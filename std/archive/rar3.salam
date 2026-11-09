@@ -69,6 +69,7 @@ struct _R3:
     pub last_filter: int
     pub filters: Vector<_R3Filter>
     pub unsup: bool
+    pub upc: bool
 end
 
 func _r3_new(ws: int): _R3:
@@ -100,6 +101,7 @@ func _r3_new(ws: int): _R3:
         last_filter = 0
         filters = Vector {} as Vector<_R3Filter>
         unsup = false
+        upc = false
     }
     mut cum := 0
     repeat _R3_DC in i:
@@ -164,6 +166,7 @@ func _r3_reset(d &: _R3):
     d.last_filter = 0
     d.defs.clear()
     d.unsup = false
+    d.upc = false
     repeat 4 in i:
         d.od[i] = 0
     end
@@ -391,6 +394,9 @@ func _r3_std_kind(code: u8*, n: int): int:
     if n == 216 and c == 0xbc85e701:
         ret 6
     end
+    if n == 40 and c == 0x46b9c560:
+        ret 7
+    end
     ret 0
 end
 
@@ -470,6 +476,9 @@ func _r3_add_filter(d &: _R3, first: int, code: u8*, codelen: int, produced: i64
     if kind == 0:
         d.unsup = true
         ret true
+    end
+    if kind == 7:
+        d.upc = true
     end
     d.filters.push(_R3Filter { start = produced + bs, len = blen, kind = kind, r0 = r0, r1 = r1 })
     ret true
@@ -664,20 +673,53 @@ func _r3_filter_audio(p: u8*, len: int, channels: int): bool:
     ret true
 end
 
-func _r3_apply_filters(d &: _R3, out &: compress.ByteBuf, base: int, produced: i64): int:
+func _r3_filter_upcase(out &: compress.ByteBuf, at: int, n: int): int:
+    p := ((out.data as i64) + (at as i64)) as u8*
+    tmp := mem.Allocate((n + 1) as u64) as u8*
+    mut s := 0
+    mut w := 0
+    until s < n:
+        mut c := p[s] as int
+        s++
+        if c == 2:
+            nx := s < n ? (p[s] as int) : 0
+            s++
+            c = nx
+            if nx != 2:
+                c = (nx - 32) & 255
+            end
+        end
+        tmp[w] = c as u8
+        w++
+    end
+    mem.Copy(p as void*, tmp as void*, w as u64)
+    mem.Free(tmp as void*)
+    rest := out.len - (at + n)
+    if rest > 0:
+        tail := ((out.data as i64) + ((at + n) as i64)) as void*
+        mem.MemMove(((out.data as i64) + ((at + w) as i64)) as void*, tail, rest as u64)
+    end
+    out.len = at + w + (rest > 0 ? rest : 0)
+    ret n - w
+end
+
+func _r3_apply_filters(d &: _R3, out &: compress.ByteBuf, base: int, produced: i64, shrink &: i64): int:
     mut i := 0
+    shrink = 0 as i64
     until i < d.filters.len():
         f := d.filters.get(i)
         i++
         if f.start < 0 or f.len <= 0 or f.start + f.len > produced:
             continue
         end
-        p := ((out.data as i64) + (base as i64) + f.start) as u8*
+        p := ((out.data as i64) + (base as i64) + (f.start - shrink)) as u8*
         n := f.len as int
         if n > 0x40000:
             continue
         end
-        if f.kind == 1:
+        if f.kind == 7:
+            shrink += _r3_filter_upcase(out, base + ((f.start - shrink) as int), n) as i64
+        else f.kind == 1:
             _r5_filter_e8(p, n, f.start, false)
         else f.kind == 2:
             _r5_filter_e8(p, n, f.start, true)
@@ -772,6 +814,7 @@ func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
     d.filters.clear()
     d.fl = d.wp
     d.unsup = false
+    d.upc = false
     if not d.tables_read:
         if not _r3_read_tables(d, b):
             ret 4
@@ -973,11 +1016,16 @@ func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
     end
     _r3_flush(d, out)
     produced := d.total - start_total
-    if unp >= 0 and produced != unp:
+    if unp >= 0 and produced != unp and not d.upc:
         ret 4
     end
     if d.unsup:
         ret 2
     end
-    ret _r3_apply_filters(d, out, base, produced)
+    mut shrink := 0 as i64
+    st := _r3_apply_filters(d, out, base, produced, shrink)
+    if st == 0 and unp >= 0 and produced - shrink != unp:
+        ret 4
+    end
+    ret st
 end

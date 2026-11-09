@@ -785,3 +785,132 @@ func _zs_encode(p: void*, n: int, level: int, checksum: bool): ByteBuf:
     _ze_free(e)
     ret out
 end
+
+@en "ZstdCompressFileToSink"
+@fa "فشرده سازی زستد پرونده به مقصد"
+pub func ZstdCompressFileToSink(fp: void*, off: i64, len: i64, level: int, sink &: FileSink): bool:
+    if fp == null or len < (0 as i64):
+        ret false
+    end
+    mut nsz := 1073741824
+    if len < (nsz as i64):
+        nsz = len as int
+    end
+    mut e := _ze_new(null as void*, nsz, level < 1 ? 1 : level)
+    wlog := _zs_hb(e.wsize)
+    single := len <= (e.wsize as i64)
+    bufcap := single ? (len as int) + 32 : 2 * e.wsize + 2 * _ZS_MAXBLOCK + 32
+    buf := mem.Allocate(bufcap as u64) as u8*
+    e.src = buf
+    mut out := NewByteBuf()
+    BufPush(out, 0x28)
+    BufPush(out, 0xB5)
+    BufPush(out, 0x2F)
+    BufPush(out, 0xFD)
+    mut fcsf := 2
+    if single:
+        fcsf = 0
+        if len > (255 as i64):
+            fcsf = 1
+        end
+        if len > (65791 as i64):
+            fcsf = 2
+        end
+    else len >= (4294967296 as i64):
+        fcsf = 3
+    end
+    mut fhd := fcsf << 6
+    if single:
+        fhd |= 32
+    end
+    fhd |= 4
+    BufPush(out, fhd)
+    if not single:
+        BufPush(out, (wlog - 10) << 3)
+    end
+    mut fsz := 1
+    if fcsf == 1:
+        fsz = 2
+    else fcsf == 2:
+        fsz = 4
+    else fcsf == 3:
+        fsz = 8
+    end
+    mut fv := len
+    if fcsf == 1:
+        fv -= (256 as i64)
+    end
+    repeat fsz in i:
+        BufPush(out, ((fv >> (8 * i)) & (255 as i64)) as int)
+    end
+    if len == (0 as i64):
+        BufPush(out, 1)
+        BufPush(out, 0)
+        BufPush(out, 0)
+    end
+    mut xx := _xxs_new()
+    mut ok := SinkWrite(sink, out.data, out.len)
+    BufReset(out)
+    mut bs := 0
+    mut filled := 0
+    mut at := off
+    mut left := len
+    until ok and (left > (0 as i64) or filled > bs):
+        if left > (0 as i64) and filled < bs + _ZS_MAXBLOCK + 4:
+            if not single and bs >= 2 * e.wsize:
+                shift := (bs / e.wsize - 1) * e.wsize
+                _ := mem.MemMove(buf as void*, ((buf as i64) + (shift as i64)) as void*, (filled - shift) as u64)
+                filled -= shift
+                bs -= shift
+                repeat (1 << e.hlog) in h:
+                    v := e.head[h]
+                    e.head[h] = v >= shift ? v - shift : 0 - 1
+                end
+                repeat e.wsize in h:
+                    v := e.prev[h]
+                    e.prev[h] = v >= shift ? v - shift : 0 - 1
+                end
+            end
+            room := bufcap - 16 - filled
+            mut want := room
+            if (want as i64) > left:
+                want = left as int
+            end
+            got := FileReadAt(fp, at, ((buf as i64) + (filled as i64)) as void*, want)
+            if got != want:
+                ok = false
+                break
+            end
+            at += got as i64
+            left -= got as i64
+            filled += got
+        end
+        e.n = filled
+        mut be := bs + _ZS_MAXBLOCK
+        if be > filled:
+            be = filled
+        end
+        lastblk := left == (0 as i64) and be == filled
+        if level < 1:
+            _ze_raw(e, out, bs, be, lastblk)
+        else:
+            _ze_block(e, out, bs, be, lastblk)
+        end
+        _xxs_update(xx, _zs_at(buf, bs) as void*, be - bs)
+        ok = SinkWrite(sink, out.data, out.len)
+        BufReset(out)
+        bs = be
+    end
+    if ok:
+        h := _xxs_digest(xx)
+        repeat 4 in i:
+            BufPush(out, ((h >> (8 * i)) & (255 as u64)) as int)
+        end
+        ok = SinkWrite(sink, out.data, out.len)
+    end
+    mem.Free(xx.buf as void*)
+    mem.Free(buf as void*)
+    _ze_free(e)
+    BufFree(out)
+    ret ok
+end

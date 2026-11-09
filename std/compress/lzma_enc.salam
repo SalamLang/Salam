@@ -761,3 +761,85 @@ end
 pub func XzCompressStr(s: str): ByteBuf:
     ret XzCompress(s as void*, s.len())
 end
+
+@en "LzmaCompressFileToSink"
+@fa "فشرده سازی الزد ام ای پرونده به مقصد"
+pub func LzmaCompressFileToSink(fp: void*, off: i64, len: i64, level: int, with_props: bool, sink &: FileSink): bool:
+    if fp == null or len < (0 as i64):
+        ret false
+    end
+    mut nsz := 1073741824
+    if len < (nsz as i64):
+        nsz = len as int
+    end
+    dsz := _lzma2_dict_size(_lze_dict_prop(_lze_dict_for(level, nsz)))
+    mut e := _lze_new(null as void*, nsz, level, dsz as int)
+    wsize := e.wmask + 1
+    bufcap := 2 * wsize + 4194304 + 64
+    buf := mem.Allocate(bufcap as u64) as u8*
+    e.src = buf
+    mut ok := true
+    if with_props:
+        mut hd := NewByteBuf()
+        BufPush(hd, 93)
+        _lze_le32(hd, dsz)
+        ok = SinkWrite(sink, hd.data, hd.len)
+        BufFree(hd)
+    end
+    _lze_reset_state(e)
+    _lze_rc_reset(e)
+    mut pos := 0
+    mut filled := 0
+    mut at := off
+    mut left := len
+    until ok and (left > (0 as i64) or pos < filled):
+        if left > (0 as i64) and filled - pos < 2097152:
+            if pos >= 2 * wsize:
+                shift := (pos / wsize - 1) * wsize
+                _ := mem.MemMove(buf as void*, ((buf as i64) + (shift as i64)) as void*, (filled - shift) as u64)
+                filled -= shift
+                pos -= shift
+                e.ins -= shift
+                shift32 := shift as u32
+                repeat (1 << e.hbits) in h:
+                    v := e.head[h]
+                    e.head[h] = v > shift32 ? v - shift32 : (0 as u32)
+                end
+                repeat wsize in h:
+                    v := e.prev[h]
+                    e.prev[h] = v > shift32 ? v - shift32 : (0 as u32)
+                end
+            end
+            mut want := bufcap - 64 - filled
+            if (want as i64) > left:
+                want = left as int
+            end
+            got := FileReadAt(fp, at, ((buf as i64) + (filled as i64)) as void*, want)
+            if got != want:
+                ok = false
+                break
+            end
+            at += got as i64
+            left -= got as i64
+            filled += got
+        end
+        e.n = filled
+        mut endp := filled
+        if left > (0 as i64):
+            endp = filled - 300
+        end
+        if endp > pos:
+            pos = _lze_run(e, pos, endp, 0x7FFFFFF0)
+        end
+        ok = SinkWrite(sink, e.rc.data, e.rc.len)
+        BufReset(e.rc)
+    end
+    if ok:
+        _lze_flush(e)
+        ok = SinkWrite(sink, e.rc.data, e.rc.len)
+    end
+    mem.Free(buf as void*)
+    e.src = null as u8*
+    _lze_free(e)
+    ret ok
+end

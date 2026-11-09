@@ -1,0 +1,499 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cssbox
+
+struct BItem:
+    pub id: int = 0
+    pub same_bfc: bool = false
+    pub oof: bool = false
+    pub fit: bool = false
+    pub w: f64 = NO
+    pub h: f64 = NO
+    pub minw: f64 = NO
+    pub minh: f64 = NO
+    pub maxw: f64 = NO
+    pub maxh: f64 = NO
+    pub pad: R4 = R4 {}
+    pub bor: R4 = R4 {}
+    pub pbw: f64 = 0.0
+    pub pbh: f64 = 0.0
+    pub spx: f64 = 0.0
+    pub spy: f64 = 0.0
+    pub can_collapse: bool = false
+    pub has_final: bool = false
+    pub fx: f64 = 0.0
+    pub fy: f64 = 0.0
+    pub fw: f64 = 0.0
+    pub fh: f64 = 0.0
+    pub fm: R4 = R4 {}
+end
+
+struct BRes:
+    pub content_h: f64 = 0.0
+    pub ftpos: f64 = 0.0
+    pub ftneg: f64 = 0.0
+    pub lbpos: f64 = 0.0
+    pub lbneg: f64 = 0.0
+    pub baseline: f64 = NO
+end
+
+func _ms_collapse_pos(p: f64, m: f64): f64:
+    if m >= 0.0 and m > p:
+        ret m
+    end
+    ret p
+end
+
+func _ms_collapse_neg(ng: f64, m: f64): f64:
+    if m < 0.0 and m < ng:
+        ret m
+    end
+    ret ng
+end
+
+func _block_items(t &: Engine, kids: Vector<int>, inner_w: f64, inner_h: f64): Vector<BItem>:
+    mut items := Vector {} as Vector<BItem>
+    each c in kids:
+        n := t.nodes.ref(c)
+        st := n.style
+        if st.display == Display.None:
+            continue
+        end
+        pad := _r4(st.padding, inner_w)
+        bor := _r4(st.border, inner_w)
+        pbw := pad.l + pad.r + bor.l + bor.r
+        pbh := pad.t + pad.b + bor.t + bor.b
+        adjw := st.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+        adjh := st.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+        ratio := st.aspect_ratio
+        w0 := _res(st.width, inner_w)
+        h0 := _res(st.height, inner_h)
+        mnw0 := _res(st.min_width, inner_w)
+        mnh0 := _res(st.min_height, inner_h)
+        mxw0 := _res(st.max_width, inner_w)
+        mxh0 := _res(st.max_height, inner_h)
+        is_scroll := _scroller(st.overflow_x) or _scroller(st.overflow_y)
+        oof := _oof(st.position)
+        same := st.display == Display.Block and not oof and not is_scroll and st.align_content == Align.Normal
+        fit := st.display == Display.InlineBlock or st.display == Display.InlineFlex
+        items.push(BItem { id = c, same_bfc = same, oof = oof, fit = fit, w = _add(_arw(w0, h0, ratio), adjw), h = _add(_arh(w0, h0, ratio), adjh), minw = _add(_arw(mnw0, mnh0, ratio), adjw), minh = _add(_arh(mnw0, mnh0, ratio), adjh), maxw = _add(_arw(mxw0, mxh0, ratio), adjw), maxh = _add(_arh(mxw0, mxh0, ratio), adjh), pad = pad, bor = bor, pbw = pbw, pbh = pbh })
+    end
+    ret items
+end
+
+func _block_content_width(t &: Engine, items: Vector<BItem>, avw: f64): f64:
+    mut maxw := 0.0
+    each it in items:
+        if it.oof:
+            continue
+        end
+        n := t.nodes.ref(it.id)
+        kw := _clamp(it.w, it.minw, it.maxw)
+        kh := _clamp(it.h, it.minh, it.maxh)
+        mar := _r4(n.style.margin, _avopt(avw))
+        mx := mar.l + mar.r
+        mut w := kw
+        if not _is(w):
+            wk := n.style.width.kind
+            mut iaw := _avsub(avw, mx)
+            switch wk:
+                LengthKind.MinContent:
+                    iaw = MINC
+                    break
+                end
+                LengthKind.MaxContent:
+                    iaw = MAXC
+                    break
+                end
+                else:
+                end
+            end
+            o := _layout(t, it.id, Inp { kw = kw, kh = kh, aw = iaw, ah = MINC, inherent = true, axis = 0, cstart = it.same_bfc, cend = it.same_bfc })
+            w = o.w
+        end
+        w2 := _fmax(w, it.pbw) + mx
+        maxw = _fmax(maxw, w2)
+    end
+    ret maxw
+end
+
+func _block_known(t &: Engine, it: BItem, stretch_w: f64, pct_h: f64, nmar: R4, adjoin_s: bool, adjoin_e: bool, pw: f64, ph: f64): Inp:
+    n := t.nodes.ref(it.id)
+    mut wk := n.style.width.kind
+    if it.fit and wk == LengthKind.Auto:
+        wk = LengthKind.FitContent
+    end
+    mut kwd := NO
+    switch wk:
+        LengthKind.MinContent:
+            kwd = _layout(t, it.id, Inp { pw = pw, ph = ph, aw = MINC, ah = MAXC, inherent = true, axis = 0, cstart = it.same_bfc, cend = it.same_bfc }).w
+            break
+        end
+        LengthKind.MaxContent:
+            kwd = _layout(t, it.id, Inp { pw = pw, ph = ph, aw = MAXC, ah = MAXC, inherent = true, axis = 0, cstart = it.same_bfc, cend = it.same_bfc }).w
+            break
+        end
+        LengthKind.FitContent:
+            kwd = _layout(t, it.id, Inp { pw = pw, ph = ph, aw = stretch_w, ah = MAXC, inherent = true, axis = 0, cstart = it.same_bfc, cend = it.same_bfc }).w
+            break
+        end
+        LengthKind.Stretch:
+            kwd = stretch_w
+            break
+        end
+        else:
+        end
+    end
+    mut kh := NO
+    if n.style.height.kind == LengthKind.Stretch and _is(pct_h):
+        mut hh := pct_h
+        if not adjoin_s:
+            hh -= nmar.t
+        end
+        if not adjoin_e:
+            hh -= nmar.b
+        end
+        kh = hh
+    end
+    mut w := _is(it.w) ? it.w : (_is(kwd) ? kwd : stretch_w)
+    w = _clampf(w, it.minw, it.maxw)
+    mut h := _is(it.h) ? it.h : kh
+    h = _clamp(h, it.minh, it.maxh)
+    ret Inp { kw = w, kh = h }
+end
+
+func _block_children(t &: Engine, items &: Vector<BItem>, perform: bool, outer_w: f64, pct_h_in: f64, rcbi: R4, dir_rtl: bool, own_s: bool, own_e: bool, adjoin_s: bool, adjoin_e: bool): BRes:
+    inner_w := _fmax(outer_w - rcbi.l - rcbi.r, 0.0)
+    pct_h := _sub(pct_h_in, rcbi.t + rcbi.b)
+    mut committed := rcbi.t
+    mut y_abs := rcbi.t
+    mut ftpos := 0.0
+    mut ftneg := 0.0
+    mut apos := 0.0
+    mut aneg := 0.0
+    mut collapsing_first := true
+    mut first_base := NO
+    repeat items.len() in i:
+        mut it := items.get(i)
+        if it.oof:
+            it.spx = dir_rtl ? outer_w - rcbi.r : rcbi.l
+            it.spy = y_abs
+            items.set(i, it)
+            continue
+        end
+        n := t.nodes.ref(it.id)
+        st_margin := n.style.margin
+        im := _r4opt(st_margin, inner_w)
+        nmar := R4 { t = _or(im.t, 0.0), r = _or(im.r, 0.0), b = _or(im.b, 0.0), l = _or(im.l, 0.0) }
+        nmx := nmar.l + nmar.r
+        mut ymo := 0.0
+        stretch_w := _fmax(inner_w - nmx, 0.0)
+        if not it.same_bfc:
+            if not collapsing_first or not own_s:
+                ymo = _fmax(apos, _fmax(nmar.t, 0.0)) + _fmin(aneg, _fmin(nmar.t, 0.0))
+            end
+        end
+        kd := _block_known(t, it, stretch_w, pct_h, nmar, adjoin_s, adjoin_e, inner_w, pct_h)
+        o := _layout(t, it.id, Inp { kw = kd.kw, kh = kd.kh, pw = inner_w, ph = pct_h, aw = stretch_w, ah = MAXC, inherent = true, axis = 2, perform = perform, cstart = it.same_bfc, cend = it.same_bfc })
+        tm := _or(im.t, 0.0)
+        bm := _or(im.b, 0.0)
+        ttpos := _ms_collapse_pos(o.top_pos, tm)
+        ttneg := _ms_collapse_neg(o.top_neg, tm)
+        bbpos := _ms_collapse_pos(o.bot_pos, bm)
+        bbneg := _ms_collapse_neg(o.bot_neg, bm)
+        free_x := _fmax(0.0, stretch_w - o.w)
+        mut autos := 0
+        if not _is(im.l):
+            autos++
+        end
+        if not _is(im.r):
+            autos++
+        end
+        auto_m := autos > 0 ? free_x / (autos as f64) : 0.0
+        rm := R4 { l = _or(im.l, auto_m), r = _or(im.r, auto_m), t = tm, b = bm }
+        mut insx := 0.0
+        mut insy := 0.0
+        if _isrel(n.style.position):
+            ins := _r4opt(n.style.inset, inner_w)
+            insh := _r4opt(n.style.inset, pct_h)
+            if dir_rtl:
+                insx = _is(ins.r) ? 0.0 - ins.r : _or(ins.l, 0.0)
+            else:
+                insx = _is(ins.l) ? ins.l : (_is(ins.r) ? 0.0 - ins.r : 0.0)
+            end
+            insy = _is(insh.t) ? insh.t : (_is(insh.b) ? 0.0 - insh.b : 0.0)
+        end
+        if it.same_bfc and (not collapsing_first or not own_s):
+            ymo = _fmax(apos, ttpos) + _fmin(aneg, ttneg)
+        end
+        it.can_collapse = o.collapse
+        mut lx := 0.0
+        if it.same_bfc:
+            if dir_rtl:
+                lx = outer_w - rcbi.r - o.w - rm.r + insx
+            else:
+                lx = rcbi.l + insx + rm.l
+            end
+        else:
+            if dir_rtl:
+                lx = rcbi.l + inner_w - o.w - rm.r + insx
+            else:
+                lx = rcbi.l + rm.l + insx
+            end
+        end
+        ly := committed + ymo + insy
+        has_auto_x := not _is(im.l) or not _is(im.r)
+        item_outer_w := o.w + rm.l + rm.r
+        if it.fit and not has_auto_x:
+            fx := inner_w - item_outer_w
+            off := dir_rtl ? fx : 0.0
+            lx = rcbi.l + rm.l + insx + off
+        end
+        if not _is(first_base):
+            cb := _child_baseline(o.baseline, o.h, n.style.overflow_y)
+            if _is(cb):
+                first_base = ly - insy + cb
+            end
+        end
+        it.has_final = true
+        it.fx = lx
+        it.fy = ly
+        it.fw = o.w
+        it.fh = o.h
+        it.fm = rm
+        if collapsing_first:
+            if it.can_collapse:
+                ftpos = _fmax(_fmax(ftpos, ttpos), bbpos)
+                ftneg = _fmin(_fmin(ftneg, ttneg), bbneg)
+            else:
+                ftpos = _fmax(ftpos, ttpos)
+                ftneg = _fmin(ftneg, ttneg)
+                collapsing_first = false
+            end
+        end
+        if it.can_collapse:
+            apos = _fmax(_fmax(apos, ttpos), bbpos)
+            aneg = _fmin(_fmin(aneg, ttneg), bbneg)
+            y_abs = committed + o.h + ymo
+        else:
+            committed = ly - insy + o.h
+            apos = bbpos
+            aneg = bbneg
+            y_abs = committed + apos + aneg
+        end
+        items.set(i, it)
+    end
+    mut bottom_off := 0.0
+    if own_e or (collapsing_first and own_s):
+        bottom_off = 0.0
+    else:
+        bottom_off = apos + aneg
+    end
+    committed += rcbi.b + bottom_off
+    ret BRes { content_h = _fmax(0.0, committed), ftpos = ftpos, ftneg = ftneg, lbpos = apos, lbneg = aneg, baseline = first_base }
+end
+
+func _block(t &: Engine, id: int, inp_in: Inp): Out:
+    n := t.nodes.ref(id)
+    st := n.style
+    is_scroll := _scroller(st.overflow_x) or _scroll_y(st)
+    new_bfc := is_scroll or st.align_content != Align.Normal or st.display == Display.FlowRoot or st.display == Display.InlineBlock
+    ratio := st.aspect_ratio
+    pad0 := _r4(st.padding, inp_in.pw)
+    bor0 := _r4(st.border, inp_in.pw)
+    pbw := pad0.l + pad0.r + bor0.l + bor0.r
+    pbh := pad0.t + pad0.b + bor0.t + bor0.b
+    adjw := st.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+    adjh := st.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+    mnw0 := _res(st.min_width, inp_in.pw)
+    mnh0 := _res(st.min_height, inp_in.ph)
+    mxw0 := _res(st.max_width, inp_in.pw)
+    mxh0 := _res(st.max_height, inp_in.ph)
+    minw := _add(_arw(mnw0, mnh0, ratio), adjw)
+    minh := _add(_arh(mnw0, mnh0, ratio), adjh)
+    maxw := _add(_arw(mxw0, mxh0, ratio), adjw)
+    maxh := _add(_arh(mxw0, mxh0, ratio), adjh)
+    mut csw := NO
+    mut csh := NO
+    if inp_in.inherent:
+        sw0 := _res(st.width, inp_in.pw)
+        sh0 := _res(st.height, inp_in.ph)
+        csw = _clamp(_add(_arw(sw0, sh0, ratio), adjw), minw, maxw)
+        csh = _clamp(_add(_arh(sw0, sh0, ratio), adjh), minh, maxh)
+    end
+    mmw := (_is(minw) and _is(maxw) and maxw <= minw) ? minw : NO
+    mmh := (_is(minh) and _is(maxh) and maxh <= minh) ? minh : NO
+    kw0 := _mmax(_or(_or(inp_in.kw, mmw), csw), pbw)
+    kh0 := _mmax(_or(_or(inp_in.kh, mmh), csh), pbh)
+    if not inp_in.perform:
+        if _is(kw0) and _is(kh0):
+            ret Out { w = kw0, h = kh0 }
+        end
+        if inp_in.axis == 0 and _is(kw0):
+            ret Out { w = kw0, h = 0.0 }
+        end
+    end
+    mut inp := inp_in
+    inp.kw = kw0
+    inp.kh = kh0
+    in_bfc := inp.cstart or inp.cend
+    ret _block_inner(t, id, inp, in_bfc and not new_bfc, new_bfc)
+end
+
+func _scroll_y(st: Style): bool:
+    ret _scroller(st.overflow_y)
+end
+
+func _block_inner(t &: Engine, id: int, inp: Inp, in_parent_bfc: bool, new_bfc: bool): Out:
+    n := t.nodes.ref(id)
+    st := n.style
+    ratio := st.aspect_ratio
+    pad := _r4(st.padding, inp.pw)
+    bor := _r4(st.border, inp.pw)
+    rtl := st.direction == Direction.Rtl
+    sgx := st.overflow_y == Overflow.Scroll ? st.scrollbar_width : 0.0
+    sgy := st.overflow_x == Overflow.Scroll ? st.scrollbar_width : 0.0
+    sg := R4 { t = 0.0, l = rtl ? sgx : 0.0, r = rtl ? 0.0 : sgx, b = sgy }
+    pbw := pad.l + pad.r + bor.l + bor.r
+    pbh := pad.t + pad.b + bor.t + bor.b
+    cbi := _r4add(_r4add(pad, bor), sg)
+    adjw := st.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+    adjh := st.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+    sw0 := _res(st.width, inp.pw)
+    sh0 := _res(st.height, inp.ph)
+    size_h := _add(_arh(sw0, sh0, ratio), adjh)
+    mnw0 := _res(st.min_width, inp.pw)
+    mnh0 := _res(st.min_height, inp.ph)
+    mxw0 := _res(st.max_width, inp.pw)
+    mxh0 := _res(st.max_height, inp.ph)
+    minw := _add(_arw(mnw0, mnh0, ratio), adjw)
+    minh := _add(_arh(mnw0, mnh0, ratio), adjh)
+    maxw := _add(_arw(mxw0, mxh0, ratio), adjw)
+    maxh := _add(_arh(mxw0, mxh0, ratio), adjh)
+    dw := _clamp(_arw(inp.kw, inp.kh, ratio), minw, maxw)
+    dh := _clamp(_arh(inp.kw, inp.kh, ratio), minh, maxh)
+    kw := _or(inp.kw, dw)
+    kh := _or(inp.kh, dh)
+    pbd_h := inp.kh_def ? kh : NO
+    ccw := _sub(kw, cbi.l + cbi.r)
+    cch := _sub(pbd_h, cbi.t + cbi.b)
+    oof_self := _oof(st.position)
+    adj_s := inp.cstart and not new_bfc and not oof_self and pad.t == 0.0 and bor.t == 0.0
+    adj_e := inp.cend and not new_bfc and not oof_self and pad.b == 0.0 and bor.b == 0.0
+    own_s := adj_s
+    own_e := adj_e and not _is(size_h)
+    prevent := st.display != Display.Block or not in_parent_bfc or new_bfc or oof_self or pad.t > 0.0 or pad.b > 0.0 or bor.t > 0.0 or bor.b > 0.0
+    align_c := st.align_content
+    kids := _kids(t, id)
+    defer kids.free()
+    mut items := _block_items(t, kids, ccw, cch)
+    defer items.free()
+    mut outer_w := kw
+    if not _is(outer_w):
+        avw := _avsub(inp.aw, cbi.l + cbi.r)
+        iw := _block_content_width(t, items, avw) + cbi.l + cbi.r
+        outer_w = _fmax(_clampf(iw, minw, maxw), pbw)
+    end
+    if not inp.perform and _is(kh):
+        ret Out { w = outer_w, h = kh }
+    end
+    if not inp.perform and inp.axis == 0:
+        ret Out { w = outer_w, h = 0.0 }
+    end
+    mut pct_h := pbd_h
+    if not _is(pct_h) and inp.inherent:
+        pct_h = _mmax(size_h, minh)
+    end
+    prw := _or(inp.pw, outer_w)
+    rpad := _r4(st.padding, prw)
+    rbor := _r4(st.border, prw)
+    rcbi := _r4add(_r4add(rpad, rbor), sg)
+    res := _block_children(t, items, inp.perform, outer_w, pct_h, rcbi, rtl, own_s, own_e, adj_s, adj_e)
+    mut outer_h := kh
+    if not _is(outer_h):
+        outer_h = _clampf(res.content_h, minh, maxh)
+    end
+    outer_h = _fmax(outer_h, pbh)
+    constrained := _is(minh) and minh > 0.0 and minh >= outer_h
+    own_bottom := own_e and not constrained
+    mut first_base := res.baseline
+    if align_c != Align.Normal:
+        inner_h := outer_h - rcbi.t - rcbi.b
+        flow_h := res.content_h - rcbi.t - rcbi.b
+        free := inner_h - flow_h
+        off := _block_align_offset(align_c, free)
+        if _is(first_base):
+            first_base += off
+        end
+        repeat items.len() in i:
+            mut it := items.get(i)
+            if it.has_final:
+                it.fy += off
+            end
+            if it.oof:
+                it.spy += off
+            end
+            items.set(i, it)
+        end
+    end
+    mut all_collapse := true
+    each it in items:
+        if not it.oof and not it.can_collapse:
+            all_collapse = false
+        end
+    end
+    mut o := Out { w = outer_w, h = outer_h, baseline = first_base }
+    o.collapse = not prevent and outer_h == 0.0 and all_collapse
+    if own_s:
+        o.top_pos = res.ftpos
+        o.top_neg = res.ftneg
+    else:
+        mt := _res0(st.margin.top, inp.pw)
+        o.top_pos = _fmax(mt, 0.0)
+        o.top_neg = _fmin(mt, 0.0)
+    end
+    if own_bottom:
+        o.bot_pos = res.lbpos
+        o.bot_neg = res.lbneg
+    else:
+        mb := _res0(st.margin.bottom, inp.pw)
+        o.bot_pos = _fmax(mb, 0.0)
+        o.bot_neg = _fmin(mb, 0.0)
+    end
+    if not inp.perform:
+        ret o
+    end
+    each it in items:
+        c := t.nodes.ref(it.id)
+        if it.has_final:
+            _set_layout(t, it.id, it.fx, it.fy, it.fw, it.fh, it.pad, it.bor, it.fm)
+        end
+        if it.oof:
+            c.spx_s = rcbi.l
+            c.spx_e = outer_w - rcbi.r
+            c.spx_a = rtl ? 1 : 0
+            c.spy_s = it.spy
+            c.spy_e = it.spy
+            c.spy_a = 0
+        end
+    end
+    _hide_display_none(t, kids)
+    ret o
+end
+
+func _block_align_offset(a: Align, free: f64): f64:
+    k := _content_fallback(a, free, 1)
+    ret _content_offset(free, 1, 0.0, k, false, true)
+end

@@ -1,0 +1,48 @@
+import str
+import sync
+import net.transport
+import net.vless
+
+const ID := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+
+func server():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut users := Vector {} as Vector<vless.User>
+    users.push(vless.NewUser(ID, ""))
+    mut c := vless.Accept(transport.Accept(l), users)
+    until c.ok:
+        mut p := transport.NewBytes(64)
+        if not vless.ReadPacket(c, p):
+            transport.FreeBytes(p)
+            break
+        end
+        vless.WritePacket(c, p.p, p.len)
+        transport.FreeBytes(p)
+    end
+    vless.Close(c)
+    transport.CloseListener(l)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+    dns := transport.NewAddr("8.8.8.8", 53)
+    mut c := vless.Dial("127.0.0.1", port, transport.Settings {}, ID, "", vless.CmdUDP, dns)
+    repeat 3 in i:
+        mut msg := transport.FromStr("datagram " + str.FromInt(i as i64))
+        vless.WritePacket(c, msg.p, msg.len)
+        mut back := transport.NewBytes(64)
+        vless.ReadPacket(c, back)
+        println back.len, (back.p as str).substr(0, back.len)
+        transport.FreeBytes(back)
+        transport.FreeBytes(msg)
+    end
+    vless.Close(c)
+    join(t)
+end

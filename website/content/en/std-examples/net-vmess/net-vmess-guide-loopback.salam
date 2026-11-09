@@ -1,0 +1,58 @@
+import mem
+import str
+import sync
+import net.transport
+import net.vmess
+
+const ID := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut seen := ""
+
+func server():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut users := Vector {} as Vector<vmess.User>
+    users.push(vmess.NewUser(ID))
+    mut rf := vmess.NewReplayFilter()
+    buf := mem.Allocate(4096 as u64)
+    repeat 3:
+        mut c := vmess.Accept(transport.Accept(l), users, rf)
+        if not c.ok:
+            seen += "refused(" + c.err + ") "
+            continue
+        end
+        seen += c.req.addr.host + " security " + str.FromInt(c.req.security as i64) + "; "
+        n := vmess.Read(c, buf, 4096)
+        vmess.Write(c, buf, n)
+        vmess.Close(c)
+    end
+    mem.Free(buf)
+    transport.CloseListener(l)
+end
+
+func talk(security: int):
+    target := transport.NewAddr("example.com", 443)
+    mut c := vmess.Dial("127.0.0.1", port, transport.Settings {}, ID, security, vmess.CmdTCP, target)
+    mut msg := transport.FromStr("hello through vmess")
+    vmess.Write(c, msg.p, msg.len)
+    buf := mem.Allocate(4096 as u64)
+    n := vmess.Read(c, buf, 4096)
+    println security, (buf as str).substr(0, n)
+    mem.Free(buf)
+    transport.FreeBytes(msg)
+    vmess.Close(c)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+    talk(vmess.SecAES128GCM)
+    talk(vmess.SecChaCha20Poly1305)
+    talk(vmess.SecNone)
+    join(t)
+    println seen
+end

@@ -1,0 +1,47 @@
+import mem
+import sync
+import net.transport
+import net.tunnel
+import net.vless
+import net.vmess
+
+const OUTER := "b831381d-6324-4d53-ad4f-8cda48b30811"
+const INNER := "5783a3e7-e373-51cd-8642-c83782b807c5"
+
+mut pipe := tunnel.NewPipe()
+mut done := sync.NewWaitGroup()
+mut seen := ""
+
+func server():
+    mut vl := Vector {} as Vector<vless.User>
+    vl.push(vless.NewUser(OUTER, ""))
+    mut vm := Vector {} as Vector<vmess.User>
+    vm.push(vmess.NewUser(INNER))
+    mut rf := vmess.NewReplayFilter()
+    outer := vless.AcceptOver(tunnel.PipeB(pipe), vl)
+    inner := vmess.AcceptOver(vless.AsStream(outer), vm, rf)
+    seen = outer.req.addr.host + " then " + inner.req.addr.host
+    s := vmess.AsStream(inner)
+    buf := mem.Allocate(256 as u64)
+    n := s.ReadBytes(buf, 256)
+    s.WriteBytes(buf, n)
+    mem.Free(buf)
+    s.Close()
+    sync.Done(done)
+end
+
+func main:
+    sync.Add(done, 1 as i64)
+    _t := spawn(server)
+    outer := vless.DialOver(tunnel.PipeA(pipe), OUTER, "", vless.CmdTCP, transport.NewAddr("hop.example", 443))
+    inner := vmess.DialOver(vless.AsStream(outer), INNER, vmess.SecChaCha20Poly1305, vmess.CmdTCP, transport.NewAddr("final.example", 443))
+    s := vmess.AsStream(inner)
+    s.Write("two layers deep")
+    buf := mem.AllocateZeroed(256 as u64)
+    n := s.ReadBytes(buf, 256)
+    println (buf as str).substr(0, n)
+    mem.Free(buf)
+    s.Close()
+    sync.Wait(done)
+    println "server saw", seen
+end

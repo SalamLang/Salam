@@ -1,0 +1,50 @@
+import str
+import mem
+import sync
+import net.transport
+import net.vless
+
+const ID := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut seen := ""
+
+func server():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut users := Vector {} as Vector<vless.User>
+    users.push(vless.NewUser(ID, ""))
+    mut c := vless.Accept(transport.Accept(l), users)
+    if c.ok:
+        seen = c.req.addr.host + ":" + str.FromInt(c.req.addr.port as i64)
+        buf := mem.Allocate(4096 as u64)
+        n := vless.Read(c, buf, 4096)
+        vless.Write(c, buf, n)
+        mem.Free(buf)
+    else:
+        seen = "refused: " + c.err
+    end
+    vless.Close(c)
+    transport.CloseListener(l)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+
+    target := transport.NewAddr("example.com", 443)
+    mut c := vless.Dial("127.0.0.1", port, transport.Settings {}, ID, "", vless.CmdTCP, target)
+    mut msg := transport.FromStr("hello through vless")
+    vless.Write(c, msg.p, msg.len)
+    buf := mem.Allocate(4096 as u64)
+    n := vless.Read(c, buf, 4096)
+    println (buf as str).substr(0, n)
+    mem.Free(buf)
+    transport.FreeBytes(msg)
+    vless.Close(c)
+    join(t)
+    println "server saw the target", seen
+end

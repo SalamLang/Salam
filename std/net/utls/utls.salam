@@ -130,6 +130,12 @@ pub struct Hello:
     @en "pub_key"
     @fa "کلید عمومی"
     pub pub_key: Bytes = Bytes {}
+    @en "pq_seed"
+    @fa "بذر پسا کوانتومی"
+    pub pq_seed: Bytes = Bytes {}
+    @en "pq_ek"
+    @fa "کلید عمومی پسا کوانتومی"
+    pub pq_ek: Bytes = Bytes {}
     @en "ok"
     @fa "معتبر"
     pub ok: bool = false
@@ -353,26 +359,11 @@ func _put_alpn(out &: Bytes, list: str):
     _patch16(out, mark, out.len - mark - 2)
 end
 
-func _pq_ek(out &: Bytes):
-    mut n := 0
-    until n < 768:
-        mut a := 4095
-        until a >= 3329:
-            a = ((_randbyte() << 8) | _randbyte()) & 0xFFF
-        end
-        mut b := 4095
-        until b >= 3329:
-            b = ((_randbyte() << 8) | _randbyte()) & 0xFFF
-        end
-        _p8(out, a & 0xFF)
-        _p8(out, (a >> 8) | ((b & 0xF) << 4))
-        _p8(out, b >> 4)
-        n += 2
-    end
-    _prand(out, 32)
+func _pq_ek(out &: Bytes, ek: Bytes):
+    _praw(out, ek.p, 1184)
 end
 
-func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Bytes, grease_on: bool): bool:
+func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Bytes, pq_ek: Bytes, grease_on: bool): bool:
     if id == 0:
         if o.server_name.len() == 0:
             ret false
@@ -500,7 +491,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
                 if o.pq:
                     _p16(out, 0x11EC)
                     _p16(out, 1184 + 32)
-                    _pq_ek(out)
+                    _pq_ek(out, pq_ek)
                     _praw(out, pub_key.p, 32)
                 end
             else if t == 0x6399:
@@ -508,7 +499,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
                     _p16(out, 0x6399)
                     _p16(out, 32 + 1184)
                     _praw(out, pub_key.p, 32)
-                    _pq_ek(out)
+                    _pq_ek(out, pq_ek)
                 end
             else if t == 0x0017:
                 _p16(out, 0x0017)
@@ -664,6 +655,11 @@ pub func FreeHello(h &: Hello):
     FreeBytes(h.raw)
     FreeBytes(h.priv)
     FreeBytes(h.pub_key)
+    if h.pq_seed.p != null:
+        mem.Set(h.pq_seed.p, 0, h.pq_seed.len as u64)
+    end
+    FreeBytes(h.pq_seed)
+    FreeBytes(h.pq_ek)
 end
 
 @en "ToHex"
@@ -709,6 +705,13 @@ pub func Build(sp: Spec, o: Options): Hello:
     h.pub_key.len = 0
     h.pub_key.len = 32
     tls.X25519Public(h.priv.p, h.pub_key.p)
+    h.pq_ek = _nb(1184)
+    if o.pq:
+        h.pq_seed = _nb(64)
+        _prand(h.pq_seed, 64)
+        tls.Mlkem768PublicKey(h.pq_seed.p, h.pq_ek.p)
+        h.pq_ek.len = 1184
+    end
 
     mut out := _nb(2048)
     _p8(out, 1)
@@ -775,7 +778,7 @@ pub func Build(sp: Spec, o: Options): Hello:
             end
             continue
         end
-        _put_ext(out, t, c, sp, o, h.pub_key, grease_on)
+        _put_ext(out, t, c, sp, o, h.pub_key, h.pq_ek, grease_on)
     end
     if pad_at >= 0 and o.padding and sp.pad_to > 0:
         total := out.len
@@ -835,8 +838,8 @@ pub func Profile(name: str): Spec:
     if name == "firefox":
         s.ciphers = "1301 1303 1302 c02b c02f cca9 cca8 c02c c030 c00a c009 c013 c014 009c 009d 002f 0035"
         s.extensions = "0000 0017 ff01 000a 000b 0023 0010 0005 0022 0033 002b 000d 002d 001c fe0d pad"
-        s.groups = "001d 0017 0018 0019 0100 0101"
-        s.key_shares = "001d 0017"
+        s.groups = "11ec 001d 0017 0018 0019 0100 0101"
+        s.key_shares = "11ec 001d 0017"
         s.sigalgs = "0403 0503 0603 0804 0805 0806 0401 0501 0601 0203 0201"
         s.delegated = "0403 0503 0603 0203"
         s.versions = "0304 0303"
@@ -849,8 +852,8 @@ pub func Profile(name: str): Spec:
     if name == "safari" or name == "ios":
         s.ciphers = "g0 1301 1302 1303 c02c c02b cca9 c030 c02f cca8 c00a c009 c014 c013 009d 009c 003d 003c 0035 002f c008 c012 000a"
         s.extensions = "g1 0000 0017 ff01 000a 000b 0010 0005 000d 0012 0033 002d 002b 001b g4 pad"
-        s.groups = "g2 001d 0017 0018 0019"
-        s.key_shares = "g2 001d"
+        s.groups = "g2 11ec 001d 0017 0018 0019"
+        s.key_shares = "g2 11ec 001d"
         s.sigalgs = "0403 0804 0401 0503 0203 0805 0805 0501 0806 0601 0201"
         s.versions = "g3 0304 0303 0302 0301"
         s.alpn = "h2,http/1.1"
@@ -879,6 +882,15 @@ pub func Record(h: Hello): Bytes:
     ret r
 end
 
+@en "PqSeed"
+@fa "بذر پسا کوانتومی سلام"
+pub func PqSeed(h: Hello): void*:
+    if h.pq_seed.len == 64:
+        ret h.pq_seed.p
+    end
+    ret null
+end
+
 @en "WrapClient"
 @fa "پوشش کارخواه"
 pub func WrapClient(fd: i64, sp: Spec, o: Options, cfg: tls.Config): tls.Conn:
@@ -888,7 +900,7 @@ pub func WrapClient(fd: i64, sp: Spec, o: Options, cfg: tls.Config): tls.Conn:
         c.err = h.err
         ret c
     end
-    conn := tls.WrapClientRaw(fd, h.raw.p, h.raw.len, h.priv.p, null, 0, cfg)
+    conn := tls.WrapClientRawPq(fd, h.raw.p, h.raw.len, h.priv.p, PqSeed(h), null, 0, cfg)
     FreeHello(h)
     ret conn
 end

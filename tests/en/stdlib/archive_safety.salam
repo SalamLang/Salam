@@ -1,0 +1,468 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+import str
+
+const EVIL5 := """
+526172211a0701003392b5e50a010506000501018080002ed60f4425020312000400edc302000000008000010275700a03
+133e51026a1332261706050101022e2e7f2236082a02030b9700049700a48302477d32c08000010c75702f70776e65642e
+7478740a03133e51026aacd12c175a4950534c49502d5649412d53594d4c494e4b2d4f4b0a1d77565103050400
+"""
+
+const SYM4 := """
+526172211a0700cf907300000d00000000000000261874c0902e000800000008000000030979388bbdb9fa5014300900ff
+a10000646174615f6c696e6b00b0832413646174612e747874d69c74c0902d0005000000050000000382c5c1e6b0b9fa50
+1d300800b4810000646174612e74787400f0b8b756646174610a546374c09030000c0000000c000000030576b6cf04bcfa
+5014300b00ffa1000072616e646f6d5f6c696e6b00b07ece882e2e2f72616e646f6d313233c43d7b00400700
+"""
+
+const CONTAINERS := [1, 2, 3, 4, 5, 12, 10, 9]
+
+struct Item:
+    pub name: str = ""
+    pub data: str = ""
+    pub link: str = ""
+    pub kind: int = 0
+    pub raw: void* = null
+    pub n: int = 0
+end
+
+func hexv(c: int): int:
+    if c >= 97: ret c - 87 end
+    ret c - 48
+end
+
+func unhex(h: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    bp := h as u8*
+    mut i := 0
+    until i < h.len():
+        c := bp[i] as int
+        if (c >= 48 and c <= 57) or (c >= 97 and c <= 102):
+            if i + 1 < h.len():
+                compress.BufPush(b, hexv(c) * 16 + hexv(bp[i + 1] as int))
+            end
+            i += 2
+        else:
+            i++
+        end
+    end
+    ret b
+end
+
+func file(name: str, data: str): Item:
+    ret Item { name = name, data = data, raw = data as void*, n = data.len() }
+end
+
+func sym(name: str, target: str): Item:
+    ret Item { name = name, link = target, kind = 1 }
+end
+
+func hard(name: str, target: str): Item:
+    ret Item { name = name, link = target, kind = 2 }
+end
+
+func has(dir: str, rel: str): bool:
+    p := filepath.Join(dir, rel)
+    r := os.Exists(p)
+    mem.Free(p as void*)
+    ret r
+end
+
+func ext(fmt: int): str:
+    if fmt == 1: ret ".zip" end
+    if fmt == 2: ret ".tar" end
+    if fmt == 3: ret ".tar.gz" end
+    if fmt == 4: ret ".tar.bz2" end
+    if fmt == 5: ret ".tar.xz" end
+    if fmt == 12: ret ".tar.zst" end
+    if fmt == 10: ret ".7z" end
+    if fmt == 9: ret ".rar" end
+    if fmt == 6: ret ".gz" end
+    if fmt == 7: ret ".bz2" end
+    if fmt == 8: ret ".xz" end
+    ret ".zst"
+end
+
+func tag(prefix: str, fmt: int, n: int): str:
+    ret prefix + " " + archive.FormatName(fmt) + " " + str.FromInt(n as i64)
+end
+
+func pack_stream(fmt: int, data: void*, n: int): compress.ByteBuf:
+    if fmt == 6: ret compress.GzipCompress(data, n) end
+    if fmt == 7: ret compress.Bzip2Compress(data, n) end
+    if fmt == 8: ret compress.XzCompress(data, n) end
+    ret compress.ZstdCompress(data, n)
+end
+
+func build(fmt: int, items: Vector<Item>): compress.ByteBuf:
+    if fmt == 1:
+        mut zs := Vector {} as Vector<archive.ZipFileInput>
+        each it in items:
+            if it.kind == 0: zs.push(archive.MakeZipFileInput(it.name, it.raw, it.n, 8)) end
+        end
+        out := archive.ZipCreate(zs)
+        zs.free()
+        ret out
+    end
+    if fmt == 10:
+        mut ss := Vector {} as Vector<archive.SevenZipFileInput>
+        each it in items:
+            mut si := archive.MakeSevenZipFileInput(it.name, it.raw, it.n, false)
+            if it.kind == 1: si.link = it.link end
+            if it.kind != 2: ss.push(si) end
+        end
+        out := archive.SevenZipCreate(ss)
+        ss.free()
+        ret out
+    end
+    if fmt == 9:
+        mut rs := Vector {} as Vector<archive.RarFileInput>
+        each it in items:
+            if it.kind == 0: rs.push(archive.MakeRarFileInput(it.name, it.raw, it.n, false)) end
+        end
+        out := archive.RarCreate(rs)
+        rs.free()
+        ret out
+    end
+    mut ts := Vector {} as Vector<archive.TarFileInput>
+    each it in items:
+        if it.kind == 1:
+            ts.push(archive.MakeTarSymlink(it.name, it.link))
+        else it.kind == 2:
+            ts.push(archive.MakeTarHardlink(it.name, it.link))
+        else:
+            ts.push(archive.MakeTarFileInput(it.name, it.raw, it.n, false))
+        end
+    end
+    mut tar := archive.TarCreate(ts)
+    ts.free()
+    if fmt == 2: ret tar end
+    mut out := compress.NewByteBuf()
+    if fmt == 3:
+        out = compress.GzipCompressBuf(tar)
+    else fmt == 4:
+        out = compress.Bzip2CompressBuf(tar)
+    else fmt == 5:
+        out = compress.XzCompressBuf(tar)
+    else:
+        out = compress.ZstdCompressBuf(tar)
+    end
+    compress.BufFree(tar)
+    ret out
+end
+
+func attempt(label: str, buf: compress.ByteBuf, fmt: int, lim: archive.Limits, disk: bool, root: str):
+    dest := filepath.Join(root, "d")
+    os.RemoveAll(dest)
+    mut path := ""
+    mut arc := archive.Archive {}
+    if disk:
+        path = filepath.Join(root, "in" + ext(fmt))
+        _ := archive.WriteBinaryFileBuf(path, buf)
+        arc = archive.OpenFile(path, "")
+        archive.SetLimits(arc, lim)
+    else:
+        arc = archive.OpenWith(buf.data, buf.len, "", lim)
+    end
+    n := archive.ExtractAll(arc, dest)
+    st := arc.status
+    mut es := archive.List(arc)
+    mut rd := 0
+    if es.len() > 0:
+        mut got := archive.Read(arc, es.get(0).name)
+        rd = arc.status
+        compress.BufFree(got)
+    end
+    archive.FreeEntries(es)
+    archive.Close(arc)
+    println label, disk ? "disk" : "mem", "files", n, "status", st, "read", rd
+    if disk:
+        os.Remove(path)
+        mem.Free(path as void*)
+    end
+    os.RemoveAll(dest)
+    mem.Free(dest as void*)
+end
+
+func slip_names(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("../evil.txt")
+    v.push("a/../../evil.txt")
+    v.push("/salam_safe_abs.txt")
+    v.push("C:\\salam_safe_win.txt")
+    v.push("..\\evil.txt")
+    v.push("x\\..\\..\\evil.txt")
+    ret v
+end
+
+func escaped(root: str): bool:
+    parent := filepath.Dir(root)
+    mut bad := has(parent, "evil.txt")
+    ev := filepath.Join(parent, "evil.txt")
+    os.Remove(ev)
+    mem.Free(ev as void*)
+    mem.Free(parent as void*)
+    if os.Exists("/salam_safe_abs.txt"):
+        bad = true
+        os.Remove("/salam_safe_abs.txt")
+    end
+    ret bad
+end
+
+func zip_slip(root: str):
+    names := slip_names()
+    each fmt in CONTAINERS:
+        mut i := 0
+        until i < names.len():
+            mut items := Vector {} as Vector<Item>
+            items.push(file("ok.txt", "fine fine fine fine"))
+            items.push(file(names.get(i), "bad bad bad bad"))
+            mut buf := build(fmt, items)
+            label := tag("slip", fmt, i)
+            attempt(label, buf, fmt, archive.DefaultLimits(), false, root)
+            attempt(label, buf, fmt, archive.DefaultLimits(), true, root)
+            println "  escaped", escaped(root)
+            compress.BufFree(buf)
+            items.free()
+            i++
+        end
+    end
+end
+
+func link_cases(root: str):
+    mut sets := Vector {} as Vector<Vector<Item>>
+    mut a := Vector {} as Vector<Item>
+    a.push(sym("l", "../../etc"))
+    sets.push(a)
+    mut b := Vector {} as Vector<Item>
+    b.push(sym("l", "/etc"))
+    sets.push(b)
+    mut c := Vector {} as Vector<Item>
+    c.push(hard("h", "../evil.txt"))
+    sets.push(c)
+    mut d := Vector {} as Vector<Item>
+    d.push(hard("h", "/etc/passwd"))
+    sets.push(d)
+    mut e := Vector {} as Vector<Item>
+    e.push(sym("d", "sub"))
+    e.push(file("d/x.txt", "through"))
+    sets.push(e)
+    mut f := Vector {} as Vector<Item>
+    f.push(sym("up", ".."))
+    f.push(file("up/evil.txt", "through"))
+    sets.push(f)
+    mut g := Vector {} as Vector<Item>
+    g.push(file("ok.txt", "fine"))
+    g.push(sym("fine", "ok.txt"))
+    sets.push(g)
+    each fmt in [2, 3, 4, 5, 12, 10]:
+        mut i := 0
+        until i < sets.len():
+            if fmt == 10 and (i == 2 or i == 3):
+                i++
+                continue
+            end
+            mut buf := build(fmt, sets.get(i))
+            label := tag("link", fmt, i)
+            attempt(label, buf, fmt, archive.DefaultLimits(), false, root)
+            attempt(label, buf, fmt, archive.DefaultLimits(), true, root)
+            println "  escaped", escaped(root)
+            compress.BufFree(buf)
+            i++
+        end
+    end
+    each hex in [EVIL5, SYM4]:
+        mut buf := unhex(hex)
+        attempt("link rar", buf, 9, archive.DefaultLimits(), false, root)
+        attempt("link rar", buf, 9, archive.DefaultLimits(), true, root)
+        println "  escaped", escaped(root)
+        compress.BufFree(buf)
+    end
+    mut k := 0
+    until k < sets.len():
+        sets.get(k).free()
+        k++
+    end
+    sets.free()
+end
+
+func zeros(n: int): compress.ByteBuf:
+    mut z := compress.NewByteBuf()
+    mut chunk := compress.NewByteBuf()
+    repeat 4096:
+        compress.BufPush(chunk, 0)
+    end
+    repeat n / 4096:
+        compress.BufPushBuf(z, chunk)
+    end
+    compress.BufFree(chunk)
+    ret z
+end
+
+func bomb_cases(root: str):
+    mut big := zeros(3145728)
+    each fmt in [1, 2, 3, 4, 5, 12, 10, 9, 6, 7, 8, 11]:
+        mut buf := compress.NewByteBuf()
+        if fmt == 6 or fmt == 7 or fmt == 8 or fmt == 11:
+            buf = pack_stream(fmt, big.data, big.len)
+        else:
+            mut items := Vector {} as Vector<Item>
+            items.push(Item { name = "zeros.bin", raw = big.data, n = big.len })
+            buf = build(fmt, items)
+            items.free()
+        end
+        mut lim := archive.DefaultLimits()
+        lim.max_ratio = 10
+        attempt(tag("ratio", fmt, 0), buf, fmt, lim, false, root)
+        attempt(tag("ratio", fmt, 0), buf, fmt, lim, true, root)
+        lim = archive.DefaultLimits()
+        lim.max_total = 1000000 as i64
+        attempt(tag("total", fmt, 0), buf, fmt, lim, false, root)
+        attempt(tag("total", fmt, 0), buf, fmt, lim, true, root)
+        lim = archive.DefaultLimits()
+        lim.max_entry = 1000000 as i64
+        attempt(tag("entry", fmt, 0), buf, fmt, lim, false, root)
+        attempt(tag("entry", fmt, 0), buf, fmt, lim, true, root)
+        lim = archive.DefaultLimits()
+        attempt(tag("plain", fmt, 0), buf, fmt, lim, false, root)
+        compress.BufFree(buf)
+    end
+    compress.BufFree(big)
+end
+
+func many_cases(root: str):
+    each fmt in CONTAINERS:
+        mut items := Vector {} as Vector<Item>
+        mut i := 0
+        until i < 40:
+            items.push(file("f" + str.FromInt(i as i64) + ".txt", "x"))
+            i++
+        end
+        mut buf := build(fmt, items)
+        mut lim := archive.DefaultLimits()
+        lim.max_entries = 10
+        attempt(tag("count", fmt, 0), buf, fmt, lim, false, root)
+        attempt(tag("count", fmt, 0), buf, fmt, lim, true, root)
+        lim.max_entries = 40
+        attempt(tag("count ok", fmt, 0), buf, fmt, lim, false, root)
+        attempt(tag("count ok", fmt, 0), buf, fmt, lim, true, root)
+        compress.BufFree(buf)
+        items.free()
+    end
+end
+
+func poke(fmt: int, buf: compress.ByteBuf, disk: bool, root: str): int:
+    mut lim := archive.DefaultLimits()
+    lim.max_total = 4194304 as i64
+    lim.max_entry = 2097152 as i64
+    dest := filepath.Join(root, "d")
+    os.RemoveAll(dest)
+    mut path := ""
+    mut arc := archive.Archive {}
+    if disk:
+        path = filepath.Join(root, "in" + ext(fmt))
+        _ := archive.WriteBinaryFileBuf(path, buf)
+        arc = archive.OpenFile(path, "")
+        archive.SetLimits(arc, lim)
+    else:
+        arc = archive.OpenWith(buf.data, buf.len, "", lim)
+    end
+    mut es := archive.List(arc)
+    mut k := 0
+    until k < es.len() and k < 4:
+        mut got := archive.Read(arc, es.get(k).name)
+        compress.BufFree(got)
+        k++
+    end
+    archive.FreeEntries(es)
+    _ := archive.ExtractAll(arc, dest)
+    st := arc.status
+    archive.Close(arc)
+    if disk:
+        os.Remove(path)
+        mem.Free(path as void*)
+    end
+    os.RemoveAll(dest)
+    mem.Free(dest as void*)
+    ret st
+end
+
+func corrupt_cases(root: str):
+    each fmt in [1, 2, 3, 4, 5, 12, 10, 9, 6, 7, 8, 11]:
+        mut items := Vector {} as Vector<Item>
+        items.push(file("docs/a.txt", "hello hello hello hello hello hello"))
+        items.push(file("b.bin", "0123456789abcdef0123456789abcdef"))
+        mut buf := compress.NewByteBuf()
+        if fmt == 6 or fmt == 7 or fmt == 8 or fmt == 11:
+            buf = pack_stream(fmt, "hello hello hello hello hello" as void*, 29)
+        else:
+            buf = build(fmt, items)
+        end
+        mut runs := 0
+        mut nothing := compress.NewByteBuf()
+        empty := poke(fmt, nothing, false, root)
+        compress.BufFree(nothing)
+        mut cut := 1
+        until cut < 16:
+            mut part := compress.BufClone(buf)
+            part.len = buf.len * cut / 16
+            _ := poke(fmt, part, false, root)
+            _ := poke(fmt, part, true, root)
+            runs += 2
+            compress.BufFree(part)
+            cut++
+        end
+        mut pos := 0
+        until pos < buf.len:
+            mut flip := compress.BufClone(buf)
+            p := flip.data as u8*
+            p[pos] = ((p[pos] as int) ^ 255) as u8
+            _ := poke(fmt, flip, false, root)
+            runs++
+            compress.BufFree(flip)
+            pos += 1 + buf.len / 40
+        end
+        println tag("corrupt", fmt, 0), "empty bad", empty != 0, "runs", runs
+        compress.BufFree(buf)
+        items.free()
+    end
+end
+
+func main:
+    root := filepath.Join(filepath.Join(os.TempDir(), "salam_safety"), "r")
+    parent := filepath.Dir(root)
+    os.RemoveAll(parent)
+    archive.EnsureDir(root)
+    println "== zip slip"
+    zip_slip(root)
+    println "== links"
+    link_cases(root)
+    println "== bombs"
+    bomb_cases(root)
+    println "== entry count"
+    many_cases(root)
+    println "== corrupt"
+    corrupt_cases(root)
+    os.RemoveAll(parent)
+    mem.Free(root as void*)
+    mem.Free(parent as void*)
+end

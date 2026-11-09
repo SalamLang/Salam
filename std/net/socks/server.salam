@@ -337,17 +337,15 @@ func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address):
     s.Close()
 end
 
-func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
+func _hs5(cfg: ServerConfig, s: dyn tunnel.Stream, req &: Request, user &: str): bool:
     nm := tunnel.ReadByte(s)
     if nm <= 0:
-        s.Close()
-        ret
+        ret false
     end
     mut mv := Vector {} as Vector<u8>
     defer mv.free()
     if not _recv(s, mv, nm):
-        s.Close()
-        ret
+        ret false
     end
     mut has0 := false
     mut has2 := false
@@ -365,42 +363,38 @@ func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
     _send(s, cv)
     cv.free()
     if choice == AuthNoAcceptable:
-        s.Close()
-        ret
+        ret false
     end
     if choice == AuthUserPass:
         if tunnel.ReadByte(s) != 1:
-            s.Close()
-            ret
+            ret false
         end
         ul := tunnel.ReadByte(s)
         mut uv := Vector {} as Vector<u8>
         defer uv.free()
         if ul < 1 or not _recv(s, uv, ul):
-            s.Close()
-            ret
+            ret false
         end
         pl := tunnel.ReadByte(s)
         mut pv := Vector {} as Vector<u8>
         defer pv.free()
         if pl < 0 or (pl > 0 and not _recv(s, pv, pl)):
-            s.Close()
-            ret
+            ret false
         end
-        okp := _authorized(cfg, _bytes_str(uv, 0, ul), _bytes_str(pv, 0, pl))
+        uname := _bytes_str(uv, 0, ul)
+        okp := _authorized(cfg, uname, _bytes_str(pv, 0, pl))
         ar := EncodeAuthReply(okp)
         _send(s, ar)
         ar.free()
         if not okp:
-            s.Close()
-            ret
+            ret false
         end
+        user = uname
     end
     mut rq := Vector {} as Vector<u8>
     defer rq.free()
     if not _recv(s, rq, 4):
-        s.Close()
-        ret
+        ret false
     end
     t := _b(rq, 3)
     mut more := 0
@@ -410,22 +404,27 @@ func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
         more = 18
     else t == AtypDomain:
         if not _recv(s, rq, 1):
-            s.Close()
-            ret
+            ret false
         end
         more = _b(rq, 4) + 2
     else:
         _reply(s, 5, RepAtypNotSupported, _wild())
-        s.Close()
-        ret
+        ret false
     end
     if not _recv(s, rq, more):
-        s.Close()
-        ret
+        ret false
     end
-    mut req := Request {}
     if DecodeRequest(rq, req) <= 0:
         _reply(s, 5, RepGeneralFailure, _wild())
+        ret false
+    end
+    ret true
+end
+
+func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
+    mut req := Request {}
+    mut user := ""
+    if not _hs5(cfg, s, req, user):
         s.Close()
         ret
     end
@@ -446,34 +445,37 @@ func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
     end
 end
 
-func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
+func _hs4(cfg: ServerConfig, s: dyn tunnel.Stream, req &: Request): bool:
     mut v := Vector {} as Vector<u8>
     defer v.free()
     v.push(4 as u8)
     if not _recv(s, v, 7):
-        s.Close()
-        ret
+        ret false
     end
     if not _read_cstr(s, v, 255):
-        s.Close()
-        ret
+        ret false
     end
     if _b(v, 4) == 0 and _b(v, 5) == 0 and _b(v, 6) == 0 and _b(v, 7) != 0:
         if not _read_cstr(s, v, 255):
-            s.Close()
-            ret
+            ret false
         end
     end
-    mut req := Request {}
     if Decode4Request(v, req) <= 0:
         _reply(s, 4, RepGeneralFailure, _wild())
-        s.Close()
-        ret
+        ret false
     end
     if cfg.require_auth:
         bad := Encode4Reply(Rep4BadUser, "0.0.0.0", 0)
         _send(s, bad)
         bad.free()
+        ret false
+    end
+    ret true
+end
+
+func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
+    mut req := Request {}
+    if not _hs4(cfg, s, req):
         s.Close()
         ret
     end

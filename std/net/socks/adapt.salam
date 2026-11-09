@@ -1,0 +1,162 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socks
+
+import net.tunnel
+
+@en "Socks5Inbound"
+@fa "ورودی ساکس۵"
+pub struct Socks5Inbound:
+    @en "config"
+    @fa "پیکربندی"
+    pub config: ServerConfig = ServerConfig {}
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "socks5"
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        v := tunnel.ReadByte(s)
+        if v != 5: ret tunnel.Session { error = "not a SOCKS5 client" } end
+        mut req := Request {}
+        mut user := ""
+        if not _hs5(this.config, s, req, user):
+            ret tunnel.Session { error = "SOCKS5 handshake failed" }
+        end
+        if req.cmd != CmdConnect:
+            _reply(s, 5, RepCmdNotSupported, _wild())
+            ret tunnel.Session { error = "SOCKS5 command not supported here" }
+        end
+        if not this.config.allow(CmdConnect, req.addr.host, req.addr.port):
+            _reply(s, 5, RepNotAllowed, _wild())
+            ret tunnel.Session { error = "target not allowed" }
+        end
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr(req.addr.host, req.addr.port), protocol = "socks5", user = user, command = 1 }
+    end
+
+    @en "Reply"
+    @fa "پاسخ"
+    pub func Reply(s: dyn tunnel.Stream, _sess: tunnel.Session, ok: bool):
+        if ok:
+            _reply(s, 5, RepSucceeded, _wild())
+        else:
+            _reply(s, 5, RepHostUnreachable, _wild())
+        end
+    end
+end
+
+@en "Socks4Inbound"
+@fa "ورودی ساکس۴"
+pub struct Socks4Inbound:
+    @en "config"
+    @fa "پیکربندی"
+    pub config: ServerConfig = ServerConfig {}
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "socks4"
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        v := tunnel.ReadByte(s)
+        if v != 4: ret tunnel.Session { error = "not a SOCKS4 client" } end
+        mut req := Request {}
+        if not _hs4(this.config, s, req):
+            ret tunnel.Session { error = "SOCKS4 handshake failed" }
+        end
+        if req.cmd != CmdConnect:
+            _reply(s, 4, RepCmdNotSupported, _wild())
+            ret tunnel.Session { error = "SOCKS4 command not supported here" }
+        end
+        if not this.config.allow(CmdConnect, req.addr.host, req.addr.port):
+            _reply(s, 4, RepNotAllowed, _wild())
+            ret tunnel.Session { error = "target not allowed" }
+        end
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr(req.addr.host, req.addr.port), protocol = "socks4", user = req.user, command = 1 }
+    end
+
+    @en "Reply"
+    @fa "پاسخ"
+    pub func Reply(s: dyn tunnel.Stream, _sess: tunnel.Session, ok: bool):
+        if ok:
+            _reply(s, 4, RepSucceeded, _wild())
+        else:
+            _reply(s, 4, RepGeneralFailure, _wild())
+        end
+    end
+end
+
+@en "SocksConnector"
+@fa "رابط ساکس"
+pub struct SocksConnector:
+    @en "client"
+    @fa "کلاینت"
+    pub client: Client = Client {}
+
+    @en "Server"
+    @fa "کارساز"
+    pub func Server(): tunnel.Addr:
+        ret tunnel.NewAddr(this.client.host, this.client.port)
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream, target: tunnel.Addr): bool:
+        ret ClientHandshake(s, this.client, CmdConnect, target.host, target.port).ok
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        if this.client.version == Socks5: ret "socks5" end
+        if this.client.version == Socks4a: ret "socks4a" end
+        ret "socks4"
+    end
+end
+
+@en "NewConnector"
+@fa "رابط جدید"
+pub func NewConnector(c: Client): SocksConnector:
+    ret SocksConnector { client = c }
+end
+
+@en "NewInbound"
+@fa "ورودی جدید"
+pub func NewInbound(cfg: ServerConfig): Socks5Inbound:
+    ret Socks5Inbound { config = cfg }
+end
+
+@en "NewInbound4"
+@fa "ورودی جدید ساکس۴"
+pub func NewInbound4(cfg: ServerConfig): Socks4Inbound:
+    ret Socks4Inbound { config = cfg }
+end
+
+@en "SetDialer"
+@fa "تعیین شماره‌گیر"
+pub func SetDialer(cfg &: ServerConfig, d: dyn tunnel.Dialer):
+    cfg.connect = (h: str, p: int):
+        s := d.Dial(tunnel.NewAddr(h, p))
+        if not s.Ok(): ret Outbound { ok = false, code = RepHostUnreachable, err = "dial failed via " + d.Name() } end
+        ret Outbound { ok = true, code = RepSucceeded, stream = s }
+    end
+end

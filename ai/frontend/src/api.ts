@@ -347,6 +347,7 @@ export type Plan = {
   enabled: boolean;
   sort: number;
   salam_only: boolean;
+  hours: number;
 };
 export type AdminPlan = Plan & { subscribers: number };
 export type Gateway = "zarinpal" | "zibal";

@@ -36,6 +36,15 @@ else:
 end
 
 const _STREAM_CHUNK := 65536
+const _MULTI_MAGIC := 0x53414C4D56303031
+
+struct _Multi:
+    pub magic: i64
+    pub n: int
+    pub fps: void**
+    pub starts: i64*
+    pub total: i64
+end
 
 @en "FileSink"
 @fa "مقصد پرونده"
@@ -77,6 +86,49 @@ else:
     func _tell64(fp: void*): i64: ret ftello(fp) end
 end
 
+func _is_multi(fp: void*): bool:
+    if fp == null:
+        ret false
+    end
+    ret (fp as i64*)[0] == _MULTI_MAGIC
+end
+
+func _multi_read(m: _Multi*, off: i64, dst: void*, n: int): int:
+    if off < (0 as i64):
+        ret 0
+    end
+    mut done := 0
+    mut at := off
+    mut vi := 0
+    until done < n:
+        until vi < m[0].n - 1 and at >= m[0].starts[vi + 1]:
+            vi++
+        end
+        if vi >= m[0].n or at >= m[0].starts[vi + 1]:
+            break
+        end
+        local := at - m[0].starts[vi]
+        room := m[0].starts[vi + 1] - at
+        mut want := (n - done) as i64
+        if want > room:
+            want = room
+        end
+        if _seek64(m[0].fps[vi], local, 0) != 0:
+            break
+        end
+        got := fread(((dst as i64) + (done as i64)) as void*, 1 as u64, want as u64, m[0].fps[vi]) as int
+        if got <= 0:
+            break
+        end
+        done += got
+        at += got as i64
+        if (got as i64) < want:
+            break
+        end
+    end
+    ret done
+end
+
 @en "FileOpenRead"
 @fa "بازکردن پرونده برای خواندن"
 pub func FileOpenRead(path: str): void*:
@@ -92,9 +144,20 @@ end
 @en "FileClose"
 @fa "بستن پرونده"
 pub func FileClose(fp: void*):
-    if fp != null:
-        fclose(fp)
+    if fp == null:
+        ret
     end
+    if _is_multi(fp):
+        m := fp as _Multi*
+        repeat m[0].n in i:
+            fclose(m[0].fps[i])
+        end
+        mem.Free(m[0].fps as void*)
+        mem.Free(m[0].starts as void*)
+        mem.Free(fp)
+        ret
+    end
+    fclose(fp)
 end
 
 @en "FileSeek"
@@ -106,6 +169,9 @@ end
 @en "FileSize"
 @fa "اندازه پرونده"
 pub func FileSize(fp: void*): i64:
+    if _is_multi(fp):
+        ret (fp as _Multi*)[0].total
+    end
     if _seek64(fp, 0 as i64, 2) != 0:
         ret -1
     end
@@ -117,10 +183,50 @@ end
 @en "FileReadAt"
 @fa "خواندن از جایگاه پرونده"
 pub func FileReadAt(fp: void*, off: i64, dst: void*, n: int): int:
-    if n <= 0 or not FileSeek(fp, off):
+    if n <= 0:
+        ret 0
+    end
+    if _is_multi(fp):
+        ret _multi_read(fp as _Multi*, off, dst, n)
+    end
+    if not FileSeek(fp, off):
         ret 0
     end
     ret fread(dst, 1 as u64, n as u64, fp) as int
+end
+
+@en "MultiOpenRead"
+@fa "بازکردن چند پرونده برای خواندن"
+pub func MultiOpenRead(paths: Vector<str>): void*:
+    n := paths.len()
+    if n < 1:
+        ret null
+    end
+    m := mem.AllocateZeroed(sizeof(_Multi)) as _Multi*
+    m[0].magic = _MULTI_MAGIC
+    m[0].n = 0
+    m[0].fps = mem.AllocateZeroed((n * 8) as u64) as void**
+    m[0].starts = mem.AllocateZeroed(((n + 1) * 8) as u64) as i64*
+    mut total := 0 as i64
+    repeat n in i:
+        fp := fopen(paths.get(i), "rb")
+        if fp == null:
+            FileClose(m as void*)
+            ret null
+        end
+        m[0].fps[i] = fp
+        m[0].starts[i] = total
+        m[0].n = i + 1
+        sz := FileSize(fp)
+        if sz < (0 as i64):
+            FileClose(m as void*)
+            ret null
+        end
+        total += sz
+    end
+    m[0].starts[n] = total
+    m[0].total = total
+    ret m as void*
 end
 
 @en "SinkOpen"
@@ -183,20 +289,19 @@ end
 @en "SinkCopyFrom"
 @fa "رونوشت از پرونده به مقصد"
 pub func SinkCopyFrom(s &: FileSink, fp: void*, off: i64, len: i64): bool:
-    if not FileSeek(fp, off):
-        ret false
-    end
     buf := mem.Allocate(_STREAM_CHUNK as u64)
     mut left := len
+    mut at := off
     mut ok := true
     until left > (0 as i64) and ok:
         want := left > (_STREAM_CHUNK as i64) ? _STREAM_CHUNK : (left as int)
-        got := fread(buf, 1 as u64, want as u64, fp) as int
+        got := FileReadAt(fp, at, buf, want)
         if got != want:
             ok = false
         else:
             ok = SinkWrite(s, buf, got)
             left -= got as i64
+            at += got as i64
         end
     end
     mem.Free(buf)

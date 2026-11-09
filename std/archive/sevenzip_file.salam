@@ -76,6 +76,9 @@ pub struct SevenZipFile:
     @en "header"
     @fa "سرایند"
     pub hdr: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    @en "volumes"
+    @fa "بخش ها"
+    pub volumes: Vector<str> = Vector {} as Vector<str>
 end
 
 func _szx_new(s: _Sz, fi: int, made: Vector<str>): _SzX:
@@ -599,6 +602,37 @@ func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: s
     ret st
 end
 
+func _szf_open(sf: SevenZipFile): void*:
+    if sf.volumes.len() > 1:
+        ret compress.MultiOpenRead(sf.volumes)
+    end
+    ret compress.FileOpenRead(sf.path)
+end
+
+func _szf_find_volumes(first: str): Vector<str>:
+    mut vols := Vector {} as Vector<str>
+    vols.push(str.Clone(first))
+    n := first.len()
+    ds := _rar_digits_end(first, n)
+    if ds == n or n - ds > 9 or ds < 4 or not str.EndsWith(str.Substr(first, 0, ds), ".7z."):
+        ret vols
+    end
+    mut idx := 1
+    until idx < 10000:
+        path := _sz_volume_path(first, idx)
+        if path.len() == 0:
+            break
+        end
+        if not os.Exists(path):
+            mem.Free(path as void*)
+            break
+        end
+        vols.push(path)
+        idx++
+    end
+    ret vols
+end
+
 func _szf_load(fp: void*, sf &: SevenZipFile): int:
     sz := sf.size
     if sz < (32 as i64):
@@ -765,7 +799,7 @@ func _szf_links(fp: void*, sf: SevenZipFile, s: _Sz, memcap: i64, kinds: Vector<
 end
 
 func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: str, cap: i64, memcap: i64, made: Vector<str>, written &: int): int:
-    fp := compress.FileOpenRead(sf.path)
+    fp := _szf_open(sf)
     if fp == null:
         ret SEVENZIP_IO
     end
@@ -848,7 +882,8 @@ end
 @fa "بازکردن پرونده هفت زد"
 pub func SevenZipOpenFile(path: str, password: str): SevenZipFile:
     mut sf := SevenZipFile { path = str.Clone(path), password = str.Clone(password), status = SEVENZIP_CORRUPT }
-    fp := compress.FileOpenRead(path)
+    sf.volumes = _szf_find_volumes(path)
+    fp := _szf_open(sf)
     if fp == null:
         sf.status = SEVENZIP_IO
         ret sf
@@ -858,7 +893,6 @@ pub func SevenZipOpenFile(path: str, password: str): SevenZipFile:
     compress.FileClose(fp)
     ret sf
 end
-
 @en "SevenZipFileClose"
 @fa "بستن پرونده هفت زد"
 pub func SevenZipFileClose(sf &: SevenZipFile):
@@ -869,6 +903,10 @@ pub func SevenZipFileClose(sf &: SevenZipFile):
     if sf.password.len() > 0:
         mem.Free(sf.password as void*)
     end
+    repeat sf.volumes.len() in v:
+        mem.Free(sf.volumes.get(v) as void*)
+    end
+    sf.volumes.free()
     sf.path = ""
     sf.password = ""
     sf.size = 0 as i64
@@ -899,7 +937,7 @@ pub func SevenZipFileEntries(sf &: SevenZipFile): Vector<Entry>:
         kinds.push(k)
         texts.push("")
     end
-    fp := compress.FileOpenRead(sf.path)
+    fp := _szf_open(sf)
     if fp != null:
         _szf_links(fp, sf, s, 0 as i64, kinds, texts)
         compress.FileClose(fp)

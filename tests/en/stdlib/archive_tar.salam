@@ -19,6 +19,11 @@ import compress
 import os
 import fs
 import filepath
+import mem
+import str
+
+mut pool_s := Vector {} as Vector<str>
+mut pool_b := Vector {} as Vector<compress.ByteBuf>
 
 func hex_val(c: int): int:
     if c >= 97: ret c - 87 end
@@ -36,9 +41,50 @@ func unhex(h: str): compress.ByteBuf:
     ret b
 end
 
+func keep(s: str): str:
+    pool_s.push(s)
+    ret s
+end
+
+func keepb(b: compress.ByteBuf): compress.ByteBuf:
+    pool_b.push(b)
+    ret b
+end
+
+func release():
+    repeat pool_s.len() in i:
+        mem.Free(pool_s.get(i) as void*)
+    end
+    pool_s.free()
+    repeat pool_b.len() in i:
+        mut b := pool_b.get(i)
+        compress.BufFree(b)
+    end
+    pool_b.free()
+end
+
+func j(a: str, b: str): str:
+    ret keep(filepath.Join(a, b))
+end
+
+func cat(a: str, b: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, b)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret keep(out)
+end
+
+func rep(a: str, n: int): str:
+    ret keep(a.repeat(n))
+end
+
 func short(s: str): str:
     if s.len() > 40:
-        ret s.substr(0, 12) + "..." + s.substr(s.len() - 12, 12)
+        head := keep(s.substr(0, 12))
+        tail := keep(s.substr(s.len() - 12, 12))
+        ret cat(cat(head, "..."), tail)
     end
     ret s
 end
@@ -53,13 +99,15 @@ func show(label: str, gz: str):
     end
     archive.FreeEntries(es)
     compress.BufFree(z)
+    release()
 end
 
-func read_text(path: str): str:
+func rt(path: str): str:
     mut ok := false
-    b := archive.ReadBinaryFile(path, ok)
-    if not ok: ret "missing" end
-    ret compress.BufToStrUnsafe(b)
+    mut b := archive.ReadBinaryFile(path, ok)
+    defer compress.BufFree(b)
+    if not ok: ret keep(str.Clone("missing")) end
+    ret keep(compress.BufToStrUnsafe(b))
 end
 
 func main:
@@ -69,26 +117,26 @@ func main:
     show("global", "1f8b08000000000002ffedd3b10ec22010c6f19b7d8a3e01bd832b4c268e8ebe022aa90e5d2a26f8f69634695d3ad29870bf852f2c37fd55abdad3c5a773f0f730421138db7a1135ad3bff1392eda0e96107ef57f4e3741eea44ae19e2730847d2863beb0e206ad2ab9862e11b396acbbcdd3f9a6513e76d9d99fa47e9bf387fbd4904157bfc45fffaa77f3df7cfd2ff1ed2471a1042881a7d0103d6590000100000")
     show("7z", "1f8b08000000000002ff2b4e2d4bcdd32ba92861a01d300002331313300d04e8344896c1d0d4c8dcc4c8d0d004c836303037333266503060a003282d2e492c52506018a1a01814ff5c0ca360148c8251300a4618000018cd7efb00080000")
 
-    root := filepath.Join(os.TempDir(), "salam_tar_extra")
+    root := j(os.TempDir(), "salam_tar_extra")
     os.RemoveAll(root)
-    gz := unhex("1f8b08000000000002ffed98416e8330104567dd53f80478c68ced6d0fc025901a012a255542a4f424dd74db45a5dea277c939ea66975025f2c26e54cfdb182124841ff307a6d2901c0c786b8f6be07c3d1e135bc3de232385f38ed082b29081dd766e374a41a154baade6fd9cdcbf63bee0df9df9f7e80c2814ffc9e957e3b8be03a1d8fa5f3d3dcf2f0fc34627adffb8fcf79e8de47f1eff5d343ab57f83c688ff4cfe2b7ddfaca7ae19a6c73feaff64e9e45df8a97f8fa01af17f9bf5df47a34128d67f74fed7e4ace47f31f96f7099ff8e25ffff53fe0fbf907cf020dc4cfe5f9cff102df23f5c2ef39f0c8c21fa5537ed6404546afdf763ea7b5c9fff2ee63fb676a028c770baf8febfcde23ffcd1c7f86713f2dfb419be108af7fff571787d3fbc7da6dbebebf5cfa7fe891cd5d2ffb33cfe3448eb17044128906f7ebe45b000240000")
-    out1 := filepath.Join(root, "gnu")
+    mut gz := unhex("1f8b08000000000002ffed98416e8330104567dd53f80478c68ced6d0fc025901a012a255542a4f424dd74db45a5dea277c939ea66975025f2c26e54cfdb182124841ff307a6d2901c0c786b8f6be07c3d1e135bc3de232385f38ed082b29081dd766e374a41a154baade6fd9cdcbf63bee0df9df9f7e80c2814ffc9e957e3b8be03a1d8fa5f3d3dcf2f0fc34627adffb8fcf79e8de47f1eff5d343ab57f83c688ff4cfe2b7ddfaca7ae19a6c73feaff64e9e45df8a97f8fa01af17f9bf5df47a34128d67f74fed7e4ace47f31f96f7099ff8e25ffff53fe0fbf907cf020dc4cfe5f9cff102df23f5c2ef39f0c8c21fa5537ed6404546afdf763ea7b5c9fff2ee63fb676a028c770baf8febfcde23ffcd1c7f86713f2dfb419be108af7fff571787d3fbc7da6dbebebf5cfa7fe891cd5d2ffb33cfe3448eb17044128906f7ebe45b000240000")
+    out1 := j(root, "gnu")
     println archive.TarGzExtractAll(gz.data, gz.len, out1)
-    println read_text(filepath.Join(out1, "a.txt")), read_text(filepath.Join(out1, "hl")), read_text(filepath.Join(out1, "sl"))
-    long := "g".repeat(50) + "/" + "h".repeat(50) + "/" + "i".repeat(20) + ".txt"
-    println read_text(filepath.Join(out1, long))
-    println read_text(filepath.Join(out1, "é日本.txt"))
-    println os.Exists(filepath.Join(out1, "emptydir"))
+    println rt(j(out1, "a.txt")), rt(j(out1, "hl")), rt(j(out1, "sl"))
+    long := cat(cat(cat(cat(cat(rep("g", 50), "/"), rep("h", 50)), "/"), rep("i", 20)), ".txt")
+    println rt(j(out1, long))
+    println rt(j(out1, "é日本.txt"))
+    println os.Exists(j(out1, "emptydir"))
     mut gok := false
-    one := archive.TarGzExtractByName(gz.data, gz.len, "./a.txt", gok)
-    println gok, compress.BufToStrUnsafe(one)
-    perm := fs.Permissions(filepath.Join(out1, "a.txt"))
-    mt := fs.ModTime(filepath.Join(out1, "a.txt"))
+    one := keepb(archive.TarGzExtractByName(gz.data, gz.len, "./a.txt", gok))
+    println gok, keep(compress.BufToStrUnsafe(one))
+    perm := fs.Permissions(j(out1, "a.txt"))
+    mt := fs.ModTime(j(out1, "a.txt"))
     println SALAM_OS_WINDOWS or perm == 420
     println SALAM_OS_WINDOWS or sizeof(void*) != 8 or mt == (1700000000 as i64)
 
     mut fl := Vector {} as Vector<archive.TarFileInput>
-    d := compress.BufFromStr("payload\n")
+    mut d := compress.BufFromStr("payload\n")
     mut f0 := archive.MakeTarFileInput("a.txt", d.data, d.len, false)
     f0.mtime = 1700000000 as i64
     f0.mode = 0o640
@@ -96,45 +144,48 @@ func main:
     fl.push(archive.MakeTarFileInput("dir", null, 0, true))
     fl.push(archive.MakeTarSymlink("dir/sl", "../a.txt"))
     fl.push(archive.MakeTarHardlink("hl", "a.txt"))
-    split := "p1234567890/".repeat(6) + "x/" + "n".repeat(90) + ".txt"
+    split := cat(cat(cat(rep("p1234567890/", 6), "x/"), rep("n", 90)), ".txt")
     fl.push(archive.MakeTarFileInput(split, d.data, d.len, false))
-    deep := "q".repeat(150) + "/f.txt"
+    deep := cat(rep("q", 150), "/f.txt")
     fl.push(archive.MakeTarFileInput(deep, d.data, d.len, false))
-    wide := "é日本-" + "z".repeat(200) + ".txt"
+    wide := cat(cat("é日本-", rep("z", 200)), ".txt")
     fl.push(archive.MakeTarFileInput(wide, d.data, d.len, false))
-    fl.push(archive.MakeTarSymlink("l".repeat(120), "t".repeat(130)))
+    fl.push(archive.MakeTarSymlink(rep("l", 120), rep("t", 130)))
     mut big := archive.MakeTarFileInput("late.txt", d.data, d.len, false)
     big.mtime = 99999999999 as i64
     fl.push(big)
-    t := archive.TarCreate(fl)
+    mut t := archive.TarCreate(fl)
     println t.len % 512
     mut es := archive.TarList(t.data, t.len)
     each e in es:
         println e.kind, e.name.len(), e.link.len(), e.size, e.mtime, e.mode
     end
     archive.FreeEntries(es)
-    println archive.TarList(t.data, t.len).get(4).name == split
-    out2 := filepath.Join(root, "made")
+    mut tl4 := archive.TarList(t.data, t.len)
+    println tl4.get(4).name == split
+    archive.FreeEntries(tl4)
+    out2 := j(root, "made")
     println archive.TarExtractAll(t.data, t.len, out2)
-    println read_text(filepath.Join(out2, "hl")), read_text(filepath.Join(out2, "dir/sl")), read_text(filepath.Join(out2, split)), read_text(filepath.Join(out2, wide))
-    println read_text(filepath.Join(out2, "late.txt"))
-    tg := archive.TarGzCreate(fl)
+    println rt(j(out2, "hl")), rt(j(out2, "dir/sl")), rt(j(out2, split)), rt(j(out2, wide))
+    println rt(j(out2, "late.txt"))
+    mut tg := archive.TarGzCreate(fl)
     mut tok := false
     mut tes := archive.TarGzList(tg.data, tg.len, tok)
     println tok, tes.len()
     archive.FreeEntries(tes)
-    tl := archive.TarGzListMax(tg.data, tg.len, 1000, tok)
+    mut tl := archive.TarGzListMax(tg.data, tg.len, 1000, tok)
     println tok, tl.len()
-    println archive.TarGzExtractAllMax(tg.data, tg.len, filepath.Join(root, "capped"), 1000), os.Exists(filepath.Join(root, "capped"))
-    one2 := archive.TarGzExtractByNameMax(tg.data, tg.len, "late.txt", 1000, tok)
+    archive.FreeEntries(tl)
+    println archive.TarGzExtractAllMax(tg.data, tg.len, j(root, "capped"), 1000), os.Exists(j(root, "capped"))
+    one2 := keepb(archive.TarGzExtractByNameMax(tg.data, tg.len, "late.txt", 1000, tok))
     println tok, one2.len
-    one3 := archive.TarGzExtractByName(tg.data, tg.len, "late.txt", tok)
-    println tok, compress.BufToStrUnsafe(one3)
-    println archive.TarGzCreateFile(fl, filepath.Join(root, "x.tar.gz"))
-    println archive.TarGzExtractAll(tg.data, tg.len, filepath.Join(root, "viagz"))
-    println read_text(filepath.Join(root, "viagz/a.txt"))
-    junk := compress.BufFromStr("not gzip data at all, just text")
-    println archive.TarGzExtractAll(junk.data, junk.len, filepath.Join(root, "junk")), os.Exists(filepath.Join(root, "junk"))
+    one3 := keepb(archive.TarGzExtractByName(tg.data, tg.len, "late.txt", tok))
+    println tok, keep(compress.BufToStrUnsafe(one3))
+    println archive.TarGzCreateFile(fl, j(root, "x.tar.gz"))
+    println archive.TarGzExtractAll(tg.data, tg.len, j(root, "viagz"))
+    println rt(j(root, "viagz/a.txt"))
+    mut junk := compress.BufFromStr("not gzip data at all, just text")
+    println archive.TarGzExtractAll(junk.data, junk.len, j(root, "junk")), os.Exists(j(root, "junk"))
 
     mut bad := Vector {} as Vector<archive.TarFileInput>
     bad.push(archive.MakeTarFileInput("ok.txt", d.data, d.len, false))
@@ -149,13 +200,22 @@ func main:
     bad.push(archive.MakeTarSymlink("dot/back", ".."))
     bad.push(archive.MakeTarFileInput("dot/escape.txt", d.data, d.len, false))
     bad.push(archive.MakeTarSymlink("good", "ok.txt"))
-    b := archive.TarCreate(bad)
-    sec := filepath.Join(root, "sec")
-    inner := filepath.Join(sec, "inner")
+    mut b := archive.TarCreate(bad)
+    sec := j(root, "sec")
+    inner := j(sec, "inner")
     println archive.TarExtractAll(b.data, b.len, inner)
-    println os.Exists(filepath.Join(sec, "escape.txt")), os.Exists(filepath.Join(sec, "outside.txt"))
-    println os.Exists(filepath.Join(inner, "abs")), os.Exists(filepath.Join(inner, "up")), os.Exists(filepath.Join(inner, "hard"))
-    println read_text(filepath.Join(inner, "ok.txt")), read_text(filepath.Join(inner, "good"))
+    println os.Exists(j(sec, "escape.txt")), os.Exists(j(sec, "outside.txt"))
+    println os.Exists(j(inner, "abs")), os.Exists(j(inner, "up")), os.Exists(j(inner, "hard"))
+    println rt(j(inner, "ok.txt")), rt(j(inner, "good"))
 
     os.RemoveAll(root)
+    fl.free()
+    bad.free()
+    compress.BufFree(gz)
+    compress.BufFree(d)
+    compress.BufFree(t)
+    compress.BufFree(tg)
+    compress.BufFree(junk)
+    compress.BufFree(b)
+    release()
 end

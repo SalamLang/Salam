@@ -19,6 +19,7 @@ import compress
 import filepath
 import mem
 import os
+import str
 
 const SOLID := """
 526172211a07010009efc86f0b0105070406010180808000f59006092302030bc300049c04a48302dcdfaa7280050105
@@ -139,20 +140,43 @@ func get(a: compress.ByteBuf, name: str, max: int): int:
     ret st
 end
 
-func read_text(path: str): str:
+func text_in(dir: str, name: str): str:
+    path := filepath.Join(dir, name)
+    defer mem.Free(path as void*)
     mut ok := false
-    buf := archive.ReadBinaryFile(path, ok)
+    mut buf := archive.ReadBinaryFile(path, ok)
+    defer compress.BufFree(buf)
     if not ok:
-        ret "missing"
+        ret str.Clone("missing")
     end
     ret compress.BufToStrUnsafe(buf)
 end
 
+func print_text(dir: str, name: str):
+    t := text_in(dir, name)
+    println t
+    mem.Free(t as void*)
+end
+
+func exists_in(dir: str, name: str): bool:
+    path := filepath.Join(dir, name)
+    found := os.Exists(path)
+    mem.Free(path as void*)
+    ret found
+end
+
+func size_in(dir: str, name: str): i64:
+    path := filepath.Join(dir, name)
+    n := os.FileSize(path)
+    mem.Free(path as void*)
+    ret n
+end
+
 func main:
-    solid := unhex(SOLID)
-    filt := unhex(FILT)
-    enc := unhex(ENC)
-    empty1 := unhex(EMPTY1)
+    mut solid := unhex(SOLID)
+    mut filt := unhex(FILT)
+    mut enc := unhex(ENC)
+    mut empty1 := unhex(EMPTY1)
     println archive.IsRar(solid.data, solid.len), archive.IsRar(filt.data, filt.len), archive.IsRar(enc.data, 3)
     show("solid", solid)
     show("filters", filt)
@@ -176,7 +200,9 @@ func main:
     println get(bad, "b.txt", 0) != archive.RAR_OK
     mut cut := compress.BufClone(filt)
     cut.len /= 2
-    println archive.RarList(cut.data, cut.len).len() <= 2, get(cut, "audio.bin", 0) != archive.RAR_OK
+    mut cut_list := archive.RarList(cut.data, cut.len)
+    println cut_list.len() <= 2, get(cut, "audio.bin", 0) != archive.RAR_OK
+    archive.FreeEntries(cut_list)
     compress.BufFree(bad)
     compress.BufFree(cut)
 
@@ -191,19 +217,22 @@ func main:
     files.push(f2)
     files.push(archive.MakeRarFileInput("empty.txt", null, 0, false))
     files.push(archive.MakeRarFileInput("../escape.txt", d1 as void*, d1.len(), false))
-    made := archive.RarCreate(files)
+    mut made := archive.RarCreate(files)
     show("made", made)
     get(made, "docs/hello.txt", 0)
     get(made, "docs/second.txt", 0)
     mut ok := false
-    small := archive.RarExtractByNameMax(made.data, made.len, "docs/hello.txt", 5, ok)
+    mut small := archive.RarExtractByNameMax(made.data, made.len, "docs/hello.txt", 5, ok)
     println ok, small.len
-    whole := archive.RarExtractByNameMax(made.data, made.len, "docs/hello.txt", 100, ok)
+    mut whole := archive.RarExtractByNameMax(made.data, made.len, "docs/hello.txt", 100, ok)
     println ok, whole.len
     disk := filepath.Join(os.TempDir(), "salam_rar_demo.rar")
     println archive.RarCreateFile(files, disk)
-    back := archive.ReadBinaryFile(disk, ok)
+    mut back := archive.ReadBinaryFile(disk, ok)
     println ok, back.len == made.len
+    compress.BufFree(small)
+    compress.BufFree(whole)
+    compress.BufFree(back)
     os.Remove(disk)
     mem.Free(disk as void*)
 
@@ -212,14 +241,20 @@ func main:
     mut st := 0
     n := archive.RarExtractAllStatus(made.data, made.len, dir, st)
     println n, archive.RarStatusText(st)
-    println read_text(filepath.Join(dir, "docs/hello.txt"))
-    println read_text(filepath.Join(dir, "docs/second.txt"))
-    println os.Exists(filepath.Join(dir, "empty.txt")), os.Exists(filepath.Join(dir, "../escape.txt"))
-    println archive.RarExtractAll(filt.data, filt.len, dir), os.FileSize(filepath.Join(dir, "audio.bin"))
+    print_text(dir, "docs/hello.txt")
+    print_text(dir, "docs/second.txt")
+    println exists_in(dir, "empty.txt"), exists_in(dir, "../escape.txt")
+    println archive.RarExtractAll(filt.data, filt.len, dir), size_in(dir, "audio.bin")
     os.RemoveAll(dir)
     mem.Free(dir as void*)
 
     println "status"
     println archive.RarStatusText(archive.RAR_OK), "|", archive.RarStatusText(archive.RAR_UNSUPPORTED), "|", archive.RarStatusText(archive.RAR_BAD_CRC), "|", archive.RarStatusText(archive.RAR_MULTIVOLUME), "|", archive.RarStatusText(99)
+    files.free()
+    compress.BufFree(made)
+    compress.BufFree(solid)
+    compress.BufFree(filt)
+    compress.BufFree(enc)
+    compress.BufFree(empty1)
     ret 0
 end

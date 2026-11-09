@@ -1,0 +1,117 @@
+pkg.en = net/reality
+pkg.name = net.reality
+pkg.group = Network
+pkg.summary = The REALITY security layer of Xray: a client that proves itself inside a TLS 1.3 handshake, a server that shows everyone else the real website, key and short id helpers, and link parameters.
+pkg.title = The net.reality package in Salam | REALITY client and server
+pkg.description = The net.reality package in Salam: the XTLS REALITY transport security with a client and a server, x25519 keys and short ids, probe fallback to a real website, link parameters, tested against a real Xray build, and the limits of this implementation, with examples.
+pkg.import = net.reality
+pkg.intro <<
+<p>REALITY is a way to hide a proxy server behind a website that already exists. The client sends an ordinary TLS 1.3 handshake whose server name is that website. Inside the handshake, in a field that is random bytes to everybody else, it puts a small sealed message that only the owner of the server's key can open. If the message opens and the short id is known, the server answers as itself and the connection carries your traffic. If not (a censor probing the address, a browser, a scanner) the server does nothing clever: it forwards the bytes to the real website and forwards the answers back, so the probe sees the real site's real certificate. There is no certificate of your own to find.</p>
+<p>This package is both halves. <code>DialOver</code> runs the client half on a connected socket and returns a <code>tls.Conn</code>. <code>Accept</code> runs the server half on an accepted socket: it reads the first record, decides, and either returns an authenticated <code>tls.Conn</code> or relays the connection to the destination. <code>GenerateKey</code> and <code>NewShortId</code> make the secrets, and <code>ParseParams</code> and <code>FormatParams</code> read and write the <code>security=reality</code> part of a <code>vless://</code> link. The ClientHello is built by <a href="/std/net/utls/">net.utls</a> so it looks like a browser, and the handshake itself is the TLS 1.3 code of <a href="/std/tls/">tls</a>.</p>
+
+<h3 id="wire">What happens on the wire</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Step</th><th>What</th></tr></thead>
+<tbody>
+<tr><td>Client hello</td><td>A browser-like ClientHello with an x25519 key share and the real website as server name. The 32 byte session id is the sealed message.</td></tr>
+<tr><td>Sealed message</td><td>16 bytes: three version bytes, one zero byte, the time as 4 bytes and the 8 byte short id. It is sealed with AES-256-GCM. The key is HKDF-SHA256 over the x25519 secret between the client's ephemeral key and the server's static key, with the first 20 bytes of the hello random as salt and <code>REALITY</code> as info. The nonce is the last 12 bytes of the random, and the whole ClientHello (with the session id set to zeros) is the associated data.</td></tr>
+<tr><td>Server, not authenticated</td><td>Connects to the destination, sends it the bytes it has read and copies in both directions until both sides close.</td></tr>
+<tr><td>Server, authenticated</td><td>Completes a TLS 1.3 handshake with a one-off ed25519 certificate. The certificate's signature field is not a signature: it is HMAC-SHA512 of the certificate's public key under the key derived above.</td></tr>
+<tr><td>Client check</td><td>Instead of checking a certificate chain, the client recomputes that HMAC, and verifies the ed25519 CertificateVerify signature with the certificate's key. Only the real server can produce the HMAC.</td></tr>
+</tbody></table></div>
+
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>The server name must be one of <code>server_names</code>.</strong> Otherwise the server forwards you to the website like any stranger, and the client reports <code>server did not sign with ed25519</code>, because the website's certificate is not an ed25519 HMAC certificate. That message means "authentication failed" in every case: wrong public key, unknown short id, wrong name.</li>
+<li><strong>A current Xray server only accepts a hello with a hybrid key share.</strong> Since the ML-KEM change Xray rejects a ClientHello that has no X25519MLKEM768 share before the plain x25519 one. This package always sends one (see the limits), so use the <code>chrome</code> or <code>edge</code> fingerprint with such a server. The <code>firefox</code> and <code>safari</code> profiles send no hybrid share and are not authenticated by it.</li>
+<li><strong>The destination has to look like your server.</strong> Xray makes its handshake records exactly as long as the destination's. The destination should be a TLS 1.3 site that negotiates the same ALPN you offer (usually <code>h2</code>) and does not select X25519MLKEM768, because this package cannot finish a hybrid key exchange (see the limits).</li>
+<li><strong>Close sockets of failed clients.</strong> A rejected client is relayed until it closes; a program that leaves its socket open keeps the relay open too.</li>
+<li><strong>A short id has to be an even number of hex digits, at most 16.</strong> It is zero padded to 8 bytes. An empty short id is the all-zero id and must be in the server's list to work.</li>
+<li><strong>Clocks.</strong> <code>max_time_diff</code> is in milliseconds and 0 turns the check off, as in Xray.</li>
+</ul>
+
+<h2 id="guide-keys">Keys and short ids</h2>
+<p><code>GenerateKey</code> returns an x25519 pair as the 43 character base64url text that Xray prints for <code>xray x25519</code>. The private key stays on the server; the public key goes into every client. <code>PublicKeyOf</code> recomputes the public key from the private one. A short id tells clients apart without any extra key.</p>
+{{example.net-reality-guide-keys}}
+
+<h2 id="guide-link">Link parameters</h2>
+<p>A REALITY share link is a <code>vless://</code> link with <code>security=reality</code> and the keys <code>pbk</code> (public key), <code>sid</code> (short id), <code>spx</code> (spider path), <code>sni</code>, <code>fp</code> (fingerprint) and <code>flow</code>. The package that reads <code>vless://</code> links is <a href="/std/net/vless/">net.vless</a>; the part that is about REALITY is here. Give <code>ParseParams</code> the query text (the part after <code>?</code>) and it fills a <code>Settings</code>; <code>FormatParams</code> goes back. Values are kept as written and are not percent decoded.</p>
+{{example.net-reality-guide-link}}
+
+<h2 id="guide-loopback">A client, a server and a probe</h2>
+<p>The example runs everything in one program. The destination is a plain decoy that answers one request. The first client has the right key and short id: the server accepts it and the two sides exchange a message through an ordinary <code>tls.Conn</code>. The second connection never speaks TLS and so cannot be authenticated; it is relayed to the destination and gets the decoy's answer. A real deployment is the same code with a real destination and the two halves in different programs.</p>
+{{example.net-reality-guide-loopback}}
+
+<h2 id="guide-usage">Using it in a tunnel</h2>
+<p>After <code>DialOver</code> or <code>Accept</code> succeeds you hold a <code>tls.Conn</code>, which is what <a href="/std/net/transport/">net.transport</a> keeps for TLS connections. To use REALITY as the security layer of a VLESS outbound, dial the TCP socket as usual and call <code>reality.DialOver(fd, settings)</code> where the transport would call <code>tls.WrapClient</code>; on the server call <code>reality.Accept(fd, server_settings)</code> where it would call <code>tls.WrapServer</code>. <code>tunnel.WrapTls</code> turns the result into a stream. The connection then carries the VLESS header and payload.</p>
+
+<h2 id="guide-interop">What was tested against a real Xray</h2>
+<p>Xray 26.11.9 (Linux amd64, from the official release, checksum checked) was run on the loopback interface with a local TLS 1.3 server as its destination:</p>
+<ul>
+<li>This client against a real Xray REALITY server (VLESS inbound): the handshake completes and a VLESS request through it reaches a TCP echo service and comes back.</li>
+<li>A real Xray client (VLESS outbound with REALITY, fingerprint <code>chrome</code>) against this server: the request is accepted, the VLESS header arrives, and the data round trips.</li>
+<li>A plain <code>openssl s_client</code> against this server is shown the destination's certificate.</li>
+</ul>
+<p>The tests in the repository use this package against itself, because Xray is not available there.</p>
+
+<h2 id="guide-limits">Limits</h2>
+<ul>
+<li><strong>Written from memory of the REALITY source and checked only against Xray 26.11.9.</strong> The sealed message layout, the key derivation and the certificate rule match that build on loopback. Older Xray and sing-box builds were not tried. Version and time checks are done the way that build does them, not from a specification.</li>
+<li><strong>The hybrid key share is a placeholder.</strong> The X25519MLKEM768 share carries a well formed but random ML-KEM encapsulation key, with no key behind it. A destination that chooses that group completes the exchange with it and this package cannot finish, because ML-KEM is not implemented. Choose a destination that does not negotiate X25519MLKEM768, or accept that it does not work with that server.</li>
+<li><strong>The flow <code>xtls-rprx-vision</code> is not implemented.</strong> <code>flow</code> is carried in <code>Settings</code> and in link parameters only. Use an empty flow.</li>
+<li><strong>The spider path <code>spx</code> is stored and written back and is not used.</strong> The client does not browse the destination after a failed check.</li>
+<li><strong>The optional ML-DSA-65 certificate signature of Xray is not checked.</strong></li>
+<li><strong>No replay protection.</strong> A recorded ClientHello authenticates again. Set <code>max_time_diff</code> to limit it.</li>
+<li><strong>No HelloRetryRequest.</strong> The hello is fixed at the time it is built, so a server that wants another group fails the handshake.</li>
+<li><strong>Not constant time.</strong> The ed25519 code is correct against RFC 8032 vectors but is not hardened against timing attacks. The server signs with a fresh key for each connection.</li>
+<li>The server relays an unauthenticated client with the first record only up to its first read of 16384 bytes; a ClientHello split over several records is relayed but not authenticated.</li>
+</ul>
+>>
+
+doc.Settings = What a client needs to reach a REALITY server.
+doc.Settings.server_name = The server name in the ClientHello. It must be one of the server's <code>server_names</code> and a name the destination serves.
+doc.Settings.public_key = The server's public key, 43 base64url characters.
+doc.Settings.short_id = Up to 16 hex digits, an even count. Empty means all zeros.
+doc.Settings.spider_x = The <code>spx</code> value of a link. Stored and written back, not used.
+doc.Settings.fingerprint = The <a href="/std/net/utls/">net.utls</a> profile name. Empty means <code>chrome</code>.
+doc.Settings.alpn = ALPN override, comma separated. Empty keeps the profile's list.
+doc.Settings.flow = The flow of a link. Carried only; <code>xtls-rprx-vision</code> is not implemented.
+doc.ServerSettings = What a server needs.
+doc.ServerSettings.private_key = The server's private key, 43 base64url characters.
+doc.ServerSettings.dest = The website to show to everyone else, as <code>host:port</code>.
+doc.ServerSettings.server_names = Comma separated names a client may use as its server name.
+doc.ServerSettings.short_ids = Comma separated short ids that are accepted.
+doc.ServerSettings.max_time_diff = The largest allowed difference between the client's clock and the server's, in milliseconds. 0 turns the check off.
+doc.ServerSettings.dest_timeout_ms = The time allowed to connect to the destination.
+doc.KeyPair = An x25519 key pair in the text form that Xray uses.
+doc.KeyPair.private_key = The private key.
+doc.KeyPair.public_key = The public key.
+doc.Accepted = The outcome of <code>Accept</code>.
+doc.Accepted.ok = The client was authenticated and <code>conn</code> is open.
+doc.Accepted.proxied = The connection was not authenticated and has been relayed to the destination until it ended.
+doc.Accepted.conn = The TLS connection when <code>ok</code> is true.
+doc.Accepted.sni = The server name the client sent.
+doc.Accepted.short_id = The client's short id as 16 hex digits.
+doc.Accepted.err = Why it was not accepted.
+doc.GenerateKey = Makes a new x25519 key pair.
+doc.PublicKeyOf = The public key for a private key, or an empty text when the private key is not valid.
+doc.NewShortId = Makes a random short id of the given number of bytes, 1 to 8, as hex.
+doc.ValidPublicKey = True when the text is a 43 character base64url key.
+doc.ValidShortId = True when the text is an even number of hex digits, at most 16.
+doc.DialOver = Runs the client half on a connected socket. Check <code>tls.ConnOk</code> on the result.
+doc.Accept = Runs the server half on an accepted socket. It blocks while it relays a rejected client.
+doc.ParseParams = Reads <code>pbk</code>, <code>sid</code>, <code>spx</code>, <code>sni</code>, <code>fp</code>, <code>flow</code> and <code>alpn</code> from a query text.
+doc.FormatParams = Writes the REALITY part of a link query, starting with <code>security=reality</code>.
+ex.Settings = -
+ex.ServerSettings = -
+ex.KeyPair = -
+ex.Accepted = -
+ex.GenerateKey = -
+ex.PublicKeyOf = -
+ex.NewShortId = -
+ex.ValidPublicKey = -
+ex.ValidShortId = -
+ex.DialOver = -
+ex.Accept = -
+ex.ParseParams = -
+ex.FormatParams = -

@@ -3,7 +3,7 @@ import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminP
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
-import { IconActivity, IconBadgeCheck, IconChart, IconChat, IconClose, IconKey, IconSearch, IconShield, IconUsers } from "./icons";
+import { IconActivity, IconBadgeCheck, IconChart, IconChat, IconClose, IconDownload, IconKey, IconSearch, IconShield, IconUsers } from "./icons";
 import { fmtSize } from "./Attach";
 import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
@@ -2522,11 +2522,11 @@ export function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: str
                       </td>
                       <td className="cell-actions">
                         <div className="row-actions">
-                          <button type="button" className="button ghost small" onClick={() => saveUpload(f, tell)}>
-                            {t("دریافت", "Download")}
+                          <button type="button" className="button ghost small icon-only" onClick={() => saveUpload(f, tell)} title={t("دریافت", "Download")} aria-label={t("دریافت", "Download")}>
+                            <IconDownload width={16} height={16} />
                           </button>
-                          <a className="button ghost small" href={`/admin/chats/${f.chat_id}`} target="_blank" rel="noopener">
-                            {t("گفت‌وگو", "Chat")}
+                          <a className="button ghost small icon-only" href={`/admin/chats/${f.chat_id}`} target="_blank" rel="noopener" title={t("گفت‌وگو", "Chat")} aria-label={t("گفت‌وگو", "Chat")}>
+                            <IconChat width={16} height={16} />
                           </a>
                         </div>
                       </td>

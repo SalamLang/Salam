@@ -18,10 +18,20 @@ import mem
 
 const _RH_FAST := 12
 
+const _RB_BUF := 4194304
+const _RB_LOW := 1048576
+
 struct _RarBits:
     pub p: u8*
     pub n: int
     pub pos: int
+end
+
+struct _RarStrm:
+    pub base: i64
+    pub soff: i64
+    pub stream: bool
+    pub cap: int
 end
 
 struct _RarHuff:
@@ -31,6 +41,67 @@ struct _RarHuff:
     pub first: int*
     pub fidx: int*
     pub nsyms: int
+end
+
+func _rb_apos(b &: _RarBits, st &: _RarStrm): i64:
+    ret (st.base << 3) + (b.pos as i64)
+end
+
+func _rb_fill(b &: _RarBits, st &: _RarStrm, s &: _RarSrc):
+    if not st.stream:
+        ret
+    end
+    have := b.n - (b.pos >> 3)
+    if have >= _RB_LOW or st.soff >= s.total:
+        ret
+    end
+    shift := b.pos >> 3
+    if shift > 0:
+        mem.MemMove(b.p as void*, _poff(b.p, shift) as void*, have as u64)
+        st.base += shift as i64
+        b.pos &= 7
+        b.n = have
+    end
+    mut take := st.cap - b.n
+    if (take as i64) > s.total - st.soff:
+        take = (s.total - st.soff) as int
+    end
+    q := _rsrc_get(s, st.soff, take)
+    if q == null:
+        st.soff = s.total
+        ret
+    end
+    mem.Copy(_poff(b.p, b.n) as void*, q as void*, take as u64)
+    b.n += take
+    st.soff += take as i64
+end
+
+func _rb_open(s &: _RarSrc, st &: _RarStrm): _RarBits:
+    st.base = 0 as i64
+    if s.mem != null and not s.aes_on and s.total <= (2000000000 as i64):
+        st.stream = false
+        st.soff = s.total
+        st.cap = 0
+        ret _RarBits { p = s.mem, n = s.total as int, pos = 0 }
+    end
+    st.stream = true
+    st.soff = 0 as i64
+    st.cap = _RB_BUF
+    buf := mem.AllocateZeroed((_RB_BUF + 64) as u64) as u8*
+    mut b := _RarBits { p = buf, n = 0, pos = 0 }
+    _rb_fill(b, st, s)
+    ret b
+end
+
+func _rb_close(b &: _RarBits, st &: _RarStrm):
+    if st.stream:
+        mem.Free(b.p as void*)
+        b.p = null
+    end
+end
+
+func _rb_done(b &: _RarBits, st &: _RarStrm, s &: _RarSrc): bool:
+    ret b.pos >= b.n * 8 and (not st.stream or st.soff >= s.total)
 end
 
 func _rb_peek(b &: _RarBits, count: int): int:

@@ -1,0 +1,838 @@
+@en "net/reality"
+@fa "ریالیتی"
+package reality
+
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import crypto
+import time
+import str
+import tls
+import net.utls
+import net.tcp
+import net.tunnel
+
+const _B64 := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+struct _B:
+    pub p: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+end
+
+struct _Parsed:
+    pub ok: bool = false
+    pub random_off: int = 0
+    pub sid_off: int = 0
+    pub sid_len: int = 0
+    pub share_off: int = 0 - 1
+    pub tls13: bool = false
+    pub sni: str = ""
+end
+
+@en "Settings"
+@fa "تنظیمات"
+pub struct Settings:
+    @en "server_name"
+    @fa "نام سرور"
+    pub server_name: str = ""
+    @en "public_key"
+    @fa "کلید عمومی"
+    pub public_key: str = ""
+    @en "short_id"
+    @fa "شناسه کوتاه"
+    pub short_id: str = ""
+    @en "spider_x"
+    @fa "مسیر عنکبوتی"
+    pub spider_x: str = ""
+    @en "fingerprint"
+    @fa "اثر انگشت"
+    pub fingerprint: str = "chrome"
+    @en "alpn"
+    @fa "پروتکل برنامه"
+    pub alpn: str = ""
+    @en "flow"
+    @fa "جریان"
+    pub flow: str = ""
+end
+
+@en "ServerSettings"
+@fa "تنظیمات سرور"
+pub struct ServerSettings:
+    @en "private_key"
+    @fa "کلید خصوصی"
+    pub private_key: str = ""
+    @en "dest"
+    @fa "مقصد"
+    pub dest: str = ""
+    @en "server_names"
+    @fa "نام های سرور"
+    pub server_names: str = ""
+    @en "short_ids"
+    @fa "شناسه های کوتاه"
+    pub short_ids: str = ""
+    @en "max_time_diff"
+    @fa "بیشینه اختلاف زمان"
+    pub max_time_diff: int = 0
+    @en "dest_timeout_ms"
+    @fa "مهلت مقصد"
+    pub dest_timeout_ms: int = 5000
+end
+
+@en "KeyPair"
+@fa "جفت کلید"
+pub struct KeyPair:
+    @en "private_key"
+    @fa "کلید خصوصی"
+    pub private_key: str = ""
+    @en "public_key"
+    @fa "کلید عمومی"
+    pub public_key: str = ""
+end
+
+@en "Accepted"
+@fa "پذیرفته شده"
+pub struct Accepted:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "proxied"
+    @fa "پروکسی شده"
+    pub proxied: bool = false
+    @en "conn"
+    @fa "اتصال"
+    pub conn: tls.Conn = tls.Conn {}
+    @en "sni"
+    @fa "نام سرور"
+    pub sni: str = ""
+    @en "short_id"
+    @fa "شناسه کوتاه"
+    pub short_id: str = ""
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+func _bnew(cap0: int): _B:
+    mut c := cap0
+    if c < 64:
+        c = 64
+    end
+    ret _B { p = mem.AllocateZeroed(c as u64), len = 0, cap = c }
+end
+
+func _bfree(b &: _B):
+    if b.p != null:
+        mem.Free(b.p)
+    end
+    b.p = null
+    b.len = 0
+    b.cap = 0
+end
+
+func _bput(b &: _B, v: int):
+    if b.len + 1 > b.cap:
+        b.p = mem.Reallocate(b.p, (b.cap * 2) as u64)
+        b.cap = b.cap * 2
+    end
+    bp := b.p as u8*
+    bp[b.len] = (v & 0xFF) as u8
+    b.len += 1
+end
+
+func _braw(b &: _B, src: void*, n: int):
+    repeat n in i:
+        sp := src as u8*
+        _bput(b, sp[i] as int)
+    end
+end
+
+func _at(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func _off(p: void*, n: int): void*:
+    ret ((p as i64) + (n as i64)) as void*
+end
+
+func _der(tag: int, body: _B): _B:
+    mut o := _bnew(body.len + 8)
+    _bput(o, tag)
+    if body.len < 128:
+        _bput(o, body.len)
+    else if body.len < 256:
+        _bput(o, 0x81)
+        _bput(o, body.len)
+    else:
+        _bput(o, 0x82)
+        _bput(o, body.len >> 8)
+        _bput(o, body.len)
+    end
+    _braw(o, body.p, body.len)
+    ret o
+end
+
+func _b64val(ch: int): int:
+    if ch >= 65 and ch <= 90:
+        ret ch - 65
+    end
+    if ch >= 97 and ch <= 122:
+        ret ch - 71
+    end
+    if ch >= 48 and ch <= 57:
+        ret ch + 4
+    end
+    if ch == 45 or ch == 43:
+        ret 62
+    end
+    if ch == 95 or ch == 47:
+        ret 63
+    end
+    ret 0 - 1
+end
+
+func _b64decode(s: str, out: void*, want: int): bool:
+    mut n := s.len()
+    bp := s as u8*
+    until n > 0 and (bp[n - 1] as int) == 61:
+        n--
+    end
+    mut acc := 0
+    mut bits := 0
+    mut o := 0
+    repeat n in i:
+        v := _b64val(bp[i] as int)
+        if v < 0:
+            ret false
+        end
+        acc = (acc << 6) | v
+        bits += 6
+        if bits >= 8:
+            bits -= 8
+            if o >= want:
+                ret false
+            end
+            ob := out as u8*
+            ob[o] = ((acc >> bits) & 0xFF) as u8
+            o++
+        end
+    end
+    ret o == want
+end
+
+func _b64encode(p: void*, n: int): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    mut acc := 0
+    mut bits := 0
+    repeat n in i:
+        acc = ((acc << 8) | _at(p, i)) & 0xFFFFFF
+        bits += 8
+        until bits >= 6:
+            bits -= 6
+            parts.push(str.Substr(_B64, (acc >> bits) & 63, 1))
+        end
+    end
+    if bits > 0:
+        parts.push(str.Substr(_B64, (acc << (6 - bits)) & 63, 1))
+    end
+    ret str.Join(parts, "")
+end
+
+func _hexval(ch: int): int:
+    if ch >= 48 and ch <= 57:
+        ret ch - 48
+    end
+    if ch >= 97 and ch <= 102:
+        ret ch - 87
+    end
+    if ch >= 65 and ch <= 70:
+        ret ch - 55
+    end
+    ret 0 - 1
+end
+
+func _short_id_bytes(s: str, out: void*): bool:
+    n := s.len()
+    if n > 16 or n % 2 != 0:
+        ret false
+    end
+    bp := s as u8*
+    repeat 8 in i:
+        ob := out as u8*
+        ob[i] = 0 as u8
+    end
+    repeat n / 2 in i:
+        hi := _hexval(bp[i * 2] as int)
+        lo := _hexval(bp[i * 2 + 1] as int)
+        if hi < 0 or lo < 0:
+            ret false
+        end
+        ob := out as u8*
+        ob[i] = ((hi << 4) | lo) as u8
+    end
+    ret true
+end
+
+func _auth_key(shared: void*, random: void*, out: void*): bool:
+    ret tls.HkdfSha256Derive(shared, 32, random, 20, "REALITY", out, 32)
+end
+
+func _fail_conn(msg: str): tls.Conn:
+    mut c := tls.Conn {}
+    c.err = msg
+    ret c
+end
+
+func _seal_session(h &: utls.Hello, spub: void*, short8: void*): bool:
+    sid := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(sid)
+    utls.SetSessionId(h, sid)
+    plain := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(plain)
+    pb := plain as u8*
+    pb[0] = 1 as u8
+    pb[1] = 8 as u8
+    pb[2] = 1 as u8
+    now := time.Now()
+    pb[4] = ((now >> (24 as i64)) & (255 as i64)) as u8
+    pb[5] = ((now >> (16 as i64)) & (255 as i64)) as u8
+    pb[6] = ((now >> (8 as i64)) & (255 as i64)) as u8
+    pb[7] = (now & (255 as i64)) as u8
+    repeat 8 in i:
+        pb[8 + i] = _at(short8, i) as u8
+    end
+    shared := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(shared)
+    if not tls.X25519Shared(h.priv.p, spub, shared):
+        ret false
+    end
+    key := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(key)
+    random := _off(h.raw.p, 6)
+    if not _auth_key(shared, random, key):
+        ret false
+    end
+    sealed := mem.AllocateZeroed(48 as u64)
+    defer mem.Free(sealed)
+    if not tls.AesGcmSealRaw(key, 32, _off(random, 20), h.raw.p, h.raw.len, plain, 16, sealed):
+        ret false
+    end
+    utls.SetSessionId(h, sealed)
+    ret true
+end
+
+func _parse_hello(p: void*, n: int): _Parsed:
+    mut r := _Parsed {}
+    if n < 43 or _at(p, 0) != 1:
+        ret r
+    end
+    r.random_off = 6
+    mut o := 38
+    sl := _at(p, o)
+    r.sid_off = o + 1
+    r.sid_len = sl
+    o += 1 + sl
+    if o + 2 > n:
+        ret r
+    end
+    o += 2 + ((_at(p, o) << 8) | _at(p, o + 1))
+    if o + 1 > n:
+        ret r
+    end
+    o += 1 + _at(p, o)
+    if o + 2 > n:
+        ret r
+    end
+    el := (_at(p, o) << 8) | _at(p, o + 1)
+    o += 2
+    end_at := o + el
+    if end_at > n:
+        ret r
+    end
+    until o + 4 <= end_at:
+        id := (_at(p, o) << 8) | _at(p, o + 1)
+        l := (_at(p, o + 2) << 8) | _at(p, o + 3)
+        b := o + 4
+        if b + l > end_at:
+            ret r
+        end
+        if id == 0 and l >= 5:
+            nl := (_at(p, b + 3) << 8) | _at(p, b + 4)
+            if b + 5 + nl <= b + l:
+                nbuf := mem.AllocateZeroed((nl + 1) as u64)
+                mem.Copy(nbuf, _off(p, b + 5), nl as u64)
+                r.sni = nbuf as str
+            end
+        else if id == 43 and l >= 1:
+            vl := _at(p, b)
+            mut j := 0
+            until j < vl and 1 + j + 1 < l:
+                if _at(p, b + 1 + j) == 3 and _at(p, b + 2 + j) == 4:
+                    r.tls13 = true
+                end
+                j += 2
+            end
+        else if id == 51 and l >= 2:
+            mut j := 2
+            until j + 4 <= l:
+                g := (_at(p, b + j) << 8) | _at(p, b + j + 1)
+                kl := (_at(p, b + j + 2) << 8) | _at(p, b + j + 3)
+                if g == 0x001D and kl == 32 and j + 4 + kl <= l:
+                    r.share_off = b + j + 4
+                end
+                j += 4 + kl
+            end
+        end
+        o = b + l
+    end
+    r.ok = true
+    ret r
+end
+
+func _csv_has(list: str, item: str): bool:
+    if list.len() == 0:
+        ret false
+    end
+    mut parts := str.Split(list, ",")
+    defer parts.free()
+    repeat parts.len() in i:
+        if str.Trim(parts.get(i)) == item:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _short_id_hex(p: void*): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    digits := "0123456789abcdef"
+    repeat 8 in i:
+        v := _at(p, i)
+        parts.push(str.Substr(digits, v >> 4, 1) + str.Substr(digits, v & 15, 1))
+    end
+    ret str.Join(parts, "")
+end
+
+func _short_id_known(ss: ServerSettings, id8: void*): bool:
+    if ss.short_ids.len() == 0:
+        ret false
+    end
+    mut parts := str.Split(ss.short_ids, ",")
+    defer parts.free()
+    cand := mem.AllocateZeroed(8 as u64)
+    defer mem.Free(cand)
+    repeat parts.len() in i:
+        if _short_id_bytes(str.Trim(parts.get(i)), cand):
+            mut same := true
+            repeat 8 in j:
+                if _at(cand, j) != _at(id8, j):
+                    same = false
+                end
+            end
+            if same:
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func _make_cert(seed: void*, auth: void*): _B:
+    pubk := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(pubk)
+    tls.Ed25519PublicKey(seed, pubk)
+    mac := mem.AllocateZeroed(64 as u64)
+    defer mem.Free(mac)
+    tls.HmacSha512Raw(auth, 32, pubk, 32, mac)
+
+    mut oid := _bnew(8)
+    _bput(oid, 0x06)
+    _bput(oid, 3)
+    _bput(oid, 0x2b)
+    _bput(oid, 0x65)
+    _bput(oid, 0x70)
+    mut algid := _der(0x30, oid)
+
+    mut ver0 := _bnew(8)
+    _bput(ver0, 0x02)
+    _bput(ver0, 1)
+    _bput(ver0, 2)
+    mut ver := _der(0xA0, ver0)
+    mut serial := _bnew(8)
+    _bput(serial, 0x02)
+    _bput(serial, 1)
+    _bput(serial, 1)
+    mut empty := _bnew(8)
+    mut name := _der(0x30, empty)
+    mut val := _bnew(40)
+    nb := "260101000000Z"
+    na := "360101000000Z"
+    _bput(val, 0x17)
+    _bput(val, 13)
+    _braw(val, nb as void*, 13)
+    _bput(val, 0x17)
+    _bput(val, 13)
+    _braw(val, na as void*, 13)
+    mut validity := _der(0x30, val)
+    mut kb := _bnew(40)
+    _bput(kb, 0)
+    _braw(kb, pubk, 32)
+    mut kbs := _der(0x03, kb)
+    mut spki_body := _bnew(64)
+    _braw(spki_body, algid.p, algid.len)
+    _braw(spki_body, kbs.p, kbs.len)
+    mut spki := _der(0x30, spki_body)
+
+    mut tbs_body := _bnew(256)
+    _braw(tbs_body, ver.p, ver.len)
+    _braw(tbs_body, serial.p, serial.len)
+    _braw(tbs_body, algid.p, algid.len)
+    _braw(tbs_body, name.p, name.len)
+    _braw(tbs_body, validity.p, validity.len)
+    _braw(tbs_body, name.p, name.len)
+    _braw(tbs_body, spki.p, spki.len)
+    mut tbs := _der(0x30, tbs_body)
+
+    mut sg := _bnew(80)
+    _bput(sg, 0)
+    _braw(sg, mac, 64)
+    mut sgs := _der(0x03, sg)
+    mut cert_body := _bnew(256)
+    _braw(cert_body, tbs.p, tbs.len)
+    _braw(cert_body, algid.p, algid.len)
+    _braw(cert_body, sgs.p, sgs.len)
+    cert := _der(0x30, cert_body)
+
+    _bfree(oid)
+    _bfree(algid)
+    _bfree(ver0)
+    _bfree(ver)
+    _bfree(serial)
+    _bfree(empty)
+    _bfree(name)
+    _bfree(val)
+    _bfree(validity)
+    _bfree(kb)
+    _bfree(kbs)
+    _bfree(spki_body)
+    _bfree(spki)
+    _bfree(tbs_body)
+    _bfree(tbs)
+    _bfree(sg)
+    _bfree(sgs)
+    _bfree(cert_body)
+    ret cert
+end
+
+func _dest_parts(dest: str, host &: str, port &: int): bool:
+    mut parts := str.Split(dest, ":")
+    defer parts.free()
+    if parts.len() < 2:
+        ret false
+    end
+    mut h := parts.get(0)
+    repeat parts.len() - 2 in i:
+        h = h + ":" + parts.get(i + 1)
+    end
+    host = h
+    port = str.ToInt(parts.get(parts.len() - 1)) as int
+    ret port > 0
+end
+
+func _proxy_to_dest(c: tcp.Conn, ss: ServerSettings, data: void*, n: int): bool:
+    mut host := ""
+    mut port := 0
+    if not _dest_parts(ss.dest, host, port):
+        tcp.Close(c)
+        ret false
+    end
+    mut upstream := tunnel.DialTcp(host, port, ss.dest_timeout_ms)
+    if not upstream.Ok():
+        tcp.Close(c)
+        ret false
+    end
+    if n > 0:
+        upstream.WriteBytes(data, n)
+    end
+    client := tunnel.WrapTcp(c)
+    tunnel.Relay(client, upstream)
+    ret true
+end
+
+func _read_exact(c: tcp.Conn, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := tcp.ReadBytes(c, _off(buf, got), n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+func _query_get(q: str, key: str): str:
+    mut parts := str.Split(q, "&")
+    defer parts.free()
+    repeat parts.len() in i:
+        kv := parts.get(i)
+        if str.StartsWith(kv, key + "="):
+            ret str.Substr(kv, key.len() + 1, kv.len() - key.len() - 1)
+        end
+    end
+    ret ""
+end
+
+@en "GenerateKey"
+@fa "ساخت کلید"
+pub func GenerateKey(): KeyPair:
+    priv := mem.AllocateZeroed(32 as u64)
+    pubk := mem.AllocateZeroed(32 as u64)
+    crypto.RandomBytes(priv, 32)
+    tls.X25519Public(priv, pubk)
+    kp := KeyPair { private_key = _b64encode(priv, 32), public_key = _b64encode(pubk, 32) }
+    mem.Free(priv)
+    mem.Free(pubk)
+    ret kp
+end
+
+@en "PublicKeyOf"
+@fa "کلید عمومی از خصوصی"
+pub func PublicKeyOf(private_key: str): str:
+    priv := mem.AllocateZeroed(32 as u64)
+    pubk := mem.AllocateZeroed(32 as u64)
+    mut out := ""
+    if _b64decode(private_key, priv, 32):
+        tls.X25519Public(priv, pubk)
+        out = _b64encode(pubk, 32)
+    end
+    mem.Free(priv)
+    mem.Free(pubk)
+    ret out
+end
+
+@en "NewShortId"
+@fa "شناسه کوتاه جدید"
+pub func NewShortId(bytes: int): str:
+    mut n := bytes
+    if n < 1:
+        n = 1
+    end
+    if n > 8:
+        n = 8
+    end
+    raw := mem.AllocateZeroed(8 as u64)
+    crypto.RandomBytes(raw, n)
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    digits := "0123456789abcdef"
+    repeat n in i:
+        v := _at(raw, i)
+        parts.push(str.Substr(digits, v >> 4, 1) + str.Substr(digits, v & 15, 1))
+    end
+    mem.Free(raw)
+    ret str.Join(parts, "")
+end
+
+@en "ValidPublicKey"
+@fa "کلید عمومی معتبر"
+pub func ValidPublicKey(public_key: str): bool:
+    k := mem.AllocateZeroed(32 as u64)
+    ok := _b64decode(public_key, k, 32)
+    mem.Free(k)
+    ret ok
+end
+
+@en "ValidShortId"
+@fa "شناسه کوتاه معتبر"
+pub func ValidShortId(short_id: str): bool:
+    k := mem.AllocateZeroed(8 as u64)
+    ok := _short_id_bytes(short_id, k)
+    mem.Free(k)
+    ret ok
+end
+
+@en "DialOver"
+@fa "اتصال روی"
+pub func DialOver(fd: i64, s: Settings): tls.Conn:
+    spub := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(spub)
+    if not _b64decode(s.public_key, spub, 32):
+        ret _fail_conn("reality: public key must be 43 base64url characters")
+    end
+    short8 := mem.AllocateZeroed(8 as u64)
+    defer mem.Free(short8)
+    if not _short_id_bytes(s.short_id, short8):
+        ret _fail_conn("reality: short id must be 0 to 16 hex digits, an even count")
+    end
+    mut name := s.fingerprint
+    if name.len() == 0:
+        name = "chrome"
+    end
+    sp := utls.Profile(name)
+    if not sp.ok:
+        ret _fail_conn("reality: unknown fingerprint " + name)
+    end
+    mut o := utls.Options {}
+    o.server_name = s.server_name
+    o.alpn = s.alpn
+    o.pq = true
+    mut h := utls.Build(sp, o)
+    if not h.ok:
+        ret _fail_conn(h.err)
+    end
+    if not _seal_session(h, spub, short8):
+        utls.FreeHello(h)
+        ret _fail_conn("reality: could not derive the session key")
+    end
+    auth := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(auth)
+    shared := mem.AllocateZeroed(32 as u64)
+    tls.X25519Shared(h.priv.p, spub, shared)
+    _auth_key(shared, _off(h.raw.p, 6), auth)
+    mem.Free(shared)
+    cfg := tls.NewConfig(s.server_name)
+    conn := tls.WrapClientRaw(fd, h.raw.p, h.raw.len, h.priv.p, auth, 32, cfg)
+    utls.FreeHello(h)
+    ret conn
+end
+
+@en "Accept"
+@fa "پذیرش"
+pub func Accept(fd: i64, ss: ServerSettings): Accepted:
+    mut res := Accepted {}
+    c := tcp.ConnFromFd(fd)
+    tcp.SetReadDeadline(c, 10000)
+    buf := mem.AllocateZeroed(16700 as u64)
+    defer mem.Free(buf)
+    if not _read_exact(c, buf, 5):
+        tcp.Close(c)
+        res.err = "no data"
+        ret res
+    end
+    mut have := 5
+    rl := (_at(buf, 3) << 8) | _at(buf, 4)
+    if _at(buf, 0) != 0x16 or rl < 40 or rl > 16384 or _at(buf, 1) != 3:
+        res.proxied = _proxy_to_dest(c, ss, buf, have)
+        res.err = "not a TLS ClientHello"
+        ret res
+    end
+    if not _read_exact(c, _off(buf, 5), rl):
+        tcp.Close(c)
+        res.err = "truncated ClientHello"
+        ret res
+    end
+    have += rl
+    msg := _off(buf, 5)
+    p := _parse_hello(msg, rl)
+    ok_shape := p.ok and p.sid_len == 32 and p.tls13 and p.share_off > 0
+    mut authed := false
+    auth := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(auth)
+    id8 := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(id8)
+    if ok_shape and _csv_has(ss.server_names, p.sni):
+        priv := mem.AllocateZeroed(32 as u64)
+        defer mem.Free(priv)
+        shared := mem.AllocateZeroed(32 as u64)
+        defer mem.Free(shared)
+        if _b64decode(ss.private_key, priv, 32) and tls.X25519Shared(priv, _off(msg, p.share_off), shared):
+            if _auth_key(shared, _off(msg, p.random_off), auth):
+                aad := mem.AllocateZeroed((rl + 1) as u64)
+                defer mem.Free(aad)
+                mem.Copy(aad, msg, rl as u64)
+                repeat 32 in i:
+                    ab := aad as u8*
+                    ab[p.sid_off + i] = 0 as u8
+                end
+                if tls.AesGcmOpenRaw(auth, 32, _off(msg, p.random_off + 20), aad, rl, _off(msg, p.sid_off), 32, id8):
+                    ok_id := _short_id_known(ss, _off(id8, 8))
+                    mut ok_time := true
+                    if ss.max_time_diff > 0:
+                        t := (_at(id8, 4) << 24) | (_at(id8, 5) << 16) | (_at(id8, 6) << 8) | _at(id8, 7)
+                        now := time.Now()
+                        mut d := now - (t as i64)
+                        if d < (0 as i64):
+                            d = (0 as i64) - d
+                        end
+                        ok_time = d * (1000 as i64) <= (ss.max_time_diff as i64)
+                    end
+                    authed = ok_id and ok_time
+                end
+            end
+        end
+    end
+    if not authed:
+        res.proxied = _proxy_to_dest(c, ss, buf, have)
+        res.err = "not authenticated"
+        ret res
+    end
+    seed := mem.AllocateZeroed(32 as u64)
+    defer mem.Free(seed)
+    crypto.RandomBytes(seed, 32)
+    mut cert := _make_cert(seed, auth)
+    res.conn = tls.WrapServerRaw(fd, msg, rl, cert.p, cert.len, seed)
+    _bfree(cert)
+    res.sni = p.sni
+    res.short_id = _short_id_hex(_off(id8, 8))
+    res.ok = tls.ConnOk(res.conn)
+    if not res.ok:
+        res.err = tls.ConnError(res.conn)
+    end
+    ret res
+end
+
+@en "ParseParams"
+@fa "خواندن پارامترها"
+pub func ParseParams(query: str): Settings:
+    mut s := Settings {}
+    s.public_key = _query_get(query, "pbk")
+    s.short_id = _query_get(query, "sid")
+    s.spider_x = _query_get(query, "spx")
+    s.server_name = _query_get(query, "sni")
+    s.flow = _query_get(query, "flow")
+    s.alpn = _query_get(query, "alpn")
+    fp := _query_get(query, "fp")
+    if fp.len() > 0:
+        s.fingerprint = fp
+    end
+    ret s
+end
+
+@en "FormatParams"
+@fa "نوشتن پارامترها"
+pub func FormatParams(s: Settings): str:
+    mut q := "security=reality&pbk=" + s.public_key
+    if s.short_id.len() > 0:
+        q += "&sid=" + s.short_id
+    end
+    if s.spider_x.len() > 0:
+        q += "&spx=" + s.spider_x
+    end
+    if s.server_name.len() > 0:
+        q += "&sni=" + s.server_name
+    end
+    if s.fingerprint.len() > 0:
+        q += "&fp=" + s.fingerprint
+    end
+    if s.flow.len() > 0:
+        q += "&flow=" + s.flow
+    end
+    ret q
+end

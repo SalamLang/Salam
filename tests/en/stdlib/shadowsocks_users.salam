@@ -1,0 +1,104 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.shadowsocks
+import net.tcp
+import mem
+
+const IP16 := "AQQHCg0QExYZHB8iJSgrLg=="
+const UP16 := "MjU4Oz5BREdKTVBTVllcXw=="
+const UQ16 := "MjM0NTY3ODk6Ozw9Pj9AQQ=="
+const K16 := "AAECAwQFBgcICQoLDA0ODw=="
+
+mut failures := 0
+mut echo_srv := tcp.Server {}
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func echo_conn(c: tcp.Conn):
+    buf := mem.Allocate(8192 as u64)
+    mut go := true
+    until go:
+        n := tcp.ReadBytes(c, buf, 8192)
+        if n <= 0:
+            go = false
+        else:
+            _w := tcp.WriteBytes(c, buf, n)
+        end
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+end
+
+func echo_main():
+    mut go := true
+    until go:
+        c := tcp.Accept(echo_srv)
+        if not tcp.ConnOk(c):
+            go = false
+        else:
+            echo_conn(c)
+        end
+    end
+end
+
+func serve_thread(ss: shadowsocks.ServerState*):
+    shadowsocks.ServeRelay(shadowsocks.Server { st = ss })
+end
+
+func round_trip(port: int, password: str): bool:
+    c := shadowsocks.Dial(shadowsocks.Config { host = "127.0.0.1", port = port, method = "2022-blake3-aes-128-gcm", password = password }, "127.0.0.1", tcp.Port(echo_srv))
+    if not shadowsocks.Ok(c):
+        ret false
+    end
+    tcp.SetDeadline(c.st.sock, 3000)
+    _w := shadowsocks.WriteStr(c, "hello users")
+    got := shadowsocks.ReadStr(c, 64)
+    shadowsocks.Close(c)
+    ret got == "hello users"
+end
+
+func main:
+    echo_srv = tcp.Bind(tcp.FreePort())
+    _te := spawn(echo_main)
+    srv := shadowsocks.ListenOn("127.0.0.1", tcp.FreePort(), "2022-blake3-aes-128-gcm", IP16, "")
+    check("listen on loopback", shadowsocks.ServerOk(srv))
+    check("add first user", shadowsocks.AddUser(srv, "alice", UP16))
+    check("add second user", shadowsocks.AddUser(srv, "bob", UQ16))
+    th := spawn(serve_thread, srv.st)
+    port := shadowsocks.ServerPort(srv)
+    check("first user connects", round_trip(port, IP16 + ":" + UP16))
+    check("second user connects", round_trip(port, IP16 + ":" + UQ16))
+    check("unknown user is refused", not round_trip(port, IP16 + ":" + K16))
+    check("plain server key is refused when users exist", not round_trip(port, IP16))
+    check("first user still connects", round_trip(port, IP16 + ":" + UP16))
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+    plain := shadowsocks.ListenOn("127.0.0.1", tcp.FreePort(), "aes-256-gcm", "pw", "")
+    check("users need a 2022 method", not shadowsocks.AddUser(plain, "x", UP16))
+    shadowsocks.Destroy(plain)
+    tcp.CloseServer(echo_srv)
+    println "failures", failures
+    ret failures
+end

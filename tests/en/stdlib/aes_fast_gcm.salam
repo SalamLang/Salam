@@ -1,0 +1,195 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import tls
+import mem
+import str
+import crypto
+
+mut failures := 0
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func hexof(p: void*, n: int): str:
+    b := p as u8*
+    d := "0123456789abcdef"
+    mut s := ""
+    repeat n in i:
+        v := b[i] as int
+        s += d.substr(v >> 4, 1)
+        s += d.substr(v & 15, 1)
+    end
+    ret s
+end
+
+func unhex(h: str): void*:
+    n := str.Len(h) / 2
+    p := mem.AllocateZeroed((n + 1) as u64)
+    b := p as u8*
+    d := "0123456789abcdef"
+    repeat n in i:
+        b[i] = ((str.IndexOf(d, h.substr(i * 2, 1)) << 4) | str.IndexOf(d, h.substr(i * 2 + 1, 1))) as u8
+    end
+    ret p
+end
+
+func same(a: void*, b: void*, n: int): bool:
+    x := a as u8*
+    y := b as u8*
+    repeat n in i:
+        if x[i] != y[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func sha_prefix(p: void*, n: int): str:
+    out := mem.AllocateZeroed(32 as u64)
+    crypto.Sha256Bytes(p, n, out)
+    r := hexof(out, 8)
+    mem.Free(out)
+    ret r
+end
+
+func nist():
+    key := unhex("feffe9928665731c6d6a8f9467308308")
+    nonce := unhex("cafebabefacedbaddecaf888")
+    aad := unhex("feedfacedeadbeeffeedfacedeadbeefabaddad2")
+    pt := unhex("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39")
+    out := mem.AllocateZeroed(76 as u64)
+    check("nist case 4 seal", tls.AesGcmSealRaw(key, 16, nonce, aad, 20, pt, 60, out))
+    check("nist case 4 bytes", hexof(out, 76) == "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47")
+    z := mem.AllocateZeroed(32 as u64)
+    zn := mem.AllocateZeroed(12 as u64)
+    o2 := mem.AllocateZeroed(32 as u64)
+    tls.AesGcmSealRaw(z, 16, zn, z, 0, z, 16, o2)
+    check("nist case 2", hexof(o2, 32) == "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf")
+    o3 := mem.AllocateZeroed(32 as u64)
+    tls.AesGcmSealRaw(z, 32, zn, z, 0, z, 16, o3)
+    check("nist case 14", hexof(o3, 32) == "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919")
+    bb := out as u8*
+    bb[3] = bb[3] ^ (1 as u8)
+    back := mem.AllocateZeroed(80 as u64)
+    check("open tampered body fails", not tls.AesGcmOpenRaw(key, 16, nonce, aad, 20, out, 76, back))
+    bb[3] = bb[3] ^ (1 as u8)
+    bb[70] = bb[70] ^ (1 as u8)
+    check("open tampered tag fails", not tls.AesGcmOpenRaw(key, 16, nonce, aad, 20, out, 76, back))
+    bb[70] = bb[70] ^ (1 as u8)
+    check("open restored", tls.AesGcmOpenRaw(key, 16, nonce, aad, 20, out, 76, back))
+    check("open plaintext", hexof(back, 60) == hexof(pt, 60))
+    check("open short input", not tls.AesGcmOpenRaw(key, 16, nonce, aad, 20, out, 8, back))
+    check("bad key length", not tls.AesGcmSealRaw(key, 24, nonce, aad, 20, pt, 60, out))
+end
+
+func case(klen: int, n: int, al: int, tag: str, body: str):
+    key := mem.AllocateZeroed(32 as u64)
+    nonce := mem.AllocateZeroed(12 as u64)
+    aad := mem.AllocateZeroed(64 as u64)
+    pt := mem.AllocateZeroed((n + 1) as u64)
+    out := mem.AllocateZeroed((n + 16) as u64)
+    back := mem.AllocateZeroed((n + 1) as u64)
+    kb := key as u8*
+    repeat 32 in i:
+        kb[i] = (i * 7 + klen) as u8
+    end
+    nb := nonce as u8*
+    repeat 12 in i:
+        nb[i] = (i * 13 + 5) as u8
+    end
+    ab := aad as u8*
+    repeat 64 in i:
+        ab[i] = (i * 3 + 1) as u8
+    end
+    pb := pt as u8*
+    repeat n in i:
+        pb[i] = (i * 31 + 17) as u8
+    end
+    tls.AesGcmSealRaw(key, klen, nonce, aad, al, pt, n, out)
+    tg := ((out as i64) + (n as i64)) as void*
+    ok := hexof(tg, 16) == tag and sha_prefix(out, n) == body
+    open := tls.AesGcmOpenRaw(key, klen, nonce, aad, al, out, n + 16, back)
+    plain := same(back, pt, n)
+    check("aes-" + str.FromInt(klen * 8) + " gcm size " + str.FromInt(n) + " aad " + str.FromInt(al), ok and open and plain)
+    ctx := tls.AeadNew(klen == 16 ? tls.AEAD_AES_128_GCM : tls.AEAD_AES_256_GCM, key)
+    out2 := mem.AllocateZeroed((n + 16) as u64)
+    tls.AeadSeal(ctx, nonce, aad, al, pt, n, out2)
+    check("aead ctx matches size " + str.FromInt(n), same(out, out2, n + 16))
+    mem.Set(back, 0, (n + 1) as u64)
+    check("aead ctx open size " + str.FromInt(n), tls.AeadOpen(ctx, nonce, aad, al, out2, n, back) and same(back, pt, n))
+    tls.AeadFree(ctx)
+    mem.Free(key)
+    mem.Free(nonce)
+    mem.Free(aad)
+    mem.Free(pt)
+    mem.Free(out)
+    mem.Free(out2)
+    mem.Free(back)
+end
+
+func main():
+    nist()
+    case(16, 0, 0, "444b219b3be40b2c448262760b5d70a7", "e3b0c44298fc1c14")
+    case(16, 1, 5, "c86a2ebb6db13c5b984f32f91263171f", "9d1e0e2d9459d065")
+    case(16, 15, 34, "7bfeb158d82bd1a6f2d550370929e963", "3288f5350e52d64c")
+    case(16, 16, 39, "3e60beb94319ce64bd14aebcb39ba115", "b549525b62e5d098")
+    case(16, 17, 3, "cad1c789b2f7546f8cef4d8d33bf2597", "ba8de3578b686670")
+    case(16, 31, 32, "932562177e89f75804bdcb4be6916a2f", "dee4c22019c2bb55")
+    case(16, 32, 37, "5ac1ca4d48c71cc04d50b4f15c4d0123", "1f35b39df679c74b")
+    case(16, 33, 1, "3e82f23f4d7c13de24baca4368f9276f", "ffc4a1e6daa8e0fe")
+    case(16, 63, 28, "8e713fcd93e0f3483f0cb0c32468223b", "17feb966ee03c706")
+    case(16, 64, 33, "14d7d7504f398f65cb060921dde07c87", "bbb08e2132d99ae2")
+    case(16, 65, 38, "f53e54d28a78c47904a9cec6ba8b5c6f", "061a2e34bc3a4dc7")
+    case(16, 127, 20, "ba8c7403b4b6feb7434ced2cadeed077", "e2236f4e0260ca3f")
+    case(16, 128, 25, "4da469ed97ad40afe4732f1a54be258f", "054a8d6bcea20447")
+    case(16, 129, 30, "f1e108d70858f15cbc9e05a32f9a9d43", "ab6b2495872c97cf")
+    case(16, 255, 4, "cea64e372721e7b8e96dc324713b90cd", "36b9864cc5b2c5b0")
+    case(16, 256, 9, "c9c7c173981b93b7126a6a34c5aebd1c", "cc2991d90bd1cf6d")
+    case(16, 1000, 39, "d8f4e6dae7cabb9575bcff3faed134a5", "c2ca044b12dea847")
+    case(16, 4096, 21, "6ff56d7fd8b3e357515d3552ea8525ec", "7d940a5a5052c6c7")
+    case(16, 4099, 36, "c7fe132fd0de92cc74324aaedf8d4e9e", "dc81365c3a91ff74")
+    case(16, 16384, 2, "dca1a1600dcc966377b6f0bdd7b6f7be", "fec633b6b76b2a31")
+    case(16, 65537, 13, "7d51b4e07f68d5e4ea3454be0ed174f8", "171fea2df2b4ee8a")
+    case(32, 0, 0, "a4679a22dc83dd6720054112cf79a438", "e3b0c44298fc1c14")
+    case(32, 1, 5, "59ddeeb4d76031799beebe3dfd016102", "4fb733bedb74fec8")
+    case(32, 15, 34, "9b642a03beed57a4813c32a34b414d57", "cf0e5fb0f3dcf432")
+    case(32, 16, 39, "c34088d33258ce745ef011da14070a0f", "8efcdf84f9865510")
+    case(32, 17, 3, "b946fec82f1b9809f9ca9d93db58c3f4", "9f94e13f03b7588f")
+    case(32, 31, 32, "ec573ac93231e48394d8e93d26921e4c", "9403bbbb350d8e14")
+    case(32, 32, 37, "3ca1d7c225b66d246a22383a697c3ec8", "6045472d8ab91e75")
+    case(32, 33, 1, "95594f91df34bf7167d98d21fb29bea0", "71744a91be5e8d37")
+    case(32, 63, 28, "ece50464e3ae016be4e52f39826b03ca", "40a6477674cb765e")
+    case(32, 64, 33, "325fd651e39e764413cba99c3163b301", "586e7670f9de8cda")
+    case(32, 65, 38, "87a513371d1076429f27ef4d37964c30", "4d960f045ef40e66")
+    case(32, 127, 20, "f5180598864b93fa6f0487b273632e68", "5b660c2951be5956")
+    case(32, 128, 25, "196fb1c8937d2b09387572369aaf7020", "058dee561fd07a70")
+    case(32, 129, 30, "7eba49c5f731ee8354bdb2426b531b5d", "0ea0af03c16bac07")
+    case(32, 255, 4, "07302ff1f646c266a386abbd660d07e1", "f5d9b94cfca2281c")
+    case(32, 256, 9, "eb10d4c72ef423707fa61c975eb6487d", "c3f1731df8be6e14")
+    case(32, 1000, 39, "884124c2f7d5921bdef1293812bc0016", "74f9373ec9caca4a")
+    case(32, 4096, 21, "8046b9d95c530358761e28f5fd217d81", "535a3ac714cac46f")
+    case(32, 4099, 36, "66d79602f6b7c0bda7dd20dfde62da98", "e7217d0e7a3ddc4e")
+    case(32, 16384, 2, "a4bd60ff52911d25e5de4d1dc69a895b", "408baf994dd7cd2b")
+    case(32, 65537, 13, "ba9b01fba73db392a965787348adbb77", "5238ea65191326dc")
+    println "failures", failures
+end

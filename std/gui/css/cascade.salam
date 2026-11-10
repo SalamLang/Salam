@@ -55,6 +55,7 @@ struct Engine:
     pub vv: Vector<str> = Vector {}
     pub cache: HashMap<str, int> = HashMap {}
     pub el_style: Vector<int> = Vector {}
+    pub el_sch: Vector<bool> = Vector {}
     pub el_blocks: Vector<ElBlocks> = Vector {}
     pub el_media_blocks: Vector<int> = Vector {}
     pub el_dyn_blocks: Vector<int> = Vector {}
@@ -81,6 +82,7 @@ func engine_new(env: Env): Engine:
     e.vv = Vector {} as Vector<str>
     e.cache = HashMap {} as HashMap<str, int>
     e.el_style = Vector {} as Vector<int>
+    e.el_sch = Vector {} as Vector<bool>
     e.el_blocks = Vector {} as Vector<ElBlocks>
     e.el_media_blocks = Vector {} as Vector<int>
     e.el_dyn_blocks = Vector {} as Vector<int>
@@ -157,6 +159,7 @@ func engine_free(e &: Engine):
     e.vv.free()
     free_keys(e.cache)
     e.el_style.free()
+    e.el_sch.free()
     e.el_blocks.free()
     e.el_media_blocks.free()
     e.el_dyn_blocks.free()
@@ -853,19 +856,117 @@ func compute_style(e &: Engine, sd: SheetData, pstyle: int): int:
     ret e.styles.len() - 1
 end
 
+func style_env_ok(e: Engine, idx: int): bool:
+    cs := e.styles[idx]
+    ret cs.color_scheme != ColorScheme.LightDark or cs.used_dark == e.env.dark
+end
+
 func compute_one(e &: Engine, sd: SheetData, i: int):
     p := e.dom.parent[i]
     pstyle := p >= 0 ? e.el_style[p] : -1
     collect(e, sd, i)
+    mut sch := false
+    repeat e.entries.len() in k:
+        if sd.blocks[e.entries[k].block].sch:
+            sch = true
+            break
+        end
+    end
+    until e.el_sch.len() <= i:
+        e.el_sch.push(false)
+    end
+    e.el_sch[i] = sch
     key := entries_key(e, pstyle)
     if e.cache.has(key):
-        e.el_style[i] = e.cache.get(key)
+        idx0 := e.cache.get(key)
+        if style_env_ok(e, idx0):
+            e.el_style[i] = idx0
+            sfree(key)
+            ret
+        end
+        key2 := key + (e.env.dark ? "|d" : "|l")
         sfree(key)
+        if e.cache.has(key2):
+            e.el_style[i] = e.cache.get(key2)
+            sfree(key2)
+            ret
+        end
+        idx2 := compute_style(e, sd, pstyle)
+        e.cache.put(key2, idx2)
+        e.el_style[i] = idx2
         ret
     end
     idx := compute_style(e, sd, pstyle)
     e.cache.put(key, idx)
     e.el_style[i] = idx
+end
+
+func scheme_restyle(e &: Engine, sd &: SheetData, elements: Vector<Element>, dark: bool): int:
+    n := e.dom.count
+    if elements.len() != n or e.env.dark == dark:
+        ret 0
+    end
+    e.dom.els = elements
+    mut old_ok := Vector {} as Vector<bool>
+    defer old_ok.free()
+    repeat e.media_ok.len() in k:
+        old_ok.push(e.media_ok[k])
+    end
+    e.env.dark = dark
+    free_keys(e.cond_cache)
+    e.cond_cache = HashMap {} as HashMap<str, int>
+    eval_medias(e, sd)
+    mut mflag := Vector {} as Vector<bool>
+    defer mflag.free()
+    repeat n + 1:
+        mflag.push(false)
+    end
+    mut any := false
+    repeat e.media_ok.len() in k:
+        if k < old_ok.len() and old_ok[k] != e.media_ok[k]:
+            any = true
+        end
+    end
+    if any:
+        repeat sd.rules.len() in r:
+            rule := sd.rules[r]
+            if rule.media < 0 or rule.media >= old_ok.len() or old_ok[rule.media] == e.media_ok[rule.media]:
+                continue
+            end
+            repeat n + 1 in j:
+                if not mflag[j] and match_selector(sd, e.dom, rule.sel, j):
+                    mflag[j] = true
+                end
+            end
+        end
+    end
+    repeat n in j:
+        if elements[j].media_conditions.len() > 0:
+            element_blocks(e, sd, j)
+            mflag[j] = true
+        end
+    end
+    mut sty := Vector {} as Vector<bool>
+    defer sty.free()
+    repeat n:
+        sty.push(false)
+    end
+    old_root := e.el_style[n]
+    compute_one(e, sd, n)
+    root_changed := e.el_style[n] != old_root
+    mut count := 1
+    repeat n in j:
+        p := e.dom.parent[j]
+        inner := p >= 0 and p != n
+        pch := inner ? sty[p] : root_changed
+        if pch or e.el_sch[j] or mflag[j]:
+            old := e.el_style[j]
+            compute_one(e, sd, j)
+            sty[j] = e.el_style[j] != old
+            count++
+        end
+    end
+    ret count
 end
 
 func compute_all(e &: Engine, sd &: SheetData, elements: Vector<Element>):

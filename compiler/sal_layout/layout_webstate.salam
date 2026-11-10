@@ -1,0 +1,710 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include at "../ast.salam"
+include lp "../langpack.salam"
+include sm "../semantic/semantic.salam"
+
+struct WsUse:
+    pub url: bool = false
+    pub css: bool = false
+end
+
+func ws_name(n: int): str:
+    ret "__salam_ws_" + co.U64Toa(n as u64)
+end
+
+func ws_placeholder(i: int): str:
+    s := co.U64Toa(i as u64)
+    ret "<!--salam:" + s + "--><!--/salam:" + s + "-->"
+end
+
+func ws_is_done(a &: at.Ast, mark: int): bool:
+    ret str.StartsWith(val_str(a, at.Get(a, mark).a), "<!--salam:")
+end
+
+func ws_int(a &: at.Ast, v: int, from: int): int:
+    n := at.NewNode(a, at.AST_LITERAL)
+    copy_span(a, n, from)
+    at.SetOp(a, n, tok.TK_INT)
+    at.SetName(a, n, co.U64Toa(v as u64))
+    at.SetTokenValue(a, n, tok.ValueInt(v as u64))
+    ret n
+end
+
+func ws_touch_stmt(a &: at.Ast, inst: int, from: int): int:
+    call := at.NewNode(a, at.AST_CALL)
+    copy_span(a, call, from)
+    mut args := Vector {} as Vector<int>
+    args.push(ws_int(a, inst, from))
+    mut cn := at.Get(a, call)
+    cn.a = lo_ident(a, "salamWsTouch", from)
+    mut old := cn.list
+    cn.list = args
+    at.Put(a, call, cn)
+    old.free()
+    st := at.NewNode(a, at.AST_EXPR_STMT)
+    copy_span(a, st, from)
+    mut sn := at.Get(a, st)
+    sn.a = call
+    at.Put(a, st, sn)
+    ret st
+end
+
+func ws_note(a &: at.Ast, target: int, insts &: Vector<int>):
+    root := ln_rx_root(a, target)
+    if root == 0:
+        ret
+    end
+    name := at.Get(a, root).name
+    if not str.StartsWith(name, "__salam_ws_"):
+        ret
+    end
+    n := str.Substr(name, 11, str.Len(name) - 11).to_int()
+    if n >= 0 and n < g_lo_ws_inst.len():
+        ln_rx_add(insts, g_lo_ws_inst.get(n))
+    end
+end
+
+func ws_writes(r &: LnReact, a &: at.Ast, nid: int, insts &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK or n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC:
+        ws_note(a, n.a, insts)
+    end
+    if n.kind == at.AST_CALL and n.a != 0:
+        callee := at.Get(a, n.a)
+        if callee.kind == at.AST_MEMBER:
+            mut ro := false
+            each m in k_ln_rx_readonly:
+                if str.Equals(m, callee.name):
+                    ro = true
+                end
+            end
+            if not ro:
+                ws_note(a, callee.a, insts)
+            end
+        end
+        repeat n.list.len() in i:
+            arg := n.list.get(i)
+            if ln_rx_root(a, arg) == 0:
+                continue
+            end
+            mut refp := -1
+            if callee.kind == at.AST_IDENTIFIER:
+                refp = ln_rx_ref_param(r, a, callee.name, i)
+                if refp < 0:
+                    refp = 0
+                end
+            end
+            if refp != 0:
+                ws_note(a, arg, insts)
+            end
+        end
+    end
+    ws_writes(r, a, n.a, insts)
+    ws_writes(r, a, n.b, insts)
+    ws_writes(r, a, n.c, insts)
+    ws_writes(r, a, n.d, insts)
+    repeat n.list.len() in j:
+        ws_writes(r, a, n.list.get(j), insts)
+    end
+end
+
+func ws_block(r &: LnReact, a &: at.Ast, blk: int):
+    b := at.Get(a, blk)
+    mut items := Vector {} as Vector<int>
+    mut changed := false
+    repeat b.list.len() in i:
+        sid := b.list.get(i)
+        mut insts := Vector {} as Vector<int>
+        ws_writes(r, a, sid, insts)
+        each inst in insts:
+            items.push(ws_touch_stmt(a, inst, sid))
+            changed = true
+        end
+        insts.free()
+        items.push(sid)
+        ws_visit(r, a, sid)
+    end
+    if changed:
+        mut bn := at.Get(a, blk)
+        mut old := bn.list
+        bn.list = items
+        at.Put(a, blk, bn)
+        old.free()
+    else:
+        items.free()
+    end
+end
+
+func ws_visit(r &: LnReact, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK:
+        ws_block(r, a, nid)
+        ret
+    end
+    ws_visit(r, a, n.a)
+    ws_visit(r, a, n.b)
+    ws_visit(r, a, n.c)
+    ws_visit(r, a, n.d)
+    repeat n.list.len() in i:
+        ws_visit(r, a, n.list.get(i))
+    end
+end
+
+func ws_mark_program(r &: LnReact, a &: at.Ast, prog: int):
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        k := at.KindOf(a, did)
+        if k == at.AST_FUNC_DEF:
+            ws_visit(r, a, at.Get(a, did).a)
+        else k == at.AST_STRUCT_DEF:
+            repeat at.ChildCount(a, did) in j:
+                mid := at.Child(a, did, j)
+                if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                    ws_visit(r, a, at.Get(a, mid).a)
+                end
+            end
+        end
+    end
+end
+
+func ws_slot(lw &: LoLower, expr: int): str:
+    idx := lw.slots.len()
+    lw.slots.push(LoSlot { kind = SL_TEXT, expr = expr })
+    ret ln_dyn_name(idx)
+end
+
+func ws_chunk(chunks &: Vector<str>, text: str): str:
+    line := "__salam_h += __salam_chunk_" + co.U64Toa(chunks.len() as u64) + "\n"
+    chunks.push(text)
+    ret line
+end
+
+func ws_view_source(lw &: LoLower, nm: LnNames, i: int, doc: str, chunks &: Vector<str>, wu &: WsUse): str:
+    mut body := "mut __salam_h := \"\"\n"
+    mut p := 0
+    mut start := 0
+    n := str.Len(doc)
+    stx := char_from_code(2)
+    until p < n:
+        q := str.IndexFrom(doc, stx, p)
+        if q < 0:
+            break
+        end
+        mut tag := ""
+        mut num := 0
+        after := lo_marker_at(doc, q, tag, num)
+        if after < 0:
+            p = q + 1
+            continue
+        end
+        if q > start:
+            body += ws_chunk(chunks, str.Substr(doc, start, q - start))
+        end
+        if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.len():
+            sl := lw.slots.get(num)
+            ns := co.U64Toa(num as u64)
+            dn := "__salam_dyn_" + ns
+            switch sl.kind:
+                SL_IF:
+                    body += "if " + dn + ":\n"
+                    break
+                end
+                SL_EACH:
+                    mut head := "each "
+                    if sl.key != 0:
+                        head += "__salam_key_" + ns + ", "
+                    end
+                    body += head + "__salam_item_" + ns + " in " + dn + ":\n"
+                    break
+                end
+                SL_BAD:
+                    break
+                end
+                SL_BOOL:
+                    body += "if " + dn + ":\n"
+                    body += ws_chunk(chunks, " " + sl.out)
+                    body += "end\n"
+                    break
+                end
+                SL_URL:
+                    wu.url = true
+                    body += "__salam_h += salamWsUrl(\"\" + " + dn + ")\n"
+                    break
+                end
+                SL_CSS, SL_CSSURL:
+                    wu.css = true
+                    body += "__salam_h += salamWsCss(\"\" + " + dn + ")\n"
+                    break
+                end
+                else:
+                    body += "__salam_h += salamWsHtml(\"\" + " + dn + ")\n"
+                end
+            end
+        else str.Equals(tag, "else"):
+            body += "else:\n"
+        else str.Equals(tag, "end"):
+            body += "end\n"
+        end
+        p = after
+        start = after
+    end
+    if start < n:
+        body += ws_chunk(chunks, str.Substr(doc, start, n - start))
+    end
+    ret "func __salam_view_" + co.U64Toa(i as u64) + "(): " + nm.t_str + ":\n" + body + "ret __salam_h\nend\n\n"
+end
+
+func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): str:
+    s := nm.t_str
+    mut t := "extern:\n"
+    t += "    func salamWsHtml(__salam_s: " + s + "): " + s + "\n"
+    if wu.url:
+        t += "    func salamWsUrl(__salam_s: " + s + "): " + s + "\n"
+    end
+    if wu.css:
+        t += "    func salamWsCss(__salam_s: " + s + "): " + s + "\n"
+    end
+    t += "    func salamWsTouch(__salam_i: " + nm.t_int + ")\n"
+    t += "end\n\n"
+    repeat g_lo_ws_inst.len() in n:
+        decl := g_lo_ws_decl.get(n)
+        t += "mut " + ws_name(n) + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
+    end
+    t += "\n"
+    repeat count in i:
+        t += "func __salam_init_" + co.U64Toa(i as u64) + "():\n"
+        repeat g_lo_ws_inst.len() in n2:
+            if g_lo_ws_inst.get(n2) == i:
+                decl2 := g_lo_ws_decl.get(n2)
+                t += "    " + ws_name(n2) + " = " + ws_slot(lw, at.Clone(a, at.Get(a, decl2).a)) + "\n"
+            end
+        end
+        t += "end\n\n"
+    end
+    ret t
+end
+
+func ws_insert(list &: Vector<int>, a &: at.Ast, items: Vector<int>, min_phase: int):
+    mut out := Vector {} as Vector<int>
+    mut placed := false
+    each item in list:
+        ph := at.ToplevelOrderPhase(a, item)
+        if not placed and ph >= min_phase:
+            each x in items:
+                out.push(x)
+            end
+            placed = true
+        end
+        out.push(item)
+    end
+    if not placed:
+        each x2 in items:
+            out.push(x2)
+        end
+    end
+    list.clear()
+    each y in out:
+        list.push(y)
+    end
+    out.free()
+end
+
+pub func WebStateCount(): int:
+    ret g_lo_wi_mark.len()
+end
+
+pub func WebStateCss(): str:
+    ret g_lo_ws_css
+end
+
+pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, file: str): int:
+    count := g_lo_wi_mark.len()
+    if count == 0 or prog == 0:
+        ret 0
+    end
+    lb := find_layout_block(a, prog)
+    if lb == 0:
+        ret 0
+    end
+    nm := ln_names(pack)
+    is_fa := str.Equals(lp.Code(pack), "fa")
+    mut lw := LoLower { prog = prog }
+    defer lw.slots.free()
+    defer lw.shadow.free()
+    defer lw.funcs.free()
+    lo_collect_funcs(lw, a, prog)
+    repeat g_lo_ws_inst.len() in n:
+        lw.shadow.push(ws_name(n))
+    end
+    mut r := LnReact {}
+    defer ln_rx_free(r)
+    ln_rx_init(r, a, prog)
+    ws_mark_program(r, a, prog)
+    mut chunks := Vector {} as Vector<str>
+    defer chunks.free()
+    mut wu := WsUse {}
+    mut views := ""
+    mut quiet := dg.NewDefault(0, false, 0)
+    repeat count in k:
+        i := count - 1 - k
+        m := g_lo_wi_mark.get(i)
+        if m == 0:
+            continue
+        end
+        body := at.Get(a, m).b
+        lo_walk(lw, a, body, 0, 0 - 1)
+        vb := at.NewNode(a, at.AST_LAYOUT_BLOCK)
+        copy_span(a, vb, m)
+        at.SetName(a, vb, "__salam_view_" + co.U64Toa(i as u64))
+        mut kept := Vector {} as Vector<int>
+        repeat at.ChildCount(a, body) in c:
+            cid := at.Child(a, body, c)
+            if at.KindOf(a, cid) != at.AST_VAR_DECL:
+                kept.push(cid)
+                at.AddChild(a, vb, cid)
+            end
+        end
+        sm.LayoutResolve(a, vb)
+        g_lo_cls_prefix = "s" + co.U64Toa(i as u64) + "-"
+        res := Generate(log, quiet, file, a, vb, true, lp.Code(pack))
+        g_lo_cls_prefix = ""
+        g_lo_ws_css += res.css
+        views += ws_view_source(lw, nm, i, res.html, chunks, wu)
+        mut bn := at.Get(a, body)
+        mut oldk := bn.list
+        bn.list = kept
+        at.Put(a, body, bn)
+        oldk.free()
+        mut mn := at.Get(a, m)
+        mn.a = mk_str(a, ws_placeholder(i), m)
+        at.Put(a, m, mn)
+    end
+    dg.Free(quiet)
+    mut text := ws_header(lw, a, nm, count, wu) + views
+    if is_fa:
+        text = ln_to_fa(text, pack)
+    end
+    base := at.Count(a)
+    sp := ln_parse(log, a, text, file, is_fa ? pack : lp.Load("en"))
+    if sp == 0:
+        ret 0
+    end
+    mut front := Vector {} as Vector<int>
+    defer front.free()
+    mut gvars := Vector {} as Vector<int>
+    defer gvars.free()
+    mut funcs := Vector {} as Vector<int>
+    defer funcs.free()
+    repeat at.ChildCount(a, sp) in ci:
+        cid := at.Child(a, sp, ci)
+        cn := at.Get(a, cid)
+        if cn.kind == at.AST_VAR_DECL:
+            _vs := lo_splice(lw, a, cid, chunks, lb)
+            lo_span_tree(a, cid, lb, base)
+            gvars.push(cid)
+        else cn.kind == at.AST_FUNC_DEF and cn.a != 0:
+            fbody := lo_splice(lw, a, cn.a, chunks, lb)
+            mut fn := at.Get(a, cid)
+            fn.a = fbody
+            at.Put(a, cid, fn)
+            lo_fix_glue_spans(lw, a, fbody, base)
+            lo_span_tree(a, cid, lb, base)
+            mut fn2 := at.Get(a, cid)
+            fn2.file_boundary = funcs.len() == 0
+            at.Put(a, cid, fn2)
+            funcs.push(cid)
+        else:
+            lo_span_tree(a, cid, lb, base)
+            front.push(cid)
+        end
+    end
+    mut pn := at.Get(a, prog)
+    mut list := Vector {} as Vector<int>
+    repeat pn.list.len() in li:
+        list.push(pn.list.get(li))
+    end
+    ws_insert(list, a, front, at.AST_ORDER_CONST)
+    ws_insert(list, a, gvars, at.AST_ORDER_VAR)
+    each f in funcs:
+        list.push(f)
+    end
+    mut oldl := pn.list
+    pn.list = list
+    at.Put(a, prog, pn)
+    oldl.free()
+    ret count
+end
+
+pub func WebStateRuntime(views: Vector<str>, inits: Vector<str>): str:
+    mut s := "var __salam_views = ["
+    repeat views.len() in i:
+        if i > 0:
+            s += ", "
+        end
+        s += views.get(i)
+    end
+    s += "];\nvar __salam_inits = ["
+    repeat inits.len() in j:
+        if j > 0:
+            s += ", "
+        end
+        s += inits.get(j)
+    end
+    s += "];\n"
+    s += `var __salam_dirty = [];
+var __salam_queued = false;
+var __salam_marks = {};
+function salamWsHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+        return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "\"" ? "&quot;" : "&#39;";
+    });
+}
+function salamWsUrl(s) {
+    var t = String(s).replace(/[\u0000- ]/g, "").toLowerCase();
+    return /^(javascript|vbscript|data):/.test(t) ? "#" : salamWsHtml(s);
+}
+function salamWsCss(s) {
+    return salamWsHtml(String(s).replace(/[;{}<>\r\n]/g, ""));
+}
+function salamWsTouch(i) {
+    if (__salam_dirty.indexOf(i) < 0) {
+        __salam_dirty.push(i);
+    }
+    if (!__salam_queued) {
+        __salam_queued = true;
+        Promise.resolve().then(__salam_flush);
+    }
+}
+function __salam_find(i) {
+    var c = __salam_marks[i];
+    if (c && c.isConnected) {
+        return c;
+    }
+    var w = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT), n, m;
+    while ((n = w.nextNode())) {
+        m = /^salam:(\d+)$/.exec(n.data);
+        if (m) {
+            __salam_marks[m[1]] = n;
+        }
+    }
+    c = __salam_marks[i];
+    return c && c.isConnected ? c : null;
+}
+function __salam_end(start) {
+    var n = start.nextSibling, d = "/" + start.data;
+    while (n && !(n.nodeType === 8 && n.data === d)) {
+        n = n.nextSibling;
+    }
+    return n;
+}
+function __salam_key(n) {
+    if (n.nodeType !== 1) {
+        return null;
+    }
+    var k = n.getAttribute("data-key");
+    return k !== null ? k : n.id ? "#" + n.id : null;
+}
+function __salam_scan(n, fresh) {
+    if (n.nodeType === 8) {
+        var m0 = /^salam:(\d+)$/.exec(n.data);
+        if (m0) {
+            fresh.push(+m0[1]);
+        }
+        return;
+    }
+    if (n.nodeType !== 1) {
+        return;
+    }
+    var w = document.createTreeWalker(n, NodeFilter.SHOW_COMMENT), c, m;
+    while ((c = w.nextNode())) {
+        m = /^salam:(\d+)$/.exec(c.data);
+        if (m) {
+            fresh.push(+m[1]);
+        }
+    }
+}
+function __salam_patch(o, n, fresh) {
+    if (o.nodeType !== 1) {
+        if (o.data !== n.data) {
+            o.data = n.data;
+        }
+        return;
+    }
+    var at = o.attributes, k, nm;
+    for (k = at.length - 1; k >= 0; k--) {
+        nm = at[k].name;
+        if (!n.hasAttribute(nm)) {
+            o.removeAttribute(nm);
+            if (nm === "checked") {
+                o.checked = false;
+            } else if (nm === "value" && "value" in o && o.nodeName !== "BUTTON") {
+                o.value = "";
+            }
+        }
+    }
+    at = n.attributes;
+    for (k = 0; k < at.length; k++) {
+        nm = at[k].name;
+        if (o.getAttribute(nm) !== at[k].value) {
+            o.setAttribute(nm, at[k].value);
+            if (nm === "checked") {
+                o.checked = true;
+            } else if (nm === "value" && "value" in o && o.nodeName !== "BUTTON") {
+                o.value = at[k].value;
+            }
+        }
+    }
+    if (o.nodeName === "TEXTAREA") {
+        if (o.defaultValue !== n.defaultValue) {
+            o.defaultValue = n.defaultValue;
+            o.value = n.defaultValue;
+        }
+        return;
+    }
+    __salam_kids(o, o.firstChild, null, Array.prototype.slice.call(n.childNodes), fresh);
+}
+function __salam_kids(p, cur, stop, list, fresh) {
+    for (var i = 0; i < list.length; i++) {
+        var n = list[i], m = n.nodeType === 8 ? /^salam:(\d+)$/.exec(n.data) : null;
+        if (m) {
+            var close = "/" + n.data, j = i + 1;
+            while (j < list.length && !(list[j].nodeType === 8 && list[j].data === close)) {
+                j++;
+            }
+            var o = cur;
+            while (o && o !== stop && !(o.nodeType === 8 && o.data === n.data)) {
+                o = o.nextSibling;
+            }
+            if (o && o !== stop) {
+                var oe = __salam_end(o);
+                if (o !== cur) {
+                    var x = o;
+                    for (;;) {
+                        var nx = x.nextSibling;
+                        p.insertBefore(x, cur);
+                        if (x === oe || !nx) {
+                            break;
+                        }
+                        x = nx;
+                    }
+                } else {
+                    cur = oe ? oe.nextSibling : null;
+                }
+            } else {
+                p.insertBefore(n, cur);
+                if (j < list.length) {
+                    p.insertBefore(list[j], cur);
+                }
+                fresh.push(+m[1]);
+            }
+            i = j;
+            continue;
+        }
+        var k = __salam_key(n), f = cur;
+        if (k !== null) {
+            while (f && f !== stop && !(f.nodeName === n.nodeName && __salam_key(f) === k)) {
+                f = f.nextSibling;
+            }
+            if (f && f !== stop) {
+                if (f !== cur) {
+                    p.insertBefore(f, cur);
+                }
+            } else {
+                f = null;
+            }
+        }
+        if (f && f !== stop && f.nodeType === n.nodeType && f.nodeName === n.nodeName && __salam_key(f) === k) {
+            __salam_patch(f, n, fresh);
+            cur = f.nextSibling;
+        } else {
+            __salam_scan(n, fresh);
+            p.insertBefore(n, cur);
+        }
+    }
+    while (cur && cur !== stop) {
+        var nx2 = cur.nextSibling;
+        p.removeChild(cur);
+        cur = nx2;
+    }
+}
+function __salam_render(i, fresh) {
+    var s = __salam_find(i), e = s ? __salam_end(s) : null;
+    if (!e) {
+        return;
+    }
+    var t = document.createElement("template");
+    t.innerHTML = __salam_views[i]();
+    __salam_kids(s.parentNode, s.nextSibling, e, Array.prototype.slice.call(t.content.childNodes), fresh);
+}
+function __salam_mount(i) {
+    var fresh = [];
+    __salam_render(i, fresh);
+    while (fresh.length) {
+        var j = fresh.shift();
+        __salam_inits[j]();
+        __salam_render(j, fresh);
+    }
+}
+function __salam_flush() {
+    __salam_queued = false;
+    var act = document.activeElement, ss = null, se = null;
+    try {
+        ss = act.selectionStart;
+        se = act.selectionEnd;
+    } catch (x) {
+        ss = null;
+    }
+    var list = __salam_dirty.sort(function (a, b) {
+        return a - b;
+    });
+    __salam_dirty = [];
+    for (var k = 0; k < list.length; k++) {
+        __salam_mount(list[k]);
+    }
+    if (act && act !== document.activeElement && act.isConnected && act.focus) {
+        act.focus();
+        try {
+            if (ss !== null) {
+                act.setSelectionRange(ss, se);
+            }
+        } catch (x2) {
+            ss = null;
+        }
+    }
+}
+for (var __salam_i = 0; __salam_i < __salam_views.length; __salam_i++) {
+    __salam_mount(__salam_i);
+}
+`
+    ret s
+end

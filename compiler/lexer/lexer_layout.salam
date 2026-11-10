@@ -263,8 +263,8 @@ func layout_value(L &: Lx):
         layout_scan_embedded_lambda(L)
         ret
     end
-    st := L.layout_state
-    L.layout_state = false
+    st := L.layout_decl
+    L.layout_decl = false
     mut depth := 0
     mut want := true
     mut quest := 0
@@ -460,49 +460,63 @@ func layout_control(L &: Lx, k: int, word: str):
     L.layout_sub = LX_SUB_NAME
 end
 
-func layout_state_line(L &: Lx, w: str): bool:
-    if not lp.IsSoftState(L.pack, w):
-        ret false
-    end
-    mut j := str.Len(w)
-    b0 := peek2(L, j)
-    if b0 != 32 and b0 != 9:
-        ret false
-    end
-    until L.pos + j < L.n:
-        c := peek2(L, j)
-        if c == 10 or c == 0 or c == 61:
-            ret false
-        end
-        if c == 58:
-            ret peek2(L, j + 1) == 61
-        end
+func layout_skip_gap(L &: Lx, j0: int): int:
+    mut j := j0
+    until peek2(L, j) == 32 or peek2(L, j) == 9:
         j++
     end
-    ret false
+    ret j
 end
 
-func layout_state_decl(L &: Lx, w: str):
-    b := lx_pos(L)
-    repeat str.Len(w):
-        adv(L)
+func layout_ident_len(L &: Lx, j0: int): int:
+    if not is_ident_start(peek2(L, j0)):
+        ret 0
     end
-    emit(L, tok.TK_KW_MUT, b, w)
-    layout_skip_inline_ws(L)
-    until is_ident_start(peek(L)):
-        scan_ident(L)
+    mut j := j0
+    until L.pos + j < L.n and is_ident_cont(peek2(L, j)):
+        j++
+    end
+    ret j - j0
+end
+
+func layout_decl_line(L &: Lx, w: str): int:
+    mut j := 0
+    mut lead := 0
+    if lp.LookupKeyword(L.pack, w) == tok.TK_KW_MUT:
+        lead = str.Len(w)
+        j = layout_skip_gap(L, lead)
+        if j == lead:
+            ret 0
+        end
+    end
+    n := layout_ident_len(L, j)
+    if n == 0:
+        ret 0
+    end
+    k := layout_skip_gap(L, j + n)
+    if peek2(L, k) == 58 and peek2(L, k + 1) == 61:
+        ret lead > 0 ? 2 : 1
+    end
+    ret 0
+end
+
+func layout_decl(L &: Lx, w: str, kind: int):
+    if kind == 2:
+        b := lx_pos(L)
+        repeat str.Len(w):
+            adv(L)
+        end
+        emit(L, tok.TK_KW_MUT, b, w)
         layout_skip_inline_ws(L)
     end
+    scan_ident(L)
+    layout_skip_inline_ws(L)
     cb := lx_pos(L)
-    if peek(L) == 58 and peek2(L, 1) == 61:
-        adv(L)
-        adv(L)
-        emit(L, tok.TK_COLON_ASSIGN, cb, ":=")
-        L.layout_sub = LX_SUB_VALUE
-        L.layout_state = true
-        ret
-    end
-    error_at(L, cb, "expected ':=' after the state name, as in 'state count := 0'")
+    adv(L)
+    adv(L)
+    emit(L, tok.TK_COLON_ASSIGN, cb, ":=")
+    L.layout_sub = LX_SUB_VALUE
+    L.layout_decl = true
 end
 
 func layout_name(L &: Lx):
@@ -512,8 +526,9 @@ func layout_name(L &: Lx):
     end
     if is_ident_start(peek(L)):
         w := layout_word_at(L)
-        if layout_state_line(L, w):
-            layout_state_decl(L, w)
+        dk := layout_decl_line(L, w)
+        if dk > 0:
+            layout_decl(L, w, dk)
             ret
         end
         mut ck := lp.LookupKeyword(L.pack, w)

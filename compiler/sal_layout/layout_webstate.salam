@@ -42,6 +42,8 @@ struct WsCtx:
     pub ekey_expr: Vector<int> = Vector {}
     pub ctl: Vector<int> = Vector {}
     pub multi: Vector<int> = Vector {}
+    pub wsd_inst: Vector<int> = Vector {}
+    pub wsd_n: Vector<int> = Vector {}
 end
 
 func ws_free(c &: WsCtx):
@@ -53,6 +55,8 @@ func ws_free(c &: WsCtx):
     c.ekey_expr.free()
     c.ctl.free()
     c.multi.free()
+    c.wsd_inst.free()
+    c.wsd_n.free()
 end
 
 func ws_name(n: int): str:
@@ -133,7 +137,15 @@ func ws_mark_index(nid: int): int:
     ret 0 - 1
 end
 
-func ws_note(r &: LnReact, wc &: WsCtx, a &: at.Ast, target: int, insts &: Vector<int>):
+func ws_owner_of(wc &: WsCtx, inst0: int): int:
+    mut inst := inst0
+    if ws_kind(inst) == WS_MULTI:
+        inst = inst < wc.owner.len() ? wc.owner.get(inst) : 0 - 1
+    end
+    ret inst
+end
+
+func ws_note(r &: LnReact, wc &: WsCtx, a &: at.Ast, target: int, locals: Vector<str>, insts &: Vector<int>):
     root := ln_rx_root(a, target)
     if root == 0:
         ret
@@ -142,14 +154,22 @@ func ws_note(r &: LnReact, wc &: WsCtx, a &: at.Ast, target: int, insts &: Vecto
     if str.StartsWith(name, "__salam_ws_"):
         n := str.Substr(name, 11, str.Len(name) - 11).to_int()
         if n >= 0 and n < g_lo_ws_inst.len():
-            mut inst := g_lo_ws_inst.get(n)
-            if ws_kind(inst) == WS_MULTI:
-                inst = inst < wc.owner.len() ? wc.owner.get(inst) : 0 - 1
+            if n < g_lo_ws_kind.len() and g_lo_ws_kind.get(n) != LI_STATE:
+                ret
             end
+            inst := ws_owner_of(wc, g_lo_ws_inst.get(n))
             if inst >= 0:
                 ln_rx_add(insts, inst)
             end
+            repeat wc.wsd_n.len() in k:
+                if wc.wsd_n.get(k) == n:
+                    ln_rx_add(insts, wc.wsd_inst.get(k))
+                end
+            end
         end
+        ret
+    end
+    if ln_rx_local(locals, name):
         ret
     end
     repeat r.ids.len() in i:
@@ -163,7 +183,7 @@ func ws_note(r &: LnReact, wc &: WsCtx, a &: at.Ast, target: int, insts &: Vecto
     end
 end
 
-func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, insts &: Vector<int>):
+func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, locals: Vector<str>, insts &: Vector<int>):
     if nid == 0:
         ret
     end
@@ -172,7 +192,7 @@ func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, insts &: Vector
         ret
     end
     if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC:
-        ws_note(r, wc, a, n.a, insts)
+        ws_note(r, wc, a, n.a, locals, insts)
     end
     if n.kind == at.AST_CALL and n.a != 0:
         callee := at.Get(a, n.a)
@@ -184,7 +204,7 @@ func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, insts &: Vector
                 end
             end
             if not ro:
-                ws_note(r, wc, a, callee.a, insts)
+                ws_note(r, wc, a, callee.a, locals, insts)
             end
         end
         repeat n.list.len() in i:
@@ -202,34 +222,40 @@ func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, insts &: Vector
                 refp = 0
             end
             if refp != 0:
-                ws_note(r, wc, a, arg, insts)
+                ws_note(r, wc, a, arg, locals, insts)
             end
         end
     end
-    ws_writes(r, wc, a, n.a, insts)
-    ws_writes(r, wc, a, n.b, insts)
-    ws_writes(r, wc, a, n.c, insts)
-    ws_writes(r, wc, a, n.d, insts)
+    ws_writes(r, wc, a, n.a, locals, insts)
+    ws_writes(r, wc, a, n.b, locals, insts)
+    ws_writes(r, wc, a, n.c, locals, insts)
+    ws_writes(r, wc, a, n.d, locals, insts)
     repeat n.list.len() in j:
-        ws_writes(r, wc, a, n.list.get(j), insts)
+        ws_writes(r, wc, a, n.list.get(j), locals, insts)
     end
 end
 
-func ws_block(r &: LnReact, wc &: WsCtx, a &: at.Ast, blk: int):
+func ws_block(r &: LnReact, wc &: WsCtx, a &: at.Ast, blk: int, locals0: Vector<str>):
+    mut locals := ln_rx_clone_locals(locals0)
+    defer locals.free()
     b := at.Get(a, blk)
     mut items := Vector {} as Vector<int>
     mut changed := false
     repeat b.list.len() in i:
         sid := b.list.get(i)
         mut insts := Vector {} as Vector<int>
-        ws_writes(r, wc, a, sid, insts)
+        ws_writes(r, wc, a, sid, locals, insts)
         each inst in insts:
             items.push(ws_touch_stmt(a, inst, sid))
             changed = true
         end
         insts.free()
         items.push(sid)
-        ws_visit(r, wc, a, sid)
+        s := at.Get(a, sid)
+        if s.kind == at.AST_VAR_DECL and str.Len(s.name) > 0:
+            locals.push(s.name)
+        end
+        ws_visit(r, wc, a, sid, locals)
     end
     if changed:
         mut bn := at.Get(a, blk)
@@ -242,22 +268,57 @@ func ws_block(r &: LnReact, wc &: WsCtx, a &: at.Ast, blk: int):
     end
 end
 
-func ws_visit(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int):
+func ws_visit(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, locals0: Vector<str>):
     if nid == 0:
         ret
     end
     n := at.Get(a, nid)
     if n.kind == at.AST_BLOCK:
-        ws_block(r, wc, a, nid)
+        ws_block(r, wc, a, nid, locals0)
         ret
     end
-    ws_visit(r, wc, a, n.a)
-    ws_visit(r, wc, a, n.b)
-    ws_visit(r, wc, a, n.c)
-    ws_visit(r, wc, a, n.d)
-    repeat n.list.len() in i:
-        ws_visit(r, wc, a, n.list.get(i))
+    if n.kind == at.AST_LAMBDA:
+        mut locals := ln_rx_clone_locals(locals0)
+        defer locals.free()
+        ln_rx_params(a, nid, locals)
+        ws_visit(r, wc, a, n.a, locals)
+        ret
     end
+    if n.kind == at.AST_EACH or n.kind == at.AST_REPEAT:
+        mut locals2 := ln_rx_clone_locals(locals0)
+        defer locals2.free()
+        if str.Len(n.name) > 0:
+            locals2.push(n.name)
+        end
+        if n.kind == at.AST_EACH and n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+            locals2.push(at.Get(a, n.c).name)
+        end
+        ws_visit(r, wc, a, n.a, locals0)
+        ws_visit(r, wc, a, n.b, locals2)
+        if n.kind == at.AST_REPEAT:
+            ws_visit(r, wc, a, n.c, locals0)
+            ws_visit(r, wc, a, n.d, locals0)
+        end
+        ret
+    end
+    ws_visit(r, wc, a, n.a, locals0)
+    ws_visit(r, wc, a, n.b, locals0)
+    ws_visit(r, wc, a, n.c, locals0)
+    ws_visit(r, wc, a, n.d, locals0)
+    repeat n.list.len() in i:
+        ws_visit(r, wc, a, n.list.get(i), locals0)
+    end
+end
+
+func ws_func(r &: LnReact, wc &: WsCtx, a &: at.Ast, fid: int):
+    f := at.Get(a, fid)
+    if f.a == 0:
+        ret
+    end
+    mut locals := Vector {} as Vector<str>
+    defer locals.free()
+    ln_rx_params(a, fid, locals)
+    ws_visit(r, wc, a, f.a, locals)
 end
 
 func ws_mark_program(r &: LnReact, wc &: WsCtx, a &: at.Ast, prog: int):
@@ -265,12 +326,12 @@ func ws_mark_program(r &: LnReact, wc &: WsCtx, a &: at.Ast, prog: int):
         did := at.Child(a, prog, i)
         k := at.KindOf(a, did)
         if k == at.AST_FUNC_DEF:
-            ws_visit(r, wc, a, at.Get(a, did).a)
+            ws_func(r, wc, a, did)
         else k == at.AST_STRUCT_DEF:
             repeat at.ChildCount(a, did) in j:
                 mid := at.Child(a, did, j)
                 if at.KindOf(a, mid) == at.AST_FUNC_DEF:
-                    ws_visit(r, wc, a, at.Get(a, mid).a)
+                    ws_func(r, wc, a, mid)
                 end
             end
         end
@@ -440,6 +501,79 @@ func ws_deps_in(r &: LnReact, lw &: LoLower, a &: at.Ast, nid: int, out &: Vecto
     ws_deps_in(r, lw, a, n.c, out)
     repeat n.list.len() in i:
         ws_deps_in(r, lw, a, n.list.get(i), out)
+    end
+end
+
+func ws_ws_scan(a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        if str.StartsWith(n.name, "__salam_ws_"):
+            ln_rx_add(out, str.Substr(n.name, 11, str.Len(n.name) - 11).to_int())
+        end
+        ret
+    end
+    ws_ws_scan(a, n.a, out)
+    ws_ws_scan(a, n.b, out)
+    ws_ws_scan(a, n.c, out)
+    ws_ws_scan(a, n.d, out)
+    repeat n.list.len() in i:
+        ws_ws_scan(a, n.list.get(i), out)
+    end
+end
+
+func ws_ws_markers(lw &: LoLower, a &: at.Ast, v: str, out &: Vector<int>):
+    stx := char_from_code(2)
+    mut p := 0
+    until true:
+        q := str.IndexFrom(v, stx, p)
+        if q < 0:
+            break
+        end
+        mut tag := ""
+        mut num := 0
+        after := lo_marker_at(v, q, tag, num)
+        if after < 0:
+            p = q + 1
+            continue
+        end
+        if num >= 0 and num < lw.slots.len():
+            ws_ws_scan(a, lw.slots.get(num).expr, out)
+        end
+        p = after
+    end
+end
+
+func ws_ws_deps_in(lw &: LoLower, a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ATTR:
+        if n.a != 0:
+            ws_ws_markers(lw, a, val_str(a, n.a), out)
+        end
+        ret
+    end
+    if n.kind == at.AST_VAR_DECL:
+        ret
+    end
+    if ln_rx_is_comp(a, nid):
+        if ws_kind(ws_mark_index(nid)) != WS_MULTI:
+            ret
+        end
+    else n.kind == at.AST_IF or n.kind == at.AST_EACH:
+        ws_ws_markers(lw, a, val_str(a, n.a), out)
+    end
+    ws_ws_deps_in(lw, a, n.b, out)
+    ws_ws_deps_in(lw, a, n.c, out)
+    repeat n.list.len() in i:
+        ws_ws_deps_in(lw, a, n.list.get(i), out)
     end
 end
 
@@ -931,6 +1065,15 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
             wc.dep_id.push(d)
         end
         deps.free()
+        mut wdeps := Vector {} as Vector<int>
+        ws_ws_deps_in(lw, a, body, wdeps)
+        each wd in wdeps:
+            if wd >= 0 and wd < g_lo_ws_inst.len() and ws_owner_of(wc, g_lo_ws_inst.get(wd)) != i:
+                wc.wsd_inst.push(i)
+                wc.wsd_n.push(wd)
+            end
+        end
+        wdeps.free()
         ws_keys(lw, wc, a, body)
         ws_ids(a, body)
         vb := at.NewNode(a, at.AST_LAYOUT_BLOCK)

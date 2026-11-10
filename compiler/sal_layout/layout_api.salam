@@ -16,11 +16,11 @@ func expand_block(ex &: LoExpand, log: lg.Logger, a &: at.Ast, program: int, lb:
     collect(ex, a, program, base_dir, 0)
     lo_bub_reset(a, program)
     lo_bub_page_handlers(ex, a, lb)
+    li_analyze(ex, a, program, lb)
     mut items := Vector {} as Vector<int>
-    mut none := LoFrame {}
-    defer none.names.free()
-    defer none.vals.free()
-    defer none.content.free()
+    mut none := LoFrame { page = true }
+    defer frame_free(none)
+    lo_page_decls(a, program, lb, none)
     expand_items(ex, a, items, lb, none, base_dir, 0)
     mut lbn := at.Get(a, lb)
     mut old := lbn.list
@@ -34,6 +34,59 @@ func expand_block(ex &: LoExpand, log: lg.Logger, a &: at.Ast, program: int, lb:
     )
     errors := ex.errors
     ret errors
+end
+
+func lo_page_decls(a &: at.Ast, program: int, lb: int, fr &: LoFrame):
+    mut hoist := Vector {} as Vector<int>
+    defer hoist.free()
+    repeat at.ChildCount(a, lb) in i:
+        sid := at.Child(a, lb, i)
+        if at.KindOf(a, sid) != at.AST_VAR_DECL:
+            continue
+        end
+        sd := at.Get(a, sid)
+        init := subst_value(a, sd.a, fr)
+        if li_kind(sid) == LI_DERIVED:
+            fr.present = true
+            frame_set(fr, sd.name, init)
+            fr.derived.push(sd.name)
+            continue
+        end
+        g := at.NewNode(a, at.AST_VAR_DECL)
+        copy_span(a, g, sid)
+        mut gn := at.Get(a, g)
+        gn.name = sd.name
+        gn.a = init
+        gn.ty = sd.ty
+        gn.is_mut = true
+        at.Put(a, g, gn)
+        hoist.push(g)
+    end
+    if hoist.len() == 0:
+        ret
+    end
+    mut pn := at.Get(a, program)
+    mut list := Vector {} as Vector<int>
+    mut placed := false
+    each item in pn.list:
+        ph := at.ToplevelOrderPhase(a, item)
+        if not placed and (ph == at.AST_ORDER_TYPEDEF or ph == at.AST_ORDER_FUNC or item == lb):
+            each h in hoist:
+                list.push(h)
+            end
+            placed = true
+        end
+        list.push(item)
+    end
+    if not placed:
+        each h2 in hoist:
+            list.push(h2)
+        end
+    end
+    mut old := pn.list
+    pn.list = list
+    at.Put(a, program, pn)
+    old.free()
 end
 
 pub func NewResult(): Result:
@@ -68,6 +121,9 @@ pub func Expand(
     if lb == 0:
         ret 0
     end
+    if not g_lo_web_state:
+        li_reset()
+    end
     ret expand_block(ex, log, a, program, lb, base_dir)
 end
 
@@ -82,6 +138,8 @@ pub func ExpandPage(
     g_lo_ws_type.clear()
     g_lo_ws_lit.clear()
     g_lo_ws_ids.clear()
+    g_lo_ws_kind.clear()
+    li_reset()
     g_lo_each_depth = 0
     g_lo_web_state = true
     r := Expand(log, pack, ct, a, program, base_dir)

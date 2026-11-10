@@ -2399,14 +2399,23 @@ the same page in a native window drawn by Salam (`std/gui/ui`,
 `docs/design/NATIVE_UI.md`). The rule: handlers only change state, never the
 page. State is mutable globals plus `state count := 0` (Persian
 `وضعیت شمار := ۰`) inside a `component` body, which lives per instance and
-survives re-runs of the parent (native only for now; on the web it is an
-error). The compiler marks every write and re-runs only the scopes that read
-what changed: a component instance re-runs as a whole, outside components an
-element, `if` or `each` that reads state re-runs alone, and a handler that
-changes nothing costs no re-render. Writes it cannot see (inside another
-package, through a pointer or a second name for a Vector) need
-`ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A `state` needs
-a visible type: a literal, a typed parameter or `value as Type`.
+survives re-runs of the parent. The compiler marks every write and re-runs
+only the scopes that read what changed: a component instance re-runs as a
+whole, outside components an element, `if` or `each` that reads state re-runs
+alone, and a handler that changes nothing costs no re-render. Inside `each`,
+give the row a `key = item.id` (Persian `کلید`, or an `id`) and each
+component instance keeps its state when rows are inserted, removed or
+reordered; without one, instances follow the position. Writes it cannot see
+(inside another package, through a pointer or a second name for a Vector)
+need `ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A `state`
+needs a visible type: a literal, a typed parameter or `value as Type`
+(`state items := Vector {} as Vector<str>`). `state` works on the web too, in
+the page block built by `salam page build`: each instance renders itself in
+the page script from its state, after a handler re-renders only the instances
+whose state it wrote, and patches their DOM in place (focus, typed input
+values and keyed rows survive). On the web `if` and `each` may appear inside a
+component with `state`, a mutable global still cannot be read by the page,
+and a component with `state` cannot sit inside `each`.
 `salam check page.salam --ui=native`
 reports what a native window cannot show: E165 for things that need a browser (`script`, `style`, `iframe`,
 `embed`, `object`, `template`, `slot`, `svg`, `math`, `inline style`,

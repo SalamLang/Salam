@@ -263,10 +263,10 @@ cards in a grid) with a style sheet that uses hex, `rgba()`, `hsl()`, named, sys
 Style computation hardly changed with typed values: it was dominated by copying
 large structures and by selector matching, not by reading values. Since then
 tokens carry their keyword id, values are applied with integer switches on those
-ids, and the cascade passes the sheet, the element tree, the engine and the parent
+IDs, and the cascade passes the sheet, the element tree, the engine and the parent
 style by reference instead of copying them on every call. On the same page
 (minimum of 500 runs, one core, C backend) the full style computation went from
-282 us to 113 us; the keyword ids alone did not move it, passing by reference did.
+282 us to 113 us; the keyword IDs alone did not move it, passing by reference did.
 
 ### Colours
 

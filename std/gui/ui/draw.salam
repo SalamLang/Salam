@@ -85,120 +85,8 @@ func _native_look(node: int, cs: css.ComputedStyle): bool:
 end
 
 func _paint_bg_layer(cv &: paint.Canvas, bl: css.BgLayer, x: f64, y: f64, w: f64, h: f64, radii: paint.Radii, alpha: f64):
-    s := _e.scale
-    switch bl.image:
-        css.ImageKind.Linear, css.ImageKind.Radial, css.ImageKind.Conic:
-            mut g := paint.Gradient {}
-            g.stops = Vector {} as Vector<paint.GradientStop>
-            g.repeating = bl.repeating
-            mut glen := w
-            if bl.image == css.ImageKind.Linear:
-                mut ang := bl.angle
-                if bl.to_x != 0 or bl.to_y != 0:
-                    th := math.Atan2(h, w) * 180.0 / math.PI
-                    if bl.to_x == 0:
-                        ang = bl.to_y < 0 ? 0.0 : 180.0
-                    else bl.to_y == 0:
-                        ang = bl.to_x > 0 ? 90.0 : 270.0
-                    else bl.to_x > 0 and bl.to_y < 0:
-                        ang = th
-                    else bl.to_x > 0:
-                        ang = 180.0 - th
-                    else bl.to_y > 0:
-                        ang = 180.0 + th
-                    else:
-                        ang = 360.0 - th
-                    end
-                end
-                g.kind = paint.GradientKind.Linear
-                g.angle = ang
-                rad := ang * math.PI / 180.0
-                glen = math.Abs(w * math.Sin(rad)) + math.Abs(h * math.Cos(rad))
-            else:
-                cx := css.Resolve(bl.center_x, w)
-                cy := css.Resolve(bl.center_y, h)
-                g.cx *= s
-                g.cy *= s
-                if bl.image == css.ImageKind.Radial:
-                    g.kind = paint.GradientKind.Radial
-                    mut rx := css.Resolve(bl.radius_x, w)
-                    mut ry := css.Resolve(bl.radius_y, h)
-                    if rx <= 0.0 or ry <= 0.0:
-                        mut ext := paint.RadialExtent.FarthestCorner
-                        switch bl.extent:
-                            css.RadialExtent.ClosestSide: ext = paint.RadialExtent.ClosestSide break end
-                            css.RadialExtent.ClosestCorner: ext = paint.RadialExtent.ClosestCorner break end
-                            css.RadialExtent.FarthestSide: ext = paint.RadialExtent.FarthestSide break end
-                            else: break end
-                        end
-                        pt := paint.RadialSize(w, h, cx, cy, bl.shape == css.RadialShape.Circle, ext)
-                        rx = pt.x
-                        ry = pt.y
-                    end
-                    g.rx *= s
-                    g.ry *= s
-                    glen = rx
-                else:
-                    g.kind = paint.GradientKind.Conic
-                    g.angle = bl.angle
-                    glen = 360.0
-                end
-            end
-            each st in bl.stops:
-                mut pos := -1.0
-                if st.has_pos:
-                    if st.pos.has_pct and st.pos.px == 0.0:
-                        pos = st.pos.pct / 100.0
-                    else glen > 0.0:
-                        pos = css.Resolve(st.pos, glen) / glen
-                    end
-                end
-                g.AddStop(pos, _pca(st.color, alpha))
-            end
-            cv.FillGradient(_rect(x, y, w, h), radii, g)
-            g.Free()
-            break
-        end
-        css.ImageKind.Url:
-            k := _image_index(bl.url)
-            if k >= 0 and _img_ok[k]:
-                img := _img_canvas[k]
-                mut tw := img.width as f64
-                mut th := img.height as f64
-                if bl.size_kind == css.SizeKind.Cover or bl.size_kind == css.SizeKind.Contain:
-                    sx := w / tw
-                    sy := h / th
-                    f := bl.size_kind == css.SizeKind.Cover ? math.Max(sx, sy) : math.Min(sx, sy)
-                    tw *= f
-                    th *= f
-                else:
-                    if bl.size_w.kind != css.LenKind.Auto:
-                        nw := css.Resolve(bl.size_w, w)
-                        if bl.size_h.kind == css.LenKind.Auto:
-                            th *= nw / tw
-                        end
-                        tw = nw
-                    end
-                    if bl.size_h.kind != css.LenKind.Auto:
-                        th = css.Resolve(bl.size_h, h)
-                    end
-                end
-                px := css.Resolve(bl.position_x, w - tw)
-                py := css.Resolve(bl.position_y, h - th)
-                cv.PushRoundedClip(_rect(x, y, w, h), radii)
-                if bl.repeat_x == css.Repeat.NoRepeat and bl.repeat_y == css.Repeat.NoRepeat:
-                    cv.DrawImage(img, _rect(x + px, y + py, tw, th), alpha)
-                else:
-                    cv.DrawImageTiled(img, _rect(x, y, w, h), _rect(x + px, y + py, tw, th), alpha)
-                end
-                cv.PopClip()
-            end
-            break
-        end
-        else:
-            break
-        end
-    end
+    mut a := [x, y, w, h, 0.0, 0.0, 0.0, 0.0]
+    _paint_layer_in(cv, bl, a, radii, a, alpha)
 end
 
 func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
@@ -243,24 +131,19 @@ func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
         bc := c.hovered and not _is_text_input(node) ? css.Color { r = 79, g = 79, b = 79, a = 255 } : css.Color { r = 118, g = 118, b = 118, a = 255 }
         cv.DrawBorder(_rect(b.x, b.y, b.w, b.h), nr, paint.SolidBorder(s, _pca(bc, alpha)))
     else:
-        if bg.a > 0:
-            cv.FillRoundedRect(_rect(b.x, b.y, b.w, b.h), radii, _pca(bg, alpha))
-        end
-        mut k := cs.backgrounds.len() - 1
-        until k >= 0:
-            _paint_bg_layer(cv, cs.backgrounds[k], b.x, b.y, b.w, b.h, radii, alpha)
-            k--
-        end
+        _paint_backgrounds(cv, node, cs, b, radii, bg, alpha)
     end
     mut n2 := cs.box_shadows.len() - 1
     until n2 >= 0:
         sh := cs.box_shadows[n2]
         if sh.inset:
-            cv.DrawShadow(_rect(b.x, b.y, b.w, b.h), radii, paint.Shadow { offset_x = sh.x * s, offset_y = sh.y * s, blur = sh.blur * s, spread = sh.spread * s, color = _pca(sh.color, alpha), inset = true })
+            mut ia := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            _area_of(node, b, css.BoxArea.PaddingBox, ia)
+            cv.DrawShadow(_rect(ia[0], ia[1], ia[2], ia[3]), _area_radii(radii, ia), paint.Shadow { offset_x = sh.x * s, offset_y = sh.y * s, blur = sh.blur * s, spread = sh.spread * s, color = _pca(sh.color, alpha), inset = true })
         end
         n2--
     end
-    if not native:
+    if not native and not _paint_border_image(cv, cs, b, alpha):
         mut bt := _bwidth(cs.border_top)
         mut br := _bwidth(cs.border_right)
         mut bb := _bwidth(cs.border_bottom)
@@ -303,7 +186,7 @@ func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
             bd.right_style = _bstyle(cs.border_right.style)
             bd.bottom_style = _bstyle(cs.border_bottom.style)
             bd.left_style = _bstyle(cs.border_left.style)
-            cv.DrawBorder(_rect(rx, ry, rw, rh), radii, bd)
+            _draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs)
         end
     end
     _paint_replaced(cv, node, cs, b, alpha)
@@ -797,19 +680,20 @@ func _paint_ctx(cv &: paint.Canvas, node: int, alpha0: f64, out_of_flow: bool):
         cv.PushTransform(_own_device(node))
         _vis_push(node, saved)
     end
-    if cs.backdrop_filters.len() > 0 and b.shown and cs.visibility == css.Visibility.Visible:
+    op := _anim_f(node, 2, cs.opacity)
+    backdrop := cs.backdrop_filters.len() > 0
+    if backdrop and b.shown and cs.visibility == css.Visibility.Visible:
         mut bch := paint.FilterChain {}
         _effect_chain(cs.backdrop_filters, bch)
-        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), bch)
+        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), bch, op)
         bch.Free()
     end
-    op := _anim_f(node, 2, cs.opacity)
     mut chain := paint.FilterChain {}
     filtered := cs.filters.len() > 0
     if filtered:
         _effect_chain(cs.filters, chain)
     end
-    layered := op < 1.0 or filtered
+    layered := op < 1.0 or filtered or backdrop
     alpha := alpha0
     if layered:
         mut lr := [0.0, 0.0, 0.0, 0.0]

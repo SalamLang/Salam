@@ -1,0 +1,208 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import math
+
+@en "ImageRepeat"
+@fa "تکرارتصویر"
+pub enum ImageRepeat:
+    @en "Stretch"
+    @fa "کشیده"
+    Stretch
+    @en "Repeat"
+    @fa "تکرارشده"
+    Repeat
+    @en "Round"
+    @fa "گردشده"
+    Round
+    @en "Space"
+    @fa "فاصله دار"
+    Space
+end
+
+@en "NineSlice"
+@fa "نه‌برش"
+pub struct NineSlice:
+    @en "slice_top"
+    @fa "برش بالایی"
+    pub slice_top: f64 = 0.0
+    @en "slice_right"
+    @fa "برش راستی"
+    pub slice_right: f64 = 0.0
+    @en "slice_bottom"
+    @fa "برش پایینی"
+    pub slice_bottom: f64 = 0.0
+    @en "slice_left"
+    @fa "برش چپی"
+    pub slice_left: f64 = 0.0
+    @en "width_top"
+    @fa "پهنای بالایی"
+    pub width_top: f64 = 0.0
+    @en "width_right"
+    @fa "پهنای راستی"
+    pub width_right: f64 = 0.0
+    @en "width_bottom"
+    @fa "پهنای پایینی"
+    pub width_bottom: f64 = 0.0
+    @en "width_left"
+    @fa "پهنای چپی"
+    pub width_left: f64 = 0.0
+    @en "repeat_x"
+    @fa "تکرار افقی"
+    pub repeat_x: ImageRepeat = ImageRepeat.Stretch
+    @en "repeat_y"
+    @fa "تکرار عمودی"
+    pub repeat_y: ImageRepeat = ImageRepeat.Stretch
+    @en "fill"
+    @fa "پرکردن وسط"
+    pub fill: bool = false
+end
+
+func _ns_axis(d0: f64, span: f64, natural: f64, mode: ImageRepeat, out: f64[]): int:
+    if span <= 0.0:
+        ret 0
+    end
+    if mode == ImageRepeat.Stretch or natural <= 0.0:
+        out[0] = d0
+        out[1] = span
+        out[2] = 0.0
+        ret 1
+    end
+    switch mode:
+        ImageRepeat.Round:
+            n := math.Max(1.0, math.Round(span / natural))
+            out[0] = d0
+            out[1] = span / n
+            out[2] = 0.0
+            ret n as int
+        end
+        ImageRepeat.Space:
+            n := math.Floor(span / natural)
+            if n < 1.0:
+                ret 0
+            end
+            gap := (span - n * natural) / (n + 1.0)
+            out[0] = d0 + gap
+            out[1] = natural
+            out[2] = gap
+            ret n as int
+        end
+        else:
+            mut first := d0 + (span - natural) / 2.0
+            if first > d0:
+                first -= math.Ceil((first - d0) / natural) * natural
+            end
+            out[0] = first
+            out[1] = natural
+            out[2] = 0.0
+            ret math.Ceil((d0 + span - first) / natural) as int
+        end
+    end
+    ret 0
+end
+
+func _ns_part(cv &: Canvas, src: Canvas, part: IntRect, dst: Rect, nat_w: f64, nat_h: f64, mx: ImageRepeat, my: ImageRepeat, opacity: f64):
+    if part.width <= 0 or part.height <= 0 or dst.width <= 0.0 or dst.height <= 0.0:
+        ret
+    end
+    mut ax := [0.0, 0.0, 0.0]
+    mut ay := [0.0, 0.0, 0.0]
+    nx := _ns_axis(dst.x, dst.width, nat_w, mx, ax)
+    ny := _ns_axis(dst.y, dst.height, nat_h, my, ay)
+    if nx <= 0 or ny <= 0:
+        ret
+    end
+    if nx == 1 and ny == 1 and ax[0] == dst.x and ay[0] == dst.y and ax[1] == dst.width and ay[1] == dst.height:
+        _cv_image(cv, src, part, dst, dst, opacity, false)
+        ret
+    end
+    _cv_push_clip(cv, dst, Radii {}, false)
+    repeat ny in j:
+        y := ay[0] + (j as f64) * (ay[1] + ay[2])
+        repeat nx in i:
+            x := ax[0] + (i as f64) * (ax[1] + ax[2])
+            _cv_image(cv, src, part, Rect { x = x, y = y, width = ax[1], height = ay[1] }, Rect {}, opacity, false)
+        end
+    end
+    _cv_pop_clip(cv)
+end
+
+func _ns_scale(w: f64, s: int, w2: f64, s2: int): f64:
+    if s > 0 and w > 0.0:
+        ret w / (s as f64)
+    end
+    if s2 > 0 and w2 > 0.0:
+        ret w2 / (s2 as f64)
+    end
+    ret 1.0
+end
+
+func _cv_nine_slice(cv &: Canvas, src: Canvas, area: Rect, ns: NineSlice, opacity: f64):
+    if src.pixels == null or src.width <= 0 or src.height <= 0 or area.width <= 0.0 or area.height <= 0.0:
+        ret
+    end
+    sw := src.width
+    sh := src.height
+    sl := _clampi(math.Round(ns.slice_left) as int, 0, sw)
+    sr := _clampi(math.Round(ns.slice_right) as int, 0, sw - sl)
+    st := _clampi(math.Round(ns.slice_top) as int, 0, sh)
+    sb := _clampi(math.Round(ns.slice_bottom) as int, 0, sh - st)
+    mut wl := _maxf(ns.width_left, 0.0)
+    mut wr := _maxf(ns.width_right, 0.0)
+    mut wt := _maxf(ns.width_top, 0.0)
+    mut wb := _maxf(ns.width_bottom, 0.0)
+    mut f := 1.0
+    if wl + wr > area.width and wl + wr > 0.0:
+        f = area.width / (wl + wr)
+    end
+    if wt + wb > area.height and wt + wb > 0.0:
+        f = math.Min(f, area.height / (wt + wb))
+    end
+    wl *= f
+    wr *= f
+    wt *= f
+    wb *= f
+    x0 := area.x
+    y0 := area.y
+    x1 := area.x + area.width
+    y1 := area.y + area.height
+    mw := sw - sl - sr
+    mh := sh - st - sb
+    dw := area.width - wl - wr
+    dh := area.height - wt - wb
+    st_ := ImageRepeat.Stretch
+    _ns_part(cv, src, IntRect { x = 0, y = 0, width = sl, height = st }, Rect { x = x0, y = y0, width = wl, height = wt }, 0.0, 0.0, st_, st_, opacity)
+    _ns_part(cv, src, IntRect { x = sw - sr, y = 0, width = sr, height = st }, Rect { x = x1 - wr, y = y0, width = wr, height = wt }, 0.0, 0.0, st_, st_, opacity)
+    _ns_part(cv, src, IntRect { x = 0, y = sh - sb, width = sl, height = sb }, Rect { x = x0, y = y1 - wb, width = wl, height = wb }, 0.0, 0.0, st_, st_, opacity)
+    _ns_part(cv, src, IntRect { x = sw - sr, y = sh - sb, width = sr, height = sb }, Rect { x = x1 - wr, y = y1 - wb, width = wr, height = wb }, 0.0, 0.0, st_, st_, opacity)
+    if st > 0:
+        _ns_part(cv, src, IntRect { x = sl, y = 0, width = mw, height = st }, Rect { x = x0 + wl, y = y0, width = dw, height = wt }, (mw as f64) * wt / (st as f64), wt, ns.repeat_x, st_, opacity)
+    end
+    if sb > 0:
+        _ns_part(cv, src, IntRect { x = sl, y = sh - sb, width = mw, height = sb }, Rect { x = x0 + wl, y = y1 - wb, width = dw, height = wb }, (mw as f64) * wb / (sb as f64), wb, ns.repeat_x, st_, opacity)
+    end
+    if sl > 0:
+        _ns_part(cv, src, IntRect { x = 0, y = st, width = sl, height = mh }, Rect { x = x0, y = y0 + wt, width = wl, height = dh }, wl, (mh as f64) * wl / (sl as f64), st_, ns.repeat_y, opacity)
+    end
+    if sr > 0:
+        _ns_part(cv, src, IntRect { x = sw - sr, y = st, width = sr, height = mh }, Rect { x = x1 - wr, y = y0 + wt, width = wr, height = dh }, wr, (mh as f64) * wr / (sr as f64), st_, ns.repeat_y, opacity)
+    end
+    if ns.fill:
+        hs := _ns_scale(wt, st, wb, sb)
+        vs := _ns_scale(wl, sl, wr, sr)
+        _ns_part(cv, src, IntRect { x = sl, y = st, width = mw, height = mh }, Rect { x = x0 + wl, y = y0 + wt, width = dw, height = dh }, (mw as f64) * hs, (mh as f64) * vs, ns.repeat_x, ns.repeat_y, opacity)
+    end
+end

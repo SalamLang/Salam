@@ -1,0 +1,477 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.css
+import gui.paint
+
+func _make_gradient(bl: css.BgLayer, w: f64, h: f64, alpha: f64, g &: paint.Gradient): bool:
+    s := _e.scale
+    g.stops = Vector {} as Vector<paint.GradientStop>
+    g.repeating = bl.repeating
+    mut glen := w
+    switch bl.image:
+        css.ImageKind.Linear:
+            mut ang := bl.angle
+            if bl.to_x != 0 or bl.to_y != 0:
+                th := math.Atan2(h, w) * 180.0 / math.PI
+                if bl.to_x == 0:
+                    ang = bl.to_y < 0 ? 0.0 : 180.0
+                else bl.to_y == 0:
+                    ang = bl.to_x > 0 ? 90.0 : 270.0
+                else bl.to_x > 0 and bl.to_y < 0:
+                    ang = th
+                else bl.to_x > 0:
+                    ang = 180.0 - th
+                else bl.to_y > 0:
+                    ang = 180.0 + th
+                else:
+                    ang = 360.0 - th
+                end
+            end
+            g.kind = paint.GradientKind.Linear
+            g.angle = ang
+            rad := ang * math.PI / 180.0
+            glen = math.Abs(w * math.Sin(rad)) + math.Abs(h * math.Cos(rad))
+            break
+        end
+        css.ImageKind.Radial:
+            cx := css.Resolve(bl.center_x, w)
+            cy := css.Resolve(bl.center_y, h)
+            mut rx := css.Resolve(bl.radius_x, w)
+            mut ry := css.Resolve(bl.radius_y, h)
+            if rx <= 0.0 or ry <= 0.0:
+                mut ext := paint.RadialExtent.FarthestCorner
+                switch bl.extent:
+                    css.RadialExtent.ClosestSide: ext = paint.RadialExtent.ClosestSide break end
+                    css.RadialExtent.ClosestCorner: ext = paint.RadialExtent.ClosestCorner break end
+                    css.RadialExtent.FarthestSide: ext = paint.RadialExtent.FarthestSide break end
+                    else: break end
+                end
+                pt := paint.RadialSize(w, h, cx, cy, bl.shape == css.RadialShape.Circle, ext)
+                rx = pt.x
+                ry = pt.y
+            end
+            g.kind = paint.GradientKind.Radial
+            g.cx = cx * s
+            g.cy = cy * s
+            g.rx = rx * s
+            g.ry = ry * s
+            glen = rx
+            break
+        end
+        css.ImageKind.Conic:
+            g.kind = paint.GradientKind.Conic
+            g.cx = css.Resolve(bl.center_x, w) * s
+            g.cy = css.Resolve(bl.center_y, h) * s
+            g.angle = bl.angle
+            glen = 360.0
+            break
+        end
+        else:
+            ret false
+        end
+    end
+    _gradient_stops(bl, glen, alpha, g)
+    ret true
+end
+
+func _gradient_stops(bl: css.BgLayer, glen: f64, alpha: f64, g &: paint.Gradient):
+    mut v := css.GradientStops(bl, glen)
+    each st in v:
+        g.AddStop(glen > 0.0 ? st.pos.px / glen : 0.0, _pca(st.color, alpha))
+    end
+    v.free()
+end
+
+func _area_of(node: int, b: _Box, area: css.BoxArea, out: f64[]):
+    out[0] = b.x
+    out[1] = b.y
+    out[2] = b.w
+    out[3] = b.h
+    out[4] = 0.0
+    out[5] = 0.0
+    out[6] = 0.0
+    out[7] = 0.0
+    if area != css.BoxArea.PaddingBox and area != css.BoxArea.ContentBox:
+        ret
+    end
+    cb := _e.node_cb[node]
+    if cb < 0:
+        ret
+    end
+    l := _e.tree.Layout(cb)
+    mut t := l.border.top
+    mut r := l.border.right
+    mut bt := l.border.bottom
+    mut lf := l.border.left
+    if area == css.BoxArea.ContentBox:
+        t += l.padding.top
+        r += l.padding.right
+        bt += l.padding.bottom
+        lf += l.padding.left
+    end
+    out[0] = b.x + lf
+    out[1] = b.y + t
+    out[2] = math.Max(0.0, b.w - lf - r)
+    out[3] = math.Max(0.0, b.h - t - bt)
+    out[4] = t
+    out[5] = r
+    out[6] = bt
+    out[7] = lf
+end
+
+func _area_radii(radii: paint.Radii, a: f64[]): paint.Radii:
+    s := _e.scale
+    if a[4] == 0.0 and a[5] == 0.0 and a[6] == 0.0 and a[7] == 0.0:
+        ret radii
+    end
+    ret _inner_radii(radii, a[4] * s, a[5] * s, a[6] * s, a[7] * s)
+end
+
+func _tile_axis(p0: f64, plen: f64, o0: f64, olen: f64, size: f64, rep: css.Repeat, pos: css.Len, out: f64[]): int:
+    if size <= 0.0:
+        ret 0
+    end
+    mut step := size
+    mut start := o0 + css.Resolve(pos, olen - size)
+    mut repeating := rep == css.Repeat.Repeat or rep == css.Repeat.Round
+    if rep == css.Repeat.Space:
+        n := math.Floor(olen / size)
+        if n >= 2.0:
+            step = size + (olen - n * size) / (n - 1.0)
+            start = o0
+            repeating = true
+        end
+    end
+    if not repeating:
+        out[0] = start
+        out[1] = step
+        ret start < p0 + plen and start + size > p0 ? 1 : 0
+    end
+    if start > p0:
+        start -= math.Ceil((start - p0) / step) * step
+    else start + step <= p0:
+        start += math.Floor((p0 - start) / step) * step
+    end
+    out[0] = start
+    out[1] = step
+    ret math.Max(0.0, math.Ceil((p0 + plen - start) / step)) as int
+end
+
+func _paint_layer_in(cv &: paint.Canvas, bl: css.BgLayer, pa: f64[], prad: paint.Radii, oa: f64[], alpha: f64):
+    if bl.image == css.ImageKind.None or pa[2] <= 0.0 or pa[3] <= 0.0:
+        ret
+    end
+    mut img_k := -1
+    mut iw := 0.0
+    mut ih := 0.0
+    if bl.image == css.ImageKind.Url:
+        img_k = _image_index(bl.url)
+        if img_k < 0 or not _img_ok[img_k]:
+            ret
+        end
+        iw = _img_canvas[img_k].width as f64
+        ih = _img_canvas[img_k].height as f64
+        if iw <= 0.0 or ih <= 0.0:
+            ret
+        end
+    end
+    ow := oa[2]
+    oh := oa[3]
+    mut tw := ow
+    mut th := oh
+    if bl.size_kind == css.SizeKind.Cover or bl.size_kind == css.SizeKind.Contain:
+        if img_k >= 0:
+            sx := ow / iw
+            sy := oh / ih
+            f := bl.size_kind == css.SizeKind.Cover ? math.Max(sx, sy) : math.Min(sx, sy)
+            tw = iw * f
+            th = ih * f
+        end
+    else:
+        wa := bl.size_w.kind == css.LenKind.Auto
+        ha := bl.size_h.kind == css.LenKind.Auto
+        if wa and ha:
+            if img_k >= 0:
+                tw = iw
+                th = ih
+            end
+        else ha:
+            tw = css.Resolve(bl.size_w, ow)
+            th = img_k >= 0 ? tw * ih / iw : oh
+        else wa:
+            th = css.Resolve(bl.size_h, oh)
+            tw = img_k >= 0 ? th * iw / ih : ow
+        else:
+            tw = css.Resolve(bl.size_w, ow)
+            th = css.Resolve(bl.size_h, oh)
+        end
+    end
+    if bl.repeat_x == css.Repeat.Round and tw > 0.0:
+        nw := ow / math.Max(1.0, math.Round(ow / tw))
+        if bl.repeat_y != css.Repeat.Round and bl.size_kind == css.SizeKind.Explicit and bl.size_h.kind == css.LenKind.Auto:
+            th = th * nw / tw
+        end
+        tw = nw
+    end
+    if bl.repeat_y == css.Repeat.Round and th > 0.0:
+        nh := oh / math.Max(1.0, math.Round(oh / th))
+        if bl.repeat_x != css.Repeat.Round and bl.size_kind == css.SizeKind.Explicit and bl.size_w.kind == css.LenKind.Auto:
+            tw = tw * nh / th
+        end
+        th = nh
+    end
+    if tw <= 0.0 or th <= 0.0:
+        ret
+    end
+    mut ax := [0.0, 0.0]
+    mut ay := [0.0, 0.0]
+    nx := _tile_axis(pa[0], pa[2], oa[0], ow, tw, bl.repeat_x, bl.position_x, ax)
+    ny := _tile_axis(pa[1], pa[3], oa[1], oh, th, bl.repeat_y, bl.position_y, ay)
+    if nx <= 0 or ny <= 0:
+        ret
+    end
+    cv.PushRoundedClip(_rect(pa[0], pa[1], pa[2], pa[3]), prad)
+    if img_k >= 0:
+        img := _img_canvas[img_k]
+        if nx == 1 and ny == 1:
+            cv.DrawImage(img, _rect(ax[0], ay[0], tw, th), alpha)
+        else ax[1] == tw and ay[1] == th:
+            cv.DrawImageTiled(img, _rect(ax[0], ay[0], ax[1] * (nx as f64), ay[1] * (ny as f64)), _rect(ax[0], ay[0], tw, th), alpha)
+        else:
+            repeat ny in j:
+                repeat nx in i:
+                    cv.DrawImage(img, _rect(ax[0] + (i as f64) * ax[1], ay[0] + (j as f64) * ay[1], tw, th), alpha)
+                end
+            end
+        end
+    else:
+        mut g := paint.Gradient {}
+        if _make_gradient(bl, tw, th, alpha, g):
+            if nx * ny <= 64:
+                repeat ny in j:
+                    repeat nx in i:
+                        cv.FillGradient(_rect(ax[0] + (i as f64) * ax[1], ay[0] + (j as f64) * ay[1], tw, th), paint.Radii {}, g)
+                    end
+                end
+            else:
+                s := _e.scale
+                pw := math.MaxI(1, math.Round(tw * s) as int)
+                ph := math.MaxI(1, math.Round(th * s) as int)
+                mut tile := paint.NewCanvas(pw, ph)
+                tile.FillGradient(paint.Rect { x = 0.0, y = 0.0, width = pw as f64, height = ph as f64 }, paint.Radii {}, g)
+                if ax[1] == tw and ay[1] == th:
+                    cv.DrawImageTiled(tile, _rect(ax[0], ay[0], ax[1] * (nx as f64), ay[1] * (ny as f64)), _rect(ax[0], ay[0], tw, th), 1.0)
+                else:
+                    repeat ny in j:
+                        repeat nx in i:
+                            cv.DrawImage(tile, _rect(ax[0] + (i as f64) * ax[1], ay[0] + (j as f64) * ay[1], tw, th), 1.0)
+                        end
+                    end
+                end
+                tile.Free()
+            end
+        end
+        g.Free()
+    end
+    cv.PopClip()
+end
+
+func _paint_backgrounds(cv &: paint.Canvas, node: int, cs: css.ComputedStyle, b: _Box, radii: paint.Radii, bg: css.Color, alpha: f64):
+    nl := cs.backgrounds.len()
+    mut pa := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    mut oa := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    if bg.a > 0:
+        if nl > 0:
+            _area_of(node, b, cs.backgrounds[nl - 1].clip, pa)
+        else:
+            _area_of(node, b, css.BoxArea.BorderBox, pa)
+        end
+        if pa[2] > 0.0 and pa[3] > 0.0:
+            cv.FillRoundedRect(_rect(pa[0], pa[1], pa[2], pa[3]), _area_radii(radii, pa), _pca(bg, alpha))
+        end
+    end
+    mut k := nl - 1
+    until k >= 0:
+        bl := cs.backgrounds[k]
+        if bl.image != css.ImageKind.None:
+            _area_of(node, b, bl.clip, pa)
+            if bl.fixed:
+                oa[0] = 0.0
+                oa[1] = 0.0
+                oa[2] = _e.width
+                oa[3] = _e.height
+            else:
+                _area_of(node, b, bl.origin, oa)
+            end
+            _paint_layer_in(cv, bl, pa, _area_radii(radii, pa), oa, alpha)
+        end
+        k--
+    end
+end
+
+func _bi_res(l: css.Len, border: f64, basis: f64): f64:
+    if l.kind == css.LenKind.Number:
+        ret l.px * border
+    end
+    ret css.Resolve(l, basis)
+end
+
+func _bi_slice(l: css.Len, size: f64, unit: f64): f64:
+    if l.kind == css.LenKind.Number:
+        ret math.Min(l.px * unit, size)
+    end
+    ret math.Min(css.Resolve(l, size), size)
+end
+
+func _bi_width(l: css.Len, border: f64, basis: f64, slice: f64, unit: f64, intrinsic: bool): f64:
+    if l.kind == css.LenKind.Auto:
+        ret intrinsic ? slice / unit : border
+    end
+    ret _bi_res(l, border, basis)
+end
+
+func _bi_repeat(r: css.Repeat): paint.ImageRepeat:
+    switch r:
+        css.Repeat.Repeat: ret paint.ImageRepeat.Repeat end
+        css.Repeat.Round: ret paint.ImageRepeat.Round end
+        css.Repeat.Space: ret paint.ImageRepeat.Space end
+        else: ret paint.ImageRepeat.Stretch end
+    end
+    ret paint.ImageRepeat.Stretch
+end
+
+func _paint_border_image(cv &: paint.Canvas, cs: css.ComputedStyle, b: _Box, alpha: f64): bool:
+    bi := cs.border_image
+    src := bi.source
+    if src.image == css.ImageKind.None:
+        ret false
+    end
+    s := _e.scale
+    bt := _bwidth(cs.border_top)
+    br := _bwidth(cs.border_right)
+    bb := _bwidth(cs.border_bottom)
+    bl := _bwidth(cs.border_left)
+    out_t := _bi_res(bi.outset_top, bt, 0.0)
+    out_r := _bi_res(bi.outset_right, br, 0.0)
+    out_b := _bi_res(bi.outset_bottom, bb, 0.0)
+    out_l := _bi_res(bi.outset_left, bl, 0.0)
+    ax := b.x - out_l
+    ay := b.y - out_t
+    aw := b.w + out_l + out_r
+    ah := b.h + out_t + out_b
+    if aw <= 0.0 or ah <= 0.0:
+        ret true
+    end
+    mut img := paint.Canvas {}
+    mut own := false
+    mut unit := 1.0
+    mut intrinsic := false
+    if src.image == css.ImageKind.Url:
+        k := _image_index(src.url)
+        if k < 0 or not _img_ok[k]:
+            ret false
+        end
+        img = _img_canvas[k]
+        intrinsic = true
+    else:
+        pw := math.MaxI(1, math.Round(aw * s) as int)
+        ph := math.MaxI(1, math.Round(ah * s) as int)
+        mut g := paint.Gradient {}
+        if not _make_gradient(src, aw, ah, 1.0, g):
+            g.Free()
+            ret false
+        end
+        img = paint.NewCanvas(pw, ph)
+        img.FillGradient(paint.Rect { x = 0.0, y = 0.0, width = pw as f64, height = ph as f64 }, paint.Radii {}, g)
+        g.Free()
+        own = true
+        unit = s
+    end
+    iw := img.width as f64
+    ih := img.height as f64
+    mut ns := paint.NineSlice {}
+    ns.slice_top = _bi_slice(bi.slice_top, ih, unit)
+    ns.slice_right = _bi_slice(bi.slice_right, iw, unit)
+    ns.slice_bottom = _bi_slice(bi.slice_bottom, ih, unit)
+    ns.slice_left = _bi_slice(bi.slice_left, iw, unit)
+    ns.width_top = _bi_width(bi.width_top, bt, ah, ns.slice_top, unit, intrinsic) * s
+    ns.width_right = _bi_width(bi.width_right, br, aw, ns.slice_right, unit, intrinsic) * s
+    ns.width_bottom = _bi_width(bi.width_bottom, bb, ah, ns.slice_bottom, unit, intrinsic) * s
+    ns.width_left = _bi_width(bi.width_left, bl, aw, ns.slice_left, unit, intrinsic) * s
+    ns.repeat_x = _bi_repeat(bi.repeat_x)
+    ns.repeat_y = _bi_repeat(bi.repeat_y)
+    ns.fill = bi.fill
+    cv.DrawNineSlice(img, _rect(ax, ay, aw, ah), ns, alpha)
+    if own:
+        img.Free()
+    end
+    ret true
+end
+
+func _dbl_third(w: f64, st: css.BorderStyle): f64:
+    if st != css.BorderStyle.Double or w < 3.0 * _e.scale:
+        ret -1.0
+    end
+    ret math.Floor((w + _e.scale) / (3.0 * _e.scale)) * _e.scale
+end
+
+func _draw_css_border(cv &: paint.Canvas, r: paint.Rect, radii: paint.Radii, bd: paint.Border, cs: css.ComputedStyle):
+    tt := _dbl_third(bd.top_width, cs.border_top.style)
+    tr := _dbl_third(bd.right_width, cs.border_right.style)
+    tb := _dbl_third(bd.bottom_width, cs.border_bottom.style)
+    tl := _dbl_third(bd.left_width, cs.border_left.style)
+    if tt < 0.0 and tr < 0.0 and tb < 0.0 and tl < 0.0:
+        cv.DrawBorder(r, radii, bd)
+        ret
+    end
+    mut outer := bd
+    mut inner := bd
+    inner.top_width = 0.0
+    inner.right_width = 0.0
+    inner.bottom_width = 0.0
+    inner.left_width = 0.0
+    mut it := 0.0
+    mut ir := 0.0
+    mut ib := 0.0
+    mut il := 0.0
+    if tt >= 0.0:
+        outer.top_width = tt
+        inner.top_width = tt
+        it = bd.top_width - tt
+    end
+    if tr >= 0.0:
+        outer.right_width = tr
+        inner.right_width = tr
+        ir = bd.right_width - tr
+    end
+    if tb >= 0.0:
+        outer.bottom_width = tb
+        inner.bottom_width = tb
+        ib = bd.bottom_width - tb
+    end
+    if tl >= 0.0:
+        outer.left_width = tl
+        inner.left_width = tl
+        il = bd.left_width - tl
+    end
+    cv.DrawBorder(r, radii, outer)
+    ir2 := paint.Rect { x = r.x + il, y = r.y + it, width = r.width - il - ir, height = r.height - it - ib }
+    if ir2.width > 0.0 and ir2.height > 0.0:
+        cv.DrawBorder(ir2, _inner_radii(radii, it, ir, ib, il), inner)
+    end
+end

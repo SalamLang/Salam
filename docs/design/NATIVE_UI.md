@@ -1,6 +1,51 @@
 # Native UI from the page language
 
-Status: phase 0 (target gating) implemented. Later phases are planned below.
+Status: a page runs in a native window with `salam run page.salam --ui=native`.
+The runtime is `std/gui/ui` on top of `gui.window`, `gui.paint`, `gui.typeset`,
+`gui.cssbox`, `gui.css` and `gui.reactive`. Later phases are planned below.
+
+## Using it
+
+```salam
+mut count := 0
+
+page:
+    title = "Counter"
+    box:
+        heading: content = "Count: " + count end
+        button: content = "+1" click = (): count++ end end
+    end
+end
+```
+
+```
+salam page build app.salam            web page, as before
+salam run app.salam --ui=native       the same page in a native window
+salam build app.salam --ui=native     a native executable
+```
+
+For a file with a page and no entry function, the compiler does all style work
+at compile time. Every declaration list, global rule and media rule is parsed,
+validated and shorthand-expanded by `gui.css` while the compiler runs, and the
+resulting typed style program is emitted as Salam code that rebuilds it from
+literals (`__salam_styles`). The page itself becomes `__salam_page(b)`, a
+function of `gui.ui` builder calls (`b.Open("div")`, `b.Decls(3, 4, -1, -1)`,
+`b.Text(...)`, `b.On("click", handler)`, `b.Close()`); runtime values, `if` and
+`each` stay ordinary Salam code. No HTML or CSS text is parsed when the program
+runs, apart from a style attribute whose value is itself a runtime expression.
+After every handler the runtime runs the view again and reconciles the new tree
+with the old one, so a handler only changes the program's state; hover, focus,
+scroll positions and typed text survive. The page view reads the program's
+mutable globals. `SALAM_NATIVE_DUMP=1` prints the generated program.
+
+A program that has its own entry function keeps it, and can call
+`ui.RunCompiled((): ret __salam_styles() end, (b: ui.Builder): __salam_page(b) end)`,
+or build HTML documents with runtime `page Name(params):` views and `ui.Run`.
+
+Tests run headless: `SALAM_WINDOW_BACKEND=headless` with `SALAM_UI_SCRIPT`
+naming a file of steps (`click #id`, `type text`, `key Tab`, `dump`,
+`shot out.png`, `quit`). The `ui` section of `tools/bash/run-tests.sh` builds
+each `tests/<lang>/ui/X.salam` with `--ui=native` and runs it with `X.script`.
 
 ## The problem
 

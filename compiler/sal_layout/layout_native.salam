@@ -1,0 +1,737 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import os
+import str
+import gui.css
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include at "../ast.salam"
+include lp "../langpack.salam"
+include cc "../condcomp.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include sm "../semantic/semantic.salam"
+include i18 "../i18n.salam"
+
+pub const NATIVE_PAGE_VIEW := "__salam_page"
+
+pub const NATIVE_STYLES := "__salam_styles"
+
+struct LnNames:
+    pub kw_func: str = "func"
+    pub kw_end: str = "end"
+    pub kw_if: str = "if"
+    pub kw_else: str = "else"
+    pub kw_each: str = "each"
+    pub kw_in: str = "in"
+    pub kw_ret: str = "ret"
+    pub kw_import: str = "import"
+    pub kw_true: str = "true"
+    pub kw_false: str = "false"
+    pub sep: str = ", "
+    pub entry: str = "main"
+    pub import_ui: str = "gui.ui"
+    pub import_css: str = "gui.css"
+    pub ui: str = "ui"
+    pub css: str = "css"
+    pub builder: str = "Builder"
+    pub program: str = "Program"
+    pub run: str = "RunCompiled"
+    pub open: str = "Open"
+    pub close: str = "Close"
+    pub decls: str = "Decls"
+    pub dyn: str = "Dyn"
+    pub id: str = "Id"
+    pub klass: str = "Class"
+    pub attr: str = "Attr"
+    pub bool_attr: str = "BoolAttr"
+    pub text: str = "Text"
+    pub on: str = "On"
+    pub title: str = "Title"
+    pub lang: str = "Lang"
+    pub dir: str = "Dir"
+end
+
+struct LnGen:
+    pub lw: LoLower = LoLower {}
+    pub cx: LoCtx = LoCtx {}
+    pub prog: css.Program = css.Program {}
+    pub out: str = ""
+    pub depth: int = 1
+    pub nm: LnNames = LnNames {}
+    pub media_seq: int = 0
+    pub sel: Vector<str> = Vector {}
+    pub a_node: int = 0
+end
+
+func ln_names(pack: lp.Langpack): LnNames:
+    mut n := LnNames {}
+    if not str.Equals(lp.Code(pack), "fa"):
+        ret n
+    end
+    n.import_ui = "رابط گرافیکی.رابط کاربری"
+    n.import_css = "رابط گرافیکی.سی اس اس"
+    n.ui = "رابط کاربری"
+    n.css = "سی اس اس"
+    n.builder = "سازنده‌صفحه"
+    n.program = "برنامه‌سبک"
+    n.run = "اجرای ترجمه شده"
+    n.open = "گشودن عنصر"
+    n.close = "بستن عنصر"
+    n.decls = "اعلان های عنصر"
+    n.dyn = "سبک زمان اجرا"
+    n.id = "شناسه عنصر"
+    n.klass = "کلاس عنصر"
+    n.attr = "ویژگی عنصر"
+    n.bool_attr = "ویژگی دودویی عنصر"
+    n.text = "متن فرزند"
+    n.on = "رسیدگی رخداد"
+    n.title = "عنوان صفحه"
+    n.lang = "زبان صفحه"
+    n.dir = "جهت صفحه"
+    n.entry = lp.Entry(pack)
+    ret n
+end
+
+func ln_is_word_start(b: int): bool:
+    ret (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
+end
+
+func ln_is_word(b: int): bool:
+    ret ln_is_word_start(b) or (b >= 48 and b <= 57)
+end
+
+func ln_to_fa(text: str, fa: lp.Langpack): str:
+    en := lp.Load("en")
+    n := str.Len(text)
+    mut out := str.NewBuilder()
+    mut in_str := false
+    mut i := 0
+    until i < n:
+        b := byte_at(text, i)
+        if in_str:
+            str.BufAppendChar(out, b)
+            if b == 92 and i + 1 < n:
+                i++
+                str.BufAppendChar(out, byte_at(text, i))
+            else b == 34:
+                in_str = false
+            end
+            i++
+            continue
+        end
+        if b == 34:
+            in_str = true
+            str.BufAppendChar(out, b)
+            i++
+            continue
+        end
+        if b == 44:
+            str.BufAppend(out, "،")
+            i++
+            continue
+        end
+        if ln_is_word_start(b) and (i == 0 or not ln_is_word(byte_at(text, i - 1))):
+            mut j := i
+            until j < n and ln_is_word(byte_at(text, j)):
+                j++
+            end
+            word := str.Substr(text, i, j - i)
+            k := lp.LookupKeyword(en, word)
+            sp := k != tok.TK_IDENT ? lp.Spelling(fa, k) : ""
+            str.BufAppend(out, str.Len(sp) > 0 ? sp : word)
+            i = j
+            continue
+        end
+        str.BufAppendChar(out, b)
+        i++
+    end
+    r := str.BufStr(out)
+    str.BufFree(out)
+    ret r
+end
+
+func ln_find_page(a &: at.Ast, prog: int): int:
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) == 0 and not d.view_glue:
+            ret did
+        end
+    end
+    ret 0
+end
+
+func ln_has_main(a &: at.Ast, prog: int, pack: lp.Langpack): bool:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and (str.Equals(d.name, "main") or lp.IdentEqual(d.name, lp.Entry(pack))):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_quote(s: str): str:
+    mut out := "\""
+    repeat str.Len(s) in i:
+        b := byte_at(s, i)
+        if b == 34 or b == 92:
+            out += "\\"
+            out += str.Substr(s, i, 1)
+        else b == 10:
+            out += "\\n"
+        else b == 13:
+            out += "\\r"
+        else b == 9:
+            out += "\\t"
+        else:
+            out += str.Substr(s, i, 1)
+        end
+    end
+    ret out + "\""
+end
+
+func ln_parse(log: lg.Logger, a &: at.Ast, text: str, path: str, pack: lp.Langpack): int:
+    mut sf := src.New()
+    sf.path = path
+    sf.text = text
+    sf.len = text.len()
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut toks := tok.StreamNew(path)
+    ok := lx.Run(quiet, pack, sf, toks)
+    mut prog := 0
+    if ok:
+        _ps := ps.Run(quiet, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    if prog == 0:
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "internal: could not build the native page program")
+    end
+    ret prog
+end
+
+func ln_line(g &: LnGen, text: str):
+    mut pad := ""
+    repeat g.depth:
+        pad += "    "
+    end
+    g.out += pad + text + "\n"
+end
+
+func ln_call(g &: LnGen, method: str, args: str):
+    ln_line(g, "b." + method + "(" + args + ")")
+end
+
+func ln_dyn_num(v: str): int:
+    if not is_dyn(v):
+        ret 0 - 1
+    end
+    p := str.IndexOf(v, char_from_code(2))
+    mut tag := ""
+    mut num := 0 - 1
+    _e := lo_marker_at(v, p, tag, num)
+    ret num
+end
+
+func ln_dyn_name(n: int): str:
+    ret "__salam_dyn_" + co.U64Toa(n as u64)
+end
+
+func ln_str_expr(v: str): str:
+    n := ln_dyn_num(v)
+    if n >= 0:
+        ret "(\"\" + " + ln_dyn_name(n) + ")"
+    end
+    ret ln_quote(v)
+end
+
+func ln_bool_expr(g &: LnGen, v: str): str:
+    n := ln_dyn_num(v)
+    if n >= 0:
+        ret ln_dyn_name(n)
+    end
+    ret str.Equals(v, "false") ? g.nm.kw_false : g.nm.kw_true
+end
+
+func ln_compile(g &: LnGen, text: str): int:
+    if str.Len(text) == 0:
+        ret 0 - 1
+    end
+    ret css.CompileDecls(g.prog, text)
+end
+
+func ln_top_sel(g &: LnGen): str:
+    if g.sel.len() == 0:
+        ret "body"
+    end
+    ret g.sel.get(g.sel.len() - 1)
+end
+
+func ln_has_media_child(a &: at.Ast, el: int): bool:
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        ei := sm.LayoutElemOf(a, cid)
+        if ei >= 0 and str.Equals(sm.LayoutElemGenerator(ei), "media"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_event_name(out: str): str:
+    if str.StartsWith(out, "on") and str.Len(out) > 2:
+        ret str.Substr(out, 2, str.Len(out) - 2)
+    end
+    ret out
+end
+
+func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0:
+            continue
+        end
+        nm := an.name
+        if sm.LayoutPseudoPrefixLen(nm) > 0:
+            continue
+        end
+        mut key := sm.LayoutAttrKey(nm)
+        if str.Len(key) == 0:
+            key = nm
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai < 0:
+            continue
+        end
+        dest := sm.LayoutAttrDest(ai)
+        vt := sm.LayoutAttrVtype(ai)
+        if vt == sm.VT_CODE:
+            num := ln_dyn_num(val_str(a, an.a))
+            if num < 0 or num >= g.lw.slots.len():
+                continue
+            end
+            ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
+            if at.KindOf(a, g.lw.slots.get(num).expr) == at.AST_LAMBDA:
+                ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
+            else:
+                ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+            end
+            continue
+        end
+        v := val_str(a, an.a)
+        if dest == sm.LA_HTML:
+            mut out := sm.LayoutAttrOut(ai)
+            if str.IndexOf(out, "*") >= 0:
+                out = hyphenate(nm)
+            end
+            if vt == sm.VT_BOOL or (vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false") or is_dyn(v))):
+                ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
+            else str.Equals(out, "id"):
+                ln_call(g, g.nm.id, ln_str_expr(v))
+            else:
+                mv := is_dyn(v) ? v : attr_value_map(ai, v)
+                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv))
+            end
+        else dest == sm.LA_SOURCE:
+            ln_call(g, g.nm.attr, ln_quote(str.Equals(tag, "a") ? "href" : "src") + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_CLASS:
+            ln_call(g, g.nm.klass, ln_str_expr(v))
+        else dest == sm.LA_DIR or dest == sm.LA_LANG:
+            mv2 := is_dyn(v) ? v : attr_value_map(ai, v)
+            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_str_expr(mv2))
+        else dest == sm.LA_HTML_OR_CSS and lo_all_digits(v):
+            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_quote(v))
+        end
+    end
+    if ei < 0:
+        ret
+    end
+    ekey := sm.LayoutElemKey(ei)
+    repeat sm.LayoutAttrCount() in d:
+        if not sm.LayoutAttrHasDefault(d) or not sm.LayoutCsvHas(sm.LayoutAttrScope(d), ekey):
+            continue
+        end
+        if sm.LayoutAttrDest(d) == sm.LA_HTML:
+            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(d)) + g.nm.sep + ln_quote(sm.LayoutAttrDefault(d)))
+        end
+    end
+end
+
+func ln_pre_events(g &: LnGen, a &: at.Ast, container: int, ei: int):
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            an := at.Get(a, cid)
+            if an.a == 0 or str.Len(an.name) == 0:
+                continue
+            end
+            mut key := sm.LayoutAttrKey(an.name)
+            if str.Len(key) == 0:
+                key = an.name
+            end
+            ai := sm.LayoutAttrFor(ei, key)
+            if ai < 0 or sm.LayoutAttrVtype(ai) != sm.VT_CODE:
+                continue
+            end
+            vk := at.KindOf(a, an.a)
+            if vk != at.AST_LAMBDA and vk != at.AST_IDENTIFIER:
+                continue
+            end
+            idx := g.lw.slots.len()
+            g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = an.a })
+            mut n2 := at.Get(a, cid)
+            n2.a = mk_str(a, lo_mark("dyn", idx), cid)
+            at.Put(a, cid, n2)
+        else k == at.AST_LAYOUT_ELEMENT:
+            ln_pre_events(g, a, cid, sm.LayoutElemOf(a, cid))
+        else k == at.AST_IF:
+            ln_pre_events_if(g, a, cid, ei)
+        else k == at.AST_EACH:
+            ln_pre_events(g, a, at.Get(a, cid).b, ei)
+        end
+    end
+end
+
+func ln_pre_events_if(g &: LnGen, a &: at.Ast, nid: int, ei: int):
+    n := at.Get(a, nid)
+    ln_pre_events(g, a, n.b, ei)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            ln_pre_events_if(g, a, n.c, ei)
+        else:
+            ln_pre_events(g, a, n.c, ei)
+        end
+    end
+end
+
+func ln_dynstyle(g &: LnGen, text: str):
+    if str.Len(text) == 0:
+        ret
+    end
+    mut parts := str.Split(text, ";")
+    defer parts.free()
+    each p in parts:
+        c := str.IndexOf(p, ":")
+        if c <= 0:
+            continue
+        end
+        prop := str.Trim(str.Substr(p, 0, c))
+        val := str.Substr(p, c + 1, str.Len(p) - c - 1)
+        ln_call(g, g.nm.dyn, ln_quote(prop) + g.nm.sep + ln_str_expr(val))
+    end
+end
+
+func ln_items(g &: LnGen, a &: at.Ast, container: int):
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT:
+            ln_element(g, a, cid)
+        else k == at.AST_IF:
+            ln_if(g, a, cid)
+        else k == at.AST_EACH:
+            ln_each(g, a, cid)
+        end
+    end
+end
+
+func ln_if(g &: LnGen, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    num := ln_dyn_num(val_str(a, n.a))
+    ln_line(g, g.nm.kw_if + " " + ln_dyn_name(num) + ":")
+    g.depth++
+    ln_items(g, a, n.b)
+    g.depth--
+    if n.c != 0:
+        ln_line(g, g.nm.kw_else + ":")
+        g.depth++
+        if at.KindOf(a, n.c) == at.AST_IF:
+            ln_if(g, a, n.c)
+        else:
+            ln_items(g, a, n.c)
+        end
+        g.depth--
+    end
+    ln_line(g, g.nm.kw_end)
+end
+
+func ln_each(g &: LnGen, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    num := ln_dyn_num(val_str(a, n.a))
+    ns := co.U64Toa(num as u64)
+    mut head := g.nm.kw_each + " "
+    if n.c != 0:
+        head += "__salam_key_" + ns + g.nm.sep
+    end
+    head += "__salam_item_" + ns + " " + g.nm.kw_in + " " + ln_dyn_name(num) + ":"
+    ln_line(g, head)
+    g.depth++
+    ln_items(g, a, n.b)
+    g.depth--
+    ln_line(g, g.nm.kw_end)
+end
+
+func ln_element(g &: LnGen, a &: at.Ast, el: int):
+    ei := sm.LayoutElemOf(a, el)
+    mut kind := sm.LK_NORMAL
+    mut tag := "div"
+    mut gen := ""
+    mut in_head := false
+    if ei >= 0:
+        kind = sm.LayoutElemKind(ei)
+        if str.Len(sm.LayoutElemTag(ei)) > 0:
+            tag = sm.LayoutElemTag(ei)
+        end
+        gen = sm.LayoutElemGenerator(ei)
+        in_head = sm.LayoutElemInHead(ei)
+    end
+    mut la := LoAttrs {}
+    defer lo_free_attrs(la)
+    lo_collect_attrs(g.cx, a, el, ei, tag, la)
+    if str.Len(la.gen) > 0:
+        gen = la.gen
+    end
+    if str.Equals(gen, "global"):
+        mut gsel := "*"
+        _hs := lo_attr_get(la, "selector", gsel)
+        css.CompileRule(g.prog, gsel, la.css, "")
+        ret
+    end
+    if str.Equals(gen, "media"):
+        mut cond := "all"
+        _hc := lo_attr_get(la, "condition", cond)
+        css.CompileRule(g.prog, ln_top_sel(g), la.css, cond)
+        ret
+    end
+    if str.Equals(gen, "style") or str.Equals(gen, "script") or str.Equals(gen, "font_face") or in_head:
+        ret
+    end
+    if str.Equals(gen, "heading"):
+        mut sv := ""
+        mut sz := 1
+        if lo_attr_get(la, "size", sv) and str.Len(sv) > 0:
+            sz = lo_atoi(sv)
+        end
+        if sz < 1:
+            sz = 1
+        end
+        if sz > 6:
+            sz = 6
+        end
+        tag = "h" + co.U64Toa(sz as u64)
+    end
+    if kind == sm.LK_VIRTUAL:
+        ln_items(g, a, el)
+        ret
+    end
+    ln_call(g, g.nm.open, ln_quote(tag))
+    g.depth++
+    b0 := ln_compile(g, la.css)
+    b1 := ln_compile(g, la.hover)
+    b2 := ln_compile(g, la.focus)
+    b3 := ln_compile(g, la.active)
+    if b0 >= 0 or b1 >= 0 or b2 >= 0 or b3 >= 0:
+        ln_call(g, g.nm.decls, co.I64Toa(b0 as i64) + g.nm.sep + co.I64Toa(b1 as i64) + g.nm.sep + co.I64Toa(b2 as i64) + g.nm.sep + co.I64Toa(b3 as i64))
+    end
+    ln_dynstyle(g, la.dynstyle)
+    ln_attrs(g, a, el, ei, tag)
+    if ln_has_media_child(a, el):
+        cls := "__salam_m" + co.U64Toa(g.media_seq as u64)
+        g.media_seq++
+        ln_call(g, g.nm.klass, ln_quote(cls))
+        g.sel.push("." + cls)
+    else:
+        g.sel.push(ln_top_sel(g))
+    end
+    if la.has_content and kind != sm.LK_VOID:
+        ln_call(g, g.nm.text, ln_str_expr(la.content))
+    end
+    if kind != sm.LK_VOID and kind != sm.LK_RAW:
+        ln_items(g, a, el)
+    end
+    _ps := g.sel.pop()
+    g.depth--
+    ln_call(g, g.nm.close, "")
+end
+
+func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
+    mut have_lang := false
+    mut have_dir := false
+    repeat at.ChildCount(a, lb) in i:
+        iid := at.Child(a, lb, i)
+        item := at.Get(a, iid)
+        if item.kind != at.AST_LAYOUT_ATTR:
+            continue
+        end
+        v := val_str(a, item.a)
+        if str.Equals(item.name, "title"):
+            ln_call(g, g.nm.title, ln_str_expr(v))
+        else str.Equals(item.name, "lang"):
+            l := is_dyn(v) ? v : sm.LayoutDynValue("lang", i18.LayoutValue(v))
+            ln_call(g, g.nm.lang, ln_str_expr(str.Len(l) > 0 ? l : v))
+            have_lang = true
+        else str.Equals(item.name, "dir"):
+            d := is_dyn(v) ? v : sm.LayoutDynValue("dir", i18.LayoutValue(v))
+            ln_call(g, g.nm.dir, ln_str_expr(str.Len(d) > 0 ? d : v))
+            have_dir = true
+        end
+    end
+    if str.Equals(lp.Code(pack), "fa"):
+        if not have_lang:
+            ln_call(g, g.nm.lang, ln_quote("fa"))
+        end
+        if not have_dir:
+            ln_call(g, g.nm.dir, ln_quote("rtl"))
+        end
+    end
+    root_ei := sm.LayoutElemLookup("page")
+    if root_ei < 0:
+        ret
+    end
+    mut rla := LoAttrs {}
+    defer lo_free_attrs(rla)
+    lo_collect_attrs(g.cx, a, lb, root_ei, "body", rla)
+    if str.Len(rla.css) > 0:
+        css.CompileRule(g.prog, "body", rla.css, "")
+    end
+    if str.Len(rla.hover) > 0:
+        css.CompileRule(g.prog, "body:hover", rla.hover, "")
+    end
+    if str.Len(rla.focus) > 0:
+        css.CompileRule(g.prog, "body:focus", rla.focus, "")
+    end
+    if str.Len(rla.active) > 0:
+        css.CompileRule(g.prog, "body:active", rla.active, "")
+    end
+    repeat at.ChildCount(a, lb) in j:
+        jid := at.Child(a, lb, j)
+        jt := at.Get(a, jid)
+        if jt.kind == at.AST_LAYOUT_ATTR and str.Equals(jt.name, "content"):
+            ln_call(g, g.nm.text, ln_str_expr(val_str(a, jt.a)))
+        end
+    end
+end
+
+func ln_source(g &: LnGen, with_main: bool): str:
+    n := g.nm
+    mut s := n.kw_import + " " + n.import_ui + "\n" + n.kw_import + " " + n.import_css + "\n\n"
+    s += n.kw_func + " " + NATIVE_PAGE_VIEW + "(b: " + n.ui + "." + n.builder + "):\n" + g.out + n.kw_end + "\n\n"
+    s += css.ProgramSource(g.prog, NATIVE_STYLES, n.css) + "\n"
+    if with_main:
+        s += n.kw_func + " " + n.entry + ":\n"
+        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + NATIVE_STYLES + "() " + n.kw_end + n.sep + "(b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(b) " + n.kw_end + ")\n"
+        s += n.kw_end + "\n"
+    end
+    ret s
+end
+
+pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): bool:
+    if prog == 0:
+        ret false
+    end
+    lb := ln_find_page(a, prog)
+    if lb == 0:
+        ret false
+    end
+    _ex := ExpandBlock(log, pack, ct, a, prog, lb, lo_dir_of(file))
+    sm.LayoutResolve(a, lb)
+    mut g := LnGen {}
+    defer g.lw.slots.free()
+    defer g.lw.shadow.free()
+    defer g.lw.funcs.free()
+    defer g.sel.free()
+    g.lw.prog = prog
+    g.prog = css.NewProgram()
+    g.nm = ln_names(pack)
+    g.cx.log = log
+    g.cx.file = file
+    g.cx.compact = true
+    lo_collect_funcs(g.lw, a, prog)
+    lo_shadow_globals(g.lw, a, prog)
+    ln_pre_events(g, a, lb, 0 - 1)
+    lo_walk(g.lw, a, lb, 0, 0 - 1)
+    ln_page_settings(g, a, lb, pack)
+    ln_items(g, a, lb)
+    errs := css.ProgramErrors(g.prog)
+    repeat errs in ei:
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "native page style: " + css.ProgramError(g.prog, ei))
+    end
+    is_fa := str.Equals(lp.Code(pack), "fa")
+    mut text := ln_source(g, not ln_has_main(a, prog, pack))
+    if is_fa:
+        text = ln_to_fa(text, pack)
+    end
+    if os.Env("SALAM_NATIVE_DUMP").len() > 0:
+        println text
+    end
+    base := at.Count(a)
+    sp := ln_parse(log, a, text, file, is_fa ? pack : lp.Load("en"))
+    if sp == 0:
+        ret false
+    end
+    mut chunks := Vector {} as Vector<str>
+    defer chunks.free()
+    mut pn := at.Get(a, prog)
+    mut list := Vector {} as Vector<int>
+    repeat at.ChildCount(a, sp) in ci:
+        cid := at.Child(a, sp, ci)
+        if at.KindOf(a, cid) == at.AST_IMPORT and not lo_has_import(a, prog, at.Get(a, cid).name):
+            list.push(cid)
+        end
+    end
+    repeat pn.list.len() in k:
+        list.push(pn.list.get(k))
+    end
+    repeat at.ChildCount(a, sp) in cj:
+        cid2 := at.Child(a, sp, cj)
+        if at.KindOf(a, cid2) != at.AST_FUNC_DEF:
+            continue
+        end
+        fnode := at.Get(a, cid2)
+        if str.Equals(fnode.name, NATIVE_PAGE_VIEW):
+            body := lo_splice(g.lw, a, fnode.a, chunks, lb)
+            mut fn2 := at.Get(a, cid2)
+            fn2.a = body
+            at.Put(a, cid2, fn2)
+            lo_fix_glue_spans(g.lw, a, body, base)
+        end
+        lo_span_tree(a, cid2, lb, base)
+        mut fn3 := at.Get(a, cid2)
+        fn3.file_boundary = true
+        at.Put(a, cid2, fn3)
+        list.push(cid2)
+    end
+    mut old := pn.list
+    pn.list = list
+    at.Put(a, prog, pn)
+    old.free()
+    mut lbm := at.Get(a, lb)
+    lbm.view_glue = true
+    at.Put(a, lb, lbm)
+    lg.Log(log, lg.PH_DRIVER, lg.LOG_INFO, "page " + file + " compiled for a native window")
+    ret true
+end

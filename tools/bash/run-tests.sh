@@ -489,6 +489,18 @@ EOF_LNOTS
         if [ -z "$lfail" ]; then echo "PASS $label"; else echo "FAIL $label ($lfail)"; fi
         rm -rf "$jobdir"
     }
+    wk_uinative() {
+        ujob="$WORK/ui_${jobid}_$$"
+        mkdir -p "$ujob"
+        (cd "$ujob" && "$SALAM_ABS" build "$fabs" --ui=native --output="$ujob/app" --no-color --log-level=error --lang="$lang") >"$ujob/build.log" 2>&1
+        if [ -x "$ujob/app" ]; then
+            got=$(cd "$ujob" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 ./app 2>&1 | tr -d '\r')
+        else
+            got="<build failed> $(head -5 "$ujob/build.log")"
+        fi
+        rm -rf "$ujob"
+        wk_check "$expabs" "$got"
+    }
     wk_page_errors() {
         lcode=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
         ptflags=$(grep -oE '(FLAGS|پرچم): .*' "$f" | head -1 | sed -E 's/^(FLAGS|پرچم): //' | tr -d '\r')
@@ -622,6 +634,7 @@ EOF_LAYOUT_NOT
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
         cross) wk_cross ;;
+        uinative) wk_uinative ;;
         esac
     }
 
@@ -908,6 +921,17 @@ fi
 
 if want packages && command -v git >/dev/null 2>&1; then
     add_job script "packages/en/flow" "tools/bash/test-packages.sh" "en" "tests/en/packages/flow.out"
+fi
+
+if want ui; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/ui/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
+            add_job uinative "ui/$lang/$name" "$f" "$lang" "${f%.salam}.out"
+        done
+    done
 fi
 
 if want new; then

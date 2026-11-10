@@ -1,0 +1,226 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.css
+import gui.cssbox
+import gui.typeset
+
+func _place_all():
+    _e.boxes.free()
+    _e.boxes = Vector {} as Vector<_Box>
+    repeat _e.dom.nodes.len():
+        _e.boxes.push(_Box {})
+    end
+    rl := _e.tree.Layout(_e.root_cb)
+    _e.doc_h = rl.height
+    _e.doc_w = rl.width
+    if _e.dom.body >= 0:
+        bl := _e.tree.Layout(_e.node_cb[_e.dom.body])
+        bottom := bl.abs_y + bl.height + bl.margin.bottom
+        if bottom > _e.doc_h:
+            _e.doc_h = bottom
+        end
+        _e.doc_h = math.Max(_e.doc_h, rl.scroll_height)
+    end
+    maxs := math.Max(0.0, _e.doc_h - _e.height)
+    if _e.vscroll > maxs:
+        _e.vscroll = maxs
+    end
+    if _e.dom.body >= 0:
+        _place(_e.dom.body, 0.0, 0.0 - _e.vscroll, _Box {})
+    end
+end
+
+func _is_clipper(cs: css.ComputedStyle): bool:
+    ret cs.overflow_x != cssbox.Overflow.Visible or cs.overflow_y != cssbox.Overflow.Visible
+end
+
+func _is_scroller(cs: css.ComputedStyle): bool:
+    ox := cs.overflow_x
+    oy := cs.overflow_y
+    ret ox == cssbox.Overflow.Scroll or ox == cssbox.Overflow.Auto or oy == cssbox.Overflow.Scroll or oy == cssbox.Overflow.Auto
+end
+
+func _place(node: int, ox0: f64, oy0: f64, clip: _Box):
+    nd := _e.dom.nodes[node]
+    if nd.tag == "#text":
+        ret
+    end
+    cb := _e.node_cb[node]
+    if cb < 0:
+        each k in nd.kids:
+            if _e.node_atom[k] < 0:
+                _place(k, ox0, oy0, clip)
+            end
+        end
+        ret
+    end
+    cs := _style_of(node)
+    mut ox := ox0
+    mut oy := oy0
+    if cs.position == cssbox.Position.Fixed and _e.node_atom[node] < 0:
+        ox = 0.0
+        oy = 0.0
+    end
+    l := _e.tree.Layout(cb)
+    mut b := _Box { x = ox + l.abs_x, y = oy + l.abs_y, w = l.width, h = l.height, shown = true }
+    b.clip_x0 = clip.clip_x0
+    b.clip_y0 = clip.clip_y0
+    b.clip_x1 = clip.clip_x1
+    b.clip_y1 = clip.clip_y1
+    if cs.position == cssbox.Position.Fixed:
+        b.clip_x0 = -1.0e9
+        b.clip_y0 = -1.0e9
+        b.clip_x1 = 1.0e9
+        b.clip_y1 = 1.0e9
+    end
+    _e.boxes[node] = b
+    mut kc := b
+    if _is_clipper(cs):
+        px0 := b.x + l.border.left
+        py0 := b.y + l.border.top
+        px1 := b.x + b.w - l.border.right
+        py1 := b.y + b.h - l.border.bottom
+        kc.clip_x0 = math.Max(b.clip_x0, px0)
+        kc.clip_y0 = math.Max(b.clip_y0, py0)
+        kc.clip_x1 = math.Min(b.clip_x1, px1)
+        kc.clip_y1 = math.Min(b.clip_y1, py1)
+    end
+    mut inner_x := ox
+    mut inner_y := oy
+    if _is_scroller(cs):
+        c := _e.ctl[node]
+        inner_x -= c.scroll_x
+        inner_y -= c.scroll_y
+    end
+    mut fi := _e.node_ifc[node]
+    until fi >= 0:
+        _place_ifc(fi, inner_x, inner_y, kc)
+        fi = _e.ifcs[fi].next
+    end
+    each k in nd.kids:
+        if _e.node_atom[k] < 0:
+            _place(k, inner_x, inner_y, kc)
+        end
+    end
+end
+
+func _place_ifc(fi: int, ox: f64, oy: f64, clip: _Box):
+    f0 := _e.ifcs[fi]
+    l := _e.tree.Layout(f0.cb)
+    cx := ox + l.abs_x + l.border.left + l.padding.left
+    cy := oy + l.abs_y + l.border.top + l.padding.top
+    cw := l.content_width
+    ch := l.content_height
+    if f0.control:
+        _ifc_layout(fi, 0.0)
+    else:
+        _ifc_para(fi)
+        maxc := typeset.MaxContentWidth(_e.ifcs[fi].para)
+        mut lw := cw
+        if maxc > cw and maxc <= cw + 1.0:
+            lw = maxc
+        end
+        _ifc_layout(fi, lw)
+    end
+    mut f := _e.ifcs.ref(fi)
+    f.x = cx
+    f.y = cy
+    f.w = cw
+    f.h = ch
+    if f.control:
+        lh := f.lay.height
+        if _e.dom.nodes[f.owner].tag != "textarea" and ch > lh:
+            f.y = cy + (ch - lh) / 2.0
+        end
+        if _is_button_input(f.owner) or _e.dom.nodes[f.owner].tag == "select":
+            if _e.dom.nodes[f.owner].tag == "select":
+                f.x = cx
+            else:
+                f.x = cx + (cw - f.lay.width) / 2.0
+            end
+        end
+    end
+    f2 := _e.ifcs[fi]
+    repeat f2.lay.lines.len() in li:
+        line := f2.lay.lines[li]
+        mut k := line.run_start
+        until k < line.run_start + line.run_count:
+            r := f2.lay.runs[k]
+            if r.span >= 0 and r.span < f2.span_el.len():
+                mut el := f2.span_el[r.span]
+                rx := f2.x + r.x
+                ry := f2.y + line.top
+                until el >= 0 and el != f2.owner:
+                    if _e.node_cb[el] >= 0:
+                        break
+                    end
+                    _grow_box(el, rx, ry, r.width, line.height, clip)
+                    el = _e.dom.nodes[el].parent
+                end
+            end
+            k++
+        end
+    end
+    each ai in f2.atoms:
+        a := _e.atoms[ai]
+        sp_start := f2.para.span_starts[a.span]
+        mut gx := 0.0
+        mut gy := 0.0
+        mut found := false
+        each g in f2.lay.glyphs:
+            if g.cluster == sp_start:
+                gx = g.x
+                gy = g.y
+                found = true
+                break
+            end
+        end
+        if not found:
+            continue
+        end
+        acb := _e.node_cb[a.node]
+        if acb < 0:
+            continue
+        end
+        al := _e.tree.Layout(acb)
+        mx := f2.x + gx
+        my := f2.y + gy - a.baseline
+        mut at := _e.atoms.ref(ai)
+        at.ox = mx
+        at.oy = my
+        _place(a.node, mx - (al.abs_x - al.margin.left), my - (al.abs_y - al.margin.top), clip)
+    end
+end
+
+func _grow_box(el: int, x: f64, y: f64, w: f64, h: f64, clip: _Box):
+    b := _e.boxes[el]
+    if not b.shown:
+        _e.boxes[el] = _Box { x = x, y = y, w = w, h = h, shown = true, clip_x0 = clip.clip_x0, clip_y0 = clip.clip_y0, clip_x1 = clip.clip_x1, clip_y1 = clip.clip_y1 }
+        ret
+    end
+    x0 := math.Min(b.x, x)
+    y0 := math.Min(b.y, y)
+    x1 := math.Max(b.x + b.w, x + w)
+    y1 := math.Max(b.y + b.h, y + h)
+    mut nb := b
+    nb.x = x0
+    nb.y = y0
+    nb.w = x1 - x0
+    nb.h = y1 - y0
+    _e.boxes[el] = nb
+end

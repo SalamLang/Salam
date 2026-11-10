@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
 import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
+import { getCampaignFields } from "./campaign";
 import { agent, isDesktop } from "./desktop";
 import { isFa, t } from "./i18n";
 
@@ -198,7 +199,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
     setBusy(plan.id);
     try {
       const trimmed = code.trim();
-      const r = await api.checkout(plan.id, gateway, trimmed || undefined);
+      const r = await api.checkout(plan.id, gateway, trimmed || undefined, getCampaignFields());
       if (isDesktop) {
         await agent.payUrl(r.url);
         setBusy(null);

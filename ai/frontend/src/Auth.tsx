@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type FormEvent } from "react";
 import { useEffect } from "react";
 import { api, ApiError, awaitProviderLogin, newPollSecret, rememberOAuth, setToken, type Plan, type User } from "./api";
+import { getCampaignFields } from "./campaign";
 import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook, IconSpark } from "./icons";
 import { fmtNum } from "./format";
 import type { Theme } from "./theme";
@@ -146,7 +147,7 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
     if (password.length < 8) return setError(t("گذرواژه باید دست‌کم ۸ نویسه باشد.", "Password must be at least 8 characters."));
     setBusy(true);
     try {
-      const res = mode === "login" ? await api.login(email, password) : await api.register(name.trim(), email, password);
+      const res = mode === "login" ? await api.login(email, password) : await api.register(name.trim(), email, password, getCampaignFields());
       setToken(res.token);
       onAuth(res.user);
     } catch (err) {

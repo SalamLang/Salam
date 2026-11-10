@@ -126530,7 +126530,9 @@ pub func Stem(p: str): str:
 b := Base(p)
 idx := str.LastIndex(b, ".")
 if idx <= 0: ret b end
-ret b.substr(0, idx)
+out := b.substr(0, idx)
+mem.Free(b as void*)
+ret out
 end
 @en "Clean"
 @fa "پاک سازی"
@@ -142778,6 +142780,21 @@ else: ret cssbox.Display.Block end
 end
 ret cssbox.Display.Block
 end
+func box_kind(b: BorderStyle): cssbox.BorderKind:
+switch b:
+BorderStyle.None: ret cssbox.BorderKind.None end
+BorderStyle.Hidden: ret cssbox.BorderKind.Hidden end
+BorderStyle.Dashed: ret cssbox.BorderKind.Dashed end
+BorderStyle.Dotted: ret cssbox.BorderKind.Dotted end
+BorderStyle.Double: ret cssbox.BorderKind.Double end
+BorderStyle.Groove: ret cssbox.BorderKind.Groove end
+BorderStyle.Ridge: ret cssbox.BorderKind.Ridge end
+BorderStyle.Inset: ret cssbox.BorderKind.Inset end
+BorderStyle.Outset: ret cssbox.BorderKind.Outset end
+else: ret cssbox.BorderKind.Solid end
+end
+ret cssbox.BorderKind.Solid
+end
 func box_style(cs: ComputedStyle, cbw: f64, cbh: f64, exact: bool): cssbox.Style:
 cx := Cx { fs = cs.font_size }
 mut st := cssbox.Style {}
@@ -142828,6 +142845,7 @@ if cs.min_width.kind == LenKind.Auto:
 st.min_width = cssbox.Auto()
 end
 st.border = cssbox.SidesOf(cssbox.Px(cs.border_top.width), cssbox.Px(cs.border_right.width), cssbox.Px(cs.border_bottom.width), cssbox.Px(cs.border_left.width))
+st.border_kinds = cssbox.BorderKinds { top = box_kind(cs.border_top.style), right = box_kind(cs.border_right.style), bottom = box_kind(cs.border_bottom.style), left = box_kind(cs.border_left.style) }
 st.justify_items = cs.justify_items
 st.justify_self = cs.justify_self
 st.grid_template_columns = cs.grid_template_columns
@@ -145720,6 +145738,7 @@ import gui.cssbox
 const ORDER_EL := 1000000000
 const SPEC_CLASS := 1000
 const SPEC_STATE := 2000
+const SPEC_INLINE := 1000000000
 struct Entry:
 pub block: int = 0
 pub spec: int = 0
@@ -145733,6 +145752,7 @@ end
 struct ElBlocks:
 pub base: int = -1
 pub hint: int = -1
+pub inl: int = -1
 pub hover: int = -1
 pub focus: int = -1
 pub active: int = -1
@@ -145994,6 +146014,9 @@ end
 else el.base.len() > 0:
 b.base = parse_block(sd, el.base)
 end
+if el.inline_style.len() > 0:
+b.inl = parse_block(sd, el.inline_style)
+end
 if el.decl_hover >= 0:
 b.hover = prog_block(sd, el.decl_hover)
 else el.hover.len() > 0:
@@ -146084,8 +146107,11 @@ end
 if b.hint >= 0:
 push_entry(e, Entry { block = b.hint, spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
 end
+if b.inl >= 0:
+push_entry(e, Entry { block = b.inl, spec = SPEC_INLINE, order = ORDER_EL })
+end
 repeat b.dynn in k:
-push_entry(e, Entry { block = e.el_dyn_blocks[b.dyn0 + k], spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
+push_entry(e, Entry { block = e.el_dyn_blocks[b.dyn0 + k], spec = SPEC_INLINE, order = ORDER_EL + 1 + k })
 end
 repeat b.median in k:
 mb := e.el_media_blocks[b.media0 + k]
@@ -150187,6 +150213,9 @@ pub parent: int = -1
 @en "base"
 @fa "اعلان های پایه"
 pub base: str = ""
+@en "inline_style"
+@fa "سبک درون خطی"
+pub inline_style: str = ""
 @en "hover"
 @fa "اعلان های اشاره"
 pub hover: str = ""
@@ -150303,7 +150332,7 @@ own = true
 break
 end
 TK_DIM:
-if tk.s == "fr":
+if tk.id == KW_FR:
 n := fmt_sig(tk.n)
 piece = n + "fr"
 sfree(n)
@@ -150380,11 +150409,11 @@ out = intern_own(r)
 ret true
 end
 func apply_grid_prop(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
-k := kw_at(t, s, e)
+k := kw_id_at(t, s, e)
 switch p:
 P_GRID_TEMPLATE_COLUMNS, P_GRID_TEMPLATE_ROWS:
 mut v := ""
-if k == "none":
+if k == KW_NONE:
 v = ""
 else:
 if not grid_text(t, s, e, cx, v) or not cssbox.IsTrackList(v):
@@ -150400,7 +150429,7 @@ ret true
 end
 P_GRID_TEMPLATE_AREAS:
 mut v := ""
-if k != "none":
+if k != KW_NONE:
 if not grid_text(t, s, e, cx, v) or not cssbox.IsGridAreas(v):
 ret false
 end
@@ -150413,7 +150442,7 @@ mut v := ""
 if not grid_text(t, s, e, cx, v) or not cssbox.IsTrackSizes(v):
 ret false
 end
-if k == "auto":
+if k == KW_AUTO:
 v = ""
 end
 if p == P_GRID_AUTO_COLUMNS:
@@ -150432,13 +150461,13 @@ until i < e:
 if t[i].k != TK_IDENT:
 ret false
 end
-w := t[i].s
-if w == "row" and not seen_dir:
+w := t[i].id
+if w == KW_ROW and not seen_dir:
 seen_dir = true
-else w == "column" and not seen_dir:
+else w == KW_COLUMN and not seen_dir:
 col = true
 seen_dir = true
-else w == "dense" and not dense:
+else w == KW_DENSE and not dense:
 dense = true
 else:
 ret false
@@ -150457,7 +150486,7 @@ mut v := ""
 if not grid_text(t, s, e, cx, v) or not cssbox.IsGridLine(v):
 ret false
 end
-if k == "auto":
+if k == KW_AUTO:
 v = ""
 end
 switch p:
@@ -150470,8 +150499,8 @@ ret true
 end
 P_CAPTION_SIDE:
 switch k:
-"top", "block-start": cs.caption_side = cssbox.CaptionSide.Top break end
-"bottom", "block-end": cs.caption_side = cssbox.CaptionSide.Bottom break end
+KW_TOP, KW_BLOCK_START: cs.caption_side = cssbox.CaptionSide.Top break end
+KW_BOTTOM, KW_BLOCK_END: cs.caption_side = cssbox.CaptionSide.Bottom break end
 else: ret false end
 end
 ret true
@@ -150495,7 +150524,7 @@ end
 out.push(e)
 end
 func grid_is_ident(t: Vector<Tok>, s: int, e: int): bool:
-ret single(t, s, e) and t[s].k == TK_IDENT and t[s].s != "auto" and t[s].s != "span"
+ret single(t, s, e) and t[s].k == TK_IDENT and t[s].id != KW_AUTO and t[s].id != KW_SPAN
 end
 func expand_grid_line(src: str, t: Vector<Tok>, s: int, e: int, a: int, b: int, ids &: Vector<int>, vals &: Vector<str>): bool:
 mut parts := Vector {} as Vector<int>
@@ -150557,7 +150586,7 @@ end
 ret true
 end
 func expand_grid_template(src: str, t: Vector<Tok>, s: int, e: int, full: bool, ids &: Vector<int>, vals &: Vector<str>): bool:
-if kw_at(t, s, e) == "none":
+if kw_id_at(t, s, e) == KW_NONE:
 push_lit(ids, vals, P_GRID_TEMPLATE_ROWS, "none")
 push_lit(ids, vals, P_GRID_TEMPLATE_COLUMNS, "none")
 push_lit(ids, vals, P_GRID_TEMPLATE_AREAS, "none")
@@ -150578,10 +150607,10 @@ end
 if full and n == 2:
 a0 := parts[0]
 b0 := parts[2]
-if t[b0].k == TK_IDENT and t[b0].s == "auto-flow":
+if t[b0].k == TK_IDENT and t[b0].id == KW_AUTO_FLOW:
 mut j := nxt(t, b0)
 mut dense := false
-if j < parts[3] and t[j].k == TK_IDENT and t[j].s == "dense":
+if j < parts[3] and t[j].k == TK_IDENT and t[j].id == KW_DENSE:
 dense = true
 j = nxt(t, j)
 end
@@ -150597,10 +150626,10 @@ push_lit(ids, vals, P_GRID_AUTO_COLUMNS, "auto")
 end
 ret true
 end
-if t[a0].k == TK_IDENT and t[a0].s == "auto-flow":
+if t[a0].k == TK_IDENT and t[a0].id == KW_AUTO_FLOW:
 mut j := nxt(t, a0)
 mut dense := false
-if j < parts[1] and t[j].k == TK_IDENT and t[j].s == "dense":
+if j < parts[1] and t[j].k == TK_IDENT and t[j].id == KW_DENSE:
 dense = true
 j = nxt(t, j)
 end
@@ -151756,7 +151785,11 @@ const KW_BORDER_IMAGE_SLICE := 717
 const KW_BORDER_IMAGE_WIDTH := 718
 const KW_BORDER_IMAGE_OUTSET := 719
 const KW_BORDER_IMAGE_REPEAT := 720
-const NAME_COUNT := 721
+const KW_BLOCK_START := 721
+const KW_BLOCK_END := 722
+const KW_AUTO_FLOW := 723
+const KW_SUBGRID := 724
+const NAME_COUNT := 725
 mut g_name_ids := HashMap {} as HashMap<str, int>
 mut g_name_ids_ready := false
 func name_of(id: int): str:
@@ -152482,6 +152515,10 @@ switch id:
 718: ret "border-image-width" end
 719: ret "border-image-outset" end
 720: ret "border-image-repeat" end
+721: ret "block-start" end
+722: ret "block-end" end
+723: ret "auto-flow" end
+724: ret "subgrid" end
 else: ret "" end
 end
 ret ""
@@ -160773,6 +160810,22 @@ pub r: f64 = 0.0
 pub b: f64 = 0.0
 pub l: f64 = 0.0
 end
+struct CEdge:
+pub w: f64 = 0.0
+pub rank: int = 0
+pub origin: int = -1
+pub node: int = -1
+pub side: int = 0
+pub hidden: bool = false
+end
+struct TableEdges:
+pub h: Vector<CEdge> = Vector {}
+pub v: Vector<CEdge> = Vector {}
+pub xs: Vector<f64> = Vector {}
+pub ys: Vector<f64> = Vector {}
+pub nr: int = 0
+pub nc: int = 0
+end
 struct Node:
 pub style: Style = Style {}
 pub children: Vector<int> = Vector {}
@@ -160815,6 +160868,7 @@ pub gd: GData = GData {}
 pub gi: GInfo = GInfo {}
 pub ubor: Sides = Sides {}
 pub bov: bool = false
+pub tb: TableEdges = TableEdges {}
 end
 @en "LengthKind"
 @fa "نوع‌درازا"
@@ -161104,6 +161158,40 @@ MinContent
 @fa "فضای بیشینه محتوا"
 MaxContent
 end
+@en "BorderKind"
+@fa "نوع‌خط‌مرز"
+pub enum BorderKind:
+@en "Solid"
+@fa "خط پیوسته"
+Solid
+@en "None"
+@fa "بی خط"
+None
+@en "Hidden"
+@fa "خط پنهان"
+Hidden
+@en "Inset"
+@fa "خط فرورفته"
+Inset
+@en "Groove"
+@fa "خط شیار"
+Groove
+@en "Outset"
+@fa "خط برآمده"
+Outset
+@en "Ridge"
+@fa "خط برجسته"
+Ridge
+@en "Dotted"
+@fa "خط نقطه چین"
+Dotted
+@en "Dashed"
+@fa "خط خط چین"
+Dashed
+@en "Double"
+@fa "خط دوتایی"
+Double
+end
 @en "Length"
 @fa "درازا"
 pub struct Length:
@@ -161145,6 +161233,47 @@ pub bottom: f64 = 0.0
 @en "left"
 @fa "لبه چپ"
 pub left: f64 = 0.0
+end
+@en "BorderKinds"
+@fa "خطوط‌مرز"
+pub struct BorderKinds:
+@en "top"
+@fa "خط بالا"
+pub top: BorderKind = BorderKind.Solid
+@en "right"
+@fa "خط راست"
+pub right: BorderKind = BorderKind.Solid
+@en "bottom"
+@fa "خط پایین"
+pub bottom: BorderKind = BorderKind.Solid
+@en "left"
+@fa "خط چپ"
+pub left: BorderKind = BorderKind.Solid
+end
+@en "CollapsedBorder"
+@fa "مرزادغامی"
+pub struct CollapsedBorder:
+@en "x"
+@fa "ایکس مرز"
+pub x: f64 = 0.0
+@en "y"
+@fa "ایگرگ مرز"
+pub y: f64 = 0.0
+@en "width"
+@fa "پهنای تکه"
+pub width: f64 = 0.0
+@en "height"
+@fa "بلندی تکه"
+pub height: f64 = 0.0
+@en "node"
+@fa "گره برنده"
+pub node: int = -1
+@en "side"
+@fa "سوی برنده"
+pub side: int = 0
+@en "vertical"
+@fa "عمودی است"
+pub vertical: bool = false
 end
 @en "Style"
 @fa "سبک"
@@ -161281,6 +161410,9 @@ pub table_layout: TableLayout = TableLayout.Auto
 @en "border_collapse"
 @fa "ادغام مرز"
 pub border_collapse: BorderCollapse = BorderCollapse.Separate
+@en "border_kinds"
+@fa "خطوط مرز"
+pub border_kinds: BorderKinds = BorderKinds {}
 @en "border_spacing_x"
 @fa "فاصله مرز افقی"
 pub border_spacing_x: f64 = 0.0
@@ -168037,128 +168169,244 @@ n.couts.clear()
 n.cnext = 0
 end
 end
+func _bk_rank(k: BorderKind): int:
+switch k:
+BorderKind.Double: ret 8 end
+BorderKind.Solid: ret 7 end
+BorderKind.Dashed: ret 6 end
+BorderKind.Dotted: ret 5 end
+BorderKind.Ridge, BorderKind.Inset: ret 4 end
+BorderKind.Groove, BorderKind.Outset: ret 2 end
+else: ret 0 end
+end
+ret 0
+end
+func _bk_side(k: BorderKinds, side: int): BorderKind:
+switch side:
+0: ret k.top end
+1: ret k.right end
+2: ret k.bottom end
+else: ret k.left end
+end
+ret k.left
+end
+func _len_side(s: Sides, side: int): f64:
+switch side:
+0: ret _side_w(s.top) end
+1: ret _side_w(s.right) end
+2: ret _side_w(s.bottom) end
+else: ret _side_w(s.left) end
+end
+ret 0.0
+end
+func _ce_better(a: CEdge, b: CEdge): bool:
+if b.origin < 0:
+ret a.origin >= 0
+end
+if a.hidden or b.hidden:
+ret a.hidden and not b.hidden
+end
+if a.w != b.w:
+ret a.w > b.w
+end
+if a.rank != b.rank:
+ret a.rank > b.rank
+end
+ret a.origin > b.origin
+end
+func _ce_offer(t &: Engine, v &: Vector<CEdge>, i: int, node: int, side: int, origin: int):
+if node < 0 or i < 0 or i >= v.len():
+ret
+end
+n := t.nodes.ref(node)
+k := _bk_side(n.style.border_kinds, side)
+mut c := CEdge { origin = origin, node = node, side = side }
+if k == BorderKind.Hidden:
+c.hidden = true
+else:
+if k == BorderKind.None:
+ret
+end
+c.w = _len_side(n.ubor, side)
+if c.w <= 0.0:
+ret
+end
+c.rank = _bk_rank(k)
+end
+if _ce_better(c, v[i]):
+v[i] = c
+end
+end
+func _bk_vis(k: BorderKinds, side: int): bool:
+b := _bk_side(k, side)
+ret b != BorderKind.None and b != BorderKind.Hidden
+end
+func _ce_w(c: CEdge): f64:
+if c.hidden or c.origin < 0:
+ret 0.0
+end
+ret c.w
+end
+func _tb_free(b &: TableEdges):
+b.h.free()
+b.v.free()
+b.xs.free()
+b.ys.free()
+end
+func _t_resolve(t &: Engine, id: int, x &: TCtx, rtl: bool):
+nr := x.rows.len()
+nc := x.ncols
+sside := rtl ? 1 : 3
+eside := rtl ? 3 : 1
+tn := t.nodes.ref(id)
+_tb_free(tn.tb)
+mut hs := Vector {} as Vector<CEdge>
+mut vs := Vector {} as Vector<CEdge>
+repeat (nr + 1) * nc:
+hs.push(CEdge {})
+end
+repeat nr * (nc + 1):
+vs.push(CEdge {})
+end
+repeat nc in c:
+_ce_offer(t, hs, c, id, 0, 0)
+_ce_offer(t, hs, nr * nc + c, id, 2, 0)
+end
+repeat nr in r:
+_ce_offer(t, vs, r * (nc + 1), id, sside, 0)
+_ce_offer(t, vs, r * (nc + 1) + nc, id, eside, 0)
+end
+mut k := 0
+until k < nc:
+g := x.cols[k].gid
+mut k1 := k + 1
+until k1 < nc and x.cols[k1].gid == g:
+k1++
+end
+if g >= 0:
+repeat nr in r:
+_ce_offer(t, vs, r * (nc + 1) + k, g, sside, 1)
+_ce_offer(t, vs, r * (nc + 1) + k1, g, eside, 1)
+end
+mut c := k
+until c < k1:
+_ce_offer(t, hs, c, g, 0, 1)
+_ce_offer(t, hs, nr * nc + c, g, 2, 1)
+c++
+end
+end
+k = k1
+end
+k = 0
+until k < nc:
+cid := x.cols[k].id
+mut k1 := k + 1
+until k1 < nc and x.cols[k1].id == cid:
+k1++
+end
+if cid >= 0:
+repeat nr in r:
+_ce_offer(t, vs, r * (nc + 1) + k, cid, sside, 2)
+_ce_offer(t, vs, r * (nc + 1) + k1, cid, eside, 2)
+end
+mut c := k
+until c < k1:
+_ce_offer(t, hs, c, cid, 0, 2)
+_ce_offer(t, hs, nr * nc + c, cid, 2, 2)
+c++
+end
+end
+k = k1
+end
+each g in x.grps:
+if g.id >= 0 and g.r1 > g.r0:
+repeat nc in c:
+_ce_offer(t, hs, g.r0 * nc + c, g.id, 0, 3)
+_ce_offer(t, hs, g.r1 * nc + c, g.id, 2, 3)
+end
+mut r := g.r0
+until r < g.r1:
+_ce_offer(t, vs, r * (nc + 1), g.id, sside, 3)
+_ce_offer(t, vs, r * (nc + 1) + nc, g.id, eside, 3)
+r++
+end
+end
+end
+repeat nr in r:
+rid := x.rows[r].id
+if rid >= 0:
+repeat nc in c:
+_ce_offer(t, hs, r * nc + c, rid, 0, 4)
+_ce_offer(t, hs, (r + 1) * nc + c, rid, 2, 4)
+end
+_ce_offer(t, vs, r * (nc + 1), rid, sside, 4)
+_ce_offer(t, vs, r * (nc + 1) + nc, rid, eside, 4)
+end
+end
+each c in x.cells:
+repeat c.cs in dc:
+_ce_offer(t, hs, c.row * nc + c.col + dc, c.id, 0, 5)
+_ce_offer(t, hs, (c.row + c.rs) * nc + c.col + dc, c.id, 2, 5)
+end
+repeat c.rs in dr:
+_ce_offer(t, vs, (c.row + dr) * (nc + 1) + c.col, c.id, sside, 5)
+_ce_offer(t, vs, (c.row + dr) * (nc + 1) + c.col + c.cs, c.id, eside, 5)
+end
+end
+each c in x.cells:
+repeat c.rs - 1 in dr:
+repeat c.cs in dc:
+hs[(c.row + dr + 1) * nc + c.col + dc] = CEdge {}
+end
+end
+repeat c.cs - 1 in dc:
+repeat c.rs in dr:
+vs[(c.row + dr) * (nc + 1) + c.col + dc + 1] = CEdge {}
+end
+end
+end
+tn2 := t.nodes.ref(id)
+tn2.tb = TableEdges { h = hs, v = vs, xs = Vector {} as Vector<f64>, ys = Vector {} as Vector<f64>, nr = nr, nc = nc }
+end
 func _t_collapse(t &: Engine, id: int, x &: TCtx, tb &: R4, rtl: bool):
 nr := x.rows.len()
 nc := x.ncols
-tub := t.nodes.ref(id).ubor
-tl := _side_w(rtl ? tub.right : tub.left)
-tr := _side_w(rtl ? tub.left : tub.right)
-ttop := _side_w(tub.top)
-tbot := _side_w(tub.bottom)
-mut owner := Vector {} as Vector<int>
-defer owner.free()
-repeat nr * nc:
-owner.push(-1)
-end
-repeat x.cells.len() in i:
-c := x.cells[i]
-repeat c.rs in dr:
-repeat c.cs in dc:
-owner[(c.row + dr) * nc + c.col + dc] = i
-end
-end
-end
+_t_resolve(t, id, x, rtl)
+tbd := t.nodes.ref(id).tb
+hs := tbd.h
+vs := tbd.v
 mut ml := 0.0
 mut mr := 0.0
 mut mt := 0.0
 mut mb := 0.0
+repeat nr in r:
+ml = _fmax(ml, _ce_w(vs[r * (nc + 1)]))
+mr = _fmax(mr, _ce_w(vs[r * (nc + 1) + nc]))
+end
+repeat nc in c:
+mt = _fmax(mt, _ce_w(hs[c]))
+mb = _fmax(mb, _ce_w(hs[nr * nc + c]))
+end
 repeat x.cells.len() in i:
 c := x.cells[i]
-ub := t.nodes.ref(c.id).ubor
 mut bl := 0.0
 mut br := 0.0
 mut bt := 0.0
 mut bb := 0.0
 repeat c.rs in dr:
-r := c.row + dr
-mut e := _side_w(rtl ? ub.right : ub.left)
-if c.col == 0:
-e = _fmax(e, tl)
-ml = _fmax(ml, e)
-else:
-o := owner[r * nc + c.col - 1]
-if o >= 0:
-e = _fmax(e, _side_w(rtl ? t.nodes.ref(x.cells[o].id).ubor.left : t.nodes.ref(x.cells[o].id).ubor.right))
-end
-end
-bl = _fmax(bl, e)
-mut f := _side_w(rtl ? ub.left : ub.right)
-if c.col + c.cs == nc:
-f = _fmax(f, tr)
-mr = _fmax(mr, f)
-else:
-o := owner[r * nc + c.col + c.cs]
-if o >= 0:
-f = _fmax(f, _side_w(rtl ? t.nodes.ref(x.cells[o].id).ubor.right : t.nodes.ref(x.cells[o].id).ubor.left))
-end
-end
-br = _fmax(br, f)
+bl = _fmax(bl, _ce_w(vs[(c.row + dr) * (nc + 1) + c.col]))
+br = _fmax(br, _ce_w(vs[(c.row + dr) * (nc + 1) + c.col + c.cs]))
 end
 repeat c.cs in dc:
-col := c.col + dc
-mut e := _side_w(ub.top)
-if c.row == 0:
-e = _fmax(e, ttop)
-mt = _fmax(mt, e)
-else:
-o := owner[(c.row - 1) * nc + col]
-if o >= 0:
-e = _fmax(e, _side_w(t.nodes.ref(x.cells[o].id).ubor.bottom))
-end
-end
-bt = _fmax(bt, e)
-mut f := _side_w(ub.bottom)
-if c.row + c.rs == nr:
-f = _fmax(f, tbot)
-mb = _fmax(mb, f)
-else:
-o := owner[(c.row + c.rs) * nc + col]
-if o >= 0:
-f = _fmax(f, _side_w(t.nodes.ref(x.cells[o].id).ubor.top))
-end
-end
-bb = _fmax(bb, f)
+bt = _fmax(bt, _ce_w(hs[c.row * nc + c.col + dc]))
+bb = _fmax(bb, _ce_w(hs[(c.row + c.rs) * nc + c.col + dc]))
 end
 cr := x.cells.ref(i)
 cr.bor = R4 { l = bl / 2.0, r = br / 2.0, t = bt / 2.0, b = bb / 2.0 }
 end
-mut rt := Vector {} as Vector<f64>
-defer rt.free()
-mut rb := Vector {} as Vector<f64>
-defer rb.free()
-repeat nr:
-rt.push(0.0)
-rb.push(0.0)
-end
-mut cl := Vector {} as Vector<f64>
-defer cl.free()
-mut cr2 := Vector {} as Vector<f64>
-defer cr2.free()
-repeat nc:
-cl.push(0.0)
-cr2.push(0.0)
-end
-each c in x.cells:
-rt[c.row] = _fmax(rt[c.row], c.bor.t)
-cl[c.col] = _fmax(cl[c.col], c.bor.l)
-if c.rs == 1:
-rb[c.row] = _fmax(rb[c.row], c.bor.b)
-end
-if c.cs == 1:
-cr2[c.col] = _fmax(cr2[c.col], c.bor.r)
-end
-end
 repeat x.cells.len() in i:
 c := x.cells[i]
 mut b := c.bor
-b.t = rt[c.row]
-b.l = cl[c.col]
-if c.rs == 1:
-b.b = rb[c.row]
-end
-if c.cs == 1:
-b.r = cr2[c.col]
-end
 if rtl:
 sw := b.l
 b.l = b.r
@@ -168169,15 +168417,118 @@ cr.bor = b
 _t_set_border(t, c.id, b)
 end
 if nr == 0 or nc == 0:
-ml = tl
-mr = tr
-mt = ttop
-mb = tbot
+tub := t.nodes.ref(id).ubor
+tk := t.nodes.ref(id).style.border_kinds
+ml = _bk_vis(tk, rtl ? 1 : 3) ? _side_w(rtl ? tub.right : tub.left) : 0.0
+mr = _bk_vis(tk, rtl ? 3 : 1) ? _side_w(rtl ? tub.left : tub.right) : 0.0
+mt = _bk_vis(tk, 0) ? _side_w(tub.top) : 0.0
+mb = _bk_vis(tk, 2) ? _side_w(tub.bottom) : 0.0
 end
 if rtl:
 tb = R4 { l = mr / 2.0, r = ml / 2.0, t = mt / 2.0, b = mb / 2.0 }
 else:
 tb = R4 { l = ml / 2.0, r = mr / 2.0, t = mt / 2.0, b = mb / 2.0 }
+end
+end
+func _joint(b: TableEdges, hr: int, k: int, e: CEdge, horiz: bool, perp &: f64): bool:
+nc := b.nc
+nr := b.nr
+mut beaten := false
+perp = 0.0
+repeat 2 in q:
+if horiz:
+r := hr - 1 + q
+if r >= 0 and r < nr:
+o := b.v[r * (nc + 1) + k]
+if _ce_w(o) > 0.0:
+perp = _fmax(perp, o.w)
+if _ce_better(o, e):
+beaten = true
+end
+end
+end
+else:
+c := k - 1 + q
+if c >= 0 and c < nc:
+o := b.h[hr * nc + c]
+if _ce_w(o) > 0.0:
+perp = _fmax(perp, o.w)
+if _ce_better(o, e):
+beaten = true
+end
+end
+end
+end
+end
+ret not beaten
+end
+func _col_beats(o: CEdge, e: CEdge): bool:
+ret _ce_w(o) > 0.0 and _ce_better(o, e)
+end
+func _tb_segments(t &: Engine, id: int, out &: Vector<CollapsedBorder>):
+if id < 0 or id >= t.nodes.len():
+ret
+end
+b := t.nodes.ref(id).tb
+nr := b.nr
+nc := b.nc
+if b.xs.len() != nc + 1 or b.ys.len() != nr + 1 or b.h.len() != (nr + 1) * nc or b.v.len() != nr * (nc + 1):
+ret
+end
+mut pw := 0.0
+repeat nr in r0:
+repeat nc + 1 in k0:
+r := nr - 1 - r0
+k := nc - k0
+e := b.v[r * (nc + 1) + k]
+if _ce_w(e) <= 0.0:
+continue
+end
+mut y0 := b.ys[r]
+mut y1 := b.ys[r + 1]
+if _joint(b, r, k, e, false, pw) and not (r > 0 and _col_beats(b.v[(r - 1) * (nc + 1) + k], e)):
+y0 -= pw / 2.0
+else:
+y0 += pw / 2.0
+end
+if _joint(b, r + 1, k, e, false, pw) and not (r + 1 < nr and _col_beats(b.v[(r + 1) * (nc + 1) + k], e)):
+y1 += pw / 2.0
+else:
+y1 -= pw / 2.0
+end
+if y1 > y0:
+out.push(CollapsedBorder { x = b.xs[k] - e.w / 2.0, y = y0, width = e.w, height = y1 - y0, node = e.node, side = e.side, vertical = true })
+end
+end
+end
+repeat nr + 1 in hr0:
+repeat nc in c0:
+hr := nr - hr0
+c := nc - 1 - c0
+e := b.h[hr * nc + c]
+if _ce_w(e) <= 0.0:
+continue
+end
+kl := b.xs[c] <= b.xs[c + 1] ? c : c + 1
+kr := kl == c ? c + 1 : c
+mut x0 := _fmin(b.xs[c], b.xs[c + 1])
+mut x1 := _fmax(b.xs[c], b.xs[c + 1])
+cl := kl == c ? c - 1 : c + 1
+cr := kl == c ? c + 1 : c - 1
+if _joint(b, hr, kl, e, true, pw) and not (cl >= 0 and cl < nc and _col_beats(b.h[hr * nc + cl], e)):
+x0 -= pw / 2.0
+else:
+x0 += pw / 2.0
+end
+if _joint(b, hr, kr, e, true, pw) and not (cr >= 0 and cr < nc and _col_beats(b.h[hr * nc + cr], e)):
+x1 += pw / 2.0
+else:
+x1 -= pw / 2.0
+end
+if x1 > x0:
+out.push(CollapsedBorder { x = x0, y = b.ys[hr] - e.w / 2.0, width = x1 - x0, height = e.w, node = e.node, side = e.side, vertical = false })
+end
+end
 end
 end
 func _t_cell_widths(t &: Engine, x &: TCtx):
@@ -168527,9 +168878,6 @@ end
 cr.base = b
 end
 each c in x.cells:
-if c.rs != 1:
-continue
-end
 st := t.nodes.ref(c.id).style
 if st.vertical_align == VerticalAlign.Baseline:
 rr := x.rows.ref(c.row)
@@ -168833,6 +169181,25 @@ ry += rr.h + vs
 end
 gtop := gy0
 gbot := nr > 0 ? ry - vs : gy0
+if collapse:
+tbn := t.nodes.ref(id)
+tbn.tb.xs.clear()
+tbn.tb.ys.clear()
+repeat nc + 1 in k:
+if k < nc:
+tbn.tb.xs.push(rtl ? x.cols[k].x + x.cols[k].w : x.cols[k].x)
+else nc > 0:
+tbn.tb.xs.push(rtl ? x.cols[nc - 1].x : x.cols[nc - 1].x + x.cols[nc - 1].w)
+end
+end
+repeat nr + 1 in r:
+if r < nr:
+tbn.tb.ys.push(x.rows[r].y)
+else nr > 0:
+tbn.tb.ys.push(x.rows[nr - 1].y + x.rows[nr - 1].h)
+end
+end
+end
 mut ty := 0.0
 each cp in x.caps:
 if not cp.bottom:
@@ -168919,9 +169286,7 @@ off = ch - c.hauto
 break
 end
 VerticalAlign.Baseline:
-if c.rs == 1:
 off = _or(rw.base, c.base) - c.base
-end
 break
 end
 else:
@@ -169206,6 +169571,15 @@ ret BoxLayout {}
 end
 ret this.e.nodes.ref(node).fin
 end
+@en "CollapsedBorders"
+@fa "مرزهای ادغامی"
+pub func CollapsedBorders(table: int): Vector<CollapsedBorder>:
+mut out := Vector {} as Vector<CollapsedBorder>
+if table >= 0 and table < this.e.nodes.len() and this.e.nodes.ref(table).style.border_collapse == BorderCollapse.Collapse:
+_tb_segments(this.e, table, out)
+end
+ret out
+end
 @en "Free"
 @fa "آزاد کردن"
 pub func Free():
@@ -169216,6 +169590,7 @@ n.ckeys.free()
 n.couts.free()
 _gd_free(n.gd)
 n.gi.tr.free()
+_tb_free(n.tb)
 end
 this.e.nodes.free()
 this.e.oofs.free()
@@ -169360,6 +169735,9 @@ if not (a.grid_column_end == b.grid_column_end):
 ret false
 end
 if not (a.table_layout == b.table_layout):
+ret false
+end
+if not (a.border_kinds.top == b.border_kinds.top and a.border_kinds.right == b.border_kinds.right and a.border_kinds.bottom == b.border_kinds.bottom and a.border_kinds.left == b.border_kinds.left):
 ret false
 end
 if not (a.border_collapse == b.border_collapse):
@@ -170014,6 +170392,20 @@ sh[o] = 1
 end
 ret
 end
+if style == 3 and w <= 768:
+inner := lm - 2 * w
+n := inner / (2 * w)
+if n < 1:
+sh[o] = 1
+ret
+end
+rest := inner - (2 * n - 1) * w
+sh[o] = 4
+sh[o + 4] = w
+sh[o + 5] = w + ((rest + 256) / 512) * 256
+sh[o + 6] = n
+ret
+end
 if style == 2:
 d := w >= 768 ? 2 * w : 3 * w
 g := w >= 768 ? w : 2 * w
@@ -170061,6 +170453,23 @@ ret 256
 end
 w := sh[o + 1]
 n := sh[o + 6]
+if style == 4:
+t := u - ua
+lm := ub - ua
+mut c := _overlap(t - 128, t + 128, 0, w) + _overlap(t - 128, t + 128, lm - w, lm)
+st := sh[o + 5]
+mut k := (t - st) / (2 * w)
+if t < st:
+k = 0
+end
+repeat 3 in j:
+kk := k - 1 + j
+if kk >= 0 and kk < n:
+c += _overlap(t - 128, t + 128, st + kk * 2 * w, st + kk * 2 * w + w)
+end
+end
+ret c > 256 ? 256 : c
+end
 if style == 2:
 d := sh[o + 4]
 p := sh[o + 5]
@@ -172802,6 +173211,58 @@ end
 func _cv_end_layer(cv &: Canvas, opacity: f64):
 _cv_end_layer_with(cv, opacity, FilterChain {})
 end
+func _cv_end_layer_masked(cv &: Canvas, opacity: f64):
+_cv_ready(cv)
+if cv.state.layers.len() < 22:
+_cv_end_layer(cv, opacity)
+ret
+end
+mbuf := cv.state.tpix
+cv.state.has_region = cv.state.layers.pop() != (0 as i64)
+my1 := cv.state.layers.pop() as int
+mx1 := cv.state.layers.pop() as int
+my0 := cv.state.layers.pop() as int
+mx0 := cv.state.layers.pop() as int
+cv.state.tspx = cv.state.layers.pop() as int
+cv.state.th = cv.state.layers.pop() as int
+cv.state.tw = cv.state.layers.pop() as int
+cv.state.toy = cv.state.layers.pop() as int
+cv.state.tox = cv.state.layers.pop() as int
+cv.state.tpix = (cv.state.layers.pop() as usize) as u32*
+_cv_pop_clip(cv)
+cbuf := cv.state.tpix
+if cbuf != null:
+mw := mx1 - mx0
+repeat cv.state.th in y:
+gy := cv.state.toy + y
+row := y * cv.state.tspx
+repeat cv.state.tw in x:
+gx := cv.state.tox + x
+mut a := 0 as u32
+if mbuf != null and gx >= mx0 and gx < mx1 and gy >= my0 and gy < my1:
+a = (mbuf[(gy - my0) * mw + (gx - mx0)] >> 24) & (255 as u32)
+end
+if a == (255 as u32):
+continue
+end
+if a == (0 as u32):
+cbuf[row + x] = 0 as u32
+continue
+end
+p := cbuf[row + x]
+ca := (((p >> 24) & (255 as u32)) * a + (127 as u32)) / (255 as u32)
+cr := (((p >> 16) & (255 as u32)) * a + (127 as u32)) / (255 as u32)
+cg := (((p >> 8) & (255 as u32)) * a + (127 as u32)) / (255 as u32)
+cb := ((p & (255 as u32)) * a + (127 as u32)) / (255 as u32)
+cbuf[row + x] = (ca << 24) | (cr << 16) | (cg << 8) | cb
+end
+end
+end
+if mbuf != null:
+mem.Free(mbuf as void*)
+end
+_cv_end_layer(cv, opacity)
+end
 func _cv_end_layer_with(cv &: Canvas, opacity: f64, chain: FilterChain):
 _cv_ready(cv)
 if cv.state.layers.len() < 11:
@@ -174014,6 +174475,11 @@ end
 @fa "ادغام لایه"
 pub func EndLayer(opacity: f64):
 _cv_end_layer(this, opacity)
+end
+@en "EndLayerMasked"
+@fa "ادغام لایه با نقاب"
+pub func EndLayerMasked(opacity: f64):
+_cv_end_layer_masked(this, opacity)
 end
 @en "BeginFilterLayer"
 @fa "آغاز لایه پالایه"
@@ -189086,10 +189552,15 @@ cmd := sp < 0 ? line : line.substr(0, sp)
 arg := sp < 0 ? "" : str.Trim(line.substr(sp + 1, line.len() - sp - 1))
 switch cmd:
 "click", "dblclick", "tripleclick", "hover", "press", "release":
-n := _selector_node(arg)
+mut n := _selector_node(arg)
 if n < 0:
 println "ui script: no element matches", arg
 break
+end
+if not _e.boxes[n].shown and _virt_row_of(n) >= 0:
+_reveal(n, _REVEAL_FOCUS)
+_step(0)
+n = _selector_node(arg)
 end
 b := _e.boxes[n]
 mut x := b.x + b.w / 2.0
@@ -189227,6 +189698,14 @@ end
 "hash":
 _step(0)
 println "hash", _e.canvas.Hash()
+break
+end
+"reveal":
+n := _selector_node(arg)
+if n >= 0:
+_reveal(n, _REVEAL_START)
+_step(0)
+end
 break
 end
 "focus":
@@ -189951,6 +190430,10 @@ func _paint_backgrounds(cv &: paint.Canvas, node: int, cs: css.ComputedStyle, b:
 nl := cs.backgrounds.len()
 mut pa := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 mut oa := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+if _bg_text_any(cs):
+_paint_bg_text(cv, node, cs, b, radii, bg, alpha)
+ret
+end
 if bg.a > 0:
 if nl > 0:
 _area_of(node, b, cs.backgrounds[nl - 1].clip, pa)
@@ -190079,50 +190562,154 @@ ret -1.0
 end
 ret math.Floor((w + _e.scale) / (3.0 * _e.scale)) * _e.scale
 end
-func _draw_css_border(cv &: paint.Canvas, r: paint.Rect, radii: paint.Radii, bd: paint.Border, cs: css.ComputedStyle):
-tt := _dbl_third(bd.top_width, cs.border_top.style)
-tr := _dbl_third(bd.right_width, cs.border_right.style)
-tb := _dbl_third(bd.bottom_width, cs.border_bottom.style)
-tl := _dbl_third(bd.left_width, cs.border_left.style)
-if tt < 0.0 and tr < 0.0 and tb < 0.0 and tl < 0.0:
-cv.DrawBorder(r, radii, bd)
-ret
+func _split_side(w: f64, st: css.BorderStyle, ow &: f64, off &: f64, iw &: f64): bool:
+t := _dbl_third(w, st)
+if t >= 0.0:
+ow = t
+iw = t
+off = w - t
+ret true
 end
+if (st == css.BorderStyle.Groove or st == css.BorderStyle.Ridge) and w >= 2.0 * _e.scale:
+h := math.Floor(w / (2.0 * _e.scale)) * _e.scale
+ow = h
+iw = w - h
+off = h
+ret true
+end
+ow = w
+iw = 0.0
+off = 0.0
+ret false
+end
+func _draw_css_border(cv &: paint.Canvas, r: paint.Rect, radii: paint.Radii, bd: paint.Border, cs: css.ComputedStyle, alpha: f64):
 mut outer := bd
 mut inner := bd
-inner.top_width = 0.0
-inner.right_width = 0.0
-inner.bottom_width = 0.0
-inner.left_width = 0.0
+mut ow := 0.0
+mut iw := 0.0
 mut it := 0.0
 mut ir := 0.0
 mut ib := 0.0
 mut il := 0.0
-if tt >= 0.0:
-outer.top_width = tt
-inner.top_width = tt
-it = bd.top_width - tt
+mut two := false
+if _split_side(bd.top_width, cs.border_top.style, ow, it, iw):
+two = true
 end
-if tr >= 0.0:
-outer.right_width = tr
-inner.right_width = tr
-ir = bd.right_width - tr
+outer.top_width = ow
+inner.top_width = iw
+if _split_side(bd.right_width, cs.border_right.style, ow, ir, iw):
+two = true
 end
-if tb >= 0.0:
-outer.bottom_width = tb
-inner.bottom_width = tb
-ib = bd.bottom_width - tb
+outer.right_width = ow
+inner.right_width = iw
+if _split_side(bd.bottom_width, cs.border_bottom.style, ow, ib, iw):
+two = true
 end
-if tl >= 0.0:
-outer.left_width = tl
-inner.left_width = tl
-il = bd.left_width - tl
+outer.bottom_width = ow
+inner.bottom_width = iw
+if _split_side(bd.left_width, cs.border_left.style, ow, il, iw):
+two = true
+end
+outer.left_width = ow
+inner.left_width = iw
+if not two:
+cv.DrawBorder(r, radii, bd)
+ret
+end
+if cs.border_top.style == css.BorderStyle.Groove or cs.border_top.style == css.BorderStyle.Ridge:
+inner.top_color = _pca(_side_tone(cs.border_top.color, cs.border_top.style, 0, false), alpha)
+end
+if cs.border_right.style == css.BorderStyle.Groove or cs.border_right.style == css.BorderStyle.Ridge:
+inner.right_color = _pca(_side_tone(cs.border_right.color, cs.border_right.style, 1, false), alpha)
+end
+if cs.border_bottom.style == css.BorderStyle.Groove or cs.border_bottom.style == css.BorderStyle.Ridge:
+inner.bottom_color = _pca(_side_tone(cs.border_bottom.color, cs.border_bottom.style, 2, false), alpha)
+end
+if cs.border_left.style == css.BorderStyle.Groove or cs.border_left.style == css.BorderStyle.Ridge:
+inner.left_color = _pca(_side_tone(cs.border_left.color, cs.border_left.style, 3, false), alpha)
 end
 cv.DrawBorder(r, radii, outer)
 ir2 := paint.Rect { x = r.x + il, y = r.y + it, width = r.width - il - ir, height = r.height - it - ib }
 if ir2.width > 0.0 and ir2.height > 0.0:
 cv.DrawBorder(ir2, _inner_radii(radii, it, ir, ib, il), inner)
 end
+end
+package ui
+import gui.css
+import gui.paint
+func _bg_text_any(cs: css.ComputedStyle): bool:
+each bl in cs.backgrounds:
+if bl.clip == css.BoxArea.Text:
+ret true
+end
+end
+ret false
+end
+func _bg_text_inside(el: int, node: int): bool:
+mut n := el
+until n >= 0:
+if n == node:
+ret true
+end
+n = _e.dom.nodes[n].parent
+end
+ret false
+end
+func _bg_text_glyphs(cv &: paint.Canvas, node: int):
+white := paint.Color { r = 255, g = 255, b = 255, a = 255 }
+repeat _e.ifcs.len() in fi:
+f := _e.ifcs[fi]
+if not f.has_lay or f.control:
+continue
+end
+if not _bg_text_inside(f.owner, node) and not _bg_text_inside(node, f.owner):
+continue
+end
+each r in f.lay.runs:
+if r.span >= 0 and r.span < f.span_el.len() and f.span_atom[r.span] < 0 and _bg_text_inside(f.span_el[r.span], node):
+if _style_of(f.span_el[r.span]).visibility == css.Visibility.Visible:
+_draw_run(cv, f.lay, r, f.x, f.y, white)
+end
+end
+end
+end
+end
+func _bg_text_layers(cv &: paint.Canvas, node: int, cs: css.ComputedStyle, b: _Box, radii: paint.Radii, bg: css.Color, alpha: f64, text: bool):
+nl := cs.backgrounds.len()
+mut pa := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+mut oa := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+if bg.a > 0 and (cs.backgrounds[nl - 1].clip == css.BoxArea.Text) == text:
+_area_of(node, b, text ? css.BoxArea.BorderBox : cs.backgrounds[nl - 1].clip, pa)
+if pa[2] > 0.0 and pa[3] > 0.0:
+cv.FillRoundedRect(_rect(pa[0], pa[1], pa[2], pa[3]), _area_radii(radii, pa), _pca(bg, alpha))
+end
+end
+mut k := nl - 1
+until k >= 0:
+bl := cs.backgrounds[k]
+if bl.image != css.ImageKind.None and (bl.clip == css.BoxArea.Text) == text:
+_area_of(node, b, text ? css.BoxArea.BorderBox : bl.clip, pa)
+if bl.fixed:
+oa[0] = 0.0
+oa[1] = 0.0
+oa[2] = _e.width
+oa[3] = _e.height
+else:
+_area_of(node, b, bl.origin, oa)
+end
+_paint_layer_in(cv, bl, pa, _area_radii(radii, pa), oa, alpha)
+end
+k--
+end
+end
+func _paint_bg_text(cv &: paint.Canvas, node: int, cs: css.ComputedStyle, b: _Box, radii: paint.Radii, bg: css.Color, alpha: f64):
+_bg_text_layers(cv, node, cs, b, radii, bg, alpha, false)
+r := _rect(b.x, b.y, b.w, b.h)
+cv.BeginLayer(r)
+_bg_text_layers(cv, node, cs, b, radii, bg, alpha, true)
+cv.BeginLayer(r)
+_bg_text_glyphs(cv, node)
+cv.EndLayerMasked(1.0)
 end
 package ui
 import str
@@ -191158,13 +191745,41 @@ ret 0.0
 end
 ret b.width
 end
-func _shade(c: css.Color, s: css.BorderStyle, dark: bool): css.Color:
-if s == css.BorderStyle.Inset or s == css.BorderStyle.Outset or s == css.BorderStyle.Groove or s == css.BorderStyle.Ridge:
+func _tone_ch(m: f64, ch: int): int:
+ret math.MinI(255, math.Floor(m * (ch as f64) / 255.0 * 255.99998) as int)
+end
+func _tone(c: css.Color, dark: bool): css.Color:
+r := c.r as f64
+g := c.g as f64
+b := c.b as f64
 if dark:
-ret css.Color { r = c.r * 2 / 3, g = c.g * 2 / 3, b = c.b * 2 / 3, a = c.a }
+if r * r + g * g + b * b <= 3072.0:
+ret css.Color { r = math.MinI(255, c.r + 84), g = math.MinI(255, c.g + 84), b = math.MinI(255, c.b + 84), a = c.a }
 end
+v := math.Max(r, math.Max(g, b)) / 255.0
+m := math.Max(0.0, (v - 0.33) / v)
+ret css.Color { r = _tone_ch(m, c.r), g = _tone_ch(m, c.g), b = _tone_ch(m, c.b), a = c.a }
 end
+if r * r + g * g + b * b <= 3072.0:
+ret css.Color { r = math.MinI(255, c.r + 168), g = math.MinI(255, c.g + 168), b = math.MinI(255, c.b + 168), a = c.a }
+end
+if (255.0 - r) * (255.0 - r) + (255.0 - g) * (255.0 - g) + (255.0 - b) * (255.0 - b) < 1200.0:
 ret c
+end
+v := math.Max(r, math.Max(g, b)) / 255.0
+m := math.Min(1.0, v + 0.33) / v
+ret css.Color { r = _tone_ch(m, c.r), g = _tone_ch(m, c.g), b = _tone_ch(m, c.b), a = c.a }
+end
+func _side_tone(c: css.Color, style: css.BorderStyle, side: int, outer: bool): css.Color:
+mut st := style
+if style == css.BorderStyle.Groove:
+st = outer ? css.BorderStyle.Inset : css.BorderStyle.Outset
+else style == css.BorderStyle.Ridge:
+st = outer ? css.BorderStyle.Outset : css.BorderStyle.Inset
+else style != css.BorderStyle.Inset and style != css.BorderStyle.Outset:
+ret c
+end
+ret _tone(c, (side == 0 or side == 3) == (st == css.BorderStyle.Inset))
 end
 func _native_look(node: int, cs: css.ComputedStyle): bool:
 if cs.appearance != "auto":
@@ -191242,29 +191857,15 @@ mut bt := _bwidth(cs.border_top)
 mut br := _bwidth(cs.border_right)
 mut bb := _bwidth(cs.border_bottom)
 mut bl := _bwidth(cs.border_left)
-mut rx := b.x
-mut ry := b.y
-mut rw := b.w
-mut rh := b.h
-if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
+rx := b.x
+ry := b.y
+rw := b.w
+rh := b.h
+if cs.border_collapse == css.BorderCollapse.Collapse and _table_part(cs.display):
 bt = 0.0
 br = 0.0
 bb = 0.0
 bl = 0.0
-else cs.border_collapse == css.BorderCollapse.Collapse and cs.display == css.Display.TableCell:
-cl := _e.tree.Layout(_e.node_cb[node])
-ht := cl.border.top
-hr := cl.border.right
-hb := cl.border.bottom
-hl := cl.border.left
-rx -= hl
-ry -= ht
-rw += hl + hr
-rh += ht + hb
-bt = bt > 0.0 ? cl.border.top * 2.0 : 0.0
-br = br > 0.0 ? cl.border.right * 2.0 : 0.0
-bb = bb > 0.0 ? cl.border.bottom * 2.0 : 0.0
-bl = bl > 0.0 ? cl.border.left * 2.0 : 0.0
 end
 if bt > 0.0 or br > 0.0 or bb > 0.0 or bl > 0.0:
 mut bd := paint.Border {}
@@ -191272,18 +191873,107 @@ bd.top_width = bt * s
 bd.right_width = br * s
 bd.bottom_width = bb * s
 bd.left_width = bl * s
-bd.top_color = _pca(_shade(cs.border_top.color, cs.border_top.style, cs.border_top.style == css.BorderStyle.Inset or cs.border_top.style == css.BorderStyle.Groove), alpha)
-bd.right_color = _pca(_shade(cs.border_right.color, cs.border_right.style, cs.border_right.style == css.BorderStyle.Outset or cs.border_right.style == css.BorderStyle.Ridge), alpha)
-bd.bottom_color = _pca(_shade(cs.border_bottom.color, cs.border_bottom.style, cs.border_bottom.style == css.BorderStyle.Outset or cs.border_bottom.style == css.BorderStyle.Ridge), alpha)
-bd.left_color = _pca(_shade(cs.border_left.color, cs.border_left.style, cs.border_left.style == css.BorderStyle.Inset or cs.border_left.style == css.BorderStyle.Groove), alpha)
+bd.top_color = _pca(_side_tone(cs.border_top.color, cs.border_top.style, 0, true), alpha)
+bd.right_color = _pca(_side_tone(cs.border_right.color, cs.border_right.style, 1, true), alpha)
+bd.bottom_color = _pca(_side_tone(cs.border_bottom.color, cs.border_bottom.style, 2, true), alpha)
+bd.left_color = _pca(_side_tone(cs.border_left.color, cs.border_left.style, 3, true), alpha)
 bd.top_style = _bstyle(cs.border_top.style)
 bd.right_style = _bstyle(cs.border_right.style)
 bd.bottom_style = _bstyle(cs.border_bottom.style)
 bd.left_style = _bstyle(cs.border_left.style)
-_draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs)
+_draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs, alpha)
 end
 end
 _paint_replaced(cv, node, cs, b, alpha)
+end
+func _table_part(d: css.Display): bool:
+switch d:
+css.Display.Table, css.Display.InlineTable, css.Display.TableCell, css.Display.TableRow, css.Display.TableRowGroup, css.Display.TableHeaderGroup, css.Display.TableFooterGroup, css.Display.TableColumn, css.Display.TableColumnGroup:
+ret true
+end
+else:
+ret false
+end
+end
+ret false
+end
+func _side_of(cs: css.ComputedStyle, side: int): css.BorderSide:
+switch side:
+0: ret cs.border_top end
+1: ret cs.border_right end
+2: ret cs.border_bottom end
+else: ret cs.border_left end
+end
+ret cs.border_left
+end
+func _paint_collapsed(cv &: paint.Canvas, node: int, alpha: f64):
+b := _e.boxes[node]
+cb := _e.node_cb[node]
+if cb < 0 or not b.shown:
+ret
+end
+mut segs := _e.tree.CollapsedBorders(cb)
+defer segs.free()
+s := _e.scale
+each sg in segs:
+own := sg.node >= 0 and sg.node < _e.cb_node.len() ? _e.cb_node[sg.node] : -1
+if own < 0:
+continue
+end
+mut ocs := _style_of(own)
+mut sd := _side_of(ocs, sg.side)
+if sd.style == css.BorderStyle.Inset:
+sd.style = css.BorderStyle.Ridge
+else sd.style == css.BorderStyle.Outset:
+sd.style = css.BorderStyle.Groove
+end
+switch sg.side:
+0: ocs.border_top = sd break end
+1: ocs.border_right = sd break end
+2: ocs.border_bottom = sd break end
+else: ocs.border_left = sd break end
+end
+x0 := math.Round(b.x + sg.x)
+y0 := math.Round(b.y + sg.y)
+x1 := math.Round(b.x + sg.x + sg.width)
+y1 := math.Round(b.y + sg.y + sg.height)
+if x1 <= x0 or y1 <= y0:
+continue
+end
+w := sg.vertical ? x1 - x0 : y1 - y0
+col := _pca(_side_tone(sd.color, sd.style, sg.side, true), alpha)
+bst := _bstyle(sd.style)
+mut bd := paint.Border { top_color = col, right_color = col, bottom_color = col, left_color = col, top_style = bst, right_style = bst, bottom_style = bst, left_style = bst }
+mut rx := x0
+mut ry := y0
+mut rw := x1 - x0
+mut rh := y1 - y0
+switch sg.side:
+0:
+bd.top_width = w * s
+rh += w
+break
+end
+1:
+bd.right_width = w * s
+rx -= w
+rw += w
+break
+end
+2:
+bd.bottom_width = w * s
+ry -= w
+rh += w
+break
+end
+else:
+bd.left_width = w * s
+rw += w
+break
+end
+end
+_draw_css_border(cv, _rect(rx, ry, rw, rh), paint.Radii {}, bd, ocs, alpha)
+end
 end
 func _paint_outline(cv &: paint.Canvas, node: int, alpha: f64):
 b := _e.boxes[node]
@@ -191872,6 +192562,9 @@ end
 _paint_flow(cv, k, alpha)
 _paint_outline(cv, k, alpha)
 end
+if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
+_paint_collapsed(cv, node, alpha)
+end
 if _e.node_cb[node] >= 0 and _is_scroller(cs) and b.shown:
 _paint_scrollbars(cv, node, alpha)
 end
@@ -192064,6 +192757,15 @@ pub func Focus():
 n := _find_id(this.id)
 if n >= 0:
 _set_focus(n, true)
+_reveal(n, _REVEAL_FOCUS)
+end
+end
+@en "ScrollIntoView"
+@fa "نمایان کردن"
+pub func ScrollIntoView():
+n := _find_id(this.id)
+if n >= 0:
+_reveal(n, _REVEAL_START)
 end
 end
 @en "Click"
@@ -192163,7 +192865,7 @@ n := _find_id(this.id)
 if n < 0 or n >= _e.boxes.len():
 ret paint.Rect {}
 end
-b := _e.boxes[n]
+b := _rect_box(n)
 ret paint.Rect { x = b.x, y = b.y, width = b.w, height = b.h }
 end
 end
@@ -192571,7 +193273,7 @@ else:
 next = idx < 0 or idx >= order.len() - 1 ? 0 : idx + 1
 end
 _set_focus(order[next], true)
-_scroll_into_view(order[next])
+_reveal(order[next], _REVEAL_FOCUS)
 end
 func _virt_has(node: int): bool:
 each c in _e.vconts:
@@ -192590,24 +193292,6 @@ end
 n = _e.dom.nodes[n].parent
 end
 ret -1
-end
-func _scroll_into_view(node: int):
-vr := _virt_row_of(node)
-if vr >= 0:
-cont := _e.vskip[vr]
-mut cc := _e.ctl.ref(cont)
-cc.scroll_y = _e.vtop[vr]
-_e.dirty_layout = true
-ret
-end
-b := _e.boxes[node]
-if b.y < 0.0:
-_e.vscroll = math.Max(0.0, _e.vscroll + b.y - 8.0)
-_e.dirty_place = true
-else b.y + b.h > _e.height:
-_e.vscroll += (b.y + b.h - _e.height) + 8.0
-_e.dirty_place = true
-end
 end
 func _ancestor_tag(node: int, tag: str): int:
 mut n := node
@@ -194963,6 +195647,7 @@ r := rows[i]
 u := _row_uid(r)
 a := _e.vadv.has(u) ? _e.vadv.get(u) : avg
 _e.vtop[r] = top
+_e.vh[r] = a
 if top + a > lo and top < hi:
 if first < 0:
 first = i
@@ -195053,11 +195738,14 @@ func _virt_reset():
 n := _e.dom.nodes.len()
 _e.vskip.free()
 _e.vtop.free()
+_e.vh.free()
 _e.vskip = Vector {} as Vector<int>
 _e.vtop = Vector {} as Vector<f64>
+_e.vh = Vector {} as Vector<f64>
 repeat n:
 _e.vskip.push(-1)
 _e.vtop.push(0.0)
+_e.vh.push(0.0)
 end
 _e.vconts.clear()
 _e.vrow0.clear()
@@ -195369,10 +196057,8 @@ _build_element(_e.dom.body, _e.root_cb, false)
 end
 _end_build()
 _e.tree.ResetCounters()
-mut k := _e.atoms.len() - 1
-until k >= 0:
+repeat _e.atoms.len() in k:
 _compute_atom(k)
-k--
 end
 _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
 _e.last_layout_calls = _e.tree.LayoutCalls()
@@ -195400,11 +196086,9 @@ mut base := at.mh
 if l.has_baseline and not (tag == "img" or (tag == "input" and not _is_text_input(a.node) and not _is_button_input(a.node))):
 base = l.margin.top + l.baseline
 end
-cs := _style_of(a.node)
-if cs.vertical_align == css.VerticalAlign.Middle:
-base = at.mh / 2.0 + cs.font_size * 0.25
-end
-at.baseline = base
+at.baseline = _va_base(a.node, base, at.mh)
+at.va = _va_kind(a.node)
+at.va_set = false
 end
 func _face_for(sp: typeset.TextSpan, cp: int): int:
 ret typeset.FaceForCodepoint(_fc, sp.families, sp.weight, sp.italic, cp)
@@ -195427,14 +196111,15 @@ asc = (m.ascent as f64) / (m.units_per_em as f64)
 desc = (math.Abs(m.descent as f64)) / (m.units_per_em as f64)
 end
 end
-h := math.Max(a.mh, 0.01)
+tiny := a.va != _VA_NONE and not a.va_set
+h := tiny ? 0.001 : math.Max(a.mh, 0.01)
 mut s := 0.0
 k := asc - desc
-if k > 0.01:
+if k > 0.01 and not tiny:
 s = (2.0 * a.baseline - h) / k
 end
-if s < 0.5:
-s = 0.5
+if math.Abs(s) < 0.001:
+s = 0.001
 end
 sp.size = s
 sp.line_height = h
@@ -195566,7 +196251,7 @@ if f.alt_w[i] == width:
 k = i
 end
 end
-if k >= 0:
+if k >= 0 and _va_tb_count(f0) == 0:
 got := f.alt_lay[k]
 f.alt_lay.remove_at(k)
 f.alt_w.remove_at(k)
@@ -195592,6 +196277,7 @@ end
 f.lay = typeset.LayoutParagraph(f.para, _fc, width)
 f.lay_w = width
 f.has_lay = true
+_va_fix(fi, width)
 end
 func _measure(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
 cb := mi.node
@@ -195809,6 +196495,9 @@ c := _e.ctl[node]
 inner_x -= c.scroll_x
 inner_y -= c.scroll_y
 end
+if _is_scroller(cs) and _virt_has(node):
+_virt_estimate(node, b, l)
+end
 mut fi := _e.node_ifc[node]
 until fi >= 0:
 _place_ifc(fi, inner_x, inner_y, kc)
@@ -195923,6 +196612,129 @@ nb.y = y0
 nb.w = x1 - x0
 nb.h = y1 - y0
 _e.boxes[el] = nb
+end
+package ui
+import math
+import gui.cssbox
+const _REVEAL_FOCUS := 0
+const _REVEAL_START := 1
+const _REVEAL_END := 2
+const _REVEAL_NEAREST := 3
+const _REVEAL_CENTER := 4
+func _virt_estimate(node: int, b: _Box, l: cssbox.BoxLayout):
+c := _e.ctl[node]
+x := b.x + l.border.left + l.padding.left
+y0 := b.y + l.border.top + l.padding.top - c.scroll_y
+each k in _e.dom.nodes[node].kids:
+if k < _e.vskip.len() and _e.vskip[k] == node:
+_e.boxes[k] = _Box { x = x, y = y0 + _e.vtop[k], w = l.content_width, h = _e.vh[k], shown = false, clip_x0 = b.clip_x0, clip_y0 = b.clip_y0, clip_x1 = b.clip_x1, clip_y1 = b.clip_y1 }
+end
+end
+end
+func _rect_box(n: int): _Box:
+b := _e.boxes[n]
+if b.shown:
+ret b
+end
+vr := _virt_row_of(n)
+if vr >= 0:
+ret _e.boxes[vr]
+end
+ret b
+end
+func _reveal_pos(cur: f64, top: f64, h: f64, view: f64, mode: int): f64:
+switch mode:
+_REVEAL_START:
+ret top
+end
+_REVEAL_END:
+ret top + h - view
+end
+_REVEAL_CENTER:
+ret top - (view - h) / 2.0
+end
+else:
+break
+end
+end
+if top >= cur and top + h <= cur + view:
+ret cur
+end
+if mode == _REVEAL_NEAREST or (top < cur + view and top + h > cur):
+if top < cur or h > view:
+ret top
+end
+ret top + h - view
+end
+ret top - (view - h) / 2.0
+end
+func _scroller_of(node: int): int:
+mut p := _e.dom.nodes[node].parent
+until p >= 0 and p != _e.dom.body and p != _e.dom.html:
+if _e.node_cb[p] >= 0 and _e.node_el[p] >= 0 and _is_scroller(_style_of(p)):
+ret p
+end
+p = _e.dom.nodes[p].parent
+end
+ret -1
+end
+func _reveal(node: int, mode: int):
+if node < 0 or node >= _e.boxes.len():
+ret
+end
+vr := _virt_row_of(node)
+if vr >= 0:
+cont := _e.vskip[vr]
+l := _e.tree.Layout(_e.node_cb[cont])
+view := l.height - l.border.top - l.border.bottom - l.scrollbar_height
+c := _e.ctl[cont]
+top := l.padding.top + _e.vtop[vr]
+mut ny := math.Round(_reveal_pos(c.scroll_y, top, _e.vh[vr], view, mode))
+cu := _row_uid(cont)
+if _e.vmax.has(cu):
+ny = math.Min(ny, _e.vmax.get(cu))
+end
+ny = math.Max(0.0, ny)
+if ny != c.scroll_y:
+mut cc := _e.ctl.ref(cont)
+cc.scroll_y = ny
+_e.dirty_layout = true
+end
+ret
+end
+b := _e.boxes[node]
+if not b.shown:
+ret
+end
+mut ey := b.y
+sc := _scroller_of(node)
+if sc >= 0:
+l := _e.tree.Layout(_e.node_cb[sc])
+pb := _e.boxes[sc]
+port := pb.y + l.border.top
+view := l.height - l.border.top - l.border.bottom - l.scrollbar_height
+c := _e.ctl[sc]
+top := ey - port + c.scroll_y
+maxy := math.Max(0.0, l.scroll_height - view)
+ny := math.Max(0.0, math.Min(maxy, math.Round(_reveal_pos(c.scroll_y, top, b.h, view, mode))))
+if ny != c.scroll_y:
+ey -= ny - c.scroll_y
+mut cc := _e.ctl.ref(sc)
+cc.scroll_y = ny
+if _virt_has(sc):
+_e.dirty_layout = true
+else:
+_e.dirty_place = true
+end
+end
+end
+top := ey + _e.vscroll
+maxs := math.Max(0.0, _e.doc_h - _e.height)
+nv := math.Max(0.0, math.Min(maxs, math.Round(_reveal_pos(_e.vscroll, top, b.h, _e.height, mode))))
+if nv != _e.vscroll:
+_e.vscroll = nv
+_e.dirty_place = true
+end
 end
 package ui
 import str
@@ -196552,9 +197364,12 @@ el.classes = _attr(_e.dom, node, "class")
 if el.base.len() > 0:
 _sfree(el.base)
 end
-hint := _hints(node, nd.tag)
+if el.inline_style.len() > 0:
+_sfree(el.inline_style)
+end
+el.base = _hints(node, nd.tag)
 inline_style := _attr(_e.dom, node, "style")
-el.base = hint.len() == 0 ? str.Clone(inline_style) : str.Clone(hint + inline_style)
+el.inline_style = inline_style.len() > 0 ? str.Clone(inline_style) : ""
 el.decl_base = nd.d_base
 el.decl_hover = nd.d_hover
 el.decl_focus = nd.d_focus
@@ -196854,7 +197669,8 @@ el.id = _attr(_e.dom, node, "id")
 el.classes = _attr(_e.dom, node, "class")
 hint := _hints(node, nd.tag)
 inline_style := _attr(_e.dom, node, "style")
-el.base = hint.len() == 0 ? str.Clone(inline_style) : str.Clone(hint + inline_style)
+el.base = hint
+el.inline_style = inline_style.len() > 0 ? str.Clone(inline_style) : ""
 el.decl_base = nd.d_base
 el.decl_hover = nd.d_hover
 el.decl_focus = nd.d_focus
@@ -196908,6 +197724,9 @@ repeat _e.els.len() in i:
 mut el := _e.els.ref(i)
 if el.base.len() > 0:
 _sfree(el.base)
+end
+if el.inline_style.len() > 0:
+_sfree(el.inline_style)
 end
 el.Free()
 end
@@ -197184,6 +198003,8 @@ pub mh: f64 = 0.0
 pub baseline: f64 = 0.0
 pub ox: f64 = 0.0
 pub oy: f64 = 0.0
+pub va: int = 0
+pub va_set: bool = false
 end
 struct _Rec:
 pub uid: int = 0
@@ -197296,6 +198117,7 @@ pub last_layout_calls: int = 0
 pub vadv: HashMap<int, f64> = HashMap {}
 pub vskip: Vector<int> = Vector {}
 pub vtop: Vector<f64> = Vector {}
+pub vh: Vector<f64> = Vector {}
 pub vconts: Vector<int> = Vector {}
 pub vrow0: Vector<int> = Vector {}
 pub vrows: Vector<int> = Vector {}
@@ -197400,6 +198222,180 @@ pub paint_ms: f64 = 0.0
 @en "elements"
 @fa "شمار عنصرها"
 pub elements: int = 0
+end
+package ui
+import math
+import gui.css
+import gui.typeset
+const _VA_NONE := 0
+const _VA_TOP := 1
+const _VA_BOTTOM := 2
+struct _FontV:
+pub asc: f64 = 0.0
+pub desc: f64 = 0.0
+pub gap: f64 = 0.0
+pub xh: f64 = 0.0
+end
+func _font_v(cs: css.ComputedStyle): _FontV:
+mut v := _FontV {}
+fs := cs.font_size
+v.asc = fs * 0.8
+v.desc = fs * 0.2
+v.xh = fs * 0.5
+face := typeset.FaceForCodepoint(_fc, cs.font_family, cs.font_weight, cs.font_style != css.FontStyle.Normal, 0x78)
+if face < 0:
+ret v
+end
+m := typeset.Metrics(typeset.FaceFont(_fc, face))
+if m.units_per_em <= 0:
+ret v
+end
+u := m.units_per_em as f64
+v.asc = (m.ascent as f64) * fs / u
+v.desc = math.Abs(m.descent as f64) * fs / u
+v.gap = (m.line_gap as f64) * fs / u
+v.xh = m.x_height > 0 ? (m.x_height as f64) * fs / u : v.asc * 0.56
+ret v
+end
+func _va_kind(node: int): int:
+cs := _style_of(node)
+switch cs.vertical_align:
+css.VerticalAlign.Top: ret _VA_TOP end
+css.VerticalAlign.Bottom: ret _VA_BOTTOM end
+else: ret _VA_NONE end
+end
+ret _VA_NONE
+end
+func _va_base(node: int, base: f64, h: f64): f64:
+cs := _style_of(node)
+pn := _el_of(_e.dom.nodes[node].parent)
+switch cs.vertical_align:
+css.VerticalAlign.Sub:
+ps := _style_of(pn)
+ret base - (ps.font_size / 5.0 + 1.0)
+end
+css.VerticalAlign.Super:
+ps := _style_of(pn)
+ret base + (ps.font_size / 3.0 + 1.0)
+end
+css.VerticalAlign.TextTop:
+ret _font_v(_style_of(pn)).asc
+end
+css.VerticalAlign.TextBottom:
+ret h - _font_v(_style_of(pn)).desc
+end
+css.VerticalAlign.Middle:
+ret h / 2.0 + _font_v(_style_of(pn)).xh / 2.0
+end
+css.VerticalAlign.Length:
+l := cs.vertical_align_len
+if l.has_pct:
+mut lh := cs.line_height
+if cs.line_height_normal:
+fv := _font_v(cs)
+lh = fv.asc + fv.desc + fv.gap
+end
+ret base + l.px + l.pct * lh / 100.0
+end
+ret base + l.px
+end
+else:
+ret base
+end
+end
+ret base
+end
+func _va_tb_count(f: _Ifc): int:
+mut n := 0
+each ai in f.atoms:
+if _e.atoms[ai].va != _VA_NONE:
+n++
+end
+end
+ret n
+end
+func _va_line_of(f: _Ifc, a: _Atom, li &: int): bool:
+if a.span < 0 or a.span >= f.para.span_starts.len():
+ret false
+end
+sp_start := f.para.span_starts[a.span]
+repeat f.lay.lines.len() in k:
+line := f.lay.lines[k]
+mut r := line.run_start
+until r < line.run_start + line.run_count:
+run := f.lay.runs[r]
+repeat run.glyph_count in q:
+if f.lay.glyphs[run.glyph_start + q].cluster == sp_start:
+li = k
+ret true
+end
+end
+r++
+end
+end
+ret false
+end
+func _va_relayout(fi: int, width: f64):
+mut f := _e.ifcs.ref(fi)
+_patch_atoms(f)
+if f.has_lay:
+typeset.FreeLayout(f.lay)
+f.has_lay = false
+end
+if f.has_para:
+typeset.FreeParagraph(f.para)
+end
+f.para = typeset.NewParagraph(_fc, f.spans, f.pstyle)
+f.has_para = true
+f.lay = typeset.LayoutParagraph(f.para, _fc, width)
+f.lay_w = width
+f.has_lay = true
+end
+func _va_fix(fi: int, width: f64):
+f0 := _e.ifcs[fi]
+if _va_tb_count(f0) == 0:
+ret
+end
+mut stale := false
+each ai in f0.atoms:
+if _e.atoms[ai].va_set:
+mut a := _e.atoms.ref(ai)
+a.va_set = false
+stale = true
+end
+end
+if stale:
+_va_relayout(fi, width)
+end
+repeat 3:
+f := _e.ifcs[fi]
+mut changed := false
+each ai in f.atoms:
+a := _e.atoms[ai]
+if a.va == _VA_NONE:
+continue
+end
+mut li := -1
+if not _va_line_of(f, a, li):
+continue
+end
+line := f.lay.lines[li]
+mut want := line.baseline - line.top
+if a.va == _VA_BOTTOM:
+want = a.mh - (line.top + line.height - line.baseline)
+end
+if not a.va_set or math.Abs(want - a.baseline) > 0.001:
+mut am := _e.atoms.ref(ai)
+am.baseline = want
+am.va_set = true
+changed = true
+end
+end
+if not changed:
+break
+end
+_va_relayout(fi, width)
+end
 end
 package ui
 import math

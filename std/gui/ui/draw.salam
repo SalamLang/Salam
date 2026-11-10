@@ -301,7 +301,7 @@ func _paint_outline(cv &: paint.Canvas, node: int, alpha: f64):
         col = css.Color { r = 16, g = 16, b = 16, a = 255 }
         w = 2.0
     end
-    cv.DrawOutline(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), w * s, cs.outline_offset * s, _pca(col, alpha))
+    cv.DrawOutlineStyled(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), w * s, cs.outline_offset * s, _pca(col, alpha), cs.outline.style == css.BorderStyle.Auto ? paint.BorderStyle.Solid : _bstyle(cs.outline.style))
 end
 
 func _content_rect(node: int, b: _Box): _Box:
@@ -706,10 +706,15 @@ func _in_region(node: int): bool:
     end
     pad := 64.0
     s := _e.scale
-    x0 := ((b.x - pad) * s) as int
-    y0 := ((b.y - pad) * s) as int
-    x1 := ((b.x + b.w + pad) * s) as int
-    y1 := ((b.y + b.h + pad) * s) as int
+    mut fx0 := b.x - pad
+    mut fy0 := b.y - pad
+    mut fx1 := b.x + b.w + pad
+    mut fy1 := b.y + b.h + pad
+    _screen_bbox(node, fx0, fy0, fx1, fy1)
+    x0 := (fx0 * s) as int
+    y0 := (fy0 * s) as int
+    x1 := (fx1 * s) as int
+    y1 := (fy1 * s) as int
     repeat _e.damage.Count() in i:
         r := _e.damage.At(i)
         if x0 < r.x + r.width and r.x < x1 and y0 < r.y + r.height and r.y < y1:
@@ -732,17 +737,48 @@ func _push_box_clip(cv &: paint.Canvas, b: _Box): bool:
 end
 
 func _paint_ctx(cv &: paint.Canvas, node: int, alpha0: f64, out_of_flow: bool):
+    if out_of_flow and not _sub_visible(node):
+        ret
+    end
     cs := _style_of(node)
     b := _e.boxes[node]
     mut pushed := false
     if out_of_flow:
         pushed = _push_box_clip(cv, b)
     end
+    xf := _own_has(node)
+    mut saved := [0.0, 0.0, 0.0, 0.0]
+    if xf:
+        cv.PushTransform(_own_device(node))
+        _vis_push(node, saved)
+    end
+    if cs.backdrop_filters.len() > 0 and b.shown and cs.visibility == css.Visibility.Visible:
+        mut bch := paint.FilterChain {}
+        _effect_chain(cs.backdrop_filters, bch)
+        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), bch)
+        bch.Free()
+    end
     op := _anim_f(node, 2, cs.opacity)
-    layered := op < 1.0
+    mut chain := paint.FilterChain {}
+    filtered := cs.filters.len() > 0
+    if filtered:
+        _effect_chain(cs.filters, chain)
+    end
+    layered := op < 1.0 or filtered
     alpha := alpha0
     if layered:
-        cv.BeginLayer(_rect(0.0, 0.0, _e.width, math.Max(_e.height, _e.doc_h)))
+        mut lr := [0.0, 0.0, 0.0, 0.0]
+        if not _sub_local(node, lr):
+            lr[0] = 0.0
+            lr[1] = 0.0
+            lr[2] = _e.width
+            lr[3] = math.Max(_e.height, _e.doc_h)
+        end
+        if filtered:
+            cv.BeginFilterLayer(_rect(lr[0] - 1.0, lr[1] - 1.0, lr[2] - lr[0] + 2.0, lr[3] - lr[1] + 2.0), chain)
+        else:
+            cv.BeginLayer(_rect(lr[0] - 1.0, lr[1] - 1.0, lr[2] - lr[0] + 2.0, lr[3] - lr[1] + 2.0))
+        end
     end
     if _in_region(node):
         _paint_box(cv, node, alpha)
@@ -764,7 +800,16 @@ func _paint_ctx(cv &: paint.Canvas, node: int, alpha0: f64, out_of_flow: bool):
     end
     _paint_outline(cv, node, alpha)
     if layered:
-        cv.EndLayer(op)
+        if filtered:
+            cv.EndLayerFiltered(chain, op)
+        else:
+            cv.EndLayer(op)
+        end
+    end
+    chain.Free()
+    if xf:
+        cv.PopTransform()
+        _vis_pop(saved)
     end
     if pushed:
         cv.PopClip()
@@ -804,12 +849,15 @@ func _paint_flow(cv &: paint.Canvas, node: int, alpha: f64):
         if _positioned(kcs) and _e.node_cb[k] >= 0:
             continue
         end
+        if not _sub_visible(k):
+            continue
+        end
         if _e.node_cb[k] < 0:
             _paint_flow(cv, k, alpha)
             continue
         end
         kop := _anim_f(k, 2, kcs.opacity)
-        if kop < 1.0:
+        if kop < 1.0 or _own_has(k) or (k < _e.fx_on.len() and _e.fx_on[k]):
             _paint_ctx(cv, k, alpha, false)
             continue
         end
@@ -833,10 +881,15 @@ func _ifc_in_region(fi: int): bool:
     end
     f := _e.ifcs[fi]
     s := _e.scale
-    x0 := ((f.x - 32.0) * s) as int
-    y0 := ((f.y - 32.0) * s) as int
-    x1 := ((f.x + math.Max(f.w, f.lay.width) + 32.0) * s) as int
-    y1 := ((f.y + math.Max(f.h, f.lay.height) + 32.0) * s) as int
+    mut fx0 := f.x - 32.0
+    mut fy0 := f.y - 32.0
+    mut fx1 := f.x + math.Max(f.w, f.lay.width) + 32.0
+    mut fy1 := f.y + math.Max(f.h, f.lay.height) + 32.0
+    _screen_bbox(f.owner, fx0, fy0, fx1, fy1)
+    x0 := (fx0 * s) as int
+    y0 := (fy0 * s) as int
+    x1 := (fx1 * s) as int
+    y1 := (fy1 * s) as int
     repeat _e.damage.Count() in i:
         r := _e.damage.At(i)
         if x0 < r.x + r.width and r.x < x1 and y0 < r.y + r.height and r.y < y1:
@@ -896,6 +949,7 @@ end
 
 func _paint_all(cv &: paint.Canvas):
     _ensure_gcache()
+    _vis_init()
     if _e.full:
         cv.ClearRegion()
     else:

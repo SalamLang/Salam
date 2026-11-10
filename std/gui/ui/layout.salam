@@ -25,6 +25,7 @@ const _OUT_NONE := 0
 const _OUT_BLOCK := 1
 const _OUT_INLINE := 2
 const _OUT_ATOM := 3
+const _VIRT_MIN := 200
 
 func _ensure_fonts():
     if _fonts_ready:
@@ -264,7 +265,7 @@ func _new_cb(st: cssbox.Style, node: int): int:
         ord := _e.node_ord[node]
         _e.node_ord[node] = ord + 1
         uid := node < _e.ctl.len() ? _e.ctl[node].uid : node
-        key = (uid as i64) * (4096 as i64) + (ord as i64)
+        key = (uid as i64) * (1000003 as i64) + (ord as i64)
     else:
         key = (-2 - _e.root_ord) as i64
         _e.root_ord++
@@ -272,7 +273,7 @@ func _new_cb(st: cssbox.Style, node: int): int:
     mut cb := -1
     if _e.key_map.has(key):
         c := _e.key_map.get(key)
-        if c < _e.cb_used.len() and not _e.cb_used[c]:
+        if c < _e.cb_used.len() and not _e.cb_used[c] and _e.cb_key[c] == key:
             cb = c
         end
     end
@@ -286,7 +287,10 @@ func _new_cb(st: cssbox.Style, node: int): int:
         cb = _e.tree.AddNode(st)
         _cb_grow(cb + 1)
     end
-    _e.cb_key[cb] = key
+    if _e.cb_key[cb] != key:
+        _e.cb_key[cb] = key
+        _e.key_map.put(key, cb)
+    end
     _e.cb_used[cb] = true
     _e.cb_node[cb] = node
     ret cb
@@ -313,17 +317,12 @@ func _begin_build():
     end
     n := _e.tree.NodeCount()
     _cb_grow(n)
-    _e.key_map.free()
-    _e.key_map = HashMap {} as HashMap<i64, int>
     repeat n in c:
         _e.cb_node[c] = -1
         _e.cb_ifc[c] = -1
         _e.cb_rep[c] = -1
         _e.cb_used[c] = false
         _e.cb_want[c] = false
-        if _e.cb_key[c] != (-1 as i64):
-            _e.key_map.put(_e.cb_key[c], c)
-        end
     end
     _e.node_ord.free()
     _e.node_ord = Vector {} as Vector<int>
@@ -376,6 +375,9 @@ func _end_build():
                     _e.tree.ClearMeasure(c)
                     _e.cb_meas[c] = false
                 end
+                if _e.key_map.has(_e.cb_key[c]) and _e.key_map.get(_e.cb_key[c]) == c:
+                    _e.key_map.remove(_e.cb_key[c])
+                end
                 _e.cb_key[c] = -1 as i64
                 _sfree(_e.cb_pkey[c])
                 _e.cb_pkey[c] = ""
@@ -425,6 +427,10 @@ func _end_build():
             if key.len() == 0 or key != _e.cb_pkey[c]:
                 _e.tree.MarkDirty(c)
             end
+            if key.len() > 0 and f.ckey.len() == 0:
+                mut fr := _e.ifcs.ref(fi)
+                fr.ckey = str.Clone(key)
+            end
             _sfree(_e.cb_pkey[c])
             _e.cb_pkey[c] = key
         else _e.cb_pkey[c].len() > 0:
@@ -439,6 +445,8 @@ func _cb_clear():
     each k in _e.cb_pkey:
         _sfree(k)
     end
+    _e.key_map.free()
+    _e.key_map = HashMap {} as HashMap<i64, int>
     _e.cb_node.clear()
     _e.cb_ifc.clear()
     _e.cb_rep.clear()
@@ -700,6 +708,181 @@ func _flush_run(node: int, cbn: int, run &: Vector<int>):
     run.clear()
 end
 
+func _virt_view(node: int, cs: css.ComputedStyle): f64:
+    if node < 0 or node == _e.dom.body or not (cs.overflow_y == cssbox.Overflow.Auto or cs.overflow_y == cssbox.Overflow.Scroll):
+        ret -1.0
+    end
+    if cs.height.kind == css.LenKind.Length and cs.height.calc.len() == 0 and not cs.height.has_pct and cs.height.px > 0.0:
+        ret cs.height.px
+    end
+    if cs.max_height.kind == css.LenKind.Length and cs.max_height.calc.len() == 0 and not cs.max_height.has_pct and cs.max_height.px > 0.0:
+        ret cs.max_height.px
+    end
+    ret -1.0
+end
+
+func _virt_rows(node: int, rows &: Vector<int>): bool:
+    each k in _e.dom.nodes[node].kids:
+        nd := _e.dom.nodes[k]
+        if nd.tag == "#text":
+            if not _is_ws_text(nd.text):
+                ret false
+            end
+            continue
+        end
+        o := _outer(k)
+        if o == _OUT_NONE:
+            continue
+        end
+        if o != _OUT_BLOCK:
+            ret false
+        end
+        kcs := _style_of(k)
+        if kcs.position != cssbox.Position.Static and kcs.position != cssbox.Position.Relative:
+            ret false
+        end
+        rows.push(k)
+    end
+    ret rows.len() >= _VIRT_MIN
+end
+
+func _row_uid(k: int): int:
+    if k < _e.ctl.len():
+        ret _e.ctl[k].uid
+    end
+    ret k
+end
+
+func _virt_build(node: int, cbn: int, view: f64, rows: Vector<int>):
+    mut known := 0.0
+    mut known_n := 0
+    each r in rows:
+        u := _row_uid(r)
+        if _e.vadv.has(u):
+            known += _e.vadv.get(u)
+            known_n++
+        end
+    end
+    mut avg := 20.0
+    if known_n > 0:
+        avg = known / (known_n as f64)
+    else:
+        _e.vfix = true
+    end
+    scroll := node < _e.ctl.len() ? _e.ctl[node].scroll_y : 0.0
+    lo := scroll - view
+    hi := scroll + 2.0 * view
+    mut top := 0.0
+    mut first := -1
+    mut last := -1
+    repeat rows.len() in i:
+        r := rows[i]
+        u := _row_uid(r)
+        a := _e.vadv.has(u) ? _e.vadv.get(u) : avg
+        _e.vtop[r] = top
+        if top + a > lo and top < hi:
+            if first < 0:
+                first = i
+            end
+            last = i
+        end
+        top += a
+    end
+    if first < 0:
+        first = rows.len() - 1
+        last = rows.len() - 1
+    end
+    total := top
+    last_row := rows[last]
+    lu := _row_uid(last_row)
+    after := total - _e.vtop[last_row] - (_e.vadv.has(lu) ? _e.vadv.get(lu) : avg)
+    before := _e.vtop[rows[first]]
+    cs := _style_of(node)
+    if before > 0.0:
+        mut st := cssbox.Style {}
+        st.direction = cs.direction
+        st.height = cssbox.Px(before)
+        sp := _new_cb(st, node)
+        _link(cbn, sp)
+    end
+    _e.vconts.push(node)
+    _e.vrow0.push(_e.vrows.len())
+    repeat rows.len() in i:
+        r := rows[i]
+        if i < first or i > last:
+            _e.vskip[r] = node
+            continue
+        end
+        child := _build_element(r, cbn, false)
+        if child >= 0:
+            _e.node_cb[r] = child
+            _e.vrows.push(r)
+        end
+    end
+    if after > 0.0:
+        mut st := cssbox.Style {}
+        st.direction = cs.direction
+        st.height = cssbox.Px(after)
+        sp := _new_cb(st, node)
+        _link(cbn, sp)
+    end
+end
+
+func _virt_measure():
+    repeat _e.vconts.len() in v:
+        s0 := _e.vrow0[v]
+        e0 := v + 1 < _e.vrow0.len() ? _e.vrow0[v + 1] : _e.vrows.len()
+        mut k := s0
+        until k < e0:
+            r := _e.vrows[k]
+            l := _e.tree.Layout(_e.node_cb[r])
+            mut a := 0.0
+            if k + 1 < e0:
+                n2 := _e.tree.Layout(_e.node_cb[_e.vrows[k + 1]])
+                a = n2.abs_y - l.abs_y
+            else:
+                a = l.height + l.margin.top + l.margin.bottom
+            end
+            u := _row_uid(r)
+            if not _e.vadv.has(u) or math.Abs(_e.vadv.get(u) - a) > 0.01:
+                _e.vadv.put(u, a)
+                _e.vfix = true
+            end
+            k++
+        end
+        cont := _e.vconts[v]
+        cl := _e.tree.Layout(_e.node_cb[cont])
+        vh := cl.height - cl.border.top - cl.border.bottom - cl.scrollbar_height
+        newmax := math.Max(0.0, cl.scroll_height - vh)
+        cu := _row_uid(cont)
+        if _e.vmax.has(cu) and cont < _e.ctl.len():
+            oldmax := _e.vmax.get(cu)
+            sy := _e.ctl[cont].scroll_y
+            if sy >= oldmax - 0.5 and math.Abs(newmax - sy) > 0.5:
+                mut cc := _e.ctl.ref(cont)
+                cc.scroll_y = newmax
+                _e.vfix = true
+            end
+        end
+        _e.vmax.put(cu, newmax)
+    end
+end
+
+func _virt_reset():
+    n := _e.dom.nodes.len()
+    _e.vskip.free()
+    _e.vtop.free()
+    _e.vskip = Vector {} as Vector<int>
+    _e.vtop = Vector {} as Vector<f64>
+    repeat n:
+        _e.vskip.push(-1)
+        _e.vtop.push(0.0)
+    end
+    _e.vconts.clear()
+    _e.vrow0.clear()
+    _e.vrows.clear()
+end
+
 func _build_children(node: int, cbn: int, flex: bool):
     nd := _e.dom.nodes[node]
     mut any_block := false
@@ -710,6 +893,18 @@ func _build_children(node: int, cbn: int, flex: bool):
         end
     end
     cs := _style_of(node)
+    if any_block and not flex and nd.kids.len() >= _VIRT_MIN:
+        view := _virt_view(node, cs)
+        if view > 0.0:
+            mut rows := Vector {} as Vector<int>
+            if _virt_rows(node, rows):
+                _virt_build(node, cbn, view, rows)
+                rows.free()
+                ret
+            end
+            rows.free()
+        end
+    end
     if not any_block and not flex:
         pre := cs.white_space == css.WhiteSpace.Pre or cs.white_space == css.WhiteSpace.PreWrap
         list_marker := cs.display == css.Display.ListItem and cs.list_style_position == css.ListPosition.Inside
@@ -967,8 +1162,19 @@ func _free_ifc(f &: _Ifc):
 end
 
 func _layout():
+    repeat 3:
+        _e.vfix = false
+        _layout_pass()
+        if not _e.vfix:
+            break
+        end
+    end
+end
+
+func _layout_pass():
     _ensure_fonts()
     _reset_layout()
+    _virt_reset()
     _begin_build()
     mut rs := cssbox.Style {}
     rs.width = cssbox.Px(_e.width)
@@ -987,6 +1193,7 @@ func _layout():
     end
     _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
     _e.last_layout_calls = _e.tree.LayoutCalls()
+    _virt_measure()
     _place_all()
     _pc_sweep()
 end
@@ -1132,7 +1339,7 @@ func _ifc_para(fi: int):
             f.spans[0] = sp
         end
     end
-    key := _para_key(_e.ifcs[fi])
+    key := f.ckey.len() > 0 ? f.ckey : _para_key(_e.ifcs[fi])
     if key.len() > 0 and _pc_map.has(key):
         k := _pc_map.get(key)
         if not _pc_taken[k]:

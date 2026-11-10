@@ -208,6 +208,85 @@ indent, link colour, the look of buttons and inputs. The native default
 theme reproduces those defaults, so a page that looks right in a browser
 looks the same natively without changing any web output.
 
+## Typed style values
+
+`css.ProgramSource` writes a program whose values were decided by the compiler.
+Loading it compares no strings and parses nothing.
+
+```
+p.AddTyped(14, 0, [css.DimId(1.5, 205)])                       margin-top: 1.5em
+p.AddTyped(59, 2, [css.ColorValue(0x111111ff, 0xeeeeeeff, 1)])  color: light-dark(#111, #eee)
+p.AddTyped(61, 0, [css.FnId(334), css.KwId(595), css.KwId(486), css.Comma(),
+    css.ColorValue(0xff0000ff, 0xff0000ff, 0), ...])            background-image: linear-gradient(...)
+```
+
+- Property: the integer id from `css.PropertyId`. Longhands are 0 to 121,
+  shorthands 200 to 244, logical properties 300 to 333 (`std/gui/css/props.salam`).
+  Shorthands are already expanded, so a program only holds longhands.
+- Flags: 1 is `!important`, 2 says the value depends on the colour scheme.
+- Keywords, units and function names: indexes into one name table,
+  `std/gui/css/names.salam` (673 names, `css.KeywordId`/`css.KeywordName`). A
+  loaded keyword points at the table's static string, so nothing is copied or
+  freed. A name that is not in the table (a custom ident, a font family) stays
+  text: `Kw`, `KwAs` (keeps the spelling of a font family), `Dim`, `Fn`.
+- Lengths and angles: number and unit. Absolute lengths (in, cm, mm, q, pt,
+  pc) are already pixels and angles already degrees; em, rem, viewport units and
+  percentages stay as they are because they depend on the element and the
+  window. `calc()`, `min()`, `max()` and `clamp()` that need nothing from the
+  page are folded to one value; a negative folded length stays a `calc()` so the
+  property can still clamp it.
+- Colours: `ColorValue(light, dark, flags)`, straight RGBA `0xRRGGBBAA` for each
+  scheme. Flag 1 marks a value that differs between the schemes
+  (`light-dark()`, system colours), flag 2 a colour written in a syntax newer
+  than hex, names, `rgb()`, `hsl()` and `hwb()`. `currentColor`, and
+  expressions that use it such as `color-mix(in srgb, currentColor, red)`, stay
+  as written and resolve in the cascade.
+- `var()` and custom properties stay text (`AddVarDecl`), substituted per element.
+
+The ids are stable: new properties and names are only appended, so an
+executable built by one compiler keeps its meaning with a newer `gui.css`.
+`AddDecl` (property by name, colours as hex pieces) still loads older programs.
+The same resolution runs for HTML-path style sheets when a declaration is
+parsed, so both paths reach the cascade with resolved colours.
+
+### Colours
+
+Every CSS Color 4 and 5 form: hex, 148 named colours, `transparent`,
+`currentColor`, `rgb()`/`hsl()`/`hwb()` in both syntaxes, `lab()`, `lch()`,
+`oklab()`, `oklch()`, `color()` in srgb, srgb-linear, display-p3, a98-rgb,
+prophoto-rgb, rec2020, xyz, xyz-d50 and xyz-d65, `color-mix()` in any of those
+spaces with shorter, longer, increasing and decreasing hue, relative colours
+(`rgb(from red r g calc(b * 2) / alpha)`), `light-dark()` and the system
+colours (Canvas, CanvasText, ButtonFace, ButtonText, ButtonBorder, Field,
+FieldText, Highlight, HighlightText, LinkText, VisitedText, ActiveText,
+GrayText, AccentColor, AccentColorText, Mark, MarkText, SelectedItem,
+SelectedItemText) with Chromium's light and dark values. The conversions use
+the CSS Color 4 matrices in f64. Every colour inside sRGB matches Chromium 156
+to the 8-bit value (`tests/*/stdlib/css/colors`). Out of gamut colours are
+mapped with the CSS Color 4 gamut mapping algorithm (OKLCH chroma reduction,
+deltaEOK 0.02); Chromium clips them instead, so those values differ.
+
+Gradients interpolate in the space named with `in <space> [<hue> hue]`;
+without it they use sRGB when every stop is a legacy colour and Oklab
+otherwise, as Chromium does. `gui.paint` interpolates premultiplied sRGB
+between stops, so the cascade splits each segment into 8 stops computed in the
+interpolation space (not done when the gradient has interpolation hints or
+`calc()` stop positions). Colour transitions mix premultiplied sRGB
+(`css.MixColors`).
+
+### Dark mode
+
+`Sheet.SetColorScheme(elements, dark)` re-evaluates the media conditions and
+computes again only elements whose matched rules contain a scheme-dependent
+declaration (`light-dark()`, a system colour, `color-scheme`, `var()`), elements
+that a rule with a changed `prefers-color-scheme` condition matches, and the
+descendants of elements whose style changed. A page with
+`:root { color-scheme: light dark }` therefore restyles everything, since every
+element inherits the used scheme; a page without it restyles only the elements
+that name a system colour. `gui.ui` calls it on `ColorSchemeChanged` without
+running the view again. The script steps `scheme dark`, `scheme light` and
+`style <selector> <property>` test it headless.
+
 ## Lessons taken from Slint
 
 Slint (`slint-ui/slint`) solves the same problem for its own language, so its

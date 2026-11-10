@@ -38,6 +38,7 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-watch-reply",
     "allow-agent-unwatch-reply",
     "allow-agent-open-url",
+    "allow-agent-pay",
     "allow-chatgpt-pick-export",
     "allow-chatgpt-import",
     "allow-ws-index-open",
@@ -74,6 +75,44 @@ fn open_external(app: &AppHandle, url: &tauri::Url) -> bool {
 
 fn locked() -> bool {
     !(cfg!(debug_assertions) && std::env::var_os("SALAM_DEVTOOLS").is_some())
+}
+
+/// Opens the payment gateway in its own window inside the app, so paying
+/// never sends the user out to the system browser. Once the gateway redirects
+/// back to our own site (the checkout callback lands there), that window
+/// closes and the main window is sent to the same place, which shows the
+/// result exactly as the plan page does for a browser visitor.
+pub(crate) fn open_payment_window(app: &AppHandle, url: tauri::Url) -> tauri::Result<()> {
+    if let Some(existing) = app.get_webview_window("payment") {
+        existing.navigate(url)?;
+        return existing.set_focus();
+    }
+    let target = config::app_url();
+    let returning = app.clone();
+    let popup = app.clone();
+    WebviewWindowBuilder::new(app, "payment", WebviewUrl::External(url))
+        .title("پرداخت")
+        .inner_size(480.0, 760.0)
+        .min_inner_size(380.0, 560.0)
+        .on_navigation(move |url| {
+            if !config::same_origin(url, &target) {
+                return true;
+            }
+            if let Some(main) = returning.get_webview_window("main") {
+                let _ = main.navigate(url.clone());
+                let _ = main.set_focus();
+            }
+            if let Some(payment) = returning.get_webview_window("payment") {
+                let _ = payment.close();
+            }
+            false
+        })
+        .on_new_window(move |url, _features| {
+            open_external(&popup, &url);
+            NewWindowResponse::Deny
+        })
+        .build()?;
+    Ok(())
 }
 
 fn open_main(app: &AppHandle) -> tauri::Result<()> {
@@ -201,6 +240,7 @@ pub fn run() {
             commands::agent_watch_reply,
             commands::agent_unwatch_reply,
             commands::agent_open_url,
+            commands::agent_pay,
             commands::chatgpt_pick_export,
             commands::chatgpt_import,
             mention::ws_index_open,

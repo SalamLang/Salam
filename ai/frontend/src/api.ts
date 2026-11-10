@@ -428,7 +428,7 @@ export type Payment = {
   plan_name: string;
   gateway: Gateway;
   amount: number;
-  status: "pending" | "verifying" | "paid" | "failed" | "canceled";
+  status: "pending" | "verifying" | "paid" | "failed" | "canceled" | "reversed";
   token: string;
   ref: string;
   card: string;
@@ -1692,6 +1692,8 @@ export const api = {
       "GET",
       `/admin/payments${query({ status: f.status, user: f.user, before: f.before })}`,
     ),
+  adminReversePayment: (id: number) =>
+    call<{ ok: boolean }>("POST", `/admin/payments/${id}/reverse`),
   adminCampaigns: (days: number) =>
     call<{ campaigns: Campaign[]; ready: boolean }>(
       "GET",

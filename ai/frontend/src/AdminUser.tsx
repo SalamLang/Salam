@@ -262,7 +262,7 @@ export function AdminUser({ id, notify, onNavigate }: { id: number; notify: (msg
             {tab === "purchases" && (
               <>
                 <Subscriptions picked={picked} notify={notify} history userEmail={p.email} />
-                <Payments picked={picked} />
+                <Payments picked={picked} notify={notify} />
               </>
             )}
             {tab === "api" && (

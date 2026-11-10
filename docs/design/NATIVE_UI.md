@@ -306,8 +306,8 @@ parameter bound to `total` makes the instance depend on `total`.
 
 ### Change marks
 
-Every state global that some scope reads gets a small id and a bit in a
-generated `i64` word (`__salam_touched_0`, 31 ids per word). The compiler
+Every state global that some scope reads gets a small ID and a bit in a
+generated `i64` word (`__salam_touched_0`, 31 IDs per word). The compiler
 inserts `__salam_touched_0 |= 4` before every statement anywhere in the
 program that may write it: assignments, compound assignments, `++` and `--`,
 method calls other than the read only ones (`len`, `get`, `has`, ...), passing

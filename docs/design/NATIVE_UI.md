@@ -539,7 +539,7 @@ through a function of the program) becomes a page part: a pair of comments
 and a render function, like an instance without state. The compiler records
 which globals every instance and page part reads, and before every statement
 of the program that may write one of them (the write analysis of the native
-target) it adds `salamWsTouch` for each of them. Static ids inside instances
+target) it adds `salamWsTouch` for each of them. Static IDs inside instances
 and page parts still count for `dom.ById` checks (E138).
 
 `ui.ScopeRuns()` counts scope re-runs (a full re-run counts one), for tests.

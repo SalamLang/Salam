@@ -125,6 +125,41 @@ pub enum LineJoin:
     Bevel
 end
 
+@en "FilterKind"
+@fa "نوع‌پالایه"
+pub enum FilterKind:
+    @en "Blur"
+    @fa "تار کردن"
+    Blur,
+    @en "Brightness"
+    @fa "روشنایی"
+    Brightness,
+    @en "Contrast"
+    @fa "تضاد"
+    Contrast,
+    @en "Grayscale"
+    @fa "خاکستری"
+    Grayscale,
+    @en "Sepia"
+    @fa "قهوه ای کهنه"
+    Sepia,
+    @en "Saturate"
+    @fa "اشباع"
+    Saturate,
+    @en "HueRotate"
+    @fa "چرخش فام"
+    HueRotate,
+    @en "Invert"
+    @fa "وارون رنگ"
+    Invert,
+    @en "Opacity"
+    @fa "ماتی"
+    Opacity,
+    @en "DropShadow"
+    @fa "سایه افتاده"
+    DropShadow
+end
+
 @en "Color"
 @fa "رنگ"
 pub struct Color:
@@ -394,6 +429,106 @@ pub struct Transform:
     @fa "اعمال روی نقطه"
     pub func Apply(p: Point): Point:
         ret Point { x = this.a * p.x + this.c * p.y + this.e, y = this.b * p.x + this.d * p.y + this.f }
+    end
+
+    @en "Invert"
+    @fa "وارون تبدیل"
+    pub func Invert(): Transform:
+        det := this.a * this.d - this.b * this.c
+        if det == 0.0 or not (det == det):
+            ret Transform {}
+        end
+        ia := this.d / det
+        ib := 0.0 - this.b / det
+        ic := 0.0 - this.c / det
+        id := this.a / det
+        ret Transform { a = ia, b = ib, c = ic, d = id, e = 0.0 - (ia * this.e + ic * this.f), f = 0.0 - (ib * this.e + id * this.f) }
+    end
+
+    @en "MapRect"
+    @fa "نگاشت مستطیل"
+    pub func MapRect(r: Rect): Rect:
+        mut x0 := 1.0e300
+        mut y0 := 1.0e300
+        mut x1 := -1.0e300
+        mut y1 := -1.0e300
+        repeat 4 in i:
+            px := (i & 1) == 0 ? r.x : r.x + r.width
+            py := (i & 2) == 0 ? r.y : r.y + r.height
+            tx := this.a * px + this.c * py + this.e
+            ty := this.b * px + this.d * py + this.f
+            x0 = _minf(x0, tx)
+            y0 = _minf(y0, ty)
+            x1 = _maxf(x1, tx)
+            y1 = _maxf(y1, ty)
+        end
+        ret Rect { x = x0, y = y0, width = x1 - x0, height = y1 - y0 }
+    end
+
+    @en "IsIdentity"
+    @fa "همانی است"
+    pub func IsIdentity(): bool:
+        ret this.a == 1.0 and this.b == 0.0 and this.c == 0.0 and this.d == 1.0 and this.e == 0.0 and this.f == 0.0
+    end
+end
+
+@en "Filter"
+@fa "پالایه"
+pub struct Filter:
+    @en "kind"
+    @fa "نوع پالایه"
+    pub kind: FilterKind = FilterKind.Blur
+    @en "amount"
+    @fa "اندازه پالایه"
+    pub amount: f64 = 0.0
+    @en "offset_x"
+    @fa "جابجایی افقی سایه"
+    pub offset_x: f64 = 0.0
+    @en "offset_y"
+    @fa "جابجایی عمودی سایه"
+    pub offset_y: f64 = 0.0
+    @en "color"
+    @fa "رنگ سایه"
+    pub color: Color = Color { a = 255 }
+end
+
+@en "FilterChain"
+@fa "زنجیره‌پالایه"
+pub struct FilterChain:
+    @en "items"
+    @fa "پالایه ها"
+    pub items: Vector<Filter> = Vector {} as Vector<Filter>
+
+    @en "Add"
+    @fa "افزودن پالایه"
+    pub func Add(f: Filter):
+        this.items.push(f)
+    end
+
+    @en "Extent"
+    @fa "گستره پالایه"
+    pub func Extent(): f64:
+        mut e := 0.0
+        each f in this.items:
+            if f.kind == FilterKind.Blur:
+                e += _posf(f.amount) * 3.0
+            else f.kind == FilterKind.DropShadow:
+                e += _posf(f.amount) * 3.0 + _maxf(_posf(f.offset_x), _posf(0.0 - f.offset_x)) + _maxf(_posf(f.offset_y), _posf(0.0 - f.offset_y))
+            end
+        end
+        ret e
+    end
+
+    @en "IsEmpty"
+    @fa "خالی است"
+    pub func IsEmpty(): bool:
+        ret this.items.len() == 0
+    end
+
+    @en "Free"
+    @fa "رهاسازی"
+    pub func Free():
+        this.items.free()
     end
 end
 
@@ -750,6 +885,12 @@ struct _State:
     pub r_ymin: int = 0
     pub r_ymax: int = 0
     pub f_n: int = 0
+    pub rc_base: int = 0
+    pub masks: Vector<i64> = Vector {} as Vector<i64>
+    pub mk_base: int = 0
+    pub lxs: Vector<i64> = Vector {} as Vector<i64>
+    pub lxf: Vector<f64> = Vector {} as Vector<f64>
+    pub rg_saved: Vector<int> = Vector {} as Vector<int>
 end
 
 @en "Canvas"
@@ -959,6 +1100,31 @@ pub struct Canvas:
     pub func EndLayer(opacity: f64):
         _cv_end_layer(this, opacity)
     end
+
+    @en "BeginFilterLayer"
+    @fa "آغاز لایه پالایه"
+    pub func BeginFilterLayer(r: Rect, chain: FilterChain):
+        e := chain.Extent()
+        _cv_begin_layer_with(this, Rect { x = r.x - e, y = r.y - e, width = r.width + 2.0 * e, height = r.height + 2.0 * e }, true)
+    end
+
+    @en "EndLayerFiltered"
+    @fa "ادغام لایه با پالایه"
+    pub func EndLayerFiltered(chain: FilterChain, opacity: f64):
+        _cv_end_layer_with(this, opacity, chain)
+    end
+
+    @en "BackdropFilter"
+    @fa "پالایه پس زمینه"
+    pub func BackdropFilter(r: Rect, radii: Radii, chain: FilterChain):
+        _cv_backdrop(this, r, radii, chain)
+    end
+
+    @en "DrawOutlineStyled"
+    @fa "رسم دورخط با سبک"
+    pub func DrawOutlineStyled(r: Rect, radii: Radii, width: f64, offset: f64, c: Color, style: BorderStyle):
+        _cv_outline_styled(this, r, radii, width, offset, c, style)
+    end
 end
 
 func _irect_union(a: IntRect, b: IntRect): IntRect:
@@ -1098,6 +1264,24 @@ end
 @fa "تبدیل مقیاس"
 pub func Scaling(sx: f64, sy: f64): Transform:
     ret Transform { a = sx, d = sy }
+end
+
+@en "Skewing"
+@fa "تبدیل کجی"
+pub func Skewing(x_degrees: f64, y_degrees: f64): Transform:
+    ret Transform { c = _tan_deg(x_degrees), b = _tan_deg(y_degrees) }
+end
+
+@en "NewFilter"
+@fa "پالایه تازه"
+pub func NewFilter(kind: FilterKind, amount: f64): Filter:
+    ret Filter { kind = kind, amount = amount }
+end
+
+@en "DropShadowFilter"
+@fa "پالایه سایه افتاده"
+pub func DropShadowFilter(offset_x: f64, offset_y: f64, blur: f64, c: Color): Filter:
+    ret Filter { kind = FilterKind.DropShadow, amount = blur, offset_x = offset_x, offset_y = offset_y, color = c }
 end
 
 @en "Rotation"

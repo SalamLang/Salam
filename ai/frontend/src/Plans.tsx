@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
 import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
@@ -100,6 +100,12 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
   const [busy, setBusy] = useState<PlanId | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [codeStatus, setCodeStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
+  const [codeError, setCodeError] = useState("");
+  const [discounts, setDiscounts] = useState<Record<PlanId, { charge: number; discount: number } | "invalid" | undefined>>({});
+  const codeReq = useRef(0);
 
   const load = useCallback(async () => {
     setError("");
@@ -136,19 +142,68 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
     return () => window.removeEventListener("pageshow", back);
   }, [load]);
 
+  const active = current?.plan;
+
+  useEffect(() => {
+    const trimmed = code.trim();
+    if (!trimmed || !plans) {
+      setCodeStatus("idle");
+      setCodeError("");
+      setDiscounts({});
+      return;
+    }
+    const buyable = plans.filter((p) => p.price > 0 && active?.id !== p.id);
+    if (buyable.length === 0) {
+      setCodeStatus("idle");
+      setCodeError("");
+      setDiscounts({});
+      return;
+    }
+    const req = ++codeReq.current;
+    setCodeStatus("checking");
+    setCodeError("");
+    const timer = window.setTimeout(() => {
+      void Promise.all(
+        buyable.map((p) =>
+          api
+            .previewDiscount(p.id, trimmed)
+            .then((r) => ({ id: p.id, ok: true as const, charge: r.charge, discount: r.discount }))
+            .catch((e) => ({ id: p.id, ok: false as const, message: errText(e, t("کد تخفیف نامعتبر است.", "Invalid discount code.")) })),
+        ),
+      ).then((results) => {
+        if (codeReq.current !== req) return;
+        const next: Record<PlanId, { charge: number; discount: number } | "invalid" | undefined> = {};
+        let firstError = "";
+        let anyValid = false;
+        for (const r of results) {
+          if (r.ok) {
+            next[r.id] = { charge: r.charge, discount: r.discount };
+            anyValid = true;
+          } else {
+            next[r.id] = "invalid";
+            if (!firstError) firstError = r.message;
+          }
+        }
+        setDiscounts(next);
+        setCodeStatus(anyValid ? "valid" : "invalid");
+        setCodeError(anyValid ? "" : firstError);
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [code, plans, active]);
+
   const buy = async (plan: Plan) => {
     if (gateways.length === 0) return;
     setBusy(plan.id);
     try {
-      const r = await api.checkout(plan.id, gateway);
+      const trimmed = code.trim();
+      const r = await api.checkout(plan.id, gateway, trimmed || undefined);
       location.href = r.url;
     } catch (e) {
       notify(errText(e, t("شروع پرداخت ناموفق بود.", "Could not start the payment.")));
       setBusy(null);
     }
   };
-
-  const active = current?.plan;
 
   return (
     <div className="page plans-page">
@@ -211,6 +266,37 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
         </div>
       )}
 
+      <div className="discount-code">
+        {codeOpen ? (
+          <div className="discount-code-row">
+            <label htmlFor="discount-code-input">{t("کد تخفیف", "Discount code")}</label>
+            <input
+              id="discount-code-input"
+              type="text"
+              dir="ltr"
+              value={code}
+              placeholder={t("مثلا SUMMER50", "e.g. SUMMER50")}
+              onChange={(e) => setCode(e.target.value)}
+            />
+            {codeStatus === "checking" && <span className="spinner" />}
+            {codeStatus === "valid" && (
+              <span className="discount-code-ok">
+                <IconBadgeCheck width={14} height={14} /> {t("کد اعمال شد", "Code applied")}
+              </span>
+            )}
+          </div>
+        ) : (
+          <button type="button" className="link" onClick={() => setCodeOpen(true)}>
+            {t("یک کد تخفیف دارم", "I have a discount code")}
+          </button>
+        )}
+        {codeStatus === "invalid" && codeError && (
+          <p className="form-error" role="alert">
+            {codeError}
+          </p>
+        )}
+      </div>
+
       {plans === null && !error ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
@@ -224,6 +310,8 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
             const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (p.price % 1000000 === 0 ? fmtNum(p.price / 1000000) : fmtNum(p.price)) : `$${fmtNum(p.usd)}`;
             const unit = p.price === 0 ? "" : isFa ? (p.price % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
             const period = p.price === 0 ? t("برای همیشه", "forever") : p.hours > 0 ? t(`فقط ${fmtNum(p.hours)} ساعت از لحظه‌ی خرید`, `${fmtNum(p.hours)} hours from the moment you buy`) : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);
+            const discount = discounts[p.id];
+            const applied = discount && discount !== "invalid" ? discount : null;
             return (
               <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
                 {featured && <span className="plan-ribbon">{t("بیشترین امکانات", "Most capable")}</span>}
@@ -234,8 +322,17 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                   <h3>{planName(p.id, p.name)}</h3>
                 </header>
                 <div className="plan-priceblock">
-                  <span className="plan-price">{price}</span>
-                  {unit && <span className="plan-unit">{unit}</span>}
+                  {applied ? (
+                    <>
+                      <s className="plan-price-old">{toman(p.price)}</s>
+                      <span className="plan-price">{toman(applied.charge)}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="plan-price">{price}</span>
+                      {unit && <span className="plan-unit">{unit}</span>}
+                    </>
+                  )}
                 </div>
                 <p className="plan-period">{period}</p>
                 {p.note && <p className="plan-note">{planNote(p.id, p.note)}</p>}

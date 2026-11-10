@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Project, User } from "./api";
+import type { Project, Subscription, User } from "./api";
 import { isDesktop } from "./desktop";
 import { IconChart, IconChat, IconClose, IconFolder, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
 import { isFa, setLang, t } from "./i18n";
@@ -7,6 +7,7 @@ import { fmtNum } from "./format";
 
 type Props = {
   user: User;
+  plan: Subscription | null;
   projects: Project[];
   activeProject: string | null;
   open: boolean;
@@ -131,6 +132,18 @@ export function Sidebar(p: Props) {
           <div className="who">
             <strong dir="auto">{p.user.name}</strong>
             <span dir="ltr">{p.user.email}</span>
+            {p.plan && (
+              <button
+                type="button"
+                className={`plan-chip ${p.plan.plan.id === "free" ? "free" : "ok"}`}
+                onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/plans")))}
+                title={t("دیدن پلن‌ها", "See plans")}
+              >
+                <IconSpark width={12} height={12} />
+                {isFa ? p.plan.plan.name : p.plan.plan.name_en || p.plan.plan.name}
+                {p.plan.plan.id === "free" && <span className="plan-chip-cta">{t("ارتقا", "Upgrade")}</span>}
+              </button>
+            )}
           </div>
           <div className="settings-wrap" ref={wrap}>
             <button

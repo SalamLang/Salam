@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type ChatStart, type FileMeta, type Message, type OutgoingFile, type Project, type ProjectInput, type QueueItem, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type ChatStart, type FileMeta, type Message, type OutgoingFile, type Project, type ProjectInput, type QueueItem, type Subscription, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AdminUser } from "./AdminUser";
@@ -160,6 +160,7 @@ function goNew(project: string | null, replace = false) {
 export function App() {
   const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState<User | null>(null);
+  const [plan, setPlan] = useState<Subscription | null>(null);
   const [draft, setDraft] = useState(takeDraft);
   const dropDraft = useCallback(() => {
     try {
@@ -236,15 +237,29 @@ export function App() {
   const signOut = useCallback(() => {
     setToken("");
     setUser(null);
+    setPlan(null);
     setChats([]);
     setMessages([]);
     setActiveId(null);
     if (routeFromPath() === "chat") goUrl("/", true);
   }, []);
 
+  const loadPlan = useCallback((announceFree: boolean) => {
+    api
+      .subscription()
+      .then((r) => {
+        setPlan(r.subscription);
+        if (announceFree && r.subscription.plan.id === "free") {
+          notify(t("حساب شما روی پلن رایگان است. از منوی «اشتراک‌ها» می‌توانید پلن‌های پولی را ببینید.", "Your account is on the free plan. See the paid plans under Plans in the menu."), true);
+        }
+      })
+      .catch(() => {});
+  }, [notify]);
+
   const onAuth = useCallback((u: User) => {
     setUser(u);
-  }, []);
+    loadPlan(true);
+  }, [loadPlan]);
 
   useEffect(() => {
     handleUnauthorized(signOut);
@@ -254,7 +269,10 @@ export function App() {
     }
     api
       .me()
-      .then((r) => setUser(r.user))
+      .then((r) => {
+        setUser(r.user);
+        loadPlan(false);
+      })
       .catch(() => {})
       .finally(() => setBooting(false));
   }, [signOut]);
@@ -1037,6 +1055,7 @@ export function App() {
     <div className="app">
       <Sidebar
         user={user}
+        plan={plan}
         projects={projects}
         activeProject={projectScope}
         page={route === "admin-chat" || route === "admin-user" ? "admin" : route}

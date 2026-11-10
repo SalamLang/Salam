@@ -1,0 +1,536 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+
+const LN_RX_BITS := 31
+
+k_ln_rx_readonly := [
+    "len", "get", "has", "size", "cap", "is_empty", "first", "last", "iter", "contains", "index_of", "count_of", "copy", "deep_copy", "find", "starts_with", "ends_with", "includes", "substr", "split", "trim", "to_int", "to_float", "char_count", "char_at", "char_substr", "char_find", "concat", "lower", "upper", "bytes", "to_str", "طول", "بگیر", "دارد", "اندازه", "ظرفیت", "پیمایش", "زیررشته", "بیاب", "بشکاف", "پیراست", "به صحیح", "به اعشار", "شمارنویسه", "نویسه شماره", "زیررشته نویسه", "بیاب نویسه", "شروع با", "ختم با", "دربردارد", "رونوشت", "رونوشت عمیق", "پیوست"
+]
+
+struct LnReact:
+    pub states: Vector<str> = Vector {}
+    pub ids: Vector<str> = Vector {}
+    pub fnames: Vector<str> = Vector {}
+    pub fnodes: Vector<int> = Vector {}
+    pub fvisit: Vector<str> = Vector {}
+    pub site_comp: Vector<int> = Vector {}
+    pub dep_site: Vector<int> = Vector {}
+    pub dep_id: Vector<int> = Vector {}
+    pub st_comps: Vector<int> = Vector {}
+    pub tmpl: Vector<int> = Vector {}
+end
+
+func ln_rx_free(r &: LnReact):
+    r.states.free()
+    r.ids.free()
+    r.fnames.free()
+    r.fnodes.free()
+    r.fvisit.free()
+    r.site_comp.free()
+    r.dep_site.free()
+    r.dep_id.free()
+    r.st_comps.free()
+    r.tmpl.free()
+end
+
+func ln_rx_has(v: Vector<str>, name: str): bool:
+    each s in v:
+        if str.Equals(s, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_rx_init(r &: LnReact, a &: at.Ast, prog: int):
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_VAR_DECL and d.is_mut and str.Len(d.name) > 0:
+            r.states.push(d.name)
+        else d.kind == at.AST_FUNC_DEF and str.Len(d.name) > 0:
+            r.fnames.push(d.name)
+            r.fnodes.push(did)
+        end
+    end
+end
+
+func ln_rx_id(r &: LnReact, name: str): int:
+    repeat r.ids.len() in i:
+        if str.Equals(r.ids.get(i), name):
+            ret i
+        end
+    end
+    r.ids.push(name)
+    ret r.ids.len() - 1
+end
+
+func ln_rx_add(out &: Vector<int>, id: int):
+    each x in out:
+        if x == id:
+            ret
+        end
+    end
+    out.push(id)
+end
+
+func ln_rx_scan(r &: LnReact, a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        if ln_rx_has(r.states, n.name):
+            ln_rx_add(out, ln_rx_id(r, n.name))
+        end
+        ret
+    end
+    if n.kind == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        fname := at.Get(a, n.a).name
+        repeat r.fnames.len() in fi:
+            if str.Equals(r.fnames.get(fi), fname) and not ln_rx_has(r.fvisit, fname):
+                r.fvisit.push(fname)
+                ln_rx_scan(r, a, at.Get(a, r.fnodes.get(fi)).a, out)
+                _p := r.fvisit.pop()
+            end
+        end
+    end
+    ln_rx_scan(r, a, n.a, out)
+    ln_rx_scan(r, a, n.b, out)
+    ln_rx_scan(r, a, n.c, out)
+    ln_rx_scan(r, a, n.d, out)
+    repeat n.list.len() in i:
+        ln_rx_scan(r, a, n.list.get(i), out)
+    end
+end
+
+func ln_rx_markers(r &: LnReact, lw &: LoLower, a &: at.Ast, v: str, out &: Vector<int>):
+    stx := char_from_code(2)
+    mut p := 0
+    until true:
+        q := str.IndexFrom(v, stx, p)
+        if q < 0:
+            break
+        end
+        mut tag := ""
+        mut num := 0
+        after := lo_marker_at(v, q, tag, num)
+        if after < 0:
+            p = q + 1
+            continue
+        end
+        if num >= 0 and num < lw.slots.len():
+            ln_rx_scan(r, a, lw.slots.get(num).expr, out)
+        end
+        p = after
+    end
+end
+
+func ln_rx_own(r &: LnReact, lw &: LoLower, a &: at.Ast, el: int, out &: Vector<int>):
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        if at.KindOf(a, cid) == at.AST_LAYOUT_ATTR:
+            ln_rx_markers(r, lw, a, val_str(a, at.Get(a, cid).a), out)
+        end
+    end
+end
+
+func ln_rx_is_comp(a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    ret n.kind == at.AST_IF and n.synthetic and str.Equals(n.name, "__salam_component")
+end
+
+func ln_rx_cond(r &: LnReact, lw &: LoLower, a &: at.Ast, nid: int, out &: Vector<int>):
+    n := at.Get(a, nid)
+    ln_rx_markers(r, lw, a, val_str(a, n.a), out)
+    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IF:
+        ln_rx_cond(r, lw, a, n.c, out)
+    end
+end
+
+func ln_rx_tree_if(r &: LnReact, lw &: LoLower, a &: at.Ast, nid: int, out &: Vector<int>):
+    n := at.Get(a, nid)
+    ln_rx_markers(r, lw, a, val_str(a, n.a), out)
+    ln_rx_tree(r, lw, a, n.b, out)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            ln_rx_tree_if(r, lw, a, n.c, out)
+        else:
+            ln_rx_tree(r, lw, a, n.c, out)
+        end
+    end
+end
+
+func ln_rx_tree(r &: LnReact, lw &: LoLower, a &: at.Ast, container: int, out &: Vector<int>):
+    if container == 0:
+        ret
+    end
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            ln_rx_markers(r, lw, a, val_str(a, at.Get(a, cid).a), out)
+        else k == at.AST_LAYOUT_ELEMENT:
+            ln_rx_tree(r, lw, a, cid, out)
+        else k == at.AST_IF:
+            if not ln_rx_is_comp(a, cid):
+                ln_rx_tree_if(r, lw, a, cid, out)
+            end
+        else k == at.AST_EACH:
+            ln_rx_markers(r, lw, a, val_str(a, at.Get(a, cid).a), out)
+            ln_rx_tree(r, lw, a, at.Get(a, cid).b, out)
+        else k == at.AST_VAR_DECL:
+            ln_rx_scan(r, a, at.Get(a, cid).a, out)
+        end
+    end
+end
+
+func ln_rx_site(r &: LnReact, comp: int, deps: Vector<int>): int:
+    id := r.site_comp.len()
+    r.site_comp.push(comp)
+    each d in deps:
+        r.dep_site.push(id)
+        r.dep_id.push(d)
+    end
+    ret id
+end
+
+func ln_rx_words(r &: LnReact): int:
+    w := (r.ids.len() + LN_RX_BITS - 1) / LN_RX_BITS
+    ret w < 1 ? 1 : w
+end
+
+func ln_rx_word_name(w: int): str:
+    ret "__salam_touched_" + co.U64Toa(w as u64)
+end
+
+func ln_rx_mask(id: int): int:
+    ret 1 << (id % LN_RX_BITS)
+end
+
+func ln_rx_comp_has_state(r &: LnReact, ci: int): bool:
+    each c in r.st_comps:
+        if c == ci:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_rx_root(a &: at.Ast, nid: int): int:
+    mut n := nid
+    until n != 0:
+        k := at.KindOf(a, n)
+        if k == at.AST_IDENTIFIER:
+            ret n
+        end
+        if k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_SLICE:
+            n = at.Get(a, n).a
+            continue
+        end
+        ret 0
+    end
+    ret 0
+end
+
+func ln_rx_local(locals: Vector<str>, name: str): bool:
+    ret ln_rx_has(locals, name)
+end
+
+func ln_rx_note(r &: LnReact, a &: at.Ast, target: int, locals: Vector<str>, ids &: Vector<int>, comps &: Vector<int>):
+    root := ln_rx_root(a, target)
+    if root == 0:
+        ret
+    end
+    name := at.Get(a, root).name
+    if ln_rx_local(locals, name):
+        ret
+    end
+    if str.StartsWith(name, "__salam_st_"):
+        gi := str.Substr(name, 11, str.Len(name) - 11).to_int()
+        if gi >= 0 and gi < g_lo_st_comp.len():
+            ln_rx_add(comps, g_lo_st_comp.get(gi))
+        end
+        ret
+    end
+    repeat r.ids.len() in i:
+        if str.Equals(r.ids.get(i), name):
+            ln_rx_add(ids, i)
+        end
+    end
+end
+
+func ln_rx_ref_param(r &: LnReact, a &: at.Ast, fname: str, idx: int): int:
+    repeat r.fnames.len() in fi:
+        if str.Equals(r.fnames.get(fi), fname):
+            f := at.Get(a, r.fnodes.get(fi))
+            mut pi := 0
+            repeat f.list.len() in k:
+                pid := f.list.get(k)
+                if at.KindOf(a, pid) == at.AST_PARAM:
+                    if pi == idx:
+                        ret at.Get(a, pid).is_ref ? 1 : 0
+                    end
+                    pi++
+                end
+            end
+            ret 0
+        end
+    end
+    ret -1
+end
+
+func ln_rx_writes(r &: LnReact, a &: at.Ast, nid: int, locals: Vector<str>, ids &: Vector<int>, comps &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK or n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC:
+        ln_rx_note(r, a, n.a, locals, ids, comps)
+    end
+    if n.kind == at.AST_CALL and n.a != 0:
+        callee := at.Get(a, n.a)
+        if callee.kind == at.AST_MEMBER:
+            mut ro := false
+            each m in k_ln_rx_readonly:
+                if str.Equals(m, callee.name):
+                    ro = true
+                end
+            end
+            if not ro:
+                ln_rx_note(r, a, callee.a, locals, ids, comps)
+            end
+        end
+        repeat n.list.len() in i:
+            arg := n.list.get(i)
+            if ln_rx_root(a, arg) == 0:
+                continue
+            end
+            mut refp := -1
+            if callee.kind == at.AST_IDENTIFIER:
+                refp = ln_rx_ref_param(r, a, callee.name, i)
+                if refp < 0:
+                    refp = 0
+                end
+            end
+            if refp != 0:
+                ln_rx_note(r, a, arg, locals, ids, comps)
+            end
+        end
+    end
+    ln_rx_writes(r, a, n.a, locals, ids, comps)
+    ln_rx_writes(r, a, n.b, locals, ids, comps)
+    ln_rx_writes(r, a, n.c, locals, ids, comps)
+    ln_rx_writes(r, a, n.d, locals, ids, comps)
+    repeat n.list.len() in j:
+        ln_rx_writes(r, a, n.list.get(j), locals, ids, comps)
+    end
+end
+
+func ln_rx_clone_locals(v: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each s in v:
+        out.push(s)
+    end
+    ret out
+end
+
+func ln_rx_one(a &: at.Ast, from: int): int:
+    n := at.NewNode(a, at.AST_LITERAL)
+    copy_span(a, n, from)
+    at.SetOp(a, n, tok.TK_INT)
+    at.SetName(a, n, "1")
+    at.SetTokenValue(a, n, tok.ValueInt(1 as u64))
+    ret n
+end
+
+func ln_rx_fix_incdec(a &: at.Ast, stmt: int):
+    s := at.Get(a, stmt)
+    if s.kind != at.AST_EXPR_STMT or s.a == 0 or at.KindOf(a, s.a) != at.AST_INCDEC:
+        ret
+    end
+    e := at.Get(a, s.a)
+    root := ln_rx_root(a, e.a)
+    if root == 0 or at.KindOf(a, e.a) != at.AST_INDEX or not str.StartsWith(at.Get(a, root).name, "__salam_st_"):
+        ret
+    end
+    mut m := at.Get(a, s.a)
+    m.kind = at.AST_ASSIGN
+    m.op = e.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS_EQ : tok.TK_MINUS_EQ
+    m.b = ln_rx_one(a, s.a)
+    m.is_prefix = false
+    at.Put(a, s.a, m)
+end
+
+func ln_rx_block(r &: LnReact, a &: at.Ast, blk: int, locals0: Vector<str>):
+    mut locals := ln_rx_clone_locals(locals0)
+    defer locals.free()
+    b := at.Get(a, blk)
+    mut items := Vector {} as Vector<int>
+    mut changed := false
+    repeat b.list.len() in i:
+        sid := b.list.get(i)
+        ln_rx_fix_incdec(a, sid)
+        mut ids := Vector {} as Vector<int>
+        mut comps := Vector {} as Vector<int>
+        ln_rx_writes(r, a, sid, locals, ids, comps)
+        each id in ids:
+            if id < r.tmpl.len():
+                items.push(at.Clone(a, r.tmpl.get(id)))
+                changed = true
+            end
+        end
+        each ci in comps:
+            repeat r.st_comps.len() in k:
+                if r.st_comps.get(k) == ci and r.ids.len() + k < r.tmpl.len():
+                    items.push(at.Clone(a, r.tmpl.get(r.ids.len() + k)))
+                    changed = true
+                end
+            end
+        end
+        ids.free()
+        comps.free()
+        items.push(sid)
+        s := at.Get(a, sid)
+        if s.kind == at.AST_VAR_DECL and str.Len(s.name) > 0:
+            locals.push(s.name)
+        end
+        ln_rx_visit(r, a, sid, locals)
+    end
+    if changed:
+        mut bn := at.Get(a, blk)
+        mut old := bn.list
+        bn.list = items
+        at.Put(a, blk, bn)
+        old.free()
+    else:
+        items.free()
+    end
+end
+
+func ln_rx_params(a &: at.Ast, nid: int, locals &: Vector<str>):
+    n := at.Get(a, nid)
+    repeat n.list.len() in i:
+        pid := n.list.get(i)
+        if at.KindOf(a, pid) == at.AST_PARAM:
+            locals.push(at.Get(a, pid).name)
+        end
+    end
+end
+
+func ln_rx_visit(r &: LnReact, a &: at.Ast, nid: int, locals0: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK:
+        ln_rx_block(r, a, nid, locals0)
+        ret
+    end
+    if n.kind == at.AST_LAMBDA:
+        mut locals := ln_rx_clone_locals(locals0)
+        defer locals.free()
+        ln_rx_params(a, nid, locals)
+        ln_rx_visit(r, a, n.a, locals)
+        ret
+    end
+    if n.kind == at.AST_EACH or n.kind == at.AST_REPEAT:
+        mut locals2 := ln_rx_clone_locals(locals0)
+        defer locals2.free()
+        if str.Len(n.name) > 0:
+            locals2.push(n.name)
+        end
+        if n.kind == at.AST_EACH and n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+            locals2.push(at.Get(a, n.c).name)
+        end
+        ln_rx_visit(r, a, n.a, locals0)
+        ln_rx_visit(r, a, n.b, locals2)
+        if n.kind == at.AST_REPEAT:
+            ln_rx_visit(r, a, n.c, locals0)
+            ln_rx_visit(r, a, n.d, locals0)
+        end
+        ret
+    end
+    ln_rx_visit(r, a, n.a, locals0)
+    ln_rx_visit(r, a, n.b, locals0)
+    ln_rx_visit(r, a, n.c, locals0)
+    ln_rx_visit(r, a, n.d, locals0)
+    repeat n.list.len() in i:
+        ln_rx_visit(r, a, n.list.get(i), locals0)
+    end
+end
+
+func ln_rx_func(r &: LnReact, a &: at.Ast, fid: int):
+    f := at.Get(a, fid)
+    if f.a == 0:
+        ret
+    end
+    mut locals := Vector {} as Vector<str>
+    defer locals.free()
+    ln_rx_params(a, fid, locals)
+    ln_rx_visit(r, a, f.a, locals)
+end
+
+func ln_rx_mark_program(r &: LnReact, a &: at.Ast, prog: int):
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        k := at.KindOf(a, did)
+        if k == at.AST_FUNC_DEF:
+            ln_rx_func(r, a, did)
+        else k == at.AST_STRUCT_DEF:
+            repeat at.ChildCount(a, did) in j:
+                mid := at.Child(a, did, j)
+                if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                    ln_rx_func(r, a, mid)
+                end
+            end
+        end
+    end
+end
+
+func ln_rx_fix_types(a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_TYPE and str.StartsWith(n.name, "__salam_type_"):
+        gi := str.Substr(n.name, 13, str.Len(n.name) - 13).to_int()
+        if gi >= 0 and gi < g_lo_st_type.len() and g_lo_st_type.get(gi) != 0:
+            cp := at.Clone(a, g_lo_st_type.get(gi))
+            at.Put(a, nid, at.Get(a, cp))
+        end
+        ret
+    end
+    ln_rx_fix_types(a, n.ty)
+    ln_rx_fix_types(a, n.a)
+    ln_rx_fix_types(a, n.b)
+    ln_rx_fix_types(a, n.c)
+    repeat n.list.len() in i:
+        ln_rx_fix_types(a, n.list.get(i))
+    end
+end

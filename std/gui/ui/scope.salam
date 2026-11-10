@@ -16,6 +16,8 @@ package ui
 
 import str
 import gui.css
+import gui.cssbox
+import gui.typeset
 
 mut _sc := Vector {} as Vector<_Scope>
 mut _sc_free := Vector {} as Vector<int>
@@ -36,7 +38,10 @@ mut _sc_slot_free_c := Vector {} as Vector<int>
 mut _sc_slot_free_s := Vector {} as Vector<int>
 mut _sc_dead := 0
 mut _sc_touched := Vector {} as Vector<i64>
-mut _sc_text_changed := false
+mut _sc_text_nodes := Vector {} as Vector<int>
+mut _sc_span_fi := Vector {} as Vector<int>
+mut _sc_span_k := Vector {} as Vector<int>
+mut _sc_span_node := Vector {} as Vector<int>
 mut _sc_el_changed := Vector {} as Vector<int>
 
 struct _Scope:
@@ -369,7 +374,7 @@ func _sc_patch(o: int, n: int, map &: Vector<int>, nbefore: int):
         t := a.text
         a.text = b.text
         b.text = t
-        _sc_text_changed = true
+        _sc_text_nodes.push(o)
     end
     same := _sc_same_list(ond.names, nn.names) and _sc_same_list(ond.values, nn.values) and ond.d_base == nn.d_base and ond.d_hover == nn.d_hover and ond.d_focus == nn.d_focus and ond.d_active == nn.d_active and _sc_same_ints(ond.dyn, nn.dyn)
     if not same:
@@ -684,8 +689,90 @@ func _sc_refresh_el(node: int):
     end
 end
 
+func _sc_note_span(fi: int, k: int, node: int):
+    _sc_span_fi.push(fi)
+    _sc_span_k.push(k)
+    _sc_span_node.push(node)
+end
+
+func _sc_spans_reset():
+    _sc_span_fi.clear()
+    _sc_span_k.clear()
+    _sc_span_node.clear()
+end
+
+func _sc_flow_block(node: int): bool:
+    if node < 0:
+        ret false
+    end
+    cs := _style_of(node)
+    if cs.position != cssbox.Position.Static:
+        ret false
+    end
+    ret cs.display == css.Display.Block or cs.display == css.Display.ListItem
+end
+
+func _sc_retext(fi: int, k: int, t: int): bool:
+    f0 := _e.ifcs[fi]
+    if f0.control or f0.atoms.len() > 0 or not f0.has_lay or not f0.has_para:
+        ret false
+    end
+    ow := f0.lay.width
+    oh := f0.lay.height
+    lw := f0.lay_w
+    ominc := typeset.MinContentWidth(f0.para)
+    omaxc := typeset.MaxContentWidth(f0.para)
+    nd := _e.dom.nodes[t]
+    el := _el_of(nd.parent)
+    cs := _style_of(el)
+    nt := _transform(cs, nd.text)
+    mut f := _e.ifcs.ref(fi)
+    mut sp := f.spans[k]
+    _sfree(sp.text)
+    sp.text = nt
+    f.spans[k] = sp
+    typeset.FreeParagraph(f.para)
+    f.has_para = false
+    typeset.FreeLayout(f.lay)
+    f.has_lay = false
+    _sfree(f.ckey)
+    f.ckey = ""
+    _ifc_layout(fi, lw)
+    f2 := _e.ifcs[fi]
+    if f2.lay.height != oh:
+        ret false
+    end
+    if f2.lay.width == ow and typeset.MinContentWidth(f2.para) == ominc and typeset.MaxContentWidth(f2.para) == omaxc:
+        ret true
+    end
+    owner := f2.owner
+    ret _sc_flow_block(owner) and _e.dom.nodes[owner].parent >= 0 and _sc_flow_block(_e.dom.nodes[owner].parent)
+end
+
+func _sc_fast_text(): bool:
+    if not _e.has_tree:
+        ret false
+    end
+    each t in _sc_text_nodes:
+        mut found := false
+        repeat _sc_span_node.len() in q:
+            if _sc_span_node[q] == t:
+                if not _sc_retext(_sc_span_fi[q], _sc_span_k[q], t):
+                    ret false
+                end
+                found = true
+            end
+        end
+        if not found:
+            ret false
+        end
+    end
+    ret true
+end
+
 func _sc_full():
     _sc_invalid = false
+    _sc_runs++
     _load_dom(_build_view())
 end
 
@@ -749,7 +836,7 @@ func _sc_update():
             maxd = dv
         end
     end
-    _sc_text_changed = false
+    _sc_text_nodes.clear()
     _sc_el_changed.clear()
     repeat maxd + 1 in level:
         repeat dirty.len() in j:
@@ -771,7 +858,7 @@ func _sc_update():
             _e.dirty_layout = true
         end
     end
-    if _sc_text_changed:
+    if _sc_text_nodes.len() > 0 and (_e.dirty_layout or not _sc_fast_text()):
         _e.dirty_layout = true
     end
 end
@@ -789,6 +876,9 @@ end
 @en "TouchInstance"
 @fa "لمس نمونه"
 pub func TouchInstance(comp: int, slot: int):
+    if _sc_cur >= 0:
+        ret
+    end
     _sc_touch_comp.push(comp)
     _sc_touch_slot.push(slot)
     _e.dirty_view = true

@@ -260,8 +260,13 @@ cards in a grid) with a style sheet that uses hex, `rgba()`, `hsl()`, named, sys
 | program plus sheet with the user agent rules | 130 us |  62 us |
 | full style computation, 202 elements, cold   | 287 us | 281 us |
 
-Style computation hardly changes: it is dominated by selector matching and the
-style cache, not by reading values.
+Style computation hardly changed with typed values: it was dominated by copying
+large structures and by selector matching, not by reading values. Since then
+tokens carry their keyword id, values are applied with integer switches on those
+ids, and the cascade passes the sheet, the element tree, the engine and the parent
+style by reference instead of copying them on every call. On the same page
+(minimum of 500 runs, one core, C backend) the full style computation went from
+282 us to 113 us; the keyword ids alone did not move it, passing by reference did.
 
 ### Colours
 
@@ -284,9 +289,39 @@ Gradients interpolate in the space named with `in <space> [<hue> hue]`;
 without it they use sRGB when every stop is a legacy colour and Oklab
 otherwise, as Chromium does. `gui.paint` interpolates premultiplied sRGB
 between stops, so the cascade splits each segment into 8 stops computed in the
-interpolation space (not done when the gradient has interpolation hints or
-`calc()` stop positions). Colour transitions mix premultiplied sRGB
-(`css.MixColors`).
+interpolation space. Stops are resolved when the gradient is painted
+(`css.GradientStops`), when the length of the gradient line is known: `calc()`
+positions, missing and out of order positions are fixed up as CSS Images says,
+colour hints are replaced by nine stops placed as Blink places them, and each
+segment in a space other than sRGB is split into 35 pieces mixed in that space
+(denser near both ends, where the sRGB transfer curve bends most), with
+intermediate colours clipped to sRGB as Chromium does. Against Chromium on a
+300 pixel line the hint and `calc()` cases match within 2 levels and the Oklab and
+OKLCH cases within 4, except `longer hue` around the gamut edge (21).
+
+Colours carry a `legacy` flag (hex, names, `rgb()`, `hsl()`, `hwb()`).
+Transitions and animations mix premultiplied sRGB when both colours are legacy and
+Oklab otherwise (`css.MixColors`), which matches Chromium's interpolated values to
+the 8-bit level except for two half-level roundings in 24 samples.
+
+`border-image` (source, slice with `fill`, width, outset, repeat and the
+shorthand, which `border` resets) is parsed, compiled to typed values and painted
+by `gui.paint`'s `DrawNineSlice`. A gradient source is drawn at the size of the
+border image area. Against Chromium the stretch, repeat and round cases match
+within 3 levels away from antialiased stripe edges; `space` differs because
+Chromium scales the gap between tiles by the tile scale. Backgrounds are clipped to
+their `background-clip` box and positioned, sized and tiled from their
+`background-origin` box, so the `padding-box, border-box` double background gives
+a gradient border with round corners.
+
+`backdrop-filter` follows Chromium (Skia's save layer with a backdrop): the
+backdrop is the content of the backdrop root (the nearest layer: opacity, filter or
+another backdrop filter) under the border box, read with mirrored edges, filtered,
+clipped to the border box with its radius and drawn source-over with the element's
+opacity; the element's content is drawn over it in its own layer, and is the
+backdrop root of its descendants. Translucent, faded, filtered and nested cases
+match Chromium within 1 level away from the rounded corners, whose antialiasing
+differs.
 
 ### Dark mode
 

@@ -24,22 +24,60 @@ include at "../ast.salam"
 include lp "../langpack.salam"
 include sm "../semantic/semantic.salam"
 
+const WS_SINGLE := 0
+const WS_MULTI := 1
+const WS_REGION := 2
+
 struct WsUse:
     pub url: bool = false
     pub css: bool = false
+end
+
+struct WsCtx:
+    pub owner: Vector<int> = Vector {}
+    pub done: Vector<bool> = Vector {}
+    pub dep_inst: Vector<int> = Vector {}
+    pub dep_id: Vector<int> = Vector {}
+    pub ekey_num: Vector<int> = Vector {}
+    pub ekey_expr: Vector<int> = Vector {}
+    pub ctl: Vector<int> = Vector {}
+    pub multi: Vector<int> = Vector {}
+end
+
+func ws_free(c &: WsCtx):
+    c.owner.free()
+    c.done.free()
+    c.dep_inst.free()
+    c.dep_id.free()
+    c.ekey_num.free()
+    c.ekey_expr.free()
+    c.ctl.free()
+    c.multi.free()
 end
 
 func ws_name(n: int): str:
     ret "__salam_ws_" + co.U64Toa(n as u64)
 end
 
+func ws_kind(i: int): int:
+    if i >= 0 and i < g_lo_wi_kind.len():
+        ret g_lo_wi_kind.get(i)
+    end
+    ret WS_SINGLE
+end
+
+func ws_has_multi_inst(): bool:
+    each k in g_lo_wi_kind:
+        if k == WS_MULTI:
+            ret true
+        end
+    end
+    ret false
+end
+
 func ws_placeholder(i: int): str:
     s := co.U64Toa(i as u64)
     ret "<!--salam:" + s + "--><!--/salam:" + s + "-->"
-end
-
-func ws_is_done(a &: at.Ast, mark: int): bool:
-    ret str.StartsWith(val_str(a, at.Get(a, mark).a), "<!--salam:")
 end
 
 func ws_int(a &: at.Ast, v: int, from: int): int:
@@ -51,17 +89,33 @@ func ws_int(a &: at.Ast, v: int, from: int): int:
     ret n
 end
 
-func ws_touch_stmt(a &: at.Ast, inst: int, from: int): int:
+func ws_call1(a &: at.Ast, fname: str, v: int, from: int): int:
     call := at.NewNode(a, at.AST_CALL)
     copy_span(a, call, from)
     mut args := Vector {} as Vector<int>
-    args.push(ws_int(a, inst, from))
+    args.push(ws_int(a, v, from))
     mut cn := at.Get(a, call)
-    cn.a = lo_ident(a, "salamWsTouch", from)
+    cn.a = lo_ident(a, fname, from)
     mut old := cn.list
     cn.list = args
     at.Put(a, call, cn)
     old.free()
+    ret call
+end
+
+func ws_cur_ref(a &: at.Ast, gi: int, wi: int, from: int): int:
+    ix := at.NewNode(a, at.AST_INDEX)
+    copy_span(a, ix, from)
+    mut n := at.Get(a, ix)
+    n.a = lo_ident(a, ws_name(gi), from)
+    n.b = ws_call1(a, "salamWsCur", wi, from)
+    n.synthetic = true
+    at.Put(a, ix, n)
+    ret ix
+end
+
+func ws_touch_stmt(a &: at.Ast, inst: int, from: int): int:
+    call := ws_call1(a, "salamWsTouch", inst, from)
     st := at.NewNode(a, at.AST_EXPR_STMT)
     copy_span(a, st, from)
     mut sn := at.Get(a, st)
@@ -70,22 +124,46 @@ func ws_touch_stmt(a &: at.Ast, inst: int, from: int): int:
     ret st
 end
 
-func ws_note(a &: at.Ast, target: int, insts &: Vector<int>):
+func ws_mark_index(nid: int): int:
+    repeat g_lo_wi_mark.len() in i:
+        if g_lo_wi_mark.get(i) == nid:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func ws_note(r &: LnReact, wc &: WsCtx, a &: at.Ast, target: int, insts &: Vector<int>):
     root := ln_rx_root(a, target)
     if root == 0:
         ret
     end
     name := at.Get(a, root).name
-    if not str.StartsWith(name, "__salam_ws_"):
+    if str.StartsWith(name, "__salam_ws_"):
+        n := str.Substr(name, 11, str.Len(name) - 11).to_int()
+        if n >= 0 and n < g_lo_ws_inst.len():
+            mut inst := g_lo_ws_inst.get(n)
+            if ws_kind(inst) == WS_MULTI:
+                inst = inst < wc.owner.len() ? wc.owner.get(inst) : 0 - 1
+            end
+            if inst >= 0:
+                ln_rx_add(insts, inst)
+            end
+        end
         ret
     end
-    n := str.Substr(name, 11, str.Len(name) - 11).to_int()
-    if n >= 0 and n < g_lo_ws_inst.len():
-        ln_rx_add(insts, g_lo_ws_inst.get(n))
+    repeat r.ids.len() in i:
+        if str.Equals(r.ids.get(i), name):
+            repeat wc.dep_id.len() in k:
+                if wc.dep_id.get(k) == i:
+                    ln_rx_add(insts, wc.dep_inst.get(k))
+                end
+            end
+        end
     end
 end
 
-func ws_writes(r &: LnReact, a &: at.Ast, nid: int, insts &: Vector<int>):
+func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, insts &: Vector<int>):
     if nid == 0:
         ret
     end
@@ -94,7 +172,7 @@ func ws_writes(r &: LnReact, a &: at.Ast, nid: int, insts &: Vector<int>):
         ret
     end
     if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC:
-        ws_note(a, n.a, insts)
+        ws_note(r, wc, a, n.a, insts)
     end
     if n.kind == at.AST_CALL and n.a != 0:
         callee := at.Get(a, n.a)
@@ -106,7 +184,7 @@ func ws_writes(r &: LnReact, a &: at.Ast, nid: int, insts &: Vector<int>):
                 end
             end
             if not ro:
-                ws_note(a, callee.a, insts)
+                ws_note(r, wc, a, callee.a, insts)
             end
         end
         repeat n.list.len() in i:
@@ -122,34 +200,34 @@ func ws_writes(r &: LnReact, a &: at.Ast, nid: int, insts &: Vector<int>):
                 end
             end
             if refp != 0:
-                ws_note(a, arg, insts)
+                ws_note(r, wc, a, arg, insts)
             end
         end
     end
-    ws_writes(r, a, n.a, insts)
-    ws_writes(r, a, n.b, insts)
-    ws_writes(r, a, n.c, insts)
-    ws_writes(r, a, n.d, insts)
+    ws_writes(r, wc, a, n.a, insts)
+    ws_writes(r, wc, a, n.b, insts)
+    ws_writes(r, wc, a, n.c, insts)
+    ws_writes(r, wc, a, n.d, insts)
     repeat n.list.len() in j:
-        ws_writes(r, a, n.list.get(j), insts)
+        ws_writes(r, wc, a, n.list.get(j), insts)
     end
 end
 
-func ws_block(r &: LnReact, a &: at.Ast, blk: int):
+func ws_block(r &: LnReact, wc &: WsCtx, a &: at.Ast, blk: int):
     b := at.Get(a, blk)
     mut items := Vector {} as Vector<int>
     mut changed := false
     repeat b.list.len() in i:
         sid := b.list.get(i)
         mut insts := Vector {} as Vector<int>
-        ws_writes(r, a, sid, insts)
+        ws_writes(r, wc, a, sid, insts)
         each inst in insts:
             items.push(ws_touch_stmt(a, inst, sid))
             changed = true
         end
         insts.free()
         items.push(sid)
-        ws_visit(r, a, sid)
+        ws_visit(r, wc, a, sid)
     end
     if changed:
         mut bn := at.Get(a, blk)
@@ -162,38 +240,335 @@ func ws_block(r &: LnReact, a &: at.Ast, blk: int):
     end
 end
 
-func ws_visit(r &: LnReact, a &: at.Ast, nid: int):
+func ws_visit(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int):
     if nid == 0:
         ret
     end
     n := at.Get(a, nid)
     if n.kind == at.AST_BLOCK:
-        ws_block(r, a, nid)
+        ws_block(r, wc, a, nid)
         ret
     end
-    ws_visit(r, a, n.a)
-    ws_visit(r, a, n.b)
-    ws_visit(r, a, n.c)
-    ws_visit(r, a, n.d)
+    ws_visit(r, wc, a, n.a)
+    ws_visit(r, wc, a, n.b)
+    ws_visit(r, wc, a, n.c)
+    ws_visit(r, wc, a, n.d)
     repeat n.list.len() in i:
-        ws_visit(r, a, n.list.get(i))
+        ws_visit(r, wc, a, n.list.get(i))
     end
 end
 
-func ws_mark_program(r &: LnReact, a &: at.Ast, prog: int):
+func ws_mark_program(r &: LnReact, wc &: WsCtx, a &: at.Ast, prog: int):
     repeat at.ChildCount(a, prog) in i:
         did := at.Child(a, prog, i)
         k := at.KindOf(a, did)
         if k == at.AST_FUNC_DEF:
-            ws_visit(r, a, at.Get(a, did).a)
+            ws_visit(r, wc, a, at.Get(a, did).a)
         else k == at.AST_STRUCT_DEF:
             repeat at.ChildCount(a, did) in j:
                 mid := at.Child(a, did, j)
                 if at.KindOf(a, mid) == at.AST_FUNC_DEF:
-                    ws_visit(r, a, at.Get(a, mid).a)
+                    ws_visit(r, wc, a, at.Get(a, mid).a)
                 end
             end
         end
+    end
+end
+
+func ws_reads(r &: LnReact, a &: at.Ast, nid: int): bool:
+    mut out := Vector {} as Vector<int>
+    ln_rx_scan(r, a, nid, out)
+    got := out.len() > 0
+    out.free()
+    ret got
+end
+
+func ws_own_reads(r &: LnReact, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ELEMENT:
+        repeat at.ChildCount(a, nid) in i:
+            cid := at.Child(a, nid, i)
+            if at.KindOf(a, cid) == at.AST_LAYOUT_ATTR and ws_reads(r, a, at.Get(a, cid).a):
+                ret true
+            end
+        end
+        ret false
+    end
+    if n.kind == at.AST_EACH:
+        ret ws_reads(r, a, n.a)
+    end
+    if n.kind == at.AST_IF:
+        if ws_reads(r, a, n.a):
+            ret true
+        end
+        if n.c != 0 and at.KindOf(a, n.c) == at.AST_IF:
+            ret ws_own_reads(r, a, n.c)
+        end
+    end
+    ret false
+end
+
+func ws_region(a &: at.Ast, item: int): int:
+    mark := at.NewNode(a, at.AST_IF)
+    copy_span(a, mark, item)
+    blk := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, blk, item)
+    at.AddChild(a, blk, item)
+    mut mn := at.Get(a, mark)
+    mn.name = "__salam_component"
+    mn.synthetic = true
+    mn.a = mk_str(a, "", item)
+    mn.b = blk
+    at.Put(a, mark, mn)
+    g_lo_wi_mark.push(mark)
+    g_lo_wi_kind.push(WS_REGION)
+    ret mark
+end
+
+func ws_regions(r &: LnReact, a &: at.Ast, container: int):
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT or k == at.AST_EACH or (k == at.AST_IF and not ln_rx_is_comp(a, cid)):
+            if ws_own_reads(r, a, cid):
+                mark := ws_region(a, cid)
+                mut cn := at.Get(a, container)
+                cn.list.set(i, mark)
+                at.Put(a, container, cn)
+            else k == at.AST_LAYOUT_ELEMENT:
+                ws_regions(r, a, cid)
+            end
+        end
+    end
+end
+
+func ws_order_in(wc &: WsCtx, a &: at.Ast, nid: int, order &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    if ln_rx_is_comp(a, nid):
+        idx := ws_mark_index(nid)
+        if idx >= 0 and ws_kind(idx) != WS_MULTI:
+            ws_order(wc, a, idx, order)
+            ret
+        end
+    end
+    n := at.Get(a, nid)
+    ws_order_in(wc, a, n.b, order)
+    ws_order_in(wc, a, n.c, order)
+    repeat n.list.len() in i:
+        ws_order_in(wc, a, n.list.get(i), order)
+    end
+end
+
+func ws_order(wc &: WsCtx, a &: at.Ast, i: int, order &: Vector<int>):
+    if wc.done.get(i):
+        ret
+    end
+    wc.done.set(i, true)
+    m := g_lo_wi_mark.get(i)
+    if m == 0 or ws_kind(i) == WS_MULTI:
+        ret
+    end
+    ws_order_in(wc, a, at.Get(a, m).b, order)
+    order.push(i)
+end
+
+func ws_owned(wc &: WsCtx, a &: at.Ast, nid: int, owner: int):
+    if nid == 0:
+        ret
+    end
+    if ln_rx_is_comp(a, nid):
+        idx := ws_mark_index(nid)
+        if idx < 0 or ws_kind(idx) != WS_MULTI:
+            ret
+        end
+        wc.owner.set(idx, owner)
+    end
+    n := at.Get(a, nid)
+    ws_owned(wc, a, n.b, owner)
+    ws_owned(wc, a, n.c, owner)
+    repeat n.list.len() in i:
+        ws_owned(wc, a, n.list.get(i), owner)
+    end
+end
+
+func ws_has_multi(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    if ln_rx_is_comp(a, nid):
+        ret ws_kind(ws_mark_index(nid)) == WS_MULTI
+    end
+    n := at.Get(a, nid)
+    if ws_has_multi(a, n.b) or ws_has_multi(a, n.c):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if ws_has_multi(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ws_deps_in(r &: LnReact, lw &: LoLower, a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ATTR:
+        if n.a != 0:
+            ln_rx_markers(r, lw, a, val_str(a, n.a), out)
+        end
+        ret
+    end
+    if n.kind == at.AST_VAR_DECL:
+        ln_rx_scan(r, a, n.a, out)
+        ret
+    end
+    if ln_rx_is_comp(a, nid):
+        if ws_kind(ws_mark_index(nid)) != WS_MULTI:
+            ret
+        end
+    else n.kind == at.AST_IF or n.kind == at.AST_EACH:
+        ln_rx_markers(r, lw, a, val_str(a, n.a), out)
+    end
+    ws_deps_in(r, lw, a, n.b, out)
+    ws_deps_in(r, lw, a, n.c, out)
+    repeat n.list.len() in i:
+        ws_deps_in(r, lw, a, n.list.get(i), out)
+    end
+end
+
+func ws_refs_state(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret str.StartsWith(n.name, "__salam_ws_") or str.Equals(n.name, "salamWsCur")
+    end
+    if ws_refs_state(a, n.a) or ws_refs_state(a, n.b) or ws_refs_state(a, n.c) or ws_refs_state(a, n.d):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if ws_refs_state(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
+    ei := sm.LayoutElemOf(a, el)
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0 or an.a == 0:
+            continue
+        end
+        mut key := sm.LayoutAttrKey(an.name)
+        if str.Len(key) == 0:
+            key = an.name
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai < 0 or not str.Equals(sm.LayoutAttrOut(ai), want):
+            continue
+        end
+        num := ln_dyn_num(val_str(a, an.a))
+        if num >= 0 and num < lw.slots.len():
+            ex := lw.slots.get(num).expr
+            if ws_refs_state(a, ex):
+                ret 0
+            end
+            ret ex
+        end
+        ret 0
+    end
+    ret 0
+end
+
+func ws_row_key(lw &: LoLower, a &: at.Ast, body: int): int:
+    repeat at.ChildCount(a, body) in i:
+        cid := at.Child(a, body, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT:
+            mut key := ws_key_attr(lw, a, cid, "data-key")
+            if key == 0:
+                key = ws_key_attr(lw, a, cid, "id")
+            end
+            ret key
+        end
+        if k == at.AST_IF and ln_rx_is_comp(a, cid):
+            ret ws_row_key(lw, a, at.Get(a, cid).b)
+        end
+    end
+    ret 0
+end
+
+func ws_keys(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if ln_rx_is_comp(a, nid) and ws_kind(ws_mark_index(nid)) != WS_MULTI:
+        ret
+    end
+    if n.kind == at.AST_EACH and ws_has_multi(a, n.b):
+        num := ln_dyn_num(val_str(a, n.a))
+        if num >= 0 and num < lw.slots.len():
+            mut key := ws_row_key(lw, a, n.b)
+            if key == 0:
+                mut sl := lw.slots.get(num)
+                if sl.key == 0:
+                    sl.key = lo_ident(a, "__salam_ix_" + co.U64Toa(num as u64), nid)
+                    lw.slots.set(num, sl)
+                end
+                key = sl.key
+            end
+            wc.ekey_num.push(num)
+            wc.ekey_expr.push(key)
+        end
+    end
+    ws_keys(lw, wc, a, n.b)
+    ws_keys(lw, wc, a, n.c)
+    repeat n.list.len() in i:
+        ws_keys(lw, wc, a, n.list.get(i))
+    end
+end
+
+func ws_ekey(wc &: WsCtx, num: int): int:
+    repeat wc.ekey_num.len() in i:
+        if wc.ekey_num.get(i) == num:
+            ret wc.ekey_expr.get(i)
+        end
+    end
+    ret 0
+end
+
+func ws_ids(a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ATTR:
+        mut key := sm.LayoutAttrKey(n.name)
+        if str.Len(key) == 0:
+            key = n.name
+        end
+        if n.a != 0 and str.Equals(key, "id") and at.KindOf(a, n.a) == at.AST_LITERAL:
+            v := at.Get(a, n.a)
+            if v.value_kind == tok.TV_STRING:
+                g_lo_ws_ids.push(v.value_str)
+            end
+        end
+        ret
+    end
+    ws_ids(a, n.b)
+    ws_ids(a, n.c)
+    repeat n.list.len() in i:
+        ws_ids(a, n.list.get(i))
     end
 end
 
@@ -209,7 +584,82 @@ func ws_chunk(chunks &: Vector<str>, text: str): str:
     ret line
 end
 
-func ws_view_source(lw &: LoLower, nm: LnNames, i: int, doc: str, chunks &: Vector<str>, wu &: WsUse): str:
+func ws_text(wc &: WsCtx, chunks &: Vector<str>, text: str): str:
+    if wc.multi.len() == 0:
+        ret ws_chunk(chunks, text)
+    end
+    pat := "=\"__sl_ev_"
+    mut out := ""
+    mut p := 0
+    n := str.Len(text)
+    until p < n:
+        q := str.IndexFrom(text, pat, p)
+        if q < 0:
+            break
+        end
+        out += ws_chunk(chunks, str.Substr(text, p, q + 2 - p))
+        each mi in wc.multi:
+            ms := co.U64Toa(mi as u64)
+            out += "__salam_h += \"salamWsAt(" + ms + ",\" + salamWsCur(" + ms + ") + \");\"\n"
+        end
+        p = q + 2
+    end
+    if p < n:
+        out += ws_chunk(chunks, str.Substr(text, p, n - p))
+    end
+    ret out
+end
+
+func ws_enter(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, inst: int): str:
+    is := co.U64Toa(inst as u64)
+    mut parts := ""
+    each mi in wc.multi:
+        if str.Len(parts) > 0:
+            parts += " + \"/\" + "
+        end
+        parts += "(\"\" + salamWsCur(" + co.U64Toa(mi as u64) + "))"
+    end
+    each en in wc.ctl:
+        if en < 0:
+            continue
+        end
+        ke := ws_ekey(wc, en)
+        if ke == 0:
+            continue
+        end
+        if str.Len(parts) > 0:
+            parts += " + \"/\" + "
+        end
+        parts += "(\"\" + " + ws_slot(lw, at.Clone(a, ke)) + ")"
+    end
+    if str.Len(parts) == 0:
+        parts = "\"\""
+    end
+    tn := "__salam_t_" + is
+    mut s := "salamWsSlot(" + is + ", " + parts + ")\n"
+    s += "if salamWsFresh():\n"
+    s += tn + " := salamWsCur(" + is + ")\n"
+    repeat g_lo_ws_inst.len() in n:
+        if g_lo_ws_inst.get(n) != inst:
+            continue
+        end
+        decl := g_lo_ws_decl.get(n)
+        wn := ws_name(n)
+        tmp := "__salam_i_" + co.U64Toa(n as u64)
+        s += tmp + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
+        s += "if " + tn + " < " + wn + "." + nm.len + "():\n"
+        s += wn + "[" + tn + "] = " + tmp + "\n"
+        s += "else:\n"
+        s += wn + "." + nm.push + "(" + tmp + ")\n"
+        s += "end\n"
+    end
+    s += "end\n"
+    ret s
+end
+
+func ws_view_source(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, i: int, doc: str, chunks &: Vector<str>, wu &: WsUse): str:
+    wc.ctl.clear()
+    wc.multi.clear()
     mut body := "mut __salam_h := \"\"\n"
     mut p := 0
     mut start := 0
@@ -228,7 +678,7 @@ func ws_view_source(lw &: LoLower, nm: LnNames, i: int, doc: str, chunks &: Vect
             continue
         end
         if q > start:
-            body += ws_chunk(chunks, str.Substr(doc, start, q - start))
+            body += ws_text(wc, chunks, str.Substr(doc, start, q - start))
         end
         if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.len():
             sl := lw.slots.get(num)
@@ -237,6 +687,7 @@ func ws_view_source(lw &: LoLower, nm: LnNames, i: int, doc: str, chunks &: Vect
             switch sl.kind:
                 SL_IF:
                     body += "if " + dn + ":\n"
+                    wc.ctl.push(0 - 1)
                     break
                 end
                 SL_EACH:
@@ -245,6 +696,7 @@ func ws_view_source(lw &: LoLower, nm: LnNames, i: int, doc: str, chunks &: Vect
                         head += "__salam_key_" + ns + ", "
                     end
                     body += head + "__salam_item_" + ns + " in " + dn + ":\n"
+                    wc.ctl.push(num)
                     break
                 end
                 SL_BAD:
@@ -274,14 +726,67 @@ func ws_view_source(lw &: LoLower, nm: LnNames, i: int, doc: str, chunks &: Vect
             body += "else:\n"
         else str.Equals(tag, "end"):
             body += "end\n"
+            if wc.ctl.len() > 0:
+                _c := wc.ctl.pop()
+            end
+        else str.Equals(tag, "wsin") and num >= 0:
+            body += ws_enter(lw, wc, a, nm, num)
+            wc.multi.push(num)
+        else str.Equals(tag, "wsout"):
+            if wc.multi.len() > 0:
+                _m := wc.multi.pop()
+            end
         end
         p = after
         start = after
     end
     if start < n:
-        body += ws_chunk(chunks, str.Substr(doc, start, n - start))
+        body += ws_text(wc, chunks, str.Substr(doc, start, n - start))
     end
     ret "func __salam_view_" + co.U64Toa(i as u64) + "(): " + nm.t_str + ":\n" + body + "ret __salam_h\nend\n\n"
+end
+
+func ws_type_text(nm: LnNames, n: int): str:
+    lit := n < g_lo_ws_lit.len() ? g_lo_ws_lit.get(n) : ""
+    if str.Equals(lit, "int"):
+        ret nm.t_int
+    end
+    if str.Equals(lit, "f64"):
+        ret nm.t_f64
+    end
+    if str.Equals(lit, "str"):
+        ret nm.t_str
+    end
+    if str.Equals(lit, "bool"):
+        ret nm.t_bool
+    end
+    ret "__salam_wtype_" + co.U64Toa(n as u64)
+end
+
+func ws_fix_types(a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_TYPE and str.StartsWith(n.name, "__salam_wtype_"):
+        gi := str.Substr(n.name, 14, str.Len(n.name) - 14).to_int()
+        if gi >= 0 and gi < g_lo_ws_type.len() and g_lo_ws_type.get(gi) != 0:
+            cp := at.Clone(a, g_lo_ws_type.get(gi))
+            at.Put(a, nid, at.Get(a, cp))
+            mut cn := at.Get(a, cp)
+            cn.list = Vector {} as Vector<int>
+            cn.ext = 0
+            at.Put(a, cp, cn)
+        end
+        ret
+    end
+    ws_fix_types(a, n.ty)
+    ws_fix_types(a, n.a)
+    ws_fix_types(a, n.b)
+    ws_fix_types(a, n.c)
+    repeat n.list.len() in i:
+        ws_fix_types(a, n.list.get(i))
+    end
 end
 
 func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): str:
@@ -295,13 +800,25 @@ func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): 
         t += "    func salamWsCss(__salam_s: " + s + "): " + s + "\n"
     end
     t += "    func salamWsTouch(__salam_i: " + nm.t_int + ")\n"
+    if ws_has_multi_inst():
+        t += "    func salamWsCur(__salam_i: " + nm.t_int + "): " + nm.t_int + "\n"
+        t += "    func salamWsSlot(__salam_i: " + nm.t_int + ", __salam_k: " + s + ")\n"
+        t += "    func salamWsFresh(): " + nm.t_bool + "\n"
+    end
     t += "end\n\n"
     repeat g_lo_ws_inst.len() in n:
+        if ws_kind(g_lo_ws_inst.get(n)) == WS_MULTI:
+            t += "mut " + ws_name(n) + " := " + nm.vec + " {} as " + nm.vec + "<" + ws_type_text(nm, n) + ">\n"
+            continue
+        end
         decl := g_lo_ws_decl.get(n)
         t += "mut " + ws_name(n) + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
     end
     t += "\n"
     repeat count in i:
+        if ws_kind(i) != WS_SINGLE:
+            continue
+        end
         t += "func __salam_init_" + co.U64Toa(i as u64) + "():\n"
         repeat g_lo_ws_inst.len() in n2:
             if g_lo_ws_inst.get(n2) == i:
@@ -343,46 +860,77 @@ pub func WebStateCount(): int:
     ret g_lo_wi_mark.len()
 end
 
+pub func WebStateKind(i: int): int:
+    ret ws_kind(i)
+end
+
+pub func WebStateIds(): Vector<str>:
+    ret g_lo_ws_ids
+end
+
 pub func WebStateCss(): str:
     ret g_lo_ws_css
 end
 
 pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, file: str): int:
-    count := g_lo_wi_mark.len()
-    if count == 0 or prog == 0:
+    if prog == 0:
         ret 0
     end
     lb := find_layout_block(a, prog)
     if lb == 0:
         ret 0
     end
-    nm := ln_names(pack)
-    is_fa := str.Equals(lp.Code(pack), "fa")
     mut lw := LoLower { prog = prog }
     defer lw.slots.free()
     defer lw.shadow.free()
     defer lw.funcs.free()
     lo_collect_funcs(lw, a, prog)
+    lo_shadow_globals(lw, a, prog)
     repeat g_lo_ws_inst.len() in n:
         lw.shadow.push(ws_name(n))
     end
     mut r := LnReact {}
     defer ln_rx_free(r)
     ln_rx_init(r, a, prog)
-    ws_mark_program(r, a, prog)
+    if r.states.len() > 0:
+        ws_regions(r, a, lb)
+    end
+    count := g_lo_wi_mark.len()
+    if count == 0:
+        ret 0
+    end
+    nm := ln_names(pack)
+    is_fa := str.Equals(lp.Code(pack), "fa")
+    mut wc := WsCtx {}
+    defer ws_free(wc)
+    repeat count:
+        wc.owner.push(0 - 1)
+        wc.done.push(false)
+    end
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    repeat count in oi:
+        ws_order(wc, a, oi, order)
+    end
     mut chunks := Vector {} as Vector<str>
     defer chunks.free()
     mut wu := WsUse {}
     mut views := ""
     mut quiet := dg.NewDefault(0, false, 0)
-    repeat count in k:
-        i := count - 1 - k
+    each i in order:
         m := g_lo_wi_mark.get(i)
-        if m == 0:
-            continue
-        end
         body := at.Get(a, m).b
         lo_walk(lw, a, body, 0, 0 - 1)
+        ws_owned(wc, a, body, i)
+        mut deps := Vector {} as Vector<int>
+        ws_deps_in(r, lw, a, body, deps)
+        each d in deps:
+            wc.dep_inst.push(i)
+            wc.dep_id.push(d)
+        end
+        deps.free()
+        ws_keys(lw, wc, a, body)
+        ws_ids(a, body)
         vb := at.NewNode(a, at.AST_LAYOUT_BLOCK)
         copy_span(a, vb, m)
         at.SetName(a, vb, "__salam_view_" + co.U64Toa(i as u64))
@@ -399,7 +947,7 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
         res := Generate(log, quiet, file, a, vb, true, lp.Code(pack))
         g_lo_cls_prefix = ""
         g_lo_ws_css += res.css
-        views += ws_view_source(lw, nm, i, res.html, chunks, wu)
+        views += ws_view_source(lw, wc, a, nm, i, res.html, chunks, wu)
         mut bn := at.Get(a, body)
         mut oldk := bn.list
         bn.list = kept
@@ -410,6 +958,7 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
         at.Put(a, m, mn)
     end
     dg.Free(quiet)
+    ws_mark_program(r, wc, a, prog)
     mut text := ws_header(lw, a, nm, count, wu) + views
     if is_fa:
         text = ln_to_fa(text, pack)
@@ -429,6 +978,7 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
         cid := at.Child(a, sp, ci)
         cn := at.Get(a, cid)
         if cn.kind == at.AST_VAR_DECL:
+            ws_fix_types(a, cid)
             _vs := lo_splice(lw, a, cid, chunks, lb)
             lo_span_tree(a, cid, lb, base)
             gvars.push(cid)
@@ -484,6 +1034,13 @@ pub func WebStateRuntime(views: Vector<str>, inits: Vector<str>): str:
     s += `var __salam_dirty = [];
 var __salam_queued = false;
 var __salam_marks = {};
+var __salam_cur = {};
+var __salam_slots = {};
+var __salam_free = {};
+var __salam_next = {};
+var __salam_rendering = "";
+var __salam_seen = {};
+var __salam_wasfresh = false;
 function salamWsHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
         return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "\"" ? "&quot;" : "&#39;";
@@ -496,7 +1053,45 @@ function salamWsUrl(s) {
 function salamWsCss(s) {
     return salamWsHtml(String(s).replace(/[;{}<>\r\n]/g, ""));
 }
+function salamWsCur(i) {
+    var s = __salam_cur[i];
+    return s === undefined ? 0 : s;
+}
+function salamWsSlot(i, key) {
+    var fk = __salam_rendering + "/" + i + "/" + key, e = __salam_slots[fk];
+    __salam_seen[fk] = 1;
+    __salam_wasfresh = !e;
+    if (!e) {
+        var fl = __salam_free[i] || (__salam_free[i] = []);
+        if (fl.length) {
+            e = { i: i, s: fl.pop() };
+        } else {
+            e = { i: i, s: __salam_next[i] || 0 };
+            __salam_next[i] = e.s + 1;
+        }
+        __salam_slots[fk] = e;
+    }
+    __salam_cur[i] = e.s;
+}
+function salamWsFresh() {
+    return __salam_wasfresh;
+}
+function __salam_drop(prefix, keep) {
+    for (var fk in __salam_slots) {
+        if (fk.indexOf(prefix) === 0 && !(keep && keep[fk])) {
+            var e = __salam_slots[fk];
+            (__salam_free[e.i] || (__salam_free[e.i] = [])).push(e.s);
+            delete __salam_slots[fk];
+        }
+    }
+}
+window.salamWsAt = function (i, s) {
+    __salam_cur[i] = s;
+};
 function salamWsTouch(i) {
+    if (!__salam_dirty) {
+        return;
+    }
     if (__salam_dirty.indexOf(i) < 0) {
         __salam_dirty.push(i);
     }
@@ -659,11 +1254,16 @@ function __salam_kids(p, cur, stop, list, fresh) {
 }
 function __salam_render(i, fresh) {
     var s = __salam_find(i), e = s ? __salam_end(s) : null;
-    if (!e) {
+    if (!e || !__salam_views[i]) {
         return;
     }
-    var t = document.createElement("template");
+    var t = document.createElement("template"), pr = __salam_rendering, ps = __salam_seen;
+    __salam_rendering = String(i);
+    __salam_seen = {};
     t.innerHTML = __salam_views[i]();
+    __salam_drop(__salam_rendering + "/", __salam_seen);
+    __salam_rendering = pr;
+    __salam_seen = ps;
     __salam_kids(s.parentNode, s.nextSibling, e, Array.prototype.slice.call(t.content.childNodes), fresh);
 }
 function __salam_mount(i) {
@@ -671,7 +1271,10 @@ function __salam_mount(i) {
     __salam_render(i, fresh);
     while (fresh.length) {
         var j = fresh.shift();
-        __salam_inits[j]();
+        __salam_drop(j + "/", null);
+        if (__salam_inits[j]) {
+            __salam_inits[j]();
+        }
         __salam_render(j, fresh);
     }
 }

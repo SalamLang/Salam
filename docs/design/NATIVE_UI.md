@@ -648,7 +648,7 @@ component Button(name: str):
 end
 
 component Toolbar:
-    state picked := "none"
+    picked := "none"
     box:
         Button: name = "save" on pressed = (n: str): picked = n end end
         Button:
@@ -662,7 +662,7 @@ component Toolbar:
 end
 
 component Panel:
-    state count := 0
+    count := 0
     Toolbar: on pressed = (): count++ end end
 end
 
@@ -710,16 +710,18 @@ block and in components; a function of the program that calls it is an error
 - Instances inside `each` without a `key` or `id` on the row are matched by
   position: removing the first row moves every later row's component state
   up by one. Give the row a key.
-- A `state` needs a type the compiler can see without type checking: a
-  literal, a typed component parameter or `value as Type`.
-- On the web, `state` works in the page block built by `salam page build`,
+- A component variable that is written needs a type the compiler can see
+  without type checking: a literal, a typed component parameter or
+  `value as Type`.
+- Variables are declared only at the top of a component body or of the page
+  block, not inside an element, `if` or `each`.
+- On the web, component variables work in the page block built by
+  `salam page build`,
   not in runtime pages with parameters. Instances and page parts that read
   mutable globals are drawn by the page script, so they show nothing without
   JavaScript. A component inside `each` takes its parameters from the row
   every time the instance holding the `each` renders; giving a parameter a
-  new value inside the component does not change the caller's value. On the
-  web a nested instance does not re-render when only the parameters its
-  parent passes change.
+  new value inside the component does not change the caller's value.
 - Selecting a row in a list re-runs one scope per row that reads the selection.
 - A handler or callback body written on one line cannot put a call right
   after a value (`picked = n stop()` reads `n stop` as one name); put the
@@ -728,8 +730,9 @@ block and in components; a function of the program that calls it is an error
   handler that sent the event.
 - On the web, a handler inside `each` cannot read the row's loop variable,
   or a component parameter bound to it, because handlers are functions of
-  the page script; copy the value into a `state` of the row's component
-  (`state label := name`) and read that.
+  the page script; declare a variable in the row's component
+  (`label := name`) and read that: a variable a handler reads gets storage
+  that is set again every time the instance renders.
 - The fallback for a hand written view without `b.Reactive` is the old one:
   the whole view runs after every handler.
 

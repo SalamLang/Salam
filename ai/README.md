@@ -85,6 +85,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_GITHUB_APP_FOR`                                               | which flows use the GitHub App: `signin`, `connect` or `signin,connect`; a flow not listed keeps the OAuth App; ignored until the App id and secret are set                                                                                                                                                                                                                                                                                | empty                                                                 |
 | `AI_GITHUB_WEBHOOK_SECRET`                                        | secret of the GitHub App webhook (`/auth/webhook/github`); every delivery is checked against `X-Hub-Signature-256`; unset means the route answers 503                                                                                                                                                                                                                                                                                      | empty                                                                 |
 | `AI_GITHUB_API`, `AI_GITHUB_WEB`, `AI_FIGMA_API`, `AI_FIGMA_WEB`  | where those services live, for the test mock                                                                                                                                                                                                                                                                                                                                                                                               | the real services                                                     |
+| `AI_FIGMA_MCP_URL`                                                | the remote Figma MCP endpoint, for the test mock; setting it also turns the Figma MCP card on                                                                                                                                                                                                                                                                                                                                              | `https://mcp.figma.com/mcp`                                           |
+| `AI_FIGMA_MCP_ENABLED`                                            | `1` turns the Figma MCP card on once Figma has approved Salam AI's client name for dynamic client registration; before that every registration answers 403                                                                                                                                                                                                                                                                               | off                                                                    |
 
 The API keeps a stream open for as long as an answer takes, so give the
 container room: it ran into a 512 MB limit in production and was killed by the
@@ -429,9 +431,12 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
   (`/v1/oauth/mcp/register`, stored encrypted in `integration_clients`), then sends the
   user to `https://www.figma.com/oauth/mcp` with PKCE (the verifier is an HMAC of the
   state, so nothing extra is stored) and the redirect `AI_APP_URL/auth/callback/figma-mcp`.
-  Nothing has to be configured by the operator. `AI_FIGMA_MCP_URL` only moves the MCP
-  endpoint, for the test mock. Tokens are refreshed on use and, like the others, never
-  shown to the model.
+  Figma only registers clients it has approved (an exact `client_name` allowlist), so
+  the card stays hidden until the operator sets `AI_FIGMA_MCP_ENABLED=1` after Salam AI
+  is approved by Figma; before that, registration always answers 403 and the status
+  reply names it. `AI_FIGMA_MCP_URL` moves the MCP endpoint (for the test mock) and also
+  turns the card on. Tokens are refreshed on use and, like the others, never shown to
+  the model.
 - The sandbox shell is signed in for the user: when GitHub is connected, `GH_TOKEN`,
   `GITHUB_TOKEN` and a Git credential helper for github.com are set, and for Figma
   `FIGMA_TOKEN` and `FIGMA_AUTH_HEADER`. Tokens are scrubbed from command output.

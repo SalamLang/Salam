@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Campaign, type CampaignDay, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
@@ -1537,6 +1537,263 @@ export function Payments({ picked }: { picked: Picked }) {
   );
 }
 
+const APP_ORIGIN = "https://ai.salamlang.ir";
+
+function campaignLink(source: string, medium: string, campaign: string, term: string, content: string): string {
+  const p = new URLSearchParams();
+  if (source) p.set("utm_source", source);
+  if (medium) p.set("utm_medium", medium);
+  if (campaign) p.set("utm_campaign", campaign);
+  if (term) p.set("utm_term", term);
+  if (content) p.set("utm_content", content);
+  const q = p.toString();
+  return q ? `${APP_ORIGIN}/?${q}` : APP_ORIGIN;
+}
+
+function LinkBuilder() {
+  const [source, setSource] = useState("");
+  const [medium, setMedium] = useState("");
+  const [campaign, setCampaign] = useState("");
+  const [term, setTerm] = useState("");
+  const [content, setContent] = useState("");
+  const [copied, setCopied] = useState(false);
+  const url = campaignLink(source, medium, campaign, term, content);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
+
+  return (
+    <details className="card panel chart-table">
+      <summary>{t("ساخت لینک ردیابی تازه", "Build a new tracking link")}</summary>
+      <div className="campaign-builder-grid">
+        <label>
+          {t("منبع (utm_source)", "Source (utm_source)")}
+          <input value={source} onChange={(e) => setSource(e.target.value)} placeholder={t("مثلا اینستاگرام", "e.g. instagram")} />
+        </label>
+        <label>
+          {t("رسانه (utm_medium)", "Medium (utm_medium)")}
+          <input value={medium} onChange={(e) => setMedium(e.target.value)} placeholder={t("مثلا استوری", "e.g. story")} />
+        </label>
+        <label>
+          {t("نام کمپین (utm_campaign)", "Campaign name (utm_campaign)")}
+          <input value={campaign} onChange={(e) => setCampaign(e.target.value)} placeholder={t("مثلا تخفیف-بهمن", "e.g. winter-sale")} />
+        </label>
+        <label>
+          {t("عبارت (utm_term)", "Term (utm_term)")}
+          <input value={term} onChange={(e) => setTerm(e.target.value)} />
+        </label>
+        <label>
+          {t("محتوا (utm_content)", "Content (utm_content)")}
+          <input value={content} onChange={(e) => setContent(e.target.value)} />
+        </label>
+      </div>
+      <div className="campaign-builder-url">
+        <code dir="ltr">{url}</code>
+        <button type="button" className="button ghost" onClick={copy} disabled={!campaign && !source}>
+          {copied ? t("کپی شد", "Copied") : t("کپی", "Copy")}
+        </button>
+      </div>
+    </details>
+  );
+}
+
+function CampaignChart({ days }: { days: CampaignDay[] }) {
+  const max = Math.max(1, ...days.flatMap((d) => [d.visits, d.signups, d.payments]));
+  const W = 920;
+  const H = 230;
+  const PAD = 34;
+  const BOTTOM = 26;
+  const height = H - PAD - BOTTOM;
+  const step = (W - PAD * 2) / Math.max(1, days.length - 1 || 1);
+  const pointsFor = (pick: (d: CampaignDay) => number) =>
+    days.map((d, i) => `${PAD + i * step},${H - BOTTOM - Math.round((pick(d) / max) * height)}`).join(" ");
+  const labelEvery = Math.max(1, Math.ceil(days.length / 7));
+  return (
+    <div className="usage-chart">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" style={{ direction: "ltr" }} aria-label={t("روند روزانه کمپین", "Daily campaign trend")}>
+        {[0, 0.25, 0.5, 0.75, 1].map((r) => {
+          const y = H - BOTTOM - height * r;
+          return (
+            <g key={r}>
+              <line className="chart-grid" x1={PAD} x2={W - PAD} y1={y} y2={y} />
+              <text className="chart-label" x={4} y={y + 4}>
+                {fmtCompact(Math.round(max * r))}
+              </text>
+            </g>
+          );
+        })}
+        <polyline fill="none" stroke="var(--brand)" strokeWidth={2} points={pointsFor((d) => d.visits)} />
+        <polyline fill="none" stroke="var(--tk-f)" strokeWidth={2} points={pointsFor((d) => d.signups)} />
+        <polyline fill="none" stroke="var(--danger)" strokeWidth={2} points={pointsFor((d) => d.payments)} />
+        {days.map((d, i) =>
+          i % labelEvery === 0 ? (
+            <text key={d.day} className="chart-label" x={PAD + i * step} y={H - 6} textAnchor="middle">
+              {fmtDay(d.day)}
+            </text>
+          ) : null,
+        )}
+        <line className="chart-axis" x1={PAD} x2={W - PAD} y1={H - BOTTOM} y2={H - BOTTOM} />
+      </svg>
+      <div className="usage-legend">
+        <span>
+          <i className="swatch" style={{ background: "var(--brand)" }} /> {t("بازدید", "Visits")}
+        </span>
+        <span>
+          <i className="swatch" style={{ background: "var(--tk-f)" }} /> {t("ثبت‌نام", "Signups")}
+        </span>
+        <span>
+          <i className="swatch" style={{ background: "var(--danger)" }} /> {t("پرداخت", "Payments")}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CampaignDetail({ campaign, days }: { campaign: string; days: number }) {
+  const [series, setSeries] = useState<CampaignDay[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setSeries(null);
+    api
+      .adminCampaignSeries(campaign, days)
+      .then((r) => live && setSeries(r.days))
+      .catch((e) => live && setError(errText(e, t("بارگذاری روند کمپین ناموفق بود.", "Could not load the campaign trend."))));
+    return () => {
+      live = false;
+    };
+  }, [campaign, days]);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>
+          <bdi>{campaign}</bdi>
+        </h3>
+      </div>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {series === null && !error && (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      )}
+      {series && series.length === 0 && <p className="muted">{t("برای این کمپین هنوز داده‌ای نیست.", "No data yet for this campaign.")}</p>}
+      {series && series.length > 0 && <CampaignChart days={series} />}
+    </section>
+  );
+}
+
+function Campaigns() {
+  const [rows, setRows] = useState<Campaign[] | null>(null);
+  const [ready, setReady] = useState(true);
+  const [error, setError] = useState("");
+  const [days, setDays] = useState("30");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setRows(null);
+    setError("");
+    api
+      .adminCampaigns(Number(days))
+      .then((r) => {
+        if (!live) return;
+        setRows(r.campaigns);
+        setReady(r.ready);
+      })
+      .catch((e) => live && setError(errText(e, t("بارگذاری کمپین‌ها ناموفق بود.", "Could not load campaigns."))));
+    return () => {
+      live = false;
+    };
+  }, [days]);
+
+  return (
+    <>
+      <LinkBuilder />
+      <section className="card panel">
+        <div className="panel-head">
+          <h3>{t("کمپین‌های بازاریابی", "Marketing campaigns")}</h3>
+          <Segmented
+            label={t("بازه", "Range")}
+            options={[
+              { id: "7", label: t("۷ روز", "7 days") },
+              { id: "30", label: t("۳۰ روز", "30 days") },
+              { id: "90", label: t("۹۰ روز", "90 days") },
+            ]}
+            value={days}
+            onChange={setDays}
+          />
+        </div>
+        {!ready && <p className="muted">{t("پایگاه داده‌ی ClickHouse برای کمپین‌ها هنوز وصل نشده است.", "The ClickHouse database for campaigns is not connected yet.")}</p>}
+        {error && (
+          <div className="form-error" role="alert">
+            {error}
+          </div>
+        )}
+        {rows === null && !error ? (
+          <div className="list-loading" role="status">
+            <span className="spinner" />
+            <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">{t("کمپین", "Campaign")}</th>
+                  <th scope="col">{t("منبع / رسانه", "Source / medium")}</th>
+                  <th scope="col">{t("بازدید", "Visits")}</th>
+                  <th scope="col">{t("بازدیدکننده یکتا", "Unique visitors")}</th>
+                  <th scope="col">{t("ثبت‌نام", "Signups")}</th>
+                  <th scope="col">{t("پرداخت", "Payments")}</th>
+                  <th scope="col">{t("درآمد", "Revenue")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows?.map((r) => (
+                  <tr key={`${r.campaign}:${r.source}:${r.medium}`} className="row-click" onClick={() => setSelected(r.campaign)}>
+                    <td>
+                      <bdi>{r.campaign || t("(بدون نام)", "(none)")}</bdi>
+                    </td>
+                    <td className="cell-sub" dir="ltr">
+                      {r.source}
+                      {r.medium ? ` / ${r.medium}` : ""}
+                    </td>
+                    <td>{fmtNum(r.visits)}</td>
+                    <td>{fmtNum(r.uniques)}</td>
+                    <td>{fmtNum(r.signups)}</td>
+                    <td>{fmtNum(r.payments)}</td>
+                    <td>{toman(r.revenue)}</td>
+                  </tr>
+                ))}
+                {rows?.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted">
+                      {t("هنوز بازدیدی از لینک‌های ردیابی ثبت نشده.", "No visits from tracking links yet.")}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      {selected && <CampaignDetail campaign={selected} days={Number(days)} />}
+    </>
+  );
+}
+
 function LatestChats() {
   const [rows, setRows] = useState<AdminChatRow[] | null>(null);
   const [more, setMore] = useState(false);
@@ -2953,6 +3210,7 @@ const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; h
       { id: "subscriptions", label: () => t("اشتراک‌ها", "Subscriptions"), hint: () => t("اشتراک‌های فعال و اعطای پلن", "Active subscriptions and grants") },
       { id: "payments", label: () => t("پرداخت‌ها", "Payments"), hint: () => t("تراکنش‌های پرداخت", "Payment transactions") },
       { id: "discounts", label: () => t("کدهای تخفیف", "Discount codes"), hint: () => t("ساخت و مدیریت کدهای تخفیف", "Create and manage discount codes") },
+      { id: "campaigns", label: () => t("کمپین‌ها", "Campaigns"), hint: () => t("بازدید، ثبت‌نام و پرداخت لینک‌های ردیابی", "Visits, signups and payments from tracking links") },
     ],
   },
   {
@@ -3196,6 +3454,7 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
         {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
         {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
         {section === "billing" && sub?.id === "discounts" && <DiscountsAdmin notify={notify} />}
+        {section === "billing" && sub?.id === "campaigns" && <Campaigns />}
         {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}
         {section === "api" && sub?.id === "keys" && <KeyPolicies picked={picked} notify={notify} />}
         {section === "api" && sub?.id === "apps" && <AppsTable picked={picked} notify={notify} />}

@@ -1,3 +1,4 @@
+import type { CampaignFields } from "./campaign";
 import { isDesktop, type ProjectContext } from "./desktop";
 import { isFa, lang, t } from "./i18n";
 export type User = {
@@ -451,6 +452,24 @@ export type Discount = {
   uses: number;
   users: number;
   user?: { id: number; name: string; email: string };
+};
+export type Campaign = {
+  campaign: string;
+  source: string;
+  medium: string;
+  visits: number;
+  uniques: number;
+  signups: number;
+  payments: number;
+  revenue: number;
+};
+export type CampaignDay = {
+  day: string;
+  visits: number;
+  uniques: number;
+  signups: number;
+  payments: number;
+  revenue: number;
 };
 export type AdminSubscription = {
   id: number;
@@ -1251,12 +1270,20 @@ export async function streamMessage(
 }
 
 export const api = {
-  register: (name: string, email: string, password: string) =>
+  register: (
+    name: string,
+    email: string,
+    password: string,
+    campaign?: CampaignFields,
+  ) =>
     call<{ token: string; user: User }>("POST", "/auth/register", {
       name,
       email,
       password,
+      ...campaign,
     }),
+  recordVisit: (fields: CampaignFields & { path: string; referrer: string }) =>
+    call<void>("POST", "/campaign/visit", fields, true),
   login: (email: string, password: string) =>
     call<{ token: string; user: User }>("POST", "/auth/login", {
       email,
@@ -1611,11 +1638,16 @@ export const api = {
   plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
   subscription: () =>
     call<{ subscription: Subscription }>("GET", "/billing/subscription"),
-  checkout: (plan: PlanId, gateway: Gateway, code?: string) =>
+  checkout: (
+    plan: PlanId,
+    gateway: Gateway,
+    code?: string,
+    campaign?: CampaignFields,
+  ) =>
     call<{ payment_id: number; gateway: Gateway; amount: number; url: string }>(
       "POST",
       "/billing/checkout",
-      { plan, gateway, code: code || undefined },
+      { plan, gateway, code: code || undefined, ...campaign },
     ),
   previewDiscount: (plan: PlanId, code: string) =>
     call<{ code: string; price: number; charge: number; discount: number }>(
@@ -1658,7 +1690,18 @@ export const api = {
       "GET",
       `/admin/payments${query({ status: f.status, user: f.user, before: f.before })}`,
     ),
-  adminDiscounts: () => call<{ discounts: Discount[] }>("GET", "/admin/discounts"),
+  adminCampaigns: (days: number) =>
+    call<{ campaigns: Campaign[]; ready: boolean }>(
+      "GET",
+      `/admin/campaigns${query({ days })}`,
+    ),
+  adminCampaignSeries: (campaign: string, days: number) =>
+    call<{ campaign: string; days: CampaignDay[]; ready: boolean }>(
+      "GET",
+      `/admin/campaigns/${encodeURIComponent(campaign)}/series${query({ days })}`,
+    ),
+  adminDiscounts: () =>
+    call<{ discounts: Discount[] }>("GET", "/admin/discounts"),
   adminDiscountCreate: (body: {
     code: string;
     kind: DiscountKind;
@@ -1669,9 +1712,21 @@ export const api = {
     expires?: number;
     note?: string;
   }) => call<{ discount: Discount }>("POST", "/admin/discounts", body),
-  adminDiscountSave: (id: number, body: Partial<{ kind: DiscountKind; value: number; email: string; max_users: number; max_uses: number; expires: number; note: string; active: boolean }>) =>
-    call<{ discount: Discount }>("PUT", `/admin/discounts/${id}`, body),
-  adminDiscountDelete: (id: number) => call<{ ok: boolean }>("DELETE", `/admin/discounts/${id}`),
+  adminDiscountSave: (
+    id: number,
+    body: Partial<{
+      kind: DiscountKind;
+      value: number;
+      email: string;
+      max_users: number;
+      max_uses: number;
+      expires: number;
+      note: string;
+      active: boolean;
+    }>,
+  ) => call<{ discount: Discount }>("PUT", `/admin/discounts/${id}`, body),
+  adminDiscountDelete: (id: number) =>
+    call<{ ok: boolean }>("DELETE", `/admin/discounts/${id}`),
   keys: () => call<{ keys: ApiKey[] }>("GET", "/keys"),
   createKey: (name: string) =>
     call<{ key: ApiKey; secret: string }>("POST", "/keys", { name }),

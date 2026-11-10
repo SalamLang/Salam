@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type ChatStart, type FileMeta, type Message, type OutgoingFile, type Project, type ProjectInput, type QueueItem, type Subscription, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
+import { captureFromUrl } from "./campaign";
 import { AdminChat } from "./AdminChat";
 import { AdminUser } from "./AdminUser";
 import { confirmDialog } from "./Confirm";
@@ -98,6 +99,8 @@ function routeFromPath(): Route {
 const INITIAL_PLACE: Place = new URLSearchParams(location.search).has("q")
   ? { route: "chat", chat: null, project: null }
   : placeFromPath();
+
+captureFromUrl();
 
 const PAGE_TITLES: Record<Route, string> = {
   share: t("گفت‌وگوی اشتراکی", "Shared chat"),

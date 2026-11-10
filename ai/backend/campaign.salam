@@ -1,0 +1,196 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aicampaign
+
+import db.clickhouse
+import net.http
+import net.router
+import encoding.json
+import str
+
+include aiweb "web.salam"
+
+const FIELD_MAX := 80
+const DAYS_MAX := 365
+
+mut CH := clickhouse.Conn {}
+mut READY := false
+
+func clip(s: str, max: int): str:
+    t := str.Trim(s)
+    ret t.len() > max ? t.substr(0, max) : t
+end
+
+func days_of(q: str): int:
+    d := q.to_int()
+    if d <= 0: ret 30 end
+    ret d > DAYS_MAX ? DAYS_MAX : d
+end
+
+func insert(event: str, vid: str, uid: i64, pid: i64, amount: i64, source: str, medium: str, campaign: str, term: str, content: str, ip: str, path: str, referrer: str):
+    if not READY:
+        ret
+    end
+    mut cols := clickhouse.StrArg(event) + ", " + clickhouse.StrArg(vid) + ", " + clickhouse.UIntArg(uid as u64) + ", " + clickhouse.UIntArg(pid as u64)
+    cols = cols + ", " + clickhouse.IntArg(amount) + ", " + clickhouse.StrArg(source) + ", " + clickhouse.StrArg(medium) + ", " + clickhouse.StrArg(campaign)
+    cols = cols + ", " + clickhouse.StrArg(term) + ", " + clickhouse.StrArg(content) + ", " + clickhouse.StrArg(ip) + ", " + clickhouse.StrArg(path) + ", " + clickhouse.StrArg(referrer)
+    sql := "INSERT INTO campaign_events (event, vid, user_id, payment_id, amount, source, medium, campaign, term, content, ip, path, referrer) VALUES (" + cols + ")"
+    _r := CH.Exec(sql, Vector {} as Vector<str>)
+end
+
+func record_visit(ctx: i64):
+    body := http.Body(ctx)
+    campaign := clip(json.Get(body, "campaign"), FIELD_MAX)
+    source := clip(json.Get(body, "source"), FIELD_MAX)
+    if campaign.len() == 0 and source.len() == 0:
+        aiweb.Reply(ctx, 204, "")
+        ret
+    end
+    vid := clip(json.Get(body, "vid"), FIELD_MAX)
+    medium := clip(json.Get(body, "medium"), FIELD_MAX)
+    term := clip(json.Get(body, "term"), FIELD_MAX)
+    content := clip(json.Get(body, "content"), FIELD_MAX)
+    path := clip(json.Get(body, "path"), 200)
+    referrer := clip(json.Get(body, "referrer"), 200)
+    insert("visit", vid, 0, 0, 0, source, medium, campaign, term, content, aiweb.ClientIp(ctx), path, referrer)
+    aiweb.Reply(ctx, 204, "")
+end
+
+func row_num(rows: clickhouse.Rows, col: int): str:
+    ret str.FromInt(rows.Int64(col))
+end
+
+func admin_summary(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    if not READY:
+        aiweb.Reply(ctx, 200, `{"campaigns": [], "ready": false}`)
+        ret
+    end
+    days := days_of(http.Query(ctx, "days"))
+    mut args := Vector {} as Vector<str>
+    args.push(clickhouse.IntArg(days as i64))
+    sql := "SELECT campaign, source, medium, countIf(event = 'visit') AS visits, uniqExactIf(vid, event = 'visit' AND vid != '') AS uniques, countIf(event = 'signup') AS signups, countIf(event = 'payment') AS payments, sumIf(amount, event = 'payment') AS revenue FROM campaign_events WHERE (campaign != '' OR source != '') AND ts >= now() - toIntervalDay(?) GROUP BY campaign, source, medium ORDER BY visits DESC LIMIT 200"
+    mut rows := CH.Query(sql, args)
+    mut items := Vector {} as Vector<str>
+    until rows.Next():
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("campaign", rows.Text(0)))
+        m.push(json.Member("source", rows.Text(1)))
+        m.push(json.Member("medium", rows.Text(2)))
+        m.push(json.MemberRaw("visits", row_num(rows, 3)))
+        m.push(json.MemberRaw("uniques", row_num(rows, 4)))
+        m.push(json.MemberRaw("signups", row_num(rows, 5)))
+        m.push(json.MemberRaw("payments", row_num(rows, 6)))
+        m.push(json.MemberRaw("revenue", row_num(rows, 7)))
+        items.push(json.Object(m))
+    end
+    rows.Close()
+    if rows.Error().len() > 0:
+        aiweb.Fail(ctx, 502, "clickhouse", rows.Error())
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"campaigns": ` + json.Array(items) + `, "ready": true}`)
+end
+
+func admin_series(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    if not READY:
+        aiweb.Reply(ctx, 200, `{"days": [], "ready": false}`)
+        ret
+    end
+    campaign := http.Param(ctx, "campaign")
+    days := days_of(http.Query(ctx, "days"))
+    mut args := Vector {} as Vector<str>
+    args.push(clickhouse.StrArg(campaign))
+    args.push(clickhouse.IntArg(days as i64))
+    sql := "SELECT toString(toDate(ts)) AS day, countIf(event = 'visit') AS visits, uniqExactIf(vid, event = 'visit' AND vid != '') AS uniques, countIf(event = 'signup') AS signups, countIf(event = 'payment') AS payments, sumIf(amount, event = 'payment') AS revenue FROM campaign_events WHERE campaign = ? AND ts >= now() - toIntervalDay(?) GROUP BY day ORDER BY day"
+    mut rows := CH.Query(sql, args)
+    mut items := Vector {} as Vector<str>
+    until rows.Next():
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("day", rows.Text(0)))
+        m.push(json.MemberRaw("visits", row_num(rows, 1)))
+        m.push(json.MemberRaw("uniques", row_num(rows, 2)))
+        m.push(json.MemberRaw("signups", row_num(rows, 3)))
+        m.push(json.MemberRaw("payments", row_num(rows, 4)))
+        m.push(json.MemberRaw("revenue", row_num(rows, 5)))
+        items.push(json.Object(m))
+    end
+    rows.Close()
+    if rows.Error().len() > 0:
+        aiweb.Fail(ctx, 502, "clickhouse", rows.Error())
+        ret
+    end
+    mut out := Vector {} as Vector<str>
+    out.push(json.Member("campaign", campaign))
+    out.push(json.MemberRaw("days", json.Array(items)))
+    out.push(json.MemberRaw("ready", "true"))
+    aiweb.Reply(ctx, 200, json.Object(out))
+end
+
+pub func Configure(addr: str, database: str, username: str, password: str):
+    if addr.len() == 0:
+        ret
+    end
+    mut o := clickhouse.DefaultOptions()
+    o.addr = addr
+    o.database = database
+    if username.len() > 0:
+        o.username = username
+    end
+    o.password = password
+    CH = clickhouse.Open(o)
+    if not CH.Ok():
+        printerrln "campaign: clickhouse did not open: " + CH.Error()
+        ret
+    end
+    ok := CH.Exec("CREATE TABLE IF NOT EXISTS campaign_events (ts DateTime DEFAULT now(), event LowCardinality(String), vid String DEFAULT '', user_id UInt64 DEFAULT 0, payment_id UInt64 DEFAULT 0, amount Int64 DEFAULT 0, source String DEFAULT '', medium String DEFAULT '', campaign String DEFAULT '', term String DEFAULT '', content String DEFAULT '', ip String DEFAULT '', path String DEFAULT '', referrer String DEFAULT '') ENGINE = MergeTree ORDER BY (campaign, event, ts)", Vector {} as Vector<str>)
+    if not ok:
+        printerrln "campaign: clickhouse schema setup failed: " + CH.Error()
+        ret
+    end
+    READY = true
+end
+
+pub func Ready(): bool:
+    ret READY
+end
+
+pub func RecordSignup(vid: str, uid: i64, source: str, medium: str, campaign: str, term: str, content: str):
+    if campaign.len() == 0 and source.len() == 0:
+        ret
+    end
+    insert("signup", clip(vid, FIELD_MAX), uid, 0, 0, clip(source, FIELD_MAX), clip(medium, FIELD_MAX), clip(campaign, FIELD_MAX), clip(term, FIELD_MAX), clip(content, FIELD_MAX), "", "", "")
+end
+
+pub func RecordPayment(vid: str, uid: i64, pid: i64, amount: i64, source: str, medium: str, campaign: str, term: str, content: str):
+    if campaign.len() == 0 and source.len() == 0:
+        ret
+    end
+    insert("payment", clip(vid, FIELD_MAX), uid, pid, amount, clip(source, FIELD_MAX), clip(medium, FIELD_MAX), clip(campaign, FIELD_MAX), clip(term, FIELD_MAX), clip(content, FIELD_MAX), "", "", "")
+end
+
+pub func Routes(r &: router.Router):
+    router.Post(r, "/campaign/visit", record_visit)
+    router.Get(r, "/admin/campaigns", admin_summary)
+    router.Get(r, "/admin/campaigns/:campaign/series", admin_series)
+    each path in ["/campaign/visit", "/admin/campaigns", "/admin/campaigns/:campaign/series"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

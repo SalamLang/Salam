@@ -1,0 +1,362 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import mem
+import math
+
+func _box_pass(src: u32*, dst: u32*, n: int, stride: int, count: int, cstride: int, lo: int, hi: int):
+    w := lo + hi + 1
+    half := w / 2
+    repeat count in line:
+        base := line * cstride
+        mut s0 := 0
+        mut s1 := 0
+        mut s2 := 0
+        mut s3 := 0
+        repeat hi in k:
+            if k < n:
+                v := src[base + k * stride]
+                s0 += (v & (255 as u32)) as int
+                s1 += ((v >> 8) & (255 as u32)) as int
+                s2 += ((v >> 16) & (255 as u32)) as int
+                s3 += (v >> 24) as int
+            end
+        end
+        repeat n in i:
+            ka := i + hi
+            if ka < n:
+                v := src[base + ka * stride]
+                s0 += (v & (255 as u32)) as int
+                s1 += ((v >> 8) & (255 as u32)) as int
+                s2 += ((v >> 16) & (255 as u32)) as int
+                s3 += (v >> 24) as int
+            end
+            o0 := (s0 + half) / w
+            o1 := (s1 + half) / w
+            o2 := (s2 + half) / w
+            o3 := (s3 + half) / w
+            dst[base + i * stride] = ((o3 as u32) << 24) | ((o2 as u32) << 16) | ((o1 as u32) << 8) | (o0 as u32)
+            kr := i - lo
+            if kr >= 0:
+                v := src[base + kr * stride]
+                s0 -= (v & (255 as u32)) as int
+                s1 -= ((v >> 8) & (255 as u32)) as int
+                s2 -= ((v >> 16) & (255 as u32)) as int
+                s3 -= (v >> 24) as int
+            end
+        end
+    end
+end
+
+func _blur_sizes(sigma: f64, out: int[]):
+    mut d := math.Floor(sigma * 3.0 * math.Sqrt(2.0 * math.PI) / 4.0 + 0.5) as int
+    if d < 1:
+        d = 1
+    end
+    if d % 2 == 1:
+        h := (d - 1) / 2
+        repeat 3 in i:
+            out[i * 2] = h
+            out[i * 2 + 1] = h
+        end
+        ret
+    end
+    out[0] = d / 2
+    out[1] = d / 2 - 1
+    out[2] = d / 2 - 1
+    out[3] = d / 2
+    out[4] = d / 2
+    out[5] = d / 2
+end
+
+func _blur_buf(buf: u32*, w: int, h: int, sx: f64, sy: f64):
+    if w <= 0 or h <= 0:
+        ret
+    end
+    tmp := mem.Allocate(((w as i64) * (h as i64) * (4 as i64)) as u64) as u32*
+    if sx >= 0.25:
+        mut bs := [0, 0, 0, 0, 0, 0]
+        _blur_sizes(sx, bs)
+        _box_pass(buf, tmp, w, 1, h, w, bs[0], bs[1])
+        _box_pass(tmp, buf, w, 1, h, w, bs[2], bs[3])
+        _box_pass(buf, tmp, w, 1, h, w, bs[4], bs[5])
+        mem.Copy(buf as void*, tmp as void*, ((w as i64) * (h as i64) * (4 as i64)) as u64)
+    end
+    if sy >= 0.25:
+        mut bs := [0, 0, 0, 0, 0, 0]
+        _blur_sizes(sy, bs)
+        _box_pass(buf, tmp, h, w, w, 1, bs[0], bs[1])
+        _box_pass(tmp, buf, h, w, w, 1, bs[2], bs[3])
+        _box_pass(buf, tmp, h, w, w, 1, bs[4], bs[5])
+        mem.Copy(buf as void*, tmp as void*, ((w as i64) * (h as i64) * (4 as i64)) as u64)
+    end
+    mem.Free(tmp as void*)
+end
+
+func _mat_identity(m: f64[]):
+    repeat 20 in i:
+        m[i] = 0.0
+    end
+    m[0] = 1.0
+    m[6] = 1.0
+    m[12] = 1.0
+    m[18] = 1.0
+end
+
+func _mat_then(m: f64[], n: f64[]):
+    mut r := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    repeat 4 in i:
+        repeat 5 in j:
+            mut v := 0.0
+            repeat 4 in k:
+                v += n[i * 5 + k] * m[k * 5 + j]
+            end
+            if j == 4:
+                v += n[i * 5 + 4]
+            end
+            r[i * 5 + j] = v
+        end
+    end
+    repeat 20 in i:
+        m[i] = r[i]
+    end
+end
+
+func _mat_rgb(n: f64[], v: f64[9]):
+    _mat_identity(n)
+    repeat 3 in i:
+        repeat 3 in j:
+            n[i * 5 + j] = v[i * 3 + j]
+        end
+    end
+end
+
+func _filter_matrix(f: Filter, n: f64[]): bool:
+    a := f.amount
+    switch f.kind:
+        FilterKind.Brightness:
+            _mat_identity(n)
+            n[0] = a
+            n[6] = a
+            n[12] = a
+            ret true
+        end
+        FilterKind.Contrast:
+            _mat_identity(n)
+            o := 0.5 * (1.0 - a)
+            n[0] = a
+            n[6] = a
+            n[12] = a
+            n[4] = o
+            n[9] = o
+            n[14] = o
+            ret true
+        end
+        FilterKind.Invert:
+            _mat_identity(n)
+            k := _minf(1.0, _posf(a))
+            n[0] = 1.0 - 2.0 * k
+            n[6] = 1.0 - 2.0 * k
+            n[12] = 1.0 - 2.0 * k
+            n[4] = k
+            n[9] = k
+            n[14] = k
+            ret true
+        end
+        FilterKind.Opacity:
+            _mat_identity(n)
+            n[18] = _minf(1.0, _posf(a))
+            ret true
+        end
+        FilterKind.Grayscale:
+            t := 1.0 - _minf(1.0, _posf(a))
+            _mat_rgb(n, [0.2126 + 0.7874 * t, 0.7152 - 0.7152 * t, 0.0722 - 0.0722 * t, 0.2126 - 0.2126 * t, 0.7152 + 0.2848 * t, 0.0722 - 0.0722 * t, 0.2126 - 0.2126 * t, 0.7152 - 0.7152 * t, 0.0722 + 0.9278 * t])
+            ret true
+        end
+        FilterKind.Sepia:
+            t := 1.0 - _minf(1.0, _posf(a))
+            _mat_rgb(n, [0.393 + 0.607 * t, 0.769 - 0.769 * t, 0.189 - 0.189 * t, 0.349 - 0.349 * t, 0.686 + 0.314 * t, 0.168 - 0.168 * t, 0.272 - 0.272 * t, 0.534 - 0.534 * t, 0.131 + 0.869 * t])
+            ret true
+        end
+        FilterKind.Saturate:
+            s := _posf(a)
+            _mat_rgb(n, [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s, 0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s, 0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s])
+            ret true
+        end
+        FilterKind.HueRotate:
+            au := _angle_units(a)
+            c := (_cos_au(au) as f64) / 65536.0
+            s := (_sin_au(au) as f64) / 65536.0
+            _mat_rgb(n, [0.213 + c * 0.787 - s * 0.213, 0.715 - c * 0.715 - s * 0.715, 0.072 - c * 0.072 + s * 0.928, 0.213 - c * 0.213 + s * 0.143, 0.715 + c * 0.285 + s * 0.140, 0.072 - c * 0.072 - s * 0.283, 0.213 - c * 0.213 - s * 0.787, 0.715 - c * 0.715 + s * 0.715, 0.072 + c * 0.928 + s * 0.072])
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _apply_matrix(buf: u32*, n: int, m: f64[]):
+    mut q := [0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 0 as i64]
+    repeat 20 in i:
+        if i % 5 == 4:
+            q[i] = math.Floor(m[i] * 255.0 * 4096.0 + 0.5) as i64
+        else:
+            q[i] = math.Floor(m[i] * 4096.0 + 0.5) as i64
+        end
+    end
+    repeat n in i:
+        v := buf[i]
+        a := (v >> 24) as int
+        if a == 0:
+            continue
+        end
+        mut r := ((v >> 16) & (255 as u32)) as int
+        mut g := ((v >> 8) & (255 as u32)) as int
+        mut b := (v & (255 as u32)) as int
+        if a < 255:
+            r = _clamp255((r * 255 + a / 2) / a)
+            g = _clamp255((g * 255 + a / 2) / a)
+            b = _clamp255((b * 255 + a / 2) / a)
+        end
+        ri := r as i64
+        gi := g as i64
+        bi := b as i64
+        ai := a as i64
+        nr := _clamp255(((q[0] * ri + q[1] * gi + q[2] * bi + q[3] * ai + q[4] + (2048 as i64)) >> 12) as int)
+        ng := _clamp255(((q[5] * ri + q[6] * gi + q[7] * bi + q[8] * ai + q[9] + (2048 as i64)) >> 12) as int)
+        nb := _clamp255(((q[10] * ri + q[11] * gi + q[12] * bi + q[13] * ai + q[14] + (2048 as i64)) >> 12) as int)
+        na := _clamp255(((q[15] * ri + q[16] * gi + q[17] * bi + q[18] * ai + q[19] + (2048 as i64)) >> 12) as int)
+        buf[i] = _premul(Color { r = nr, g = ng, b = nb, a = na })
+    end
+end
+
+func _drop_shadow(buf: u32*, w: int, h: int, dx: int, dy: int, sigma: f64, c: Color):
+    total := (w as i64) * (h as i64)
+    sh := mem.AllocateZeroed((total * (4 as i64)) as u64) as u32*
+    col := _premul(c)
+    repeat h in y:
+        sy := y - dy
+        if sy < 0 or sy >= h:
+            continue
+        end
+        repeat w in x:
+            sx := x - dx
+            if sx >= 0 and sx < w:
+                al := buf[sy * w + sx] >> 24
+                if al > (0 as u32):
+                    sh[y * w + x] = al >= (255 as u32) ? col : _mul8(col, al)
+                end
+            end
+        end
+    end
+    if sigma >= 0.25:
+        _blur_buf(sh, w, h, sigma, sigma)
+    end
+    repeat (total as int) in i:
+        buf[i] = _over(sh[i], buf[i])
+    end
+    mem.Free(sh as void*)
+end
+
+func _xf_scale_x(cv &: Canvas): f64:
+    a := (cv.state.xa as f64) / 65536.0
+    b := (cv.state.xb as f64) / 65536.0
+    ret math.Sqrt(a * a + b * b)
+end
+
+func _xf_scale_y(cv &: Canvas): f64:
+    c := (cv.state.xc as f64) / 65536.0
+    d := (cv.state.xd as f64) / 65536.0
+    ret math.Sqrt(c * c + d * d)
+end
+
+func _apply_chain(cv &: Canvas, buf: u32*, w: int, h: int, chain: FilterChain):
+    sx := _xf_scale_x(cv)
+    sy := _xf_scale_y(cv)
+    mut m := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    mut n := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    _mat_identity(m)
+    mut pending := false
+    each f in chain.items:
+        if _filter_matrix(f, n):
+            _mat_then(m, n)
+            pending = true
+            continue
+        end
+        if pending:
+            _apply_matrix(buf, w * h, m)
+            _mat_identity(m)
+            pending = false
+        end
+        if f.kind == FilterKind.Blur:
+            _blur_buf(buf, w, h, _posf(f.amount) * sx, _posf(f.amount) * sy)
+        else:
+            dx := math.Round(f.offset_x * sx) as int
+            dy := math.Round(f.offset_y * sy) as int
+            _drop_shadow(buf, w, h, dx, dy, _posf(f.amount) * sx, f.color)
+        end
+    end
+    if pending:
+        _apply_matrix(buf, w * h, m)
+    end
+end
+
+func _cv_backdrop(cv &: Canvas, r: Rect, radii: Radii, chain: FilterChain):
+    _cv_ready(cv)
+    if cv.pixels == null or chain.items.len() == 0:
+        ret
+    end
+    sh := cv.state.sh
+    zero := Radii {}
+    if not _shape_from(cv, r, zero, sh, 108):
+        ret
+    end
+    ext := math.Ceil(chain.Extent() * _maxf(_xf_scale_x(cv), _xf_scale_y(cv))) as int
+    bx0 := _maxi(_maxi(sh[108] >> 8, cv.state.cx0) - ext, cv.state.tox)
+    by0 := _maxi(_maxi(sh[109] >> 8, cv.state.cy0) - ext, cv.state.toy)
+    bx1 := _mini(_mini((sh[110] + 255) >> 8, cv.state.cx1) + ext, cv.state.tox + cv.state.tw)
+    by1 := _mini(_mini((sh[111] + 255) >> 8, cv.state.cy1) + ext, cv.state.toy + cv.state.th)
+    w := bx1 - bx0
+    h := by1 - by0
+    if w <= 0 or h <= 0:
+        ret
+    end
+    buf := mem.Allocate(((w as i64) * (h as i64) * (4 as i64)) as u64) as u32*
+    tp := cv.state.tpix
+    repeat h in j:
+        srow := (by0 + j - cv.state.toy) * cv.state.tspx + bx0 - cv.state.tox
+        repeat w in i:
+            buf[j * w + i] = tp[srow + i]
+        end
+    end
+    _apply_chain(cv, buf, w, h, chain)
+    cv.state.i_pix = buf
+    cv.state.i_spx = w
+    cv.state.i_ox = bx0
+    cv.state.i_oy = by0
+    cv.state.i_w = w
+    cv.state.i_h = h
+    cv.state.i_op = 255
+    cv.state.i_tile = false
+    cv.state.i_affine = false
+    mut p := Path {}
+    p.AddRoundedRect(r, radii)
+    _fill_path_kind(cv, p, FillRule.NonZero, _K_IMAGE, 0 as u32)
+    p.Free()
+    mem.Free(buf as void*)
+end

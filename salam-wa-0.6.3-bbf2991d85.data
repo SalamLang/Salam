@@ -142603,6 +142603,14 @@ ret 0
 end
 ret restyle(this.e, this.d, elements, index)
 end
+@en "SetColorScheme"
+@fa "تنظیم طرح رنگ"
+pub func SetColorScheme(elements &: Vector<Element>, dark: bool): int:
+if not this.computed:
+ret 0
+end
+ret scheme_restyle(this.e, this.d, elements, dark)
+end
 @en "Count"
 @fa "شمار عنصرها"
 pub func Count(): int:
@@ -143634,10 +143642,18 @@ mut parts := Vector {} as Vector<int>
 defer parts.free()
 split_commas(t, s, e, parts)
 mut first := 0
-gs := parts[0]
-ge := parts[1]
+mut gs := parts[0]
+mut ge := parts[1]
+mut sp := -1
+mut method := HUE_SHORTER
+if not take_interp(t, parts[0], parts[1], gs, ge, sp, method):
+ret false
+end
+if sp >= 0 and gs == ge:
+first = 2
+end
 mut c := Color {}
-starts_color := gs < ge and parse_color_at(t, gs, nxt(t, gs), cx.dark, cx.color, c)
+starts_color := sp < 0 and gs < ge and parse_color_at(t, gs, nxt(t, gs), cx.dark, cx.color, c)
 switch base:
 "linear-gradient":
 out.image = ImageKind.Linear
@@ -143760,10 +143776,6 @@ out.center_x = cxl
 out.center_y = cyl
 break
 end
-if is_kw(t, j, ge, "in"):
-j += 2
-continue
-end
 ret false
 end
 end
@@ -143775,7 +143787,22 @@ end
 end
 out.stops.free()
 out.stops = Vector {} as Vector<ColorStop>
-ret parse_stops(t, parts, first, cx, out.image == ImageKind.Conic, out.stops)
+if not parse_stops(t, parts, first, cx, out.image == ImageKind.Conic, out.stops):
+ret false
+end
+if sp < 0:
+mut k := first
+until k + 1 < parts.len():
+if parts[k] < parts[k + 1] and not color_is_legacy(t, parts[k], nxt(t, parts[k]), cx.dark, cx.color):
+sp = SP_OKLAB
+end
+k += 2
+end
+end
+if sp >= 0 and sp != SP_SRGB:
+expand_stops(out.stops, sp, method, out.image == ImageKind.Conic)
+end
+ret true
 end
 func parse_image(t: Vector<Tok>, s: int, e: int, cx: Cx, out &: BgLayer): bool:
 if not single(t, s, e):
@@ -145552,6 +145579,7 @@ pub vn: Vector<str> = Vector {}
 pub vv: Vector<str> = Vector {}
 pub cache: HashMap<str, int> = HashMap {}
 pub el_style: Vector<int> = Vector {}
+pub el_sch: Vector<bool> = Vector {}
 pub el_blocks: Vector<ElBlocks> = Vector {}
 pub el_media_blocks: Vector<int> = Vector {}
 pub el_dyn_blocks: Vector<int> = Vector {}
@@ -145577,6 +145605,7 @@ e.vn = Vector {} as Vector<str>
 e.vv = Vector {} as Vector<str>
 e.cache = HashMap {} as HashMap<str, int>
 e.el_style = Vector {} as Vector<int>
+e.el_sch = Vector {} as Vector<bool>
 e.el_blocks = Vector {} as Vector<ElBlocks>
 e.el_media_blocks = Vector {} as Vector<int>
 e.el_dyn_blocks = Vector {} as Vector<int>
@@ -145648,6 +145677,7 @@ e.vn.free()
 e.vv.free()
 free_keys(e.cache)
 e.el_style.free()
+e.el_sch.free()
 e.el_blocks.free()
 e.el_media_blocks.free()
 e.el_dyn_blocks.free()
@@ -146324,19 +146354,115 @@ e.styles.push(cs)
 e.style_vars.push(vset)
 ret e.styles.len() - 1
 end
+func style_env_ok(e: Engine, idx: int): bool:
+cs := e.styles[idx]
+ret cs.color_scheme != ColorScheme.LightDark or cs.used_dark == e.env.dark
+end
 func compute_one(e &: Engine, sd: SheetData, i: int):
 p := e.dom.parent[i]
 pstyle := p >= 0 ? e.el_style[p] : -1
 collect(e, sd, i)
+mut sch := false
+repeat e.entries.len() in k:
+if sd.blocks[e.entries[k].block].sch:
+sch = true
+break
+end
+end
+until e.el_sch.len() <= i:
+e.el_sch.push(false)
+end
+e.el_sch[i] = sch
 key := entries_key(e, pstyle)
 if e.cache.has(key):
-e.el_style[i] = e.cache.get(key)
+idx0 := e.cache.get(key)
+if style_env_ok(e, idx0):
+e.el_style[i] = idx0
 sfree(key)
+ret
+end
+key2 := key + (e.env.dark ? "|d" : "|l")
+sfree(key)
+if e.cache.has(key2):
+e.el_style[i] = e.cache.get(key2)
+sfree(key2)
+ret
+end
+idx2 := compute_style(e, sd, pstyle)
+e.cache.put(key2, idx2)
+e.el_style[i] = idx2
 ret
 end
 idx := compute_style(e, sd, pstyle)
 e.cache.put(key, idx)
 e.el_style[i] = idx
+end
+func scheme_restyle(e &: Engine, sd &: SheetData, elements: Vector<Element>, dark: bool): int:
+n := e.dom.count
+if elements.len() != n or e.env.dark == dark:
+ret 0
+end
+e.dom.els = elements
+mut old_ok := Vector {} as Vector<bool>
+defer old_ok.free()
+repeat e.media_ok.len() in k:
+old_ok.push(e.media_ok[k])
+end
+e.env.dark = dark
+free_keys(e.cond_cache)
+e.cond_cache = HashMap {} as HashMap<str, int>
+eval_medias(e, sd)
+mut mflag := Vector {} as Vector<bool>
+defer mflag.free()
+repeat n + 1:
+mflag.push(false)
+end
+mut any := false
+repeat e.media_ok.len() in k:
+if k < old_ok.len() and old_ok[k] != e.media_ok[k]:
+any = true
+end
+end
+if any:
+repeat sd.rules.len() in r:
+rule := sd.rules[r]
+if rule.media < 0 or rule.media >= old_ok.len() or old_ok[rule.media] == e.media_ok[rule.media]:
+continue
+end
+repeat n + 1 in j:
+if not mflag[j] and match_selector(sd, e.dom, rule.sel, j):
+mflag[j] = true
+end
+end
+end
+end
+repeat n in j:
+if elements[j].media_conditions.len() > 0:
+element_blocks(e, sd, j)
+mflag[j] = true
+end
+end
+mut sty := Vector {} as Vector<bool>
+defer sty.free()
+repeat n:
+sty.push(false)
+end
+old_root := e.el_style[n]
+compute_one(e, sd, n)
+root_changed := e.el_style[n] != old_root
+mut count := 1
+repeat n in j:
+p := e.dom.parent[j]
+inner := p >= 0 and p != n
+pch := inner ? sty[p] : root_changed
+if pch or e.el_sch[j] or mflag[j]:
+old := e.el_style[j]
+compute_one(e, sd, j)
+sty[j] = e.el_style[j] != old
+count++
+end
+end
+ret count
 end
 func compute_all(e &: Engine, sd &: SheetData, elements: Vector<Element>):
 e.dom = build_dom(elements, e.env)
@@ -146509,24 +146635,16 @@ ret false
 end
 func system_color(name: str, dark: bool, out &: Color): bool:
 switch name:
-"canvas":
+"canvas", "window", "background":
 out = dark ? rgb_of(0x121212, 255) : rgb_of(0xffffff, 255)
 break
 end
-"canvastext", "buttontext", "fieldtext", "marktext", "selecteditemtext", "highlighttext", "windowtext":
-if name == "marktext":
-out = rgb_of(0x000000, 255)
-else:
+"canvastext", "buttontext", "fieldtext", "windowtext", "buttonborder":
 out = dark ? rgb_of(0xffffff, 255) : rgb_of(0x000000, 255)
-end
 break
 end
 "buttonface":
 out = dark ? rgb_of(0x6b6b6b, 255) : rgb_of(0xefefef, 255)
-break
-end
-"buttonborder":
-out = dark ? rgb_of(0xffffff, 255) : rgb_of(0x000000, 255)
 break
 end
 "field":
@@ -146534,7 +146652,7 @@ out = dark ? rgb_of(0x3b3b3b, 255) : rgb_of(0xffffff, 255)
 break
 end
 "graytext":
-out = dark ? rgb_of(0x8e8e8e, 255) : rgb_of(0x6d6d6d, 255)
+out = rgb_of(0x808080, 255)
 break
 end
 "linktext":
@@ -146546,27 +146664,35 @@ out = dark ? rgb_of(0xd0adf0, 255) : rgb_of(0x551a8b, 255)
 break
 end
 "activetext":
-out = dark ? rgb_of(0xff9e9e, 255) : rgb_of(0xff0000, 255)
+out = rgb_of(0xff0000, 255)
 break
 end
-"highlight", "selecteditem":
-out = dark ? rgb_of(0x99c8ff, 255) : rgb_of(0x0075ff, 255)
+"highlight":
+out = rgb_of(0x0041c6, 204)
+break
+end
+"highlighttext", "accentcolortext":
+out = rgb_of(0xffffff, 255)
+break
+end
+"selecteditem":
+out = dark ? rgb_of(0x99c8ff, 255) : rgb_of(0x1967d2, 255)
+break
+end
+"selecteditemtext":
+out = dark ? rgb_of(0x3b3b3b, 255) : rgb_of(0xffffff, 255)
 break
 end
 "mark":
 out = rgb_of(0xffff00, 255)
 break
 end
+"marktext":
+out = rgb_of(0x000000, 255)
+break
+end
 "accentcolor":
-out = dark ? rgb_of(0x99c8ff, 255) : rgb_of(0x0075ff, 255)
-break
-end
-"accentcolortext":
-out = dark ? rgb_of(0x000000, 255) : rgb_of(0xffffff, 255)
-break
-end
-"window", "background":
-out = dark ? rgb_of(0x121212, 255) : rgb_of(0xffffff, 255)
+out = rgb_of(0x0075ff, 255)
 break
 end
 "buttonhighlight", "threedhighlight":
@@ -146589,30 +146715,6 @@ k := k0 - math.Floor(k0 / 12.0) * 12.0
 a := s * math.Min(l, 1.0 - l)
 ret l - a * math.Max(-1.0, math.Min(math.Min(k - 3.0, 9.0 - k), 1.0))
 end
-func round255(v: f64): int:
-ret clamp255(v * 255.0 + 1.0e-7)
-end
-func hsl_color(h0: f64, s0: f64, l0: f64, a: f64): Color:
-h := h0 - math.Floor(h0 / 360.0) * 360.0
-s := clamp01(s0)
-l := clamp01(l0)
-ret Color { r = round255(hsl_channel(0.0, h, s, l)), g = round255(hsl_channel(8.0, h, s, l)), b = round255(hsl_channel(4.0, h, s, l)), a = clamp255(clamp01(a) * 255.0) }
-end
-func hwb_color(h: f64, w0: f64, b0: f64, a: f64): Color:
-w := clamp01(w0)
-bl := clamp01(b0)
-if w + bl >= 1.0:
-g := w / (w + bl)
-v := round255(g)
-ret Color { r = v, g = v, b = v, a = clamp255(clamp01(a) * 255.0) }
-end
-base := hsl_color(h, 1.0, 0.5, 1.0)
-f := 1.0 - w - bl
-r := (base.r as f64 / 255.0) * f + w
-gg := (base.g as f64 / 255.0) * f + w
-b := (base.b as f64 / 255.0) * f + w
-ret Color { r = round255(r), g = round255(gg), b = round255(b), a = clamp255(clamp01(a) * 255.0) }
-end
 func angle_deg(t: Tok, out &: f64): bool:
 if t.k == TK_NUM:
 out = t.n
@@ -146630,61 +146732,501 @@ else: ret false end
 end
 ret true
 end
-func color_args(t: Vector<Tok>, s: int, e: int, vals &: Vector<Tok>, alpha &: Tok, has_alpha &: bool): bool:
-mut i := s
-mut commas := false
-mut after_slash := false
-until i < e:
-tk := t[i]
-if tk.k == TK_COMMA:
-commas = true
-i++
-continue
+func pack_color(c: Color): i64:
+ret ((c.r as i64) << 24) | ((c.g as i64) << 16) | ((c.b as i64) << 8) | (c.a as i64)
 end
-if tk.k == TK_DELIM and tk.d == 47:
-after_slash = true
-i++
-continue
+func unpack_color(v: i64): Color:
+ret Color { r = ((v >> 24) & 255) as int, g = ((v >> 16) & 255) as int, b = ((v >> 8) & 255) as int, a = (v & 255) as int }
 end
-if tk.k == TK_FUNC:
+func space_of(name: str): int:
+switch name:
+"srgb": ret SP_SRGB end
+"srgb-linear": ret SP_SRGB_LINEAR end
+"display-p3": ret SP_P3 end
+"a98-rgb": ret SP_A98 end
+"prophoto-rgb": ret SP_PROPHOTO end
+"rec2020": ret SP_REC2020 end
+"xyz-d50": ret SP_XYZ_D50 end
+"xyz", "xyz-d65": ret SP_XYZ_D65 end
+"lab": ret SP_LAB end
+"lch": ret SP_LCH end
+"oklab": ret SP_OKLAB end
+"oklch": ret SP_OKLCH end
+"hsl": ret SP_HSL end
+"hwb": ret SP_HWB end
+else: ret -1 end
+end
+ret -1
+end
+func hue_method_of(name: str): int:
+switch name:
+"shorter": ret HUE_SHORTER end
+"longer": ret HUE_LONGER end
+"increasing": ret HUE_INCREASING end
+"decreasing": ret HUE_DECREASING end
+else: ret -1 end
+end
+ret -1
+end
+func rel_channel(sp: int, fn_rgb: bool, origin: CF, name: str, out &: f64): bool:
+if name == "alpha":
+out = origin.al
+ret true
+end
+o := cf_convert(origin, sp)
+switch sp:
+SP_SRGB:
+mul := fn_rgb ? 255.0 : 1.0
+switch name:
+"r": out = o.c0 * mul ret true end
+"g": out = o.c1 * mul ret true end
+"b": out = o.c2 * mul ret true end
+else: ret false end
+end
+end
+SP_HSL:
+switch name:
+"h": out = o.c0 ret true end
+"s": out = o.c1 * 100.0 ret true end
+"l": out = o.c2 * 100.0 ret true end
+else: ret false end
+end
+end
+SP_HWB:
+switch name:
+"h": out = o.c0 ret true end
+"w": out = o.c1 * 100.0 ret true end
+"b": out = o.c2 * 100.0 ret true end
+else: ret false end
+end
+end
+SP_LAB, SP_OKLAB:
+switch name:
+"l": out = o.c0 ret true end
+"a": out = o.c1 ret true end
+"b": out = o.c2 ret true end
+else: ret false end
+end
+end
+SP_LCH, SP_OKLCH:
+switch name:
+"l": out = o.c0 ret true end
+"c": out = o.c1 ret true end
+"h": out = o.c2 ret true end
+else: ret false end
+end
+end
+SP_XYZ_D50, SP_XYZ_D65:
+switch name:
+"x": out = o.c0 ret true end
+"y": out = o.c1 ret true end
+"z": out = o.c2 ret true end
+else: ret false end
+end
+end
+else:
+switch name:
+"r": out = o.c0 ret true end
+"g": out = o.c1 ret true end
+"b": out = o.c2 ret true end
+else: ret false end
+end
+end
+end
 ret false
 end
-if after_slash:
-alpha = tk
-has_alpha = true
+func rel_calc(t: Vector<Tok>, i: int, hue: bool, pct: f64, sp: int, fn_rgb: bool, origin: CF, out &: f64): bool:
+e := t[i].close
+if e < 0:
+ret false
+end
+mut v := Vector {} as Vector<Tok>
+defer v.free()
+mut j := i
+until j <= e:
+mut tk := t[j]
+tk.stat = true
+if tk.close >= 0:
+tk.close -= i
+end
+mut x := 0.0
+if tk.k == TK_IDENT and rel_channel(sp, fn_rgb, origin, tk.s, x):
+tk = Tok { k = TK_NUM, n = x, ws = tk.ws, stat = true }
+end
+v.push(tk)
+j++
+end
+a := calc_fn(v, 0, Cx {})
+if not a.ok or a.nl.len() > 0:
+lin_free(a)
+ret false
+end
+if a.kind == K_ANG and hue:
+out = a.v
+ret true
+end
+if a.kind != K_NUM:
+ret false
+end
+out = a.v + (a.has_pct ? a.pct * pct / 100.0 : 0.0)
+ret true
+end
+func chan_of(t: Vector<Tok>, i: int, hue: bool, pct: f64, rel: bool, sp: int, fn_rgb: bool, origin: CF, out &: f64, none &: bool): bool:
+tk := t[i]
+none = false
+switch tk.k:
+TK_NUM:
+out = tk.n
+ret true
+end
+TK_PCT:
+if hue:
+ret false
+end
+out = tk.n * pct / 100.0
+ret true
+end
+TK_DIM:
+ret hue and angle_deg(tk, out)
+end
+TK_IDENT:
+if tk.s == "none":
+none = true
+out = 0.0
+ret true
+end
+ret rel and rel_channel(sp, fn_rgb, origin, tk.s, out)
+end
+TK_FUNC:
+if not is_math_fn(tk.s):
+ret false
+end
+if rel:
+ret rel_calc(t, i, hue, pct, sp, fn_rgb, origin, out)
+end
+a := calc_fn(t, i, Cx {})
+if not a.ok or a.nl.len() > 0:
+lin_free(a)
+ret false
+end
+if a.kind == K_ANG:
+if not hue:
+ret false
+end
+out = a.v
+ret true
+end
+if a.kind != K_NUM:
+ret false
+end
+out = a.v + (a.has_pct ? a.pct * pct / 100.0 : 0.0)
+ret true
+end
 else:
-vals.push(tk)
+ret false
 end
-i++
 end
-if commas and vals.len() == 4 and not has_alpha:
-alpha = vals.pop()
-has_alpha = true
+ret false
 end
-ret vals.len() == 3
+func clamp_to(v: f64, lo: f64, hi: f64): f64:
+if v < lo:
+ret lo
 end
-func alpha_of(t: Tok, has: bool): f64:
-if not has:
-ret 1.0
+if v > hi:
+ret hi
 end
-if t.k == TK_PCT:
-ret clamp01(t.n / 100.0)
+ret v
 end
-if t.k == TK_NUM:
-ret clamp01(t.n)
+func parse_space_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: CF): bool:
+f := t[i]
+e := f.close
+mut items := Vector {} as Vector<int>
+defer items.free()
+mut commas := false
+mut slash := -1
+mut j := i + 1
+until j < e:
+tk := t[j]
+if tk.k == TK_COMMA:
+commas = true
+else tk.k == TK_DELIM and tk.d == 47:
+if slash >= 0:
+ret false
 end
-ret 0.0
+slash = items.len()
+else:
+items.push(j)
 end
-func chan_val(t: Tok, scale: f64): f64:
-if t.k == TK_PCT:
-ret t.n * scale / 100.0
+j = nxt(t, j)
 end
-if t.k == TK_NUM:
-ret t.n
+mut k := 0
+mut rel := false
+mut origin := CF {}
+if items.len() > 0 and t[items[0]].k == TK_IDENT and t[items[0]].s == "from":
+if items.len() < 2 or commas:
+ret false
 end
-ret 0.0
+o := items[1]
+if not parse_cf_at(t, o, nxt(t, o), dark, cur, origin):
+ret false
 end
-func parse_color_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: Color): bool:
+rel = true
+k = 2
+end
+mut sp := SP_SRGB
+mut fn_rgb := false
+switch f.s:
+"rgb", "rgba": fn_rgb = true break end
+"hsl", "hsla": sp = SP_HSL break end
+"hwb": sp = SP_HWB break end
+"lab": sp = SP_LAB break end
+"lch": sp = SP_LCH break end
+"oklab": sp = SP_OKLAB break end
+"oklch": sp = SP_OKLCH break end
+"color":
+if k >= items.len() or t[items[k]].k != TK_IDENT:
+ret false
+end
+sp = space_of(t[items[k]].s)
+if sp < 0 or sp == SP_LAB or sp == SP_LCH or sp == SP_OKLAB or sp == SP_OKLCH or sp == SP_HSL or sp == SP_HWB:
+ret false
+end
+k++
+break
+end
+else: ret false end
+end
+if commas and (rel or f.s == "color" or f.s == "lab" or f.s == "lch" or f.s == "oklab" or f.s == "oklch"):
+ret false
+end
+mut nch := items.len() - k
+mut alpha_at := -1
+if slash >= 0:
+if slash != k + 3 or items.len() != k + 4 or commas:
+ret false
+end
+alpha_at = items[k + 3]
+nch = 3
+else commas and nch == 4:
+alpha_at = items[k + 3]
+nch = 3
+end
+if nch != 3:
+ret false
+end
+mut v := [0.0, 0.0, 0.0]
+mut none := 0
+repeat 3 in c:
+mut hue := false
+mut pct := 1.0
+switch sp:
+SP_SRGB:
+pct = fn_rgb ? 255.0 : 1.0
+break
+end
+SP_HSL, SP_HWB:
+hue = c == 0
+pct = 100.0
+break
+end
+SP_LAB:
+pct = c == 0 ? 100.0 : 125.0
+break
+end
+SP_LCH:
+hue = c == 2
+pct = c == 0 ? 100.0 : 150.0
+break
+end
+SP_OKLAB:
+pct = c == 0 ? 1.0 : 0.4
+break
+end
+SP_OKLCH:
+hue = c == 2
+pct = c == 0 ? 1.0 : 0.4
+break
+end
+else:
+break
+end
+end
+mut x := 0.0
+mut nn := false
+tk := t[items[k + c]]
+if commas and tk.k == TK_IDENT:
+ret false
+end
+if commas and (sp == SP_HSL or sp == SP_HWB) and c > 0 and tk.k != TK_PCT:
+ret false
+end
+if not chan_of(t, items[k + c], hue, pct, rel, sp, fn_rgb, origin, x, nn):
+ret false
+end
+if nn:
+none |= (1 << c)
+end
+v[c] = x
+end
+mut al := 1.0
+if alpha_at >= 0:
+mut nn := false
+if not chan_of(t, alpha_at, false, 1.0, rel, sp, fn_rgb, origin, al, nn):
+ret false
+end
+if nn:
+none |= NA
+end
+else rel:
+al = origin.al
+end
+al = clamp01(al)
+mut r := CF { sp = sp, al = al, none = none }
+switch sp:
+SP_SRGB:
+if fn_rgb:
+r.c0 = clamp01(v[0] / 255.0)
+r.c1 = clamp01(v[1] / 255.0)
+r.c2 = clamp01(v[2] / 255.0)
+r.legacy = not rel
+else:
+r.c0 = v[0]
+r.c1 = v[1]
+r.c2 = v[2]
+end
+break
+end
+SP_HSL, SP_HWB:
+r.c0 = wrap_hue(v[0])
+r.c1 = clamp01(v[1] / 100.0)
+r.c2 = clamp01(v[2] / 100.0)
+r.legacy = not rel
+break
+end
+SP_LAB:
+r.c0 = clamp_to(v[0], 0.0, 100.0)
+r.c1 = v[1]
+r.c2 = v[2]
+break
+end
+SP_LCH:
+r.c0 = clamp_to(v[0], 0.0, 100.0)
+r.c1 = math.Max(v[1], 0.0)
+r.c2 = wrap_hue(v[2])
+break
+end
+SP_OKLAB:
+r.c0 = clamp_to(v[0], 0.0, 1.0)
+r.c1 = v[1]
+r.c2 = v[2]
+break
+end
+SP_OKLCH:
+r.c0 = clamp_to(v[0], 0.0, 1.0)
+r.c1 = math.Max(v[1], 0.0)
+r.c2 = wrap_hue(v[2])
+break
+end
+else:
+r.c0 = v[0]
+r.c1 = v[1]
+r.c2 = v[2]
+break
+end
+end
+out = r
+ret true
+end
+func mix_part(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, c &: CF, p &: f64, has_p &: bool): bool:
+has_p = false
+mut got := false
+mut i := s
+until i < e:
+tk := t[i]
+n := nxt(t, i)
+if tk.k == TK_PCT and not has_p:
+if tk.n < 0.0 or tk.n > 100.0:
+ret false
+end
+p = tk.n
+has_p = true
+else not got:
+if not parse_cf_at(t, i, n, dark, cur, c):
+ret false
+end
+got = true
+else:
+ret false
+end
+i = n
+end
+ret got
+end
+func parse_color_mix(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: CF): bool:
+e := t[i].close
+mut parts := Vector {} as Vector<int>
+defer parts.free()
+split_commas(t, i + 1, e, parts)
+mut sp := SP_OKLAB
+mut method := HUE_SHORTER
+mut first := 0
+if parts.len() == 6:
+mut j := parts[0]
+pe := parts[1]
+if not is_kw(t, j, pe, "in"):
+ret false
+end
+j++
+if j >= pe or t[j].k != TK_IDENT:
+ret false
+end
+sp = space_of(t[j].s)
+if sp < 0:
+ret false
+end
+j++
+if j < pe:
+if hue_index(sp) < 0 or t[j].k != TK_IDENT:
+ret false
+end
+method = hue_method_of(t[j].s)
+if method < 0 or not is_kw(t, j + 1, pe, "hue") or j + 2 != pe:
+ret false
+end
+end
+first = 2
+else parts.len() != 4:
+ret false
+end
+mut a := CF {}
+mut b := CF {}
+mut pa := 0.0
+mut pb := 0.0
+mut ha := false
+mut hb := false
+if not mix_part(t, parts[first], parts[first + 1], dark, cur, a, pa, ha) or not mix_part(t, parts[first + 2], parts[first + 3], dark, cur, b, pb, hb):
+ret false
+end
+if not ha and not hb:
+pa = 50.0
+pb = 50.0
+else not ha:
+pa = 100.0 - pb
+else not hb:
+pb = 100.0 - pa
+end
+sum := pa + pb
+if sum <= 0.0:
+ret false
+end
+mut r := cf_mix(a, b, pb / sum, sp, method)
+if sum < 100.0:
+r.al *= sum / 100.0
+end
+out = r
+ret true
+end
+func parse_color_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: CF): bool:
 f := t[i]
 s := i + 1
 e := f.close
@@ -146698,67 +147240,36 @@ split_commas(t, s, e, parts)
 if parts.len() != 4:
 ret false
 end
-mut a := Color {}
-mut b := Color {}
-if not parse_color_at(t, parts[0], parts[1], dark, cur, a) or not parse_color_at(t, parts[2], parts[3], dark, cur, b):
+mut a := CF {}
+mut b := CF {}
+if not parse_cf_at(t, parts[0], parts[1], dark, cur, a) or not parse_cf_at(t, parts[2], parts[3], dark, cur, b):
 ret false
 end
 out = dark ? b : a
 ret true
 end
-mut vals := Vector {} as Vector<Tok>
-defer vals.free()
-mut al := Tok {}
-mut has_a := false
-if not color_args(t, s, e, vals, al, has_a):
-ret false
+if f.s == "color-mix":
+ret parse_color_mix(t, i, dark, cur, out)
 end
-a := alpha_of(al, has_a)
-if has_a and al.k != TK_NUM and al.k != TK_PCT and not (al.k == TK_IDENT and al.s == "none"):
-ret false
+ret parse_space_fn(t, i, dark, cur, out)
 end
-switch f.s:
-"rgb", "rgba":
-repeat 3 in k:
-kk := vals[k].k
-if kk != TK_NUM and kk != TK_PCT and not (kk == TK_IDENT and vals[k].s == "none"):
-ret false
-end
-end
-out = Color { r = clamp255(chan_val(vals[0], 255.0)), g = clamp255(chan_val(vals[1], 255.0)), b = clamp255(chan_val(vals[2], 255.0)), a = clamp255(a * 255.0) }
-ret true
-end
-"hsl", "hsla":
-mut h := 0.0
-if not (vals[0].k == TK_IDENT and vals[0].s == "none") and not angle_deg(vals[0], h):
-ret false
-end
-ret_s := vals[1].k == TK_PCT ? vals[1].n / 100.0 : vals[1].n / 100.0
-ret_l := vals[2].k == TK_PCT ? vals[2].n / 100.0 : vals[2].n / 100.0
-out = hsl_color(h, ret_s, ret_l, a)
-ret true
-end
-"hwb":
-mut h := 0.0
-if not (vals[0].k == TK_IDENT and vals[0].s == "none") and not angle_deg(vals[0], h):
-ret false
-end
-out = hwb_color(h, vals[1].n / 100.0, vals[2].n / 100.0, a)
-ret true
-end
-else:
-ret false
-end
-end
-ret false
-end
-func parse_color_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out &: Color): bool:
+func parse_cf_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out &: CF): bool:
 if s >= e or nxt(t, s) != e:
 ret false
 end
 tk := t[s]
+if tk.k == TK_COLOR:
+out = cf_from_color(unpack_color(dark ? tk.c2 : tk.c))
+out.legacy = (tk.d & 2) == 0
+ret true
+end
+mut c := Color {}
 if tk.k == TK_HASH:
-ret parse_hex_color(tk.s, out)
+if not parse_hex_color(tk.s, c):
+ret false
+end
+out = cf_from_color(c)
+ret true
 end
 if tk.k == TK_FUNC:
 ret parse_color_fn(t, s, dark, cur, out)
@@ -146767,19 +147278,35 @@ if tk.k != TK_IDENT:
 ret false
 end
 if tk.s == "transparent":
-out = Color { a = 0 }
+out = CF { sp = SP_SRGB, al = 0.0, legacy = true }
 ret true
 end
 if tk.s == "currentcolor":
-out = cur
+out = cf_from_color(cur)
 ret true
 end
 init_colors()
 if g_colors.has(tk.s):
-out = rgb_of(g_colors.get(tk.s), 255)
+out = cf_from_color(rgb_of(g_colors.get(tk.s), 255))
 ret true
 end
-ret system_color(tk.s, dark, out)
+if not system_color(tk.s, dark, c):
+ret false
+end
+out = cf_from_color(c)
+ret true
+end
+func parse_color_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out &: Color): bool:
+if s < e and t[s].k == TK_COLOR and s + 1 == e:
+out = unpack_color(dark ? t[s].c2 : t[s].c)
+ret true
+end
+mut c := CF {}
+if not parse_cf_at(t, s, e, dark, cur, c):
+ret false
+end
+out = cf_to_color(c)
+ret true
 end
 func is_color_start(t: Vector<Tok>, i: int): bool:
 mut c := Color {}
@@ -146807,6 +147334,724 @@ if clamp255(best * 255.0) != a:
 best = math.Floor(a as f64 / 255.0 * 1000.0 + 0.5) / 1000.0
 end
 ret fmt_num(best)
+end
+package css
+import math
+const SP_SRGB := 0
+const SP_SRGB_LINEAR := 1
+const SP_P3 := 2
+const SP_A98 := 3
+const SP_PROPHOTO := 4
+const SP_REC2020 := 5
+const SP_XYZ_D50 := 6
+const SP_XYZ_D65 := 7
+const SP_LAB := 8
+const SP_LCH := 9
+const SP_OKLAB := 10
+const SP_OKLCH := 11
+const SP_HSL := 12
+const SP_HWB := 13
+const HUE_SHORTER := 0
+const HUE_LONGER := 1
+const HUE_INCREASING := 2
+const HUE_DECREASING := 3
+const N0 := 1
+const N1 := 2
+const N2 := 4
+const NA := 8
+struct V3:
+pub x: f64 = 0.0
+pub y: f64 = 0.0
+pub z: f64 = 0.0
+end
+struct CF:
+pub sp: int = SP_SRGB
+pub c0: f64 = 0.0
+pub c1: f64 = 0.0
+pub c2: f64 = 0.0
+pub al: f64 = 1.0
+pub none: int = 0
+pub legacy: bool = false
+end
+func lin_srgb_to_xyz(v: V3): V3:
+ret V3 { x = 0.4123907992659595 * v.x + 0.35758433938387796 * v.y + 0.1804807884018343 * v.z, y = 0.21263900587151036 * v.x + 0.7151686787677559 * v.y + 0.07219231536073371 * v.z, z = 0.01933081871559185 * v.x + 0.11919477979462599 * v.y + 0.9505321522496606 * v.z }
+end
+func xyz_to_lin_srgb(v: V3): V3:
+ret V3 { x = 3.2409699419045213 * v.x - 1.5373831775700935 * v.y - 0.4986107602930033 * v.z, y = 0.0 - 0.9692436362808798 * v.x + 1.8759675015077206 * v.y + 0.04155505740717561 * v.z, z = 0.05563007969699361 * v.x - 0.20397695888897657 * v.y + 1.0569715142428786 * v.z }
+end
+func lin_p3_to_xyz(v: V3): V3:
+ret V3 { x = 0.48657094864821626 * v.x + 0.26566769316909294 * v.y + 0.1982172852343625 * v.z, y = 0.22897456406974884 * v.x + 0.6917385218365062 * v.y + 0.079286914093745 * v.z, z = 0.045113381858902575 * v.y + 1.0439443689009757 * v.z }
+end
+func xyz_to_lin_p3(v: V3): V3:
+ret V3 { x = 2.4934969119414245 * v.x - 0.9313836179191236 * v.y - 0.40271078445071684 * v.z, y = 0.0 - 0.829488969561575 * v.x + 1.7626640603183468 * v.y + 0.02362468584194359 * v.z, z = 0.035845830243784335 * v.x - 0.07617238926804171 * v.y + 0.9568845240076873 * v.z }
+end
+func lin_a98_to_xyz(v: V3): V3:
+ret V3 { x = 0.5766690429101308 * v.x + 0.18555823790654627 * v.y + 0.18822864623499472 * v.z, y = 0.29734497525053616 * v.x + 0.627363566255466 * v.y + 0.07529145849399789 * v.z, z = 0.027031361386412378 * v.x + 0.07068885253582714 * v.y + 0.9913375368376389 * v.z }
+end
+func xyz_to_lin_a98(v: V3): V3:
+ret V3 { x = 2.041587903810746 * v.x - 0.5650069742788596 * v.y - 0.3447313507783295 * v.z, y = 0.0 - 0.9692436362808798 * v.x + 1.8759675015077206 * v.y + 0.04155505740717561 * v.z, z = 0.013444280632031024 * v.x - 0.11836239223101824 * v.y + 1.0151749943912054 * v.z }
+end
+func lin_2020_to_xyz(v: V3): V3:
+ret V3 { x = 0.6369580483012913 * v.x + 0.14461690358620838 * v.y + 0.16888097516417205 * v.z, y = 0.26270021201126703 * v.x + 0.677998071518871 * v.y + 0.059301716469861945 * v.z, z = 0.028072693049087508 * v.y + 1.0609850577107909 * v.z }
+end
+func xyz_to_lin_2020(v: V3): V3:
+ret V3 { x = 1.7166511879712676 * v.x - 0.3556707837763924 * v.y - 0.2533662813736598 * v.z, y = 0.0 - 0.666684351832489 * v.x + 1.616481236634939 * v.y + 0.01576854581391113 * v.z, z = 0.017639857445310915 * v.x - 0.042770613257808655 * v.y + 0.942103121235474 * v.z }
+end
+func lin_prophoto_to_xyz50(v: V3): V3:
+ret V3 { x = 0.7977666449006423 * v.x + 0.13518129740053308 * v.y + 0.0313477341283922 * v.z, y = 0.2880748288194013 * v.x + 0.711835234241873 * v.y + 0.00008993693872564 * v.z, z = 0.8251046025104602 * v.z }
+end
+func xyz50_to_lin_prophoto(v: V3): V3:
+ret V3 { x = 1.3457868816471583 * v.x - 0.25557208737979464 * v.y - 0.05110186497554526 * v.z, y = 0.0 - 0.5446307051249019 * v.x + 1.5082477428451468 * v.y + 0.02052744743642139 * v.z, z = 1.2119675456389452 * v.z }
+end
+func d65_to_d50(v: V3): V3:
+ret V3 { x = 1.0479297925449969 * v.x + 0.022946870601609652 * v.y - 0.05019226628920524 * v.z, y = 0.02962780877005599 * v.x + 0.9904344267538799 * v.y - 0.017073799063418826 * v.z, z = 0.0 - 0.009243040646204504 * v.x + 0.015055191490298152 * v.y + 0.7518742814281371 * v.z }
+end
+func d50_to_d65(v: V3): V3:
+ret V3 { x = 0.955473421488075 * v.x - 0.02309845494876471 * v.y + 0.06325924320057072 * v.z, y = 0.0 - 0.0283697093338637 * v.x + 1.0099953980813041 * v.y + 0.021041441191917323 * v.z, z = 0.012314014864481998 * v.x - 0.020507649298898964 * v.y + 1.330365926242124 * v.z }
+end
+func xyz_to_lms(v: V3): V3:
+ret V3 { x = 0.819022437996703 * v.x + 0.3619062600528904 * v.y - 0.1288737815209879 * v.z, y = 0.0329836539323885 * v.x + 0.9292868615863434 * v.y + 0.0361446663506424 * v.z, z = 0.0481771893596242 * v.x + 0.2642395317527308 * v.y + 0.6335478284694309 * v.z }
+end
+func lms_to_oklab(v: V3): V3:
+ret V3 { x = 0.210454268309314 * v.x + 0.7936177747023054 * v.y - 0.0040720430116193 * v.z, y = 1.9779985324311684 * v.x - 2.42859224204858 * v.y + 0.450593709617411 * v.z, z = 0.0259040424655478 * v.x + 0.7827717124575296 * v.y - 0.8086757549230774 * v.z }
+end
+func lms_to_xyz(v: V3): V3:
+ret V3 { x = 1.2268798758459243 * v.x - 0.5578149944602171 * v.y + 0.2813910456659647 * v.z, y = 0.0 - 0.0405757452148008 * v.x + 1.112286803280317 * v.y - 0.0717110580655164 * v.z, z = 0.0 - 0.0763729366746601 * v.x - 0.4214933324022432 * v.y + 1.5869240198367816 * v.z }
+end
+func oklab_to_lms(v: V3): V3:
+ret V3 { x = 1.0 * v.x + 0.3963377773761749 * v.y + 0.2158037573099136 * v.z, y = 1.0 * v.x - 0.1055613458156586 * v.y - 0.0638541728258133 * v.z, z = 1.0 * v.x - 0.0894841775298119 * v.y - 1.2914855480194092 * v.z }
+end
+func srgb_lin(v: f64): f64:
+a := math.Abs(v)
+if a <= 0.04045:
+ret v / 12.92
+end
+s := v < 0.0 ? -1.0 : 1.0
+ret s * math.Pow((a + 0.055) / 1.055, 2.4)
+end
+func srgb_enc(v: f64): f64:
+a := math.Abs(v)
+if a > 0.0031308:
+s := v < 0.0 ? -1.0 : 1.0
+ret s * (1.055 * math.Pow(a, 1.0 / 2.4) - 0.055)
+end
+ret 12.92 * v
+end
+func a98_lin(v: f64): f64:
+s := v < 0.0 ? -1.0 : 1.0
+ret s * math.Pow(math.Abs(v), 563.0 / 256.0)
+end
+func a98_enc(v: f64): f64:
+s := v < 0.0 ? -1.0 : 1.0
+ret s * math.Pow(math.Abs(v), 256.0 / 563.0)
+end
+func pro_lin(v: f64): f64:
+a := math.Abs(v)
+if a <= 16.0 / 512.0:
+ret v / 16.0
+end
+s := v < 0.0 ? -1.0 : 1.0
+ret s * math.Pow(a, 1.8)
+end
+func pro_enc(v: f64): f64:
+a := math.Abs(v)
+if a >= 1.0 / 512.0:
+s := v < 0.0 ? -1.0 : 1.0
+ret s * math.Pow(a, 1.0 / 1.8)
+end
+ret 16.0 * v
+end
+func r2020_lin(v: f64): f64:
+al := 1.09929682680944
+be := 0.018053968510807
+a := math.Abs(v)
+if a < be * 4.5:
+ret v / 4.5
+end
+s := v < 0.0 ? -1.0 : 1.0
+ret s * math.Pow((a + al - 1.0) / al, 1.0 / 0.45)
+end
+func r2020_enc(v: f64): f64:
+al := 1.09929682680944
+be := 0.018053968510807
+a := math.Abs(v)
+if a > be:
+s := v < 0.0 ? -1.0 : 1.0
+ret s * (al * math.Pow(a, 0.45) - (al - 1.0))
+end
+ret 4.5 * v
+end
+func map3(v: V3, sp: int, to_lin: bool): V3:
+if sp == SP_SRGB:
+if to_lin:
+ret V3 { x = srgb_lin(v.x), y = srgb_lin(v.y), z = srgb_lin(v.z) }
+end
+ret V3 { x = srgb_enc(v.x), y = srgb_enc(v.y), z = srgb_enc(v.z) }
+end
+if sp == SP_P3:
+ret map3(v, SP_SRGB, to_lin)
+end
+if sp == SP_A98:
+if to_lin:
+ret V3 { x = a98_lin(v.x), y = a98_lin(v.y), z = a98_lin(v.z) }
+end
+ret V3 { x = a98_enc(v.x), y = a98_enc(v.y), z = a98_enc(v.z) }
+end
+if sp == SP_PROPHOTO:
+if to_lin:
+ret V3 { x = pro_lin(v.x), y = pro_lin(v.y), z = pro_lin(v.z) }
+end
+ret V3 { x = pro_enc(v.x), y = pro_enc(v.y), z = pro_enc(v.z) }
+end
+if sp == SP_REC2020:
+if to_lin:
+ret V3 { x = r2020_lin(v.x), y = r2020_lin(v.y), z = r2020_lin(v.z) }
+end
+ret V3 { x = r2020_enc(v.x), y = r2020_enc(v.y), z = r2020_enc(v.z) }
+end
+ret v
+end
+func wrap_hue(h: f64): f64:
+r := h - math.Floor(h / 360.0) * 360.0
+ret r >= 360.0 ? 0.0 : r
+end
+func hsl_to_srgb(h0: f64, s: f64, l: f64): V3:
+h := wrap_hue(h0)
+ret V3 { x = hsl_channel(0.0, h, s, l), y = hsl_channel(8.0, h, s, l), z = hsl_channel(4.0, h, s, l) }
+end
+func hwb_to_srgb(h: f64, w0: f64, b0: f64): V3:
+w := w0
+bl := b0
+if w + bl >= 1.0:
+g := w / (w + bl)
+ret V3 { x = g, y = g, z = g }
+end
+base := hsl_to_srgb(h, 1.0, 0.5)
+f := 1.0 - w - bl
+ret V3 { x = base.x * f + w, y = base.y * f + w, z = base.z * f + w }
+end
+func srgb_to_hsl(v: V3): CF:
+mx := math.Max(v.x, math.Max(v.y, v.z))
+mn := math.Min(v.x, math.Min(v.y, v.z))
+l := (mx + mn) / 2.0
+d := mx - mn
+mut h := 0.0
+mut s := 0.0
+mut none := 0
+if d != 0.0:
+if l != 0.0 and l != 1.0:
+s = (mx - l) / math.Min(l, 1.0 - l)
+end
+if mx == v.x:
+h = (v.y - v.z) / d + (v.y < v.z ? 6.0 : 0.0)
+else mx == v.y:
+h = (v.z - v.x) / d + 2.0
+else:
+h = (v.x - v.y) / d + 4.0
+end
+h *= 60.0
+end
+if s < 0.0:
+h += 180.0
+s = math.Abs(s)
+end
+if math.Abs(s) < 1.0e-9 or d == 0.0:
+none = N0
+end
+ret CF { sp = SP_HSL, c0 = wrap_hue(h), c1 = s, c2 = l, none = none }
+end
+func srgb_to_hwb(v: V3): CF:
+hs := srgb_to_hsl(v)
+w := math.Min(v.x, math.Min(v.y, v.z))
+b := 1.0 - math.Max(v.x, math.Max(v.y, v.z))
+mut none := 0
+if w + b >= 1.0 - 1.0e-9:
+none = N0
+end
+ret CF { sp = SP_HWB, c0 = hs.c0, c1 = w, c2 = b, none = none }
+end
+func lab_to_xyz50(l: f64, a: f64, b: f64): V3:
+k := 24389.0 / 27.0
+ep := 216.0 / 24389.0
+f1 := (l + 16.0) / 116.0
+f0 := a / 500.0 + f1
+f2 := f1 - b / 200.0
+x := f0 * f0 * f0 > ep ? f0 * f0 * f0 : (116.0 * f0 - 16.0) / k
+y := l > k * ep ? f1 * f1 * f1 : l / k
+z := f2 * f2 * f2 > ep ? f2 * f2 * f2 : (116.0 * f2 - 16.0) / k
+ret V3 { x = x * 0.3457 / 0.3585, y = y, z = z * (1.0 - 0.3457 - 0.3585) / 0.3585 }
+end
+func lab_f(v: f64): f64:
+k := 24389.0 / 27.0
+ep := 216.0 / 24389.0
+if v > ep:
+ret math.Cbrt(v)
+end
+ret (k * v + 16.0) / 116.0
+end
+func xyz50_to_lab(v: V3): V3:
+f0 := lab_f(v.x / (0.3457 / 0.3585))
+f1 := lab_f(v.y)
+f2 := lab_f(v.z / ((1.0 - 0.3457 - 0.3585) / 0.3585))
+ret V3 { x = 116.0 * f1 - 16.0, y = 500.0 * (f0 - f1), z = 200.0 * (f1 - f2) }
+end
+func oklab_to_xyz(l: f64, a: f64, b: f64): V3:
+m := oklab_to_lms(V3 { x = l, y = a, z = b })
+ret lms_to_xyz(V3 { x = m.x * m.x * m.x, y = m.y * m.y * m.y, z = m.z * m.z * m.z })
+end
+func xyz_to_oklab(v: V3): V3:
+m := xyz_to_lms(v)
+ret lms_to_oklab(V3 { x = math.Cbrt(m.x), y = math.Cbrt(m.y), z = math.Cbrt(m.z) })
+end
+func to_polar(v: V3, eps: f64): CF:
+c := math.Sqrt(v.y * v.y + v.z * v.z)
+mut h := math.Atan2(v.z, v.y) * 180.0 / math.PI
+mut none := 0
+if c <= eps:
+h = 0.0
+none = N2
+end
+ret CF { c0 = v.x, c1 = c, c2 = wrap_hue(h), none = none }
+end
+func from_polar(l: f64, c: f64, h: f64): V3:
+r := h * math.PI / 180.0
+ret V3 { x = l, y = c * math.Cos(r), z = c * math.Sin(r) }
+end
+func comp(c: CF, k: int): f64:
+switch k:
+0: ret (c.none & N0) != 0 ? 0.0 : c.c0 end
+1: ret (c.none & N1) != 0 ? 0.0 : c.c1 end
+else: ret (c.none & N2) != 0 ? 0.0 : c.c2 end
+end
+ret 0.0
+end
+func cf_to_xyz65(c: CF): V3:
+v := V3 { x = comp(c, 0), y = comp(c, 1), z = comp(c, 2) }
+switch c.sp:
+SP_SRGB: ret lin_srgb_to_xyz(map3(v, SP_SRGB, true)) end
+SP_SRGB_LINEAR: ret lin_srgb_to_xyz(v) end
+SP_P3: ret lin_p3_to_xyz(map3(v, SP_P3, true)) end
+SP_A98: ret lin_a98_to_xyz(map3(v, SP_A98, true)) end
+SP_PROPHOTO: ret d50_to_d65(lin_prophoto_to_xyz50(map3(v, SP_PROPHOTO, true))) end
+SP_REC2020: ret lin_2020_to_xyz(map3(v, SP_REC2020, true)) end
+SP_XYZ_D50: ret d50_to_d65(v) end
+SP_XYZ_D65: ret v end
+SP_LAB: ret d50_to_d65(lab_to_xyz50(v.x, v.y, v.z)) end
+SP_LCH:
+p := from_polar(v.x, v.y, v.z)
+ret d50_to_d65(lab_to_xyz50(p.x, p.y, p.z))
+end
+SP_OKLAB: ret oklab_to_xyz(v.x, v.y, v.z) end
+SP_OKLCH:
+p := from_polar(v.x, v.y, v.z)
+ret oklab_to_xyz(p.x, p.y, p.z)
+end
+SP_HSL: ret lin_srgb_to_xyz(map3(hsl_to_srgb(v.x, v.y, v.z), SP_SRGB, true)) end
+else: ret lin_srgb_to_xyz(map3(hwb_to_srgb(v.x, v.y, v.z), SP_SRGB, true)) end
+end
+ret v
+end
+func xyz65_to_space(v: V3, sp: int): CF:
+switch sp:
+SP_SRGB:
+r := map3(xyz_to_lin_srgb(v), SP_SRGB, false)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_SRGB_LINEAR:
+r := xyz_to_lin_srgb(v)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_P3:
+r := map3(xyz_to_lin_p3(v), SP_P3, false)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_A98:
+r := map3(xyz_to_lin_a98(v), SP_A98, false)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_PROPHOTO:
+r := map3(xyz50_to_lin_prophoto(d65_to_d50(v)), SP_PROPHOTO, false)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_REC2020:
+r := map3(xyz_to_lin_2020(v), SP_REC2020, false)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_XYZ_D50:
+r := d65_to_d50(v)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_XYZ_D65:
+ret CF { sp = sp, c0 = v.x, c1 = v.y, c2 = v.z }
+end
+SP_LAB:
+r := xyz50_to_lab(d65_to_d50(v))
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_LCH:
+mut p := to_polar(xyz50_to_lab(d65_to_d50(v)), 0.0015)
+p.sp = sp
+ret p
+end
+SP_OKLAB:
+r := xyz_to_oklab(v)
+ret CF { sp = sp, c0 = r.x, c1 = r.y, c2 = r.z }
+end
+SP_OKLCH:
+mut p := to_polar(xyz_to_oklab(v), 0.000004)
+p.sp = sp
+ret p
+end
+SP_HSL:
+ret srgb_to_hsl(map3(xyz_to_lin_srgb(v), SP_SRGB, false))
+end
+else:
+ret srgb_to_hwb(map3(xyz_to_lin_srgb(v), SP_SRGB, false))
+end
+end
+ret CF {}
+end
+func is_rgbish(sp: int): bool:
+ret sp <= SP_XYZ_D65
+end
+func kind_of(sp: int, k: int): int:
+if is_rgbish(sp):
+ret k
+end
+switch sp:
+SP_LAB, SP_OKLAB: ret k == 0 ? 3 : (k == 1 ? 6 : 7) end
+SP_LCH, SP_OKLCH: ret k == 0 ? 3 : (k == 1 ? 4 : 5) end
+SP_HSL: ret k == 0 ? 5 : (k == 1 ? 4 : 3) end
+else: ret k == 0 ? 5 : -1 end
+end
+ret -1
+end
+func cf_convert(c: CF, sp: int): CF:
+if c.sp == sp:
+ret c
+end
+mut r := xyz65_to_space(cf_to_xyz65(c), sp)
+r.al = c.al
+if (c.none & NA) != 0:
+r.none |= NA
+end
+repeat 3 in k:
+bit := 1 << k
+if (c.none & bit) == 0:
+continue
+end
+kd := kind_of(c.sp, k)
+if kd < 0:
+continue
+end
+repeat 3 in j:
+if kind_of(sp, j) == kd:
+r.none |= (1 << j)
+end
+end
+end
+ret r
+end
+func in_srgb(v: CF): bool:
+e := 0.000075
+ret v.c0 >= 0.0 - e and v.c0 <= 1.0 + e and v.c1 >= 0.0 - e and v.c1 <= 1.0 + e and v.c2 >= 0.0 - e and v.c2 <= 1.0 + e
+end
+func clip_srgb(v: CF): CF:
+ret CF { sp = SP_SRGB, c0 = clamp01(v.c0), c1 = clamp01(v.c1), c2 = clamp01(v.c2), al = v.al }
+end
+func delta_eok(a: CF, b: CF): f64:
+x := cf_convert(a, SP_OKLAB)
+y := cf_convert(b, SP_OKLAB)
+d0 := x.c0 - y.c0
+d1 := x.c1 - y.c1
+d2 := x.c2 - y.c2
+ret math.Sqrt(d0 * d0 + d1 * d1 + d2 * d2)
+end
+func gamut_map_srgb(c: CF): CF:
+s := cf_convert(c, SP_SRGB)
+if in_srgb(s):
+ret clip_srgb(s)
+end
+mut o := cf_convert(c, SP_OKLCH)
+o.none = 0
+if o.c0 >= 1.0:
+ret CF { sp = SP_SRGB, c0 = 1.0, c1 = 1.0, c2 = 1.0, al = c.al }
+end
+if o.c0 <= 0.0:
+ret CF { sp = SP_SRGB, al = c.al }
+end
+jnd := 0.02
+eps := 0.0001
+mut lo := 0.0
+mut hi := o.c1
+mut lo_in := true
+mut cur := o
+mut clipped := clip_srgb(cf_convert(cur, SP_SRGB))
+if delta_eok(clipped, cur) < jnd:
+ret clipped
+end
+until hi - lo > eps:
+ch := (lo + hi) / 2.0
+cur.c1 = ch
+cs := cf_convert(cur, SP_SRGB)
+if lo_in and in_srgb(cs):
+lo = ch
+continue
+end
+clipped = clip_srgb(cs)
+e := delta_eok(clipped, cur)
+if e < jnd:
+if jnd - e < eps:
+ret clipped
+end
+lo_in = false
+lo = ch
+else:
+hi = ch
+end
+end
+ret clipped
+end
+func unit255(v: f64, eps: f64): int:
+ret clamp255(v * 255.0 + eps)
+end
+func cf_to_color(c: CF): Color:
+mut s := c
+mut eps := 0.0
+if c.sp == SP_SRGB:
+if not in_srgb(c):
+s = gamut_map_srgb(c)
+end
+else c.sp == SP_HSL or c.sp == SP_HWB:
+s = cf_convert(c, SP_SRGB)
+eps = 1.0e-6
+else:
+s = gamut_map_srgb(c)
+end
+al := (c.none & NA) != 0 ? 0.0 : clamp01(c.al)
+ret Color { r = unit255(comp(s, 0), eps), g = unit255(comp(s, 1), eps), b = unit255(comp(s, 2), eps), a = unit255(al, 0.0) }
+end
+func cf_from_color(c: Color): CF:
+ret CF { sp = SP_SRGB, c0 = c.r as f64 / 255.0, c1 = c.g as f64 / 255.0, c2 = c.b as f64 / 255.0, al = c.a as f64 / 255.0, legacy = true }
+end
+func hue_pair(a: f64, b: f64, method: int, out &: f64):
+d := b - a
+switch method:
+HUE_SHORTER:
+if d > 180.0:
+out = b - 360.0
+ret
+end
+if d < -180.0:
+out = b + 360.0
+ret
+end
+break
+end
+HUE_LONGER:
+if d > 0.0 and d < 180.0:
+out = b - 360.0
+ret
+end
+if d > -180.0 and d <= 0.0:
+out = b + 360.0
+ret
+end
+break
+end
+HUE_INCREASING:
+if d < 0.0:
+out = b + 360.0
+ret
+end
+break
+end
+else:
+if d > 0.0:
+out = b - 360.0
+ret
+end
+break
+end
+end
+out = b
+end
+func hue_index(sp: int): int:
+switch sp:
+SP_LCH, SP_OKLCH: ret 2 end
+SP_HSL, SP_HWB: ret 0 end
+else: ret -1 end
+end
+ret -1
+end
+func cf_mix(a0: CF, b0: CF, t: f64, sp: int, method: int): CF:
+mut a := cf_convert(a0, sp)
+mut b := cf_convert(b0, sp)
+repeat 4 in k:
+bit := k == 3 ? NA : (1 << k)
+an := (a.none & bit) != 0
+bn := (b.none & bit) != 0
+if an and not bn:
+switch k:
+0: a.c0 = b.c0 break end
+1: a.c1 = b.c1 break end
+2: a.c2 = b.c2 break end
+else: a.al = b.al end
+end
+a.none &= ~bit
+else bn and not an:
+switch k:
+0: b.c0 = a.c0 break end
+1: b.c1 = a.c1 break end
+2: b.c2 = a.c2 break end
+else: b.al = a.al end
+end
+b.none &= ~bit
+end
+end
+hi := hue_index(sp)
+aa := (a.none & NA) != 0 ? 1.0 : a.al
+ba := (b.none & NA) != 0 ? 1.0 : b.al
+al := aa + (ba - aa) * t
+mut r := CF { sp = sp, al = al, none = a.none & b.none }
+repeat 3 in k:
+mut x := comp(a, k)
+mut y := comp(b, k)
+if k == hi:
+mut y2 := y
+hue_pair(x, y, method, y2)
+v := x + (y2 - x) * t
+switch k:
+0: r.c0 = wrap_hue(v) break end
+else: r.c2 = wrap_hue(v) end
+end
+continue
+end
+x *= aa
+y *= ba
+mut v := x + (y - x) * t
+if al != 0.0:
+v /= al
+end
+switch k:
+0: r.c0 = v break end
+1: r.c1 = v break end
+else: r.c2 = v end
+end
+end
+ret r
+end
+func color_is_legacy(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color): bool:
+if s + 1 == e and t[s].k == TK_COLOR:
+ret (t[s].d & 2) == 0
+end
+mut c := CF {}
+if not parse_cf_at(t, s, e, dark, cur, c):
+ret true
+end
+ret c.legacy
+end
+func take_interp(t: Vector<Tok>, gs: int, ge: int, ns &: int, ne &: int, sp &: int, method &: int): bool:
+ns = gs
+ne = ge
+mut j := gs
+until j < ge:
+if t[j].k == TK_IDENT and t[j].s == "in":
+if j + 1 >= ge or t[j + 1].k != TK_IDENT:
+ret false
+end
+s := space_of(t[j + 1].s)
+if s < 0:
+ret false
+end
+mut k := j + 2
+if k < ge and t[k].k == TK_IDENT and t[k].s != "to" and t[k].s != "at" and t[k].s != "from":
+m := hue_method_of(t[k].s)
+if m < 0 or hue_index(s) < 0 or k + 1 >= ge or t[k + 1].k != TK_IDENT or t[k + 1].s != "hue":
+ret false
+end
+method = m
+k += 2
+end
+sp = s
+if j == gs:
+ns = k
+else k == ge:
+ne = j
+else:
+ret false
+end
+ret true
+end
+j = nxt(t, j)
+end
+ret true
+end
+func len_lerp(a: Len, b: Len, f: f64): Len:
+ret Len { px = a.px + (b.px - a.px) * f, pct = a.pct + (b.pct - a.pct) * f, has_pct = a.has_pct or b.has_pct }
+end
+func expand_stops(stops &: Vector<ColorStop>, sp: int, method: int, conic: bool):
+n := stops.len()
+if n < 2:
+ret
+end
+repeat n in k:
+st := stops[k]
+if st.hint or (st.has_pos and st.pos.calc.len() > 0):
+ret
+end
+end
+mut pos := Vector {} as Vector<Len>
+defer pos.free()
+repeat n in k:
+pos.push(stops[k].pos)
+end
+mut known := Vector {} as Vector<bool>
+defer known.free()
+repeat n in k:
+known.push(stops[k].has_pos)
+end
+if not known[0]:
+pos[0] = Len {}
+known[0] = true
+end
+if not known[n - 1]:
+pos[n - 1] = conic ? Len { px = 360.0 } : Len { pct = 100.0, has_pct = true }
+known[n - 1] = true
+end
+mut a := 0
+until a < n - 1:
+mut b := a + 1
+until not known[b]:
+b++
+end
+mut m := a + 1
+until m < b:
+pos[m] = len_lerp(pos[a], pos[b], ((m - a) as f64) / ((b - a) as f64))
+m++
+end
+a = b
+end
+steps := 8
+mut out := Vector {} as Vector<ColorStop>
+repeat n in k:
+out.push(ColorStop { color = stops[k].color, pos = pos[k], has_pos = true })
+if k + 1 < n:
+ca := cf_from_color(stops[k].color)
+cb := cf_from_color(stops[k + 1].color)
+repeat steps - 1 in q:
+f := ((q + 1) as f64) / (steps as f64)
+out.push(ColorStop { color = cf_to_color(cf_mix(ca, cb, f, sp, method)), pos = len_lerp(pos[k], pos[k + 1], f), has_pos = true })
+end
+end
+end
+stops.free()
+stops = out
+end
+@en "MixColors"
+@fa "آمیختن رنگ ها"
+pub func MixColors(start: Color, finish: Color, amount: f64): Color:
+ret cf_to_color(cf_mix(cf_from_color(start), cf_from_color(finish), amount, SP_SRGB, HUE_SHORTER))
 end
 package css
 import gui.cssbox
@@ -148948,6 +150193,706 @@ t.free()
 ret result
 end
 package css
+const KW_INHERIT := 286
+const KW_INITIAL := 287
+const KW_UNSET := 623
+const KW_REVERT := 481
+const KW_REVERT_LAYER := 482
+const NAME_COUNT := 673
+mut g_name_ids := HashMap {} as HashMap<str, int>
+mut g_name_ids_ready := false
+func name_of(id: int): str:
+switch id:
+0: ret "a" end
+1: ret "a98-rgb" end
+2: ret "abs" end
+3: ret "absolute" end
+4: ret "accent-color" end
+5: ret "accentcolor" end
+6: ret "accentcolortext" end
+7: ret "activetext" end
+8: ret "alias" end
+9: ret "align-content" end
+10: ret "align-items" end
+11: ret "align-self" end
+12: ret "all" end
+13: ret "all-petite-caps" end
+14: ret "all-scroll" end
+15: ret "all-small-caps" end
+16: ret "alpha" end
+17: ret "and" end
+18: ret "any-hover" end
+19: ret "any-pointer" end
+20: ret "anywhere" end
+21: ret "appearance" end
+22: ret "arabic-indic" end
+23: ret "aspect-ratio" end
+24: ret "at" end
+25: ret "aural" end
+26: ret "auto" end
+27: ret "auto-phrase" end
+28: ret "b" end
+29: ret "background" end
+30: ret "background-attachment" end
+31: ret "background-clip" end
+32: ret "background-color" end
+33: ret "background-image" end
+34: ret "background-origin" end
+35: ret "background-position" end
+36: ret "background-position-x" end
+37: ret "background-position-y" end
+38: ret "background-repeat" end
+39: ret "background-size" end
+40: ret "baseline" end
+41: ret "blink" end
+42: ret "block" end
+43: ret "block-size" end
+44: ret "bold" end
+45: ret "bolder" end
+46: ret "border" end
+47: ret "border-block" end
+48: ret "border-block-color" end
+49: ret "border-block-end" end
+50: ret "border-block-end-color" end
+51: ret "border-block-end-style" end
+52: ret "border-block-end-width" end
+53: ret "border-block-start" end
+54: ret "border-block-start-color" end
+55: ret "border-block-start-style" end
+56: ret "border-block-start-width" end
+57: ret "border-block-style" end
+58: ret "border-block-width" end
+59: ret "border-bottom" end
+60: ret "border-bottom-color" end
+61: ret "border-bottom-left-radius" end
+62: ret "border-bottom-right-radius" end
+63: ret "border-bottom-style" end
+64: ret "border-bottom-width" end
+65: ret "border-box" end
+66: ret "border-collapse" end
+67: ret "border-color" end
+68: ret "border-end-end-radius" end
+69: ret "border-end-start-radius" end
+70: ret "border-inline" end
+71: ret "border-inline-color" end
+72: ret "border-inline-end" end
+73: ret "border-inline-end-color" end
+74: ret "border-inline-end-style" end
+75: ret "border-inline-end-width" end
+76: ret "border-inline-start" end
+77: ret "border-inline-start-color" end
+78: ret "border-inline-start-style" end
+79: ret "border-inline-start-width" end
+80: ret "border-inline-style" end
+81: ret "border-inline-width" end
+82: ret "border-left" end
+83: ret "border-left-color" end
+84: ret "border-left-style" end
+85: ret "border-left-width" end
+86: ret "border-radius" end
+87: ret "border-right" end
+88: ret "border-right-color" end
+89: ret "border-right-style" end
+90: ret "border-right-width" end
+91: ret "border-spacing" end
+92: ret "border-start-end-radius" end
+93: ret "border-start-start-radius" end
+94: ret "border-style" end
+95: ret "border-top" end
+96: ret "border-top-color" end
+97: ret "border-top-left-radius" end
+98: ret "border-top-right-radius" end
+99: ret "border-top-style" end
+100: ret "border-top-width" end
+101: ret "border-width" end
+102: ret "both" end
+103: ret "bottom" end
+104: ret "box-shadow" end
+105: ret "box-sizing" end
+106: ret "braille" end
+107: ret "break-all" end
+108: ret "break-spaces" end
+109: ret "break-word" end
+110: ret "browser" end
+111: ret "buttonborder" end
+112: ret "buttonface" end
+113: ret "buttonhighlight" end
+114: ret "buttonshadow" end
+115: ret "buttontext" end
+116: ret "c" end
+117: ret "calc" end
+118: ret "canvas" end
+119: ret "canvastext" end
+120: ret "cap" end
+121: ret "capitalize" end
+122: ret "caption" end
+123: ret "caret-color" end
+124: ret "cell" end
+125: ret "center" end
+126: ret "ch" end
+127: ret "circle" end
+128: ret "clamp" end
+129: ret "clear" end
+130: ret "clip" end
+131: ret "closest-corner" end
+132: ret "closest-side" end
+133: ret "cm" end
+134: ret "coarse" end
+135: ret "col-resize" end
+136: ret "collapse" end
+137: ret "color" end
+138: ret "color-gamut" end
+139: ret "color-index" end
+140: ret "color-mix" end
+141: ret "color-scheme" end
+142: ret "column" end
+143: ret "column-gap" end
+144: ret "column-reverse" end
+145: ret "condensed" end
+146: ret "conic-gradient" end
+147: ret "contain" end
+148: ret "content" end
+149: ret "content-box" end
+150: ret "contents" end
+151: ret "context-menu" end
+152: ret "copy" end
+153: ret "cover" end
+154: ret "cqb" end
+155: ret "cqh" end
+156: ret "cqi" end
+157: ret "cqmax" end
+158: ret "cqmin" end
+159: ret "cqw" end
+160: ret "crosshair" end
+161: ret "cubic-bezier" end
+162: ret "currentcolor" end
+163: ret "cursive" end
+164: ret "cursor" end
+165: ret "dark" end
+166: ret "dashed" end
+167: ret "decimal" end
+168: ret "decimal-leading-zero" end
+169: ret "decreasing" end
+170: ret "default" end
+171: ret "deg" end
+172: ret "device-aspect-ratio" end
+173: ret "device-height" end
+174: ret "device-width" end
+175: ret "direction" end
+176: ret "disc" end
+177: ret "disclosure-closed" end
+178: ret "disclosure-open" end
+179: ret "display" end
+180: ret "display-mode" end
+181: ret "display-p3" end
+182: ret "document" end
+183: ret "dotted" end
+184: ret "double" end
+185: ret "down" end
+186: ret "dpcm" end
+187: ret "dpi" end
+188: ret "dppx" end
+189: ret "dvb" end
+190: ret "dvh" end
+191: ret "dvi" end
+192: ret "dvmax" end
+193: ret "dvmin" end
+194: ret "dvw" end
+195: ret "dynamic-range" end
+196: ret "e" end
+197: ret "e-resize" end
+198: ret "each-line" end
+199: ret "ease" end
+200: ret "ease-in" end
+201: ret "ease-in-out" end
+202: ret "ease-out" end
+203: ret "ellipse" end
+204: ret "ellipsis" end
+205: ret "em" end
+206: ret "embossed" end
+207: ret "emoji" end
+208: ret "enabled" end
+209: ret "end" end
+210: ret "env" end
+211: ret "ew-resize" end
+212: ret "ex" end
+213: ret "expanded" end
+214: ret "extra-condensed" end
+215: ret "extra-expanded" end
+216: ret "fangsong" end
+217: ret "fantasy" end
+218: ret "farthest-corner" end
+219: ret "farthest-side" end
+220: ret "fast" end
+221: ret "field" end
+222: ret "fieldtext" end
+223: ret "fill" end
+224: ret "fine" end
+225: ret "first" end
+226: ret "fit-content" end
+227: ret "fixed" end
+228: ret "flex" end
+229: ret "flex-basis" end
+230: ret "flex-direction" end
+231: ret "flex-end" end
+232: ret "flex-flow" end
+233: ret "flex-grow" end
+234: ret "flex-shrink" end
+235: ret "flex-start" end
+236: ret "flex-wrap" end
+237: ret "float" end
+238: ret "flow" end
+239: ret "flow-root" end
+240: ret "font" end
+241: ret "font-family" end
+242: ret "font-size" end
+243: ret "font-stretch" end
+244: ret "font-style" end
+245: ret "font-variant" end
+246: ret "font-variant-caps" end
+247: ret "font-weight" end
+248: ret "forced-colors" end
+249: ret "from" end
+250: ret "from-font" end
+251: ret "full-width" end
+252: ret "g" end
+253: ret "gap" end
+254: ret "grab" end
+255: ret "grabbing" end
+256: ret "grad" end
+257: ret "gradient" end
+258: ret "grammar-error" end
+259: ret "gray" end
+260: ret "graytext" end
+261: ret "grid" end
+262: ret "grid-column-gap" end
+263: ret "grid-gap" end
+264: ret "grid-row-gap" end
+265: ret "groove" end
+266: ret "h" end
+267: ret "handheld" end
+268: ret "hanging" end
+269: ret "height" end
+270: ret "help" end
+271: ret "hidden" end
+272: ret "highlight" end
+273: ret "highlighttext" end
+274: ret "hover" end
+275: ret "hsl" end
+276: ret "hsla" end
+277: ret "hue" end
+278: ret "hwb" end
+279: ret "ic" end
+280: ret "icon" end
+281: ret "image-set" end
+282: ret "important" end
+283: ret "in" end
+284: ret "increasing" end
+285: ret "infinity" end
+286: ret "inherit" end
+287: ret "initial" end
+288: ret "inline" end
+289: ret "inline-block" end
+290: ret "inline-end" end
+291: ret "inline-flex" end
+292: ret "inline-grid" end
+293: ret "inline-size" end
+294: ret "inline-start" end
+295: ret "inline-table" end
+296: ret "inset" end
+297: ret "inset-block" end
+298: ret "inset-block-end" end
+299: ret "inset-block-start" end
+300: ret "inset-inline" end
+301: ret "inset-inline-end" end
+302: ret "inset-inline-start" end
+303: ret "inside" end
+304: ret "invert" end
+305: ret "inverted-colors" end
+306: ret "italic" end
+307: ret "jump-both" end
+308: ret "jump-end" end
+309: ret "jump-none" end
+310: ret "jump-start" end
+311: ret "justify" end
+312: ret "justify-content" end
+313: ret "justify-items" end
+314: ret "justify-self" end
+315: ret "keep-all" end
+316: ret "l" end
+317: ret "lab" end
+318: ret "landscape" end
+319: ret "large" end
+320: ret "larger" end
+321: ret "last" end
+322: ret "layer" end
+323: ret "lch" end
+324: ret "left" end
+325: ret "legacy" end
+326: ret "letter-spacing" end
+327: ret "lh" end
+328: ret "light" end
+329: ret "light-dark" end
+330: ret "lighter" end
+331: ret "line-height" end
+332: ret "line-through" end
+333: ret "linear" end
+334: ret "linear-gradient" end
+335: ret "linktext" end
+336: ret "list-item" end
+337: ret "list-style" end
+338: ret "list-style-image" end
+339: ret "list-style-position" end
+340: ret "list-style-type" end
+341: ret "local" end
+342: ret "longer" end
+343: ret "lower-alpha" end
+344: ret "lower-greek" end
+345: ret "lower-latin" end
+346: ret "lower-roman" end
+347: ret "lowercase" end
+348: ret "ltr" end
+349: ret "lvb" end
+350: ret "lvh" end
+351: ret "lvi" end
+352: ret "lvmax" end
+353: ret "lvmin" end
+354: ret "lvw" end
+355: ret "margin" end
+356: ret "margin-block" end
+357: ret "margin-block-end" end
+358: ret "margin-block-start" end
+359: ret "margin-bottom" end
+360: ret "margin-inline" end
+361: ret "margin-inline-end" end
+362: ret "margin-inline-start" end
+363: ret "margin-left" end
+364: ret "margin-right" end
+365: ret "margin-top" end
+366: ret "mark" end
+367: ret "marktext" end
+368: ret "match-parent" end
+369: ret "math" end
+370: ret "matrix" end
+371: ret "matrix3d" end
+372: ret "max" end
+373: ret "max-block-size" end
+374: ret "max-content" end
+375: ret "max-height" end
+376: ret "max-inline-size" end
+377: ret "max-width" end
+378: ret "media" end
+379: ret "medium" end
+380: ret "menu" end
+381: ret "message-box" end
+382: ret "middle" end
+383: ret "min" end
+384: ret "min-block-size" end
+385: ret "min-content" end
+386: ret "min-height" end
+387: ret "min-inline-size" end
+388: ret "min-width" end
+389: ret "mm" end
+390: ret "mod" end
+391: ret "monochrome" end
+392: ret "monospace" end
+393: ret "move" end
+394: ret "ms" end
+395: ret "n-resize" end
+396: ret "nearest" end
+397: ret "nesw-resize" end
+398: ret "no-drop" end
+399: ret "no-preference" end
+400: ret "no-repeat" end
+401: ret "none" end
+402: ret "normal" end
+403: ret "not" end
+404: ret "not-allowed" end
+405: ret "nowrap" end
+406: ret "ns-resize" end
+407: ret "nwse-resize" end
+408: ret "object-fit" end
+409: ret "object-position" end
+410: ret "oblique" end
+411: ret "oklab" end
+412: ret "oklch" end
+413: ret "only" end
+414: ret "opacity" end
+415: ret "or" end
+416: ret "order" end
+417: ret "orientation" end
+418: ret "outline" end
+419: ret "outline-color" end
+420: ret "outline-offset" end
+421: ret "outline-style" end
+422: ret "outline-width" end
+423: ret "outset" end
+424: ret "outside" end
+425: ret "overflow" end
+426: ret "overflow-wrap" end
+427: ret "overflow-x" end
+428: ret "overflow-y" end
+429: ret "overlay" end
+430: ret "overline" end
+431: ret "padding" end
+432: ret "padding-block" end
+433: ret "padding-block-end" end
+434: ret "padding-block-start" end
+435: ret "padding-bottom" end
+436: ret "padding-box" end
+437: ret "padding-inline" end
+438: ret "padding-inline-end" end
+439: ret "padding-inline-start" end
+440: ret "padding-left" end
+441: ret "padding-right" end
+442: ret "padding-top" end
+443: ret "pc" end
+444: ret "persian" end
+445: ret "perspective" end
+446: ret "petite-caps" end
+447: ret "pi" end
+448: ret "place-content" end
+449: ret "place-items" end
+450: ret "place-self" end
+451: ret "pointer" end
+452: ret "pointer-events" end
+453: ret "portrait" end
+454: ret "position" end
+455: ret "pre" end
+456: ret "pre-line" end
+457: ret "pre-wrap" end
+458: ret "prefers-color-scheme" end
+459: ret "prefers-contrast" end
+460: ret "prefers-reduced-data" end
+461: ret "prefers-reduced-motion" end
+462: ret "prefers-reduced-transparency" end
+463: ret "print" end
+464: ret "progress" end
+465: ret "projection" end
+466: ret "prophoto-rgb" end
+467: ret "pt" end
+468: ret "px" end
+469: ret "q" end
+470: ret "r" end
+471: ret "rad" end
+472: ret "radial-gradient" end
+473: ret "rec2020" end
+474: ret "reduce" end
+475: ret "relative" end
+476: ret "rem" end
+477: ret "repeat" end
+478: ret "repeat-x" end
+479: ret "repeat-y" end
+480: ret "resolution" end
+481: ret "revert" end
+482: ret "revert-layer" end
+483: ret "rgb" end
+484: ret "rgba" end
+485: ret "ridge" end
+486: ret "right" end
+487: ret "rlh" end
+488: ret "rotate" end
+489: ret "rotate3d" end
+490: ret "rotatex" end
+491: ret "rotatey" end
+492: ret "rotatez" end
+493: ret "round" end
+494: ret "row" end
+495: ret "row-gap" end
+496: ret "row-resize" end
+497: ret "row-reverse" end
+498: ret "rtl" end
+499: ret "ruby" end
+500: ret "ruby-base" end
+501: ret "ruby-text" end
+502: ret "run-in" end
+503: ret "s" end
+504: ret "s-resize" end
+505: ret "safe" end
+506: ret "sans-serif" end
+507: ret "scale" end
+508: ret "scale-down" end
+509: ret "scale3d" end
+510: ret "scalex" end
+511: ret "scaley" end
+512: ret "scalez" end
+513: ret "scope" end
+514: ret "screen" end
+515: ret "scripting" end
+516: ret "scroll" end
+517: ret "selecteditem" end
+518: ret "selecteditemtext" end
+519: ret "self-end" end
+520: ret "self-start" end
+521: ret "semi-condensed" end
+522: ret "semi-expanded" end
+523: ret "separate" end
+524: ret "serif" end
+525: ret "shorter" end
+526: ret "sign" end
+527: ret "skew" end
+528: ret "skewx" end
+529: ret "skewy" end
+530: ret "small" end
+531: ret "small-caps" end
+532: ret "small-caption" end
+533: ret "smaller" end
+534: ret "solid" end
+535: ret "space" end
+536: ret "space-around" end
+537: ret "space-between" end
+538: ret "space-evenly" end
+539: ret "speech" end
+540: ret "spelling-error" end
+541: ret "square" end
+542: ret "srgb" end
+543: ret "srgb-linear" end
+544: ret "standalone" end
+545: ret "standard" end
+546: ret "start" end
+547: ret "starting-style" end
+548: ret "static" end
+549: ret "status-bar" end
+550: ret "step-end" end
+551: ret "step-start" end
+552: ret "steps" end
+553: ret "sticky" end
+554: ret "stretch" end
+555: ret "sub" end
+556: ret "super" end
+557: ret "supports" end
+558: ret "svb" end
+559: ret "svh" end
+560: ret "svi" end
+561: ret "svmax" end
+562: ret "svmin" end
+563: ret "svw" end
+564: ret "system-ui" end
+565: ret "tab-size" end
+566: ret "table" end
+567: ret "table-caption" end
+568: ret "table-cell" end
+569: ret "table-column" end
+570: ret "table-column-group" end
+571: ret "table-footer-group" end
+572: ret "table-header-group" end
+573: ret "table-layout" end
+574: ret "table-row" end
+575: ret "table-row-group" end
+576: ret "text" end
+577: ret "text-align" end
+578: ret "text-bottom" end
+579: ret "text-decoration" end
+580: ret "text-decoration-color" end
+581: ret "text-decoration-line" end
+582: ret "text-decoration-style" end
+583: ret "text-decoration-thickness" end
+584: ret "text-indent" end
+585: ret "text-overflow" end
+586: ret "text-shadow" end
+587: ret "text-top" end
+588: ret "text-transform" end
+589: ret "thick" end
+590: ret "thin" end
+591: ret "threeddarkshadow" end
+592: ret "threedhighlight" end
+593: ret "threedshadow" end
+594: ret "titling-caps" end
+595: ret "to" end
+596: ret "to-zero" end
+597: ret "top" end
+598: ret "transform" end
+599: ret "transform-origin" end
+600: ret "transition" end
+601: ret "transition-delay" end
+602: ret "transition-duration" end
+603: ret "transition-property" end
+604: ret "transition-timing-function" end
+605: ret "translate" end
+606: ret "translate3d" end
+607: ret "translatex" end
+608: ret "translatey" end
+609: ret "translatez" end
+610: ret "transparent" end
+611: ret "tty" end
+612: ret "turn" end
+613: ret "tv" end
+614: ret "ui-monospace" end
+615: ret "ui-rounded" end
+616: ret "ui-sans-serif" end
+617: ret "ui-serif" end
+618: ret "ultra-condensed" end
+619: ret "ultra-expanded" end
+620: ret "underline" end
+621: ret "unicase" end
+622: ret "unsafe" end
+623: ret "unset" end
+624: ret "up" end
+625: ret "update" end
+626: ret "upper-alpha" end
+627: ret "upper-latin" end
+628: ret "upper-roman" end
+629: ret "uppercase" end
+630: ret "url" end
+631: ret "user-select" end
+632: ret "var" end
+633: ret "vb" end
+634: ret "vertical-align" end
+635: ret "vertical-text" end
+636: ret "vh" end
+637: ret "vi" end
+638: ret "video-dynamic-range" end
+639: ret "visibility" end
+640: ret "visible" end
+641: ret "visitedtext" end
+642: ret "vmax" end
+643: ret "vmin" end
+644: ret "vw" end
+645: ret "w" end
+646: ret "w-resize" end
+647: ret "wait" end
+648: ret "wavy" end
+649: ret "webkit-small-control" end
+650: ret "white-space" end
+651: ret "width" end
+652: ret "window" end
+653: ret "windowtext" end
+654: ret "word-break" end
+655: ret "word-spacing" end
+656: ret "word-wrap" end
+657: ret "wrap" end
+658: ret "wrap-reverse" end
+659: ret "x" end
+660: ret "x-large" end
+661: ret "x-small" end
+662: ret "xx-large" end
+663: ret "xx-small" end
+664: ret "xxx-large" end
+665: ret "xyz" end
+666: ret "xyz-d50" end
+667: ret "xyz-d65" end
+668: ret "y" end
+669: ret "z" end
+670: ret "z-index" end
+671: ret "zoom-in" end
+672: ret "zoom-out" end
+else: ret "" end
+end
+ret ""
+end
+func name_id(s: str): int:
+if not g_name_ids_ready:
+g_name_ids_ready = true
+repeat NAME_COUNT in i:
+g_name_ids.put(name_of(i), i)
+end
+end
+if g_name_ids.has(s):
+ret g_name_ids.get(s)
+end
+ret -1
+end
+package css
 import str
 mut g_progs := Vector {} as Vector<SheetData>
 mut g_prog_live := Vector {} as Vector<bool>
@@ -148973,6 +150918,15 @@ pub code: int = 0
 @en "space"
 @fa "فاصله پیش از تکه"
 pub space: bool = false
+@en "id"
+@fa "شناسه نام تکه"
+pub id: int = -1
+@en "color"
+@fa "رنگ روشن تکه"
+pub color: i64 = 0
+@en "dark"
+@fa "رنگ تیره تکه"
+pub dark: i64 = 0
 end
 @en "Program"
 @fa "برنامه‌سبک"
@@ -149000,6 +150954,29 @@ te := sd.toks.len()
 mut d := Decl { prop = p, name = str.Clone(prop), important = important, ts = ts, te = te }
 d.wide = wide_kw(sd.toks, ts, te)
 d.has_var = d.wide == W_NONE and has_var_fn(sd.toks, ts, te)
+d.sch = decl_sch(sd.toks, ts, te, p, d.has_var)
+sd.decls.push(d)
+end
+@en "AddTyped"
+@fa "افزودن اعلان نوع دار"
+pub func AddTyped(prop: int, flags: int, value: Piece[]):
+this.ready()
+if prop < 0:
+ret
+end
+mut sd := g_progs.ref(this.id)
+ts := sd.toks.len()
+push_pieces(sd.toks, value)
+te := sd.toks.len()
+mut d := Decl { prop = prop, important = (flags & 1) != 0, ts = ts, te = te, sch = (flags & 2) != 0 }
+if len(value) == 1 and value[0].kind == TK_IDENT:
+switch value[0].id:
+KW_INHERIT: d.wide = W_INHERIT break end
+KW_INITIAL: d.wide = W_INITIAL break end
+KW_UNSET, KW_REVERT, KW_REVERT_LAYER: d.wide = W_UNSET break end
+else: break end
+end
+end
 sd.decls.push(d)
 end
 @en "AddVarDecl"
@@ -149012,7 +150989,7 @@ if p < 0:
 ret
 end
 ts := sd.toks.len()
-sd.decls.push(Decl { prop = p, name = str.Clone(prop), value = str.Clone(value), important = important, ts = ts, te = ts, has_var = p != P_CUSTOM })
+sd.decls.push(Decl { prop = p, name = str.Clone(prop), value = str.Clone(value), important = important, ts = ts, te = ts, has_var = p != P_CUSTOM, sch = p != P_CUSTOM })
 end
 @en "EndList"
 @fa "بستن فهرست اعلان"
@@ -149023,7 +151000,7 @@ mut n := count
 if n > sd.decls.len():
 n = sd.decls.len()
 end
-sd.blocks.push(Block { d0 = sd.decls.len() - n, n = n })
+sd.blocks.push(Block { d0 = sd.decls.len() - n, n = n, sch = block_sch(sd, sd.decls.len() - n, n) })
 end
 @en "AddMedia"
 @fa "افزودن پرسش رسانه"
@@ -149101,10 +151078,17 @@ defer stack.free()
 repeat len(v) in i:
 pc := v[i]
 mut t := Tok { k = pc.kind, n = pc.num, ws = pc.space }
+if pc.id >= 0:
+t.s = name_of(pc.id)
+t.raw = pc.kind == TK_DIM ? "" : t.s
+t.stat = true
+end
 switch pc.kind:
 TK_IDENT:
+if pc.id < 0:
 t.s = sclone(pc.text)
 t.raw = pc.raw.len() > 0 ? str.Clone(pc.raw) : sclone(pc.text)
+end
 break
 end
 TK_NUM:
@@ -149112,8 +151096,16 @@ t.int_like = pc.code != 0
 break
 end
 TK_FUNC:
+if pc.id < 0:
 t.s = sclone(pc.text)
 t.raw = sclone(pc.text)
+end
+break
+end
+TK_COLOR:
+t.c = pc.color
+t.c2 = pc.dark
+t.d = pc.code
 break
 end
 TK_DELIM:
@@ -149124,7 +151116,9 @@ TK_CLOSE, TK_COMMA:
 break
 end
 else:
+if pc.id < 0:
 t.s = sclone(pc.text)
+end
 end
 end
 out.push(t)
@@ -149158,8 +151152,10 @@ mut i := ts
 until i < te:
 t := src.toks[i]
 mut c := t
+if not t.stat:
 c.s = sclone(t.s)
 c.raw = sclone(t.raw)
+end
 if t.close >= 0:
 c.close = t.close - ts + nts
 end
@@ -149236,7 +151232,7 @@ nd.ts = ts
 nd.te = te
 dst.decls.push(nd)
 end
-dst.blocks.push(Block { d0 = d0, n = blk.n })
+dst.blocks.push(Block { d0 = d0, n = blk.n, sch = blk.sch })
 m.blocks.push(dst.blocks.len() - 1)
 added++
 i++
@@ -149360,10 +151356,26 @@ end
 func src_name(fa: bool, en: str, fa_name: str): str:
 ret fa ? fa_name : en
 end
-func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
+func hex8(v: i64): str:
+hx := "0123456789abcdef"
+mut b := str.NewBuilder()
+str.BufAppend(b, "0x")
+mut k := 28
+until k >= 0:
+str.BufAppend(b, hx.substr(((v >> k) & 15) as int, 1))
+k -= 4
+end
+r := str.BufStr(b)
+str.BufFree(b)
+ret r
+end
+func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok, keep_raw: bool):
 switch t.k:
 TK_IDENT:
-if t.raw.len() > 0 and t.raw != t.s:
+id := name_id(t.s)
+if id >= 0 and (t.raw.len() == 0 or t.raw == t.s or not keep_raw):
+str.BufAppend(b, q + src_name(fa, "KwId", "کلیدواژه با شناسه") + "(" + id + ")")
+else t.raw.len() > 0 and t.raw != t.s:
 str.BufAppend(b, q + src_name(fa, "KwAs", "کلیدواژه با متن") + "(" + src_str(t.s) + ", " + src_str(t.raw) + ")")
 else:
 str.BufAppend(b, q + src_name(fa, "Kw", "کلیدواژه") + "(" + src_str(t.s) + ")")
@@ -149375,7 +151387,12 @@ str.BufAppend(b, q + (t.int_like ? src_name(fa, "Int", "عدد گرد") : src_na
 break
 end
 TK_DIM:
+uid := name_id(t.s)
+if uid >= 0:
+str.BufAppend(b, q + src_name(fa, "DimId", "کمیت با شناسه واحد") + "(" + src_num(t.n) + ", " + uid + ")")
+else:
 str.BufAppend(b, q + src_name(fa, "Dim", "کمیت با واحد") + "(" + src_num(t.n) + ", " + src_str(t.s) + ")")
+end
 break
 end
 TK_PCT:
@@ -149384,6 +151401,14 @@ break
 end
 TK_HASH:
 str.BufAppend(b, q + src_name(fa, "Hash", "نشان هش") + "(" + src_str(t.s) + ")")
+break
+end
+TK_COLOR:
+h1 := hex8(t.c)
+h2 := hex8(t.c2)
+str.BufAppend(b, q + src_name(fa, "ColorValue", "رنگ حل شده") + "(" + h1 + ", " + h2 + ", " + t.d + ")")
+sfree(h1)
+sfree(h2)
 break
 end
 TK_STR:
@@ -149395,7 +151420,12 @@ str.BufAppend(b, q + src_name(fa, "Url", "نشانی منبع") + "(" + src_str(
 break
 end
 TK_FUNC:
+fid := name_id(t.s)
+if fid >= 0:
+str.BufAppend(b, q + src_name(fa, "FnId", "کارکرد با شناسه") + "(" + fid + ")")
+else:
 str.BufAppend(b, q + src_name(fa, "Fn", "آغاز کارکرد") + "(" + src_str(t.s) + ")")
+end
 break
 end
 TK_CLOSE:
@@ -149411,14 +151441,14 @@ str.BufAppend(b, q + src_name(fa, "Delim", "جداکننده") + "(" + t.d + ", 
 end
 end
 end
-func src_pieces(b &: str.StringBuilder, q: str, fa: bool, sd: SheetData, ts: int, te: int):
+func src_pieces(b &: str.StringBuilder, q: str, fa: bool, sd: SheetData, ts: int, te: int, keep_raw: bool):
 str.BufAppend(b, "[")
 mut i := ts
 until i < te:
 if i > ts:
 str.BufAppend(b, ", ")
 end
-src_piece(b, q, fa, sd.toks[i])
+src_piece(b, q, fa, sd.toks[i], keep_raw)
 i++
 end
 str.BufAppend(b, "]")
@@ -149440,7 +151470,7 @@ repeat sd.media_list.len() in i:
 me := sd.media_list[i]
 str.BufAppend(b, "    p." + src_name(fa, "AddMedia", "افزودن پرسش رسانه") + "(" + me.parent + ", ")
 if me.te > me.ts:
-src_pieces(b, q, fa, sd, me.ts, me.te)
+src_pieces(b, q, fa, sd, me.ts, me.te, false)
 else:
 str.BufAppend(b, "[" + q + src_name(fa, "Kw", "کلیدواژه") + "(\"all\")]")
 end
@@ -149466,8 +151496,9 @@ name := d.prop == P_CUSTOM ? d.name : prop_name(d.prop)
 if d.prop == P_CUSTOM or d.has_var:
 str.BufAppend(b, "    p." + src_name(fa, "AddVarDecl", "افزودن اعلان متنی") + "(" + src_str(name) + ", " + src_str(d.value) + ", " + src_bool(d.important) + ")\n")
 else:
-str.BufAppend(b, "    p." + src_name(fa, "AddDecl", "افزودن اعلان") + "(" + src_str(name) + ", " + src_bool(d.important) + ", ")
-src_pieces(b, q, fa, sd, d.ts, d.te)
+flags := (d.important ? 1 : 0) + (d.sch ? 2 : 0)
+str.BufAppend(b, "    p." + src_name(fa, "AddTyped", "افزودن اعلان نوع دار") + "(" + d.prop + ", " + flags + ", ")
+src_pieces(b, q, fa, sd, d.ts, d.te, d.prop == P_FONT_FAMILY)
 str.BufAppend(b, ")\n")
 end
 end
@@ -149821,6 +151852,7 @@ mut g_props := HashMap {} as HashMap<str, int>
 mut g_props_ready := false
 mut g_inherited := Vector {} as Vector<bool>
 mut g_names := Vector {} as Vector<str>
+mut g_inherit_ready := false
 func add_names(list: str, base: int):
 mut parts := str.Fields(list)
 until g_names.len() < 500:
@@ -149860,6 +151892,12 @@ g_props.put("-webkit-transform", P_TRANSFORM)
 g_props.put("-webkit-transition", S_TRANSITION)
 g_props.put("-webkit-filter", P_FILTER)
 g_props.put("-webkit-backdrop-filter", P_BACKDROP_FILTER)
+end
+func init_inherit():
+if g_inherit_ready:
+ret
+end
+g_inherit_ready = true
 repeat NPROP:
 g_inherited.push(false)
 end
@@ -149886,7 +151924,7 @@ end
 ret ""
 end
 func is_inherited(p: int): bool:
-init_props()
+init_inherit()
 if p < 0 or p >= NPROP:
 ret p == P_CUSTOM
 end
@@ -151634,10 +153672,12 @@ pub ts: int = 0
 pub te: int = 0
 pub has_var: bool = false
 pub wide: int = W_NONE
+pub sch: bool = false
 end
 struct Block:
 pub d0: int = 0
 pub n: int = 0
+pub sch: bool = false
 end
 struct Rule:
 pub sel: int = 0
@@ -151804,6 +153844,14 @@ sfree(d.value)
 free_toks(sd.toks, ts)
 ret false
 end
+if d.wide == W_NONE and not d.has_var:
+resolve_decl(sd, prop, ts)
+d.te = sd.toks.len()
+if sd.collect and not validate(sd, prop, d.ts, d.te):
+sd.errs.push("internal: resolved value for '" + name + "' does not apply: " + value)
+end
+end
+d.sch = decl_sch(sd.toks, d.ts, d.te, prop, d.has_var)
 sd.decls.push(d)
 out_n++
 ret true
@@ -151973,7 +154021,7 @@ sfree(value)
 end
 i = j + 1
 end
-sd.blocks.push(Block { d0 = d0, n = n })
+sd.blocks.push(Block { d0 = d0, n = n, sch = block_sch(sd, d0, n) })
 idx := sd.blocks.len() - 1
 sd.block_cache.put(str.Clone(text), idx)
 ret idx
@@ -153307,6 +155355,7 @@ const TK_COMMA := 9
 const TK_DELIM := 10
 const TK_URL := 11
 const TK_BAD := 12
+const TK_COLOR := 13
 struct Tok:
 pub k: int = 0
 pub s: str = ""
@@ -153318,6 +155367,9 @@ pub p0: int = 0
 pub p1: int = 0
 pub ws: bool = false
 pub int_like: bool = false
+pub c: i64 = 0
+pub c2: i64 = 0
+pub stat: bool = false
 end
 inline func _ub(p: u8*, i: int): int:
 ret p[i] as int
@@ -153706,11 +155758,13 @@ func free_toks(v &: Vector<Tok>, from: int):
 mut i := v.len() - 1
 until i >= from:
 t := v[i]
+if not t.stat:
 if t.s.len() > 0:
 sfree(t.s)
 end
 if t.raw.len() > 0:
 sfree(t.raw)
+end
 end
 _x := v.pop()
 i--
@@ -153748,6 +155802,278 @@ end
 i = nxt(t, i)
 end
 out.push(e)
+end
+package css
+import str
+func block_sch(sd &: SheetData, d0: int, n: int): bool:
+repeat n in k:
+if d0 + k < sd.decls.len() and sd.decls[d0 + k].sch:
+ret true
+end
+end
+ret false
+end
+func decl_sch(t: Vector<Tok>, s: int, e: int, prop: int, has_var: bool): bool:
+if has_var or prop == P_COLOR_SCHEME:
+ret true
+end
+mut i := s
+until i < e:
+tk := t[i]
+if tk.k == TK_COLOR and (tk.d & 1) != 0:
+ret true
+end
+if tk.k == TK_FUNC and tk.s == "light-dark":
+ret true
+end
+if tk.k == TK_IDENT:
+mut c := Color {}
+mut c2 := Color {}
+if system_color(tk.s, false, c) and system_color(tk.s, true, c2) and pack_color(c) != pack_color(c2):
+ret true
+end
+end
+i++
+end
+ret false
+end
+func is_color_prop(p: int): bool:
+if p >= P_BORDER_TOP_COLOR and p < P_BORDER_TOP_COLOR + 4:
+ret true
+end
+if p >= L_BC and p < L_BC + 4:
+ret true
+end
+switch p:
+P_COLOR, P_BG_COLOR, P_OUTLINE_COLOR, P_TD_COLOR, P_CARET_COLOR, P_ACCENT_COLOR, P_BOX_SHADOW, P_TEXT_SHADOW:
+ret true
+end
+else:
+ret false
+end
+end
+ret false
+end
+func is_color_fn(name: str): bool:
+switch name:
+"rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "light-dark":
+ret true
+end
+else:
+ret false
+end
+end
+ret false
+end
+func try_color(t: Vector<Tok>, s: int, e: int, out &: Tok): bool:
+cur1 := Color { r = 1, g = 2, b = 3 }
+cur2 := Color { r = 200, g = 100, b = 50, a = 128 }
+mut a := CF {}
+if not parse_cf_at(t, s, e, false, cur1, a):
+ret false
+end
+mut a2 := CF {}
+if not parse_cf_at(t, s, e, false, cur2, a2):
+ret false
+end
+cl := pack_color(cf_to_color(a))
+if cl != pack_color(cf_to_color(a2)):
+ret false
+end
+mut d := CF {}
+if not parse_cf_at(t, s, e, true, cur1, d):
+ret false
+end
+cd := pack_color(cf_to_color(d))
+mut flags := 0
+if cd != cl:
+flags |= 1
+end
+if not a.legacy:
+flags |= 2
+end
+out = Tok { k = TK_COLOR, c = cl, c2 = cd, d = flags, ws = t[s].ws, stat = true }
+ret true
+end
+func try_calc(t: Vector<Tok>, i: int, out &: Tok): bool:
+a := calc_fn(t, i, Cx {})
+b := calc_fn(t, i, Cx { fs = 11.0, pfs = 13.0, rfs = 17.0, vw = 333.0, vh = 444.0, pkw = 1.5 })
+ok := a.ok and b.ok and a.nl.len() == 0 and b.nl.len() == 0 and not a.has_pct and not b.has_pct and a.kind == b.kind and a.v == b.v
+lin_free(a)
+lin_free(b)
+if not ok:
+ret false
+end
+switch a.kind:
+K_LEN:
+if a.v < 0.0:
+ret false
+end
+out = Tok { k = TK_DIM, n = a.v, s = name_of(name_id("px")), stat = true }
+break
+end
+K_NUM:
+if a.v < 0.0:
+ret false
+end
+out = Tok { k = TK_NUM, n = a.v, int_like = true, stat = true }
+break
+end
+K_ANG:
+out = Tok { k = TK_DIM, n = a.v, s = name_of(name_id("deg")), stat = true }
+break
+end
+else:
+if a.v < 0.0:
+ret false
+end
+out = Tok { k = TK_DIM, n = a.v, s = name_of(name_id("ms")), stat = true }
+break
+end
+end
+out.ws = t[i].ws
+ret true
+end
+func canon_dim(tk &: Tok):
+switch tk.s:
+"in", "cm", "mm", "q", "pt", "pc", "rad", "grad", "turn":
+break
+end
+else:
+ret
+end
+end
+mut v := 0.0
+mut kind := K_LEN
+cx := Cx {}
+if not unit_value(tk.n, tk.s, cx, v, kind):
+ret
+end
+if not tk.stat:
+sfree(tk.s)
+sfree(tk.raw)
+end
+tk.n = v
+tk.s = name_of(name_id(kind == K_ANG ? "deg" : "px"))
+tk.raw = ""
+tk.stat = true
+end
+func drop_toks(t: Vector<Tok>, s: int, e: int):
+mut i := s
+until i < e:
+tk := t[i]
+if not tk.stat:
+sfree(tk.s)
+sfree(tk.raw)
+end
+i++
+end
+end
+func resolve_decl(sd &: SheetData, prop: int, ts: int):
+mut src := Vector {} as Vector<Tok>
+defer src.free()
+repeat sd.toks.len() - ts in k:
+mut tk := sd.toks[ts + k]
+if tk.close >= 0:
+tk.close -= ts
+end
+src.push(tk)
+end
+until sd.toks.len() > ts:
+_x := sd.toks.pop()
+end
+col := is_color_prop(prop)
+grad := prop == P_BG_IMAGE
+mut stack := Vector {} as Vector<int>
+defer stack.free()
+mut gdepth := -1
+mut i := 0
+until i < src.len():
+mut tk := src[i]
+n := nxt(src, i)
+depth := stack.len()
+cand := (col and depth == 0) or (grad and gdepth >= 0 and depth == gdepth + 1)
+fcol := (col or (grad and gdepth >= 0)) and tk.k == TK_FUNC and is_color_fn(tk.s)
+if (cand and (tk.k == TK_HASH or tk.k == TK_IDENT)) or fcol:
+mut ct := Tok {}
+if try_color(src, i, n, ct):
+drop_toks(src, i, n)
+sd.toks.push(ct)
+i = n
+continue
+end
+end
+if tk.k == TK_FUNC and is_math_fn(tk.s):
+mut mt := Tok {}
+if try_calc(src, i, mt):
+drop_toks(src, i, n)
+sd.toks.push(mt)
+i = n
+continue
+end
+end
+if tk.k == TK_DIM:
+canon_dim(tk)
+end
+if tk.k == TK_FUNC:
+if grad and gdepth < 0 and str.EndsWith(tk.s, "gradient"):
+gdepth = depth
+end
+stack.push(sd.toks.len())
+tk.close = -1
+end
+if tk.k == TK_CLOSE and stack.len() > 0:
+o := stack.pop()
+mut open_tok := sd.toks[o]
+open_tok.close = sd.toks.len()
+sd.toks[o] = open_tok
+if gdepth == stack.len():
+gdepth = -1
+end
+end
+sd.toks.push(tk)
+i++
+end
+end
+@en "KeywordId"
+@fa "شناسه کلیدواژه"
+pub func KeywordId(name: str): int:
+ret name_id(name)
+end
+@en "KeywordName"
+@fa "نام کلیدواژه"
+pub func KeywordName(id: int): str:
+ret str.Clone(name_of(id))
+end
+@en "PropertyId"
+@fa "شناسه ویژگی سبک"
+pub func PropertyId(name: str): int:
+ret prop_id(name)
+end
+@en "PropertyName"
+@fa "نام ویژگی سبک"
+pub func PropertyName(id: int): str:
+ret str.Clone(prop_name(id))
+end
+@en "KwId"
+@fa "کلیدواژه با شناسه"
+pub func KwId(id: int): Piece:
+ret Piece { kind = TK_IDENT, id = id }
+end
+@en "DimId"
+@fa "کمیت با شناسه واحد"
+pub func DimId(value: f64, unit: int): Piece:
+ret Piece { kind = TK_DIM, num = value, id = unit }
+end
+@en "FnId"
+@fa "کارکرد با شناسه"
+pub func FnId(id: int): Piece:
+ret Piece { kind = TK_FUNC, id = id }
+end
+@en "ColorValue"
+@fa "رنگ حل شده"
+pub func ColorValue(light: i64, dark: i64, flags: int): Piece:
+ret Piece { kind = TK_COLOR, color = light, dark = dark, code = flags }
 end
 package css
 import str
@@ -154617,567 +156943,567 @@ p.AddSelector(231, 1, 1001, false, false)
 p.AddSelector(232, 1, 1001, false, false)
 p.AddSelector(233, 1, 1001, false, false)
 p.AddSelector(234, 1, 1001, false, false)
-p.AddDecl("display", false, [Kw("block")])
+p.AddTyped(0, 0, [KwId(42)])
 p.EndList(1)
-p.AddDecl("display", false, [Kw("none")])
+p.AddTyped(0, 0, [KwId(401)])
 p.EndList(1)
-p.AddDecl("color", false, [Kw("canvastext")])
+p.AddTyped(59, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
 p.EndList(1)
-p.AddDecl("margin-top", false, [Dim(8.0, "px")])
-p.AddDecl("margin-right", false, [Dim(8.0, "px")])
-p.AddDecl("margin-bottom", false, [Dim(8.0, "px")])
-p.AddDecl("margin-left", false, [Dim(8.0, "px")])
+p.AddTyped(14, 0, [DimId(8.0, 468)])
+p.AddTyped(15, 0, [DimId(8.0, 468)])
+p.AddTyped(16, 0, [DimId(8.0, 468)])
+p.AddTyped(17, 0, [DimId(8.0, 468)])
 p.EndList(4)
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
-p.AddDecl("margin-inline-start", false, [Int(0.0)])
-p.AddDecl("margin-inline-end", false, [Int(0.0)])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
+p.AddTyped(302, 0, [Int(0.0)])
+p.AddTyped(303, 0, [Int(0.0)])
 p.EndList(4)
-p.AddDecl("font-style", false, [Kw("italic")])
+p.AddTyped(87, 0, [KwId(306)])
 p.EndList(1)
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
-p.AddDecl("margin-inline-start", false, [Dim(40.0, "px")])
-p.AddDecl("margin-inline-end", false, [Dim(40.0, "px")])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
+p.AddTyped(302, 0, [DimId(40.0, 468)])
+p.AddTyped(303, 0, [DimId(40.0, 468)])
 p.EndList(4)
-p.AddDecl("text-align", false, [Kw("center")])
+p.AddTyped(93, 0, [KwId(125)])
 p.EndList(1)
-p.AddDecl("color", false, [Kw("gray")])
-p.AddDecl("overflow-x", false, [Kw("hidden")])
-p.AddDecl("overflow-y", false, [Kw("hidden")])
-p.AddDecl("margin-block-start", false, [Dim(0.5, "em")])
-p.AddDecl("margin-block-end", false, [Dim(0.5, "em")])
-p.AddDecl("margin-inline-start", false, [Kw("auto")])
-p.AddDecl("margin-inline-end", false, [Kw("auto")])
-p.AddDecl("border-top-style", false, [Kw("inset")])
-p.AddDecl("border-right-style", false, [Kw("inset")])
-p.AddDecl("border-bottom-style", false, [Kw("inset")])
-p.AddDecl("border-left-style", false, [Kw("inset")])
-p.AddDecl("border-top-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(1.0, "px")])
+p.AddTyped(59, 0, [ColorValue(0x808080ff, 0x808080ff, 0)])
+p.AddTyped(38, 0, [KwId(271)])
+p.AddTyped(39, 0, [KwId(271)])
+p.AddTyped(300, 0, [DimId(0.5, 205)])
+p.AddTyped(301, 0, [DimId(0.5, 205)])
+p.AddTyped(302, 0, [KwId(26)])
+p.AddTyped(303, 0, [KwId(26)])
+p.AddTyped(26, 0, [KwId(296)])
+p.AddTyped(27, 0, [KwId(296)])
+p.AddTyped(28, 0, [KwId(296)])
+p.AddTyped(29, 0, [KwId(296)])
+p.AddTyped(22, 0, [DimId(1.0, 468)])
+p.AddTyped(23, 0, [DimId(1.0, 468)])
+p.AddTyped(24, 0, [DimId(1.0, 468)])
+p.AddTyped(25, 0, [DimId(1.0, 468)])
 p.EndList(15)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("font-weight", false, [Kw("bold")])
-p.AddDecl("margin-inline-start", false, [Int(0.0)])
-p.AddDecl("margin-inline-end", false, [Int(0.0)])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(86, 0, [KwId(44)])
+p.AddTyped(302, 0, [Int(0.0)])
+p.AddTyped(303, 0, [Int(0.0)])
 p.EndList(4)
-p.AddDecl("font-size", false, [Dim(2.0, "em")])
-p.AddDecl("margin-block-start", false, [Dim(0.67, "em")])
-p.AddDecl("margin-block-end", false, [Dim(0.67, "em")])
+p.AddTyped(85, 0, [DimId(2.0, 205)])
+p.AddTyped(300, 0, [DimId(0.67, 205)])
+p.AddTyped(301, 0, [DimId(0.67, 205)])
 p.EndList(3)
-p.AddDecl("font-size", false, [Dim(1.5, "em")])
-p.AddDecl("margin-block-start", false, [Dim(0.83, "em")])
-p.AddDecl("margin-block-end", false, [Dim(0.83, "em")])
+p.AddTyped(85, 0, [DimId(1.5, 205)])
+p.AddTyped(300, 0, [DimId(0.83, 205)])
+p.AddTyped(301, 0, [DimId(0.83, 205)])
 p.EndList(3)
-p.AddDecl("font-size", false, [Dim(1.17, "em")])
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
+p.AddTyped(85, 0, [DimId(1.17, 205)])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
 p.EndList(3)
-p.AddDecl("margin-block-start", false, [Dim(1.33, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.33, "em")])
+p.AddTyped(300, 0, [DimId(1.33, 205)])
+p.AddTyped(301, 0, [DimId(1.33, 205)])
 p.EndList(2)
-p.AddDecl("font-size", false, [Dim(0.83, "em")])
-p.AddDecl("margin-block-start", false, [Dim(1.67, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.67, "em")])
+p.AddTyped(85, 0, [DimId(0.83, 205)])
+p.AddTyped(300, 0, [DimId(1.67, 205)])
+p.AddTyped(301, 0, [DimId(1.67, 205)])
 p.EndList(3)
-p.AddDecl("font-size", false, [Dim(0.67, "em")])
-p.AddDecl("margin-block-start", false, [Dim(2.33, "em")])
-p.AddDecl("margin-block-end", false, [Dim(2.33, "em")])
+p.AddTyped(85, 0, [DimId(0.67, 205)])
+p.AddTyped(300, 0, [DimId(2.33, 205)])
+p.AddTyped(301, 0, [DimId(2.33, 205)])
 p.EndList(3)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("list-style-type", false, [Kw("disc")])
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
-p.AddDecl("margin-inline-start", false, [Int(0.0)])
-p.AddDecl("margin-inline-end", false, [Int(0.0)])
-p.AddDecl("padding-inline-start", false, [Dim(40.0, "px")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(106, 0, [KwId(176)])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
+p.AddTyped(302, 0, [Int(0.0)])
+p.AddTyped(303, 0, [Int(0.0)])
+p.AddTyped(306, 0, [DimId(40.0, 468)])
 p.EndList(7)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("list-style-type", false, [Kw("decimal")])
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
-p.AddDecl("margin-inline-start", false, [Int(0.0)])
-p.AddDecl("margin-inline-end", false, [Int(0.0)])
-p.AddDecl("padding-inline-start", false, [Dim(40.0, "px")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(106, 0, [KwId(167)])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
+p.AddTyped(302, 0, [Int(0.0)])
+p.AddTyped(303, 0, [Int(0.0)])
+p.AddTyped(306, 0, [DimId(40.0, 468)])
 p.EndList(7)
-p.AddDecl("display", false, [Kw("list-item")])
-p.AddDecl("text-align", false, [Kw("match-parent")])
+p.AddTyped(0, 0, [KwId(336)])
+p.AddTyped(93, 0, [KwId(368)])
 p.EndList(2)
-p.AddDecl("list-style-type", false, [Kw("circle")])
+p.AddTyped(106, 0, [KwId(127)])
 p.EndList(1)
-p.AddDecl("list-style-type", false, [Kw("square")])
+p.AddTyped(106, 0, [KwId(541)])
 p.EndList(1)
-p.AddDecl("margin-block-start", false, [Int(0.0)])
-p.AddDecl("margin-block-end", false, [Int(0.0)])
+p.AddTyped(300, 0, [Int(0.0)])
+p.AddTyped(301, 0, [Int(0.0)])
 p.EndList(2)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("margin-inline-start", false, [Dim(40.0, "px")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(302, 0, [DimId(40.0, 468)])
 p.EndList(2)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
-p.AddDecl("margin-inline-start", false, [Int(0.0)])
-p.AddDecl("margin-inline-end", false, [Int(0.0)])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
+p.AddTyped(302, 0, [Int(0.0)])
+p.AddTyped(303, 0, [Int(0.0)])
 p.EndList(5)
-p.AddDecl("display", false, [Kw("table")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
-p.AddDecl("border-spacing", false, [Dim(2.0, "px")])
-p.AddDecl("border-collapse", false, [Kw("separate")])
-p.AddDecl("text-indent", false, [Int(0.0)])
+p.AddTyped(0, 0, [KwId(566)])
+p.AddTyped(6, 0, [KwId(65)])
+p.AddTyped(110, 0, [DimId(2.0, 468)])
+p.AddTyped(109, 0, [KwId(523)])
+p.AddTyped(94, 0, [Int(0.0)])
 p.EndList(5)
-p.AddDecl("display", false, [Kw("table-caption")])
-p.AddDecl("text-align", false, [Kw("center")])
+p.AddTyped(0, 0, [KwId(567)])
+p.AddTyped(93, 0, [KwId(125)])
 p.EndList(2)
-p.AddDecl("display", false, [Kw("table-header-group")])
-p.AddDecl("vertical-align", false, [Kw("middle")])
-p.AddDecl("border-top-color", false, [Kw("inherit")])
-p.AddDecl("border-right-color", false, [Kw("inherit")])
-p.AddDecl("border-bottom-color", false, [Kw("inherit")])
-p.AddDecl("border-left-color", false, [Kw("inherit")])
+p.AddTyped(0, 0, [KwId(572)])
+p.AddTyped(58, 0, [KwId(382)])
+p.AddTyped(30, 0, [KwId(286)])
+p.AddTyped(31, 0, [KwId(286)])
+p.AddTyped(32, 0, [KwId(286)])
+p.AddTyped(33, 0, [KwId(286)])
 p.EndList(6)
-p.AddDecl("display", false, [Kw("table-row-group")])
-p.AddDecl("vertical-align", false, [Kw("middle")])
-p.AddDecl("border-top-color", false, [Kw("inherit")])
-p.AddDecl("border-right-color", false, [Kw("inherit")])
-p.AddDecl("border-bottom-color", false, [Kw("inherit")])
-p.AddDecl("border-left-color", false, [Kw("inherit")])
+p.AddTyped(0, 0, [KwId(575)])
+p.AddTyped(58, 0, [KwId(382)])
+p.AddTyped(30, 0, [KwId(286)])
+p.AddTyped(31, 0, [KwId(286)])
+p.AddTyped(32, 0, [KwId(286)])
+p.AddTyped(33, 0, [KwId(286)])
 p.EndList(6)
-p.AddDecl("display", false, [Kw("table-footer-group")])
-p.AddDecl("vertical-align", false, [Kw("middle")])
-p.AddDecl("border-top-color", false, [Kw("inherit")])
-p.AddDecl("border-right-color", false, [Kw("inherit")])
-p.AddDecl("border-bottom-color", false, [Kw("inherit")])
-p.AddDecl("border-left-color", false, [Kw("inherit")])
+p.AddTyped(0, 0, [KwId(571)])
+p.AddTyped(58, 0, [KwId(382)])
+p.AddTyped(30, 0, [KwId(286)])
+p.AddTyped(31, 0, [KwId(286)])
+p.AddTyped(32, 0, [KwId(286)])
+p.AddTyped(33, 0, [KwId(286)])
 p.EndList(6)
-p.AddDecl("display", false, [Kw("table-column")])
+p.AddTyped(0, 0, [KwId(569)])
 p.EndList(1)
-p.AddDecl("display", false, [Kw("table-column-group")])
+p.AddTyped(0, 0, [KwId(570)])
 p.EndList(1)
-p.AddDecl("display", false, [Kw("table-row")])
-p.AddDecl("vertical-align", false, [Kw("inherit")])
-p.AddDecl("border-top-color", false, [Kw("inherit")])
-p.AddDecl("border-right-color", false, [Kw("inherit")])
-p.AddDecl("border-bottom-color", false, [Kw("inherit")])
-p.AddDecl("border-left-color", false, [Kw("inherit")])
+p.AddTyped(0, 0, [KwId(574)])
+p.AddTyped(58, 0, [KwId(286)])
+p.AddTyped(30, 0, [KwId(286)])
+p.AddTyped(31, 0, [KwId(286)])
+p.AddTyped(32, 0, [KwId(286)])
+p.AddTyped(33, 0, [KwId(286)])
 p.EndList(6)
-p.AddDecl("display", false, [Kw("table-cell")])
-p.AddDecl("vertical-align", false, [Kw("inherit")])
-p.AddDecl("padding-top", false, [Dim(1.0, "px")])
-p.AddDecl("padding-right", false, [Dim(1.0, "px")])
-p.AddDecl("padding-bottom", false, [Dim(1.0, "px")])
-p.AddDecl("padding-left", false, [Dim(1.0, "px")])
+p.AddTyped(0, 0, [KwId(568)])
+p.AddTyped(58, 0, [KwId(286)])
+p.AddTyped(18, 0, [DimId(1.0, 468)])
+p.AddTyped(19, 0, [DimId(1.0, 468)])
+p.AddTyped(20, 0, [DimId(1.0, 468)])
+p.AddTyped(21, 0, [DimId(1.0, 468)])
 p.EndList(6)
-p.AddDecl("font-weight", false, [Kw("bold")])
-p.AddDecl("text-align", false, [Kw("center")])
+p.AddTyped(86, 0, [KwId(44)])
+p.AddTyped(93, 0, [KwId(125)])
 p.EndList(2)
-p.AddDecl("font-weight", false, [Kw("bolder")])
+p.AddTyped(86, 0, [KwId(45)])
 p.EndList(1)
-p.AddDecl("font-family", false, [Kw("monospace")])
+p.AddTyped(84, 0, [KwId(392)])
 p.EndList(1)
-p.AddDecl("font-family", false, [Kw("monospace")])
-p.AddDecl("white-space", false, [Kw("pre")])
-p.AddDecl("margin-block-start", false, [Dim(1.0, "em")])
-p.AddDecl("margin-block-end", false, [Dim(1.0, "em")])
-p.AddDecl("margin-inline-start", false, [Int(0.0)])
-p.AddDecl("margin-inline-end", false, [Int(0.0)])
+p.AddTyped(84, 0, [KwId(392)])
+p.AddTyped(96, 0, [KwId(455)])
+p.AddTyped(300, 0, [DimId(1.0, 205)])
+p.AddTyped(301, 0, [DimId(1.0, 205)])
+p.AddTyped(302, 0, [Int(0.0)])
+p.AddTyped(303, 0, [Int(0.0)])
 p.EndList(6)
-p.AddDecl("font-size", false, [Kw("larger")])
+p.AddTyped(85, 0, [KwId(320)])
 p.EndList(1)
-p.AddDecl("font-size", false, [Kw("smaller")])
+p.AddTyped(85, 0, [KwId(533)])
 p.EndList(1)
-p.AddDecl("vertical-align", false, [Kw("sub")])
-p.AddDecl("font-size", false, [Kw("smaller")])
+p.AddTyped(58, 0, [KwId(555)])
+p.AddTyped(85, 0, [KwId(533)])
 p.EndList(2)
-p.AddDecl("vertical-align", false, [Kw("super")])
-p.AddDecl("font-size", false, [Kw("smaller")])
+p.AddTyped(58, 0, [KwId(556)])
+p.AddTyped(85, 0, [KwId(533)])
 p.EndList(2)
-p.AddDecl("text-decoration-line", false, [Kw("line-through")])
-p.AddDecl("text-decoration-style", false, [Kw("solid")])
-p.AddDecl("text-decoration-color", false, [Kw("currentcolor")])
-p.AddDecl("text-decoration-thickness", false, [Kw("auto")])
+p.AddTyped(97, 0, [KwId(332)])
+p.AddTyped(98, 0, [KwId(534)])
+p.AddTyped(99, 0, [KwId(162)])
+p.AddTyped(100, 0, [KwId(26)])
 p.EndList(4)
-p.AddDecl("text-decoration-line", false, [Kw("underline")])
-p.AddDecl("text-decoration-style", false, [Kw("solid")])
-p.AddDecl("text-decoration-color", false, [Kw("currentcolor")])
-p.AddDecl("text-decoration-thickness", false, [Kw("auto")])
+p.AddTyped(97, 0, [KwId(620)])
+p.AddTyped(98, 0, [KwId(534)])
+p.AddTyped(99, 0, [KwId(162)])
+p.AddTyped(100, 0, [KwId(26)])
 p.EndList(4)
-p.AddDecl("text-decoration-line", false, [Kw("underline")])
-p.AddDecl("text-decoration-style", false, [Kw("dotted")])
-p.AddDecl("text-decoration-color", false, [Kw("currentcolor")])
-p.AddDecl("text-decoration-thickness", false, [Kw("auto")])
+p.AddTyped(97, 0, [KwId(620)])
+p.AddTyped(98, 0, [KwId(183)])
+p.AddTyped(99, 0, [KwId(162)])
+p.AddTyped(100, 0, [KwId(26)])
 p.EndList(4)
-p.AddDecl("background-color", false, [Kw("mark")])
-p.AddDecl("color", false, [Kw("marktext")])
+p.AddTyped(60, 0, [ColorValue(0xffff00ff, 0xffff00ff, 0)])
+p.AddTyped(59, 0, [ColorValue(0x000000ff, 0x000000ff, 0)])
 p.EndList(2)
-p.AddDecl("color", false, [Kw("linktext")])
-p.AddDecl("text-decoration-line", false, [Kw("underline")])
-p.AddDecl("text-decoration-style", false, [Kw("solid")])
-p.AddDecl("text-decoration-color", false, [Kw("currentcolor")])
-p.AddDecl("text-decoration-thickness", false, [Kw("auto")])
-p.AddDecl("cursor", false, [Kw("pointer")])
+p.AddTyped(59, 2, [ColorValue(0x0000eeff, 0x9e9effff, 1)])
+p.AddTyped(97, 0, [KwId(620)])
+p.AddTyped(98, 0, [KwId(534)])
+p.AddTyped(99, 0, [KwId(162)])
+p.AddTyped(100, 0, [KwId(26)])
+p.AddTyped(81, 0, [KwId(451)])
 p.EndList(6)
-p.AddDecl("color", false, [Kw("activetext")])
+p.AddTyped(59, 0, [ColorValue(0xff0000ff, 0xff0000ff, 0)])
 p.EndList(1)
-p.AddDecl("display", false, [Kw("ruby")])
+p.AddTyped(0, 0, [KwId(499)])
 p.EndList(1)
-p.AddDecl("font-size", false, [Pct(50.0)])
+p.AddTyped(85, 0, [Pct(50.0)])
 p.EndList(1)
-p.AddDecl("white-space", false, [Kw("nowrap")])
+p.AddTyped(96, 0, [KwId(405)])
 p.EndList(1)
-p.AddDecl("display", false, [Kw("inline")])
+p.AddTyped(0, 0, [KwId(288)])
 p.EndList(1)
-p.AddDecl("display", false, [Kw("list-item")])
-p.AddDecl("list-style-type", false, [Kw("disclosure-closed")])
-p.AddDecl("list-style-position", false, [Kw("inside")])
-p.AddDecl("list-style-image", false, [Kw("none")])
+p.AddTyped(0, 0, [KwId(336)])
+p.AddTyped(106, 0, [KwId(177)])
+p.AddTyped(107, 0, [KwId(303)])
+p.AddTyped(108, 0, [KwId(401)])
 p.EndList(4)
-p.AddDecl("list-style-type", false, [Kw("disclosure-open")])
+p.AddTyped(106, 0, [KwId(178)])
 p.EndList(1)
-p.AddDecl("position", false, [Kw("absolute")])
-p.AddDecl("inset-inline-start", false, [Int(0.0)])
-p.AddDecl("inset-inline-end", false, [Int(0.0)])
-p.AddDecl("width", false, [Kw("fit-content")])
-p.AddDecl("height", false, [Kw("fit-content")])
-p.AddDecl("margin-top", false, [Kw("auto")])
-p.AddDecl("margin-right", false, [Kw("auto")])
-p.AddDecl("margin-bottom", false, [Kw("auto")])
-p.AddDecl("margin-left", false, [Kw("auto")])
-p.AddDecl("border-top-width", false, [Kw("medium")])
-p.AddDecl("border-right-width", false, [Kw("medium")])
-p.AddDecl("border-bottom-width", false, [Kw("medium")])
-p.AddDecl("border-left-width", false, [Kw("medium")])
-p.AddDecl("border-top-style", false, [Kw("solid")])
-p.AddDecl("border-right-style", false, [Kw("solid")])
-p.AddDecl("border-bottom-style", false, [Kw("solid")])
-p.AddDecl("border-left-style", false, [Kw("solid")])
-p.AddDecl("border-top-color", false, [Kw("currentcolor")])
-p.AddDecl("border-right-color", false, [Kw("currentcolor")])
-p.AddDecl("border-bottom-color", false, [Kw("currentcolor")])
-p.AddDecl("border-left-color", false, [Kw("currentcolor")])
-p.AddDecl("padding-top", false, [Dim(1.0, "em")])
-p.AddDecl("padding-right", false, [Dim(1.0, "em")])
-p.AddDecl("padding-bottom", false, [Dim(1.0, "em")])
-p.AddDecl("padding-left", false, [Dim(1.0, "em")])
-p.AddDecl("background-color", false, [Kw("canvas")])
-p.AddDecl("color", false, [Kw("canvastext")])
+p.AddTyped(1, 0, [KwId(3)])
+p.AddTyped(310, 0, [Int(0.0)])
+p.AddTyped(311, 0, [Int(0.0)])
+p.AddTyped(7, 0, [KwId(226)])
+p.AddTyped(8, 0, [KwId(226)])
+p.AddTyped(14, 0, [KwId(26)])
+p.AddTyped(15, 0, [KwId(26)])
+p.AddTyped(16, 0, [KwId(26)])
+p.AddTyped(17, 0, [KwId(26)])
+p.AddTyped(22, 0, [KwId(379)])
+p.AddTyped(23, 0, [KwId(379)])
+p.AddTyped(24, 0, [KwId(379)])
+p.AddTyped(25, 0, [KwId(379)])
+p.AddTyped(26, 0, [KwId(534)])
+p.AddTyped(27, 0, [KwId(534)])
+p.AddTyped(28, 0, [KwId(534)])
+p.AddTyped(29, 0, [KwId(534)])
+p.AddTyped(30, 0, [KwId(162)])
+p.AddTyped(31, 0, [KwId(162)])
+p.AddTyped(32, 0, [KwId(162)])
+p.AddTyped(33, 0, [KwId(162)])
+p.AddTyped(18, 0, [DimId(1.0, 205)])
+p.AddTyped(19, 0, [DimId(1.0, 205)])
+p.AddTyped(20, 0, [DimId(1.0, 205)])
+p.AddTyped(21, 0, [DimId(1.0, 205)])
+p.AddTyped(60, 2, [ColorValue(0xffffffff, 0x121212ff, 1)])
+p.AddTyped(59, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
 p.EndList(27)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("margin-inline-start", false, [Dim(2.0, "px")])
-p.AddDecl("margin-inline-end", false, [Dim(2.0, "px")])
-p.AddDecl("border-top-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-top-style", false, [Kw("groove")])
-p.AddDecl("border-right-style", false, [Kw("groove")])
-p.AddDecl("border-bottom-style", false, [Kw("groove")])
-p.AddDecl("border-left-style", false, [Kw("groove")])
-p.AddDecl("border-top-color", false, [Kw("buttonface")])
-p.AddDecl("border-right-color", false, [Kw("buttonface")])
-p.AddDecl("border-bottom-color", false, [Kw("buttonface")])
-p.AddDecl("border-left-color", false, [Kw("buttonface")])
-p.AddDecl("padding-block-start", false, [Dim(0.35, "em")])
-p.AddDecl("padding-block-end", false, [Dim(0.625, "em")])
-p.AddDecl("padding-inline-start", false, [Dim(0.75, "em")])
-p.AddDecl("padding-inline-end", false, [Dim(0.75, "em")])
-p.AddDecl("min-inline-size", false, [Kw("min-content")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(302, 0, [DimId(2.0, 468)])
+p.AddTyped(303, 0, [DimId(2.0, 468)])
+p.AddTyped(22, 0, [DimId(2.0, 468)])
+p.AddTyped(23, 0, [DimId(2.0, 468)])
+p.AddTyped(24, 0, [DimId(2.0, 468)])
+p.AddTyped(25, 0, [DimId(2.0, 468)])
+p.AddTyped(26, 0, [KwId(265)])
+p.AddTyped(27, 0, [KwId(265)])
+p.AddTyped(28, 0, [KwId(265)])
+p.AddTyped(29, 0, [KwId(265)])
+p.AddTyped(30, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(31, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(32, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(33, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(304, 0, [DimId(0.35, 205)])
+p.AddTyped(305, 0, [DimId(0.625, 205)])
+p.AddTyped(306, 0, [DimId(0.75, 205)])
+p.AddTyped(307, 0, [DimId(0.75, 205)])
+p.AddTyped(326, 0, [KwId(385)])
 p.EndList(20)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("padding-inline-start", false, [Dim(2.0, "px")])
-p.AddDecl("padding-inline-end", false, [Dim(2.0, "px")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(306, 0, [DimId(2.0, 468)])
+p.AddTyped(307, 0, [DimId(2.0, 468)])
 p.EndList(3)
-p.AddDecl("margin-top", false, [Int(0.0)])
-p.AddDecl("margin-right", false, [Int(0.0)])
-p.AddDecl("margin-bottom", false, [Int(0.0)])
-p.AddDecl("margin-left", false, [Int(0.0)])
-p.AddDecl("font-style", false, [Kw("normal")])
-p.AddDecl("font-variant-caps", false, [Kw("normal")])
-p.AddDecl("font-weight", false, [Kw("normal")])
-p.AddDecl("font-stretch", false, [Kw("normal")])
-p.AddDecl("font-size", false, [Dim(13.333333, "px")])
-p.AddDecl("line-height", false, [Kw("normal")])
-p.AddDecl("font-family", false, [KwAs("arial", "Arial")])
-p.AddDecl("color", false, [Kw("fieldtext")])
-p.AddDecl("letter-spacing", false, [Kw("normal")])
-p.AddDecl("word-spacing", false, [Kw("normal")])
-p.AddDecl("line-height", false, [Kw("normal")])
-p.AddDecl("text-transform", false, [Kw("none")])
-p.AddDecl("text-indent", false, [Int(0.0)])
-p.AddDecl("text-shadow", false, [Kw("none")])
-p.AddDecl("display", false, [Kw("inline-block")])
-p.AddDecl("text-align", false, [Kw("start")])
+p.AddTyped(14, 0, [Int(0.0)])
+p.AddTyped(15, 0, [Int(0.0)])
+p.AddTyped(16, 0, [Int(0.0)])
+p.AddTyped(17, 0, [Int(0.0)])
+p.AddTyped(87, 0, [KwId(402)])
+p.AddTyped(88, 0, [KwId(402)])
+p.AddTyped(86, 0, [KwId(402)])
+p.AddTyped(89, 0, [KwId(402)])
+p.AddTyped(85, 0, [DimId(13.333333, 468)])
+p.AddTyped(90, 0, [KwId(402)])
+p.AddTyped(84, 0, [KwAs("arial", "Arial")])
+p.AddTyped(59, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
+p.AddTyped(91, 0, [KwId(402)])
+p.AddTyped(92, 0, [KwId(402)])
+p.AddTyped(90, 0, [KwId(402)])
+p.AddTyped(95, 0, [KwId(401)])
+p.AddTyped(94, 0, [Int(0.0)])
+p.AddTyped(101, 0, [KwId(401)])
+p.AddTyped(0, 0, [KwId(289)])
+p.AddTyped(93, 0, [KwId(546)])
 p.EndList(20)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("padding-block-start", false, [Dim(1.0, "px")])
-p.AddDecl("padding-block-end", false, [Dim(1.0, "px")])
-p.AddDecl("padding-inline-start", false, [Dim(2.0, "px")])
-p.AddDecl("padding-inline-end", false, [Dim(2.0, "px")])
-p.AddDecl("background-color", false, [Kw("field")])
-p.AddDecl("border-top-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-top-style", false, [Kw("inset")])
-p.AddDecl("border-right-style", false, [Kw("inset")])
-p.AddDecl("border-bottom-style", false, [Kw("inset")])
-p.AddDecl("border-left-style", false, [Kw("inset")])
-p.AddDecl("border-top-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-right-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-bottom-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-left-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("cursor", false, [Kw("text")])
-p.AddDecl("overflow-x", false, [Kw("clip")])
-p.AddDecl("overflow-y", false, [Kw("clip")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(304, 0, [DimId(1.0, 468)])
+p.AddTyped(305, 0, [DimId(1.0, 468)])
+p.AddTyped(306, 0, [DimId(2.0, 468)])
+p.AddTyped(307, 0, [DimId(2.0, 468)])
+p.AddTyped(60, 2, [ColorValue(0xffffffff, 0x3b3b3bff, 1)])
+p.AddTyped(22, 0, [DimId(2.0, 468)])
+p.AddTyped(23, 0, [DimId(2.0, 468)])
+p.AddTyped(24, 0, [DimId(2.0, 468)])
+p.AddTyped(25, 0, [DimId(2.0, 468)])
+p.AddTyped(26, 0, [KwId(296)])
+p.AddTyped(27, 0, [KwId(296)])
+p.AddTyped(28, 0, [KwId(296)])
+p.AddTyped(29, 0, [KwId(296)])
+p.AddTyped(30, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(31, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(32, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(33, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(81, 0, [KwId(576)])
+p.AddTyped(38, 0, [KwId(130)])
+p.AddTyped(39, 0, [KwId(130)])
 p.EndList(21)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
-p.AddDecl("margin-top", false, [Dim(3.0, "px")])
-p.AddDecl("margin-right", false, [Dim(3.0, "px")])
-p.AddDecl("margin-bottom", false, [Dim(3.0, "px")])
-p.AddDecl("margin-left", false, [Dim(4.0, "px")])
-p.AddDecl("padding-top", false, [Int(0.0)])
-p.AddDecl("padding-right", false, [Int(0.0)])
-p.AddDecl("padding-bottom", false, [Int(0.0)])
-p.AddDecl("padding-left", false, [Int(0.0)])
-p.AddDecl("border-top-width", false, [Int(0.0)])
-p.AddDecl("border-right-width", false, [Int(0.0)])
-p.AddDecl("border-bottom-width", false, [Int(0.0)])
-p.AddDecl("border-left-width", false, [Int(0.0)])
-p.AddDecl("border-top-style", false, [Kw("none")])
-p.AddDecl("border-right-style", false, [Kw("none")])
-p.AddDecl("border-bottom-style", false, [Kw("none")])
-p.AddDecl("border-left-style", false, [Kw("none")])
-p.AddDecl("border-top-color", false, [Kw("currentcolor")])
-p.AddDecl("border-right-color", false, [Kw("currentcolor")])
-p.AddDecl("border-bottom-color", false, [Kw("currentcolor")])
-p.AddDecl("border-left-color", false, [Kw("currentcolor")])
-p.AddDecl("background-color", false, [Kw("transparent")])
-p.AddDecl("cursor", false, [Kw("default")])
-p.AddDecl("overflow-x", false, [Kw("visible")])
-p.AddDecl("overflow-y", false, [Kw("visible")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(6, 0, [KwId(65)])
+p.AddTyped(14, 0, [DimId(3.0, 468)])
+p.AddTyped(15, 0, [DimId(3.0, 468)])
+p.AddTyped(16, 0, [DimId(3.0, 468)])
+p.AddTyped(17, 0, [DimId(4.0, 468)])
+p.AddTyped(18, 0, [Int(0.0)])
+p.AddTyped(19, 0, [Int(0.0)])
+p.AddTyped(20, 0, [Int(0.0)])
+p.AddTyped(21, 0, [Int(0.0)])
+p.AddTyped(22, 0, [Int(0.0)])
+p.AddTyped(23, 0, [Int(0.0)])
+p.AddTyped(24, 0, [Int(0.0)])
+p.AddTyped(25, 0, [Int(0.0)])
+p.AddTyped(26, 0, [KwId(401)])
+p.AddTyped(27, 0, [KwId(401)])
+p.AddTyped(28, 0, [KwId(401)])
+p.AddTyped(29, 0, [KwId(401)])
+p.AddTyped(30, 0, [KwId(162)])
+p.AddTyped(31, 0, [KwId(162)])
+p.AddTyped(32, 0, [KwId(162)])
+p.AddTyped(33, 0, [KwId(162)])
+p.AddTyped(60, 0, [ColorValue(0x00000000, 0x00000000, 0)])
+p.AddTyped(81, 0, [KwId(170)])
+p.AddTyped(38, 0, [KwId(640)])
+p.AddTyped(39, 0, [KwId(640)])
 p.EndList(26)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
-p.AddDecl("margin-top", false, [Dim(3.0, "px")])
-p.AddDecl("margin-right", false, [Dim(3.0, "px")])
-p.AddDecl("margin-bottom", false, [Int(0.0)])
-p.AddDecl("margin-left", false, [Dim(5.0, "px")])
-p.AddDecl("padding-top", false, [Int(0.0)])
-p.AddDecl("padding-right", false, [Int(0.0)])
-p.AddDecl("padding-bottom", false, [Int(0.0)])
-p.AddDecl("padding-left", false, [Int(0.0)])
-p.AddDecl("border-top-width", false, [Int(0.0)])
-p.AddDecl("border-right-width", false, [Int(0.0)])
-p.AddDecl("border-bottom-width", false, [Int(0.0)])
-p.AddDecl("border-left-width", false, [Int(0.0)])
-p.AddDecl("border-top-style", false, [Kw("none")])
-p.AddDecl("border-right-style", false, [Kw("none")])
-p.AddDecl("border-bottom-style", false, [Kw("none")])
-p.AddDecl("border-left-style", false, [Kw("none")])
-p.AddDecl("border-top-color", false, [Kw("currentcolor")])
-p.AddDecl("border-right-color", false, [Kw("currentcolor")])
-p.AddDecl("border-bottom-color", false, [Kw("currentcolor")])
-p.AddDecl("border-left-color", false, [Kw("currentcolor")])
-p.AddDecl("background-color", false, [Kw("transparent")])
-p.AddDecl("cursor", false, [Kw("default")])
-p.AddDecl("overflow-x", false, [Kw("visible")])
-p.AddDecl("overflow-y", false, [Kw("visible")])
-p.AddDecl("border-top-left-radius", false, [Pct(50.0), Pct(50.0)])
-p.AddDecl("border-top-right-radius", false, [Pct(50.0), Pct(50.0)])
-p.AddDecl("border-bottom-right-radius", false, [Pct(50.0), Pct(50.0)])
-p.AddDecl("border-bottom-left-radius", false, [Pct(50.0), Pct(50.0)])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(6, 0, [KwId(65)])
+p.AddTyped(14, 0, [DimId(3.0, 468)])
+p.AddTyped(15, 0, [DimId(3.0, 468)])
+p.AddTyped(16, 0, [Int(0.0)])
+p.AddTyped(17, 0, [DimId(5.0, 468)])
+p.AddTyped(18, 0, [Int(0.0)])
+p.AddTyped(19, 0, [Int(0.0)])
+p.AddTyped(20, 0, [Int(0.0)])
+p.AddTyped(21, 0, [Int(0.0)])
+p.AddTyped(22, 0, [Int(0.0)])
+p.AddTyped(23, 0, [Int(0.0)])
+p.AddTyped(24, 0, [Int(0.0)])
+p.AddTyped(25, 0, [Int(0.0)])
+p.AddTyped(26, 0, [KwId(401)])
+p.AddTyped(27, 0, [KwId(401)])
+p.AddTyped(28, 0, [KwId(401)])
+p.AddTyped(29, 0, [KwId(401)])
+p.AddTyped(30, 0, [KwId(162)])
+p.AddTyped(31, 0, [KwId(162)])
+p.AddTyped(32, 0, [KwId(162)])
+p.AddTyped(33, 0, [KwId(162)])
+p.AddTyped(60, 0, [ColorValue(0x00000000, 0x00000000, 0)])
+p.AddTyped(81, 0, [KwId(170)])
+p.AddTyped(38, 0, [KwId(640)])
+p.AddTyped(39, 0, [KwId(640)])
+p.AddTyped(34, 0, [Pct(50.0), Pct(50.0)])
+p.AddTyped(35, 0, [Pct(50.0), Pct(50.0)])
+p.AddTyped(36, 0, [Pct(50.0), Pct(50.0)])
+p.AddTyped(37, 0, [Pct(50.0), Pct(50.0)])
 p.EndList(30)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("margin-top", false, [Dim(2.0, "px")])
-p.AddDecl("margin-right", false, [Dim(2.0, "px")])
-p.AddDecl("margin-bottom", false, [Dim(2.0, "px")])
-p.AddDecl("margin-left", false, [Dim(2.0, "px")])
-p.AddDecl("padding-top", false, [Int(0.0)])
-p.AddDecl("padding-right", false, [Int(0.0)])
-p.AddDecl("padding-bottom", false, [Int(0.0)])
-p.AddDecl("padding-left", false, [Int(0.0)])
-p.AddDecl("border-top-width", false, [Int(0.0)])
-p.AddDecl("border-right-width", false, [Int(0.0)])
-p.AddDecl("border-bottom-width", false, [Int(0.0)])
-p.AddDecl("border-left-width", false, [Int(0.0)])
-p.AddDecl("border-top-style", false, [Kw("none")])
-p.AddDecl("border-right-style", false, [Kw("none")])
-p.AddDecl("border-bottom-style", false, [Kw("none")])
-p.AddDecl("border-left-style", false, [Kw("none")])
-p.AddDecl("border-top-color", false, [Kw("currentcolor")])
-p.AddDecl("border-right-color", false, [Kw("currentcolor")])
-p.AddDecl("border-bottom-color", false, [Kw("currentcolor")])
-p.AddDecl("border-left-color", false, [Kw("currentcolor")])
-p.AddDecl("cursor", false, [Kw("default")])
-p.AddDecl("color", false, [Fn("rgb"), Int(157.0), Comma(), Int(150.0), Comma(), Int(142.0), Close()])
-p.AddDecl("overflow-x", false, [Kw("visible")])
-p.AddDecl("overflow-y", false, [Kw("visible")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(14, 0, [DimId(2.0, 468)])
+p.AddTyped(15, 0, [DimId(2.0, 468)])
+p.AddTyped(16, 0, [DimId(2.0, 468)])
+p.AddTyped(17, 0, [DimId(2.0, 468)])
+p.AddTyped(18, 0, [Int(0.0)])
+p.AddTyped(19, 0, [Int(0.0)])
+p.AddTyped(20, 0, [Int(0.0)])
+p.AddTyped(21, 0, [Int(0.0)])
+p.AddTyped(22, 0, [Int(0.0)])
+p.AddTyped(23, 0, [Int(0.0)])
+p.AddTyped(24, 0, [Int(0.0)])
+p.AddTyped(25, 0, [Int(0.0)])
+p.AddTyped(26, 0, [KwId(401)])
+p.AddTyped(27, 0, [KwId(401)])
+p.AddTyped(28, 0, [KwId(401)])
+p.AddTyped(29, 0, [KwId(401)])
+p.AddTyped(30, 0, [KwId(162)])
+p.AddTyped(31, 0, [KwId(162)])
+p.AddTyped(32, 0, [KwId(162)])
+p.AddTyped(33, 0, [KwId(162)])
+p.AddTyped(81, 0, [KwId(170)])
+p.AddTyped(59, 0, [ColorValue(0x9d968eff, 0x9d968eff, 0)])
+p.AddTyped(38, 0, [KwId(640)])
+p.AddTyped(39, 0, [KwId(640)])
 p.EndList(25)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("inline-size", false, [Dim(50.0, "px")])
-p.AddDecl("block-size", false, [Dim(27.0, "px")])
-p.AddDecl("border-top-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-top-style", false, [Kw("solid")])
-p.AddDecl("border-right-style", false, [Kw("solid")])
-p.AddDecl("border-bottom-style", false, [Kw("solid")])
-p.AddDecl("border-left-style", false, [Kw("solid")])
-p.AddDecl("border-top-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-right-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-bottom-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-left-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("padding-top", false, [Dim(1.0, "px")])
-p.AddDecl("padding-right", false, [Dim(2.0, "px")])
-p.AddDecl("padding-bottom", false, [Dim(1.0, "px")])
-p.AddDecl("padding-left", false, [Dim(2.0, "px")])
-p.AddDecl("background-color", false, [Kw("buttonface")])
-p.AddDecl("cursor", false, [Kw("default")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(324, 0, [DimId(50.0, 468)])
+p.AddTyped(325, 0, [DimId(27.0, 468)])
+p.AddTyped(22, 0, [DimId(1.0, 468)])
+p.AddTyped(23, 0, [DimId(1.0, 468)])
+p.AddTyped(24, 0, [DimId(1.0, 468)])
+p.AddTyped(25, 0, [DimId(1.0, 468)])
+p.AddTyped(26, 0, [KwId(534)])
+p.AddTyped(27, 0, [KwId(534)])
+p.AddTyped(28, 0, [KwId(534)])
+p.AddTyped(29, 0, [KwId(534)])
+p.AddTyped(30, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(31, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(32, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(33, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(18, 0, [DimId(1.0, 468)])
+p.AddTyped(19, 0, [DimId(2.0, 468)])
+p.AddTyped(20, 0, [DimId(1.0, 468)])
+p.AddTyped(21, 0, [DimId(2.0, 468)])
+p.AddTyped(60, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(81, 0, [KwId(170)])
+p.AddTyped(6, 0, [KwId(65)])
 p.EndList(22)
-p.AddDecl("appearance", false, [Kw("none")])
-p.AddDecl("padding-top", false, [Int(0.0)])
-p.AddDecl("padding-right", false, [Int(0.0)])
-p.AddDecl("padding-bottom", false, [Int(0.0)])
-p.AddDecl("padding-left", false, [Int(0.0)])
-p.AddDecl("border-top-width", false, [Int(0.0)])
-p.AddDecl("border-right-width", false, [Int(0.0)])
-p.AddDecl("border-bottom-width", false, [Int(0.0)])
-p.AddDecl("border-left-width", false, [Int(0.0)])
-p.AddDecl("border-top-style", false, [Kw("none")])
-p.AddDecl("border-right-style", false, [Kw("none")])
-p.AddDecl("border-bottom-style", false, [Kw("none")])
-p.AddDecl("border-left-style", false, [Kw("none")])
-p.AddDecl("border-top-color", false, [Kw("currentcolor")])
-p.AddDecl("border-right-color", false, [Kw("currentcolor")])
-p.AddDecl("border-bottom-color", false, [Kw("currentcolor")])
-p.AddDecl("border-left-color", false, [Kw("currentcolor")])
-p.AddDecl("background-color", false, [Kw("transparent")])
-p.AddDecl("cursor", false, [Kw("default")])
+p.AddTyped(118, 0, [KwId(401)])
+p.AddTyped(18, 0, [Int(0.0)])
+p.AddTyped(19, 0, [Int(0.0)])
+p.AddTyped(20, 0, [Int(0.0)])
+p.AddTyped(21, 0, [Int(0.0)])
+p.AddTyped(22, 0, [Int(0.0)])
+p.AddTyped(23, 0, [Int(0.0)])
+p.AddTyped(24, 0, [Int(0.0)])
+p.AddTyped(25, 0, [Int(0.0)])
+p.AddTyped(26, 0, [KwId(401)])
+p.AddTyped(27, 0, [KwId(401)])
+p.AddTyped(28, 0, [KwId(401)])
+p.AddTyped(29, 0, [KwId(401)])
+p.AddTyped(30, 0, [KwId(162)])
+p.AddTyped(31, 0, [KwId(162)])
+p.AddTyped(32, 0, [KwId(162)])
+p.AddTyped(33, 0, [KwId(162)])
+p.AddTyped(60, 0, [ColorValue(0x00000000, 0x00000000, 0)])
+p.AddTyped(81, 0, [KwId(170)])
 p.EndList(19)
-p.AddDecl("white-space", false, [Kw("pre")])
+p.AddTyped(96, 0, [KwId(455)])
 p.EndList(1)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("padding-block-start", false, [Dim(1.0, "px")])
-p.AddDecl("padding-block-end", false, [Dim(1.0, "px")])
-p.AddDecl("padding-inline-start", false, [Dim(6.0, "px")])
-p.AddDecl("padding-inline-end", false, [Dim(6.0, "px")])
-p.AddDecl("border-top-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(2.0, "px")])
-p.AddDecl("border-top-style", false, [Kw("outset")])
-p.AddDecl("border-right-style", false, [Kw("outset")])
-p.AddDecl("border-bottom-style", false, [Kw("outset")])
-p.AddDecl("border-left-style", false, [Kw("outset")])
-p.AddDecl("border-top-color", false, [Kw("buttonborder")])
-p.AddDecl("border-right-color", false, [Kw("buttonborder")])
-p.AddDecl("border-bottom-color", false, [Kw("buttonborder")])
-p.AddDecl("border-left-color", false, [Kw("buttonborder")])
-p.AddDecl("background-color", false, [Kw("buttonface")])
-p.AddDecl("color", false, [Kw("buttontext")])
-p.AddDecl("text-align", false, [Kw("center")])
-p.AddDecl("cursor", false, [Kw("default")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(304, 0, [DimId(1.0, 468)])
+p.AddTyped(305, 0, [DimId(1.0, 468)])
+p.AddTyped(306, 0, [DimId(6.0, 468)])
+p.AddTyped(307, 0, [DimId(6.0, 468)])
+p.AddTyped(22, 0, [DimId(2.0, 468)])
+p.AddTyped(23, 0, [DimId(2.0, 468)])
+p.AddTyped(24, 0, [DimId(2.0, 468)])
+p.AddTyped(25, 0, [DimId(2.0, 468)])
+p.AddTyped(26, 0, [KwId(423)])
+p.AddTyped(27, 0, [KwId(423)])
+p.AddTyped(28, 0, [KwId(423)])
+p.AddTyped(29, 0, [KwId(423)])
+p.AddTyped(30, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
+p.AddTyped(31, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
+p.AddTyped(32, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
+p.AddTyped(33, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
+p.AddTyped(60, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(59, 2, [ColorValue(0x000000ff, 0xffffffff, 1)])
+p.AddTyped(93, 0, [KwId(125)])
+p.AddTyped(81, 0, [KwId(170)])
+p.AddTyped(6, 0, [KwId(65)])
 p.EndList(22)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("font-family", false, [Kw("monospace")])
-p.AddDecl("overflow-x", false, [Kw("auto")])
-p.AddDecl("overflow-y", false, [Kw("auto")])
-p.AddDecl("border-top-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-top-style", false, [Kw("solid")])
-p.AddDecl("border-right-style", false, [Kw("solid")])
-p.AddDecl("border-bottom-style", false, [Kw("solid")])
-p.AddDecl("border-left-style", false, [Kw("solid")])
-p.AddDecl("border-top-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-right-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-bottom-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-left-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("padding-top", false, [Dim(2.0, "px")])
-p.AddDecl("padding-right", false, [Dim(2.0, "px")])
-p.AddDecl("padding-bottom", false, [Dim(2.0, "px")])
-p.AddDecl("padding-left", false, [Dim(2.0, "px")])
-p.AddDecl("background-color", false, [Kw("field")])
-p.AddDecl("white-space", false, [Kw("pre-wrap")])
-p.AddDecl("overflow-wrap", false, [Kw("break-word")])
-p.AddDecl("cursor", false, [Kw("text")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(84, 0, [KwId(392)])
+p.AddTyped(38, 0, [KwId(26)])
+p.AddTyped(39, 0, [KwId(26)])
+p.AddTyped(22, 0, [DimId(1.0, 468)])
+p.AddTyped(23, 0, [DimId(1.0, 468)])
+p.AddTyped(24, 0, [DimId(1.0, 468)])
+p.AddTyped(25, 0, [DimId(1.0, 468)])
+p.AddTyped(26, 0, [KwId(534)])
+p.AddTyped(27, 0, [KwId(534)])
+p.AddTyped(28, 0, [KwId(534)])
+p.AddTyped(29, 0, [KwId(534)])
+p.AddTyped(30, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(31, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(32, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(33, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(18, 0, [DimId(2.0, 468)])
+p.AddTyped(19, 0, [DimId(2.0, 468)])
+p.AddTyped(20, 0, [DimId(2.0, 468)])
+p.AddTyped(21, 0, [DimId(2.0, 468)])
+p.AddTyped(60, 2, [ColorValue(0xffffffff, 0x3b3b3bff, 1)])
+p.AddTyped(96, 0, [KwId(457)])
+p.AddTyped(104, 0, [KwId(109)])
+p.AddTyped(81, 0, [KwId(576)])
 p.EndList(24)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
-p.AddDecl("align-items", false, [Kw("center")])
-p.AddDecl("border-top-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-right-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-bottom-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-left-width", false, [Dim(1.0, "px")])
-p.AddDecl("border-top-style", false, [Kw("solid")])
-p.AddDecl("border-right-style", false, [Kw("solid")])
-p.AddDecl("border-bottom-style", false, [Kw("solid")])
-p.AddDecl("border-left-style", false, [Kw("solid")])
-p.AddDecl("border-top-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-right-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-bottom-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-left-color", false, [Fn("light-dark"), Fn("rgb"), Int(118.0), Comma(), Int(118.0), Comma(), Int(118.0), Close(), Comma(), Fn("rgb"), Int(133.0), Comma(), Int(133.0), Comma(), Int(133.0), Close(), Close()])
-p.AddDecl("border-top-left-radius", false, [Int(0.0), Int(0.0)])
-p.AddDecl("border-top-right-radius", false, [Int(0.0), Int(0.0)])
-p.AddDecl("border-bottom-right-radius", false, [Int(0.0), Int(0.0)])
-p.AddDecl("border-bottom-left-radius", false, [Int(0.0), Int(0.0)])
-p.AddDecl("white-space", false, [Kw("pre")])
-p.AddDecl("background-color", false, [Kw("buttonface")])
-p.AddDecl("cursor", false, [Kw("default")])
-p.AddDecl("overflow-x", false, [Kw("clip")])
-p.AddDecl("overflow-y", false, [Kw("clip")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(6, 0, [KwId(65)])
+p.AddTyped(47, 0, [KwId(125)])
+p.AddTyped(22, 0, [DimId(1.0, 468)])
+p.AddTyped(23, 0, [DimId(1.0, 468)])
+p.AddTyped(24, 0, [DimId(1.0, 468)])
+p.AddTyped(25, 0, [DimId(1.0, 468)])
+p.AddTyped(26, 0, [KwId(534)])
+p.AddTyped(27, 0, [KwId(534)])
+p.AddTyped(28, 0, [KwId(534)])
+p.AddTyped(29, 0, [KwId(534)])
+p.AddTyped(30, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(31, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(32, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(33, 2, [ColorValue(0x767676ff, 0x858585ff, 1)])
+p.AddTyped(34, 0, [Int(0.0), Int(0.0)])
+p.AddTyped(35, 0, [Int(0.0), Int(0.0)])
+p.AddTyped(36, 0, [Int(0.0), Int(0.0)])
+p.AddTyped(37, 0, [Int(0.0), Int(0.0)])
+p.AddTyped(96, 0, [KwId(455)])
+p.AddTyped(60, 2, [ColorValue(0xefefefff, 0x6b6b6bff, 1)])
+p.AddTyped(81, 0, [KwId(170)])
+p.AddTyped(38, 0, [KwId(130)])
+p.AddTyped(39, 0, [KwId(130)])
 p.EndList(24)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("padding-inline-start", false, [Dim(2.0, "px")])
-p.AddDecl("padding-inline-end", false, [Dim(2.0, "px")])
-p.AddDecl("padding-block-end", false, [Dim(1.0, "px")])
-p.AddDecl("white-space", false, [Kw("nowrap")])
-p.AddDecl("min-block-size", false, [Dim(1.2, "em")])
-p.AddDecl("row-gap", false, [Dim(0.5, "em")])
-p.AddDecl("column-gap", false, [Dim(0.5, "em")])
-p.AddDecl("align-items", false, [Kw("center")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(306, 0, [DimId(2.0, 468)])
+p.AddTyped(307, 0, [DimId(2.0, 468)])
+p.AddTyped(305, 0, [DimId(1.0, 468)])
+p.AddTyped(96, 0, [KwId(405)])
+p.AddTyped(327, 0, [DimId(1.2, 205)])
+p.AddTyped(52, 0, [DimId(0.5, 205)])
+p.AddTyped(53, 0, [DimId(0.5, 205)])
+p.AddTyped(47, 0, [KwId(125)])
 p.EndList(9)
-p.AddDecl("display", false, [Kw("block")])
-p.AddDecl("font-weight", false, [Kw("bolder")])
+p.AddTyped(0, 0, [KwId(42)])
+p.AddTyped(86, 0, [KwId(45)])
 p.EndList(2)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
-p.AddDecl("display", false, [Kw("inline-block")])
-p.AddDecl("block-size", false, [Dim(1.0, "em")])
-p.AddDecl("inline-size", false, [Dim(10.0, "em")])
-p.AddDecl("vertical-align", false, [Dim(-0.2, "em")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(6, 0, [KwId(65)])
+p.AddTyped(0, 0, [KwId(289)])
+p.AddTyped(325, 0, [DimId(1.0, 205)])
+p.AddTyped(324, 0, [DimId(10.0, 205)])
+p.AddTyped(58, 0, [DimId(-0.2, 205)])
 p.EndList(6)
-p.AddDecl("appearance", false, [Kw("auto")])
-p.AddDecl("box-sizing", false, [Kw("border-box")])
-p.AddDecl("display", false, [Kw("inline-block")])
-p.AddDecl("block-size", false, [Dim(1.0, "em")])
-p.AddDecl("inline-size", false, [Dim(5.0, "em")])
-p.AddDecl("vertical-align", false, [Dim(-0.2, "em")])
+p.AddTyped(118, 0, [KwId(26)])
+p.AddTyped(6, 0, [KwId(65)])
+p.AddTyped(0, 0, [KwId(289)])
+p.AddTyped(325, 0, [DimId(1.0, 205)])
+p.AddTyped(324, 0, [DimId(5.0, 205)])
+p.AddTyped(58, 0, [DimId(-0.2, 205)])
 p.EndList(6)
-p.AddDecl("cursor", false, [Kw("default")])
+p.AddTyped(81, 0, [KwId(170)])
 p.EndList(1)
-p.AddDecl("overflow-x", false, [Kw("clip")])
-p.AddDecl("overflow-y", false, [Kw("clip")])
+p.AddTyped(38, 0, [KwId(130)])
+p.AddTyped(39, 0, [KwId(130)])
 p.EndList(2)
-p.AddDecl("object-fit", false, [Kw("contain")])
+p.AddTyped(120, 0, [KwId(147)])
 p.EndList(1)
-p.AddDecl("direction", false, [Kw("rtl")])
+p.AddTyped(40, 0, [KwId(498)])
 p.EndList(1)
-p.AddDecl("direction", false, [Kw("ltr")])
+p.AddTyped(40, 0, [KwId(348)])
 p.EndList(1)
-p.AddDecl("outline-width", false, [Dim(1.0, "px")])
-p.AddDecl("outline-style", false, [Kw("auto")])
-p.AddDecl("outline-color", false, [Fn("rgb"), Int(16.0), Comma(), Int(16.0), Comma(), Int(16.0), Close()])
+p.AddTyped(70, 0, [DimId(1.0, 468)])
+p.AddTyped(71, 0, [KwId(26)])
+p.AddTyped(72, 0, [ColorValue(0x101010ff, 0x101010ff, 0)])
 p.EndList(3)
-p.AddDecl("outline-offset", false, [Int(0.0)])
+p.AddTyped(73, 0, [Int(0.0)])
 p.EndList(1)
-p.AddDecl("outline-offset", false, [Dim(1.0, "px")])
+p.AddTyped(73, 0, [DimId(1.0, 468)])
 p.EndList(1)
 p.AddRule(0, 0, -1)
 p.AddRule(1, 0, -1)
@@ -178100,7 +180426,6 @@ end
 @fa "حروف‌چینی"
 package typeset
 package ui
-import math
 import gui.css
 import gui.reactive
 func _prop_name(prop: int): str:
@@ -178188,9 +180513,6 @@ ret 1.0
 end
 ret css.EasingAt(a.timing, el / a.duration)
 end
-func _mix(a: int, b: int, t: f64): int:
-ret math.Round((a as f64) + ((b - a) as f64) * t) as int
-end
 func _anim_color(node: int, prop: int, target: css.Color): css.Color:
 if _e.anims.len() == 0:
 ret target
@@ -178204,7 +180526,7 @@ t := _anim_progress(a)
 if t >= 1.0:
 ret target
 end
-ret css.Color { r = _mix(a.from.r, target.r, t), g = _mix(a.from.g, target.g, t), b = _mix(a.from.b, target.b, t), a = _mix(a.from.a, target.a, t) }
+ret css.MixColors(a.from, target, t)
 end
 func _anim_f(node: int, prop: int, target: f64): f64:
 if _e.anims.len() == 0:
@@ -178688,9 +181010,7 @@ _ime(ev.text, true)
 break
 end
 window.EventKind.ColorSchemeChanged:
-_env()
-_restyle_media()
-_e.full = true
+_scheme_changed()
 break
 end
 window.EventKind.FocusOut:
@@ -178995,6 +181315,24 @@ break
 end
 "wait":
 window.Advance(arg.to_int())
+break
+end
+"scheme":
+_inject(window.Event { kind = window.EventKind.ColorSchemeChanged, scheme = arg == "dark" ? window.ColorScheme.Dark : window.ColorScheme.Light })
+break
+end
+"style":
+mut parts := str.Fields(arg)
+if parts.len() >= 2:
+_step(0)
+n := _selector_node(parts[0])
+v := css.ValueText(_style_of(n), parts[1])
+println "style", parts[0], parts[1], v
+end
+repeat parts.len() in i:
+_sfree(parts[i])
+end
+parts.free()
 break
 end
 "dump":
@@ -185075,6 +187413,23 @@ repeat _e.els.len() in i:
 _sync_el(i)
 end
 _cnt := _e.sheet.Restyle(_e.els, idx)
+ret _take_styles()
+end
+func _scheme_changed():
+dark := window.CurrentColorScheme() == window.ColorScheme.Dark
+if not _e.has_sheet or dark == _e.env.dark:
+_env()
+_e.full = true
+ret
+end
+_env()
+_cnt := _e.sheet.SetColorScheme(_e.els, dark)
+if _take_styles():
+_e.dirty_layout = true
+end
+_e.full = true
+end
+func _take_styles(): bool:
 mut relayout := false
 repeat _e.els.len() in i:
 nid := _e.sheet.StyleId(i)
@@ -209422,6 +211777,67 @@ pub const fa := LayoutValue { group = "lang" generated_value = "fa" }
 @en "ar" "arabic"
 @fa "عربی"
 pub const ar := LayoutValue { group = "lang" generated_value = "ar" }
+package layout
+@en "Canvas" "canvas"
+@fa "رنگ‌بوم"
+pub const system_color_canvas := LayoutValue { group = "color" generated_value = "Canvas" }
+@en "CanvasText" "canvastext"
+@fa "متن‌بوم"
+pub const system_color_canvastext := LayoutValue { group = "color" generated_value = "CanvasText" }
+@en "ButtonFace" "buttonface"
+@fa "رویه‌دکمه"
+pub const system_color_buttonface := LayoutValue { group = "color" generated_value = "ButtonFace" }
+@en "ButtonText" "buttontext"
+@fa "متن‌دکمه"
+pub const system_color_buttontext := LayoutValue { group = "color" generated_value = "ButtonText" }
+@en "ButtonBorder" "buttonborder"
+@fa "مرز‌دکمه"
+pub const system_color_buttonborder := LayoutValue { group = "color" generated_value = "ButtonBorder" }
+@en "Field" "field"
+@fa "زمینه‌فیلد"
+pub const system_color_field := LayoutValue { group = "color" generated_value = "Field" }
+@en "FieldText" "fieldtext"
+@fa "متن‌فیلد"
+pub const system_color_fieldtext := LayoutValue { group = "color" generated_value = "FieldText" }
+@en "Highlight" "highlight"
+@fa "پس‌زمینه‌گزینش"
+pub const system_color_highlight := LayoutValue { group = "color" generated_value = "Highlight" }
+@en "HighlightText" "highlighttext"
+@fa "متن‌گزینش"
+pub const system_color_highlighttext := LayoutValue { group = "color" generated_value = "HighlightText" }
+@en "LinkText" "linktext"
+@fa "متن‌پیوند"
+pub const system_color_linktext := LayoutValue { group = "color" generated_value = "LinkText" }
+@en "VisitedText" "visitedtext"
+@fa "متن‌پیوند‌دیده‌شده"
+pub const system_color_visitedtext := LayoutValue { group = "color" generated_value = "VisitedText" }
+@en "ActiveText" "activetext"
+@fa "متن‌پیوند‌فعال"
+pub const system_color_activetext := LayoutValue { group = "color" generated_value = "ActiveText" }
+@en "GrayText" "graytext"
+@fa "متن‌خاکستری"
+pub const system_color_graytext := LayoutValue { group = "color" generated_value = "GrayText" }
+@en "AccentColor" "accentcolor"
+@fa "رنگ‌تاکید‌سامانه"
+pub const system_color_accentcolor := LayoutValue { group = "color" generated_value = "AccentColor" }
+@en "AccentColorText" "accentcolortext"
+@fa "متن‌رنگ‌تاکید"
+pub const system_color_accentcolortext := LayoutValue { group = "color" generated_value = "AccentColorText" }
+@en "Mark" "mark"
+@fa "زمینه‌نشانه‌گذاری"
+pub const system_color_mark := LayoutValue { group = "color" generated_value = "Mark" }
+@en "MarkText" "marktext"
+@fa "متن‌نشانه‌گذاری"
+pub const system_color_marktext := LayoutValue { group = "color" generated_value = "MarkText" }
+@en "SelectedItem" "selecteditem"
+@fa "مورد‌گزیده"
+pub const system_color_selecteditem := LayoutValue { group = "color" generated_value = "SelectedItem" }
+@en "SelectedItemText" "selecteditemtext"
+@fa "متن‌مورد‌گزیده"
+pub const system_color_selecteditemtext := LayoutValue { group = "color" generated_value = "SelectedItemText" }
+@en "currentColor" "currentcolor"
+@fa "رنگ‌کنونی"
+pub const system_color_currentcolor := LayoutValue { group = "color" generated_value = "currentColor" }
 package layout
 @en "_blank" "blank" "new"
 @fa "پنجره جدید"

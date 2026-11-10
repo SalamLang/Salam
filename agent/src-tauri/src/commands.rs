@@ -100,6 +100,26 @@ pub async fn agent_pick_folder(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
+pub async fn chatgpt_pick_export(app: AppHandle) -> Option<String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("ChatGPT export")
+            .add_filter("ChatGPT export (zip)", &["zip"])
+            .blocking_pick_file()
+    })
+    .await
+    .ok()
+    .flatten()?;
+    picked.into_path().ok().map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn chatgpt_import(app: AppHandle, path: String, token: String) -> Result<serde_json::Value, String> {
+    crate::chatgpt::run(app, path, token).await
+}
+
+#[tauri::command]
 pub fn agent_set_mode(app: AppHandle, chat: String, mode: Mode) {
     app.state::<Approvals>().set_mode(chat, mode);
 }

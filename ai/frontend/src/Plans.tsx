@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
 import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
+import { agent, isDesktop } from "./desktop";
 import { isFa, t } from "./i18n";
 
 const GATEWAY_NAMES: Record<Gateway, string> = {
@@ -141,7 +142,12 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
     setBusy(plan.id);
     try {
       const r = await api.checkout(plan.id, gateway);
-      location.href = r.url;
+      if (isDesktop) {
+        await agent.payUrl(r.url);
+        setBusy(null);
+      } else {
+        location.href = r.url;
+      }
     } catch (e) {
       notify(errText(e, t("شروع پرداخت ناموفق بود.", "Could not start the payment.")));
       setBusy(null);

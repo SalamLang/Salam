@@ -245,6 +245,17 @@ pub fn agent_open_url(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("could not open the link: {e}"))
 }
 
+/// Opens a payment gateway page in a window inside the app instead of the
+/// system browser, so the user never leaves the agent to pay.
+#[tauri::command]
+pub fn agent_pay(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|_| "invalid payment url".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("payment links must be https".to_string());
+    }
+    crate::open_payment_window(&app, parsed).map_err(|e| format!("could not open the payment window: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

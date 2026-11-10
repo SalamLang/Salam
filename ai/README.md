@@ -70,6 +70,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_CHAT_MEMORY_IDLE_SECONDS`                                     | how long a chat stays quiet before its new turns are summarized, so a quick back and forth costs one pass                                                                                                                                                                                                                                                                                                                                  | `60`                                                                  |
 | `AI_CHAT_MEMORY_DAYS`                                             | how far back chats are picked up, which also bounds the first pass over old chats after an upgrade                                                                                                                                                                                                                                                                                                                                         | `30`                                                                  |
 | `AI_CHAT_MEMORY_PAUSE_SECONDS`                                    | the pause between memory passes; they run one at a time                                                                                                                                                                                                                                                                                                                                                                                    | `10`                                                                  |
+| `AI_IMPORT_DIR`                                                   | where uploaded ChatGPT exports are kept; mount a private volume here and never serve it                                                                                                                                                                                                                                                                                                                                                    | `/data/imports`                                                       |
+| `AI_CHATGPT_IMPORT`                                               | `off` turns the ChatGPT import routes and worker off                                                                                                                                                                                                                                                                                                                                                                                       | `on`                                                                  |
 | `AI_API_START_SECONDS`                                            | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                                                                                                                                                                                                                                                                                                                    | `180`                                                                 |
 | `AI_TELEGRAM_TOKEN`                                               | the Telegram bot token from BotFather; empty switches the bot off. Keep it in the server's env file, never in the repository                                                                                                                                                                                                                                                                                                               | empty                                                                 |
 | `AI_TELEGRAM_GUEST_LIMIT`                                         | messages a Telegram guest may send before being asked to sign in                                                                                                                                                                                                                                                                                                                                                                           | `15`                                                                  |
@@ -86,7 +88,7 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_GITHUB_WEBHOOK_SECRET`                                        | secret of the GitHub App webhook (`/auth/webhook/github`); every delivery is checked against `X-Hub-Signature-256`; unset means the route answers 503                                                                                                                                                                                                                                                                                      | empty                                                                 |
 | `AI_GITHUB_API`, `AI_GITHUB_WEB`, `AI_FIGMA_API`, `AI_FIGMA_WEB`  | where those services live, for the test mock                                                                                                                                                                                                                                                                                                                                                                                               | the real services                                                     |
 | `AI_FIGMA_MCP_URL`                                                | the remote Figma MCP endpoint, for the test mock; setting it also turns the Figma MCP card on                                                                                                                                                                                                                                                                                                                                              | `https://mcp.figma.com/mcp`                                           |
-| `AI_FIGMA_MCP_ENABLED`                                            | `1` turns the Figma MCP card on once Figma has approved Salam AI's client name for dynamic client registration; before that every registration answers 403                                                                                                                                                                                                                                                                               | off                                                                    |
+| `AI_FIGMA_MCP_ENABLED`                                            | `1` turns the Figma MCP card on once Figma has approved Salam AI's client name for dynamic client registration; before that every registration answers 403                                                                                                                                                                                                                                                                                 | off                                                                   |
 
 The API keeps a stream open for as long as an answer takes, so give the
 container room: it ran into a 512 MB limit in production and was killed by the
@@ -552,6 +554,54 @@ Markdown files:
 Turning memory off stops new passes and recall; turning it back on or clearing
 it starts from the chats' current ends, so old turns are not picked up again.
 Users see and manage all of it on the Memory page.
+
+### Importing from ChatGPT
+
+Users can bring their history from ChatGPT. The client reads the export ZIP on
+the user's own device (the web app in the browser, the desktop app in Rust), keeps
+only `conversations*.json` and, when present, `memories*.json` and custom
+instruction files, regroups the conversations into parts of about 3 MB, and
+gzips each part (a 176 MB export of 8,157 chats becomes about 38 MB). Images
+and other files in the ZIP are not uploaded. The parts go up one by one over
+the API, each with the SHA-256 of its base64 text, so a dropped connection
+costs one part and a second try with the same file resumes where it stopped.
+
+The server writes every part under `AI_IMPORT_DIR/<random 32 hex>/<random 32 hex>.gz`.
+Nothing in the API reads those files back, and a name never comes from the
+client. When all parts are in and the user starts the import, a single worker
+reads them one at a time, so memory stays near one part (about 90 MB for the
+8,157 chats above, in 40 seconds), and for every conversation it:
+
+- follows `current_node` up through `mapping`, so only the branch the user was
+  looking at is kept, and keeps visible `user` and `assistant` text (images
+  become `[image]`, attached filenames stay, citation markers are removed);
+- creates a chat (`source = 'chatgpt'`, `ext_id = chatgpt:<id>`, original dates)
+  with its messages, sets `chats.summary` from the first question, and writes one
+  `chatgpt-import` memory with the date, model, up to eight of the user's
+  questions and how the chat ended;
+- marks the chat as already summarized, so the memory worker does not spend model
+  calls on it, and skips a conversation that was imported before, so importing
+  the same export twice adds nothing;
+- puts a conversation with a `gizmo_id` (a custom GPT) in a project named after
+  it.
+
+Memory entries in the export become memories in a `ChatGPT memories` chat, and
+custom instructions become the account prompt when that is still empty. ChatGPT
+does not put memories, GPTs or custom instructions in every export, so these
+only appear when the file has them.
+
+| Method and path                                    | Purpose                                                                                                                                              |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /imports/chatgpt`                            | `{fingerprint, filename, parts, raw_bytes}`; creates an import, or returns the unfinished one with the same fingerprint and the parts it already has |
+| `PUT /imports/chatgpt/:id/parts/:n`                | `{kind, name, size, sha256, data}` with `data` the base64 gzip; `kind` is `conversations` or `file`; sending a part again replaces it                |
+| `POST /imports/chatgpt/:id/start`                  | queues the import once every part is in                                                                                                              |
+| `GET /imports/chatgpt`, `GET /imports/chatgpt/:id` | status and counters (`parts_done`, `chats`, `messages`, `memories`, `skipped`, `existing`)                                                           |
+| `DELETE /imports/chatgpt/:id`                      | cancels a running import; otherwise deletes the stored parts and, with `?chats=1`, every chat it created                                             |
+
+An account can start six imports a day and keep 1 GB of parts per import. The
+upload route needs `client_max_body_size 12m` in nginx. After a restart a
+running import goes back to the queue and carries on; chats already created are
+skipped.
 
 ### Salam only
 

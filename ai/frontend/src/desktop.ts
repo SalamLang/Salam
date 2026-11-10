@@ -91,6 +91,25 @@ export const agent = {
     call<NotifyPrefs>("agent_set_notify_prefs", { prefs }),
 };
 
+export type ChatgptProgress = {
+  phase: "reading" | "uploading" | "processing";
+  done: number;
+  total: number;
+  bytes: number;
+};
+
+export const nativeChatgptImport = isTauri();
+
+export const chatgptExport = {
+  pick: () => call<string | null>("chatgpt_pick_export"),
+  run: (path: string, token: string) =>
+    call<{ import: { id: number } }>("chatgpt_import", { path, token }),
+  onProgress: async (
+    handler: (p: ChatgptProgress) => void,
+  ): Promise<() => void> =>
+    listen<ChatgptProgress>("chatgpt-import", (e) => handler(e.payload)),
+};
+
 export type MentionHit = {
   path: string;
   is_dir: boolean;

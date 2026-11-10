@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
@@ -988,6 +988,242 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
             move={{ up: i > 0 ? () => void shift(i, i - 1) : null, down: i < plans.length - 1 ? () => void shift(i, i + 1) : null, busy: moving }}
           />
         ))
+      )}
+    </section>
+  );
+}
+
+function epochFromDtLocal(s: string): number {
+  if (!s) return 0;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? 0 : Math.floor(d.getTime() / 1000);
+}
+
+const DISCOUNT_KIND_OPTIONS: { value: DiscountKind; label: string }[] = [
+  { value: "percent", label: t("درصدی", "Percent") },
+  { value: "amount", label: t("مقدار ثابت", "Fixed amount") },
+];
+
+type DiscountDraft = { code: string; kind: DiscountKind; value: string; email: string; maxUsers: string; maxUses: string; expires: string; note: string };
+
+const EMPTY_DISCOUNT_DRAFT: DiscountDraft = { code: "", kind: "percent", value: "", email: "", maxUsers: "", maxUses: "", expires: "", note: "" };
+
+function discountAmount(d: Discount): string {
+  return d.kind === "percent" ? t(`${fmtNum(d.value)}٪`, `${fmtNum(d.value)}%`) : toman(d.value);
+}
+
+function DiscountsAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
+  const [discounts, setDiscounts] = useState<Discount[] | null>(null);
+  const [error, setError] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState<DiscountDraft>(EMPTY_DISCOUNT_DRAFT);
+  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const load = useCallback(() => {
+    setError("");
+    api
+      .adminDiscounts()
+      .then((r) => setDiscounts(r.discounts))
+      .catch((e) => setError(errText(e, t("بارگذاری کدهای تخفیف ناموفق بود.", "Could not load discount codes."))));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const set = <K extends keyof DiscountDraft>(k: K, v: DiscountDraft[K]) => setDraft((old) => ({ ...old, [k]: v }));
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.adminDiscountCreate({
+        code: draft.code.trim(),
+        kind: draft.kind,
+        value: Number(draft.value) || 0,
+        email: draft.email.trim() || undefined,
+        max_users: draft.maxUsers.trim() ? Number(draft.maxUsers) : undefined,
+        max_uses: draft.maxUses.trim() ? Number(draft.maxUses) : undefined,
+        expires: epochFromDtLocal(draft.expires) || undefined,
+        note: draft.note.trim() || undefined,
+      });
+      notify(t("کد تخفیف ساخته شد.", "Discount code created."), true);
+      setDraft(EMPTY_DISCOUNT_DRAFT);
+      setAdding(false);
+      load();
+    } catch (err) {
+      notify(errText(err, t("ساخت کد تخفیف ناموفق بود.", "Could not create the discount code.")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deactivate = async (row: Discount) => {
+    const ok = await confirmDialog({
+      title: t("غیرفعال‌سازی کد تخفیف", "Deactivate discount code"),
+      subject: row.code,
+      message: (
+        <>
+          {t("کد", "The code")} <Subject>{row.code}</Subject> {t("غیرفعال می‌شود و دیگر قابل استفاده نخواهد بود.", "will be deactivated and can no longer be used.")}
+        </>
+      ),
+      confirmLabel: t("غیرفعال‌سازی", "Deactivate"),
+      icon: "alert",
+    });
+    if (!ok) return;
+    setBusy(row.id);
+    try {
+      await api.adminDiscountDelete(row.id);
+      notify(t("کد تخفیف غیرفعال شد.", "Discount code deactivated."), true);
+      load();
+    } catch (e) {
+      notify(errText(e, t("غیرفعال‌سازی کد تخفیف ناموفق بود.", "Could not deactivate the discount code.")));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reactivate = async (row: Discount) => {
+    setBusy(row.id);
+    try {
+      await api.adminDiscountSave(row.id, { active: true });
+      notify(t("کد تخفیف دوباره فعال شد.", "Discount code reactivated."), true);
+      load();
+    } catch (e) {
+      notify(errText(e, t("فعال‌سازی کد تخفیف ناموفق بود.", "Could not reactivate the discount code.")));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("کدهای تخفیف", "Discount codes")}</h3>
+        <button type="button" className="button" onClick={() => setAdding((v) => !v)}>
+          {adding ? t("بستن", "Close") : t("کد تازه", "New code")}
+        </button>
+      </div>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {adding && (
+        <form className="grant" onSubmit={submit}>
+          <div className="grant-grid">
+            <label className="grant-field">
+              <span>{t("کد (انگلیسی، یکتا)", "Code (latin, unique)")}</span>
+              <input dir="ltr" value={draft.code} onChange={(e) => set("code", e.target.value.toUpperCase())} placeholder="SUMMER50" required />
+            </label>
+            <div className="grant-field">
+              <span>{t("نوع تخفیف", "Discount type")}</span>
+              <Select<DiscountKind> value={draft.kind} options={DISCOUNT_KIND_OPTIONS} ariaLabel={t("نوع تخفیف", "Discount type")} onChange={(v) => set("kind", v)} />
+            </div>
+            <label className="grant-field">
+              <span>{draft.kind === "percent" ? t("درصد تخفیف (۰ تا ۱۰۰)", "Discount percent (0-100)") : t("مقدار تخفیف (تومان)", "Discount amount (toman)")}</span>
+              <input type="number" min={0} inputMode="numeric" dir="ltr" value={draft.value} onChange={(e) => set("value", e.target.value)} required />
+            </label>
+            <label className="grant-field">
+              <span>
+                {t("فقط برای این کاربر", "Only for this user")} <span className="opt">{t("اختیاری", "optional")}</span>
+              </span>
+              <input type="email" dir="ltr" value={draft.email} onChange={(e) => set("email", e.target.value)} placeholder="user@example.com" />
+            </label>
+            <label className="grant-field">
+              <span>
+                {t("حداکثر تعداد نفرات", "Max number of different people")} <span className="opt">{t("اختیاری", "optional")}</span>
+              </span>
+              <input type="number" min={0} inputMode="numeric" dir="ltr" value={draft.maxUsers} onChange={(e) => set("maxUsers", e.target.value)} />
+              <span className="muted small">{t("تعداد افراد متفاوتی که می‌توانند از این کد استفاده کنند، نه تعداد دفعات.", "How many different people can redeem this code, not how many times.")}</span>
+            </label>
+            <label className="grant-field">
+              <span>
+                {t("حداکثر تعداد دفعات استفاده", "Max number of total uses")} <span className="opt">{t("اختیاری", "optional")}</span>
+              </span>
+              <input type="number" min={0} inputMode="numeric" dir="ltr" value={draft.maxUses} onChange={(e) => set("maxUses", e.target.value)} />
+              <span className="muted small">{t("هر استفاده را می‌شمارد، حتی استفاده‌های تکراری یک نفر.", "Counts every use, including repeats by the same person.")}</span>
+            </label>
+            <label className="grant-field">
+              <span>
+                {t("تاریخ انقضا", "Expiry date")} <span className="opt">{t("اختیاری", "optional")}</span>
+              </span>
+              <input type="datetime-local" dir="ltr" value={draft.expires} onChange={(e) => set("expires", e.target.value)} />
+            </label>
+            <label className="grant-field">
+              <span>
+                {t("یادداشت", "Note")} <span className="opt">{t("اختیاری", "optional")}</span>
+              </span>
+              <input type="text" dir="auto" value={draft.note} onChange={(e) => set("note", e.target.value)} />
+            </label>
+          </div>
+          <div className="grant-actions">
+            <button type="submit" className="button primary" disabled={saving}>
+              {saving ? <span className="spinner" /> : null}
+              {t("ساخت کد", "Create code")}
+            </button>
+          </div>
+        </form>
+      )}
+      {discounts === null && !error ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">{t("کد", "Code")}</th>
+                <th scope="col">{t("تخفیف", "Discount")}</th>
+                <th scope="col">{t("محدودیت", "Restriction")}</th>
+                <th scope="col">{t("استفاده", "Usage")}</th>
+                <th scope="col">{t("انقضا", "Expiry")}</th>
+                <th scope="col">{t("وضعیت", "Status")}</th>
+                <th scope="col">
+                  <span className="sr-only">{t("کارها", "Actions")}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {discounts?.map((d) => (
+                <tr key={d.id}>
+                  <td dir="ltr">{d.code}</td>
+                  <td>{discountAmount(d)}</td>
+                  <td>{d.user?.email ? <span dir="ltr">{d.user.email}</span> : t("همه", "Everyone")}</td>
+                  <td>
+                    <div>{t(`${fmtNum(d.uses)} استفاده از ${d.max_uses ? fmtNum(d.max_uses) : "∞"}`, `${fmtNum(d.uses)} of ${d.max_uses ? fmtNum(d.max_uses) : "∞"} uses`)}</div>
+                    <div className="cell-sub">{t(`${fmtNum(d.users)} نفر از ${d.max_users ? fmtNum(d.max_users) : "∞"}`, `${fmtNum(d.users)} of ${d.max_users ? fmtNum(d.max_users) : "∞"} people`)}</div>
+                  </td>
+                  <td>{d.expires === 0 ? t("بدون انقضا", "No expiry") : fmtDate(d.expires)}</td>
+                  <td>
+                    <span className={`badge ${d.active ? "ok" : ""}`}>{d.active ? t("فعال", "Active") : t("غیرفعال", "Inactive")}</span>
+                  </td>
+                  <td>
+                    {d.active ? (
+                      <button type="button" className="link danger" disabled={busy === d.id} onClick={() => void deactivate(d)}>
+                        {t("لغو", "Deactivate")}
+                      </button>
+                    ) : (
+                      <button type="button" className="link" disabled={busy === d.id} onClick={() => void reactivate(d)}>
+                        {t("فعال‌سازی دوباره", "Reactivate")}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {discounts?.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="muted">
+                    {t("هنوز کد تخفیفی ساخته نشده است.", "No discount codes yet.")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
@@ -2716,6 +2952,7 @@ const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; h
       { id: "plans", label: () => t("پلن‌ها", "Plans"), hint: () => t("ساخت و ویرایش پلن‌ها", "Create and edit plans") },
       { id: "subscriptions", label: () => t("اشتراک‌ها", "Subscriptions"), hint: () => t("اشتراک‌های فعال و اعطای پلن", "Active subscriptions and grants") },
       { id: "payments", label: () => t("پرداخت‌ها", "Payments"), hint: () => t("تراکنش‌های پرداخت", "Payment transactions") },
+      { id: "discounts", label: () => t("کدهای تخفیف", "Discount codes"), hint: () => t("ساخت و مدیریت کدهای تخفیف", "Create and manage discount codes") },
     ],
   },
   {
@@ -2958,6 +3195,7 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
         {section === "billing" && sub?.id === "plans" && <PlansAdmin notify={notify} />}
         {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
         {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
+        {section === "billing" && sub?.id === "discounts" && <DiscountsAdmin notify={notify} />}
         {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}
         {section === "api" && sub?.id === "keys" && <KeyPolicies picked={picked} notify={notify} />}
         {section === "api" && sub?.id === "apps" && <AppsTable picked={picked} notify={notify} />}

@@ -1,0 +1,860 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cssbox
+
+import mem
+
+const K_AUTO := 0
+const K_PX := 1
+const K_PCT := 2
+const K_FR := 3
+const K_MINC := 4
+const K_MAXC := 5
+const K_FITPX := 6
+const K_FITPCT := 7
+const GP_AUTO := 0
+const GP_LINE := 1
+const GP_SPAN := 2
+const GP_NLINE := 3
+const GP_NSPAN := 4
+const GMAX := 10000
+
+struct TDef:
+    pub mk: int = 0
+    pub mv: f64 = 0.0
+    pub xk: int = 0
+    pub xv: f64 = 0.0
+end
+
+struct LName:
+    pub line: int = 0
+    pub name: str = ""
+    pub after: bool = false
+end
+
+struct GTpl:
+    pub ok: bool = false
+    pub tracks: Vector<TDef> = Vector {}
+    pub names: Vector<LName> = Vector {}
+    pub rep: int = 0
+    pub rep_at: int = 0
+    pub rtracks: Vector<TDef> = Vector {}
+    pub rnames: Vector<LName> = Vector {}
+end
+
+struct GArea:
+    pub name: str = ""
+    pub rs: int = 0
+    pub re: int = 0
+    pub cs: int = 0
+    pub ce: int = 0
+end
+
+struct GPl:
+    pub kind: int = 0
+    pub n: int = 0
+    pub name: str = ""
+end
+
+struct GData:
+    pub s_cols: str = ""
+    pub s_rows: str = ""
+    pub s_areas: str = ""
+    pub s_acols: str = ""
+    pub s_arows: str = ""
+    pub s_rs: str = ""
+    pub s_re: str = ""
+    pub s_cs: str = ""
+    pub s_ce: str = ""
+    pub cols: GTpl = GTpl {}
+    pub rows: GTpl = GTpl {}
+    pub areas: Vector<GArea> = Vector {}
+    pub area_nc: int = 0
+    pub area_nr: int = 0
+    pub acols: Vector<TDef> = Vector {}
+    pub arows: Vector<TDef> = Vector {}
+    pub prs: GPl = GPl {}
+    pub pre: GPl = GPl {}
+    pub pcs: GPl = GPl {}
+    pub pce: GPl = GPl {}
+end
+
+struct Sc:
+    pub p: u8* = null
+    pub n: int = 0
+    pub i: int = 0
+    pub bad: bool = false
+end
+
+inline func _sb(sc: Sc, i: int): int:
+    ret sc.p[i] as int
+end
+
+func _sc(s: str): Sc:
+    ret Sc { p = (s as void*) as u8*, n = s.len() }
+end
+
+func _ws(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 13 or c == 12
+end
+
+func _skip_ws(sc &: Sc):
+    until sc.i < sc.n and _ws(_sb(sc, sc.i)):
+        sc.i++
+    end
+end
+
+func _id_char(c: int): bool:
+    ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 95 or c >= 128
+end
+
+func _peek(sc &: Sc): int:
+    _skip_ws(sc)
+    if sc.i >= sc.n:
+        ret -1
+    end
+    ret _sb(sc, sc.i)
+end
+
+func _eat(sc &: Sc, c: int): bool:
+    if _peek(sc) == c:
+        sc.i++
+        ret true
+    end
+    ret false
+end
+
+func _ident(sc &: Sc): str:
+    _skip_ws(sc)
+    st := sc.i
+    until sc.i < sc.n and _id_char(_sb(sc, sc.i)):
+        sc.i++
+    end
+    if sc.i == st:
+        ret ""
+    end
+    ret _slice(sc, st, sc.i)
+end
+
+func _slice(sc: Sc, a: int, b: int): str:
+    r := mem.AllocateZeroed((b - a + 1) as u64) as u8*
+    repeat b - a in k:
+        r[k] = sc.p[a + k]
+    end
+    ret (r as void*) as str
+end
+
+func _sfree(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func _seq(s: str, lit: str): bool:
+    ret s == lit
+end
+
+func _lower_eq(s: str, lit: str): bool:
+    if s.len() != lit.len():
+        ret false
+    end
+    a := (s as void*) as u8*
+    b := (lit as void*) as u8*
+    repeat s.len() in i:
+        mut c := a[i] as int
+        if c >= 65 and c <= 90:
+            c += 32
+        end
+        if c != (b[i] as int):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _is_num_start(sc &: Sc): bool:
+    c := _peek(sc)
+    if c >= 48 and c <= 57:
+        ret true
+    end
+    if (c == 45 or c == 43 or c == 46) and sc.i + 1 < sc.n:
+        d := _sb(sc, sc.i + 1)
+        ret (d >= 48 and d <= 57) or d == 46
+    end
+    ret false
+end
+
+func _number(sc &: Sc, unit &: str): f64:
+    _skip_ws(sc)
+    mut neg := false
+    if sc.i < sc.n and (_sb(sc, sc.i) == 45 or _sb(sc, sc.i) == 43):
+        neg = _sb(sc, sc.i) == 45
+        sc.i++
+    end
+    mut v := 0.0
+    mut digits := 0
+    until sc.i < sc.n and _sb(sc, sc.i) >= 48 and _sb(sc, sc.i) <= 57:
+        v = v * 10.0 + ((_sb(sc, sc.i) - 48) as f64)
+        sc.i++
+        digits++
+    end
+    if sc.i < sc.n and _sb(sc, sc.i) == 46:
+        sc.i++
+        mut f := 0.1
+        until sc.i < sc.n and _sb(sc, sc.i) >= 48 and _sb(sc, sc.i) <= 57:
+            v += f * ((_sb(sc, sc.i) - 48) as f64)
+            f /= 10.0
+            sc.i++
+            digits++
+        end
+    end
+    if digits == 0:
+        sc.bad = true
+    end
+    if sc.i < sc.n and (_sb(sc, sc.i) == 101 or _sb(sc, sc.i) == 69) and sc.i + 1 < sc.n:
+        d := _sb(sc, sc.i + 1)
+        if (d >= 48 and d <= 57) or d == 45 or d == 43:
+            sc.i++
+            mut eneg := false
+            if _sb(sc, sc.i) == 45 or _sb(sc, sc.i) == 43:
+                eneg = _sb(sc, sc.i) == 45
+                sc.i++
+            end
+            mut e := 0
+            until sc.i < sc.n and _sb(sc, sc.i) >= 48 and _sb(sc, sc.i) <= 57:
+                e = e * 10 + (_sb(sc, sc.i) - 48)
+                sc.i++
+            end
+            repeat e:
+                v = eneg ? v / 10.0 : v * 10.0
+            end
+        end
+    end
+    if neg:
+        v = 0.0 - v
+    end
+    st := sc.i
+    if sc.i < sc.n and _sb(sc, sc.i) == 37:
+        sc.i++
+        unit = "%"
+        ret v
+    end
+    until sc.i < sc.n and _id_char(_sb(sc, sc.i)):
+        sc.i++
+    end
+    if sc.i == st:
+        unit = ""
+    else:
+        u := _slice(sc, st, sc.i)
+        if _lower_eq(u, "px"):
+            unit = "px"
+        else _lower_eq(u, "fr"):
+            unit = "fr"
+        else:
+            unit = "?"
+        end
+        _sfree(u)
+    end
+    ret v
+end
+
+func _breadth(sc &: Sc, k &: int, v &: f64): bool:
+    if _is_num_start(sc):
+        mut unit := ""
+        x := _number(sc, unit)
+        if sc.bad:
+            ret false
+        end
+        v = x
+        if unit == "px" or (unit == "" and x == 0.0):
+            k = K_PX
+        else unit == "%":
+            k = K_PCT
+        else unit == "fr":
+            k = K_FR
+        else:
+            ret false
+        end
+        ret x >= 0.0
+    end
+    id := _ident(sc)
+    defer _sfree(id)
+    v = 0.0
+    if _lower_eq(id, "auto"):
+        k = K_AUTO
+        ret true
+    end
+    if _lower_eq(id, "min-content"):
+        k = K_MINC
+        ret true
+    end
+    if _lower_eq(id, "max-content"):
+        k = K_MAXC
+        ret true
+    end
+    ret false
+end
+
+func _track_size(sc &: Sc, d &: TDef): bool:
+    save := sc.i
+    id := _ident(sc)
+    if _peek(sc) == 40 and _lower_eq(id, "minmax"):
+        _sfree(id)
+        sc.i++
+        mut mk := 0
+        mut mv := 0.0
+        if not _breadth(sc, mk, mv) or mk == K_FR:
+            ret false
+        end
+        if not _eat(sc, 44):
+            ret false
+        end
+        mut xk := 0
+        mut xv := 0.0
+        if not _breadth(sc, xk, xv):
+            ret false
+        end
+        if not _eat(sc, 41):
+            ret false
+        end
+        d = TDef { mk = mk, mv = mv, xk = xk, xv = xv }
+        ret true
+    end
+    if _peek(sc) == 40 and _lower_eq(id, "fit-content"):
+        _sfree(id)
+        sc.i++
+        mut k := 0
+        mut v := 0.0
+        if not _breadth(sc, k, v):
+            ret false
+        end
+        if not _eat(sc, 41):
+            ret false
+        end
+        if k == K_PX:
+            d = TDef { mk = K_AUTO, xk = K_FITPX, xv = v }
+            ret true
+        end
+        if k == K_PCT:
+            d = TDef { mk = K_AUTO, xk = K_FITPCT, xv = v }
+            ret true
+        end
+        ret false
+    end
+    _sfree(id)
+    sc.i = save
+    mut k := 0
+    mut v := 0.0
+    if not _breadth(sc, k, v):
+        ret false
+    end
+    if k == K_FR:
+        d = TDef { mk = K_AUTO, xk = K_FR, xv = v }
+    else:
+        d = TDef { mk = k, mv = v, xk = k, xv = v }
+    end
+    ret true
+end
+
+func _line_names(sc &: Sc, out &: Vector<LName>, line: int, after: bool): bool:
+    if not _eat(sc, 91):
+        ret true
+    end
+    until true:
+        if _eat(sc, 93):
+            ret true
+        end
+        id := _ident(sc)
+        if id.len() == 0:
+            ret false
+        end
+        if _lower_eq(id, "span") or _lower_eq(id, "auto"):
+            _sfree(id)
+            ret false
+        end
+        out.push(LName { line = line, name = id, after = after })
+    end
+end
+
+func _free_names(v &: Vector<LName>):
+    each nm in v:
+        _sfree(nm.name)
+    end
+    v.free()
+end
+
+func _tpl_free(g &: GTpl):
+    g.tracks.free()
+    _free_names(g.names)
+    g.rtracks.free()
+    _free_names(g.rnames)
+    g.ok = false
+end
+
+func _fixed(k: int): bool:
+    ret k == K_PX or k == K_PCT
+end
+
+func _tpl_parse(s: str): GTpl:
+    mut g := GTpl {}
+    g.tracks = Vector {} as Vector<TDef>
+    g.names = Vector {} as Vector<LName>
+    g.rtracks = Vector {} as Vector<TDef>
+    g.rnames = Vector {} as Vector<LName>
+    mut sc := _sc(s)
+    if _peek(sc) < 0:
+        ret g
+    end
+    save := sc.i
+    first := _ident(sc)
+    if _lower_eq(first, "none") and _peek(sc) < 0:
+        _sfree(first)
+        ret g
+    end
+    _sfree(first)
+    sc.i = save
+    mut ok := true
+    mut after := false
+    until ok:
+        if not _line_names(sc, g.names, g.tracks.len(), after):
+            ok = false
+            break
+        end
+        if _peek(sc) < 0:
+            break
+        end
+        save2 := sc.i
+        id := _ident(sc)
+        if _peek(sc) == 40 and _lower_eq(id, "repeat"):
+            _sfree(id)
+            sc.i++
+            mut count := 0
+            mut kind := 0
+            if _is_num_start(sc):
+                mut unit := ""
+                c := _number(sc, unit)
+                if unit != "" or c < 1.0 or sc.bad:
+                    ok = false
+                    break
+                end
+                count = c as int
+            else:
+                kw := _ident(sc)
+                if _lower_eq(kw, "auto-fill"):
+                    kind = 1
+                else _lower_eq(kw, "auto-fit"):
+                    kind = 2
+                else:
+                    ok = false
+                end
+                _sfree(kw)
+                if not ok:
+                    break
+                end
+            end
+            if not _eat(sc, 44):
+                ok = false
+                break
+            end
+            mut rt := Vector {} as Vector<TDef>
+            mut rn := Vector {} as Vector<LName>
+            until ok:
+                if not _line_names(sc, rn, rt.len(), false):
+                    ok = false
+                    break
+                end
+                if _eat(sc, 41):
+                    break
+                end
+                mut d := TDef {}
+                if not _track_size(sc, d):
+                    ok = false
+                    break
+                end
+                rt.push(d)
+            end
+            if ok and rt.len() == 0:
+                ok = false
+            end
+            if not ok:
+                rt.free()
+                _free_names(rn)
+                break
+            end
+            if kind == 0:
+                mut reps := count
+                if g.tracks.len() + reps * rt.len() > GMAX:
+                    reps = (GMAX - g.tracks.len()) / rt.len() + 1
+                end
+                repeat reps:
+                    base := g.tracks.len()
+                    each nm in rn:
+                        g.names.push(LName { line = base + nm.line, name = _clone_s(nm.name), after = after })
+                    end
+                    each d in rt:
+                        g.tracks.push(d)
+                    end
+                end
+                rt.free()
+                _free_names(rn)
+            else:
+                if g.rep != 0:
+                    ok = false
+                    rt.free()
+                    _free_names(rn)
+                    break
+                end
+                g.rep = kind
+                g.rep_at = g.tracks.len()
+                g.rtracks.free()
+                g.rtracks = rt
+                _free_names(g.rnames)
+                g.rnames = rn
+                after = true
+            end
+            continue
+        end
+        _sfree(id)
+        sc.i = save2
+        mut d := TDef {}
+        if not _track_size(sc, d):
+            ok = false
+            break
+        end
+        g.tracks.push(d)
+    end
+    if ok and g.rep != 0:
+        each d in g.tracks:
+            if not (_fixed(d.mk) or _fixed(d.xk)):
+                ok = false
+            end
+        end
+        each d in g.rtracks:
+            if not (_fixed(d.mk) or _fixed(d.xk)):
+                ok = false
+            end
+        end
+    end
+    if not ok or (g.tracks.len() == 0 and g.rep == 0):
+        _tpl_free(g)
+        g.tracks = Vector {} as Vector<TDef>
+        g.names = Vector {} as Vector<LName>
+        g.rtracks = Vector {} as Vector<TDef>
+        g.rnames = Vector {} as Vector<LName>
+        g.ok = false
+        g.rep = 0
+        ret g
+    end
+    g.ok = true
+    ret g
+end
+
+func _clone_s(s: str): str:
+    if s.len() == 0:
+        ret ""
+    end
+    sc := _sc(s)
+    ret _slice(sc, 0, s.len())
+end
+
+func _auto_list(s: str): Vector<TDef>:
+    mut out := Vector {} as Vector<TDef>
+    mut sc := _sc(s)
+    until _peek(sc) >= 0:
+        mut d := TDef {}
+        if not _track_size(sc, d):
+            out.clear()
+            break
+        end
+        out.push(d)
+    end
+    ret out
+end
+
+func _place_parse(s: str): GPl:
+    mut sc := _sc(s)
+    mut span := false
+    mut has_n := false
+    mut n := 0
+    mut name := ""
+    mut bad := false
+    until _peek(sc) >= 0:
+        if _is_num_start(sc):
+            mut unit := ""
+            v := _number(sc, unit)
+            if has_n or unit != "" or sc.bad:
+                bad = true
+                break
+            end
+            has_n = true
+            n = v as int
+            continue
+        end
+        id := _ident(sc)
+        if id.len() == 0:
+            bad = true
+            break
+        end
+        if _lower_eq(id, "span"):
+            _sfree(id)
+            if span:
+                bad = true
+                break
+            end
+            span = true
+            continue
+        end
+        if _lower_eq(id, "auto"):
+            _sfree(id)
+            if span or has_n or name.len() > 0 or _peek(sc) >= 0:
+                bad = true
+            end
+            break
+        end
+        if name.len() > 0:
+            _sfree(id)
+            bad = true
+            break
+        end
+        name = id
+    end
+    if bad or (has_n and n == 0) or (span and has_n and n < 0):
+        _sfree(name)
+        ret GPl {}
+    end
+    if span:
+        if name.len() > 0:
+            ret GPl { kind = GP_NSPAN, n = has_n ? n : 1, name = name }
+        end
+        ret GPl { kind = GP_SPAN, n = has_n ? n : 1 }
+    end
+    if name.len() > 0:
+        ret GPl { kind = GP_NLINE, n = has_n ? n : 0, name = name }
+    end
+    if has_n:
+        ret GPl { kind = GP_LINE, n = n }
+    end
+    ret GPl {}
+end
+
+func _areas_parse(s: str, areas &: Vector<GArea>, nc &: int, nr &: int):
+    nc = 0
+    nr = 0
+    mut sc := _sc(s)
+    mut cells := Vector {} as Vector<str>
+    defer cells.free()
+    mut bad := false
+    until _peek(sc) >= 0:
+        q := _peek(sc)
+        if q != 34 and q != 39:
+            bad = true
+            break
+        end
+        sc.i++
+        mut row := 0
+        until sc.i < sc.n and _sb(sc, sc.i) != q:
+            c := _sb(sc, sc.i)
+            if _ws(c):
+                sc.i++
+                continue
+            end
+            if c == 46:
+                until sc.i < sc.n and _sb(sc, sc.i) == 46:
+                    sc.i++
+                end
+                cells.push("")
+                row++
+                continue
+            end
+            st := sc.i
+            until sc.i < sc.n and _id_char(_sb(sc, sc.i)):
+                sc.i++
+            end
+            if sc.i == st:
+                bad = true
+                break
+            end
+            cells.push(_slice(sc, st, sc.i))
+            row++
+        end
+        if bad or sc.i >= sc.n:
+            bad = true
+            break
+        end
+        sc.i++
+        if row == 0 or (nr > 0 and row != nc):
+            bad = true
+            break
+        end
+        nc = row
+        nr++
+    end
+    if not bad:
+        repeat cells.len() in k:
+            nm := cells[k]
+            if nm.len() == 0:
+                continue
+            end
+            mut found := -1
+            repeat areas.len() in a:
+                if areas[a].name == nm:
+                    found = a
+                end
+            end
+            r := k / nc
+            c := k % nc
+            if found < 0:
+                areas.push(GArea { name = _clone_s(nm), rs = r + 1, re = r + 2, cs = c + 1, ce = c + 2 })
+            else:
+                mut ar := areas[found]
+                if r + 2 > ar.re:
+                    ar.re = r + 2
+                end
+                if c + 2 > ar.ce:
+                    ar.ce = c + 2
+                end
+                areas[found] = ar
+            end
+        end
+        each ar in areas:
+            repeat ar.re - ar.rs in rr:
+                repeat ar.ce - ar.cs in cc:
+                    k := (ar.rs - 1 + rr) * nc + ar.cs - 1 + cc
+                    if cells[k] != ar.name:
+                        bad = true
+                    end
+                end
+            end
+        end
+        mut cnt := 0
+        each nm in cells:
+            if nm.len() > 0:
+                cnt++
+            end
+        end
+        mut tot := 0
+        each ar in areas:
+            tot += (ar.re - ar.rs) * (ar.ce - ar.cs)
+        end
+        if tot != cnt:
+            bad = true
+        end
+    end
+    each nm in cells:
+        _sfree(nm)
+    end
+    if bad:
+        each ar in areas:
+            _sfree(ar.name)
+        end
+        areas.clear()
+        nc = 0
+        nr = 0
+    end
+end
+
+func _gd_free(g &: GData):
+    _sfree(g.s_cols)
+    _sfree(g.s_rows)
+    _sfree(g.s_areas)
+    _sfree(g.s_acols)
+    _sfree(g.s_arows)
+    _sfree(g.s_rs)
+    _sfree(g.s_re)
+    _sfree(g.s_cs)
+    _sfree(g.s_ce)
+    _tpl_free(g.cols)
+    _tpl_free(g.rows)
+    each ar in g.areas:
+        _sfree(ar.name)
+    end
+    g.areas.free()
+    g.acols.free()
+    g.arows.free()
+    _sfree(g.prs.name)
+    _sfree(g.pre.name)
+    _sfree(g.pcs.name)
+    _sfree(g.pce.name)
+    g = GData {}
+end
+
+func _gd_set(g &: GData, st &: Style):
+    if st.grid_template_columns != g.s_cols:
+        _sfree(g.s_cols)
+        _tpl_free(g.cols)
+        g.s_cols = _clone_s(st.grid_template_columns)
+        g.cols = _tpl_parse(g.s_cols)
+    end
+    if st.grid_template_rows != g.s_rows:
+        _sfree(g.s_rows)
+        _tpl_free(g.rows)
+        g.s_rows = _clone_s(st.grid_template_rows)
+        g.rows = _tpl_parse(g.s_rows)
+    end
+    if st.grid_template_areas != g.s_areas:
+        _sfree(g.s_areas)
+        each ar in g.areas:
+            _sfree(ar.name)
+        end
+        g.areas.clear()
+        g.s_areas = _clone_s(st.grid_template_areas)
+        _areas_parse(g.s_areas, g.areas, g.area_nc, g.area_nr)
+    end
+    if st.grid_auto_columns != g.s_acols:
+        _sfree(g.s_acols)
+        g.acols.free()
+        g.s_acols = _clone_s(st.grid_auto_columns)
+        g.acols = _auto_list(g.s_acols)
+    end
+    if st.grid_auto_rows != g.s_arows:
+        _sfree(g.s_arows)
+        g.arows.free()
+        g.s_arows = _clone_s(st.grid_auto_rows)
+        g.arows = _auto_list(g.s_arows)
+    end
+    if st.grid_row_start != g.s_rs:
+        _sfree(g.s_rs)
+        _sfree(g.prs.name)
+        g.s_rs = _clone_s(st.grid_row_start)
+        g.prs = _place_parse(g.s_rs)
+    end
+    if st.grid_row_end != g.s_re:
+        _sfree(g.s_re)
+        _sfree(g.pre.name)
+        g.s_re = _clone_s(st.grid_row_end)
+        g.pre = _place_parse(g.s_re)
+    end
+    if st.grid_column_start != g.s_cs:
+        _sfree(g.s_cs)
+        _sfree(g.pcs.name)
+        g.s_cs = _clone_s(st.grid_column_start)
+        g.pcs = _place_parse(g.s_cs)
+    end
+    if st.grid_column_end != g.s_ce:
+        _sfree(g.s_ce)
+        _sfree(g.pce.name)
+        g.s_ce = _clone_s(st.grid_column_end)
+        g.pce = _place_parse(g.s_ce)
+    end
+    st.grid_template_columns = g.s_cols
+    st.grid_template_rows = g.s_rows
+    st.grid_template_areas = g.s_areas
+    st.grid_auto_columns = g.s_acols
+    st.grid_auto_rows = g.s_arows
+    st.grid_row_start = g.s_rs
+    st.grid_row_end = g.s_re
+    st.grid_column_start = g.s_cs
+    st.grid_column_end = g.s_ce
+end

@@ -209,7 +209,10 @@ fn pin(chat: &str, root: &std::path::Path) -> Result<Pin, String> {
     let pos = pins.iter().position(|p| p.0 == chat);
     if let Some(i) = pos {
         if pins[i].1 != root {
-            return Err("The project folder of this chat changed while it is running. Wait for the running steps to finish, then run it again.".to_string());
+            return Err(
+                "The project folder of this chat changed while it is running. Wait for the running steps to finish, then run it again."
+                    .to_string(),
+            );
         }
         pins[i].2 += 1;
     } else {

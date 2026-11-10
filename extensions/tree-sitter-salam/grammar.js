@@ -51,7 +51,7 @@ module.exports = grammar({
     $._layout_keyword,
     $._component_keyword,
     $._dyn_keyword,
-    $._state_keyword,
+    $._layout_var_name,
   ],
 
   extras: ($) => [/\s/, $.line_comment, $.block_comment],
@@ -371,7 +371,7 @@ module.exports = grammar({
         optional(field("name", $.name)),
         optional($.parameter_list),
         ":",
-        repeat($._layout_item),
+        repeat(choice($.layout_variable, $._layout_item)),
         kw("end"),
       ),
 
@@ -381,14 +381,13 @@ module.exports = grammar({
         field("name", $.name),
         optional($.parameter_list),
         ":",
-        repeat(choice($.state_declaration, $._layout_item)),
+        repeat(choice($.layout_variable, $._layout_item)),
         kw("end"),
       ),
 
-    state_declaration: ($) =>
+    layout_variable: ($) =>
       seq(
-        alias($._state_keyword, "state"),
-        field("name", $.name),
+        field("name", alias($._layout_var_name, $.name)),
         ":=",
         field("value", $._expression),
       ),

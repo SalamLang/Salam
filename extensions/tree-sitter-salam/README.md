@@ -29,9 +29,9 @@ different token: a name after `.` may start with a keyword
 (`رشته.پایان با(...)`), a layout tag or attribute name runs to its `:` or `=`
 (`border block end color`), and an import path runs to the end of the line.
 `page`, `component` and `dyn` are keywords only where the parser can take
-them, so `page := http.Get(...)` is a variable. `state` (`وضعیت`) is a
-keyword only at the start of a line in a component body that has `:=` before
-any `=`, the same test the compiler makes.
+them, so `page := http.Get(...)` is a variable. A line in a component body
+or a page block whose name is followed by `:=` declares a variable, the same
+test the compiler makes.
 
 ## Building
 

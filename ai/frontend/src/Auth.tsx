@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState, type FormEvent } from "react";
 import { useEffect } from "react";
-import { api, ApiError, awaitProviderLogin, newPollSecret, rememberOAuth, setToken, type User } from "./api";
-import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
+import { api, ApiError, awaitProviderLogin, newPollSecret, rememberOAuth, setToken, type Plan, type User } from "./api";
+import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook, IconSpark } from "./icons";
+import { fmtNum } from "./format";
 import type { Theme } from "./theme";
 import { isFa, setLang, t } from "./i18n";
 import { autoDir } from "./dir";
@@ -218,6 +219,51 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
   );
 }
 
+function tomanShort(n: number): string {
+  if (n >= 1000000 && n % 1000000 === 0) return t(`${fmtNum(n / 1000000)} میلیون تومان`, `${fmtNum(n / 1000000)} million toman`);
+  return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
+}
+
+function PlansTeaser() {
+  const [open, setOpen] = useState(false);
+  const [plans, setPlans] = useState<Plan[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!open || plans !== null) return;
+    api
+      .plans()
+      .then((r) => setPlans(r.plans))
+      .catch(() => setError(t("بارگذاری پلن‌ها ناموفق بود.", "Could not load plans.")));
+  }, [open, plans]);
+  return (
+    <div className="auth-plans-teaser">
+      <button type="button" className="link" onClick={() => setOpen((v) => !v)}>
+        <IconSpark width={14} height={14} /> {open ? t("بستن پلن‌ها", "Close plans") : t("دیدن پلن‌ها و قیمت‌ها", "See plans and pricing")}
+      </button>
+      {open && (
+        <div className="auth-plans-grid">
+          {plans === null && !error && (
+            <div className="list-loading" role="status">
+              <span className="spinner" />
+            </div>
+          )}
+          {error && <p className="muted">{error}</p>}
+          {plans?.map((p) => (
+            <div key={p.id} className="auth-plan-card">
+              <strong>{isFa ? p.name : p.name_en || p.name}</strong>
+              <span className="auth-plan-price">{p.price === 0 ? t("رایگان", "Free") : tomanShort(p.price)}</span>
+              <span className="muted">{isFa ? p.note : p.note_en || p.note}</span>
+            </div>
+          ))}
+          {plans && (
+            <p className="muted auth-plans-cta">{t("برای خرید یک پلن، ابتدا ثبت‌نام یا وارد شوید.", "To buy a plan, sign up or sign in first.")}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void; theme: Theme; toggleTheme: () => void }) {
   return (
     <div className="auth">
@@ -252,6 +298,7 @@ export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void
               </div>
             </li>
           </ul>
+          <PlansTeaser />
         </div>
       </section>
       <section className="auth-panel">

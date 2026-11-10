@@ -1,0 +1,437 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+import gui.cssbox
+
+func grid_tok_name(tk: Tok): str:
+    if tk.raw.len() > 0:
+        ret tk.raw
+    end
+    ret tk.s
+end
+
+func grid_text(t: Vector<Tok>, s: int, e: int, cx: Cx, out &: str): bool:
+    mut b := str.NewBuilder()
+    mut ok := true
+    mut prev_open := false
+    mut i := s
+    until i < e:
+        tk := t[i]
+        mut piece := ""
+        mut own := false
+        switch tk.k:
+            TK_IDENT:
+                piece = grid_tok_name(tk)
+                break
+            end
+            TK_NUM:
+                piece = fmt_sig(tk.n)
+                own = true
+                break
+            end
+            TK_PCT:
+                n := fmt_sig(tk.n)
+                piece = n + "%"
+                sfree(n)
+                own = true
+                break
+            end
+            TK_DIM:
+                if tk.s == "fr":
+                    n := fmt_sig(tk.n)
+                    piece = n + "fr"
+                    sfree(n)
+                    own = true
+                else:
+                    mut l := Len {}
+                    if not p_len(t, i, i + 1, cx, false, true, l) or l.calc.len() > 0:
+                        ok = false
+                    else:
+                        piece = px_text(l.px)
+                        own = true
+                    end
+                end
+                break
+            end
+            TK_FUNC:
+                piece = tk.s + "("
+                own = true
+                break
+            end
+            TK_CLOSE:
+                piece = ")"
+                break
+            end
+            TK_COMMA:
+                piece = ","
+                break
+            end
+            TK_STR:
+                piece = "\"" + tk.s + "\""
+                own = true
+                break
+            end
+            TK_DELIM:
+                if tk.d == 91:
+                    piece = "["
+                else tk.d == 93:
+                    piece = "]"
+                else tk.d == 46:
+                    piece = "."
+                else:
+                    ok = false
+                end
+                break
+            end
+            else:
+                ok = false
+            end
+        end
+        if not ok:
+            break
+        end
+        if i > s and not (prev_open or piece == ")" or piece == "]" or piece == ","):
+            str.BufAppend(b, " ")
+        end
+        str.BufAppend(b, piece)
+        prev_open = piece.ends_with("(") or piece == "["
+        if piece == ",":
+            str.BufAppend(b, " ")
+            prev_open = true
+        end
+        if own:
+            sfree(piece)
+        end
+        i++
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    if not ok:
+        sfree(r)
+        ret false
+    end
+    out = intern_own(r)
+    ret true
+end
+
+func apply_grid_prop(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
+    k := kw_at(t, s, e)
+    switch p:
+        P_GRID_TEMPLATE_COLUMNS, P_GRID_TEMPLATE_ROWS:
+            mut v := ""
+            if k == "none":
+                v = ""
+            else:
+                if not grid_text(t, s, e, cx, v) or not cssbox.IsTrackList(v):
+                    ret false
+                end
+            end
+            if p == P_GRID_TEMPLATE_COLUMNS:
+                cs.grid_template_columns = v
+            else:
+                cs.grid_template_rows = v
+            end
+            ret true
+        end
+        P_GRID_TEMPLATE_AREAS:
+            mut v := ""
+            if k != "none":
+                if not grid_text(t, s, e, cx, v) or not cssbox.IsGridAreas(v):
+                    ret false
+                end
+            end
+            cs.grid_template_areas = v
+            ret true
+        end
+        P_GRID_AUTO_COLUMNS, P_GRID_AUTO_ROWS:
+            mut v := ""
+            if not grid_text(t, s, e, cx, v) or not cssbox.IsTrackSizes(v):
+                ret false
+            end
+            if k == "auto":
+                v = ""
+            end
+            if p == P_GRID_AUTO_COLUMNS:
+                cs.grid_auto_columns = v
+            else:
+                cs.grid_auto_rows = v
+            end
+            ret true
+        end
+        P_GRID_AUTO_FLOW:
+            mut col := false
+            mut dense := false
+            mut seen_dir := false
+            mut i := s
+            until i < e:
+                if t[i].k != TK_IDENT:
+                    ret false
+                end
+                w := t[i].s
+                if w == "row" and not seen_dir:
+                    seen_dir = true
+                else w == "column" and not seen_dir:
+                    col = true
+                    seen_dir = true
+                else w == "dense" and not dense:
+                    dense = true
+                else:
+                    ret false
+                end
+                i = nxt(t, i)
+            end
+            if col:
+                cs.grid_auto_flow = dense ? cssbox.GridAutoFlow.ColumnDense : cssbox.GridAutoFlow.Column
+            else:
+                cs.grid_auto_flow = dense ? cssbox.GridAutoFlow.RowDense : cssbox.GridAutoFlow.Row
+            end
+            ret true
+        end
+        P_GRID_ROW_START, P_GRID_ROW_END, P_GRID_COLUMN_START, P_GRID_COLUMN_END:
+            mut v := ""
+            if not grid_text(t, s, e, cx, v) or not cssbox.IsGridLine(v):
+                ret false
+            end
+            if k == "auto":
+                v = ""
+            end
+            switch p:
+                P_GRID_ROW_START: cs.grid_row_start = v break end
+                P_GRID_ROW_END: cs.grid_row_end = v break end
+                P_GRID_COLUMN_START: cs.grid_column_start = v break end
+                else: cs.grid_column_end = v break end
+            end
+            ret true
+        end
+        P_CAPTION_SIDE:
+            switch k:
+                "top", "block-start": cs.caption_side = cssbox.CaptionSide.Top break end
+                "bottom", "block-end": cs.caption_side = cssbox.CaptionSide.Bottom break end
+                else: ret false end
+            end
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func grid_slash_parts(t: Vector<Tok>, s: int, e: int, out &: Vector<int>):
+    out.push(s)
+    mut i := s
+    until i < e:
+        if t[i].k == TK_DELIM and t[i].d == 47:
+            out.push(i)
+            out.push(i + 1)
+        end
+        i = nxt(t, i)
+    end
+    out.push(e)
+end
+
+func grid_is_ident(t: Vector<Tok>, s: int, e: int): bool:
+    ret single(t, s, e) and t[s].k == TK_IDENT and t[s].s != "auto" and t[s].s != "span"
+end
+
+func expand_grid_line(src: str, t: Vector<Tok>, s: int, e: int, a: int, b: int, ids &: Vector<int>, vals &: Vector<str>): bool:
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    grid_slash_parts(t, s, e, parts)
+    n := parts.len() / 2
+    if n < 1 or n > 2:
+        ret false
+    end
+    if parts[0] >= parts[1]:
+        ret false
+    end
+    push_val(ids, vals, a, tok_text(src, t, parts[0], parts[1]))
+    if n == 2:
+        if parts[2] >= parts[3]:
+            ret false
+        end
+        push_val(ids, vals, b, tok_text(src, t, parts[2], parts[3]))
+    else grid_is_ident(t, parts[0], parts[1]):
+        push_val(ids, vals, b, tok_text(src, t, parts[0], parts[1]))
+    else:
+        push_lit(ids, vals, b, "auto")
+    end
+    ret true
+end
+
+func expand_grid_area(src: str, t: Vector<Tok>, s: int, e: int, ids &: Vector<int>, vals &: Vector<str>): bool:
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    grid_slash_parts(t, s, e, parts)
+    n := parts.len() / 2
+    if n < 1 or n > 4:
+        ret false
+    end
+    repeat n in i:
+        if parts[2 * i] >= parts[2 * i + 1]:
+            ret false
+        end
+    end
+    order := [P_GRID_ROW_START, P_GRID_COLUMN_START, P_GRID_ROW_END, P_GRID_COLUMN_END]
+    mut srcp := [0, 1, 2, 3]
+    repeat 4 in i:
+        if i < n:
+            srcp[i] = i
+        else:
+            from := i == 3 ? srcp[1] : srcp[0]
+            if from >= 0 and grid_is_ident(t, parts[2 * from], parts[2 * from + 1]):
+                srcp[i] = from
+            else:
+                srcp[i] = -1
+            end
+        end
+        if srcp[i] >= 0:
+            k := srcp[i]
+            push_val(ids, vals, order[i], tok_text(src, t, parts[2 * k], parts[2 * k + 1]))
+        else:
+            push_lit(ids, vals, order[i], "auto")
+        end
+    end
+    ret true
+end
+
+func expand_grid_template(src: str, t: Vector<Tok>, s: int, e: int, full: bool, ids &: Vector<int>, vals &: Vector<str>): bool:
+    if kw_at(t, s, e) == "none":
+        push_lit(ids, vals, P_GRID_TEMPLATE_ROWS, "none")
+        push_lit(ids, vals, P_GRID_TEMPLATE_COLUMNS, "none")
+        push_lit(ids, vals, P_GRID_TEMPLATE_AREAS, "none")
+        if full:
+            push_lit(ids, vals, P_GRID_AUTO_ROWS, "auto")
+            push_lit(ids, vals, P_GRID_AUTO_COLUMNS, "auto")
+            push_lit(ids, vals, P_GRID_AUTO_FLOW, "row")
+        end
+        ret true
+    end
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    grid_slash_parts(t, s, e, parts)
+    n := parts.len() / 2
+    if n > 2:
+        ret false
+    end
+    if full and n == 2:
+        a0 := parts[0]
+        b0 := parts[2]
+        if t[b0].k == TK_IDENT and t[b0].s == "auto-flow":
+            mut j := nxt(t, b0)
+            mut dense := false
+            if j < parts[3] and t[j].k == TK_IDENT and t[j].s == "dense":
+                dense = true
+                j = nxt(t, j)
+            end
+            push_val(ids, vals, P_GRID_TEMPLATE_ROWS, tok_text(src, t, a0, parts[1]))
+            push_lit(ids, vals, P_GRID_TEMPLATE_COLUMNS, "none")
+            push_lit(ids, vals, P_GRID_TEMPLATE_AREAS, "none")
+            push_lit(ids, vals, P_GRID_AUTO_FLOW, dense ? "column dense" : "column")
+            push_lit(ids, vals, P_GRID_AUTO_ROWS, "auto")
+            if j < parts[3]:
+                push_val(ids, vals, P_GRID_AUTO_COLUMNS, tok_text(src, t, j, parts[3]))
+            else:
+                push_lit(ids, vals, P_GRID_AUTO_COLUMNS, "auto")
+            end
+            ret true
+        end
+        if t[a0].k == TK_IDENT and t[a0].s == "auto-flow":
+            mut j := nxt(t, a0)
+            mut dense := false
+            if j < parts[1] and t[j].k == TK_IDENT and t[j].s == "dense":
+                dense = true
+                j = nxt(t, j)
+            end
+            push_lit(ids, vals, P_GRID_TEMPLATE_ROWS, "none")
+            push_val(ids, vals, P_GRID_TEMPLATE_COLUMNS, tok_text(src, t, b0, parts[3]))
+            push_lit(ids, vals, P_GRID_TEMPLATE_AREAS, "none")
+            push_lit(ids, vals, P_GRID_AUTO_FLOW, dense ? "row dense" : "row")
+            push_lit(ids, vals, P_GRID_AUTO_COLUMNS, "auto")
+            if j < parts[1]:
+                push_val(ids, vals, P_GRID_AUTO_ROWS, tok_text(src, t, j, parts[1]))
+            else:
+                push_lit(ids, vals, P_GRID_AUTO_ROWS, "auto")
+            end
+            ret true
+        end
+    end
+    mut has_str := false
+    mut i := parts[0]
+    until i < parts[1]:
+        if t[i].k == TK_STR:
+            has_str = true
+        end
+        i = nxt(t, i)
+    end
+    if has_str:
+        mut areas := str.NewBuilder()
+        mut rows := str.NewBuilder()
+        mut pending := false
+        i = parts[0]
+        until i < parts[1]:
+            tk := t[i]
+            if tk.k == TK_STR:
+                if pending:
+                    str.BufAppend(rows, " auto")
+                end
+                str.BufAppend(areas, " \"" + tk.s + "\"")
+                pending = true
+            else:
+                txt := tok_text(src, t, i, nxt(t, i))
+                str.BufAppend(rows, " " + txt)
+                sfree(txt)
+                if not (tk.k == TK_DELIM and tk.d == 91):
+                    pending = false
+                end
+            end
+            i = nxt(t, i)
+        end
+        if pending:
+            str.BufAppend(rows, " auto")
+        end
+        a := str.BufStr(areas)
+        r := str.BufStr(rows)
+        str.BufFree(areas)
+        str.BufFree(rows)
+        ids.push(P_GRID_TEMPLATE_AREAS)
+        vals.push(str.Trim(a))
+        ids.push(P_GRID_TEMPLATE_ROWS)
+        vals.push(str.Trim(r))
+        sfree(a)
+        sfree(r)
+        if n == 2:
+            push_val(ids, vals, P_GRID_TEMPLATE_COLUMNS, tok_text(src, t, parts[2], parts[3]))
+        else:
+            push_lit(ids, vals, P_GRID_TEMPLATE_COLUMNS, "none")
+        end
+    else:
+        if n != 2 or parts[0] >= parts[1] or parts[2] >= parts[3]:
+            ret false
+        end
+        push_val(ids, vals, P_GRID_TEMPLATE_ROWS, tok_text(src, t, parts[0], parts[1]))
+        push_val(ids, vals, P_GRID_TEMPLATE_COLUMNS, tok_text(src, t, parts[2], parts[3]))
+        push_lit(ids, vals, P_GRID_TEMPLATE_AREAS, "none")
+    end
+    if full:
+        push_lit(ids, vals, P_GRID_AUTO_ROWS, "auto")
+        push_lit(ids, vals, P_GRID_AUTO_COLUMNS, "auto")
+        push_lit(ids, vals, P_GRID_AUTO_FLOW, "row")
+    end
+    ret true
+end

@@ -525,7 +525,7 @@ Each phase is one pull request.
    DPI, clipboard and timers, and a headless backend for tests.
 3. **UI runtime.** `std/gui/ui`: node tree, computed styles, the cascade
    (default theme, element styles, `hover`/`focus`/`active`, `media`),
-   block, inline and flex layout, absolute positioning, scrolling, painting,
+   block, inline, flex, grid and table layout, absolute positioning, scrolling, painting,
    hit testing, event dispatch, focus order.
 4. **Native generator.** `compiler/sal_layout/layout_native.salam`,
    `salam page run --ui=native`, `salam page shot` (render to PNG),
@@ -539,7 +539,7 @@ Each phase is one pull request.
 8. **Tooling.** Live preview with reload, LSP target diagnostics, site
    learn pages in English and Persian, CI on Linux, Windows and macOS.
 9. **Later.** Accessibility from `aria` and roles, a GPU renderer, Wayland,
-   CSS grid, an SVG subset, Android and iOS.
+   subgrid, an SVG subset, Android and iOS.
 
 ## Diagnostics
 

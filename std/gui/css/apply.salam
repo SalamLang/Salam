@@ -507,6 +507,7 @@ func parse_gradient(t: Vector<Tok>, i: int, cx: Cx, out &: BgLayer): bool:
     if not take_interp(t, parts[0], parts[1], gs, ge, sp, method):
         ret false
     end
+    explicit := sp >= 0
     if sp >= 0 and gs == ge:
         first = 2
     end
@@ -657,8 +658,10 @@ func parse_gradient(t: Vector<Tok>, i: int, cx: Cx, out &: BgLayer): bool:
             k += 2
         end
     end
-    if sp >= 0 and sp != SP_SRGB:
-        expand_stops(out.stops, sp, method, out.image == ImageKind.Conic)
+    out.interpolation_set = explicit
+    if sp >= 0:
+        out.interpolation = sp
+        out.hue_interpolation = method
     end
     ret true
 end
@@ -1505,6 +1508,139 @@ func set_corner(cs &: ComputedStyle, k: int, c: Corner):
     end
 end
 
+func bi_sides(t: Vector<Tok>, s: int, e: int, out &: Vector<int>): bool:
+    mut i := s
+    until i < e:
+        out.push(i)
+        i = nxt(t, i)
+    end
+    ret out.len() >= 1 and out.len() <= 4
+end
+
+func bi_side_index(n: int, side: int): int:
+    pick := [[0, 0, 0, 0], [0, 1, 0, 1], [0, 1, 2, 1], [0, 1, 2, 3]]
+    ret pick[n - 1][side]
+end
+
+func bi_set(b &: BorderImage, what: int, side: int, l: Len):
+    switch what * 4 + side:
+        0: b.slice_top = l break end
+        1: b.slice_right = l break end
+        2: b.slice_bottom = l break end
+        3: b.slice_left = l break end
+        4: b.width_top = l break end
+        5: b.width_right = l break end
+        6: b.width_bottom = l break end
+        7: b.width_left = l break end
+        8: b.outset_top = l break end
+        9: b.outset_right = l break end
+        10: b.outset_bottom = l break end
+        else: b.outset_left = l end
+    end
+end
+
+func bi_item(t: Vector<Tok>, i: int, e: int, cx: Cx, what: int, out &: Len): bool:
+    tk := t[i]
+    if tk.k == TK_NUM or (tk.k == TK_FUNC and is_math_fn(tk.s) and what != 1):
+        mut n := 0.0
+        if p_num(t, i, e, cx, n):
+            if n < 0.0:
+                ret false
+            end
+            out = Len { kind = LenKind.Number, px = n }
+            ret true
+        end
+    end
+    if what == 0:
+        if tk.k == TK_PCT and tk.n >= 0.0:
+            out = pct_len(tk.n)
+            ret true
+        end
+        ret false
+    end
+    if what == 1 and tk.k == TK_IDENT and tk.id == KW_AUTO:
+        out = Len { kind = LenKind.Auto }
+        ret true
+    end
+    ret p_len(t, i, e, cx, what == 1, false, out)
+end
+
+func apply_border_image(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
+    if p == P_BI_SOURCE:
+        mut l := BgLayer {}
+        l.stops = Vector {} as Vector<ColorStop>
+        if kw_id_at(t, s, e) != KW_NONE and not parse_image(t, s, e, cx, l):
+            l.stops.free()
+            ret false
+        end
+        cs.border_image.source.stops.free()
+        cs.border_image.source = l
+        ret true
+    end
+    if p == P_BI_REPEAT:
+        c := count_items(t, s, e)
+        if c < 1 or c > 2:
+            ret false
+        end
+        mut rx := Repeat.Stretch
+        mut ry := Repeat.Stretch
+        if not bi_repeat_kw(t[s].id, rx):
+            ret false
+        end
+        ry = rx
+        if c == 2 and not bi_repeat_kw(t[nxt(t, s)].id, ry):
+            ret false
+        end
+        cs.border_image.repeat_x = rx
+        cs.border_image.repeat_y = ry
+        ret true
+    end
+    what := p == P_BI_SLICE ? 0 : (p == P_BI_WIDTH ? 1 : 2)
+    mut items := Vector {} as Vector<int>
+    defer items.free()
+    mut fill := false
+    mut i := s
+    until i < e:
+        if what == 0 and t[i].k == TK_IDENT and t[i].id == KW_FILL:
+            if fill or (items.len() > 0 and nxt(t, i) < e):
+                ret false
+            end
+            fill = true
+        else:
+            items.push(i)
+        end
+        i = nxt(t, i)
+    end
+    n := items.len()
+    if n < 1 or n > 4:
+        ret false
+    end
+    mut vals := [Len {}, Len {}, Len {}, Len {}]
+    repeat n in k:
+        if not bi_item(t, items[k], e, cx, what, vals[k]):
+            ret false
+        end
+    end
+    repeat 4 in side:
+        bi_set(cs.border_image, what, side, vals[bi_side_index(n, side)])
+    end
+    if what == 0:
+        cs.border_image.fill = fill
+    end
+    ret true
+end
+
+func bi_repeat_kw(k: int, out &: Repeat): bool:
+    switch k:
+        KW_STRETCH: out = Repeat.Stretch break end
+        KW_REPEAT: out = Repeat.Repeat break end
+        KW_ROUND: out = Repeat.Round break end
+        KW_SPACE: out = Repeat.Space break end
+        else: ret false end
+    end
+    ret true
+end
+
 func apply_prop(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
     if s >= e:
         ret false
@@ -1581,6 +1717,9 @@ func apply_prop(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx:
     end
     if p >= P_TR_PROPERTY and p <= P_TR_DELAY:
         ret apply_tr_list(cs, p, t, s, e, cx)
+    end
+    if p >= P_BI_SOURCE and p <= P_BI_REPEAT:
+        ret apply_border_image(cs, p, t, s, e, cx)
     end
     switch p:
         P_DISPLAY:

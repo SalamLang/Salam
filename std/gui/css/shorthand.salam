@@ -38,6 +38,15 @@ func longhands_of(id: int, out &: Vector<int>):
             repeat 12 in i:
                 out.push(P_BORDER_TOP_WIDTH + i)
             end
+            repeat 5 in i:
+                out.push(P_BI_SOURCE + i)
+            end
+            break
+        end
+        S_BORDER_IMAGE:
+            repeat 5 in i:
+                out.push(P_BI_SOURCE + i)
+            end
             break
         end
         S_BORDER_TOP, S_BORDER_RIGHT, S_BORDER_BOTTOM, S_BORDER_LEFT:
@@ -1029,6 +1038,114 @@ func expand_radius(src: str, t: Vector<Tok>, s: int, e: int, ids &: Vector<int>,
     ret true
 end
 
+func bi_initial(p: int): str:
+    switch p:
+        P_BI_SOURCE: ret "none" end
+        P_BI_SLICE: ret "100%" end
+        P_BI_WIDTH: ret "1" end
+        P_BI_OUTSET: ret "0" end
+        else: ret "stretch" end
+    end
+    ret ""
+end
+
+func bi_num_item(t: Vector<Tok>, i: int, slice: bool): bool:
+    tk := t[i]
+    if tk.k == TK_NUM or tk.k == TK_PCT or (tk.k == TK_FUNC and is_math_fn(tk.s)):
+        ret true
+    end
+    if slice:
+        ret tk.k == TK_IDENT and tk.id == KW_FILL
+    end
+    ret tk.k == TK_DIM or (tk.k == TK_IDENT and tk.id == KW_AUTO)
+end
+
+func bi_rep_item(t: Vector<Tok>, i: int): bool:
+    tk := t[i]
+    ret tk.k == TK_IDENT and (tk.id == KW_STRETCH or tk.id == KW_REPEAT or tk.id == KW_ROUND or tk.id == KW_SPACE)
+end
+
+func expand_border_image(src: str, t: Vector<Tok>, s: int, e: int, ids &: Vector<int>, vals &: Vector<str>): bool:
+    mut parts := ["", "", "", "", ""]
+    mut have := [false, false, false, false, false]
+    mut i := s
+    mut ok := true
+    until i < e:
+        if not have[0] and is_image_item(t, i):
+            j := nxt(t, i)
+            parts[0] = tok_text(src, t, i, j)
+            have[0] = true
+            i = j
+            continue
+        end
+        if not have[4] and bi_rep_item(t, i):
+            mut j := nxt(t, i)
+            if j < e and bi_rep_item(t, j):
+                j = nxt(t, j)
+            end
+            parts[4] = tok_text(src, t, i, j)
+            have[4] = true
+            i = j
+            continue
+        end
+        if not have[1] and bi_num_item(t, i, true):
+            mut j := i
+            until j < e and bi_num_item(t, j, true):
+                j = nxt(t, j)
+            end
+            parts[1] = tok_text(src, t, i, j)
+            have[1] = true
+            if is_delim(t, j, e, 47):
+                mut k := j + 1
+                until k < e and bi_num_item(t, k, false):
+                    k = nxt(t, k)
+                end
+                if k > j + 1:
+                    parts[2] = tok_text(src, t, j + 1, k)
+                    have[2] = true
+                end
+                if is_delim(t, k, e, 47):
+                    mut m := k + 1
+                    until m < e and bi_num_item(t, m, false) and not (t[m].k == TK_IDENT):
+                        m = nxt(t, m)
+                    end
+                    if m == k + 1:
+                        ok = false
+                        break
+                    end
+                    parts[3] = tok_text(src, t, k + 1, m)
+                    have[3] = true
+                    k = m
+                else not have[2]:
+                    ok = false
+                    break
+                end
+                j = k
+            end
+            i = j
+            continue
+        end
+        ok = false
+        break
+    end
+    if not ok or i == s:
+        repeat 5 in k:
+            if have[k]:
+                sfree(parts[k])
+            end
+        end
+        ret false
+    end
+    repeat 5 in k:
+        if have[k]:
+            push_val(ids, vals, P_BI_SOURCE + k, parts[k])
+        else:
+            push_lit(ids, vals, P_BI_SOURCE + k, bi_initial(P_BI_SOURCE + k))
+        end
+    end
+    ret true
+end
+
 func expand(id: int, src: str, t: Vector<Tok>, s: int, e: int, ids &: Vector<int>, vals &: Vector<str>): bool:
     switch id:
         S_MARGIN: ret four_sides(src, t, s, e, P_MARGIN_TOP, ids, vals) end
@@ -1038,6 +1155,7 @@ func expand(id: int, src: str, t: Vector<Tok>, s: int, e: int, ids &: Vector<int
         S_BORDER_STYLE: ret four_sides(src, t, s, e, P_BORDER_TOP_STYLE, ids, vals) end
         S_BORDER_COLOR: ret four_sides(src, t, s, e, P_BORDER_TOP_COLOR, ids, vals) end
         S_BORDER_RADIUS: ret expand_radius(src, t, s, e, ids, vals) end
+        S_BORDER_IMAGE: ret expand_border_image(src, t, s, e, ids, vals) end
         S_BORDER, S_BORDER_TOP, S_BORDER_RIGHT, S_BORDER_BOTTOM, S_BORDER_LEFT, S_BORDER_BLOCK, S_BORDER_INLINE, S_BORDER_BLOCK_START, S_BORDER_BLOCK_END, S_BORDER_INLINE_START, S_BORDER_INLINE_END:
             mut w := ""
             mut st := ""
@@ -1052,6 +1170,10 @@ func expand(id: int, src: str, t: Vector<Tok>, s: int, e: int, ids &: Vector<int
             longhands_of(id, lh)
             repeat lh.len() in k:
                 p := lh[k]
+                if p >= P_BI_SOURCE and p <= P_BI_REPEAT:
+                    push_lit(ids, vals, p, bi_initial(p))
+                    continue
+                end
                 mut what := 0
                 if (p >= P_BORDER_TOP_STYLE and p < P_BORDER_TOP_STYLE + 4) or (p >= L_BS and p < L_BS + 4):
                     what = 1

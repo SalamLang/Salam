@@ -2396,8 +2396,18 @@ end
 **Web and native targets.** Pages are built for the web by default.
 `salam run page.salam --ui=native` (and `salam build ... --ui=native`) runs
 the same page in a native window drawn by Salam (`std/gui/ui`,
-`docs/design/NATIVE_UI.md`): handlers change program state (mutable globals)
-and the page re-renders after each one. `salam check page.salam --ui=native`
+`docs/design/NATIVE_UI.md`). The rule: handlers only change state, never the
+page. State is mutable globals plus `state count := 0` (Persian
+`وضعیت شمار := ۰`) inside a `component` body, which lives per instance and
+survives re-runs of the parent (native only for now; on the web it is an
+error). The compiler marks every write and re-runs only the scopes that read
+what changed: a component instance re-runs as a whole, outside components an
+element, `if` or `each` that reads state re-runs alone, and a handler that
+changes nothing costs no re-render. Writes it cannot see (inside another
+package, through a pointer or a second name for a Vector) need
+`ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A `state` needs
+a visible type: a literal, a typed parameter or `value as Type`.
+`salam check page.salam --ui=native`
 reports what a native window cannot show: E165 for things that need a browser (`script`, `style`, `iframe`,
 `embed`, `object`, `template`, `slot`, `svg`, `math`, `inline style`,
 `contenteditable`, `popover`, ...) and W166 for web metadata it ignores

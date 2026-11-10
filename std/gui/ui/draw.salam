@@ -538,22 +538,23 @@ func _paint_ifc(cv &: paint.Canvas, fi: int, alpha: f64):
                     col = css.Color { r = 117, g = 117, b = 117, a = 255 }
                 end
                 if cs.visibility == css.Visibility.Visible:
-                    fnt := typeset.FaceFont(_fc, r.face)
-                    if typeset.FontValid(fnt):
-                        pc := _pca(col, alpha)
-                        mut q := r.glyph_start
-                        until q < r.glyph_start + r.glyph_count:
-                            g := f.lay.glyphs[q]
-                            gx := (tx + g.x) * s
-                            gy := (ty + g.y) * s
-                            m := typeset.CachedGlyph(_gcache, fnt, g.id, r.size * s, gx)
-                            if m.width > 0 and m.height > 0:
-                                pm := paint.Mask { data = m.data, width = m.width, height = m.height, stride = m.stride }
-                                cv.DrawMask(pm, typeset.GlyphOriginX(gx, m), typeset.GlyphOriginY(gy, m), pc)
-                            end
-                            q++
+                    mut si := cs.text_shadows.len() - 1
+                    until si >= 0:
+                        sh := cs.text_shadows[si]
+                        sc := _pca(sh.color, alpha)
+                        if sh.blur > 0.0:
+                            mut ch := paint.FilterChain {}
+                            ch.Add(paint.NewFilter(paint.FilterKind.Blur, sh.blur * s / 2.0))
+                            cv.BeginFilterLayer(_rect(tx + r.x + sh.x - r.size, ty + line.top + sh.y - r.size, r.width + 2.0 * r.size, line.height + 2.0 * r.size), ch)
+                            _draw_run(cv, f.lay, r, tx + sh.x, ty + sh.y, sc)
+                            cv.EndLayerFiltered(ch, 1.0)
+                            ch.Free()
+                        else:
+                            _draw_run(cv, f.lay, r, tx + sh.x, ty + sh.y, sc)
                         end
+                        si--
                     end
+                    _draw_run(cv, f.lay, r, tx, ty, _pca(col, alpha))
                     mut under := false
                     mut over := false
                     mut through := false
@@ -639,6 +640,25 @@ func _first_ifc_in(node: int): int:
         end
     end
     ret -1
+end
+
+func _draw_run(cv &: paint.Canvas, l: typeset.TextLayout, r: typeset.GlyphRun, x: f64, y: f64, col: paint.Color):
+    fnt := typeset.FaceFont(_fc, r.face)
+    if not typeset.FontValid(fnt):
+        ret
+    end
+    s := _e.scale
+    mut q := r.glyph_start
+    until q < r.glyph_start + r.glyph_count:
+        g := l.glyphs[q]
+        gx := (x + g.x) * s
+        gy := (y + g.y) * s
+        m := typeset.CachedGlyph(_gcache, fnt, g.id, r.size * s, gx)
+        if m.width > 0 and m.height > 0:
+            cv.DrawMask(paint.Mask { data = m.data, width = m.width, height = m.height, stride = m.stride }, typeset.GlyphOriginX(gx, m), typeset.GlyphOriginY(gy, m), col)
+        end
+        q++
+    end
 end
 
 func _draw_layout(cv &: paint.Canvas, l: typeset.TextLayout, x: f64, y: f64, col: paint.Color):

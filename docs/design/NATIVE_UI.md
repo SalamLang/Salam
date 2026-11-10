@@ -544,6 +544,118 @@ and page parts still count for `dom.ById` checks (E138).
 
 `ui.ScopeRuns()` counts scope re-runs (a full re-run counts one), for tests.
 
+### Components talking to each other
+
+A child talks to the components around it in two ways, and both work the
+same natively and on the web.
+
+**Callbacks.** A parent passes a function to a child as a parameter, and the
+child calls it from a handler:
+
+```salam
+component Counter(name: str, change):
+    state count := 0
+    button: id = name click = (): count++ change(count) end content = name + " " + count end
+end
+
+component Pair(report: func (int)):
+    state sum := 0
+    box:
+        paragraph: content = "sum " + sum end
+        Counter:
+            name = "a"
+            change = (v: int):
+                sum += v
+                report(sum)
+            end
+        end
+    end
+end
+
+page:
+    Pair: report = (v: int): total = v end end
+end
+```
+
+The parameter may be untyped (`change`) or typed (`report: func (int)`), and
+the value may be a lambda or the name of a function of the program. Since
+components are expanded by the compiler, the call `change(count)` becomes a
+call of the lambda the parent wrote, with the parent's names: `sum` is the
+`Pair` instance's state, `report` is the page's lambda. A write there marks
+the instance that owns the state (`ui.TouchInstance` natively, `salamWsTouch`
+on the web) like any other write, so only that instance and the scopes that
+read the changed globals run again. A child that calls a callback its parent
+did not pass does nothing (`Counter: name = "solo" end`).
+
+**Events that bubble.** A child sends a named event with an optional value,
+`emit("saved", value)` (Persian `برانگیز("ذخیره"، مقدار)`). Where a component
+is used, `on saved = (v: T): ... end` (Persian `هنگام ذخیره = ...`) handles
+it. The event goes to the nearest use site that has a handler for the name,
+then on to every level above it up to the page, where an `on saved` line at
+the top of the page block is the last handler. A handler that calls `stop()`
+(Persian `بایست()`) ends the trip. Handlers take the value as their one typed
+parameter, or no parameter when they do not need it, and they change the
+state of the component they are written in:
+
+```salam
+component Button(name: str):
+    button: id = name click = (): emit("pressed", name) end content = name end
+end
+
+component Toolbar:
+    state picked := "none"
+    box:
+        Button: name = "save" on pressed = (n: str): picked = n end end
+        Button:
+            name = "quit"
+            on pressed = (n: str):
+                picked = n
+                stop()
+            end
+        end
+    end
+end
+
+component Panel:
+    state count := 0
+    Toolbar: on pressed = (): count++ end end
+end
+
+page:
+    on pressed = (n: str): println "page got " + n end
+    Panel: end
+end
+```
+
+Pressing `save` sets the toolbar's `picked`, adds one to the panel's `count`
+and reaches the page; pressing `quit` stops at the toolbar. The route is known
+at compile time, because every instance is expanded inside its parent: the
+compiler replaces `emit` with the value kept in a temporary and one call per
+handler on the way up, nearest first, and a handler that calls `stop()`
+becomes a lambda returning whether to go on, which guards the rest. There is
+no event object and nothing to look up while the page runs, and the writes
+in the handlers are marked like any other, so an event from a deep child
+re-runs only the instances whose state changed. In `events_bubble`, where the
+page also counts the presses in a paragraph, `save` re-runs two scopes (the
+panel instance, with the toolbar and button inside it, and that paragraph)
+and `quit` re-runs one, the toolbar; an unrelated sibling never runs. On the web the page script
+re-renders the instances whose state changed, here the panel, the toolbar,
+the button and the page part.
+
+Inside `each`, an event from a row goes to the instance that holds that row:
+two `Group` instances in an `each`, each with rows in an `each` of their own,
+each get only their own rows' events, because the handler is written with the
+group's state, which is reached through its own key (natively the captured
+instance slot, on the web `salamWsCur` of the group, set by the row's handler
+attribute). The tests are `tests/{en,fa}/ui/events_*.salam` and
+`tests/{en,fa}/page/components/events_*.salam`.
+
+A handler written at a use site sends its own `emit` from the level where it
+is written, so a parent can turn a child's event into one of its own:
+`on pressed = (n: str): emit("changed", n) end`. `emit` only works in the page
+block and in components; a function of the program that calls it is an error
+(E012), because there is no instance to start from.
+
 ### The escape hatch and the limits
 
 - Writes the compiler cannot see do not update the page: state changed inside
@@ -564,6 +676,15 @@ and page parts still count for `dom.ById` checks (E138).
   web a nested instance does not re-render when only the parameters its
   parent passes change.
 - Selecting a row in a list re-runs one scope per row that reads the selection.
+- A handler or callback body written on one line cannot put a call right
+  after a value (`picked = n stop()` reads `n stop` as one name); put the
+  statements on separate lines. Lambda parameters need a type, as everywhere
+  in Salam. A `ret` in a callback or handler ends that callback, not the
+  handler that sent the event.
+- On the web, a handler inside `each` cannot read the row's loop variable,
+  or a component parameter bound to it, because handlers are functions of
+  the page script; copy the value into a `state` of the row's component
+  (`state label := name`) and read that.
 - The fallback for a hand written view without `b.Reactive` is the old one:
   the whole view runs after every handler.
 

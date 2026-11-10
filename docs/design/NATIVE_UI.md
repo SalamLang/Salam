@@ -472,6 +472,53 @@ indexed by an instance slot. An instance keeps its slot when its parent
 re-runs: it is matched by site and by its position among siblings of the same
 site. A new instance initialises its state from the declaration.
 
+Inside `each`, an instance follows its row's key instead of its position.
+The key is the `key` attribute (Persian `کلید`, written as `data-key` on the
+web) of the row's first element, or its `id` when it has no key; when the row
+starts with a component, the component's first element counts. The scope is
+then opened with `b.KeyedScope(site, key, ...)` and matched by site and key,
+so inserting, removing or reordering rows moves each instance's state with its
+row:
+
+```salam
+component Row(name: str):
+    state hits := 0
+    item: key = name content = name + " " + hits click = (): hits++ end end
+end
+
+page:
+    list:
+        each it in items:
+            Row: name = it end
+        end
+    end
+end
+```
+
+A key that reads the component's own `state` is ignored, because the key is
+needed before the state exists.
+
+### On the web
+
+`salam page build` gives the same `state` to the page block. Every component
+instance that declares `state` gets one global per declaration
+(`__salam_ws_N`), a render function `__salam_view_I()` built from the
+instance's elements with the runtime view lowering (dynamic values, `if` and
+`each` become Salam code that returns HTML, compiled to JavaScript with the
+event handlers), and an init function. In the HTML the instance is a pair of
+comments, `<!--salam:I--><!--/salam:I-->`, which the page script fills when it
+loads. Every write to a `state` gets a `salamWsTouch(I)` call before it, as
+the native target gets `TouchInstance`. The page script then re-renders the
+touched instances once, after the handler returns, and patches the DOM
+between the two comments in place: elements are matched by tag and by
+`data-key` or `id`, attributes and text are updated where they changed, an
+input keeps what was typed unless the page changes its `value`, and the
+focused element and its selection are kept. An instance nested in another one
+keeps its DOM and state when the outer one re-renders; when it appears again
+(an `if` turned true) its state starts from the declaration, as natively.
+Styles of the instance's elements are compiled once into the page's style
+sheet with an `sI-` class prefix.
+
 `ui.ScopeRuns()` counts scope re-runs (a full re-run counts one), for tests.
 
 ### The escape hatch and the limits
@@ -480,12 +527,16 @@ site. A new instance initialises its state from the declaration.
   another package, through a pointer, or through a second name for the same
   Vector. Call `ui.Invalidate()` after such a change; it re-runs the whole
   view. `ui.Refresh()` does the same.
-- Instances inside `each` are matched by position, not by item: removing the
-  first row moves every later row's component state up by one.
+- Instances inside `each` without a `key` or `id` on the row are matched by
+  position: removing the first row moves every later row's component state
+  up by one. Give the row a key.
 - A `state` needs a type the compiler can see without type checking: a
   literal, a typed component parameter or `value as Type`.
-- `state` works only natively for now. On the web target it is an error; the
-  web page keeps re-rendering with `std/dom`.
+- On the web, `state` works in the page block built by `salam page build`,
+  not in runtime pages with parameters, and a component with `state` cannot
+  sit inside `each` there (it can natively). Mutable globals still cannot be
+  read by a web page. The instance's HTML is drawn by the page script, so
+  a stateful component shows nothing without JavaScript.
 - Selecting a row in a list re-runs one scope per row that reads the selection.
 - The fallback for a hand written view without `b.Reactive` is the old one:
   the whole view runs after every handler.

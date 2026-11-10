@@ -53,7 +53,7 @@
 ["if" "اگر" "else" "وگرنه" "match" "همخوان" "switch" "ترابرد"] @keyword.conditional
 ["until" "تا" "each" "هر" "repeat" "تکرار" "to" "by" "in" "در" "break" "بشکن" "continue" "گذر"] @keyword.repeat
 ["import" "واردسازی" "include" "فراخوانی" "package" "بسته"] @keyword.import
-["mut" "ناپایا" "const" "پایا" "pub" "همگانی" "inline" "درخط" "noinline" "نادرخط" "pure" "ناب" "noret" "نابرگشت" "deprecated" "بی‌کاره" "extern" "درون‌داد" "export" "برون‌داد" "static" "ایستا"] @keyword.modifier
+["mut" "ناپایا" "const" "پایا" "pub" "همگانی" "inline" "درخط" "noinline" "نادرخط" "pure" "ناب" "noret" "نابرگشت" "deprecated" "بی‌کاره" "extern" "درون‌داد" "export" "برون‌داد" "static" "ایستا" "state"] @keyword.modifier
 ["struct" "ساختار" "enum" "جداشمار" "interface" "میانجی" "type" "گونه" "impl" "کاربست" "on" "بر" "page" "component" "dyn" "use" "شامل"] @keyword.type
 ["end" "پایان" "defer" "دیرکن" "as" "برگردان"] @keyword
 ["and" "و" "or" "یا" "not" "وارونه" "eq" "برابر" "neq" "نابرابر" "lt" "کوچکتر" "gt" "بزرگتر" "lte" "کوچکتربرابر" "gte" "بزرگتربرابر"] @keyword.operator

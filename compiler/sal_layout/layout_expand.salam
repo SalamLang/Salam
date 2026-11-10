@@ -167,7 +167,7 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         ret cp
     end
     if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST or k == at.AST_ASSIGN or k == at.AST_INCDEC or k == at.AST_SLICE or k == at.AST_ARRAY_LIT or k == at.AST_STRUCT_LIT or k == at.AST_FIELD_INIT:
-        na := k == at.AST_CALL ? v.a : subst_value(a, v.a, f)
+        na := k == at.AST_CALL and at.KindOf(a, v.a) != at.AST_MEMBER ? v.a : subst_value(a, v.a, f)
         nb := subst_value(a, v.b, f)
         nc := subst_value(a, v.c, f)
         mut args := Vector {} as Vector<int>
@@ -229,6 +229,9 @@ func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
         cn.a = na
         at.Put(a, cp, cn)
         ret cp
+    end
+    if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC or n.kind == at.AST_CALL:
+        ret subst_value(a, nid, f)
     end
     if n.kind == at.AST_IF:
         na := subst_value(a, n.a, f)
@@ -659,17 +662,36 @@ func expand_component(
         ex.errors++
     end
     body := at.Get(a, comp_def).a
-    if not g_lo_native_scopes:
+    web := g_lo_web_state and not g_lo_native_scopes
+    if not g_lo_native_scopes and not web:
         if lo_has_state(a, body):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("component '%s' has 'state', which works only in native pages for now; run it with --ui=native or keep the value in a mutable global"), co.ArgStr(comp_name)
+                    i18.Tr("component '%s' has 'state', which works only in the page block and in native pages; build the page with 'salam page build' or --ui=native, or keep the value in a mutable global"), co.ArgStr(comp_name)
                 )
             )
             ex.errors++
         end
         expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
         ret
+    end
+    if web and not lo_has_state(a, body):
+        expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+        ret
+    end
+    if web and g_lo_each_depth > 0:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("component '%s' has 'state' and sits inside 'each'; on the web each instance needs its own place in the page, so keep the rows in the outer component's state or build with --ui=native"), co.ArgStr(comp_name)
+            )
+        )
+        ex.errors++
+        expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+        ret
+    end
+    wi := g_lo_wi_mark.len()
+    if web:
+        g_lo_wi_mark.push(0)
     end
     mark := at.NewNode(a, at.AST_IF)
     copy_span(a, mark, invocation)
@@ -683,7 +705,12 @@ func expand_component(
             continue
         end
         sd := at.Get(a, sid)
-        gi := lo_state_index(ex, a, ci, sj, sid)
+        mut gi := 0
+        if web:
+            gi = lo_web_state_index(ex, a, ci, sid)
+        else:
+            gi = lo_state_index(ex, a, ci, sj, sid)
+        end
         sj++
         decl := at.NewNode(a, at.AST_VAR_DECL)
         copy_span(a, decl, sid)
@@ -695,7 +722,12 @@ func expand_component(
         dn.synthetic = true
         at.Put(a, decl, dn)
         kids.push(decl)
-        frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
+        if web:
+            g_lo_ws_decl.push(decl)
+            frame_set(fr, sd.name, lo_ident(a, "__salam_ws_" + co.U64Toa(gi as u64), sid))
+        else:
+            frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
+        end
     end
     expand_items(ex, a, kids, body, fr, ex.comp_dir.get(ci), depth + 1)
     mut bn := at.Get(a, blk)
@@ -710,6 +742,9 @@ func expand_component(
     mn.a = mk_str(a, "", invocation)
     mn.b = blk
     at.Put(a, mark, mn)
+    if web:
+        g_lo_wi_mark.set(wi, mark)
+    end
     out.push(mark)
 end
 
@@ -727,7 +762,26 @@ end
 
 func lo_is_state_ref(a &: at.Ast, nid: int): bool:
     n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret str.StartsWith(n.name, "__salam_ws_")
+    end
     ret n.kind == at.AST_INDEX and n.synthetic
+end
+
+func lo_web_state_index(ex &: LoExpand, a &: at.Ast, ci: int, sid: int): int:
+    sd := at.Get(a, sid)
+    mut lit := ""
+    ty := lo_state_type(a, ex.comp_def.get(ci), sd.a, lit)
+    if ty == 0 and str.Len(lit) == 0:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                i18.Tr("component '%s': give the state '%s' a type, as in 'state items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+            )
+        )
+        ex.errors++
+    end
+    g_lo_ws_inst.push(g_lo_wi_mark.len() - 1)
+    ret g_lo_ws_inst.len() - 1
 end
 
 func lo_ident(a &: at.Ast, name: str, from: int): int:
@@ -913,7 +967,9 @@ func expand_item(
         cn.name = item.name
         cn.c = item.c
         cn.a = subst_value(a, item.a, fr)
+        g_lo_each_depth++
         cn.b = expand_container(ex, a, item.b, fr, dir, depth)
+        g_lo_each_depth--
         at.Put(a, cp, cn)
         out.push(cp)
         ret

@@ -61,13 +61,39 @@ func _bwidth(b: css.BorderSide): f64:
     ret b.width
 end
 
-func _shade(c: css.Color, s: css.BorderStyle, dark: bool): css.Color:
-    if s == css.BorderStyle.Inset or s == css.BorderStyle.Outset or s == css.BorderStyle.Groove or s == css.BorderStyle.Ridge:
-        if dark:
-            ret css.Color { r = c.r * 2 / 3, g = c.g * 2 / 3, b = c.b * 2 / 3, a = c.a }
+func _tone(c: css.Color, dark: bool): css.Color:
+    r := c.r as f64
+    g := c.g as f64
+    b := c.b as f64
+    if dark:
+        if r * r + g * g + b * b <= 3072.0:
+            ret css.Color { r = math.MinI(255, c.r + 84), g = math.MinI(255, c.g + 84), b = math.MinI(255, c.b + 84), a = c.a }
         end
+        v := math.Max(r, math.Max(g, b)) / 256.0
+        m := math.Max(0.0, (v - 0.33) / v)
+        ret css.Color { r = math.Round(m * r) as int, g = math.Round(m * g) as int, b = math.Round(m * b) as int, a = c.a }
     end
-    ret c
+    if r * r + g * g + b * b <= 3072.0:
+        ret css.Color { r = math.MinI(255, c.r + 168), g = math.MinI(255, c.g + 168), b = math.MinI(255, c.b + 168), a = c.a }
+    end
+    if (255.0 - r) * (255.0 - r) + (255.0 - g) * (255.0 - g) + (255.0 - b) * (255.0 - b) <= 1200.0:
+        ret c
+    end
+    v := math.Max(r, math.Max(g, b)) / 256.0
+    m := math.Min(1.0, v + 0.33) / v
+    ret css.Color { r = math.MinI(255, math.Round(m * r) as int), g = math.MinI(255, math.Round(m * g) as int), b = math.MinI(255, math.Round(m * b) as int), a = c.a }
+end
+
+func _side_tone(c: css.Color, style: css.BorderStyle, side: int, outer: bool): css.Color:
+    mut st := style
+    if style == css.BorderStyle.Groove:
+        st = outer ? css.BorderStyle.Inset : css.BorderStyle.Outset
+    else style == css.BorderStyle.Ridge:
+        st = outer ? css.BorderStyle.Outset : css.BorderStyle.Inset
+    else style != css.BorderStyle.Inset and style != css.BorderStyle.Outset:
+        ret c
+    end
+    ret _tone(c, (side == 0 or side == 3) == (st == css.BorderStyle.Inset))
 end
 
 func _native_look(node: int, cs: css.ComputedStyle): bool:
@@ -148,29 +174,15 @@ func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
         mut br := _bwidth(cs.border_right)
         mut bb := _bwidth(cs.border_bottom)
         mut bl := _bwidth(cs.border_left)
-        mut rx := b.x
-        mut ry := b.y
-        mut rw := b.w
-        mut rh := b.h
-        if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
+        rx := b.x
+        ry := b.y
+        rw := b.w
+        rh := b.h
+        if cs.border_collapse == css.BorderCollapse.Collapse and _table_part(cs.display):
             bt = 0.0
             br = 0.0
             bb = 0.0
             bl = 0.0
-        else cs.border_collapse == css.BorderCollapse.Collapse and cs.display == css.Display.TableCell:
-            cl := _e.tree.Layout(_e.node_cb[node])
-            ht := cl.border.top
-            hr := cl.border.right
-            hb := cl.border.bottom
-            hl := cl.border.left
-            rx -= hl
-            ry -= ht
-            rw += hl + hr
-            rh += ht + hb
-            bt = bt > 0.0 ? cl.border.top * 2.0 : 0.0
-            br = br > 0.0 ? cl.border.right * 2.0 : 0.0
-            bb = bb > 0.0 ? cl.border.bottom * 2.0 : 0.0
-            bl = bl > 0.0 ? cl.border.left * 2.0 : 0.0
         end
         if bt > 0.0 or br > 0.0 or bb > 0.0 or bl > 0.0:
             mut bd := paint.Border {}
@@ -178,18 +190,110 @@ func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
             bd.right_width = br * s
             bd.bottom_width = bb * s
             bd.left_width = bl * s
-            bd.top_color = _pca(_shade(cs.border_top.color, cs.border_top.style, cs.border_top.style == css.BorderStyle.Inset or cs.border_top.style == css.BorderStyle.Groove), alpha)
-            bd.right_color = _pca(_shade(cs.border_right.color, cs.border_right.style, cs.border_right.style == css.BorderStyle.Outset or cs.border_right.style == css.BorderStyle.Ridge), alpha)
-            bd.bottom_color = _pca(_shade(cs.border_bottom.color, cs.border_bottom.style, cs.border_bottom.style == css.BorderStyle.Outset or cs.border_bottom.style == css.BorderStyle.Ridge), alpha)
-            bd.left_color = _pca(_shade(cs.border_left.color, cs.border_left.style, cs.border_left.style == css.BorderStyle.Inset or cs.border_left.style == css.BorderStyle.Groove), alpha)
+            bd.top_color = _pca(_side_tone(cs.border_top.color, cs.border_top.style, 0, true), alpha)
+            bd.right_color = _pca(_side_tone(cs.border_right.color, cs.border_right.style, 1, true), alpha)
+            bd.bottom_color = _pca(_side_tone(cs.border_bottom.color, cs.border_bottom.style, 2, true), alpha)
+            bd.left_color = _pca(_side_tone(cs.border_left.color, cs.border_left.style, 3, true), alpha)
             bd.top_style = _bstyle(cs.border_top.style)
             bd.right_style = _bstyle(cs.border_right.style)
             bd.bottom_style = _bstyle(cs.border_bottom.style)
             bd.left_style = _bstyle(cs.border_left.style)
-            _draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs)
+            _draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs, alpha)
         end
     end
     _paint_replaced(cv, node, cs, b, alpha)
+end
+
+func _table_part(d: css.Display): bool:
+    switch d:
+        css.Display.Table, css.Display.InlineTable, css.Display.TableCell, css.Display.TableRow, css.Display.TableRowGroup, css.Display.TableHeaderGroup, css.Display.TableFooterGroup, css.Display.TableColumn, css.Display.TableColumnGroup:
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _side_of(cs: css.ComputedStyle, side: int): css.BorderSide:
+    switch side:
+        0: ret cs.border_top end
+        1: ret cs.border_right end
+        2: ret cs.border_bottom end
+        else: ret cs.border_left end
+    end
+    ret cs.border_left
+end
+
+func _paint_collapsed(cv &: paint.Canvas, node: int, alpha: f64):
+    b := _e.boxes[node]
+    cb := _e.node_cb[node]
+    if cb < 0 or not b.shown:
+        ret
+    end
+    mut segs := _e.tree.CollapsedBorders(cb)
+    defer segs.free()
+    s := _e.scale
+    each sg in segs:
+        own := sg.node >= 0 and sg.node < _e.cb_node.len() ? _e.cb_node[sg.node] : -1
+        if own < 0:
+            continue
+        end
+        mut ocs := _style_of(own)
+        mut sd := _side_of(ocs, sg.side)
+        if sd.style == css.BorderStyle.Inset:
+            sd.style = css.BorderStyle.Ridge
+        else sd.style == css.BorderStyle.Outset:
+            sd.style = css.BorderStyle.Groove
+        end
+        switch sg.side:
+            0: ocs.border_top = sd break end
+            1: ocs.border_right = sd break end
+            2: ocs.border_bottom = sd break end
+            else: ocs.border_left = sd break end
+        end
+        x0 := math.Round(b.x + sg.x)
+        y0 := math.Round(b.y + sg.y)
+        x1 := math.Round(b.x + sg.x + sg.width)
+        y1 := math.Round(b.y + sg.y + sg.height)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        end
+        w := sg.vertical ? x1 - x0 : y1 - y0
+        col := _pca(_side_tone(sd.color, sd.style, sg.side, true), alpha)
+        bst := _bstyle(sd.style)
+        mut bd := paint.Border { top_color = col, right_color = col, bottom_color = col, left_color = col, top_style = bst, right_style = bst, bottom_style = bst, left_style = bst }
+        mut rx := x0
+        mut ry := y0
+        mut rw := x1 - x0
+        mut rh := y1 - y0
+        switch sg.side:
+            0:
+                bd.top_width = w * s
+                rh += w
+                break
+            end
+            1:
+                bd.right_width = w * s
+                rx -= w
+                rw += w
+                break
+            end
+            2:
+                bd.bottom_width = w * s
+                ry -= w
+                rh += w
+                break
+            end
+            else:
+                bd.left_width = w * s
+                rw += w
+                break
+            end
+        end
+        _draw_css_border(cv, _rect(rx, ry, rw, rh), paint.Radii {}, bd, ocs, alpha)
+    end
 end
 
 func _paint_outline(cv &: paint.Canvas, node: int, alpha: f64):
@@ -795,6 +899,9 @@ func _paint_flow(cv &: paint.Canvas, node: int, alpha: f64):
         end
         _paint_flow(cv, k, alpha)
         _paint_outline(cv, k, alpha)
+    end
+    if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
+        _paint_collapsed(cv, node, alpha)
     end
     if _e.node_cb[node] >= 0 and _is_scroller(cs) and b.shown:
         _paint_scrollbars(cv, node, alpha)

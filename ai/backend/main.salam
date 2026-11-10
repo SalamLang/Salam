@@ -232,6 +232,8 @@ func main:
     aiengine.SetGate(os.Env("AI_GATE_URL"))
     aiengine.SetRedactions(os.Env("AI_REDACT_WORDS"), strict)
     ailangfuse.Configure(os.Env("AI_LANGFUSE_URL"), os.Env("AI_LANGFUSE_PUBLIC_KEY"), os.Env("AI_LANGFUSE_SECRET_KEY"), os.Env("AI_LANGFUSE_PUBLIC_URL"), os.Env("AI_LANGFUSE_PROJECT"))
+    ailangfuse.RegisterPrompt("salam-policy", aipolicy.SYSTEM)
+    ailangfuse.RegisterPrompt("general-policy", aipolicy.GENERAL)
     aicampaign.Configure(os.Env("AI_CLICKHOUSE_ADDR"), env_or("AI_CLICKHOUSE_DB", "salam_ai"), env_or("AI_CLICKHOUSE_USER", "default"), os.Env("AI_CLICKHOUSE_PASSWORD"))
     stream_port := env_or("AI_STREAM_PORT", "8081").to_int()
     STREAM_SRV = tcp.Bind(stream_port)
@@ -834,6 +836,7 @@ func create_chat(ctx: i64):
     end
     id := crypto.RandomHex(12)
     t := i64s(aistore.Now())
+    client_source := aiweb.ClientKind(ctx) == "agent" ? "desktop" : "web"
     mut a := four(id, i64s(uid), DEFAULT_TITLE, t)
     a.push(device)
     a.push(device == "0" ? "" : workspace)
@@ -841,8 +844,13 @@ func create_chat(ctx: i64):
     a.push(cloud)
     a.push(project)
     a.push(extra)
+    a.push(client_source)
+    a.push(aiweb.ClientOsLabel(ctx))
+    a.push(aiweb.ClientBrowserLabel(ctx))
+    a.push(aiweb.ClientVersion(ctx))
+    a.push(aiweb.ClientArch(ctx))
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud, project_id, extra_path) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10)", a)
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud, project_id, extra_path, source, client_os, client_browser, client_version, client_arch) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)", a)
     aistore.Unlock()
     if not ok:
         fail(ctx, 500, "server", "ساخت گفت‌وگو ناموفق بود.")
@@ -908,8 +916,12 @@ func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
             if usage.ms <= 0:
                 usage.ms = time.NowMillis() - created * 1000
             end
-            aiturn.SaveUsage("messages", mid, usage)
-            ailangfuse.Send(sid, mid, aiengine.ModelOf(sid), usage, r.text, r.failed, "", "web", aiturn.OwnerEmail(sid))
+            model := aiengine.ModelOf(sid)
+            aiturn.SaveUsage("messages", mid, usage, model)
+            info := aiturn.ChatInfoOf(sid)
+            attachments := info.id.len() > 0 ? aifiles.NoteForTurn(info.id, mid) : ""
+            source := info.source.len() > 0 ? info.source : "web"
+            ailangfuse.Send(sid, mid, model, usage, r.text, r.failed, "", source, aiturn.OwnerEmail(sid), info.client_os, info.client_browser, info.client_version, info.client_arch, attachments)
             ailive.End(sid)
             forget_check(sid)
             aiengine.Forget(sid)

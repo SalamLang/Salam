@@ -243,6 +243,7 @@ export type AdminPlatforms = {
   platforms: { id: PlatformId; count: number }[];
   systems: { os: string; version: string; arch: string; count: number }[];
 };
+export type AdminModel = { model: string; alias: string; count: number };
 export type UserProfile = {
   id: number;
   name: string;
@@ -1481,6 +1482,7 @@ export const api = {
     ),
   adminPlatforms: (days: number) =>
     call<AdminPlatforms>("GET", `/admin/platforms?days=${days}`),
+  adminModels: () => call<{ models: AdminModel[] }>("GET", "/admin/models"),
   adminGuests: (offset: number) =>
     call<{ guests: AdminGuest[]; total: number }>(
       "GET",

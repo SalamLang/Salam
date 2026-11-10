@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Campaign, type CampaignDay, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminModel, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Campaign, type CampaignDay, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
@@ -2747,6 +2747,74 @@ function PlatformsPanel() {
   );
 }
 
+function ModelsPanel() {
+  const [data, setData] = useState<AdminModel[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setError("");
+    api
+      .adminModels()
+      .then((r) => live && setData(r.models))
+      .catch((e) => live && setError(errText(e, t("بارگذاری مدل‌ها ناموفق بود.", "Could not load the models."))));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("مدل‌ها در Langfuse", "Models in Langfuse")}</h3>
+      </div>
+      <p className="muted">
+        {t(
+          "نام واقعی مدل در Langfuse نشان داده نمی‌شود؛ هر مدل با یک نام جایگزین ثابت فرستاده می‌شود. این جدول تطبیق نام جایگزین با مدل واقعی را فقط برای مدیران نشان می‌دهد.",
+          "Langfuse never sees the real model name; each model is sent under a stable alias instead. This table, visible only to admins, matches each alias back to the real model.",
+        )}
+      </p>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : data === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      ) : data.length === 0 ? (
+        <p className="empty-list">{t("هنوز پیامی با مدل ثبت نشده است.", "No messages with a recorded model yet.")}</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">{t("مدل واقعی", "Real model")}</th>
+                <th scope="col">{t("نام جایگزین در Langfuse", "Langfuse alias")}</th>
+                <th scope="col">{t("پیام‌ها", "Messages")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((m) => (
+                <tr key={m.model}>
+                  <td>
+                    <bdi>{m.model}</bdi>
+                  </td>
+                  <td>
+                    <code className="inline-code">{m.alias}</code>
+                  </td>
+                  <td>{fmtNum(m.count)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminSession[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -2828,6 +2896,7 @@ export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: str
   return (
     <>
     {!picked && <PlatformsPanel />}
+    {!picked && <ModelsPanel />}
     <section className="card panel">
       <div className="panel-head">
         <h3>{t("نشست‌ها", "Sessions")}{picked ? t(" این کاربر", " for this user") : ""}</h3>

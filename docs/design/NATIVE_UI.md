@@ -224,7 +224,7 @@ p.AddTyped(61, 0, [css.FnId(334), css.KwId(595), css.KwId(486), css.Comma(),
   shorthands 200 to 244, logical properties 300 to 333 (`std/gui/css/props.salam`).
   Shorthands are already expanded, so a program only holds longhands.
 - Flags: 1 is `!important`, 2 says the value depends on the colour scheme.
-- Keywords, units and function names: indexes into one name table,
+- Keywords, units and function names: indices into one name table,
   `std/gui/css/names.salam` (673 names, `css.KeywordId`/`css.KeywordName`). A
   loaded keyword points at the table's static string, so nothing is copied or
   freed. A name that is not in the table (a custom ident, a font family) stays
@@ -243,7 +243,7 @@ p.AddTyped(61, 0, [css.FnId(334), css.KwId(595), css.KwId(486), css.Comma(),
   as written and resolve in the cascade.
 - `var()` and custom properties stay text (`AddVarDecl`), substituted per element.
 
-The ids are stable: new properties and names are only appended, so an
+The IDs are stable: new properties and names are only appended, so an
 executable built by one compiler keeps its meaning with a newer `gui.css`.
 `AddDecl` (property by name, colours as hex pieces) still loads older programs.
 The same resolution runs for HTML-path style sheets when a declaration is

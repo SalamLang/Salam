@@ -82,7 +82,7 @@ An empty string lets the compiler find it."
 (defconst salam-builtin-type-keywords '("وکتور" "Vector" "نگاشت" "HashMap" "پیمایشگرنگاشت" "MapIter" "پرونده" "File" "گوناگون" "Variant"))
 (defconst salam-builtin-keywords '("print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی"))
 (defconst salam-word-operators '("and" "or" "not" "eq" "neq" "lt" "gt" "lte" "gte" "و" "یا" "برابر" "نابرابر" "وارونه" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"))
-(defconst salam-contextual-keywords '("link" "static" "dynamic" "framework" "پیوند" "ایستا" "پویا" "چارچوب" "dyn" "go" "برو"))
+(defconst salam-contextual-keywords '("link" "static" "dynamic" "framework" "پیوند" "ایستا" "پویا" "چارچوب" "dyn" "go" "برو" "state" "وضعیت"))
 (defconst salam-directive-keywords '("mode" "title" "lang" "dir" "name" "version"))
 (defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float" "شمارنویسه" "char_count" "نویسه شماره" "char_at" "زیررشته نویسه" "char_substr" "بیاب نویسه" "char_find" "شروع با" "starts_with" "ختم با" "ends_with" "دربردارد" "includes" "رونوشت" "copy" "رونوشت عمیق" "deep_copy" "بایت ها" "bytes" "کوچک" "lower" "بزرگ" "upper" "تکرار" "repeat"))
 (defconst salam-end-keywords '("end" "پایان"))

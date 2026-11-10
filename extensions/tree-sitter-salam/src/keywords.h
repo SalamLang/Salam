@@ -144,6 +144,13 @@ static const char *const SALAM_COMPONENT_WORDS[] = {
 
 #define SALAM_COMPONENT_WORDS_COUNT 2
 
+static const char *const SALAM_STATE_WORDS[] = {
+    "state",
+    "\331\210\330\266\330\271\333\214\330\252",
+};
+
+#define SALAM_STATE_WORDS_COUNT 2
+
 static const char *const SALAM_AS_WORDS[] = {
     "as",
     "\330\250\330\261\332\257\330\261\330\257\330\247\331\206",

@@ -249,6 +249,20 @@ executable built by one compiler keeps its meaning with a newer `gui.css`.
 The same resolution runs for HTML-path style sheets when a declaration is
 parsed, so both paths reach the cascade with resolved colours.
 
+Measured on a 202-element page shaped like the one in `tools/bench/gui_ui.salam` (40
+cards in a grid) with a style sheet that uses hex, `rgba()`, `hsl()`, named, system and
+`light-dark()` colours, the minimum of 500 runs on one core of a loaded desktop
+(load average 16 on 6 cores), C backend:
+
+| step                                         | before |  typed |
+| -------------------------------------------- | -----: | -----: |
+| build the program (`__salam_styles()`)       |  30 us |   6 us |
+| program plus sheet with the user agent rules | 130 us |  62 us |
+| full style computation, 202 elements, cold   | 287 us | 281 us |
+
+Style computation hardly changes: it is dominated by selector matching and the
+style cache, not by reading values.
+
 ### Colours
 
 Every CSS Color 4 and 5 form: hex, 148 named colours, `transparent`,

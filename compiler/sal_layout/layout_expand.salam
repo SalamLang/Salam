@@ -134,6 +134,9 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         bound := frame_lookup(f, v.name, found)
         if found:
             if bound != 0:
+                if lo_is_state_ref(a, bound):
+                    ret at.Clone(a, bound)
+                end
                 ret bound
             end
             ret mk_str(a, "", vid)
@@ -163,7 +166,7 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         at.Put(a, cp, cn)
         ret cp
     end
-    if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST or k == at.AST_ASSIGN:
+    if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST or k == at.AST_ASSIGN or k == at.AST_INCDEC or k == at.AST_SLICE or k == at.AST_ARRAY_LIT or k == at.AST_STRUCT_LIT or k == at.AST_FIELD_INIT:
         na := k == at.AST_CALL ? v.a : subst_value(a, v.a, f)
         nb := subst_value(a, v.b, f)
         nc := subst_value(a, v.c, f)
@@ -656,7 +659,152 @@ func expand_component(
         ex.errors++
     end
     body := at.Get(a, comp_def).a
-    expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+    if not g_lo_native_scopes:
+        if lo_has_state(a, body):
+            lg.Log(
+                ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("component '%s' has 'state', which works only in native pages for now; run it with --ui=native or keep the value in a mutable global"), co.ArgStr(comp_name)
+                )
+            )
+            ex.errors++
+        end
+        expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+        ret
+    end
+    mark := at.NewNode(a, at.AST_IF)
+    copy_span(a, mark, invocation)
+    blk := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, blk, invocation)
+    mut kids := Vector {} as Vector<int>
+    mut sj := 0
+    repeat at.ChildCount(a, body) in bi:
+        sid := at.Child(a, body, bi)
+        if at.KindOf(a, sid) != at.AST_VAR_DECL:
+            continue
+        end
+        sd := at.Get(a, sid)
+        gi := lo_state_index(ex, a, ci, sj, sid)
+        sj++
+        decl := at.NewNode(a, at.AST_VAR_DECL)
+        copy_span(a, decl, sid)
+        init := subst_value(a, sd.a, fr)
+        mut dn := at.Get(a, decl)
+        dn.name = sd.name
+        dn.a = init
+        dn.value_int = gi as u64
+        dn.synthetic = true
+        at.Put(a, decl, dn)
+        kids.push(decl)
+        frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
+    end
+    expand_items(ex, a, kids, body, fr, ex.comp_dir.get(ci), depth + 1)
+    mut bn := at.Get(a, blk)
+    mut oldl := bn.list
+    bn.list = kids
+    at.Put(a, blk, bn)
+    oldl.free()
+    mut mn := at.Get(a, mark)
+    mn.name = "__salam_component"
+    mn.synthetic = true
+    mn.value_int = ci as u64
+    mn.a = mk_str(a, "", invocation)
+    mn.b = blk
+    at.Put(a, mark, mn)
+    out.push(mark)
+end
+
+func lo_has_state(a &: at.Ast, body: int): bool:
+    if body == 0:
+        ret false
+    end
+    repeat at.ChildCount(a, body) in i:
+        if at.KindOf(a, at.Child(a, body, i)) == at.AST_VAR_DECL:
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_is_state_ref(a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    ret n.kind == at.AST_INDEX and n.synthetic
+end
+
+func lo_ident(a &: at.Ast, name: str, from: int): int:
+    id := at.NewNode(a, at.AST_IDENTIFIER)
+    copy_span(a, id, from)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func lo_state_ref(a &: at.Ast, gi: int, ci: int, from: int): int:
+    ix := at.NewNode(a, at.AST_INDEX)
+    copy_span(a, ix, from)
+    mut n := at.Get(a, ix)
+    n.a = lo_ident(a, "__salam_st_" + co.U64Toa(gi as u64), from)
+    n.b = lo_ident(a, "__salam_k_" + co.U64Toa(ci as u64), from)
+    n.synthetic = true
+    at.Put(a, ix, n)
+    ret ix
+end
+
+func lo_state_type(a &: at.Ast, comp_def: int, init: int, lit &: str): int:
+    lit = ""
+    if init == 0:
+        ret 0
+    end
+    v := at.Get(a, init)
+    if v.kind == at.AST_LITERAL:
+        if v.value_kind == tok.TV_INT:
+            lit = "int"
+        else v.value_kind == tok.TV_FLOAT:
+            lit = "f64"
+        else v.value_kind == tok.TV_STRING:
+            lit = "str"
+        else v.value_kind == tok.TV_BOOL:
+            lit = "bool"
+        end
+        ret 0
+    end
+    if v.kind == at.AST_UNARY and v.a != 0 and at.KindOf(a, v.a) == at.AST_LITERAL:
+        ret lo_state_type(a, comp_def, v.a, lit)
+    end
+    if v.kind == at.AST_CAST and v.ty != 0:
+        ret v.ty
+    end
+    if v.kind == at.AST_IDENTIFIER:
+        ret comp_param_type(a, comp_def, v.name)
+    end
+    ret 0
+end
+
+func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int): int:
+    mut seen := 0
+    repeat g_lo_st_comp.len() in i:
+        if g_lo_st_comp.get(i) == ci:
+            if seen == j:
+                ret i
+            end
+            seen++
+        end
+    end
+    sd := at.Get(a, sid)
+    mut lit := ""
+    ty := lo_state_type(a, ex.comp_def.get(ci), sd.a, lit)
+    if ty == 0 and str.Len(lit) == 0:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                i18.Tr("component '%s': give the state '%s' a type, as in 'state items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+            )
+        )
+        ex.errors++
+        lit = "int"
+    end
+    g_lo_st_comp.push(ci)
+    g_lo_st_name.push(sd.name)
+    g_lo_st_type.push(ty)
+    g_lo_st_lit.push(lit)
+    ret g_lo_st_comp.len() - 1
 end
 
 func expand_item(
@@ -753,6 +901,9 @@ func expand_item(
     end
     if item.kind == at.AST_IF:
         out.push(expand_if(ex, a, iid, fr, dir, depth))
+        ret
+    end
+    if item.kind == at.AST_VAR_DECL:
         ret
     end
     if item.kind == at.AST_EACH:

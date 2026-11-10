@@ -8,7 +8,7 @@ pkg.import = gui.ui
 pkg.add = gui.ui
 pkg.intro <<
 <p>This package runs a page as a native desktop window that Salam draws itself. The compiler turns a <code>page:</code> into the same HTML document it writes for the web, with the page's CSS in a <code>&lt;style&gt;</code> element and event attributes such as <code>onclick="add()"</code> that name Salam functions. <code>gui.ui</code> is a small browser engine for exactly that output: it parses the document, computes styles with <code>gui.css</code> (the user agent style sheet, hover, focus, active and media rules), lays boxes out with <code>gui.cssbox</code> (block, flex and absolute positioning), breaks and shapes text with <code>gui.typeset</code> (inline elements, bidi, Persian shaping, list markers), paints with <code>gui.paint</code> and shows the result with <code>gui.window</code>.</p>
-<p>A program registers its handlers with <code>Handle</code> and calls <code>Run</code> with a function that returns the page. After every handler the view function runs again; the new document is matched against the old one by position, tag, <code>id</code> and <code>key</code>, so hover, focus, scroll offsets, the caret and the values typed into inputs survive, and only the parts of the window that changed are painted again. <code>RunHtml</code> shows a fixed document. <code>Render</code> draws a page without a window, for tests and screenshots.</p>
+<p>A program registers its handlers with <code>Handle</code> and calls <code>Run</code> with a function that returns the page. After every handler the view function runs again (a compiled page re-runs only the parts whose state changed, see below); the new document is matched against the old one by position, tag, <code>id</code> and <code>key</code>, so hover, focus, scroll offsets, the caret and the values typed into inputs survive, and only the parts of the window that changed are painted again. <code>RunHtml</code> shows a fixed document. <code>Render</code> draws a page without a window, for tests and screenshots.</p>
 <p>Form controls are drawn by the runtime and follow the page's CSS: buttons, text, password, number, email and search inputs with a caret, selection, clipboard and undo, checkboxes, radio groups, ranges, text areas, selects with a popup list, progress, meter, details with summary, and labels that focus or toggle their control. Links to <code>http</code> and <code>https</code> addresses open in the user's browser; a relative link opens another page registered with <code>Page</code>.</p>
 <h3>Things to know</h3>
 <ul>
@@ -34,6 +34,9 @@ pkg.intro <<
 <p>A page built with <code>--ui=native</code> does not go through HTML or CSS text at all. The compiler compiles the page's styles into a <code>gui.css</code> program and writes a view that takes a <code>Builder</code> and creates the elements with direct calls: <code>Open</code> and <code>Close</code> for each element, <code>Decls</code> for the ids of its compiled declaration lists, <code>Text</code>, <code>Id</code>, <code>Class</code>, <code>Attr</code> and <code>On</code> with a Salam closure for each handler. <code>RunCompiled</code> builds the program once and runs the view again after every handler. The new tree goes through the same matching, restyling, layout, paint and events as an HTML view, so the two give the same pixels. Only style values that are runtime expressions are parsed, once each, through <code>Dyn</code>.</p>
 <p>For the 200 element page in <code>tools/bench/gui_ui.salam</code> on one desktop core, a view re-run after a click (building the tree, matching, restyling, layout and the partial repaint) takes about 7.2 ms on the compiled path and 7.7 ms on the HTML path; layout and paint are shared and take most of it. Shaped text paragraphs whose text and style did not change are reused across re-runs on both paths.</p>
 {{example.gui-ui-guide-compiled}}
+<h2 id="guide-reactive">Re-running only what changed</h2>
+<p>A compiled page does not run its whole view after a handler. The compiler puts every component instance, and every element, <code>if</code> or <code>each</code> outside a component that reads state, in its own <code>Scope</code>, and works out at compile time which mutable globals each scope reads. It gives each such global a change bit and sets the bit before every statement in the program that may write it (assignments, <code>++</code>, methods such as <code>push</code>, passing it by reference). A write to a component's <code>state</code> marks just that instance. After a handler, timer or animation step the runtime reads the bits: when none is set nothing runs at all; otherwise only the scopes that read a changed global run again, outermost first, and a component instance runs again as a whole. When a scope's elements keep their shape the new text and attributes are copied into the existing elements, only those are restyled, and changed text is reshaped in place, so layout runs only when a size can change.</p>
+<p>For a page of 200 elements where one counter changes (<code>tools/bench/gui_ui.salam</code>, on a loaded six-core desktop), a click took 3.4 to 4.0 ms when the whole view ran again and 0.5 to 0.7 ms when only the counter's scope ran. A click whose handler changes nothing took 3.1 to 3.8 ms before and 0.2 to 0.3 ms now; what is left is event dispatch and the pressed-state repaint. Writes the compiler cannot see, such as changes inside another package, need <code>Invalidate</code>.</p>
 >>
 
 doc.Handle = Registers a Salam function under a name, so that event attributes such as <code>onclick="name()"</code>, <code>onclick="name(event)"</code> and <code>onclick="window['name']()"</code> run it. Registering the same name again replaces the function.
@@ -132,6 +135,14 @@ doc.Builder.BoolAttr = Sets a boolean attribute such as <code>checked</code> or 
 doc.Builder.Text = Adds text to the open element. Text added next to child elements forms one paragraph with them, as in HTML.
 doc.Builder.On = Runs a closure when an event of the given name reaches the element: <code>click</code>, <code>dblclick</code>, <code>input</code>, <code>change</code>, <code>submit</code>, <code>keydown</code>, <code>keyup</code>, <code>focus</code>, <code>blur</code> and the others, named like the HTML attribute without <code>on</code>. Events bubble; <code>CurrentEvent</code> describes the event inside the closure.
 doc.Builder.Close = Closes the open element.
+doc.Builder.Scope = Builds part of the page in a closure that the runtime can run again on its own. <code>site</code> names the place in the view, registered with <code>ScopeSite</code>; the closure receives the builder and is run at once. A compiled page puts every component instance, and every element, <code>if</code> or <code>each</code> that reads state, in a scope.
+doc.Builder.Reactive = Turns on partial re-runs for a compiled view: the number of change words, a function that returns and clears one word of change bits, and a function that registers the sites once. The view calls it first. Without it the whole view runs after every handler.
+doc.Builder.Instance = Inside a component's scope, the slot of this instance among the live instances of component <code>comp</code>. The slot stays the same when the parent re-runs, so the component's state can be stored per slot.
+doc.Builder.Fresh = True while a component instance builds for the first time, when its state should be set from its declarations.
+doc.ScopeSite = Registers what a site depends on: the component it belongs to (-1 for none) and a mask of change bits in one word. A site that registers several words is called once per word.
+doc.TouchInstance = Marks one component instance as changed, so it alone re-runs after the handler. The compiler writes this after every write to a component's <code>state</code>.
+doc.Invalidate = Runs the whole view again after the current handler. Use it when state changed in a way the compiler cannot see: inside another package, through a pointer, or through a second name for the same Vector.
+doc.ScopeRuns = How many scopes have run again since the page started; a whole view run counts as one. Tests print it to check that a click re-ran only what it should.
 doc.RunCompiled = Opens a window for a compiled page: a function that returns its style program and a view that builds the elements with a <code>Builder</code>. Runs until the window closes. This is what the compiler calls for a page built with <code>--ui=native</code>.
 doc.RunCompiledWith = Like <code>RunCompiled</code> with options such as the size, the title or a headless script.
 doc.RenderCompiled = Draws a compiled page without a window into a new canvas of the given size. The caller frees the canvas.
@@ -233,3 +244,11 @@ ex.Builder.Close = gui-ui-Builder
 ex.RunCompiled = gui-ui-Builder
 ex.RunCompiledWith = gui-ui-Builder
 ex.RenderCompiled = gui-ui-Builder
+ex.Builder.Scope = gui-ui-Scope
+ex.Builder.Reactive = gui-ui-Scope
+ex.Builder.Instance = gui-ui-Scope
+ex.Builder.Fresh = gui-ui-Scope
+ex.ScopeSite = gui-ui-Scope
+ex.TouchInstance = gui-ui-Scope
+ex.Invalidate = gui-ui-Scope
+ex.ScopeRuns = gui-ui-Scope

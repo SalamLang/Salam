@@ -1201,7 +1201,7 @@ function DiscountsAdmin({ notify }: { notify: (msg: string, ok?: boolean) => voi
                   <td>
                     <span className={`badge ${d.active ? "ok" : ""}`}>{d.active ? t("فعال", "Active") : t("غیرفعال", "Inactive")}</span>
                   </td>
-                  <td>
+                  <td className="cell-actions">
                     {d.active ? (
                       <button type="button" className="link danger" disabled={busy === d.id} onClick={() => void deactivate(d)}>
                         {t("لغو", "Deactivate")}
@@ -1409,7 +1409,7 @@ export function Subscriptions({ picked, notify, history, userEmail }: { picked: 
                   <td>
                     <bdi>{r.note}</bdi>
                   </td>
-                  <td>
+                  <td className="cell-actions">
                     {r.status === "active" && (
                       <button type="button" className="link danger" disabled={busy === r.id} onClick={() => void cancel(r)}>
                         {t("لغو", "Cancel")}

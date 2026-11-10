@@ -1,0 +1,305 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package css
+
+import str
+
+func block_sch(sd &: SheetData, d0: int, n: int): bool:
+    repeat n in k:
+        if d0 + k < sd.decls.len() and sd.decls[d0 + k].sch:
+            ret true
+        end
+    end
+    ret false
+end
+
+func decl_sch(t: Vector<Tok>, s: int, e: int, prop: int, has_var: bool): bool:
+    if has_var or prop == P_COLOR_SCHEME:
+        ret true
+    end
+    mut i := s
+    until i < e:
+        tk := t[i]
+        if tk.k == TK_COLOR and (tk.d & 1) != 0:
+            ret true
+        end
+        if tk.k == TK_FUNC and tk.s == "light-dark":
+            ret true
+        end
+        if tk.k == TK_IDENT:
+            mut c := Color {}
+            mut c2 := Color {}
+            if system_color(tk.s, false, c) and system_color(tk.s, true, c2) and pack_color(c) != pack_color(c2):
+                ret true
+            end
+        end
+        i++
+    end
+    ret false
+end
+
+func is_color_prop(p: int): bool:
+    if p >= P_BORDER_TOP_COLOR and p < P_BORDER_TOP_COLOR + 4:
+        ret true
+    end
+    if p >= L_BC and p < L_BC + 4:
+        ret true
+    end
+    switch p:
+        P_COLOR, P_BG_COLOR, P_OUTLINE_COLOR, P_TD_COLOR, P_CARET_COLOR, P_ACCENT_COLOR, P_BOX_SHADOW, P_TEXT_SHADOW:
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func is_color_fn(name: str): bool:
+    switch name:
+        "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "light-dark":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func try_color(t: Vector<Tok>, s: int, e: int, out &: Tok): bool:
+    cur1 := Color { r = 1, g = 2, b = 3 }
+    cur2 := Color { r = 200, g = 100, b = 50, a = 128 }
+    mut a := CF {}
+    if not parse_cf_at(t, s, e, false, cur1, a):
+        ret false
+    end
+    mut a2 := CF {}
+    if not parse_cf_at(t, s, e, false, cur2, a2):
+        ret false
+    end
+    cl := pack_color(cf_to_color(a))
+    if cl != pack_color(cf_to_color(a2)):
+        ret false
+    end
+    mut d := CF {}
+    if not parse_cf_at(t, s, e, true, cur1, d):
+        ret false
+    end
+    cd := pack_color(cf_to_color(d))
+    mut flags := 0
+    if cd != cl:
+        flags |= 1
+    end
+    if not a.legacy:
+        flags |= 2
+    end
+    out = Tok { k = TK_COLOR, c = cl, c2 = cd, d = flags, ws = t[s].ws, stat = true }
+    ret true
+end
+
+func try_calc(t: Vector<Tok>, i: int, out &: Tok): bool:
+    a := calc_fn(t, i, Cx {})
+    b := calc_fn(t, i, Cx { fs = 11.0, pfs = 13.0, rfs = 17.0, vw = 333.0, vh = 444.0, pkw = 1.5 })
+    ok := a.ok and b.ok and a.nl.len() == 0 and b.nl.len() == 0 and not a.has_pct and not b.has_pct and a.kind == b.kind and a.v == b.v
+    lin_free(a)
+    lin_free(b)
+    if not ok:
+        ret false
+    end
+    switch a.kind:
+        K_LEN:
+            if a.v < 0.0:
+                ret false
+            end
+            out = Tok { k = TK_DIM, n = a.v, s = name_of(name_id("px")), stat = true }
+            break
+        end
+        K_NUM:
+            if a.v < 0.0:
+                ret false
+            end
+            out = Tok { k = TK_NUM, n = a.v, int_like = true, stat = true }
+            break
+        end
+        K_ANG:
+            out = Tok { k = TK_DIM, n = a.v, s = name_of(name_id("deg")), stat = true }
+            break
+        end
+        else:
+            if a.v < 0.0:
+                ret false
+            end
+            out = Tok { k = TK_DIM, n = a.v, s = name_of(name_id("ms")), stat = true }
+            break
+        end
+    end
+    out.ws = t[i].ws
+    ret true
+end
+
+func canon_dim(tk &: Tok):
+    switch tk.s:
+        "in", "cm", "mm", "q", "pt", "pc", "rad", "grad", "turn":
+            break
+        end
+        else:
+            ret
+        end
+    end
+    mut v := 0.0
+    mut kind := K_LEN
+    cx := Cx {}
+    if not unit_value(tk.n, tk.s, cx, v, kind):
+        ret
+    end
+    if not tk.stat:
+        sfree(tk.s)
+        sfree(tk.raw)
+    end
+    tk.n = v
+    tk.s = name_of(name_id(kind == K_ANG ? "deg" : "px"))
+    tk.raw = ""
+    tk.stat = true
+end
+
+func drop_toks(t: Vector<Tok>, s: int, e: int):
+    mut i := s
+    until i < e:
+        tk := t[i]
+        if not tk.stat:
+            sfree(tk.s)
+            sfree(tk.raw)
+        end
+        i++
+    end
+end
+
+func resolve_decl(sd &: SheetData, prop: int, ts: int):
+    mut src := Vector {} as Vector<Tok>
+    defer src.free()
+    repeat sd.toks.len() - ts in k:
+        mut tk := sd.toks[ts + k]
+        if tk.close >= 0:
+            tk.close -= ts
+        end
+        src.push(tk)
+    end
+    until sd.toks.len() > ts:
+        _x := sd.toks.pop()
+    end
+    col := is_color_prop(prop)
+    grad := prop == P_BG_IMAGE
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    mut gdepth := -1
+    mut i := 0
+    until i < src.len():
+        mut tk := src[i]
+        n := nxt(src, i)
+        depth := stack.len()
+        cand := (col and depth == 0) or (grad and gdepth >= 0 and depth == gdepth + 1)
+        fcol := (col or (grad and gdepth >= 0)) and tk.k == TK_FUNC and is_color_fn(tk.s)
+        if (cand and (tk.k == TK_HASH or tk.k == TK_IDENT)) or fcol:
+            mut ct := Tok {}
+            if try_color(src, i, n, ct):
+                drop_toks(src, i, n)
+                sd.toks.push(ct)
+                i = n
+                continue
+            end
+        end
+        if tk.k == TK_FUNC and is_math_fn(tk.s):
+            mut mt := Tok {}
+            if try_calc(src, i, mt):
+                drop_toks(src, i, n)
+                sd.toks.push(mt)
+                i = n
+                continue
+            end
+        end
+        if tk.k == TK_DIM:
+            canon_dim(tk)
+        end
+        if tk.k == TK_FUNC:
+            if grad and gdepth < 0 and str.EndsWith(tk.s, "gradient"):
+                gdepth = depth
+            end
+            stack.push(sd.toks.len())
+            tk.close = -1
+        end
+        if tk.k == TK_CLOSE and stack.len() > 0:
+            o := stack.pop()
+            mut open_tok := sd.toks[o]
+            open_tok.close = sd.toks.len()
+            sd.toks[o] = open_tok
+            if gdepth == stack.len():
+                gdepth = -1
+            end
+        end
+        sd.toks.push(tk)
+        i++
+    end
+end
+
+@en "KeywordId"
+@fa "شناسه کلیدواژه"
+pub func KeywordId(name: str): int:
+    ret name_id(name)
+end
+
+@en "KeywordName"
+@fa "نام کلیدواژه"
+pub func KeywordName(id: int): str:
+    ret str.Clone(name_of(id))
+end
+
+@en "PropertyId"
+@fa "شناسه ویژگی سبک"
+pub func PropertyId(name: str): int:
+    ret prop_id(name)
+end
+
+@en "PropertyName"
+@fa "نام ویژگی سبک"
+pub func PropertyName(id: int): str:
+    ret str.Clone(prop_name(id))
+end
+
+@en "KwId"
+@fa "کلیدواژه با شناسه"
+pub func KwId(id: int): Piece:
+    ret Piece { kind = TK_IDENT, id = id }
+end
+
+@en "DimId"
+@fa "کمیت با شناسه واحد"
+pub func DimId(value: f64, unit: int): Piece:
+    ret Piece { kind = TK_DIM, num = value, id = unit }
+end
+
+@en "FnId"
+@fa "کارکرد با شناسه"
+pub func FnId(id: int): Piece:
+    ret Piece { kind = TK_FUNC, id = id }
+end
+
+@en "ColorValue"
+@fa "رنگ حل شده"
+pub func ColorValue(light: i64, dark: i64, flags: int): Piece:
+    ret Piece { kind = TK_COLOR, color = light, dark = dark, code = flags }
+end

@@ -714,6 +714,42 @@ export type MemoryOverview = {
   index: string;
   chats: MemoryChat[];
 };
+export type ChatgptImportStatus =
+  | "uploading"
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "canceled";
+export type ChatgptImport = {
+  id: number;
+  status: ChatgptImportStatus;
+  filename: string;
+  parts: number;
+  received: number;
+  parts_done: number;
+  bytes: number;
+  raw_bytes: number;
+  chats: number;
+  messages: number;
+  memories: number;
+  skipped: number;
+  existing: number;
+  projects: number;
+  instructions: number;
+  error: string;
+  created: number;
+  updated: number;
+  finished: number;
+  have?: { n: number; sha256: string }[];
+};
+export type ChatgptPartBody = {
+  kind: string;
+  name: string;
+  size: number;
+  sha256: string;
+  data: string;
+};
 export type KeyPolicy = {
   salam_prompt?: boolean;
   salam_tools?: boolean;
@@ -1351,6 +1387,29 @@ export const api = {
       },
     ),
   capabilities: () => call<Capabilities>("GET", "/capabilities"),
+  chatgptImports: () =>
+    call<{ imports: ChatgptImport[] }>("GET", "/imports/chatgpt"),
+  chatgptImport: (id: number) =>
+    call<{ import: ChatgptImport }>("GET", `/imports/chatgpt/${id}`),
+  chatgptImportCreate: (body: {
+    fingerprint: string;
+    filename: string;
+    parts: number;
+    raw_bytes: number;
+  }) => call<{ import: ChatgptImport }>("POST", "/imports/chatgpt", body),
+  chatgptImportPart: (id: number, n: number, body: ChatgptPartBody) =>
+    call<{ import: ChatgptImport }>(
+      "PUT",
+      `/imports/chatgpt/${id}/parts/${n}`,
+      body,
+    ),
+  chatgptImportRun: (id: number) =>
+    call<{ import: ChatgptImport }>("POST", `/imports/chatgpt/${id}/start`),
+  chatgptImportDelete: (id: number, chats: boolean) =>
+    call<{ ok?: boolean; chats_removed?: number; import?: ChatgptImport }>(
+      "DELETE",
+      `/imports/chatgpt/${id}${chats ? "?chats=1" : ""}`,
+    ),
   memory: () => call<MemoryOverview>("GET", "/memory"),
   setMemory: (enabled: boolean) =>
     call<{ enabled: boolean }>("PATCH", "/memory", { enabled }),

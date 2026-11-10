@@ -121,24 +121,16 @@ end
 
 func system_color(name: str, dark: bool, out &: Color): bool:
     switch name:
-        "canvas":
+        "canvas", "window", "background":
             out = dark ? rgb_of(0x121212, 255) : rgb_of(0xffffff, 255)
             break
         end
-        "canvastext", "buttontext", "fieldtext", "marktext", "selecteditemtext", "highlighttext", "windowtext":
-            if name == "marktext":
-                out = rgb_of(0x000000, 255)
-            else:
-                out = dark ? rgb_of(0xffffff, 255) : rgb_of(0x000000, 255)
-            end
+        "canvastext", "buttontext", "fieldtext", "windowtext", "buttonborder":
+            out = dark ? rgb_of(0xffffff, 255) : rgb_of(0x000000, 255)
             break
         end
         "buttonface":
             out = dark ? rgb_of(0x6b6b6b, 255) : rgb_of(0xefefef, 255)
-            break
-        end
-        "buttonborder":
-            out = dark ? rgb_of(0xffffff, 255) : rgb_of(0x000000, 255)
             break
         end
         "field":
@@ -146,7 +138,7 @@ func system_color(name: str, dark: bool, out &: Color): bool:
             break
         end
         "graytext":
-            out = dark ? rgb_of(0x8e8e8e, 255) : rgb_of(0x6d6d6d, 255)
+            out = rgb_of(0x808080, 255)
             break
         end
         "linktext":
@@ -158,27 +150,35 @@ func system_color(name: str, dark: bool, out &: Color): bool:
             break
         end
         "activetext":
-            out = dark ? rgb_of(0xff9e9e, 255) : rgb_of(0xff0000, 255)
+            out = rgb_of(0xff0000, 255)
             break
         end
-        "highlight", "selecteditem":
-            out = dark ? rgb_of(0x99c8ff, 255) : rgb_of(0x0075ff, 255)
+        "highlight":
+            out = rgb_of(0x0041c6, 204)
+            break
+        end
+        "highlighttext", "accentcolortext":
+            out = rgb_of(0xffffff, 255)
+            break
+        end
+        "selecteditem":
+            out = dark ? rgb_of(0x99c8ff, 255) : rgb_of(0x1967d2, 255)
+            break
+        end
+        "selecteditemtext":
+            out = dark ? rgb_of(0x3b3b3b, 255) : rgb_of(0xffffff, 255)
             break
         end
         "mark":
             out = rgb_of(0xffff00, 255)
             break
         end
+        "marktext":
+            out = rgb_of(0x000000, 255)
+            break
+        end
         "accentcolor":
-            out = dark ? rgb_of(0x99c8ff, 255) : rgb_of(0x0075ff, 255)
-            break
-        end
-        "accentcolortext":
-            out = dark ? rgb_of(0x000000, 255) : rgb_of(0xffffff, 255)
-            break
-        end
-        "window", "background":
-            out = dark ? rgb_of(0x121212, 255) : rgb_of(0xffffff, 255)
+            out = rgb_of(0x0075ff, 255)
             break
         end
         "buttonhighlight", "threedhighlight":
@@ -203,33 +203,6 @@ func hsl_channel(n: f64, h: f64, s: f64, l: f64): f64:
     ret l - a * math.Max(-1.0, math.Min(math.Min(k - 3.0, 9.0 - k), 1.0))
 end
 
-func round255(v: f64): int:
-    ret clamp255(v * 255.0 + 1.0e-7)
-end
-
-func hsl_color(h0: f64, s0: f64, l0: f64, a: f64): Color:
-    h := h0 - math.Floor(h0 / 360.0) * 360.0
-    s := clamp01(s0)
-    l := clamp01(l0)
-    ret Color { r = round255(hsl_channel(0.0, h, s, l)), g = round255(hsl_channel(8.0, h, s, l)), b = round255(hsl_channel(4.0, h, s, l)), a = clamp255(clamp01(a) * 255.0) }
-end
-
-func hwb_color(h: f64, w0: f64, b0: f64, a: f64): Color:
-    w := clamp01(w0)
-    bl := clamp01(b0)
-    if w + bl >= 1.0:
-        g := w / (w + bl)
-        v := round255(g)
-        ret Color { r = v, g = v, b = v, a = clamp255(clamp01(a) * 255.0) }
-    end
-    base := hsl_color(h, 1.0, 0.5, 1.0)
-    f := 1.0 - w - bl
-    r := (base.r as f64 / 255.0) * f + w
-    gg := (base.g as f64 / 255.0) * f + w
-    b := (base.b as f64 / 255.0) * f + w
-    ret Color { r = round255(r), g = round255(gg), b = round255(b), a = clamp255(clamp01(a) * 255.0) }
-end
-
 func angle_deg(t: Tok, out &: f64): bool:
     if t.k == TK_NUM:
         out = t.n
@@ -248,64 +221,512 @@ func angle_deg(t: Tok, out &: f64): bool:
     ret true
 end
 
-func color_args(t: Vector<Tok>, s: int, e: int, vals &: Vector<Tok>, alpha &: Tok, has_alpha &: bool): bool:
-    mut i := s
-    mut commas := false
-    mut after_slash := false
-    until i < e:
-        tk := t[i]
-        if tk.k == TK_COMMA:
-            commas = true
-            i++
-            continue
+func pack_color(c: Color): i64:
+    ret ((c.r as i64) << 24) | ((c.g as i64) << 16) | ((c.b as i64) << 8) | (c.a as i64)
+end
+
+func unpack_color(v: i64): Color:
+    ret Color { r = ((v >> 24) & 255) as int, g = ((v >> 16) & 255) as int, b = ((v >> 8) & 255) as int, a = (v & 255) as int }
+end
+
+func space_of(name: str): int:
+    switch name:
+        "srgb": ret SP_SRGB end
+        "srgb-linear": ret SP_SRGB_LINEAR end
+        "display-p3": ret SP_P3 end
+        "a98-rgb": ret SP_A98 end
+        "prophoto-rgb": ret SP_PROPHOTO end
+        "rec2020": ret SP_REC2020 end
+        "xyz-d50": ret SP_XYZ_D50 end
+        "xyz", "xyz-d65": ret SP_XYZ_D65 end
+        "lab": ret SP_LAB end
+        "lch": ret SP_LCH end
+        "oklab": ret SP_OKLAB end
+        "oklch": ret SP_OKLCH end
+        "hsl": ret SP_HSL end
+        "hwb": ret SP_HWB end
+        else: ret -1 end
+    end
+    ret -1
+end
+
+func hue_method_of(name: str): int:
+    switch name:
+        "shorter": ret HUE_SHORTER end
+        "longer": ret HUE_LONGER end
+        "increasing": ret HUE_INCREASING end
+        "decreasing": ret HUE_DECREASING end
+        else: ret -1 end
+    end
+    ret -1
+end
+
+func rel_channel(sp: int, fn_rgb: bool, origin: CF, name: str, out &: f64): bool:
+    if name == "alpha":
+        out = origin.al
+        ret true
+    end
+    o := cf_convert(origin, sp)
+    switch sp:
+        SP_SRGB:
+            mul := fn_rgb ? 255.0 : 1.0
+            switch name:
+                "r": out = o.c0 * mul ret true end
+                "g": out = o.c1 * mul ret true end
+                "b": out = o.c2 * mul ret true end
+                else: ret false end
+            end
         end
-        if tk.k == TK_DELIM and tk.d == 47:
-            after_slash = true
-            i++
-            continue
+        SP_HSL:
+            switch name:
+                "h": out = o.c0 ret true end
+                "s": out = o.c1 * 100.0 ret true end
+                "l": out = o.c2 * 100.0 ret true end
+                else: ret false end
+            end
         end
-        if tk.k == TK_FUNC:
+        SP_HWB:
+            switch name:
+                "h": out = o.c0 ret true end
+                "w": out = o.c1 * 100.0 ret true end
+                "b": out = o.c2 * 100.0 ret true end
+                else: ret false end
+            end
+        end
+        SP_LAB, SP_OKLAB:
+            switch name:
+                "l": out = o.c0 ret true end
+                "a": out = o.c1 ret true end
+                "b": out = o.c2 ret true end
+                else: ret false end
+            end
+        end
+        SP_LCH, SP_OKLCH:
+            switch name:
+                "l": out = o.c0 ret true end
+                "c": out = o.c1 ret true end
+                "h": out = o.c2 ret true end
+                else: ret false end
+            end
+        end
+        SP_XYZ_D50, SP_XYZ_D65:
+            switch name:
+                "x": out = o.c0 ret true end
+                "y": out = o.c1 ret true end
+                "z": out = o.c2 ret true end
+                else: ret false end
+            end
+        end
+        else:
+            switch name:
+                "r": out = o.c0 ret true end
+                "g": out = o.c1 ret true end
+                "b": out = o.c2 ret true end
+                else: ret false end
+            end
+        end
+    end
+    ret false
+end
+
+func rel_calc(t: Vector<Tok>, i: int, hue: bool, pct: f64, sp: int, fn_rgb: bool, origin: CF, out &: f64): bool:
+    e := t[i].close
+    if e < 0:
+        ret false
+    end
+    mut v := Vector {} as Vector<Tok>
+    defer v.free()
+    mut j := i
+    until j <= e:
+        mut tk := t[j]
+        tk.stat = true
+        if tk.close >= 0:
+            tk.close -= i
+        end
+        mut x := 0.0
+        if tk.k == TK_IDENT and rel_channel(sp, fn_rgb, origin, tk.s, x):
+            tk = Tok { k = TK_NUM, n = x, ws = tk.ws, stat = true }
+        end
+        v.push(tk)
+        j++
+    end
+    a := calc_fn(v, 0, Cx {})
+    if not a.ok or a.nl.len() > 0:
+        lin_free(a)
+        ret false
+    end
+    if a.kind == K_ANG and hue:
+        out = a.v
+        ret true
+    end
+    if a.kind != K_NUM:
+        ret false
+    end
+    out = a.v + (a.has_pct ? a.pct * pct / 100.0 : 0.0)
+    ret true
+end
+
+func chan_of(t: Vector<Tok>, i: int, hue: bool, pct: f64, rel: bool, sp: int, fn_rgb: bool, origin: CF, out &: f64, none &: bool): bool:
+    tk := t[i]
+    none = false
+    switch tk.k:
+        TK_NUM:
+            out = tk.n
+            ret true
+        end
+        TK_PCT:
+            if hue:
+                ret false
+            end
+            out = tk.n * pct / 100.0
+            ret true
+        end
+        TK_DIM:
+            ret hue and angle_deg(tk, out)
+        end
+        TK_IDENT:
+            if tk.s == "none":
+                none = true
+                out = 0.0
+                ret true
+            end
+            ret rel and rel_channel(sp, fn_rgb, origin, tk.s, out)
+        end
+        TK_FUNC:
+            if not is_math_fn(tk.s):
+                ret false
+            end
+            if rel:
+                ret rel_calc(t, i, hue, pct, sp, fn_rgb, origin, out)
+            end
+            a := calc_fn(t, i, Cx {})
+            if not a.ok or a.nl.len() > 0:
+                lin_free(a)
+                ret false
+            end
+            if a.kind == K_ANG:
+                if not hue:
+                    ret false
+                end
+                out = a.v
+                ret true
+            end
+            if a.kind != K_NUM:
+                ret false
+            end
+            out = a.v + (a.has_pct ? a.pct * pct / 100.0 : 0.0)
+            ret true
+        end
+        else:
             ret false
         end
-        if after_slash:
-            alpha = tk
-            has_alpha = true
+    end
+    ret false
+end
+
+func clamp_to(v: f64, lo: f64, hi: f64): f64:
+    if v < lo:
+        ret lo
+    end
+    if v > hi:
+        ret hi
+    end
+    ret v
+end
+
+func parse_space_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: CF): bool:
+    f := t[i]
+    e := f.close
+    mut items := Vector {} as Vector<int>
+    defer items.free()
+    mut commas := false
+    mut slash := -1
+    mut j := i + 1
+    until j < e:
+        tk := t[j]
+        if tk.k == TK_COMMA:
+            commas = true
+        else tk.k == TK_DELIM and tk.d == 47:
+            if slash >= 0:
+                ret false
+            end
+            slash = items.len()
         else:
-            vals.push(tk)
+            items.push(j)
         end
-        i++
+        j = nxt(t, j)
     end
-    if commas and vals.len() == 4 and not has_alpha:
-        alpha = vals.pop()
-        has_alpha = true
+    mut k := 0
+    mut rel := false
+    mut origin := CF {}
+    if items.len() > 0 and t[items[0]].k == TK_IDENT and t[items[0]].s == "from":
+        if items.len() < 2 or commas:
+            ret false
+        end
+        o := items[1]
+        if not parse_cf_at(t, o, nxt(t, o), dark, cur, origin):
+            ret false
+        end
+        rel = true
+        k = 2
     end
-    ret vals.len() == 3
+    mut sp := SP_SRGB
+    mut fn_rgb := false
+    switch f.s:
+        "rgb", "rgba": fn_rgb = true break end
+        "hsl", "hsla": sp = SP_HSL break end
+        "hwb": sp = SP_HWB break end
+        "lab": sp = SP_LAB break end
+        "lch": sp = SP_LCH break end
+        "oklab": sp = SP_OKLAB break end
+        "oklch": sp = SP_OKLCH break end
+        "color":
+            if k >= items.len() or t[items[k]].k != TK_IDENT:
+                ret false
+            end
+            sp = space_of(t[items[k]].s)
+            if sp < 0 or sp == SP_LAB or sp == SP_LCH or sp == SP_OKLAB or sp == SP_OKLCH or sp == SP_HSL or sp == SP_HWB:
+                ret false
+            end
+            k++
+            break
+        end
+        else: ret false end
+    end
+    if commas and (rel or f.s == "color" or f.s == "lab" or f.s == "lch" or f.s == "oklab" or f.s == "oklch"):
+        ret false
+    end
+    mut nch := items.len() - k
+    mut alpha_at := -1
+    if slash >= 0:
+        if slash != k + 3 or items.len() != k + 4 or commas:
+            ret false
+        end
+        alpha_at = items[k + 3]
+        nch = 3
+    else commas and nch == 4:
+        alpha_at = items[k + 3]
+        nch = 3
+    end
+    if nch != 3:
+        ret false
+    end
+    mut v := [0.0, 0.0, 0.0]
+    mut none := 0
+    repeat 3 in c:
+        mut hue := false
+        mut pct := 1.0
+        switch sp:
+            SP_SRGB:
+                pct = fn_rgb ? 255.0 : 1.0
+                break
+            end
+            SP_HSL, SP_HWB:
+                hue = c == 0
+                pct = 100.0
+                break
+            end
+            SP_LAB:
+                pct = c == 0 ? 100.0 : 125.0
+                break
+            end
+            SP_LCH:
+                hue = c == 2
+                pct = c == 0 ? 100.0 : 150.0
+                break
+            end
+            SP_OKLAB:
+                pct = c == 0 ? 1.0 : 0.4
+                break
+            end
+            SP_OKLCH:
+                hue = c == 2
+                pct = c == 0 ? 1.0 : 0.4
+                break
+            end
+            else:
+                break
+            end
+        end
+        mut x := 0.0
+        mut nn := false
+        tk := t[items[k + c]]
+        if commas and tk.k == TK_IDENT:
+            ret false
+        end
+        if commas and (sp == SP_HSL or sp == SP_HWB) and c > 0 and tk.k != TK_PCT:
+            ret false
+        end
+        if not chan_of(t, items[k + c], hue, pct, rel, sp, fn_rgb, origin, x, nn):
+            ret false
+        end
+        if nn:
+            none |= (1 << c)
+        end
+        v[c] = x
+    end
+    mut al := 1.0
+    if alpha_at >= 0:
+        mut nn := false
+        if not chan_of(t, alpha_at, false, 1.0, rel, sp, fn_rgb, origin, al, nn):
+            ret false
+        end
+        if nn:
+            none |= NA
+        end
+    else rel:
+        al = origin.al
+    end
+    al = clamp01(al)
+    mut r := CF { sp = sp, al = al, none = none }
+    switch sp:
+        SP_SRGB:
+            if fn_rgb:
+                r.c0 = clamp01(v[0] / 255.0)
+                r.c1 = clamp01(v[1] / 255.0)
+                r.c2 = clamp01(v[2] / 255.0)
+                r.legacy = not rel
+            else:
+                r.c0 = v[0]
+                r.c1 = v[1]
+                r.c2 = v[2]
+            end
+            break
+        end
+        SP_HSL, SP_HWB:
+            r.c0 = wrap_hue(v[0])
+            r.c1 = clamp01(v[1] / 100.0)
+            r.c2 = clamp01(v[2] / 100.0)
+            r.legacy = not rel
+            break
+        end
+        SP_LAB:
+            r.c0 = clamp_to(v[0], 0.0, 100.0)
+            r.c1 = v[1]
+            r.c2 = v[2]
+            break
+        end
+        SP_LCH:
+            r.c0 = clamp_to(v[0], 0.0, 100.0)
+            r.c1 = math.Max(v[1], 0.0)
+            r.c2 = wrap_hue(v[2])
+            break
+        end
+        SP_OKLAB:
+            r.c0 = clamp_to(v[0], 0.0, 1.0)
+            r.c1 = v[1]
+            r.c2 = v[2]
+            break
+        end
+        SP_OKLCH:
+            r.c0 = clamp_to(v[0], 0.0, 1.0)
+            r.c1 = math.Max(v[1], 0.0)
+            r.c2 = wrap_hue(v[2])
+            break
+        end
+        else:
+            r.c0 = v[0]
+            r.c1 = v[1]
+            r.c2 = v[2]
+            break
+        end
+    end
+    out = r
+    ret true
 end
 
-func alpha_of(t: Tok, has: bool): f64:
-    if not has:
-        ret 1.0
+func mix_part(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, c &: CF, p &: f64, has_p &: bool): bool:
+    has_p = false
+    mut got := false
+    mut i := s
+    until i < e:
+        tk := t[i]
+        n := nxt(t, i)
+        if tk.k == TK_PCT and not has_p:
+            if tk.n < 0.0 or tk.n > 100.0:
+                ret false
+            end
+            p = tk.n
+            has_p = true
+        else not got:
+            if not parse_cf_at(t, i, n, dark, cur, c):
+                ret false
+            end
+            got = true
+        else:
+            ret false
+        end
+        i = n
     end
-    if t.k == TK_PCT:
-        ret clamp01(t.n / 100.0)
-    end
-    if t.k == TK_NUM:
-        ret clamp01(t.n)
-    end
-    ret 0.0
+    ret got
 end
 
-func chan_val(t: Tok, scale: f64): f64:
-    if t.k == TK_PCT:
-        ret t.n * scale / 100.0
+func parse_color_mix(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: CF): bool:
+    e := t[i].close
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    split_commas(t, i + 1, e, parts)
+    mut sp := SP_OKLAB
+    mut method := HUE_SHORTER
+    mut first := 0
+    if parts.len() == 6:
+        mut j := parts[0]
+        pe := parts[1]
+        if not is_kw(t, j, pe, "in"):
+            ret false
+        end
+        j++
+        if j >= pe or t[j].k != TK_IDENT:
+            ret false
+        end
+        sp = space_of(t[j].s)
+        if sp < 0:
+            ret false
+        end
+        j++
+        if j < pe:
+            if hue_index(sp) < 0 or t[j].k != TK_IDENT:
+                ret false
+            end
+            method = hue_method_of(t[j].s)
+            if method < 0 or not is_kw(t, j + 1, pe, "hue") or j + 2 != pe:
+                ret false
+            end
+        end
+        first = 2
+    else parts.len() != 4:
+        ret false
     end
-    if t.k == TK_NUM:
-        ret t.n
+    mut a := CF {}
+    mut b := CF {}
+    mut pa := 0.0
+    mut pb := 0.0
+    mut ha := false
+    mut hb := false
+    if not mix_part(t, parts[first], parts[first + 1], dark, cur, a, pa, ha) or not mix_part(t, parts[first + 2], parts[first + 3], dark, cur, b, pb, hb):
+        ret false
     end
-    ret 0.0
+    if not ha and not hb:
+        pa = 50.0
+        pb = 50.0
+    else not ha:
+        pa = 100.0 - pb
+    else not hb:
+        pb = 100.0 - pa
+    end
+    sum := pa + pb
+    if sum <= 0.0:
+        ret false
+    end
+    mut r := cf_mix(a, b, pb / sum, sp, method)
+    if sum < 100.0:
+        r.al *= sum / 100.0
+    end
+    out = r
+    ret true
 end
 
-func parse_color_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: Color): bool:
+func parse_color_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: CF): bool:
     f := t[i]
     s := i + 1
     e := f.close
@@ -319,68 +740,37 @@ func parse_color_fn(t: Vector<Tok>, i: int, dark: bool, cur: Color, out &: Color
         if parts.len() != 4:
             ret false
         end
-        mut a := Color {}
-        mut b := Color {}
-        if not parse_color_at(t, parts[0], parts[1], dark, cur, a) or not parse_color_at(t, parts[2], parts[3], dark, cur, b):
+        mut a := CF {}
+        mut b := CF {}
+        if not parse_cf_at(t, parts[0], parts[1], dark, cur, a) or not parse_cf_at(t, parts[2], parts[3], dark, cur, b):
             ret false
         end
         out = dark ? b : a
         ret true
     end
-    mut vals := Vector {} as Vector<Tok>
-    defer vals.free()
-    mut al := Tok {}
-    mut has_a := false
-    if not color_args(t, s, e, vals, al, has_a):
-        ret false
+    if f.s == "color-mix":
+        ret parse_color_mix(t, i, dark, cur, out)
     end
-    a := alpha_of(al, has_a)
-    if has_a and al.k != TK_NUM and al.k != TK_PCT and not (al.k == TK_IDENT and al.s == "none"):
-        ret false
-    end
-    switch f.s:
-        "rgb", "rgba":
-            repeat 3 in k:
-                kk := vals[k].k
-                if kk != TK_NUM and kk != TK_PCT and not (kk == TK_IDENT and vals[k].s == "none"):
-                    ret false
-                end
-            end
-            out = Color { r = clamp255(chan_val(vals[0], 255.0)), g = clamp255(chan_val(vals[1], 255.0)), b = clamp255(chan_val(vals[2], 255.0)), a = clamp255(a * 255.0) }
-            ret true
-        end
-        "hsl", "hsla":
-            mut h := 0.0
-            if not (vals[0].k == TK_IDENT and vals[0].s == "none") and not angle_deg(vals[0], h):
-                ret false
-            end
-            ret_s := vals[1].k == TK_PCT ? vals[1].n / 100.0 : vals[1].n / 100.0
-            ret_l := vals[2].k == TK_PCT ? vals[2].n / 100.0 : vals[2].n / 100.0
-            out = hsl_color(h, ret_s, ret_l, a)
-            ret true
-        end
-        "hwb":
-            mut h := 0.0
-            if not (vals[0].k == TK_IDENT and vals[0].s == "none") and not angle_deg(vals[0], h):
-                ret false
-            end
-            out = hwb_color(h, vals[1].n / 100.0, vals[2].n / 100.0, a)
-            ret true
-        end
-        else:
-            ret false
-        end
-    end
-    ret false
+    ret parse_space_fn(t, i, dark, cur, out)
 end
 
-func parse_color_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out &: Color): bool:
+func parse_cf_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out &: CF): bool:
     if s >= e or nxt(t, s) != e:
         ret false
     end
     tk := t[s]
+    if tk.k == TK_COLOR:
+        out = cf_from_color(unpack_color(dark ? tk.c2 : tk.c))
+        out.legacy = (tk.d & 2) == 0
+        ret true
+    end
+    mut c := Color {}
     if tk.k == TK_HASH:
-        ret parse_hex_color(tk.s, out)
+        if not parse_hex_color(tk.s, c):
+            ret false
+        end
+        out = cf_from_color(c)
+        ret true
     end
     if tk.k == TK_FUNC:
         ret parse_color_fn(t, s, dark, cur, out)
@@ -389,19 +779,36 @@ func parse_color_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out 
         ret false
     end
     if tk.s == "transparent":
-        out = Color { a = 0 }
+        out = CF { sp = SP_SRGB, al = 0.0, legacy = true }
         ret true
     end
     if tk.s == "currentcolor":
-        out = cur
+        out = cf_from_color(cur)
         ret true
     end
     init_colors()
     if g_colors.has(tk.s):
-        out = rgb_of(g_colors.get(tk.s), 255)
+        out = cf_from_color(rgb_of(g_colors.get(tk.s), 255))
         ret true
     end
-    ret system_color(tk.s, dark, out)
+    if not system_color(tk.s, dark, c):
+        ret false
+    end
+    out = cf_from_color(c)
+    ret true
+end
+
+func parse_color_at(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color, out &: Color): bool:
+    if s < e and t[s].k == TK_COLOR and s + 1 == e:
+        out = unpack_color(dark ? t[s].c2 : t[s].c)
+        ret true
+    end
+    mut c := CF {}
+    if not parse_cf_at(t, s, e, dark, cur, c):
+        ret false
+    end
+    out = cf_to_color(c)
+    ret true
 end
 
 func is_color_start(t: Vector<Tok>, i: int): bool:

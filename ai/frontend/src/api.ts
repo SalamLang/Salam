@@ -435,6 +435,23 @@ export type Payment = {
   paid: number;
   user?: { id: number; name: string; email: string };
 };
+export type DiscountKind = "percent" | "amount";
+export type Discount = {
+  id: number;
+  code: string;
+  kind: DiscountKind;
+  value: number;
+  user_id: number;
+  max_users: number;
+  max_uses: number;
+  expires: number;
+  active: boolean;
+  note: string;
+  created: number;
+  uses: number;
+  users: number;
+  user?: { id: number; name: string; email: string };
+};
 export type AdminSubscription = {
   id: number;
   user_id: number;
@@ -1594,11 +1611,17 @@ export const api = {
   plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
   subscription: () =>
     call<{ subscription: Subscription }>("GET", "/billing/subscription"),
-  checkout: (plan: PlanId, gateway: Gateway) =>
+  checkout: (plan: PlanId, gateway: Gateway, code?: string) =>
     call<{ payment_id: number; gateway: Gateway; amount: number; url: string }>(
       "POST",
       "/billing/checkout",
-      { plan, gateway },
+      { plan, gateway, code: code || undefined },
+    ),
+  previewDiscount: (plan: PlanId, code: string) =>
+    call<{ code: string; price: number; charge: number; discount: number }>(
+      "POST",
+      "/billing/discount/preview",
+      { plan, code },
     ),
   payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
   usage: () => call<UsageReport>("GET", "/usage"),
@@ -1635,6 +1658,20 @@ export const api = {
       "GET",
       `/admin/payments${query({ status: f.status, user: f.user, before: f.before })}`,
     ),
+  adminDiscounts: () => call<{ discounts: Discount[] }>("GET", "/admin/discounts"),
+  adminDiscountCreate: (body: {
+    code: string;
+    kind: DiscountKind;
+    value: number;
+    email?: string;
+    max_users?: number;
+    max_uses?: number;
+    expires?: number;
+    note?: string;
+  }) => call<{ discount: Discount }>("POST", "/admin/discounts", body),
+  adminDiscountSave: (id: number, body: Partial<{ kind: DiscountKind; value: number; email: string; max_users: number; max_uses: number; expires: number; note: string; active: boolean }>) =>
+    call<{ discount: Discount }>("PUT", `/admin/discounts/${id}`, body),
+  adminDiscountDelete: (id: number) => call<{ ok: boolean }>("DELETE", `/admin/discounts/${id}`),
   keys: () => call<{ keys: ApiKey[] }>("GET", "/keys"),
   createKey: (name: string) =>
     call<{ key: ApiKey; secret: string }>("POST", "/keys", { name }),

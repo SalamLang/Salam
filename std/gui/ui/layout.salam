@@ -710,6 +710,9 @@ func _reset_layout():
     _e.has_tree = true
     repeat _e.ifcs.len() in i:
         mut f := _e.ifcs.ref(i)
+        if f.ckey.len() > 0 and f.has_para and not _pc_map.has(f.ckey):
+            _pc_put(f)
+        end
         _free_ifc(f)
     end
     _e.ifcs.free()
@@ -753,6 +756,8 @@ func _free_ifc(f &: _Ifc):
     f.span_el.free()
     f.span_atom.free()
     f.atoms.free()
+    _sfree(f.ckey)
+    f.ckey = ""
     if f.has_para:
         typeset.FreeParagraph(f.para)
         f.has_para = false
@@ -781,6 +786,7 @@ func _layout():
     end
     _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
     _place_all()
+    _pc_sweep()
 end
 
 func _compute_atom(k: int):
@@ -859,6 +865,57 @@ func _patch_atoms(f &: _Ifc):
     end
 end
 
+func _para_key(f: _Ifc): str:
+    if f.control or f.atoms.len() > 0 or f.spans.len() == 0:
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    ps := f.pstyle
+    str.BufAppend(b, (ps.align as int) + "|" + ps.direction + "|" + (ps.white_space as int) + "|" + (ps.overflow_wrap as int) + "|" + ps.max_lines + "|" + ps.ellipsis + "|" + ps.lang)
+    each sp in f.spans:
+        str.BufAppend(b, "\x01" + sp.families + "|" + sp.size + "|" + sp.weight + "|" + sp.italic + "|" + sp.letter_spacing + "|" + sp.word_spacing + "|" + sp.line_height + "|" + sp.line_height_scale + "|" + sp.tag + "|" + sp.lang + "\x02")
+        str.BufAppend(b, sp.text)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _pc_put(f &: _Ifc):
+    _pc_keys.push(f.ckey)
+    _pc_para.push(f.para)
+    _pc_lay.push(f.lay)
+    _pc_layw.push(f.lay_w)
+    _pc_has_lay.push(f.has_lay)
+    _pc_taken.push(false)
+    _pc_map.put(f.ckey, _pc_keys.len() - 1)
+    f.ckey = ""
+    f.has_para = false
+    f.has_lay = false
+end
+
+func _pc_sweep():
+    repeat _pc_keys.len() in i:
+        if not _pc_taken[i]:
+            mut p := _pc_para[i]
+            typeset.FreeParagraph(p)
+            if _pc_has_lay[i]:
+                mut l := _pc_lay[i]
+                typeset.FreeLayout(l)
+            end
+        end
+        _sfree(_pc_keys[i])
+    end
+    _pc_map.free()
+    _pc_map = HashMap {} as HashMap<str, int>
+    _pc_keys.clear()
+    _pc_para.clear()
+    _pc_lay.clear()
+    _pc_layw.clear()
+    _pc_has_lay.clear()
+    _pc_taken.clear()
+end
+
 func _ifc_para(fi: int):
     f0 := _e.ifcs[fi]
     if f0.has_para:
@@ -873,8 +930,25 @@ func _ifc_para(fi: int):
             f.spans[0] = sp
         end
     end
+    key := _para_key(_e.ifcs[fi])
+    if key.len() > 0 and _pc_map.has(key):
+        k := _pc_map.get(key)
+        if not _pc_taken[k]:
+            _pc_taken[k] = true
+            f.para = _pc_para[k]
+            f.has_para = true
+            if _pc_has_lay[k]:
+                f.lay = _pc_lay[k]
+                f.lay_w = _pc_layw[k]
+                f.has_lay = true
+            end
+            f.ckey = key
+            ret
+        end
+    end
     f.para = typeset.NewParagraph(_fc, f.spans, f.pstyle)
     f.has_para = true
+    f.ckey = key
 end
 
 func _ifc_layout(fi: int, width: f64):

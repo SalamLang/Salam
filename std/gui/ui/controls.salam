@@ -152,6 +152,11 @@ func _control_text(node: int): str:
         ret str.Clone(t == "reset" ? "Reset" : (t == "submit" ? "Submit" : ""))
     end
     v := _control_value(node)
+    pre := _e.ctl[node].preedit
+    if pre.len() > 0 and _e.ctl[node].focused and not (tag == "input" and _input_type(node) == "password"):
+        cp := math.MaxI(0, math.MinI(_e.ctl[node].caret, v.len()))
+        ret v.substr(0, cp) + pre + v.substr(cp, v.len() - cp)
+    end
     if v.len() == 0:
         ret str.Clone(_attr(_e.dom, node, "placeholder"))
     end
@@ -161,7 +166,27 @@ func _control_text(node: int): str:
     ret str.Clone(v)
 end
 
+func _preedit_len(node: int): int:
+    c := _e.ctl[node]
+    if c.preedit.len() == 0 or not c.focused or (_e.dom.nodes[node].tag == "input" and _input_type(node) == "password"):
+        ret 0
+    end
+    ret c.preedit.len()
+end
+
+func _is_textarea(node: int): bool:
+    ret _e.dom.nodes[node].tag == "textarea"
+end
+
+func _wraps(node: int): bool:
+    ret _is_textarea(node) and _attr(_e.dom, node, "wrap") != "off"
+end
+
 func _display_offset(node: int, off: int): int:
+    pl := _preedit_len(node)
+    if pl > 0:
+        ret off >= _e.ctl[node].caret ? off + pl : off
+    end
     if _e.dom.nodes[node].tag == "input" and _input_type(node) == "password":
         v := _control_value(node)
         n := str.CharCount(v.substr(0, off))
@@ -171,6 +196,14 @@ func _display_offset(node: int, off: int): int:
 end
 
 func _value_offset(node: int, doff: int): int:
+    pl := _preedit_len(node)
+    if pl > 0:
+        c := _e.ctl[node].caret
+        if doff < c:
+            ret doff
+        end
+        ret doff < c + pl ? c : doff - pl
+    end
     if _e.dom.nodes[node].tag == "input" and _input_type(node) == "password":
         v := _control_value(node)
         cps := doff / 3
@@ -219,7 +252,7 @@ end
 
 func _control_wrap_width(fi: int): f64:
     f := _e.ifcs[fi]
-    if _e.dom.nodes[f.owner].tag == "textarea":
+    if _wraps(f.owner):
         ret f.w
     end
     ret 0.0
@@ -234,31 +267,136 @@ func _scroll_caret(node: int):
         ret
     end
     f := _e.ifcs[fi]
-    if _e.dom.nodes[node].tag == "textarea":
-        ret
-    end
     c := _e.ctl[node]
     mut x := 0.0
+    mut y := 0.0
+    mut h := 0.0
     if not _control_shows_placeholder(node):
         r := typeset.CaretRect(f.para, f.lay, typeset.TextPosition { offset = _display_offset(node, c.caret) })
         x = r.x
+        y = r.y
+        h = r.height
     end
     mut sc := c.text_scroll
-    if x - sc > f.w - 1.0:
-        sc = x - f.w + 1.0
-    end
-    if x - sc < 0.0:
-        sc = x
-    end
-    maxs := math.Max(0.0, f.lay.width - f.w + 1.0)
-    if sc > maxs:
-        sc = maxs
-    end
-    if sc < 0.0:
+    mut sy := c.text_scroll_y
+    if not _wraps(node):
+        if x - sc > f.w - 1.0:
+            sc = x - f.w + 1.0
+        end
+        if x - sc < 0.0:
+            sc = x
+        end
+        maxs := math.Max(0.0, f.lay.width - f.w + 1.0)
+        sc = math.Max(0.0, math.Min(sc, maxs))
+    else:
         sc = 0.0
+    end
+    if _is_textarea(node):
+        if y + h - sy > f.h:
+            sy = y + h - f.h
+        end
+        if y - sy < 0.0:
+            sy = y
+        end
+        maxy := math.Max(0.0, f.lay.height - f.h)
+        sy = math.Max(0.0, math.Min(sy, maxy))
+    else:
+        sy = 0.0
     end
     mut cc := _e.ctl.ref(node)
     cc.text_scroll = sc
+    cc.text_scroll_y = sy
+end
+
+func _scroll_text(node: int, dx: f64, dy: f64): bool:
+    fi := _e.node_ifc[node]
+    if fi < 0 or not _e.ifcs[fi].has_lay:
+        ret false
+    end
+    f := _e.ifcs[fi]
+    c := _e.ctl[node]
+    maxx := _wraps(node) ? 0.0 : math.Max(0.0, f.lay.width - f.w + 1.0)
+    maxy := math.Max(0.0, f.lay.height - f.h)
+    nx := math.Max(0.0, math.Min(maxx, c.text_scroll + dx))
+    ny := math.Max(0.0, math.Min(maxy, c.text_scroll_y + dy))
+    if nx == c.text_scroll and ny == c.text_scroll_y:
+        ret false
+    end
+    mut cc := _e.ctl.ref(node)
+    cc.text_scroll = nx
+    cc.text_scroll_y = ny
+    _damage_node(node)
+    ret true
+end
+
+func _word_bounds(node: int, off: int, a &: int, b &: int):
+    b = _grapheme_step(node, off, true, true)
+    a = _grapheme_step(node, b, false, true)
+    if a > off:
+        a = _grapheme_step(node, off, false, true)
+        b = _grapheme_step(node, a, true, true)
+    end
+end
+
+func _line_bounds(node: int, off: int, a &: int, b &: int):
+    v := _control_value(node)
+    if not _is_textarea(node):
+        a = 0
+        b = v.len()
+        ret
+    end
+    p := (v as void*) as u8*
+    mut i := math.MinI(off, v.len())
+    until i > 0 and _hb(p, i - 1) != 10:
+        i--
+    end
+    mut j := math.MinI(off, v.len())
+    until j < v.len() and _hb(p, j) != 10:
+        j++
+    end
+    a = i
+    b = j < v.len() ? j + 1 : j
+end
+
+func _line_move(node: int, off: int, dir: int, edge: bool): int:
+    fi := _e.node_ifc[node]
+    if fi < 0 or not _e.ifcs[fi].has_lay:
+        ret off
+    end
+    f := _e.ifcs[fi]
+    pos := typeset.TextPosition { offset = _display_offset(node, off) }
+    r := typeset.CaretRect(f.para, f.lay, pos)
+    if edge:
+        nl := f.lay.lines.len()
+        mut li := 0
+        repeat nl in i:
+            ln := f.lay.lines[i]
+            if r.y >= ln.top and r.y < ln.top + ln.height:
+                li = i
+            end
+        end
+        if nl == 0:
+            ret off
+        end
+        ln := f.lay.lines[li]
+        mut x := 0.0
+        if (dir > 0) != ln.rtl:
+            x = ln.x + ln.width + 1000.0
+        else:
+            x = ln.x - 1000.0
+        end
+        hp := typeset.HitTest(f.para, f.lay, x, ln.top + ln.height / 2.0)
+        ret _value_offset(node, hp.offset)
+    end
+    ny := dir > 0 ? r.y + r.height + 1.0 : r.y - 1.0
+    if ny < 0.0:
+        ret 0
+    end
+    if ny >= f.lay.height:
+        ret _control_value(node).len()
+    end
+    hp := typeset.HitTest(f.para, f.lay, r.x, ny)
+    ret _value_offset(node, hp.offset)
 end
 
 func _paint_selection(cv &: paint.Canvas, fi: int, tx: f64, ty: f64, alpha: f64):
@@ -268,7 +406,8 @@ func _paint_selection(cv &: paint.Canvas, fi: int, tx: f64, ty: f64, alpha: f64)
         ret
     end
     a := _display_offset(f.owner, math.MinI(c.caret, c.anchor))
-    b := _display_offset(f.owner, math.MaxI(c.caret, c.anchor))
+    b0 := math.MaxI(c.caret, c.anchor)
+    b := b0 == c.caret ? _display_offset(f.owner, b0) - _preedit_len(f.owner) : _display_offset(f.owner, b0)
     mut rs := typeset.SelectionRects(f.para, f.lay, a, b)
     each r in rs:
         cv.FillRect(_rect(tx + r.x, ty + r.y, r.width, r.height), paint.Color { r = 0, g = 117, b = 255, a = (math.Round(77.0 * alpha) as int) })
@@ -289,8 +428,13 @@ func _paint_caret(cv &: paint.Canvas, fi: int, tx: f64, ty: f64, alpha: f64):
     r := typeset.CaretRect(f.para, f.lay, typeset.TextPosition { offset = off })
     cs := _style_of(f.owner)
     col := cs.caret_color.a > 0 ? cs.caret_color : cs.color
-    if c.preedit.len() > 0:
-        cv.FillRect(_rect(tx + r.x, ty + r.y + r.height - 1.0, 2.0, 1.0), _pca(col, alpha))
+    pl := _preedit_len(f.owner)
+    if pl > 0:
+        mut rs := typeset.SelectionRects(f.para, f.lay, off - pl, off)
+        each u in rs:
+            cv.FillRect(_rect(tx + u.x, ty + u.y + u.height - 2.0, u.width, 1.0), _pca(cs.color, alpha))
+        end
+        rs.free()
     end
     cv.FillRect(_rect(tx + r.x, ty + r.y, 1.0, r.height), _pca(col, alpha))
 end
@@ -444,6 +588,6 @@ func _caret_from_point(node: int, x: f64, y: f64): int:
     mut lx := x
     mut ly := y
     _to_local(node, x, y, lx, ly)
-    pos := typeset.HitTest(f.para, f.lay, lx - f.x + _e.ctl[node].text_scroll, ly - f.y)
+    pos := typeset.HitTest(f.para, f.lay, lx - f.x + _e.ctl[node].text_scroll, ly - f.y + _e.ctl[node].text_scroll_y)
     ret _value_offset(node, pos.offset)
 end

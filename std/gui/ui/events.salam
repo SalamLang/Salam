@@ -860,11 +860,19 @@ func _pointer_down(x: f64, y: f64, button: int, clicks: int, mods: int):
             c.anchor = off
         end
         if clicks == 2:
-            c.anchor = _grapheme_step(ft, off, false, true)
-            c.caret = _grapheme_step(ft, off, true, true)
+            mut wa := 0
+            mut wb := 0
+            _word_bounds(ft, off, wa, wb)
+            mut c2 := _e.ctl.ref(ft)
+            c2.anchor = wa
+            c2.caret = wb
         else clicks >= 3:
-            c.anchor = 0
-            c.caret = _control_value(ft).len()
+            mut la := 0
+            mut lb := 0
+            _line_bounds(ft, off, la, lb)
+            mut c3 := _e.ctl.ref(ft)
+            c3.anchor = la
+            c3.caret = lb
         end
         _e.capture = ft
         _e.drag_sel = true
@@ -944,6 +952,9 @@ func _wheel(dx0: f64, dy0: f64, line: bool):
     _fire_ev(t, _make_event("wheel", t), true)
     mut n := t
     until n >= 0 and n != _e.dom.html:
+        if n < _e.node_ifc.len() and _is_textarea(n) and _scroll_text(n, dx, dy):
+            ret
+        end
         if _e.node_cb[n] >= 0 and _e.node_el[n] >= 0 and _is_scroller(_style_of(n)) and n != _e.dom.body:
             l := _e.tree.Layout(_e.node_cb[n])
             vw := l.width - l.border.left - l.border.right
@@ -1162,9 +1173,11 @@ func _text_input(text: str):
         end
     end
     _push_undo(f)
-    _replace_selection(f, clean)
     mut c := _e.ctl.ref(f)
+    old_pre := c.preedit
     c.preedit = ""
+    _sfree(old_pre)
+    _replace_selection(f, clean)
     _refresh_control(f)
     mut ev := _make_event("input", f)
     ev.text = clean
@@ -1186,19 +1199,29 @@ func _edit_key(f: int, k: window.Key, ctrl: bool, shift: bool):
             logical := rtl ? not fwd : fwd
             if not shift and caret != anchor:
                 caret = logical ? math.MaxI(caret, anchor) : math.MinI(caret, anchor)
+            else ctrl:
+                caret = _grapheme_step(f, caret, logical, true)
             else:
-                caret = _grapheme_step(f, caret, logical, ctrl)
+                caret = _visual_step(f, caret, fwd, logical)
             end
             moved = true
             break
         end
-        window.Key.Home, window.Key.Up:
-            caret = 0
+        window.Key.Home, window.Key.End:
+            if ctrl or not _is_textarea(f):
+                caret = k == window.Key.Home ? 0 : v.len()
+            else:
+                caret = _line_move(f, caret, k == window.Key.Home ? -1 : 1, true)
+            end
             moved = true
             break
         end
-        window.Key.End, window.Key.Down:
-            caret = v.len()
+        window.Key.Up, window.Key.Down:
+            if _is_textarea(f):
+                caret = _line_move(f, caret, k == window.Key.Up ? -1 : 1, false)
+            else:
+                caret = k == window.Key.Up ? 0 : v.len()
+            end
             moved = true
             break
         end
@@ -1308,6 +1331,21 @@ func _edit_key(f: int, k: window.Key, ctrl: bool, shift: bool):
     end
 end
 
+func _visual_step(f: int, caret: int, right: bool, logical: bool): int:
+    fi := _e.node_ifc[f]
+    v := _control_value(f)
+    plain := not (_e.dom.nodes[f].tag == "input" and _input_type(f) == "password") and v.len() > 0
+    if fi < 0 or not plain or not _e.ifcs[fi].has_lay or _e.ifcs[fi].para.text != v:
+        ret _grapheme_step(f, caret, logical, false)
+    end
+    fc := _e.ifcs[fi]
+    np := typeset.MoveVisual(fc.para, fc.lay, typeset.TextPosition { offset = caret }, right)
+    if np.offset == caret:
+        ret _grapheme_step(f, caret, logical, false)
+    end
+    ret np.offset
+end
+
 func _set_clipboard(t: str):
     _clip_text = str.Clone(t)
     _clip_owned = true
@@ -1332,6 +1370,8 @@ func _ime(text: str, commit: bool):
         ret
     end
     mut c := _e.ctl.ref(f)
+    old := c.preedit
     c.preedit = str.Clone(text)
-    _damage_node(f)
+    _sfree(old)
+    _refresh_control(f)
 end

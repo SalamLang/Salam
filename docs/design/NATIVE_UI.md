@@ -386,17 +386,17 @@ differently:
 
 ## Interactivity: reactive state
 
-A handler only changes the program's state: mutable globals, and `state`
-variables declared inside a component. Every element that reads that state
-updates. Natively this works like Svelte or Solid: the compiler finds what
-each part of the page reads, marks every write, and the runtime re-runs only
-the parts whose state changed.
+A handler only changes the program's state: mutable globals, and variables
+declared inside a component or the page block. Every element that reads that
+state updates. Natively this works like Svelte or Solid: the compiler finds
+what each part of the page reads, marks every write, and the runtime re-runs
+only the parts whose state changed.
 
 ```salam
 mut total := 0
 
 component Counter(name: str, start: int):
-    state count := start
+    count := start
     box:
         button: id = name click = (): count++ total++ end content = name + " " + count end
     end
@@ -409,6 +409,46 @@ page:
     Counter: name = "b" start = 10 end
 end
 ```
+
+### Component and page variables
+
+A line `name := value` at the top of a component body or of the page block
+declares a variable. There is no keyword: the compiler classifies every such
+variable while it expands the page (`compiler/sal_layout/layout_infer.salam`,
+shared by the native and the web targets), from two facts.
+
+- **Written:** an assignment, `++`/`--`, a method call other than the read
+  only ones, passing it to a `&:` parameter of a program function, or passing
+  it to a child component whose parameter is written, anywhere in the body:
+  in handlers, in callbacks passed to children, in values. Passing it to a
+  function of another package, or calling a method on it, counts too unless
+  its value is plainly a number, string or bool, which nothing can change
+  through a call. Lambda parameters, locals and loop variables of the same
+  name hide it.
+- **Read by the view:** an attribute value or text, an `if` condition, an
+  `each` collection, a key, a value passed to a child component (a lambda
+  passed to a child counts when the child calls it in its view), and anything
+  a derived value it feeds is read by.
+
+| Written | Read by the view | Kind | What the compiler generates |
+|---|---|---|---|
+| yes | yes | state | per instance storage, write marks, the instance depends on it |
+| yes | no | instance variable | per instance storage, no marks, never re-runs anything |
+| no | either | derived value | its expression, worked out each time the instance runs |
+
+An instance variable starts from its value once, when the instance is made,
+and keeps it across re-runs; a derived value follows the parameters and the
+state it is made from. A variable neither read nor written gets a warning.
+`mut name := value` is accepted too and means the same. A page block variable
+that is written becomes a mutable global, so it gets the same reactivity as
+one, and a derived one is substituted where it is used. A value passed to a
+child component makes the child depend on it, so a child re-runs (natively,
+with its parent; on the web, on its own) when only its parameters change.
+When the analysis cannot tell, it picks state: a wrong guess costs one extra
+re-run, never a stale screen.
+
+`SALAM_NATIVE_DUMP=1` shows the result: only state variables get
+`ui.TouchInstance` marks.
 
 ### Scopes
 
@@ -441,8 +481,9 @@ program that may write it: assignments, compound assignments, `++` and `--`,
 method calls other than the read only ones (`len`, `get`, `has`, ...), passing
 it to a `&:` parameter of a program function, and passing it to a function of
 another package (which cannot be checked, so it is assumed to write). A write
-to a component's `state` becomes `ui.TouchInstance(component, instance)`
-instead, so only that instance re-runs. A mark costs one OR into a global;
+to a component's state variable becomes `ui.TouchInstance(component, instance)`
+instead, so only that instance re-runs; a write to an instance variable gets no
+mark at all. A mark costs one OR into a global;
 handlers that change nothing run no extra code.
 
 The page view starts with `b.Reactive(words, take, sites)`: `take(w)` reads and
@@ -467,8 +508,8 @@ shape changed (an `if` flipped, a row was added) the new elements are spliced
 into the tree, matched with the old ones by tag, `id` and `key` so focus and
 typed text survive, and the element, style and layout passes run once.
 
-Component state lives in generated vectors, one per `state` declaration,
-indexed by an instance slot. An instance keeps its slot when its parent
+Component state and instance variables live in generated vectors, one per
+declaration, indexed by an instance slot. An instance keeps its slot when its parent
 re-runs: it is matched by site and by its position among siblings of the same
 site. A new instance initialises its state from the declaration.
 
@@ -482,7 +523,7 @@ row:
 
 ```salam
 component Row(name: str):
-    state hits := 0
+    hits := 0
     item: key = name content = name + " " + hits click = (): hits++ end end
 end
 
@@ -495,20 +536,24 @@ page:
 end
 ```
 
-A key that reads the component's own `state` is ignored, because the key is
-needed before the state exists.
+A key that reads the component's own variables is ignored, because the key is
+needed before they exist.
 
 ### On the web
 
-`salam page build` gives the same `state` to the page block. Every component
-instance that declares `state` gets one global per declaration
+`salam page build` gives the same variables to the page block. Every
+component instance that keeps a written variable gets one global per such
+declaration
 (`__salam_ws_N`), a render function `__salam_view_I()` built from the
 instance's elements with the runtime view lowering (dynamic values, `if` and
 `each` become Salam code that returns HTML, compiled to JavaScript with the
 event handlers), and an init function. In the HTML the instance is a pair of
 comments, `<!--salam:I--><!--/salam:I-->`, which the page script fills when it
-loads. Every write to a `state` gets a `salamWsTouch(I)` call before it, as
-the native target gets `TouchInstance`. The page script then re-renders the
+loads. Every write to a state variable gets a `salamWsTouch(I)` call before it,
+as the native target gets `TouchInstance`, and so does every nested instance
+that reads it (a value passed to a child), so a child re-renders when only its
+parameters change. The write analysis skips names hidden by a lambda
+parameter, a local or a loop variable. The page script then re-renders the
 touched instances once, after the handler returns, and patches the DOM
 between the two comments in place: elements are matched by tag and by
 `data-key` or `id`, attributes and text are updated where they changed, an
@@ -519,9 +564,9 @@ keeps its DOM and state when the outer one re-renders; when it appears again
 Styles of the instance's elements are compiled once into the page's style
 sheet with an `sI-` class prefix.
 
-A component with `state` inside `each` has no comments of its own: its
-elements are drawn inline by the instance (or page part, below) that holds
-the `each`, and each `state` is one Vector (`__salam_ws_N`) indexed by a slot.
+A component with written variables inside `each` has no comments of its own:
+its elements are drawn inline by the instance (or page part, below) that
+holds the `each`, and each such variable is one Vector (`__salam_ws_N`) indexed by a slot.
 At the instance's place the render function calls `salamWsSlot(I, key)`, and
 the page script returns the slot kept for that key, or a new one, in which
 case the state is set from its declarations. The key is the row's key, by
@@ -554,12 +599,12 @@ child calls it from a handler:
 
 ```salam
 component Counter(name: str, change):
-    state count := 0
+    count := 0
     button: id = name click = (): count++ change(count) end content = name + " " + count end
 end
 
 component Pair(report: func (int)):
-    state sum := 0
+    sum := 0
     box:
         paragraph: content = "sum " + sum end
         Counter:

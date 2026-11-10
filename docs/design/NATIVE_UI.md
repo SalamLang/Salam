@@ -519,6 +519,29 @@ keeps its DOM and state when the outer one re-renders; when it appears again
 Styles of the instance's elements are compiled once into the page's style
 sheet with an `sI-` class prefix.
 
+A component with `state` inside `each` has no comments of its own: its
+elements are drawn inline by the instance (or page part, below) that holds
+the `each`, and each `state` is one Vector (`__salam_ws_N`) indexed by a slot.
+At the instance's place the render function calls `salamWsSlot(I, key)`, and
+the page script returns the slot kept for that key, or a new one, in which
+case the state is set from its declarations. The key is the row's key, by
+the same rule as natively (the `key` of the row's first element, or its
+`id`, or else the row's index), joined with the slots of the instances
+around it. A slot not asked for during a render is freed, so a row that goes
+away and comes back starts from its declarations. Reads and writes go
+through `salamWsCur(I)`, which a handler attribute in the row sets first
+(`onclick="salamWsAt(I,slot);__sl_ev_7()"`), and a write re-renders the
+instance that holds the `each`, which patches the rows by key.
+
+The page block may read mutable globals. Every element, `if` or `each` of
+the page block whose own attributes, condition or collection read one (also
+through a function of the program) becomes a page part: a pair of comments
+and a render function, like an instance without state. The compiler records
+which globals every instance and page part reads, and before every statement
+of the program that may write one of them (the write analysis of the native
+target) it adds `salamWsTouch` for each of them. Static IDs inside instances
+and page parts still count for `dom.ById` checks (E138).
+
 `ui.ScopeRuns()` counts scope re-runs (a full re-run counts one), for tests.
 
 ### The escape hatch and the limits
@@ -533,10 +556,13 @@ sheet with an `sI-` class prefix.
 - A `state` needs a type the compiler can see without type checking: a
   literal, a typed component parameter or `value as Type`.
 - On the web, `state` works in the page block built by `salam page build`,
-  not in runtime pages with parameters, and a component with `state` cannot
-  sit inside `each` there (it can natively). Mutable globals still cannot be
-  read by a web page. The instance's HTML is drawn by the page script, so
-  a stateful component shows nothing without JavaScript.
+  not in runtime pages with parameters. Instances and page parts that read
+  mutable globals are drawn by the page script, so they show nothing without
+  JavaScript. A component inside `each` takes its parameters from the row
+  every time the instance holding the `each` renders; giving a parameter a
+  new value inside the component does not change the caller's value. On the
+  web a nested instance does not re-render when only the parameters its
+  parent passes change.
 - Selecting a row in a list re-runs one scope per row that reads the selection.
 - The fallback for a hand written view without `b.Reactive` is the old one:
   the whole view runs after every handler.

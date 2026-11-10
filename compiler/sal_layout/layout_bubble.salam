@@ -1,0 +1,461 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+
+include at "../ast.salam"
+include tok "../token.salam"
+include lp "../langpack.salam"
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+
+const LO_BUB_EMIT := 0
+
+const LO_BUB_STOP := 1
+
+mut g_lo_bub_name := Vector {} as Vector<str>
+
+mut g_lo_bub_fn := Vector {} as Vector<int>
+
+mut g_lo_bub_page := Vector {} as Vector<int>
+
+mut g_lo_bub_prog := 0
+
+mut g_lo_bub_seq := 0
+
+mut g_lo_bub_emit_ok := true
+
+mut g_lo_bub_stop_ok := true
+
+func lo_bub_prefix_len(name: str): int:
+    if str.StartsWith(name, "on ") and str.Len(name) > 3:
+        ret 3
+    end
+    fa := "هنگام"
+    n := str.Len(fa)
+    if str.StartsWith(name, fa) and str.Len(name) > n + 1:
+        if byte_at(name, n) == 32:
+            ret n + 1
+        end
+        if str.Len(name) > n + 3 and byte_at(name, n) == 226 and byte_at(name, n + 1) == 128 and byte_at(name, n + 2) == 140:
+            ret n + 3
+        end
+    end
+    ret 0
+end
+
+func lo_bub_is_handler(name: str): bool:
+    ret lo_bub_prefix_len(name) > 0
+end
+
+func lo_bub_event(name: str): str:
+    p := lo_bub_prefix_len(name)
+    ret str.Trim(str.Substr(name, p, str.Len(name) - p))
+end
+
+func lo_bub_prog_has(a &: at.Ast, prog: int, name: str): bool:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_bub_reset(a &: at.Ast, prog: int):
+    g_lo_bub_name.clear()
+    g_lo_bub_fn.clear()
+    g_lo_bub_page.clear()
+    g_lo_bub_prog = prog
+    g_lo_bub_emit_ok = prog == 0 or not (lo_bub_prog_has(a, prog, "emit") or lo_bub_prog_has(a, prog, "برانگیز"))
+    g_lo_bub_stop_ok = prog == 0 or not (lo_bub_prog_has(a, prog, "stop") or lo_bub_prog_has(a, prog, "بایست"))
+end
+
+func lo_bub_word(a &: at.Ast, call: int, which: int): bool:
+    if call == 0 or at.KindOf(a, call) != at.AST_CALL:
+        ret false
+    end
+    c := at.Get(a, call)
+    if c.a == 0 or at.KindOf(a, c.a) != at.AST_IDENTIFIER:
+        ret false
+    end
+    nm := at.Get(a, c.a).name
+    if which == LO_BUB_EMIT:
+        ret g_lo_bub_emit_ok and (str.Equals(nm, "emit") or lp.IdentEqual(nm, "برانگیز"))
+    end
+    ret g_lo_bub_stop_ok and (str.Equals(nm, "stop") or lp.IdentEqual(nm, "بایست"))
+end
+
+func lo_bub_stmt_call(a &: at.Ast, sid: int): int:
+    if sid == 0:
+        ret 0
+    end
+    s := at.Get(a, sid)
+    if s.kind == at.AST_CALL:
+        ret sid
+    end
+    if s.kind == at.AST_EXPR_STMT and s.a != 0 and at.KindOf(a, s.a) == at.AST_CALL:
+        ret s.a
+    end
+    ret 0
+end
+
+func lo_bub_has(a &: at.Ast, nid: int, which: int, root: bool): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA and not root and which == LO_BUB_STOP:
+        ret false
+    end
+    if lo_bub_word(a, nid, which):
+        ret true
+    end
+    if lo_bub_has(a, n.a, which, false) or lo_bub_has(a, n.b, which, false) or lo_bub_has(a, n.c, which, false) or lo_bub_has(a, n.d, which, false):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if lo_bub_has(a, n.list.get(i), which, false):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_bub_ident(a &: at.Ast, name: str, from: int): int:
+    id := at.NewNode(a, at.AST_IDENTIFIER)
+    copy_span(a, id, from)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func lo_bub_bool(a &: at.Ast, v: bool, from: int): int:
+    n := at.NewNode(a, at.AST_LITERAL)
+    copy_span(a, n, from)
+    at.SetOp(a, n, v ? tok.TK_KW_TRUE : tok.TK_KW_FALSE)
+    at.SetName(a, n, v ? "true" : "false")
+    at.SetTokenValue(a, n, tok.ValueBool(v))
+    ret n
+end
+
+func lo_bub_node(a &: at.Ast, kind: int, from: int, na: int, nb: int): int:
+    id := at.NewNode(a, kind)
+    copy_span(a, id, from)
+    mut n := at.Get(a, id)
+    n.a = na
+    n.b = nb
+    at.Put(a, id, n)
+    ret id
+end
+
+func lo_bub_block(a &: at.Ast, items: Vector<int>, from: int): int:
+    blk := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, blk, from)
+    mut bn := at.Get(a, blk)
+    mut old := bn.list
+    bn.list = items
+    at.Put(a, blk, bn)
+    old.free()
+    ret blk
+end
+
+func lo_bub_call(a &: at.Ast, callee: int, arg: int, from: int): int:
+    call := at.NewNode(a, at.AST_CALL)
+    copy_span(a, call, from)
+    mut args := Vector {} as Vector<int>
+    if arg != 0:
+        args.push(arg)
+    end
+    mut cn := at.Get(a, call)
+    cn.a = callee
+    mut old := cn.list
+    cn.list = args
+    at.Put(a, call, cn)
+    old.free()
+    ret call
+end
+
+func lo_bub_arity(a &: at.Ast, h: int): int:
+    n := at.Get(a, h)
+    if n.kind == at.AST_LAMBDA:
+        mut c := 0
+        repeat n.list.len() in i:
+            if at.KindOf(a, n.list.get(i)) == at.AST_PARAM:
+                c++
+            end
+        end
+        ret c
+    end
+    if n.kind == at.AST_IDENTIFIER and g_lo_bub_prog != 0:
+        ret lo_ev_prog_func_params(a, g_lo_bub_prog, n.name)
+    end
+    ret 0 - 1
+end
+
+func lo_bub_set_list(a &: at.Ast, nid: int, items: Vector<int>):
+    mut n := at.Get(a, nid)
+    mut old := n.list
+    n.list = items
+    at.Put(a, nid, n)
+    old.free()
+end
+
+func lo_bub_stop_body(a &: at.Ast, nid: int, keep: bool):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_BLOCK:
+        mut items := Vector {} as Vector<int>
+        repeat n.list.len() in i:
+            sid := n.list.get(i)
+            if lo_bub_word(a, lo_bub_stmt_call(a, sid), LO_BUB_STOP):
+                if keep:
+                    asg := lo_bub_node(a, at.AST_ASSIGN, sid, lo_bub_ident(a, "__salam_go", sid), lo_bub_bool(a, false, sid))
+                    at.SetOp(a, asg, tok.TK_ASSIGN)
+                    items.push(asg)
+                end
+                continue
+            end
+            s := at.Get(a, sid)
+            if keep and s.kind == at.AST_RETURN and s.a == 0:
+                mut rn := s
+                rn.a = lo_bub_ident(a, "__salam_go", sid)
+                at.Put(a, sid, rn)
+            end
+            lo_bub_stop_body(a, sid, keep)
+            items.push(sid)
+        end
+        lo_bub_set_list(a, nid, items)
+        ret
+    end
+    lo_bub_stop_body(a, n.a, keep)
+    lo_bub_stop_body(a, n.b, keep)
+    lo_bub_stop_body(a, n.c, keep)
+    lo_bub_stop_body(a, n.d, keep)
+    repeat n.list.len() in j:
+        lo_bub_stop_body(a, n.list.get(j), keep)
+    end
+end
+
+func lo_bub_stopper(a &: at.Ast, lam: int, keep: bool): int:
+    l := at.Get(a, lam)
+    body := l.a
+    if body == 0 or at.KindOf(a, body) != at.AST_BLOCK:
+        ret lam
+    end
+    lo_bub_stop_body(a, body, keep)
+    if not keep:
+        ret lam
+    end
+    b := at.Get(a, body)
+    mut items := Vector {} as Vector<int>
+    decl := lo_bub_node(a, at.AST_VAR_DECL, lam, lo_bub_bool(a, true, lam), 0)
+    mut dn := at.Get(a, decl)
+    dn.name = "__salam_go"
+    dn.is_mut = true
+    at.Put(a, decl, dn)
+    items.push(decl)
+    mut last_ret := false
+    repeat b.list.len() in i:
+        sid := b.list.get(i)
+        items.push(sid)
+        last_ret = at.KindOf(a, sid) == at.AST_RETURN
+    end
+    if not last_ret:
+        items.push(lo_bub_node(a, at.AST_RETURN, lam, lo_bub_ident(a, "__salam_go", lam), 0))
+    end
+    lo_bub_set_list(a, body, items)
+    ret lam
+end
+
+func lo_bub_error(ex &: LoExpand, msg: str):
+    lg.Log(ex.log, lg.PH_DRIVER, lg.LOG_ERROR, msg)
+    ex.errors++
+end
+
+func lo_bub_expand(ex &: LoExpand, a &: at.Ast, call: int, out &: Vector<int>):
+    c := at.Get(a, call)
+    mut name := ""
+    if c.list.len() >= 1:
+        nv := at.Get(a, c.list.get(0))
+        if nv.kind == at.AST_LITERAL and nv.value_kind == tok.TV_STRING:
+            name = nv.value_str
+        end
+    end
+    if str.Len(name) == 0 or c.list.len() > 2:
+        lo_bub_error(ex, i18.Tr("'emit' takes the event name as a string and at most one value, as in emit(\"saved\", value)"))
+        ret
+    end
+    value := c.list.len() == 2 ? c.list.get(1) : 0
+    mut hs := Vector {} as Vector<int>
+    defer hs.free()
+    mut i := g_lo_bub_name.len() - 1
+    until i >= 0:
+        if lp.IdentEqual(g_lo_bub_name.get(i), name):
+            hs.push(g_lo_bub_fn.get(i))
+        end
+        i--
+    end
+    if hs.len() == 0:
+        ret
+    end
+    mut needs := false
+    each h in hs:
+        ar := lo_bub_arity(a, h)
+        if ar < 0 or ar > 1:
+            lo_bub_error(ex, co.Format1(i18.Tr("a handler for the event '%s' must be a function or a lambda with at most one parameter"), co.ArgStr(name)))
+            ret
+        end
+        if ar == 1:
+            needs = true
+        end
+    end
+    if needs and value == 0:
+        lo_bub_error(ex, co.Format2(i18.Tr("a handler for the event '%s' takes a value; send one, as in emit(\"%s\", value)"), co.ArgStr(name), co.ArgStr(name)))
+        ret
+    end
+    mut argref := 0
+    if needs:
+        vk := at.KindOf(a, value)
+        if vk == at.AST_LITERAL or vk == at.AST_IDENTIFIER:
+            argref = value
+        else:
+            g_lo_bub_seq++
+            tmp := "__salam_ev_" + co.U64Toa(g_lo_bub_seq as u64)
+            decl := lo_bub_node(a, at.AST_VAR_DECL, call, value, 0)
+            mut dn := at.Get(a, decl)
+            dn.name = tmp
+            at.Put(a, decl, dn)
+            out.push(decl)
+            argref = lo_bub_ident(a, tmp, call)
+        end
+    end
+    mut rest := Vector {} as Vector<int>
+    mut k := hs.len() - 1
+    until k >= 0:
+        h := hs.get(k)
+        ar := lo_bub_arity(a, h)
+        arg := ar == 1 ? at.Clone(a, argref) : 0
+        stops := at.KindOf(a, h) == at.AST_LAMBDA and lo_bub_has(a, h, LO_BUB_STOP, true)
+        mut callee := at.Clone(a, h)
+        if stops:
+            callee = lo_bub_stopper(a, callee, rest.len() > 0)
+        end
+        cl := lo_bub_call(a, callee, arg, call)
+        if stops and rest.len() > 0:
+            iff := lo_bub_node(a, at.AST_IF, call, cl, lo_bub_block(a, rest, call))
+            rest = Vector {} as Vector<int>
+            rest.push(iff)
+        else:
+            mut nr := Vector {} as Vector<int>
+            nr.push(lo_bub_node(a, at.AST_EXPR_STMT, call, cl, 0))
+            each r in rest:
+                nr.push(r)
+            end
+            rest.free()
+            rest = nr
+        end
+        k--
+    end
+    each r2 in rest:
+        out.push(r2)
+    end
+    rest.free()
+end
+
+func lo_bub_walk(ex &: LoExpand, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK:
+        mut items := Vector {} as Vector<int>
+        repeat n.list.len() in i:
+            sid := n.list.get(i)
+            call := lo_bub_stmt_call(a, sid)
+            if lo_bub_word(a, call, LO_BUB_EMIT):
+                lo_bub_expand(ex, a, call, items)
+                continue
+            end
+            lo_bub_walk(ex, a, sid)
+            items.push(sid)
+        end
+        lo_bub_set_list(a, nid, items)
+        ret
+    end
+    if lo_bub_word(a, nid, LO_BUB_EMIT):
+        lo_bub_error(ex, i18.Tr("'emit' is a statement of its own; it does not give a value"))
+        ret
+    end
+    lo_bub_walk(ex, a, n.a)
+    lo_bub_walk(ex, a, n.b)
+    lo_bub_walk(ex, a, n.c)
+    lo_bub_walk(ex, a, n.d)
+    repeat n.list.len() in j:
+        lo_bub_walk(ex, a, n.list.get(j))
+    end
+end
+
+func lo_bub_value(ex &: LoExpand, a &: at.Ast, vid: int): int:
+    if vid == 0 or not lo_bub_has(a, vid, LO_BUB_EMIT, true):
+        ret vid
+    end
+    cp := at.Clone(a, vid)
+    lo_bub_walk(ex, a, cp)
+    ret cp
+end
+
+func lo_bub_mark(): int:
+    ret g_lo_bub_name.len()
+end
+
+func lo_bub_pop(mark: int):
+    until g_lo_bub_name.len() > mark:
+        _n := g_lo_bub_name.pop()
+        _f := g_lo_bub_fn.pop()
+    end
+end
+
+func lo_bub_push(name: str, fn: int):
+    g_lo_bub_name.push(name)
+    g_lo_bub_fn.push(fn)
+end
+
+func lo_bub_is_page_attr(iid: int): bool:
+    each p in g_lo_bub_page:
+        if p == iid:
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_bub_page_handlers(ex &: LoExpand, a &: at.Ast, lb: int):
+    repeat at.ChildCount(a, lb) in i:
+        cid := at.Child(a, lb, i)
+        n := at.Get(a, cid)
+        if n.kind == at.AST_LAYOUT_ATTR and lo_bub_is_handler(n.name) and n.a != 0:
+            g_lo_bub_page.push(cid)
+            lo_bub_push(lo_bub_event(n.name), lo_bub_value(ex, a, n.a))
+        end
+    end
+end

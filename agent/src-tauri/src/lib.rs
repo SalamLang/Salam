@@ -1,5 +1,6 @@
 mod approve;
 mod bridge;
+mod chatgpt;
 mod commands;
 mod config;
 mod device;
@@ -37,6 +38,8 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-watch-reply",
     "allow-agent-unwatch-reply",
     "allow-agent-open-url",
+    "allow-chatgpt-pick-export",
+    "allow-chatgpt-import",
     "allow-ws-index-open",
     "allow-ws-index-close",
     "allow-ws-search",
@@ -198,6 +201,8 @@ pub fn run() {
             commands::agent_watch_reply,
             commands::agent_unwatch_reply,
             commands::agent_open_url,
+            commands::chatgpt_pick_export,
+            commands::chatgpt_import,
             mention::ws_index_open,
             mention::ws_index_close,
             mention::ws_search,

@@ -14,6 +14,8 @@
 
 package paint
 
+import math
+
 func _side_setup(sh: int*, s: int, style: int, w: int, ua: int, ub: int, cl: int):
     o := 32 + s * 8
     sh[o] = w > 0 ? style : 0
@@ -201,26 +203,179 @@ func _style_code(s: BorderStyle): int:
     end
 end
 
-func _border_path(cv &: Canvas, r: Rect, radii: Radii, b: Border):
-    mut c := b.top_color
-    if b.top_width <= 0.0 or b.top_style == BorderStyle.None:
-        c = b.left_color
+func _bp_arc(pts &: Vector<f64>, cx: f64, cy: f64, rx: f64, ry: f64, a0: f64, a1: f64):
+    rr := _maxf(rx, ry)
+    mut steps := (rr * (a1 - a0) / 90.0) as int + 1
+    if steps < 1:
+        steps = 1
+    end
+    if steps > 64:
+        steps = 64
+    end
+    repeat steps + 1 in k:
+        au := _angle_units(a0 + (a1 - a0) * (k as f64) / (steps as f64))
+        x := cx + rx * (_cos_au(au) as f64) / 65536.0
+        y := cy + ry * (_sin_au(au) as f64) / 65536.0
+        n := pts.len()
+        if n >= 2 and pts[n - 2] == x and pts[n - 1] == y:
+            continue
+        end
+        pts.push(x)
+        pts.push(y)
+    end
+end
+
+func _bp_piece(r: Rect, fr: Radii, b: Border, s: int, pts &: Vector<f64>):
+    x0 := r.x
+    y0 := r.y
+    x1 := r.x + r.width
+    y1 := r.y + r.height
+    ht := _posf(b.top_width) / 2.0
+    hr := _posf(b.right_width) / 2.0
+    hb := _posf(b.bottom_width) / 2.0
+    hl := _posf(b.left_width) / 2.0
+    tlx := x0 + _maxf(fr.top_left_x, hl)
+    tly := y0 + _maxf(fr.top_left_y, ht)
+    trx := x1 - _maxf(fr.top_right_x, hr)
+    tr_y := y0 + _maxf(fr.top_right_y, ht)
+    brx := x1 - _maxf(fr.bottom_right_x, hr)
+    bry := y1 - _maxf(fr.bottom_right_y, hb)
+    blx := x0 + _maxf(fr.bottom_left_x, hl)
+    bly := y1 - _maxf(fr.bottom_left_y, hb)
+    switch s:
+        0:
+            _bp_arc(pts, tlx, tly, _posf(fr.top_left_x - hl), _posf(fr.top_left_y - ht), 225.0, 270.0)
+            _bp_arc(pts, trx, tr_y, _posf(fr.top_right_x - hr), _posf(fr.top_right_y - ht), 270.0, 315.0)
+            break
+        end
+        1:
+            _bp_arc(pts, trx, tr_y, _posf(fr.top_right_x - hr), _posf(fr.top_right_y - ht), 315.0, 360.0)
+            _bp_arc(pts, brx, bry, _posf(fr.bottom_right_x - hr), _posf(fr.bottom_right_y - hb), 0.0, 45.0)
+            break
+        end
+        2:
+            _bp_arc(pts, brx, bry, _posf(fr.bottom_right_x - hr), _posf(fr.bottom_right_y - hb), 45.0, 90.0)
+            _bp_arc(pts, blx, bly, _posf(fr.bottom_left_x - hl), _posf(fr.bottom_left_y - hb), 90.0, 135.0)
+            break
+        end
+        else:
+            _bp_arc(pts, blx, bly, _posf(fr.bottom_left_x - hl), _posf(fr.bottom_left_y - hb), 135.0, 180.0)
+            _bp_arc(pts, tlx, tly, _posf(fr.top_left_x - hl), _posf(fr.top_left_y - ht), 180.0, 225.0)
+        end
+    end
+end
+
+func _side_style(b: Border, s: int): BorderStyle:
+    switch s:
+        0: ret b.top_style end
+        1: ret b.right_style end
+        2: ret b.bottom_style end
+        else: ret b.left_style end
+    end
+    ret b.left_style
+end
+
+func _side_width(b: Border, s: int): f64:
+    switch s:
+        0: ret b.top_width end
+        1: ret b.right_width end
+        2: ret b.bottom_width end
+        else: ret b.left_width end
+    end
+    ret b.left_width
+end
+
+func _side_col(b: Border, s: int): Color:
+    switch s:
+        0: ret b.top_color end
+        1: ret b.right_color end
+        2: ret b.bottom_color end
+        else: ret b.left_color end
+    end
+    ret b.left_color
+end
+
+func _side_rounded(fr: Radii, s: int): bool:
+    switch s:
+        0: ret fr.top_left_x > 0.0 or fr.top_right_x > 0.0 end
+        1: ret fr.top_right_x > 0.0 or fr.bottom_right_x > 0.0 end
+        2: ret fr.bottom_right_x > 0.0 or fr.bottom_left_x > 0.0 end
+        else: ret fr.bottom_left_x > 0.0 or fr.top_left_x > 0.0 end
+    end
+    ret false
+end
+
+func _bp_patterned(b: Border, fr: Radii, s: int): bool:
+    st := _side_style(b, s)
+    ret (st == BorderStyle.Dashed or st == BorderStyle.Dotted) and _side_width(b, s) > 0.0 and _side_rounded(fr, s)
+end
+
+func _bp_draw(cv &: Canvas, r: Rect, fr: Radii, b: Border, s: int):
+    w := _side_width(b, s)
+    col := _side_col(b, s)
+    mut pts := Vector {} as Vector<f64>
+    defer pts.free()
+    _bp_piece(r, fr, b, s, pts)
+    np := pts.len() / 2
+    if np < 2:
+        ret
+    end
+    mut total := 0.0
+    repeat np - 1 in i:
+        dx := pts[i * 2 + 2] - pts[i * 2]
+        dy := pts[i * 2 + 3] - pts[i * 2 + 1]
+        total += math.Sqrt(dx * dx + dy * dy)
+    end
+    if total <= 0.0:
+        ret
     end
     mut p := Path {}
-    fr := FitRadii(r, radii)
-    p.AddRoundedRect(r, fr)
-    inner := Rect { x = r.x + b.left_width, y = r.y + b.top_width, width = r.width - b.left_width - b.right_width, height = r.height - b.top_width - b.bottom_width }
-    if inner.width > 0.0 and inner.height > 0.0:
-        ir := Radii {
-            top_left_x = _posf(fr.top_left_x - b.left_width), top_left_y = _posf(fr.top_left_y - b.top_width),
-            top_right_x = _posf(fr.top_right_x - b.right_width), top_right_y = _posf(fr.top_right_y - b.top_width),
-            bottom_right_x = _posf(fr.bottom_right_x - b.right_width), bottom_right_y = _posf(fr.bottom_right_y - b.bottom_width),
-            bottom_left_x = _posf(fr.bottom_left_x - b.left_width), bottom_left_y = _posf(fr.bottom_left_y - b.bottom_width)
-        }
-        p.AddRoundedRect(inner, ir)
+    defer p.Free()
+    if _side_style(b, s) == BorderStyle.Dashed:
+        mut n := math.Round(total / (6.0 * w)) as int
+        if n < 1:
+            n = 1
+        end
+        per := total / (n as f64)
+        dd := per / 2.0
+        repeat np in i:
+            if i == 0:
+                p.MoveTo(pts[0], pts[1])
+            else:
+                p.LineTo(pts[i * 2], pts[i * 2 + 1])
+            end
+        end
+        _cv_stroke_path(cv, p, Stroke { width = w, dash = dd, gap = per - dd, dash_offset = dd / 2.0 }, col)
+        ret
     end
-    _cv_fill_path(cv, p, FillRule.EvenOdd, c)
-    p.Free()
+    mut n := math.Round(total / (2.0 * w)) as int
+    if n < 1:
+        n = 1
+    end
+    per := total / (n as f64)
+    nxt := (s + 1) % 4
+    last := _side_style(b, nxt) == BorderStyle.Dotted and _side_width(b, nxt) > 0.0 ? n - 1 : n
+    mut seg := 0
+    mut seg_start := 0.0
+    repeat last + 1 in k:
+        at := per * (k as f64)
+        mut seg_len := 0.0
+        until seg < np - 1:
+            dx := pts[seg * 2 + 2] - pts[seg * 2]
+            dy := pts[seg * 2 + 3] - pts[seg * 2 + 1]
+            seg_len = math.Sqrt(dx * dx + dy * dy)
+            if seg_start + seg_len >= at or seg == np - 2:
+                break
+            end
+            seg_start += seg_len
+            seg++
+        end
+        t := seg_len > 0.0 ? _minf(1.0, _maxf(0.0, (at - seg_start) / seg_len)) : 0.0
+        cx := pts[seg * 2] + (pts[seg * 2 + 2] - pts[seg * 2]) * t
+        cy := pts[seg * 2 + 1] + (pts[seg * 2 + 3] - pts[seg * 2 + 1]) * t
+        p.AddEllipse(cx, cy, w / 2.0, w / 2.0)
+    end
+    _cv_fill_path(cv, p, FillRule.NonZero, col)
 end
 
 func _cv_border(cv &: Canvas, r: Rect, radii: Radii, b: Border):
@@ -229,9 +384,39 @@ func _cv_border(cv &: Canvas, r: Rect, radii: Radii, b: Border):
         ret
     end
     if not _xf_axis(cv):
-        _border_path(cv, r, radii, b)
+        if _lx_begin(cv, r, 1.0):
+            _cv_border(cv, r, radii, b)
+            _lx_end(cv)
+        end
         ret
     end
+    fr0 := FitRadii(r, radii)
+    if _bp_patterned(b, fr0, 0) or _bp_patterned(b, fr0, 1) or _bp_patterned(b, fr0, 2) or _bp_patterned(b, fr0, 3):
+        mut rest := b
+        if _bp_patterned(b, fr0, 0):
+            rest.top_color = Color { a = 0 }
+        end
+        if _bp_patterned(b, fr0, 1):
+            rest.right_color = Color { a = 0 }
+        end
+        if _bp_patterned(b, fr0, 2):
+            rest.bottom_color = Color { a = 0 }
+        end
+        if _bp_patterned(b, fr0, 3):
+            rest.left_color = Color { a = 0 }
+        end
+        _cv_border_solid(cv, r, radii, rest)
+        repeat 4 in sd:
+            if _bp_patterned(b, fr0, sd):
+                _bp_draw(cv, r, fr0, b, sd)
+            end
+        end
+        ret
+    end
+    _cv_border_solid(cv, r, radii, b)
+end
+
+func _cv_border_solid(cv &: Canvas, r: Rect, radii: Radii, b: Border):
     sh := cv.state.sh
     if not _shape_from(cv, r, radii, sh, 0):
         ret
@@ -384,7 +569,11 @@ func _cv_border(cv &: Canvas, r: Rect, radii: Radii, b: Border):
 end
 
 func _cv_outline(cv &: Canvas, r: Rect, radii: Radii, width: f64, offset: f64, c: Color):
-    if not (width > 0.0):
+    _cv_outline_styled(cv, r, radii, width, offset, c, BorderStyle.Solid)
+end
+
+func _cv_outline_styled(cv &: Canvas, r: Rect, radii: Radii, width: f64, offset: f64, c: Color, style: BorderStyle):
+    if not (width > 0.0) or style == BorderStyle.None:
         ret
     end
     g := offset + width
@@ -396,7 +585,12 @@ func _cv_outline(cv &: Canvas, r: Rect, radii: Radii, width: f64, offset: f64, c
         bottom_right_x = _grow_radius(fr.bottom_right_x, g), bottom_right_y = _grow_radius(fr.bottom_right_y, g),
         bottom_left_x = _grow_radius(fr.bottom_left_x, g), bottom_left_y = _grow_radius(fr.bottom_left_y, g)
     }
-    _cv_border(cv, outer, grown, SolidBorder(width, c))
+    mut b := SolidBorder(width, c)
+    b.top_style = style
+    b.right_style = style
+    b.bottom_style = style
+    b.left_style = style
+    _cv_border(cv, outer, grown, b)
 end
 
 func _grow_radius(v: f64, g: f64): f64:

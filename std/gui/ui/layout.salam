@@ -768,6 +768,18 @@ func _free_ifc(f &: _Ifc):
         typeset.FreeLayout(f.lay)
         f.has_lay = false
     end
+    _free_alts(f)
+end
+
+func _free_alts(f &: _Ifc):
+    repeat f.alt_lay.len() in i:
+        mut l := f.alt_lay[i]
+        typeset.FreeLayout(l)
+    end
+    f.alt_lay.free()
+    f.alt_w.free()
+    f.alt_lay = Vector {} as Vector<typeset.TextLayout>
+    f.alt_w = Vector {} as Vector<f64>
 end
 
 func _layout():
@@ -868,7 +880,7 @@ func _patch_atoms(f &: _Ifc):
 end
 
 func _para_key(f: _Ifc): str:
-    if f.control or f.atoms.len() > 0 or f.spans.len() == 0:
+    if (f.control and _is_text_input(f.owner)) or f.atoms.len() > 0 or f.spans.len() == 0:
         ret ""
     end
     mut b := str.NewBuilder()
@@ -890,6 +902,10 @@ func _pc_put(f &: _Ifc):
     _pc_layw.push(f.lay_w)
     _pc_has_lay.push(f.has_lay)
     _pc_taken.push(false)
+    _pc_alt.push(f.alt_lay)
+    _pc_altw.push(f.alt_w)
+    f.alt_lay = Vector {} as Vector<typeset.TextLayout>
+    f.alt_w = Vector {} as Vector<f64>
     _pc_map.put(f.ckey, _pc_keys.len() - 1)
     f.ckey = ""
     f.has_para = false
@@ -905,6 +921,14 @@ func _pc_sweep():
                 mut l := _pc_lay[i]
                 typeset.FreeLayout(l)
             end
+            mut al := _pc_alt[i]
+            repeat al.len() in j:
+                mut l2 := al[j]
+                typeset.FreeLayout(l2)
+            end
+            al.free()
+            mut aw := _pc_altw[i]
+            aw.free()
         end
         _sfree(_pc_keys[i])
     end
@@ -916,6 +940,8 @@ func _pc_sweep():
     _pc_layw.clear()
     _pc_has_lay.clear()
     _pc_taken.clear()
+    _pc_alt.clear()
+    _pc_altw.clear()
 end
 
 func _ifc_para(fi: int):
@@ -944,6 +970,10 @@ func _ifc_para(fi: int):
                 f.lay_w = _pc_layw[k]
                 f.has_lay = true
             end
+            f.alt_lay.free()
+            f.alt_w.free()
+            f.alt_lay = _pc_alt[k]
+            f.alt_w = _pc_altw[k]
             f.ckey = key
             ret
         end
@@ -960,8 +990,34 @@ func _ifc_layout(fi: int, width: f64):
         ret
     end
     mut f := _e.ifcs.ref(fi)
+    mut k := -1
+    repeat f.alt_w.len() in i:
+        if f.alt_w[i] == width:
+            k = i
+        end
+    end
+    if k >= 0:
+        got := f.alt_lay[k]
+        f.alt_lay.remove_at(k)
+        f.alt_w.remove_at(k)
+        if f.has_lay:
+            f.alt_lay.push(f.lay)
+            f.alt_w.push(f.lay_w)
+        end
+        f.lay = got
+        f.lay_w = width
+        f.has_lay = true
+        ret
+    end
     if f.has_lay:
-        typeset.FreeLayout(f.lay)
+        if f.alt_lay.len() >= 3:
+            mut old := f.alt_lay[0]
+            typeset.FreeLayout(old)
+            f.alt_lay.remove_at(0)
+            f.alt_w.remove_at(0)
+        end
+        f.alt_lay.push(f.lay)
+        f.alt_w.push(f.lay_w)
     end
     f.lay = typeset.LayoutParagraph(f.para, _fc, width)
     f.lay_w = width

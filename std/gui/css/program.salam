@@ -41,6 +41,15 @@ pub struct Piece:
     @en "space"
     @fa "فاصله پیش از تکه"
     pub space: bool = false
+    @en "id"
+    @fa "شناسه نام تکه"
+    pub id: int = -1
+    @en "color"
+    @fa "رنگ روشن تکه"
+    pub color: i64 = 0
+    @en "dark"
+    @fa "رنگ تیره تکه"
+    pub dark: i64 = 0
 end
 
 @en "Program"
@@ -71,6 +80,30 @@ pub struct Program:
         mut d := Decl { prop = p, name = str.Clone(prop), important = important, ts = ts, te = te }
         d.wide = wide_kw(sd.toks, ts, te)
         d.has_var = d.wide == W_NONE and has_var_fn(sd.toks, ts, te)
+        d.sch = decl_sch(sd.toks, ts, te, p, d.has_var)
+        sd.decls.push(d)
+    end
+
+    @en "AddTyped"
+    @fa "افزودن اعلان نوع دار"
+    pub func AddTyped(prop: int, flags: int, value: Piece[]):
+        this.ready()
+        if prop < 0:
+            ret
+        end
+        mut sd := g_progs.ref(this.id)
+        ts := sd.toks.len()
+        push_pieces(sd.toks, value)
+        te := sd.toks.len()
+        mut d := Decl { prop = prop, important = (flags & 1) != 0, ts = ts, te = te, sch = (flags & 2) != 0 }
+        if len(value) == 1 and value[0].kind == TK_IDENT:
+            switch value[0].id:
+                KW_INHERIT: d.wide = W_INHERIT break end
+                KW_INITIAL: d.wide = W_INITIAL break end
+                KW_UNSET, KW_REVERT, KW_REVERT_LAYER: d.wide = W_UNSET break end
+                else: break end
+            end
+        end
         sd.decls.push(d)
     end
 
@@ -84,7 +117,7 @@ pub struct Program:
             ret
         end
         ts := sd.toks.len()
-        sd.decls.push(Decl { prop = p, name = str.Clone(prop), value = str.Clone(value), important = important, ts = ts, te = ts, has_var = p != P_CUSTOM })
+        sd.decls.push(Decl { prop = p, name = str.Clone(prop), value = str.Clone(value), important = important, ts = ts, te = ts, has_var = p != P_CUSTOM, sch = p != P_CUSTOM })
     end
 
     @en "EndList"
@@ -96,7 +129,7 @@ pub struct Program:
         if n > sd.decls.len():
             n = sd.decls.len()
         end
-        sd.blocks.push(Block { d0 = sd.decls.len() - n, n = n })
+        sd.blocks.push(Block { d0 = sd.decls.len() - n, n = n, sch = block_sch(sd, sd.decls.len() - n, n) })
     end
 
     @en "AddMedia"
@@ -183,10 +216,17 @@ func push_pieces(out &: Vector<Tok>, v: Piece[]):
     repeat len(v) in i:
         pc := v[i]
         mut t := Tok { k = pc.kind, n = pc.num, ws = pc.space }
+        if pc.id >= 0:
+            t.s = name_of(pc.id)
+            t.raw = pc.kind == TK_DIM ? "" : t.s
+            t.stat = true
+        end
         switch pc.kind:
             TK_IDENT:
-                t.s = sclone(pc.text)
-                t.raw = pc.raw.len() > 0 ? str.Clone(pc.raw) : sclone(pc.text)
+                if pc.id < 0:
+                    t.s = sclone(pc.text)
+                    t.raw = pc.raw.len() > 0 ? str.Clone(pc.raw) : sclone(pc.text)
+                end
                 break
             end
             TK_NUM:
@@ -194,8 +234,16 @@ func push_pieces(out &: Vector<Tok>, v: Piece[]):
                 break
             end
             TK_FUNC:
-                t.s = sclone(pc.text)
-                t.raw = sclone(pc.text)
+                if pc.id < 0:
+                    t.s = sclone(pc.text)
+                    t.raw = sclone(pc.text)
+                end
+                break
+            end
+            TK_COLOR:
+                t.c = pc.color
+                t.c2 = pc.dark
+                t.d = pc.code
                 break
             end
             TK_DELIM:
@@ -206,7 +254,9 @@ func push_pieces(out &: Vector<Tok>, v: Piece[]):
                 break
             end
             else:
-                t.s = sclone(pc.text)
+                if pc.id < 0:
+                    t.s = sclone(pc.text)
+                end
             end
         end
         out.push(t)
@@ -243,8 +293,10 @@ func copy_toks(dst &: SheetData, src: SheetData, ts: int, te: int, nts &: int, n
     until i < te:
         t := src.toks[i]
         mut c := t
-        c.s = sclone(t.s)
-        c.raw = sclone(t.raw)
+        if not t.stat:
+            c.s = sclone(t.s)
+            c.raw = sclone(t.raw)
+        end
         if t.close >= 0:
             c.close = t.close - ts + nts
         end
@@ -322,7 +374,7 @@ func append_prog(dst &: SheetData, src: SheetData, m &: ProgMap, ua: bool): int:
             nd.te = te
             dst.decls.push(nd)
         end
-        dst.blocks.push(Block { d0 = d0, n = blk.n })
+        dst.blocks.push(Block { d0 = d0, n = blk.n, sch = blk.sch })
         m.blocks.push(dst.blocks.len() - 1)
         added++
         i++
@@ -455,10 +507,27 @@ func src_name(fa: bool, en: str, fa_name: str): str:
     ret fa ? fa_name : en
 end
 
-func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
+func hex8(v: i64): str:
+    hx := "0123456789abcdef"
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "0x")
+    mut k := 28
+    until k >= 0:
+        str.BufAppend(b, hx.substr(((v >> k) & 15) as int, 1))
+        k -= 4
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok, keep_raw: bool):
     switch t.k:
         TK_IDENT:
-            if t.raw.len() > 0 and t.raw != t.s:
+            id := name_id(t.s)
+            if id >= 0 and (t.raw.len() == 0 or t.raw == t.s or not keep_raw):
+                str.BufAppend(b, q + src_name(fa, "KwId", "کلیدواژه با شناسه") + "(" + id + ")")
+            else t.raw.len() > 0 and t.raw != t.s:
                 str.BufAppend(b, q + src_name(fa, "KwAs", "کلیدواژه با متن") + "(" + src_str(t.s) + ", " + src_str(t.raw) + ")")
             else:
                 str.BufAppend(b, q + src_name(fa, "Kw", "کلیدواژه") + "(" + src_str(t.s) + ")")
@@ -470,7 +539,12 @@ func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
             break
         end
         TK_DIM:
-            str.BufAppend(b, q + src_name(fa, "Dim", "کمیت با واحد") + "(" + src_num(t.n) + ", " + src_str(t.s) + ")")
+            uid := name_id(t.s)
+            if uid >= 0:
+                str.BufAppend(b, q + src_name(fa, "DimId", "کمیت با شناسه واحد") + "(" + src_num(t.n) + ", " + uid + ")")
+            else:
+                str.BufAppend(b, q + src_name(fa, "Dim", "کمیت با واحد") + "(" + src_num(t.n) + ", " + src_str(t.s) + ")")
+            end
             break
         end
         TK_PCT:
@@ -479,6 +553,14 @@ func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
         end
         TK_HASH:
             str.BufAppend(b, q + src_name(fa, "Hash", "نشان هش") + "(" + src_str(t.s) + ")")
+            break
+        end
+        TK_COLOR:
+            h1 := hex8(t.c)
+            h2 := hex8(t.c2)
+            str.BufAppend(b, q + src_name(fa, "ColorValue", "رنگ حل شده") + "(" + h1 + ", " + h2 + ", " + t.d + ")")
+            sfree(h1)
+            sfree(h2)
             break
         end
         TK_STR:
@@ -490,7 +572,12 @@ func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
             break
         end
         TK_FUNC:
-            str.BufAppend(b, q + src_name(fa, "Fn", "آغاز کارکرد") + "(" + src_str(t.s) + ")")
+            fid := name_id(t.s)
+            if fid >= 0:
+                str.BufAppend(b, q + src_name(fa, "FnId", "کارکرد با شناسه") + "(" + fid + ")")
+            else:
+                str.BufAppend(b, q + src_name(fa, "Fn", "آغاز کارکرد") + "(" + src_str(t.s) + ")")
+            end
             break
         end
         TK_CLOSE:
@@ -507,14 +594,14 @@ func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
     end
 end
 
-func src_pieces(b &: str.StringBuilder, q: str, fa: bool, sd: SheetData, ts: int, te: int):
+func src_pieces(b &: str.StringBuilder, q: str, fa: bool, sd: SheetData, ts: int, te: int, keep_raw: bool):
     str.BufAppend(b, "[")
     mut i := ts
     until i < te:
         if i > ts:
             str.BufAppend(b, ", ")
         end
-        src_piece(b, q, fa, sd.toks[i])
+        src_piece(b, q, fa, sd.toks[i], keep_raw)
         i++
     end
     str.BufAppend(b, "]")
@@ -537,7 +624,7 @@ func program_source(sd: SheetData, fn_name: str, css_pkg: str): str:
         me := sd.media_list[i]
         str.BufAppend(b, "    p." + src_name(fa, "AddMedia", "افزودن پرسش رسانه") + "(" + me.parent + ", ")
         if me.te > me.ts:
-            src_pieces(b, q, fa, sd, me.ts, me.te)
+            src_pieces(b, q, fa, sd, me.ts, me.te, false)
         else:
             str.BufAppend(b, "[" + q + src_name(fa, "Kw", "کلیدواژه") + "(\"all\")]")
         end
@@ -563,8 +650,9 @@ func program_source(sd: SheetData, fn_name: str, css_pkg: str): str:
             if d.prop == P_CUSTOM or d.has_var:
                 str.BufAppend(b, "    p." + src_name(fa, "AddVarDecl", "افزودن اعلان متنی") + "(" + src_str(name) + ", " + src_str(d.value) + ", " + src_bool(d.important) + ")\n")
             else:
-                str.BufAppend(b, "    p." + src_name(fa, "AddDecl", "افزودن اعلان") + "(" + src_str(name) + ", " + src_bool(d.important) + ", ")
-                src_pieces(b, q, fa, sd, d.ts, d.te)
+                flags := (d.important ? 1 : 0) + (d.sch ? 2 : 0)
+                str.BufAppend(b, "    p." + src_name(fa, "AddTyped", "افزودن اعلان نوع دار") + "(" + d.prop + ", " + flags + ", ")
+                src_pieces(b, q, fa, sd, d.ts, d.te, d.prop == P_FONT_FAMILY)
                 str.BufAppend(b, ")\n")
             end
         end

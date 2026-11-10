@@ -14,7 +14,6 @@
 
 package ui
 
-import math
 import gui.css
 import gui.reactive
 
@@ -22,7 +21,8 @@ func _prop_name(prop: int): str:
     switch prop:
         0: ret "color" end
         1: ret "background-color" end
-        else: ret "opacity" end
+        2: ret "opacity" end
+        else: ret "transform" end
     end
     ret "opacity"
 end
@@ -31,7 +31,7 @@ func _find_transition(cs: css.ComputedStyle, prop: int, out &: css.Transition): 
     name := _prop_name(prop)
     mut found := false
     each t in cs.transitions:
-        if (t.property == "all" or t.property == name or (prop == 1 and t.property == "background")) and t.duration > 0.0:
+        if (t.property == "all" or t.property == name or (prop == 1 and t.property == "background") or (prop == 3 and (t.property == "translate" or t.property == "rotate" or t.property == "scale"))) and t.duration > 0.0:
             out = t
             found = true
         end
@@ -59,13 +59,21 @@ end
 
 func _start_transitions(i: int, old: css.ComputedStyle, now: css.ComputedStyle):
     node := _e.el_node[i]
-    repeat 3 in prop:
+    repeat 4 in prop:
         mut t := css.Transition {}
         if not _find_transition(now, prop, t):
             continue
         end
         mut a := _Anim { node = node, uid = _e.ctl[node].uid, prop = prop, start = _now(), duration = t.duration, delay = t.delay, timing = t.timing }
-        if prop == 2:
+        if prop == 3:
+            if not _xf_changed(old, now):
+                continue
+            end
+            a.from_x = Vector {} as Vector<css.TransformFn>
+            a.to_x = Vector {} as Vector<css.TransformFn>
+            _xf_current_fns(node, old, a.from_x)
+            _fns_of(now, a.to_x)
+        else prop == 2:
             if old.opacity == now.opacity:
                 continue
             end
@@ -101,10 +109,6 @@ func _anim_progress(a: _Anim): f64:
     ret css.EasingAt(a.timing, el / a.duration)
 end
 
-func _mix(a: int, b: int, t: f64): int:
-    ret math.Round((a as f64) + ((b - a) as f64) * t) as int
-end
-
 func _anim_color(node: int, prop: int, target: css.Color): css.Color:
     if _e.anims.len() == 0:
         ret target
@@ -118,7 +122,7 @@ func _anim_color(node: int, prop: int, target: css.Color): css.Color:
     if t >= 1.0:
         ret target
     end
-    ret css.Color { r = _mix(a.from.r, target.r, t), g = _mix(a.from.g, target.g, t), b = _mix(a.from.b, target.b, t), a = _mix(a.from.a, target.a, t) }
+    ret css.MixColors(a.from, target, t)
 end
 
 func _anim_f(node: int, prop: int, target: f64): f64:
@@ -153,7 +157,54 @@ func _anims_running(): bool:
         end
     end
     if not any and _e.anims.len() > 0:
-        _e.anims.clear()
+        _free_anims()
     end
     ret any
+end
+
+func _free_anims():
+    repeat _e.anims.len() in i:
+        mut a := _e.anims.ref(i)
+        a.from_x.free()
+        a.to_x.free()
+    end
+    _e.anims.clear()
+end
+
+func _xf_changed(a: css.ComputedStyle, b: css.ComputedStyle): bool:
+    mut fa := Vector {} as Vector<css.TransformFn>
+    mut fb := Vector {} as Vector<css.TransformFn>
+    defer fa.free()
+    defer fb.free()
+    _fns_of(a, fa)
+    _fns_of(b, fb)
+    if fa.len() != fb.len():
+        ret true
+    end
+    repeat fa.len() in i:
+        x := fa[i]
+        y := fb[i]
+        if x.kind != y.kind or x.a != y.a or x.b != y.b or x.c != y.c or x.d != y.d or x.e != y.e or x.f != y.f or x.x.px != y.x.px or x.x.pct != y.x.pct or x.y.px != y.y.px or x.y.pct != y.y.pct:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _xf_current_fns(node: int, old: css.ComputedStyle, out &: Vector<css.TransformFn>):
+    k := _anim_index(node, 3)
+    if k >= 0:
+        a := _e.anims[k]
+        t := _anim_progress(a)
+        if t < 1.0 and _same_kinds(a.from_x, a.to_x):
+            n := math.MaxI(a.from_x.len(), a.to_x.len())
+            repeat n in i:
+                to_f := i < a.to_x.len() ? a.to_x[i] : _ident_fn(a.from_x[i].kind)
+                from_f := i < a.from_x.len() ? a.from_x[i] : _ident_fn(a.to_x[i].kind)
+                out.push(_mix_fn(from_f, to_f, t))
+            end
+            ret
+        end
+    end
+    _fns_of(old, out)
 end

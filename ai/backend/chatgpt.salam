@@ -1,0 +1,1070 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aichatgpt
+
+import net.http
+import net.router
+import encoding
+import encoding.json
+import encoding.value
+import archive
+import compress
+import crypto
+import db.mysql
+import mem
+import os
+import str
+import sync
+import time
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aimaster "master.salam"
+
+const MAX_PARTS := 4000
+const MAX_PART_B64 := 8000000
+const MAX_PART_BYTES := 6000000
+const MAX_PART_RAW := 96000000
+const MAX_VAULT := 1073741824
+const DAILY_STARTS := 6
+const MAX_TEXT := 100000
+const BATCH_BYTES := 3000000
+const BATCH_ROWS := 60
+const POLL_MS := 3000
+const DIGEST_ASKS := 8
+const ASK_CHARS := 220
+const END_CHARS := 500
+const SUMMARY_CHARS := 300
+const CHUNK := "conversations"
+const FILE := "file"
+const COLUMNS := "id, status, filename, parts, received, parts_done, bytes, raw_bytes, chats, messages, memories, skipped, existing, projects, instructions, error, created, updated, finished"
+
+mut ROOT := "/data/imports"
+mut ON := true
+
+struct Stats:
+    pub chats: int = 0
+    pub messages: int = 0
+    pub memories: int = 0
+    pub skipped: int = 0
+    pub existing: int = 0
+    pub projects: int = 0
+    pub instructions: int = 0
+end
+
+struct Msg:
+    pub role: str = ""
+    pub time: i64 = 0
+    pub text: str = ""
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func n(v: i64): str:
+    ret aiweb.I64s(v)
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut--
+    end
+    ret s.substr(0, cut)
+end
+
+func one_line(s: str, max: int): str:
+    t := str.Trim(str.Replace(str.Replace(s, "\r", " "), "\n", " "))
+    if t.len() <= max:
+        ret t
+    end
+    ret str.Trim(clip(t, max)) + "..."
+end
+
+func field(v: value.Value, key: str): value.Value:
+    if not value.IsObject(v) or not value.ObjectHas(v, key):
+        ret value.ValueNull()
+    end
+    ret value.ObjectGet(v, key)
+end
+
+func text_of(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    ret ""
+end
+
+func num_of(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsInt(f):
+        ret value.AsInt(f)
+    end
+    if value.IsFloat(f):
+        ret value.AsFloat(f) as i64
+    end
+    ret 0
+end
+
+func truthy(v: value.Value, key: str): bool:
+    f := field(v, key)
+    ret value.IsBool(f) and value.AsBool(f)
+end
+
+func day(t: i64): str:
+    if t <= 0:
+        ret "unknown date"
+    end
+    ret time.FormatDate(t)
+end
+
+func hex(len: int): str:
+    ret crypto.RandomHex(len)
+end
+
+func vault_path(vault: str, file: str): str:
+    ret ROOT + "/" + vault + "/" + file + ".gz"
+end
+
+func clean_text(raw: str): str:
+    size := raw.len()
+    mut seen := false
+    mut k := 0
+    until k < size:
+        if (raw[k] as int) == 238:
+            seen = true
+            break
+        end
+        k++
+    end
+    if not seen:
+        ret raw
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut start := 0
+    mut i := 0
+    until i < size:
+        c := raw[i] as int
+        if c == 238 and i + 2 < size and (raw[i + 1] as int) >= 136 and (raw[i + 1] as int) <= 139:
+            str.BufAppend(b, raw.substr(start, i - start))
+            if (raw[i + 1] as int) == 136 and (raw[i + 2] as int) == 128:
+                mut j := i + 3
+                mut closed := false
+                until j + 2 < size:
+                    if (raw[j] as int) == 238 and (raw[j + 1] as int) == 136 and (raw[j + 2] as int) == 129:
+                        closed = true
+                        break
+                    end
+                    j++
+                end
+                if closed:
+                    i = j + 3
+                else:
+                    i += 3
+                end
+            else:
+                i += 3
+            end
+            start = i
+        else:
+            i++
+        end
+    end
+    str.BufAppend(b, raw.substr(start, size - start))
+    ret str.Trim(str.BufStr(b))
+end
+
+func message_text(g: value.Value): str:
+    content := field(g, "content")
+    ctype := text_of(content, "content_type")
+    if ctype != "text" and ctype != "multimodal_text":
+        ret ""
+    end
+    parts := field(content, "parts")
+    mut pieces := Vector {} as Vector<str>
+    if value.IsArray(parts):
+        repeat value.ArrayLen(parts) in i:
+            p := value.ArrayGet(parts, i)
+            if value.IsString(p):
+                if value.AsString(p).len() > 0:
+                    pieces.push(value.AsString(p))
+                end
+            else value.IsObject(p) and text_of(p, "content_type") == "image_asset_pointer":
+                pieces.push("[image]")
+            end
+        end
+    end
+    md := field(g, "metadata")
+    files := field(md, "attachments")
+    if value.IsArray(files):
+        repeat value.ArrayLen(files) in i:
+            name := text_of(value.ArrayGet(files, i), "name")
+            if name.len() > 0:
+                pieces.push("[file: " + clip(name, 120) + "]")
+            end
+        end
+    end
+    ret clip(clean_text(str.Join(pieces, "\n\n")), MAX_TEXT)
+end
+
+func branch(conv: value.Value): Vector<Msg>:
+    mut out := Vector {} as Vector<Msg>
+    mapping := field(conv, "mapping")
+    if not value.IsObject(mapping):
+        ret out
+    end
+    mut cur := text_of(conv, "current_node")
+    mut chain := Vector {} as Vector<value.Value>
+    mut guard := 0
+    until cur.len() > 0 and value.ObjectHas(mapping, cur) and guard <= 20000:
+        node := value.ObjectGet(mapping, cur)
+        chain.push(node)
+        cur = text_of(node, "parent")
+        guard++
+    end
+    mut i := chain.len() - 1
+    until i >= 0:
+        g := field(chain.get(i), "message")
+        i--
+        if not value.IsObject(g):
+            continue
+        end
+        role := text_of(field(g, "author"), "role")
+        if role != "user" and role != "assistant":
+            continue
+        end
+        md := field(g, "metadata")
+        if truthy(md, "is_visually_hidden_from_conversation") or truthy(md, "is_user_system_message"):
+            continue
+        end
+        text := message_text(g)
+        if text.len() == 0:
+            continue
+        end
+        out.push(Msg { role = role, time = num_of(g, "create_time"), text = text })
+    end
+    ret out
+end
+
+func digest(model: str, started: i64, msgs: Vector<Msg>): str:
+    mut asks := Vector {} as Vector<str>
+    each m in msgs:
+        if m.role == "user":
+            asks.push(m.text)
+        end
+    end
+    mut last := ""
+    mut j := msgs.len() - 1
+    until j >= 0:
+        if msgs.get(j).role == "assistant":
+            last = msgs.get(j).text
+            break
+        end
+        j--
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "Imported from a ChatGPT export.\n\n- Date: " + day(started) + "\n- Messages: " + msgs.len())
+    if model.len() > 0:
+        str.BufAppend(b, "\n- Model: " + clip(model, 60))
+    end
+    str.BufAppend(b, "\n\n## What the user asked\n\n")
+    mut take := Vector {} as Vector<int>
+    total := asks.len()
+    if total <= DIGEST_ASKS:
+        repeat total in i:
+            take.push(i)
+        end
+    else:
+        repeat DIGEST_ASKS in i:
+            take.push((i * (total - 1)) / (DIGEST_ASKS - 1))
+        end
+    end
+    each idx in take:
+        str.BufAppend(b, "- " + one_line(asks.get(idx), ASK_CHARS) + "\n")
+    end
+    if last.len() > 0:
+        str.BufAppend(b, "\n## How it ended\n\n" + one_line(last, END_CHARS) + "\n")
+    end
+    ret str.BufStr(b)
+end
+
+func add_chat(uid: str, imp: str, ext: str, title: str, created: i64, updated: i64, summary: str, project: str): str:
+    id := hex(12)
+    mut a := three(id, uid, clip(title.len() > 0 ? title : "ChatGPT", 250))
+    a.push(n(created))
+    a.push(n(updated))
+    a.push(summary)
+    a.push(ext)
+    a.push(imp)
+    a.push(project)
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, summary, source, ext_id, import_id, project_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'chatgpt', ?7, ?8, ?9)", a)
+    aistore.Unlock()
+    ret ok ? id : ""
+end
+
+func add_memory(uid: str, chat: str, slug: str, title: str, description: str, body: str, at: i64): bool:
+    mut a := three(uid, chat, slug)
+    a.push(clip(title, 250))
+    a.push(clip(description, 590))
+    a.push(body)
+    a.push(n(at))
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO memories (user_id, chat_id, slug, title, description, body, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), body = VALUES(body), updated = VALUES(updated)", a)
+    aistore.Unlock()
+    ret ok
+end
+
+func add_messages(chat: str, msgs: Vector<Msg>, fallback: i64): bool:
+    mut i := 0
+    until i < msgs.len():
+        mut a := one(chat)
+        mut sql := "INSERT INTO messages (chat_id, role, body, status, created) VALUES "
+        mut bytes := 0
+        mut rows := 0
+        until i < msgs.len() and rows < BATCH_ROWS and not (rows > 0 and bytes > BATCH_BYTES):
+            m := msgs.get(i)
+            base := 2 + rows * 3
+            if rows > 0:
+                sql += ", "
+            end
+            sql = sql + "(?1, ?" + base + ", ?" + (base + 1) + ", 'done', ?" + (base + 2) + ")"
+            a.push(m.role)
+            a.push(m.text)
+            a.push(n(m.time > 0 ? m.time : fallback))
+            bytes += m.text.len()
+            rows++
+            i++
+        end
+        aistore.Lock()
+        ok := aistore.Run(sql, a)
+        aistore.Unlock()
+        if not ok:
+            ret false
+        end
+    end
+    ret true
+end
+
+func project_for(uid: str, gizmo: str, cache &: HashMap<str, str>, st &: Stats): str:
+    if gizmo.len() == 0:
+        ret ""
+    end
+    if cache.has(gizmo):
+        ret cache.get(gizmo)
+    end
+    name := "ChatGPT " + clip(gizmo, 60)
+    aistore.Lock()
+    mut found := aistore.OneText("SELECT id FROM projects WHERE user_id = ?1 AND name = ?2 LIMIT 1", two(uid, name))
+    aistore.Unlock()
+    if found.len() == 0:
+        id := hex(12)
+        now := n(aistore.Now())
+        mut a := three(id, uid, name)
+        a.push("Conversations with the ChatGPT GPT " + clip(gizmo, 120) + ", imported from a ChatGPT export.")
+        a.push(now)
+        aistore.Lock()
+        ok := aistore.Run("INSERT INTO projects (id, user_id, name, description, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", a)
+        aistore.Unlock()
+        if ok:
+            found = id
+            st.projects++
+        end
+    end
+    cache.put(gizmo, found)
+    ret found
+end
+
+func import_conversation(uid: str, imp: str, conv: value.Value, cache &: HashMap<str, str>, st &: Stats):
+    mut ext := text_of(conv, "conversation_id")
+    if ext.len() == 0:
+        ext = text_of(conv, "id")
+    end
+    if ext.len() == 0:
+        st.skipped++
+        ret
+    end
+    ext = "chatgpt:" + clip(ext, 50)
+    aistore.Lock()
+    have := aistore.OneText("SELECT id FROM chats WHERE user_id = ?1 AND ext_id = ?2 LIMIT 1", two(uid, ext))
+    aistore.Unlock()
+    if have.len() > 0:
+        st.existing++
+        ret
+    end
+    msgs := branch(conv)
+    if msgs.len() == 0:
+        st.skipped++
+        ret
+    end
+    now := aistore.Now()
+    mut created := num_of(conv, "create_time")
+    mut updated := num_of(conv, "update_time")
+    if created <= 0:
+        created = msgs.get(0).time > 0 ? msgs.get(0).time : now
+    end
+    if updated < created:
+        updated = created
+    end
+    title := str.Trim(text_of(conv, "title"))
+    model := text_of(conv, "default_model_slug")
+    mut first := ""
+    each m in msgs:
+        if m.role == "user":
+            first = m.text
+            break
+        end
+    end
+    project := project_for(uid, text_of(conv, "gizmo_id"), cache, st)
+    chat := add_chat(uid, imp, ext, title.len() > 0 ? title : one_line(first, 80), created, updated, one_line(first, SUMMARY_CHARS), project)
+    if chat.len() == 0:
+        st.skipped++
+        ret
+    end
+    if not add_messages(chat, msgs, created):
+        aistore.Lock()
+        _d := aistore.Run("DELETE FROM chats WHERE id = ?1", one(chat))
+        aistore.Unlock()
+        st.skipped++
+        ret
+    end
+    aistore.Lock()
+    _m := aistore.Run("UPDATE chats SET memory_mid = (SELECT COALESCE(MAX(id), 0) FROM messages WHERE chat_id = ?1) WHERE id = ?1", one(chat))
+    aistore.Unlock()
+    shown := title.len() > 0 ? title : one_line(first, 80)
+    if add_memory(uid, chat, "chatgpt-import", shown, "ChatGPT conversation from " + day(created) + ", " + msgs.len() + " messages", digest(model, created, msgs), updated):
+        st.memories++
+    end
+    st.chats++
+    st.messages += msgs.len()
+end
+
+func string_items(v: value.Value, out &: Vector<str>):
+    if value.IsString(v):
+        t := str.Trim(value.AsString(v))
+        if t.len() > 0:
+            out.push(clip(t, 4000))
+        end
+    else value.IsArray(v):
+        repeat value.ArrayLen(v) in i:
+            string_items(value.ArrayGet(v, i), out)
+        end
+    else value.IsObject(v):
+        mut got := false
+        each key in ["content", "text", "memory", "value", "summary"]:
+            if not got and value.IsString(field(v, key)):
+                string_items(field(v, key), out)
+                got = true
+            end
+        end
+        if not got:
+            string_items(field(v, "memories"), out)
+            string_items(field(v, "items"), out)
+        end
+    end
+end
+
+func import_memories(uid: str, imp: str, root: value.Value, st &: Stats):
+    mut items := Vector {} as Vector<str>
+    string_items(root, items)
+    if items.len() == 0:
+        ret
+    end
+    aistore.Lock()
+    mut chat := aistore.OneText("SELECT id FROM chats WHERE user_id = ?1 AND ext_id = 'chatgpt:memories' LIMIT 1", one(uid))
+    aistore.Unlock()
+    now := aistore.Now()
+    if chat.len() == 0:
+        chat = add_chat(uid, imp, "chatgpt:memories", "ChatGPT memories", now, now, "Memories saved in ChatGPT, imported.", "")
+    end
+    if chat.len() == 0:
+        ret
+    end
+    each item in items:
+        slug := "chatgpt-" + crypto.Sha256Hex(item).substr(0, 12)
+        if add_memory(uid, chat, slug, one_line(item, 80), one_line(item, 300), item, now):
+            st.memories++
+        end
+    end
+end
+
+func import_instructions(uid: str, root: value.Value, st &: Stats):
+    mut pieces := Vector {} as Vector<str>
+    each key in ["about_user_message", "what_chatgpt_should_know", "about_model_message", "how_chatgpt_should_respond"]:
+        t := str.Trim(text_of(root, key))
+        if t.len() > 0:
+            pieces.push(t)
+        end
+    end
+    if pieces.len() == 0:
+        ret
+    end
+    aistore.Lock()
+    current := aistore.OneText("SELECT COALESCE(master_prompt, '') FROM users WHERE id = ?1", one(uid))
+    aistore.Unlock()
+    if str.Trim(current).len() > 0:
+        st.instructions = -1
+        ret
+    end
+    text := aimaster.Account(str.Join(pieces, "\n\n"))
+    aistore.Lock()
+    _u := aistore.Run("UPDATE users SET master_prompt = ?1 WHERE id = ?2", two(text, uid))
+    aistore.Unlock()
+    st.instructions = 1
+end
+
+func import_file(uid: str, imp: str, name: str, root: value.Value, st &: Stats):
+    lower := str.Lower(name)
+    if lower.find("memories") >= 0 or lower.find("memory") >= 0:
+        import_memories(uid, imp, root, st)
+    else lower.find("instruction") >= 0 or lower.find("custom") >= 0:
+        if value.IsArray(root) and value.ArrayLen(root) > 0:
+            import_instructions(uid, value.ArrayGet(root, 0), st)
+        else:
+            import_instructions(uid, root, st)
+        end
+    end
+end
+
+func read_part(path: str, ok &: bool): str:
+    ok = false
+    mut present := false
+    mut data := archive.ReadBinaryFile(path, present)
+    if not present:
+        compress.BufFree(data)
+        ret ""
+    end
+    mut good := false
+    mut raw := compress.GzipDecompressMax(data.data, data.len, MAX_PART_RAW, good)
+    compress.BufFree(data)
+    if not good:
+        compress.BufFree(raw)
+        ret ""
+    end
+    text := compress.BufToStrUnsafe(raw)
+    copy := text + ""
+    compress.BufFree(raw)
+    ok = true
+    ret copy
+end
+
+func conversation_shaped(v: value.Value): bool:
+    if not value.IsObject(v):
+        ret false
+    end
+    if text_of(v, "conversation_id").len() == 0 and text_of(v, "id").len() == 0:
+        ret false
+    end
+    ret value.IsObject(field(v, "mapping"))
+end
+
+func part_ok(path: str, kind: str): bool:
+    mut ok := false
+    text := read_part(path, ok)
+    if not ok:
+        ret false
+    end
+    mut root := try json.Decode(text) catch value.ValueNull()
+    if value.IsNull(root):
+        ret false
+    end
+    mut good := false
+    if kind == CHUNK:
+        good = value.IsArray(root) and value.ArrayLen(root) > 0
+        mut shaped := 0
+        mut k := 0
+        until good and k < value.ArrayLen(root):
+            item := value.ArrayGet(root, k)
+            if not value.IsObject(item):
+                good = false
+            else conversation_shaped(item):
+                shaped++
+            end
+            k++
+        end
+        good = good and shaped > 0
+    else:
+        good = value.IsArray(root) or value.IsObject(root)
+    end
+    value.ValueFree(root)
+    ret good
+end
+
+func set_state(id: str, status: str, error: str):
+    mut a := three(status, clip(error, 290), n(aistore.Now()))
+    a.push(id)
+    aistore.Lock()
+    _u := aistore.Run("UPDATE imports SET status = ?1, error = ?2, updated = ?3, finished = IF(?1 IN ('done', 'failed', 'canceled'), ?3, 0) WHERE id = ?4", a)
+    aistore.Unlock()
+end
+
+func save_progress(id: str, done: int, st: Stats):
+    mut a := one(n(done as i64))
+    a.push(n(st.chats as i64))
+    a.push(n(st.messages as i64))
+    a.push(n(st.memories as i64))
+    a.push(n(st.skipped as i64))
+    a.push(n(st.existing as i64))
+    a.push(n(st.projects as i64))
+    a.push(n(st.instructions as i64))
+    a.push(n(aistore.Now()))
+    a.push(id)
+    aistore.Lock()
+    _u := aistore.Run("UPDATE imports SET parts_done = ?1, chats = ?2, messages = ?3, memories = ?4, skipped = ?5, existing = ?6, projects = ?7, instructions = ?8, updated = ?9 WHERE id = ?10", a)
+    aistore.Unlock()
+end
+
+func canceled(id: str): bool:
+    aistore.Lock()
+    status := aistore.OneText("SELECT status FROM imports WHERE id = ?1", one(id))
+    aistore.Unlock()
+    ret status != "running"
+end
+
+func process(id: str, uid: str, vault: str):
+    mut files := Vector {} as Vector<str>
+    mut kinds := Vector {} as Vector<str>
+    mut names := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT file, kind, name FROM import_parts WHERE import_id = ?1 ORDER BY n", one(id))
+    until aistore.Next(rows):
+        files.push(aistore.Text(rows, 0))
+        kinds.push(aistore.Text(rows, 1))
+        names.push(aistore.Text(rows, 2))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    mut st := Stats {}
+    mut cache := HashMap {} as HashMap<str, str>
+    mut step := 0
+    repeat files.len() in i:
+        if canceled(id):
+            ret
+        end
+        mut ok := false
+        text := read_part(vault_path(vault, files.get(i)), ok)
+        if not ok:
+            set_state(id, "failed", "part " + (i + 1) + " is damaged or missing")
+            ret
+        end
+        mut root := try json.Decode(text) catch value.ValueNull()
+        if value.IsNull(root):
+            set_state(id, "failed", "part " + (i + 1) + " is not valid JSON")
+            ret
+        end
+        if kinds.get(i) == CHUNK:
+            if value.IsArray(root):
+                repeat value.ArrayLen(root) in k:
+                    import_conversation(uid, id, value.ArrayGet(root, k), cache, st)
+                    step++
+                    if step % 25 == 0:
+                        sync.SleepMs(20)
+                    end
+                end
+            end
+        else:
+            import_file(uid, id, names.get(i), root, st)
+        end
+        value.ValueFree(root)
+        save_progress(id, i + 1, st)
+    end
+    set_state(id, "done", "")
+end
+
+func next_job(id &: str, uid &: str, vault &: str): bool:
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, user_id, vault FROM imports WHERE status = 'queued' ORDER BY id LIMIT 1", Vector {} as Vector<str>)
+    mut found := false
+    if aistore.Next(rows):
+        id = aistore.Text(rows, 0)
+        uid = aistore.Text(rows, 1)
+        vault = aistore.Text(rows, 2)
+        found = true
+    end
+    aistore.Finish(rows)
+    if found:
+        _u := aistore.Run("UPDATE imports SET status = 'running', updated = ?1 WHERE id = ?2", two(n(aistore.Now()), id))
+    end
+    aistore.Unlock()
+    ret found
+end
+
+func worker():
+    aistore.Lock()
+    _r := aistore.Run("UPDATE imports SET status = 'queued' WHERE status = 'running'", Vector {} as Vector<str>)
+    aistore.Unlock()
+    until true:
+        mut id := ""
+        mut uid := ""
+        mut vault := ""
+        if next_job(id, uid, vault):
+            process(id, uid, vault)
+        else:
+            sync.SleepMs(POLL_MS)
+        end
+    end
+end
+
+func row_json(rows: mysql.Result): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+    m.push(json.Member("status", aistore.Text(rows, 1)))
+    m.push(json.Member("filename", aistore.Text(rows, 2)))
+    names := ["parts", "received", "parts_done", "bytes", "raw_bytes", "chats", "messages", "memories", "skipped", "existing", "projects", "instructions"]
+    repeat 12 in k:
+        m.push(json.MemberRaw(names[k], aistore.Text(rows, k + 3)))
+    end
+    m.push(json.Member("error", aistore.Text(rows, 15)))
+    m.push(json.MemberRaw("created", aistore.Text(rows, 16)))
+    m.push(json.MemberRaw("updated", aistore.Text(rows, 17)))
+    m.push(json.MemberRaw("finished", aistore.Text(rows, 18)))
+    ret json.Object(m)
+end
+
+func one_import(uid: str, id: str): str:
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT " + COLUMNS + " FROM imports WHERE id = ?1 AND user_id = ?2", two(id, uid))
+    mut out := ""
+    if aistore.Next(rows):
+        out = row_json(rows)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret out
+end
+
+func received_json(id: str): str:
+    mut list := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT n, sha FROM import_parts WHERE import_id = ?1 ORDER BY n", one(id))
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("n", aistore.Text(rows, 0)))
+        m.push(json.Member("sha256", aistore.Text(rows, 1)))
+        list.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(list)
+end
+
+func with_parts(item: str, id: str): str:
+    ret str.TrimSuffix(item, "}") + ", \"have\": " + received_json(id) + "}"
+end
+
+func owned(uid: str, id: str): str:
+    aistore.Lock()
+    status := aistore.OneText("SELECT status FROM imports WHERE id = ?1 AND user_id = ?2", two(id, uid))
+    aistore.Unlock()
+    ret status
+end
+
+func off(ctx: i64): bool:
+    if ON:
+        ret false
+    end
+    aiweb.Fail(ctx, 503, "disabled", "درون‌ریزی از ChatGPT روی این سرور خاموش است.")
+    ret true
+end
+
+func list_imports(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0 or off(ctx):
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT " + COLUMNS + " FROM imports WHERE user_id = ?1 ORDER BY id DESC LIMIT 20", one(n(uid)))
+    until aistore.Next(rows):
+        items.push(row_json(rows))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"imports": ` + json.Array(items) + "}")
+end
+
+func get_import(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0 or off(ctx):
+        ret
+    end
+    id := http.Param(ctx, "id")
+    item := one_import(n(uid), id)
+    if item.len() == 0:
+        aiweb.Fail(ctx, 404, "import", "این درون‌ریزی پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"import": ` + with_parts(item, id) + "}")
+end
+
+func start_import(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0 or off(ctx):
+        ret
+    end
+    body := http.Body(ctx)
+    parts := json.Get(body, "parts").to_int()
+    fingerprint := clip(str.Trim(json.Get(body, "fingerprint")), 64)
+    filename := clip(str.Trim(json.Get(body, "filename")), 200)
+    raw_bytes := json.Get(body, "raw_bytes").to_int()
+    if parts < 1 or parts > MAX_PARTS:
+        aiweb.Fail(ctx, 400, "parts", "تعداد بخش‌ها معتبر نیست.")
+        ret
+    end
+    if fingerprint.len() > 0:
+        aistore.Lock()
+        existing := aistore.OneText("SELECT id FROM imports WHERE user_id = ?1 AND fingerprint = ?2 AND status = 'uploading' AND parts = ?3 ORDER BY id DESC LIMIT 1", three(n(uid), fingerprint, n(parts as i64)))
+        aistore.Unlock()
+        if existing.len() > 0:
+            aiweb.Reply(ctx, 200, `{"import": ` + with_parts(one_import(n(uid), existing), existing) + "}")
+            ret
+        end
+    end
+    aistore.Lock()
+    recent := aistore.OneText("SELECT COUNT(*) FROM imports WHERE user_id = ?1 AND created > ?2", two(n(uid), n(aistore.Now() - 86400))).to_int()
+    aistore.Unlock()
+    if recent >= DAILY_STARTS:
+        aiweb.Fail(ctx, 429, "limit", "امروز بیش از حد درون‌ریزی کرده‌اید. فردا دوباره امتحان کنید.")
+        ret
+    end
+    vault := hex(16)
+    if os.MkdirAll(ROOT + "/" + vault) != 0:
+        aiweb.Fail(ctx, 500, "server", "ساخت پوشه‌ی امن ناموفق بود.")
+        ret
+    end
+    now := n(aistore.Now())
+    mut a := three(n(uid), fingerprint, filename)
+    a.push(n(parts as i64))
+    a.push(vault)
+    a.push(n(raw_bytes as i64))
+    a.push(now)
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO imports (user_id, fingerprint, filename, status, parts, vault, raw_bytes, created, updated) VALUES (?1, ?2, ?3, 'uploading', ?4, ?5, ?6, ?7, ?7)", a)
+    id := aistore.LastId()
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ثبت درون‌ریزی ناموفق بود.")
+        ret
+    end
+    aiweb.Reply(ctx, 201, `{"import": ` + with_parts(one_import(n(uid), id), id) + "}")
+end
+
+func put_part(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0 or off(ctx):
+        ret
+    end
+    id := http.Param(ctx, "id")
+    status := owned(n(uid), id)
+    if status.len() == 0:
+        aiweb.Fail(ctx, 404, "import", "این درون‌ریزی پیدا نشد.")
+        ret
+    end
+    if status != "uploading":
+        aiweb.Fail(ctx, 409, "state", "این درون‌ریزی دیگر بخش جدید نمی‌پذیرد.")
+        ret
+    end
+    body := http.Body(ctx)
+    index := http.Param(ctx, "n").to_int()
+    size := json.Get(body, "size").to_int()
+    sha := json.Get(body, "sha256")
+    data := json.Get(body, "data")
+    kind := json.Get(body, "kind")
+    name := clip(str.Trim(json.Get(body, "name")), 100)
+    aistore.Lock()
+    total := aistore.OneText("SELECT parts FROM imports WHERE id = ?1", one(id)).to_int()
+    vault := aistore.OneText("SELECT vault FROM imports WHERE id = ?1", one(id))
+    used := aistore.OneText("SELECT COALESCE(SUM(size), 0) FROM import_parts WHERE import_id = ?1 AND n <> ?2", two(id, n(index as i64))).to_int()
+    aistore.Unlock()
+    if index < 0 or index >= total or (kind != CHUNK and kind != FILE):
+        aiweb.Fail(ctx, 400, "part", "شماره‌ی بخش یا نوع آن معتبر نیست.")
+        ret
+    end
+    if size < 20 or size > MAX_PART_BYTES or data.len() > MAX_PART_B64 or used + size > MAX_VAULT:
+        aiweb.Fail(ctx, 413, "size", "این بخش بیش از حد بزرگ است.")
+        ret
+    end
+    if crypto.Sha256Hex(data) != sha:
+        aiweb.Fail(ctx, 422, "checksum", "بخش دریافت‌شده سالم نیست. دوباره بفرستید.")
+        ret
+    end
+    buf := mem.Allocate((size + 16) as u64)
+    mut got := 0
+    mut decoded := false
+    try:
+        got = encoding.Base64DecodeBytes(data, buf, size + 16)
+        decoded = true
+    catch:
+        decoded = false
+    end
+    file := hex(16)
+    mut wrote := false
+    if decoded and got == size:
+        wrote = archive.WriteBinaryFile(vault_path(vault, file), buf, got)
+    end
+    mem.Free(buf)
+    if wrote and not part_ok(vault_path(vault, file), kind):
+        _bad := os.Remove(vault_path(vault, file))
+        wrote = false
+    end
+    if not wrote:
+        aiweb.Fail(ctx, 422, "format", "این بخش یک گفتگوی معتبر ChatGPT یا یک فایل gzip سالم نیست.")
+        ret
+    end
+    aistore.Lock()
+    old := aistore.OneText("SELECT file FROM import_parts WHERE import_id = ?1 AND n = ?2", two(id, n(index as i64)))
+    mut a := three(id, n(index as i64), kind)
+    a.push(name)
+    a.push(sha)
+    a.push(n(size as i64))
+    a.push(file)
+    a.push(n(aistore.Now()))
+    ok := aistore.Run("REPLACE INTO import_parts (import_id, n, kind, name, sha, size, file, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", a)
+    _u := aistore.Run("UPDATE imports SET received = (SELECT COUNT(*) FROM import_parts WHERE import_id = ?1), bytes = (SELECT COALESCE(SUM(size), 0) FROM import_parts WHERE import_id = ?1), updated = ?2 WHERE id = ?1", two(id, n(aistore.Now())))
+    aistore.Unlock()
+    if old.len() > 0:
+        _r := os.Remove(vault_path(vault, old))
+    end
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ذخیره‌ی بخش ناموفق بود.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"import": ` + one_import(n(uid), id) + "}")
+end
+
+func run_import(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0 or off(ctx):
+        ret
+    end
+    id := http.Param(ctx, "id")
+    status := owned(n(uid), id)
+    if status.len() == 0:
+        aiweb.Fail(ctx, 404, "import", "این درون‌ریزی پیدا نشد.")
+        ret
+    end
+    if status != "uploading":
+        aiweb.Reply(ctx, 200, `{"import": ` + one_import(n(uid), id) + "}")
+        ret
+    end
+    aistore.Lock()
+    parts := aistore.OneText("SELECT parts FROM imports WHERE id = ?1", one(id)).to_int()
+    have := aistore.OneText("SELECT COUNT(*) FROM import_parts WHERE import_id = ?1", one(id)).to_int()
+    aistore.Unlock()
+    if have != parts:
+        aiweb.Fail(ctx, 409, "incomplete", "هنوز همه‌ی بخش‌ها بارگذاری نشده‌اند.")
+        ret
+    end
+    aistore.Lock()
+    chunks := aistore.OneText("SELECT COUNT(*) FROM import_parts WHERE import_id = ?1 AND kind = 'conversations'", one(id)).to_int()
+    aistore.Unlock()
+    if chunks < 1:
+        aiweb.Fail(ctx, 422, "empty", "هیچ گفتگویی در این فایل پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    _u := aistore.Run("UPDATE imports SET status = 'queued', error = '', updated = ?1 WHERE id = ?2 AND status = 'uploading'", two(n(aistore.Now()), id))
+    aistore.Unlock()
+    aiweb.Reply(ctx, 202, `{"import": ` + one_import(n(uid), id) + "}")
+end
+
+func delete_import(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0 or off(ctx):
+        ret
+    end
+    id := http.Param(ctx, "id")
+    status := owned(n(uid), id)
+    if status.len() == 0:
+        aiweb.Fail(ctx, 404, "import", "این درون‌ریزی پیدا نشد.")
+        ret
+    end
+    if status == "running" or status == "queued":
+        aistore.Lock()
+        _c := aistore.Run("UPDATE imports SET status = 'canceled', updated = ?1 WHERE id = ?2", two(n(aistore.Now()), id))
+        aistore.Unlock()
+        aiweb.Reply(ctx, 202, `{"import": ` + one_import(n(uid), id) + "}")
+        ret
+    end
+    aistore.Lock()
+    vault := aistore.OneText("SELECT vault FROM imports WHERE id = ?1", one(id))
+    aistore.Unlock()
+    mut removed := 0
+    if http.Query(ctx, "chats") == "1":
+        aistore.Lock()
+        removed = aistore.OneText("SELECT COUNT(*) FROM chats WHERE import_id = ?1 AND user_id = ?2", two(id, n(uid))).to_int()
+        _d := aistore.Run("DELETE FROM chats WHERE import_id = ?1 AND user_id = ?2", two(id, n(uid)))
+        aistore.Unlock()
+    end
+    if vault.len() == 32:
+        _r := os.RemoveAll(ROOT + "/" + vault)
+    end
+    aistore.Lock()
+    _x := aistore.Run("DELETE FROM imports WHERE id = ?1 AND user_id = ?2", two(id, n(uid)))
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"ok": true, "chats_removed": ` + removed + "}")
+end
+
+pub func Configure(dir: str, enabled: bool):
+    d := str.TrimSuffix(str.Trim(dir), "/")
+    if d.len() > 0:
+        ROOT = d
+    end
+    ON = enabled
+    _m := os.MkdirAll(ROOT)
+end
+
+pub func Start():
+    if ON:
+        _w := spawn(worker)
+    end
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/imports/chatgpt", list_imports)
+    router.Post(r, "/imports/chatgpt", start_import)
+    router.Get(r, "/imports/chatgpt/:id", get_import)
+    router.Put(r, "/imports/chatgpt/:id/parts/:n", put_part)
+    router.Post(r, "/imports/chatgpt/:id/start", run_import)
+    router.Delete(r, "/imports/chatgpt/:id", delete_import)
+    each path in ["/imports/chatgpt", "/imports/chatgpt/:id", "/imports/chatgpt/:id/parts/:n", "/imports/chatgpt/:id/start"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

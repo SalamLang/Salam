@@ -35,7 +35,13 @@ function read(): { fields: CampaignFields; at: number } | null {
     const raw = localStorage.getItem(FIELDS_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { fields: CampaignFields; at: number };
-    if (!parsed || typeof parsed.at !== "number") return null;
+    if (
+      !parsed ||
+      typeof parsed.at !== "number" ||
+      !parsed.fields ||
+      typeof parsed.fields !== "object"
+    )
+      return null;
     return parsed;
   } catch {
     return null;

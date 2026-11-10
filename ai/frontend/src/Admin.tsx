@@ -1661,6 +1661,7 @@ function CampaignDetail({ campaign, days }: { campaign: string; days: number }) 
   useEffect(() => {
     let live = true;
     setSeries(null);
+    setError("");
     api
       .adminCampaignSeries(campaign, days)
       .then((r) => live && setSeries(r.days))
@@ -1789,7 +1790,7 @@ function Campaigns() {
           </div>
         )}
       </section>
-      {selected && <CampaignDetail campaign={selected} days={Number(days)} />}
+      {selected !== null && <CampaignDetail campaign={selected} days={Number(days)} />}
     </>
   );
 }

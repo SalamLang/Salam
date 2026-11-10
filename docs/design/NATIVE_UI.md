@@ -430,11 +430,11 @@ shared by the native and the web targets), from two facts.
   passed to a child counts when the child calls it in its view), and anything
   a derived value it feeds is read by.
 
-| Written | Read by the view | Kind | What the compiler generates |
-|---|---|---|---|
-| yes | yes | state | per instance storage, write marks, the instance depends on it |
-| yes | no | instance variable | per instance storage, no marks, never re-runs anything |
-| no | either | derived value | its expression, worked out each time the instance runs |
+| Written | Read by the view | Kind              | What the compiler generates                                   |
+| ------- | ---------------- | ----------------- | ------------------------------------------------------------- |
+| yes     | yes              | state             | per instance storage, write marks, the instance depends on it |
+| yes     | no               | instance variable | per instance storage, no marks, never re-runs anything        |
+| no      | either           | derived value     | its expression, worked out each time the instance runs        |
 
 An instance variable starts from its value once, when the instance is made,
 and keeps it across re-runs; a derived value follows the parameters and the

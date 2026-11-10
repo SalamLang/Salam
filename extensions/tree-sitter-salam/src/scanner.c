@@ -19,8 +19,8 @@
  *
  * 'page', 'component' and 'dyn' are soft keywords: they are names wherever
  * the parser cannot take the keyword, which is what valid_symbols says.
- * 'state' starts a line in a component body that has ':=' before any '=',
- * the same test the compiler's lexer makes.
+ * A name followed by ':=' at the start of a line in a component body or a
+ * page block declares a variable, the same test the compiler's lexer makes.
  */
 
 #include "tree_sitter/parser.h"
@@ -39,7 +39,7 @@ enum TokenType {
     LAYOUT_KEYWORD,
     COMPONENT_KEYWORD,
     DYN_KEYWORD,
-    STATE_KEYWORD
+    LAYOUT_VAR_NAME
 };
 
 #define MAX_WORD 256
@@ -229,12 +229,11 @@ static bool scan_import_path(TSLexer *lexer)
     return true;
 }
 
-static bool scan_layout_name(TSLexer *lexer, bool state_ok)
+static bool scan_layout_name(TSLexer *lexer, bool var_ok)
 {
     char word[MAX_WORD];
     int words = 0;
     bool first_is_end = false;
-    bool maybe_state = false;
     for (;;) {
         int len = read_word(lexer, word);
         if (len == 0) {
@@ -242,29 +241,19 @@ static bool scan_layout_name(TSLexer *lexer, bool state_ok)
         }
         if (words == 0) {
             first_is_end = is_end(word, len);
-            maybe_state = state_ok && is_space(lexer->lookahead) &&
-                          in_table(SALAM_STATE_WORDS, SALAM_STATE_WORDS_COUNT, word, len);
         }
         words++;
-        if (!maybe_state) {
-            lexer->mark_end(lexer);
-        } else if (words == 1) {
-            lexer->mark_end(lexer);
-        }
+        lexer->mark_end(lexer);
         while (is_space(lexer->lookahead)) {
             lexer->advance(lexer, false);
         }
         int32_t c = lexer->lookahead;
         if (c == ':' || c == '=') {
-            if (maybe_state && words > 1) {
-                if (c == '=') {
-                    lexer->mark_end(lexer);
-                } else {
-                    lexer->advance(lexer, false);
-                    if (lexer->lookahead == '=') {
-                        lexer->result_symbol = STATE_KEYWORD;
-                        return true;
-                    }
+            if (var_ok && c == ':') {
+                lexer->advance(lexer, false);
+                if (lexer->lookahead == '=') {
+                    lexer->result_symbol = LAYOUT_VAR_NAME;
+                    return true;
                 }
             }
             lexer->result_symbol = LAYOUT_NAME;
@@ -380,7 +369,7 @@ bool tree_sitter_salam_external_scanner_scan(void *payload, TSLexer *lexer,
         return scan_member_name(lexer);
     }
     if (!recovering && valid_symbols[LAYOUT_NAME]) {
-        return scan_layout_name(lexer, valid_symbols[STATE_KEYWORD]);
+        return scan_layout_name(lexer, valid_symbols[LAYOUT_VAR_NAME]);
     }
     if (valid_symbols[NAME] || valid_symbols[LAYOUT_KEYWORD] ||
         valid_symbols[COMPONENT_KEYWORD] || valid_symbols[DYN_KEYWORD]) {

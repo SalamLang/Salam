@@ -72,6 +72,11 @@ func frame_lookup(f &: LoFrame, name: str, found &: bool): int:
     if not f.present:
         ret 0
     end
+    each sh in f.shadow:
+        if str.Equals(sh, name):
+            ret 0
+        end
+    end
     repeat f.names.len() in i:
         if str.Equals(f.names.get(i), name):
             found = true
@@ -79,6 +84,44 @@ func frame_lookup(f &: LoFrame, name: str, found &: bool): int:
         end
     end
     ret 0
+end
+
+func frame_cut(f &: LoFrame, mark: int):
+    until f.shadow.len() > mark:
+        _x := f.shadow.pop()
+    end
+end
+
+func frame_is_derived(f &: LoFrame, name: str): bool:
+    each d in f.derived:
+        if str.Equals(d, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func frame_derive(a &: at.Ast, f &: LoFrame, body: int):
+    if body == 0:
+        ret
+    end
+    repeat at.ChildCount(a, body) in i:
+        sid := at.Child(a, body, i)
+        if at.KindOf(a, sid) != at.AST_VAR_DECL or li_kind(sid) != LI_DERIVED:
+            continue
+        end
+        sd := at.Get(a, sid)
+        frame_set(f, sd.name, subst_value(a, sd.a, f))
+        f.derived.push(sd.name)
+    end
+end
+
+func frame_free(f &: LoFrame):
+    f.names.free()
+    f.vals.free()
+    f.content.free()
+    f.derived.free()
+    f.shadow.free()
 end
 
 func frame_set(f &: LoFrame, name: str, val: int):
@@ -134,7 +177,7 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         bound := frame_lookup(f, v.name, found)
         if found:
             if bound != 0:
-                if lo_is_state_ref(a, bound):
+                if lo_is_state_ref(a, bound) or frame_is_derived(f, v.name):
                     ret at.Clone(a, bound)
                 end
                 ret bound
@@ -150,7 +193,14 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
     end
     k := v.kind
     if k == at.AST_LAMBDA:
+        mark := f.shadow.len()
+        repeat v.list.len() in li:
+            if at.KindOf(a, v.list.get(li)) == at.AST_PARAM:
+                f.shadow.push(at.Get(a, v.list.get(li)).name)
+            end
+        end
         nbody := subst_block(a, v.a, f)
+        frame_cut(f, mark)
         if nbody == v.a:
             ret vid
         end
@@ -303,7 +353,13 @@ func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
     end
     if n.kind == at.AST_EACH:
         na := subst_value(a, n.a, f)
+        mark := f.shadow.len()
+        f.shadow.push(n.name)
+        if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+            f.shadow.push(at.Get(a, n.c).name)
+        end
         nb := subst_stmt(a, n.b, f)
+        frame_cut(f, mark)
         if na == n.a and nb == n.b:
             ret nid
         end
@@ -318,7 +374,12 @@ func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
         na := subst_value(a, n.a, f)
         nc := subst_value(a, n.c, f)
         nd := subst_value(a, n.d, f)
+        rmark := f.shadow.len()
+        if str.Len(n.name) > 0:
+            f.shadow.push(n.name)
+        end
         nb := subst_stmt(a, n.b, f)
+        frame_cut(f, rmark)
         if na == n.a and nc == n.c and nd == n.d and nb == n.b:
             ret nid
         end
@@ -341,6 +402,7 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
     n := at.Get(a, nid)
     mut changed := false
     mut items := Vector {} as Vector<int>
+    mark := f.shadow.len()
     repeat n.list.len() in i:
         child := n.list.get(i)
         if subst_missing_callback(a, child, f):
@@ -352,7 +414,11 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
             changed = true
         end
         items.push(s)
+        if at.KindOf(a, child) == at.AST_VAR_DECL:
+            f.shadow.push(at.Get(a, child).name)
+        end
     end
+    frame_cut(f, mark)
     if not changed:
         items.free()
         ret nid
@@ -654,9 +720,7 @@ func expand_component(
         ret
     end
     mut fr := LoFrame { present = true }
-    defer fr.names.free()
-    defer fr.vals.free()
-    defer fr.content.free()
+    defer frame_free(fr)
     comp_def := ex.comp_def.get(ci)
 
     repeat at.ChildCount(a, comp_def) in i:
@@ -720,18 +784,20 @@ func expand_component(
     body := at.Get(a, comp_def).a
     web := g_lo_web_state and not g_lo_native_scopes
     if not g_lo_native_scopes and not web:
-        if lo_has_state(a, body):
+        if li_has_storage(a, body):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("component '%s' has 'state', which works only in the page block and in native pages; build the page with 'salam page build' or --ui=native, or keep the value in a mutable global"), co.ArgStr(comp_name)
+                    i18.Tr("component '%s' has variables that change, which work only in pages built with 'salam page build' or --ui=native; keep the value in a mutable global instead"), co.ArgStr(comp_name)
                 )
             )
             ex.errors++
         end
+        frame_derive(a, fr, body)
         expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
         ret
     end
-    if web and not lo_has_state(a, body):
+    if web and not li_has_storage(a, body):
+        frame_derive(a, fr, body)
         expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
         ret
     end
@@ -753,11 +819,18 @@ func expand_component(
             continue
         end
         sd := at.Get(a, sid)
+        kind := li_kind(sid)
+        if kind == LI_DERIVED:
+            frame_set(fr, sd.name, subst_value(a, sd.a, fr))
+            fr.derived.push(sd.name)
+            continue
+        end
         mut gi := 0
         if web:
             gi = lo_web_state_index(ex, a, ci, sid)
+            g_lo_ws_kind.push(kind)
         else:
-            gi = lo_state_index(ex, a, ci, sj, sid)
+            gi = lo_state_index(ex, a, ci, sj, sid, kind)
         end
         sj++
         decl := at.NewNode(a, at.AST_VAR_DECL)
@@ -800,7 +873,7 @@ func expand_component(
     out.push(mark)
 end
 
-func lo_has_state(a &: at.Ast, body: int): bool:
+func lo_has_decls(a &: at.Ast, body: int): bool:
     if body == 0:
         ret false
     end
@@ -827,7 +900,7 @@ func lo_web_state_index(ex &: LoExpand, a &: at.Ast, ci: int, sid: int): int:
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("component '%s': give the state '%s' a type, as in 'state items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
             )
         )
         ex.errors++
@@ -886,7 +959,7 @@ func lo_state_type(a &: at.Ast, comp_def: int, init: int, lit &: str): int:
     ret 0
 end
 
-func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int): int:
+func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind: int): int:
     mut seen := 0
     repeat g_lo_st_comp.len() in i:
         if g_lo_st_comp.get(i) == ci:
@@ -902,13 +975,14 @@ func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int): int
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("component '%s': give the state '%s' a type, as in 'state items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
             )
         )
         ex.errors++
         lit = "int"
     end
     g_lo_st_comp.push(ci)
+    g_lo_st_kind.push(kind)
     g_lo_st_name.push(sd.name)
     g_lo_st_type.push(ty)
     g_lo_st_lit.push(lit)
@@ -951,9 +1025,7 @@ func expand_item(
                     expand_items(
                         ex, a, out, lb, none, ex.loaded_dir.get(l), depth + 1
                     )
-                    none.names.free()
-                    none.vals.free()
-                    none.content.free()
+                    frame_free(none)
                 else not has_component_def(a, lprog):
                     lg.Log(
                         ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(
@@ -991,7 +1063,7 @@ func expand_item(
             ret
         end
 
-        if fr.present and is_content_word(item.name):
+        if fr.present and not fr.page and is_content_word(item.name):
             if fr.content.len() > 0:
                 repeat fr.content.len() in i:
                     out.push(fr.content.get(i))
@@ -1023,6 +1095,14 @@ func expand_item(
         ret
     end
     if item.kind == at.AST_VAR_DECL:
+        if not li_known(iid):
+            lg.Log(
+                ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("'%s' is declared inside an element, 'if' or 'each'; declare it at the top of the component or the page block"), co.ArgStr(item.name)
+                )
+            )
+            ex.errors++
+        end
         ret
     end
     if item.kind == at.AST_EACH:

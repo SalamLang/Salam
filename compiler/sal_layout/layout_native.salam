@@ -633,6 +633,44 @@ func ln_each_scoped(g &: LnGen, a &: at.Ast, nid: int):
     ln_scope_close(g)
 end
 
+func ln_is_render(gi: int): bool:
+    ret gi < g_lo_st_kind.len() and g_lo_st_kind.get(gi) == LI_RENDER
+end
+
+func ln_comp_has_stores(a &: at.Ast, blk: int, render: bool): bool:
+    repeat at.ChildCount(a, blk) in j:
+        sid := at.Child(a, blk, j)
+        if at.KindOf(a, sid) == at.AST_VAR_DECL and ln_is_render(at.Get(a, sid).value_int as int) == render:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_comp_stores(g &: LnGen, a &: at.Ast, blk: int, kname: str, render: bool):
+    repeat at.ChildCount(a, blk) in j:
+        sid := at.Child(a, blk, j)
+        if at.KindOf(a, sid) != at.AST_VAR_DECL:
+            continue
+        end
+        sd := at.Get(a, sid)
+        if ln_is_render(sd.value_int as int) != render:
+            continue
+        end
+        gs := co.U64Toa(sd.value_int)
+        idx := g.lw.slots.len()
+        g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = sd.a })
+        store := "__salam_st_" + gs
+        tmp := "__salam_i_" + gs
+        ln_line(g, tmp + " := " + ln_dyn_name(idx))
+        ln_line(g, g.nm.kw_if + " " + kname + " < " + store + "." + g.nm.len + "():")
+        ln_line(g, "    " + store + "[" + kname + "] = " + tmp)
+        ln_line(g, g.nm.kw_else + ":")
+        ln_line(g, "    " + store + "." + g.nm.push + "(" + tmp + ")")
+        ln_line(g, g.nm.kw_end)
+    end
+end
+
 func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
     n := at.Get(a, nid)
     ci := n.value_int as int
@@ -668,28 +706,14 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
         cs := co.U64Toa(ci as u64)
         kname := "__salam_k_" + cs
         ln_line(g, kname + " := __salam_b." + g.nm.instance + "(" + cs + ")")
-        ln_line(g, g.nm.kw_if + " __salam_b." + g.nm.fresh + "():")
-        g.depth++
-        repeat at.ChildCount(a, n.b) in j:
-            sid := at.Child(a, n.b, j)
-            if at.KindOf(a, sid) != at.AST_VAR_DECL:
-                continue
-            end
-            sd := at.Get(a, sid)
-            gs := co.U64Toa(sd.value_int)
-            idx := g.lw.slots.len()
-            g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = sd.a })
-            store := "__salam_st_" + gs
-            tmp := "__salam_i_" + gs
-            ln_line(g, tmp + " := " + ln_dyn_name(idx))
-            ln_line(g, g.nm.kw_if + " " + kname + " < " + store + "." + g.nm.len + "():")
-            ln_line(g, "    " + store + "[" + kname + "] = " + tmp)
-            ln_line(g, g.nm.kw_else + ":")
-            ln_line(g, "    " + store + "." + g.nm.push + "(" + tmp + ")")
+        if ln_comp_has_stores(a, n.b, false):
+            ln_line(g, g.nm.kw_if + " __salam_b." + g.nm.fresh + "():")
+            g.depth++
+            ln_comp_stores(g, a, n.b, kname, false)
+            g.depth--
             ln_line(g, g.nm.kw_end)
         end
-        g.depth--
-        ln_line(g, g.nm.kw_end)
+        ln_comp_stores(g, a, n.b, kname, true)
     end
     g.in_comp++
     ln_items(g, a, n.b)
@@ -995,6 +1019,8 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     g_lo_st_name.clear()
     g_lo_st_type.clear()
     g_lo_st_lit.clear()
+    g_lo_st_kind.clear()
+    li_reset()
     g_lo_native_scopes = true
     _ex := ExpandBlock(log, pack, ct, a, prog, lb, lo_dir_of(file))
     g_lo_native_scopes = false

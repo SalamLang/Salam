@@ -1,0 +1,665 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include i18 "../i18n.salam"
+
+const LI_DERIVED := 0
+const LI_INSTANCE := 1
+const LI_STATE := 2
+const LI_RENDER := 3
+
+mut g_li_decl := Vector {} as Vector<int>
+mut g_li_kind := Vector {} as Vector<int>
+mut g_li_prog := 0
+mut g_li_pc := Vector {} as Vector<int>
+mut g_li_pn := Vector {} as Vector<str>
+mut g_li_pf := Vector {} as Vector<int>
+
+struct LiScan:
+    pub hard: Vector<str> = Vector {}
+    pub soft: Vector<str> = Vector {}
+    pub view: Vector<str> = Vector {}
+    pub used: Vector<str> = Vector {}
+    pub lread: Vector<str> = Vector {}
+    pub dname: Vector<str> = Vector {}
+    pub dinit: Vector<int> = Vector {}
+    pub did: Vector<int> = Vector {}
+end
+
+func li_free(s &: LiScan):
+    s.hard.free()
+    s.soft.free()
+    s.view.free()
+    s.used.free()
+    s.lread.free()
+    s.dname.free()
+    s.dinit.free()
+    s.did.free()
+end
+
+func li_add(v &: Vector<str>, name: str): bool:
+    each s in v:
+        if str.Equals(s, name):
+            ret false
+        end
+    end
+    v.push(name)
+    ret true
+end
+
+func li_has(v: Vector<str>, name: str): bool:
+    each s in v:
+        if str.Equals(s, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func li_cut(v &: Vector<str>, mark: int):
+    until v.len() > mark:
+        _x := v.pop()
+    end
+end
+
+func li_params(a &: at.Ast, nid: int, out &: Vector<str>):
+    n := at.Get(a, nid)
+    each pid in n.list:
+        if at.KindOf(a, pid) == at.AST_PARAM:
+            out.push(at.Get(a, pid).name)
+        end
+    end
+end
+
+func li_reset():
+    g_li_decl.clear()
+    g_li_kind.clear()
+    g_li_pc.clear()
+    g_li_pn.clear()
+    g_li_pf.clear()
+end
+
+func li_kind(did: int): int:
+    repeat g_li_decl.len() in i:
+        if g_li_decl.get(i) == did:
+            ret g_li_kind.get(i)
+        end
+    end
+    ret LI_STATE
+end
+
+func li_known(did: int): bool:
+    each d in g_li_decl:
+        if d == did:
+            ret true
+        end
+    end
+    ret false
+end
+
+func li_pflags(ci: int, name: str): int:
+    repeat g_li_pc.len() in i:
+        if g_li_pc.get(i) == ci and str.Equals(g_li_pn.get(i), name):
+            ret g_li_pf.get(i)
+        end
+    end
+    ret 0
+end
+
+func li_set_pflags(ci: int, name: str, f: int): bool:
+    repeat g_li_pc.len() in i:
+        if g_li_pc.get(i) == ci and str.Equals(g_li_pn.get(i), name):
+            old := g_li_pf.get(i)
+            if (old | f) == old:
+                ret false
+            end
+            g_li_pf.set(i, old | f)
+            ret true
+        end
+    end
+    if f == 0:
+        ret false
+    end
+    g_li_pc.push(ci)
+    g_li_pn.push(name)
+    g_li_pf.push(f)
+    ret true
+end
+
+func li_ref_param(a &: at.Ast, fname: str, idx: int): int:
+    if g_li_prog == 0:
+        ret -1
+    end
+    repeat at.ChildCount(a, g_li_prog) in i:
+        did := at.Child(a, g_li_prog, i)
+        d := at.Get(a, did)
+        if d.kind != at.AST_FUNC_DEF or not str.Equals(d.name, fname):
+            continue
+        end
+        mut pi := 0
+        each pid in d.list:
+            if at.KindOf(a, pid) == at.AST_PARAM:
+                if pi == idx:
+                    ret at.Get(a, pid).is_ref ? 1 : 0
+                end
+                pi++
+            end
+        end
+        ret 0
+    end
+    ret -1
+end
+
+func li_note(a &: at.Ast, target: int, locals: Vector<str>, out &: Vector<str>):
+    root := ln_rx_root(a, target)
+    if root == 0:
+        ret
+    end
+    name := at.Get(a, root).name
+    if li_has(locals, name):
+        ret
+    end
+    _a := li_add(out, name)
+end
+
+func li_readonly(name: str): bool:
+    each m in k_ln_rx_readonly:
+        if str.Equals(m, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func li_wr_call(s &: LiScan, a &: at.Ast, n: at.Node, locals: Vector<str>):
+    if n.a == 0:
+        ret
+    end
+    callee := at.Get(a, n.a)
+    if callee.kind == at.AST_MEMBER and not li_readonly(callee.name):
+        li_note(a, callee.a, locals, s.soft)
+    end
+    repeat n.list.len() in i:
+        arg := n.list.get(i)
+        if ln_rx_root(a, arg) == 0:
+            continue
+        end
+        if callee.kind == at.AST_IDENTIFIER:
+            if li_ref_param(a, callee.name, i) == 1:
+                li_note(a, arg, locals, s.hard)
+            end
+        else callee.kind == at.AST_MEMBER:
+            li_note(a, arg, locals, s.soft)
+        end
+    end
+end
+
+func li_wr(s &: LiScan, a &: at.Ast, nid: int, locals &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    k := n.kind
+    if k == at.AST_LAMBDA or k == at.AST_FUNC_DEF:
+        mark := locals.len()
+        li_params(a, nid, locals)
+        li_wr(s, a, n.a, locals)
+        li_cut(locals, mark)
+        ret
+    end
+    if k == at.AST_BLOCK:
+        mark := locals.len()
+        each cid in n.list:
+            li_wr(s, a, cid, locals)
+            if at.KindOf(a, cid) == at.AST_VAR_DECL:
+                locals.push(at.Get(a, cid).name)
+            end
+        end
+        li_cut(locals, mark)
+        ret
+    end
+    if k == at.AST_EACH or k == at.AST_REPEAT:
+        li_wr(s, a, n.a, locals)
+        li_wr(s, a, n.c, locals)
+        li_wr(s, a, n.d, locals)
+        mark := locals.len()
+        if str.Len(n.name) > 0:
+            locals.push(n.name)
+        end
+        if k == at.AST_EACH and n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+            locals.push(at.Get(a, n.c).name)
+        end
+        li_wr(s, a, n.b, locals)
+        li_cut(locals, mark)
+        ret
+    end
+    if k == at.AST_ASSIGN or k == at.AST_INCDEC:
+        li_note(a, n.a, locals, s.hard)
+    end
+    if k == at.AST_CALL:
+        li_wr_call(s, a, n, locals)
+    end
+    li_wr(s, a, n.a, locals)
+    li_wr(s, a, n.b, locals)
+    li_wr(s, a, n.c, locals)
+    li_wr(s, a, n.d, locals)
+    each c in n.list:
+        li_wr(s, a, c, locals)
+    end
+end
+
+func li_rd(a &: at.Ast, nid: int, shadow &: Vector<str>, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        if not li_has(shadow, n.name):
+            _a := li_add(out, n.name)
+        end
+        ret
+    end
+    if n.kind == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_LAMBDA:
+        li_rd_lambda(a, n.a, shadow, out)
+    end
+    li_rd(a, n.a, shadow, out)
+    li_rd(a, n.b, shadow, out)
+    li_rd(a, n.c, shadow, out)
+    li_rd(a, n.d, shadow, out)
+    each c in n.list:
+        li_rd(a, c, shadow, out)
+    end
+end
+
+func li_rd_lambda(a &: at.Ast, lam: int, shadow &: Vector<str>, out &: Vector<str>):
+    mark := shadow.len()
+    li_params(a, lam, shadow)
+    li_rd_any(a, at.Get(a, lam).a, shadow, out)
+    li_cut(shadow, mark)
+end
+
+func li_rd_any(a &: at.Ast, nid: int, shadow &: Vector<str>, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        li_rd_lambda(a, nid, shadow, out)
+        ret
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        if not li_has(shadow, n.name):
+            _a := li_add(out, n.name)
+        end
+        ret
+    end
+    li_rd_any(a, n.a, shadow, out)
+    li_rd_any(a, n.b, shadow, out)
+    li_rd_any(a, n.c, shadow, out)
+    li_rd_any(a, n.d, shadow, out)
+    each c in n.list:
+        li_rd_any(a, c, shadow, out)
+    end
+end
+
+func li_used(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        _a := li_add(out, n.name)
+        ret
+    end
+    li_used(a, n.a, out)
+    li_used(a, n.b, out)
+    li_used(a, n.c, out)
+    li_used(a, n.d, out)
+    each c in n.list:
+        li_used(a, c, out)
+    end
+end
+
+func li_value(s &: LiScan, a &: at.Ast, v: int, shadow &: Vector<str>):
+    li_used(a, v, s.used)
+    mut locals := ln_rx_clone_locals(shadow)
+    li_wr(s, a, v, locals)
+    locals.free()
+    if at.KindOf(a, v) != at.AST_LAMBDA:
+        li_rd(a, v, shadow, s.view)
+    else:
+        li_rd_lambda(a, v, shadow, s.lread)
+    end
+end
+
+func li_invocation(ex &: LoExpand, s &: LiScan, a &: at.Ast, inv: int, ci: int, shadow &: Vector<str>):
+    repeat at.ChildCount(a, inv) in i:
+        cid := at.Child(a, inv, i)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ATTR:
+            li_item(ex, s, a, cid, shadow, false)
+            continue
+        end
+        an := at.Get(a, cid)
+        v := an.a
+        if v == 0:
+            continue
+        end
+        li_used(a, v, s.used)
+        mut locals := ln_rx_clone_locals(shadow)
+        li_wr(s, a, v, locals)
+        locals.free()
+        if at.KindOf(a, v) == at.AST_LAMBDA:
+            li_rd_lambda(a, v, shadow, s.lread)
+        end
+        if lo_bub_is_handler(an.name):
+            continue
+        end
+        f := li_pflags(ci, an.name)
+        if at.KindOf(a, v) == at.AST_LAMBDA:
+            if (f & 4) != 0:
+                li_rd_lambda(a, v, shadow, s.view)
+            end
+            continue
+        end
+        li_rd(a, v, shadow, s.view)
+        root := ln_rx_root(a, v)
+        if root != 0 and not li_has(shadow, at.Get(a, root).name):
+            rn := at.Get(a, root).name
+            if (f & 1) != 0:
+                _h := li_add(s.hard, rn)
+            end
+            if (f & 2) != 0:
+                _s := li_add(s.soft, rn)
+            end
+        end
+    end
+end
+
+func li_item(ex &: LoExpand, s &: LiScan, a &: at.Ast, cid: int, shadow &: Vector<str>, top: bool):
+    n := at.Get(a, cid)
+    k := n.kind
+    if k == at.AST_LAYOUT_ATTR:
+        if n.a != 0:
+            li_value(s, a, n.a, shadow)
+        end
+    else k == at.AST_LAYOUT_ELEMENT:
+        ci := find_comp(ex, n.name)
+        if ci >= 0:
+            li_invocation(ex, s, a, cid, ci, shadow)
+        else:
+            li_view(ex, s, a, cid, shadow)
+        end
+    else k == at.AST_IF:
+        li_value(s, a, n.a, shadow)
+        li_view(ex, s, a, n.b, shadow)
+        if n.c != 0:
+            if at.KindOf(a, n.c) == at.AST_IF:
+                li_item(ex, s, a, n.c, shadow, false)
+            else:
+                li_view(ex, s, a, n.c, shadow)
+            end
+        end
+    else k == at.AST_EACH:
+        li_value(s, a, n.a, shadow)
+        mark := shadow.len()
+        shadow.push(n.name)
+        if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+            shadow.push(at.Get(a, n.c).name)
+        end
+        li_view(ex, s, a, n.b, shadow)
+        li_cut(shadow, mark)
+    else k == at.AST_VAR_DECL:
+        li_used(a, n.a, s.used)
+        mut locals := ln_rx_clone_locals(shadow)
+        li_wr(s, a, n.a, locals)
+        locals.free()
+        if top:
+            s.dname.push(n.name)
+            s.dinit.push(n.a)
+            s.did.push(cid)
+        end
+    end
+end
+
+func li_view(ex &: LoExpand, s &: LiScan, a &: at.Ast, container: int, shadow &: Vector<str>):
+    if container == 0:
+        ret
+    end
+    repeat at.ChildCount(a, container) in i:
+        li_item(ex, s, a, at.Child(a, container, i), shadow, false)
+    end
+end
+
+func li_scope(ex &: LoExpand, s &: LiScan, a &: at.Ast, body: int):
+    if body == 0:
+        ret
+    end
+    mut shadow := Vector {} as Vector<str>
+    defer shadow.free()
+    repeat at.ChildCount(a, body) in i:
+        li_item(ex, s, a, at.Child(a, body, i), shadow, true)
+    end
+end
+
+func li_decl_index(s &: LiScan, name: str): int:
+    repeat s.dname.len() in i:
+        if str.Equals(s.dname.get(i), name):
+            ret i
+        end
+    end
+    ret -1
+end
+
+func li_primitive(s &: LiScan, a &: at.Ast, comp_def: int, nid: int, depth: int): bool:
+    if nid == 0 or depth > 16:
+        ret false
+    end
+    n := at.Get(a, nid)
+    k := n.kind
+    if k == at.AST_LITERAL:
+        ret true
+    end
+    if k == at.AST_UNARY:
+        ret li_primitive(s, a, comp_def, n.a, depth + 1)
+    end
+    if k == at.AST_CAST:
+        if n.ty == 0:
+            ret false
+        end
+        ret sm.TypePrimKindFromName(at.Get(a, n.ty).name, "") >= 0
+    end
+    if k == at.AST_BINARY or k == at.AST_TERNARY:
+        if k == at.AST_BINARY and at.KindOf(a, n.a) == at.AST_LITERAL and at.Get(a, n.a).value_kind == tok.TV_STRING:
+            ret true
+        end
+        if k == at.AST_BINARY and at.KindOf(a, n.b) == at.AST_LITERAL and at.Get(a, n.b).value_kind == tok.TV_STRING:
+            ret true
+        end
+        if k == at.AST_TERNARY:
+            ret li_primitive(s, a, comp_def, n.b, depth + 1) and li_primitive(s, a, comp_def, n.c, depth + 1)
+        end
+        ret li_primitive(s, a, comp_def, n.a, depth + 1) and li_primitive(s, a, comp_def, n.b, depth + 1)
+    end
+    if k == at.AST_IDENTIFIER:
+        di := li_decl_index(s, n.name)
+        if di >= 0:
+            ret li_primitive(s, a, comp_def, s.dinit.get(di), depth + 1)
+        end
+        if comp_def != 0:
+            ty := comp_param_type(a, comp_def, n.name)
+            if ty != 0:
+                ret sm.TypePrimKindFromName(at.Get(a, ty).name, "") >= 0
+            end
+        end
+    end
+    ret false
+end
+
+func li_written(s &: LiScan, a &: at.Ast, comp_def: int, i: int): bool:
+    name := s.dname.get(i)
+    if li_has(s.hard, name):
+        ret true
+    end
+    ret li_has(s.soft, name) and not li_primitive(s, a, comp_def, s.dinit.get(i), 0)
+end
+
+func li_close_view(s &: LiScan, a &: at.Ast, comp_def: int):
+    mut shadow := Vector {} as Vector<str>
+    defer shadow.free()
+    mut grew := true
+    until grew:
+        grew = false
+        repeat s.dname.len() in i:
+            if li_written(s, a, comp_def, i) or not li_has(s.view, s.dname.get(i)):
+                continue
+            end
+            before := s.view.len()
+            li_rd(a, s.dinit.get(i), shadow, s.view)
+            if s.view.len() > before:
+                grew = true
+            end
+        end
+    end
+end
+
+func li_comp_pass(ex &: LoExpand, a &: at.Ast, ci: int): bool:
+    cdef := ex.comp_def.get(ci)
+    mut s := LiScan {}
+    defer li_free(s)
+    li_scope(ex, s, a, at.Get(a, cdef).a)
+    li_close_view(s, a, cdef)
+    mut changed := false
+    repeat at.ChildCount(a, cdef) in i:
+        p := at.Get(a, at.Child(a, cdef, i))
+        if p.kind != at.AST_PARAM:
+            continue
+        end
+        mut f := 0
+        if li_has(s.hard, p.name):
+            f |= 1
+        end
+        if li_has(s.soft, p.name):
+            f |= 2
+        end
+        if li_has(s.view, p.name):
+            f |= 4
+        end
+        if li_set_pflags(ci, p.name, f):
+            changed = true
+        end
+    end
+    ret changed
+end
+
+func li_classify(ex &: LoExpand, s &: LiScan, a &: at.Ast, comp_def: int, owner: str):
+    repeat s.did.len() in i:
+        did := s.did.get(i)
+        if li_known(did):
+            continue
+        end
+        name := s.dname.get(i)
+        mut kind := LI_DERIVED
+        if li_written(s, a, comp_def, i):
+            kind = li_has(s.view, name) ? LI_STATE : LI_INSTANCE
+        else comp_def != 0 and li_has(s.lread, name):
+            mut lit := ""
+            ty := lo_state_type(a, comp_def, s.dinit.get(i), lit)
+            if ty != 0 or str.Len(lit) > 0:
+                kind = LI_RENDER
+            end
+        else not li_has(s.used, name):
+            if str.Len(owner) > 0:
+                lg.Log(
+                    ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format2(
+                        i18.Tr("component '%s': '%s' is never used"), co.ArgStr(owner), co.ArgStr(name)
+                    )
+                )
+            else:
+                lg.Log(
+                    ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(i18.Tr("page: '%s' is never used"), co.ArgStr(name))
+                )
+            end
+        end
+        g_li_decl.push(did)
+        g_li_kind.push(kind)
+    end
+end
+
+func li_analyze(ex &: LoExpand, a &: at.Ast, prog: int, lb: int):
+    g_li_prog = prog
+    mut rounds := 0
+    mut changed := true
+    until changed and rounds <= ex.comp_name.len() + 1:
+        changed = false
+        repeat ex.comp_name.len() in ci:
+            if li_comp_pass(ex, a, ci):
+                changed = true
+            end
+        end
+        rounds++
+    end
+    repeat ex.comp_name.len() in cj:
+        cdef := ex.comp_def.get(cj)
+        mut s := LiScan {}
+        li_scope(ex, s, a, at.Get(a, cdef).a)
+        li_close_view(s, a, cdef)
+        li_classify(ex, s, a, cdef, ex.comp_name.get(cj))
+        li_free(s)
+    end
+    if lb == 0:
+        ret
+    end
+    mut ps := LiScan {}
+    defer li_free(ps)
+    li_scope(ex, ps, a, lb)
+    if ps.did.len() == 0:
+        ret
+    end
+    mut locals := Vector {} as Vector<str>
+    defer locals.free()
+    repeat at.ChildCount(a, prog) in pi:
+        did := at.Child(a, prog, pi)
+        if at.KindOf(a, did) == at.AST_FUNC_DEF:
+            li_wr(ps, a, did, locals)
+            li_used(a, at.Get(a, did).a, ps.used)
+        end
+    end
+    li_close_view(ps, a, 0)
+    li_classify(ex, ps, a, 0, "")
+end
+
+func li_has_storage(a &: at.Ast, body: int): bool:
+    if body == 0:
+        ret false
+    end
+    repeat at.ChildCount(a, body) in i:
+        cid := at.Child(a, body, i)
+        if at.KindOf(a, cid) == at.AST_VAR_DECL and li_kind(cid) != LI_DERIVED:
+            ret true
+        end
+    end
+    ret false
+end

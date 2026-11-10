@@ -2397,26 +2397,35 @@ end
 `salam run page.salam --ui=native` (and `salam build ... --ui=native`) runs
 the same page in a native window drawn by Salam (`std/gui/ui`,
 `docs/design/NATIVE_UI.md`). The rule: handlers only change state, never the
-page. State is mutable globals plus `state count := 0` (Persian
-`وضعیت شمار := ۰`) inside a `component` body, which lives per instance and
-survives re-runs of the parent. The compiler marks every write and re-runs
-only the scopes that read what changed: a component instance re-runs as a
-whole, outside components an element, `if` or `each` that reads state re-runs
-alone, and a handler that changes nothing costs no re-render. Inside `each`,
-give the row a `key = item.id` (Persian `کلید`, or an `id`) and each
-component instance keeps its state when rows are inserted, removed or
-reordered; without one, instances follow the position. Writes it cannot see
-(inside another package, through a pointer or a second name for a Vector)
-need `ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A `state`
-needs a visible type: a literal, a typed parameter or `value as Type`
-(`state items := Vector {} as Vector<str>`). `state` works on the web too, in
-the page block built by `salam page build`: each instance renders itself in
-the page script from its state, after a handler re-renders only the instances
+page. State is mutable globals plus variables declared with a plain
+`name := value` line at the top of a `component` body or of the page block
+(Persian `شمار := ۰`; there is no keyword). The compiler classifies each one
+by use: written somewhere (assignment, `++`, `push`, a handler, a callback)
+and shown by the view (attribute, text, `if`, `each`, a value passed to a
+child component) is state, kept per instance and re-rendered when written;
+written but never shown is an instance variable (kept, never re-renders);
+never written is a derived value worked out again each time the instance
+runs, so `label := "Hi " + name` follows `name`. A variable neither read nor
+written gets a warning. The compiler marks every write and re-runs only the
+scopes that read what changed: a component instance re-runs as a whole,
+outside components an element, `if` or `each` that reads state re-runs
+alone, a child re-runs when only its parameters change, and a handler that
+changes nothing costs no re-render. Inside `each`, give the row a
+`key = item.id` (Persian `کلید`, or an `id`) and each component instance
+keeps its variables when rows are inserted, removed or reordered; without
+one, instances follow the position. Writes it cannot see (inside another
+package, through a pointer or a second name for a Vector) need
+`ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A written
+variable needs a visible type: a literal, a typed parameter or
+`value as Type` (`items := Vector {} as Vector<str>`). It works on the web
+too, in the page block built by `salam page build`: each instance renders
+itself in the page script, after a handler re-renders only the instances
 whose state it wrote, and patches their DOM in place (focus, typed input
-values and keyed rows survive). On the web a component with `state` may sit
-inside `each` (its state follows the row's key) and the page block may read
-mutable globals; a handler inside `each` cannot read the row's loop variable
-there, so copy it into a `state` first.
+values and keyed rows survive). On the web a component with variables may
+sit inside `each` (they follow the row's key) and the page block may read
+mutable globals; a handler inside `each` cannot read the row's loop
+variable there, so declare `label := name` in the row's component and read
+that.
 **Components talking to each other.** A parent passes a function as a
 parameter and the child calls it from a handler:
 `component Counter(change): ... click = (): count++ change(count) end ...`,

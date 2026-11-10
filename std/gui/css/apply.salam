@@ -750,6 +750,69 @@ func fn_args(t: Vector<Tok>, i: int, out &: Vector<int>):
     end
 end
 
+func parse_filter_fn(t: Vector<Tok>, i: int, cx: Cx, out &: FilterFn): bool:
+    f := t[i]
+    e := f.close
+    mut a := Vector {} as Vector<int>
+    defer a.free()
+    fn_args(t, i, a)
+    n := a.len()
+    switch f.s:
+        "blur":
+            out.name = "blur"
+            out.amount = 0.0
+            if n == 0:
+                ret true
+            end
+            mut l := Len {}
+            if n != 1 or not p_len(t, a[0], e, cx, false, false, l) or l.calc.len() > 0:
+                ret false
+            end
+            out.amount = l.px
+            ret true
+        end
+        "brightness", "contrast", "grayscale", "sepia", "saturate", "invert", "opacity":
+            out.name = f.s == "brightness" ? "brightness" : (f.s == "contrast" ? "contrast" : (f.s == "grayscale" ? "grayscale" : (f.s == "sepia" ? "sepia" : (f.s == "saturate" ? "saturate" : (f.s == "invert" ? "invert" : "opacity")))))
+            out.amount = 1.0
+            if n == 0:
+                ret true
+            end
+            mut v := 0.0
+            if n != 1 or not p_num_or_pct(t, a[0], e, cx, v) or v < 0.0:
+                ret false
+            end
+            out.amount = v
+            ret true
+        end
+        "hue-rotate":
+            out.name = "hue-rotate"
+            out.amount = 0.0
+            if n == 0:
+                ret true
+            end
+            mut ang := 0.0
+            if n != 1 or not p_angle(t, a[0], e, cx, true, ang):
+                ret false
+            end
+            out.amount = ang
+            ret true
+        end
+        "drop-shadow":
+            out.name = "drop-shadow"
+            mut sh := Shadow {}
+            if i + 1 >= e or not parse_shadow(t, i + 1, e, cx, true, sh):
+                ret false
+            end
+            out.shadow = sh
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
 func parse_transform_fn(t: Vector<Tok>, i: int, cx: Cx, out &: TransformFn): bool:
     f := t[i]
     e := f.close
@@ -1783,6 +1846,29 @@ func apply_prop(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx:
             end
             cs.transforms.free()
             cs.transforms = list
+            break
+        end
+        P_FILTER, P_BACKDROP_FILTER:
+            mut list := Vector {} as Vector<FilterFn>
+            if k != "none":
+                mut i := s
+                until i < e:
+                    mut fv := FilterFn {}
+                    if t[i].k != TK_FUNC or not parse_filter_fn(t, i, cx, fv):
+                        list.free()
+                        ret false
+                    end
+                    list.push(fv)
+                    i = nxt(t, i)
+                end
+            end
+            if p == P_FILTER:
+                cs.filters.free()
+                cs.filters = list
+            else:
+                cs.backdrop_filters.free()
+                cs.backdrop_filters = list
+            end
             break
         end
         P_TRANSFORM_ORIGIN, P_OBJECT_POSITION:

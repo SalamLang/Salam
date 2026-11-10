@@ -131,6 +131,12 @@ func _cv_free(cv &: Canvas):
     cv.state.xforms.free()
     cv.state.layers.free()
     cv.state.i_m.free()
+    until cv.state.masks.len() >= 5:
+        _mask_pop(cv)
+    end
+    cv.state.masks.free()
+    cv.state.lxs.free()
+    cv.state.lxf.free()
     if cv.owned and cv.pixels != null:
         mem.Free(cv.pixels)
     end
@@ -431,9 +437,10 @@ func _emit(cv &: Canvas, y: int, n0: int, kind: int, color: u32):
     mut buf := cv.state.ra
     mut alt := cv.state.rb
     mut n := n0
-    nrc := cv.state.rclips.len() / 14
-    repeat nrc in k:
-        cn := _rclip_row(cv, k, y, cv.state.rc)
+    k0 := cv.state.rc_base / 14
+    nrc := cv.state.rclips.len() / 14 - k0
+    repeat nrc in q:
+        cn := _rclip_row(cv, k0 + q, y, cv.state.rc)
         if cn >= 0:
             n = _runs_mul(buf, n, cv.state.rc, cn, alt)
             t := buf
@@ -442,6 +449,17 @@ func _emit(cv &: Canvas, y: int, n0: int, kind: int, color: u32):
             if n == 0:
                 ret
             end
+        end
+    end
+    nmk := (cv.state.masks.len() - cv.state.mk_base) / 5
+    repeat nmk in q:
+        cn := _mask_row(cv, cv.state.mk_base + q * 5, y, buf[0], buf[(n - 1) * 3 + 1], cv.state.rc)
+        n = _runs_mul(buf, n, cv.state.rc, cn, alt)
+        t := buf
+        buf = alt
+        alt = t
+        if n == 0:
+            ret
         end
     end
     mut rg := [0, 0, 0, 0, 0, 0]
@@ -511,6 +529,11 @@ func _cv_push_clip(cv &: Canvas, r: Rect, radii: Radii, rounded: bool):
     cv.state.cy0 = _maxi(cv.state.cy0, y0)
     cv.state.cx1 = _maxi(cv.state.cx0, _mini(cv.state.cx1, x1))
     cv.state.cy1 = _maxi(cv.state.cy0, _mini(cv.state.cy1, y1))
+    if not _xf_axis(cv):
+        _mask_push(cv, r, radii, rounded)
+        cv.state.clips.push(2)
+        ret
+    end
     mut any := false
     repeat 8 in i:
         if sh[100 + i] > 0:
@@ -550,6 +573,8 @@ func _cv_pop_clip(cv &: Canvas):
         repeat 14:
             _ := cv.state.rclips.pop()
         end
+    else kind == 2:
+        _mask_pop(cv)
     end
 end
 
@@ -725,9 +750,20 @@ func _shape_from(cv &: Canvas, r: Rect, radii: Radii, sh: int*, o: int): bool:
     ret true
 end
 
+func _region_cols(cv &: Canvas, lo &: int, hi &: int):
+    if cv.state.has_region:
+        lo = _maxi(lo, cv.state.rg_x0)
+        hi = _mini(hi, cv.state.rg_x1)
+    end
+end
+
 func _clip_rows(cv &: Canvas, y0q: int, y1q: int, out: int[]): bool:
-    a := _maxi(y0q >> 8, cv.state.cy0)
-    b := _mini((y1q + 255) >> 8, cv.state.cy1)
+    mut a := _maxi(y0q >> 8, cv.state.cy0)
+    mut b := _mini((y1q + 255) >> 8, cv.state.cy1)
+    if cv.state.has_region:
+        a = _maxi(a, cv.state.rg_y0)
+        b = _mini(b, cv.state.rg_y1)
+    end
     out[0] = a
     out[1] = b
     ret a < b and cv.state.cx0 < cv.state.cx1

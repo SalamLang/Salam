@@ -13,8 +13,9 @@ pkg.intro <<
 <ul>
 <li>Coordinates are logical pixels as <code>f64</code>. Fractional edges are anti-aliased; images, clips and layers snap to whole pixels.</li>
 <li>Rasterization uses integers and fixed point only, so a picture is meant to have the same hash on every system and backend. Tests compare <code>Hash()</code> and a few pixels.</li>
-<li>Rotation and skew apply to paths, images, <code>FillRect</code> and <code>FillRoundedRect</code>. Borders, gradients and shadows use only the translation and scale of the transform, and a rotated border is drawn in its top colour.</li>
-<li>Dashed and dotted sides are patterned along their straight part; a rounded corner of such a side is drawn solid.</li>
+<li>Every drawing call follows the whole transform, rotation and skew included. Borders, gradients, shadows and tiled images under a rotation or skew are drawn upright in a scratch layer and then resampled, and a clip under a rotation becomes a coverage mask.</li>
+<li>Dashed and dotted sides are patterned along their rounded corners too, with the pattern spaced so that each corner gets a whole dash or dot.</li>
+<li>Filters work on layers: <code>BeginFilterLayer</code> and <code>EndLayerFiltered</code> give CSS <code>filter</code>, and <code>BackdropFilter</code> gives <code>backdrop-filter</code>. Colour filters work on straight colours in sRGB, as browsers do, and blurs use three box blurs, as the filter specification describes.</li>
 <li>Free every canvas, path and gradient you make. A canvas from <code>WrapCanvas</code> or <code>Sub</code> still needs <code>Free</code> for its scratch memory, but leaves the pixels alone.</li>
 <li>The benchmark in <code>tools/bench/paint_frame.salam</code> draws 200 rounded boxes with a shadow, a background and a border over a full screen gradient at 1920x1080.</li>
 </ul>
@@ -137,6 +138,32 @@ doc.Transform.e = The x translation.
 doc.Transform.f = The y translation.
 doc.Transform.Then = Returns the transform that applies this one and then the other.
 doc.Transform.Apply = Transforms a point.
+doc.Transform.Invert = Returns the transform that undoes this one, or the identity if it cannot be undone.
+doc.Transform.MapRect = Returns the smallest rectangle that holds a rectangle after this transform.
+doc.Transform.IsIdentity = Reports whether the transform changes nothing.
+doc.FilterKind = One CSS filter function, used by <code>Filter</code>.
+doc.FilterKind.Blur = A Gaussian blur; <code>amount</code> is the standard deviation, as in CSS <code>blur()</code>.
+doc.FilterKind.Brightness = Multiplies the colour channels by <code>amount</code>.
+doc.FilterKind.Contrast = Moves the channels away from or towards middle grey by <code>amount</code>.
+doc.FilterKind.Grayscale = Turns the colours grey; 1 is fully grey.
+doc.FilterKind.Sepia = Turns the colours sepia; 1 is fully sepia.
+doc.FilterKind.Saturate = Changes the saturation; 0 is grey, 1 leaves the colours alone.
+doc.FilterKind.HueRotate = Turns the hue by <code>amount</code> degrees.
+doc.FilterKind.Invert = Inverts the colours; 1 is fully inverted.
+doc.FilterKind.Opacity = Multiplies the alpha by <code>amount</code>.
+doc.FilterKind.DropShadow = A blurred, offset copy of the shape drawn under it, as in CSS <code>drop-shadow()</code>.
+doc.Filter = One step of a filter chain.
+doc.Filter.kind = Which filter.
+doc.Filter.amount = The filter amount: a blur standard deviation in pixels, an angle in degrees for <code>HueRotate</code>, or a factor.
+doc.Filter.offset_x = For <code>DropShadow</code>, how far the shadow moves to the right.
+doc.Filter.offset_y = For <code>DropShadow</code>, how far the shadow moves down.
+doc.Filter.color = For <code>DropShadow</code>, the shadow colour.
+doc.FilterChain = Filters applied in order, like the CSS <code>filter</code> and <code>backdrop-filter</code> lists.
+doc.FilterChain.items = The filters, in order.
+doc.FilterChain.Add = Adds a filter at the end.
+doc.FilterChain.Extent = How far the result can reach past the input, in pixels, for blurs and shadows.
+doc.FilterChain.IsEmpty = Reports whether the chain has no filters.
+doc.FilterChain.Free = Frees the chain.
 doc.Stroke = How a path is stroked.
 doc.Stroke.width = The line width.
 doc.Stroke.cap = The ends of open lines.
@@ -204,6 +231,10 @@ doc.Canvas.FillPath = Fills a path with a colour.
 doc.Canvas.StrokePath = Strokes a path with a colour.
 doc.Canvas.BeginLayer = Starts drawing into an offscreen layer covering a rectangle.
 doc.Canvas.EndLayer = Composites the last layer onto what is below it with an opacity (CSS <code>opacity</code>).
+doc.Canvas.BeginFilterLayer = Starts a layer for a filter chain: the layer is grown by the chain extent and is drawn whole even when a damage region is set, so a blur near the region edge is right.
+doc.Canvas.EndLayerFiltered = Applies a filter chain to the last layer and composites it with an opacity (CSS <code>filter</code>).
+doc.Canvas.BackdropFilter = Filters what is already drawn under a rounded rectangle, like CSS <code>backdrop-filter</code>.
+doc.Canvas.DrawOutlineStyled = Draws a CSS outline with a border style (solid, dashed or dotted) around a rectangle, at an offset.
 doc.NewCanvas = Makes a transparent canvas of a size that owns its pixels.
 doc.WrapCanvas = Makes a canvas over pixel memory that someone else owns, such as a window buffer.
 doc.RectOf = Makes a <code>Rect</code>.
@@ -217,6 +248,9 @@ doc.Identity = The transform that changes nothing.
 doc.Translation = A transform that moves by (dx, dy).
 doc.Scaling = A transform that scales x and y.
 doc.Rotation = A transform that rotates clockwise on screen by degrees around the origin.
+doc.Skewing = A transform that slants by angles in degrees along x and y, like CSS <code>skew()</code>.
+doc.NewFilter = Makes a filter of a kind with an amount.
+doc.DropShadowFilter = Makes a <code>drop-shadow</code> filter from an offset, a blur standard deviation and a colour.
 doc.Rgb = An opaque colour.
 doc.Rgba = A colour with alpha.
 doc.Premultiply = The premultiplied 0xAARRGGBB value of a colour.
@@ -340,6 +374,32 @@ ex.Transform.e = gui-paint-Path
 ex.Transform.f = gui-paint-Path
 ex.Transform.Then = gui-paint-Path
 ex.Transform.Apply = gui-paint-Path
+ex.Transform.Invert = gui-paint-Transform
+ex.Transform.MapRect = gui-paint-Transform
+ex.Transform.IsIdentity = gui-paint-Transform
+ex.FilterKind = gui-paint-Filter
+ex.FilterKind.Blur = gui-paint-Filter
+ex.FilterKind.Brightness = gui-paint-Filter
+ex.FilterKind.Contrast = gui-paint-Filter
+ex.FilterKind.Grayscale = gui-paint-Filter
+ex.FilterKind.Sepia = gui-paint-Filter
+ex.FilterKind.Saturate = gui-paint-Filter
+ex.FilterKind.HueRotate = gui-paint-Filter
+ex.FilterKind.Invert = gui-paint-Filter
+ex.FilterKind.Opacity = gui-paint-Filter
+ex.FilterKind.DropShadow = gui-paint-Filter
+ex.Filter = gui-paint-Filter
+ex.Filter.kind = gui-paint-Filter
+ex.Filter.amount = gui-paint-Filter
+ex.Filter.offset_x = gui-paint-Filter
+ex.Filter.offset_y = gui-paint-Filter
+ex.Filter.color = gui-paint-Filter
+ex.FilterChain = gui-paint-Filter
+ex.FilterChain.items = gui-paint-Filter
+ex.FilterChain.Add = gui-paint-Filter
+ex.FilterChain.Extent = gui-paint-Filter
+ex.FilterChain.IsEmpty = gui-paint-Filter
+ex.FilterChain.Free = gui-paint-Filter
 ex.Stroke = gui-paint-Path
 ex.Stroke.width = gui-paint-Path
 ex.Stroke.cap = gui-paint-Path
@@ -407,6 +467,10 @@ ex.Canvas.FillPath = gui-paint-Path
 ex.Canvas.StrokePath = gui-paint-Path
 ex.Canvas.BeginLayer = gui-paint-Image
 ex.Canvas.EndLayer = gui-paint-Image
+ex.Canvas.BeginFilterLayer = gui-paint-Filter
+ex.Canvas.EndLayerFiltered = gui-paint-Filter
+ex.Canvas.BackdropFilter = gui-paint-Filter
+ex.Canvas.DrawOutlineStyled = gui-paint-Transform
 ex.NewCanvas = gui-paint-Box
 ex.WrapCanvas = gui-paint-Image
 ex.RectOf = gui-paint-Box
@@ -420,6 +484,9 @@ ex.Identity = gui-paint-Path
 ex.Translation = gui-paint-Path
 ex.Scaling = gui-paint-Path
 ex.Rotation = gui-paint-Path
+ex.Skewing = gui-paint-Transform
+ex.NewFilter = gui-paint-Filter
+ex.DropShadowFilter = gui-paint-Filter
 ex.Rgb = gui-paint-Box
 ex.Rgba = gui-paint-Box
 ex.Premultiply = gui-paint-Image

@@ -1,0 +1,284 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import mem
+import math
+
+func _xf_get(cv &: Canvas, m: f64[]):
+    m[0] = (cv.state.xa as f64) / 65536.0
+    m[1] = (cv.state.xb as f64) / 65536.0
+    m[2] = (cv.state.xc as f64) / 65536.0
+    m[3] = (cv.state.xd as f64) / 65536.0
+    m[4] = (cv.state.xe as f64) / 256.0
+    m[5] = (cv.state.xf as f64) / 256.0
+end
+
+func _xf_translate_only(cv &: Canvas): bool:
+    ret cv.state.xa == 65536 and cv.state.xd == 65536 and cv.state.xb == 0 and cv.state.xc == 0
+end
+
+func _target_push(cv &: Canvas, out &: Vector<i64>):
+    out.push((cv.state.tpix as usize) as i64)
+    out.push(cv.state.tox as i64)
+    out.push(cv.state.toy as i64)
+    out.push(cv.state.tw as i64)
+    out.push(cv.state.th as i64)
+    out.push(cv.state.tspx as i64)
+    out.push(cv.state.cx0 as i64)
+    out.push(cv.state.cy0 as i64)
+    out.push(cv.state.cx1 as i64)
+    out.push(cv.state.cy1 as i64)
+    out.push(cv.state.xa as i64)
+    out.push(cv.state.xb as i64)
+    out.push(cv.state.xc as i64)
+    out.push(cv.state.xd as i64)
+    out.push(cv.state.xe as i64)
+    out.push(cv.state.xf as i64)
+    out.push(cv.state.rc_base as i64)
+    out.push(cv.state.mk_base as i64)
+    out.push(cv.state.has_region ? 1 as i64 : 0 as i64)
+end
+
+func _target_pop(cv &: Canvas, src &: Vector<i64>):
+    cv.state.has_region = src.pop() != (0 as i64)
+    cv.state.mk_base = src.pop() as int
+    cv.state.rc_base = src.pop() as int
+    cv.state.xf = src.pop() as int
+    cv.state.xe = src.pop() as int
+    cv.state.xd = src.pop() as int
+    cv.state.xc = src.pop() as int
+    cv.state.xb = src.pop() as int
+    cv.state.xa = src.pop() as int
+    cv.state.cy1 = src.pop() as int
+    cv.state.cx1 = src.pop() as int
+    cv.state.cy0 = src.pop() as int
+    cv.state.cx0 = src.pop() as int
+    cv.state.tspx = src.pop() as int
+    cv.state.th = src.pop() as int
+    cv.state.tw = src.pop() as int
+    cv.state.toy = src.pop() as int
+    cv.state.tox = src.pop() as int
+    cv.state.tpix = (src.pop() as usize) as u32*
+end
+
+func _target_redirect(cv &: Canvas, buf: u32*, x0: int, y0: int, w: int, h: int):
+    cv.state.tpix = buf
+    cv.state.tox = x0
+    cv.state.toy = y0
+    cv.state.tw = w
+    cv.state.th = h
+    cv.state.tspx = w
+    cv.state.cx0 = x0
+    cv.state.cy0 = y0
+    cv.state.cx1 = x0 + w
+    cv.state.cy1 = y0 + h
+    cv.state.rc_base = cv.state.rclips.len()
+    cv.state.mk_base = cv.state.masks.len()
+    cv.state.has_region = false
+end
+
+func _local_bounds(cv &: Canvas, lb: f64[]): bool:
+    mut m := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    _xf_get(cv, m)
+    det := m[0] * m[3] - m[1] * m[2]
+    if math.Abs(det) < 0.000000001:
+        ret false
+    end
+    ia := m[3] / det
+    ib := 0.0 - m[1] / det
+    ic := 0.0 - m[2] / det
+    id := m[0] / det
+    ie := 0.0 - (ia * m[4] + ic * m[5])
+    iff := 0.0 - (ib * m[4] + id * m[5])
+    mut bx0 := 1.0e18
+    mut by0 := 1.0e18
+    mut bx1 := -1.0e18
+    mut by1 := -1.0e18
+    repeat 4 in i:
+        px := ((i & 1) == 0 ? cv.state.cx0 : cv.state.cx1) as f64
+        py := ((i & 2) == 0 ? cv.state.cy0 : cv.state.cy1) as f64
+        lx := ia * px + ic * py + ie
+        ly := ib * px + id * py + iff
+        bx0 = _minf(bx0, lx)
+        by0 = _minf(by0, ly)
+        bx1 = _maxf(bx1, lx)
+        by1 = _maxf(by1, ly)
+    end
+    lb[0] = _maxf(lb[0], bx0 - 1.0)
+    lb[1] = _maxf(lb[1], by0 - 1.0)
+    lb[2] = _minf(lb[2], bx1 + 1.0)
+    lb[3] = _minf(lb[3], by1 + 1.0)
+    ret lb[2] > lb[0] and lb[3] > lb[1]
+end
+
+func _lx_begin(cv &: Canvas, r: Rect, pad: f64): bool:
+    _cv_ready(cv)
+    if cv.pixels == null or cv.state.cx1 <= cv.state.cx0 or cv.state.cy1 <= cv.state.cy0:
+        ret false
+    end
+    mut m := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    _xf_get(cv, m)
+    mut sx := math.Sqrt(m[0] * m[0] + m[1] * m[1])
+    mut sy := math.Sqrt(m[2] * m[2] + m[3] * m[3])
+    if sx < 0.01 or sy < 0.01:
+        ret false
+    end
+    mut lb := [r.x - pad, r.y - pad, r.x + r.width + pad, r.y + r.height + pad]
+    if not _local_bounds(cv, lb):
+        ret false
+    end
+    lx0 := math.Floor(lb[0])
+    ly0 := math.Floor(lb[1])
+    mut w := math.Ceil((lb[2] - lx0) * sx) as int + 1
+    mut h := math.Ceil((lb[3] - ly0) * sy) as int + 1
+    if w > 4096:
+        sx = sx * 4096.0 / (w as f64)
+        w = 4096
+    end
+    if h > 4096:
+        sy = sy * 4096.0 / (h as f64)
+        h = 4096
+    end
+    if w <= 0 or h <= 0:
+        ret false
+    end
+    buf := mem.AllocateZeroed(((w as i64) * (h as i64) * (4 as i64)) as u64) as u32*
+    if buf == null:
+        ret false
+    end
+    _target_push(cv, cv.state.lxs)
+    cv.state.lxs.push(w as i64)
+    cv.state.lxs.push(h as i64)
+    cv.state.lxf.push(lx0)
+    cv.state.lxf.push(ly0)
+    cv.state.lxf.push(sx)
+    cv.state.lxf.push(sy)
+    _target_redirect(cv, buf, 0, 0, w, h)
+    cv.state.xa = _fx16(sx) as int
+    cv.state.xb = 0
+    cv.state.xc = 0
+    cv.state.xd = _fx16(sy) as int
+    cv.state.xe = _fx(0.0 - lx0 * sx)
+    cv.state.xf = _fx(0.0 - ly0 * sy)
+    ret true
+end
+
+func _lx_end(cv &: Canvas):
+    if cv.state.lxs.len() < 21:
+        ret
+    end
+    buf := cv.state.tpix
+    sy := cv.state.lxf.pop()
+    sx := cv.state.lxf.pop()
+    ly0 := cv.state.lxf.pop()
+    lx0 := cv.state.lxf.pop()
+    h := cv.state.lxs.pop() as int
+    w := cv.state.lxs.pop() as int
+    _target_pop(cv, cv.state.lxs)
+    src := Canvas { pixels = buf as void*, width = w, height = h, stride = w * 4 }
+    _image_affine(cv, src, 0, 0, w, h, Rect { x = lx0, y = ly0, width = (w as f64) / sx, height = (h as f64) / sy }, 255)
+    mem.Free(buf as void*)
+end
+
+func _mask_row(cv &: Canvas, k: int, y: int, xa: int, xb: int, out: int*): int:
+    mx0 := cv.state.masks.get(k + 1) as int
+    my0 := cv.state.masks.get(k + 2) as int
+    mw := cv.state.masks.get(k + 3) as int
+    mh := cv.state.masks.get(k + 4) as int
+    if y < my0 or y >= my0 + mh:
+        ret 0
+    end
+    mp := (cv.state.masks.get(k) as usize) as u8*
+    lo := _maxi(xa, mx0)
+    hi := _mini(xb, mx0 + mw)
+    row := (y - my0) * mw - mx0
+    mut n := 0
+    repeat hi - lo in i:
+        x := lo + i
+        v := mp[row + x] as int
+        n = _rpush(out, n, x, x + 1, (v * 257 + 128) >> 8)
+    end
+    ret n
+end
+
+func _mask_pop(cv &: Canvas):
+    if cv.state.masks.len() < 5:
+        ret
+    end
+    repeat 4:
+        _ := cv.state.masks.pop()
+    end
+    p := cv.state.masks.pop()
+    if p != (0 as i64):
+        mem.Free((p as usize) as void*)
+    end
+end
+
+func _mask_push(cv &: Canvas, r: Rect, radii: Radii, rounded: bool):
+    x0 := cv.state.cx0
+    y0 := cv.state.cy0
+    w := cv.state.cx1 - cv.state.cx0
+    h := cv.state.cy1 - cv.state.cy0
+    if w <= 0 or h <= 0:
+        cv.state.masks.push(0)
+        cv.state.masks.push(x0 as i64)
+        cv.state.masks.push(y0 as i64)
+        cv.state.masks.push(0)
+        cv.state.masks.push(0)
+        ret
+    end
+    buf := mem.AllocateZeroed(((w as i64) * (h as i64) * (4 as i64)) as u64) as u32*
+    mut saved := Vector {} as Vector<i64>
+    _target_push(cv, saved)
+    _target_redirect(cv, buf, x0, y0, w, h)
+    mut p := Path {}
+    if rounded:
+        p.AddRoundedRect(r, radii)
+    else:
+        p.AddRect(r)
+    end
+    _fill_path_kind(cv, p, FillRule.NonZero, _K_SOLID, 0xFFFFFFFF as u32)
+    p.Free()
+    _target_pop(cv, saved)
+    saved.free()
+    mb := mem.Allocate(((w as i64) * (h as i64)) as u64) as u8*
+    repeat w * h in i:
+        mb[i] = (buf[i] >> 24) as u8
+    end
+    mem.Free(buf as void*)
+    cv.state.masks.push((mb as usize) as i64)
+    cv.state.masks.push(x0 as i64)
+    cv.state.masks.push(y0 as i64)
+    cv.state.masks.push(w as i64)
+    cv.state.masks.push(h as i64)
+end
+
+func _mask_affine(cv &: Canvas, m: Mask, x: int, y: int, c: Color):
+    col := _premul(c)
+    w := m.width
+    h := m.height
+    buf := mem.Allocate(((w as i64) * (h as i64) * (4 as i64)) as u64) as u32*
+    data := m.data as u8*
+    repeat h in j:
+        repeat w in i:
+            v := data[j * m.stride + i] as u32
+            buf[j * w + i] = v >= (255 as u32) ? col : _mul8(col, v)
+        end
+    end
+    src := Canvas { pixels = buf as void*, width = w, height = h, stride = w * 4 }
+    _image_affine(cv, src, 0, 0, w, h, Rect { x = x as f64, y = y as f64, width = w as f64, height = h as f64 }, 255)
+    mem.Free(buf as void*)
+end

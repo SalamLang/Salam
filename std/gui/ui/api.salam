@@ -218,6 +218,7 @@ end
 
 func _relayout():
     _layout()
+    _xf_update()
     _assign_order()
     if _e.focus >= 0:
         _scroll_caret(_e.focus)
@@ -240,6 +241,7 @@ end
 func _frame_update():
     reactive.SetTime(window.Clock())
     mut guard := 0
+    mut relaid := false
     until (_e.dirty_view or _e.dirty_style or _e.dirty_layout or _e.dirty_dom) and guard < 4:
         guard++
         if _e.dirty_dom and not _e.dirty_view:
@@ -250,6 +252,7 @@ func _frame_update():
             _build_elements()
             _style_all()
             _relayout()
+            relaid = true
             continue
         end
         if _e.dirty_view:
@@ -258,6 +261,7 @@ func _frame_update():
             _e.dirty_style = false
             _e.dirty_layout = false
             _rerun_view()
+            relaid = true
             continue
         end
         mut need := _e.dirty_layout
@@ -270,9 +274,24 @@ func _frame_update():
         _e.dirty_layout = false
         if need:
             _relayout()
+            relaid = true
+        end
+    end
+    mut xf_need := _e.restyled or _e.anim_xf
+    if _e.dirty_place:
+        _e.dirty_place = false
+        if not relaid:
+            _place_all()
+            xf_need = true
         end
     end
     _anims_running()
+    _e.restyled = false
+    if xf_need and not relaid:
+        _xf_update()
+    else xf_need and _e.anim_xf:
+        _xf_update()
+    end
     _diff_records()
 end
 
@@ -621,15 +640,16 @@ func _script_line(line0: str):
     cmd := sp < 0 ? line : line.substr(0, sp)
     arg := sp < 0 ? "" : str.Trim(line.substr(sp + 1, line.len() - sp - 1))
     switch cmd:
-        "click", "dblclick", "hover", "press", "release":
+        "click", "dblclick", "tripleclick", "hover", "press", "release":
             n := _selector_node(arg)
             if n < 0:
                 println "ui script: no element matches", arg
                 break
             end
             b := _e.boxes[n]
-            x := b.x + b.w / 2.0
-            y := b.y + b.h / 2.0
+            mut x := b.x + b.w / 2.0
+            mut y := b.y + b.h / 2.0
+            _to_screen(n, b.x + b.w / 2.0, b.y + b.h / 2.0, x, y)
             _inject(window.Event { kind = window.EventKind.PointerMove, x = x, y = y })
             if cmd != "hover":
                 if cmd != "release":
@@ -638,7 +658,11 @@ func _script_line(line0: str):
                 if cmd != "press":
                     _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
                 end
-                if cmd == "dblclick":
+                if cmd == "dblclick" or cmd == "tripleclick":
+                    _inject(window.Event { kind = window.EventKind.PointerDown, x = x, y = y, button = window.MouseButton.Left })
+                    _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
+                end
+                if cmd == "tripleclick":
                     _inject(window.Event { kind = window.EventKind.PointerDown, x = x, y = y, button = window.MouseButton.Left })
                     _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
                 end
@@ -675,6 +699,33 @@ func _script_line(line0: str):
         end
         "type":
             _inject(window.Event { kind = window.EventKind.TextInput, text = arg })
+            break
+        end
+        "ime":
+            _inject(window.Event { kind = window.EventKind.ImePreedit, text = arg })
+            break
+        end
+        "commit":
+            _inject(window.Event { kind = window.EventKind.ImeCommit, text = arg })
+            break
+        end
+        "drag":
+            parts := str.Fields(arg)
+            if parts.len() >= 4:
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = parts[0].to_float(), y = parts[1].to_float() })
+                _inject(window.Event { kind = window.EventKind.PointerDown, x = parts[0].to_float(), y = parts[1].to_float(), button = window.MouseButton.Left })
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = parts[2].to_float(), y = parts[3].to_float() })
+                _inject(window.Event { kind = window.EventKind.PointerUp, x = parts[2].to_float(), y = parts[3].to_float(), button = window.MouseButton.Left })
+            end
+            break
+        end
+        "sel":
+            if _e.focus >= 0:
+                c := _e.ctl[_e.focus]
+                println "sel", c.anchor, c.caret, "scroll", math.Round(c.text_scroll), math.Round(c.text_scroll_y), "pre", c.preedit
+            else:
+                println "sel none"
+            end
             break
         end
         "scroll":

@@ -1,0 +1,1343 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cssbox
+
+struct TCell:
+    pub id: int = 0
+    pub row: int = 0
+    pub col: int = 0
+    pub cs: int = 1
+    pub rs: int = 1
+    pub mn: f64 = 0.0
+    pub mx: f64 = 0.0
+    pub fixed: bool = false
+    pub fw: f64 = 0.0
+    pub pct: f64 = NO
+    pub hauto: f64 = 0.0
+    pub hmin: f64 = 0.0
+    pub base: f64 = NO
+    pub w: f64 = 0.0
+    pub h: f64 = 0.0
+    pub bor: R4 = R4 {}
+end
+
+struct TRow:
+    pub id: int = -1
+    pub g: int = 0
+    pub fixed: bool = false
+    pub hspec: f64 = 0.0
+    pub h: f64 = 0.0
+    pub y: f64 = 0.0
+    pub base: f64 = NO
+end
+
+struct TGrp:
+    pub id: int = -1
+    pub kind: int = 1
+    pub r0: int = 0
+    pub r1: int = 0
+end
+
+struct TCol:
+    pub mn: f64 = 0.0
+    pub mx: f64 = 0.0
+    pub fixed: bool = false
+    pub fw: f64 = 0.0
+    pub pct: f64 = NO
+    pub w: f64 = 0.0
+    pub x: f64 = 0.0
+    pub id: int = -1
+    pub gid: int = -1
+end
+
+struct TCap:
+    pub id: int = 0
+    pub bottom: bool = false
+    pub h: f64 = 0.0
+    pub mt: f64 = 0.0
+    pub mb: f64 = 0.0
+end
+
+struct TCtx:
+    pub cells: Vector<TCell> = Vector {}
+    pub rows: Vector<TRow> = Vector {}
+    pub grps: Vector<TGrp> = Vector {}
+    pub cols: Vector<TCol> = Vector {}
+    pub caps: Vector<TCap> = Vector {}
+    pub rcells: Vector<int> = Vector {}
+    pub rstart: Vector<int> = Vector {}
+    pub ncols: int = 0
+end
+
+func _is_group(d: Display): bool:
+    ret d == Display.TableRowGroup or d == Display.TableHeaderGroup or d == Display.TableFooterGroup
+end
+
+func _t_skip(t &: Engine, c: int): bool:
+    st := t.nodes.ref(c).style
+    ret st.display == Display.None or _oof(st.position)
+end
+
+func _t_row_cells(t &: Engine, row: int, out &: Vector<int>):
+    kids := _kids(t, row)
+    each c in kids:
+        if not _t_skip(t, c):
+            out.push(c)
+        end
+    end
+    kids.free()
+end
+
+func _t_add_row(x &: TCtx, id: int, g: int, cells: Vector<int>):
+    x.rstart.push(x.rcells.len())
+    each c in cells:
+        x.rcells.push(c)
+    end
+    x.rows.push(TRow { id = id, g = g })
+end
+
+func _t_build(t &: Engine, id: int, x &: TCtx):
+    kids := _kids(t, id)
+    defer kids.free()
+    mut gl := Vector {} as Vector<TGrp>
+    defer gl.free()
+    mut grows := Vector {} as Vector<int>
+    defer grows.free()
+    mut gcells := Vector {} as Vector<int>
+    defer gcells.free()
+    mut grstart := Vector {} as Vector<int>
+    defer grstart.free()
+    mut growgrp := Vector {} as Vector<int>
+    defer growgrp.free()
+    mut anon_g := -1
+    mut anon_r := -1
+    each c in kids:
+        if _t_skip(t, c):
+            continue
+        end
+        d := t.nodes.ref(c).style.display
+        if d == Display.TableCaption:
+            cs := t.nodes.ref(c).style
+            x.caps.push(TCap { id = c, bottom = cs.caption_side == CaptionSide.Bottom })
+            anon_g = -1
+            anon_r = -1
+            continue
+        end
+        if d == Display.TableColumnGroup:
+            ck := _kids(t, c)
+            mut any := false
+            each cc in ck:
+                cst := t.nodes.ref(cc).style
+                if cst.display == Display.TableColumn:
+                    any = true
+                    repeat _imax(cst.col_span, 1):
+                        x.cols.push(TCol { id = cc, gid = c })
+                    end
+                end
+            end
+            ck.free()
+            if not any:
+                repeat _imax(t.nodes.ref(c).style.col_span, 1):
+                    x.cols.push(TCol { id = -1, gid = c })
+                end
+            end
+            anon_g = -1
+            anon_r = -1
+            continue
+        end
+        if d == Display.TableColumn:
+            repeat _imax(t.nodes.ref(c).style.col_span, 1):
+                x.cols.push(TCol { id = c })
+            end
+            anon_g = -1
+            anon_r = -1
+            continue
+        end
+        if _is_group(d):
+            kind := d == Display.TableHeaderGroup ? 0 : (d == Display.TableFooterGroup ? 2 : 1)
+            gi := gl.len()
+            gl.push(TGrp { id = c, kind = kind })
+            gk := _kids(t, c)
+            mut ar := -1
+            each rc in gk:
+                if _t_skip(t, rc):
+                    continue
+                end
+                if t.nodes.ref(rc).style.display == Display.TableRow:
+                    grstart.push(gcells.len())
+                    mut tmp := Vector {} as Vector<int>
+                    _t_row_cells(t, rc, tmp)
+                    each q in tmp:
+                        gcells.push(q)
+                    end
+                    tmp.free()
+                    grows.push(rc)
+                    growgrp.push(gi)
+                    ar = -1
+                else:
+                    if ar < 0:
+                        grstart.push(gcells.len())
+                        grows.push(-1)
+                        growgrp.push(gi)
+                        ar = grows.len() - 1
+                    end
+                    gcells.push(rc)
+                end
+            end
+            gk.free()
+            anon_g = -1
+            anon_r = -1
+            continue
+        end
+        if anon_g < 0:
+            gl.push(TGrp { id = -1, kind = 1 })
+            anon_g = gl.len() - 1
+            anon_r = -1
+        end
+        if d == Display.TableRow:
+            grstart.push(gcells.len())
+            mut tmp := Vector {} as Vector<int>
+            _t_row_cells(t, c, tmp)
+            each q in tmp:
+                gcells.push(q)
+            end
+            tmp.free()
+            grows.push(c)
+            growgrp.push(anon_g)
+            anon_r = -1
+            continue
+        end
+        if anon_r < 0:
+            grstart.push(gcells.len())
+            grows.push(-1)
+            growgrp.push(anon_g)
+            anon_r = grows.len() - 1
+        end
+        gcells.push(c)
+    end
+    mut head := -1
+    mut foot := -1
+    repeat gl.len() in i:
+        if gl[i].kind == 0 and head < 0:
+            head = i
+        end
+        if gl[i].kind == 2 and foot < 0:
+            foot = i
+        end
+    end
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    if head >= 0:
+        order.push(head)
+    end
+    repeat gl.len() in i:
+        if i != head and i != foot:
+            order.push(i)
+        end
+    end
+    if foot >= 0:
+        order.push(foot)
+    end
+    each gi in order:
+        mut gg := gl[gi]
+        gg.kind = gi == head ? 0 : (gi == foot ? 2 : 1)
+        gg.r0 = x.rows.len()
+        ng := x.grps.len()
+        repeat grows.len() in r:
+            if growgrp[r] == gi:
+                e := r + 1 < grstart.len() ? grstart[r + 1] : gcells.len()
+                mut cl := Vector {} as Vector<int>
+                mut k := grstart[r]
+                until k < e:
+                    cl.push(gcells[k])
+                    k++
+                end
+                _t_add_row(x, grows[r], ng, cl)
+                cl.free()
+            end
+        end
+        gg.r1 = x.rows.len()
+        x.grps.push(gg)
+    end
+end
+
+func _t_place(t &: Engine, x &: TCtx):
+    mut left := Vector {} as Vector<int>
+    defer left.free()
+    repeat x.rows.len() in r:
+        rw := x.rows[r]
+        g := x.grps[rw.g]
+        if r == g.r0:
+            repeat left.len() in k:
+                left[k] = 0
+            end
+        end
+        s := x.rstart[r]
+        e := r + 1 < x.rstart.len() ? x.rstart[r + 1] : x.rcells.len()
+        mut col := 0
+        mut k := s
+        until k < e:
+            cid := x.rcells[k]
+            st := t.nodes.ref(cid).style
+            iscell := st.display == Display.TableCell
+            cs := iscell ? _imin(_imax(st.col_span, 1), 1000) : 1
+            mut rs := iscell ? st.row_span : 1
+            if rs <= 0:
+                rs = g.r1 - r
+            end
+            rs = _imax(1, _imin(rs, g.r1 - r))
+            until col < left.len() and left[col] > 0:
+                col++
+            end
+            until left.len() < col + cs:
+                left.push(0)
+            end
+            repeat cs in q:
+                left[col + q] = rs
+            end
+            x.cells.push(TCell { id = cid, row = r, col = col, cs = cs, rs = rs })
+            col += cs
+            k++
+        end
+        repeat left.len() in q:
+            if left[q] > 0:
+                left[q] = left[q] - 1
+            end
+        end
+        if left.len() > x.ncols:
+            x.ncols = left.len()
+        end
+    end
+    each c in x.cells:
+        if c.col + c.cs > x.ncols:
+            x.ncols = c.col + c.cs
+        end
+    end
+    if x.cols.len() > x.ncols:
+        x.ncols = x.cols.len()
+    end
+    until x.cols.len() < x.ncols:
+        x.cols.push(TCol {})
+    end
+end
+
+func _side_w(s: Length): f64:
+    if s.kind == LengthKind.Px:
+        ret s.value
+    end
+    ret 0.0
+end
+
+func _t_set_border(t &: Engine, id: int, b: R4):
+    n := t.nodes.ref(id)
+    nb := Sides { top = Px(b.t), right = Px(b.r), bottom = Px(b.b), left = Px(b.l) }
+    mut same := n.bov
+    if same:
+        same = n.style.border.top.value == b.t and n.style.border.right.value == b.r and n.style.border.bottom.value == b.b and n.style.border.left.value == b.l
+    end
+    if not same:
+        n.style.border = nb
+        n.bov = true
+        n.fin_ok = false
+        n.ckeys.clear()
+        n.couts.clear()
+        n.cnext = 0
+    end
+end
+
+func _t_restore_border(t &: Engine, id: int):
+    n := t.nodes.ref(id)
+    if n.bov:
+        n.style.border = n.ubor
+        n.bov = false
+        n.fin_ok = false
+        n.ckeys.clear()
+        n.couts.clear()
+        n.cnext = 0
+    end
+end
+
+func _t_collapse(t &: Engine, id: int, x &: TCtx, tb &: R4, rtl: bool):
+    nr := x.rows.len()
+    nc := x.ncols
+    tub := t.nodes.ref(id).ubor
+    tl := _side_w(rtl ? tub.right : tub.left)
+    tr := _side_w(rtl ? tub.left : tub.right)
+    ttop := _side_w(tub.top)
+    tbot := _side_w(tub.bottom)
+    mut owner := Vector {} as Vector<int>
+    defer owner.free()
+    repeat nr * nc:
+        owner.push(-1)
+    end
+    repeat x.cells.len() in i:
+        c := x.cells[i]
+        repeat c.rs in dr:
+            repeat c.cs in dc:
+                owner[(c.row + dr) * nc + c.col + dc] = i
+            end
+        end
+    end
+    mut ml := 0.0
+    mut mr := 0.0
+    mut mt := 0.0
+    mut mb := 0.0
+    repeat x.cells.len() in i:
+        c := x.cells[i]
+        ub := t.nodes.ref(c.id).ubor
+        mut bl := 0.0
+        mut br := 0.0
+        mut bt := 0.0
+        mut bb := 0.0
+        repeat c.rs in dr:
+            r := c.row + dr
+            mut e := _side_w(rtl ? ub.right : ub.left)
+            if c.col == 0:
+                e = _fmax(e, tl)
+                ml = _fmax(ml, e)
+            else:
+                o := owner[r * nc + c.col - 1]
+                if o >= 0:
+                    e = _fmax(e, _side_w(rtl ? t.nodes.ref(x.cells[o].id).ubor.left : t.nodes.ref(x.cells[o].id).ubor.right))
+                end
+            end
+            bl = _fmax(bl, e)
+            mut f := _side_w(rtl ? ub.left : ub.right)
+            if c.col + c.cs == nc:
+                f = _fmax(f, tr)
+                mr = _fmax(mr, f)
+            else:
+                o := owner[r * nc + c.col + c.cs]
+                if o >= 0:
+                    f = _fmax(f, _side_w(rtl ? t.nodes.ref(x.cells[o].id).ubor.right : t.nodes.ref(x.cells[o].id).ubor.left))
+                end
+            end
+            br = _fmax(br, f)
+        end
+        repeat c.cs in dc:
+            col := c.col + dc
+            mut e := _side_w(ub.top)
+            if c.row == 0:
+                e = _fmax(e, ttop)
+                mt = _fmax(mt, e)
+            else:
+                o := owner[(c.row - 1) * nc + col]
+                if o >= 0:
+                    e = _fmax(e, _side_w(t.nodes.ref(x.cells[o].id).ubor.bottom))
+                end
+            end
+            bt = _fmax(bt, e)
+            mut f := _side_w(ub.bottom)
+            if c.row + c.rs == nr:
+                f = _fmax(f, tbot)
+                mb = _fmax(mb, f)
+            else:
+                o := owner[(c.row + c.rs) * nc + col]
+                if o >= 0:
+                    f = _fmax(f, _side_w(t.nodes.ref(x.cells[o].id).ubor.top))
+                end
+            end
+            bb = _fmax(bb, f)
+        end
+        cr := x.cells.ref(i)
+        cr.bor = R4 { l = bl / 2.0, r = br / 2.0, t = bt / 2.0, b = bb / 2.0 }
+    end
+    mut rt := Vector {} as Vector<f64>
+    defer rt.free()
+    mut rb := Vector {} as Vector<f64>
+    defer rb.free()
+    repeat nr:
+        rt.push(0.0)
+        rb.push(0.0)
+    end
+    mut cl := Vector {} as Vector<f64>
+    defer cl.free()
+    mut cr2 := Vector {} as Vector<f64>
+    defer cr2.free()
+    repeat nc:
+        cl.push(0.0)
+        cr2.push(0.0)
+    end
+    each c in x.cells:
+        rt[c.row] = _fmax(rt[c.row], c.bor.t)
+        cl[c.col] = _fmax(cl[c.col], c.bor.l)
+        if c.rs == 1:
+            rb[c.row] = _fmax(rb[c.row], c.bor.b)
+        end
+        if c.cs == 1:
+            cr2[c.col] = _fmax(cr2[c.col], c.bor.r)
+        end
+    end
+    repeat x.cells.len() in i:
+        c := x.cells[i]
+        mut b := c.bor
+        b.t = rt[c.row]
+        b.l = cl[c.col]
+        if c.rs == 1:
+            b.b = rb[c.row]
+        end
+        if c.cs == 1:
+            b.r = cr2[c.col]
+        end
+        if rtl:
+            sw := b.l
+            b.l = b.r
+            b.r = sw
+        end
+        cr := x.cells.ref(i)
+        cr.bor = b
+        _t_set_border(t, c.id, b)
+    end
+    if nr == 0 or nc == 0:
+        ml = tl
+        mr = tr
+        mt = ttop
+        mb = tbot
+    end
+    if rtl:
+        tb = R4 { l = mr / 2.0, r = ml / 2.0, t = mt / 2.0, b = mb / 2.0 }
+    else:
+        tb = R4 { l = ml / 2.0, r = mr / 2.0, t = mt / 2.0, b = mb / 2.0 }
+    end
+end
+
+func _t_cell_widths(t &: Engine, x &: TCtx):
+    repeat x.cells.len() in i:
+        c := x.cells[i]
+        st := t.nodes.ref(c.id).style
+        mn := _layout(t, c.id, Inp { pw = NO, ph = NO, aw = MINC, ah = MAXC, axis = 0 }).w
+        mut mx := _layout(t, c.id, Inp { pw = NO, ph = NO, aw = MAXC, ah = MAXC, axis = 0 }).w
+        mx = _fmax(mx, mn)
+        cr := x.cells.ref(i)
+        cr.mn = mn
+        cr.mx = mx
+        if st.width.kind == LengthKind.Px:
+            pad := _r4(st.padding, NO)
+            bor := _r4(st.border, NO)
+            adj := st.box_sizing == BoxSizing.ContentBox ? pad.l + pad.r + bor.l + bor.r : 0.0
+            w := st.width.value + adj
+            cr.fixed = true
+            cr.fw = w
+            cr.mx = _fmax(w, mn)
+        else st.width.kind == LengthKind.Percent:
+            cr.pct = st.width.value
+        end
+    end
+    repeat x.cols.len() in k:
+        col := x.cols[k]
+        if col.id >= 0 or col.gid >= 0:
+            src := col.id >= 0 ? col.id : col.gid
+            st := t.nodes.ref(src).style
+            cr := x.cols.ref(k)
+            if st.width.kind == LengthKind.Px:
+                cr.fixed = true
+                cr.fw = st.width.value
+                cr.mx = _fmax(cr.mx, st.width.value)
+            else st.width.kind == LengthKind.Percent:
+                cr.pct = st.width.value
+            end
+        end
+    end
+    each c in x.cells:
+        if c.cs != 1:
+            continue
+        end
+        cr := x.cols.ref(c.col)
+        cr.mn = _fmax(cr.mn, c.mn)
+        cr.mx = _fmax(cr.mx, c.mx)
+        if c.fixed:
+            cr.fixed = true
+            cr.fw = _fmax(cr.fw, c.fw)
+        end
+        if _is(c.pct):
+            cr.pct = _fmax(_or(cr.pct, 0.0), c.pct)
+        end
+    end
+    repeat x.cols.len() in k:
+        cr := x.cols.ref(k)
+        cr.mx = _fmax(cr.mx, cr.mn)
+    end
+end
+
+func _t_spans(x &: TCtx, hs: f64):
+    mut maxs := 1
+    each c in x.cells:
+        maxs = _imax(maxs, c.cs)
+    end
+    mut sp := 2
+    until sp <= maxs:
+        each c in x.cells:
+            if c.cs != sp:
+                continue
+            end
+            mut smn := 0.0
+            mut smx := 0.0
+            repeat c.cs in q:
+                col := x.cols[c.col + q]
+                smn += col.mn
+                smx += col.mx
+            end
+            gaps := hs * ((c.cs - 1) as f64)
+            if c.mx > smx + gaps:
+                extra := c.mx - smx - gaps
+                repeat c.cs in q:
+                    cr := x.cols.ref(c.col + q)
+                    share := smx > 0.0 ? extra * cr.mx / smx : extra / (c.cs as f64)
+                    cr.mx += share
+                end
+            end
+            if c.mn > smn + gaps:
+                extra := c.mn - smn - gaps
+                mut base := 0.0
+                repeat c.cs in q:
+                    base += x.cols[c.col + q].mx
+                end
+                repeat c.cs in q:
+                    cr := x.cols.ref(c.col + q)
+                    share := base > 0.0 ? extra * cr.mx / base : extra / (c.cs as f64)
+                    cr.mn += share
+                    cr.mx = _fmax(cr.mx, cr.mn)
+                end
+            end
+        end
+        sp++
+    end
+end
+
+func _t_distribute(x &: TCtx, target: f64):
+    n := x.cols.len()
+    mut gmin := 0.0
+    mut gpct := 0.0
+    mut gspec := 0.0
+    mut gmax := 0.0
+    repeat n in k:
+        c := x.cols[k]
+        gmin += c.mn
+        if _is(c.pct):
+            p := _fmax(c.mn, c.pct * target / 100.0)
+            gpct += p
+            gspec += p
+            gmax += p
+        else c.fixed:
+            gpct += c.mn
+            gspec += c.mx
+            gmax += c.mx
+        else:
+            gpct += c.mn
+            gspec += c.mn
+            gmax += c.mx
+        end
+    end
+    repeat n in k:
+        c := x.cols[k]
+        mut w := c.mn
+        mut hi := c.mn
+        mut lo := c.mn
+        if target <= gmin:
+            w = c.mn
+        else target <= gpct:
+            hi = _is(c.pct) ? _fmax(c.mn, c.pct * target / 100.0) : c.mn
+            w = c.mn + (hi - c.mn) * (target - gmin) / _fmax(gpct - gmin, 0.000001)
+        else target <= gspec:
+            lo = _is(c.pct) ? _fmax(c.mn, c.pct * target / 100.0) : c.mn
+            hi = _is(c.pct) ? lo : (c.fixed ? c.mx : c.mn)
+            w = lo + (hi - lo) * (target - gpct) / _fmax(gspec - gpct, 0.000001)
+        else target <= gmax:
+            lo = _is(c.pct) ? _fmax(c.mn, c.pct * target / 100.0) : (c.fixed ? c.mx : c.mn)
+            hi = _is(c.pct) ? lo : c.mx
+            w = lo + (hi - lo) * (target - gspec) / _fmax(gmax - gspec, 0.000001)
+        else:
+            w = _is(c.pct) ? _fmax(c.mn, c.pct * target / 100.0) : c.mx
+        end
+        cr := x.cols.ref(k)
+        cr.w = w
+    end
+    if target > gmax and n > 0:
+        excess := target - gmax
+        mut kind := 0
+        mut tot := 0.0
+        mut cnt := 0
+        repeat n in k:
+            c := x.cols[k]
+            if not _is(c.pct) and not c.fixed:
+                cnt++
+                tot += c.mx
+            end
+        end
+        if cnt == 0:
+            kind = 1
+            repeat n in k:
+                c := x.cols[k]
+                if not _is(c.pct) and c.fixed:
+                    cnt++
+                    tot += c.mx
+                end
+            end
+        end
+        if cnt == 0:
+            kind = 2
+            repeat n in k:
+                c := x.cols[k]
+                if _is(c.pct):
+                    cnt++
+                    tot += c.pct
+                end
+            end
+        end
+        if cnt == 0:
+            kind = 3
+            cnt = n
+        end
+        repeat n in k:
+            c := x.cols[k]
+            mut take := false
+            mut wt := 0.0
+            switch kind:
+                0:
+                    take = not _is(c.pct) and not c.fixed
+                    wt = c.mx
+                    break
+                end
+                1:
+                    take = not _is(c.pct) and c.fixed
+                    wt = c.mx
+                    break
+                end
+                2:
+                    take = _is(c.pct)
+                    wt = _or(c.pct, 0.0)
+                    break
+                end
+                else:
+                    take = true
+                    wt = 1.0
+                end
+            end
+            if take:
+                cr := x.cols.ref(k)
+                if tot > 0.0 and kind != 3:
+                    cr.w += excess * wt / tot
+                else:
+                    cr.w += excess / (cnt as f64)
+                end
+            end
+        end
+    end
+end
+
+func _t_fixed(t &: Engine, x &: TCtx, target: f64, hs: f64): f64:
+    n := x.cols.len()
+    mut set := Vector {} as Vector<bool>
+    defer set.free()
+    repeat n in k:
+        set.push(false)
+        c := x.cols[k]
+        if c.id >= 0 or c.gid >= 0:
+            src := c.id >= 0 ? c.id : c.gid
+            st := t.nodes.ref(src).style
+            cr := x.cols.ref(k)
+            if st.width.kind == LengthKind.Px:
+                cr.w = st.width.value
+                set[k] = true
+            else st.width.kind == LengthKind.Percent:
+                cr.w = st.width.value * target / 100.0
+                set[k] = true
+            end
+        end
+    end
+    each c in x.cells:
+        if c.row != 0:
+            continue
+        end
+        st := t.nodes.ref(c.id).style
+        mut w := NO
+        if st.width.kind == LengthKind.Px:
+            pad := _r4(st.padding, NO)
+            bor := _r4(st.border, NO)
+            adj := st.box_sizing == BoxSizing.ContentBox ? pad.l + pad.r + bor.l + bor.r : 0.0
+            w = st.width.value + adj
+        else st.width.kind == LengthKind.Percent:
+            w = st.width.value * target / 100.0
+        end
+        if not _is(w):
+            continue
+        end
+        per := (w - hs * ((c.cs - 1) as f64)) / (c.cs as f64)
+        repeat c.cs in q:
+            k := c.col + q
+            if not set[k]:
+                cr := x.cols.ref(k)
+                cr.w = per
+                set[k] = true
+            end
+        end
+    end
+    mut used := 0.0
+    mut free_n := 0
+    repeat n in k:
+        if set[k]:
+            used += x.cols[k].w
+        else:
+            free_n++
+        end
+    end
+    if free_n > 0:
+        each_w := _fmax(0.0, (target - used) / (free_n as f64))
+        repeat n in k:
+            if not set[k]:
+                cr := x.cols.ref(k)
+                cr.w = each_w
+            end
+        end
+    else used < target and n > 0:
+        extra := target - used
+        repeat n in k:
+            cr := x.cols.ref(k)
+            if used > 0.0:
+                cr.w += extra * cr.w / used
+            else:
+                cr.w += extra / (n as f64)
+            end
+        end
+    end
+    mut tot := 0.0
+    repeat n in k:
+        tot += x.cols[k].w
+    end
+    ret tot
+end
+
+func _t_rows(t &: Engine, x &: TCtx, hs: f64, vs: f64):
+    repeat x.rows.len() in r:
+        rw := x.rows[r]
+        if rw.id >= 0:
+            st := t.nodes.ref(rw.id).style
+            if st.height.kind == LengthKind.Px:
+                rr := x.rows.ref(r)
+                rr.hspec = st.height.value
+                rr.fixed = true
+                rr.h = st.height.value
+            end
+        end
+    end
+    repeat x.cells.len() in i:
+        c := x.cells[i]
+        mut w := hs * ((c.cs - 1) as f64)
+        repeat c.cs in q:
+            w += x.cols[c.col + q].w
+        end
+        o := _layout(t, c.id, Inp { kw = w, pw = w, ph = NO, aw = w, ah = MAXC, axis = 2 })
+        st := t.nodes.ref(c.id).style
+        mut hmin := 0.0
+        if st.height.kind == LengthKind.Px:
+            pad := _r4(st.padding, w)
+            bor := _r4(st.border, w)
+            adj := st.box_sizing == BoxSizing.ContentBox ? pad.t + pad.b + bor.t + bor.b : 0.0
+            hmin = st.height.value + adj
+            if c.rs == 1:
+                rr := x.rows.ref(c.row)
+                rr.fixed = true
+            end
+        end
+        cr := x.cells.ref(i)
+        cr.w = w
+        cr.hauto = o.h
+        cr.hmin = hmin
+        mut b := o.baseline
+        if not _is(b):
+            pad := _r4(st.padding, w)
+            bor := _r4(st.border, w)
+            b = o.h - pad.b - bor.b
+        end
+        cr.base = b
+    end
+    each c in x.cells:
+        if c.rs != 1:
+            continue
+        end
+        st := t.nodes.ref(c.id).style
+        if st.vertical_align == VerticalAlign.Baseline:
+            rr := x.rows.ref(c.row)
+            rr.base = _fmax(_or(rr.base, 0.0), c.base)
+        end
+    end
+    each c in x.cells:
+        if c.rs != 1:
+            continue
+        end
+        st := t.nodes.ref(c.id).style
+        mut need := _fmax(c.hauto, c.hmin)
+        if st.vertical_align == VerticalAlign.Baseline:
+            rb := x.rows[c.row].base
+            need = _fmax(need, rb - c.base + c.hauto)
+        end
+        rr := x.rows.ref(c.row)
+        rr.h = _fmax(rr.h, need)
+    end
+    mut maxs := 1
+    each c in x.cells:
+        maxs = _imax(maxs, c.rs)
+    end
+    mut sp := 2
+    until sp <= maxs:
+        each c in x.cells:
+            if c.rs != sp:
+                continue
+            end
+            need := _fmax(c.hauto, c.hmin)
+            mut have := vs * ((c.rs - 1) as f64)
+            repeat c.rs in q:
+                have += x.rows[c.row + q].h
+            end
+            if need > have:
+                _t_grow_rows(x, c.row, c.row + c.rs, need - have, false)
+            end
+        end
+        sp++
+    end
+end
+
+func _t_grow_rows(x &: TCtx, r0: int, r1: int, extra: f64, body_only: bool):
+    mut tot := 0.0
+    mut cnt := 0
+    mut pass := 0
+    until pass < 3:
+        tot = 0.0
+        cnt = 0
+        mut r := r0
+        until r < r1:
+            rw := x.rows[r]
+            if _t_row_ok(x, rw, pass, body_only):
+                tot += rw.h
+                cnt++
+            end
+            r++
+        end
+        if cnt > 0:
+            break
+        end
+        pass++
+    end
+    if cnt == 0:
+        ret
+    end
+    mut r := r0
+    until r < r1:
+        rw := x.rows[r]
+        if _t_row_ok(x, rw, pass, body_only):
+            rr := x.rows.ref(r)
+            if tot > 0.0:
+                rr.h += extra * rw.h / tot
+            else:
+                rr.h += extra / (cnt as f64)
+            end
+        end
+        r++
+    end
+end
+
+func _t_row_ok(x &: TCtx, rw: TRow, pass: int, body_only: bool): bool:
+    body := x.grps[rw.g].kind == 1
+    switch pass:
+        0:
+            ret not rw.fixed and (body or not body_only)
+        end
+        1:
+            ret body or not body_only
+        end
+        else:
+            ret true
+        end
+    end
+    ret true
+end
+
+func _t_shift(t &: Engine, id: int, dy: f64):
+    if dy == 0.0:
+        ret
+    end
+    kids := _kids(t, id)
+    each c in kids:
+        n := t.nodes.ref(c)
+        if n.style.display == Display.None:
+            continue
+        end
+        if _oof(n.style.position):
+            n.spy_s += dy
+            n.spy_e += dy
+        else:
+            n.ly += dy
+        end
+    end
+    kids.free()
+end
+
+func _table(t &: Engine, id: int, inp: Inp): Out:
+    n := t.nodes.ref(id)
+    st := n.style
+    rtl := st.direction == Direction.Rtl
+    collapse := st.border_collapse == BorderCollapse.Collapse
+    mut x := TCtx {}
+    x.cells = Vector {} as Vector<TCell>
+    x.rows = Vector {} as Vector<TRow>
+    x.grps = Vector {} as Vector<TGrp>
+    x.cols = Vector {} as Vector<TCol>
+    x.caps = Vector {} as Vector<TCap>
+    x.rcells = Vector {} as Vector<int>
+    x.rstart = Vector {} as Vector<int>
+    defer x.cells.free()
+    defer x.rows.free()
+    defer x.grps.free()
+    defer x.cols.free()
+    defer x.caps.free()
+    defer x.rcells.free()
+    defer x.rstart.free()
+    _t_build(t, id, x)
+    _t_place(t, x)
+    mut pad := _r4(st.padding, inp.pw)
+    mut bor := _r4(n.ubor, inp.pw)
+    hs := collapse ? 0.0 : st.border_spacing_x
+    vs := collapse ? 0.0 : st.border_spacing_y
+    if collapse:
+        pad = R4 {}
+        _t_collapse(t, id, x, bor, rtl)
+        _t_set_border(t, id, bor)
+    else:
+        _t_restore_border(t, id)
+        each c in x.cells:
+            _t_restore_border(t, c.id)
+        end
+    end
+    pbw := pad.l + pad.r + bor.l + bor.r
+    pbh := pad.t + pad.b + bor.t + bor.b
+    adjw := st.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+    adjh := st.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+    nc := x.ncols
+    extra := pbw + hs * ((_imax(nc, 1) + 1) as f64)
+    fixed_layout := st.table_layout == TableLayout.Fixed and st.width.kind != LengthKind.Auto
+    _t_cell_widths(t, x)
+    _t_spans(x, hs)
+    mut smn := 0.0
+    mut smx := 0.0
+    mut nonpct := 0.0
+    mut totpct := 0.0
+    mut pctmax := 0.0
+    each c in x.cols:
+        smn += c.mn
+        smx += c.mx
+        if _is(c.pct):
+            totpct += c.pct
+            if c.pct > 0.0:
+                pctmax = _fmax(pctmax, c.mx * 100.0 / c.pct)
+            end
+        else:
+            nonpct += c.mx
+        end
+    end
+    mut cmx := _fmax(smx, pctmax)
+    if totpct > 0.0 and totpct < 100.0:
+        cmx = _fmax(cmx, nonpct * 100.0 / (100.0 - totpct))
+    end
+    mut capmin := 0.0
+    each cp in x.caps:
+        capmin = _fmax(capmin, _layout(t, cp.id, Inp { aw = MINC, ah = MAXC, axis = 0 }).w)
+    end
+    tmin := _fmax(smn + extra, capmin)
+    tmax := _fmax(cmx + extra, tmin)
+    minw := _add(_res(st.min_width, inp.pw), adjw)
+    maxw := _add(_res(st.max_width, inp.pw), adjw)
+    mut spec := NO
+    if inp.inherent:
+        spec = _add(_res(st.width, inp.pw), adjw)
+    end
+    mut w := NO
+    if _is(inp.kw):
+        w = _fmax(inp.kw, tmin)
+    else _is(spec):
+        w = _fmax(_clampf(spec, minw, maxw), tmin)
+    else:
+        if inp.aw == MINC:
+            w = tmin
+        else inp.aw == MAXC:
+            w = tmax
+        else:
+            w = _fmin(_fmax(tmin, inp.aw), tmax)
+        end
+        w = _fmax(_clampf(w, minw, maxw), tmin)
+    end
+    if fixed_layout:
+        used := _t_fixed(t, x, w - extra, hs)
+        w = _fmax(w, used + extra)
+    else:
+        _t_distribute(x, w - extra)
+    end
+    if not inp.perform and inp.axis == 0:
+        ret Out { w = w, h = 0.0 }
+    end
+    _t_rows(t, x, hs, vs)
+    nr := x.rows.len()
+    mut rows_h := 0.0
+    each rw in x.rows:
+        rows_h += rw.h
+    end
+    if nr > 0:
+        rows_h += vs * ((nr + 1) as f64)
+    end
+    mut cap_top := 0.0
+    mut cap_bot := 0.0
+    repeat x.caps.len() in i:
+        cp := x.caps[i]
+        cst := t.nodes.ref(cp.id).style
+        o := _layout(t, cp.id, Inp { kw = w, pw = w, ph = NO, aw = w, ah = MAXC, inherent = true, axis = 1 })
+        mt := _res0(cst.margin.top, w)
+        mb := _res0(cst.margin.bottom, w)
+        cr := x.caps.ref(i)
+        cr.h = o.h
+        cr.mt = mt
+        cr.mb = mb
+        if cp.bottom:
+            cap_bot += o.h + mt + mb
+        else:
+            cap_top += o.h + mt + mb
+        end
+    end
+    mut spech := NO
+    if inp.inherent:
+        spech = _add(_res(st.height, inp.ph), adjh)
+    end
+    mut boxh := rows_h + pbh
+    target_h := _or(inp.kh, NO)
+    mut want := spech
+    if _is(target_h):
+        want = target_h - cap_top - cap_bot
+    end
+    minh := _add(_res(st.min_height, inp.ph), adjh)
+    maxh := _add(_res(st.max_height, inp.ph), adjh)
+    if _is(want) or _is(minh):
+        want2 := _clampf(_or(want, boxh), minh, maxh)
+        if want2 > boxh and nr > 0:
+            _t_grow_rows(x, 0, nr, want2 - boxh, true)
+            boxh = want2
+        else want2 > boxh:
+            boxh = want2
+        end
+    end
+    total_h := boxh + cap_top + cap_bot
+    mut base := NO
+    if nr > 0:
+        r0 := x.rows[0]
+        mut rb := r0.base
+        if not _is(rb):
+            each c in x.cells:
+                if c.row == 0 and not _is(rb):
+                    rb = c.base
+                end
+            end
+        end
+        if _is(rb):
+            base = cap_top + bor.t + pad.t + vs + rb
+        end
+    end
+    if not inp.perform:
+        ret Out { w = w, h = total_h, baseline = base }
+    end
+    gx0 := bor.l + pad.l + hs
+    gy0 := cap_top + bor.t + pad.t + vs
+    gw := _fmax(0.0, w - extra + hs * ((_imax(nc, 1) - 1) as f64))
+    mut cx := 0.0
+    repeat nc in k:
+        cr := x.cols.ref(k)
+        if rtl:
+            cr.x = gx0 + gw - cx - cr.w
+        else:
+            cr.x = gx0 + cx
+        end
+        cx += cr.w + hs
+    end
+    mut ry := gy0
+    repeat nr in r:
+        rr := x.rows.ref(r)
+        rr.y = ry
+        ry += rr.h + vs
+    end
+    gtop := gy0
+    gbot := nr > 0 ? ry - vs : gy0
+    mut ty := 0.0
+    each cp in x.caps:
+        if not cp.bottom:
+            ty += cp.mt
+            _layout(t, cp.id, Inp { kw = w, kh = cp.h, pw = w, ph = NO, aw = w, ah = cp.h, inherent = true, axis = 2, perform = true })
+            cst := t.nodes.ref(cp.id).style
+            _set_layout(t, cp.id, 0.0, ty, w, cp.h, _r4(cst.padding, w), _r4(cst.border, w), R4 { t = cp.mt, b = cp.mb })
+            ty += cp.h + cp.mb
+        end
+    end
+    ty = cap_top + boxh
+    each cp in x.caps:
+        if cp.bottom:
+            ty += cp.mt
+            _layout(t, cp.id, Inp { kw = w, kh = cp.h, pw = w, ph = NO, aw = w, ah = cp.h, inherent = true, axis = 2, perform = true })
+            cst := t.nodes.ref(cp.id).style
+            _set_layout(t, cp.id, 0.0, ty, w, cp.h, _r4(cst.padding, w), _r4(cst.border, w), R4 { t = cp.mt, b = cp.mb })
+            ty += cp.h + cp.mb
+        end
+    end
+    mut gtx := Vector {} as Vector<f64>
+    defer gtx.free()
+    mut gty := Vector {} as Vector<f64>
+    defer gty.free()
+    each g in x.grps:
+        y0 := g.r1 > g.r0 ? x.rows[g.r0].y : gtop
+        y1 := g.r1 > g.r0 ? x.rows[g.r1 - 1].y + x.rows[g.r1 - 1].h : y0
+        gtx.push(gx0)
+        gty.push(y0)
+        if g.id >= 0:
+            gs := t.nodes.ref(g.id).style
+            _set_layout(t, g.id, gx0, y0, gw, y1 - y0, _r4(gs.padding, gw), _r4(gs.border, gw), R4 {})
+        end
+    end
+    mut rtx := Vector {} as Vector<f64>
+    defer rtx.free()
+    mut rty := Vector {} as Vector<f64>
+    defer rty.free()
+    repeat nr in r:
+        rw := x.rows[r]
+        g := x.grps[rw.g]
+        mut px := 0.0
+        mut py := 0.0
+        if g.id >= 0:
+            px = gtx[rw.g]
+            py = gty[rw.g]
+        end
+        rtx.push(px)
+        rty.push(py)
+        if rw.id >= 0:
+            rs := t.nodes.ref(rw.id).style
+            _set_layout(t, rw.id, gx0 - px, rw.y - py, gw, rw.h, _r4(rs.padding, gw), _r4(rs.border, gw), R4 {})
+        end
+    end
+    each c in x.cells:
+        rw := x.rows[c.row]
+        mut ox := 0.0
+        mut oy := 0.0
+        if rw.id >= 0:
+            ox = gx0
+            oy = rw.y
+        else x.grps[rw.g].id >= 0:
+            ox = gtx[rw.g]
+            oy = gty[rw.g]
+        end
+        mut cx0 := x.cols[c.col].x
+        if rtl:
+            cx0 = x.cols[c.col + c.cs - 1].x
+        end
+        mut ch := vs * ((c.rs - 1) as f64)
+        repeat c.rs in q:
+            ch += x.rows[c.row + q].h
+        end
+        cst := t.nodes.ref(c.id).style
+        _layout(t, c.id, Inp { kw = c.w, kh = ch, pw = c.w, ph = ch, aw = c.w, ah = ch, axis = 2, perform = true })
+        mut off := 0.0
+        switch cst.vertical_align:
+            VerticalAlign.Middle:
+                off = (ch - c.hauto) / 2.0
+                break
+            end
+            VerticalAlign.Bottom:
+                off = ch - c.hauto
+                break
+            end
+            VerticalAlign.Baseline:
+                if c.rs == 1:
+                    off = _or(rw.base, c.base) - c.base
+                end
+                break
+            end
+            else:
+            end
+        end
+        off = _fmax(off, 0.0)
+        mut cpad := _r4(cst.padding, c.w)
+        cbor := _r4(cst.border, c.w)
+        cn := t.nodes.ref(c.id)
+        if cn.children.len() == 0:
+            cpad.t += off
+            cpad.b = _fmax(0.0, cpad.b - off)
+        else:
+            _t_shift(t, c.id, off)
+        end
+        _set_layout(t, c.id, cx0 - ox, rw.y - oy, c.w, ch, cpad, cbor, R4 {})
+        if off != 0.0:
+            cn2 := t.nodes.ref(c.id)
+            if _is(cn2.base):
+                cn2.base += off
+            end
+        end
+    end
+    repeat nc in k:
+        col := x.cols[k]
+        if col.id >= 0:
+            mut px := 0.0
+            mut py := 0.0
+            if col.gid >= 0:
+                px = gx0
+                py = gtop
+            end
+            cs := t.nodes.ref(col.id).style
+            mut cw := col.w
+            mut ccx := col.x
+            mut k2 := k + 1
+            until k2 < nc and x.cols[k2].id == col.id:
+                cw += hs + x.cols[k2].w
+                if rtl:
+                    ccx = x.cols[k2].x
+                end
+                k2++
+            end
+            if k == 0 or x.cols[k - 1].id != col.id:
+                _set_layout(t, col.id, ccx - px, gtop - py, cw, gbot - gtop, _r4(cs.padding, cw), _r4(cs.border, cw), R4 {})
+            end
+        end
+        if col.gid >= 0 and (k == 0 or x.cols[k - 1].gid != col.gid):
+            mut k2 := k
+            mut cw := 0.0
+            mut ccx := col.x
+            until k2 < nc and x.cols[k2].gid == col.gid:
+                cw += x.cols[k2].w + (k2 > k ? hs : 0.0)
+                if rtl:
+                    ccx = x.cols[k2].x
+                end
+                k2++
+            end
+            gs := t.nodes.ref(col.gid).style
+            _set_layout(t, col.gid, ccx, gtop, cw, gbot - gtop, _r4(gs.padding, cw), _r4(gs.border, cw), R4 {})
+        end
+    end
+    kids := _kids(t, id)
+    defer kids.free()
+    each c in kids:
+        cn := t.nodes.ref(c)
+        if cn.style.display != Display.None and _oof(cn.style.position):
+            cn.spx_s = bor.l + pad.l
+            cn.spx_e = w - bor.r - pad.r
+            cn.spx_a = rtl ? 1 : 0
+            cn.spy_s = cap_top + bor.t + pad.t
+            cn.spy_e = cn.spy_s
+            cn.spy_a = 0
+        end
+    end
+    _hide_display_none(t, kids)
+    ret Out { w = w, h = total_h, baseline = base }
+end

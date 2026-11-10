@@ -1,0 +1,766 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+
+mut g_progs := Vector {} as Vector<SheetData>
+mut g_prog_live := Vector {} as Vector<bool>
+mut g_ua_prog := -1
+
+@en "Piece"
+@fa "تکه‌مقدار"
+pub struct Piece:
+    @en "kind"
+    @fa "گونه تکه"
+    pub kind: int = 0
+    @en "num"
+    @fa "عدد تکه"
+    pub num: f64 = 0.0
+    @en "text"
+    @fa "متن تکه"
+    pub text: str = ""
+    @en "raw"
+    @fa "متن خام تکه"
+    pub raw: str = ""
+    @en "code"
+    @fa "کد تکه"
+    pub code: int = 0
+    @en "space"
+    @fa "فاصله پیش از تکه"
+    pub space: bool = false
+end
+
+@en "Program"
+@fa "برنامه‌سبک"
+pub struct Program:
+    @en "id"
+    @fa "شناسه برنامه"
+    pub id: int = -1
+
+    func ready():
+        if this.id < 0 or this.id >= g_progs.len() or not g_prog_live[this.id]:
+            this.id = new_prog()
+        end
+    end
+
+    @en "AddDecl"
+    @fa "افزودن اعلان"
+    pub func AddDecl(prop: str, important: bool, value: Piece[]):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        p := prop_id(prop)
+        if p < 0:
+            ret
+        end
+        ts := sd.toks.len()
+        push_pieces(sd.toks, value)
+        te := sd.toks.len()
+        mut d := Decl { prop = p, name = str.Clone(prop), important = important, ts = ts, te = te }
+        d.wide = wide_kw(sd.toks, ts, te)
+        d.has_var = d.wide == W_NONE and has_var_fn(sd.toks, ts, te)
+        sd.decls.push(d)
+    end
+
+    @en "AddVarDecl"
+    @fa "افزودن اعلان متنی"
+    pub func AddVarDecl(prop: str, value: str, important: bool):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        p := prop_id(prop)
+        if p < 0:
+            ret
+        end
+        ts := sd.toks.len()
+        sd.decls.push(Decl { prop = p, name = str.Clone(prop), value = str.Clone(value), important = important, ts = ts, te = ts, has_var = p != P_CUSTOM })
+    end
+
+    @en "EndList"
+    @fa "بستن فهرست اعلان"
+    pub func EndList(count: int):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        mut n := count
+        if n > sd.decls.len():
+            n = sd.decls.len()
+        end
+        sd.blocks.push(Block { d0 = sd.decls.len() - n, n = n })
+    end
+
+    @en "AddMedia"
+    @fa "افزودن پرسش رسانه"
+    pub func AddMedia(parent: int, condition: Piece[]):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        ts := sd.toks.len()
+        push_pieces(sd.toks, condition)
+        sd.media_list.push(MediaEntry { parent = parent, ts = ts, te = sd.toks.len() })
+    end
+
+    @en "AddSimple"
+    @fa "افزودن گزینشگر ساده"
+    pub func AddSimple(kind: int, name: str, value: str, op: int, a: int, b: int, icase: bool):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        sd.simples.push(Simple { k = kind, name = intern(name), value = intern(value), op = op, a = a, b = b, icase = icase })
+    end
+
+    @en "AddCompound"
+    @fa "افزودن گزینشگر مرکب"
+    pub func AddCompound(first: int, count: int, combinator: int):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        sd.compounds.push(Compound { s0 = first, n = count, comb = combinator })
+    end
+
+    @en "AddSelector"
+    @fa "افزودن گزینشگر کامل"
+    pub func AddSelector(first: int, count: int, specificity: int, state_left: bool, sibling: bool):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        sd.selectors.push(Selector { c0 = first, n = count, spec = specificity, state_left = state_left, sibling = sibling })
+    end
+
+    @en "AddRule"
+    @fa "افزودن قاعده برنامه"
+    pub func AddRule(selector: int, list: int, media: int):
+        this.ready()
+        mut sd := g_progs.ref(this.id)
+        sd.rules.push(Rule { sel = selector, block = list, order = sd.rules.len(), media = media })
+        add_rule_to_bucket(sd, sd.rules.len() - 1)
+        sel := sd.selectors[selector]
+        if sel.state_left:
+            sd.state_left = true
+        end
+        if sel.sibling:
+            sd.sibling = true
+        end
+        sd.version++
+    end
+
+    @en "Free"
+    @fa "آزادسازی برنامه"
+    pub func Free():
+        if this.id >= 0 and this.id < g_progs.len() and g_prog_live[this.id]:
+            mut sd := g_progs.ref(this.id)
+            sheet_free(sd)
+            g_prog_live[this.id] = false
+        end
+        this.id = -1
+    end
+end
+
+func new_prog(): int:
+    mut sd := sheet_new()
+    sd.collect = true
+    g_progs.push(sd)
+    g_prog_live.push(true)
+    ret g_progs.len() - 1
+end
+
+func sclone(s: str): str:
+    if s.len() == 0:
+        ret ""
+    end
+    ret str.Clone(s)
+end
+
+func push_pieces(out &: Vector<Tok>, v: Piece[]):
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    repeat len(v) in i:
+        pc := v[i]
+        mut t := Tok { k = pc.kind, n = pc.num, ws = pc.space }
+        switch pc.kind:
+            TK_IDENT:
+                t.s = sclone(pc.text)
+                t.raw = pc.raw.len() > 0 ? str.Clone(pc.raw) : sclone(pc.text)
+                break
+            end
+            TK_NUM:
+                t.int_like = pc.code != 0
+                break
+            end
+            TK_FUNC:
+                t.s = sclone(pc.text)
+                t.raw = sclone(pc.text)
+                break
+            end
+            TK_DELIM:
+                t.d = pc.code
+                break
+            end
+            TK_CLOSE, TK_COMMA:
+                break
+            end
+            else:
+                t.s = sclone(pc.text)
+            end
+        end
+        out.push(t)
+        if pc.kind == TK_FUNC:
+            stack.push(out.len() - 1)
+        else pc.kind == TK_CLOSE and stack.len() > 0:
+            o := stack.pop()
+            mut open_tok := out.ref(o)
+            open_tok.close = out.len() - 1
+        end
+    end
+end
+
+func prog_data(id: int): SheetData:
+    if id < 0 or id >= g_progs.len() or not g_prog_live[id]:
+        ret SheetData {}
+    end
+    ret g_progs[id]
+end
+
+func map_at(v: Vector<int>, base: int, start: int, i: int): int:
+    if i < 0:
+        ret i
+    end
+    if i < start:
+        ret v[i]
+    end
+    ret base + i - start
+end
+
+func copy_toks(dst &: SheetData, src: SheetData, ts: int, te: int, nts &: int, nte &: int):
+    nts = dst.toks.len()
+    mut i := ts
+    until i < te:
+        t := src.toks[i]
+        mut c := t
+        c.s = sclone(t.s)
+        c.raw = sclone(t.raw)
+        if t.close >= 0:
+            c.close = t.close - ts + nts
+        end
+        dst.toks.push(c)
+        i++
+    end
+    nte = dst.toks.len()
+end
+
+func append_prog(dst &: SheetData, src: SheetData, m &: ProgMap, ua: bool): int:
+    sb := dst.simples.len()
+    ss := m.simples.len()
+    selb := dst.selectors.len()
+    sels := m.selectors.len()
+    mut added := 0
+    mut i := m.media.len()
+    until i < src.media_list.len():
+        me := src.media_list[i]
+        mut ts := 0
+        mut te := 0
+        copy_toks(dst, src, me.ts, me.te, ts, te)
+        mut parent := -1
+        if me.parent >= 0:
+            parent = m.media[me.parent]
+        end
+        dst.media_list.push(MediaEntry { text = sclone(me.text), parent = parent, ts = ts, te = te })
+        m.media.push(dst.media_list.len() - 1)
+        i++
+    end
+    i = ss
+    until i < src.simples.len():
+        mut sm := src.simples[i]
+        if sm.k == SK_LIST:
+            sm.a = map_at(m.selectors, selb, sels, sm.a)
+        end
+        dst.simples.push(sm)
+        m.simples.push(sb + i - ss)
+        i++
+    end
+    i = m.compounds.len()
+    until i < src.compounds.len():
+        mut c := src.compounds[i]
+        if c.n > 0:
+            c.s0 = m.simples[c.s0]
+        else:
+            c.s0 = dst.simples.len()
+        end
+        dst.compounds.push(c)
+        m.compounds.push(dst.compounds.len() - 1)
+        i++
+    end
+    i = sels
+    until i < src.selectors.len():
+        mut sel := src.selectors[i]
+        if sel.n > 0:
+            sel.c0 = m.compounds[sel.c0]
+        end
+        dst.selectors.push(sel)
+        m.selectors.push(selb + i - sels)
+        i++
+    end
+    i = m.blocks.len()
+    until i < src.blocks.len():
+        blk := src.blocks[i]
+        d0 := dst.decls.len()
+        repeat blk.n in k:
+            d := src.decls[blk.d0 + k]
+            mut nd := d
+            nd.name = sclone(d.name)
+            nd.value = sclone(d.value)
+            mut ts := 0
+            mut te := 0
+            copy_toks(dst, src, d.ts, d.te, ts, te)
+            nd.ts = ts
+            nd.te = te
+            dst.decls.push(nd)
+        end
+        dst.blocks.push(Block { d0 = d0, n = blk.n })
+        m.blocks.push(dst.blocks.len() - 1)
+        added++
+        i++
+    end
+    i = m.rules
+    until i < src.rules.len():
+        r := src.rules[i]
+        sel := m.selectors[r.sel]
+        mut media := -1
+        if r.media >= 0:
+            media = m.media[r.media]
+        end
+        dst.rules.push(Rule { sel = sel, block = m.blocks[r.block], order = dst.rules.len(), ua = r.ua or ua, media = media })
+        add_rule_to_bucket(dst, dst.rules.len() - 1)
+        s := dst.selectors[sel]
+        if s.state_left:
+            dst.state_left = true
+        end
+        if s.sibling:
+            dst.sibling = true
+        end
+        added++
+        i++
+    end
+    m.rules = src.rules.len()
+    if added > 0:
+        dst.version++
+    end
+    ret added
+end
+
+func sheet_add_program(sd &: SheetData, pid: int, main: bool, ua: bool): int:
+    if pid < 0 or pid >= g_progs.len() or not g_prog_live[pid]:
+        ret 0
+    end
+    mut k := -1
+    repeat sd.maps.len() in i:
+        if sd.maps[i].pid == pid:
+            k = i
+        end
+    end
+    if k < 0:
+        mut nm := ProgMap { pid = pid }
+        nm.simples = Vector {} as Vector<int>
+        nm.compounds = Vector {} as Vector<int>
+        nm.selectors = Vector {} as Vector<int>
+        nm.media = Vector {} as Vector<int>
+        nm.blocks = Vector {} as Vector<int>
+        sd.maps.push(nm)
+        k = sd.maps.len() - 1
+        if main and sd.main_map < 0:
+            sd.main_map = k
+        end
+    end
+    mut m := sd.maps[k]
+    n := append_prog(sd, g_progs[pid], m, ua)
+    sd.maps[k] = m
+    ret n
+end
+
+func ua_prog_id(): int:
+    if g_ua_prog < 0:
+        p := ua_program()
+        g_ua_prog = p.id
+    end
+    ret g_ua_prog
+end
+
+func add_ua_program(sd &: SheetData): int:
+    ret sheet_add_program(sd, ua_prog_id(), false, true)
+end
+
+func src_num(v: f64): str:
+    s := str.FromFloat(v)
+    if s.includes(".") or s.includes("n") or s.includes("i"):
+        ret s
+    end
+    e := s.find("e")
+    if e >= 0:
+        ret s.substr(0, e) + ".0" + s.substr(e, s.len() - e)
+    end
+    ret s + ".0"
+end
+
+func src_str(s: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppendChar(b, 34)
+    p := (s as void*) as u8*
+    repeat s.len() in i:
+        c := p[i] as int
+        if c == 34 or c == 92:
+            str.BufAppendChar(b, 92)
+            str.BufAppendChar(b, c)
+        else c == 10:
+            str.BufAppend(b, "\\n")
+        else c == 9:
+            str.BufAppend(b, "\\t")
+        else c == 13:
+            str.BufAppend(b, "\\r")
+        else c < 32 or c == 127:
+            str.BufAppend(b, "\\x")
+            hx := "0123456789abcdef"
+            str.BufAppend(b, hx.substr(c / 16, 1))
+            str.BufAppend(b, hx.substr(c % 16, 1))
+        else:
+            str.BufAppendChar(b, c)
+        end
+    end
+    str.BufAppendChar(b, 34)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func src_bool(v: bool): str:
+    ret v ? "true" : "false"
+end
+
+func is_ascii(s: str): bool:
+    p := (s as void*) as u8*
+    repeat s.len() in i:
+        if (p[i] as int) >= 128:
+            ret false
+        end
+    end
+    ret true
+end
+
+func src_name(fa: bool, en: str, fa_name: str): str:
+    ret fa ? fa_name : en
+end
+
+func src_piece(b &: str.StringBuilder, q: str, fa: bool, t: Tok):
+    switch t.k:
+        TK_IDENT:
+            if t.raw.len() > 0 and t.raw != t.s:
+                str.BufAppend(b, q + src_name(fa, "KwAs", "کلیدواژه با متن") + "(" + src_str(t.s) + ", " + src_str(t.raw) + ")")
+            else:
+                str.BufAppend(b, q + src_name(fa, "Kw", "کلیدواژه") + "(" + src_str(t.s) + ")")
+            end
+            break
+        end
+        TK_NUM:
+            str.BufAppend(b, q + (t.int_like ? src_name(fa, "Int", "عدد گرد") : src_name(fa, "Num", "عدد")) + "(" + src_num(t.n) + ")")
+            break
+        end
+        TK_DIM:
+            str.BufAppend(b, q + src_name(fa, "Dim", "کمیت با واحد") + "(" + src_num(t.n) + ", " + src_str(t.s) + ")")
+            break
+        end
+        TK_PCT:
+            str.BufAppend(b, q + src_name(fa, "Pct", "درصد") + "(" + src_num(t.n) + ")")
+            break
+        end
+        TK_HASH:
+            str.BufAppend(b, q + src_name(fa, "Hash", "نشان هش") + "(" + src_str(t.s) + ")")
+            break
+        end
+        TK_STR:
+            str.BufAppend(b, q + src_name(fa, "Str", "متن نقل شده") + "(" + src_str(t.s) + ")")
+            break
+        end
+        TK_URL:
+            str.BufAppend(b, q + src_name(fa, "Url", "نشانی منبع") + "(" + src_str(t.s) + ")")
+            break
+        end
+        TK_FUNC:
+            str.BufAppend(b, q + src_name(fa, "Fn", "آغاز کارکرد") + "(" + src_str(t.s) + ")")
+            break
+        end
+        TK_CLOSE:
+            str.BufAppend(b, q + src_name(fa, "Close", "بستن پرانتز") + "()")
+            break
+        end
+        TK_COMMA:
+            str.BufAppend(b, q + src_name(fa, "Comma", "ویرگول") + "()")
+            break
+        end
+        else:
+            str.BufAppend(b, q + src_name(fa, "Delim", "جداکننده") + "(" + t.d + ", " + src_bool(t.ws) + ")")
+        end
+    end
+end
+
+func src_pieces(b &: str.StringBuilder, q: str, fa: bool, sd: SheetData, ts: int, te: int):
+    str.BufAppend(b, "[")
+    mut i := ts
+    until i < te:
+        if i > ts:
+            str.BufAppend(b, ", ")
+        end
+        src_piece(b, q, fa, sd.toks[i])
+        i++
+    end
+    str.BufAppend(b, "]")
+end
+
+func program_source(sd: SheetData, fn_name: str, css_pkg: str): str:
+    fa := not is_ascii(css_pkg)
+    q := css_pkg.len() > 0 ? css_pkg + "." : ""
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "func " + fn_name + "(): " + q + src_name(fa, "Program", "برنامه‌سبک") + ":\n")
+    empty := sd.simples.len() == 0 and sd.compounds.len() == 0 and sd.selectors.len() == 0 and sd.media_list.len() == 0 and sd.blocks.len() == 0 and sd.rules.len() == 0
+    if empty:
+        str.BufAppend(b, "    ret " + q + src_name(fa, "NewProgram", "برنامه سبک تازه") + "()\nend\n")
+        r0 := str.BufStr(b)
+        str.BufFree(b)
+        ret r0
+    end
+    str.BufAppend(b, "    mut p := " + q + src_name(fa, "NewProgram", "برنامه سبک تازه") + "()\n")
+    repeat sd.media_list.len() in i:
+        me := sd.media_list[i]
+        str.BufAppend(b, "    p." + src_name(fa, "AddMedia", "افزودن پرسش رسانه") + "(" + me.parent + ", ")
+        if me.te > me.ts:
+            src_pieces(b, q, fa, sd, me.ts, me.te)
+        else:
+            str.BufAppend(b, "[" + q + src_name(fa, "Kw", "کلیدواژه") + "(\"all\")]")
+        end
+        str.BufAppend(b, ")\n")
+    end
+    repeat sd.simples.len() in i:
+        sm := sd.simples[i]
+        str.BufAppend(b, "    p." + src_name(fa, "AddSimple", "افزودن گزینشگر ساده") + "(" + sm.k + ", " + src_str(sm.name) + ", " + src_str(sm.value) + ", " + sm.op + ", " + sm.a + ", " + sm.b + ", " + src_bool(sm.icase) + ")\n")
+    end
+    repeat sd.compounds.len() in i:
+        c := sd.compounds[i]
+        str.BufAppend(b, "    p." + src_name(fa, "AddCompound", "افزودن گزینشگر مرکب") + "(" + c.s0 + ", " + c.n + ", " + c.comb + ")\n")
+    end
+    repeat sd.selectors.len() in i:
+        sel := sd.selectors[i]
+        str.BufAppend(b, "    p." + src_name(fa, "AddSelector", "افزودن گزینشگر کامل") + "(" + sel.c0 + ", " + sel.n + ", " + sel.spec + ", " + src_bool(sel.state_left) + ", " + src_bool(sel.sibling) + ")\n")
+    end
+    repeat sd.blocks.len() in i:
+        blk := sd.blocks[i]
+        repeat blk.n in k:
+            d := sd.decls[blk.d0 + k]
+            name := d.prop == P_CUSTOM ? d.name : prop_name(d.prop)
+            if d.prop == P_CUSTOM or d.has_var:
+                str.BufAppend(b, "    p." + src_name(fa, "AddVarDecl", "افزودن اعلان متنی") + "(" + src_str(name) + ", " + src_str(d.value) + ", " + src_bool(d.important) + ")\n")
+            else:
+                str.BufAppend(b, "    p." + src_name(fa, "AddDecl", "افزودن اعلان") + "(" + src_str(name) + ", " + src_bool(d.important) + ", ")
+                src_pieces(b, q, fa, sd, d.ts, d.te)
+                str.BufAppend(b, ")\n")
+            end
+        end
+        str.BufAppend(b, "    p." + src_name(fa, "EndList", "بستن فهرست اعلان") + "(" + blk.n + ")\n")
+    end
+    repeat sd.rules.len() in i:
+        r := sd.rules[i]
+        str.BufAppend(b, "    p." + src_name(fa, "AddRule", "افزودن قاعده برنامه") + "(" + r.sel + ", " + r.block + ", " + r.media + ")\n")
+    end
+    str.BufAppend(b, "    ret p\nend\n")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+@en "Kw"
+@fa "کلیدواژه"
+pub func Kw(text: str): Piece:
+    ret Piece { kind = TK_IDENT, text = text }
+end
+
+@en "KwAs"
+@fa "کلیدواژه با متن"
+pub func KwAs(text: str, raw: str): Piece:
+    ret Piece { kind = TK_IDENT, text = text, raw = raw }
+end
+
+@en "Num"
+@fa "عدد"
+pub func Num(value: f64): Piece:
+    ret Piece { kind = TK_NUM, num = value }
+end
+
+@en "Int"
+@fa "عدد گرد"
+pub func Int(value: f64): Piece:
+    ret Piece { kind = TK_NUM, num = value, code = 1 }
+end
+
+@en "Dim"
+@fa "کمیت با واحد"
+pub func Dim(value: f64, unit: str): Piece:
+    ret Piece { kind = TK_DIM, num = value, text = unit }
+end
+
+@en "Pct"
+@fa "درصد"
+pub func Pct(value: f64): Piece:
+    ret Piece { kind = TK_PCT, num = value }
+end
+
+@en "Hash"
+@fa "نشان هش"
+pub func Hash(text: str): Piece:
+    ret Piece { kind = TK_HASH, text = text }
+end
+
+@en "Str"
+@fa "متن نقل شده"
+pub func Str(text: str): Piece:
+    ret Piece { kind = TK_STR, text = text }
+end
+
+@en "Url"
+@fa "نشانی منبع"
+pub func Url(text: str): Piece:
+    ret Piece { kind = TK_URL, text = text }
+end
+
+@en "Fn"
+@fa "آغاز کارکرد"
+pub func Fn(name: str): Piece:
+    ret Piece { kind = TK_FUNC, text = name }
+end
+
+@en "Close"
+@fa "بستن پرانتز"
+pub func Close(): Piece:
+    ret Piece { kind = TK_CLOSE }
+end
+
+@en "Comma"
+@fa "ویرگول"
+pub func Comma(): Piece:
+    ret Piece { kind = TK_COMMA }
+end
+
+@en "Delim"
+@fa "جداکننده"
+pub func Delim(code: int, space: bool): Piece:
+    ret Piece { kind = TK_DELIM, code = code, space = space }
+end
+
+@en "NewProgram"
+@fa "برنامه سبک تازه"
+pub func NewProgram(): Program:
+    ret Program { id = new_prog() }
+end
+
+@en "CompileDecls"
+@fa "ترجمه اعلان ها"
+pub func CompileDecls(p &: Program, text: str): int:
+    if p.id < 0 or p.id >= g_progs.len() or not g_prog_live[p.id]:
+        p.id = new_prog()
+    end
+    mut sd := g_progs.ref(p.id)
+    idx := parse_block(sd, text)
+    if sd.blocks[idx].n == 0:
+        ret -1
+    end
+    ret idx
+end
+
+@en "CompileRule"
+@fa "ترجمه قاعده"
+pub func CompileRule(p &: Program, selector: str, decls: str, media: str): bool:
+    if p.id < 0 or p.id >= g_progs.len() or not g_prog_live[p.id]:
+        p.id = new_prog()
+    end
+    mut sd := g_progs.ref(p.id)
+    mut mi := -1
+    if media.len() > 0:
+        if sd.media_cache.has(media):
+            mi = sd.media_cache.get(media)
+        else:
+            mi = add_media(sd, media, -1)
+            sd.media_cache.put(str.Clone(media), mi)
+        end
+    end
+    ret add_rule_text(sd, selector, decls, mi)
+end
+
+@en "CompileCss"
+@fa "ترجمه سی اس اس"
+pub func CompileCss(p &: Program, text: str): int:
+    if p.id < 0 or p.id >= g_progs.len() or not g_prog_live[p.id]:
+        p.id = new_prog()
+    end
+    mut sd := g_progs.ref(p.id)
+    ret parse_css(sd, text, 0, text.len(), -1)
+end
+
+@en "ProgramErrors"
+@fa "شمار خطاهای برنامه"
+pub func ProgramErrors(p: Program): int:
+    if p.id < 0 or p.id >= g_progs.len() or not g_prog_live[p.id]:
+        ret 0
+    end
+    ret g_progs[p.id].errs.len()
+end
+
+@en "ProgramError"
+@fa "خطای برنامه"
+pub func ProgramError(p: Program, index: int): str:
+    if p.id < 0 or p.id >= g_progs.len() or not g_prog_live[p.id]:
+        ret str.Clone("")
+    end
+    errs := g_progs[p.id].errs
+    if index < 0 or index >= errs.len():
+        ret str.Clone("")
+    end
+    ret str.Clone(errs[index])
+end
+
+@en "ProgramSource"
+@fa "متن برنامه سبک"
+pub func ProgramSource(p: Program, fn_name: str, css_pkg: str): str:
+    ret program_source(prog_data(p.id), fn_name, css_pkg)
+end
+
+@en "SheetFromProgram"
+@fa "برگه از برنامه"
+pub func SheetFromProgram(p: Program): Sheet:
+    mut s := NewSheet()
+    _n := s.AddProgram(p)
+    ret s
+end
+
+@en "DynDecl"
+@fa "اعلان زمان اجرا"
+pub func DynDecl(p &: Program, prop: str, value: str): int:
+    if p.id < 0 or p.id >= g_progs.len() or not g_prog_live[p.id]:
+        p.id = new_prog()
+    end
+    mut sd := g_progs.ref(p.id)
+    key := prop + ":" + value
+    if sd.dyn_cache.has(key):
+        r := sd.dyn_cache.get(key)
+        sfree(key)
+        ret r
+    end
+    idx := parse_block(sd, key)
+    mut r := idx
+    if sd.blocks[idx].n == 0:
+        r = -1
+    end
+    sd.dyn_cache.put(key, r)
+    ret r
+end

@@ -16,6 +16,7 @@ const COMMANDS: &[&str] = &[
     "agent_watch_reply",
     "agent_unwatch_reply",
     "agent_open_url",
+    "agent_pay",
     "chatgpt_pick_export",
     "chatgpt_import",
     "ws_index_open",

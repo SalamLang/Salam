@@ -1703,6 +1703,25 @@ func admin_payments(ctx: i64):
     aiweb.Reply(ctx, 200, `{"payments": ` + json.Array(items) + `, "income": ` + (paid.len() > 0 ? paid : "0") + "}")
 end
 
+func admin_reverse_payment(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM payments WHERE id = ?1 AND status = 'paid'", one(id))
+    if found.len() > 0:
+        _u := aistore.Run("UPDATE payments SET status = 'reversed', message = 'بازگشت شد توسط درگاه، به تایید مدیر' WHERE id = ?1", one(id))
+        _c := aistore.Run("UPDATE subscriptions SET status = 'canceled' WHERE payment_id = ?1 AND status = 'active'", one(id))
+    end
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این پرداخت تایید شده پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
 func settle_one(pid: str):
     aistore.Lock()
     mut rows := aistore.Stmt("SELECT user_id, plan, gateway, amount, token, discount_code_id FROM payments WHERE id = ?1", one(pid))
@@ -1899,6 +1918,7 @@ pub func Routes(r &: router.Router):
     router.Post(r, "/admin/subscriptions", admin_grant)
     router.Delete(r, "/admin/subscriptions/:id", admin_cancel)
     router.Get(r, "/admin/payments", admin_payments)
+    router.Post(r, "/admin/payments/:id/reverse", admin_reverse_payment)
     router.Get(r, "/admin/plans", admin_plans)
     router.Post(r, "/admin/plans", admin_plan_create)
     router.Put(r, "/admin/plans/:id", admin_plan_update)
@@ -1907,7 +1927,7 @@ pub func Routes(r &: router.Router):
     router.Post(r, "/admin/discounts", admin_discount_create)
     router.Put(r, "/admin/discounts/:id", admin_discount_update)
     router.Delete(r, "/admin/discounts/:id", admin_discount_delete)
-    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/billing/discount/preview", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments", "/admin/plans", "/admin/plans/:id", "/admin/discounts", "/admin/discounts/:id"]:
+    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/billing/discount/preview", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments", "/admin/payments/:id/reverse", "/admin/plans", "/admin/plans/:id", "/admin/discounts", "/admin/discounts/:id"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

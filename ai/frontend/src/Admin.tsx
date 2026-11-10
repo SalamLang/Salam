@@ -801,6 +801,7 @@ const PAY_WORDS: Record<Payment["status"], string> = {
   paid: t("پرداخت شده", "Paid"),
   failed: t("ناموفق", "Failed"),
   canceled: t("لغو شده", "Canceled"),
+  reversed: t("برگشت‌خورده", "Reversed"),
 };
 
 const GATEWAY_WORDS: Record<string, string> = { zarinpal: t("زرین‌پال", "Zarinpal"), zibal: t("زیبال", "Zibal") };
@@ -1434,28 +1435,38 @@ export function Subscriptions({ picked, notify, history, userEmail }: { picked: 
   );
 }
 
-export function Payments({ picked }: { picked: Picked }) {
+export function Payments({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<Payment[] | null>(null);
   const [income, setIncome] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState<number | null>(null);
 
-  useEffect(() => {
-    let live = true;
-    setRows(null);
+  const load = useCallback(() => {
     setError("");
-    api
+    return api
       .adminPayments({ status: status || undefined, user: picked?.id })
       .then((r) => {
-        if (!live) return;
         setRows(r.payments);
         setIncome(r.income);
       })
-      .catch((e) => live && setError(errText(e, t("بارگذاری پرداخت‌ها ناموفق بود.", "Could not load payments."))));
-    return () => {
-      live = false;
-    };
+      .catch((e) => setError(errText(e, t("بارگذاری پرداخت‌ها ناموفق بود.", "Could not load payments."))));
   }, [status, picked]);
+
+  useEffect(() => {
+    setRows(null);
+    void load();
+  }, [load]);
+
+  const reverse = (id: number) => {
+    if (!window.confirm(t("این پرداخت در درگاه برگشت خورده؟ اشتراک فعالی که از آن داده شده لغو می‌شود.", "Did the gateway reverse this payment? The active subscription it granted will be canceled."))) return;
+    setBusy(id);
+    api
+      .adminReversePayment(id)
+      .then(() => load())
+      .catch((e) => notify(errText(e, t("ثبت برگشت پرداخت ناموفق بود.", "Could not mark the payment reversed."))))
+      .finally(() => setBusy(null));
+  };
 
   return (
     <section className="card panel">
@@ -1469,6 +1480,7 @@ export function Payments({ picked }: { picked: Picked }) {
             { id: "pending", label: t("در انتظار", "Pending") },
             { id: "failed", label: t("ناموفق", "Failed") },
             { id: "canceled", label: t("لغو شده", "Canceled") },
+            { id: "reversed", label: t("برگشت‌خورده", "Reversed") },
           ]}
           value={status}
           onChange={setStatus}
@@ -1497,6 +1509,7 @@ export function Payments({ picked }: { picked: Picked }) {
                 <th scope="col">{t("کد پیگیری", "Reference")}</th>
                 <th scope="col">{t("کارت", "Card")}</th>
                 <th scope="col">{t("زمان", "Time")}</th>
+                <th scope="col">{t("کنش", "Action")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1519,11 +1532,18 @@ export function Payments({ picked }: { picked: Picked }) {
                   <td dir="ltr">{r.ref || "-"}</td>
                   <td dir="ltr">{r.card || "-"}</td>
                   <td>{fmtDateTime(r.paid > 0 ? r.paid : r.created)}</td>
+                  <td>
+                    {r.status === "paid" && (
+                      <button type="button" className="link danger" disabled={busy === r.id} onClick={() => reverse(r.id)}>
+                        {t("ثبت برگشت", "Mark reversed")}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {rows?.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="muted">
+                  <td colSpan={9} className="muted">
                     {t("پرداختی با این فیلتر نیست.", "No payments match this filter.")}
                   </td>
                 </tr>
@@ -3522,7 +3542,7 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
         {section === "chats" && sub?.id === "files" && <Uploads picked={picked} notify={notify} />}
         {section === "billing" && sub?.id === "plans" && <PlansAdmin notify={notify} />}
         {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
-        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
+        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} notify={notify} />}
         {section === "billing" && sub?.id === "discounts" && <DiscountsAdmin notify={notify} />}
         {section === "billing" && sub?.id === "campaigns" && <Campaigns />}
         {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}

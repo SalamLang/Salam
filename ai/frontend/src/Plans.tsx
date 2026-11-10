@@ -17,6 +17,7 @@ const PAYMENT_WORDS: Record<Payment["status"], string> = {
   paid: t("پرداخت شده", "Paid"),
   failed: t("ناموفق", "Failed"),
   canceled: t("لغو شده", "Canceled"),
+  reversed: t("برگشت‌خورده", "Reversed"),
 };
 
 const RESULTS: Record<string, { tone: "ok" | "warn"; text: string }> = {

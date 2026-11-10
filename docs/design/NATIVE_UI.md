@@ -351,30 +351,112 @@ differently:
 
 ## Interactivity: reactive state
 
-Today a handler changes the page through `std/dom`
-(`dom.SetText(dom.ById("count"), ...)`), which exists only in a browser.
-Phase 5 adds state that both targets understand:
+A handler only changes the program's state: mutable globals, and `state`
+variables declared inside a component. Every element that reads that state
+updates. Natively this works like Svelte or Solid: the compiler finds what
+each part of the page reads, marks every write, and the runtime re-runs only
+the parts whose state changed.
 
 ```salam
-component Counter(start: int):
+mut total := 0
+
+component Counter(name: str, start: int):
     state count := start
     box:
-        heading: content = "Count: " + count end
-        button: content = "+1" click = (): count++ end end
+        button: id = name click = (): count++ total++ end content = name + " " + count end
     end
 end
 
 page:
     title = "Counter"
-    Counter: start = 5 end
+    heading: content = "Total: " + total end
+    Counter: name = "a" start = 0 end
+    Counter: name = "b" start = 10 end
 end
 ```
 
-A handler only changes state, and every attribute that reads that state
-updates. Natively the component's subtree is rebuilt and reconciled (focus,
-scroll position and caret are kept). On the web the generated JavaScript
-re-runs the component's view and patches the DOM. `std/dom` stays as a
-web-only escape hatch.
+### Scopes
+
+The compiler splits the generated view into scopes. Each scope is a closure
+that builds a run of sibling elements, `b.Scope(site, (b: ui.Builder): ... end)`,
+so the runtime can call it again on its own later.
+
+- The page itself is site 0.
+- Every component instance is one scope. Components are still expanded
+  inline, but the expanded body is wrapped in its own closure, and the whole
+  instance re-runs when anything it reads changes, as a React component does.
+  Inside a component there are no smaller scopes.
+- Outside components, an element whose own attributes or text read state is a
+  scope, an `if` whose condition reads state is a scope, and an `each` whose
+  collection reads state is a scope (the list scope). An element that reads
+  only loop variables is not a scope.
+
+Each site gets a dependency set at compile time: the mutable globals read by
+its own attributes, text, conditions and collections, not by nested scopes.
+Calls to functions of the same program count as reads of whatever those
+functions read. Component parameters are substituted into the body, so a
+parameter bound to `total` makes the instance depend on `total`.
+
+### Change marks
+
+Every state global that some scope reads gets a small ID and a bit in a
+generated `i64` word (`__salam_touched_0`, 31 IDs per word). The compiler
+inserts `__salam_touched_0 |= 4` before every statement anywhere in the
+program that may write it: assignments, compound assignments, `++` and `--`,
+method calls other than the read only ones (`len`, `get`, `has`, ...), passing
+it to a `&:` parameter of a program function, and passing it to a function of
+another package (which cannot be checked, so it is assumed to write). A write
+to a component's `state` becomes `ui.TouchInstance(component, instance)`
+instead, so only that instance re-runs. A mark costs one OR into a global;
+handlers that change nothing run no extra code.
+
+The page view starts with `b.Reactive(words, take, sites)`: `take(w)` reads and
+clears word `w`, and `sites()` registers each site's dependency mask with
+`ui.ScopeSite` once. `SALAM_NATIVE_DUMP=1` shows all of it.
+
+### Runtime
+
+After every handler, timer or animation step the runtime reads the words.
+When nothing was touched it does nothing at all: no view run, no matching, no
+restyle, no layout and no paint. Otherwise it re-runs the scopes whose masks
+meet the touched bits, outermost first, and skips scopes inside one that is
+already re-running.
+
+A re-run builds the scope's elements again. When the new run of elements has
+the same shape (tags and child counts) as the old one, the runtime copies the
+changed text and attributes into the existing nodes and drops the new ones, so
+nothing else is rebuilt: changed elements are restyled one by one, and changed
+text is reshaped in place. If the paragraph keeps its size (or its block
+cannot change size) no layout runs and only the damage is repainted. When the
+shape changed (an `if` flipped, a row was added) the new elements are spliced
+into the tree, matched with the old ones by tag, `id` and `key` so focus and
+typed text survive, and the element, style and layout passes run once.
+
+Component state lives in generated vectors, one per `state` declaration,
+indexed by an instance slot. An instance keeps its slot when its parent
+re-runs: it is matched by site and by its position among siblings of the same
+site. A new instance initialises its state from the declaration.
+
+`ui.ScopeRuns()` counts scope re-runs (a full re-run counts one), for tests.
+
+### The escape hatch and the limits
+
+- Writes the compiler cannot see do not update the page: state changed inside
+  another package, through a pointer, or through a second name for the same
+  Vector. Call `ui.Invalidate()` after such a change; it re-runs the whole
+  view. `ui.Refresh()` does the same.
+- Instances inside `each` are matched by position, not by item: removing the
+  first row moves every later row's component state up by one.
+- A `state` needs a type the compiler can see without type checking: a
+  literal, a typed component parameter or `value as Type`.
+- `state` works only natively for now. On the web target it is an error; the
+  web page keeps re-rendering with `std/dom`.
+- Selecting a row in a list re-runs one scope per row that reads the selection.
+- The fallback for a hand written view without `b.Reactive` is the old one:
+  the whole view runs after every handler.
+
+Numbers for the 200 element page in `tools/bench/gui_ui.salam` are in the
+`gui.ui` site page.
 
 ## Phases
 

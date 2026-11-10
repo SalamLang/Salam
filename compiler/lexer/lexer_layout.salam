@@ -447,6 +447,50 @@ func layout_control(L &: Lx, k: int, word: str):
     L.layout_sub = LX_SUB_NAME
 end
 
+func layout_state_line(L &: Lx, w: str): bool:
+    if not lp.IsSoftState(L.pack, w):
+        ret false
+    end
+    mut j := str.Len(w)
+    b0 := peek2(L, j)
+    if b0 != 32 and b0 != 9:
+        ret false
+    end
+    until L.pos + j < L.n:
+        c := peek2(L, j)
+        if c == 10 or c == 0 or c == 61:
+            ret false
+        end
+        if c == 58:
+            ret peek2(L, j + 1) == 61
+        end
+        j++
+    end
+    ret false
+end
+
+func layout_state_decl(L &: Lx, w: str):
+    b := lx_pos(L)
+    repeat str.Len(w):
+        adv(L)
+    end
+    emit(L, tok.TK_KW_MUT, b, w)
+    layout_skip_inline_ws(L)
+    if is_ident_start(peek(L)):
+        scan_ident(L)
+    end
+    layout_skip_inline_ws(L)
+    cb := lx_pos(L)
+    if peek(L) == 58 and peek2(L, 1) == 61:
+        adv(L)
+        adv(L)
+        emit(L, tok.TK_COLON_ASSIGN, cb, ":=")
+        L.layout_sub = LX_SUB_VALUE
+        ret
+    end
+    error_at(L, cb, "expected ':=' after the state name, as in 'state count := 0'")
+end
+
 func layout_name(L &: Lx):
     b := lx_pos(L)
     if layout_try_end_inline(L, b):
@@ -454,6 +498,10 @@ func layout_name(L &: Lx):
     end
     if is_ident_start(peek(L)):
         w := layout_word_at(L)
+        if layout_state_line(L, w):
+            layout_state_decl(L, w)
+            ret
+        end
         mut ck := lp.LookupKeyword(L.pack, w)
         if ck == tok.TK_KW_STEP:
             ck = tok.TK_KW_EACH

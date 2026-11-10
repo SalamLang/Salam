@@ -21,6 +21,8 @@ import sort
 const GLOBAL_CSS := `*{box-sizing:border-box}.grid{display:flex;flex-wrap:wrap;gap:8px;padding:8px}.card{width:180px;padding:8px;border:1px solid #ccd;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.2);background:#fff}.card:hover{background:#eef4ff;border-color:#36c}h3{margin:0 0 4px;font-size:15px}p{margin:0;color:#444}button{margin-top:6px}`
 
 mut clicks := 0
+mut noops := 0
+mut touched := 0 as i64
 
 func compile(p &: css.Program):
     _n := css.CompileCss(p, GLOBAL_CSS)
@@ -174,6 +176,73 @@ end
 
 func hit():
     clicks++
+    touched |= 1
+end
+
+func noop():
+    noops++
+end
+
+func take(w: int): i64:
+    mut t := 0 as i64
+    if w == 0:
+        t = touched
+        touched = 0
+    end
+    ret t
+end
+
+func sites():
+    ui.ScopeSite(1, -1, 0, 1)
+end
+
+func card(b: ui.Builder, i: int):
+    b.Open("div")
+    b.Class("card")
+    b.Id("c" + i)
+    b.Open("h3")
+    b.Text("Item " + i)
+    b.Close()
+    b.Open("p")
+    b.Text("Some ")
+    b.Open("b")
+    b.Text("bold")
+    b.Close()
+    b.Text(" text for card " + i + ".")
+    b.Close()
+    if i == 0:
+        b.Scope(1, (b: ui.Builder):
+            b.Open("button")
+            b.Id("b0")
+            b.On("click", (): hit() end)
+            b.Text("Open " + clicks)
+            b.Close()
+        end)
+    else:
+        b.Open("button")
+        b.Id("b" + i)
+        b.On("click", (): noop() end)
+        b.Text("Open 0")
+        b.Close()
+    end
+    b.Close()
+end
+
+func view_whole(b: ui.Builder):
+    b.Title("Bench")
+    b.Lang("en")
+    b.Dir("ltr")
+    b.Open("div")
+    b.Class("grid")
+    repeat 40 in i:
+        card(b, i)
+    end
+    b.Close()
+end
+
+func view_scoped(b: ui.Builder):
+    b.Reactive(1, (w: int): ret take(w) end, (): sites() end)
+    view_whole(b)
 end
 
 func median(v &: Vector<f64>): f64:
@@ -219,6 +288,52 @@ func run_compiled(script: str): f64:
     t0 := time.MonoNanos()
     ui.RunCompiledWith((): ret styles() end, (b: ui.Builder): view(b) end, o)
     ret ms(t0)
+end
+
+func run_page(script: str, scoped: bool): f64:
+    o := ui.Options { width = 1024.0, height = 768.0, headless = true, script = script }
+    t0 := time.MonoNanos()
+    if scoped:
+        ui.RunCompiledWith((): ret styles() end, (b: ui.Builder): view_scoped(b) end, o)
+    else:
+        ui.RunCompiledWith((): ret styles() end, (b: ui.Builder): view_whole(b) end, o)
+    end
+    ret ms(t0)
+end
+
+func same_steps(cmd: str, n: int): str:
+    mut b := str.NewBuilder()
+    repeat n:
+        str.BufAppend(b, cmd + "\n")
+    end
+    str.BufAppend(b, "quit\n")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func reactive_numbers(rounds: int, n: int):
+    mut wc := Vector {} as Vector<f64>
+    mut sc := Vector {} as Vector<f64>
+    mut wn := Vector {} as Vector<f64>
+    mut sn := Vector {} as Vector<f64>
+    clicks_steps := same_steps("click #b0", n)
+    noop_steps := same_steps("click #b5", n)
+    repeat rounds:
+        w0 := run_page("quit\n", false)
+        s0 := run_page("quit\n", true)
+        wc.push((run_page(clicks_steps, false) - w0) / (n as f64))
+        sc.push((run_page(clicks_steps, true) - s0) / (n as f64))
+        wn.push((run_page(noop_steps, false) - w0) / (n as f64))
+        sn.push((run_page(noop_steps, true) - s0) / (n as f64))
+    end
+    println "counter click ms whole view", median(wc), "one scope", median(sc)
+    println "nothing-changed click ms whole view", median(wn), "scoped", median(sn)
+    println "scope runs in last scoped run", ui.ScopeRuns()
+    wc.free()
+    sc.free()
+    wn.free()
+    sn.free()
 end
 
 func main:
@@ -274,6 +389,7 @@ func main:
     println "click re-run ms html", median(hc), "compiled", median(cc)
     println "hover repaint ms html", median(hh), "compiled", median(ch)
     println "scroll frame ms html", median(hsc), "compiled", median(csc)
+    reactive_numbers(rounds, n)
     println "clicks", clicks
     parse.free()
     style.free()

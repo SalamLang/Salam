@@ -746,6 +746,38 @@ func ws_text(wc &: WsCtx, chunks &: Vector<str>, text: str): str:
     ret out
 end
 
+func ws_is_render(n: int): bool:
+    ret n < g_lo_ws_kind.len() and g_lo_ws_kind.get(n) == LI_RENDER
+end
+
+func ws_inst_has(inst: int, render: bool): bool:
+    repeat g_lo_ws_inst.len() in n:
+        if g_lo_ws_inst.get(n) == inst and ws_is_render(n) == render:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ws_stores(lw &: LoLower, a &: at.Ast, nm: LnNames, inst: int, tn: str, render: bool): str:
+    mut s := ""
+    repeat g_lo_ws_inst.len() in n:
+        if g_lo_ws_inst.get(n) != inst or ws_is_render(n) != render:
+            continue
+        end
+        decl := g_lo_ws_decl.get(n)
+        wn := ws_name(n)
+        tmp := "__salam_i_" + co.U64Toa(n as u64)
+        s += tmp + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
+        s += "if " + tn + " < " + wn + "." + nm.len + "():\n"
+        s += wn + "[" + tn + "] = " + tmp + "\n"
+        s += "else:\n"
+        s += wn + "." + nm.push + "(" + tmp + ")\n"
+        s += "end\n"
+    end
+    ret s
+end
+
 func ws_enter(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, inst: int): str:
     is := co.U64Toa(inst as u64)
     mut parts := ""
@@ -773,23 +805,13 @@ func ws_enter(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, inst: int): 
     end
     tn := "__salam_t_" + is
     mut s := "salamWsSlot(" + is + ", " + parts + ")\n"
-    s += "if salamWsFresh():\n"
     s += tn + " := salamWsCur(" + is + ")\n"
-    repeat g_lo_ws_inst.len() in n:
-        if g_lo_ws_inst.get(n) != inst:
-            continue
-        end
-        decl := g_lo_ws_decl.get(n)
-        wn := ws_name(n)
-        tmp := "__salam_i_" + co.U64Toa(n as u64)
-        s += tmp + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
-        s += "if " + tn + " < " + wn + "." + nm.len + "():\n"
-        s += wn + "[" + tn + "] = " + tmp + "\n"
-        s += "else:\n"
-        s += wn + "." + nm.push + "(" + tmp + ")\n"
+    if ws_inst_has(inst, false):
+        s += "if salamWsFresh():\n"
+        s += ws_stores(lw, a, nm, inst, tn, false)
         s += "end\n"
     end
-    s += "end\n"
+    s += ws_stores(lw, a, nm, inst, tn, true)
     ret s
 end
 
@@ -797,6 +819,13 @@ func ws_view_source(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, i: int
     wc.ctl.clear()
     wc.multi.clear()
     mut body := "mut __salam_h := \"\"\n"
+    if ws_kind(i) == WS_SINGLE:
+        repeat g_lo_ws_inst.len() in rn:
+            if g_lo_ws_inst.get(rn) == i and ws_is_render(rn):
+                body += ws_name(rn) + " = " + ws_slot(lw, at.Clone(a, at.Get(a, g_lo_ws_decl.get(rn)).a)) + "\n"
+            end
+        end
+    end
     mut p := 0
     mut start := 0
     n := str.Len(doc)

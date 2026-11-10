@@ -316,9 +316,25 @@ func _apply_chain(cv &: Canvas, buf: u32*, w: int, h: int, chain: FilterChain):
     end
 end
 
-func _cv_backdrop(cv &: Canvas, r: Rect, radii: Radii, chain: FilterChain):
+func _mirror_index(i: int, n: int): int:
+    if n <= 1:
+        ret 0
+    end
+    p := 2 * n
+    mut k := i % p
+    if k < 0:
+        k += p
+    end
+    ret k < n ? k : p - 1 - k
+end
+
+func _cv_backdrop(cv &: Canvas, r: Rect, radii: Radii, chain: FilterChain, opacity: f64):
     _cv_ready(cv)
     if cv.pixels == null or chain.items.len() == 0:
+        ret
+    end
+    op := _clamp255(math.Floor(opacity * 255.0 + 0.5) as int)
+    if op <= 0:
         ret
     end
     sh := cv.state.sh
@@ -326,37 +342,41 @@ func _cv_backdrop(cv &: Canvas, r: Rect, radii: Radii, chain: FilterChain):
     if not _shape_from(cv, r, zero, sh, 108):
         ret
     end
-    ext := math.Ceil(chain.Extent() * _maxf(_xf_scale_x(cv), _xf_scale_y(cv))) as int
-    bx0 := _maxi(_maxi(sh[108] >> 8, cv.state.cx0) - ext, cv.state.tox)
-    by0 := _maxi(_maxi(sh[109] >> 8, cv.state.cy0) - ext, cv.state.toy)
-    bx1 := _mini(_mini((sh[110] + 255) >> 8, cv.state.cx1) + ext, cv.state.tox + cv.state.tw)
-    by1 := _mini(_mini((sh[111] + 255) >> 8, cv.state.cy1) + ext, cv.state.toy + cv.state.th)
+    if _maxi(sh[108] >> 8, cv.state.cx0) >= _mini((sh[110] + 255) >> 8, cv.state.cx1) or _maxi(sh[109] >> 8, cv.state.cy0) >= _mini((sh[111] + 255) >> 8, cv.state.cy1):
+        ret
+    end
+    bx0 := _maxi(sh[108] >> 8, cv.state.tox)
+    by0 := _maxi(sh[109] >> 8, cv.state.toy)
+    bx1 := _mini((sh[110] + 255) >> 8, cv.state.tox + cv.state.tw)
+    by1 := _mini((sh[111] + 255) >> 8, cv.state.toy + cv.state.th)
     w := bx1 - bx0
     h := by1 - by0
     if w <= 0 or h <= 0:
         ret
     end
-    buf := mem.Allocate(((w as i64) * (h as i64) * (4 as i64)) as u64) as u32*
+    ext := math.Ceil(chain.Extent() * _maxf(_xf_scale_x(cv), _xf_scale_y(cv))) as int
+    pw := w + 2 * ext
+    ph := h + 2 * ext
+    buf := mem.Allocate(((pw as i64) * (ph as i64) * (4 as i64)) as u64) as u32*
     tp := cv.state.tpix
-    repeat h in j:
-        srow := (by0 + j - cv.state.toy) * cv.state.tspx + bx0 - cv.state.tox
-        repeat w in i:
-            buf[j * w + i] = tp[srow + i]
+    repeat ph in j:
+        sy := _mirror_index(j - ext, h)
+        srow := (by0 + sy - cv.state.toy) * cv.state.tspx + bx0 - cv.state.tox
+        drow := j * pw
+        repeat pw in i:
+            buf[drow + i] = tp[srow + _mirror_index(i - ext, w)]
         end
     end
-    _apply_chain(cv, buf, w, h, chain)
-    cv.state.i_pix = buf
-    cv.state.i_spx = w
+    _apply_chain(cv, buf, pw, ph, chain)
+    cv.state.i_pix = ((buf as usize) + (((ext * pw + ext) * 4) as usize)) as u32*
+    cv.state.i_spx = pw
     cv.state.i_ox = bx0
     cv.state.i_oy = by0
     cv.state.i_w = w
     cv.state.i_h = h
-    cv.state.i_op = 255
+    cv.state.i_op = op
     cv.state.i_tile = false
     cv.state.i_affine = false
-    mut p := Path {}
-    p.AddRoundedRect(r, radii)
-    _fill_path_kind(cv, p, FillRule.NonZero, _K_IMAGE, 0 as u32)
-    p.Free()
+    _fill_rounded_kind(cv, r, radii, _K_IMAGE, 0 as u32)
     mem.Free(buf as void*)
 end

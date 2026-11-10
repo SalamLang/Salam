@@ -43,6 +43,8 @@ struct LnNames:
     pub kw_each: str = "each"
     pub kw_in: str = "in"
     pub kw_ret: str = "ret"
+    pub kw_mut: str = "mut"
+    pub kw_as: str = "as"
     pub kw_import: str = "import"
     pub kw_true: str = "true"
     pub kw_false: str = "false"
@@ -68,6 +70,20 @@ struct LnNames:
     pub title: str = "Title"
     pub lang: str = "Lang"
     pub dir: str = "Dir"
+    pub scope: str = "Scope"
+    pub reactive: str = "Reactive"
+    pub instance: str = "Instance"
+    pub fresh: str = "Fresh"
+    pub site: str = "ScopeSite"
+    pub touch: str = "TouchInstance"
+    pub vec: str = "Vector"
+    pub len: str = "len"
+    pub push: str = "push"
+    pub t_int: str = "int"
+    pub t_i64: str = "i64"
+    pub t_f64: str = "f64"
+    pub t_str: str = "str"
+    pub t_bool: str = "bool"
 end
 
 struct LnGen:
@@ -80,6 +96,8 @@ struct LnGen:
     pub media_seq: int = 0
     pub sel: Vector<str> = Vector {}
     pub a_node: int = 0
+    pub rx: LnReact = LnReact {}
+    pub in_comp: int = 0
 end
 
 func ln_names(pack: lp.Langpack): LnNames:
@@ -107,6 +125,20 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.title = "عنوان صفحه"
     n.lang = "زبان صفحه"
     n.dir = "جهت صفحه"
+    n.scope = "دامنه واکنشی"
+    n.reactive = "راه اندازی واکنش"
+    n.instance = "نمونه بخش"
+    n.fresh = "نمونه تازه"
+    n.site = "جایگاه دامنه"
+    n.touch = "لمس نمونه"
+    n.vec = "وکتور"
+    n.len = "طول"
+    n.push = "بیفزا"
+    n.t_int = "صحیح"
+    n.t_i64 = "صحیح۶۴"
+    n.t_f64 = "اعشار۶۴"
+    n.t_str = "رشته"
+    n.t_bool = "منطقی"
     n.entry = lp.Entry(pack)
     ret n
 end
@@ -249,7 +281,7 @@ func ln_line(g &: LnGen, text: str):
 end
 
 func ln_call(g &: LnGen, method: str, args: str):
-    ln_line(g, "b." + method + "(" + args + ")")
+    ln_line(g, "__salam_b." + method + "(" + args + ")")
 end
 
 func ln_dyn_num(v: str): int:
@@ -463,11 +495,110 @@ func ln_items(g &: LnGen, a &: at.Ast, container: int):
         if k == at.AST_LAYOUT_ELEMENT:
             ln_element(g, a, cid)
         else k == at.AST_IF:
-            ln_if(g, a, cid)
+            if ln_rx_is_comp(a, cid):
+                ln_comp(g, a, cid)
+            else:
+                ln_if_scoped(g, a, cid)
+            end
         else k == at.AST_EACH:
-            ln_each(g, a, cid)
+            ln_each_scoped(g, a, cid)
         end
     end
+end
+
+func ln_scope_open(g &: LnGen, site: int):
+    ln_line(g, "__salam_b." + g.nm.scope + "(" + co.U64Toa(site as u64) + g.nm.sep + "(__salam_b: " + g.nm.ui + "." + g.nm.builder + "):")
+    g.depth++
+end
+
+func ln_scope_close(g &: LnGen):
+    g.depth--
+    ln_line(g, g.nm.kw_end + ")")
+end
+
+func ln_if_scoped(g &: LnGen, a &: at.Ast, nid: int):
+    mut deps := Vector {} as Vector<int>
+    defer deps.free()
+    if g.in_comp == 0:
+        ln_rx_cond(g.rx, g.lw, a, nid, deps)
+    end
+    if deps.len() == 0:
+        ln_if(g, a, nid)
+        ret
+    end
+    ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
+    ln_if(g, a, nid)
+    ln_scope_close(g)
+end
+
+func ln_each_scoped(g &: LnGen, a &: at.Ast, nid: int):
+    mut deps := Vector {} as Vector<int>
+    defer deps.free()
+    if g.in_comp == 0:
+        ln_rx_markers(g.rx, g.lw, a, val_str(a, at.Get(a, nid).a), deps)
+    end
+    if deps.len() == 0:
+        ln_each(g, a, nid)
+        ret
+    end
+    ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
+    ln_each(g, a, nid)
+    ln_scope_close(g)
+end
+
+func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    ci := n.value_int as int
+    mut deps := Vector {} as Vector<int>
+    defer deps.free()
+    ln_rx_tree(g.rx, g.lw, a, n.b, deps)
+    mut has_state := false
+    repeat at.ChildCount(a, n.b) in i:
+        if at.KindOf(a, at.Child(a, n.b, i)) == at.AST_VAR_DECL:
+            has_state = true
+        end
+    end
+    if deps.len() == 0 and not has_state:
+        g.in_comp++
+        ln_items(g, a, n.b)
+        g.in_comp--
+        ret
+    end
+    ln_scope_open(g, ln_rx_site(g.rx, has_state ? ci : 0 - 1, deps))
+    if has_state:
+        if not ln_rx_comp_has_state(g.rx, ci):
+            g.rx.st_comps.push(ci)
+        end
+        cs := co.U64Toa(ci as u64)
+        kname := "__salam_k_" + cs
+        ln_line(g, kname + " := __salam_b." + g.nm.instance + "(" + cs + ")")
+        ln_line(g, g.nm.kw_if + " __salam_b." + g.nm.fresh + "():")
+        g.depth++
+        repeat at.ChildCount(a, n.b) in j:
+            sid := at.Child(a, n.b, j)
+            if at.KindOf(a, sid) != at.AST_VAR_DECL:
+                continue
+            end
+            sd := at.Get(a, sid)
+            gs := co.U64Toa(sd.value_int)
+            idx := g.lw.slots.len()
+            g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = sd.a })
+            store := "__salam_st_" + gs
+            tmp := "__salam_i_" + gs
+            ln_line(g, tmp + " := " + ln_dyn_name(idx))
+            ln_line(g, g.nm.kw_if + " " + kname + " < " + store + "." + g.nm.len + "():")
+            ln_line(g, "    " + store + "[" + kname + "] = " + tmp)
+            ln_line(g, g.nm.kw_else + ":")
+            ln_line(g, "    " + store + "." + g.nm.push + "(" + tmp + ")")
+            ln_line(g, g.nm.kw_end)
+        end
+        g.depth--
+        ln_line(g, g.nm.kw_end)
+    end
+    g.in_comp++
+    ln_items(g, a, n.b)
+    g.in_comp--
+    ln_scope_close(g)
 end
 
 func ln_if(g &: LnGen, a &: at.Ast, nid: int):
@@ -559,6 +690,14 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
         ln_items(g, a, el)
         ret
     end
+    mut deps := Vector {} as Vector<int>
+    defer deps.free()
+    if g.in_comp == 0:
+        ln_rx_own(g.rx, g.lw, a, el, deps)
+    end
+    if deps.len() > 0:
+        ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
+    end
     ln_call(g, g.nm.open, ln_quote(tag))
     g.depth++
     b0 := ln_compile(g, la.css)
@@ -587,6 +726,9 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     _ps := g.sel.pop()
     g.depth--
     ln_call(g, g.nm.close, "")
+    if deps.len() > 0:
+        ln_scope_close(g)
+    end
 end
 
 func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
@@ -647,14 +789,97 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
     end
 end
 
+func ln_state_type(g &: LnGen, gi: int): str:
+    lit := g_lo_st_lit.get(gi)
+    if str.Equals(lit, "int"):
+        ret g.nm.t_int
+    end
+    if str.Equals(lit, "f64"):
+        ret g.nm.t_f64
+    end
+    if str.Equals(lit, "str"):
+        ret g.nm.t_str
+    end
+    if str.Equals(lit, "bool"):
+        ret g.nm.t_bool
+    end
+    ret "__salam_type_" + co.U64Toa(gi as u64)
+end
+
+func ln_rx_source(g &: LnGen): str:
+    n := g.nm
+    words := ln_rx_words(g.rx)
+    mut s := ""
+    repeat words in w:
+        s += n.kw_mut + " " + ln_rx_word_name(w) + " := 0 " + n.kw_as + " " + n.t_i64 + "\n"
+    end
+    repeat g_lo_st_comp.len() in gi:
+        if ln_rx_comp_has_state(g.rx, g_lo_st_comp.get(gi)):
+            s += n.kw_mut + " __salam_st_" + co.U64Toa(gi as u64) + " := " + n.vec + " {} " + n.kw_as + " " + n.vec + "<" + ln_state_type(g, gi) + ">\n"
+        end
+    end
+    s += "\n" + n.kw_func + " __salam_take(__salam_w: " + n.t_int + "): " + n.t_i64 + ":\n"
+    s += "    " + n.kw_mut + " __salam_t := 0 " + n.kw_as + " " + n.t_i64 + "\n"
+    repeat words in w2:
+        wn := ln_rx_word_name(w2)
+        s += "    " + n.kw_if + " __salam_w == " + co.U64Toa(w2 as u64) + ":\n"
+        s += "        __salam_t = " + wn + "\n"
+        s += "        " + wn + " = 0\n"
+        s += "    " + n.kw_end + "\n"
+    end
+    s += "    " + n.kw_ret + " __salam_t\n" + n.kw_end + "\n\n"
+    s += n.kw_func + " __salam_sites():\n"
+    s += "    " + n.ui + "." + n.site + "(0" + n.sep + "0 - 1" + n.sep + "0" + n.sep + "0)\n"
+    repeat g.rx.site_comp.len() in si:
+        mut masks := Vector {} as Vector<int>
+        repeat words:
+            masks.push(0)
+        end
+        repeat g.rx.dep_site.len() in di:
+            if g.rx.dep_site.get(di) == si:
+                id := g.rx.dep_id.get(di)
+                wi := id / LN_RX_BITS
+                masks.set(wi, masks.get(wi) | ln_rx_mask(id))
+            end
+        end
+        comp := g.rx.site_comp.get(si)
+        cs := comp < 0 ? "0 - 1" : co.U64Toa(comp as u64)
+        mut any := false
+        repeat words in w3:
+            if masks.get(w3) != 0:
+                any = true
+                s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + co.U64Toa(w3 as u64) + n.sep + co.U64Toa(masks.get(w3) as u64) + ")\n"
+            end
+        end
+        if not any and comp >= 0:
+            s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + "0" + n.sep + "0)\n"
+        end
+        masks.free()
+    end
+    s += n.kw_end + "\n\n"
+    s += n.kw_func + " __salam_marks():\n"
+    repeat g.rx.ids.len() in id2:
+        s += "    " + ln_rx_word_name(id2 / LN_RX_BITS) + " |= " + co.U64Toa(ln_rx_mask(id2) as u64) + "\n"
+    end
+    each ci in g.rx.st_comps:
+        cs2 := co.U64Toa(ci as u64)
+        s += "    " + n.ui + "." + n.touch + "(" + cs2 + n.sep + "__salam_k_" + cs2 + ")\n"
+    end
+    s += "    " + ln_rx_word_name(0) + " |= 0\n"
+    s += n.kw_end + "\n\n"
+    ret s
+end
+
 func ln_source(g &: LnGen, with_main: bool): str:
     n := g.nm
     mut s := n.kw_import + " " + n.import_ui + "\n" + n.kw_import + " " + n.import_css + "\n\n"
-    s += n.kw_func + " " + NATIVE_PAGE_VIEW + "(b: " + n.ui + "." + n.builder + "):\n" + g.out + n.kw_end + "\n\n"
+    s += ln_rx_source(g)
+    rline := "    __salam_b." + n.reactive + "(" + co.U64Toa(ln_rx_words(g.rx) as u64) + n.sep + "(__salam_w: " + n.t_int + "): " + n.kw_ret + " __salam_take(__salam_w) " + n.kw_end + n.sep + "(): __salam_sites() " + n.kw_end + ")\n"
+    s += n.kw_func + " " + NATIVE_PAGE_VIEW + "(__salam_b: " + n.ui + "." + n.builder + "):\n" + rline + g.out + n.kw_end + "\n\n"
     s += css.ProgramSource(g.prog, NATIVE_STYLES, n.css) + "\n"
     if with_main:
         s += n.kw_func + " " + n.entry + ":\n"
-        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + NATIVE_STYLES + "() " + n.kw_end + n.sep + "(b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(b) " + n.kw_end + ")\n"
+        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + NATIVE_STYLES + "() " + n.kw_end + n.sep + "(__salam_b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(__salam_b) " + n.kw_end + ")\n"
         s += n.kw_end + "\n"
     end
     ret s
@@ -668,9 +893,16 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     if lb == 0:
         ret false
     end
+    g_lo_st_comp.clear()
+    g_lo_st_name.clear()
+    g_lo_st_type.clear()
+    g_lo_st_lit.clear()
+    g_lo_native_scopes = true
     _ex := ExpandBlock(log, pack, ct, a, prog, lb, lo_dir_of(file))
+    g_lo_native_scopes = false
     sm.LayoutResolve(a, lb)
     mut g := LnGen {}
+    defer ln_rx_free(g.rx)
     defer g.lw.slots.free()
     defer g.lw.shadow.free()
     defer g.lw.funcs.free()
@@ -685,6 +917,11 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     lo_shadow_globals(g.lw, a, prog)
     ln_pre_events(g, a, lb, 0 - 1)
     lo_walk(g.lw, a, lb, 0, 0 - 1)
+    ln_rx_init(g.rx, a, prog)
+    mut rdeps := Vector {} as Vector<int>
+    ln_rx_own(g.rx, g.lw, a, lb, rdeps)
+    _root := ln_rx_site(g.rx, 0 - 1, rdeps)
+    rdeps.free()
     ln_page_settings(g, a, lb, pack)
     ln_items(g, a, lb)
     errs := css.ProgramErrors(g.prog)
@@ -714,8 +951,32 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
             list.push(cid)
         end
     end
+    mut gvars := Vector {} as Vector<int>
+    defer gvars.free()
+    repeat at.ChildCount(a, sp) in cv:
+        vid := at.Child(a, sp, cv)
+        if at.KindOf(a, vid) == at.AST_VAR_DECL:
+            ln_rx_fix_types(a, vid)
+            lo_span_tree(a, vid, lb, base)
+            gvars.push(vid)
+        end
+    end
+    mut placed := false
     repeat pn.list.len() in k:
-        list.push(pn.list.get(k))
+        item := pn.list.get(k)
+        ph := at.ToplevelOrderPhase(a, item)
+        if not placed and (ph == at.AST_ORDER_VAR or ph == at.AST_ORDER_TYPEDEF or ph == at.AST_ORDER_FUNC):
+            each gv in gvars:
+                list.push(gv)
+            end
+            placed = true
+        end
+        list.push(item)
+    end
+    if not placed:
+        each gv2 in gvars:
+            list.push(gv2)
+        end
     end
     repeat at.ChildCount(a, sp) in cj:
         cid2 := at.Child(a, sp, cj)
@@ -723,6 +984,13 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
             continue
         end
         fnode := at.Get(a, cid2)
+        if str.Equals(fnode.name, "__salam_marks"):
+            blk := at.Get(a, fnode.a)
+            repeat blk.list.len() in ti:
+                g.rx.tmpl.push(blk.list.get(ti))
+            end
+            continue
+        end
         if str.Equals(fnode.name, NATIVE_PAGE_VIEW):
             body := lo_splice(g.lw, a, fnode.a, chunks, lb)
             mut fn2 := at.Get(a, cid2)
@@ -740,9 +1008,22 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     pn.list = list
     at.Put(a, prog, pn)
     old.free()
+    ln_rx_mark_program(g.rx, a, prog)
     mut lbm := at.Get(a, lb)
     lbm.view_glue = true
     at.Put(a, lb, lbm)
+    mut pn2 := at.Get(a, prog)
+    mut kept := Vector {} as Vector<int>
+    repeat pn2.list.len() in ck:
+        cdid := pn2.list.get(ck)
+        if at.KindOf(a, cdid) != at.AST_LAYOUT_COMPONENT:
+            kept.push(cdid)
+        end
+    end
+    mut old2 := pn2.list
+    pn2.list = kept
+    at.Put(a, prog, pn2)
+    old2.free()
     lg.Log(log, lg.PH_DRIVER, lg.LOG_INFO, "page " + file + " compiled for a native window")
     ret true
 end

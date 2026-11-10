@@ -25,6 +25,7 @@ import sync
 
 include aistore "store.salam"
 include aiweb "web.salam"
+include aicampaign "campaign.salam"
 
 const CALL_MS := 20000
 const DAY := 86400
@@ -726,7 +727,7 @@ func valid_discount_code(c: str): bool:
         if not ((ch >= 65 and ch <= 90) or (ch >= 48 and ch <= 57) or ch == 45 or ch == 95):
             ret false
         end
-        i += 1
+        i++
     end
     ret true
 end
@@ -828,6 +829,35 @@ func finish_payment(id: str, status: str, ref: str, card: str, message: str):
     aistore.Lock()
     _u := aistore.Run("UPDATE payments SET status = ?1, ref = ?2, card = ?3, message = ?4, paid = ?5 WHERE id = ?6", a)
     aistore.Unlock()
+    if status == "paid":
+        record_payment_campaign(id)
+    end
+end
+
+func record_payment_campaign(id: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT user_id, amount, campaign_vid, campaign_source, campaign_medium, campaign_name, campaign_term, campaign_content FROM payments WHERE id = ?1", one(id))
+    mut uid := 0 as i64
+    mut amount := 0 as i64
+    mut vid := ""
+    mut source := ""
+    mut medium := ""
+    mut campaign := ""
+    mut term := ""
+    mut content := ""
+    if aistore.Next(rows):
+        uid = aistore.Int64(rows, 0)
+        amount = aistore.Int64(rows, 1)
+        vid = aistore.Text(rows, 2)
+        source = aistore.Text(rows, 3)
+        medium = aistore.Text(rows, 4)
+        campaign = aistore.Text(rows, 5)
+        term = aistore.Text(rows, 6)
+        content = aistore.Text(rows, 7)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aicampaign.RecordPayment(vid, uid, id.to_int() as i64, amount, source, medium, campaign, term, content)
 end
 
 func claim_stale(pid: str): bool:
@@ -936,6 +966,12 @@ func checkout(ctx: i64):
     plan_id := str.Trim(json.Get(body, "plan"))
     gateway := str.Lower(str.Trim(json.Get(body, "gateway")))
     code := str.Upper(str.Trim(json.Get(body, "code")))
+    campaign_vid := json.Get(body, "vid")
+    campaign_source := json.Get(body, "source")
+    campaign_medium := json.Get(body, "medium")
+    campaign_name := json.Get(body, "campaign")
+    campaign_term := json.Get(body, "term")
+    campaign_content := json.Get(body, "content")
     if not buyable(plan_id):
         aiweb.Fail(ctx, 400, "plan", "این پلن برای خرید نیست.")
         ret
@@ -972,8 +1008,14 @@ func checkout(ctx: i64):
     a.push(n(aistore.Now()))
     a.push(discount_id)
     a.push(n(p.price - charge))
+    a.push(campaign_vid)
+    a.push(campaign_source)
+    a.push(campaign_medium)
+    a.push(campaign_name)
+    a.push(campaign_term)
+    a.push(campaign_content)
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO payments (user_id, plan, gateway, amount, status, ip, created, discount_code_id, discount_amount) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8)", a)
+    ok := aistore.Run("INSERT INTO payments (user_id, plan, gateway, amount, status, ip, created, discount_code_id, discount_amount, campaign_vid, campaign_source, campaign_medium, campaign_name, campaign_term, campaign_content) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)", a)
     pid := aistore.LastId()
     aistore.Unlock()
     if not ok:
@@ -1320,7 +1362,7 @@ func valid_plan_id(id: str): bool:
         if not ((c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45 or c == 95):
             ret false
         end
-        i += 1
+        i++
     end
     ret true
 end
@@ -1431,7 +1473,7 @@ func admin_discounts(ctx: i64):
         mut users := 0
         discount_counts(ds[i].id, uses, users)
         items.push(discount_json(ds[i], uses, users, emails[i], names[i]))
-        i += 1
+        i++
     end
     aiweb.Reply(ctx, 200, `{"discounts": ` + json.Array(items) + "}")
 end

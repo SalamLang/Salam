@@ -42,6 +42,15 @@ mut RELAXED := HashMap {} as HashMap<str, str>
 mut TALLY := HashMap {} as HashMap<str, int>
 mut TALLIED := HashMap {} as HashMap<str, str>
 
+pub struct ChatInfo:
+    pub id: str = ""
+    pub source: str = ""
+    pub client_os: str = ""
+    pub client_browser: str = ""
+    pub client_version: str = ""
+    pub client_arch: str = ""
+end
+
 func check_due(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
     t := aistore.Now()
@@ -168,7 +177,7 @@ func verify(sid: str, text: str): bool:
     ret sent
 end
 
-pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
+pub func SaveUsage(table: str, id: str, u: aiengine.Usage, model: str = ""):
     if not u.ok or id.len() == 0:
         ret
     end
@@ -189,6 +198,10 @@ pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
         a.push(conv.FormatInt(u.ms))
         a.push(conv.FormatInt(aistore.Now()))
         extra = ", ms = ?12, finished = ?13"
+        if model.len() > 0:
+            a.push(model)
+            extra += ", model = ?14"
+        end
     end
     aistore.Lock()
     _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, cost_in = ?7, cost_out = ?8, tools = ?9, steps = ?10" + extra + " WHERE id = ?11", a)
@@ -205,6 +218,28 @@ pub func OwnerEmail(engine_sid: str): str:
     email := aistore.OneText("SELECT u.email FROM chats c JOIN users u ON u.id = c.user_id WHERE c.engine_sid = ?1", a)
     aistore.Unlock()
     ret email
+end
+
+pub func ChatInfoOf(engine_sid: str): ChatInfo:
+    mut c := ChatInfo {}
+    if engine_sid.len() == 0:
+        ret c
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(engine_sid)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, source, client_os, client_browser, client_version, client_arch FROM chats WHERE engine_sid = ?1", a)
+    if aistore.Next(rows):
+        c.id = aistore.Text(rows, 0)
+        c.source = aistore.Text(rows, 1)
+        c.client_os = aistore.Text(rows, 2)
+        c.client_browser = aistore.Text(rows, 3)
+        c.client_version = aistore.Text(rows, 4)
+        c.client_arch = aistore.Text(rows, 5)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret c
 end
 
 pub func Init():

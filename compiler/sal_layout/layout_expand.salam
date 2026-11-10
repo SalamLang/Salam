@@ -167,7 +167,7 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         ret cp
     end
     if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST or k == at.AST_ASSIGN or k == at.AST_INCDEC or k == at.AST_SLICE or k == at.AST_ARRAY_LIT or k == at.AST_STRUCT_LIT or k == at.AST_FIELD_INIT:
-        na := k == at.AST_CALL ? v.a : subst_value(a, v.a, f)
+        na := k == at.AST_CALL ? subst_callee(a, v.a, f) : subst_value(a, v.a, f)
         nb := subst_value(a, v.b, f)
         nc := subst_value(a, v.c, f)
         mut args := Vector {} as Vector<int>
@@ -200,6 +200,46 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
     ret vid
 end
 
+func subst_callee(a &: at.Ast, cid: int, f &: LoFrame): int:
+    if cid == 0:
+        ret cid
+    end
+    c := at.Get(a, cid)
+    if c.kind == at.AST_MEMBER:
+        ret subst_value(a, cid, f)
+    end
+    if c.kind != at.AST_IDENTIFIER:
+        ret cid
+    end
+    mut found := false
+    bound := frame_lookup(f, c.name, found)
+    if not found or bound == 0:
+        ret cid
+    end
+    bk := at.KindOf(a, bound)
+    if bk == at.AST_LAMBDA or bk == at.AST_IDENTIFIER:
+        ret at.Clone(a, bound)
+    end
+    ret cid
+end
+
+func subst_missing_callback(a &: at.Ast, sid: int, f &: LoFrame): bool:
+    if not f.present:
+        ret false
+    end
+    call := lo_bub_stmt_call(a, sid)
+    if call == 0:
+        ret false
+    end
+    c := at.Get(a, call)
+    if c.a == 0 or at.KindOf(a, c.a) != at.AST_IDENTIFIER:
+        ret false
+    end
+    mut found := false
+    bound := frame_lookup(f, at.Get(a, c.a).name, found)
+    ret found and bound == 0
+end
+
 func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
     if nid == 0:
         ret 0
@@ -229,6 +269,9 @@ func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
         cn.a = na
         at.Put(a, cp, cn)
         ret cp
+    end
+    if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC or n.kind == at.AST_CALL:
+        ret subst_value(a, nid, f)
     end
     if n.kind == at.AST_IF:
         na := subst_value(a, n.a, f)
@@ -300,6 +343,10 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
     mut items := Vector {} as Vector<int>
     repeat n.list.len() in i:
         child := n.list.get(i)
+        if subst_missing_callback(a, child, f):
+            changed = true
+            continue
+        end
         s := subst_stmt(a, child, f)
         if s != child:
             changed = true
@@ -621,11 +668,18 @@ func expand_component(
     end
 
     mut got_content := false
+    mut ev_names := Vector {} as Vector<str>
+    defer ev_names.free()
+    mut ev_fns := Vector {} as Vector<int>
+    defer ev_fns.free()
     repeat at.ChildCount(a, invocation) in i2:
         aid := at.Child(a, invocation, i2)
         an := at.Get(a, aid)
         if an.kind == at.AST_LAYOUT_ATTR:
-            if is_content_word(an.name):
+            if lo_bub_is_handler(an.name):
+                ev_names.push(lo_bub_event(an.name))
+                ev_fns.push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
+            else is_content_word(an.name):
                 txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
                 copy_span(a, txt, aid)
                 at.SetName(a, txt, "content")
@@ -636,7 +690,7 @@ func expand_component(
                 fr.content.push(txt)
                 got_content = true
             else:
-                sub_val := subst_value(a, an.a, caller)
+                sub_val := lo_bub_value(ex, a, subst_value(a, an.a, caller))
                 check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
                 frame_set(fr, an.name, sub_val)
             end
@@ -650,6 +704,11 @@ func expand_component(
             end
         end
     end
+    ev_mark := lo_bub_mark()
+    defer lo_bub_pop(ev_mark)
+    repeat ev_names.len() in evi:
+        lo_bub_push(ev_names.get(evi), ev_fns.get(evi))
+    end
     if not ex.comp_mother.get(ci) and got_content:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
@@ -659,17 +718,28 @@ func expand_component(
         ex.errors++
     end
     body := at.Get(a, comp_def).a
-    if not g_lo_native_scopes:
+    web := g_lo_web_state and not g_lo_native_scopes
+    if not g_lo_native_scopes and not web:
         if lo_has_state(a, body):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("component '%s' has 'state', which works only in native pages for now; run it with --ui=native or keep the value in a mutable global"), co.ArgStr(comp_name)
+                    i18.Tr("component '%s' has 'state', which works only in the page block and in native pages; build the page with 'salam page build' or --ui=native, or keep the value in a mutable global"), co.ArgStr(comp_name)
                 )
             )
             ex.errors++
         end
         expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
         ret
+    end
+    if web and not lo_has_state(a, body):
+        expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+        ret
+    end
+    wi := g_lo_wi_mark.len()
+    multi := web and g_lo_each_depth > 0
+    if web:
+        g_lo_wi_mark.push(0)
+        g_lo_wi_kind.push(multi ? WS_MULTI : WS_SINGLE)
     end
     mark := at.NewNode(a, at.AST_IF)
     copy_span(a, mark, invocation)
@@ -683,7 +753,12 @@ func expand_component(
             continue
         end
         sd := at.Get(a, sid)
-        gi := lo_state_index(ex, a, ci, sj, sid)
+        mut gi := 0
+        if web:
+            gi = lo_web_state_index(ex, a, ci, sid)
+        else:
+            gi = lo_state_index(ex, a, ci, sj, sid)
+        end
         sj++
         decl := at.NewNode(a, at.AST_VAR_DECL)
         copy_span(a, decl, sid)
@@ -695,7 +770,16 @@ func expand_component(
         dn.synthetic = true
         at.Put(a, decl, dn)
         kids.push(decl)
-        frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
+        if web:
+            g_lo_ws_decl.push(decl)
+            if multi:
+                frame_set(fr, sd.name, ws_cur_ref(a, gi, wi, sid))
+            else:
+                frame_set(fr, sd.name, lo_ident(a, "__salam_ws_" + co.U64Toa(gi as u64), sid))
+            end
+        else:
+            frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
+        end
     end
     expand_items(ex, a, kids, body, fr, ex.comp_dir.get(ci), depth + 1)
     mut bn := at.Get(a, blk)
@@ -707,9 +791,12 @@ func expand_component(
     mn.name = "__salam_component"
     mn.synthetic = true
     mn.value_int = ci as u64
-    mn.a = mk_str(a, "", invocation)
+    mn.a = mk_str(a, multi ? lo_mark("wsin", wi) : "", invocation)
     mn.b = blk
     at.Put(a, mark, mn)
+    if web:
+        g_lo_wi_mark.set(wi, mark)
+    end
     out.push(mark)
 end
 
@@ -727,7 +814,28 @@ end
 
 func lo_is_state_ref(a &: at.Ast, nid: int): bool:
     n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret str.StartsWith(n.name, "__salam_ws_")
+    end
     ret n.kind == at.AST_INDEX and n.synthetic
+end
+
+func lo_web_state_index(ex &: LoExpand, a &: at.Ast, ci: int, sid: int): int:
+    sd := at.Get(a, sid)
+    mut lit := ""
+    ty := lo_state_type(a, ex.comp_def.get(ci), sd.a, lit)
+    if ty == 0 and str.Len(lit) == 0:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                i18.Tr("component '%s': give the state '%s' a type, as in 'state items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+            )
+        )
+        ex.errors++
+    end
+    g_lo_ws_inst.push(g_lo_wi_mark.len() - 1)
+    g_lo_ws_type.push(ty)
+    g_lo_ws_lit.push(lit)
+    ret g_lo_ws_inst.len() - 1
 end
 
 func lo_ident(a &: at.Ast, name: str, from: int): int:
@@ -857,8 +965,19 @@ func expand_item(
             ret
         end
 
+        if lo_bub_is_handler(item.name):
+            if not lo_bub_is_page_attr(iid):
+                lg.Log(
+                    ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                        i18.Tr("'%s' handles an event that a component sends; write it where the component is used, or at the top of the page block"), co.ArgStr(item.name)
+                    )
+                )
+                ex.errors++
+            end
+            ret
+        end
         attr := at.Clone(a, iid)
-        sub := subst_value(a, item.a, fr)
+        sub := lo_bub_value(ex, a, subst_value(a, item.a, fr))
         mut an := at.Get(a, attr)
         an.a = sub
         at.Put(a, attr, an)
@@ -913,7 +1032,9 @@ func expand_item(
         cn.name = item.name
         cn.c = item.c
         cn.a = subst_value(a, item.a, fr)
+        g_lo_each_depth++
         cn.b = expand_container(ex, a, item.b, fr, dir, depth)
+        g_lo_each_depth--
         at.Put(a, cp, cn)
         out.push(cp)
         ret

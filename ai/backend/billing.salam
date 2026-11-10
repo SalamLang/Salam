@@ -83,6 +83,20 @@ pub struct Limits:
     pub expires: i64 = 0
 end
 
+pub struct Discount:
+    pub id: str = "0"
+    pub code: str = ""
+    pub kind: str = "percent"
+    pub value: i64 = 0
+    pub user_id: str = "0"
+    pub max_users: int = 0
+    pub max_uses: int = 0
+    pub expires: i64 = 0
+    pub active: bool = true
+    pub note: str = ""
+    pub created: i64 = 0
+end
+
 func n(v: i64): str:
     ret aiweb.I64s(v)
 end
@@ -581,7 +595,143 @@ func active_of(uid: str, plan &: str, expires &: i64, started &: i64, source &: 
     ret found
 end
 
-func activate(uid: str, plan_id: str, source: str, payment_id: str, granted_by: str, days: int, note: str): str:
+func find_discount(code: str): Discount:
+    mut d := Discount { id = "0" }
+    if code.len() == 0:
+        ret d
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, code, kind, value, user_id, max_users, max_uses, expires, active, note, created FROM discount_codes WHERE code = ?1", one(code))
+    if aistore.Next(rows):
+        d.id = aistore.Text(rows, 0)
+        d.code = aistore.Text(rows, 1)
+        d.kind = aistore.Text(rows, 2)
+        d.value = aistore.Int64(rows, 3)
+        d.user_id = aistore.Text(rows, 4)
+        d.max_users = aistore.Text(rows, 5).to_int()
+        d.max_uses = aistore.Text(rows, 6).to_int()
+        d.expires = aistore.Int64(rows, 7)
+        d.active = aistore.Text(rows, 8) == "1"
+        d.note = aistore.Text(rows, 9)
+        d.created = aistore.Int64(rows, 10)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret d
+end
+
+func discount_counts(code_id: str, uses &: int, users &: int):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM discount_redemptions WHERE code_id = ?1", one(code_id))
+    if aistore.Next(rows):
+        uses = aistore.Text(rows, 0).to_int()
+        users = aistore.Text(rows, 1).to_int()
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+end
+
+func user_used_discount(code_id: str, uid: str): bool:
+    aistore.Lock()
+    v := aistore.OneText("SELECT COUNT(*) FROM discount_redemptions WHERE code_id = ?1 AND user_id = ?2", two(code_id, uid))
+    aistore.Unlock()
+    ret v.len() > 0 and v != "0"
+end
+
+func discount_usable(d: Discount, uid: str, fail &: str): bool:
+    if d.id == "0":
+        fail = "این کد تخفیف پیدا نشد."
+        ret false
+    end
+    if not d.active:
+        fail = "این کد تخفیف غیرفعال است."
+        ret false
+    end
+    if d.expires != 0 and d.expires <= aistore.Now():
+        fail = "این کد تخفیف منقضی شده است."
+        ret false
+    end
+    if d.user_id != "0" and d.user_id != uid:
+        fail = "این کد تخفیف فقط برای یک کاربر مشخص قابل استفاده است."
+        ret false
+    end
+    mut uses := 0
+    mut users := 0
+    discount_counts(d.id, uses, users)
+    if d.max_uses > 0 and uses >= d.max_uses:
+        fail = "سقف تعداد استفاده از این کد تخفیف پر شده است."
+        ret false
+    end
+    if d.max_users > 0 and users >= d.max_users and not user_used_discount(d.id, uid):
+        fail = "سقف تعداد نفرات استفاده‌کننده از این کد تخفیف پر شده است."
+        ret false
+    end
+    ret true
+end
+
+func discount_price(d: Discount, price: i64): i64:
+    mut charge := price
+    if d.kind == "amount":
+        charge = price - d.value
+    else:
+        charge = price - (price * d.value) / 100
+    end
+    ret charge < 0 ? 0 : charge
+end
+
+func record_redemption(code_id: str, uid: str, pid: str):
+    if code_id == "0" or code_id.len() == 0:
+        ret
+    end
+    mut a := two(code_id, uid)
+    a.push(pid)
+    a.push(n(aistore.Now()))
+    aistore.Lock()
+    _i := aistore.Run("INSERT INTO discount_redemptions (code_id, user_id, payment_id, created) VALUES (?1, ?2, ?3, ?4)", a)
+    aistore.Unlock()
+end
+
+func discount_json(d: Discount, uses: int, users: int, email: str, name: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", d.id))
+    m.push(json.Member("code", d.code))
+    m.push(json.Member("kind", d.kind))
+    m.push(json.MemberInt("value", d.value))
+    m.push(json.MemberRaw("user_id", d.user_id))
+    m.push(json.MemberInt("max_users", d.max_users as i64))
+    m.push(json.MemberInt("max_uses", d.max_uses as i64))
+    m.push(json.MemberInt("expires", d.expires))
+    m.push(json.MemberBool("active", d.active))
+    m.push(json.Member("note", d.note))
+    m.push(json.MemberInt("created", d.created))
+    m.push(json.MemberInt("uses", uses as i64))
+    m.push(json.MemberInt("users", users as i64))
+    if email.len() > 0:
+        mut u := Vector {} as Vector<str>
+        u.push(json.MemberRaw("id", d.user_id))
+        u.push(json.Member("name", name))
+        u.push(json.Member("email", email))
+        m.push(json.MemberRaw("user", json.Object(u)))
+    end
+    ret json.Object(m)
+end
+
+func valid_discount_code(c: str): bool:
+    if c.len() < 3 or c.len() > 32:
+        ret false
+    end
+    mut i := 0
+    until i < c.len():
+        ch := c[i] as int
+        if not ((ch >= 65 and ch <= 90) or (ch >= 48 and ch <= 57) or ch == 45 or ch == 95):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func activate(uid: str, plan_id: str, source: str, payment_id: str, granted_by: str, days: int, note: str, price: i64): str:
     p := plan_of(plan_id)
     now := aistore.Now()
     mut span := p.days
@@ -612,7 +762,7 @@ func activate(uid: str, plan_id: str, source: str, payment_id: str, granted_by: 
     a.push(str.Trim(note))
     a.push(n(now))
     a.push(n(ends))
-    a.push(n(p.price))
+    a.push(n(price))
     _i := aistore.Run("INSERT INTO subscriptions (user_id, plan, status, source, payment_id, granted_by, note, started, expires, price, created) VALUES (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?7)", a)
     id := aistore.LastId()
     aistore.Unlock()
@@ -785,6 +935,7 @@ func checkout(ctx: i64):
     body := http.Body(ctx)
     plan_id := str.Trim(json.Get(body, "plan"))
     gateway := str.Lower(str.Trim(json.Get(body, "gateway")))
+    code := str.Upper(str.Trim(json.Get(body, "code")))
     if not buyable(plan_id):
         aiweb.Fail(ctx, 400, "plan", "این پلن برای خرید نیست.")
         ret
@@ -795,6 +946,18 @@ func checkout(ctx: i64):
     end
     p := plan_of(plan_id)
     who := n(uid)
+    mut discount_id := "0"
+    mut charge := p.price
+    if code.len() > 0:
+        d := find_discount(code)
+        mut fail := ""
+        if not discount_usable(d, who, fail):
+            aiweb.Fail(ctx, 400, "code", fail)
+            ret
+        end
+        discount_id = d.id
+        charge = discount_price(d, p.price)
+    end
     aistore.Lock()
     mut now_plan := "free"
     mut now_expires := 0 as i64
@@ -802,20 +965,34 @@ func checkout(ctx: i64):
     mut now_source := ""
     _h := active_of(who, now_plan, now_expires, now_started, now_source)
     aistore.Unlock()
-    amount := p.price * 10
     mut a := two(who, p.id)
     a.push(gateway)
-    a.push(n(p.price))
+    a.push(n(charge))
     a.push(aiweb.ClientIp(ctx))
     a.push(n(aistore.Now()))
+    a.push(discount_id)
+    a.push(n(p.price - charge))
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO payments (user_id, plan, gateway, amount, status, ip, created) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6)", a)
+    ok := aistore.Run("INSERT INTO payments (user_id, plan, gateway, amount, status, ip, created, discount_code_id, discount_amount) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8)", a)
     pid := aistore.LastId()
     aistore.Unlock()
     if not ok:
         aiweb.Fail(ctx, 500, "server", "ثبت پرداخت انجام نشد. دوباره تلاش کنید.")
         ret
     end
+    if charge <= 0:
+        finish_payment(pid, "paid", "", "", "")
+        _s := activate(who, p.id, "payment", pid, "0", 0, "", charge)
+        record_redemption(discount_id, who, pid)
+        mut free_m := Vector {} as Vector<str>
+        free_m.push(json.MemberRaw("payment_id", pid))
+        free_m.push(json.Member("gateway", gateway))
+        free_m.push(json.MemberInt("amount", 0))
+        free_m.push(json.Member("url", done_url("ok", p.id)))
+        aiweb.Reply(ctx, 200, json.Object(free_m))
+        ret
+    end
+    amount := charge * 10
     back := (PAY_URL.len() > 0 ? PAY_URL : CALLBACK_BASE) + "/billing/callback/" + gateway
     about := "اشتراک " + p.name + " دستیار سلام"
     mut token := ""
@@ -841,8 +1018,40 @@ func checkout(ctx: i64):
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("payment_id", pid))
     m.push(json.Member("gateway", gateway))
-    m.push(json.MemberInt("amount", p.price))
+    m.push(json.MemberInt("amount", charge))
     m.push(json.Member("url", url))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func discount_preview(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    plan_id := str.Trim(json.Get(body, "plan"))
+    code := str.Upper(str.Trim(json.Get(body, "code")))
+    if not buyable(plan_id):
+        aiweb.Fail(ctx, 400, "plan", "این پلن برای خرید نیست.")
+        ret
+    end
+    if code.len() == 0:
+        aiweb.Fail(ctx, 400, "code", "کد تخفیف را بنویسید.")
+        ret
+    end
+    d := find_discount(code)
+    mut fail := ""
+    if not discount_usable(d, n(uid), fail):
+        aiweb.Fail(ctx, 400, "code", fail)
+        ret
+    end
+    p := plan_of(plan_id)
+    charge := discount_price(d, p.price)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("code", d.code))
+    m.push(json.MemberInt("price", p.price))
+    m.push(json.MemberInt("charge", charge))
+    m.push(json.MemberInt("discount", p.price - charge))
     aiweb.Reply(ctx, 200, json.Object(m))
 end
 
@@ -884,18 +1093,20 @@ func gateway_return(ctx: i64):
         ret
     end
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, user_id, plan, amount, status FROM payments WHERE gateway = ?1 AND token = ?2 ORDER BY id DESC LIMIT 1", two(gateway, token))
+    mut rows := aistore.Stmt("SELECT id, user_id, plan, amount, status, discount_code_id FROM payments WHERE gateway = ?1 AND token = ?2 ORDER BY id DESC LIMIT 1", two(gateway, token))
     mut pid := ""
     mut uid := ""
     mut plan := ""
     mut amount := 0 as i64
     mut status := ""
+    mut discount_id := "0"
     if aistore.Next(rows):
         pid = aistore.Text(rows, 0)
         uid = aistore.Text(rows, 1)
         plan = aistore.Text(rows, 2)
         amount = aistore.Int64(rows, 3)
         status = aistore.Text(rows, 4)
+        discount_id = aistore.Text(rows, 5)
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -934,7 +1145,8 @@ func gateway_return(ctx: i64):
         ret
     end
     finish_payment(pid, "paid", ref, card, "")
-    _s := activate(uid, plan, "payment", pid, "0", 0, "")
+    _s := activate(uid, plan, "payment", pid, "0", 0, "", amount)
+    record_redemption(discount_id, uid, pid)
     redirect(ctx, done_url("ok", plan))
 end
 
@@ -996,7 +1208,7 @@ func admin_grant(ctx: i64):
         aiweb.Fail(ctx, 404, "user", "این کاربر پیدا نشد.")
         ret
     end
-    id := activate(uid, plan_id, "admin", "0", n(admin), days, note.len() > MAX_NOTE ? note.substr(0, MAX_NOTE) : note)
+    id := activate(uid, plan_id, "admin", "0", n(admin), days, note.len() > MAX_NOTE ? note.substr(0, MAX_NOTE) : note, plan_of(plan_id).price)
     aiweb.Reply(ctx, 201, `{"subscription_id": ` + id + `, "plan": ` + json.Str(plan_id) + "}")
 end
 
@@ -1184,6 +1396,224 @@ func admin_cancel(ctx: i64):
     aiweb.Reply(ctx, 200, `{"ok": true}`)
 end
 
+func admin_discounts(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut ds := Vector {} as Vector<Discount>
+    mut names := Vector {} as Vector<str>
+    mut emails := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT d.id, d.code, d.kind, d.value, d.user_id, d.max_users, d.max_uses, d.expires, d.active, d.note, d.created, COALESCE(u.name, ''), COALESCE(u.email, '') FROM discount_codes d LEFT JOIN users u ON u.id = d.user_id ORDER BY d.id DESC LIMIT 200", Vector {} as Vector<str>)
+    until aistore.Next(rows):
+        mut d := Discount {}
+        d.id = aistore.Text(rows, 0)
+        d.code = aistore.Text(rows, 1)
+        d.kind = aistore.Text(rows, 2)
+        d.value = aistore.Int64(rows, 3)
+        d.user_id = aistore.Text(rows, 4)
+        d.max_users = aistore.Text(rows, 5).to_int()
+        d.max_uses = aistore.Text(rows, 6).to_int()
+        d.expires = aistore.Int64(rows, 7)
+        d.active = aistore.Text(rows, 8) == "1"
+        d.note = aistore.Text(rows, 9)
+        d.created = aistore.Int64(rows, 10)
+        ds.push(d)
+        names.push(aistore.Text(rows, 11))
+        emails.push(aistore.Text(rows, 12))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    mut items := Vector {} as Vector<str>
+    mut i := 0
+    until i < ds.len():
+        mut uses := 0
+        mut users := 0
+        discount_counts(ds[i].id, uses, users)
+        items.push(discount_json(ds[i], uses, users, emails[i], names[i]))
+        i += 1
+    end
+    aiweb.Reply(ctx, 200, `{"discounts": ` + json.Array(items) + "}")
+end
+
+func admin_discount_get(id: str): Discount:
+    mut d := Discount { id = "0" }
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, code, kind, value, user_id, max_users, max_uses, expires, active, note, created FROM discount_codes WHERE id = ?1", one(id))
+    if aistore.Next(rows):
+        d.id = aistore.Text(rows, 0)
+        d.code = aistore.Text(rows, 1)
+        d.kind = aistore.Text(rows, 2)
+        d.value = aistore.Int64(rows, 3)
+        d.user_id = aistore.Text(rows, 4)
+        d.max_users = aistore.Text(rows, 5).to_int()
+        d.max_uses = aistore.Text(rows, 6).to_int()
+        d.expires = aistore.Int64(rows, 7)
+        d.active = aistore.Text(rows, 8) == "1"
+        d.note = aistore.Text(rows, 9)
+        d.created = aistore.Int64(rows, 10)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret d
+end
+
+func admin_discount_create(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    code := str.Upper(str.Trim(json.Get(body, "code")))
+    mut kind := str.Lower(str.Trim(json.Get(body, "kind")))
+    if kind != "percent" and kind != "amount":
+        kind = "percent"
+    end
+    value := clamp_num(json.Get(body, "value"), kind == "percent" ? 100 as i64 : 100000000000 as i64)
+    email := str.Lower(str.Trim(json.Get(body, "email")))
+    max_users := clamp_num(json.Get(body, "max_users"), 1000000 as i64) as int
+    max_uses := clamp_num(json.Get(body, "max_uses"), 1000000 as i64) as int
+    expires := clamp_num(json.Get(body, "expires"), 99999999999 as i64)
+    note := str.Trim(json.Get(body, "note"))
+    if not valid_discount_code(code):
+        aiweb.Fail(ctx, 400, "code", "کد باید ۳ تا ۳۲ نویسه از حروف بزرگ انگلیسی، عدد، خط تیره یا زیرخط باشد.")
+        ret
+    end
+    if value <= 0:
+        aiweb.Fail(ctx, 400, "value", "مقدار تخفیف را درست بنویسید.")
+        ret
+    end
+    mut uid := "0"
+    if email.len() > 0:
+        aistore.Lock()
+        uid = aistore.OneText("SELECT id FROM users WHERE LOWER(email) = ?1", one(email))
+        aistore.Unlock()
+        if uid.len() == 0:
+            aiweb.Fail(ctx, 404, "email", "این کاربر پیدا نشد.")
+            ret
+        end
+    end
+    mut a := one(code)
+    a.push(kind)
+    a.push(n(value))
+    a.push(uid)
+    a.push(n(max_users as i64))
+    a.push(n(max_uses as i64))
+    a.push(n(expires))
+    a.push(note.len() > MAX_NOTE ? note.substr(0, MAX_NOTE) : note)
+    a.push(n(admin))
+    a.push(n(aistore.Now()))
+    aistore.Lock()
+    existing := aistore.OneText("SELECT id FROM discount_codes WHERE code = ?1", one(code))
+    mut ok := false
+    if existing.len() == 0:
+        ok = aistore.Run("INSERT INTO discount_codes (code, kind, value, user_id, max_users, max_uses, expires, active, note, created_by, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10)", a)
+    end
+    id := ok ? aistore.LastId() : ""
+    aistore.Unlock()
+    if existing.len() > 0:
+        aiweb.Fail(ctx, 409, "code", "کدی با این نام هست.")
+        ret
+    end
+    if not ok:
+        aiweb.Fail(ctx, 500, "save", "ذخیره‌ی کد تخفیف ناموفق بود.")
+        ret
+    end
+    d := Discount { id = id, code = code, kind = kind, value = value, user_id = uid, max_users = max_users, max_uses = max_uses, expires = expires, active = true, note = note }
+    aiweb.Reply(ctx, 201, `{"discount": ` + discount_json(d, 0, 0, "", "") + "}")
+end
+
+func admin_discount_update(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    id := str.Trim(http.Param(ctx, "id"))
+    mut d := admin_discount_get(id)
+    if d.id == "0":
+        aiweb.Fail(ctx, 404, "discount", "این کد تخفیف پیدا نشد.")
+        ret
+    end
+    body := http.Body(ctx)
+    if json.Has(body, "kind"):
+        k := str.Lower(str.Trim(json.Get(body, "kind")))
+        if k == "percent" or k == "amount":
+            d.kind = k
+        end
+    end
+    if json.Has(body, "value"):
+        d.value = clamp_num(json.Get(body, "value"), d.kind == "percent" ? 100 as i64 : 100000000000 as i64)
+    end
+    if json.Has(body, "max_users"):
+        d.max_users = clamp_num(json.Get(body, "max_users"), 1000000 as i64) as int
+    end
+    if json.Has(body, "max_uses"):
+        d.max_uses = clamp_num(json.Get(body, "max_uses"), 1000000 as i64) as int
+    end
+    if json.Has(body, "expires"):
+        d.expires = clamp_num(json.Get(body, "expires"), 99999999999 as i64)
+    end
+    if json.Has(body, "note"):
+        note := str.Trim(json.Get(body, "note"))
+        d.note = note.len() > MAX_NOTE ? note.substr(0, MAX_NOTE) : note
+    end
+    if json.Has(body, "active"):
+        e := str.Trim(json.Get(body, "active"))
+        d.active = e == "true" or e == "1"
+    end
+    if json.Has(body, "email"):
+        email := str.Lower(str.Trim(json.Get(body, "email")))
+        if email.len() == 0:
+            d.user_id = "0"
+        else:
+            aistore.Lock()
+            found := aistore.OneText("SELECT id FROM users WHERE LOWER(email) = ?1", one(email))
+            aistore.Unlock()
+            if found.len() == 0:
+                aiweb.Fail(ctx, 404, "email", "این کاربر پیدا نشد.")
+                ret
+            end
+            d.user_id = found
+        end
+    end
+    mut a := one(d.kind)
+    a.push(n(d.value))
+    a.push(d.user_id)
+    a.push(n(d.max_users as i64))
+    a.push(n(d.max_uses as i64))
+    a.push(n(d.expires))
+    a.push(d.active ? "1" : "0")
+    a.push(d.note)
+    a.push(d.id)
+    aistore.Lock()
+    ok := aistore.Run("UPDATE discount_codes SET kind = ?1, value = ?2, user_id = ?3, max_users = ?4, max_uses = ?5, expires = ?6, active = ?7, note = ?8 WHERE id = ?9", a)
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "save", "ذخیره‌ی کد تخفیف ناموفق بود.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"discount": ` + discount_json(d, 0, 0, "", "") + "}")
+end
+
+func admin_discount_delete(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    id := str.Trim(http.Param(ctx, "id"))
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM discount_codes WHERE id = ?1", one(id))
+    if found.len() > 0:
+        _u := aistore.Run("UPDATE discount_codes SET active = 0 WHERE id = ?1", one(id))
+    end
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "discount", "این کد تخفیف پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
 func admin_payments(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -1218,18 +1648,20 @@ end
 
 func settle_one(pid: str):
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT user_id, plan, gateway, amount, token FROM payments WHERE id = ?1", one(pid))
+    mut rows := aistore.Stmt("SELECT user_id, plan, gateway, amount, token, discount_code_id FROM payments WHERE id = ?1", one(pid))
     mut uid := ""
     mut plan := ""
     mut gateway := ""
     mut amount := 0 as i64
     mut token := ""
+    mut discount_id := "0"
     if aistore.Next(rows):
         uid = aistore.Text(rows, 0)
         plan = aistore.Text(rows, 1)
         gateway = aistore.Text(rows, 2)
         amount = aistore.Int64(rows, 3)
         token = aistore.Text(rows, 4)
+        discount_id = aistore.Text(rows, 5)
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -1254,7 +1686,8 @@ func settle_one(pid: str):
         ret
     end
     finish_payment(pid, "paid", ref, card, "پرداخت پس از بازگشت نیمه‌کاره تایید شد.")
-    _s := activate(uid, plan, "payment", pid, "0", 0, "")
+    _s := activate(uid, plan, "payment", pid, "0", 0, "", amount)
+    record_redemption(discount_id, uid, pid)
 end
 
 func sweep():
@@ -1412,7 +1845,12 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/plans", admin_plans)
     router.Post(r, "/admin/plans", admin_plan_create)
     router.Put(r, "/admin/plans/:id", admin_plan_update)
-    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments", "/admin/plans", "/admin/plans/:id"]:
+    router.Post(r, "/billing/discount/preview", discount_preview)
+    router.Get(r, "/admin/discounts", admin_discounts)
+    router.Post(r, "/admin/discounts", admin_discount_create)
+    router.Put(r, "/admin/discounts/:id", admin_discount_update)
+    router.Delete(r, "/admin/discounts/:id", admin_discount_delete)
+    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/billing/discount/preview", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments", "/admin/plans", "/admin/plans/:id", "/admin/discounts", "/admin/discounts/:id"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

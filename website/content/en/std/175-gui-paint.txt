@@ -15,7 +15,8 @@ pkg.intro <<
 <li>Rasterization uses integers and fixed point only, so a picture is meant to have the same hash on every system and backend. Tests compare <code>Hash()</code> and a few pixels.</li>
 <li>Every drawing call follows the whole transform, rotation and skew included. Borders, gradients, shadows and tiled images under a rotation or skew are drawn upright in a scratch layer and then resampled, and a clip under a rotation becomes a coverage mask.</li>
 <li>Dashed and dotted sides are patterned along their rounded corners too, with the pattern spaced so that each corner gets a whole dash or dot.</li>
-<li>Filters work on layers: <code>BeginFilterLayer</code> and <code>EndLayerFiltered</code> give CSS <code>filter</code>, and <code>BackdropFilter</code> gives <code>backdrop-filter</code>. Colour filters work on straight colours in sRGB, as browsers do, and blurs use three box blurs, as the filter specification describes.</li>
+<li>Filters work on layers: <code>BeginFilterLayer</code> and <code>EndLayerFiltered</code> give CSS <code>filter</code>, and <code>BackdropFilter</code> gives <code>backdrop-filter</code>, compared with Chromium on opaque, translucent and nested backdrops. Colour filters work on straight colours in sRGB, as browsers do, and blurs use three box blurs, as the filter specification describes.</li>
+<li><code>DrawNineSlice</code> draws an image cut into nine parts around a rectangle, the way CSS <code>border-image</code> does, with stretched, repeated, rounded or spaced edges.</li>
 <li>Free every canvas, path and gradient you make. A canvas from <code>WrapCanvas</code> or <code>Sub</code> still needs <code>Free</code> for its scratch memory, but leaves the pixels alone.</li>
 <li>The benchmark in <code>tools/bench/paint_frame.salam</code> draws 200 rounded boxes with a shadow, a background and a border over a full screen gradient at 1920x1080.</li>
 </ul>
@@ -33,8 +34,8 @@ pkg.intro <<
 doc.BorderStyle = How one side of a border is drawn.
 doc.BorderStyle.None = No line on this side.
 doc.BorderStyle.Solid = A solid line.
-doc.BorderStyle.Dashed = Dashes three times the side width long, spaced so that both ends of the side get a whole dash.
-doc.BorderStyle.Dotted = Round dots as wide as the side, spaced so that both ends get a dot.
+doc.BorderStyle.Dashed = Dashes as Chromium draws them: twice the side width long with gaps as wide as the side when the side is 3 pixels or wider, and three times long with gaps twice as wide when it is thinner. The gap is stretched or shrunk so that both ends of the side get a whole dash.
+doc.BorderStyle.Dotted = Round dots as wide as the side, spaced so that both ends get a dot. On straight sides the dots snap to whole pixels, so thin dotted lines stay crisp.
 doc.GradientKind = The shape of a gradient.
 doc.GradientKind.Linear = Colours change along a line, like CSS <code>linear-gradient</code>.
 doc.GradientKind.Radial = Colours change from a centre outwards in an ellipse, like CSS <code>radial-gradient</code>.
@@ -231,9 +232,28 @@ doc.Canvas.FillPath = Fills a path with a colour.
 doc.Canvas.StrokePath = Strokes a path with a colour.
 doc.Canvas.BeginLayer = Starts drawing into an offscreen layer covering a rectangle.
 doc.Canvas.EndLayer = Composites the last layer onto what is below it with an opacity (CSS <code>opacity</code>).
+doc.Canvas.EndLayerMasked = Ends two layers at once: the last one is a mask, and the layer under it is kept only where the mask has alpha, then composited with an opacity. This is how CSS <code>background-clip: text</code> paints a background through the glyphs.
 doc.Canvas.BeginFilterLayer = Starts a layer for a filter chain: the layer is grown by the chain extent and is drawn whole even when a damage region is set, so a blur near the region edge is right.
 doc.Canvas.EndLayerFiltered = Applies a filter chain to the last layer and composites it with an opacity (CSS <code>filter</code>).
-doc.Canvas.BackdropFilter = Filters what is already drawn under a rounded rectangle, like CSS <code>backdrop-filter</code>.
+doc.Canvas.BackdropFilter = Filters what is already drawn under a rounded rectangle, like CSS <code>backdrop-filter</code>: the pixels under the rectangle are read with mirrored edges, filtered, clipped to the rounded rectangle and drawn back with <code>opacity</code> (1 when left out) over what was there, the way Chromium composites a backdrop. Inside a layer the backdrop is only what the layer holds.
+doc.ImageRepeat = How the edges and the middle of a nine-slice image fill their part, like <code>border-image-repeat</code>.
+doc.ImageRepeat.Stretch = Scale the part to fill the space.
+doc.ImageRepeat.Repeat = Tile the part at its scaled size, centred, cutting the tiles at both ends.
+doc.ImageRepeat.Round = Tile the part, scaled so that a whole number of tiles fits.
+doc.ImageRepeat.Space = Tile only whole tiles and spread the space left over evenly between and around them.
+doc.NineSlice = How <code>DrawNineSlice</code> cuts the source image and where the parts go.
+doc.NineSlice.slice_top = How far from the top of the source the top slice ends, in source pixels.
+doc.NineSlice.slice_right = How far from the right of the source the right slice starts, in source pixels.
+doc.NineSlice.slice_bottom = How far from the bottom of the source the bottom slice starts, in source pixels.
+doc.NineSlice.slice_left = How far from the left of the source the left slice ends, in source pixels.
+doc.NineSlice.width_top = How tall the top edge is drawn, in canvas pixels.
+doc.NineSlice.width_right = How wide the right edge is drawn.
+doc.NineSlice.width_bottom = How tall the bottom edge is drawn.
+doc.NineSlice.width_left = How wide the left edge is drawn. Widths that do not fit are all scaled down by the same factor, as CSS does.
+doc.NineSlice.repeat_x = How the top and bottom edges and the middle fill the width.
+doc.NineSlice.repeat_y = How the left and right edges and the middle fill the height.
+doc.NineSlice.fill = Whether the middle part is drawn too, like the <code>fill</code> keyword of <code>border-image-slice</code>.
+doc.Canvas.DrawNineSlice = Draws <code>src</code> cut into nine parts around <code>area</code>: the corners are scaled into the corners, the edges fill the sides as <code>repeat_x</code> and <code>repeat_y</code> say, and the middle is drawn when <code>fill</code> is set. This is how CSS <code>border-image</code> is painted.
 doc.Canvas.DrawOutlineStyled = Draws a CSS outline with a border style (solid, dashed or dotted) around a rectangle, at an offset.
 doc.NewCanvas = Makes a transparent canvas of a size that owns its pixels.
 doc.WrapCanvas = Makes a canvas over pixel memory that someone else owns, such as a window buffer.
@@ -467,9 +487,28 @@ ex.Canvas.FillPath = gui-paint-Path
 ex.Canvas.StrokePath = gui-paint-Path
 ex.Canvas.BeginLayer = gui-paint-Image
 ex.Canvas.EndLayer = gui-paint-Image
+ex.Canvas.EndLayerMasked = gui-paint-Image
 ex.Canvas.BeginFilterLayer = gui-paint-Filter
 ex.Canvas.EndLayerFiltered = gui-paint-Filter
 ex.Canvas.BackdropFilter = gui-paint-Filter
+ex.ImageRepeat = gui-paint-NineSlice
+ex.ImageRepeat.Stretch = gui-paint-NineSlice
+ex.ImageRepeat.Repeat = gui-paint-NineSlice
+ex.ImageRepeat.Round = gui-paint-NineSlice
+ex.ImageRepeat.Space = gui-paint-NineSlice
+ex.NineSlice = gui-paint-NineSlice
+ex.NineSlice.slice_top = gui-paint-NineSlice
+ex.NineSlice.slice_right = gui-paint-NineSlice
+ex.NineSlice.slice_bottom = gui-paint-NineSlice
+ex.NineSlice.slice_left = gui-paint-NineSlice
+ex.NineSlice.width_top = gui-paint-NineSlice
+ex.NineSlice.width_right = gui-paint-NineSlice
+ex.NineSlice.width_bottom = gui-paint-NineSlice
+ex.NineSlice.width_left = gui-paint-NineSlice
+ex.NineSlice.repeat_x = gui-paint-NineSlice
+ex.NineSlice.repeat_y = gui-paint-NineSlice
+ex.NineSlice.fill = gui-paint-NineSlice
+ex.Canvas.DrawNineSlice = gui-paint-NineSlice
 ex.Canvas.DrawOutlineStyled = gui-paint-Transform
 ex.NewCanvas = gui-paint-Box
 ex.WrapCanvas = gui-paint-Image

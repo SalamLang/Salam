@@ -369,128 +369,253 @@ func _t_restore_border(t &: Engine, id: int):
     end
 end
 
-func _t_collapse(t &: Engine, id: int, x &: TCtx, tb &: R4, rtl: bool):
+func _bk_rank(k: BorderKind): int:
+    switch k:
+        BorderKind.Double: ret 8 end
+        BorderKind.Solid: ret 7 end
+        BorderKind.Dashed: ret 6 end
+        BorderKind.Dotted: ret 5 end
+        BorderKind.Ridge, BorderKind.Inset: ret 4 end
+        BorderKind.Groove, BorderKind.Outset: ret 2 end
+        else: ret 0 end
+    end
+    ret 0
+end
+
+func _bk_side(k: BorderKinds, side: int): BorderKind:
+    switch side:
+        0: ret k.top end
+        1: ret k.right end
+        2: ret k.bottom end
+        else: ret k.left end
+    end
+    ret k.left
+end
+
+func _len_side(s: Sides, side: int): f64:
+    switch side:
+        0: ret _side_w(s.top) end
+        1: ret _side_w(s.right) end
+        2: ret _side_w(s.bottom) end
+        else: ret _side_w(s.left) end
+    end
+    ret 0.0
+end
+
+func _ce_better(a: CEdge, b: CEdge): bool:
+    if b.origin < 0:
+        ret a.origin >= 0
+    end
+    if a.hidden or b.hidden:
+        ret a.hidden and not b.hidden
+    end
+    if a.w != b.w:
+        ret a.w > b.w
+    end
+    if a.rank != b.rank:
+        ret a.rank > b.rank
+    end
+    ret a.origin > b.origin
+end
+
+func _ce_offer(t &: Engine, v &: Vector<CEdge>, i: int, node: int, side: int, origin: int):
+    if node < 0 or i < 0 or i >= v.len():
+        ret
+    end
+    n := t.nodes.ref(node)
+    k := _bk_side(n.style.border_kinds, side)
+    mut c := CEdge { origin = origin, node = node, side = side }
+    if k == BorderKind.Hidden:
+        c.hidden = true
+    else:
+        if k == BorderKind.None:
+            ret
+        end
+        c.w = _len_side(n.ubor, side)
+        if c.w <= 0.0:
+            ret
+        end
+        c.rank = _bk_rank(k)
+    end
+    if _ce_better(c, v[i]):
+        v[i] = c
+    end
+end
+
+func _bk_vis(k: BorderKinds, side: int): bool:
+    b := _bk_side(k, side)
+    ret b != BorderKind.None and b != BorderKind.Hidden
+end
+
+func _ce_w(c: CEdge): f64:
+    if c.hidden or c.origin < 0:
+        ret 0.0
+    end
+    ret c.w
+end
+
+func _tb_free(b &: TableEdges):
+    b.h.free()
+    b.v.free()
+    b.xs.free()
+    b.ys.free()
+end
+
+func _t_resolve(t &: Engine, id: int, x &: TCtx, rtl: bool):
     nr := x.rows.len()
     nc := x.ncols
-    tub := t.nodes.ref(id).ubor
-    tl := _side_w(rtl ? tub.right : tub.left)
-    tr := _side_w(rtl ? tub.left : tub.right)
-    ttop := _side_w(tub.top)
-    tbot := _side_w(tub.bottom)
-    mut owner := Vector {} as Vector<int>
-    defer owner.free()
-    repeat nr * nc:
-        owner.push(-1)
+    sside := rtl ? 1 : 3
+    eside := rtl ? 3 : 1
+    tn := t.nodes.ref(id)
+    _tb_free(tn.tb)
+    mut hs := Vector {} as Vector<CEdge>
+    mut vs := Vector {} as Vector<CEdge>
+    repeat (nr + 1) * nc:
+        hs.push(CEdge {})
     end
-    repeat x.cells.len() in i:
-        c := x.cells[i]
-        repeat c.rs in dr:
-            repeat c.cs in dc:
-                owner[(c.row + dr) * nc + c.col + dc] = i
+    repeat nr * (nc + 1):
+        vs.push(CEdge {})
+    end
+    repeat nc in c:
+        _ce_offer(t, hs, c, id, 0, 0)
+        _ce_offer(t, hs, nr * nc + c, id, 2, 0)
+    end
+    repeat nr in r:
+        _ce_offer(t, vs, r * (nc + 1), id, sside, 0)
+        _ce_offer(t, vs, r * (nc + 1) + nc, id, eside, 0)
+    end
+    mut k := 0
+    until k < nc:
+        g := x.cols[k].gid
+        mut k1 := k + 1
+        until k1 < nc and x.cols[k1].gid == g:
+            k1++
+        end
+        if g >= 0:
+            repeat nr in r:
+                _ce_offer(t, vs, r * (nc + 1) + k, g, sside, 1)
+                _ce_offer(t, vs, r * (nc + 1) + k1, g, eside, 1)
+            end
+            mut c := k
+            until c < k1:
+                _ce_offer(t, hs, c, g, 0, 1)
+                _ce_offer(t, hs, nr * nc + c, g, 2, 1)
+                c++
+            end
+        end
+        k = k1
+    end
+    k = 0
+    until k < nc:
+        cid := x.cols[k].id
+        mut k1 := k + 1
+        until k1 < nc and x.cols[k1].id == cid:
+            k1++
+        end
+        if cid >= 0:
+            repeat nr in r:
+                _ce_offer(t, vs, r * (nc + 1) + k, cid, sside, 2)
+                _ce_offer(t, vs, r * (nc + 1) + k1, cid, eside, 2)
+            end
+            mut c := k
+            until c < k1:
+                _ce_offer(t, hs, c, cid, 0, 2)
+                _ce_offer(t, hs, nr * nc + c, cid, 2, 2)
+                c++
+            end
+        end
+        k = k1
+    end
+    each g in x.grps:
+        if g.id >= 0 and g.r1 > g.r0:
+            repeat nc in c:
+                _ce_offer(t, hs, g.r0 * nc + c, g.id, 0, 3)
+                _ce_offer(t, hs, g.r1 * nc + c, g.id, 2, 3)
+            end
+            mut r := g.r0
+            until r < g.r1:
+                _ce_offer(t, vs, r * (nc + 1), g.id, sside, 3)
+                _ce_offer(t, vs, r * (nc + 1) + nc, g.id, eside, 3)
+                r++
             end
         end
     end
+    repeat nr in r:
+        rid := x.rows[r].id
+        if rid >= 0:
+            repeat nc in c:
+                _ce_offer(t, hs, r * nc + c, rid, 0, 4)
+                _ce_offer(t, hs, (r + 1) * nc + c, rid, 2, 4)
+            end
+            _ce_offer(t, vs, r * (nc + 1), rid, sside, 4)
+            _ce_offer(t, vs, r * (nc + 1) + nc, rid, eside, 4)
+        end
+    end
+    each c in x.cells:
+        repeat c.cs in dc:
+            _ce_offer(t, hs, c.row * nc + c.col + dc, c.id, 0, 5)
+            _ce_offer(t, hs, (c.row + c.rs) * nc + c.col + dc, c.id, 2, 5)
+        end
+        repeat c.rs in dr:
+            _ce_offer(t, vs, (c.row + dr) * (nc + 1) + c.col, c.id, sside, 5)
+            _ce_offer(t, vs, (c.row + dr) * (nc + 1) + c.col + c.cs, c.id, eside, 5)
+        end
+    end
+    each c in x.cells:
+        repeat c.rs - 1 in dr:
+            repeat c.cs in dc:
+                hs[(c.row + dr + 1) * nc + c.col + dc] = CEdge {}
+            end
+        end
+        repeat c.cs - 1 in dc:
+            repeat c.rs in dr:
+                vs[(c.row + dr) * (nc + 1) + c.col + dc + 1] = CEdge {}
+            end
+        end
+    end
+    tn2 := t.nodes.ref(id)
+    tn2.tb = TableEdges { h = hs, v = vs, xs = Vector {} as Vector<f64>, ys = Vector {} as Vector<f64>, nr = nr, nc = nc }
+end
+
+func _t_collapse(t &: Engine, id: int, x &: TCtx, tb &: R4, rtl: bool):
+    nr := x.rows.len()
+    nc := x.ncols
+    _t_resolve(t, id, x, rtl)
+    tbd := t.nodes.ref(id).tb
+    hs := tbd.h
+    vs := tbd.v
     mut ml := 0.0
     mut mr := 0.0
     mut mt := 0.0
     mut mb := 0.0
+    repeat nr in r:
+        ml = _fmax(ml, _ce_w(vs[r * (nc + 1)]))
+        mr = _fmax(mr, _ce_w(vs[r * (nc + 1) + nc]))
+    end
+    repeat nc in c:
+        mt = _fmax(mt, _ce_w(hs[c]))
+        mb = _fmax(mb, _ce_w(hs[nr * nc + c]))
+    end
     repeat x.cells.len() in i:
         c := x.cells[i]
-        ub := t.nodes.ref(c.id).ubor
         mut bl := 0.0
         mut br := 0.0
         mut bt := 0.0
         mut bb := 0.0
         repeat c.rs in dr:
-            r := c.row + dr
-            mut e := _side_w(rtl ? ub.right : ub.left)
-            if c.col == 0:
-                e = _fmax(e, tl)
-                ml = _fmax(ml, e)
-            else:
-                o := owner[r * nc + c.col - 1]
-                if o >= 0:
-                    e = _fmax(e, _side_w(rtl ? t.nodes.ref(x.cells[o].id).ubor.left : t.nodes.ref(x.cells[o].id).ubor.right))
-                end
-            end
-            bl = _fmax(bl, e)
-            mut f := _side_w(rtl ? ub.left : ub.right)
-            if c.col + c.cs == nc:
-                f = _fmax(f, tr)
-                mr = _fmax(mr, f)
-            else:
-                o := owner[r * nc + c.col + c.cs]
-                if o >= 0:
-                    f = _fmax(f, _side_w(rtl ? t.nodes.ref(x.cells[o].id).ubor.right : t.nodes.ref(x.cells[o].id).ubor.left))
-                end
-            end
-            br = _fmax(br, f)
+            bl = _fmax(bl, _ce_w(vs[(c.row + dr) * (nc + 1) + c.col]))
+            br = _fmax(br, _ce_w(vs[(c.row + dr) * (nc + 1) + c.col + c.cs]))
         end
         repeat c.cs in dc:
-            col := c.col + dc
-            mut e := _side_w(ub.top)
-            if c.row == 0:
-                e = _fmax(e, ttop)
-                mt = _fmax(mt, e)
-            else:
-                o := owner[(c.row - 1) * nc + col]
-                if o >= 0:
-                    e = _fmax(e, _side_w(t.nodes.ref(x.cells[o].id).ubor.bottom))
-                end
-            end
-            bt = _fmax(bt, e)
-            mut f := _side_w(ub.bottom)
-            if c.row + c.rs == nr:
-                f = _fmax(f, tbot)
-                mb = _fmax(mb, f)
-            else:
-                o := owner[(c.row + c.rs) * nc + col]
-                if o >= 0:
-                    f = _fmax(f, _side_w(t.nodes.ref(x.cells[o].id).ubor.top))
-                end
-            end
-            bb = _fmax(bb, f)
+            bt = _fmax(bt, _ce_w(hs[c.row * nc + c.col + dc]))
+            bb = _fmax(bb, _ce_w(hs[(c.row + c.rs) * nc + c.col + dc]))
         end
         cr := x.cells.ref(i)
         cr.bor = R4 { l = bl / 2.0, r = br / 2.0, t = bt / 2.0, b = bb / 2.0 }
     end
-    mut rt := Vector {} as Vector<f64>
-    defer rt.free()
-    mut rb := Vector {} as Vector<f64>
-    defer rb.free()
-    repeat nr:
-        rt.push(0.0)
-        rb.push(0.0)
-    end
-    mut cl := Vector {} as Vector<f64>
-    defer cl.free()
-    mut cr2 := Vector {} as Vector<f64>
-    defer cr2.free()
-    repeat nc:
-        cl.push(0.0)
-        cr2.push(0.0)
-    end
-    each c in x.cells:
-        rt[c.row] = _fmax(rt[c.row], c.bor.t)
-        cl[c.col] = _fmax(cl[c.col], c.bor.l)
-        if c.rs == 1:
-            rb[c.row] = _fmax(rb[c.row], c.bor.b)
-        end
-        if c.cs == 1:
-            cr2[c.col] = _fmax(cr2[c.col], c.bor.r)
-        end
-    end
     repeat x.cells.len() in i:
         c := x.cells[i]
         mut b := c.bor
-        b.t = rt[c.row]
-        b.l = cl[c.col]
-        if c.rs == 1:
-            b.b = rb[c.row]
-        end
-        if c.cs == 1:
-            b.r = cr2[c.col]
-        end
         if rtl:
             sw := b.l
             b.l = b.r
@@ -501,15 +626,121 @@ func _t_collapse(t &: Engine, id: int, x &: TCtx, tb &: R4, rtl: bool):
         _t_set_border(t, c.id, b)
     end
     if nr == 0 or nc == 0:
-        ml = tl
-        mr = tr
-        mt = ttop
-        mb = tbot
+        tub := t.nodes.ref(id).ubor
+        tk := t.nodes.ref(id).style.border_kinds
+        ml = _bk_vis(tk, rtl ? 1 : 3) ? _side_w(rtl ? tub.right : tub.left) : 0.0
+        mr = _bk_vis(tk, rtl ? 3 : 1) ? _side_w(rtl ? tub.left : tub.right) : 0.0
+        mt = _bk_vis(tk, 0) ? _side_w(tub.top) : 0.0
+        mb = _bk_vis(tk, 2) ? _side_w(tub.bottom) : 0.0
     end
     if rtl:
         tb = R4 { l = mr / 2.0, r = ml / 2.0, t = mt / 2.0, b = mb / 2.0 }
     else:
         tb = R4 { l = ml / 2.0, r = mr / 2.0, t = mt / 2.0, b = mb / 2.0 }
+    end
+end
+
+func _joint(b: TableEdges, hr: int, k: int, e: CEdge, horiz: bool, perp &: f64): bool:
+    nc := b.nc
+    nr := b.nr
+    mut beaten := false
+    perp = 0.0
+    repeat 2 in q:
+        if horiz:
+            r := hr - 1 + q
+            if r >= 0 and r < nr:
+                o := b.v[r * (nc + 1) + k]
+                if _ce_w(o) > 0.0:
+                    perp = _fmax(perp, o.w)
+                    if _ce_better(o, e):
+                        beaten = true
+                    end
+                end
+            end
+        else:
+            c := k - 1 + q
+            if c >= 0 and c < nc:
+                o := b.h[hr * nc + c]
+                if _ce_w(o) > 0.0:
+                    perp = _fmax(perp, o.w)
+                    if _ce_better(o, e):
+                        beaten = true
+                    end
+                end
+            end
+        end
+    end
+    ret not beaten
+end
+
+func _col_beats(o: CEdge, e: CEdge): bool:
+    ret _ce_w(o) > 0.0 and _ce_better(o, e)
+end
+
+func _tb_segments(t &: Engine, id: int, out &: Vector<CollapsedBorder>):
+    if id < 0 or id >= t.nodes.len():
+        ret
+    end
+    b := t.nodes.ref(id).tb
+    nr := b.nr
+    nc := b.nc
+    if b.xs.len() != nc + 1 or b.ys.len() != nr + 1 or b.h.len() != (nr + 1) * nc or b.v.len() != nr * (nc + 1):
+        ret
+    end
+    mut pw := 0.0
+    repeat nr in r0:
+        repeat nc + 1 in k0:
+            r := nr - 1 - r0
+            k := nc - k0
+            e := b.v[r * (nc + 1) + k]
+            if _ce_w(e) <= 0.0:
+                continue
+            end
+            mut y0 := b.ys[r]
+            mut y1 := b.ys[r + 1]
+            if _joint(b, r, k, e, false, pw) and not (r > 0 and _col_beats(b.v[(r - 1) * (nc + 1) + k], e)):
+                y0 -= pw / 2.0
+            else:
+                y0 += pw / 2.0
+            end
+            if _joint(b, r + 1, k, e, false, pw) and not (r + 1 < nr and _col_beats(b.v[(r + 1) * (nc + 1) + k], e)):
+                y1 += pw / 2.0
+            else:
+                y1 -= pw / 2.0
+            end
+            if y1 > y0:
+                out.push(CollapsedBorder { x = b.xs[k] - e.w / 2.0, y = y0, width = e.w, height = y1 - y0, node = e.node, side = e.side, vertical = true })
+            end
+        end
+    end
+    repeat nr + 1 in hr0:
+        repeat nc in c0:
+            hr := nr - hr0
+            c := nc - 1 - c0
+            e := b.h[hr * nc + c]
+            if _ce_w(e) <= 0.0:
+                continue
+            end
+            kl := b.xs[c] <= b.xs[c + 1] ? c : c + 1
+            kr := kl == c ? c + 1 : c
+            mut x0 := _fmin(b.xs[c], b.xs[c + 1])
+            mut x1 := _fmax(b.xs[c], b.xs[c + 1])
+            cl := kl == c ? c - 1 : c + 1
+            cr := kl == c ? c + 1 : c - 1
+            if _joint(b, hr, kl, e, true, pw) and not (cl >= 0 and cl < nc and _col_beats(b.h[hr * nc + cl], e)):
+                x0 -= pw / 2.0
+            else:
+                x0 += pw / 2.0
+            end
+            if _joint(b, hr, kr, e, true, pw) and not (cr >= 0 and cr < nc and _col_beats(b.h[hr * nc + cr], e)):
+                x1 += pw / 2.0
+            else:
+                x1 -= pw / 2.0
+            end
+            if x1 > x0:
+                out.push(CollapsedBorder { x = x0, y = b.ys[hr] - e.w / 2.0, width = x1 - x0, height = e.w, node = e.node, side = e.side, vertical = false })
+            end
+        end
     end
 end
 
@@ -864,9 +1095,6 @@ func _t_rows(t &: Engine, x &: TCtx, hs: f64, vs: f64):
         cr.base = b
     end
     each c in x.cells:
-        if c.rs != 1:
-            continue
-        end
         st := t.nodes.ref(c.id).style
         if st.vertical_align == VerticalAlign.Baseline:
             rr := x.rows.ref(c.row)
@@ -1174,6 +1402,25 @@ func _table(t &: Engine, id: int, inp: Inp): Out:
     end
     gtop := gy0
     gbot := nr > 0 ? ry - vs : gy0
+    if collapse:
+        tbn := t.nodes.ref(id)
+        tbn.tb.xs.clear()
+        tbn.tb.ys.clear()
+        repeat nc + 1 in k:
+            if k < nc:
+                tbn.tb.xs.push(rtl ? x.cols[k].x + x.cols[k].w : x.cols[k].x)
+            else nc > 0:
+                tbn.tb.xs.push(rtl ? x.cols[nc - 1].x : x.cols[nc - 1].x + x.cols[nc - 1].w)
+            end
+        end
+        repeat nr + 1 in r:
+            if r < nr:
+                tbn.tb.ys.push(x.rows[r].y)
+            else nr > 0:
+                tbn.tb.ys.push(x.rows[nr - 1].y + x.rows[nr - 1].h)
+            end
+        end
+    end
     mut ty := 0.0
     each cp in x.caps:
         if not cp.bottom:
@@ -1260,9 +1507,7 @@ func _table(t &: Engine, id: int, inp: Inp): Out:
                 break
             end
             VerticalAlign.Baseline:
-                if c.rs == 1:
-                    off = _or(rw.base, c.base) - c.base
-                end
+                off = _or(rw.base, c.base) - c.base
                 break
             end
             else:

@@ -260,8 +260,13 @@ cards in a grid) with a style sheet that uses hex, `rgba()`, `hsl()`, named, sys
 | program plus sheet with the user agent rules | 130 us |  62 us |
 | full style computation, 202 elements, cold   | 287 us | 281 us |
 
-Style computation hardly changes: it is dominated by selector matching and the
-style cache, not by reading values.
+Style computation hardly changed with typed values: it was dominated by copying
+large structures and by selector matching, not by reading values. Since then
+tokens carry their keyword id, values are applied with integer switches on those
+IDs, and the cascade passes the sheet, the element tree, the engine and the parent
+style by reference instead of copying them on every call. On the same page
+(minimum of 500 runs, one core, C backend) the full style computation went from
+282 us to 113 us; the keyword IDs alone did not move it, passing by reference did.
 
 ### Colours
 
@@ -284,9 +289,39 @@ Gradients interpolate in the space named with `in <space> [<hue> hue]`;
 without it they use sRGB when every stop is a legacy colour and Oklab
 otherwise, as Chromium does. `gui.paint` interpolates premultiplied sRGB
 between stops, so the cascade splits each segment into 8 stops computed in the
-interpolation space (not done when the gradient has interpolation hints or
-`calc()` stop positions). Colour transitions mix premultiplied sRGB
-(`css.MixColors`).
+interpolation space. Stops are resolved when the gradient is painted
+(`css.GradientStops`), when the length of the gradient line is known: `calc()`
+positions, missing and out of order positions are fixed up as CSS Images says,
+colour hints are replaced by nine stops placed as Blink places them, and each
+segment in a space other than sRGB is split into 35 pieces mixed in that space
+(denser near both ends, where the sRGB transfer curve bends most), with
+intermediate colours clipped to sRGB as Chromium does. Against Chromium on a
+300 pixel line the hint and `calc()` cases match within 2 levels and the Oklab and
+OKLCH cases within 4, except `longer hue` around the gamut edge (21).
+
+Colours carry a `legacy` flag (hex, names, `rgb()`, `hsl()`, `hwb()`).
+Transitions and animations mix premultiplied sRGB when both colours are legacy and
+Oklab otherwise (`css.MixColors`), which matches Chromium's interpolated values to
+the 8-bit level except for two half-level roundings in 24 samples.
+
+`border-image` (source, slice with `fill`, width, outset, repeat and the
+shorthand, which `border` resets) is parsed, compiled to typed values and painted
+by `gui.paint`'s `DrawNineSlice`. A gradient source is drawn at the size of the
+border image area. Against Chromium the stretch, repeat and round cases match
+within 3 levels away from antialiased stripe edges; `space` differs because
+Chromium scales the gap between tiles by the tile scale. Backgrounds are clipped to
+their `background-clip` box and positioned, sized and tiled from their
+`background-origin` box, so the `padding-box, border-box` double background gives
+a gradient border with round corners.
+
+`backdrop-filter` follows Chromium (Skia's save layer with a backdrop): the
+backdrop is the content of the backdrop root (the nearest layer: opacity, filter or
+another backdrop filter) under the border box, read with mirrored edges, filtered,
+clipped to the border box with its radius and drawn source-over with the element's
+opacity; the element's content is drawn over it in its own layer, and is the
+backdrop root of its descendants. Translucent, faded, filtered and nested cases
+match Chromium within 1 level away from the rounded corners, whose antialiasing
+differs.
 
 ### Dark mode
 
@@ -437,7 +472,189 @@ indexed by an instance slot. An instance keeps its slot when its parent
 re-runs: it is matched by site and by its position among siblings of the same
 site. A new instance initialises its state from the declaration.
 
+Inside `each`, an instance follows its row's key instead of its position.
+The key is the `key` attribute (Persian `کلید`, written as `data-key` on the
+web) of the row's first element, or its `id` when it has no key; when the row
+starts with a component, the component's first element counts. The scope is
+then opened with `b.KeyedScope(site, key, ...)` and matched by site and key,
+so inserting, removing or reordering rows moves each instance's state with its
+row:
+
+```salam
+component Row(name: str):
+    state hits := 0
+    item: key = name content = name + " " + hits click = (): hits++ end end
+end
+
+page:
+    list:
+        each it in items:
+            Row: name = it end
+        end
+    end
+end
+```
+
+A key that reads the component's own `state` is ignored, because the key is
+needed before the state exists.
+
+### On the web
+
+`salam page build` gives the same `state` to the page block. Every component
+instance that declares `state` gets one global per declaration
+(`__salam_ws_N`), a render function `__salam_view_I()` built from the
+instance's elements with the runtime view lowering (dynamic values, `if` and
+`each` become Salam code that returns HTML, compiled to JavaScript with the
+event handlers), and an init function. In the HTML the instance is a pair of
+comments, `<!--salam:I--><!--/salam:I-->`, which the page script fills when it
+loads. Every write to a `state` gets a `salamWsTouch(I)` call before it, as
+the native target gets `TouchInstance`. The page script then re-renders the
+touched instances once, after the handler returns, and patches the DOM
+between the two comments in place: elements are matched by tag and by
+`data-key` or `id`, attributes and text are updated where they changed, an
+input keeps what was typed unless the page changes its `value`, and the
+focused element and its selection are kept. An instance nested in another one
+keeps its DOM and state when the outer one re-renders; when it appears again
+(an `if` turned true) its state starts from the declaration, as natively.
+Styles of the instance's elements are compiled once into the page's style
+sheet with an `sI-` class prefix.
+
+A component with `state` inside `each` has no comments of its own: its
+elements are drawn inline by the instance (or page part, below) that holds
+the `each`, and each `state` is one Vector (`__salam_ws_N`) indexed by a slot.
+At the instance's place the render function calls `salamWsSlot(I, key)`, and
+the page script returns the slot kept for that key, or a new one, in which
+case the state is set from its declarations. The key is the row's key, by
+the same rule as natively (the `key` of the row's first element, or its
+`id`, or else the row's index), joined with the slots of the instances
+around it. A slot not asked for during a render is freed, so a row that goes
+away and comes back starts from its declarations. Reads and writes go
+through `salamWsCur(I)`, which a handler attribute in the row sets first
+(`onclick="salamWsAt(I,slot);__sl_ev_7()"`), and a write re-renders the
+instance that holds the `each`, which patches the rows by key.
+
+The page block may read mutable globals. Every element, `if` or `each` of
+the page block whose own attributes, condition or collection read one (also
+through a function of the program) becomes a page part: a pair of comments
+and a render function, like an instance without state. The compiler records
+which globals every instance and page part reads, and before every statement
+of the program that may write one of them (the write analysis of the native
+target) it adds `salamWsTouch` for each of them. Static IDs inside instances
+and page parts still count for `dom.ById` checks (E138).
+
 `ui.ScopeRuns()` counts scope re-runs (a full re-run counts one), for tests.
+
+### Components talking to each other
+
+A child talks to the components around it in two ways, and both work the
+same natively and on the web.
+
+**Callbacks.** A parent passes a function to a child as a parameter, and the
+child calls it from a handler:
+
+```salam
+component Counter(name: str, change):
+    state count := 0
+    button: id = name click = (): count++ change(count) end content = name + " " + count end
+end
+
+component Pair(report: func (int)):
+    state sum := 0
+    box:
+        paragraph: content = "sum " + sum end
+        Counter:
+            name = "a"
+            change = (v: int):
+                sum += v
+                report(sum)
+            end
+        end
+    end
+end
+
+page:
+    Pair: report = (v: int): total = v end end
+end
+```
+
+The parameter may be untyped (`change`) or typed (`report: func (int)`), and
+the value may be a lambda or the name of a function of the program. Since
+components are expanded by the compiler, the call `change(count)` becomes a
+call of the lambda the parent wrote, with the parent's names: `sum` is the
+`Pair` instance's state, `report` is the page's lambda. A write there marks
+the instance that owns the state (`ui.TouchInstance` natively, `salamWsTouch`
+on the web) like any other write, so only that instance and the scopes that
+read the changed globals run again. A child that calls a callback its parent
+did not pass does nothing (`Counter: name = "solo" end`).
+
+**Events that bubble.** A child sends a named event with an optional value,
+`emit("saved", value)` (Persian `برانگیز("ذخیره"، مقدار)`). Where a component
+is used, `on saved = (v: T): ... end` (Persian `هنگام ذخیره = ...`) handles
+it. The event goes to the nearest use site that has a handler for the name,
+then on to every level above it up to the page, where an `on saved` line at
+the top of the page block is the last handler. A handler that calls `stop()`
+(Persian `بایست()`) ends the trip. Handlers take the value as their one typed
+parameter, or no parameter when they do not need it, and they change the
+state of the component they are written in:
+
+```salam
+component Button(name: str):
+    button: id = name click = (): emit("pressed", name) end content = name end
+end
+
+component Toolbar:
+    state picked := "none"
+    box:
+        Button: name = "save" on pressed = (n: str): picked = n end end
+        Button:
+            name = "quit"
+            on pressed = (n: str):
+                picked = n
+                stop()
+            end
+        end
+    end
+end
+
+component Panel:
+    state count := 0
+    Toolbar: on pressed = (): count++ end end
+end
+
+page:
+    on pressed = (n: str): println "page got " + n end
+    Panel: end
+end
+```
+
+Pressing `save` sets the toolbar's `picked`, adds one to the panel's `count`
+and reaches the page; pressing `quit` stops at the toolbar. The route is known
+at compile time, because every instance is expanded inside its parent: the
+compiler replaces `emit` with the value kept in a temporary and one call per
+handler on the way up, nearest first, and a handler that calls `stop()`
+becomes a lambda returning whether to go on, which guards the rest. There is
+no event object and nothing to look up while the page runs, and the writes
+in the handlers are marked like any other, so an event from a deep child
+re-runs only the instances whose state changed. In `events_bubble`, where the
+page also counts the presses in a paragraph, `save` re-runs two scopes (the
+panel instance, with the toolbar and button inside it, and that paragraph)
+and `quit` re-runs one, the toolbar; an unrelated sibling never runs. On the web the page script
+re-renders the instances whose state changed, here the panel, the toolbar,
+the button and the page part.
+
+Inside `each`, an event from a row goes to the instance that holds that row:
+two `Group` instances in an `each`, each with rows in an `each` of their own,
+each get only their own rows' events, because the handler is written with the
+group's state, which is reached through its own key (natively the captured
+instance slot, on the web `salamWsCur` of the group, set by the row's handler
+attribute). The tests are `tests/{en,fa}/ui/events_*.salam` and
+`tests/{en,fa}/page/components/events_*.salam`.
+
+A handler written at a use site sends its own `emit` from the level where it
+is written, so a parent can turn a child's event into one of its own:
+`on pressed = (n: str): emit("changed", n) end`. `emit` only works in the page
+block and in components; a function of the program that calls it is an error
+(E012), because there is no instance to start from.
 
 ### The escape hatch and the limits
 
@@ -445,13 +662,29 @@ site. A new instance initialises its state from the declaration.
   another package, through a pointer, or through a second name for the same
   Vector. Call `ui.Invalidate()` after such a change; it re-runs the whole
   view. `ui.Refresh()` does the same.
-- Instances inside `each` are matched by position, not by item: removing the
-  first row moves every later row's component state up by one.
+- Instances inside `each` without a `key` or `id` on the row are matched by
+  position: removing the first row moves every later row's component state
+  up by one. Give the row a key.
 - A `state` needs a type the compiler can see without type checking: a
   literal, a typed component parameter or `value as Type`.
-- `state` works only natively for now. On the web target it is an error; the
-  web page keeps re-rendering with `std/dom`.
+- On the web, `state` works in the page block built by `salam page build`,
+  not in runtime pages with parameters. Instances and page parts that read
+  mutable globals are drawn by the page script, so they show nothing without
+  JavaScript. A component inside `each` takes its parameters from the row
+  every time the instance holding the `each` renders; giving a parameter a
+  new value inside the component does not change the caller's value. On the
+  web a nested instance does not re-render when only the parameters its
+  parent passes change.
 - Selecting a row in a list re-runs one scope per row that reads the selection.
+- A handler or callback body written on one line cannot put a call right
+  after a value (`picked = n stop()` reads `n stop` as one name); put the
+  statements on separate lines. Lambda parameters need a type, as everywhere
+  in Salam. A `ret` in a callback or handler ends that callback, not the
+  handler that sent the event.
+- On the web, a handler inside `each` cannot read the row's loop variable,
+  or a component parameter bound to it, because handlers are functions of
+  the page script; copy the value into a `state` of the row's component
+  (`state label := name`) and read that.
 - The fallback for a hand written view without `b.Reactive` is the old one:
   the whole view runs after every handler.
 

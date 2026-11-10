@@ -565,8 +565,14 @@ func cf_to_color(c: CF): Color:
     ret Color { r = unit255(comp(s, 0), eps), g = unit255(comp(s, 1), eps), b = unit255(comp(s, 2), eps), a = unit255(al, 0.0) }
 end
 
+func cf_to_color_clip(c: CF): Color:
+    s := clip_srgb(cf_convert(c, SP_SRGB))
+    al := (c.none & NA) != 0 ? 0.0 : clamp01(c.al)
+    ret Color { r = unit255(s.c0, 0.0), g = unit255(s.c1, 0.0), b = unit255(s.c2, 0.0), a = unit255(al, 0.0) }
+end
+
 func cf_from_color(c: Color): CF:
-    ret CF { sp = SP_SRGB, c0 = c.r as f64 / 255.0, c1 = c.g as f64 / 255.0, c2 = c.b as f64 / 255.0, al = c.a as f64 / 255.0, legacy = true }
+    ret CF { sp = SP_SRGB, c0 = c.r as f64 / 255.0, c1 = c.g as f64 / 255.0, c2 = c.b as f64 / 255.0, al = c.a as f64 / 255.0, legacy = c.legacy }
 end
 
 func hue_pair(a: f64, b: f64, method: int, out &: f64):
@@ -727,38 +733,42 @@ func take_interp(t: Vector<Tok>, gs: int, ge: int, ns &: int, ne &: int, sp &: i
     ret true
 end
 
-func len_lerp(a: Len, b: Len, f: f64): Len:
-    ret Len { px = a.px + (b.px - a.px) * f, pct = a.pct + (b.pct - a.pct) * f, has_pct = a.has_pct or b.has_pct }
+func near(a: f64, b: f64): bool:
+    ret math.Abs(a - b) <= 0.000001 * math.Max(1.0, math.Max(math.Abs(a), math.Abs(b)))
 end
 
-func expand_stops(stops &: Vector<ColorStop>, sp: int, method: int, conic: bool):
-    n := stops.len()
-    if n < 2:
-        ret
-    end
-    repeat n in k:
-        st := stops[k]
-        if st.hint or (st.has_pos and st.pos.calc.len() > 0):
-            ret
-        end
-    end
-    mut pos := Vector {} as Vector<Len>
-    defer pos.free()
-    repeat n in k:
-        pos.push(stops[k].pos)
-    end
+func grad_positions(l: BgLayer, length: f64, pos &: Vector<f64>):
+    n := l.stops.len()
     mut known := Vector {} as Vector<bool>
     defer known.free()
     repeat n in k:
-        known.push(stops[k].has_pos)
+        st := l.stops[k]
+        if st.has_pos:
+            pos.push(resolve_len(st.pos, length, Cx {}))
+        else:
+            pos.push(0.0)
+        end
+        known.push(st.has_pos)
+    end
+    if n == 0:
+        ret
     end
     if not known[0]:
-        pos[0] = Len {}
+        pos[0] = 0.0
         known[0] = true
     end
     if not known[n - 1]:
-        pos[n - 1] = conic ? Len { px = 360.0 } : Len { pct = 100.0, has_pct = true }
+        pos[n - 1] = length
         known[n - 1] = true
+    end
+    mut mx := pos[0]
+    repeat n in k:
+        if known[k]:
+            if pos[k] < mx:
+                pos[k] = mx
+            end
+            mx = pos[k]
+        end
     end
     mut a := 0
     until a < n - 1:
@@ -768,30 +778,120 @@ func expand_stops(stops &: Vector<ColorStop>, sp: int, method: int, conic: bool)
         end
         mut m := a + 1
         until m < b:
-            pos[m] = len_lerp(pos[a], pos[b], ((m - a) as f64) / ((b - a) as f64))
+            pos[m] = pos[a] + (pos[b] - pos[a]) * ((m - a) as f64) / ((b - a) as f64)
             m++
         end
         a = b
     end
-    steps := 8
-    mut out := Vector {} as Vector<ColorStop>
-    repeat n in k:
-        out.push(ColorStop { color = stops[k].color, pos = pos[k], has_pos = true })
-        if k + 1 < n:
-            ca := cf_from_color(stops[k].color)
-            cb := cf_from_color(stops[k + 1].color)
-            repeat steps - 1 in q:
-                f := ((q + 1) as f64) / (steps as f64)
-                out.push(ColorStop { color = cf_to_color(cf_mix(ca, cb, f, sp, method)), pos = len_lerp(pos[k], pos[k + 1], f), has_pos = true })
+end
+
+func grad_push(out &: Vector<ColorStop>, c: Color, p: f64):
+    out.push(ColorStop { color = c, pos = Len { px = p }, has_pos = true })
+end
+
+func grad_run(out &: Vector<ColorStop>, fa: CF, pa: f64, fb: CF, pb: f64, sp: int, method: int, steps: int):
+    if sp != SP_SRGB:
+        n := steps + 3
+        repeat n in q:
+            mut f := 0.0
+            if q == 0:
+                f = 0.25 / (steps as f64)
+            else q == 1:
+                f = 0.5 / (steps as f64)
+            else q == n - 2:
+                f = 1.0 - 0.5 / (steps as f64)
+            else q == n - 1:
+                f = 1.0 - 0.25 / (steps as f64)
+            else q == 2:
+                f = 1.0 / (steps as f64)
+            else:
+                f = ((q - 1) as f64) / (steps as f64)
+            end
+            if f > 0.0 and f < 1.0:
+                grad_push(out, cf_to_color_clip(cf_mix(fa, fb, f, sp, method)), pa + (pb - pa) * f)
             end
         end
     end
-    stops.free()
-    stops = out
+    grad_push(out, cf_to_color_clip(fb), pb)
+end
+
+func grad_segment(out &: Vector<ColorStop>, ca: Color, pa: f64, cb: Color, pb: f64, hint: bool, ph: f64, sp: int, method: int):
+    fa := cf_from_color(ca)
+    fb := cf_from_color(cb)
+    total := pb - pa
+    if hint and total > 0.0 and not near(ph - pa, pb - ph):
+        if near(pa, ph):
+            grad_push(out, cb, ph)
+            grad_push(out, cb, pb)
+            ret
+        end
+        if near(pb, ph):
+            grad_push(out, ca, ph)
+            grad_push(out, cb, pb)
+            ret
+        end
+        ld := ph - pa
+        rd := pb - ph
+        mut offs := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        if ld > rd:
+            repeat 7 in y:
+                offs[y] = pa + ld * ((7.0 + (y as f64)) / 13.0)
+            end
+            offs[7] = ph + rd / 3.0
+            offs[8] = ph + rd * 2.0 / 3.0
+        else:
+            offs[0] = pa + ld / 3.0
+            offs[1] = pa + ld * 2.0 / 3.0
+            repeat 7 in y:
+                offs[y + 2] = ph + rd * ((y as f64) / 13.0)
+            end
+        end
+        ex := math.Log(0.5) / math.Log(ld / total)
+        mut pf := fa
+        mut pp := pa
+        repeat 9 in y:
+            w := math.Pow(math.Max((offs[y] - pa) / total, 0.0), ex)
+            cur := cf_mix(fa, fb, w, sp, method)
+            grad_run(out, pf, pp, cur, offs[y], sp, method, 4)
+            pf = cur
+            pp = offs[y]
+        end
+        grad_run(out, pf, pp, fb, pb, sp, method, 4)
+        ret
+    end
+    grad_run(out, fa, pa, fb, pb, sp, method, 32)
+end
+
+@en "GradientStops"
+@fa "ایستگاه های شیب"
+pub func GradientStops(l: BgLayer, length: f64): Vector<ColorStop>:
+    mut out := Vector {} as Vector<ColorStop>
+    mut pos := Vector {} as Vector<f64>
+    defer pos.free()
+    grad_positions(l, length, pos)
+    mut prev := -1
+    mut hint := -1
+    repeat l.stops.len() in k:
+        st := l.stops[k]
+        if st.hint:
+            hint = k
+            continue
+        end
+        if prev < 0:
+            grad_push(out, st.color, pos[k])
+        else:
+            grad_segment(out, l.stops[prev].color, pos[prev], st.color, pos[k], hint > prev, hint > prev ? pos[hint] : 0.0, l.interpolation, l.hue_interpolation)
+        end
+        prev = k
+    end
+    ret out
 end
 
 @en "MixColors"
 @fa "آمیختن رنگ ها"
 pub func MixColors(start: Color, finish: Color, amount: f64): Color:
-    ret cf_to_color(cf_mix(cf_from_color(start), cf_from_color(finish), amount, SP_SRGB, HUE_SHORTER))
+    legacy := start.legacy and finish.legacy
+    mut out := cf_to_color(cf_mix(cf_from_color(start), cf_from_color(finish), amount, legacy ? SP_SRGB : SP_OKLAB, HUE_SHORTER))
+    out.legacy = legacy
+    ret out
 end

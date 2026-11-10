@@ -16,6 +16,22 @@ package paint
 
 import math
 
+func _dash_count(lm: int, d: int, g: int): int:
+    nmin := (lm + g) / (d + g)
+    nmax := nmin + 1
+    if nmin < 2:
+        ret nmax
+    end
+    gmin := (lm - nmin * d) / (nmin - 1)
+    gmax := (lm - nmax * d) / (nmax - 1)
+    if gmax <= 0:
+        ret nmin
+    end
+    dmin := gmin > g ? gmin - g : g - gmin
+    dmax := gmax > g ? gmax - g : g - gmax
+    ret dmin < dmax ? nmin : nmax
+end
+
 func _side_setup(sh: int*, s: int, style: int, w: int, ua: int, ub: int, cl: int):
     o := 32 + s * 8
     sh[o] = w > 0 ? style : 0
@@ -33,14 +49,28 @@ func _side_setup(sh: int*, s: int, style: int, w: int, ua: int, ub: int, cl: int
         end
         ret
     end
+    if style == 3 and w <= 768:
+        inner := lm - 2 * w
+        n := inner / (2 * w)
+        if n < 1:
+            sh[o] = 1
+            ret
+        end
+        rest := inner - (2 * n - 1) * w
+        sh[o] = 4
+        sh[o + 4] = w
+        sh[o + 5] = w + ((rest + 256) / 512) * 256
+        sh[o + 6] = n
+        ret
+    end
     if style == 2:
-        d := 3 * w
-        g := 3 * w
+        d := w >= 768 ? 2 * w : 3 * w
+        g := w >= 768 ? w : 2 * w
         if lm <= d:
             sh[o] = 1
             ret
         end
-        n := (lm + g + (d + g) / 2) / (d + g)
+        n := _dash_count(lm, d, g)
         if n < 2:
             sh[o] = 1
             ret
@@ -82,6 +112,23 @@ func _side_pattern(sh: int*, s: int, u: int, v: int): int:
     end
     w := sh[o + 1]
     n := sh[o + 6]
+    if style == 4:
+        t := u - ua
+        lm := ub - ua
+        mut c := _overlap(t - 128, t + 128, 0, w) + _overlap(t - 128, t + 128, lm - w, lm)
+        st := sh[o + 5]
+        mut k := (t - st) / (2 * w)
+        if t < st:
+            k = 0
+        end
+        repeat 3 in j:
+            kk := k - 1 + j
+            if kk >= 0 and kk < n:
+                c += _overlap(t - 128, t + 128, st + kk * 2 * w, st + kk * 2 * w + w)
+            end
+        end
+        ret c > 256 ? 256 : c
+    end
     if style == 2:
         d := sh[o + 4]
         p := sh[o + 5]
@@ -110,7 +157,7 @@ func _side_pattern(sh: int*, s: int, u: int, v: int): int:
         if k > n - 1:
             k = n - 1
         end
-        center = ua + w / 2 + k * sp
+        center = ua + w / 2 + (((k * sp + 128) >> 8) << 8)
     end
     du := (u - center) as i64
     dv := (v - sh[o + 7]) as i64
@@ -332,12 +379,14 @@ func _bp_draw(cv &: Canvas, r: Rect, fr: Radii, b: Border, s: int):
     mut p := Path {}
     defer p.Free()
     if _side_style(b, s) == BorderStyle.Dashed:
-        mut n := math.Round(total / (6.0 * w)) as int
+        dl := w >= 3.0 ? 2.0 * w : 3.0 * w
+        gl := w >= 3.0 ? w : 2.0 * w
+        mut n := math.Round(total / (dl + gl)) as int
         if n < 1:
             n = 1
         end
         per := total / (n as f64)
-        dd := per / 2.0
+        dd := _minf(dl, per * 0.75)
         repeat np in i:
             if i == 0:
                 p.MoveTo(pts[0], pts[1])

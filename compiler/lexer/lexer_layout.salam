@@ -175,7 +175,7 @@ func layout_lambda_header_here(L &: Lx): bool:
         shape_ok = true
     else is_ident_start(b0):
         mut k := j
-        until not is_ident_cont(peek2(L, k)):
+        until is_ident_cont(peek2(L, k)):
             k++
         end
         until true:
@@ -263,6 +263,8 @@ func layout_value(L &: Lx):
         layout_scan_embedded_lambda(L)
         ret
     end
+    st := L.layout_state
+    L.layout_state = false
     mut depth := 0
     mut want := true
     mut quest := 0
@@ -286,13 +288,24 @@ func layout_value(L &: Lx):
             ret
         end
         if depth > 0:
-            if c == 40 or c == 91:
+            if c == 40 or c == 91 or (st and c == 123):
                 depth++
-            else c == 41 or c == 93:
+            else c == 41 or c == 93 or (st and c == 125):
                 depth--
             end
             scan_one(L)
             want = false
+            continue
+        end
+        if st and not want and c == 123:
+            depth++
+            scan_one(L)
+            continue
+        end
+        if st and not want and is_ident_start(c) and lp.LookupKeyword(L.pack, layout_word_at(L)) == tok.TK_KW_AS:
+            scan_ident(L)
+            want = true
+            prev_ident = false
             continue
         end
         if want:
@@ -476,16 +489,17 @@ func layout_state_decl(L &: Lx, w: str):
     end
     emit(L, tok.TK_KW_MUT, b, w)
     layout_skip_inline_ws(L)
-    if is_ident_start(peek(L)):
+    until is_ident_start(peek(L)):
         scan_ident(L)
+        layout_skip_inline_ws(L)
     end
-    layout_skip_inline_ws(L)
     cb := lx_pos(L)
     if peek(L) == 58 and peek2(L, 1) == 61:
         adv(L)
         adv(L)
         emit(L, tok.TK_COLON_ASSIGN, cb, ":=")
         L.layout_sub = LX_SUB_VALUE
+        L.layout_state = true
         ret
     end
     error_at(L, cb, "expected ':=' after the state name, as in 'state count := 0'")

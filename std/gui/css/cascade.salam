@@ -20,6 +20,7 @@ import gui.cssbox
 const ORDER_EL := 1000000000
 const SPEC_CLASS := 1000
 const SPEC_STATE := 2000
+const SPEC_INLINE := 1000000000
 
 struct Entry:
     pub block: int = 0
@@ -36,6 +37,7 @@ end
 struct ElBlocks:
     pub base: int = -1
     pub hint: int = -1
+    pub inl: int = -1
     pub hover: int = -1
     pub focus: int = -1
     pub active: int = -1
@@ -288,7 +290,7 @@ func eval_medias(e &: Engine, sd: SheetData):
     end
 end
 
-func prog_block(sd: SheetData, id: int): int:
+func prog_block(sd &: SheetData, id: int): int:
     if id < 0 or sd.main_map < 0:
         ret -1
     end
@@ -309,6 +311,9 @@ func element_blocks(e &: Engine, sd &: SheetData, i: int):
         end
     else el.base.len() > 0:
         b.base = parse_block(sd, el.base)
+    end
+    if el.inline_style.len() > 0:
+        b.inl = parse_block(sd, el.inline_style)
     end
     if el.decl_hover >= 0:
         b.hover = prog_block(sd, el.decl_hover)
@@ -361,7 +366,7 @@ func push_entry(e &: Engine, en: Entry):
     e.entries[k] = en
 end
 
-func collect_bucket(e &: Engine, sd: SheetData, key: str, i: int):
+func collect_bucket(e &: Engine, sd &: SheetData, key: str, i: int):
     if not sd.buckets.has(key):
         ret
     end
@@ -376,7 +381,7 @@ func collect_bucket(e &: Engine, sd: SheetData, key: str, i: int):
     end
 end
 
-func collect(e &: Engine, sd: SheetData, i: int):
+func collect(e &: Engine, sd &: SheetData, i: int):
     e.entries.clear()
     d := e.dom
     if d.ids[i].len() > 0:
@@ -403,8 +408,11 @@ func collect(e &: Engine, sd: SheetData, i: int):
     if b.hint >= 0:
         push_entry(e, Entry { block = b.hint, spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
     end
+    if b.inl >= 0:
+        push_entry(e, Entry { block = b.inl, spec = SPEC_INLINE, order = ORDER_EL })
+    end
     repeat b.dynn in k:
-        push_entry(e, Entry { block = e.el_dyn_blocks[b.dyn0 + k], spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
+        push_entry(e, Entry { block = e.el_dyn_blocks[b.dyn0 + k], spec = SPEC_INLINE, order = ORDER_EL + 1 + k })
     end
     repeat b.median in k:
         mb := e.el_media_blocks[b.media0 + k]
@@ -424,7 +432,7 @@ func collect(e &: Engine, sd: SheetData, i: int):
     end
 end
 
-func entries_key(e: Engine, pstyle: int): str:
+func entries_key(e &: Engine, pstyle: int): str:
     mut b := str.NewBuilder()
     str.BufAppendInt(b, pstyle as i64)
     repeat e.entries.len() in k:
@@ -439,7 +447,7 @@ func entries_key(e: Engine, pstyle: int): str:
     ret out
 end
 
-func var_lookup(e: Engine, vset: int, name: str, out &: str): bool:
+func var_lookup(e &: Engine, vset: int, name: str, out &: str): bool:
     vs := e.vsets[vset]
     mut k := vs.count - 1
     until k >= 0:
@@ -452,7 +460,7 @@ func var_lookup(e: Engine, vset: int, name: str, out &: str): bool:
     ret false
 end
 
-func subst(e: Engine, text: str, vset: int, depth: int, ok &: bool): str:
+func subst(e &: Engine, text: str, vset: int, depth: int, ok &: bool): str:
     if depth > 16:
         ok = false
         ret str.Clone("")
@@ -524,7 +532,7 @@ func subst(e: Engine, text: str, vset: int, depth: int, ok &: bool): str:
     ret out
 end
 
-func assign(e &: Engine, sd: SheetData, di: int, rtl: bool):
+func assign(e &: Engine, sd &: SheetData, di: int, rtl: bool):
     d := sd.decls[di]
     p := d.prop
     if p == P_CUSTOM:
@@ -556,7 +564,7 @@ func assign(e &: Engine, sd: SheetData, di: int, rtl: bool):
     end
 end
 
-func run_passes(e &: Engine, sd: SheetData, rtl: bool, only: int):
+func run_passes(e &: Engine, sd &: SheetData, rtl: bool, only: int):
     repeat 4 in pass:
         want_ua := pass == 0 or pass == 3
         want_imp := pass >= 2
@@ -584,7 +592,7 @@ func run_passes(e &: Engine, sd: SheetData, rtl: bool, only: int):
     end
 end
 
-func longhand_text(e: Engine, d: Decl, p: int, rtl: bool, vset: int, out &: str): bool:
+func longhand_text(e &: Engine, d: Decl, p: int, rtl: bool, vset: int, out &: str): bool:
     mut ok := true
     resolved := subst(e, d.value, vset, 0, ok)
     if not ok:
@@ -623,7 +631,7 @@ func longhand_text(e: Engine, d: Decl, p: int, rtl: bool, vset: int, out &: str)
     ret found
 end
 
-func apply_decl(e &: Engine, sd: SheetData, cs &: ComputedStyle, p: int, di: int, parent: ComputedStyle, has_parent: bool, cx: Cx, vset: int):
+func apply_decl(e &: Engine, sd &: SheetData, cs &: ComputedStyle, p: int, di: int, parent &: ComputedStyle, has_parent: bool, cx: Cx, vset: int):
     d := sd.decls[di]
     mut wide := d.wide
     if wide == W_NONE and (d.has_var or d.prop != p and d.prop >= S_FIRST and d.prop <= S_LAST):
@@ -701,10 +709,10 @@ func blockify(d: Display): Display:
     ret d
 end
 
-func compute_style(e &: Engine, sd: SheetData, pstyle: int): int:
+func compute_style(e &: Engine, sd &: SheetData, pstyle: int): int:
     e.cascades++
     has_parent := pstyle >= 0
-    parent := has_parent ? e.styles[pstyle] : e.initial
+    mut parent := has_parent ? e.styles[pstyle] : e.initial
     pvars := has_parent ? e.style_vars[pstyle] : 0
     repeat NPROP in k:
         e.win[k] = -1
@@ -856,12 +864,12 @@ func compute_style(e &: Engine, sd: SheetData, pstyle: int): int:
     ret e.styles.len() - 1
 end
 
-func style_env_ok(e: Engine, idx: int): bool:
+func style_env_ok(e &: Engine, idx: int): bool:
     cs := e.styles[idx]
     ret cs.color_scheme != ColorScheme.LightDark or cs.used_dark == e.env.dark
 end
 
-func compute_one(e &: Engine, sd: SheetData, i: int):
+func compute_one(e &: Engine, sd &: SheetData, i: int):
     p := e.dom.parent[i]
     pstyle := p >= 0 ? e.el_style[p] : -1
     collect(e, sd, i)

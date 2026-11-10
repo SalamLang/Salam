@@ -61,13 +61,43 @@ func _bwidth(b: css.BorderSide): f64:
     ret b.width
 end
 
-func _shade(c: css.Color, s: css.BorderStyle, dark: bool): css.Color:
-    if s == css.BorderStyle.Inset or s == css.BorderStyle.Outset or s == css.BorderStyle.Groove or s == css.BorderStyle.Ridge:
-        if dark:
-            ret css.Color { r = c.r * 2 / 3, g = c.g * 2 / 3, b = c.b * 2 / 3, a = c.a }
+func _tone_ch(m: f64, ch: int): int:
+    ret math.MinI(255, math.Floor(m * (ch as f64) / 255.0 * 255.99998) as int)
+end
+
+func _tone(c: css.Color, dark: bool): css.Color:
+    r := c.r as f64
+    g := c.g as f64
+    b := c.b as f64
+    if dark:
+        if r * r + g * g + b * b <= 3072.0:
+            ret css.Color { r = math.MinI(255, c.r + 84), g = math.MinI(255, c.g + 84), b = math.MinI(255, c.b + 84), a = c.a }
         end
+        v := math.Max(r, math.Max(g, b)) / 255.0
+        m := math.Max(0.0, (v - 0.33) / v)
+        ret css.Color { r = _tone_ch(m, c.r), g = _tone_ch(m, c.g), b = _tone_ch(m, c.b), a = c.a }
     end
-    ret c
+    if r * r + g * g + b * b <= 3072.0:
+        ret css.Color { r = math.MinI(255, c.r + 168), g = math.MinI(255, c.g + 168), b = math.MinI(255, c.b + 168), a = c.a }
+    end
+    if (255.0 - r) * (255.0 - r) + (255.0 - g) * (255.0 - g) + (255.0 - b) * (255.0 - b) < 1200.0:
+        ret c
+    end
+    v := math.Max(r, math.Max(g, b)) / 255.0
+    m := math.Min(1.0, v + 0.33) / v
+    ret css.Color { r = _tone_ch(m, c.r), g = _tone_ch(m, c.g), b = _tone_ch(m, c.b), a = c.a }
+end
+
+func _side_tone(c: css.Color, style: css.BorderStyle, side: int, outer: bool): css.Color:
+    mut st := style
+    if style == css.BorderStyle.Groove:
+        st = outer ? css.BorderStyle.Inset : css.BorderStyle.Outset
+    else style == css.BorderStyle.Ridge:
+        st = outer ? css.BorderStyle.Outset : css.BorderStyle.Inset
+    else style != css.BorderStyle.Inset and style != css.BorderStyle.Outset:
+        ret c
+    end
+    ret _tone(c, (side == 0 or side == 3) == (st == css.BorderStyle.Inset))
 end
 
 func _native_look(node: int, cs: css.ComputedStyle): bool:
@@ -85,120 +115,8 @@ func _native_look(node: int, cs: css.ComputedStyle): bool:
 end
 
 func _paint_bg_layer(cv &: paint.Canvas, bl: css.BgLayer, x: f64, y: f64, w: f64, h: f64, radii: paint.Radii, alpha: f64):
-    s := _e.scale
-    switch bl.image:
-        css.ImageKind.Linear, css.ImageKind.Radial, css.ImageKind.Conic:
-            mut g := paint.Gradient {}
-            g.stops = Vector {} as Vector<paint.GradientStop>
-            g.repeating = bl.repeating
-            mut glen := w
-            if bl.image == css.ImageKind.Linear:
-                mut ang := bl.angle
-                if bl.to_x != 0 or bl.to_y != 0:
-                    th := math.Atan2(h, w) * 180.0 / math.PI
-                    if bl.to_x == 0:
-                        ang = bl.to_y < 0 ? 0.0 : 180.0
-                    else bl.to_y == 0:
-                        ang = bl.to_x > 0 ? 90.0 : 270.0
-                    else bl.to_x > 0 and bl.to_y < 0:
-                        ang = th
-                    else bl.to_x > 0:
-                        ang = 180.0 - th
-                    else bl.to_y > 0:
-                        ang = 180.0 + th
-                    else:
-                        ang = 360.0 - th
-                    end
-                end
-                g.kind = paint.GradientKind.Linear
-                g.angle = ang
-                rad := ang * math.PI / 180.0
-                glen = math.Abs(w * math.Sin(rad)) + math.Abs(h * math.Cos(rad))
-            else:
-                cx := css.Resolve(bl.center_x, w)
-                cy := css.Resolve(bl.center_y, h)
-                g.cx *= s
-                g.cy *= s
-                if bl.image == css.ImageKind.Radial:
-                    g.kind = paint.GradientKind.Radial
-                    mut rx := css.Resolve(bl.radius_x, w)
-                    mut ry := css.Resolve(bl.radius_y, h)
-                    if rx <= 0.0 or ry <= 0.0:
-                        mut ext := paint.RadialExtent.FarthestCorner
-                        switch bl.extent:
-                            css.RadialExtent.ClosestSide: ext = paint.RadialExtent.ClosestSide break end
-                            css.RadialExtent.ClosestCorner: ext = paint.RadialExtent.ClosestCorner break end
-                            css.RadialExtent.FarthestSide: ext = paint.RadialExtent.FarthestSide break end
-                            else: break end
-                        end
-                        pt := paint.RadialSize(w, h, cx, cy, bl.shape == css.RadialShape.Circle, ext)
-                        rx = pt.x
-                        ry = pt.y
-                    end
-                    g.rx *= s
-                    g.ry *= s
-                    glen = rx
-                else:
-                    g.kind = paint.GradientKind.Conic
-                    g.angle = bl.angle
-                    glen = 360.0
-                end
-            end
-            each st in bl.stops:
-                mut pos := -1.0
-                if st.has_pos:
-                    if st.pos.has_pct and st.pos.px == 0.0:
-                        pos = st.pos.pct / 100.0
-                    else glen > 0.0:
-                        pos = css.Resolve(st.pos, glen) / glen
-                    end
-                end
-                g.AddStop(pos, _pca(st.color, alpha))
-            end
-            cv.FillGradient(_rect(x, y, w, h), radii, g)
-            g.Free()
-            break
-        end
-        css.ImageKind.Url:
-            k := _image_index(bl.url)
-            if k >= 0 and _img_ok[k]:
-                img := _img_canvas[k]
-                mut tw := img.width as f64
-                mut th := img.height as f64
-                if bl.size_kind == css.SizeKind.Cover or bl.size_kind == css.SizeKind.Contain:
-                    sx := w / tw
-                    sy := h / th
-                    f := bl.size_kind == css.SizeKind.Cover ? math.Max(sx, sy) : math.Min(sx, sy)
-                    tw *= f
-                    th *= f
-                else:
-                    if bl.size_w.kind != css.LenKind.Auto:
-                        nw := css.Resolve(bl.size_w, w)
-                        if bl.size_h.kind == css.LenKind.Auto:
-                            th *= nw / tw
-                        end
-                        tw = nw
-                    end
-                    if bl.size_h.kind != css.LenKind.Auto:
-                        th = css.Resolve(bl.size_h, h)
-                    end
-                end
-                px := css.Resolve(bl.position_x, w - tw)
-                py := css.Resolve(bl.position_y, h - th)
-                cv.PushRoundedClip(_rect(x, y, w, h), radii)
-                if bl.repeat_x == css.Repeat.NoRepeat and bl.repeat_y == css.Repeat.NoRepeat:
-                    cv.DrawImage(img, _rect(x + px, y + py, tw, th), alpha)
-                else:
-                    cv.DrawImageTiled(img, _rect(x, y, w, h), _rect(x + px, y + py, tw, th), alpha)
-                end
-                cv.PopClip()
-            end
-            break
-        end
-        else:
-            break
-        end
-    end
+    mut a := [x, y, w, h, 0.0, 0.0, 0.0, 0.0]
+    _paint_layer_in(cv, bl, a, radii, a, alpha)
 end
 
 func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
@@ -243,51 +161,32 @@ func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
         bc := c.hovered and not _is_text_input(node) ? css.Color { r = 79, g = 79, b = 79, a = 255 } : css.Color { r = 118, g = 118, b = 118, a = 255 }
         cv.DrawBorder(_rect(b.x, b.y, b.w, b.h), nr, paint.SolidBorder(s, _pca(bc, alpha)))
     else:
-        if bg.a > 0:
-            cv.FillRoundedRect(_rect(b.x, b.y, b.w, b.h), radii, _pca(bg, alpha))
-        end
-        mut k := cs.backgrounds.len() - 1
-        until k >= 0:
-            _paint_bg_layer(cv, cs.backgrounds[k], b.x, b.y, b.w, b.h, radii, alpha)
-            k--
-        end
+        _paint_backgrounds(cv, node, cs, b, radii, bg, alpha)
     end
     mut n2 := cs.box_shadows.len() - 1
     until n2 >= 0:
         sh := cs.box_shadows[n2]
         if sh.inset:
-            cv.DrawShadow(_rect(b.x, b.y, b.w, b.h), radii, paint.Shadow { offset_x = sh.x * s, offset_y = sh.y * s, blur = sh.blur * s, spread = sh.spread * s, color = _pca(sh.color, alpha), inset = true })
+            mut ia := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            _area_of(node, b, css.BoxArea.PaddingBox, ia)
+            cv.DrawShadow(_rect(ia[0], ia[1], ia[2], ia[3]), _area_radii(radii, ia), paint.Shadow { offset_x = sh.x * s, offset_y = sh.y * s, blur = sh.blur * s, spread = sh.spread * s, color = _pca(sh.color, alpha), inset = true })
         end
         n2--
     end
-    if not native:
+    if not native and not _paint_border_image(cv, cs, b, alpha):
         mut bt := _bwidth(cs.border_top)
         mut br := _bwidth(cs.border_right)
         mut bb := _bwidth(cs.border_bottom)
         mut bl := _bwidth(cs.border_left)
-        mut rx := b.x
-        mut ry := b.y
-        mut rw := b.w
-        mut rh := b.h
-        if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
+        rx := b.x
+        ry := b.y
+        rw := b.w
+        rh := b.h
+        if cs.border_collapse == css.BorderCollapse.Collapse and _table_part(cs.display):
             bt = 0.0
             br = 0.0
             bb = 0.0
             bl = 0.0
-        else cs.border_collapse == css.BorderCollapse.Collapse and cs.display == css.Display.TableCell:
-            cl := _e.tree.Layout(_e.node_cb[node])
-            ht := cl.border.top
-            hr := cl.border.right
-            hb := cl.border.bottom
-            hl := cl.border.left
-            rx -= hl
-            ry -= ht
-            rw += hl + hr
-            rh += ht + hb
-            bt = bt > 0.0 ? cl.border.top * 2.0 : 0.0
-            br = br > 0.0 ? cl.border.right * 2.0 : 0.0
-            bb = bb > 0.0 ? cl.border.bottom * 2.0 : 0.0
-            bl = bl > 0.0 ? cl.border.left * 2.0 : 0.0
         end
         if bt > 0.0 or br > 0.0 or bb > 0.0 or bl > 0.0:
             mut bd := paint.Border {}
@@ -295,18 +194,110 @@ func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
             bd.right_width = br * s
             bd.bottom_width = bb * s
             bd.left_width = bl * s
-            bd.top_color = _pca(_shade(cs.border_top.color, cs.border_top.style, cs.border_top.style == css.BorderStyle.Inset or cs.border_top.style == css.BorderStyle.Groove), alpha)
-            bd.right_color = _pca(_shade(cs.border_right.color, cs.border_right.style, cs.border_right.style == css.BorderStyle.Outset or cs.border_right.style == css.BorderStyle.Ridge), alpha)
-            bd.bottom_color = _pca(_shade(cs.border_bottom.color, cs.border_bottom.style, cs.border_bottom.style == css.BorderStyle.Outset or cs.border_bottom.style == css.BorderStyle.Ridge), alpha)
-            bd.left_color = _pca(_shade(cs.border_left.color, cs.border_left.style, cs.border_left.style == css.BorderStyle.Inset or cs.border_left.style == css.BorderStyle.Groove), alpha)
+            bd.top_color = _pca(_side_tone(cs.border_top.color, cs.border_top.style, 0, true), alpha)
+            bd.right_color = _pca(_side_tone(cs.border_right.color, cs.border_right.style, 1, true), alpha)
+            bd.bottom_color = _pca(_side_tone(cs.border_bottom.color, cs.border_bottom.style, 2, true), alpha)
+            bd.left_color = _pca(_side_tone(cs.border_left.color, cs.border_left.style, 3, true), alpha)
             bd.top_style = _bstyle(cs.border_top.style)
             bd.right_style = _bstyle(cs.border_right.style)
             bd.bottom_style = _bstyle(cs.border_bottom.style)
             bd.left_style = _bstyle(cs.border_left.style)
-            cv.DrawBorder(_rect(rx, ry, rw, rh), radii, bd)
+            _draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs, alpha)
         end
     end
     _paint_replaced(cv, node, cs, b, alpha)
+end
+
+func _table_part(d: css.Display): bool:
+    switch d:
+        css.Display.Table, css.Display.InlineTable, css.Display.TableCell, css.Display.TableRow, css.Display.TableRowGroup, css.Display.TableHeaderGroup, css.Display.TableFooterGroup, css.Display.TableColumn, css.Display.TableColumnGroup:
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _side_of(cs: css.ComputedStyle, side: int): css.BorderSide:
+    switch side:
+        0: ret cs.border_top end
+        1: ret cs.border_right end
+        2: ret cs.border_bottom end
+        else: ret cs.border_left end
+    end
+    ret cs.border_left
+end
+
+func _paint_collapsed(cv &: paint.Canvas, node: int, alpha: f64):
+    b := _e.boxes[node]
+    cb := _e.node_cb[node]
+    if cb < 0 or not b.shown:
+        ret
+    end
+    mut segs := _e.tree.CollapsedBorders(cb)
+    defer segs.free()
+    s := _e.scale
+    each sg in segs:
+        own := sg.node >= 0 and sg.node < _e.cb_node.len() ? _e.cb_node[sg.node] : -1
+        if own < 0:
+            continue
+        end
+        mut ocs := _style_of(own)
+        mut sd := _side_of(ocs, sg.side)
+        if sd.style == css.BorderStyle.Inset:
+            sd.style = css.BorderStyle.Ridge
+        else sd.style == css.BorderStyle.Outset:
+            sd.style = css.BorderStyle.Groove
+        end
+        switch sg.side:
+            0: ocs.border_top = sd break end
+            1: ocs.border_right = sd break end
+            2: ocs.border_bottom = sd break end
+            else: ocs.border_left = sd break end
+        end
+        x0 := math.Round(b.x + sg.x)
+        y0 := math.Round(b.y + sg.y)
+        x1 := math.Round(b.x + sg.x + sg.width)
+        y1 := math.Round(b.y + sg.y + sg.height)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        end
+        w := sg.vertical ? x1 - x0 : y1 - y0
+        col := _pca(_side_tone(sd.color, sd.style, sg.side, true), alpha)
+        bst := _bstyle(sd.style)
+        mut bd := paint.Border { top_color = col, right_color = col, bottom_color = col, left_color = col, top_style = bst, right_style = bst, bottom_style = bst, left_style = bst }
+        mut rx := x0
+        mut ry := y0
+        mut rw := x1 - x0
+        mut rh := y1 - y0
+        switch sg.side:
+            0:
+                bd.top_width = w * s
+                rh += w
+                break
+            end
+            1:
+                bd.right_width = w * s
+                rx -= w
+                rw += w
+                break
+            end
+            2:
+                bd.bottom_width = w * s
+                ry -= w
+                rh += w
+                break
+            end
+            else:
+                bd.left_width = w * s
+                rw += w
+                break
+            end
+        end
+        _draw_css_border(cv, _rect(rx, ry, rw, rh), paint.Radii {}, bd, ocs, alpha)
+    end
 end
 
 func _paint_outline(cv &: paint.Canvas, node: int, alpha: f64):
@@ -797,19 +788,20 @@ func _paint_ctx(cv &: paint.Canvas, node: int, alpha0: f64, out_of_flow: bool):
         cv.PushTransform(_own_device(node))
         _vis_push(node, saved)
     end
-    if cs.backdrop_filters.len() > 0 and b.shown and cs.visibility == css.Visibility.Visible:
+    op := _anim_f(node, 2, cs.opacity)
+    backdrop := cs.backdrop_filters.len() > 0
+    if backdrop and b.shown and cs.visibility == css.Visibility.Visible:
         mut bch := paint.FilterChain {}
         _effect_chain(cs.backdrop_filters, bch)
-        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), bch)
+        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), bch, op)
         bch.Free()
     end
-    op := _anim_f(node, 2, cs.opacity)
     mut chain := paint.FilterChain {}
     filtered := cs.filters.len() > 0
     if filtered:
         _effect_chain(cs.filters, chain)
     end
-    layered := op < 1.0 or filtered
+    layered := op < 1.0 or filtered or backdrop
     alpha := alpha0
     if layered:
         mut lr := [0.0, 0.0, 0.0, 0.0]
@@ -911,6 +903,9 @@ func _paint_flow(cv &: paint.Canvas, node: int, alpha: f64):
         end
         _paint_flow(cv, k, alpha)
         _paint_outline(cv, k, alpha)
+    end
+    if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
+        _paint_collapsed(cv, node, alpha)
     end
     if _e.node_cb[node] >= 0 and _is_scroller(cs) and b.shown:
         _paint_scrollbars(cv, node, alpha)

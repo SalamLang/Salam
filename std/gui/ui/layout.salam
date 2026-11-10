@@ -781,6 +781,7 @@ func _virt_build(node: int, cbn: int, view: f64, rows: Vector<int>):
         u := _row_uid(r)
         a := _e.vadv.has(u) ? _e.vadv.get(u) : avg
         _e.vtop[r] = top
+        _e.vh[r] = a
         if top + a > lo and top < hi:
             if first < 0:
                 first = i
@@ -873,11 +874,14 @@ func _virt_reset():
     n := _e.dom.nodes.len()
     _e.vskip.free()
     _e.vtop.free()
+    _e.vh.free()
     _e.vskip = Vector {} as Vector<int>
     _e.vtop = Vector {} as Vector<f64>
+    _e.vh = Vector {} as Vector<f64>
     repeat n:
         _e.vskip.push(-1)
         _e.vtop.push(0.0)
+        _e.vh.push(0.0)
     end
     _e.vconts.clear()
     _e.vrow0.clear()
@@ -1200,10 +1204,8 @@ func _layout_pass():
     end
     _end_build()
     _e.tree.ResetCounters()
-    mut k := _e.atoms.len() - 1
-    until k >= 0:
+    repeat _e.atoms.len() in k:
         _compute_atom(k)
-        k--
     end
     _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
     _e.last_layout_calls = _e.tree.LayoutCalls()
@@ -1232,11 +1234,9 @@ func _compute_atom(k: int):
     if l.has_baseline and not (tag == "img" or (tag == "input" and not _is_text_input(a.node) and not _is_button_input(a.node))):
         base = l.margin.top + l.baseline
     end
-    cs := _style_of(a.node)
-    if cs.vertical_align == css.VerticalAlign.Middle:
-        base = at.mh / 2.0 + cs.font_size * 0.25
-    end
-    at.baseline = base
+    at.baseline = _va_base(a.node, base, at.mh)
+    at.va = _va_kind(a.node)
+    at.va_set = false
 end
 
 func _face_for(sp: typeset.TextSpan, cp: int): int:
@@ -1261,14 +1261,15 @@ func _patch_atoms(f &: _Ifc):
                 desc = (math.Abs(m.descent as f64)) / (m.units_per_em as f64)
             end
         end
-        h := math.Max(a.mh, 0.01)
+        tiny := a.va != _VA_NONE and not a.va_set
+        h := tiny ? 0.001 : math.Max(a.mh, 0.01)
         mut s := 0.0
         k := asc - desc
-        if k > 0.01:
+        if k > 0.01 and not tiny:
             s = (2.0 * a.baseline - h) / k
         end
-        if s < 0.5:
-            s = 0.5
+        if math.Abs(s) < 0.001:
+            s = 0.001
         end
         sp.size = s
         sp.line_height = h
@@ -1405,7 +1406,7 @@ func _ifc_layout(fi: int, width: f64):
             k = i
         end
     end
-    if k >= 0:
+    if k >= 0 and _va_tb_count(f0) == 0:
         got := f.alt_lay[k]
         f.alt_lay.remove_at(k)
         f.alt_w.remove_at(k)
@@ -1431,6 +1432,7 @@ func _ifc_layout(fi: int, width: f64):
     f.lay = typeset.LayoutParagraph(f.para, _fc, width)
     f.lay_w = width
     f.has_lay = true
+    _va_fix(fi, width)
 end
 
 func _measure(mi: cssbox.MeasureInput): cssbox.MeasureOutput:

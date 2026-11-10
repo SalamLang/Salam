@@ -71,6 +71,8 @@ struct LnNames:
     pub lang: str = "Lang"
     pub dir: str = "Dir"
     pub scope: str = "Scope"
+    pub keyed: str = "KeyedScope"
+    pub key: str = "Key"
     pub reactive: str = "Reactive"
     pub instance: str = "Instance"
     pub fresh: str = "Fresh"
@@ -98,6 +100,7 @@ struct LnGen:
     pub a_node: int = 0
     pub rx: LnReact = LnReact {}
     pub in_comp: int = 0
+    pub row_keys: Vector<int> = Vector {}
 end
 
 func ln_names(pack: lp.Langpack): LnNames:
@@ -126,6 +129,8 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.lang = "زبان صفحه"
     n.dir = "جهت صفحه"
     n.scope = "دامنه واکنشی"
+    n.keyed = "دامنه کلیددار"
+    n.key = "کلید عنصر"
     n.reactive = "راه اندازی واکنش"
     n.instance = "نمونه بخش"
     n.fresh = "نمونه تازه"
@@ -394,6 +399,8 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
                 ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
             else str.Equals(out, "id"):
                 ln_call(g, g.nm.id, ln_str_expr(v))
+            else str.Equals(out, "data-key"):
+                ln_call(g, g.nm.key, ln_str_expr(v))
             else:
                 mv := is_dyn(v) ? v : attr_value_map(ai, v)
                 ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv))
@@ -511,6 +518,86 @@ func ln_scope_open(g &: LnGen, site: int):
     g.depth++
 end
 
+func ln_refs_state(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret str.StartsWith(n.name, "__salam_st_") or str.StartsWith(n.name, "__salam_k_")
+    end
+    if ln_refs_state(a, n.a) or ln_refs_state(a, n.b) or ln_refs_state(a, n.c) or ln_refs_state(a, n.d):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if ln_refs_state(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_key_attr(g &: LnGen, a &: at.Ast, el: int, want: str): int:
+    ei := sm.LayoutElemOf(a, el)
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0 or an.a == 0:
+            continue
+        end
+        mut key := sm.LayoutAttrKey(an.name)
+        if str.Len(key) == 0:
+            key = an.name
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai < 0 or not str.Equals(sm.LayoutAttrOut(ai), want):
+            continue
+        end
+        num := ln_dyn_num(val_str(a, an.a))
+        if num >= 0 and num < g.lw.slots.len():
+            ex := g.lw.slots.get(num).expr
+            if ln_refs_state(a, ex):
+                ret 0
+            end
+            ret ex
+        end
+        ret an.a
+    end
+    ret 0
+end
+
+func ln_row_key(g &: LnGen, a &: at.Ast, container: int): int:
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT:
+            mut key := ln_key_attr(g, a, cid, "data-key")
+            if key == 0:
+                key = ln_key_attr(g, a, cid, "id")
+            end
+            ret key
+        end
+        if k == at.AST_IF and ln_rx_is_comp(a, cid):
+            ret ln_row_key(g, a, at.Get(a, cid).b)
+        end
+    end
+    ret 0
+end
+
+func ln_key_open(g &: LnGen, a &: at.Ast, site: int, key_expr: int):
+    kv := at.Get(a, key_expr)
+    mut ks := ""
+    if kv.kind == at.AST_LITERAL:
+        ks = ln_quote(val_str(a, key_expr))
+    else:
+        idx := g.lw.slots.len()
+        g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = at.Clone(a, key_expr) })
+        ks = "(\"\" + " + ln_dyn_name(idx) + ")"
+    end
+    ln_line(g, "__salam_b." + g.nm.keyed + "(" + co.U64Toa(site as u64) + g.nm.sep + ks + g.nm.sep + "(__salam_b: " + g.nm.ui + "." + g.nm.builder + "):")
+    g.depth++
+end
+
 func ln_scope_close(g &: LnGen):
     g.depth--
     ln_line(g, g.nm.kw_end + ")")
@@ -564,7 +651,16 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
         g.in_comp--
         ret
     end
-    ln_scope_open(g, ln_rx_site(g.rx, has_state ? ci : 0 - 1, deps))
+    site := ln_rx_site(g.rx, has_state ? ci : 0 - 1, deps)
+    mut row_key := 0
+    if g.row_keys.len() > 0:
+        row_key = g.row_keys.get(g.row_keys.len() - 1)
+    end
+    if row_key != 0:
+        ln_key_open(g, a, site, row_key)
+    else:
+        ln_scope_open(g, site)
+    end
     if has_state:
         if not ln_rx_comp_has_state(g.rx, ci):
             g.rx.st_comps.push(ci)
@@ -632,7 +728,9 @@ func ln_each(g &: LnGen, a &: at.Ast, nid: int):
     head += "__salam_item_" + ns + " " + g.nm.kw_in + " " + ln_dyn_name(num) + ":"
     ln_line(g, head)
     g.depth++
+    g.row_keys.push(ln_row_key(g, a, n.b))
     ln_items(g, a, n.b)
+    _rk := g.row_keys.pop()
     g.depth--
     ln_line(g, g.nm.kw_end)
 end
@@ -907,6 +1005,7 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     defer g.lw.shadow.free()
     defer g.lw.funcs.free()
     defer g.sel.free()
+    defer g.row_keys.free()
     g.lw.prog = prog
     g.prog = css.NewProgram()
     g.nm = ln_names(pack)

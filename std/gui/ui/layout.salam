@@ -243,15 +243,58 @@ func _box_style(node: int, cs: css.ComputedStyle, blockify: bool): cssbox.Style:
     ret st
 end
 
-func _new_cb(st: cssbox.Style, node: int): int:
-    cb := _e.tree.AddNode(st)
-    until _e.cb_node.len() <= cb:
+func _cb_grow(n: int):
+    until _e.cb_node.len() < n:
         _e.cb_node.push(-1)
         _e.cb_ifc.push(-1)
         _e.cb_rep.push(-1)
+        _e.cb_key.push(-1 as i64)
+        _e.cb_used.push(false)
+        _e.cb_meas.push(false)
+        _e.cb_want.push(false)
+        _e.cb_pkey.push("")
+        _e.cb_rw.push(-1.0)
+        _e.cb_rh.push(-1.0)
     end
+end
+
+func _new_cb(st: cssbox.Style, node: int): int:
+    mut key := -2 as i64
+    if node >= 0 and node < _e.node_ord.len():
+        ord := _e.node_ord[node]
+        _e.node_ord[node] = ord + 1
+        uid := node < _e.ctl.len() ? _e.ctl[node].uid : node
+        key = (uid as i64) * (4096 as i64) + (ord as i64)
+    else:
+        key = (-2 - _e.root_ord) as i64
+        _e.root_ord++
+    end
+    mut cb := -1
+    if _e.key_map.has(key):
+        c := _e.key_map.get(key)
+        if c < _e.cb_used.len() and not _e.cb_used[c]:
+            cb = c
+        end
+    end
+    if cb >= 0:
+        _e.tree.SetStyle(cb, st)
+    else _e.free_cbs.len() > 0:
+        cb = _e.free_cbs.pop()
+        _e.tree.SetStyle(cb, st)
+        _e.tree.MarkDirty(cb)
+    else:
+        cb = _e.tree.AddNode(st)
+        _cb_grow(cb + 1)
+    end
+    _e.cb_key[cb] = key
+    _e.cb_used[cb] = true
     _e.cb_node[cb] = node
     ret cb
+end
+
+func _link(parent: int, child: int):
+    _e.link_p.push(parent)
+    _e.link_c.push(child)
 end
 
 func _measure_fn(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
@@ -259,7 +302,164 @@ func _measure_fn(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
 end
 
 func _attach_measure(cb: int):
-    _e.tree.SetMeasure(cb, (mi: cssbox.MeasureInput): ret _measure_fn(mi) end)
+    _e.cb_want[cb] = true
+end
+
+func _begin_build():
+    if not _e.has_tree:
+        _e.tree = cssbox.Tree {}
+        _e.has_tree = true
+        _cb_clear()
+    end
+    n := _e.tree.NodeCount()
+    _cb_grow(n)
+    _e.key_map.free()
+    _e.key_map = HashMap {} as HashMap<i64, int>
+    repeat n in c:
+        _e.cb_node[c] = -1
+        _e.cb_ifc[c] = -1
+        _e.cb_rep[c] = -1
+        _e.cb_used[c] = false
+        _e.cb_want[c] = false
+        if _e.cb_key[c] != (-1 as i64):
+            _e.key_map.put(_e.cb_key[c], c)
+        end
+    end
+    _e.node_ord.free()
+    _e.node_ord = Vector {} as Vector<int>
+    repeat _e.dom.nodes.len():
+        _e.node_ord.push(0)
+    end
+    _e.root_ord = 0
+    _e.link_p.clear()
+    _e.link_c.clear()
+end
+
+func _end_build():
+    n := _e.tree.NodeCount()
+    mut cnt := Vector {} as Vector<int>
+    defer cnt.free()
+    repeat n + 1:
+        cnt.push(0)
+    end
+    each p in _e.link_p:
+        cnt[p + 1] += 1
+    end
+    repeat n in i:
+        cnt[i + 1] += cnt[i]
+    end
+    mut fill := Vector {} as Vector<int>
+    defer fill.free()
+    repeat n:
+        fill.push(0)
+    end
+    mut flat := Vector {} as Vector<int>
+    defer flat.free()
+    repeat _e.link_c.len():
+        flat.push(0)
+    end
+    repeat _e.link_p.len() in k:
+        p := _e.link_p[k]
+        flat[cnt[p] + fill[p]] = _e.link_c[k]
+        fill[p] += 1
+    end
+    mut kids := Vector {} as Vector<int>
+    defer kids.free()
+    repeat n in c:
+        if not _e.cb_used[c]:
+            if _e.cb_key[c] != (-1 as i64):
+                kids.clear()
+                if _e.tree.ChildCount(c) > 0:
+                    _e.tree.SetChildren(c, kids)
+                end
+                if _e.cb_meas[c]:
+                    _e.tree.ClearMeasure(c)
+                    _e.cb_meas[c] = false
+                end
+                _e.cb_key[c] = -1 as i64
+                _sfree(_e.cb_pkey[c])
+                _e.cb_pkey[c] = ""
+                _e.cb_rw[c] = -1.0
+                _e.cb_rh[c] = -1.0
+                _e.free_cbs.push(c)
+            end
+            continue
+        end
+        s0 := cnt[c]
+        e0 := cnt[c + 1]
+        mut same := _e.tree.ChildCount(c) == e0 - s0
+        if same:
+            repeat e0 - s0 in q:
+                if _e.tree.Child(c, q) != flat[s0 + q]:
+                    same = false
+                    break
+                end
+            end
+        end
+        if not same:
+            kids.clear()
+            repeat e0 - s0 in q:
+                kids.push(flat[s0 + q])
+            end
+            _e.tree.SetChildren(c, kids)
+        end
+        if _e.cb_want[c] and not _e.cb_meas[c]:
+            _e.tree.SetMeasure(c, (mi: cssbox.MeasureInput): ret _measure_fn(mi) end)
+            _e.cb_meas[c] = true
+        else not _e.cb_want[c] and _e.cb_meas[c]:
+            _e.tree.ClearMeasure(c)
+            _e.cb_meas[c] = false
+        end
+        rep := _e.cb_rep[c]
+        if rep >= 0:
+            if _e.cb_rw[c] != _e.rep_w[rep] or _e.cb_rh[c] != _e.rep_h[rep]:
+                _e.cb_rw[c] = _e.rep_w[rep]
+                _e.cb_rh[c] = _e.rep_h[rep]
+                _e.tree.MarkDirty(c)
+            end
+        end
+        fi := _e.cb_ifc[c]
+        if fi >= 0:
+            f := _e.ifcs[fi]
+            key := (f.control or f.atoms.len() > 0) ? "" : _para_key(f)
+            if key.len() == 0 or key != _e.cb_pkey[c]:
+                _e.tree.MarkDirty(c)
+            end
+            _sfree(_e.cb_pkey[c])
+            _e.cb_pkey[c] = key
+        else _e.cb_pkey[c].len() > 0:
+            _sfree(_e.cb_pkey[c])
+            _e.cb_pkey[c] = ""
+            _e.tree.MarkDirty(c)
+        end
+    end
+end
+
+func _cb_clear():
+    each k in _e.cb_pkey:
+        _sfree(k)
+    end
+    _e.cb_node.clear()
+    _e.cb_ifc.clear()
+    _e.cb_rep.clear()
+    _e.cb_key.clear()
+    _e.cb_used.clear()
+    _e.cb_meas.clear()
+    _e.cb_want.clear()
+    _e.cb_pkey.clear()
+    _e.cb_rw.clear()
+    _e.cb_rh.clear()
+    _e.free_cbs.clear()
+end
+
+func _drop_tree():
+    if _e.has_tree:
+        _e.tree.Free()
+        _e.has_tree = false
+    end
+    _cb_clear()
+    _e.key_map.free()
+    _e.key_map = HashMap {} as HashMap<i64, int>
 end
 
 func _new_ifc(owner: int, cb: int): int:
@@ -494,7 +694,7 @@ func _flush_run(node: int, cbn: int, run &: Vector<int>):
         mut st := cssbox.Style {}
         st.direction = cs.direction
         anon := _new_cb(st, node)
-        _e.tree.AddChild(cbn, anon)
+        _link(cbn, anon)
         _make_ifc(node, anon, run)
     end
     run.clear()
@@ -674,7 +874,7 @@ func _build_element(node: int, parent_cb: int, blockify: bool): int:
     cb := _new_cb(st, node)
     _e.node_cb[node] = cb
     if parent_cb >= 0:
-        _e.tree.AddChild(parent_cb, cb)
+        _link(parent_cb, cb)
     end
     if replaced:
         if _intrinsic(node, cs):
@@ -712,11 +912,6 @@ func _image_index(src: str): int:
 end
 
 func _reset_layout():
-    if _e.has_tree:
-        _e.tree.Free()
-    end
-    _e.tree = cssbox.Tree {}
-    _e.has_tree = true
     repeat _e.ifcs.len() in i:
         mut f := _e.ifcs.ref(i)
         if f.ckey.len() > 0 and f.has_para and not _pc_map.has(f.ckey):
@@ -728,12 +923,6 @@ func _reset_layout():
     _e.ifcs = Vector {} as Vector<_Ifc>
     _e.atoms.free()
     _e.atoms = Vector {} as Vector<_Atom>
-    _e.cb_node.free()
-    _e.cb_ifc.free()
-    _e.cb_rep.free()
-    _e.cb_node = Vector {} as Vector<int>
-    _e.cb_ifc = Vector {} as Vector<int>
-    _e.cb_rep = Vector {} as Vector<int>
     n := _e.dom.nodes.len()
     _e.node_cb.free()
     _e.node_atom.free()
@@ -780,6 +969,7 @@ end
 func _layout():
     _ensure_fonts()
     _reset_layout()
+    _begin_build()
     mut rs := cssbox.Style {}
     rs.width = cssbox.Px(_e.width)
     rcs := _e.sheet.RootStyle()
@@ -788,12 +978,15 @@ func _layout():
     if _e.dom.body >= 0:
         _build_element(_e.dom.body, _e.root_cb, false)
     end
+    _end_build()
+    _e.tree.ResetCounters()
     mut k := _e.atoms.len() - 1
     until k >= 0:
         _compute_atom(k)
         k--
     end
     _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
+    _e.last_layout_calls = _e.tree.LayoutCalls()
     _place_all()
     _pc_sweep()
 end

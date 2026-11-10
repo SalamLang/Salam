@@ -678,3 +678,120 @@ func cf_mix(a0: CF, b0: CF, t: f64, sp: int, method: int): CF:
     end
     ret r
 end
+
+func color_is_legacy(t: Vector<Tok>, s: int, e: int, dark: bool, cur: Color): bool:
+    if s + 1 == e and t[s].k == TK_COLOR:
+        ret (t[s].d & 2) == 0
+    end
+    mut c := CF {}
+    if not parse_cf_at(t, s, e, dark, cur, c):
+        ret true
+    end
+    ret c.legacy
+end
+
+func take_interp(t: Vector<Tok>, gs: int, ge: int, ns &: int, ne &: int, sp &: int, method &: int): bool:
+    ns = gs
+    ne = ge
+    mut j := gs
+    until j < ge:
+        if t[j].k == TK_IDENT and t[j].s == "in":
+            if j + 1 >= ge or t[j + 1].k != TK_IDENT:
+                ret false
+            end
+            s := space_of(t[j + 1].s)
+            if s < 0:
+                ret false
+            end
+            mut k := j + 2
+            if k < ge and t[k].k == TK_IDENT and t[k].s != "to" and t[k].s != "at" and t[k].s != "from":
+                m := hue_method_of(t[k].s)
+                if m < 0 or hue_index(s) < 0 or k + 1 >= ge or t[k + 1].k != TK_IDENT or t[k + 1].s != "hue":
+                    ret false
+                end
+                method = m
+                k += 2
+            end
+            sp = s
+            if j == gs:
+                ns = k
+            else k == ge:
+                ne = j
+            else:
+                ret false
+            end
+            ret true
+        end
+        j = nxt(t, j)
+    end
+    ret true
+end
+
+func len_lerp(a: Len, b: Len, f: f64): Len:
+    ret Len { px = a.px + (b.px - a.px) * f, pct = a.pct + (b.pct - a.pct) * f, has_pct = a.has_pct or b.has_pct }
+end
+
+func expand_stops(stops &: Vector<ColorStop>, sp: int, method: int, conic: bool):
+    n := stops.len()
+    if n < 2:
+        ret
+    end
+    repeat n in k:
+        st := stops[k]
+        if st.hint or (st.has_pos and st.pos.calc.len() > 0):
+            ret
+        end
+    end
+    mut pos := Vector {} as Vector<Len>
+    defer pos.free()
+    repeat n in k:
+        pos.push(stops[k].pos)
+    end
+    mut known := Vector {} as Vector<bool>
+    defer known.free()
+    repeat n in k:
+        known.push(stops[k].has_pos)
+    end
+    if not known[0]:
+        pos[0] = Len {}
+        known[0] = true
+    end
+    if not known[n - 1]:
+        pos[n - 1] = conic ? Len { px = 360.0 } : Len { pct = 100.0, has_pct = true }
+        known[n - 1] = true
+    end
+    mut a := 0
+    until a < n - 1:
+        mut b := a + 1
+        until not known[b]:
+            b++
+        end
+        mut m := a + 1
+        until m < b:
+            pos[m] = len_lerp(pos[a], pos[b], ((m - a) as f64) / ((b - a) as f64))
+            m++
+        end
+        a = b
+    end
+    steps := 8
+    mut out := Vector {} as Vector<ColorStop>
+    repeat n in k:
+        out.push(ColorStop { color = stops[k].color, pos = pos[k], has_pos = true })
+        if k + 1 < n:
+            ca := cf_from_color(stops[k].color)
+            cb := cf_from_color(stops[k + 1].color)
+            repeat steps - 1 in q:
+                f := ((q + 1) as f64) / (steps as f64)
+                out.push(ColorStop { color = cf_to_color(cf_mix(ca, cb, f, sp, method)), pos = len_lerp(pos[k], pos[k + 1], f), has_pos = true })
+            end
+        end
+    end
+    stops.free()
+    stops = out
+end
+
+@en "MixColors"
+@fa "آمیختن رنگ ها"
+pub func MixColors(start: Color, finish: Color, amount: f64): Color:
+    ret cf_to_color(cf_mix(cf_from_color(start), cf_from_color(finish), amount, SP_SRGB, HUE_SHORTER))
+end

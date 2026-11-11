@@ -10,18 +10,18 @@ with a wrong answer:
 
 | Bug                                   | Before this pass                                      |
 | ------------------------------------- | ----------------------------------------------------- |
-| `repeat 0 to 3 in i: xs[i]` on 3 items | aborts at run time on the fourth pass                 |
-| `i := 5` then `xs[i]`                 | aborts at run time                                    |
-| `v.push(1)` twice, then `v[5]`        | panics at run time                                    |
+| `repeat 0 to 3 in i: xs[i]` on 3 items | aborts at runtime on the fourth pass                  |
+| `i := 5` then `xs[i]`                 | aborts at runtime                                     |
+| `v.push(1)` twice, then `v[5]`        | panics at runtime                                     |
 | `a := 2147483647 as i32; a + 1`       | prints `-2147483648`; undefined in a `--release` build |
 | 13! in an `int` (`i32`)                | prints a wrong number                                 |
-| `d := 0` then `10 / d`                | stops at run time                                     |
+| `d := 0` then `10 / d`                | stops at runtime                                      |
 | `p := null as Node*; p.key`           | prints `0` (the C compiler folds the undefined read)  |
 | `mem.Allocate(32) as i64*`, then `p[4]` | writes past the block, silently                     |
 
 The only compile-time checks were for literal indices (`xs[3]`), constant
 division by zero and shift widths. Everything that went through a variable,
-a loop counter or a length waited for the run-time checks, which a
+a loop counter or a length waited for the runtime checks, which a
 `--release` build removes.
 
 ## The goal
@@ -35,7 +35,7 @@ error[E146]: index out of bounds: 'i' is 3, but 'xs' has 3 elements (on pass 4 o
           'repeat xs.len() in i:' or 'each i, x in xs:'
 ```
 
-with no annotations, no new syntax, and no run-time cost.
+with no annotations, no new syntax, and no runtime cost.
 
 ## How it works
 
@@ -63,7 +63,7 @@ local and parameter, an abstract value (`RgV`):
 - A path that ends in `ret`, `throw`, `break`, `continue` or a call to a
   `noret` function (`panic`, `os.Exit`) does not reach the code after it, so
   `if i >= n: panic("bad index") end` protects what follows.
-- `switch` arms fall through to the next arm, as at run time; `break` leaves
+- `switch` arms fall through to the next arm, as at runtime; `break` leaves
   the switch.
 - Loops are solved to a fixpoint with widening, then analyzed once more with
   reporting on.
@@ -120,13 +120,18 @@ shapes, each now excluded:
 | W154 | an explicit cast of a known value that does not fit and loses bits          |
 | W158 | memory from `mem.Allocate` that nothing frees, returns, stores or passes on |
 
+A literal index or slice bound on a fixed array, or a literal index into a
+constant string (`xs[3]` on three elements, `xs[2:1]`, `"ab"[7]`), is checked
+by the type checker, not by this pass, so it is reported as E168 even with
+`--range-checks=off`.
+
 Unsigned arithmetic is not reported: it wraps by definition, and hashes rely
 on that. Signed overflow is reported because a `--release` build lets the
 backend assume it never happens. The constant folder (`sema_fold.salam`)
 reports E148 too, so `const B := A * 4096` no longer folds to `0` in silence
 when `A` is `1 << 20`; this is the rule Go, Swift and Rust apply to
-constants. Tests that check how each backend wraps at run time now pass
-their operands through a function, which is what code that wants run-time
+constants. Tests that check how each backend wraps at runtime now pass
+their operands through a function, which is what code that wants runtime
 wrapping looks like.
 
 ### `repeat a to b` counts down
@@ -151,9 +156,9 @@ errors. Messages exist in English and Persian (`compiler/i18n.salam`).
   block, or bound by a `match` pattern is not tracked.
 - Calls are crossed in one way only: a function whose every `ret` returns
   `null` makes its result null at the call, so `p := find(3)` followed by
-  `p.key` is E152. A function that indexes a parameter with another
-  parameter, `xs[i]`, in a top-level statement that runs before anything
-  can return, makes each call check its arguments: `get(a, 4)` on a
+  `p.key` is E152. A function that reads one parameter at an index
+  taken from another, `xs[i]`, in a top-level statement that runs before
+  anything can return, makes each call check its arguments: `get(a, 4)` on a
   4-element `a` is E146 at the call, and the help names the line in `get`.
   Neither parameter may be assigned or passed by `&:` in the callee. An
   index that the callee guards first is not checked at the call.

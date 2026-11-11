@@ -450,6 +450,77 @@ func check_toplevel(s &: Sema, a &: at.Ast, did: int):
     s.file = save_file
 end
 
+func const_len_receiver(a &: at.Ast, recv: int): bool:
+    if recv == 0:
+        ret false
+    end
+    ts := at.Get(a, recv).type_str
+    ret str.Equals(ts, "str") or str.EndsWith(ts, "]") or str.StartsWith(ts, "slice<")
+end
+
+func const_call_is_runtime(s &: Sema, a &: at.Ast, call: int): bool:
+    callee := at.Get(a, call).a
+    if callee == 0:
+        ret false
+    end
+    ck := at.KindOf(a, callee)
+    if ck == at.AST_MEMBER:
+        cv := at.Get(a, callee)
+        ret not (str.Equals(cv.name, "len") and const_len_receiver(a, cv.a))
+    end
+    if ck != at.AST_IDENTIFIER:
+        ret true
+    end
+    sym := scope_lookup(s, s.cur, at.Get(a, callee).name)
+    if sym == 0:
+        ret false
+    end
+    k := sym_at(s, sym).kind
+    ret k == SYM_FUNC or k == SYM_VAR or k == SYM_CONST or k == SYM_PARAM
+end
+
+func const_init_call(s &: Sema, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret 0
+    end
+    if n.kind == at.AST_CALL and const_call_is_runtime(s, a, nid):
+        ret nid
+    end
+    kids := [n.a, n.b, n.c, n.d]
+    each k in kids:
+        hit := const_init_call(s, a, k)
+        if hit != 0:
+            ret hit
+        end
+    end
+    repeat n.list.len() in i:
+        hit2 := const_init_call(s, a, n.list.get(i))
+        if hit2 != 0:
+            ret hit2
+        end
+    end
+    ret 0
+end
+
+func check_const_init(s &: Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    call := const_init_call(s, a, d.a)
+    if call == 0:
+        ret
+    end
+    serr_help(
+        s, 167, span_of(a, call), co.Format1(
+            i18.Tr("constant '%s' needs a value known at compile time, but its initializer calls a function"), co.ArgStr(d.name)
+        ), co.Format1(
+            i18.Tr("write '%s := ...' without 'const' to compute the value once when the program starts"), co.ArgStr(d.name)
+        )
+    )
+end
+
 func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
     d := at.Get(a, did)
     if d.kind == at.AST_FUNC_DEF:
@@ -547,6 +618,9 @@ func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
     else d.kind == at.AST_VAR_DECL or d.kind == at.AST_CONST_DECL:
         g := scope_lookup_local(s, s.global, d.name)
         t := sema_check_var_decl(s, a, did)
+        if d.kind == at.AST_CONST_DECL:
+            check_const_init(s, a, did)
+        end
         if g != 0 and sym_at(s, g).ty == TYPE_NONE:
             mut gv := sym_at(s, g)
             gv.ty = t

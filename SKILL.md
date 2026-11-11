@@ -136,6 +136,9 @@ are parse errors ("declarations with a type annotation were removed"). Write
 `name: Type = value` survives only for struct fields and parameters.
 A `const` name must be a single word (`const MAX VALUE := 3` is a parse
 error); `mut` globals, locals and functions may still have multi-word names.
+A top-level `const` must be known at compile time: literals, other constants,
+operators and `sizeof`. A function call there (`const R := math.Sqrt(2.0)`)
+is E167; drop `const` (`R := math.Sqrt(2.0)`) to compute it at start-up.
 
 ### Printing
 

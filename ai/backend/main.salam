@@ -69,6 +69,7 @@ const MAX_MESSAGE := 12000
 const PENDING_SECONDS := 600
 const TIMED_OUT_PARTIAL := "\n\n---\n\nاین نوبت به سقف زمانی خودش رسید و همین‌جا متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
 const TIMED_OUT := "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
+const OUTPUT_LIMIT_PARTIAL := "\n\n---\n\nپاسخ به سقف حجم خروجی پلن شما رسید و همین‌جا بریده شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
 const STREAM_WORKERS := 128
 const BRIDGE_SLOTS := 48
 const STREAM_SECONDS := 900
@@ -895,6 +896,16 @@ func turn_seconds(id: str): i64:
     ret ailimits.Pick(device.len() > 0 and device != "0", plan, CHAT_TURN_SECONDS, AGENT_TURN_SECONDS, UNLIMITED_TURN_SECONDS)
 end
 
+func output_cap_for(mid: str): int:
+    aistore.Lock()
+    owner := aistore.OneText("SELECT c.user_id FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.id = ?1", one(mid))
+    aistore.Unlock()
+    if owner.len() == 0:
+        ret 0
+    end
+    ret aibilling.LimitsOf(owner).max_output
+end
+
 func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
     mut r := aiturn.Progress(sid, created, limit)
     if r.done:
@@ -905,6 +916,11 @@ func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
             body = r.timed_out ? TIMED_OUT : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
         else r.timed_out and body.len() > 0:
             body += TIMED_OUT_PARTIAL
+        else body.len() > 0:
+            cap := output_cap_for(mid)
+            if cap > 0 and body.char_count() > cap:
+                body = body.char_substr(0, cap) + OUTPUT_LIMIT_PARTIAL
+            end
         end
         aistore.Lock()
         _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, activity_raw(r.activity)))
@@ -1398,6 +1414,12 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         status = 429
         code = "rate"
         message = aibilling.RateMessage(over, limits.name, false, false)
+        ret false
+    end
+    if limits.max_input > 0 and text.char_count() > limits.max_input:
+        status = 413
+        code = "too_long"
+        message = "پیام شما از سقف حجم ورودی پلن «" + limits.name + "» (" + str.FromInt(limits.max_input as i64) + " نویسه) بلندتر است. آن را کوتاه‌تر کنید یا پلن را ارتقا دهید."
         ret false
     end
     mut fresh := false

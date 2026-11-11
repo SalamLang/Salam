@@ -810,7 +810,7 @@ function toman(n: number): string {
   return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
 }
 
-const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "hours" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort"; fa: string; en: string }[] = [
+const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "hours" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort" | "max_input" | "max_output"; fa: string; en: string }[] = [
   { key: "price", fa: "قیمت (تومان)", en: "Price (toman)" },
   { key: "usd", fa: "قیمت (دلار)", en: "Price (USD)" },
   { key: "days", fa: "مدت (روز، ۰ بدون انقضا)", en: "Days (0 never expires)" },
@@ -822,6 +822,8 @@ const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "hours" | "chat_5h" | "cha
   { key: "api_daily", fa: "درخواست API در روز (۰ نامحدود)", en: "API requests per day (0 unlimited)" },
   { key: "api_weekly", fa: "درخواست API در هفته (۰ نامحدود)", en: "API requests per week (0 unlimited)" },
   { key: "parallel", fa: "درخواست هم‌زمان (۰ نامحدود)", en: "In flight (0 unlimited)" },
+  { key: "max_input", fa: "حداکثر حجم پیام ورودی (نویسه، ۰ نامحدود)", en: "Max input size (characters, 0 unlimited)" },
+  { key: "max_output", fa: "حداکثر حجم پاسخ خروجی (نویسه، ۰ نامحدود)", en: "Max output size (characters, 0 unlimited)" },
   { key: "sort", fa: "ترتیب نمایش", en: "Sort order" },
 ];
 

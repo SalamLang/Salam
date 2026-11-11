@@ -1,0 +1,174 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// tui demo: a small interactive program that exercises the core.
+//
+//     make run          (or: salam build examples/demo.salam && ./demo)
+//
+// What it shows:
+//   - a root widget that draws a title bar and a status line;
+//   - framed panels (library Panel) positioned by the application with set_bounds,
+//     re-laid-out when the terminal is resized;
+//   - the event loop: the input thread produces events, this main loop
+//     consumes them with next_event and dispatches them synchronously;
+//   - tick events (once a second) driving a counter;
+//   - focus: the opt-in default keymap is installed, so Tab moves to the next
+//     panel (linear order) and the arrow keys move to the nearest panel in
+//     that direction (spatial navigation); the focused panel draws a
+//     highlighted border;
+//   - Enter or Space is consumed by the focused panel; q (or Ctrl+C), which
+//     nothing handles, bubbles up to the main loop and quits;
+//   - `defer screen.close()` restores the terminal on every exit path.
+
+import term
+
+import tui
+
+// Application state lives in globals: the main loop updates it and the
+// root widget reads it when drawing. (Salam cannot downcast a dyn widget,
+// so state the application changes from outside a widget is shared this
+// way or through events.)
+mut last_key := "none"
+mut seconds := 0
+
+// The root widget: a reverse-video title bar on the first row and a status
+// line on the last. It covers the whole screen and consumes nothing, so
+// unhandled keys reach the main loop.
+struct App:
+    pub use tui.BaseWidget
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        bar := tui.Style { reverse = true }
+        top := tui.Rect { x = bounds.x, y = bounds.y, width = bounds.width, height = 1 }
+        buf.fill(top, " ", bar)
+        buf.put_str(bounds.x + 1, bounds.y, "tui demo", bar)
+        status := "key: " + last_key + " | " + bounds.width + "x" + bounds.height + " | " + seconds + "s | Tab/arrows focus, Enter press, q quit"
+        buf.put_str(bounds.x + 1, bounds.bottom() - 1, status, tui.Style { dim = true })
+    end
+end
+
+// The body of a panel: a line that counts Enter and Space presses. The frame
+// around it is a library Panel with takes_focus set, so the Panel holds the
+// focus and forwards the keys here; this body is not a focus stop itself.
+struct Body:
+    pub use tui.BaseWidget
+    pub presses: int = 0
+
+    pub func handle_event(event: tui.Event): bool:
+        if event.is_key(term.KeyEnter) or event.is_key(term.KeySpace):
+            this.presses += 1
+            ret true
+        end
+        ret false
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x + 1, bounds.y, "presses: " + this.presses, tui.StyleDefault)
+    end
+end
+
+// A readable name for a key, for the status line.
+func describe(k: term.Key): str:
+    if k.code == term.KeyChar:
+        if k.ctrl:
+            ret "Ctrl+" + k.ch
+        end
+        ret k.ch
+    end
+    names := [term.KeyEnter, term.KeyTab, term.KeySpace, term.KeyBackspace, term.KeyEscape, term.KeyUp, term.KeyDown, term.KeyLeft, term.KeyRight]
+    labels := ["Enter", "Tab", "Space", "Backspace", "Esc", "Up", "Down", "Left", "Right"]
+    repeat len(names) in i:
+        if names[i] == k.code:
+            ret labels[i]
+        end
+    end
+    ret "key " + k.code
+end
+
+// The application's layout: two panels side by side, and a wide one under
+// them, between the title bar and the status line. The core has no layout
+// engine; this is the "set_bounds directly" approach the core is designed
+// for.
+func arrange(screen: tui.Screen, left: int, right: int, bottom: int):
+    w := screen.buffer.width
+    h := screen.buffer.height - 3
+    half := w / 2
+    top_h := h - h / 3
+    screen.widget(left).set_bounds(tui.Rect { x = 1, y = 2, width = half - 1, height = top_h })
+    screen.widget(right).set_bounds(tui.Rect { x = half + 1, y = 2, width = w - half - 2, height = top_h })
+    screen.widget(bottom).set_bounds(tui.Rect { x = 1, y = 2 + top_h, width = w - 2, height = h - top_h })
+end
+
+// Adds a framed panel under the root and returns the frame's ID. The body is
+// added first, so the frame can take it as its child; the frame is the focus
+// stop and draws the green frame while it has focus.
+func framed(screen &: tui.Screen, label: str): int:
+    body := screen.add(tui.RootId, Body {})
+    mut frame := tui.Panel { border = tui.BorderStyle.Single, title = label, takes_focus = true, focus_style = tui.Style { fg = tui.Green } }
+    frame.add(screen.widget(body))
+    ret screen.add(tui.RootId, frame)
+end
+
+func main:
+    if not term.IsTTY(term.StdinFd) or not term.IsTerminal():
+        printerrln "demo: needs an interactive terminal"
+        ret 1
+    end
+
+    root := App {} as dyn tui.Widget
+    mut screen := tui.NewTerminalScreen(root)
+    screen.tick_ms = 1000
+    // Opt in to the library's default focus bindings: Tab and the four arrow
+    // keys are handled by the keymap as a dispatch fallback, after the panels.
+    screen.set_keymap(tui.NewDefaultKeymap())
+    left := framed(screen, "Left")
+    right := framed(screen, "Right")
+    bottom := framed(screen, "Bottom")
+
+    screen.start()
+    // From here on, every return path restores the terminal.
+    defer screen.close()
+
+    arrange(screen, left, right, bottom)
+    screen.present()
+
+    mut ev := tui.Event {}
+    until screen.next_event(ev):
+        consumed := screen.dispatch(ev)
+        if ev.kind == tui.ResizeEvent:
+            arrange(screen, left, right, bottom)
+        end
+        if ev.kind == tui.TickEvent:
+            seconds += 1
+        end
+        if ev.kind == tui.KeyEvent:
+            last_key = describe(ev.key)
+        end
+        // The status line is drawn by the root widget, which consumes
+        // nothing, so mark the screen after changing it.
+        if ev.kind == tui.TickEvent or ev.kind == tui.KeyEvent:
+            screen.dirty = true
+        end
+        // Tab and the arrows are consumed by the keymap, and Enter/Space by
+        // the focused panel, so only q and Ctrl+C reach here unconsumed, and
+        // they quit.
+        if not consumed:
+            if ev.is_char("q") or ev.is_ctrl("c"):
+                screen.stop()
+            end
+        end
+        screen.present()
+    end
+    ret 0
+end

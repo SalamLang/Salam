@@ -1,0 +1,905 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Headless integration tests for Screen. No terminal is used:
+// the screen is never start()ed, so present() draws into the buffer without
+// writing to the terminal. Synthetic events go through the real events
+// channel (post / next_event / run_with_tick), the real dispatch path, and
+// the real draw path, and the tests assert on the resulting buffer. dirty
+// means a full repaint (resize, tick, added widget, raise). A consumed key
+// queues that widget's bounds instead, and an unconsumed one changes
+// nothing. The resize path is
+// covered here too: a ResizeEvent reallocates the buffer, so the next frame
+// is a forced full repaint (diff() equals the whole-frame ansi()).
+
+import testing
+import term
+
+import tui
+
+mut ticks := 0
+
+// Column the next ZBox render writes. present() walks paint order, so the
+// row text is that order: each widget writes its mark and steps the column.
+mut paint_at := 0
+
+// Glyph policy GlyphProbe last saw.
+mut seen_glyphs := tui.GlyphPolicy.Unicode
+
+// Draws one mark at paint_at. Used to read Screen paint order off the buffer.
+struct ZBox:
+    pub use tui.BaseWidget
+    pub mark: str = "0"
+    pub can_focus: bool = false
+    pub allow_hits: bool = true
+
+    pub func focusable(): bool:
+        ret this.can_focus
+    end
+
+    pub func hits(): bool:
+        ret this.allow_hits
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(paint_at, bounds.y, this.mark, tui.StyleDefault)
+        paint_at = paint_at + 1
+    end
+end
+
+// Records the glyph policy its render buffer carries.
+struct GlyphProbe:
+    pub use tui.BaseWidget
+
+    pub func render(buf: tui.Buffer, _bounds: tui.Rect):
+        seen_glyphs = buf.glyphs
+    end
+end
+
+// Root widget: draws a title on row 0 and counts the keys that bubble up
+// to it. Consumes "r".
+struct Frame:
+    pub use tui.BaseWidget
+    pub title: str = ""
+    pub seen: int = 0
+
+    pub func handle_event(event: tui.Event): bool:
+        if event.kind == tui.KeyEvent:
+            this.seen += 1
+        end
+        ret event.is_char("r")
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.title + " " + this.seen, tui.StyleDefault)
+    end
+end
+
+// One cell that consumes "r" and flips its mark. Focusable so dispatch
+// starts here instead of on the root.
+struct Spot:
+    pub use tui.BaseWidget
+    pub mark: str = "a"
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        if not event.is_char("r"):
+            ret false
+        end
+        if this.mark == "a":
+            this.mark = "b"
+        else:
+            this.mark = "a"
+        end
+        ret true
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.mark, tui.StyleDefault)
+    end
+end
+
+// One cell: "*" while focused, otherwise blank.
+struct Flag:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        mut ch := " "
+        if buf.focused:
+            ch = "*"
+        end
+        buf.put_str(bounds.x, bounds.y, ch, tui.StyleDefault)
+    end
+end
+
+// Writes its current digit, then advances it. A later frame that still
+// shows the old digit was not rendered.
+struct Counter:
+    pub use tui.BaseWidget
+    pub ch: str = "1"
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.ch, tui.StyleDefault)
+        if this.ch == "1":
+            this.ch = "2"
+        else:
+            this.ch = "3"
+        end
+    end
+end
+
+// A filled box of one character; consumes nothing.
+struct Block:
+    pub use tui.BaseWidget
+    pub ch: str = "#"
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.fill(bounds, this.ch, tui.StyleDefault)
+    end
+end
+
+// A container that can hide its whole subtree. It is not a Modal: the Screen
+// must consult Widget.visible on the parent chain, never a widget type.
+struct Shutter:
+    pub use tui.BaseWidget
+    pub shown: bool = true
+
+    pub func visible(): bool:
+        ret this.shown
+    end
+end
+
+// Four widgets, ids 0..3, each covering the whole row. Widget 1 holds focus.
+func zstack(): tui.Screen:
+    mut s := tui.NewScreen(ZBox { mark = "0" }, 4, 1)
+    _ := s.add(tui.RootId, ZBox { mark = "1", can_focus = true })
+    _ := s.add(tui.RootId, ZBox { mark = "2", can_focus = true })
+    _ := s.add(tui.RootId, ZBox { mark = "3" })
+    full := rect(0, 0, 4, 1)
+    repeat s.tree.count() in id:
+        s.widget(id).set_bounds(full)
+    end
+    ret s
+end
+
+func painted(s &: tui.Screen): str:
+    paint_at = 0
+    s.present()
+    ret s.buffer.row_text(0)
+end
+
+// n is 1 or 2. b is pushed only when n is 2, so a negative id can be passed.
+func id_vec(n: int, a: int, b: int): Vector<int>:
+    mut ids := Vector {} as Vector<int>
+    ids.push(a)
+    if n >= 2:
+        ids.push(b)
+    end
+    ret ids
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func test_new_screen_fits_root():
+    mut s := tui.NewScreen(Frame { title = "t" }, 20, 5)
+    defer s.close()
+    testing.AssertEqInt(s.buffer.width, 20)
+    testing.AssertEqInt(s.buffer.height, 5)
+    testing.AssertEqInt(s.root.bounds().width, 20)
+    testing.AssertEqInt(s.root.bounds().height, 5)
+    testing.AssertEqInt(s.tree.count(), 1)
+    testing.AssertFalse(s.running)
+end
+
+func test_events_flow_through_channel():
+    mut s := tui.NewScreen(Frame { title = "app" }, 12, 3)
+    defer s.close()
+    testing.AssertTrue(s.post(key("a")))
+    testing.AssertTrue(s.post(key("r")))
+    testing.AssertTrue(s.post(tui.Event { kind = tui.TickEvent }))
+    s.stop()
+    testing.AssertFalse(s.post(key("late")))
+
+    mut ev := tui.Event {}
+    mut kinds := ""
+    mut consumed := 0
+    until s.next_event(ev):
+        kinds = kinds + ev.kind
+        if s.dispatch(ev):
+            consumed += 1
+        end
+    end
+    testing.AssertEqStr(kinds, "114")
+    testing.AssertEqInt(consumed, 1)
+    testing.AssertFalse(s.next_event(ev))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "app 2       ")
+end
+
+func test_draw_order_and_clipping():
+    mut s := tui.NewScreen(Frame { title = "z" }, 6, 3)
+    defer s.close()
+    a := s.add(tui.RootId, Block { ch = "a" })
+    b := s.add(tui.RootId, Block { ch = "b" })
+    // Partly off-screen: only the visible part is drawn.
+    c := s.add(tui.RootId, Block { ch = "c" })
+    s.widget(a).set_bounds(rect(0, 1, 4, 2))
+    s.widget(b).set_bounds(rect(2, 1, 4, 1))
+    s.widget(c).set_bounds(rect(-2, 2, 3, 5))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "z 0   ")
+    // b was added after a, so it paints over a where they overlap.
+    testing.AssertEqStr(s.buffer.row_text(1), "aabbbb")
+    // c covers columns -2..0 and rows 2..6; only (0, 2) is on screen.
+    testing.AssertEqStr(s.buffer.row_text(2), "caaa  ")
+end
+
+func test_widget_clipped_to_own_bounds():
+    mut s := tui.NewScreen(Frame { title = "" }, 8, 2)
+    defer s.close()
+    // A Frame whose title is longer than its 3-cell-wide bounds.
+    id := s.add(tui.RootId, Frame { title = "overflow" })
+    s.widget(id).set_bounds(rect(2, 1, 3, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(1), "  ove   ")
+end
+
+func test_zero_size_widget_is_skipped():
+    mut s := tui.NewScreen(Frame { title = "" }, 4, 1)
+    defer s.close()
+    id := s.add(tui.RootId, Block { ch = "x" })
+    s.widget(id).set_bounds(rect(1, 0, 0, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), " 0  ")
+end
+
+// A hidden container hides its child from painting, even though the child
+// has bounds of its own: the same layout with the container shown paints it.
+// Visibility is fixed at add time (a value-boxed bool cannot be flipped
+// through the screen), so each state builds its own screen.
+func test_hidden_container_is_not_painted():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 3)
+    defer s.close()
+    sh := s.add(tui.RootId, Shutter { shown = false })
+    kid := s.add(sh, Block { ch = "H" })
+    sib := s.add(tui.RootId, Block { ch = "S" })
+    s.widget(sh).set_bounds(rect(0, 0, 10, 1))
+    s.widget(kid).set_bounds(rect(0, 0, 10, 1))
+    s.widget(sib).set_bounds(rect(10, 0, 10, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "          SSSSSSSSSS")
+    // Region path: the queued rect is cleared, and the hidden child stays
+    // skipped instead of repainting inside it.
+    s.invalidate(kid)
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "          SSSSSSSSSS")
+
+    mut shown := tui.NewScreen(tui.BaseWidget {}, 20, 3)
+    defer shown.close()
+    sh2 := shown.add(tui.RootId, Shutter {})
+    kid2 := shown.add(sh2, Block { ch = "H" })
+    sib2 := shown.add(tui.RootId, Block { ch = "S" })
+    shown.widget(sh2).set_bounds(rect(0, 0, 10, 1))
+    shown.widget(kid2).set_bounds(rect(0, 0, 10, 1))
+    shown.widget(sib2).set_bounds(rect(10, 0, 10, 1))
+    shown.present()
+    testing.AssertEqStr(shown.buffer.row_text(0), "HHHHHHHHHHSSSSSSSSSS")
+    shown.invalidate(kid2)
+    shown.present()
+    testing.AssertEqStr(shown.buffer.row_text(0), "HHHHHHHHHHSSSSSSSSSS")
+end
+
+func test_resize_event():
+    mut s := tui.NewScreen(Frame { title = "r" }, 10, 4)
+    defer s.close()
+    resize := tui.Event { kind = tui.ResizeEvent, width = 30, height = 7 }
+    testing.AssertFalse(s.dispatch(resize))
+    testing.AssertEqInt(s.buffer.width, 30)
+    testing.AssertEqInt(s.buffer.height, 7)
+    testing.AssertEqInt(s.root.bounds().width, 30)
+    testing.AssertEqInt(s.root.bounds().height, 7)
+    testing.AssertTrue(s.dirty)
+    s.present()
+    testing.AssertFalse(s.dirty)
+    testing.AssertEqStr(s.buffer.row_text(6), "                              ")
+end
+
+func test_consumed_key_repaints_region_without_dirty():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.close()
+    spot := s.add(tui.RootId, Spot {})
+    counter := s.add(tui.RootId, Counter {})
+    s.widget(spot).set_bounds(rect(0, 0, 1, 1))
+    s.widget(counter).set_bounds(rect(4, 0, 1, 1))
+    s.present()
+    // The first present was a full repaint and cleared dirty.
+    testing.AssertFalse(s.dirty)
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "a")
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "1")
+    // "x" is unconsumed. Nothing is queued, so the next present is a no-op.
+    testing.AssertFalse(s.dispatch(key("x")))
+    testing.AssertFalse(s.dirty)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "1")
+    // "r" queues the spot's cell and does not set dirty. The counter sits
+    // outside that rect, so its digit stays where the full paint left it.
+    testing.AssertTrue(s.dispatch(key("r")))
+    testing.AssertFalse(s.dirty)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "b")
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "1")
+end
+
+func test_run_with_tick():
+    mut s := tui.NewScreen(Frame { title = "run" }, 10, 2)
+    defer s.close()
+    ticks = 0
+    _ := s.post(tui.Event { kind = tui.TickEvent })
+    _ := s.post(key("x"))
+    _ := s.post(tui.Event { kind = tui.TickEvent })
+    // An unconsumed Ctrl+C ends run_with_tick without anyone calling stop().
+    _ := s.post(key("\x03"))
+    _ := s.post(key("y"))
+    s.run_with_tick((): ticks += 1 end)
+    testing.AssertEqInt(ticks, 2)
+    testing.AssertFalse(s.running)
+    // The last frame was drawn on the second tick: Frame counts keys it
+    // does not consume, which do not mark the screen dirty.
+    testing.AssertEqStr(s.buffer.row_text(0), "run 1     ")
+    // "y" was queued after Ctrl+C; the loop drains the queue before ending,
+    // so Frame saw x, Ctrl+C, and y. Those keys were not consumed, so they
+    // queued no region. present returns when nothing is pending.
+    s.dirty = true
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "run 3     ")
+end
+
+func test_ansi_frame():
+    mut b := tui.NewBuffer(3, 2)
+    defer b.free()
+    bold := tui.Style { bold = true }
+    b.put_str(0, 0, "ab", bold)
+    b.put_str(0, 1, "c", tui.StyleDefault)
+    out := b.ansi()
+    seq_on := tui.StyleSgr(bold, tui.ColorTier.TrueColor)
+    seq_off := tui.StyleSgrOff(bold, tui.ColorTier.TrueColor)
+    want := term.SeqMoveTo(1, 1) + seq_on + "ab" + seq_off + " " + term.SeqMoveTo(2, 1) + "c  "
+    testing.AssertEqStr(out, want)
+end
+
+func test_close_is_idempotent():
+    mut s := tui.NewScreen(Frame { title = "c" }, 4, 1)
+    s.close()
+    s.close()
+    testing.AssertFalse(s.running)
+end
+
+func test_raise_paint_order():
+    mut s := zstack()
+    defer s.close()
+    // First focusable added (id 1) holds focus. A raise moves focus only
+    // when 1 is outside the new focus order. raise([1]), raise([1,2]),
+    // and raise([2,1]) all contain 1, so focus stays there.
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqStr(painted(s), "0123")
+
+    mut ids := id_vec(1, 1, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0231")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "0123")
+
+    ids = id_vec(2, 1, 2)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0312")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "0123")
+
+    // Call order is 2 then 1. One stamp, so id order inside the layer
+    // is still 1 then 2, not 2 then 1.
+    ids = id_vec(2, 2, 1)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0312")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise(ids)
+    ids.free()
+
+    // raise([2]) does not contain 1, so focus moves to 2 and the saved
+    // id is 1. unraise of that layer puts 1 back. Paint order is unchanged.
+    ids = id_vec(1, 2, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0132")
+    testing.AssertEqInt(s.focused_id(), 2)
+    s.unraise(ids)
+    testing.AssertEqInt(s.focused_id(), 1)
+    ids.free()
+
+    ids = id_vec(2, 1, 2)
+    s.raise(ids)
+    ids.free()
+    ids = id_vec(1, 1, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0321")
+    testing.AssertEqInt(s.focused_id(), 1)
+    ids.free()
+    ids = id_vec(2, 1, 2)
+    s.unraise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "0123")
+
+    // Unknown ids are stored and do not crash. 99 is not registered, so
+    // the registered order matches raise([1]). Unraise of 99 and of -1
+    // is idempotent and leaves 1 raised.
+    ids = id_vec(2, 1, 99)
+    s.raise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "0231")
+    ids = id_vec(2, 99, -1)
+    s.unraise(ids)
+    s.unraise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "0231")
+    ids = id_vec(1, 1, 0)
+    s.unraise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "0123")
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_hits_false_still_paints():
+    mut s := tui.NewScreen(ZBox { mark = "0" }, 2, 1)
+    defer s.close()
+    top := s.add(tui.RootId, ZBox { mark = "1", allow_hits = false })
+    full := rect(0, 0, 2, 1)
+    s.widget(tui.RootId).set_bounds(full)
+    s.widget(top).set_bounds(full)
+    testing.AssertEqStr(painted(s), "01")
+    testing.AssertEqInt(s.hit_test(0, 0), tui.RootId)
+    testing.AssertEqInt(s.hit_test(1, 0), tui.RootId)
+end
+
+func test_resize_forces_full_repaint():
+    mut s := tui.NewScreen(Frame { title = "g" }, 8, 2)
+    defer s.close()
+    counter := s.add(tui.RootId, Counter {})
+    s.widget(counter).set_bounds(rect(0, 1, 1, 1))
+    // A resize reallocates both grids and refits the root to the new area.
+    big := tui.Event { kind = tui.ResizeEvent, width = 12, height = 3 }
+    testing.AssertFalse(s.dispatch(big))
+    testing.AssertEqInt(s.buffer.width, 12)
+    testing.AssertEqInt(s.buffer.height, 3)
+    testing.AssertEqInt(s.root.bounds().width, 12)
+    testing.AssertEqInt(s.root.bounds().height, 3)
+    // The fresh grid is blank and the next frame is the whole grid.
+    testing.AssertEqStr(s.buffer.row_text(2), "            ")
+    testing.AssertTrue(s.buffer.force_full)
+    testing.AssertEqStr(s.buffer.diff(), s.buffer.ansi())
+    // Resize set dirty, so this present re-renders every widget.
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 1).ch, "1")
+    // Simulate the flush an attached present() would do: front catches up.
+    s.buffer.commit()
+    testing.AssertFalse(s.buffer.force_full)
+    testing.AssertEqStr(s.buffer.diff(), "")
+    // A same-size resize still reallocates, so it repaints in full again.
+    again := tui.Event { kind = tui.ResizeEvent, width = 12, height = 3 }
+    testing.AssertFalse(s.dispatch(again))
+    testing.AssertTrue(s.buffer.force_full)
+    testing.AssertEqStr(s.buffer.diff(), s.buffer.ansi())
+end
+
+func assert_rect(r: tui.Rect, x: int, y: int, w: int, h: int):
+    testing.AssertEqInt(r.x, x)
+    testing.AssertEqInt(r.y, y)
+    testing.AssertEqInt(r.width, w)
+    testing.AssertEqInt(r.height, h)
+end
+
+// A dispatched resize must reach a layout container: the root is refit, and
+// the Column re-lays out its children into the new area.
+func test_resize_event_relayouts_container():
+    root := tui.NewColumn()
+    top := Block { ch = "a" } as dyn tui.Widget
+    bottom := Block { ch = "b" } as dyn tui.Widget
+    _ := root.add(top)
+    _ := root.add(bottom)
+    mut s := tui.NewScreen(root as dyn tui.Widget, 20, 10)
+    defer s.close()
+    _ := s.add(tui.RootId, top)
+    _ := s.add(tui.RootId, bottom)
+    // Both children are Fill on y, so the 10 rows split 5 and 5.
+    assert_rect(top.bounds(), 0, 0, 20, 5)
+    assert_rect(bottom.bounds(), 0, 5, 20, 5)
+
+    resize := tui.Event { kind = tui.ResizeEvent, width = 30, height = 12 }
+    testing.AssertFalse(s.dispatch(resize))
+    testing.AssertEqInt(s.buffer.width, 30)
+    testing.AssertEqInt(s.buffer.height, 12)
+    assert_rect(s.root.bounds(), 0, 0, 30, 12)
+    // 12 rows split 6 and 6; each child fills the 30-cell width.
+    assert_rect(top.bounds(), 0, 0, 30, 6)
+    assert_rect(bottom.bounds(), 0, 6, 30, 6)
+end
+
+// Six widgets on a 6-cell row. 1 is a focusable sibling and holds focus.
+// 2 is an overlay with focusable children 3 and 4. 5 is a sibling added
+// after the overlay. Every widget covers the whole row.
+func subtree_screen(): tui.Screen:
+    mut s := tui.NewScreen(ZBox { mark = "0" }, 6, 1)
+    _ := s.add(tui.RootId, ZBox { mark = "1", can_focus = true })
+    overlay := s.add(tui.RootId, ZBox { mark = "2" })
+    _ := s.add(overlay, ZBox { mark = "3", can_focus = true })
+    _ := s.add(overlay, ZBox { mark = "4", can_focus = true })
+    _ := s.add(tui.RootId, ZBox { mark = "5" })
+    full := rect(0, 0, 6, 1)
+    repeat s.tree.count() in id:
+        s.widget(id).set_bounds(full)
+    end
+    ret s
+end
+
+// The subtree is one layer above the siblings, and the parent paints
+// before its children inside it.
+func test_raise_subtree_paint_order():
+    mut s := subtree_screen()
+    defer s.close()
+    testing.AssertEqStr(painted(s), "012345")
+    s.raise_subtree(2)
+    testing.AssertEqStr(painted(s), "015234")
+    s.unraise_subtree(2)
+    testing.AssertEqStr(painted(s), "012345")
+end
+
+// 5 covers the same cell as the overlay's children but sits outside the
+// layer, so the topmost subtree member wins the hit.
+func test_raise_subtree_hit_test():
+    mut s := subtree_screen()
+    defer s.close()
+    testing.AssertEqInt(s.hit_test(0, 0), 5)
+    s.raise_subtree(2)
+    testing.AssertEqInt(s.hit_test(0, 0), 4)
+    s.unraise_subtree(2)
+    testing.AssertEqInt(s.hit_test(0, 0), 5)
+end
+
+// A childless widget raised as a subtree paints exactly as raise([id]).
+func test_raise_subtree_leaf_matches_raise():
+    mut s := subtree_screen()
+    defer s.close()
+    s.raise_subtree(1)
+    testing.AssertEqStr(painted(s), "023451")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise_subtree(1)
+    testing.AssertEqStr(painted(s), "012345")
+    ids := id_vec(1, 1, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "023451")
+    s.unraise(ids)
+    ids.free()
+    testing.AssertEqStr(painted(s), "012345")
+end
+
+// Focus moves to the layer's first focusable widget and returns to the
+// previous focus on unraise.
+func test_raise_subtree_focus():
+    mut s := subtree_screen()
+    defer s.close()
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.raise_subtree(2)
+    testing.AssertEqInt(s.focused_id(), 3)
+    s.unraise_subtree(2)
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+// Ids outside the tree, and NoWidget, change nothing and do not crash.
+// present returns immediately when nothing is pending. commit clears
+// force_full, so the skipped frame also emits no diff.
+func test_present_with_nothing_pending_is_a_noop():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.close()
+    counter := s.add(tui.RootId, Counter {})
+    s.widget(counter).set_bounds(rect(0, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "1")
+    s.buffer.commit()
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "1")
+    testing.AssertEqStr(s.buffer.diff(), "")
+end
+
+// invalidate(id) repaints that widget. An unknown id, or an empty rect,
+// marks the whole screen.
+func test_invalidate_targets_one_widget():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.close()
+    spot := Spot {} as dyn tui.Widget
+    spot_id := s.add(tui.RootId, spot)
+    counter := s.add(tui.RootId, Counter {})
+    ghost := s.add(tui.RootId, Spot {})
+    s.widget(spot_id).set_bounds(rect(0, 0, 1, 1))
+    s.widget(counter).set_bounds(rect(4, 0, 1, 1))
+    s.widget(ghost).set_bounds(rect(7, 0, 0, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "a")
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "1")
+    // The dyn handle shares the box the screen stores. No region is queued.
+    testing.AssertTrue(spot.handle_event(key("r")))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "a")
+    s.invalidate(spot_id)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "b")
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "1")
+    s.invalidate(99)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "2")
+    s.invalidate(ghost)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(4, 0).ch, "3")
+end
+
+// invalidate_subtree(id) repaints the widget and its descendants as one
+// region. An unknown id, or a subtree whose rects are all empty, marks the
+// whole screen instead.
+func test_invalidate_subtree():
+    // A: both children repaint; a counter outside the subtree stays put.
+    mut s := tui.NewScreen(tui.BaseWidget {}, 10, 6)
+    defer s.close()
+    parent := s.add(tui.RootId, ZBox { mark = "p" })
+    kid_a := s.add(parent, Counter {})
+    kid_b := s.add(parent, Counter {})
+    outside := s.add(tui.RootId, Counter {})
+    s.widget(parent).set_bounds(rect(0, 0, 1, 1))
+    s.widget(kid_a).set_bounds(rect(0, 1, 1, 1))
+    s.widget(kid_b).set_bounds(rect(2, 1, 1, 1))
+    s.widget(outside).set_bounds(rect(8, 5, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 1).ch, "1")
+    testing.AssertEqStr(s.buffer.get(2, 1).ch, "1")
+    testing.AssertEqStr(s.buffer.get(8, 5).ch, "1")
+    s.invalidate_subtree(parent)
+    testing.AssertFalse(s.dirty)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 1).ch, "2")
+    testing.AssertEqStr(s.buffer.get(2, 1).ch, "2")
+    testing.AssertEqStr(s.buffer.get(8, 5).ch, "1")
+
+    // B: a child outside its parent's rect. invalidate leaves the stale
+    // pixel; invalidate_subtree covers it.
+    mut b := tui.NewScreen(tui.BaseWidget {}, 12, 4)
+    defer b.close()
+    p := b.add(tui.RootId, ZBox { mark = "p" })
+    spot := Spot {} as dyn tui.Widget
+    spot_id := b.add(p, spot)
+    b.widget(p).set_bounds(rect(0, 0, 2, 1))
+    b.widget(spot_id).set_bounds(rect(4, 0, 1, 1))
+    b.present()
+    testing.AssertEqStr(b.buffer.get(4, 0).ch, "a")
+    testing.AssertTrue(spot.handle_event(key("r")))
+    b.invalidate(p)
+    b.present()
+    testing.AssertEqStr(b.buffer.get(4, 0).ch, "a")
+    b.invalidate_subtree(p)
+    testing.AssertFalse(b.dirty)
+    b.present()
+    testing.AssertEqStr(b.buffer.get(4, 0).ch, "b")
+
+    // C: ids outside the tree mark the whole screen.
+    mut k := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer k.close()
+    k.present()
+    testing.AssertFalse(k.dirty)
+    k.invalidate_subtree(tui.NoWidget)
+    testing.AssertTrue(k.dirty)
+    k.present()
+    k.invalidate_subtree(k.tree.count())
+    testing.AssertTrue(k.dirty)
+
+    // D: a widget with no bounds has an empty rect, so its subtree's union
+    // is empty and becomes a full repaint.
+    mut d := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer d.close()
+    empty := d.add(tui.RootId, Counter {})
+    d.present()
+    testing.AssertFalse(d.dirty)
+    d.invalidate_subtree(empty)
+    testing.AssertTrue(d.dirty)
+
+    // E: six members under half the screen stay one partial region, so a
+    // distant counter is not repainted by a per-member scheme.
+    mut e := tui.NewScreen(tui.BaseWidget {}, 10, 4)
+    defer e.close()
+    band := e.add(tui.RootId, ZBox { mark = "b" })
+    repeat 5 in i:
+        id := e.add(band, ZBox { mark = "c" })
+        e.widget(id).set_bounds(rect(i + 1, 0, 1, 1))
+    end
+    e.widget(band).set_bounds(rect(0, 0, 1, 1))
+    distant := e.add(tui.RootId, Counter {})
+    e.widget(distant).set_bounds(rect(0, 3, 1, 1))
+    e.present()
+    testing.AssertEqStr(e.buffer.get(0, 3).ch, "1")
+    e.invalidate_subtree(band)
+    testing.AssertFalse(e.dirty)
+    e.present()
+    testing.AssertEqStr(e.buffer.get(0, 3).ch, "1")
+
+    // F: the parent's own rect is empty, so the union starts at the child's
+    // rect, not at the origin.
+    mut f := tui.NewScreen(tui.BaseWidget {}, 8, 4)
+    defer f.close()
+    ghost := f.add(tui.RootId, ZBox { mark = "p" })
+    fkid := f.add(ghost, Counter {})
+    near := f.add(tui.RootId, Counter {})
+    f.widget(fkid).set_bounds(rect(5, 2, 1, 1))
+    f.widget(near).set_bounds(rect(0, 0, 1, 1))
+    f.present()
+    testing.AssertEqStr(f.buffer.get(0, 0).ch, "1")
+    f.invalidate_subtree(ghost)
+    testing.AssertFalse(f.dirty)
+    f.present()
+    testing.AssertEqStr(f.buffer.get(5, 2).ch, "2")
+    testing.AssertEqStr(f.buffer.get(0, 0).ch, "1")
+end
+
+// A focus change queues the old and new cells. A third widget stays put.
+func test_focus_change_repaints_old_and_new_only():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.close()
+    a := s.add(tui.RootId, Flag {})
+    b := s.add(tui.RootId, Flag {})
+    counter := s.add(tui.RootId, Counter {})
+    s.widget(a).set_bounds(rect(0, 0, 1, 1))
+    s.widget(b).set_bounds(rect(2, 0, 1, 1))
+    s.widget(counter).set_bounds(rect(6, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "*")
+    testing.AssertEqStr(s.buffer.get(2, 0).ch, " ")
+    testing.AssertEqStr(s.buffer.get(6, 0).ch, "1")
+    testing.AssertTrue(s.focus_next())
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, " ")
+    testing.AssertEqStr(s.buffer.get(2, 0).ch, "*")
+    testing.AssertEqStr(s.buffer.get(6, 0).ch, "1")
+end
+
+// Four regions stay partial. A fifth takes the full path.
+func test_too_many_regions_repaint_everything():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 12, 1)
+    defer s.close()
+    mut ids := Vector {} as Vector<int>
+    defer ids.free()
+    repeat 5 in i:
+        id := s.add(tui.RootId, Spot {})
+        s.widget(id).set_bounds(rect(i, 0, 1, 1))
+        ids.push(id)
+    end
+    counter := s.add(tui.RootId, Counter {})
+    s.widget(counter).set_bounds(rect(10, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(10, 0).ch, "1")
+    repeat 4 in i:
+        s.invalidate(ids.get(i))
+    end
+    s.present()
+    testing.AssertEqStr(s.buffer.get(10, 0).ch, "1")
+    repeat 5 in i:
+        s.invalidate(ids.get(i))
+    end
+    s.present()
+    testing.AssertEqStr(s.buffer.get(10, 0).ch, "2")
+end
+
+// Two regions covering more than half the screen take the full path.
+func test_wide_regions_repaint_everything():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 12, 1)
+    defer s.close()
+    a := s.add(tui.RootId, Spot {})
+    b := s.add(tui.RootId, Spot {})
+    counter := s.add(tui.RootId, Counter {})
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    s.widget(b).set_bounds(rect(8, 0, 4, 1))
+    s.widget(counter).set_bounds(rect(6, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(6, 0).ch, "1")
+    // One 4x1 region doubled is 8, below the 12-cell screen, so it stays
+    // partial and the counter is not rendered again.
+    s.invalidate(a)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(6, 0).ch, "1")
+    // 4 + 4 cells doubled is 16, above 12, so everything repaints.
+    s.invalidate(a)
+    s.invalidate(b)
+    s.present()
+    testing.AssertEqStr(s.buffer.get(6, 0).ch, "2")
+end
+
+func test_raise_subtree_ignores_unknown_ids():
+    mut s := subtree_screen()
+    defer s.close()
+    testing.AssertEqStr(painted(s), "012345")
+    s.raise_subtree(99)
+    s.raise_subtree(tui.NoWidget)
+    s.unraise_subtree(99)
+    s.unraise_subtree(tui.NoWidget)
+    testing.AssertFalse(s.dirty)
+    testing.AssertEqStr(painted(s), "012345")
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+// Screen seeds the glyph policy into the render buffer on both the full and
+// the region draw path. set_glyphs after the first draw forces a repaint.
+func test_set_glyphs_reaches_render():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
+    defer s.close()
+    id := s.add(tui.RootId, GlyphProbe {})
+    s.widget(id).set_bounds(rect(0, 0, 1, 1))
+    s.present()
+    testing.AssertTrue(seen_glyphs == tui.GlyphPolicy.Unicode)
+    s.set_glyphs(tui.GlyphPolicy.ASCII)
+    s.present()
+    testing.AssertTrue(seen_glyphs == tui.GlyphPolicy.ASCII)
+    seen_glyphs = tui.GlyphPolicy.Unicode
+    s.invalidate(id)
+    s.present()
+    testing.AssertTrue(seen_glyphs == tui.GlyphPolicy.ASCII)
+end
+
+func main:
+    test_new_screen_fits_root()
+    test_events_flow_through_channel()
+    test_draw_order_and_clipping()
+    test_widget_clipped_to_own_bounds()
+    test_zero_size_widget_is_skipped()
+    test_hidden_container_is_not_painted()
+    test_resize_event()
+    test_consumed_key_repaints_region_without_dirty()
+    test_run_with_tick()
+    test_ansi_frame()
+    test_close_is_idempotent()
+    test_resize_forces_full_repaint()
+    test_resize_event_relayouts_container()
+    test_raise_paint_order()
+    test_hits_false_still_paints()
+    test_raise_subtree_paint_order()
+    test_raise_subtree_hit_test()
+    test_raise_subtree_leaf_matches_raise()
+    test_raise_subtree_focus()
+    test_raise_subtree_ignores_unknown_ids()
+    test_present_with_nothing_pending_is_a_noop()
+    test_invalidate_targets_one_widget()
+    test_invalidate_subtree()
+    test_focus_change_repaints_old_and_new_only()
+    test_too_many_regions_repaint_everything()
+    test_wide_regions_repaint_everything()
+    test_set_glyphs_reaches_render()
+    ret testing.Summary()
+end

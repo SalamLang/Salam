@@ -1,0 +1,398 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The Modal overlay: a dialog that paints one single-line ring with a title
+// over a dimmed scrim, and owns one child placed inside the ring. The dialog
+// is sized by ModalSize inside the Modal's own bounds and centred there. While
+// open, the Modal is the focus stop of its layer, consumes Esc when closable,
+// and consumes every mouse event outside the dialog, so a click never reaches
+// a widget below it.
+//
+// The app owns z-order and focus. A widget cannot know its own id, so Modal
+// never raises itself and never moves focus. Open is Screen.push_focus then
+// Screen.raise_subtree on its id; close is Screen.unraise_subtree then
+// Screen.pop_focus. Visibility also governs focus eligibility: a hidden Modal
+// reports visible() false, so focus order skips the Modal and its whole
+// subtree, not just the Modal itself. Push focus before raising:
+// raise_subtree moves the focus into the layer on its own, so raising first
+// would leave a stale entry on the focus stack. A child added to an open Modal
+// is not raised into its layer; call raise_subtree again after adding.
+//
+// Screen.add stores a copy of the widget. The Modal's mutable state (visible,
+// title, size, closable and rect) lives in one shared holder, a Vector with one
+// _ModalState, and copies of a Vector share storage. So open, close, set_title,
+// set_size, set_closable and set_bounds reach the stored copy whether they run
+// before or after Screen.add. Esc closes the stored widget itself, and on_close
+// is the app's hook, called after that close, to call Screen.unraise_subtree
+// and Screen.pop_focus. on_close is a plain field, not holder state: set it
+// before Screen.add, or the stored copy keeps the empty callback.
+//
+// The scrim dims with the DIM attribute, not a character or a colour blend.
+// A terminal that ignores SGR 2 shows no scrim at all, and the frame and
+// content still draw. Dimming is a field copy on the cell's Style: no string
+// is built while painting, so there is nothing to cache — the buffer builds
+// the bytes when the frame is emitted. Esc is consumed here, at the widget,
+// so the keymap default set is unchanged. There is no dismiss_on_scrim: a
+// click on the scrim is consumed but never closes the dialog. Resize, move,
+// drag and sibling (non-LIFO) modals are not provided.
+
+package tui
+
+import term
+
+// The state every copy of a Modal must share. It lives in a Vector, so a copy
+// made by Screen.add writes to the same element as the local value.
+struct _ModalState:
+    pub title: str = ""
+    pub fixed: bool = false
+    pub w: int = 50
+    pub h: int = 40
+    pub visible: bool = false
+    pub closable: bool = true
+    pub rect: Rect = Rect {}
+end
+
+@en "ModalSize"
+@fa "اندازه مودال"
+/// How big the dialog is inside the Modal's bounds.
+pub enum ModalSize:
+    @en "Percent"
+    @fa "درصدی"
+    /// A share of the bounds, in percent (0-100) on each axis. The product
+    /// is floored, then clamped to at least 20 by 5 and at most the bounds.
+    /// When the bounds are smaller than 20 by 5 the dialog is the bounds.
+    Percent(w: int, h: int)
+    @en "Fixed"
+    @fa "ثابت"
+    /// Exactly w by h cells, clamped to the bounds and nothing more: no
+    /// 20 by 5 floor applies to an explicit size.
+    Fixed(w: int, h: int)
+end
+
+@en "Modal"
+@fa "مودال"
+/// An overlay dialog: a Single-line ring with a title, centred in the
+/// Modal's bounds over a DIM scrim. The child is inset one cell inside the
+/// ring. A hidden Modal paints nothing, takes no focus and hits nothing.
+/// Build it with NewModal. Its state is shared by every copy, so the
+/// methods below work before and after Screen.add.
+pub struct Modal:
+    pub use BaseWidget
+
+    @en "border_style"
+    @fa "ظاهر کادر"
+    /// The ring's colour. Only its foreground is used; attributes are
+    /// ignored, as for Panel.
+    pub border_style: Style = StyleDefault
+
+    @en "takes_focus"
+    @fa "تمرکز می‌گیرد"
+    /// When true the Modal is a focus stop while open. Its one focus stop
+    /// keeps Tab inside its layer.
+    pub takes_focus: bool = true
+
+    @en "on_close"
+    @fa "هنگام بستن"
+    /// Called after Esc closes the Modal. close does not call it.
+    pub on_close: func () = (): end
+
+    // The one child, held as a layout slot. Empty until add is called.
+    slot: Vector<LayoutSlot> = Vector {}
+
+    @en "state"
+    @fa "وضعیت"
+    /// The shared state holder, one element. NewModal builds it; every copy
+    /// shares it. Read and write the Modal through its methods.
+    pub state: Vector<_ModalState> = Vector {}
+
+    // The shared state, read and written as a whole element. get returns a
+    // copy of the element; put writes it back into the shared storage.
+    func _get(): _ModalState:
+        ret this.state.get(0)
+    end
+
+    func _put(s: _ModalState):
+        this.state.set(0, s)
+    end
+
+    // The size as a ModalSize, rebuilt from the holder's plain fields.
+    func _size(): ModalSize:
+        s := this._get()
+        if s.fixed:
+            ret ModalSize.Fixed(s.w, s.h)
+        end
+        ret ModalSize.Percent(s.w, s.h)
+    end
+
+    @en "add"
+    @fa "افزودن"
+    /// Sets the child. A second call replaces the first. The child must also
+    /// be added to the Screen's tree under the Modal's id to be painted and
+    /// to receive events. It is placed on the next set_bounds.
+    pub func add(child: dyn Widget):
+        if this.slot.len() > 0:
+            this.slot.set(0, LayoutSlot { child = child })
+            ret
+        end
+        _ := _slotAdd(this.slot, child)
+    end
+
+    @en "open"
+    @fa "باز کردن"
+    /// Shows the Modal. State only: it does not raise the Modal or move
+    /// focus. The app does both with Screen.push_focus, then raise_subtree.
+    /// Works on the local value or on the copy Screen.add stored.
+    pub func open():
+        mut s := this._get()
+        s.visible = true
+        this._put(s)
+    end
+
+    @en "close"
+    @fa "بستن"
+    /// Hides the Modal. State only: it does not call on_close, unraise or
+    /// restore focus. The app does those with unraise_subtree, then pop_focus.
+    /// Works on the local value or on the copy Screen.add stored.
+    pub func close():
+        mut s := this._get()
+        s.visible = false
+        this._put(s)
+    end
+
+    @en "set_title"
+    @fa "تنظیم عنوان"
+    /// Sets the text on the top edge of the ring. Works before or after
+    /// Screen.add.
+    pub func set_title(t: str):
+        mut s := this._get()
+        s.title = t
+        this._put(s)
+    end
+
+    @en "set_size"
+    @fa "تنظیم اندازه"
+    /// Sets the dialog size and re-places the child for the current bounds.
+    /// Works before or after Screen.add.
+    pub func set_size(sz: ModalSize):
+        mut s := this._get()
+        s.fixed = _is_fixed(sz)
+        s.w = _size_w(sz)
+        s.h = _size_h(sz)
+        this._put(s)
+        this.set_bounds(s.rect)
+    end
+
+    @en "set_closable"
+    @fa "تنظیم امکان بستن"
+    /// Sets whether Esc closes the Modal. Works before or after Screen.add.
+    pub func set_closable(b: bool):
+        mut s := this._get()
+        s.closable = b
+        this._put(s)
+    end
+
+    @en "set_bounds"
+    @fa "تنظیم محدوده"
+    /// Stores the Modal's rect in the shared state, then places the child in
+    /// the dialog rect inset by one cell for the ring. Works before or after
+    /// Screen.add.
+    pub func set_bounds(bounds: Rect):
+        _enter_pass()
+        r := FitRect(bounds, bounds)
+        mut s := this._get()
+        s.rect = r
+        this._put(s)
+        if this.slot.len() > 0:
+            n := BorderInset(BorderStyle.Single)
+            inner := InsetRect(this._dialog_rect(r), Insets { top = n, right = n, bottom = n, left = n })
+            this.slot.get(0).child.set_bounds(inner)
+        end
+        _leave_pass()
+    end
+
+    @en "bounds"
+    @fa "محدوده"
+    /// The rect stored by the last set_bounds, read from the shared state so
+    /// the Screen sees the same rect on the stored copy.
+    pub func bounds(): Rect:
+        ret this._get().rect
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    /// A Fixed size reports its exact w by h. A Percent size depends on the
+    /// bounds it is given, so it reports the no-preference sentinel.
+    pub func preferred_size(max_width: int): Rect:
+        _ := max_width
+        ret _preferred_of(this._size())
+    end
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// True only while open and when takes_focus is set.
+    pub func focusable(): bool:
+        ret this._get().visible and this.takes_focus
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    /// True only while open. A hidden Modal lets a click fall through.
+    pub func hits(): bool:
+        ret this._get().visible
+    end
+
+    @en "visible"
+    @fa "نمایان است"
+    /// True only while open. A hidden Modal also hides its child from focus
+    /// order, painting, and hit testing, because the screen checks every
+    /// widget on the path to the root.
+    pub func visible(): bool:
+        ret this._get().visible
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Offers the event to the child first and returns true if it consumed
+    /// it. Then Esc closes the Modal when closable, calls on_close and
+    /// returns true. Then a mouse event inside the bounds but outside the
+    /// dialog returns true, so it never reaches a widget below. Anything
+    /// else returns false. A hidden Modal returns false for everything.
+    pub func handle_event(event: Event): bool:
+        if not this._get().visible:
+            ret false
+        end
+        if this.slot.len() > 0 and this.slot.get(0).child.handle_event(event):
+            ret true
+        end
+        if this._get().closable and event.is_key(term.KeyEscape):
+            this.close()
+            this.on_close()
+            ret true
+        end
+        if event.kind == MouseEvent:
+            p := event.mouse_point()
+            if this.bounds().contains(p) and not this._dialog_rect(this.bounds()).contains(p):
+                ret true
+            end
+        end
+        ret false
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Paints nothing while hidden. Otherwise dims every cell of bounds
+    /// outside the dialog rect, then draws the ring around the dialog rect
+    /// when it is at least 2 by 2. The child paints itself.
+    pub func render(buf: Buffer, bounds: Rect):
+        s := this._get()
+        if not s.visible:
+            ret
+        end
+        dialog := this._dialog_rect(bounds)
+        repeat bounds.height in j:
+            repeat bounds.width in i:
+                p := Point { x = bounds.x + i, y = bounds.y + j }
+                if not dialog.contains(p):
+                    mut cell := buf.get(p.x, p.y)
+                    cell.style = _dim(cell.style)
+                    buf.set(p.x, p.y, cell)
+                end
+            end
+        end
+        if dialog.width >= 2 and dialog.height >= 2:
+            DrawBorder(buf, dialog, BorderStyle.Single, this.border_style, s.title)
+        end
+    end
+
+    // The dialog rect inside bounds: sized by size, then centred. The odd
+    // cell of an odd gap goes right and bottom.
+    func _dialog_rect(bounds: Rect): Rect:
+        span := _span_of(this._size(), bounds)
+        x := bounds.x + (bounds.width - span.x) / 2
+        y := bounds.y + (bounds.height - span.y) / 2
+        ret Rect { x = x, y = y, width = span.x, height = span.y }
+    end
+end
+
+// The parts of a ModalSize the holder keeps as plain fields. The holder itself
+// never names ModalSize, so no struct is declared against an enum it precedes.
+func _is_fixed(sz: ModalSize): bool:
+    ret match sz:
+        Fixed(_w, _h): true end
+        else: false end
+    end
+end
+
+func _size_w(sz: ModalSize): int:
+    ret match sz:
+        Fixed(w, _h): w end
+        Percent(w, _h): w end
+    end
+end
+
+func _size_h(sz: ModalSize): int:
+    ret match sz:
+        Fixed(_w, h): h end
+        Percent(_w, h): h end
+    end
+end
+
+// The Rect a size reports to preferred_size: exact for Fixed, the sentinel
+// for Percent, which depends on the bounds it is given.
+func _preferred_of(sz: ModalSize): Rect:
+    ret match sz:
+        Fixed(w, h): Rect { width = w, height = h } end
+        else: Rect { width = -1, height = -1 } end
+    end
+end
+
+// The span a size asks for inside bounds, before centring.
+func _span_of(sz: ModalSize, bounds: Rect): Point:
+    ret match sz:
+        Fixed(w, h): Point { x = _fit_span(w, 0, bounds.width), y = _fit_span(h, 0, bounds.height) } end
+        Percent(w, h): Point { x = _fit_span(bounds.width * w / 100, 20, bounds.width), y = _fit_span(bounds.height * h / 100, 5, bounds.height) } end
+    end
+end
+
+// Raises want to at least lo, then caps it at room. When room is below lo
+// the room wins, so a dialog never exceeds its bounds.
+func _fit_span(want: int, lo: int, room: int): int:
+    mut out := want
+    if out < lo:
+        out = lo
+    end
+    if out > room:
+        out = room
+    end
+    ret out
+end
+
+// The style of a scrimmed cell: under with DIM added. A field copy, not a
+// string: the buffer builds the bytes when it emits the frame, so nothing
+// here needs the tier.
+func _dim(under: Style): Style:
+    mut out := under
+    out.dim = true
+    ret out
+end
+
+@en "NewModal"
+@fa "مودال جدید"
+/// Creates a hidden Modal: Percent(50, 40), no title, no child. Its state
+/// holder is created here, so every copy made later shares it.
+pub func NewModal(): Modal:
+    mut m := Modal {}
+    m.state.push(_ModalState {})
+    ret m
+end

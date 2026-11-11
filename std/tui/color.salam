@@ -1,0 +1,401 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Color: the value type a style carries, and its raw SGR encoding.
+ *
+ * The terminal distinguishes four color kinds — its own default, the 16
+ * ANSI palette, the 256-color palette, and 24-bit truecolor — and each has
+ * its own SGR form. Color models exactly those four as a payload enum, so a
+ * value never carries more than its kind needs: Default has no payload,
+ * Ansi and Indexed carry one index, Rgb carries three channels. Value
+ * equality is native.
+ *
+ *   present:  the Color enum; the 16 palette constants (Black..White,
+ *             BrightBlack..BrightWhite); FgSeq / BgSeq, which turn a color
+ *             into the exact escape a terminal understands; the ColorTier
+ *             enum and DetectTier, which read the environment for the
+ *             terminal's color capability; Lower, the emission-time
+ *             downgrade; and FgSeqAt / BgSeqAt, which encode a color at a
+ *             given tier.
+ *
+ *   fit:      sits beside buffer.salam and text.salam. Cells carry a Style,
+ *             which carries a Color; style.salam emits through FgSeqAt /
+ *             BgSeqAt when the buffer serializes a frame.
+ *
+ *   absent:   any caching of the detected tier — DetectTier is a pure env
+ *             read, so the buffer hoists the tier once and passes it to
+ *             FgSeqAt / BgSeqAt. No validation or clamping either — Ansi is
+ *             documented for 0-15, but any int follows the same arithmetic.
+ *
+ * Why raw sequences live here: the encoding is the one thing every consumer
+ * of a color needs, and it must be built from std/term's sequence builders
+ * rather than hand-written escapes. Keeping FgSeq / BgSeq pure (a color in,
+ * a string out) means tests can assert them without a terminal.
+ */
+
+package tui
+
+import env
+import str
+import term
+
+@en "Black"
+@fa "مشکی"
+/// Palette index 0.
+pub const Black := Color.Ansi(0)
+
+@en "Red"
+@fa "قرمز"
+/// Palette index 1.
+pub const Red := Color.Ansi(1)
+
+@en "Green"
+@fa "سبز"
+/// Palette index 2.
+pub const Green := Color.Ansi(2)
+
+@en "Yellow"
+@fa "زرد"
+/// Palette index 3.
+pub const Yellow := Color.Ansi(3)
+
+@en "Blue"
+@fa "آبی"
+/// Palette index 4.
+pub const Blue := Color.Ansi(4)
+
+@en "Magenta"
+@fa "ارغوانی"
+/// Palette index 5.
+pub const Magenta := Color.Ansi(5)
+
+@en "Cyan"
+@fa "فیروزه‌ای"
+/// Palette index 6.
+pub const Cyan := Color.Ansi(6)
+
+@en "White"
+@fa "سفید"
+/// Palette index 7.
+pub const White := Color.Ansi(7)
+
+@en "BrightBlack"
+@fa "مشکی روشن"
+/// Palette index 8, the bright variant of Black.
+pub const BrightBlack := Color.Ansi(8)
+
+@en "BrightRed"
+@fa "قرمز روشن"
+/// Palette index 9, the bright variant of Red.
+pub const BrightRed := Color.Ansi(9)
+
+@en "BrightGreen"
+@fa "سبز روشن"
+/// Palette index 10, the bright variant of Green.
+pub const BrightGreen := Color.Ansi(10)
+
+@en "BrightYellow"
+@fa "زرد روشن"
+/// Palette index 11, the bright variant of Yellow.
+pub const BrightYellow := Color.Ansi(11)
+
+@en "BrightBlue"
+@fa "آبی روشن"
+/// Palette index 12, the bright variant of Blue.
+pub const BrightBlue := Color.Ansi(12)
+
+@en "BrightMagenta"
+@fa "ارغوانی روشن"
+/// Palette index 13, the bright variant of Magenta.
+pub const BrightMagenta := Color.Ansi(13)
+
+@en "BrightCyan"
+@fa "فیروزه‌ای روشن"
+/// Palette index 14, the bright variant of Cyan.
+pub const BrightCyan := Color.Ansi(14)
+
+@en "BrightWhite"
+@fa "سفید روشن"
+/// Palette index 15, the bright variant of White.
+pub const BrightWhite := Color.Ansi(15)
+
+const _CUBE_STEPS := [0, 95, 135, 175, 215, 255]
+
+const _REF_R := [0, 205, 0, 205, 0, 205, 0, 229, 127, 255, 0, 255, 92, 255, 0, 255]
+
+const _REF_G := [0, 0, 205, 205, 0, 0, 205, 229, 127, 0, 255, 255, 92, 0, 255, 255]
+
+const _REF_B := [0, 0, 0, 0, 238, 205, 205, 229, 127, 0, 0, 0, 255, 255, 255, 255]
+
+@en "Color"
+@fa "رنگ"
+/// One terminal color, as the four kinds the wire format distinguishes.
+/// Equality is native: two Colors are equal when their kind and payload are
+/// equal, so different kinds are never equal.
+pub enum Color:
+    @en "Default"
+    @fa "پیش‌فرض"
+    /// The terminal's own default foreground or background (SGR 39 / 49),
+    /// not an entry in any palette.
+    Default
+    @en "Ansi"
+    @fa "انسی"
+    /// A 16-color palette index, 0-15: 0-7 the normal colors, 8-15 their
+    /// bright variants. No validation; the documented range is 0-15.
+    Ansi(n: int)
+    @en "Indexed"
+    @fa "نمایه‌ای"
+    /// A 256-color palette index, 0-255 (SGR 38;5;n / 48;5;n). An index in
+    /// 0-15 stays Indexed on the wire, never rewritten to the ANSI form.
+    Indexed(n: int)
+    @en "Rgb"
+    @fa "آرجی‌بی"
+    /// A 24-bit truecolor triple, each channel 0-255 (SGR 38;2;r;g;b).
+    Rgb(r: int, g: int, b: int)
+end
+
+@en "ColorTier"
+@fa "سطح رنگ"
+/// How much color the terminal can show. Off is no color, Ansi16 the
+/// 16-color palette, Indexed256 the 256-color palette, TrueColor 24-bit RGB.
+pub enum ColorTier:
+    @en "Off"
+    @fa "خاموش"
+    /// No color: every Color lowers to Default.
+    Off
+    @en "Ansi16"
+    @fa "انسی ۱۶"
+    /// The 16-color palette only.
+    Ansi16
+    @en "Indexed256"
+    @fa "نمایه‌ای ۲۵۶"
+    /// The 256-color palette.
+    Indexed256
+    @en "TrueColor"
+    @fa "رنگ حقیقی"
+    /// 24-bit truecolor.
+    TrueColor
+end
+
+func _ansi_fg(n: int): int:
+    if n < 8:
+        ret term.FgBlack + n
+    end
+    ret term.FgBlack + term.FgBright + (n - 8)
+end
+
+func _ansi_bg(n: int): int:
+    if n < 8:
+        ret term.BgBlack + n
+    end
+    ret term.BgBlack + term.FgBright + (n - 8)
+end
+
+func _force_color(): bool:
+    v := env.Get("CLICOLOR_FORCE")
+    ret v.len() > 0 and v != "0"
+end
+
+func _lower_256(c: Color): Color:
+    ret match c:
+        Rgb(r, g, b): Color.Indexed(_nearest_indexed(r, g, b)) end
+        else: c end
+    end
+end
+
+func _lower_16(c: Color): Color:
+    ret match c:
+        Indexed(n): Color.Ansi(_indexed_to_ansi(n)) end
+        Rgb(r, g, b): Color.Ansi(_nearest_ansi(r, g, b)) end
+        else: c end
+    end
+end
+
+func _indexed_to_ansi(n: int): int:
+    if n < 16:
+        ret n
+    end
+    ret _nearest_ansi_from_indexed(n)
+end
+
+func _nearest_ansi_from_indexed(n: int): int:
+    ret match _idx_rgb(n):
+        Rgb(r, g, b): _nearest_ansi(r, g, b) end
+        else: 0 end
+    end
+end
+
+func _idx_rgb(n: int): Color:
+    if n < 16:
+        ret Color.Rgb(_REF_R[n], _REF_G[n], _REF_B[n])
+    end
+    if n < 232:
+        m := n - 16
+        ret Color.Rgb(_CUBE_STEPS[m / 36], _CUBE_STEPS[(m / 6) % 6], _CUBE_STEPS[m % 6])
+    end
+    v := 8 + 10 * (n - 232)
+    ret Color.Rgb(v, v, v)
+end
+
+func _nearest_step(v: int): int:
+    mut best := 0
+    mut bestd := -1
+    repeat 6 in i:
+        mut d := v - _CUBE_STEPS[i]
+        if d < 0:
+            d = 0 - d
+        end
+        if bestd < 0 or d < bestd:
+            bestd = d
+            best = i
+        end
+    end
+    ret best
+end
+
+func _nearest_indexed(r: int, g: int, b: int): int:
+    ri := _nearest_step(r)
+    gi := _nearest_step(g)
+    bi := _nearest_step(b)
+    cube := 16 + 36 * ri + 6 * gi + bi
+    cr := _CUBE_STEPS[ri]
+    cg := _CUBE_STEPS[gi]
+    cb := _CUBE_STEPS[bi]
+    mean := (r + g + b) / 3
+    mut gi2 := (mean - 8 + 5) / 10
+    if gi2 < 0:
+        gi2 = 0
+    end
+    if gi2 > 23:
+        gi2 = 23
+    end
+    gray := 232 + gi2
+    gv := 8 + 10 * gi2
+    dc := (r - cr) * (r - cr) + (g - cg) * (g - cg) + (b - cb) * (b - cb)
+    dg := (r - gv) * (r - gv) + (g - gv) * (g - gv) + (b - gv) * (b - gv)
+    if dg < dc:
+        ret gray
+    end
+    ret cube
+end
+
+func _nearest_ansi(r: int, g: int, b: int): int:
+    mut best := 0
+    mut bestd := -1
+    repeat 16 in i:
+        dr := r - _REF_R[i]
+        dg := g - _REF_G[i]
+        db := b - _REF_B[i]
+        d := dr * dr + dg * dg + db * db
+        if bestd < 0 or d < bestd:
+            bestd = d
+            best = i
+        end
+    end
+    ret best
+end
+
+@en "FgSeq"
+@fa "دنباله رنگ پیش‌زمینه"
+/// The foreground SGR sequence for a color, at full fidelity: the exact
+/// escape the color's kind encodes to, with no tier downgrade. Default is
+/// SGR 39; Ansi 0-7 is 30+n and Ansi 8-15 is 90+(n-8); Indexed is 38;5;n;
+/// Rgb is 38;2;r;g;b. Built from term's sequence builders — no escape is
+/// written by hand.
+pub func FgSeq(c: Color): str:
+    ret match c:
+        Default: term.Sgr(term.FgDefault) end
+        Ansi(n): term.Sgr(_ansi_fg(n)) end
+        Indexed(n): term.SeqFg256(n) end
+        Rgb(r, g, b): term.SeqFgRGB(r, g, b) end
+    end
+end
+
+@en "BgSeq"
+@fa "دنباله رنگ پس‌زمینه"
+/// The background SGR sequence for a color, at full fidelity: the exact
+/// escape the color's kind encodes to, with no tier downgrade. Default is
+/// SGR 49; Ansi 0-7 is 40+n and Ansi 8-15 is 100+(n-8); Indexed is 48;5;n;
+/// Rgb is 48;2;r;g;b. Built from term's sequence builders — no escape is
+/// written by hand.
+pub func BgSeq(c: Color): str:
+    ret match c:
+        Default: term.Sgr(term.BgDefault) end
+        Ansi(n): term.Sgr(_ansi_bg(n)) end
+        Indexed(n): term.SeqBg256(n) end
+        Rgb(r, g, b): term.SeqBgRGB(r, g, b) end
+    end
+end
+
+@en "DetectTier"
+@fa "تشخیص سطح رنگ"
+/// The color tier the environment advertises, from NO_COLOR, TERM,
+/// COLORTERM and CLICOLOR_FORCE only — no tty probe and no caching, so it is
+/// pure and headless-testable. First match wins: NO_COLOR set and non-empty
+/// -> Off; TERM == "dumb" unless CLICOLOR_FORCE is set to a non-empty value
+/// other than "0" -> Off; COLORTERM == "truecolor" or "24bit" -> TrueColor;
+/// TERM containing "256color" or any other non-empty COLORTERM ->
+/// Indexed256; otherwise Ansi16. NO_COLOR beats CLICOLOR_FORCE.
+pub func DetectTier(): ColorTier:
+    if env.Get("NO_COLOR").len() > 0:
+        ret ColorTier.Off
+    end
+    ct := env.Get("COLORTERM")
+    if env.Get("TERM") == "dumb" and not _force_color():
+        ret ColorTier.Off
+    end
+    if ct == "truecolor" or ct == "24bit":
+        ret ColorTier.TrueColor
+    end
+    if str.Contains(env.Get("TERM"), "256color") or ct.len() > 0:
+        ret ColorTier.Indexed256
+    end
+    ret ColorTier.Ansi16
+end
+
+@en "Lower"
+@fa "کاهش سطح رنگ"
+/// The same color at a lower tier — the emission-time downgrade. Off makes
+/// every color Default; TrueColor is unchanged; Indexed256 lowers only Rgb
+/// to the nearest 256 index; Ansi16 lowers Rgb and Indexed 16-255 to the
+/// nearest of the 16 ANSI colors (Rgb directly, never through Indexed) and
+/// leaves Default and Ansi alone. Pure: it returns a new value and never
+/// mutates its input.
+pub func Lower(c: Color, tier: ColorTier): Color:
+    ret match tier:
+        Off: Color.Default end
+        TrueColor: c end
+        Indexed256: _lower_256(c) end
+        Ansi16: _lower_16(c) end
+    end
+end
+
+@en "FgSeqAt"
+@fa "دنباله پیش‌زمینه در سطح"
+/// The foreground SGR sequence for a color after lowering it to `tier`:
+/// FgSeq of Lower(c, tier), so the emitted escape matches the tier and no
+/// sequence is written by hand.
+pub func FgSeqAt(c: Color, tier: ColorTier): str:
+    ret FgSeq(Lower(c, tier))
+end
+
+@en "BgSeqAt"
+@fa "دنباله پس‌زمینه در سطح"
+/// The background SGR sequence for a color after lowering it to `tier`:
+/// BgSeq of Lower(c, tier), so the emitted escape matches the tier and no
+/// sequence is written by hand.
+pub func BgSeqAt(c: Color, tier: ColorTier): str:
+    ret BgSeq(Lower(c, tier))
+end

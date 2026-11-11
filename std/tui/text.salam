@@ -1,0 +1,366 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Text: the pure line rules and the Text widget that draws through them.
+ *
+ * Two layers live here. WrapText and MeasureText turn a string into display
+ * lines and a preferred size; they hold no state and know nothing about
+ * widgets. Text is the first concrete widget: it stores content, alignment,
+ * wrap mode, and a style, and draws itself with those rules. A Text widget
+ * and, later, the layout engine both consume the same two functions, so the
+ * arithmetic exists once.
+ *
+ * Cell model. A display cell is two columns for an East Asian wide or
+ * fullwidth codepoint, zero for a control, mark or format codepoint, and one
+ * otherwise. Text measures plain strings with the shared rule in width.salam;
+ * it does not parse ANSI escapes or segment grapheme clusters.
+ *
+ * Wrap policy. Greedy word-boundary wrapping: walk the words of a paragraph
+ * and, when the next word would cross the width, start a new line and drop
+ * the space at the break. A word that does not fit on a line of its own is
+ * hard-split onto the character grid, so no emitted line is ever wider than
+ * the requested width. Plain cell-width cutting and clip-only were both
+ * rejected: the first splits words that would have fit, the second loses
+ * cells a hard clip cannot show. WrapMode.None opts a widget out of wrapping:
+ * each explicit line is drawn as-is and the box edge clips it.
+ *
+ * An explicit "\n" is a hard break: it ends the paragraph, and each paragraph
+ * wraps independently. A width of zero or less means unbounded (the
+ * artifact's M = infinity): every paragraph is returned unwrapped.
+ *
+ * This file delegates display width to width.salam and has no layout pass:
+ * placement in the parent's box belongs to the layout engine. The style is a
+ * tui.Style value (style.salam), not a raw
+ * SGR string: render paints the box's padding with the style's background
+ * only and the glyph runs with the full style, and the buffer turns each into
+ * bytes at emission, at `buf.tier`. The screen detects the terminal once when
+ * it starts and stores the result on the buffer, which applies it as it emits
+ * the frame. A headless NewBuffer keeps TrueColor, so the bytes never depend
+ * on the ambient environment and the goldens stay deterministic.
+ */
+
+package tui
+
+import str
+
+@en "Alignment"
+@fa "تراز"
+/// Where each rendered line sits horizontally inside the widget's box.
+pub enum Alignment:
+    @en "Left"
+    @fa "چپ"
+    /// Lines start at the box's left edge (the default).
+    Left
+    @en "Center"
+    @fa "مرکز"
+    /// Lines are centred; when the slack is odd the extra cell is on the
+    /// right.
+    Center
+    @en "Right"
+    @fa "راست"
+    /// Lines end at the box's right edge.
+    Right
+end
+
+@en "WrapMode"
+@fa "حالت شکست خط"
+/// How Text turns its content into lines at render time.
+pub enum WrapMode:
+    @en "Word"
+    @fa "بر پایه واژه"
+    /// Greedy word-boundary wrapping at the box width (the default).
+    Word
+    @en "None"
+    @fa "بدون شکست"
+    /// Each explicit line is drawn as-is; the box edge clips it.
+    None
+end
+
+@en "Text"
+@fa "متن"
+/// A widget that draws a string: set once or updated later, aligned left,
+/// centre, or right, wrapped to its box (or clipped), in one style. Its
+/// preferred size comes from the content. Embed it or construct it with
+/// NewText.
+pub struct Text:
+    pub use BaseWidget
+
+    @en "content"
+    @fa "محتوا"
+    /// The text to draw. An explicit "\n" starts a new line (see WrapText).
+    pub content: str = ""
+
+    @en "align"
+    @fa "تراز"
+    /// Horizontal placement of each line. Defaults to Alignment.Left.
+    pub align: Alignment = Alignment.Left
+
+    @en "style"
+    @fa "ظاهر"
+    /// How the content is drawn. The background fills the whole box; the
+    /// foreground and attributes apply to the glyph cells only, interior
+    /// spaces included, so an underline stays continuous. StyleDefault draws
+    /// with the terminal's defaults. The buffer emits it at its tier.
+    pub style: Style = StyleDefault
+
+    @en "wrap"
+    @fa "شکست خط"
+    /// How the content becomes lines at render time. Defaults to
+    /// WrapMode.Word.
+    pub wrap: WrapMode = WrapMode.Word
+
+    source: func () str = (): ret "" end
+    source_set: bool = false
+
+    func _content(): str:
+        if this.source_set:
+            ret this.source()
+        end
+        ret this.content
+    end
+
+    @en "set_text"
+    @fa "تنظیم متن"
+    /// Replaces the content and clears the source; the last setter wins.
+    pub func set_text(content: str):
+        this.content = content
+        this.source_set = false
+    end
+
+    @en "set_source"
+    @fa "تنظیم منبع"
+    /// Reads `src` at render and measure time; the last setter wins. Keep its
+    /// value stable within a frame. Closures capture by value, so read module
+    /// state or a shared holder. Set the source before Screen.add, which copies
+    /// the widget. Changes do not repaint or relayout automatically: call
+    /// invalidate(id), register a tick, or call set_bounds again.
+    pub func set_source(src: func () str):
+        this.source = src
+        this.source_set = true
+    end
+
+    @en "clear_source"
+    @fa "پاک‌سازی منبع"
+    /// Clears the source and returns to the last pushed content.
+    pub func clear_source():
+        this.source_set = false
+    end
+
+    @en "set_align"
+    @fa "تنظیم تراز"
+    /// Sets the horizontal alignment.
+    pub func set_align(align: Alignment):
+        this.align = align
+    end
+
+    @en "set_style"
+    @fa "تنظیم ظاهر"
+    /// Sets the style the content is drawn with.
+    pub func set_style(style: Style):
+        this.style = style
+    end
+
+    @en "set_wrap"
+    @fa "تنظیم شکست خط"
+    /// Sets the wrap mode.
+    pub func set_wrap(wrap: WrapMode):
+        this.wrap = wrap
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    /// The size the content wants at max_width, as a rect at (0, 0): width is
+    /// the longest wrapped line in cells, height the number of wrapped lines.
+    /// max_width <= 0 means unbounded, so the explicit lines are measured.
+    pub func preferred_size(max_width: int): Rect:
+        content := this._content()
+        if this.source_set and content == "":
+            ret Rect {}
+        end
+        ret MeasureText(content, max_width)
+    end
+
+    @en "preferred_width"
+    @fa "عرض ترجیحی"
+    /// The longest explicit line of the content, in cells (the unbounded
+    /// width).
+    pub func preferred_width(): int:
+        ret MeasureText(this._content(), 0).width
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Draws the content into bounds. The box is first filled with the pad
+    /// style — the widget style's background only — so a background colour
+    /// reads full-bleed while nothing else reaches the padding. Each line is
+    /// then placed with the alignment offset and written as one run in the
+    /// full style, interior spaces included, so an underline never breaks; at
+    /// most bounds.height lines are drawn. A degenerate box draws nothing and
+    /// never panics.
+    pub func render(buf: Buffer, bounds: Rect):
+        pad := Style { bg = this.style.bg }
+        glyph := this.style
+        buf.fill(bounds, " ", pad)
+        mut lines := Vector {} as Vector<str>
+        if this.wrap == WrapMode.None:
+            lines = WrapText(this._content(), 0)
+        else:
+            lines = WrapText(this._content(), bounds.width)
+        end
+        defer lines.free()
+        mut n := lines.len()
+        if n > bounds.height:
+            n = bounds.height
+        end
+        if n < 0:
+            n = 0
+        end
+        repeat n in i:
+            line := lines.get(i)
+            mut slack := bounds.width - _text_width(line)
+            // The artifact: a line at least as wide as the box shows its
+            // first cells for every alignment (len >= W puts offset = 0), so
+            // right and center never reveal the tail of an over-long line.
+            if slack < 0:
+                slack = 0
+            end
+            mut offset := 0
+            if this.align == Alignment.Right:
+                offset = slack
+            else this.align == Alignment.Center:
+                offset = slack / 2
+            end
+            buf.put_str(bounds.x + offset, bounds.y + i, line, glyph)
+        end
+    end
+end
+
+// Appends the wrapped lines of one paragraph to out. Assumes width > 0; the
+// lines are pushed in top-to-bottom order and the break space is consumed.
+func _wrapInto(para: str, width: int, out &: Vector<str>):
+    if width <= 0:
+        out.push(para)
+        ret
+    end
+    mut words := str.Fields(para)
+    defer words.free()
+    mut line := ""
+    repeat words.len() in i:
+        w := words.get(i)
+        if _text_width(w) > width:
+            if _text_width(line) > 0:
+                out.push(line)
+                line = ""
+            end
+            mut chunks := _splitWord(w, width)
+            repeat chunks.len() in c:
+                if c + 1 < chunks.len():
+                    out.push(chunks.get(c))
+                else:
+                    line = chunks.get(c)
+                end
+            end
+            chunks.free()
+        else:
+            if _text_width(line) == 0:
+                line = w
+            else:
+                candidate := line + " " + w
+                if _text_width(candidate) <= width:
+                    line = candidate
+                else:
+                    out.push(line)
+                    line = w
+                end
+            end
+        end
+    end
+    out.push(line)
+end
+
+// Cuts a word wider than width onto the character grid: consecutive chunks of
+// at most width cells, in order. Assumes width > 0.
+func _splitWord(word: str, width: int): Vector<str>:
+    out := Vector {} as Vector<str>
+    mut chars := str.Chars(word)
+    defer chars.free()
+    mut chunk := ""
+    mut chunk_width := 0
+    repeat chars.len() in i:
+        ch := chars.get(i)
+        ch_width := _char_width(ch)
+        if chunk_width > 0 and chunk_width + ch_width > width:
+            out.push(chunk)
+            chunk = ""
+            chunk_width = 0
+        end
+        if chunk_width == 0 and ch_width > width:
+            // shortcut: a 2-cell glyph can overflow a 1-cell line; the buffer blanks it at paint time. Upgrade if Text grows ellipsis.
+            out.push(chunk + ch)
+            chunk = ""
+        else:
+            chunk = chunk + ch
+            chunk_width = chunk_width + ch_width
+        end
+    end
+    if chunk_width > 0:
+        out.push(chunk)
+    end
+    ret out
+end
+
+@en "WrapText"
+@fa "شکستن خطوط متن"
+/// Splits text into display lines of at most width cells, top to bottom. An
+/// explicit "\n" starts a new paragraph, each wrapped on its own; the space
+/// at a break is consumed. A word longer than width is cut on the character
+/// grid. A two-cell glyph can exceed a width of one. width <= 0 means
+/// unbounded, so each paragraph is returned unwrapped.
+pub func WrapText(text: str, width: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    paras := str.Split(text, "\n")
+    defer paras.free()
+    repeat paras.len() in i:
+        _wrapInto(paras.get(i), width, out)
+    end
+    ret out
+end
+
+@en "MeasureText"
+@fa "اندازه‌گیری متن"
+/// The preferred size of text wrapped at max_width, as a rect at (0, 0):
+/// width is the longest wrapped line in cells, height the number of wrapped
+/// lines. max_width <= 0 means unbounded, so width is the longest explicit
+/// line and height is the explicit line count. Widths count display cells.
+pub func MeasureText(text: str, max_width: int): Rect:
+    mut lines := WrapText(text, max_width)
+    defer lines.free()
+    mut w := 0
+    repeat lines.len() in i:
+        lw := _text_width(lines.get(i))
+        if lw > w:
+            w = lw
+        end
+    end
+    ret Rect { width = w, height = lines.len() }
+end
+
+@en "NewText"
+@fa "متن جدید"
+/// Creates a Text widget with the given content: left-aligned, unstyled, and
+/// word-wrapped.
+pub func NewText(content: str): Text:
+    ret Text { content = content }
+end

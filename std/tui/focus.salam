@@ -1,0 +1,124 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Focus: spatial navigation, as a pure function over rects.
+ *
+ * The screen supports two focus models side by side:
+ *
+ *   linear   focus_next / focus_prev walk the focusable widgets outside
+ *            hidden subtrees in ID order (the same order they paint in),
+ *            wrapping around;
+ *   spatial  focus_up / focus_down / focus_left / focus_right move to the
+ *            nearest focusable widget in that direction.
+ *
+ * Both live on Screen (screen.salam), which owns the focus stack. This
+ * file holds only the geometric search behind the spatial model, kept
+ * free of widgets and screens so it can be tested on plain rects.
+ *
+ * Key bindings. The focus system binds nothing itself: the movement
+ * methods are plain calls. The library's only stock bindings live in the
+ * opt-in default keymap (see keymap.salam), which an application installs
+ * with set_keymap. Which key means "next" or "left" stays the
+ * application's decision, not the focus system's.
+ */
+
+package tui
+
+@en "DirUp"
+@fa "جهت بالا"
+/// Direction: toward smaller y.
+pub const DirUp := 0
+
+@en "DirDown"
+@fa "جهت پایین"
+/// Direction: toward larger y.
+pub const DirDown := 1
+
+@en "DirLeft"
+@fa "جهت چپ"
+/// Direction: toward smaller x.
+pub const DirLeft := 2
+
+@en "DirRight"
+@fa "جهت راست"
+/// Direction: toward larger x.
+pub const DirRight := 3
+
+@en "Nearest"
+@fa "نزدیک‌ترین"
+/// Finds the candidate nearest to `from` in direction dir (DirUp, DirDown,
+/// DirLeft, DirRight) and returns its index in candidates, or -1 when no
+/// candidate qualifies. The rules are spelled out in the comments of the
+/// function body. O(n): every candidate is looked at once.
+pub func Nearest(from: Rect, candidates: Vector<Rect>, dir: int): int:
+    horizontal := dir == DirLeft or dir == DirRight
+    // Doubled centers (2 * x + width) keep the center arithmetic exact:
+    // halving would truncate, and two candidates whose centers differ by
+    // half a cell would wrongly tie.
+    from_mid := horizontal ? 2 * from.y + from.height : 2 * from.x + from.width
+    mut best := -1
+    mut best_gap := 0
+    mut best_offset := 0
+    repeat candidates.len() in i:
+        c := candidates.get(i)
+        // Rule 1 - direction. The candidate must lie entirely beyond the
+        // edge of `from` that faces dir. Moving right, its left edge must be
+        // at or past from's right edge (c.x >= from.right()). A candidate
+        // that overlaps `from` along the axis of motion is not "to the
+        // right", it is on top of or beside it, and is skipped. Touching
+        // (a gap of 0) qualifies.
+        mut gap := -1
+        if dir == DirRight:
+            gap = c.x - from.right()
+        else dir == DirLeft:
+            gap = from.x - c.right()
+        else dir == DirDown:
+            gap = c.y - from.bottom()
+        else dir == DirUp:
+            gap = from.y - c.bottom()
+        end
+        // Rule 2 - overlap on the perpendicular axis. Moving left or right,
+        // the candidate's rows must share at least one row with from's;
+        // moving up or down, they must share a column. Ranges are half-open
+        // like Rect itself, so rects that only touch at a corner do not
+        // overlap, and an empty rect (on either side) overlaps nothing.
+        // This is what keeps focus moving in straight lines: a widget that
+        // is diagonally away is never "to the right", however close.
+        mut overlaps := false
+        if horizontal:
+            overlaps = c.y < from.bottom() and from.y < c.bottom()
+        else:
+            overlaps = c.x < from.right() and from.x < c.right()
+        end
+        if gap >= 0 and overlaps and not c.is_empty() and not from.is_empty():
+            // Ranking, in order:
+            //   1. the smallest gap along the direction wins (nearest edge);
+            //   2. on equal gaps, the smallest distance between the two
+            //      centers on the perpendicular axis wins (best aligned);
+            //   3. on a full tie, the earliest candidate wins. Candidates
+            //      are scanned in order and only a strictly better one
+            //      replaces the current best, so the lowest index (the
+            //      earliest in focus order) is kept.
+            mid := horizontal ? 2 * c.y + c.height : 2 * c.x + c.width
+            offset := mid > from_mid ? mid - from_mid : from_mid - mid
+            if best < 0 or gap < best_gap or (gap == best_gap and offset < best_offset):
+                best = i
+                best_gap = gap
+                best_offset = offset
+            end
+        end
+    end
+    ret best
+end

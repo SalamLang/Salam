@@ -1,0 +1,399 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Unit tests for the Color value type and its raw SGR encoding: all four
+// kinds construct and their payloads round-trip through a match, the 16
+// palette constants equal Color.Ansi(0..15), and FgSeq / BgSeq encode every
+// kind to the exact escape its kind specifies (Default 39/49, Ansi 0-7
+// 30+n/40+n, Ansi 8-15 90+(n-8)/100+(n-8), Indexed 38;5;n / 48;5;n, Rgb
+// 38;2;r;g;b / 48;2;r;g;b). Expected strings are built with term's own
+// sequence builders, so no escape appears by hand. Finally the equality
+// truth table: equal payloads are equal, and different kinds or payloads
+// never are (including Indexed(1) vs Rgb(205,0,0) and Indexed(196) vs
+// Rgb(255,0,0)).
+//
+// STAGE-02 adds the terminal tier and the emission-time downgrade: DetectTier
+// is pinned against all 13 environment cases (every case explicitly sets or
+// unsets TERM, COLORTERM, NO_COLOR and CLICOLOR_FORCE first), and Lower is
+// pinned against the worked examples (Rgb(255,0,0)->196, (128,128,128)->244,
+// (30,144,255)->33, (100,110,105)->242, Indexed(196)->Ansi(9),
+// Indexed(244)->Ansi(8), Indexed(33)->Ansi(6)), Off->Default for every kind,
+// TrueColor unchanged, Indexed256 (Default/Ansi/Indexed unchanged, Rgb
+// lowered), and the tie rules (step tie -> lower step, gray-vs-cube tie ->
+// cube, nearest-Ansi tie -> lower index). FgSeqAt / BgSeqAt are checked at
+// each tier with term-built oracle strings.
+
+import env
+import testing
+import term
+
+import tui
+
+func kind(c: tui.Color): int:
+    ret match c:
+        Default: 0 end
+        Ansi(_): 1 end
+        Indexed(_): 2 end
+        Rgb(_, _, _): 3 end
+    end
+end
+
+func ansi_n(c: tui.Color): int:
+    ret match c:
+        Ansi(n): n end
+        else: -1 end
+    end
+end
+
+func indexed_n(c: tui.Color): int:
+    ret match c:
+        Indexed(n): n end
+        else: -1 end
+    end
+end
+
+func rgb_r(c: tui.Color): int:
+    ret match c:
+        Rgb(r, _, _): r end
+        else: -1 end
+    end
+end
+
+func rgb_g(c: tui.Color): int:
+    ret match c:
+        Rgb(_, g, _): g end
+        else: -1 end
+    end
+end
+
+func rgb_b(c: tui.Color): int:
+    ret match c:
+        Rgb(_, _, b): b end
+        else: -1 end
+    end
+end
+
+func test_construct_kind():
+    testing.AssertEqInt(kind(tui.Color.Default), 0)
+    testing.AssertEqInt(kind(tui.Color.Ansi(3)), 1)
+    testing.AssertEqInt(kind(tui.Color.Indexed(196)), 2)
+    testing.AssertEqInt(kind(tui.Color.Rgb(255, 135, 0)), 3)
+end
+
+func test_payload_round_trip():
+    testing.AssertEqInt(ansi_n(tui.Color.Ansi(3)), 3)
+    testing.AssertEqInt(ansi_n(tui.Color.Ansi(15)), 15)
+    testing.AssertEqInt(indexed_n(tui.Color.Indexed(196)), 196)
+    testing.AssertEqInt(indexed_n(tui.Color.Indexed(0)), 0)
+    testing.AssertEqInt(rgb_r(tui.Color.Rgb(255, 135, 0)), 255)
+    testing.AssertEqInt(rgb_g(tui.Color.Rgb(255, 135, 0)), 135)
+    testing.AssertEqInt(rgb_b(tui.Color.Rgb(255, 135, 0)), 0)
+end
+
+func test_palette_constants():
+    testing.AssertTrue(tui.Black == tui.Color.Ansi(0))
+    testing.AssertTrue(tui.Red == tui.Color.Ansi(1))
+    testing.AssertTrue(tui.Green == tui.Color.Ansi(2))
+    testing.AssertTrue(tui.Yellow == tui.Color.Ansi(3))
+    testing.AssertTrue(tui.Blue == tui.Color.Ansi(4))
+    testing.AssertTrue(tui.Magenta == tui.Color.Ansi(5))
+    testing.AssertTrue(tui.Cyan == tui.Color.Ansi(6))
+    testing.AssertTrue(tui.White == tui.Color.Ansi(7))
+    testing.AssertTrue(tui.BrightBlack == tui.Color.Ansi(8))
+    testing.AssertTrue(tui.BrightRed == tui.Color.Ansi(9))
+    testing.AssertTrue(tui.BrightGreen == tui.Color.Ansi(10))
+    testing.AssertTrue(tui.BrightYellow == tui.Color.Ansi(11))
+    testing.AssertTrue(tui.BrightBlue == tui.Color.Ansi(12))
+    testing.AssertTrue(tui.BrightMagenta == tui.Color.Ansi(13))
+    testing.AssertTrue(tui.BrightCyan == tui.Color.Ansi(14))
+    testing.AssertTrue(tui.BrightWhite == tui.Color.Ansi(15))
+end
+
+func test_fg_seq_ansi_range():
+    mut n := 0
+    until n < 8:
+        testing.AssertEqStr(tui.FgSeq(tui.Color.Ansi(n)), term.Sgr(30 + n))
+        n += 1
+    end
+    until n < 16:
+        testing.AssertEqStr(tui.FgSeq(tui.Color.Ansi(n)), term.Sgr(90 + (n - 8)))
+        n += 1
+    end
+end
+
+func test_bg_seq_ansi_range():
+    mut n := 0
+    until n < 8:
+        testing.AssertEqStr(tui.BgSeq(tui.Color.Ansi(n)), term.Sgr(40 + n))
+        n += 1
+    end
+    until n < 16:
+        testing.AssertEqStr(tui.BgSeq(tui.Color.Ansi(n)), term.Sgr(100 + (n - 8)))
+        n += 1
+    end
+end
+
+func test_fg_seq_other_kinds():
+    testing.AssertEqStr(tui.FgSeq(tui.Color.Default), term.Sgr(term.FgDefault))
+    testing.AssertEqStr(tui.FgSeq(tui.Color.Indexed(0)), term.SeqFg256(0))
+    testing.AssertEqStr(tui.FgSeq(tui.Color.Indexed(196)), term.SeqFg256(196))
+    testing.AssertEqStr(tui.FgSeq(tui.Color.Indexed(15)), term.SeqFg256(15))
+    testing.AssertEqStr(tui.FgSeq(tui.Color.Rgb(255, 135, 0)), term.SeqFgRGB(255, 135, 0))
+    testing.AssertEqStr(tui.FgSeq(tui.Color.Rgb(0, 0, 0)), term.SeqFgRGB(0, 0, 0))
+end
+
+func test_bg_seq_other_kinds():
+    testing.AssertEqStr(tui.BgSeq(tui.Color.Default), term.Sgr(term.BgDefault))
+    testing.AssertEqStr(tui.BgSeq(tui.Color.Indexed(0)), term.SeqBg256(0))
+    testing.AssertEqStr(tui.BgSeq(tui.Color.Indexed(196)), term.SeqBg256(196))
+    testing.AssertEqStr(tui.BgSeq(tui.Color.Indexed(15)), term.SeqBg256(15))
+    testing.AssertEqStr(tui.BgSeq(tui.Color.Rgb(255, 135, 0)), term.SeqBgRGB(255, 135, 0))
+    testing.AssertEqStr(tui.BgSeq(tui.Color.Rgb(0, 0, 0)), term.SeqBgRGB(0, 0, 0))
+end
+
+func test_fg_seq_palette():
+    testing.AssertEqStr(tui.FgSeq(tui.Black), term.Sgr(30))
+    testing.AssertEqStr(tui.FgSeq(tui.White), term.Sgr(37))
+    testing.AssertEqStr(tui.FgSeq(tui.BrightBlack), term.Sgr(90))
+    testing.AssertEqStr(tui.FgSeq(tui.BrightWhite), term.Sgr(97))
+end
+
+func test_equality_equal():
+    testing.AssertTrue(tui.Color.Default == tui.Color.Default)
+    testing.AssertTrue(tui.Color.Ansi(1) == tui.Color.Ansi(1))
+    testing.AssertTrue(tui.Color.Indexed(196) == tui.Color.Indexed(196))
+    testing.AssertTrue(tui.Color.Rgb(255, 0, 0) == tui.Color.Rgb(255, 0, 0))
+    testing.AssertTrue(tui.Black == tui.Color.Ansi(0))
+end
+
+func test_equality_unequal():
+    testing.AssertFalse(tui.Color.Ansi(1) == tui.Color.Ansi(9))
+    testing.AssertFalse(tui.Color.Default == tui.Color.Ansi(7))
+    testing.AssertFalse(tui.Color.Ansi(1) == tui.Color.Indexed(1))
+    testing.AssertFalse(tui.Color.Indexed(1) == tui.Color.Rgb(205, 0, 0))
+    testing.AssertFalse(tui.Color.Indexed(196) == tui.Color.Rgb(255, 0, 0))
+    testing.AssertFalse(tui.Color.Rgb(255, 0, 0) == tui.Color.Rgb(255, 0, 1))
+end
+
+func clear_env():
+    env.Unset("TERM")
+    env.Unset("COLORTERM")
+    env.Unset("NO_COLOR")
+    env.Unset("CLICOLOR_FORCE")
+end
+
+func test_detect_nothing_set():
+    clear_env()
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Ansi16)
+end
+
+func test_detect_term_xterm():
+    clear_env()
+    env.Set("TERM", "xterm")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Ansi16)
+end
+
+func test_detect_term_256color():
+    clear_env()
+    env.Set("TERM", "xterm-256color")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Indexed256)
+end
+
+func test_detect_colorterm_other():
+    clear_env()
+    env.Set("TERM", "xterm")
+    env.Set("COLORTERM", "yes")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Indexed256)
+end
+
+func test_detect_truecolor_with_256term():
+    clear_env()
+    env.Set("TERM", "xterm-256color")
+    env.Set("COLORTERM", "truecolor")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.TrueColor)
+end
+
+func test_detect_24bit():
+    clear_env()
+    env.Set("TERM", "xterm")
+    env.Set("COLORTERM", "24bit")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.TrueColor)
+end
+
+func test_detect_dumb():
+    clear_env()
+    env.Set("TERM", "dumb")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Off)
+end
+
+func test_detect_dumb_beats_colorterm():
+    clear_env()
+    env.Set("TERM", "dumb")
+    env.Set("COLORTERM", "truecolor")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Off)
+end
+
+func test_detect_clicolor_force_dumb():
+    clear_env()
+    env.Set("TERM", "dumb")
+    env.Set("CLICOLOR_FORCE", "1")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Ansi16)
+end
+
+func test_detect_clicolor_force_truecolor():
+    clear_env()
+    env.Set("TERM", "dumb")
+    env.Set("COLORTERM", "truecolor")
+    env.Set("CLICOLOR_FORCE", "1")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.TrueColor)
+end
+
+func test_detect_nocolor_beats_truecolor():
+    clear_env()
+    env.Set("NO_COLOR", "1")
+    env.Set("COLORTERM", "truecolor")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Off)
+end
+
+func test_detect_nocolor_beats_force():
+    clear_env()
+    env.Set("NO_COLOR", "1")
+    env.Set("CLICOLOR_FORCE", "1")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Off)
+end
+
+func test_detect_empty_nocolor():
+    clear_env()
+    env.Set("NO_COLOR", "")
+    env.Set("TERM", "xterm-256color")
+    testing.AssertTrue(tui.DetectTier() == tui.ColorTier.Indexed256)
+end
+
+func test_lower_off():
+    testing.AssertTrue(tui.Lower(tui.Color.Default, tui.ColorTier.Off) == tui.Color.Default)
+    testing.AssertTrue(tui.Lower(tui.Color.Ansi(3), tui.ColorTier.Off) == tui.Color.Default)
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(196), tui.ColorTier.Off) == tui.Color.Default)
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Off) == tui.Color.Default)
+end
+
+func test_lower_truecolor_unchanged():
+    testing.AssertTrue(tui.Lower(tui.Color.Default, tui.ColorTier.TrueColor) == tui.Color.Default)
+    testing.AssertTrue(tui.Lower(tui.Color.Ansi(9), tui.ColorTier.TrueColor) == tui.Color.Ansi(9))
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(196), tui.ColorTier.TrueColor) == tui.Color.Indexed(196))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(30, 144, 255), tui.ColorTier.TrueColor) == tui.Color.Rgb(30, 144, 255))
+end
+
+func test_lower_256_unchanged():
+    testing.AssertTrue(tui.Lower(tui.Color.Default, tui.ColorTier.Indexed256) == tui.Color.Default)
+    testing.AssertTrue(tui.Lower(tui.Color.Ansi(9), tui.ColorTier.Indexed256) == tui.Color.Ansi(9))
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(196), tui.ColorTier.Indexed256) == tui.Color.Indexed(196))
+end
+
+func test_lower_256_rgb_examples():
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Indexed256) == tui.Color.Indexed(196))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(128, 128, 128), tui.ColorTier.Indexed256) == tui.Color.Indexed(244))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(30, 144, 255), tui.ColorTier.Indexed256) == tui.Color.Indexed(33))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(100, 110, 105), tui.ColorTier.Indexed256) == tui.Color.Indexed(242))
+end
+
+func test_lower_16_unchanged():
+    testing.AssertTrue(tui.Lower(tui.Color.Default, tui.ColorTier.Ansi16) == tui.Color.Default)
+    testing.AssertTrue(tui.Lower(tui.Color.Ansi(9), tui.ColorTier.Ansi16) == tui.Color.Ansi(9))
+end
+
+func test_lower_16_indexed_passthrough():
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(0), tui.ColorTier.Ansi16) == tui.Color.Ansi(0))
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(15), tui.ColorTier.Ansi16) == tui.Color.Ansi(15))
+end
+
+func test_lower_16_indexed_examples():
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(196), tui.ColorTier.Ansi16) == tui.Color.Ansi(9))
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(244), tui.ColorTier.Ansi16) == tui.Color.Ansi(8))
+    testing.AssertTrue(tui.Lower(tui.Color.Indexed(33), tui.ColorTier.Ansi16) == tui.Color.Ansi(6))
+end
+
+func test_lower_16_rgb_direct():
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Ansi16) == tui.Color.Ansi(9))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(0, 0, 0), tui.ColorTier.Ansi16) == tui.Color.Ansi(0))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(255, 255, 255), tui.ColorTier.Ansi16) == tui.Color.Ansi(15))
+end
+
+func test_lower_ties():
+    // 115 is midway between cube steps 95 and 135: step tie -> lower step.
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(115, 0, 0), tui.ColorTier.Indexed256) == tui.Color.Indexed(52))
+    // (0,0,12) is equidistant from cube 16 and gray 232: gray-vs-cube tie -> cube.
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(0, 0, 12), tui.ColorTier.Indexed256) == tui.Color.Indexed(16))
+    // 178 is midway between Ansi refs 127 and 229: nearest-Ansi tie -> lower index.
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(178, 178, 178), tui.ColorTier.Ansi16) == tui.Color.Ansi(7))
+end
+
+func test_lower_256_slots_0_15_never_chosen():
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(0, 0, 0), tui.ColorTier.Indexed256) == tui.Color.Indexed(16))
+    testing.AssertTrue(tui.Lower(tui.Color.Rgb(255, 255, 255), tui.ColorTier.Indexed256) == tui.Color.Indexed(231))
+end
+
+func test_fg_seq_at():
+    testing.AssertEqStr(tui.FgSeqAt(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Indexed256), term.SeqFg256(196))
+    testing.AssertEqStr(tui.FgSeqAt(tui.Color.Rgb(255, 0, 0), tui.ColorTier.TrueColor), term.SeqFgRGB(255, 0, 0))
+    testing.AssertEqStr(tui.FgSeqAt(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Ansi16), term.Sgr(91))
+    testing.AssertEqStr(tui.FgSeqAt(tui.Color.Indexed(196), tui.ColorTier.Off), term.Sgr(term.FgDefault))
+    testing.AssertEqStr(tui.FgSeqAt(tui.Color.Ansi(3), tui.ColorTier.Indexed256), term.Sgr(33))
+end
+
+func test_bg_seq_at():
+    testing.AssertEqStr(tui.BgSeqAt(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Indexed256), term.SeqBg256(196))
+    testing.AssertEqStr(tui.BgSeqAt(tui.Color.Rgb(255, 0, 0), tui.ColorTier.TrueColor), term.SeqBgRGB(255, 0, 0))
+    testing.AssertEqStr(tui.BgSeqAt(tui.Color.Rgb(255, 0, 0), tui.ColorTier.Ansi16), term.Sgr(101))
+    testing.AssertEqStr(tui.BgSeqAt(tui.Color.Indexed(196), tui.ColorTier.Off), term.Sgr(term.BgDefault))
+    testing.AssertEqStr(tui.BgSeqAt(tui.Color.Ansi(3), tui.ColorTier.Indexed256), term.Sgr(43))
+end
+
+func main:
+    test_construct_kind()
+    test_payload_round_trip()
+    test_palette_constants()
+    test_fg_seq_ansi_range()
+    test_bg_seq_ansi_range()
+    test_fg_seq_other_kinds()
+    test_bg_seq_other_kinds()
+    test_fg_seq_palette()
+    test_equality_equal()
+    test_equality_unequal()
+    test_detect_nothing_set()
+    test_detect_term_xterm()
+    test_detect_term_256color()
+    test_detect_colorterm_other()
+    test_detect_truecolor_with_256term()
+    test_detect_24bit()
+    test_detect_dumb()
+    test_detect_dumb_beats_colorterm()
+    test_detect_clicolor_force_dumb()
+    test_detect_clicolor_force_truecolor()
+    test_detect_nocolor_beats_truecolor()
+    test_detect_nocolor_beats_force()
+    test_detect_empty_nocolor()
+    test_lower_off()
+    test_lower_truecolor_unchanged()
+    test_lower_256_unchanged()
+    test_lower_256_rgb_examples()
+    test_lower_16_unchanged()
+    test_lower_16_indexed_passthrough()
+    test_lower_16_indexed_examples()
+    test_lower_16_rgb_direct()
+    test_lower_ties()
+    test_lower_256_slots_0_15_never_chosen()
+    test_fg_seq_at()
+    test_bg_seq_at()
+    ret testing.Summary()
+end

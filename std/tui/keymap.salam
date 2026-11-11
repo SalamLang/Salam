@@ -1,0 +1,568 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Keymap: an opt-in table of key (and key-sequence) bindings.
+ *
+ * The library imposes no bindings of its own; this is the value an
+ * application fills in and (in screen.salam) a Screen consults after the
+ * widget tree declines an event. A Keymap is self-contained: it never holds
+ * a Screen or a widget. The screen arrives at call time as a Screen*
+ * argument to handle, which is how an action reaches live screen state.
+ *
+ * Representation. A single trie keyed by a canonical string. Each node is
+ * a KeyNode; node 0 is the root and children are stored as indices into
+ * the `nodes` vector (`children: HashMap<str, int>`). A single key is one
+ * average-O(1) hash probe at the root; a sequence walks one node per event
+ * through a single `pending` node index. Children are always read with
+ * `get_or(id, -1)` because HashMap.get returns a zeroed value on a miss,
+ * which would alias node 0; node 0 stays reserved for the root. The root
+ * node is created on the first bind, so a zero-valued Keymap (as a Screen
+ * field default) is usable directly.
+ *
+ * Key identity. `key_id` is THE identity function: two keys are the same
+ * binding if and only if its output matches. It encodes `code`, `ctrl`,
+ * `alt`, `shift`, and — for a KeyChar — `ch`; for a decoded-but-unknown
+ * sequence (KeyUnknown) it also includes the raw bytes, so distinct
+ * undecodable sequences stay distinct. Fields are joined with US (0x1F),
+ * which cannot appear in `ch` for keys that came from term.Decode (control
+ * bytes decode to ctrl+char). Keys built by hand with control characters in
+ * `ch` are out of contract. Trap: space arrives as KeySpace (code 6, ch
+ * " "), while KeyChar with ch " " is only Ctrl+Space; `code` in the
+ * encoding keeps the two apart.
+ *
+ * Sequences and deferral. `pending` is -1 (no prefix in progress) or a node
+ * index. A node that has both bindings and children defers: it fires only
+ * when the next key breaks the path (so avoid binding both a key and a longer
+ * sequence that starts with it). A pending prefix expires only when
+ * pending_timeout_ms is set and the next KeyEvent arrives later than that;
+ * non-key events never evaluate the timeout, but the time they take counts.
+ * A key that does not continue a pending prefix resets `pending` and is
+ * reprocessed from the root. Esc and Ctrl+C fall out of this path: if nothing
+ * matches they leave `pending` reset and return false, so the loop's
+ * auto-stop is unaffected.
+ *
+ * Scope. A binding carries a widget ID; NoWidget means global. At a
+ * terminal node the focused widget and its ancestors are checked first
+ * (nearest wins), then the global binding. This walk is O(tree depth) and
+ * only runs at nodes that carry scoped bindings; a global-only map is
+ * strictly O(1) per key.
+ *
+ * Ownership. Salam has no move semantics and a Keymap's fields hold raw
+ * Vector/HashMap pointers, so a Keymap must never be copied (`mut b := a` is
+ * forbidden): two owners would alias the same buffers and double-free.
+ * Create it with NewKeymap, release it with free, and never store a Screen
+ * or widget inside it.
+ *
+ * Re-entrancy. An action may rebind the keymap or swap it out (mode
+ * switching) while handle runs. handle resolves a key — every read and write
+ * of `nodes` and `pending` — before it invokes an action. Once an action is
+ * invoked the key is resolved and is never reprocessed from the root, and no
+ * trie state is touched afterward; this holds even when the action reports
+ * the key unconsumed.
+ *
+ * Actions are function values of type `func (Screen*, Event) bool`; only
+ * lambda literals can be stored in a function value, so both application
+ * actions and library defaults are lambdas. The screen is a pointer so an
+ * action can move focus and mark the screen dirty.
+ *
+ * Default map. NewDefaultKeymap builds an opt-in map of exactly five
+ * bindings: Tab -> focus_next, Up -> focus_up, Down -> focus_down, Left ->
+ * focus_left, Right -> focus_right. Nothing installs it: NewScreen and
+ * start() touch no bindings, so an app opts in with set_keymap or builds its
+ * own map. Shift+Tab is deliberately absent: Salam decodes the backtab
+ * sequence to KeyUnknown, and a binding here would need an escape literal; an
+ * app may bind term.Decode(its own sequence) if its terminal sends one.
+ *
+ * Vim preset. NewVimKeymap is opt-in in the same way and is a superset of
+ * the default five: it adds h/j/k/l for the same four directions, "gg" and
+ * "G" for the ends of the focused widget's column (repeated focus_up and
+ * focus_down, so the column is preserved), Esc for pop_focus while a pushed
+ * focus remains, and "/" for the application's own on_search action. Enter
+ * and Space are deliberately absent: dispatch offers every key to the focused
+ * widget first, where Button, Checkbox, List and Modal already act on them,
+ * so a row here would fire only for widgets that declined the key. There is
+ * no generic activation to bind either: Widget has no activate method and a
+ * dyn Widget cannot be downcast.
+ */
+
+package tui
+
+import str
+import sync
+import term
+
+// Sep is the field separator of the canonical key identity. US (0x1F)
+// cannot occur in a decoded key's `ch`, so the encoding is unambiguous for
+// every key term.Decode produces.
+const Sep := "\x1f"
+
+// KeyOverride is one binding: the action plus the widget it is scoped to.
+// NoWidget means the global scope. One entry per widget per node keeps
+// resolution tie-free; a rebind replaces the entry in place.
+struct KeyOverride:
+    pub widget: int = NoWidget
+    pub action: func (Screen*, Event) bool = (_screen: Screen*, _event: Event): ret false end
+end
+
+// KeyNode is one node of the trie. `children` maps a canonical key id to the
+// index of the child node; `bindings` holds this node's bindings.
+struct KeyNode:
+    pub children: HashMap<str, int> = HashMap {} as HashMap<str, int>
+    pub bindings: Vector<KeyOverride> = Vector {}
+end
+
+@en "Keymap"
+@fa "نگاشت کلید"
+/// A table of key and key-sequence bindings. Build it with NewKeymap,
+/// NewDefaultKeymap or NewVimKeymap (or empty with `Keymap {}`), fill it with
+/// bind and its variants, feed events to handle, and release it with free.
+/// Never copy a Keymap value.
+pub struct Keymap:
+    // nodes[0] is the root; every child index is >= 1 and points into nodes.
+    // The root is created by ensure_root on the first bind.
+    nodes: Vector<KeyNode> = Vector {}
+    // pending is the node index a sequence is parked on, or -1 for none.
+    pending: int = -1
+
+    @en "pending_timeout_ms"
+    @fa "مهلت توالی به میلی‌ثانیه"
+    /// How long a pending key sequence may wait for its next key, in
+    /// milliseconds. 0 (the default) never expires a prefix, which is the
+    /// behavior without a timeout. The timeout is evaluated lazily, on the
+    /// next KeyEvent only; non-key events never expire a prefix. Set it
+    /// directly (keymap.pending_timeout_ms = 700); there is no constructor.
+    pub pending_timeout_ms: int = 0
+
+    @en "pending_since_ms"
+    @fa "آغاز انتظار توالی به میلی‌ثانیه"
+    /// The clock reading, in milliseconds, when the current pending sequence
+    /// started waiting; it is refreshed on every prefix step and is 0 when
+    /// nothing is pending. handle maintains it; an application sets
+    /// pending_timeout_ms instead.
+    pub pending_since_ms: int = 0
+
+    @en "bind"
+    @fa "پیوند کلید"
+    /// Binds one key to an action in the global scope. A later bind of the
+    /// same key replaces this one (last write wins).
+    pub func bind(key: term.Key, action: func (Screen*, Event) bool):
+        this.bind_for(NoWidget, key, action)
+    end
+
+    @en "bind_for"
+    @fa "پیوند کلید برای ویجت"
+    /// Binds one key to an action for the widget with this ID: the action
+    /// runs when that widget (or one of its descendants) has the focus.
+    /// NoWidget binds globally.
+    pub func bind_for(widget_id: int, key: term.Key, action: func (Screen*, Event) bool):
+        this.ensure_root()
+        id := key_id(key)
+        mut child := this.nodes.ref(0)[0].children.get_or(id, -1)
+        if child < 0:
+            this.nodes.push(KeyNode {})
+            child = this.nodes.len() - 1
+            this.nodes.ref(0)[0].children.put(id, child)
+        end
+        put_override(this.nodes.ref(child), widget_id, action)
+        this.pending = -1
+    end
+
+    @en "bind_seq"
+    @fa "پیوند توالی"
+    /// Binds a key sequence to an action in the global scope. seq is decoded
+    /// per rune; an empty string is ignored. A later bind of the same
+    /// sequence replaces this one.
+    pub func bind_seq(seq: str, action: func (Screen*, Event) bool):
+        this.bind_for_seq(NoWidget, seq, action)
+    end
+
+    @en "bind_for_seq"
+    @fa "پیوند توالی برای ویجت"
+    /// Binds a key sequence to an action for the widget with this ID.
+    /// NoWidget binds globally. An empty string is ignored.
+    pub func bind_for_seq(widget_id: int, seq: str, action: func (Screen*, Event) bool):
+        if str.CharCount(seq) == 0:
+            ret
+        end
+        node := this.node_for_seq(seq)
+        put_override(this.nodes.ref(node), widget_id, action)
+        this.pending = -1
+    end
+
+    @en "unbind"
+    @fa "لغو پیوند کلید"
+    /// Removes the global binding for one key. A no-op when there is none.
+    /// Scoped bindings are not touched (use bind_for to replace one, or
+    /// unbind_for to drop one). unbind_for(NoWidget, key) does the same work.
+    pub func unbind(key: term.Key):
+        this.unbind_for(NoWidget, key)
+    end
+
+    @en "unbind_for"
+    @fa "لغو پیوند کلید برای ویجت"
+    /// Removes the binding for one widget on one key: bind_for's inverse.
+    /// Only that widget's override is removed, so the global binding and every
+    /// other widget's override on the same key still apply, and no trie node
+    /// is deleted. A no-op when the map is empty, the key was never bound, or
+    /// the widget never bound it. NoWidget removes the global binding, so
+    /// unbind_for(NoWidget, key) is unbind(key). Resets a pending sequence.
+    pub func unbind_for(widget_id: int, key: term.Key):
+        this.pending = -1
+        if this.nodes.len() == 0:
+            ret
+        end
+        child := this.nodes.ref(0)[0].children.get_or(key_id(key), -1)
+        if child < 0:
+            ret
+        end
+        drop_override(this.nodes.ref(child), widget_id)
+    end
+
+    @en "unbind_for_seq"
+    @fa "لغو پیوند توالی برای ویجت"
+    /// Removes one widget's binding for one key sequence: bind_for_seq's
+    /// inverse. Only that widget's override is removed, so the global sequence
+    /// and every other widget's override on the same sequence still apply. The
+    /// trie is walked read-only, so no node is created or deleted and a later
+    /// bind_for_seq on the same sequence still works. A no-op when the map is
+    /// empty, the sequence was never bound, or the widget never bound it;
+    /// NoWidget removes the global sequence binding, and an empty string is
+    /// ignored. Resets a pending sequence.
+    pub func unbind_for_seq(widget_id: int, seq: str):
+        this.pending = -1
+        if str.CharCount(seq) == 0 or this.nodes.len() == 0:
+            ret
+        end
+        node := this.find_node_for_seq(seq)
+        if node < 0:
+            ret
+        end
+        drop_override(this.nodes.ref(node), widget_id)
+    end
+
+    @en "handle"
+    @fa "پردازش کلید"
+    /// Handles one event against the bindings. Only KeyEvents reach the
+    /// trie; every other kind returns false and leaves `pending` untouched.
+    /// Returns true when an action ran. Reads resolve the key before any
+    /// action is invoked; nothing touches the trie after an invocation.
+    pub func handle(screen: Screen*, event: Event): bool:
+        if event.kind != KeyEvent:
+            ret false
+        end
+        if this.nodes.len() == 0:
+            ret false
+        end
+        id := key_id(event.key)
+
+        // Lazy sequence timeout. A pending prefix is abandoned only here, on
+        // the next KeyEvent, when it has waited longer than pending_timeout_ms.
+        // Time taken by non-key events in between still counts, but they never
+        // expire a prefix themselves, and nothing fires from the timeout alone:
+        // the arriving key is simply processed as a fresh start.
+        if this.pending >= 0 and this.pending_timeout_ms > 0:
+            now := sync.NowMs() as int
+            if now - this.pending_since_ms > this.pending_timeout_ms:
+                this.pending = -1
+                this.pending_since_ms = 0
+            end
+        end
+
+        if this.pending >= 0:
+            p := this.pending
+            this.pending = -1
+            this.pending_since_ms = 0
+            next := this.nodes.ref(p)[0].children.get_or(id, -1)
+            if next >= 0:
+                // A node with children defers, even when it has a binding.
+                if this.nodes.ref(next)[0].children.size() > 0:
+                    this.pending = next
+                    this.pending_since_ms = sync.NowMs() as int
+                    ret false
+                end
+                // The sequence ends here: resolve, then invoke and return
+                // immediately. An invoked action resolves the key, so this
+                // never falls through, even when the action returns false.
+                e_next := this.resolve(next, screen)
+                if e_next >= 0:
+                    act := this.nodes.ref(next)[0].bindings.get(e_next).action
+                    ret act(screen, event)
+                end
+            else:
+                // The key breaks the pending prefix: a deferred binding at p
+                // fires if one applies (that is the "fires only when the next
+                // key breaks the path" rule), and resolves the key.
+                e_prev := this.resolve(p, screen)
+                if e_prev >= 0:
+                    act := this.nodes.ref(p)[0].bindings.get(e_prev).action
+                    ret act(screen, event)
+                end
+            end
+            // resolve found nothing, so no action ran: it is safe to read and
+            // write the trie again, and the key is reprocessed from the root.
+        end
+
+        // Start (or restart) from the root.
+        root_child := this.nodes.ref(0)[0].children.get_or(id, -1)
+        if root_child < 0:
+            ret false
+        end
+        if this.nodes.ref(root_child)[0].children.size() > 0:
+            this.pending = root_child
+            this.pending_since_ms = sync.NowMs() as int
+            ret false
+        end
+        e_root := this.resolve(root_child, screen)
+        if e_root >= 0:
+            act := this.nodes.ref(root_child)[0].bindings.get(e_root).action
+            ret act(screen, event)
+        end
+        ret false
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    /// Releases every node's children map and binding vector, then the node
+    /// storage itself. The actions and their captured values are the
+    /// caller's; only the trie is freed. Call once.
+    pub func free():
+        repeat this.nodes.len() in i:
+            node := this.nodes.get(i)
+            node.children.free()
+            node.bindings.free()
+        end
+        this.nodes.free()
+        this.pending = -1
+    end
+
+    // ensure_root creates the root node (index 0) when the keymap is still
+    // zero-valued, so a bind on a `Keymap {}` (a Screen field default) works.
+    func ensure_root():
+        if this.nodes.len() == 0:
+            this.nodes.push(KeyNode {})
+        end
+    end
+
+    // node_for_seq walks the trie from the root, creating nodes as needed,
+    // and returns the index of the terminal node for seq. seq must be
+    // non-empty. A fresh reference is taken after every push because the
+    // nodes vector may reallocate.
+    func node_for_seq(seq: str): int:
+        this.ensure_root()
+        mut cur := 0
+        n := str.CharCount(seq)
+        repeat n in i:
+            id := key_id(term.Decode(str.CharSubstr(seq, i, 1)))
+            mut child := this.nodes.ref(cur)[0].children.get_or(id, -1)
+            if child < 0:
+                this.nodes.push(KeyNode {})
+                child = this.nodes.len() - 1
+                this.nodes.ref(cur)[0].children.put(id, child)
+            end
+            cur = child
+        end
+        ret cur
+    end
+
+    // find_node_for_seq walks the trie without creating nodes and returns the
+    // terminal node for seq, or -1 when any step is missing. seq must be
+    // non-empty.
+    func find_node_for_seq(seq: str): int:
+        mut cur := 0
+        n := str.CharCount(seq)
+        repeat n in i:
+            id := key_id(term.Decode(str.CharSubstr(seq, i, 1)))
+            child := this.nodes.ref(cur)[0].children.get_or(id, -1)
+            if child < 0:
+                ret -1
+            end
+            cur = child
+        end
+        ret cur
+    end
+
+    // resolve returns the index, in node idx's bindings, of the binding that
+    // applies to the focused widget or one of its ancestors (nearest wins),
+    // then the global binding, or -1 when none applies. It is read-only: it
+    // never invokes an action, so the caller may keep reading the trie
+    // afterward when it returns -1.
+    func resolve(idx: int, screen: Screen*): int:
+        node := this.nodes.ref(idx)
+        mut from := screen[0].focused_id()
+        if not screen[0].tree.valid(from):
+            from = RootId
+        end
+        mut cur := from
+        until cur != NoWidget:
+            i := override_index(node, cur)
+            if i >= 0:
+                ret i
+            end
+            cur = screen[0].tree.parent(cur)
+        end
+        ret override_index(node, NoWidget)
+    end
+end
+
+// key_id is the single canonical identity of a key (see the module comment).
+func key_id(k: term.Key): str:
+    mut flags := k.ctrl ? "1" : "0"
+    flags = flags + (k.alt ? "1" : "0")
+    flags = flags + (k.shift ? "1" : "0")
+    if k.code == term.KeyChar:
+        ret "c" + Sep + k.ch + Sep + flags
+    end
+    if k.code == term.KeyUnknown:
+        ret "k" + Sep + k.code + Sep + flags + Sep + k.raw
+    end
+    ret "k" + Sep + k.code + Sep + flags
+end
+
+// override_index returns the index of the binding at node for widget, or -1.
+func override_index(node: KeyNode*, widget: int): int:
+    repeat node[0].bindings.len() in i:
+        if node[0].bindings.get(i).widget == widget:
+            ret i
+        end
+    end
+    ret -1
+end
+
+// put_override stores action for widget at node, replacing an existing entry
+// for the same widget so there is exactly one binding per widget per node.
+func put_override(node: KeyNode*, widget: int, action: func (Screen*, Event) bool):
+    repeat node[0].bindings.len() in i:
+        if node[0].bindings.get(i).widget == widget:
+            node[0].bindings.set(i, KeyOverride { widget = widget, action = action })
+            ret
+        end
+    end
+    node[0].bindings.push(KeyOverride { widget = widget, action = action })
+end
+
+// drop_override removes the binding for widget at node, if present.
+func drop_override(node: KeyNode*, widget: int):
+    repeat node[0].bindings.len() in i:
+        if node[0].bindings.get(i).widget == widget:
+            _ := node[0].bindings.remove_at(i)
+            ret
+        end
+    end
+end
+
+// vim_home moves the focus to the top of the focused widget's column and
+// reports whether it moved: one focus_up per row, stopping when the direction
+// is exhausted. Repeated moves rather than an ordinal jump preserve the
+// column, and the extra changes coalesce into one repaint because `dirty` is
+// a flag.
+func vim_home(screen: Screen*, _event: Event): bool:
+    mut moved := false
+    // `until` is the language's while loop, so the condition performs one
+    // move per iteration and the body only records that it happened.
+    until screen[0].focus_up():
+        moved = true
+    end
+    ret moved
+end
+
+// vim_end is vim_home downward: it moves the focus to the bottom of the
+// focused widget's column and reports whether it moved.
+func vim_end(screen: Screen*, _event: Event): bool:
+    mut moved := false
+    until screen[0].focus_down():
+        moved = true
+    end
+    ret moved
+end
+
+// vim_back pops one pushed focus and reports the key consumed. At depth one
+// (or with nothing focused) it returns false before touching the stack, so
+// Esc falls through to the application instead of leaving the screen with no
+// focused widget.
+func vim_back(screen: Screen*, _event: Event): bool:
+    if screen[0].focus_stack.len() <= 1:
+        ret false
+    end
+    ret screen[0].pop_focus()
+end
+
+@en "NewKeymap"
+@fa "نگاشت کلید جدید"
+/// Creates an empty keymap. Feed it keys with bind and the bind_* variants
+/// and release it with free. The root node is created on the first bind.
+pub func NewKeymap(): Keymap:
+    ret Keymap {}
+end
+
+@en "NewDefaultKeymap"
+@fa "نگاشت کلید پیش‌فرض"
+/// Creates an opt-in keymap with the library's default focus bindings:
+/// exactly five rows — Tab moves the focus to the next widget, and Up, Down,
+/// Left and Right move it in those directions. Nothing installs this map on
+/// its own; pass it to set_keymap (or bind through a screen's keymap field)
+/// to use it. Shift+Tab is deliberately not bound: Salam decodes the
+/// backtab sequence to KeyUnknown.
+pub func NewDefaultKeymap(): Keymap:
+    focus_next_action := (screen: Screen*, _event: Event): ret screen[0].focus_next() end
+    focus_up_action := (screen: Screen*, _event: Event): ret screen[0].focus_up() end
+    focus_down_action := (screen: Screen*, _event: Event): ret screen[0].focus_down() end
+    focus_left_action := (screen: Screen*, _event: Event): ret screen[0].focus_left() end
+    focus_right_action := (screen: Screen*, _event: Event): ret screen[0].focus_right() end
+
+    mut km := NewKeymap()
+    km.bind(term.Key { code = term.KeyTab }, focus_next_action)
+    km.bind(term.Key { code = term.KeyUp }, focus_up_action)
+    km.bind(term.Key { code = term.KeyDown }, focus_down_action)
+    km.bind(term.Key { code = term.KeyLeft }, focus_left_action)
+    km.bind(term.Key { code = term.KeyRight }, focus_right_action)
+    ret km
+end
+
+@en "NewVimKeymap"
+@fa "نگاشت کلید ویم"
+/// Creates an opt-in vim-style preset. It is a superset of NewDefaultKeymap,
+/// so Tab and the four arrows keep working, and it adds h, j, k and l for
+/// the same four directions; "gg" and "G" move to the top and the bottom of
+/// the focused widget's column, by repeated directional moves, so the column
+/// is kept; Esc pops the focus stack, but only while a pushed focus remains,
+/// and is reported unconsumed at the root so the application still sees it;
+/// and "/" runs on_search, the application's own action, whose boolean is the
+/// dispatch result. Enter and Space are deliberately not bound: dispatch
+/// offers every key to the focused widget first, where Button, Checkbox, List
+/// and Modal already act on them, and Widget has no generic activation to
+/// bind. A focused Input consumes "/" before the keymap sees it. Install the
+/// map with set_keymap, which takes ownership: never copy or free it
+/// afterward.
+pub func NewVimKeymap(on_search: func (Screen*, Event) bool): Keymap:
+    focus_up_action := (screen: Screen*, _event: Event): ret screen[0].focus_up() end
+    focus_down_action := (screen: Screen*, _event: Event): ret screen[0].focus_down() end
+    focus_left_action := (screen: Screen*, _event: Event): ret screen[0].focus_left() end
+    focus_right_action := (screen: Screen*, _event: Event): ret screen[0].focus_right() end
+    // Salam has no first-class function values; each named action needs a wrapper.
+    vim_home_action := (screen: Screen*, event: Event): ret vim_home(screen, event) end
+    vim_end_action := (screen: Screen*, event: Event): ret vim_end(screen, event) end
+    vim_back_action := (screen: Screen*, event: Event): ret vim_back(screen, event) end
+
+    mut km := NewDefaultKeymap()
+    km.bind(term.Decode("h"), focus_left_action)
+    km.bind(term.Decode("j"), focus_down_action)
+    km.bind(term.Decode("k"), focus_up_action)
+    km.bind(term.Decode("l"), focus_right_action)
+    km.bind_seq("gg", vim_home_action)
+    km.bind(term.Decode("G"), vim_end_action)
+    km.bind(term.Key { code = term.KeyEscape }, vim_back_action)
+    km.bind(term.Decode("/"), on_search)
+    ret km
+end

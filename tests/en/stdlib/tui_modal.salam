@@ -1,0 +1,705 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Tests for the Modal overlay: the frame vectors (MD01-MD05, including the
+// title clip), the scrim (SC01: outside cells keep their glyph and gain DIM,
+// dialog cells are not touched), Esc (close, on_close, closable, a child that
+// consumes it), focus and hit predicates, mouse routing (the scrim consumes,
+// the dialog passes to its child), the hidden state, the Screen protocol
+// (push_focus then raise_subtree to open, unraise_subtree then pop_focus to
+// close, and the nested-modal Esc rule), the shared state that makes calls
+// after Screen.add reach the stored copy (open, close, set_title, Esc), and
+// the sizing preferences. Keys and clicks are built from the exact bytes a
+// terminal sends. Cell styles are compared with StyleEq, never as
+// hand-written escapes.
+
+import term
+import testing
+
+import tui
+
+// The child and the base widgets. Each records its tag when it receives an
+// event, or paints, so a test can read which widgets were reached and in what
+// order. Its own rect is kept in a global, since a dyn Widget cannot be read
+// back by the test.
+mut events_log := ""
+mut paint_log := ""
+mut child_box := tui.Rect {}
+mut closes := 0
+mut inner_closes := 0
+mut outer_closes := 0
+
+struct Probe:
+    pub use tui.BaseWidget
+    pub tag: str = ""
+    pub can_focus: bool = false
+    pub consumes_esc: bool = false
+    pub consumes_mouse: bool = false
+
+    pub func set_bounds(bounds: tui.Rect):
+        this.BaseWidget.set_bounds(bounds)
+        child_box = bounds
+    end
+
+    pub func focusable(): bool:
+        ret this.can_focus
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        events_log = events_log + this.tag
+        if event.is_key(term.KeyEscape):
+            ret this.consumes_esc
+        end
+        ret event.kind == tui.MouseEvent and this.consumes_mouse
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        _ := buf
+        _ := bounds
+        paint_log = paint_log + this.tag
+    end
+end
+
+// The root of every Screen in this file. It draws nothing.
+struct Root:
+    pub use tui.BaseWidget
+end
+
+func closed():
+    closes = closes + 1
+end
+
+func inner_closed():
+    inner_closes = inner_closes + 1
+end
+
+func outer_closed():
+    outer_closes = outer_closes + 1
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(code: int): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
+end
+
+// A left-button press as the terminal reports it: SGR coordinates are
+// 1-based, so cell (x, y) arrives as column x + 1, row y + 1.
+func click(x: int, y: int): tui.Event:
+    seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
+    ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
+end
+
+func rep(s: str, n: int): str:
+    mut out := ""
+    repeat n:
+        out = out + s
+    end
+    ret out
+end
+
+// A Modal with the given title and size, opened over bounds w by h, with a
+// probe child placed inside the ring.
+func openModal(w: int, h: int, size: tui.ModalSize, title: str): tui.Modal:
+    m := tui.NewModal()
+    m.set_title(title)
+    m.set_size(size)
+    m.add(Probe { tag = "c" })
+    m.set_bounds(rect(0, 0, w, h))
+    m.open()
+    ret m
+end
+
+// MD01: a 18 by 5 dialog with the title Quit. The title sits at column 2
+// with one space each side.
+func test_md01_frame_with_title():
+    mut b := tui.NewBuffer(18, 5)
+    m := openModal(18, 5, tui.ModalSize.Fixed(18, 5), "Quit")
+    m.render(b, rect(0, 0, 18, 5))
+    testing.AssertEqStr(b.row_text(0), "┌─ Quit " + rep("─", 9) + "┐")
+    testing.AssertEqStr(b.row_text(1), "│" + rep(" ", 16) + "│")
+    testing.AssertEqStr(b.row_text(4), "└" + rep("─", 16) + "┘")
+    testing.AssertEqInt(child_box.x, 1)
+    testing.AssertEqInt(child_box.y, 1)
+    testing.AssertEqInt(child_box.width, 16)
+    testing.AssertEqInt(child_box.height, 3)
+    b.free()
+end
+
+// MD02: a Percent size that floors below 20 by 5 is raised to 20 by 5 and
+// centred: x = (30 - 20) / 2, y = (10 - 5) / 2.
+func test_md02_percent_floor_is_20_by_5():
+    mut b := tui.NewBuffer(30, 10)
+    m := openModal(30, 10, tui.ModalSize.Percent(10, 10), "")
+    m.render(b, rect(0, 0, 30, 10))
+    testing.AssertEqStr(b.row_text(2), rep(" ", 5) + "┌" + rep("─", 18) + "┐" + rep(" ", 5))
+    testing.AssertEqStr(b.row_text(6), rep(" ", 5) + "└" + rep("─", 18) + "┘" + rep(" ", 5))
+    testing.AssertEqInt(child_box.x, 6)
+    testing.AssertEqInt(child_box.y, 3)
+    testing.AssertEqInt(child_box.width, 18)
+    testing.AssertEqInt(child_box.height, 3)
+    b.free()
+end
+
+// MD03: a 3 by 3 ring with a 1 by 1 child.
+func test_md03_three_by_three_ring():
+    mut b := tui.NewBuffer(3, 3)
+    m := openModal(3, 3, tui.ModalSize.Fixed(3, 3), "")
+    m.render(b, rect(0, 0, 3, 3))
+    testing.AssertEqStr(b.row_text(0), "┌─┐")
+    testing.AssertEqStr(b.row_text(1), "│ │")
+    testing.AssertEqStr(b.row_text(2), "└─┘")
+    testing.AssertEqInt(child_box.width, 1)
+    testing.AssertEqInt(child_box.height, 1)
+    b.free()
+end
+
+// MD04: a 2 by 2 dialog is corners only, below the ring's 2 by 2 minimum
+// there are no edges, and its child is 0 by 0.
+func test_md04_two_by_two_corners_only():
+    mut b := tui.NewBuffer(2, 2)
+    m := openModal(2, 2, tui.ModalSize.Fixed(2, 2), "")
+    m.render(b, rect(0, 0, 2, 2))
+    testing.AssertEqStr(b.row_text(0), "┌┐")
+    testing.AssertEqStr(b.row_text(1), "└┘")
+    testing.AssertEqInt(child_box.width, 0)
+    testing.AssertEqInt(child_box.height, 0)
+    b.free()
+end
+
+// MD05: a 12 by 3 dialog. The title is cut to width - 5 = 7 characters.
+func test_md05_title_clipped_to_width_minus_five():
+    mut b := tui.NewBuffer(12, 3)
+    m := openModal(12, 3, tui.ModalSize.Fixed(12, 3), "Confirm exit")
+    m.render(b, rect(0, 0, 12, 3))
+    testing.AssertEqStr(b.row_text(0), "┌─ Confirm ┐")
+    testing.AssertEqStr(b.row_text(1), "│" + rep(" ", 10) + "│")
+    testing.AssertEqStr(b.row_text(2), "└" + rep("─", 10) + "┘")
+    b.free()
+end
+
+// SC01: a Fixed 4 by 3 dialog centred in an 8 by 3 screen sits at x = 2.
+// Outside cells keep their glyph and gain DIM on top of their own style.
+// The dialog's interior keeps its style.
+func test_sc01_scrim_dims_outside_only():
+    base := tui.Style { fg = tui.Red }
+    dimmed := tui.Style { fg = tui.Red, dim = true }
+    mut b := tui.NewBuffer(8, 3)
+    b.fill(rect(0, 0, 8, 3), "x", base)
+    m := openModal(8, 3, tui.ModalSize.Fixed(4, 3), "")
+    m.render(b, rect(0, 0, 8, 3))
+    testing.AssertEqStr(b.row_text(0), "xx┌──┐xx")
+    testing.AssertEqStr(b.row_text(1), "xx│xx│xx")
+    testing.AssertEqStr(b.row_text(2), "xx└──┘xx")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, dimmed))
+    testing.AssertTrue(tui.StyleEq(b.get(7, 2).style, dimmed))
+    testing.AssertTrue(tui.StyleEq(b.get(3, 1).style, base))
+    b.free()
+end
+
+// A cell with several style fields (bold and a colour, as Text or Button
+// paints) keeps every one of them; only DIM is added.
+func test_scrim_keeps_every_style_field():
+    base := tui.Style { bold = true, fg = tui.Red }
+    dimmed := tui.Style { bold = true, fg = tui.Red, dim = true }
+    mut b := tui.NewBuffer(8, 3)
+    b.fill(rect(0, 0, 8, 3), "x", base)
+    m := openModal(8, 3, tui.ModalSize.Fixed(4, 3), "")
+    m.render(b, rect(0, 0, 8, 3))
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, dimmed))
+    testing.AssertTrue(tui.StyleEq(b.get(3, 1).style, base))
+    b.free()
+end
+
+// A scrim over a cell with no style yet is DIM alone, the StyleSgr of DIM.
+func test_scrim_on_unstyled_cell_is_dim_alone():
+    mut b := tui.NewBuffer(8, 3)
+    m := openModal(8, 3, tui.ModalSize.Fixed(4, 3), "")
+    m.render(b, rect(0, 0, 8, 3))
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { dim = true }))
+    testing.AssertEqStr(b.get(0, 0).ch, " ")
+    b.free()
+end
+
+// A Percent(50, 40) dialog on an 8 by 3 screen degenerates to the whole
+// bounds: 4 floors to 20, clamps to the 8 columns; 1 floors to 5, clamps
+// to the 3 rows. No cell is left to dim.
+func test_percent_in_small_bounds_fills_bounds():
+    mut b := tui.NewBuffer(8, 3)
+    m := openModal(8, 3, tui.ModalSize.Percent(50, 40), "")
+    m.render(b, rect(0, 0, 8, 3))
+    testing.AssertEqStr(b.row_text(0), "┌──────┐")
+    testing.AssertEqStr(b.row_text(2), "└──────┘")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
+    b.free()
+end
+
+// The scrim is a field copy, so painting builds no SGR. The bytes appear only
+// when the buffer emits the frame — the cost model the old map existed for.
+func test_scrim_painting_builds_nothing():
+    area := rect(0, 0, 8, 3)
+    mut b := tui.NewBuffer(8, 3)
+    defer b.free()
+    m := openModal(8, 3, tui.ModalSize.Fixed(4, 3), "")
+    b.fill(area, "x", tui.Style { fg = tui.Red })
+    before := tui.SgrBuilds()
+    m.render(b, area)
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    // The dimmed cells carry the underlying style plus DIM, per cell.
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { fg = tui.Red, dim = true }))
+    testing.AssertTrue(tui.StyleEq(b.get(6, 2).style, tui.Style { fg = tui.Red, dim = true }))
+    // The interior keeps its style untouched.
+    testing.AssertTrue(tui.StyleEq(b.get(3, 1).style, tui.Style { fg = tui.Red }))
+    _ := b.ansi()
+    testing.AssertTrue(tui.SgrBuilds() > before)
+end
+
+// Esc: the first press closes while closable, fires on_close and is
+// consumed. Once closed, a press is not consumed.
+func test_esc_closes_and_fires_on_close():
+    closes = 0
+    mut m := openModal(20, 10, tui.ModalSize.Fixed(10, 4), "")
+    m.on_close = (): closed() end
+    testing.AssertTrue(m.handle_event(key(term.KeyEscape)))
+    testing.AssertFalse(m.hits())
+    testing.AssertEqInt(closes, 1)
+    testing.AssertFalse(m.handle_event(key(term.KeyEscape)))
+    testing.AssertEqInt(closes, 1)
+end
+
+// closable = false: Esc passes through and the Modal stays open.
+func test_not_closable_passes_esc():
+    closes = 0
+    mut m := openModal(20, 10, tui.ModalSize.Fixed(10, 4), "")
+    m.on_close = (): closed() end
+    m.set_closable(false)
+    testing.AssertFalse(m.handle_event(key(term.KeyEscape)))
+    testing.AssertTrue(m.hits())
+    testing.AssertEqInt(closes, 0)
+end
+
+// A child that consumes Esc keeps the Modal open and on_close silent.
+func test_child_consuming_esc_keeps_open():
+    closes = 0
+    mut m := tui.NewModal()
+    m.add(Probe { tag = "c", consumes_esc = true })
+    m.set_bounds(rect(0, 0, 20, 10))
+    m.open()
+    m.on_close = (): closed() end
+    testing.AssertTrue(m.handle_event(key(term.KeyEscape)))
+    testing.AssertTrue(m.hits())
+    testing.AssertEqInt(closes, 0)
+end
+
+// focusable and hits follow visible; takes_focus gates focus alone.
+func test_focusable_and_hits_follow_open_state():
+    mut m := tui.NewModal()
+    testing.AssertFalse(m.focusable())
+    testing.AssertFalse(m.hits())
+    m.open()
+    testing.AssertTrue(m.focusable())
+    testing.AssertTrue(m.hits())
+    m.takes_focus = false
+    testing.AssertFalse(m.focusable())
+    testing.AssertTrue(m.hits())
+end
+
+// Mouse: a press on the scrim is consumed, a press on the dialog reaches the
+// child and falls through when the child does not take it, and a press
+// outside the Modal's bounds is not the Modal's.
+func test_mouse_on_scrim_consumed_dialog_reaches_child():
+    events_log = ""
+    m := openModal(20, 10, tui.ModalSize.Fixed(10, 4), "")
+    testing.AssertTrue(m.handle_event(click(0, 0)))
+    testing.AssertFalse(m.handle_event(click(6, 4)))
+    testing.AssertEqStr(events_log, "cc")
+    testing.AssertFalse(m.handle_event(click(25, 5)))
+end
+
+// A hidden Modal lets every event fall through and paints nothing.
+func test_hidden_modal_paints_nothing_and_passes_events():
+    events_log = ""
+    mut b := tui.NewBuffer(8, 3)
+    b.fill(rect(0, 0, 8, 3), "x", tui.StyleDefault)
+    m := tui.NewModal()
+    m.add(Probe { tag = "c" })
+    m.set_bounds(rect(0, 0, 8, 3))
+    m.render(b, rect(0, 0, 8, 3))
+    testing.AssertEqStr(b.row_text(0), "xxxxxxxx")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
+    testing.AssertFalse(m.handle_event(click(0, 0)))
+    testing.AssertFalse(m.handle_event(key(term.KeyEscape)))
+    testing.AssertEqStr(events_log, "")
+    b.free()
+end
+
+// A Modal configured for the Screen: child added, bounds set, opened, all
+// before Screen.add, which stores a copy (see the module comment).
+func screen_modal(area: tui.Rect, size: tui.ModalSize, tag: str): tui.Modal:
+    m := tui.NewModal()
+    m.set_size(size)
+    m.add(Probe { tag = tag })
+    m.set_bounds(area)
+    m.open()
+    ret m
+end
+
+// The Screen protocol: raise_subtree paints the Modal layer last even when
+// its base widget has a lower id and a later base widget sits above it
+// (u and v are the base, c is the child); push_focus lands the focus on
+// the Modal. Esc closes the stored Modal, and unraise_subtree with pop_focus
+// gives the focus back.
+func test_screen_open_paints_last_and_takes_focus():
+    closes = 0
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    under := s.add(tui.RootId, Probe { tag = "u", can_focus = true })
+    s.widget(under).set_bounds(area)
+    mut m := screen_modal(area, tui.ModalSize.Fixed(10, 4), "c")
+    m.on_close = (): closed() end
+    mid := s.add(tui.RootId, m)
+    cid := s.add(mid, Probe { tag = "c" })
+    s.widget(cid).set_bounds(rect(6, 4, 8, 2))
+    later := s.add(tui.RootId, Probe { tag = "v" })
+    s.widget(later).set_bounds(area)
+    testing.AssertTrue(s.push_focus(mid))
+    s.raise_subtree(mid)
+    testing.AssertEqInt(s.focused_id(), mid)
+    paint_log = ""
+    s.present()
+    testing.AssertEqStr(paint_log, "uvc")
+
+    testing.AssertTrue(s.dispatch(key(term.KeyEscape)))
+    testing.AssertEqInt(closes, 1)
+    testing.AssertEqInt(s.hit_test(0, 0), later)
+    s.unraise_subtree(mid)
+    testing.AssertTrue(s.pop_focus())
+    testing.AssertEqInt(s.focused_id(), under)
+end
+
+// A Screen-level click on a probe covered by the Modal goes to the Modal:
+// the probe never sees it. A click on the dialog reaches the child.
+func test_screen_click_on_covered_probe_stops_at_modal():
+    events_log = ""
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    under := s.add(tui.RootId, Probe { tag = "u" })
+    s.widget(under).set_bounds(area)
+    m := screen_modal(area, tui.ModalSize.Fixed(10, 4), "")
+    mid := s.add(tui.RootId, m)
+    cid := s.add(mid, Probe { tag = "c", consumes_mouse = true })
+    s.widget(cid).set_bounds(rect(6, 4, 8, 2))
+    s.raise_subtree(mid)
+    testing.AssertEqInt(s.hit_test(0, 0), mid)
+    testing.AssertTrue(s.dispatch(click(0, 0)))
+    testing.AssertEqStr(events_log, "")
+    testing.AssertEqInt(s.hit_test(6, 4), cid)
+    testing.AssertTrue(s.dispatch(click(6, 4)))
+    testing.AssertEqStr(events_log, "c")
+end
+
+// Tab stays inside the Modal layer: the Modal is the only focus stop.
+func test_tab_stays_inside_open_modal():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    under := s.add(tui.RootId, Probe { tag = "u", can_focus = true })
+    s.widget(under).set_bounds(area)
+    mid := s.add(tui.RootId, screen_modal(area, tui.ModalSize.Fixed(10, 4), ""))
+    testing.AssertTrue(s.push_focus(mid))
+    s.raise_subtree(mid)
+    s.focus_next()
+    testing.AssertEqInt(s.focused_id(), mid)
+end
+
+// A key pressed at the focused Modal does not reach a base widget.
+func test_key_at_modal_does_not_reach_base():
+    events_log = ""
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    under := s.add(tui.RootId, Probe { tag = "u", can_focus = true })
+    s.widget(under).set_bounds(area)
+    mid := s.add(tui.RootId, screen_modal(area, tui.ModalSize.Fixed(10, 4), ""))
+    testing.AssertTrue(s.push_focus(mid))
+    s.raise_subtree(mid)
+    testing.AssertTrue(s.dispatch(key(term.KeyEscape)))
+    testing.AssertEqStr(events_log, "")
+end
+
+// Nested modals: the inner one holds the focus, so Esc closes it alone and
+// the outer one stays open.
+func test_nested_esc_closes_only_inner():
+    inner_closes = 0
+    outer_closes = 0
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    mut outer := screen_modal(area, tui.ModalSize.Fixed(16, 8), "")
+    outer.on_close = (): outer_closed() end
+    oid := s.add(tui.RootId, outer)
+    mut inner := screen_modal(area, tui.ModalSize.Fixed(10, 4), "")
+    inner.on_close = (): inner_closed() end
+    iid := s.add(oid, inner)
+    testing.AssertTrue(s.push_focus(oid))
+    s.raise_subtree(oid)
+    testing.AssertTrue(s.push_focus(iid))
+    s.raise_subtree(iid)
+    testing.AssertEqInt(s.focused_id(), iid)
+    testing.AssertTrue(s.dispatch(key(term.KeyEscape)))
+    testing.AssertEqInt(inner_closes, 1)
+    testing.AssertEqInt(outer_closes, 0)
+    testing.AssertEqInt(s.hit_test(0, 0), oid)
+    s.unraise_subtree(iid)
+    testing.AssertTrue(s.pop_focus())
+    testing.AssertEqInt(s.focused_id(), oid)
+end
+
+// A hidden Modal does not hit: the widget under it is found. An open one does.
+func test_hidden_modal_lets_hit_test_fall_through():
+    mut s := tui.NewScreen(Root {}, 8, 3)
+    defer s.close()
+    under := s.add(tui.RootId, Probe { tag = "u" })
+    s.widget(under).set_bounds(rect(0, 0, 8, 3))
+    hidden := tui.NewModal()
+    hidden.set_bounds(rect(0, 0, 8, 3))
+    _ := s.add(tui.RootId, hidden)
+    testing.AssertEqInt(s.hit_test(0, 0), under)
+    shown := s.add(tui.RootId, screen_modal(rect(0, 0, 8, 3), tui.ModalSize.Fixed(4, 3), ""))
+    testing.AssertEqInt(s.hit_test(0, 0), shown)
+end
+
+// A closed Modal hides its focusable child: explicit focus refuses it and Tab and Shift-Tab only visit the base tiles.
+func test_closed_modal_hides_its_child_from_focus_order():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    a := s.add(tui.RootId, Probe { tag = "a", can_focus = true })
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    b := s.add(tui.RootId, Probe { tag = "b", can_focus = true })
+    s.widget(b).set_bounds(rect(4, 0, 4, 1))
+    m := tui.NewModal()
+    m.set_size(tui.ModalSize.Fixed(10, 4))
+    m.add(Probe { tag = "c", can_focus = true })
+    m.set_bounds(area)
+    mid := s.add(tui.RootId, m)
+    cid := s.add(mid, Probe { tag = "c", can_focus = true })
+    s.widget(cid).set_bounds(rect(6, 4, 8, 2))
+    testing.AssertEqInt(s.focused_id(), a)
+    testing.AssertFalse(s.can_focus(cid))
+    testing.AssertFalse(s.focus(cid))
+    testing.AssertFalse(s.push_focus(cid))
+    testing.AssertEqInt(s.focused_id(), a)
+
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), b)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), a)
+    testing.AssertTrue(s.focus_prev())
+    testing.AssertEqInt(s.focused_id(), b)
+    testing.AssertTrue(s.focus_prev())
+    testing.AssertEqInt(s.focused_id(), a)
+end
+
+// Opening the Modal makes its child reachable: can_focus accepts it, focus lands on it, Tab reaches it after the base tiles.
+func test_opening_modal_makes_its_child_reachable():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    a := s.add(tui.RootId, Probe { tag = "a", can_focus = true })
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    b := s.add(tui.RootId, Probe { tag = "b", can_focus = true })
+    s.widget(b).set_bounds(rect(4, 0, 4, 1))
+    m := tui.NewModal()
+    m.set_size(tui.ModalSize.Fixed(10, 4))
+    m.add(Probe { tag = "c", can_focus = true })
+    m.set_bounds(area)
+    mid := s.add(tui.RootId, m)
+    cid := s.add(mid, Probe { tag = "c", can_focus = true })
+    s.widget(cid).set_bounds(rect(6, 4, 8, 2))
+    m.open()
+    testing.AssertTrue(s.can_focus(cid))
+    testing.AssertTrue(s.focus(cid))
+    testing.AssertEqInt(s.focused_id(), cid)
+
+    testing.AssertTrue(s.focus(b))
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), mid)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), cid)
+end
+
+// G6: closed without unraise or pop, the hidden child keeps the stamp, but the next dispatch revalidates focus to the first entry of the visible base order, so the hidden child receives nothing.
+func test_close_without_unraise_keeps_child_out_of_order():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    a := s.add(tui.RootId, Probe { tag = "a", can_focus = true })
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    b := s.add(tui.RootId, Probe { tag = "b", can_focus = true })
+    s.widget(b).set_bounds(rect(4, 0, 4, 1))
+    m := tui.NewModal()
+    m.set_size(tui.ModalSize.Fixed(10, 4))
+    m.add(Probe { tag = "c", can_focus = true })
+    m.set_bounds(area)
+    mid := s.add(tui.RootId, m)
+    cid := s.add(mid, Probe { tag = "c", can_focus = true })
+    s.widget(cid).set_bounds(rect(6, 4, 8, 2))
+    m.open()
+    testing.AssertTrue(s.push_focus(cid))
+    s.raise_subtree(mid)
+    testing.AssertEqInt(s.focused_id(), cid)
+
+    m.close()
+    testing.AssertFalse(s.can_focus(cid))
+    events_log = ""
+    _ := s.dispatch(key(120))
+    testing.AssertEqStr(events_log, "a")
+    testing.AssertEqInt(s.focused_id(), a)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), b)
+end
+
+// A hidden child is not a spatial candidate: the right move refuses while the Modal is closed and reaches it once open.
+func test_hidden_child_is_not_a_spatial_candidate():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    a := s.add(tui.RootId, Probe { tag = "a", can_focus = true })
+    s.widget(a).set_bounds(rect(0, 4, 2, 1))
+    m := tui.NewModal()
+    m.set_size(tui.ModalSize.Fixed(10, 4))
+    m.add(Probe { tag = "c", can_focus = true })
+    m.set_bounds(area)
+    mid := s.add(tui.RootId, m)
+    cid := s.add(mid, Probe { tag = "c", can_focus = true })
+    s.widget(cid).set_bounds(rect(6, 4, 8, 2))
+    testing.AssertEqInt(s.focused_id(), a)
+    testing.AssertFalse(s.focus_right())
+    testing.AssertEqInt(s.focused_id(), a)
+
+    m.open()
+    testing.AssertTrue(s.focus_right())
+    testing.AssertEqInt(s.focused_id(), cid)
+end
+
+// preferred_size: Fixed reports its size; Percent reports the sentinel.
+// measure is never ok, so a layout reads preferred_size.
+func test_preferred_size_and_measure():
+    m := tui.NewModal()
+    m.set_size(tui.ModalSize.Fixed(7, 4))
+    p := m.preferred_size(0)
+    testing.AssertEqInt(p.width, 7)
+    testing.AssertEqInt(p.height, 4)
+    m.set_size(tui.ModalSize.Percent(50, 40))
+    q := m.preferred_size(0)
+    testing.AssertEqInt(q.width, -1)
+    testing.AssertEqInt(q.height, -1)
+    testing.AssertFalse(m.measure(tui.Axis.X, 0).ok)
+end
+
+// Post-add open and close: the Modal is added hidden, then the app keeps the
+// local value and opens and closes it. The stored copy, read by hit_test,
+// sees each change.
+func test_post_add_open_and_close_reach_tree_copy():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    under := s.add(tui.RootId, Probe { tag = "u" })
+    s.widget(under).set_bounds(area)
+    m := tui.NewModal()
+    m.set_size(tui.ModalSize.Fixed(10, 4))
+    m.add(Probe { tag = "c" })
+    m.set_bounds(area)
+    mid := s.add(tui.RootId, m)
+    testing.AssertEqInt(s.hit_test(0, 0), under)
+    m.open()
+    testing.AssertEqInt(s.hit_test(0, 0), mid)
+    m.close()
+    testing.AssertEqInt(s.hit_test(0, 0), under)
+end
+
+// set_title after Screen.add reaches the frame: the Screen draws the stored
+// copy, whose ring carries the new title.
+func test_post_add_set_title_reaches_frame():
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    m := screen_modal(area, tui.ModalSize.Fixed(20, 10), "")
+    mid := s.add(tui.RootId, m)
+    m.set_title("Quit")
+    s.draw()
+    testing.AssertEqStr(s.buffer.row_text(0), "┌─ Quit " + rep("─", 11) + "┐")
+    testing.AssertEqInt(s.hit_test(0, 0), mid)
+end
+
+// Esc through dispatch on the stored copy closes it and fires on_close once.
+// The local value reads the same closed state, since both share it.
+func test_post_add_esc_fires_on_close_once():
+    closes = 0
+    mut s := tui.NewScreen(Root {}, 20, 10)
+    defer s.close()
+    area := rect(0, 0, 20, 10)
+    under := s.add(tui.RootId, Probe { tag = "u" })
+    s.widget(under).set_bounds(area)
+    mut m := screen_modal(area, tui.ModalSize.Fixed(10, 4), "")
+    m.on_close = (): closed() end
+    mid := s.add(tui.RootId, m)
+    testing.AssertTrue(s.push_focus(mid))
+    s.raise_subtree(mid)
+    testing.AssertTrue(s.dispatch(key(term.KeyEscape)))
+    testing.AssertEqInt(closes, 1)
+    testing.AssertFalse(m.hits())
+    testing.AssertEqInt(s.hit_test(0, 0), under)
+    _ := s.dispatch(key(term.KeyEscape))
+    testing.AssertEqInt(closes, 1)
+end
+
+func main:
+    test_md01_frame_with_title()
+    test_md02_percent_floor_is_20_by_5()
+    test_md03_three_by_three_ring()
+    test_md04_two_by_two_corners_only()
+    test_md05_title_clipped_to_width_minus_five()
+    test_sc01_scrim_dims_outside_only()
+    test_scrim_keeps_every_style_field()
+    test_scrim_on_unstyled_cell_is_dim_alone()
+    test_percent_in_small_bounds_fills_bounds()
+    test_scrim_painting_builds_nothing()
+    test_esc_closes_and_fires_on_close()
+    test_not_closable_passes_esc()
+    test_child_consuming_esc_keeps_open()
+    test_focusable_and_hits_follow_open_state()
+    test_mouse_on_scrim_consumed_dialog_reaches_child()
+    test_hidden_modal_paints_nothing_and_passes_events()
+    test_screen_open_paints_last_and_takes_focus()
+    test_screen_click_on_covered_probe_stops_at_modal()
+    test_tab_stays_inside_open_modal()
+    test_key_at_modal_does_not_reach_base()
+    test_nested_esc_closes_only_inner()
+    test_hidden_modal_lets_hit_test_fall_through()
+    test_closed_modal_hides_its_child_from_focus_order()
+    test_opening_modal_makes_its_child_reachable()
+    test_close_without_unraise_keeps_child_out_of_order()
+    test_hidden_child_is_not_a_spatial_candidate()
+    test_preferred_size_and_measure()
+    test_post_add_open_and_close_reach_tree_copy()
+    test_post_add_set_title_reaches_frame()
+    test_post_add_esc_fires_on_close_once()
+    ret testing.Summary()
+end

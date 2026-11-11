@@ -1,0 +1,1319 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Standalone tests for the keymap core: key identity, single-trie bindings
+// and rebinds, sequence deferral and mismatch reprocessing, per-widget scope
+// resolution, and the inert/non-key edges. No widget or Screen code is
+// exercised beyond building a headless screen; the keymap itself is the unit
+// under test. Actions move focus to a chosen widget, because a closure cannot
+// write a captured local (closures capture by value), so focused_id is the
+// observable effect of an action running.
+
+import sync
+import testing
+import term
+
+import tui
+
+// Number of times the timeout tests' counter action has run. The action is a
+// lambda (closures capture by value, so a captured local would be useless), so
+// a global is the observable shared by those tests.
+mut seq_hits := 0
+
+// Number of Enter and Space events the Activate fixture consumed. The fixture
+// counts through a global because dyn Widget cannot be compared or downcast.
+mut activate_hits := 0
+
+// The screen root: an unfocusable placeholder so each test controls which
+// widget holds the focus.
+struct Root:
+    pub use tui.BaseWidget
+end
+
+// A focusable widget with no behavior; only its focusability and ID matter.
+struct Field:
+    pub use tui.BaseWidget
+    pub focus: bool = true
+
+    pub func focusable(): bool:
+        ret this.focus
+    end
+end
+
+// Grab consumes the "r" key and nothing else, to prove widget consumption
+// wins over a keymap binding for the same key.
+struct Grab:
+    pub use tui.BaseWidget
+
+    pub func handle_event(event: tui.Event): bool:
+        ret event.is_char("r")
+    end
+end
+
+// TabGrab consumes Tab and nothing else, so a widget can beat the default
+// Tab -> focus_next binding.
+struct TabGrab:
+    pub use tui.BaseWidget
+
+    pub func handle_event(event: tui.Event): bool:
+        ret event.is_key(term.KeyTab)
+    end
+end
+
+// Activate stands in for a Button without its construction setup: it is
+// focusable and consumes Enter and Space, so a test can prove the focused
+// widget still answers those keys with the vim preset installed.
+struct Activate:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        if event.is_key(term.KeyEnter) or event.is_key(term.KeySpace):
+            activate_hits += 1
+            ret true
+        end
+        ret false
+    end
+end
+
+// A headless screen the keymap can be pointed at. handle takes a
+// tui.Screen*; a free function cannot take `&screen` and Vector.ref is
+// the only way to address a value in Salam, so the screen lives in a
+// one-element vector and every call goes through the pointer into it.
+struct Rig:
+    pub screens: Vector<tui.Screen> = Vector {}
+
+    pub func open(w: int, h: int):
+        this.screens.push(tui.NewScreen(Root {}, w, h))
+    end
+
+    pub func ptr(): tui.Screen*:
+        ret this.screens.ref(0)
+    end
+
+    pub func add(parent: int, focus: bool): int:
+        ret this.ptr()[0].add(parent, Field { focus = focus })
+    end
+
+    pub func focus(id: int): bool:
+        ret this.ptr()[0].focus(id)
+    end
+
+    pub func focused(): int:
+        ret this.ptr()[0].focused_id()
+    end
+
+    pub func release():
+        this.ptr()[0].close()
+        this.screens.free()
+    end
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+// action_focus returns an action that moves the focus to id, so a test can
+// tell which binding ran by reading focused_id. The closure captures id by
+// value, baking it in.
+func action_focus(id: int): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, _event: tui.Event): ret screen[0].focus(id) end
+end
+
+// focus_next_decline advances the focus one step and reports the key as
+// unconsumed, so a test can see that a declined action still resolved the key.
+func focus_next_decline(screen: tui.Screen*): bool:
+    _ := screen[0].focus_next()
+    ret false
+end
+
+// act_next_decline returns an action that advances the focus once and returns
+// false (declines the key).
+func act_next_decline(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, _event: tui.Event): ret focus_next_decline(screen) end
+end
+
+// act_next_consume returns an action that advances the focus and returns true.
+func act_next_consume(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, _event: tui.Event): ret screen[0].focus_next() end
+end
+
+// bump_seq is the body of the timeout tests' action: it counts one run and
+// consumes the key. The screen and event are ignored.
+func bump_seq(_screen: tui.Screen*, _event: tui.Event): bool:
+    seq_hits += 1
+    ret true
+end
+
+// count_action returns an action that increments the global seq_hits counter,
+// so a test can assert how many times a binding fired.
+func count_action(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, event: tui.Event): ret bump_seq(screen, event) end
+end
+
+// vim_search_count is the vim preset's on_search hook: it counts one run and
+// consumes the key, so a test can prove "/" reached the application.
+func vim_search_count(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, event: tui.Event): ret bump_seq(screen, event) end
+end
+
+// vim_search_decline is an on_search hook that declines the key, so a test
+// can see that the hook's boolean is the dispatch result.
+func vim_search_decline(): func (tui.Screen*, tui.Event) bool:
+    ret (_screen: tui.Screen*, _event: tui.Event): ret false end
+end
+
+// new_focus_map returns a fresh keymap that binds b to moving the focus to id;
+// the mode-switch tests install it from inside an action.
+func new_focus_map(id: int): tui.Keymap:
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("b"), action_focus(id))
+    ret km
+end
+
+// swap_consume installs a new keymap on the screen and reports the key as
+// consumed. It is called from inside an action, while handle runs on the map
+// being freed.
+func swap_consume(screen: tui.Screen*, id: int): bool:
+    screen[0].set_keymap(new_focus_map(id))
+    ret true
+end
+
+// swap_decline is swap_consume but reports the key as unconsumed, exercising
+// the re-entrancy guarantee that handle touches no trie state after an invoked
+// action, even one that swapped the map out from under it.
+func swap_decline(screen: tui.Screen*, id: int): bool:
+    screen[0].set_keymap(new_focus_map(id))
+    ret false
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+// grid builds the 2x2 focusable layout the default-binding tests use, so the
+// arrows have real geometry:
+//
+//     a(1) b(2)          ids 1, 2 on row 0
+//     c(3) d(4)          ids 3, 4 on row 1
+//
+// Tab cycles 1->2->3->4; right is 1->2, down is 2->4, left is 4->3, up is 3->1.
+func grid(): tui.Screen:
+    mut s := tui.NewScreen(Root {}, 8, 3)
+    a := s.add(tui.RootId, Field {})
+    b := s.add(tui.RootId, Field {})
+    c := s.add(tui.RootId, Field {})
+    d := s.add(tui.RootId, Field {})
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    s.widget(b).set_bounds(rect(4, 0, 4, 1))
+    s.widget(c).set_bounds(rect(0, 1, 4, 1))
+    s.widget(d).set_bounds(rect(4, 1, 4, 1))
+    ret s
+end
+
+func test_single_hit_and_miss():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(w2))
+
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w2)
+    testing.AssertFalse(km.handle(r.ptr(), key("b")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_rebind_last_write_wins():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    w3 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(w2))
+    km.bind(term.Decode("a"), action_focus(w3))
+
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w3)
+end
+
+func test_unbind():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(w2))
+    km.unbind(term.Decode("a"))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w1)
+end
+
+func test_unbind_for_drops_only_the_target_override():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    t_global := s.add(tui.RootId, Field {})
+    t_w1 := s.add(tui.RootId, Field {})
+    t_w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("x"), action_focus(t_global))
+    km.bind_for(w1, term.Decode("x"), action_focus(t_w1))
+    km.bind_for(w2, term.Decode("x"), action_focus(t_w2))
+    s.set_keymap(km)
+
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t_w1)
+    // Dropping widget 1's override leaves the global row in place.
+    s.keymap.unbind_for(w1, term.Decode("x"))
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t_global)
+    // The sibling widget's override on the same key survives.
+    testing.AssertTrue(s.focus(w2))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t_w2)
+end
+
+func test_unbind_for_keeps_sibling_overrides():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    t_w1 := s.add(tui.RootId, Field {})
+    t_w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind_for(w1, term.Decode("y"), action_focus(t_w1))
+    km.bind_for(w2, term.Decode("y"), action_focus(t_w2))
+    s.set_keymap(km)
+
+    s.keymap.unbind_for(w1, term.Decode("y"))
+    testing.AssertTrue(s.focus(w2))
+    testing.AssertTrue(s.dispatch(key("y")))
+    testing.AssertEqInt(s.focused_id(), t_w2)
+end
+
+func test_unbind_for_missing_key_or_widget_is_inert():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    t1 := s.add(tui.RootId, Field {})
+    // Empty map: the root node does not exist yet.
+    s.keymap.unbind_for(w1, term.Decode("z"))
+    testing.AssertFalse(s.dispatch(key("z")))
+
+    s.keymap.bind(term.Decode("x"), action_focus(t1))
+    // A key nobody bound, then a widget that never bound anything.
+    s.keymap.unbind_for(w1, term.Decode("z"))
+    s.keymap.unbind_for(99, term.Decode("x"))
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t1)
+end
+
+func test_unbind_for_clears_pending_sequence():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    s.keymap.unbind_for(w1, term.Decode("h"))
+    // Without the pending reset this g would complete "gg" and fire.
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+end
+
+func test_unbind_for_then_rebind():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    t1 := s.add(tui.RootId, Field {})
+    t2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind_for(w1, term.Decode("x"), action_focus(t1))
+    s.set_keymap(km)
+
+    s.keymap.unbind_for(w1, term.Decode("x"))
+    // The node survived the unbind, so bind_for can add the row back.
+    s.keymap.bind_for(w1, term.Decode("x"), action_focus(t2))
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t2)
+end
+
+func test_unbind_for_seq_drops_only_the_target_override():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    t_global := s.add(tui.RootId, Field {})
+    t_w1 := s.add(tui.RootId, Field {})
+    t_w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind_seq("jj", action_focus(t_global))
+    km.bind_for_seq(w1, "jj", action_focus(t_w1))
+    km.bind_for_seq(w2, "jj", action_focus(t_w2))
+    s.set_keymap(km)
+
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t_w1)
+    // Dropping widget 1's row leaves the global sequence in place.
+    s.keymap.unbind_for_seq(w1, "jj")
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t_global)
+    // The sibling widget's row on the same sequence survives.
+    testing.AssertTrue(s.focus(w2))
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t_w2)
+end
+
+func test_unbind_for_seq_missing_sequence_or_widget_is_inert():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    t1 := s.add(tui.RootId, Field {})
+    // Empty map: the root node does not exist yet.
+    s.keymap.unbind_for_seq(w1, "jj")
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertFalse(s.dispatch(key("j")))
+
+    s.keymap.bind_seq("jj", action_focus(t1))
+    // A sequence nobody bound, then a widget that never bound it.
+    s.keymap.unbind_for_seq(w1, "qq")
+    s.keymap.unbind_for_seq(99, "jj")
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t1)
+end
+
+func test_unbind_for_seq_clears_pending_sequence():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    s.keymap.unbind_for_seq(w1, "gg")
+    // Without the pending reset this g would complete "gg" and fire.
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+end
+
+func test_sequence_across_two_events():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_deferral_fires_on_break():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    w3 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("g"), action_focus(w2))
+    km.bind_seq("gg", action_focus(w3))
+
+    // g has both a binding and a child: it defers.
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    // The continuation wins.
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w3)
+    // A breaking key fires the deferred single binding.
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertTrue(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_mismatch_reprocesses_from_root():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", action_focus(w2))
+    km.bind(term.Decode("x"), action_focus(w2))
+
+    // "g" starts a pending prefix; "x" does not continue it and is then
+    // reprocessed from the root, where it is bound.
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertTrue(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_direct_two_key_sequence():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("ab", action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("b")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_nearest_scope_wins():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    inner := r.add(outer, true)
+    t_inner := r.add(tui.RootId, true)
+    t_outer := r.add(tui.RootId, true)
+    t_global := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+    km.bind_for(inner, term.Decode("a"), action_focus(t_inner))
+
+    testing.AssertTrue(r.focus(inner))
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), t_inner)
+end
+
+func test_outer_scope_beats_global():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    t_outer := r.add(tui.RootId, true)
+    t_global := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+
+    // Focus on outer directly: the chain is outer -> root, so outer's
+    // binding applies and the global one does not.
+    testing.AssertTrue(r.focus(outer))
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), t_outer)
+end
+
+func test_global_fallback_when_unscoped():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    other := r.add(tui.RootId, true)
+    t_outer := r.add(tui.RootId, true)
+    t_global := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+
+    // Focus is outside outer's subtree, so only the global binding applies.
+    testing.AssertTrue(r.focus(other))
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), t_global)
+end
+
+func test_scoped_only_outside_scope_misses():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    other := r.add(tui.RootId, true)
+    target := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_for(outer, term.Decode("a"), action_focus(target))
+
+    testing.AssertTrue(r.focus(other))
+    testing.AssertFalse(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), other)
+end
+
+func test_empty_map_is_inert():
+    mut r := Rig {}
+    defer r.release()
+    r.open(10, 3)
+    w1 := r.add(tui.RootId, true)
+
+    mut bare := tui.Keymap {}
+    defer bare.free()
+    testing.AssertFalse(bare.handle(r.ptr(), key("a")))
+
+    mut empty := tui.NewKeymap()
+    defer empty.free()
+    testing.AssertFalse(empty.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w1)
+end
+
+func test_non_key_event_leaves_pending():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.TickEvent }))
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_space_is_not_ctrl_space():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode(" "), action_focus(w2))
+
+    // Ctrl+Space decodes to a KeyChar with ch " "; plain space is KeySpace.
+    // The canonical identity keeps them apart.
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.KeyEvent, key = term.Decode("\x00") }))
+    testing.AssertTrue(km.handle(r.ptr(), key(" ")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_declined_mismatch_stops():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    _ := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("g"), act_next_decline())
+    km.bind_seq("gg", act_next_consume())
+    km.bind(term.Decode("x"), act_next_consume())
+
+    testing.AssertEqInt(r.focused(), w1)
+    // g has both a binding and a child, so it defers.
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    // x breaks the prefix: the deferred g action runs (focus moves to the
+    // second widget) and reports the key unconsumed. The key is resolved, so
+    // x is not also run from the root: handle returns false and the focus
+    // stays put (the old fall-through would have moved it to the third).
+    testing.AssertFalse(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_declined_completion_stops():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    _ := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", act_next_decline())
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    // Completing the sequence runs the action, which advances the focus and
+    // declines the key. The key is resolved even though the action returned
+    // false.
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+    // A fresh g defers again; it must not re-run the action (the old
+    // fall-through re-parked pending at the g node and the third g re-fired).
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_dispatch_empty_keymap_inert():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    s.add(tui.RootId, Field {})
+    s.dirty = false
+
+    // The default keymap is empty: dispatch behaves exactly as before.
+    testing.AssertFalse(s.dispatch(key("a")))
+    testing.AssertFalse(s.dirty)
+    // An explicitly installed empty map is inert too.
+    s.set_keymap(tui.NewKeymap())
+    testing.AssertFalse(s.dispatch(key("a")))
+end
+
+func test_dispatch_keymap_fallback():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("\t"), action_focus(w2))
+
+    testing.AssertEqInt(s.focused_id(), w1)
+    s.dirty = false
+    // No widget consumes Tab, so the keymap fallback consumes it and the
+    // screen is marked dirty.
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), w2)
+    testing.AssertTrue(s.dirty)
+    // An unbound key still falls through to nothing.
+    s.dirty = false
+    testing.AssertFalse(s.dispatch(key("z")))
+    testing.AssertFalse(s.dirty)
+end
+
+func test_widget_consumption_beats_keymap():
+    mut s := tui.NewScreen(Grab {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("r"), action_focus(w2))
+
+    // Grab (the root) consumes "r", so the keymap fallback never runs and the
+    // action does not move the focus.
+    testing.AssertTrue(s.dispatch(key("r")))
+    testing.AssertEqInt(s.focused_id(), w1)
+end
+
+func test_scoped_binding_through_dispatch():
+    mut s := tui.NewScreen(Root {}, 40, 10)
+    defer s.close()
+    outer := s.add(tui.RootId, Field {})
+    inner := s.add(outer, Field {})
+    other := s.add(tui.RootId, Field {})
+    t_inner := s.add(tui.RootId, Field {})
+    t_outer := s.add(tui.RootId, Field {})
+    t_global := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+    km.bind_for(inner, term.Decode("a"), action_focus(t_inner))
+    s.set_keymap(km)
+
+    // Focus inside inner: the nearest scope (inner) wins.
+    testing.AssertTrue(s.focus(inner))
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), t_inner)
+    // Focus on outer directly: outer beats the global binding.
+    testing.AssertTrue(s.focus(outer))
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), t_outer)
+    // Focus outside both scopes: only the global binding applies.
+    testing.AssertTrue(s.focus(other))
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), t_global)
+end
+
+func test_ctrl_c_with_pending_is_unconsumed():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    // Ctrl+C is unbound: dispatch returns false, so run()'s auto-stop fires.
+    testing.AssertFalse(s.dispatch(key("\x03")))
+    testing.AssertEqInt(s.focused_id(), w1)
+    // The pending prefix was reset cleanly: a fresh gg completes.
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_non_key_events_leave_pending():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.TickEvent }))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.ResizeEvent, width = 21, height = 6 }))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.MouseEvent }))
+    testing.AssertEqInt(s.focused_id(), w1)
+    // The tick, resize, and mouse never reached the keymap: gg still completes.
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_mode_switch_in_action_consumes():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w3 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("a"), (screen: tui.Screen*, _event: tui.Event): ret swap_consume(screen, w3) end)
+
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), w1)
+    // The swapped-in map is intact and routes the next event.
+    testing.AssertTrue(s.dispatch(key("b")))
+    testing.AssertEqInt(s.focused_id(), w3)
+    // The old map (and its "a" binding) is gone.
+    testing.AssertFalse(s.dispatch(key("a")))
+end
+
+func test_mode_switch_in_action_declines():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w3 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("a"), (screen: tui.Screen*, _event: tui.Event): ret swap_decline(screen, w3) end)
+
+    // The action frees the map it is running on and then declines; dispatch
+    // must not crash and must return false.
+    testing.AssertFalse(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), w1)
+    // The swapped-in map is uncorrupted and routes the next event.
+    testing.AssertTrue(s.dispatch(key("b")))
+    testing.AssertEqInt(s.focused_id(), w3)
+    testing.AssertFalse(s.dispatch(key("a")))
+end
+
+func test_run_with_tick_uses_keymap():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    _ := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("\t"), action_focus(w2))
+    _ := s.post(key("\t"))
+    // An unconsumed Ctrl+C ends the loop, so the keymap moves the focus and
+    // then run_with_tick stops.
+    _ := s.post(key("\x03"))
+    s.run_with_tick((): ret end)
+
+    testing.AssertFalse(s.running)
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_default_keymap_tab_moves_next():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 3)
+end
+
+func test_default_keymap_arrows_move_spatially():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("\x1b[B"))) // Down: a(1) -> c(3)
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.dispatch(key("\x1b[C"))) // Right: c(3) -> d(4)
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.dispatch(key("\x1b[A"))) // Up: d(4) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\x1b[D"))) // Left: b(2) -> a(1)
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_default_keymap_not_installed_is_inert():
+    mut s := grid()
+    defer s.close()
+
+    // Nothing is installed automatically: the default bindings do nothing
+    // until an app installs the map.
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertFalse(s.dispatch(key("\t")))
+    testing.AssertFalse(s.dispatch(key("\x1b[B")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_default_keymap_widget_consumes_tab():
+    mut s := tui.NewScreen(TabGrab {}, 8, 3)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    _ := s.add(tui.RootId, Field {})
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    // The root TabGrab consumes Tab, so the default focus_next never runs and
+    // the focus stays where it was.
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), w1)
+end
+
+func test_default_keymap_only_five_bindings():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    // Unrelated keys pass through untouched (q stays free for the quit
+    // pattern).
+    testing.AssertFalse(s.dispatch(key("q")))
+    testing.AssertFalse(s.dispatch(key("z")))
+    // Shift+Tab is not one of the five: Salam decodes backtab to KeyUnknown,
+    // which is why the library cannot bind it without an escape literal.
+    testing.AssertEqInt(term.Decode("\x1b[Z").code, term.KeyUnknown)
+    testing.AssertFalse(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_default_keymap_fresh_per_call():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    w3 := r.add(tui.RootId, true)
+    mut a := tui.NewDefaultKeymap()
+    defer a.free()
+    mut b := tui.NewDefaultKeymap()
+    defer b.free()
+    // Rebinding one map must not touch another: each call is independent.
+    a.bind(term.Decode("\t"), action_focus(w3))
+
+    testing.AssertEqInt(r.focused(), w1)
+    // b is still the default: Tab moves to the next widget.
+    testing.AssertTrue(b.handle(r.ptr(), key("\t")))
+    testing.AssertEqInt(r.focused(), w2)
+    // a's rebound Tab goes where it was told.
+    testing.AssertTrue(r.focus(w1))
+    testing.AssertTrue(a.handle(r.ptr(), key("\t")))
+    testing.AssertEqInt(r.focused(), w3)
+end
+
+func test_default_keymap_set_keymap_and_replace():
+    mut s := grid()
+    defer s.close()
+    // Installing the default map makes its Tab binding live.
+    s.set_keymap(tui.NewDefaultKeymap())
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    // Replacing it with an empty map makes Tab unconsumed again.
+    s.set_keymap(tui.NewKeymap())
+    testing.AssertFalse(s.dispatch(key("\t")))
+end
+
+func test_default_keymap_extend_rebind():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+    // Extending the installed map: rebinding Tab (last write wins) replaces
+    // the default focus_next with a jump to d(4).
+    s.keymap.bind(term.Decode("\t"), action_focus(4))
+
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 4)
+end
+
+func test_backtab_decodes_to_an_unknown_key():
+    k := term.Decode("\x1b[Z")
+
+    // Shift+Tab has no key of its own in the pinned std/term: Z is absent from
+    // the letter map, so the sequence stays an anonymous KeyUnknown with no
+    // modifiers and its bytes kept in raw.
+    testing.AssertEqInt(k.code, term.KeyUnknown)
+    testing.AssertFalse(k.shift)
+    testing.AssertTrue(k.ch == "")
+    testing.AssertTrue(k.raw == "\x1b[Z")
+end
+
+func test_backtab_binding_fires_through_dispatch():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("\x1b[Z"), action_focus(w2))
+    s.set_keymap(km)
+
+    // An unnamed key is still a key: the normal binding API accepts it and a
+    // real dispatch routes it to the action.
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_backtab_variants_are_distinct_keys():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w3 := s.add(tui.RootId, Field {})
+    w4 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("\x1b[Z"), action_focus(w3))
+    km.bind(term.Decode("\x1b[1;2Z"), action_focus(w4))
+    s.set_keymap(km)
+
+    // Terminals disagree about the Shift+Tab sequence. The modified form parses
+    // 1;2 and sets shift, so key_id's raw term keeps the two apart and each one
+    // fires only its own binding.
+    testing.AssertFalse(term.Decode("\x1b[Z").shift)
+    testing.AssertTrue(term.Decode("\x1b[1;2Z").shift)
+    testing.AssertTrue(term.Decode("\x1b[1;2Z").raw != term.Decode("\x1b[Z").raw)
+
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), w3)
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("\x1b[1;2Z")))
+    testing.AssertEqInt(s.focused_id(), w4)
+end
+
+func test_default_map_leaves_backtab_unbound():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    _ := s.add(tui.RootId, Field {})
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    // The default map learns no raw sequence behind the missing constant, so a
+    // backtab the terminal does send falls through to the application.
+    testing.AssertFalse(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), w1)
+end
+
+// The vim preset tests. Each installs NewVimKeymap on a real Screen and
+// dispatches through it, so both the widget-first order and the keymap
+// fallback run.
+
+func test_vim_preset_hjkl_moves_spatially():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("j"))) // Down: a(1) -> c(3)
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.dispatch(key("k"))) // Up: c(3) -> a(1)
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("l"))) // Right: a(1) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("h"))) // Left: b(2) -> a(1)
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_vim_preset_keeps_tab_and_arrows():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+
+    // The preset is a superset: the default rows are still there.
+    testing.AssertTrue(s.dispatch(key("\t"))) // Tab: a(1) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\x1b[B"))) // Down: b(2) -> d(4)
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.dispatch(key("\x1b[A"))) // Up: d(4) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+end
+
+func test_vim_preset_gg_moves_to_the_top_of_the_column():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertTrue(s.focus(4))
+
+    // One g is only a prefix: nothing moves and the key is unconsumed.
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 4)
+    // The pair walks up its own column: d(4) -> b(2), not to a(1).
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    // A further g starts a new prefix and moves nothing.
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 2)
+end
+
+func test_vim_preset_gg_needs_both_keys():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    // The parked prefix is not itself a binding: a mismatch clears it.
+    testing.AssertFalse(s.dispatch(key("z")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_vim_preset_G_moves_to_the_bottom_of_the_column():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertTrue(s.focus(2))
+
+    // b(2) -> d(4): the column is kept and the move stops at the last row.
+    testing.AssertTrue(s.dispatch(key("G")))
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertFalse(s.dispatch(key("G")))
+    testing.AssertEqInt(s.focused_id(), 4)
+end
+
+func test_vim_preset_esc_pops_one_level():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertTrue(s.push_focus(2))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertEqInt(s.focus_stack.len(), 2)
+
+    testing.AssertTrue(s.dispatch(key("\x1b")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqInt(s.focus_stack.len(), 1)
+end
+
+func test_vim_preset_esc_at_root_is_unconsumed():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertEqInt(s.focus_stack.len(), 1)
+
+    // At depth one the guard declines, so the app keeps Esc and the screen
+    // still has a focused widget.
+    testing.AssertFalse(s.dispatch(key("\x1b")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqInt(s.focus_stack.len(), 1)
+end
+
+func test_vim_preset_slash_runs_the_app_action():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    seq_hits = 0
+
+    testing.AssertTrue(s.dispatch(key("/")))
+    testing.AssertEqInt(seq_hits, 1)
+    // A declining hook makes "/" an unconsumed key.
+    s.set_keymap(tui.NewVimKeymap(vim_search_decline()))
+    testing.AssertFalse(s.dispatch(key("/")))
+end
+
+func test_vim_preset_is_opt_in():
+    mut s := grid()
+    defer s.close()
+
+    // Nothing installed: the vim rows are inert.
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    // A blank map is still blank: it does not inherit the preset.
+    s.set_keymap(tui.NewKeymap())
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertFalse(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_vim_preset_widget_still_takes_enter_and_space():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w := s.add(tui.RootId, Activate {})
+    _ := s.add(tui.RootId, Field {})
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    activate_hits = 0
+
+    // The widget answers Enter and Space before the keymap is consulted, and
+    // the preset deliberately has no row for either.
+    testing.AssertTrue(s.dispatch(key("\r")))
+    testing.AssertTrue(s.dispatch(key(" ")))
+    testing.AssertEqInt(activate_hits, 2)
+    testing.AssertEqInt(s.focused_id(), w)
+end
+
+func test_sequence_timeout_blocks_completion():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.pending_timeout_ms = 50
+    km.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    // Simulate a long gap between the two g presses: the pending prefix is
+    // older than the timeout, so the second g is a fresh start, not a
+    // completion (without the timeout it would fire "gg" here).
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    // That fresh g began a new prefix, so an immediate third g completes it.
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_sequence_timeout_fresh_start_fires_single():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.pending_timeout_ms = 50
+    km.bind_seq("gg", count_action())
+    km.bind(term.Decode("x"), count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    // The expired prefix is abandoned and x is processed as a fresh key, so
+    // its single binding fires.
+    testing.AssertTrue(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_sequence_timeout_zero_never_expires():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    // The default timeout is 0, so even a stale timestamp must not expire the
+    // prefix: the same behavior as before the timeout existed.
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_sequence_timeout_ignores_non_key_events():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.pending_timeout_ms = 50
+    km.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    // Non-key events never evaluate the timeout nor clear the prefix.
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.TickEvent }))
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.ResizeEvent, width = 21, height = 6 }))
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.MouseEvent }))
+    // The prefix survived, so a fresh timestamp lets the completion fire.
+    km.pending_since_ms = sync.NowMs() as int
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func main:
+    test_single_hit_and_miss()
+    test_rebind_last_write_wins()
+    test_unbind()
+    test_unbind_for_drops_only_the_target_override()
+    test_unbind_for_keeps_sibling_overrides()
+    test_unbind_for_missing_key_or_widget_is_inert()
+    test_unbind_for_clears_pending_sequence()
+    test_unbind_for_then_rebind()
+    test_unbind_for_seq_drops_only_the_target_override()
+    test_unbind_for_seq_missing_sequence_or_widget_is_inert()
+    test_unbind_for_seq_clears_pending_sequence()
+    test_sequence_across_two_events()
+    test_deferral_fires_on_break()
+    test_mismatch_reprocesses_from_root()
+    test_direct_two_key_sequence()
+    test_nearest_scope_wins()
+    test_outer_scope_beats_global()
+    test_global_fallback_when_unscoped()
+    test_scoped_only_outside_scope_misses()
+    test_empty_map_is_inert()
+    test_non_key_event_leaves_pending()
+    test_space_is_not_ctrl_space()
+    test_declined_mismatch_stops()
+    test_declined_completion_stops()
+    test_dispatch_empty_keymap_inert()
+    test_dispatch_keymap_fallback()
+    test_widget_consumption_beats_keymap()
+    test_scoped_binding_through_dispatch()
+    test_ctrl_c_with_pending_is_unconsumed()
+    test_non_key_events_leave_pending()
+    test_mode_switch_in_action_consumes()
+    test_mode_switch_in_action_declines()
+    test_run_with_tick_uses_keymap()
+    test_default_keymap_tab_moves_next()
+    test_default_keymap_arrows_move_spatially()
+    test_default_keymap_not_installed_is_inert()
+    test_default_keymap_widget_consumes_tab()
+    test_default_keymap_only_five_bindings()
+    test_default_keymap_fresh_per_call()
+    test_default_keymap_set_keymap_and_replace()
+    test_default_keymap_extend_rebind()
+    test_backtab_decodes_to_an_unknown_key()
+    test_backtab_binding_fires_through_dispatch()
+    test_backtab_variants_are_distinct_keys()
+    test_default_map_leaves_backtab_unbound()
+    test_vim_preset_hjkl_moves_spatially()
+    test_vim_preset_keeps_tab_and_arrows()
+    test_vim_preset_gg_moves_to_the_top_of_the_column()
+    test_vim_preset_gg_needs_both_keys()
+    test_vim_preset_G_moves_to_the_bottom_of_the_column()
+    test_vim_preset_esc_pops_one_level()
+    test_vim_preset_esc_at_root_is_unconsumed()
+    test_vim_preset_slash_runs_the_app_action()
+    test_vim_preset_is_opt_in()
+    test_vim_preset_widget_still_takes_enter_and_space()
+    test_sequence_timeout_blocks_completion()
+    test_sequence_timeout_fresh_start_fires_single()
+    test_sequence_timeout_zero_never_expires()
+    test_sequence_timeout_ignores_non_key_events()
+    ret testing.Summary()
+end

@@ -1,0 +1,328 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Input: a single-line text-entry widget.
+ *
+ * Input holds a value, a caret index into that value, and three styles. It is
+ * focusable, so the screen routes keyboard events to it; its handle_event
+ * inserts printable characters and spaces at the caret, moves the caret with
+ * Left/Right/Home/End, deletes with Backspace (before the caret) and Delete
+ * (at the caret), and calls on_submit on enter.
+ *
+ * The value and caret index use codepoints. Rendering uses display cells: a
+ * wide glyph takes two columns, and the caret column is the display width of
+ * the visible prefix. A combining mark remains a separate caret position.
+ *
+ * Rendering is stateful. The widget stores the index of the first visible
+ * codepoint (window_start) between frames; each render shows the full width
+ * and moves the window the minimum needed to keep the caret inside it, so the
+ * caret column is always 0..width-1 and no cell is reserved for it. The
+ * cursor is drawn as one reverse-video cell over whatever glyph the row
+ * already has at the caret column (a blank past the last glyph), and only
+ * while the buffer reports focus. An empty value shows the placeholder,
+ * styled dim, whether focused or not.
+ *
+ * Shaping: max_length (glyphs), an insertion filter and display-only masking.
+ *
+ * Submit: on_submit gets the real value on enter and its bool is the consumed
+ * flag; false lets enter bubble. It is a field because the screen gives
+ * widgets keys before the keymap, so a keymap binding on enter never fires.
+ *
+ * This file deliberately has no layout measurement, no selection or paste,
+ * and no Buffer cursor API. The
+ * fields are complete Style values: StyleDefault on `style` asks for the
+ * terminal's default, and StyleDefault on `cursor_style` or
+ * `placeholder_style` adds nothing. The cursor and placeholder compose over
+ * the base with StyleMerge — their colors win, their attributes are ORed —
+ * so a caller can ask for a plain cursor by assigning StyleDefault. Placement
+ * in the parent's box belongs to whoever owns the layout.
+ */
+
+package tui
+
+import str
+import term
+
+@en "Input"
+@fa "ورودی"
+/// A single-line text input: value, caret, optional placeholder, and styles
+/// for the value, the cursor cell, and the placeholder. It is focusable, so
+/// keyboard events reach it through the screen's focus dispatch. Set the
+/// value with the field or set_value, read it with value, and set the
+/// placeholder with the field or set_placeholder.
+pub struct Input:
+    pub use BaseWidget
+
+    @en "placeholder"
+    @fa "متن راهنما"
+    /// Text shown (dim) while the value is empty. "" means no placeholder.
+    pub placeholder: str = ""
+
+    @en "style"
+    @fa "ظاهر"
+    /// The base style of the value and the blank background. StyleDefault
+    /// draws with the terminal's defaults.
+    pub style: Style = StyleDefault
+
+    @en "cursor_style"
+    @fa "ظاهر مکان‌نما"
+    /// The style merged over `style` for the cursor cell. Defaults to
+    /// reverse video.
+    pub cursor_style: Style = Style { reverse = true }
+
+    @en "placeholder_style"
+    @fa "ظاهر متن راهنما"
+    /// The style merged over `style` for the placeholder. Defaults to a
+    /// bright-black foreground.
+    pub placeholder_style: Style = Style { fg = BrightBlack }
+
+    @en "max_length"
+    @fa "حداکثر طول"
+    /// Maximum value length in glyphs (codepoints), not display cells. 0
+    /// means unlimited. Typing at the limit is consumed and changes nothing;
+    /// set_value truncates a longer value; deleting is always allowed.
+    pub max_length: int = 0
+
+    @en "filter"
+    @fa "پالایه"
+    /// Called with the whole candidate value after a proposed insertion (one
+    /// typed glyph), once the max_length check has passed. Returning false
+    /// rejects it: the key is consumed and nothing changes. Not called for
+    /// Backspace, Delete or set_value. The default accepts everything.
+    pub filter: func (str) bool = (_candidate: str): ret true end
+
+    @en "masked"
+    @fa "پوشانده"
+    /// When true every value glyph is painted as mask_glyph. Display only:
+    /// value, caret and window are unchanged. The placeholder is never masked.
+    pub masked: bool = false
+
+    @en "mask_glyph"
+    @fa "نماد پوشش"
+    /// The glyph painted for each value glyph while masked. Only its first
+    /// codepoint is used; "" means "*". Under GlyphPolicy.ASCII a non-ASCII
+    /// mask glyph paints as "*".
+    pub mask_glyph: str = "*"
+
+    @en "on_submit"
+    @fa "هنگام ثبت"
+    /// Called synchronously on Enter with the real value, never the mask.
+    /// Returning true consumes the key; false lets it bubble to the parent.
+    /// The default returns true. After it returns, the caret and window are
+    /// clamped to the value, in case it changed the value.
+    pub on_submit: func (str) bool = (_value: str): ret true end
+
+    content: str = ""
+    caret: int = 0
+    window_start: int = 0
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// Returns true: Input is interactive, so the screen's focus dispatch
+    /// routes keyboard events to it.
+    pub func focusable(): bool:
+        ret true
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Reacts to a key press. A printable character or space is inserted at
+    /// the caret; Left, Right, Home and End move it (all consumed, even when
+    /// it cannot move); backspace drops the codepoint before the caret and
+    /// delete the one at it (nothing at the start or end); enter calls on_submit
+    /// and returns its result. Other events and keys are not consumed, so
+    /// they bubble on.
+    pub func handle_event(event: Event): bool:
+        if event.kind != KeyEvent:
+            ret false
+        end
+        code := event.key.code
+        total := str.CharCount(this.content)
+        if code == term.KeyChar and not event.key.ctrl and not event.key.alt:
+            this._insert(event.key.ch)
+            ret true
+        end
+        if code == term.KeySpace:
+            this._insert(" ")
+            ret true
+        end
+        if code == term.KeyLeft and not event.key.ctrl and not event.key.alt:
+            if this.caret > 0:
+                this.caret = this.caret - 1
+            end
+            ret true
+        end
+        if code == term.KeyRight and not event.key.ctrl and not event.key.alt:
+            if this.caret < total:
+                this.caret = this.caret + 1
+            end
+            ret true
+        end
+        if code == term.KeyHome and not event.key.ctrl and not event.key.alt:
+            this.caret = 0
+            ret true
+        end
+        if code == term.KeyEnd and not event.key.ctrl and not event.key.alt:
+            this.caret = total
+            ret true
+        end
+        if code == term.KeyBackspace:
+            if this.caret > 0:
+                this.content = str.CharSubstr(this.content, 0, this.caret - 1) + str.CharSubstr(this.content, this.caret, total - this.caret)
+                this.caret = this.caret - 1
+            end
+            ret true
+        end
+        if code == term.KeyDelete and not event.key.ctrl and not event.key.alt:
+            if this.caret < total:
+                this.content = str.CharSubstr(this.content, 0, this.caret) + str.CharSubstr(this.content, this.caret + 1, total - this.caret - 1)
+            end
+            ret true
+        end
+        if code == term.KeyEnter:
+            consumed := this.on_submit(this.content)
+            // The callback may have replaced the value.
+            n := str.CharCount(this.content)
+            if this.caret > n:
+                this.caret = n
+            end
+            if this.window_start > this.caret:
+                this.window_start = this.caret
+            end
+            ret consumed
+        end
+        ret false
+    end
+
+    // Inserts `ins` at the caret: max_length first (keeps the prefix that
+    // fits), then the filter once on the whole candidate. All or nothing.
+    func _insert(ins: str):
+        total := str.CharCount(this.content)
+        mut piece := ins
+        if this.max_length > 0:
+            room := this.max_length - total
+            if room <= 0:
+                ret
+            end
+            piece = str.CharSubstr(ins, 0, room)
+        end
+        candidate := str.CharSubstr(this.content, 0, this.caret) + piece + str.CharSubstr(this.content, this.caret, total - this.caret)
+        if not this.filter(candidate):
+            ret
+        end
+        this.content = candidate
+        this.caret = this.caret + str.CharCount(piece)
+    end
+
+    @en "value"
+    @fa "مقدار"
+    /// The current text, without styles.
+    pub func value(): str:
+        ret this.content
+    end
+
+    @en "set_value"
+    @fa "تنظیم مقدار"
+    /// Replaces the value, cut to max_length glyphs when that is set, without
+    /// calling filter; the caret moves to its end.
+    pub func set_value(v: str):
+        mut t := v
+        if this.max_length > 0 and str.CharCount(t) > this.max_length:
+            t = str.CharSubstr(t, 0, this.max_length)
+        end
+        this.content = t
+        this.caret = str.CharCount(t)
+    end
+
+    @en "set_placeholder"
+    @fa "تنظیم متن راهنما"
+    /// Sets the text shown while the value is empty.
+    pub func set_placeholder(p: str):
+        this.placeholder = p
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Draws the value into bounds: the box is painted with `style`, the
+    /// window of cells that holds the caret is written (the placeholder,
+    /// dim, when the value is empty), and — while the buffer reports focus —
+    /// one reverse-video cell marks the caret column. The window start is
+    /// kept between frames and moves only when the caret leaves it. A
+    /// degenerate box draws nothing and never panics.
+    pub func render(buf: Buffer, bounds: Rect):
+        if bounds.is_empty():
+            ret
+        end
+        buf.fill(bounds, " ", this.style)
+        w := bounds.width
+        count := str.CharCount(this.content)
+        mut start := this.window_start
+        if start < 0:
+            start = 0
+        end
+        if start > count:
+            start = 0
+        end
+        mut chars := str.Chars(this.content)
+        defer chars.free()
+        if this.caret < start:
+            start = this.caret
+        end
+        mut col := 0
+        if start < this.caret:
+            col = _text_width(str.CharSubstr(this.content, start, this.caret - start))
+        end
+        until col >= w and start < this.caret:
+            col -= _char_width(chars.get(start))
+            start += 1
+        end
+        this.window_start = start
+        if count == 0 and this.placeholder != "":
+            ps := StyleMerge(this.style, this.placeholder_style)
+            buf.put_str(bounds.x, bounds.y, _take_cells(this.placeholder, w), ps)
+        else:
+            mut text := ""
+            if start < count:
+                text = _take_cells(str.CharSubstr(this.content, start, count - start), w)
+            end
+            if this.masked:
+                mut mg := _take_cells(this.mask_glyph, 1)
+                // A non-ASCII codepoint is more than one byte.
+                if mg == "" or (buf.glyphs == GlyphPolicy.ASCII and mg.len() > 1):
+                    mg = "*"
+                end
+                text = _take_cells(str.Repeat(mg, str.CharCount(text)), w)
+            end
+            buf.put_str(bounds.x, bounds.y, text, this.style)
+        end
+        if buf.focused:
+            c := buf.get(bounds.x + col, bounds.y)
+            cursor_style := StyleMerge(this.style, this.cursor_style)
+            if _char_width(c.ch) == 2:
+                buf.put_str(bounds.x + col, bounds.y, c.ch, cursor_style)
+            else:
+                buf.set(bounds.x + col, bounds.y, Cell { ch = c.ch, style = cursor_style })
+            end
+        end
+    end
+end
+
+@en "NewInput"
+@fa "ورودی جدید"
+/// Creates an empty Input with no placeholder, unstyled values, and the
+/// default cursor and placeholder styles.
+pub func NewInput(): Input:
+    ret Input {}
+end

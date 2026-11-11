@@ -1,0 +1,826 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Table: a non-focusable grid of single-line rows, with an optional bold
+ * header, a rule under the header, per-column and per-cell alignment, and
+ * clip or ellipsis overflow.
+ *
+ * Column widths reuse LayoutSize: Fixed is an exact width, Pref is the
+ * content width plus 2 * pad_x clamped to [min, max], and Fill is a weighted
+ * share of what is left. When the rect is narrower than the table, star
+ * columns shrink to 0 first, then Pref columns shrink toward min, and Fixed
+ * columns keep their width and are clipped by the rect from the right.
+ *
+ * Widths are resolved on every call by one helper, so measure reports what
+ * preferred_size reports. preferred_size resolves without a width, so Fill
+ * columns count 0 there; render resolves at the real rect width. That is cheap
+ * for a first version. A cache belongs in set_bounds if a profile ever asks
+ * for one.
+ *
+ * Cells cost the display width of their codepoints, where East Asian wide
+ * glyphs count 2 (term.Width counts codepoints, so it cannot answer that).
+ * A wide glyph that would be split at an edge is replaced by a blank cell.
+ * Each cell paints its own rect and nothing else: the table's remainder is
+ * not painted, so it stays transparent over whatever lies beneath it.
+ *
+ * Deliberate omissions: no scrolling in either direction, no row selection
+ * or keyboard handling (TableView, below, adds both), no sorting, no column resize, no borders or column
+ * dividers, and no per-cell styles. Table is never a focus or click target:
+ * it does not take focus, does not hit-test, and does not consume events.
+ *
+ * TableView lives in this file to reuse Table's private width and row
+ * helpers. It adds vertical scrolling only: a pinned header, a window that
+ * starts at offset, a selection cursor, a scrollbar, and an activate callback.
+ * Horizontal scrolling, click-to-select and the mouse wheel are not
+ * implemented (std/term drops the wheel bit). Table itself is unchanged.
+ */
+
+package tui
+
+import str
+import term
+
+// A per-cell alignment override. Private: set only through set_cell_align.
+struct _CellAlign:
+    pub row: int = 0
+    pub col: int = 0
+    pub align: Alignment = Alignment.Left
+end
+
+@en "CellOverflow"
+@fa "سرریز سلول"
+/// What happens to cell text wider than its text area.
+pub enum CellOverflow:
+    @en "Clip"
+    @fa "برش"
+    /// Text past the edge is cut off (the default).
+    Clip
+    @en "Ellipsis"
+    @fa "سه‌نقطه"
+    /// The last visible cell is replaced by the ellipsis character.
+    Ellipsis
+end
+
+@en "TableColumn"
+@fa "ستون جدول"
+/// One column of a Table. width is read as a LayoutSize; min and max are read
+/// only when width is Pref. max = -1 means unbounded. When min and max
+/// conflict, min wins.
+pub struct TableColumn:
+    @en "width"
+    @fa "عرض"
+    /// Fixed exact cells, Pref the content width, Fill a star share.
+    pub width: LayoutSize = LayoutSize {}
+
+    @en "min"
+    @fa "کمینه"
+    /// Lower bound for a Pref column, in cells.
+    pub min: int = 0
+
+    @en "max"
+    @fa "بیشینه"
+    /// Upper bound for a Pref column, in cells. -1 means unbounded.
+    pub max: int = -1
+
+    @en "align"
+    @fa "تراز"
+    /// Default alignment of this column's cells and header.
+    pub align: Alignment = Alignment.Left
+
+    @en "overflow"
+    @fa "سرریز"
+    /// How text wider than the column is shown.
+    pub overflow: CellOverflow = CellOverflow.Clip
+end
+
+@en "Table"
+@fa "جدول"
+/// A non-focusable grid of single-line rows. Add columns and rows, then
+/// render it. When header is on, row 0 is the header: it is painted in
+/// header_style and each cell takes its column's alignment. rule draws a
+/// line of ─ under the header across the table's width. pad_x is the blank
+/// space on each side of a cell; a negative value counts as 0.
+pub struct Table:
+    pub use BaseWidget
+
+    @en "columns"
+    @fa "ستون‌ها"
+    /// The column definitions, left to right.
+    pub columns: Vector<TableColumn> = Vector {}
+
+    @en "rows"
+    @fa "ردیف‌ها"
+    /// The cell text by row, then column. Row 0 is the header when header is on.
+    pub rows: Vector<Vector<str>> = Vector {}
+
+    @en "header"
+    @fa "سرآیند"
+    /// When true, row 0 is the header.
+    pub header: bool = false
+
+    @en "rule"
+    @fa "خط‌کشی"
+    /// Draws a rule under the header. Only meaningful when header is on.
+    pub rule: bool = true
+
+    @en "pad_x"
+    @fa "فاصله درونی افقی"
+    /// Blank cells on each side of every cell's text.
+    pub pad_x: int = 1
+
+    @en "style"
+    @fa "ظاهر"
+    /// Style of the data rows.
+    pub style: Style = StyleDefault
+
+    @en "header_style"
+    @fa "ظاهر سرآیند"
+    /// Style of the header row. It replaces style there, rather than merging.
+    pub header_style: Style = Style { bold = true }
+
+    cell_aligns: Vector<_CellAlign> = Vector {}
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// Returns false: a table takes no keyboard focus.
+    pub func focusable(): bool:
+        ret false
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    /// Returns false: a click on the table falls through to whatever is beneath.
+    pub func hits(): bool:
+        ret false
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Consumes nothing and changes nothing.
+    pub func handle_event(event: Event): bool:
+        _ := event
+        ret false
+    end
+
+    @en "add_column"
+    @fa "افزودن ستون"
+    /// Appends a column and returns its index.
+    pub func add_column(col: TableColumn): int:
+        this.columns.push(col)
+        ret this.columns.len() - 1
+    end
+
+    @en "add_row"
+    @fa "افزودن ردیف"
+    /// Appends a row and returns its index. Missing cells read as blank.
+    pub func add_row(cells: Vector<str>): int:
+        this.rows.push(cells)
+        ret this.rows.len() - 1
+    end
+
+    @en "set_column_width"
+    @fa "تنظیم عرض ستون"
+    /// Sets a column's width rule. An index out of range does nothing.
+    pub func set_column_width(i: int, w: LayoutSize):
+        if i < 0 or i >= this.columns.len():
+            ret
+        end
+        mut col := this.columns.get(i)
+        col.width = w
+        this.columns.set(i, col)
+    end
+
+    @en "set_column_align"
+    @fa "تنظیم تراز ستون"
+    /// Sets a column's default alignment. An index out of range does nothing.
+    pub func set_column_align(i: int, a: Alignment):
+        if i < 0 or i >= this.columns.len():
+            ret
+        end
+        mut col := this.columns.get(i)
+        col.align = a
+        this.columns.set(i, col)
+    end
+
+    @en "set_column_overflow"
+    @fa "تنظیم سرریز ستون"
+    /// Sets a column's overflow. An index out of range does nothing.
+    pub func set_column_overflow(i: int, o: CellOverflow):
+        if i < 0 or i >= this.columns.len():
+            ret
+        end
+        mut col := this.columns.get(i)
+        col.overflow = o
+        this.columns.set(i, col)
+    end
+
+    @en "set_cell_align"
+    @fa "تنظیم تراز سلول"
+    /// Overrides the alignment of one cell. It beats the column's alignment,
+    /// which beats Left. Row is an index into rows, so 0 is the header when
+    /// header is on.
+    pub func set_cell_align(row: int, col: int, a: Alignment):
+        repeat this.cell_aligns.len() in k:
+            mut o := this.cell_aligns.get(k)
+            if o.row == row and o.col == col:
+                o.align = a
+                this.cell_aligns.set(k, o)
+                ret
+            end
+        end
+        this.cell_aligns.push(_CellAlign { row = row, col = col, align = a })
+    end
+
+    @en "set_pad_x"
+    @fa "تنظیم فاصله درونی افقی"
+    /// Sets the blank space on each side of a cell. A negative value counts as 0.
+    pub func set_pad_x(n: int):
+        this.pad_x = n
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    /// The table's natural size: the resolved widths with star columns at 0,
+    /// clamped to max_width when it is positive. The height is the header,
+    /// the rule and the data rows, so a table with no rows is 0 high. A table
+    /// with no columns is 0 by 0.
+    pub func preferred_size(max_width: int): Rect:
+        if this.columns.len() == 0:
+            ret Rect { width = 0, height = 0 }
+        end
+        ws := this._resolve_widths(-1)
+        mut total := 0
+        repeat ws.len() in i:
+            total = total + ws.get(i)
+        end
+        if max_width > 0 and total > max_width:
+            total = max_width
+        end
+        ret Rect { width = total, height = this._height() }
+    end
+
+    @en "measure"
+    @fa "اندازه‌گیری"
+    /// Reports the preferred size along axis. ok is always true, so the
+    /// layout engine reads a real answer.
+    pub func measure(axis: Axis, max_width: int): Measure:
+        size := this.preferred_size(max_width)
+        if axis == Axis.X:
+            ret Measure { ok = true, extent = size.width }
+        end
+        ret Measure { ok = true, extent = size.height }
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Draws the table into bounds. Rows past bounds.height are not drawn.
+    /// Nothing is drawn for an empty table or an empty rect.
+    pub func render(buf: Buffer, bounds: Rect):
+        if bounds.is_empty() or this.columns.len() == 0 or this.rows.len() == 0:
+            ret
+        end
+        ws := this._resolve_widths(bounds.width)
+        body := this.style
+        head := this.header_style
+        mut y := 0
+        mut first := 0
+        if this.header:
+            if y < bounds.height:
+                this._paint_row(buf, bounds, ws, 0, y, head)
+            end
+            y = y + 1
+            first = 1
+        end
+        if this.header and this.rule:
+            if y < bounds.height:
+                this._paint_rule(buf, bounds, ws, y, body)
+            end
+            y = y + 1
+        end
+        repeat this.rows.len() - first in k:
+            if y < bounds.height:
+                this._paint_row(buf, bounds, ws, first + k, y, body)
+            end
+            y = y + 1
+        end
+    end
+
+    @en "_resolve_widths"
+    @fa "محاسبه عرض‌ها"
+    /// Column widths for a rect w cells wide. w < 0 means no width is given:
+    /// star columns resolve to 0 and nothing shrinks. That is the preferred
+    /// size. Public only so TableView can reach it; not for application code.
+    pub func _resolve_widths(w: int): Vector<int>:
+        n := this.columns.len()
+        pad := this._pad()
+        mut out := Vector {} as Vector<int>
+        repeat n in i:
+            col := this.columns.get(i)
+            mut v := 0
+            if col.width.kind == SizeKind.Fixed:
+                v = col.width.cells
+                if v < 0:
+                    v = 0
+                end
+            else col.width.kind == SizeKind.Pref:
+                v = this._natural(i) + 2 * pad
+                mut lo := col.min
+                if lo < 0:
+                    lo = 0
+                end
+                if col.max >= 0 and v > col.max:
+                    v = col.max
+                end
+                if v < lo:
+                    v = lo
+                end
+            end
+            out.push(v)
+        end
+        if w < 0:
+            ret out
+        end
+        mut used := 0
+        repeat n in i:
+            used = used + out.get(i)
+        end
+        if used > w:
+            // Too narrow even without star columns: Pref columns shrink toward
+            // min, left to right. Fixed columns keep their width and are
+            // clipped by the rect at paint time.
+            mut over := used - w
+            repeat n in i:
+                col := this.columns.get(i)
+                if over > 0 and col.width.kind == SizeKind.Pref:
+                    mut lo := col.min
+                    if lo < 0:
+                        lo = 0
+                    end
+                    mut take := out.get(i) - lo
+                    if take < 0:
+                        take = 0
+                    end
+                    if take > over:
+                        take = over
+                    end
+                    out.set(i, out.get(i) - take)
+                    over = over - take
+                end
+            end
+            ret out
+        end
+        // Star columns share what is left, by weight. Each gets its floor
+        // share, and the integer remainder goes one cell each to the earliest
+        // weighted star columns.
+        free_cells := w - used
+        mut wsum := 0
+        repeat n in i:
+            col := this.columns.get(i)
+            if col.width.kind == SizeKind.Fill and col.width.weight > 0:
+                wsum = wsum + col.width.weight
+            end
+        end
+        if wsum == 0:
+            ret out
+        end
+        mut given := 0
+        repeat n in i:
+            col := this.columns.get(i)
+            if col.width.kind == SizeKind.Fill and col.width.weight > 0:
+                share := free_cells * col.width.weight / wsum
+                out.set(i, share)
+                given = given + share
+            end
+        end
+        mut extra := free_cells - given
+        repeat n in i:
+            col := this.columns.get(i)
+            if extra > 0 and col.width.kind == SizeKind.Fill and col.width.weight > 0:
+                out.set(i, out.get(i) + 1)
+                extra = extra - 1
+            end
+        end
+        ret out
+    end
+
+    // Height in rows: header, rule, then data rows. No columns or no rows is 0.
+    func _height(): int:
+        if this.columns.len() == 0 or this.rows.len() == 0:
+            ret 0
+        end
+        mut h := 0
+        mut data := this.rows.len()
+        if this.header:
+            h = 1
+            data = data - 1
+            if this.rule:
+                h = h + 1
+            end
+        end
+        ret h + data
+    end
+
+    // The text of cell (r, c), or "" when the row is shorter than c.
+    func _cell_text(r: int, c: int): str:
+        row := this.rows.get(r)
+        if c >= row.len():
+            ret ""
+        end
+        ret _first_line(row.get(c))
+    end
+
+    // The widest content of column c across all rows, in cells.
+    func _natural(c: int): int:
+        mut best := 0
+        repeat this.rows.len() in r:
+            w := _text_width(this._cell_text(r, c))
+            if w > best:
+                best = w
+            end
+        end
+        ret best
+    end
+
+    func _pad(): int:
+        if this.pad_x < 0:
+            ret 0
+        end
+        ret this.pad_x
+    end
+
+    // Cell > column > Left.
+    func _align_for(r: int, c: int): Alignment:
+        repeat this.cell_aligns.len() in k:
+            o := this.cell_aligns.get(k)
+            if o.row == r and o.col == c:
+                ret o.align
+            end
+        end
+        if c < this.columns.len():
+            ret this.columns.get(c).align
+        end
+        ret Alignment.Left
+    end
+
+    @en "_paint_row"
+    @fa "رسم ردیف"
+    /// Paints data or header row r at row y of bounds, one cell per column.
+    /// Public only so TableView can reach it; not for application code.
+    pub func _paint_row(buf: Buffer, bounds: Rect, ws: Vector<int>, r: int, y: int, style: Style):
+        pad := this._pad()
+        mut x := 0
+        repeat this.columns.len() in c:
+            w := ws.get(c)
+            mut cw := w
+            if cw > bounds.width - x:
+                cw = bounds.width - x
+            end
+            if cw > 0:
+                cell := Rect { x = bounds.x + x, y = bounds.y + y, width = cw, height = 1 }
+                buf.fill(cell, " ", style)
+                area := cw - 2 * pad
+                mut text := ""
+                mut shown := 0
+                if area > 0:
+                    overflow := this.columns.get(c).overflow
+                    raw := this._cell_text(r, c)
+                    raw_w := _text_width(raw)
+                    text = _fit(raw, raw_w, area, overflow)
+                    shown = raw_w
+                    if shown > area:
+                        shown = area
+                    end
+                end
+                mut offset := 0
+                slack := area - shown
+                align := this._align_for(r, c)
+                if align == Alignment.Right:
+                    offset = slack
+                else align == Alignment.Center:
+                    offset = slack / 2
+                end
+                buf.put_str(cell.x + pad + offset, cell.y, text, style)
+            end
+            x = x + w
+        end
+    end
+
+    @en "_paint_rule"
+    @fa "رسم خط"
+    /// Paints the rule under the header at row y of bounds. Public only so
+    /// TableView can reach it; not for application code.
+    pub func _paint_rule(buf: Buffer, bounds: Rect, ws: Vector<int>, y: int, style: Style):
+        mut total := 0
+        repeat ws.len() in i:
+            total = total + ws.get(i)
+        end
+        if total > bounds.width:
+            total = bounds.width
+        end
+        mut glyph := "─"
+        if buf.glyphs == GlyphPolicy.ASCII:
+            glyph = "-"
+        end
+        buf.fill(Rect { x = bounds.x, y = bounds.y + y, width = total, height = 1 }, glyph, style)
+    end
+end
+
+@en "TableView"
+@fa "نمای جدول"
+/// A focusable, vertically scrollable Table. It embeds Table, so columns,
+/// rows, header, rule, styles and every setter are Table's. The header and
+/// rule stay pinned; the data rows scroll under them in a window that starts
+/// at offset. selected is the cursor row, an index into the data rows, or -1
+/// when there are none. Place a TableView in a Fill slot: preferred_size is
+/// Table's full height, so any other slot shows every row and never scrolls.
+/// Up, Down, PageUp, PageDown, Home and End move the cursor and are always
+/// consumed; Enter calls activate. When rows outnumber the window, the last
+/// column of cells holds a scrollbar.
+pub struct TableView:
+    pub use Table
+
+    @en "offset"
+    @fa "جابه‌جایی"
+    /// Index of the first visible data row.
+    pub offset: int = 0
+
+    @en "selected"
+    @fa "انتخاب‌شده"
+    /// The selected data row, or -1 when there are no data rows.
+    pub selected: int = 0
+
+    @en "activate"
+    @fa "فعال‌سازی"
+    /// Called with the selected row when Enter is pressed on a non-empty
+    /// table. Its result is the consumed flag: the default returns false, so
+    /// Enter bubbles on.
+    pub activate: func (int) bool = (_row: int): ret false end
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// Returns true: the screen routes keys to a TableView while it has focus.
+    pub func focusable(): bool:
+        ret true
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    /// Returns true. A click does not focus the table; the wheel is not
+    /// decoded by std/term yet, so nothing scrolls by mouse.
+    pub func hits(): bool:
+        ret true
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Up and Down move the cursor by one row, PageUp and PageDown by the
+    /// window height, Home and End to the first and last row. The window
+    /// scrolls by the least amount that keeps the cursor visible, and a page
+    /// key moves the window by a page. All six are consumed, even with no
+    /// rows. Enter returns activate(selected), and is not consumed when there
+    /// are no rows. Everything else returns false.
+    pub func handle_event(event: Event): bool:
+        if event.kind != KeyEvent:
+            ret false
+        end
+        n := this._body_count()
+        h := this._body_height(this.bounds().height)
+        this._clamp(h)
+        if event.is_key(term.KeyEnter):
+            if n == 0:
+                ret false
+            end
+            ret this.activate(this.selected)
+        end
+        mut step := h
+        if step < 1:
+            step = 1
+        end
+        if event.is_key(term.KeyUp):
+            this.selected = this.selected - 1
+        else event.is_key(term.KeyDown):
+            this.selected = this.selected + 1
+        else event.is_key(term.KeyPageUp):
+            this.selected = this.selected - step
+            this.offset = this.offset - step
+        else event.is_key(term.KeyPageDown):
+            this.selected = this.selected + step
+            this.offset = this.offset + step
+        else event.is_key(term.KeyHome):
+            this.selected = 0
+            this.offset = 0
+        else event.is_key(term.KeyEnd):
+            this.selected = n - 1
+            this.offset = this._max_offset(h)
+        else:
+            ret false
+        end
+        this._clamp(h)
+        this._ensure_visible(h)
+        ret true
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Draws the pinned header and rule, then data rows offset up to
+    /// offset + window height, each painted only inside bounds. The selected
+    /// row is reversed while the buffer is focused and bold while it is not;
+    /// no row is marked when the selection lies outside the window. The
+    /// scrollbar uses │ and █, or | and # under the ASCII glyph policy.
+    pub func render(buf: Buffer, bounds: Rect):
+        n := this._body_count()
+        h := this._body_height(bounds.height)
+        this._clamp(h)
+        if bounds.is_empty() or this.columns.len() == 0 or this.rows.len() == 0:
+            ret
+        end
+        mut bar := 0
+        if n > h and h > 0:
+            bar = 1
+        end
+        cw := bounds.width - bar
+        inner := Rect { x = bounds.x, y = bounds.y, width = cw, height = bounds.height }
+        ws := this.Table._resolve_widths(cw)
+        hr := this._header_rows()
+        mut first := 0
+        if this.header:
+            first = 1
+            this.Table._paint_row(buf, inner, ws, 0, 0, this.header_style)
+            if bar == 1:
+                buf.fill(Rect { x = bounds.x + cw, y = bounds.y, width = 1, height = 1 }, " ", this.header_style)
+            end
+            if this.rule and bounds.height > 1:
+                this.Table._paint_rule(buf, inner, ws, 1, this.style)
+            end
+        end
+        mut shown := n - this.offset
+        if shown > h:
+            shown = h
+        end
+        mut mark := Style { bold = true }
+        if buf.focused:
+            mark = Style { reverse = true }
+        end
+        repeat shown in k:
+            i := this.offset + k
+            y := bounds.y + hr + k
+            this.Table._paint_row(buf, inner, ws, first + i, hr + k, this.style)
+            if i == this.selected:
+                repeat cw in dx:
+                    c := buf.get(bounds.x + dx, y)
+                    buf.set(bounds.x + dx, y, Cell { ch = c.ch, style = StyleMerge(c.style, mark) })
+                end
+            end
+        end
+        if bar == 1:
+            mut tl := h * h / n
+            if tl < 1:
+                tl = 1
+            end
+            pos := this.offset * (h - tl) / this._max_offset(h)
+            mut track := "│"
+            mut thumb := "█"
+            if buf.glyphs == GlyphPolicy.ASCII:
+                track = "|"
+                thumb = "#"
+            end
+            repeat h in r:
+                mut ch := track
+                if r >= pos and r < pos + tl:
+                    ch = thumb
+                end
+                buf.set(bounds.x + cw, bounds.y + hr + r, Cell { ch = ch, style = this.style })
+            end
+        end
+    end
+
+    // Rows taken by the pinned header and its rule.
+    func _header_rows(): int:
+        mut r := 0
+        if this.header:
+            r = 1
+            if this.rule:
+                r = 2
+            end
+        end
+        ret r
+    end
+
+    // Data rows: every row except the header.
+    func _body_count(): int:
+        mut n := this.rows.len()
+        if this.header:
+            n = n - 1
+        end
+        if n < 0:
+            n = 0
+        end
+        ret n
+    end
+
+    // Rows left for data under the pinned header.
+    func _body_height(total: int): int:
+        h := total - this._header_rows()
+        if h < 0:
+            ret 0
+        end
+        ret h
+    end
+
+    func _max_offset(h: int): int:
+        m := this._body_count() - h
+        if m < 0:
+            ret 0
+        end
+        ret m
+    end
+
+    // Puts selected and offset back in range. Does not scroll to the cursor.
+    func _clamp(h: int):
+        n := this._body_count()
+        if n == 0:
+            this.selected = -1
+            this.offset = 0
+            ret
+        end
+        if this.selected < 0:
+            this.selected = 0
+        end
+        if this.selected > n - 1:
+            this.selected = n - 1
+        end
+        m := this._max_offset(h)
+        if this.offset < 0:
+            this.offset = 0
+        end
+        if this.offset > m:
+            this.offset = m
+        end
+    end
+
+    // The least scroll that shows the cursor.
+    func _ensure_visible(h: int):
+        if h <= 0 or this.selected < 0:
+            ret
+        end
+        if this.selected < this.offset:
+            this.offset = this.selected
+        end
+        if this.selected >= this.offset + h:
+            this.offset = this.selected - h + 1
+        end
+    end
+end
+
+// The text of a cell up to its first newline. Cells are single-line.
+func _first_line(s: str): str:
+    k := s.find("\n")
+    if k >= 0:
+        ret str.Substr(s, 0, k)
+    end
+    ret s
+end
+
+// Text fitted to exactly n cells when it is cut: clipped, or clipped to n - 1
+// cells and followed by the ellipsis. Text that already fits is returned as is.
+// A wide glyph that would be split at the edge leaves a blank cell instead.
+// w is the display width of s, measured once by the caller.
+func _fit(s: str, w: int, n: int, overflow: CellOverflow): str:
+    if n <= 0:
+        ret ""
+    end
+    if w <= n:
+        ret s
+    end
+    if overflow == CellOverflow.Ellipsis:
+        ret _clip_cells(s, n - 1) + "…"
+    end
+    ret _clip_cells(s, n)
+end
+
+@en "NewTable"
+@fa "جدول جدید"
+/// Creates an empty Table: no columns, no rows, no header, a rule, pad_x 1.
+pub func NewTable(): Table:
+    ret Table {}
+end
+
+@en "NewTableView"
+@fa "نمای جدول جدید"
+/// Creates an empty TableView: Table's defaults, offset 0, selected 0, and an
+/// activate that returns false.
+pub func NewTableView(): TableView:
+    ret TableView {}
+end

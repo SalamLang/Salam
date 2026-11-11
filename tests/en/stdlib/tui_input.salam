@@ -1,0 +1,1017 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Tests for the Input widget: the frozen defaults, the key table
+// (printable and space insert at the caret, Left/Right/Home/End move it,
+// backspace and delete splice a codepoint, enter calls on_submit, everything
+// else bubbles), the value getter and setters, the
+// stateful caret-window render (value or placeholder, styled cursor cell,
+// codepoint counts), the overflow window, and the screen-level focus gating
+// that routes keys to the input only while it holds the focus. Keys are
+// built with term.Decode from the exact bytes a terminal sends, or as a
+// literal term.Key code for specials. Cell styles are compared with StyleEq,
+// never as hand-written escapes.
+
+import testing
+import str
+import term
+
+import tui
+
+// Counts filter calls; the filter closure writes it.
+mut filter_calls := 0
+
+// Submit probes: the callbacks write them; `shared` is the input a callback
+// mutates.
+mut submit_calls := 0
+mut submit_arg := "unset"
+mut shared := tui.NewInput()
+
+// A focusable widget that consumes nothing, so it can steal the focus from
+// the input.
+struct Sink:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func special(code: int): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
+end
+
+// ---- Defaults ---------------------------------------------------------
+
+func test_defaults():
+    mut e := tui.NewInput()
+    testing.AssertTrue(e.focusable())
+    testing.AssertEqStr(e.value(), "")
+    testing.AssertEqStr(e.placeholder, "")
+    testing.AssertTrue(tui.StyleEq(e.style, tui.StyleDefault))
+    testing.AssertTrue(tui.StyleEq(e.cursor_style, tui.Style { reverse = true }))
+    testing.AssertTrue(tui.StyleEq(e.placeholder_style, tui.Style { fg = tui.BrightBlack }))
+end
+
+// ---- Editing (AC2) ----------------------------------------------------
+
+func test_editing_append_printable():
+    mut e := tui.NewInput()
+    testing.AssertTrue(e.handle_event(key("a")))
+    testing.AssertEqStr(e.value(), "a")
+    testing.AssertTrue(e.handle_event(key("b")))
+    testing.AssertEqStr(e.value(), "ab")
+end
+
+func test_editing_space_wire_shape():
+    mut e := tui.NewInput()
+    // A space on the wire is KeySpace, not KeyChar (G4).
+    testing.AssertTrue(e.handle_event(key(" ")))
+    testing.AssertEqStr(e.value(), " ")
+    // The literal form appends the same way.
+    testing.AssertTrue(e.handle_event(special(term.KeySpace)))
+    testing.AssertEqStr(e.value(), "  ")
+end
+
+func test_editing_backspace_sequence():
+    mut e := tui.NewInput()
+    e.set_value("ab")
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "a")
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "")
+    // One extra press at the start stays consumed and changes nothing.
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "")
+end
+
+func test_editing_enter_consumed():
+    mut e := tui.NewInput()
+    e.set_value("hi")
+    testing.AssertTrue(e.handle_event(key("\r")))
+    testing.AssertEqStr(e.value(), "hi")
+end
+
+func test_editing_unhandled_keys_bubble():
+    mut e := tui.NewInput()
+    // Tab, escape, up/down, page keys, insert, F-keys, ctrl chords, mouse:
+    // not consumed, so they bubble on.
+    testing.AssertFalse(e.handle_event(key("\t")))
+    testing.AssertFalse(e.handle_event(key("\x1b")))
+    testing.AssertFalse(e.handle_event(key("\x1b[A")))
+    testing.AssertFalse(e.handle_event(key("\x1b[B")))
+    testing.AssertFalse(e.handle_event(key("\x1b[5~")))
+    testing.AssertFalse(e.handle_event(key("\x1b[6~")))
+    testing.AssertFalse(e.handle_event(key("\x1b[2~")))
+    testing.AssertFalse(e.handle_event(key("\x1bOP")))
+    testing.AssertFalse(e.handle_event(key("\x01")))
+    testing.AssertFalse(e.handle_event(key("\x1b[1;5D")))
+    testing.AssertFalse(e.handle_event(key("\x1b[3;5~")))
+    testing.AssertFalse(e.handle_event(key("\x1b[3;3~")))
+    testing.AssertFalse(e.handle_event(tui.Event { kind = tui.MouseEvent }))
+    testing.AssertEqStr(e.value(), "")
+end
+
+func test_editing_navigation_consumed():
+    mut e := tui.NewInput()
+    // Delete, Home, Left, Right, End are consumed even with nothing to do.
+    testing.AssertTrue(e.handle_event(key("\x1b[3~")))
+    testing.AssertTrue(e.handle_event(key("\x1b[H")))
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("\x1b[C")))
+    testing.AssertTrue(e.handle_event(key("\x1b[F")))
+    testing.AssertEqStr(e.value(), "")
+end
+
+// ---- Caret editing ----------------------------------------------------
+
+// The column of the reverse-video cell in row 0, or -1.
+func cursor_col(b: tui.Buffer, w: int): int:
+    reverse := tui.Style { reverse = true }
+    mut found := -1
+    repeat w in x:
+        if tui.StyleEq(b.get(x, 0).style, reverse):
+            found = x
+        end
+    end
+    ret found
+end
+
+func test_caret_insert_mid_string():
+    mut e := tui.NewInput()
+    e.set_value("ac")
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("b")))
+    testing.AssertEqStr(e.value(), "abc")
+    testing.AssertTrue(e.handle_event(special(term.KeySpace)))
+    testing.AssertEqStr(e.value(), "ab c")
+end
+
+func test_caret_delete_and_backspace():
+    mut e := tui.NewInput()
+    e.set_value("abcd")
+    // Delete at the end changes nothing.
+    testing.AssertTrue(e.handle_event(key("\x1b[3~")))
+    testing.AssertEqStr(e.value(), "abcd")
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    // Caret 2: Delete drops "c", the caret stays; Backspace drops "b".
+    testing.AssertTrue(e.handle_event(key("\x1b[3~")))
+    testing.AssertEqStr(e.value(), "abd")
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "ad")
+end
+
+func test_caret_home_end_bounds():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    b.focused = true
+    e.set_value("abc")
+    // Right at the end stays at 3; End lands on 3.
+    testing.AssertTrue(e.handle_event(key("\x1b[C")))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(cursor_col(b, 8), 3)
+    testing.AssertTrue(e.handle_event(key("\x1b[H")))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(cursor_col(b, 8), 0)
+    // Left at 0 stays at 0.
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(cursor_col(b, 8), 0)
+    testing.AssertTrue(e.handle_event(key("\x1b[F")))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(cursor_col(b, 8), 3)
+end
+
+func test_caret_edit_trace():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    b.focused = true
+    e.set_value("salam")
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("x")))
+    testing.AssertEqStr(e.value(), "saxlam")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqInt(cursor_col(b, 16), 3)
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "salam")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqInt(cursor_col(b, 16), 2)
+    testing.AssertTrue(e.handle_event(key("\x1b[3~")))
+    testing.AssertEqStr(e.value(), "saam")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqInt(cursor_col(b, 16), 2)
+    testing.AssertTrue(e.handle_event(key("\x1b[F")))
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqInt(cursor_col(b, 16), 4)
+    testing.AssertTrue(e.handle_event(key("\x1b[H")))
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqInt(cursor_col(b, 16), 0)
+end
+
+func test_caret_over_glyph_and_trailing_blank():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    b.focused = true
+    e.set_value("abc")
+    // At n the cursor is a blank.
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.get(3, 0).ch, " ")
+    // Below n the cursor keeps the glyph under it.
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(cursor_col(b, 8), 2)
+    testing.AssertEqStr(b.get(2, 0).ch, "c")
+    testing.AssertEqStr(b.row_text(0), "abc     ")
+    // Unfocused: same window, no reverse cell.
+    b.focused = false
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(cursor_col(b, 8), -1)
+    testing.AssertEqStr(b.row_text(0), "abc     ")
+end
+
+func test_window_moves_only_when_caret_leaves():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(4, 1)
+    defer b.free()
+    b.focused = true
+    e.set_value("abcdefgh")
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "fgh ")
+    // Moving left inside the window does not scroll.
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "fgh ")
+    testing.AssertEqInt(cursor_col(b, 4), 2)
+    // Reaching the first column still does not scroll; leaving it does, by one.
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "fgh ")
+    testing.AssertEqInt(cursor_col(b, 4), 0)
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "efgh")
+    testing.AssertEqInt(cursor_col(b, 4), 0)
+end
+
+// Feeds one key, renders focused at width 5, and asserts the caret cell is
+// inside the window (exactly one reverse cell at column 0..4).
+func step(e &: tui.Input, b: tui.Buffer, seq: str):
+    testing.AssertTrue(e.handle_event(key(seq)))
+    e.render(b, rect(0, 0, 5, 1))
+    c := cursor_col(b, 5)
+    testing.AssertTrue(c >= 0 and c <= 4)
+end
+
+func test_caret_window_invariant():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(5, 1)
+    defer b.free()
+    b.focused = true
+    step(e, b, "a")
+    step(e, b, "b")
+    step(e, b, "c")
+    step(e, b, "d")
+    step(e, b, "e")
+    step(e, b, "f")
+    step(e, b, "g")
+    step(e, b, "\x1b[D")
+    step(e, b, "\x1b[D")
+    step(e, b, "x")
+    step(e, b, "\x1b[H")
+    step(e, b, "\x1b[3~")
+    step(e, b, "\x1b[F")
+    step(e, b, "y")
+    step(e, b, "\x7f")
+    step(e, b, "\x1b[D")
+    step(e, b, "\x1b[D")
+    step(e, b, "\x1b[D")
+    step(e, b, "\x1b[D")
+    step(e, b, "\x1b[D")
+    step(e, b, "\x1b[C")
+    step(e, b, "\x1b[3~")
+    step(e, b, "z")
+    step(e, b, "\x1b[F")
+    testing.AssertEqStr(e.value(), "bcdzxfg")
+end
+
+// ---- Getter and setters (AC6) -----------------------------------------
+
+func test_getter_and_setters():
+    mut e := tui.NewInput()
+    e.set_value("hello")
+    testing.AssertEqStr(e.value(), "hello")
+    e.set_value("")
+    testing.AssertEqStr(e.value(), "")
+    e.set_placeholder("name")
+    testing.AssertEqStr(e.value(), "")
+end
+
+// ---- Render (AC1, AC3) ------------------------------------------------
+
+func test_render_value_unfocused():
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    mut e := tui.NewInput()
+    e.set_value("hello")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqStr(b.get(0, 0).ch, "h")
+    testing.AssertEqStr(b.get(4, 0).ch, "o")
+    testing.AssertEqStr(b.get(5, 0).ch, " ")
+    testing.AssertEqStr(b.row_text(0), "hello           ")
+    // The background fill carries the base style; nothing is reverse while
+    // unfocused.
+    testing.AssertTrue(tui.StyleEq(b.get(15, 0).style, tui.StyleDefault))
+    cursor := tui.Style { reverse = true }
+    mut reversed := false
+    repeat 16 in x:
+        if tui.StyleEq(b.get(x, 0).style, cursor):
+            reversed = true
+        end
+    end
+    testing.AssertFalse(reversed)
+end
+
+func test_render_cursor_default():
+    reverse := tui.Style { reverse = true }
+    mut e := tui.NewInput()
+    e.set_value("hello")
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    b.focused = true
+    e.render(b, rect(0, 0, 16, 1))
+    // The caret is past the last glyph, so the cursor cell is the blank at
+    // column 5, reverse video (G04).
+    testing.AssertEqStr(b.get(5, 0).ch, " ")
+    testing.AssertTrue(tui.StyleEq(b.get(5, 0).style, reverse))
+    testing.AssertEqStr(b.row_text(0), "hello           ")
+
+    // Empty content puts the cursor at column 0.
+    mut empty := tui.NewInput()
+    mut b2 := tui.NewBuffer(16, 1)
+    defer b2.free()
+    b2.focused = true
+    empty.render(b2, rect(0, 0, 16, 1))
+    testing.AssertEqStr(b2.get(0, 0).ch, " ")
+    testing.AssertTrue(tui.StyleEq(b2.get(0, 0).style, reverse))
+end
+
+func test_render_placeholder_default():
+    gray := tui.Style { fg = tui.BrightBlack }
+    reverse := tui.Style { reverse = true }
+    mut e := tui.NewInput()
+    e.set_placeholder("Name")
+    testing.AssertEqStr(e.value(), "")
+
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqStr(b.row_text(0), "Name            ")
+    testing.AssertEqStr(b.get(0, 0).ch, "N")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, gray))
+    testing.AssertTrue(tui.StyleEq(b.get(3, 0).style, gray))
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, tui.StyleDefault))
+
+    mut b2 := tui.NewBuffer(16, 1)
+    defer b2.free()
+    b2.focused = true
+    e.render(b2, rect(0, 0, 16, 1))
+    // The cursor cell keeps the placeholder glyph but drops the grey (G02).
+    testing.AssertEqStr(b2.get(0, 0).ch, "N")
+    testing.AssertTrue(tui.StyleEq(b2.get(0, 0).style, reverse))
+    testing.AssertTrue(tui.StyleEq(b2.get(1, 0).style, gray))
+    testing.AssertEqStr(e.value(), "")
+end
+
+func test_render_default_fallbacks_from_fields():
+    // The defaults now live in the field initialisers, so the first render
+    // needs no lazy build, and the widget never builds an SGR itself.
+    mut e := tui.NewInput()
+    e.set_placeholder("Name")
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    b.focused = true
+    before := tui.SgrBuilds()
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    // Bytes are unchanged: the cursor cell is reverse, the placeholder grey.
+    testing.AssertEqStr(b.get(0, 0).ch, "N")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
+    testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, tui.Style { fg = tui.BrightBlack }))
+
+    // A caller-supplied style replaces the default outright.
+    bold := tui.Style { bold = true }
+    italic := tui.Style { italic = true }
+    mut c := tui.NewInput()
+    c.set_placeholder("Name")
+    c.cursor_style = italic
+    c.placeholder_style = bold
+    mut b3 := tui.NewBuffer(8, 1)
+    defer b3.free()
+    b3.focused = true
+    c.render(b3, rect(0, 0, 8, 1))
+    testing.AssertTrue(tui.StyleEq(b3.get(0, 0).style, italic))
+    testing.AssertTrue(tui.StyleEq(b3.get(1, 0).style, bold))
+    // StyleDefault adds nothing: a caller can ask for a plain cursor.
+    c.cursor_style = tui.StyleDefault
+    c.render(b3, rect(0, 0, 8, 1))
+    testing.AssertTrue(tui.StyleEq(b3.get(0, 0).style, tui.StyleDefault))
+end
+
+func test_render_themed_styles():
+    base := tui.Style { fg = tui.Black, bg = tui.White }
+    gray := tui.Style { fg = tui.BrightBlack, bg = tui.White }
+    reverse := tui.Style { reverse = true }
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    mut e := tui.NewInput()
+    e.style = base
+    e.set_value("hi")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, base))
+    testing.AssertTrue(tui.StyleEq(b.get(15, 0).style, base))
+    testing.AssertFalse(tui.StyleEq(b.get(2, 0).style, reverse))
+    b.focused = true
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, base))
+    testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, tui.StyleMerge(base, reverse)))
+
+    // Placeholder and cursor compose on top of the base style.
+    mut p := tui.NewInput()
+    p.style = base
+    p.set_placeholder("Name")
+    p.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqStr(b.get(0, 0).ch, "N")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleMerge(base, reverse)))
+    testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, tui.StyleMerge(base, gray)))
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, base))
+end
+
+// ---- Cursor tracking (AC5) --------------------------------------------
+
+func test_cursor_tracks_value_and_backspace():
+    reverse := tui.Style { reverse = true }
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    b.focused = true
+    e.set_value("ab")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, reverse))
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, reverse))
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, reverse))
+end
+
+func test_render_overflow_wide_value():
+    mut e := tui.NewInput()
+    e.set_value("abcdefghij")
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    // The caret is at the end, so the window ends one past the last glyph;
+    // focus does not change it.
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "defghij ")
+    b.focused = true
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "defghij ")
+    testing.AssertTrue(tui.StyleEq(b.get(7, 0).style, tui.Style { reverse = true }))
+end
+
+func test_render_scroll_starts_at_boundary():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    b.focused = true
+    // count == width: the caret sits one past the last glyph, so the first
+    // cell scrolls away.
+    e.set_value("abcdefgh")
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "bcdefgh ")
+    // One more cell scrolls the window one more step, same unfocused.
+    b.focused = false
+    e.set_value("abcdefghi")
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "cdefghi ")
+end
+
+func test_render_window_follows_shrinking_value():
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    e.set_value("abcdefghij")
+    e.render(b, rect(0, 0, 8, 1))
+    e.set_value("ab")
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "ab      ")
+    // Backspace down from the long value keeps the text visible.
+    e.set_value("abcdefghij")
+    e.render(b, rect(0, 0, 8, 1))
+    bs := special(term.KeyBackspace)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.handle_event(bs)
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "ab      ")
+end
+
+func test_render_wide_value_and_caret():
+    mut e := tui.NewInput()
+    e.set_value("中文ab")
+    mut b := tui.NewBuffer(6, 1)
+    defer b.free()
+    b.focused = true
+    e.render(b, rect(0, 0, 6, 1))
+    testing.AssertEqStr(b.row_text(0), "文ab  ")
+    testing.AssertEqStr(b.get(0, 0).ch, "文")
+    testing.AssertEqStr(b.get(1, 0).ch, "")
+    testing.AssertEqStr(b.get(4, 0).ch, " ")
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, tui.Style { reverse = true }))
+end
+
+func test_render_width5_focused():
+    mut e := tui.NewInput()
+    e.set_value("hello")
+    mut b := tui.NewBuffer(5, 1)
+    defer b.free()
+    b.focused = true
+    e.render(b, rect(0, 0, 5, 1))
+    testing.AssertEqStr(b.row_text(0), "ello ")
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, tui.Style { reverse = true }))
+    // Home: all five glyphs show and the caret overlays the first.
+    testing.AssertTrue(e.handle_event(key("\x1b[H")))
+    e.render(b, rect(0, 0, 5, 1))
+    testing.AssertEqStr(b.row_text(0), "hello")
+    testing.AssertEqInt(cursor_col(b, 5), 0)
+end
+
+func test_render_width1():
+    mut e := tui.NewInput()
+    e.set_value("ab")
+    mut b := tui.NewBuffer(1, 1)
+    defer b.free()
+    // Focused at the end: the whole cell is the blank cursor.
+    b.focused = true
+    e.render(b, rect(0, 0, 1, 1))
+    testing.AssertEqStr(b.row_text(0), " ")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
+    // Caret on the last glyph: that glyph is the cursor.
+    testing.AssertTrue(e.handle_event(key("\x1b[D")))
+    e.render(b, rect(0, 0, 1, 1))
+    testing.AssertEqStr(b.row_text(0), "b")
+    testing.AssertEqInt(cursor_col(b, 1), 0)
+    // Unfocused: same window, no cursor.
+    b.focused = false
+    e.render(b, rect(0, 0, 1, 1))
+    testing.AssertEqStr(b.row_text(0), "b")
+    testing.AssertEqInt(cursor_col(b, 1), -1)
+end
+
+func test_render_width0_draws_nothing():
+    mut e := tui.NewInput()
+    e.set_value("ab")
+    mut b := tui.NewBuffer(2, 1)
+    defer b.free()
+    b.focused = true
+    e.render(b, rect(0, 0, 0, 1))
+    testing.AssertEqStr(b.row_text(0), "  ")
+end
+
+// ---- Focus gating at screen level (AC4) -------------------------------
+
+func test_screen_dispatch_reaches_focused_input():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    // Keep the dyn handle: it shares the box the screen stores, so after
+    // screen dispatch it renders the value the screen's copy appended
+    // (dyn has no downcast; a plain struct copy is not shared).
+    w := tui.NewInput() as dyn tui.Widget
+    id := s.add(tui.RootId, w)
+    s.widget(id).set_bounds(rect(0, 0, 24, 1))
+    // The first focusable widget added receives the focus.
+    testing.AssertEqInt(s.focused_id(), id)
+    testing.AssertTrue(s.dispatch(key("a")))
+    mut probe := tui.NewBuffer(24, 1)
+    defer probe.free()
+    w.render(probe, rect(0, 0, 24, 1))
+    testing.AssertEqStr(probe.get(0, 0).ch, "a")
+    testing.AssertEqStr(probe.get(1, 0).ch, " ")
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "a")
+    testing.AssertTrue(tui.StyleEq(s.buffer.get(1, 0).style, tui.Style { reverse = true }))
+end
+
+func test_screen_unfocused_input_does_not_consume():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    w := tui.NewInput() as dyn tui.Widget
+    inlet := s.add(tui.RootId, w)
+    s.widget(inlet).set_bounds(rect(0, 0, 24, 1))
+    other := s.add(tui.RootId, Sink {})
+    s.widget(other).set_bounds(rect(0, 1, 24, 1))
+    // Move the focus off the input.
+    testing.AssertTrue(s.focus(other))
+    testing.AssertFalse(s.dispatch(key("a")))
+    mut probe := tui.NewBuffer(24, 1)
+    defer probe.free()
+    w.render(probe, rect(0, 0, 24, 1))
+    testing.AssertEqStr(probe.row_text(0), "                        ")
+    s.present()
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, " ")
+    // Unfocused: no cursor cell is drawn anywhere.
+    cursor := tui.Style { reverse = true }
+    mut reversed := false
+    repeat 24 in x:
+        if tui.StyleEq(s.buffer.get(x, 0).style, cursor):
+            reversed = true
+        end
+    end
+    testing.AssertFalse(reversed)
+end
+
+// ---- Unicode ----------------------------------------------------------
+
+func test_unicode_codepoint_editing():
+    reverse := tui.Style { reverse = true }
+    mut e := tui.NewInput()
+    mut b := tui.NewBuffer(16, 1)
+    defer b.free()
+    b.focused = true
+    // One multibyte glyph is one codepoint: one append, one caret step.
+    testing.AssertTrue(e.handle_event(key("é")))
+    testing.AssertEqStr(e.value(), "é")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertEqStr(b.get(0, 0).ch, "é")
+    testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, reverse))
+    // Two codepoints: the caret is at codepoint column 2.
+    testing.AssertTrue(e.handle_event(key("é")))
+    testing.AssertEqStr(e.value(), "éé")
+    e.render(b, rect(0, 0, 16, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, reverse))
+    // Backspace removes the whole codepoint, not one byte.
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "é")
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "")
+end
+
+// ---- Submit -------------------------------------------------------------
+
+func rec_true(v: str): bool:
+    submit_calls = submit_calls + 1
+    submit_arg = v
+    ret true
+end
+
+func rec_false(v: str): bool:
+    submit_calls = submit_calls + 1
+    submit_arg = v
+    ret false
+end
+
+func clear_shared(): bool:
+    submit_calls = submit_calls + 1
+    shared.set_value("")
+    ret false
+end
+
+func test_submit_true():
+    submit_calls = 0
+    mut e := tui.NewInput()
+    e.on_submit = (v: str): ret rec_true(v) end
+    e.set_value("hi")
+    testing.AssertTrue(e.handle_event(key("\r")))
+    testing.AssertEqInt(submit_calls, 1)
+    testing.AssertEqStr(submit_arg, "hi")
+    testing.AssertEqStr(e.value(), "hi")
+end
+
+func test_submit_false_bubbles():
+    submit_calls = 0
+    mut e := tui.NewInput()
+    e.on_submit = (v: str): ret rec_false(v) end
+    e.set_value("hi")
+    testing.AssertFalse(e.handle_event(key("\r")))
+    testing.AssertEqInt(submit_calls, 1)
+    testing.AssertEqStr(e.value(), "hi")
+end
+
+func test_submit_empty_value():
+    submit_calls = 0
+    submit_arg = "unset"
+    mut e := tui.NewInput()
+    e.on_submit = (v: str): ret rec_true(v) end
+    testing.AssertTrue(e.handle_event(key("\r")))
+    testing.AssertEqInt(submit_calls, 1)
+    testing.AssertEqStr(submit_arg, "")
+end
+
+func test_submit_only_on_enter():
+    submit_calls = 0
+    mut e := tui.NewInput()
+    e.on_submit = (v: str): ret rec_true(v) end
+    e.filter = (_c: str): ret false end
+    _ := e.handle_event(key("a"))
+    _ := e.handle_event(special(term.KeyBackspace))
+    _ := e.handle_event(special(term.KeyLeft))
+    _ := e.handle_event(special(term.KeyTab))
+    testing.AssertEqInt(submit_calls, 0)
+end
+
+func test_submit_masked_gets_real_value():
+    submit_arg = "unset"
+    mut e := tui.NewInput()
+    e.on_submit = (v: str): ret rec_true(v) end
+    e.masked = true
+    e.set_value("secret")
+    _ := e.handle_event(key("\r"))
+    testing.AssertEqStr(submit_arg, "secret")
+end
+
+func test_submit_clears_value_reclamps():
+    submit_calls = 0
+    shared = tui.NewInput()
+    shared.on_submit = (_v: str): ret clear_shared() end
+    shared.set_value("abcdefghij")
+    mut buf := tui.NewBuffer(4, 1)
+    defer buf.free()
+    buf.focused = true
+    shared.render(buf, rect(0, 0, 4, 1))
+    testing.AssertFalse(shared.handle_event(key("\r")))
+    testing.AssertEqInt(submit_calls, 1)
+    testing.AssertEqStr(shared.value(), "")
+    shared.render(buf, rect(0, 0, 4, 1))
+    testing.AssertEqInt(cursor_col(buf, 4), 0)
+    testing.AssertTrue(shared.handle_event(key("x")))
+    testing.AssertEqStr(shared.value(), "x")
+end
+
+// ---- Shaping (max length, filter, mask) -------------------------------
+
+func bump(): bool:
+    filter_calls = filter_calls + 1
+    ret true
+end
+
+func digits_only(c: str): bool:
+    repeat str.CharCount(c) in i:
+        if not str.Contains("0123456789", str.CharSubstr(c, i, 1)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func type_all(e: tui.Input, seq: str): tui.Input:
+    mut m := e
+    repeat str.CharCount(seq) in i:
+        _ := m.handle_event(key(str.CharSubstr(seq, i, 1)))
+    end
+    ret m
+end
+
+func test_shaping_defaults():
+    mut e := tui.NewInput()
+    testing.AssertEqInt(e.max_length, 0)
+    testing.AssertFalse(e.masked)
+    testing.AssertEqStr(e.mask_glyph, "*")
+    testing.AssertTrue(e.filter("anything"))
+end
+
+func test_max_length_rejects_and_consumes():
+    mut e := tui.NewInput()
+    e.max_length = 4
+    e = type_all(e, "abcdef")
+    testing.AssertEqStr(e.value(), "abcd")
+    testing.AssertTrue(e.handle_event(key("z")))
+    testing.AssertTrue(e.handle_event(special(term.KeySpace)))
+    testing.AssertEqStr(e.value(), "abcd")
+    // Deletion still works, then typing fits again.
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "abc")
+    testing.AssertTrue(e.handle_event(key("x")))
+    testing.AssertEqStr(e.value(), "abcx")
+end
+
+func test_max_length_counts_glyphs():
+    mut e := tui.NewInput()
+    e.max_length = 2
+    e = type_all(e, "éüa")
+    testing.AssertEqStr(e.value(), "éü")
+end
+
+func test_set_value_truncates():
+    mut e := tui.NewInput()
+    e.max_length = 3
+    e.set_value("abcdef")
+    testing.AssertEqStr(e.value(), "abc")
+    // Caret at the new end: the next typed glyph is rejected, backspace works.
+    testing.AssertTrue(e.handle_event(key("z")))
+    testing.AssertEqStr(e.value(), "abc")
+    testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
+    testing.AssertEqStr(e.value(), "ab")
+    e.max_length = 0
+    e.set_value("abcdef")
+    testing.AssertEqStr(e.value(), "abcdef")
+end
+
+func test_filter_digits_only():
+    mut e := tui.NewInput()
+    e.filter = (c: str): ret digits_only(c) end
+    e = type_all(e, "1a2 b3")
+    testing.AssertEqStr(e.value(), "123")
+    // Rejection is consumed and leaves value and caret alone.
+    testing.AssertTrue(e.handle_event(key("x")))
+    testing.AssertEqStr(e.value(), "123")
+    testing.AssertTrue(e.handle_event(special(term.KeyLeft)))
+    testing.AssertTrue(e.handle_event(key("x")))
+    testing.AssertTrue(e.handle_event(key("9")))
+    testing.AssertEqStr(e.value(), "1293")
+end
+
+func test_filter_insertions_only():
+    mut e := tui.NewInput()
+    e.filter = (_c: str): ret bump() end
+    base := filter_calls
+    e = type_all(e, "ab")
+    testing.AssertEqInt(filter_calls, base + 2)
+    _ := e.handle_event(special(term.KeyBackspace))
+    _ := e.handle_event(special(term.KeyHome))
+    _ := e.handle_event(special(term.KeyDelete))
+    e.set_value("xyz")
+    testing.AssertEqInt(filter_calls, base + 2)
+end
+
+func test_filter_after_max_length():
+    mut e := tui.NewInput()
+    e.max_length = 1
+    e.filter = (_c: str): ret bump() end
+    _ := e.handle_event(key("a"))
+    base := filter_calls
+    _ := e.handle_event(key("b"))
+    testing.AssertEqInt(filter_calls, base)
+end
+
+func test_mask_frame_and_caret():
+    reverse := tui.Style { reverse = true }
+    mut e := tui.NewInput()
+    e.masked = true
+    e.set_value("1234")
+    mut b := tui.NewBuffer(8, 1)
+    defer b.free()
+    b.focused = true
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "****    ")
+    testing.AssertEqStr(e.value(), "1234")
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, reverse))
+    _ := e.handle_event(special(term.KeyHome))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertEqStr(b.get(0, 0).ch, "*")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, reverse))
+    _ := e.handle_event(special(term.KeyEnd))
+    e.render(b, rect(0, 0, 8, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, reverse))
+end
+
+func test_mask_empty_shows_placeholder():
+    mut e := tui.NewInput()
+    e.masked = true
+    e.set_placeholder("PIN")
+    mut b := tui.NewBuffer(6, 1)
+    defer b.free()
+    e.render(b, rect(0, 0, 6, 1))
+    testing.AssertEqStr(b.row_text(0), "PIN   ")
+end
+
+func test_mask_glyph_variants():
+    mut e := tui.NewInput()
+    e.masked = true
+    e.set_value("ab")
+    mut b := tui.NewBuffer(4, 1)
+    defer b.free()
+    e.mask_glyph = ""
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "**  ")
+    e.mask_glyph = "•"
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "••  ")
+    // Only the first codepoint is used.
+    e.mask_glyph = "#@"
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "##  ")
+    e.mask_glyph = "•"
+    b.glyphs = tui.GlyphPolicy.ASCII
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "**  ")
+    e.mask_glyph = "#"
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "##  ")
+end
+
+func test_max_length_with_mask():
+    mut e := tui.NewInput()
+    e.max_length = 3
+    e.masked = true
+    e = type_all(e, "abcde")
+    mut b := tui.NewBuffer(5, 1)
+    defer b.free()
+    e.render(b, rect(0, 0, 5, 1))
+    testing.AssertEqStr(e.value(), "abc")
+    testing.AssertEqStr(b.row_text(0), "***  ")
+end
+
+func test_mask_overflow_window():
+    mut e := tui.NewInput()
+    e.masked = true
+    e.set_value("abcdefghij")
+    mut b := tui.NewBuffer(4, 1)
+    defer b.free()
+    e.render(b, rect(0, 0, 4, 1))
+    testing.AssertEqStr(b.row_text(0), "*** ")
+end
+
+func main:
+    test_render_default_fallbacks_from_fields()
+    test_defaults()
+    test_editing_append_printable()
+    test_editing_space_wire_shape()
+    test_editing_backspace_sequence()
+    test_editing_enter_consumed()
+    test_editing_unhandled_keys_bubble()
+    test_editing_navigation_consumed()
+    test_caret_insert_mid_string()
+    test_caret_delete_and_backspace()
+    test_caret_home_end_bounds()
+    test_caret_edit_trace()
+    test_caret_over_glyph_and_trailing_blank()
+    test_window_moves_only_when_caret_leaves()
+    test_caret_window_invariant()
+    test_getter_and_setters()
+    test_render_value_unfocused()
+    test_render_cursor_default()
+    test_render_placeholder_default()
+    test_render_themed_styles()
+    test_cursor_tracks_value_and_backspace()
+    test_render_overflow_wide_value()
+    test_render_scroll_starts_at_boundary()
+    test_render_wide_value_and_caret()
+    test_render_window_follows_shrinking_value()
+    test_render_width5_focused()
+    test_render_width1()
+    test_render_width0_draws_nothing()
+    test_screen_dispatch_reaches_focused_input()
+    test_screen_unfocused_input_does_not_consume()
+    test_unicode_codepoint_editing()
+    test_submit_true()
+    test_submit_false_bubbles()
+    test_submit_empty_value()
+    test_submit_only_on_enter()
+    test_submit_masked_gets_real_value()
+    test_submit_clears_value_reclamps()
+    test_shaping_defaults()
+    test_max_length_rejects_and_consumes()
+    test_max_length_counts_glyphs()
+    test_set_value_truncates()
+    test_filter_digits_only()
+    test_filter_insertions_only()
+    test_filter_after_max_length()
+    test_mask_frame_and_caret()
+    test_mask_empty_shows_placeholder()
+    test_mask_glyph_variants()
+    test_max_length_with_mask()
+    test_mask_overflow_window()
+    ret testing.Summary()
+end

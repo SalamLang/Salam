@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Unit tests for the Widget interface and BaseWidget: the
+// defaults, overriding only some methods through embedding, polymorphism
+// (different widget types in one Vector<dyn Widget>), and state that
+// persists across calls made through the interface.
+
+import testing
+import term
+
+import tui
+
+// A button-like widget: focusable, counts Enter presses, draws its label.
+struct Button:
+    pub use tui.BaseWidget
+    pub label: str = ""
+    pub presses: int = 0
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        if event.kind == tui.KeyEvent and event.key.code == term.KeyEnter:
+            this.presses += 1
+            ret true
+        end
+        ret false
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, "[" + this.label + "]", tui.StyleDefault)
+    end
+end
+
+// A list-like widget: not focusable here, draws one item per row and only
+// overrides render.
+struct List:
+    pub use tui.BaseWidget
+    pub items: Vector<str> = Vector {}
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        repeat this.items.len() in i:
+            buf.put_str(bounds.x, bounds.y + i, this.items.get(i), tui.StyleDefault)
+        end
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func enter(): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = term.KeyEnter } }
+end
+
+func test_base_defaults():
+    mut b := tui.BaseWidget {}
+    testing.AssertFalse(b.focusable())
+    testing.AssertFalse(b.handle_event(enter()))
+    testing.AssertTrue(b.bounds().is_empty())
+    b.set_bounds(rect(1, 2, 3, 4))
+    testing.AssertEqInt(b.bounds().x, 1)
+    testing.AssertEqInt(b.bounds().height, 4)
+    mut buf := tui.NewBuffer(4, 1)
+    b.render(buf, b.bounds())
+    testing.AssertEqStr(buf.row_text(0), "    ")
+    buf.free()
+end
+
+func test_override_through_embedding():
+    mut btn := Button { label = "ok" }
+    testing.AssertTrue(btn.focusable())
+    btn.set_bounds(rect(0, 0, 4, 1))
+    testing.AssertEqInt(btn.bounds().width, 4)
+    testing.AssertTrue(btn.handle_event(enter()))
+    testing.AssertFalse(btn.handle_event(tui.Event { kind = tui.TickEvent }))
+    testing.AssertEqInt(btn.presses, 1)
+end
+
+func test_polymorphism():
+    mut items := Vector {} as Vector<str>
+    items.push("one")
+    items.push("two")
+    mut ws := Vector {} as Vector<dyn tui.Widget>
+    ws.push(Button { label = "go" })
+    ws.push(List { items = items })
+    ws.push(tui.BaseWidget {})
+
+    ws.get(0).set_bounds(rect(0, 0, 4, 1))
+    ws.get(1).set_bounds(rect(5, 0, 3, 2))
+    ws.get(2).set_bounds(rect(0, 1, 2, 1))
+
+    // set_bounds through one copy of a dyn value is visible through another:
+    // copies share the boxed widget.
+    testing.AssertEqInt(ws.get(1).bounds().x, 5)
+
+    testing.AssertTrue(ws.get(0).focusable())
+    testing.AssertFalse(ws.get(1).focusable())
+    testing.AssertFalse(ws.get(2).focusable())
+
+    mut buf := tui.NewBuffer(8, 2)
+    each w in ws:
+        w.render(buf, w.bounds())
+    end
+    testing.AssertEqStr(buf.row_text(0), "[go] one")
+    testing.AssertEqStr(buf.row_text(1), "     two")
+    buf.free()
+    items.free()
+    ws.free()
+end
+
+func test_state_persists_through_interface():
+    w := Button { label = "x" } as dyn tui.Widget
+    testing.AssertTrue(w.handle_event(enter()))
+    testing.AssertTrue(w.handle_event(enter()))
+    copy := w
+    testing.AssertTrue(copy.handle_event(enter()))
+    mut buf := tui.NewBuffer(3, 1)
+    w.render(buf, rect(0, 0, 3, 1))
+    testing.AssertEqStr(buf.row_text(0), "[x]")
+    buf.free()
+end
+
+func main:
+    test_base_defaults()
+    test_override_through_embedding()
+    test_polymorphism()
+    test_state_persists_through_interface()
+    ret testing.Summary()
+end

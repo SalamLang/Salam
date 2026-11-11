@@ -1,0 +1,255 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The border ring: glyph sets (BorderGlyphs, chosen by GlyphsFor) and the
+// shared DrawBorder helper that paints one ring into a buffer. The helper is the
+// single place frames are drawn, so widgets (Panel first) and custom widgets
+// get the same corners, title rules and color rules. It takes no capability
+// or tier parameter: it writes a Style into the cells, and the buffer it
+// draws into lowers it to `buf.tier` at emission like every other styled
+// cell. It paints only the cells of its ring, and never reads or clears the
+// interior. It does not lay out children, change geometry, or decide focus.
+
+package tui
+
+import str
+
+@en "Weight"
+@fa "ضخامت"
+/// The stroke weight of a border run. Light is the zero value; Heavy and
+/// Double describe the other weights of the glyph table. A BorderGlyphs
+/// records the weight of its horizontal and vertical runs for Screen's
+/// post-paint junction pass.
+pub enum Weight:
+    @en "Light"
+    @fa "سبک"
+    /// Thin single line.
+    Light
+    @en "Heavy"
+    @fa "سنگین"
+    /// Thick single line.
+    Heavy
+    @en "Double"
+    @fa "دوگانه"
+    /// Double line.
+    Double
+end
+
+@en "BorderGlyphs"
+@fa "نویسه‌های کادر"
+/// The glyphs of one border ring: edges, corners, the four T junctions and
+/// the cross, plus the weight of the horizontal and vertical runs. Every
+/// glyph is one codepoint. DrawBorderGlyphs draws the edges and corners;
+/// Screen's post-paint pass selects junction glyphs from painted arms.
+pub struct BorderGlyphs:
+    @en "h"
+    @fa "افقی"
+    /// Horizontal run, drawn on the top and bottom edges.
+    pub h: str = ""
+    @en "v"
+    @fa "عمودی"
+    /// Vertical run, drawn on the left and right edges.
+    pub v: str = ""
+    @en "tl"
+    @fa "گوشه بالا چپ"
+    /// Top-left corner.
+    pub tl: str = ""
+    @en "tr"
+    @fa "گوشه بالا راست"
+    /// Top-right corner.
+    pub tr: str = ""
+    @en "bl"
+    @fa "گوشه پایین چپ"
+    /// Bottom-left corner.
+    pub bl: str = ""
+    @en "br"
+    @fa "گوشه پایین راست"
+    /// Bottom-right corner.
+    pub br: str = ""
+    @en "t_down"
+    @fa "سه‌راهی پایین"
+    /// T junction with its stem pointing down.
+    pub t_down: str = ""
+    @en "t_up"
+    @fa "سه‌راهی بالا"
+    /// T junction with its stem pointing up.
+    pub t_up: str = ""
+    @en "t_right"
+    @fa "سه‌راهی راست"
+    /// T junction with its stem pointing right.
+    pub t_right: str = ""
+    @en "t_left"
+    @fa "سه‌راهی چپ"
+    /// T junction with its stem pointing left.
+    pub t_left: str = ""
+    @en "cross"
+    @fa "چهارراه"
+    /// Four-way junction.
+    pub cross: str = ""
+    @en "hw"
+    @fa "ضخامت افقی"
+    /// Weight of the horizontal run.
+    pub hw: Weight = Weight.Light
+    @en "vw"
+    @fa "ضخامت عمودی"
+    /// Weight of the vertical run.
+    pub vw: Weight = Weight.Light
+end
+
+@en "GlyphsSingle"
+@fa "نویسه‌های تک خط"
+/// Light lines with square corners; what BorderStyle.Single draws.
+pub func GlyphsSingle(): BorderGlyphs:
+    ret BorderGlyphs { h = "─", v = "│", tl = "┌", tr = "┐", bl = "└", br = "┘", t_down = "┬", t_up = "┴", t_right = "├", t_left = "┤", cross = "┼" }
+end
+
+@en "GlyphsDouble"
+@fa "نویسه‌های دو خط"
+/// Double lines; what BorderStyle.Double draws.
+pub func GlyphsDouble(): BorderGlyphs:
+    ret BorderGlyphs { h = "═", v = "║", tl = "╔", tr = "╗", bl = "╚", br = "╝", t_down = "╦", t_up = "╩", t_right = "╠", t_left = "╣", cross = "╬", hw = Weight.Double, vw = Weight.Double }
+end
+
+@en "GlyphsRounded"
+@fa "نویسه‌های گرد"
+/// Light runs with rounded corners; what BorderStyle.Rounded draws. Rounded
+/// has no rounded junction glyphs, so its T and cross fields are light.
+pub func GlyphsRounded(): BorderGlyphs:
+    ret BorderGlyphs { h = "─", v = "│", tl = "╭", tr = "╮", bl = "╰", br = "╯", t_down = "┬", t_up = "┴", t_right = "├", t_left = "┤", cross = "┼" }
+end
+
+@en "GlyphsASCII"
+@fa "نویسه‌های اسکی"
+/// Plain ASCII: `-` and `|` runs and `+` for every corner and junction. Used
+/// for every border under GlyphPolicy.ASCII.
+pub func GlyphsASCII(): BorderGlyphs:
+    ret BorderGlyphs { h = "-", v = "|", tl = "+", tr = "+", bl = "+", br = "+", t_down = "+", t_up = "+", t_right = "+", t_left = "+", cross = "+" }
+end
+
+@en "GlyphsHeavy"
+@fa "نویسه‌های سنگین"
+/// Heavy lines with heavy corners.
+pub func GlyphsHeavy(): BorderGlyphs:
+    ret BorderGlyphs { h = "━", v = "┃", tl = "┏", tr = "┓", bl = "┗", br = "┛", t_down = "┳", t_up = "┻", t_right = "┣", t_left = "┫", cross = "╋", hw = Weight.Heavy, vw = Weight.Heavy }
+end
+
+@en "GlyphsMixed"
+@fa "نویسه‌های ترکیبی"
+/// Heavy horizontal runs and light vertical runs, with the mixed corners.
+pub func GlyphsMixed(): BorderGlyphs:
+    ret BorderGlyphs { h = "━", v = "│", tl = "┍", tr = "┑", bl = "┕", br = "┙", t_down = "┯", t_up = "┷", t_right = "┝", t_left = "┥", cross = "┿", hw = Weight.Heavy, vw = Weight.Light }
+end
+
+@en "GlyphsFor"
+@fa "نویسه‌ها برای"
+/// The glyph set for `border` under `policy`. BorderStyle.None gives the
+/// zero value (no glyphs). Under GlyphPolicy.ASCII every other style gives
+/// GlyphsASCII; otherwise Single, Double and Rounded give GlyphsSingle,
+/// GlyphsDouble and GlyphsRounded.
+pub func GlyphsFor(border: BorderStyle, policy: GlyphPolicy): BorderGlyphs:
+    if border == BorderStyle.None:
+        ret BorderGlyphs {}
+    end
+    if policy == GlyphPolicy.ASCII:
+        ret GlyphsASCII()
+    end
+    ret match border:
+        Single: GlyphsSingle() end
+        Double: GlyphsDouble() end
+        Rounded: GlyphsRounded() end
+        None: BorderGlyphs {} end
+    end
+end
+
+@en "DrawBorder"
+@fa "ترسیم کادر"
+/// Paints a one-cell ring of `border` around `rect` into `buf`, every cell
+/// in one foreground color taken from `style.fg`.
+///
+/// Rules:
+/// - BorderStyle.None, or a rect with no area, writes nothing.
+/// - A one-row rect is a horizontal rule and a one-column rect is a
+///   vertical rule; neither has corners or a title.
+/// - Otherwise the four corners are drawn, then the horizontal edges, then
+///   the vertical edges. Edges run strictly between the corners.
+/// - `title` sits on the top edge starting at rect.x + 2, with one space
+///   before and after it. It is trimmed; an empty title draws nothing; it
+///   is cut to rect.width - 5 display cells on the right and needs a width of
+///   at least 6.
+/// - Only foreground color is used. Attributes in `style` are ignored, and
+///   a Color.Default fg writes an empty style (the terminal default).
+///
+/// Writes go through Buffer.set, which clips to the grid and the clip
+/// region, so a rect partly outside the buffer paints only its inside part.
+pub func DrawBorder(buf: Buffer, rect: Rect, border: BorderStyle, style: Style, title: str):
+    if border == BorderStyle.None:
+        ret
+    end
+    DrawBorderGlyphs(buf, rect, GlyphsFor(border, buf.glyphs), style, title)
+end
+
+@en "DrawBorderGlyphs"
+@fa "ترسیم کادر با نویسه‌ها"
+/// Paints a one-cell ring of `glyphs` around `rect` into `buf`, with every
+/// rule of DrawBorder (degenerate rects, title, one foreground color). Use it
+/// for a custom or non-default glyph set. When `buf.glyphs` is
+/// GlyphPolicy.ASCII the set is replaced by GlyphsASCII, so a custom set
+/// never emits a non-ASCII glyph under that policy.
+pub func DrawBorderGlyphs(buf: Buffer, rect: Rect, glyphs: BorderGlyphs, style: Style, title: str):
+    if rect.width <= 0 or rect.height <= 0:
+        ret
+    end
+    mut g := glyphs
+    if buf.glyphs == GlyphPolicy.ASCII:
+        g = GlyphsASCII()
+    end
+    ink := Style { fg = style.fg }
+    x0 := rect.x
+    y0 := rect.y
+    x1 := rect.x + rect.width - 1
+    y1 := rect.y + rect.height - 1
+    if rect.height == 1:
+        repeat rect.width in i:
+            buf.set(x0 + i, y0, Cell { ch = g.h, style = ink })
+        end
+        ret
+    end
+    if rect.width == 1:
+        repeat rect.height in j:
+            buf.set(x0, y0 + j, Cell { ch = g.v, style = ink })
+        end
+        ret
+    end
+    buf.set(x0, y0, Cell { ch = g.tl, style = ink })
+    buf.set(x1, y0, Cell { ch = g.tr, style = ink })
+    buf.set(x0, y1, Cell { ch = g.bl, style = ink })
+    buf.set(x1, y1, Cell { ch = g.br, style = ink })
+    repeat rect.width - 2 in i:
+        buf.set(x0 + 1 + i, y0, Cell { ch = g.h, style = ink })
+        buf.set(x0 + 1 + i, y1, Cell { ch = g.h, style = ink })
+    end
+    repeat rect.height - 2 in j:
+        buf.set(x0, y0 + 1 + j, Cell { ch = g.v, style = ink })
+        buf.set(x1, y0 + 1 + j, Cell { ch = g.v, style = ink })
+    end
+    text := str.Trim(title)
+    if text == "" or rect.width < 6:
+        ret
+    end
+    shown := _take_cells(text, rect.width - 5)
+    shown_len := _text_width(shown)
+    buf.set(x0 + 2, y0, Cell { ch = " ", style = ink })
+    buf.put_str(x0 + 3, y0, shown, ink)
+    buf.set(x0 + 3 + shown_len, y0, Cell { ch = " ", style = ink })
+end

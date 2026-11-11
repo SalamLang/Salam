@@ -1,0 +1,154 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The registry behind Install/Restore: a second install of the same handler
+// refcounts instead of resetting the disposition, a different handler is
+// refused, and the last restore puts the mask and the disposition back and
+// frees the canonical snapshot so the next install rebuilds it. Everything
+// here runs on the main thread, so no watcher and no lock of its own.
+
+import testing
+import mem
+
+import os.signal
+
+// The disposition read back at offset 0 of a struct sigaction is the handler
+// word. The extern is declared here because the package keeps its own private,
+// and it has to sit with the imports, before any other declaration.
+extern:
+    func sigaction(sig: int, act: void*, old: void*): int
+end
+
+// Two distinct handlers: the same one refcounts, the other is refused. The
+// discard keeps the body non-empty, as the compiler requires.
+func noop_a(_sig: int):
+    _ := _sig
+end
+
+func noop_b(_sig: int):
+    _ := _sig
+end
+
+func live_handler(sig: int): u64:
+    // struct sigaction is 16 bytes on Darwin but 152 on glibc, and the kernel
+    // writes the whole struct: the block is sized for the largest target, not
+    // the one this test happens to run on.
+    buf := mem.AllocateZeroed(256 as u64)
+    if buf == null: ret 0 end
+    _ := sigaction(sig, null, buf)
+    handler := (buf as u64*)[0]
+    mem.Free(buf)
+    ret handler
+end
+
+func test_refcount_round_trip():
+    before := signal.CurrentMask()
+    testing.AssertNotNil(before)
+    first := signal.Install(signal.WinchSignal, &noop_a)
+    testing.AssertNotNil(first)
+    second := signal.Install(signal.WinchSignal, &noop_a)
+    testing.AssertNotNil(second)
+    // Caller-owned copies, not the canonical block: two owners, two frees.
+    testing.AssertTrue(first != second)
+    // Restoring the refcounted copy leaves the signal owned: the mask stays
+    // blocked and the disposition stays installed.
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, second))
+    held := signal.CurrentMask()
+    testing.AssertTrue(signal.IsSignal(held, signal.WinchSignal))
+    testing.AssertTrue(live_handler(signal.WinchSignal) == (&noop_a) as u64)
+    // The last reference puts the mask and the disposition back.
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, first))
+    after := signal.CurrentMask()
+    testing.AssertEqBool(
+        signal.IsSignal(after, signal.WinchSignal), signal.IsSignal(before, signal.WinchSignal)
+    )
+    testing.AssertEqInt64(live_handler(signal.WinchSignal) as i64, 0)
+    // Refs are zero, so a third restore is idempotent: no count, no free.
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, first))
+    mem.Free(held)
+    mem.Free(after)
+    mem.Free(second)
+    mem.Free(first)
+    mem.Free(before)
+end
+
+func test_restore_order_is_free():
+    // Two installs freed in the order that does not nest. The last Restore
+    // puts back the FIRST install's pre-block mask, so refcount zero leaves
+    // the signal unblocked; restoring the caller's copy here would leave it
+    // blocked, because every copy's mask was read after the block.
+    first := signal.Install(signal.WinchSignal, &noop_a)
+    testing.AssertNotNil(first)
+    second := signal.Install(signal.WinchSignal, &noop_a)
+    testing.AssertNotNil(second)
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, first))
+    // One owner is left, so the signal must still be blocked: unblocking here
+    // would let a raise run the handler instead of queueing for its wait.
+    mid := signal.CurrentMask()
+    testing.AssertTrue(signal.IsSignal(mid, signal.WinchSignal))
+    mem.Free(mid)
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, second))
+    after := signal.CurrentMask()
+    testing.AssertTrue(not signal.IsSignal(after, signal.WinchSignal))
+    testing.AssertEqInt64(live_handler(signal.WinchSignal) as i64, 0)
+    // A repeated Restore does nothing: this handle's mask was read while the
+    // signal was blocked, so applying it here would block it with no owner.
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, second))
+    again := signal.CurrentMask()
+    testing.AssertTrue(not signal.IsSignal(again, signal.WinchSignal))
+    mem.Free(again)
+    mem.Free(after)
+    mem.Free(second)
+    mem.Free(first)
+end
+
+func test_different_handler_refused():
+    first := signal.Install(signal.WinchSignal, &noop_a)
+    testing.AssertNotNil(first)
+    // noop_a owns the signal, so noop_b would silently never run: refused.
+    second := signal.Install(signal.WinchSignal, &noop_b)
+    testing.AssertTrue(second == null)
+    // The refusal changed nothing, and it blocked nothing extra either.
+    testing.AssertTrue(live_handler(signal.WinchSignal) == (&noop_a) as u64)
+    held := signal.CurrentMask()
+    testing.AssertTrue(signal.IsSignal(held, signal.WinchSignal))
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, first))
+    after := signal.CurrentMask()
+    testing.AssertTrue(not signal.IsSignal(after, signal.WinchSignal))
+    testing.AssertEqInt64(live_handler(signal.WinchSignal) as i64, 0)
+    mem.Free(held)
+    mem.Free(after)
+    mem.Free(first)
+end
+
+func test_rebuild_after_zero():
+    // The canonical snapshot was freed at refs zero, so this install rebuilds
+    // it and snapshots the default disposition again.
+    prev := signal.Install(signal.WinchSignal, &noop_a)
+    testing.AssertNotNil(prev)
+    testing.AssertEqInt64((prev as u64*)[0] as i64, 0)
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, prev))
+    mask := signal.CurrentMask()
+    testing.AssertTrue(not signal.IsSignal(mask, signal.WinchSignal))
+    mem.Free(mask)
+    mem.Free(prev)
+end
+
+func main:
+    test_refcount_round_trip()
+    test_restore_order_is_free()
+    test_different_handler_refused()
+    test_rebuild_after_zero()
+    ret testing.Summary()
+end

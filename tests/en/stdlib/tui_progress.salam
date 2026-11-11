@@ -1,0 +1,261 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Tests for the Progress widget: the defaults and the predicates (never
+// focusable, never hittable, consumes no event, preferred size is one row of
+// unknown width), the setters and their clamping, and the render golden
+// vectors PR01-PR15. The rows are compared as text, and the boundary and
+// style cells per cell. SGR strings are built with StyleSgr at TrueColor,
+// never written by hand.
+
+import testing
+import term
+
+import tui
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+// A left press at column 1, row 1 (0-based 0, 0).
+func press_origin(): tui.Event:
+    seq := "\x1b[<0;1;1M"
+    ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
+end
+
+// Renders p into a fresh w x h buffer, with bounds at the origin.
+func draw(p: tui.Progress, w: int, h: int): tui.Buffer:
+    b := tui.NewBuffer(w, h)
+    p.render(b, rect(0, 0, w, h))
+    ret b
+end
+
+// ---- Defaults and predicates ------------------------------------------
+
+func test_defaults():
+    p := tui.NewProgress()
+    testing.AssertEqInt(p.progress(), 0)
+    testing.AssertTrue(tui.StyleEq(p.fill_style, tui.StyleDefault))
+    testing.AssertTrue(tui.StyleEq(p.empty_style, tui.StyleDefault))
+    testing.AssertTrue(tui.StyleEq(p.text_style, tui.StyleDefault))
+end
+
+func test_predicates():
+    mut p := tui.NewProgress()
+    p.set_bounds(rect(0, 0, 10, 1))
+    testing.AssertFalse(p.focusable())
+    testing.AssertFalse(p.hits())
+    testing.AssertFalse(p.handle_event(key("a")))
+    testing.AssertFalse(p.handle_event(press_origin()))
+    testing.AssertEqInt(p.progress(), 0)
+end
+
+func test_preferred_size():
+    p := tui.NewProgress()
+    testing.AssertEqInt(p.preferred_size(0).width, -1)
+    testing.AssertEqInt(p.preferred_size(0).height, 1)
+end
+
+// ---- Setters (AC5) ----------------------------------------------------
+
+func test_setters_clamp():
+    mut p := tui.NewProgress()
+    p.set_progress(-20)
+    testing.AssertEqInt(p.progress(), 0)
+    p.set_progress(250)
+    testing.AssertEqInt(p.progress(), 100)
+    p.set_progress(42)
+    testing.AssertEqInt(p.progress(), 42)
+    p.set_max(3)
+    testing.AssertEqInt(p.progress(), 3)
+    p.set_progress(9)
+    testing.AssertEqInt(p.progress(), 3)
+    p.set_max(0)
+    testing.AssertEqInt(p.progress(), 0)
+    p.set_progress(5)
+    testing.AssertEqInt(p.progress(), 0)
+end
+
+// ---- Render golden vectors (AC1, AC2, AC4, AC6) ------------------------
+
+func test_render_vectors_bar_and_tail():
+    mut p := tui.NewProgress()
+
+    // PR01: empty bar, and the row below the bounds stays blank.
+    b := draw(p, 20, 2)
+    defer b.free()
+    testing.AssertEqStr(b.row_text(0), "---------------   0%")
+    testing.AssertEqStr(b.row_text(1), "                    ")
+
+    p.set_progress(42)
+    c := draw(p, 20, 1)
+    defer c.free()
+    testing.AssertEqStr(c.row_text(0), "######---------  42%")
+    // Boundary: the last filled cell and the first empty one.
+    testing.AssertEqStr(c.get(5, 0).ch, "#")
+    testing.AssertEqStr(c.get(6, 0).ch, "-")
+
+    p.set_progress(100)
+    d := draw(p, 20, 1)
+    defer d.free()
+    testing.AssertEqStr(d.row_text(0), "############### 100%")
+
+    mut q := tui.NewProgress()
+    q.set_max(3)
+    q.set_progress(1)
+    e := draw(q, 20, 1)
+    defer e.free()
+    testing.AssertEqStr(e.row_text(0), "#####----------  33%")
+    testing.AssertEqStr(e.get(4, 0).ch, "#")
+    testing.AssertEqStr(e.get(5, 0).ch, "-")
+
+    mut r := tui.NewProgress()
+    r.set_progress(-20)
+    f := draw(r, 20, 1)
+    defer f.free()
+    testing.AssertEqStr(f.row_text(0), "---------------   0%")
+
+    mut s := tui.NewProgress()
+    s.set_progress(250)
+    g := draw(s, 20, 1)
+    defer g.free()
+    testing.AssertEqStr(g.row_text(0), "############### 100%")
+
+    mut t := tui.NewProgress()
+    t.set_max(0)
+    t.set_progress(5)
+    h := draw(t, 20, 1)
+    defer h.free()
+    testing.AssertEqStr(h.row_text(0), "---------------   0%")
+end
+
+func test_render_vectors_narrow():
+    mut p := tui.NewProgress()
+
+    // PR06: width 8, half full, the tail is still shown.
+    p.set_progress(50)
+    a := draw(p, 8, 1)
+    defer a.free()
+    testing.AssertEqStr(a.row_text(0), "#--  50%")
+
+    // PR07: width 5, no tail; the bar takes all five cells.
+    b := draw(p, 5, 1)
+    defer b.free()
+    testing.AssertEqStr(b.row_text(0), "##---")
+
+    // PR08: width 6, the smallest width with a tail.
+    c := draw(p, 6, 1)
+    defer c.free()
+    testing.AssertEqStr(c.row_text(0), "-  50%")
+
+    mut full := tui.NewProgress()
+    full.set_progress(100)
+    // PR09: width 6 at 100%.
+    d := draw(full, 6, 1)
+    defer d.free()
+    testing.AssertEqStr(d.row_text(0), "# 100%")
+
+    // PR10: width 2 at 100%, no tail.
+    e := draw(full, 2, 1)
+    defer e.free()
+    testing.AssertEqStr(e.row_text(0), "##")
+
+    mut almost := tui.NewProgress()
+    almost.set_progress(99)
+    // PR11: width 1, 99% still shows empty; floor means full only at 100%.
+    f := draw(almost, 1, 1)
+    defer f.free()
+    testing.AssertEqStr(f.row_text(0), "-")
+
+    // PR12: width 0 draws nothing.
+    g := draw(p, 0, 1)
+    defer g.free()
+    testing.AssertEqStr(g.row_text(0), "")
+end
+
+func test_render_offset_bounds():
+    mut p := tui.NewProgress()
+    p.set_progress(50)
+    b := tui.NewBuffer(11, 3)
+    defer b.free()
+    p.render(b, rect(3, 1, 8, 1))
+    testing.AssertEqStr(b.row_text(0), "           ")
+    testing.AssertEqStr(b.row_text(1), "   #--  50%")
+    testing.AssertEqStr(b.row_text(2), "           ")
+end
+
+// ---- Colour and tail style (AC3) --------------------------------------
+
+func test_render_colours():
+    mut p := tui.NewProgress()
+    p.fill_style = tui.Style { fg = tui.Green }
+    p.empty_style = tui.Style { fg = tui.BrightBlack }
+    p.set_progress(42)
+    // PR03: two distinct styled runs, then the default-styled tail.
+    b := draw(p, 20, 1)
+    defer b.free()
+    testing.AssertEqStr(b.row_text(0), "######---------  42%")
+    green := tui.StyleSgr(tui.Style { fg = tui.Green }, tui.ColorTier.TrueColor)
+    green_off := tui.StyleSgrOff(tui.Style { fg = tui.Green }, tui.ColorTier.TrueColor)
+    bright := tui.StyleSgr(tui.Style { fg = tui.BrightBlack }, tui.ColorTier.TrueColor)
+    bright_off := tui.StyleSgrOff(tui.Style { fg = tui.BrightBlack }, tui.ColorTier.TrueColor)
+    // The whole row, not just the boundary cells: fill, empty, then the tail.
+    want := term.SeqMoveTo(1, 1) + green + "######" + green_off + bright + "---------" + bright_off + "  42%"
+    testing.AssertEqStr(b.ansi(), want)
+
+    // The tail takes text_style.
+    mut t := tui.NewProgress()
+    t.text_style = tui.Style { fg = tui.Green }
+    t.set_progress(42)
+    c := draw(t, 20, 1)
+    defer c.free()
+    testing.AssertTrue(tui.StyleEq(c.get(18, 0).style, tui.Style { fg = tui.Green }))
+end
+
+// After the typed-style migration: the widget builds nothing. Each styled run costs one on and
+// one off sequence when the buffer emits it; default cells cost none.
+func test_sgr_memo_probe():
+    mut p := tui.NewProgress()
+    p.set_progress(42)
+    buf := tui.NewBuffer(20, 1)
+    defer buf.free()
+    before := tui.SgrBuilds()
+    p.render(buf, rect(0, 0, 20, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    _ := buf.ansi()
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    p.fill_style = tui.Style { fg = tui.Green }
+    p.render(buf, rect(0, 0, 20, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    // The filled run is one styled style, the rest default.
+    _ := buf.ansi()
+    testing.AssertEqInt(tui.SgrBuilds() - before, 2)
+end
+
+func main:
+    test_defaults()
+    test_predicates()
+    test_preferred_size()
+    test_setters_clamp()
+    test_render_vectors_bar_and_tail()
+    test_render_vectors_narrow()
+    test_render_offset_bounds()
+    test_render_colours()
+    test_sgr_memo_probe()
+    ret testing.Summary()
+end

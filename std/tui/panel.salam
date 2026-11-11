@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The Panel decorator: a single child framed by a border ring. It owns the
+// border kind, the frame's style and the title, insets its child by the
+// border's cost, and paints only the frame. It is not a layout engine: it
+// holds exactly one child and never lays out several. Several children
+// compose as one Column or Row inside the Panel. Focus is opt-in: with
+// takes_focus the Panel is the focus stop, forwards keys to its child, and
+// paints its frame in focus_style while focused. The child is never a focus
+// stop of its own, so a framed child is focused once, through its frame.
+
+package tui
+
+@en "Panel"
+@fa "پنل"
+/// A single-child decorator that draws a border ring around its child.
+///
+/// The child is positioned inside the ring: Panel insets it by BorderInset
+/// of `border` on each side and passes that rect to the child's set_bounds.
+/// A Panel with border None draws nothing and insets nothing, so it behaves
+/// like its child. Add the child with add; it must also be added to the
+/// Screen's tree to be painted, like any other child.
+///
+/// Panel reports the child's natural size plus BorderInset of `border` on
+/// each side, so the ring it draws is part of that size. It is not focusable
+/// unless takes_focus is set.
+pub struct Panel:
+    pub use BaseWidget
+
+    @en "border"
+    @fa "کادر"
+    /// The ring drawn around the child. None draws nothing and insets
+    /// nothing.
+    pub border: BorderStyle = BorderStyle.None
+
+    @en "border_style"
+    @fa "ظاهر کادر"
+    /// The frame's style. Only its foreground is used, for every ring cell
+    /// and the title; attributes are ignored.
+    pub border_style: Style = StyleDefault
+
+    @en "title"
+    @fa "عنوان"
+    /// Text on the top edge. Empty or whitespace-only means no title.
+    pub title: str = ""
+
+    @en "takes_focus"
+    @fa "تمرکز می‌گیرد"
+    /// When true the Panel is focusable: it takes focus and passes every
+    /// event to its child. The child is not focusable and gets no focus of
+    /// its own. False by default, so a Panel is never a focus stop.
+    pub takes_focus: bool = false
+
+    @en "focus_style"
+    @fa "ظاهر تمرکز"
+    /// The frame's style while the Panel has focus. StyleDefault, the
+    /// default, means no focus style: the frame keeps border_style. Only the
+    /// foreground is used, as for border_style.
+    pub focus_style: Style = StyleDefault
+
+    @en "slot"
+    @fa "جایگاه"
+    /// The child, held as the one layout slot. Empty until add is called.
+    pub slot: Vector<LayoutSlot> = Vector {}
+
+    @en "add"
+    @fa "افزودن"
+    /// Sets the child. A second call replaces the first, so a Panel has at
+    /// most one child. The child is positioned in the Panel's content area
+    /// on the next set_bounds.
+    pub func add(child: dyn Widget):
+        if this.slot.len() > 0:
+            this.slot.set(0, LayoutSlot { child = child })
+            ret
+        end
+        _ := _slotAdd(this.slot, child)
+    end
+
+    @en "set_bounds"
+    @fa "تنظیم محدوده"
+    /// Stores the Panel's rect, then sets the child's rect to the Panel's
+    /// rect inset by the border's cost on each side (BorderInset).
+    pub func set_bounds(bounds: Rect):
+        _enter_pass()
+        r := FitRect(bounds, bounds)
+        this.BaseWidget.set_bounds(r)
+        if this.slot.len() > 0:
+            n := BorderInset(this.border)
+            inner := InsetRect(r, Insets { top = n, right = n, bottom = n, left = n })
+            this.slot.get(0).child.set_bounds(inner)
+        end
+        _leave_pass()
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    /// The child's natural size plus BorderInset of `border` on each side.
+    /// Each axis is measured at max_width minus that inset on both sides,
+    /// floored at 1; a non-positive max_width is forwarded unchanged as
+    /// unbounded. A child that cannot measure falls back to its
+    /// preferred_size. A negative component means no preference on that
+    /// axis and stays -1. An empty Panel reports no preference.
+    pub func preferred_size(max_width: int): Rect:
+        if this.slot.len() == 0:
+            ret Rect { width = -1, height = -1 }
+        end
+        n := BorderInset(this.border)
+        mut inner_max := max_width
+        if max_width > 0:
+            inner_max = max_width - 2 * n
+            if inner_max < 1:
+                inner_max = 1
+            end
+        end
+        child := this.slot.get(0).child
+        mx := child.measure(Axis.X, inner_max)
+        my := child.measure(Axis.Y, inner_max)
+        mut pref := Rect { width = -1, height = -1 }
+        if not mx.ok or not my.ok:
+            pref = child.preferred_size(inner_max)
+        end
+        mut w := -1
+        if mx.ok:
+            w = mx.extent
+            if w < 0:
+                w = 0
+            end
+            w = w + 2 * n
+        else:
+            if pref.width >= 0:
+                w = pref.width + 2 * n
+            end
+        end
+        mut h := -1
+        if my.ok:
+            h = my.extent
+            if h < 0:
+                h = 0
+            end
+            h = h + 2 * n
+        else:
+            if pref.height >= 0:
+                h = pref.height + 2 * n
+            end
+        end
+        ret Rect { width = w, height = h }
+    end
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// True only when takes_focus is set.
+    pub func focusable(): bool:
+        ret this.takes_focus
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Passes the event to the child and returns what the child returns.
+    /// Only a focused Panel receives events, so this is the child's key
+    /// path.
+    pub func handle_event(event: Event): bool:
+        if this.slot.len() > 0:
+            ret this.slot.get(0).child.handle_event(event)
+        end
+        ret false
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Paints the frame over the Panel's rect. While the Panel has focus
+    /// and focus_style is set, the frame uses focus_style. The child paints
+    /// itself: the Screen draws every widget in its tree.
+    pub func render(buf: Buffer, bounds: Rect):
+        mut style := this.border_style
+        if buf.focused and not StyleEq(this.focus_style, StyleDefault):
+            style = this.focus_style
+        end
+        DrawBorder(buf, bounds, this.border, style, this.title)
+    end
+end

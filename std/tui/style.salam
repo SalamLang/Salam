@@ -1,0 +1,329 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Style: the value type a cell is drawn with — seven stored fields.
+ *
+ * A Style says how a cell looks: a foreground and a background color, and
+ * five attributes (bold, dim, italic, underline, reverse). A field with no
+ * effect is its neutral value — Color.Default for a color, false for an
+ * attribute — so a Style never carries "is this set" metadata, and
+ * zero-initialised fields already spell the default style (StyleDefault).
+ *
+ * Reverse is the one attribute the set was extended for, because a cell has
+ * to be able to carry it: Input's cursor and List's focused selection are
+ * reverse video, and faking it by swapping fg and bg cannot reproduce it over
+ * terminal-default colors. It is a stored field rather than a rule applied at
+ * emission so StyleEq sees it — an inversion invisible to equality would make
+ * a cell whose only difference is reverse compare equal to its neighbour and
+ * skip the repaint. Nothing else was added: strikethrough, blink and hidden
+ * have no consumer, so the set stays closed at seven.
+ *
+ *   present:  the Style struct; BorderStyle, the sibling enum for a
+ *             container's border kind, and BorderInset, the cells a border
+ *             costs on each side (0 for None, 1 otherwise); StyleDefault,
+ *             the constant of a cell that asks for nothing; StyleMerge, the
+ *             sentinel-patch inheritance that resolves a child style over
+ *             its parent; StyleEq, value equality over the seven stored
+ *             fields; and StyleSgr / StyleSgrOff, which turn a style into
+ *             the SGR bytes that enter and leave it, built from std/term's
+ *             sequence builders and color.salam's tier-aware encoders. The
+ *             buffer appends these pieces directly; public functions return
+ *             the same sequences as strings.
+ *
+ *   fit:      sits beside color.salam, whose Color it carries and whose
+ *             FgSeqAt / BgSeqAt it emits through, and beside buffer.salam,
+ *             whose cells carry a Style. Widgets resolve a Style and hand it
+ *             to the buffer, which turns it into bytes here at emission.
+ *
+ *   absent:   any border drawing or geometry (BorderStyle is a value only,
+ *             for CUR-220 to consume); a border field on Style (it is
+ *             deliberately a sibling enum, so a child never inherits a
+ *             parent's border); and any terminal reset — clearing a
+ *             previous cell is the buffer's job, so these functions never
+ *             emit term.Reset and never read the environment (the
+ *             capability tier is a pure parameter).
+ *
+ * Transition contract: Buffer.ansi and Buffer.diff implement it — between two
+ * cells whose styles differ they append StyleSgrOff(prev, tier) then
+ * StyleSgr(next, tier); the first cell of a frame assumes the terminal's
+ * default, and the frame ends with StyleSgrOff(last, tier). These functions
+ * stay pure and hold no state, so only the sequencing lives in the buffer.
+ * That is also why nothing caches them: the bytes depend on the tier, which
+ * only the buffer knows, so it appends each piece when it emits them.
+ *
+ * Why no reset inside the conversion: StyleSgr never emits ESC[0m. A reset
+ * would discard the previous cell's state instead of describing this one,
+ * and the color spec promises that a tier-Off stream carries no color SGR.
+ * StyleSgrOff exists so the caller need not re-derive the fact that SGR 22
+ * clears bold and dim together.
+ */
+
+package tui
+
+import str
+import term
+
+@en "StyleDefault"
+@fa "ظاهر پیش‌فرض"
+/// The style of a cell that asks for nothing: both colors the terminal's
+/// default and all five attributes off. It is the zero value of Style and
+/// the identity of StyleMerge.
+pub const StyleDefault := Style {}
+
+// How many non-empty SGR sequences StyleSgr and StyleSgrOff have emitted this process.
+// Diagnostics only: the tests read it through SgrBuilds, and it never resets.
+// The buffer's private append helpers preserve one count per on or off sequence.
+mut _sgr_builds := 0
+
+@en "BorderStyle"
+@fa "سبک کادر"
+/// The kind of border a container draws: none, or a one-cell ring drawn with
+/// light lines, double lines, or light lines and arc corners. A value only —
+/// drawing the ring (its code points, corners and titles) is CUR-220. It is
+/// a sibling of Style, never a field of it, so a border is a per-widget
+/// choice and is not inherited or merged.
+pub enum BorderStyle:
+    @en "None"
+    @fa "بدون کادر"
+    /// No border; the content area is the full area.
+    None
+    @en "Single"
+    @fa "تک خط"
+    /// A one-cell ring of light lines with square corners.
+    Single
+    @en "Double"
+    @fa "دو خط"
+    /// A one-cell ring of double lines.
+    Double
+    @en "Rounded"
+    @fa "گوشه‌گرد"
+    /// A one-cell ring of light lines with arc corners.
+    Rounded
+end
+
+@en "Style"
+@fa "ظاهر"
+/// How a cell is drawn: a foreground and a background color and five
+/// attributes. Colors are Color, not Option<Color> — Default already means
+/// "no color chosen" — and a false attribute is one that is off. Reverse is
+/// stored rather than composed at emission so StyleEq sees it and a
+/// reverse-only change reaches the buffer diff. The set stays closed at
+/// these seven: no strikethrough, blink or hidden.
+pub struct Style:
+    @en "fg"
+    @fa "رنگ پیش‌زمینه"
+    /// Glyph foreground; Color.Default leaves the terminal's own foreground.
+    pub fg: Color = Color.Default
+
+    @en "bg"
+    @fa "رنگ پس‌زمینه"
+    /// Cell background; Color.Default leaves the terminal's own background.
+    pub bg: Color = Color.Default
+
+    @en "bold"
+    @fa "پررنگ"
+    /// Bold weight only; never brightens the foreground slot.
+    pub bold: bool = false
+
+    @en "dim"
+    @fa "کم‌رنگ"
+    /// Reduced intensity.
+    pub dim: bool = false
+
+    @en "italic"
+    @fa "کج"
+    /// Slanted glyphs.
+    pub italic: bool = false
+
+    @en "underline"
+    @fa "زیرخط"
+    /// A single underline.
+    pub underline: bool = false
+
+    @en "reverse"
+    @fa "وارونه"
+    /// Swaps the foreground and background the terminal draws with.
+    pub reverse: bool = false
+end
+
+// Whether a color survives lowering to the tier: a color that lowers to
+// Color.Default emits nothing, so StyleSgr(StyleDefault, t) is empty and a
+// tier-Off stream carries no color SGR.
+func _color_shown(c: Color, tier: ColorTier): bool:
+    ret Lower(c, tier) != Color.Default
+end
+
+func _append_sgr(b &: str.StringBuilder, style: Style, tier: ColorTier): bool:
+    mut wrote := false
+    if style.bold:
+        str.BufAppend(b, term.Sgr(term.StyleBold))
+        wrote = true
+    end
+    if style.dim:
+        str.BufAppend(b, term.Sgr(term.StyleDim))
+        wrote = true
+    end
+    if style.italic:
+        str.BufAppend(b, term.Sgr(term.StyleItalic))
+        wrote = true
+    end
+    if style.underline:
+        str.BufAppend(b, term.Sgr(term.StyleUnderline))
+        wrote = true
+    end
+    if style.reverse:
+        str.BufAppend(b, term.Sgr(term.StyleReverse))
+        wrote = true
+    end
+    if _color_shown(style.fg, tier):
+        str.BufAppend(b, FgSeqAt(style.fg, tier))
+        wrote = true
+    end
+    if _color_shown(style.bg, tier):
+        str.BufAppend(b, BgSeqAt(style.bg, tier))
+        wrote = true
+    end
+    if wrote:
+        _sgr_builds = _sgr_builds + 1
+    end
+    ret wrote
+end
+
+func _append_sgr_off(b &: str.StringBuilder, style: Style, tier: ColorTier): bool:
+    mut wrote := false
+    if style.bold or style.dim:
+        str.BufAppend(b, term.Sgr(22))
+        wrote = true
+    end
+    if style.italic:
+        str.BufAppend(b, term.Sgr(23))
+        wrote = true
+    end
+    if style.underline:
+        str.BufAppend(b, term.Sgr(24))
+        wrote = true
+    end
+    if style.reverse:
+        str.BufAppend(b, term.Sgr(27))
+        wrote = true
+    end
+    if _color_shown(style.fg, tier):
+        str.BufAppend(b, term.Sgr(term.FgDefault))
+        wrote = true
+    end
+    if _color_shown(style.bg, tier):
+        str.BufAppend(b, term.Sgr(term.BgDefault))
+        wrote = true
+    end
+    if wrote:
+        _sgr_builds = _sgr_builds + 1
+    end
+    ret wrote
+end
+
+@en "BorderInset"
+@fa "ضخامت کادر"
+/// The cells a border of this kind uses on each side: 0 for None, 1 for
+/// every other kind. A container shrinks its content area by this to get the
+/// area its children draw into.
+pub func BorderInset(b: BorderStyle): int:
+    ret b == BorderStyle.None ? 0 : 1
+end
+
+@en "StyleMerge"
+@fa "ادغام ظاهر"
+/// The style a child ends up with under a parent, by sentinel patch: a
+/// child's color is used unless it is Color.Default (then the parent's
+/// color is inherited), and each attribute is the OR of the two. So
+/// StyleMerge(StyleDefault, s) and StyleMerge(s, StyleDefault) both equal
+/// s, and the result of merging into StyleDefault is a fully resolved
+/// style. Pure: it returns a new value and never mutates its inputs.
+///
+/// ponytail: a child can add an attribute or override a color but cannot
+/// remove an inherited attribute (child false is indistinguishable from
+/// unset) or force the terminal-default color under a colored parent
+/// (child Default means inherit). Ceiling: no subtraction. Upgrade path if
+/// removal is ever needed: a separate StylePatch of Option fields that
+/// resolves into a Style, leaving Style, cells and equality unchanged.
+pub func StyleMerge(parent: Style, child: Style): Style:
+    ret Style {
+        fg = child.fg == Color.Default ? parent.fg : child.fg, bg = child.bg == Color.Default ? parent.bg : child.bg,
+        bold = parent.bold or child.bold, dim = parent.dim or child.dim, italic = parent.italic or child.italic,
+        underline = parent.underline or child.underline, reverse = parent.reverse or child.reverse,
+    }
+end
+
+@en "StyleEq"
+@fa "برابری ظاهر"
+/// True when two styles are equal field by field, over the seven stored
+/// fields — colors by kind and payload, attributes directly. It needs no
+/// tier. The contract with emission: equal styles emit identical bytes for
+/// every tier (sound), but unequal styles can emit the same bytes at tier
+/// Off, where every color is dropped (not complete). It therefore errs
+/// toward "different", so a cell is never wrongly skipped; a tier change
+/// invalidates every cell, since equality ignores the tier.
+pub func StyleEq(a: Style, b: Style): bool:
+    ret a.fg == b.fg and a.bg == b.bg and a.bold == b.bold and a.dim == b.dim and a.italic == b.italic and a.underline == b.underline and a.reverse == b.reverse
+end
+
+@en "StyleSgr"
+@fa "دنباله فعال‌سازی ظاهر"
+/// The SGR sequence that takes a terminal from its default state to `style`
+/// at `tier`: attributes first in the fixed order bold, dim, italic,
+/// underline, reverse, then the foreground, then the background. Attributes
+/// ignore the tier (NO_COLOR asks for no color, not for no bold); each color
+/// is lowered to the tier first, and one that is Default after lowering is
+/// skipped. Returns "" when nothing is set, and never emits a reset — every
+/// sequence is built from term's builders and color.salam's encoders, none
+/// is written by hand.
+pub func StyleSgr(style: Style, tier: ColorTier): str:
+    mut b := str.NewBuilder()
+    if not _append_sgr(b, style, tier):
+        str.BufFree(b)
+        ret ""
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+@en "StyleSgrOff"
+@fa "دنباله غیرفعال‌سازی ظاهر"
+/// The mirror of StyleSgr: the SGR sequence that takes a terminal from
+/// `style` back to its default state at `tier`, in the fixed order a single
+/// 22 if bold or dim is set (22 clears both together), then 23 if italic,
+/// then 24 if underline, then 27 if reverse, then 39 if the foreground is
+/// non-default after lowering, then 49 if the background is. Returns "" when
+/// nothing is set and never emits a reset; the codes are built with term.Sgr.
+pub func StyleSgrOff(style: Style, tier: ColorTier): str:
+    mut b := str.NewBuilder()
+    if not _append_sgr_off(b, style, tier):
+        str.BufFree(b)
+        ret ""
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+@en "SgrBuilds"
+@fa "شمار ساخت اس‌جی‌آر"
+/// Diagnostics: how many non-empty SGR sequences StyleSgr and StyleSgrOff have
+/// emitted this process. Nothing caches them: the buffer appends one per style
+/// change it writes, so a frame adds one per on or off sequence emitted.
+/// Read-only; not configuration.
+pub func SgrBuilds(): int:
+    ret _sgr_builds
+end

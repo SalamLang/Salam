@@ -1,0 +1,177 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Button: a one-row action control drawn as "[ label ]".
+ *
+ * Button holds a label, two Style values (the base style and the focus
+ * style), a disabled flag, and an on_click callback. It is focusable, so the
+ * screen routes keyboard events to it while it holds the focus: Enter or
+ * Space calls on_click. A left press inside its bounds also calls on_click,
+ * whether or not the button has the focus; a click moves no focus, because
+ * the screen never moves focus on a click. A disabled button is not
+ * focusable, takes no hits, and consumes no events.
+ *
+ * Focus is read from the buffer at render time, never stored: a focused,
+ * enabled button draws bold, or draws focus_style when the caller set one. A
+ * disabled button draws dim, ignores focus, and loses bold: its foreground,
+ * background, italic, and underline stay, and any bold the caller set is
+ * dropped. Button writes exactly one row,
+ * the first row of its bounds, and centres the label between the brackets.
+ *
+ * This file deliberately has no border, no pressed or hover state, no
+ * focus or blur callbacks, no label ellipsis, and no terminal output. The
+ * styles are Style values that the buffer emits, and placement in the
+ * parent's box belongs to whoever owns the layout.
+ */
+
+package tui
+
+import term
+
+@en "Button"
+@fa "دکمه"
+/// A one-row action button drawn as "[ label ]". Enter and Space call
+/// on_click while the button has the focus, and a left click inside its bounds
+/// calls on_click whether or not it has the focus. A disabled button draws
+/// dim, takes no focus, and ignores every event.
+pub struct Button:
+    pub use BaseWidget
+
+    @en "label"
+    @fa "برچسب"
+    /// The text drawn between the brackets. Clipped to the width, never
+    /// ellipsised.
+    pub label: str = ""
+
+    @en "style"
+    @fa "ظاهر"
+    /// The base style of every cell in the button.
+    pub style: Style = StyleDefault
+
+    @en "focus_style"
+    @fa "ظاهر تمرکز"
+    /// The style used instead of style while the button is focused and
+    /// enabled. StyleDefault, the default, means bold on every cell.
+    pub focus_style: Style = StyleDefault
+
+    @en "disabled"
+    @fa "غیرفعال"
+    /// When true the button draws dim, does not take focus or hits, and
+    /// ignores every event.
+    pub disabled: bool = false
+
+    @en "on_click"
+    @fa "هنگام کلیک"
+    /// Called when the button is activated. The default does nothing.
+    pub on_click: func () = (): end
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// True when the button is enabled and has a width, so keyboard focus
+    /// can reach it. A button added before it has bounds is not focusable.
+    pub func focusable(): bool:
+        ret not this.disabled and this.bounds().width > 0
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    /// True when the button is enabled, so a click on it lands here. A
+    /// disabled button lets the click fall through to what is painted under
+    /// it.
+    pub func hits(): bool:
+        ret not this.disabled
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    /// The label width plus the two brackets, on one row, clamped to
+    /// max_width when max_width > 0.
+    pub func preferred_size(max_width: int): Rect:
+        mut w := MeasureText(this.label, 0).width + 2
+        if max_width > 0 and w > max_width:
+            w = max_width
+        end
+        ret Rect { width = w, height = 1 }
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Reacts to Enter or Space, and to a left press inside the bounds. A
+    /// disabled button consumes nothing. Each activation calls on_click and
+    /// returns true; every other event returns false.
+    pub func handle_event(event: Event): bool:
+        if this.disabled:
+            ret false
+        end
+        if event.is_key(term.KeyEnter) or event.is_key(term.KeySpace):
+            this.on_click()
+            ret true
+        end
+        if event.mouse.ok and event.mouse.pressed and not event.mouse.motion and event.mouse.button == 0 and this.bounds().contains(event.mouse_point()):
+            this.on_click()
+            ret true
+        end
+        ret false
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Draws the button into the first row of bounds: the row is filled with
+    /// the effective style, "[" goes in the first column and "]" in the last
+    /// (when the width allows), and the label is centred between them,
+    /// clipped to fit. The effective style is style; dim and not bold when
+    /// disabled; a focused, enabled button uses focus_style, or bold when
+    /// focus_style is StyleDefault. A width of zero or less draws nothing.
+    pub func render(buf: Buffer, bounds: Rect):
+        w := bounds.width
+        if w <= 0:
+            ret
+        end
+        mut st := this.style
+        if this.disabled:
+            st.dim = true
+            st.bold = false
+        end
+        if buf.focused and not this.disabled:
+            if StyleEq(this.focus_style, StyleDefault):
+                st.bold = true
+            else:
+                st = this.focus_style
+            end
+        end
+        buf.fill(Rect { x = bounds.x, y = bounds.y, width = w, height = 1 }, " ", st)
+        buf.put_str(bounds.x, bounds.y, "[", st)
+        if w >= 2:
+            buf.put_str(bounds.x + w - 1, bounds.y, "]", st)
+        end
+        avail := w - 2
+        mut pad := (avail - _text_width(this.label)) / 2
+        if pad < 0:
+            pad = 0
+        end
+        room := avail - pad
+        if room > 0:
+            buf.put_str(bounds.x + 1 + pad, bounds.y, _take_cells(this.label, room), st)
+        end
+    end
+end
+
+@en "NewButton"
+@fa "دکمه جدید"
+/// Creates an enabled Button with the given label, default styles, and a
+/// no-op on_click.
+pub func NewButton(label: str): Button:
+    ret Button { label = label }
+end

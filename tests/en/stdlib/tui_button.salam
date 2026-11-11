@@ -1,0 +1,425 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Tests for the Button widget: the defaults, the key and click tables
+// (activation on Enter, Space and a left press, everything else bubbling),
+// the predicates (focusable, hits, and the disabled gate), the one-row render
+// vectors (brackets, label centring and clipping, bold focus, dim disabled,
+// focus_style), the preferred size, the screen-level focus gating, and the
+// SGR build count (the buffer, not the widget, builds at emission). Keys
+// and clicks are built from the exact bytes a terminal sends. Styles are
+// compared as StyleSgr output, never as hand-written escapes.
+
+import testing
+import term
+import str
+
+import tui
+
+// Counts the on_click invocations. Handlers cannot capture locals, so a
+// global is the shared counter.
+mut taps := 0
+
+// A focusable widget that consumes nothing, so it can steal the focus from
+// the button.
+struct Sink:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+end
+
+func tap():
+    taps = taps + 1
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func special(code: int): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
+end
+
+func mouse(seq: str): tui.Event:
+    ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
+end
+
+// A left-button press as the terminal reports it: SGR coordinates are
+// 1-based, so cell (x, y) arrives as column x + 1, row y + 1.
+func click(x: int, y: int): tui.Event:
+    ret mouse("\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M")
+end
+
+// Renders b into a fresh w x h buffer, bounds (0, 0, w, h); the caller frees it.
+func paint(b: tui.Button, w: int, h: int, focused: bool): tui.Buffer:
+    mut buf := tui.NewBuffer(w, h)
+    buf.focused = focused
+    mut bb := b
+    bb.render(buf, rect(0, 0, w, h))
+    ret buf
+end
+
+// The bytes Buffer.ansi emits for a one-row buffer whose cells all carry
+// style and whose text is text: a cursor move, the style's on sequence
+// (empty for the default), the text, and the style's off sequence.
+func row_bytes(style: tui.Style, text: str): str:
+    ret term.SeqMoveTo(1, 1) + tui.StyleSgr(style, tui.ColorTier.TrueColor) + text + tui.StyleSgrOff(style, tui.ColorTier.TrueColor)
+end
+
+// Renders b at width w, unfocused or focused, and checks the whole row.
+func check_row(b: tui.Button, w: int, focused: bool, text: str, style: tui.Style):
+    buf := paint(b, w, 1, focused)
+    testing.AssertEqStr(buf.ansi(), row_bytes(style, text))
+    buf.free()
+end
+
+// ---- Defaults ---------------------------------------------------------
+
+func test_defaults():
+    b := tui.NewButton("OK")
+    testing.AssertEqStr(b.label, "OK")
+    testing.AssertFalse(b.disabled)
+    testing.AssertTrue(tui.StyleEq(b.style, tui.StyleDefault))
+    testing.AssertTrue(tui.StyleEq(b.focus_style, tui.StyleDefault))
+    testing.AssertTrue(b.hits())
+    // No bounds yet: the width is zero, so the button is not focusable.
+    testing.AssertFalse(b.focusable())
+end
+
+// ---- Predicates -------------------------------------------------------
+
+func test_predicates():
+    mut b := tui.NewButton("OK")
+    b.set_bounds(rect(0, 0, 10, 1))
+    testing.AssertTrue(b.focusable())
+    testing.AssertTrue(b.hits())
+    b.disabled = true
+    testing.AssertFalse(b.focusable())
+    testing.AssertFalse(b.hits())
+    b.disabled = false
+    b.set_bounds(rect(0, 0, 0, 1))
+    testing.AssertFalse(b.focusable())
+end
+
+// ---- Keys (widget level) ----------------------------------------------
+
+func test_keys():
+    taps = 0
+    mut b := tui.NewButton("OK")
+    b.on_click = (): tap() end
+    b.set_bounds(rect(0, 0, 10, 1))
+    // BK01, BK02: Enter and Space activate and are consumed.
+    testing.AssertTrue(b.handle_event(special(term.KeyEnter)))
+    testing.AssertEqInt(taps, 1)
+    testing.AssertTrue(b.handle_event(key(" ")))
+    testing.AssertEqInt(taps, 2)
+    // BK03: any other key bubbles on and activates nothing.
+    testing.AssertFalse(b.handle_event(key("a")))
+    testing.AssertEqInt(taps, 2)
+    // BK05 (widget half): disabled consumes nothing.
+    b.disabled = true
+    testing.AssertFalse(b.handle_event(special(term.KeyEnter)))
+    testing.AssertFalse(b.handle_event(key(" ")))
+    testing.AssertEqInt(taps, 2)
+end
+
+// ---- Clicks (widget level) --------------------------------------------
+
+func test_clicks():
+    taps = 0
+    mut b := tui.NewButton("OK")
+    b.on_click = (): tap() end
+    b.set_bounds(rect(0, 0, 10, 1))
+    // BK06: a left press inside the bounds activates, focus or not.
+    testing.AssertTrue(b.handle_event(click(3, 0)))
+    testing.AssertEqInt(taps, 1)
+    // BK07: a press just outside the right edge does not.
+    testing.AssertFalse(b.handle_event(click(10, 0)))
+    // BK09: a press one row below the bounds does not.
+    testing.AssertFalse(b.handle_event(click(0, 1)))
+    testing.AssertEqInt(taps, 1)
+    // BK08: a disabled button ignores a press inside its bounds.
+    b.disabled = true
+    testing.AssertFalse(b.handle_event(click(3, 0)))
+    testing.AssertEqInt(taps, 1)
+end
+
+// Only a left press activates: a release, a motion report and a right press
+// all bubble on.
+func test_mouse_gates():
+    taps = 0
+    mut b := tui.NewButton("OK")
+    b.on_click = (): tap() end
+    b.set_bounds(rect(0, 0, 10, 1))
+    testing.AssertFalse(b.handle_event(mouse("\x1b[<0;4;1m")))
+    testing.AssertFalse(b.handle_event(mouse("\x1b[<32;4;1M")))
+    testing.AssertFalse(b.handle_event(mouse("\x1b[<2;4;1M")))
+    testing.AssertEqInt(taps, 0)
+end
+
+// ---- Render vectors (one row, exact bytes) ----------------------------
+
+func test_render_label_and_brackets():
+    ok := tui.NewButton("OK")
+    bold := tui.Style { bold = true }
+    dim := tui.Style { dim = true }
+    // BT01: centred label, default style.
+    check_row(ok, 10, false, "[   OK   ]", tui.StyleDefault)
+    // Odd leftover width: the extra cell goes to the right, so the pad floors.
+    check_row(ok, 9, false, "[  OK   ]", tui.StyleDefault)
+    // BT02: bold on every cell while focused.
+    check_row(ok, 10, true, "[   OK   ]", bold)
+    // BT03: dim while disabled.
+    mut dis := ok
+    dis.disabled = true
+    check_row(dis, 10, false, "[   OK   ]", dim)
+    // BT04: a long label is clipped to the inner width, no ellipsis.
+    check_row(tui.NewButton("Save and continue"), 10, false, "[Save and]", tui.StyleDefault)
+    // BT05: the label fills the inner width exactly.
+    check_row(ok, 4, true, "[OK]", bold)
+    // BT06: one inner cell.
+    check_row(ok, 3, false, "[O]", tui.StyleDefault)
+    // BT07: no inner cell, both brackets still drawn.
+    check_row(ok, 2, false, "[]", tui.StyleDefault)
+    // BT08: a width of one draws only the opening bracket.
+    check_row(ok, 1, false, "[", tui.StyleDefault)
+end
+
+func test_render_wide_label():
+    mut buf := paint(tui.NewButton("中文"), 6, 1, false)
+    defer buf.free()
+    testing.AssertEqStr(buf.row_text(0), "[中文]")
+    testing.AssertEqInt(buf.width, 6)
+    testing.AssertEqStr(buf.get(1, 0).ch, "中")
+    testing.AssertEqStr(buf.get(2, 0).ch, "")
+    testing.AssertEqStr(buf.get(3, 0).ch, "文")
+end
+
+// BT09: a width of zero draws nothing, even when focused.
+func test_render_zero_width():
+    mut buf := tui.NewBuffer(10, 1)
+    buf.focused = true
+    mut b := tui.NewButton("OK")
+    b.render(buf, rect(0, 0, 0, 1))
+    testing.AssertEqStr(buf.ansi(), row_bytes(tui.StyleDefault, "          "))
+    buf.free()
+end
+
+// BT10: the base style's colours survive focus; bold is added on top.
+func test_render_keeps_colours():
+    mut b := tui.NewButton("OK")
+    b.style = tui.Style { fg = tui.Blue, bg = tui.White }
+    want := tui.Style { fg = tui.Blue, bg = tui.White, bold = true }
+    check_row(b, 10, true, "[   OK   ]", want)
+end
+
+// BT11: disabled wins over focus: dim, no bold.
+func test_render_disabled_beats_focus():
+    mut b := tui.NewButton("OK")
+    b.disabled = true
+    dim := tui.Style { dim = true }
+    check_row(b, 10, true, "[   OK   ]", dim)
+end
+
+// BT12: disabled drops a bold the caller set, and keeps dim; the same bold
+// survives while the enabled button is focused.
+func test_render_disabled_drops_caller_bold():
+    mut b := tui.NewButton("OK")
+    b.style = tui.Style { bold = true }
+    bold := tui.Style { bold = true }
+    dim := tui.Style { dim = true }
+    b.disabled = true
+    mut buf := paint(b, 10, 1, false)
+    testing.AssertEqStr(buf.ansi(), row_bytes(dim, "[   OK   ]"))
+    testing.AssertTrue(str.Contains(buf.ansi(), term.Sgr(term.StyleDim)))
+    testing.AssertFalse(str.Contains(buf.ansi(), term.Sgr(term.StyleBold)))
+    buf.free()
+    b.disabled = false
+    buf = paint(b, 10, 1, true)
+    testing.AssertEqStr(buf.ansi(), row_bytes(bold, "[   OK   ]"))
+    testing.AssertTrue(str.Contains(buf.ansi(), term.Sgr(term.StyleBold)))
+    testing.AssertFalse(str.Contains(buf.ansi(), term.Sgr(term.StyleDim)))
+    buf.free()
+end
+
+// G14: a focus_style replaces the base style while focused and enabled, and
+// leaves the base style alone otherwise; disabled still ignores it.
+func test_focus_style():
+    mut b := tui.NewButton("OK")
+    b.style = tui.Style { fg = tui.Blue }
+    b.focus_style = tui.Style { bg = tui.White }
+    check_row(b, 10, true, "[   OK   ]", tui.Style { bg = tui.White })
+    check_row(b, 10, false, "[   OK   ]", tui.Style { fg = tui.Blue })
+    b.disabled = true
+    dim := tui.Style { fg = tui.Blue, dim = true }
+    check_row(b, 10, true, "[   OK   ]", dim)
+end
+
+// SGR-build probe after the typed-style migration: the widget builds nothing. One uniform styled
+// row costs exactly two strings when the buffer emits it — the on and off
+// sequences — and a default row costs none. Rendering through a Screen covers
+// the real frame path, where the widget is a copy stored in the tree.
+func test_sgr_memo_probe():
+    mut b := tui.NewButton("OK")
+    buf := tui.NewBuffer(10, 1)
+    before := tui.SgrBuilds()
+    b.render(buf, rect(0, 0, 10, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    _ := buf.ansi()
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    b.style = tui.Style { fg = tui.Blue }
+    b.render(buf, rect(0, 0, 10, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    _ := buf.ansi()
+    testing.AssertEqInt(tui.SgrBuilds() - before, 2)
+    buf.free()
+
+    mut s := tui.NewScreen(tui.BaseWidget {}, 10, 1)
+    defer s.close()
+    id := s.add(tui.RootId, tui.NewButton("OK") as dyn tui.Widget)
+    s.widget(id).set_bounds(rect(0, 0, 10, 1))
+    s.present()
+    built := tui.SgrBuilds()
+    s.invalidate(id)
+    s.present()
+    // Nothing changed, so the diff is empty and builds nothing.
+    testing.AssertEqInt(tui.SgrBuilds(), built)
+end
+
+// The label is centred between the brackets on the first row only: the rows
+// below the bounds stay blank.
+func test_render_one_row_only():
+    mut buf := tui.NewBuffer(12, 3)
+    mut b := tui.NewButton("OK")
+    b.render(buf, rect(2, 1, 10, 2))
+    testing.AssertEqStr(buf.row_text(0), "            ")
+    testing.AssertEqStr(buf.row_text(1), "  [   OK   ]")
+    testing.AssertEqStr(buf.row_text(2), "            ")
+    buf.free()
+end
+
+// ---- Preferred size ---------------------------------------------------
+
+func test_preferred_size():
+    b := tui.NewButton("OK")
+    testing.AssertEqInt(b.preferred_size(0).width, 4)
+    testing.AssertEqInt(b.preferred_size(0).height, 1)
+    testing.AssertEqInt(b.preferred_size(3).width, 3)
+    testing.AssertEqInt(tui.NewButton("").preferred_size(0).width, 2)
+    testing.AssertEqInt(tui.NewButton("Save and continue").preferred_size(0).width, 19)
+end
+
+// ---- Screen gating ----------------------------------------------------
+
+// BK04: keys reach the button only while it holds the focus.
+func test_screen_keys_follow_focus():
+    taps = 0
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    sink := s.add(tui.RootId, Sink {})
+    s.widget(sink).set_bounds(rect(0, 0, 24, 1))
+    mut b := tui.NewButton("OK")
+    b.on_click = (): tap() end
+    btn := s.add(tui.RootId, b as dyn tui.Widget)
+    s.widget(btn).set_bounds(rect(0, 1, 10, 1))
+    testing.AssertEqInt(s.focused_id(), sink)
+    testing.AssertFalse(s.dispatch(special(term.KeyEnter)))
+    testing.AssertEqInt(taps, 0)
+    testing.AssertTrue(s.focus(btn))
+    testing.AssertTrue(s.dispatch(special(term.KeyEnter)))
+    testing.AssertEqInt(taps, 1)
+end
+
+// BK05 (screen half): a disabled button never takes the focus, and its
+// presses fall through to the root.
+func test_screen_disabled_never_focused():
+    taps = 0
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    sink := s.add(tui.RootId, Sink {})
+    s.widget(sink).set_bounds(rect(0, 0, 24, 1))
+    mut b := tui.NewButton("OK")
+    b.disabled = true
+    b.on_click = (): tap() end
+    btn := s.add(tui.RootId, b as dyn tui.Widget)
+    s.widget(btn).set_bounds(rect(0, 1, 10, 1))
+    testing.AssertFalse(s.focus(btn))
+    testing.AssertEqInt(s.focused_id(), sink)
+    testing.AssertFalse(s.dispatch(special(term.KeyEnter)))
+    testing.AssertFalse(s.dispatch(click(3, 1)))
+    testing.AssertEqInt(taps, 0)
+end
+
+// A click reaches the button through hit-test and activates it, and the
+// click moves no focus.
+func test_screen_click_activates_without_focus():
+    taps = 0
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    sink := s.add(tui.RootId, Sink {})
+    s.widget(sink).set_bounds(rect(0, 0, 24, 1))
+    mut b := tui.NewButton("OK")
+    b.on_click = (): tap() end
+    btn := s.add(tui.RootId, b as dyn tui.Widget)
+    s.widget(btn).set_bounds(rect(0, 1, 10, 1))
+    testing.AssertTrue(s.dispatch(click(3, 1)))
+    testing.AssertEqInt(taps, 1)
+    testing.AssertEqInt(s.focused_id(), sink)
+end
+
+// G15: a button added before it has bounds is not focusable, so the first
+// focusable rule passes it over; after set_bounds it joins the focus order.
+func test_screen_focus_waits_for_bounds():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    sink := s.add(tui.RootId, Sink {})
+    s.widget(sink).set_bounds(rect(0, 0, 24, 1))
+    btn := s.add(tui.RootId, tui.NewButton("OK") as dyn tui.Widget)
+    testing.AssertFalse(s.can_focus(btn))
+    s.focus_next()
+    testing.AssertEqInt(s.focused_id(), sink)
+    s.widget(btn).set_bounds(rect(0, 1, 10, 1))
+    testing.AssertTrue(s.can_focus(btn))
+    s.focus_next()
+    testing.AssertEqInt(s.focused_id(), btn)
+end
+
+func main:
+    test_defaults()
+    test_predicates()
+    test_keys()
+    test_clicks()
+    test_mouse_gates()
+    test_render_label_and_brackets()
+    test_render_wide_label()
+    test_render_zero_width()
+    test_render_keeps_colours()
+    test_render_disabled_beats_focus()
+    test_render_disabled_drops_caller_bold()
+    test_focus_style()
+    test_sgr_memo_probe()
+    test_render_one_row_only()
+    test_preferred_size()
+    test_screen_keys_follow_focus()
+    test_screen_disabled_never_focused()
+    test_screen_click_activates_without_focus()
+    test_screen_focus_waits_for_bounds()
+    ret testing.Summary()
+end

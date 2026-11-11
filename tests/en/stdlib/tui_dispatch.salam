@@ -1,0 +1,200 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Unit tests for the widget tree and event dispatch: an event
+// reaches the starting widget first, bubbles to each ancestor while
+// unconsumed, stops at the first widget that consumes it, and never visits
+// siblings. The starting widget need not be focusable: dispatch walks the
+// tree by parent links and never consults focusable().
+//
+// Tree used throughout:
+//
+//     root(0)
+//     |-- panel(1)
+//     |   |-- left(2)
+//     |   `-- right(3)
+//     `-- footer(4)
+
+import testing
+import term
+
+import tui
+
+// Every Recorder appends its name here when it sees an event, so a test can
+// assert the exact visiting order. Handlers cannot capture locals (lambdas
+// capture by value), so a global is the simplest shared log.
+mut visits := Vector {} as Vector<str>
+
+// A widget that records each event it sees and consumes the ones whose
+// character is in `takes`.
+struct Recorder:
+    pub use tui.BaseWidget
+    pub name: str = ""
+    pub takes: str = ""
+
+    pub func handle_event(event: tui.Event): bool:
+        visits.push(this.name)
+        ret event.kind == tui.KeyEvent and str_contains(this.takes, event.key.ch)
+    end
+end
+
+func str_contains(hay: str, needle: str): bool:
+    if needle == "":
+        ret false
+    end
+    ret hay.find(needle) >= 0
+end
+
+func key(ch: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(ch) }
+end
+
+func trail(): str:
+    mut out := ""
+    each i, v in visits:
+        if i > 0:
+            out = out + ">"
+        end
+        out = out + v
+    end
+    visits.clear()
+    ret out
+end
+
+func build(): tui.Tree:
+    mut t := tui.NewTree(Recorder { name = "root", takes = "r" })
+    panel := t.add(tui.RootId, Recorder { name = "panel", takes = "p" })
+    _left := t.add(panel, Recorder { name = "left", takes = "l" })
+    _right := t.add(panel, Recorder { name = "right", takes = "x" })
+    _footer := t.add(tui.RootId, Recorder { name = "footer", takes = "f" })
+    ret t
+end
+
+func test_structure():
+    mut t := build()
+    testing.AssertEqInt(t.count(), 5)
+    testing.AssertEqInt(t.parent(0), tui.NoWidget)
+    testing.AssertEqInt(t.parent(1), 0)
+    testing.AssertEqInt(t.parent(2), 1)
+    testing.AssertEqInt(t.parent(3), 1)
+    testing.AssertEqInt(t.parent(4), 0)
+    testing.AssertEqInt(t.parent(99), tui.NoWidget)
+    testing.AssertTrue(t.valid(4))
+    testing.AssertFalse(t.valid(5))
+    testing.AssertFalse(t.valid(-1))
+    t.free()
+end
+
+func test_consumed_by_start():
+    mut t := build()
+    testing.AssertEqInt(t.dispatch(2, key("l")), 2)
+    testing.AssertEqStr(trail(), "left")
+    t.free()
+end
+
+func test_bubbles_to_parent():
+    mut t := build()
+    testing.AssertEqInt(t.dispatch(2, key("p")), 1)
+    testing.AssertEqStr(trail(), "left>panel")
+    t.free()
+end
+
+func test_bubbles_to_root():
+    mut t := build()
+    testing.AssertEqInt(t.dispatch(3, key("r")), 0)
+    testing.AssertEqStr(trail(), "right>panel>root")
+    t.free()
+end
+
+func test_unconsumed():
+    mut t := build()
+    testing.AssertEqInt(t.dispatch(2, key("z")), tui.NoWidget)
+    testing.AssertEqStr(trail(), "left>panel>root")
+    t.free()
+end
+
+func test_siblings_never_see_it():
+    mut t := build()
+    // "x" is what right consumes, but right is not on left's path.
+    testing.AssertEqInt(t.dispatch(2, key("x")), tui.NoWidget)
+    testing.AssertEqStr(trail(), "left>panel>root")
+    // footer's path skips the whole panel subtree.
+    testing.AssertEqInt(t.dispatch(4, key("p")), tui.NoWidget)
+    testing.AssertEqStr(trail(), "footer>root")
+    t.free()
+end
+
+func test_non_key_events_bubble_too():
+    mut t := build()
+    testing.AssertEqInt(t.dispatch(2, tui.Event { kind = tui.TickEvent }), tui.NoWidget)
+    testing.AssertEqStr(trail(), "left>panel>root")
+    t.free()
+end
+
+func test_invalid_start_is_root():
+    mut t := build()
+    testing.AssertEqInt(t.dispatch(tui.NoWidget, key("r")), 0)
+    testing.AssertEqStr(trail(), "root")
+    testing.AssertEqInt(t.dispatch(42, key("z")), tui.NoWidget)
+    testing.AssertEqStr(trail(), "root")
+    t.free()
+end
+
+func test_unfocusable_start_is_visited_and_bubbles():
+    mut t := build()
+    // Every Recorder here is unfocusable (BaseWidget's default), yet
+    // dispatch never consults focusable(): the start sees the event first.
+    testing.AssertFalse(t.get(2).focusable())
+    testing.AssertEqInt(t.dispatch(2, key("l")), 2)
+    testing.AssertEqStr(trail(), "left")
+    // Left unconsumed there, it walks to the root, whose "r" consumes it.
+    testing.AssertEqInt(t.dispatch(2, key("r")), 0)
+    testing.AssertEqStr(trail(), "left>panel>root")
+    t.free()
+end
+
+func test_invalid_parent_attaches_to_root():
+    mut t := build()
+    id := t.add(77, Recorder { name = "stray" })
+    testing.AssertEqInt(t.parent(id), tui.RootId)
+    testing.AssertEqInt(t.dispatch(id, key("z")), tui.NoWidget)
+    testing.AssertEqStr(trail(), "stray>root")
+    t.free()
+end
+
+func test_get_shares_widget():
+    mut t := build()
+    t.get(3).set_bounds(tui.Rect { x = 7, width = 2, height = 1 })
+    testing.AssertEqInt(t.get(3).bounds().x, 7)
+    // An invalid ID returns the root rather than failing.
+    t.get(0).set_bounds(tui.Rect { width = 80, height = 24 })
+    testing.AssertEqInt(t.get(-5).bounds().width, 80)
+    t.free()
+end
+
+func main:
+    test_structure()
+    test_consumed_by_start()
+    test_bubbles_to_parent()
+    test_bubbles_to_root()
+    test_unconsumed()
+    test_siblings_never_see_it()
+    test_non_key_events_bubble_too()
+    test_invalid_start_is_root()
+    test_unfocusable_start_is_visited_and_bubbles()
+    test_invalid_parent_attaches_to_root()
+    test_get_shares_widget()
+    visits.free()
+    ret testing.Summary()
+end

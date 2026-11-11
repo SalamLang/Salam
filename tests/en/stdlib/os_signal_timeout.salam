@@ -1,0 +1,119 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// WaitTimeout's bound, measured instead of assumed: 100 ms with nothing queued
+// reports WaitTimedOut and took at least 80 ms; a raise 20 ms after the wait
+// starts reports WaitArrived long before a 5 s bound; the zero-length probe
+// reports WaitTimedOut without touching the out-block; a negative bound is
+// refused before anything is claimed. The bounds are loose on both sides so a
+// loaded runner cannot flake them, and tight enough that an ignored timeout or
+// a busy probe fails. Every sleep is a bounded MonoNanos spin, so nothing here
+// can reach the harness watchdog.
+
+import testing
+import mem
+import time
+
+import os.signal
+
+// Raise SIGWINCH about 20 ms after the wait has started. A raise that is
+// already queued before the wait begins would be consumed by the blocking
+// Wait too, so it would prove nothing about the bound.
+func raiser():
+    start := time.MonoNanos()
+    mut spin := 0
+    until time.MonoNanos() - start < (20000000 as i64):
+        spin += 1
+    end
+    _ := spin
+    _ := signal.WakeWinch()
+end
+
+func test_timeout_expires():
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out)
+    start := time.MonoNanos()
+    status := signal.WaitTimeout(set, out, 100)
+    elapsed := time.SinceMs(start)
+    testing.AssertEqInt(status, signal.WaitTimedOut)
+    // An ignored bound returns at once and a busy loop finishes in
+    // microseconds; both land under 80 ms.
+    testing.AssertTrue(elapsed >= 80.0)
+    testing.AssertTrue(elapsed < 5000.0)
+    // A wait that timed out wrote nothing to the caller's block.
+    testing.AssertEqInt((out as i32*)[0], 0)
+    mem.Free(out)
+    mem.Free(set)
+end
+
+func test_arrival_inside_bound():
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out)
+    // Spawned before the clock starts, so the 20 ms spin overlaps the wait
+    // rather than the setup.
+    a := spawn(raiser)
+    start := time.MonoNanos()
+    status := signal.WaitTimeout(set, out, 5000)
+    elapsed := time.SinceMs(start)
+    join(a)
+    testing.AssertEqInt(status, signal.WaitArrived)
+    testing.AssertEqInt((out as i32*)[0], signal.WinchSignal)
+    // The bound was 5 s; an arrival inside it is orders of magnitude sooner.
+    testing.AssertTrue(elapsed < 4000.0)
+    mem.Free(out)
+    mem.Free(set)
+end
+
+func test_zero_is_a_probe():
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out)
+    // Runs right after the arrival above drained its signal, so nothing is
+    // queued: a zero-length wait must return instead of blocking, and must
+    // leave the block alone.
+    (out as i32*)[0] = 99
+    testing.AssertEqInt(signal.WaitTimeout(set, out, 0), signal.WaitTimedOut)
+    testing.AssertEqInt((out as i32*)[0], 99)
+    mem.Free(out)
+    mem.Free(set)
+end
+
+func test_negative_bound_is_invalid():
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out)
+    // Refused before the claim and before the kernel: nothing was waited on.
+    testing.AssertEqInt(signal.WaitTimeout(set, out, -1), signal.WaitInvalid)
+    testing.AssertEqInt((out as i32*)[0], 0)
+    mem.Free(out)
+    mem.Free(set)
+end
+
+func main:
+    // The bound is built with the registry, so the first Install has to happen
+    // before the first timed wait; blocking is what makes the raise queue.
+    signal.InstallWinchHandler()
+    signal.BlockWinch()
+    test_timeout_expires()
+    test_arrival_inside_bound()
+    test_zero_is_a_probe()
+    test_negative_bound_is_invalid()
+    ret testing.Summary()
+end

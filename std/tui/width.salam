@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * The one display-cell width rule. A codepoint occupies two cells when it is
+ * East Asian wide or fullwidth, zero for controls, marks and format characters,
+ * and one otherwise. Buffer writes cells; Text and Table measure strings;
+ * Separator validates its rune with this rule.
+ *
+ * This module does not parse ANSI escapes because callers measure plain text.
+ * It does not segment grapheme clusters or carry full East Asian Width data.
+ */
+
+package tui
+
+import str
+import unicode
+
+// ponytail: rare wide codepoints outside this table can misalign Text/Buffer; upgrade with generated EastAsianWidth data when needed.
+func _cell_width(cp: int): int:
+    if unicode.IsControl(cp) or unicode.IsMark(cp) or unicode.IsFormat(cp):
+        ret 0
+    end
+    if (cp >= 0x1100 and cp <= 0x115F) or (cp >= 0x2E80 and cp <= 0x303E) or (cp >= 0x3041 and cp <= 0x33FF) or (cp >= 0x3400 and cp <= 0x4DBF) or (cp >= 0x4E00 and cp <= 0x9FFF) or (cp >= 0xA000 and cp <= 0xA4CF) or (cp >= 0xAC00 and cp <= 0xD7A3) or (cp >= 0xF900 and cp <= 0xFAFF) or (cp >= 0xFE30 and cp <= 0xFE4F) or (cp >= 0xFF00 and cp <= 0xFF60) or (cp >= 0xFFE0 and cp <= 0xFFE6) or (cp >= 0x1F300 and cp <= 0x1F64F) or (cp >= 0x1F900 and cp <= 0x1F9FF) or (cp >= 0x20000 and cp <= 0x3FFFD):
+        ret 2
+    end
+    ret 1
+end
+
+func _char_width(ch: str): int:
+    if ch.len() == 1:
+        b := ch[0] as int
+        ret b < 32 or b == 127 ? 0 : 1
+    end
+    cps := str.CodePoints(ch)
+    defer cps.free()
+    if cps.len() == 0:
+        ret 0
+    end
+    ret _cell_width(cps.get(0))
+end
+
+func _text_width(s: str): int:
+    cps := str.CodePoints(s)
+    defer cps.free()
+    mut w := 0
+    repeat cps.len() in i:
+        w = w + _cell_width(cps.get(i))
+    end
+    ret w
+end
+
+// The longest prefix that fits in n cells, padded with blanks to n.
+func _clip_cells(s: str, n: int): str:
+    if n <= 0:
+        ret ""
+    end
+    text := _take_cells(s, n)
+    ret text + str.Repeat(" ", n - _text_width(text))
+end
+
+func _take_cells(s: str, n: int): str:
+    if n <= 0:
+        ret ""
+    end
+    cps := str.CodePoints(s)
+    defer cps.free()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut used := 0
+    mut stop := false
+    repeat cps.len() in i:
+        cp := cps.get(i)
+        cw := _cell_width(cp)
+        if not stop:
+            if used + cw <= n:
+                str.BufAppendCp(b, cp)
+                used = used + cw
+            else:
+                stop = true
+            end
+        end
+    end
+    ret str.BufStr(b)
+end

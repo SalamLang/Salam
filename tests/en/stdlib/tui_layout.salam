@@ -1,0 +1,2303 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Unit tests for the layout box arithmetic: FitRect, InsetRect, SplitMain,
+// TrackSizes and the two axis-placement helpers. The cases are the spec's
+// worked vectors, not a random sweep: the two padding vectors (uniform and
+// per-side), the over-budget padding that must collapse to an empty rect
+// anchored at the raw origin, a negative inset side that must clamp to 0, the
+// three main-axis split vectors, the weighted-share vectors, the gap vectors,
+// split with no Fill entries and with Fixed entries that exceed the length, a
+// negative Fixed that clamps to 0, the grid track vectors, and the placement
+// tables for Start/Center/End/Stretch plus the non-positive-avail edge (which
+// behaves like Stretch). Rect normal form
+// (never a negative dimension) is asserted directly on FitRect.
+//
+// The container smoke exercises the R1 recursion (a Column containing a Row
+// is moved by one set_bounds), R5 packing, R10 grid cells including an
+// out-of-range cell, R15 row and column spans, R11 stack overlap, R8 Pref
+// through Text, a measurable container's natural cross extent, a Panel as a
+// measured child of a Row and a Column with its border included in the
+// reserved size (including a Panel whose own child is a Column), and an
+// unmeasurable child that still fills the axis, R12
+// empty propagation, and R13 idempotence. Main-axis Pref reserves a measured
+// size and degrades to Fill weight 1 when it cannot measure. The full per-AC
+// matrix is a later stage.
+
+import mem
+import testing
+
+import tui
+
+// Leaf is an invisible child widget: it satisfies Widget with the BaseWidget
+// defaults (so it cannot measure and preferred_size returns the sentinel) and
+// only stores the rect it is given. Sizer is the same but reports a fixed
+// preferred size, so Pref and cross-axis alignment can be tested without
+// depending on text wrapping.
+struct Leaf:
+    pub use tui.BaseWidget
+
+    pub func render(buf: tui.Buffer, b: tui.Rect):
+        _ := buf
+        _ := b
+    end
+end
+
+struct Sizer:
+    pub use tui.BaseWidget
+
+    pub w: int = 0
+    pub h: int = 0
+
+    pub func preferred_size(max_width: int): tui.Rect:
+        _ := max_width
+        ret tui.Rect { width = this.w, height = this.h }
+    end
+
+    pub func render(buf: tui.Buffer, b: tui.Rect):
+        _ := buf
+        _ := b
+    end
+end
+
+// AssertMeasure measures normally but fails the test if the engine ever
+// forwards a non-positive max_width: R8 says that is never forwarded, the
+// axis resolves to 0 with no call.
+// CountSizer reports a fixed preferred size and records each preferred_size
+// call. calls[0] is the count; calls[1..] are the max_width values, in order.
+// The pointer is shared with the dyn copy because an int* is not deep-copied.
+struct CountSizer:
+    pub use tui.BaseWidget
+
+    pub w: int = 0
+    pub h: int = 0
+    pub calls: int* = null
+
+    pub func preferred_size(max_width: int): tui.Rect:
+        if this.calls != null:
+            n := this.calls[0]
+            if n < 8:
+                this.calls[n + 1] = max_width
+            end
+            this.calls[0] = n + 1
+        end
+        ret tui.Rect { width = this.w, height = this.h }
+    end
+
+    pub func render(buf: tui.Buffer, b: tui.Rect):
+        _ := buf
+        _ := b
+    end
+end
+
+// WrapSizer's height depends on max_width. A wide measure is one line; a
+// narrow one wraps to three. calls is shared with the dyn copy. calls[0] is
+// the count; calls[1..] are the max_width values, in order.
+struct WrapSizer:
+    pub use tui.BaseWidget
+
+    pub calls: int* = null
+
+    pub func preferred_size(max_width: int): tui.Rect:
+        if this.calls != null:
+            n := this.calls[0]
+            if n < 8:
+                this.calls[n + 1] = max_width
+            end
+            this.calls[0] = n + 1
+        end
+        mut h := 1
+        if max_width < 16:
+            h = 3
+        end
+        ret tui.Rect { width = 4, height = h }
+    end
+
+    pub func render(buf: tui.Buffer, b: tui.Rect):
+        _ := buf
+        _ := b
+    end
+end
+
+struct AssertMeasure:
+    pub use tui.BaseWidget
+
+    pub func preferred_size(max_width: int): tui.Rect:
+        testing.AssertTrue(max_width > 0)
+        ret tui.Rect { width = 2, height = 1 }
+    end
+
+    pub func render(buf: tui.Buffer, b: tui.Rect):
+        _ := buf
+        _ := b
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+// Raw insets (negatives preserved) so the clamping in the helpers is the
+// thing under test.
+func ins(t: int, r: int, b: int, l: int): tui.Insets:
+    ret tui.Insets { top = t, right = r, bottom = b, left = l }
+end
+
+func fillSize(): tui.LayoutSize:
+    ret tui.LayoutSize { kind = tui.SizeKind.Fill }
+end
+
+func fillWeight(w: int): tui.LayoutSize:
+    ret tui.LayoutSize { kind = tui.SizeKind.Fill, weight = w }
+end
+
+func prefWeight(w: int): tui.LayoutSize:
+    ret tui.LayoutSize { kind = tui.SizeKind.Pref, weight = w }
+end
+
+func prefSize(): tui.LayoutSize:
+    ret tui.LayoutSize { kind = tui.SizeKind.Pref }
+end
+
+func fixedSize(n: int): tui.LayoutSize:
+    ret tui.LayoutSize { kind = tui.SizeKind.Fixed, cells = n }
+end
+
+// A fresh invisible child each call, boxed as dyn Widget so the test keeps a
+// reference to the same widget the container will move.
+func leaf(): dyn tui.Widget:
+    ret Leaf {} as dyn tui.Widget
+end
+
+func sizer(w: int, h: int): dyn tui.Widget:
+    ret Sizer { w = w, h = h } as dyn tui.Widget
+end
+
+func keyed(): dyn tui.Widget:
+    ret AssertMeasure {} as dyn tui.Widget
+end
+
+func text(s: str): dyn tui.Widget:
+    ret tui.NewText(s) as dyn tui.Widget
+end
+
+func checkRect(r: tui.Rect, x: int, y: int, w: int, h: int):
+    testing.AssertEqInt(r.x, x)
+    testing.AssertEqInt(r.y, y)
+    testing.AssertEqInt(r.width, w)
+    testing.AssertEqInt(r.height, h)
+end
+
+func checkEmpty(r: tui.Rect):
+    testing.AssertEqInt(r.width, 0)
+    testing.AssertEqInt(r.height, 0)
+end
+
+func test_inset_uniform():
+    r := tui.InsetRect(rect(0, 0, 80, 24), tui.UniformInsets(1))
+    testing.AssertEqInt(r.x, 1)
+    testing.AssertEqInt(r.y, 1)
+    testing.AssertEqInt(r.width, 78)
+    testing.AssertEqInt(r.height, 22)
+end
+
+func test_inset_margin():
+    r := tui.InsetRect(rect(0, 0, 16, 9), ins(1, 2, 1, 2))
+    testing.AssertEqInt(r.x, 2)
+    testing.AssertEqInt(r.y, 1)
+    testing.AssertEqInt(r.width, 12)
+    testing.AssertEqInt(r.height, 7)
+end
+
+func test_inset_over_budget():
+    // raw {6,7,-2,-4} clipped back inside {2,3,6,4} -> 0x0 at (6,7).
+    r := tui.InsetRect(rect(2, 3, 6, 4), tui.UniformInsets(4))
+    testing.AssertEqInt(r.x, 6)
+    testing.AssertEqInt(r.y, 7)
+    testing.AssertEqInt(r.width, 0)
+    testing.AssertEqInt(r.height, 0)
+    testing.AssertTrue(r.is_empty())
+end
+
+func test_inset_negative():
+    // A negative side adds nothing: left -5 clamps to 0.
+    r := tui.InsetRect(rect(0, 0, 10, 5), ins(0, 0, 0, -5))
+    testing.AssertEqInt(r.x, 0)
+    testing.AssertEqInt(r.y, 0)
+    testing.AssertEqInt(r.width, 10)
+    testing.AssertEqInt(r.height, 5)
+    n := tui.NewInsets(-5, 2, -1, 0)
+    testing.AssertEqInt(n.top, 0)
+    testing.AssertEqInt(n.right, 2)
+    testing.AssertEqInt(n.bottom, 0)
+    testing.AssertEqInt(n.left, 0)
+end
+
+func test_inset_empty():
+    r := tui.InsetRect(rect(0, 0, 0, 0), tui.UniformInsets(1))
+    testing.AssertEqInt(r.x, 0)
+    testing.AssertEqInt(r.y, 0)
+    testing.AssertEqInt(r.width, 0)
+    testing.AssertEqInt(r.height, 0)
+end
+
+func test_fit_rect():
+    i := tui.FitRect(rect(0, 0, 4, 4), rect(2, 1, 5, 2))
+    testing.AssertEqInt(i.x, 2)
+    testing.AssertEqInt(i.y, 1)
+    testing.AssertEqInt(i.width, 2)
+    testing.AssertEqInt(i.height, 2)
+end
+
+func test_fit_rect_empty():
+    // Disjoint: 0x0 at the nearest point of the box (10,10).
+    e := tui.FitRect(rect(0, 0, 4, 4), rect(10, 10, 2, 2))
+    testing.AssertEqInt(e.x, 10)
+    testing.AssertEqInt(e.y, 10)
+    testing.AssertEqInt(e.width, 0)
+    testing.AssertEqInt(e.height, 0)
+    testing.AssertTrue(e.is_empty())
+    // A negative-dimension input never leaks a negative result.
+    n := tui.FitRect(rect(0, 0, -3, 4), rect(0, 0, 5, 5))
+    testing.AssertEqInt(n.width, 0)
+    testing.AssertEqInt(n.height, 0)
+    testing.AssertTrue(n.width >= 0 and n.height >= 0)
+end
+
+func test_split_equal():
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    r := tui.SplitMain(22, sizes, 0)
+    testing.AssertEqInt(r.len(), 3)
+    testing.AssertEqInt(r.get(0), 8)
+    testing.AssertEqInt(r.get(1), 7)
+    testing.AssertEqInt(r.get(2), 7)
+    sizes.free()
+    r.free()
+end
+
+func test_split_fixed():
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(10))
+    sizes.push(fixedSize(5))
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    r := tui.SplitMain(43, sizes, 0)
+    testing.AssertEqInt(r.len(), 5)
+    testing.AssertEqInt(r.get(0), 10)
+    testing.AssertEqInt(r.get(1), 5)
+    testing.AssertEqInt(r.get(2), 10)
+    testing.AssertEqInt(r.get(3), 9)
+    testing.AssertEqInt(r.get(4), 9)
+    sizes.free()
+    r.free()
+end
+
+func test_split_remainder():
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    repeat 5:
+        sizes.push(fillSize())
+    end
+    r := tui.SplitMain(13, sizes, 0)
+    testing.AssertEqInt(r.len(), 5)
+    testing.AssertEqInt(r.get(0), 3)
+    testing.AssertEqInt(r.get(1), 3)
+    testing.AssertEqInt(r.get(2), 3)
+    testing.AssertEqInt(r.get(3), 2)
+    testing.AssertEqInt(r.get(4), 2)
+    sizes.free()
+    r.free()
+end
+
+func test_split_no_fill():
+    // No Fill entries: the leftover stays unused.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(3))
+    sizes.push(fixedSize(4))
+    r := tui.SplitMain(20, sizes, 0)
+    testing.AssertEqInt(r.len(), 2)
+    testing.AssertEqInt(r.get(0), 3)
+    testing.AssertEqInt(r.get(1), 4)
+    sizes.free()
+    r.free()
+end
+
+func test_split_over_budget():
+    // Fixed 8 exceeds L=5: R = 0, so every Fill gets 0 and Fixed is not shrunk.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(8))
+    sizes.push(fillSize())
+    r := tui.SplitMain(5, sizes, 0)
+    testing.AssertEqInt(r.get(0), 8)
+    testing.AssertEqInt(r.get(1), 0)
+    sizes.free()
+    r.free()
+end
+
+func test_split_negative_fixed():
+    // A negative Fixed clamps to 0 and does not reduce R.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(-5))
+    sizes.push(fillSize())
+    r := tui.SplitMain(10, sizes, 0)
+    testing.AssertEqInt(r.get(0), 0)
+    testing.AssertEqInt(r.get(1), 10)
+    sizes.free()
+    r.free()
+end
+
+func test_split_pref_counts_as_fill():
+    // Arrange resolves a measured Pref to a Fixed reservation before calling
+    // SplitMain. A null Pref becomes Fill weight 1. SplitMain itself does not
+    // measure: an unresolved Pref stays in the weight pool (11, 10).
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(prefSize())
+    sizes.push(fillSize())
+    r := tui.SplitMain(21, sizes, 0)
+    testing.AssertEqInt(r.get(0), 11)
+    testing.AssertEqInt(r.get(1), 10)
+    sizes.free()
+    r.free()
+end
+
+func test_split_weights_2_1_1():
+    // L=10, weights 2,1,1. Floors 5,2,2, one cell to the earliest tied leftover.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillWeight(2))
+    sizes.push(fillWeight(1))
+    sizes.push(fillWeight(1))
+    r := tui.SplitMain(10, sizes, 0)
+    testing.AssertEqInt(r.len(), 3)
+    testing.AssertEqInt(r.get(0), 5)
+    testing.AssertEqInt(r.get(1), 3)
+    testing.AssertEqInt(r.get(2), 2)
+    sizes.free()
+    r.free()
+end
+
+func test_split_weights_1_2_3():
+    // L=24, weights 1,2,3. Exact integers, no remainder.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillWeight(1))
+    sizes.push(fillWeight(2))
+    sizes.push(fillWeight(3))
+    r := tui.SplitMain(24, sizes, 0)
+    testing.AssertEqInt(r.get(0), 4)
+    testing.AssertEqInt(r.get(1), 8)
+    testing.AssertEqInt(r.get(2), 12)
+    sizes.free()
+    r.free()
+end
+
+func test_split_weights_fixed_and_zero():
+    // L=30, Fixed(6), weights 3,0,0,1. Shares 18,0,0,6. Zero still has a slot.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(6))
+    sizes.push(fillWeight(3))
+    sizes.push(fillWeight(0))
+    sizes.push(fillWeight(0))
+    sizes.push(fillWeight(1))
+    r := tui.SplitMain(30, sizes, 0)
+    testing.AssertEqInt(r.len(), 5)
+    testing.AssertEqInt(r.get(0), 6)
+    testing.AssertEqInt(r.get(1), 18)
+    testing.AssertEqInt(r.get(2), 0)
+    testing.AssertEqInt(r.get(3), 0)
+    testing.AssertEqInt(r.get(4), 6)
+    sizes.free()
+    r.free()
+end
+
+func test_split_weight_one_remainder():
+    // L=28, three weight-1 Fills. Same rule as an equal split: 10,9,9.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    r := tui.SplitMain(28, sizes, 0)
+    testing.AssertEqInt(r.get(0), 10)
+    testing.AssertEqInt(r.get(1), 9)
+    testing.AssertEqInt(r.get(2), 9)
+    sizes.free()
+    r.free()
+end
+
+func test_split_negative_weight():
+    // A negative weight clamps to 0 and the slot is still returned.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillWeight(-3))
+    sizes.push(fillWeight(1))
+    sizes.push(fillWeight(1))
+    r := tui.SplitMain(10, sizes, 0)
+    testing.AssertEqInt(r.len(), 3)
+    testing.AssertEqInt(r.get(0), 0)
+    testing.AssertEqInt(r.get(1), 5)
+    testing.AssertEqInt(r.get(2), 5)
+    sizes.free()
+    r.free()
+end
+
+func test_split_zero_weight_sum():
+    // Every pool weight is 0. Pool sizes stay 0, Fixed stays nominal, R unused.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(4))
+    sizes.push(fillWeight(0))
+    sizes.push(fillWeight(-1))
+    r := tui.SplitMain(15, sizes, 0)
+    testing.AssertEqInt(r.get(0), 4)
+    testing.AssertEqInt(r.get(1), 0)
+    testing.AssertEqInt(r.get(2), 0)
+    sizes.free()
+    r.free()
+    none := Vector {} as Vector<tui.LayoutSize>
+    none.push(fillWeight(0))
+    none.push(fillWeight(0))
+    z := tui.SplitMain(15, none, 0)
+    testing.AssertEqInt(z.len(), 2)
+    testing.AssertEqInt(z.get(0), 0)
+    testing.AssertEqInt(z.get(1), 0)
+    none.free()
+    z.free()
+end
+
+func test_split_fixed_overflow_weight():
+    // Fixed overflow. R is 0, heavy Fill weights get 0, Fixed is not shrunk.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(8))
+    sizes.push(fixedSize(8))
+    sizes.push(fillWeight(5))
+    sizes.push(fillWeight(1))
+    r := tui.SplitMain(12, sizes, 0)
+    testing.AssertEqInt(r.get(0), 8)
+    testing.AssertEqInt(r.get(1), 8)
+    testing.AssertEqInt(r.get(2), 0)
+    testing.AssertEqInt(r.get(3), 0)
+    sizes.free()
+    r.free()
+end
+
+func test_split_fixed_ignores_weight():
+    // A Fixed child's weight is not part of the share.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(tui.LayoutSize { kind = tui.SizeKind.Fixed, cells = 4, weight = 9 })
+    sizes.push(fillWeight(1))
+    sizes.push(fillWeight(1))
+    r := tui.SplitMain(10, sizes, 0)
+    testing.AssertEqInt(r.get(0), 4)
+    testing.AssertEqInt(r.get(1), 3)
+    testing.AssertEqInt(r.get(2), 3)
+    sizes.free()
+    r.free()
+end
+
+func test_split_pref_weight():
+    // Pref stays in the pool and its weight counts, same as Fill.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(prefWeight(2))
+    sizes.push(fillWeight(1))
+    r := tui.SplitMain(10, sizes, 0)
+    testing.AssertEqInt(r.get(0), 7)
+    testing.AssertEqInt(r.get(1), 3)
+    sizes.free()
+    r.free()
+    zero := Vector {} as Vector<tui.LayoutSize>
+    zero.push(prefWeight(0))
+    zero.push(fillWeight(1))
+    z := tui.SplitMain(10, zero, 0)
+    testing.AssertEqInt(z.get(0), 0)
+    testing.AssertEqInt(z.get(1), 10)
+    zero.free()
+    z.free()
+end
+
+func test_split_empty():
+    empty := Vector {} as Vector<tui.LayoutSize>
+    r := tui.SplitMain(10, empty, 0)
+    testing.AssertEqInt(r.len(), 0)
+    empty.free()
+    r.free()
+    one := Vector {} as Vector<tui.LayoutSize>
+    one.push(fillSize())
+    z := tui.SplitMain(0, one, 0)
+    testing.AssertEqInt(z.len(), 1)
+    testing.AssertEqInt(z.get(0), 0)
+    one.free()
+    z.free()
+end
+
+func test_tracks_uneven():
+    r := tui.TrackSizes(41, 3)
+    testing.AssertEqInt(r.len(), 3)
+    testing.AssertEqInt(r.get(0), 14)
+    testing.AssertEqInt(r.get(1), 14)
+    testing.AssertEqInt(r.get(2), 13)
+    r.free()
+end
+
+func test_tracks_even():
+    r := tui.TrackSizes(12, 2)
+    testing.AssertEqInt(r.get(0), 6)
+    testing.AssertEqInt(r.get(1), 6)
+    r.free()
+end
+
+func test_tracks_zero():
+    z := tui.TrackSizes(0, 3)
+    testing.AssertEqInt(z.len(), 3)
+    testing.AssertEqInt(z.get(0), 0)
+    testing.AssertEqInt(z.get(1), 0)
+    testing.AssertEqInt(z.get(2), 0)
+    z.free()
+    n := tui.TrackSizes(5, 0)
+    testing.AssertEqInt(n.len(), 0)
+    n.free()
+    nn := tui.TrackSizes(0, 0)
+    testing.AssertEqInt(nn.len(), 0)
+    nn.free()
+end
+
+func test_place_center_table():
+    // avail 10, free 0..5 -> offset 0,0,1,1,2,2; the odd cell trails.
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 10), 0)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 9), 0)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 8), 1)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 7), 1)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 6), 2)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 5), 2)
+    // Size is the natural size on a non-Stretch axis.
+    testing.AssertEqInt(tui.PlaceAxisSize(10, tui.CrossAlign.Center, 5), 5)
+end
+
+func test_place_start_end_stretch():
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Start, 4), 0)
+    testing.AssertEqInt(tui.PlaceAxisSize(10, tui.CrossAlign.Start, 4), 4)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.End, 4), 6)
+    testing.AssertEqInt(tui.PlaceAxisSize(10, tui.CrossAlign.End, 4), 4)
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Center, 4), 3)
+    testing.AssertEqInt(tui.PlaceAxisSize(10, tui.CrossAlign.Center, 4), 4)
+    // Stretch ignores the natural size and fills the axis.
+    testing.AssertEqInt(tui.PlaceAxisOffset(10, tui.CrossAlign.Stretch, 99), 0)
+    testing.AssertEqInt(tui.PlaceAxisSize(10, tui.CrossAlign.Stretch, 99), 10)
+end
+
+func test_place_clamp():
+    // natural above avail clamps down; below 0 clamps up.
+    testing.AssertEqInt(tui.PlaceAxisSize(5, tui.CrossAlign.End, 9), 5)
+    testing.AssertEqInt(tui.PlaceAxisOffset(5, tui.CrossAlign.End, 9), 0)
+    testing.AssertEqInt(tui.PlaceAxisSize(5, tui.CrossAlign.End, -2), 0)
+    testing.AssertEqInt(tui.PlaceAxisOffset(5, tui.CrossAlign.End, -2), 5)
+end
+
+func test_place_nonpositive():
+    // avail <= 0 behaves like Stretch: offset 0, size max(0, avail).
+    testing.AssertEqInt(tui.PlaceAxisOffset(0, tui.CrossAlign.Center, 3), 0)
+    testing.AssertEqInt(tui.PlaceAxisSize(0, tui.CrossAlign.Center, 3), 0)
+    testing.AssertEqInt(tui.PlaceAxisOffset(-3, tui.CrossAlign.Start, 3), 0)
+    testing.AssertEqInt(tui.PlaceAxisSize(-3, tui.CrossAlign.Start, 3), 0)
+    testing.AssertEqInt(tui.PlaceAxisOffset(-3, tui.CrossAlign.Stretch, 3), 0)
+    testing.AssertEqInt(tui.PlaceAxisSize(-3, tui.CrossAlign.Stretch, 3), 0)
+end
+
+func test_column_padding_recursion():
+    col := tui.NewColumn()
+    col.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    _ := col.add(a)
+    _ := col.add(b)
+    _ := col.add(c)
+    col.set_bounds(rect(0, 0, 80, 24))
+    // content {1,1,78,22}; 22 = 3x7 + 1 -> 8, 7, 7.
+    checkRect(a.bounds(), 1, 1, 78, 8)
+    checkRect(b.bounds(), 1, 9, 78, 7)
+    checkRect(c.bounds(), 1, 16, 78, 7)
+end
+
+func test_row_fixed_and_fill():
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    e := leaf()
+    ia := row.add(a)
+    _ := row.add(b)
+    _ := row.add(c)
+    id := row.add(d)
+    _ := row.add(e)
+    row.set_width(ia, fixedSize(10))
+    row.set_width(id, fixedSize(5))
+    row.set_bounds(rect(0, 0, 43, 6))
+    // F=15, R=28, m=3 -> base 9, rem 1; packed with no gaps.
+    checkRect(a.bounds(), 0, 0, 10, 6)
+    checkRect(b.bounds(), 10, 0, 10, 6)
+    checkRect(c.bounds(), 20, 0, 9, 6)
+    checkRect(d.bounds(), 29, 0, 5, 6)
+    checkRect(e.bounds(), 34, 0, 9, 6)
+end
+
+func test_row_weighted_main():
+    // Unequal main-axis weights produce unequal child rects. Cross axis stretches.
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    row.set_width(ia, fillWeight(2))
+    row.set_width(ib, fillWeight(1))
+    row.set_width(ic, fillWeight(1))
+    row.set_bounds(rect(0, 0, 10, 3))
+    checkRect(a.bounds(), 0, 0, 5, 3)
+    checkRect(b.bounds(), 5, 0, 3, 3)
+    checkRect(c.bounds(), 8, 0, 2, 3)
+end
+
+func test_row_weight_cross_ignored():
+    // Width weights split the main axis. Height weights and Fixed weight do not.
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    row.set_width(ia, fillWeight(2))
+    row.set_width(ib, fillWeight(1))
+    row.set_height(ia, tui.LayoutSize { kind = tui.SizeKind.Fixed, cells = 2, weight = 50 })
+    row.set_height(ib, fillWeight(50))
+    row.set_align(ia, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_bounds(rect(0, 0, 18, 6))
+    checkRect(a.bounds(), 0, 2, 12, 2)
+    checkRect(b.bounds(), 12, 0, 6, 6)
+end
+
+func test_row_zero_weight_visited():
+    // A 0 or negative weight still places a 0x0 slot. The next child starts after it.
+    row := tui.NewRow()
+    f := leaf()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    ifx := row.add(f)
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    id := row.add(d)
+    row.set_width(ifx, fixedSize(6))
+    row.set_width(ia, fillWeight(3))
+    row.set_width(ib, fillWeight(0))
+    row.set_width(ic, fillWeight(-2))
+    row.set_width(id, fillWeight(1))
+    row.set_bounds(rect(0, 0, 30, 3))
+    checkRect(f.bounds(), 0, 0, 6, 3)
+    checkRect(a.bounds(), 6, 0, 18, 3)
+    checkRect(b.bounds(), 24, 0, 0, 0)
+    checkRect(c.bounds(), 24, 0, 0, 0)
+    checkRect(d.bounds(), 24, 0, 6, 3)
+end
+
+func test_grid_ignores_weight():
+    // Grid track sizes ignore weight. 10 columns and 2 tracks stay 5, 5.
+    g := tui.NewGrid(1, 2)
+    a := leaf()
+    b := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    g.set_cell(ib, 0, 1)
+    g.set_width(ia, fillWeight(9))
+    g.set_width(ib, fillWeight(1))
+    g.set_height(ia, fillWeight(4))
+    g.set_height(ib, fillWeight(1))
+    g.set_bounds(rect(0, 0, 10, 4))
+    checkRect(a.bounds(), 0, 0, 5, 4)
+    checkRect(b.bounds(), 5, 0, 5, 4)
+end
+
+func test_recursion_nested():
+    inner := tui.NewRow()
+    r0 := leaf()
+    r1 := leaf()
+    _ := inner.add(r0)
+    _ := inner.add(r1)
+    innerd := inner as dyn tui.Widget
+
+    outer := tui.NewColumn()
+    outer.set_padding(tui.UniformInsets(1))
+    top := leaf()
+    bottom := leaf()
+    _ := outer.add(top)
+    _ := outer.add(innerd)
+    _ := outer.add(bottom)
+    outer.set_bounds(rect(0, 0, 20, 10))
+    // One set_bounds drives the whole subtree; content {1,1,18,8} -> 3,3,2.
+    checkRect(top.bounds(), 1, 1, 18, 3)
+    checkRect(innerd.bounds(), 1, 4, 18, 3)
+    checkRect(bottom.bounds(), 1, 7, 18, 2)
+    // inner content {1,4,18,3}; two fills of 18 -> 9, 9.
+    checkRect(r0.bounds(), 1, 4, 9, 3)
+    checkRect(r1.bounds(), 10, 4, 9, 3)
+end
+
+func test_idempotent():
+    col := tui.NewColumn()
+    col.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    b := leaf()
+    _ := col.add(a)
+    _ := col.add(b)
+    col.set_bounds(rect(0, 0, 11, 7))
+    a1 := a.bounds()
+    b1 := b.bounds()
+    col.set_bounds(rect(0, 0, 11, 7))
+    checkRect(a.bounds(), a1.x, a1.y, a1.width, a1.height)
+    checkRect(b.bounds(), b1.x, b1.y, b1.width, b1.height)
+end
+
+func test_grid_cells():
+    g := tui.NewGrid(2, 3)
+    p := leaf()
+    q := leaf()
+    _ := g.add(p)
+    iq := g.add(q)
+    g.set_cell(iq, 1, 1)
+    g.set_bounds(rect(0, 0, 12, 6))
+    // cols 4,4,4; rows 3,3. p cell (0,0), q cell (1,1).
+    checkRect(p.bounds(), 0, 0, 4, 3)
+    checkRect(q.bounds(), 4, 3, 4, 3)
+end
+
+func test_grid_out_of_range():
+    g := tui.NewGrid(2, 2)
+    p := leaf()
+    i := g.add(p)
+    g.set_cell(i, 5, 5)
+    g.set_bounds(rect(3, 4, 8, 6))
+    // Out of range -> 0x0 at the content origin; the child is still placed.
+    checkRect(p.bounds(), 3, 4, 0, 0)
+end
+
+func test_stack_overlap():
+    st := tui.NewStack()
+    st.set_padding(ins(1, 2, 1, 2))
+    a := leaf()
+    b := leaf()
+    _ := st.add(a)
+    ib := st.add(b)
+    st.set_margin(ib, ins(1, 3, 2, 4))
+    st.set_bounds(rect(0, 0, 30, 10))
+    checkRect(a.bounds(), 2, 1, 26, 8)
+    checkRect(b.bounds(), 6, 2, 19, 5)
+end
+
+func test_pref_cross_axis():
+    row := tui.NewRow()
+    ad := tui.NewText("hi") as dyn tui.Widget
+    i := row.add(ad)
+    row.set_width(i, fixedSize(6))
+    row.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_bounds(rect(0, 0, 6, 9))
+    // Main x fixed 6 -> box {0,0,6,9}; natural height 1 at width 6;
+    // free 8 -> centre 4.
+    checkRect(ad.bounds(), 0, 4, 6, 1)
+end
+
+func test_pref_end_alignment():
+    row := tui.NewRow()
+    a := sizer(3, 4)
+    i := row.add(a)
+    row.set_width(i, fixedSize(6))
+    row.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.End)
+    row.set_bounds(rect(0, 0, 6, 9))
+    // natural height 4; free 5 -> End offset 5.
+    checkRect(a.bounds(), 0, 5, 6, 4)
+end
+
+func test_pref_container_yields_avail():
+    outer := tui.NewRow()
+    inner := tui.NewRow()
+    s := sizer(3, 2)
+    _ := inner.add(s)
+    innerd := inner as dyn tui.Widget
+    i := outer.add(innerd)
+    outer.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    outer.set_bounds(rect(0, 0, 8, 5))
+    // Inner Row measures: natural cross extent is the sizer's height 2.
+    // free = 5 - 2, centre offset 1.
+    checkRect(innerd.bounds(), 0, 1, 8, 2)
+    checkRect(s.bounds(), 0, 1, 8, 2)
+
+    // A Leaf cannot measure, so the inner Row cannot, and the cross axis fills.
+    blank := tui.NewRow()
+    leafc := leaf()
+    _ := blank.add(leafc)
+    blankd := blank as dyn tui.Widget
+    outer2 := tui.NewRow()
+    j := outer2.add(blankd)
+    outer2.set_align(j, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    outer2.set_bounds(rect(0, 0, 8, 5))
+    checkRect(blankd.bounds(), 0, 0, 8, 5)
+    checkRect(leafc.bounds(), 0, 0, 8, 5)
+end
+
+func test_empty_content():
+    col := tui.NewColumn()
+    col.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    _ := col.add(a)
+    col.set_bounds(rect(0, 0, 0, 0))
+    // R12: an empty content box gives every descendant an empty rect.
+    checkRect(a.bounds(), 0, 0, 0, 0)
+end
+
+func test_slot_bad_index_ignored():
+    row := tui.NewRow()
+    a := leaf()
+    _ := row.add(a)
+    row.set_margin(5, tui.UniformInsets(2))
+    row.set_width(-1, fixedSize(3))
+    row.set_align(9, tui.CrossAlign.End, tui.CrossAlign.End)
+    row.set_bounds(rect(0, 0, 4, 2))
+    checkRect(a.bounds(), 0, 0, 4, 2)
+end
+
+// ---- AC1: recursive layout tree ------------------------------------------
+
+func test_screen_fit_root_recursion():
+    root := tui.NewColumn()
+    root.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    mid := tui.NewRow()
+    midd := mid as dyn tui.Widget
+    b := leaf()
+    _ := root.add(a)
+    _ := root.add(midd)
+    _ := root.add(b)
+
+    // A headless screen: NewScreen fits the root to the buffer, and the
+    // container override cascades to every registered child.
+    scr := tui.NewScreen(root as dyn tui.Widget, 20, 10)
+    _ := scr.add(tui.RootId, a)
+    _ := scr.add(tui.RootId, midd)
+    _ := scr.add(tui.RootId, b)
+    checkRect(scr.widget(tui.RootId).bounds(), 0, 0, 20, 10)
+    checkRect(a.bounds(), 1, 1, 18, 3)
+    checkRect(midd.bounds(), 1, 4, 18, 3)
+    checkRect(b.bounds(), 1, 7, 18, 2)
+
+    // resize refits the root and re-lays out: content {1,1,18,10} -> 4,3,3.
+    scr.resize(20, 12)
+    checkRect(scr.widget(tui.RootId).bounds(), 0, 0, 20, 12)
+    checkRect(a.bounds(), 1, 1, 18, 4)
+    checkRect(midd.bounds(), 1, 5, 18, 3)
+    checkRect(b.bounds(), 1, 8, 18, 3)
+end
+
+func test_deep_column_row_grid_d():
+    grid := tui.NewGrid(2, 3)
+    gc := leaf()
+    ga := leaf()
+    gd := leaf()
+    gb := leaf()
+    igc := grid.add(gc)
+    iga := grid.add(ga)
+    igd := grid.add(gd)
+    igb := grid.add(gb)
+    grid.set_cell(igc, 1, 2)
+    grid.set_margin(igc, tui.UniformInsets(1))
+    grid.set_cell(iga, 0, 0)
+    grid.set_cell(igd, 1, 0)
+    grid.set_width(igd, fixedSize(5))
+    grid.set_height(igd, fixedSize(2))
+    grid.set_align(igd, tui.CrossAlign.End, tui.CrossAlign.Start)
+    grid.set_cell(igb, 0, 1)
+    grid.set_width(igb, fixedSize(6))
+    grid.set_height(igb, fixedSize(3))
+    grid.set_align(igb, tui.CrossAlign.Center, tui.CrossAlign.Center)
+    gridd := grid as dyn tui.Widget
+
+    row := tui.NewRow()
+    s := leaf()
+    is := row.add(s)
+    row.set_width(is, fixedSize(15))
+    ig := row.add(gridd)
+    row.set_margin(ig, tui.UniformInsets(1))
+    rowd := row as dyn tui.Widget
+
+    root := tui.NewColumn()
+    root.set_padding(tui.UniformInsets(1))
+    h := leaf()
+    f := leaf()
+    ih := root.add(h)
+    root.set_height(ih, fixedSize(3))
+    _ := root.add(rowd)
+    iff := root.add(f)
+    root.set_height(iff, fixedSize(1))
+    root.set_bounds(rect(0, 0, 60, 20))
+
+    checkRect(h.bounds(), 1, 1, 58, 3)
+    checkRect(rowd.bounds(), 1, 4, 58, 14)
+    checkRect(s.bounds(), 1, 4, 15, 14)
+    checkRect(gridd.bounds(), 17, 5, 41, 12)
+    checkRect(gc.bounds(), 46, 12, 11, 4)
+    checkRect(ga.bounds(), 17, 5, 14, 6)
+    checkRect(gd.bounds(), 26, 11, 5, 2)
+    checkRect(gb.bounds(), 35, 6, 6, 3)
+    checkRect(f.bounds(), 1, 18, 58, 1)
+end
+
+func test_recursion_empty_not_skipped_g1():
+    inner := tui.NewRow()
+    b := leaf()
+    _ := inner.add(b)
+    innerd := inner as dyn tui.Widget
+
+    col := tui.NewColumn()
+    col.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    _ := col.add(a)
+    _ := col.add(innerd)
+    // Sentinel bounds: an unvisited leaf would keep them.
+    a.set_bounds(rect(9, 9, 9, 9))
+    b.set_bounds(rect(9, 9, 9, 9))
+    col.set_bounds(rect(0, 0, 0, 0))
+    checkEmpty(a.bounds())
+    checkEmpty(innerd.bounds())
+    checkEmpty(b.bounds())
+end
+
+// ---- AC2: row / column main-axis split -----------------------------------
+
+func test_column_equal_remainder_b2():
+    col := tui.NewColumn()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    e := leaf()
+    _ := col.add(a)
+    _ := col.add(b)
+    _ := col.add(c)
+    _ := col.add(d)
+    _ := col.add(e)
+    col.set_bounds(rect(0, 0, 7, 13))
+    // 13 = 5x2 + 3 -> first three get 3; Stretch fills the width.
+    checkRect(a.bounds(), 0, 0, 7, 3)
+    checkRect(b.bounds(), 0, 3, 7, 3)
+    checkRect(c.bounds(), 0, 6, 7, 3)
+    checkRect(d.bounds(), 0, 9, 7, 2)
+    checkRect(e.bounds(), 0, 11, 7, 2)
+end
+
+func test_row_overflow_f1():
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    _ := row.add(c)
+    id := row.add(d)
+    row.set_width(ia, fixedSize(12))
+    row.set_width(ib, fixedSize(12))
+    row.set_margin(ib, ins(0, 2, 0, 2))
+    row.set_width(id, fixedSize(6))
+    row.set_bounds(rect(0, 0, 20, 5))
+    // Fixed 24 > 20 -> R = 0. B is cut at the edge, C/D fall past it.
+    checkRect(a.bounds(), 0, 0, 12, 5)
+    checkRect(b.bounds(), 14, 0, 6, 5)
+    checkRect(c.bounds(), 20, 0, 0, 0)
+    checkRect(d.bounds(), 20, 0, 0, 0)
+    testing.AssertTrue(c.bounds().is_empty())
+end
+
+func test_column_negative_fixed_padding_f2():
+    col := tui.NewColumn()
+    col.set_padding(ins(1, 0, 1, -5))
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := col.add(a)
+    ib := col.add(b)
+    _ := col.add(c)
+    col.set_height(ia, fixedSize(-3))
+    col.set_height(ib, fixedSize(4))
+    col.set_bounds(rect(0, 0, 10, 7))
+    // Padding left -5 clamps to 0; Fixed(-3) clamps to 0.
+    checkRect(a.bounds(), 0, 1, 0, 0)
+    checkRect(b.bounds(), 0, 1, 10, 4)
+    checkRect(c.bounds(), 0, 5, 10, 1)
+end
+
+// ---- AC3: grid -----------------------------------------------------------
+
+func test_grid_tracks_out_of_range_g5():
+    g := tui.NewGrid(3, 3)
+    p := leaf()
+    q := leaf()
+    r := leaf()
+    z := leaf()
+    y := leaf()
+    ip := g.add(p)
+    iq := g.add(q)
+    ir := g.add(r)
+    iz := g.add(z)
+    iy := g.add(y)
+    g.set_cell(ip, 0, 0)
+    g.set_cell(iq, 1, 1)
+    g.set_cell(ir, 2, 2)
+    g.set_cell(iz, 3, 0)
+    g.set_cell(iy, 0, -1)
+    g.set_bounds(rect(0, 0, 2, 3))
+    // W=2,C=3 -> cols 1,1,0; H=3,R=3 -> rows 1,1,1.
+    checkRect(p.bounds(), 0, 0, 1, 1)
+    checkRect(q.bounds(), 1, 1, 1, 1)
+    checkRect(r.bounds(), 2, 2, 0, 0)
+    checkRect(z.bounds(), 0, 0, 0, 0)
+    checkRect(y.bounds(), 0, 0, 0, 0)
+end
+
+func test_grid_two_children_one_cell():
+    g := tui.NewGrid(1, 1)
+    a := leaf()
+    b := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    g.set_cell(ia, 0, 0)
+    g.set_cell(ib, 0, 0)
+    g.set_bounds(rect(0, 0, 8, 4))
+    checkRect(a.bounds(), 0, 0, 8, 4)
+    checkRect(b.bounds(), 0, 0, 8, 4)
+end
+
+func test_grid_cell_margin_alignment():
+    g := tui.NewGrid(1, 2)
+    a := leaf()
+    b := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    g.set_cell(ia, 0, 0)
+    g.set_cell(ib, 0, 1)
+    g.set_margin(ia, tui.UniformInsets(1))
+    g.set_width(ib, fixedSize(2))
+    g.set_align(ib, tui.CrossAlign.Center, tui.CrossAlign.Stretch)
+    g.set_bounds(rect(0, 0, 10, 4))
+    // cols 5,5; cell0 margin 1 -> {1,1,3,2}; cell1 center of a 2-wide child.
+    checkRect(a.bounds(), 1, 1, 3, 2)
+    checkRect(b.bounds(), 6, 0, 2, 4)
+end
+
+func test_grid_span_even():
+    // W=21 C=3 -> 7,7,7. H=12 R=2 -> 6,6.
+    g := tui.NewGrid(2, 3)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    ic := g.add(c)
+    id := g.add(d)
+    g.set_cell(ia, 0, 0)
+    g.set_span(ia, 1, 2)
+    g.set_cell(ib, 1, 2)
+    g.set_cell(ic, 0, 2)
+    g.set_span(ic, 2, 1)
+    g.set_cell(id, 1, 0)
+    g.set_span(id, 1, 3)
+    g.set_bounds(rect(0, 0, 21, 12))
+    // (0,0) col_span 2 -> w 14. (1,2) stays one cell at x 14.
+    checkRect(a.bounds(), 0, 0, 14, 6)
+    checkRect(b.bounds(), 14, 6, 7, 6)
+    // row_span 2 from (0,2) reaches the last row: h 6+6.
+    checkRect(c.bounds(), 14, 0, 7, 12)
+    // col_span 3 from (1,0) reaches the last column: w 21.
+    checkRect(d.bounds(), 0, 6, 21, 6)
+end
+
+func test_grid_span_clamp():
+    // W=10 C=3 -> 4,3,3. H=6 R=2 -> 3,3. Overshoot is stored, then clamped.
+    g := tui.NewGrid(2, 3)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    ic := g.add(c)
+    g.set_cell(ia, 0, 1)
+    g.set_span(ia, 1, 5)
+    g.set_cell(ib, 0, 2)
+    g.set_span(ib, 1, -3)
+    g.set_cell(ic, 1, 0)
+    g.set_span(ic, 4, 1)
+    testing.AssertEqInt(g.items.get(ia).col_span, 5)
+    testing.AssertEqInt(g.items.get(ib).col_span, 1)
+    testing.AssertEqInt(g.items.get(ic).row_span, 4)
+    g.set_bounds(rect(0, 0, 10, 6))
+    // col_span 5 from col 1 clamps to 2 -> w 3+3.
+    checkRect(a.bounds(), 4, 0, 6, 3)
+    // col_span -3 is stored as 1 -> the last track.
+    checkRect(b.bounds(), 7, 0, 3, 3)
+    // row_span 4 from row 1 clamps to 1.
+    checkRect(c.bounds(), 0, 3, 4, 3)
+end
+
+func test_grid_span_nonpositive():
+    // 0 or less is one cell, stored by set_span or written on the slot.
+    // A bad index does not change a span already stored.
+    g := tui.NewGrid(2, 3)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    ic := g.add(c)
+    id := g.add(d)
+    g.set_cell(ia, 0, 1)
+    g.set_span(ia, 0, 0)
+    g.set_cell(ib, 0, 2)
+    g.set_span(ib, -2, -4)
+    g.set_cell(ic, 1, 0)
+    mut slot := g.items.get(ic)
+    slot.row_span = 0
+    slot.col_span = -3
+    g.items.set(ic, slot)
+    g.set_cell(id, 0, 0)
+    g.set_span(id, 2, 2)
+    g.set_span(-1, 9, 9)
+    testing.AssertEqInt(g.items.get(ia).row_span, 1)
+    testing.AssertEqInt(g.items.get(ia).col_span, 1)
+    testing.AssertEqInt(g.items.get(ib).row_span, 1)
+    testing.AssertEqInt(g.items.get(ib).col_span, 1)
+    testing.AssertEqInt(g.items.get(id).row_span, 2)
+    testing.AssertEqInt(g.items.get(id).col_span, 2)
+    g.set_bounds(rect(0, 0, 21, 12))
+    // W=21 C=3 -> 7,7,7. H=12 R=2 -> 6,6.
+    checkRect(a.bounds(), 7, 0, 7, 6)
+    checkRect(b.bounds(), 14, 0, 7, 6)
+    checkRect(c.bounds(), 0, 6, 7, 6)
+    checkRect(d.bounds(), 0, 0, 14, 12)
+end
+
+func test_grid_span_margin():
+    // Spanned slot {2,3,14,12}. Margin insets the child; the span still
+    // includes that margin. A single 7x6 cell would inset to 1x2.
+    g := tui.NewGrid(2, 3)
+    a := leaf()
+    ia := g.add(a)
+    g.set_cell(ia, 0, 0)
+    g.set_span(ia, 2, 2)
+    g.set_margin(ia, ins(1, 2, 3, 4))
+    g.set_bounds(rect(2, 3, 21, 12))
+    checkRect(a.bounds(), 6, 4, 8, 8)
+end
+
+func test_grid_span_align():
+    // Slot {1,2,14,12}. Fixed 4x3, Center on x and End on y.
+    // x free 10 -> offset 5. y free 9 -> offset 9.
+    g := tui.NewGrid(2, 3)
+    a := leaf()
+    ia := g.add(a)
+    g.set_cell(ia, 0, 0)
+    g.set_span(ia, 2, 2)
+    g.set_width(ia, fixedSize(4))
+    g.set_height(ia, fixedSize(3))
+    g.set_align(ia, tui.CrossAlign.Center, tui.CrossAlign.End)
+    g.set_bounds(rect(1, 2, 21, 12))
+    checkRect(a.bounds(), 6, 11, 4, 3)
+end
+
+func test_grid_span_out_of_range():
+    g := tui.NewGrid(2, 2)
+    p := leaf()
+    q := leaf()
+    r := leaf()
+    s := leaf()
+    ip := g.add(p)
+    iq := g.add(q)
+    ir := g.add(r)
+    is := g.add(s)
+    g.set_cell(ip, 5, 5)
+    g.set_span(ip, 3, 4)
+    g.set_cell(iq, -1, 0)
+    g.set_span(iq, 2, 2)
+    g.set_cell(ir, 0, -1)
+    g.set_span(ir, 2, 2)
+    g.set_cell(is, 1, 1)
+    g.set_span(is, 5, 5)
+    g.set_bounds(rect(3, 4, 8, 6))
+    // Origin wins: the span is irrelevant. The child is still placed.
+    checkRect(p.bounds(), 3, 4, 0, 0)
+    checkRect(q.bounds(), 3, 4, 0, 0)
+    checkRect(r.bounds(), 3, 4, 0, 0)
+    // In range at the last cell. Span 5 clamps to 1. Tracks 4,4 and 3,3.
+    checkRect(s.bounds(), 7, 7, 4, 3)
+
+    empty := tui.NewGrid(0, 3)
+    z := leaf()
+    iz := empty.add(z)
+    empty.set_cell(iz, 0, 0)
+    empty.set_span(iz, 2, 2)
+    empty.set_bounds(rect(5, 6, 9, 4))
+    checkRect(z.bounds(), 5, 6, 0, 0)
+end
+
+func test_grid_span_overlap():
+    // A covers rows 0-1, cols 0-1. B covers row 1, cols 1-2. Both are placed.
+    g := tui.NewGrid(2, 3)
+    a := leaf()
+    b := leaf()
+    ia := g.add(a)
+    ib := g.add(b)
+    g.set_cell(ia, 0, 0)
+    g.set_span(ia, 2, 2)
+    g.set_cell(ib, 1, 1)
+    g.set_span(ib, 1, 2)
+    g.set_bounds(rect(0, 0, 21, 12))
+    checkRect(a.bounds(), 0, 0, 14, 12)
+    checkRect(b.bounds(), 7, 6, 14, 6)
+end
+
+func test_grid_span_pref_exceeds():
+    // Slot cols 0-1 is 14 wide and one row is 6 tall. Height 20 exceeds it
+    // and is clipped to the slot, not grown (a grown slot would clip to the
+    // content height 12). x is measured at 14, then y at the resolved width 4.
+    calls := mem.AllocateZeroed((9 as u64) * sizeof(int)) as int*
+    a := CountSizer { w = 4, h = 20, calls = calls } as dyn tui.Widget
+    b := sizer(30, 20)
+    g := tui.NewGrid(2, 3)
+    ia := g.add(a)
+    ib := g.add(b)
+    g.set_cell(ia, 0, 0)
+    g.set_span(ia, 1, 2)
+    g.set_width(ia, prefSize())
+    g.set_height(ia, prefSize())
+    g.set_align(ia, tui.CrossAlign.Center, tui.CrossAlign.End)
+    g.set_cell(ib, 1, 1)
+    g.set_span(ib, 1, 2)
+    g.set_width(ib, prefSize())
+    g.set_height(ib, prefSize())
+    g.set_align(ib, tui.CrossAlign.Start, tui.CrossAlign.Start)
+    g.set_bounds(rect(0, 0, 21, 12))
+    testing.AssertEqInt(calls[0], 2)
+    testing.AssertEqInt(calls[1], 14)
+    testing.AssertEqInt(calls[2], 4)
+    // x free 10 -> centre 5. y free 0 -> End offset 0, height 6.
+    checkRect(a.bounds(), 5, 0, 4, 6)
+    // 30x20 clipped to the spanned slot {7,6,14,6}.
+    checkRect(b.bounds(), 7, 6, 14, 6)
+    mem.Free(calls as void*)
+end
+
+// ---- AC4: stack ----------------------------------------------------------
+
+func test_stack_three_share_e2():
+    st := tui.NewStack()
+    st.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    _ := st.add(a)
+    _ := st.add(b)
+    _ := st.add(c)
+    st.set_bounds(rect(0, 0, 9, 3))
+    checkRect(a.bounds(), 1, 1, 7, 1)
+    checkRect(b.bounds(), 1, 1, 7, 1)
+    checkRect(c.bounds(), 1, 1, 7, 1)
+end
+
+func test_stack_one_child():
+    st := tui.NewStack()
+    st.set_padding(tui.UniformInsets(1))
+    a := leaf()
+    _ := st.add(a)
+    st.set_bounds(rect(0, 0, 9, 3))
+    checkRect(a.bounds(), 1, 1, 7, 1)
+end
+
+func test_stack_zero_children():
+    st := tui.NewStack()
+    st.set_padding(tui.UniformInsets(1))
+    st.set_bounds(rect(0, 0, 9, 3))
+    testing.AssertEqInt(st.items.len(), 0)
+    checkRect(st.bounds(), 0, 0, 9, 3)
+end
+
+func test_stack_margin_over_budget_g4():
+    st := tui.NewStack()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := st.add(a)
+    _ := st.add(b)
+    ic := st.add(c)
+    st.set_margin(ia, ins(0, 6, 0, 6))
+    st.set_margin(ic, ins(0, 0, 0, 10))
+    st.set_bounds(rect(0, 0, 10, 4))
+    checkRect(a.bounds(), 6, 0, 0, 0)
+    checkRect(b.bounds(), 0, 0, 10, 4)
+    checkRect(c.bounds(), 10, 0, 0, 0)
+end
+
+// ---- AC5: padding, margin, alignment, Pref -------------------------------
+
+func test_row_margin_center_c():
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    row.set_margin(ia, ins(1, 2, 1, 2))
+    row.set_height(ib, fixedSize(4))
+    row.set_align(ib, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_width(ic, fixedSize(8))
+    row.set_bounds(rect(0, 0, 40, 9))
+    // R=32, m=2 -> 16, 16; C Fixed(8).
+    checkRect(a.bounds(), 2, 1, 12, 7)
+    checkRect(b.bounds(), 16, 2, 16, 4)
+    checkRect(c.bounds(), 32, 0, 8, 9)
+end
+
+func test_center_column_nine_h1():
+    col := tui.NewColumn()
+    children := Vector {} as Vector<dyn tui.Widget>
+    repeat 9 in i:
+        w := i + 1
+        l := leaf()
+        idx := col.add(l)
+        col.set_height(idx, fixedSize(1))
+        col.set_width(idx, fixedSize(w))
+        col.set_align(idx, tui.CrossAlign.Center, tui.CrossAlign.Stretch)
+        children.push(l)
+    end
+    col.set_bounds(rect(0, 0, 10, 9))
+    // free = 10 - w, offset floor(free / 2); the odd cell trails.
+    checkRect(children.get(0).bounds(), 4, 0, 1, 1)
+    checkRect(children.get(1).bounds(), 4, 1, 2, 1)
+    checkRect(children.get(2).bounds(), 3, 2, 3, 1)
+    checkRect(children.get(3).bounds(), 3, 3, 4, 1)
+    checkRect(children.get(4).bounds(), 2, 4, 5, 1)
+    checkRect(children.get(5).bounds(), 2, 5, 6, 1)
+    checkRect(children.get(6).bounds(), 1, 6, 7, 1)
+    checkRect(children.get(7).bounds(), 1, 7, 8, 1)
+    checkRect(children.get(8).bounds(), 0, 8, 9, 1)
+    children.free()
+end
+
+func test_center_row_four_h2():
+    row := tui.NewRow()
+    v1 := leaf()
+    v2 := leaf()
+    v3 := leaf()
+    v4 := leaf()
+    i1 := row.add(v1)
+    i2 := row.add(v2)
+    i3 := row.add(v3)
+    i4 := row.add(v4)
+    row.set_height(i1, fixedSize(2))
+    row.set_align(i1, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_height(i2, fixedSize(3))
+    row.set_align(i2, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_height(i3, fixedSize(4))
+    row.set_align(i3, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_height(i4, fixedSize(6))
+    row.set_align(i4, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_bounds(rect(0, 0, 12, 7))
+    // Four Fill columns of 3; free = 7 - h.
+    checkRect(v1.bounds(), 0, 2, 3, 2)
+    checkRect(v2.bounds(), 3, 2, 3, 3)
+    checkRect(v3.bounds(), 6, 1, 3, 4)
+    checkRect(v4.bounds(), 9, 0, 3, 6)
+end
+
+func test_pref_column_text_i1():
+    col := tui.NewColumn()
+    t1 := text("hello wide world")
+    t2 := text("hello wide world")
+    t3 := text("hi")
+    inner := tui.NewRow()
+    rin := leaf()
+    _ := inner.add(rin)
+    t4 := inner as dyn tui.Widget
+
+    i1 := col.add(t1)
+    i2 := col.add(t2)
+    i3 := col.add(t3)
+    i4 := col.add(t4)
+    col.set_height(i1, fixedSize(3))
+    col.set_align(i1, tui.CrossAlign.Center, tui.CrossAlign.Stretch)
+    col.set_height(i2, fixedSize(3))
+    col.set_align(i2, tui.CrossAlign.End, tui.CrossAlign.Stretch)
+    col.set_height(i3, fixedSize(1))
+    col.set_align(i3, tui.CrossAlign.Start, tui.CrossAlign.Stretch)
+    col.set_height(i4, fixedSize(2))
+    col.set_align(i4, tui.CrossAlign.Center, tui.CrossAlign.Stretch)
+    col.set_bounds(rect(0, 0, 12, 10))
+    // T1/T2 preferred_size(12): "hello wide" 10 / "world" 5 -> width 10.
+    checkRect(t1.bounds(), 1, 0, 10, 3)
+    checkRect(t2.bounds(), 2, 3, 10, 3)
+    checkRect(t3.bounds(), 0, 6, 2, 1)
+    // T4 is a container: it cannot measure, so it takes avail (12).
+    checkRect(t4.bounds(), 0, 7, 12, 2)
+    checkRect(rin.bounds(), 0, 7, 12, 2)
+end
+
+func test_pref_row_resolved_width_i2():
+    row := tui.NewRow()
+    a := text("one two three")
+    b := text("x")
+    ia := row.add(a)
+    ib := row.add(b)
+    row.set_width(ia, fixedSize(8))
+    row.set_height(ia, prefSize())
+    row.set_align(ia, tui.CrossAlign.Stretch, tui.CrossAlign.Center)
+    row.set_align(ib, tui.CrossAlign.Stretch, tui.CrossAlign.End)
+    row.set_bounds(rect(0, 0, 20, 6))
+    // A height Pref resolves after the width: preferred_size(8) -> 2 lines.
+    checkRect(a.bounds(), 0, 2, 8, 2)
+    // B preferred_size(12) of "x" -> height 1, End -> 6 - 1 = 5.
+    checkRect(b.bounds(), 8, 5, 12, 1)
+end
+
+func test_pref_nonpositive_never_forwarded():
+    col := tui.NewColumn()
+    a := keyed()
+    i := col.add(a)
+    col.set_align(i, tui.CrossAlign.Start, tui.CrossAlign.Stretch)
+    // width 0: max_width 0 must never reach preferred_size; the axis is 0.
+    col.set_bounds(rect(0, 0, 0, 5))
+    checkRect(a.bounds(), 0, 0, 0, 0)
+end
+
+func test_main_pref_acts_as_fill():
+    row := tui.NewRow()
+    a := sizer(4, 2)
+    i := row.add(a)
+    row.set_width(i, prefSize())
+    row.set_bounds(rect(0, 0, 10, 4))
+    // Measured Pref reserves 4. No Fill slot, so the leftover 6 stays unused.
+    checkRect(a.bounds(), 0, 0, 4, 4)
+
+    // Unmeasurable Pref degrades to Fill weight 1 and takes the whole row.
+    row2 := tui.NewRow()
+    b := leaf()
+    j := row2.add(b)
+    row2.set_width(j, prefSize())
+    row2.set_bounds(rect(0, 0, 10, 4))
+    checkRect(b.bounds(), 0, 0, 10, 4)
+end
+
+func test_row_pref_then_fill():
+    // L=20: Pref 16, Pref 2, Fill -> R=2 -> 16, 2, 2.
+    row := tui.NewRow()
+    a := sizer(16, 1)
+    b := sizer(2, 1)
+    c := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    _ := row.add(c)
+    row.set_width(ia, prefSize())
+    row.set_width(ib, prefSize())
+    row.set_bounds(rect(0, 0, 20, 3))
+    checkRect(a.bounds(), 0, 0, 16, 3)
+    checkRect(b.bounds(), 16, 0, 2, 3)
+    checkRect(c.bounds(), 18, 0, 2, 3)
+end
+
+func test_row_pref_overflow_clip():
+    // L=10: Pref 10, Pref 2, Fixed 4, Fill. Reserved 16 > 10, so R=0 and the
+    // Fill is 0. FitRect anchors anything past the content edge at x=10.
+    row := tui.NewRow()
+    a := sizer(10, 1)
+    b := sizer(2, 1)
+    c := leaf()
+    d := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    _ := row.add(d)
+    row.set_width(ia, prefSize())
+    row.set_width(ib, prefSize())
+    row.set_width(ic, fixedSize(4))
+    row.set_bounds(rect(0, 0, 10, 3))
+    checkRect(a.bounds(), 0, 0, 10, 3)
+    checkRect(b.bounds(), 10, 0, 0, 0)
+    checkRect(c.bounds(), 10, 0, 0, 0)
+    checkRect(d.bounds(), 10, 0, 0, 0)
+end
+
+func test_column_measured_pref():
+    // L=9: container natural height 3, Pref 1, Fill -> R=5 -> 3, 1, 5.
+    col := tui.NewColumn()
+    inner := tui.NewRow()
+    s := sizer(2, 3)
+    _ := inner.add(s)
+    innerd := inner as dyn tui.Widget
+    one := sizer(1, 1)
+    fill := leaf()
+    i0 := col.add(innerd)
+    i1 := col.add(one)
+    _ := col.add(fill)
+    col.set_height(i0, prefSize())
+    col.set_height(i1, prefSize())
+    col.set_bounds(rect(0, 0, 6, 9))
+    checkRect(innerd.bounds(), 0, 0, 6, 3)
+    checkRect(s.bounds(), 0, 0, 6, 3)
+    checkRect(one.bounds(), 0, 3, 6, 1)
+    checkRect(fill.bounds(), 0, 4, 6, 5)
+end
+
+func test_column_pref_measures_at_width():
+    // Column is 8 wide and 30 tall. Main-axis Pref must see max_width 8, not
+    // 30. At width 8 the child reports height 3; at width 30 it would report 1.
+    calls := mem.AllocateZeroed((4 as u64) * sizeof(int)) as int*
+    child := WrapSizer { calls = calls } as dyn tui.Widget
+    col := tui.NewColumn()
+    i := col.add(child)
+    col.set_height(i, prefSize())
+    col.set_bounds(rect(0, 0, 8, 30))
+    testing.AssertEqInt(calls[0], 1)
+    testing.AssertEqInt(calls[1], 8)
+    checkRect(child.bounds(), 0, 0, 8, 3)
+    mem.Free(calls as void*)
+end
+
+func test_pref_weight_ignored_when_measured():
+    // Pref 6 (weight 9) is reserved first, then Fixed 4, then R=10 shared
+    // 1:3. Tie on the remainder goes to the earlier Fill: 3, 7.
+    row := tui.NewRow()
+    a := sizer(6, 1)
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    id := row.add(d)
+    row.set_width(ia, prefWeight(9))
+    row.set_width(ib, fixedSize(4))
+    row.set_width(ic, fillWeight(1))
+    row.set_width(id, fillWeight(3))
+    row.set_bounds(rect(0, 0, 20, 2))
+    checkRect(a.bounds(), 0, 0, 6, 2)
+    checkRect(b.bounds(), 6, 0, 4, 2)
+    checkRect(c.bounds(), 10, 0, 3, 2)
+    checkRect(d.bounds(), 13, 0, 7, 2)
+end
+
+func test_nested_pref_measure():
+    // Inner Row measure composes: 4 + 5 + gap 2 = 11, reserved by the outer.
+    outer := tui.NewRow()
+    inner := tui.NewRow()
+    inner.set_gap(2)
+    a := sizer(4, 1)
+    b := sizer(5, 1)
+    ia := inner.add(a)
+    ib := inner.add(b)
+    inner.set_width(ia, prefSize())
+    inner.set_width(ib, prefSize())
+    innerd := inner as dyn tui.Widget
+    fill := leaf()
+    oi := outer.add(innerd)
+    _ := outer.add(fill)
+    outer.set_width(oi, prefSize())
+    outer.set_bounds(rect(0, 0, 20, 4))
+    checkRect(innerd.bounds(), 0, 0, 11, 4)
+    checkRect(fill.bounds(), 11, 0, 9, 4)
+    checkRect(a.bounds(), 0, 0, 4, 4)
+    checkRect(b.bounds(), 6, 0, 5, 4)
+end
+
+func test_pref_grid_stack_null():
+    // A Grid or Stack cannot measure, so a main-axis Pref degrades to Fill
+    // weight 1. Same split as a Fill beside another Fill.
+    row := tui.NewRow()
+    g := tui.NewGrid(1, 1) as dyn tui.Widget
+    a := leaf()
+    ig := row.add(g)
+    _ := row.add(a)
+    row.set_width(ig, prefSize())
+    row.set_bounds(rect(0, 0, 12, 2))
+    checkRect(g.bounds(), 0, 0, 6, 2)
+    checkRect(a.bounds(), 6, 0, 6, 2)
+
+    rowf := tui.NewRow()
+    gf := tui.NewGrid(1, 1) as dyn tui.Widget
+    af := leaf()
+    _ := rowf.add(gf)
+    _ := rowf.add(af)
+    rowf.set_bounds(rect(0, 0, 12, 2))
+    checkRect(gf.bounds(), 0, 0, 6, 2)
+    checkRect(af.bounds(), 6, 0, 6, 2)
+
+    rows := tui.NewRow()
+    st := tui.NewStack() as dyn tui.Widget
+    b := leaf()
+    is := rows.add(st)
+    _ := rows.add(b)
+    rows.set_width(is, prefSize())
+    rows.set_bounds(rect(0, 0, 12, 2))
+    checkRect(st.bounds(), 0, 0, 6, 2)
+    checkRect(b.bounds(), 6, 0, 6, 2)
+end
+
+func test_measure_x_before_y():
+    // Main-axis Pref measures x at the content width (20). Cross-axis y then
+    // sees the resolved slot width (6), not 20.
+    calls := mem.AllocateZeroed((9 as u64) * sizeof(int)) as int*
+    a := CountSizer { w = 6, h = 2, calls = calls } as dyn tui.Widget
+    row := tui.NewRow()
+    i := row.add(a)
+    row.set_width(i, prefSize())
+    row.set_height(i, prefSize())
+    row.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.Start)
+    row.set_bounds(rect(0, 0, 20, 10))
+    testing.AssertEqInt(calls[0], 2)
+    testing.AssertEqInt(calls[1], 20)
+    testing.AssertEqInt(calls[2], 6)
+    checkRect(a.bounds(), 0, 0, 6, 2)
+    mem.Free(calls as void*)
+end
+
+func test_measure_memo_once():
+    // Outer measure and the nested set_bounds both want (child, X, 20).
+    // One pass, one preferred_size. A second set_bounds is a new pass.
+    calls := mem.AllocateZeroed((4 as u64) * sizeof(int)) as int*
+    child := CountSizer { w = 20, h = 1, calls = calls } as dyn tui.Widget
+    inner := tui.NewRow()
+    i := inner.add(child)
+    inner.set_width(i, prefSize())
+    outer := tui.NewRow()
+    o := outer.add(inner as dyn tui.Widget)
+    outer.set_width(o, prefSize())
+    outer.set_bounds(rect(0, 0, 20, 4))
+    testing.AssertEqInt(calls[0], 1)
+    checkRect(child.bounds(), 0, 0, 20, 4)
+    child.set_bounds(rect(3, 3, 1, 1))
+    checkRect(child.bounds(), 3, 3, 1, 1)
+    outer.set_bounds(rect(0, 0, 20, 4))
+    testing.AssertEqInt(calls[0], 2)
+    checkRect(child.bounds(), 0, 0, 20, 4)
+    mem.Free(calls as void*)
+end
+
+func test_gap_reserved_pref():
+    // Gap 2 still sits between reserved Pref slots. budget 4, R = 20-10-4 = 6.
+    row := tui.NewRow()
+    row.set_gap(2)
+    a := sizer(6, 1)
+    b := sizer(4, 1)
+    c := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    _ := row.add(c)
+    row.set_width(ia, prefSize())
+    row.set_width(ib, prefSize())
+    row.set_bounds(rect(0, 0, 20, 3))
+    checkRect(a.bounds(), 0, 0, 6, 3)
+    checkRect(b.bounds(), 8, 0, 4, 3)
+    checkRect(c.bounds(), 14, 0, 6, 3)
+end
+
+func test_cross_fill_means_pref():
+    row := tui.NewRow()
+    a := sizer(4, 2)
+    i := row.add(a)
+    // Fill on a non-stretch cross axis means Pref: preferred_size(8).height.
+    row.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.Start)
+    row.set_bounds(rect(0, 0, 8, 4))
+    checkRect(a.bounds(), 0, 0, 8, 2)
+end
+
+// ---- A Panel as a measured child ----------------------------------------
+
+func test_panel_row_measured_pref():
+    // The Panel's natural width is the Sizer's 4 plus one ring cell each
+    // side, so the Pref slot reserves 6, not the whole row. Stretch fills the
+    // cross axis and the child sits one cell inside the frame.
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(sizer(4, 2))
+    row := tui.NewRow()
+    pd := p as dyn tui.Widget
+    i := row.add(pd)
+    row.set_width(i, prefSize())
+    row.set_bounds(rect(0, 0, 20, 6))
+    checkRect(pd.bounds(), 0, 0, 6, 6)
+    checkRect(p.slot.get(0).child.bounds(), 1, 1, 4, 4)
+end
+
+func test_panel_column_measured_pref():
+    // Same reservation on the vertical axis: height 4, not 30. The width
+    // stretches to the column's 8.
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(sizer(4, 2))
+    col := tui.NewColumn()
+    pd := p as dyn tui.Widget
+    i := col.add(pd)
+    col.set_height(i, prefSize())
+    col.set_bounds(rect(0, 0, 8, 30))
+    checkRect(pd.bounds(), 0, 0, 8, 4)
+    checkRect(p.slot.get(0).child.bounds(), 1, 1, 6, 2)
+end
+
+func test_panel_container_child_measured_pref():
+    // The Panel's child is a Column, which has measure but no
+    // preferred_size. The Pref slot must still reserve the Panel's natural
+    // width: the Column's 4 plus one ring cell each side.
+    mut col := tui.Column {}
+    _ := col.add(sizer(4, 2))
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(col)
+    row := tui.NewRow()
+    pd := p as dyn tui.Widget
+    i := row.add(pd)
+    row.set_width(i, prefSize())
+    row.set_bounds(rect(0, 0, 20, 6))
+    checkRect(pd.bounds(), 0, 0, 6, 6)
+    checkRect(p.slot.get(0).child.bounds(), 1, 1, 4, 4)
+end
+
+func test_panel_unmeasurable_pref_is_fill():
+    // An unmeasurable child leaves the Panel's preference at the -1 sentinel
+    // on both axes, so Pref degrades to Fill weight 1: the Panel and its
+    // sibling split the row 10/10 with no hole. The child is inset anyway.
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(leaf())
+    row := tui.NewRow()
+    pd := p as dyn tui.Widget
+    i := row.add(pd)
+    row.set_width(i, prefSize())
+    other := leaf()
+    _ := row.add(other)
+    row.set_bounds(rect(0, 0, 20, 2))
+    checkRect(pd.bounds(), 0, 0, 10, 2)
+    // The 2-tall box leaves no room inside a 1-cell ring: R3/R6 collapse the
+    // child to an empty rect anchored at the inset origin.
+    checkRect(p.slot.get(0).child.bounds(), 1, 1, 0, 0)
+    checkRect(other.bounds(), 10, 0, 10, 2)
+end
+
+func test_panel_none_border_pref():
+    // BorderStyle.None costs no inset, so the Panel reserves the child's 4x2
+    // and both rects coincide. Start keeps the height natural.
+    mut p := tui.Panel { border = tui.BorderStyle.None }
+    p.add(sizer(4, 2))
+    row := tui.NewRow()
+    pd := p as dyn tui.Widget
+    i := row.add(pd)
+    row.set_width(i, prefSize())
+    row.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.Start)
+    row.set_bounds(rect(0, 0, 20, 3))
+    checkRect(pd.bounds(), 0, 0, 4, 2)
+    checkRect(p.slot.get(0).child.bounds(), 0, 0, 4, 2)
+end
+
+func test_panel_nested_row_measured_pref():
+    // Two rings, each insetting once: natural width 4 + 2 + 2 = 8, height
+    // 2 + 2 + 2 = 6. Stretch fills the 6-tall row.
+    mut inner := tui.Panel { border = tui.BorderStyle.Single }
+    inner.add(sizer(4, 2))
+    mut outer := tui.Panel { border = tui.BorderStyle.Single }
+    outer.add(inner)
+    row := tui.NewRow()
+    od := outer as dyn tui.Widget
+    i := row.add(od)
+    row.set_width(i, prefSize())
+    row.set_bounds(rect(0, 0, 20, 6))
+    checkRect(od.bounds(), 0, 0, 8, 6)
+    ib := outer.slot.get(0).child
+    checkRect(ib.bounds(), 1, 1, 6, 4)
+    checkRect(inner.slot.get(0).child.bounds(), 2, 2, 4, 2)
+end
+
+func test_panel_nested_measure_budget():
+    // preferred_size(6): the inner Panel is asked for 6 - 2 = 4, the leaf for
+    // 4 - 2 = 2. A double inset would give the leaf 1. The leaf's width 1
+    // plus two rings gives back 5. calls[0] is the count, calls[1] the budget.
+    calls := mem.AllocateZeroed((9 as u64) * sizeof(int)) as int*
+    mut inner := tui.Panel { border = tui.BorderStyle.Single }
+    inner.add(CountSizer { w = 1, h = 1, calls = calls } as dyn tui.Widget)
+    mut outer := tui.Panel { border = tui.BorderStyle.Single }
+    outer.add(inner)
+    got := outer.preferred_size(6)
+    testing.AssertEqInt(calls[0], 1)
+    testing.AssertEqInt(calls[1], 2)
+    testing.AssertEqInt(got.width, 5)
+end
+
+func test_panel_nested_outer_none():
+    // The outer None adds no ring: the inner Panel takes the outer's whole
+    // rect and only the inner ring insets the leaf, once.
+    mut inner := tui.Panel { border = tui.BorderStyle.Single }
+    inner.add(sizer(4, 2))
+    mut outer := tui.Panel { border = tui.BorderStyle.None }
+    outer.add(inner)
+    row := tui.NewRow()
+    od := outer as dyn tui.Widget
+    i := row.add(od)
+    row.set_width(i, prefSize())
+    row.set_align(i, tui.CrossAlign.Stretch, tui.CrossAlign.Start)
+    row.set_bounds(rect(0, 0, 20, 6))
+    checkRect(od.bounds(), 0, 0, 6, 4)
+    checkRect(outer.slot.get(0).child.bounds(), 0, 0, 6, 4)
+    checkRect(inner.slot.get(0).child.bounds(), 1, 1, 4, 2)
+end
+
+// ---- AC6: set_bounds contract and paint smoke ----------------------------
+
+func test_normal_form_outputs():
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    row.set_width(ia, fixedSize(30))
+    row.set_margin(ib, tui.UniformInsets(5))
+    row.set_bounds(rect(0, 0, 10, 4))
+    ra := a.bounds()
+    rb := b.bounds()
+    testing.AssertTrue(ra.width >= 0 and ra.height >= 0)
+    testing.AssertTrue(rb.width >= 0 and rb.height >= 0)
+    testing.AssertTrue((ra.width > 0 and ra.height > 0) or (ra.width == 0 and ra.height == 0))
+    testing.AssertTrue((rb.width > 0 and rb.height > 0) or (rb.width == 0 and rb.height == 0))
+end
+
+func test_row_gap_four_fill():
+    // L=20 gap 2, four Fill. budget 6, R 14 -> 4,4,3,3 at x 0,6,12,17.
+    // Stretch keeps the full cross-axis height.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    repeat 4:
+        sizes.push(fillSize())
+    end
+    parts := tui.SplitMain(20, sizes, 2)
+    testing.AssertEqInt(parts.len(), 4)
+    testing.AssertEqInt(parts.get(0), 4)
+    testing.AssertEqInt(parts.get(1), 4)
+    testing.AssertEqInt(parts.get(2), 3)
+    testing.AssertEqInt(parts.get(3), 3)
+    sizes.free()
+    parts.free()
+    row := tui.NewRow()
+    row.set_gap(2)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    _ := row.add(a)
+    _ := row.add(b)
+    _ := row.add(c)
+    _ := row.add(d)
+    row.set_bounds(rect(0, 0, 20, 4))
+    checkRect(a.bounds(), 0, 0, 4, 4)
+    checkRect(b.bounds(), 6, 0, 4, 4)
+    checkRect(c.bounds(), 12, 0, 3, 4)
+    checkRect(d.bounds(), 17, 0, 3, 4)
+end
+
+func test_row_gap_fill_and_fixed():
+    // L=9 gap 5, Fill + Fixed(3). R = 9 - 3 - 5 = 1 -> 1,3 at x 0,6.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillSize())
+    sizes.push(fixedSize(3))
+    parts := tui.SplitMain(9, sizes, 5)
+    testing.AssertEqInt(parts.get(0), 1)
+    testing.AssertEqInt(parts.get(1), 3)
+    sizes.free()
+    parts.free()
+    row := tui.NewRow()
+    row.set_gap(5)
+    a := leaf()
+    b := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    row.set_width(ia, fillSize())
+    row.set_width(ib, fixedSize(3))
+    row.set_bounds(rect(0, 0, 9, 2))
+    checkRect(a.bounds(), 0, 0, 1, 2)
+    checkRect(b.bounds(), 6, 0, 3, 2)
+end
+
+func test_column_gap_fixed_fill_fixed():
+    // L=10 gap 3, Fixed(2), Fill, Fixed(2). R = 0 -> heights 2,0,2 at y 0,5,8.
+    // The zero-height slot collapses to 0x0. Cross axis stays the full width.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(2))
+    sizes.push(fillSize())
+    sizes.push(fixedSize(2))
+    parts := tui.SplitMain(10, sizes, 3)
+    testing.AssertEqInt(parts.get(0), 2)
+    testing.AssertEqInt(parts.get(1), 0)
+    testing.AssertEqInt(parts.get(2), 2)
+    sizes.free()
+    parts.free()
+    col := tui.NewColumn()
+    col.set_gap(3)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := col.add(a)
+    ib := col.add(b)
+    ic := col.add(c)
+    col.set_height(ia, fixedSize(2))
+    col.set_height(ib, fillSize())
+    col.set_height(ic, fixedSize(2))
+    col.set_bounds(rect(0, 0, 6, 10))
+    checkRect(a.bounds(), 0, 0, 6, 2)
+    checkRect(b.bounds(), 0, 5, 0, 0)
+    checkRect(c.bounds(), 0, 8, 6, 2)
+end
+
+func test_gap_fixed_only():
+    // No Fill: sizes stay the Fixed requests. Starts are separated by the gap.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(4))
+    sizes.push(fixedSize(5))
+    gapped := tui.SplitMain(20, sizes, 3)
+    plain := tui.SplitMain(20, sizes, 0)
+    testing.AssertEqInt(gapped.get(0), 4)
+    testing.AssertEqInt(gapped.get(1), 5)
+    testing.AssertEqInt(plain.get(0), 4)
+    testing.AssertEqInt(plain.get(1), 5)
+    sizes.free()
+    gapped.free()
+    plain.free()
+    row := tui.NewRow()
+    row.set_gap(3)
+    a := leaf()
+    b := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    row.set_width(ia, fixedSize(4))
+    row.set_width(ib, fixedSize(5))
+    row.set_bounds(rect(0, 0, 20, 2))
+    checkRect(a.bounds(), 0, 0, 4, 2)
+    checkRect(b.bounds(), 7, 0, 5, 2)
+end
+
+func test_gap_overflow_no_refund():
+    // Gap larger than the leftover. R = 0, Fill is 0, Fixed is not shrunk.
+    // Clip parks the overflow at the content edge; it does not pull slots back.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fixedSize(3))
+    sizes.push(fillSize())
+    sizes.push(fixedSize(2))
+    parts := tui.SplitMain(5, sizes, 4)
+    testing.AssertEqInt(parts.get(0), 3)
+    testing.AssertEqInt(parts.get(1), 0)
+    testing.AssertEqInt(parts.get(2), 2)
+    sizes.free()
+    parts.free()
+    row := tui.NewRow()
+    row.set_gap(4)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    row.set_width(ia, fixedSize(3))
+    row.set_width(ib, fillSize())
+    row.set_width(ic, fixedSize(2))
+    row.set_bounds(rect(0, 0, 5, 2))
+    checkRect(a.bounds(), 0, 0, 3, 2)
+    checkRect(b.bounds(), 5, 0, 0, 0)
+    checkRect(c.bounds(), 5, 0, 0, 0)
+end
+
+func test_gap_negative():
+    // Setter and the split both treat a negative gap as 0.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillSize())
+    sizes.push(fillSize())
+    neg := tui.SplitMain(10, sizes, -8)
+    testing.AssertEqInt(neg.get(0), 5)
+    testing.AssertEqInt(neg.get(1), 5)
+    sizes.free()
+    neg.free()
+    row := tui.NewRow()
+    a := leaf()
+    b := leaf()
+    _ := row.add(a)
+    _ := row.add(b)
+    row.set_gap(-8)
+    testing.AssertEqInt(row.gap, 0)
+    row.set_bounds(rect(0, 0, 10, 3))
+    checkRect(a.bounds(), 0, 0, 5, 3)
+    checkRect(b.bounds(), 5, 0, 5, 3)
+    // A field write bypasses the setter. Use still clamps, so slots are not
+    // pulled together.
+    mut raw := tui.NewRow()
+    c := leaf()
+    d := leaf()
+    _ := raw.add(c)
+    _ := raw.add(d)
+    raw.gap = -8
+    raw.set_bounds(rect(0, 0, 10, 3))
+    checkRect(c.bounds(), 0, 0, 5, 3)
+    checkRect(d.bounds(), 5, 0, 5, 3)
+end
+
+func test_gap_one_child():
+    // k <= 1 charges no budget, so a large gap matches gap 0.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillSize())
+    big := tui.SplitMain(10, sizes, 50)
+    zero := tui.SplitMain(10, sizes, 0)
+    testing.AssertEqInt(big.get(0), 10)
+    testing.AssertEqInt(zero.get(0), 10)
+    sizes.free()
+    big.free()
+    zero.free()
+    wide := tui.NewRow()
+    wide.set_gap(50)
+    a := leaf()
+    _ := wide.add(a)
+    wide.set_bounds(rect(0, 0, 10, 4))
+    plain := tui.NewRow()
+    b := leaf()
+    _ := plain.add(b)
+    plain.set_bounds(rect(0, 0, 10, 4))
+    checkRect(a.bounds(), 0, 0, 10, 4)
+    checkRect(b.bounds(), 0, 0, 10, 4)
+end
+
+func test_gap_zero_matches():
+    // gap 0 keeps the weight-1 equal split and the weighted rects.
+    row := tui.NewRow()
+    row.set_gap(0)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    _ := row.add(a)
+    _ := row.add(b)
+    _ := row.add(c)
+    row.set_bounds(rect(0, 0, 10, 2))
+    checkRect(a.bounds(), 0, 0, 4, 2)
+    checkRect(b.bounds(), 4, 0, 3, 2)
+    checkRect(c.bounds(), 7, 0, 3, 2)
+    weighted := tui.NewRow()
+    weighted.set_gap(0)
+    d := leaf()
+    e := leaf()
+    f := leaf()
+    id := weighted.add(d)
+    ie := weighted.add(e)
+    ifx := weighted.add(f)
+    weighted.set_width(id, fillWeight(2))
+    weighted.set_width(ie, fillWeight(1))
+    weighted.set_width(ifx, fillWeight(1))
+    weighted.set_bounds(rect(0, 0, 10, 3))
+    checkRect(d.bounds(), 0, 0, 5, 3)
+    checkRect(e.bounds(), 5, 0, 3, 3)
+    checkRect(f.bounds(), 8, 0, 2, 3)
+end
+
+func test_gap_zero_slot():
+    // A 0-size slot between two children still costs a gap on both sides.
+    sizes := Vector {} as Vector<tui.LayoutSize>
+    sizes.push(fillSize())
+    sizes.push(fixedSize(0))
+    sizes.push(fillSize())
+    parts := tui.SplitMain(20, sizes, 2)
+    testing.AssertEqInt(parts.get(0), 8)
+    testing.AssertEqInt(parts.get(1), 0)
+    testing.AssertEqInt(parts.get(2), 8)
+    sizes.free()
+    parts.free()
+    row := tui.NewRow()
+    row.set_gap(2)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    ia := row.add(a)
+    ib := row.add(b)
+    ic := row.add(c)
+    row.set_width(ia, fillSize())
+    row.set_width(ib, fixedSize(0))
+    row.set_width(ic, fillSize())
+    row.set_bounds(rect(0, 0, 20, 3))
+    checkRect(a.bounds(), 0, 0, 8, 3)
+    checkRect(b.bounds(), 10, 0, 0, 0)
+    checkRect(c.bounds(), 12, 0, 8, 3)
+end
+
+func test_gap_idempotent():
+    row := tui.NewRow()
+    row.set_gap(2)
+    a := leaf()
+    b := leaf()
+    c := leaf()
+    d := leaf()
+    _ := row.add(a)
+    _ := row.add(b)
+    _ := row.add(c)
+    _ := row.add(d)
+    row.set_bounds(rect(0, 0, 20, 4))
+    a1 := a.bounds()
+    b1 := b.bounds()
+    c1 := c.bounds()
+    d1 := d.bounds()
+    row.set_bounds(rect(0, 0, 20, 4))
+    checkRect(a.bounds(), a1.x, a1.y, a1.width, a1.height)
+    checkRect(b.bounds(), b1.x, b1.y, b1.width, b1.height)
+    checkRect(c.bounds(), c1.x, c1.y, c1.width, c1.height)
+    checkRect(d.bounds(), d1.x, d1.y, d1.width, d1.height)
+end
+
+func test_gap_cross_stretch():
+    // Gap separates main-axis slots only. Stretch still fills the cross axis.
+    row := tui.NewRow()
+    row.set_gap(4)
+    a := leaf()
+    b := leaf()
+    _ := row.add(a)
+    _ := row.add(b)
+    row.set_bounds(rect(2, 3, 10, 7))
+    checkRect(a.bounds(), 2, 3, 3, 7)
+    checkRect(b.bounds(), 9, 3, 3, 7)
+end
+
+func test_draw_containers_smoke():
+    root := tui.NewColumn()
+    root.set_padding(tui.UniformInsets(1))
+    t := text("hi")
+    _ := root.add(t)
+    scr := tui.NewScreen(root as dyn tui.Widget, 6, 3)
+    _ := scr.add(tui.RootId, t)
+    scr.draw()
+    // Containers paint nothing; the Text child drew at its bounds (1,1).
+    testing.AssertEqStr(scr.buffer.get(1, 1).ch, "h")
+    testing.AssertEqStr(scr.buffer.get(2, 1).ch, "i")
+    // The container's padding row stayed blank.
+    testing.AssertEqStr(scr.buffer.row_text(0), "      ")
+end
+
+func main:
+    test_inset_uniform()
+    test_inset_margin()
+    test_inset_over_budget()
+    test_inset_negative()
+    test_inset_empty()
+    test_fit_rect()
+    test_fit_rect_empty()
+    test_split_equal()
+    test_split_fixed()
+    test_split_remainder()
+    test_split_no_fill()
+    test_split_over_budget()
+    test_split_negative_fixed()
+    test_split_pref_counts_as_fill()
+    test_split_weights_2_1_1()
+    test_split_weights_1_2_3()
+    test_split_weights_fixed_and_zero()
+    test_split_weight_one_remainder()
+    test_split_negative_weight()
+    test_split_zero_weight_sum()
+    test_split_fixed_overflow_weight()
+    test_split_fixed_ignores_weight()
+    test_split_pref_weight()
+    test_split_empty()
+    test_tracks_uneven()
+    test_tracks_even()
+    test_tracks_zero()
+    test_place_center_table()
+    test_place_start_end_stretch()
+    test_place_clamp()
+    test_place_nonpositive()
+    test_column_padding_recursion()
+    test_row_fixed_and_fill()
+    test_row_weighted_main()
+    test_row_weight_cross_ignored()
+    test_row_zero_weight_visited()
+    test_grid_ignores_weight()
+    test_recursion_nested()
+    test_idempotent()
+    test_grid_cells()
+    test_grid_out_of_range()
+    test_stack_overlap()
+    test_pref_cross_axis()
+    test_pref_end_alignment()
+    test_pref_container_yields_avail()
+    test_empty_content()
+    test_slot_bad_index_ignored()
+    test_screen_fit_root_recursion()
+    test_deep_column_row_grid_d()
+    test_recursion_empty_not_skipped_g1()
+    test_column_equal_remainder_b2()
+    test_row_overflow_f1()
+    test_column_negative_fixed_padding_f2()
+    test_grid_tracks_out_of_range_g5()
+    test_grid_two_children_one_cell()
+    test_grid_cell_margin_alignment()
+    test_grid_span_even()
+    test_grid_span_clamp()
+    test_grid_span_nonpositive()
+    test_grid_span_margin()
+    test_grid_span_align()
+    test_grid_span_out_of_range()
+    test_grid_span_overlap()
+    test_grid_span_pref_exceeds()
+    test_stack_three_share_e2()
+    test_stack_one_child()
+    test_stack_zero_children()
+    test_stack_margin_over_budget_g4()
+    test_row_margin_center_c()
+    test_center_column_nine_h1()
+    test_center_row_four_h2()
+    test_pref_column_text_i1()
+    test_pref_row_resolved_width_i2()
+    test_pref_nonpositive_never_forwarded()
+    test_main_pref_acts_as_fill()
+    test_row_pref_then_fill()
+    test_row_pref_overflow_clip()
+    test_column_measured_pref()
+    test_column_pref_measures_at_width()
+    test_pref_weight_ignored_when_measured()
+    test_nested_pref_measure()
+    test_pref_grid_stack_null()
+    test_measure_x_before_y()
+    test_measure_memo_once()
+    test_gap_reserved_pref()
+    test_cross_fill_means_pref()
+    test_panel_row_measured_pref()
+    test_panel_column_measured_pref()
+    test_panel_container_child_measured_pref()
+    test_panel_unmeasurable_pref_is_fill()
+    test_panel_none_border_pref()
+    test_panel_nested_row_measured_pref()
+    test_panel_nested_measure_budget()
+    test_panel_nested_outer_none()
+    test_normal_form_outputs()
+    test_draw_containers_smoke()
+    test_row_gap_four_fill()
+    test_row_gap_fill_and_fixed()
+    test_column_gap_fixed_fill_fixed()
+    test_gap_fixed_only()
+    test_gap_overflow_no_refund()
+    test_gap_negative()
+    test_gap_one_child()
+    test_gap_zero_matches()
+    test_gap_zero_slot()
+    test_gap_idempotent()
+    test_gap_cross_stretch()
+    ret testing.Summary()
+end

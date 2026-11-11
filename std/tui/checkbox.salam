@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Checkbox: a one-row boolean toggle drawn as "[x] label" or "[ ] label".
+ *
+ * Checkbox owns one private bool, the checked state, and changes it only in
+ * two places: the toggling path (Space while focused, or a left press inside
+ * its bounds) and set_checked. Rendering never changes it. Each toggle calls
+ * on_toggle with the new value and returns true, so the screen redraws.
+ *
+ * Space is the only key it consumes. Enter bubbles on, because the host
+ * needs Enter for submitting a form. Mouse activation does not need focus:
+ * mouse routing never moves focus, so a click on an unfocused checkbox
+ * toggles it and leaves the focus where it was.
+ *
+ * The box and the label take separate styles. The three mark cells use
+ * box_style; the spacer, the label and the trailing fill use label_style.
+ * While the buffer reports focus the whole row turns bold. When disabled the
+ * whole row turns dim and loses bold: its colours, italic, and underline
+ * stay, and any bold the caller set is dropped. A disabled checkbox also
+ * ignores input and hits.
+ *
+ * This file deliberately has no focus or blur hooks, no pressed or hover
+ * state, no reverse-video style, no Enter activation, no Screen reference,
+ * and no terminal writes: the style is the Style value the caller sets and
+ * placement in the parent's box belongs to whoever owns the layout.
+ */
+
+package tui
+
+import str
+import term
+
+@en "Checkbox"
+@fa "کادر انتخاب"
+/// A one-row boolean toggle drawn as "[x] label" when checked and "[ ] label"
+/// when not. It is focusable, so keyboard events reach it through the
+/// screen's focus dispatch: Space toggles it and is consumed, and every other
+/// key bubbles on. A left press inside its bounds toggles it whether or not
+/// it has focus. Read the state with checked, and change it with set_checked
+/// or by the user. Set disabled to stop it from taking input.
+pub struct Checkbox:
+    pub use BaseWidget
+
+    @en "label"
+    @fa "برچسب"
+    /// Text drawn after the mark. "" draws the mark alone.
+    pub label: str = ""
+
+    @en "box_style"
+    @fa "ظاهر کادر"
+    /// Style of the three mark cells, the "[", the state glyph and the "]".
+    pub box_style: Style = StyleDefault
+
+    @en "label_style"
+    @fa "ظاهر برچسب"
+    /// Style of the spacer, the label, and the trailing fill of the row.
+    pub label_style: Style = StyleDefault
+
+    @en "disabled"
+    @fa "غیرفعال"
+    /// When true the checkbox is not focusable, ignores every event and does
+    /// not take hits, and draws its row dim.
+    pub disabled: bool = false
+
+    @en "on_toggle"
+    @fa "هنگام تغییر انتخاب"
+    /// Called with the new checked value after every toggle. The default does
+    /// nothing.
+    pub on_toggle: func (bool) = (_v: bool): end
+
+    state: bool = false
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    /// True when enabled and at least one cell wide, so the checkbox can take
+    /// keyboard focus.
+    pub func focusable(): bool:
+        ret not this.disabled and this.bounds().width > 0
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    /// True when enabled, so a click on the row lands on the checkbox. A
+    /// disabled checkbox lets the click fall through to what lies under it.
+    pub func hits(): bool:
+        ret not this.disabled
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    /// Reacts to Space and to a left press inside bounds. Either one flips the
+    /// checked state, calls on_toggle with the new value, and returns true.
+    /// Every other event returns false, and a disabled checkbox returns false
+    /// for all of them.
+    pub func handle_event(event: Event): bool:
+        if this.disabled:
+            ret false
+        end
+        mut toggle := event.is_key(term.KeySpace)
+        if event.kind == MouseEvent and event.mouse.ok and event.mouse.pressed and not event.mouse.motion and event.mouse.button == 0 and this.bounds().contains(event.mouse_point()):
+            toggle = true
+        end
+        if not toggle:
+            ret false
+        end
+        this.state = not this.state
+        this.on_toggle(this.state)
+        ret true
+    end
+
+    @en "checked"
+    @fa "انتخاب شده است"
+    /// The current checked state.
+    pub func checked(): bool:
+        ret this.state
+    end
+
+    @en "set_checked"
+    @fa "تنظیم انتخاب"
+    /// Sets the checked state without calling on_toggle.
+    pub func set_checked(value: bool):
+        this.state = value
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    /// The label width plus the four cells before it (the three mark cells and
+    /// the spacer), one row tall, clamped to max_width when max_width > 0.
+    pub func preferred_size(max_width: int): Rect:
+        mut w := MeasureText(this.label, 0).width + 4
+        if max_width > 0 and w > max_width:
+            w = max_width
+        end
+        ret Rect { width = w, height = 1 }
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    /// Draws one row at bounds.y: the spacer and label cells and the trailing
+    /// fill in label_style, then the three mark cells in box_style. Focus
+    /// (while enabled) overlays bold and disabled overlays dim and drops bold
+    /// onto both styles.
+    /// Each cell is clipped to the width, so a narrow row drops the label
+    /// first and then the mark cells from the right. A degenerate box draws
+    /// nothing.
+    pub func render(buf: Buffer, bounds: Rect):
+        if bounds.is_empty():
+            ret
+        end
+        f := buf.focused and not this.disabled
+        gb := _overlay(this.box_style, f, this.disabled)
+        gl := _overlay(this.label_style, f, this.disabled)
+        w := bounds.width
+        buf.fill(Rect { x = bounds.x, y = bounds.y, width = w, height = 1 }, " ", gl)
+        mut tick := " "
+        if this.state:
+            tick = "x"
+        end
+        buf.put_str(bounds.x, bounds.y, str.CharSubstr("[" + tick + "]", 0, w), gb)
+        if w > 4:
+            buf.put_str(bounds.x + 4, bounds.y, _take_cells(this.label, w - 4), gl)
+        end
+    end
+end
+
+// The style with the focus bold and the disabled dim laid over it. Disabled
+// drops bold but keeps foreground, background, italic, underline, and reverse:
+// every field the caller set except bold survives.
+func _overlay(s: Style, focused: bool, disabled: bool): Style:
+    ret Style { fg = s.fg, bg = s.bg, bold = (s.bold or focused) and not disabled, dim = s.dim or disabled, italic = s.italic, underline = s.underline, reverse = s.reverse }
+end
+
+@en "NewCheckbox"
+@fa "کادر انتخاب جدید"
+/// Creates a Checkbox with the given label and initial checked state, enabled,
+/// with default styles and a do-nothing on_toggle.
+pub func NewCheckbox(label: str, checked: bool): Checkbox:
+    ret Checkbox { label = label, state = checked }
+end

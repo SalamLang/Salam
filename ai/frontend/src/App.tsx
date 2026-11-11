@@ -174,6 +174,10 @@ export function App() {
   const [route, setRoute] = useState<Route>(INITIAL_PLACE.route);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
+  const activeChats = useMemo(
+    () => chats.filter((c) => c.state === "working" || c.state === "waiting" || c.state === "queued"),
+    [chats],
+  );
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsReady, setProjectsReady] = useState(false);
   const [projectScope, setProjectScope] = useState<string | null>(INITIAL_PLACE.project);
@@ -1060,6 +1064,7 @@ export function App() {
         user={user}
         plan={plan}
         projects={projects}
+        activeChats={activeChats}
         activeProject={projectScope}
         page={route === "admin-chat" || route === "admin-user" ? "admin" : route}
         onNavigate={navigate}
@@ -1069,6 +1074,7 @@ export function App() {
         onOpenProjects={() => navigate("/")}
         onOpenProject={openProject}
         onOpenOthers={openOthers}
+        onOpenChat={(id, pid) => openChat(id, false, pid)}
         onNewProject={() => setProjectDialog({ mode: "create" })}
       />
       <main className="main">

@@ -22,7 +22,7 @@ import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
 import { Usage } from "./Usage";
 import { Select } from "./Select";
-import { IconArrowLeft, IconBook, IconBug, IconCode, IconFolder, IconGlobe, IconMenu, IconMoon, IconPlus, IconSearch, IconShare, IconSun, IconSwap, IconTerminal } from "./icons";
+import { IconArrowLeft, IconBook, IconBug, IconCode, IconFolder, IconGlobe, IconLogout, IconMenu, IconMoon, IconPlus, IconSearch, IconShare, IconSun, IconSwap, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { ProjectDialog, ProjectPage, ProjectsHome, confirmDeleteProject } from "./Projects";
@@ -1066,7 +1066,6 @@ export function App() {
         open={sidebar}
         onClose={() => setSidebar(false)}
         onNew={newChatHere}
-        onLogout={logout}
         onOpenProjects={() => navigate("/")}
         onOpenProject={openProject}
         onOpenOthers={openOthers}
@@ -1124,6 +1123,9 @@ export function App() {
             title={isFa ? "English" : "فارسی"}
           >
             <IconGlobe />
+          </button>
+          <button type="button" className="icon-button" onClick={logout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
+            <IconLogout />
           </button>
         </header>
         {route === "projects" ? (

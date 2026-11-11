@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Project, Subscription, User } from "./api";
 import { isDesktop, useAgentUpdate } from "./desktop";
-import { IconChart, IconChat, IconClose, IconDownload, IconFolder, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
+import { IconChart, IconChat, IconClose, IconDownload, IconFolder, IconKey, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
 import { isFa, t } from "./i18n";
 import { fmtNum } from "./format";
 
@@ -13,7 +13,6 @@ type Props = {
   open: boolean;
   onClose: () => void;
   onNew: () => void;
-  onLogout: () => void;
   onOpenProjects: () => void;
   onOpenProject: (id: string) => void;
   onOpenOthers: () => void;
@@ -212,9 +211,6 @@ export function Sidebar(p: Props) {
                 </nav>
               )}
             </div>
-            <button type="button" className="icon-button" onClick={p.onLogout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
-            <IconLogout />
-          </button>
           </div>
         </div>
       </aside>

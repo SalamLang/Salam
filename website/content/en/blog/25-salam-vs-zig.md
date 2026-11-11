@@ -16,16 +16,16 @@ This article compares how they handle errors, memory, compile-time code, C libra
 
 Zig first appeared in 2016, created by Andrew Kelley, and is developed by the Zig Software Foundation. It already has well-known users, among them the Bun JavaScript runtime, the TigerBeetle database and the Ghostty terminal. Salam is younger and its compiler has been written in Salam itself since the original C implementation was retired in August 2026. Both are open source.
 
-| | Zig | Salam |
-|---|---|---|
-| Design goal | A simpler, safer replacement for C | A readable systems language for apps, servers and low-level code |
-| Syntax | C-like, braces and semicolons | Blocks with `:` and `end`, no semicolons, English or Persian keywords |
-| Memory | Explicit allocators, passed as arguments | One global allocator for collections; `mem` arenas and pools on request |
-| Errors | Error unions (`!T`), `try`, `catch`, `errdefer` | `throws`, `try`, `catch`; errors carry a kind, a message and a position |
-| Compile time | `comptime`: run any Zig code while compiling | Constants, conditional compilation, `-D` flags, monomorphized generics |
-| C interop | Imports C headers; `zig cc` compiles C and C++ | `extern:` declarations; calls follow the C ABI on every backend |
-| Standard library | Lower level: data structures, I/O, HTTP, JSON, crypto | Application level: HTTP router, databases, JSON, TLS, images, ML |
-| Status | Pre-1.0, breaking changes between releases | Pre-1.0, breaking changes between releases |
+|                  | Zig                                                   | Salam                                                                   |
+| ---------------- | ----------------------------------------------------- | ----------------------------------------------------------------------- |
+| Design goal      | A simpler, safer replacement for C                    | A readable systems language for apps, servers and low-level code        |
+| Syntax           | C-like, braces and semicolons                         | Blocks with `:` and `end`, no semicolons, English or Persian keywords   |
+| Memory           | Explicit allocators, passed as arguments              | One global allocator for collections; `mem` arenas and pools on request |
+| Errors           | Error unions (`!T`), `try`, `catch`, `errdefer`       | `throws`, `try`, `catch`; errors carry a kind, a message and a position |
+| Compile time     | `comptime`: run any Zig code while compiling          | Constants, conditional compilation, `-D` flags, monomorphized generics  |
+| C interop        | Imports C headers; `zig cc` compiles C and C++        | `extern:` declarations; calls follow the C ABI on every backend         |
+| Standard library | Lower level: data structures, I/O, HTTP, JSON, crypto | Application level: HTTP router, databases, JSON, TLS, images, ML        |
+| Status           | Pre-1.0, breaking changes between releases            | Pre-1.0, breaking changes between releases                              |
 
 ## Error handling: error unions and throws {#errors}
 
@@ -127,7 +127,7 @@ end
 
 Salam's version is shorter because it decides for you. When you need arenas or fixed-size pools, the [mem package](/std/mem/) has `NewArena`, `ArenaAlloc`, `ArenaReset` and `NewPool`, but they hand out raw memory rather than plugging into the collections the way a Zig allocator does. If your program must control every allocation, for example in an embedded system or a database with a strict memory budget, Zig's model is more flexible.
 
-For finding mistakes, Zig's `DebugAllocator` reports leaks when it is deinitialized, and Debug and ReleaseSafe builds check bounds and integer overflow at run time. Salam checks array and vector indexes at run time in normal builds (not with `--release`), proves some indexes out of range while compiling, reports some use-after-free and double-free patterns before the program runs, and `salam memcheck` runs a program under Valgrind or AddressSanitizer. Neither language proves memory safety the way Rust's borrow checker does. The article [Memory management in Salam](/blog/memory-management-in-salam/) covers Salam's side in depth.
+For finding mistakes, Zig's `DebugAllocator` reports leaks when it is deinitialized, and Debug and ReleaseSafe builds check bounds and integer overflow at runtime. Salam checks array and vector indices at runtime in normal builds (not with `--release`), proves some indices out of range while compiling, reports some use-after-free and double-free patterns before the program runs, and `salam memcheck` runs a program under Valgrind or AddressSanitizer. Neither language proves memory safety the way Rust's borrow checker does. The article [Memory management in Salam](/blog/memory-management-in-salam/) covers Salam's side in depth.
 
 ## comptime vs Salam's compile-time features {#comptime}
 
@@ -202,7 +202,7 @@ The project's [benchmark](/speed/) compares Salam with C, C++, Rust, Go, Python 
 
 Both languages change between releases, and both tell you so. Zig's 0.15 release, for example, reworked the standard library's reader and writer interfaces, and code written for earlier versions had to be updated. Salam removed typed local declarations in 2026 and changes its rules from release to release as well.
 
-The ecosystems differ in kind. Zig has a growing community, a package manager built into its build system and several large open source projects that prove it in production. Salam's community is much smaller and its third-party package registry is new and nearly empty, but its standard library is far larger at the application level: HTTP servers with routing and middleware, database drivers, JSON, YAML and TOML, TLS written in Salam, image codecs, matrices and neural network layers, and a page language that generates HTML and CSS. Zig gives you sharp building blocks and expects you to assemble them; Salam gives you more finished parts.
+The ecosystems differ in kind. Zig has a growing community, a package manager built into its build tool and several large open source projects that prove it in production. Salam's community is much smaller and its third-party package registry is new and nearly empty, but its standard library is far larger at the application level: HTTP servers with routing and middleware, database drivers, JSON, YAML and TOML, TLS written in Salam, image codecs, matrices and neural network layers, and a page language that generates HTML and CSS. Zig gives you sharp building blocks and expects you to assemble them; Salam gives you more finished parts.
 
 ## When to choose which {#choose}
 
@@ -210,7 +210,7 @@ The ecosystems differ in kind. Zig has a growing community, a package manager bu
 
 - you need precise control over every allocation, with allocators chosen per call;
 - you want compile-time code generation and type reflection inside the language;
-- you are replacing or extending a C code base and want to import its headers directly;
+- you are replacing or extending a C codebase and want to import its headers directly;
 - you need cross-compilation to many targets with minimal setup, or a drop-in C compiler.
 
 **Choose Salam when:**

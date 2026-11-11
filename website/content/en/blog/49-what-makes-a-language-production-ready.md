@@ -14,21 +14,21 @@ A programming language is ready for production when a business can depend on it 
 
 There is no single official standard for "production ready", but evaluation checklists used by platform teams converge on the same questions. Here they are with Salam's status as of November 2026. "Met" means the evidence is there; "partly" means some of it is; "not yet" means it is missing.
 
-| Item | Salam's status | Evidence in short |
-|---|---|---|
-| Language stability and compatibility policy | Not yet | Version 0.6, syntax still changes, no written promise |
-| Versioning and release process | Partly | Frequent tagged releases, checksums, release gate; no LTS |
-| Platform support | Partly | Many targets; 32-bit and cross builds are best-effort |
-| Developer tooling | Mostly met | LSP, formatter, tests, debugger, memcheck; no program profiler |
-| Quality assurance of the compiler | Met for its age | Self-hosting, thousands of tests, differential fuzzing |
-| Security process | Not yet | No `SECURITY.md`, no audit, no advisory history |
-| Memory safety | Partly | Bounds checks and warnings; no borrow checker |
-| Performance evidence | Met | Published benchmark with raw data and caveats |
-| Ecosystem and libraries | Partly | Large standard library; third-party registry empty |
-| Documentation | Mostly met | Course, library reference, design docs; books out of date |
-| Governance and continuity | Not yet | No governance document; work concentrated in one person |
-| Support | Not yet | Community chat only; no commercial support |
-| Licensing | Condition | GPL-3.0 throughout, no runtime exception |
+| Item                                        | Salam's status  | Evidence in short                                              |
+| ------------------------------------------- | --------------- | -------------------------------------------------------------- |
+| Language stability and compatibility policy | Not yet         | Version 0.6, syntax still changes, no written promise          |
+| Versioning and release process              | Partly          | Frequent tagged releases, checksums, release gate; no LTS      |
+| Platform support                            | Partly          | Many targets; 32-bit and cross builds are best-effort          |
+| Developer tooling                           | Mostly met      | LSP, formatter, tests, debugger, memcheck; no program profiler |
+| Quality assurance of the compiler           | Met for its age | Self-hosting, thousands of tests, differential fuzzing         |
+| Security process                            | Not yet         | No `SECURITY.md`, no audit, no advisory history                |
+| Memory safety                               | Partly          | Bounds checks and warnings; no borrow checker                  |
+| Performance evidence                        | Met             | Published benchmark with raw data and caveats                  |
+| Ecosystem and libraries                     | Partly          | Large standard library; third-party registry empty             |
+| Documentation                               | Mostly met      | Course, library reference, design docs; books out of date      |
+| Governance and continuity                   | Not yet         | No governance document; work concentrated in one person        |
+| Support                                     | Not yet         | Community chat only; no commercial support                     |
+| Licensing                                   | Condition       | GPL-3.0 throughout, no runtime exception                       |
 
 The sections below give the evidence for each row.
 
@@ -136,7 +136,7 @@ Salam publishes the kind of performance evidence an evaluation team should deman
 
 ## Ecosystem, documentation, people and support {#ecosystem-people}
 
-**Ecosystem.** The standard library is large, more than 170 documented packages from HTTP and gRPC to database drivers, compression and cryptography, which covers most needs without third-party code. The package manager is well designed (Git-based modules, lock file, checksums, a reviewed sum list). But the registry index lists no third-party packages yet, and the checksum list is empty. The [ecosystem article](/blog/building-an-open-source-language-ecosystem/) discusses this.
+**Ecosystem.** The standard library is large, more than 170 documented packages from HTTP and gRPC to database drivers, compression and cryptography, which covers most needs without third-party code. The package manager is well designed (Git-based modules, lockfile, checksums, a reviewed sum list). But the registry index lists no third-party packages yet, and the checksum list is empty. The [ecosystem article](/blog/building-an-open-source-language-ecosystem/) discusses this.
 
 **Documentation.** A 47-lesson course in English and Persian, a reference page per standard library package with compiled examples, and design documents in `docs/`. Some documents lag the code: the LaTeX books are marked out of date by the project itself, and some design notes still refer to the C implementation that was retired in August 2026.
 
@@ -146,7 +146,7 @@ Salam publishes the kind of performance evidence an evaluation team should deman
 
 ## Licensing: GPL-3.0 without a runtime exception {#licensing}
 
-The compiler, the standard library and the tools are licensed under the GNU GPL version 3. The VS Code extension directory is MIT, so its grammar can be reused. The important detail for businesses is that there is no runtime-library exception, of the kind the GCC Runtime Library Exception provides for code linked against GCC's own libraries. The README describes Salam code that imports the standard library as GPL-derived when built.
+The compiler, the standard library and the tools are licensed under the GNU GPL version 3. The Visual Studio Code extension directory is MIT, so its grammar can be reused. The important detail for businesses is that there is no runtime-library exception, of the kind the GCC Runtime Library Exception provides for code linked against GCC's own libraries. The readme describes Salam code that imports the standard library as GPL-derived when built.
 
 What that means in practice depends on distribution. Internal tools and software you only run as a network service are treated differently by GPL-3.0, which, unlike the AGPL, does not count network use as distribution. Distributing binaries to customers brings the GPL's source-availability obligations. That is a legitimate choice for a free software project and a deciding factor for many proprietary products. Ask a lawyer before relying on any reading of it, including this one.
 

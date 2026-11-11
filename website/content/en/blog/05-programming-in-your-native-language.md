@@ -29,9 +29,9 @@ None of this is impossible to overcome; millions of programmers worldwide learne
 
 It is worth being careful here, because this topic attracts strong opinions.
 
-On the general question, there is long-standing support for teaching in a language the learner understands. UNESCO's 1953 report *The Use of Vernacular Languages in Education* argued for teaching children in their mother tongue, and the organization has promoted mother-tongue based multilingual education ever since. That research is about schooling in general, not programming.
+On the general question, there is long-standing support for teaching in a language the learner understands. UNESCO's 1953 report _The Use of Vernacular Languages in Education_ argued for teaching children in their mother tongue, and the organization has promoted mother-tongue based multilingual education ever since. That research is about schooling in general, not programming.
 
-On programming specifically, the evidence is thinner but points the same way. Philip Guo's 2018 CHI paper *Non-Native English Speakers Learning Computer Programming: Barriers, Desires, and Design Opportunities* surveyed learners around the world and documented the extra load English places on them, from reading instructional material and technical vocabulary to understanding code examples. Felienne Hermans's educational language Hedy was built so that its keywords can be used in many natural languages, on the argument that English keywords are an unnecessary obstacle for children.
+On programming specifically, the evidence is thinner but points the same way. Philip Guo's 2018 CHI paper _Non-Native English Speakers Learning Computer Programming: Barriers, Desires, and Design Opportunities_ surveyed learners around the world and documented the extra load English places on them, from reading instructional material and technical vocabulary to understanding code examples. Felienne Hermans's educational language Hedy was built so that its keywords can be used in many natural languages, on the argument that English keywords are an unnecessary obstacle for children.
 
 What we are not aware of is a large controlled study showing that native-language keywords alone produce better programmers. Keywords are a small part of a programming language, and the effect of a native-language environment is hard to separate from the effect of better teaching, better materials and better error messages. A fair summary: the language barrier is real for many learners, removing it matters a great deal for some and not at all for others, and translating only the keywords leaves most of the barrier in place.
 
@@ -134,18 +134,18 @@ There are three ways to make the move:
 - **With the translator.** `salam translate en` converts a Persian file to English keywords and library names, leaving the student's own names alone. Students can compare their own code side by side with its English form. See [inside salam translate](/blog/salam-translate-persian-english-code/).
 - **All at once.** Start a new project in English. Everything learned still applies, and the vocabulary is small:
 
-| Persian | English | Meaning |
-|---|---|---|
-| `تابع` | `func` | declares a function |
-| `برگشت` | `ret` | returns a value |
-| `ناپایا` | `mut` | makes a variable changeable |
-| `پایان` | `end` | closes a block |
-| `سرچاپ` | `println` | prints a line |
-| `اگر` / `وگرنه` | `if` / `else` | branches |
-| `هر ... در` | `each ... in` | loops over a collection |
-| `تا` | `until` | loops while a condition holds |
-| `تکرار` | `repeat` | loops a number of times |
-| `برگردان` | `as` | converts a type |
+| Persian         | English       | Meaning                       |
+| --------------- | ------------- | ----------------------------- |
+| `تابع`          | `func`        | declares a function           |
+| `برگشت`         | `ret`         | returns a value               |
+| `ناپایا`        | `mut`         | makes a variable changeable   |
+| `پایان`         | `end`         | closes a block                |
+| `سرچاپ`         | `println`     | prints a line                 |
+| `اگر` / `وگرنه` | `if` / `else` | branches                      |
+| `هر ... در`     | `each ... in` | loops over a collection       |
+| `تا`            | `until`       | loops while a condition holds |
+| `تکرار`         | `repeat`      | loops a number of times       |
+| `برگردان`       | `as`          | converts a type               |
 
 After that, moving from Salam to Python, Go or C is a change of language, not of spelling, and the concepts transfer the way they do between any two languages.
 

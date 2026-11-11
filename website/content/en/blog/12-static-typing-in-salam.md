@@ -14,7 +14,7 @@ date: 2026-11-11
 
 In a dynamically typed language such as Python or JavaScript, `price * quantity` is checked when that line runs: if `quantity` happens to be a string that day, you find out in production. In a statically typed language such as Go, Rust, Java or Salam, the same mistake is a compile error, found on your machine before the program ever starts.
 
-The trade-offs are well known. Static types catch a whole class of bugs early, make code easier to navigate (an editor can tell you exactly what `user.address` is), and let the compiler generate faster code because it does not have to check types at run time. They cost some flexibility and, in older languages, a lot of typing. Modern statically typed languages, Salam included, recover most of that convenience with **type inference**.
+The trade-offs are well known. Static types catch a whole class of bugs early, make code easier to navigate (an editor can tell you exactly what `user.address` is), and let the compiler generate faster code because it does not have to check types at runtime. They cost some flexibility and, in older languages, a lot of typing. Modern statically typed languages, Salam included, recover most of that convenience with **type inference**.
 
 Salam also uses the type checker as the foundation for more checks than types alone. Before generating any code, the compiler's semantic analysis (described in [the compiler pipeline article](/blog/how-the-salam-compiler-works/)) checks types, mutability, exhaustiveness, definite initialization, unused code, value ranges and memory ownership.
 
@@ -162,7 +162,7 @@ square has area 4
 total area: 21.56636
 ```
 
-Bounded generics such as `report<T: Shape>` are **monomorphized**: the compiler makes a separate copy for each type used, as C++ templates and Rust generics do, so there is no run-time cost. When you need a mixed collection, `dyn Shape` gives dynamic dispatch through a table of methods, as in the array above. The two arguments of `larger` must have the same type: `larger(2, "x")` fails with `cannot pass 'str' to 'i32'`, and `report(42)` fails because `'i32' does not satisfy 'Shape'` (E002). The [generics lesson](/learn/generics/) goes further.
+Bounded generics such as `report<T: Shape>` are **monomorphized**: the compiler makes a separate copy for each type used, as C++ templates and Rust generics do, so there is no runtime cost. When you need a mixed collection, `dyn Shape` gives dynamic dispatch through a table of methods, as in the array above. The two arguments of `larger` must have the same type: `larger(2, "x")` fails with `cannot pass 'str' to 'i32'`, and `report(42)` fails because `'i32' does not satisfy 'Shape'` (E002). The [generics lesson](/learn/generics/) goes further.
 
 ## Enums with data and exhaustive match {#enums-and-match}
 
@@ -330,11 +330,11 @@ The same idea applies to memory: an **ownership analysis** reports use after fre
 It is worth being exact about what these checks do not do:
 
 - **No borrow checker.** Rust proves at compile time that references never outlive their data. Salam's ownership analysis catches many common mistakes but proves nothing in general, and freeing heap memory is still your job.
-- **Run-time checks are removed by `--release`.** A development build checks array and `Vector` indices at run time and stops with a panic; a release build strips those checks for speed and assumes signed arithmetic does not overflow.
+- **Runtime checks are removed by `--release`.** A development build checks array and `Vector` indices at runtime and stops with a panic; a release build strips those checks for speed and assumes signed arithmetic does not overflow.
 - **Local inference only.** Function signatures must be written out, unlike languages with whole-program inference such as Haskell or OCaml.
 - **Optionals can be unwrapped unsafely**, as described above.
 
-These are the honest limits of a young, pre-1.0 language. Within them, the compiler catches more before run time than most mainstream languages do by default. If you want to try it, the [online editor](https://editor.salamlang.ir) compiles and runs Salam in the browser, and the [install page](/install/) has the full toolchain.
+These are the honest limits of a young, pre-1.0 language. Within them, the compiler catches more before runtime than most mainstream languages do by default. If you want to try it, the [online editor](https://editor.salamlang.ir) compiles and runs Salam in the browser, and the [install page](/install/) has the full toolchain.
 
 ## Frequently asked questions {#faq}
 

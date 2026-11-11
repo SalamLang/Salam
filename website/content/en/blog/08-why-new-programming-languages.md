@@ -22,13 +22,13 @@ That is why the big shifts have come through new languages rather than through n
 
 Five languages from the last twenty years illustrate the pattern, each with a clear origin:
 
-| Language | Origin | The pain it targeted | What it gave up |
-|---|---|---|---|
-| **Go** | Google, begun 2007, public in 2009, 1.0 in 2012 | Slow C++ builds, complex large codebases, concurrency on multicore servers | Expressiveness: no generics until 1.18 (2022), a garbage collector |
-| **Rust** | Started by Graydon Hoare, sponsored by Mozilla, 1.0 in 2015 | Memory-safety bugs in C and C++ systems code | Simplicity: the ownership and borrowing model takes real effort to learn |
-| **Swift** | Apple, 2014 | Objective-C's age and unsafety for Apple platforms | Portability, at first: its ecosystem is still centered on Apple |
-| **Kotlin** | JetBrains, 1.0 in 2016, Google's preferred Android language from 2019 | Java's verbosity and null-pointer errors, without leaving the JVM | Independence from the JVM's model for most uses |
-| **Zig** | Andrew Kelley, 2016 | C's hidden control flow, preprocessor and cross-compilation pain | A stable language: it has changed significantly between releases |
+| Language   | Origin                                                                | The pain it targeted                                                       | What it gave up                                                          |
+| ---------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **Go**     | Google, begun 2007, public in 2009, 1.0 in 2012                       | Slow C++ builds, complex large codebases, concurrency on multicore servers | Expressiveness: no generics until 1.18 (2022), a garbage collector       |
+| **Rust**   | Started by Graydon Hoare, sponsored by Mozilla, 1.0 in 2015           | Memory-safety bugs in C and C++ systems code                               | Simplicity: the ownership and borrowing model takes real effort to learn |
+| **Swift**  | Apple, 2014                                                           | Objective-C's age and unsafety for Apple platforms                         | Portability, at first: its ecosystem is still centered on Apple          |
+| **Kotlin** | JetBrains, 1.0 in 2016, Google's preferred Android language from 2019 | Java's verbosity and null-pointer errors, without leaving the JVM          | Independence from the JVM's model for most uses                          |
+| **Zig**    | Andrew Kelley, 2016                                                   | C's hidden control flow, preprocessor and cross-compilation pain           | A stable language: it has changed significantly between releases         |
 
 The common thread is not novelty for its own sake. Each language picked a cost its users paid every day and designed around removing it, accepting a new cost in return. Go traded expressiveness for simplicity and fast builds. Rust traded ease of learning for safety without a garbage collector. Kotlin traded a clean start for full compatibility with Java code.
 
@@ -40,13 +40,13 @@ Salam's design reflects two costs that the languages above do not address.
 
 **The second is the English prerequisite.** Every mainstream language assumes its users read English: keywords, library names, error messages, documentation. Salam makes English optional. Every keyword, type, standard library package and compiler message has a Persian spelling, and both spellings are the same language, so a learner can start in Persian and move to English without changing languages. The article [one language, two scripts](/blog/one-language-two-scripts/) explains the mechanism.
 
-The project's README states the broader aim: to balance low-level control with developer productivity and to lower the cognitive barrier to entry. The rest of the design follows from these goals.
+The project's readme states the broader aim: to balance low-level control with developer productivity and to lower the cognitive barrier to entry. The rest of the design follows from these goals.
 
 ## Design principles that follow from the goals {#principles}
 
 **Native code, no virtual machine, no garbage collector.** If one language is to cover systems programming, servers and tools, it has to produce small native executables with predictable performance. Salam compiles ahead of time through C, LLVM or its own x86-64 backend. On the project's benchmark of 39 programs that use the same algorithm in every language, Salam averaged 10.6 ms, C 11.7 ms and Rust 11.3 ms, which puts it in the same range as C and Rust. Those numbers come with caveats: the programs are short, so start-up time counts; differences under about 5% are noise; the runs are on a CI virtual machine; and Salam was behind the fastest compiled language on 6 of the 39. The [speed page](/speed/) has every number.
 
-**A strict compiler as the safety net.** Without a garbage collector or a borrow checker, the compiler has to catch what it can. Salam rejects unused variables and functions, reassignment of immutable values, conditions that are not booleans, non-exhaustive `match` expressions and a range of out-of-bounds indexes it can prove at compile time, with error codes and fixes that `salam check --fix` can apply.
+**A strict compiler as the safety net.** Without a garbage collector or a borrow checker, the compiler has to catch what it can. Salam rejects unused variables and functions, reassignment of immutable values, conditions that are not booleans, non-exhaustive `match` expressions and a range of out-of-bounds indices it can prove at compile time, with error codes and fixes that `salam check --fix` can apply.
 
 **Batteries included.** A language that wants to replace several tools needs a large standard library from day one. Salam's includes networking, TLS, databases, compression, cryptography, images and numerical computing, and every package has a Persian name.
 

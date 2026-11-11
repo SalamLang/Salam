@@ -61,13 +61,76 @@ end
 `salam page build site.salam` writes `site.html` and `site.css`. The HTML it produced for this page is:
 
 ```html
-<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Acme Notes</title><link rel="stylesheet" href="site.css"></head><body><header class="b"><h1>Acme Notes</h1><nav><a href="/" class="c">Home</a><a href="/pricing" class="d">Pricing</a></nav></header><main class="e"><div class="f"><h3 class="g">Fast</h3><p>Opens in a blink.</p></div><div class="f"><h3 class="g">Private</h3><p>Your notes stay on your device.</p></div><div class="f"><h3 class="g">Bilingual</h3><p>Write in English or Persian.</p></div></main><footer class="h"><p>Built with Salam</p></footer></body></html>
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Notes</title>
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="b">
+      <h1>Acme Notes</h1>
+      <nav>
+        <a href="/" class="c">Home</a><a href="/pricing" class="d">Pricing</a>
+      </nav>
+    </header>
+    <main class="e">
+      <div class="f">
+        <h3 class="g">Fast</h3>
+        <p>Opens in a blink.</p>
+      </div>
+      <div class="f">
+        <h3 class="g">Private</h3>
+        <p>Your notes stay on your device.</p>
+      </div>
+      <div class="f">
+        <h3 class="g">Bilingual</h3>
+        <p>Write in English or Persian.</p>
+      </div>
+    </main>
+    <footer class="h"><p>Built with Salam</p></footer>
+  </body>
+</html>
 ```
 
-and the stylesheet:
+and the style sheet:
 
 ```css
-body{margin:0px;font-family:system-ui, sans-serif}.b{background:#0f766e;color:white;padding:24px}.c{color:white}.d{color:white;margin:0px 12px}.e{padding:24px;display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px}.f{padding:16px;border:1px solid #e2e8f0;border-radius:12px}.g{color:#0f766e}.h{padding:24px}
+body {
+  margin: 0px;
+  font-family: system-ui, sans-serif;
+}
+.b {
+  background: #0f766e;
+  color: white;
+  padding: 24px;
+}
+.c {
+  color: white;
+}
+.d {
+  color: white;
+  margin: 0px 12px;
+}
+.e {
+  padding: 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.f {
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+.g {
+  color: #0f766e;
+}
+.h {
+  padding: 24px;
+}
 ```
 
 A few things happened on the way. `box` became a `div`, `link` became an `a`, and `url` became `href`. The styles did not stay on the elements: each styled element got a short generated class, and identical styles share one, which is why the three feature cards all use `.f`. The constant `BRAND` was folded into the CSS at compile time. With `--inline` the CSS goes into the HTML file, giving one self-contained page any static host can serve. The [layout lesson](/learn/layout/) introduces all of this step by step.
@@ -95,7 +158,7 @@ E004: element 'item' cannot be placed inside 'page' (bad.salam:5:5)
 E112: unknown attribute 'colour' on 'box'; did you mean 'color'? (bad.salam:6:10)
 ```
 
-The checks go further than names. Elements are checked against where they may appear (an `item` needs a `list`, a link cannot contain a link), required attributes must be present, ids referenced by `for` must exist and must not repeat, and almost every CSS property validates its value as a length, color, time, angle or keyword, including shorthands such as `border` and `transition`. URL attributes reject `javascript:` and similar schemes. The full table of elements, with their Persian names and placement rules, is in [LAYOUT_ELEMENTS.md](https://github.com/SalamLang/Salam/blob/main/docs/LAYOUT_ELEMENTS.md).
+The checks go further than names. Elements are checked against where they may appear (an `item` needs a `list`, a link cannot contain a link), required attributes must be present, IDs referenced by `for` must exist and must not repeat, and almost every CSS property validates its value as a length, color, time, angle or keyword, including shorthands such as `border` and `transition`. URL attributes reject `javascript:` and similar schemes. The full table of elements, with their Persian names and placement rules, is in [LAYOUT_ELEMENTS.md](https://github.com/SalamLang/Salam/blob/main/docs/LAYOUT_ELEMENTS.md).
 
 ## Readable names for HTML and CSS {#names}
 
@@ -134,7 +197,7 @@ Components keep the generated CSS small, because two uses with identical styles 
 
 ## Making pages interactive {#interactive}
 
-An attribute named after a browser event, such as `click`, `input`, `submit` or `key down`, takes a Salam function or an inline lambda instead of a value. The handler is compiled through Salam's JavaScript backend into the page's script, so the behavior is written in Salam, not in hand-written JavaScript. The `dom` package gives handlers access to the page (`dom.ById`, `dom.SetText`, `dom.SetStyle` and many more), and ids written as plain text in `dom.ById("...")` are checked against the ids in the same page at compile time.
+An attribute named after a browser event, such as `click`, `input`, `submit` or `key down`, takes a Salam function or an inline lambda instead of a value. The handler is compiled through Salam's JavaScript backend into the page's script, so the behavior is written in Salam, not in hand-written JavaScript. The `dom` package gives handlers access to the page (`dom.ById`, `dom.SetText`, `dom.SetStyle` and many more), and IDs written as plain text in `dom.ById("...")` are checked against the IDs in the same page at compile time.
 
 Components can also hold state. A variable declared at the top of a component body belongs to each instance; when a handler changes it, the compiler re-renders only the instances that read it:
 
@@ -159,7 +222,7 @@ Each `Choice` counts its own votes, and clicking one redraws only that box, so f
 
 ## Pages with parameters: server-side rendering {#server-rendering}
 
-A `page:` block is fixed when you compile it. Give the page a name and typed parameters, and it becomes a function that returns the whole document as a string of HTML. The structure and the CSS are still worked out at compile time; at run time the function only fills in values, and every value is HTML-escaped:
+A `page:` block is fixed when you compile it. Give the page a name and typed parameters, and it becomes a function that returns the whole document as a string of HTML. The structure and the CSS are still worked out at compile time; at runtime the function only fills in values, and every value is HTML-escaped:
 
 ```salam
 page Profile(name: str, skills: Vector<str>, admin: bool):
@@ -188,7 +251,7 @@ end
 <!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sara | Profile</title></head><body><h1>Sara</h1><p>Administrator</p><ul><li>1. Salam</li><li>2. SQL &amp; &lt;HTML&gt;</li></ul></body></html>
 ```
 
-There is no template interpreter at run time, and no raw-HTML type to forget to escape. The layout function is `pure`: it cannot read files, call the network or change globals, so the handler gathers the data and passes it in. A value that goes into a URL or a CSS property cannot be a plain string; it must be parsed first into a `web.Url`, `web.Color` or `web.Length`, which reject unsafe input. Because the page is a function, a Salam web server can call it for each request:
+There is no template interpreter at runtime, and no raw-HTML type to forget to escape. The layout function is `pure`: it cannot read files, call the network or change globals, so the handler gathers the data and passes it in. A value that goes into a URL or a CSS property cannot be a plain string; it must be parsed first into a `web.Url`, `web.Color` or `web.Length`, which reject unsafe input. Because the page is a function, a Salam web server can call it for each request:
 
 ```salam
 import net.http
@@ -217,7 +280,7 @@ func main:
 end
 ```
 
-The server runs until it is stopped, so this one is type-checked rather than run. Opening `http://localhost:8080/?name=Ada` returns the greeting, and a visitor who sends `?name=<b>` sees the characters, not bold text. The server side is covered in [Building fast web servers with Salam](/blog/fast-web-servers-with-salam/), and [Full-stack development with Salam](/blog/full-stack-development-with-salam/) puts the two halves together.
+The server runs until it is stopped, so this one is type-checked rather than run. Opening `http://localhost:8080/?name=Ada` returns the greeting, and a visitor who sends `?name=<b>` sees the characters, not bold text. The server-side is covered in [Building fast web servers with Salam](/blog/fast-web-servers-with-salam/), and [Full-stack development with Salam](/blog/full-stack-development-with-salam/) puts the two halves together.
 
 ## Building, serving and deploying {#deploy}
 
@@ -259,7 +322,7 @@ The free course on this site teaches the page language in twenty-one lessons aft
 
 ### Is Salam's page language a template engine?
 
-No. A template engine fills text into text at run time. Salam's page language is part of the compiler: it knows HTML and CSS, checks the page while compiling, and turns a page with parameters into a pure function that only fills in escaped values.
+No. A template engine fills text into text at runtime. Salam's page language is part of the compiler: it knows HTML and CSS, checks the page while compiling, and turns a page with parameters into a pure function that only fills in escaped values.
 
 ### Do I need to know HTML and CSS to use it?
 

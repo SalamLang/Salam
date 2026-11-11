@@ -14,12 +14,12 @@ That is still a meaningful result for a young language: it places Salam with the
 
 ## The short answer {#short-answer}
 
-| Claim | Supported by the benchmark? |
-|---|---|
-| Salam compiles to code in the same performance range as C, C++, Rust and Go | Yes, on this suite |
-| Salam is much faster than Python and PHP | Yes: about 56 times faster than Python and 9.6 times faster than PHP on this suite |
-| Salam is faster than C or Rust | No. The average gap is within what start-up time and run-to-run noise can explain |
-| Salam is fast for large applications, memory-heavy work or long builds | Not measured |
+| Claim                                                                       | Supported by the benchmark?                                                        |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Salam compiles to code in the same performance range as C, C++, Rust and Go | Yes, on this suite                                                                 |
+| Salam is much faster than Python and PHP                                    | Yes: about 56 times faster than Python and 9.6 times faster than PHP on this suite |
+| Salam is faster than C or Rust                                              | No. The average gap is within what start-up time and run-to-run noise can explain  |
+| Salam is fast for large applications, memory-heavy work or long builds      | Not measured                                                                       |
 
 If you remember one sentence, make it the one the [speed page](/speed/) itself uses: between compiled languages, read the results as the same range, not as a ranking.
 
@@ -50,14 +50,14 @@ Wall-clock time of a whole process includes starting it: loading the executable,
 Here are the geometric means over the 39 same-algorithm programs, as published on the speed page:
 
 | Language | Geometric mean |
-|---|---|
-| Salam | 10.63 ms |
-| Rust | 11.29 ms |
-| C | 11.68 ms |
-| C++ | 13.06 ms |
-| Go | 14.23 ms |
-| PHP | 102 ms |
-| Python | 598 ms |
+| -------- | -------------- |
+| Salam    | 10.63 ms       |
+| Rust     | 11.29 ms       |
+| C        | 11.68 ms       |
+| C++      | 13.06 ms       |
+| Go       | 14.23 ms       |
+| PHP      | 102 ms         |
+| Python   | 598 ms         |
 
 With all 42 programs the order does not change: Salam 10.93 ms, Rust 12.00, C 12.10, C++ 13.47, Go 15.07.
 

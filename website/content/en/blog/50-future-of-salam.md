@@ -14,20 +14,20 @@ The future of Salam depends less on new features than on a few hard, slow milest
 
 Any forecast has to start from an honest baseline. These are the facts the rest of the article builds on.
 
-| Area | State today |
-|---|---|
-| Version | 0.6.3, tagged 11 November 2026; 33 tagged releases from v0.3.0 (August 2026) to v0.6.3 |
-| History | Git history from 2018; first tagged release v0.1 in November 2024 |
-| Compiler | Self-hosting since the C implementation was retired in August 2026 |
-| Backends | C, LLVM, and a native backend for x86-64, 32-bit x86, AArch64, 32-bit ARM and RISC-V |
-| Targets | Linux, macOS, Windows, WebAssembly, JavaScript, Android, iOS, freestanding |
-| Standard library | More than 170 documented packages, every public name in English and Persian |
-| Learning | A 47-lesson course in English and Persian, an online editor, an Android app |
-| Tools | LSP, formatter, test runner, debugger launcher, memory checker, 11 editor plugins |
-| Performance | Same range as C and Rust on the project's 39-program benchmark |
-| Packages | Git-based package manager with lock file and checksums; registry index still empty |
-| People | Most commits from the designer; a few dozen contributors in 2026 |
-| License | GPL-3.0 |
+| Area             | State today                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| Version          | 0.6.3, tagged 11 November 2026; 33 tagged releases from v0.3.0 (August 2026) to v0.6.3 |
+| History          | Git history from 2018; first tagged release v0.1 in November 2024                      |
+| Compiler         | Self-hosting since the C implementation was retired in August 2026                     |
+| Backends         | C, LLVM, and a native backend for x86-64, 32-bit x86, AArch64, 32-bit ARM and RISC-V   |
+| Targets          | Linux, macOS, Windows, WebAssembly, JavaScript, Android, iOS, freestanding             |
+| Standard library | More than 170 documented packages, every public name in English and Persian            |
+| Learning         | A 47-lesson course in English and Persian, an online editor, an Android app            |
+| Tools            | LSP, formatter, test runner, debugger launcher, memory checker, 11 editor plugins      |
+| Performance      | Same range as C and Rust on the project's 39-program benchmark                         |
+| Packages         | Git-based package manager with lockfile and checksums; registry index still empty      |
+| People           | Most commits from the designer; a few dozen contributors in 2026                       |
+| License          | GPL-3.0                                                                                |
 
 Two things stand out. The technical surface is far larger than the age of the project would suggest: three code generators, a built-in linker, a page language for the web, desktop and native UI work, and machine learning packages. And the social surface is far smaller: one dominant maintainer, small chat communities, and no third-party packages in the registry. The next decade is mostly about closing that second gap.
 
@@ -99,7 +99,7 @@ The repository already shows what would have to settle before such a promise. [d
 
 ## Milestone 2: a real package ecosystem {#ecosystem}
 
-Salam's standard library is its strongest asset for early adopters, and also a ceiling. A core team cannot maintain every database driver, cloud SDK and framework forever. The package manager is ready for the next stage: Git-based modules, a lock file, checksums, a reviewed sum list and a registry index that `salam search` reads. What it lacks is packages. The [ecosystem article](/blog/building-an-open-source-language-ecosystem/) describes the mechanics.
+Salam's standard library is its strongest asset for early adopters, and also a ceiling. A core team cannot maintain every database driver, cloud SDK and framework forever. The package manager is ready for the next stage: Git-based modules, a lockfile, checksums, a reviewed sum list and a registry index that `salam search` reads. What it lacks is packages. The [ecosystem article](/blog/building-an-open-source-language-ecosystem/) describes the mechanics.
 
 A realistic five-year goal, in this article's view, is a registry with a few hundred maintained packages, several of them maintained by people outside the core team, and a handful of frameworks with their own users. The bilingual naming system gives Salam packages something unusual to offer: a library written once can be called by its English names from an English program and by its Persian names from a Persian one.
 
@@ -111,7 +111,7 @@ Every successful language has a home: Go had cloud infrastructure, Ruby had web 
 
 **Local software.** Businesses that work in Persian need the Jalali calendar, Persian digits, right-to-left text and Persian-language tooling. The standard library already treats those as first-class (`calendar`, `bidi`, `arabic`, `i18n`). A generation of developers who learned in Salam and build local software in it would give the language a durable base, much as regional communities sustained other languages before they spread.
 
-That home base should not become a boundary. English Salam is the same language, the English website and course exist, and the compiler's design keeps both communities on one ecosystem. The [multilingual programming article](/blog/multilingual-programming-future/) explores whether the model could extend further.
+That home base should not become a boundary. English Salam is the same language, the English site and course exist, and the compiler's design keeps both communities on one ecosystem. The [multilingual programming article](/blog/multilingual-programming-future/) explores whether the model could extend further.
 
 ## Milestone 4: a domain where Salam is the obvious choice {#killer-apps}
 

@@ -8,7 +8,7 @@ summary: Salam can write the server, the database layer, the HTML and CSS, and t
 date: 2026-11-11
 ---
 
-Full-stack development with one language means writing the server, the data layer, the pages and the code that runs in the browser without switching languages at the boundary. Salam gets closer to that than most compiled languages: **one Salam program can serve HTTP, query a database, render typed HTML pages, and ship browser handlers that the same compiler translates to JavaScript.** It is not yet a replacement for a mature JavaScript stack on the client side, and this article is precise about where the line is.
+Full-stack development with one language means writing the server, the data layer, the pages and the code that runs in the browser without switching languages at the boundary. Salam gets closer to that than most compiled languages: **one Salam program can serve HTTP, query a database, render typed HTML pages, and ship browser handlers that the same compiler translates to JavaScript.** It is not yet a replacement for a mature JavaScript stack on the client-side, and this article is precise about where the line is.
 
 The question matters for small teams and for learners. Every language boundary in a web stack costs something: two sets of types that drift apart, validation written twice, two toolchains, two package managers, and a mental switch every time a bug crosses from the server to the page. Node.js made "JavaScript everywhere" popular for exactly that reason. Salam takes the other direction: a compiled, statically typed language that reaches up to the browser.
 
@@ -16,21 +16,21 @@ The question matters for small teams and for learners. Every language boundary i
 
 A typical web application has five layers. This is what Salam uses for each, all of it shipped with the compiler:
 
-| Layer | In Salam | Where to read more |
-|---|---|---|
-| HTTP server, routing, middleware | `net.http`, `net.router`, `net.http.middleware` | [net.http](/std/net/http/), [fast web servers](/blog/fast-web-servers-with-salam/) |
-| Data and SQL | `db` with SQLite, MySQL, PostgreSQL drivers, `db.sql` checks | [typed SQL](/blog/typed-sql-database-apps/) |
-| HTML and CSS | the page language, `page:` and `page Name(params):` | [the layout lesson](/learn/layout/) |
-| Browser behavior | event handlers in Salam, compiled to JavaScript | [UI components and state](/blog/interactive-ui-components-state-events/) |
-| Build and deploy | `salam build`, `salam page build`, `salam web`, `salam serve` | [salam serve](/learn/serve/) |
+| Layer                            | In Salam                                                      | Where to read more                                                                 |
+| -------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| HTTP server, routing, middleware | `net.http`, `net.router`, `net.http.middleware`               | [net.http](/std/net/http/), [fast web servers](/blog/fast-web-servers-with-salam/) |
+| Data and SQL                     | `db` with SQLite, MySQL, PostgreSQL drivers, `db.sql` checks  | [typed SQL](/blog/typed-sql-database-apps/)                                        |
+| HTML and CSS                     | the page language, `page:` and `page Name(params):`           | [the layout lesson](/learn/layout/)                                                |
+| Browser behavior                 | event handlers in Salam, compiled to JavaScript               | [UI components and state](/blog/interactive-ui-components-state-events/)           |
+| Build and deploy                 | `salam build`, `salam page build`, `salam web`, `salam serve` | [salam serve](/learn/serve/)                                                       |
 
-There is no web framework to choose, because the pieces above are the framework, and there is no separate front-end build: no bundler, no transpiler configuration, no `node_modules`. The compiler is one executable.
+There is no web framework to choose, because the pieces above are the framework, and there is no separate frontend build: no bundler, no transpiler configuration, no `node_modules`. The compiler is one executable.
 
 ## The backend: an HTTP server that renders typed pages {#backend}
 
 The center of a Salam web application is an ordinary program. Handlers take a context id, read the request with functions such as `http.Param`, `http.Query`, `http.Form` and `http.Body`, and answer with `http.Text`, `http.Json` or `http.Html`.
 
-The interesting part is the page. A `page` with a name and typed parameters is a runtime layout: the compiler builds the document structure and its CSS at compile time and turns the layout into a function that returns HTML with the values filled in. There is no template interpreter at run time and no template file that can drift from the code. Every value from a parameter is HTML-escaped automatically.
+The interesting part is the page. A `page` with a name and typed parameters is a runtime layout: the compiler builds the document structure and its CSS at compile time and turns the layout into a function that returns HTML with the values filled in. There is no template interpreter at runtime and no template file that can drift from the code. Every value from a parameter is HTML-escaped automatically.
 
 The program below is a complete notes application in one file. It serves the page, accepts a form post, validates it, stores the note, and offers the same data as JSON for other clients. To make it runnable here, `main` starts the server in the background on a free port and plays the client itself.
 
@@ -177,7 +177,7 @@ end
 
 `salam page build notes.salam` compiles `check` and `title problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events-dom/) ends with the same warning.
 
-Beyond single handlers there are three tools for the client side:
+Beyond single handlers there are three tools for the client-side:
 
 - **Components with state**, where handlers only change variables and the page redraws itself. The article [Interactive user interfaces in Salam](/blog/interactive-ui-components-state-events/) covers them.
 - **`salam js app.salam`** compiles a whole Salam program to JavaScript, or to a self-contained HTML page when the output ends in `.html`.
@@ -251,7 +251,7 @@ Salam's full-stack story is strongest for server-rendered applications with focu
 
 ### Can Salam replace JavaScript in the browser?
 
-For handlers, small interactive pages and components with state, yes: you write Salam and the compiler produces the JavaScript. For applications that need many third-party front-end libraries or background data fetching, not yet.
+For handlers, small interactive pages and components with state, yes: you write Salam and the compiler produces the JavaScript. For applications that need many third-party frontend libraries or background data fetching, not yet.
 
 ### Does Salam have a web framework?
 

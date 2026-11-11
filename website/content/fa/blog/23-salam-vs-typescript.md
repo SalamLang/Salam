@@ -16,16 +16,16 @@ date: 2026-11-11
 
 اگر امروز یک محصول وب معمولی می‌سازید، با تیمی که جاوااسکریپت بلد است و فهرست بلندی از بسته‌های npm که به آن‌ها وابسته است، TypeScript انتخاب امن است و سلام جایگزینش نیست. اگر سروری می‌خواهید که به یک فایل اجرایی بومی کامپایل شود، سیستم گونه‌ای که تضمین‌هایش هنگام اجرای برنامه هم پابرجا بماند، و صفحه‌هایی که بدون زنجیره‌ی ساخت جاوااسکریپت در زمان کامپایل بررسی شوند، سلام ارزش یک نگاه جدی را دارد.
 
-| | TypeScript | سلام |
-|---|---|---|
-| محل اجرا | هر موتور جاوااسکریپت (مرورگر، <bdi>Node.js</bdi>، Deno، Bun) | کد بومی روی سرور؛ HTML، CSS و JS در مرورگر |
-| گونه‌ها در زمان اجرا | پاک می‌شوند؛ فقط مقدارهای جاوااسکریپت می‌مانند | در برنامه‌ی کامپایل‌شده می‌مانند؛ ساختارها چیدمان ثابتی دارند |
-| سیستم گونه | ساختاری، تدریجی (`any`، تبدیل اجباری)، بسیار بیان‌گر | ایستا، بدون `any`؛ میانجی‌ها ساختاری‌اند و ساختارها اسمی |
-| گونه‌های جمع (Sum types) | اجتماع‌های متمایزشده، به‌صورت قرارداد | جداشمار با داده، `همخوان` بررسی‌شده |
-| سرور | <bdi>Node.js</bdi> و چارچوب‌هایی مانند Express، Fastify و NestJS | `net/http` و `net/router` در کتابخانه‌ی استاندارد |
-| صفحه‌ها | JSX/TSX با React، Vue، Svelte و دیگران | زبان صفحه‌ی داخلی، `salam page build` |
-| اکوسیستم بسته‌ها | npm، بزرگ‌ترین مخزن بسته‌ای که وجود دارد | کتابخانه‌ی استاندارد بزرگ، اکوسیستم شخص ثالث بسیار کوچک |
-| بلوغ | منتشرشده در ۲۰۱۲، رایج در سراسر صنعت | پیش از نسخه‌ی ۱٫۰، استقرار عملیاتی اندک |
+|                          | TypeScript                                                       | سلام                                                          |
+| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------- |
+| محل اجرا                 | هر موتور جاوااسکریپت (مرورگر، <bdi>Node.js</bdi>، Deno، Bun)     | کد بومی روی سرور؛ HTML، CSS و JS در مرورگر                    |
+| گونه‌ها در زمان اجرا     | پاک می‌شوند؛ فقط مقدارهای جاوااسکریپت می‌مانند                   | در برنامه‌ی کامپایل‌شده می‌مانند؛ ساختارها چیدمان ثابتی دارند |
+| سیستم گونه               | ساختاری، تدریجی (`any`، تبدیل اجباری)، بسیار بیان‌گر             | ایستا، بدون `any`؛ میانجی‌ها ساختاری‌اند و ساختارها اسمی      |
+| گونه‌های جمع (Sum types) | اجتماع‌های متمایزشده، به‌صورت قرارداد                            | جداشمار با داده، `همخوان` بررسی‌شده                           |
+| سرور                     | <bdi>Node.js</bdi> و چارچوب‌هایی مانند Express، Fastify و NestJS | `net/http` و `net/router` در کتابخانه‌ی استاندارد             |
+| صفحه‌ها                  | JSX/TSX با React، Vue، Svelte و دیگران                           | زبان صفحه‌ی داخلی، `salam page build`                         |
+| اکوسیستم بسته‌ها         | npm، بزرگ‌ترین مخزن بسته‌ای که وجود دارد                         | کتابخانه‌ی استاندارد بزرگ، اکوسیستم شخص ثالث بسیار کوچک       |
+| بلوغ                     | منتشرشده در ۲۰۱۲، رایج در سراسر صنعت                             | پیش از نسخه‌ی ۱٫۰، استقرار عملیاتی اندک                       |
 
 ## دو برداشت از اینکه گونه چیست {#type-systems}
 
@@ -35,17 +35,17 @@ date: 2026-11-11
 
 ```typescript
 type OrderEvent =
-  | { kind: "placed"; id: number; total: number }
-  | { kind: "shipped"; id: number; carrier: string }
-  | { kind: "cancelled"; id: number; reason: string };
+  | { kind: 'placed'; id: number; total: number }
+  | { kind: 'shipped'; id: number; carrier: string }
+  | { kind: 'cancelled'; id: number; reason: string };
 
 function describe(e: OrderEvent): string {
   switch (e.kind) {
-    case "placed":
+    case 'placed':
       return `order ${e.id} placed, total ${e.total}`;
-    case "shipped":
+    case 'shipped':
       return `order ${e.id} shipped with ${e.carrier}`;
-    case "cancelled":
+    case 'cancelled':
       return `order ${e.id} cancelled: ${e.reason}`;
     default: {
       const unreachable: never = e;
@@ -55,9 +55,9 @@ function describe(e: OrderEvent): string {
 }
 
 const events: OrderEvent[] = [
-  { kind: "placed", id: 17, total: 42.5 },
-  { kind: "shipped", id: 17, carrier: "DHL" },
-  { kind: "cancelled", id: 18, reason: "out of stock" },
+  { kind: 'placed', id: 17, total: 42.5 },
+  { kind: 'shipped', id: 17, carrier: 'DHL' },
+  { kind: 'cancelled', id: 18, reason: 'out of stock' },
 ];
 
 for (const e of events) console.log(describe(e));
@@ -162,7 +162,7 @@ console.log(s.age + 1); // NaN, and no error anywhere
 یک سرور TypeScript روی یک محیط اجرای جاوااسکریپت کار می‌کند. <bdi>Node.js</bdi> پیش‌فرض است، Deno و Bun فایل‌های TypeScript را مستقیم اجرا می‌کنند، و نسخه‌های اخیر <bdi>Node.js</bdi> می‌توانند حاشیه‌نویسی‌های گونه را حذف کنند و فایل‌های `.ts` را بدون گام ساخت جداگانه اجرا کنند. موتور، کد داغ را با یک کامپایلر درجا (JIT) کامپایل می‌کند و حافظه را با زباله‌روب (Garbage Collector) مدیریت می‌کند، و یک حلقه‌ی رویداد با ورودی و خروجی ناهمگام به اتصال‌های زیادی رسیدگی می‌کند. این یک نقطه‌ی پایانی کوچک JSON با Express 5 است:
 
 ```typescript
-import express from "express";
+import express from 'express';
 
 interface Product {
   id: number;
@@ -172,8 +172,12 @@ interface Product {
 
 const app = express();
 
-app.get("/products/:id", (req, res) => {
-  const p: Product = { id: Number(req.params.id), name: "Notebook", price: 4.5 };
+app.get('/products/:id', (req, res) => {
+  const p: Product = {
+    id: Number(req.params.id),
+    name: 'Notebook',
+    price: 4.5,
+  };
   res.json(p);
 });
 

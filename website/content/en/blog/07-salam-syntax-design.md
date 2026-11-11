@@ -219,13 +219,13 @@ Go:
 
 ```go
 func sumEven(numbers []int) int {
-	total := 0
-	for _, n := range numbers {
-		if n%2 == 0 {
-			total += n
-		}
-	}
-	return total
+    total := 0
+    for _, n := range numbers {
+        if n%2 == 0 {
+            total += n
+        }
+    }
+    return total
 }
 ```
 
@@ -277,16 +277,16 @@ end
 12
 ```
 
-| Feature | Python | Go | Ruby | Lua | Salam |
-|---|---|---|---|---|---|
-| Block delimiters | colon + indentation | braces | `end` (various openers) | `end` (`do`, `then`) | colon + `end` |
-| Declaration | assignment | `:=` or `var` | assignment | `local` | `:=` |
-| Immutable by default | no | no | no | no | yes, `mut` to change |
-| Static types | optional hints | yes | no | no | yes, inferred |
-| Loop forms | `for`, `while` | `for` only | `each`, `while`, `until` | `for`, `while`, `repeat` | `each`, `repeat`, `until` |
-| Logical operators | `and or not` | `&& \|\| !` | both | `and or not` | `and or not` |
-| Pattern matching | `match` (3.10+) | no | `case/in` | no | `match`, exhaustive |
-| Compiled to native code | no | yes | no | no | yes |
+| Feature                 | Python              | Go            | Ruby                     | Lua                      | Salam                     |
+| ----------------------- | ------------------- | ------------- | ------------------------ | ------------------------ | ------------------------- |
+| Block delimiters        | colon + indentation | braces        | `end` (various openers)  | `end` (`do`, `then`)     | colon + `end`             |
+| Declaration             | assignment          | `:=` or `var` | assignment               | `local`                  | `:=`                      |
+| Immutable by default    | no                  | no            | no                       | no                       | yes, `mut` to change      |
+| Static types            | optional hints      | yes           | no                       | no                       | yes, inferred             |
+| Loop forms              | `for`, `while`      | `for` only    | `each`, `while`, `until` | `for`, `while`, `repeat` | `each`, `repeat`, `until` |
+| Logical operators       | `and or not`        | `&& \|\| !`   | both                     | `and or not`             | `and or not`              |
+| Pattern matching        | `match` (3.10+)     | no            | `case/in`                | no                       | `match`, exhaustive       |
+| Compiled to native code | no                  | yes           | no                       | no                       | yes                       |
 
 The Salam version reads closest to Python and Lua, keeps Go's `:=` and static types, and adds an explicit `end` and explicit mutability. It is longer than the Ruby version, which leans on blocks and an implicit return; Salam prefers explicit `ret`.
 

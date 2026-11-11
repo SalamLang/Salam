@@ -175,9 +175,9 @@ The first query is typed with Arabic letters and still matches. The third is a d
 The compiler does not care how a line looks, but the person reading it does. There are two approaches to displaying Persian code:
 
 1. **Right-aligned, right-to-left paragraphs.** The whole editor runs right to left, and each line is a right-to-left paragraph. Persian keywords read naturally; embedded English names and numbers are laid out left to right inside the line by the bidi algorithm. This is what the [Salam online editor](https://editor.salamlang.ir) does when its language is set to Persian: the page, the code area and the highlighting layer all switch to `dir="rtl"`. The code blocks on this site do the same for Salam code that contains Persian.
-2. **Left-aligned lines with bidi inside each line.** Many desktop code editors, VS Code among them, keep every line left-aligned and apply the bidi algorithm within it. Persian code is readable this way, but lines that start with a Latin identifier or a symbol can look scrambled.
+2. **Left-aligned lines with bidi inside each line.** Many desktop code editors, Visual Studio Code among them, keep every line left-aligned and apply the bidi algorithm within it. Persian code is readable this way, but lines that start with a Latin identifier or a symbol can look scrambled.
 
-The Salam plugins for VS Code and ten other editors highlight both the English and the Persian keyword sets, which are generated from the compiler's own tables; see the [tools page](/tools/). How the text is laid out is up to each editor.
+The Salam plugins for Visual Studio Code and ten other editors highlight both the English and the Persian keyword sets, which are generated from the compiler's own tables; see the [tools page](/tools/). How the text is laid out is up to each editor.
 
 ## What is not solved yet {#limits}
 

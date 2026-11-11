@@ -8,11 +8,11 @@ summary: Salam can turn the same checked program into C, into LLVM IR or straigh
 date: 2026-11-11
 ---
 
-A **compiler backend** is the part of a compiler that turns a checked program into something a machine can run. Salam has three backends for native executables: a **C backend** that writes C and hands it to a C compiler, an **LLVM backend** that writes LLVM IR and lets LLVM optimize it, and a **native backend** that writes x86-64, ARM and RISC-V machine code itself and links it with a linker built into the compiler. All three sit behind the same front end, so a program means the same thing whichever one you pick. This article shows what each produces, why each exists, and when to use which.
+A **compiler backend** is the part of a compiler that turns a checked program into something a machine can run. Salam has three backends for native executables: a **C backend** that writes C and hands it to a C compiler, an **LLVM backend** that writes LLVM IR and lets LLVM optimize it, and a **native backend** that writes x86-64, ARM and RISC-V machine code itself and links it with a linker built into the compiler. All three sit behind the same frontend, so a program means the same thing whichever one you pick. This article shows what each produces, why each exists, and when to use which.
 
 ## What a compiler backend does {#what-is-a-backend}
 
-The front end of a compiler (lexer, parser, semantic analysis) answers "is this program valid, and what does it mean?" The backend answers "what instructions should the processor run?" That second question has three hard parts: **lowering** high-level constructs (a `match` on an enum, a string concatenation, a generic call) into simple operations, **optimizing** those operations, and **emitting** them in a format the operating system can load, which also means following each platform's calling conventions and object file format.
+The frontend of a compiler (lexer, parser, semantic analysis) answers "is this program valid, and what does it mean?" The backend answers "what instructions should the processor run?" That second question has three hard parts: **lowering** high-level constructs (a `match` on an enum, a string concatenation, a generic call) into simple operations, **optimizing** those operations, and **emitting** them in a format the operating system can load, which also means following each platform's calling conventions and object file format.
 
 Every language project has to decide how much of that to build itself. Some reuse a whole existing compiler by generating C. Many reuse LLVM. A few write everything. Salam does all three, and the [compiler pipeline article](/blog/how-the-salam-compiler-works/) shows where they plug in. Here is the program we will push through each one:
 
@@ -38,12 +38,12 @@ end
 
 You choose with `--backend=c`, `--backend=llvm` or `--backend=native`. Without the option, the driver (`use_llvm_backend` in `compiler/driver/driver_proc.salam`) picks:
 
-| Situation | Default backend |
-|---|---|
-| The `salam` binary has LLVM built in (the main release builds for Linux, macOS and Windows) | LLVM |
-| The `salam` binary has no LLVM (a compiler built from source without it, or the static musl release) | C |
-| Windows on Arm, where neither LLVM nor tcc ships | Native |
-| `--cc=PATH` given | C, since naming a C compiler can only mean that |
+| Situation                                                                                            | Default backend                                 |
+| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| The `salam` binary has LLVM built-in (the main release builds for Linux, macOS and Windows)          | LLVM                                            |
+| The `salam` binary has no LLVM (a compiler built from source without it, or the static musl release) | C                                               |
+| Windows on Arm, where neither LLVM nor tcc ships                                                     | Native                                          |
+| `--cc=PATH` given                                                                                    | C, since naming a C compiler can only mean that |
 
 If the LLVM backend meets a construct it cannot lower, the build does not fail: the driver prints `salam: falling back to the C backend for this file (build with --backend=llvm to make this an error)` and builds through C instead. Passing `--backend=llvm` explicitly turns that safety net into a hard error, which is what you want in CI.
 
@@ -138,25 +138,25 @@ Generating machine code is not enough; something has to combine the object files
 
 Here is the effect on file size, for a hello-world program built on x86-64 Linux by a compiler from the main branch in November 2026:
 
-| Build | Linking | Size |
-|---|---|---|
-| `--backend=native` | built-in linker, glibc PIE | 11,488 bytes |
-| `--backend=native --target=x86_64-linux-musl` | built-in linker, fully static | 24,944 bytes |
-| `--backend=llvm` | lld, glibc | 17,536 bytes |
-| `--backend=c` with clang | system linker, glibc | 363,384 bytes |
+| Build                                         | Linking                       | Size          |
+| --------------------------------------------- | ----------------------------- | ------------- |
+| `--backend=native`                            | built-in linker, glibc PIE    | 11,488 bytes  |
+| `--backend=native --target=x86_64-linux-musl` | built-in linker, fully static | 24,944 bytes  |
+| `--backend=llvm`                              | lld, glibc                    | 17,536 bytes  |
+| `--backend=c` with clang                      | system linker, glibc          | 363,384 bytes |
 
 The C build is larger because it links whole precompiled standard library modules as separate objects, data included, while the LLVM and native paths compile one program and drop what it never references. The native build's log reports the link itself: `built-in link: 5 objects, 15 live sections, 28 symbols`.
 
 ## C vs LLVM vs native: a comparison {#comparison}
 
-| | C backend | LLVM backend | Native backend |
-|---|---|---|---|
-| Needs outside tools | a C compiler | none in release builds | none beyond the C runtime files |
-| Optimizer | the C compiler's (tcc: none) | LLVM `-O2`/`-O3` | Salam's own |
-| Targets | wherever a C compiler runs | the `--target` triples Salam supports, plus WebAssembly and freestanding | x86-64, i686, AArch64, armhf, RISC-V 64 on Linux; x86-64, i686, AArch64 on Windows; x86-64, arm64 on macOS |
-| Read the output | `--emit-c` | `salam llvm` | `--emit-asm` |
-| Special abilities | `--asan`, `memcheck`, `--protect`, choice of C compiler | cross-compiling, wasm, bare metal | `--cpu` levels, built-in linker, `--icf` |
-| Main cost | depends on an external toolchain | large compiler binary | newest backend, library code still behind LLVM |
+|                     | C backend                                               | LLVM backend                                                             | Native backend                                                                                             |
+| ------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Needs outside tools | a C compiler                                            | none in release builds                                                   | none beyond the C runtime files                                                                            |
+| Optimizer           | the C compiler's (tcc: none)                            | LLVM `-O2`/`-O3`                                                         | Salam's own                                                                                                |
+| Targets             | wherever a C compiler runs                              | the `--target` triples Salam supports, plus WebAssembly and freestanding | x86-64, i686, AArch64, armhf, RISC-V 64 on Linux; x86-64, i686, AArch64 on Windows; x86-64, arm64 on macOS |
+| Read the output     | `--emit-c`                                              | `salam llvm`                                                             | `--emit-asm`                                                                                               |
+| Special abilities   | `--asan`, `memcheck`, `--protect`, choice of C compiler | cross-compiling, Wasm, bare metal                                        | `--cpu` levels, built-in linker, `--icf`                                                                   |
+| Main cost           | depends on an external toolchain                        | large compiler binary                                                    | newest backend, library code still behind LLVM                                                             |
 
 On the project's [speed page](/speed/), Salam was measured with its LLVM backend at `-O3`: 10.6 ms on average over 39 programs, against 11.7 ms for C and 11.3 ms for Rust, which is the same range rather than a ranking. The same page notes that a plain C-backend build with tcc and no optimizer averaged 11.0 ms on those programs, because most of them finish in a few milliseconds and process start-up is a large share of each time. Backend choice matters most for long-running, compute-heavy code, and much less for short command-line tools.
 

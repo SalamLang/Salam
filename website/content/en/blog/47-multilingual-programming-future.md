@@ -8,7 +8,7 @@ summary: Salam compiles English and Persian source with one front end, one stand
 date: 2026-11-11
 ---
 
-Multilingual programming means writing code whose keywords, library names and compiler messages are in a human language other than English, while still compiling to the same programs as everyone else. Salam is one working example: **every Salam keyword, built-in type, standard library name and diagnostic has an English and a Persian spelling, and both compile through the same front end to the same executable.** The interesting question for the future is whether that model generalizes. Could the same compiler gain an Arabic, Turkish or Hindi spelling? This article explains how Salam's bilingual design (introduced in [One language, two scripts](/blog/one-language-two-scripts/)) actually works in the compiler, then works through what a third language would require. Everything about a third language here is analysis; no third language pack exists or is planned in the repository.
+Multilingual programming means writing code whose keywords, library names and compiler messages are in a human language other than English, while still compiling to the same programs as everyone else. Salam is one working example: **every Salam keyword, built-in type, standard library name and diagnostic has an English and a Persian spelling, and both compile through the same frontend to the same executable.** The interesting question for the future is whether that model generalizes. Could the same compiler gain an Arabic, Turkish or Hindi spelling? This article explains how Salam's bilingual design (introduced in [One language, two scripts](/blog/one-language-two-scripts/)) actually works in the compiler, then works through what a third language would require. Everything about a third language here is analysis; no third language pack exists or is planned in the repository.
 
 ## Localized programming languages before Salam {#history}
 
@@ -110,15 +110,15 @@ Packages cross the language line more smoothly. Because every public name carrie
 
 Suppose someone wanted Salam in Arabic, Turkish or Hindi. Reading the current code, the work falls into seven parts:
 
-| Part | Size of the job | Notes |
-|---|---|---|
-| Keyword table | 60 spellings | Including context rules where one word covers two keywords |
-| Built-in functions and methods | a few dozen names | `len`, `push`, `free` and similar, in one compiler table |
-| Standard library names | over 21,000 annotations | The dominant cost; needs a naming standard first |
-| Diagnostics | over 1,300 messages | Plus native digits in error codes |
-| Lexer script rules | small but subtle | Digits, punctuation, string quotes, letter variants |
-| Editors and grammars | 11 editor plugins, tree-sitter | Generated from the compiler's tables, which helps |
-| Course and documentation | 47 lessons, every std page | Persian has both; a new pack would start from zero |
+| Part                           | Size of the job                | Notes                                                      |
+| ------------------------------ | ------------------------------ | ---------------------------------------------------------- |
+| Keyword table                  | 60 spellings                   | Including context rules where one word covers two keywords |
+| Built-in functions and methods | a few dozen names              | `len`, `push`, `free` and similar, in one compiler table   |
+| Standard library names         | over 21,000 annotations        | The dominant cost; needs a naming standard first           |
+| Diagnostics                    | over 1,300 messages            | Plus native digits in error codes                          |
+| Lexer script rules             | small but subtle               | Digits, punctuation, string quotes, letter variants        |
+| Editors and grammars           | 11 editor plugins, tree-sitter | Generated from the compiler's tables, which helps          |
+| Course and documentation       | 47 lessons, every std page     | Persian has both; a new pack would start from zero         |
 
 There is also an engineering step before any of that. The pack mechanism is table-driven, but the current code is written for exactly two packs: the compiler checks `LP_EN` and `LP_FA` by name, and the annotations are `@en` and `@fa`. A third language would first need the compiler generalized from "English plus Persian" to "English plus N", which is a contained refactor, not a redesign.
 

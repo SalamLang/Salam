@@ -8,11 +8,11 @@ summary: A practical guide to memory in Salam: what is copied, what is shared, w
 date: 2026-11-11
 ---
 
-**Memory management is how a program obtains memory for its data and gives it back when the data is no longer needed.** Salam has no garbage collector, so this is partly the programmer's job, but it is a much smaller job than in C. Plain values live on the stack and need no care at all. Heap collections such as `Vector` and `HashMap` are freed with `.free()`, usually through `defer`, and the compiler inserts that call itself for local collections that never leave their scope. On top of that, an ownership checker finds use-after-free and double-free mistakes at compile time, and `salam memcheck` finds leaks at run time. This article walks through each piece with programs and the compiler's real output.
+**Memory management is how a program obtains memory for its data and gives it back when the data is no longer needed.** Salam has no garbage collector, so this is partly the programmer's job, but it is a much smaller job than in C. Plain values live on the stack and need no care at all. Heap collections such as `Vector` and `HashMap` are freed with `.free()`, usually through `defer`, and the compiler inserts that call itself for local collections that never leave their scope. On top of that, an ownership checker finds use-after-free and double-free mistakes at compile time, and `salam memcheck` finds leaks at runtime. This article walks through each piece with programs and the compiler's real output.
 
 ## The model in one paragraph {#overview}
 
-Numbers, booleans, characters, structs and fixed-size arrays are **values**: assigning one copies it, passing one to a function copies it (unless the parameter is a reference), and it vanishes when its scope ends. `Vector`, `HashMap`, `Set` and the other [collections](/std/collections/), `dyn` boxes, strings built at run time and blocks from `mem.Allocate` live on the **heap**: the variable holds a small header that points at heap storage, and that storage stays until someone frees it. The rule for the heap is "whoever creates it frees it, or hands it to someone who will". Everything else in this article is tooling around that rule. The [memory lesson](/learn/memory/) teaches the same model step by step.
+Numbers, booleans, characters, structs and fixed-size arrays are **values**: assigning one copies it, passing one to a function copies it (unless the parameter is a reference), and it vanishes when its scope ends. `Vector`, `HashMap`, `Set` and the other [collections](/std/collections/), `dyn` boxes, strings built at runtime and blocks from `mem.Allocate` live on the **heap**: the variable holds a small header that points at heap storage, and that storage stays until someone frees it. The rule for the heap is "whoever creates it frees it, or hands it to someone who will". Everything else in this article is tooling around that rule. The [memory lesson](/learn/memory/) teaches the same model step by step.
 
 ## Stack values: structs and arrays are copied {#stack-values}
 
@@ -99,7 +99,7 @@ Notice `free words`. `line.split(" ")` returns a `Vector<str>` whose strings are
 
 ## Finding leaks with salam memcheck {#memcheck}
 
-`salam memcheck app.salam` builds the program with debug information and runs it under Valgrind when it is installed, or with AddressSanitizer otherwise, and reports leaks and invalid accesses with Salam file names and line numbers. Here is its report for an earlier version of `count words`, saved as `d1.salam`, that used a plain `defer words.free()` and so never freed the word strings (two inner stack frames removed):
+`salam memcheck app.salam` builds the program with debug information and runs it under Valgrind when it is installed, or with AddressSanitizer otherwise, and reports leaks and invalid accesses with Salam filenames and line numbers. Here is its report for an earlier version of `count words`, saved as `d1.salam`, that used a plain `defer words.free()` and so never freed the word strings (two inner stack frames removed):
 
 ```text
 ==47772== 14 bytes in 3 blocks are definitely lost in loss record 4 of 4
@@ -150,7 +150,7 @@ This is not a garbage collector, and not C++ or Rust-style destructors for every
 
 ## Who frees a string {#strings}
 
-A string literal such as `"hello"` is part of the program and is never freed. A string built at run time lives on the heap. The standard library follows one rule, and your code should too: **a function that returns a `str` returns a new string that the caller owns**, on every path. The caller frees it with `mem.Free(s as void*)` when done:
+A string literal such as `"hello"` is part of the program and is never freed. A string built at runtime lives on the heap. The standard library follows one rule, and your code should too: **a function that returns a `str` returns a new string that the caller owns**, on every path. The caller frees it with `mem.Free(s as void*)` when done:
 
 ```salam
 import mem
@@ -249,20 +249,20 @@ error[E139]: 'b' is used after its storage was freed on line 5
   = help: a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy
 ```
 
-The codes cover the main cases: **E139** use after free, **E140** double free, **E141** a returned value that the function's own `defer` frees; **W142** and **W143** when only some paths do it; **W144** a copy, `.ref()` pointer or iterator kept across a call that may move the buffer; **W163** an owned container used after it was handed to another name. `--ownership=warn` is the default, `error` turns the warnings into errors, and `off` disables the checks along with the automatic frees. None of this costs anything at run time; the analysis only reads the program.
+The codes cover the main cases: **E139** use after free, **E140** double free, **E141** a returned value that the function's own `defer` frees; **W142** and **W143** when only some paths do it; **W144** a copy, `.ref()` pointer or iterator kept across a call that may move the buffer; **W163** an owned container used after it was handed to another name. `--ownership=warn` is the default, `error` turns the warnings into errors, and `off` disables the checks along with the automatic frees. None of this costs anything at runtime; the analysis only reads the program.
 
 It is important to be precise about what this is. It is **not a borrow checker**. Rust's borrow checker proves that safe code cannot have use-after-free or data races, and rejects programs it cannot prove. Salam's checker reports the mistakes it can see and stays quiet otherwise. Globals, indirect calls through function values and `dyn`, and the elements inside containers are outside its view, as `docs/design/OWNERSHIP.md` lists. It catches a lot, with no annotations and no new syntax, but it is a strong safety net, not a proof.
 
 ## How Salam compares {#comparison}
 
-| Language | How heap memory is freed | Compile-time safety |
-|---|---|---|
-| C | `free` by hand | None built in |
-| C++ | Destructors (RAII), smart pointers | Partial, mostly by convention |
-| Rust | Ownership and `Drop` | Borrow checker proves memory safety in safe code |
-| Zig | Explicit allocators and `defer` | Little; safety checks at run time in debug builds |
-| Go | Garbage collector | Memory safe by design |
-| Salam | `free` with `defer`, plus compiler-inserted drops for simple locals | Ownership and range analyses report common errors; not a proof |
+| Language | How heap memory is freed                                            | Compile-time safety                                            |
+| -------- | ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| C        | `free` by hand                                                      | None built-in                                                  |
+| C++      | Destructors (RAII), smart pointers                                  | Partial, mostly by convention                                  |
+| Rust     | Ownership and `Drop`                                                | Borrow checker proves memory safety in safe code               |
+| Zig      | Explicit allocators and `defer`                                     | Little; safety checks at runtime in debug builds               |
+| Go       | Garbage collector                                                   | Memory safe by design                                          |
+| Salam    | `free` with `defer`, plus compiler-inserted drops for simple locals | Ownership and range analyses report common errors; not a proof |
 
 Salam's place is between Zig and Rust: closer to Zig's explicit `defer` style, with compile-time analyses that take some of Rust's ideas (ownership, inferred function behavior) without its annotations or its guarantees. The article on [native compilation without a garbage collector](/blog/native-compilation-without-vm-or-gc/) explains what that design buys in speed and footprint, and the [static typing article](/blog/static-typing-in-salam/) covers the range checks that work alongside the ownership checker.
 
@@ -270,7 +270,7 @@ Salam's place is between Zig and Rust: closer to Zig's explicit `defer` style, w
 
 ### Does Salam have manual memory management?
 
-Partly. Values on the stack need nothing. Heap collections and run-time strings are freed with `.free()` or `mem.Free`, usually through `defer`, except for simple local collections and strings that the compiler frees automatically. There is no garbage collector in compiled programs.
+Partly. Values on the stack need nothing. Heap collections and runtime strings are freed with `.free()` or `mem.Free`, usually through `defer`, except for simple local collections and strings that the compiler frees automatically. There is no garbage collector in compiled programs.
 
 ### What does defer do in Salam?
 

@@ -70,7 +70,7 @@ INV-7 99 true
 
 ## Files, processes and the operating system {#system}
 
-For system programming the library has [os](/std/os/) and [fs](/std/fs/) for files, directories and environment variables, [fs.path](/std/fs/path/) for paths, [os.process](/std/os/process/) for running programs with pipes and time limits, [os.pty](/std/os/pty/) for driving interactive programs on a pseudo terminal, [os.dl](/std/os/dl/) for loading shared libraries at run time, and [os.mmap](/std/os/mmap/) for memory pages with permissions.
+For system programming the library has [os](/std/os/) and [fs](/std/fs/) for files, directories and environment variables, [fs.path](/std/fs/path/) for paths, [os.process](/std/os/process/) for running programs with pipes and time limits, [os.pty](/std/os/pty/) for driving interactive programs on a pseudo terminal, [os.dl](/std/os/dl/) for loading shared libraries at runtime, and [os.mmap](/std/os/mmap/) for memory pages with permissions.
 
 Command-line tools get [flag](/std/flag/) for options, [cli](/std/cli/) for programs with subcommands such as `git commit`, [term](/std/term/) for colors, cursor movement, progress bars and key input, [log](/std/log/) for leveled and structured logs, [config](/std/config/) and [env](/std/env/) for settings, and [testing](/std/testing/) for assertions. Time is covered by [time](/std/time/) and [cron](/std/cron/), which schedules jobs from cron expressions.
 
@@ -86,7 +86,7 @@ Databases have drivers for [SQLite](/std/db/sqlite/), [MySQL and MariaDB](/std/d
 
 ## Security, cryptography and compression {#security}
 
-[crypto](/std/crypto/) has SHA-1, SHA-2 and MD5 digests, HMAC, secure random numbers and password hashing. [jwt](/std/jwt/) signs and verifies tokens and guards API routes. [tls](/std/tls/) implements TLS 1.3 and 1.2 with no OpenSSL dependency, and [ssl](/std/ssl/) puts a familiar OpenSSL-style interface on top of it. On the data side, [compress](/std/compress/) has DEFLATE, gzip, bzip2, zstd and checksums, and [archive](/std/archive/) creates and extracts zip, tar and compressed tar files and reads RAR archives, including password-protected and multi-volume ones.
+[crypto](/std/crypto/) has SHA-1, SHA-2 and MD5 digests, HMAC, secure random numbers and password hashing. [jwt](/std/jwt/) signs and verifies tokens and guards API routes. [tls](/std/tls/) implements TLS 1.3 and 1.2 with no OpenSSL dependency, and [ssl](/std/ssl/) puts a familiar OpenSSL-style interface on top of it. On the data side, [compress](/std/compress/) has DEFLATE, gzip, bzip2, zstd and checksums, and [archive](/std/archive/) creates and extracts ZIP, tar and compressed tar files and reads RAR archives, including password-protected and multi-volume ones.
 
 ```salam
 import crypto

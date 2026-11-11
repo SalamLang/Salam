@@ -61,13 +61,76 @@ date: 2026-11-11
 فرمان `salam page build site.salam` دو پرونده‌ی `site.html` و `site.css` را می‌نویسد. HTML ساخته‌شده برای این صفحه این است:
 
 ```html
-<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>یادداشت‌یار</title><link rel="stylesheet" href="site.css"></head><body><header class="b"><h1>یادداشت‌یار</h1><nav><a href="/" class="c">خانه</a><a href="/pricing" class="d">تعرفه‌ها</a></nav></header><main class="e"><div class="f"><h3 class="g">سریع</h3><p>در یک چشم به هم زدن باز می‌شود.</p></div><div class="f"><h3 class="g">خصوصی</h3><p>یادداشت‌هایتان روی دستگاه خودتان می‌ماند.</p></div><div class="f"><h3 class="g">دوزبانه</h3><p>به فارسی یا انگلیسی بنویسید.</p></div></main><footer class="h"><p>ساخته‌شده با سلام</p></footer></body></html>
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>یادداشت‌یار</title>
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="b">
+      <h1>یادداشت‌یار</h1>
+      <nav>
+        <a href="/" class="c">خانه</a><a href="/pricing" class="d">تعرفه‌ها</a>
+      </nav>
+    </header>
+    <main class="e">
+      <div class="f">
+        <h3 class="g">سریع</h3>
+        <p>در یک چشم به هم زدن باز می‌شود.</p>
+      </div>
+      <div class="f">
+        <h3 class="g">خصوصی</h3>
+        <p>یادداشت‌هایتان روی دستگاه خودتان می‌ماند.</p>
+      </div>
+      <div class="f">
+        <h3 class="g">دوزبانه</h3>
+        <p>به فارسی یا انگلیسی بنویسید.</p>
+      </div>
+    </main>
+    <footer class="h"><p>ساخته‌شده با سلام</p></footer>
+  </body>
+</html>
 ```
 
 و برگه‌ی سبک:
 
 ```css
-body{margin:0px;font-family:Vazirmatn, system-ui, sans-serif}.b{background:#0f766e;color:white;padding:24px}.c{color:white}.d{color:white;margin:0px 12px}.e{padding:24px;display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px}.f{padding:16px;border:1px solid #e2e8f0;border-radius:12px}.g{color:#0f766e}.h{padding:24px}
+body {
+  margin: 0px;
+  font-family: Vazirmatn, system-ui, sans-serif;
+}
+.b {
+  background: #0f766e;
+  color: white;
+  padding: 24px;
+}
+.c {
+  color: white;
+}
+.d {
+  color: white;
+  margin: 0px 12px;
+}
+.e {
+  padding: 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.f {
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+.g {
+  color: #0f766e;
+}
+.h {
+  padding: 24px;
+}
 ```
 
 در این مسیر چند اتفاق افتاده است. `جعبه` به `div` تبدیل شد، `پیوند` به `a` و `نشانی` به `href`. مقدار فارسی `"سفید"` در CSS به `white` رسید. صفحه چون در پرونده‌ی فارسی نوشته شده، خودش `lang="fa"` و `dir="rtl"` گرفت. سبک‌ها روی خود عنصرها نماندند: هر عنصر سبک‌دار یک کلاس کوتاه ساختگی گرفت و سبک‌های یکسان یک کلاس مشترک دارند؛ برای همین هر سه کارت ویژگی از `.f` استفاده می‌کنند. ثابت `برند` هم در زمان کامپایل درون CSS نشست. با گزینه‌ی `--inline` کل CSS درون پرونده‌ی HTML می‌رود و یک صفحه‌ی خودبسنده به دست می‌آید که هر میزبان ایستایی می‌تواند آن را ارائه کند. [درس زبان صفحه](/learn/layout/) همه‌ی این‌ها را گام به گام آموزش می‌دهد.

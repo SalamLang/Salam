@@ -14,17 +14,17 @@ On the project's own HTTP router benchmark Salam's server answered more requests
 
 ## Salam vs Go at a glance {#at-a-glance}
 
-| | Go | Salam |
-|---|---|---|
-| Concurrency | Goroutines (M:N scheduling by the runtime), channels, `select` | OS threads (`spawn`), a bounded task pool (`go f(x)`), channels, `chan.Select`, futures |
-| Blocking I/O | Parks the goroutine; the runtime multiplexes sockets | Blocks the thread; the HTTP server uses an event loop with a worker pool on Linux |
-| Memory | Garbage collected | Manual: `.free()` and `defer`, with compile-time ownership checks |
-| Errors | `error` values, `if err != nil` | `throws`, `try`, `catch`, or result enums |
-| Generics | Since Go 1.18 | Yes, with interface bounds |
-| Sum types | No (interfaces and type switches) | Enums with data and exhaustive `match` |
-| HTTP | `net/http` in the standard library, frameworks such as Gin, Echo and Fiber | `net/http` and `net/router` in the standard library |
-| Cross-compiling | `GOOS` and `GOARCH` | `--target` with a built-in linker and bundled sysroots |
-| Maturity | 1.0 in 2012, compatibility promise, huge ecosystem | Pre-1.0, small ecosystem |
+|                 | Go                                                                         | Salam                                                                                   |
+| --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Concurrency     | Goroutines (M:N scheduling by the runtime), channels, `select`             | OS threads (`spawn`), a bounded task pool (`go f(x)`), channels, `chan.Select`, futures |
+| Blocking I/O    | Parks the goroutine; the runtime multiplexes sockets                       | Blocks the thread; the HTTP server uses an event loop with a worker pool on Linux       |
+| Memory          | Garbage collected                                                          | Manual: `.free()` and `defer`, with compile-time ownership checks                       |
+| Errors          | `error` values, `if err != nil`                                            | `throws`, `try`, `catch`, or result enums                                               |
+| Generics        | Since Go 1.18                                                              | Yes, with interface bounds                                                              |
+| Sum types       | No (interfaces and type switches)                                          | Enums with data and exhaustive `match`                                                  |
+| HTTP            | `net/http` in the standard library, frameworks such as Gin, Echo and Fiber | `net/http` and `net/router` in the standard library                                     |
+| Cross-compiling | `GOOS` and `GOARCH`                                                        | `--target` with a built-in linker and bundled sysroots                                  |
+| Maturity        | 1.0 in 2012, compatibility promise, huge ecosystem                         | Pre-1.0, small ecosystem                                                                |
 
 ## Concurrency: goroutines against threads, pools and channels {#concurrency}
 
@@ -34,34 +34,34 @@ Here is a classic worker pool in Go: three goroutines read numbers from a channe
 package main
 
 import (
-	"fmt"
-	"sync"
+    "fmt"
+    "sync"
 )
 
 func main() {
-	jobs := make(chan int64, 4)
-	results := make(chan int64, 16)
-	var wg sync.WaitGroup
-	for range 3 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for n := range jobs {
-				results <- n * n
-			}
-		}()
-	}
-	for i := int64(1); i <= 10; i++ {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-	var sum int64
-	for v := range results {
-		sum += v
-	}
-	fmt.Println("sum of squares:", sum)
+    jobs := make(chan int64, 4)
+    results := make(chan int64, 16)
+    var wg sync.WaitGroup
+    for range 3 {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for n := range jobs {
+                results <- n * n
+            }
+        }()
+    }
+    for i := int64(1); i <= 10; i++ {
+        jobs <- i
+    }
+    close(jobs)
+    wg.Wait()
+    close(results)
+    var sum int64
+    for v := range results {
+        sum += v
+    }
+    fmt.Println("sum of squares:", sum)
 }
 ```
 
@@ -170,40 +170,40 @@ The Go equivalent uses `sync.WaitGroup` with its `Go` method (added in Go 1.25) 
 package main
 
 import (
-	"fmt"
-	"sync"
-	"sync/atomic"
+    "fmt"
+    "sync"
+    "sync/atomic"
 )
 
 func isPrime(n int64) bool {
-	if n < 2 {
-		return false
-	}
-	for d := int64(2); d*d <= n; d++ {
-		if n%d == 0 {
-			return false
-		}
-	}
-	return true
+    if n < 2 {
+        return false
+    }
+    for d := int64(2); d*d <= n; d++ {
+        if n%d == 0 {
+            return false
+        }
+    }
+    return true
 }
 
 func main() {
-	var found atomic.Int64
-	var wg sync.WaitGroup
-	for i := range int64(8) {
-		lo := i * 25000
-		wg.Go(func() {
-			var n int64
-			for x := lo; x < lo+25000; x++ {
-				if isPrime(x) {
-					n++
-				}
-			}
-			found.Add(n)
-		})
-	}
-	wg.Wait()
-	fmt.Println("primes below 200000:", found.Load())
+    var found atomic.Int64
+    var wg sync.WaitGroup
+    for i := range int64(8) {
+        lo := i * 25000
+        wg.Go(func() {
+            var n int64
+            for x := lo; x < lo+25000; x++ {
+                if isPrime(x) {
+                    n++
+                }
+            }
+            found.Add(n)
+        })
+    }
+    wg.Wait()
+    fmt.Println("primes below 200000:", found.Load())
 }
 ```
 
@@ -223,17 +223,17 @@ Both languages put an HTTP server in the standard library. In Go, with the path 
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
+    "fmt"
+    "log"
+    "net/http"
 )
 
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /hello/{name}", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, %s!\n", r.PathValue("name"))
-	})
-	log.Fatal(http.ListenAndServe(":8080", mux))
+    mux := http.NewServeMux()
+    mux.HandleFunc("GET /hello/{name}", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintf(w, "Hello, %s!\n", r.PathValue("name"))
+    })
+    log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
 
@@ -262,15 +262,15 @@ Both answer `curl localhost:8080/hello/Sara` with `Hello, Sara!` and return 404 
 
 The project published a benchmark of nine servers answering the same eleven routes (plain text, JSON, a cached response, a file, a path parameter, query parsing, a computation, headers, a static file, the root page and a POST echo). In the run of 28 October 2026, the geometric mean over all eleven routes was:
 
-| Server | Requests per second |
-|---|---|
-| Salam `net/http` | 94,850 |
-| Go, Fiber | 62,493 |
-| Go, Echo | 35,238 |
-| Go, Gin | 34,999 |
-| Go, `net/http` | 34,987 |
-| Node, Express | 22,536 |
-| PHP built-in server | 11,992 |
+| Server              | Requests per second |
+| ------------------- | ------------------- |
+| Salam `net/http`    | 94,850              |
+| Go, Fiber           | 62,493              |
+| Go, Echo            | 35,238              |
+| Go, Gin             | 34,999              |
+| Go, `net/http`      | 34,987              |
+| Node, Express       | 22,536              |
+| PHP built-in server | 11,992              |
 
 Salam answered more requests per second than Fiber on all 11 routes, and was 2.7 times Go's own `net/http`. The widest gap was query parsing with list building (`/search`, 99,143 against Fiber's 48,247); the thinnest was `/`, where Salam was 4% ahead.
 

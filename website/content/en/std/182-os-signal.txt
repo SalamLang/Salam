@@ -1,0 +1,122 @@
+pkg.en = os/signal
+pkg.name = os.signal
+pkg.group = System and tools
+pkg.summary = Waiting for operating system signals: stopping cleanly on Ctrl+C or SIGTERM, noticing terminal resizes, and controlling which thread receives a signal.
+pkg.title = The os.signal package in Salam | Ctrl+C, SIGTERM and terminal resizes
+pkg.description = The os.signal package in Salam: catching Ctrl+C and SIGTERM for a clean shutdown, waiting for SIGWINCH when the terminal is resized, signal sets and per-thread masks, with examples.
+pkg.import = os.signal
+group.Wait.title = Wait statuses
+group.Wait = What <code>Wait</code> and <code>WaitTimeout</code> return, and the negative values <code>WaitSignal</code> and <code>WaitWinch</code> return when no signal arrived. <code>WaitArrived</code> is 1, <code>WaitTimedOut</code> is 0, and the failures are negative: <code>WaitInvalid</code> (a bad argument, a missing <code>Install</code> before a timed wait, or Windows), <code>WaitFailed</code> (the system call failed) and <code>WaitBusy</code> (another thread is already waiting).
+pkg.intro <<
+<p>A signal is a short message the operating system sends to a process: Ctrl+C sends SIGINT, <code>kill</code> and container runtimes send SIGTERM, and a terminal sends SIGWINCH when its window changes size. By default most signals end the program on the spot, in the middle of whatever it was writing. The <code>os.signal</code> package lets a program take the signals it cares about as ordinary events and react to them at a safe point in its own code.</p>
+<p>The model is the same for every use: <strong>block</strong> the signals, then <strong>wait</strong> for them. A blocked signal is not delivered; it waits in a queue until a thread asks for it with <code>WaitSignal</code>, <code>Wait</code> or <code>WaitTimeout</code>. Blocking is per thread, and a new thread copies the mask of the thread that started it, so block in <code>main</code> before you start any thread. Then no worker is interrupted, and the one thread that waits receives the signal.</p>
+<p>Sets, masks and snapshots are memory blocks the package allocates for you; free each one with <code>mem.Free</code> when you are done. The package grew out of the terminal library <a href="/std/tui/">tui</a>, which uses it to redraw when the window is resized.</p>
+<div class="note"><p>Signals exist on Linux, Android, macOS and the BSDs. On Windows every function is a safe stub: <code>WinchSupported</code> is false, sets are null and waits return <code>WaitInvalid</code>, so the same program compiles everywhere and can fall back to polling.</p></div>
+<h2 id="guide-shutdown">Stop cleanly on Ctrl+C or SIGTERM</h2>
+<p>Put SIGINT and SIGTERM in a set, block it, do the work, then wait. <code>WaitSignal</code> returns the number of the signal that arrived, so the program can save its state and exit on its own terms. The example sends itself SIGTERM with <code>Raise</code> so it finishes by itself; in a real program the signal comes from the keyboard or from <code>kill</code>.</p>
+{{example.os-signal-guide-shutdown}}
+
+<h2 id="guide-threads">Workers keep running, one thread waits</h2>
+<p>Block first, then start the threads: they inherit the mask, so a signal never lands in the middle of a worker. <code>main</code> waits for the signal and then tells the workers to stop through an atomic flag (see <a href="/std/atomic/">atomic</a>), and joins them.</p>
+{{example.os-signal-guide-threads}}
+
+<h2 id="guide-resize">Notice a terminal resize</h2>
+<p>SIGWINCH is ignored by default, and on macOS an ignored signal is thrown away even when it is blocked. <code>InstallWinchHandler</code> therefore installs a handler that does nothing, and blocks the signal, so resizes queue up. <code>WaitTimeout</code> waits with a limit, which lets a loop check other things between resizes. Hand the value it returned back to <code>Restore</code> at the end. A signal only says that the size <em>may</em> have changed, and several resizes can arrive as one, so read the new size with <code>term.Size()</code> after every wake-up.</p>
+{{example.os-signal-guide-resize}}
+<div class="table-wrap"><table>
+<thead><tr><th>Need</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Wait for Ctrl+C or SIGTERM</td><td><code>NewSet</code>, <code>AddSignal</code>, <code>Block</code>, <code>WaitSignal</code></td></tr>
+<tr><td>Wait with a time limit</td><td><code>Install</code>, then <code>WaitTimeout</code></td></tr>
+<tr><td>React to terminal resizes</td><td><code>InstallWinchHandler</code>, <code>NewWinchSet</code>, <code>WaitWinch</code> or <code>WaitTimeout</code></td></tr>
+<tr><td>Wake a waiting thread</td><td><code>Raise</code>, or <code>WakeWinch</code> for SIGWINCH</td></tr>
+<tr><td>Save and put back a thread's mask</td><td><code>CurrentMask</code>, <code>SetMask</code></td></tr>
+<tr><td>Send a signal to another program</td><td><code>Child.Signal</code> in <a href="/std/os/process/">os.process</a></td></tr>
+<tr><td>A full-screen terminal program</td><td><a href="/std/tui/">tui</a>, which does all of this for you</td></tr>
+</tbody>
+</table></div>
+<p>What to keep in mind:</p>
+<ul>
+<li>SIGKILL and SIGSTOP can never be blocked, waited for or handled.</li>
+<li>Only one thread in the process may wait at a time; a second waiter gets <code>WaitBusy</code> instead of half the signals.</li>
+<li>Signals of one kind do not stack up: two SIGWINCH sent while one is already pending arrive as one.</li>
+<li>A handler passed to <code>Install</code> runs on whatever thread receives the signal and may only do async-signal-safe work. Blocking and waiting, as above, avoids handlers entirely.</li>
+</ul>
+>>
+
+doc.WinchSignal = The SIGWINCH number (28), the signal a terminal sends when its window changes size.
+doc.SigHup = SIGHUP (1): the terminal was closed, or a daemon is asked to reload its settings.
+doc.SigInt = SIGINT (2): the user pressed Ctrl+C.
+doc.SigQuit = SIGQUIT (3): the user pressed Ctrl+\.
+doc.SigKill = SIGKILL (9): ends the process at once. It cannot be blocked, waited for or handled.
+doc.SigPipe = SIGPIPE (13): a write to a pipe or socket whose reader has gone.
+doc.SigAlrm = SIGALRM (14): a timer set with alarm expired.
+doc.SigTerm = SIGTERM (15): the polite request to stop, sent by <code>kill</code>, service managers and container runtimes.
+doc.SigWinch = SIGWINCH (28): the terminal window changed size. The same value as <code>WinchSignal</code>.
+doc.SigUsr1 = SIGUSR1: free for the program's own use. 10 on Linux and Android, 30 on macOS and the BSDs.
+doc.SigUsr2 = SIGUSR2: free for the program's own use. 12 on Linux and Android, 31 on macOS and the BSDs.
+doc.SigChld = SIGCHLD: a child process stopped or ended. 17 on Linux, 20 on macOS and the BSDs.
+doc.SigCont = SIGCONT: a stopped process continues. 18 on Linux, 19 on macOS and the BSDs.
+doc.SigStop = SIGSTOP: stops the process. Like SIGKILL it cannot be blocked or handled. 19 on Linux, 17 on macOS and the BSDs.
+doc.SigTstp = SIGTSTP: the user pressed Ctrl+Z. 20 on Linux, 18 on macOS and the BSDs.
+doc.SignalSetSize = The size in bytes of one signal set on this system: 128 on Linux, 8 on 64-bit Android, 4 on macOS, 16 on FreeBSD and NetBSD, 0 on Windows.
+doc.WinchSupported = True when the process can receive SIGWINCH, which is every system except Windows. On Windows, poll <code>term.Size()</code> instead.
+doc.NewWinchSet = Returns a new signal set that holds only SIGWINCH. Free it with <code>mem.Free</code>. Null on Windows or when memory runs out.
+doc.InstallWinchHandler = Gives SIGWINCH a handler that does nothing and blocks it on the calling thread, so resizes queue up for a wait. Returns the previous state: pass it to <code>Restore</code> when you are done, then free it with <code>mem.Free</code>. Null on Windows or when it fails, and then nothing was changed.
+doc.Install = Installs handler for sig (null means the default action) and blocks sig on the calling thread. Returns a snapshot of the previous handler and mask: pass it to <code>Restore</code> and then free it with <code>mem.Free</code>. Installing the same handler again only counts one more owner; a different handler for a signal that is already owned is refused with null. The handler runs on whatever thread receives the signal and may only do async-signal-safe work: no allocation, no locks, no printing.
+doc.Restore = Gives back the state an <code>Install</code> snapshot recorded, on the thread that installed it. While other owners remain, only the owner count drops and the signal stays blocked for them; the last owner puts back the original handler and mask. Restoring again afterwards does nothing and returns true. It does not free the snapshot.
+doc.BlockWinch = Blocks SIGWINCH on the calling thread so resizes wait in the queue. Threads started afterwards inherit the mask, which lets one watcher thread own the wait. False on Windows or on failure.
+doc.Wait = Waits until a signal in set is pending, writes its number as an <code>i32</code> at <code>out[0]</code> and returns <code>WaitArrived</code>. Block the signals first so they queue instead of being delivered. Returns <code>WaitInvalid</code> for a null argument and on Windows, <code>WaitBusy</code> when another thread is already waiting, and <code>WaitFailed</code> when the wait itself failed. Only one thread may wait at a time.
+doc.WaitTimeout = Like <code>Wait</code>, but gives up after millis milliseconds and returns <code>WaitTimedOut</code>; 0 checks once without waiting and a negative value is <code>WaitInvalid</code>. The signal must have been installed with <code>Install</code> first. On macOS the set must hold exactly one signal; Linux takes any set.
+doc.WaitWinch = Waits for SIGWINCH on a set from <code>NewWinchSet</code> and returns 28 when it arrives, or a negative <code>Wait</code> status. Returns 0 only on Windows, where there is no SIGWINCH.
+doc.WakeWinch = Sends SIGWINCH to this process, which wakes a thread waiting in <code>WaitWinch</code>; useful to stop a watcher thread. False on Windows or when sending failed.
+doc.NewSet = Returns a new, empty signal set. Free it with <code>mem.Free</code>. Null on Windows or when memory runs out.
+doc.FillSet = Adds every signal the system knows to set. Does nothing for a null set or on Windows.
+doc.AddSignal = Adds sig to set. False when set is null, sig is not positive, or the system rejects the number.
+doc.DelSignal = Removes sig from set. False when set is null, sig is not positive, or the system rejects the number.
+doc.IsSignal = True when sig is in set. False for a null set, a non-positive number, and on Windows.
+doc.Block = Adds the signals in set to the calling thread's mask, so they wait in the queue instead of interrupting the thread. Do it before starting other threads so they inherit it. False for a null set, on Windows, or on failure.
+doc.Unblock = Removes the signals in set from the calling thread's mask. A pending signal is delivered right away. False for a null set, on Windows, or on failure.
+doc.SetMask = Replaces the calling thread's whole mask with set, for example to put back a mask saved with <code>CurrentMask</code>. False for a null set, on Windows, or on failure.
+doc.CurrentMask = Returns a new set holding the calling thread's current mask. Free it with <code>mem.Free</code>. Null on Windows or on failure.
+doc.WaitSignal = Waits until a signal in set is pending and returns its number, or a negative <code>Wait</code> status when the wait could not run. Block the signals first. This is the simplest way to wait for Ctrl+C or SIGTERM.
+doc.Raise = Sends sig to this process. When the signal is blocked it only waits in the queue for a <code>Wait</code>. False for a non-positive number, on Windows, or when sending failed.
+
+ex.WinchSignal = os-signal-Winch
+ex.SigHup = os-signal-Wait
+ex.SigInt = os-signal-Wait
+ex.SigQuit = os-signal-Wait
+ex.SigKill = os-signal-Wait
+ex.SigPipe = os-signal-Wait
+ex.SigAlrm = os-signal-Wait
+ex.SigTerm = os-signal-Wait
+ex.SigWinch = os-signal-Winch
+ex.SigUsr1 = os-signal-Wait
+ex.SigUsr2 = os-signal-Wait
+ex.SigChld = os-signal-Wait
+ex.SigCont = os-signal-Wait
+ex.SigStop = os-signal-Wait
+ex.SigTstp = os-signal-Wait
+ex.SignalSetSize = os-signal-Sets
+ex.WinchSupported = os-signal-Winch
+ex.NewWinchSet = os-signal-Winch
+ex.InstallWinchHandler = os-signal-Winch
+ex.Install = os-signal-Wait
+ex.Restore = os-signal-Wait
+ex.BlockWinch = os-signal-Winch
+ex.Wait = os-signal-Wait
+ex.WaitTimeout = os-signal-Wait
+ex.WaitWinch = os-signal-Winch
+ex.WakeWinch = os-signal-Winch
+ex.NewSet = os-signal-Sets
+ex.FillSet = os-signal-Sets
+ex.AddSignal = os-signal-Sets
+ex.DelSignal = os-signal-Sets
+ex.IsSignal = os-signal-Sets
+ex.Block = os-signal-Sets
+ex.Unblock = os-signal-Sets
+ex.SetMask = os-signal-Sets
+ex.CurrentMask = os-signal-Sets
+ex.WaitSignal = os-signal-Wait
+ex.Raise = os-signal-Wait
+ex.group.Wait = os-signal-Wait

@@ -10,22 +10,22 @@ date: 2026-11-11
 
 Salam vs TypeScript is a comparison between two answers to the same wish: write the server and the browser code in one language. **TypeScript is a typed layer over JavaScript; its types are checked by the compiler and then erased, and the program runs on a JavaScript engine such as Node.js, Deno, Bun or a browser. Salam is a statically typed language that compiles to native code for the server and generates HTML, CSS and JavaScript for the browser.** Both are "full stack languages", but they get there from opposite ends.
 
-This article compares them on the things that matter for web work: what the type system promises, what happens when JSON arrives from outside, how the server side runs, how pages are built, and what each ecosystem gives you. The code on both sides solves the same small tasks, and every Salam example is compiled and run when this site is built.
+This article compares them on the things that matter for web work: what the type system promises, what happens when JSON arrives from outside, how the server-side runs, how pages are built, and what each ecosystem gives you. The code on both sides solves the same small tasks, and every Salam example is compiled and run when this site is built.
 
 ## The short answer {#short-answer}
 
 If you are building a typical web product today, with a team that knows JavaScript and a long list of npm packages it depends on, TypeScript is the safe choice and Salam is not a replacement for it. If you want a server that compiles to a single native executable, a type system whose guarantees still hold while the program runs, and pages that are checked at compile time without a JavaScript build chain, Salam is worth a serious look.
 
-| | TypeScript | Salam |
-|---|---|---|
-| Runs on | Any JavaScript engine (browser, Node.js, Deno, Bun) | Native code on the server; HTML, CSS and JS in the browser |
-| Types at run time | Erased; JavaScript values only | Kept in the compiled program; structs have a fixed layout |
-| Type system | Structural, gradual (`any`, casts), very expressive | Static, no `any`; interfaces are structural, structs are nominal |
-| Sum types | Discriminated unions by convention | Enums with data, checked `match` |
-| Server | Node.js and frameworks such as Express, Fastify, NestJS | `net/http` and `net/router` in the standard library |
-| Pages | JSX/TSX with React, Vue, Svelte and others | The built-in page language, `salam page build` |
-| Package ecosystem | npm, the largest package registry there is | Large standard library, very small third-party ecosystem |
-| Maturity | Released in 2012, used across the industry | Pre-1.0, few production deployments |
+|                   | TypeScript                                              | Salam                                                            |
+| ----------------- | ------------------------------------------------------- | ---------------------------------------------------------------- |
+| Runs on           | Any JavaScript engine (browser, Node.js, Deno, Bun)     | Native code on the server; HTML, CSS and JS in the browser       |
+| Types at runtime  | Erased; JavaScript values only                          | Kept in the compiled program; structs have a fixed layout        |
+| Type system       | Structural, gradual (`any`, casts), very expressive     | Static, no `any`; interfaces are structural, structs are nominal |
+| Sum types         | Discriminated unions by convention                      | Enums with data, checked `match`                                 |
+| Server            | Node.js and frameworks such as Express, Fastify, NestJS | `net/http` and `net/router` in the standard library              |
+| Pages             | JSX/TSX with React, Vue, Svelte and others              | The built-in page language, `salam page build`                   |
+| Package ecosystem | npm, the largest package registry there is              | Large standard library, very small third-party ecosystem         |
+| Maturity          | Released in 2012, used across the industry              | Pre-1.0, few production deployments                              |
 
 ## Two ideas of what a type is {#type-systems}
 
@@ -35,17 +35,17 @@ Salam's types are the program's types. A `struct` has a fixed set of fields and 
 
 ```typescript
 type OrderEvent =
-  | { kind: "placed"; id: number; total: number }
-  | { kind: "shipped"; id: number; carrier: string }
-  | { kind: "cancelled"; id: number; reason: string };
+  | { kind: 'placed'; id: number; total: number }
+  | { kind: 'shipped'; id: number; carrier: string }
+  | { kind: 'cancelled'; id: number; reason: string };
 
 function describe(e: OrderEvent): string {
   switch (e.kind) {
-    case "placed":
+    case 'placed':
       return `order ${e.id} placed, total ${e.total}`;
-    case "shipped":
+    case 'shipped':
       return `order ${e.id} shipped with ${e.carrier}`;
-    case "cancelled":
+    case 'cancelled':
       return `order ${e.id} cancelled: ${e.reason}`;
     default: {
       const unreachable: never = e;
@@ -55,9 +55,9 @@ function describe(e: OrderEvent): string {
 }
 
 const events: OrderEvent[] = [
-  { kind: "placed", id: 17, total: 42.5 },
-  { kind: "shipped", id: 17, carrier: "DHL" },
-  { kind: "cancelled", id: 18, reason: "out of stock" },
+  { kind: 'placed', id: 17, total: 42.5 },
+  { kind: 'shipped', id: 17, carrier: 'DHL' },
+  { kind: 'cancelled', id: 18, reason: 'out of stock' },
 ];
 
 for (const e of events) console.log(describe(e));
@@ -155,12 +155,12 @@ rejected: json: value does not match the expected type (line 1, column 38)
 
 The decoder is derived from the struct declaration, so there is one description of the shape, not two. `UnmarshalLenient` exists for input where missing keys should keep their defaults, and `json.Schema` derives a JSON Schema from the same struct. The [encoding/json reference](/std/encoding/json/) lists the options.
 
-## The server side: Node.js or a native binary {#server}
+## The server-side: Node.js or a native binary {#server}
 
 A TypeScript server runs on a JavaScript runtime. Node.js is the default, Deno and Bun run TypeScript files directly, and recent Node.js versions can strip type annotations and run `.ts` files without a separate build step. The engine compiles hot code with a JIT and manages memory with a garbage collector, and one event loop handles many connections through asynchronous I/O. Here is a small JSON endpoint with Express 5:
 
 ```typescript
-import express from "express";
+import express from 'express';
 
 interface Product {
   id: number;
@@ -170,8 +170,12 @@ interface Product {
 
 const app = express();
 
-app.get("/products/:id", (req, res) => {
-  const p: Product = { id: Number(req.params.id), name: "Notebook", price: 4.5 };
+app.get('/products/:id', (req, res) => {
+  const p: Product = {
+    id: Number(req.params.id),
+    name: 'Notebook',
+    price: 4.5,
+  };
   res.json(p);
 });
 
@@ -208,13 +212,13 @@ end
 
 The program runs until it is stopped, so it is type-checked here rather than run. Built with `salam build`, it becomes one native executable. There is no runtime to install on the server, no `node_modules` folder to ship and no JIT warm-up.
 
-How much faster is it? The project's [HTTP router benchmark](/speed/) ran nine servers on the same eleven routes, interleaved, on one machine. Salam's `net.http` reached a geometric mean of 94,850 requests per second, and Node 24 with Express 5 reached 22,536, which the page rounds to 4.2 times. Read that with its caveats: the machine was a shared 6-vCPU sandbox with unrelated load, Express is a convenient framework rather than Node's fastest option, and the page itself asks you to rerun the harness on your own hardware before planning capacity with it. The article [Building fast web servers with Salam](/blog/fast-web-servers-with-salam/) goes through the server side in detail.
+How much faster is it? The project's [HTTP router benchmark](/speed/) ran nine servers on the same eleven routes, interleaved, on one machine. Salam's `net.http` reached a geometric mean of 94,850 requests per second, and Node 24 with Express 5 reached 22,536, which the page rounds to 4.2 times. Read that with its caveats: the machine was a shared 6-vCPU sandbox with unrelated load, Express is a convenient framework rather than Node's fastest option, and the page itself asks you to rerun the harness on your own hardware before planning capacity with it. The article [Building fast web servers with Salam](/blog/fast-web-servers-with-salam/) goes through the server-side in detail.
 
 What Node has that Salam does not is the async model and its libraries. Salam has no `async`/`await`; a Salam server handles concurrency with a pool of worker threads, and your own code uses threads, a task pool and channels (see [Concurrency in Salam](/blog/concurrency-in-salam/)). If your service is mostly waiting on other services, Node's model is a good fit and its client libraries for every cloud API are hard to beat.
 
 ## The browser side: pages and JavaScript {#browser}
 
-On the front end TypeScript is the default language of most frameworks. You write components in TSX, a bundler such as Vite turns them into JavaScript, and React, Vue, Svelte or Angular takes care of rendering and state. The ecosystem around them, from component libraries to testing tools, is enormous.
+On the frontend TypeScript is the default language of most frameworks. You write components in TSX, a bundler such as Vite turns them into JavaScript, and React, Vue, Svelte or Angular takes care of rendering and state. The ecosystem around them, from component libraries to testing tools, is enormous.
 
 Salam's approach is different. It has a [page language](/learn/layout/) built into the compiler: you describe the page as a tree of elements, and `salam page build` turns it into HTML, CSS and, when there are event handlers, JavaScript. Every element, attribute and CSS value is checked at compile time. A layout with parameters becomes an ordinary function that returns HTML, with every value escaped, so the same page can be rendered by a Salam server for each request:
 
@@ -271,25 +275,25 @@ The other side of that coin is the ecosystem. npm has packages for almost every 
 
 **Choose TypeScript when:**
 
-- the project depends on npm packages, a front-end framework or a cloud SDK;
+- the project depends on npm packages, a frontend framework or a cloud SDK;
 - the team already knows JavaScript, and hiring matters;
-- you are adding types to an existing JavaScript code base, which is exactly what TypeScript was designed for;
-- the front end is a large, highly interactive application.
+- you are adding types to an existing JavaScript codebase, which is exactly what TypeScript was designed for;
+- the frontend is a large, highly interactive application.
 
 **Choose Salam when:**
 
 - you want the server to be a single native executable with predictable memory and no runtime to deploy;
-- you want types that also describe the data at run time, with decoders derived from them;
+- you want types that also describe the data at runtime, with decoders derived from them;
 - your pages are content, forms and dashboards that benefit from compile-time checking of every element and style, without a JavaScript build chain;
 - you want to write both the server and the pages in Persian or English with one toolchain.
 
-It is also reasonable to mix them: a Salam API server behind a TypeScript front end, or a TypeScript service next to a Salam worker that does CPU-heavy work. They talk JSON over HTTP like any two services.
+It is also reasonable to mix them: a Salam API server behind a TypeScript frontend, or a TypeScript service next to a Salam worker that does CPU-heavy work. They talk JSON over HTTP like any two services.
 
 ## Frequently asked questions {#faq}
 
-### Can Salam replace TypeScript for front-end development?
+### Can Salam replace TypeScript for frontend development?
 
-Not for large framework-based applications. Salam's page language builds checked HTML, CSS and JavaScript and supports components with state and events, but it has nothing like the React or Vue ecosystems. For content pages, forms and dashboards it can replace a hand-written front end.
+Not for large framework-based applications. Salam's page language builds checked HTML, CSS and JavaScript and supports components with state and events, but it has nothing like the React or Vue ecosystems. For content pages, forms and dashboards it can replace a hand-written frontend.
 
 ### Is a Salam server faster than a Node.js server?
 

@@ -8,7 +8,7 @@ summary: A language is only as useful as the code around it. This is how Salam's
 date: 2026-11-11
 ---
 
-An open source ecosystem is everything around a language that lets people reuse each other's work: a package manager, a place to find packages, a way to trust what you download, documentation, editor support, and a community that keeps all of it alive. For a new programming language, building that ecosystem is harder than building the compiler. This article looks at how Salam approaches it: a large standard library first, then a Git-based package manager with lock files and checksums, a registry, and tooling that makes packages usable in both English and Persian. It is also plain about the current state, which is early.
+An open source ecosystem is everything around a language that lets people reuse each other's work: a package manager, a place to find packages, a way to trust what you download, documentation, editor support, and a community that keeps all of it alive. For a new programming language, building that ecosystem is harder than building the compiler. This article looks at how Salam approaches it: a large standard library first, then a Git-based package manager with lockfiles and checksums, a registry, and tooling that makes packages usable in both English and Persian. It is also plain about the current state, which is early.
 
 ## What a language ecosystem is made of {#definition}
 
@@ -33,7 +33,7 @@ The project made this choice explicit in October 2026, when a separate `packages
 
 For C libraries, the [FFI](/blog/salam-c-interop-ffi/) is the third escape hatch: an `extern` block can call any C function, and a package manifest can describe how to find or build the C library it wraps.
 
-## The package manager: salam.toml, salam add and the lock file {#package-manager}
+## The package manager: salam.toml, salam add and the lockfile {#package-manager}
 
 Third-party code lives in ordinary Git repositories. A project is a folder with `main.salam` and a `salam.toml` manifest, and `salam new` or `salam init` creates both. Adding a dependency is one command:
 
@@ -67,7 +67,7 @@ Two details make this practical for a small community. Packages can be fetched f
 
 A package manager is a supply-chain tool, and the dangerous failure is silently installing different code than the author published. Salam answers this in three layers.
 
-1. **Lock file sums.** Every entry in `salam.lock` has a SHA-256 sum over all files of the package (except `.git`), so a Git checkout and a tarball download produce the same sum. `salam deps` re-checks it.
+1. **Lockfile sums.** Every entry in `salam.lock` has a SHA-256 sum over all files of the package (except `.git`), so a Git checkout and a tarball download produce the same sum. `salam deps` re-checks it.
 2. **A machine-local record.** The first time a machine downloads a version, its sum is kept in `~/.salam/pkg/sums.txt`. If a later download of the same version differs, for example because someone moved a tag after release, the command stops.
 3. **A published list.** Sums are also checked against `registry/sums.txt` in the Salam repository, a reviewed list of `module@version sum` lines. A download that disagrees with a published line is refused. `salam deps sums` prints the lines for a pull request.
 
@@ -134,12 +134,12 @@ The same toolchain helps with evolution. A function marked `deprecated` keeps wo
 
 Libraries are only half of what newcomers look for. The other half is "can I learn this, and will my editor understand it?" The Salam repository puts a lot of weight here:
 
-- **Documentation built from tested code.** The library reference has a page per package, and its examples are compiled when the website builds. This magazine works the same way: every Salam program in these articles is compiled, and the ones with output are run and compared.
+- **Documentation built from tested code.** The library reference has a page per package, and its examples are compiled when the site builds. This magazine works the same way: every Salam program in these articles is compiled, and the ones with output are run and compared.
 - **A free course** of 47 lessons in English and Persian, from the first program to web servers, in the [learn section](/learn/).
 - **`salam doc`** generates an API page for your own project, and **`salam test`** runs the `test_` functions in `*_test.salam` files, so package authors get documentation and testing without extra tools.
-- **Editors.** The repository has plugins or syntax files for eleven editors, among them VS Code, Vim, Emacs, Sublime Text, Kate and the JetBrains IDEs, a tree-sitter grammar, and a language server built into the compiler (`salam lsp`). The [developer tools article](/blog/salam-developer-tools/) covers them.
+- **Editors.** The repository has plugins or syntax files for eleven editors, among them Visual Studio Code, Vim, Emacs, Sublime Text, Kate and the JetBrains IDEs, a tree-sitter grammar, and a language server built into the compiler (`salam lsp`). The [developer tools article](/blog/salam-developer-tools/) covers them.
 
-One licensing decision belongs here. The repository is GPL-3.0, but the VS Code extension directory, including the TextMate grammar, is MIT. The README explains why: highlighting is only useful if other projects can embed the grammar, and some, GitHub Linguist among them, accept only permissive licenses for grammars. It is a small example of thinking about the ecosystem rather than only the compiler.
+One licensing decision belongs here. The repository is GPL-3.0, but the Visual Studio Code extension directory, including the TextMate grammar, is MIT. The readme explains why: highlighting is only useful if other projects can embed the grammar, and some, GitHub Linguist among them, accept only permissive licenses for grammars. It is a small example of thinking about the ecosystem rather than only the compiler.
 
 ## Contributors and how work gets in {#contributors}
 

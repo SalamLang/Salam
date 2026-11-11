@@ -14,17 +14,17 @@ date: 2026-11-11
 
 ## مقایسه‌ی سلام و Go در یک نگاه {#at-a-glance}
 
-| | Go | سلام |
-|---|---|---|
-| هم‌زمانی | گوروتین‌ها (زمان‌بندی M:N در محیط اجرا)، کانال‌ها، `select` | نخ‌های سیستم‌عامل (`نخ‌ساز`)، استخر کار محدود (`برو f(x)`)، کانال‌ها، `chan.Select`، Futureها |
-| ورودی و خروجی مسدودکننده | گوروتین را کنار می‌گذارد؛ محیط اجرا سوکت‌ها را چندگانه‌سازی می‌کند | نخ را مسدود می‌کند؛ سرور HTTP روی لینوکس از یک حلقه‌ی رویداد با استخر کارگرها استفاده می‌کند |
-| حافظه | با زباله‌روب | دستی: `.آزادکن()` و `دیرکن`، همراه با بررسی مالکیت در زمان کامپایل |
-| خطاها | مقدارهای `error`، `if err != nil` | `خطادار`، `تلاش`، `گرفتن خطا`، یا جداشمارهای نتیجه |
-| برنامه‌نویسی عام | از Go 1.18 | بله، با قید میانجی |
-| گونه‌های جمع | ندارد (میانجی‌ها و type switch) | جداشمار با داده و `همخوان` جامع |
-| HTTP | `net/http` در کتابخانه‌ی استاندارد، چارچوب‌هایی مانند Gin، Echo و Fiber | `net/http` و `net/router` در کتابخانه‌ی استاندارد |
-| کامپایل متقابل | `GOOS` و `GOARCH` | `--target` با پیونددهنده‌ی درونی و sysrootهای همراه |
-| پختگی | نسخه‌ی ۱٫۰ در ۲۰۱۲، تعهد سازگاری، اکوسیستم عظیم | پیش از ۱٫۰، اکوسیستم کوچک |
+|                          | Go                                                                      | سلام                                                                                          |
+| ------------------------ | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| هم‌زمانی                 | گوروتین‌ها (زمان‌بندی M:N در محیط اجرا)، کانال‌ها، `select`             | نخ‌های سیستم‌عامل (`نخ‌ساز`)، استخر کار محدود (`برو f(x)`)، کانال‌ها، `chan.Select`، Futureها |
+| ورودی و خروجی مسدودکننده | گوروتین را کنار می‌گذارد؛ محیط اجرا سوکت‌ها را چندگانه‌سازی می‌کند      | نخ را مسدود می‌کند؛ سرور HTTP روی لینوکس از یک حلقه‌ی رویداد با استخر کارگرها استفاده می‌کند  |
+| حافظه                    | با زباله‌روب                                                            | دستی: `.آزادکن()` و `دیرکن`، همراه با بررسی مالکیت در زمان کامپایل                            |
+| خطاها                    | مقدارهای `error`، `if err != nil`                                       | `خطادار`، `تلاش`، `گرفتن خطا`، یا جداشمارهای نتیجه                                            |
+| برنامه‌نویسی عام         | از Go 1.18                                                              | بله، با قید میانجی                                                                            |
+| گونه‌های جمع             | ندارد (میانجی‌ها و type switch)                                         | جداشمار با داده و `همخوان` جامع                                                               |
+| HTTP                     | `net/http` در کتابخانه‌ی استاندارد، چارچوب‌هایی مانند Gin، Echo و Fiber | `net/http` و `net/router` در کتابخانه‌ی استاندارد                                             |
+| کامپایل متقابل           | `GOOS` و `GOARCH`                                                       | `--target` با پیونددهنده‌ی درونی و sysrootهای همراه                                           |
+| پختگی                    | نسخه‌ی ۱٫۰ در ۲۰۱۲، تعهد سازگاری، اکوسیستم عظیم                         | پیش از ۱٫۰، اکوسیستم کوچک                                                                     |
 
 ## هم‌زمانی: گوروتین‌ها در برابر نخ‌ها، استخرها و کانال‌ها {#concurrency}
 
@@ -34,34 +34,34 @@ date: 2026-11-11
 package main
 
 import (
-	"fmt"
-	"sync"
+    "fmt"
+    "sync"
 )
 
 func main() {
-	jobs := make(chan int64, 4)
-	results := make(chan int64, 16)
-	var wg sync.WaitGroup
-	for range 3 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for n := range jobs {
-				results <- n * n
-			}
-		}()
-	}
-	for i := int64(1); i <= 10; i++ {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-	var sum int64
-	for v := range results {
-		sum += v
-	}
-	fmt.Println("sum of squares:", sum)
+    jobs := make(chan int64, 4)
+    results := make(chan int64, 16)
+    var wg sync.WaitGroup
+    for range 3 {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for n := range jobs {
+                results <- n * n
+            }
+        }()
+    }
+    for i := int64(1); i <= 10; i++ {
+        jobs <- i
+    }
+    close(jobs)
+    wg.Wait()
+    close(results)
+    var sum int64
+    for v := range results {
+        sum += v
+    }
+    fmt.Println("sum of squares:", sum)
 }
 ```
 
@@ -170,40 +170,40 @@ func main() {
 package main
 
 import (
-	"fmt"
-	"sync"
-	"sync/atomic"
+    "fmt"
+    "sync"
+    "sync/atomic"
 )
 
 func isPrime(n int64) bool {
-	if n < 2 {
-		return false
-	}
-	for d := int64(2); d*d <= n; d++ {
-		if n%d == 0 {
-			return false
-		}
-	}
-	return true
+    if n < 2 {
+        return false
+    }
+    for d := int64(2); d*d <= n; d++ {
+        if n%d == 0 {
+            return false
+        }
+    }
+    return true
 }
 
 func main() {
-	var found atomic.Int64
-	var wg sync.WaitGroup
-	for i := range int64(8) {
-		lo := i * 25000
-		wg.Go(func() {
-			var n int64
-			for x := lo; x < lo+25000; x++ {
-				if isPrime(x) {
-					n++
-				}
-			}
-			found.Add(n)
-		})
-	}
-	wg.Wait()
-	fmt.Println("primes below 200000:", found.Load())
+    var found atomic.Int64
+    var wg sync.WaitGroup
+    for i := range int64(8) {
+        lo := i * 25000
+        wg.Go(func() {
+            var n int64
+            for x := lo; x < lo+25000; x++ {
+                if isPrime(x) {
+                    n++
+                }
+            }
+            found.Add(n)
+        })
+    }
+    wg.Wait()
+    fmt.Println("primes below 200000:", found.Load())
 }
 ```
 
@@ -223,17 +223,17 @@ func main() {
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
+    "fmt"
+    "log"
+    "net/http"
 )
 
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /hello/{name}", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, %s!\n", r.PathValue("name"))
-	})
-	log.Fatal(http.ListenAndServe(":8080", mux))
+    mux := http.NewServeMux()
+    mux.HandleFunc("GET /hello/{name}", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintf(w, "Hello, %s!\n", r.PathValue("name"))
+    })
+    log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
 
@@ -262,15 +262,15 @@ func main() {
 
 پروژه سنجشی از نه سرور منتشر کرده که به همان یازده مسیر پاسخ می‌دهند (متن ساده، JSON، یک پاسخ از حافظه‌ی نهان، یک پرونده، یک پارامتر مسیر، تجزیه‌ی پرسمان، یک محاسبه، سرآیندها، یک پرونده‌ی ایستا، صفحه‌ی ریشه و بازتاب یک درخواست POST). در اجرای ۶ آبان ۱۴۰۵ (۲۸ اکتبر ۲۰۲۶)، میانگین هندسی روی هر یازده مسیر این بود:
 
-| سرور | درخواست در ثانیه |
-|---|---|
-| `net/http` سلام | ۹۴٬۸۵۰ |
-| Go، Fiber | ۶۲٬۴۹۳ |
-| Go، Echo | ۳۵٬۲۳۸ |
-| Go، Gin | ۳۴٬۹۹۹ |
-| Go، `net/http` | ۳۴٬۹۸۷ |
-| Node، Express | ۲۲٬۵۳۶ |
-| سرور توکار PHP | ۱۱٬۹۹۲ |
+| سرور            | درخواست در ثانیه |
+| --------------- | ---------------- |
+| `net/http` سلام | ۹۴٬۸۵۰           |
+| Go، Fiber       | ۶۲٬۴۹۳           |
+| Go، Echo        | ۳۵٬۲۳۸           |
+| Go، Gin         | ۳۴٬۹۹۹           |
+| Go، `net/http`  | ۳۴٬۹۸۷           |
+| Node، Express   | ۲۲٬۵۳۶           |
+| سرور توکار PHP  | ۱۱٬۹۹۲           |
 
 سلام در هر ۱۱ مسیر از Fiber درخواست بیشتری در ثانیه پاسخ داد و ۲٫۷ برابر `net/http` خود Go بود. بیشترین فاصله در تجزیه‌ی پرسمان همراه با ساختن فهرست بود (`/search`، ۹۹٬۱۴۳ در برابر ۴۸٬۲۴۷ برای Fiber) و کمترین فاصله در `/`، جایی که سلام ۴٪ جلوتر بود.
 

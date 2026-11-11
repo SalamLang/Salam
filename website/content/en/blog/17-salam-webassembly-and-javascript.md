@@ -14,16 +14,16 @@ This article walks through every target that exists today, shows the commands, a
 
 ## Where Salam programs run {#targets}
 
-| Target | Command | Runs on | Good for |
-|---|---|---|---|
-| Native executable | `salam build app.salam` | Linux, macOS, Windows (x86-64, ARM, 32-bit) | Tools, servers, desktop apps |
-| WebAssembly (WASI) | `salam build app.salam --target=wasm32-wasi` | Any WASI preview 1 runtime | Sandboxed modules, plug-ins, edge functions |
-| Cloudflare Workers | WASI build plus a small `worker.js` | Cloudflare's edge | HTTP handlers close to users |
-| JavaScript | `salam js app.salam` | Browsers and Node | Interactive pages, browser logic |
-| Web project | `salam web` | Browsers | A page plus its Salam scripts in one build |
-| Online editor | `editor.salamlang.ir` | Any modern browser | Learning, sharing, quick experiments |
-| Phone IDE | Android and iOS apps | Phones and tablets | Writing and running code offline |
-| Freestanding | `--target=x86_64-unknown-none` | No operating system | Kernels and boot payloads |
+| Target             | Command                                      | Runs on                                     | Good for                                    |
+| ------------------ | -------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
+| Native executable  | `salam build app.salam`                      | Linux, macOS, Windows (x86-64, ARM, 32-bit) | Tools, servers, desktop apps                |
+| WebAssembly (WASI) | `salam build app.salam --target=wasm32-wasi` | Any WASI preview 1 runtime                  | Sandboxed modules, plug-ins, edge functions |
+| Cloudflare Workers | WASI build plus a small `worker.js`          | Cloudflare's edge                           | HTTP handlers close to users                |
+| JavaScript         | `salam js app.salam`                         | Browsers and Node                           | Interactive pages, browser logic            |
+| Web project        | `salam web`                                  | Browsers                                    | A page plus its Salam scripts in one build  |
+| Online editor      | `editor.salamlang.ir`                        | Any modern browser                          | Learning, sharing, quick experiments        |
+| Phone IDE          | Android and iOS apps                         | Phones and tablets                          | Writing and running code offline            |
+| Freestanding       | `--target=x86_64-unknown-none`               | No operating system                         | Kernels and boot payloads                   |
 
 The native targets have their own article on [cross-compilation](/blog/cross-compilation-salam/). The rest of this one is about the others.
 
@@ -80,12 +80,18 @@ salam build primes.salam --target=wasm32-wasi --release --output=primes.wasm
 The release builds of the compiler carry a WASI sysroot and run the LLD linker in-process, so for a program like the one above nothing else needs to be installed. The release workflow checks this on every release by building a small program with `WASI_SDK_PATH` unset and a minimal `PATH`, then running it with Node's built-in `node:wasi` module. A runner script for Node is a few lines:
 
 ```javascript
-const { WASI } = require("node:wasi");
-const fs = require("node:fs");
+const { WASI } = require('node:wasi');
+const fs = require('node:fs');
 
-const wasi = new WASI({ version: "preview1", args: ["primes"], returnOnExit: true });
-WebAssembly.instantiate(fs.readFileSync("primes.wasm"), wasi.getImportObject())
-    .then(({ instance }) => process.exit(wasi.start(instance)));
+const wasi = new WASI({
+  version: 'preview1',
+  args: ['primes'],
+  returnOnExit: true,
+});
+WebAssembly.instantiate(
+  fs.readFileSync('primes.wasm'),
+  wasi.getImportObject(),
+).then(({ instance }) => process.exit(wasi.start(instance)));
 ```
 
 The module for the prime program is about 30 KB. Programs that pull in more of the runtime need more of the C library: a program that uses the HTTP server stack also needs threading support, and the WASI sysroot embedded in the 0.6.2 release could not link one (the linker reported a missing `libpthread`). For those, install wasi-sdk; the compiler finds it through `WASI_SDK_PATH`, `~/.salam/wasi-sdk` or `/opt/wasi-sdk`.
@@ -117,8 +123,8 @@ end
 Built natively, this listens on port 8080. Built with `--target=wasm32-wasi`, `http.Run` changes behavior: it serves exactly one request per process. The host script `std/net/http/cloudflare/worker.js` writes the raw HTTP/1.1 request to the module's standard input and reads the response from file descriptor 3; `println` output goes to the Worker's logs, and `os.Env` reads wrangler variables and secrets. The Worker entry point is three lines:
 
 ```javascript
-import { createWorker } from "./worker-host.js";
-import app from "./build/app.wasm";
+import { createWorker } from './worker-host.js';
+import app from './build/app.wasm';
 export default createWorker(app);
 ```
 
@@ -163,7 +169,7 @@ The JavaScript backend has limits that come from JavaScript itself:
 
 - **64-bit integers.** JavaScript numbers hold integers exactly only up to `2^53`. On this backend an `i64` beyond that loses precision: `9007199254740993 + 2` prints `9007199254740995` natively and `9007199254740994` in JavaScript. `i128` and `u128` are exact, because they become BigInts.
 - **Threads.** `spawn` is not supported on this backend, and the atomic intrinsics become plain reads and writes, since the generated code runs on the page's single thread.
-- **System access.** Files, sockets and processes belong to native and WASI targets. In the browser the `dom` package gives you the page, events, timers, local storage, the canvas, and generic property and method access to any JavaScript object.
+- **System access.** Files, sockets and processes belong to native and WASI targets. In the browser the `dom` package gives you the page, events, timers, localStorage, the canvas, and generic property and method access to any JavaScript object.
 
 ## Web projects: salam web and the page language {#web}
 
@@ -189,15 +195,15 @@ For desktop applications with a web interface, Salam uses a system WebView rathe
 
 ## Choosing a target {#choosing}
 
-| You need | Choose |
-|---|---|
-| Maximum speed, threads, files, sockets, C libraries | Native build |
-| A sandboxed module a host can embed and limit | `wasm32-wasi` |
-| An HTTP handler at the edge with no server to run | `wasm32-wasi` on Cloudflare Workers |
-| Logic that runs in the visitor's browser and changes the page | `salam js` |
-| A static or interactive website written in Salam | The page language with `salam page build` or `salam web` |
-| Learning or sharing a snippet | The online editor |
-| An operating system or bare-metal program | A freestanding `*-none` target |
+| You need                                                      | Choose                                                   |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| Maximum speed, threads, files, sockets, C libraries           | Native build                                             |
+| A sandboxed module a host can embed and limit                 | `wasm32-wasi`                                            |
+| An HTTP handler at the edge with no server to run             | `wasm32-wasi` on Cloudflare Workers                      |
+| Logic that runs in the visitor's browser and changes the page | `salam js`                                               |
+| A static or interactive site written in Salam                 | The page language with `salam page build` or `salam web` |
+| Learning or sharing a snippet                                 | The online editor                                        |
+| An operating system or bare-metal program                     | A freestanding `*-none` target                           |
 
 A sensible pattern for a web product is to keep shared logic (validation, formatting, pure calculations) in plain Salam packages with no system calls, compile it natively for the server and with `salam js` for the browser, and keep platform code at the edges behind `if defined(SALAM_JS):` or `if SALAM_ARCH_WASM:`.
 

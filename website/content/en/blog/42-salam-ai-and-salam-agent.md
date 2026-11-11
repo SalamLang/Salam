@@ -14,13 +14,13 @@ This article explains what each one is for, how they relate, and what limits you
 
 ## The pieces at a glance {#overview}
 
-| Tool | Where it runs | Use it for |
-|---|---|---|
-| [Salam AI](/ai/) | In the browser at ai.salamlang.ir | Questions, writing and fixing code, explaining compiler errors |
-| [Salam Agent](/agent/) | A desktop app for Windows, macOS and Linux | Letting the assistant run commands and edit files in a project folder |
-| MCP server | Hosted at mcp.salamlang.ir, or on your machine | Giving the AI tools you already use the Salam compiler and docs |
-| API | ai-api.salamlang.ir | Calling the assistant from your own code |
-| Telegram bot | @SalamAgentBot | Salam AI inside Telegram |
+| Tool                   | Where it runs                                  | Use it for                                                            |
+| ---------------------- | ---------------------------------------------- | --------------------------------------------------------------------- |
+| [Salam AI](/ai/)       | In the browser at ai.salamlang.ir              | Questions, writing and fixing code, explaining compiler errors        |
+| [Salam Agent](/agent/) | A desktop app for Windows, macOS and Linux     | Letting the assistant run commands and edit files in a project folder |
+| MCP server             | Hosted at mcp.salamlang.ir, or on your machine | Giving the AI tools you already use the Salam compiler and docs       |
+| API                    | ai-api.salamlang.ir                            | Calling the assistant from your own code                              |
+| Telegram bot           | @SalamAgentBot                                 | Salam AI inside Telegram                                              |
 
 The common thread is the one described in [the future of programming languages in the AI era](/blog/programming-languages-in-the-ai-era/): a young language is poorly represented in general training data, so the useful thing an assistant can do is check its answers against the real compiler and the real library.
 
@@ -32,7 +32,7 @@ Salam's syntax differs from every mainstream language, so a general chatbot tend
 - **Writing and fixing code.** Describe a program and get Salam code that the assistant checks with the Salam compiler, or paste one that does not compile and find out why.
 - **The standard library.** More than 170 packages, from JSON and HTTP to databases and machine learning, with real function names and signatures looked up rather than guessed.
 
-Code in answers is highlighted with the same grammar as the VS Code plugin. You sign up with an email address, and your chats are saved to your account. The interface is in Persian and laid out right to left, which fits the language's origins; questions and code can be in English or Persian, since both are the same language (see [one language, two scripts](/blog/one-language-two-scripts/)).
+Code in answers is highlighted with the same grammar as the Visual Studio Code plugin. You sign up with an email address, and your chats are saved to your account. The interface is in Persian and laid out right to left, which fits the language's origins; questions and code can be in English or Persian, since both are the same language (see [one language, two scripts](/blog/one-language-two-scripts/)).
 
 A typical use is a compiler error you do not understand. The compiler already explains a lot by itself, with codes, help lines and suggested fixes, but an assistant can connect the error to your intent. For writing Persian code in particular, see [can AI write code in Persian?](/blog/can-ai-write-persian-code/).
 
@@ -50,12 +50,12 @@ What it can do is what you would do in a terminal and an editor to get a Salam p
 
 ### Access levels you set per chat {#access-levels}
 
-| Level | Reading in the folder | Writing and commands in the folder | Anything outside the folder |
-|---|---|---|---|
-| Ask before every change | Runs | Asks you, or always for that tool | Asks you |
-| Automatic in the work folder | Runs | Runs | Asks you |
-| Read only | Runs | Refused | Asks for reads, refuses the rest |
-| Accept everything, everywhere | Runs | Runs | Runs, without asking |
+| Level                         | Reading in the folder | Writing and commands in the folder | Anything outside the folder      |
+| ----------------------------- | --------------------- | ---------------------------------- | -------------------------------- |
+| Ask before every change       | Runs                  | Asks you, or always for that tool  | Asks you                         |
+| Automatic in the work folder  | Runs                  | Runs                               | Asks you                         |
+| Read only                     | Runs                  | Refused                            | Asks for reads, refuses the rest |
+| Accept everything, everywhere | Runs                  | Runs                               | Runs, without asking             |
 
 A few rules apply at every level. Writes inside `.git` are always refused. Commands stop after two minutes unless the assistant asks for longer, up to 30 minutes. Only `ai.salamlang.ir` can talk to the app, and links to other sites open in your normal browser.
 
@@ -88,12 +88,12 @@ The first connection opens a browser window to sign in with your Salam AI accoun
 
 The tools fall into groups:
 
-| Group | Tools |
-|---|---|
-| Compiler | `salam_check`, `salam_build`, `salam_run`, `salam_exec`, `salam_format`, `salam_translate` |
-| Inspection | `salam_inspect`, `salam_llvm_ir`, `salam_js`, `salam_version` |
+| Group                | Tools                                                                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compiler             | `salam_check`, `salam_build`, `salam_run`, `salam_exec`, `salam_format`, `salam_translate`                                                         |
+| Inspection           | `salam_inspect`, `salam_llvm_ir`, `salam_js`, `salam_version`                                                                                      |
 | Language and library | `salam_docs`, `salam_stdlib_search`, `salam_stdlib_packages`, `salam_stdlib_symbols`, `salam_find_examples`, `salam_read_source`, `salam_keywords` |
-| Web | `salam_web_search`, `salam_web_fetch` |
+| Web                  | `salam_web_search`, `salam_web_fetch`                                                                                                              |
 
 The hosted server cannot see your files, so its compiler tools take program text instead of a path, and it never runs code: `salam_run`, `salam_exec` and `salam_build` exist only when you run the server yourself. Built locally from the repository, the server is a single native binary with no Node or Python involved, and it is read-only toward your workspace: the compiler runs in a private temporary directory and `salam_format` only reports, it never rewrites files. Three prompts, `salam-write`, `salam-port` and `salam-fix`, give a model the check-and-fix workflow and the short list of rules where Salam differs from other languages.
 

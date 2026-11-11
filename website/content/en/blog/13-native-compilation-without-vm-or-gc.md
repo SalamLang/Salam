@@ -14,13 +14,13 @@ date: 2026-11-11
 
 A few terms get mixed up, so here they are side by side:
 
-| Term | Meaning | Examples |
-|---|---|---|
-| Interpreter | Reads the program (or its bytecode) and performs it step by step | CPython, PHP, `salam exec` |
-| Virtual machine (VM) | A runtime that executes a portable bytecode, usually with a JIT and a GC | JVM, .NET CLR |
-| JIT compilation | Compiles bytecode to machine code while the program runs, using what it observes | HotSpot, V8, RyuJIT |
-| AOT (ahead-of-time) compilation | Compiles to machine code before the program runs | C, C++, Rust, Go, Zig, Salam |
-| Garbage collector (GC) | Finds memory the program can no longer reach and frees it automatically | Java, C#, Go, JavaScript, Python |
+| Term                            | Meaning                                                                          | Examples                         |
+| ------------------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
+| Interpreter                     | Reads the program (or its bytecode) and performs it step by step                 | CPython, PHP, `salam exec`       |
+| Virtual machine (VM)            | A runtime that executes a portable bytecode, usually with a JIT and a GC         | JVM, .NET CLR                    |
+| JIT compilation                 | Compiles bytecode to machine code while the program runs, using what it observes | HotSpot, V8, RyuJIT              |
+| AOT (ahead-of-time) compilation | Compiles to machine code before the program runs                                 | C, C++, Rust, Go, Zig, Salam     |
+| Garbage collector (GC)          | Finds memory the program can no longer reach and frees it automatically          | Java, C#, Go, JavaScript, Python |
 
 The two axes are independent. Go compiles ahead of time to native code but has a garbage collector and a runtime with its own goroutine scheduler. Java and C# now have AOT options (GraalVM Native Image, .NET Native AOT) that keep the garbage collector. Swift compiles natively and uses reference counting rather than a tracing collector. Salam sits with C, C++, Rust and Zig: native code, ahead of time, no collector.
 
@@ -110,24 +110,24 @@ Run under `salam memcheck`, this program reports `definitely lost: 0 bytes in 0 
 The honest side of the ledger:
 
 - **You are responsible for freeing heap memory.** Forget a `free` on a value the compiler cannot prove is local, and the program leaks. A server that leaks a little per request will eventually run out of memory.
-- **Mistakes are not all caught.** Salam's compile-time ownership checks catch common use-after-free and double-free bugs without annotations, but they are not a proof. Rust's borrow checker proves memory safety for safe Rust; Salam has no borrow checker, and a bug the analysis does not see can still corrupt memory at run time. A development build checks indices at run time, and `--release` removes those checks for speed.
+- **Mistakes are not all caught.** Salam's compile-time ownership checks catch common use-after-free and double-free bugs without annotations, but they are not a proof. Rust's borrow checker proves memory safety for safe Rust; Salam has no borrow checker, and a bug the analysis does not see can still corrupt memory at runtime. A development build checks indices at runtime, and `--release` removes those checks for speed.
 - **Tools replace the safety net.** `salam memcheck` runs a program under Valgrind or AddressSanitizer to find leaks and bad accesses. It is a habit to build, not something you get for free.
-- **No run-time specialization.** An AOT compiler optimizes for every possible input. A JIT can, in principle, specialize for the inputs it actually sees, and on some long-running workloads that is an advantage for the JVM or V8.
+- **No runtime specialization.** An AOT compiler optimizes for every possible input. A JIT can, in principle, specialize for the inputs it actually sees, and on some long-running workloads that is an advantage for the JVM or V8.
 - **One build per target.** A native executable runs on one operating system and processor family. Cross-compilation makes that cheap, but there is no single portable artifact as with a JAR.
 
 ## Performance, measured carefully {#performance}
 
 The project's own benchmark compares 39 programs that use the same algorithm in C, C++, Rust, Go, Python, PHP and Salam. Measured on 27 October 2026, with Salam built by its LLVM backend at `-O3`, the averages were:
 
-| Language | Average time |
-|---|---|
-| Salam | 10.6 ms |
-| Rust | 11.3 ms |
-| C | 11.7 ms |
-| C++ | 13.1 ms |
-| Go | 14.2 ms |
-| PHP | about 9.6 times Salam's time |
-| Python | about 56 times Salam's time |
+| Language | Average time                 |
+| -------- | ---------------------------- |
+| Salam    | 10.6 ms                      |
+| Rust     | 11.3 ms                      |
+| C        | 11.7 ms                      |
+| C++      | 13.1 ms                      |
+| Go       | 14.2 ms                      |
+| PHP      | about 9.6 times Salam's time |
+| Python   | about 56 times Salam's time  |
 
 Against the fastest of C, C++, Rust and Go on each program, Salam was ahead on 6, level on 27 and behind on 6. It was behind on recursive Fibonacci (3.1 ms against 2.4 ms for C), n-queens, binary search, LCG random numbers, a counting loop and printing a line a million times (8.2 ms against 2.6 ms for Rust).
 
@@ -160,4 +160,4 @@ Ahead-of-time compilation translates a program to machine code before it runs, p
 
 ### Is a language without a garbage collector unsafe?
 
-It can be, if nothing checks memory use. Salam reduces the risk with compile-time ownership checks, run-time bounds checks in development builds and `salam memcheck`, but it does not prove memory safety the way Rust's borrow checker does.
+It can be, if nothing checks memory use. Salam reduces the risk with compile-time ownership checks, runtime bounds checks in development builds and `salam memcheck`, but it does not prove memory safety the way Rust's borrow checker does.

@@ -42,23 +42,23 @@ The same program written in Persian. The compiler detects the language from the 
 سلام دنیا!
 ```
 
-Both files go through the same front end, the same type checker and the same code generator. Their executables are interchangeable. The article [One language, two scripts](/blog/one-language-two-scripts/) explains how that works in detail.
+Both files go through the same frontend, the same type checker and the same code generator. Their executables are interchangeable. The article [One language, two scripts](/blog/one-language-two-scripts/) explains how that works in detail.
 
 ## What kind of language is Salam? {#kind}
 
 If you have used Go, Rust, Swift or Python, most of Salam will look familiar. The table puts the main design choices in one place.
 
-| Question | Salam's answer |
-|---|---|
-| Typing | Static, with type inference: `count := 0` is an `int`, `x := 3.14` is an `f64` |
-| Compilation | Ahead of time to native code, through C, LLVM or Salam's own native backend |
-| Memory | No garbage collector; values live on the stack, heap containers are freed with `.free()` or `defer` |
-| Data types | Structs with methods, enums that carry data, tuples, generics, interfaces, `T?` optionals |
-| Errors | `Result` values with `try`, plus `throws`, `throw` and `try`/`catch` |
-| Concurrency | Threads, a bounded task pool, the `go` keyword, channels, futures, atomics |
-| Targets | Linux, macOS, Windows, WebAssembly, JavaScript, Android, iOS and freestanding bare metal |
-| Source languages | English and Persian, with one shared standard library |
-| License | GPL-3.0, developed in the open on GitHub |
+| Question         | Salam's answer                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| Typing           | Static, with type inference: `count := 0` is an `int`, `x := 3.14` is an `f64`                      |
+| Compilation      | Ahead of time to native code, through C, LLVM or Salam's own native backend                         |
+| Memory           | No garbage collector; values live on the stack, heap containers are freed with `.free()` or `defer` |
+| Data types       | Structs with methods, enums that carry data, tuples, generics, interfaces, `T?` optionals           |
+| Errors           | `Result` values with `try`, plus `throws`, `throw` and `try`/`catch`                                |
+| Concurrency      | Threads, a bounded task pool, the `go` keyword, channels, futures, atomics                          |
+| Targets          | Linux, macOS, Windows, WebAssembly, JavaScript, Android, iOS and freestanding bare metal            |
+| Source languages | English and Persian, with one shared standard library                                               |
+| License          | GPL-3.0, developed in the open on GitHub                                                            |
 
 Variables are immutable unless you ask otherwise: `name := "Sara"` cannot be reassigned, `mut count := 0` can. Reassigning an immutable variable is a compile error, not a warning. That small rule removes a whole category of accidental bugs and makes code easier to read, because a name without `mut` never changes.
 
@@ -114,7 +114,7 @@ The Salam compiler is self-hosting: it is written in Salam and compiles itself. 
 A build goes through the usual stages: lexing, parsing, semantic analysis with type inference and many static checks, then code generation. There are three backends:
 
 - **LLVM**, the default in the release builds (which embed it), and also the engine behind the WebAssembly target;
-- **C**, selected with `--backend=c` and used whenever LLVM is not built in, which hands generated C to gcc, clang or the bundled tcc;
+- **C**, selected with `--backend=c` and used whenever LLVM is not built-in, which hands generated C to gcc, clang or the bundled tcc;
 - **a native backend**, selected with `--backend=native`, which writes x86-64, 32-bit x86, AArch64, 32-bit ARM or RISC-V machine code itself and links it with a built-in linker, so it needs no external toolchain at all.
 
 The checks run before any code is generated. `salam check` stops there, which makes it the fast way to find mistakes, and its diagnostics carry stable codes (E001, W147 and so on) that you can look up. The [compiler article](/blog/how-the-salam-compiler-works/) follows a program through every stage.
@@ -127,7 +127,7 @@ Salam ships with a large standard library, documented package by package on the 
 - files, processes, the terminal, time and calendars, including the Jalali (Persian) calendar;
 - HTTP clients and servers with a router and middleware, WebSocket, HTTP/2, gRPC, GraphQL, SSH and TLS;
 - drivers for SQLite, PostgreSQL, MySQL, Redis and ClickHouse, clients for Elasticsearch, OpenSearch, Meilisearch and Typesense, and a checker for SQL strings;
-- cryptography, JWT, compression and archives (zip, tar, gzip, xz, zstd, 7z, and reading RAR);
+- cryptography, JWT, compression and archives (ZIP, tar, gzip, xz, zstd, 7z, and reading RAR);
 - images, audio, matrices, tensors, automatic differentiation and neural network layers.
 
 Packages written by other people are added from GitHub with `salam add`, pinned in `salam.lock` and verified by checksum. The [package manager page](/packages/) explains the workflow.
@@ -146,7 +146,7 @@ salam translate fa app.salam # rewrite English source as Persian
 salam page build site.salam  # turn a page program into HTML, CSS and JS
 ```
 
-There is also an interpreter (`salam exec`) that needs no C toolchain, a REPL, a documentation generator, a debugger launcher, a memory checker, a language server for editors and plugins for VS Code and ten other editors. If you would rather not install anything, the [online editor](https://editor.salamlang.ir) compiles and runs Salam in the browser.
+There is also an interpreter (`salam exec`) that needs no C toolchain, a REPL, a documentation generator, a debugger launcher, a memory checker, a language server for editors and plugins for Visual Studio Code and ten other editors. If you would rather not install anything, the [online editor](https://editor.salamlang.ir) compiles and runs Salam in the browser.
 
 ## How fast is it? {#performance}
 

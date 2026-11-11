@@ -16,13 +16,13 @@ date: 2026-11-11
 
 یک برنامه‌ی وب معمولی پنج لایه دارد. این جدول نشان می‌دهد سلام برای هر لایه چه چیزی دارد، و همه‌اش همراه کامپایلر می‌آید:
 
-| لایه | در سلام | برای مطالعه‌ی بیشتر |
-|---|---|---|
-| سرور HTTP، مسیریابی، میان‌افزار | `net.http`، `net.router`، `net.http.middleware` | [net.http](/std/net/http/)، [سرور وب سریع](/blog/fast-web-servers-with-salam/) |
-| داده و SQL | `db` با درایورهای SQLite، MySQL و PostgreSQL، و بررسی‌های `db.sql` | [SQL گونه‌دار](/blog/typed-sql-database-apps/) |
-| HTML و CSS | زبان صفحه، `صفحه:` و `صفحه نام(پارامترها):` | [درس زبان صفحه](/learn/layout/) |
-| رفتار مرورگر | رویدادگیرهای سلام که به جاوااسکریپت کامپایل می‌شوند | [بخش‌ها و حالت در رابط کاربری](/blog/interactive-ui-components-state-events/) |
-| ساخت و استقرار | `salam build`، `salam page build`، `salam web`، `salam serve` | [salam serve](/learn/serve/) |
+| لایه                            | در سلام                                                            | برای مطالعه‌ی بیشتر                                                            |
+| ------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| سرور HTTP، مسیریابی، میان‌افزار | `net.http`، `net.router`، `net.http.middleware`                    | [net.http](/std/net/http/)، [سرور وب سریع](/blog/fast-web-servers-with-salam/) |
+| داده و SQL                      | `db` با درایورهای SQLite، MySQL و PostgreSQL، و بررسی‌های `db.sql` | [SQL گونه‌دار](/blog/typed-sql-database-apps/)                                 |
+| HTML و CSS                      | زبان صفحه، `صفحه:` و `صفحه نام(پارامترها):`                        | [درس زبان صفحه](/learn/layout/)                                                |
+| رفتار مرورگر                    | رویدادگیرهای سلام که به جاوااسکریپت کامپایل می‌شوند                | [بخش‌ها و حالت در رابط کاربری](/blog/interactive-ui-components-state-events/)  |
+| ساخت و استقرار                  | `salam build`، `salam page build`، `salam web`، `salam serve`      | [salam serve](/learn/serve/)                                                   |
 
 چارچوب وبی برای انتخاب وجود ندارد، چون همین تکه‌ها خودشان چارچوب‌اند، و ساخت جداگانه‌ای برای فرانت‌اند هم در کار نیست: نه بسته‌ساز (bundler)، نه پیکربندی ترنسپایلر و نه `node_modules`. کامپایلر یک فایل اجرایی است.
 

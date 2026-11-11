@@ -150,19 +150,19 @@ Detection is per file, which is what makes mixing possible: a project can contai
 
 The table lists everything that changes with the language of the file, and what does not.
 
-| Part of the language | English | Persian |
-|---|---|---|
-| Keywords | `func`, `if`, `else`, `until`, `repeat`, `each`, `match`, `end` | `تابع`, `اگر`, `وگرنه`, `تا`, `تکرار`, `هر`, `همخوان`, `پایان` |
-| Entry function | `main` | `ریشه` |
-| Literals | `true`, `false`, `null`, `this` | `درست`, `نادرست`, `پوچ`, `این` |
-| Primitive types | `int`, `str`, `f64`, `bool` | `صحیح`, `رشته`, `اعشار۶۴`, `منطقی` |
-| Collections | `Vector<T>`, `HashMap<K, V>` | `وکتور<T>`, `نگاشت<K, V>` |
-| Built-in methods | `push`, `len`, `free`, `split` | `بیفزا`, `طول`, `آزادکن`, `بشکاف` |
-| Built-in functions | `len`, `sizeof`, `spawn` | `طول`, `اندازه‌گونه`, `نخ‌ساز` |
-| Logic and comparison words | `and`, `or`, `not`, `gt`, `eq` | `و`, `یا`, `وارونه`, `بزرگتر`, `برابر` |
-| Standard library | `str.Split`, `math.Sqrt` | `رشته.تفکیک کردن`, `ریاضی.جذر` |
-| Compile-time constants | `SALAM_OS_LINUX` | `سلام سیستم لینوکس` |
-| Diagnostics | `error[E001]: unknown identifier` | `خطا[خطا۰۰۱]: شناسه‌ی ناشناخته` |
+| Part of the language       | English                                                         | Persian                                                        |
+| -------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
+| Keywords                   | `func`, `if`, `else`, `until`, `repeat`, `each`, `match`, `end` | `تابع`, `اگر`, `وگرنه`, `تا`, `تکرار`, `هر`, `همخوان`, `پایان` |
+| Entry function             | `main`                                                          | `ریشه`                                                         |
+| Literals                   | `true`, `false`, `null`, `this`                                 | `درست`, `نادرست`, `پوچ`, `این`                                 |
+| Primitive types            | `int`, `str`, `f64`, `bool`                                     | `صحیح`, `رشته`, `اعشار۶۴`, `منطقی`                             |
+| Collections                | `Vector<T>`, `HashMap<K, V>`                                    | `وکتور<T>`, `نگاشت<K, V>`                                      |
+| Built-in methods           | `push`, `len`, `free`, `split`                                  | `بیفزا`, `طول`, `آزادکن`, `بشکاف`                              |
+| Built-in functions         | `len`, `sizeof`, `spawn`                                        | `طول`, `اندازه‌گونه`, `نخ‌ساز`                                 |
+| Logic and comparison words | `and`, `or`, `not`, `gt`, `eq`                                  | `و`, `یا`, `وارونه`, `بزرگتر`, `برابر`                         |
+| Standard library           | `str.Split`, `math.Sqrt`                                        | `رشته.تفکیک کردن`, `ریاضی.جذر`                                 |
+| Compile-time constants     | `SALAM_OS_LINUX`                                                | `سلام سیستم لینوکس`                                            |
+| Diagnostics                | `error[E001]: unknown identifier`                               | `خطا[خطا۰۰۱]: شناسه‌ی ناشناخته`                                |
 
 What stays the same in both: operators and punctuation (`+`, `:=`, `==`, `[ ]`), the names you choose for your own variables, functions and types, string contents, and the names of C functions declared in an `extern` block, because those are names in a C library.
 

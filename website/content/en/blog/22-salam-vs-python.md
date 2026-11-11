@@ -14,17 +14,17 @@ So Salam is not a drop-in replacement for Python. It is an option for the parts 
 
 ## Salam vs Python at a glance {#at-a-glance}
 
-| | Python | Salam |
-|---|---|---|
-| Execution | Interpreted bytecode (CPython); other implementations such as PyPy exist | Compiled ahead of time to native code; an interpreter (`salam exec`) for quick runs |
-| Typing | Dynamic; optional type hints checked by external tools | Static with inference, checked by the compiler |
-| Blocks | Indentation | A colon opens a block, `end` closes it |
-| Memory | Reference counting plus a cycle collector | Manual: `.free()` and `defer`, with compile-time checks |
-| Parallelism | GIL in the default build; an optional free-threaded build (experimental in 3.13, supported in 3.14) | OS threads, a task pool, channels, atomics |
-| Speed on the benchmark | About 56 times Salam's time | In the same range as C and Rust |
-| Deployment | Interpreter plus dependencies, or a bundler | One native executable |
-| Ecosystem | Enormous: PyPI, NumPy, pandas, PyTorch, Django, Jupyter | Large standard library, few third-party packages |
-| Source languages | English keywords | English or Persian keywords, same compiler |
+|                        | Python                                                                                              | Salam                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Execution              | Interpreted bytecode (CPython); other implementations such as PyPy exist                            | Compiled ahead of time to native code; an interpreter (`salam exec`) for quick runs |
+| Typing                 | Dynamic; optional type hints checked by external tools                                              | Static with inference, checked by the compiler                                      |
+| Blocks                 | Indentation                                                                                         | A colon opens a block, `end` closes it                                              |
+| Memory                 | Reference counting plus a cycle collector                                                           | Manual: `.free()` and `defer`, with compile-time checks                             |
+| Parallelism            | GIL in the default build; an optional free-threaded build (experimental in 3.13, supported in 3.14) | OS threads, a task pool, channels, atomics                                          |
+| Speed on the benchmark | About 56 times Salam's time                                                                         | In the same range as C and Rust                                                     |
+| Deployment             | Interpreter plus dependencies, or a bundler                                                         | One native executable                                                               |
+| Ecosystem              | Enormous: PyPI, NumPy, pandas, PyTorch, Django, Jupyter                                             | Large standard library, few third-party packages                                    |
+| Source languages       | English keywords                                                                                    | English or Persian keywords, same compiler                                          |
 
 ## The same program in both languages {#side-by-side}
 
@@ -112,7 +112,7 @@ end
 68
 ```
 
-Change the call to `discount(80.0, "15")` and `salam check` stops with `error[E012]: argument 2: cannot pass 'str' to 'f64'`, pointing at the line. Python can get close with type hints and a checker such as mypy or Pyright, and many teams do exactly that; in Salam the check is part of the compiler and cannot be skipped. Local types are inferred (`count := 0` is an integer, `name := "Sara"` a string), so the annotations you write are mostly on function parameters and struct fields. The cost is flexibility: no duck typing at run time, no monkey patching, and a little more ceremony for heterogeneous data, which Salam handles with interfaces, generics and `int or str` union types. The [static typing article](/blog/static-typing-in-salam/) covers the type system.
+Change the call to `discount(80.0, "15")` and `salam check` stops with `error[E012]: argument 2: cannot pass 'str' to 'f64'`, pointing at the line. Python can get close with type hints and a checker such as mypy or Pyright, and many teams do exactly that; in Salam the check is part of the compiler and cannot be skipped. Local types are inferred (`count := 0` is an integer, `name := "Sara"` a string), so the annotations you write are mostly on function parameters and struct fields. The cost is flexibility: no duck typing at runtime, no monkey patching, and a little more ceremony for heterogeneous data, which Salam handles with interfaces, generics and `int or str` union types. The [static typing article](/blog/static-typing-in-salam/) covers the type system.
 
 ## How much faster is Salam than Python? {#performance}
 
@@ -177,7 +177,7 @@ Two caveats keep the comparison fair. First, the programs are short, so interpre
 
 ## The ecosystem gap {#ecosystem}
 
-This is where Python wins, and by a wide margin. PyPI holds hundreds of thousands of packages. Data science runs on NumPy, pandas, SciPy and Jupyter; machine learning on PyTorch, scikit-learn and the Hugging Face libraries; web back ends on Django, Flask and FastAPI; and almost every cloud service, database and API ships a Python client first. Answers to almost any Python question are a search away, and most programmers already know some Python.
+This is where Python wins, and by a wide margin. PyPI holds hundreds of thousands of packages. Data science runs on NumPy, pandas, SciPy and Jupyter; machine learning on PyTorch, scikit-learn and the Hugging Face libraries; web backends on Django, Flask and FastAPI; and almost every cloud service, database and API ships a Python client first. Answers to almost any Python question are a search away, and most programmers already know some Python.
 
 Salam's [standard library](/std/) is unusually broad for a young language: HTTP servers and clients, a router, WebSocket, gRPC, drivers for SQLite, PostgreSQL, MySQL, Redis and ClickHouse, JSON and CSV, cryptography, compression, images, audio, and machine learning building blocks such as tensors, automatic differentiation, neural network layers and ONNX and GGUF model loading. It installs with the compiler, so many programs need no third-party code. But third-party packages are few, there is nothing like the scientific Python stack's depth, and the community that writes tutorials and answers questions is small. For machine learning in particular, the [machine learning article](/blog/machine-learning-with-salam/) describes what exists, and the [Salam vs Python and Julia](/blog/salam-vs-python-and-julia/) piece compares the numerical side.
 
@@ -198,7 +198,7 @@ At the other end, deployment favors Salam: `salam build` produces one native exe
 Choose **Python** when:
 
 - the work is data analysis, scientific computing or machine learning that relies on NumPy, pandas, PyTorch and friends;
-- you are writing glue code, automation or prototypes where development speed matters more than run time;
+- you are writing glue code, automation or prototypes where development speed matters more than runtime;
 - the libraries, hiring pool or team experience you need are in Python;
 - you work interactively in notebooks.
 

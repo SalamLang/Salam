@@ -8,24 +8,24 @@ summary: Rust proves memory safety at compile time and Salam does not. This comp
 date: 2026-11-11
 ---
 
-Salam and Rust are both compiled, statically typed languages with no garbage collector, enums that carry data, exhaustive pattern matching and native performance. The decisive difference is memory safety: **Rust has a borrow checker that proves at compile time that safe code has no use after free, no double free and no data races. Salam does not.** Salam frees heap memory by hand with `.free()` and `defer`, catches a set of common mistakes with compile-time checks and warnings, and checks bounds at run time in development builds. Those checks help, but they are not a proof.
+Salam and Rust are both compiled, statically typed languages with no garbage collector, enums that carry data, exhaustive pattern matching and native performance. The decisive difference is memory safety: **Rust has a borrow checker that proves at compile time that safe code has no use after free, no double free and no data races. Salam does not.** Salam frees heap memory by hand with `.free()` and `defer`, catches a set of common mistakes with compile-time checks and warnings, and checks bounds at runtime in development builds. Those checks help, but they are not a proof.
 
 In exchange, Salam is a smaller language with a gentler learning curve, a large standard library in the box and source code you can write in English or Persian. This comparison shows the same programs in both languages and states the trade-offs plainly.
 
 ## Salam vs Rust at a glance {#at-a-glance}
 
-| | Rust | Salam |
-|---|---|---|
-| Memory management | Ownership, borrowing and lifetimes, checked by the compiler; `Drop` frees automatically | Manual: `.free()`, usually through `defer`; compile-time warnings for common mistakes |
-| Memory safety guarantee | Yes, for safe code; `unsafe` blocks opt out | No guarantee; bounds checks in development builds, ownership checks, AddressSanitizer via `salam memcheck` |
-| Data races | Prevented at compile time by `Send` and `Sync` | Your responsibility: mutexes, atomics, channels |
-| Sum types and matching | `enum` with data, exhaustive `match` | `enum` with data, exhaustive `match` |
-| Errors | `Result<T, E>` with `?` | `throws`, `try`, `catch`; or your own `Result` enum with postfix `?` |
-| Generics | Traits, monomorphized generics | Interfaces, generics with bounds |
-| Code generation | LLVM (other backends in progress) | LLVM, C or Salam's own native backend |
-| Package ecosystem | crates.io, very large | Large standard library, few third-party packages |
-| Stability | 1.0 in 2015, editions keep old code compiling | Pre-1.0, the language still changes |
-| Learning curve | Steep, especially the borrow checker | Gentle: closer to Go or Python in feel |
+|                         | Rust                                                                                    | Salam                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Memory management       | Ownership, borrowing and lifetimes, checked by the compiler; `Drop` frees automatically | Manual: `.free()`, usually through `defer`; compile-time warnings for common mistakes                      |
+| Memory safety guarantee | Yes, for safe code; `unsafe` blocks opt out                                             | No guarantee; bounds checks in development builds, ownership checks, AddressSanitizer via `salam memcheck` |
+| Data races              | Prevented at compile time by `Send` and `Sync`                                          | Your responsibility: mutexes, atomics, channels                                                            |
+| Sum types and matching  | `enum` with data, exhaustive `match`                                                    | `enum` with data, exhaustive `match`                                                                       |
+| Errors                  | `Result<T, E>` with `?`                                                                 | `throws`, `try`, `catch`; or your own `Result` enum with postfix `?`                                       |
+| Generics                | Traits, monomorphized generics                                                          | Interfaces, generics with bounds                                                                           |
+| Code generation         | LLVM (other backends in progress)                                                       | LLVM, C or Salam's own native backend                                                                      |
+| Package ecosystem       | crates.io, very large                                                                   | Large standard library, few third-party packages                                                           |
+| Stability               | 1.0 in 2015, editions keep old code compiling                                           | Pre-1.0, the language still changes                                                                        |
+| Learning curve          | Steep, especially the borrow checker                                                    | Gentle: closer to Go or Python in feel                                                                     |
 
 ## The same program in both languages {#side-by-side}
 
@@ -206,7 +206,7 @@ error[E139]: 'p' is used after its storage was freed on line 6
   = help: a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy
 ```
 
-The ownership checker also reports freeing twice (`E140`), returning something the function's own `defer` frees (`E141`), the same mistakes on only some paths (warnings `W142` and `W143`), and keeping a pointer or copy across a call that may grow a `Vector` or `HashMap` and move its storage (`W144`). It costs nothing at run time, and `--ownership=error` turns its warnings into errors.
+The ownership checker also reports freeing twice (`E140`), returning something the function's own `defer` frees (`E141`), the same mistakes on only some paths (warnings `W142` and `W143`), and keeping a pointer or copy across a call that may grow a `Vector` or `HashMap` and move its storage (`W144`). It costs nothing at runtime, and `--ownership=error` turns its warnings into errors.
 
 But it does not cover everything Rust's checker covers. This Salam program, the direct counterpart of the Rust example above, compiles today without a diagnostic:
 
@@ -219,9 +219,9 @@ func main:
 end
 ```
 
-In a development build the freed `Vector` reads as empty, so this prints `0`, and a `get` on it would stop the program with a bounds error at run time. That is a safety net, not a compile-time guarantee. The same applies to threads: nothing in Salam's type system stops two threads from writing the same variable without a lock, which Rust rejects through `Send` and `Sync`. The [concurrency article](/blog/concurrency-in-salam/) shows the tools Salam gives you instead.
+In a development build the freed `Vector` reads as empty, so this prints `0`, and a `get` on it would stop the program with a bounds error at runtime. That is a safety net, not a compile-time guarantee. The same applies to threads: nothing in Salam's type system stops two threads from writing the same variable without a lock, which Rust rejects through `Send` and `Sync`. The [concurrency article](/blog/concurrency-in-salam/) shows the tools Salam gives you instead.
 
-The honest summary: **Rust prevents these bugs; Salam detects many of them, catches more at run time in development builds, and leaves the rest to you, to tests and to `salam memcheck`.** The [memory management article](/blog/memory-management-in-salam/) goes through Salam's model in full.
+The honest summary: **Rust prevents these bugs; Salam detects many of them, catches more at runtime in development builds, and leaves the rest to you, to tests and to `salam memcheck`.** The [memory management article](/blog/memory-management-in-salam/) goes through Salam's model in full.
 
 ## Performance {#performance}
 

@@ -1347,6 +1347,16 @@ KillGroup Close`. Reads take a time in ms (0 only looks, negative waits
   timeout (`RunResult`, `Free` it). **`os.pty`** `Open(cmd, rows, cols):
 process.Child` runs a program on a pseudo terminal (POSIX only; type
   `\r` for Enter), `Resize GetSize Supported`.
+  **`os.signal`** (POSIX signals; Windows has safe stubs): block, then
+  wait. `NewSet AddSignal DelSignal IsSignal FillSet Block Unblock SetMask
+  CurrentMask` (sets are `void*`, `mem.Free` them), `WaitSignal(set)`
+  returns the number, `Wait`/`WaitTimeout(set, out, ms)` return
+  `WaitArrived WaitTimedOut WaitInvalid WaitFailed WaitBusy`, `Raise`,
+  `Install(sig, handler)`/`Restore(sig, snapshot)`, and `SigInt SigTerm
+  SigHup SigUsr1 SigWinch` etc. (USR1/USR2/CHLD/CONT/STOP/TSTP differ by OS).
+  Block in `main` **before** spawning threads, which inherit the mask; one
+  waiter per process; `WaitTimeout` needs an `Install` first. SIGWINCH:
+  `InstallWinchHandler NewWinchSet WaitWinch WakeWinch WinchSupported`.
   **`os.shell`** `Run Exec System` (code, stdout and stderr together),
   **`os.temp`** `File Directory Remove RemoveDir` (`Directory` returns `""`
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
@@ -1418,6 +1428,22 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   - Input: `Decode DecodeMouse` (pure, testable without a tty), `ReadKey GetKey ReadByte KeyReady ReadPassword`, `Key`/`MouseEvent`, `Key*` codes.
   - Progress: `NewBar BarSet BarAdd BarDraw BarFinish`, `NewSpinner SpinnerTick SpinnerStop SpinnerFree`, `FormatBytes FormatDuration`; off a
     terminal they write one plain final line.
+- **`tui`**: retained-mode full-screen terminal UI on top of `term`.
+  `NewTerminalScreen(root)` then `start()` and **`defer screen.close()` on
+  the next line** (restores the terminal); loop `until screen.next_event(ev):
+  screen.dispatch(ev) ... screen.present() end`, or `run()`. A widget is a
+  struct with `pub use tui.BaseWidget` overriding `render(buf, bounds)` /
+  `handle_event(ev): bool` / `focusable()`; add with `screen.add(parent, w)`
+  (`RootId`), get back with `screen.widget(id)`. Widgets: `NewText NewInput
+  NewButton NewCheckbox NewList NewProgress NewSeparator NewTable
+  NewTableView NewModal`, `Panel {}`; layout `NewRow NewColumn NewGrid
+  NewStack` with `add` and `set_width(i, LayoutSize {...})`. Draw with
+  `buf.put_str(x, y, text, tui.Style { fg = tui.Cyan, bold = true })`,
+  `fill`, `DrawBorder`. Focus: `focus focus_next push_focus pop_focus`,
+  keys via `set_keymap(NewDefaultKeymap())`. Headless (tests, previews):
+  `NewScreen(root, w, h)`, `post`/`dispatch`, `draw()`,
+  `buffer.row_text(y)`; never `start()` without a terminal. Resizes come
+  from SIGWINCH (`os.signal`), polled on Windows.
 
 ```salam
 import term

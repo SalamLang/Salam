@@ -142,7 +142,7 @@ Passing the wrong type, and indexing past the end of a fixed array:
 error[E012]: argument 2: cannot pass 'str' to 'i32'
  --> e2.salam:6:13
 
-error[E021]: index 5 is out of bounds for an array of length 3
+error[E168]: index 5 is out of bounds for an array of length 3
  --> e3.salam:3:13
 ```
 
@@ -155,7 +155,7 @@ The same diagnostics come in other shapes. `--error-style=gcc` gives the one-lin
 With `--error-lang=fa` the same error is printed in Persian, code included, written with Persian digits (`خطا۰۱۳`). A Persian source file gets Persian errors by default.
 
 > [!NOTE]
-> Codes group related problems rather than naming each message: E021, for example, covers both an out-of-range literal index and a non-boolean `if` condition. Read the message as well as the number.
+> Codes group related problems rather than naming each message: E021, for example, covers every operator or condition used with a value of the wrong type, from `<` between two arrays to a non-boolean `if` condition. Read the message as well as the number.
 
 ## Stage 4: code generation with three backends {#codegen}
 

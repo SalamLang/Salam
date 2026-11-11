@@ -32,6 +32,10 @@ include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
 include cc "../condcomp.salam"
 
+const TR_BIND_PKG := 1
+const TR_BIND_BUILTIN := 2
+const TR_BIND_USER := 3
+
 k_tr_type := [
     "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar", "صحیح۸", "i8", "صحیح۱۶", "i16", "صحیح۳۲", "i32", "صحیح", "int", "صحیح۶۴", "i64", "طبیعی۸", "u8", "طبیعی۱۶", "u16", "طبیعی۳۲", "u32", "طبیعی", "uint", "طبیعی۶۴", "u64", "اندازه مثبت", "usize", "اندازه", "size", "اعشار۳۲", "f32", "اعشار", "float", "اعشار۶۴", "f64", "صحیح۱۲۸", "i128", "طبیعی۱۲۸", "u128", "وکتور", "Vector", "نگاشت", "HashMap", "پیمایشگرنگاشت", "MapIter", "پرونده", "File", "گوناگون", "Variant"
 ]
@@ -39,8 +43,6 @@ k_tr_type := [
 k_tr_type_alt := [
     "صحیح8", "i8", "صحیح16", "i16", "صحیح32", "i32", "صحیح64", "i64", "طبیعی8", "u8", "طبیعی16", "u16", "طبیعی32", "u32", "طبیعی64", "u64", "اعشار32", "f32", "اعشار64", "f64", "صحیح128", "i128", "طبیعی128", "u128"
 ]
-
-k_tr_container_files := ["collections/vector.salam", "collections/hashmap.salam"]
 
 k_tr_ctx := [
     "پیوند", "link", "ایستا", "static", "پویا", "dynamic", "چارچوب", "framework", "شامل", "use"
@@ -52,6 +54,16 @@ mut tr_pkg_en := Vector {} as Vector<str>
 mut tr_pkg_fa := Vector {} as Vector<str>
 mut tr_pkg_dir := Vector {} as Vector<str>
 mut tr_core_idx := 0 - 1
+
+struct TrBind:
+    pub name: str = ""
+    pub at: int = 0
+    pub scope: int = 0 - 1
+    pub field: bool = false
+    pub kind: int = 0
+    pub pkg: int = 0 - 1
+    pub file: str = ""
+end
 
 struct TrCtx:
     pub target: int = 0
@@ -532,16 +544,10 @@ func tr_pkg_member(std_root: str, pkg_dir: str, name: str, from_fa: bool, method
 end
 
 func tr_lookup_member(std_root: str, pkg_dir: str, name: str, from_fa: bool, methods: bool): str:
-    if str.Len(pkg_dir) > 0:
-        ret tr_pkg_member(std_root, pkg_dir, name, from_fa, methods)
+    if str.EndsWith(pkg_dir, ".salam"):
+        ret tr_scan_file_member(pth.PathJoin(std_root, pkg_dir), name, from_fa, methods)
     end
-    each file in k_tr_container_files:
-        found := tr_scan_file_member(pth.PathJoin(std_root, file), name, from_fa, methods)
-        if str.Len(found) > 0:
-            ret found
-        end
-    end
-    ret ""
+    ret tr_pkg_member(std_root, pkg_dir, name, from_fa, methods)
 end
 
 func tr_word_kind(kind: int): bool:
@@ -592,7 +598,7 @@ func tr_builtin_words(targetpack: int, toks: tok.TokenStream, i: int, n: int, fr
     ret found
 end
 
-func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, member_pkg: int, var_pkg: int, alias_pkg: Vector<int>, declared: bool, user_method: bool, container: bool, best_j &: int): str:
+func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, member_pkg: int, var_pkg: int, alias_pkg: Vector<int>, declared: bool, user_method: bool, recv_kind: int, recv_file: str, best_j &: int): str:
     best_j = i
     if member_pkg >= 0:
         top := tr_member_words(std_root, tr_pkg_dir.get(member_pkg), toks, i, n, from_fa, false, best_j)
@@ -611,15 +617,24 @@ func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i:
         best_j = i
         ret ""
     end
-    builtin := tr_builtin_words(targetpack, toks, i, n, from_fa, best_j)
-    if str.Len(builtin) > 0:
-        ret builtin
+    if recv_kind == TR_BIND_USER:
+        copier := tr_builtin_words(targetpack, toks, i, n, from_fa, best_j)
+        en := from_fa ? copier : tok.StreamAt(toks, i).lexeme
+        if str.Equals(en, "copy") or str.Equals(en, "deep_copy"):
+            ret copier
+        end
+        best_j = i
+        ret ""
     end
-    if container:
-        found := tr_member_words(std_root, "", toks, i, n, from_fa, true, best_j)
+    if str.Len(recv_file) > 0:
+        found := tr_member_words(std_root, recv_file, toks, i, n, from_fa, true, best_j)
         if str.Len(found) > 0 and tr_next_is_call(toks, best_j, n):
             ret found
         end
+    end
+    builtin := tr_builtin_words(targetpack, toks, i, n, from_fa, best_j)
+    if str.Len(builtin) > 0:
+        ret builtin
     end
     best_j = i
     if declared:
@@ -779,29 +794,6 @@ func tr_method_names(toks: tok.TokenStream, n: int): Vector<str>:
     ret names
 end
 
-func tr_builtin_typed_vars(toks: tok.TokenStream, n: int, targetpack: int): Vector<str>:
-    mut names := Vector {} as Vector<str>
-    mut prev := 0 - 1
-    mut i := 0
-    until i + 2 < n:
-        t := tok.StreamAt(toks, i)
-        if t.kind == tok.TK_IDENT and prev != tok.TK_DOT:
-            op := tok.StreamAt(toks, i + 1).kind
-            if op == tok.TK_COLON_ASSIGN or op == tok.TK_COLON or op == tok.TK_ASSIGN:
-                val := tok.StreamAt(toks, i + 2)
-                if val.kind == tok.TK_STRING or str.Len(tr_type_word(targetpack, val.lexeme)) > 0:
-                    names.push(t.lexeme)
-                end
-            end
-        end
-        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
-            prev = t.kind
-        end
-        i++
-    end
-    ret names
-end
-
 func tr_component_names(toks: tok.TokenStream, n: int): Vector<str>:
     mut names := Vector {} as Vector<str>
     mut i := 0
@@ -913,61 +905,195 @@ func tr_alias_words(toks: tok.TokenStream, i: int, n: int, aliases: Vector<str>,
     ret 0 - 1
 end
 
-func tr_var_packages(toks: tok.TokenStream, n: int, aliases: Vector<str>, alias_pkg: Vector<int>, var_names &: Vector<str>, var_pkgs &: Vector<int>):
-    mut prev := 0 - 1
-    mut i := 0
-    until i + 3 < n:
+func tr_func_scopes(toks: tok.TokenStream, n: int, parents &: Vector<int>): Vector<int>:
+    mut scopes := Vector {} as Vector<int>
+    mut open_at := Vector {} as Vector<int>
+    defer open_at.free()
+    mut open_col := Vector {} as Vector<int>
+    defer open_col.free()
+    mut line := 0 - 1
+    mut line_col := 0
+    repeat n in i:
         t := tok.StreamAt(toks, i)
-        if t.kind == tok.TK_IDENT and prev != tok.TK_DOT:
-            op := tok.StreamAt(toks, i + 1).kind
-            rhs := tok.StreamAt(toks, i + 2)
-            if op == tok.TK_COLON_ASSIGN or op == tok.TK_ASSIGN or (op == tok.TK_COLON and rhs.begin_line == t.begin_line):
-                mut count := 0
-                a := tr_alias_words(toks, i + 2, n, aliases, count)
-                if a >= 0 and alias_pkg.get(a) >= 0:
-                    var_names.push(t.lexeme)
-                    var_pkgs.push(alias_pkg.get(a))
-                else op != tok.TK_COLON and rhs.kind == tok.TK_IDENT and tok.StreamAt(toks, i + 3).kind == tok.TK_STMT_END and tr_var_package(var_names, var_pkgs, rhs.lexeme) >= 0:
-                    var_names.push(t.lexeme)
-                    var_pkgs.push(tr_var_package(var_names, var_pkgs, rhs.lexeme))
+        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK and t.kind != tok.TK_STMT_END and t.begin_line as int != line:
+            line = t.begin_line as int
+            line_col = t.begin_col as int
+            until open_col.len() > 0 and open_col.get(open_col.len() - 1) >= line_col:
+                _c := open_col.pop()
+                _a := open_at.pop()
+            end
+        end
+        cur := open_at.len() > 0 ? open_at.get(open_at.len() - 1) : 0 - 1
+        scopes.push(cur)
+        parents.push(cur)
+        if t.kind == tok.TK_KW_FUNC:
+            open_at.push(i)
+            open_col.push(line_col)
+        end
+    end
+    ret scopes
+end
+
+func tr_type_names(toks: tok.TokenStream, n: int, kinds_struct: bool): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    repeat n in i:
+        k := tok.StreamAt(toks, i).kind
+        opener := kinds_struct ? (k == tok.TK_KW_STRUCT or k == tok.TK_KW_INTERFACE or k == tok.TK_KW_ENUM) : k == tok.TK_KW_TYPE
+        if opener and i + 1 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT:
+            names.push(tr_call_words(toks, i + 1, n))
+        end
+    end
+    ret names
+end
+
+func tr_local_aliases(toks: tok.TokenStream, n: int, aliases: Vector<str>, alias_pkg: Vector<int>): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    repeat n in i:
+        if tok.StreamAt(toks, i).kind == tok.TK_KW_INCLUDE and i + 1 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT:
+            names.push(tok.StreamAt(toks, i + 1).lexeme)
+        end
+    end
+    repeat aliases.len() in a:
+        if alias_pkg.get(a) < 0 and str.Len(aliases.get(a)) > 0:
+            names.push(aliases.get(a))
+        end
+    end
+    ret names
+end
+
+func tr_builtin_type_en(name: str, from_fa: bool): str:
+    if from_fa:
+        ret tr_type_to_en(name)
+    end
+    ret str.Len(tr_type_to_fa(name)) > 0 ? name : ""
+end
+
+func tr_container_file(en_type: str): str:
+    if str.Equals(en_type, "Vector"):
+        ret "collections/vector.salam"
+    else str.Equals(en_type, "HashMap") or str.Equals(en_type, "MapIter"):
+        ret "collections/hashmap.salam"
+    end
+    ret ""
+end
+
+func tr_bind_find(binds: Vector<TrBind>, scopes: Vector<int>, parents: Vector<int>, name: str, at_i: int, field: bool): int:
+    mut sc := field ? 0 - 1 : scopes.get(at_i)
+    until true:
+        mut before := 0 - 1
+        mut after := 0 - 1
+        repeat binds.len() in b:
+            bd := binds.get(b)
+            if bd.field == field and bd.scope == sc and lp.IdentEqual(bd.name, name):
+                if bd.at < at_i:
+                    before = b
+                else after < 0:
+                    after = b
                 end
             end
+        end
+        if before >= 0:
+            ret before
+        end
+        if after >= 0:
+            ret after
+        end
+        if sc < 0:
+            break
+        end
+        sc = parents.get(sc)
+    end
+    ret 0 - 1
+end
+
+func tr_bind_add(binds &: Vector<TrBind>, toks: tok.TokenStream, n: int, i: int, scopes: Vector<int>, kind: int, pkg: int, file: str):
+    sc := scopes.get(i)
+    line := tok.StreamAt(toks, i).begin_line
+    mut first := i
+    until first > 0 and tok.StreamAt(toks, first - 1).kind != tok.TK_STMT_END and tok.StreamAt(toks, first - 1).begin_line == line:
+        first--
+    end
+    field := sc < 0 and tr_in_struct_body(toks, first, n)
+    binds.push(TrBind { name = tok.StreamAt(toks, i).lexeme, at = i, scope = sc, field = field, kind = kind, pkg = pkg, file = file })
+end
+
+func tr_bind_decl(std_root: str, toks: tok.TokenStream, n: int, i: int, prev: int, from_fa: bool, aliases: Vector<str>, alias_pkg: Vector<int>, scopes: Vector<int>, parents: Vector<int>, user_types: Vector<str>, type_aliases: Vector<str>, local_aliases: Vector<str>, binds &: Vector<TrBind>):
+    t := tok.StreamAt(toks, i)
+    mut op_at := i + 1
+    if op_at < n and tok.StreamAt(toks, op_at).kind == tok.TK_AMP:
+        op_at++
+    end
+    if op_at + 1 >= n:
+        ret
+    end
+    op := tok.StreamAt(toks, op_at).kind
+    mut j := op_at + 1
+    typed := op == tok.TK_COLON and tok.StreamAt(toks, j).begin_line == t.begin_line and (prev < 0 or prev == tok.TK_STMT_END or prev == tok.TK_LPAREN or prev == tok.TK_COMMA or prev == tok.TK_KW_MUT or prev == tok.TK_KW_PUB or prev == tok.TK_KW_CONST)
+    assign := op == tok.TK_COLON_ASSIGN or (op == tok.TK_ASSIGN and prev != tok.TK_LBRACE and prev != tok.TK_COMMA)
+    if not typed and not assign:
+        ret
+    end
+    if typed and j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT and (str.Equals(tok.StreamAt(toks, j).lexeme, "dyn") or str.Equals(tok.StreamAt(toks, j).lexeme, "پویا")):
+        j++
+    end
+    mut count := 0
+    a := tr_alias_words(toks, j, n, aliases, count)
+    if a >= 0 and alias_pkg.get(a) >= 0:
+        tr_bind_add(binds, toks, n, i, scopes, TR_BIND_PKG, alias_pkg.get(a), "")
+        ret
+    end
+    rt := tok.StreamAt(toks, j)
+    if assign and rt.kind == tok.TK_STRING:
+        tr_bind_add(binds, toks, n, i, scopes, TR_BIND_BUILTIN, 0 - 1, "")
+        ret
+    end
+    if rt.kind != tok.TK_IDENT:
+        ret
+    end
+    en_type := tr_builtin_type_en(rt.lexeme, from_fa)
+    if str.Len(en_type) > 0:
+        tr_bind_add(binds, toks, n, i, scopes, TR_BIND_BUILTIN, 0 - 1, tr_container_file(en_type))
+        ret
+    end
+    tname := tr_call_words(toks, j, n)
+    local_type := typed and tr_next_kind(toks, j, n) == tok.TK_DOT and tr_has_ident(local_aliases, rt.lexeme)
+    if local_type or (not tr_has_ident(type_aliases, tname) and tr_has_ident(user_types, tname) and (typed or tr_next_kind(toks, j, n) == tok.TK_LBRACE)):
+        tr_bind_add(binds, toks, n, i, scopes, TR_BIND_USER, 0 - 1, "")
+        ret
+    end
+    if not assign:
+        ret
+    end
+    src_b := tr_bind_find(binds, scopes, parents, rt.lexeme, j, false)
+    if src_b >= 0:
+        sb := binds.get(src_b)
+        nk := tr_next_kind(toks, j, n)
+        if (sb.kind == TR_BIND_PKG and sb.pkg == tr_core_idx) or nk == tok.TK_STMT_END or nk < 0:
+            tr_bind_add(binds, toks, n, i, scopes, sb.kind, sb.pkg, sb.file)
+            ret
+        end
+    end
+    mut bj := j
+    if tr_core_idx >= 0 and str.Len(tr_prelude_word(std_root, toks, j, n, from_fa, bj)) > 0:
+        tr_bind_add(binds, toks, n, i, scopes, TR_BIND_PKG, tr_core_idx, "")
+    end
+end
+
+func tr_bindings(std_root: str, toks: tok.TokenStream, n: int, from_fa: bool, aliases: Vector<str>, alias_pkg: Vector<int>, scopes: Vector<int>, parents: Vector<int>, user_types: Vector<str>, type_aliases: Vector<str>, local_aliases: Vector<str>): Vector<TrBind>:
+    mut binds := Vector {} as Vector<TrBind>
+    mut prev := 0 - 1
+    repeat n in i:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_KW_CATCH and tr_core_idx >= 0 and i + 2 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, i + 2).kind == tok.TK_COLON:
+            tr_bind_add(binds, toks, n, i + 1, scopes, TR_BIND_PKG, tr_core_idx, "")
+        else t.kind == tok.TK_IDENT and prev != tok.TK_DOT and prev != tok.TK_KW_CATCH:
+            tr_bind_decl(std_root, toks, n, i, prev, from_fa, aliases, alias_pkg, scopes, parents, user_types, type_aliases, local_aliases, binds)
         end
         if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
             prev = t.kind
         end
-        i++
     end
-end
-
-func tr_catch_vars(std_root: str, toks: tok.TokenStream, n: int, from_fa: bool, var_names &: Vector<str>, var_pkgs &: Vector<int>):
-    if tr_core_idx < 0:
-        ret
-    end
-    repeat n in i:
-        k := tok.StreamAt(toks, i).kind
-        if k == tok.TK_KW_CATCH and i + 2 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, i + 2).kind == tok.TK_COLON:
-            var_names.push(tok.StreamAt(toks, i + 1).lexeme)
-            var_pkgs.push(tr_core_idx)
-        else k == tok.TK_IDENT and i + 2 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_COLON_ASSIGN and tok.StreamAt(toks, i + 2).kind == tok.TK_IDENT:
-            rhs := tok.StreamAt(toks, i + 2).lexeme
-            mut bj := i + 2
-            if tr_var_package(var_names, var_pkgs, rhs) == tr_core_idx or str.Len(tr_prelude_word(std_root, toks, i + 2, n, from_fa, bj)) > 0:
-                var_names.push(tok.StreamAt(toks, i).lexeme)
-                var_pkgs.push(tr_core_idx)
-            end
-        end
-    end
-end
-
-func tr_var_package(var_names: Vector<str>, var_pkgs: Vector<int>, name: str): int:
-    mut found := 0 - 1
-    repeat var_names.len() in v:
-        if lp.IdentEqual(var_names.get(v), name):
-            found = var_pkgs.get(v)
-        end
-    end
-    ret found
+    ret binds
 end
 
 func tr_has_ident(names: Vector<str>, w: str): bool:
@@ -1116,8 +1242,6 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     defer names.free()
     method_names := tr_method_names(toks, n)
     defer method_names.free()
-    builtin_vars := tr_builtin_typed_vars(toks, n, targetpack)
-    defer builtin_vars.free()
     comp_names := tr_component_names(toks, n)
     defer comp_names.free()
     pkgs := tr_imported_packages(toks, n)
@@ -1135,14 +1259,23 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         aliases.push("")
         alias_pkg.push(tr_core_idx)
     end
-    mut var_names := Vector {} as Vector<str>
-    defer var_names.free()
-    mut var_pkgs := Vector {} as Vector<int>
-    defer var_pkgs.free()
-    tr_var_packages(toks, n, aliases, alias_pkg, var_names, var_pkgs)
-    tr_catch_vars(std_root, toks, n, from_fa, var_names, var_pkgs)
+    mut parents := Vector {} as Vector<int>
+    defer parents.free()
+    scopes := tr_func_scopes(toks, n, parents)
+    defer scopes.free()
+    user_types := tr_type_names(toks, n, true)
+    defer user_types.free()
+    local_aliases := tr_local_aliases(toks, n, aliases, alias_pkg)
+    defer local_aliases.free()
+    type_aliases := tr_type_names(toks, n, false)
+    defer type_aliases.free()
+    binds := tr_bindings(std_root, toks, n, from_fa, aliases, alias_pkg, scopes, parents, user_types, type_aliases, local_aliases)
+    defer binds.free()
     mut prev_ident := ""
+    mut prev_ident_dotted := false
     mut dot_var := ""
+    mut dot_field := false
+    mut dot_at := 0
     mut brace_depth := 0
     mut core_lit_level := 0 - 1
     mut core_lit_next := false
@@ -1172,7 +1305,14 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         mut kw_j := i
         mut dot_member := ""
         if prev_kind == tok.TK_DOT and tr_word_kind(t.kind) and (t.kind == tok.TK_IDENT or from_fa):
-            dot_member = tr_resolve_member(std_root, targetpack, toks, i, n, from_fa, member_pkg, tr_var_package(var_names, var_pkgs, dot_var), alias_pkg, tr_has(names, t.lexeme), tr_has(method_names, tr_call_words(toks, i, n)) and not tr_has(builtin_vars, dot_var), tr_has(builtin_vars, dot_var), kw_j)
+            recv := str.Len(dot_var) > 0 ? tr_bind_find(binds, scopes, parents, dot_var, dot_at, dot_field) : 0 - 1
+            mut rb := TrBind {}
+            if recv >= 0:
+                rb = binds.get(recv)
+            end
+            var_pkg := rb.kind == TR_BIND_PKG ? rb.pkg : 0 - 1
+            user_method := tr_has(method_names, tr_call_words(toks, i, n)) and rb.kind != TR_BIND_BUILTIN
+            dot_member = tr_resolve_member(std_root, targetpack, toks, i, n, from_fa, member_pkg, var_pkg, alias_pkg, tr_has(names, t.lexeme), user_method, rb.kind, rb.file, kw_j)
         end
         if t.kind == tok.TK_IDENT and not in_import and prev_kind != tok.TK_DOT and not tr_has(names, t.lexeme):
             recv_a = tr_alias_words(toks, i, n, aliases, recv_count)
@@ -1328,11 +1468,14 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         if t.kind == tok.TK_DOT:
             member_pkg = recv_prev
             dot_var = prev_kind == tok.TK_IDENT ? prev_ident : ""
+            dot_field = prev_ident_dotted
+            dot_at = i
         else t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
             member_pkg = 0 - 1
         end
         if t.kind == tok.TK_IDENT:
             prev_ident = t.lexeme
+            prev_ident_dotted = prev_kind == tok.TK_DOT
         end
         if t.kind == tok.TK_KW_IMPORT:
             in_import = true
@@ -1508,6 +1651,9 @@ func translate_cmd(opt &: dr.Dr): int:
     c.fallback = fallback
     c.rewrite = opt.translate_rewrite
     c.stdlib_root = str.Len(opt.stdlib_path) > 0 ? opt.stdlib_path : "std"
+    if str.Len(opt.stdlib_path) > 0 and os.IsDir(pth.PathJoin(opt.stdlib_path, "std")):
+        c.stdlib_root = pth.PathJoin(opt.stdlib_path, "std")
+    end
     if str.Len(opt.stdlib_path) == 0 and not os.IsDir("std"):
         sroot := sm.GetStdlibRoot()
         if str.Len(sroot) > 0 and os.IsDir(sroot + "/std"):

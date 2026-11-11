@@ -204,7 +204,7 @@ C's biggest cost is undefined behavior: reading past an array, overflowing a sig
 
 Salam closes several of those doors:
 
-- **Bounds checks.** When the compiler can prove an index is out of range, the program does not compile. For a fixed array `a := [1, 2, 3]`, writing `a[3]` is `E021`; for a `Vector` whose length the compiler can track, `v.get(v.len())` is `E146` with the message "index out of bounds: 'i' is 2, but 'v' has 2 elements". When the index is only known at runtime, a development build checks it and stops with `salam panic: Vector.get: index out of bounds` instead of reading someone else's memory.
+- **Bounds checks.** When the compiler can prove an index is out of range, the program does not compile. For a fixed array `a := [1, 2, 3]`, writing `a[3]` is `E168`; for a `Vector` whose length the compiler can track, `v.get(v.len())` is `E146` with the message "index out of bounds: 'i' is 2, but 'v' has 2 elements". When the index is only known at runtime, a development build checks it and stops with `salam panic: Vector.get: index out of bounds` instead of reading someone else's memory.
 - **Integer overflow.** In a development build, signed arithmetic wraps predictably. Range checks at compile time report an overflow, a division by zero or a null dereference that always happens as an error, and one that can happen as a warning.
 - **Initialization and types.** Variables are declared with a value, immutable unless declared `mut`, and conversions between types are explicit.
 

@@ -35644,7 +35644,11 @@ pub hdr: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
 @en "volumes"
 @fa "بخش ها"
 pub volumes: Vector<str> = Vector {} as Vector<str>
+@en "memp"
+@fa "داده حافظه"
 pub memp: void* = null
+@en "memn"
+@fa "اندازه حافظه"
 pub memn: i64 = 0 as i64
 end
 func _szx_new(s: _Sz, fi: int, made: Vector<str>): _SzX:
@@ -303935,7 +303939,7 @@ c.key = mem.Allocate(32 as u64)
 mem.Set(c.key, 0, 32 as u64)
 mem.Copy(c.key, key, klen as u64)
 if kind != AEAD_CHACHA20_POLY1305:
-c.fg = _fg_new(key, klen)
+c.fg = _fg_new_gcm(key, klen)
 end
 ret c as void*
 end
@@ -303982,7 +303986,7 @@ pub func AesGcmSealRaw(
 key: void*, keylen: int, nonce: void*, aad: void*, aadlen: int, pt: void*, n: int, out: void*
 ): bool:
 if keylen != 16 and keylen != 32: ret false end
-c := _fg_new(key, keylen)
+c := _fg_new_gcm(key, keylen)
 defer _fg_free(c)
 _fg_seal(c, nonce, aad, aadlen, pt, out, n, ((out as i64) + (n as i64)) as void*)
 ret true
@@ -303995,7 +303999,7 @@ key: void*, keylen: int, nonce: void*, aad: void*, aadlen: int, sealed: void*, s
 if keylen != 16 and keylen != 32: ret false end
 if sealed_len < 16: ret false end
 n := sealed_len - 16
-c := _fg_new(key, keylen)
+c := _fg_new_gcm(key, keylen)
 defer _fg_free(c)
 ret _fg_open(c, nonce, aad, aadlen, sealed, n, ((sealed as i64) + (n as i64)) as void*, out)
 end
@@ -304919,6 +304923,7 @@ struct FastGcm:
 pub rk: u32* = null
 pub ht: u64* = null
 pub nr: int = 0
+pub hw: HwGcm* = null
 end
 struct FgY:
 pub hi: u64 = 0 as u64
@@ -305008,18 +305013,10 @@ end
 inline func _fg_sub4(a: u32, b: u32, c: u32, d: u32): u32:
 ret ((FG_SBOX[(a >> (24 as u32)) as int] as u32) << (24 as u32)) | ((FG_SBOX[((b >> (16 as u32)) & (255 as u32)) as int] as u32) << (16 as u32)) | ((FG_SBOX[((c >> (8 as u32)) & (255 as u32)) as int] as u32) << (8 as u32)) | (FG_SBOX[(d & (255 as u32)) as int] as u32)
 end
-func _fg_new(key: void*, keylen: int): FastGcm*:
-if keylen != 16 and keylen != 32:
-ret null
-end
-c := mem.AllocateZeroed(sizeof(FastGcm) as u64) as FastGcm*
-c.nr = keylen == 16 ? 10 : 14
+func _fg_expand(key: void*, keylen: int, rk: u32*): int:
 nk := keylen / 4
-total := (c.nr + 1) * 4
-mem_ := mem.AllocateZeroed(4352 as u64)
-c.rk = mem_ as u32*
-c.ht = ((mem_ as i64) + (256 as i64)) as u64*
-rk := c.rk
+nr := nk + 6
+total := (nr + 1) * 4
 repeat nk in i:
 rk[i] = _fg_be32(key, i * 4)
 end
@@ -305034,6 +305031,30 @@ end
 rk[i] = rk[i - nk] ^ t
 i++
 end
+ret nr
+end
+func _fg_new_gcm(key: void*, keylen: int): FastGcm*:
+if keylen != 16 and keylen != 32:
+ret null
+end
+hw := _hg_try(key, keylen)
+if hw != null:
+c := mem.AllocateZeroed(sizeof(FastGcm) as u64) as FastGcm*
+c.nr = hw.nr
+c.hw = hw
+ret c
+end
+ret _fg_new(key, keylen)
+end
+func _fg_new(key: void*, keylen: int): FastGcm*:
+if keylen != 16 and keylen != 32:
+ret null
+end
+c := mem.AllocateZeroed(sizeof(FastGcm) as u64) as FastGcm*
+mem_ := mem.AllocateZeroed(4352 as u64)
+c.rk = mem_ as u32*
+c.ht = ((mem_ as i64) + (256 as i64)) as u64*
+c.nr = _fg_expand(key, keylen, c.rk)
 hb := mem.AllocateZeroed(16 as u64)
 _fg_block(c, 0 as u32, 0 as u32, 0 as u32, 0 as u32, hb, 0)
 mut vh := _be64(hb, 0)
@@ -305066,8 +305087,11 @@ func _fg_free(c: FastGcm*):
 if c == null:
 ret
 end
+_hg_free(c.hw)
+if c.rk != null:
 _wipe(c.rk as void*, 4352)
 mem.Free(c.rk as void*)
+end
 _wipe(c as void*, sizeof(FastGcm) as int)
 mem.Free(c as void*)
 end
@@ -305117,6 +305141,10 @@ mask.lo = y.lo ^ _be64(m, 8)
 mem.Free(m)
 end
 func _fg_seal(c: FastGcm*, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+if c.hw != null:
+_hg_seal(c.hw, nonce, aad, aadlen, pt, ct, n, tag)
+ret
+end
 _fg_ctr(c, nonce, 2, pt, ct, n)
 mut t := FgY {}
 _fg_tag(c, nonce, aad, aadlen, ct, n, t)
@@ -305124,6 +305152,9 @@ _pbe64(t.hi, tag, 0)
 _pbe64(t.lo, tag, 8)
 end
 func _fg_open(c: FastGcm*, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+if c.hw != null:
+ret _hg_open(c.hw, nonce, aad, aadlen, ct, n, tag, pt)
+end
 mut t := FgY {}
 _fg_tag(c, nonce, aad, aadlen, ct, n, t)
 d1 := t.hi ^ _be64(tag, 0)
@@ -305132,6 +305163,319 @@ if (d1 | d0) != (0 as u64):
 ret false
 end
 _fg_ctr(c, nonce, 2, ct, pt, n)
+ret true
+end
+package tls
+import mem
+import cpu
+struct HwGcm:
+pub rk: void* = null
+pub hp: void* = null
+pub nr: int = 0
+end
+inline func _hg_at(p: void*, off: int): void*:
+ret ((p as i64) + (off as i64)) as void*
+end
+inline func _hg_red(l: u128): u128:
+o := (l & (127 as u128)) ^ ((l & (3 as u128)) << (5 as u128)) ^ ((l & (1 as u128)) << (6 as u128))
+ret l ^ (l >> (1 as u128)) ^ (l >> (2 as u128)) ^ (l >> (7 as u128)) ^ (o << (121 as u128)) ^ (o << (120 as u128)) ^ (o << (119 as u128)) ^ (o << (114 as u128))
+end
+inline func _hg_fold(lo: u128, mid: u128, hi: u128): u128:
+rlo := lo ^ (mid << (64 as u128))
+rhi := hi ^ (mid >> (64 as u128))
+shi := (rhi << (1 as u128)) | (rlo >> (127 as u128))
+slo := rlo << (1 as u128)
+ret shi ^ _hg_red(slo)
+end
+inline func _hg_mul(a: u128, b: u128): u128:
+lo := cpu.HwClmul(a, b, 0)
+hi := cpu.HwClmul(a, b, 17)
+mid := cpu.HwClmul(a, b, 1) ^ cpu.HwClmul(a, b, 16)
+ret _hg_fold(lo, mid, hi)
+end
+inline func _hg_cb(nlo: u64, nhi: u64, ctr: u32): u128:
+be := ((ctr & (255 as u32)) << (24 as u32)) | ((ctr & (65280 as u32)) << (8 as u32)) | ((ctr >> (8 as u32)) & (65280 as u32)) | (ctr >> (24 as u32))
+hi := nhi | ((be as u64) << (32 as u64))
+ret ((hi as u128) << (64 as u128)) | (nlo as u128)
+end
+func _hg_enc1(c: HwGcm*, x: u128): u128:
+rk := c.rk
+mut b := x ^ cpu.HwLoad(rk)
+mut r := 1
+until r < c.nr:
+b = cpu.HwAesEnc(b, cpu.HwLoad(_hg_at(rk, r * 16)))
+r++
+end
+ret cpu.HwAesEncLast(b, cpu.HwLoad(_hg_at(rk, c.nr * 16)))
+end
+func _hg_ctr(c: HwGcm*, nonce: void*, first: u32, inp: void*, out: void*, n: int):
+rk := c.rk
+nr := c.nr
+nlo := _le64(nonce, 0)
+nhi := _le32(nonce, 8) as u64
+mut ctr := first
+mut off := 0
+until n - off >= 128:
+k0 := cpu.HwLoad(rk)
+mut b0 := _hg_cb(nlo, nhi, ctr) ^ k0
+mut b1 := _hg_cb(nlo, nhi, ctr + (1 as u32)) ^ k0
+mut b2 := _hg_cb(nlo, nhi, ctr + (2 as u32)) ^ k0
+mut b3 := _hg_cb(nlo, nhi, ctr + (3 as u32)) ^ k0
+mut b4 := _hg_cb(nlo, nhi, ctr + (4 as u32)) ^ k0
+mut b5 := _hg_cb(nlo, nhi, ctr + (5 as u32)) ^ k0
+mut b6 := _hg_cb(nlo, nhi, ctr + (6 as u32)) ^ k0
+mut b7 := _hg_cb(nlo, nhi, ctr + (7 as u32)) ^ k0
+mut r := 1
+until r < nr:
+kr := cpu.HwLoad(_hg_at(rk, r * 16))
+b0 = cpu.HwAesEnc(b0, kr)
+b1 = cpu.HwAesEnc(b1, kr)
+b2 = cpu.HwAesEnc(b2, kr)
+b3 = cpu.HwAesEnc(b3, kr)
+b4 = cpu.HwAesEnc(b4, kr)
+b5 = cpu.HwAesEnc(b5, kr)
+b6 = cpu.HwAesEnc(b6, kr)
+b7 = cpu.HwAesEnc(b7, kr)
+r++
+end
+kl := cpu.HwLoad(_hg_at(rk, nr * 16))
+b0 = cpu.HwAesEncLast(b0, kl)
+b1 = cpu.HwAesEncLast(b1, kl)
+b2 = cpu.HwAesEncLast(b2, kl)
+b3 = cpu.HwAesEncLast(b3, kl)
+b4 = cpu.HwAesEncLast(b4, kl)
+b5 = cpu.HwAesEncLast(b5, kl)
+b6 = cpu.HwAesEncLast(b6, kl)
+b7 = cpu.HwAesEncLast(b7, kl)
+cpu.HwStore(_hg_at(out, off + 0), cpu.HwLoad(_hg_at(inp, off + 0)) ^ b0)
+cpu.HwStore(_hg_at(out, off + 16), cpu.HwLoad(_hg_at(inp, off + 16)) ^ b1)
+cpu.HwStore(_hg_at(out, off + 32), cpu.HwLoad(_hg_at(inp, off + 32)) ^ b2)
+cpu.HwStore(_hg_at(out, off + 48), cpu.HwLoad(_hg_at(inp, off + 48)) ^ b3)
+cpu.HwStore(_hg_at(out, off + 64), cpu.HwLoad(_hg_at(inp, off + 64)) ^ b4)
+cpu.HwStore(_hg_at(out, off + 80), cpu.HwLoad(_hg_at(inp, off + 80)) ^ b5)
+cpu.HwStore(_hg_at(out, off + 96), cpu.HwLoad(_hg_at(inp, off + 96)) ^ b6)
+cpu.HwStore(_hg_at(out, off + 112), cpu.HwLoad(_hg_at(inp, off + 112)) ^ b7)
+ctr += 8 as u32
+off += 128
+end
+until n - off >= 64:
+k0 := cpu.HwLoad(rk)
+mut b0 := _hg_cb(nlo, nhi, ctr) ^ k0
+mut b1 := _hg_cb(nlo, nhi, ctr + (1 as u32)) ^ k0
+mut b2 := _hg_cb(nlo, nhi, ctr + (2 as u32)) ^ k0
+mut b3 := _hg_cb(nlo, nhi, ctr + (3 as u32)) ^ k0
+mut r := 1
+until r < nr:
+kr := cpu.HwLoad(_hg_at(rk, r * 16))
+b0 = cpu.HwAesEnc(b0, kr)
+b1 = cpu.HwAesEnc(b1, kr)
+b2 = cpu.HwAesEnc(b2, kr)
+b3 = cpu.HwAesEnc(b3, kr)
+r++
+end
+kl := cpu.HwLoad(_hg_at(rk, nr * 16))
+b0 = cpu.HwAesEncLast(b0, kl)
+b1 = cpu.HwAesEncLast(b1, kl)
+b2 = cpu.HwAesEncLast(b2, kl)
+b3 = cpu.HwAesEncLast(b3, kl)
+cpu.HwStore(_hg_at(out, off + 0), cpu.HwLoad(_hg_at(inp, off + 0)) ^ b0)
+cpu.HwStore(_hg_at(out, off + 16), cpu.HwLoad(_hg_at(inp, off + 16)) ^ b1)
+cpu.HwStore(_hg_at(out, off + 32), cpu.HwLoad(_hg_at(inp, off + 32)) ^ b2)
+cpu.HwStore(_hg_at(out, off + 48), cpu.HwLoad(_hg_at(inp, off + 48)) ^ b3)
+ctr += 4 as u32
+off += 64
+end
+until n - off >= 16:
+k0 := cpu.HwLoad(rk)
+mut b0 := _hg_cb(nlo, nhi, ctr) ^ k0
+mut r := 1
+until r < nr:
+kr := cpu.HwLoad(_hg_at(rk, r * 16))
+b0 = cpu.HwAesEnc(b0, kr)
+r++
+end
+kl := cpu.HwLoad(_hg_at(rk, nr * 16))
+b0 = cpu.HwAesEncLast(b0, kl)
+cpu.HwStore(_hg_at(out, off + 0), cpu.HwLoad(_hg_at(inp, off + 0)) ^ b0)
+ctr++
+off += 16
+end
+if off < n:
+ks := _hg_enc1(c, _hg_cb(nlo, nhi, ctr))
+t := mem.AllocateZeroed(16 as u64)
+cpu.HwStore(t, ks)
+tb := t as u8*
+ib := inp as u8*
+ob := out as u8*
+repeat n - off in j:
+ob[off + j] = ib[off + j] ^ tb[j]
+end
+_wipe(t, 16)
+mem.Free(t)
+end
+end
+func _hg_ghash(c: HwGcm*, y0: u128, p: void*, n: int): u128:
+hp := c.hp
+mut y := y0
+mut off := 0
+until n - off >= 128:
+x0 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 0))) ^ y
+h0 := cpu.HwLoad(_hg_at(hp, 0))
+x1 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 16)))
+h1 := cpu.HwLoad(_hg_at(hp, 16))
+x2 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 32)))
+h2 := cpu.HwLoad(_hg_at(hp, 32))
+x3 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 48)))
+h3 := cpu.HwLoad(_hg_at(hp, 48))
+x4 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 64)))
+h4 := cpu.HwLoad(_hg_at(hp, 64))
+x5 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 80)))
+h5 := cpu.HwLoad(_hg_at(hp, 80))
+x6 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 96)))
+h6 := cpu.HwLoad(_hg_at(hp, 96))
+x7 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 112)))
+h7 := cpu.HwLoad(_hg_at(hp, 112))
+mut lo := cpu.HwClmul(x0, h0, 0)
+mut hi := cpu.HwClmul(x0, h0, 17)
+mut mid := cpu.HwClmul(x0, h0, 1) ^ cpu.HwClmul(x0, h0, 16)
+lo ^= cpu.HwClmul(x1, h1, 0)
+hi ^= cpu.HwClmul(x1, h1, 17)
+mid ^= cpu.HwClmul(x1, h1, 1) ^ cpu.HwClmul(x1, h1, 16)
+lo ^= cpu.HwClmul(x2, h2, 0)
+hi ^= cpu.HwClmul(x2, h2, 17)
+mid ^= cpu.HwClmul(x2, h2, 1) ^ cpu.HwClmul(x2, h2, 16)
+lo ^= cpu.HwClmul(x3, h3, 0)
+hi ^= cpu.HwClmul(x3, h3, 17)
+mid ^= cpu.HwClmul(x3, h3, 1) ^ cpu.HwClmul(x3, h3, 16)
+lo ^= cpu.HwClmul(x4, h4, 0)
+hi ^= cpu.HwClmul(x4, h4, 17)
+mid ^= cpu.HwClmul(x4, h4, 1) ^ cpu.HwClmul(x4, h4, 16)
+lo ^= cpu.HwClmul(x5, h5, 0)
+hi ^= cpu.HwClmul(x5, h5, 17)
+mid ^= cpu.HwClmul(x5, h5, 1) ^ cpu.HwClmul(x5, h5, 16)
+lo ^= cpu.HwClmul(x6, h6, 0)
+hi ^= cpu.HwClmul(x6, h6, 17)
+mid ^= cpu.HwClmul(x6, h6, 1) ^ cpu.HwClmul(x6, h6, 16)
+lo ^= cpu.HwClmul(x7, h7, 0)
+hi ^= cpu.HwClmul(x7, h7, 17)
+mid ^= cpu.HwClmul(x7, h7, 1) ^ cpu.HwClmul(x7, h7, 16)
+y = _hg_fold(lo, mid, hi)
+off += 128
+end
+until n - off >= 64:
+x0 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 0))) ^ y
+h0 := cpu.HwLoad(_hg_at(hp, 64))
+x1 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 16)))
+h1 := cpu.HwLoad(_hg_at(hp, 80))
+x2 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 32)))
+h2 := cpu.HwLoad(_hg_at(hp, 96))
+x3 := cpu.HwBswap(cpu.HwLoad(_hg_at(p, off + 48)))
+h3 := cpu.HwLoad(_hg_at(hp, 112))
+mut lo := cpu.HwClmul(x0, h0, 0)
+mut hi := cpu.HwClmul(x0, h0, 17)
+mut mid := cpu.HwClmul(x0, h0, 1) ^ cpu.HwClmul(x0, h0, 16)
+lo ^= cpu.HwClmul(x1, h1, 0)
+hi ^= cpu.HwClmul(x1, h1, 17)
+mid ^= cpu.HwClmul(x1, h1, 1) ^ cpu.HwClmul(x1, h1, 16)
+lo ^= cpu.HwClmul(x2, h2, 0)
+hi ^= cpu.HwClmul(x2, h2, 17)
+mid ^= cpu.HwClmul(x2, h2, 1) ^ cpu.HwClmul(x2, h2, 16)
+lo ^= cpu.HwClmul(x3, h3, 0)
+hi ^= cpu.HwClmul(x3, h3, 17)
+mid ^= cpu.HwClmul(x3, h3, 1) ^ cpu.HwClmul(x3, h3, 16)
+y = _hg_fold(lo, mid, hi)
+off += 64
+end
+h1 := cpu.HwLoad(_hg_at(hp, 112))
+until n - off >= 16:
+y = _hg_mul(cpu.HwBswap(cpu.HwLoad(_hg_at(p, off))) ^ y, h1)
+off += 16
+end
+if off < n:
+t := mem.AllocateZeroed(16 as u64)
+mem.Copy(t, _hg_at(p, off), (n - off) as u64)
+y = _hg_mul(cpu.HwBswap(cpu.HwLoad(t)) ^ y, h1)
+mem.Free(t)
+end
+ret y
+end
+func _hg_new(key: void*, keylen: int): HwGcm*:
+if keylen != 16 and keylen != 24 and keylen != 32:
+ret null
+end
+c := mem.AllocateZeroed(sizeof(HwGcm) as u64) as HwGcm*
+base := mem.AllocateZeroed(512 as u64)
+c.rk = base
+c.hp = _hg_at(base, 256)
+c.nr = keylen / 4 + 6
+w := mem.AllocateZeroed(256 as u64) as u32*
+_fg_expand(key, keylen, w)
+repeat (c.nr + 1) * 4 in i:
+_fg_pbe32(w[i], c.rk, i * 4)
+end
+_wipe(w as void*, 256)
+mem.Free(w as void*)
+h1 := cpu.HwBswap(_hg_enc1(c, 0 as u128))
+mut pw := h1
+cpu.HwStore(_hg_at(c.hp, 112), pw)
+repeat 7 in i:
+pw = _hg_mul(pw, h1)
+cpu.HwStore(_hg_at(c.hp, (6 - i) * 16), pw)
+end
+ret c
+end
+func _hg_try(key: void*, keylen: int): HwGcm*:
+if not cpu.HasHardwareCrypto():
+ret null
+end
+ret _hg_new(key, keylen)
+end
+func _hg_free(c: HwGcm*):
+if c == null:
+ret
+end
+_wipe(c.rk, 512)
+mem.Free(c.rk)
+_wipe(c as void*, sizeof(HwGcm) as int)
+mem.Free(c as void*)
+end
+func _hg_finish(c: HwGcm*, nonce: void*, y0: u128, aadlen: int, n: int): u128:
+lens := (((aadlen as u64) * (8 as u64)) as u128) << (64 as u128) | (((n as u64) * (8 as u64)) as u128)
+y := _hg_mul(y0 ^ lens, cpu.HwLoad(_hg_at(c.hp, 112)))
+j0 := _hg_enc1(c, _hg_cb(_le64(nonce, 0), _le32(nonce, 8) as u64, 1 as u32))
+ret cpu.HwBswap(y ^ cpu.HwBswap(j0))
+end
+func _hg_seal(c: HwGcm*, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+mut y := 0 as u128
+if aadlen > 0:
+y = _hg_ghash(c, y, aad, aadlen)
+end
+mut off := 0
+until off < n:
+mut take := n - off
+if take > 4096:
+take = 4096
+end
+_hg_ctr(c, nonce, (2 + off / 16) as u32, _hg_at(pt, off), _hg_at(ct, off), take)
+y = _hg_ghash(c, y, _hg_at(ct, off), take)
+off += take
+end
+cpu.HwStore(tag, _hg_finish(c, nonce, y, aadlen, n))
+end
+func _hg_open(c: HwGcm*, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+mut y := 0 as u128
+if aadlen > 0:
+y = _hg_ghash(c, y, aad, aadlen)
+end
+if n > 0:
+y = _hg_ghash(c, y, ct, n)
+end
+want := _hg_finish(c, nonce, y, aadlen, n)
+d := want ^ cpu.HwLoad(tag)
+if d != (0 as u128):
+ret false
+end
+_hg_ctr(c, nonce, 2 as u32, ct, pt, n)
 ret true
 end
 package tls
@@ -309075,6 +309419,7 @@ end
 struct GcmCtx:
 pub aes: Aes = Aes {}
 pub g: Ghash = Ghash {}
+pub hw: HwGcm* = null
 end
 inline func _be64(p: void*, o: int): u64:
 bp := p as u8*
@@ -309178,6 +309523,7 @@ func _gcm_new(key: void*, keylen: int): GcmCtx*:
 c := mem.AllocateZeroed(sizeof(GcmCtx) as u64) as GcmCtx*
 c.aes = _aes_init(key, keylen)
 c.g = _ghash_key(c.aes)
+c.hw = _hg_try(key, keylen)
 ret c
 end
 func _gcm_free(c: GcmCtx*):
@@ -309185,6 +309531,7 @@ if c == null:
 ret
 end
 _aes_free(c.aes)
+_hg_free(c.hw)
 _wipe(c as void*, sizeof(GcmCtx) as int)
 mem.Free(c as void*)
 end
@@ -310324,11 +310671,18 @@ if t.cipher == CIPHER_CHACHA20_SHA256:
 _cha20poly_seal(t.key.p, nonce.p, aad, aadlen, pt, ct, n, tag)
 ret
 end
+if t.gcm.hw != null:
+_hg_seal(t.gcm.hw, nonce.p, aad, aadlen, pt, ct, n, tag)
+ret
+end
 _gcm_seal_with(t.gcm.aes, t.gcm.g, nonce.p, aad, aadlen, pt, ct, n, tag)
 end
 func _aead_open(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
 if t.cipher == CIPHER_CHACHA20_SHA256:
 ret _cha20poly_open(t.key.p, nonce.p, aad, aadlen, ct, n, tag, pt)
+end
+if t.gcm.hw != null:
+ret _hg_open(t.gcm.hw, nonce.p, aad, aadlen, ct, n, tag, pt)
 end
 ret _gcm_open_with(t.gcm.aes, t.gcm.g, nonce.p, aad, aadlen, ct, n, tag, pt)
 end

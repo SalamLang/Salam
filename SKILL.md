@@ -892,26 +892,30 @@ lambdas and `extern` functions cannot. `E139` unmarked throwing call, `E140`
 misplaced `try`, `E141` misplaced or mistyped `throw`, `E142` `try` with
 nothing that can throw.
 
-**Generic enums, `result.Result` and `?`:** an enum with data may take type
+**Generic enums and `?`:** an enum with data may take type
 parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
 built where its type is known - returned from a function, or with `as`:
-`Maybe.Nothing as Maybe<int>`. `import result` gives
-`result.Result<T, E>` (`Ok(value)` / `Err(error)`) plus `result.IsOk`,
-`IsErr`, `UnwrapOr(r, fallback)` and `Expect(r, msg)`. Inside a function that
-returns such an enum, a postfix `?` unwraps `Ok` and returns any `Err` early
+`Maybe.Nothing as Maybe<int>`. There is no stdlib `Result` type; declare your
+own `enum Result<T, E>: Ok(value: T), Err(error: E) end` where it is needed
+(or use `throws`/`try`/`catch`, §-on-throws, which covers most error-return
+cases without an enum at all). Inside a function that returns an Ok/Err-shaped
+enum, a postfix `?` unwraps `Ok` and returns any `Err` early
 (running `defer`s): it must be a statement's whole value - `x := f()?`,
 `x = f()?`, `f()?` or `ret f()?`.
 
 ```salam
-import result
-func parse(s: str): result.Result<int, str>:
-    if s == "7": ret result.Result.Ok(7) end
-    ret result.Result.Err("bad " + s)
+enum Result<T, E>:
+    Ok(value: T)
+    Err(error: E)
 end
-func sum(a: str, b: str): result.Result<int, str>:
+func parse(s: str): Result<int, str>:
+    if s == "7": ret Result.Ok(7) end
+    ret Result.Err("bad " + s)
+end
+func sum(a: str, b: str): Result<int, str>:
     x := parse(a)?
     y := parse(b)?
-    ret result.Result.Ok(x + y)
+    ret Result.Ok(x + y)
 end
 ```
 
@@ -926,40 +930,52 @@ bindings and runs only when the pattern matches; if it is false, matching
 continues with the next arm. A guarded arm does not count toward
 exhaustiveness, so keep an unguarded arm (or `else`) for that case.
 
-**`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
-Assign any member type; narrow it back with `match` on **type-name** patterns:
+**`A or B or …`** (Persian `A یا B یا …`) is a tagged union type: a value whose
+type is exactly one of the listed members (one slot sized to the largest
+member). Write it as a chain of member types joined by `or` wherever a type
+is expected - a parameter, a return type, a struct field, a local's declared
+type:
 
 ```salam
-mut v := 21 as Variant<i32, f64, str>   // initial cast is OK from a *member* type (i32)
-v = "offline"                            // then assign member-typed values directly
-label := match v:
-    i32 n: "int " + n end
-    f64 f: "float " + f end
-    str s: "text " + s end
+func describe(v: int or str or bool): str:
+    ret match v:
+        int n: "int " + n end
+        str s: "str " + s end
+        bool b: "bool " + b end
+    end
 end
 ```
 
-Assign a value whose type is exactly one of the members; **do not** write
-`"x" as Variant<…>` (casting a `str` into a Variant fails). Struct fields typed as
-a `Variant` coerce a member-typed literal automatically
-(`Reading { value = "offline" }`). Variant `match` needs the **compiled** backend,
-not `salam exec`; see §10.
+A plain value whose type is exactly one of the members coerces in
+automatically, in struct literals, assignments, arguments, returns and
+defaults (`Reading { value = "offline" }`). Narrow it back with `match` on
+**type-name** patterns (`int n: ... end`, `str s: ... end`). `match` on a
+union needs the **compiled** backend, not `salam exec`; see §10.
 
-**`Option<T>`** (via `import option`) for maybe-absent values:
+In an expression position (after `as`), parenthesize the union so it is not
+read as the boolean `or` operator: `x as (int or str)`, not `x as int or str`
+(the latter parses as `(x as int) or str`). No parentheses are needed in a
+type position (`func f(v: int or str): ...`), since there is no expression to
+be ambiguous with there. Use `T?` below for "maybe absent", and a local
+`Result<T, E>` enum (or `throws`) for error returns.
+
+**`Option<T>`** (in `std/core`, `import core`) for maybe-absent values:
 
 ```salam
-o := option.Some(99)
-println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
+import core
+o := core.Some(99)
+println core.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
 ```
 
-**`T?`** is short for `option.Option<T>` and needs no import. A struct field of
+**`T?`** is short for `core.Option<T>` and needs no import by itself (only the
+free functions above need `import core`). A struct field of
 type `T?` may be omitted from a literal (it starts empty, unless it has its own
 default such as `retries: int? = 3`). Plain values wrap automatically in struct literals, assignments, arguments, returns and defaults,
 and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
 it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
 with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`
 and `value`. Check `is_some()` before using `value`: on an empty one it means
-nothing, and a `str` from `option.None()` is a null pointer that crashes. A `&: T?`
+nothing, and a `str` from `core.None()` is a null pointer that crashes. A `&: T?`
 parameter needs a `T?` variable, not a plain value. JSON:
 a `T?` field is an optional key, `null` decodes to empty, and an empty one
 encodes as `null` (or is left out with `@json "" "omitempty"`).
@@ -1444,10 +1460,10 @@ end
   wrongly without error; `Min`/`Max` of an empty vector stop the program.
   Strings sort by code point, which is wrong for Persian (`پ چ ژ ک گ` after
   `و`).
-- **`option`**: `Some None IsSome IsNone Unwrap UnwrapOr Expect`, fields
-  `.present .value`. Never read `.value` unchecked: on an empty
-  `Option<str>` it is a null pointer and printing it segfaults. No `match`
-  and no `?` on an Option.
+- **`core`'s `Option<T>`**: `Some None IsSome IsNone Unwrap UnwrapOr Expect`, fields
+  `.present .value` (and the methods under `T?` above). Never read `.value`
+  unchecked: on an empty `Option<str>` it is a null pointer and printing it
+  segfaults. No `match` and no `?` on an Option.
 - **`dependency`**: dependency injection, google/wire style. Providers are keyed by a
   name you choose (no runtime type identity): `New()`,
   `Provide(c, "Service", "Repo", Service {}, (cx: dependency.Container): ... end)` (the
@@ -1455,9 +1471,12 @@ end
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
   (lazy singleton), `Built Count Error`, `Close` (cleanups in reverse build order).
-- **`result`**: `Result<T, E>` (`Ok`/`Err`) with `IsOk IsErr UnwrapOr Expect`
-  and postfix `?` (error types must match). There is no `Unwrap`, `map` or
-  `and_then`; `Expect` does not print the error.
+- **Error returns**: there is no stdlib `Result`. Prefer `throws`/`try`/`catch`
+  (see the throws section above); for an explicit `Ok`/`Err` value, declare
+  your own `enum Result<T, E>: Ok(value: T), Err(error: E) end` - postfix `?`
+  works on any such enum (error types must match). For "one of several
+  shapes" that are not an error/success pair, prefer an `or` type instead
+  of a hand-rolled enum.
 
 ### Data formats
 
@@ -1926,7 +1945,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
-- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
+- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`T?` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `T?` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
 - **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `ai.tensor ai.autograd ai.nn ai.optim ai.ml ai.gguf ai.llm ai.onnx ai.image data npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview ai.opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
@@ -2047,12 +2066,12 @@ General mapping that applies to all source languages:
 | dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                              |
 | list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                                         |
 | set                          | `Set<T>`                                                                                    |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                                       |
+| tuple / record               | small `struct`, or `Pair`, or `A or B` for sum types                                        |
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                               |
 | exception / error            | `func f(): T throws`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                                        |
+| null / nil / None            | `null` (pointers) or `core.None()`                                                          |
 | lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                 |
-| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`                     |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `A or B or …`                    |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                                         |
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`                    |
 | `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)                  |
@@ -2911,7 +2930,7 @@ two closing angle brackets, not a shift.
 | C                                            | Salam                                                                                                                       |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `typedef struct { … } T;`                    | `struct T: … end` (fields default private → add `pub`)                                                                      |
-| `union { … }` / tagged union                 | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                                                |
+| `union { … }` / tagged union                 | **`A or B or …`**, narrowed by `match` on type patterns                                                                     |
 | `enum { A, B=5 }`                            | `enum E: A, B = 5 end` (members on one line need commas; one per line needs none)                                           |
 | `#define NAME 3` (const)                     | `const NAME := 3`                                                                                                           |
 | `#define MAX(a,b) …` (macro fn)              | `inline func Max(a: int, b: int): int: … end`                                                                               |
@@ -3134,7 +3153,7 @@ are fine.
 | `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
 | `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
 | `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |
-| `Variant<...>`   | `گوناگون<...>`               |                  |                          |
+| `A or B`         | `A یا B`                     |                  |                          |
 
 Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 `اعشار` is **f32**; a float literal such as `۲.۵` is `اعشار۶۴`, so write
@@ -3192,7 +3211,7 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `عبارت باقاعده`, `collections` `مجموعه ها`, `mem` `حافظه`, `path` `مسیر`,
 `fs` `سیستم پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
-`log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
+`log` `گزارش`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
 (imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`,
 `db/typesense` `تایپسنس` (imported as `دیتابیس.تایپسنس`),
@@ -3372,8 +3391,8 @@ More forms, each checked with the current compiler:
     همگانی نژاد: رشته = ""
 پایان
 
-// Variant
-تابع شرح(م: گوناگون<صحیح، رشته>): رشته:
+// or type
+تابع شرح(م: صحیح یا رشته): رشته:
     برگشت همخوان م:
         صحیح ع: "عدد " + ع پایان
         رشته ر: "متن " + ر پایان

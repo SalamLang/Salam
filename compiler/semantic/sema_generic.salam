@@ -285,14 +285,28 @@ func check_type_param_zero(s &: Sema, a &: at.Ast, nid: int): int:
     ret sema_check_expr(s, a, nid)
 end
 
-func g_resolved_targs(a &: at.Ast, targ_nodes: Vector<int>, argtypes: Vector<int>): Vector<int>:
+func g_mark_resolved(s &: Sema, a &: at.Ast, cid: int, t: int):
+    mut cv := at.Get(a, cid)
+    cv.sema_type = t
+    depth := cv.ptr_depth != 0 ? cv.ptr_depth : (cv.is_pointer ? 1 : 0)
+    if depth > 0 and at.Dims(a, cv.ext).len() == 0 and cv.elem_ptr_depth == 0 and not cv.is_slice:
+        mut base := t
+        mut k := 0
+        until k < depth and ty_at(s, base).kind == TY_PTR:
+            base = ty_at(s, base).pointee
+            k++
+        end
+        cv.sema_base_type = base
+    end
+    at.Put(a, cid, cv)
+end
+
+func g_resolved_targs(s &: Sema, a &: at.Ast, targ_nodes: Vector<int>, argtypes: Vector<int>): Vector<int>:
     mut out := Vector {} as Vector<int>
     repeat targ_nodes.len() in i:
         cid := at.Clone(a, targ_nodes.get(i))
         if i < argtypes.len() and argtypes.get(i) >= 0:
-            mut cv := at.Get(a, cid)
-            cv.sema_type = argtypes.get(i)
-            at.Put(a, cid, cv)
+            g_mark_resolved(s, a, cid, argtypes.get(i))
         end
         out.push(cid)
     end
@@ -302,23 +316,10 @@ end
 func g_pre_resolve_targs(s &: Sema, a &: at.Ast, targ_nodes: Vector<int>): Vector<int>:
     mut out := Vector {} as Vector<int>
     repeat targ_nodes.len() in i:
-        node := at.Get(a, targ_nodes.get(i))
         t := sema_resolve_type(s, a, targ_nodes.get(i))
         cid := at.Clone(a, targ_nodes.get(i))
         if t >= 0:
-            mut cv := at.Get(a, cid)
-            cv.sema_type = t
-            depth := node.ptr_depth != 0 ? node.ptr_depth : (node.is_pointer ? 1 : 0)
-            if depth > 0 and at.Dims(a, node.ext).len() == 0 and node.elem_ptr_depth == 0 and not node.is_slice:
-                mut base := t
-                mut k := 0
-                until k < depth and ty_at(s, base).kind == TY_PTR:
-                    base = ty_at(s, base).pointee
-                    k++
-                end
-                cv.sema_base_type = base
-            end
-            at.Put(a, cid, cv)
+            g_mark_resolved(s, a, cid, t)
         end
         out.push(cid)
     end
@@ -732,7 +733,7 @@ func g_instantiate_func(
     iv.synthetic = true
     iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
     at.Put(a, inst, iv)
-    rargs := g_resolved_targs(a, targ_nodes, argtypes)
+    rargs := g_resolved_targs(s, a, targ_nodes, argtypes)
     g_subst(a, inst, at.Typarams(a, tn.ext), rargs)
     rargs.free()
     at.ClearTyparams(a, inst)

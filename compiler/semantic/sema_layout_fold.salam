@@ -364,6 +364,15 @@ func lay_fold(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int)
     if n.kind == at.AST_UNARY:
         ret lay_fold_unary(cx, a, nid, out, depth)
     end
+    if n.kind == at.AST_BINARY and lay_is_calc_op(n.op) and lay_has_unit(a, nid, 0):
+        mut ctext := ""
+        crc := lay_calc_text(cx, a, nid, ctext, depth + 1)
+        if crc != LF_OK:
+            ret crc
+        end
+        out = LayVal { kind = LV_STR, s = "calc(" + ctext + ")" }
+        ret LF_OK
+    end
     if n.kind == at.AST_BINARY:
         ret lay_fold_binary(cx, a, nid, out, depth)
     end
@@ -496,6 +505,70 @@ func lay_check_event_attr(s &: Sema, a &: at.Ast, attr: int, name: str): bool:
         )
     )
     ret false
+end
+
+func lay_is_calc_op(op: int): bool:
+    ret op == tok.TK_PLUS or op == tok.TK_MINUS or op == tok.TK_STAR or op == tok.TK_SLASH
+end
+
+func lay_has_unit(a &: at.Ast, nid: int, depth: int): bool:
+    if nid == 0 or depth > 64:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL:
+        ret (n.op == tok.TK_INT or n.op == tok.TK_FLOAT) and str.Len(LayoutNumUnit(n.name)) > 0
+    end
+    if n.kind == at.AST_BINARY:
+        ret lay_is_calc_op(n.op) and (lay_has_unit(a, n.a, depth + 1) or lay_has_unit(a, n.b, depth + 1))
+    end
+    if n.kind == at.AST_UNARY:
+        ret lay_has_unit(a, n.a, depth + 1)
+    end
+    ret false
+end
+
+func lay_calc_side(cx &: LayFoldCx, a &: at.Ast, nid: int, additive: bool, out &: str, depth: int): int:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BINARY and lay_is_calc_op(n.op):
+        mut inner := ""
+        rc := lay_calc_text(cx, a, nid, inner, depth + 1)
+        if rc != LF_OK:
+            ret rc
+        end
+        out = "(" + inner + ")"
+        ret LF_OK
+    end
+    mut text := ""
+    rc2 := lay_item_text(cx, a, nid, text, depth + 1)
+    if rc2 != LF_OK:
+        ret rc2
+    end
+    if additive and not lay_has_unit(a, nid, 0) and lay_is_float(text) and not str.Equals(text, "0"):
+        text += "px"
+    end
+    out = text
+    ret LF_OK
+end
+
+func lay_calc_text(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: str, depth: int): int:
+    if depth > 64:
+        ret lay_fold_err(cx, nid, i18.Tr("layout value is nested too deeply (a constant that refers to itself?)"))
+    end
+    n := at.Get(a, nid)
+    additive := n.op == tok.TK_PLUS or n.op == tok.TK_MINUS
+    mut left := ""
+    rc := lay_calc_side(cx, a, n.a, additive, left, depth)
+    if rc != LF_OK:
+        ret rc
+    end
+    mut right := ""
+    rc2 := lay_calc_side(cx, a, n.b, additive, right, depth)
+    if rc2 != LF_OK:
+        ret rc2
+    end
+    out = left + " " + lay_op_text(n.op) + " " + right
+    ret LF_OK
 end
 
 func lay_list_commas(name: str): bool:

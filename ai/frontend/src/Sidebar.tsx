@@ -127,96 +127,95 @@ export function Sidebar(p: Props) {
           </div>
         </div>
         <div className="sidebar-foot">
-          <div className="avatar" aria-hidden="true">
-            {p.user.name.trim().charAt(0)}
-          </div>
-          <div className="who">
-            <strong dir="auto">{p.user.name}</strong>
-            <span dir="ltr">{p.user.email}</span>
-            {p.plan && (
-              <button
-                type="button"
-                className={`plan-chip ${p.plan.plan.id === "free" ? "free" : "ok"}`}
-                onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/plans")))}
-                title={t("دیدن پلن‌ها", "See plans")}
-              >
-                <IconSpark width={12} height={12} />
-                {isFa ? p.plan.plan.name : p.plan.plan.name_en || p.plan.plan.name}
-                {p.plan.plan.id === "free" && <span className="plan-chip-cta">{t("ارتقا", "Upgrade")}</span>}
-              </button>
-            )}
-          </div>
           {!isDesktop ? (
             <a
               href="https://www.salamlang.ir/agent/"
-              className="icon-button"
+              className="foot-banner"
               target="_blank"
               rel="noreferrer"
-              aria-label={t("دریافت دستیار زبان سلام", "Get Salam Agent")}
-              title={t("دریافت دستیار زبان سلام", "Get Salam Agent")}
             >
-              <IconMonitor width={18} height={18} />
+              <IconMonitor width={16} height={16} />
+              <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
             </a>
           ) : (
             agentUpdate && (
               <a
                 href={agentUpdate.url}
-                className="icon-button agent-update"
+                className="foot-banner foot-banner-update"
                 target="_blank"
                 rel="noreferrer"
-                aria-label={t(`به‌روزرسانی ایجنت به ${agentUpdate.version}`, `Update agent to ${agentUpdate.version}`)}
-                title={t(`نسخه‌ی تازه‌ای در دسترس است: ${agentUpdate.version}`, `A new version is available: ${agentUpdate.version}`)}
               >
-                <IconDownload width={18} height={18} />
-                <span className="agent-update-dot" aria-hidden="true" />
+                <IconDownload width={16} height={16} />
+                <span>{t(`به‌روزرسانی به نسخه‌ی ${agentUpdate.version}`, `Update to version ${agentUpdate.version}`)}</span>
               </a>
             )
           )}
-          <div className="settings-wrap" ref={wrap}>
-            <button
-              type="button"
-              className={`icon-button ${menu ? "active" : ""}`}
-              onClick={() => setMenu(!menu)}
-              aria-label={t("تنظیمات", "Settings")}
-              title={t("تنظیمات", "Settings")}
-              aria-haspopup="true"
-              aria-expanded={menu}
-              aria-controls="settings-menu"
-              ref={gear}
-            >
-              <IconSettings />
-            </button>
-            {menu && (
-              <nav className="settings-menu" id="settings-menu" aria-label={t("تنظیمات", "Settings")}>
-                {items.map((item) => (
-                  <a
-                    key={item.path}
-                    href={item.path}
-                    className={`chat-link ${p.page === item.key ? "active" : ""}`}
-                    aria-current={p.page === item.key ? "page" : undefined}
-                    onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate(item.path)))}
-                  >
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </a>
-                ))}
-                {p.user.admin && (
-                  <a
-                    href="/admin"
-                    className={`chat-link ${p.page === "admin" ? "active" : ""}`}
-                    aria-current={p.page === "admin" ? "page" : undefined}
-                    onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/admin")))}
-                  >
-                    <IconShield width={16} height={16} />
-                    <span>{t("مدیریت", "Admin")}</span>
-                  </a>
-                )}
-              </nav>
-            )}
-          </div>
-          <button type="button" className="icon-button" onClick={p.onLogout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
+          <div className="sidebar-foot-row">
+            <div className="avatar" aria-hidden="true">
+              {p.user.name.trim().charAt(0)}
+            </div>
+            <div className="who">
+              <strong dir="auto">{p.user.name}</strong>
+              <span dir="ltr">{p.user.email}</span>
+              {p.plan && (
+                <button
+                  type="button"
+                  className={`plan-chip ${p.plan.plan.id === "free" ? "free" : "ok"}`}
+                  onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/plans")))}
+                  title={t("دیدن پلن‌ها", "See plans")}
+                >
+                  <IconSpark width={12} height={12} />
+                  {isFa ? p.plan.plan.name : p.plan.plan.name_en || p.plan.plan.name}
+                  {p.plan.plan.id === "free" && <span className="plan-chip-cta">{t("ارتقا", "Upgrade")}</span>}
+                </button>
+              )}
+            </div>
+            <div className="settings-wrap" ref={wrap}>
+              <button
+                type="button"
+                className={`icon-button ${menu ? "active" : ""}`}
+                onClick={() => setMenu(!menu)}
+                aria-label={t("تنظیمات", "Settings")}
+                title={t("تنظیمات", "Settings")}
+                aria-haspopup="true"
+                aria-expanded={menu}
+                aria-controls="settings-menu"
+                ref={gear}
+              >
+                <IconSettings />
+              </button>
+              {menu && (
+                <nav className="settings-menu" id="settings-menu" aria-label={t("تنظیمات", "Settings")}>
+                  {items.map((item) => (
+                    <a
+                      key={item.path}
+                      href={item.path}
+                      className={`chat-link ${p.page === item.key ? "active" : ""}`}
+                      aria-current={p.page === item.key ? "page" : undefined}
+                      onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate(item.path)))}
+                    >
+                      {item.icon}
+                      <span>{item.label}</span>
+                    </a>
+                  ))}
+                  {p.user.admin && (
+                    <a
+                      href="/admin"
+                      className={`chat-link ${p.page === "admin" ? "active" : ""}`}
+                      aria-current={p.page === "admin" ? "page" : undefined}
+                      onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/admin")))}
+                    >
+                      <IconShield width={16} height={16} />
+                      <span>{t("مدیریت", "Admin")}</span>
+                    </a>
+                  )}
+                </nav>
+              )}
+            </div>
+            <button type="button" className="icon-button" onClick={p.onLogout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
             <IconLogout />
           </button>
+          </div>
         </div>
       </aside>
     </>

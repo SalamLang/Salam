@@ -268,6 +268,12 @@ pub struct Input:
         buf.fill(bounds, " ", this.style)
         w := bounds.width
         count := str.CharCount(this.content)
+        if this.caret > count:
+            this.caret = count
+        end
+        if this.caret < 0:
+            this.caret = 0
+        end
         mut start := this.window_start
         if start < 0:
             start = 0
@@ -275,17 +281,34 @@ pub struct Input:
         if start > count:
             start = 0
         end
+        mut mg := _take_cells(this.mask_glyph, 1)
+        if mg == "" or _text_width(mg) != 1 or (buf.glyphs == GlyphPolicy.ASCII and mg.len() > 1):
+            mg = "*"
+        end
+        mut widths := Vector {} as Vector<int>
+        defer widths.free()
         mut chars := str.Chars(this.content)
         defer chars.free()
+        repeat chars.len() in k:
+            if this.masked:
+                widths.push(1)
+            else:
+                widths.push(_char_width(chars.get(k)))
+            end
+        end
         if this.caret < start:
             start = this.caret
         end
         mut col := 0
-        if start < this.caret:
-            col = _text_width(str.CharSubstr(this.content, start, this.caret - start))
+        repeat this.caret - start in k:
+            col += widths.get(start + k)
         end
-        until col >= w and start < this.caret:
-            col -= _char_width(chars.get(start))
+        mut need := 1
+        if this.caret < widths.len() and widths.get(this.caret) > 1:
+            need = widths.get(this.caret)
+        end
+        until col + need > w and start < this.caret:
+            col -= widths.get(start)
             start++
         end
         this.window_start = start
@@ -295,15 +318,15 @@ pub struct Input:
         else:
             mut text := ""
             if start < count:
-                text = _take_cells(str.CharSubstr(this.content, start, count - start), w)
-            end
-            if this.masked:
-                mut mg := _take_cells(this.mask_glyph, 1)
-                // A non-ASCII codepoint is more than one byte.
-                if mg == "" or (buf.glyphs == GlyphPolicy.ASCII and mg.len() > 1):
-                    mg = "*"
+                if this.masked:
+                    mut shown := count - start
+                    if shown > w:
+                        shown = w
+                    end
+                    text = str.Repeat(mg, shown)
+                else:
+                    text = _take_cells(str.CharSubstr(this.content, start, count - start), w)
                 end
-                text = _take_cells(str.Repeat(mg, str.CharCount(text)), w)
             end
             buf.put_str(bounds.x, bounds.y, text, this.style)
         end

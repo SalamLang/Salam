@@ -131,7 +131,7 @@ func test_display_cells():
 
     mut zero := tui.NewBuffer(4, 1)
     zero.put_str(0, 0, "e\u0301b", tui.StyleDefault)
-    testing.AssertEqStr(zero.row_text(0), "eb  ")
+    testing.AssertEqStr(zero.row_text(0), "e\u0301b  ")
     zero.free()
 
     mut normalized := tui.NewBuffer(1, 1)
@@ -518,6 +518,56 @@ func test_diff_outside_clip():
     b.free()
 end
 
+
+func test_put_str_reuses_glyph_strings():
+    mut b := tui.NewBuffer(4, 2)
+    b.put_str(0, 0, "a中", tui.StyleDefault)
+    b.put_str(0, 1, "a中", tui.StyleDefault)
+    first := b.get(0, 0).ch
+    wide := b.get(1, 0).ch
+    b.put_str(0, 0, "a中", tui.StyleDefault)
+    testing.AssertTrue(b.get(0, 0).ch as void* == first as void*)
+    testing.AssertTrue(b.get(0, 1).ch as void* == first as void*)
+    testing.AssertTrue(b.get(1, 1).ch as void* == wide as void*)
+    testing.AssertEqStr(b.row_text(1), "a中 ")
+    b.free()
+end
+
+func test_put_str_keeps_zero_width_marks():
+    mut b := tui.NewBuffer(6, 1)
+    b.put_str(0, 0, "e\u0301b\u200Cc", tui.StyleDefault)
+    testing.AssertEqStr(b.get(0, 0).ch, "e\u0301")
+    testing.AssertEqStr(b.get(1, 0).ch, "b\u200C")
+    testing.AssertEqStr(b.get(2, 0).ch, "c")
+    testing.AssertEqStr(b.row_text(0), "e\u0301b\u200Cc   ")
+    testing.AssertEqInt(tui.MeasureText(b.row_text(0), 0).width, 6)
+    testing.AssertEqStr(b.diff(), term.SeqMoveTo(1, 1) + "e\u0301b\u200Cc   ")
+    b.commit()
+    b.put_str(0, 0, "\u0301x\tz", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "xzc   ")
+    b.free()
+
+    mut clipped := tui.NewBuffer(3, 1)
+    clipped.clip = rect(0, 0, 1, 1)
+    clipped.put_str(0, 0, "ab\u0301", tui.StyleDefault)
+    testing.AssertEqStr(clipped.row_text(0), "a  ")
+    clipped.free()
+end
+
+func test_emoji_presentation_is_wide():
+    each s in ["\U0001F680", "\U00002705", "\U0000274C", "\U00002B50", "\U000026A1", "\U0001F7E2", "\U0001FAE0", "\U0000231A"]:
+        testing.AssertEqInt(tui.MeasureText(s, 0).width, 2)
+    end
+    each s in ["\U00002764", "\U00002122", "a", "\U00000645"]:
+        testing.AssertEqInt(tui.MeasureText(s, 0).width, 1)
+    end
+    mut b := tui.NewBuffer(5, 1)
+    b.put_str(0, 0, "\U0001F680ab", tui.StyleDefault)
+    testing.AssertEqStr(b.get(1, 0).ch, "")
+    testing.AssertEqStr(b.get(2, 0).ch, "a")
+    b.free()
+end
+
 func main:
     test_new_is_blank()
     test_set_get()
@@ -549,5 +599,8 @@ func main:
     test_clear_round_trip()
     test_commit_front_matches_cells()
     test_diff_outside_clip()
+    test_put_str_reuses_glyph_strings()
+    test_put_str_keeps_zero_width_marks()
+    test_emoji_presentation_is_wide()
     ret testing.Summary()
 end

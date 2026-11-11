@@ -82,11 +82,17 @@
 package tui
 
 import env
+import mem
 import str
 import term
+import unicode
+
+mut _glyph_cps := HashMap {} as HashMap<int, str>
+
+mut _glyph_clusters := HashMap {} as HashMap<str, str>
 
 @en "GlyphPolicy"
-@fa "سیاست نویسه‌ها"
+@fa "سیاست‌نویسه‌ها"
 /// Which glyph repertoire structural glyphs (borders) may use. Unicode is
 /// the zero value and draws box-drawing glyphs; ASCII restricts them to
 /// codepoints up to 0x7F for terminals without box drawing.
@@ -277,27 +283,40 @@ pub struct Buffer:
     pub func put_str(x: int, y: int, text: str, style: Style):
         mut i := 0
         mut col := 0
+        mut last := -1
         n := text.len()
         until i < n:
-            ch := str.CharAt(text, i)
-            if ch == "":
+            mut cp := 0
+            next := str.CodePointAt(text, i, cp)
+            if next <= i:
                 break
             end
-            width := _char_width(ch)
+            i = next
+            if cp < 0:
+                cp = 0xFFFD
+            end
+            width := _cell_width(cp)
             if width == 0:
-                i += ch.len()
-            else if width == 1:
-                this.set(x + col, y, Cell { ch = ch, style = style })
+                if last >= 0 and not unicode.IsControl(cp):
+                    this._attach(last, y, cp)
+                end
+            else width == 1:
+                last = -1
+                if this._writable(x + col, y):
+                    last = x + col
+                end
+                this.set(x + col, y, Cell { ch = _glyph(cp), style = style })
                 col++
-                i += ch.len()
             else:
+                last = -1
                 left := this._writable(x + col, y)
                 right := this._writable(x + col + 1, y)
                 if left and right:
                     this.set(x + col, y, Cell { ch = " ", style = style })
                     this.set(x + col + 1, y, Cell { ch = " ", style = style })
-                    this._store(x + col, y, Cell { ch = ch, style = style })
+                    this._store(x + col, y, Cell { ch = _glyph(cp), style = style })
                     this._store(x + col + 1, y, Cell { ch = "", style = style })
+                    last = x + col
                 else:
                     if left:
                         this.set(x + col, y, Cell { ch = " ", style = style })
@@ -307,9 +326,19 @@ pub struct Buffer:
                     end
                 end
                 col += 2
-                i += ch.len()
             end
         end
+    end
+
+    func _attach(x: int, y: int, cp: int):
+        if not this._writable(x, y):
+            ret
+        end
+        old := this.cells.get(y * this.width + x)
+        if old.ch == "" or old.ch.len() >= 32:
+            ret
+        end
+        this._store(x, y, Cell { ch = _cluster(old.ch, _glyph(cp)), style = old.style })
     end
 
     @en "fill"
@@ -398,7 +427,7 @@ pub struct Buffer:
         this._reset_out()
         mut style := StyleDefault
         repeat this.height in y:
-            str.BufAppend(this.out_buf, term.SeqMoveTo(y + 1, 1))
+            _append_free(this.out_buf, term.SeqMoveTo(y + 1, 1))
             repeat this.width in x:
                 c := this.cells.get(y * this.width + x)
                 if not StyleEq(c.style, style):
@@ -443,7 +472,7 @@ pub struct Buffer:
                         until e < this.width and (this.all_touched or this.touched.get(y * this.width + e)) and this.cells.get(y * this.width + e) != this.front.get(y * this.width + e):
                             e++
                         end
-                        str.BufAppend(this.out_buf, term.SeqMoveTo(y + 1, x + 1))
+                        _append_free(this.out_buf, term.SeqMoveTo(y + 1, x + 1))
                         mut i := x
                         until i < e:
                             c := this.cells.get(y * this.width + i)
@@ -516,6 +545,7 @@ pub struct Buffer:
         if out != "":
             term.Emit(out)
         end
+        mem.Free(out as void*)
         this.commit()
     end
 
@@ -530,6 +560,29 @@ pub struct Buffer:
         this.row_touched.free()
         str.BufFree(this.out_buf)
     end
+end
+
+func _glyph(cp: int): str:
+    if _glyph_cps.has(cp):
+        ret _glyph_cps.get(cp)
+    end
+    mut b := str.NewBuilder()
+    str.BufAppendCp(b, cp)
+    g := str.BufStr(b)
+    str.BufFree(b)
+    _glyph_cps.put(cp, g)
+    ret g
+end
+
+func _cluster(base: str, mark: str): str:
+    joined := base + mark
+    if _glyph_clusters.has(joined):
+        pooled := _glyph_clusters.get(joined)
+        mem.Free(joined as void*)
+        ret pooled
+    end
+    _glyph_clusters.put(joined, joined)
+    ret joined
 end
 
 func _is_utf8_locale(v: str): bool:

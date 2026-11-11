@@ -255,6 +255,8 @@ pub struct Screen:
     // a screen that never ran start()). close() joins it before freeing the
     // channel.
     winch_thread: i64 = 0
+    winch_snap: void* = null
+    freed: bool = false
     term_state: term.TermState = term.TermState {}
     // Raise stamps live on the screen, not on the widget. A missing id is
     // stamp 0 (unraised). One raise() call bumps ztop once and writes that
@@ -498,6 +500,7 @@ pub struct Screen:
         end
         _ := this.focus_stack.pop()
         this.focus_changed()
+        this.revalidate_focus()
         ret true
     end
 
@@ -624,6 +627,9 @@ pub struct Screen:
         if consumed:
             // The widget's own bounds, not its subtree.
             this.queue_region(this.tree.get(id).bounds())
+            if event.kind == KeyEvent:
+                this.keymap.cancel_pending()
+            end
         end
         if not consumed and event.kind == KeyEvent:
             consumed = this.keymap.handle(this, event)
@@ -831,6 +837,9 @@ pub struct Screen:
     /// Queues an event as if the input thread had produced it. Safe from
     /// any thread. Returns false once the screen is stopped.
     pub func post(event: Event): bool:
+        if this.freed:
+            ret false
+        end
         ret this.events.send(event)
     end
 
@@ -840,6 +849,10 @@ pub struct Screen:
     /// the screen has been stopped and every queued event was delivered.
     /// The intended loop is: until screen.next_event(ev): ... end
     pub func next_event(event &: Event): bool:
+        if this.freed:
+            this.running = false
+            ret false
+        end
         mut ok := true
         got := this.events.recv(ok)
         if not ok:
@@ -869,6 +882,12 @@ pub struct Screen:
     pub func start():
         if this.attached or this.closed:
             ret
+        end
+        if signal.WinchSupported():
+            this.winch_snap = signal.InstallWinchHandler()
+            if this.winch_snap == null:
+                signal.BlockWinch()
+            end
         end
         this.term_state = term.MakeRaw(term.StdinFd)
         mut setup := term.SeqEnterAltScreen() + term.SeqHideCursor() + term.SeqClearScreen()
@@ -902,8 +921,6 @@ pub struct Screen:
             // shortcut: one snapshot per Screen.start() is never freed and the
             // process-wide disposition is not restored, matching v0.1.0;
             // upgrade to Restore + mem.Free if start() becomes repeatable.
-            _ := signal.InstallWinchHandler()
-            signal.BlockWinch()
             wctx := mem.Allocate(sizeof(WinchContext) as u64) as WinchContext*
             wctx[0] = WinchContext {
                 events = this.events, width = size.cols, height = size.rows
@@ -923,6 +940,9 @@ pub struct Screen:
     /// such as a tick callback.
     pub func stop():
         this.running = false
+        if this.freed:
+            ret
+        end
         this.events.close()
     end
 
@@ -938,12 +958,6 @@ pub struct Screen:
         this.closed = true
         this.stop()
         if this.attached:
-            mut teardown := term.Reset + term.SeqShowCursor() + term.SeqExitAltScreen()
-            if this.mouse or this.mouse_motion:
-                teardown = term.SeqDisableMouse() + teardown
-            end
-            term.Emit(teardown)
-            _ := term.Restore(this.term_state)
             join(this.input_thread)
             if this.winch_thread != 0:
                 // The channel is already closed (stop above), so the watcher
@@ -955,8 +969,20 @@ pub struct Screen:
                 join(this.winch_thread)
                 this.winch_thread = 0
             end
+            if this.winch_snap != null:
+                _ := signal.Restore(signal.WinchSignal, this.winch_snap)
+                mem.Free(this.winch_snap)
+                this.winch_snap = null
+            end
+            mut teardown := term.Reset + term.SeqShowCursor() + term.SeqExitAltScreen()
+            if this.mouse or this.mouse_motion:
+                teardown = term.SeqDisableMouse() + teardown
+            end
+            term.Emit(teardown)
+            _ := term.Restore(this.term_state)
             this.attached = false
         end
+        this.freed = true
         this.events.free()
         this.tree.free()
         this.buffer.free()
@@ -1043,7 +1069,7 @@ pub struct Screen:
     // the depth the caller pushed survives.
     func revalidate_focus():
         id := this.focused_id()
-        if id == NoWidget or this.visible_chain(id):
+        if id == NoWidget or this.can_focus(id):
             ret
         end
         order := this.focus_order()

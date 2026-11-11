@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Project, Subscription, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChart, IconChat, IconClose, IconFolder, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
-import { isFa, setLang, t } from "./i18n";
+import { IconChart, IconChat, IconClose, IconFolder, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
+import { isFa, t } from "./i18n";
 import { fmtNum } from "./format";
 
 type Props = {
@@ -145,6 +145,18 @@ export function Sidebar(p: Props) {
               </button>
             )}
           </div>
+          {!isDesktop && (
+            <a
+              href="https://www.salamlang.ir/agent/"
+              className="icon-button"
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t("دریافت دستیار زبان سلام", "Get Salam Agent")}
+              title={t("دریافت دستیار زبان سلام", "Get Salam Agent")}
+            >
+              <IconMonitor width={18} height={18} />
+            </a>
+          )}
           <div className="settings-wrap" ref={wrap}>
             <button
               type="button"
@@ -173,12 +185,6 @@ export function Sidebar(p: Props) {
                     <span>{item.label}</span>
                   </a>
                 ))}
-                {!isDesktop && (
-                  <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer" onClick={() => pick(() => {})}>
-                    <IconMonitor width={16} height={16} />
-                    <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
-                  </a>
-                )}
                 {p.user.admin && (
                   <a
                     href="/admin"
@@ -193,15 +199,6 @@ export function Sidebar(p: Props) {
               </nav>
             )}
           </div>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setLang(isFa ? "en" : "fa")}
-            aria-label={t("تغییر زبان به انگلیسی", "Switch to Persian")}
-            title={isFa ? "English" : "فارسی"}
-          >
-            <IconGlobe />
-          </button>
           <button type="button" className="icon-button" onClick={p.onLogout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
             <IconLogout />
           </button>

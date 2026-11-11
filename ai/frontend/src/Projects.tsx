@@ -66,7 +66,7 @@ function when(ts: number): string {
   return fmtDate(ts);
 }
 
-function stateText(c: Chat): string {
+export function stateText(c: Chat): string {
   if (c.state === "working") {
     if (c.phase === "writing") return t("در حال نوشتن", "Writing");
     if (c.phase === "tool") return t("در حال اجرای ابزار", "Running tools");

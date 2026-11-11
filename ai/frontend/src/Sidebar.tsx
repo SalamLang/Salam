@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { Project, Subscription, User } from "./api";
+import type { Chat, Project, Subscription, User } from "./api";
 import { isDesktop, useAgentUpdate } from "./desktop";
-import { IconChart, IconChat, IconClose, IconDownload, IconFolder, IconKey, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
+import { IconBolt, IconChart, IconChat, IconClose, IconDownload, IconFolder, IconKey, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
 import { isFa, t } from "./i18n";
 import { fmtNum } from "./format";
+import { stateText } from "./Projects";
 
 type Props = {
   user: User;
   plan: Subscription | null;
   projects: Project[];
+  activeChats: Chat[];
   activeProject: string | null;
   open: boolean;
   onClose: () => void;
@@ -16,6 +18,7 @@ type Props = {
   onOpenProjects: () => void;
   onOpenProject: (id: string) => void;
   onOpenOthers: () => void;
+  onOpenChat: (id: string, projectId: string) => void;
   onNewProject: () => void;
   page: string;
   onNavigate: (path: string) => void;
@@ -84,6 +87,30 @@ export function Sidebar(p: Props) {
           {t("گفت‌وگوی تازه", "New chat")}
         </button>
         <div className="sidebar-scroll" ref={scroller}>
+          {p.activeChats.length > 0 && (
+            <div className="sidebar-projects">
+              <div className="sidebar-section-head">
+                <span className="sidebar-section-title static">
+                  <IconBolt width={14} height={14} />
+                  <span>{t("الان فعال", "Active now")}</span>
+                </span>
+              </div>
+              <div className="project-nav">
+                {p.activeChats.map((chat) => (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    className="project-link"
+                    onClick={() => pick(() => p.onOpenChat(chat.id, chat.project_id || ""))}
+                    title={stateText(chat)}
+                  >
+                    <span className={`chat-state ${chat.state ?? "idle"}`} aria-hidden="true" />
+                    <span className="project-link-name" dir="auto">{chat.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="sidebar-projects">
             <div className="sidebar-section-head">
               <button type="button" className={`sidebar-section-title ${p.page === "projects" ? "active" : ""}`} onClick={p.onOpenProjects}>

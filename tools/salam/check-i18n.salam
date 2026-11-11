@@ -13,7 +13,151 @@
  */
 
 import str
+import fs
+import fs.dir
 include i18 "../../compiler/i18n.salam"
+
+const SOURCES := "compiler"
+
+func walk(path: str, out &: Vector<str>):
+    each d in dir.ListDirs(path):
+        if d != "tests_port":
+            walk(path + "/" + d, out)
+        end
+    end
+    each f in dir.ListFiles(path):
+        if str.EndsWith(f, ".salam"):
+            out.push(path + "/" + f)
+        end
+    end
+end
+
+func unescape(raw: str): str:
+    mut out := ""
+    mut i := 0
+    until i < raw.len():
+        c := raw.substr(i, 1)
+        if c == "\\" and i + 1 < raw.len():
+            e := raw.substr(i + 1, 1)
+            if e == "n":
+                out += "\n"
+            else e == "t":
+                out += "\t"
+            else:
+                out += e
+            end
+            i += 2
+            continue
+        end
+        out += c
+        i++
+    end
+    ret out
+end
+
+func skip_blank(text: str, at: int): int:
+    mut i := at
+    until i < text.len() and (text.substr(i, 1) == " " or text.substr(i, 1) == "\n"):
+        i++
+    end
+    ret i
+end
+
+func one_literal(text: str, at: int, msg &: str): int:
+    i := skip_blank(text, at)
+    if i >= text.len():
+        ret 0 - 1
+    end
+    q := text.substr(i, 1)
+    if q == "`":
+        e := str.IndexFrom(text, "`", i + 1)
+        if e < 0:
+            ret 0 - 1
+        end
+        msg = text.substr(i + 1, e - i - 1)
+        ret e + 1
+    end
+    if q != `"`:
+        ret 0 - 1
+    end
+    mut j := i + 1
+    until j < text.len() and text.substr(j, 1) != `"`:
+        if text.substr(j, 1) == "\\":
+            j++
+        end
+        j++
+    end
+    msg = unescape(text.substr(i + 1, j - i - 1))
+    ret j + 1
+end
+
+func literal_at(text: str, at: int, msg &: str): bool:
+    mut part := ""
+    mut next := one_literal(text, at, part)
+    if next < 0:
+        ret false
+    end
+    msg = part
+    mut plus := skip_blank(text, next)
+    until plus < text.len() and text.substr(plus, 1) == "+":
+        next = one_literal(text, plus + 1, part)
+        if next < 0:
+            ret false
+        end
+        msg += part
+        plus = skip_blank(text, next)
+    end
+    ret true
+end
+
+func skip_args(text: str, at: int, n: int): int:
+    mut i := at
+    mut depth := 0
+    mut left := n
+    until left > 0 and i < text.len():
+        c := text.substr(i, 1)
+        if c == "(" or c == "[":
+            depth++
+        else c == ")" or c == "]":
+            if depth == 0:
+                ret 0 - 1
+            end
+            depth--
+        else c == `"`:
+            j := str.IndexFrom(text, `"`, i + 1)
+            if j < 0:
+                ret 0 - 1
+            end
+            i = j
+        else c == "," and depth == 0:
+            left--
+        end
+        i++
+    end
+    ret i
+end
+
+func line_of(text: str, at: int): int:
+    mut n := 1
+    repeat at in i:
+        if text.substr(i, 1) == "\n":
+            n++
+        end
+    end
+    ret n
+end
+
+func scan(path: str, text: str, call: str, skip: int, missing &: Vector<str>):
+    mut at := str.IndexFrom(text, call, 0)
+    until at >= 0:
+        start := skip_args(text, at + call.len(), skip)
+        mut msg := ""
+        if start >= 0 and literal_at(text, start, msg) and not i18.HasMessage(msg):
+            missing.push(path + ":" + line_of(text, at) + ": '" + msg + "' has no Persian text in compiler/i18n.salam")
+        end
+        at = str.IndexFrom(text, call, at + call.len())
+    end
+end
 
 func main:
     problem := i18.CheckTranslations()
@@ -21,6 +165,27 @@ func main:
         printerrln "check-i18n: " + problem
         ret 1
     end
-    println "check-i18n: message tables are consistent"
+    mut files := Vector {} as Vector<str>
+    walk(SOURCES, files)
+    mut missing := Vector {} as Vector<str>
+    each path in files:
+        text := fs.ReadText(path)
+        scan(path, text, "i18.Tr(", 0, missing)
+        scan(path, text, "i18n.Tr(", 0, missing)
+        scan(path, text, "p_error(p,", 0, missing)
+        scan(path, text, "p_error_at(p,", 1, missing)
+        scan(path, text, "p_expect(p,", 1, missing)
+        scan(path, text, "p_close_angle(p,", 0, missing)
+        scan(path, text, "p_foreign_error(p,", 0, missing)
+        scan(path, text, "p_foreign_error(p,", 1, missing)
+        scan(path, text, "error_at(L,", 1, missing)
+    end
+    each m in missing:
+        printerrln "check-i18n: " + m
+    end
+    if missing.len() > 0:
+        ret 1
+    end
+    println "check-i18n: message tables are consistent and cover every literal message"
     ret 0
 end

@@ -405,6 +405,8 @@ export type Plan = {
   sort: number;
   salam_only: boolean;
   hours: number;
+  max_input: number;
+  max_output: number;
 };
 export type AdminPlan = Plan & { subscribers: number };
 export type Gateway = "zarinpal" | "zibal";

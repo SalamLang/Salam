@@ -12,27 +12,10 @@
  *
  */
 
-// Tests for the Modal overlay: the frame vectors (MD01-MD05, including the
-// title clip), the scrim (SC01: outside cells keep their glyph and gain DIM,
-// dialog cells are not touched), Esc (close, on_close, closable, a child that
-// consumes it), focus and hit predicates, mouse routing (the scrim consumes,
-// the dialog passes to its child), the hidden state, the Screen protocol
-// (push_focus then raise_subtree to open, unraise_subtree then pop_focus to
-// close, and the nested-modal Esc rule), the shared state that makes calls
-// after Screen.add reach the stored copy (open, close, set_title, Esc), and
-// the sizing preferences. Keys and clicks are built from the exact bytes a
-// terminal sends. Cell styles are compared with StyleEq, never as
-// hand-written escapes.
-
 import term
 import testing
-
 import tui
 
-// The child and the base widgets. Each records its tag when it receives an
-// event, or paints, so a test can read which widgets were reached and in what
-// order. Its own rect is kept in a global, since a dyn Widget cannot be read
-// back by the test.
 mut events_log := ""
 mut paint_log := ""
 mut child_box := tui.Rect {}
@@ -71,7 +54,6 @@ struct Probe:
     end
 end
 
-// The root of every Screen in this file. It draws nothing.
 struct Root:
     pub use tui.BaseWidget
 end
@@ -96,8 +78,6 @@ func key(code: int): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
 end
 
-// A left-button press as the terminal reports it: SGR coordinates are
-// 1-based, so cell (x, y) arrives as column x + 1, row y + 1.
 func click(x: int, y: int): tui.Event:
     seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
     ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
@@ -111,8 +91,6 @@ func rep(s: str, n: int): str:
     ret out
 end
 
-// A Modal with the given title and size, opened over bounds w by h, with a
-// probe child placed inside the ring.
 func openModal(w: int, h: int, size: tui.ModalSize, title: str): tui.Modal:
     m := tui.NewModal()
     m.set_title(title)
@@ -123,8 +101,6 @@ func openModal(w: int, h: int, size: tui.ModalSize, title: str): tui.Modal:
     ret m
 end
 
-// MD01: a 18 by 5 dialog with the title Quit. The title sits at column 2
-// with one space each side.
 func test_md01_frame_with_title():
     mut b := tui.NewBuffer(18, 5)
     m := openModal(18, 5, tui.ModalSize.Fixed(18, 5), "Quit")
@@ -139,8 +115,6 @@ func test_md01_frame_with_title():
     b.free()
 end
 
-// MD02: a Percent size that floors below 20 by 5 is raised to 20 by 5 and
-// centred: x = (30 - 20) / 2, y = (10 - 5) / 2.
 func test_md02_percent_floor_is_20_by_5():
     mut b := tui.NewBuffer(30, 10)
     m := openModal(30, 10, tui.ModalSize.Percent(10, 10), "")
@@ -154,7 +128,6 @@ func test_md02_percent_floor_is_20_by_5():
     b.free()
 end
 
-// MD03: a 3 by 3 ring with a 1 by 1 child.
 func test_md03_three_by_three_ring():
     mut b := tui.NewBuffer(3, 3)
     m := openModal(3, 3, tui.ModalSize.Fixed(3, 3), "")
@@ -167,8 +140,6 @@ func test_md03_three_by_three_ring():
     b.free()
 end
 
-// MD04: a 2 by 2 dialog is corners only, below the ring's 2 by 2 minimum
-// there are no edges, and its child is 0 by 0.
 func test_md04_two_by_two_corners_only():
     mut b := tui.NewBuffer(2, 2)
     m := openModal(2, 2, tui.ModalSize.Fixed(2, 2), "")
@@ -180,7 +151,6 @@ func test_md04_two_by_two_corners_only():
     b.free()
 end
 
-// MD05: a 12 by 3 dialog. The title is cut to width - 5 = 7 characters.
 func test_md05_title_clipped_to_width_minus_five():
     mut b := tui.NewBuffer(12, 3)
     m := openModal(12, 3, tui.ModalSize.Fixed(12, 3), "Confirm exit")
@@ -191,9 +161,6 @@ func test_md05_title_clipped_to_width_minus_five():
     b.free()
 end
 
-// SC01: a Fixed 4 by 3 dialog centred in an 8 by 3 screen sits at x = 2.
-// Outside cells keep their glyph and gain DIM on top of their own style.
-// The dialog's interior keeps its style.
 func test_sc01_scrim_dims_outside_only():
     base := tui.Style { fg = tui.Red }
     dimmed := tui.Style { fg = tui.Red, dim = true }
@@ -210,8 +177,6 @@ func test_sc01_scrim_dims_outside_only():
     b.free()
 end
 
-// A cell with several style fields (bold and a colour, as Text or Button
-// paints) keeps every one of them; only DIM is added.
 func test_scrim_keeps_every_style_field():
     base := tui.Style { bold = true, fg = tui.Red }
     dimmed := tui.Style { bold = true, fg = tui.Red, dim = true }
@@ -224,7 +189,6 @@ func test_scrim_keeps_every_style_field():
     b.free()
 end
 
-// A scrim over a cell with no style yet is DIM alone, the StyleSgr of DIM.
 func test_scrim_on_unstyled_cell_is_dim_alone():
     mut b := tui.NewBuffer(8, 3)
     m := openModal(8, 3, tui.ModalSize.Fixed(4, 3), "")
@@ -234,9 +198,6 @@ func test_scrim_on_unstyled_cell_is_dim_alone():
     b.free()
 end
 
-// A Percent(50, 40) dialog on an 8 by 3 screen degenerates to the whole
-// bounds: 4 floors to 20, clamps to the 8 columns; 1 floors to 5, clamps
-// to the 3 rows. No cell is left to dim.
 func test_percent_in_small_bounds_fills_bounds():
     mut b := tui.NewBuffer(8, 3)
     m := openModal(8, 3, tui.ModalSize.Percent(50, 40), "")
@@ -247,8 +208,6 @@ func test_percent_in_small_bounds_fills_bounds():
     b.free()
 end
 
-// The scrim is a field copy, so painting builds no SGR. The bytes appear only
-// when the buffer emits the frame — the cost model the old map existed for.
 func test_scrim_painting_builds_nothing():
     area := rect(0, 0, 8, 3)
     mut b := tui.NewBuffer(8, 3)
@@ -258,17 +217,13 @@ func test_scrim_painting_builds_nothing():
     before := tui.SgrBuilds()
     m.render(b, area)
     testing.AssertEqInt(tui.SgrBuilds() - before, 0)
-    // The dimmed cells carry the underlying style plus DIM, per cell.
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { fg = tui.Red, dim = true }))
     testing.AssertTrue(tui.StyleEq(b.get(6, 2).style, tui.Style { fg = tui.Red, dim = true }))
-    // The interior keeps its style untouched.
     testing.AssertTrue(tui.StyleEq(b.get(3, 1).style, tui.Style { fg = tui.Red }))
     _ := b.ansi()
     testing.AssertTrue(tui.SgrBuilds() > before)
 end
 
-// Esc: the first press closes while closable, fires on_close and is
-// consumed. Once closed, a press is not consumed.
 func test_esc_closes_and_fires_on_close():
     closes = 0
     mut m := openModal(20, 10, tui.ModalSize.Fixed(10, 4), "")
@@ -280,7 +235,6 @@ func test_esc_closes_and_fires_on_close():
     testing.AssertEqInt(closes, 1)
 end
 
-// closable = false: Esc passes through and the Modal stays open.
 func test_not_closable_passes_esc():
     closes = 0
     mut m := openModal(20, 10, tui.ModalSize.Fixed(10, 4), "")
@@ -291,7 +245,6 @@ func test_not_closable_passes_esc():
     testing.AssertEqInt(closes, 0)
 end
 
-// A child that consumes Esc keeps the Modal open and on_close silent.
 func test_child_consuming_esc_keeps_open():
     closes = 0
     mut m := tui.NewModal()
@@ -304,7 +257,6 @@ func test_child_consuming_esc_keeps_open():
     testing.AssertEqInt(closes, 0)
 end
 
-// focusable and hits follow visible; takes_focus gates focus alone.
 func test_focusable_and_hits_follow_open_state():
     mut m := tui.NewModal()
     testing.AssertFalse(m.focusable())
@@ -317,9 +269,6 @@ func test_focusable_and_hits_follow_open_state():
     testing.AssertTrue(m.hits())
 end
 
-// Mouse: a press on the scrim is consumed, a press on the dialog reaches the
-// child and falls through when the child does not take it, and a press
-// outside the Modal's bounds is not the Modal's.
 func test_mouse_on_scrim_consumed_dialog_reaches_child():
     events_log = ""
     m := openModal(20, 10, tui.ModalSize.Fixed(10, 4), "")
@@ -329,7 +278,6 @@ func test_mouse_on_scrim_consumed_dialog_reaches_child():
     testing.AssertFalse(m.handle_event(click(25, 5)))
 end
 
-// A hidden Modal lets every event fall through and paints nothing.
 func test_hidden_modal_paints_nothing_and_passes_events():
     events_log = ""
     mut b := tui.NewBuffer(8, 3)
@@ -346,8 +294,6 @@ func test_hidden_modal_paints_nothing_and_passes_events():
     b.free()
 end
 
-// A Modal configured for the Screen: child added, bounds set, opened, all
-// before Screen.add, which stores a copy (see the module comment).
 func screen_modal(area: tui.Rect, size: tui.ModalSize, tag: str): tui.Modal:
     m := tui.NewModal()
     m.set_size(size)
@@ -357,11 +303,6 @@ func screen_modal(area: tui.Rect, size: tui.ModalSize, tag: str): tui.Modal:
     ret m
 end
 
-// The Screen protocol: raise_subtree paints the Modal layer last even when
-// its base widget has a lower id and a later base widget sits above it
-// (u and v are the base, c is the child); push_focus lands the focus on
-// the Modal. Esc closes the stored Modal, and unraise_subtree with pop_focus
-// gives the focus back.
 func test_screen_open_paints_last_and_takes_focus():
     closes = 0
     mut s := tui.NewScreen(Root {}, 20, 10)
@@ -391,8 +332,6 @@ func test_screen_open_paints_last_and_takes_focus():
     testing.AssertEqInt(s.focused_id(), under)
 end
 
-// A Screen-level click on a probe covered by the Modal goes to the Modal:
-// the probe never sees it. A click on the dialog reaches the child.
 func test_screen_click_on_covered_probe_stops_at_modal():
     events_log = ""
     mut s := tui.NewScreen(Root {}, 20, 10)
@@ -413,7 +352,6 @@ func test_screen_click_on_covered_probe_stops_at_modal():
     testing.AssertEqStr(events_log, "c")
 end
 
-// Tab stays inside the Modal layer: the Modal is the only focus stop.
 func test_tab_stays_inside_open_modal():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -427,7 +365,6 @@ func test_tab_stays_inside_open_modal():
     testing.AssertEqInt(s.focused_id(), mid)
 end
 
-// A key pressed at the focused Modal does not reach a base widget.
 func test_key_at_modal_does_not_reach_base():
     events_log = ""
     mut s := tui.NewScreen(Root {}, 20, 10)
@@ -442,8 +379,6 @@ func test_key_at_modal_does_not_reach_base():
     testing.AssertEqStr(events_log, "")
 end
 
-// Nested modals: the inner one holds the focus, so Esc closes it alone and
-// the outer one stays open.
 func test_nested_esc_closes_only_inner():
     inner_closes = 0
     outer_closes = 0
@@ -470,7 +405,6 @@ func test_nested_esc_closes_only_inner():
     testing.AssertEqInt(s.focused_id(), oid)
 end
 
-// A hidden Modal does not hit: the widget under it is found. An open one does.
 func test_hidden_modal_lets_hit_test_fall_through():
     mut s := tui.NewScreen(Root {}, 8, 3)
     defer s.close()
@@ -484,7 +418,6 @@ func test_hidden_modal_lets_hit_test_fall_through():
     testing.AssertEqInt(s.hit_test(0, 0), shown)
 end
 
-// A closed Modal hides its focusable child: explicit focus refuses it and Tab and Shift-Tab only visit the base tiles.
 func test_closed_modal_hides_its_child_from_focus_order():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -516,7 +449,6 @@ func test_closed_modal_hides_its_child_from_focus_order():
     testing.AssertEqInt(s.focused_id(), a)
 end
 
-// Opening the Modal makes its child reachable: can_focus accepts it, focus lands on it, Tab reaches it after the base tiles.
 func test_opening_modal_makes_its_child_reachable():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -544,7 +476,6 @@ func test_opening_modal_makes_its_child_reachable():
     testing.AssertEqInt(s.focused_id(), cid)
 end
 
-// G6: closed without unraise or pop, the hidden child keeps the stamp, but the next dispatch revalidates focus to the first entry of the visible base order, so the hidden child receives nothing.
 func test_close_without_unraise_keeps_child_out_of_order():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -575,7 +506,6 @@ func test_close_without_unraise_keeps_child_out_of_order():
     testing.AssertEqInt(s.focused_id(), b)
 end
 
-// A hidden child is not a spatial candidate: the right move refuses while the Modal is closed and reaches it once open.
 func test_hidden_child_is_not_a_spatial_candidate():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -598,8 +528,6 @@ func test_hidden_child_is_not_a_spatial_candidate():
     testing.AssertEqInt(s.focused_id(), cid)
 end
 
-// preferred_size: Fixed reports its size; Percent reports the sentinel.
-// measure is never ok, so a layout reads preferred_size.
 func test_preferred_size_and_measure():
     m := tui.NewModal()
     m.set_size(tui.ModalSize.Fixed(7, 4))
@@ -613,9 +541,6 @@ func test_preferred_size_and_measure():
     testing.AssertFalse(m.measure(tui.Axis.X, 0).ok)
 end
 
-// Post-add open and close: the Modal is added hidden, then the app keeps the
-// local value and opens and closes it. The stored copy, read by hit_test,
-// sees each change.
 func test_post_add_open_and_close_reach_tree_copy():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -634,8 +559,6 @@ func test_post_add_open_and_close_reach_tree_copy():
     testing.AssertEqInt(s.hit_test(0, 0), under)
 end
 
-// set_title after Screen.add reaches the frame: the Screen draws the stored
-// copy, whose ring carries the new title.
 func test_post_add_set_title_reaches_frame():
     mut s := tui.NewScreen(Root {}, 20, 10)
     defer s.close()
@@ -648,8 +571,6 @@ func test_post_add_set_title_reaches_frame():
     testing.AssertEqInt(s.hit_test(0, 0), mid)
 end
 
-// Esc through dispatch on the stored copy closes it and fires on_close once.
-// The local value reads the same closed state, since both share it.
 func test_post_add_esc_fires_on_close_once():
     closes = 0
     mut s := tui.NewScreen(Root {}, 20, 10)

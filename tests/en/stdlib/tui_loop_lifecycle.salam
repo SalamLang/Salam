@@ -12,29 +12,14 @@
  *
  */
 
-// Headless lifecycle and event-loop tests. No terminal is used: the screen is
-// never start()ed (the only start() call is the post-close guard), so present()
-// draws into the buffer without writing to the terminal. run() is driven to
-// completion by an unconsumed Ctrl+C, which stops the loop, so run() always
-// returns. Every event in the scripted loop goes through the real events
-// channel (post / next_event), the real dispatch path, the keymap fallback,
-// and the real draw path. A consumed event queues that widget's bounds and the
-// next present repaints them; an unconsumed one changes nothing. The buffer is
-// never touched after close(), which frees it.
-
 import testing
 import term
-
 import tui
 
-// Bumped by App.render, so a test can tell how many frames run() drew.
 mut renders := 0
 
-// Bumped by the scripted loop's button, so a click test reads a module
-// global rather than trying to downcast the screen's dyn widget copy.
 mut clicks := 0
 
-// Root widget: paints "app" at the origin and counts every render.
 struct App:
     pub use tui.BaseWidget
 
@@ -44,8 +29,6 @@ struct App:
     end
 end
 
-// One cell that consumes "r" and flips its mark, so a key that run() delivers
-// leaves a visible new glyph in the buffer.
 struct Spot:
     pub use tui.BaseWidget
     pub mark: str = "a"
@@ -79,20 +62,15 @@ func key(seq: str): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
 end
 
-// A key with no character payload, for Tab, Enter and friends.
 func special(code: int): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
 end
 
-// A left-button press as the terminal reports it: SGR coordinates are
-// 1-based, so cell (x, y) arrives as column x + 1, row y + 1.
 func click(x: int, y: int): tui.Event:
     seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
     ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
 end
 
-// Posts ev, receives it, dispatches it. Returns dispatch's result.
-// next_event blocks until an event arrives, so the post always comes first.
 func pump(s &: tui.Screen, ev: tui.Event): bool:
     _ := s.post(ev)
     mut got := tui.Event {}
@@ -100,7 +78,6 @@ func pump(s &: tui.Screen, ev: tui.Event): bool:
     ret s.dispatch(got)
 end
 
-// The whole grid, row by row, rows joined with "|".
 func frame(s &: tui.Screen): str:
     mut out := ""
     repeat s.buffer.height in y:
@@ -129,7 +106,6 @@ func test_new_screen_state():
     testing.AssertFalse(s.mouse_motion)
 end
 
-// run() presents once, then stops on a Ctrl+C no widget consumed.
 func test_run_exits_on_unconsumed_ctrl_c():
     mut s := tui.NewScreen(App {}, 20, 8)
     defer s.close()
@@ -140,8 +116,6 @@ func test_run_exits_on_unconsumed_ctrl_c():
     testing.AssertEqInt(renders, 1)
 end
 
-// run() delivers events to widgets: the focused Spot consumes "r" and
-// repaints its cell, so the loop, not just dispatch, moved the state.
 func test_run_consumed_key_changes_state():
     mut s := tui.NewScreen(tui.BaseWidget {}, 20, 8)
     defer s.close()
@@ -156,15 +130,12 @@ func test_run_consumed_key_changes_state():
     testing.AssertEqStr(s.buffer.get(0, 0).ch, "b")
 end
 
-// close() stops the loop on its own. Nothing else is asserted: close frees
-// the buffer and the channel.
 func test_close_without_stop():
     mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
     s.close()
     testing.AssertFalse(s.running)
 end
 
-// start() after close() returns on the closed guard and does not attach.
 func test_start_after_close_is_a_noop():
     mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
     s.close()
@@ -191,47 +162,34 @@ func test_scripted_event_loop():
     launch := s.add(tui.RootId, btn as dyn tui.Widget)
     s.widget(launch).set_bounds(rect(1, 4, 12, 1))
 
-    // The input is always focusable and was added first, so it holds focus.
     testing.AssertEqInt(s.focused_id(), inbox)
 
-    // 1. The focused input consumes printable characters. No downcast exists,
-    // so the value is read off the frame the widget painted.
     testing.AssertTrue(pump(s, key("h")))
     testing.AssertTrue(pump(s, key("i")))
     s.present()
     testing.AssertEqStr(s.buffer.get(1, 1).ch, "h")
     testing.AssertEqStr(s.buffer.get(2, 1).ch, "i")
 
-    // 2. No widget consumes Tab, so the keymap fallback runs focus_next and
-    // dispatch reports the keymap's consumption.
     testing.AssertTrue(pump(s, special(term.KeyTab)))
     testing.AssertEqInt(s.focused_id(), wrapped)
 
-    // 3. Space reaches the checkbox now that it holds focus.
     testing.AssertTrue(pump(s, key(" ")))
     s.present()
     testing.AssertEqStr(s.buffer.get(2, 3).ch, "x")
 
-    // 4. Tab again, onto the button.
     testing.AssertTrue(pump(s, special(term.KeyTab)))
     testing.AssertEqInt(s.focused_id(), launch)
 
-    // 5. Enter activates the focused button.
     testing.AssertTrue(pump(s, special(term.KeyEnter)))
     testing.AssertEqInt(clicks, 1)
 
-    // 6. Tab wraps to the first focusable widget.
     testing.AssertTrue(pump(s, special(term.KeyTab)))
     testing.AssertEqInt(s.focused_id(), inbox)
 
-    // 7. A click on the button centre activates it. Focus stays on the input:
-    // clicks never move focus.
     testing.AssertTrue(pump(s, click(7, 4)))
     testing.AssertEqInt(clicks, 2)
     testing.AssertEqInt(s.focused_id(), inbox)
 
-    // 8. A resize reallocates the buffer and refits the root, so the next
-    // frame is a forced full repaint.
     testing.AssertFalse(pump(s, tui.Event { kind = tui.ResizeEvent, width = 24, height = 10 }))
     testing.AssertEqInt(s.buffer.width, 24)
     testing.AssertEqInt(s.buffer.height, 10)
@@ -244,11 +202,9 @@ func test_scripted_event_loop():
     s.present()
     s.buffer.commit()
 
-    // 9. A tick is unconsumed outside run_with_tick and changes no state.
     testing.AssertFalse(pump(s, tui.Event { kind = tui.TickEvent }))
     testing.AssertFalse(s.running)
 
-    // 10. An unconsumed Ctrl+C is the loop's stop rule, applied by hand.
     ev := key("\x03")
     consumed := pump(s, ev)
     testing.AssertFalse(consumed)

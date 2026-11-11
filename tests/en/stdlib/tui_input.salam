@@ -12,34 +12,17 @@
  *
  */
 
-// Tests for the Input widget: the frozen defaults, the key table
-// (printable and space insert at the caret, Left/Right/Home/End move it,
-// backspace and delete splice a codepoint, enter calls on_submit, everything
-// else bubbles), the value getter and setters, the
-// stateful caret-window render (value or placeholder, styled cursor cell,
-// codepoint counts), the overflow window, and the screen-level focus gating
-// that routes keys to the input only while it holds the focus. Keys are
-// built with term.Decode from the exact bytes a terminal sends, or as a
-// literal term.Key code for specials. Cell styles are compared with StyleEq,
-// never as hand-written escapes.
-
 import testing
 import str
 import term
-
 import tui
 
-// Counts filter calls; the filter closure writes it.
 mut filter_calls := 0
 
-// Submit probes: the callbacks write them; `shared` is the input a callback
-// mutates.
 mut submit_calls := 0
 mut submit_arg := "unset"
 mut shared := tui.NewInput()
 
-// A focusable widget that consumes nothing, so it can steal the focus from
-// the input.
 struct Sink:
     pub use tui.BaseWidget
 
@@ -60,8 +43,6 @@ func special(code: int): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
 end
 
-// ---- Defaults ---------------------------------------------------------
-
 func test_defaults():
     mut e := tui.NewInput()
     testing.AssertTrue(e.focusable())
@@ -71,8 +52,6 @@ func test_defaults():
     testing.AssertTrue(tui.StyleEq(e.cursor_style, tui.Style { reverse = true }))
     testing.AssertTrue(tui.StyleEq(e.placeholder_style, tui.Style { fg = tui.BrightBlack }))
 end
-
-// ---- Editing (AC2) ----------------------------------------------------
 
 func test_editing_append_printable():
     mut e := tui.NewInput()
@@ -84,10 +63,8 @@ end
 
 func test_editing_space_wire_shape():
     mut e := tui.NewInput()
-    // A space on the wire is KeySpace, not KeyChar (G4).
     testing.AssertTrue(e.handle_event(key(" ")))
     testing.AssertEqStr(e.value(), " ")
-    // The literal form appends the same way.
     testing.AssertTrue(e.handle_event(special(term.KeySpace)))
     testing.AssertEqStr(e.value(), "  ")
 end
@@ -99,7 +76,6 @@ func test_editing_backspace_sequence():
     testing.AssertEqStr(e.value(), "a")
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
     testing.AssertEqStr(e.value(), "")
-    // One extra press at the start stays consumed and changes nothing.
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
     testing.AssertEqStr(e.value(), "")
 end
@@ -113,8 +89,6 @@ end
 
 func test_editing_unhandled_keys_bubble():
     mut e := tui.NewInput()
-    // Tab, escape, up/down, page keys, insert, F-keys, ctrl chords, mouse:
-    // not consumed, so they bubble on.
     testing.AssertFalse(e.handle_event(key("\t")))
     testing.AssertFalse(e.handle_event(key("\x1b")))
     testing.AssertFalse(e.handle_event(key("\x1b[A")))
@@ -133,7 +107,6 @@ end
 
 func test_editing_navigation_consumed():
     mut e := tui.NewInput()
-    // Delete, Home, Left, Right, End are consumed even with nothing to do.
     testing.AssertTrue(e.handle_event(key("\x1b[3~")))
     testing.AssertTrue(e.handle_event(key("\x1b[H")))
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
@@ -142,9 +115,6 @@ func test_editing_navigation_consumed():
     testing.AssertEqStr(e.value(), "")
 end
 
-// ---- Caret editing ----------------------------------------------------
-
-// The column of the reverse-video cell in row 0, or -1.
 func cursor_col(b: tui.Buffer, w: int): int:
     reverse := tui.Style { reverse = true }
     mut found := -1
@@ -169,12 +139,10 @@ end
 func test_caret_delete_and_backspace():
     mut e := tui.NewInput()
     e.set_value("abcd")
-    // Delete at the end changes nothing.
     testing.AssertTrue(e.handle_event(key("\x1b[3~")))
     testing.AssertEqStr(e.value(), "abcd")
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
-    // Caret 2: Delete drops "c", the caret stays; Backspace drops "b".
     testing.AssertTrue(e.handle_event(key("\x1b[3~")))
     testing.AssertEqStr(e.value(), "abd")
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
@@ -187,14 +155,12 @@ func test_caret_home_end_bounds():
     defer b.free()
     b.focused = true
     e.set_value("abc")
-    // Right at the end stays at 3; End lands on 3.
     testing.AssertTrue(e.handle_event(key("\x1b[C")))
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqInt(cursor_col(b, 8), 3)
     testing.AssertTrue(e.handle_event(key("\x1b[H")))
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqInt(cursor_col(b, 8), 0)
-    // Left at 0 stays at 0.
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqInt(cursor_col(b, 8), 0)
@@ -238,16 +204,13 @@ func test_caret_over_glyph_and_trailing_blank():
     defer b.free()
     b.focused = true
     e.set_value("abc")
-    // At n the cursor is a blank.
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqStr(b.get(3, 0).ch, " ")
-    // Below n the cursor keeps the glyph under it.
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqInt(cursor_col(b, 8), 2)
     testing.AssertEqStr(b.get(2, 0).ch, "c")
     testing.AssertEqStr(b.row_text(0), "abc     ")
-    // Unfocused: same window, no reverse cell.
     b.focused = false
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqInt(cursor_col(b, 8), -1)
@@ -262,12 +225,10 @@ func test_window_moves_only_when_caret_leaves():
     e.set_value("abcdefgh")
     e.render(b, rect(0, 0, 4, 1))
     testing.AssertEqStr(b.row_text(0), "fgh ")
-    // Moving left inside the window does not scroll.
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     e.render(b, rect(0, 0, 4, 1))
     testing.AssertEqStr(b.row_text(0), "fgh ")
     testing.AssertEqInt(cursor_col(b, 4), 2)
-    // Reaching the first column still does not scroll; leaving it does, by one.
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     e.render(b, rect(0, 0, 4, 1))
@@ -279,8 +240,6 @@ func test_window_moves_only_when_caret_leaves():
     testing.AssertEqInt(cursor_col(b, 4), 0)
 end
 
-// Feeds one key, renders focused at width 5, and asserts the caret cell is
-// inside the window (exactly one reverse cell at column 0..4).
 func step(e &: tui.Input, b: tui.Buffer, seq: str):
     testing.AssertTrue(e.handle_event(key(seq)))
     e.render(b, rect(0, 0, 5, 1))
@@ -320,8 +279,6 @@ func test_caret_window_invariant():
     testing.AssertEqStr(e.value(), "bcdzxfg")
 end
 
-// ---- Getter and setters (AC6) -----------------------------------------
-
 func test_getter_and_setters():
     mut e := tui.NewInput()
     e.set_value("hello")
@@ -331,8 +288,6 @@ func test_getter_and_setters():
     e.set_placeholder("name")
     testing.AssertEqStr(e.value(), "")
 end
-
-// ---- Render (AC1, AC3) ------------------------------------------------
 
 func test_render_value_unfocused():
     mut b := tui.NewBuffer(16, 1)
@@ -344,8 +299,6 @@ func test_render_value_unfocused():
     testing.AssertEqStr(b.get(4, 0).ch, "o")
     testing.AssertEqStr(b.get(5, 0).ch, " ")
     testing.AssertEqStr(b.row_text(0), "hello           ")
-    // The background fill carries the base style; nothing is reverse while
-    // unfocused.
     testing.AssertTrue(tui.StyleEq(b.get(15, 0).style, tui.StyleDefault))
     cursor := tui.Style { reverse = true }
     mut reversed := false
@@ -365,13 +318,10 @@ func test_render_cursor_default():
     defer b.free()
     b.focused = true
     e.render(b, rect(0, 0, 16, 1))
-    // The caret is past the last glyph, so the cursor cell is the blank at
-    // column 5, reverse video (G04).
     testing.AssertEqStr(b.get(5, 0).ch, " ")
     testing.AssertTrue(tui.StyleEq(b.get(5, 0).style, reverse))
     testing.AssertEqStr(b.row_text(0), "hello           ")
 
-    // Empty content puts the cursor at column 0.
     mut empty := tui.NewInput()
     mut b2 := tui.NewBuffer(16, 1)
     defer b2.free()
@@ -401,7 +351,6 @@ func test_render_placeholder_default():
     defer b2.free()
     b2.focused = true
     e.render(b2, rect(0, 0, 16, 1))
-    // The cursor cell keeps the placeholder glyph but drops the grey (G02).
     testing.AssertEqStr(b2.get(0, 0).ch, "N")
     testing.AssertTrue(tui.StyleEq(b2.get(0, 0).style, reverse))
     testing.AssertTrue(tui.StyleEq(b2.get(1, 0).style, gray))
@@ -409,8 +358,6 @@ func test_render_placeholder_default():
 end
 
 func test_render_default_fallbacks_from_fields():
-    // The defaults now live in the field initialisers, so the first render
-    // needs no lazy build, and the widget never builds an SGR itself.
     mut e := tui.NewInput()
     e.set_placeholder("Name")
     mut b := tui.NewBuffer(8, 1)
@@ -419,12 +366,10 @@ func test_render_default_fallbacks_from_fields():
     before := tui.SgrBuilds()
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqInt(tui.SgrBuilds() - before, 0)
-    // Bytes are unchanged: the cursor cell is reverse, the placeholder grey.
     testing.AssertEqStr(b.get(0, 0).ch, "N")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
     testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, tui.Style { fg = tui.BrightBlack }))
 
-    // A caller-supplied style replaces the default outright.
     bold := tui.Style { bold = true }
     italic := tui.Style { italic = true }
     mut c := tui.NewInput()
@@ -437,7 +382,6 @@ func test_render_default_fallbacks_from_fields():
     c.render(b3, rect(0, 0, 8, 1))
     testing.AssertTrue(tui.StyleEq(b3.get(0, 0).style, italic))
     testing.AssertTrue(tui.StyleEq(b3.get(1, 0).style, bold))
-    // StyleDefault adds nothing: a caller can ask for a plain cursor.
     c.cursor_style = tui.StyleDefault
     c.render(b3, rect(0, 0, 8, 1))
     testing.AssertTrue(tui.StyleEq(b3.get(0, 0).style, tui.StyleDefault))
@@ -461,7 +405,6 @@ func test_render_themed_styles():
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, base))
     testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, tui.StyleMerge(base, reverse)))
 
-    // Placeholder and cursor compose on top of the base style.
     mut p := tui.NewInput()
     p.style = base
     p.set_placeholder("Name")
@@ -471,8 +414,6 @@ func test_render_themed_styles():
     testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, tui.StyleMerge(base, gray)))
     testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, base))
 end
-
-// ---- Cursor tracking (AC5) --------------------------------------------
 
 func test_cursor_tracks_value_and_backspace():
     reverse := tui.Style { reverse = true }
@@ -496,8 +437,6 @@ func test_render_overflow_wide_value():
     e.set_value("abcdefghij")
     mut b := tui.NewBuffer(8, 1)
     defer b.free()
-    // The caret is at the end, so the window ends one past the last glyph;
-    // focus does not change it.
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqStr(b.row_text(0), "defghij ")
     b.focused = true
@@ -511,12 +450,9 @@ func test_render_scroll_starts_at_boundary():
     mut b := tui.NewBuffer(8, 1)
     defer b.free()
     b.focused = true
-    // count == width: the caret sits one past the last glyph, so the first
-    // cell scrolls away.
     e.set_value("abcdefgh")
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqStr(b.row_text(0), "bcdefgh ")
-    // One more cell scrolls the window one more step, same unfocused.
     b.focused = false
     e.set_value("abcdefghi")
     e.render(b, rect(0, 0, 8, 1))
@@ -532,7 +468,6 @@ func test_render_window_follows_shrinking_value():
     e.set_value("ab")
     e.render(b, rect(0, 0, 8, 1))
     testing.AssertEqStr(b.row_text(0), "ab      ")
-    // Backspace down from the long value keeps the text visible.
     e.set_value("abcdefghij")
     e.render(b, rect(0, 0, 8, 1))
     bs := special(term.KeyBackspace)
@@ -571,7 +506,6 @@ func test_render_width5_focused():
     e.render(b, rect(0, 0, 5, 1))
     testing.AssertEqStr(b.row_text(0), "ello ")
     testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, tui.Style { reverse = true }))
-    // Home: all five glyphs show and the caret overlays the first.
     testing.AssertTrue(e.handle_event(key("\x1b[H")))
     e.render(b, rect(0, 0, 5, 1))
     testing.AssertEqStr(b.row_text(0), "hello")
@@ -583,17 +517,14 @@ func test_render_width1():
     e.set_value("ab")
     mut b := tui.NewBuffer(1, 1)
     defer b.free()
-    // Focused at the end: the whole cell is the blank cursor.
     b.focused = true
     e.render(b, rect(0, 0, 1, 1))
     testing.AssertEqStr(b.row_text(0), " ")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
-    // Caret on the last glyph: that glyph is the cursor.
     testing.AssertTrue(e.handle_event(key("\x1b[D")))
     e.render(b, rect(0, 0, 1, 1))
     testing.AssertEqStr(b.row_text(0), "b")
     testing.AssertEqInt(cursor_col(b, 1), 0)
-    // Unfocused: same window, no cursor.
     b.focused = false
     e.render(b, rect(0, 0, 1, 1))
     testing.AssertEqStr(b.row_text(0), "b")
@@ -610,18 +541,12 @@ func test_render_width0_draws_nothing():
     testing.AssertEqStr(b.row_text(0), "  ")
 end
 
-// ---- Focus gating at screen level (AC4) -------------------------------
-
 func test_screen_dispatch_reaches_focused_input():
     mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
     defer s.close()
-    // Keep the dyn handle: it shares the box the screen stores, so after
-    // screen dispatch it renders the value the screen's copy appended
-    // (dyn has no downcast; a plain struct copy is not shared).
     w := tui.NewInput() as dyn tui.Widget
     id := s.add(tui.RootId, w)
     s.widget(id).set_bounds(rect(0, 0, 24, 1))
-    // The first focusable widget added receives the focus.
     testing.AssertEqInt(s.focused_id(), id)
     testing.AssertTrue(s.dispatch(key("a")))
     mut probe := tui.NewBuffer(24, 1)
@@ -642,7 +567,6 @@ func test_screen_unfocused_input_does_not_consume():
     s.widget(inlet).set_bounds(rect(0, 0, 24, 1))
     other := s.add(tui.RootId, Sink {})
     s.widget(other).set_bounds(rect(0, 1, 24, 1))
-    // Move the focus off the input.
     testing.AssertTrue(s.focus(other))
     testing.AssertFalse(s.dispatch(key("a")))
     mut probe := tui.NewBuffer(24, 1)
@@ -651,7 +575,6 @@ func test_screen_unfocused_input_does_not_consume():
     testing.AssertEqStr(probe.row_text(0), "                        ")
     s.present()
     testing.AssertEqStr(s.buffer.get(0, 0).ch, " ")
-    // Unfocused: no cursor cell is drawn anywhere.
     cursor := tui.Style { reverse = true }
     mut reversed := false
     repeat 24 in x:
@@ -662,33 +585,26 @@ func test_screen_unfocused_input_does_not_consume():
     testing.AssertFalse(reversed)
 end
 
-// ---- Unicode ----------------------------------------------------------
-
 func test_unicode_codepoint_editing():
     reverse := tui.Style { reverse = true }
     mut e := tui.NewInput()
     mut b := tui.NewBuffer(16, 1)
     defer b.free()
     b.focused = true
-    // One multibyte glyph is one codepoint: one append, one caret step.
     testing.AssertTrue(e.handle_event(key("é")))
     testing.AssertEqStr(e.value(), "é")
     e.render(b, rect(0, 0, 16, 1))
     testing.AssertEqStr(b.get(0, 0).ch, "é")
     testing.AssertTrue(tui.StyleEq(b.get(1, 0).style, reverse))
-    // Two codepoints: the caret is at codepoint column 2.
     testing.AssertTrue(e.handle_event(key("é")))
     testing.AssertEqStr(e.value(), "éé")
     e.render(b, rect(0, 0, 16, 1))
     testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, reverse))
-    // Backspace removes the whole codepoint, not one byte.
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
     testing.AssertEqStr(e.value(), "é")
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
     testing.AssertEqStr(e.value(), "")
 end
-
-// ---- Submit -------------------------------------------------------------
 
 func rec_true(v: str): bool:
     submit_calls++
@@ -779,8 +695,6 @@ func test_submit_clears_value_reclamps():
     testing.AssertEqStr(shared.value(), "x")
 end
 
-// ---- Shaping (max length, filter, mask) -------------------------------
-
 func bump(): bool:
     filter_calls++
     ret true
@@ -819,7 +733,6 @@ func test_max_length_rejects_and_consumes():
     testing.AssertTrue(e.handle_event(key("z")))
     testing.AssertTrue(e.handle_event(special(term.KeySpace)))
     testing.AssertEqStr(e.value(), "abcd")
-    // Deletion still works, then typing fits again.
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
     testing.AssertEqStr(e.value(), "abc")
     testing.AssertTrue(e.handle_event(key("x")))
@@ -838,7 +751,6 @@ func test_set_value_truncates():
     e.max_length = 3
     e.set_value("abcdef")
     testing.AssertEqStr(e.value(), "abc")
-    // Caret at the new end: the next typed glyph is rejected, backspace works.
     testing.AssertTrue(e.handle_event(key("z")))
     testing.AssertEqStr(e.value(), "abc")
     testing.AssertTrue(e.handle_event(special(term.KeyBackspace)))
@@ -853,7 +765,6 @@ func test_filter_digits_only():
     e.filter = (c: str): ret digits_only(c) end
     e = type_all(e, "1a2 b3")
     testing.AssertEqStr(e.value(), "123")
-    // Rejection is consumed and leaves value and caret alone.
     testing.AssertTrue(e.handle_event(key("x")))
     testing.AssertEqStr(e.value(), "123")
     testing.AssertTrue(e.handle_event(special(term.KeyLeft)))
@@ -928,7 +839,6 @@ func test_mask_glyph_variants():
     e.mask_glyph = "•"
     e.render(b, rect(0, 0, 4, 1))
     testing.AssertEqStr(b.row_text(0), "••  ")
-    // Only the first codepoint is used.
     e.mask_glyph = "#@"
     e.render(b, rect(0, 0, 4, 1))
     testing.AssertEqStr(b.row_text(0), "##  ")
@@ -962,7 +872,6 @@ func test_mask_overflow_window():
     e.render(b, rect(0, 0, 4, 1))
     testing.AssertEqStr(b.row_text(0), "*** ")
 end
-
 
 func cursor_cols(b: tui.Buffer, w: int): str:
     mut s := ""

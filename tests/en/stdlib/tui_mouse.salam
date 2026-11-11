@@ -12,31 +12,12 @@
  *
  */
 
-// Headless tests for mouse routing: a MouseEvent goes to the widget under
-// the cursor (the topmost one by paint order) and bubbles from there, falls
-// back to the focused widget when nothing is under the cursor, and leaves
-// every other event kind on the focused-first path. Routing never moves the
-// focus: a click does not focus what it hits.
-//
-// Layout on a 20 x 10 screen (root is widget 0 and fills it):
-//
-//     root(0)
-//     |-- panel(1)    x 0..9,  y 0..4     focusable, holds the focus
-//     |   `-- child(2)  x 2..5, y 1..2
-//     `-- overlay(3)  x 4..7,  y 1..3     added after panel, paints over it
-
 import testing
 import term
-
 import tui
 
-// Every Recorder appends its name here when it sees an event, so a test can
-// assert the exact visiting order. Handlers cannot capture locals (lambdas
-// capture by value), so a global is the simplest shared log.
 mut visits := Vector {} as Vector<str>
 
-// Records each event it sees. Consumes mouse events when `takes_mouse` is
-// set and key events when `takes_keys` is set.
 struct Recorder:
     pub use tui.BaseWidget
     pub name: str = ""
@@ -62,8 +43,6 @@ struct Recorder:
     end
 end
 
-// A container that can hide its whole subtree. It is not a Modal: the Screen
-// must consult Widget.visible on the parent chain, never a widget type.
 struct Shutter:
     pub use tui.BaseWidget
     pub shown: bool = true
@@ -77,8 +56,6 @@ func rect(x: int, y: int, w: int, h: int): tui.Rect:
     ret tui.Rect { x = x, y = y, width = w, height = h }
 end
 
-// A left-button press as the terminal reports it: SGR coordinates are
-// 1-based, so cell (x, y) arrives as column x + 1, row y + 1.
 func click(x: int, y: int): tui.Event:
     seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
     ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
@@ -100,8 +77,6 @@ func trail(): str:
     ret out
 end
 
-// Builds the layout from the header comment. panel takes the initial focus
-// because it is the first focusable widget added.
 func build(): tui.Screen:
     mut s := tui.NewScreen(Recorder { name = "root" }, 20, 10)
     panel := s.add(tui.RootId, Recorder { name = "panel", can_focus = true, takes_keys = true })
@@ -126,9 +101,7 @@ func test_hit_test_picks_topmost():
     testing.AssertEqInt(s.hit_test(2, 1), 2)
     testing.AssertEqInt(s.hit_test(0, 0), 1)
     testing.AssertEqInt(s.hit_test(15, 8), tui.RootId)
-    // child and overlay both cover (4, 1); overlay was added later.
     testing.AssertEqInt(s.hit_test(4, 1), 3)
-    // Half-open edges: child ends at column 5 and row 2, overlay at 7 and 3.
     testing.AssertEqInt(s.hit_test(5, 2), 3)
     testing.AssertEqInt(s.hit_test(6, 1), 3)
     testing.AssertEqInt(s.hit_test(8, 1), 1)
@@ -152,10 +125,6 @@ func test_hit_test_skips_empty_bounds():
     testing.AssertEqInt(s.hit_test(12, 5), tui.RootId)
 end
 
-// A hidden container hides its whole subtree from hit testing. A point over
-// a hidden container and its child falls through to the visible widget
-// underneath (not to NoWidget), while the same layout with the container
-// shown returns the child.
 func test_hit_test_skips_hidden_subtree():
     mut s := tui.NewScreen(Recorder { name = "root" }, 20, 10)
     defer s.close()
@@ -185,8 +154,6 @@ func test_click_on_child_reaches_child_first():
     mut s := build()
     defer s.close()
     testing.AssertFalse(s.dispatch(click(2, 1)))
-    // Unconsumed: bubbles child > panel > root, never to the focus first
-    // and never to the overlay sibling.
     testing.AssertEqStr(trail(), "child>panel>root")
 end
 
@@ -209,9 +176,7 @@ func test_click_never_moves_focus():
     two := s.add(tui.RootId, Recorder { name = "two", can_focus = true })
     s.widget(one).set_bounds(rect(0, 0, 10, 5))
     s.widget(two).set_bounds(rect(10, 0, 10, 5))
-    // The first focusable widget added takes the focus.
     testing.AssertEqInt(s.focused_id(), one)
-    // The click lands on two, but hit-test routing must not focus it.
     testing.AssertFalse(s.dispatch(click(12, 2)))
     testing.AssertEqStr(trail(), "two>root")
     testing.AssertEqInt(s.focused_id(), one)
@@ -222,8 +187,6 @@ func test_click_outside_children_goes_to_root():
     defer s.close()
     panel := s.add(tui.RootId, Recorder { name = "panel", can_focus = true })
     s.widget(panel).set_bounds(rect(0, 0, 10, 5))
-    // The focused widget (panel) is not under the cursor and is not an
-    // ancestor of the root, so it is never asked.
     testing.AssertTrue(s.dispatch(click(15, 8)))
     testing.AssertEqStr(trail(), "root")
 end
@@ -231,8 +194,6 @@ end
 func test_click_with_nothing_under_cursor_falls_back_to_focus():
     mut s := build()
     defer s.close()
-    // Beyond the buffer: no widget contains it, so the focused widget goes
-    // first and the event bubbles from there.
     testing.AssertFalse(s.dispatch(click(30, 3)))
     testing.AssertEqStr(trail(), "panel>root")
 end
@@ -247,8 +208,6 @@ end
 func test_undecoded_mouse_report_falls_back_to_focus():
     mut s := build()
     defer s.close()
-    // ok = false: the report could not be decoded, so its position is not
-    // trusted and the event is treated like any other.
     ev := tui.Event { kind = tui.MouseEvent }
     testing.AssertFalse(s.dispatch(ev))
     testing.AssertEqStr(trail(), "panel>root")
@@ -262,7 +221,6 @@ func test_raised_widget_beats_later_sibling():
     ids.push(1)
     testing.AssertEqInt(s.focused_id(), 1)
     s.raise(ids)
-    // panel now paints above overlay, which used to win at (4, 1).
     testing.AssertEqInt(s.hit_test(4, 1), 1)
     testing.AssertEqInt(s.focused_id(), 1)
     testing.AssertFalse(s.dispatch(click(4, 1)))
@@ -274,7 +232,6 @@ func test_one_raise_shares_one_stamp():
     defer s.close()
     mut ids := Vector {} as Vector<int>
     defer ids.free()
-    // 2 then 1. A per-id increment would stamp panel above child.
     ids.push(2)
     ids.push(1)
     s.raise(ids)
@@ -282,9 +239,6 @@ func test_one_raise_shares_one_stamp():
     testing.AssertEqInt(s.focused_id(), 1)
 end
 
-// Spec z1, hit probes only. Widget 3 covers (7, 2) but refuses hits, so
-// the scan falls through to widget 2. Raising focusable w1 moves focus
-// onto w1. The click still follows hit-test, not focus.
 func test_hits_false_is_skipped():
     mut s := tui.NewScreen(Recorder { name = "w0", can_focus = true }, 10, 4)
     defer s.close()
@@ -330,7 +284,6 @@ end
 func test_release_report_decodes_and_routes():
     mut s := build()
     defer s.close()
-    // Final byte 'm' is a release. Column 3 and row 2 are cell (2, 1), the child.
     seq := "\x1b[<0;3;2m"
     mouse := term.DecodeMouse(seq)
     testing.AssertTrue(mouse.ok)
@@ -343,13 +296,10 @@ end
 func test_motion_report_decodes_and_routes():
     mut s := build()
     defer s.close()
-    // Button byte 35 = 32 (motion bit) | 3 (no button held). Cell (2, 1).
     seq := "\x1b[<35;3;2M"
     mouse := term.DecodeMouse(seq)
     testing.AssertTrue(mouse.ok)
     testing.AssertTrue(mouse.motion)
-    // 35 = 32 (motion) | 3 (no button): the stdlib follows the terminator,
-    // so a hover reads as pressed button 3. Pinned: widgets must gate on motion.
     testing.AssertTrue(mouse.pressed)
     testing.AssertEqInt(mouse.button, 3)
     ev := tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = mouse }

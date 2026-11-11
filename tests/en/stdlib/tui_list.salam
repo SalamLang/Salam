@@ -12,29 +12,12 @@
  *
  */
 
-// Tests for the List widget: the frozen defaults and focusable surface,
-// vim navigation with clamped ends and no wrap (j/k), the enter callback,
-// the render frame with its per-cell selection styles (reverse while
-// focused, bright-on-black while not), the minimal keep-selection-visible
-// scroll window, the empty-list edge, the bubble-on keys, the screen-level
-// focus gating, and codepoint-accurate clipping. Events are built headless
-// with term.Decode or synthetic kinds; frames are asserted per cell, or as
-// whole-grid bytes via Buffer.ansi(), never with diff() (a fresh buffer's
-// diff equals ansi, and a headless present() does not commit the front
-// grid). Keys follow the artifact vectors K01-K23, frames F01-F18, and
-// sequences S01-S05.
-
 import testing
 import term
-
 import tui
 
-// Appends the index of every on_select invocation. Handlers cannot capture
-// locals (lambdas capture by value), so a global is the shared log.
 mut picks := Vector {} as Vector<int>
 
-// A focusable widget that consumes nothing, so it can steal the focus from
-// the list in the screen tests.
 struct Sink:
     pub use tui.BaseWidget
 
@@ -51,7 +34,6 @@ func key(seq: str): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
 end
 
-// The item text the artifact examples use.
 func items10(): Vector<str>:
     mut v := Vector {} as Vector<str>
     v.push("inbox")
@@ -84,8 +66,6 @@ func items4(): Vector<str>:
     ret v
 end
 
-// A List over items10 selected by pressing j `sel` times with the window
-// already at height h, so the derived window_start matches real navigation.
 func list_at(sel: int, h: int): tui.List:
     mut l := tui.NewList(items10())
     l.set_bounds(rect(0, 0, 10, h))
@@ -95,7 +75,6 @@ func list_at(sel: int, h: int): tui.List:
     ret l
 end
 
-// Renders l into a fresh focused/unfocused w x h buffer; the caller frees it.
 func frame(l: tui.List, w: int, h: int, focused: bool): tui.Buffer:
     mut b := tui.NewBuffer(w, h)
     b.focused = focused
@@ -104,14 +83,11 @@ func frame(l: tui.List, w: int, h: int, focused: bool): tui.Buffer:
     ret b
 end
 
-// Renders l into an existing buffer, to sample the window after each step.
 func refresh(l: tui.List, b: tui.Buffer):
     mut ll := l
     ll.render(b, rect(0, 0, b.width, b.height))
 end
 
-// The window start implied by a frame: the index of the item that begins
-// row 0, or -1 when no item does.
 func start_from(items: Vector<str>, b: tui.Buffer): int:
     row := b.row_text(0)
     each i, it in items:
@@ -122,8 +98,6 @@ func start_from(items: Vector<str>, b: tui.Buffer): int:
     ret -1
 end
 
-// ---- Defaults/focusable (AC1) -----------------------------------------
-
 func test_defaults_selection():
     mut l := tui.NewList(items3())
     testing.AssertTrue(l.focusable())
@@ -132,7 +106,6 @@ func test_defaults_selection():
     testing.AssertTrue(tui.StyleEq(l.style, tui.StyleDefault))
     testing.AssertTrue(tui.StyleEq(l.selected_style, tui.Style { reverse = true }))
     testing.AssertTrue(tui.StyleEq(l.selected_unfocused_style, tui.Style { bg = tui.BrightBlack }))
-    // BaseWidget is embedded, so the preferred_size sentinel is inherited.
     testing.AssertEqInt(l.preferred_size(80).width, -1)
     testing.AssertEqInt(l.preferred_size(80).height, -1)
 end
@@ -144,8 +117,6 @@ func test_defaults_empty():
     testing.AssertEqStr(e.selected_item(), "")
 end
 
-// OQ-2: the selection style replaces the base style on that row; it does not
-// inherit the base foreground the way StyleMerge would.
 func test_selection_replaces_base_style():
     mut l := tui.NewList(items3())
     l.set_bounds(rect(0, 0, 10, 3))
@@ -154,11 +125,8 @@ func test_selection_replaces_base_style():
     mut b := frame(l, 10, 3, true)
     defer b.free()
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
-    // An unselected row keeps the base style.
     testing.AssertTrue(tui.StyleEq(b.get(0, 1).style, tui.Style { fg = tui.Green }))
 end
-
-// ---- Navigation (AC2) — K01-K07, K22-K23 ------------------------------
 
 func test_nav_k01_j_inside_window():
     mut l := tui.NewList(items10())
@@ -246,8 +214,6 @@ func test_nav_k07_j_then_k_roundtrip():
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
 end
 
-// K22/K23: on a single-item list both j and k are consumed but neither
-// moves the selection nor calls on_select.
 func test_nav_k22_k23_single_item():
     picks.clear()
     mut v := Vector {} as Vector<str>
@@ -267,8 +233,6 @@ func test_nav_k22_k23_single_item():
     testing.AssertEqStr(b.row_text(0), "only      ")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
 end
-
-// ---- Navigation sequences — S01-S03 -----------------------------------
 
 func test_seq_s01_five_j():
     mut l := tui.NewList(items10())
@@ -314,8 +278,6 @@ func test_seq_s03_three_k():
     testing.AssertEqStr(b.row_text(0), "stars     ")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
 end
-
-// ---- Enter + callback (AC3) — K08/K09, S04/S05 ------------------------
 
 func test_enter_k08():
     picks.clear()
@@ -382,8 +344,6 @@ func test_seq_s05_n4():
     testing.AssertEqStr(b.row_text(0), "drafts    ")
 end
 
-// ---- Render + highlight (AC1/AC4/AC6) — F01-F18 -----------------------
-
 func test_frame_f01_sel0_focused():
     mut b := frame(list_at(0, 3), 10, 3, true)
     defer b.free()
@@ -402,8 +362,6 @@ func test_frame_f02_sel0_unfocused():
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, unfocused))
     testing.AssertTrue(tui.StyleEq(b.get(9, 0).style, unfocused))
     testing.AssertTrue(tui.StyleEq(b.get(0, 1).style, tui.StyleDefault))
-    // G16: the bytes are unchanged by the type flip — a bright-black
-    // background, one SGR 100, not bright-on-black text.
     want := term.SeqMoveTo(1, 1) + term.Sgr(100) + "inbox     " + term.SeqMoveTo(2, 1) + term.Sgr(49) + "drafts    " + term.SeqMoveTo(3, 1) + "sent      "
     testing.AssertEqStr(b.ansi(), want)
 end
@@ -478,7 +436,6 @@ func test_frame_f10_f11_empty_identical():
     testing.AssertEqStr(bf.row_text(0), "      ")
     testing.AssertEqStr(bf.row_text(1), "      ")
     testing.AssertEqStr(bu.row_text(0), "      ")
-    // Focused and unfocused empty frames are byte-identical.
     testing.AssertEqStr(bf.ansi(), bu.ansi())
 end
 
@@ -534,7 +491,6 @@ func test_frame_f16_w4_h1():
     defer b.free()
     testing.AssertEqStr(b.row_text(0), "sent")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { reverse = true }))
-    // Whole-frame bytes: cursor move, the reverse run, and its off sequence.
     seq_on := tui.StyleSgr(tui.Style { reverse = true }, tui.ColorTier.TrueColor)
     seq_off := tui.StyleSgrOff(tui.Style { reverse = true }, tui.ColorTier.TrueColor)
     want := term.SeqMoveTo(1, 1) + seq_on + "sent" + seq_off
@@ -559,8 +515,6 @@ func test_frame_f18_w1_unfocused():
     testing.AssertEqStr(b.row_text(0), "i")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, unfocused))
 end
-
-// ---- Scrolling (AC5) — F05-F07, invariant -----------------------------
 
 func test_scroll_starts_and_invariant():
     mut l := tui.NewList(items10())
@@ -591,7 +545,6 @@ func test_scroll_starts_and_invariant():
             testing.AssertEqInt(st, 7)
         end
     end
-    // Upward path: 3 x k from 9/7 lands 6/6.
     repeat 3:
         _ := l.handle_event(key("k"))
     end
@@ -615,8 +568,6 @@ func test_scroll_from_start_jumps():
     testing.AssertEqInt(start_from(items10(), b3), 7)
 end
 
-// ---- Empty list (AC1) — K10-K12 ---------------------------------------
-
 func test_empty_k10_k12():
     picks.clear()
     mut e := tui.NewList(Vector {} as Vector<str>)
@@ -628,8 +579,6 @@ func test_empty_k10_k12():
     testing.AssertEqStr(e.selected_item(), "")
     testing.AssertEqInt(picks.len(), 0)
 end
-
-// ---- Bubbling (rule 8) — K13-K20 ---------------------------------------
 
 func test_bubbling_k13_k20():
     picks.clear()
@@ -663,10 +612,6 @@ func test_mouse_not_consumed():
     testing.AssertEqInt(picks.len(), 0)
 end
 
-// ---- Screen-level gating (AC4/AC6) — K21 -------------------------------
-
-// K21: the widget consumes j with no focus context at all; routing to the
-// focused widget is the screen's job.
 func test_screen_k21_consumes_without_focus():
     mut l := tui.NewList(items10())
     l.set_bounds(rect(0, 0, 10, 3))
@@ -680,12 +625,10 @@ func test_screen_focused_list_receives_j():
     w := tui.NewList(items10()) as dyn tui.Widget
     id := s.add(tui.RootId, w)
     s.widget(id).set_bounds(rect(0, 0, 12, 3))
-    // The first focusable widget added receives the focus.
     testing.AssertEqInt(s.focused_id(), id)
     s.present()
     testing.AssertFalse(s.dirty)
     testing.AssertTrue(s.dispatch(key("j")))
-    // A consumed key queues the list's bounds and leaves dirty false.
     testing.AssertFalse(s.dirty)
     s.present()
     testing.AssertEqStr(s.buffer.row_text(1), "drafts      ")
@@ -701,19 +644,15 @@ func test_screen_unfocused_list_does_not_consume():
     s.widget(id).set_bounds(rect(0, 0, 16, 2))
     other := s.add(tui.RootId, Sink {})
     s.widget(other).set_bounds(rect(0, 1, 16, 1))
-    // Move the focus off the list, then dispatch.
     testing.AssertTrue(s.focus(other))
     s.present()
     testing.AssertFalse(s.dirty)
     testing.AssertFalse(s.dispatch(key("j")))
     testing.AssertFalse(s.dirty)
     s.present()
-    // The selection is unchanged (still row 0) and drawn unfocused.
     testing.AssertEqStr(s.buffer.row_text(0), "inbox           ")
     testing.AssertTrue(tui.StyleEq(s.buffer.get(0, 0).style, tui.Style { bg = tui.BrightBlack }))
 end
-
-// ---- Unicode ----------------------------------------------------------
 
 func test_unicode_codepoint_clip():
     mut v := Vector {} as Vector<str>
@@ -721,13 +660,11 @@ func test_unicode_codepoint_clip():
     v.push("asdf")
     l := tui.NewList(v)
     testing.AssertTrue(l.focusable())
-    // W3: the first three whole codepoints.
     mut b3 := frame(l, 3, 1, true)
     defer b3.free()
     testing.AssertEqStr(b3.row_text(0), "ééé")
     testing.AssertEqStr(b3.get(0, 0).ch, "é")
     testing.AssertTrue(tui.StyleEq(b3.get(0, 0).style, tui.Style { reverse = true }))
-    // W2: two whole codepoints, never a split byte.
     mut b2 := frame(l, 2, 1, true)
     defer b2.free()
     testing.AssertEqStr(b2.row_text(0), "éé")
@@ -746,12 +683,6 @@ func test_unicode_cell_clip():
     testing.AssertEqStr(b.get(3, 0).ch, "")
 end
 
-// ---- CUR-455 probe ----------------------------------------------------
-
-// After the typed-style migration: the widget builds nothing; the buffer builds at emission. A
-// focused list has one selected run (reverse) and default rows around it, so
-// one ansi() costs one on and one off sequence. A caller-supplied style is
-// used verbatim, including StyleDefault, which emits nothing.
 func test_sgr_defaults_probe():
     mut lf := tui.NewList(items3())
     lf.set_bounds(rect(0, 0, 10, 3))
@@ -773,7 +704,6 @@ func test_sgr_defaults_probe():
     lc.render(bc, rect(0, 0, 10, 3))
     testing.AssertTrue(tui.StyleEq(bc.get(0, 0).style, tui.Style { bold = true }))
 
-    // The string API could not express this: a plain selected row.
     mut lp := tui.NewList(items3())
     lp.set_bounds(rect(0, 0, 10, 3))
     lp.selected_style = tui.StyleDefault
@@ -783,7 +713,6 @@ func test_sgr_defaults_probe():
     lp.render(bp, rect(0, 0, 10, 3))
     testing.AssertTrue(tui.StyleEq(bp.get(0, 0).style, tui.StyleDefault))
 end
-
 
 func test_zero_value_list_selected_index():
     l := tui.List {}

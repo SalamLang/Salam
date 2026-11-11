@@ -12,73 +12,6 @@
  *
  */
 
-/*
- * Buffer: the drawing surface widgets render into.
- *
- * Two grids of width x height display cells: a wide glyph owns two adjacent
- * cells, and a row's display width is always `width`:
- * `cells` is the back grid widgets draw into; `front` is the front grid,
- * what the terminal currently shows. Widgets never write the front grid;
- * only commit() advances it.
- *
- * Output. diff() serializes what changed: while `force_full` it is the whole
- * frame (ansi semantics); otherwise it skips clean rows and emits only the
- * maximal runs of marked cells that differ from the front grid, one cursor
- * move per run, carrying one style variable across runs and closing any
- * non-empty diff by turning the last style off. It returns "" when nothing
- * changed. flush() emits that diff (skipping the write when it is empty) and
- * commits.
- *
- *   present:  the back and front grids and the cell access they need
- *             (set/get); text and rect helpers (put_str/fill); clear;
- *             resize (reallocates both grids and forces a full repaint);
- *             per-row text for tests (row_text); clipping; a render-context
- *             flag (focused); touched-cell tracking (writes go through
- *             set/fill/put_str/clear); and output: ansi() serializes the
- *             WHOLE grid (cursor moves via term.SeqMoveTo, and private SGR
- *             append helpers whenever the style changes) while
- *             diff()/commit() write only the cells that changed since the
- *             last commit.
- *
- *   still absent: rectangle repaint (touched-cell tracking exists; writes
- *             go through set/fill/put_str/clear) and cursor placement for
- *             text input (epic 2 follow-ups).
- *
- * Style transitions. A cell stores a Style; the buffer turns it into bytes at
- * emission, so the tier is applied once, here, and widgets never build SGR.
- * A frame starts from the terminal's default style (its first cell is drawn
- * under that assumption), every change appends StyleSgrOff(previous, tier)
- * pieces followed by StyleSgr(next, tier) pieces, and the frame closes with
- * the off pieces for the last style. A default style appends nothing. A reset
- * is not part of a frame; it belongs to
- * Screen.start / Screen.close, which set the terminal up and tear it down.
- *
- *   contract to keep: Widget.render receives a Buffer by value, writes
- *             through it reach the screen's grid, and `clip` / `focused` /
- *             `tier` are per-copy render context: `tier` set once by
- *             Screen.start, the rest by Screen.draw.
- *
- * Why widgets never touch the terminal: widgets draw here, the screen
- * decides when and how a frame reaches the terminal. That keeps rendering
- * testable without a tty (row_text / get inspect the result) and lets the
- * output strategy change without touching any widget.
- *
- * Value semantics. A Buffer is passed to Widget.render by value, but both
- * grids live in Vectors, and copies of a Vector share storage. Writing a
- * cell through any copy writes the screen's one back grid, and commit()
- * through any copy advances the shared front grid. `touched` and
- * `row_touched` are vectors too, so a copy shares the marks and a widget's
- * `set` marks the owner's grid. The scalar fields (clip, focused, tier,
- * force_full) are per-copy: the screen hands each widget its own copy with
- * `clip` set to that widget's visible area and `focused` set when it holds
- * the focus. `tier` is set once when the screen takes the terminal and every
- * copy inherits the same value: it is the tier the buffer lowers styles to
- * when it writes a frame, so widgets never read the environment themselves.
- * `glyphs` (the GlyphPolicy) is per-copy like `tier`: Screen seeds it on
- * every frame copy, and widgets never read the environment.
- * Only the owner of the original may resize, free, or flush it.
- */
-
 package tui
 
 import env
@@ -93,137 +26,81 @@ mut _glyph_clusters := HashMap {} as HashMap<str, str>
 
 @en "GlyphPolicy"
 @fa "سیاست‌نویسه‌ها"
-/// Which glyph repertoire structural glyphs (borders) may use. Unicode is
-/// the zero value and draws box-drawing glyphs; ASCII restricts them to
-/// codepoints up to 0x7F for terminals without box drawing.
 pub enum GlyphPolicy:
     @en "Unicode"
     @fa "یونیکد"
-    /// Box-drawing glyphs.
     Unicode
     @en "ASCII"
     @fa "اسکی"
-    /// Plain ASCII glyphs only.
     ASCII
 end
 
 @en "Cell"
 @fa "سلول"
-/// One display cell and the style it is drawn with.
 pub struct Cell:
     @en "ch"
     @fa "نویسه"
-    /// A one-cell-wide glyph, or `""` for the continuation of the wide glyph
-    /// in the cell to its left. A blank cell holds " ". `put_str` writes wide
-    /// glyphs; `set` blanks any `ch` that is not one cell wide.
     pub ch: str = " "
 
     @en "style"
     @fa "ظاهر"
-    /// The resolved style this cell is drawn with. StyleDefault asks for the
-    /// terminal's default style. The buffer, not the widget, turns it into
-    /// bytes.
     pub style: Style = StyleDefault
 end
 
 @en "Buffer"
 @fa "بافر"
-/// A grid of cells that widgets draw into. Writes outside `clip` (or
-/// outside the grid) are silently ignored, so drawing is infallible.
 pub struct Buffer:
     @en "width"
     @fa "عرض"
-    /// Number of columns.
     pub width: int = 0
 
     @en "height"
     @fa "ارتفاع"
-    /// Number of rows.
     pub height: int = 0
 
     @en "cells"
     @fa "سلول‌ها"
-    /// Row-major cell storage: the cell at (x, y) is cells[y * width + x].
-    /// Prefer get and set, which bounds-check and clip. Write through
-    /// `set` / `fill` / `put_str` / `clear`. Direct writes to the backing
-    /// vector are outside the contract and are not tracked.
     pub cells: Vector<Cell> = Vector {}
 
     @en "front"
     @fa "بافر پیشین"
-    /// The front grid: what the terminal currently shows. Same length and
-    /// layout as `cells`. Widgets never write it; only commit() advances it.
     pub front: Vector<Cell> = Vector {}
 
     @en "clip"
     @fa "محدوده برش"
-    /// Writes outside this rect are dropped. NewBuffer sets it to the whole
-    /// grid; the screen narrows it to each widget's bounds while that
-    /// widget renders.
     pub clip: Rect = Rect {}
 
     @en "focused"
     @fa "در تمرکز"
-    /// Render context: true while the screen renders the focused widget,
-    /// so the widget can draw a focus indicator. Always false outside a
-    /// screen-driven render.
     pub focused: bool = false
 
     @en "tier"
     @fa "سطح رنگ"
-    /// Render context: the colour capability of the terminal this buffer is
-    /// drawn for. The buffer lowers every cell's Style to this tier when it
-    /// emits a frame; widgets and DrawBorder only store styles.
-    /// Screen.start() sets it to DetectTier() once; a buffer built by hand
-    /// keeps TrueColor, so headless renders stay true colour whatever the
-    /// environment says. resize() preserves it.
     pub tier: ColorTier = ColorTier.TrueColor
 
     @en "glyphs"
     @fa "نویسه‌ها"
-    /// Render context: the glyph policy structural glyphs follow. DrawBorder
-    /// reads it. Screen seeds it on every frame copy; a buffer built by hand
-    /// keeps Unicode. resize() preserves it.
     pub glyphs: GlyphPolicy = GlyphPolicy.Unicode
 
     @en "force_full"
     @fa "اجبار بازترسیم کامل"
-    /// True when the next diff() must serialize the whole frame instead of
-    /// only the changed cells. NewBuffer and resize set it; commit() clears
-    /// it once the front grid has caught up with the back grid.
     pub force_full: bool = true
 
-    // Per-cell marks plus a row summary so diff/commit skip clean rows.
-    // A bbox was rejected because two corner edits would repaint everything
-    // between them. Marks are Vector<bool>. The rejected int fallback would
-    // have cost about 96 KB at 200×60, beside the two cell grids. Direct
-    // writes to `cells` are not marked.
     touched: Vector<bool> = Vector {}
     row_touched: Vector<bool> = Vector {}
 
-    // clear() blanks every cell, so one flag replaces a mark per cell. While
-    // it is set, set() skips marking and commit() treats the whole grid as
-    // changed, which keeps a full frame free of per-cell mark work.
     all_touched: bool = false
 
-    // ansi()/diff() scratch. BufReset keeps the capacity; BufStr clones, so
-    // the returned str does not alias it. resize() keeps this builder.
-    // Only free() releases it. A copy shares data and has its own len, so
-    // only the owner may serialize.
     out_buf: str.StringBuilder = str.StringBuilder {}
 
     @en "area"
     @fa "محدوده"
-    /// The rect covering the whole grid: (0, 0, width, height).
     pub func area(): Rect:
         ret Rect { width = this.width, height = this.height }
     end
 
     @en "set"
     @fa "تنظیم"
-    /// Writes one cell. Does nothing when (x, y) is outside the grid or
-    /// outside `clip`. A non-empty `ch` that is not one cell wide becomes
-    /// blank; `""` is accepted only after a wide glyph.
     pub func set(x: int, y: int, cell: Cell):
         mut ch := cell.ch
         if ch == "" and (x <= 0 or _char_width(this.get(x - 1, y).ch) != 2):
@@ -264,8 +141,6 @@ pub struct Buffer:
 
     @en "get"
     @fa "دریافت"
-    /// Reads one cell. Returns a blank default Cell when (x, y) is outside
-    /// the grid. Reading ignores `clip`.
     pub func get(x: int, y: int): Cell:
         p := Point { x = x, y = y }
         if not this.area().contains(p):
@@ -276,10 +151,6 @@ pub struct Buffer:
 
     @en "put_str"
     @fa "نوشتن متن"
-    /// Writes text left to right, advancing one column per narrow codepoint
-    /// and two per wide one. A wide glyph that cannot fit both its columns
-    /// inside the grid and the clip writes a blank. Zero-width codepoints are
-    /// dropped. Text is cut off at the clip; it never wraps.
     pub func put_str(x: int, y: int, text: str, style: Style):
         mut i := 0
         mut col := 0
@@ -343,8 +214,6 @@ pub struct Buffer:
 
     @en "fill"
     @fa "پرکردن"
-    /// Sets every cell of r (clipped) to the same character and style. A
-    /// multi-cell or zero-width `ch` becomes blank through `set`.
     pub func fill(r: Rect, ch: str, style: Style):
         repeat r.height in dy:
             repeat r.width in dx:
@@ -355,8 +224,6 @@ pub struct Buffer:
 
     @en "clear"
     @fa "پاک‌سازی"
-    /// Resets every cell of the grid to a blank default Cell, ignoring
-    /// `clip`. The next diff() and commit() treat every cell as changed.
     pub func clear():
         repeat this.cells.len() in i:
             this.cells.set(i, Cell {})
@@ -366,9 +233,6 @@ pub struct Buffer:
 
     @en "row_text"
     @fa "متن ردیف"
-    /// The glyphs of row y joined into one string, without styles. Continuation
-    /// cells contribute nothing, so display width equals the buffer width.
-    /// Returns "" for a row outside the grid. Meant for tests and debugging.
     pub func row_text(y: int): str:
         if y < 0 or y >= this.height:
             ret ""
@@ -386,10 +250,6 @@ pub struct Buffer:
 
     @en "resize"
     @fa "تغییر اندازه"
-    /// Replaces both grids with blank width x height ones and resets clip to
-    /// cover them, forcing a full repaint on the next diff(). Only the owner
-    /// of the original Buffer may call this: it frees the old storage that
-    /// copies were sharing.
     pub func resize(width: int, height: int):
         this.cells.free()
         this.front.free()
@@ -405,24 +265,14 @@ pub struct Buffer:
         this.all_touched = fresh.all_touched
         this.clip = fresh.clip
         this.force_full = fresh.force_full
-        // tier stays: a reallocation is not a new terminal, so it must not
-        // reset the capability detected at start(). It is not copied from
-        // fresh for that reason.
-        // out_buf stays. fresh.out_buf is unused, so dropping fresh neither
-        // leaks nor frees this builder.
     end
 
-    // BufReset out_buf for one serialization. Capacity stays.
     func _reset_out():
         str.BufReset(this.out_buf)
     end
 
     @en "ansi"
     @fa "خروجی کامل انسی"
-    /// The whole grid as one string of terminal output: for each row, a
-    /// cursor move to its first column, then its cells, switching style
-    /// only where it changes, and closing with the last style turned off.
-    /// This is the entire frame; nothing is diffed against the previous one.
     pub func ansi(): str:
         this._reset_out()
         mut style := StyleDefault
@@ -435,7 +285,6 @@ pub struct Buffer:
                     _ := _append_sgr(this.out_buf, c.style, this.tier)
                     style = c.style
                 end
-                // Empty continuation cells emit no bytes; the glyph owns both columns.
                 str.BufAppend(this.out_buf, c.ch)
             end
         end
@@ -445,12 +294,6 @@ pub struct Buffer:
 
     @en "diff"
     @fa "اختلاف"
-    /// The bytes flush() would write: the whole frame (see ansi) while
-    /// `force_full`, otherwise only the cells that differ from the front
-    /// grid, row by row. Each maximal run of changed cells is prefixed by one
-    /// cursor move; styles switch only where they change and are carried
-    /// across runs; a non-empty diff ends by turning the last style off.
-    /// Returns "" when the grids match.
     pub func diff(): str:
         if this.force_full:
             ret this.ansi()
@@ -467,7 +310,6 @@ pub struct Buffer:
                     if not marked or this.cells.get(idx) == this.front.get(idx):
                         x++
                     else:
-                        // Extend the run while the next cell is marked and differs.
                         mut e := x + 1
                         until e < this.width and (this.all_touched or this.touched.get(y * this.width + e)) and this.cells.get(y * this.width + e) != this.front.get(y * this.width + e):
                             e++
@@ -481,7 +323,6 @@ pub struct Buffer:
                                 _ := _append_sgr(this.out_buf, c.style, this.tier)
                                 style = c.style
                             end
-                            // Empty continuation cells emit no bytes; the glyph owns both columns.
                             str.BufAppend(this.out_buf, c.ch)
                             i++
                         end
@@ -499,13 +340,8 @@ pub struct Buffer:
 
     @en "commit"
     @fa "ثبت قاب"
-    /// Copies every cell when `force_full` is set or clear() touched the
-    /// whole grid, and only marked cells otherwise, then clears the marks
-    /// and `force_full`, so a later diff() reports only subsequent changes.
     pub func commit():
         if this.force_full or this.all_touched:
-            // ansi() left the front grid stale everywhere, or clear()
-            // invalidated it.
             repeat this.cells.len() in i:
                 this.front.set(i, this.cells.get(i))
             end
@@ -522,7 +358,6 @@ pub struct Buffer:
                 end
             end
         end
-        // A clear() frame wrote no marks, so there is nothing to clear.
         if not this.all_touched:
             repeat this.touched.len() in i:
                 this.touched.set(i, false)
@@ -537,9 +372,6 @@ pub struct Buffer:
 
     @en "flush"
     @fa "ارسال به ترمینال"
-    /// Writes the changed cells (see diff) to the terminal, then commits so
-    /// the front grid matches the back grid. Nothing is written when the
-    /// diff is empty.
     pub func flush():
         out := this.diff()
         if out != "":
@@ -551,8 +383,6 @@ pub struct Buffer:
 
     @en "free"
     @fa "آزادسازی"
-    /// Releases both grids. Call it once, on the original Buffer, when you
-    /// are done with it; copies share the storage.
     pub func free():
         this.cells.free()
         this.front.free()
@@ -592,11 +422,6 @@ end
 
 @en "DetectGlyphPolicy"
 @fa "تشخیص سیاست نویسه‌ها"
-/// The glyph policy the environment advertises. Pure and uncached; the only
-/// environment reader for glyphs, called once by Screen.start. First match
-/// wins: SALAM_TUI_GLYPHS "ascii" -> ASCII, "unicode" -> Unicode; TERM ==
-/// "dumb" -> ASCII; the first non-empty of LC_ALL, LC_CTYPE, LANG decides:
-/// not UTF-8 -> ASCII, UTF-8 -> Unicode; otherwise Unicode.
 pub func DetectGlyphPolicy(): GlyphPolicy:
     g := str.Lower(env.Get("SALAM_TUI_GLYPHS"))
     if g == "ascii":
@@ -623,12 +448,9 @@ end
 
 @en "NewBuffer"
 @fa "بافر جدید"
-/// Creates a blank width x height buffer whose clip covers the whole grid and
-/// whose next diff() is a full frame. A negative size is treated as zero.
 pub func NewBuffer(width: int, height: int): Buffer:
     w := width < 0 ? 0 : width
     h := height < 0 ? 0 : height
-    // Private fields can only be set from a method or this literal.
     mut cells := Vector {} as Vector<Cell>
     mut front := Vector {} as Vector<Cell>
     mut touched := Vector {} as Vector<bool>

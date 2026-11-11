@@ -12,25 +12,9 @@
  *
  */
 
-// Unit tests for the minimal Buffer: cell access, clipping (writes outside
-// the grid or the clip rect are dropped, never errors), multi-byte text,
-// the shared-storage behavior that lets widgets draw through a copy, and
-// resize (new dimensions, blank grid, whole-grid clip, negatives to zero).
-// Also the ansi() serialization (a cursor move per row, an off-then-on style
-// pair only where the style changes, and the closing off sequence), the styles
-// put_str writes, off-grid
-// and edge starts, the clip-vs-grid split (set and fill obey clip; get,
-// clear and row_text do not), and the per-copy focused flag. Finally the
-// front-buffer machinery: diff() is a whole frame while force_full and then
-// only the changed runs (one cursor move per run), commit() silences it, and
-// resize() reallocates both grids, forces a full repaint, and keeps the
-// buffer's colour tier.
-// Touched-cell tracking marks each write so diff() emits only those cells.
-
 import str
 import testing
 import term
-
 import tui
 
 func rect(x: int, y: int, w: int, h: int): tui.Rect:
@@ -79,9 +63,7 @@ func test_clip():
     mut view := b
     view.clip = rect(1, 0, 3, 1)
     view.put_str(0, 0, "abcdef", tui.StyleDefault)
-    // The view shares the cells, so the original sees what fit in the clip.
     testing.AssertEqStr(b.row_text(0), " bcd  ")
-    // The original's own clip is untouched.
     testing.AssertEqInt(b.clip.width, 6)
     b.free()
 end
@@ -198,22 +180,18 @@ func test_resize():
     b.resize(4, 3)
     testing.AssertEqInt(b.width, 4)
     testing.AssertEqInt(b.height, 3)
-    // Fresh blank grid: the pre-resize content is gone.
     testing.AssertEqStr(b.row_text(0), "    ")
     testing.AssertEqStr(b.row_text(2), "    ")
     testing.AssertEqStr(b.row_text(3), "")
     testing.AssertEqStr(b.get(0, 0).ch, " ")
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
-    // Storage is width * height: the last cell is addressable, one past is not.
     b.set(3, 2, tui.Cell { ch = "z" })
     testing.AssertEqStr(b.row_text(2), "   z")
     b.set(4, 2, tui.Cell { ch = "!" })
     testing.AssertEqStr(b.get(4, 2).ch, " ")
     testing.AssertEqStr(b.get(3, 2).ch, "z")
-    // clip covers the whole new grid.
     testing.AssertEqInt(b.clip.width, 4)
     testing.AssertEqInt(b.clip.height, 3)
-    // Negative and zero sizes clamp to zero, as in NewBuffer.
     b.resize(-2, 1)
     testing.AssertEqInt(b.width, 0)
     testing.AssertEqInt(b.height, 1)
@@ -227,12 +205,9 @@ end
 
 func test_resize_preserves_tier():
     mut b := tui.NewBuffer(2, 2)
-    // A fresh buffer is true colour whatever the environment says.
     testing.AssertTrue(b.tier == tui.ColorTier.TrueColor)
     b.tier = tui.ColorTier.Ansi16
     b.resize(4, 3)
-    // A reallocation is not a new terminal: the detected tier survives, or a
-    // live resize would silently put a low-colour terminal back on true colour.
     testing.AssertTrue(b.tier == tui.ColorTier.Ansi16)
     b.resize(0, 0)
     testing.AssertTrue(b.tier == tui.ColorTier.Ansi16)
@@ -246,14 +221,10 @@ func test_ansi_serialization():
     b.set(1, 0, tui.Cell { ch = "b", style = bold })
     b.set(0, 1, tui.Cell { ch = "c", style = bold })
     b.set(1, 1, tui.Cell { ch = "d" })
-    // The whole grid, never a diff: a cursor move prefixes each row, cells in
-    // order, an off-then-on pair only where the style changes, and the last
-    // style turned off at the end (nothing, because it is the default).
     seq_on := tui.StyleSgr(bold, tui.ColorTier.TrueColor)
     seq_off := tui.StyleSgrOff(bold, tui.ColorTier.TrueColor)
     want := term.SeqMoveTo(1, 1) + "a" + seq_on + "b" + term.SeqMoveTo(2, 1) + "c" + seq_off + "d"
     testing.AssertEqStr(b.ansi(), want)
-    // The frame is exactly the builders concatenated: no reset anywhere.
     testing.AssertFalse(str.Contains(b.ansi(), term.Reset))
     b.free()
 end
@@ -264,21 +235,17 @@ func test_put_str_style():
     b.put_str(0, 0, "abc", bold)
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, bold))
     testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, bold))
-    // row_text exposes the characters only, never the styles.
     testing.AssertEqStr(b.row_text(0), "abc")
     b.free()
 end
 
 func test_off_grid_starts():
     mut b := tui.NewBuffer(3, 2)
-    // Negative x: clipping is per codepoint, so the in-grid tail still lands.
     b.put_str(-1, 0, "ab", tui.StyleDefault)
     testing.AssertEqStr(b.row_text(0), "b  ")
-    // Negative y: the whole row start is off-grid, nothing lands.
     b.clear()
     b.put_str(0, -1, "xy", tui.StyleDefault)
     testing.AssertEqStr(b.row_text(0), "   ")
-    // Starts on the right and bottom edges: the first cell is already outside.
     b.put_str(3, 0, "z", tui.StyleDefault)
     b.put_str(0, 2, "z", tui.StyleDefault)
     testing.AssertEqStr(b.row_text(0), "   ")
@@ -288,11 +255,9 @@ end
 
 func test_fill_edges():
     mut b := tui.NewBuffer(2, 2)
-    // Rect partly outside the grid: only the in-grid cells are set.
     b.fill(rect(-1, -1, 3, 3), "#", tui.StyleDefault)
     testing.AssertEqStr(b.row_text(0), "##")
     testing.AssertEqStr(b.row_text(1), "##")
-    // A rect starting on the right edge is wholly outside, so it writes nothing.
     b.clear()
     b.fill(rect(2, 0, 1, 1), "#", tui.StyleDefault)
     testing.AssertEqStr(b.row_text(0), "  ")
@@ -301,7 +266,6 @@ func test_fill_edges():
     mut c := tui.NewBuffer(3, 3)
     mut view := c
     view.clip = rect(1, 1, 1, 1)
-    // fill is clipped: only the single cell the clip exposes is written.
     view.fill(rect(0, 0, 3, 3), "#", tui.StyleDefault)
     testing.AssertEqStr(c.row_text(0), "   ")
     testing.AssertEqStr(c.row_text(1), " # ")
@@ -313,18 +277,13 @@ func test_clip_vs_grid():
     mut b := tui.NewBuffer(3, 2)
     mut view := b
     view.clip = rect(1, 0, 1, 1)
-    // set: inside the grid but outside clip, so dropped.
     view.set(0, 1, tui.Cell { ch = "x" })
     testing.AssertEqStr(b.row_text(1), "   ")
-    // set inside clip lands, and shared storage shows it to the original.
     view.set(1, 0, tui.Cell { ch = "y" })
     testing.AssertEqStr(b.row_text(0), " y ")
-    // get ignores clip: reads the whole grid through the narrowed view.
     testing.AssertEqStr(view.get(0, 0).ch, " ")
     testing.AssertEqStr(view.get(1, 0).ch, "y")
-    // row_text ignores clip too: the full row, not just the clipped cell.
     testing.AssertEqStr(view.row_text(0), " y ")
-    // clear ignores clip: wipes every cell of the grid.
     view.clear()
     testing.AssertEqStr(b.row_text(0), "   ")
     testing.AssertEqStr(b.row_text(1), "   ")
@@ -347,7 +306,6 @@ func test_diff_full_on_new():
     b.set(1, 0, tui.Cell { ch = "b", style = bold })
     b.set(0, 1, tui.Cell { ch = "c", style = bold })
     b.set(1, 1, tui.Cell { ch = "d" })
-    // A fresh buffer must repaint everything, byte for byte like ansi().
     testing.AssertTrue(b.force_full)
     testing.AssertEqStr(b.diff(), b.ansi())
     b.free()
@@ -357,7 +315,6 @@ func test_commit_clears_diff():
     mut b := tui.NewBuffer(2, 1)
     b.set(0, 0, tui.Cell { ch = "x" })
     b.commit()
-    // After a commit the front grid matches the back grid: nothing to draw.
     testing.AssertFalse(b.force_full)
     testing.AssertEqStr(b.diff(), "")
     b.free()
@@ -367,8 +324,6 @@ func test_diff_single_cell():
     mut b := tui.NewBuffer(3, 1)
     b.commit()
     b.set(1, 0, tui.Cell { ch = "x" })
-    // One run: a cursor move and the character. The default style needs no
-    // on sequence, and the closing off sequence is empty too.
     want := term.SeqMoveTo(1, 2) + "x"
     testing.AssertEqStr(b.diff(), want)
     b.free()
@@ -379,7 +334,6 @@ func test_diff_adjacent_run():
     b.commit()
     b.set(1, 0, tui.Cell { ch = "a" })
     b.set(2, 0, tui.Cell { ch = "b" })
-    // Adjacent changed cells share one cursor move and one run.
     want := term.SeqMoveTo(1, 2) + "ab"
     testing.AssertEqStr(b.diff(), want)
     b.free()
@@ -390,7 +344,6 @@ func test_diff_two_runs():
     b.commit()
     b.set(0, 0, tui.Cell { ch = "a" })
     b.set(3, 0, tui.Cell { ch = "b" })
-    // A gap between changed cells splits the row into two runs.
     want := term.SeqMoveTo(1, 1) + "a" + term.SeqMoveTo(1, 4) + "b"
     testing.AssertEqStr(b.diff(), want)
     b.free()
@@ -402,7 +355,6 @@ func test_diff_style_only():
     b.set(0, 0, tui.Cell { ch = "a" })
     b.commit()
     b.set(0, 0, tui.Cell { ch = "a", style = bold })
-    // Same character, new style: enter the style, draw it, then leave it.
     want := term.SeqMoveTo(1, 1) + tui.StyleSgr(bold, tui.ColorTier.TrueColor) + "a" + tui.StyleSgrOff(bold, tui.ColorTier.TrueColor)
     testing.AssertEqStr(b.diff(), want)
     b.free()
@@ -414,8 +366,6 @@ func test_diff_reverse_only():
     b.set(0, 0, tui.Cell { ch = "a" })
     b.commit()
     b.set(0, 0, tui.Cell { ch = "a", style = rev })
-    // Reverse is a stored field for exactly this case: an inversion StyleEq
-    // could not see would leave the cursor and the selection stale.
     want := term.SeqMoveTo(1, 1) + tui.StyleSgr(rev, tui.ColorTier.TrueColor) + "a" + tui.StyleSgrOff(rev, tui.ColorTier.TrueColor)
     testing.AssertEqStr(b.diff(), want)
     b.free()
@@ -425,7 +375,6 @@ func test_clear_redraw_is_empty():
     mut b := tui.NewBuffer(3, 1)
     b.put_str(0, 0, "abc", tui.StyleDefault)
     b.commit()
-    // Repainting the same content after a clear leaves nothing to draw.
     b.clear()
     b.put_str(0, 0, "abc", tui.StyleDefault)
     testing.AssertEqStr(b.diff(), "")
@@ -438,7 +387,6 @@ func test_resize_forces_full():
     b.commit()
     testing.AssertEqStr(b.diff(), "")
     b.resize(3, 1)
-    // A resize reallocates both grids and forces a whole-frame repaint.
     testing.AssertTrue(b.force_full)
     testing.AssertEqInt(b.width, 3)
     testing.AssertEqInt(b.height, 1)
@@ -452,10 +400,8 @@ func test_front_shared_through_copies():
     b.commit()
     mut view := b
     view.set(0, 0, tui.Cell { ch = "z" })
-    // The copy writes the shared back grid, so the original diffs the change.
     want := term.SeqMoveTo(1, 1) + "z"
     testing.AssertEqStr(b.diff(), want)
-    // free() releases both grids once; teardown exercises it here.
     b.free()
 end
 
@@ -464,7 +410,6 @@ func test_diff_sparse_rows():
     b.commit()
     b.set(0, 0, tui.Cell { ch = "a" })
     b.set(4, 2, tui.Cell { ch = "b" })
-    // Changed cells on different rows are separate runs.
     want := term.SeqMoveTo(1, 1) + "a" + term.SeqMoveTo(3, 5) + "b"
     testing.AssertEqStr(b.diff(), want)
     b.free()
@@ -473,7 +418,6 @@ end
 func test_diff_identical_write():
     mut b := tui.NewBuffer(3, 1)
     b.commit()
-    // A blank is the default cell, so writing it again is not a change.
     b.set(1, 0, tui.Cell { ch = " " })
     testing.AssertEqStr(b.diff(), "")
     b.free()
@@ -484,7 +428,6 @@ func test_clear_round_trip():
     b.put_str(0, 0, "ab", tui.StyleDefault)
     b.commit()
     b.clear()
-    // Only the two cells that held text differ from the front grid.
     want := term.SeqMoveTo(1, 1) + "  "
     testing.AssertEqStr(b.diff(), want)
     b.commit()
@@ -500,7 +443,6 @@ func test_commit_front_matches_cells():
     b.set(2, 0, tui.Cell { ch = "b", style = bold })
     b.set(1, 1, tui.Cell { ch = "c" })
     b.commit()
-    // commit filled front. Read it; nothing here writes it.
     repeat b.cells.len() in i:
         testing.AssertEqStr(b.front.get(i).ch, b.cells.get(i).ch)
         testing.AssertTrue(tui.StyleEq(b.front.get(i).style, b.cells.get(i).style))
@@ -512,12 +454,10 @@ func test_diff_outside_clip():
     mut b := tui.NewBuffer(4, 2)
     b.commit()
     b.clip = rect(1, 0, 2, 1)
-    // Inside the grid, outside the clip: set drops it, so diff stays empty.
     b.set(0, 0, tui.Cell { ch = "x" })
     testing.AssertEqStr(b.diff(), "")
     b.free()
 end
-
 
 func test_put_str_reuses_glyph_strings():
     mut b := tui.NewBuffer(4, 2)

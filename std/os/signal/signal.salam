@@ -12,138 +12,10 @@
  *
  */
 
-/*
- * Signal: POSIX signal plumbing, extracted from the tui package's resize watcher.
- *
- * A terminal reports a resize out of band as SIGWINCH, and waiting for that
- * signal is cheaper than polling the size. This package owns the process-wide
- * half of that job: InstallWinchHandler gives SIGWINCH a disposition,
- * BlockWinch keeps it queued instead of delivering it on an arbitrary thread,
- * and WaitWinch parks a thread until one arrives. Policy is not here: when to
- * start watching and what a wake-up means belong to the caller.
- *
- * The handler is a deliberate no-op. It exists only to keep the disposition
- * away from SIG_DFL: Darwin discards a blocked signal at generation when its
- * disposition is the default, so without an installed handler a self- or
- * terminal-raised SIGWINCH would vanish and sigwait would park forever. The
- * signal number carries no information (SIGWINCH only means "the size may
- * have changed"), so the handler has nothing to record and the caller
- * re-reads the state after every wake-up.
- *
- * Installing is reversible, and one registry owns each signal for the whole
- * process. The first Install for a signal captures the calling thread's
- * current disposition and its signal mask into one zeroed heap block: the
- * first _SIGACTION_SIZE bytes take the struct sigaction the kernel fills in,
- * the next SignalSetSize bytes take the mask read before the install. That
- * block is the canonical snapshot and stays in the registry; every Install
- * returns a caller-owned copy of it, released with mem.Free, so two consumers
- * can both free what they were given and neither holds the canonical.
- * Further installs of the same handler only refcount; an install of a
- * different handler while the signal is owned is refused with null, because a
- * handler that never runs is the silent mismatch this package exists to
- * remove. Above one reference Restore only drops the count, so the signal stays
- * blocked while anyone still owns it; at the last one it puts back the state
- * the first Install captured — disposition and pre-block mask both, whichever
- * order the handles are freed in — then frees the canonical snapshot; at zero
- * it does nothing and succeeds, because a handle's mask would undo that.
- * The mask half goes through pthread_sigmask, not sigprocmask, because
- * sigprocmask is process-wide on Darwin and unspecified in a multithreaded
- * process on Linux, so only pthread_sigmask makes "the calling thread's mask"
- * true. The mask is per thread, so the thread that restores is normally the
- * thread that installed; a spawned thread inherits the mask, which is how a
- * dedicated watcher can take the wait over from the thread that installed.
- * Install blocks the signal on the calling thread as its last step, after the
- * disposition is in place: a signal blocked while SIG_DFL is still installed
- * is discarded at generation on Darwin, so the other order loses it.
- *
- * One waiter per process. Wait and WaitTimeout claim the registry's waiter
- * flag for the duration of the call, and a second waiter is told WaitBusy
- * instead of being handed a subset of the deliveries, because POSIX gives a
- * blocked signal to exactly one waiting thread and does not say which. The
- * claim lives in the registry, so it exists once a signal has been installed.
- *
- * A wait returns a status, never a sentinel. WaitArrived (1) means the
- * out-block now holds the signal number; WaitTimedOut (0) means the bound won
- * and the out-block was not written, and only WaitTimeout returns it;
- * WaitInvalid (-1) means a bad argument, a target with no bounded wait, or
- * Windows; WaitFailed (-2) means the kernel call failed; WaitBusy (-3) means
- * another thread owns the wait and nothing was waited on. Wait never returns
- * 0, and 0 from WaitWinch is Windows only, so a resize is no longer reported
- * with the same value as a broken call. A timed wait needs an Install first,
- * because the bound is built with the registry. Neither Wait nor WaitTimeout
- * allocates: the registry, the kqueue and the timespec buffer belong to the
- * install. WaitWinch allocates its private out-block once, on first use.
- *
- * Signals coalesce. A standard signal raised twice while it is blocked leaves
- * one instance pending, so a waiter observes one arrival, not two. That is why
- * the tests assert a single delivery where two raises could race, and why a
- * wake-up means "look at the state again", never "one resize happened".
- *
- * A bound is not a self-pipe. With the signal blocked — the model this package
- * documents — the installed handler never runs, so nothing could write the
- * pipe, and unblocking the signal to make one work would abandon sigwait and
- * Install's handler contract. Darwin measures the bound with a kqueue
- * EVFILT_SIGNAL filter, which counts generations of the signal without
- * consuming it; one filter per signal is why a Darwin WaitTimeout takes a set
- * of exactly one, and nothing in this package's surface needs more. Linux
- * measures the same bound with sigtimedwait and keeps the general set. The
- * pending signal itself is taken by sigwait on both.
- *
- * Every POSIX target installs through sigaction, never signal(). Salam has no
- * C struct here, so the struct sigaction is a zeroed byte block written
- * through named offsets, one branch per target: Darwin, Linux, FreeBSD,
- * NetBSD and OpenBSD. FreeBSD is the only target where sa_flags precedes
- * sa_mask. ci/sigaction_offsets.c proves the numbers with _Static_asserts
- * against each platform's real headers and a sigaction round trip. Salam has
- * no BSD port, so the BSD branches are proven by that oracle and reviewed,
- * not compiled. Only SA_RESTART is set, sa_mask stays empty and no restorer
- * is written.
- *
- * Async-signal-safety contract for any handler passed to Install: it runs on
- * the thread that took the signal, and it may call async-signal-safe
- * functions only. No allocation, no locks, no stdio, no calls into the Salam
- * runtime: its allocator, its prints and its data structures are all unsafe
- * there. It may touch only volatile sig_atomic_t, lock-free atomics or
- * read-only data; it must save errno on entry and restore it before
- * returning; and it must not assume this package, or anything else it calls,
- * is reentrant. The no-op below meets the contract by doing nothing.
- *
- * Deliberate non-goals. No handler body: the handler runs on the delivery
- * thread and must stay async-signal-safe. No bounded wait built on
- * sigtimedwait for Darwin, which does not have it — the bound there is
- * kqueue's EVFILT_SIGNAL filter — while Linux, which has it, uses it. No
- * SIGALRM on either: a handler cannot interrupt sigwait, so an alarm would not
- * break the wait, and SIGALRM is process-wide state the caller may already own.
- * Sets are built and edited by libc's sigemptyset, sigfillset, sigaddset,
- * sigdelset and sigismember. On Darwin those names are
- * C macros at signal.h:116-126 shadowing the prototypes at 89-97; the
- * real symbols (_sigemptyset, _sigfillset, _sigaddset, _sigdelset,
- * _sigismember) are ordinary libSystem exports, and a non-C extern binds the
- * symbol rather than expanding the macro. A probe on macOS 27.0.1 arm64
- * measured all five linking and running and sizeof(sigset_t) at 4. The size
- * is not universal: 4 on OpenBSD, 16 on FreeBSD and NetBSD, 128 on Linux.
- * DragonFly has no Salam target, so no build selects a size for it. Windows
- * is a stub surface — there is no SIGWINCH and no sigset_t: every function is
- * safe to call, WinchSupported reports false, Install returns null, Wait and
- * WaitTimeout return WaitInvalid, and WaitWinch returns 0, so callers fall
- * back to polling the terminal size.
- *
- * Three public surfaces. SIGWINCH: WinchSignal, WinchSupported, NewWinchSet,
- * InstallWinchHandler, BlockWinch, WaitWinch, WakeWinch. Disposition and
- * waits: Install, Restore, CurrentMask, Wait, WaitTimeout, and the five
- * WaitArrived, WaitTimedOut, WaitInvalid, WaitFailed and WaitBusy statuses.
- * Signal sets: SignalSetSize, NewSet, FillSet, AddSignal, DelSignal, IsSignal,
- * Block, Unblock, SetMask.
- */
-
 @en "signal"
 @fa "سیگنال"
 package signal
 
-// mem is imported only on POSIX. Every use of it lives in the POSIX halves
-// of the platform branches below; on Windows those halves are not compiled
-// and an import nothing uses is an error (E082), so the import has to go
-// away with them. sync goes with it: the registry mutex is POSIX-only.
 if not SALAM_OS_WINDOWS:
     import mem
     import sync
@@ -165,9 +37,6 @@ if not SALAM_OS_WINDOWS:
     end
 end
 
-// The bounded wait's own entry points, split by kernel because neither has the
-// other's: Darwin has kqueue and no sigtimedwait, Linux has sigtimedwait and no
-// kqueue. Nothing here is declared on Windows, where the wait is a stub.
 if SALAM_OS_MAC:
     extern:
         func kqueue(): int
@@ -183,37 +52,26 @@ end
 
 @en "WinchSignal"
 @fa "سیگنال تغییر اندازه"
-/// The SIGWINCH number. It is 28 on macOS and Linux, the only platforms
-/// the watch is enabled on.
 pub const WinchSignal := 28
 
 @en "WaitArrived"
 @fa "نتیجه رسیدن"
-/// Wait returned a signal from its set: the out-block holds its number.
 pub const WaitArrived := 1
 
 @en "WaitTimedOut"
 @fa "نتیجه اتمام مهلت"
-/// A bounded wait expired with nothing queued, so the out-block was not
-/// written. Wait never returns it; only a timed wait does.
 pub const WaitTimedOut := 0
 
 @en "WaitInvalid"
 @fa "نتیجه نامعتبر"
-/// A bad argument, or a platform with no signal support. Nothing was waited
-/// on.
 pub const WaitInvalid := -1
 
 @en "WaitFailed"
 @fa "نتیجه شکست"
-/// The wait itself failed. sigwait reports failure as a positive error number
-/// and does not set errno; the out-block is untouched.
 pub const WaitFailed := -2
 
 @en "WaitBusy"
 @fa "نتیجه مشغول"
-/// Another thread in this process already owns the wait. Nothing was waited
-/// on, so the caller can retry later instead of splitting the deliveries.
 pub const WaitBusy := -3
 
 @en "SigHup"
@@ -298,28 +156,21 @@ else:
     pub const SigTstp := 20
 end
 
-// sizeof(sigset_t): Darwin sys/_types/_sigset_t.h, OpenBSD sys/signal.h, FreeBSD sys/_sigset.h, NetBSD sys/sigtypes.h, Linux sigset headers.
-// MAC and OPENBSD must precede BSD, which also matches them.
 if SALAM_OS_WINDOWS:
     @en "SignalSetSize"
     @fa "اندازه مجموعه سیگنال"
-    /// 0: signal sets do not exist on Windows, where the set functions are
-    /// inert stubs.
     pub const SignalSetSize := 0
 else SALAM_OS_MAC:
     @en "SignalSetSize"
     @fa "اندازه مجموعه سیگنال"
-    /// 4 bytes, the Darwin sigset_t.
     pub const SignalSetSize := 4
 else SALAM_OS_OPENBSD:
     @en "SignalSetSize"
     @fa "اندازه مجموعه سیگنال"
-    /// 4 bytes, the OpenBSD sigset_t.
     pub const SignalSetSize := 4
 else SALAM_OS_BSD:
     @en "SignalSetSize"
     @fa "اندازه مجموعه سیگنال"
-    /// 16 bytes, the FreeBSD and NetBSD sigset_t.
     pub const SignalSetSize := 16
 else SALAM_OS_ANDROID:
     if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
@@ -334,13 +185,9 @@ else SALAM_OS_ANDROID:
 else:
     @en "SignalSetSize"
     @fa "اندازه مجموعه سیگنال"
-    /// 128 bytes, the glibc and musl sigset_t.
     pub const SignalSetSize := 128
 end
 
-// SIG_BLOCK, SIG_UNBLOCK and SIG_SETMASK: sys/signal.h on Darwin and the
-// BSDs, bits/sigaction.h in glibc and musl. The wrong value turns a block
-// into an unblock, so each is a named constant.
 if SALAM_OS_BSD:
     const _SIG_BLOCK := 1
     const _SIG_UNBLOCK := 2
@@ -351,19 +198,10 @@ else:
     const _SIG_SETMASK := 2
 end
 
-// sigtimedwait returns -1 for a timeout and for a failure, so only errno
-// separates them. EAGAIN is 11 on glibc and musl; Darwin never reads errno,
-// because sigwait returns the error number itself.
 if SALAM_OS_LINUX:
     const _EAGAIN := 11
 end
 
-// struct sigaction: sys/signal.h on Darwin, OpenBSD, NetBSD and FreeBSD,
-// bits/sigaction.h in glibc and musl. _SA_FLAGS_WORD is the u32 index of the
-// flags byte, because the zeroed block is written through typed pointers.
-// FreeBSD is the only target that puts sa_flags before sa_mask. MAC, OPENBSD
-// and NETBSD must precede BSD, which also matches them, or NetBSD silently
-// takes FreeBSD's layout and SA_RESTART lands in its mask.
 if SALAM_OS_ANDROID:
     if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
         const _SA_HANDLER_U64 := 0
@@ -375,24 +213,24 @@ else:
 end
 
 if SALAM_OS_WINDOWS:
-    const _SIGACTION_SIZE := 0 // no sigaction on Windows
+    const _SIGACTION_SIZE := 0
     const _SA_FLAGS_WORD := 0
     const _SA_RESTART := 0
 else SALAM_OS_MAC:
-    const _SIGACTION_SIZE := 16 // sys/signal.h: handler 0, mask 8 (4 B), flags 12
-    const _SA_FLAGS_WORD := 3 // u32 index of byte 12
+    const _SIGACTION_SIZE := 16
+    const _SA_FLAGS_WORD := 3
     const _SA_RESTART := 0x0002
 else SALAM_OS_OPENBSD:
-    const _SIGACTION_SIZE := 16 // sys/signal.h: handler 0, mask 8 (4 B), flags 12
-    const _SA_FLAGS_WORD := 3 // u32 index of byte 12
+    const _SIGACTION_SIZE := 16
+    const _SA_FLAGS_WORD := 3
     const _SA_RESTART := 0x0002
 else SALAM_OS_NETBSD:
-    const _SIGACTION_SIZE := 32 // sys/signal.h: handler 0, mask 8 (16 B), flags 24
-    const _SA_FLAGS_WORD := 6 // u32 index of byte 24
+    const _SIGACTION_SIZE := 32
+    const _SA_FLAGS_WORD := 6
     const _SA_RESTART := 0x0002
 else SALAM_OS_BSD:
-    const _SIGACTION_SIZE := 32 // FreeBSD sys/signal.h: handler 0, flags 8, mask 12 (16 B)
-    const _SA_FLAGS_WORD := 2 // u32 index of byte 8
+    const _SIGACTION_SIZE := 32
+    const _SA_FLAGS_WORD := 2
     const _SA_RESTART := 0x0002
 else SALAM_OS_ANDROID:
     if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
@@ -408,34 +246,18 @@ else SALAM_ARCH_X86 or SALAM_ARCH_ARM:
     const _SA_FLAGS_WORD := 33
     const _SA_RESTART := 0x10000000
 else:
-    const _SIGACTION_SIZE := 152 // glibc/musl bits/sigaction.h: mask 8-135, flags 136, restorer 144
-    const _SA_FLAGS_WORD := 34 // u32 index of byte 136
+    const _SIGACTION_SIZE := 152
+    const _SA_FLAGS_WORD := 34
     const _SA_RESTART := 0x10000000
 end
 
 if not SALAM_OS_WINDOWS:
-    // One zeroed heap block holds the registry: a header, then one slot per
-    // signal number, slot 0 unused. The registry exists so one snapshot per
-    // signal is canonical for the whole process; callers never see it.
-    //
-    // Header: the mutex handle slot at _REG_HDR_MUTEX stays reserved and
-    // unused. The live mutex is the package-level _mu, because it has to exist
-    // before the first install to serialise the registry allocation itself.
-    // The offset is named anyway so stage 03's waiter flag and stage 04's
-    // pending set keep the planned numbering. _REG_HDR_SIZE is fixed at
-    // 16 + 128, the largest sigset_t, so the slot base is the same everywhere.
-    //
-    // Slot: refs (i64), handler (u64), canonical prev (void*), then the
-    // stage-04 fields, named here so the slot size does not move later.
     const _REG_SLOTS := 128
     const _REG_HDR_MUTEX := 0
     const _REG_HDR_WAITER := 8
     const _REG_HDR_PENDING := 16
     const _REG_HDR_SIZE := 144
     const _REG_SLOT_SIZE := 80
-    // The three live fields are word indices into the slot, so the read and
-    // the layout cannot drift apart. The stage-04 fields below are byte
-    // offsets because they carve one blob.
     const _REG_SLOT_REFS := 0
     const _REG_SLOT_HANDLER := 1
     const _REG_SLOT_PREV := 2
@@ -445,64 +267,38 @@ if not SALAM_OS_WINDOWS:
 
     const _HANDLE_SIZE := _SIGACTION_SIZE + SignalSetSize
 
-    // Null until the first Install. Every read and write happens under _mu,
-    // except _reg == null itself, which is re-checked under the lock.
     mut _reg := null as void*
 
-    // Serialises Install, Restore and stage 03's waiter claim. Created before
-    // main runs, so two threads racing on the first Install cannot each
-    // allocate a registry.
     mut _mu := sync.NewMutex()
 end
 
 if not SALAM_OS_WINDOWS:
-    // The out-block WaitWinch writes into, created on the first call and
-    // reused because the wait path may not allocate. Two threads racing that
-    // first call can each allocate one and the later pointer wins: a benign
-    // one-time double allocation, and no thread reads a block another is
-    // writing, because only the claim holder waits.
     mut _winch_out := null as void*
 end
 
 if not SALAM_OS_WINDOWS:
     func _winch_noop(_sig: int):
-        // Deliberate no-op, kept async-signal-safe. It exists only to
-        // give SIGWINCH a non-default disposition; the argument is the
-        // signal number and carries no information (see the module
-        // comment). The discard keeps the body non-empty as the
-        // compiler requires without doing any work.
         _ := _sig
     end
 end
 
 if not SALAM_OS_WINDOWS:
-    // The slot for sig. The registry exists and sig is in range; both are the
-    // caller's check.
     func _slot(sig: int): void*:
         base := (_reg as u64) + (_REG_HDR_SIZE as u64)
         ret (base + ((sig as u64) * (_REG_SLOT_SIZE as u64))) as void*
     end
 
-    // The registry, allocated on the first call. Called under _mu, so the
-    // allocation and the pending set are not raced.
     func _registry(): void*:
         if _reg == null:
             _reg = mem.AllocateZeroed((_REG_HDR_SIZE + _REG_SLOTS * _REG_SLOT_SIZE) as u64)
             if _reg == null: ret null end
-            // Stage 04 waits on this set, so it is built here: no wait path
-            // may allocate.
             _ := sigemptyset(((_reg as u64) + (_REG_HDR_PENDING as u64)) as void*)
         end
         ret _reg
     end
 
-    // Test-and-set on the registry header's waiter flag: one waiter per
-    // process, so a second one is told so instead of receiving a silent
-    // subset. The lock covers the write only, never the wait itself.
     func _claim_waiter(): bool:
         _ := sync.Lock(_mu)
-        // No registry means no Install has run, so there is no flag to take:
-        // a program that waits before installing gets no ownership check.
         if _reg == null:
             _ := sync.Unlock(_mu)
             ret true
@@ -516,7 +312,6 @@ if not SALAM_OS_WINDOWS:
         ret not busy
     end
 
-    // Clear the claim. Writing 0 when the flag was never taken is harmless.
     func _release_waiter():
         _ := sync.Lock(_mu)
         if _reg != null:
@@ -526,11 +321,6 @@ if not SALAM_OS_WINDOWS:
         _ := sync.Unlock(_mu)
     end
 
-    // Put a captured disposition and mask back on the calling thread. The
-    // disposition goes first: a signal arriving between the two steps must
-    // meet the restored handler, not this package's no-op. The mask follows
-    // even when that failed, so a failed restore cannot leave the signal both
-    // blocked and installed.
     func _put_back(sig: int, handle: void*): bool:
         disposition_ok := sigaction(sig, handle, null) == 0
         mask := ((handle as u64) + (_SIGACTION_SIZE as u64)) as void*
@@ -538,10 +328,6 @@ if not SALAM_OS_WINDOWS:
         ret disposition_ok and mask_ok
     end
 
-    // A caller-owned copy of the canonical snapshot: sigaction bytes and the
-    // first install's mask. No path applies a copy's mask — the last Restore
-    // applies the canonical state itself — so the copy is made whole and the
-    // reading thread's mask is never consulted.
     func _snapshot_copy(canonical: void*): void*:
         copy := mem.AllocateZeroed(_HANDLE_SIZE as u64)
         if copy == null: ret null end
@@ -551,11 +337,6 @@ if not SALAM_OS_WINDOWS:
 end
 
 if SALAM_OS_MAC:
-    // The one signal in set, or -1 when there is none or more than one. The
-    // registry registers one EVFILT_SIGNAL per signal, so a timed wait can
-    // carry the bound of exactly one; Linux needs no filter and keeps the
-    // general set. The scan costs about a microsecond per call, and if it ever
-    // shows in a profile the signal can be cached in the registry at Install.
     func _single_signal(set: void*): int:
         mut found := 0
         mut i := 1
@@ -573,9 +354,6 @@ end
 
 @en "WinchSupported"
 @fa "تغییر اندازه پشتیبانی می شود"
-/// True when this process can receive SIGWINCH, i.e. on POSIX. Windows has
-/// no SIGWINCH, so the watcher must not start there and callers should poll
-/// the terminal size instead.
 pub func WinchSupported(): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -586,9 +364,6 @@ end
 
 @en "NewWinchSet"
 @fa "مجموعه تغییر اندازه جدید"
-/// Allocate a signal set containing SIGWINCH and nothing else. The caller
-/// owns the memory and releases it with mem.Free. Returns null on Windows,
-/// when the allocation fails, or when SIGWINCH cannot be added.
 pub func NewWinchSet(): void*:
     if SALAM_OS_WINDOWS:
         ret null
@@ -605,11 +380,6 @@ end
 
 @en "InstallWinchHandler"
 @fa "نصب گرداننده تغییر اندازه"
-/// Install the process-wide no-op SIGWINCH handler with SA_RESTART and an
-/// empty mask, then block SIGWINCH on the calling thread. Returns the
-/// previous disposition and mask, owned by the caller: pass it to Restore, or
-/// free it with mem.Free. Null on Windows and when the install fails, in
-/// which case nothing is left changed. A no-op on Windows.
 pub func InstallWinchHandler(): void*:
     if SALAM_OS_WINDOWS:
         ret null
@@ -620,16 +390,6 @@ end
 
 @en "Install"
 @fa "نصب"
-/// Capture the calling thread's current disposition for sig and its signal
-/// mask, install handler with SA_RESTART and an empty sa_mask, then block sig
-/// on the calling thread. A null handler is legal and means SIG_DFL. The first
-/// install for a signal does that work and keeps the snapshot in the registry;
-/// a later install of the same handler only refcounts it, and a later install
-/// of a different handler is refused, because a handler that never runs is a
-/// silent mismatch. Returns a caller-owned copy of the snapshot: release it
-/// with mem.Free and put the state back with Restore. Null on Windows, when
-/// sig is outside the table, when another handler already owns sig, or when a
-/// step fails, in which case anything already changed is put back.
 pub func Install(sig: int, handler: void*): void*:
     if SALAM_OS_WINDOWS:
         ret null
@@ -647,7 +407,6 @@ pub func Install(sig: int, handler: void*): void*:
                 _ := sync.Unlock(_mu)
                 ret null
             end
-            // Same handler: a fresh copy so both consumers own their handle.
             copy := _snapshot_copy((slot as u64*)[_REG_SLOT_PREV] as void*)
             if copy == null:
                 _ := sync.Unlock(_mu)
@@ -657,14 +416,11 @@ pub func Install(sig: int, handler: void*): void*:
             _ := sync.Unlock(_mu)
             ret copy
         end
-        // refs == 0: this install does the work and owns the canonical block.
         canonical := mem.AllocateZeroed(_HANDLE_SIZE as u64)
         if canonical == null:
             _ := sync.Unlock(_mu)
             ret null
         end
-        // The mask is read before the install and before the block: it is what
-        // Restore puts back. set == null only reads the third argument.
         mask := ((canonical as u64) + (_SIGACTION_SIZE as u64)) as void*
         if pthread_sigmask(_SIG_BLOCK, null, mask) != 0:
             mem.Free(canonical)
@@ -677,10 +433,8 @@ pub func Install(sig: int, handler: void*): void*:
             _ := sync.Unlock(_mu)
             ret null
         end
-        // The block is zeroed, so sa_mask is empty and the rest is SIG_DFL.
         (act as u64*)[_SA_HANDLER_U64] = handler as u64
         (act as i32*)[_SA_FLAGS_WORD] = _SA_RESTART
-        // The kernel writes the whole previous struct at canonical offset 0.
         installed := sigaction(sig, act, canonical) == 0
         mem.Free(act)
         if not installed:
@@ -697,16 +451,12 @@ pub func Install(sig: int, handler: void*): void*:
             mem.Free(set)
         end
         if not blocked:
-            // Nothing is recorded yet, so the canonical mask makes the
-            // recovery exact and the slot stays at refs == 0.
             _ := _put_back(sig, canonical)
             mem.Free(canonical)
             _ := sync.Unlock(_mu)
             ret null
         end
         if SALAM_OS_MAC:
-            // The bound in WaitTimeout waits on this kqueue, which belongs to
-            // the slot: one per install cycle, never created on the wait path.
             kq := kqueue()
             if kq < 0:
                 _ := _put_back(sig, canonical)
@@ -714,10 +464,6 @@ pub func Install(sig: int, handler: void*): void*:
                 _ := sync.Unlock(_mu)
                 ret null
             end
-            // struct kevent, 32 bytes: ident 0, filter 8, flags 10, fflags 12,
-            // data 16, udata 24. EVFILT_SIGNAL is -6; EV_ADD|EV_ENABLE is
-            // 0x0005. Registration is the whole job: EV_CLEAR is automatic, so
-            // the filter is read by the wait and never re-armed.
             kev := ((slot as u64) + (_REG_SLOT_KEVENT as u64)) as void*
             (kev as i64*)[0] = sig as i64
             (kev as i16*)[4] = -6 as i16
@@ -739,14 +485,11 @@ pub func Install(sig: int, handler: void*): void*:
             _ := _put_back(sig, canonical)
             mem.Free(canonical)
             if SALAM_OS_MAC:
-                // Registered, never used: the slot will not keep it, so it
-                // cannot be closed by a later Restore.
                 _ := close((((slot as u64) + (_REG_SLOT_KQUEUE as u64)) as i64*)[0] as int)
             end
             _ := sync.Unlock(_mu)
             ret null
         end
-        // The canonical mask is the pre-block mask, which is this thread's.
         mem.Copy(copy, canonical, _HANDLE_SIZE as u64)
         (slot as u64*)[_REG_SLOT_HANDLER] = handler as u64
         (slot as u64*)[_REG_SLOT_PREV] = canonical as u64
@@ -758,24 +501,12 @@ end
 
 @en "Restore"
 @fa "بازگردانی"
-/// Put back the state an Install snapshot captured on the same thread,
-/// returning whether both steps succeeded. Above one reference only the count
-/// drops: the signal stays blocked for the consumers that still own it. At the
-/// last reference the state the *first* Install captured goes back in full —
-/// both the disposition and its pre-block mask — so freeing handles in either
-/// order leaves the signal unblocked and no owner is left with a blocked
-/// signal. The registry then frees its canonical
-/// snapshot. A further Restore does nothing and succeeds: the state is already
-/// back, and re-applying a handle would restore the mask it was taken with.
-/// Frees nothing the caller owns.
 pub func Restore(sig: int, prev: void*): bool:
     if SALAM_OS_WINDOWS:
         ret false
     else:
         if sig <= 0 or prev == null: ret false end
         _ := sync.Lock(_mu)
-        // Nothing was ever installed, or sig is outside the table: the handle
-        // still holds a full snapshot, so it can be re-applied on its own.
         if _reg == null or sig >= _REG_SLOTS:
             _ := sync.Unlock(_mu)
             ret _put_back(sig, prev)
@@ -783,29 +514,18 @@ pub func Restore(sig: int, prev: void*): bool:
         slot := _slot(sig)
         refs := (slot as i64*)[_REG_SLOT_REFS]
         if refs > 1:
-            // Only the count drops. The signal stays blocked while anyone
-            // still owns it: unblocking here would let a raise run the
-            // handler instead of queueing for the remaining consumer's wait.
             (slot as i64*)[_REG_SLOT_REFS] = refs - 1
             _ := sync.Unlock(_mu)
             ret true
         end
         if refs == 1:
             (slot as i64*)[_REG_SLOT_REFS] = 0
-            // The last Restore puts back the state the *first* Install
-            // captured, never a copy: a copy may have been taken by a thread
-            // whose mask is not the one to restore, and either free order must
-            // end with the signal unblocked.
             canonical := (slot as u64*)[_REG_SLOT_PREV] as void*
             ok := _put_back(sig, canonical)
-            // refs reached zero, so the canonical snapshot goes; a later
-            // install rebuilds it. The caller's copy is untouched.
             mem.Free((slot as u64*)[_REG_SLOT_PREV] as void*)
             (slot as u64*)[_REG_SLOT_HANDLER] = 0
             (slot as u64*)[_REG_SLOT_PREV] = 0
             if SALAM_OS_MAC:
-                // A kqueue is a descriptor, so it goes with the snapshot: kept
-                // past this point, every install/restore cycle leaks one.
                 kq := ((slot as u64) + (_REG_SLOT_KQUEUE as u64)) as i64*
                 if kq[0] >= 0:
                     _ := close(kq[0] as int)
@@ -815,9 +535,6 @@ pub func Restore(sig: int, prev: void*): bool:
             _ := sync.Unlock(_mu)
             ret ok
         end
-        // refs == 0: the state went back at the last reference, so there is
-        // nothing left to apply; re-applying a handle would resurrect whatever
-        // mask it was copied with.
         _ := sync.Unlock(_mu)
         ret true
     end
@@ -825,11 +542,6 @@ end
 
 @en "BlockWinch"
 @fa "مسدود کردن تغییر اندازه"
-/// Add SIGWINCH to the calling thread's signal mask so the signal is queued
-/// for WaitWinch instead of delivered on an arbitrary thread. Threads
-/// spawned afterwards inherit the mask, which is what lets one dedicated
-/// watcher thread own the wait. False on Windows, when the set could not be
-/// built, or when blocking failed.
 pub func BlockWinch(): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -844,60 +556,26 @@ end
 
 @en "Wait"
 @fa "انتظار"
-/// Block the calling thread until a signal in set is queued, then write its
-/// number as an i32 at out[0] and return WaitArrived. The thread must have
-/// those signals blocked, as BlockWinch does, so they queue instead of being
-/// delivered on an arbitrary thread. The out-block is caller-owned and
-/// written on arrival only, so a caller can keep its previous value after any
-/// other status. Nothing is allocated here. Returns WaitInvalid for a null set
-/// or null out and on Windows, WaitBusy when another thread already waits, and
-/// WaitFailed when the wait itself failed. Never returns WaitTimedOut, because
-/// it has no bound; one waiter per process, so two consumers cannot silently
-/// split the deliveries.
 pub func Wait(set: void*, out: void*): int:
     if SALAM_OS_WINDOWS:
         ret WaitInvalid
     else:
         if set == null or out == null: ret WaitInvalid end
         if not _claim_waiter(): ret WaitBusy end
-        // The kernel writes the number into the caller's block on success.
         status := sigwait(set, out)
-        // Released before any return, so a failed wait does not wedge the
-        // claim for the rest of the process.
         _release_waiter()
         if status == 0: ret WaitArrived end
         ret WaitFailed
     end
 end
 
-// The bound is not a self-pipe: with the signal blocked — the model this
-// package documents — the installed handler never runs, so nothing could write
-// a pipe, and unblocking the signal to make one work would abandon sigwait and
-// Install's handler contract. Darwin measures the bound with a kqueue
-// EVFILT_SIGNAL filter instead, which counts generations of the signal without
-// consuming it; the queue that is actually pending is then taken by sigwait.
 @en "WaitTimeout"
 @fa "انتظار با مهلت"
-/// Block the calling thread until a signal in set is queued or millis
-/// milliseconds go by. On arrival the number is written as an i32 at out[0]
-/// and WaitArrived is returned; when the bound wins it returns WaitTimedOut
-/// and out is untouched, like every other non-arrival status. millis == 0
-/// probes once without blocking, and millis < 0 is WaitInvalid. The signal
-/// must be installed, because the bound is built with the registry, and the
-/// thread must have it blocked, as BlockWinch does. Darwin
-/// times one signal per call, since the registry registers one kqueue filter
-/// per signal: a set with no signal or with more than one is WaitInvalid
-/// there, while Linux takes any set. Nothing is allocated here. Returns
-/// WaitInvalid for a null set or null out, WaitBusy when another thread
-/// already waits, and WaitFailed when the kernel call failed.
 pub func WaitTimeout(set: void*, out: void*, millis: int): int:
     if SALAM_OS_WINDOWS:
         ret WaitInvalid
     else:
         if set == null or out == null or millis < 0: ret WaitInvalid end
-        // The kqueue and the timespec buffer are built with the registry on
-        // the first Install, so there is nothing to bound a wait with before
-        // one. sig stays 0 on Linux, which has no filter and needs no signal.
         if _reg == null: ret WaitInvalid end
         mut sig := 0
         if SALAM_OS_MAC:
@@ -905,10 +583,6 @@ pub func WaitTimeout(set: void*, out: void*, millis: int): int:
             if sig < 0: ret WaitInvalid end
         end
         if not _claim_waiter(): ret WaitBusy end
-        // Both branches need a 16-byte tv_sec/tv_nsec that the caller cannot
-        // take the address of and the wait path may not allocate. Darwin keeps
-        // it in the signal's slot; Linux needs no filter, so sig is 0 and the
-        // unused slot 0 is one process-wide buffer.
         slot := _slot(sig)
         ts := ((slot as u64) + (_REG_SLOT_TIMESPEC as u64)) as i64*
         if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
@@ -924,10 +598,6 @@ pub func WaitTimeout(set: void*, out: void*, millis: int): int:
             kev := ((slot as u64) + (_REG_SLOT_KEVENT as u64)) as void*
             n := kevent(kq, null, 0, kev, 1, ts as void*)
             if n > 0:
-                // The filter counted a generation, but a generation can be
-                // counted and already consumed. Ask what is queued before
-                // draining: without this guard a drained generation parks the
-                // caller in sigwait with no timeout left to rescue it.
                 pending := ((_reg as u64) + (_REG_HDR_PENDING as u64)) as void*
                 if sigpending(pending) == 0 and IsSignal(pending, sig):
                     if sigwait(set, out) == 0: status = WaitArrived end
@@ -942,14 +612,11 @@ pub func WaitTimeout(set: void*, out: void*, millis: int): int:
                 (out as i32*)[0] = rc
                 status = WaitArrived
             else if rc < 0:
-                // EAGAIN is the timeout; anything else, EINTR included, is a
-                // failure the caller sees rather than one to loop over.
                 if (__errno_location() as i32*)[0] == _EAGAIN:
                     status = WaitTimedOut
                 end
             end
         else:
-            // No bounded wait on this target, so nothing was waited on.
             status = WaitInvalid
         end
         _release_waiter()
@@ -959,12 +626,6 @@ end
 
 @en "WaitWinch"
 @fa "انتظار تغییر اندازه"
-/// Block the calling thread until a SIGWINCH is queued, then return its
-/// signal number. The set must contain SIGWINCH, as NewWinchSet builds, and
-/// the thread must have it blocked, as BlockWinch does. Returns 0 on Windows
-/// only, where there is no SIGWINCH; on POSIX the failure statuses are
-/// negative, so WaitInvalid replaces the old 0 for a null set, and WaitBusy
-/// means another thread already waits.
 pub func WaitWinch(set: void*): int:
     if SALAM_OS_WINDOWS:
         ret 0
@@ -982,10 +643,6 @@ end
 
 @en "WakeWinch"
 @fa "بیدار کردن تغییر اندازه"
-/// Send SIGWINCH to this process so a thread parked in WaitWinch wakes up.
-/// With the signal blocked this only queues it, which is exactly what the
-/// watcher consumes; Screen uses it to break the wait when shutting down.
-/// False on Windows or when kill failed.
 pub func WakeWinch(): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -996,16 +653,12 @@ end
 
 @en "NewSet"
 @fa "مجموعه جدید"
-/// Allocate an empty signal set. The caller owns the memory and releases it
-/// with mem.Free. Returns null on Windows, where sets do not exist, and when
-/// the allocation fails.
 pub func NewSet(): void*:
     if SALAM_OS_WINDOWS:
         ret null
     else:
         set := mem.AllocateZeroed(SignalSetSize as u64)
         if set == null: ret null end
-        // Fails only on a null set, guarded above.
         _ := sigemptyset(set)
         ret set
     end
@@ -1013,23 +666,17 @@ end
 
 @en "FillSet"
 @fa "پر کردن مجموعه"
-/// Fill set with every signal the platform knows. A no-op when set is null
-/// and on Windows.
 pub func FillSet(set: void*):
     if SALAM_OS_WINDOWS:
         ret
     else:
         if set == null: ret end
-        // Fails only on a null set, guarded above.
         _ := sigfillset(set)
     end
 end
 
 @en "AddSignal"
 @fa "افزودن سیگنال"
-/// Add sig to set, returning false on failure. False when set is null and
-/// when sig is not positive: Darwin accepts 0 in sigaddset and Linux
-/// rejects it, so both are normalized away. Always false on Windows.
 pub func AddSignal(set: void*, sig: int): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -1041,8 +688,6 @@ end
 
 @en "DelSignal"
 @fa "حذف سیگنال"
-/// Remove sig from set, returning false on failure. The guards match
-/// AddSignal. Always false on Windows.
 pub func DelSignal(set: void*, sig: int): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -1054,9 +699,6 @@ end
 
 @en "IsSignal"
 @fa "عضو مجموعه است"
-/// True when sig is in set. False when set is null or sig is not positive;
-/// sigismember's -1 error is never treated as membership. Always false on
-/// Windows.
 pub func IsSignal(set: void*, sig: int): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -1068,9 +710,6 @@ end
 
 @en "Block"
 @fa "مسدود کردن"
-/// Add set to the calling thread's signal mask so its signals queue instead
-/// of being delivered. False when set is null, on Windows, or when the mask
-/// could not be changed.
 pub func Block(set: void*): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -1082,8 +721,6 @@ end
 
 @en "Unblock"
 @fa "رفع انسداد"
-/// Remove set from the calling thread's signal mask. False when set is null,
-/// on Windows, or when the mask could not be changed.
 pub func Unblock(set: void*): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -1095,8 +732,6 @@ end
 
 @en "SetMask"
 @fa "تنظیم ماسک"
-/// Replace the calling thread's signal mask with set. False when set is null,
-/// on Windows, or when the mask could not be changed.
 pub func SetMask(set: void*): bool:
     if SALAM_OS_WINDOWS:
         ret false
@@ -1108,17 +743,12 @@ end
 
 @en "CurrentMask"
 @fa "ماسک فعلی"
-/// Allocate a set holding the calling thread's current signal mask. The
-/// caller owns the memory and releases it with mem.Free, like every other set
-/// in this package. Returns null on Windows and when the mask could not be
-/// read.
 pub func CurrentMask(): void*:
     if SALAM_OS_WINDOWS:
         ret null
     else:
         set := NewSet()
         if set == null: ret null end
-        // set == null is what selects "read only"; how is ignored then.
         if pthread_sigmask(_SIG_BLOCK, null, set) != 0:
             mem.Free(set)
             ret null

@@ -12,153 +12,69 @@
  *
  */
 
-/*
- * Widget: the contract between a piece of UI and the screen.
- *
- * tui is retained mode: a widget is a long-lived value that holds its
- * own state, and the screen asks it to draw itself and to react to events.
- * The Widget interface is the whole contract; anything that has these nine
- * methods is a widget (Salam interfaces are structural: there is no
- * `implements`). A list, a button, and a panel are all Widgets, so the
- * screen stores them side by side as `dyn Widget`.
- *
- * preferred_size is the leaf measurement hook: a size at a given maximum
- * width. A widget that cannot measure reports a negative sentinel, and the
- * engine fills the available space instead. measure is the container hook.
- * It returns ok false when the widget cannot measure, and the engine then
- * reads preferred_size. Leaves keep the BaseWidget default.
- *
- * BaseWidget supplies a default for every method. Embed it with `use` and
- * override only what your widget needs:
- *
- *     struct Label:
- *         pub use tui.BaseWidget
- *         pub text: str = ""
- *         pub func render(buf: tui.Buffer, bounds: tui.Rect):
- *             buf.put_str(bounds.x, bounds.y, this.text, tui.StyleDefault)
- *         end
- *     end
- *
- * Rules every implementation follows:
- *
- *   - Methods are infallible. There is no error return. A widget given a
- *     region too small to draw in draws what fits (the buffer clips) or
- *     nothing at all; that is not an error.
- *   - handle_event is synchronous and must return promptly. It runs on the
- *     main thread, between frames. Long work belongs in the application,
- *     driven by tick events, not inside a handler.
- *   - Widgets never write to the terminal. They draw into the Buffer they
- *     are given; the screen owns output.
- *   - Widgets do not position themselves. Whoever owns the layout (the
- *     application, or a container in layout.salam) calls set_bounds.
- *
- * What this file deliberately does not do: parent/child links and focus
- * order belong to the screen's widget tree, not to widgets, so a widget can
- * be written without knowing where it sits in the tree.
- */
-
 package tui
 
-// dyn Widget cannot be compared or downcast, so it cannot key the layout
-// memo. measure() assigns memo_id and publishes it here; the caller reads
-// _last_memo_id immediately, before any other measure.
 mut _next_memo_id := 0
 mut _last_memo_id := 0
 
 @en "Widget"
 @fa "ویجت"
-/// The interface every widget satisfies. Store widgets as `dyn Widget`.
 pub interface Widget:
     @en "render"
     @fa "ترسیم"
-    /// Draws the widget into buf. bounds is the widget's own rect (the
-    /// same value bounds() returns); buf is already clipped to it, so
-    /// drawing outside is harmless and simply dropped.
     func render(buf: Buffer, bounds: Rect)
 
     @en "handle_event"
     @fa "پردازش رویداد"
-    /// Reacts to an event. Returns true when the widget consumed it, which
-    /// stops it from bubbling to the widget's parent; false passes it on.
     func handle_event(event: Event): bool
 
     @en "focusable"
     @fa "تمرکز‌پذیر است"
-    /// True when the widget can take keyboard focus. Only focusable widgets
-    /// take part in focus navigation.
     func focusable(): bool
 
     @en "hits"
     @fa "اصابت‌پذیر است"
-    /// True when hit-testing may land on this widget. A widget may paint
-    /// and still refuse hits; the screen then skips it and keeps scanning
-    /// the widgets under it.
     func hits(): bool
 
     @en "visible"
     @fa "نمایان است"
-    /// True when the widget is on screen. False hides the whole subtree
-    /// from focus navigation, painting, and hit testing: a widget answers
-    /// only for itself, so every consumer asks every widget on the path to
-    /// the root.
     func visible(): bool
 
     @en "bounds"
     @fa "محدوده"
-    /// The widget's rect on the screen, as last set by set_bounds.
     func bounds(): Rect
 
     @en "set_bounds"
     @fa "تنظیم محدوده"
-    /// Moves and resizes the widget. Called by whoever owns the layout.
     func set_bounds(bounds: Rect)
 
     @en "preferred_size"
     @fa "اندازه ترجیحی"
-    /// The size the widget wants at max_width, as a rect at (0, 0).
-    /// max_width <= 0 means unbounded. A widget that cannot measure returns
-    /// a rect with negative width and height as a sentinel; the layout
-    /// engine reads that as "no preference" and fills the axis instead.
     func preferred_size(max_width: int): Rect
 
     @en "measure"
     @fa "اندازه‌گیری"
-    /// Natural extent along axis at max_width. ok is false when this widget
-    /// cannot measure; the layout engine then reads preferred_size. extent
-    /// is the length in cells when ok is true. Must not call set_bounds.
     func measure(axis: Axis, max_width: int): Measure
 end
 
 @en "BaseWidget"
 @fa "ویجت‌پایه"
-/// Default implementations of every Widget method. Embed it with
-/// `pub use tui.BaseWidget` and override what you need. On its own it is
-/// a widget that paints nothing, is unfocusable, reports itself visible and
-/// ignores every event, which also makes it a useful container or
-/// placeholder.
 pub struct BaseWidget:
     @en "rect"
     @fa "مستطیل"
-    /// Storage for bounds() and set_bounds(). Embedding widgets can read it
-    /// directly as this.rect.
     pub rect: Rect = Rect {}
 
-    // Stable id for the layout pass memo. 0 means not assigned yet. The pass
-    // clears the memo table, not this id.
     memo_id: int = 0
 
     @en "render"
     @fa "ترسیم"
-    /// Draws nothing.
     pub func render(buf: Buffer, bounds: Rect):
-        // Salam rejects empty bodies (E061), so discard the arguments.
         _ := buf
         _ := bounds
     end
 
     @en "handle_event"
     @fa "پردازش رویداد"
-    /// Consumes nothing: returns false so the event bubbles on.
     pub func handle_event(event: Event): bool:
         _ := event
         ret false
@@ -166,46 +82,36 @@ pub struct BaseWidget:
 
     @en "focusable"
     @fa "تمرکز‌پذیر است"
-    /// Returns false. Override it to return true for interactive widgets.
     pub func focusable(): bool:
         ret false
     end
 
     @en "hits"
     @fa "اصابت‌پذیر است"
-    /// Returns true. Override it to return false when the widget may paint
-    /// and still refuse hits.
     pub func hits(): bool:
         ret true
     end
 
     @en "visible"
     @fa "نمایان است"
-    /// Returns true: a BaseWidget is on screen even though it paints nothing.
-    /// Override it to hide a whole subtree.
     pub func visible(): bool:
         ret true
     end
 
     @en "bounds"
     @fa "محدوده"
-    /// Returns the rect stored by the last set_bounds call.
     pub func bounds(): Rect:
         ret this.rect
     end
 
     @en "set_bounds"
     @fa "تنظیم محدوده"
-    /// Stores the rect.
     pub func set_bounds(bounds: Rect):
         this.rect = bounds
     end
 
     @en "preferred_size"
     @fa "اندازه ترجیحی"
-    /// Cannot measure: returns the negative sentinel (width and height -1),
-    /// which the layout engine maps to the available length. Override it to
-    /// report a real size.
     pub func preferred_size(max_width: int): Rect:
         _ := max_width
         ret Rect { width = -1, height = -1 }
@@ -213,9 +119,6 @@ pub struct BaseWidget:
 
     @en "measure"
     @fa "اندازه‌گیری"
-    /// Cannot measure: ok is false and extent is 0. The layout engine then
-    /// reads preferred_size. Containers that can report a natural extent
-    /// override it.
     pub func measure(axis: Axis, max_width: int): Measure:
         _ := axis
         _ := max_width
@@ -223,9 +126,6 @@ pub struct BaseWidget:
         ret Measure { ok = false, extent = 0 }
     end
 
-    // Private. Row and Column finish by calling BaseWidget.measure, which
-    // lands here and publishes this node. A private method is not callable
-    // from outside BaseWidget.
     func _note_measure():
         if this.memo_id == 0:
             _next_memo_id++

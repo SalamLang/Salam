@@ -12,37 +12,13 @@
  *
  */
 
-// Focus navigation across a widget tree three levels deep, not just across
-// flat sibling lists. The screen is never started: the fixture is built with
-// NewScreen and every focus movement calls the screen methods directly, then
-// asserts focused_id(). Nesting does not reorder focus: the order stays
-// ascending id among focusable widgets, filtered to the top raised layer and
-// to ids with no hidden widget on their path to the root.
-//
-// Tree used throughout:
-//
-//     root(0)
-//     |-- outer(1)         Group, not focusable
-//     |   |-- inner(2)     Group, not focusable
-//     |   |   |-- a(3)     Tile, at (2, 2, 4, 1)
-//     |   |   `-- b(4)     Tile, at (8, 2, 4, 1)
-//     |   `-- c(5)         Tile, at (2, 5, 4, 1)
-//     `-- modal(6)         closed Modal
-//         `-- m(7)         Tile, at (14, 2, 4, 1)
-
 import testing
 import str
 import term
-
 import tui
 
-// Every Group and Tile appends its name here when it receives an event, so
-// the dispatch test can assert the exact visiting order. Handlers cannot
-// capture locals, so a module-level vector is the shared log.
 mut visits := Vector {} as Vector<str>
 
-// A container that records visits and can consume "x" on behalf of its
-// children.
 struct Group:
     pub use tui.BaseWidget
     pub name: str = ""
@@ -56,7 +32,6 @@ struct Group:
     end
 end
 
-// A focusable leaf that records visits and paints its first letter.
 struct Tile:
     pub use tui.BaseWidget
     pub name: str = ""
@@ -84,7 +59,6 @@ func key(seq: str): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
 end
 
-// Flushes and joins the visit log, so a test asserts one exact sequence.
 func trail(): str:
     mut out := ""
     each i, v in visits:
@@ -97,9 +71,6 @@ func trail(): str:
     ret out
 end
 
-// The tree above. Add order fixes the ids and the first focusable added (a)
-// takes focus. inner is built consuming because a Group is copied into the
-// tree: mutating the local Group afterwards would not reach the stored copy.
 func tree_screen(m: tui.Modal): tui.Screen:
     mut s := tui.NewScreen(tui.BaseWidget {}, 20, 8)
     outer := s.add(tui.RootId, Group { name = "outer" })
@@ -133,7 +104,6 @@ func test_auto_focus_reaches_depth_three():
     testing.AssertEqInt(s.focused_id(), 3)
     testing.AssertFalse(s.can_focus(1))
     testing.AssertFalse(s.can_focus(2))
-    // 7 is focusable on its own but sits under the closed modal.
     testing.AssertFalse(s.can_focus(7))
 end
 
@@ -143,10 +113,8 @@ func test_auto_focus_skips_hidden_subtree():
     defer s.close()
     mid := s.add(tui.RootId, m)
     tile := s.add(mid, Tile { name = "t" })
-    // The modal is closed, so auto-focus must refuse the hidden child.
     testing.AssertEqInt(s.focused_id(), tui.NoWidget)
     testing.AssertFalse(s.can_focus(tile))
-    // Open reaches the screen's copy through the shared state.
     m.open()
     testing.AssertTrue(s.can_focus(tile))
     testing.AssertTrue(s.focus(tile))
@@ -156,16 +124,12 @@ func test_focus_next_crosses_container_boundaries():
     mut s := tree_screen(tui.NewModal())
     defer s.close()
     testing.AssertEqInt(s.focused_id(), 3)
-    // Ascending id across depths: a, b, c. The modal is closed, so it and m
-    // are outside the order: an id is skipped when any widget on its path to
-    // the root reports visible() false.
     testing.AssertTrue(s.focus_next())
     testing.AssertEqInt(s.focused_id(), 4)
     testing.AssertTrue(s.focus_next())
     testing.AssertEqInt(s.focused_id(), 5)
     testing.AssertTrue(s.focus_next())
     testing.AssertEqInt(s.focused_id(), 3)
-    // And back down the same order, wrapping at the first entry.
     testing.AssertTrue(s.focus_prev())
     testing.AssertEqInt(s.focused_id(), 5)
     testing.AssertTrue(s.focus_prev())
@@ -188,11 +152,8 @@ func test_spatial_focus_across_depth():
     mut s := tree_screen(tui.NewModal())
     defer s.close()
     testing.AssertTrue(s.focus(3))
-    // a and b share row 2; c is two rows below a.
     testing.AssertTrue(s.focus_right())
     testing.AssertEqInt(s.focused_id(), 4)
-    // The modal tile is the right edge of row 2, but it is hidden with its
-    // container, so nothing lies to the right of b.
     testing.AssertFalse(s.focus_right())
     testing.AssertEqInt(s.focused_id(), 4)
     testing.AssertTrue(s.focus(3))
@@ -223,13 +184,11 @@ func test_nested_dispatch_bubbles_depth_first():
     testing.AssertEqInt(s.focused_id(), 3)
     visits.clear()
     testing.AssertTrue(s.dispatch(key("x")))
-    // Tile first, then its parent, and no sibling or root in between.
     testing.AssertEqStr(trail(), "a>inner")
 end
 
 func test_raised_modal_layer_stays_focused_and_ordered():
     mut m := tui.NewModal()
-    // The layer's one focus stop is the tile; the modal is a passive frame.
     m.takes_focus = false
     mut s := tree_screen(m)
     defer s.close()
@@ -238,7 +197,6 @@ func test_raised_modal_layer_stays_focused_and_ordered():
     testing.AssertEqInt(s.focused_id(), 7)
     s.raise_subtree(6)
     testing.AssertEqInt(s.focused_id(), 7)
-    // The raised layer holds one focusable, so next cannot leave it.
     testing.AssertFalse(s.focus_next())
     testing.AssertEqInt(s.focused_id(), 7)
     s.unraise_subtree(6)

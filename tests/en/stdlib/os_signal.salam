@@ -12,28 +12,14 @@
  *
  */
 
-// Unit tests for the SIGWINCH primitives. These are headless: they never
-// open a terminal, they install the handler, block SIGWINCH, raise it
-// against the process itself, and consume it with sigwait. That proves the
-// full path Screen relies on, including that a blocked signal raised with a
-// non-default disposition is queued and delivered, and that a thread spawned
-// after BlockWinch inherits the mask and can own the wait.
-
 import testing
 import mem
-
 import os.signal
 
-// The SIGWINCH disposition read back at offset 0 of a struct sigaction is the
-// handler word. The extern is declared here because the package keeps its own
-// one private. It has to sit with the imports, before any other declaration.
 extern:
     func sigaction(sig: int, act: void*, old: void*): int
 end
 
-// How many SIGWINCHes the watcher thread consumed. Written by the watcher,
-// read by main after join (which orders the two), so no locking is needed
-// and the assertions stay on the main thread.
 mut _thread_hits := 0
 
 func watcher(set: void*):
@@ -42,9 +28,6 @@ func watcher(set: void*):
     end
 end
 
-// Two distinct handlers for the install/restore round trip: the second
-// install must be refused while the first one owns the signal. The discard
-// keeps the body non-empty, as the compiler requires.
 func noop_one(_sig: int):
     _ := _sig
 end
@@ -53,12 +36,7 @@ func noop_two(_sig: int):
     _ := _sig
 end
 
-// The SIGWINCH disposition currently installed, read back the same way the
-// returned handle is: offset 0 of a struct sigaction is the handler word.
 func live_handler(sig: int): u64:
-    // struct sigaction is 16 bytes on Darwin but 152 on glibc, and the kernel
-    // writes the whole struct: the block is sized for the largest target, not
-    // the one this test happens to run on.
     buf := mem.AllocateZeroed(256 as u64)
     if buf == null: ret 0 end
     _ := sigaction(sig, null, buf)
@@ -68,39 +46,27 @@ func live_handler(sig: int): u64:
 end
 
 func test_supported():
-    // Every POSIX target has SIGWINCH.
     testing.AssertTrue(signal.WinchSupported())
 end
 
 func test_install_restore():
-    // Runs second in main, before anything installs a handler or blocks
-    // SIGWINCH, so the first install still sees the default disposition.
     before := signal.CurrentMask()
     testing.AssertNotNil(before)
     prev1 := signal.Install(signal.WinchSignal, &noop_one)
     testing.AssertNotNil(prev1)
-    // A different handler while noop_one owns the signal is refused rather
-    // than silently installed: it would never run.
     prev2 := signal.Install(signal.WinchSignal, &noop_two)
     testing.AssertTrue(prev2 == null)
-    // The refusal changed nothing: noop_one is still the live disposition.
     testing.AssertTrue(live_handler(signal.WinchSignal) == (&noop_one) as u64)
-    // The same handler refcounts and hands back its own copy. Restoring that
-    // one drops the count to one, so the mask stays blocked and the
-    // disposition stays installed: a consumer still owns the signal.
     prev3 := signal.Install(signal.WinchSignal, &noop_one)
     testing.AssertNotNil(prev3)
     testing.AssertTrue(signal.Restore(signal.WinchSignal, prev3))
     held := signal.CurrentMask()
     testing.AssertTrue(signal.IsSignal(held, signal.WinchSignal))
     testing.AssertTrue(live_handler(signal.WinchSignal) == (&noop_one) as u64)
-    // The last reference restores the mask and the disposition.
     testing.AssertTrue(signal.Restore(signal.WinchSignal, prev1))
     after := signal.CurrentMask()
     testing.AssertEqBool(signal.IsSignal(after, signal.WinchSignal), signal.IsSignal(before, signal.WinchSignal))
     testing.AssertEqInt64(live_handler(signal.WinchSignal) as i64, 0)
-    // At refcount zero Restore is idempotent: it re-applies the same state,
-    // frees nothing, and changes no count.
     testing.AssertTrue(signal.Restore(signal.WinchSignal, prev1))
     mem.Free(held)
     mem.Free(after)
@@ -114,11 +80,8 @@ func test_blocked_self_signal_is_consumed():
     set := signal.NewWinchSet()
     testing.AssertTrue(set != null)
     signal.BlockWinch()
-    // Handler installed and signal blocked: raise it at the process, then
-    // consume it. Mirrors probe 1g.
     signal.WakeWinch()
     testing.AssertEqInt(signal.WaitWinch(set), signal.WinchSignal)
-    // A null set must not wait (it would block forever), it is refused.
     testing.AssertEqInt(signal.WaitWinch(null), signal.WaitInvalid)
     mem.Free(set)
 end
@@ -127,11 +90,6 @@ func test_thread_inherits_mask():
     signal.InstallWinchHandler()
     signal.BlockWinch()
     set := signal.NewWinchSet()
-    // The watcher is spawned after blocking, so it inherits SIGWINCH in its
-    // mask and its sigwait is the one that consumes the signal, not main.
-    // Mirrors probe 2b, with a single raise: SIGWINCH is a standard signal
-    // and two pending copies coalesce into one, so raising twice before the
-    // watcher runs would be a race, not a stronger test.
     h := spawn(watcher, set)
     signal.WakeWinch()
     join(h)
@@ -144,11 +102,9 @@ func test_set_membership():
     testing.AssertTrue(set != null)
     testing.AssertTrue(not signal.AddSignal(set, 0))
     _ := signal.AddSignal(set, signal.WinchSignal)
-    // 15 is SIGTERM on every target.
     _ := signal.AddSignal(set, 15)
     testing.AssertTrue(signal.IsSignal(set, signal.WinchSignal))
     testing.AssertTrue(signal.IsSignal(set, 15))
-    // SIGHUP (1) was never added.
     testing.AssertTrue(not signal.IsSignal(set, 1))
     testing.AssertTrue(signal.DelSignal(set, signal.WinchSignal))
     testing.AssertTrue(not signal.IsSignal(set, signal.WinchSignal))
@@ -156,8 +112,6 @@ func test_set_membership():
 end
 
 func test_windows_stubs():
-    // Windows has no signals: every call is a safe stub, so a caller can
-    // fall back to polling the terminal size.
     testing.AssertFalse(signal.WinchSupported())
     testing.AssertNil(signal.NewSet())
     testing.AssertNil(signal.NewWinchSet())

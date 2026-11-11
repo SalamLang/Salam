@@ -12,101 +12,6 @@
  *
  */
 
-/*
- * Screen: owns the terminal, the widget tree, the buffer, and the loop.
- *
- * Threading model. Exactly one part of tui is asynchronous: input.
- *
- *     input thread                         main thread
- *     ------------                         -----------
- *     poll stdin (term.KeyReady)           screen.next_event(ev)  <- blocks
- *     term.ReadKey -> KeyEvent  ----+      screen.dispatch(ev)    <- sync
- *     timer due -> TickEvent -------+-->   (first widget, then its
- *                    events channel        ancestors, see tree.salam)
- *                                          screen.present()       <- draw
- *
- * On POSIX a second producer feeds the same channel: the winch thread,
- * which parks in sigwait(SIGWINCH) and turns each wake into a ResizeEvent
- * when the size changed (see winch_loop and the Resizing paragraph below).
- * Neither producer touches widgets, the tree, or the buffer, so none of
- * those need locks. Everything that touches widgets happens on the main
- * thread, one event at a time, which is why Widget.handle_event can be
- * plain synchronous code.
- *
- * Stopping. stop() closes the channel. The input thread notices on its next
- * poll (within PollMs) and the winch thread on its next wake, which close()
- * supplies (WakeWinch); next_event drains what is left and then returns
- * false. close() additionally joins both threads and restores the terminal.
- * Applications call start() and immediately `defer screen.close()`, so the
- * terminal is restored on every exit path.
- *
- * Headless use. Nothing here requires a terminal until start() is called.
- * A screen that was never started still accepts post()ed events, dispatches
- * them, and draws into its buffer; present() then skips terminal output.
- * The integration tests drive the real channel and dispatch path this way.
- *
- * Focus. The screen keeps a focus stack of widget IDs; the top is the
- * focused widget, which receives each event first and renders with
- * buf.focused set. Every focus change queues the old and the new bounds,
- * so the next present() repaints those two and leaves the rest. Linear
- * (focus_next/prev) and spatial (focus_up/down/left/right, see
- * focus.salam) navigation walk the focus order: focusable widgets in the
- * topmost raised layer, or every focusable widget in ID order when that
- * layer has none. Neither set contains an id inside a hidden subtree: an id
- * is skipped when any widget on its path to the root reports visible()
- * false. Paint and hit test skip that id too, so a hidden subtree is
- * neither drawn nor clickable. An application binds the methods to keys
- * through the opt-in keymap.
- *
- * Keymap fallback. A screen carries an opt-in Keymap (see keymap.salam). For
- * an event the widget chain does not consume, dispatch offers KeyEvents to
- * the keymap; nothing else, and never before the widgets. That order means
- * the keymap sees only keys no widget consumed, scoped bindings included:
- * bind_for(input_id, Enter, ...) never fires, because Input consumes Enter.
- * Non-key events (tick, resize, mouse) never reach the keymap, so a pending
- * key sequence survives them. An empty keymap is inert. Install or replace a
- * whole map with set_keymap; binding through the keymap field extends the
- * current map in place.
- *
- * Mouse routing. A decoded MouseEvent starts at the widget under the
- * cursor instead of the focused one: hit_test walks reverse paint order
- * and takes the first widget whose bounds contain the cell, whose hits()
- * is true, and whose ancestor chain is visible. The event bubbles up from
- * there. If nothing qualifies (a click outside the buffer, or every cover
- * refuses hits) or the report could not be decoded, it starts at the
- * focused widget like any other event. Routing never moves the focus: a
- * click does not focus what it hits, because whether a click should focus
- * is a widget and application decision, and it can call focus() itself.
- *
- * Resizing. On a ResizeEvent the screen resizes its buffer and gives the
- * root widget the full terminal rect (fit_root). A resize reallocates the
- * buffer's grids and forces the next present() to repaint the whole frame
- * (see buffer.salam). That is the only layout the core does: every other
- * widget gets its bounds from the application, or from a layout container
- * (layout.salam), via set_bounds.
- *
- * Resize detection. On POSIX a dedicated winch thread (winch_loop) parks in
- * sigwait(SIGWINCH) and, on every wake, reads term.Size() and sends a
- * ResizeEvent only when the size actually changed. The signal plumbing
- * lives in the signal package; the watcher is spawned in start() and joined in
- * close() before the channel is freed. WaitWinch returns the signal number
- * (positive) on arrival, zero on Windows only, and a negative Wait* status on
- * failure; the watcher breaks on zero and retries a negative status after a
- * bounded sleep (WinchRetryMs) instead of spinning. SIGWINCH coalesces, so two
- * quick resizes can arrive as one wake: the event carries the current size,
- * not a count, and a wake with an unchanged size emits nothing, preserving the
- * only-on-change behavior the old poll had. Windows has no SIGWINCH
- * (WinchSupported is false), so there the input thread keeps polling
- * term.Size() once per pass instead, and PollMs bounds that poll's latency.
- *
- * Deliberate gaps: no key bindings are installed by default (NewScreen and
- * start() add none; an application installs or extends a keymap itself), no
- * vim-style modes (an application concern, built on set_keymap).
- *
- * Salam 0.6 can spell chan.Chan<Event> inside the package that declares
- * Event, so Screen.events uses the std/chan channel directly.
- */
-
 package tui
 
 import chan
@@ -117,37 +22,21 @@ import os.signal
 
 @en "PollMs"
 @fa "بازه پایش به میلی‌ثانیه"
-/// How often, at most, the input thread wakes when no key arrives, in
-/// milliseconds. Bounds the latency of stop() and, on Windows, of resize
-/// detection (on POSIX a resize arrives as SIGWINCH instead).
 pub const PollMs := 20
 
 @en "EventCapacity"
 @fa "ظرفیت رویداد"
-/// How many events the channel buffers before the input thread waits.
 pub const EventCapacity := 256
 
-// More pending regions than this, or a combined area over half the screen,
-// becomes a full repaint. Both knobs are cheap to retune.
 const RegionLimit := 4
 
-// Backoff for the winch thread when WaitWinch fails (a negative Wait* status)
-// instead of arriving, in milliseconds. Bounds both the CPU cost of a
-// persistent failure and close()'s join latency.
 const WinchRetryMs := 50
 
-// What the input thread needs, copied onto the heap because spawn() passes
-// exactly one pointer. The channel copy shares the screen's channel.
 struct InputContext:
     pub events: chan.Chan<Event>
     pub tick_ms: int = 0
 end
 
-// What the winch thread needs, copied onto the heap for the same reason as
-// InputContext. width and height are the size start() just resized the
-// screen to, so the watcher emits a ResizeEvent only when the terminal
-// genuinely changes size (a same-size wake emits nothing, which is the
-// behavior the polling path had).
 struct WinchContext:
     pub events: chan.Chan<Event>
     pub width: int = 0
@@ -156,124 +45,77 @@ end
 
 @en "Screen"
 @fa "صفحه"
-/// The terminal session: widget tree, back buffer, focus, and the event
-/// loop. Create it with NewScreen.
 pub struct Screen:
     @en "events"
     @fa "رویدادها"
-    /// The channel the input thread sends events on and next_event reads.
     pub events: chan.Chan<Event>
 
     @en "root"
     @fa "ریشه"
-    /// The root widget (ID 0). It always covers the whole screen.
     pub root: dyn Widget
 
     @en "focused"
     @fa "ویجت متمرکز"
-    /// The widget that currently receives events first.
     pub focused: dyn Widget
 
     @en "buffer"
     @fa "بافر"
-    /// The back buffer widgets draw into.
     pub buffer: Buffer = Buffer {}
 
     @en "glyphs"
     @fa "نویسه‌ها"
-    /// The glyph policy seeded into every frame's buffer copy. Unicode by
-    /// default; start() replaces it with DetectGlyphPolicy() unless the app
-    /// called set_glyphs.
     pub glyphs: GlyphPolicy = GlyphPolicy.Unicode
 
     @en "running"
     @fa "در حال اجرا"
-    /// True from start() (or the first run) until stop().
     pub running: bool = false
 
     @en "tree"
     @fa "درخت"
-    /// The widget registry. Prefer add() and widget() to editing it.
     pub tree: Tree = Tree {}
 
     @en "tick_ms"
     @fa "بازه تیک به میلی‌ثانیه"
-    /// Interval of TickEvents in milliseconds; 0 (the default) sends none.
-    /// Set it before start().
     pub tick_ms: int = 0
 
     @en "mouse"
     @fa "گزارش ماوس"
-    /// When true, start() enables click reporting: presses and releases
-    /// arrive as MouseEvents. Set it before start().
     pub mouse: bool = false
 
     @en "mouse_motion"
     @fa "گزارش حرکت ماوس"
-    /// When true, start() enables all-motion reporting and every pointer
-    /// movement, press, and release arrives as a MouseEvent. Includes clicks,
-    /// so it does not need `mouse`, and reports are frequent. Set it before
-    /// start().
     pub mouse_motion: bool = false
 
     @en "keymap"
     @fa "نگاشت کلید"
-    /// The opt-in key bindings, consulted as a dispatch fallback for KeyEvents
-    /// no widget consumed. Empty by default, so an app that never touches it
-    /// behaves exactly as before. Bind through this field to extend it in
-    /// place, or install a whole map with set_keymap. Never assign a Keymap
-    /// directly: it would leak the current map's buffers.
     pub keymap: Keymap = Keymap {}
 
     @en "dirty"
     @fa "نیازمند بازترسیم"
-    /// True when the next present() must repaint the whole frame: a resize,
-    /// a tick, an added widget, raise/unraise, a keymap-consumed key, or
-    /// invalidate of an unknown widget. A precise change is a region.
     pub dirty: bool = true
 
-    // One rect per invalidation request: invalidate queues a widget's own
-    // bounds, invalidate_subtree queues the union of a widget and its
-    // descendants, and draw_regions repaints whatever intersects either.
     regions: Vector<Rect> = Vector {}
 
     junction_arms: Vector<int> = Vector {} as Vector<int>
 
     @en "focus_stack"
     @fa "پشته تمرکز"
-    /// Widget IDs; the top (last) entry is the focused widget, and an
-    /// empty stack means nothing is focused. Change it through focus,
-    /// push_focus, pop_focus, and the navigation methods, which keep
-    /// `focused` in sync and queue the old and new bounds.
     pub focus_stack: Vector<int> = Vector {}
 
     glyphs_explicit: bool = false
     attached: bool = false
     closed: bool = false
     input_thread: i64 = 0
-    // The SIGWINCH watcher's handle, or 0 when none was started (Windows, or
-    // a screen that never ran start()). close() joins it before freeing the
-    // channel.
     winch_thread: i64 = 0
     winch_snap: void* = null
     freed: bool = false
     term_state: term.TermState = term.TermState {}
-    // Raise stamps live on the screen, not on the widget. A missing id is
-    // stamp 0 (unraised). One raise() call bumps ztop once and writes that
-    // same stamp on every id, so the call is one layer. Focus moves after
-    // the stamps change, and only through focus(). restore is the single
-    // id unraise puts back when the last layer is cleared.
     stamps: HashMap<int, int> = HashMap {} as HashMap<int, int>
     ztop: int = 0
     restore: int = NoWidget
 
     @en "add"
     @fa "افزودن"
-    /// Adds w under parent (an ID; RootId for top level) and returns the
-    /// new widget's ID. Unraised widgets paint in ID order, which is the
-    /// order they were added. The first reachable focusable widget added
-    /// while nothing has focus receives it; a child of a hidden container is
-    /// not reachable, so it is skipped.
     pub func add(parent: int, w: dyn Widget): int:
         this.dirty = true
         id := this.tree.add(parent, w)
@@ -285,14 +127,6 @@ pub struct Screen:
 
     @en "raise"
     @fa "آوردن به رو"
-    /// Assigns every id one fresh stamp, shared by this whole call, so the
-    /// ids form a single layer above every widget raised earlier and above
-    /// every unraised widget. Within the layer, paint order stays ID order.
-    /// When the resulting focus order is non-empty and the current focus
-    /// is outside it, saves that focus and moves to the order's first id.
-    /// Otherwise leaves the focus and the saved id unchanged. An id that
-    /// is not in the tree is recorded and does not crash; it changes
-    /// painting only once that id is registered.
     pub func raise(ids: Vector<int>):
         this.ztop++
         stamp := this.ztop
@@ -305,14 +139,6 @@ pub struct Screen:
 
     @en "unraise"
     @fa "بازگرداندن ترتیب"
-    /// Clears the stamp of every id to 0, so those widgets return to plain
-    /// ID order. Idempotent: an id that was not raised, or that is not in
-    /// the tree, is left at 0. Does not rewind the stamp counter. When
-    /// nothing remains raised, focuses the saved id if it is still
-    /// focusable outside a hidden subtree, otherwise the first focusable
-    /// widget outside a hidden subtree, and clears the saved id. While a
-    /// layer remains, focuses the first id of the new focus order when the
-    /// current focus is outside it.
     pub func unraise(ids: Vector<int>):
         repeat ids.len() in i:
             this.stamps.put(ids.get(i), 0)
@@ -323,18 +149,6 @@ pub struct Screen:
 
     @en "raise_subtree"
     @fa "آوردن زیردرخت به رو"
-    /// Raises id and every descendant of id as one layer: one fresh stamp
-    /// for the whole subtree, so it paints above every other widget. Inside
-    /// the layer, ascending ID order keeps each parent before its children.
-    /// Focus follows raise: when the current focus is outside the layer's
-    /// focus order, it moves to that order's first id and the old focus is
-    /// saved for unraise_subtree. An id that is not in the tree, including
-    /// NoWidget, does nothing. The saved focus is one level deep: a second
-    /// raise overwrites it, so nest layers with push_focus and pop_focus.
-    /// Rejected: a public subtree query followed by raise(), which is two
-    /// calls on every modal open. Also rejected: a blocking-owner field that
-    /// dispatch and hit_test consult, which duplicates the geometric block
-    /// and can fall out of step with it.
     pub func raise_subtree(id: int):
         if not this.tree.valid(id):
             ret
@@ -346,9 +160,6 @@ pub struct Screen:
 
     @en "unraise_subtree"
     @fa "بازگرداندن ترتیب زیردرخت"
-    /// Clears the stamp of id and every descendant to 0, returning them to
-    /// plain ID order, and restores focus exactly as unraise does. An id
-    /// that is not in the tree, including NoWidget, does nothing.
     pub func unraise_subtree(id: int):
         if not this.tree.valid(id):
             ret
@@ -358,9 +169,6 @@ pub struct Screen:
         this.unraise(ids)
     end
 
-    // Ids of id and of every widget whose ancestor chain reaches id, in
-    // ascending order. Parents have lower ids than children, so the walk
-    // up always ends. The caller frees the vector.
     func subtree_ids(id: int): Vector<int>:
         mut ids := Vector {} as Vector<int>
         repeat this.tree.count() in c:
@@ -375,9 +183,6 @@ pub struct Screen:
         ret ids
     end
 
-    // Bounding union of the rects of id and its descendants, skipping empty
-    // rects. Rect {} when every rect is empty, which queue_region escalates
-    // to a full repaint. The caller passes an id the tree knows.
     func subtree_bounds(id: int): Rect:
         ids := this.subtree_ids(id)
         defer ids.free()
@@ -419,15 +224,12 @@ pub struct Screen:
 
     @en "widget"
     @fa "ویجت"
-    /// The widget with this ID (the root for an invalid ID).
     pub func widget(id: int): dyn Widget:
         ret this.tree.get(id)
     end
 
     @en "focused_id"
     @fa "شناسه متمرکز"
-    /// The ID of the focused widget, or NoWidget when nothing has focus
-    /// (events then start at the root).
     pub func focused_id(): int:
         if this.focus_stack.len() == 0:
             ret NoWidget
@@ -437,14 +239,10 @@ pub struct Screen:
 
     @en "can_focus"
     @fa "تمرکز‌پذیر است"
-    /// True when id names a widget that is currently focusable and no widget
-    /// on its path to the root reports itself hidden.
     pub func can_focus(id: int): bool:
         ret this.tree.valid(id) and this.visible_chain(id) and this.tree.get(id).focusable()
     end
 
-    // True when no widget on the path from id to the root reports itself
-    // hidden. Parent ids are always smaller, so the walk ends at NoWidget.
     func visible_chain(id: int): bool:
         mut cur := id
         until cur != NoWidget:
@@ -458,9 +256,6 @@ pub struct Screen:
 
     @en "focus"
     @fa "تمرکز"
-    /// Moves the focus to id, replacing the top of the focus stack (or
-    /// starting it). Returns false, changing nothing, when id is not a
-    /// focusable widget outside a hidden subtree.
     pub func focus(id: int): bool:
         if not this.can_focus(id):
             ret false
@@ -476,10 +271,6 @@ pub struct Screen:
 
     @en "push_focus"
     @fa "تمرکز با ذخیره قبلی"
-    /// Focuses id and remembers the previous focus underneath it, for
-    /// example while a dialog is open. pop_focus returns to it. Returns
-    /// false, changing nothing, when id is not a focusable widget outside
-    /// a hidden subtree.
     pub func push_focus(id: int): bool:
         if not this.can_focus(id):
             ret false
@@ -491,9 +282,6 @@ pub struct Screen:
 
     @en "pop_focus"
     @fa "بازیابی تمرکز"
-    /// Drops the top of the focus stack, returning the focus to whatever
-    /// was focused before the matching push_focus. Returns false when the
-    /// stack was already empty.
     pub func pop_focus(): bool:
         if this.focus_stack.len() == 0:
             ret false
@@ -506,60 +294,42 @@ pub struct Screen:
 
     @en "focus_next"
     @fa "تمرکز بعدی"
-    /// Moves the focus to the next widget in focus order, wrapping from
-    /// the last to the first. Focus order is the focusable widgets outside
-    /// hidden subtrees in the topmost raised layer, or every such widget
-    /// in ID order when that layer has none. A current focus outside the
-    /// order lands on the first entry. With no such widget, does nothing.
-    /// Returns true when the focus moved.
     pub func focus_next(): bool:
         ret this.focus_step(1)
     end
 
     @en "focus_prev"
     @fa "تمرکز قبلی"
-    /// Moves the focus to the previous widget in focus order, wrapping
-    /// from the first to the last. A current focus outside the order
-    /// lands on the last entry. With no such widget, does nothing.
-    /// Returns true when the focus moved.
     pub func focus_prev(): bool:
         ret this.focus_step(-1)
     end
 
     @en "focus_up"
     @fa "تمرکز بالا"
-    /// Moves the focus to the nearest widget above, chosen from the focus
-    /// order (see Nearest). Returns true when the focus moved.
     pub func focus_up(): bool:
         ret this.focus_toward(DirUp)
     end
 
     @en "focus_down"
     @fa "تمرکز پایین"
-    /// Moves the focus to the nearest widget below, from the focus order.
     pub func focus_down(): bool:
         ret this.focus_toward(DirDown)
     end
 
     @en "focus_left"
     @fa "تمرکز چپ"
-    /// Moves the focus to the nearest widget to the left, from the focus
-    /// order.
     pub func focus_left(): bool:
         ret this.focus_toward(DirLeft)
     end
 
     @en "focus_right"
     @fa "تمرکز راست"
-    /// Moves the focus to the nearest widget to the right, from the focus
-    /// order.
     pub func focus_right(): bool:
         ret this.focus_toward(DirRight)
     end
 
     @en "fit_root"
     @fa "جاسازی ریشه"
-    /// Gives the root widget the whole buffer: (0, 0, width, height).
     pub func fit_root():
         this.root.set_bounds(this.buffer.area())
         this.dirty = true
@@ -567,7 +337,6 @@ pub struct Screen:
 
     @en "resize"
     @fa "تغییر اندازه"
-    /// Resizes the back buffer to width x height and refits the root.
     pub func resize(width: int, height: int):
         this.buffer.resize(width, height)
         this.junction_arms.free()
@@ -577,12 +346,6 @@ pub struct Screen:
 
     @en "hit_test"
     @fa "آزمون برخورد"
-    /// The ID of the widget drawn at cell (x, y), both 0-based, or
-    /// NoWidget when no widget covers it. The scan is reverse paint order:
-    /// the first widget whose rect contains the point, whose hits() is true,
-    /// and whose ancestor chain reports visible wins. A widget may paint and
-    /// still refuse hits, and a widget inside a hidden subtree never wins;
-    /// the scan then continues. Widgets with empty bounds never match.
     pub func hit_test(x: int, y: int): int:
         p := Point { x = x, y = y }
         order := this.paint_order()
@@ -601,13 +364,6 @@ pub struct Screen:
 
     @en "dispatch"
     @fa "هدایت رویداد"
-    /// Handles one event synchronously: a ResizeEvent first resizes the
-    /// screen. A decoded MouseEvent then goes to the widget under the
-    /// cursor (see hit_test); every other event, and a mouse event with no
-    /// widget under it, goes to the focused widget. From that first widget
-    /// the event bubbles up the tree. An unconsumed KeyEvent is then offered
-    /// to the keymap fallback. Returns true when a widget or the keymap
-    /// consumed it.
     pub func dispatch(event: Event): bool:
         if event.kind == ResizeEvent:
             this.resize(event.width, event.height)
@@ -625,7 +381,6 @@ pub struct Screen:
         this.revalidate_focus()
         mut consumed := id != NoWidget
         if consumed:
-            // The widget's own bounds, not its subtree.
             this.queue_region(this.tree.get(id).bounds())
             if event.kind == KeyEvent:
                 this.keymap.cancel_pending()
@@ -633,7 +388,6 @@ pub struct Screen:
         end
         if not consumed and event.kind == KeyEvent:
             consumed = this.keymap.handle(this, event)
-            // The keymap does not name a widget, so the repaint is full.
             if consumed:
                 this.dirty = true
             end
@@ -643,18 +397,11 @@ pub struct Screen:
 
     @en "set_keymap"
     @fa "تنظیم نگاشت کلید"
-    /// Replaces the screen's keymap with km. Frees the current map's buffers
-    /// first, so this is the only safe way to swap a Keymap (assigning to the
-    /// field directly leaks the old one). The new map starts with no pending
-    /// sequence. Ownership of km transfers to the screen: the caller must not
-    /// free or use it afterward. Intended for mode switches and for installing
-    /// a freshly built map.
     pub func set_keymap(km: Keymap):
         this.keymap.free()
         this.keymap = km
     end
 
-    // Empty rects are not paintable, so they escalate to a full repaint.
     func queue_region(r: Rect):
         if r.is_empty():
             this.dirty = true
@@ -665,10 +412,6 @@ pub struct Screen:
 
     @en "invalidate"
     @fa "علامت‌گذاری برای بازترسیم"
-    /// Queues a repaint of widget id's bounds. An unknown id, or a widget
-    /// whose rect is empty, marks the whole screen instead. Legal before
-    /// start(): it only marks, and the flush still waits until the screen
-    /// is attached.
     pub func invalidate(id: int):
         if not this.tree.valid(id):
             this.dirty = true
@@ -679,15 +422,6 @@ pub struct Screen:
 
     @en "invalidate_subtree"
     @fa "علامت‌گذاری زیردرخت برای بازترسیم"
-    /// Queues one repaint region covering widget id and every descendant,
-    /// instead of only the widget's own bounds as invalidate does. Use it
-    /// when a widget's look depends on a child, or when a child can extend
-    /// past the widget's own rect. The region is the bounding union, so a
-    /// spread-out subtree also repaints the gaps between its rects, and one
-    /// over half the screen escalates to a full repaint. An unknown id,
-    /// including NoWidget, or a subtree whose rects are all empty marks the
-    /// whole screen instead. Legal before start(): it only marks, and the
-    /// flush still waits until the screen is attached.
     pub func invalidate_subtree(id: int):
         if not this.tree.valid(id):
             this.dirty = true
@@ -696,9 +430,6 @@ pub struct Screen:
         this.queue_region(this.subtree_bounds(id))
     end
 
-    // dirty, too many regions, or too much area. force_full is not a reason:
-    // resize already sets dirty, and a headless present never flushes, so
-    // force_full would otherwise stay true and every frame would be full.
     func needs_full(): bool:
         if this.dirty or this.regions.len() > RegionLimit:
             ret true
@@ -711,8 +442,6 @@ pub struct Screen:
             end
             sum += r.width * r.height
         end
-        // The sum double-counts overlaps, so this can escalate early. A
-        // full repaint is still the correct frame.
         ret sum * 2 > this.buffer.width * this.buffer.height
     end
 
@@ -797,12 +526,6 @@ pub struct Screen:
 
     @en "draw"
     @fa "بازترسیم"
-    /// Repaints the back buffer. A set `dirty` flag, more than RegionLimit
-    /// regions, or regions covering more than half the screen repaints
-    /// every widget. Otherwise only the pending regions are cleared and
-    /// repainted. Does nothing when neither is set. Paint order is ascending
-    /// (stamp, id). Each widget gets a buffer copy clipped to its visible
-    /// bounds, with `focused` set if it holds the focus.
     pub func draw():
         if not this.dirty and this.regions.len() == 0:
             ret
@@ -817,9 +540,6 @@ pub struct Screen:
 
     @en "present"
     @fa "نمایش تغییرات"
-    /// Draws and, once start() has attached the terminal, writes the changed
-    /// cells out. Returns immediately when nothing is pending. Clears
-    /// `dirty` and the pending regions.
     pub func present():
         if not this.dirty and this.regions.len() == 0:
             ret
@@ -834,8 +554,6 @@ pub struct Screen:
 
     @en "post"
     @fa "صف‌گذاری رویداد"
-    /// Queues an event as if the input thread had produced it. Safe from
-    /// any thread. Returns false once the screen is stopped.
     pub func post(event: Event): bool:
         if this.freed:
             ret false
@@ -845,9 +563,6 @@ pub struct Screen:
 
     @en "next_event"
     @fa "رویداد بعدی"
-    /// Waits for the next event and stores it in event. Returns false once
-    /// the screen has been stopped and every queued event was delivered.
-    /// The intended loop is: until screen.next_event(ev): ... end
     pub func next_event(event &: Event): bool:
         if this.freed:
             this.running = false
@@ -865,8 +580,6 @@ pub struct Screen:
 
     @en "set_glyphs"
     @fa "تنظیم نویسه‌ها"
-    /// Fixes the glyph policy and marks it explicit, so start() does not
-    /// detect one from the environment. May be called before or after start().
     pub func set_glyphs(policy: GlyphPolicy):
         this.glyphs = policy
         this.glyphs_explicit = true
@@ -875,10 +588,6 @@ pub struct Screen:
 
     @en "start"
     @fa "آغاز"
-    /// Takes over the terminal: raw mode, alternate screen, hidden cursor,
-    /// all-motion reporting if `mouse_motion` is set, click reporting
-    /// otherwise if `mouse` is set, a buffer sized to the terminal, and the
-    /// input thread. Call `defer screen.close()` right after it.
     pub func start():
         if this.attached or this.closed:
             ret
@@ -892,7 +601,6 @@ pub struct Screen:
         this.term_state = term.MakeRaw(term.StdinFd)
         mut setup := term.SeqEnterAltScreen() + term.SeqHideCursor() + term.SeqClearScreen()
         if this.mouse_motion:
-            // All-motion tracking is a superset of clicks: emit one, not both.
             setup += term.SeqEnableMouseMotion()
         else:
             if this.mouse:
@@ -903,24 +611,11 @@ pub struct Screen:
         this.attached = true
         size := term.Size()
         this.resize(size.cols, size.rows)
-        // Detect once, here, at the moment the process takes the terminal.
-        // Not in NewScreen: a headless screen must not depend on TERM, and
-        // resize() above must not clobber the result.
         this.buffer.tier = DetectTier()
         if not this.glyphs_explicit:
             this.glyphs = DetectGlyphPolicy()
         end
         if signal.WinchSupported():
-            // Order matters. Give SIGWINCH a non-default disposition before
-            // blocking it (a blocked signal whose disposition is still
-            // SIG_DFL is discarded at generation on Darwin), then block it
-            // before spawning either thread so both inherit the mask: the
-            // watcher parks in sigwait instead of running the handler, and
-            // the input thread must not receive it on some arbitrary stack.
-            // The returned snapshot is unreachable here by design.
-            // shortcut: one snapshot per Screen.start() is never freed and the
-            // process-wide disposition is not restored, matching v0.1.0;
-            // upgrade to Restore + mem.Free if start() becomes repeatable.
             wctx := mem.Allocate(sizeof(WinchContext) as u64) as WinchContext*
             wctx[0] = WinchContext {
                 events = this.events, width = size.cols, height = size.rows
@@ -935,9 +630,6 @@ pub struct Screen:
 
     @en "stop"
     @fa "توقف"
-    /// Ends the event loop: next_event returns false once the queue is
-    /// drained. Safe to call more than once and from a widget-free context
-    /// such as a tick callback.
     pub func stop():
         this.running = false
         if this.freed:
@@ -948,9 +640,6 @@ pub struct Screen:
 
     @en "close"
     @fa "بستن"
-    /// Stops the loop, restores the terminal exactly as start() found it,
-    /// waits for the input and winch threads, and frees the screen's
-    /// storage. Safe to call more than once; meant for `defer`.
     pub func close():
         if this.closed:
             ret
@@ -960,11 +649,6 @@ pub struct Screen:
         if this.attached:
             join(this.input_thread)
             if this.winch_thread != 0:
-                // The channel is already closed (stop above), so the watcher
-                // exits on its next is_closed() check; WakeWinch() supplies
-                // the wake it needs to get there, and join waits for it to
-                // finish. Both must happen before events.free(), which
-                // requires every user of the channel to be gone.
                 signal.WakeWinch()
                 join(this.winch_thread)
                 this.winch_thread = 0
@@ -995,32 +679,22 @@ pub struct Screen:
 
     @en "run"
     @fa "اجرا"
-    /// Runs the loop until stop(): present, then for every event dispatch
-    /// it and present again if anything changed. An unconsumed Ctrl+C
-    /// stops the loop, so a raw-mode program can always be left.
     pub func run():
         this.loop(false, (): ret end)
     end
 
     @en "run_with_tick"
     @fa "اجرا با تیک"
-    /// Like run, and also calls on_tick on the main thread for every
-    /// TickEvent, before the tick is dispatched, then redraws. Ticks arrive
-    /// every tick_ms milliseconds; set tick_ms before start().
     pub func run_with_tick(on_tick: func ()):
         this.loop(true, on_tick)
     end
 
-    // True when a paints before b: lower stamp, or the same stamp and a
-    // smaller id. Stamp 0 is every unraised widget, so nothing raised keeps
-    // ID order.
     func paints_before(a: int, b: int): bool:
         sa := this.stamps.get_or(a, 0)
         sb := this.stamps.get_or(b, 0)
         ret sa < sb or (sa == sb and a < b)
     end
 
-    // Ascending (stamp, id). The caller frees the vector.
     func paint_order(): Vector<int>:
         mut order := Vector {} as Vector<int>
         n := this.tree.count()
@@ -1047,11 +721,7 @@ pub struct Screen:
         ret order
     end
 
-    // Keeps the `focused` field in step with the stack and queues the old
-    // and new bounds, so both focus indicators can update.
     func focus_changed():
-        // this.focused still names the previous widget. The stack already
-        // names the new one. Root covers the empty-stack case.
         old_bounds := this.focused.bounds()
         id := this.focused_id()
         if id == NoWidget:
@@ -1063,10 +733,6 @@ pub struct Screen:
         this.queue_region(this.focused.bounds())
     end
 
-    // Nothing notifies the screen when a chain starts reporting hidden, so
-    // dispatch revalidates: focus falls to the first entry of the order, or
-    // clears when that order is empty. focus() replaces the stack top, so
-    // the depth the caller pushed survives.
     func revalidate_focus():
         id := this.focused_id()
         if id == NoWidget or this.can_focus(id):
@@ -1081,8 +747,6 @@ pub struct Screen:
         end
     end
 
-    // Highest raise stamp, or 0 when nothing is raised. unraise writes 0
-    // and leaves the entry in the map, so those values do not count.
     func max_stamp(): int:
         mut top := 0
         mut it := this.stamps.iter()
@@ -1096,10 +760,6 @@ pub struct Screen:
         ret top
     end
 
-    // Focusable widgets in the topmost layer, ascending id, none of them
-    // inside a hidden subtree. An empty layer, or a layer with no focusable
-    // widget, falls back to every focusable widget, which is ID order. The
-    // caller frees the vector.
     func focus_order(): Vector<int>:
         mut all := Vector {} as Vector<int>
         mut layered := Vector {} as Vector<int>
@@ -1129,9 +789,6 @@ pub struct Screen:
         ret -1
     end
 
-    // Stamps are already updated. Move only when the new order is non-empty
-    // and the current focus is outside it. Otherwise leave both the focus
-    // and the restore slot alone.
     func focus_after_raise():
         order := this.focus_order()
         defer order.free()
@@ -1170,7 +827,6 @@ pub struct Screen:
         end
     end
 
-    // focus() refuses NoWidget. This is only the spec's assignment of -1.
     func clear_focus():
         if this.focus_stack.len() == 0:
             ret
@@ -1179,9 +835,6 @@ pub struct Screen:
         this.focus_changed()
     end
 
-    // Linear navigation over focus_order. step is +1 or -1 and wraps inside
-    // that order. A focus outside the order jumps to the first entry (next)
-    // or the last (prev). No focusable widget leaves the focus unchanged.
     func focus_step(step: int): bool:
         order := this.focus_order()
         defer order.free()
@@ -1201,9 +854,6 @@ pub struct Screen:
         ret this.focus(order.get(next))
     end
 
-    // Spatial navigation. Candidates are focus_order, and Nearest does not
-    // wrap. Nothing focused has no starting rect, so fall back to
-    // focus_next, which lands on the first entry of the order.
     func focus_toward(dir: int): bool:
         current := this.focused_id()
         if current == NoWidget:
@@ -1249,12 +899,6 @@ pub struct Screen:
     end
 end
 
-// The input thread. It owns nothing but its copy of the channel and polls
-// stdin (with a timeout, so it never blocks indefinitely) and the tick
-// timer. On Windows it also polls the terminal size, because there is no
-// SIGWINCH there; on POSIX the winch thread owns size changes. It exits
-// when the channel is closed, either noticed on a poll or because a send
-// was refused.
 func input_loop(ctx: InputContext*):
     c := ctx[0]
     mem.Free(ctx as void*)
@@ -1274,8 +918,6 @@ func input_loop(ctx: InputContext*):
             if term.KeyReady(wait):
                 k := term.ReadKey()
                 if k.code == term.KeyEOF:
-                    // stdin is closed (or not a terminal): report it once,
-                    // then stop reading so the loop does not spin on it.
                     reading = false
                 end
                 if not events.send(key_event(k)):
@@ -1286,11 +928,6 @@ func input_loop(ctx: InputContext*):
             sync.SleepMs(wait)
         end
         if not signal.WinchSupported():
-            // Windows only: no SIGWINCH, so the size is polled here. On
-            // POSIX winch_loop produces ResizeEvents and this block is
-            // skipped, so the size is queried only when something happened.
-            // `size` is the baseline this thread compares against; it is
-            // still read here (and in start()) on every platform.
             now := term.Size()
             if now.cols != size.cols or now.rows != size.rows:
                 size = now
@@ -1301,8 +938,6 @@ func input_loop(ctx: InputContext*):
             end
         end
         if c.tick_ms > 0 and sync.NowMs() >= next_tick:
-            // Schedule from now, not from the missed deadline: a slow main
-            // thread gets one late tick, not a burst of catch-up ticks.
             next_tick = sync.NowMs() + c.tick_ms
             tick := Event { kind = TickEvent }
             if not events.send(tick):
@@ -1312,16 +947,6 @@ func input_loop(ctx: InputContext*):
     end
 end
 
-// The winch thread (POSIX only). It owns nothing but its copy of the
-// channel and its baseline size, parks in WaitWinch(set), and on each wake
-// re-reads term.Size(): a change updates the baseline and becomes a
-// ResizeEvent, a same-size wake emits nothing. A negative WaitWinch status
-// (WaitInvalid, WaitFailed, WaitBusy) means the wait failed, so it sleeps for
-// WinchRetryMs and retries without touching term.Size(). SIGWINCH coalesces,
-// so several resizes can collapse into one wake; the event carries the current
-// size, not a count. It exits when the channel is closed, either noticed
-// before the wait or because a send was refused. It is never spawned on
-// Windows (WinchSupported is false).
 func winch_loop(ctx: WinchContext*):
     c := ctx[0]
     mem.Free(ctx as void*)
@@ -1332,17 +957,11 @@ func winch_loop(ctx: WinchContext*):
     until not events.is_closed():
         n := signal.WaitWinch(set)
         if n == 0:
-            // Windows only: WaitWinch returns 0 there instead of a status,
-            // and the watcher is never spawned on Windows.
             break
         end
         if n < 0:
-            // WaitInvalid, WaitFailed or WaitBusy: the wait did not run or
-            // failed. Retrying at once would spin, so back off; close() still
-            // interrupts, because it closes the channel and wakes the thread.
             sync.SleepMs(WinchRetryMs)
         else:
-            // A positive return is the signal number: a wake.
             if events.is_closed():
                 break
             end
@@ -1360,7 +979,6 @@ func winch_loop(ctx: WinchContext*):
     mem.Free(set)
 end
 
-// Wraps a key from term.ReadKey in an Event; mouse reports are decoded.
 func key_event(k: term.Key): Event:
     if k.code == term.KeyMouse:
         ret Event { kind = MouseEvent, key = k, mouse = term.DecodeMouse(k.raw) }
@@ -1370,9 +988,6 @@ end
 
 @en "NewScreen"
 @fa "صفحه جدید"
-/// Creates a screen of width x height cells with root as its root widget
-/// (ID 0, sized to the whole screen). Nothing touches the terminal until
-/// start(), which resizes the screen to the real terminal.
 pub func NewScreen(root: dyn Widget, width: int, height: int): Screen:
     mut evch := chan.Chan {} as chan.Chan<Event>
     evch.init(EventCapacity as i64)
@@ -1386,7 +1001,6 @@ end
 
 @en "NewTerminalScreen"
 @fa "صفحه ترمینال جدید"
-/// Creates a screen sized to the current terminal (term.Size()).
 pub func NewTerminalScreen(root: dyn Widget): Screen:
     size := term.Size()
     ret NewScreen(root, size.cols, size.rows)

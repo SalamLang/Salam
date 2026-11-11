@@ -12,26 +12,12 @@
  *
  */
 
-// Tests for the Checkbox widget: the defaults and the focusable/hits
-// predicates, the one-row render with its mark and label clipping (CB01-CB10),
-// the styled-label frame, the preferred size, the event table (Space toggles
-// and is consumed, Enter and other keys bubble, a left press toggles without
-// focus, the disabled gate, CK01-CK08), and the screen-level focus gating
-// that routes Space only to the focused checkbox. Rows are asserted as text
-// or as whole-row Buffer.ansi() bytes; SGR strings are built with StyleSgr,
-// never written by hand.
-
 import testing
 import term
-
 import tui
 
-// Appends each on_toggle value. Handlers cannot capture locals (lambdas
-// capture by value), so a global is the shared log.
 mut toggles := Vector {} as Vector<bool>
 
-// A focusable widget that consumes nothing, so it can steal the focus from
-// the checkbox in the screen tests.
 struct Sink:
     pub use tui.BaseWidget
 
@@ -48,8 +34,6 @@ func key(seq: str): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
 end
 
-// A left-button press as the terminal reports it: SGR coordinates are
-// 1-based, so cell (x, y) arrives as column x + 1, row y + 1.
 func click(x: int, y: int): tui.Event:
     seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
     ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
@@ -63,8 +47,6 @@ func sgr_off(s: tui.Style): str:
     ret tui.StyleSgrOff(s, tui.ColorTier.TrueColor)
 end
 
-// Renders c into a one-row buffer of width bufw, clipped to bounds width bw,
-// and returns the row text. The buffer is freed before returning.
 func row_of(c: tui.Checkbox, bufw: int, bw: int, focused: bool): str:
     mut b := tui.NewBuffer(bufw, 1)
     defer b.free()
@@ -73,7 +55,6 @@ func row_of(c: tui.Checkbox, bufw: int, bw: int, focused: bool): str:
     ret b.row_text(0)
 end
 
-// As row_of, but returns the whole row as Buffer.ansi() bytes.
 func ansi_of(c: tui.Checkbox, bufw: int, bw: int, focused: bool): str:
     mut b := tui.NewBuffer(bufw, 1)
     defer b.free()
@@ -82,14 +63,11 @@ func ansi_of(c: tui.Checkbox, bufw: int, bw: int, focused: bool): str:
     ret b.ansi()
 end
 
-// ---- Defaults and predicates ------------------------------------------
-
 func test_defaults():
     mut e := tui.NewCheckbox("Notify me", false)
     testing.AssertFalse(e.checked())
     testing.AssertEqStr(e.label, "Notify me")
     testing.AssertFalse(e.disabled)
-    // No bounds yet means width 0, so the checkbox is not focusable.
     testing.AssertFalse(e.focusable())
     testing.AssertTrue(e.hits())
     e.set_bounds(rect(0, 0, 14, 1))
@@ -104,14 +82,11 @@ func test_getter_and_setter():
     mut e := tui.NewCheckbox("Notify me", false)
     e.set_checked(true)
     testing.AssertTrue(e.checked())
-    // Rendering draws the state but never changes it.
     testing.AssertEqStr(row_of(e, 14, 14, false), "[x] Notify me ")
     testing.AssertTrue(e.checked())
     e.set_checked(false)
     testing.AssertFalse(e.checked())
 end
-
-// ---- Render: plain rows (CB01, CB05-CB10) -----------------------------
 
 func test_render_cb01_unchecked():
     e := tui.NewCheckbox("Notify me", false)
@@ -161,8 +136,6 @@ func test_render_wide_label():
     testing.AssertEqStr(b.get(5, 0).ch, "")
 end
 
-// ---- Render: styled rows (CB02-CB04) ----------------------------------
-
 func test_render_cb02_checked_focused_bold():
     e := tui.NewCheckbox("Notify me", true)
     want := term.SeqMoveTo(1, 1) + sgr(tui.Style { bold = true }) + "[x] Notify me " + sgr_off(tui.Style { bold = true })
@@ -172,13 +145,10 @@ end
 func test_render_cb03_checked_disabled_dim():
     mut e := tui.NewCheckbox("Notify me", true)
     e.disabled = true
-    // Disabled wins over focus: bold is dropped and dim is set.
     want := term.SeqMoveTo(1, 1) + sgr(tui.Style { dim = true }) + "[x] Notify me " + sgr_off(tui.Style { dim = true })
     testing.AssertEqStr(ansi_of(e, 14, 14, true), want)
 end
 
-// CB11: a disabled checkbox drops a bold the caller set on either style and
-// adds dim; the same bold survives while it is enabled and focused.
 func test_render_disabled_drops_caller_bold():
     mut e := tui.NewCheckbox("Notify me", false)
     e.box_style = tui.Style { bold = true }
@@ -210,8 +180,6 @@ func test_overlay_keeps_reverse():
     e.disabled = true
     mut buf := tui.NewBuffer(9, 1)
     e.render(buf, rect(0, 0, 9, 1))
-    // The overlay swaps bold for dim but carries every other field through,
-    // reverse included; a Style literal that forgot it would drop it silently.
     testing.AssertTrue(tui.StyleEq(buf.get(2, 0).style, tui.Style { reverse = true, dim = true }))
     buf.free()
 end
@@ -219,7 +187,6 @@ end
 func test_render_cb04_box_style_only():
     mut e := tui.NewCheckbox("Notify me", false)
     e.box_style = tui.Style { fg = tui.Green }
-    // Only the three mark cells carry the box style; the label stays bare.
     want := term.SeqMoveTo(1, 1) + sgr(tui.Style { fg = tui.Green }) + "[ ]" + sgr_off(tui.Style { fg = tui.Green }) + " Notify me "
     testing.AssertEqStr(ansi_of(e, 14, 14, false), want)
 end
@@ -230,7 +197,6 @@ func test_render_styled_label_frame():
     mut b := tui.NewBuffer(14, 1)
     defer b.free()
     e.render(b, rect(0, 0, 14, 1))
-    // The label run carries label_style, including the spacer and trailing fill.
     testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
     testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, tui.Style { underline = true }))
     testing.AssertTrue(tui.StyleEq(b.get(13, 0).style, tui.Style { underline = true }))
@@ -238,11 +204,6 @@ func test_render_styled_label_frame():
     testing.AssertEqStr(b.ansi(), want)
 end
 
-// ---- SGR memo (CUR-455 probe) -----------------------------------------
-
-// After the typed-style migration: the widget builds nothing; the buffer builds one on and one
-// off sequence per styled run it writes. Rendering twice adds no strings, and
-// a second style run (the marks) costs two more.
 func test_sgr_memo_probe():
     mut e := tui.NewCheckbox("Notify me", true)
     buf := tui.NewBuffer(14, 1)
@@ -257,12 +218,9 @@ func test_sgr_memo_probe():
     e.box_style = tui.Style { fg = tui.Green }
     e.render(buf, rect(0, 0, 14, 1))
     testing.AssertEqInt(tui.SgrBuilds() - before, 0)
-    // The three mark cells are one styled run; the label stays default.
     _ := buf.ansi()
     testing.AssertEqInt(tui.SgrBuilds() - before, 2)
 end
-
-// ---- Preferred size ---------------------------------------------------
 
 func test_preferred_size():
     e := tui.NewCheckbox("Notify me", false)
@@ -272,8 +230,6 @@ func test_preferred_size():
     testing.AssertEqInt(e.preferred_size(10).width, 10)
     testing.AssertEqInt(tui.NewCheckbox("", false).preferred_size(0).width, 4)
 end
-
-// ---- Events (CK01-CK08) -----------------------------------------------
 
 func test_ck01_space_checks():
     mut e := tui.NewCheckbox("Notify me", false)
@@ -323,7 +279,6 @@ func test_ck06_click_toggles_without_focus():
     e.on_toggle = (v: bool): toggles.push(v) end
     e.set_bounds(rect(0, 0, 14, 1))
     base := toggles.len()
-    // The label cell is part of the click target, and no focus is needed.
     testing.AssertTrue(e.handle_event(click(5, 0)))
     testing.AssertTrue(e.checked())
     testing.AssertEqInt(toggles.len(), base + 1)
@@ -344,8 +299,6 @@ func test_ck08_click_outside_bounds_misses():
     testing.AssertFalse(e.checked())
 end
 
-// ---- Screen-level focus gating (CK04) and mouse routing ---------------
-
 func test_ck04_space_needs_focus():
     mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
     defer s.close()
@@ -363,7 +316,6 @@ func test_ck04_space_needs_focus():
     testing.AssertTrue(s.focus(id))
     testing.AssertTrue(s.dispatch(key(" ")))
     testing.AssertEqInt(toggles.len(), base + 1)
-    // The dyn handle shares the box the screen stores, so it shows the toggle.
     mut probe := tui.NewBuffer(14, 1)
     defer probe.free()
     w.render(probe, rect(0, 0, 14, 1))
@@ -381,7 +333,6 @@ func test_click_reaches_unfocused_checkbox():
     s.widget(other).set_bounds(rect(0, 1, 14, 1))
     testing.AssertTrue(s.focus(other))
     base := toggles.len()
-    // The click toggles the checkbox, and focus stays boldbuf the sink.
     testing.AssertTrue(s.dispatch(click(3, 0)))
     testing.AssertEqInt(toggles.len(), base + 1)
     testing.AssertEqInt(s.focused_id(), other)

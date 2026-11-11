@@ -12,26 +12,13 @@
  *
  */
 
-// Wait's statuses and the single-waiter claim behind them: three raises are
-// observed exactly three times, a null set and a null out are refused, and a
-// second concurrent waiter is told so instead of splitting the deliveries.
-// Nothing here sleeps and nothing here can park for good, so a failure is
-// always an assertion and never the harness watchdog: the arrival loop joins
-// its raiser before it waits, and in the busy pair the waiter that loses the
-// claim is the one that raises SIGWINCH, which is what wakes the parked one.
-
 import testing
 import mem
-
 import os.signal
 
-// Written by a spawned thread and read by main after join, which orders the
-// two. 99 is a value Wait never returns, so a thread that never got to its
-// assignment shows up as a failed assertion rather than as a passing 0.
 mut _busy_status := 99
 mut _arrived_status := 99
 
-// One out-block per waiter, because spawn passes a single argument.
 mut _out_a := null as void*
 mut _out_b := null as void*
 
@@ -39,10 +26,6 @@ func raiser():
     _ := signal.WakeWinch()
 end
 
-// Both waiters run this. Exactly one claims the process-wide wait and parks;
-// the other is refused at once with WaitBusy and raises, and the claim is
-// still held at that point, so that raise cannot be lost: the parked waiter
-// always wakes and neither join can hang.
 func waiter(set: void*, out: void*):
     status := signal.Wait(set, out)
     if status == signal.WaitBusy:
@@ -72,9 +55,6 @@ func test_three_raises_three_arrivals():
     mut numbers_ok := true
     mut i := 0
     until i < 3:
-        // Join the raiser first, so the signal is already queued when the
-        // wait starts: SIGWINCH is a standard signal, so one raise that is
-        // pending when sigwait runs is exactly one arrival.
         join(spawn(raiser))
         if signal.Wait(set, out) == signal.WaitArrived:
             arrivals++
@@ -93,11 +73,8 @@ func test_invalid_arguments():
     testing.AssertNotNil(set)
     out := mem.AllocateZeroed(8 as u64)
     testing.AssertNotNil(out)
-    // Both refusals happen before the claim, so neither call can wait: a null
-    // set selects nothing and a null out has nowhere to write.
     testing.AssertEqInt(signal.Wait(null, out), signal.WaitInvalid)
     testing.AssertEqInt(signal.Wait(set, null), signal.WaitInvalid)
-    // A refused call writes nothing to the caller's block.
     testing.AssertEqInt((out as i32*)[0], 0)
     mem.Free(out)
     mem.Free(set)
@@ -112,9 +89,6 @@ func test_second_waiter_is_busy():
     out_b := mem.AllocateZeroed(8 as u64)
     testing.AssertNotNil(out_a)
     testing.AssertNotNil(out_b)
-    // Two waiters, one claim. Whichever order the two threads reach Wait in,
-    // the claim holder stays parked until the refused one raises, so both
-    // joins return and the two statuses are always one of each.
     _out_a = out_a
     _out_b = out_b
     a := spawn(waiter_a, set)
@@ -123,8 +97,6 @@ func test_second_waiter_is_busy():
     join(b)
     testing.AssertEqInt(_busy_status, signal.WaitBusy)
     testing.AssertEqInt(_arrived_status, signal.WaitArrived)
-    // Only the wait that arrived wrote its block; the refused one left a
-    // zeroed block alone.
     mut numbers_ok := false
     if (out_a as i32*)[0] == signal.WinchSignal and (out_b as i32*)[0] == 0:
         numbers_ok = true

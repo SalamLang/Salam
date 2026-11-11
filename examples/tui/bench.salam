@@ -12,25 +12,11 @@
  *
  */
 
-// Benchmark, not a newcomer program. Raw serializer growth and headless
-// 200x60 frame timing.
-// Never calls start(), loop(), or next_event(). present() flushes only
-// when attached; this process never attaches, so the run is silent.
-// A frame mutates, marks that change, then does what flush() does minus
-// term.Emit: present, diff, commit. A small frame marks one widget with
-// invalidate. str has no free, so diff strings accumulate.
-// Fine for this short run, not for library code.
-// dyn Widget is a boxed copy with no downcast, so set_progress cannot
-// reach a boxed Progress and that widget is omitted. Text and Button
-// rewrite one byte of a captured heap str. List shares its Vector.
-// Input and Checkbox change through handle_event.
-
 import conv
 import mem
 import str
 import term
 import time
-
 import tui
 
 const Warmup := 100
@@ -42,7 +28,6 @@ mut rows_b := Vector {} as Vector<str>
 mut input_a := tui.Input {}
 mut input_b := tui.Input {}
 mut box := tui.NewCheckbox("flag", false)
-// Screen ids in mutate_one slot order. main fills this.
 mut slots := Vector {} as Vector<int>
 
 func heap(s: str): str:
@@ -62,7 +47,6 @@ end
 func key(code: int, ch: str): tui.Event:
     ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code, ch = ch } }
 end
-// Backspace, then one digit: the field stays one cell and still changes.
 func type_digit(w: dyn tui.Widget, digit: int):
     ch := str.CharSubstr("0123456789", digit % 10, 1)
     _ := w.handle_event(key(term.KeyBackspace, ""))
@@ -77,8 +61,6 @@ func mutate_all(n: int):
     type_digit(input_b as dyn tui.Widget, n + 1)
     _ := box.handle_event(key(term.KeySpace, ""))
 end
-// 0-4 heap strings (four Text, then Button), 5-6 lists, 7 input, 8 checkbox, 9 input.
-// d = n/10 so a widget that runs every 10th frame still changes.
 func mutate_one(n: int):
     w := n % 10
     d := n / 10
@@ -92,14 +74,12 @@ end
 func frame(screen &: tui.Screen, n: int, small: bool): int:
     if small:
         mutate_one(n)
-        // n%10 is a slot, not a screen id.
         screen.invalidate(slots.get(n % 10))
     else:
         mutate_all(n)
         screen.dirty = true
     end
     screen.present()
-    // flush() minus term.Emit. The diff str is dropped on purpose.
     out := screen.buffer.diff()
     screen.buffer.commit()
     ret out.len()
@@ -223,7 +203,6 @@ func main:
     end
     mut root := tui.NewColumn()
     mut kids := Vector {} as Vector<dyn tui.Widget>
-    // Heights 2+4+18+16+8+1+1+1+1+8 = 60. Stretch fills width 200.
     add_child(root, kids, tui.NewText(texts.get(0)) as dyn tui.Widget, 2)
     add_child(root, kids, tui.NewText(texts.get(1)) as dyn tui.Widget, 4)
     add_child(root, kids, tui.NewList(rows_a) as dyn tui.Widget, 18)
@@ -243,7 +222,6 @@ func main:
     repeat kids.len() in i:
         kid_ids.push(screen.add(tui.RootId, kids.get(i)))
     end
-    // header, body, mid, foot, button, list a, list b, input a, checkbox, input b
     slots.push(kid_ids.get(0))
     slots.push(kid_ids.get(1))
     slots.push(kid_ids.get(4))

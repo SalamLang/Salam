@@ -16,12 +16,17 @@ func embed_type_sym(s &: Sema, a &: at.Ast, tnode: int, pkg_out &: int): int:
     if dot < 0:
         ret scope_lookup_local(s, s.global, tn)
     end
-    pk := scope_lookup(s, s.global, str.Substr(tn, 0, dot))
+    pname := str.Substr(tn, 0, dot)
+    mut pk := scope_lookup(s, s.cur, pname)
+    if pk == 0:
+        pk = scope_lookup(s, s.global, pname)
+    end
     if pk == 0 or sym_at(s, pk).kind != SYM_PACKAGE:
         ret 0
     end
     pkg_out = pk
-    ret scope_lookup_local(s, sym_at(s, pk).members, str.Substr(tn, dot + 1, str.Len(tn) - dot - 1))
+    mname := pkg_member_canon(s, a, pk, str.Substr(tn, dot + 1, str.Len(tn) - dot - 1), span_of(a, tnode))
+    ret scope_lookup_local(s, sym_at(s, pk).members, mname)
 end
 
 func embed_target(s &: Sema, a &: at.Ast, fid: int, pkg_out &: int): int:
@@ -96,10 +101,18 @@ func embed_qualify_types(s &: Sema, a &: at.Ast, tnode: int, pk: int, fn: int):
     if tnode == 0:
         ret
     end
-    t := at.Get(a, tnode)
+    mut t := at.Get(a, tnode)
+    if t.kind == at.AST_TYPE and not t.synthetic:
+        t.synthetic = true
+        at.Put(a, tnode, t)
+    end
     if t.kind == at.AST_TYPE and str.Len(t.name) > 0 and str.IndexOf(t.name, ".") < 0 and not sema_is_builtin_type_name(t.name) and not embed_has_typaram(a, fn, t.name):
         if scope_lookup_local(s, sym_at(s, pk).members, t.name) != 0:
-            at.SetName(a, tnode, sym_at(s, pk).name + "." + t.name)
+            mut qual := sym_at(s, pk).pkgname
+            if str.Len(qual) == 0:
+                qual = sym_at(s, pk).name
+            end
+            at.SetName(a, tnode, qual + "." + t.name)
         end
     end
     embed_qualify_types(s, a, t.ty, pk, fn)
@@ -120,7 +133,9 @@ func embed_forwarder(s &: Sema, a &: at.Ast, fid: int, mid: int, pk: int, edid: 
     fv.is_pub = fv.is_pub and f.is_pub
     fv.is_embedded = true
     fv.is_static = false
-    at.ClearAliases(a, fwd)
+    mut flag := at.Get(a, fwd)
+    flag.is_embedded = true
+    at.Put(a, fwd, flag)
     at.SetSpan(
         a, fwd, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index, sp.length
     )
@@ -161,6 +176,33 @@ func embed_forwarder(s &: Sema, a &: at.Ast, fid: int, mid: int, pk: int, edid: 
     fv.a = blk
     at.Put(a, fwd, fv)
     ret fwd
+end
+
+func embed_adopt_alias(a &: at.Ast, did: int, mid: int):
+    m := at.Get(a, mid)
+    al := at.Aliases(a, m.ext)
+    if al.len() < 2:
+        ret
+    end
+    d := at.Get(a, did)
+    repeat d.list.len() in i:
+        oid := d.list.get(i)
+        o := at.Get(a, oid)
+        if o.kind != at.AST_FUNC_DEF or o.is_embedded or str.Equals(o.name, m.name):
+            continue
+        end
+        mut k := 1
+        until k < al.len():
+            if su_ident_eq(al.get(k), o.name):
+                used := o.name
+                at.SetName(a, oid, m.name)
+                at.AddAlias(a, oid, al.get(k - 1))
+                at.AddAlias(a, oid, used)
+                ret
+            end
+            k += 2
+        end
+    end
 end
 
 func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
@@ -216,6 +258,9 @@ func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
         end
         repeat ed.list.len() in j:
             mid := ed.list.get(j)
+            if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                embed_adopt_alias(a, did, mid)
+            end
             m := at.Get(a, mid)
             if m.kind != at.AST_FUNC_DEF or embed_skip_method(m.name) or embed_own_member(a, did, m.name):
                 continue

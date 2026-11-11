@@ -27,7 +27,7 @@ import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { ProjectDialog, ProjectPage, ProjectsHome, confirmDeleteProject } from "./Projects";
 import { useTheme } from "./theme";
-import { t } from "./i18n";
+import { isFa, setLang, t } from "./i18n";
 import { Checkbox } from "./Checkbox";
 import { pushToast } from "./Toasts";
 
@@ -1115,6 +1115,15 @@ export function App() {
           </button>
           <button type="button" className="icon-button" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
             {theme === "dark" ? <IconSun /> : <IconMoon />}
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setLang(isFa ? "en" : "fa")}
+            aria-label={t("تغییر زبان به انگلیسی", "Switch to Persian")}
+            title={isFa ? "English" : "فارسی"}
+          >
+            <IconGlobe />
           </button>
         </header>
         {route === "projects" ? (

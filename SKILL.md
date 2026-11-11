@@ -2726,7 +2726,7 @@ Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
   (language server), `dap` (debug adapter, not on Windows yet), `cli`,
   `upgrade`, `version`, plus the two SQL commands (schema check and typed
   query generation).
-- Targets: LLVM is the default backend when the compiler has it built in
+- Targets: LLVM is the default backend when the compiler includes it
   (the release builds for Linux, macOS and Windows), the C backend
   (`--backend=c`, through tcc, gcc or clang) otherwise; Windows on Arm
   defaults to the native backend. `--target=<triple>` cross-compiles with
@@ -2841,7 +2841,7 @@ assets), and no outbound sockets, so `http.Get` cannot call another server from
 the module. A program that must call out uses a few lines of `fetch` in
 `worker.js` or a native host. `salam js` is for browsers, not a Worker module.
 
-Complete examples (in the repository, not built by CI for wasm): `tests/en/apps/cloudflare-worker-router`,
+Complete examples (in the repository, not built by CI for Wasm): `tests/en/apps/cloudflare-worker-router`,
 `-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook
 answers with the Bot API call itself, so no outbound call and no token at
 runtime; `setup/setup.salam` calls `setWebhook` from a native machine). The
@@ -3010,14 +3010,14 @@ in dependency order:
 | `interp`                              | 3.5k                      | tree-walking interpreter (`salam exec`)                             |
 | `driver` / `cli`                      | 4.6k / 0.7k               | command dispatch, build orchestration                               |
 | `diag` / `logger` / `xml`             | 0.8k / 0.3k / 0.2k        | errors, logging, `--emit-tokens/-ast/-symbol`                       |
+| `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                             |
+| `fmt`                                 | 1.0k                      | source formatter (`salam format`)                                   |
 
 The table is the retired C implementation, kept as the shape to port. The
 self-hosted compiler in `compiler/` keeps that shape and has grown past it:
 `nativegen` writes machine code with its own linker, `interp` is a bytecode VM
 with a garbage collector (`SALAM_VM=0` falls back to the tree walker), and
-LLVM is the default backend whenever it is built in.
-| `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                             |
-| `fmt`                                 | 1.0k                      | source formatter (`salam format`)                                   |
+LLVM is the default backend whenever the compiler includes it.
 
 **Suggested port order:** `core` → `token`/`source` → `lexer` → `ast` →
 `parser` → `semantic` → one backend (`codegen` C) → `driver`/`cli`, then the

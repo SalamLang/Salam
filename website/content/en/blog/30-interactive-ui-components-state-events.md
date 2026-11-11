@@ -58,7 +58,7 @@ page:
 end
 ```
 
-Three details matter. First, `click = more` names the function; it does not call it. Writing `click = more()` is rejected with error E137, because the attribute wants the function itself. Second, `dom.ById("value")` is checked against the ids that really exist in the same file, so a typo such as `dom.ById("valeu")` stops the build with E138 before the page ever reaches a browser. Third, the page has no `main`. A page program is driven entirely by its handlers, and adding a `main` makes the compiler report the handlers as unused functions.
+Three details matter. First, `click = more` names the function; it does not call it. Writing `click = more()` is rejected, because the attribute wants the function itself (error E137; when the function writes page state, as `more` does here, the compiler reports the same mistake as E132). Second, `dom.ById("value")` is checked against the ids that really exist in the same file, so a typo such as `dom.ById("valeu")` stops the build with E138 before the page ever reaches a browser. Third, the page has no `main`. A page program is driven entirely by its handlers, and adding a `main` makes the compiler report the handlers as unused functions.
 
 The `dom` package covers what a handler normally needs: finding elements (`ById`, `Query`, `QueryAll`), reading and writing text and values, classes and styles, creating and removing elements, timers (`SetTimeout`, `SetInterval`, `RequestFrame`), the event itself (`EventTarget`, `EventKey`, `PreventDefault`), and browser storage (`StoreSetStr`, `StoreGetStr`). The full list is on the [dom package page](/std/dom/), and the lesson on [state, the DOM and timers](/learn/events-dom/) builds a todo list, tabs, a stopwatch and a quiz with it.
 

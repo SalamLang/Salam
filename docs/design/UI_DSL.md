@@ -56,7 +56,7 @@ gui.ui                     node tree, events, state, text through gui.typeset,
 ```
 
 `gui.color` depends on nothing in gui. `gui.flow` depends on nothing in gui.
-`gui.style` depends on `gui.color`. `gui.ui` depends on all of them.
+`gui.style` depends only on `gui.color`. `gui.ui` depends on all of them.
 
 ## Value syntax
 
@@ -285,8 +285,10 @@ pub func Default(element: str): Style     defaults per element kind (heading 1-6
 pub func Set(s &: Style, prop: int, v: Value)
 pub func Inherit(parent: Style, child &: Style)
 pub func Lerp(prop: int, a: Value, b: Value, t: f64): Value
-pub func Flow(s: Style, font_size: f64, root_font_size: f64, vw: f64, vh: f64): flow.FlowStyle
 ```
+
+`gui.style` does not import `gui.flow`. `gui.ui` maps a `Style` to a
+`flow.FlowStyle` (resolving em, rem, vw and vh to pixels) in phase 2.
 
 The compiler turns a static page value (literal AST) into canonical text and
 calls `Parse`; on failure it reports `Error` at the attribute. For web it

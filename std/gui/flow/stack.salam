@@ -1,0 +1,318 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package flow
+
+func _self_align(v: int, parent: int): int:
+    mut a := v
+    if a == ALIGN_AUTO:
+        a = parent
+    end
+    if a != ALIGN_CENTER and a != ALIGN_END and a != ALIGN_STRETCH and a != ALIGN_BASELINE:
+        a = ALIGN_START
+    end
+    ret a
+end
+
+func _place_in(al: int, free: f64, ms: f64, ams: bool, ame: bool): f64:
+    if ams and ame:
+        ret ms + _max(0.0, free) / 2.0
+    end
+    if ams:
+        ret ms + _max(0.0, free)
+    end
+    if ame:
+        ret ms
+    end
+    if al == ALIGN_CENTER:
+        ret ms + free / 2.0
+    end
+    if al == ALIGN_END:
+        ret ms + free
+    end
+    ret ms
+end
+
+func _stack(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, final: bool): Out:
+    n := t.nodes.ref(id)
+    rtl := n.rtl
+    align := n.st.align
+    justify := n.st.justify
+    inner_w := _max(0.0, kw - bx.pl - bx.pr)
+    pby := bx.pt + bx.pb
+    mut inner_h := _UNK
+    if kh >= 0.0:
+        inner_h = _max(0.0, kh - pby)
+    end
+    mut items := Vector {} as Vector<FItem>
+    defer items.free()
+    each k in n.kids:
+        if _in_flow(t.nodes.ref(k)):
+            items.push(FItem { id = k })
+        end
+    end
+    mut tall := 0.0
+    repeat items.len() in i:
+        it := items.ref(i)
+        _resolve_dir(t, it.id)
+        kb := _box(t, it.id, inner_w)
+        kn := t.nodes.ref(it.id)
+        if rtl:
+            it.ms = kb.mr
+            it.ams = kb.amr
+            it.me = kb.ml
+            it.ame = kb.aml
+        else:
+            it.ms = kb.ml
+            it.ams = kb.aml
+            it.me = kb.mr
+            it.ame = kb.amr
+        end
+        it.cs = kb.mt
+        it.acs = kb.amt
+        it.ce = kb.mb
+        it.ace = kb.amb
+        it.al = _self_align(kn.st.align_self, align)
+        if it.al == ALIGN_BASELINE:
+            it.al = ALIGN_START
+        end
+        mut js := kn.st.justify_self
+        if js == ALIGN_AUTO:
+            js = justify
+        end
+        if js != ALIGN_CENTER and js != ALIGN_END and js != ALIGN_STRETCH:
+            js = ALIGN_START
+        end
+        it.grow = js as f64
+        mx := kb.ml + kb.mr
+        my := kb.mt + kb.mb
+        it.cmin = _max(_min_len(t, it.id, kn.st.min_height, inner_h, my, false), kb.pt + kb.pb)
+        it.cmax = _max_len(t, it.id, kn.st.max_height, inner_h, my, false)
+        it.cauto = kn.st.height.kind == LEN_AUTO and kn.st.aspect_ratio <= 0.0
+        if js == ALIGN_STRETCH and kn.st.width.kind == LEN_AUTO and kn.st.aspect_ratio <= 0.0 and not it.ams and not it.ame:
+            lo := _max(_min_len(t, it.id, kn.st.min_width, inner_w, mx, true), kb.pl + kb.pr)
+            hi := _max_len(t, it.id, kn.st.max_width, inner_w, mx, true)
+            it.target = _clamp(inner_w - mx, lo, hi)
+        else:
+            it.target = _compute(t, it.id, _UNK, _UNK, _max(0.0, inner_w - mx), inner_w, inner_h, false).w
+        end
+        mut ch := _UNK
+        if it.al == ALIGN_STRETCH and it.cauto and inner_h >= 0.0 and not it.acs and not it.ace:
+            ch = _clamp(inner_h - my, it.cmin, it.cmax)
+        end
+        o := _compute(t, it.id, it.target, ch, it.target, inner_w, inner_h, false)
+        it.cross = o.h
+        it.bl = o.base
+        tall = _max(tall, it.cross + my)
+    end
+    if inner_h < 0.0:
+        inner_h = _max(0.0, _clamp(tall + pby, minh, maxh) - pby)
+        repeat items.len() in i:
+            it := items.ref(i)
+            if it.al == ALIGN_STRETCH and it.cauto and not it.acs and not it.ace:
+                nh := _clamp(inner_h - it.cs - it.ce, it.cmin, it.cmax)
+                if nh != it.cross:
+                    it.cross = nh
+                    it.bl = _compute(t, it.id, it.target, nh, it.target, inner_w, inner_h, false).base
+                end
+            end
+        end
+    end
+    mut base := -1.0
+    repeat items.len() in i:
+        it := items.ref(i)
+        mut p := _place_in(it.grow as int, inner_w - it.target - it.ms - it.me, it.ms, it.ams, it.ame)
+        if rtl:
+            p = inner_w - p - it.target
+        end
+        it.pm = p
+        it.pc = _place_in(it.al, inner_h - it.cross - it.cs - it.ce, it.cs, it.acs, it.ace)
+        if i == 0:
+            base = bx.pt + it.pc + it.bl
+        end
+        if final:
+            _compute(t, it.id, it.target, it.cross, it.target, inner_w, inner_h, true)
+            kn := t.nodes.ref(it.id)
+            kn.x = bx.pl + it.pm
+            kn.y = bx.pt + it.pc
+            kn.in_fixed = false
+        end
+    end
+    ret Out { w = kw, h = inner_h + pby, base = base }
+end
+
+func _inline(t &: Eng, id: int, kw: f64, kh: f64, bx: Box, final: bool): Out:
+    n := t.nodes.ref(id)
+    rtl := n.rtl
+    inner_w := _max(0.0, kw - bx.pl - bx.pr)
+    pby := bx.pt + bx.pb
+    mut inner_h := _UNK
+    if kh >= 0.0:
+        inner_h = _max(0.0, kh - pby)
+    end
+    gap_x := _gap(n.st.column_gap, inner_w)
+    gap_y := _gap(n.st.row_gap, inner_h)
+    mut ta := n.st.text_align
+    if ta == TEXT_LEFT:
+        ta = TEXT_START
+        if rtl:
+            ta = TEXT_END
+        end
+    else ta == TEXT_RIGHT:
+        ta = TEXT_END
+        if rtl:
+            ta = TEXT_START
+        end
+    end
+    mut items := Vector {} as Vector<FItem>
+    defer items.free()
+    each k in n.kids:
+        if _in_flow(t.nodes.ref(k)):
+            items.push(FItem { id = k })
+        end
+    end
+    _sort_order(t, items)
+    repeat items.len() in i:
+        it := items.ref(i)
+        _resolve_dir(t, it.id)
+        kb := _box(t, it.id, inner_w)
+        kn := t.nodes.ref(it.id)
+        if rtl:
+            it.ms = kb.mr
+            it.me = kb.ml
+        else:
+            it.ms = kb.ml
+            it.me = kb.mr
+        end
+        it.cs = kb.mt
+        it.ce = kb.mb
+        mut al := kn.st.align_self
+        if al == ALIGN_AUTO:
+            al = ALIGN_BASELINE
+        end
+        if al != ALIGN_CENTER and al != ALIGN_END and al != ALIGN_BASELINE:
+            al = ALIGN_START
+        end
+        it.al = al
+        it.target = _compute(t, it.id, _UNK, _UNK, _max(0.0, inner_w - it.ms - it.me), inner_w, inner_h, false).w
+        o := _compute(t, it.id, it.target, _UNK, it.target, inner_w, inner_h, false)
+        it.cross = o.h
+        it.bl = o.base
+    end
+    mut lines := Vector {} as Vector<FLine>
+    defer lines.free()
+    if items.len() > 0:
+        mut a := 0
+        mut used := 0.0
+        repeat items.len() in i:
+            it := items.get(i)
+            o := it.target + it.ms + it.me
+            if i > a and used + gap_x + o > inner_w + _EPS:
+                lines.push(FLine { a = a, b = i })
+                a = i
+                used = o
+            else:
+                if i > a:
+                    used += gap_x
+                end
+                used += o
+            end
+        end
+        lines.push(FLine { a = a, b = items.len() })
+    end
+    mut y := 0.0
+    repeat lines.len() in li:
+        ln := lines.ref(li)
+        mut asc := 0.0
+        mut desc := 0.0
+        mut maxo := 0.0
+        repeat ln.b - ln.a in k:
+            it := items.get(ln.a + k)
+            o := it.cross + it.cs + it.ce
+            if it.al == ALIGN_BASELINE:
+                up := it.cs + it.bl
+                asc = _max(asc, up)
+                desc = _max(desc, o - up)
+            else:
+                maxo = _max(maxo, o)
+            end
+        end
+        ln.asc = asc
+        ln.cross = _max(maxo, asc + desc)
+        if li > 0:
+            y += gap_y
+        end
+        ln.off = y
+        y += ln.cross
+    end
+    content := y
+    mut base := -1.0
+    repeat lines.len() in li:
+        ln := lines.get(li)
+        cnt := ln.b - ln.a
+        mut used := 0.0
+        repeat cnt in k:
+            it := items.get(ln.a + k)
+            used += it.target + it.ms + it.me
+        end
+        used += gap_x * ((cnt - 1) as f64)
+        free := inner_w - used
+        mut start := 0.0
+        mut between := gap_x
+        if ta == TEXT_CENTER:
+            start = free / 2.0
+        else ta == TEXT_END:
+            start = free
+        else ta == TEXT_JUSTIFY and li < lines.len() - 1 and cnt > 1 and free > 0.0:
+            between += free / ((cnt - 1) as f64)
+        end
+        mut p := start
+        repeat cnt in k:
+            it := items.ref(ln.a + k)
+            p += it.ms
+            mut x := p
+            if rtl:
+                x = inner_w - p - it.target
+            end
+            it.pm = x
+            p += it.target + it.me + between
+            mut cy := ln.off + it.cs
+            if it.al == ALIGN_BASELINE:
+                cy = ln.off + ln.asc - it.bl
+            else it.al == ALIGN_CENTER:
+                cy = ln.off + (ln.cross - it.cross - it.cs - it.ce) / 2.0 + it.cs
+            else it.al == ALIGN_END:
+                cy = ln.off + ln.cross - it.ce - it.cross
+            end
+            it.pc = cy
+            if base < 0.0:
+                if ln.asc > 0.0:
+                    base = bx.pt + ln.off + ln.asc
+                else:
+                    base = bx.pt + cy + it.bl
+                end
+            end
+        end
+    end
+    if final:
+        each it in items:
+            _compute(t, it.id, it.target, it.cross, it.target, inner_w, inner_h, true)
+            kn := t.nodes.ref(it.id)
+            kn.x = bx.pl + it.pm
+            kn.y = bx.pt + it.pc
+            kn.in_fixed = false
+        end
+    end
+    ret Out { w = kw, h = content + pby, base = base }
+end

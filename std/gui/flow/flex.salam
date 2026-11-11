@@ -1,0 +1,640 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package flow
+
+struct FItem:
+    pub id: int = 0
+    pub base: f64 = 0.0
+    pub hyp: f64 = 0.0
+    pub minm: f64 = 0.0
+    pub maxm: f64 = 0.0
+    pub target: f64 = 0.0
+    pub frozen: bool = false
+    pub viol: f64 = 0.0
+    pub grow: f64 = 0.0
+    pub shrink: f64 = 0.0
+    pub ms: f64 = 0.0
+    pub me: f64 = 0.0
+    pub ams: bool = false
+    pub ame: bool = false
+    pub cs: f64 = 0.0
+    pub ce: f64 = 0.0
+    pub acs: bool = false
+    pub ace: bool = false
+    pub cross: f64 = 0.0
+    pub cmin: f64 = 0.0
+    pub cmax: f64 = 0.0
+    pub cauto: bool = false
+    pub bl: f64 = 0.0
+    pub al: int = 0
+    pub pm: f64 = 0.0
+    pub pc: f64 = 0.0
+end
+
+struct FLine:
+    pub a: int = 0
+    pub b: int = 0
+    pub cross: f64 = 0.0
+    pub asc: f64 = 0.0
+    pub off: f64 = 0.0
+end
+
+func _abs(v: f64): f64:
+    if v < 0.0:
+        ret 0.0 - v
+    end
+    ret v
+end
+
+func _sort_order(t &: Eng, items &: Vector<FItem>):
+    mut any := false
+    each it in items:
+        if t.nodes.ref(it.id).st.order != 0:
+            any = true
+            break
+        end
+    end
+    if not any:
+        ret
+    end
+    mut i := 1
+    until i < items.len():
+        cur := items.get(i)
+        key := t.nodes.ref(cur.id).st.order
+        mut j := i
+        until j > 0 and t.nodes.ref(items.get(j - 1).id).st.order > key:
+            items.set(j, items.get(j - 1))
+            j--
+        end
+        items.set(j, cur)
+        i++
+    end
+end
+
+func _resolve_flex(items &: Vector<FItem>, a: int, b: int, main: f64, gap: f64):
+    cnt := b - a
+    if cnt <= 0:
+        ret
+    end
+    gaps := gap * ((cnt - 1) as f64)
+    mut used := gaps
+    repeat cnt in k:
+        it := items.ref(a + k)
+        used += it.hyp + it.ms + it.me
+    end
+    grow := used < main
+    repeat cnt in k:
+        it := items.ref(a + k)
+        it.target = it.hyp
+        it.frozen = false
+        mut f := it.shrink
+        if grow:
+            f = it.grow
+        end
+        if f <= 0.0 or (grow and it.base > it.hyp) or (not grow and it.base < it.hyp):
+            it.frozen = true
+        end
+    end
+    mut initial := main - gaps
+    repeat cnt in k:
+        it := items.ref(a + k)
+        initial -= it.ms + it.me
+        if it.frozen:
+            initial -= it.target
+        else:
+            initial -= it.base
+        end
+    end
+    mut guard := 0
+    until guard < cnt + 2:
+        guard++
+        mut any := false
+        mut sumf := 0.0
+        mut rem := main - gaps
+        repeat cnt in k:
+            it := items.ref(a + k)
+            rem -= it.ms + it.me
+            if it.frozen:
+                rem -= it.target
+            else:
+                rem -= it.base
+                any = true
+                if grow:
+                    sumf += it.grow
+                else:
+                    sumf += it.shrink
+                end
+            end
+        end
+        if not any:
+            break
+        end
+        if sumf < 1.0:
+            x := initial * sumf
+            if _abs(x) < _abs(rem):
+                rem = x
+            end
+        end
+        mut scaled := 0.0
+        repeat cnt in k:
+            it := items.ref(a + k)
+            if not it.frozen:
+                scaled += it.shrink * it.base
+            end
+        end
+        repeat cnt in k:
+            it := items.ref(a + k)
+            if it.frozen:
+                continue
+            end
+            if rem == 0.0 or sumf <= 0.0:
+                it.target = it.base
+            else grow:
+                it.target = it.base + rem * it.grow / sumf
+            else scaled > 0.0:
+                it.target = it.base + rem * (it.shrink * it.base / scaled)
+            else:
+                it.target = it.base
+            end
+        end
+        mut total := 0.0
+        repeat cnt in k:
+            it := items.ref(a + k)
+            if it.frozen:
+                continue
+            end
+            c := _clamp(it.target, it.minm, it.maxm)
+            it.viol = c - it.target
+            total += it.viol
+            it.target = c
+        end
+        repeat cnt in k:
+            it := items.ref(a + k)
+            if it.frozen:
+                continue
+            end
+            if _abs(total) < _EPS or (total > 0.0 and it.viol > 0.0) or (total < 0.0 and it.viol < 0.0):
+                it.frozen = true
+            end
+        end
+    end
+end
+
+func _distribute(mode: int, free: f64, cnt: int, gap: f64): (f64, f64):
+    mut start := 0.0
+    mut between := gap
+    switch mode:
+        ALIGN_CENTER:
+            start = free / 2.0
+            break
+        end
+        ALIGN_END:
+            start = free
+            break
+        end
+        ALIGN_BETWEEN:
+            if free > 0.0 and cnt > 1:
+                between += free / ((cnt - 1) as f64)
+            end
+            break
+        end
+        ALIGN_AROUND:
+            if free > 0.0 and cnt > 0:
+                start = free / (2.0 * (cnt as f64))
+                between += free / (cnt as f64)
+            else:
+                start = free / 2.0
+            end
+            break
+        end
+        ALIGN_EVENLY:
+            if free > 0.0 and cnt > 0:
+                start = free / ((cnt + 1) as f64)
+                between += free / ((cnt + 1) as f64)
+            else:
+                start = free / 2.0
+            end
+            break
+        end
+        else:
+        end
+    end
+    ret start, between
+end
+
+func _flex(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, final: bool): Out:
+    n := t.nodes.ref(id)
+    row := n.st.layout == LAYOUT_ROW
+    rtl := n.rtl
+    rev := n.st.reverse
+    wrap := n.st.wrap
+    align := n.st.align
+    justify := n.st.justify
+    acontent := n.st.align_content
+    inner_w := _max(0.0, kw - bx.pl - bx.pr)
+    mut inner_h := _UNK
+    if kh >= 0.0:
+        inner_h = _max(0.0, kh - bx.pt - bx.pb)
+    end
+    pby := bx.pt + bx.pb
+    mut flip := rev
+    if row:
+        flip = rtl != rev
+    end
+    cflip := (not row) and rtl
+    mut gap_main := _gap(n.st.row_gap, inner_h)
+    mut gap_cross := _gap(n.st.column_gap, inner_w)
+    if row:
+        gap_main = _gap(n.st.column_gap, inner_w)
+        gap_cross = _gap(n.st.row_gap, inner_h)
+    end
+    mut items := Vector {} as Vector<FItem>
+    defer items.free()
+    each k in n.kids:
+        if _in_flow(t.nodes.ref(k)):
+            items.push(FItem { id = k })
+        end
+    end
+    _sort_order(t, items)
+    mut mref := inner_h
+    if row:
+        mref = inner_w
+    end
+    repeat items.len() in i:
+        it := items.ref(i)
+        _resolve_dir(t, it.id)
+        kb := _box(t, it.id, inner_w)
+        kn := t.nodes.ref(it.id)
+        if row:
+            if flip:
+                it.ms = kb.mr
+                it.ams = kb.amr
+                it.me = kb.ml
+                it.ame = kb.aml
+            else:
+                it.ms = kb.ml
+                it.ams = kb.aml
+                it.me = kb.mr
+                it.ame = kb.amr
+            end
+            it.cs = kb.mt
+            it.acs = kb.amt
+            it.ce = kb.mb
+            it.ace = kb.amb
+        else:
+            if flip:
+                it.ms = kb.mb
+                it.ams = kb.amb
+                it.me = kb.mt
+                it.ame = kb.amt
+            else:
+                it.ms = kb.mt
+                it.ams = kb.amt
+                it.me = kb.mb
+                it.ame = kb.amb
+            end
+            if cflip:
+                it.cs = kb.mr
+                it.acs = kb.amr
+                it.ce = kb.ml
+                it.ace = kb.aml
+            else:
+                it.cs = kb.ml
+                it.acs = kb.aml
+                it.ce = kb.mr
+                it.ace = kb.amr
+            end
+        end
+        it.grow = _max(0.0, kn.st.grow)
+        it.shrink = _max(0.0, kn.st.shrink)
+        mut al := kn.st.align_self
+        if al == ALIGN_AUTO:
+            al = align
+        end
+        if al != ALIGN_CENTER and al != ALIGN_END and al != ALIGN_STRETCH and al != ALIGN_BASELINE:
+            al = ALIGN_START
+        end
+        if al == ALIGN_BASELINE and not row:
+            al = ALIGN_START
+        end
+        it.al = al
+        mxi := kb.ml + kb.mr
+        myi := kb.mt + kb.mb
+        if row:
+            it.minm = _max(_min_len(t, it.id, kn.st.min_width, inner_w, mxi, true), kb.pl + kb.pr)
+            it.maxm = _max_len(t, it.id, kn.st.max_width, inner_w, mxi, true)
+            it.cmin = _max(_min_len(t, it.id, kn.st.min_height, inner_h, myi, false), kb.pt + kb.pb)
+            it.cmax = _max_len(t, it.id, kn.st.max_height, inner_h, myi, false)
+            it.cauto = kn.st.height.kind == LEN_AUTO and kn.st.aspect_ratio <= 0.0
+        else:
+            it.minm = _max(_min_len(t, it.id, kn.st.min_height, inner_h, myi, false), kb.pt + kb.pb)
+            it.maxm = _max_len(t, it.id, kn.st.max_height, inner_h, myi, false)
+            it.cmin = _max(_min_len(t, it.id, kn.st.min_width, inner_w, mxi, true), kb.pl + kb.pr)
+            it.cmax = _max_len(t, it.id, kn.st.max_width, inner_w, mxi, true)
+            it.cauto = kn.st.width.kind == LEN_AUTO and kn.st.aspect_ratio <= 0.0
+        end
+        it.maxm = _max(it.maxm, it.minm)
+        if not row:
+            if not wrap and it.cauto and it.al == ALIGN_STRETCH and not it.acs and not it.ace:
+                it.cross = _clamp(inner_w - it.cs - it.ce, it.cmin, it.cmax)
+            else:
+                it.cross = _compute(t, it.id, _UNK, _UNK, _max(0.0, inner_w - it.cs - it.ce), inner_w, inner_h, false).w
+            end
+        end
+        kn2 := t.nodes.ref(it.id)
+        basis := kn2.st.basis
+        mut b := _size_def(basis, mref, it.ms + it.me)
+        mut bk := basis.kind
+        if b < 0.0 and bk == LEN_AUTO:
+            if row:
+                b = _size_def(kn2.st.width, mref, it.ms + it.me)
+                bk = kn2.st.width.kind
+            else:
+                b = _size_def(kn2.st.height, mref, it.ms + it.me)
+                bk = kn2.st.height.kind
+            end
+        end
+        if b < 0.0:
+            if row:
+                mut a := _AV_MAX
+                if bk == LEN_MIN_CONTENT:
+                    a = _AV_MIN
+                else bk == LEN_FIT:
+                    a = _max(0.0, inner_w - it.ms - it.me)
+                end
+                b = _compute(t, it.id, _UNK, _UNK, a, inner_w, inner_h, false).w
+            else:
+                b = _compute(t, it.id, it.cross, _UNK, it.cross, inner_w, inner_h, false).h
+            end
+        end
+        it.base = b
+        it.hyp = _clamp(b, it.minm, it.maxm)
+    end
+    mut main_size := inner_h
+    if row:
+        main_size = inner_w
+    end
+    mut limit := main_size
+    if limit < 0.0:
+        limit = _INF
+        if maxh < _INF:
+            limit = _max(0.0, maxh - pby)
+        end
+    end
+    mut lines := Vector {} as Vector<FLine>
+    defer lines.free()
+    if items.len() > 0:
+        if not wrap:
+            lines.push(FLine { a = 0, b = items.len() })
+        else:
+            mut a := 0
+            mut used := 0.0
+            repeat items.len() in i:
+                it := items.get(i)
+                o := it.hyp + it.ms + it.me
+                if i > a and used + gap_main + o > limit + _EPS:
+                    lines.push(FLine { a = a, b = i })
+                    a = i
+                    used = o
+                else:
+                    if i > a:
+                        used += gap_main
+                    end
+                    used += o
+                end
+            end
+            lines.push(FLine { a = a, b = items.len() })
+        end
+    end
+    if main_size < 0.0:
+        mut big := 0.0
+        each ln in lines:
+            mut s := 0.0
+            repeat ln.b - ln.a in k:
+                it := items.get(ln.a + k)
+                s += it.hyp + it.ms + it.me
+            end
+            s += gap_main * ((ln.b - ln.a - 1) as f64)
+            big = _max(big, s)
+        end
+        main_size = _max(0.0, _clamp(big + pby, minh, maxh) - pby)
+    end
+    each ln in lines:
+        _resolve_flex(items, ln.a, ln.b, main_size, gap_main)
+    end
+    repeat items.len() in i:
+        it := items.ref(i)
+        if row:
+            o := _compute(t, it.id, it.target, _UNK, it.target, inner_w, inner_h, false)
+            it.cross = o.h
+            it.bl = o.base
+        end
+    end
+    mut cross_known := inner_w
+    if row:
+        cross_known = inner_h
+    end
+    repeat lines.len() in li:
+        ln := lines.ref(li)
+        mut maxo := 0.0
+        mut asc := 0.0
+        mut desc := 0.0
+        repeat ln.b - ln.a in k:
+            it := items.get(ln.a + k)
+            o := it.cross + it.cs + it.ce
+            if it.al == ALIGN_BASELINE and not it.acs and not it.ace:
+                up := it.cs + it.bl
+                asc = _max(asc, up)
+                desc = _max(desc, o - up)
+            else:
+                maxo = _max(maxo, o)
+            end
+        end
+        ln.asc = asc
+        if not wrap and cross_known >= 0.0:
+            ln.cross = cross_known
+        else:
+            ln.cross = _max(maxo, asc + desc)
+        end
+    end
+    mut inner_cross := cross_known
+    if inner_cross < 0.0:
+        mut s := 0.0
+        each ln in lines:
+            s += ln.cross
+        end
+        if lines.len() > 1:
+            s += gap_cross * ((lines.len() - 1) as f64)
+        end
+        inner_cross = _max(0.0, _clamp(s + pby, minh, maxh) - pby)
+        if not wrap and lines.len() == 1:
+            l0 := lines.ref(0)
+            l0.cross = inner_cross
+        end
+    end
+    if wrap and lines.len() > 0:
+        mut total := 0.0
+        each ln in lines:
+            total += ln.cross
+        end
+        total += gap_cross * ((lines.len() - 1) as f64)
+        free := inner_cross - total
+        if acontent == ALIGN_STRETCH and free > 0.0:
+            add := free / (lines.len() as f64)
+            repeat lines.len() in li:
+                lr := lines.ref(li)
+                lr.cross += add
+            end
+        end
+        mut mode := acontent
+        if mode == ALIGN_STRETCH:
+            mode = ALIGN_START
+        end
+        start, between := _distribute(mode, free, lines.len(), gap_cross)
+        mut p := start
+        repeat lines.len() in li:
+            ln := lines.ref(li)
+            ln.off = p
+            p += ln.cross + between
+        end
+    end
+    each ln in lines:
+        repeat ln.b - ln.a in k:
+            it := items.ref(ln.a + k)
+            if it.al == ALIGN_STRETCH and it.cauto and not it.acs and not it.ace:
+                it.cross = _clamp(ln.cross - it.cs - it.ce, it.cmin, it.cmax)
+            end
+        end
+    end
+    each ln in lines:
+        cnt := ln.b - ln.a
+        mut used := 0.0
+        mut autos := 0
+        repeat cnt in k:
+            it := items.get(ln.a + k)
+            used += it.target + it.ms + it.me
+            if it.ams:
+                autos++
+            end
+            if it.ame:
+                autos++
+            end
+        end
+        used += gap_main * ((cnt - 1) as f64)
+        free := main_size - used
+        mut auto_each := 0.0
+        mut start := 0.0
+        mut between := gap_main
+        if autos > 0:
+            if free > 0.0:
+                auto_each = free / (autos as f64)
+            end
+        else:
+            start, between = _distribute(justify, free, cnt, gap_main)
+        end
+        mut p := start
+        repeat cnt in k:
+            it := items.ref(ln.a + k)
+            p += it.ms
+            if it.ams:
+                p += auto_each
+            end
+            it.pm = p
+            p += it.target + it.me + between
+            if it.ame:
+                p += auto_each
+            end
+            o := it.cross + it.cs + it.ce
+            cfree := ln.cross - o
+            mut pc := it.cs
+            if it.acs or it.ace:
+                if it.acs and it.ace:
+                    pc = it.cs + _max(0.0, cfree) / 2.0
+                else it.acs:
+                    pc = it.cs + _max(0.0, cfree)
+                end
+            else it.al == ALIGN_CENTER:
+                pc = it.cs + cfree / 2.0
+            else it.al == ALIGN_END:
+                pc = it.cs + cfree
+            else it.al == ALIGN_BASELINE:
+                pc = ln.asc - it.bl
+            end
+            it.pc = ln.off + pc
+        end
+    end
+    mut base := -1.0
+    if items.len() > 0:
+        if row:
+            ln := lines.get(0)
+            repeat ln.b - ln.a in k:
+                it := items.get(ln.a + k)
+                if it.al == ALIGN_BASELINE:
+                    base = bx.pt + ln.off + ln.asc
+                    break
+                end
+            end
+            if base < 0.0:
+                it := items.get(0)
+                base = bx.pt + it.pc + it.bl
+            end
+        else:
+            it := items.get(0)
+            o := _compute(t, it.id, it.cross, it.target, it.cross, inner_w, inner_h, false)
+            mut mp := it.pm
+            if flip:
+                mp = main_size - it.pm - it.target
+            end
+            base = bx.pt + mp + o.base
+        end
+    end
+    if final:
+        each it in items:
+            mut mp := it.pm
+            if flip:
+                mp = main_size - it.pm - it.target
+            end
+            mut cp := it.pc
+            if cflip:
+                cp = inner_cross - it.pc - it.cross
+            end
+            mut x := 0.0
+            mut y := 0.0
+            mut w := 0.0
+            mut h := 0.0
+            if row:
+                x = bx.pl + mp
+                y = bx.pt + cp
+                w = it.target
+                h = it.cross
+            else:
+                x = bx.pl + cp
+                y = bx.pt + mp
+                w = it.cross
+                h = it.target
+            end
+            _compute(t, it.id, w, h, w, inner_w, inner_h, true)
+            kn := t.nodes.ref(it.id)
+            kn.x = x
+            kn.y = y
+            kn.in_fixed = false
+        end
+    end
+    mut h := main_size + pby
+    if row:
+        h = inner_cross + pby
+    end
+    ret Out { w = kw, h = h, base = base }
+end

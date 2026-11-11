@@ -88,3 +88,31 @@ before `std/tls` can rely on it in the self-host chain.
 - `tools/bench/aes_gcm_hw.salam` prints MB/s for AES-128-GCM, AES-256-GCM and
   ChaCha20-Poly1305 at 1 KB, 16 KB and 1 MB, with a checksum of the last output.
   Run it once normally and once with `SALAM_NO_HWCRYPTO=1`.
+
+## Measured
+
+Machine: AMD EPYC (virtual), AES-NI and PCLMULQDQ present, shared and loaded, so
+wall-clock numbers are rough. Build: `--backend=llvm --release`. Instruction
+counts come from callgrind and are the reliable figures: the cost per byte is the
+difference between runs over 2 MB and 6 MB, which removes key setup.
+
+| cipher            | size  | software, instructions/byte | hardware, instructions/byte |
+| ----------------- | ----- | --------------------------- | --------------------------- |
+| AES-128-GCM       | 1 KB  | 57.1                        | 3.42                        |
+| AES-128-GCM       | 16 KB | 55.9                        | 3.06                        |
+| AES-128-GCM       | 1 MB  | 55.8                        | 3.05                        |
+| AES-256-GCM       | 1 KB  | 74.1                        | 3.81                        |
+| AES-256-GCM       | 16 KB | 72.7                        | 3.44                        |
+| AES-256-GCM       | 1 MB  | 72.6                        | 3.42                        |
+| ChaCha20-Poly1305 | all   | 28.1 to 30.0                | unchanged                   |
+
+Wall clock on the loaded machine, single runs of `tools/bench/aes_gcm_hw.salam`:
+AES-128-GCM 95 to 160 MB/s in software and 1200 to 2400 MB/s in hardware;
+ChaCha20-Poly1305 160 to 360 MB/s either way. Results were checked against
+OpenSSL (python `cryptography`) on 368 random cases up to 1 MB with associated
+data, for both key sizes and both paths, and against the NIST GCM vectors in
+`aes_fast_gcm`.
+
+Not run: AArch64. The code is compiled for `aarch64-linux-gnu` and the object
+contains `aese`, `aesmc` and `pmull`, but there was no AArch64 machine or
+emulator, so its results are unchecked.

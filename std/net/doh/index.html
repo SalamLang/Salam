@@ -244,100 +244,6 @@ println doh.LookupHost(resolver, "example.com")</code></pre>
 <li>No logging happens by itself.</li>
 </ul>
 <h2 id="types">Types</h2>
-<article class="api-item"><h3 class="api-name" id="Response"><code dir="ltr">Response</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Response</span></code></pre><div class="api-doc">The answer of one <code>Query</code>: the raw DNS message, the decoded message, how long it took and which server gave it.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when a valid DNS message with the same id came back. A name that does not exist is still ok: look at the message's rcode.</td></tr><tr><td><code dir="ltr">raw</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>The answer as DNS wire bytes. Free it with <code>FreeResponse</code>.</td></tr><tr><td><code dir="ltr">msg</code></td><td><code dir="ltr">dns.Message</code></td><td>The decoded <code>dns.Message</code>: its questions, answers and rcode.</td></tr><tr><td><code dir="ltr">rtt_ms</code></td><td><code dir="ltr">i64 = 0</code></td><td>The round trip time in milliseconds.</td></tr><tr><td><code dir="ltr">server</code></td><td><code dir="ltr">str = ""</code></td><td>The name of the server that answered.</td></tr><tr><td><code dir="ltr">err</code></td><td><code dir="ltr">str = ""</code></td><td>A readable reason when <code>ok</code> is false, such as <code>id mismatch</code> or a connection error.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Query.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Query" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Query"><span class="tok-k">import</span> compress
-<span class="tok-k">import</span> mem
-<span class="tok-k">import</span> net.dns
-<span class="tok-k">import</span> net.doh
-<span class="tok-k">import</span> net.udp
-<span class="tok-k">import</span> sync
-
-<span class="tok-k">mut</span> udp_port := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> queries := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
-
-<span class="tok-k">func</span> <span class="tok-f">record</span>(name: <span class="tok-t">str</span>, rtype: <span class="tok-t">int</span>, ttl: <span class="tok-t">int</span>, data: <span class="tok-t">str</span>): dns.Record:
-    <span class="tok-k">ret</span> dns.Record { name = name, rtype = rtype, rclass = <span class="tok-n">1</span>, ttl = ttl, data = data }
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">answer_for</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): compress.ByteBuf:
-    queries++
-    question := dns.<span class="tok-f">Decode</span>(p, n)
-    asked := question.questions.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-    <span class="tok-k">mut</span> records := <span class="tok-t">Vector</span> {} <span class="tok-k">as</span> <span class="tok-t">Vector</span>&lt;dns.Record&gt;
-    <span class="tok-k">mut</span> rcode := <span class="tok-n">0</span>
-    <span class="tok-k">if</span> asked.name == <span class="tok-s">&quot;a.test&quot;</span> <span class="tok-k">and</span> asked.qtype == dns.TypeA:
-        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">120</span>, <span class="tok-s">&quot;10.0.0.1&quot;</span>))
-        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">300</span>, <span class="tok-s">&quot;10.0.0.2&quot;</span>))
-    <span class="tok-k">else</span> asked.name == <span class="tok-s">&quot;v6.test&quot;</span> <span class="tok-k">and</span> asked.qtype == dns.TypeAAAA:
-        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;v6.test&quot;</span>, dns.TypeAAAA, <span class="tok-n">300</span>, <span class="tok-s">&quot;2001:db8::5&quot;</span>))
-    <span class="tok-k">else</span> asked.name == <span class="tok-s">&quot;txt.test&quot;</span> <span class="tok-k">and</span> asked.qtype == dns.TypeTXT:
-        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;txt.test&quot;</span>, dns.TypeTXT, <span class="tok-n">60</span>, <span class="tok-s">&quot;hello world&quot;</span>))
-    <span class="tok-k">else</span> asked.name == <span class="tok-s">&quot;alias.test&quot;</span>:
-        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;alias.test&quot;</span>, dns.TypeCNAME, <span class="tok-n">60</span>, <span class="tok-s">&quot;target.test&quot;</span>))
-        <span class="tok-k">if</span> asked.qtype == dns.TypeA:
-            records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;target.test&quot;</span>, dns.TypeA, <span class="tok-n">60</span>, <span class="tok-s">&quot;10.9.9.9&quot;</span>))
-        <span class="tok-k">end</span>
-    <span class="tok-k">else</span>:
-        rcode = <span class="tok-n">3</span>
-    <span class="tok-k">end</span>
-    <span class="tok-k">ret</span> doh.<span class="tok-f">EncodeResponse</span>(question.id, asked.name, asked.qtype, rcode, records)
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">udp_server</span>():
-    s := udp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
-    udp_port = udp.<span class="tok-f">Port</span>(s)
-    sync.<span class="tok-f">Done</span>(ready)
-    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">2048</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    <span class="tok-k">mut</span> from_host := <span class="tok-s">&quot;&quot;</span>
-    <span class="tok-k">mut</span> from_port := <span class="tok-n">0</span>
-    <span class="tok-k">until</span> <span class="tok-k">true</span>:
-        n := udp.<span class="tok-f">ReceiveBytes</span>(s, buf, <span class="tok-n">2048</span>, from_host, from_port)
-        <span class="tok-k">if</span> n &gt; <span class="tok-n">0</span>:
-            answer := <span class="tok-f">answer_for</span>(buf, n)
-            udp.<span class="tok-f">SendBytes</span>(s, from_host, from_port, answer.data, answer.len)
-        <span class="tok-k">end</span>
-    <span class="tok-k">end</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">start_mock</span>():
-    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">1</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
-    _t := <span class="tok-f">spawn</span>(udp_server)
-    sync.<span class="tok-f">Wait</span>(ready)
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">mock_server</span>(name: <span class="tok-t">str</span>): doh.Server:
-    <span class="tok-k">mut</span> server := doh.<span class="tok-f">NewPlain</span>(name, <span class="tok-s">&quot;127.0.0.1&quot;</span>)
-    server.port = udp_port
-    <span class="tok-k">ret</span> server
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    <span class="tok-f">start_mock</span>()
-    server := <span class="tok-f">mock_server</span>(<span class="tok-s">&quot;mock&quot;</span>)
-    <span class="tok-b">println</span> server.kind == doh.KindUDP, server.port == udp_port, server.use_tls, server.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-
-    <span class="tok-k">mut</span> r := doh.<span class="tok-f">Query</span>(server, <span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">2000</span>)
-    <span class="tok-b">println</span> r.ok, r.server, r.msg.rcode, r.msg.answers.items.<span class="tok-f">len</span>(), r.msg.answers.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>).data
-    <span class="tok-b">println</span> r.raw.len &gt; <span class="tok-n">12</span>, r.err.<span class="tok-f">len</span>()
-    doh.<span class="tok-f">FreeResponse</span>(r)
-
-    <span class="tok-k">mut</span> direct := doh.<span class="tok-f">QueryAddr</span>(server, <span class="tok-s">&quot;127.0.0.1&quot;</span>, <span class="tok-s">&quot;v6.test&quot;</span>, dns.TypeAAAA, <span class="tok-n">2000</span>)
-    <span class="tok-b">println</span> direct.ok, direct.msg.answers.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>).data
-    doh.<span class="tok-f">FreeResponse</span>(direct)
-
-    <span class="tok-k">mut</span> missing := doh.<span class="tok-f">Query</span>(server, <span class="tok-s">&quot;nothing.test&quot;</span>, dns.TypeA, <span class="tok-n">2000</span>)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;missing name:&quot;</span>, missing.ok, missing.msg.rcode, missing.msg.answers.items.<span class="tok-f">len</span>()
-    doh.<span class="tok-f">FreeResponse</span>(missing)
-
-    dead := doh.<span class="tok-f">NewServer</span>(<span class="tok-s">&quot;dead&quot;</span>, doh.KindDoH, <span class="tok-s">&quot;http://127.0.0.1:1/dns-query&quot;</span>)
-    failed := doh.<span class="tok-f">Query</span>(dead, <span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">500</span>)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;dead server:&quot;</span>, failed.ok, failed.err.<span class="tok-f">len</span>() &gt; <span class="tok-n">0</span>
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>true true false 127.0.0.1
-true mock 0 2 10.0.0.1
-true 0
-true 2001:db8:0:0:0:0:0:5
-missing name: true 3 0
-dead server: false true</div></div></article>
 <article class="api-item"><h3 class="api-name" id="CacheEntry"><code dir="ltr">CacheEntry</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">CacheEntry</span></code></pre><div class="api-doc">One cached answer: the bytes, when it expires and whether it is a cached failure.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">raw</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>The cached answer as DNS wire bytes.</td></tr><tr><td><code dir="ltr">expires_ms</code></td><td><code dir="ltr">i64 = 0</code></td><td>When the entry expires, as a time in milliseconds.</td></tr><tr><td><code dir="ltr">negative</code></td><td><code dir="ltr">bool = false</code></td><td>True for a cached 'no such name' or 'no data' answer.</td></tr></tbody></table></div></article>
 <article class="api-item"><h3 class="api-name" id="Answer"><code dir="ltr">Answer</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Answer</span></code></pre><div class="api-doc">What <code>Resolve</code> returns: the answer, and whether it came from the cache.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when some server gave a usable answer, or the cache did.</td></tr><tr><td><code dir="ltr">cached</code></td><td><code dir="ltr">bool = false</code></td><td>True when the answer came from the cache without asking a server.</td></tr><tr><td><code dir="ltr">negative</code></td><td><code dir="ltr">bool = false</code></td><td>True when the answer says the name does not exist or has no data of that type.</td></tr><tr><td><code dir="ltr">rcode</code></td><td><code dir="ltr">int = 0</code></td><td>The DNS response code: 0 is success, 3 is a name that does not exist.</td></tr><tr><td><code dir="ltr">ttl</code></td><td><code dir="ltr">int = 0</code></td><td>How many seconds the answer may still be used, after the limits of <code>SetTTLLimits</code>.</td></tr><tr><td><code dir="ltr">raw</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>The answer as DNS wire bytes. Free it with <code>FreeAnswer</code>.</td></tr><tr><td><code dir="ltr">msg</code></td><td><code dir="ltr">dns.Message</code></td><td>The decoded <code>dns.Message</code>.</td></tr><tr><td><code dir="ltr">server</code></td><td><code dir="ltr">str = ""</code></td><td>The name of the server that answered, empty for a cached answer.</td></tr><tr><td><code dir="ltr">err</code></td><td><code dir="ltr">str = ""</code></td><td>Why no server could answer, when <code>ok</code> is false.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Resolver.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Resolver" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Resolver"><span class="tok-k">import</span> compress
 <span class="tok-k">import</span> mem
@@ -478,82 +384,100 @@ none
 bootstrap set</div></div></article>
 <article class="api-item"><h3 class="api-name" id="ResolverStats"><code dir="ltr">ResolverStats</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ResolverStats</span></code></pre><div class="api-doc">Counters of a resolver. <code>Stats</code> returns them.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">hits</code></td><td><code dir="ltr">i64 = 0</code></td><td>Questions answered from the cache.</td></tr><tr><td><code dir="ltr">misses</code></td><td><code dir="ltr">i64 = 0</code></td><td>Questions that were not in the cache.</td></tr><tr><td><code dir="ltr">upstream</code></td><td><code dir="ltr">i64 = 0</code></td><td>Servers asked in total (a failed server and its successor count twice).</td></tr><tr><td><code dir="ltr">failures</code></td><td><code dir="ltr">i64 = 0</code></td><td>Questions that no server could answer.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Resolver"><code dir="ltr">Resolver</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Resolver</span></code></pre><div class="api-doc">A caching resolver over a list of servers: it asks them in order, falls over to the next on failure and remembers answers for their TTL. Make it with <code>NewResolver</code>; it is safe to use from several threads.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">st</code></td><td><code dir="ltr">State*</code></td><td>The internal state: servers, cache, limits and counters.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Server"><code dir="ltr">Server</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Server</span></code></pre><div class="api-doc">One DNS server and how to talk to it: the protocol, where it is and which addresses to try first. The preset functions and <code>NewServer</code>, <code>NewDoT</code> and <code>NewPlain</code> make them.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">name</code></td><td><code dir="ltr">str = ""</code></td><td>A short name for logs and for <code>server</code>.</td></tr><tr><td><code dir="ltr">kind</code></td><td><code dir="ltr">int = 0</code></td><td><code>KindDoH</code>, <code>KindDoHGet</code>, <code>KindDoT</code> or <code>KindUDP</code>.</td></tr><tr><td><code dir="ltr">url</code></td><td><code dir="ltr">str = ""</code></td><td>The URL of a DoH endpoint, such as <code>https://dns.google/dns-query</code>.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The host name (for the TLS name and the <code>Host</code> header) or the IP.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port: 443 for DoH, 853 for DoT, 53 for plain DNS.</td></tr><tr><td><code dir="ltr">path</code></td><td><code dir="ltr">str = ""</code></td><td>The request path of a DoH endpoint.</td></tr><tr><td><code dir="ltr">use_tls</code></td><td><code dir="ltr">bool = true</code></td><td>True when the server uses TLS. It is true for DoH over <code>https</code> and for DoT.</td></tr><tr><td><code dir="ltr">addrs</code></td><td><code dir="ltr">Vector<str></code></td><td>IP addresses to connect to, so that the server's own name does not have to be looked up first. This is what makes an encrypted resolver work when DNS is the thing that is blocked.</td></tr><tr><td><code dir="ltr">insecure</code></td><td><code dir="ltr">bool = false</code></td><td>True to skip the certificate check. For tests only.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Servers.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Servers" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Servers"><span class="tok-k">import</span> net.doh
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    cloudflare := doh.<span class="tok-f">Cloudflare</span>()
-    <span class="tok-b">println</span> cloudflare.name, cloudflare.kind == doh.KindDoH, cloudflare.url, cloudflare.host, cloudflare.port, cloudflare.path, cloudflare.use_tls
-    <span class="tok-b">println</span> cloudflare.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>), cloudflare.addrs.<span class="tok-f">get</span>(<span class="tok-n">1</span>)
-    <span class="tok-b">println</span> doh.<span class="tok-f">Google</span>().host, doh.<span class="tok-f">Google</span>().addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>), doh.<span class="tok-f">Quad9</span>().host, doh.<span class="tok-f">Quad9</span>().addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-    dot := doh.<span class="tok-f">CloudflareDoT</span>()
-    <span class="tok-b">println</span> dot.kind == doh.KindDoT, dot.host, dot.port, dot.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-    <span class="tok-b">println</span> doh.<span class="tok-f">GoogleDoT</span>().addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>), doh.<span class="tok-f">Quad9DoT</span>().host
-
-    custom := doh.<span class="tok-f">NewServer</span>(<span class="tok-s">&quot;mine&quot;</span>, doh.KindDoHGet, <span class="tok-s">&quot;https://dns.example.net/resolve&quot;</span>)
-    <span class="tok-b">println</span> custom.kind == doh.KindDoHGet, custom.host, custom.path, custom.addrs.<span class="tok-f">len</span>()
-    pinned := doh.<span class="tok-f">WithBootstrap</span>(custom, <span class="tok-s">&quot;203.0.113.53&quot;</span>)
-    <span class="tok-b">println</span> pinned.addrs.<span class="tok-f">len</span>(), custom.addrs.<span class="tok-f">len</span>(), pinned.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-
-    mine := doh.<span class="tok-f">NewDoT</span>(<span class="tok-s">&quot;dot&quot;</span>, <span class="tok-s">&quot;dns.example.net&quot;</span>, <span class="tok-s">&quot;203.0.113.54&quot;</span>)
-    plain := doh.<span class="tok-f">NewPlain</span>(<span class="tok-s">&quot;plain&quot;</span>, <span class="tok-s">&quot;203.0.113.55&quot;</span>)
-    <span class="tok-b">println</span> mine.port, mine.use_tls, plain.port, plain.kind == doh.KindUDP, plain.use_tls
-    <span class="tok-b">println</span> doh.KindDoH, doh.KindDoHGet, doh.KindDoT, doh.KindUDP
-
-    <span class="tok-k">mut</span> servers := doh.<span class="tok-f">DefaultServers</span>()
-    <span class="tok-b">println</span> servers.<span class="tok-f">len</span>(), servers.<span class="tok-f">get</span>(<span class="tok-n">0</span>).name, servers.<span class="tok-f">get</span>(<span class="tok-n">2</span>).name
-    iran := doh.<span class="tok-f">IranPlainServers</span>()
-    <span class="tok-b">println</span> iran.<span class="tok-f">len</span>(), iran.<span class="tok-f">get</span>(<span class="tok-n">0</span>).name, iran.<span class="tok-f">get</span>(<span class="tok-n">0</span>).port, iran.<span class="tok-f">get</span>(<span class="tok-n">0</span>).addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-    <span class="tok-b">println</span> doh.<span class="tok-f">Shecan</span>().<span class="tok-f">len</span>(), doh.<span class="tok-f">Electro</span>().<span class="tok-f">get</span>(<span class="tok-n">0</span>).name, doh.<span class="tok-f">Radar</span>().<span class="tok-f">get</span>(<span class="tok-n">1</span>).name, doh.<span class="tok-f">Begzar</span>().<span class="tok-f">get</span>(<span class="tok-n">0</span>).addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-    doh.<span class="tok-f">FreeServers</span>(servers)
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>cloudflare true https://cloudflare-dns.com/dns-query cloudflare-dns.com 443 /dns-query true
-1.1.1.1 1.0.0.1
-dns.google 8.8.8.8 dns.quad9.net 9.9.9.9
-true one.one.one.one 853 1.1.1.1
-8.8.8.8 dns.quad9.net
-true dns.example.net /resolve 0
-1 0 203.0.113.53
-853 true 53 true false
-0 1 2 3
-3 cloudflare quad9
-6 shecan 53 178.22.122.100
-2 electro radar2 185.55.226.26</div></div></article>
-<article class="api-item"><h3 class="api-name" id="Url"><code dir="ltr">Url</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Url</span></code></pre><div class="api-doc">A parsed DoH URL: scheme (as <code>use_tls</code>), host, port and path.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the URL was valid.</td></tr><tr><td><code dir="ltr">use_tls</code></td><td><code dir="ltr">bool = true</code></td><td>True for <code>https</code>, false for <code>http</code>.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The host.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port, or 443 or 80 when the URL has none.</td></tr><tr><td><code dir="ltr">path</code></td><td><code dir="ltr">str = ""</code></td><td>The path with the query, at least <code>/</code>.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Parse.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Parse" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Parse"><span class="tok-k">import</span> compress
+<article class="api-item"><h3 class="api-name" id="Response"><code dir="ltr">Response</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Response</span></code></pre><div class="api-doc">The answer of one <code>Query</code>: the raw DNS message, the decoded message, how long it took and which server gave it.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when a valid DNS message with the same id came back. A name that does not exist is still ok: look at the message's rcode.</td></tr><tr><td><code dir="ltr">raw</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>The answer as DNS wire bytes. Free it with <code>FreeResponse</code>.</td></tr><tr><td><code dir="ltr">msg</code></td><td><code dir="ltr">dns.Message</code></td><td>The decoded <code>dns.Message</code>: its questions, answers and rcode.</td></tr><tr><td><code dir="ltr">rtt_ms</code></td><td><code dir="ltr">i64 = 0</code></td><td>The round trip time in milliseconds.</td></tr><tr><td><code dir="ltr">server</code></td><td><code dir="ltr">str = ""</code></td><td>The name of the server that answered.</td></tr><tr><td><code dir="ltr">err</code></td><td><code dir="ltr">str = ""</code></td><td>A readable reason when <code>ok</code> is false, such as <code>id mismatch</code> or a connection error.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Query.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Query" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Query"><span class="tok-k">import</span> compress
+<span class="tok-k">import</span> mem
 <span class="tok-k">import</span> net.dns
 <span class="tok-k">import</span> net.doh
+<span class="tok-k">import</span> net.udp
+<span class="tok-k">import</span> sync
+
+<span class="tok-k">mut</span> udp_port := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> queries := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
+
+<span class="tok-k">func</span> <span class="tok-f">record</span>(name: <span class="tok-t">str</span>, rtype: <span class="tok-t">int</span>, ttl: <span class="tok-t">int</span>, data: <span class="tok-t">str</span>): dns.Record:
+    <span class="tok-k">ret</span> dns.Record { name = name, rtype = rtype, rclass = <span class="tok-n">1</span>, ttl = ttl, data = data }
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">answer_for</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): compress.ByteBuf:
+    queries++
+    question := dns.<span class="tok-f">Decode</span>(p, n)
+    asked := question.questions.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+    <span class="tok-k">mut</span> records := <span class="tok-t">Vector</span> {} <span class="tok-k">as</span> <span class="tok-t">Vector</span>&lt;dns.Record&gt;
+    <span class="tok-k">mut</span> rcode := <span class="tok-n">0</span>
+    <span class="tok-k">if</span> asked.name == <span class="tok-s">&quot;a.test&quot;</span> <span class="tok-k">and</span> asked.qtype == dns.TypeA:
+        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">120</span>, <span class="tok-s">&quot;10.0.0.1&quot;</span>))
+        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">300</span>, <span class="tok-s">&quot;10.0.0.2&quot;</span>))
+    <span class="tok-k">else</span> asked.name == <span class="tok-s">&quot;v6.test&quot;</span> <span class="tok-k">and</span> asked.qtype == dns.TypeAAAA:
+        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;v6.test&quot;</span>, dns.TypeAAAA, <span class="tok-n">300</span>, <span class="tok-s">&quot;2001:db8::5&quot;</span>))
+    <span class="tok-k">else</span> asked.name == <span class="tok-s">&quot;txt.test&quot;</span> <span class="tok-k">and</span> asked.qtype == dns.TypeTXT:
+        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;txt.test&quot;</span>, dns.TypeTXT, <span class="tok-n">60</span>, <span class="tok-s">&quot;hello world&quot;</span>))
+    <span class="tok-k">else</span> asked.name == <span class="tok-s">&quot;alias.test&quot;</span>:
+        records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;alias.test&quot;</span>, dns.TypeCNAME, <span class="tok-n">60</span>, <span class="tok-s">&quot;target.test&quot;</span>))
+        <span class="tok-k">if</span> asked.qtype == dns.TypeA:
+            records.<span class="tok-f">push</span>(<span class="tok-f">record</span>(<span class="tok-s">&quot;target.test&quot;</span>, dns.TypeA, <span class="tok-n">60</span>, <span class="tok-s">&quot;10.9.9.9&quot;</span>))
+        <span class="tok-k">end</span>
+    <span class="tok-k">else</span>:
+        rcode = <span class="tok-n">3</span>
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> doh.<span class="tok-f">EncodeResponse</span>(question.id, asked.name, asked.qtype, rcode, records)
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">udp_server</span>():
+    s := udp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
+    udp_port = udp.<span class="tok-f">Port</span>(s)
+    sync.<span class="tok-f">Done</span>(ready)
+    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">2048</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    <span class="tok-k">mut</span> from_host := <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">mut</span> from_port := <span class="tok-n">0</span>
+    <span class="tok-k">until</span> <span class="tok-k">true</span>:
+        n := udp.<span class="tok-f">ReceiveBytes</span>(s, buf, <span class="tok-n">2048</span>, from_host, from_port)
+        <span class="tok-k">if</span> n &gt; <span class="tok-n">0</span>:
+            answer := <span class="tok-f">answer_for</span>(buf, n)
+            udp.<span class="tok-f">SendBytes</span>(s, from_host, from_port, answer.data, answer.len)
+        <span class="tok-k">end</span>
+    <span class="tok-k">end</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">start_mock</span>():
+    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">1</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
+    _t := <span class="tok-f">spawn</span>(udp_server)
+    sync.<span class="tok-f">Wait</span>(ready)
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">mock_server</span>(name: <span class="tok-t">str</span>): doh.Server:
+    <span class="tok-k">mut</span> server := doh.<span class="tok-f">NewPlain</span>(name, <span class="tok-s">&quot;127.0.0.1&quot;</span>)
+    server.port = udp_port
+    <span class="tok-k">ret</span> server
+<span class="tok-k">end</span>
 
 <span class="tok-k">func</span> <span class="tok-f">main</span>:
-    <span class="tok-b">println</span> doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;1.2.3.4&quot;</span>), doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;2001:db8::1&quot;</span>), doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;dns.google&quot;</span>), doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;1.2.3&quot;</span>)
-    url := doh.<span class="tok-f">ParseURL</span>(<span class="tok-s">&quot;https://dns.example.net/dns-query&quot;</span>)
-    <span class="tok-b">println</span> url.ok, url.use_tls, url.host, url.port, url.path
-    plain := doh.<span class="tok-f">ParseURL</span>(<span class="tok-s">&quot;http://127.0.0.1:8053&quot;</span>)
-    <span class="tok-b">println</span> plain.ok, plain.use_tls, plain.port, plain.path
-    <span class="tok-b">println</span> doh.<span class="tok-f">ParseURL</span>(<span class="tok-s">&quot;ftp://x&quot;</span>).ok
+    <span class="tok-f">start_mock</span>()
+    server := <span class="tok-f">mock_server</span>(<span class="tok-s">&quot;mock&quot;</span>)
+    <span class="tok-b">println</span> server.kind == doh.KindUDP, server.port == udp_port, server.use_tls, server.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
 
-    <span class="tok-k">mut</span> v4 := compress.<span class="tok-f">NewByteBuf</span>()
-    <span class="tok-b">println</span> doh.<span class="tok-f">ParseIPv4</span>(<span class="tok-s">&quot;10.0.0.7&quot;</span>, v4), v4.len
-    <span class="tok-k">mut</span> v6 := compress.<span class="tok-f">NewByteBuf</span>()
-    <span class="tok-b">println</span> doh.<span class="tok-f">ParseIPv6</span>(<span class="tok-s">&quot;2001:db8::7&quot;</span>, v6), v6.len
-    <span class="tok-b">println</span> doh.<span class="tok-f">ParseIPv4</span>(<span class="tok-s">&quot;10.0.0&quot;</span>, compress.<span class="tok-f">NewByteBuf</span>())
+    <span class="tok-k">mut</span> r := doh.<span class="tok-f">Query</span>(server, <span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">2000</span>)
+    <span class="tok-b">println</span> r.ok, r.server, r.msg.rcode, r.msg.answers.items.<span class="tok-f">len</span>(), r.msg.answers.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>).data
+    <span class="tok-b">println</span> r.raw.len &gt; <span class="tok-n">12</span>, r.err.<span class="tok-f">len</span>()
+    doh.<span class="tok-f">FreeResponse</span>(r)
 
-    <span class="tok-k">mut</span> records := <span class="tok-t">Vector</span> {} <span class="tok-k">as</span> <span class="tok-t">Vector</span>&lt;dns.Record&gt;
-    records.<span class="tok-f">push</span>(dns.Record { name = <span class="tok-s">&quot;example.test&quot;</span>, rtype = dns.TypeA, rclass = <span class="tok-n">1</span>, ttl = <span class="tok-n">300</span>, data = <span class="tok-s">&quot;192.0.2.7&quot;</span> })
-    wire := doh.<span class="tok-f">EncodeResponse</span>(<span class="tok-n">4242</span>, <span class="tok-s">&quot;example.test&quot;</span>, dns.TypeA, <span class="tok-n">0</span>, records)
-    message := dns.<span class="tok-f">Decode</span>(wire.data, wire.len)
-    <span class="tok-b">println</span> message.id, message.qr, message.rcode, message.questions.items.<span class="tok-f">len</span>(), message.answers.items.<span class="tok-f">len</span>()
-    answer := message.answers.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
-    <span class="tok-b">println</span> answer.name, answer.ttl, answer.data
-    nx := doh.<span class="tok-f">EncodeResponse</span>(<span class="tok-n">7</span>, <span class="tok-s">&quot;nothing.test&quot;</span>, dns.TypeA, <span class="tok-n">3</span>, <span class="tok-t">Vector</span> {} <span class="tok-k">as</span> <span class="tok-t">Vector</span>&lt;dns.Record&gt;)
-    <span class="tok-b">println</span> dns.<span class="tok-f">Decode</span>(nx.data, nx.len).rcode
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>true true false false
-true true dns.example.net 443 /dns-query
-true false 8053 /
-false
-true 4
-true 16
-false
-4242 true 0 1 1
-example.test 300 192.0.2.7
-3</div></div></article>
+    <span class="tok-k">mut</span> direct := doh.<span class="tok-f">QueryAddr</span>(server, <span class="tok-s">&quot;127.0.0.1&quot;</span>, <span class="tok-s">&quot;v6.test&quot;</span>, dns.TypeAAAA, <span class="tok-n">2000</span>)
+    <span class="tok-b">println</span> direct.ok, direct.msg.answers.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>).data
+    doh.<span class="tok-f">FreeResponse</span>(direct)
+
+    <span class="tok-k">mut</span> missing := doh.<span class="tok-f">Query</span>(server, <span class="tok-s">&quot;nothing.test&quot;</span>, dns.TypeA, <span class="tok-n">2000</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;missing name:&quot;</span>, missing.ok, missing.msg.rcode, missing.msg.answers.items.<span class="tok-f">len</span>()
+    doh.<span class="tok-f">FreeResponse</span>(missing)
+
+    dead := doh.<span class="tok-f">NewServer</span>(<span class="tok-s">&quot;dead&quot;</span>, doh.KindDoH, <span class="tok-s">&quot;http://127.0.0.1:1/dns-query&quot;</span>)
+    failed := doh.<span class="tok-f">Query</span>(dead, <span class="tok-s">&quot;a.test&quot;</span>, dns.TypeA, <span class="tok-n">500</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;dead server:&quot;</span>, failed.ok, failed.err.<span class="tok-f">len</span>() &gt; <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>true true false 127.0.0.1
+true mock 0 2 10.0.0.1
+true 0
+true 2001:db8:0:0:0:0:0:5
+missing name: true 3 0
+dead server: false true</div></div></article>
 <article class="api-item"><h3 class="api-name" id="Stub"><code dir="ltr">Stub</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Stub</span></code></pre><div class="api-doc">A small DNS server on a local UDP port that answers other programs from a <code>Resolver</code>. Point a program's DNS at it and its lookups go through your encrypted resolver and cache. Start it with <code>StartStub</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the port was bound.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The UDP port it listens on, useful when you asked for 0.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The address the stub listens on.</td></tr><tr><td><code dir="ltr">tcp_ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the TCP side of the stub is listening too.</td></tr><tr><td><code dir="ltr">st</code></td><td><code dir="ltr">StubState*</code></td><td>The internal state.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Stub.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Stub" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Stub"><span class="tok-k">import</span> compress
 <span class="tok-k">import</span> mem
 <span class="tok-k">import</span> net.dns
@@ -667,6 +591,82 @@ a.test true 0 2 1
 a.test true 0 2 1
 nothing.test true 3 0 2
 served: 3</div></div></article>
+<article class="api-item"><h3 class="api-name" id="Server"><code dir="ltr">Server</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Server</span></code></pre><div class="api-doc">One DNS server and how to talk to it: the protocol, where it is and which addresses to try first. The preset functions and <code>NewServer</code>, <code>NewDoT</code> and <code>NewPlain</code> make them.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">name</code></td><td><code dir="ltr">str = ""</code></td><td>A short name for logs and for <code>server</code>.</td></tr><tr><td><code dir="ltr">kind</code></td><td><code dir="ltr">int = 0</code></td><td><code>KindDoH</code>, <code>KindDoHGet</code>, <code>KindDoT</code> or <code>KindUDP</code>.</td></tr><tr><td><code dir="ltr">url</code></td><td><code dir="ltr">str = ""</code></td><td>The URL of a DoH endpoint, such as <code>https://dns.google/dns-query</code>.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The host name (for the TLS name and the <code>Host</code> header) or the IP.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port: 443 for DoH, 853 for DoT, 53 for plain DNS.</td></tr><tr><td><code dir="ltr">path</code></td><td><code dir="ltr">str = ""</code></td><td>The request path of a DoH endpoint.</td></tr><tr><td><code dir="ltr">use_tls</code></td><td><code dir="ltr">bool = true</code></td><td>True when the server uses TLS. It is true for DoH over <code>https</code> and for DoT.</td></tr><tr><td><code dir="ltr">addrs</code></td><td><code dir="ltr">Vector<str></code></td><td>IP addresses to connect to, so that the server's own name does not have to be looked up first. This is what makes an encrypted resolver work when DNS is the thing that is blocked.</td></tr><tr><td><code dir="ltr">insecure</code></td><td><code dir="ltr">bool = false</code></td><td>True to skip the certificate check. For tests only.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Servers.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Servers" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Servers"><span class="tok-k">import</span> net.doh
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    cloudflare := doh.<span class="tok-f">Cloudflare</span>()
+    <span class="tok-b">println</span> cloudflare.name, cloudflare.kind == doh.KindDoH, cloudflare.url, cloudflare.host, cloudflare.port, cloudflare.path, cloudflare.use_tls
+    <span class="tok-b">println</span> cloudflare.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>), cloudflare.addrs.<span class="tok-f">get</span>(<span class="tok-n">1</span>)
+    <span class="tok-b">println</span> doh.<span class="tok-f">Google</span>().host, doh.<span class="tok-f">Google</span>().addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>), doh.<span class="tok-f">Quad9</span>().host, doh.<span class="tok-f">Quad9</span>().addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+    dot := doh.<span class="tok-f">CloudflareDoT</span>()
+    <span class="tok-b">println</span> dot.kind == doh.KindDoT, dot.host, dot.port, dot.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+    <span class="tok-b">println</span> doh.<span class="tok-f">GoogleDoT</span>().addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>), doh.<span class="tok-f">Quad9DoT</span>().host
+
+    custom := doh.<span class="tok-f">NewServer</span>(<span class="tok-s">&quot;mine&quot;</span>, doh.KindDoHGet, <span class="tok-s">&quot;https://dns.example.net/resolve&quot;</span>)
+    <span class="tok-b">println</span> custom.kind == doh.KindDoHGet, custom.host, custom.path, custom.addrs.<span class="tok-f">len</span>()
+    pinned := doh.<span class="tok-f">WithBootstrap</span>(custom, <span class="tok-s">&quot;203.0.113.53&quot;</span>)
+    <span class="tok-b">println</span> pinned.addrs.<span class="tok-f">len</span>(), custom.addrs.<span class="tok-f">len</span>(), pinned.addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+
+    mine := doh.<span class="tok-f">NewDoT</span>(<span class="tok-s">&quot;dot&quot;</span>, <span class="tok-s">&quot;dns.example.net&quot;</span>, <span class="tok-s">&quot;203.0.113.54&quot;</span>)
+    plain := doh.<span class="tok-f">NewPlain</span>(<span class="tok-s">&quot;plain&quot;</span>, <span class="tok-s">&quot;203.0.113.55&quot;</span>)
+    <span class="tok-b">println</span> mine.port, mine.use_tls, plain.port, plain.kind == doh.KindUDP, plain.use_tls
+    <span class="tok-b">println</span> doh.KindDoH, doh.KindDoHGet, doh.KindDoT, doh.KindUDP
+
+    <span class="tok-k">mut</span> servers := doh.<span class="tok-f">DefaultServers</span>()
+    <span class="tok-b">println</span> servers.<span class="tok-f">len</span>(), servers.<span class="tok-f">get</span>(<span class="tok-n">0</span>).name, servers.<span class="tok-f">get</span>(<span class="tok-n">2</span>).name
+    iran := doh.<span class="tok-f">IranPlainServers</span>()
+    <span class="tok-b">println</span> iran.<span class="tok-f">len</span>(), iran.<span class="tok-f">get</span>(<span class="tok-n">0</span>).name, iran.<span class="tok-f">get</span>(<span class="tok-n">0</span>).port, iran.<span class="tok-f">get</span>(<span class="tok-n">0</span>).addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+    <span class="tok-b">println</span> doh.<span class="tok-f">Shecan</span>().<span class="tok-f">len</span>(), doh.<span class="tok-f">Electro</span>().<span class="tok-f">get</span>(<span class="tok-n">0</span>).name, doh.<span class="tok-f">Radar</span>().<span class="tok-f">get</span>(<span class="tok-n">1</span>).name, doh.<span class="tok-f">Begzar</span>().<span class="tok-f">get</span>(<span class="tok-n">0</span>).addrs.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+    doh.<span class="tok-f">FreeServers</span>(servers)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>cloudflare true https://cloudflare-dns.com/dns-query cloudflare-dns.com 443 /dns-query true
+1.1.1.1 1.0.0.1
+dns.google 8.8.8.8 dns.quad9.net 9.9.9.9
+true one.one.one.one 853 1.1.1.1
+8.8.8.8 dns.quad9.net
+true dns.example.net /resolve 0
+1 0 203.0.113.53
+853 true 53 true false
+0 1 2 3
+3 cloudflare quad9
+6 shecan 53 178.22.122.100
+2 electro radar2 185.55.226.26</div></div></article>
+<article class="api-item"><h3 class="api-name" id="Url"><code dir="ltr">Url</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Url</span></code></pre><div class="api-doc">A parsed DoH URL: scheme (as <code>use_tls</code>), host, port and path.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the URL was valid.</td></tr><tr><td><code dir="ltr">use_tls</code></td><td><code dir="ltr">bool = true</code></td><td>True for <code>https</code>, false for <code>http</code>.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The host.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port, or 443 or 80 when the URL has none.</td></tr><tr><td><code dir="ltr">path</code></td><td><code dir="ltr">str = ""</code></td><td>The path with the query, at least <code>/</code>.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Parse.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Parse" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Parse"><span class="tok-k">import</span> compress
+<span class="tok-k">import</span> net.dns
+<span class="tok-k">import</span> net.doh
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    <span class="tok-b">println</span> doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;1.2.3.4&quot;</span>), doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;2001:db8::1&quot;</span>), doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;dns.google&quot;</span>), doh.<span class="tok-f">IsIP</span>(<span class="tok-s">&quot;1.2.3&quot;</span>)
+    url := doh.<span class="tok-f">ParseURL</span>(<span class="tok-s">&quot;https://dns.example.net/dns-query&quot;</span>)
+    <span class="tok-b">println</span> url.ok, url.use_tls, url.host, url.port, url.path
+    plain := doh.<span class="tok-f">ParseURL</span>(<span class="tok-s">&quot;http://127.0.0.1:8053&quot;</span>)
+    <span class="tok-b">println</span> plain.ok, plain.use_tls, plain.port, plain.path
+    <span class="tok-b">println</span> doh.<span class="tok-f">ParseURL</span>(<span class="tok-s">&quot;ftp://x&quot;</span>).ok
+
+    <span class="tok-k">mut</span> v4 := compress.<span class="tok-f">NewByteBuf</span>()
+    <span class="tok-b">println</span> doh.<span class="tok-f">ParseIPv4</span>(<span class="tok-s">&quot;10.0.0.7&quot;</span>, v4), v4.len
+    <span class="tok-k">mut</span> v6 := compress.<span class="tok-f">NewByteBuf</span>()
+    <span class="tok-b">println</span> doh.<span class="tok-f">ParseIPv6</span>(<span class="tok-s">&quot;2001:db8::7&quot;</span>, v6), v6.len
+    <span class="tok-b">println</span> doh.<span class="tok-f">ParseIPv4</span>(<span class="tok-s">&quot;10.0.0&quot;</span>, compress.<span class="tok-f">NewByteBuf</span>())
+
+    <span class="tok-k">mut</span> records := <span class="tok-t">Vector</span> {} <span class="tok-k">as</span> <span class="tok-t">Vector</span>&lt;dns.Record&gt;
+    records.<span class="tok-f">push</span>(dns.Record { name = <span class="tok-s">&quot;example.test&quot;</span>, rtype = dns.TypeA, rclass = <span class="tok-n">1</span>, ttl = <span class="tok-n">300</span>, data = <span class="tok-s">&quot;192.0.2.7&quot;</span> })
+    wire := doh.<span class="tok-f">EncodeResponse</span>(<span class="tok-n">4242</span>, <span class="tok-s">&quot;example.test&quot;</span>, dns.TypeA, <span class="tok-n">0</span>, records)
+    message := dns.<span class="tok-f">Decode</span>(wire.data, wire.len)
+    <span class="tok-b">println</span> message.id, message.qr, message.rcode, message.questions.items.<span class="tok-f">len</span>(), message.answers.items.<span class="tok-f">len</span>()
+    answer := message.answers.items.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+    <span class="tok-b">println</span> answer.name, answer.ttl, answer.data
+    nx := doh.<span class="tok-f">EncodeResponse</span>(<span class="tok-n">7</span>, <span class="tok-s">&quot;nothing.test&quot;</span>, dns.TypeA, <span class="tok-n">3</span>, <span class="tok-t">Vector</span> {} <span class="tok-k">as</span> <span class="tok-t">Vector</span>&lt;dns.Record&gt;)
+    <span class="tok-b">println</span> dns.<span class="tok-f">Decode</span>(nx.data, nx.len).rcode
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>true true false false
+true true dns.example.net 443 /dns-query
+true false 8053 /
+false
+true 4
+true 16
+false
+4242 true 0 1 1
+example.test 300 192.0.2.7
+3</div></div></article>
 <h2 id="values">Constants and variables</h2>
 <article class="api-item"><h3 class="api-name" id="Kind"><span>Server kinds</span> <code dir="ltr">Kind…</code></h3><div class="api-doc">The values of <code>kind</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="KindDoH"><td><code dir="ltr">KindDoH</code></td><td><code dir="ltr">0</code></td></tr><tr id="KindDoHGet"><td><code dir="ltr">KindDoHGet</code></td><td><code dir="ltr">1</code></td></tr><tr id="KindDoT"><td><code dir="ltr">KindDoT</code></td><td><code dir="ltr">2</code></td></tr><tr id="KindUDP"><td><code dir="ltr">KindUDP</code></td><td><code dir="ltr">3</code></td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-doh-Http.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-doh-Http" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-doh-Http"><span class="tok-k">import</span> compress
 <span class="tok-k">import</span> mem
@@ -805,11 +805,6 @@ true 192.0.2.80
 true 192.0.2.80
 POST GET</div></div></article>
 <h2 id="funcs">Functions</h2>
-<article class="api-item"><h3 class="api-name" id="QueryAddr"><code dir="ltr">QueryAddr</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">QueryAddr</span>(srv: Server, addr: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>, qtype: <span class="tok-t">int</span>, timeout_ms: <span class="tok-t">int</span>): Response</code></pre><div class="api-doc">Sends one query to one address of a server and waits up to the timeout. Use it when you already know which IP to ask.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Response">net-doh-Query.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Query"><code dir="ltr">Query</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Query</span>(srv: Server, name: <span class="tok-t">str</span>, qtype: <span class="tok-t">int</span>, timeout_ms: <span class="tok-t">int</span>): Response</code></pre><div class="api-doc">Sends one query to a server, trying each of its <code>addrs</code> in turn, or resolving its host name when it has none. <code>QueryAddr</code> does one address.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Response">net-doh-Query.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="FreeResponse"><code dir="ltr">FreeResponse</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">FreeResponse</span>(r &amp;: Response)</code></pre><div class="api-doc">Frees the raw bytes of a response.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Response">net-doh-Query.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="ReusedConnections"><code dir="ltr">ReusedConnections</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ReusedConnections</span>(): <span class="tok-t">i64</span></code></pre><div class="api-doc">How many DoH queries so far used a connection kept from an earlier query.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Kind">net-doh-Http.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="CloseIdleConnections"><code dir="ltr">CloseIdleConnections</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">CloseIdleConnections</span>()</code></pre><div class="api-doc">Closes the kept DoH connections that are idle.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Kind">net-doh-Http.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="NewResolver"><code dir="ltr">NewResolver</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewResolver</span>(servers: <span class="tok-t">Vector</span>&lt;Server&gt;): Resolver</code></pre><div class="api-doc">Makes a resolver that asks these servers in order. The defaults are a minimum TTL of 10 seconds, a maximum of 86400, 30 seconds for failures, a 4000 millisecond timeout and 2048 cache entries.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="SetBootstrap"><code dir="ltr">SetBootstrap</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SetBootstrap</span>(r: Resolver, servers: <span class="tok-t">Vector</span>&lt;Server&gt;)</code></pre><div class="api-doc">Sets the servers used to find the address of a DoH or DoT server that has a host name but no <code>addrs</code>. They must be reachable by IP, for example plain ones.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="SetTTLLimits"><code dir="ltr">SetTTLLimits</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SetTTLLimits</span>(r: Resolver, min_ttl: <span class="tok-t">int</span>, max_ttl: <span class="tok-t">int</span>, neg_ttl: <span class="tok-t">int</span>)</code></pre><div class="api-doc">Sets the smallest and largest time an answer is kept, and how long a failure ('no such name') is kept, in seconds.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
@@ -825,6 +820,14 @@ POST GET</div></div></article>
 <article class="api-item"><h3 class="api-name" id="LookupTXT"><code dir="ltr">LookupTXT</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LookupTXT</span>(r: Resolver, name: <span class="tok-t">str</span>): <span class="tok-t">Vector</span>&lt;<span class="tok-t">str</span>&gt;</code></pre><div class="api-doc">Returns the TXT records of a name.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="LookupCNAME"><code dir="ltr">LookupCNAME</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LookupCNAME</span>(r: Resolver, name: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the canonical name a name points to, or an empty text.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="LookupHost"><code dir="ltr">LookupHost</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LookupHost</span>(r: Resolver, name: <span class="tok-t">str</span>): <span class="tok-t">Vector</span>&lt;<span class="tok-t">str</span>&gt;</code></pre><div class="api-doc">Returns the addresses of a name, IPv4 then IPv6. A name that is already an IP comes back as itself without asking anyone.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Answer">net-doh-Resolver.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="QueryAddr"><code dir="ltr">QueryAddr</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">QueryAddr</span>(srv: Server, addr: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>, qtype: <span class="tok-t">int</span>, timeout_ms: <span class="tok-t">int</span>): Response</code></pre><div class="api-doc">Sends one query to one address of a server and waits up to the timeout. Use it when you already know which IP to ask.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Response">net-doh-Query.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Query"><code dir="ltr">Query</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Query</span>(srv: Server, name: <span class="tok-t">str</span>, qtype: <span class="tok-t">int</span>, timeout_ms: <span class="tok-t">int</span>): Response</code></pre><div class="api-doc">Sends one query to a server, trying each of its <code>addrs</code> in turn, or resolving its host name when it has none. <code>QueryAddr</code> does one address.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Response">net-doh-Query.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="FreeResponse"><code dir="ltr">FreeResponse</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">FreeResponse</span>(r &amp;: Response)</code></pre><div class="api-doc">Frees the raw bytes of a response.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Response">net-doh-Query.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="ReusedConnections"><code dir="ltr">ReusedConnections</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ReusedConnections</span>(): <span class="tok-t">i64</span></code></pre><div class="api-doc">How many DoH queries so far used a connection kept from an earlier query.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Kind">net-doh-Http.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="CloseIdleConnections"><code dir="ltr">CloseIdleConnections</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">CloseIdleConnections</span>()</code></pre><div class="api-doc">Closes the kept DoH connections that are idle.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Kind">net-doh-Http.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="StartStub"><code dir="ltr">StartStub</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StartStub</span>(r: Resolver, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>): Stub</code></pre><div class="api-doc">Starts the local DNS server on a host and port (0 picks a free port), answering on UDP and on TCP, on background threads. An empty host means <code>127.0.0.1</code>. Check <code>ok</code>, and <code>tcp_ok</code> for the TCP side.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Stub">net-doh-Stub.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="StubServed"><code dir="ltr">StubServed</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StubServed</span>(s: Stub): <span class="tok-t">i64</span></code></pre><div class="api-doc">How many queries the stub has answered.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Stub">net-doh-Stub.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="StopStub"><code dir="ltr">StopStub</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StopStub</span>(s: Stub)</code></pre><div class="api-doc">Stops the local DNS server.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Stub">net-doh-Stub.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="ParseIPv4"><code dir="ltr">ParseIPv4</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ParseIPv4</span>(text: <span class="tok-t">str</span>, out &amp;: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Parses IPv4 text into four bytes appended to a buffer. False when it is not an address.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Url">net-doh-Parse.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="ParseIPv6"><code dir="ltr">ParseIPv6</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ParseIPv6</span>(text: <span class="tok-t">str</span>, out &amp;: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Parses IPv6 text into sixteen bytes appended to a buffer. False when it is not an address.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Url">net-doh-Parse.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="IsIP"><code dir="ltr">IsIP</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">IsIP</span>(host: <span class="tok-t">str</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">True when the text is an IPv4 or IPv6 address and not a name.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Url">net-doh-Parse.salam</a></p></article>
@@ -878,9 +881,6 @@ POST GET</div></div></article>
 <article class="api-item"><h3 class="api-name" id="IranPlainServers"><code dir="ltr">IranPlainServers</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">IranPlainServers</span>(): <span class="tok-t">Vector</span>&lt;Server&gt;</code></pre><div class="api-doc">Six plain UDP servers: Shecan, 403 and Electro, for use inside Iran. Plain DNS can be read and changed by the network, so prefer <code>DefaultServers</code> where they are reachable.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Server">net-doh-Servers.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="EncodeResponse"><code dir="ltr">EncodeResponse</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">EncodeResponse</span>(id: <span class="tok-t">int</span>, name: <span class="tok-t">str</span>, qtype: <span class="tok-t">int</span>, rcode: <span class="tok-t">int</span>, records: <span class="tok-t">Vector</span>&lt;dns.Record&gt;): compress.ByteBuf</code></pre><div class="api-doc">Builds a DNS response message for a question and a list of records. It exists for tests and for the local stub, so you can make a fake DNS server in a few lines.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Url">net-doh-Parse.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="FreeServers"><code dir="ltr">FreeServers</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">FreeServers</span>(v &amp;: <span class="tok-t">Vector</span>&lt;Server&gt;)</code></pre><div class="api-doc">Frees a vector of servers and their address lists.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Server">net-doh-Servers.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="StartStub"><code dir="ltr">StartStub</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StartStub</span>(r: Resolver, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>): Stub</code></pre><div class="api-doc">Starts the local DNS server on a host and port (0 picks a free port), answering on UDP and on TCP, on background threads. An empty host means <code>127.0.0.1</code>. Check <code>ok</code>, and <code>tcp_ok</code> for the TCP side.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Stub">net-doh-Stub.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="StubServed"><code dir="ltr">StubServed</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StubServed</span>(s: Stub): <span class="tok-t">i64</span></code></pre><div class="api-doc">How many queries the stub has answered.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Stub">net-doh-Stub.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="StopStub"><code dir="ltr">StopStub</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StopStub</span>(s: Stub)</code></pre><div class="api-doc">Stops the local DNS server.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Stub">net-doh-Stub.salam</a></p></article>
 
           </div>
         </article>

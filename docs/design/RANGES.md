@@ -120,6 +120,11 @@ shapes, each now excluded:
 | W154 | an explicit cast of a known value that does not fit and loses bits          |
 | W158 | memory from `mem.Allocate` that nothing frees, returns, stores or passes on |
 
+A literal index or slice bound on a fixed array, or a literal index into a
+constant string (`xs[3]` on three elements, `xs[2:1]`, `"ab"[7]`), is checked
+by the type checker, not by this pass, so it is reported as E168 even with
+`--range-checks=off`.
+
 Unsigned arithmetic is not reported: it wraps by definition, and hashes rely
 on that. Signed overflow is reported because a `--release` build lets the
 backend assume it never happens. The constant folder (`sema_fold.salam`)

@@ -1,6 +1,6 @@
 ---
 title: What is the Salam programming language? A tour of a modern general-purpose and systems language
-seo_title: What Is the Salam Programming Language? A Complete Introduction | Salam Magazine
+seo_title: What Is the Salam Programming Language? A Complete Introduction
 description: Salam is an open source, statically typed systems language you can write in English or Persian. What it is, how it compiles, what it can build and where it falls short.
 keywords: Salam programming language, what is Salam, SalamLang, Persian programming language, bilingual programming language, systems programming language, compiled programming language, new programming language
 category: language
@@ -14,7 +14,7 @@ This article is the starting point of the Salam Magazine. It explains what kind 
 
 ## Salam in one paragraph {#summary}
 
-**Salam is a compiled, statically typed language for building everything from command-line tools and web servers to desktop apps and bare-metal kernels.** You write `func main:` and a block that ends with `end`; the compiler checks the types, generates code through C, LLVM or its own native x86-64 backend, and leaves you with a single executable for Linux, macOS, Windows or the web. There is no virtual machine and no garbage collector. A standard library of more than 170 packages covers networking, databases, cryptography, compression, images, machine learning and more, and a built-in page language turns Salam code into HTML, CSS and JavaScript. The name means "peace" and "hello" in Persian.
+**Salam is a compiled, statically typed language for building everything from command-line tools and web servers to desktop apps and bare-metal kernels.** You write `func main:` and a block that ends with `end`; the compiler checks the types, generates code through C, LLVM or its own native backend, and leaves you with a single executable for Linux, macOS, Windows or the web. There is no virtual machine and no garbage collector. A standard library of more than 170 packages covers networking, databases, cryptography, compression, images, machine learning and more, and a built-in page language turns Salam code into HTML, CSS and JavaScript. The name means "peace" and "hello" in Persian.
 
 ## A first program {#first-program}
 
@@ -51,7 +51,7 @@ If you have used Go, Rust, Swift or Python, most of Salam will look familiar. Th
 | Question | Salam's answer |
 |---|---|
 | Typing | Static, with type inference: `count := 0` is an `int`, `x := 3.14` is an `f64` |
-| Compilation | Ahead of time to native code, through C, LLVM or a native x86-64 backend |
+| Compilation | Ahead of time to native code, through C, LLVM or Salam's own native backend |
 | Memory | No garbage collector; values live on the stack, heap containers are freed with `.free()` or `defer` |
 | Data types | Structs with methods, enums that carry data, tuples, generics, interfaces, `T?` optionals |
 | Errors | `Result` values with `try`, plus `throws`, `throw` and `try`/`catch` |
@@ -113,9 +113,9 @@ The Salam compiler is self-hosting: it is written in Salam and compiles itself. 
 
 A build goes through the usual stages: lexing, parsing, semantic analysis with type inference and many static checks, then code generation. There are three backends:
 
-- **C**, the default, which hands generated C to a C compiler such as gcc, clang or the bundled tcc;
-- **LLVM**, selected with `--backend=llvm`, which also drives the WebAssembly target;
-- **a native x86-64 backend** with its own built-in linker, which needs no external toolchain at all.
+- **LLVM**, the default in the release builds (which embed it), and also the engine behind the WebAssembly target;
+- **C**, selected with `--backend=c` and used whenever LLVM is not built in, which hands generated C to gcc, clang or the bundled tcc;
+- **a native backend**, selected with `--backend=native`, which writes x86-64, 32-bit x86, AArch64, 32-bit ARM or RISC-V machine code itself and links it with a built-in linker, so it needs no external toolchain at all.
 
 The checks run before any code is generated. `salam check` stops there, which makes it the fast way to find mistakes, and its diagnostics carry stable codes (E001, W147 and so on) that you can look up. The [compiler article](/blog/how-the-salam-compiler-works/) follows a program through every stage.
 

@@ -1326,8 +1326,8 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   `os.Exists`). Lines split on `\n` only (a Windows `\r` stays), `Readline`
   returns `""` for a empty line and at EOF alike, and everything is `str`,
   so text only. `print`/`println` to a pipe or file are buffered:
-  `io.Flush()` pushes the buffer out, and a panic loses what is still in it
-  (`printerrln` is unbuffered).
+  `io.Flush()` pushes the buffer out; `printerrln`, a panic and `os.Exit`
+  write out what is still in it first (`printerrln` is unbuffered).
 - **`os`**: `Args Env Cwd Chdir Exit Abort Pid Run RunCapture Output Exists IsDir FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
   `Run`/`RunCapture`/`Output` hand the whole string to `/bin/sh` (never
   splice user input in); `RunCapture` captures stdout only (add `2>&1`).

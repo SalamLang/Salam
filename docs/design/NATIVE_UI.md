@@ -68,7 +68,8 @@ One page source, two targets:
 
 ```
 salam page build app.salam              -> app.html (web, unchanged)
-salam page run app.salam --ui=native    -> a native window, drawn by Salam
+salam run app.salam --ui=native         -> a native window, drawn by Salam
+salam build app.salam --ui=native       -> a native executable
 ```
 
 - The same syntax, elements, attributes and CSS properties on both targets.
@@ -86,10 +87,10 @@ salam page run app.salam --ui=native    -> a native window, drawn by Salam
 
 The compiler knows which UI target it is building for:
 
-| target   | how it is chosen                                          | `SALAM_UI_WEB` | `SALAM_UI_NATIVE` |
-| -------- | --------------------------------------------------------- | -------------- | ----------------- |
-| `web`    | default for every command                                 | true           | false             |
-| `native` | `--ui=native` (`salam check`, later `page run`, `bundle`) | false          | true              |
+| target   | how it is chosen                                                          | `SALAM_UI_WEB` | `SALAM_UI_NATIVE` |
+| -------- | ------------------------------------------------------------------------- | -------------- | ----------------- |
+| `web`    | default for every command                                                 | true           | false             |
+| `native` | `--ui=native` (`salam check`, `salam run`, `salam build`; later `bundle`) | false          | true              |
 
 Both names are compile-time constants, folded like `SALAM_OS_LINUX`. In
 Persian they are `سلام رابط وب` and `سلام رابط بومی`. Inside a page:
@@ -758,8 +759,9 @@ Each phase is one pull request.
    block, inline, flex, grid and table layout, absolute positioning, scrolling, painting,
    hit testing, event dispatch, focus order.
 4. **Native generator.** `compiler/sal_layout/layout_native.salam`,
-   `salam page run --ui=native`, `salam page shot` (render to PNG),
-   `ui.Run` for programs, `engine = "native"` in `salam bundle`.
+   `salam run --ui=native` and `salam build --ui=native`, `ui.Run` for
+   programs (done); `salam page shot` (render to PNG) and
+   `engine = "native"` in `salam bundle` (not yet).
 5. **Reactive state** on both targets, with two-way binding for inputs.
 6. **Widgets and input.** Every input type, text area, select with a popup,
    forms, details, dialog, progress, meter, tables, lists, text editing with

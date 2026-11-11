@@ -35,7 +35,7 @@ This skill has two parts:
   Persian programs. Read Part I for semantics and Part II for spelling; the
   semantics never differ.
 
-There is also a 46-lesson human tutorial of the language, in Persian at
+There is also a 47-lesson human tutorial of the language, in Persian at
 **<https://www.salamlang.ir/learn/>** and in English at
 **<https://salamlang.github.io/Salam/learn/>** (one page per topic, every
 example compiled and run), and a reference page for every std package under
@@ -112,7 +112,8 @@ func main:
 end
 ```
 
-Blocks open with `:` and close with `end`. `{ … }` braces are also accepted. A
+Blocks open with `:` and close with `end`; braces do not open blocks
+(`func main {` and `if x {` are parse errors: "expected ':' to open block"). A
 single-statement body may follow the `:` on the same line: `if n < 2: ret n end`.
 Comments: `//` to end of line, `/* … */` across lines.
 
@@ -885,12 +886,15 @@ end
 calls) and may appear anywhere in an expression of a statement, except where
 it would run conditionally or repeatedly: the right side of `and`/`or`, a
 `?:` branch, an `until` or `else` condition, a `defer`, or a match expression
-arm (E140; store the value first). `func main throws:` prints
+arm (E156; store the value first). `func main throws:` prints
 `error: <message>` to stderr and exits 1. `continue` cannot leave a `try:`
 block yet; `break` can. Methods and interface methods may be `throws`;
-lambdas and `extern` functions cannot. `E139` unmarked throwing call, `E140`
-misplaced `try`, `E141` misplaced or mistyped `throw`, `E142` `try` with
-nothing that can throw.
+lambdas and `extern` functions cannot. `E155` unmarked throwing call, `E156`
+`try` in a spot that runs conditionally or repeatedly, `E157` `throw` outside a
+`throws` function or a `try:` block, `E142` `try` with nothing that can throw.
+(E139 to E141 are ownership errors: use after free, double free, returning a
+value the function's own `defer` frees; `--ownership=off|on|warn|error`, warn
+by default, `docs/design/OWNERSHIP.md`.)
 
 **Generic enums and `?`:** an enum with data may take type
 parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
@@ -950,7 +954,7 @@ A plain value whose type is exactly one of the members coerces in
 automatically, in struct literals, assignments, arguments, returns and
 defaults (`Reading { value = "offline" }`). Narrow it back with `match` on
 **type-name** patterns (`int n: ... end`, `str s: ... end`). `match` on a
-union needs the **compiled** backend, not `salam exec`; see §10.
+union works on every backend, `salam exec` included.
 
 In an expression position (after `as`), parenthesize the union so it is not
 read as the boolean `or` operator: `x as (int or str)`, not `x as int or str`
@@ -2007,7 +2011,7 @@ naive port into compile errors (each corresponds to a case in
 6. **Errors are thrown and caught explicitly.** A function that can fail is
    declared `throws` and fails with `throw`; every call to it is marked `try`
    (pass the error on, only inside a `throws` function) or sits in a
-   `try: ... catch e: ... end` block. An unmarked call is E139. The error is
+   `try: ... catch e: ... end` block. An unmarked call is E155. The error is
    always the prelude type `Error`; nothing is unwound, `defer` runs, and
    panics (out-of-bounds index, `Unwrap` on None) are not caught.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
@@ -2662,8 +2666,8 @@ salam add github.com/owner/repo         # add a GitHub package (import "github.c
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages
 salam update / salam update pkg@latest  # same-major updates by default; uninstall, deps clean too (docs/PACKAGES.md)
 salam build --lib[=static]              # .so/.dylib/.dll (or .a) + NAME.h from the entry file's export: block
-salam memcheck app.salam                # build with AddressSanitizer and run
-salam version                           # print the compiler version (NOT --version)
+salam memcheck app.salam                # run under Valgrind if installed, else build with AddressSanitizer
+salam version                           # print the compiler version (--version and -v work too)
 salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
@@ -2718,12 +2722,18 @@ Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
 - `salam help` lists every command: `build`, `check`, `test`, `obj`, `llvm`,
   `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`, `add`,
   `remove`, `update`, `deps`, `install`, `uninstall`, `search`, `format`,
-  `doc`, `translate`, `page`, `debug`, `memcheck`, `inspect`, `cli`,
+  `doc`, `translate`, `page`, `debug`, `memcheck`, `inspect`, `lsp`
+  (language server), `dap` (debug adapter, not on Windows yet), `cli`,
   `upgrade`, `version`, plus the two SQL commands (schema check and typed
   query generation).
-- Targets: the C backend is the default (`build`, `run`, `obj`, cross-compile
-  with `--target=<triple>`); `salam llvm` emits LLVM IR and `--backend=llvm`
-  builds with it (32-bit aware, `docs/PLATFORMS.md`); `--target=wasm32-wasi`
+- Targets: LLVM is the default backend when the compiler has it built in
+  (the release builds for Linux, macOS and Windows), the C backend
+  (`--backend=c`, through tcc, gcc or clang) otherwise; Windows on Arm
+  defaults to the native backend. `--target=<triple>` cross-compiles with
+  `build`, `run` and `obj`; `salam llvm` emits LLVM IR (32-bit aware,
+  `docs/PLATFORMS.md`); `--backend=native` writes machine code itself for
+  x86-64, i686, AArch64, 32-bit ARM and RISC-V 64 Linux, x86-64, i686 and
+  AArch64 Windows, and x86-64 and arm64 macOS (`docs/NATIVE_BACKEND.md`); `--target=wasm32-wasi`
   builds WebAssembly; `salam js` and `salam web` target browsers;
   `--target=<arch>-unknown-none` with `--entry`, `--linker-script` and
   `--link-object` builds freestanding kernels (`docs/FREESTANDING.md`).
@@ -2831,7 +2841,7 @@ assets), and no outbound sockets, so `http.Get` cannot call another server from
 the module. A program that must call out uses a few lines of `fetch` in
 `worker.js` or a native host. `salam js` is for browsers, not a Worker module.
 
-Complete examples, built by CI: `tests/en/apps/cloudflare-worker-router`,
+Complete examples (in the repository, not built by CI for wasm): `tests/en/apps/cloudflare-worker-router`,
 `-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook
 answers with the Bot API call itself, so no outbound call and no token at
 runtime; `setup/setup.salam` calls `setWebhook` from a native machine). The
@@ -3000,6 +3010,12 @@ in dependency order:
 | `interp`                              | 3.5k                      | tree-walking interpreter (`salam exec`)                             |
 | `driver` / `cli`                      | 4.6k / 0.7k               | command dispatch, build orchestration                               |
 | `diag` / `logger` / `xml`             | 0.8k / 0.3k / 0.2k        | errors, logging, `--emit-tokens/-ast/-symbol`                       |
+
+The table is the retired C implementation, kept as the shape to port. The
+self-hosted compiler in `compiler/` keeps that shape and has grown past it:
+`nativegen` writes machine code with its own linker, `interp` is a bytecode VM
+with a garbage collector (`SALAM_VM=0` falls back to the tree walker), and
+LLVM is the default backend whenever it is built in.
 | `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                             |
 | `fmt`                                 | 1.0k                      | source formatter (`salam format`)                                   |
 
@@ -3030,7 +3046,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 - **Language directive:** a Persian file may state its language with
   `// زبان: فارسی` in its first 8 lines; an English file uses `// lang: en`.
   Mixed forms such as `// lang: fa` or `// زبان: en` are a compile error.
-- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`. There is no `اصلی` (`تابع اصلی` compiles as an ordinary function but the program has no entry point), and no `بسته اصلی` line is needed.
+- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`. There is no `اصلی`: a file with `تابع اصلی` and no `ریشه` fails to build with "نقطه‌ی ورود وجود ندارد: یک تابع 'ریشه' تعریف کنید" (no entry point), and no `بسته اصلی` line is needed.
   Its return value is the exit code, as in English (`برگشت ۱` to fail).
 - **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in
   number literals, mixed freely with ASCII. The decimal point is always `.`
@@ -3122,8 +3138,12 @@ operators instead. `open` is gone as well: file IO is `import fs`, then
 the interpreter implement them in their own runtimes; prefer `os.Env` and
 `os.Args` in new code.
 
-**Stay English in Persian files:** the compile-time constants (`SALAM_OS`,
-`SALAM_OS_WINDOWS`, ...) and C names declared in `درون‌داد`.
+**Compile-time constants have Persian names** and a Persian file must use
+them: `SALAM_OS_LINUX` is `سلام سیستم لینوکس`, `SALAM_OS_WINDOWS` is
+`سلام سیستم ویندوز`, `SALAM_OS` is `سلام سیستم`, `SALAM_ARCH` is `سلام معماری`
+(the English spelling is E001, and the message names the Persian one;
+`salam translate fa` converts them). **Stay English in Persian files:** only
+the C names declared in `درون‌داد`.
 
 Two Persian words have two meanings, told apart by position:
 
@@ -3426,9 +3446,9 @@ More forms, each checked with the current compiler:
     پایا جداکننده := "/"
 پایان
 
-// threads: spawn and join stay English
-ر := spawn(کارگر)
-join(ر)
+// threads: spawn and join are نخ‌ساز and نخ‌پیوند (the English names are E001)
+ر := نخ‌ساز(کارگر)
+نخ‌پیوند(ر)
 ```
 
 **چند مقدار برگشتی (چندتایی).** گونه‌ی برگشتی `(الف، ب)`، ساختن با `برگشت الف، ب`
@@ -3451,7 +3471,7 @@ join(ر)
 
 All of §6 applies. In addition:
 
-1. **Entry is `ریشه`:** `تابع ریشه:` ... `پایان`. A Persian file with `تابع main`, `تابع اصلی` or a `بسته اصلی` line has no entry point (the first two compile as ordinary functions, so the program builds and then does nothing).
+1. **Entry is `ریشه`:** `تابع ریشه:` ... `پایان`. A Persian file with `تابع main`, `تابع اصلی` or a `بسته اصلی` line has no entry point, and the build fails with "نقطه‌ی ورود وجود ندارد" (no entry point).
 2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
    like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In

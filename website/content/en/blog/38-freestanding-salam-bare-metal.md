@@ -14,15 +14,15 @@ This article shows how the freestanding target works, builds and boots a kernel,
 
 ## What freestanding means {#what-freestanding-means}
 
-The C standard has long separated a *hosted* implementation, where the whole standard library and an operating system are available, from a *freestanding* one, where almost nothing is. C programmers pass `-ffreestanding`, Rust programmers write `#![no_std]`, and Zig selects a `freestanding` operating system in its target. Salam selects the mode by target triple:
+The C standard has long separated a _hosted_ implementation, where the whole standard library and an operating system are available, from a _freestanding_ one, where almost nothing is. C programmers pass `-ffreestanding`, Rust programmers write `#![no_std]`, and Zig selects a `freestanding` operating system in its target. Salam selects the mode by target triple:
 
-| Target | Output | Notes |
-|---|---|---|
-| `x86_64-unknown-none` | ELF64 | For a 64-bit bootloader such as GRUB or Limine |
-| `i686-unknown-none` | ELF32 | Multiboot, QEMU `-kernel`, 32-bit PCs |
-| `aarch64-unknown-none` | ELF64 | PL011 serial at `0x09000000`, `wfi` to halt |
-| `x86_64-unknown-salamos` | ELF64 | A Salam OS userspace-style target |
-| `x86_64-unknown-salamos-kernel` | ELF64 | Defines `SALAM_KERNEL` |
+| Target                          | Output | Notes                                          |
+| ------------------------------- | ------ | ---------------------------------------------- |
+| `x86_64-unknown-none`           | ELF64  | For a 64-bit bootloader such as GRUB or Limine |
+| `i686-unknown-none`             | ELF32  | Multiboot, QEMU `-kernel`, 32-bit PCs          |
+| `aarch64-unknown-none`          | ELF64  | PL011 serial at `0x09000000`, `wfi` to halt    |
+| `x86_64-unknown-salamos`        | ELF64  | A Salam OS userspace-style target              |
+| `x86_64-unknown-salamos-kernel` | ELF64  | Defines `SALAM_KERNEL`                         |
 
 Any `*-none` or `*-salamos` triple is freestanding. A `*-uefi` triple is freestanding too but keeps the UEFI object format. The compiler turns the program into LLVM IR, compiles it to an object for the target and links it with `ld.lld`, without libc, without `crt` files and without `-lm`. If you have not used the LLVM backend before, the article on [Salam's C, LLVM and native backends](/blog/salam-code-generation-c-llvm-native/) explains where it fits.
 
@@ -159,16 +159,16 @@ The VGA buffer shows bytes as ASCII, so Persian or other UTF-8 text should go to
 
 `std/baremetal` is the Salam face of that runtime:
 
-| Function | Purpose |
-|---|---|
-| `Halt()` | Stop the CPU (`cli; hlt` on x86, `wfi` on AArch64) |
-| `Exit(code)` | Leave through `salam_rt_exit`; the kernel decides what that means |
-| `Out8(port, value)`, `In8(port)` | x86 port I/O |
-| `Clear()`, `WriteAt(row, col, text, color)` | VGA text screen |
-| `SerialWrite(text)` | Unbuffered serial output |
-| `Panic(message)` | Print a panic line and halt |
-| `ExitQemu(code)` | Leave QEMU through `isa-debug-exit` |
-| `HeapUsed()`, `HeapSize()` | Bump allocator counters in bytes |
+| Function                                    | Purpose                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| `Halt()`                                    | Stop the CPU (`cli; hlt` on x86, `wfi` on AArch64)                |
+| `Exit(code)`                                | Leave through `salam_rt_exit`; the kernel decides what that means |
+| `Out8(port, value)`, `In8(port)`            | x86 port I/O                                                      |
+| `Clear()`, `WriteAt(row, col, text, color)` | VGA text screen                                                   |
+| `SerialWrite(text)`                         | Unbuffered serial output                                          |
+| `Panic(message)`                            | Print a panic line and halt                                       |
+| `ExitQemu(code)`                            | Leave QEMU through `isa-debug-exit`                               |
+| `HeapUsed()`, `HeapSize()`                  | Bump allocator counters in bytes                                  |
 
 Like every standard library package, it has Persian names: in Persian source the package is `کرنل`, and `کرنل.توقف()` halts the CPU. A kernel can be written entirely in Persian. This one, built with the same boot stub and linker script, printed its greeting over the serial port and shut QEMU down:
 
@@ -189,7 +189,7 @@ The compiler's job here is narrow: a correct, libc-free object with a predictabl
 - **Most of the standard library is unavailable.** Files, sockets, processes, threads and wall-clock time need an operating system, so most of `os`, `fs`, `net`, `db` and `gui` are out. `str`, `mem`, `conv`, `encoding` and the collection types work, and `SALAM_KERNEL` removes the parts of `std` that cannot build in a kernel.
 - **Three architectures have a runtime.** Other machines need `--no-freestanding-runtime` and your own `malloc`, `memcpy`, `write` and `salam_rt_*` hooks.
 - **Memory is your responsibility, as everywhere in Salam.** There is no garbage collector to disable, which is good news for a kernel, but there is also no borrow checker. Salam has bounds checks in development builds and compile-time ownership warnings; read [memory management in Salam](/blog/memory-management-in-salam/) before relying on them.
-- **The demo kernel is a demo.** It proves the toolchain end to end; it has no scheduler, file system or driver model.
+- **The demo kernel is a demo.** It proves the toolchain end-to-end; it has no scheduler, file system or driver model.
 
 ## Why write a kernel in Salam {#why}
 
@@ -215,4 +215,4 @@ No. Salam never had one; heap memory is freed explicitly in every build. In free
 
 ### Can I write a Linux kernel module in Salam?
 
-Nothing in the repository supports that. Kernel modules depend on the exact kernel's build system, headers and conventions, and the freestanding target is aimed at programs that own the whole machine, not at code loaded into another kernel.
+Nothing in the repository supports that. Kernel modules depend on the exact kernel's build tool, headers and conventions, and the freestanding target is aimed at programs that own the whole machine, not at code loaded into another kernel.

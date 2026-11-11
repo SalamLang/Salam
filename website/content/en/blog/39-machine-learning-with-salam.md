@@ -14,17 +14,17 @@ This article tours that stack with complete programs and their real output, expl
 
 ## The machine learning packages at a glance {#packages}
 
-| Package | What it does |
-|---|---|
-| [`ai.tensor`](/std/ai/tensor/) | `f32` tensors, broadcasting arithmetic, matrix products, reductions, masks |
-| [`ai.autograd`](/std/ai/autograd/) | A tape that records operations and computes gradients backward |
-| [`ai.nn`](/std/ai/nn/) | Layers: linear, convolution, pooling, normalization, embedding, LSTM, GRU, attention, transformer blocks, checkpoints |
-| [`ai.optim`](/std/ai/optim/) | SGD with momentum, Adam and AdamW, RMSProp, gradient clipping, learning rate schedules |
-| [`ai.ml`](/std/ai/ml/) | Classic models in a scikit-learn style: regression, trees, forests, boosting, SVMs, k-means, PCA, metrics |
-| [`matrix`](/std/matrix/) | `f64` linear algebra: solving, decompositions, eigenvalues, SVD |
-| [`ai.onnx`](/std/ai/onnx/) | Load and run ONNX models exported from other frameworks |
-| [`ai.gguf`](/std/ai/gguf/), `ai.llm` | Read GGUF files and run small Llama-family language models on the CPU |
-| `stats`, `data`, `npy` | Descriptive statistics, data loading and batching, NumPy `.npy` and `.npz` files |
+| Package                              | What it does                                                                                                          |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| [`ai.tensor`](/std/ai/tensor/)       | `f32` tensors, broadcasting arithmetic, matrix products, reductions, masks                                            |
+| [`ai.autograd`](/std/ai/autograd/)   | A tape that records operations and computes gradients backward                                                        |
+| [`ai.nn`](/std/ai/nn/)               | Layers: linear, convolution, pooling, normalization, embedding, LSTM, GRU, attention, transformer blocks, checkpoints |
+| [`ai.optim`](/std/ai/optim/)         | SGD with momentum, Adam and AdamW, RMSProp, gradient clipping, learning rate schedules                                |
+| [`ai.ml`](/std/ai/ml/)               | Classic models in a scikit-learn style: regression, trees, forests, boosting, SVMs, k-means, PCA, metrics             |
+| [`matrix`](/std/matrix/)             | `f64` linear algebra: solving, decompositions, eigenvalues, SVD                                                       |
+| [`ai.onnx`](/std/ai/onnx/)           | Load and run ONNX models exported from other frameworks                                                               |
+| [`ai.gguf`](/std/ai/gguf/), `ai.llm` | Read GGUF files and run small Llama-family language models on the CPU                                                 |
+| `stats`, `data`, `npy`               | Descriptive statistics, data loading and batching, NumPy `.npy` and `.npz` files                                      |
 
 The design is layered: `tensor` is plain arithmetic, `autograd` records operations on tensors, `nn` builds layers on the tape, and `optim` updates the weights that `nn` keeps. If you know PyTorch, the shape is familiar; if you know scikit-learn, `ai.ml` will be.
 
@@ -232,7 +232,7 @@ The project's [benchmark](/speed/) includes three programs built on these librar
 
 ## What Salam is not, for machine learning {#limits}
 
-- **No GPU.** Everything runs on the CPU. There is no CUDA, Metal or Vulkan back end, so training anything beyond small models is impractical.
+- **No GPU.** Everything runs on the CPU. There is no CUDA, Metal or Vulkan backend, so training anything beyond small models is impractical.
 - **A small ecosystem.** PyTorch, JAX, scikit-learn and Hugging Face have years of models, tutorials and pretrained weights. Salam has a standard library and no third-party model zoo. Python remains the right place for research.
 - **`f32` tensors only.** No `f16` or `bf16` training, and integer weights are converted to `f32`.
 - **Manual memory.** Every operation makes a new tensor. In a long loop, use the `...Into` and `...InPlace` forms or free results explicitly.
@@ -248,7 +248,7 @@ Yes. `ai.nn` has linear, convolutional, recurrent, attention and transformer lay
 
 ### Does Salam support GPUs for machine learning?
 
-No. All tensor operations run on the CPU, with large operations split across threads. There is no CUDA or other GPU back end.
+No. All tensor operations run on the CPU, with large operations split across threads. There is no CUDA or other GPU backend.
 
 ### Can Salam load a PyTorch model?
 

@@ -14,7 +14,7 @@ This article follows a database application from the connection to generated cod
 
 ## Why query strings are a source of bugs {#problem}
 
-In most languages, SQL is a string. The compiler does not look inside it, so a column renamed in a migration, a table name in the plural, or a placeholder of the wrong dialect is found by the database, at run time, on whichever code path nobody tested. ORMs avoid the problem by generating the SQL, at the cost of a second query language and less control. Tools such as sqlc for Go took a different route: keep writing SQL, but parse it, check it against the schema, and generate typed code.
+In most languages, SQL is a string. The compiler does not look inside it, so a column renamed in a migration, a table name in the plural, or a placeholder of the wrong dialect is found by the database, at runtime, on whichever code path nobody tested. ORMs avoid the problem by generating the SQL, at the cost of a second query language and less control. Tools such as sqlc for Go took a different route: keep writing SQL, but parse it, check it against the schema, and generate typed code.
 
 Salam builds that route into the toolchain. The schema is the DDL you already have in your migrations, so there is no separate model file to keep in step.
 
@@ -22,11 +22,11 @@ Salam builds that route into the toolchain. The schema is the DDL you already ha
 
 Each engine has its own package, and each of them can be turned into the shared `dyn db.Connection` from the [db package](/std/db/):
 
-| Package | Engine | How it connects |
-|---|---|---|
-| [db.sqlite](/std/db/sqlite/) | SQLite, a file or `:memory:` | wraps the SQLite C library, with `Prepare` and `Bind` |
-| [db.mysql](/std/db/mysql/) | MySQL and MariaDB | speaks the client protocol in Salam, with TLS and utf8mb4; no libmysqlclient |
-| [db.postgres](/std/db/postgres/) | PostgreSQL | implements the wire protocol in Salam, with SCRAM-SHA-256 and TLS; no libpq |
+| Package                          | Engine                       | How it connects                                                              |
+| -------------------------------- | ---------------------------- | ---------------------------------------------------------------------------- |
+| [db.sqlite](/std/db/sqlite/)     | SQLite, a file or `:memory:` | wraps the SQLite C library, with `Prepare` and `Bind`                        |
+| [db.mysql](/std/db/mysql/)       | MySQL and MariaDB            | speaks the client protocol in Salam, with TLS and utf8mb4; no libmysqlclient |
+| [db.postgres](/std/db/postgres/) | PostgreSQL                   | implements the wire protocol in Salam, with SCRAM-SHA-256 and TLS; no libpq  |
 
 Code written against `dyn db.Connection` runs on all three, which is how tests can use an in-memory SQLite database while production uses PostgreSQL. The interface gives `Exec`, `Query` (rows read with `Next`, `Int`, `Text`, `Float` and `IsNull`), `Begin` for transactions, `LastInsertId`, `Error` and `Kind`. Helpers such as `db.Run`, `db.QueryInt` and `db.QueryText` cover the one-line cases, and `db.InTx` runs a list of statements all or nothing.
 
@@ -138,7 +138,7 @@ func main:
     """)
     sql.FreeReport(ddl)
 
-    report("SELECT id, emial FROM customers WHERE id = $1", schema)
+    report("SELECT id, phone FROM customers WHERE id = $1", schema)
     report("SELECT id FROM customers WHERE email = ?", schema)
     report("UPDATE orders SET total_cents = 0", schema)
     report("SELECT c.name, o.total_cents FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1", schema)
@@ -154,8 +154,8 @@ end
 ```
 
 ```output
-bad   SELECT id, emial FROM customers WHERE id = $1
-      SQL311 no column named "emial" in this statement
+bad   SELECT id, phone FROM customers WHERE id = $1
+      SQL311 no column named "phone" in this statement
 bad   SELECT id FROM customers WHERE email = ?
       SQL201 '?' is not a placeholder in postgres
 bad   UPDATE orders SET total_cents = 0
@@ -273,7 +273,7 @@ end
 3 400 (no note)
 ```
 
-Three things stand out in the generated code. The nullable `note` column becomes a `str?`, and the generated reader checks `IsNull` before reading it, so the caller is forced to decide what a missing note means. The functions take `dyn db.Connection`, so one generated file serves SQLite, MySQL and PostgreSQL, picking each dialect's quoting at run time from `c.Kind()`. And the values go into the SQL through `sql.Fill`, which lexes the query first, so a `?` inside a string literal is left alone, the number of values must match, and quotes are doubled correctly for the dialect.
+Three things stand out in the generated code. The nullable `note` column becomes a `str?`, and the generated reader checks `IsNull` before reading it, so the caller is forced to decide what a missing note means. The functions take `dyn db.Connection`, so one generated file serves SQLite, MySQL and PostgreSQL, picking each dialect's quoting at runtime from `c.Kind()`. And the values go into the SQL through `sql.Fill`, which lexes the query first, so a `?` inside a string literal is left alone, the number of values must match, and quotes are doubled correctly for the dialect.
 
 That last point is also a limit: `Fill` is substitution, not a server-side prepared statement. It is safe quoting done once and audited, not plan reuse. Only `db.sqlite` offers `Prepare` and `Bind` today.
 
@@ -285,7 +285,7 @@ A server keeps a few connections open and lends one to each request. `db.NewPool
 
 ## How it compares, and what is missing {#compare}
 
-Compared with an ORM such as Django's or Entity Framework, Salam keeps you in SQL and gives no object mapping beyond the generated row structs. Compared with sqlc, the idea is the same and the integration is tighter: the checker ships with the compiler, reads SQL out of ordinary source files, and needs no separate configuration file. Compared with raw drivers in C or Python, you get type information and schema checks before run time.
+Compared with an ORM such as Django's or Entity Framework, Salam keeps you in SQL and gives no object mapping beyond the generated row structs. Compared with sqlc, the idea is the same and the integration is tighter: the checker ships with the compiler, reads SQL out of ordinary source files, and needs no separate configuration file. Compared with raw drivers in C or Python, you get type information and schema checks before runtime.
 
 The limits are worth stating:
 
@@ -306,7 +306,7 @@ No. Salam's approach is SQL first: you write the queries, `salam sql check` veri
 
 No. The PostgreSQL and MySQL drivers implement the wire protocols in Salam itself, including TLS and modern password authentication. Only SQLite links its C library.
 
-### Can salam sql check run in CI?
+### Can salam SQL check run in CI?
 
 Yes. `salam sql check src --schema=db` exits with status 1 when it finds an error, prints file, line and column for each problem, and needs no database server, only the DDL files.
 

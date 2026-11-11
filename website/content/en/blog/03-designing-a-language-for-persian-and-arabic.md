@@ -37,18 +37,18 @@ Two patterns stand out. Projects that only translate keywords tend to stay demon
 
 A keyword must be short, unambiguous and readable, and it must not take away a word that people need as a name. In Persian these goals pull against each other more than in English. Some of Salam's choices:
 
-| English | Persian | Literal meaning |
-|---|---|---|
-| `func` | `تابع` | function (the mathematical term) |
-| `ret` | `برگشت` | return, coming back |
-| `main` | `ریشه` | root |
-| `mut` | `ناپایا` | not constant, unstable |
-| `struct` | `ساختار` | structure |
-| `enum` | `جداشمار` | separately counted |
-| `match` | `همخوان` | in agreement, matching |
-| `defer` | `دیرکن` | delay it |
-| `as` | `برگردان` | convert, render as |
-| `end` | `پایان` | end |
+| English  | Persian   | Literal meaning                  |
+| -------- | --------- | -------------------------------- |
+| `func`   | `تابع`    | function (the mathematical term) |
+| `ret`    | `برگشت`   | return, coming back              |
+| `main`   | `ریشه`    | root                             |
+| `mut`    | `ناپایا`  | not constant, unstable           |
+| `struct` | `ساختار`  | structure                        |
+| `enum`   | `جداشمار` | separately counted               |
+| `match`  | `همخوان`  | in agreement, matching           |
+| `defer`  | `دیرکن`   | delay it                         |
+| `as`     | `برگردان` | convert, render as               |
+| `end`    | `پایان`   | end                              |
 
 The entry function is a good example of a choice with consequences. The obvious translation of `main` is `اصلی`. Salam uses `ریشه` instead, and `تابع اصلی` is an ordinary function: a program that defines it compiles, but has no entry point. The English course warns about this in the first lesson, and the compiler reports "entry point is missing". The upside is that `اصلی` stays free as an everyday word for names such as `صفحه اصلی`.
 
@@ -168,7 +168,7 @@ This says that the identifier `upper` must be Persian in a Persian file and that
 
 A language is also its tools, and every tool needs the Persian rules:
 
-- **Editors.** The plugins for VS Code and ten other editors highlight both keyword sets, generated from the compiler's own tables so that they cannot drift. The language server inside `salam` provides completion, hover, rename and semantic highlighting that understands multi-word Persian names, and it sends Persian diagnostics and hover text to an editor running in a Persian locale. See the [tools page](/tools/).
+- **Editors.** The plugins for Visual Studio Code and ten other editors highlight both keyword sets, generated from the compiler's own tables so that they cannot drift. The language server inside `salam` provides completion, hover, rename and semantic highlighting that understands multi-word Persian names, and it sends Persian diagnostics and hover text to an editor running in a Persian locale. See the [tools page](/tools/).
 - **The formatter.** `salam format` re-indents Persian code and normalizes the spacing around operators, without touching the spelling of names.
 - **The online editor** switches its whole layout, including the code area, to right to left for Persian.
 - **The translator.** `salam translate` uses the compiler's lexer, so it applies the ZWNJ and yeh rules identically; see [inside salam translate](/blog/salam-translate-persian-english-code/).

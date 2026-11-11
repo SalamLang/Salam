@@ -51,7 +51,7 @@ The teaching material around it is already substantial:
 
 - **A free course of 47 lessons** in both [English](/learn/) and Persian, from the [first program](/learn/start/) through [structs](/learn/structs/), [generics](/learn/generics/), [memory](/learn/memory/) and threads to building web pages. Every example in every lesson is compiled when the site builds, and the output shown is the real output.
 - **Nothing to install.** The online editor at [editor.salamlang.ir](https://editor.salamlang.ir) runs the whole compiler in the browser through WebAssembly, which matters in computer labs where students cannot install software.
-- **An Android app** with the compiler built in, so programs run offline on a phone or tablet running Android 5.0 or newer. For students whose main computer is a phone, that is not a detail.
+- **An Android app** with the compiler built-in, so programs run offline on a phone or tablet running Android 5.0 or newer. For students whose main computer is a phone, that is not a detail.
 - **An interpreter** (`salam exec`) and a REPL (`salam cli`) for quick experiments without a C toolchain.
 
 ## A strict compiler as a patient teacher {#strict-compiler}
@@ -147,9 +147,9 @@ The first token of `func main:` comes out like this:
 </token>
 ```
 
-The last three commands show the same program as C, as LLVM IR and as x86-64 assembly, which makes the trade-offs between compiling through C, through LLVM and directly to machine code concrete rather than theoretical. A compilers course could assign "add a warning" or "add a constant-folding rule" as a project in a real, self-hosting compiler and have students test it with the project's own test suite. The [compiler pipeline article](/blog/how-the-salam-compiler-works/) and the [self-hosting article](/blog/self-hosting-compiler/) are good starting points for such a course. The bilingual front end is a teaching topic in its own right: the keyword tables for both languages live in one file, `compiler/langpack.salam`.
+The last three commands show the same program as C, as LLVM IR and as x86-64 assembly, which makes the trade-offs between compiling through C, through LLVM and directly to machine code concrete rather than theoretical. A compilers course could assign "add a warning" or "add a constant-folding rule" as a project in a real, self-hosting compiler and have students test it with the project's own test suite. The [compiler pipeline article](/blog/how-the-salam-compiler-works/) and the [self-hosting article](/blog/self-hosting-compiler/) are good starting points for such a course. The bilingual frontend is a teaching topic in its own right: the keyword tables for both languages live in one file, `compiler/langpack.salam`.
 
-The scale is a fair warning. The compiler and its tools are more than 300 source files, which is too large to read end to end in one semester. It is better used as a codebase to explore and modify than as a textbook.
+The scale is a fair warning. The compiler and its tools are more than 300 source files, which is too large to read end-to-end in one semester. It is better used as a codebase to explore and modify than as a textbook.
 
 ## Software engineering practice from the first project {#software-engineering}
 
@@ -186,11 +186,11 @@ ok   gcd_test.salam: 2 tests passed
 PASS: 1 test files
 ```
 
-`salam new` creates a project with a manifest, `salam format` settles style arguments before they start, `salam doc` generates an API page, and `salam add` brings in packages from Git repositories with a lock file and checksums. A team project in Salam therefore exercises the same workflow students will meet in industry, in a language where they can also read the error messages. The [developer tools article](/blog/salam-developer-tools/) covers these commands.
+`salam new` creates a project with a manifest, `salam format` settles style arguments before they start, `salam doc` generates an API page, and `salam add` brings in packages from Git repositories with a lockfile and checksums. A team project in Salam therefore exercises the same workflow students will meet in industry, in a language where they can also read the error messages. The [developer tools article](/blog/salam-developer-tools/) covers these commands.
 
 ## Younger learners: a block-based prototype {#younger-learners}
 
-The repository also contains an experiment aimed at children, in the `kids/` folder: a drag-and-drop block editor written in Salam itself. Children build a program from blocks such as "Say", "Ask", "Repeat" and "Move" in two modes, "Talk & Print" and a turtle-graphics "Draw & Move", and a "Grown-up Code" panel shows the Salam program the blocks correspond to. That last idea is the interesting one: the bridge from blocks to text code is built in.
+The repository also contains an experiment aimed at children, in the `kids/` folder: a drag-and-drop block editor written in Salam itself. Children build a program from blocks such as "Say", "Ask", "Repeat" and "Move" in two modes, "Talk & Print" and a turtle-graphics "Draw & Move", and a "Grown-up Code" panel shows the Salam program the blocks correspond to. That last idea is the interesting one: the bridge from blocks to text code is built-in.
 
 It is a prototype in the source tree, not a published product, and its labels are in English. It shows a direction rather than a finished tool.
 
@@ -218,7 +218,7 @@ Yes, the self-hosting compiler is open source, follows the classic lexer, parser
 
 ### Do students need to install anything?
 
-No. The online editor runs the compiler in the browser, and there is an Android app with the compiler built in. Installing the compiler itself is one command on Linux, macOS or Windows.
+No. The online editor runs the compiler in the browser, and there is an Android app with the compiler built-in. Installing the compiler itself is one command on Linux, macOS or Windows.
 
 ### Will students who learn in Persian be able to move to English languages?
 

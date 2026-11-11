@@ -166,15 +166,15 @@ On Linux, the server accepts connections on one thread and hands them to an epol
 
 The project measured this server against eight others answering the same eleven routes on the same machine, on 28 October 2026. The geometric mean over all eleven routes:
 
-| Server | Requests per second |
-|---|---|
-| Salam (`net.http`) | 94,850 |
-| Go, Fiber | 62,493 |
-| Go, Echo | 35,238 |
-| Go, Gin | 34,999 |
-| Go, `net/http` | 34,987 |
-| Node, Express 5 | 22,536 |
-| PHP built-in server | 11,992 |
+| Server              | Requests per second |
+| ------------------- | ------------------- |
+| Salam (`net.http`)  | 94,850              |
+| Go, Fiber           | 62,493              |
+| Go, Echo            | 35,238              |
+| Go, Gin             | 34,999              |
+| Go, `net/http`      | 34,987              |
+| Node, Express 5     | 22,536              |
+| PHP built-in server | 11,992              |
 
 On the seven routes nginx can answer from its own configuration, Salam measured 94,156 requests per second, Fiber 69,653 and nginx 60,490. The widest gap was query parsing on `/search`: Salam 99,143, Fiber 48,247, Go's `net/http` 33,193. The narrowest was `/`, where Salam was only 4% ahead of Fiber.
 
@@ -189,7 +189,7 @@ The honest summary: Salam's server is in the same class as the fastest Go framew
 
 ## WebSocket servers and broadcast rooms {#websocket}
 
-[net.websocket](/std/net/websocket/) is a two-way connection that stays open, with a `Hub` for rooms. The server side is `Listen`, `Accept`, `Receive` and `SendText`; `Register` puts a connection in a room and `Broadcast` sends to everyone in it. `LoadWSSConfig` and `AcceptWSS` add TLS, and `Poll` and `Ping` handle heartbeats without blocking.
+[net.websocket](/std/net/websocket/) is a two-way connection that stays open, with a `Hub` for rooms. The server-side is `Listen`, `Accept`, `Receive` and `SendText`; `Register` puts a connection in a room and `Broadcast` sends to everyone in it. `LoadWSSConfig` and `AcceptWSS` add TLS, and `Poll` and `Ping` handle heartbeats without blocking.
 
 ```salam
 import net.websocket

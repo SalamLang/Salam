@@ -14,23 +14,23 @@ This article walks through each option with real code, shows how packaging and c
 
 ## Three ways to build a GUI in Salam {#three-ways}
 
-| Approach | Package | What draws the pixels | Good for |
-|---|---|---|---|
-| Web interface | `gui.webview` | WebView2, WKWebView or WebKitGTK | Tools and apps with a rich interface you already know how to build in HTML |
-| Native UI from a page | `gui.ui` | Salam itself (layout, text, painting) | A page written in Salam's page language, shown without a browser engine |
-| Games and graphics | `gui.raylib` | raylib over OpenGL | Games, simulations, visual toys, teaching |
+| Approach              | Package       | What draws the pixels                 | Good for                                                                   |
+| --------------------- | ------------- | ------------------------------------- | -------------------------------------------------------------------------- |
+| Web interface         | `gui.webview` | WebView2, WKWebView or WebKitGTK      | Tools and apps with a rich interface you already know how to build in HTML |
+| Native UI from a page | `gui.ui`      | Salam itself (layout, text, painting) | A page written in Salam's page language, shown without a browser engine    |
+| Games and graphics    | `gui.raylib`  | raylib over OpenGL                    | Games, simulations, visual toys, teaching                                  |
 
 The first is the mature path: it has a security model, system services, installers and a CI workflow on real Windows, macOS and Linux machines. The second is newer and still growing. The third is a binding to a well-known C library, so it inherits raylib's strengths and its requirements.
 
 ## Desktop apps with a WebView, the Tauri model {#webview}
 
-Electron ships a full copy of Chromium with every application. Tauri showed that you can instead use the web view the operating system already has, which keeps the download small. Salam's `gui.webview` follows the second model, without Rust and without a second language for the back end:
+Electron ships a full copy of Chromium with every application. Tauri showed that you can instead use the web view the operating system already has, which keeps the download small. Salam's `gui.webview` follows the second model, without Rust and without a second language for the backend:
 
-| System | Engine | Needed at run time |
-|---|---|---|
-| Linux | WebKitGTK | `libgtk-3-0`, `libwebkit2gtk-4.1-0` |
-| Windows | WebView2 | The WebView2 runtime, included in current Windows |
-| macOS | WKWebView | Nothing |
+| System  | Engine    | Needed at runtime                                 |
+| ------- | --------- | ------------------------------------------------- |
+| Linux   | WebKitGTK | `libgtk-3-0`, `libwebkit2gtk-4.1-0`               |
+| Windows | WebView2  | The WebView2 runtime, included in current Windows |
+| macOS   | WKWebView | Nothing                                           |
 
 `salam new notes --desktop` writes a complete project: `main.salam`, a `salam.toml`, a `.gitignore` and a `www` folder with `index.html`, `app.js` and `style.css`. Add `--lang=fa` and the project is written in Persian. The generated entry point is short:
 
@@ -54,7 +54,7 @@ end
 `Init` describes the application, `Command` registers a function the page can call, `Open` creates a window and `Run` drives the event loop until the user quits. The page calls the command like any async JavaScript function:
 
 ```javascript
-const text = await salam.invoke("greet", { name: "Sara" });
+const text = await salam.invoke('greet', { name: 'Sara' });
 ```
 
 During development `assets_dir` serves the folder directly, so a reload shows your edits. In a release build the same files are packed inside the executable and served from `app://localhost` (`https://app.localhost` on Windows). A page can also come from a remote site (`url` in `WindowOptions`) or from an HTML string (`html`).
@@ -63,11 +63,11 @@ During development `assets_dir` serves the folder directly, so a reload shows yo
 
 Three calls cover the whole bridge:
 
-| From the page | In Salam |
-|---|---|
+| From the page                    | In Salam                                                                    |
+| -------------------------------- | --------------------------------------------------------------------------- |
 | `await salam.invoke(name, args)` | `webview.Command` runs on the UI thread, `webview.CommandAsync` on a worker |
-| `salam.emit(name, data)` | `webview.On(name, handler)` |
-| `salam.listen(name, fn)` | `webview.Emit(name, json)`, or `win.Emit` for one window |
+| `salam.emit(name, data)`         | `webview.On(name, handler)`                                                 |
+| `salam.listen(name, fn)`         | `webview.Emit(name, json)`, or `win.Emit` for one window                    |
 
 Arguments and results travel as JSON. A command answers exactly once, with one of the `Resolve` methods or with `Reject`, which makes the page's promise throw. Slow work belongs in `CommandAsync`, because a plain `Command` runs on the UI thread and would freeze the window. Window calls belong on the UI thread, so a worker hands them over with `webview.Dispatch`. If you have used the [threads lesson](/learn/threads/), this is the usual rule of every GUI toolkit, written down explicitly.
 
@@ -106,11 +106,11 @@ salam bundle --target=x86_64-w64-windows-gnu
 salam bundle --target=arm64-apple-macos --format=app,tar
 ```
 
-| System | Default formats | Also, when the tool is on `PATH` |
-|---|---|---|
-| Linux | `tar`, `deb` | `rpm` (`rpmbuild`), `appimage` (`appimagetool`) |
-| Windows | `zip` | `nsis` (`makensis`) |
-| macOS | `app`, `tar` | `dmg` (`hdiutil`) |
+| System  | Default formats | Also, when the tool is on `PATH`                |
+| ------- | --------------- | ----------------------------------------------- |
+| Linux   | `tar`, `deb`    | `rpm` (`rpmbuild`), `appimage` (`appimagetool`) |
+| Windows | `zip`           | `nsis` (`makensis`)                             |
+| macOS   | `app`, `tar`    | `dmg` (`hdiutil`)                               |
 
 Cross builds need nothing extra, because the compiler links Windows and macOS programs itself (see [cross-compiling Salam](/blog/cross-compilation-salam/)). On Linux and Windows the assets are appended to the executable; on macOS they go into `Contents/Resources/app.pack` so the program's signature stays valid. A PNG icon is converted to `.ico` and `.icns` for you.
 
@@ -225,7 +225,7 @@ The project uses the package for its own software too. The Salam Agent desktop a
 ## Choosing an approach {#choosing}
 
 - **Use `gui.webview`** for most desktop applications today. You get a familiar interface stack, system dialogs, a keychain, a tray icon, installers for three systems and a security model that has been thought through.
-- **Use `--ui=native`** when you want one page source for the web and the desktop, no browser engine at all, and you can live with a runtime that is still adding features. It is also the interesting option for Persian interfaces, because shaping and bidirectional text are built in.
+- **Use `--ui=native`** when you want one page source for the web and the desktop, no browser engine at all, and you can live with a runtime that is still adding features. It is also the interesting option for Persian interfaces, because shaping and bidirectional text are built-in.
 - **Use `gui.raylib`** for games and anything that redraws every frame.
 
 Whichever you pick, the rest of the program is ordinary Salam, so the HTTP clients, databases and file handling of the [standard library](/std/) are available from your commands and handlers. The [web development article](/blog/web-development-with-salam/) explains the page language that both the web and the native targets start from.
@@ -234,7 +234,7 @@ Whichever you pick, the rest of the program is ordinary Salam, so the HTTP clien
 
 ### Can Salam replace Electron or Tauri?
 
-For many apps, yes: `gui.webview` uses the system web view like Tauri, so there is no bundled browser, and the back end is Salam instead of Rust or Node. It is much younger than either project and has a far smaller community, so expect to read the package reference rather than search for answers.
+For many apps, yes: `gui.webview` uses the system web view like Tauri, so there is no bundled browser, and the backend is Salam instead of Rust or Node. It is much younger than either project and has a far smaller community, so expect to read the package reference rather than search for answers.
 
 ### Does a Salam desktop app need a runtime installed?
 
@@ -242,7 +242,7 @@ On macOS, no. On Windows it needs the WebView2 runtime, which current Windows in
 
 ### Can I build a Windows installer from Linux?
 
-Yes. `salam bundle --target=x86_64-w64-windows-gnu` cross-builds the program and packs a zip, and an NSIS installer when `makensis` is on your `PATH`. Signing is still up to you.
+Yes. `salam bundle --target=x86_64-w64-windows-gnu` cross-builds the program and packs a ZIP, and an NSIS installer when `makensis` is on your `PATH`. Signing is still up to you.
 
 ### Is the native UI ready for production?
 

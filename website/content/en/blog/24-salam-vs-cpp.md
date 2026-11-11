@@ -14,21 +14,21 @@ This article puts the same small tasks side by side, compares how the two handle
 
 ## Salam and C++ at a glance {#at-a-glance}
 
-| | C++ | Salam |
-|---|---|---|
-| Standard | ISO C++ (C++20, C++23, C++26 in progress) | One open source implementation, pre-1.0 |
-| Compilers | GCC, Clang, MSVC and others | The self-hosting `salam` compiler |
-| Code generation | Direct to machine code | Through C, through LLVM, or its own native backend |
-| Memory | RAII, smart pointers, manual `new`/`delete` | Stack values, heap collections freed with `.free()` and `defer` |
-| Generics | Templates, concepts | Generic functions and structs with interface bounds |
-| Polymorphism | Inheritance, virtual functions, `std::variant` | Interfaces with `dyn`, enums with data, embedding with `use` |
-| Errors | Exceptions, `std::expected` | `throws`, `try`, `catch`, without stack unwinding |
-| Build | CMake, Meson, Bazel; vcpkg or Conan for packages | One command: `salam build`, `salam test`, `salam add` |
-| Ecosystem | Enormous, every domain | Large standard library, small community |
+|                 | C++                                              | Salam                                                           |
+| --------------- | ------------------------------------------------ | --------------------------------------------------------------- |
+| Standard        | ISO C++ (C++20, C++23, C++26 in progress)        | One open source implementation, pre-1.0                         |
+| Compilers       | GCC, Clang, MSVC and others                      | The self-hosting `salam` compiler                               |
+| Code generation | Direct to machine code                           | Through C, through LLVM, or its own native backend              |
+| Memory          | RAII, smart pointers, manual `new`/`delete`      | Stack values, heap collections freed with `.free()` and `defer` |
+| Generics        | Templates, concepts                              | Generic functions and structs with interface bounds             |
+| Polymorphism    | Inheritance, virtual functions, `std::variant`   | Interfaces with `dyn`, enums with data, embedding with `use`    |
+| Errors          | Exceptions, `std::expected`                      | `throws`, `try`, `catch`, without stack unwinding               |
+| Build           | CMake, Meson, Bazel; vcpkg or Conan for packages | One command: `salam build`, `salam test`, `salam add`           |
+| Ecosystem       | Enormous, every domain                           | Large standard library, small community                         |
 
 ## Architecture: from source to machine code {#architecture}
 
-A C++ program is compiled one translation unit at a time. Each `.cpp` file includes its headers, the preprocessor pastes them in, templates are instantiated where they are used, and a linker joins the object files. That model is the reason C++ builds scale across thousands of files and the reason they are slow: the same headers are parsed again and again. C++20 modules address this, and support in compilers and build systems has been arriving gradually.
+A C++ program is compiled one translation unit at a time. Each `.cpp` file includes its headers, the preprocessor pastes them in, templates are instantiated where they are used, and a linker joins the object files. That model is the reason C++ builds scale across thousands of files and the reason they are slow: the same headers are parsed again and again. C++20 modules address this, and support in compilers and build tools has been arriving gradually.
 
 Salam compiles a program together with everything it imports. The compiler, which is written in Salam itself, reads the entry file and every package it uses, checks types and many other rules, and then hands the program to one of three backends: generated C passed to a C compiler (gcc, clang or the bundled tcc), LLVM IR, or its own native backend that writes object files directly. The benchmark discussed below builds Salam through LLVM at `-O3`. The article [Three ways to generate code](/blog/salam-code-generation-c-llvm-native/) explains the trade-offs, and [How the Salam compiler works](/blog/how-the-salam-compiler-works/) follows a program through each stage.
 
@@ -102,7 +102,7 @@ end
 
 ## Generics: templates and concepts vs bounded generics {#generics}
 
-C++ templates are a compile-time language of their own. They can compute values, choose types and specialize for particular arguments, which is what makes libraries such as Eigen or the standard ranges library possible. Concepts, added in C++20, finally let a template state what it needs from its arguments. Here a concept constrains a function template, and a classic virtual base class handles a mixed collection at run time:
+C++ templates are a compile-time language of their own. They can compute values, choose types and specialize for particular arguments, which is what makes libraries such as Eigen or the standard ranges library possible. Concepts, added in C++20, finally let a template state what it needs from its arguments. Here a concept constrains a function template, and a classic virtual base class handles a mixed collection at runtime:
 
 ```cpp
 #include <concepts>
@@ -255,11 +255,11 @@ Both languages compile ahead of time to native code with no garbage collector, s
 
 That does not mean Salam is faster than C++. Most of these programs finish in a few milliseconds, so process start-up is part of every time, and gaps under about 5% change between runs on the shared CI virtual machine that produced them. The fair reading is "the same range as C, C++ and Rust" on small compute-bound programs. Salam was behind on recursive Fibonacci, n-queens, a linear congruential generator, a tight counting loop, a binary search stress test and printing a line a million times. The benchmark does not measure large applications, where C++'s mature optimizers, profile-guided optimization and hand-tuned libraries count for a lot. The [speed page](/speed/) publishes every number and the raw data, and [Is Salam faster than C and Rust?](/blog/is-salam-faster-than-c-and-rust/) reads it carefully.
 
-## Tooling and build systems {#tooling}
+## Tooling and build tools {#tooling}
 
-C++ tooling is deep and fragmented. There are several excellent compilers, world-class debuggers and profilers, sanitizers, static analyzers and IDEs. There is also no standard build system or package manager: most projects use CMake, some Meson or Bazel, and dependencies come from vcpkg, Conan, the system package manager or a vendored copy. Getting a cross-platform C++ project with dependencies to build cleanly is a skill in itself.
+C++ tooling is deep and fragmented. There are several excellent compilers, world-class debuggers and profilers, sanitizers, static analyzers and IDEs. There is also no standard build tool or package manager: most projects use CMake, some Meson or Bazel, and dependencies come from vcpkg, Conan, the system package manager or a vendored copy. Getting a cross-platform C++ project with dependencies to build cleanly is a skill in itself.
 
-Salam's toolchain is one executable. `salam build` compiles, `salam test` runs the tests, `salam format` formats, `salam check` type-checks without generating code, `salam debug` builds with debug information and starts GDB or LLDB, `salam memcheck` checks memory, and `salam add` fetches a package from GitHub and pins it in a lock file. Cross-compiling is a `--target` flag. It is simpler because there is less of it: the profilers, analyzers and IDE support around C++ are far more mature. The article [The Salam developer toolchain](/blog/salam-developer-tools/) lists what exists today.
+Salam's toolchain is one executable. `salam build` compiles, `salam test` runs the tests, `salam format` formats, `salam check` type-checks without generating code, `salam debug` builds with debug information and starts GDB or LLDB, `salam memcheck` checks memory, and `salam add` fetches a package from GitHub and pins it in a lockfile. Cross-compiling is a `--target` flag. It is simpler because there is less of it: the profilers, analyzers and IDE support around C++ are far more mature. The article [The Salam developer toolchain](/blog/salam-developer-tools/) lists what exists today.
 
 ## Systems programming reach {#systems}
 

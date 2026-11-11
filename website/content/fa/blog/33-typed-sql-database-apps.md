@@ -22,11 +22,11 @@ SQL گونه‌دار یعنی گونه‌ی پارامترها و نتیجه‌
 
 هر موتور بسته‌ی خودش را دارد، و هر کدام را می‌توان به `پویا دیتابیس.اتصال` (`dyn db.Connection`) مشترک از [بسته‌ی db](/std/db/) تبدیل کرد:
 
-| بسته | موتور | چطور وصل می‌شود |
-|---|---|---|
-| [db.sqlite](/std/db/sqlite/) | SQLite، یک پرونده یا `:memory:` | کتابخانه‌ی C خود SQLite را می‌پیچد، با `آماده سازی` و اتصال مقدار |
-| [db.mysql](/std/db/mysql/) | MySQL و MariaDB | پروتکل کلاینت را به سلام پیاده می‌کند، با TLS و utf8mb4؛ بدون libmysqlclient |
-| [db.postgres](/std/db/postgres/) | PostgreSQL | پروتکل سیم را به سلام پیاده می‌کند، با SCRAM-SHA-256 و TLS؛ بدون libpq |
+| بسته                             | موتور                           | چطور وصل می‌شود                                                              |
+| -------------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
+| [db.sqlite](/std/db/sqlite/)     | SQLite، یک پرونده یا `:memory:` | کتابخانه‌ی C خود SQLite را می‌پیچد، با `آماده سازی` و اتصال مقدار            |
+| [db.mysql](/std/db/mysql/)       | MySQL و MariaDB                 | پروتکل کلاینت را به سلام پیاده می‌کند، با TLS و utf8mb4؛ بدون libmysqlclient |
+| [db.postgres](/std/db/postgres/) | PostgreSQL                      | پروتکل سیم را به سلام پیاده می‌کند، با SCRAM-SHA-256 و TLS؛ بدون libpq       |
 
 کدی که روی `پویا دیتابیس.اتصال` نوشته شود روی هر سه اجرا می‌شود؛ آزمون‌ها این‌طور می‌توانند از SQLite در حافظه استفاده کنند در حالی که محیط عملیاتی PostgreSQL دارد. میانجی این‌ها را می‌دهد: `اجرا`، `پرسمان` (ردیف‌ها با `بعدی`، `عدد صحیح`، `متن`، `عدد اعشار` و `خالی است` خوانده می‌شوند)، `شروع تراکنش` برای تراکنش‌ها، `شناسه آخرین درج`، `خطا` و `نوع`. کمک‌تابع‌هایی مثل `دیتابیس.اجرا کن`، `دیتابیس.پرسمان عدد` و `دیتابیس.پرسمان متن` کارهای یک‌خطی را پوشش می‌دهند و `دیتابیس.در تراکنش` فهرستی از دستورها را یا همه با هم یا هیچ‌کدام اجرا می‌کند.
 
@@ -138,7 +138,7 @@ checked 3 statement(s) in 1 file(s): 2 error(s), 1 warning(s)
     """)
     اس کیو ال.آزادسازی گزارش(تعریف)
 
-    گزارش کن("SELECT id, emial FROM customers WHERE id = $1"، طرح)
+    گزارش کن("SELECT id, phone FROM customers WHERE id = $1"، طرح)
     گزارش کن("SELECT id FROM customers WHERE email = ?"، طرح)
     گزارش کن("UPDATE orders SET total_cents = 0"، طرح)
     گزارش کن("SELECT c.name, o.total_cents FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1"، طرح)
@@ -154,8 +154,8 @@ checked 3 statement(s) in 1 file(s): 2 error(s), 1 warning(s)
 ```
 
 ```output
-نادرست SELECT id, emial FROM customers WHERE id = $1
-      SQL311 no column named "emial" in this statement
+نادرست SELECT id, phone FROM customers WHERE id = $1
+      SQL311 no column named "phone" in this statement
 نادرست SELECT id FROM customers WHERE email = ?
       SQL201 '?' is not a placeholder in postgres
 نادرست UPDATE orders SET total_cents = 0
@@ -306,7 +306,7 @@ wrote gen/store.salam (3 queries)
 
 نه. درایورهای PostgreSQL و MySQL پروتکل‌های سیم را به خود سلام پیاده می‌کنند، از جمله TLS و احراز هویت گذرواژه‌ی مدرن. فقط SQLite به کتابخانه‌ی C خودش پیوند می‌خورد.
 
-### آیا salam sql check در CI اجرا می‌شود؟
+### آیا salam SQL check در CI اجرا می‌شود؟
 
 بله. `salam sql check src --schema=db` وقتی خطایی پیدا کند با وضعیت ۱ خارج می‌شود، برای هر مشکل پرونده، خط و ستون را چاپ می‌کند و به سرور پایگاه داده نیازی ندارد؛ فقط پرونده‌های DDL را می‌خواهد.
 

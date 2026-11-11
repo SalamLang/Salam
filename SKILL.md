@@ -3061,6 +3061,11 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
   (`تابع جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
   same inside a name, so `آرگومان ها` and `آرگومان‌ها` are one name. Arabic
   `ي`/`ك` equal Persian `ی`/`ک`.
+- **Bidi control characters** (U+202A-U+202E, U+2066-U+2069, and the marks
+  U+200E, U+200F, U+061C) are an error in code, in either language. Inside a
+  string or a comment the embeddings, overrides and isolates are a warning
+  (write `"\u202E"` instead; `check --fix` does it), while the marks are
+  allowed there. ZWNJ and ZWJ are never flagged.
 - **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
   written with a ZWNJ or a space, but not glued together: `نادرستسرچاپ` is an
   unknown identifier.

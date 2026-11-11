@@ -74716,6 +74716,36 @@ pub f5: F
 pub f6: G
 pub f7: H
 end
+@en "Option"
+@fa "اختیاری"
+pub struct Option<T>:
+@en "value"
+@fa "مقدار"
+pub value: T
+@en "present"
+@fa "موجود"
+pub present: bool
+@en "is_some"
+@fa "دارد"
+pub func is_some(): bool: ret this.present
+end
+@en "is_none"
+@fa "ندارد"
+pub func is_none(): bool: ret this.present == false
+end
+@en "unwrap_or"
+@fa "یابرگردان"
+pub func unwrap_or(fallback: T): T: if this.present: ret this.value
+end
+ret fallback
+end
+@en "unwrap"
+@fa "بازکن"
+pub func unwrap(): T: if this.present == false: salam_panic("called unwrap on a None value")
+end
+ret this.value
+end
+end
 func _error_kind_text(kind: ErrorKind): str:
 ret match kind:
 ErrorKind.Syntax: "syntax error" end
@@ -75019,6 +75049,48 @@ end
 @en "Panic"
 @fa "خطای مرگبار"
 pub noret func Panic(msg: str): salam_panic(msg) end
+@en "Some"
+@fa "یک مقدار"
+pub func Some<T>(x: T): Option<T>:
+ret Option { value = x, present = true }
+end
+@en "None"
+@fa "هیچ مقدار"
+pub func None<T>(): Option<T>:
+p := mem.MustAllocateZeroed(sizeof(T))
+vp := p as T*
+v := vp[0]
+mem.Free(p)
+ret Option { value = v, present = false }
+end
+@en "IsSome"
+@fa "دارد"
+pub func IsSome<T>(o: Option<T>): bool:
+ret o.present
+end
+@en "IsNone"
+@fa "ندارد"
+pub func IsNone<T>(o: Option<T>): bool:
+ret not o.present
+end
+@en "UnwrapOr"
+@fa "با پیش فرض"
+pub func UnwrapOr<T>(o: Option<T>, fallback: T): T:
+ret o.present ? o.value : fallback
+end
+@en "Expect"
+@fa "انتظار"
+pub func Expect<T>(o: Option<T>, msg: str): T:
+if not o.present:
+salam_panic(msg)
+end
+ret o.value
+end
+@en "Unwrap"
+@fa "باز کردن"
+pub func Unwrap<T>(o: Option<T>): T:
+ret Expect(o, "called Unwrap on a value that has none")
+end
 package core
 import mem
 import str
@@ -98682,12 +98754,11 @@ mut i := 0
 until i < a.results.len():
 c := a.results.get(i)
 field := names.get(i)
-base := plain_type(c.kind)
 if c.nullable:
 str.BufAppend(sb, pad + "if r.IsNull(" + str.FromInt(i as i64) + "):\n")
-str.BufAppend(sb, pad + "    out." + field + " = option.None() as option.Option<" + base + ">\n")
+str.BufAppend(sb, pad + "    out." + field + " = null\n")
 str.BufAppend(sb, pad + "else:\n")
-str.BufAppend(sb, pad + "    out." + field + " = option.Some(" + read_expr(c.kind, i) + ")\n")
+str.BufAppend(sb, pad + "    out." + field + " = " + read_expr(c.kind, i) + "\n")
 str.BufAppend(sb, pad + "end\n")
 else:
 str.BufAppend(sb, pad + "out." + field + " = " + read_expr(c.kind, i) + "\n")
@@ -98833,19 +98904,11 @@ end
 @fa "تولید کد"
 pub func Generate(pkg: str, queries: Vector<Query>, c: Catalog, err &: Report): str:
 mut analyses := Vector {} as Vector<Analysis>
-mut needs_option := false
 mut i := 0
 until i < queries.len():
 q := queries.get(i)
-mut a := Analyze(q.text, c)
+a := Analyze(q.text, c)
 merge_report(err, a.report, q.name, q.line)
-mut j := 0
-until j < a.results.len():
-if a.results.get(j).nullable:
-needs_option = true
-end
-j++
-end
 analyses.push(a)
 i++
 end
@@ -98854,9 +98917,6 @@ str.BufAppend(sb, "package " + pkg + "\n\n")
 str.BufAppend(sb, "import db\n")
 str.BufAppend(sb, "import db.sql\n")
 str.BufAppend(sb, "import mem\n")
-if needs_option:
-str.BufAppend(sb, "import option\n")
-end
 str.BufAppend(sb, "\n")
 mut k := 0
 until k < queries.len():
@@ -98871,7 +98931,7 @@ rc := a.results.get(f)
 base := plain_type(rc.kind)
 if rc.nullable:
 str.BufAppend(
-sb, "    pub " + fields.get(f) + ": option.Option<" + base + "> = option.None() as option.Option<" + base + ">\n"
+sb, "    pub " + fields.get(f) + ": " + base + "? = null\n"
 )
 else:
 str.BufAppend(sb, "    pub " + fields.get(f) + ": " + base + " = " + zero_of(rc.kind) + "\n")
@@ -102526,7 +102586,7 @@ end
 if not_null:
 ret base
 end
-ret "option.Option<" + base + ">"
+ret base + "?"
 end
 @en "sqlite"
 @fa "اس کیو لایت"
@@ -281900,81 +281960,6 @@ bufs.free()
 inputs.free()
 ret ok
 end
-@en "option"
-@fa "اختیاری"
-package option
-import mem
-extern:
-noret func salam_panic(msg: str)
-end
-@en "Option"
-@fa "اختیاری"
-pub struct Option<T>:
-@en "value"
-@fa "مقدار"
-pub value: T
-@en "present"
-@fa "موجود"
-pub present: bool
-@en "is_some"
-@fa "دارد"
-pub func is_some(): bool: ret this.present
-end
-@en "is_none"
-@fa "ندارد"
-pub func is_none(): bool: ret this.present == false
-end
-@en "unwrap_or"
-@fa "یابرگردان"
-pub func unwrap_or(fallback: T): T: if this.present: ret this.value
-end
-ret fallback
-end
-@en "unwrap"
-@fa "بازکن"
-pub func unwrap(): T: if this.present == false: salam_panic("called unwrap on a None value")
-end
-ret this.value
-end
-end
-@en "Some"
-@fa "یک مقدار"
-pub func Some<T>(x: T): Option<T>: ret Option { value = x, present = true }
-end
-@en "None"
-@fa "هیچ مقدار"
-pub func None<T>(): Option<T>: p := mem.MustAllocateZeroed(sizeof(T))
-vp := p as T*
-v := vp[0]
-mem.Free(p)
-ret Option { value = v, present = false }
-end
-@en "IsSome"
-@fa "دارد"
-pub func IsSome<T>(o: Option<T>): bool: ret o.present
-end
-@en "IsNone"
-@fa "ندارد"
-pub func IsNone<T>(o: Option<T>): bool: ret o.present == false
-end
-@en "UnwrapOr"
-@fa "یابرگردان"
-pub func UnwrapOr<T>(o: Option<T>, fallback: T): T: if o.present: ret o.value
-end
-ret fallback
-end
-@en "Unwrap"
-@fa "بازکن"
-pub func Unwrap<T>(o: Option<T>): T: if o.present == false: salam_panic("called Unwrap on a None value")
-end
-ret o.value
-end
-@en "Expect"
-@fa "انتظار"
-pub func Expect<T>(o: Option<T>, msg: str): T: if o.present == false: salam_panic(msg)
-end
-ret o.value
-end
 package os
 @en "MkdirAll"
 @fa "ساخت پوشه ها"
@@ -287582,55 +287567,6 @@ end
 pub func ReplaceAllStr(pattern: str, text: str, replacement: str): str throws:
 re := try Compile(pattern)
 ret ReplaceAll(re, text, replacement)
-end
-@en "result"
-@fa "نتیجه"
-package result
-extern:
-noret func salam_panic(msg: str)
-end
-@en "Result"
-@fa "نتیجه"
-pub enum Result<T, E>:
-@en "Ok"
-@fa "موفق"
-Ok(value: T)
-@en "Err"
-@fa "خطا"
-Err(error: E)
-end
-@en "IsOk"
-@fa "موفق است"
-pub func IsOk<T, E>(r: Result<T, E>): bool:
-ret match r:
-Ok(_): true end
-Err(_): false end
-end
-end
-@en "IsErr"
-@fa "خطا است"
-pub func IsErr<T, E>(r: Result<T, E>): bool:
-ret not IsOk(r)
-end
-@en "UnwrapOr"
-@fa "با پیش فرض"
-pub func UnwrapOr<T, E>(r: Result<T, E>, fallback: T): T:
-ret match r:
-Ok(v): v end
-Err(_): fallback end
-end
-end
-@en "Expect"
-@fa "انتظار"
-pub func Expect<T, E>(r: Result<T, E>, msg: str): T:
-match r:
-Ok(v):
-ret v
-end
-Err(_):
-salam_panic(msg)
-end
-end
 end
 package rpc
 import encoding.value

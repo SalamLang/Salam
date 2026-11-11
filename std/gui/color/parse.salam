@@ -1,0 +1,890 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package color
+
+import str
+import math
+
+const _GC_T_END := 0
+const _GC_T_NUM := 1
+const _GC_T_PCT := 2
+const _GC_T_DIM := 3
+const _GC_T_WORD := 4
+const _GC_T_HASH := 5
+const _GC_T_LP := 6
+const _GC_T_RP := 7
+const _GC_T_COMMA := 8
+const _GC_T_SLASH := 9
+const _GC_T_BAD := 10
+
+const _GC_MAX_DEPTH := 16
+
+const _GC_B_NONE := 0
+const _GC_B_BOTH := 1
+const _GC_B_LOW := 2
+
+struct _GcTok:
+    pub k: int = 0
+    pub n: f64 = 0.0
+    pub a: int = 0
+    pub b: int = 0
+    pub u: int = 0
+end
+
+struct _GcP:
+    pub cps: Vector<int>
+    pub toks: Vector<_GcTok>
+    pub i: int = 0
+    pub err: str = ""
+end
+
+struct _GcArgs:
+    pub vals: Vector<_GcTok>
+    pub comma: bool = false
+    pub spaced: bool = false
+    pub alpha: _GcTok
+    pub has_alpha: bool = false
+    pub end_col: int = 0
+    pub count: int = 0
+end
+
+func _gc_digit(cp: int): int:
+    if cp >= 48 and cp <= 57:
+        ret cp - 48
+    end
+    if cp >= 0x06F0 and cp <= 0x06F9:
+        ret cp - 0x06F0
+    end
+    if cp >= 0x0660 and cp <= 0x0669:
+        ret cp - 0x0660
+    end
+    ret -1
+end
+
+func _gc_is_space(cp: int): bool:
+    ret cp == 32 or cp == 9 or cp == 10 or cp == 13 or cp == 12 or cp == 0xA0 or cp == 0x200C or cp == 0x200E or cp == 0x200F or cp == 0x2009 or cp == 0x202F or cp == 0xFEFF
+end
+
+func _gc_is_dot(cp: int): bool:
+    ret cp == 46 or cp == 0x066B
+end
+
+func _gc_is_ascii_letter(cp: int): bool:
+    ret (cp >= 97 and cp <= 122) or (cp >= 65 and cp <= 90)
+end
+
+func _gc_is_punct(cp: int): bool:
+    ret cp == 0x060C or cp == 0x066A or cp == 0x066B or cp == 0x066C or cp == 0x061B or cp == 0x061F
+end
+
+func _gc_is_word_start(cp: int): bool:
+    if _gc_is_ascii_letter(cp) or cp == 95:
+        ret true
+    end
+    ret cp >= 0x80 and _gc_digit(cp) < 0 and not _gc_is_punct(cp) and not _gc_is_space(cp)
+end
+
+func _gc_is_word_char(cp: int): bool:
+    if cp == 45 or cp == 0x200C or (cp >= 48 and cp <= 57):
+        ret true
+    end
+    ret _gc_is_word_start(cp)
+end
+
+func _gc_at(cps: Vector<int>, i: int): int:
+    if i < 0 or i >= cps.len():
+        ret -1
+    end
+    ret cps.get(i)
+end
+
+func _gc_starts_number(cps: Vector<int>, i: int): bool:
+    c := _gc_at(cps, i)
+    if _gc_digit(c) >= 0:
+        ret true
+    end
+    if _gc_is_dot(c):
+        ret _gc_digit(_gc_at(cps, i + 1)) >= 0
+    end
+    if c == 43 or c == 45:
+        n := _gc_at(cps, i + 1)
+        if _gc_digit(n) >= 0:
+            ret true
+        end
+        ret _gc_is_dot(n) and _gc_digit(_gc_at(cps, i + 2)) >= 0
+    end
+    ret false
+end
+
+func _gc_lex_number(cps: Vector<int>, start: int, t &: _GcTok): int:
+    mut i := start
+    mut neg := false
+    c0 := cps.get(i)
+    if c0 == 43 or c0 == 45:
+        neg = c0 == 45
+        i++
+    end
+    mut v := 0.0
+    until _gc_digit(_gc_at(cps, i)) >= 0:
+        v = v * 10.0 + (_gc_digit(cps.get(i)) as f64)
+        i++
+    end
+    if _gc_is_dot(_gc_at(cps, i)) and _gc_digit(_gc_at(cps, i + 1)) >= 0:
+        i++
+        mut scale := 0.1
+        until _gc_digit(_gc_at(cps, i)) >= 0:
+            v += (_gc_digit(cps.get(i)) as f64) * scale
+            scale /= 10.0
+            i++
+        end
+    end
+    e := _gc_at(cps, i)
+    if e == 101 or e == 69:
+        mut j := i + 1
+        mut eneg := false
+        s := _gc_at(cps, j)
+        if s == 43 or s == 45:
+            eneg = s == 45
+            j++
+        end
+        if _gc_digit(_gc_at(cps, j)) >= 0:
+            mut ex := 0
+            until _gc_digit(_gc_at(cps, j)) >= 0:
+                if ex < 400:
+                    ex = ex * 10 + _gc_digit(cps.get(j))
+                end
+                j++
+            end
+            repeat ex:
+                if eneg:
+                    v /= 10.0
+                else:
+                    v *= 10.0
+                end
+            end
+            i = j
+        end
+    end
+    if neg:
+        v = 0.0 - v
+    end
+    t.k = _GC_T_NUM
+    t.n = v
+    c := _gc_at(cps, i)
+    if c == 37 or c == 0x066A:
+        t.k = _GC_T_PCT
+        i++
+    else _gc_is_ascii_letter(c):
+        t.k = _GC_T_DIM
+        t.u = i
+        until _gc_is_ascii_letter(_gc_at(cps, i)):
+            i++
+        end
+    end
+    ret i
+end
+
+func _gc_lex(p &: _GcP):
+    cps := p.cps
+    n := cps.len()
+    mut i := 0
+    until i < n:
+        c := cps.get(i)
+        if _gc_is_space(c):
+            i++
+            continue
+        end
+        mut t := _GcTok { a = i, b = i + 1 }
+        if _gc_starts_number(cps, i):
+            i = _gc_lex_number(cps, i, t)
+            t.b = i
+            p.toks.push(t)
+            continue
+        end
+        switch c:
+            40: t.k = _GC_T_LP break end
+            41: t.k = _GC_T_RP break end
+            44, 0x060C: t.k = _GC_T_COMMA break end
+            47: t.k = _GC_T_SLASH break end
+            35:
+                t.k = _GC_T_HASH
+                mut j := i + 1
+                until j < n and (_gc_is_ascii_letter(cps.get(j)) or _gc_digit(cps.get(j)) >= 0):
+                    j++
+                end
+                t.b = j
+                break
+            end
+            else:
+                if _gc_is_word_start(c):
+                    t.k = _GC_T_WORD
+                    mut j := i + 1
+                    until j < n and _gc_is_word_char(cps.get(j)):
+                        j++
+                    end
+                    t.b = j
+                else:
+                    t.k = _GC_T_BAD
+                end
+            end
+        end
+        i = t.b
+        p.toks.push(t)
+    end
+    p.toks.push(_GcTok { k = _GC_T_END, a = n, b = n })
+end
+
+func _gc_text_of(p: _GcP, a: int, b: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := a
+    until i < b:
+        str.BufAppendCp(sb, p.cps.get(i))
+        i++
+    end
+    ret str.BufStr(sb)
+end
+
+func _gc_tok_text(p: _GcP, t: _GcTok): str:
+    if t.k == _GC_T_END:
+        ret str.Clone("the end of the text")
+    end
+    ret "'" + _gc_text_of(p, t.a, t.b) + "'"
+end
+
+func _gc_norm_cp(c: int): int:
+    if c >= 65 and c <= 90:
+        ret c + 32
+    end
+    switch c:
+        0x064A, 0x0649: ret 0x06CC end
+        0x0643: ret 0x06A9 end
+        0x0629: ret 0x0647 end
+        else: ret c end
+    end
+    ret c
+end
+
+func _gc_append_key(p: _GcP, t: _GcTok, sb &: str.StringBuilder):
+    mut i := t.a
+    until i < t.b:
+        c := p.cps.get(i)
+        if c != 45 and c != 95 and c != 0x200C:
+            str.BufAppendCp(sb, _gc_norm_cp(c))
+        end
+        i++
+    end
+end
+
+func _gc_word_key(p: _GcP, t: _GcTok): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    _gc_append_key(p, t, sb)
+    ret str.BufStr(sb)
+end
+
+func _gc_phrase(p &: _GcP, col &: int, shown &: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    first := p.toks.get(p.i)
+    col = first.a + 1
+    mut last := first
+    until p.toks.get(p.i).k == _GC_T_WORD:
+        last = p.toks.get(p.i)
+        _gc_append_key(p, last, sb)
+        p.i++
+    end
+    shown = _gc_text_of(p, first.a, last.b)
+    ret str.BufStr(sb)
+end
+
+func _gc_peek(p: _GcP): _GcTok:
+    ret p.toks.get(p.i)
+end
+
+func _gc_fail(p &: _GcP, col: int, msg: str): bool:
+    if p.err == "":
+        p.err = "column " + str.FromInt(col as i64) + ": " + msg
+    end
+    ret false
+end
+
+func _gc_fail_at(p &: _GcP, t: _GcTok, msg: str): bool:
+    ret _gc_fail(p, t.a + 1, msg)
+end
+
+func _gc_is_none(p: _GcP, t: _GcTok): bool:
+    if t.k != _GC_T_WORD:
+        ret false
+    end
+    k := _gc_word_key(p, t)
+    defer _gc_free(k)
+    ret k == "none"
+end
+
+func _gc_is_value(p: _GcP, t: _GcTok): bool:
+    ret t.k == _GC_T_NUM or t.k == _GC_T_PCT or t.k == _GC_T_DIM or _gc_is_none(p, t)
+end
+
+func _gc_args(p &: _GcP, name: str, a &: _GcArgs): bool:
+    mut slash := false
+    until true:
+        t := _gc_peek(p)
+        if t.k == _GC_T_END:
+            ret _gc_fail_at(p, t, name + "( is missing its closing ')'")
+        end
+        if not _gc_is_value(p, t):
+            if t.k == _GC_T_RP and a.vals.len() == 0:
+                ret _gc_fail_at(p, t, name + "() needs values inside the parentheses")
+            end
+            ret _gc_fail_at(p, t, "expected a number in " + name + "(...), found " + _gc_tok_text(p, t))
+        end
+        p.i++
+        if slash:
+            a.alpha = t
+            a.has_alpha = true
+        else:
+            a.vals.push(t)
+        end
+        nx := _gc_peek(p)
+        if nx.k == _GC_T_RP:
+            a.end_col = nx.a + 1
+            p.i++
+            ret true
+        end
+        if a.has_alpha:
+            ret _gc_fail_at(p, nx, "expected ')' after the alpha in " + name + "(...), found " + _gc_tok_text(p, nx))
+        end
+        switch nx.k:
+            _GC_T_COMMA:
+                if a.spaced:
+                    ret _gc_fail_at(p, nx, "do not mix commas and spaces in " + name + "(...): separate every value with a comma, or every value with a space")
+                end
+                a.comma = true
+                p.i++
+                break
+            end
+            _GC_T_SLASH:
+                if a.comma:
+                    ret _gc_fail_at(p, nx, "the comma form of " + name + "(...) takes the alpha after a comma, not after '/'")
+                end
+                slash = true
+                p.i++
+                break
+            end
+            _GC_T_END:
+                ret _gc_fail_at(p, nx, name + "( is missing its closing ')'")
+            end
+            else:
+                if _gc_is_value(p, nx):
+                    if a.comma:
+                        ret _gc_fail_at(p, nx, "expected ',' between the values of " + name + "(...), found " + _gc_tok_text(p, nx))
+                    end
+                    a.spaced = true
+                else:
+                    ret _gc_fail_at(p, nx, "expected ',' or ')' in " + name + "(...), found " + _gc_tok_text(p, nx))
+                end
+            end
+        end
+    end
+end
+
+func _gc_take(p &: _GcP, a &: _GcArgs, n: int, name: str, what: str): bool:
+    mut k := a.vals.len()
+    if a.comma and not a.has_alpha and k == n + 1:
+        a.alpha = a.vals.get(n)
+        a.has_alpha = true
+        k = n
+    end
+    a.count = k
+    if k == n:
+        ret true
+    end
+    if not a.comma and not a.has_alpha and k == n + 1:
+        ret _gc_fail(p, a.vals.get(n).a + 1, "put '/' before the alpha in " + name + "(...), like " + name + "(... / 0.5)")
+    end
+    mut found := str.FromInt(k as i64) + " values"
+    if k == 1:
+        found = "1 value"
+    end
+    ret _gc_fail(p, a.end_col, name + "() takes " + what + " and an optional alpha, found " + found)
+end
+
+func _gc_range_text(lo: f64, hi: f64, bound: int, pct: bool): str:
+    suffix := pct ? "%" : ""
+    if bound == _GC_B_LOW:
+        ret _gc_fmt(lo, 4) + suffix + " or more"
+    end
+    ret _gc_fmt(lo, 4) + suffix + " to " + _gc_fmt(hi, 4) + suffix
+end
+
+func _gc_chan(p &: _GcP, t: _GcTok, name: str, label: str, lo: f64, hi: f64, num_scale: f64, pct_full: f64, bound: int, out &: f64): bool:
+    switch t.k:
+        _GC_T_NUM:
+            if (bound != _GC_B_NONE and t.n < lo) or (bound == _GC_B_BOTH and t.n > hi):
+                ret _gc_fail_at(p, t, "the " + label + " of " + name + "() must be " + _gc_range_text(lo, hi, bound, false) + ", found " + _gc_fmt(t.n, 6))
+            end
+            out = t.n * num_scale
+            ret true
+        end
+        _GC_T_PCT:
+            if (bound != _GC_B_NONE and t.n < 0.0) or (bound == _GC_B_BOTH and t.n > 100.0):
+                ret _gc_fail_at(p, t, "the " + label + " of " + name + "() must be " + _gc_range_text(0.0, 100.0, bound, true) + ", found " + _gc_fmt(t.n, 6) + "%")
+            end
+            out = t.n / 100.0 * pct_full
+            ret true
+        end
+        _GC_T_WORD:
+            out = 0.0
+            ret true
+        end
+        else:
+            ret _gc_fail_at(p, t, "the " + label + " of " + name + "() takes a number or a percent, found " + _gc_tok_text(p, t))
+        end
+    end
+    ret false
+end
+
+func _gc_hue(p &: _GcP, t: _GcTok, name: str, out &: f64): bool:
+    switch t.k:
+        _GC_T_NUM:
+            out = t.n
+            ret true
+        end
+        _GC_T_WORD:
+            out = 0.0
+            ret true
+        end
+        _GC_T_DIM:
+            unit := _gc_text_of(p, t.u, t.b)
+            defer _gc_free(unit)
+            switch _gc_lower_ascii(unit):
+                "deg": out = t.n ret true end
+                "rad": out = t.n * 180.0 / math.PI ret true end
+                "grad": out = t.n * 0.9 ret true end
+                "turn": out = t.n * 360.0 ret true end
+                else:
+                    ret _gc_fail_at(p, t, "unknown angle unit '" + unit + "' in the hue of " + name + "(); use deg, rad, grad or turn, or a bare number of degrees")
+                end
+            end
+        end
+        else:
+            ret _gc_fail_at(p, t, "the hue of " + name + "() is an angle such as 210, 210deg, 0.5turn or 3.1rad, found " + _gc_tok_text(p, t))
+        end
+    end
+    ret false
+end
+
+func _gc_lower_ascii(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    each b in s.bytes():
+        mut c := b as int
+        if c >= 65 and c <= 90:
+            c += 32
+        end
+        str.BufAppendChar(sb, c)
+    end
+    ret str.BufStr(sb)
+end
+
+func _gc_alpha(p &: _GcP, a: _GcArgs, name: str, out &: f64): bool:
+    if not a.has_alpha:
+        out = 1.0
+        ret true
+    end
+    ret _gc_chan(p, a.alpha, name, "alpha", 0.0, 1.0, 1.0, 1.0, _GC_B_BOTH, out)
+end
+
+func _gc_new_args(): _GcArgs:
+    ret _GcArgs { vals = Vector {} as Vector<_GcTok>, alpha = _GcTok {} }
+end
+
+func _gc_fn_rgb(p &: _GcP, name: str, out &: Color): bool:
+    mut a := _gc_new_args()
+    defer a.vals.free()
+    if not _gc_args(p, name, a) or not _gc_take(p, a, 3, name, "3 channels (red, green, blue)"):
+        ret false
+    end
+    mut r := 0.0
+    mut g := 0.0
+    mut b := 0.0
+    mut al := 1.0
+    s := 1.0 / 255.0
+    if not _gc_chan(p, a.vals.get(0), name, "red channel", 0.0, 255.0, s, 1.0, _GC_B_BOTH, r) or not _gc_chan(p, a.vals.get(1), name, "green channel", 0.0, 255.0, s, 1.0, _GC_B_BOTH, g) or not _gc_chan(p, a.vals.get(2), name, "blue channel", 0.0, 255.0, s, 1.0, _GC_B_BOTH, b) or not _gc_alpha(p, a, name, al):
+        ret false
+    end
+    out = New(r, g, b, al)
+    ret true
+end
+
+func _gc_fn_hsl_hwb(p &: _GcP, name: str, hwb: bool, out &: Color): bool:
+    mut a := _gc_new_args()
+    defer a.vals.free()
+    l1 := hwb ? "whiteness" : "saturation"
+    l2 := hwb ? "blackness" : "lightness"
+    if not _gc_args(p, name, a) or not _gc_take(p, a, 3, name, "3 values (hue, " + l1 + ", " + l2 + ")"):
+        ret false
+    end
+    mut h := 0.0
+    mut x := 0.0
+    mut y := 0.0
+    mut al := 1.0
+    if not _gc_hue(p, a.vals.get(0), name, h) or not _gc_chan(p, a.vals.get(1), name, l1, 0.0, 100.0, 0.01, 1.0, _GC_B_BOTH, x) or not _gc_chan(p, a.vals.get(2), name, l2, 0.0, 100.0, 0.01, 1.0, _GC_B_BOTH, y) or not _gc_alpha(p, a, name, al):
+        ret false
+    end
+    v := _gc_v3(h, x, y)
+    if hwb:
+        out = _gc_color_of(_gc_hwb_to_srgb(v), al)
+    else:
+        out = _gc_color_of(_gc_hsl_to_srgb(v), al)
+    end
+    ret true
+end
+
+func _gc_fn_lab(p &: _GcP, name: str, sp: int, out &: Color): bool:
+    mut a := _gc_new_args()
+    defer a.vals.free()
+    ok := sp == _GC_OKLAB or sp == _GC_OKLCH
+    polar := sp == _GC_LCH or sp == _GC_OKLCH
+    what := polar ? "3 values (lightness, chroma, hue)" : "3 values (lightness, a, b)"
+    if not _gc_args(p, name, a) or not _gc_take(p, a, 3, name, what):
+        ret false
+    end
+    lmax := ok ? 1.0 : 100.0
+    ab_full := ok ? 0.4 : 125.0
+    c_full := ok ? 0.4 : 150.0
+    mut l := 0.0
+    mut x := 0.0
+    mut y := 0.0
+    mut al := 1.0
+    if not _gc_chan(p, a.vals.get(0), name, "lightness", 0.0, lmax, 1.0, lmax, _GC_B_BOTH, l):
+        ret false
+    end
+    if polar:
+        if not _gc_chan(p, a.vals.get(1), name, "chroma", 0.0, 0.0, 1.0, c_full, _GC_B_LOW, x) or not _gc_hue(p, a.vals.get(2), name, y):
+            ret false
+        end
+    else:
+        if not _gc_chan(p, a.vals.get(1), name, "a axis", 0.0, 0.0, 1.0, ab_full, _GC_B_NONE, x) or not _gc_chan(p, a.vals.get(2), name, "b axis", 0.0, 0.0, 1.0, ab_full, _GC_B_NONE, y):
+            ret false
+        end
+    end
+    if not _gc_alpha(p, a, name, al):
+        ret false
+    end
+    out = _gc_color_of(_gc_from_space(_gc_v3(l, x, y), sp), al)
+    ret true
+end
+
+func _gc_fn_cmyk(p &: _GcP, name: str, out &: Color): bool:
+    mut a := _gc_new_args()
+    defer a.vals.free()
+    if not _gc_args(p, name, a) or not _gc_take(p, a, 4, name, "4 values (cyan, magenta, yellow, black)"):
+        ret false
+    end
+    mut c := 0.0
+    mut m := 0.0
+    mut y := 0.0
+    mut k := 0.0
+    mut al := 1.0
+    if not _gc_chan(p, a.vals.get(0), name, "cyan", 0.0, 1.0, 1.0, 1.0, _GC_B_BOTH, c) or not _gc_chan(p, a.vals.get(1), name, "magenta", 0.0, 1.0, 1.0, 1.0, _GC_B_BOTH, m) or not _gc_chan(p, a.vals.get(2), name, "yellow", 0.0, 1.0, 1.0, 1.0, _GC_B_BOTH, y) or not _gc_chan(p, a.vals.get(3), name, "black", 0.0, 1.0, 1.0, 1.0, _GC_B_BOTH, k) or not _gc_alpha(p, a, name, al):
+        ret false
+    end
+    out = WithAlpha(Cmyk(c, m, y, k), al)
+    ret true
+end
+
+func _gc_space_of_key(key: str, mix: bool): int:
+    switch key:
+        "srgb": ret _GC_SRGB end
+        "srgblinear": ret _GC_SRGB_LINEAR end
+        "displayp3": ret _GC_P3 end
+        "a98rgb": ret _GC_A98 end
+        "prophotorgb": ret _GC_PROPHOTO end
+        "rec2020": ret _GC_REC2020 end
+        "xyz", "xyzd65": ret _GC_XYZ_D65 end
+        "xyzd50": ret _GC_XYZ_D50 end
+        else: break end
+    end
+    if not mix:
+        ret -1
+    end
+    switch key:
+        "lab": ret _GC_LAB end
+        "lch": ret _GC_LCH end
+        "oklab": ret _GC_OKLAB end
+        "oklch": ret _GC_OKLCH end
+        "hsl": ret _GC_HSL end
+        "hwb": ret _GC_HWB end
+        else: ret -1 end
+    end
+    ret -1
+end
+
+func _gc_fn_color(p &: _GcP, out &: Color): bool:
+    t := _gc_peek(p)
+    spaces := "srgb, srgb linear, display p3, a98 rgb, prophoto rgb, rec2020, xyz, xyz d50 or xyz d65"
+    if t.k != _GC_T_WORD:
+        ret _gc_fail_at(p, t, "color() starts with a colour space (" + spaces + "), found " + _gc_tok_text(p, t))
+    end
+    mut col := 0
+    mut shown := ""
+    key := _gc_phrase(p, col, shown)
+    defer _gc_free(key)
+    sp := _gc_space_of_key(key, false)
+    if sp < 0:
+        ret _gc_fail(p, col, "unknown colour space '" + shown + "' in color(); use " + spaces)
+    end
+    mut a := _gc_new_args()
+    defer a.vals.free()
+    if _gc_peek(p).k == _GC_T_COMMA:
+        p.i++
+        a.comma = true
+    end
+    if not _gc_args(p, "color", a) or not _gc_take(p, a, 3, "color", "3 channels after the colour space"):
+        ret false
+    end
+    mut x := 0.0
+    mut y := 0.0
+    mut z := 0.0
+    mut al := 1.0
+    if not _gc_chan(p, a.vals.get(0), "color", "first channel", 0.0, 0.0, 1.0, 1.0, _GC_B_NONE, x) or not _gc_chan(p, a.vals.get(1), "color", "second channel", 0.0, 0.0, 1.0, 1.0, _GC_B_NONE, y) or not _gc_chan(p, a.vals.get(2), "color", "third channel", 0.0, 0.0, 1.0, 1.0, _GC_B_NONE, z) or not _gc_alpha(p, a, "color", al):
+        ret false
+    end
+    out = _gc_color_of(_gc_from_space(_gc_v3(x, y, z), sp), al)
+    ret true
+end
+
+func _gc_expect(p &: _GcP, k: int, what: str): bool:
+    t := _gc_peek(p)
+    if t.k != k:
+        ret _gc_fail_at(p, t, "expected " + what + ", found " + _gc_tok_text(p, t))
+    end
+    p.i++
+    ret true
+end
+
+func _gc_fn_mix(p &: _GcP, name: str, depth: int, out &: Color): bool:
+    first := _gc_peek(p)
+    mut a := Color {}
+    mut b := Color {}
+    if not _gc_color(p, depth + 1, a) or not _gc_expect(p, _GC_T_COMMA, "',' after the first colour of " + name + "(...)"):
+        ret false
+    end
+    second := _gc_peek(p)
+    if not _gc_color(p, depth + 1, b):
+        ret false
+    end
+    if a.current or b.current or (a.has_dark and a.dark_current) or (b.has_dark and b.dark_current):
+        bad := (a.current or (a.has_dark and a.dark_current)) ? first : second
+        ret _gc_fail_at(p, bad, name + "() cannot take current: the text colour is only known when the page is shown")
+    end
+    mut amount := 0.5
+    mut sp := _GC_OKLAB
+    if _gc_peek(p).k == _GC_T_COMMA:
+        p.i++
+        t := _gc_peek(p)
+        if t.k != _GC_T_NUM and t.k != _GC_T_PCT:
+            ret _gc_fail_at(p, t, "expected the amount of the second colour in " + name + "(...), a number 0 to 1 or a percent, found " + _gc_tok_text(p, t))
+        end
+        if not _gc_chan(p, t, name, "amount", 0.0, 1.0, 1.0, 1.0, _GC_B_BOTH, amount):
+            ret false
+        end
+        p.i++
+        if _gc_peek(p).k == _GC_T_COMMA:
+            p.i++
+            st := _gc_peek(p)
+            if st.k != _GC_T_WORD:
+                ret _gc_fail_at(p, st, "expected a colour space after the amount in " + name + "(...), found " + _gc_tok_text(p, st))
+            end
+            mut col := 0
+            mut shown := ""
+            key := _gc_phrase(p, col, shown)
+            defer _gc_free(key)
+            sp = _gc_space_of_key(key, true)
+            if sp < 0:
+                ret _gc_fail(p, col, "unknown colour space '" + shown + "' in " + name + "(); use oklab, oklch, lab, lch, srgb, srgb linear, hsl, hwb, display p3, a98 rgb, prophoto rgb, rec2020, xyz, xyz d50 or xyz d65")
+            end
+        end
+    end
+    if not _gc_expect(p, _GC_T_RP, "')' to close " + name + "(...)"):
+        ret false
+    end
+    out = _gc_mix_space(a, b, amount, sp)
+    ret true
+end
+
+func _gc_fn_light_dark(p &: _GcP, name: str, depth: int, out &: Color): bool:
+    mut a := Color {}
+    mut b := Color {}
+    if not _gc_color(p, depth + 1, a) or not _gc_expect(p, _GC_T_COMMA, "',' after the light colour of " + name + "(...)") or not _gc_color(p, depth + 1, b) or not _gc_expect(p, _GC_T_RP, "')' to close " + name + "(...)"):
+        ret false
+    end
+    out = LightDark(Light(a), Dark(b))
+    ret true
+end
+
+func _gc_hex(p &: _GcP, t: _GcTok, out &: Color): bool:
+    n := t.b - t.a - 1
+    shown := _gc_tok_text(p, t)
+    if n == 0:
+        ret _gc_fail_at(p, t, "'#' must be followed by 3, 4, 6 or 8 hex digits, like #3366aa")
+    end
+    mut d := Vector {} as Vector<int>
+    defer d.free()
+    mut i := t.a + 1
+    until i < t.b:
+        c := p.cps.get(i)
+        mut v := _gc_digit(c)
+        if v < 0:
+            v = _gc_hex_digit(c)
+        end
+        if v < 0:
+            ret _gc_fail(p, i + 1, shown + " is not a hex colour: '" + _gc_text_of(p, i, i + 1) + "' is not a hex digit (0-9, a-f)")
+        end
+        d.push(v)
+        i++
+    end
+    if n == 3 or n == 4:
+        mut al := 15
+        if n == 4:
+            al = d.get(3)
+        end
+        out = New((d.get(0) * 17) as f64 / 255.0, (d.get(1) * 17) as f64 / 255.0, (d.get(2) * 17) as f64 / 255.0, (al * 17) as f64 / 255.0)
+        ret true
+    end
+    if n == 6 or n == 8:
+        mut al := 255
+        if n == 8:
+            al = d.get(6) * 16 + d.get(7)
+        end
+        out = New((d.get(0) * 16 + d.get(1)) as f64 / 255.0, (d.get(2) * 16 + d.get(3)) as f64 / 255.0, (d.get(4) * 16 + d.get(5)) as f64 / 255.0, al as f64 / 255.0)
+        ret true
+    end
+    ret _gc_fail_at(p, t, shown + " has " + str.FromInt(n as i64) + " hex digits; a hex colour has 3, 4, 6 or 8")
+end
+
+func _gc_is_function_key(key: str): bool:
+    switch key:
+        "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "cmyk", "devicecmyk", "color", "mix", "ترکیب", "ترکیبرنگ", "lightdark", "روشنتیره", "روشنتاریک": ret true end
+        else: ret false end
+    end
+    ret false
+end
+
+func _gc_named(p &: _GcP, key: str, shown: str, col: int, out &: Color): bool:
+    switch key:
+        "transparent", "شفاف":
+            out = New(0.0, 0.0, 0.0, 0.0)
+            ret true
+        end
+        "current", "currentcolor", "کنونی", "رنگکنونی":
+            out = Current()
+            ret true
+        end
+        else: break end
+    end
+    mut v := 0
+    if _gc_lookup_name(key, v):
+        out = Hex(v)
+        ret true
+    end
+    if _gc_is_function_key(key):
+        ret _gc_fail(p, col, shown + " needs its values in parentheses, like " + shown + "(...)")
+    end
+    hint := _gc_suggest(key)
+    if hint != "":
+        ret _gc_fail(p, col, "unknown colour name '" + shown + "'; did you mean '" + hint + "'?")
+    end
+    ret _gc_fail(p, col, "unknown colour name '" + shown + "'; expected a colour name, #hex, current, transparent or a function such as rgb(...)")
+end
+
+func _gc_call(p &: _GcP, key: str, shown: str, col: int, depth: int, out &: Color): bool:
+    switch key:
+        "rgb", "rgba": ret _gc_fn_rgb(p, key, out) end
+        "hsl", "hsla": ret _gc_fn_hsl_hwb(p, key, false, out) end
+        "hwb": ret _gc_fn_hsl_hwb(p, key, true, out) end
+        "lab": ret _gc_fn_lab(p, key, _GC_LAB, out) end
+        "lch": ret _gc_fn_lab(p, key, _GC_LCH, out) end
+        "oklab": ret _gc_fn_lab(p, key, _GC_OKLAB, out) end
+        "oklch": ret _gc_fn_lab(p, key, _GC_OKLCH, out) end
+        "cmyk": ret _gc_fn_cmyk(p, "cmyk", out) end
+        "devicecmyk": ret _gc_fn_cmyk(p, "device cmyk", out) end
+        "color": ret _gc_fn_color(p, out) end
+        "mix", "ترکیب", "ترکیبرنگ": ret _gc_fn_mix(p, shown, depth, out) end
+        "lightdark", "روشنتیره", "روشنتاریک": ret _gc_fn_light_dark(p, shown, depth, out) end
+        else: break end
+    end
+    ret _gc_fail(p, col, "unknown colour function '" + shown + "('; expected rgb, rgba, hsl, hsla, hwb, lab, lch, oklab, oklch, cmyk, device cmyk, color, mix or light dark")
+end
+
+func _gc_color(p &: _GcP, depth: int, out &: Color): bool:
+    t := _gc_peek(p)
+    if depth > _GC_MAX_DEPTH:
+        ret _gc_fail_at(p, t, "colours are nested too deeply")
+    end
+    switch t.k:
+        _GC_T_HASH:
+            p.i++
+            ret _gc_hex(p, t, out)
+        end
+        _GC_T_WORD:
+            mut col := 0
+            mut shown := ""
+            key := _gc_phrase(p, col, shown)
+            defer _gc_free(key)
+            if _gc_peek(p).k == _GC_T_LP:
+                p.i++
+                ret _gc_call(p, key, shown, col, depth, out)
+            end
+            ret _gc_named(p, key, shown, col, out)
+        end
+        _GC_T_END:
+            ret _gc_fail_at(p, t, "expected a colour (a name, #hex or a function such as rgb(...)), found nothing")
+        end
+        else:
+            ret _gc_fail_at(p, t, "expected a colour (a name, #hex or a function such as rgb(...)), found " + _gc_tok_text(p, t))
+        end
+    end
+    ret false
+end
+
+func _gc_parse(text: str, out &: Color, err &: str): bool:
+    mut p := _GcP { cps = str.CodePoints(text), toks = Vector {} as Vector<_GcTok> }
+    defer p.cps.free()
+    defer p.toks.free()
+    _gc_lex(p)
+    each t in p.toks:
+        if t.k == _GC_T_BAD:
+            _gc_fail_at(p, t, "unexpected " + _gc_tok_text(p, t))
+            err = p.err
+            ret false
+        end
+    end
+    mut c := Color {}
+    if not _gc_color(p, 0, c):
+        err = p.err
+        ret false
+    end
+    rest := _gc_peek(p)
+    if rest.k != _GC_T_END:
+        _gc_fail_at(p, rest, "unexpected " + _gc_tok_text(p, rest) + " after the colour")
+        err = p.err
+        ret false
+    end
+    out = c
+    ret true
+end

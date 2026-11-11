@@ -19,7 +19,7 @@ This comparison puts the same programs side by side, then goes through memory, s
 | First appeared | 1972, standardized since 1989 (C23 is current) | 2024 per its source headers, still pre-1.0 |
 | Compilation | Native, through gcc, clang, MSVC and many others | Native, through its own C, LLVM or x86-64/ARM backends |
 | Memory | `malloc`/`free`, by hand | Stack values plus heap containers freed with `.free()` and `defer` |
-| Growable arrays and maps | Write your own or pick a library | `Vector<T>`, `HashMap<K, V>`, `Set<T>` and more, built in |
+| Growable arrays and maps | Write your own or pick a library | `Vector<T>` and `HashMap<K, V>` built in, `Set<T>` and more in the standard library |
 | Strings | `char *` with a terminating zero byte | `str`, UTF-8 text with byte and character operations |
 | Out-of-bounds access | Undefined behavior | Compile error when provable, runtime panic in development builds |
 | Signed overflow | Undefined behavior | Wraps in development builds; with `--release` the LLVM backend assumes it does not happen |

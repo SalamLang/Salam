@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Project, Subscription, User } from "./api";
-import { isDesktop } from "./desktop";
-import { IconChart, IconChat, IconClose, IconFolder, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
+import { isDesktop, useAgentUpdate } from "./desktop";
+import { IconChart, IconChat, IconClose, IconDownload, IconFolder, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
 import { isFa, t } from "./i18n";
 import { fmtNum } from "./format";
 
@@ -29,6 +29,7 @@ export function Sidebar(p: Props) {
     scroller.current?.scrollTo({ top: 0 });
   }, [scope]);
   const [menu, setMenu] = useState(false);
+  const agentUpdate = useAgentUpdate();
   const wrap = useRef<HTMLDivElement>(null);
   const gear = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -145,7 +146,7 @@ export function Sidebar(p: Props) {
               </button>
             )}
           </div>
-          {!isDesktop && (
+          {!isDesktop ? (
             <a
               href="https://www.salamlang.ir/agent/"
               className="icon-button"
@@ -156,6 +157,20 @@ export function Sidebar(p: Props) {
             >
               <IconMonitor width={18} height={18} />
             </a>
+          ) : (
+            agentUpdate && (
+              <a
+                href={agentUpdate.url}
+                className="icon-button agent-update"
+                target="_blank"
+                rel="noreferrer"
+                aria-label={t(`به‌روزرسانی ایجنت به ${agentUpdate.version}`, `Update agent to ${agentUpdate.version}`)}
+                title={t(`نسخه‌ی تازه‌ای در دسترس است: ${agentUpdate.version}`, `A new version is available: ${agentUpdate.version}`)}
+              >
+                <IconDownload width={18} height={18} />
+                <span className="agent-update-dot" aria-hidden="true" />
+              </a>
+            )
           )}
           <div className="settings-wrap" ref={wrap}>
             <button

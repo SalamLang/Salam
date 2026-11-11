@@ -61,5 +61,19 @@ count=$(find "$out" -name '*.salam' | wc -l | tr -d ' ')
 jobs=${BLOG_JOBS:-$(nproc 2>/dev/null || echo 4)}
 echo "website: checking $count code blocks in the magazine"
 [ "$count" -gt 0 ] || exit 0
+# A block with an output block runs through check-example.sh; a page goes
+# through 'salam page build'; any other block gets the full 'salam check'.
 find "$out" -name '*.salam' | LC_ALL=C sort | tr '\n' '\0' |
-    xargs -0 -P "$jobs" -n 1 sh website/check-example.sh
+    xargs -0 -P "$jobs" -n 1 sh -c '
+        src=$1
+        if [ -f "${src%.salam}.out" ] || grep -q "^صفحه:\|^page:" "$src"; then
+            exec sh website/check-example.sh "$src"
+        fi
+        if "$SALAM" check "$src" --no-color --log-level=error >/dev/null 2>&1; then
+            echo "ok   $src (checked, not run)"
+            exit 0
+        fi
+        echo "FAIL $src (does not compile)"
+        "$SALAM" check "$src" --no-color --log-level=error 2>&1 | head -20
+        exit 1
+    ' sh

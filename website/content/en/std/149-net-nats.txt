@@ -28,10 +28,21 @@ nats.Publish(nc, "greet.bob", "hello")
 m := nats.NextMsg(nc, sub, 1000)
 println m.subject, m.data</code></pre>
 
+<h2 id="guide-headers">Headers</h2>
+<p>A <code>Header</code> carries key and value pairs next to the payload. <code>NewHeader</code> makes one, <code>HeaderAdd</code> appends a value, <code>HeaderSet</code> replaces the values of a key, <code>HeaderGet</code> and <code>HeaderValues</code> read them, and <code>HeaderEncode</code> and <code>HeaderParse</code> turn a header to and from its wire form.</p>
+{{example.net-nats-headers}}
+
+<h2 id="guide-subjects">Subjects and wildcards</h2>
+<p>A subscription may use two wildcards: <code>*</code> stands for exactly one word and <code>&gt;</code> for one or more words at the end. So <code>orders.*</code> matches <code>orders.created</code> but not <code>orders.created.eu</code>, and <code>orders.&gt;</code> matches both but not <code>orders</code> alone. <code>SubjectMatches</code> applies the same rule locally, which makes it handy in tests. <code>ValidSubject</code> rejects an empty name, spaces and control characters, a leading or trailing dot and an empty word between two dots. Neither call needs a server.</p>
+{{example.net-nats-guide-subjects}}
+
 <h2 id="guide-request">Request and reply</h2>
-<p><code>Request</code> publishes with a private reply subject and waits for one answer. A responder is a <code>SubscribeReplier</code> or a handler that calls <code>Respond</code>. When nobody is subscribed, a server with headers support answers at once with <code>no responders</code> instead of making you wait for the timeout.</p>
-<pre class="code"><code>nats.SubscribeReplier(nc, "svc.up", "", (m: nats.Msg): ret str.Upper(m.data) end)
-r := nats.Request(nc, "svc.up", "quiet", 1000)</code></pre>
+<p><code>Request</code> sends a message with a private reply subject and waits for one answer. It returns a <code>Msg</code>, so check <code>ok</code> before reading <code>data</code>. When nothing is subscribed to the subject the server says so and <code>err</code> is <code>no responders</code>; when somebody is subscribed but does not answer in time it is <code>timeout</code>. <code>SubscribeReplier</code> takes a function from a message to the reply text. Nothing runs in the background: handlers run while the connection is being pumped, which <code>Request</code>, <code>NextMsg</code>, <code>Flush</code> and <code>Pump</code> all do. To answer by hand, subscribe with <code>Subscribe</code> and call <code>Respond</code> with the incoming message.</p>
+{{example.net-nats-guide-request}}
+
+<h2 id="guide-queue">Queue groups and a clean exit</h2>
+<p>Subscriptions that share a queue name are one group, and the server delivers each message to just one of them, which is how several workers split a stream of jobs. Which member gets which message is up to the server, so count what was handled, not who handled it. <code>NextMsg</code> waits up to the given milliseconds and returns a message with <code>ok</code> false and <code>err</code> set to <code>timeout</code> when nothing arrives. <code>AutoUnsubscribe</code> removes a subscription after that many deliveries. <code>Drain</code> stops the subscriptions, flushes what is pending and closes the connection, so it is the right last call.</p>
+{{example.net-nats-guide-queue}}
 
 <h2 id="guide-reconnect">Reconnecting</h2>
 <p>By default a lost connection is closed for good. Set <code>max_reconnects</code> to a positive number, or a negative one to never give up, and the client reconnects by itself. It walks the list made of the URL and <code>servers</code>, waits <code>reconnect_wait_ms</code> between attempts, sends all subscriptions again (an <code>AutoUnsubscribe</code> limit counts only what is left) and then sends the publishes that were held while the link was down, up to <code>reconnect_buffer</code> bytes. Reconnecting happens inside <code>Pump</code>, <code>NextMsg</code>, <code>Flush</code> and <code>Request</code>, since nothing runs in the background. A request that was already on its way when the link broke gets no answer and times out. Errors such as a refused login close the connection instead of retrying.</p>

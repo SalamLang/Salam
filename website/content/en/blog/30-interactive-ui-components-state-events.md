@@ -8,7 +8,7 @@ summary: A practical guide to interactivity in Salam pages: handlers written in 
 date: 2026-11-11
 ---
 
-Salam's page language handles UI components, state management and event handling without a separate front-end framework. You declare the page as a tree of elements, write event handlers as ordinary Salam functions, and the compiler turns the whole thing into HTML, CSS and JavaScript. **A component in Salam is a named piece of page with parameters; when it declares a variable that a handler changes and the view shows, that variable becomes state, and the page redraws only what depends on it.** The same page can also run in a native window drawn by Salam itself.
+Salam's page language handles UI components, state management and event handling without a separate frontend framework. You declare the page as a tree of elements, write event handlers as ordinary Salam functions, and the compiler turns the whole thing into HTML, CSS and JavaScript. **A component in Salam is a named piece of page with parameters; when it declares a variable that a handler changes and the view shows, that variable becomes state, and the page redraws only what depends on it.** The same page can also run in a native window drawn by Salam itself.
 
 This article walks through the model step by step, from a single click handler to components that keep their own state and talk to each other, and ends with the checks the compiler runs and the limits you should know about. Every program below is a complete page that builds with `salam page build`.
 
@@ -25,7 +25,7 @@ There are two ways to make a page change after an event, and Salam supports both
 
 The rest of the article starts with the first and moves to the second.
 
-## Event handling with the dom package {#events}
+## Event handling with the DOM package {#events}
 
 Here is the smallest useful interactive page: a number and two buttons. The state is one `mut` variable above the page. Each handler changes it and calls `show`, the one function that writes to the page.
 
@@ -58,7 +58,7 @@ page:
 end
 ```
 
-Three details matter. First, `click = more` names the function; it does not call it. Writing `click = more()` is rejected, because the attribute wants the function itself (error E137; when the function writes page state, as `more` does here, the compiler reports the same mistake as E132). Second, `dom.ById("value")` is checked against the ids that really exist in the same file, so a typo such as `dom.ById("valeu")` stops the build with E138 before the page ever reaches a browser. Third, the page has no `main`. A page program is driven entirely by its handlers, and adding a `main` makes the compiler report the handlers as unused functions.
+Three details matter. First, `click = more` names the function; it does not call it. Writing `click = more()` is rejected, because the attribute wants the function itself (error E137; when the function writes page state, as `more` does here, the compiler reports the same mistake as E132). Second, `dom.ById("value")` is checked against the IDs that really exist in the same file, so a wrong id such as `dom.ById("count")` stops the build with E138 before the page ever reaches a browser. Third, the page has no `main`. A page program is driven entirely by its handlers, and adding a `main` makes the compiler report the handlers as unused functions.
 
 The `dom` package covers what a handler normally needs: finding elements (`ById`, `Query`, `QueryAll`), reading and writing text and values, classes and styles, creating and removing elements, timers (`SetTimeout`, `SetInterval`, `RequestFrame`), the event itself (`EventTarget`, `EventKey`, `PreventDefault`), and browser storage (`StoreSetStr`, `StoreGetStr`). The full list is on the [dom package page](/std/dom/), and the lesson on [state, the DOM and timers](/learn/events-dom/) builds a todo list, tabs, a stopwatch and a quiz with it.
 
@@ -100,11 +100,11 @@ A component with typed parameters is also a function. Called from ordinary Salam
 
 A component becomes interactive when it declares a variable at the top of its body. There is no `useState`, no signal constructor and no keyword. The compiler looks at how each variable is used and classifies it:
 
-| Written by some code? | Shown by the view? | What it becomes |
-|---|---|---|
-| yes | yes | **state**: kept per copy, and the copy redraws when it changes |
-| yes | no | an instance variable: kept per copy, never causes a redraw |
-| no | either | a derived value, worked out again every time the copy draws |
+| Written by some code? | Shown by the view? | What it becomes                                                |
+| --------------------- | ------------------ | -------------------------------------------------------------- |
+| yes                   | yes                | **state**: kept per copy, and the copy redraws when it changes |
+| yes                   | no                 | an instance variable: kept per copy, never causes a redraw     |
+| no                    | either             | a derived value, worked out again every time the copy draws    |
 
 "Written" means an assignment, `++`, a method such as `push`, or a change made inside a handler or a callback. "Shown" means it appears in an attribute, a text, an `if` condition, an `each` collection or a value passed to a child component.
 
@@ -222,15 +222,15 @@ Because the compiler works out the route of every event while it builds the page
 
 A UI that is wrong in the browser is usually wrong silently: a misspelled id returns `null`, a handler is never attached, a style is ignored. Salam moves as many of those mistakes as it can to the build. A few of the checks that apply to interactive pages:
 
-| Code | What it catches |
-|---|---|
-| E137 | an event attribute given an expression such as `more()` instead of a function |
-| E138 | `dom.ById("x")` where no element in the file has the id `x` |
-| E111 / E112 | an unknown element or attribute, with a "did you mean" suggestion |
-| E133 | `if` or `each` in a static layout, where no runtime value exists |
-| E134 | a fixed `id` inside `each`, which would repeat |
-| E136 | one class given different styles on two elements |
-| E018 | a CSS value of the wrong type, such as a color where a length belongs |
+| Code        | What it catches                                                               |
+| ----------- | ----------------------------------------------------------------------------- |
+| E137        | an event attribute given an expression such as `more()` instead of a function |
+| E138        | `dom.ById("x")` where no element in the file has the id `x`                   |
+| E111 / E112 | an unknown element or attribute, with a "did you mean" suggestion             |
+| E133        | `if` or `each` in a static layout, where no runtime value exists              |
+| E134        | a fixed `id` inside `each`, which would repeat                                |
+| E136        | one class given different styles on two elements                              |
+| E018        | a CSS value of the wrong type, such as a color where a length belongs         |
 
 Here is what the first two look like on a page that calls its handler by mistake and looks up an id that does not exist:
 
@@ -241,7 +241,7 @@ E138: no element with id 'counter' in this file's layout (counter.salam:4:26)
 page build failed with 2 errors; no output written
 ```
 
-The id check has a limit worth knowing: it only sees ids written as plain text. `dom.ById("votes-" + name)` is built at run time and cannot be checked, so a typo there still shows up in the browser console. Handlers themselves are Salam code, so a wrong type, an unknown function or a missing argument is an ordinary compile error, exactly as in a server program.
+The id check has a limit worth knowing: it only sees IDs written as plain text. `dom.ById("votes-" + name)` is built at runtime and cannot be checked, so a typo there still shows up in the browser console. Handlers themselves are Salam code, so a wrong type, an unknown function or a missing argument is an ordinary compile error, exactly as in a server program.
 
 ## One page, two targets: the web and a native window {#native}
 

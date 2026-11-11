@@ -38,18 +38,18 @@ error: no seed compiler on PATH.
 
 The repository's history goes back to June 2018 and includes several earlier implementations. Until the summer of 2026 the compiler was a C program, in its last form under `c/src/`: lexer, parser, semantic analysis, a C code generator, an LLVM backend, an interpreter, a JavaScript backend and the tooling around them. The port to Salam happened over the summer of 2026, and `git log` dates the milestones:
 
-| Date | Milestone |
-|---|---|
-| 27 July 2026 | The compiler written in Salam is added to the repository (PR #1461) |
-| 1 August 2026 | A release cut with both the C and the Salam compilers in the tree ("First self-host with C version") |
-| 20 August 2026 | The C implementation is removed: 220 C files, about 62,900 lines (PR #1546) |
-| 22 October 2026 | Compile-time use-after-free and double-free checks land in the self-hosted compiler (PR #2282) |
-| 25 October 2026 | The native backend and built-in linker, written in Salam, are merged (PR #2363) |
-| 3 November 2026 | Compile-time range, overflow and division checks (PR #2604) |
+| Date            | Milestone                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| 27 July 2026    | The compiler written in Salam is added to the repository (PR #1461)                                  |
+| 1 August 2026   | A release cut with both the C and the Salam compilers in the tree ("First self-host with C version") |
+| 20 August 2026  | The C implementation is removed: 220 C files, about 62,900 lines (PR #1546)                          |
+| 22 October 2026 | Compile-time use-after-free and double-free checks land in the self-hosted compiler (PR #2282)       |
+| 25 October 2026 | The native backend and built-in linker, written in Salam, are merged (PR #2363)                      |
+| 3 November 2026 | Compile-time range, overflow and division checks (PR #2604)                                          |
 
 At the moment of the switch, the Salam version of the compiler was 164 files and about 64,900 lines, roughly the same size as the C program it replaced. Since then it has tripled, to close to 200,000 lines, and the largest additions (the native code generator, the linker, the ownership and range analyses) were written in Salam from the start. They never existed in C.
 
-The Salam compiler mirrors the structure of the C one: the same pipeline of source, lexer, tokens, parser, AST, semantic analysis and code generation. The porting guide in the repository describes the method: port module by module in dependency order, keep the C build runnable, and check each stage against it. The deleted C sources are still in git history, where they remain useful as a design reference.
+The Salam compiler mirrors the structure of the C one: the same pipeline of source, lexer, tokens, parser, AST, semantic analysis and code generation. The porting guide in the repository describes the method: port module by module in dependency order, keep the C build runnable, and check each stage against it. The deleted C sources are still in Git history, where they remain useful as a design reference.
 
 ## How the port was checked {#verification}
 
@@ -155,7 +155,7 @@ What Salam offers on this front, stated honestly:
 
 - **The whole chain is public.** The compiler, the build scripts and the CI workflows that produce releases are in the [GitHub repository](https://github.com/SalamLang/Salam), and the C implementation the chain started from is in its history.
 - **Fixpoint checks.** A three-stage bootstrap that reaches a fixpoint shows that the compiler compiles itself consistently. It does not show that the seed was clean.
-- **Independent code generators.** Building the compiler through C (with gcc or clang as the C compiler), through LLVM and through the native backend gives binaries produced by unrelated machine-code generators. That makes a hidden payload in one of them harder to keep consistent, but they all share the same Salam front end and the same seed.
+- **Independent code generators.** Building the compiler through C (with gcc or clang as the C compiler), through LLVM and through the native backend gives binaries produced by unrelated machine-code generators. That makes a hidden payload in one of them harder to keep consistent, but they all share the same Salam frontend and the same seed.
 
 What has not been done, as far as the repository shows, is a formal **diverse double-compiling** check, the technique David A. Wheeler proposed for answering Thompson's attack, which rebuilds a compiler with an independent trusted compiler and compares the results bit for bit. Salam's multiple backends make that kind of experiment possible; it has not been published.
 
@@ -182,7 +182,7 @@ Write a first compiler in an existing language, use it to compile a second compi
 
 ### Can I build Salam from source without a Salam binary?
 
-Not from the current tree: you need a seed. Install a released compiler from the [install page](/install/) and run `sh tools/bash/build-selfhost.sh`. In principle you could start from the C implementation in git history and climb through the releases, but that is a long road and the repository does not document it.
+Not from the current tree: you need a seed. Install a released compiler from the [install page](/install/) and run `sh tools/bash/build-selfhost.sh`. In principle you could start from the C implementation in Git history and climb through the releases, but that is a long road and the repository does not document it.
 
 ### Is the Salam compiler written in Persian or English Salam?
 

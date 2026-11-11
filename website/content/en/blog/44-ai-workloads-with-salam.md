@@ -16,15 +16,15 @@ This article is in the "future" category because the interesting question is whe
 
 People mean several different jobs when they say "run AI". It helps to separate them, because Salam covers some well, some partly and some not at all.
 
-| Job | Typical tool elsewhere | Salam today |
-|---|---|---|
-| Train a large model on GPUs | PyTorch, JAX | Not covered: no GPU code in the library |
-| Serve a large model to many users | vLLM, llama.cpp server, hosted APIs | Call such a server over HTTP |
-| Run a small language model inside a program | llama.cpp | `ai.llm` with a GGUF file under 2 GB |
-| Run an exported classifier or embedding model | ONNX Runtime | `ai.onnx`, about 65 operators |
-| Train a small network on the CPU | PyTorch on CPU | `ai.nn`, `ai.autograd`, `ai.optim` |
-| Classic machine learning on tables | scikit-learn | `ai.ml` |
-| Exchange arrays with Python | NumPy files | `npy` reads and writes `.npy` and `.npz` |
+| Job                                           | Typical tool elsewhere              | Salam today                              |
+| --------------------------------------------- | ----------------------------------- | ---------------------------------------- |
+| Train a large model on GPUs                   | PyTorch, JAX                        | Not covered: no GPU code in the library  |
+| Serve a large model to many users             | vLLM, llama.cpp server, hosted APIs | Call such a server over HTTP             |
+| Run a small language model inside a program   | llama.cpp                           | `ai.llm` with a GGUF file under 2 GB     |
+| Run an exported classifier or embedding model | ONNX Runtime                        | `ai.onnx`, about 65 operators            |
+| Train a small network on the CPU              | PyTorch on CPU                      | `ai.nn`, `ai.autograd`, `ai.optim`       |
+| Classic machine learning on tables            | scikit-learn                        | `ai.ml`                                  |
+| Exchange arrays with Python                   | NumPy files                         | `npy` reads and writes `.npy` and `.npz` |
 
 The pattern is clear: Salam is useful at the small and embedded end, where a program needs a model as one component and you want a single native binary with no Python environment beside it. At the large end, the honest answer is to call a server.
 
@@ -72,9 +72,9 @@ The last count matters because of the package's main limit. It reads five weight
 
 The [`ai.llm` package](/std/ai/llm/) builds on the GGUF reader and runs Llama-family models on the CPU, in pure Salam. It implements the Llama layer layout (RMSNorm, rotary positions, grouped-query attention, a SwiGLU feed-forward block) plus the attention biases Qwen2 uses. Its documentation lists Qwen2.5 Instruct as tested; Llama and Mistral use the same layout. Architectures with a different layout, such as Phi, fail to load or produce nonsense.
 
-The package has the pieces you would expect from a small inference engine: BPE and SentencePiece tokenizers, a key/value cache, `Forward` for one step, a `Sampler` with temperature, top-k, top-p and a repetition penalty, and `Generate` for the whole loop. The cost is spelled out in the package page, and it is worth repeating plainly:
+The package has the pieces you would expect from a small inference engine: BPE and SentencePiece tokenizers, a key-value cache, `Forward` for one step, a `Sampler` with temperature, top-k, top-p and a repetition penalty, and `Generate` for the whole loop. The cost is spelled out in the package page, and it is worth repeating plainly:
 
-- **Memory.** Every weight is expanded to `f32` when the model loads, so Qwen2.5 0.5B, a 0.7 GB file, needs about 3 GB of memory. The key/value cache is sized from the context length, so lowering `cfg.ctx` saves memory.
+- **Memory.** Every weight is expanded to `f32` when the model loads, so Qwen2.5 0.5B, a 0.7 GB file, needs about 3 GB of memory. The key-value cache is sized from the context length, so lowering `cfg.ctx` saves memory.
 - **Speed.** The documentation says to expect a few seconds per token on an ordinary machine, even in a `--release` build, which drops bounds checks from the inner loops.
 - **Quality.** A half-billion-parameter model writes fluent sentences and gets facts wrong. The package's own chat example shows Qwen2.5 0.5B explaining the blue sky with water droplets.
 

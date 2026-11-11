@@ -16,16 +16,16 @@ Everything here can be reproduced with the `salam` command. Where the article sa
 
 **A compiler pipeline is a chain of stages, each of which turns one representation of the program into the next.** Salam's compiler is written in Salam itself (see [the self-hosting article](/blog/self-hosting-compiler/)), and its source sits in `compiler/`, one directory per stage. The entry point, `compiler/main.salam`, is short: it reads the command-line arguments and hands them to `cli.Run`. Everything else hangs off that call.
 
-| Stage | Input | Output | Directory | Size (lines) |
-|---|---|---|---|---|
-| Lexer | source text | tokens | `compiler/lexer/` | about 2,800 |
-| Parser | tokens | syntax tree (AST) | `compiler/parser/` | about 5,100 |
-| Semantic analysis | AST | typed, checked AST | `compiler/semantic/` | about 40,700 |
-| C backend | checked AST | C source | `compiler/codegen/` | about 8,900 |
-| LLVM backend | checked AST | LLVM IR | `compiler/llvmgen/` | about 11,900 |
-| Native backend | LLVM IR text | machine code | `compiler/nativegen/` | about 52,600 |
-| Built-in linker | object files | executable | `compiler/nativelink/` | about 12,600 |
-| Driver | command line | the whole run | `compiler/driver/` | about 9,500 |
+| Stage             | Input        | Output             | Directory              | Size (lines) |
+| ----------------- | ------------ | ------------------ | ---------------------- | ------------ |
+| Lexer             | source text  | tokens             | `compiler/lexer/`      | about 2,800  |
+| Parser            | tokens       | syntax tree (AST)  | `compiler/parser/`     | about 5,100  |
+| Semantic analysis | AST          | typed, checked AST | `compiler/semantic/`   | about 40,700 |
+| C backend         | checked AST  | C source           | `compiler/codegen/`    | about 8,900  |
+| LLVM backend      | checked AST  | LLVM IR            | `compiler/llvmgen/`    | about 11,900 |
+| Native backend    | LLVM IR text | machine code       | `compiler/nativegen/`  | about 52,600 |
+| Built-in linker   | object files | executable         | `compiler/nativelink/` | about 12,600 |
+| Driver            | command line | the whole run      | `compiler/driver/`     | about 9,500  |
 
 The numbers say something about where the work is. Lexing and parsing are the small, well-understood part. The semantic analysis is eight times bigger than the parser, because that is where a strict language earns its strictness. The native backend is the largest piece of all, since it contains a full optimizer and writes machine code for five processor families. Counting the interpreter, the JavaScript backend, the formatter, the language server and the page language, the compiler is about 340 source files and close to 200,000 lines.
 
@@ -87,7 +87,7 @@ When a package is spread over several files in one directory, those files are le
 4. **Check every function**: resolve names, infer the type of every expression, check every call against its signature, instantiate generics, check `match` for exhaustiveness, track definite initialization, and run the value-range analysis and the ownership analysis described in [the static typing article](/blog/static-typing-in-salam/) and [the memory article](/blog/memory-management-in-salam/).
 5. **Report unused functions and imports**, which are errors in Salam, not warnings.
 
-The analysis also rewrites the tree. You can see the result with `--emit-ast`, which prints the *decorated* tree, types included. For `x := 1 + 2`, the declaration comes out like this (location elements removed):
+The analysis also rewrites the tree. You can see the result with `--emit-ast`, which prints the _decorated_ tree, types included. For `x := 1 + 2`, the declaration comes out like this (location elements removed):
 
 ```text
 <node kind="VariableDecl" name="x" type="i32" mut="false">
@@ -148,7 +148,7 @@ error[E168]: index 5 is out of bounds for an array of length 3
 
 The same diagnostics come in other shapes. `--error-style=gcc` gives the one-line `file:line:col: error:` form that editors and build tools parse, and `--error-format=json` gives one JSON object per diagnostic for scripts and other tools:
 
-```json
+```text
 {"level":"error","code":"E013","message":"cannot reassign immutable variable 'count'; declare it 'mut' to reassign it, or assign to its elements or fields instead","file":"e1.salam","line":3,"column":5}
 ```
 

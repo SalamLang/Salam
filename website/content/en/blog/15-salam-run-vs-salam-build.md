@@ -12,12 +12,12 @@ date: 2026-11-11
 
 ## The four commands at a glance {#short-answer}
 
-| Command | What it does | Produces | Typical use |
-|---|---|---|---|
-| `salam check app.salam` | Lex, parse and fully analyze, imports included | Diagnostics only | After every edit |
-| `salam run app.salam` | Check, compile, run, delete the executable | Program output | Trying a program, scripts, examples |
-| `salam build app.salam` | Check, compile, link | An executable you keep | Releases, benchmarks, deployment |
-| `salam exec app.salam` | Check, then run in the interpreter | Program output | Machines without a toolchain, quick logic checks |
+| Command                 | What it does                                   | Produces               | Typical use                                      |
+| ----------------------- | ---------------------------------------------- | ---------------------- | ------------------------------------------------ |
+| `salam check app.salam` | Lex, parse and fully analyze, imports included | Diagnostics only       | After every edit                                 |
+| `salam run app.salam`   | Check, compile, run, delete the executable     | Program output         | Trying a program, scripts, examples              |
+| `salam build app.salam` | Check, compile, link                           | An executable you keep | Releases, benchmarks, deployment                 |
+| `salam exec app.salam`  | Check, then run in the interpreter             | Program output         | Machines without a toolchain, quick logic checks |
 
 The REPL (`salam cli`) is a fifth way in, covered below. One program can go through all of them unchanged. Here is a prime sieve that we will use throughout:
 
@@ -88,7 +88,7 @@ The cost of `run` is the compile step on every invocation. The C backend caches 
 
 The options that matter most:
 
-- **Development and release builds.** By default a build keeps the safety checks: array and `Vector` indices are checked at run time, and signed arithmetic is guaranteed to wrap. `--release` removes the bounds checks, lets the optimizer assume signed arithmetic never overflows and raises LLVM's optimization from `-O2` to `-O3`. Test with the default, ship with `--release` when you need the speed.
+- **Development and release builds.** By default a build keeps the safety checks: array and `Vector` indices are checked at runtime, and signed arithmetic is guaranteed to wrap. `--release` removes the bounds checks, lets the optimizer assume signed arithmetic never overflows and raises LLVM's optimization from `-O2` to `-O3`. Test with the default, ship with `--release` when you need the speed.
 - **Debugging.** `-g` embeds DWARF debug information, and `salam debug app.salam` builds that way and starts GDB or LLDB. `salam memcheck` builds and runs the program under Valgrind or AddressSanitizer.
 - **Backends.** `--backend=c`, `llvm` or `native` picks the code generator; the article [Three ways to generate code](/blog/salam-code-generation-c-llvm-native/) explains the trade-offs.
 - **Targets.** `--target=TRIPLE` cross-compiles, for example to Windows from Linux. See [cross-compiling Salam](/blog/cross-compilation-salam/).
@@ -98,7 +98,7 @@ The executable needs nothing from the Salam toolchain to run. You can copy it to
 
 ## salam exec: the interpreter {#exec}
 
-`salam exec app.salam` runs the program without producing machine code. After the same front end and checks as every other command, it hands the checked syntax tree to an interpreter that lives inside the `salam` binary (`compiler/interp/`). Despite the "tree-walking interpreter" description in `salam help`, the current interpreter does a little more: the first time a function is called, it is translated into **register bytecode** for a small virtual machine (`interp_vm.salam`), and anything the bytecode compiler does not handle natively falls back to evaluating the tree directly, so the results stay exact. Setting `SALAM_VM=0` turns the bytecode path off. The interpreter's values live in its own heap and are cleaned up by a mark-and-sweep garbage collector, unlike compiled Salam, which has none.
+`salam exec app.salam` runs the program without producing machine code. After the same frontend and checks as every other command, it hands the checked syntax tree to an interpreter that lives inside the `salam` binary (`compiler/interp/`). Despite the "tree-walking interpreter" description in `salam help`, the current interpreter does a little more: the first time a function is called, it is translated into **register bytecode** for a small virtual machine (`interp_vm.salam`), and anything the bytecode compiler does not handle natively falls back to evaluating the tree directly, so the results stay exact. Setting `SALAM_VM=0` turns the bytecode path off. The interpreter's values live in its own heap and are cleaned up by a mark-and-sweep garbage collector, unlike compiled Salam, which has none.
 
 When is that useful?
 
@@ -133,15 +133,15 @@ Under the hood the REPL is not an interpreter. Every turn, it writes the whole s
 
 The classic distinction is that a **compiled** language is translated to machine code before it runs and an **interpreted** one is executed by another program as it goes. In practice most languages mix the two: Java compiles to bytecode and then JIT-compiles it, CPython compiles to bytecode and interprets it, and JavaScript engines do several of these at once. "Compiled" and "interpreted" describe implementations more than languages.
 
-Salam's case is clear, though. The language is designed for ahead-of-time compilation: static types, no runtime reflection needed for ordinary code, no garbage collector in the compiled output. The interpreter is a convenience built on the same front end, not a second runtime with its own semantics. For Salam programs, the practical differences are:
+Salam's case is clear, though. The language is designed for ahead-of-time compilation: static types, no runtime reflection needed for ordinary code, no garbage collector in the compiled output. The interpreter is a convenience built on the same frontend, not a second runtime with its own semantics. For Salam programs, the practical differences are:
 
-| | Compiled (`build`, `run`) | Interpreted (`exec`) |
-|---|---|---|
-| Needs | A backend toolchain (built into release binaries, or a C compiler) | Only the `salam` binary |
-| Speed of the program | Native speed, in the [same range as C and Rust](/speed/) | Much slower on heavy computation |
-| Memory | Freed by the program, no collector | Interpreter heap with a garbage collector |
-| Feature coverage | The whole language | Nearly all; the compiled build is the reference |
-| Output | An executable (kept by `build`) | Nothing but the program's output |
+|                      | Compiled (`build`, `run`)                                          | Interpreted (`exec`)                            |
+| -------------------- | ------------------------------------------------------------------ | ----------------------------------------------- |
+| Needs                | A backend toolchain (built into release binaries, or a C compiler) | Only the `salam` binary                         |
+| Speed of the program | Native speed, in the [same range as C and Rust](/speed/)           | Much slower on heavy computation                |
+| Memory               | Freed by the program, no collector                                 | Interpreter heap with a garbage collector       |
+| Feature coverage     | The whole language                                                 | Nearly all; the compiled build is the reference |
+| Output               | An executable (kept by `build`)                                    | Nothing but the program's output                |
 
 The [native compilation article](/blog/native-compilation-without-vm-or-gc/) explains why the compiled form is what Salam is built around.
 

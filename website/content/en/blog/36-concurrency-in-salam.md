@@ -16,16 +16,16 @@ This article walks through each tool with a program you can run, shows which one
 
 Every concurrent unit in Salam is, in the end, an operating system thread. On top of that, the standard library builds the usual higher-level tools:
 
-| Need | Tool |
-|---|---|
-| Start a thread, wait for it | `spawn`, `join` (built in), [thread](/std/thread/) for groups and limits |
-| Many small jobs, bounded | `go f(x)`, `pool.New`, `pool.Submit` from [pool](/std/pool/) |
-| A loop over indexes on all cores | `pool.ParallelFor`, `pool.Map` |
-| Results and errors from tasks | `pool.Async` and `Await`, `pool.NewGroup` and `GroupWait` |
-| Pass values between threads | [chan](/std/chan/): buffered or rendezvous channels, `Select`, timers |
-| Protect shared data | [sync](/std/sync/): `Mutex`, `RWMutex`, `CondVar`, `WaitGroup`, `Semaphore`, `Once` |
-| One number or flag, lock-free | [atomic](/std/atomic/): `I64`, `Flag` |
-| Cancel work, set deadlines | [ctx](/std/ctx/): `WithCancel`, `WithTimeout`, `WithDeadline` |
+| Need                             | Tool                                                                                |
+| -------------------------------- | ----------------------------------------------------------------------------------- |
+| Start a thread, wait for it      | `spawn`, `join` (built-in), [thread](/std/thread/) for groups and limits            |
+| Many small jobs, bounded         | `go f(x)`, `pool.New`, `pool.Submit` from [pool](/std/pool/)                        |
+| A loop over indices on all cores | `pool.ParallelFor`, `pool.Map`                                                      |
+| Results and errors from tasks    | `pool.Async` and `Await`, `pool.NewGroup` and `GroupWait`                           |
+| Pass values between threads      | [chan](/std/chan/): buffered or rendezvous channels, `Select`, timers               |
+| Protect shared data              | [sync](/std/sync/): `Mutex`, `RWMutex`, `CondVar`, `WaitGroup`, `Semaphore`, `Once` |
+| One number or flag, lock-free    | [atomic](/std/atomic/): `I64`, `Flag`                                               |
+| Cancel work, set deadlines       | [ctx](/std/ctx/): `WithCancel`, `WithTimeout`, `WithDeadline`                       |
 
 The choice of real threads has consequences you should know up front. Tasks on a pool are threads, not green threads: a task that blocks keeps its worker busy. That is simpler to reason about than an async runtime, and C libraries called through the [FFI](/blog/salam-c-interop-ffi/) behave exactly as they would in C. It also means a server with ten thousand idle connections does not want ten thousand threads, which is why Salam's HTTP server uses an epoll worker pool on Linux instead of a thread per connection.
 
@@ -128,7 +128,7 @@ Without the `Lock` and `Unlock`, two tasks can read the same old count and both 
 
 ## Parallel loops: ParallelFor and Map {#parallel}
 
-Often all you want is the same loop body over many indexes, spread across the cores. `pool.ParallelFor(n, workers, body)` calls `body(i)` for every `i` from 0 to `n - 1` and returns when all are done; `pool.Map` does the same and collects each result into a `Vector<i64>`. This program counts the primes below one million in ten blocks:
+Often all you want is the same loop body over many indices, spread across the cores. `pool.ParallelFor(n, workers, body)` calls `body(i)` for every `i` from 0 to `n - 1` and returns when all are done; `pool.Map` does the same and collects each result into a `Vector<i64>`. This program counts the primes below one million in ten blocks:
 
 ```salam
 import pool
@@ -169,7 +169,7 @@ primes below 1000000: 78498
 in the first block: 9592 in the last: 7224
 ```
 
-Results land in their own slots, so the output is the same whatever order the blocks finished in. The [pool reference](/std/pool/) gives the rules: never rely on the order of turns, keep each turn large enough to be worth a thread (chunks, not single items), and do not print from the loop body. Note `until d * d <= n:` in `is prime`: Salam's `until` loops *while* its condition is true, which surprises people coming from Ruby.
+Results land in their own slots, so the output is the same whatever order the blocks finished in. The [pool reference](/std/pool/) gives the rules: never rely on the order of turns, keep each turn large enough to be worth a thread (chunks, not single items), and do not print from the loop body. Note `until d * d <= n:` in `is prime`: Salam's `until` loops _while_ its condition is true, which surprises people coming from Ruby.
 
 ## Error groups and futures {#tasks}
 
@@ -325,14 +325,14 @@ The `sync` primitives block on a condition variable rather than polling, so a wa
 
 ## How Salam's concurrency compares with Go, Rust and Java {#compare}
 
-| | Salam | Go | Rust | Java |
-|---|---|---|---|---|
-| Unit of concurrency | OS threads, bounded pools | goroutines on a scheduler | OS threads, or async tasks with a runtime such as Tokio | OS threads, and virtual threads since Java 21 |
-| Spawn syntax | `go f(x)`, `spawn(f)` | `go f(x)` | `thread::spawn`, `tokio::spawn` | executors, `Thread.ofVirtual()` |
-| Channels | library, with `Select` function | built in, `select` statement | library (`std::sync::mpsc`, crossbeam) | `BlockingQueue` and friends |
-| async/await | no | no | yes | no (virtual threads instead) |
-| Data race prevention | your discipline | race detector at run time | compile-time (`Send`, `Sync`) | your discipline |
-| Garbage collector | none | yes | none | yes |
+|                      | Salam                           | Go                           | Rust                                                    | Java                                          |
+| -------------------- | ------------------------------- | ---------------------------- | ------------------------------------------------------- | --------------------------------------------- |
+| Unit of concurrency  | OS threads, bounded pools       | goroutines on a scheduler    | OS threads, or async tasks with a runtime such as Tokio | OS threads, and virtual threads since Java 21 |
+| Spawn syntax         | `go f(x)`, `spawn(f)`           | `go f(x)`                    | `thread::spawn`, `tokio::spawn`                         | executors, `Thread.ofVirtual()`               |
+| Channels             | library, with `Select` function | built-in, `select` statement | library (`std::sync::mpsc`, crossbeam)                  | `BlockingQueue` and friends                   |
+| async/await          | no                              | no                           | yes                                                     | no (virtual threads instead)                  |
+| Data race prevention | your discipline                 | race detector at runtime     | compile-time (`Send`, `Sync`)                           | your discipline                               |
+| Garbage collector    | none                            | yes                          | none                                                    | yes                                           |
 
 The honest reading: Salam's `go` keyword borrows Go's syntax, but not its runtime. A goroutine costs a few kilobytes and Go can run hundreds of thousands of them, parking blocked ones cheaply; a Salam task occupies an OS thread while it runs and while it blocks. For CPU-bound parallel work that difference matters little, and having no garbage collector removes pause times entirely. For hundreds of thousands of mostly idle connections, Go's model, or an event loop like the one inside Salam's own HTTP server, is the better fit.
 

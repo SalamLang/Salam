@@ -8,7 +8,7 @@ summary: The --target flag, the three code generators behind it, the sysroots an
 date: 2026-11-11
 ---
 
-Cross-compilation means building an executable on one kind of machine that runs on another: a Windows `.exe` built on Linux, an ARM binary built on an x86-64 laptop, a macOS program built in a Linux CI job. In Salam you ask for it with one flag, `--target`, followed by a target triple such as `x86_64-w64-windows-gnu` or `aarch64-linux-musl`. The compiler picks a code generator, finds a C runtime for that target, links the result and hands you a file for the other machine.
+Cross-compilation means building an executable on one kind of machine that runs on another: a Windows `.exe` built on Linux, an ARM binary built on an x86-64 laptop, a macOS program built-in a Linux CI job. In Salam you ask for it with one flag, `--target`, followed by a target triple such as `x86_64-w64-windows-gnu` or `aarch64-linux-musl`. The compiler picks a code generator, finds a C runtime for that target, links the result and hands you a file for the other machine.
 
 This article explains what happens behind that flag, which targets work out of the box, which need extra files, how to write code that compiles cleanly for every platform, and where the project's own testing stops.
 
@@ -28,18 +28,18 @@ Go is well known for making this easy with `GOOS` and `GOARCH`, and Zig ships C 
 
 A target triple names the CPU, the vendor or OS family, and the ABI. These are the ones you will use most often with Salam:
 
-| Triple | Produces |
-|---|---|
-| `x86_64-linux-musl` | static 64-bit Linux executable |
-| `aarch64-linux-musl` | static 64-bit ARM Linux executable (Raspberry Pi 4 and 5, ARM servers) |
-| `arm-linux-musleabihf` | static 32-bit ARM Linux executable (ARMv7, hard float) |
-| `i686-linux-musl` | static 32-bit x86 Linux executable |
-| `x86_64-w64-windows-gnu` | 64-bit Windows `.exe` |
-| `i686-w64-windows-gnu` | 32-bit Windows `.exe` |
-| `aarch64-w64-windows-gnu` | Windows on Arm `.exe` |
-| `arm64-apple-macos`, `x86_64-apple-macos` | macOS executable for Apple silicon or Intel |
-| `universal-apple-macos` | one macOS file holding both architectures |
-| `wasm32-wasi` | WebAssembly module for a WASI runtime (see [Salam and WebAssembly](/blog/salam-webassembly-and-javascript/)) |
+| Triple                                    | Produces                                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `x86_64-linux-musl`                       | static 64-bit Linux executable                                                                               |
+| `aarch64-linux-musl`                      | static 64-bit ARM Linux executable (Raspberry Pi 4 and 5, ARM servers)                                       |
+| `arm-linux-musleabihf`                    | static 32-bit ARM Linux executable (ARMv7, hard float)                                                       |
+| `i686-linux-musl`                         | static 32-bit x86 Linux executable                                                                           |
+| `x86_64-w64-windows-gnu`                  | 64-bit Windows `.exe`                                                                                        |
+| `i686-w64-windows-gnu`                    | 32-bit Windows `.exe`                                                                                        |
+| `aarch64-w64-windows-gnu`                 | Windows on Arm `.exe`                                                                                        |
+| `arm64-apple-macos`, `x86_64-apple-macos` | macOS executable for Apple silicon or Intel                                                                  |
+| `universal-apple-macos`                   | one macOS file holding both architectures                                                                    |
+| `wasm32-wasi`                             | WebAssembly module for a WASI runtime (see [Salam and WebAssembly](/blog/salam-webassembly-and-javascript/)) |
 
 The command is the same for all of them:
 
@@ -67,13 +67,13 @@ The part of cross-compilation that usually hurts is not code generation but link
 
 The linker is written in Salam and lives inside the compiler. Its design document lists the outputs it writes:
 
-| Target | Output | C runtime |
-|---|---|---|
-| `x86_64-linux-musl`, `aarch64-linux-musl`, `i686-linux-musl`, `arm-linux-musleabihf` | static ELF | bundled musl |
-| `x86_64-linux-gnu`, `aarch64-linux-gnu` | dynamic ELF PIE | glibc |
-| `x86_64-w64-windows-gnu`, `i686-w64-windows-gnu` | PE | mingw-w64 |
-| `aarch64-w64-windows-gnu` | PE (ARM64) | llvm-mingw (UCRT) |
-| `x86_64-apple-macos`, `arm64-apple-macos` | Mach-O PIE, ad-hoc signed | `libSystem` |
+| Target                                                                               | Output                    | C runtime         |
+| ------------------------------------------------------------------------------------ | ------------------------- | ----------------- |
+| `x86_64-linux-musl`, `aarch64-linux-musl`, `i686-linux-musl`, `arm-linux-musleabihf` | static ELF                | bundled musl      |
+| `x86_64-linux-gnu`, `aarch64-linux-gnu`                                              | dynamic ELF PIE           | glibc             |
+| `x86_64-w64-windows-gnu`, `i686-w64-windows-gnu`                                     | PE                        | mingw-w64         |
+| `aarch64-w64-windows-gnu`                                                            | PE (ARM64)                | llvm-mingw (UCRT) |
+| `x86_64-apple-macos`, `arm64-apple-macos`                                            | Mach-O PIE, ad-hoc signed | `libSystem`       |
 
 For glibc targets other than the host, the driver looks for a glibc sysroot under `/usr/aarch64-linux-gnu` (and the equivalents) or in `SALAM_GLIBC_SYSROOT`. Two targets need something you install yourself: Windows on Arm needs the llvm-mingw runtime (found through `aarch64-w64-mingw32-clang` on `PATH` or `SALAM_LLVM_MINGW`), and RISC-V needs a sysroot for the C library you link against.
 
@@ -111,7 +111,7 @@ A `*-linux-gnu` triple links dynamically against glibc, which you need when the 
 - `--manifest=FILE` embeds an application manifest;
 - `--version-info=KEY=VALUE` adds a version resource (version, company, description, product, copyright).
 
-A project can set the same values in a `[windows]` table in `salam.toml`, and `salam bundle` packages a desktop app as a zip or an NSIS installer, among other formats; the article on [desktop apps](/blog/desktop-gui-apps-with-salam/) covers that workflow. On 32-bit Windows, Win32 functions use the stdcall convention; the compiler handles this for the functions it knows, and an `extern stdcall func` type covers the ones you reach through a pointer.
+A project can set the same values in a `[windows]` table in `salam.toml`, and `salam bundle` packages a desktop app as a ZIP or an NSIS installer, among other formats; the article on [desktop apps](/blog/desktop-gui-apps-with-salam/) covers that workflow. On 32-bit Windows, Win32 functions use the stdcall convention; the compiler handles this for the functions it knows, and an `extern stdcall func` type covers the ones you reach through a pointer.
 
 On a Windows on Arm machine with no `--backend` given, the compiler uses the native backend by default, because neither LLVM nor tcc ships for that host.
 

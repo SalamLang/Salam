@@ -14,17 +14,17 @@ This article explains what that difference means for startup, memory, deployment
 
 ## Managed runtimes and native code {#runtime-models}
 
-The JVM and the .NET runtime are among the most heavily engineered pieces of software in existence. A tiered JIT starts by interpreting or quickly compiling methods, watches which code is hot, and recompiles it with aggressive optimizations based on what actually happens at run time. Generational garbage collectors (G1 and ZGC on the JVM, the .NET GC) reclaim memory without the programmer thinking about it. Reflection, dynamic class loading and runtime code generation are all available because the runtime is there.
+The JVM and the .NET runtime are among the most heavily engineered pieces of software in existence. A tiered JIT starts by interpreting or quickly compiling methods, watches which code is hot, and recompiles it with aggressive optimizations based on what actually happens at runtime. Generational garbage collectors (G1 and ZGC on the JVM, the .NET GC) reclaim memory without the programmer thinking about it. Reflection, dynamic class loading and runtime code generation are all available because the runtime is there.
 
-| | Java | C# | Salam |
-|---|---|---|---|
-| Compiled to | JVM bytecode, then JIT | .NET IL, then JIT | Native machine code, ahead of time |
-| Ahead-of-time option | GraalVM Native Image; AOT cache work in recent JDKs | Native AOT, ReadyToRun | The only mode |
-| Memory | Garbage collected | Garbage collected | Stack values; heap collections freed with `.free()` and `defer` |
-| Deployment | A JVM plus your JARs, or a native image | The .NET runtime plus your assemblies, or a native binary | One executable |
-| Generics | Erased at run time | Reified, specialized for value types | Specialized per type at compile time |
-| Errors | Exceptions, checked and unchecked | Exceptions | `throws`, `try`, `catch`, no unwinding |
-| Ecosystem | Maven Central, Spring, Jakarta EE | NuGet, ASP.NET Core, Entity Framework | A large standard library, few third-party packages |
+|                      | Java                                                | C#                                                        | Salam                                                           |
+| -------------------- | --------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------- |
+| Compiled to          | JVM bytecode, then JIT                              | .NET IL, then JIT                                         | Native machine code, ahead of time                              |
+| Ahead-of-time option | GraalVM Native Image; AOT cache work in recent JDKs | Native AOT, ReadyToRun                                    | The only mode                                                   |
+| Memory               | Garbage collected                                   | Garbage collected                                         | Stack values; heap collections freed with `.free()` and `defer` |
+| Deployment           | A JVM plus your JARs, or a native image             | The .NET runtime plus your assemblies, or a native binary | One executable                                                  |
+| Generics             | Erased at runtime                                   | Reified, specialized for value types                      | Specialized per type at compile time                            |
+| Errors               | Exceptions, checked and unchecked                   | Exceptions                                                | `throws`, `try`, `catch`, no unwinding                          |
+| Ecosystem            | Maven Central, Spring, Jakarta EE                   | NuGet, ASP.NET Core, Entity Framework                     | A large standard library, few third-party packages              |
 
 ## The same task in three languages {#same-task}
 
@@ -173,7 +173,7 @@ The server runs until it is stopped, so it is type-checked here rather than run.
 
 Java and C# have both moved toward the features Salam was designed with. Java 21 has records, sealed interfaces and pattern matching in `switch`, which together give it real sum types. C# has records, switch expressions and pattern matching, and its designers have been working on union types. Salam has enums that carry data and an exhaustive `match` from the start, which you can read about in [the enums lesson](/learn/enums/).
 
-Generics differ underneath. Java erases type arguments at run time, so a `List<String>` and a `List<Integer>` are the same class. C# keeps them and specializes generic code for value types. Salam specializes every generic function and struct per type at compile time, like C++ templates but with interface bounds instead of duck typing.
+Generics differ underneath. Java erases type arguments at runtime, so a `List<String>` and a `List<Integer>` are the same class. C# keeps them and specializes generic code for value types. Salam specializes every generic function and struct per type at compile time, like C++ templates but with interface bounds instead of duck typing.
 
 Errors are another split. Java and C# use exceptions that unwind the stack. Salam's `throws`, `try` and `catch` look similar, but an error is returned like a value: every call that can fail must be marked `try` or sit inside a `try` block, `defer` statements run, and nothing is unwound.
 
@@ -185,7 +185,7 @@ Concurrency: Java 21's virtual threads and C#'s `async`/`await` let one process 
 
 This is where the comparison is least close. Java and C# have decades of libraries, frameworks for every enterprise pattern, IDEs such as IntelliJ IDEA, Visual Studio and Rider with deep refactoring support, profilers, monitoring agents, long-term support releases from several vendors, and millions of developers. Banks, governments and large companies run on them, and their security and compliance processes are built around them.
 
-Salam has a single-executable toolchain with a language server, a formatter, a test runner, a debugger launcher and a package manager, plus plugins for VS Code and ten other editors ([the toolchain](/blog/salam-developer-tools/)). It is pre-1.0, its community is small, its third-party package registry is new and nearly empty, and there are few production deployments. A company choosing a language for a ten-year system has to weigh that. The article [What makes a programming language production ready?](/blog/what-makes-a-language-production-ready/) puts Salam against that checklist.
+Salam has a single-executable toolchain with a language server, a formatter, a test runner, a debugger launcher and a package manager, plus plugins for Visual Studio Code and ten other editors ([the toolchain](/blog/salam-developer-tools/)). It is pre-1.0, its community is small, its third-party package registry is new and nearly empty, and there are few production deployments. A company choosing a language for a ten-year system has to weigh that. The article [What makes a programming language production ready?](/blog/what-makes-a-language-production-ready/) puts Salam against that checklist.
 
 ## When to choose which {#choose}
 

@@ -24,9 +24,9 @@ A language cannot fix its training data. What it can fix is what happens next.
 
 ## Strict compilers are a feedback loop {#strict-compilers}
 
-Code generation works best as a loop: write, check, read the errors, fix, check again. The value of that loop depends on the checker. A permissive language that accepts a mistake and fails at run time gives the generator nothing to work with; a strict compiler that rejects it immediately, with a specific message, closes the loop in seconds.
+Code generation works best as a loop: write, check, read the errors, fix, check again. The value of that loop depends on the checker. A permissive language that accepts a mistake and fails at runtime gives the generator nothing to work with; a strict compiler that rejects it immediately, with a specific message, closes the loop in seconds.
 
-Salam is strict on purpose. Variables are immutable unless declared `mut`, and declaring `mut` on a variable that never changes is an error, not a warning. Struct fields are private unless marked `pub`. A `match` on an enum must cover every member. Integer ranges, divisions by zero and indexes the compiler can prove wrong are reported before the program runs. Here is a function that forgot a case:
+Salam is strict on purpose. Variables are immutable unless declared `mut`, and declaring `mut` on a variable that never changes is an error, not a warning. Struct fields are private unless marked `pub`. A `match` on an enum must cover every member. Integer ranges, divisions by zero and indices the compiler can prove wrong are reported before the program runs. Here is a function that forgot a case:
 
 ```text
 error[E080]: non-exhaustive match on enum 'Status': missing member Review
@@ -105,7 +105,7 @@ Next to it, `docs/ai/AGENTS.md` is a shorter orientation for agents, with projec
 
 ## llms.txt: a site map for models {#llms-txt}
 
-[llms.txt](https://llmstxt.org/) is a proposed convention: a Markdown file at the root of a site that tells language models what the site contains and where to look. The Salam website generates one for each language at build time: `llms.txt` with the site description and every page, lesson and standard library package as a link with its summary, plus links to the agent skill and the MCP server, and `llms-full.txt` with the full text of every lesson and library page in Markdown, for loading into a model's context in one piece. The English `llms-full.txt` is about 7 MB.
+[llms.txt](https://llmstxt.org/) is a proposed convention: a Markdown file at the root of a site that tells language models what the site contains and where to look. The Salam site generates one for each language at build time: `llms.txt` with the site description and every page, lesson and standard library package as a link with its summary, plus links to the agent skill and the MCP server, and `llms-full.txt` with the full text of every lesson and library page in Markdown, for loading into a model's context in one piece. The English `llms-full.txt` is about 7 MB.
 
 What makes these files trustworthy is how the site is built. Before generating pages, the build runs every example and compares its output with the expected output stored next to it, so the site never shows code that does not compile or output that is out of date. The magazine you are reading follows the same rule: every Salam program in it with an output block was compiled and run when the site was built. Documentation that is checked by the compiler cannot quietly drift away from the language, and anything derived from it, `llms.txt` included, inherits that property.
 
@@ -157,7 +157,7 @@ Yes, with help. A general model often borrows syntax from other languages, but w
 
 ### What is llms.txt?
 
-A proposed convention for a Markdown file at a site's root that tells language models what the site contains. The Salam website generates `llms.txt` and a full-text `llms-full.txt` for each language whenever the site is built.
+A proposed convention for a Markdown file at a site's root that tells language models what the site contains. The Salam site generates `llms.txt` and a full-text `llms-full.txt` for each language whenever the site is built.
 
 ### What is an MCP server for a programming language?
 

@@ -20,15 +20,15 @@ Julia removes that split. Ordinary Julia loops are compiled to machine code by a
 
 Salam compiles ahead of time to a native executable, like C or Rust. Loops are fast from the first run, there is no interpreter and no JIT warm-up, and the numerical packages are ordinary Salam code. The cost is the ecosystem: Salam's numerics are one standard library, not the tens of thousands of packages Python and Julia have.
 
-| | Python (NumPy) | Julia | Salam |
-|---|---|---|---|
-| Execution | Interpreter; array operations in compiled libraries | JIT compiled through LLVM | Ahead-of-time native code |
-| Fast loops in your own code | Only through NumPy, Numba, Cython or similar | Yes | Yes |
-| Linear algebra | NumPy and SciPy on BLAS/LAPACK | Built-in `LinearAlgebra` on BLAS/LAPACK | `matrix` package, pure Salam |
-| Machine learning | PyTorch, JAX, scikit-learn | Flux, Lux, MLJ | `ai.tensor`, `ai.autograd`, `ai.nn`, `ai.ml` |
-| GPU | Yes, widely | Yes | No |
-| Notebooks and plotting | Jupyter, Matplotlib and many more | Jupyter, Pluto, Plots, Makie | None built in |
-| Ecosystem | Enormous | Large in science | One standard library |
+|                             | Python (NumPy)                                      | Julia                                   | Salam                                        |
+| --------------------------- | --------------------------------------------------- | --------------------------------------- | -------------------------------------------- |
+| Execution                   | Interpreter; array operations in compiled libraries | JIT compiled through LLVM               | Ahead-of-time native code                    |
+| Fast loops in your own code | Only through NumPy, Numba, Cython or similar        | Yes                                     | Yes                                          |
+| Linear algebra              | NumPy and SciPy on BLAS/LAPACK                      | Built-in `LinearAlgebra` on BLAS/LAPACK | `matrix` package, pure Salam                 |
+| Machine learning            | PyTorch, JAX, scikit-learn                          | Flux, Lux, MLJ                          | `ai.tensor`, `ai.autograd`, `ai.nn`, `ai.ml` |
+| GPU                         | Yes, widely                                         | Yes                                     | No                                           |
+| Notebooks and plotting      | Jupyter, Matplotlib and many more                   | Jupyter, Pluto, Plots, Makie            | None built-in                                |
+| Ecosystem                   | Enormous                                            | Large in science                        | One standard library                         |
 
 ## Solving a linear system {#linear-system}
 
@@ -201,11 +201,11 @@ It runs on the CPU only. There is no GPU support, no mixed precision and nothing
 
 Salam's [speed page](/speed/) lists 42 programs. Three of them, rows 40 to 42, call Salam's own matrix and tensor library, while the C, C++, Rust and Go versions are written as straightforward loops, and the Python versions use NumPy. The page says plainly that these rows compare libraries, not compilers, and leaves them out of its averages. Here they are, in milliseconds, fastest of 10 runs:
 
-| Program | C | C++ | Rust | Go | Salam | Python (NumPy) |
-|---|---|---|---|---|---|---|
-| 40, 400x400 `f64` matrix product (`matrix.MatMul`) | 42.5 | 43.8 | 64.3 | 47.2 | 14.3 | 121.8 |
-| 41, 200,000 small 4x4 operations (`matrix` package) | 4.1 | 5.0 | 5.2 | 15.9 | 36.4 | 1,174.4 |
-| 42, 400x400 `f32` tensor product (`tensor.MatMul`) | 40.3 | 38.1 | 55.7 | 43.0 | 7.3 | 119.1 |
+| Program                                             | C    | C++  | Rust | Go   | Salam | Python (NumPy) |
+| --------------------------------------------------- | ---- | ---- | ---- | ---- | ----- | -------------- |
+| 40, 400x400 `f64` matrix product (`matrix.MatMul`)  | 42.5 | 43.8 | 64.3 | 47.2 | 14.3  | 121.8          |
+| 41, 200,000 small 4x4 operations (`matrix` package) | 4.1  | 5.0  | 5.2  | 15.9 | 36.4  | 1,174.4        |
+| 42, 400x400 `f32` tensor product (`tensor.MatMul`)  | 40.3 | 38.1 | 55.7 | 43.0 | 7.3   | 119.1          |
 
 How to read them:
 
@@ -244,7 +244,7 @@ For moderate dense linear algebra and statistics inside a compiled program, the 
 
 ### Is Salam faster than Julia?
 
-There is no published measurement comparing them. Both produce native code through LLVM for hot loops; Julia does it at run time and Salam ahead of time, so Salam avoids JIT latency while Julia's specialization and its BLAS-backed linear algebra are mature and fast.
+There is no published measurement comparing them. Both produce native code through LLVM for hot loops; Julia does it at runtime and Salam ahead of time, so Salam avoids JIT latency while Julia's specialization and its BLAS-backed linear algebra are mature and fast.
 
 ### Does Salam have a REPL or notebooks for exploration?
 

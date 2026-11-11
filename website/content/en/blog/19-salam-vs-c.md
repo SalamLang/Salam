@@ -14,19 +14,19 @@ This comparison puts the same programs side by side, then goes through memory, s
 
 ## Salam vs C at a glance {#at-a-glance}
 
-| | C | Salam |
-|---|---|---|
-| First appeared | 1972, standardized since 1989 (C23 is current) | 2024 per its source headers, still pre-1.0 |
-| Compilation | Native, through gcc, clang, MSVC and many others | Native, through its own C, LLVM or x86-64/ARM backends |
-| Memory | `malloc`/`free`, by hand | Stack values plus heap containers freed with `.free()` and `defer` |
-| Growable arrays and maps | Write your own or pick a library | `Vector<T>` and `HashMap<K, V>` built-in, `Set<T>` and more in the standard library |
-| Strings | `char *` with a terminating zero byte | `str`, UTF-8 text with byte and character operations |
-| Out-of-bounds access | Undefined behavior | Compile error when provable, runtime panic in development builds |
-| Signed overflow | Undefined behavior | Wraps in development builds; with `--release` the LLVM backend assumes it does not happen |
-| Generics | Macros and `void *` | Generic functions and types |
-| Error handling | Return codes and `errno` | `throws`, `try` and `catch`, or result enums |
-| Standard library | Small; POSIX and third-party for the rest | Large: HTTP, databases, JSON, crypto, compression and more |
-| Ecosystem and community | Enormous, decades deep | Small and young |
+|                          | C                                                | Salam                                                                                     |
+| ------------------------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| First appeared           | 1972, standardized since 1989 (C23 is current)   | 2024 per its source headers, still pre-1.0                                                |
+| Compilation              | Native, through gcc, clang, MSVC and many others | Native, through its own C, LLVM or x86-64/ARM backends                                    |
+| Memory                   | `malloc`/`free`, by hand                         | Stack values plus heap containers freed with `.free()` and `defer`                        |
+| Growable arrays and maps | Write your own or pick a library                 | `Vector<T>` and `HashMap<K, V>` built-in, `Set<T>` and more in the standard library       |
+| Strings                  | `char *` with a terminating zero byte            | `str`, UTF-8 text with byte and character operations                                      |
+| Out-of-bounds access     | Undefined behavior                               | Compile error when provable, runtime panic in development builds                          |
+| Signed overflow          | Undefined behavior                               | Wraps in development builds; with `--release` the LLVM backend assumes it does not happen |
+| Generics                 | Macros and `void *`                              | Generic functions and types                                                               |
+| Error handling           | Return codes and `errno`                         | `throws`, `try` and `catch`, or result enums                                              |
+| Standard library         | Small; POSIX and third-party for the rest        | Large: HTTP, databases, JSON, crypto, compression and more                                |
+| Ecosystem and community  | Enormous, decades deep                           | Small and young                                                                           |
 
 ## The same task in both languages {#side-by-side}
 

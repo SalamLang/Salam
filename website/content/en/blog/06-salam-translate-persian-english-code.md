@@ -119,22 +119,22 @@ A Persian reader would now rename `Point` to `نقطه` and so on. The tool deli
 
 The list comes from the source of the command, `compiler/cli/cli_translate.salam`, and from running it:
 
-| Category | Example, English to Persian |
-|---|---|
-| Reserved keywords, including `and`, `or`, `not` | `func` to `تابع`, `each` to `هر`, `and` to `و` |
-| Literal words | `true`, `false`, `null`, `this` to `درست`, `نادرست`, `پوچ`, `این` |
-| The entry function | `main` to `ریشه` |
-| Primitive and built-in types in type positions | `int` to `صحیح`, `Vector<str>` to `وکتور<رشته>` |
-| Built-in methods after a dot | `.push()` to `.بیفزا()`, `.len()` to `.طول()` |
-| Built-in functions | `len(x)` to `طول(x)`, `spawn` to `نخ‌ساز` |
-| Standard library imports and members | `import math` to `واردسازی ریاضی`, `math.Sqrt` to `ریاضی.جذر` |
-| Compile-time constants | `SALAM_OS_LINUX` to `سلام سیستم لینوکس` |
-| Comparison operators | `>=` to `بزرگتربرابر` (Persian), words back to symbols (English) |
-| Separators | `,` to `،` and back |
-| Guillemet strings | `«...»` to `"..."` when going to English |
-| Context words | `static`, `link`, `dynamic`, `use` (embedding) in their positions |
-| The page language | element and attribute names in `page:` blocks |
-| The language line | `// lang: en` replaced by `// زبان: فارسی` |
+| Category                                        | Example, English to Persian                                       |
+| ----------------------------------------------- | ----------------------------------------------------------------- |
+| Reserved keywords, including `and`, `or`, `not` | `func` to `تابع`, `each` to `هر`, `and` to `و`                    |
+| Literal words                                   | `true`, `false`, `null`, `this` to `درست`, `نادرست`, `پوچ`, `این` |
+| The entry function                              | `main` to `ریشه`                                                  |
+| Primitive and built-in types in type positions  | `int` to `صحیح`, `Vector<str>` to `وکتور<رشته>`                   |
+| Built-in methods after a dot                    | `.push()` to `.بیفزا()`, `.len()` to `.طول()`                     |
+| Built-in functions                              | `len(x)` to `طول(x)`, `spawn` to `نخ‌ساز`                         |
+| Standard library imports and members            | `import math` to `واردسازی ریاضی`, `math.Sqrt` to `ریاضی.جذر`     |
+| Compile-time constants                          | `SALAM_OS_LINUX` to `سلام سیستم لینوکس`                           |
+| Comparison operators                            | `>=` to `بزرگتربرابر` (Persian), words back to symbols (English)  |
+| Separators                                      | `,` to `،` and back                                               |
+| Guillemet strings                               | `«...»` to `"..."` when going to English                          |
+| Context words                                   | `static`, `link`, `dynamic`, `use` (embedding) in their positions |
+| The page language                               | element and attribute names in `page:` blocks                     |
+| The language line                               | `// lang: en` replaced by `// زبان: فارسی`                        |
 
 Two details are worth knowing. First, comparison symbols are turned into words only when the file parses, because the tool uses the syntax tree to find which `<` and `>` really are comparisons; generic brackets such as `Vector<T>` keep their angle brackets. Going to English, comparison words always become symbols. Second, standard library names are not stored in the compiler. The tool walks the `std/` directory once, reads the `@en` and `@fa` tags of each package, and resolves `str.Upper` to `رشته.بزرگ` from the tag on the function. A package added to the standard library tomorrow is translated without any change to the tool.
 
@@ -145,7 +145,7 @@ Everything else is copied byte for byte:
 - **Your identifiers.** Variable, function, struct, field and enum names stay as written, in whatever script you wrote them.
 - **Comments and string contents.** The tool translates code, not prose.
 - **Number literals, including their digits.** A Persian file with `۱۲۰` translated to English still says `۱۲۰`, which is valid in an English file too.
-- **Whitespace and layout.** Indentation, blank lines and line breaks are the original ones, because the tool copies the text between tokens rather than reformatting.
+- **Whitespace and layout.** Indentation, empty lines and line breaks are the original ones, because the tool copies the text between tokens rather than reformatting.
 
 Leaving identifiers alone is a design decision, not a missing feature. A name such as `total` could be `جمع`, `کل` or `مجموع` in Persian depending on context, and a mechanical choice would often be wrong. Worse, renaming would break code that refers to the name from another file. Mixed names are legal in both languages, so the translated program compiles as it is, and a person can rename at leisure with the editor's rename command, which the [Salam language server](/tools/) provides.
 
@@ -153,12 +153,12 @@ Leaving identifiers alone is a design decision, not a missing feature. A name su
 
 From `salam help`:
 
-| Option | Effect |
-|---|---|
-| `en` or `fa` | The target language, required |
-| `--lang=CODE` | The source language to assume when detection is undecided; by default each file is detected from its language line or from which keyword set it matches better |
-| `--rewrite` | Overwrite the input files instead of writing new ones |
-| `--output=PATH` | An output file for a single input, or an output directory |
+| Option          | Effect                                                                                                                                                         |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `en` or `fa`    | The target language, required                                                                                                                                  |
+| `--lang=CODE`   | The source language to assume when detection is undecided; by default each file is detected from its language line or from which keyword set it matches better |
+| `--rewrite`     | Overwrite the input files instead of writing new ones                                                                                                          |
+| `--output=PATH` | An output file for a single input, or an output directory                                                                                                      |
 
 Without `--output`, a single file `app.salam` is written as `app.fa.salam` (or `app.en.salam`) next to it, and a directory `src` is copied to `src-fa`. In a directory, every `.salam` file is translated and every other file is copied, so assets and `salam.toml` come along. Hidden files and directories are skipped. A file that is already in the target language is copied unchanged and counted as such in the summary line, for example `translate: 1 translated, 0 unchanged, 0 errors`.
 
@@ -178,7 +178,7 @@ The only difference is a first line, `// lang: en`, because the tool always writ
 
 ## How it works inside {#how-it-works}
 
-The command is about 1,500 lines of Salam in `compiler/cli/cli_translate.salam`, and it reuses the compiler's own front end rather than matching text:
+The command is about 1,500 lines of Salam in `compiler/cli/cli_translate.salam`, and it reuses the compiler's own frontend rather than matching text:
 
 1. **Detect.** The same function the compiler uses decides which language pack the file is written in.
 2. **Lex.** The file is split into tokens with that pack. Each token remembers its start and end position in the source text.

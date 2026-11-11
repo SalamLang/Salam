@@ -16,19 +16,19 @@ This article looks at how the last generation of languages broke through, what a
 
 The languages that dominate today did not win on syntax. Each had a force behind it that made adoption easier than staying with the old tools.
 
-| Language | First released | What carried it |
-|---|---|---|
-| C | 1972 | Unix, written in it and spread with it |
-| Python | 1991 | Readability, then decades later the scientific and machine learning stack |
-| Java | 1995 | The JVM's "write once, run anywhere", then enterprise servers |
-| JavaScript | 1995 | The only language every browser runs |
-| C# | 2000 | Microsoft's .NET platform and Windows development |
-| TypeScript | 2012 | Types layered over JavaScript, adoptable one file at a time |
-| Go | 2009 (1.0 in 2012) | Google, simple concurrency, then Docker and Kubernetes |
-| Swift | 2014 | Apple's platforms |
-| Rust | 2015 (1.0) | Memory safety without a garbage collector |
-| Kotlin | 2016 (1.0) | Full Java interop, then Google's support for Android |
-| Zig | 2016 | A simpler C with first-class cross-compilation |
+| Language   | First released     | What carried it                                                           |
+| ---------- | ------------------ | ------------------------------------------------------------------------- |
+| C          | 1972               | Unix, written in it and spread with it                                    |
+| Python     | 1991               | Readability, then decades later the scientific and machine learning stack |
+| Java       | 1995               | The JVM's "write once, run anywhere", then enterprise servers             |
+| JavaScript | 1995               | The only language every browser runs                                      |
+| C#         | 2000               | Microsoft's .NET platform and Windows development                         |
+| TypeScript | 2012               | Types layered over JavaScript, adoptable one file at a time               |
+| Go         | 2009 (1.0 in 2012) | Google, simple concurrency, then Docker and Kubernetes                    |
+| Swift      | 2014               | Apple's platforms                                                         |
+| Rust       | 2015 (1.0)         | Memory safety without a garbage collector                                 |
+| Kotlin     | 2016 (1.0)         | Full Java interop, then Google's support for Android                      |
+| Zig        | 2016               | A simpler C with first-class cross-compilation                            |
 
 Three patterns stand out. A **platform owner** can make a language the default (Swift on Apple devices, C# on .NET, Kotlin on Android). **Interoperability** removes the cost of leaving the old world behind (TypeScript runs all JavaScript, Kotlin calls all Java, Zig compiles C). And a **distinct technical advantage** gives early adopters a reason to accept the risk (Rust's safety guarantees, Go's simple deployment and concurrency). Python is the reminder that it can also take a long time: it was more than fifteen years old before the scientific stack made it a default choice.
 
@@ -77,9 +77,9 @@ end
 
 The [standard library tour](/blog/salam-standard-library-tour/) goes through the main areas.
 
-**Third-party packages.** This is the weakest part. `salam add` fetches packages from GitHub, pins them in a lock file and verifies checksums, and `salam search` reads a public registry. The registry exists and is open to pull requests, but it is still essentially empty. Every package a Salam program uses today comes from the standard library, from the project itself or from C.
+**Third-party packages.** This is the weakest part. `salam add` fetches packages from GitHub, pins them in a lockfile and verifies checksums, and `salam search` reads a public registry. The registry exists and is open to pull requests, but it is still essentially empty. Every package a Salam program uses today comes from the standard library, from the project itself or from C.
 
-**Tools.** One executable builds, runs, tests, formats, type-checks, translates between English and Persian, builds web pages, launches a debugger and checks memory. A language server gives editors errors and completion, and there are plugins for VS Code and ten other editors, plus an [online editor](https://editor.salamlang.ir) that runs the compiler in the browser.
+**Tools.** One executable builds, runs, tests, formats, type-checks, translates between English and Persian, builds web pages, launches a debugger and checks memory. A language server gives editors errors and completion, and there are plugins for Visual Studio Code and ten other editors, plus an [online editor](https://editor.salamlang.ir) that runs the compiler in the browser.
 
 **Knowledge.** A free [47-lesson course](/learn/) in English and Persian with complete programs and real output, the library reference, and this magazine. The site also publishes an `llms.txt` file and a detailed language reference for coding assistants, which matters more each year (see [programming languages in the AI era](/blog/programming-languages-in-the-ai-era/)).
 

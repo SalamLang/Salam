@@ -16,17 +16,17 @@ This article goes through the tools a working developer uses every day, shows wh
 
 Most language ecosystems grow their tools separately: a compiler from one team, a formatter from another, a language server that reimplements parts of the type checker. Salam's tools share code with the compiler instead. `salam lsp` runs the compiler's own parser and semantic analysis, `salam format` is the formatter the language server calls, and the editor plugins take their keyword lists from the compiler's tables. The consequence is practical: when a release adds a keyword or a diagnostic, every tool knows about it at once, in English and in Persian.
 
-| Task | Command |
-|---|---|
-| Find errors without building | `salam check app.salam` |
-| Apply the safe fixes | `salam check app.salam --fix` |
-| Format code | `salam format .` |
-| Run tests | `salam test` |
-| Interactive prompt | `salam cli` (general) or `salam page` (page language) |
-| Debug | `salam debug app.salam` |
-| Memory errors | `salam memcheck app.salam` |
-| API documentation | `salam doc` |
-| Language server | `salam lsp` |
+| Task                         | Command                                               |
+| ---------------------------- | ----------------------------------------------------- |
+| Find errors without building | `salam check app.salam`                               |
+| Apply the safe fixes         | `salam check app.salam --fix`                         |
+| Format code                  | `salam format .`                                      |
+| Run tests                    | `salam test`                                          |
+| Interactive prompt           | `salam cli` (general) or `salam page` (page language) |
+| Debug                        | `salam debug app.salam`                               |
+| Memory errors                | `salam memcheck app.salam`                            |
+| API documentation            | `salam doc`                                           |
+| Language server              | `salam lsp`                                           |
 
 ## Compiler diagnostics and quick fixes {#diagnostics}
 
@@ -87,13 +87,13 @@ and in Sublime Text with the LSP package:
 }
 ```
 
-The repository's `docs/LSP.md` has the configuration for VS Code, Neovim, Emacs (eglot and lsp-mode), the JetBrains IDEs through LSP4IJ, Kate and others.
+The repository's `docs/LSP.md` has the configuration for Visual Studio Code, Neovim, Emacs (eglot and lsp-mode), the JetBrains IDEs through LSP4IJ, Kate and others.
 
 ## Editor plugins for eleven editors {#editor-plugins}
 
-The `extensions/` directory holds plugins for VS Code, Vim and Neovim, Sublime Text, Emacs, the JetBrains IDEs, Kate and KDevelop, Geany, gedit and GNOME (GtkSourceView), Notepad++, GNU nano and micro, plus a tree-sitter grammar. All of them highlight both the English and the Persian keyword sets, treat Arabic-script letters as identifier characters and accept ASCII, Persian and Arabic-Indic digits.
+The `extensions/` directory holds plugins for Visual Studio Code, Vim and Neovim, Sublime Text, Emacs, the JetBrains IDEs, Kate and KDevelop, Geany, gedit and GNOME (GtkSourceView), Notepad++, GNU nano and micro, plus a tree-sitter grammar. All of them highlight both the English and the Persian keyword sets, treat Arabic-script letters as identifier characters and accept ASCII, Persian and Arabic-Indic digits.
 
-None of them keeps its own keyword list. A generator written in Salam reads the spellings from `compiler/langpack.salam` and the type and method names from the semantic analyzer, writes every syntax file, and CI fails if the committed files differ from what the generator produces. The VS Code extension, published on the [marketplace](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language), adds run and build commands, snippets, the language server and debugging. The plugins are listed on the [tools page](/tools/).
+None of them keeps its own keyword list. A generator written in Salam reads the spellings from `compiler/langpack.salam` and the type and method names from the semantic analyzer, writes every syntax file, and CI fails if the committed files differ from what the generator produces. The Visual Studio Code extension, published on the [marketplace](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language), adds run and build commands, snippets, the language server and debugging. The plugins are listed on the [tools page](/tools/).
 
 ## Formatting: salam format {#formatter}
 
@@ -210,9 +210,9 @@ Redefining a function by name replaces it. `salam page` starts a second prompt f
 
 ## Debugging and memory checking {#debugging}
 
-`salam build -g` embeds DWARF debug information (version 5 by default, `-gdwarf-4` for older debuggers) and emits line directives, so a debugger shows Salam source lines. `salam debug app.salam` builds that way and launches GDB or LLDB. In VS Code, pressing F5 in a Salam file goes through `salam dap`, a Debug Adapter Protocol bridge that drives gdb or lldb-dap with breakpoints, stepping and locals in the Salam source. It is not available on Windows yet; there, build with `-g` and use a debugger directly.
+`salam build -g` embeds DWARF debug information (version 5 by default, `-gdwarf-4` for older debuggers) and emits line directives, so a debugger shows Salam source lines. `salam debug app.salam` builds that way and launches GDB or LLDB. In Visual Studio Code, pressing F5 in a Salam file goes through `salam dap`, a Debug Adapter Protocol bridge that drives gdb or lldb-dap with breakpoints, stepping and locals in the Salam source. It is not available on Windows yet; there, build with `-g` and use a debugger directly.
 
-For memory errors, `salam memcheck app.salam` builds with debug symbols and runs the program under Valgrind when it is installed, or builds with AddressSanitizer through gcc or clang otherwise. On a small program it reported the heap summary and finished with `salam memcheck: no memory errors detected.` Before any of that runs, the compiler's ownership checker warns about use after free, double free and pointers kept across a call that may grow a vector, and the range checks flag indexes, overflows and divisions by zero it can prove. Both are on by default and cost nothing at run time; [memory management in Salam](/blog/memory-management-in-salam/) explains them.
+For memory errors, `salam memcheck app.salam` builds with debug symbols and runs the program under Valgrind when it is installed, or builds with AddressSanitizer through gcc or clang otherwise. On a small program it reported the heap summary and finished with `salam memcheck: no memory errors detected.` Before any of that runs, the compiler's ownership checker warns about use after free, double free and pointers kept across a call that may grow a vector, and the range checks flag indices, overflows and divisions by zero it can prove. Both are on by default and cost nothing at runtime; [memory management in Salam](/blog/memory-management-in-salam/) explains them.
 
 ## Profiling, documentation and the gaps {#profiling-docs}
 
@@ -225,7 +225,7 @@ For memory errors, `salam memcheck app.salam` builds with debug symbols and runs
 A fair list for a pre-1.0 toolchain:
 
 - **No program profiler** of its own, as above.
-- **Debugging in VS Code is not available on Windows** through `salam dap`.
+- **Debugging in Visual Studio Code is not available on Windows** through `salam dap`.
 - **Smaller editors get less.** Kate, gedit, Notepad++, nano and micro have highlighting; the language server features depend on the editor having an LSP client.
 - **Fewer third-party integrations.** There is no ecosystem of linters, code-coverage services or IDE plugins written by others, as there is for Go or Rust. Coverage reporting in particular is absent.
 
@@ -239,7 +239,7 @@ Yes. `salam lsp` is built into the compiler, so there is nothing extra to instal
 
 ### Which editors support Salam?
 
-VS Code, Vim and Neovim, Sublime Text, Emacs, the JetBrains IDEs, Kate and KDevelop, Geany, gedit, Notepad++, nano and micro have plugins in the repository, and there is a tree-sitter grammar. Editors such as Helix work through the language server alone.
+Visual Studio Code, Vim and Neovim, Sublime Text, Emacs, the JetBrains IDEs, Kate and KDevelop, Geany, gedit, Notepad++, nano and micro have plugins in the repository, and there is a tree-sitter grammar. Editors such as Helix work through the language server alone.
 
 ### How do I write unit tests in Salam?
 
@@ -247,4 +247,4 @@ Put `test_` functions in a file whose name ends in `_test.salam`, use the assert
 
 ### Can I debug Salam code step by step?
 
-Yes. Build with `-g` and use GDB or LLDB, or run `salam debug`, which does both. VS Code users press F5, which uses the `salam dap` adapter on Linux and macOS.
+Yes. Build with `-g` and use GDB or LLDB, or run `salam debug`, which does both. Visual Studio Code users press F5, which uses the `salam dap` adapter on Linux and macOS.

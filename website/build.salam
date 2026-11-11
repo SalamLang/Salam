@@ -21,6 +21,7 @@ import fs
 import fs.dir
 import template
 import encoding.json
+import calendar
 
 const ROOT := "website"
 const KEYWORD_TABLE := "extensions/tree-sitter-salam/keywords.json"
@@ -39,6 +40,17 @@ struct Page:
     pub slug: str = ""
     pub url: str = ""
     pub out: str = ""
+end
+
+struct Post:
+    pub path: str = ""
+    pub slug: str = ""
+    pub url: str = ""
+    pub title: str = ""
+    pub category: str = ""
+    pub summary: str = ""
+    pub date: str = ""
+    pub updated: str = ""
 end
 
 struct ApiDecl:
@@ -366,13 +378,21 @@ func highlight_lang(code: str, lang: str): str:
             add_class_words(classes, "true false null yes no on off", "k")
             break
         end
-        "c", "cpp", "java", "go", "rust", "rs", "php":
+        "c", "cpp", "java", "go", "rust", "rs", "php", "zig", "cs", "csharp", "kotlin", "swift":
             known = true
             slash = true
             hash = lang == "php"
-            add_class_words(classes, "if else for while do switch case break continue return struct enum union typedef static const extern class public private protected new delete this null true false func package import var type interface go defer range chan map fn let mut impl trait pub use mod match loop where self as in unsafe async await function echo foreach", "k")
-            add_class_words(classes, "int char void long short unsigned signed float double bool size_t uint8_t uint32_t uint64_t int32_t int64_t string byte rune i8 i16 i32 i64 u8 u16 u32 u64 usize isize f32 f64 str String Vec Option Result", "t")
-            add_class_words(classes, "printf fprintf malloc free sizeof println fmt print", "b")
+            add_class_words(classes, "if else for while do switch case break continue return struct enum union typedef static const extern class public private protected new delete this null true false func package import var type interface go defer range chan map fn let mut impl trait pub use mod match loop where self as in unsafe async await function echo foreach using namespace val fun override try catch throw comptime errdefer orelse", "k")
+            add_class_words(classes, "int char void long short unsigned signed float double bool size_t uint8_t uint32_t uint64_t int32_t int64_t string byte rune i8 i16 i32 i64 u8 u16 u32 u64 usize isize f32 f64 str String Vec Option Result Box", "t")
+            add_class_words(classes, "printf fprintf malloc free sizeof println fmt print Console std", "b")
+            break
+        end
+        "julia", "jl":
+            known = true
+            hash = true
+            add_class_words(classes, "function end if elseif else for while return using import module struct mutable begin let do in true false nothing", "k")
+            add_class_words(classes, "Int Int64 Float64 String Bool Vector Array Matrix", "t")
+            add_class_words(classes, "println print length zeros ones rand sum", "b")
             break
         end
     end
@@ -789,6 +809,9 @@ func page_jsonld(ctx: HashMap<str, str>, p: Page, version: str): str:
     end
     if p.slug == "learn" and ctx.has("learn.itemlist"):
         graph.push(ctx.get("learn.itemlist"))
+    end
+    if p.slug == "blog" and ctx_or(ctx, "blog.nodes", "").len() > 0:
+        graph.push(ctx.get("blog.nodes"))
     end
     ret wrap_graph(graph)
 end
@@ -1262,7 +1285,7 @@ func sitemap_block(title: str, items: str): str:
     ret `<section class="card sitemap-block"><h2>` + title + `</h2><ul class="sitemap-list">` + items + "</ul></section>\n"
 end
 
-func sitemap_html(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>): str:
+func sitemap_html(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>, posts: Vector<Post>): str:
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     mut items := sitemap_item("/", ctx_or(ctx, "sitemap.home", "Home"))
@@ -1293,6 +1316,21 @@ func sitemap_html(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<L
         std += sitemap_item(p.url, pkg_label(p))
     end
     str.BufAppend(b, `<section class="card sitemap-block"><h2>` + ctx_or(ctx, "sitemap.std", "Standard library") + `</h2><ul class="sitemap-list sitemap-cols">` + std + "</ul></section>\n")
+    if posts.len() > 0:
+        mut mag := ""
+        each cat in str.Fields(ctx_or(ctx, "blog.categories", "")):
+            mut items := ""
+            each q in posts:
+                if q.category == cat:
+                    items += sitemap_item(q.url, q.title)
+                end
+            end
+            if items.len() > 0:
+                mag = mag + "<h3>" + cat_label(ctx, cat) + "</h3><ul>" + items + "</ul>"
+            end
+        end
+        str.BufAppend(b, `<section class="card sitemap-block"><h2>` + ctx_or(ctx, "nav.blog", "Magazine") + `</h2><div class="sitemap-course">` + mag + "</div></section>\n")
+    end
     mut ext := sitemap_item(ctx_or(ctx, "link.editor", ""), ctx_or(ctx, "nav.editor", "Editor"))
     ext += sitemap_item(ctx_or(ctx, "link.ai", ""), ctx_or(ctx, "sitemap.ai", "Salam AI"))
     ext += sitemap_item(ctx_or(ctx, "link.telegram_bot", ""), ctx_or(ctx, "sitemap.bot", "Telegram bot"))
@@ -1310,7 +1348,7 @@ func sitemap_html(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<L
     ret str.BufStr(b)
 end
 
-func llms_index(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>): str:
+func llms_index(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>, posts: Vector<Post>): str:
     site_url := ctx_or(ctx, "site.url", "")
     mut b := str.NewBuilder()
     defer str.BufFree(b)
@@ -1330,6 +1368,12 @@ func llms_index(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Les
     str.BufAppend(b, "\n## " + ctx_or(ctx, "llms.std", "Standard library") + "\n\n")
     each p in pkgs:
         llms_link(b, pkg_label(p), site_url + p.url, p.summary)
+    end
+    if posts.len() > 0:
+        str.BufAppend(b, "\n## " + ctx_or(ctx, "nav.blog", "Magazine") + "\n\n")
+        each q in posts:
+            llms_link(b, decode_entities(q.title), site_url + q.url, decode_entities(q.summary))
+        end
     end
     str.BufAppend(b, "\n## " + ctx_or(ctx, "llms.install", "Install") + "\n\n")
     str.BufAppend(b, ctx_or(ctx, "llms.install_text", "") + "\n\n")
@@ -1944,6 +1988,871 @@ func std_gwords(pkgs: Vector<StdPkg>, alias: str): HashMap<str, str>:
     ret out
 end
 
+func md_sentinel(): str:
+    mut v := Vector {} as Vector<int>
+    v.push(57344)
+    ret str.FromCodePoints(v)
+end
+
+func md_mark(n: int): str:
+    s := md_sentinel()
+    ret s + n + s
+end
+
+func md_is_alpha(c: int): bool:
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func md_tag_end(s: str, at: int): int:
+    p := s as i8 *
+    n := s.len()
+    mut j := at + 1
+    if j < n and p[j] == 47:
+        j++
+    end
+    start := j
+    until j < n and md_is_alpha(p[j] as int):
+        j++
+    end
+    if j == start:
+        ret -1
+    end
+    name := str.Lower(s.substr(start, j - start))
+    if " bdi kbd sub sup br abbr mark small span em strong b i a ".find(" " + name + " ") < 0:
+        ret -1
+    end
+    close := str.IndexFrom(s, ">", j)
+    ret close < 0 ? -1 : close + 1
+end
+
+func md_entity_at(s: str, at: int): bool:
+    p := s as i8 *
+    n := s.len()
+    mut j := at + 1
+    if j < n and p[j] == 35:
+        j++
+    end
+    start := j
+    until j < n and (md_is_alpha(p[j] as int) or (p[j] >= 48 and p[j] <= 57)):
+        j++
+    end
+    ret j > start and j < n and p[j] == 59
+end
+
+func md_escape(s: str): str:
+    p := s as i8 *
+    n := s.len()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut run := 0
+    mut i := 0
+    until i < n:
+        c := p[i]
+        if c == 60 or c == 62 or c == 38:
+            str.BufAppend(b, s.substr(run, i - run))
+            if c == 60:
+                stop := md_tag_end(s, i)
+                if stop > 0:
+                    str.BufAppend(b, s.substr(i, stop - i))
+                    i = stop
+                    run = i
+                    continue
+                end
+                str.BufAppend(b, "&lt;")
+            else c == 62:
+                str.BufAppend(b, "&gt;")
+            else:
+                str.BufAppend(b, md_entity_at(s, i) ? "&" : "&amp;")
+            end
+            run = i + 1
+        end
+        i++
+    end
+    str.BufAppend(b, s.substr(run, n - run))
+    ret str.BufStr(b)
+end
+
+func md_pairs(s: str, mark: str, open: str, close: str): str:
+    parts := str.Split(s, mark)
+    if parts.len() < 3:
+        ret s
+    end
+    mut out := parts.get(0)
+    mut k := 1
+    until k < parts.len():
+        if k + 1 < parts.len():
+            out = out + open + parts.get(k) + close + parts.get(k + 1)
+            k += 2
+        else:
+            out = out + mark + parts.get(k)
+            k++
+        end
+    end
+    ret out
+end
+
+func md_links(s: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until true:
+        open := str.IndexFrom(s, "[", i)
+        if open < 0:
+            break
+        end
+        mid := str.IndexFrom(s, "](", open + 1)
+        if mid < 0:
+            break
+        end
+        close := str.IndexFrom(s, ")", mid + 2)
+        if close < 0:
+            break
+        end
+        inner_open := str.IndexFrom(s, "[", open + 1)
+        if inner_open >= 0 and inner_open < mid:
+            str.BufAppend(b, s.substr(i, inner_open - i))
+            i = inner_open
+            continue
+        end
+        text := s.substr(open + 1, mid - open - 1)
+        href := str.Trim(s.substr(mid + 2, close - mid - 2))
+        str.BufAppend(b, s.substr(i, open - i))
+        if str.StartsWith(href, "http://") or str.StartsWith(href, "https://"):
+            str.BufAppend(b, `<a href="` + href + `" rel="noopener">` + text + "</a>")
+        else:
+            str.BufAppend(b, `<a href="` + href + `">` + text + "</a>")
+        end
+        i = close + 1
+    end
+    str.BufAppend(b, s.substr(i, s.len() - i))
+    ret str.BufStr(b)
+end
+
+func md_inline(s: str): str:
+    mut codes := Vector {} as Vector<str>
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until true:
+        a := str.IndexFrom(s, "`", i)
+        if a < 0:
+            break
+        end
+        z := str.IndexFrom(s, "`", a + 1)
+        if z < 0:
+            break
+        end
+        str.BufAppend(b, s.substr(i, a - i))
+        code := s.substr(a + 1, z - a - 1)
+        codes.push("<code>" + escape_text(code) + "</code>")
+        str.BufAppend(b, md_mark(codes.len() - 1))
+        i = z + 1
+    end
+    str.BufAppend(b, s.substr(i, s.len() - i))
+    mut out := md_escape(str.BufStr(b))
+    out = md_links(out)
+    out = md_pairs(out, "**", "<strong>", "</strong>")
+    out = md_pairs(out, "*", "<em>", "</em>")
+    repeat codes.len() in k:
+        out = str.Replace(out, md_mark(k), codes.get(k))
+    end
+    ret out
+end
+
+func md_slug(text: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut dash := false
+    each cp in str.CodePoints(str.Lower(strip_tags(text))):
+        if (cp >= 97 and cp <= 122) or (cp >= 48 and cp <= 57):
+            if dash and str.BufLen(b) > 0:
+                str.BufAppendChar(b, 45)
+            end
+            str.BufAppendCp(b, cp)
+            dash = false
+        else cp != 39:
+            dash = true
+        end
+    end
+    ret str.BufStr(b)
+end
+
+func md_indent(line: str): int:
+    p := line as i8 *
+    mut i := 0
+    until i < line.len() and p[i] == 32:
+        i++
+    end
+    ret i
+end
+
+func md_list_marker(t: str): int:
+    if str.StartsWith(t, "- ") or str.StartsWith(t, "* "):
+        ret 2
+    end
+    p := t as i8 *
+    mut i := 0
+    until i < t.len() and p[i] >= 48 and p[i] <= 57:
+        i++
+    end
+    if i > 0 and i + 1 < t.len() and p[i] == 46 and p[i + 1] == 32:
+        ret i + 2
+    end
+    ret 0
+end
+
+func md_is_block_start(t: str): bool:
+    if str.StartsWith(t, "```") or str.StartsWith(t, "## ") or str.StartsWith(t, "### ") or str.StartsWith(t, "#### "):
+        ret true
+    end
+    if str.StartsWith(t, ">") or str.StartsWith(t, "|") or t == "---" or md_list_marker(t) > 0:
+        ret true
+    end
+    ret str.StartsWith(t, "{{") and str.EndsWith(t, "}}")
+end
+
+func md_is_html_block(t: str): bool:
+    each tag in ["<div", "<details", "<figure", "<table", "<aside", "<section", "<p>", "<p ", "<iframe", "<!--", "<svg", "<dl"]:
+        if str.StartsWith(t, tag):
+            ret true
+        end
+    end
+    ret false
+end
+
+func md_lang_label(ctx: HashMap<str, str>, lang: str): str:
+    switch lang:
+        "c": ret "C" end
+        "cpp", "c++": ret "C++" end
+        "rust", "rs": ret "Rust" end
+        "go": ret "Go" end
+        "python", "py": ret "Python" end
+        "javascript", "js": ret "JavaScript" end
+        "typescript", "ts": ret "TypeScript" end
+        "java": ret "Java" end
+        "php": ret "PHP" end
+        "zig": ret "Zig" end
+        "cs", "csharp": ret "C#" end
+        "kotlin": ret "Kotlin" end
+        "swift": ret "Swift" end
+        "julia", "jl": ret "Julia" end
+        "json": ret "JSON" end
+        "yaml", "yml": ret "YAML" end
+        "toml": ret "TOML" end
+        "bash", "sh", "shell", "console", "zsh": ret ctx_or(ctx, "blog.code_terminal", "Terminal") end
+    end
+    ret lang
+end
+
+func md_code_block(info: str, src: str, out: str, has_out: bool, classes: HashMap<str, str>, ctx: HashMap<str, str>, slug: str, n: int, errs &: Vector<str>): str:
+    fields := str.Fields(info)
+    lang := fields.len() > 0 ? str.Lower(fields.get(0)) : ""
+    id := "code-" + slug + "-" + n
+    mut file_label := lang
+    mut code_html := ""
+    mut dir_attr := "ltr"
+    if lang == "salam":
+        code_html = highlight(src, classes)
+        dir_attr = has_rtl_script(src) ? "rtl" : "ltr"
+        file_label = ctx_or(ctx, "blog.code_salam", "Salam")
+        each f in fields:
+            if str.EndsWith(f, ".salam"):
+                file_label = f
+            end
+        end
+    else lang == "output":
+        dir_attr = has_rtl_script(src) ? "rtl" : "ltr"
+        ret `<div class="code-output code-output-alone" dir="` + dir_attr + `"><span class="label">` + label(ctx, "code.output", errs) + "</span>" + escape_text(src) + "</div>\n"
+    else lang.len() > 0 and lang != "text":
+        code_html = highlight_lang(src, lang)
+        file_label = md_lang_label(ctx, lang)
+    else:
+        code_html = escape_text(src)
+        dir_attr = has_rtl_script(src) ? "rtl" : "ltr"
+        file_label = ctx_or(ctx, "blog.code_text", "Text")
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `<div class="code-window">`)
+    str.BufAppend(b, `<div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>`)
+    str.BufAppend(b, `<span class="file" dir="ltr">` + escape_text(file_label) + "</span>")
+    str.BufAppend(b, `<button type="button" class="copy-button" data-copy-target="` + id + `" data-copied="` + escape_text(label(ctx, "code.copied", errs)) + `">` + label(ctx, "code.copy", errs) + "</button></div>")
+    str.BufAppend(b, `<pre class="code" dir="` + dir_attr + `"><code id="` + id + `">` + code_html + "</code></pre>")
+    if has_out:
+        str.BufAppend(b, `<div class="code-output" dir="` + dir_attr + `"><span class="label">` + label(ctx, "code.output", errs) + "</span>" + escape_text(str.TrimRight(out)) + "</div>")
+    end
+    str.BufAppend(b, "</div>\n")
+    ret str.BufStr(b)
+end
+
+func md_cells(row: str): Vector<str>:
+    mut r := str.Trim(row)
+    r = str.TrimPrefix(r, "|")
+    r = str.TrimSuffix(r, "|")
+    pipe := md_sentinel() + "p" + md_sentinel()
+    r = str.Replace(r, "\\|", pipe)
+    mut out := Vector {} as Vector<str>
+    each c in str.Split(r, "|"):
+        out.push(str.Replace(str.Trim(c), pipe, "|"))
+    end
+    ret out
+end
+
+func md_is_rule_row(row: str): bool:
+    each cp in str.CodePoints(row):
+        if cp != 124 and cp != 45 and cp != 58 and cp != 32:
+            ret false
+        end
+    end
+    ret true
+end
+
+func md_table(rows: Vector<str>, where: str, errs &: Vector<str>): str:
+    if rows.len() < 2 or not md_is_rule_row(rows.get(1)):
+        report(errs, where + ": a table needs a header row and a |---| rule row")
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `<div class="table-wrap"><table><thead><tr>`)
+    head := md_cells(rows.get(0))
+    each c in head:
+        str.BufAppend(b, "<th>" + md_inline(c) + "</th>")
+    end
+    str.BufAppend(b, "</tr></thead><tbody>")
+    mut r := 2
+    until r < rows.len():
+        cells := md_cells(rows.get(r))
+        if cells.len() != head.len():
+            report(errs, where + ": table row has " + cells.len() + " cells, the header has " + head.len() + ": " + rows.get(r))
+        end
+        str.BufAppend(b, "<tr>")
+        each c in cells:
+            str.BufAppend(b, "<td>" + md_inline(c) + "</td>")
+        end
+        str.BufAppend(b, "</tr>")
+        r++
+    end
+    str.BufAppend(b, "</tbody></table></div>\n")
+    ret str.BufStr(b)
+end
+
+func md_list_item(item: str, classes: HashMap<str, str>, ctx: HashMap<str, str>, slug: str, n &: int, ids &: HashMap<str, str>, errs &: Vector<str>): str:
+    lines := item.split("\n")
+    mut head := Vector {} as Vector<str>
+    mut k := 0
+    until k < lines.len():
+        t := str.Trim(lines.get(k))
+        if t.len() == 0 or (head.len() > 0 and md_is_block_start(t)):
+            break
+        end
+        head.push(t)
+        k++
+    end
+    mut rest := Vector {} as Vector<str>
+    until k < lines.len():
+        rest.push(lines.get(k))
+        k++
+    end
+    mut out := md_inline(str.Join(head, " "))
+    if rest.len() > 0:
+        out += "\n" + md_render(str.Join(rest, "\n"), classes, ctx, slug, n, ids, errs)
+    end
+    ret out
+end
+
+func md_render(md: str, classes: HashMap<str, str>, ctx: HashMap<str, str>, slug: str, n &: int, ids &: HashMap<str, str>, errs &: Vector<str>): str:
+    lines := md.split("\n")
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < lines.len():
+        line := strip_cr(lines.get(i))
+        t := str.Trim(line)
+        if t.len() == 0:
+            i++
+            continue
+        end
+        if str.StartsWith(t, "```"):
+            info := str.Trim(str.TrimPrefix(t, "```"))
+            fence_indent := md_indent(line)
+            mut code := Vector {} as Vector<str>
+            mut closed := false
+            i++
+            until i < lines.len():
+                l := strip_cr(lines.get(i))
+                i++
+                if str.Trim(l) == "```":
+                    closed = true
+                    break
+                end
+                cut := md_indent(l) < fence_indent ? md_indent(l) : fence_indent
+                code.push(l.substr(cut, l.len() - cut))
+            end
+            if not closed:
+                report(errs, slug + ": a code block has no closing ```")
+            end
+            mut out := ""
+            mut has_out := false
+            mut k := i
+            until k < lines.len() and str.Trim(strip_cr(lines.get(k))).len() == 0:
+                k++
+            end
+            if not str.StartsWith(info, "output") and k < lines.len() and str.Trim(strip_cr(lines.get(k))) == "```output":
+                mut ol := Vector {} as Vector<str>
+                out_indent := md_indent(strip_cr(lines.get(k)))
+                k++
+                until k < lines.len():
+                    l := strip_cr(lines.get(k))
+                    k++
+                    if str.Trim(l) == "```":
+                        break
+                    end
+                    cut := md_indent(l) < out_indent ? md_indent(l) : out_indent
+                    ol.push(l.substr(cut, l.len() - cut))
+                end
+                out = str.Join(ol, "\n")
+                has_out = true
+                i = k
+            end
+            n++
+            str.BufAppend(b, md_code_block(info, str.TrimRight(str.Join(code, "\n")), out, has_out, classes, ctx, slug, n, errs))
+            continue
+        end
+        if str.StartsWith(t, "#"):
+            mut level := 0
+            until level < t.len() and t.substr(level, 1) == "#":
+                level++
+            end
+            if level >= 2 and level <= 4 and t.substr(level, 1) == " ":
+                mut text := str.Trim(t.substr(level, t.len() - level))
+                mut id := ""
+                brace := str.LastIndex(text, "{#")
+                if brace >= 0 and str.EndsWith(text, "}"):
+                    id = text.substr(brace + 2, text.len() - brace - 3)
+                    text = str.Trim(text.substr(0, brace))
+                    if ids.has(id):
+                        report(errs, slug + ": two headings share the id '" + id + "'")
+                    end
+                end
+                if id.len() == 0:
+                    base_id := md_slug(text).len() > 0 ? md_slug(text) : "section"
+                    id = base_id
+                    mut k := 2
+                    until ids.has(id):
+                        id = base_id + "-" + k
+                        k++
+                    end
+                end
+                ids.put(id, "1")
+                str.BufAppend(b, "<h" + level + ` id="` + id + `">` + md_inline(text) + "</h" + level + ">\n")
+                i++
+                continue
+            end
+            if level == 1:
+                report(errs, slug + ": use the front matter title instead of a # heading")
+            end
+        end
+        if t == "---" or t == "***":
+            str.BufAppend(b, "<hr />\n")
+            i++
+            continue
+        end
+        if str.StartsWith(t, ">"):
+            mut q := Vector {} as Vector<str>
+            until i < lines.len():
+                l := str.Trim(strip_cr(lines.get(i)))
+                if not str.StartsWith(l, ">"):
+                    break
+                end
+                q.push(str.TrimPrefix(str.TrimPrefix(l, ">"), " "))
+                i++
+            end
+            mut kind := ""
+            if q.len() > 0:
+                first := str.Trim(q.get(0))
+                if first == "[!NOTE]" or first == "[!TIP]" or first == "[!WARNING]" or first == "[!IMPORTANT]":
+                    kind = str.Lower(first.substr(2, first.len() - 3))
+                    q.set(0, "")
+                end
+            end
+            inner := md_render(str.Join(q, "\n"), classes, ctx, slug, n, ids, errs)
+            if kind.len() > 0:
+                str.BufAppend(b, `<div class="note note-` + kind + `">` + inner + "</div>\n")
+            else:
+                str.BufAppend(b, "<blockquote>" + inner + "</blockquote>\n")
+            end
+            continue
+        end
+        if str.StartsWith(t, "|"):
+            mut rows := Vector {} as Vector<str>
+            until i < lines.len() and str.StartsWith(str.Trim(strip_cr(lines.get(i))), "|"):
+                rows.push(str.Trim(strip_cr(lines.get(i))))
+                i++
+            end
+            str.BufAppend(b, md_table(rows, slug, errs))
+            continue
+        end
+        if md_list_marker(t) > 0:
+            base := md_indent(line)
+            ordered := not (str.StartsWith(t, "- ") or str.StartsWith(t, "* "))
+            mut items := Vector {} as Vector<str>
+            mut cur := Vector {} as Vector<str>
+            mut width := 0
+            until i < lines.len():
+                l := strip_cr(lines.get(i))
+                lt2 := str.Trim(l)
+                ind := md_indent(l)
+                if lt2.len() == 0:
+                    mut k := i + 1
+                    until k < lines.len() and str.Trim(lines.get(k)).len() == 0:
+                        k++
+                    end
+                    if k < lines.len() and md_indent(lines.get(k)) > base:
+                        cur.push("")
+                        i++
+                        continue
+                    end
+                    break
+                end
+                lm := md_list_marker(lt2)
+                if ind <= base and lm > 0:
+                    if cur.len() > 0:
+                        items.push(str.Join(cur, "\n"))
+                        cur = Vector {} as Vector<str>
+                    end
+                    width = lm
+                    cur.push(lt2.substr(lm, lt2.len() - lm))
+                    i++
+                    continue
+                end
+                if ind > base:
+                    cut := ind < base + width ? ind : base + width
+                    cur.push(l.substr(cut, l.len() - cut))
+                    i++
+                    continue
+                end
+                if md_is_block_start(lt2) or md_is_html_block(lt2):
+                    break
+                end
+                cur.push(lt2)
+                i++
+            end
+            if cur.len() > 0:
+                items.push(str.Join(cur, "\n"))
+            end
+            tag := ordered ? "ol" : "ul"
+            str.BufAppend(b, "<" + tag + ">\n")
+            each it in items:
+                str.BufAppend(b, "<li>" + md_list_item(it, classes, ctx, slug, n, ids, errs) + "</li>\n")
+            end
+            str.BufAppend(b, "</" + tag + ">\n")
+            continue
+        end
+        if str.StartsWith(t, "{{") and str.EndsWith(t, "}}"):
+            key := str.Trim(t.substr(2, t.len() - 4))
+            if ctx.has(key):
+                str.BufAppend(b, ctx.get(key) + "\n")
+            else:
+                report(errs, slug + ": no value for '" + key + "'")
+            end
+            i++
+            continue
+        end
+        if md_is_html_block(t):
+            until i < lines.len() and str.Trim(strip_cr(lines.get(i))).len() > 0:
+                str.BufAppend(b, strip_cr(lines.get(i)) + "\n")
+                i++
+            end
+            continue
+        end
+        mut para := Vector {} as Vector<str>
+        until i < lines.len():
+            l := str.Trim(strip_cr(lines.get(i)))
+            if l.len() == 0 or (para.len() > 0 and md_is_block_start(l)):
+                break
+            end
+            para.push(l)
+            i++
+        end
+        str.BufAppend(b, "<p>" + md_inline(str.Join(para, " ")) + "</p>\n")
+    end
+    ret str.BufStr(b)
+end
+
+func post_parse(path: str, m &: HashMap<str, str>, errs &: Vector<str>): str:
+    lines := io.ReadFile(path).split("\n")
+    if lines.len() == 0 or str.Trim(strip_cr(lines.get(0))) != "---":
+        report(errs, path + ": an article starts with a --- front matter block")
+        ret ""
+    end
+    mut i := 1
+    mut closed := false
+    until i < lines.len():
+        t := str.Trim(strip_cr(lines.get(i)))
+        i++
+        if t == "---":
+            closed = true
+            break
+        end
+        if t.len() == 0 or str.StartsWith(t, "#"):
+            continue
+        end
+        pos := t.find(":")
+        if pos <= 0:
+            report(errs, path + ": expected 'key: value' in the front matter, got: " + t)
+            continue
+        end
+        key := str.Trim(t.substr(0, pos))
+        mut value := str.Trim(t.substr(pos + 1, t.len() - pos - 1))
+        if value.len() >= 2 and str.StartsWith(value, "\"") and str.EndsWith(value, "\""):
+            value = value.substr(1, value.len() - 2)
+        end
+        if m.has("post." + key):
+            report(errs, path + ": duplicate front matter key '" + key + "'")
+        end
+        m.put("post." + key, value)
+    end
+    if not closed:
+        report(errs, path + ": the front matter has no closing ---")
+    end
+    mut body := Vector {} as Vector<str>
+    until i < lines.len():
+        body.push(strip_cr(lines.get(i)))
+        i++
+    end
+    ret str.Join(body, "\n")
+end
+
+func is_iso_date(s: str): bool:
+    if s.len() != 10 or s.substr(4, 1) != "-" or s.substr(7, 1) != "-":
+        ret false
+    end
+    ret lead_num(s) > 1999 and lead_num(s.substr(5, 2)) >= 1 and lead_num(s.substr(5, 2)) <= 12 and lead_num(s.substr(8, 2)) >= 1 and lead_num(s.substr(8, 2)) <= 31
+end
+
+func load_posts(lang_dir: str, ctx: HashMap<str, str>, errs &: Vector<str>): Vector<Post>:
+    mut out := Vector {} as Vector<Post>
+    bdir := lang_dir + "/blog"
+    if not dir.Exists(bdir):
+        ret out
+    end
+    mut names := Vector {} as Vector<str>
+    each name in dir.ListFiles(bdir):
+        if str.EndsWith(name, ".md"):
+            names.push(name)
+        end
+    end
+    sort_names(names)
+    cats := " " + ctx_or(ctx, "blog.categories", "") + " "
+    mut seen := HashMap {} as HashMap<str, str>
+    each name in names:
+        path := bdir + "/" + name
+        mut m := HashMap {} as HashMap<str, str>
+        _body := post_parse(path, m, errs)
+        each key in ["title", "seo_title", "description", "keywords", "category", "summary", "date"]:
+            if not m.has("post." + key) or str.Trim(m.get("post." + key)).len() == 0:
+                report(errs, path + ": missing front matter '" + key + "'")
+            end
+        end
+        cat := ctx_or(m, "post.category", "")
+        if cats.find(" " + cat + " ") < 0:
+            report(errs, path + ": category '" + cat + "' is not in blog.categories")
+        end
+        date := ctx_or(m, "post.date", "")
+        if not is_iso_date(date):
+            report(errs, path + ": date must be YYYY-MM-DD, got '" + date + "'")
+        end
+        updated := ctx_or(m, "post.updated", "")
+        if updated.len() > 0 and not is_iso_date(updated):
+            report(errs, path + ": updated must be YYYY-MM-DD, got '" + updated + "'")
+        end
+        slug := lesson_slug(str.TrimSuffix(name, ".md"))
+        if seen.has(slug):
+            report(errs, path + ": another article already uses the slug '" + slug + "'")
+        end
+        seen.put(slug, "1")
+        out.push(Post { path = path, slug = slug, url = "/blog/" + slug + "/", title = escape_text(ctx_or(m, "post.title", "")), category = cat, summary = escape_text(ctx_or(m, "post.summary", "")), date = date, updated = updated })
+    end
+    ret out
+end
+
+func post_modified(p: Post): str:
+    ret p.updated.len() > 0 ? newest(p.date, p.updated) : p.date
+end
+
+func post_date_text(ctx: HashMap<str, str>, iso: str): str:
+    if not is_iso_date(iso):
+        ret iso
+    end
+    g := calendar.GregorianDate { year = lead_num(iso), month = lead_num(iso.substr(5, 2)), day = lead_num(iso.substr(8, 2)) }
+    if ctx_or(ctx, "site.lang", "") == "fa":
+        ret str.ToPersianDigits(calendar.FormatJalaliLongFa(calendar.GregorianToJalali(g)))
+    end
+    ret calendar.FormatGregorianLongEn(g)
+end
+
+func post_minutes(html: str): int:
+    words := str.Fields(strip_tags(html)).len()
+    mins := (words + 199) / 200
+    ret mins < 1 ? 1 : mins
+end
+
+func cat_label(ctx: HashMap<str, str>, cat: str): str:
+    ret ctx_or(ctx, "blog.cat." + cat, cat)
+end
+
+func blog_card(ctx: HashMap<str, str>, p: Post, heading: str): str:
+    ret `<article class="blog-card"><a href="` + p.url + `"><span class="blog-card-cat">` + cat_label(ctx, p.category) + "</span><" + heading + ">" + p.title + "</" + heading + "><p>" + p.summary + `</p><span class="blog-card-more">` + ctx_or(ctx, "blog.read_more", "") + "</span></a></article>"
+end
+
+func blog_index_html(ctx: HashMap<str, str>, posts: Vector<Post>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    cats := str.Fields(ctx_or(ctx, "blog.categories", ""))
+    str.BufAppend(b, `<nav class="blog-cats" aria-label="` + ctx_or(ctx, "blog.cats_label", "") + `">`)
+    each cat in cats:
+        mut count := 0
+        each p in posts:
+            if p.category == cat:
+                count++
+            end
+        end
+        if count > 0:
+            str.BufAppend(b, `<a href="#` + cat + `">` + cat_label(ctx, cat) + ` <span class="blog-cat-count">` + digits(ctx, count) + "</span></a>")
+        end
+    end
+    str.BufAppend(b, "</nav>\n")
+    featured := str.Fields(ctx_or(ctx, "blog.featured", ""))
+    mut feat := ""
+    each slug in featured:
+        each p in posts:
+            if p.slug == slug:
+                feat += blog_card(ctx, p, "h3")
+            end
+        end
+    end
+    if feat.len() > 0:
+        str.BufAppend(b, `<section class="blog-part blog-featured" id="start-here"><h2>` + ctx_or(ctx, "blog.featured_title", "") + `</h2><div class="blog-grid">` + feat + "</div></section>\n")
+    end
+    each cat in cats:
+        mut cards := ""
+        each p in posts:
+            if p.category == cat:
+                cards += blog_card(ctx, p, "h3")
+            end
+        end
+        if cards.len() > 0:
+            str.BufAppend(b, `<section class="blog-part" id="` + cat + `"><h2>` + cat_label(ctx, cat) + "</h2>")
+            lead := ctx_or(ctx, "blog.cat." + cat + "_lead", "")
+            if lead.len() > 0:
+                str.BufAppend(b, `<p class="blog-part-lead">` + lead + "</p>")
+            end
+            str.BufAppend(b, `<div class="blog-grid">` + cards + "</div></section>\n")
+        end
+    end
+    ret str.BufStr(b)
+end
+
+func blog_home_html(ctx: HashMap<str, str>, posts: Vector<Post>): str:
+    mut cards := ""
+    mut shown := 0
+    each slug in str.Fields(ctx_or(ctx, "blog.home_posts", "")):
+        each p in posts:
+            if p.slug == slug and shown < 6:
+                cards += blog_card(ctx, p, "h3")
+                shown++
+            end
+        end
+    end
+    ret cards.len() > 0 ? `<div class="blog-grid">` + cards + "</div>" : ""
+end
+
+func blog_nodes(ctx: HashMap<str, str>, posts: Vector<Post>): str:
+    u := ctx_or(ctx, "site.url", "")
+    tag := ctx_or(ctx, "site.lang_tag", ctx_or(ctx, "site.lang", ""))
+    mut refs := Vector {} as Vector<str>
+    mut items := Vector {} as Vector<str>
+    repeat posts.len() in i:
+        p := posts.get(i)
+        refs.push(`{"@id":` + json_str(u + p.url + "#article") + "}")
+        items.push(`{"@type":"ListItem","position":` + (i + 1) + `,"name":` + json_str(strip_tags(decode_entities(p.title))) + `,"url":` + json_str(u + p.url) + "}")
+    end
+    blog := `{"@type":"Blog","@id":` + json_str(u + "/blog/#blog") + `,"name":` + json_str(ctx_or(ctx, "blog.heading", "")) + `,"description":` + json_str(ctx_or(ctx, "blog.description", "")) + `,"url":` + json_str(u + "/blog/") + `,"inLanguage":` + json_str(tag) + `,"about":{"@id":` + json_str(u + "/#language") + `},"publisher":{"@id":` + json_str(u + "/#organization") + `},"blogPost":[` + str.Join(refs, ",") + "]}"
+    list := `{"@type":"ItemList","@id":` + json_str(u + "/blog/#articles") + `,"name":` + json_str(ctx_or(ctx, "blog.heading", "")) + `,"itemListElement":[` + str.Join(items, ",") + "]}"
+    ret blog + "," + list
+end
+
+func post_jsonld(ctx: HashMap<str, str>, p: Post, words: int, version: str): str:
+    u := ctx_or(ctx, "site.url", "")
+    tag := ctx_or(ctx, "site.lang_tag", ctx_or(ctx, "site.lang", ""))
+    page_url := u + p.url
+    title := strip_tags(decode_entities(p.title))
+    desc := ctx_or(ctx, "page.description_raw", "")
+    mut graph := Vector {} as Vector<str>
+    site_nodes(ctx, version, graph)
+    graph.push(webpage_node(ctx, page_url, ctx_or(ctx, "page.title_raw", title), desc, true))
+    org := `{"@id":` + json_str(u + "/#organization") + "}"
+    graph.push(`{"@type":["BlogPosting","TechArticle"],"@id":` + json_str(page_url + "#article") + `,"headline":` + json_str(title) + `,"description":` + json_str(desc) + `,"url":` + json_str(page_url) + `,"mainEntityOfPage":{"@id":` + json_str(page_url + "#webpage") + `},"datePublished":` + json_str(p.date) + `,"dateModified":` + json_str(post_modified(p)) + `,"inLanguage":` + json_str(tag) + `,"image":` + json_str(u + ctx_or(ctx, "page.og_image", ctx_or(ctx, "site.og_image", ""))) + `,"keywords":` + json_str(ctx_or(ctx, "page.keywords", "")) + `,"articleSection":` + json_str(strip_tags(cat_label(ctx, p.category))) + `,"wordCount":` + words + `,"about":{"@id":` + json_str(u + "/#language") + `},"isPartOf":{"@id":` + json_str(u + "/blog/#blog") + `},"author":` + org + `,"publisher":` + org + "}")
+    mut names := Vector {} as Vector<str>
+    mut urls := Vector {} as Vector<str>
+    names.push(ctx_or(ctx, "nav.home", ""))
+    urls.push(u + "/")
+    names.push(ctx_or(ctx, "nav.blog", ""))
+    urls.push(u + "/blog/")
+    names.push(title)
+    urls.push(page_url)
+    graph.push(crumb_node(page_url, names, urls))
+    ret wrap_graph(graph)
+end
+
+func post_related(ctx: HashMap<str, str>, posts: Vector<Post>, current: int): str:
+    p := posts.get(current)
+    mut cards := ""
+    mut shown := 0
+    mut k := 1
+    until k < posts.len() and shown < 3:
+        q := posts.get((current + k) % posts.len())
+        if q.category == p.category:
+            cards += blog_card(ctx, q, "h3")
+            shown++
+        end
+        k++
+    end
+    ret cards
+end
+
+func xml_escape(s: str): str:
+    ret str.Replace(str.Replace(str.Replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+end
+
+func blog_atom(ctx: HashMap<str, str>, posts: Vector<Post>): str:
+    u := ctx_or(ctx, "site.url", "")
+    mut latest := ""
+    each p in posts:
+        latest = newest(latest, post_modified(p))
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `<?xml version="1.0" encoding="utf-8"?>` + "\n" + `<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="` + ctx_or(ctx, "site.lang_tag", "") + `">` + "\n")
+    str.BufAppend(b, "  <title>" + xml_escape(ctx_or(ctx, "blog.feed_title", "")) + "</title>\n")
+    str.BufAppend(b, "  <subtitle>" + xml_escape(ctx_or(ctx, "blog.description", "")) + "</subtitle>\n")
+    str.BufAppend(b, `  <link rel="self" href="` + u + `/blog/atom.xml"/>` + "\n")
+    str.BufAppend(b, `  <link rel="alternate" type="text/html" href="` + u + `/blog/"/>` + "\n")
+    str.BufAppend(b, "  <id>" + u + "/blog/</id>\n  <updated>" + latest + "T00:00:00Z</updated>\n")
+    str.BufAppend(b, "  <author><name>" + xml_escape(ctx_or(ctx, "site.author", "")) + "</name><uri>" + u + "/</uri></author>\n")
+    str.BufAppend(b, `  <icon>` + u + "/assets/img/icon-192.png</icon>\n")
+    each p in posts:
+        str.BufAppend(b, "  <entry>\n    <title>" + xml_escape(decode_entities(p.title)) + "</title>\n")
+        str.BufAppend(b, `    <link rel="alternate" type="text/html" href="` + u + p.url + `"/>` + "\n")
+        str.BufAppend(b, "    <id>" + u + p.url + "</id>\n    <published>" + p.date + "T00:00:00Z</published>\n    <updated>" + post_modified(p) + "T00:00:00Z</updated>\n")
+        str.BufAppend(b, `    <category term="` + xml_escape(strip_tags(cat_label(ctx, p.category))) + `"/>` + "\n")
+        str.BufAppend(b, "    <summary>" + xml_escape(decode_entities(p.summary)) + "</summary>\n  </entry>\n")
+    end
+    str.BufAppend(b, "</feed>\n")
+    ret str.BufStr(b)
+end
+
 func alt_urls(alt_dir: str): HashMap<str, str>:
     mut ignored := Vector {} as Vector<str>
     mut out := HashMap {} as HashMap<str, str>
@@ -1957,6 +2866,10 @@ func alt_urls(alt_dir: str): HashMap<str, str>:
     end
     each p in load_std(alt_dir, ignored):
         out.put(p.url, "1")
+    end
+    no_ctx := HashMap {} as HashMap<str, str>
+    each q in load_posts(alt_dir, no_ctx, ignored):
+        out.put(q.url, "1")
     end
     ret out
 end
@@ -2042,6 +2955,12 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     ctx.put("std.cards", std_index_html(pkgs))
     ctx.put("std.count", digits(ctx, pkgs.len()))
     ctx.put("std.itemlist", std_itemlist(ctx, pkgs))
+    posts := load_posts(lang_dir, ctx, errs)
+    ctx.put("blog.cards", blog_index_html(ctx, posts))
+    ctx.put("blog.home", blog_home_html(ctx, posts))
+    ctx.put("blog.nodes", posts.len() > 0 ? blog_nodes(ctx, posts) : "")
+    ctx.put("blog.count", digits(ctx, posts.len()))
+    ctx.put("active.blog", "")
 
     mut pages := Vector {} as Vector<Page>
     each name in dir.ListFiles(ROOT + "/templates/pages"):
@@ -2052,7 +2971,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     each p in pages:
         ctx.put("active." + p.slug, "")
     end
-    ctx.put("sitemap.html", sitemap_html(ctx, pages, lessons, pkgs))
+    ctx.put("sitemap.html", sitemap_html(ctx, pages, lessons, pkgs, posts))
 
     if dir.Exists(out_dir):
         _rm := dir.RemoveAll(out_dir)
@@ -2098,6 +3017,11 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         end
         if p.slug == "std":
             each q in pkgs:
+                page_files.push(q.path)
+            end
+        end
+        if p.slug == "blog":
+            each q in posts:
                 page_files.push(q.path)
             end
         end
@@ -2194,16 +3118,73 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         write(out_dir + "/std/" + p.en + "/index.html", rebase(phtml, url_base), errs)
         str.BufAppend(sitemap, sitemap_entry(pc, site_url + p.url, pkg_mod))
     end
+    post_tmpl := io.ReadFile(ROOT + "/templates/post.html")
+    classes := code_classes(ctx)
+    repeat posts.len() in bi:
+        q := posts.get(bi)
+        mut bc := copy_map(ctx)
+        mut meta := HashMap {} as HashMap<str, str>
+        md := post_parse(q.path, meta, errs)
+        mut code_n := 0
+        mut ids := HashMap {} as HashMap<str, str>
+        body := md_render(md, classes, bc, q.slug, code_n, ids, errs)
+        words := str.Fields(strip_tags(body)).len()
+        bc.put("active.blog", "true")
+        bc.put("post.title", q.title)
+        bc.put("post.summary", q.summary)
+        bc.put("post.category", cat_label(bc, q.category))
+        bc.put("post.category_url", "/blog/#" + q.category)
+        bc.put("post.date", q.date)
+        bc.put("post.date_text", post_date_text(bc, q.date))
+        bc.put("post.updated", q.updated.len() > 0 and q.updated != q.date ? q.updated : "")
+        bc.put("post.updated_text", post_date_text(bc, q.updated))
+        bc.put("post.minutes", digits(bc, post_minutes(body)))
+        bc.put("post.body_html", body)
+        bc.put("post.toc", body_toc(body))
+        bc.put("post.related", post_related(bc, posts, bi))
+        bc.put("post.prev", bi > 0 ? `<a class="lesson-step prev" href="` + posts.get(bi - 1).url + `"><small>` + ctx_or(bc, "blog.prev_label", "") + "</small><strong>" + posts.get(bi - 1).title + "</strong></a>" : "")
+        bc.put("post.next", bi + 1 < posts.len() ? `<a class="lesson-step next" href="` + posts.get(bi + 1).url + `"><small>` + ctx_or(bc, "blog.next_label", "") + "</small><strong>" + posts.get(bi + 1).title + "</strong></a>" : "")
+        bc.put("page.slug", "blog-" + q.slug)
+        bc.put("page.url", q.url)
+        set_alt(bc, alt_pages, q.url)
+        seo_title := ctx_or(meta, "post.seo_title", "")
+        desc := ctx_or(meta, "post.description", "")
+        bc.put("page.title", escape_text(seo_title))
+        bc.put("page.title_raw", seo_title)
+        bc.put("page.description", escape_text(desc))
+        bc.put("page.description_raw", desc)
+        bc.put("page.keywords", escape_text(ctx_or(meta, "post.keywords", "")))
+        bc.put("page.robots", ctx_or(bc, "site.robots", "index, follow"))
+        bc.put("page.canonical", "1")
+        bc.put("page.og_type", "article")
+        set_cover(bc, "blog")
+        bc.put("page.og_image_alt", q.title)
+        post_mod := newest(post_modified(q), lastmod_of(lm, one_path(q.path)))
+        bc.put("page.modified", post_mod)
+        bc.put("page.lastmod", post_mod)
+        bc.put("page.prev_url", "")
+        bc.put("page.next_url", "")
+        bc.put("page.jsonld", post_jsonld(bc, q, words, raw_version))
+        bc.put("page.body", render(ROOT + "/templates/post.html", post_tmpl, bc, errs))
+        bhtml := render(ROOT + "/templates/base.html", base, bc, errs)
+        _bd := dir.MkdirAll(out_dir + "/blog/" + q.slug)
+        write(out_dir + "/blog/" + q.slug + "/index.html", rebase(bhtml, url_base), errs)
+        str.BufAppend(sitemap, sitemap_entry(bc, site_url + q.url, post_mod))
+    end
+    if posts.len() > 0:
+        _ba := dir.MkdirAll(out_dir + "/blog")
+        write(out_dir + "/blog/atom.xml", blog_atom(ctx, posts), errs)
+    end
     str.BufAppend(sitemap, "</urlset>\n")
     write(out_dir + "/sitemap.xml", str.BufStr(sitemap), errs)
     write(out_dir + "/site.webmanifest", manifest_json(ctx), errs)
-    write(out_dir + "/llms.txt", llms_index(ctx, pages, lessons, pkgs), errs)
+    write(out_dir + "/llms.txt", llms_index(ctx, pages, lessons, pkgs, posts), errs)
     write(out_dir + "/llms-full.txt", str.BufStr(full), errs)
     if fs.Copy(ROOT + "/assets/img/favicon.ico", out_dir + "/favicon.ico") != 0:
         report(errs, "cannot copy favicon.ico into " + out_dir)
     end
     write(out_dir + "/robots.txt", "User-agent: *\nAllow: /\n\nSitemap: " + site_url + "/sitemap.xml\n", errs)
-    ret pages.len() + lessons.len() + pkgs.len()
+    ret pages.len() + lessons.len() + pkgs.len() + posts.len()
 end
 
 func main:

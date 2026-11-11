@@ -140,6 +140,47 @@ contains its own `page:` line is built as it stands.
 `SALAM="$PWD/salam" ./salam run tools/salam/check-snippets.salam [lesson.txt ...]` runs the
 check by hand.
 
+## Magazine
+
+Each file in `content/<lang>/blog/` is one article in Markdown, published at
+`/blog/<name>/` (`18-is-salam-faster-than-c-and-rust.md` becomes
+`/blog/is-salam-faster-than-c-and-rust/`; the number only sets the order). A
+Persian article uses the same file name as its English twin, so the two pages
+get each other's `hreflang` link. The file starts with a front matter block:
+
+```
+---
+title: The H1 of the article
+seo_title: The <title> tag, about 60 characters
+description: The meta description, about 150 characters
+keywords: phrase one, phrase two
+category: compiler
+summary: One or two sentences for the cards and the lead
+date: 2026-11-11
+updated: 2026-12-01
+---
+```
+
+`category` must be one of the words in `blog.categories` (in `blog.txt`),
+whose labels are `blog.cat.<word>`. `updated` is optional. The body supports
+`##`/`###` headings (give every `##` an id, `## Heading {#id}`, and keep the
+ids the same in both languages; they build the contents list), paragraphs,
+`**bold**`, `*italic*`, `` `code` ``, links, `-` and `1.` lists, pipe tables,
+`> [!NOTE]`, `> [!TIP]` and `> [!WARNING]` callouts, `---`, a few inline tags
+(`<bdi>`, `<kbd>`, `<sub>`, `<sup>`) and `{{example.name}}` on a line of its own.
+
+A ` ```salam ` block must be a whole program. `check-blog-code.sh` (run by
+`build.sh` with the examples) compiles every one of them, and when the block
+is followed by a ` ```output ` block it runs the program and compares the
+output. Mark a partial snippet ` ```salam fragment ` to skip the check. Other
+languages (` ```rust `, ` ```go `, ` ```python `, ...) are highlighted and not
+compiled. Salam code in Persian script is laid out right to left.
+
+The generator also writes `/blog/` (cards grouped by category, with the
+`blog.featured` articles first), `/blog/atom.xml`, the `BlogPosting` JSON-LD
+of every article, and adds the articles to `sitemap.xml`, the site map page and
+`llms.txt`. `blog.home_posts` picks the cards shown on the home page.
+
 ## Adding English (salamlang.org)
 
 1. Copy `content/fa` to `content/en` and translate the `.txt` files.

@@ -2357,6 +2357,9 @@ are never translated, in either language.
 backend rather than defaulting to false, so test it with `defined` in either
 language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
 English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
+On the JS backend (`salam js` and page scripts) `SALAM_OS` and `SALAM_ARCH`
+are both `"js"` and every `SALAM_OS_*` / `SALAM_ARCH_*` flag is false, so an
+OS chain falls through to its `else:` there.
 
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;

@@ -225,7 +225,7 @@ salam inspect app.salam --emit-ast --xml-out=ast.xml
 
 A few design decisions explain most of the structure:
 
-- **One front end, many backends.** Because lexing, parsing and analysis are shared, a new language feature is checked once and reaches every backend. The native backend goes further and reuses the LLVM backend's output, so the two cannot disagree on what a program means.
+- **One frontend, many backends.** Because lexing, parsing and analysis are shared, a new language feature is checked once and reaches every backend. The native backend goes further and reuses the LLVM backend's output, so the two cannot disagree on what a program means.
 - **Checks before code.** Salam treats many things other compilers warn about (unused variables, dead branches, reassigning an immutable value, a definite out-of-range index) as errors, and it finds them before generating anything. The [rules lesson](/learn/rules/) lists the main ones.
 - **Two languages, one tree.** The language pack is chosen at the very start. After lexing, English and Persian programs share one tree and one set of checks; the pack only decides which spellings of names are accepted and which language the messages use.
 - **Everything is inspectable.** Tokens, the AST, the symbol table, the generated C, the LLVM IR (`salam llvm`) and the native assembly (`--emit-asm`) can all be printed. For students, this makes the Salam compiler a working, open textbook.
@@ -248,4 +248,4 @@ It can. The C backend is one of three; the others are LLVM and a native code gen
 
 ### How do I see what the compiler does with my code?
 
-Use `salam inspect --emit-tokens`, `--emit-ast` or `--emit-symbol` for the front end, `salam build --emit-c` for the generated C, `salam llvm` for LLVM IR and `salam build --backend=native --emit-asm` for the machine code as assembly.
+Use `salam inspect --emit-tokens`, `--emit-ast` or `--emit-symbol` for the frontend, `salam build --emit-c` for the generated C, `salam llvm` for LLVM IR and `salam build --backend=native --emit-asm` for the machine code as assembly.

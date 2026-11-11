@@ -19,7 +19,7 @@ This comparison puts the same programs side by side, then goes through memory, s
 | First appeared | 1972, standardized since 1989 (C23 is current) | 2024 per its source headers, still pre-1.0 |
 | Compilation | Native, through gcc, clang, MSVC and many others | Native, through its own C, LLVM or x86-64/ARM backends |
 | Memory | `malloc`/`free`, by hand | Stack values plus heap containers freed with `.free()` and `defer` |
-| Growable arrays and maps | Write your own or pick a library | `Vector<T>` and `HashMap<K, V>` built in, `Set<T>` and more in the standard library |
+| Growable arrays and maps | Write your own or pick a library | `Vector<T>` and `HashMap<K, V>` built-in, `Set<T>` and more in the standard library |
 | Strings | `char *` with a terminating zero byte | `str`, UTF-8 text with byte and character operations |
 | Out-of-bounds access | Undefined behavior | Compile error when provable, runtime panic in development builds |
 | Signed overflow | Undefined behavior | Wraps in development builds; with `--release` the LLVM backend assumes it does not happen |
@@ -184,7 +184,7 @@ average: 27.875
 hottest: Tehran
 ```
 
-The memory model underneath is close to C's. Numbers, booleans and plain structs live on the stack and are copied on assignment. A `Vector`, a `HashMap` and a string built at run time live on the heap, and someone has to free them. A function that returns a container or a new string hands ownership to its caller. Copying a `Vector` variable copies its header, not its elements, so two variables can share storage, exactly like two C pointers to one buffer. `.copy()` makes an independent copy.
+The memory model underneath is close to C's. Numbers, booleans and plain structs live on the stack and are copied on assignment. A `Vector`, a `HashMap` and a string built at runtime live on the heap, and someone has to free them. A function that returns a container or a new string hands ownership to its caller. Copying a `Vector` variable copies its header, not its elements, so two variables can share storage, exactly like two C pointers to one buffer. `.copy()` makes an independent copy.
 
 What Salam adds is a set of compile-time checks on top of that model. Using a pointer after `mem.Free` is error `E139`, freeing twice is `E140`, returning a value that the function's own `defer` frees is `E141`, and keeping a pointer into a `Vector` across a `push` that may move its storage is warning `W144`. These are checks for common patterns, not a proof that the program is memory safe; the [memory management article](/blog/memory-management-in-salam/) and the [memory lesson](/learn/memory/) go through them. For what the checks miss, `salam memcheck` builds the program with AddressSanitizer and runs it.
 
@@ -204,11 +204,11 @@ C's biggest cost is undefined behavior: reading past an array, overflowing a sig
 
 Salam closes several of those doors:
 
-- **Bounds checks.** When the compiler can prove an index is out of range, the program does not compile. For a fixed array `a := [1, 2, 3]`, writing `a[3]` is `E168`; for a `Vector` whose length the compiler can track, `v.get(v.len())` is `E146` with the message "index out of bounds: 'i' is 2, but 'v' has 2 elements". When the index is only known at run time, a development build checks it and stops with `salam panic: Vector.get: index out of bounds` instead of reading someone else's memory.
+- **Bounds checks.** When the compiler can prove an index is out of range, the program does not compile. For a fixed array `a := [1, 2, 3]`, writing `a[3]` is `E168`; for a `Vector` whose length the compiler can track, `v.get(v.len())` is `E146` with the message "index out of bounds: 'i' is 2, but 'v' has 2 elements". When the index is only known at runtime, a development build checks it and stops with `salam panic: Vector.get: index out of bounds` instead of reading someone else's memory.
 - **Integer overflow.** In a development build, signed arithmetic wraps predictably. Range checks at compile time report an overflow, a division by zero or a null dereference that always happens as an error, and one that can happen as a warning.
 - **Initialization and types.** Variables are declared with a value, immutable unless declared `mut`, and conversions between types are explicit.
 
-The trade-off is that `--release` removes the run-time bounds checks for speed and lets the optimizer assume signed arithmetic does not overflow, which brings back C's behavior in exchange for C's speed. Many teams ship release builds and test with development builds, which is a reasonable split as long as the tests are good.
+The trade-off is that `--release` removes the runtime bounds checks for speed and lets the optimizer assume signed arithmetic does not overflow, which brings back C's behavior in exchange for C's speed. Many teams ship release builds and test with development builds, which is a reasonable split as long as the tests are good.
 
 ## Calling C from Salam {#interop}
 
@@ -243,7 +243,7 @@ The Persian word "salam" is 8 bytes and 4 letters, a small reminder of why the t
 
 On the project's benchmark of 39 programs that use the same algorithm in every language, Salam averaged 10.6 ms and C 11.7 ms, with C built by `gcc -O3` and Salam by its LLVM backend at `-O3`. That is the same range, not a win: most programs run for a few milliseconds, so process start-up is part of each number, and gaps under about 5% change from run to run. C was ahead on programs such as n-queens (35.7 ms against 41.1), recursive Fibonacci (2.4 against 3.1) and an LCG random number loop (17.9 against 19.4). The [speed page](/speed/) has every number, and [the careful reading of the benchmark](/blog/is-salam-faster-than-c-and-rust/) explains why the averages should not be read as a ranking.
 
-On tooling, C gives you a choice of world-class compilers, debuggers, profilers and analyzers, and you assemble them with a build system such as Make or CMake. Salam ships one executable that builds, tests (`salam test`), formats, generates documentation, runs a language server for editors, launches gdb or lldb (`salam debug`) and runs AddressSanitizer (`salam memcheck`). C's tools are deeper; Salam's are in one place.
+On tooling, C gives you a choice of world-class compilers, debuggers, profilers and analyzers, and you assemble them with a build tool such as Make or CMake. Salam ships one executable that builds, tests (`salam test`), formats, generates documentation, runs a language server for editors, launches gdb or lldb (`salam debug`) and runs AddressSanitizer (`salam memcheck`). C's tools are deeper; Salam's are in one place.
 
 ## When to choose C, when to choose Salam {#when}
 

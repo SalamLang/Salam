@@ -105,8 +105,8 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 
 ## Traps that fail silently
 
-- Check the compiler version with `salam version`. There is no `--version`
-  flag; `salam --version` fails with `unknown command '--version'`.
+- Check the compiler version with `salam version` (`salam --version` and
+  `salam -v` work too; `salam version --short` prints just the number).
 - `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
   exact up to 2^53, but larger results or intermediates are rounded.
   `i128`/`u128` are exact BigInts there, except through `i64`/`u64` casts.
@@ -152,8 +152,8 @@ The language is detected from the keywords; `--lang=fa` forces Persian.
 ## Persian source
 
 Persian Salam has the same grammar and rules with Persian spellings. The
-entry function is `ریشه` (`تابع ریشه:`; `تابع اصلی` builds as an ordinary
-function but leaves the program with no entry point), blocks end with `پایان`, and `،` works as a comma.
+entry function is `ریشه` (`تابع ریشه:`; a file with only `تابع اصلی` fails to
+build with "no entry point"), blocks end with `پایان`, and `،` works as a comma.
 The most used words:
 
 | English                        | Persian                               | English                    | Persian                   |
@@ -170,8 +170,10 @@ The most used words:
 Persian-only traps: enum patterns in `همخوان` are bare member names; `ترابرد`
 labels each end with `پایان`; `و` is reserved; `اعشار` is f32; the decimal
 point is `.` not `٫`; std functions must use their Persian `@fa` names (an
-English name is an error in a Persian file); `spawn`, `join`, `dyn`, `len`
-and `sizeof` stay English.
+English name is an error in a Persian file). The built-ins are Persian too:
+`len` is `طول`, `sizeof` is `اندازه‌گونه`, `spawn` is `نخ‌ساز`, `join` is
+`نخ‌پیوند`, and the `SALAM_*` constants have Persian names (`SALAM_OS_LINUX` is
+`سلام سیستم لینوکس`); `dyn` may be written `dyn` or `پویا`.
 
 The root `SKILL.md` Part II has the complete tables, and the Persian course
 at <https://www.salamlang.ir/learn/> teaches the whole language with runnable

@@ -60,11 +60,11 @@ import matrix
 func main:
     mut cells := Vector {} as Vector<f64>
     each v in [4.0, 1.0, 2.0, 3.0]:
-        cells.push(v)
+        cells.Push(v)
     end
     mut rhs := Vector {} as Vector<f64>
     each v in [1.0, 2.0]:
-        rhs.push(v)
+        rhs.Push(v)
     end
     mut a := matrix.FromArray(2, 2, cells)
     mut b := matrix.FromArray(2, 1, rhs)
@@ -122,7 +122,7 @@ func main:
     mut temps := Vector {} as Vector<f64>
     defer temps.Free()
     each t in [21.5, 23.0, 19.8, 25.1, 22.4, 30.2, 20.9]:
-        temps.push(t)
+        temps.Push(t)
     end
     show("mean:  ", stats.Mean(temps))
     show("median:", stats.Median(temps))
@@ -169,7 +169,7 @@ import matrix
 func column(values: f64[]): matrix.Matrix:
     mut data := Vector {} as Vector<f64>
     each v in values:
-        data.push(v)
+        data.Push(v)
     end
     ret matrix.FromArray(values.len(), 1, data)
 end

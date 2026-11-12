@@ -137,9 +137,9 @@ end
 func main:
     mut scores := Vector {} as Vector<int>
     defer scores.Free()
-    scores.push(18)
-    scores.push(15)
-    scores.push(20)
+    scores.Push(18)
+    scores.Push(15)
+    scores.Push(20)
     println "average:", average(scores)
 end
 ```

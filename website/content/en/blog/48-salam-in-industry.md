@@ -59,8 +59,8 @@ func stock(ctx: i64):
 end
 
 func main:
-    items.push(Stock { sku = "RACK-42U", count = 7 })
-    items.push(Stock { sku = "CABLE-CAT6", count = 310 })
+    items.Push(Stock { sku = "RACK-42U", count = 7 })
+    items.Push(Stock { sku = "CABLE-CAT6", count = 310 })
     mut r := router.NewRouter()
     router.Get(r, "/healthz", health)
     router.Get(r, "/stock/:sku", stock)

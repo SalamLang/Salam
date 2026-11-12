@@ -144,7 +144,7 @@ func main:
     report("SELECT c.name, o.total_cents FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1", schema)
 
     mut a := sql.Analyze("SELECT c.name, o.total_cents FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE o.id = $1", schema)
-    p := a.params.get(0)
+    p := a.params.Get(0)
     println "takes", p.column, "as", sql.SalamType(p.kind, p.not_null)
     each col in a.results:
         println "gives", col.name, "as", sql.SalamType(col.kind, not col.nullable)
@@ -232,7 +232,7 @@ pub func OrdersFor(c: dyn db.Connection, customer_id: i64): Vector<OrdersForRow>
             else:
                 out.note = r.Text(2)
             end
-            rows.push(out)
+            rows.Push(out)
         end
         r.Close()
     end

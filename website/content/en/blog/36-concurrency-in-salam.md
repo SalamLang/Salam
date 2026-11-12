@@ -94,7 +94,7 @@ mut by_status := HashMap {} as HashMap<int, int>
 
 func record(code: int):
     sync.Lock(lock)
-    by_status.put(code, by_status.GetOr(code, 0) + 1)
+    by_status.Put(code, by_status.GetOr(code, 0) + 1)
     sync.Unlock(lock)
 end
 
@@ -156,10 +156,10 @@ func main:
     counts := pool.Map(10, pool.CPUCount(), (b: i64): ret count primes(b) end)
     mut total := 0 as i64
     repeat counts.len() in i:
-        total += counts.get(i)
+        total += counts.Get(i)
     end
     println "primes below 1000000:", total
-    println "in the first block:", counts.get(0), "in the last:", counts.get(9)
+    println "in the first block:", counts.Get(0), "in the last:", counts.Get(9)
     counts.Free()
 end
 ```
@@ -245,16 +245,16 @@ func main:
     mut workers := Vector {} as Vector<i64>
     defer workers.Free()
     repeat 3:
-        workers.push(spawn(worker))
+        workers.Push(spawn(worker))
     end
     repeat 1 to 100 in i:
         jobs.send(i as i64)
     end
-    jobs.close()
+    jobs.Close()
     each w in workers:
         join(w)
     end
-    results.close()
+    results.Close()
     all := chan.Drain(results)
     mut sum := 0 as i64
     each v in all:
@@ -282,8 +282,8 @@ func main:
     mut slow := chan.New(1) as chan.Chan<i64>
     mut both := Vector {} as Vector<chan.Chan<i64>>
     defer both.Free()
-    both.push(fast)
-    both.push(slow)
+    both.Push(fast)
+    both.Push(slow)
 
     p := pool.New(2, 4)
     pool.Submit(p, (): fast.send(1 as i64) end)
@@ -295,8 +295,8 @@ func main:
     which2 := chan.Select(both, v, 50)
     println "second select:", which2
 
-    fast.close()
-    slow.close()
+    fast.Close()
+    slow.Close()
     println "after closing:", chan.Select(both, v, 50)
     pool.Stop(p)
     fast.Free()

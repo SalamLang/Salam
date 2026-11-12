@@ -58,10 +58,10 @@ func main:
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.Free()
     each word in words:
-        counts.put(word, counts.GetOr(word, 0) + 1)
+        counts.Put(word, counts.GetOr(word, 0) + 1)
     end
-    println "apple:", counts.get("apple")
-    println "pear:", counts.get("pear")
+    println "apple:", counts.Get("apple")
+    println "pear:", counts.Get("pear")
 end
 ```
 
@@ -85,7 +85,7 @@ pear: 1
 ```salam fragment
 @en "Split"
 @fa "تفکیک کردن"
-pub pure func Split(s: str, delim: str): Vector<str>: ret s.split(delim) end
+pub pure func Split(s: str, delim: str): Vector<str>: ret s.Split(delim) end
 ```
 
 [کتابخانه‌ی استاندارد](/std/) بیش از ۲۱ هزار برچسب `@fa` دارد، یکی برای هر بسته، تابع، گونه، فیلد و ثابت همگانی. این عدد هزینه‌ی واقعی یک بسته‌ی زبانی است. ترجمه‌ی ۶۰ واژه‌ی کلیدی یک بعدازظهر کار است؛ نام‌گذاری یکدست همه‌ی نمادهای همگانی یک کتابخانه‌ی استاندارد بزرگ یک پروژه‌ی کامل است. سلام حتی یک سند طراحی دارد، [docs/design/naming-standard.md](https://github.com/SalamLang/Salam/blob/main/docs/design/naming-standard.md)، با قاعده‌هایی برای اینکه نام‌های فارسی چطور نوشته شوند (فاصله میان کلمه‌ها، هرگز خط زیر) و وقتی یک نام انگلیسی تغییر می‌کند چطور هم‌گام بمانند.

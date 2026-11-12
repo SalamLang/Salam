@@ -26,17 +26,17 @@ func count primes(limit: int): int:
     mut composite := Vector {} as Vector<bool>
     defer composite.Free()
     repeat limit + 1:
-        composite.push(false)
+        composite.Push(false)
     end
     mut count := 0
     repeat 2 to limit in n:
-        if composite.get(n):
+        if composite.Get(n):
             continue
         end
         count++
         mut multiple := n * 2
         until multiple <= limit:
-            composite.set(multiple, true)
+            composite.Set(multiple, true)
             multiple += n
         end
     end

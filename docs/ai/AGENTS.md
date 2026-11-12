@@ -320,12 +320,12 @@ count that is not an integer at all, fall back to `i32`.
 
 ```salam
 repeat v.len() in i:      // len() is i32, so i is i32
-    print v.get(i)
+    print v.Get(i)
 end
 
 n := 200 as u8
 repeat n in i:            // i is u8 here
-    total += v.get(i as int)   // ...so a signed parameter needs a cast
+    total += v.Get(i as int)   // ...so a signed parameter needs a cast
 end
 ```
 
@@ -413,7 +413,7 @@ end
 pub func Scale(v: f64, factor: f64): f64: ret v * factor end   // one-liners are fine
 
 func fill(out &: Vector<str>):                          // `&:` = by reference
-    out.push("x")
+    out.Push("x")
 end
 ```
 
@@ -481,7 +481,7 @@ are `شروع با`, `ختم با` and `دربردارد`.
 
 `len`, `s[i]`, `substr` and `find` work in bytes. The `char_*` methods are
 their UTF-8 counterparts: they count and index code points, so
-`"سلام".len()` is 8 but `"سلام".char_count()` is 4, and `char_at(1)` returns
+`"سلام".len()` is 8 but `"سلام".CharCount()` is 4, and `char_at(1)` returns
 `"ل"` as a `str`. An out-of-range `char_at` returns `""`, and `char_find`
 returns -1 when the substring is missing. Every backend counts the same way,
 the JS one included: `len`, `s[i]`, `substr` and `find` are byte based there
@@ -496,16 +496,16 @@ end
 each i, ch in "سلام":        // i is the character number: 0, 1, 2, 3
     println i, ch
 end
-each i, b in "Hi".bytes():   // b is a char (one byte), i the byte index
+each i, b in "Hi".Bytes():   // b is a char (one byte), i the byte index
     println i, b as int
 end
 ```
 
 Persian: `هر ح در متن:` and `هر ب در متن.بایت ها():`. Prefer this to
-`repeat s.char_count() in i: s.char_at(i)`, which rescans the string on
+`repeat s.CharCount() in i: s.CharAt(i)`, which rescans the string on
 every step. Invalid UTF-8 bytes come out one at a time (joining every `ch`
 gives back the string), and a character is a code point, not a grapheme
-cluster (use `str.Graphemes` for those). `s.bytes()` only works as the
+cluster (use `str.Graphemes` for those). `s.Bytes()` only works as the
 target of `each`.
 
 Text types, and which one to reach for:
@@ -514,7 +514,7 @@ Text types, and which one to reach for:
 | ------------------------------------ | --------------------------------------------------------------------------- |
 | Text of any language                 | `str` (UTF-8 bytes, like Go's `string`)                                     |
 | One byte, e.g. `'a'`                 | `char`                                                                      |
-| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.char_at(0) == u'س'` works)              |
+| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.CharAt(0) == u'س'` works)              |
 | Code point of one character          | `c as int` for a `uchar` (`u'س' as int` is 1587), back with `1587 as uchar` |
 | Random access by code point (UTF-32) | `str.CodePoints(s)` -> `Vector<int>`, back with `str.FromCodePoints(v)`     |
 | UTF-16 for Windows or JS interop     | `text.ToUtf16` / `text.FromUtf16` / `text.Utf16Len`                         |
@@ -543,8 +543,8 @@ out := str.BufStr(sb)
 
 ```salam
 v := Vector {} as Vector<str>
-v.push("a")
-first := v.get(0)                          // get() returns the element; v.ref(0) is its address
+v.Push("a")
+first := v.Get(0)                          // get() returns the element; v.Ref(0) is its address
 m := HashMap {} as HashMap<str, int>
 ```
 
@@ -559,13 +559,13 @@ independent value:
 
 | Call               | Result                                                                  |
 | ------------------ | ----------------------------------------------------------------------- |
-| `x.copy()`         | New storage for every container `x` holds directly; elements are shared |
-| `x.deep_copy()`    | Fully independent copy, recursing through structs, enums and containers |
-| `v.copy(start)`    | Vector or str from `start` to the end                                   |
-| `v.copy(s, count)` | At most `count` items from `s`                                          |
-| `v.copy(s, n, st)` | Every `st`-th item; a negative `st` walks backwards (Vector only)       |
+| `x.Copy()`         | New storage for every container `x` holds directly; elements are shared |
+| `x.DeepCopy()`    | Fully independent copy, recursing through structs, enums and containers |
+| `v.Copy(start)`    | Vector or str from `start` to the end                                   |
+| `v.Copy(s, count)` | At most `count` items from `s`                                          |
+| `v.Copy(s, n, st)` | Every `st`-th item; a negative `st` walks backwards (Vector only)       |
 
-A negative `start` counts from the end, so `v.copy(-3)` is the last three
+A negative `start` counts from the end, so `v.Copy(-3)` is the last three
 items. Ranges clamp instead of panicking. Range arguments only apply to Vector
 and str. A struct can define its own `copy()` or `deep_copy()`, and the
 recursion uses it. `deep_copy()` refuses a value holding a raw pointer, since
@@ -641,7 +641,7 @@ use them:
 ```salam
 @en "Trim"
 @fa "پیرایش"
-pub func Trim(s: str): str: ret s.trim() end
+pub func Trim(s: str): str: ret s.Trim() end
 ```
 
 In a Persian program the entry function is `تابع ریشه:` (English: `func main:`).
@@ -780,7 +780,7 @@ package main
 import str
 
 func _greeting(name: str): str:
-    ret "Hello, ".concat(name).concat("!")
+    ret "Hello, ".Concat(name).Concat("!")
 end
 
 pub func Greet(name: str): str:

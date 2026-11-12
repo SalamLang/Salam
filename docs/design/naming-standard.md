@@ -28,7 +28,7 @@ Checked by `tools/salam/check-naming.salam` and its baseline
 | --------------------------------------------- | --------------------------- | -------------------------------- |
 | package function (English)                     | UpperCamelCase (PascalCase) | `str.StartsWith(s, p)`           |
 | method (English)                              | UpperCamelCase (PascalCase) | `v.Push(x)`, `s.StartsWith(p)`   |
-| compat alias (legacy English)                 | legacy spelling allowed     | `v.push(x)` when `v.Push` exists |
+| compat alias (legacy English)                 | legacy spelling allowed     | `v.Push(x)` when `v.Push` exists |
 | Persian identifier                            | no Latin letters            | `تابع محاسبه` / `نام‌کاربر`      |
 | struct field                                  | snake_case / per checker    | `info.is_dir`                    |
 | constant                                      | per checker/baseline        | `const max_header_size := 8192`  |
@@ -166,9 +166,9 @@ methods with the same name are included:
 
 Another 555 are in Markdown, HTML and TeX (`website/`, `books/`, `docs/`).
 
-Most common: `.len(` 16422, `.push(` 14377, `.get(` 11424, `.Free(` 7969, `.set(`
-2211, `.concat(` 2206, `.substr(` 1913, `.find(` 1093, `.put(` 926, `.has(` 585,
-`.to_int(` 457. Everything below `.pop(` is under 340 each.
+Most common: `.len(` 16422, `.Push(` 14377, `.Get(` 11424, `.Free(` 7969, `.Set(`
+2211, `.Concat(` 2206, `.Substr(` 1913, `.Find(` 1093, `.Put(` 926, `.Has(` 585,
+`.to_int(` 457. Everything below `.Pop(` is under 340 each.
 
 Also keyed by public names: 57960 `doc.` and `ex.` lines in 344 site std and
 guide content files, 13291 `@en` lines and 12768 `@fa` lines in std, and the
@@ -246,7 +246,7 @@ Nothing changes for Persian. The rule applies to the English identifier only:
    Error form later is E-coded, in the next free E number.
 3. The fixer is `salam check --fix` with `--naming-lint=fix`, the same switch
    the existing lints use. It must run on resolved member calls, not on text:
-   `.get(` is a built-in, a std method and a user method, `.ok` belongs to
+   `.Get(` is a built-in, a std method and a user method, `.ok` belongs to
    different structs, and a text rewrite cannot tell. The semantic pass already
    knows the receiver type at every member call, so it can emit exact edits
    (the switch lint does this today). It rewrites calls and declarations,

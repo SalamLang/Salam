@@ -99,7 +99,7 @@ end
 - `&:` marks a by-reference parameter.
 - Built-in `str` methods are only: `len concat substr find/search/indexOf trim
 lower upper repeat split to_int to_float`. Everything else is in `str`.
-- `Vector {} as Vector<str>`, `v.get(i)` to read an element, `v.ref(i)` for its address.
+- `Vector {} as Vector<str>`, `v.Get(i)` to read an element, `v.Ref(i)` for its address.
 - `enum E: A, B, C end` - on one line the comma between members is
   **required** (member names can contain spaces); one member per line also works.
 
@@ -144,7 +144,7 @@ Declarations carry aliases:
 ```salam
 @en "Trim"
 @fa "پیرایش"
-pub func Trim(s: str): str: ret s.trim() end
+pub func Trim(s: str): str: ret s.Trim() end
 ```
 
 The language is detected from the keywords; `--lang=fa` forces Persian.

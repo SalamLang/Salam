@@ -83,13 +83,13 @@ import str
 func main:
     word := "سلامِ"
     println "bytes:", word.len()
-    println "code points:", word.char_count()
+    println "code points:", word.CharCount()
     println "graphemes:", str.GraphemeCount(word)
     each ch in "سلام":
         print "[" + ch + "]"
     end
     println ""
-    println word.char_substr(0, 2), str.Reverse("سلام")
+    println word.CharSubstr(0, 2), str.Reverse("سلام")
 end
 ```
 

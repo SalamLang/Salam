@@ -34,7 +34,7 @@ date: 2026-11-11
 from collections import Counter
 
 text = "the cat sat on the mat and the dog sat on the log"
-counts = Counter(text.split())
+counts = Counter(text.Split())
 top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
 for word, n in top:
     print(word, n)

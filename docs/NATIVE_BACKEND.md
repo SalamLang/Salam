@@ -813,7 +813,7 @@ then goes through:
    `image` tests do not change, and none of the 42 programs under
    `benchmark/` has a loop the vectorizer takes on, so their binaries do not
    change.
-   A field read from a struct loaded whole (`v.get(i).kind`, or a phi of two
+   A field read from a struct loaded whole (`v.Get(i).kind`, or a phi of two
    such loads) becomes a load of just that field, and a stack copy of a
    struct that is only ever written is dropped, so `n := at.Get(a, i)` then
    `n.kind` no longer copies the whole node.

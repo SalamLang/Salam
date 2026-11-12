@@ -90,7 +90,7 @@ func add(ctx: i64):
         http.Html(ctx, NotesPage(notes, problem))
         ret
     end
-    notes.push(Note { id = notes.len() + 1, text = str.Clone(text) })
+    notes.Push(Note { id = notes.len() + 1, text = str.Clone(text) })
     http.Redirect(ctx, "/")
 end
 
@@ -111,7 +111,7 @@ func main:
     println http.Status(http.Post(base + "/notes", "text="))
     println http.Body(http.Get(base + "/api/notes"))
     page := http.Body(http.Get(base + "/"))
-    println page.includes("<li>&lt;b&gt;buy milk&lt;/b&gt;</li>")
+    println page.Includes("<li>&lt;b&gt;buy milk&lt;/b&gt;</li>")
 end
 ```
 

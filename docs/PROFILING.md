@@ -235,7 +235,7 @@ already adds `core` (`sm.ResolveImport("", "core")` in
 if opt.profile_mode != PROF_MODE_OFF:
     profp := sm.ResolveImport("", "prof")
     if str.Len(profp) > 0 and os.Exists(profp):
-        work.push(profp)
+        work.Push(profp)
     else:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                i18.Tr("--profile needs the 'prof' package in the stdlib"))

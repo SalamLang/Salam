@@ -236,7 +236,7 @@ repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even d
 each x in xs:  println x  end         // iterate a collection/array/your own type
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
-each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
+each i, b in s.Bytes():  println b  end // the bytes of a str: b is a char, i the byte index
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -452,13 +452,13 @@ verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
 Iterate a string with `each`: `each ch in s` gives each code point as a `str`
 (`"س"`, `"👋"`), `each i, ch in s` adds the character number `i` (0, 1, 2, ...,
-the same index `s.char_at(i)` takes), and `each b in s.bytes()` /
-`each i, b in s.bytes()` walk the raw bytes as `char` with the byte index. It is
-one linear pass, so prefer it over `repeat s.char_count() in i: s.char_at(i)`,
+the same index `s.CharAt(i)` takes), and `each b in s.Bytes()` /
+`each i, b in s.Bytes()` walk the raw bytes as `char` with the byte index. It is
+one linear pass, so prefer it over `repeat s.CharCount() in i: s.CharAt(i)`,
 which rescans from the start on every step. Invalid UTF-8 bytes come out one
 byte at a time, so joining every `ch` gives back the original string. A
 character is a code point, not a grapheme cluster: `"👋🏽"` is two steps; use
-`str.Graphemes(s)` for user-perceived characters. `s.bytes()` is only valid as
+`str.Graphemes(s)` for user-perceived characters. `s.Bytes()` is only valid as
 the target of `each` (E065 otherwise); read single bytes with `s[i]`.
 
 **String/char literal forms** (values go into text with a ` ``` ` text block and
@@ -1149,7 +1149,7 @@ not the libraries.
   `atomic`, `chan`) crash when used as a zero `{}` literal.
 - `b := a` on a heap value (`Vector`, `HashMap`, `bigint.Int`,
   `decimal.Dec`, `matrix.Matrix`, a struct holding one) shares the storage;
-  take a real copy with `v.copy()`, `collections.clone(v)` or the package's
+  take a real copy with `v.Copy()`, `collections.Clone(v)` or the package's
   `Clone`.
 
 ### Text & formatting
@@ -1162,9 +1162,9 @@ not the libraries.
   `CAFé`; use `unicode.ToUpper` per code point, or `EqualFold` to compare),
   and `Trim` strips only ASCII space, tab, CR and LF (a no-break space
   stays). `ToInt` returns a 32-bit `int` and clamps.
-  For prefix, suffix and substring tests write `s.starts_with(p)`, `s.ends_with(p)`
-  and `s.includes(sub)` (no import, same on every backend), not
-  `s.substr(0, n) == p`, `s.find(p) == 0` or a byte loop; an empty affix
+  For prefix, suffix and substring tests write `s.StartsWith(p)`, `s.EndsWith(p)`
+  and `s.Includes(sub)` (no import, same on every backend), not
+  `s.Substr(0, n) == p`, `s.Find(p) == 0` or a byte loop; an empty affix
   always matches. `CutPrefix`/`CutSuffix` return the rest and set an `ok`
   flag, the `*Fold` forms ignore case, `*Any` take a `Vector<str>`.
 - **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
@@ -1436,11 +1436,11 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   - Progress: `NewBar BarSet BarAdd BarDraw BarFinish`, `NewSpinner SpinnerTick SpinnerStop SpinnerFree`, `FormatBytes FormatDuration`; off a
     terminal they write one plain final line.
 - **`tui`**: retained-mode full-screen terminal UI on top of `term`.
-  `NewTerminalScreen(root)` then `start()` and **`defer screen.close()` on
+  `NewTerminalScreen(root)` then `start()` and **`defer screen.Close()` on
   the next line** (restores the terminal); loop `until screen.next_event(ev):
 screen.dispatch(ev) ... screen.present() end`, or `run()`. A widget is a
   struct with `pub use tui.BaseWidget` overriding `render(buf, bounds)` /
-  `handle_event(ev): bool` / `focusable()`; add with `screen.add(parent, w)`
+  `handle_event(ev): bool` / `focusable()`; add with `screen.Add(parent, w)`
   (`RootId`), get back with `screen.widget(id)`. Widgets: `NewText NewInput
 NewButton NewCheckbox NewList NewProgress NewSeparator NewTable
 NewTableView NewModal`, `Panel {}`; layout `NewRow NewColumn NewGrid
@@ -1482,8 +1482,8 @@ end
   **`PriorityQueue<T>`** (`push pop peek`, a **min**-heap on `<`),
   **`LinkedList<T>`**, **`Counter<K>`** (`add add_n count distinct`),
   **`OrderedMap`** (str to str in insertion order: `set get GetOr has remove key_at val_at len`), **`Pair`**, **`CircularList`**.
-- Pitfalls: `b := a` shares the elements (`b.set(0, x)` changes `a`, a push on
-  one can move the other's memory); copy with `v.copy()`. `pop peek dequeue first last` and an index past the end stop the program on an empty
+- Pitfalls: `b := a` shares the elements (`b.Set(0, x)` changes `a`, a push on
+  one can move the other's memory); copy with `v.Copy()`. `pop peek dequeue first last` and an index past the end stop the program on an empty
   structure (a `--release` build reads garbage instead).
 - **`sort`**: `Sort SortDesc SortBy StableSortBy Sorted SortedBy IsSorted SortIndex BinarySearch LowerBound UpperBound Min Max Reverse Swap` + named
   algorithms (`QuickSort MergeSort HeapSort IntroSort …`). Comparators:
@@ -2281,7 +2281,7 @@ mut ok := true
 v := jobs.recv(ok)                            // ok = false once closed AND drained
 v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
 jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
-jobs.close()   jobs.Free()                    // also: try_send/try_recv/len/is_closed
+jobs.Close()   jobs.Free()                    // also: try_send/try_recv/len/is_closed
 // constructor and free functions (T on the result):
 c := chan.New(8) as chan.Chan<i64>            // initialized, no separate init
 chan.Send(c, v)   chan.Recv(c, ok)            // Send/SendTimeout/TrySend, Recv/RecvTimeout/TryRecv

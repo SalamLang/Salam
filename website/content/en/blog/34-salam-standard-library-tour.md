@@ -147,7 +147,7 @@ func main:
     mut ms := Vector {} as Vector<f64>
     defer ms.Free()
     each v in [12.0, 15.0, 11.0, 48.0, 13.0]:
-        ms.push(v)
+        ms.Push(v)
     end
     println "mean", stats.Mean(ms), "median", stats.Median(ms)
 end

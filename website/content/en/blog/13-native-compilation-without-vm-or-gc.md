@@ -60,9 +60,9 @@ Here is what that looks like in a program that reuses one buffer instead of allo
 
 ```salam
 func fill readings(buf &: Vector<f64>, hour: int):
-    buf.clear()
+    buf.Clear()
     repeat 6 in i:
-        buf.push(20.0 + ((hour * 2 + i % 3) as f64) * 0.5)
+        buf.Push(20.0 + ((hour * 2 + i % 3) as f64) * 0.5)
     end
 end
 
@@ -77,7 +77,7 @@ end
 func main:
     mut buf := Vector {} as Vector<f64>
     defer buf.Free()
-    buf.reserve(6)
+    buf.Reserve(6)
     repeat 3 in hour:
         fill readings(buf, hour)
         println "hour", hour, "mean", mean(buf), "of", buf.len(), "readings"

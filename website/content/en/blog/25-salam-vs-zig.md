@@ -115,7 +115,7 @@ func main:
     mut squares := Vector {} as Vector<i64>
     defer squares.Free()
     repeat 1 to 5 in i:
-        squares.push((i * i) as i64)
+        squares.Push((i * i) as i64)
     end
     println squares
 end

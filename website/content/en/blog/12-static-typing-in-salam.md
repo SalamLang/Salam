@@ -258,7 +258,7 @@ enum Result<T, E>:
 end
 
 func parse digit(s: str): Result<int, str>:
-    if s.len() != 1 or not "0123456789".includes(s):
+    if s.len() != 1 or not "0123456789".Includes(s):
         ret Result.Err("not a digit: " + s)
     end
     ret Result.Ok(s.to_int())

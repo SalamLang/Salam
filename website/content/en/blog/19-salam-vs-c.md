@@ -160,12 +160,12 @@ end
 func main:
     mut readings := Vector {} as Vector<Reading>
     defer readings.Free()
-    readings.push(Reading { city = "Tehran", celsius = 31.5 })
-    readings.push(Reading { city = "Tabriz", celsius = 24.0 })
-    readings.push(Reading { city = "Shiraz", celsius = 29.5 })
-    readings.push(Reading { city = "Rasht", celsius = 26.5 })
+    readings.Push(Reading { city = "Tehran", celsius = 31.5 })
+    readings.Push(Reading { city = "Tabriz", celsius = 24.0 })
+    readings.Push(Reading { city = "Shiraz", celsius = 29.5 })
+    readings.Push(Reading { city = "Rasht", celsius = 26.5 })
     mut total := 0.0
-    mut hottest := readings.get(0)
+    mut hottest := readings.Get(0)
     each r in readings:
         total += r.celsius
         if r.celsius > hottest.celsius:
@@ -184,7 +184,7 @@ average: 27.875
 hottest: Tehran
 ```
 
-The memory model underneath is close to C's. Numbers, booleans and plain structs live on the stack and are copied on assignment. A `Vector`, a `HashMap` and a string built at runtime live on the heap, and someone has to free them. A function that returns a container or a new string hands ownership to its caller. Copying a `Vector` variable copies its header, not its elements, so two variables can share storage, exactly like two C pointers to one buffer. `.copy()` makes an independent copy.
+The memory model underneath is close to C's. Numbers, booleans and plain structs live on the stack and are copied on assignment. A `Vector`, a `HashMap` and a string built at runtime live on the heap, and someone has to free them. A function that returns a container or a new string hands ownership to its caller. Copying a `Vector` variable copies its header, not its elements, so two variables can share storage, exactly like two C pointers to one buffer. `.Copy()` makes an independent copy.
 
 What Salam adds is a set of compile-time checks on top of that model. Using a pointer after `mem.Free` is error `E139`, freeing twice is `E140`, returning a value that the function's own `defer` frees is `E141`, and keeping a pointer into a `Vector` across a `push` that may move its storage is warning `W144`. These are checks for common patterns, not a proof that the program is memory safe; the [memory management article](/blog/memory-management-in-salam/) and the [memory lesson](/learn/memory/) go through them. For what the checks miss, `salam memcheck` builds the program with AddressSanitizer and runs it.
 
@@ -193,7 +193,7 @@ What Salam adds is a set of compile-time checks on top of that model. Using a po
 A C string is a pointer to bytes ending in a zero byte. Its length is found by scanning, its storage is someone's responsibility, and "a character" means a byte. A Salam `str` is UTF-8 text with methods for both views:
 
 - `s.len()` and `str.Substr` count bytes, the same as C's `strlen`;
-- `s.char_count()`, `str.CharSubstr` and `each ch in s` work in Unicode code points, which matters for Persian, Arabic or any text outside ASCII;
+- `s.CharCount()`, `str.CharSubstr` and `each ch in s` work in Unicode code points, which matters for Persian, Arabic or any text outside ASCII;
 - `+` concatenates and converts numbers (`"n=" + 3`), and `str.NewBuilder` builds long text efficiently.
 
 Under the hood a Salam `str` is still zero-terminated, which is why it can be passed straight to C, and also why binary data that contains zero bytes belongs in byte buffers rather than in `str`. Every `+` creates a new heap string, so a long-running loop that concatenates should use a builder and free the result, the same discipline C asks of you with `snprintf` and buffers.
@@ -204,7 +204,7 @@ C's biggest cost is undefined behavior: reading past an array, overflowing a sig
 
 Salam closes several of those doors:
 
-- **Bounds checks.** When the compiler can prove an index is out of range, the program does not compile. For a fixed array `a := [1, 2, 3]`, writing `a[3]` is `E168`; for a `Vector` whose length the compiler can track, `v.get(v.len())` is `E146` with the message "index out of bounds: 'i' is 2, but 'v' has 2 elements". When the index is only known at runtime, a development build checks it and stops with `salam panic: Vector.get: index out of bounds` instead of reading someone else's memory.
+- **Bounds checks.** When the compiler can prove an index is out of range, the program does not compile. For a fixed array `a := [1, 2, 3]`, writing `a[3]` is `E168`; for a `Vector` whose length the compiler can track, `v.Get(v.len())` is `E146` with the message "index out of bounds: 'i' is 2, but 'v' has 2 elements". When the index is only known at runtime, a development build checks it and stops with `salam panic: Vector.get: index out of bounds` instead of reading someone else's memory.
 - **Integer overflow.** In a development build, signed arithmetic wraps predictably. Range checks at compile time report an overflow, a division by zero or a null dereference that always happens as an error, and one that can happen as a warning.
 - **Initialization and types.** Variables are declared with a value, immutable unless declared `mut`, and conversions between types are explicit.
 
@@ -224,7 +224,7 @@ end
 func main:
     greeting := "سلام"
     println "bytes according to C:", strlen(greeting)
-    println "letters according to Salam:", greeting.char_count()
+    println "letters according to Salam:", greeting.CharCount()
     println "labs(-42):", labs(-42 as i64)
     println "sqrt(2):", sqrt(2.0)
 end

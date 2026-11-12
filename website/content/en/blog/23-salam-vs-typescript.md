@@ -170,7 +170,7 @@ interface Product {
 
 const app = express();
 
-app.get('/products/:id', (req, res) => {
+app.Get('/products/:id', (req, res) => {
   const p: Product = {
     id: Number(req.params.id),
     name: 'Notebook',
@@ -245,8 +245,8 @@ end
 func main:
     mut products := Vector {} as Vector<str>
     defer products.Free()
-    products.push("Pen")
-    products.push("<script>alert(1)</script>")
+    products.Push("Pen")
+    products.Push("<script>alert(1)</script>")
     println Cart("Sara", products)
     println Tag("sale")
 end

@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminModel, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Campaign, type CampaignDay, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type Campaign, type CampaignDay, type Discount, type DiscountKind, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
@@ -801,7 +801,6 @@ const PAY_WORDS: Record<Payment["status"], string> = {
   paid: t("پرداخت شده", "Paid"),
   failed: t("ناموفق", "Failed"),
   canceled: t("لغو شده", "Canceled"),
-  reversed: t("برگشت‌خورده", "Reversed"),
 };
 
 const GATEWAY_WORDS: Record<string, string> = { zarinpal: t("زرین‌پال", "Zarinpal"), zibal: t("زیبال", "Zibal") };
@@ -827,11 +826,25 @@ const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "hours" | "chat_5h" | "cha
   { key: "sort", fa: "ترتیب نمایش", en: "Sort order" },
 ];
 
-type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean; salam_only: boolean } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
+const TIER_PARALLELS = [1, 2, 3, 5, 10] as const;
+type TierDraft = { parallel: number; price: string; usd: string; off: string; chat_5h: string; chat_daily: string; chat_weekly: string; api_5h: string; api_daily: string; api_weekly: string; max_input: string; max_output: string };
+type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean; salam_only: boolean; tiers: TierDraft[] } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
+
+function defaultTiers(): TierDraft[] {
+  const base = [30000000, 55000000, 75000000, 110000000, 180000000];
+  const usd = [200, 367, 500, 733, 1200];
+  return TIER_PARALLELS.map((p, i) => ({ parallel: p, price: String(base[i]), usd: String(usd[i]), off: "0", chat_5h: "0", chat_daily: "0", chat_weekly: "0", api_5h: "0", api_daily: "0", api_weekly: "0", max_input: "0", max_output: "0" }));
+}
 
 function draftOf(p: Partial<AdminPlan>): PlanDraft {
-  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false, salam_only: p.salam_only ?? false } as PlanDraft;
-  for (const f of PLAN_NUMBERS) d[f.key] = String(p[f.key] ?? 0);
+  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false, salam_only: p.salam_only ?? false, tiers: [] as TierDraft[] } as PlanDraft;
+  for (const f of PLAN_NUMBERS) d[f.key] = String((p as any)[f.key] ?? 0);
+  if (p.tiers && p.tiers.length > 0) {
+    d.tiers = TIER_PARALLELS.map((par) => {
+      const t = p.tiers!.find((x) => x.parallel === par) ?? { parallel: par, price: 0, usd: 0, off: 0, chat_5h: 0, chat_daily: 0, chat_weekly: 0, api_5h: 0, api_daily: 0, api_weekly: 0, max_input: 0, max_output: 0 } as any;
+      return { parallel: par, price: String(t.price ?? 0), usd: String(t.usd ?? 0), off: String(t.off ?? 0), chat_5h: String(t.chat_5h ?? 0), chat_daily: String(t.chat_daily ?? 0), chat_weekly: String(t.chat_weekly ?? 0), api_5h: String(t.api_5h ?? 0), api_daily: String(t.api_daily ?? 0), api_weekly: String(t.api_weekly ?? 0), max_input: String(t.max_input ?? 0), max_output: String(t.max_output ?? 0) };
+    });
+  }
   return d;
 }
 
@@ -840,7 +853,13 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
   const [saving, setSaving] = useState(false);
   const fresh = plan === null;
   const free = plan?.id === "free";
+  const hasTiers = d.tiers.length > 0 || plan?.id === "unlimited";
   const set = <K extends keyof PlanDraft>(k: K, v: PlanDraft[K]) => setD((old) => ({ ...old, [k]: v }));
+  const setTier = (i: number, k: keyof TierDraft, v: string) => setD((old) => {
+    const tiers = old.tiers.slice();
+    tiers[i] = { ...tiers[i], [k]: v };
+    return { ...old, tiers };
+  });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -848,12 +867,17 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
     try {
       const body: Record<string, unknown> = { name: d.name, name_en: d.name_en, note: d.note, note_en: d.note_en, enabled: d.enabled, salam_only: d.salam_only };
       for (const f of PLAN_NUMBERS) body[f.key] = Number(d[f.key]) || 0;
+      if (d.tiers.length > 0) {
+        body.tiers = JSON.stringify(d.tiers.map((t) => ({ parallel: t.parallel, price: Number(t.price) || 0, usd: Number(t.usd) || 0, off: Number(t.off) || 0, chat_5h: Number(t.chat_5h) || 0, chat_daily: Number(t.chat_daily) || 0, chat_weekly: Number(t.chat_weekly) || 0, api_5h: Number(t.api_5h) || 0, api_daily: Number(t.api_daily) || 0, api_weekly: Number(t.api_weekly) || 0, max_input: Number(t.max_input) || 0, max_output: Number(t.max_output) || 0 })));
+      } else {
+        body.tiers = "";
+      }
       if (fresh) {
         body.id = d.id;
-        await api.adminPlanCreate(body as Partial<AdminPlan>);
+        await api.adminPlanCreate(body as any);
         setD(draftOf({}));
       } else {
-        await api.adminPlanSave(plan.id, body as Partial<AdminPlan>);
+        await api.adminPlanSave(plan!.id, body as any);
       }
       notify(t("پلن ذخیره شد و همین حالا برای همه اعمال می‌شود.", "Plan saved and applied to everyone right now."), true);
       onSaved();
@@ -914,6 +938,45 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
       </div>
       <Checkbox checked={d.salam_only} onChange={(v) => set("salam_only", v)} label={t("فقط سلام", "Salam only")} hint={t("روشن: دستیار با این پلن فقط به زبان سلام کد می‌نویسد. خاموش: به هر زبان و فناوری هم کد می‌نویسد. پلن رایگان باید روشن بماند.", "On: the assistant writes code in Salam only on this plan. Off: it writes code in any language too. Keep it on for the free plan.")} />
       {!free && <Checkbox checked={d.enabled} onChange={(v) => set("enabled", v)} label={t("فعال و قابل خرید", "Active and on sale")} hint={t("پلن غیرفعال از صفحه‌ی اشتراک‌ها پنهان می‌شود، ولی مشترک‌های فعلی آن می‌مانند.", "A disabled plan is hidden from the plans page, but current subscribers keep it.")} />}
+      <div className="plan-tier-editor">
+        <div className="panel-head">
+          <h5>{t("گزینه‌های نشست هم‌زمان (پلن ترکیبی)", "Concurrent session options (merged plan)")}</h5>
+          {d.tiers.length === 0 ? (
+            <button type="button" className="button small" onClick={() => setD((old) => ({ ...old, tiers: defaultTiers() }))}>{t("افزودن گزینه‌ها (۱،۲،۳،۵،۱۰)", "Add options (1,2,3,5,10)")}</button>
+          ) : (
+            <button type="button" className="button small ghost" onClick={() => setD((old) => ({ ...old, tiers: [] }))}>{t("حذف گزینه‌ها", "Remove options")}</button>
+          )}
+        </div>
+        {d.tiers.length > 0 && (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>{t("نشست هم‌زمان", "Concurrent sessions")}</th>
+                  <th>{t("قیمت (تومان)", "Price (toman)")}</th>
+                  <th>{t("تخفیف/آف (تومان)", "Off discount (toman)")}</th>
+                  <th>{t("قیمت دلاری", "USD")}</th>
+                  <th>{t("پیام/روز (۰ نامحدود)", "Chat/day (0∞)")}</th>
+                  <th>{t("API/روز (۰ نامحدود)", "API/day (0∞)")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.tiers.map((trow, i) => (
+                  <tr key={trow.parallel}>
+                    <td><b>{fmtNum(trow.parallel)}</b></td>
+                    <td><input type="number" min={0} dir="ltr" value={trow.price} onChange={(e) => setTier(i, "price", e.target.value)} /></td>
+                    <td><input type="number" min={0} dir="ltr" value={trow.off} onChange={(e) => setTier(i, "off", e.target.value)} /></td>
+                    <td><input type="number" min={0} dir="ltr" value={trow.usd} onChange={(e) => setTier(i, "usd", e.target.value)} /></td>
+                    <td><input type="number" min={0} dir="ltr" value={trow.chat_daily} onChange={(e) => setTier(i, "chat_daily", e.target.value)} /></td>
+                    <td><input type="number" min={0} dir="ltr" value={trow.api_daily} onChange={(e) => setTier(i, "api_daily", e.target.value)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted small">{t("هر گزینه می‌تواند قیمت، تخفیف (آف) و محدودیت‌های جداگانه داشته باشد. ۰ یعنی نامحدود.", "Each option can have its own price, off discount, and limits. 0 means unlimited.")}</p>
+          </div>
+        )}
+      </div>
       <div className="grant-actions">
         <button type="submit" className="button primary" disabled={saving}>
           {saving ? <span className="spinner" /> : null}
@@ -1437,38 +1500,28 @@ export function Subscriptions({ picked, notify, history, userEmail }: { picked: 
   );
 }
 
-export function Payments({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
+export function Payments({ picked }: { picked: Picked }) {
   const [rows, setRows] = useState<Payment[] | null>(null);
   const [income, setIncome] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState<number | null>(null);
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    let live = true;
+    setRows(null);
     setError("");
-    return api
+    api
       .adminPayments({ status: status || undefined, user: picked?.id })
       .then((r) => {
+        if (!live) return;
         setRows(r.payments);
         setIncome(r.income);
       })
-      .catch((e) => setError(errText(e, t("بارگذاری پرداخت‌ها ناموفق بود.", "Could not load payments."))));
+      .catch((e) => live && setError(errText(e, t("بارگذاری پرداخت‌ها ناموفق بود.", "Could not load payments."))));
+    return () => {
+      live = false;
+    };
   }, [status, picked]);
-
-  useEffect(() => {
-    setRows(null);
-    void load();
-  }, [load]);
-
-  const reverse = (id: number) => {
-    if (!window.confirm(t("این پرداخت در درگاه برگشت خورده؟ اشتراک فعالی که از آن داده شده لغو می‌شود.", "Did the gateway reverse this payment? The active subscription it granted will be canceled."))) return;
-    setBusy(id);
-    api
-      .adminReversePayment(id)
-      .then(() => load())
-      .catch((e) => notify(errText(e, t("ثبت برگشت پرداخت ناموفق بود.", "Could not mark the payment reversed."))))
-      .finally(() => setBusy(null));
-  };
 
   return (
     <section className="card panel">
@@ -1482,7 +1535,6 @@ export function Payments({ picked, notify }: { picked: Picked; notify: (msg: str
             { id: "pending", label: t("در انتظار", "Pending") },
             { id: "failed", label: t("ناموفق", "Failed") },
             { id: "canceled", label: t("لغو شده", "Canceled") },
-            { id: "reversed", label: t("برگشت‌خورده", "Reversed") },
           ]}
           value={status}
           onChange={setStatus}
@@ -1511,7 +1563,6 @@ export function Payments({ picked, notify }: { picked: Picked; notify: (msg: str
                 <th scope="col">{t("کد پیگیری", "Reference")}</th>
                 <th scope="col">{t("کارت", "Card")}</th>
                 <th scope="col">{t("زمان", "Time")}</th>
-                <th scope="col">{t("کنش", "Action")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1534,18 +1585,11 @@ export function Payments({ picked, notify }: { picked: Picked; notify: (msg: str
                   <td dir="ltr">{r.ref || "-"}</td>
                   <td dir="ltr">{r.card || "-"}</td>
                   <td>{fmtDateTime(r.paid > 0 ? r.paid : r.created)}</td>
-                  <td>
-                    {r.status === "paid" && (
-                      <button type="button" className="link danger" disabled={busy === r.id} onClick={() => reverse(r.id)}>
-                        {t("ثبت برگشت", "Mark reversed")}
-                      </button>
-                    )}
-                  </td>
                 </tr>
               ))}
               {rows?.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="muted">
+                  <td colSpan={8} className="muted">
                     {t("پرداختی با این فیلتر نیست.", "No payments match this filter.")}
                   </td>
                 </tr>
@@ -2769,74 +2813,6 @@ function PlatformsPanel() {
   );
 }
 
-function ModelsPanel() {
-  const [data, setData] = useState<AdminModel[] | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let live = true;
-    setError("");
-    api
-      .adminModels()
-      .then((r) => live && setData(r.models))
-      .catch((e) => live && setError(errText(e, t("بارگذاری مدل‌ها ناموفق بود.", "Could not load the models."))));
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  return (
-    <section className="card panel">
-      <div className="panel-head">
-        <h3>{t("مدل‌ها در Langfuse", "Models in Langfuse")}</h3>
-      </div>
-      <p className="muted">
-        {t(
-          "نام واقعی مدل در Langfuse نشان داده نمی‌شود؛ هر مدل با یک نام جایگزین ثابت فرستاده می‌شود. این جدول تطبیق نام جایگزین با مدل واقعی را فقط برای مدیران نشان می‌دهد.",
-          "Langfuse never sees the real model name; each model is sent under a stable alias instead. This table, visible only to admins, matches each alias back to the real model.",
-        )}
-      </p>
-      {error ? (
-        <div className="form-error" role="alert">
-          {error}
-        </div>
-      ) : data === null ? (
-        <div className="list-loading" role="status">
-          <span className="spinner" />
-          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
-        </div>
-      ) : data.length === 0 ? (
-        <p className="empty-list">{t("هنوز پیامی با مدل ثبت نشده است.", "No messages with a recorded model yet.")}</p>
-      ) : (
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">{t("مدل واقعی", "Real model")}</th>
-                <th scope="col">{t("نام جایگزین در Langfuse", "Langfuse alias")}</th>
-                <th scope="col">{t("پیام‌ها", "Messages")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((m) => (
-                <tr key={m.model}>
-                  <td>
-                    <bdi>{m.model}</bdi>
-                  </td>
-                  <td>
-                    <code className="inline-code">{m.alias}</code>
-                  </td>
-                  <td>{fmtNum(m.count)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
 export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminSession[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -2918,7 +2894,6 @@ export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: str
   return (
     <>
     {!picked && <PlatformsPanel />}
-    {!picked && <ModelsPanel />}
     <section className="card panel">
       <div className="panel-head">
         <h3>{t("نشست‌ها", "Sessions")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
@@ -3544,7 +3519,7 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
         {section === "chats" && sub?.id === "files" && <Uploads picked={picked} notify={notify} />}
         {section === "billing" && sub?.id === "plans" && <PlansAdmin notify={notify} />}
         {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
-        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
         {section === "billing" && sub?.id === "discounts" && <DiscountsAdmin notify={notify} />}
         {section === "billing" && sub?.id === "campaigns" && <Campaigns />}
         {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}

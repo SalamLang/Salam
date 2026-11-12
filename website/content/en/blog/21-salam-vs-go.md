@@ -18,7 +18,7 @@ On the project's own HTTP router benchmark Salam's server answered more requests
 | --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Concurrency     | Goroutines (M:N scheduling by the runtime), channels, `select`             | OS threads (`spawn`), a bounded task pool (`go f(x)`), channels, `chan.Select`, futures |
 | Blocking I/O    | Parks the goroutine; the runtime multiplexes sockets                       | Blocks the thread; the HTTP server uses an event loop with a worker pool on Linux       |
-| Memory          | Garbage collected                                                          | Manual: `.free()` and `defer`, with compile-time ownership checks                       |
+| Memory          | Garbage collected                                                          | Manual: `.Free()` and `defer`, with compile-time ownership checks                       |
 | Errors          | `error` values, `if err != nil`                                            | `throws`, `try`, `catch`, or result enums                                               |
 | Generics        | Since Go 1.18                                                              | Yes, with interface bounds                                                              |
 | Sum types       | No (interfaces and type switches)                                          | Enums with data and exhaustive `match`                                                  |
@@ -88,7 +88,7 @@ func main:
     jobs.init(4)
     results.init(16)
     mut workers := Vector {} as Vector<i64>
-    defer workers.free()
+    defer workers.Free()
     repeat 3:
         workers.push(spawn(worker))
     end
@@ -110,8 +110,8 @@ func main:
         sum += v
     end
     println "sum of squares:", sum
-    jobs.free()
-    results.free()
+    jobs.Free()
+    results.Free()
 end
 ```
 
@@ -213,7 +213,7 @@ The difference to remember: Salam's `go` is a thread pool, not a scheduler. A ta
 
 Go's garbage collector is concurrent and tuned for low pause times, and it is a large part of why Go code is quick to write: you allocate and forget. The costs are memory headroom (a collected heap needs room to grow between cycles) and CPU time spent marking, which tuning with `GOGC` and `GOMEMLIMIT` can trade against each other.
 
-Salam has no collector. Values live on the stack, heap containers are freed with `.free()`, usually written as `defer x.free()` right after creation, and a function that returns a new string or container hands ownership to its caller. The compiler's ownership checker reports use after free, double free and similar mistakes, and `salam memcheck` runs a program under AddressSanitizer. Memory use is what the program allocates, with no collector overhead, but forgetting a `free` is a leak that only tests or tools will find, and in a server that runs for weeks that matters. The [memory management article](/blog/memory-management-in-salam/) explains the rules.
+Salam has no collector. Values live on the stack, heap containers are freed with `.Free()`, usually written as `defer x.Free()` right after creation, and a function that returns a new string or container hands ownership to its caller. The compiler's ownership checker reports use after free, double free and similar mistakes, and `salam memcheck` runs a program under AddressSanitizer. Memory use is what the program allocates, with no collector overhead, but forgetting a `free` is a leak that only tests or tools will find, and in a server that runs for weeks that matters. The [memory management article](/blog/memory-management-in-salam/) explains the rules.
 
 ## Writing a web server in Go and in Salam {#web-servers}
 
@@ -321,7 +321,7 @@ In the project's router benchmark Salam's `net/http` answered more requests per 
 
 ### Does Salam have a garbage collector?
 
-No. Memory is managed manually with `.free()` and `defer`, with compile-time checks for common mistakes. That avoids collector overhead but makes leaks possible.
+No. Memory is managed manually with `.Free()` and `defer`, with compile-time checks for common mistakes. That avoids collector overhead but makes leaks possible.
 
 ### Can I use channels in Salam like in Go?
 

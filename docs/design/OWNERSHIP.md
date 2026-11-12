@@ -75,8 +75,8 @@ is seen through every other name.
   dangling.
 - `free()` on a `Vector`/`HashMap` frees the buffer and nulls that header, so
   reusing the same variable is fine but any _copy_ now dangles. Reading it
-  again (`v.len()` is 0) or freeing it again (a `defer v.free()` after an
-  explicit `v.free()` frees a null pointer) is defined on every backend, so
+  again (`v.len()` is 0) or freeing it again (a `defer v.Free()` after an
+  explicit `v.Free()` frees a null pointer) is defined on every backend, so
   neither is reported; the same through a copy is E139 or E140.
 - `.copy()` and `.deep_copy()` build a new buffer, so `b := a.copy()` neither
   shares nor moves `a`'s buffer.
@@ -324,7 +324,7 @@ written by hand, when all of the following hold:
 - it is never reassigned, returned, stored, captured, freed by hand, or passed
   to something that keeps or frees it.
 
-So the usual shape below needs no `defer v.free()`:
+So the usual shape below needs no `defer v.Free()`:
 
 ```salam
 mut v := Vector {} as Vector<int>
@@ -333,7 +333,7 @@ println total(v)
 ```
 
 Code that already frees by hand keeps working unchanged: a hand-written
-`free()` or `defer v.free()` disqualifies the variable, so nothing is freed
+`free()` or `defer v.Free()` disqualifies the variable, so nothing is freed
 twice. The drop frees what `free()` frees (the buffer, not the elements). C
 frees the header fields directly and LLVM loads them through the local's
 address. JS and the interpreter see a bare read.

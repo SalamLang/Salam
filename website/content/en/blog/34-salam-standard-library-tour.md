@@ -19,7 +19,7 @@ Packages are imported by path, `import encoding.json` or `import net.http`, and 
 Three properties hold across the library and are worth knowing before you use it:
 
 - **Most of it is written in Salam.** HTTP, TLS 1.3, the PostgreSQL and MySQL protocols, JSON, compression, ONNX inference and the native UI's layout engine are Salam code compiled with your program. A few packages wrap C libraries that already exist and that nobody should rewrite: [db.sqlite](/std/db/sqlite/), [gui.raylib](/std/gui/raylib/), [ai.opencv](/std/ai/opencv/) and the system web view in [gui.webview](/std/gui/webview/).
-- **Heap values are yours to free.** Packages that return a `Vector`, a buffer or an owned string say so, and you free them with `.free()` or the package's `Free` function, usually through `defer`. The [memory lesson](/learn/memory/) explains the rules.
+- **Heap values are yours to free.** Packages that return a `Vector`, a buffer or an owned string say so, and you free them with `.Free()` or the package's `Free` function, usually through `defer`. The [memory lesson](/learn/memory/) explains the rules.
 - **Errors use the language's own mechanisms.** Functions that can fail either return a status the caller checks or are marked `throws`, in which case the compiler makes you handle them with `try`.
 
 ## Text, data formats and encodings {#text}
@@ -145,7 +145,7 @@ func main:
     println "30! =", bigint.ToStr(bigint.Factorial(30))
 
     mut ms := Vector {} as Vector<f64>
-    defer ms.free()
+    defer ms.Free()
     each v in [12.0, 15.0, 11.0, 48.0, 13.0]:
         ms.push(v)
     end

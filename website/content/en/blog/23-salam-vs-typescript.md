@@ -244,7 +244,7 @@ end
 
 func main:
     mut products := Vector {} as Vector<str>
-    defer products.free()
+    defer products.Free()
     products.push("Pen")
     products.push("<script>alert(1)</script>")
     println Cart("Sara", products)

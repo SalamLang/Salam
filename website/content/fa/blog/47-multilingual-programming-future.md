@@ -54,9 +54,9 @@ import str
 
 func main:
     words := str.Split("apple pear apple fig apple", " ")
-    defer words.free()
+    defer words.Free()
     mut counts := HashMap {} as HashMap<str, int>
-    defer counts.free()
+    defer counts.Free()
     each word in words:
         counts.put(word, counts.GetOr(word, 0) + 1)
     end

@@ -8,7 +8,7 @@ summary: A practical guide to memory in Salam: what is copied, what is shared, w
 date: 2026-11-11
 ---
 
-**Memory management is how a program obtains memory for its data and gives it back when the data is no longer needed.** Salam has no garbage collector, so this is partly the programmer's job, but it is a much smaller job than in C. Plain values live on the stack and need no care at all. Heap collections such as `Vector` and `HashMap` are freed with `.free()`, usually through `defer`, and the compiler inserts that call itself for local collections that never leave their scope. On top of that, an ownership checker finds use-after-free and double-free mistakes at compile time, and `salam memcheck` finds leaks at runtime. This article walks through each piece with programs and the compiler's real output.
+**Memory management is how a program obtains memory for its data and gives it back when the data is no longer needed.** Salam has no garbage collector, so this is partly the programmer's job, but it is a much smaller job than in C. Plain values live on the stack and need no care at all. Heap collections such as `Vector` and `HashMap` are freed with `.Free()`, usually through `defer`, and the compiler inserts that call itself for local collections that never leave their scope. On top of that, an ownership checker finds use-after-free and double-free mistakes at compile time, and `salam memcheck` finds leaks at runtime. This article walks through each piece with programs and the compiler's real output.
 
 ## The model in one paragraph {#overview}
 
@@ -39,10 +39,10 @@ func main:
     println c.x
 
     mut cart := Vector {} as Vector<str>
-    defer cart.free()
+    defer cart.Free()
     cart.push("bread")
     mut basket := cart.copy()
-    defer basket.free()
+    defer basket.Free()
     basket.push("milk")
     println cart.len(), basket.len()
 end
@@ -67,7 +67,7 @@ func free words(words: Vector<str>):
     each w in words:
         mem.Free(w as void*)
     end
-    words.free()
+    words.Free()
 end
 
 func count words(lines: str[]): int:
@@ -93,13 +93,13 @@ main: second to last
 main: last
 ```
 
-Writing `defer x.free()` on the line right after `x` is created is the most important habit in Salam. Cleanup sits next to the allocation, where a reviewer can see it, and an early `ret` added later cannot skip it. The [defer lesson](/learn/defer/) has more examples.
+Writing `defer x.Free()` on the line right after `x` is created is the most important habit in Salam. Cleanup sits next to the allocation, where a reviewer can see it, and an early `ret` added later cannot skip it. The [defer lesson](/learn/defer/) has more examples.
 
 Notice `free words`. `line.split(" ")` returns a `Vector<str>` whose strings are themselves heap allocations, and `free()` on a `Vector` frees its own storage, not what the elements own. So the helper frees each string first, then the vector. That detail is easy to miss, which is why the next tools exist.
 
 ## Finding leaks with salam memcheck {#memcheck}
 
-`salam memcheck app.salam` builds the program with debug information and runs it under Valgrind when it is installed, or with AddressSanitizer otherwise, and reports leaks and invalid accesses with Salam filenames and line numbers. Here is its report for an earlier version of `count words`, saved as `d1.salam`, that used a plain `defer words.free()` and so never freed the word strings (two inner stack frames removed):
+`salam memcheck app.salam` builds the program with debug information and runs it under Valgrind when it is installed, or with AddressSanitizer otherwise, and reports leaks and invalid accesses with Salam filenames and line numbers. Here is its report for an earlier version of `count words`, saved as `d1.salam`, that used a plain `defer words.Free()` and so never freed the word strings (two inner stack frames removed):
 
 ```text
 ==47772== 14 bytes in 3 blocks are definitely lost in loss record 4 of 4
@@ -227,7 +227,7 @@ func main:
     mut a := Vector {} as Vector<int>
     a.push(1)
     b := a
-    a.free()
+    a.Free()
     println b.get(0)
 end
 ```
@@ -236,7 +236,7 @@ end
 warning[W163]: 'a' is used after its buffer was moved on line 4; both names now share one buffer, so take 'a.copy()' where both are needed
  --> o2.salam:5:5
   |
-5 |     a.free()
+5 |     a.Free()
   |     ^
   |
   = help: use the new name from here on, or copy the Vector or HashMap before handing it over
@@ -270,11 +270,11 @@ Salam's place is between Zig and Rust: closer to Zig's explicit `defer` style, w
 
 ### Does Salam have manual memory management?
 
-Partly. Values on the stack need nothing. Heap collections and runtime strings are freed with `.free()` or `mem.Free`, usually through `defer`, except for simple local collections and strings that the compiler frees automatically. There is no garbage collector in compiled programs.
+Partly. Values on the stack need nothing. Heap collections and runtime strings are freed with `.Free()` or `mem.Free`, usually through `defer`, except for simple local collections and strings that the compiler frees automatically. There is no garbage collector in compiled programs.
 
 ### What does defer do in Salam?
 
-It runs a statement when the enclosing block ends, on every path out of it, in reverse order of registration. The usual use is `defer v.free()` right after creating `v`.
+It runs a statement when the enclosing block ends, on every path out of it, in reverse order of registration. The usual use is `defer v.Free()` right after creating `v`.
 
 ### Can Salam detect use-after-free at compile time?
 

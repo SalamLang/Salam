@@ -24,7 +24,7 @@ The REPL (`salam cli`) is a fifth way in, covered below. One program can go thro
 ```salam
 func count primes(limit: int): int:
     mut composite := Vector {} as Vector<bool>
-    defer composite.free()
+    defer composite.Free()
     repeat limit + 1:
         composite.push(false)
     end

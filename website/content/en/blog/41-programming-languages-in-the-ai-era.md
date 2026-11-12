@@ -84,7 +84,7 @@ end
 
 func main:
     mut words := Vector {} as Vector<int>
-    defer words.free()
+    defer words.Free()
     words.push(1200)
     words.push(850)
     println label(Status.Review), total(words), "words"

@@ -11,7 +11,7 @@ Salam has no ownership model. Heap memory is released by hand, and the idiom is
 
 ```salam
 mut v := Vector {} as Vector<int>
-defer v.free()
+defer v.Free()
 ```
 
 That works, and `std/` holds itself to it: the program leak ratchet in
@@ -27,7 +27,7 @@ it today:
   `salam build` of `hello.salam`, and its own header says the reason is "no
   arena behind its string temporaries".
 - **Structs that own heap.** Every type with a `free()` needs each of its users
-  to know that, and to write `defer x.free()`. Nothing enforces it; forgetting
+  to know that, and to write `defer x.Free()`. Nothing enforces it; forgetting
   is silent.
 
 A destructor would close the third, and is the only one of the three that fits
@@ -41,7 +41,7 @@ A struct may declare
 struct Buffer:
     pub data: Vector<u8> = Vector {}
     pub func drop():
-        this.data.free()
+        this.data.Free()
     end
 end
 ```
@@ -62,7 +62,7 @@ Rules worth fixing up front:
   every copy would double-free that storage. So either copies must be tracked,
   or `drop()` must be restricted to types that cannot be copied - a notion
   Salam does not have.
-- **`drop()` runs once.** Manual `x.free()` followed by an automatic `drop()`
+- **`drop()` runs once.** Manual `x.Free()` followed by an automatic `drop()`
   must not double-free, so either `free()` becomes idempotent by convention or
   an explicit drop cancels the automatic one.
 
@@ -87,7 +87,7 @@ the interpreter's bytecode VM has its own GC.
 
 ## What to do instead, for now
 
-- Keep `defer x.free()`, and keep the two ratchets honest.
+- Keep `defer x.Free()`, and keep the two ratchets honest.
 - The two leaks that `drop()` would _not_ fix - closure environments and string
   temporaries - are allocator-shaped, not type-shaped. An arena for compiler
   string temporaries would retire the larger of the two numbers above without

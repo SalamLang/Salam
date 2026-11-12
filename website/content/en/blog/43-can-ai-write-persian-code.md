@@ -136,7 +136,7 @@ end
 
 func main:
     mut scores := Vector {} as Vector<int>
-    defer scores.free()
+    defer scores.Free()
     scores.push(18)
     scores.push(15)
     scores.push(20)

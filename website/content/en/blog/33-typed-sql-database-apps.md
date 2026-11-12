@@ -262,7 +262,7 @@ func main:
     each o in orders:
         println o.id, o.total_cents, o.note.unwrap_or("(no note)")
     end
-    orders.free()
+    orders.Free()
     _ := c.Close()
 end
 ```

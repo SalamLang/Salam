@@ -104,7 +104,7 @@ func main:
     source := "12 + 3 * 45"
     mut digits := ""
     mut tokens := Vector {} as Vector<str>
-    defer tokens.free()
+    defer tokens.Free()
     each ch in source + " ":
         k := kind of(ch)
         if k == Kind.Number:

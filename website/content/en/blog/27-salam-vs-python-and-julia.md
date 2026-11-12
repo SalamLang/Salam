@@ -75,9 +75,9 @@ func main:
     end
     println "x =", matrix.ToStringPrec(matrix.Transpose(x), 4)
     println "det =", matrix.Det(a)
-    a.free()
-    b.free()
-    x.free()
+    a.Free()
+    b.Free()
+    x.Free()
 end
 ```
 
@@ -86,7 +86,7 @@ x = 0.1000 0.6000
 det = 10
 ```
 
-The Salam version is clearly longer. Building matrices, checking for an empty result and freeing each one with `.free()` are things Python and Julia do for you with literals, exceptions and a garbage collector. That is the general pattern of this comparison: Salam's numerics are capable, but the language was not designed around arrays the way Julia was, or adapted to them over two decades the way Python was.
+The Salam version is clearly longer. Building matrices, checking for an empty result and freeing each one with `.Free()` are things Python and Julia do for you with literals, exceptions and a garbage collector. That is the general pattern of this comparison: Salam's numerics are capable, but the language was not designed around arrays the way Julia was, or adapted to them over two decades the way Python was.
 
 The `matrix` package goes well beyond this: LU, QR, Cholesky and SVD decompositions, symmetric and general eigenvalues, rank, pseudo-inverse, null space, matrix exponential and square root, iterative solvers (conjugate gradient, Jacobi, power iteration), norms, covariance, correlation and PCA. Everything works on 64-bit floats in one row-major `Matrix` type.
 
@@ -120,7 +120,7 @@ end
 
 func main:
     mut temps := Vector {} as Vector<f64>
-    defer temps.free()
+    defer temps.Free()
     each t in [21.5, 23.0, 19.8, 25.1, 22.4, 30.2, 20.9]:
         temps.push(t)
     end
@@ -179,9 +179,9 @@ func main:
     mut score := column([52.0, 57.0, 66.0, 70.0, 77.0])
     mut fit := matrix.LinearRegression(hours, score)
     println "score =", matrix.ToStringPrec(matrix.Full(1, 1, fit.at(0, 0)), 2), "+", matrix.ToStringPrec(matrix.Full(1, 1, fit.at(1, 0)), 2), "* hours"
-    hours.free()
-    score.free()
-    fit.free()
+    hours.Free()
+    score.Free()
+    fit.Free()
 end
 ```
 

@@ -154,7 +154,7 @@ built-in work:
   "layout block omitted in general (C) mode" and drops them. Reporting them
   as unsupported made 50 files look like backend gaps that the C backend
   does not compile either. Fixed 42 files.
-- **`d.free()` on an interface value** releases the box, not a vtable
+- **`d.Free()` on an interface value** releases the box, not a vtable
   method, so no slot could ever match ("interface 'Shape' has no method
   'free'").
 - **Assignment as an expression** (`a = b = c`): store, then reload the
@@ -547,7 +547,7 @@ of scope. 20-line repro:
 ```salam
 repeat bases.len() in bi:
     entries := os.ListDir(bases.get(bi))
-    defer entries.free()          // <- epilogue cannot see `entries`
+    defer entries.Free()          // <- epilogue cannot see `entries`
     ...
 end
 ```

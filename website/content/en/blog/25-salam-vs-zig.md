@@ -113,7 +113,7 @@ Salam makes the opposite trade. Collections such as `Vector` and `HashMap` use o
 ```salam
 func main:
     mut squares := Vector {} as Vector<i64>
-    defer squares.free()
+    defer squares.Free()
     repeat 1 to 5 in i:
         squares.push((i * i) as i64)
     end
@@ -232,7 +232,7 @@ Not in Zig's sense. Salam evaluates constant expressions, keeps or drops code wi
 
 ### Does Salam use allocators like Zig?
 
-No. Collections use a global allocator and are freed with `.free()`, usually through `defer`. The `mem` package offers arenas and pools for raw memory when you need them.
+No. Collections use a global allocator and are freed with `.Free()`, usually through `defer`. The `mem` package offers arenas and pools for raw memory when you need them.
 
 ### Which is faster, Salam or Zig?
 

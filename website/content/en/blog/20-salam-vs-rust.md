@@ -8,7 +8,7 @@ summary: Rust proves memory safety at compile time and Salam does not. This comp
 date: 2026-11-11
 ---
 
-Salam and Rust are both compiled, statically typed languages with no garbage collector, enums that carry data, exhaustive pattern matching and native performance. The decisive difference is memory safety: **Rust has a borrow checker that proves at compile time that safe code has no use after free, no double free and no data races. Salam does not.** Salam frees heap memory by hand with `.free()` and `defer`, catches a set of common mistakes with compile-time checks and warnings, and checks bounds at runtime in development builds. Those checks help, but they are not a proof.
+Salam and Rust are both compiled, statically typed languages with no garbage collector, enums that carry data, exhaustive pattern matching and native performance. The decisive difference is memory safety: **Rust has a borrow checker that proves at compile time that safe code has no use after free, no double free and no data races. Salam does not.** Salam frees heap memory by hand with `.Free()` and `defer`, catches a set of common mistakes with compile-time checks and warnings, and checks bounds at runtime in development builds. Those checks help, but they are not a proof.
 
 In exchange, Salam is a smaller language with a gentler learning curve, a large standard library in the box and source code you can write in English or Persian. This comparison shows the same programs in both languages and states the trade-offs plainly.
 
@@ -16,7 +16,7 @@ In exchange, Salam is a smaller language with a gentler learning curve, a large 
 
 |                         | Rust                                                                                    | Salam                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Memory management       | Ownership, borrowing and lifetimes, checked by the compiler; `Drop` frees automatically | Manual: `.free()`, usually through `defer`; compile-time warnings for common mistakes                      |
+| Memory management       | Ownership, borrowing and lifetimes, checked by the compiler; `Drop` frees automatically | Manual: `.Free()`, usually through `defer`; compile-time warnings for common mistakes                      |
 | Memory safety guarantee | Yes, for safe code; `unsafe` blocks opt out                                             | No guarantee; bounds checks in development builds, ownership checks, AddressSanitizer via `salam memcheck` |
 | Data races              | Prevented at compile time by `Send` and `Sync`                                          | Your responsibility: mutexes, atomics, channels                                                            |
 | Sum types and matching  | `enum` with data, exhaustive `match`                                                    | `enum` with data, exhaustive `match`                                                                       |
@@ -90,7 +90,7 @@ end
 
 func main:
     mut shapes := Vector {} as Vector<Shape>
-    defer shapes.free()
+    defer shapes.Free()
     shapes.push(Shape.Triangle(4.0, 3.0))
     shapes.push(Shape.Rect(3.0, 4.5))
     shapes.push(Shape.Square(5.0))
@@ -110,7 +110,7 @@ Square area 25
 total: 44.5
 ```
 
-The two print the same numbers. In both languages, removing an arm from the `match` is a compile error, because the compiler checks that every member is handled (the [enums lesson](/learn/enums/) covers Salam's version). The visible differences are small: Salam enum values have a built-in `name()`, and it needs `defer shapes.free()` where Rust's `Vec` frees itself when it goes out of scope.
+The two print the same numbers. In both languages, removing an arm from the `match` is a compile error, because the compiler checks that every member is handled (the [enums lesson](/learn/enums/) covers Salam's version). The visible differences are small: Salam enum values have a built-in `name()`, and it needs `defer shapes.Free()` where Rust's `Vec` frees itself when it goes out of scope.
 
 ## Error handling: Result and ? against throws and try {#errors}
 
@@ -214,7 +214,7 @@ But it does not cover everything Rust's checker covers. This Salam program, the 
 func main:
     mut names := Vector {} as Vector<str>
     names.push("Sara")
-    names.free()
+    names.Free()
     println names.len()
 end
 ```
@@ -263,7 +263,7 @@ If memory safety is a hard requirement, Rust is the right answer today, and Sala
 
 ### Does Salam have a borrow checker?
 
-No. Salam uses manual memory management with `.free()` and `defer`. Its ownership checker reports common mistakes such as use after free and double free at compile time, but it does not prove the absence of memory errors the way Rust's borrow checker does.
+No. Salam uses manual memory management with `.Free()` and `defer`. Its ownership checker reports common mistakes such as use after free and double free at compile time, but it does not prove the absence of memory errors the way Rust's borrow checker does.
 
 ### Is Salam faster than Rust?
 

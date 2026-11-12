@@ -96,7 +96,7 @@ func main:
         mut g := autograd.Grad(tape, x)
         tensor.AddScaled(w, g, -0.1)
     end
-    tape.free()
+    tape.Free()
 end
 ```
 
@@ -142,22 +142,22 @@ func main:
     repeat 600 in step:
         tape.reset()
         store.zero_grad()
-        logits := model.forward(tape, store, autograd.Input(tape, x))
+        logits := model.Forward(tape, store, autograd.Input(tape, x))
         loss := autograd.BCEWithLogits(tape, logits, autograd.Constant(tape, y))
         autograd.Backward(tape, loss)
-        opt.step(store)
+        opt.Step(store)
         if step % 200 == 0:
             println "step", step, "loss below 0.1:", autograd.Value(tape, loss).at(0) < 0.1
         end
     end
     tape.reset()
-    probs := tensor.Sigmoid(autograd.Value(tape, model.forward(tape, store, autograd.Input(tape, x))))
+    probs := tensor.Sigmoid(autograd.Value(tape, model.Forward(tape, store, autograd.Input(tape, x))))
     repeat 4 in i:
         println x.at2(i, 0), "xor", x.at2(i, 1), "->", (probs.at(i) + 0.5) as int
     end
-    tape.free()
-    opt.free()
-    store.free()
+    tape.Free()
+    opt.Free()
+    store.Free()
 end
 ```
 
@@ -193,12 +193,12 @@ func main:
     mut hours := build(10, 2, "1 4 2 5 2 8 3 6 4 7 5 7 6 8 7 6 8 7 9 8")
     mut passed := build(10, 1, "0 0 0 0 1 1 1 1 1 1")
     mut tree := ml.DecisionTree { max_depth = 2 }
-    defer tree.free()
-    println "trained:", tree.fit(hours, passed), "nodes:", tree.node_count()
-    mut pred := tree.predict(hours)
+    defer tree.Free()
+    println "trained:", tree.Fit(hours, passed), "nodes:", tree.node_count()
+    mut pred := tree.Predict(hours)
     println "training accuracy:", ml.Accuracy(passed, pred)
     mut students := build(3, 2, "1 9 5 5 10 4")
-    mut guess := tree.predict(students)
+    mut guess := tree.Predict(students)
     repeat 3 in i:
         outcome := guess.at(i, 0) > 0.5 ? "pass" : "fail"
         println "study", students.at(i, 0), "sleep", students.at(i, 1), "->", outcome

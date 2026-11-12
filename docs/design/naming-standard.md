@@ -166,7 +166,7 @@ methods with the same name are included:
 
 Another 555 are in Markdown, HTML and TeX (`website/`, `books/`, `docs/`).
 
-Most common: `.len(` 16422, `.push(` 14377, `.get(` 11424, `.free(` 7969, `.set(`
+Most common: `.len(` 16422, `.push(` 14377, `.get(` 11424, `.Free(` 7969, `.set(`
 2211, `.concat(` 2206, `.substr(` 1913, `.find(` 1093, `.put(` 926, `.has(` 585,
 `.to_int(` 457. Everything below `.pop(` is under 340 each.
 
@@ -316,7 +316,7 @@ is not the compiler, it is phase 2 and 3 volume and the order against the seed.
    releases, or treat the 42 built-ins plus the protocol hooks as language
    keywords that stay lower case, like `len` and `append` in Go, and apply the
    rule only to std and user code. The first is the stated rule and costs 62148
-   call sites; the second leaves `.len()` and `.free()` untouched and costs
+   call sites; the second leaves `.len()` and `.Free()` untouched and costs
    nothing. Also: should `iter`, `has_next`, `next`, `to_str`, `free` and the
    `operator_*` names rename too, since a user struct implements them?
 4. Mirror packages. Exempt `gui/raylib`, `metatrader`, `llvm`, `net/http2`,

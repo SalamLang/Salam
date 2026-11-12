@@ -18,7 +18,7 @@ This comparison puts the same programs side by side, then goes through memory, s
 | ------------------------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | First appeared           | 1972, standardized since 1989 (C23 is current)   | 2024 per its source headers, still pre-1.0                                                |
 | Compilation              | Native, through gcc, clang, MSVC and many others | Native, through its own C, LLVM or x86-64/ARM backends                                    |
-| Memory                   | `malloc`/`free`, by hand                         | Stack values plus heap containers freed with `.free()` and `defer`                        |
+| Memory                   | `malloc`/`free`, by hand                         | Stack values plus heap containers freed with `.Free()` and `defer`                        |
 | Growable arrays and maps | Write your own or pick a library                 | `Vector<T>` and `HashMap<K, V>` built-in, `Set<T>` and more in the standard library       |
 | Strings                  | `char *` with a terminating zero byte            | `str`, UTF-8 text with byte and character operations                                      |
 | Out-of-bounds access     | Undefined behavior                               | Compile error when provable, runtime panic in development builds                          |
@@ -69,7 +69,7 @@ import str
 func main:
     line := "42,7,19,88,3,61"
     parts := str.Split(line, ",")
-    defer parts.free()
+    defer parts.Free()
     mut sum := 0
     mut lo := 0
     mut hi := 0
@@ -87,7 +87,7 @@ end
 count: 6 sum: 220 min: 3 max: 88
 ```
 
-Both print the same line. The Salam version is shorter mainly because the container and the string splitting already exist. Notice what stayed the same: there is still a `free`, written once as `defer parts.free()` right after the allocation, so it runs however the function ends. Salam does not hide memory management; it makes the common pattern short.
+Both print the same line. The Salam version is shorter mainly because the container and the string splitting already exist. Notice what stayed the same: there is still a `free`, written once as `defer parts.Free()` right after the allocation, so it runs however the function ends. Salam does not hide memory management; it makes the common pattern short.
 
 ## Structs, dynamic arrays and memory {#memory}
 
@@ -159,7 +159,7 @@ end
 
 func main:
     mut readings := Vector {} as Vector<Reading>
-    defer readings.free()
+    defer readings.Free()
     readings.push(Reading { city = "Tehran", celsius = 31.5 })
     readings.push(Reading { city = "Tabriz", celsius = 24.0 })
     readings.push(Reading { city = "Shiraz", celsius = 29.5 })

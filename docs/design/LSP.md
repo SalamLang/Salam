@@ -344,7 +344,7 @@ Quick fixes:
   `each` / `repeat` / `until`, `return` to `ret`, `elif` to `else`,
   `let` / `var` to `:=` / `mut`, `=>` to `:`, `def` / `class` to `func` /
   `struct`. `p_foreign_error` already knows each case; it gains a fix.
-- Add `defer x.free()` where the ownership checker reports a leak, and remove
+- Add `defer x.Free()` where the ownership checker reports a leak, and remove
   a second `free` it reports as a double free.
 
 Refactorings (`refactor.*`):

@@ -64,9 +64,9 @@ import str
 func main:
     text := "the quick fox and the lazy dog and the cat"
     words := str.Split(text, " ")
-    defer words.free()
+    defer words.Free()
     mut counts := HashMap {} as HashMap<str, int>
-    defer counts.free()
+    defer counts.Free()
     each w in words:
         before := counts.has(w) ? counts.get(w) : 0
         counts.put(w, before + 1)

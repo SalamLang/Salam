@@ -53,7 +53,7 @@ Programs that call C pay nothing extra either. A Salam `extern` function is a di
 If nothing collects garbage, something else has to free memory. In Salam it works like this:
 
 - **Plain values live on the stack.** Numbers, booleans, structs and fixed-size arrays are values: they are copied when assigned and disappear when their scope ends. They cost no allocation and need no freeing.
-- **Heap containers are freed explicitly or by the compiler.** A `Vector`, a `HashMap` or a built string lives on the heap. You free it with `.free()`, usually written as `defer v.free()` right after creating it, so it happens on every exit path. When a local container is never stored, returned or shared, the compiler inserts the free itself at the end of its scope.
+- **Heap containers are freed explicitly or by the compiler.** A `Vector`, a `HashMap` or a built string lives on the heap. You free it with `.Free()`, usually written as `defer v.Free()` right after creating it, so it happens on every exit path. When a local container is never stored, returned or shared, the compiler inserts the free itself at the end of its scope.
 - **The compiler checks the common mistakes.** Using memory after it was freed, or freeing it twice, is reported at compile time when it happens on every path, and as a warning when it happens on some.
 
 Here is what that looks like in a program that reuses one buffer instead of allocating a new one for every batch of readings. `clear()` empties the `Vector` but keeps its storage, so after the first batch there are no allocations at all, and `defer` frees the storage once, when `main` ends:
@@ -76,7 +76,7 @@ end
 
 func main:
     mut buf := Vector {} as Vector<f64>
-    defer buf.free()
+    defer buf.Free()
     buf.reserve(6)
     repeat 3 in hour:
         fill readings(buf, hour)
@@ -148,7 +148,7 @@ The compiled language, the one `salam build` produces, has neither.
 
 ### Does Salam have a garbage collector?
 
-No. Compiled Salam programs free heap memory explicitly, with `.free()` and `defer`, or through frees the compiler inserts for local containers that never escape. Only the `salam exec` interpreter and JavaScript output use a garbage collector.
+No. Compiled Salam programs free heap memory explicitly, with `.Free()` and `defer`, or through frees the compiler inserts for local containers that never escape. Only the `salam exec` interpreter and JavaScript output use a garbage collector.
 
 ### Is native code always faster than a virtual machine?
 

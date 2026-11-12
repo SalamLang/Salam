@@ -50,7 +50,7 @@ end
 
 func main:
     mut points := Vector {} as Vector<Point>
-    defer points.free()
+    defer points.Free()
     points.push(Point { x = 3.0, y = 4.0 })
     points.push(Point { x = 1.0, y = 1.0 })
     each p in points:

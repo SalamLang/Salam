@@ -1472,16 +1472,16 @@ end
 
 - **`Vector<T>`** (built-in; also `import collections`): `push pop get(i) ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter copy free`; index via `v[i]` (read) / `v[i] = x` (write); free functions
   `contains index_of last_index_of count_of slice clone reverse swap extend`.
-- **`HashMap<K,V>`**: `put(k,v) get(k) get_or(k, def) has(k) remove(k) size is_empty iter copy free`; iterate with `each k, v in m:`. `get` of a
+- **`HashMap<K,V>`**: `put(k,v) get(k) GetOr(k, def) has(k) remove(k) size is_empty iter copy free`; iterate with `each k, v in m:`. `get` of a
   missing key returns the zero value (a **null** `str` that crashes when
-  used), so test `has` or use `get_or`. Iteration is in hash order, which
+  used), so test `has` or use `GetOr`. Iteration is in hash order, which
   changes as the map grows; sort the keys when order shows. `get` returns a
   copy of a struct value: change it and `put` it back.
 - **`Set<T>`** (`add has remove size`), **`Stack<T>`** (`push pop peek size is_empty`), **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
   **`PriorityQueue<T>`** (`push pop peek`, a **min**-heap on `<`),
   **`LinkedList<T>`**, **`Counter<K>`** (`add add_n count distinct`),
-  **`OrderedMap`** (str to str in insertion order: `set get get_or has remove key_at val_at len`), **`Pair`**, **`CircularList`**.
+  **`OrderedMap`** (str to str in insertion order: `set get GetOr has remove key_at val_at len`), **`Pair`**, **`CircularList`**.
 - Pitfalls: `b := a` shares the elements (`b.set(0, x)` changes `a`, a push on
   one can move the other's memory); copy with `v.copy()`. `pop peek dequeue first last` and an index past the end stop the program on an empty
   structure (a `--release` build reads garbage instead).
@@ -2596,7 +2596,7 @@ Rules, all checked at compile time:
 - The layout function is `pure`: no I/O, network, random numbers or global
   writes inside the UI (E012). Fetch data in the handler and pass it in.
   Reading a `Vector`/`HashMap` parameter is fine (`len`, `is_empty`, `get`,
-  `first`, `last`, `xs[i]`, `has`, `get_or`, `size`, `each x in xs`); a
+  `first`, `last`, `xs[i]`, `has`, `GetOr`, `size`, `each x in xs`); a
   method that changes it (`push`, `pop`, `set`, `put`, `remove`, `ref`) is E012.
 - Text and attribute values are always HTML-escaped; there is no raw-HTML type.
 - A runtime value for a URL attribute must be a `web.Url`, and a runtime CSS

@@ -97,6 +97,24 @@ $cerrs"
         fi
     }
 
+    wk_checkfix() {
+        jobdir="$WORK/chkfixjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        name=$(basename "$fabs")
+        cp "$fabs" "$jobdir/$name"
+        log=$( (cd "$jobdir" && "$SALAM_ABS" check "$name" --fix --no-color --log-level=error --lang="$lang" 2>/dev/null) | tr -d '\r')
+        golden="${fabs%.salam}.fixed"
+        if [ ! -f "$golden" ]; then
+            echo "FAIL $label (missing ${golden##*/})"
+        elif [ "$(tr -d '\r' <"$jobdir/$name")" != "$(tr -d '\r' <"$golden")" ]; then
+            echo "FAIL $label (rewritten file differs from ${golden##*/})"
+            diff "$golden" "$jobdir/$name" | head -20 | sed 's/^/  /'
+        else
+            wk_check "$expabs" "$log"
+        fi
+        rm -rf "$jobdir"
+    }
+
     wk_project() {
         jobdir="$WORK/projjob_${jobid}_$$"
         mkdir -p "$jobdir"
@@ -626,6 +644,7 @@ EOF_LAYOUT_NOT
         new) wk_new ;;
         project) wk_project ;;
         checkcmd) wk_checkcmd ;;
+        checkfix) wk_checkfix ;;
         lib) wk_lib ;;
         script) wk_script ;;
         expect) wk_expect ;;
@@ -896,6 +915,11 @@ if want check; then
             name=$(basename "$f" .out)
             [ -d "tests/$lang/check/$name" ] || continue
             add_job checkcmd "check/$lang/$name" "tests/$lang/check/$name" "$lang" "$f"
+        done
+        for f in tests/"$lang"/check/fix/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            add_job checkfix "check/$lang/fix/$name" "$f" "$lang" "tests/$lang/check/fix/$name.out"
         done
     done
 fi

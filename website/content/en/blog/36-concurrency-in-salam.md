@@ -94,7 +94,7 @@ mut by_status := HashMap {} as HashMap<int, int>
 
 func record(code: int):
     sync.Lock(lock)
-    by_status.put(code, by_status.get_or(code, 0) + 1)
+    by_status.put(code, by_status.GetOr(code, 0) + 1)
     sync.Unlock(lock)
 end
 
@@ -110,9 +110,9 @@ func main:
         go record(code)
     end
     pool.GoWait()
-    println "200:", by_status.get_or(200, 0)
-    println "404:", by_status.get_or(404, 0)
-    println "500:", by_status.get_or(500, 0)
+    println "200:", by_status.GetOr(200, 0)
+    println "404:", by_status.GetOr(404, 0)
+    println "500:", by_status.GetOr(500, 0)
     sync.Destroy(lock)
     by_status.free()
 end

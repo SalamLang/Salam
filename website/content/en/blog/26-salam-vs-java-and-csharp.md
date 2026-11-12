@@ -92,7 +92,7 @@ func main:
     mut totals := HashMap {} as HashMap<str, f64>
     defer totals.free()
     each o in orders:
-        totals.put(o.customer, totals.get_or(o.customer, 0.0) + o.amount)
+        totals.put(o.customer, totals.GetOr(o.customer, 0.0) + o.amount)
     end
     mut names := Vector {} as Vector<str>
     defer names.free()

@@ -58,7 +58,7 @@ func main:
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.free()
     each word in words:
-        counts.put(word, counts.get_or(word, 0) + 1)
+        counts.put(word, counts.GetOr(word, 0) + 1)
     end
     println "apple:", counts.get("apple")
     println "pear:", counts.get("pear")
@@ -70,7 +70,7 @@ apple: 3
 pear: 1
 ```
 
-Line for line the two are the same program. `واردسازی` is `import`, `رشته` is the `str` package, `تفکیک کردن` is `Split`, `دیرکن` is `defer`, `نگاشت` is `HashMap`, `هر ... در` is `each ... in`, and `دریافت با پیش فرض` is `get_or`. Inside the compiler, that mapping happens in layers.
+Line for line the two are the same program. `واردسازی` is `import`, `رشته` is the `str` package, `تفکیک کردن` is `Split`, `دیرکن` is `defer`, `نگاشت` is `HashMap`, `هر ... در` is `each ... in`, and `دریافت با پیش فرض` is `GetOr`. Inside the compiler, that mapping happens in layers.
 
 ### Layer 1: keyword tables
 
@@ -102,7 +102,7 @@ Persian also needs rules that have nothing to do with vocabulary. The lexer acce
 
 A file declares its language with a header comment (`// lang: en` or `// زبان: فارسی`); without one, the compiler picks the pack whose keywords the file matches better. The `salam translate` command then rewrites a file between packs: keywords, `true`/`false`/`null`/`this`, the entry function name, primitive type names in type positions and built-in container methods. Identifiers, comments and string contents are left exactly as written.
 
-The translator has limits worth knowing. It moves a fixed list of built-in names, so a standard library method outside that list can stay in the source language. Translating the Persian word count above to English, for example, left `دریافت با پیش فرض` in place, and the compiler then stopped with "identifier must be English in an English file" and the hint "the English name is 'get_or'". The fix is one word, and the compiler names it, but round trips are not yet fully automatic. The article [From Persian code to English and back](/blog/salam-translate-persian-english-code/) covers the tool in depth.
+The translator has limits worth knowing. It moves a fixed list of built-in names, so a standard library method outside that list can stay in the source language. Translating the Persian word count above to English, for example, left `دریافت با پیش فرض` in place, and the compiler then stopped with "identifier must be English in an English file" and the hint "the English name is 'GetOr'". The fix is one word, and the compiler names it, but round trips are not yet fully automatic. The article [From Persian code to English and back](/blog/salam-translate-persian-english-code/) covers the tool in depth.
 
 Packages cross the language line more smoothly. Because every public name carries both spellings, a Persian program can import a package written in English and call it by its Persian names, and the reverse works for packages that declare `@en` names. That is what keeps the two communities on one ecosystem instead of two.
 

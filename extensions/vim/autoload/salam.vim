@@ -48,6 +48,16 @@ function! s:CommonArgs() abort
   return l:args
 endfunction
 
+function! s:SwitchLintArgs() abort
+  let l:mode = s:Opt('salam_switch_lint', 'off')
+  if index(['warn', 'error', 'fix'], l:mode) < 0
+    return []
+  endif
+  let l:args = ['--switch-lint=' . l:mode]
+  let l:minimum = s:Opt('salam_switch_lint_min', '4')
+  return l:args + ['--switch-lint-min=' . string(l:minimum)]
+endfunction
+
 function! s:Shell(args) abort
   return join(map([s:Opt('salam_compiler', 'salam')] + a:args, 'shellescape(v:val)'), ' ')
 endfunction
@@ -128,7 +138,7 @@ function! salam#Check() abort
         \ '--xml-out=' . s:NullDevice(),
         \ '--error-style=gcc',
         \ '--log-level=error',
-        \ ] + s:CommonArgs()
+        \ ] + s:CommonArgs() + s:SwitchLintArgs()
 
   let l:output = s:Capture(l:args)
   let l:saved = &errorformat

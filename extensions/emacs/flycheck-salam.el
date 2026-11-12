@@ -27,6 +27,15 @@
       (list (concat "--stdlib-path=" salam-stdlib-path))
     nil))
 
+(defun flycheck-salam--switch-lint-args ()
+  "Return switch-lint arguments when configured."
+  (let ((mode (and (boundp 'salam-lsp-switch-lint) salam-lsp-switch-lint))
+        (minimum (if (boundp 'salam-lsp-switch-lint-min) salam-lsp-switch-lint-min 4)))
+    (if (member mode '("warn" "error" "fix"))
+        (list (concat "--switch-lint=" mode)
+              (concat "--switch-lint-min=" (number-to-string minimum)))
+      nil)))
+
 (flycheck-define-checker salam
   "A Salam syntax and type checker.
 
@@ -40,7 +49,8 @@ running it or writing any artifact."
             "--error-style=gcc"
             "--log-level=error"
             (eval (concat "--lang=" (salam--detect-lang)))
-            (eval (flycheck-salam--stdlib-args)))
+            (eval (flycheck-salam--stdlib-args))
+            (eval (flycheck-salam--switch-lint-args)))
   :error-patterns
   ((error line-start (file-name) ":" line ":" column ": error: " (message) line-end)
    (warning line-start (file-name) ":" line ":" column ": warning: " (message) line-end)

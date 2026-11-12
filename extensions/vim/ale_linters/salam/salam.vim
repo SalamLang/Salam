@@ -15,6 +15,12 @@ function! ale_linters#salam#salam#GetCommand(buffer) abort
     let l:args .= '--stdlib-path=' . ale#Escape(l:stdlib) . ' '
   endif
 
+  let l:switch_lint = get(g:, 'salam_switch_lint', 'off')
+  if index(['warn', 'error', 'fix'], l:switch_lint) >= 0
+    let l:args .= '--switch-lint=' . l:switch_lint . ' '
+    let l:args .= '--switch-lint-min=' . string(get(g:, 'salam_switch_lint_min', 4)) . ' '
+  endif
+
   return '%e' . l:args . ale#Var(a:buffer, 'salam_options')
 endfunction
 

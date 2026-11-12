@@ -74,7 +74,12 @@ is seen through every other name.
 - `mem.Free(p)`, and `free()` on a `dyn`, free `p`'s tokens and leave `p`
   dangling.
 - `free()` on a `Vector`/`HashMap` frees the buffer and nulls that header, so
-  reusing the same variable is fine but any _copy_ now dangles.
+  reusing the same variable is fine but any _copy_ now dangles. Reading it
+  again (`v.len()` is 0) or freeing it again (a `defer v.free()` after an
+  explicit `v.free()` frees a null pointer) is defined on every backend, so
+  neither is reported; the same through a copy is E139 or E140.
+- `.copy()` and `.deep_copy()` build a new buffer, so `b := a.copy()` neither
+  shares nor moves `a`'s buffer.
 - `push`, `insert`, `reserve`, `resize_set`, `zeros`, `alloc` and `put` _may_
   move the buffer, which invalidates copies, `.ref()` pointers and iterators.
 - Passing a path to a `&:` parameter, or calling a method on it, may give it

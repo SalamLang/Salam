@@ -450,10 +450,14 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
                 continue
             end
             ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
-            if at.KindOf(a, g.lw.slots.get(num).expr) == at.AST_LAMBDA:
+            ek := at.KindOf(a, g.lw.slots.get(num).expr)
+            if ek == at.AST_LAMBDA:
                 ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
-            else:
+            else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
                 ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+            else:
+                # Call/other expression handlers: evaluate the expression when fired.
+                ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
             end
             continue
         end
@@ -467,7 +471,7 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
                 ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
             else str.Equals(out, "id"):
                 ln_call(g, g.nm.id, ln_str_expr(v))
-            else str.Equals(out, "data-key"):
+            else str.Equals(out, "data-key") or str.Equals(out, "key"):
                 ln_call(g, g.nm.key, ln_str_expr(v))
             else:
                 mv := is_dyn(v) ? v : attr_value_map(ai, v)
@@ -491,12 +495,22 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
                 prop = hyphenate(key)
             end
             if is_dyn(v):
+                # Dynamic values may resolve to CSS-like values at runtime; keep
+                # them as a style property for native parity with web dyn styles.
                 ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(v))
             else lo_all_digits(v):
                 ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_quote(v))
             else:
                 mv3 := attr_value_map(ai, v)
-                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv3))
+                # Non-numeric CSS-like values are applied as style text when a
+                # concrete property name is known; fall back to an attribute.
+                if str.Len(prop) > 0 and not str.Equals(prop, out):
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                else str.Len(prop) > 0 and str.IndexOf(prop, "-") >= 0:
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                else:
+                    ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv3))
+                end
             end
         else dest == sm.LA_CSS:
             mut prop := sm.LayoutAttrOut(ai)
@@ -519,8 +533,19 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         if not sm.LayoutAttrHasDefault(d) or not sm.LayoutCsvHas(sm.LayoutAttrScope(d), ekey):
             continue
         end
-        if sm.LayoutAttrDest(d) == sm.LA_HTML:
-            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(d)) + g.nm.sep + ln_quote(sm.LayoutAttrDefault(d)))
+        ddest := sm.LayoutAttrDest(d)
+        dout := sm.LayoutAttrOut(d)
+        ddef := sm.LayoutAttrDefault(d)
+        if ddest == sm.LA_HTML:
+            ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+        else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
+            mut dprop := dout
+            if str.Len(dprop) == 0:
+                dprop = hyphenate(dout)
+            end
+            if str.Len(dprop) > 0:
+                ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(dprop) + g.nm.sep + ln_quote(ddef))
+            end
         end
     end
 end
@@ -543,7 +568,10 @@ func ln_pre_events(g &: LnGen, a &: at.Ast, container: int, ei: int):
                 continue
             end
             vk := at.KindOf(a, an.a)
-            if vk != at.AST_LAMBDA and vk != at.AST_IDENTIFIER and vk != at.AST_MEMBER:
+            # Capture handler forms that can be evaluated as event callbacks.
+            # Lambda/identifier/member are the common forms; calls and other
+            # expression forms are also accepted for parity with web lowering.
+            if vk == at.AST_LAYOUT_BLOCK or vk == at.AST_LAYOUT_ELEMENT or vk == at.AST_LAYOUT_ATTR:
                 continue
             end
             idx := g.lw.slots.Len()
@@ -976,10 +1004,13 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
                 num := ln_dyn_num(v)
                 if num >= 0 and num < g.lw.slots.Len():
                     ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
-                    if at.KindOf(a, g.lw.slots.get(num).expr) == at.AST_LAMBDA:
+                    ek := at.KindOf(a, g.lw.slots.get(num).expr)
+                    if ek == at.AST_LAMBDA:
                         ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
-                    else:
+                    else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
                         ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+                    else:
+                        ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
                     end
                 end
             end

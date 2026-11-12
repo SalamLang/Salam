@@ -87,14 +87,14 @@ pub struct Tree:
         if this.e.free.len() > 0:
             id = this.e.free.pop()
             n := this.e.nodes.ref(id)
-            n.st = style
+            n.st = _own_style(style)
             n.parent = -1
             n.kids.clear()
             n.alive = true
             n.has_measure = false
             _reset(n)
         else:
-            this.e.nodes.push(Node { st = style, alive = true })
+            this.e.nodes.push(Node { st = _own_style(style), alive = true })
             id = this.e.nodes.len() - 1
         end
         _deps(this.e.nodes.ref(id))
@@ -159,7 +159,7 @@ pub struct Tree:
         if not this.Valid(id):
             ret FlowStyle {}
         end
-        ret this.e.nodes.ref(id).st
+        ret _own_style(this.e.nodes.ref(id).st)
     end
 
     @en "SetStyle"
@@ -170,7 +170,9 @@ pub struct Tree:
         end
         n := this.e.nodes.ref(id)
         redir := n.st.direction != style.direction
-        n.st = style
+        owned := _own_style(style)
+        _free_style(n)
+        n.st = owned
         _deps(n)
         if redir:
             _mark_subtree(this.e, id)
@@ -439,6 +441,21 @@ pub struct Tree:
         this.e.layout_calls = 0
         this.e.measure_calls = 0
     end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        repeat this.e.nodes.len() in i:
+            n := this.e.nodes.ref(i)
+            _free_style(n)
+            n.kids.free()
+            n.ck.free()
+            n.cv.free()
+        end
+        this.e.nodes.free()
+        this.e.free.free()
+        this.e.roots.free()
+    end
 end
 
 func _abs_x(t &: Eng, id: int): f64:
@@ -459,6 +476,40 @@ func _abs_y(t &: Eng, id: int): f64:
         cur = t.nodes.ref(cur).parent
     end
     ret s
+end
+
+func _copy_tracks(v: Vector<Track>): Vector<Track>:
+    mut out := Vector {} as Vector<Track>
+    each tr in v:
+        mut c := tr
+        c.tracks = _copy_tracks(tr.tracks)
+        out.push(c)
+    end
+    ret out
+end
+
+func _free_tracks(v &: Vector<Track>):
+    repeat v.len() in i:
+        tr := v.ref(i)
+        _free_tracks(tr.tracks)
+    end
+    v.free()
+end
+
+func _own_style(style: FlowStyle): FlowStyle:
+    mut st := style
+    st.columns = _copy_tracks(style.columns)
+    st.rows = _copy_tracks(style.rows)
+    st.auto_columns.tracks = _copy_tracks(style.auto_columns.tracks)
+    st.auto_rows.tracks = _copy_tracks(style.auto_rows.tracks)
+    ret st
+end
+
+func _free_style(n &: Node):
+    _free_tracks(n.st.columns)
+    _free_tracks(n.st.rows)
+    _free_tracks(n.st.auto_columns.tracks)
+    _free_tracks(n.st.auto_rows.tracks)
 end
 
 func _pct(l: Len): bool:
@@ -555,6 +606,8 @@ func _free_subtree(t &: Eng, id: int):
     n.alive = false
     n.has_measure = false
     n.parent = -1
+    _free_style(n)
+    n.st = FlowStyle {}
     t.free.push(id)
 end
 

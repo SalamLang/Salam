@@ -141,8 +141,8 @@ int main() {
     std::println("{}", larger(Square{3.0}, Square{2.0}).side);
 
     std::vector<std::unique_ptr<Shape>> shapes;
-    shapes.push_back(std::make_unique<Square>(2.0));
-    shapes.push_back(std::make_unique<Rect>(2.0, 3.0));
+    shapes.PushBack(std::make_unique<Square>(2.0));
+    shapes.PushBack(std::make_unique<Rect>(2.0, 3.0));
     double total = 0.0;
     for (const auto& s : shapes) total += s->area();
     std::println("{}", total);

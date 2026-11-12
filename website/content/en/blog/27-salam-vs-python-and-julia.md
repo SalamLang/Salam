@@ -69,7 +69,7 @@ func main:
     mut a := matrix.FromArray(2, 2, cells)
     mut b := matrix.FromArray(2, 1, rhs)
     mut x := matrix.Solve(a, b)
-    if x.is_empty():
+    if x.IsEmpty():
         println "no unique solution"
         ret 1
     end

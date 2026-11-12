@@ -19,7 +19,32 @@ func is_include_attr(n: str): bool:
 end
 
 func is_content_word(n: str): bool:
-    ret str.Equals(n, "content") or str.Equals(n, "children") or str.Equals(n, "محتوا")
+    ret str.Equals(n, "content") or str.Equals(n, "children") or str.Equals(n, "محتوا") or str.Equals(n, "slot") or str.Equals(n, "جایگاه")
+end
+
+func is_slot_placeholder_name(n: str): bool:
+    ret str.Equals(n, "content") or str.Equals(n, "محتوا") or str.Equals(n, "slot") or str.Equals(n, "جایگاه")
+end
+
+func is_default_slot_name(name: str): bool:
+    ret str.Len(name) == 0 or str.Equals(name, "default") or str.Equals(name, "content") or str.Equals(name, "children") or str.Equals(name, "محتوا")
+end
+
+func slot_attr_name(a &: at.Ast, nid: int): str:
+    if nid == 0:
+        ret ""
+    end
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "name") or str.Equals(c.name, "نام") or str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه")):
+            t := node_text(a, c.a)
+            if str.Len(t) > 0:
+                ret t
+            end
+        end
+    end
+    ret ""
 end
 
 func lo_dir_of(path: str): str:
@@ -120,8 +145,72 @@ func frame_free(f &: LoFrame):
     f.names.Free()
     f.vals.Free()
     f.content.Free()
+    repeat f.slot_nodes.Len() in i:
+        mut v := f.slot_nodes.Get(i)
+        v.Free()
+    end
+    f.slot_names.Free()
+    f.slot_nodes.Free()
+    f.slot_provided.Free()
     f.derived.Free()
     f.shadow.Free()
+end
+
+func frame_slot_index(f &: LoFrame, name: str): int:
+    repeat f.slot_names.Len() in i:
+        if str.Equals(f.slot_names.Get(i), name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func frame_ensure_slot(f &: LoFrame, name: str): int:
+    i := frame_slot_index(f, name)
+    if i >= 0:
+        ret i
+    end
+    f.slot_names.Push(name)
+    f.slot_nodes.Push(Vector {} as Vector<int>)
+    f.slot_provided.Push(false)
+    ret f.slot_names.Len() - 1
+end
+
+func frame_mark_slot(f &: LoFrame, name: str):
+    i := frame_ensure_slot(f, name)
+    f.slot_provided.Set(i, true)
+end
+
+func frame_push_slot(f &: LoFrame, name: str, nid: int):
+    i := frame_ensure_slot(f, name)
+    mut v := f.slot_nodes.Get(i)
+    v.Push(nid)
+    f.slot_nodes.Set(i, v)
+    f.slot_provided.Set(i, true)
+end
+
+func frame_slot_items(f &: LoFrame, name: str, out &: Vector<int>): bool:
+    i := frame_slot_index(f, name)
+    if i < 0 or not f.slot_provided.Get(i):
+        ret false
+    end
+    v := f.slot_nodes.Get(i)
+    repeat v.Len() in j:
+        out.Push(v.Get(j))
+    end
+    ret true
+end
+
+func frame_has_any_content(f &: LoFrame): bool:
+    if f.content.Len() > 0:
+        ret true
+    end
+    repeat f.slot_provided.Len() in i:
+        if f.slot_provided.Get(i):
+            ret true
+        end
+    end
+    ret false
 end
 
 func frame_set(f &: LoFrame, name: str, val: int):
@@ -445,7 +534,7 @@ func body_has_content_sink(a &: at.Ast, node: int): bool:
         k := at.KindOf(a, cid)
         if k == at.AST_LAYOUT_ELEMENT:
             c := at.Get(a, cid)
-            if is_content_word(c.name):
+            if is_slot_placeholder_name(c.name):
                 ret true
             end
             if body_has_content_sink(a, cid):
@@ -488,7 +577,8 @@ func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str):
             if p.kind == at.AST_PARAM and is_content_word(p.name):
                 lg.Log(
                     ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                        i18.Tr("component '%s': '%s' is reserved and cannot be a parameter"), co.ArgStr(d.name), co.ArgStr(p.name)
+                        i18.Tr("component '%s': '%s' is reserved and cannot be a parameter"), co.ArgStr(d.name),
+                        co.ArgStr(p.name)
                     )
                 )
                 ex.errors++
@@ -737,7 +827,8 @@ func check_component_arg_type(
     if not ok:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format4(
-                i18.Tr("component '%s' parameter '%s' expects '%s', got %s"), co.ArgStr(comp_name), co.ArgStr(param_name), co.ArgStr(tn.name), co.ArgStr(lit_category_name(cat))
+                i18.Tr("component '%s' parameter '%s' expects '%s', got %s"), co.ArgStr(comp_name),
+                co.ArgStr(param_name), co.ArgStr(tn.name), co.ArgStr(lit_category_name(cat))
             )
         )
         ex.errors++
@@ -745,7 +836,8 @@ func check_component_arg_type(
 end
 
 func expand_component(
-    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, invocation: int, ci: int, caller &: LoFrame, dir: str, depth: int
+    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, invocation: int, ci: int, caller &: LoFrame,
+    dir: str, depth: int
 ):
     comp_name := ex.comp_name.Get(ci)
     if depth > K_LO_MAX_DEPTH:
@@ -772,12 +864,15 @@ func expand_component(
     mut got_content := false
     mut got_content_attr := false
     mut got_content_children := false
+    mut got_named_children := false
     mut ev_names := Vector {} as Vector<str>
     defer ev_names.Free()
     mut ev_fns := Vector {} as Vector<int>
     defer ev_fns.Free()
     mut bound_params := Vector {} as Vector<str>
     defer bound_params.Free()
+    mut named_seen := Vector {} as Vector<str>
+    defer named_seen.Free()
     repeat at.ChildCount(a, invocation) in i2:
         aid := at.Child(a, invocation, i2)
         an := at.Get(a, aid)
@@ -793,7 +888,8 @@ func expand_component(
                 if dup_ev:
                     lg.Log(
                         ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                            i18.Tr("component '%s' receives handler '%s' more than once"), co.ArgStr(comp_name), co.ArgStr(an.name)
+                            i18.Tr("component '%s' receives handler '%s' more than once"), co.ArgStr(comp_name),
+                            co.ArgStr(an.name)
                         )
                     )
                     ex.errors++
@@ -802,24 +898,32 @@ func expand_component(
                     ev_fns.Push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
                 end
             else is_content_word(an.name):
-                if got_content_attr:
-                    lg.Log(
-                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                            i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"), co.ArgStr(comp_name)
+                slot_name := ""
+                if str.Equals(an.name, "slot") or str.Equals(an.name, "جایگاه"):
+                    // slot as attr not supported as text content; treat as default content attr fallback
+                    slot_name = ""
+                end
+                if is_default_slot_name(slot_name):
+                    if got_content_attr:
+                        lg.Log(
+                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                                i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"),
+                                co.ArgStr(comp_name)
+                            )
                         )
-                    )
-                    ex.errors++
-                else:
-                    txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
-                    copy_span(a, txt, aid)
-                    at.SetName(a, txt, "content")
-                    sub := subst_value(a, an.a, caller)
-                    mut tn := at.Get(a, txt)
-                    tn.a = sub
-                    at.Put(a, txt, tn)
-                    fr.content.Push(txt)
-                    got_content = true
-                    got_content_attr = true
+                        ex.errors++
+                    else:
+                        txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
+                        copy_span(a, txt, aid)
+                        at.SetName(a, txt, "content")
+                        sub := subst_value(a, an.a, caller)
+                        mut tn := at.Get(a, txt)
+                        tn.a = sub
+                        at.Put(a, txt, tn)
+                        fr.content.Push(txt)
+                        got_content = true
+                        got_content_attr = true
+                    end
                 end
             else:
                 mut dup_param := false
@@ -831,7 +935,8 @@ func expand_component(
                 if dup_param:
                     lg.Log(
                         ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                            i18.Tr("component '%s' parameter '%s' is provided more than once"), co.ArgStr(comp_name), co.ArgStr(an.name)
+                            i18.Tr("component '%s' parameter '%s' is provided more than once"), co.ArgStr(comp_name),
+                            co.ArgStr(an.name)
                         )
                     )
                     ex.errors++
@@ -841,7 +946,8 @@ func expand_component(
                     if not comp_has_param(a, comp_def, an.name):
                         lg.Log(
                             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                                i18.Tr("component '%s' has no parameter '%s'"), co.ArgStr(comp_name), co.ArgStr(an.name)
+                                i18.Tr("component '%s' has no parameter '%s'"), co.ArgStr(comp_name),
+                                co.ArgStr(an.name)
                             )
                         )
                         ex.errors++
@@ -852,23 +958,83 @@ func expand_component(
                 end
             end
         else an.kind == at.AST_LAYOUT_ELEMENT:
-            before := fr.content.Len()
-            mut cvec := fr.content
-            if is_content_word(an.name):
-                expand_items(ex, a, cvec, aid, caller, dir, depth)
+            if is_slot_placeholder_name(an.name):
+                sname := slot_attr_name(a, aid)
+                if is_default_slot_name(sname):
+                    before := fr.content.Len()
+                    expand_items(ex, a, fr.content, aid, caller, dir, depth)
+                    if fr.content.Len() > before:
+                        got_content = true
+                        got_content_children = true
+                    end
+                else:
+                    mut dup_named := false
+                    repeat named_seen.Len() in ni:
+                        if str.Equals(named_seen.Get(ni), sname):
+                            dup_named = true
+                        end
+                    end
+                    if dup_named:
+                        lg.Log(
+                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                                i18.Tr("component '%s' receives named slot '%s' more than once"),
+                                co.ArgStr(comp_name), co.ArgStr(sname)
+                            )
+                        )
+                        ex.errors++
+                    else:
+                        named_seen.Push(sname)
+                    end
+                    mut svec := Vector {} as Vector<int>
+                    expand_items(ex, a, svec, aid, caller, dir, depth)
+                    if svec.Len() > 0:
+                        i := frame_ensure_slot(fr, sname)
+                        mut cur := fr.slot_nodes.Get(i)
+                        repeat svec.Len() in si:
+                            cur.Push(svec.Get(si))
+                        end
+                        fr.slot_nodes.Set(i, cur)
+                        fr.slot_provided.Set(i, true)
+                        got_content = true
+                        got_named_children = true
+                    else:
+                        frame_mark_slot(fr, sname)
+                    end
+                    svec.Free()
+                end
             else:
-                expand_item(ex, a, cvec, aid, caller, dir, depth)
-            end
-            fr.content = cvec
-            if fr.content.Len() > before:
-                got_content = true
-                got_content_children = true
+                routed_name := slot_attr_name(a, aid)
+                if not is_default_slot_name(routed_name) and (str.Len(routed_name) > 0):
+                    // Child explicitly targets a named slot via slot/name attr.
+                    mut dup_named2 := false
+                    // allow multiple children into same named slot; only provider wrappers are "once"
+                    _dn := dup_named2
+                    mut tmp := Vector {} as Vector<int>
+                    expand_item(ex, a, tmp, aid, caller, dir, depth)
+                    i2s := frame_ensure_slot(fr, routed_name)
+                    mut cur2 := fr.slot_nodes.Get(i2s)
+                    repeat tmp.Len() in ti:
+                        cur2.Push(tmp.Get(ti))
+                    end
+                    fr.slot_nodes.Set(i2s, cur2)
+                    fr.slot_provided.Set(i2s, true)
+                    got_content = true
+                    got_named_children = true
+                    tmp.Free()
+                else:
+                    before := fr.content.Len()
+                    mut cvec := fr.content
+                    expand_item(ex, a, cvec, aid, caller, dir, depth)
+                    fr.content = cvec
+                    if fr.content.Len() > before:
+                        got_content = true
+                        got_content_children = true
+                    end
+                end
             end
         else an.kind == at.AST_IF or an.kind == at.AST_EACH:
             before2 := fr.content.Len()
-            mut cvec2 := fr.content
-            expand_item(ex, a, cvec2, aid, caller, dir, depth)
-            fr.content = cvec2
+            expand_item(ex, a, fr.content, aid, caller, dir, depth)
             if fr.content.Len() > before2:
                 got_content = true
                 got_content_children = true
@@ -878,11 +1044,13 @@ func expand_component(
     if got_content_attr and got_content_children:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"), co.ArgStr(comp_name)
+                i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"),
+                co.ArgStr(comp_name)
             )
         )
         ex.errors++
     end
+    _gnc := got_named_children
     repeat at.ChildCount(a, comp_def) in pi:
         pid := at.Child(a, comp_def, pi)
         p := at.Get(a, pid)
@@ -901,7 +1069,8 @@ func expand_component(
         if not provided:
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                    i18.Tr("component '%s' is missing required parameter '%s'"), co.ArgStr(comp_name), co.ArgStr(p.name)
+                    i18.Tr("component '%s' is missing required parameter '%s'"), co.ArgStr(comp_name),
+                    co.ArgStr(p.name)
                 )
             )
             ex.errors++
@@ -912,10 +1081,11 @@ func expand_component(
     repeat ev_names.Len() in evi:
         lo_bub_push(ev_names.Get(evi), ev_fns.Get(evi))
     end
-    if not ex.comp_mother.Get(ci) and got_content:
+    if not ex.comp_mother.Get(ci) and frame_has_any_content(fr):
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                i18.Tr("component '%s' does not accept content (it has no `content:` placeholder)"), co.ArgStr(comp_name)
+                i18.Tr("component '%s' does not accept content (it has no `content:` placeholder)"),
+                co.ArgStr(comp_name)
             )
         )
         ex.errors++
@@ -926,7 +1096,8 @@ func expand_component(
         if li_has_storage(a, body):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("component '%s' has variables that change, which work only in pages built with 'salam page build' or --ui=native; keep the value in a mutable global instead"), co.ArgStr(comp_name)
+                    i18.Tr("component '%s' has variables that change, which work only in pages built with 'salam page build' or --ui=native; keep the value in a mutable global instead"),
+                    co.ArgStr(comp_name)
                 )
             )
             ex.errors++
@@ -1039,7 +1210,8 @@ func lo_web_state_index(ex &: LoExpand, a &: at.Ast, ci: int, sid: int): int:
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.Get(ci)), co.ArgStr(sd.name)
+                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"),
+                co.ArgStr(ex.comp_name.Get(ci)), co.ArgStr(sd.name)
             )
         )
         ex.errors++
@@ -1115,7 +1287,8 @@ func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.Get(ci)), co.ArgStr(sd.name)
+                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"),
+                co.ArgStr(ex.comp_name.Get(ci)), co.ArgStr(sd.name)
             )
         )
         ex.errors++
@@ -1181,7 +1354,8 @@ func expand_item(
             if not lo_bub_is_page_attr(iid):
                 lg.Log(
                     ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                        i18.Tr("'%s' handles an event that a component sends; write it where the component is used, or at the top of the page block"), co.ArgStr(item.name)
+                        i18.Tr("'%s' handles an event that a component sends; write it where the component is used, or at the top of the page block"),
+                        co.ArgStr(item.name)
                     )
                 )
                 ex.errors++
@@ -1203,14 +1377,37 @@ func expand_item(
             ret
         end
 
-        if fr.present and not fr.page and is_content_word(item.name):
-            if fr.content.Len() > 0:
-                repeat fr.content.Len() in i:
-                    out.Push(at.Clone(a, fr.content.Get(i)))
+        if fr.present and not fr.page and is_slot_placeholder_name(item.name):
+            sname := slot_attr_name(a, iid)
+            if is_default_slot_name(sname):
+                if fr.content.Len() > 0:
+                    repeat fr.content.Len() in i:
+                        out.Push(at.Clone(a, fr.content.Get(i)))
+                    end
+                    ret
                 end
+                mut tmp := Vector {} as Vector<int>
+                if frame_slot_items(fr, "", tmp) or frame_slot_items(fr, "default", tmp):
+                    repeat tmp.Len() in ti:
+                        out.Push(at.Clone(a, tmp.Get(ti)))
+                    end
+                    tmp.Free()
+                    ret
+                end
+                tmp.Free()
             else:
-                expand_items(ex, a, out, iid, fr, dir, depth)
+                mut named := Vector {} as Vector<int>
+                if frame_slot_items(fr, sname, named):
+                    repeat named.Len() in ni:
+                        out.Push(at.Clone(a, named.Get(ni)))
+                    end
+                    named.Free()
+                    ret
+                end
+                named.Free()
+                // Named slot not provided: render fallback content of the placeholder, if any.
             end
+            expand_items(ex, a, out, iid, fr, dir, depth)
             ret
         end
 
@@ -1238,7 +1435,8 @@ func expand_item(
         if not li_known(iid):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("'%s' is declared inside an element, 'if' or 'each'; declare it at the top of the component or the page block"), co.ArgStr(item.name)
+                    i18.Tr("'%s' is declared inside an element, 'if' or 'each'; declare it at the top of the component or the page block"),
+                    co.ArgStr(item.name)
                 )
             )
             ex.errors++

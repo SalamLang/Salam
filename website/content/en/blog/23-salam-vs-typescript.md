@@ -230,7 +230,7 @@ end
 page Cart(user: str, products: Vector<str>):
     title = "Cart of " + user
     heading: size = 1 content = user + "'s cart" end
-    if products.is_empty():
+    if products.IsEmpty():
         paragraph: content = "Your cart is empty" end
     else:
         paragraph: content = "Items: " + products.len() end

@@ -77,6 +77,36 @@ func lo_bub_prog_has(a &: at.Ast, prog: int, name: str): bool:
     ret false
 end
 
+func lo_bub_prog_func(a &: at.Ast, prog: int, name: str): int:
+    if prog == 0 or str.Len(name) == 0:
+        ret 0
+    end
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret did
+        end
+    end
+    ret 0
+end
+
+func lo_bub_handler_stops(a &: at.Ast, h: int): bool:
+    if h == 0:
+        ret false
+    end
+    if at.KindOf(a, h) == at.AST_LAMBDA:
+        ret lo_bub_has(a, h, LO_BUB_STOP, true)
+    end
+    if at.KindOf(a, h) == at.AST_IDENTIFIER:
+        fid := lo_bub_prog_func(a, g_lo_bub_prog, at.Get(a, h).name)
+        if fid != 0 and lo_bub_has(a, at.Get(a, fid).a, LO_BUB_STOP, true):
+            ret true
+        end
+    end
+    ret false
+end
+
 func lo_bub_reset(a &: at.Ast, prog: int):
     g_lo_bub_name.Clear()
     g_lo_bub_fn.Clear()
@@ -361,10 +391,26 @@ func lo_bub_expand(ex &: LoExpand, a &: at.Ast, call: int, out &: Vector<int>):
         h := hs.Get(k)
         ar := lo_bub_arity(a, h)
         arg := ar == 1 ? at.Clone(a, argref) : 0
-        stops := at.KindOf(a, h) == at.AST_LAMBDA and lo_bub_has(a, h, LO_BUB_STOP, true)
+        stops := lo_bub_handler_stops(a, h)
         mut callee := at.Clone(a, h)
-        if stops:
+        if stops and at.KindOf(a, h) == at.AST_LAMBDA:
             callee = lo_bub_stopper(a, callee, rest.Len() > 0)
+        else stops and at.KindOf(a, h) == at.AST_IDENTIFIER:
+            fid := lo_bub_prog_func(a, g_lo_bub_prog, at.Get(a, h).name)
+            if fid != 0:
+                lam := at.NewNode(a, at.AST_LAMBDA)
+                copy_span(a, lam, h)
+                mut params := Vector {} as Vector<int>
+                fn := at.Get(a, fid)
+                repeat fn.list.Len() in pi:
+                    params.Push(at.Clone(a, fn.list.Get(pi)))
+                end
+                mut ln := at.Get(a, lam)
+                ln.list = params
+                ln.a = at.Clone(a, fn.a)
+                at.Put(a, lam, ln)
+                callee = lo_bub_stopper(a, lam, rest.Len() > 0)
+            end
         end
         cl := lo_bub_call(a, callee, arg, call)
         if stops and rest.Len() > 0:

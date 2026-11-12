@@ -27,6 +27,167 @@ func _filter_extent(s: style.Style): f64:
     ret e
 end
 
+func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
+    mut r := [0.0, 0.0, 0.0, 0.0]
+    if not _ink_page(node, r):
+        ret false
+    end
+    b := _e.boxes[node]
+    mut l := r[0]
+    mut t := r[1]
+    mut rr := r[2]
+    mut bt := r[3]
+    if _xf_has(node):
+        _screen_bbox(node, l, t, rr, bt)
+        l--
+        t--
+        rr++
+        bt++
+    else:
+        l = math.Max(l, b.clip_x0 - 1.0)
+        t = math.Max(t, b.clip_y0 - 1.0)
+        rr = math.Min(rr, b.clip_x1 + 1.0)
+        bt = math.Min(bt, b.clip_y1 + 1.0)
+    end
+    s := _e.scale
+    x0 = math.Floor(l * s) as int
+    y0 = math.Floor(t * s) as int
+    x1 = math.Ceil(rr * s) as int
+    y1 = math.Ceil(bt * s) as int
+    ret x1 > x0 and y1 > y0
+end
+
+func _node_key(node: int): i64:
+    mut h := 1469598103934665603 as i64
+    b := _e.boxes[node]
+    h = _hf(_hf(_hf(_hf(h, b.x), b.y), b.w), b.h)
+    h = _hf(_hf(_hf(_hf(h, b.clip_x0), b.clip_y0), b.clip_x1), b.clip_y1)
+    h = _hmix(h, _e.us[node].ihash)
+    c := _e.ctl[node]
+    h = _hmix(h, (c.hovered ? 1 : 0) + (c.focused ? 2 : 0) + (c.pressed ? 4 : 0) + (c.focus_visible ? 8 : 0) + (c.open ? 16 : 0) + (_is_checked(node) ? 32 : 0))
+    h = _hf(_hf(h, c.scroll_x), c.scroll_y)
+    h = _hmix(_hmix(_hmix(h, c.caret as i64), c.anchor as i64), c.selected as i64)
+    h = _hf(_hf(h, c.text_scroll), c.text_scroll_y)
+    if c.has_value:
+        h = _hstr(h, c.value)
+    end
+    h = _hstr(h, c.preedit)
+    nd := _e.dom.nodes[node]
+    repeat nd.names.len() in k:
+        h = _hstr(_hstr(h, nd.names[k]), nd.values[k])
+    end
+    ri := node < _e.node_run.len() ? _e.node_run[node] : -1
+    if ri >= 0:
+        f := _e.runs[ri]
+        h = _hf(_hf(h, f.x), f.y)
+        repeat f.spans.len() in k:
+            h = _hstr(h, f.spans[k].text)
+            el := f.span_el[k]
+            if el >= 0 and el < _e.ctl.len():
+                h = _hmix(h, _e.ctl[el].hovered ? 3 : 5)
+            end
+        end
+    end
+    if node == _e.popup:
+        h = _hmix(h, 77)
+    end
+    ret _xf_hash(node, h)
+end
+
+func _damage_rect(x0: int, y0: int, x1: int, y1: int):
+    cw := math.Ceil(_e.width * _e.scale) as int
+    ch := math.Ceil(_e.height * _e.scale) as int
+    ax := math.MaxI(0, x0)
+    ay := math.MaxI(0, y0)
+    bx := math.MinI(cw, x1)
+    by1 := math.MinI(ch, y1)
+    if bx > ax and by1 > ay:
+        _e.damage.Add(paint.IntRect { x = ax, y = ay, width = bx - ax, height = by1 - ay })
+    end
+end
+
+func _damage_hits(x0: int, y0: int, x1: int, y1: int): bool:
+    repeat _e.damage.Count() in i:
+        r := _e.damage.At(i)
+        if r.x < x1 and r.x + r.width > x0 and r.y < y1 and r.y + r.height > y0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _diff_records():
+    mut old := HashMap {} as HashMap<int, int>
+    defer old.free()
+    repeat _e.recs.len() in i:
+        old.put(_e.recs[i].uid, i)
+    end
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    repeat _e.recs.len():
+        seen.push(false)
+    end
+    mut nrecs := Vector {} as Vector<_Rec>
+    cw := math.Ceil(_e.width * _e.scale) as int
+    ch := math.Ceil(_e.height * _e.scale) as int
+    repeat _e.dom.nodes.len() in node:
+        mut x0 := 0
+        mut y0 := 0
+        mut x1 := 0
+        mut y1 := 0
+        if not _ink(node, x0, y0, x1, y1):
+            continue
+        end
+        uid := _e.ctl[node].uid
+        if x1 <= 0 or y1 <= 0 or x0 >= cw or y0 >= ch:
+            mut was_off := true
+            if old.has(uid):
+                oi := old.get(uid)
+                o := _e.recs[oi]
+                was_off = o.x1 <= 0 or o.y1 <= 0 or o.x0 >= cw or o.y0 >= ch
+                if was_off:
+                    seen[oi] = true
+                end
+            end
+            if was_off:
+                nrecs.push(_Rec { uid = uid, hash = 0, x0 = x0, y0 = y0, x1 = x1, y1 = y1 })
+                continue
+            end
+        end
+        key := _node_key(node)
+        nrecs.push(_Rec { uid = uid, hash = key, x0 = x0, y0 = y0, x1 = x1, y1 = y1 })
+        if old.has(uid):
+            oi := old.get(uid)
+            seen[oi] = true
+            o := _e.recs[oi]
+            if o.hash != key or o.x0 != x0 or o.y0 != y0 or o.x1 != x1 or o.y1 != y1:
+                _damage_rect(o.x0, o.y0, o.x1, o.y1)
+                _damage_rect(x0, y0, x1, y1)
+            end
+        else:
+            _damage_rect(x0, y0, x1, y1)
+        end
+    end
+    repeat _e.recs.len() in i:
+        if not seen[i]:
+            o := _e.recs[i]
+            _damage_rect(o.x0, o.y0, o.x1, o.y1)
+        end
+    end
+    _e.recs.free()
+    _e.recs = nrecs
+end
+
+func _damage_node(node: int):
+    mut x0 := 0
+    mut y0 := 0
+    mut x1 := 0
+    mut y1 := 0
+    if _ink(node, x0, y0, x1, y1):
+        _damage_rect(x0, y0, x1, y1)
+    end
+end
+
 func _ink_page(node: int, r: f64[]): bool:
     b := _e.boxes[node]
     if not b.shown:

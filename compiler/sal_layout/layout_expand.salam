@@ -34,8 +34,14 @@ func slot_attr_name(a &: at.Ast, nid: int): str:
     if nid == 0:
         ret ""
     end
-    // Prefer explicit slot-routing attrs (`slot`/`جایگاه`), then provider name (`name`/`نام`).
-    // Provider attrs must be simple literal/text values; dynamic names are treated as unknown at expansion time.
+    // Prefer explicit slot-routing attrs (`slot`/`جایگاه`), then provider/placeholder name (`name`/`نام`).
+    // `name` is only treated as slot metadata for slot placeholder/provider nodes; regular elements must
+    // route via `slot`/`جایگاه` to avoid leaking/conflicting with HTML `name` attributes.
+    // Provider/routing attrs must be simple literal/text values; dynamic names are treated as unknown at expansion time.
+    is_placeholder := false
+    if at.KindOf(a, nid) == at.AST_LAYOUT_ELEMENT:
+        is_placeholder = is_slot_placeholder_name(at.Get(a, nid).name)
+    end
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
         c := at.Get(a, cid)
@@ -45,6 +51,9 @@ func slot_attr_name(a &: at.Ast, nid: int): str:
                 ret t
             end
         end
+    end
+    if not is_placeholder:
+        ret ""
     end
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
@@ -61,8 +70,9 @@ end
 
 func slot_strip_routing_attrs(a &: at.Ast, nid: int): int:
     // Clone an element/slot node while removing slot-routing metadata attrs so
-    // routing hints (`slot`, `name`, Persian equivalents) do not leak into output.
-    // Applies to regular elements and slot-provider wrappers when they are forwarded as content.
+    // routing hints do not leak into generated output.
+    // Regular content elements: strip only `slot`/`جایگاه` (preserve HTML `name`).
+    // Slot placeholder/provider wrappers: strip routing/provider metadata attrs.
     if nid == 0:
         ret 0
     end
@@ -70,12 +80,18 @@ func slot_strip_routing_attrs(a &: at.Ast, nid: int): int:
     if at.KindOf(a, nid) != at.AST_LAYOUT_ELEMENT:
         ret cp
     end
+    is_placeholder := is_slot_placeholder_name(at.Get(a, nid).name)
     mut kept := Vector {} as Vector<int>
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
         c := at.Get(a, cid)
-        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه") or str.Equals(c.name, "name") or str.Equals(c.name, "نام")):
-            continue
+        if c.kind == at.AST_LAYOUT_ATTR:
+            if str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه"):
+                continue
+            end
+            if is_placeholder and (str.Equals(c.name, "name") or str.Equals(c.name, "نام")):
+                continue
+            end
         end
         kept.Push(at.Clone(a, cid))
     end
@@ -1079,9 +1095,33 @@ func expand_component(
                 end
                 svec.Free()
             else:
-                routed_name := slot_attr_name(a, aid)
+                // Only explicit `slot`/`جایگاه` attrs route regular elements to named slots.
+                // `name`/`نام` on non-placeholder elements is preserved as a normal HTML attr.
+                routed_name := ""
+                mut routed_dynamic := false
+                repeat at.ChildCount(a, aid) in ri:
+                    rcid := at.Child(a, aid, ri)
+                    rc := at.Get(a, rcid)
+                    if rc.kind == at.AST_LAYOUT_ATTR and (str.Equals(rc.name, "slot") or str.Equals(rc.name, "جایگاه")):
+                        t := node_text(a, rc.a)
+                        if str.Len(t) > 0:
+                            routed_name = t
+                        else:
+                            routed_dynamic = true
+                        end
+                    end
+                end
+                if routed_dynamic and str.Len(routed_name) == 0:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                            i18.Tr("component '%s': slot routing attribute must be a fixed text value"),
+                            co.ArgStr(comp_name)
+                        )
+                    )
+                    ex.errors++
+                end
                 if not is_default_slot_name(routed_name) and (str.Len(routed_name) > 0):
-                    // Child explicitly targets a named slot via slot/name attr.
+                    // Child explicitly targets a named slot via slot attr.
                     // Multiple children may contribute to the same named slot.
                     mut tmp := Vector {} as Vector<int>
                     mut cvec2 := Vector {} as Vector<int>

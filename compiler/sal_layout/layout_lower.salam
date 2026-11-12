@@ -110,6 +110,12 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
         if str.Equals(name, "title") or str.Equals(name, "content"):
             ret SL_TEXT
         end
+        if str.Equals(name, "lang") or str.Equals(name, "dir"):
+            ret SL_ATTR
+        end
+        if str.Equals(name, "favicon"):
+            ret SL_URL
+        end
         ret SL_ATTR
     end
     if sm.LayoutPseudoPrefixLen(name) > 0:
@@ -158,10 +164,13 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
         ret SL_ATTR
     end
     if dest == sm.LA_CSS or dest == sm.LA_HTML_OR_CSS:
+        if vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL:
+            ret SL_CSSURL
+        end
         ret SL_CSS
     end
     if dest == sm.LA_STYLE:
-        ret SL_ATTR
+        ret SL_CSS
     end
     if dest == sm.LA_HTML or dest == sm.LA_META:
         if vt == sm.VT_BOOL:
@@ -233,12 +242,27 @@ func lo_is_mut_global(lw &: LoLower, a &: at.Ast, name: str): bool:
 end
 
 func lo_list_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int, vid: int):
+    an := at.Get(a, attr).name
+    k := lo_slot_kind(el, ei, an)
     dyn := lo_list_runtime(lw, a, vid)
     if dyn != 0:
-        an := at.Get(a, attr).name
-        k := lo_slot_kind(el, ei, an)
         if k == SL_BAD or k == SL_BOOL or k == SL_IF or k == SL_EACH:
-            k = SL_ATTR
+            mut key := sm.LayoutAttrKey(an)
+            if str.Len(key) == 0:
+                key = an
+            end
+            ai := sm.LayoutAttrFor(ei, key)
+            if ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_CONTENT:
+                ek := ei >= 0 ? sm.LayoutElemKind(ei) : sm.LK_NORMAL
+                eg := ei >= 0 ? sm.LayoutElemGenerator(ei) : ""
+                if ek != sm.LK_RAW and not str.Equals(eg, "style") and not str.Equals(eg, "script"):
+                    k = SL_TEXT
+                else:
+                    k = SL_ATTR
+                end
+            else:
+                k = SL_ATTR
+            end
         end
         mark := lo_add_slot(lw, a, vid, LoSlot { kind = k, expr = vid })
         mut n1 := at.Get(a, attr)
@@ -246,7 +270,18 @@ func lo_list_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int, vid:
         at.Put(a, attr, n1)
         ret
     end
-    text := sm.LayoutListText(a, lw.prog, vid, at.Get(a, attr).name)
+    mut lit_name := an
+    if el != 0 and ei >= 0:
+        mut key := sm.LayoutAttrKey(an)
+        if str.Len(key) == 0:
+            key = an
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_CLASS:
+            lit_name = "class"
+        end
+    end
+    text := sm.LayoutListText(a, lw.prog, vid, lit_name)
     if str.Len(text) == 0:
         ret
     end

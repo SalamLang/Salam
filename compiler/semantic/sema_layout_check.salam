@@ -834,6 +834,27 @@ func lay_is_component(ck: LayCheck, name: str): bool:
     ret false
 end
 
+func lay_handler_prefix_len(name: str): int:
+    if str.StartsWith(name, "on ") and str.Len(name) > 3:
+        ret 3
+    end
+    fa := "هنگام"
+    n := str.Len(fa)
+    if str.StartsWith(name, fa) and str.Len(name) > n + 1:
+        if byte_at(name, n) == 32:
+            ret n + 1
+        end
+        if str.Len(name) > n + 3 and byte_at(name, n) == 226 and byte_at(name, n + 1) == 128 and byte_at(name, n + 2) == 140:
+            ret n + 3
+        end
+    end
+    ret 0
+end
+
+func lay_is_handler(name: str): bool:
+    ret lay_handler_prefix_len(name) > 0
+end
+
 func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     mut sib := Vector {} as Vector<int>
     defer sib.Free()
@@ -953,10 +974,19 @@ func lay_comp_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         if str.Len(n.name) == 0:
             serr(s, 18, span_of(a, nid), i18.Tr("'each' is missing the item variable name"))
         end
-    else n.kind == at.AST_IF and n.a == 0:
+        if n.b == 0:
+            serr(s, 18, span_of(a, nid), i18.Tr("'each' has no body"))
+        else:
+            lay_comp_check_items(s, a, n.b, ck)
+        end
+        ret
+    end
+    if n.kind == at.AST_IF and n.a == 0:
         serr(s, 18, span_of(a, nid), i18.Tr("'if' is missing its condition"))
     end
-    lay_comp_check_items(s, a, n.b, ck)
+    if n.b != 0:
+        lay_comp_check_items(s, a, n.b, ck)
+    end
     if n.kind == at.AST_IF and n.c != 0:
         if at.KindOf(a, n.c) == at.AST_IF:
             lay_comp_check_control(s, a, n.c, ck)
@@ -977,12 +1007,28 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             lay_comp_check_control(s, a, cid, ck)
             continue
         end
+        if k == at.AST_LAYOUT_ATTR:
+            name := at.Get(a, cid).name
+            if lay_is_handler(name):
+                if str.Len(str.Trim(str.Substr(name, lay_handler_prefix_len(name), str.Len(name) - lay_handler_prefix_len(name)))) == 0:
+                    serr(s, 18, span_of(a, cid), i18.Tr("event handler name is missing the event"))
+                end
+            end
+            continue
+        end
         if k != at.AST_LAYOUT_ELEMENT:
             continue
         end
         cn := at.Get(a, cid)
         slot := str.Equals(cn.name, "content") or str.Equals(cn.name, "محتوا")
-        if not slot and not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
+        if slot:
+            if at.ChildCount(a, cid) == 0:
+                // empty slot placeholder is fine
+            end
+            lay_comp_check_items(s, a, cid, ck)
+            continue
+        end
+        if not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
             if ck.unexpanded:
                 swarn(
                     s, 2, span_of(a, cid), co.Format1(
@@ -991,6 +1037,17 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
                 )
             else:
                 lay_report_unknown(s, a, cid, cn.name)
+            end
+        end
+        repeat at.ChildCount(a, cid) in j:
+            aid := at.Child(a, cid, j)
+            if at.KindOf(a, aid) == at.AST_LAYOUT_ATTR:
+                aname := at.Get(a, aid).name
+                if lay_is_handler(aname):
+                    if str.Len(str.Trim(str.Substr(aname, lay_handler_prefix_len(aname), str.Len(aname) - lay_handler_prefix_len(aname)))) == 0:
+                        serr(s, 18, span_of(a, aid), i18.Tr("event handler name is missing the event"))
+                    end
+                end
             end
         end
         lay_comp_check_items(s, a, cid, ck)

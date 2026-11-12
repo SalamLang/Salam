@@ -1,0 +1,417 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import term
+import testing
+import tui
+
+struct Probe:
+    pub use tui.BaseWidget
+end
+
+struct Keyed:
+    pub use tui.BaseWidget
+
+    pub func handle_event(event: tui.Event): bool:
+        ret event.is_char("k")
+    end
+end
+
+struct FixedSizer:
+    pub use tui.BaseWidget
+
+    pub w: int = 0
+    pub h: int = 0
+    pub expect: int = -1
+
+    pub func preferred_size(max_width: int): tui.Rect:
+        if this.expect >= 0:
+            testing.AssertEqInt(max_width, this.expect)
+        end
+        ret tui.Rect { width = this.w, height = this.h }
+    end
+end
+
+struct CountingField:
+    pub use tui.BaseWidget
+    pub seen: int* = null
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        _ := event
+        this.seen[0]++
+        ret false
+    end
+end
+
+func test_single_frame_painted():
+    mut b := tui.NewBuffer(8, 3)
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "┌──────┐")
+    testing.AssertEqStr(b.row_text(1), "│      │")
+    testing.AssertEqStr(b.row_text(2), "└──────┘")
+    b.free()
+end
+
+func test_double_and_rounded_glyphs():
+    mut d := tui.NewBuffer(4, 3)
+    mut dp := tui.Panel { border = tui.BorderStyle.Double }
+    dp.add(Probe {})
+    dr := tui.Rect { x = 0, y = 0, width = 4, height = 3 }
+    dp.set_bounds(dr)
+    dp.render(d, dr)
+    testing.AssertEqStr(d.row_text(0), "╔══╗")
+    testing.AssertEqStr(d.row_text(2), "╚══╝")
+    d.free()
+
+    mut rb := tui.NewBuffer(4, 3)
+    mut rp := tui.Panel { border = tui.BorderStyle.Rounded }
+    rp.add(Probe {})
+    rp.set_bounds(dr)
+    rp.render(rb, dr)
+    testing.AssertEqStr(rb.row_text(0), "╭──╮")
+    testing.AssertEqStr(rb.row_text(2), "╰──╯")
+    rb.free()
+end
+
+func test_title_present():
+    mut b := tui.NewBuffer(10, 2)
+    mut p := tui.Panel { border = tui.BorderStyle.Single, title = "Files" }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 10, height = 2 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "┌─ Files ┐")
+    b.free()
+end
+
+func test_title_blank_is_absent():
+    mut b := tui.NewBuffer(10, 2)
+    mut p := tui.Panel { border = tui.BorderStyle.Single, title = "   " }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 10, height = 2 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "┌────────┐")
+    b.free()
+end
+
+func test_title_truncated():
+    mut b := tui.NewBuffer(10, 2)
+    mut p := tui.Panel { border = tui.BorderStyle.Single, title = "Playback" }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 10, height = 2 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "┌─ Playb ┐")
+    b.free()
+end
+
+func test_none_pass_through():
+    mut b := tui.NewBuffer(8, 3)
+    b.fill(tui.Rect { x = 0, y = 0, width = 8, height = 3 }, "x", tui.StyleDefault)
+    mut p := tui.Panel { title = "Files" }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "xxxxxxxx")
+    testing.AssertEqStr(b.row_text(2), "xxxxxxxx")
+    child := p.slot.get(0).child.bounds()
+    testing.AssertEqInt(child.x, 0)
+    testing.AssertEqInt(child.y, 0)
+    testing.AssertEqInt(child.width, 8)
+    testing.AssertEqInt(child.height, 3)
+    b.free()
+end
+
+func test_child_inset_by_single():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(Probe {})
+    p.set_bounds(tui.Rect { x = 2, y = 1, width = 10, height = 6 })
+    child := p.slot.get(0).child.bounds()
+    testing.AssertEqInt(child.x, 3)
+    testing.AssertEqInt(child.y, 2)
+    testing.AssertEqInt(child.width, 8)
+    testing.AssertEqInt(child.height, 4)
+end
+
+func test_resize_reinsets():
+    mut p := tui.Panel { border = tui.BorderStyle.Double }
+    p.add(Probe {})
+    p.set_bounds(tui.Rect { x = 0, y = 0, width = 10, height = 6 })
+    p.set_bounds(tui.Rect { x = 0, y = 0, width = 20, height = 10 })
+    child := p.slot.get(0).child.bounds()
+    testing.AssertEqInt(child.width, 18)
+    testing.AssertEqInt(child.height, 8)
+end
+
+func test_degenerate_one_row_is_rule():
+    mut b := tui.NewBuffer(10, 1)
+    mut p := tui.Panel { border = tui.BorderStyle.Single, title = "Files" }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 10, height = 1 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "──────────")
+    b.free()
+end
+
+func test_border_style_fg_only():
+    mut b := tui.NewBuffer(8, 3)
+    style := tui.Style { fg = tui.Color.Ansi(2), bold = true, underline = true }
+    mut p := tui.Panel { border = tui.BorderStyle.Single, border_style = style, title = "Files" }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    want := tui.Style { fg = tui.Color.Ansi(2) }
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, want))
+    testing.AssertTrue(tui.StyleEq(b.get(3, 0).style, want))
+    testing.AssertTrue(tui.StyleEq(b.get(7, 2).style, want))
+    b.free()
+end
+
+func test_add_replaces_child():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(Probe {})
+    p.add(Probe {})
+    testing.AssertEqInt(p.slot.len(), 1)
+end
+
+func test_column_child_positioned_inside_frame():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(tui.Column {})
+    p.set_bounds(tui.Rect { x = 0, y = 0, width = 12, height = 5 })
+    child := p.slot.get(0).child.bounds()
+    testing.AssertEqInt(child.x, 1)
+    testing.AssertEqInt(child.y, 1)
+    testing.AssertEqInt(child.width, 10)
+    testing.AssertEqInt(child.height, 3)
+end
+
+func test_preferred_size_adds_frame():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(FixedSizer { w = 4, h = 2 })
+    r := p.preferred_size(80)
+    testing.AssertEqInt(r.x, 0)
+    testing.AssertEqInt(r.y, 0)
+    testing.AssertEqInt(r.width, 6)
+    testing.AssertEqInt(r.height, 4)
+end
+
+func test_preferred_size_measures_container_child():
+    mut col := tui.Column {}
+    _ := col.add(FixedSizer { w = 4, h = 2 })
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(col)
+    r := p.preferred_size(80)
+    testing.AssertEqInt(r.width, 6)
+    testing.AssertEqInt(r.height, 4)
+end
+
+func test_preferred_size_fits_requested_width():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(FixedSizer { w = 4, h = 2, expect = 4 })
+    r := p.preferred_size(6)
+    testing.AssertEqInt(r.width, 6)
+    testing.AssertEqInt(r.height, 4)
+end
+
+func test_preferred_size_floors_forwarded_width():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(FixedSizer { w = 4, h = 2, expect = 1 })
+    r := p.preferred_size(2)
+    testing.AssertEqInt(r.width, 6)
+    testing.AssertEqInt(r.height, 4)
+end
+
+func test_preferred_size_forwards_unbounded():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(FixedSizer { w = 4, h = 2, expect = 0 })
+    r := p.preferred_size(0)
+    testing.AssertEqInt(r.width, 6)
+    testing.AssertEqInt(r.height, 4)
+end
+
+func test_preferred_size_keeps_axis_sentinel():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(FixedSizer { w = -1, h = 1 })
+    r := p.preferred_size(80)
+    testing.AssertEqInt(r.width, -1)
+    testing.AssertEqInt(r.height, 3)
+end
+
+func test_preferred_size_unmeasurable_child():
+    mut p := tui.Panel { border = tui.BorderStyle.Single }
+    p.add(FixedSizer { w = -1, h = -1 })
+    r := p.preferred_size(80)
+    testing.AssertEqInt(r.width, -1)
+    testing.AssertEqInt(r.height, -1)
+end
+
+func test_preferred_size_none_is_identity():
+    mut p := tui.Panel {}
+    p.add(FixedSizer { w = 4, h = 2, expect = 80 })
+    r := p.preferred_size(80)
+    testing.AssertEqInt(r.width, 4)
+    testing.AssertEqInt(r.height, 2)
+end
+
+func test_preferred_size_empty_slot():
+    p := tui.Panel { border = tui.BorderStyle.Single }
+    r := p.preferred_size(80)
+    testing.AssertEqInt(r.width, -1)
+    testing.AssertEqInt(r.height, -1)
+end
+
+func test_focusable_only_when_opted_in():
+    mut off := tui.Panel {}
+    testing.AssertFalse(off.focusable())
+    mut focusable_on := tui.Panel { takes_focus = true }
+    testing.AssertTrue(focusable_on.focusable())
+end
+
+func test_focus_forwards_keys_to_child():
+    mut p := tui.Panel { takes_focus = true }
+    p.add(Keyed {})
+    testing.AssertTrue(p.handle_event(tui.Event { kind = tui.KeyEvent, key = term.Decode("k") }))
+    testing.AssertFalse(p.handle_event(tui.Event { kind = tui.KeyEvent, key = term.Decode("x") }))
+end
+
+func test_focused_frame_uses_focus_style():
+    mut b := tui.NewBuffer(8, 3)
+    b.focused = true
+    mut p := tui.Panel { border = tui.BorderStyle.Single, border_style = tui.Style { fg = tui.Color.Ansi(4) }, focus_style = tui.Style { fg = tui.Color.Ansi(3) } }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { fg = tui.Color.Ansi(3) }))
+    b.free()
+end
+
+func test_unfocused_frame_uses_border_style():
+    mut b := tui.NewBuffer(8, 3)
+    mut p := tui.Panel { border = tui.BorderStyle.Single, border_style = tui.Style { fg = tui.Color.Ansi(4) }, focus_style = tui.Style { fg = tui.Color.Ansi(3) } }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { fg = tui.Color.Ansi(4) }))
+    b.free()
+end
+
+func test_default_focus_style_keeps_border_style():
+    mut b := tui.NewBuffer(8, 3)
+    b.focused = true
+    mut p := tui.Panel { border = tui.BorderStyle.Single, border_style = tui.Style { fg = tui.Color.Ansi(4) } }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.Style { fg = tui.Color.Ansi(4) }))
+    b.free()
+end
+
+func test_nested_rings_are_adjacent():
+    mut b := tui.NewBuffer(8, 5)
+    mut outer := tui.Panel { border = tui.BorderStyle.Single }
+    mut inner := tui.Panel { border = tui.BorderStyle.Double }
+    inner.add(Probe {})
+    outer.add(inner)
+    r := tui.Rect { x = 0, y = 0, width = 8, height = 5 }
+    outer.set_bounds(r)
+    outer.render(b, r)
+    inner.render(b, tui.Rect { x = 1, y = 1, width = 6, height = 3 })
+    testing.AssertEqStr(b.row_text(0), "┌──────┐")
+    testing.AssertEqStr(b.row_text(1), "│╔════╗│")
+    testing.AssertEqStr(b.row_text(2), "│║    ║│")
+    testing.AssertEqStr(b.row_text(3), "│╚════╝│")
+    testing.AssertEqStr(b.row_text(4), "└──────┘")
+    b.free()
+end
+
+func test_ascii_policy_frames_panel():
+    mut b := tui.NewBuffer(4, 3)
+    b.glyphs = tui.GlyphPolicy.ASCII
+    mut p := tui.Panel { border = tui.BorderStyle.Rounded }
+    p.add(Probe {})
+    r := tui.Rect { x = 0, y = 0, width = 4, height = 3 }
+    p.set_bounds(r)
+    p.render(b, r)
+    testing.AssertEqStr(b.row_text(0), "+--+")
+    testing.AssertEqStr(b.row_text(2), "+--+")
+    b.free()
+end
+
+func test_bubbled_event_is_not_forwarded_again():
+    seen := mem.AllocateZeroed(8 as u64) as int*
+    defer mem.Free(seen as void*)
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 5)
+    defer s.close()
+    mut p := tui.Panel { border = tui.BorderStyle.Single, takes_focus = true }
+    c := CountingField { seen = seen } as dyn tui.Widget
+    p.add(c)
+    pid := s.add(tui.RootId, p)
+    cid := s.add(pid, c)
+    s.widget(pid).set_bounds(tui.Rect { x = 0, y = 0, width = 10, height = 4 })
+    testing.AssertTrue(s.focus(cid))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.KeyEvent, key = term.Decode("z") }))
+    testing.AssertEqInt(seen[0], 1)
+    testing.AssertTrue(s.focus(pid))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.KeyEvent, key = term.Decode("z") }))
+    testing.AssertEqInt(seen[0], 2)
+end
+
+func main:
+    test_focusable_only_when_opted_in()
+    test_focus_forwards_keys_to_child()
+    test_focused_frame_uses_focus_style()
+    test_unfocused_frame_uses_border_style()
+    test_default_focus_style_keeps_border_style()
+    test_single_frame_painted()
+    test_double_and_rounded_glyphs()
+    test_title_present()
+    test_title_blank_is_absent()
+    test_title_truncated()
+    test_none_pass_through()
+    test_child_inset_by_single()
+    test_resize_reinsets()
+    test_degenerate_one_row_is_rule()
+    test_border_style_fg_only()
+    test_add_replaces_child()
+    test_column_child_positioned_inside_frame()
+    test_preferred_size_adds_frame()
+    test_preferred_size_measures_container_child()
+    test_preferred_size_fits_requested_width()
+    test_preferred_size_floors_forwarded_width()
+    test_preferred_size_forwards_unbounded()
+    test_preferred_size_keeps_axis_sentinel()
+    test_preferred_size_unmeasurable_child()
+    test_preferred_size_none_is_identity()
+    test_preferred_size_empty_slot()
+    test_nested_rings_are_adjacent()
+    test_ascii_policy_frames_panel()
+    test_bubbled_event_is_not_forwarded_again()
+    ret testing.Summary()
+end

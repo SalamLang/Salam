@@ -1,0 +1,701 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tui
+
+import str
+import term
+
+struct _CellAlign:
+    pub row: int = 0
+    pub col: int = 0
+    pub align: Alignment = Alignment.Left
+end
+
+@en "CellOverflow"
+@fa "سرریز‌سلول"
+pub enum CellOverflow:
+    @en "Clip"
+    @fa "برش"
+    Clip
+    @en "Ellipsis"
+    @fa "سه‌نقطه"
+    Ellipsis
+end
+
+@en "TableColumn"
+@fa "ستون‌جدول"
+pub struct TableColumn:
+    @en "width"
+    @fa "عرض"
+    pub width: LayoutSize = LayoutSize {}
+
+    @en "min"
+    @fa "کمینه"
+    pub min: int = 0
+
+    @en "max"
+    @fa "بیشینه"
+    pub max: int = -1
+
+    @en "align"
+    @fa "تراز"
+    pub align: Alignment = Alignment.Left
+
+    @en "overflow"
+    @fa "سرریز"
+    pub overflow: CellOverflow = CellOverflow.Clip
+end
+
+@en "Table"
+@fa "جدول"
+pub struct Table:
+    @en "BaseWidget"
+    @fa "ویجت پایه"
+    pub use BaseWidget
+
+    @en "columns"
+    @fa "ستون‌ها"
+    pub columns: Vector<TableColumn> = Vector {}
+
+    @en "rows"
+    @fa "ردیف‌ها"
+    pub rows: Vector<Vector<str>> = Vector {}
+
+    @en "header"
+    @fa "سرآیند"
+    pub header: bool = false
+
+    @en "rule"
+    @fa "خط‌کشی"
+    pub rule: bool = true
+
+    @en "pad_x"
+    @fa "فاصله درونی افقی"
+    pub pad_x: int = 1
+
+    @en "style"
+    @fa "ظاهر"
+    pub style: Style = StyleDefault
+
+    @en "header_style"
+    @fa "ظاهر سرآیند"
+    pub header_style: Style = Style { bold = true }
+
+    cell_aligns: Vector<_CellAlign> = Vector {}
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    pub func focusable(): bool:
+        ret false
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    pub func hits(): bool:
+        ret false
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    pub func handle_event(event: Event): bool:
+        _ := event
+        ret false
+    end
+
+    @en "add_column"
+    @fa "افزودن ستون"
+    pub func add_column(col: TableColumn): int:
+        this.columns.push(col)
+        ret this.columns.len() - 1
+    end
+
+    @en "add_row"
+    @fa "افزودن ردیف"
+    pub func add_row(cells: Vector<str>): int:
+        this.rows.push(cells)
+        ret this.rows.len() - 1
+    end
+
+    @en "set_column_width"
+    @fa "تنظیم عرض ستون"
+    pub func set_column_width(i: int, w: LayoutSize):
+        if i < 0 or i >= this.columns.len():
+            ret
+        end
+        mut col := this.columns.get(i)
+        col.width = w
+        this.columns.set(i, col)
+    end
+
+    @en "set_column_align"
+    @fa "تنظیم تراز ستون"
+    pub func set_column_align(i: int, a: Alignment):
+        if i < 0 or i >= this.columns.len():
+            ret
+        end
+        mut col := this.columns.get(i)
+        col.align = a
+        this.columns.set(i, col)
+    end
+
+    @en "set_column_overflow"
+    @fa "تنظیم سرریز ستون"
+    pub func set_column_overflow(i: int, o: CellOverflow):
+        if i < 0 or i >= this.columns.len():
+            ret
+        end
+        mut col := this.columns.get(i)
+        col.overflow = o
+        this.columns.set(i, col)
+    end
+
+    @en "set_cell_align"
+    @fa "تنظیم تراز سلول"
+    pub func set_cell_align(row: int, col: int, a: Alignment):
+        repeat this.cell_aligns.len() in k:
+            mut o := this.cell_aligns.get(k)
+            if o.row == row and o.col == col:
+                o.align = a
+                this.cell_aligns.set(k, o)
+                ret
+            end
+        end
+        this.cell_aligns.push(_CellAlign { row = row, col = col, align = a })
+    end
+
+    @en "set_pad_x"
+    @fa "تنظیم فاصله درونی افقی"
+    pub func set_pad_x(n: int):
+        this.pad_x = n
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    pub func preferred_size(max_width: int): Rect:
+        if this.columns.len() == 0:
+            ret Rect { width = 0, height = 0 }
+        end
+        ws := this._resolve_widths(-1)
+        mut total := 0
+        repeat ws.len() in i:
+            total += ws.get(i)
+        end
+        if max_width > 0 and total > max_width:
+            total = max_width
+        end
+        ret Rect { width = total, height = this._height() }
+    end
+
+    @en "measure"
+    @fa "اندازه‌گیری"
+    pub func measure(axis: Axis, max_width: int): Measure:
+        size := this.preferred_size(max_width)
+        if axis == Axis.X:
+            ret Measure { ok = true, extent = size.width }
+        end
+        ret Measure { ok = true, extent = size.height }
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    pub func render(buf: Buffer, bounds: Rect):
+        if bounds.is_empty() or this.columns.len() == 0 or this.rows.len() == 0:
+            ret
+        end
+        ws := this._resolve_widths(bounds.width)
+        body := this.style
+        head := this.header_style
+        mut y := 0
+        mut first := 0
+        if this.header:
+            if y < bounds.height:
+                this._paint_row(buf, bounds, ws, 0, y, head)
+            end
+            y++
+            first = 1
+        end
+        if this.header and this.rule:
+            if y < bounds.height:
+                this._paint_rule(buf, bounds, ws, y, body)
+            end
+            y++
+        end
+        repeat this.rows.len() - first in k:
+            if y < bounds.height:
+                this._paint_row(buf, bounds, ws, first + k, y, body)
+            end
+            y++
+        end
+    end
+
+    @en "_resolve_widths"
+    @fa "محاسبه عرض‌ها"
+    pub func _resolve_widths(w: int): Vector<int>:
+        n := this.columns.len()
+        pad := this._pad()
+        mut out := Vector {} as Vector<int>
+        repeat n in i:
+            col := this.columns.get(i)
+            mut v := 0
+            if col.width.kind == SizeKind.Fixed:
+                v = col.width.cells
+                if v < 0:
+                    v = 0
+                end
+            else col.width.kind == SizeKind.Pref:
+                v = this._natural(i) + 2 * pad
+                mut lo := col.min
+                if lo < 0:
+                    lo = 0
+                end
+                if col.max >= 0 and v > col.max:
+                    v = col.max
+                end
+                if v < lo:
+                    v = lo
+                end
+            end
+            out.push(v)
+        end
+        if w < 0:
+            ret out
+        end
+        mut used := 0
+        repeat n in i:
+            used += out.get(i)
+        end
+        if used > w:
+            mut over := used - w
+            repeat n in i:
+                col := this.columns.get(i)
+                if over > 0 and col.width.kind == SizeKind.Pref:
+                    mut lo := col.min
+                    if lo < 0:
+                        lo = 0
+                    end
+                    mut take := out.get(i) - lo
+                    if take < 0:
+                        take = 0
+                    end
+                    if take > over:
+                        take = over
+                    end
+                    out.set(i, out.get(i) - take)
+                    over -= take
+                end
+            end
+            ret out
+        end
+        free_cells := w - used
+        mut wsum := 0
+        repeat n in i:
+            col := this.columns.get(i)
+            if col.width.kind == SizeKind.Fill and col.width.weight > 0:
+                wsum += col.width.weight
+            end
+        end
+        if wsum == 0:
+            ret out
+        end
+        mut given := 0
+        repeat n in i:
+            col := this.columns.get(i)
+            if col.width.kind == SizeKind.Fill and col.width.weight > 0:
+                share := free_cells * col.width.weight / wsum
+                out.set(i, share)
+                given += share
+            end
+        end
+        mut extra := free_cells - given
+        repeat n in i:
+            col := this.columns.get(i)
+            if extra > 0 and col.width.kind == SizeKind.Fill and col.width.weight > 0:
+                out.set(i, out.get(i) + 1)
+                extra--
+            end
+        end
+        ret out
+    end
+
+    func _height(): int:
+        if this.columns.len() == 0 or this.rows.len() == 0:
+            ret 0
+        end
+        mut h := 0
+        mut data := this.rows.len()
+        if this.header:
+            h = 1
+            data--
+            if this.rule:
+                h++
+            end
+        end
+        ret h + data
+    end
+
+    func _cell_text(r: int, c: int): str:
+        row := this.rows.get(r)
+        if c >= row.len():
+            ret ""
+        end
+        ret _first_line(row.get(c))
+    end
+
+    func _natural(c: int): int:
+        mut best := 0
+        repeat this.rows.len() in r:
+            w := _text_width(this._cell_text(r, c))
+            if w > best:
+                best = w
+            end
+        end
+        ret best
+    end
+
+    func _pad(): int:
+        if this.pad_x < 0:
+            ret 0
+        end
+        ret this.pad_x
+    end
+
+    func _align_for(r: int, c: int): Alignment:
+        repeat this.cell_aligns.len() in k:
+            o := this.cell_aligns.get(k)
+            if o.row == r and o.col == c:
+                ret o.align
+            end
+        end
+        if c < this.columns.len():
+            ret this.columns.get(c).align
+        end
+        ret Alignment.Left
+    end
+
+    @en "_paint_row"
+    @fa "رسم ردیف"
+    pub func _paint_row(buf: Buffer, bounds: Rect, ws: Vector<int>, r: int, y: int, style: Style):
+        pad := this._pad()
+        mut x := 0
+        repeat this.columns.len() in c:
+            w := ws.get(c)
+            mut cw := w
+            if cw > bounds.width - x:
+                cw = bounds.width - x
+            end
+            if cw > 0:
+                cell := Rect { x = bounds.x + x, y = bounds.y + y, width = cw, height = 1 }
+                buf.fill(cell, " ", style)
+                area := cw - 2 * pad
+                mut text := ""
+                mut shown := 0
+                if area > 0:
+                    overflow := this.columns.get(c).overflow
+                    raw := this._cell_text(r, c)
+                    raw_w := _text_width(raw)
+                    text = _fit(raw, raw_w, area, overflow, buf.glyphs)
+                    shown = raw_w
+                    if shown > area:
+                        shown = area
+                    end
+                end
+                mut offset := 0
+                slack := area - shown
+                align := this._align_for(r, c)
+                if align == Alignment.Right:
+                    offset = slack
+                else align == Alignment.Center:
+                    offset = slack / 2
+                end
+                buf.put_str(cell.x + pad + offset, cell.y, text, style)
+            end
+            x += w
+        end
+    end
+
+    @en "_paint_rule"
+    @fa "رسم خط"
+    pub func _paint_rule(buf: Buffer, bounds: Rect, ws: Vector<int>, y: int, style: Style):
+        mut total := 0
+        repeat ws.len() in i:
+            total += ws.get(i)
+        end
+        if total > bounds.width:
+            total = bounds.width
+        end
+        mut glyph := "─"
+        if buf.glyphs == GlyphPolicy.ASCII:
+            glyph = "-"
+        end
+        buf.fill(Rect { x = bounds.x, y = bounds.y + y, width = total, height = 1 }, glyph, style)
+    end
+end
+
+@en "TableView"
+@fa "نمای‌جدول"
+pub struct TableView:
+    @en "Table"
+    @fa "جدول"
+    pub use Table
+
+    @en "offset"
+    @fa "جابه‌جایی"
+    pub offset: int = 0
+
+    @en "selected"
+    @fa "انتخاب‌شده"
+    pub selected: int = 0
+
+    @en "activate"
+    @fa "فعال‌سازی"
+    pub activate: func (int) bool = (_row: int): ret false end
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    pub func focusable(): bool:
+        ret true
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    pub func hits(): bool:
+        ret true
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    pub func handle_event(event: Event): bool:
+        if event.kind != KeyEvent:
+            ret false
+        end
+        n := this._body_count()
+        h := this._body_height(this.bounds().height)
+        this._clamp(h)
+        if event.is_key(term.KeyEnter):
+            if n == 0:
+                ret false
+            end
+            ret this.activate(this.selected)
+        end
+        mut step := h
+        if step < 1:
+            step = 1
+        end
+        if event.is_key(term.KeyUp):
+            this.selected--
+        else event.is_key(term.KeyDown):
+            this.selected++
+        else event.is_key(term.KeyPageUp):
+            this.selected -= step
+            this.offset -= step
+        else event.is_key(term.KeyPageDown):
+            this.selected += step
+            this.offset += step
+        else event.is_key(term.KeyHome):
+            this.selected = 0
+            this.offset = 0
+        else event.is_key(term.KeyEnd):
+            this.selected = n - 1
+            this.offset = this._max_offset(h)
+        else:
+            ret false
+        end
+        this._clamp(h)
+        this._ensure_visible(h)
+        ret true
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    pub func render(buf: Buffer, bounds: Rect):
+        n := this._body_count()
+        h := this._body_height(bounds.height)
+        this._clamp(h)
+        if bounds.is_empty() or this.columns.len() == 0 or this.rows.len() == 0:
+            ret
+        end
+        mut bar := 0
+        if n > h and h > 0:
+            bar = 1
+        end
+        cw := bounds.width - bar
+        inner := Rect { x = bounds.x, y = bounds.y, width = cw, height = bounds.height }
+        ws := this.Table._resolve_widths(cw)
+        hr := this._header_rows()
+        mut first := 0
+        if this.header:
+            first = 1
+            this.Table._paint_row(buf, inner, ws, 0, 0, this.header_style)
+            if bar == 1:
+                buf.fill(Rect { x = bounds.x + cw, y = bounds.y, width = 1, height = 1 }, " ", this.header_style)
+            end
+            if this.rule and bounds.height > 1:
+                this.Table._paint_rule(buf, inner, ws, 1, this.style)
+            end
+        end
+        mut shown := n - this.offset
+        if shown > h:
+            shown = h
+        end
+        mut mark := Style { bold = true }
+        if buf.focused:
+            mark = Style { reverse = true }
+        end
+        repeat shown in k:
+            i := this.offset + k
+            y := bounds.y + hr + k
+            this.Table._paint_row(buf, inner, ws, first + i, hr + k, this.style)
+            if i == this.selected:
+                repeat cw in dx:
+                    c := buf.get(bounds.x + dx, y)
+                    st := StyleMerge(c.style, mark)
+                    if _char_width(c.ch) == 2:
+                        buf.put_str(bounds.x + dx, y, c.ch, st)
+                    else c.ch != "":
+                        buf.set(bounds.x + dx, y, Cell { ch = c.ch, style = st })
+                    end
+                end
+            end
+        end
+        if bar == 1:
+            mut tl := h * h / n
+            if tl < 1:
+                tl = 1
+            end
+            pos := this.offset * (h - tl) / this._max_offset(h)
+            mut track := "│"
+            mut thumb := "█"
+            if buf.glyphs == GlyphPolicy.ASCII:
+                track = "|"
+                thumb = "#"
+            end
+            repeat h in r:
+                mut ch := track
+                if r >= pos and r < pos + tl:
+                    ch = thumb
+                end
+                buf.set(bounds.x + cw, bounds.y + hr + r, Cell { ch = ch, style = this.style })
+            end
+        end
+    end
+
+    func _header_rows(): int:
+        mut r := 0
+        if this.header:
+            r = 1
+            if this.rule:
+                r = 2
+            end
+        end
+        ret r
+    end
+
+    func _body_count(): int:
+        mut n := this.rows.len()
+        if this.header:
+            n--
+        end
+        if n < 0:
+            n = 0
+        end
+        ret n
+    end
+
+    func _body_height(total: int): int:
+        h := total - this._header_rows()
+        if h < 0:
+            ret 0
+        end
+        ret h
+    end
+
+    func _max_offset(h: int): int:
+        m := this._body_count() - h
+        if m < 0:
+            ret 0
+        end
+        ret m
+    end
+
+    func _clamp(h: int):
+        n := this._body_count()
+        if n == 0:
+            this.selected = -1
+            this.offset = 0
+            ret
+        end
+        if this.selected < 0:
+            this.selected = 0
+        end
+        if this.selected > n - 1:
+            this.selected = n - 1
+        end
+        m := this._max_offset(h)
+        if this.offset < 0:
+            this.offset = 0
+        end
+        if this.offset > m:
+            this.offset = m
+        end
+    end
+
+    func _ensure_visible(h: int):
+        if h <= 0 or this.selected < 0:
+            ret
+        end
+        if this.selected < this.offset:
+            this.offset = this.selected
+        end
+        if this.selected >= this.offset + h:
+            this.offset = this.selected - h + 1
+        end
+    end
+end
+
+func _first_line(s: str): str:
+    k := s.find("\n")
+    if k >= 0:
+        ret str.Substr(s, 0, k)
+    end
+    ret s
+end
+
+func _fit(s: str, w: int, n: int, overflow: CellOverflow, glyphs: GlyphPolicy): str:
+    if n <= 0:
+        ret ""
+    end
+    if w <= n:
+        ret s
+    end
+    if overflow == CellOverflow.Ellipsis:
+        if glyphs == GlyphPolicy.ASCII:
+            ret _clip_cells(s, n - 1) + "~"
+        end
+        ret _clip_cells(s, n - 1) + "…"
+    end
+    ret _clip_cells(s, n)
+end
+
+@en "NewTable"
+@fa "جدول جدید"
+pub func NewTable(): Table:
+    ret Table {}
+end
+
+@en "NewTableView"
+@fa "نمای جدول جدید"
+pub func NewTableView(): TableView:
+    ret TableView {}
+end

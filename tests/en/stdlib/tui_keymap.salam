@@ -1,0 +1,1174 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import sync
+import testing
+import term
+import tui
+
+mut seq_hits := 0
+
+mut activate_hits := 0
+
+struct Root:
+    pub use tui.BaseWidget
+end
+
+struct Field:
+    pub use tui.BaseWidget
+    pub focus: bool = true
+
+    pub func focusable(): bool:
+        ret this.focus
+    end
+end
+
+struct Grab:
+    pub use tui.BaseWidget
+
+    pub func handle_event(event: tui.Event): bool:
+        ret event.is_char("r")
+    end
+end
+
+struct TabGrab:
+    pub use tui.BaseWidget
+
+    pub func handle_event(event: tui.Event): bool:
+        ret event.is_key(term.KeyTab)
+    end
+end
+
+struct Activate:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        if event.is_key(term.KeyEnter) or event.is_key(term.KeySpace):
+            activate_hits++
+            ret true
+        end
+        ret false
+    end
+end
+
+struct Rig:
+    pub screens: Vector<tui.Screen> = Vector {}
+
+    pub func open(w: int, h: int):
+        this.screens.push(tui.NewScreen(Root {}, w, h))
+    end
+
+    pub func ptr(): tui.Screen*:
+        ret this.screens.ref(0)
+    end
+
+    pub func add(parent: int, focus: bool): int:
+        ret this.ptr()[0].add(parent, Field { focus = focus })
+    end
+
+    pub func focus(id: int): bool:
+        ret this.ptr()[0].focus(id)
+    end
+
+    pub func focused(): int:
+        ret this.ptr()[0].focused_id()
+    end
+
+    pub func release():
+        this.ptr()[0].close()
+        this.screens.free()
+    end
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func action_focus(id: int): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, _event: tui.Event): ret screen[0].focus(id) end
+end
+
+func focus_next_decline(screen: tui.Screen*): bool:
+    _ := screen[0].focus_next()
+    ret false
+end
+
+func act_next_decline(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, _event: tui.Event): ret focus_next_decline(screen) end
+end
+
+func act_next_consume(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, _event: tui.Event): ret screen[0].focus_next() end
+end
+
+func bump_seq(_screen: tui.Screen*, _event: tui.Event): bool:
+    seq_hits++
+    ret true
+end
+
+func count_action(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, event: tui.Event): ret bump_seq(screen, event) end
+end
+
+func vim_search_count(): func (tui.Screen*, tui.Event) bool:
+    ret (screen: tui.Screen*, event: tui.Event): ret bump_seq(screen, event) end
+end
+
+func vim_search_decline(): func (tui.Screen*, tui.Event) bool:
+    ret (_screen: tui.Screen*, _event: tui.Event): ret false end
+end
+
+func new_focus_map(id: int): tui.Keymap:
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("b"), action_focus(id))
+    ret km
+end
+
+func swap_consume(screen: tui.Screen*, id: int): bool:
+    screen[0].set_keymap(new_focus_map(id))
+    ret true
+end
+
+func swap_decline(screen: tui.Screen*, id: int): bool:
+    screen[0].set_keymap(new_focus_map(id))
+    ret false
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func grid(): tui.Screen:
+    mut s := tui.NewScreen(Root {}, 8, 3)
+    a := s.add(tui.RootId, Field {})
+    b := s.add(tui.RootId, Field {})
+    c := s.add(tui.RootId, Field {})
+    d := s.add(tui.RootId, Field {})
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    s.widget(b).set_bounds(rect(4, 0, 4, 1))
+    s.widget(c).set_bounds(rect(0, 1, 4, 1))
+    s.widget(d).set_bounds(rect(4, 1, 4, 1))
+    ret s
+end
+
+func test_single_hit_and_miss():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(w2))
+
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w2)
+    testing.AssertFalse(km.handle(r.ptr(), key("b")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_rebind_last_write_wins():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    w3 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(w2))
+    km.bind(term.Decode("a"), action_focus(w3))
+
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w3)
+end
+
+func test_unbind():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(w2))
+    km.unbind(term.Decode("a"))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w1)
+end
+
+func test_unbind_for_drops_only_the_target_override():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    t_global := s.add(tui.RootId, Field {})
+    t_w1 := s.add(tui.RootId, Field {})
+    t_w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("x"), action_focus(t_global))
+    km.bind_for(w1, term.Decode("x"), action_focus(t_w1))
+    km.bind_for(w2, term.Decode("x"), action_focus(t_w2))
+    s.set_keymap(km)
+
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t_w1)
+    s.keymap.unbind_for(w1, term.Decode("x"))
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t_global)
+    testing.AssertTrue(s.focus(w2))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t_w2)
+end
+
+func test_unbind_for_keeps_sibling_overrides():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    t_w1 := s.add(tui.RootId, Field {})
+    t_w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind_for(w1, term.Decode("y"), action_focus(t_w1))
+    km.bind_for(w2, term.Decode("y"), action_focus(t_w2))
+    s.set_keymap(km)
+
+    s.keymap.unbind_for(w1, term.Decode("y"))
+    testing.AssertTrue(s.focus(w2))
+    testing.AssertTrue(s.dispatch(key("y")))
+    testing.AssertEqInt(s.focused_id(), t_w2)
+end
+
+func test_unbind_for_missing_key_or_widget_is_inert():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    t1 := s.add(tui.RootId, Field {})
+    s.keymap.unbind_for(w1, term.Decode("z"))
+    testing.AssertFalse(s.dispatch(key("z")))
+
+    s.keymap.bind(term.Decode("x"), action_focus(t1))
+    s.keymap.unbind_for(w1, term.Decode("z"))
+    s.keymap.unbind_for(99, term.Decode("x"))
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t1)
+end
+
+func test_unbind_for_clears_pending_sequence():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    s.keymap.unbind_for(w1, term.Decode("h"))
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+end
+
+func test_unbind_for_then_rebind():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    t1 := s.add(tui.RootId, Field {})
+    t2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind_for(w1, term.Decode("x"), action_focus(t1))
+    s.set_keymap(km)
+
+    s.keymap.unbind_for(w1, term.Decode("x"))
+    s.keymap.bind_for(w1, term.Decode("x"), action_focus(t2))
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqInt(s.focused_id(), t2)
+end
+
+func test_unbind_for_seq_drops_only_the_target_override():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    t_global := s.add(tui.RootId, Field {})
+    t_w1 := s.add(tui.RootId, Field {})
+    t_w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind_seq("jj", action_focus(t_global))
+    km.bind_for_seq(w1, "jj", action_focus(t_w1))
+    km.bind_for_seq(w2, "jj", action_focus(t_w2))
+    s.set_keymap(km)
+
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t_w1)
+    s.keymap.unbind_for_seq(w1, "jj")
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t_global)
+    testing.AssertTrue(s.focus(w2))
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t_w2)
+end
+
+func test_unbind_for_seq_missing_sequence_or_widget_is_inert():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    t1 := s.add(tui.RootId, Field {})
+    s.keymap.unbind_for_seq(w1, "jj")
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertFalse(s.dispatch(key("j")))
+
+    s.keymap.bind_seq("jj", action_focus(t1))
+    s.keymap.unbind_for_seq(w1, "qq")
+    s.keymap.unbind_for_seq(99, "jj")
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), t1)
+end
+
+func test_unbind_for_seq_clears_pending_sequence():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    s.keymap.unbind_for_seq(w1, "gg")
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+end
+
+func test_sequence_across_two_events():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_deferral_fires_on_break():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    w3 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("g"), action_focus(w2))
+    km.bind_seq("gg", action_focus(w3))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w3)
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertTrue(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_mismatch_reprocesses_from_root():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", action_focus(w2))
+    km.bind(term.Decode("x"), action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertTrue(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_direct_two_key_sequence():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("ab", action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(km.handle(r.ptr(), key("b")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_nearest_scope_wins():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    inner := r.add(outer, true)
+    t_inner := r.add(tui.RootId, true)
+    t_outer := r.add(tui.RootId, true)
+    t_global := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+    km.bind_for(inner, term.Decode("a"), action_focus(t_inner))
+
+    testing.AssertTrue(r.focus(inner))
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), t_inner)
+end
+
+func test_outer_scope_beats_global():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    t_outer := r.add(tui.RootId, true)
+    t_global := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+
+    testing.AssertTrue(r.focus(outer))
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), t_outer)
+end
+
+func test_global_fallback_when_unscoped():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    other := r.add(tui.RootId, true)
+    t_outer := r.add(tui.RootId, true)
+    t_global := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+
+    testing.AssertTrue(r.focus(other))
+    testing.AssertTrue(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), t_global)
+end
+
+func test_scoped_only_outside_scope_misses():
+    mut r := Rig {}
+    defer r.release()
+    r.open(40, 10)
+    outer := r.add(tui.RootId, true)
+    other := r.add(tui.RootId, true)
+    target := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_for(outer, term.Decode("a"), action_focus(target))
+
+    testing.AssertTrue(r.focus(other))
+    testing.AssertFalse(km.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), other)
+end
+
+func test_empty_map_is_inert():
+    mut r := Rig {}
+    defer r.release()
+    r.open(10, 3)
+    w1 := r.add(tui.RootId, true)
+
+    mut bare := tui.Keymap {}
+    defer bare.free()
+    testing.AssertFalse(bare.handle(r.ptr(), key("a")))
+
+    mut empty := tui.NewKeymap()
+    defer empty.free()
+    testing.AssertFalse(empty.handle(r.ptr(), key("a")))
+    testing.AssertEqInt(r.focused(), w1)
+end
+
+func test_non_key_event_leaves_pending():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.TickEvent }))
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_space_is_not_ctrl_space():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode(" "), action_focus(w2))
+
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.KeyEvent, key = term.Decode("\x00") }))
+    testing.AssertTrue(km.handle(r.ptr(), key(" ")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_declined_mismatch_stops():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    _ := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind(term.Decode("g"), act_next_decline())
+    km.bind_seq("gg", act_next_consume())
+    km.bind(term.Decode("x"), act_next_consume())
+
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertFalse(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_declined_completion_stops():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    _ := r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", act_next_decline())
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(r.focused(), w2)
+end
+
+func test_dispatch_empty_keymap_inert():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    s.add(tui.RootId, Field {})
+    s.dirty = false
+
+    testing.AssertFalse(s.dispatch(key("a")))
+    testing.AssertFalse(s.dirty)
+    s.set_keymap(tui.NewKeymap())
+    testing.AssertFalse(s.dispatch(key("a")))
+end
+
+func test_dispatch_keymap_fallback():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("\t"), action_focus(w2))
+
+    testing.AssertEqInt(s.focused_id(), w1)
+    s.dirty = false
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), w2)
+    testing.AssertTrue(s.dirty)
+    s.dirty = false
+    testing.AssertFalse(s.dispatch(key("z")))
+    testing.AssertFalse(s.dirty)
+end
+
+func test_widget_consumption_beats_keymap():
+    mut s := tui.NewScreen(Grab {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("r"), action_focus(w2))
+
+    testing.AssertTrue(s.dispatch(key("r")))
+    testing.AssertEqInt(s.focused_id(), w1)
+end
+
+func test_scoped_binding_through_dispatch():
+    mut s := tui.NewScreen(Root {}, 40, 10)
+    defer s.close()
+    outer := s.add(tui.RootId, Field {})
+    inner := s.add(outer, Field {})
+    other := s.add(tui.RootId, Field {})
+    t_inner := s.add(tui.RootId, Field {})
+    t_outer := s.add(tui.RootId, Field {})
+    t_global := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("a"), action_focus(t_global))
+    km.bind_for(outer, term.Decode("a"), action_focus(t_outer))
+    km.bind_for(inner, term.Decode("a"), action_focus(t_inner))
+    s.set_keymap(km)
+
+    testing.AssertTrue(s.focus(inner))
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), t_inner)
+    testing.AssertTrue(s.focus(outer))
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), t_outer)
+    testing.AssertTrue(s.focus(other))
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), t_global)
+end
+
+func test_ctrl_c_with_pending_is_unconsumed():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertFalse(s.dispatch(key("\x03")))
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_non_key_events_leave_pending():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind_seq("gg", action_focus(w2))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.TickEvent }))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.ResizeEvent, width = 21, height = 6 }))
+    testing.AssertFalse(s.dispatch(tui.Event { kind = tui.MouseEvent }))
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_mode_switch_in_action_consumes():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w3 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("a"), (screen: tui.Screen*, _event: tui.Event): ret swap_consume(screen, w3) end)
+
+    testing.AssertTrue(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("b")))
+    testing.AssertEqInt(s.focused_id(), w3)
+    testing.AssertFalse(s.dispatch(key("a")))
+end
+
+func test_mode_switch_in_action_declines():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w3 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("a"), (screen: tui.Screen*, _event: tui.Event): ret swap_decline(screen, w3) end)
+
+    testing.AssertFalse(s.dispatch(key("a")))
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("b")))
+    testing.AssertEqInt(s.focused_id(), w3)
+    testing.AssertFalse(s.dispatch(key("a")))
+end
+
+func test_run_with_tick_uses_keymap():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    _ := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    s.keymap.bind(term.Decode("\t"), action_focus(w2))
+    _ := s.post(key("\t"))
+    _ := s.post(key("\x03"))
+    s.run_with_tick((): ret end)
+
+    testing.AssertFalse(s.running)
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_default_keymap_tab_moves_next():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 3)
+end
+
+func test_default_keymap_arrows_move_spatially():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("\x1b[B")))
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.dispatch(key("\x1b[C")))
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.dispatch(key("\x1b[A")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\x1b[D")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_default_keymap_not_installed_is_inert():
+    mut s := grid()
+    defer s.close()
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertFalse(s.dispatch(key("\t")))
+    testing.AssertFalse(s.dispatch(key("\x1b[B")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_default_keymap_widget_consumes_tab():
+    mut s := tui.NewScreen(TabGrab {}, 8, 3)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    _ := s.add(tui.RootId, Field {})
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), w1)
+end
+
+func test_default_keymap_only_five_bindings():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertFalse(s.dispatch(key("q")))
+    testing.AssertFalse(s.dispatch(key("z")))
+    testing.AssertEqInt(term.Decode("\x1b[Z").code, term.KeyUnknown)
+    testing.AssertFalse(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_default_keymap_fresh_per_call():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    w1 := r.add(tui.RootId, true)
+    w2 := r.add(tui.RootId, true)
+    w3 := r.add(tui.RootId, true)
+    mut a := tui.NewDefaultKeymap()
+    defer a.free()
+    mut b := tui.NewDefaultKeymap()
+    defer b.free()
+    a.bind(term.Decode("\t"), action_focus(w3))
+
+    testing.AssertEqInt(r.focused(), w1)
+    testing.AssertTrue(b.handle(r.ptr(), key("\t")))
+    testing.AssertEqInt(r.focused(), w2)
+    testing.AssertTrue(r.focus(w1))
+    testing.AssertTrue(a.handle(r.ptr(), key("\t")))
+    testing.AssertEqInt(r.focused(), w3)
+end
+
+func test_default_keymap_set_keymap_and_replace():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    s.set_keymap(tui.NewKeymap())
+    testing.AssertFalse(s.dispatch(key("\t")))
+end
+
+func test_default_keymap_extend_rebind():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+    s.keymap.bind(term.Decode("\t"), action_focus(4))
+
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 4)
+end
+
+func test_backtab_decodes_to_an_unknown_key():
+    k := term.Decode("\x1b[Z")
+
+    testing.AssertEqInt(k.code, term.KeyUnknown)
+    testing.AssertFalse(k.shift)
+    testing.AssertTrue(k.ch == "")
+    testing.AssertTrue(k.raw == "\x1b[Z")
+end
+
+func test_backtab_binding_fires_through_dispatch():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w2 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("\x1b[Z"), action_focus(w2))
+    s.set_keymap(km)
+
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), w2)
+end
+
+func test_backtab_variants_are_distinct_keys():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    w3 := s.add(tui.RootId, Field {})
+    w4 := s.add(tui.RootId, Field {})
+    mut km := tui.NewKeymap()
+    km.bind(term.Decode("\x1b[Z"), action_focus(w3))
+    km.bind(term.Decode("\x1b[1;2Z"), action_focus(w4))
+    s.set_keymap(km)
+
+    testing.AssertFalse(term.Decode("\x1b[Z").shift)
+    testing.AssertTrue(term.Decode("\x1b[1;2Z").shift)
+    testing.AssertTrue(term.Decode("\x1b[1;2Z").raw != term.Decode("\x1b[Z").raw)
+
+    testing.AssertEqInt(s.focused_id(), w1)
+    testing.AssertTrue(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), w3)
+    testing.AssertTrue(s.focus(w1))
+    testing.AssertTrue(s.dispatch(key("\x1b[1;2Z")))
+    testing.AssertEqInt(s.focused_id(), w4)
+end
+
+func test_default_map_leaves_backtab_unbound():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w1 := s.add(tui.RootId, Field {})
+    _ := s.add(tui.RootId, Field {})
+    s.set_keymap(tui.NewDefaultKeymap())
+
+    testing.AssertFalse(s.dispatch(key("\x1b[Z")))
+    testing.AssertEqInt(s.focused_id(), w1)
+end
+
+func test_vim_preset_hjkl_moves_spatially():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.dispatch(key("k")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("l")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("h")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_vim_preset_keeps_tab_and_arrows():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+
+    testing.AssertTrue(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\x1b[B")))
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.dispatch(key("\x1b[A")))
+    testing.AssertEqInt(s.focused_id(), 2)
+end
+
+func test_vim_preset_gg_moves_to_the_top_of_the_column():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertTrue(s.focus(4))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 2)
+end
+
+func test_vim_preset_gg_needs_both_keys():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertFalse(s.dispatch(key("z")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_vim_preset_G_moves_to_the_bottom_of_the_column():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertTrue(s.focus(2))
+
+    testing.AssertTrue(s.dispatch(key("G")))
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertFalse(s.dispatch(key("G")))
+    testing.AssertEqInt(s.focused_id(), 4)
+end
+
+func test_vim_preset_esc_pops_one_level():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertTrue(s.push_focus(2))
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertEqInt(s.focus_stack.len(), 2)
+
+    testing.AssertTrue(s.dispatch(key("\x1b")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqInt(s.focus_stack.len(), 1)
+end
+
+func test_vim_preset_esc_at_root_is_unconsumed():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    testing.AssertEqInt(s.focus_stack.len(), 1)
+
+    testing.AssertFalse(s.dispatch(key("\x1b")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqInt(s.focus_stack.len(), 1)
+end
+
+func test_vim_preset_slash_runs_the_app_action():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    seq_hits = 0
+
+    testing.AssertTrue(s.dispatch(key("/")))
+    testing.AssertEqInt(seq_hits, 1)
+    s.set_keymap(tui.NewVimKeymap(vim_search_decline()))
+    testing.AssertFalse(s.dispatch(key("/")))
+end
+
+func test_vim_preset_is_opt_in():
+    mut s := grid()
+    defer s.close()
+
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.set_keymap(tui.NewKeymap())
+    testing.AssertFalse(s.dispatch(key("j")))
+    testing.AssertFalse(s.dispatch(key("\t")))
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_vim_preset_widget_still_takes_enter_and_space():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    w := s.add(tui.RootId, Activate {})
+    _ := s.add(tui.RootId, Field {})
+    s.set_keymap(tui.NewVimKeymap(vim_search_count()))
+    activate_hits = 0
+
+    testing.AssertTrue(s.dispatch(key("\r")))
+    testing.AssertTrue(s.dispatch(key(" ")))
+    testing.AssertEqInt(activate_hits, 2)
+    testing.AssertEqInt(s.focused_id(), w)
+end
+
+func test_sequence_timeout_blocks_completion():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.pending_timeout_ms = 50
+    km.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_sequence_timeout_fresh_start_fires_single():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.pending_timeout_ms = 50
+    km.bind_seq("gg", count_action())
+    km.bind(term.Decode("x"), count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    testing.AssertTrue(km.handle(r.ptr(), key("x")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_sequence_timeout_zero_never_expires():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_sequence_timeout_ignores_non_key_events():
+    mut r := Rig {}
+    defer r.release()
+    r.open(20, 5)
+    r.add(tui.RootId, true)
+    mut km := tui.NewKeymap()
+    defer km.free()
+    km.pending_timeout_ms = 50
+    km.bind_seq("gg", count_action())
+    seq_hits = 0
+
+    testing.AssertFalse(km.handle(r.ptr(), key("g")))
+    km.pending_since_ms = (sync.NowMs() - 5000) as int
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.TickEvent }))
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.ResizeEvent, width = 21, height = 6 }))
+    testing.AssertFalse(km.handle(r.ptr(), tui.Event { kind = tui.MouseEvent }))
+    km.pending_since_ms = sync.NowMs() as int
+    testing.AssertTrue(km.handle(r.ptr(), key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func test_widget_consumed_key_clears_pending_sequence():
+    mut s := tui.NewScreen(Root {}, 20, 5)
+    defer s.close()
+    _ := s.add(tui.RootId, Activate {})
+    s.keymap.bind_seq("gg", count_action())
+    seq_hits = 0
+    activate_hits = 0
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertTrue(s.dispatch(tui.Event { kind = tui.KeyEvent, key = term.Key { code = term.KeyEnter } }))
+    testing.AssertEqInt(activate_hits, 1)
+    testing.AssertFalse(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 0)
+    testing.AssertTrue(s.dispatch(key("g")))
+    testing.AssertEqInt(seq_hits, 1)
+end
+
+func main:
+    test_single_hit_and_miss()
+    test_rebind_last_write_wins()
+    test_unbind()
+    test_unbind_for_drops_only_the_target_override()
+    test_unbind_for_keeps_sibling_overrides()
+    test_unbind_for_missing_key_or_widget_is_inert()
+    test_unbind_for_clears_pending_sequence()
+    test_unbind_for_then_rebind()
+    test_unbind_for_seq_drops_only_the_target_override()
+    test_unbind_for_seq_missing_sequence_or_widget_is_inert()
+    test_unbind_for_seq_clears_pending_sequence()
+    test_sequence_across_two_events()
+    test_deferral_fires_on_break()
+    test_mismatch_reprocesses_from_root()
+    test_direct_two_key_sequence()
+    test_nearest_scope_wins()
+    test_outer_scope_beats_global()
+    test_global_fallback_when_unscoped()
+    test_scoped_only_outside_scope_misses()
+    test_empty_map_is_inert()
+    test_non_key_event_leaves_pending()
+    test_space_is_not_ctrl_space()
+    test_declined_mismatch_stops()
+    test_declined_completion_stops()
+    test_dispatch_empty_keymap_inert()
+    test_dispatch_keymap_fallback()
+    test_widget_consumption_beats_keymap()
+    test_scoped_binding_through_dispatch()
+    test_ctrl_c_with_pending_is_unconsumed()
+    test_non_key_events_leave_pending()
+    test_mode_switch_in_action_consumes()
+    test_mode_switch_in_action_declines()
+    test_run_with_tick_uses_keymap()
+    test_default_keymap_tab_moves_next()
+    test_default_keymap_arrows_move_spatially()
+    test_default_keymap_not_installed_is_inert()
+    test_default_keymap_widget_consumes_tab()
+    test_default_keymap_only_five_bindings()
+    test_default_keymap_fresh_per_call()
+    test_default_keymap_set_keymap_and_replace()
+    test_default_keymap_extend_rebind()
+    test_backtab_decodes_to_an_unknown_key()
+    test_backtab_binding_fires_through_dispatch()
+    test_backtab_variants_are_distinct_keys()
+    test_default_map_leaves_backtab_unbound()
+    test_vim_preset_hjkl_moves_spatially()
+    test_vim_preset_keeps_tab_and_arrows()
+    test_vim_preset_gg_moves_to_the_top_of_the_column()
+    test_vim_preset_gg_needs_both_keys()
+    test_vim_preset_G_moves_to_the_bottom_of_the_column()
+    test_vim_preset_esc_pops_one_level()
+    test_vim_preset_esc_at_root_is_unconsumed()
+    test_vim_preset_slash_runs_the_app_action()
+    test_vim_preset_is_opt_in()
+    test_vim_preset_widget_still_takes_enter_and_space()
+    test_sequence_timeout_blocks_completion()
+    test_sequence_timeout_fresh_start_fires_single()
+    test_sequence_timeout_zero_never_expires()
+    test_sequence_timeout_ignores_non_key_events()
+    test_widget_consumed_key_clears_pending_sequence()
+    ret testing.Summary()
+end

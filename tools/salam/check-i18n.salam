@@ -19,6 +19,8 @@ include i18 "../../compiler/i18n.salam"
 
 const SOURCES := "compiler"
 
+const SQL_PARSER := "std/db/sql/sql_parse.salam"
+
 func walk(path: str, out &: Vector<str>):
     each d in dir.ListDirs(path):
         if d != "tests_port":
@@ -159,6 +161,59 @@ func scan(path: str, text: str, call: str, skip: int, missing &: Vector<str>):
     end
 end
 
+func table_strings(text: str, name: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    head := str.IndexOf(text, name + " := [")
+    if head < 0:
+        ret out
+    end
+    stop := str.IndexFrom(text, "]", head)
+    mut at := str.IndexFrom(text, `"`, head)
+    until at >= 0 and at < stop:
+        mut item := ""
+        next := one_literal(text, at, item)
+        if next < 0:
+            break
+        end
+        out.push(item)
+        at = str.IndexFrom(text, `"`, next)
+    end
+    ret out
+end
+
+func has_text(list: Vector<str>, want: str): bool:
+    each item in list:
+        if item == want:
+            ret true
+        end
+    end
+    ret false
+end
+
+func scan_ctx(path: str, text: str, call: str, known: Vector<str>, missing &: Vector<str>):
+    mut at := str.IndexFrom(text, call, 0)
+    until at >= 0:
+        start := skip_args(text, at + call.len(), 1)
+        mut ctx := ""
+        if start >= 0 and literal_at(text, start, ctx) and not has_text(known, ctx):
+            missing.push(path + ":" + line_of(text, at) + ": '" + ctx + "' has no Persian text in k_ctx_fa")
+        end
+        at = str.IndexFrom(text, call, at + call.len())
+    end
+end
+
+func check_sql_contexts(missing &: Vector<str>):
+    text := fs.ReadText(SQL_PARSER)
+    en := table_strings(text, "k_ctx_en")
+    fa := table_strings(text, "k_ctx_fa")
+    if en.len() == 0 or en.len() != fa.len():
+        missing.push(SQL_PARSER + ": k_ctx_en has " + en.len() + " entries but k_ctx_fa has " + fa.len())
+    end
+    scan_ctx(SQL_PARSER, text, "p_expect_sym(p,", en, missing)
+    scan_ctx(SQL_PARSER, text, "p_expect_kw(p,", en, missing)
+    scan_ctx(SQL_PARSER, text, "expected_msg(", en, missing)
+end
+
 func main:
     problem := i18.CheckTranslations()
     if str.Len(problem) > 0:
@@ -180,6 +235,7 @@ func main:
         scan(path, text, "p_foreign_error(p,", 1, missing)
         scan(path, text, "error_at(L,", 1, missing)
     end
+    check_sql_contexts(missing)
     each m in missing:
         printerrln "check-i18n: " + m
     end

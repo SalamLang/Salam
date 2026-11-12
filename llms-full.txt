@@ -159006,6 +159006,8 @@ counted and skipped instead of being reported as a syntax error. The count is in
 so nothing is checked silently; a fragment is also the reason to bind values as placeholders
 instead of pasting them in.
 
+The messages come in the language of the file they are about: a Persian `.salam` file is answered in Persian, an English one in English, and `.sql` files, which have no language of their own, follow `--lang`. `--error-lang=en` or `--error-lang=fa` puts every message in one language. The summary line follows `--error-lang` when it is given, then `--lang`, and otherwise is Persian only when every Salam file checked was Persian. `salam sql generate --lang=fa` writes the generated functions in Persian Salam.
+
 Every diagnostic carries a code. `SQL0xx` is lexical, `SQL1xx` is syntax, `SQL2xx` is a dialect rule, `SQL3xx` is a name or a count that does not match the schema. Match on the code when you want to allow one particular thing; never match on the message.
 
 ## Your migrations are the schema
@@ -160110,6 +160112,16 @@ func DialectNamed(name: str): Dialect
 ```
 
 The dialect of a name such as `"sqlite"`, `"mysql"`, `"mariadb"` or `"postgres"`, which is what `db.SQLITE` and `c.Kind()` give you. An unknown name gives SQLite.
+
+The example for this item is shown with the ones above: db-sql-Methods.salam
+
+### `SetMessageLanguage`
+
+```salam
+func SetMessageLanguage(code: str)
+```
+
+Pick the language of the messages and help texts the checks write from now on: "fa" for Persian, anything else for English, the default. The codes stay the same. It is one setting for the whole program.
 
 The example for this item is shown with the ones above: db-sql-Methods.salam
 
@@ -232680,6 +232692,1587 @@ func Equal(a: Color, b: Color): bool
 Reports whether two colours are the same, comparing channels with a small tolerance, `current` and both variants.
 
 The example for this item is shown with the ones above: gui-color-Css.salam
+
+
+---
+
+# gui.flow
+
+https://salamlang.github.io/Salam/std/gui/flow/
+
+The layout engine of the Salam style standard: column, row, grid, stack and flow layouts, positioning, scrolling and right to left, with incremental relayout.
+
+`gui.flow` computes the rectangle of every box of a native user interface. It implements exactly the layouts of the Salam style standard and nothing else: `column` and `row` (the flex model with grow, shrink, basis, wrapping, gaps, alignment and order), `grid` (track lists with pixels, percent, fr, auto, minmax, repeat, fit and content sizes, explicit lines, spans and auto placement), `stack` (every child in one cell) and `flow` (children placed like words, wrapped onto lines and baseline aligned). It is not a CSS engine: there is no display, float, block formatting context, margin collapsing or table.
+
+You build a `Tree`, give every box a `FlowStyle`, give leaves such as text and images a measure function, and call `Layout` with the size of the window. Then `X`, `Y`, `W` and `H` give each box relative to its parent. The package depends on nothing else in `gui`; `gui.ui` maps the style of an element to a `FlowStyle`.
+
+Things to know:
+
+- Every box is border box. Width and height include padding and border, and margins apply in every layout, `auto` margins included.
+
+- Lengths come resolved. em, rem, vw and vh are converted to pixels by the caller; only percent stays, because only the layout knows the reference.
+
+- Content is not crushed. `min_width` and `min_height` default to `Auto()`: a child of a row or column does not shrink below its min content width or content height, as in a browser. Set them to 0 to allow it, or give a child an overflow other than visible.
+
+- The flow layout has no gaps. It is formatted like inline text, so space its children with margins.
+
+- Absolute and fixed boxes keep their static position on an axis with no inset: where the parent's justify and align would place them as the only child.
+
+- A root fills the viewport when its width or height is auto; use `Fit()` to size it to its content.
+
+- Right to left mirrors rows, flow lines, grid columns, start and end. `left` and `right` stay physical.
+
+- Layout is incremental. Changing a style or a measure marks the box and its ancestors; `Layout` lays out only those again and reuses cached sizes elsewhere. `LayoutCalls` and `MeasureCalls` show the work done.
+
+## An application shell
+
+A header, a body with a side bar and a scrolling content area, and a footer. The body has `basis = 0`, grows, and has `min_height = 0`, so its long content does not push the header and footer away (by default a child of a column is never shorter than its content); the content area scrolls instead, and `ContentH` tells how far. The same tree in right to left puts the side bar on the right.
+
+gui-flow-guide-app.salam
+
+```salam
+import gui.flow
+
+func show(t &: flow.Tree, name: str, id: int):
+    println name, t.X(id), t.Y(id), t.W(id), t.H(id)
+end
+
+func build(t &: flow.Tree, dir: int): (int, int, int, int):
+    app := t.Add(-1, flow.FlowStyle { direction = dir })
+    header := t.Add(app, flow.FlowStyle { layout = flow.LAYOUT_ROW, height = flow.Px(48.0), padding = flow.Sides(flow.Px(0.0), flow.Px(16.0), flow.Px(0.0), flow.Px(16.0)), align = flow.ALIGN_CENTER, column_gap = flow.Px(12.0) })
+    t.Add(header, flow.FlowStyle { width = flow.Px(32.0), height = flow.Px(32.0) })
+    t.Add(header, flow.FlowStyle { grow = 1.0, height = flow.Px(20.0) })
+    body := t.Add(app, flow.FlowStyle { layout = flow.LAYOUT_ROW, grow = 1.0, basis = flow.Px(0.0), min_height = flow.Px(0.0) })
+    side := t.Add(body, flow.FlowStyle { width = flow.Px(180.0), border = flow.Sides(flow.Px(0.0), flow.Px(1.0), flow.Px(0.0), flow.Px(0.0)) })
+    content := t.Add(body, flow.FlowStyle { grow = 1.0, padding = flow.All(flow.Px(16.0)), row_gap = flow.Px(8.0), overflow_y = flow.OVERFLOW_AUTO })
+    repeat 30:
+        t.Add(content, flow.FlowStyle { height = flow.Px(40.0), shrink = 0.0 })
+    end
+    footer := t.Add(app, flow.FlowStyle { height = flow.Px(24.0) })
+    ret header, side, content, footer
+end
+
+func main:
+    mut t := flow.NewTree()
+    header, side, content, footer := build(t, flow.DIR_LTR)
+    t.Layout(800.0, 600.0)
+    show(t, "header", header)
+    show(t, "side", side)
+    show(t, "content", content)
+    show(t, "footer", footer)
+    println "content scrolls by", t.ContentH(content) - t.H(content)
+
+    mut r := flow.NewTree()
+    _, rside, rcontent, _ := build(r, flow.DIR_RTL)
+    r.Layout(800.0, 600.0)
+    show(r, "rtl side", rside)
+    show(r, "rtl content", rcontent)
+end
+```
+
+Output:
+
+```text
+header 0 0 800 48
+side 0 0 180 528
+content 180 0 620 528
+footer 0 576 800 24
+content scrolls by 936
+rtl side 620 0 180 528
+rtl content 0 0 620 528
+```
+
+## Text through a measure function
+
+A leaf's measure function gets the available width and returns the size of the wrapped text. Here a one word label and a long paragraph sit in a row aligned on their baselines; the paragraph has `basis = 0` and grows, so it takes the rest of the row and wraps when the window narrows. A layout with nothing changed does no work, and marking the paragraph dirty measures it once.
+
+gui-flow-guide-text.salam
+
+```salam
+import gui.flow
+
+func paragraph(t &: flow.Tree, parent: int, words: int): int:
+    id := t.Add(parent, flow.FlowStyle {})
+    t.SetMeasure(id, (_id: int, w: f64, _h: f64):
+        mut per := words
+        if w >= 0.0:
+            per = ((w + 4.0) / 44.0) as int
+            if per < 1:
+                per = 1
+            end
+            if per > words:
+                per = words
+            end
+        end
+        lines := (words + per - 1) / per
+        ret flow.Size { w = (per as f64) * 44.0 - 4.0, h = (lines as f64) * 18.0, baseline = 14.0 }
+    end)
+    ret id
+end
+
+func main:
+    mut t := flow.NewTree()
+    card := t.Add(-1, flow.FlowStyle { layout = flow.LAYOUT_ROW, align = flow.ALIGN_BASELINE, column_gap = flow.Px(12.0), padding = flow.All(flow.Px(8.0)), height = flow.Fit() })
+    label := paragraph(t, card, 1)
+    text := paragraph(t, card, 20)
+    mut st := t.Style(text)
+    st.grow = 1.0
+    st.basis = flow.Px(0.0)
+    t.SetStyle(text, st)
+    each width in [600.0, 300.0, 600.0]:
+        t.ResetCounters()
+        t.Layout(width, 400.0)
+        println "width", width, "card height", t.H(card), "text size", t.W(text), t.H(text), "label y", t.Y(label), "measures", t.MeasureCalls()
+    end
+    t.ResetCounters()
+    t.Layout(600.0, 400.0)
+    println "unchanged layout calls", t.LayoutCalls(), "measures", t.MeasureCalls()
+    t.MarkDirty(text)
+    t.Layout(600.0, 400.0)
+    println "text changed, layout calls", t.LayoutCalls(), "measures", t.MeasureCalls()
+end
+```
+
+Output:
+
+```text
+width 600 card height 52 text size 532 36 label y 8 measures 3
+width 300 card height 88 text size 232 72 label y 8 measures 1
+width 600 card height 52 text size 532 36 label y 8 measures 1
+unchanged layout calls 0 measures 0
+text changed, layout calls 4 measures 2
+```
+
+## Types
+
+### `Len`
+
+```salam
+struct Len
+```
+
+A length: `px` plus `pct` times the reference size for a fixed one, or a keyword in `kind`. em, rem, vw and vh are converted to pixels before they reach the layout.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `px` | `f64 = 0` | Pixels. |
+| `pct` | `f64 = 0` | Fraction of the reference size, 0.5 for 50%. The reference is the parent's content width for widths, padding, margins and gaps across, and its content height for heights. |
+| `kind` | `int = 0` | One of the `LEN_` constants. |
+
+gui-flow-Lengths.salam
+
+```salam
+import gui.flow
+
+func show(name: str, l: flow.Len):
+    println name, "px", l.px, "pct", l.pct, "kind", l.kind
+end
+
+func main:
+    show("Px(12)", flow.Px(12.0))
+    show("Pct(0.5)", flow.Pct(0.5))
+    show("PxPct(-20, 1)", flow.PxPct(-20.0, 1.0))
+    show("Auto", flow.Auto())
+    show("Fill", flow.Fill())
+    show("Fit", flow.Fit())
+    show("MinContent", flow.MinContent())
+    show("MaxContent", flow.MaxContent())
+    show("NoLimit", flow.NoLimit())
+    println "kinds", flow.LEN_FIXED, flow.LEN_AUTO, flow.LEN_FILL, flow.LEN_FIT, flow.LEN_MIN_CONTENT, flow.LEN_MAX_CONTENT, flow.LEN_NONE
+    pad := flow.Sides(flow.Px(4.0), flow.Px(8.0), flow.Px(4.0), flow.Px(16.0))
+    println "sides top", pad.top.px, "end", pad.end.px, "bottom", pad.bottom.px, "start", pad.start.px
+    mut m := flow.All(flow.Px(10.0))
+    m.left = flow.Px(2.0)
+    m.right = flow.Auto()
+    println "all with physical overrides", m.top.px, m.left.px, m.right.kind
+    s := flow.Size { w = 120.0, h = 48.0, baseline = 12.0, last_baseline = 44.0 }
+    println "size", s.w, s.h, s.baseline, s.last_baseline
+
+    mut t := flow.NewTree()
+    root := t.Add(-1, flow.FlowStyle { padding = flow.All(flow.Pct(0.05)), align = flow.ALIGN_START })
+    a := t.Add(root, flow.FlowStyle { width = flow.PxPct(-20.0, 1.0), height = flow.Px(10.0) })
+    b := t.Add(root, flow.FlowStyle { width = flow.Fill(), height = flow.Px(10.0), margin = m })
+    t.Layout(200.0, 100.0)
+    println "a", t.X(a), t.Y(a), t.W(a), t.H(a)
+    println "b", t.X(b), t.Y(b), t.W(b), t.H(b)
+end
+```
+
+Output:
+
+```text
+Px(12) px 12 pct 0 kind 0
+Pct(0.5) px 0 pct 0.5 kind 0
+PxPct(-20, 1) px -20 pct 1 kind 0
+Auto px 0 pct 0 kind 1
+Fill px 0 pct 0 kind 2
+Fit px 0 pct 0 kind 3
+MinContent px 0 pct 0 kind 4
+MaxContent px 0 pct 0 kind 5
+NoLimit px 0 pct 0 kind 6
+kinds 0 1 2 3 4 5 6
+sides top 4 end 8 bottom 4 start 16
+all with physical overrides 10 2 1
+size 120 48 12 44
+a 10 10 160 10
+b 12 30 178 10
+```
+
+### `Size`
+
+```salam
+struct Size
+```
+
+What a measure function returns for a leaf: its content size and first baseline.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `w` | `f64 = 0` | Content width. |
+| `h` | `f64 = 0` | Content height. |
+| `baseline` | `f64 = -1` | Distance from the top of the content to the first baseline, or -1 for none (the bottom edge is used then). |
+| `last_baseline` | `f64 = -1` | Distance from the top of the content to the last baseline, for text of several lines; -1 means the same as `baseline`. A flow parent aligns its children on their last baseline. |
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Edges`
+
+```salam
+struct Edges
+```
+
+Four sides of padding, margin, border or inset. `start` and `end` follow the direction; `left` and `right` are physical and win when set. A side that is not set is 0, or auto for an inset.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `top` | `Len` | Top side. |
+| `end` | `Len` | End side: right in left to right, left in right to left. |
+| `bottom` | `Len` | Bottom side. |
+| `start` | `Len` | Start side: left in left to right, right in right to left. |
+| `left` | `Len` | Left side, whatever the direction; overrides start or end. |
+| `right` | `Len` | Right side, whatever the direction; overrides start or end. |
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Track`
+
+```salam
+struct Track
+```
+
+One grid track, or a repeat of tracks. Build it with `TrackLen`, `TrackFr`, `TrackAuto`, `TrackMinMax`, `TrackFit` or `Repeat`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `min` | `Len` | Minimum sizing: a fixed length, auto, min content or max content. |
+| `max` | `Len` | Maximum sizing: a fixed length, auto, min content or max content; the limit of a fit track. |
+| `fr` | `f64 = 0` | When above zero, the maximum is this many shares of the free space. |
+| `fit` | `bool = false` | The track is `fit(max)`: sized to its content but no larger than `max`. |
+| `count` | `int = 0` | Above zero: a repeat of `tracks` this many times; `REPEAT_FILL` or `REPEAT_FIT`: as many as fit; zero: a single track. |
+| `tracks` | `Vector` | The tracks of a repeat. |
+
+gui-flow-Grid.salam
+
+```salam
+import gui.flow
+
+func show(t &: flow.Tree, name: str, id: int):
+    println name, t.X(id), t.Y(id), t.W(id), t.H(id)
+end
+
+func main:
+    mut cols := Vector {} as Vector<flow.Track>
+    cols.push(flow.TrackLen(flow.Px(80.0)))
+    cols.push(flow.TrackMinMax(flow.TrackLen(flow.Px(60.0)), flow.TrackFr(1.0)))
+    cols.push(flow.TrackFit(flow.Px(100.0)))
+    mut rows := Vector {} as Vector<flow.Track>
+    rows.push(flow.TrackLen(flow.Px(30.0)))
+    rows.push(flow.TrackAuto())
+    tr := cols.get(1)
+    println "minmax track", tr.min.px, tr.max.kind, tr.fr, tr.fit, tr.count, tr.tracks.len()
+    mut t := flow.NewTree()
+    grid := t.Add(-1, flow.FlowStyle {
+        layout = flow.LAYOUT_GRID,
+        columns = cols,
+        rows = rows,
+        auto_rows = flow.TrackLen(flow.Px(20.0)),
+        auto_columns = flow.TrackLen(flow.Px(40.0)),
+        auto_flow = flow.AUTO_FLOW_ROW,
+        column_gap = flow.Px(10.0),
+        row_gap = flow.Px(5.0)
+    })
+    header := t.Add(grid, flow.FlowStyle { column = 1, column_span = 3 })
+    side := t.Add(grid, flow.FlowStyle { row = 2, row_span = 2, column = 1 })
+    body := t.Add(grid, flow.FlowStyle { height = flow.Px(50.0) })
+    note := t.Add(grid, flow.FlowStyle { width = flow.Px(30.0), height = flow.Px(10.0), justify_self = flow.ALIGN_END, align_self = flow.ALIGN_CENTER })
+    last := t.Add(grid, flow.FlowStyle { column = -1 })
+    t.Layout(360.0, 400.0)
+    show(t, "grid", grid)
+    show(t, "header", header)
+    show(t, "side", side)
+    show(t, "body", body)
+    show(t, "note", note)
+    show(t, "last", last)
+
+    mut cards := Vector {} as Vector<flow.Track>
+    mut inner := Vector {} as Vector<flow.Track>
+    inner.push(flow.TrackMinMax(flow.TrackLen(flow.Px(100.0)), flow.TrackFr(1.0)))
+    cards.push(flow.Repeat(flow.REPEAT_FIT, inner))
+    mut g := flow.NewTree()
+    gallery := g.Add(-1, flow.FlowStyle { layout = flow.LAYOUT_GRID, columns = cards, auto_rows = flow.TrackLen(flow.Px(60.0)), column_gap = flow.Px(10.0) })
+    a := g.Add(gallery, flow.FlowStyle {})
+    b := g.Add(gallery, flow.FlowStyle {})
+    g.Layout(450.0, 300.0)
+    show(g, "card a", a)
+    show(g, "card b", b)
+    println "repeat counts", flow.REPEAT_FILL, flow.REPEAT_FIT
+    println "auto flow", flow.AUTO_FLOW_ROW, flow.AUTO_FLOW_COLUMN, flow.AUTO_FLOW_ROW_DENSE, flow.AUTO_FLOW_COLUMN_DENSE
+end
+```
+
+Output:
+
+```text
+minmax track 60 1 1 false 0 0
+grid 0 0 360 400
+header 0 0 360 30
+side 0 35 80 75
+body 90 35 230 50
+note 330 55 30 10
+last 330 90 30 20
+card a 0 0 220 60
+card b 230 0 220 60
+repeat counts -1 -2
+auto flow 0 1 2 3
+```
+
+### `FlowStyle`
+
+```salam
+struct FlowStyle
+```
+
+Every layout property of a box from the Salam style standard, typed and resolved except percent.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `layout` | `int` | How the children are laid out: one of the `LAYOUT_` constants. Default column. |
+| `row_gap` | `Len` | Space between rows, wrapped lines and grid rows. The flow layout ignores it. |
+| `column_gap` | `Len` | Space between items of a row, wrapped columns and grid columns. The flow layout ignores it. |
+| `align` | `int` | Cross axis alignment of the children: start, center, end, stretch or baseline. Default stretch. In a grid it aligns items in their rows, in a stack vertically. |
+| `justify` | `int` | Main axis distribution: start, center, end, between, around or evenly. In a grid it distributes the columns, in a stack it places children horizontally. |
+| `align_content` | `int` | Distribution of wrapped lines, or of grid rows. Default start. |
+| `wrap` | `bool = false` | Row and column only: wrap children onto new lines when they do not fit. |
+| `reverse` | `bool = false` | Row and column only: lay the children out from the end. |
+| `columns` | `Vector` | Column track list of a grid. |
+| `rows` | `Vector` | Row track list of a grid. |
+| `auto_columns` | `Track` | Track for columns added past the list. Default auto. |
+| `auto_rows` | `Track` | Track for rows added past the list. Default auto. |
+| `auto_flow` | `int` | How grid items without a place are placed: one of the `AUTO_FLOW_` constants. |
+| `grow` | `f64 = 0` | Share of positive free space this child takes in a row or column. Default 0. |
+| `shrink` | `f64 = 1` | Share of negative free space, weighted by the basis. Default 1. |
+| `basis` | `Len` | Starting main size before growing and shrinking; auto uses the width or height, then the content. |
+| `align_self` | `int` | This child's own cross axis alignment; auto uses the parent's align. |
+| `justify_self` | `int` | Grid and stack only: this child's horizontal alignment in its cell; auto stretches in a grid and uses the parent's justify in a stack. |
+| `column` | `int = 0` | Grid column line where the item starts, 1 based. A negative number counts from the end and puts the item's end edge on that line, so -1 is the last column. 0 places it automatically. |
+| `row` | `int = 0` | Grid row line, with the same rules as `column`. |
+| `column_span` | `int = 1` | Number of columns the item covers. Default 1. |
+| `row_span` | `int = 1` | Number of rows the item covers. Default 1. |
+| `order` | `int = 0` | Children with a smaller order come first in rows, columns, grids and flow; equal orders keep their order. |
+| `position` | `int` | One of the `POS_` constants. |
+| `inset` | `Edges` | Top, end, bottom, start, left and right offsets for absolute, fixed and sticky boxes. A side that is not set is auto. |
+| `layer` | `int = 0` | Paint and hit test order among siblings, read back with `Layer` and `PaintOrder`; it does not change the layout. |
+| `width` | `Len` | Border box width: a length, auto, fill, fit, min content or max content. |
+| `height` | `Len` | Border box height, with the same kinds as width. |
+| `min_width` | `Len` | Smallest width. The default `Auto()` keeps a child of a row at least as wide as its min content (or its width, when that is smaller), unless its horizontal overflow is not visible; elsewhere it is 0. Set 0 to let a child shrink below its content. |
+| `min_height` | `Len` | Smallest height. The default `Auto()` keeps a child of a column at least as tall as its content (or its height, when that is smaller), unless its vertical overflow is not visible; elsewhere it is 0. Set 0 to let a child shrink below its content. |
+| `max_width` | `Len` | Largest width, or no limit. A min larger than the max wins. |
+| `max_height` | `Len` | Largest height, or no limit. |
+| `aspect_ratio` | `f64 = 0` | Width divided by height; used when one of them is auto. 0 means none. |
+| `padding` | `Edges` | Space inside the border. Every box is border box: padding and border are part of the width and height. |
+| `margin` | `Edges` | Space outside the border; an auto side takes the free space, which centres or pushes the box. |
+| `border` | `Edges` | Border widths; they take space like padding. |
+| `overflow_x` | `int` | Horizontal overflow: one of the `OVERFLOW_` constants. When one axis is not visible, visible on the other axis acts as auto. |
+| `overflow_y` | `int` | Vertical overflow: one of the `OVERFLOW_` constants. When one axis is not visible, visible on the other axis acts as auto. |
+| `visible` | `bool = true` | False removes the box and its children from the layout. |
+| `direction` | `int` | One of the `DIR_` constants. Changing it relays out the whole subtree. |
+| `text_align` | `int` | Alignment of the lines of a flow layout: one of the `TEXT_` constants. |
+
+gui-flow-Row.salam
+
+```salam
+import gui.flow
+
+func show(t &: flow.Tree, name: str, id: int):
+    println name, t.X(id), t.Y(id), t.W(id), t.H(id)
+end
+
+func main:
+    mut t := flow.NewTree()
+    bar := t.Add(-1, flow.FlowStyle {
+        layout = flow.LAYOUT_ROW,
+        column_gap = flow.Px(8.0),
+        row_gap = flow.Px(4.0),
+        align = flow.ALIGN_CENTER,
+        justify = flow.ALIGN_START,
+        align_content = flow.ALIGN_START,
+        wrap = false,
+        reverse = false,
+        padding = flow.All(flow.Px(6.0)),
+        border = flow.All(flow.Px(1.0)),
+        height = flow.Px(48.0),
+        direction = flow.DIR_LTR
+    })
+    logo := t.Add(bar, flow.FlowStyle { width = flow.Px(32.0), aspect_ratio = 1.0 })
+    title := t.Add(bar, flow.FlowStyle { grow = 1.0, shrink = 1.0, basis = flow.Px(100.0), height = flow.Px(20.0), min_width = flow.Px(60.0), max_width = flow.Px(400.0) })
+    search := t.Add(bar, flow.FlowStyle { width = flow.Px(120.0), min_height = flow.Px(24.0), max_height = flow.NoLimit(), align_self = flow.ALIGN_STRETCH })
+    menu := t.Add(bar, flow.FlowStyle { width = flow.Px(24.0), height = flow.Px(24.0), order = -1 })
+    hidden := t.Add(bar, flow.FlowStyle { width = flow.Px(50.0), visible = false })
+    t.Layout(400.0, 300.0)
+    show(t, "bar", bar)
+    show(t, "logo", logo)
+    show(t, "title", title)
+    show(t, "search", search)
+    show(t, "menu", menu)
+    show(t, "hidden", hidden)
+
+    println "layouts", flow.LAYOUT_COLUMN, flow.LAYOUT_ROW, flow.LAYOUT_GRID, flow.LAYOUT_STACK, flow.LAYOUT_FLOW
+    println "aligns", flow.ALIGN_AUTO, flow.ALIGN_START, flow.ALIGN_CENTER, flow.ALIGN_END, flow.ALIGN_STRETCH, flow.ALIGN_BASELINE, flow.ALIGN_BETWEEN, flow.ALIGN_AROUND, flow.ALIGN_EVENLY
+    println "directions", flow.DIR_INHERIT, flow.DIR_LTR, flow.DIR_RTL
+
+    mut w := flow.NewTree()
+    list := w.Add(-1, flow.FlowStyle { layout = flow.LAYOUT_ROW, wrap = true, column_gap = flow.Px(10.0), row_gap = flow.Px(10.0), justify = flow.ALIGN_BETWEEN, align_content = flow.ALIGN_END, height = flow.Px(150.0), direction = flow.DIR_RTL })
+    mut cards := Vector {} as Vector<int>
+    repeat 5:
+        cards.push(w.Add(list, flow.FlowStyle { width = flow.Px(70.0), height = flow.Px(40.0) }))
+    end
+    w.Layout(250.0, 300.0)
+    each i, c in cards:
+        show(w, "card" + i, c)
+    end
+end
+```
+
+Output:
+
+```text
+bar 0 0 400 48
+logo 39 8 32 32
+title 79 14 186 20
+search 273 7 120 34
+menu 7 12 24 24
+hidden 0 0 0 0
+layouts 0 1 2 3 4
+aligns 0 1 2 3 4 5 6 7 8
+directions 0 1 2
+card0 180 60 70 40
+card1 90 60 70 40
+card2 0 60 70 40
+card3 180 110 70 40
+card4 0 110 70 40
+```
+
+### `Tree`
+
+```salam
+struct Tree
+```
+
+A tree of boxes with integer ids. It keeps the results of the last layout and lays out again only what changed.
+
+gui-flow-Tree.salam
+
+```salam
+import gui.flow
+
+func main:
+    mut t := flow.NewTree()
+    root := t.Add(-1, flow.FlowStyle { row_gap = flow.Px(4.0) })
+    a := t.Add(root, flow.FlowStyle { height = flow.Px(20.0) })
+    b := t.Add(root, flow.FlowStyle {})
+    t.SetMeasure(b, (_id: int, w: f64, _h: f64):
+        mut lines := 1.0
+        if w >= 0.0 and w < 200.0:
+            lines = 2.0
+        end
+        ret flow.Size { w = 200.0, h = lines * 16.0, baseline = 12.0 }
+    end)
+    t.Layout(300.0, 200.0)
+    println "valid", t.Valid(b), t.Valid(42), "count", t.Count()
+    println "parent", t.Parent(b), "children", t.ChildCount(root), "second", t.Child(root, 1)
+    println "b", t.X(b), t.Y(b), t.W(b), t.H(b), "baseline", t.Baseline(b)
+    println "calls", t.LayoutCalls(), t.MeasureCalls()
+    t.ResetCounters()
+    t.Layout(300.0, 200.0)
+    println "again", t.LayoutCalls(), t.MeasureCalls(), "dirty", t.IsDirty(root)
+
+    mut st := t.Style(a)
+    st.height = flow.Px(30.0)
+    t.SetStyle(a, st)
+    println "after SetStyle dirty", t.IsDirty(a), t.IsDirty(root), t.IsDirty(b)
+    t.Layout(300.0, 200.0)
+    println "b moved to", t.Y(b), "calls", t.LayoutCalls()
+
+    t.MarkDirty(b)
+    t.Layout(150.0, 200.0)
+    println "narrow b", t.W(b), t.H(b)
+    t.ClearMeasure(b)
+    t.Move(b, root, 0)
+    t.Layout(150.0, 200.0)
+    println "b first", t.Child(root, 0), t.Y(a), t.H(b)
+    t.Remove(a)
+    println "removed", t.Valid(a), t.ChildCount(root)
+    t.Free()
+    println "freed", t.Count()
+end
+```
+
+Output:
+
+```text
+valid true false count 3
+parent 0 children 2 second 2
+b 0 24 300 16 baseline 12
+calls 5 1
+again 0 0 dirty false
+after SetStyle dirty true true false
+b moved to 34 calls 3
+narrow b 150 32
+b first 2 4 0
+removed false 1
+freed 0
+```
+
+#### `Add`
+
+```salam
+func Add(parent: int, style: FlowStyle): int
+```
+
+Adds a box with this style as the last child of `parent` and returns its id. A parent of -1 makes a root. Ids of removed boxes are reused.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Valid`
+
+```salam
+func Valid(id: int): bool
+```
+
+Reports whether the id is a box in the tree.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Count`
+
+```salam
+func Count(): int
+```
+
+Number of boxes in the tree.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Parent`
+
+```salam
+func Parent(id: int): int
+```
+
+The parent's id, or -1 for a root.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ChildCount`
+
+```salam
+func ChildCount(id: int): int
+```
+
+Number of children.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Child`
+
+```salam
+func Child(id: int, index: int): int
+```
+
+The child at this index, or -1.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Style`
+
+```salam
+func Style(id: int): FlowStyle
+```
+
+A copy of the box's style. The tree keeps its own copy of the track lists, so the caller may change or free the vectors it passed.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `SetStyle`
+
+```salam
+func SetStyle(id: int, style: FlowStyle)
+```
+
+Replaces the style and marks the box and its ancestors for layout.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Remove`
+
+```salam
+func Remove(id: int)
+```
+
+Removes the box and its subtree.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Move`
+
+```salam
+func Move(id: int, parent: int, index: int)
+```
+
+Moves the box under another parent at this index (-1 for the end, or a parent of -1 to make it a root). A move into its own subtree is ignored.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `SetMeasure`
+
+```salam
+func SetMeasure(id: int, fn: func(int, f64, f64): Size)
+```
+
+Makes a box without children a leaf measured by `fn(id, width, height)`. Width is the available content width, -1 for no limit (max content) and 0 for min content; height is the known content height or -1. Text, images and controls are leaves.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ClearMeasure`
+
+```salam
+func ClearMeasure(id: int)
+```
+
+Removes the measure function; the box is then empty.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `MarkDirty`
+
+```salam
+func MarkDirty(id: int)
+```
+
+Marks a box for layout when what its measure function sees has changed, such as its text.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `IsDirty`
+
+```salam
+func IsDirty(id: int): bool
+```
+
+Reports whether the box waits for layout.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Layout`
+
+```salam
+func Layout(width: f64, height: f64)
+```
+
+Lays out every root in a viewport of this size. Boxes that did not change and get the same size are skipped, so a layout with no changes costs almost nothing.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `X`
+
+```salam
+func X(id: int): f64
+```
+
+Left edge of the border box relative to the parent's border box, after the parent's scroll and sticky offsets.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Y`
+
+```salam
+func Y(id: int): f64
+```
+
+Top edge, like `X`.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `W`
+
+```salam
+func W(id: int): f64
+```
+
+Border box width.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `H`
+
+```salam
+func H(id: int): f64
+```
+
+Border box height.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `AbsX`
+
+```salam
+func AbsX(id: int): f64
+```
+
+Left edge in viewport coordinates.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `AbsY`
+
+```salam
+func AbsY(id: int): f64
+```
+
+Top edge in viewport coordinates.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Baseline`
+
+```salam
+func Baseline(id: int): f64
+```
+
+First baseline, from the top of the border box.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ContentW`
+
+```salam
+func ContentW(id: int): f64
+```
+
+Width of the scrollable content of the box's padding box, at least the padding box width.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ContentH`
+
+```salam
+func ContentH(id: int): f64
+```
+
+Height of the scrollable content, at least the padding box height.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `SetScroll`
+
+```salam
+func SetScroll(id: int, x: f64, y: f64)
+```
+
+Sets the scroll offsets of a box whose overflow is not visible. The children shift without a new layout; offsets are clamped when read. In right to left x runs from minus the overflow to 0.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ScrollX`
+
+```salam
+func ScrollX(id: int): f64
+```
+
+Horizontal scroll offset in use.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ScrollY`
+
+```salam
+func ScrollY(id: int): f64
+```
+
+Vertical scroll offset in use.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Layer`
+
+```salam
+func Layer(id: int): int
+```
+
+The layer from the style.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `PaintOrder`
+
+```salam
+func PaintOrder(id: int): Vector<int>
+```
+
+Visible children sorted by layer, keeping their order within a layer: the order to paint them in. The caller frees the vector.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `LayoutCalls`
+
+```salam
+func LayoutCalls(): int
+```
+
+How many times a box was laid out or measured since the last reset; a cached result does not count.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `MeasureCalls`
+
+```salam
+func MeasureCalls(): int
+```
+
+How many times a measure function ran since the last reset.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `ResetCounters`
+
+```salam
+func ResetCounters()
+```
+
+Sets both counters to zero.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+#### `Free`
+
+```salam
+func Free()
+```
+
+Releases the memory of every box. The tree is empty afterwards.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
+
+## Constants and variables
+
+### `LEN_FIXED`
+
+```salam
+const LEN_FIXED: i32 = 0
+```
+
+Kind of a `Len` that is a fixed length: `px` plus `pct` times the reference size.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LEN_AUTO`
+
+```salam
+const LEN_AUTO: i32 = 1
+```
+
+Kind of a `Len` that means `auto`: the layout decides, usually from the content or by stretching.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LEN_FILL`
+
+```salam
+const LEN_FILL: i32 = 2
+```
+
+Kind of a `Len` that fills the parent's content box minus the box's own margins.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LEN_FIT`
+
+```salam
+const LEN_FIT: i32 = 3
+```
+
+Kind of a `Len` that fits the content: the max content size, but no wider than the space and no narrower than the min content size.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LEN_MIN_CONTENT`
+
+```salam
+const LEN_MIN_CONTENT: i32 = 4
+```
+
+Kind of a `Len` that is the narrowest the content can be, for text the longest word.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LEN_MAX_CONTENT`
+
+```salam
+const LEN_MAX_CONTENT: i32 = 5
+```
+
+Kind of a `Len` that is the size of the content with no wrapping.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LEN_NONE`
+
+```salam
+const LEN_NONE: i32 = 6
+```
+
+Kind of a `Len` that is not set: no limit for a max size, the default for an edge.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `LAYOUT_COLUMN`
+
+```salam
+const LAYOUT_COLUMN: i32 = 0
+```
+
+Children top to bottom, with grow, shrink, basis and the other flex rules. The default layout.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `LAYOUT_ROW`
+
+```salam
+const LAYOUT_ROW: i32 = 1
+```
+
+Children along the text direction, right to left in rtl, with the flex rules.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `LAYOUT_GRID`
+
+```salam
+const LAYOUT_GRID: i32 = 2
+```
+
+Children in the cells of a grid of column and row tracks.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `LAYOUT_STACK`
+
+```salam
+const LAYOUT_STACK: i32 = 3
+```
+
+Every child in the same cell, aligned by align and justify; later children are painted on top.
+
+gui-flow-Position.salam
+
+```salam
+import gui.flow
+
+func show(t &: flow.Tree, name: str, id: int):
+    println name, t.X(id), t.Y(id), t.W(id), t.H(id)
+end
+
+func main:
+    mut t := flow.NewTree()
+    page := t.Add(-1, flow.FlowStyle { layout = flow.LAYOUT_STACK, overflow_x = flow.OVERFLOW_HIDDEN, overflow_y = flow.OVERFLOW_SCROLL })
+    content := t.Add(page, flow.FlowStyle { height = flow.Px(900.0), width = flow.Fill() })
+    mut top := flow.FlowStyle { position = flow.POS_STICKY, height = flow.Px(40.0) }
+    top.inset.top = flow.Px(0.0)
+    bar := t.Add(content, top)
+    mut corner := flow.FlowStyle { position = flow.POS_ABSOLUTE, width = flow.Px(50.0), height = flow.Px(20.0), layer = 1 }
+    corner.inset.end = flow.Px(10.0)
+    corner.inset.top = flow.Px(10.0)
+    badge := t.Add(content, corner)
+    mut fab := flow.FlowStyle { position = flow.POS_FIXED, width = flow.Px(48.0), height = flow.Px(48.0), layer = 2 }
+    fab.inset.right = flow.Px(16.0)
+    fab.inset.bottom = flow.Px(16.0)
+    button := t.Add(content, fab)
+    t.Layout(300.0, 400.0)
+    println "content size", t.ContentW(page), t.ContentH(page)
+    t.SetScroll(page, 0.0, 120.0)
+    println "scroll", t.ScrollX(page), t.ScrollY(page)
+    show(t, "bar", bar)
+    show(t, "badge", badge)
+    show(t, "button", button)
+    println "button on screen", t.AbsX(button), t.AbsY(button)
+    print "paint order"
+    order := t.PaintOrder(content)
+    each id in order:
+        print " ", id, "layer", t.Layer(id)
+    end
+    println ""
+    order.free()
+    println "positions", flow.POS_NORMAL, flow.POS_ABSOLUTE, flow.POS_FIXED, flow.POS_STICKY
+    println "overflow", flow.OVERFLOW_VISIBLE, flow.OVERFLOW_HIDDEN, flow.OVERFLOW_SCROLL, flow.OVERFLOW_AUTO
+
+    mut p := flow.NewTree()
+    para := p.Add(-1, flow.FlowStyle { layout = flow.LAYOUT_FLOW, text_align = flow.TEXT_CENTER, width = flow.Px(100.0), height = flow.Fit() })
+    mut words := Vector {} as Vector<int>
+    repeat 4:
+        id := p.Add(para, flow.FlowStyle { margin = flow.Sides(flow.Px(0.0), flow.Px(2.0), flow.Px(0.0), flow.Px(2.0)) })
+        p.SetMeasure(id, (_id: int, _w: f64, _h: f64): ret flow.Size { w = 30.0, h = 12.0, baseline = 9.0 } end)
+        words.push(id)
+    end
+    p.Layout(300.0, 300.0)
+    each i, id in words:
+        show(p, "word" + i, id)
+    end
+    println "paragraph baseline", p.Baseline(para)
+    println "text aligns", flow.TEXT_START, flow.TEXT_CENTER, flow.TEXT_END, flow.TEXT_JUSTIFY, flow.TEXT_LEFT, flow.TEXT_RIGHT
+end
+```
+
+Output:
+
+```text
+content size 300 900
+scroll 0 120
+bar 0 120 300 40
+badge 240 10 50 20
+button 236 456 48 48
+button on screen 236 336
+paint order  2 layer 0  3 layer 1  4 layer 2
+positions 0 1 2 3
+overflow 0 1 2 3
+word0 18 0 30 12
+word1 52 0 30 12
+word2 18 12 30 12
+word3 52 12 30 12
+paragraph baseline 9
+text aligns 0 1 2 3 4 5
+```
+
+### `LAYOUT_FLOW`
+
+```salam
+const LAYOUT_FLOW: i32 = 4
+```
+
+Inline flow: children placed like words in a paragraph, wrapped onto lines and baseline aligned. Gaps do not apply; space the children with margins. A child is aligned on its last baseline (a row, column, grid or stack child on its first); a child with no baseline, or with overflow that is not visible, on its bottom margin edge.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `ALIGN_AUTO`
+
+```salam
+const ALIGN_AUTO: i32 = 0
+```
+
+For align self and justify self: use the container's value.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_START`
+
+```salam
+const ALIGN_START: i32 = 1
+```
+
+Packed at the start of the axis.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_CENTER`
+
+```salam
+const ALIGN_CENTER: i32 = 2
+```
+
+Centred on the axis.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_END`
+
+```salam
+const ALIGN_END: i32 = 3
+```
+
+Packed at the end of the axis.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_STRETCH`
+
+```salam
+const ALIGN_STRETCH: i32 = 4
+```
+
+Stretched to fill the line or cell when the size is auto. The default of align.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_BASELINE`
+
+```salam
+const ALIGN_BASELINE: i32 = 5
+```
+
+Aligned on the first baseline of each item, in rows, grid rows and flow lines.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_BETWEEN`
+
+```salam
+const ALIGN_BETWEEN: i32 = 6
+```
+
+For justify and align content: free space between the items, none at the edges.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_AROUND`
+
+```salam
+const ALIGN_AROUND: i32 = 7
+```
+
+For justify and align content: equal space around each item, half of it at the edges.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `ALIGN_EVENLY`
+
+```salam
+const ALIGN_EVENLY: i32 = 8
+```
+
+For justify and align content: equal space between the items and at the edges.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `POS_NORMAL`
+
+```salam
+const POS_NORMAL: i32 = 0
+```
+
+The box takes part in its parent's layout. The default.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `POS_ABSOLUTE`
+
+```salam
+const POS_ABSOLUTE: i32 = 1
+```
+
+Taken out of the layout and placed by its insets in the parent's padding box. On an axis with no inset it keeps its static position: in a row, column or stack where the parent's justify and align would put it as the only child, in a grid the start corner of the padding box, in a flow where it would sit inline after the previous child. It scrolls with the parent.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `POS_FIXED`
+
+```salam
+const POS_FIXED: i32 = 2
+```
+
+Taken out of the layout and placed by its insets in the viewport given to `Layout`. On an axis with no inset it keeps its static position, as absolute does, measured when laid out. It does not scroll.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `POS_STICKY`
+
+```salam
+const POS_STICKY: i32 = 3
+```
+
+Laid out normally, then kept inside the nearest scrolling ancestor by its insets while it stays in its parent.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `OVERFLOW_VISIBLE`
+
+```salam
+const OVERFLOW_VISIBLE: i32 = 0
+```
+
+Content that does not fit is shown and the box does not scroll. The default.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `OVERFLOW_HIDDEN`
+
+```salam
+const OVERFLOW_HIDDEN: i32 = 1
+```
+
+Content that does not fit is clipped; the box can still be scrolled with `SetScroll`.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `OVERFLOW_SCROLL`
+
+```salam
+const OVERFLOW_SCROLL: i32 = 2
+```
+
+The box is a scroll container.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `OVERFLOW_AUTO`
+
+```salam
+const OVERFLOW_AUTO: i32 = 3
+```
+
+The box is a scroll container; scroll bars are shown only when needed.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `DIR_INHERIT`
+
+```salam
+const DIR_INHERIT: i32 = 0
+```
+
+Take the direction of the parent; a root is left to right.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `DIR_LTR`
+
+```salam
+const DIR_LTR: i32 = 1
+```
+
+Left to right.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `DIR_RTL`
+
+```salam
+const DIR_RTL: i32 = 2
+```
+
+Right to left: rows, flow, grid columns, start and end are mirrored.
+
+The example for this item is shown with the ones above: gui-flow-Row.salam
+
+### `AUTO_FLOW_ROW`
+
+```salam
+const AUTO_FLOW_ROW: i32 = 0
+```
+
+Auto placed grid items fill rows, adding rows as needed. The default.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `AUTO_FLOW_COLUMN`
+
+```salam
+const AUTO_FLOW_COLUMN: i32 = 1
+```
+
+Auto placed grid items fill columns, adding columns as needed.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `AUTO_FLOW_ROW_DENSE`
+
+```salam
+const AUTO_FLOW_ROW_DENSE: i32 = 2
+```
+
+Like row, but each item takes the first hole that fits, even before earlier items.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `AUTO_FLOW_COLUMN_DENSE`
+
+```salam
+const AUTO_FLOW_COLUMN_DENSE: i32 = 3
+```
+
+Like column, filling holes.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `TEXT_START`
+
+```salam
+const TEXT_START: i32 = 0
+```
+
+Flow lines start at the start edge. The default.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `TEXT_CENTER`
+
+```salam
+const TEXT_CENTER: i32 = 1
+```
+
+Flow lines are centred.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `TEXT_END`
+
+```salam
+const TEXT_END: i32 = 2
+```
+
+Flow lines end at the end edge.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `TEXT_JUSTIFY`
+
+```salam
+const TEXT_JUSTIFY: i32 = 3
+```
+
+Free space is shared between the items of every line but the last.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `TEXT_LEFT`
+
+```salam
+const TEXT_LEFT: i32 = 4
+```
+
+Flow lines start at the left edge in both directions.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `TEXT_RIGHT`
+
+```salam
+const TEXT_RIGHT: i32 = 5
+```
+
+Flow lines end at the right edge in both directions.
+
+The example for this item is shown with the ones above: gui-flow-Position.salam
+
+### `REPEAT_FILL`
+
+```salam
+const REPEAT_FILL: i32 = -1
+```
+
+Repeat count for `Repeat`: as many repetitions as fit the space.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `REPEAT_FIT`
+
+```salam
+const REPEAT_FIT: i32 = -2
+```
+
+Like `REPEAT_FILL`, but repetitions with no item collapse to zero with their gaps.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+## Functions
+
+### `Px`
+
+```salam
+func Px(v: f64): Len
+```
+
+A fixed length in pixels.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Pct`
+
+```salam
+func Pct(fraction: f64): Len
+```
+
+A percent length; the argument is a fraction, 0.5 for 50%.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `PxPct`
+
+```salam
+func PxPct(v: f64, fraction: f64): Len
+```
+
+A length that is a sum of pixels and percent, such as `100% - 20`.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Auto`
+
+```salam
+func Auto(): Len
+```
+
+The auto length.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Fill`
+
+```salam
+func Fill(): Len
+```
+
+Fill the parent's content box.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Fit`
+
+```salam
+func Fit(): Len
+```
+
+Fit the content.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `MinContent`
+
+```salam
+func MinContent(): Len
+```
+
+The min content size.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `MaxContent`
+
+```salam
+func MaxContent(): Len
+```
+
+The max content size.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `NoLimit`
+
+```salam
+func NoLimit(): Len
+```
+
+No limit, for max sizes.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `All`
+
+```salam
+func All(v: Len): Edges
+```
+
+Edges with the same length on top, end, bottom and start.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `Sides`
+
+```salam
+func Sides(top: Len, trailing: Len, bottom: Len, leading: Len): Edges
+```
+
+Edges from four lengths in top, end, bottom, start order, like `padding = 1, 2, 3, 4`.
+
+The example for this item is shown with the ones above: gui-flow-Lengths.salam
+
+### `TrackLen`
+
+```salam
+func TrackLen(v: Len): Track
+```
+
+A track of one size: a length, a percent, `MinContent()`, `MaxContent()` or `Auto()`.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `TrackFr`
+
+```salam
+func TrackFr(fr: f64): Track
+```
+
+A flexible track that takes this many shares of the free space.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `TrackAuto`
+
+```salam
+func TrackAuto(): Track
+```
+
+An auto track: at least its content's min size, growing to its max content.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `TrackMinMax`
+
+```salam
+func TrackMinMax(lo: Track, hi: Track): Track
+```
+
+`minmax(lo, hi)`: the minimum of `lo` and the maximum of `hi`, which may be fr.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `TrackFit`
+
+```salam
+func TrackFit(limit: Len): Track
+```
+
+`fit(limit)`: sized to the content but no larger than the limit.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `Repeat`
+
+```salam
+func Repeat(count: int, tracks: Vector<Track>): Track
+```
+
+`repeat(count, tracks)`; count is a number, `REPEAT_FILL` or `REPEAT_FIT`.
+
+The example for this item is shown with the ones above: gui-flow-Grid.salam
+
+### `NewTree`
+
+```salam
+func NewTree(): Tree
+```
+
+An empty tree.
+
+The example for this item is shown with the ones above: gui-flow-Tree.salam
 
 
 ---

@@ -15,13 +15,7 @@
 package ui
 
 import math
-import gui.css
-import gui.paint
-
-mut _vx0 := 0.0
-mut _vy0 := 0.0
-mut _vx1 := 0.0
-mut _vy1 := 0.0
+import gui.style
 
 func _m_ident(m: f64[]):
     m[0] = 1.0
@@ -30,10 +24,6 @@ func _m_ident(m: f64[]):
     m[3] = 1.0
     m[4] = 0.0
     m[5] = 0.0
-end
-
-func _m_is_ident(m: f64[]): bool:
-    ret m[0] == 1.0 and m[1] == 0.0 and m[2] == 0.0 and m[3] == 1.0 and m[4] == 0.0 and m[5] == 0.0
 end
 
 func _m_mul(a: f64[], b: f64[], out: f64[]):
@@ -58,11 +48,6 @@ func _m_set(m: f64[], a: f64, b: f64, c: f64, d: f64, e: f64, f: f64):
     m[3] = d
     m[4] = e
     m[5] = f
-end
-
-func _m_then(m: f64[], a: f64, b: f64, c: f64, d: f64, e: f64, f: f64):
-    mut n := [a, b, c, d, e, f]
-    _m_mul(m, n, m)
 end
 
 func _m_rot(deg: f64, out: f64[]):
@@ -120,571 +105,104 @@ func _m_bbox(m: f64[], x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
     y1 = byy
 end
 
-func _fns_of(cs: css.ComputedStyle, out &: Vector<css.TransformFn>):
-    if cs.translate_x.px != 0.0 or cs.translate_x.pct != 0.0 or cs.translate_y.px != 0.0 or cs.translate_y.pct != 0.0:
-        out.push(css.TransformFn { kind = css.TransformKind.Translate, x = cs.translate_x, y = cs.translate_y })
-    end
-    if cs.rotate != 0.0:
-        out.push(css.TransformFn { kind = css.TransformKind.Rotate, a = cs.rotate })
-    end
-    if cs.scale_x != 1.0 or cs.scale_y != 1.0:
-        out.push(css.TransformFn { kind = css.TransformKind.Scale, a = cs.scale_x, d = cs.scale_y })
-    end
-    each f in cs.transforms:
-        out.push(f)
-    end
-end
-
-func _fn_matrix(f: css.TransformFn, w: f64, h: f64, out: f64[]):
-    switch f.kind:
-        css.TransformKind.Translate:
-            _m_set(out, 1.0, 0.0, 0.0, 1.0, css.Resolve(f.x, w), css.Resolve(f.y, h))
-            break
-        end
-        css.TransformKind.Scale:
-            _m_set(out, f.a, 0.0, 0.0, f.d, 0.0, 0.0)
-            break
-        end
-        css.TransformKind.Rotate:
-            _m_rot(f.a, out)
-            break
-        end
-        css.TransformKind.Skew:
-            _m_set(out, 1.0, math.Tan(f.b * math.PI / 180.0), math.Tan(f.a * math.PI / 180.0), 1.0, 0.0, 0.0)
-            break
-        end
-        else:
-            _m_set(out, f.a, f.b, f.c, f.d, f.e, f.f)
-        end
-    end
-end
-
-func _fns_matrix(fns: Vector<css.TransformFn>, w: f64, h: f64, out: f64[]):
-    _m_ident(out)
-    mut t := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    each f in fns:
-        _fn_matrix(f, w, h, t)
-        _m_mul(out, t, out)
-    end
-end
-
-func _same_kinds(a: Vector<css.TransformFn>, b: Vector<css.TransformFn>): bool:
-    if a.len() != b.len():
-        ret a.len() == 0 or b.len() == 0
-    end
-    repeat a.len() in i:
-        if a[i].kind != b[i].kind:
-            ret false
-        end
-    end
-    ret true
-end
-
-func _ident_fn(k: css.TransformKind): css.TransformFn:
-    switch k:
-        css.TransformKind.Rotate: ret css.TransformFn { kind = k, a = 0.0 } end
-        css.TransformKind.Skew: ret css.TransformFn { kind = k, a = 0.0, b = 0.0 } end
-        else: ret css.TransformFn { kind = k } end
-    end
-    ret css.TransformFn { kind = k }
-end
-
-func _mix_len(a: css.Len, b: css.Len, t: f64): css.Len:
-    mut r := b
-    r.px = a.px + (b.px - a.px) * t
-    r.pct = a.pct + (b.pct - a.pct) * t
-    r.has_pct = a.has_pct or b.has_pct
-    ret r
-end
-
-func _mix_fn(a: css.TransformFn, b: css.TransformFn, t: f64): css.TransformFn:
-    mut r := b
-    r.x = _mix_len(a.x, b.x, t)
-    r.y = _mix_len(a.y, b.y, t)
-    r.a = a.a + (b.a - a.a) * t
-    r.b = a.b + (b.b - a.b) * t
-    r.c = a.c + (b.c - a.c) * t
-    r.d = a.d + (b.d - a.d) * t
-    r.e = a.e + (b.e - a.e) * t
-    r.f = a.f + (b.f - a.f) * t
-    ret r
-end
-
-func _decompose(m: f64[], d: f64[]):
-    mut a := m[0]
-    mut b := m[1]
-    mut c := m[2]
-    mut dd := m[3]
-    mut sx := math.Sqrt(a * a + b * b)
-    if sx > 0.0:
-        a /= sx
-        b /= sx
-    end
-    mut skew := a * c + b * dd
-    c -= a * skew
-    dd -= b * skew
-    sy := math.Sqrt(c * c + dd * dd)
-    if sy > 0.0:
-        c /= sy
-        dd /= sy
-        skew /= sy
-    end
-    if a * dd - b * c < 0.0:
-        sx = 0.0 - sx
-        a = 0.0 - a
-        b = 0.0 - b
-        skew = 0.0 - skew
-    end
-    d[0] = m[4]
-    d[1] = m[5]
-    d[2] = sx
-    d[3] = sy
-    d[4] = skew
-    d[5] = math.Atan2(b, a) * 180.0 / math.PI
-end
-
-func _recompose(d: f64[], out: f64[]):
-    _m_set(out, 1.0, 0.0, 0.0, 1.0, d[0], d[1])
-    mut r := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    _m_rot(d[5], r)
-    _m_mul(out, r, out)
-    mut k := [1.0, 0.0, d[4], 1.0, 0.0, 0.0]
-    _m_mul(out, k, out)
-    mut s := [d[2], 0.0, 0.0, d[3], 0.0, 0.0]
-    _m_mul(out, s, out)
-end
-
-func _anim_matrix(a: _Anim, t: f64, w: f64, h: f64, out: f64[]):
-    if _same_kinds(a.from_x, a.to_x):
-        mut mixed := Vector {} as Vector<css.TransformFn>
-        defer mixed.free()
-        n := math.MaxI(a.from_x.len(), a.to_x.len())
-        repeat n in i:
-            to_f := i < a.to_x.len() ? a.to_x[i] : _ident_fn(a.from_x[i].kind)
-            from_f := i < a.from_x.len() ? a.from_x[i] : _ident_fn(a.to_x[i].kind)
-            mixed.push(_mix_fn(from_f, to_f, t))
-        end
-        _fns_matrix(mixed, w, h, out)
-        ret
-    end
-    mut ma := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    mut mb := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    _fns_matrix(a.from_x, w, h, ma)
-    _fns_matrix(a.to_x, w, h, mb)
-    mut da := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    mut db := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    _decompose(ma, da)
-    _decompose(mb, db)
-    if db[5] - da[5] > 180.0:
-        da[5] += 360.0
-    else da[5] - db[5] > 180.0:
-        db[5] += 360.0
-    end
-    mut dm := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    repeat 6 in i:
-        dm[i] = da[i] + (db[i] - da[i]) * t
-    end
-    _recompose(dm, out)
-end
-
-func _own_matrix(node: int, b: _Box, out: f64[]): bool:
-    _m_ident(out)
-    cs := _e.st.ref(_e.node_el[node])
-    k := _e.anims.len() > 0 ? _anim_index(node, 3) : -1
-    if k < 0 and cs.transforms.len() == 0 and cs.rotate == 0.0 and cs.scale_x == 1.0 and cs.scale_y == 1.0 and cs.translate_x.px == 0.0 and cs.translate_x.pct == 0.0 and cs.translate_y.px == 0.0 and cs.translate_y.pct == 0.0:
+func _own_transform(node: int, b: _Box): bool:
+    s := _e.cs[node]
+    if s.rotate == 0.0 and s.scale_x == 1.0 and s.scale_y == 1.0 and s.translate_x.px == 0.0 and s.translate_x.pct == 0.0 and s.translate_y.px == 0.0 and s.translate_y.pct == 0.0:
         ret false
     end
-    ox := css.Resolve(cs.transform_origin_x, b.w)
-    oy := css.Resolve(cs.transform_origin_y, b.h)
-    mut m := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    if k >= 0:
-        a := _e.anims[k]
-        t := _anim_progress(a)
-        if t < 1.0:
-            _anim_matrix(a, t, b.w, b.h, m)
-        else:
-            mut fns := Vector {} as Vector<css.TransformFn>
-            _fns_of(_style_of(node), fns)
-            _fns_matrix(fns, b.w, b.h, m)
-            fns.free()
-        end
-    else:
-        mut fns := Vector {} as Vector<css.TransformFn>
-        _fns_of(_style_of(node), fns)
-        _fns_matrix(fns, b.w, b.h, m)
-        fns.free()
+    font := _e.us[node].font
+    ox := _abs_len(s.origin_x.len, font, b.w)
+    oy := _abs_len(s.origin_y.len, font, b.h)
+    tx := _abs_len(s.translate_x, font, b.w)
+    ty := _abs_len(s.translate_y, font, b.h)
+    mut m := paint.Identity()
+    if tx != 0.0 or ty != 0.0:
+        m = m.Then(paint.Translation(tx, ty))
     end
-    if _m_is_ident(m):
+    if s.rotate != 0.0:
+        m = m.Then(paint.Rotation(s.rotate))
+    end
+    if s.scale_x != 1.0 or s.scale_y != 1.0:
+        m = m.Then(paint.Scaling(s.scale_x, s.scale_y))
+    end
+    if m.IsIdentity():
         ret false
     end
     px := b.x + ox
     py := b.y + oy
-    _m_set(out, 1.0, 0.0, 0.0, 1.0, px, py)
-    _m_mul(out, m, out)
-    _m_then(out, 1.0, 0.0, 0.0, 1.0, 0.0 - px, 0.0 - py)
+    _e.xf[node] = paint.Translation(0.0 - px, 0.0 - py).Then(m).Then(paint.Translation(px, py))
     ret true
 end
 
 func _xf_resize():
     n := _e.dom.nodes.len()
+    _e.xf.clear()
     _e.xf_on.clear()
-    _e.xf_m.clear()
-    _e.xf_l.clear()
-    _e.fx_on.clear()
-    _e.sub.clear()
-    _e.kids_sorted.clear()
     repeat n:
+        _e.xf.push(paint.Identity())
         _e.xf_on.push(false)
-        _e.fx_on.push(false)
-        _e.kids_sorted.push(false)
-        repeat 6 in j:
-            _e.xf_m.push(j == 0 or j == 3 ? 1.0 : 0.0)
-            _e.xf_l.push(j == 0 or j == 3 ? 1.0 : 0.0)
-        end
-        repeat 4:
-            _e.sub.push(0.0)
-        end
     end
 end
 
 func _xf_update():
     _xf_resize()
     _e.xf_any = false
-    _e.anim_xf = false
-    _e.sub_ok = false
-    if _e.dom.body < 0 or _e.boxes.len() != _e.dom.nodes.len() or _e.node_el.len() != _e.dom.nodes.len():
-        ret
-    end
-    mut acc := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    mut r := [0.0, 0.0, 0.0, 0.0]
-    _w := _xf_walk(_e.dom.body, acc, false, r)
-    _e.sub_ok = true
-end
-
-func _ink_page(node: int, r: f64[]): bool:
-    b := _e.boxes[node]
-    if not b.shown:
-        ret false
-    end
-    mut l := b.x
-    mut t := b.y
-    mut rr := b.x + b.w
-    mut bt := b.y + b.h
-    if _e.node_el[node] >= 0:
-        cs := _e.st.ref(_e.node_el[node])
-        each sh in cs.box_shadows:
-            if not sh.inset:
-                e := sh.blur + math.Abs(sh.spread) + 2.0
-                l = math.Min(l, b.x + sh.x - e)
-                t = math.Min(t, b.y + sh.y - e)
-                rr = math.Max(rr, b.x + b.w + sh.x + e)
-                bt = math.Max(bt, b.y + b.h + sh.y + e)
-            end
+    repeat _e.dom.nodes.len() in node:
+        if node >= _e.boxes.len() or not _e.boxes[node].shown:
+            continue
         end
-        o := math.Max(cs.outline.width, 2.0) + math.Abs(cs.outline_offset) + 1.0
-        l -= o
-        t -= o
-        rr += o
-        bt += o
-        fi := _e.node_ifc[node]
-        if fi >= 0:
-            mut ts := 0.0
-            each sh in cs.text_shadows:
-                ts = math.Max(ts, math.Max(math.Abs(sh.x), math.Abs(sh.y)) + sh.blur * 1.5 + 2.0)
-            end
-            mut j := fi
-            until j >= 0:
-                f := _e.ifcs[j]
-                if f.has_lay:
-                    l = math.Min(l, f.x - 2.0 - ts)
-                    t = math.Min(t, f.y - 2.0 - ts)
-                    rr = math.Max(rr, f.x + f.lay.width + 2.0 + ts)
-                    bt = math.Max(bt, f.y + f.lay.height + 4.0 + ts)
-                end
-                j = f.next
-            end
-        end
-        if cs.display == css.Display.ListItem:
-            l -= cs.font_size * 3.0
-            rr += cs.font_size * 3.0
-        end
-        if cs.filters.len() > 0:
-            fe := _filter_extent(_style_of(node))
-            l -= fe
-            t -= fe
-            rr += fe
-            bt += fe
-        end
-    end
-    r[0] = l
-    r[1] = t
-    r[2] = rr
-    r[3] = bt
-    ret true
-end
-
-func _filter_extent(cs: css.ComputedStyle): f64:
-    mut e := 0.0
-    each f in cs.filters:
-        if f.name == "blur":
-            e += f.amount * 3.0
-        else f.name == "drop-shadow":
-            e += f.shadow.blur * 1.5 + math.Max(math.Abs(f.shadow.x), math.Abs(f.shadow.y))
-        end
-    end
-    ret e
-end
-
-func _xf_walk(node: int, acc0: f64[], has0: bool, out: f64[]): bool:
-    mut acc := [acc0[0], acc0[1], acc0[2], acc0[3], acc0[4], acc0[5]]
-    mut has := has0
-    mut own := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    mut has_own := false
-    nd := _e.dom.nodes[node]
-    if nd.tag == "#text":
-        ret false
-    end
-    if _e.node_el[node] >= 0 and _e.node_cb[node] >= 0 and _e.boxes[node].shown:
-        if _own_matrix(node, _e.boxes[node], own):
-            has_own = true
-            _m_mul(acc, own, acc)
-            has = true
+        if _own_transform(node, _e.boxes[node]):
+            _e.xf_on[node] = true
             _e.xf_any = true
-            repeat 6 in j:
-                _e.xf_l[node * 6 + j] = own[j]
-            end
-            if _e.anims.len() > 0 and _anim_index(node, 3) >= 0:
-                _e.anim_xf = true
-            end
-        end
-        cs := _e.st.ref(_e.node_el[node])
-        if cs.filters.len() > 0 or cs.backdrop_filters.len() > 0:
-            _e.fx_on[node] = true
         end
     end
-    _e.xf_on[node] = has
-    if has:
-        repeat 6 in j:
-            _e.xf_m[node * 6 + j] = acc[j]
-        end
-    end
-    mut r := [1.0e300, 1.0e300, -1.0e300, -1.0e300]
-    mut any := _ink_page(node, r)
-    mut prev_y := -1.0e300
-    mut sorted := true
-    mut kr := [0.0, 0.0, 0.0, 0.0]
-    each k in nd.kids:
-        if _xf_walk(k, acc, has, kr):
-            if kr[1] < prev_y:
-                sorted = false
-            end
-            prev_y = kr[1]
-            if not any:
-                r[0] = kr[0]
-                r[1] = kr[1]
-                r[2] = kr[2]
-                r[3] = kr[3]
-                any = true
-            else:
-                r[0] = math.Min(r[0], kr[0])
-                r[1] = math.Min(r[1], kr[1])
-                r[2] = math.Max(r[2], kr[2])
-                r[3] = math.Max(r[3], kr[3])
-            end
-        end
-    end
-    _e.kids_sorted[node] = sorted
-    if not any:
-        ret false
-    end
-    if has_own:
-        _m_bbox(own, r[0], r[1], r[2], r[3])
-    end
-    repeat 4 in j:
-        _e.sub[node * 4 + j] = r[j]
-        out[j] = r[j]
-    end
-    ret true
 end
 
 func _xf_has(node: int): bool:
-    ret _e.xf_any and node >= 0 and node < _e.xf_on.len() and _e.xf_on[node]
-end
-
-func _xf_acc(node: int, m: f64[]):
-    repeat 6 in j:
-        m[j] = _e.xf_m[node * 6 + j]
-    end
-end
-
-func _to_local(node: int, x: f64, y: f64, ox &: f64, oy &: f64):
-    ox = x
-    oy = y
-    if not _xf_has(node):
-        ret
-    end
-    mut m := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    _xf_acc(node, m)
-    mut inv := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    if _m_invert(m, inv):
-        _m_apply(inv, x, y, ox, oy)
-    end
-end
-
-func _to_screen(node: int, x: f64, y: f64, ox &: f64, oy &: f64):
-    ox = x
-    oy = y
-    if not _xf_has(node):
-        ret
-    end
-    mut m := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    _xf_acc(node, m)
-    _m_apply(m, x, y, ox, oy)
-end
-
-func _screen_bbox(node: int, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
-    if not _xf_has(node):
-        ret
-    end
-    mut m := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    _xf_acc(node, m)
-    _m_bbox(m, x0, y0, x1, y1)
-end
-
-func _own_has(node: int): bool:
-    if not _e.xf_any or node < 0 or node >= _e.xf_l.len() / 6:
-        ret false
-    end
-    k := node * 6
-    ret not (_e.xf_l[k] == 1.0 and _e.xf_l[k + 1] == 0.0 and _e.xf_l[k + 2] == 0.0 and _e.xf_l[k + 3] == 1.0 and _e.xf_l[k + 4] == 0.0 and _e.xf_l[k + 5] == 0.0)
-end
-
-func _own_device(node: int): paint.Transform:
-    k := node * 6
-    s := _e.scale
-    ret paint.Transform { a = _e.xf_l[k], b = _e.xf_l[k + 1], c = _e.xf_l[k + 2], d = _e.xf_l[k + 3], e = _e.xf_l[k + 4] * s, f = _e.xf_l[k + 5] * s }
+    ret node >= 0 and node < _e.xf_on.len() and _e.xf_on[node]
 end
 
 func _xf_hash(node: int, h: i64): i64:
     if not _xf_has(node):
         ret h
     end
-    mut x := h
-    repeat 6 in j:
-        x = _hf(x, _e.xf_m[node * 6 + j] * 1024.0)
-    end
-    ret x
+    t := _e.xf[node]
+    mut r := h
+    r = _hf(r, t.a)
+    r = _hf(r, t.b)
+    r = _hf(r, t.c)
+    r = _hf(r, t.d)
+    r = _hf(r, t.e)
+    r = _hf(r, t.f)
+    ret r
 end
 
-func _effect_chain(fl: Vector<css.FilterFn>, chain &: paint.FilterChain):
-    s := _e.scale
-    each f in fl:
-        switch f.name:
-            "blur": chain.Add(paint.NewFilter(paint.FilterKind.Blur, f.amount * s)) break end
-            "brightness": chain.Add(paint.NewFilter(paint.FilterKind.Brightness, f.amount)) break end
-            "contrast": chain.Add(paint.NewFilter(paint.FilterKind.Contrast, f.amount)) break end
-            "grayscale": chain.Add(paint.NewFilter(paint.FilterKind.Grayscale, f.amount)) break end
-            "sepia": chain.Add(paint.NewFilter(paint.FilterKind.Sepia, f.amount)) break end
-            "saturate": chain.Add(paint.NewFilter(paint.FilterKind.Saturate, f.amount)) break end
-            "invert": chain.Add(paint.NewFilter(paint.FilterKind.Invert, f.amount)) break end
-            "opacity": chain.Add(paint.NewFilter(paint.FilterKind.Opacity, f.amount)) break end
-            "hue-rotate": chain.Add(paint.NewFilter(paint.FilterKind.HueRotate, f.amount)) break end
-            "drop-shadow":
-                c := f.shadow.color
-                chain.Add(paint.DropShadowFilter(f.shadow.x * s, f.shadow.y * s, f.shadow.blur * s / 2.0, paint.Color { r = c.r, g = c.g, b = c.b, a = c.a }))
-                break
-            end
-            else: break end
+func _ancestor_transform(node: int): paint.Transform:
+    mut m := paint.Identity()
+    mut n := node
+    until n >= 0:
+        if _xf_has(n):
+            m = m.Then(_e.xf[n])
         end
+        n = _e.dom.nodes[n].parent
     end
+    ret m
 end
 
-func _vis_init():
-    if _e.full or _e.damage.IsEmpty():
-        _vx0 = -1.0e9
-        _vy0 = -1.0e9
-        _vx1 = 1.0e9
-        _vy1 = 1.0e9
-        if not _e.xf_any:
-            _vx0 = -2.0
-            _vy0 = -2.0
-            _vx1 = _e.width + 2.0
-            _vy1 = _e.height + 2.0
-        end
-        ret
-    end
-    bb := _e.damage.Bounds()
-    s := _e.scale
-    _vx0 = (bb.x as f64) / s - 2.0
-    _vy0 = (bb.y as f64) / s - 2.0
-    _vx1 = ((bb.x + bb.width) as f64) / s + 2.0
-    _vy1 = ((bb.y + bb.height) as f64) / s + 2.0
+func _screen_bbox(node: int, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
+    r := paint.RectOf(x0, y0, x1 - x0, y1 - y0)
+    m := _ancestor_transform(node)
+    o := m.MapRect(r)
+    x0 = o.x
+    y0 = o.y
+    x1 = o.x + o.width
+    y1 = o.y + o.height
 end
 
-func _vis_push(node: int, saved: f64[]):
-    saved[0] = _vx0
-    saved[1] = _vy0
-    saved[2] = _vx1
-    saved[3] = _vy1
-    if _vx0 <= -1.0e8:
-        ret
-    end
-    k := node * 6
-    mut own := [_e.xf_l[k], _e.xf_l[k + 1], _e.xf_l[k + 2], _e.xf_l[k + 3], _e.xf_l[k + 4], _e.xf_l[k + 5]]
-    mut inv := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    if not _m_invert(own, inv):
-        ret
-    end
-    mut x0 := _vx0
-    mut y0 := _vy0
-    mut x1 := _vx1
-    mut y1 := _vy1
-    _m_bbox(inv, x0, y0, x1, y1)
-    _vx0 = x0
-    _vy0 = y0
-    _vx1 = x1
-    _vy1 = y1
-end
-
-func _vis_pop(saved: f64[]):
-    _vx0 = saved[0]
-    _vy0 = saved[1]
-    _vx1 = saved[2]
-    _vy1 = saved[3]
-end
-
-func _sub_visible(node: int): bool:
-    if not _e.sub_ok or node >= _e.sub.len() / 4:
-        ret true
-    end
-    k := node * 4
-    ret _e.sub[k] < _vx1 and _e.sub[k + 2] > _vx0 and _e.sub[k + 1] < _vy1 and _e.sub[k + 3] > _vy0
-end
-
-func _sub_local(node: int, r: f64[]): bool:
-    if not _e.sub_ok or node >= _e.sub.len() / 4:
-        ret false
-    end
-    k := node * 4
-    r[0] = _e.sub[k]
-    r[1] = _e.sub[k + 1]
-    r[2] = _e.sub[k + 2]
-    r[3] = _e.sub[k + 3]
-    if _own_has(node):
-        q := node * 6
-        mut own := [_e.xf_l[q], _e.xf_l[q + 1], _e.xf_l[q + 2], _e.xf_l[q + 3], _e.xf_l[q + 4], _e.xf_l[q + 5]]
-        mut inv := [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-        if _m_invert(own, inv):
-            mut x0 := r[0]
-            mut y0 := r[1]
-            mut x1 := r[2]
-            mut y1 := r[3]
-            _m_bbox(inv, x0, y0, x1, y1)
-            r[0] = x0
-            r[1] = y0
-            r[2] = x1
-            r[3] = y1
-        end
-    end
-    ret r[2] > r[0] and r[3] > r[1]
+func _to_local(node: int, x: f64, y: f64, ox &: f64, oy &: f64):
+    m := _ancestor_transform(node)
+    inv := m.Invert()
+    p := inv.Apply(paint.Point { x = x, y = y })
+    ox = p.x
+    oy = p.y
 end

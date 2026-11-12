@@ -15,9 +15,6 @@
 package ui
 
 import str
-import gui.css
-import gui.cssbox
-import gui.typeset
 
 mut _sc := Vector {} as Vector<_Scope>
 mut _sc_free := Vector {} as Vector<int>
@@ -39,9 +36,6 @@ mut _sc_slot_free_s := Vector {} as Vector<int>
 mut _sc_dead := 0
 mut _sc_touched := Vector {} as Vector<i64>
 mut _sc_text_nodes := Vector {} as Vector<int>
-mut _sc_span_fi := Vector {} as Vector<int>
-mut _sc_span_k := Vector {} as Vector<int>
-mut _sc_span_node := Vector {} as Vector<int>
 mut _sc_el_changed := Vector {} as Vector<int>
 
 struct _Scope:
@@ -366,7 +360,7 @@ end
 func _sc_same_shape(o: int, n: int): bool:
     old_nd := _e.dom.nodes[o]
     new_nd := _e.dom.nodes[n]
-    if old_nd.tag != new_nd.tag or old_nd.kids.len() != new_nd.kids.len():
+    if old_nd.kind != new_nd.kind or old_nd.kids.len() != new_nd.kids.len():
         ret false
     end
     if _attr(_e.dom, o, "key") != _attr(_e.dom, n, "key"):
@@ -392,7 +386,7 @@ func _sc_patch(o: int, n: int, map &: Vector<int>, nbefore: int):
         b.text = t
         _sc_text_nodes.push(o)
     end
-    same := _sc_same_list(old_nd.names, new_nd.names) and _sc_same_list(old_nd.values, new_nd.values) and old_nd.d_base == new_nd.d_base and old_nd.d_hover == new_nd.d_hover and old_nd.d_focus == new_nd.d_focus and old_nd.d_active == new_nd.d_active and _sc_same_ints(old_nd.dyn, new_nd.dyn)
+    same := _sc_same_list(old_nd.names, new_nd.names) and _sc_same_list(old_nd.values, new_nd.values) and old_nd.smask == new_nd.smask and _sc_same_ints(old_nd.pst, new_nd.pst) and _sc_same_ints(old_nd.pid, new_nd.pid) and _sc_same_ints(old_nd.dst, new_nd.dst) and _sc_same_ints(old_nd.dprop, new_nd.dprop)
     if not same:
         mut a2 := _e.dom.nodes.ref(o)
         mut b2 := _e.dom.nodes.ref(n)
@@ -402,13 +396,22 @@ func _sc_patch(o: int, n: int, map &: Vector<int>, nbefore: int):
         tv := a2.values
         a2.values = b2.values
         b2.values = tv
-        td := a2.dyn
-        a2.dyn = b2.dyn
-        b2.dyn = td
-        a2.d_base = b2.d_base
-        a2.d_hover = b2.d_hover
-        a2.d_focus = b2.d_focus
-        a2.d_active = b2.d_active
+        tp := a2.pst
+        a2.pst = b2.pst
+        b2.pst = tp
+        tpi := a2.pid
+        a2.pid = b2.pid
+        b2.pid = tpi
+        td := a2.dst
+        a2.dst = b2.dst
+        b2.dst = td
+        tdp := a2.dprop
+        a2.dprop = b2.dprop
+        b2.dprop = tdp
+        tdv := a2.dval
+        a2.dval = b2.dval
+        b2.dval = tdv
+        a2.smask = b2.smask
         _sc_el_changed.push(o)
     end
     repeat old_nd.kids.len() in i:
@@ -428,8 +431,13 @@ func _sc_free_node(i: int):
     nd.names.free()
     nd.values.free()
     nd.kids.free()
-    nd.dyn.free()
+    nd.pst.free()
+    nd.pid.free()
+    nd.dst.free()
+    nd.dprop.free()
+    nd.dval.free()
 end
+
 
 func _sc_drop_events(before: int, d: int, tops: Vector<int>):
     mut nn := Vector {} as Vector<int>
@@ -480,25 +488,25 @@ func _sc_match_tops(olds: Vector<int>, news: Vector<int>):
     repeat olds.len():
         used.push(false)
     end
-    mut tags := Vector {} as Vector<str>
-    defer tags.free()
+    mut kinds := Vector {} as Vector<str>
+    defer kinds.free()
     mut counts := Vector {} as Vector<int>
     defer counts.free()
     each k in news:
-        t := _e.dom.nodes[k].tag
+        t := _e.dom.nodes[k].kind
         if t == "#text":
             continue
         end
         mut nth := 0
         mut slot := -1
-        repeat tags.len() in q:
-            if tags[q] == t:
+        repeat kinds.len() in q:
+            if kinds[q] == t:
                 slot = q
             end
         end
         if _attr(_e.dom, k, "id").len() == 0 and _attr(_e.dom, k, "key").len() == 0:
             if slot < 0:
-                tags.push(t)
+                kinds.push(t)
                 counts.push(1)
             else:
                 nth = counts[slot]
@@ -514,6 +522,7 @@ func _sc_match_tops(olds: Vector<int>, news: Vector<int>):
         end
     end
 end
+
 
 func _sc_rerun(id: int):
     d := _sc[id].dnode
@@ -615,7 +624,7 @@ func _sc_rerun(id: int):
             a = sa.parent
         end
         repeat _e.dom.nodes.len() - _e.ctl.len():
-            _e.ctl.push(_Ctl {})
+            _e.ctl.push(_new_ctl())
         end
         _sc_match_tops(olds, news)
         repeat _e.ctl.len() - nbefore in i:
@@ -653,140 +662,9 @@ func _sc_depth(id: int): int:
     ret n
 end
 
-func _sc_refresh_el(node: int):
-    if node < 0 or node >= _e.node_el.len():
-        ret
-    end
-    i := _e.node_el[node]
-    if i < 0:
-        ret
-    end
-    nd := _e.dom.nodes[node]
-    mut el := _e.els.ref(i)
-    el.id = _attr(_e.dom, node, "id")
-    el.classes = _attr(_e.dom, node, "class")
-    if el.base.len() > 0:
-        _sfree(el.base)
-    end
-    if el.inline_style.len() > 0:
-        _sfree(el.inline_style)
-    end
-    el.base = _hints(node, nd.tag)
-    inline_style := _attr(_e.dom, node, "style")
-    el.inline_style = inline_style.len() > 0 ? str.Clone(inline_style) : ""
-    el.decl_base = nd.d_base
-    el.decl_hover = nd.d_hover
-    el.decl_focus = nd.d_focus
-    el.decl_active = nd.d_active
-    el.decl_dyn.free()
-    el.decl_dyn = Vector {} as Vector<int>
-    each di in nd.dyn:
-        el.decl_dyn.push(di)
-    end
-    el.attr_names.clear()
-    el.attr_values.clear()
-    repeat nd.names.len() in k:
-        name := nd.names[k]
-        if name != "style" and name != "checked" and name != "open":
-            el.AddAttr(name, nd.values[k])
-        end
-    end
-    c := _e.ctl[node]
-    if c.has_checked:
-        if c.checked:
-            el.AddAttr("checked", "")
-        end
-    else _has_attr(_e.dom, node, "checked"):
-        el.AddAttr("checked", "")
-    end
-    if nd.tag == "details" or nd.tag == "dialog":
-        if c.open:
-            el.AddAttr("open", "")
-        end
-    else _has_attr(_e.dom, node, "open"):
-        el.AddAttr("open", "")
-    end
-end
-
-func _sc_note_span(fi: int, k: int, node: int):
-    _sc_span_fi.push(fi)
-    _sc_span_k.push(k)
-    _sc_span_node.push(node)
-end
-
-func _sc_spans_reset():
-    _sc_span_fi.clear()
-    _sc_span_k.clear()
-    _sc_span_node.clear()
-end
-
-func _sc_flow_block(node: int): bool:
-    if node < 0:
-        ret false
-    end
-    cs := _style_of(node)
-    if cs.position != cssbox.Position.Static:
-        ret false
-    end
-    ret cs.display == css.Display.Block or cs.display == css.Display.ListItem
-end
-
-func _sc_retext(fi: int, k: int, t: int): bool:
-    f0 := _e.ifcs[fi]
-    if f0.control or f0.atoms.len() > 0 or not f0.has_lay or not f0.has_para:
-        ret false
-    end
-    ow := f0.lay.width
-    oh := f0.lay.height
-    lw := f0.lay_w
-    ominc := typeset.MinContentWidth(f0.para)
-    omaxc := typeset.MaxContentWidth(f0.para)
-    nd := _e.dom.nodes[t]
-    el := _el_of(nd.parent)
-    cs := _style_of(el)
-    nt := _transform(cs, nd.text)
-    mut f := _e.ifcs.ref(fi)
-    mut sp := f.spans[k]
-    _sfree(sp.text)
-    sp.text = nt
-    f.spans[k] = sp
-    typeset.FreeParagraph(f.para)
-    f.has_para = false
-    typeset.FreeLayout(f.lay)
-    f.has_lay = false
-    _sfree(f.ckey)
-    f.ckey = ""
-    _ifc_layout(fi, lw)
-    f2 := _e.ifcs[fi]
-    if f2.lay.height != oh:
-        ret false
-    end
-    if f2.lay.width == ow and typeset.MinContentWidth(f2.para) == ominc and typeset.MaxContentWidth(f2.para) == omaxc:
-        ret true
-    end
-    owner := f2.owner
-    ret _sc_flow_block(owner) and _e.dom.nodes[owner].parent >= 0 and _sc_flow_block(_e.dom.nodes[owner].parent)
-end
 
 func _sc_fast_text(): bool:
-    if not _e.has_tree:
-        ret false
-    end
-    each t in _sc_text_nodes:
-        mut found := false
-        repeat _sc_span_node.len() in q:
-            if _sc_span_node[q] == t:
-                if not _sc_retext(_sc_span_fi[q], _sc_span_k[q], t):
-                    ret false
-                end
-                found = true
-            end
-        end
-        if not found:
-            ret false
-        end
-    end
-    ret true
+    ret false
 end
 
 func _sc_full():
@@ -872,18 +750,16 @@ func _sc_update():
         ret
     end
     each node in _sc_el_changed:
-        _sc_refresh_el(node)
-        if _restyle(node):
-            _e.dirty_layout = true
-        end
+        _restyle(node)
+        _e.dirty_layout = true
     end
-    if _sc_text_nodes.len() > 0 and (_e.dirty_layout or not _sc_fast_text()):
+    if _sc_text_nodes.len() > 0:
         _e.dirty_layout = true
     end
 end
 
 func _sc_active(): bool:
-    ret _e.compiled and _sc_on
+    ret _sc_on
 end
 
 @en "ScopeSite"
@@ -915,3 +791,4 @@ end
 pub func ScopeRuns(): int:
     ret _sc_runs
 end
+

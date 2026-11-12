@@ -16,24 +16,15 @@ package ui
 
 import math
 import str
-import gui.css
 import gui.paint
+import gui.style
 
-func _hmix(h: i64, v: i64): i64:
-    ret (h ^ v) * (1099511628211 as i64) + (v >> 7)
-end
-
-func _hstr(h: i64, s: str): i64:
-    mut x := h
-    p := (s as void*) as u8*
-    repeat s.len() in i:
-        x = (x ^ (_hb(p, i) as i64)) * (1099511628211 as i64)
+func _filter_extent(s: style.Style): f64:
+    mut e := 0.0
+    if s.blur.px > 0.0:
+        e += s.blur.px * 3.0
     end
-    ret _hmix(x, s.len() as i64)
-end
-
-func _hf(h: i64, v: f64): i64:
-    ret _hmix(h, math.Round(v * 64.0) as i64)
+    ret e
 end
 
 func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
@@ -71,10 +62,7 @@ func _node_key(node: int): i64:
     b := _e.boxes[node]
     h = _hf(_hf(_hf(_hf(h, b.x), b.y), b.w), b.h)
     h = _hf(_hf(_hf(_hf(h, b.clip_x0), b.clip_y0), b.clip_x1), b.clip_y1)
-    i := _e.node_el[node]
-    if i >= 0:
-        h = _hmix(h, _e.sid[i] as i64)
-    end
+    h = _hmix(h, _e.us[node].ihash)
     c := _e.ctl[node]
     h = _hmix(h, (c.hovered ? 1 : 0) + (c.focused ? 2 : 0) + (c.pressed ? 4 : 0) + (c.focus_visible ? 8 : 0) + (c.open ? 16 : 0) + (_is_checked(node) ? 32 : 0))
     h = _hf(_hf(h, c.scroll_x), c.scroll_y)
@@ -88,19 +76,17 @@ func _node_key(node: int): i64:
     repeat nd.names.len() in k:
         h = _hstr(_hstr(h, nd.names[k]), nd.values[k])
     end
-    mut fi := _e.node_ifc[node]
-    until fi >= 0:
-        f := _e.ifcs[fi]
+    ri := node < _e.node_run.len() ? _e.node_run[node] : -1
+    if ri >= 0:
+        f := _e.runs[ri]
         h = _hf(_hf(h, f.x), f.y)
         repeat f.spans.len() in k:
             h = _hstr(h, f.spans[k].text)
             el := f.span_el[k]
-            if el >= 0 and el < _e.node_el.len() and _e.node_el[el] >= 0:
-                h = _hmix(h, _e.sid[_e.node_el[el]] as i64)
+            if el >= 0 and el < _e.ctl.len():
                 h = _hmix(h, _e.ctl[el].hovered ? 3 : 5)
             end
         end
-        fi = f.next
     end
     if node == _e.popup:
         h = _hmix(h, 77)
@@ -120,33 +106,6 @@ func _damage_rect(x0: int, y0: int, x1: int, y1: int):
     end
 end
 
-func _damage_node(node: int):
-    if node < 0 or node >= _e.boxes.len():
-        ret
-    end
-    mut x0 := 0
-    mut y0 := 0
-    mut x1 := 0
-    mut y1 := 0
-    if _ink(node, x0, y0, x1, y1):
-        _damage_rect(x0, y0, x1, y1)
-    end
-end
-
-func _damage_popup():
-    if _e.popup < 0:
-        ret
-    end
-    mut x := 0.0
-    mut y := 0.0
-    mut w := 0.0
-    mut ih := 0.0
-    mut n := 0
-    _popup_geometry(x, y, w, ih, n)
-    s := _e.scale
-    _damage_rect((math.Floor((x - 10.0) * s)) as int, (math.Floor((y - 10.0) * s)) as int, (math.Ceil((x + w + 10.0) * s)) as int, (math.Ceil((y + ih * (n as f64) + 12.0) * s)) as int)
-end
-
 func _damage_hits(x0: int, y0: int, x1: int, y1: int): bool:
     repeat _e.damage.Count() in i:
         r := _e.damage.At(i)
@@ -155,48 +114,6 @@ func _damage_hits(x0: int, y0: int, x1: int, y1: int): bool:
         end
     end
     ret false
-end
-
-func _damage_effects():
-    if _e.full or _e.damage.IsEmpty():
-        ret
-    end
-    repeat 3:
-        mut grew := false
-        repeat _e.dom.nodes.len() in node:
-            if node >= _e.fx_on.len() or not _e.fx_on[node]:
-                continue
-            end
-            mut x0 := 0
-            mut y0 := 0
-            mut x1 := 0
-            mut y1 := 0
-            if not _ink(node, x0, y0, x1, y1) or not _damage_hits(x0, y0, x1, y1):
-                continue
-            end
-            cw := math.Ceil(_e.width * _e.scale) as int
-            ch := math.Ceil(_e.height * _e.scale) as int
-            ax := math.MaxI(0, x0)
-            ay := math.MaxI(0, y0)
-            bx := math.MinI(cw, x1)
-            by1 := math.MinI(ch, y1)
-            mut inside := false
-            repeat _e.damage.Count() in i:
-                r := _e.damage.At(i)
-                if r.x <= ax and r.y <= ay and r.x + r.width >= bx and r.y + r.height >= by1:
-                    inside = true
-                    break
-                end
-            end
-            if not inside:
-                _damage_rect(x0, y0, x1, y1)
-                grew = true
-            end
-        end
-        if not grew:
-            break
-        end
-    end
 end
 
 func _diff_records():
@@ -214,9 +131,6 @@ func _diff_records():
     cw := math.Ceil(_e.width * _e.scale) as int
     ch := math.Ceil(_e.height * _e.scale) as int
     repeat _e.dom.nodes.len() in node:
-        if _e.node_el[node] < 0:
-            continue
-        end
         mut x0 := 0
         mut y0 := 0
         mut x1 := 0
@@ -262,5 +176,64 @@ func _diff_records():
     end
     _e.recs.free()
     _e.recs = nrecs
-    _damage_effects()
+end
+
+func _damage_node(node: int):
+    mut x0 := 0
+    mut y0 := 0
+    mut x1 := 0
+    mut y1 := 0
+    if _ink(node, x0, y0, x1, y1):
+        _damage_rect(x0, y0, x1, y1)
+    end
+end
+
+func _ink_page(node: int, r: f64[]): bool:
+    b := _e.boxes[node]
+    if not b.shown:
+        ret false
+    end
+    mut l := b.x
+    mut t := b.y
+    mut rr := b.x + b.w
+    mut bt := b.y + b.h
+    s := _e.cs[node]
+    each sh in s.shadow:
+        if not sh.inset:
+            e := sh.blur.px + math.Abs(sh.spread.px) + 2.0
+            l = math.Min(l, b.x + sh.x.px - e)
+            t = math.Min(t, b.y + sh.y.px - e)
+            rr = math.Max(rr, b.x + b.w + sh.x.px + e)
+            bt = math.Max(bt, b.y + b.h + sh.y.px + e)
+        end
+    end
+    if s.outline_style != style.KW_NONE:
+        o := math.Max(s.outline_width.px, 2.0) + math.Abs(s.outline_offset.px) + 1.0
+        l -= o
+        t -= o
+        rr += o
+        bt += o
+    end
+    if s.text_shadow.len() > 0:
+        mut ts := 0.0
+        each sh in s.text_shadow:
+            ts = math.Max(ts, math.Max(math.Abs(sh.x.px), math.Abs(sh.y.px)) + sh.blur.px * 1.5 + 2.0)
+        end
+        l -= ts
+        t -= ts
+        rr += ts
+        bt += ts
+    end
+    fe := _filter_extent(s)
+    if fe > 0.0:
+        l -= fe
+        t -= fe
+        rr += fe
+        bt += fe
+    end
+    r[0] = l
+    r[1] = t
+    r[2] = rr
+    r[3] = bt
+    ret true
 end

@@ -14,9 +14,23 @@
 
 package webview
 
+import str
+import mem
+import os
+import filepath
+import crypto
+import fs
+import io
+import os.user
+import os.shell
+import encoding.json
+import sync
+
 mut _menu_ids := Vector {} as Vector<str>
 mut _on_menu := (_id: str): ret end
 mut _on_tray_click := (): ret end
+mut _on_tray_double_click := (): ret end
+mut _on_tray_menu := (_id: str): ret end
 mut _on_second := (_args: Vector<str>): ret end
 mut _on_notify_click := (): ret end
 
@@ -45,7 +59,13 @@ end
 func _fire_menu(native: int):
     at := native - 1000
     if at >= 0 and at < _menu_ids.Len():
-        _on_menu(_menu_ids[at])
+        id := _menu_ids[at]
+        _on_menu(id)
+        _on_tray_menu(id)
+        // Best-effort app-level event broadcast for menu actions.
+        encoded := json.Str(id)
+        Emit("__app:menu", encoded)
+        mem.Free(encoded as void*)
     end
 end
 
@@ -155,8 +175,9 @@ end
 @fa "انتخاب پرونده ها"
 pub func PickFiles(title: str = "Open", filter_name: str = "", patterns: str = ""): Vector<str>:
     mut out := Vector {} as Vector<str>
-    // Best-effort: current native picker backends are single-selection.
-    // A successful pick returns a vector containing one path.
+    // Best-effort: native picker backends currently expose single-selection in many
+    // builds. A successful pick returns a vector containing one path.
+    // Backends that support multi-select can wire a richer _os_pick_files later.
     one := PickFile(title, filter_name, patterns)
     if one.Len() > 0:
         out.Push(one)
@@ -172,6 +193,26 @@ pub func OpenFiles(title: str = "Open", filter_name: str = "", patterns: str = "
     ret PickFiles(title, filter_name, patterns)
 end
 
+@en "PickDirectories"
+@fa "انتخاب پوشه ها"
+pub func PickDirectories(title: str = "Select folders"): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    // Best-effort fallback: directory picker is typically single-selection.
+    one := PickFolder(title)
+    if one.Len() > 0:
+        out.Push(one)
+    else:
+        mem.Free(one as void*)
+    end
+    ret out
+end
+
+@en "SelectDirectories"
+@fa "انتخاب شاخه ها"
+pub func SelectDirectories(title: str = "Select folders"): Vector<str>:
+    ret PickDirectories(title)
+end
+
 @en "SaveFile"
 @fa "ذخیره پرونده"
 pub func SaveFile(title: str = "Save", default_name: str = ""): str:
@@ -184,7 +225,7 @@ pub func SaveFileAs(title: str = "Save As", default_name: str = "", filter_name:
     // Best-effort: default path/filter support depends on platform picker backend.
     _keep_filter_name := filter_name
     _keep_patterns := patterns
-    ret SaveFile(title, default_name)
+    ret _os_pick(title, 2, default_name, filter_name, patterns)
 end
 
 @en "Message"
@@ -344,6 +385,14 @@ pub func SetTray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
     ret _os_set_tray(icon, tooltip, items)
 end
 
+@en "UpdateTray"
+@fa "به‌روزرسانی سینی"
+pub func UpdateTray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
+    // Best-effort portable update: remove + recreate.
+    _os_remove_tray()
+    ret _os_set_tray(icon, tooltip, items)
+end
+
 @en "RemoveTray"
 @fa "حذف سینی"
 pub func RemoveTray():
@@ -356,9 +405,41 @@ pub func OnTrayClick(handler: func ()):
     _on_tray_click = handler
 end
 
+@en "OnTrayDoubleClick"
+@fa "هنگام دوبار کلیک سینی"
+pub func OnTrayDoubleClick(handler: func ()):
+    _on_tray_double_click = handler
+end
+
+@en "OnTrayMenu"
+@fa "هنگام منوی سینی"
+pub func OnTrayMenu(handler: func (str)):
+    _on_tray_menu = handler
+end
+
 @en "SingleInstance"
 @fa "نمونه یکتا"
 pub func SingleInstance(on_second: func (Vector<str>)): bool:
-    _on_second = on_second
-    ret _os_single_instance()
+    _on_second = (args: Vector<str>):
+        on_second(args)
+        // App-level activation/deep-link forwarding hook.
+        HandleSecondInstanceArgs(args)
+    end
+    ok := _os_single_instance()
+    if ok:
+        // Primary instance: best-effort forwarding of current argv as activation.
+        args := os.Args()
+        HandleSecondInstanceArgs(args)
+        args.Free()
+    end
+    ret ok
+end
+
+@en "SingleInstanceActivate"
+@fa "فعال سازی نمونه یکتا"
+pub func SingleInstanceActivate(on_second: func (Vector<str>) = (_args: Vector<str>): ret end): bool:
+    ret SingleInstance(
+        (args: Vector<str>): on_second(args)
+        ActivateApp() end
+    )
 end

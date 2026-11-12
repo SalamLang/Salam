@@ -18,6 +18,9 @@ package webview
 
 import str
 import mem
+import os
+import filepath
+import os.desktop.paths as dpaths
 
 // Message kinds for dialogs (best-effort mapped per platform).
 pub const MESSAGE_INFO := 0
@@ -125,29 +128,83 @@ pub func Filter(name: str, patterns: str): FileFilter:
     ret FileFilter { name = str.Clone(name), patterns = str.Clone(patterns) }
 end
 
+@en "FilterFromExtensions"
+@fa "صافی از پسوندها"
+pub func FilterFromExtensions(name: str, exts: Vector<str>): FileFilter:
+    pat := dpaths.BuildFilterPattern(exts)
+    ret FileFilter { name = str.Clone(name), patterns = pat }
+end
+
+@en "NormalizeDialogPath"
+@fa "نرمال‌سازی مسیر گفتگو"
+pub func NormalizeDialogPath(path: str): str:
+    ret dpaths.NormalizeForDialog(path)
+end
+
+@en "DefaultDialogDirectory"
+@fa "پوشه پیش‌فرض گفتگو"
+pub func DefaultDialogDirectory(preferred: str = ""): str:
+    ret dpaths.DefaultDialogPath(preferred)
+end
+
+func _effective_path(p: str): str:
+    if p.Len() == 0: ret DefaultDialogDirectory("") end
+    if os.Exists(p): ret NormalizeDialogPath(p) end
+    parent := filepath.Dir(p)
+    defer mem.Free(parent as void*)
+    if parent.Len() > 0 and os.IsDir(parent): ret NormalizeDialogPath(parent) end
+    ret DefaultDialogDirectory("")
+end
+
+@en "SuggestSavePath"
+@fa "پیشنهاد مسیر ذخیره"
+pub func SuggestSavePath(directory: str, filename: str): str:
+    dir := _effective_path(directory)
+    defer mem.Free(dir as void*)
+    name := filename.Len() > 0 ? str.Clone(filename) : str.Clone("untitled")
+    defer mem.Free(name as void*)
+    ret filepath.Join(dir, name)
+end
+
 @en "OpenFileDialog"
 @fa "گفتگوی باز کردن پرونده"
 pub func OpenFileDialog(options: OpenDialogOptions): str:
     if options.directory:
+        base := _effective_path(options.default_path)
+        defer mem.Free(base as void*)
         ret PickFolder(options.title.Len() > 0 ? options.title : "Select a folder")
     end
     f := _first_filter(options)
+    _keep_base := _effective_path(options.default_path)
+    defer mem.Free(_keep_base as void*)
     ret PickFile(options.title, f.name, f.patterns)
 end
 
 @en "OpenFilesDialog"
 @fa "گفتگوی باز کردن پرونده ها"
 pub func OpenFilesDialog(options: OpenDialogOptions): Vector<str>:
-    mut out := Vector {} as Vector<str>
-    // Best-effort: native backends currently expose single-file pickers in many
-    // builds. Return a vector with the selected path when available.
-    one := OpenFileDialog(options)
-    if one.Len() > 0:
-        out.Push(one)
-    else:
-        mem.Free(one as void*)
+    if options.directory:
+        mut dirs := Vector {} as Vector<str>
+        one_dir := SelectFolderDialog(options.title.Len() > 0 ? options.title : "Select a folder")
+        if one_dir.Len() > 0:
+            dirs.Push(one_dir)
+        else:
+            mem.Free(one_dir as void*)
+        end
+        ret dirs
     end
-    ret out
+    if not options.multiple:
+        mut out := Vector {} as Vector<str>
+        one := OpenFileDialog(options)
+        if one.Len() > 0:
+            out.Push(one)
+        else:
+            mem.Free(one as void*)
+        end
+        ret out
+    end
+    f := _first_filter(options)
+    ret PickFiles(options.title, f.name, f.patterns)
 end
 
 @en "SelectFolderDialog"
@@ -156,20 +213,31 @@ pub func SelectFolderDialog(title: str = "Select a folder"): str:
     ret PickFolder(title)
 end
 
+@en "SelectFoldersDialog"
+@fa "گفتگوی انتخاب پوشه ها"
+pub func SelectFoldersDialog(title: str = "Select folders"): Vector<str>:
+    ret PickDirectories(title)
+end
+
 @en "SelectDirectoryDialog"
 @fa "گفتگوی انتخاب شاخه"
 pub func SelectDirectoryDialog(title: str = "Select a folder"): str:
     ret PickFolder(title)
 end
 
+@en "SelectDirectoriesDialog"
+@fa "گفتگوی انتخاب شاخه ها"
+pub func SelectDirectoriesDialog(title: str = "Select folders"): Vector<str>:
+    ret PickDirectories(title)
+end
+
 @en "SaveFileDialog"
 @fa "گفتگوی ذخیره پرونده"
 pub func SaveFileDialog(options: SaveDialogOptions): str:
     f := _first_save_filter(options)
-    _keep_name := f.name
-    _keep_patterns := f.patterns
+    name := options.default_name.Len() > 0 ? options.default_name : options.default_path
     // Underlying save picker may ignore filters/default path on some platforms.
-    ret SaveFile(options.title, options.default_name)
+    ret SaveFileAs(options.title, name, f.name, f.patterns)
 end
 
 @en "MessageDialog"

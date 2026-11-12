@@ -1030,8 +1030,12 @@ func lay_comp_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         if n.c != 0 and at.KindOf(a, n.c) != at.AST_IDENTIFIER:
             serr(s, 18, span_of(a, n.c), i18.Tr("'each' key must be a variable name"))
         end
-        // Keyed-each: explicit key variable/expression is preferred for stable reconciliation.
-        // TODO(runtime): validate dynamic key uniqueness/lifecycle semantics once toolchain/runtime support lands.
+        if n.c == 0:
+            swarn(
+                s, 138, span_of(a, nid), i18.Tr("'each' has no key; add a stable key for better update/reconciliation parity")
+            )
+            // TODO(runtime): validate dynamic key uniqueness/lifecycle semantics once toolchain/runtime support lands.
+        end
         if n.b == 0:
             serr(s, 18, span_of(a, nid), i18.Tr("'each' has no body"))
         else:
@@ -1052,6 +1056,17 @@ func lay_comp_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             lay_comp_check_items(s, a, n.c, ck)
         end
     end
+end
+
+func lay_comp_slot_valid_name(sn: str): bool:
+    if str.Len(sn) == 0:
+        ret false
+    end
+    // Conservative: reject whitespace/control-ish separators in slot names.
+    if str.IndexOf(sn, " ") >= 0 or str.IndexOf(sn, "\t") >= 0 or str.IndexOf(sn, "\n") >= 0 or str.IndexOf(sn, "\r") >= 0:
+        ret false
+    end
+    ret true
 end
 
 func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
@@ -1085,6 +1100,13 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             if str.Len(sn) == 0:
                 sn = "default"
             end
+            if not lay_comp_slot_valid_name(sn):
+                serr(
+                    s, 18, span_of(a, cid), co.Format1(
+                        i18.Tr("invalid slot name '%s'"), co.ArgStr(sn)
+                    )
+                )
+            end
             mut dup_slot := false
             repeat slot_names.Len() in si:
                 if str.Equals(slot_names.Get(si), sn):
@@ -1101,9 +1123,60 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
                 slot_names.Push(sn)
             end
             // Slot placeholders may contain fallback content and/or named slot metadata attrs.
-            // TODO(runtime): named-slot forwarding semantics require toolchain/runtime validation.
+            // TODO(runtime): named-slot forwarding/scoped slot params require toolchain/runtime validation.
             lay_comp_check_items(s, a, cid, ck)
             continue
+        end
+        // Component invocations inside component bodies: basic slot-routing attr diagnostics.
+        if lay_is_component(ck, cn.name):
+            mut provided_named := Vector {} as Vector<str>
+            defer provided_named.Free()
+            repeat at.ChildCount(a, cid) in jn:
+                kid := at.Child(a, cid, jn)
+                kk := at.KindOf(a, kid)
+                if kk == at.AST_LAYOUT_ELEMENT:
+                    if lay_is_slot_placeholder(at.Get(a, kid).name):
+                        psn := lay_comp_slot_name(a, kid)
+                        if str.Len(psn) == 0:
+                            psn = "default"
+                        end
+                        if not lay_comp_slot_valid_name(psn):
+                            serr(
+                                s, 18, span_of(a, kid), co.Format1(
+                                    i18.Tr("invalid slot name '%s'"), co.ArgStr(psn)
+                                )
+                            )
+                        end
+                        if not str.Equals(psn, "default"):
+                            mut seenp := false
+                            repeat provided_named.Len() in pni:
+                                if str.Equals(provided_named.Get(pni), psn):
+                                    seenp = true
+                                end
+                            end
+                            if seenp:
+                                serr(
+                                    s, 114, span_of(a, kid), co.Format1(
+                                        i18.Tr("component receives named slot '%s' more than once"),
+                                        co.ArgStr(psn)
+                                    )
+                                )
+                            else:
+                                provided_named.Push(psn)
+                            end
+                        end
+                    else:
+                        rsn := lay_comp_slot_name(a, kid)
+                        if str.Len(rsn) > 0 and not lay_comp_slot_valid_name(rsn):
+                            serr(
+                                s, 18, span_of(a, kid), co.Format1(
+                                    i18.Tr("invalid slot name '%s'"), co.ArgStr(rsn)
+                                )
+                            )
+                        end
+                    end
+                end
+            end
         end
         if not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
             if ck.unexpanded:
@@ -1307,6 +1380,12 @@ func lay_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         end
         if n.c != 0 and at.KindOf(a, n.c) != at.AST_IDENTIFIER:
             serr(s, 18, span_of(a, n.c), i18.Tr("'each' key must be a variable name"))
+        end
+        if n.c == 0:
+            swarn(
+                s, 138, span_of(a, nid), i18.Tr("'each' has no key; add a stable key for better update/reconciliation parity")
+            )
+            // TODO(runtime): enforce/validate key stability and lifecycle hook points for dynamic lists.
         end
         if n.b == 0:
             serr(s, 18, span_of(a, nid), i18.Tr("'each' has no body"))

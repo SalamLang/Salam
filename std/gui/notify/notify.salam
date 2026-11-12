@@ -70,6 +70,9 @@ pub struct Action:
     @en "icon"
     @fa "نماد"
     pub icon: str = ""
+    @en "placeholder"
+    @fa "جانگهدار"
+    pub placeholder: str = "" // for reply/text-input actions (platform-dependent)
 end
 
 @en "Notification"
@@ -90,6 +93,12 @@ pub struct Notification:
     @en "icon"
     @fa "نماد"
     pub icon: str = ""
+    @en "image"
+    @fa "تصویر"
+    pub image: str = "" // rich content hint (path/url), best-effort
+    @en "hero_image"
+    @fa "تصویر اصلی"
+    pub hero_image: str = "" // large/hero image hint, best-effort
     @en "sound"
     @fa "صدا"
     pub sound: str = ""
@@ -99,12 +108,24 @@ pub struct Notification:
     @en "timeout_ms"
     @fa "مهلت میلی ثانیه"
     pub timeout_ms: int = -1
+    @en "progress"
+    @fa "پیشرفت"
+    pub progress: int = -1 // 0..100 when >= 0, platform-dependent
     @en "actions"
     @fa "کنش ها"
     pub actions: Vector<Action> = Vector {}
     @en "tag"
     @fa "برچسب گروه"
     pub tag: str = ""
+    @en "category"
+    @fa "دسته"
+    pub category: str = ""
+    @en "group"
+    @fa "گروه"
+    pub group: str = ""
+    @en "silent"
+    @fa "بی‌صدا"
+    pub silent: bool = false
     @en "data"
     @fa "داده"
     pub data: str = ""
@@ -129,6 +150,13 @@ end
 @fa "کنش تازه"
 pub func NewAction(id: str, label: str, icon: str = ""): Action:
     ret Action { id = str.Clone(id), label = str.Clone(label), icon = str.Clone(icon) }
+end
+
+@en "NewReplyAction"
+@fa "کنش پاسخ تازه"
+pub func NewReplyAction(id: str, label: str, placeholder: str = ""): Action:
+    // Reply/text-input actions are platform-dependent and may be ignored.
+    ret Action { id = str.Clone(id), label = str.Clone(label), placeholder = str.Clone(placeholder) }
 end
 
 func _next_id(): str:
@@ -272,6 +300,39 @@ pub func WithActions(note: Notification, actions: Vector<Action>): Notification:
     ret n
 end
 
+@en "WithImage"
+@fa "با تصویر"
+pub func WithImage(note: Notification, image: str): Notification:
+    mut n := note
+    n.image = str.Clone(image)
+    ret n
+end
+
+@en "WithProgress"
+@fa "با پیشرفت"
+pub func WithProgress(note: Notification, progress: int): Notification:
+    mut n := note
+    n.progress = progress
+    ret n
+end
+
+@en "WithCategory"
+@fa "با دسته"
+pub func WithCategory(note: Notification, category: str): Notification:
+    mut n := note
+    n.category = str.Clone(category)
+    ret n
+end
+
+@en "Rich"
+@fa "غنی"
+pub func Rich(title: str, body: str, subtitle: str = "", image: str = "", icon: str = ""): Notification:
+    ret Notification {
+        title = str.Clone(title), body = str.Clone(body), subtitle = str.Clone(subtitle), image = str.Clone(image),
+        icon = str.Clone(icon), urgency = URGENCY_NORMAL, sound = SOUND_DEFAULT,
+    }
+end
+
 @en "Show"
 @fa "نمایش"
 pub func Show(note: Notification): str:
@@ -281,6 +342,13 @@ pub func Show(note: Notification): str:
     end
     if n.urgency.Len() == 0:
         n.urgency = URGENCY_NORMAL
+    end
+    if n.silent:
+        n.sound = SOUND_NONE
+    end
+    // Coalesce group/tag hints best-effort for richer notification APIs.
+    if n.group.Len() == 0 and n.tag.Len() > 0:
+        n.group = str.Clone(n.tag)
     end
     perm := PermissionStatus()
     if perm.denied:
@@ -305,6 +373,34 @@ end
 pub func Send(title: str, body: str): str:
     note := Text(title, body)
     ret Show(note)
+end
+
+@en "SupportsActions"
+@fa "کنش‌ها پشتیبانی می‌شوند"
+pub func SupportsActions(): bool:
+    // Best-effort capability signal: full interactive action dispatch is backend-dependent.
+    if SALAM_OS_LINUX: ret true end
+    ret false
+end
+
+@en "SupportsRichContent"
+@fa "محتوای غنی پشتیبانی می‌شود"
+pub func SupportsRichContent(): bool:
+    // API accepts rich fields on supported platforms; rendering fidelity varies.
+    ret IsSupported()
+end
+
+@en "CapabilitiesNote"
+@fa "یادداشت قابلیت‌ها"
+pub func CapabilitiesNote(): str:
+    if SALAM_OS_LINUX:
+        ret str.Clone("Actions, hints, and some rich fields are forwarded via freedesktop notifications; behavior depends on the daemon.")
+    else SALAM_OS_WINDOWS:
+        ret str.Clone("Balloon notifications are best-effort; actions/rich images/progress/close are limited.")
+    else SALAM_OS_MAC:
+        ret str.Clone("NSUserNotification/osascript fallback provides best-effort display; actions/rich content/click tracking are limited.")
+    end
+    ret str.Clone("Notifications are not supported on this platform.")
 end
 
 @en "Update"
@@ -487,8 +583,14 @@ if SALAM_OS_LINUX:
         end
         hints := g_variant_builder_new(g_variant_type_new("a{sv}"))
         g_variant_builder_add(hints, "{sv}", "urgency", g_variant_new_byte(_urgency_byte(note)))
-        if note.tag.Len() > 0:
+        if note.tag.Len() > 0 or note.group.Len() > 0:
             g_variant_builder_add(hints, "{sv}", "x-canonical-append", g_variant_new_string("true"))
+        end
+        if note.category.Len() > 0:
+            g_variant_builder_add(hints, "{sv}", "category", g_variant_new_string(note.category))
+        end
+        if note.progress >= 0:
+            g_variant_builder_add(hints, "{sv}", "value", g_variant_new_int32(note.progress as i32))
         end
         if note.sound.Len() == 0:
             g_variant_builder_add(hints, "{sv}", "suppress-sound", g_variant_new_boolean(1))
@@ -496,8 +598,18 @@ if SALAM_OS_LINUX:
             name := note.sound == "alert" ? "dialog-warning" : "message-new-instant"
             g_variant_builder_add(hints, "{sv}", "sound-name", g_variant_new_string(name))
         end
-        if note.icon.Len() > 0:
-            g_variant_builder_add(hints, "{sv}", "image-path", g_variant_new_string(note.icon))
+        mut image_path := note.image
+        if image_path.Len() == 0:
+            image_path = note.hero_image
+        end
+        if image_path.Len() == 0:
+            image_path = note.icon
+        end
+        if image_path.Len() > 0:
+            g_variant_builder_add(hints, "{sv}", "image-path", g_variant_new_string(image_path))
+        end
+        if note.data.Len() > 0:
+            g_variant_builder_add(hints, "{sv}", "x-salam-data", g_variant_new_string(note.data))
         end
         title := _full_title(note)
         defer mem.Free(title as void*)

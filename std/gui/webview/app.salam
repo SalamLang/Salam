@@ -42,6 +42,17 @@ mut _pending_lock := sync.NewMutex()
 mut _call_serial := 0 as i64
 mut _local_origin_text := ""
 
+// App lifecycle / activation hooks (best-effort).
+mut _on_app_ready := (): ret end
+mut _on_app_activate := (): ret end
+mut _on_before_quit := (): ret true end
+mut _on_quit := (): ret end
+mut _on_window_all_closed := (): ret end
+mut _on_deep_link := (_url: str): ret end
+mut _on_single_instance := (_args: Vector<str>): ret end
+mut _app_ready_fired := false
+mut _quitting := false
+
 struct _Win:
     pub label: str = ""
     pub view: WebView = WebView {}
@@ -333,18 +344,21 @@ pub struct Window:
     @fa "نمایش"
     pub func Show():
         this.view().Show()
+        _emit_app_event("window-shown", this.index)
     end
 
     @en "Hide"
     @fa "پنهان کردن"
     pub func Hide():
         this.view().Hide()
+        _emit_app_event("window-hidden", this.index)
     end
 
     @en "Focus"
     @fa "تمرکز"
     pub func Focus():
         this.view().Focus()
+        _emit_app_event("window-focus", this.index)
     end
 
     @en "Minimize"
@@ -414,6 +428,20 @@ pub struct Window:
         end
     end
 
+    @en "ToggleVisible"
+    @fa "جابجایی نمایانی"
+    pub func ToggleVisible():
+        this.SetVisible(not this.IsVisible())
+    end
+
+    @en "IsVisible"
+    @fa "نمایان است"
+    pub func IsVisible(): bool:
+        // Best-effort: backends do not uniformly expose visibility state.
+        // Treat closed/invalid windows as not visible.
+        ret not this.IsClosed()
+    end
+
     @en "IsFocused"
     @fa "تمرکز دارد"
     pub func IsFocused(): bool:
@@ -425,6 +453,12 @@ pub struct Window:
     pub func BringToFront():
         this.Show()
         this.Focus()
+    end
+
+    @en "Activate"
+    @fa "فعال کردن"
+    pub func Activate():
+        this.BringToFront()
     end
 
     @en "Close"
@@ -843,6 +877,10 @@ func _on_navigate(index: int, url: str): bool:
     if _nav_allowed(index, url):
         ret true
     end
+    // Best-effort deep-link/custom-protocol hook for non-asset navigations.
+    if IsCustomProtocolURL(url):
+        HandleDeepLink(url)
+    end
     if _cfg.external_links and NavigationIsMainFrame():
         OpenURL(url)
     end
@@ -850,6 +888,11 @@ func _on_navigate(index: int, url: str): bool:
 end
 
 func _on_new_window(url: str):
+    // Best-effort: treat custom protocol URLs as app activation/deep links.
+    if IsCustomProtocolURL(url):
+        HandleDeepLink(url)
+        ret
+    end
     if _cfg.external_links:
         OpenURL(url)
     end
@@ -1156,8 +1199,167 @@ pub func FirstWindow(): Window:
     ret Window { index = 0 }
 end
 
+func _emit_app_event(name: str, window: int = -1, payload: str = "null"):
+    // In-process lightweight hook dispatch and web bridge broadcast.
+    if name == "ready":
+        if not _app_ready_fired:
+            _app_ready_fired = true
+            _on_app_ready()
+        end
+    else name == "activate":
+        _on_app_activate()
+    else name == "before-quit":
+        // Caller decides whether to proceed based on return value helper.
+        ret
+    else name == "quit":
+        _on_quit()
+    else name == "window-all-closed":
+        _on_window_all_closed()
+    end
+    Emit("__app:".Concat(name), payload)
+    _keep_window := window
+end
+
+func _fire_ready_once():
+    if _app_ready_fired:
+        ret
+    end
+    _emit_app_event("ready")
+end
+
+func _check_window_all_closed():
+    if _quitting:
+        ret
+    end
+    if WindowCount() == 0:
+        _emit_app_event("window-all-closed")
+    end
+end
+
+@en "OnReady"
+@fa "هنگام آماده شدن"
+pub func OnReady(handler: func ()):
+    _on_app_ready = handler
+    if _app_ready_fired:
+        handler()
+    end
+end
+
+@en "OnActivate"
+@fa "هنگام فعال شدن"
+pub func OnActivate(handler: func ()):
+    _on_app_activate = handler
+end
+
+@en "OnBeforeQuit"
+@fa "پیش از خروج"
+pub func OnBeforeQuit(handler: func () bool):
+    _on_before_quit = handler
+end
+
+@en "OnQuit"
+@fa "هنگام خروج"
+pub func OnQuit(handler: func ()):
+    _on_quit = handler
+end
+
+@en "OnWindowAllClosed"
+@fa "هنگام بسته شدن همه پنجره ها"
+pub func OnWindowAllClosed(handler: func ()):
+    _on_window_all_closed = handler
+end
+
+@en "OnDeepLink"
+@fa "هنگام پیوند عمیق"
+pub func OnDeepLink(handler: func (str)):
+    _on_deep_link = handler
+end
+
+@en "OnSecondInstance"
+@fa "هنگام نمونه دوم"
+pub func OnSecondInstance(handler: func (Vector<str>)):
+    _on_single_instance = handler
+end
+
+@en "HandleDeepLink"
+@fa "پردازش پیوند عمیق"
+pub func HandleDeepLink(url: str):
+    if url.Len() == 0:
+        ret
+    end
+    _on_deep_link(url)
+    encoded := json.Str(url)
+    Emit("__app:deep-link", encoded)
+    mem.Free(encoded as void*)
+end
+
+@en "HandleSecondInstanceArgs"
+@fa "پردازش آرگومان های نمونه دوم"
+pub func HandleSecondInstanceArgs(args: Vector<str>):
+    _on_single_instance(args)
+    url := FirstURLArg(args)
+    if url.Len() > 0:
+        HandleDeepLink(url)
+        mem.Free(url as void*)
+    end
+    _emit_app_event("activate")
+end
+
+@en "RegisterProtocol"
+@fa "ثبت پروتکل"
+pub func RegisterProtocol(name: str, handler: func (Request) Response): ProtocolRegistration:
+    ret RegisterAppProtocol(name, handler)
+end
+
+@en "RegisterDeepLinkProtocol"
+@fa "ثبت پروتکل پیوند عمیق"
+pub func RegisterDeepLinkProtocol(name: str, handler: func (str)):
+    _on_deep_link = handler
+    // Best-effort: register a scheme so custom URL navigations can be observed/routed.
+    _ignored := RegisterProtocol(
+        name, (req: Request): Response
+        HandleDeepLink(req.url) ret Response { status = 204, mime = "text/plain" } end
+    )
+end
+
+@en "ActivateApp"
+@fa "فعال کردن برنامه"
+pub func ActivateApp():
+    w := FirstWindow()
+    if not w.IsClosed():
+        w.Activate()
+    end
+    _emit_app_event("activate")
+end
+
+@en "QuitApp"
+@fa "خروج از برنامه"
+pub func QuitApp(): bool:
+    if _quitting:
+        ret true
+    end
+    if not _on_before_quit():
+        ret false
+    end
+    _quitting = true
+    Quit()
+    _emit_app_event("quit")
+    ret true
+end
+
 @en "Run"
 @fa "اجرا"
 pub func Run():
+    _fire_ready_once()
+    // Process any deep-link-like argv in the primary instance as a best-effort
+    // activation hook (platform protocol registration is host/installer specific).
+    args := os.Args()
+    HandleSecondInstanceArgs(args)
+    args.Free()
     RunAll()
+    _check_window_all_closed()
+    if not _quitting:
+        _quitting = true
+        _emit_app_event("quit")
+    end
 end

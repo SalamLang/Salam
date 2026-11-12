@@ -1483,43 +1483,65 @@ function __salam_patch(o, n, fresh) {
     __salam_kids(o, o.firstChild, null, Array.prototype.slice.call(n.childNodes), fresh);
 }
 function __salam_kids(p, cur, stop, list, fresh) {
+    function regionStart(n) {
+        return n && n.nodeType === 8 ? /^salam:(\d+)$/.exec(n.data) : null;
+    }
+    function regionEnd(start) {
+        return __salam_end(start);
+    }
+    function removeBefore(before) {
+        while (cur && cur !== stop && cur !== before) {
+            var nx = cur.nextSibling;
+            __salam_cleanup(cur);
+            p.removeChild(cur);
+            cur = nx;
+        }
+    }
+    function moveRange(start, end) {
+        if (!start || start === cur) {
+            return end ? end.nextSibling : cur;
+        }
+        var x = start;
+        for (;;) {
+            var nx = x.nextSibling;
+            p.insertBefore(x, cur);
+            if (x === end) {
+                break;
+            }
+            if (!nx || nx === stop) {
+                end = x;
+                break;
+            }
+            x = nx;
+        }
+        return end ? end.nextSibling : (x ? x.nextSibling : cur);
+    }
+    function canReuseUnkeyed(o, n) {
+        return o && o !== stop && o.nodeType === n.nodeType && o.nodeName === n.nodeName && __salam_key(o) === null && !regionStart(o);
+    }
     for (var i = 0; i < list.length; i++) {
-        var n = list[i], m = n.nodeType === 8 ? /^salam:(\d+)$/.exec(n.data) : null;
+        var n = list[i], m = regionStart(n);
         if (m) {
             var close = "/" + n.data, j = i + 1;
             while (j < list.length && !(list[j].nodeType === 8 && list[j].data === close)) {
                 j++;
             }
-            var o = cur;
-            while (o && o !== stop && !(o.nodeType === 8 && o.data === n.data)) {
+            var o = cur, found = null;
+            while (o && o !== stop) {
+                var om = regionStart(o);
+                if (om && om[1] === m[1]) {
+                    found = o;
+                    break;
+                }
                 o = o.nextSibling;
             }
-            if (o && o !== stop) {
-                var oe = __salam_end(o);
+            if (found) {
+                removeBefore(found);
+                var oe = regionEnd(found);
                 if (!oe) {
-                    oe = o;
+                    oe = found;
                 }
-                if (o !== cur) {
-                    var x = o;
-                    for (;;) {
-                        var nx = x.nextSibling;
-                        p.insertBefore(x, cur);
-                        if (x === oe) {
-                            break;
-                        }
-                        if (!nx) {
-                            break;
-                        }
-                        x = nx;
-                    }
-                    if (oe) {
-                        cur = oe.nextSibling;
-                    } else {
-                        cur = x ? x.nextSibling : cur;
-                    }
-                } else {
-                    cur = oe ? oe.nextSibling : cur;
-                }
+                cur = moveRange(found, oe);
             } else {
                 for (var r = i; r <= j && r < list.length; r++) {
                     __salam_scan(list[r], fresh);
@@ -1529,47 +1551,46 @@ function __salam_kids(p, cur, stop, list, fresh) {
             i = j;
             continue;
         }
-        var nk = __salam_key(n), f = cur, unkeyedPos = null;
+        var nk = __salam_key(n);
         if (nk !== null) {
+            var f = cur, match = null;
             while (f && f !== stop) {
-                if (f.nodeType === n.nodeType && f.nodeName === n.nodeName && __salam_key(f) === nk) {
+                if (!regionStart(f) && f.nodeType === n.nodeType && f.nodeName === n.nodeName && __salam_key(f) === nk) {
+                    match = f;
                     break;
                 }
                 f = f.nextSibling;
             }
-        } else {
-            if (cur && cur !== stop && cur.nodeType === n.nodeType && cur.nodeName === n.nodeName && __salam_key(cur) === null) {
-                f = cur;
-            } else {
-                f = cur;
-                while (f && f !== stop) {
-                    if (f.nodeType === n.nodeType && f.nodeName === n.nodeName && __salam_key(f) === null) {
-                        unkeyedPos = f;
-                        break;
-                    }
-                    f = f.nextSibling;
+            if (match) {
+                removeBefore(match);
+                if (match !== cur) {
+                    p.insertBefore(match, cur);
                 }
-                f = unkeyedPos ? null : cur;
+                __salam_patch(match, n, fresh);
+                cur = match.nextSibling;
+            } else {
+                __salam_scan(n, fresh);
+                p.insertBefore(n, cur);
             }
-        }
-        if (nk !== null && f && f !== stop && f.nodeType === n.nodeType && f.nodeName === n.nodeName && __salam_key(f) === nk) {
-            if (f !== cur) {
-                p.insertBefore(f, cur);
-            }
-            __salam_patch(f, n, fresh);
-            cur = f.nextSibling;
-        } else if (nk === null && cur && cur !== stop && cur.nodeType === n.nodeType && cur.nodeName === n.nodeName && __salam_key(cur) === null) {
-            __salam_patch(cur, n, fresh);
-            cur = cur.nextSibling;
-        } else if (nk === null && unkeyedPos) {
-            if (unkeyedPos !== cur) {
-                p.insertBefore(unkeyedPos, cur);
-            }
-            __salam_patch(unkeyedPos, n, fresh);
-            cur = unkeyedPos.nextSibling;
         } else {
-            __salam_scan(n, fresh);
-            p.insertBefore(n, cur);
+            if (canReuseUnkeyed(cur, n)) {
+                __salam_patch(cur, n, fresh);
+                cur = cur.nextSibling;
+            } else if (cur && cur !== stop && (__salam_key(cur) !== null || regionStart(cur))) {
+                // Preserve keyed nodes/regions ahead for later matching; insert unkeyed here.
+                __salam_scan(n, fresh);
+                p.insertBefore(n, cur);
+            } else {
+                // cur is unkeyed but incompatible, or absent: replace/insert at position.
+                if (cur && cur !== stop) {
+                    var nxu = cur.nextSibling;
+                    __salam_cleanup(cur);
+                    p.removeChild(cur);
+                    cur = nxu;
+                }
+                __salam_scan(n, fresh);
+                p.insertBefore(n, cur);
+            }
         }
     }
     while (cur && cur !== stop) {

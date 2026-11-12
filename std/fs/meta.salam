@@ -1,0 +1,317 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "meta"
+@fa "فراداده"
+package meta
+
+import os
+import io
+import mem
+import str
+import filepath
+import os.shell
+
+// File metadata and permission helpers (best-effort, cross-platform).
+
+@en "FileMeta"
+@fa "فراداده پرونده"
+pub struct FileMeta:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "exists"
+    @fa "وجود دارد"
+    pub exists: bool = false
+    @en "is_file"
+    @fa "پرونده است"
+    pub is_file: bool = false
+    @en "is_dir"
+    @fa "پوشه است"
+    pub is_dir: bool = false
+    @en "is_link"
+    @fa "پیوند است"
+    pub is_link: bool = false
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0
+    @en "mod_time"
+    @fa "زمان تغییر"
+    pub mod_time: i64 = 0
+    @en "mode"
+    @fa "حالت"
+    pub mode: u32 = 0
+    @en "readable"
+    @fa "خواندنی"
+    pub readable: bool = false
+    @en "writable"
+    @fa "نوشتنی"
+    pub writable: bool = false
+    @en "executable"
+    @fa "اجراپذیر"
+    pub executable: bool = false
+end
+
+func _quote_sh(s: str): str:
+    if str.Len(s) == 0:
+        ret str.Clone("''")
+    end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        ch := str.Substr(s, i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _parse_octal_u32(s: str): u32:
+    mut v := 0 as u32
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        ch := str.Substr(s, i, 1)
+        if str.Len(ch) > 0:
+            c := ch[0] as u32
+            if c >= 48 and c <= 55:
+                v = (v * 8) + (c - 48)
+            end
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    ret v
+end
+
+@en "Exists"
+@fa "وجود دارد"
+pub func Exists(path: str): bool:
+    ret os.Exists(path)
+end
+
+@en "IsFile"
+@fa "پرونده است"
+pub func IsFile(path: str): bool:
+    ret os.Exists(path) and not os.IsDir(path)
+end
+
+@en "IsDir"
+@fa "پوشه است"
+pub func IsDir(path: str): bool:
+    ret os.IsDir(path)
+end
+
+@en "IsLink"
+@fa "پیوند است"
+pub func IsLink(path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    end
+    cmd := "test -L " + _quote_sh(path) + " >/dev/null 2>&1; echo $?"
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    ret out == "0"
+end
+
+@en "Size"
+@fa "اندازه"
+pub func Size(path: str): i64:
+    ret os.FileSize(path)
+end
+
+@en "CanRead"
+@fa "قابل خواندن"
+pub func CanRead(path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret os.Exists(path)
+    end
+    cmd := "test -r " + _quote_sh(path) + " >/dev/null 2>&1; echo $?"
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    ret out == "0"
+end
+
+@en "CanWrite"
+@fa "قابل نوشتن"
+pub func CanWrite(path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret os.Exists(path)
+    end
+    cmd := "test -w " + _quote_sh(path) + " >/dev/null 2>&1; echo $?"
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    ret out == "0"
+end
+
+@en "CanExecute"
+@fa "قابل اجرا"
+pub func CanExecute(path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ext := str.Lower(filepath.Ext(path))
+        ok := ext == ".exe" or ext == ".cmd" or ext == ".bat" or ext == ".com"
+        mem.Free(ext as void*)
+        ret ok
+    end
+    cmd := "test -x " + _quote_sh(path) + " >/dev/null 2>&1; echo $?"
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    ret out == "0"
+end
+
+@en "Mode"
+@fa "حالت"
+pub func Mode(path: str): u32:
+    if SALAM_OS_WINDOWS:
+        if os.IsDir(path):
+            ret 0o777
+        end
+        if os.Exists(path):
+            ret 0o666
+        end
+        ret 0
+    end
+    cmd := "stat -c '%a' " + _quote_sh(path) + " 2>/dev/null || stat -f '%Lp' " + _quote_sh(path) + " 2>/dev/null"
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    if str.Len(out) == 0:
+        ret 0
+    end
+    ret _parse_octal_u32(out)
+end
+
+@en "SetMode"
+@fa "تنظیم حالت"
+pub func SetMode(path: str, mode: u32): bool:
+    if SALAM_OS_WINDOWS:
+        ret os.Exists(path)
+    end
+    // Best-effort via chmod command to avoid fs API signature differences.
+    mstr := FormatMode(mode)
+    cmd := "chmod " + mstr + " " + _quote_sh(path) + " >/dev/null 2>&1; echo $?"
+    mem.Free(mstr as void*)
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    ret out == "0"
+end
+
+@en "MakeReadable"
+@fa "خواندنی کردن"
+pub func MakeReadable(path: str): bool:
+    mut m := Mode(path)
+    if m == 0:
+        m = 0o644
+    end
+    ret SetMode(path, m | 0o444)
+end
+
+@en "MakeWritable"
+@fa "نوشتنی کردن"
+pub func MakeWritable(path: str): bool:
+    mut m := Mode(path)
+    if m == 0:
+        m = 0o644
+    end
+    ret SetMode(path, m | 0o222)
+end
+
+@en "MakeExecutable"
+@fa "اجراپذیر کردن"
+pub func MakeExecutable(path: str): bool:
+    mut m := Mode(path)
+    if m == 0:
+        m = 0o755
+    end
+    ret SetMode(path, m | 0o111)
+end
+
+@en "ModTime"
+@fa "زمان تغییر"
+pub func ModTime(path: str): i64:
+    // Best-effort: use os FileInfo path where available via shell/stat; returns 0 if unknown.
+    if SALAM_OS_WINDOWS:
+        ret 0
+    end
+    cmd := "stat -c '%Y' " + _quote_sh(path) + " 2>/dev/null || stat -f '%m' " + _quote_sh(path) + " 2>/dev/null"
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    defer mem.Free(out as void*)
+    if str.Len(out) == 0:
+        ret 0
+    end
+    ret str.ParseInt(out)
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(path: str): FileMeta:
+    mut m := FileMeta { path = str.Clone(path) }
+    m.exists = os.Exists(path)
+    if not m.exists:
+        ret m
+    end
+    m.is_dir = os.IsDir(path)
+    m.is_file = os.Exists(path) and not m.is_dir
+    m.is_link = IsLink(path)
+    m.size = os.FileSize(path)
+    m.mod_time = ModTime(path)
+    m.mode = Mode(path)
+    m.readable = CanRead(path)
+    m.writable = CanWrite(path)
+    m.executable = CanExecute(path)
+    ret m
+end
+
+@en "FormatMode"
+@fa "قالب حالت"
+pub func FormatMode(mode: u32): str:
+    mut v := mode as i64
+    if v == 0:
+        ret str.Clone("0")
+    end
+    mut out := str.Clone("")
+    until v > 0:
+        d := v % 8
+        ch := str.FromInt(d)
+        tmp := str.Concat(ch, out)
+        mem.Free(ch as void*)
+        mem.Free(out as void*)
+        out = tmp
+        v = v / 8
+    end
+    ret out
+end

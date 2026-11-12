@@ -18,6 +18,20 @@ include co "../sal_core.salam"
 include jg "../jsgen/jsgen.salam"
 include mn "../minify.salam"
 
+struct JsMods:
+    pub globals: Vector<str> = Vector {}
+    pub seg_mod: Vector<int> = Vector {}
+    pub fn_names: Vector<str> = Vector {}
+    pub fn_texts: Vector<str> = Vector {}
+    pub count: int = 0
+    pub first_module: str = ""
+    pub entry_name: str = ""
+    pub failed: Vector<str> = Vector {}
+    pub ml: str = ""
+    pub mk: Vector<str> = Vector {}
+    pub mv: Vector<str> = Vector {}
+end
+
 func is_alnum(c: int): bool:
     ret (c >= 48 and c <= 57) or (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
 end
@@ -71,65 +85,47 @@ func js_refs(text: str, name: str): bool:
     end
 end
 
-func js_build_bundle(
-    lgr &: lg.Logger, opt &: Dr, entries: Vector<str>, module_out &: str, rc_out &: int
-): str:
-    rc_out = 0
-    pack := lp.Load(opt.lang)
-    if pack == lp.LP_NONE:
-        lg.Log(
-            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
-        )
-        rc_out = 2
-        ret ""
+func js_mods_free(mods &: JsMods):
+    mods.globals.free()
+    mods.seg_mod.free()
+    mods.fn_names.free()
+    mods.fn_texts.free()
+    mods.failed.free()
+    mods.mk.free()
+    mods.mv.free()
+end
+
+func js_import_paths(a &: at.Ast, prog: int, idir: str, lang: str, work &: Vector<str>):
+    pn := at.Get(a, prog)
+    repeat pn.list.len() in k:
+        did := pn.list.get(k)
+        d := at.Get(a, did)
+        if d.kind != at.AST_IMPORT:
+            continue
+        end
+        mut ipath := d.type_str
+        if str.Len(ipath) == 0:
+            ipath = sm.ResolveImportNode(a, idir, did, lang)
+        end
+        if str.Len(ipath) == 0:
+            continue
+        end
+        mut known := false
+        repeat work.len() in j2:
+            if str.Equals(work.get(j2), ipath):
+                known = true
+            end
+        end
+        if not known:
+            work.push(ipath)
+        end
     end
-    sm.SetStdlibRoot(opt.stdlib_path)
-    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+end
 
-    minify_ws := not opt.no_minify
-    minify_names := minify_ws and not opt.no_js_minify_names
-
-    mut defs := Vector {} as Vector<str>
-    defer defs.free()
-    repeat opt.defines.len() in di:
-        defs.push(opt.defines.get(di))
-    end
-    defs.push("SALAM_JS")
-
-    mut work := Vector {} as Vector<str>
-    defer work.free()
-    repeat entries.len() in ii:
-        work.push(entries.get(ii))
-    end
-    if entries.len() > 0:
-        sm.SetProjectRootFrom(entries.get(0))
-    end
-    defer sm.UnpinProjectRoot()
-
-    mut a := at.NewAst()
-    defer at.FreeAst(a)
-
-    mut mod_globals := Vector {} as Vector<str>
-    mut seg_mod := Vector {} as Vector<int>
-    mut modfn_names := Vector {} as Vector<str>
-    mut modfn_texts := Vector {} as Vector<str>
-    defer mod_globals.free()
-    defer seg_mod.free()
-    defer modfn_names.free()
-    defer modfn_texts.free()
-    mut nmod := 0
-    mut first_module := ""
-    mut entry_name := ""
+func js_compile_work(
+    lgr &: lg.Logger, opt &: Dr, pack: int, work &: Vector<str>, nentries: int, a &: at.Ast, minify_names: bool, minify_ws: bool, mods &: JsMods
+): bool:
     mut all_ok := true
-    mut failed_files := Vector {} as Vector<str>
-    defer failed_files.free()
-
-    mut ml := ""
-    mut mk := Vector {} as Vector<str>
-    mut mv := Vector {} as Vector<str>
-    defer mk.free()
-    defer mv.free()
-
     mut wi := 0
     until wi < work.len():
         path := work.get(wi)
@@ -149,19 +145,19 @@ func js_build_bundle(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
             )
             all_ok = false
-            failed_files.push(path)
+            mods.failed.push(path)
             wi++
             continue
         end
-        mut table := cc.TableBuild("", defs)
+        mut table := cc.TableBuild(cc.JS_TARGET, opt.defines)
         modpack := lx.Detect(sf, pack)
         cc.TableSetPack(table, modpack)
         modentry := lp.Entry(modpack)
         module := module_of(path)
         lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
         lg.AddDiagSource(lgr, path, sf.text, sf.len)
-        if str.Len(first_module) == 0:
-            first_module = module
+        if str.Len(mods.first_module) == 0:
+            mods.first_module = module
         end
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("compiling %s -> js"), co.ArgStr(path))
@@ -199,7 +195,7 @@ func js_build_bundle(
                     lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath))
                 )
                 all_ok = false
-                failed_files.push(ppath)
+                mods.failed.push(ppath)
             end
             pi++
         end
@@ -211,37 +207,13 @@ func js_build_bundle(
         sok := sm.RunCached(s, a, prog)
         if not lok or not pok or not sok:
             all_ok = false
-            failed_files.push(path)
+            mods.failed.push(path)
             sm.Free(s)
             wi++
             continue
         end
 
-        idir := dir_of(path)
-        pn := at.Get(a, prog)
-        repeat pn.list.len() in k:
-            did := pn.list.get(k)
-            d := at.Get(a, did)
-            if d.kind != at.AST_IMPORT:
-                continue
-            end
-            mut ipath := d.type_str
-            if str.Len(ipath) == 0:
-                ipath = sm.ResolveImportNode(a, idir, did, lp.Code(modpack))
-            end
-            if str.Len(ipath) == 0:
-                continue
-            end
-            mut known := false
-            repeat work.len() in j2:
-                if str.Equals(work.get(j2), ipath):
-                    known = true
-                end
-            end
-            if not known:
-                work.push(ipath)
-            end
-        end
+        js_import_paths(a, prog, dir_of(path), lp.Code(modpack), work)
         if s.prelude_err != 0:
             cpath := sm.ResolveImport("", "core")
             mut has_core := str.Len(cpath) == 0
@@ -256,32 +228,71 @@ func js_build_bundle(
         end
 
         mut out := jg.NewOutput()
-        jg.Run(lgr, a, s, prog, module, modentry, minify_names, minify_ws, ml, mk, mv, out, opt.safe)
-        mod_globals.push(out.globals_src)
+        jg.Run(lgr, a, s, prog, module, modentry, minify_names, minify_ws, mods.ml, mods.mk, mods.mv, out, opt.safe)
+        mods.globals.push(out.globals_src)
         repeat out.fn_names.len() in fi:
-            modfn_names.push(out.fn_names.get(fi))
-            modfn_texts.push(out.fn_texts.get(fi))
-            seg_mod.push(nmod)
+            mods.fn_names.push(out.fn_names.get(fi))
+            mods.fn_texts.push(out.fn_texts.get(fi))
+            mods.seg_mod.push(mods.count)
         end
-        if str.Len(entry_name) == 0 and wi < entries.len() and str.Len(out.entry_mangled) > 0:
-            entry_name = out.entry_mangled
+        if str.Len(mods.entry_name) == 0 and wi < nentries and str.Len(out.entry_mangled) > 0:
+            mods.entry_name = out.entry_mangled
         end
-        nmod++
+        mods.count++
         jg.FreeOutput(out)
         sm.Free(s)
         wi++
     end
+    ret all_ok
+end
 
-    module_out = first_module
+func js_build_bundle(
+    lgr &: lg.Logger, opt &: Dr, entries: Vector<str>, module_out &: str, rc_out &: int
+): str:
+    rc_out = 0
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        rc_out = 2
+        ret ""
+    end
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+
+    minify_ws := not opt.no_minify
+    minify_names := minify_ws and not opt.no_js_minify_names
+
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    repeat entries.len() in ii:
+        work.push(entries.get(ii))
+    end
+    if entries.len() > 0:
+        sm.SetProjectRootFrom(entries.get(0))
+    end
+    defer sm.UnpinProjectRoot()
+
+    mut a := at.NewAst()
+    defer at.FreeAst(a)
+
+    mut mods := JsMods {}
+    defer js_mods_free(mods)
+    all_ok := js_compile_work(
+        lgr, opt, pack, work, entries.len(), a, minify_names, minify_ws, mods
+    )
+
+    module_out = mods.first_module
 
     if not all_ok:
         lg.Log(
-            lgr, lg.PH_DRIVER, lg.LOG_ERROR, abort_message(i18.Tr("build aborted: errors in source"), failed_files)
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, abort_message(i18.Tr("build aborted: errors in source"), mods.failed)
         )
         rc_out = 1
         ret ""
     end
-    if str.Len(entry_name) == 0:
+    if str.Len(mods.entry_name) == 0:
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
                 i18.Tr("no entry point: define a '%s' function"), co.ArgStr(lp.Entry(pack))
@@ -306,23 +317,23 @@ func js_build_bundle(
         seg_texts.push(ptext)
         seg_used.push(0)
     end
-    mut m := nmod - 1
+    mut m := mods.count - 1
     until m >= 0:
-        repeat modfn_names.len() in si:
-            if seg_mod.get(si) == m:
-                seg_names.push(modfn_names.get(si))
-                seg_texts.push(modfn_texts.get(si))
+        repeat mods.fn_names.len() in si:
+            if mods.seg_mod.get(si) == m:
+                seg_names.push(mods.fn_names.get(si))
+                seg_texts.push(mods.fn_texts.get(si))
                 seg_used.push(0)
             end
         end
         m--
     end
 
-    boot := entry_name
+    boot := mods.entry_name
     mut roots := ""
-    mut m2 := nmod - 1
+    mut m2 := mods.count - 1
     until m2 >= 0:
-        roots += mod_globals.get(m2)
+        roots += mods.globals.get(m2)
         m2--
     end
     roots = roots + boot + "\n"
@@ -362,17 +373,17 @@ func js_build_bundle(
         js, minify_ws ? `(function(){"use strict";` : "(function () {\n\"use strict\";\n\n"
     )
     mut have_globals := false
-    mut m3 := nmod - 1
+    mut m3 := mods.count - 1
     until m3 >= 0:
-        if str.Len(mod_globals.get(m3)) > 0:
+        if str.Len(mods.globals.get(m3)) > 0:
             have_globals = true
         end
         m3--
     end
     if have_globals:
-        mut m4 := nmod - 1
+        mut m4 := mods.count - 1
         until m4 >= 0:
-            str.BufAppend(js, mod_globals.get(m4))
+            str.BufAppend(js, mods.globals.get(m4))
             m4--
         end
         str.BufAppendChar(js, minify_ws ? 32 : 10)
@@ -406,24 +417,47 @@ func js_string_literal(s: str): str:
 end
 
 func collect_event_js(
-    lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, minify_ws: bool, safe: bool, handlers: Vector<str>
+    lgr &: lg.Logger, opt &: Dr, a &: at.Ast, s &: sm.Sema, prog: int, path: str, minify_ws: bool, handlers: Vector<str>, ok &: bool
 ): str:
+    ok = true
     mut ml := ""
     mut mk := Vector {} as Vector<str>
     mut mv := Vector {} as Vector<str>
     defer mk.free()
     defer mv.free()
     mut out := jg.NewOutput()
-    jg.Run(lgr, a, s, prog, "page", "", false, minify_ws, ml, mk, mv, out, safe)
+    jg.Run(lgr, a, s, prog, "page", "", false, minify_ws, ml, mk, mv, out, opt.safe)
 
     if out.fn_names.len() == 0 and str.Len(out.globals_src) == 0:
         jg.FreeOutput(out)
         ret ""
     end
 
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    js_import_paths(a, prog, dir_of(path), s.lang, work)
+    mut ia := at.NewAst()
+    defer at.FreeAst(ia)
+    mut mods := JsMods {}
+    defer js_mods_free(mods)
+    if work.len() > 0:
+        pack := lp.Load(opt.lang)
+        if not js_compile_work(lgr, opt, pack, work, 0, ia, false, minify_ws, mods):
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, abort_message(i18.Tr("build aborted: errors in source"), mods.failed)
+            )
+            ok = false
+            jg.FreeOutput(out)
+            ret ""
+        end
+    end
+
     mut roots := out.globals_src
     repeat out.fn_texts.len() in ri:
         roots += out.fn_texts.get(ri)
+    end
+    repeat mods.globals.len() in gi:
+        roots += mods.globals.get(gi)
     end
 
     mut seg_names := Vector {} as Vector<str>
@@ -440,6 +474,17 @@ func collect_event_js(
         seg_names.push(k_dr_js_prelude_names[pi])
         seg_texts.push(ptext)
         seg_used.push(0)
+    end
+    mut m := mods.count - 1
+    until m >= 0:
+        repeat mods.fn_names.len() in si:
+            if mods.seg_mod.get(si) == m:
+                seg_names.push(mods.fn_names.get(si))
+                seg_texts.push(mods.fn_texts.get(si))
+                seg_used.push(0)
+            end
+        end
+        m--
     end
     mut changed := true
     until changed:
@@ -472,6 +517,14 @@ func collect_event_js(
     str.BufAppend(
         js, minify_ws ? `(function(){"use strict";` : "(function () {\n\"use strict\";\n\n"
     )
+    mut gm := mods.count - 1
+    until gm >= 0:
+        if str.Len(mods.globals.get(gm)) > 0:
+            str.BufAppend(js, mods.globals.get(gm))
+            str.BufAppendChar(js, minify_ws ? 32 : 10)
+        end
+        gm--
+    end
     if str.Len(out.globals_src) > 0:
         str.BufAppend(js, out.globals_src)
         str.BufAppendChar(js, minify_ws ? 32 : 10)

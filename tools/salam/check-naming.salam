@@ -39,12 +39,50 @@ func lines_of(text: str): Vector<str>:
 end
 
 func protocol(name: str): bool:
-    each n in ["free", "next", "has_next", "iter", "key", "value", "copy", "deep_copy", "to_str", "to_json", "from_json", "hash", "main"]:
-        if name == n:
+    if name == "main":
+        ret true
+    end
+    ret str.StartsWith(name, "operator_")
+end
+
+func to_pascal(name: str): str:
+    mut out := ""
+    mut up := true
+    repeat name.len() in i:
+        c := name.substr(i, 1)
+        if c == "_":
+            up = true
+        else up:
+            out += str.Upper(c)
+            up = false
+        else:
+            out += c
+        end
+    end
+    ret out
+end
+
+func has_persian(s: str): bool:
+    repeat s.len() in i:
+        c := s.substr(i, 1)
+        if c >= "آ" and c <= "ی":
+            ret true
+        end
+        if c == "‌":
             ret true
         end
     end
-    ret str.StartsWith(name, "operator_")
+    ret false
+end
+
+func has_latin(s: str): bool:
+    repeat s.len() in i:
+        c := s.substr(i, 1)
+        if is_upper(c) or is_lower(c):
+            ret true
+        end
+    end
+    ret false
 end
 
 func is_upper(c: str): bool:
@@ -60,13 +98,13 @@ func is_digit(c: str): bool:
 end
 
 func style_of(name: str): str:
-    if name.Len() == 0:
+    if name.len() == 0:
         ret "other"
     end
     mut upper := 0
     mut lower := 0
     mut under := 0
-    repeat name.Len() in i:
+    repeat name.len() in i:
         c := name.substr(i, 1)
         if is_upper(c):
             upper++
@@ -105,6 +143,39 @@ func func_ok(name: str): bool:
     ret s == "pascal" or s == "acronym"
 end
 
+func is_compat_alias(it: Item, items: Vector<Item>): bool:
+    if it.kind != "func" and it.kind != "method":
+        ret false
+    end
+    if has_persian(it.name):
+        ret false
+    end
+    if func_ok(it.name):
+        ret false
+    end
+    pascal := to_pascal(it.name)
+    if pascal == it.name:
+        ret false
+    end
+    each other in items:
+        if other.pkg == it.pkg and other.kind == it.kind and func_ok(other.name):
+            if it.kind == "func" and other.key == pascal and it.key == it.name:
+                ret true
+            end
+            if it.kind == "method":
+                dot := str.LastIndex(it.key, ".")
+                if dot >= 0:
+                    owner := it.key.substr(0, dot)
+                    if other.key == owner + "." + pascal and it.key == owner + "." + it.name:
+                        ret true
+                    end
+                end
+            end
+        end
+    end
+    ret false
+end
+
 func value_ok(name: str): bool:
     s := style_of(name)
     ret s == "snake" or s == "word"
@@ -112,7 +183,7 @@ end
 
 func ident_end(s: str, from: int): int:
     mut i := from
-    until i < s.Len():
+    until i < s.len():
         c := s.substr(i, 1)
         if c == "(" or c == "<" or c == ":" or c == "=" or c == " ":
             break
@@ -129,7 +200,7 @@ func strip_mods(s: str): str:
         again = false
         each m in ["pub ", "inline ", "noinline ", "pure ", "noret ", "deprecated ", "mut ", "static "]:
             if str.StartsWith(rest, m):
-                rest = rest.substr(m.Len(), rest.Len() - m.Len())
+                rest = rest.substr(m.len(), rest.len() - m.len())
                 again = true
             end
         end
@@ -138,12 +209,12 @@ func strip_mods(s: str): str:
 end
 
 func word_after(rest: str, kw: str): str:
-    body := str.TrimLeft(rest.substr(kw.Len(), rest.Len() - kw.Len()))
+    body := str.TrimLeft(rest.substr(kw.len(), rest.len() - kw.len()))
     ret body.substr(0, ident_end(body, 0))
 end
 
 func add(items &: Vector<Item>, pkg: str, key: str, kind: str, name: str):
-    if name.Len() == 0 or str.StartsWith(name, "_"):
+    if name.len() == 0 or str.StartsWith(name, "_"):
         ret
     end
     first := name.substr(0, 1)
@@ -239,9 +310,18 @@ func parse_file(path: str, pkg: str, items &: Vector<Item>):
     end
 end
 
-func violation(it: Item): str:
+func violation(it: Item, items: Vector<Item>): str:
+    if has_persian(it.name) and has_latin(it.name):
+        ret it.kind + "-mixed-persian-latin"
+    end
     if it.kind == "func" or it.kind == "method":
+        if has_persian(it.name):
+            ret ""
+        end
         if func_ok(it.name):
+            ret ""
+        end
+        if is_compat_alias(it, items):
             ret ""
         end
         ret it.kind + "-" + it.style
@@ -267,10 +347,10 @@ func collect(root: str, only: HashMap<str, bool>, items &: Vector<Item>): int:
             continue
         end
         folder := filepath.Dir(path)
-        if folder.Len() <= base.Len():
+        if folder.len() <= base.len():
             continue
         end
-        rel := folder.substr(base.Len() + 1, folder.Len() - base.Len() - 1)
+        rel := folder.substr(base.len() + 1, folder.len() - base.len() - 1)
         if only.size() > 0 and not only.has(rel):
             continue
         end
@@ -325,7 +405,7 @@ func show_counts(items: Vector<Item>):
     mut perpkg := HashMap {} as HashMap<str, int>
     each it in items:
         bump(styles, it.kind + " " + it.style)
-        v := violation(it)
+        v := violation(it, items)
         if v != "":
             bump(bad, v)
             bump(perpkg, it.pkg)
@@ -341,7 +421,7 @@ end
 
 func fold(name: str): str:
     mut out := ""
-    repeat name.Len() in i:
+    repeat name.len() in i:
         c := name.substr(i, 1)
         if c != "_":
             out += str.Lower(c)
@@ -386,12 +466,12 @@ func main:
     args := os.Args()
     defer args.free()
     mut mode := "check"
-    if args.Len() > 1:
+    if args.len() > 1:
         mode = args.get(1)
     end
     mut only := HashMap {} as HashMap<str, bool>
     if mode == "list":
-        repeat args.Len() - 2 in i:
+        repeat args.len() - 2 in i:
             only.put(args.get(i + 2), true)
         end
     else mode != "check" and mode != "counts" and mode != "collisions" and mode != "update":
@@ -401,7 +481,7 @@ func main:
     pkgs := collect(root, only, items)
     mut found := HashMap {} as HashMap<str, bool>
     each it in items:
-        v := violation(it)
+        v := violation(it, items)
         if v != "":
             found.put(v + "|" + it.pkg + "|" + it.key, true)
         end
@@ -439,8 +519,17 @@ func main:
             stale++
         end
     end
-    println "naming: " + str.FromInt(pkgs as i64) + " packages, " + str.FromInt(items.Len() as i64) + " public declarations, " + str.FromInt(found.size() as i64) + " violations, " + str.FromInt(fresh as i64) + " new, " + str.FromInt(stale as i64) + " fixed since the baseline"
-    if fresh > 0 and args.Len() > 2 and args.get(2) == "--strict":
+    println "naming: " + str.FromInt(pkgs as i64) + " packages, " + str.FromInt(items.len() as i64) + " public declarations, " + str.FromInt(found.size() as i64) + " violations, " + str.FromInt(fresh as i64) + " new, " + str.FromInt(stale as i64) + " fixed since the baseline"
+    mut new_func := 0
+    each g in sorted_keys(found):
+        if not known.has(g):
+            if str.Contains(g, "|func-") or str.Contains(g, "|method-"):
+                new_func++
+            end
+        end
+    end
+    if new_func > 0:
+        printerrln "naming: " + str.FromInt(new_func as i64) + " new public English function/method naming violations (must be UpperCamelCase; compat aliases allowed when canonical exists)"
         ret 1
     end
 end

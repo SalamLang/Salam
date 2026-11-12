@@ -148,6 +148,12 @@ $cerrs"
             out=$(tmo "${SALAM_TEST_TIMEOUT:-20}" "$jobdir/host_$kind" </dev/null 2>&1 | tr -d '\r')
             if [ "$kind" = shared ]; then got=$out; elif [ "$out" != "$got" ]; then got="static differs: $out"; fi
         done
+        if [ -f "${fabs}.h" ] && ! diff -u "${fabs}.h" "$jobdir/$name/$name.h" >"$jobdir/h.diff" 2>&1; then
+            echo "FAIL $label (generated $name.h differs)"
+            sed 's/^/  /' "$jobdir/h.diff" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }

@@ -1,0 +1,790 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "drop"
+@fa "رها کردن"
+package drop
+
+import mem
+import str
+import sync
+
+@en "Effect"
+@fa "اثر"
+pub const EFFECT_NONE := 0
+@en "EffectCopy"
+@fa "اثر کپی"
+pub const EFFECT_COPY := 1
+@en "EffectMove"
+@fa "اثر جابجایی"
+pub const EFFECT_MOVE := 2
+@en "EffectLink"
+@fa "اثر پیوند"
+pub const EFFECT_LINK := 4
+@en "EffectAll"
+@fa "همه اثرها"
+pub const EFFECT_ALL := 7
+
+@en "KindFile"
+@fa "نوع پرونده"
+pub const KIND_FILE := 1
+@en "KindText"
+@fa "نوع متن"
+pub const KIND_TEXT := 2
+@en "KindURI"
+@fa "نوع نشانی"
+pub const KIND_URI := 4
+
+@en "DropData"
+@fa "داده رها کردن"
+pub struct DropData:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "files"
+    @fa "پرونده ها"
+    pub files: Vector<str> = Vector {}
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+    @en "uri"
+    @fa "نشانی"
+    pub uri: str = ""
+    @en "mime_types"
+    @fa "نوع های رسانه"
+    pub mime_types: Vector<str> = Vector {}
+    @en "effect"
+    @fa "اثر"
+    pub effect: int = EFFECT_COPY
+end
+
+@en "DropEvent"
+@fa "رویداد رها کردن"
+pub struct DropEvent:
+    @en "x"
+    @fa "افقی"
+    pub x: int = 0
+    @en "y"
+    @fa "عمودی"
+    pub y: int = 0
+    @en "allowed_effects"
+    @fa "اثرهای مجاز"
+    pub allowed_effects: int = EFFECT_ALL
+    @en "selected_effect"
+    @fa "اثر انتخابی"
+    pub selected_effect: int = EFFECT_COPY
+    @en "data"
+    @fa "داده"
+    pub data: DropData = DropData {}
+    @en "accepted"
+    @fa "پذیرفته"
+    pub accepted: bool = true
+end
+
+@en "DropHandlers"
+@fa "گرداننده های رها کردن"
+pub struct DropHandlers:
+    @en "on_enter"
+    @fa "هنگام ورود"
+    pub on_enter: func (DropEvent) DropEvent
+    @en "on_over"
+    @fa "هنگام عبور"
+    pub on_over: func (DropEvent) DropEvent
+    @en "on_leave"
+    @fa "هنگام خروج"
+    pub on_leave: func ()
+    @en "on_drop"
+    @fa "هنگام رها کردن"
+    pub on_drop: func (DropEvent)
+end
+
+mut _lock := sync.NewMutex()
+mut _handlers := HashMap {} as HashMap<i64, DropHandlers>
+mut _enabled := HashMap {} as HashMap<i64, bool>
+
+func _key(native: void*): i64:
+    ret native as i64
+end
+
+func _empty_handlers(): DropHandlers:
+    ret DropHandlers {
+        on_enter = (e: DropEvent): ret e end,
+        on_over = (e: DropEvent): ret e end,
+        on_leave = (): ret end,
+        on_drop = (_e: DropEvent): ret end
+    }
+end
+
+func _get_handlers(native: void*): DropHandlers:
+    sync.Lock(_lock)
+    k := _key(native)
+    mut h := _empty_handlers()
+    if _handlers.Has(k):
+        h = _handlers.Get(k)
+    end
+    sync.Unlock(_lock)
+    ret h
+end
+
+func _is_enabled(native: void*): bool:
+    sync.Lock(_lock)
+    ok := _enabled.Has(_key(native)) and _enabled.Get(_key(native))
+    sync.Unlock(_lock)
+    ret ok
+end
+
+@en "SetHandlers"
+@fa "تنظیم گرداننده ها"
+pub func SetHandlers(native: void*, handlers: DropHandlers):
+    if native == null:
+        ret
+    end
+    sync.Lock(_lock)
+    _handlers.Put(_key(native), handlers)
+    if not _enabled.Has(_key(native)):
+        _enabled.Put(_key(native), true)
+    end
+    sync.Unlock(_lock)
+end
+
+@en "OnDragEnter"
+@fa "هنگام ورود کشیدن"
+pub func OnDragEnter(native: void*, handler: func (DropEvent) DropEvent):
+    if native == null:
+        ret
+    end
+    mut h := _get_handlers(native)
+    h.on_enter = handler
+    SetHandlers(native, h)
+end
+
+@en "OnDragOver"
+@fa "هنگام عبور کشیدن"
+pub func OnDragOver(native: void*, handler: func (DropEvent) DropEvent):
+    if native == null:
+        ret
+    end
+    mut h := _get_handlers(native)
+    h.on_over = handler
+    SetHandlers(native, h)
+end
+
+@en "OnDragLeave"
+@fa "هنگام خروج کشیدن"
+pub func OnDragLeave(native: void*, handler: func ()):
+    if native == null:
+        ret
+    end
+    mut h := _get_handlers(native)
+    h.on_leave = handler
+    SetHandlers(native, h)
+end
+
+@en "OnDrop"
+@fa "هنگام رها کردن"
+pub func OnDrop(native: void*, handler: func (DropEvent)):
+    if native == null:
+        ret
+    end
+    mut h := _get_handlers(native)
+    h.on_drop = handler
+    SetHandlers(native, h)
+end
+
+func _dispatch_enter(native: void*, event: DropEvent): DropEvent:
+    if not _is_enabled(native):
+        mut e := event
+        e.accepted = false
+        e.selected_effect = EFFECT_NONE
+        ret e
+    end
+    h := _get_handlers(native)
+    ret h.on_enter(event)
+end
+
+func _dispatch_over(native: void*, event: DropEvent): DropEvent:
+    if not _is_enabled(native):
+        mut e := event
+        e.accepted = false
+        e.selected_effect = EFFECT_NONE
+        ret e
+    end
+    h := _get_handlers(native)
+    ret h.on_over(event)
+end
+
+func _dispatch_leave(native: void*):
+    if not _is_enabled(native):
+        ret
+    end
+    h := _get_handlers(native)
+    h.on_leave()
+end
+
+func _dispatch_drop(native: void*, event: DropEvent):
+    if not _is_enabled(native):
+        ret
+    end
+    h := _get_handlers(native)
+    h.on_drop(event)
+end
+
+@en "Enable"
+@fa "فعال کردن"
+pub func Enable(native: void*): bool:
+    if native == null:
+        ret false
+    end
+    sync.Lock(_lock)
+    _enabled.Put(_key(native), true)
+    if not _handlers.Has(_key(native)):
+        _handlers.Put(_key(native), _empty_handlers())
+    end
+    sync.Unlock(_lock)
+    ret _os_enable(native)
+end
+
+@en "Disable"
+@fa "غیرفعال کردن"
+pub func Disable(native: void*):
+    if native == null:
+        ret
+    end
+    sync.Lock(_lock)
+    _enabled.Put(_key(native), false)
+    sync.Unlock(_lock)
+    _os_disable(native)
+end
+
+@en "IsEnabled"
+@fa "فعال است"
+pub func IsEnabled(native: void*): bool:
+    ret _is_enabled(native)
+end
+
+// Helper for platform backends to build a file drop event.
+pub func NewFileEvent(x: int, y: int, files: Vector<str>, allowed: int = EFFECT_ALL): DropEvent:
+    mut data := DropData { kind = KIND_FILE, files = files, effect = EFFECT_COPY }
+    if files.Len() > 0:
+        data.text = str.Clone(files[0])
+    end
+    ret DropEvent { x = x, y = y, allowed_effects = allowed, selected_effect = EFFECT_COPY, data = data, accepted = true }
+end
+
+// Helper for platform backends to build a text/uri drop event.
+pub func NewTextEvent(x: int, y: int, text: str, uri: str = "", allowed: int = EFFECT_ALL): DropEvent:
+    mut kind := KIND_TEXT
+    if uri.Len() > 0:
+        kind = kind | KIND_URI
+    end
+    data := DropData { kind = kind, text = text, uri = uri, effect = EFFECT_COPY }
+    ret DropEvent { x = x, y = y, allowed_effects = allowed, selected_effect = EFFECT_COPY, data = data, accepted = true }
+end
+
+// -------- Windows OLE drag-drop (IDropTarget COM scaffolding, best-effort) --------
+if SALAM_OS_WINDOWS:
+    extern:
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+        func MultiByteToWideChar(code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32): i32
+        func WideCharToMultiByte(code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*, used: void*): i32
+        func DragQueryFileW(hdrop: void*, index: u32, file: void*, count: u32): u32
+        func GlobalLock(hmem: void*): void*
+        func GlobalUnlock(hmem: void*): int
+        func ReleaseStgMedium(medium: void*)
+    end
+
+    const _E_NOINTERFACE := -2147467262
+    const _E_POINTER := -2147467261
+    const _S_OK := 0
+    const _DRAGDROP_S_DROP := 0x00040100
+    const _DROPEFFECT_NONE := 0 as u32
+    const _DROPEFFECT_COPY := 1 as u32
+    const _DROPEFFECT_MOVE := 2 as u32
+    const _DROPEFFECT_LINK := 4 as u32
+
+    struct _Slot:
+        pub v: void* = null
+    end
+
+    struct _ComObj:
+        pub vtbl: void* = null
+        pub hwnd: void* = null
+        pub refs: i32 = 1
+    end
+
+    mut _w_vtbl := null as void*
+    mut _w_qi := null as void*
+    mut _w_addref := null as void*
+    mut _w_release := null as void*
+    mut _w_enter := null as void*
+    mut _w_over := null as void*
+    mut _w_leave := null as void*
+    mut _w_drop := null as void*
+
+    func _w_wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        buf := mem.Allocate(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _w_narrow(wide: void*): str:
+        needed := WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, null, 0, null, null)
+        buf := mem.Allocate((needed + 1) as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
+        (buf as u8*)[needed] = 0 as u8
+        ret buf as str
+    end
+
+    func _w_proc(lib: str, name: str): void*:
+        wide := _w_wide(lib)
+        module := LoadLibraryW(wide)
+        mem.Free(wide)
+        if module == null:
+            ret null
+        end
+        ret GetProcAddress(module, name)
+    end
+
+    func _w_guid_eq(a: void*, b: void*): bool:
+        if a == null or b == null:
+            ret false
+        end
+        left := a as u8*
+        right := b as u8*
+        repeat 16 in i:
+            if left[i] != right[i]:
+                ret false
+            end
+        end
+        ret true
+    end
+
+    func _w_iid(text: str): void*:
+        // Minimal hex parser for "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        out := (mem.AllocateZeroed(16 as u64)) as u8*
+        order := [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15]
+        chars := text as u8*
+        mut at := 0
+        repeat 16 in i:
+            if chars[at] == (45 as u8):
+                at++
+            end
+            mut hi := (chars[at] as int)
+            mut lo := (chars[at + 1] as int)
+            hi = hi >= 97 ? hi - 87 : (hi >= 65 ? hi - 55 : hi - 48)
+            lo = lo >= 97 ? lo - 87 : (lo >= 65 ? lo - 55 : lo - 48)
+            out[order[i]] = ((hi * 16) + lo) as u8
+            at += 2
+        end
+        ret out as void*
+    end
+
+    mut _iid_unknown := null as void*
+    mut _iid_drop_target := null as void*
+
+    func _w_effect(mask: u32): int:
+        if (mask & _DROPEFFECT_COPY) != (0 as u32):
+            ret EFFECT_COPY
+        end
+        if (mask & _DROPEFFECT_MOVE) != (0 as u32):
+            ret EFFECT_MOVE
+        end
+        if (mask & _DROPEFFECT_LINK) != (0 as u32):
+            ret EFFECT_LINK
+        end
+        ret EFFECT_NONE
+    end
+
+    func _w_allowed(mask: u32): int:
+        mut out := EFFECT_NONE
+        if (mask & _DROPEFFECT_COPY) != (0 as u32):
+            out = out | EFFECT_COPY
+        end
+        if (mask & _DROPEFFECT_MOVE) != (0 as u32):
+            out = out | EFFECT_MOVE
+        end
+        if (mask & _DROPEFFECT_LINK) != (0 as u32):
+            out = out | EFFECT_LINK
+        end
+        ret out
+    end
+
+    func _w_files_from_hdrop(hdrop: void*): Vector<str>:
+        mut files := Vector {} as Vector<str>
+        count := DragQueryFileW(hdrop, 0xFFFFFFFF as u32, null, 0 as u32)
+        mut i: u32 = 0
+        until (i as int) < (count as int):
+            need := DragQueryFileW(hdrop, i, null, 0 as u32)
+            buf := mem.Allocate(((need + 1) as u64) * (2 as u64))
+            _n := DragQueryFileW(hdrop, i, buf, need + (1 as u32))
+            files.Push(_w_narrow(buf))
+            mem.Free(buf)
+            i++
+        end
+        ret files
+    end
+
+    export:
+        func salam_drop_qi(this_: void*, riid: void*, ppv: void*): i32:
+            if ppv == null:
+                ret _E_POINTER
+            end
+            slot := ppv as _Slot*
+            if _w_guid_eq(riid, _iid_unknown) or _w_guid_eq(riid, _iid_drop_target):
+                slot[0].v = this_
+                _r := salam_drop_addref(this_)
+                ret _S_OK
+            end
+            slot[0].v = null
+            ret _E_NOINTERFACE
+        end
+
+        func salam_drop_addref(this_: void*): u32:
+            obj := this_ as _ComObj*
+            obj[0].refs++
+            ret obj[0].refs as u32
+        end
+
+        func salam_drop_release(this_: void*): u32:
+            obj := this_ as _ComObj*
+            obj[0].refs--
+            left := obj[0].refs
+            if left <= 0:
+                mem.Free(this_)
+                ret 0 as u32
+            end
+            ret left as u32
+        end
+
+        func salam_drop_enter(this_: void*, _data: void*, _key: u32, pt: i64, effect: void*): i32:
+            obj := this_ as _ComObj*
+            e := NewFileEvent(((pt as u64) & (0xFFFFFFFF as u64)) as int, (((pt as u64) >> 32) & (0xFFFFFFFF as u64)) as int, Vector {}, EFFECT_ALL)
+            out := _dispatch_enter(obj[0].hwnd, e)
+            if effect != null:
+                mask := _w_allowed((effect as u32*)[0])
+                (effect as u32*)[0] = out.accepted ? _DROPEFFECT_COPY : _DROPEFFECT_NONE
+                _keep := mask
+            end
+            ret _S_OK
+        end
+
+        func salam_drop_over(this_: void*, _key: u32, pt: i64, effect: void*): i32:
+            obj := this_ as _ComObj*
+            e := NewFileEvent(((pt as u64) & (0xFFFFFFFF as u64)) as int, (((pt as u64) >> 32) & (0xFFFFFFFF as u64)) as int, Vector {}, EFFECT_ALL)
+            out := _dispatch_over(obj[0].hwnd, e)
+            if effect != null:
+                (effect as u32*)[0] = out.accepted ? _DROPEFFECT_COPY : _DROPEFFECT_NONE
+            end
+            ret _S_OK
+        end
+
+        func salam_drop_leave(this_: void*): i32:
+            obj := this_ as _ComObj*
+            _dispatch_leave(obj[0].hwnd)
+            ret _S_OK
+        end
+
+        func salam_drop_drop(this_: void*, data: void*, _key: u32, pt: i64, effect: void*): i32:
+            obj := this_ as _ComObj*
+            mut files := Vector {} as Vector<str>
+            // Best-effort: try to read CF_HDROP (15) from IDataObject::GetData(slot 3) layout varies;
+            // full FORMATETC/STGMEDIUM handling is complex across 32/64-bit - we expose the hook and
+            // callers can also feed files via platform-specific integration.
+            _keep_data := data
+            e := NewFileEvent(((pt as u64) & (0xFFFFFFFF as u64)) as int, (((pt as u64) >> 32) & (0xFFFFFFFF as u64)) as int, files, EFFECT_ALL)
+            _dispatch_drop(obj[0].hwnd, e)
+            if effect != null:
+                (effect as u32*)[0] = _DROPEFFECT_COPY
+            end
+            ret _S_OK
+        end
+    end
+
+    func _w_init_com():
+        if _w_vtbl != null:
+            ret
+        end
+        if _iid_unknown == null:
+            _iid_unknown = _w_iid("00000000-0000-0000-c000-000000000046")
+            _iid_drop_target = _w_iid("00000122-0000-0000-c000-000000000046")
+        end
+        // vtable: QI, AddRef, Release, DragEnter, DragOver, DragLeave, Drop
+        vtbl := (mem.Allocate((sizeof(_Slot) as u64) * (7 as u64))) as _Slot*
+        vtbl[0].v = &salam_drop_qi
+        vtbl[1].v = &salam_drop_addref
+        vtbl[2].v = &salam_drop_release
+        vtbl[3].v = &salam_drop_enter
+        vtbl[4].v = &salam_drop_over
+        vtbl[5].v = &salam_drop_leave
+        vtbl[6].v = &salam_drop_drop
+        _w_vtbl = vtbl as void*
+    end
+
+    func _os_enable(native: void*): bool:
+        _w_init_com()
+        ole_init := _w_proc("ole32.dll", "OleInitialize") as extern stdcall func (void*) i32
+        if ole_init != null:
+            _hr := ole_init(null)
+        end
+        obj := (mem.Allocate(sizeof(_ComObj) as u64)) as _ComObj*
+        obj[0] = _ComObj { vtbl = _w_vtbl, hwnd = native, refs = 1 }
+        reg := _w_proc("ole32.dll", "RegisterDragDrop") as extern stdcall func (void*, void*) i32
+        if reg == null:
+            mem.Free(obj as void*)
+            ret false
+        end
+        hr := reg(native, obj as void*)
+        if hr != 0 and hr != 0x00040100:
+            mem.Free(obj as void*)
+            ret false
+        end
+        ret true
+    end
+
+    func _os_disable(native: void*):
+        revoke := _w_proc("ole32.dll", "RevokeDragDrop") as extern stdcall func (void*) i32
+        if revoke != null:
+            _hr := revoke(native)
+        end
+    end
+end
+
+// -------- macOS (NSDraggingDestination via Objective-C runtime, best-effort) --------
+if SALAM_OS_MAC:
+    link framework "Cocoa"
+    link dynamic "objc"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func objc_allocateClassPair(superclass: void*, name: str, extra: usize): void*
+        func objc_registerClassPair(cls: void*)
+        func class_addMethod(cls: void*, selector: void*, imp: void*, types: str): i8
+        func class_addProtocol(cls: void*, protocol: void*): i8
+        func objc_getProtocol(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(receiver: void*, selector: void*): void*
+    end
+
+    mut _mac_cls := null as void*
+    mut _mac_ready := false
+
+    func _m_obj0(recv: void*, name: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*) void*
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _m_obj1(recv: void*, name: str, a1: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1)
+    end
+
+    func _m_ns(s: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _m_point_x(sender: void*): int:
+        // draggingLocation is NSPoint; on ARM64 returned in registers, x86_64 via stret - best-effort 0.
+        _keep := sender
+        ret 0
+    end
+
+    func _m_point_y(sender: void*): int:
+        _keep := sender
+        ret 0
+    end
+
+    export:
+        func salam_drop_mac_enter(_self: void*, _cmd: void*, sender: void*): u64:
+            // NSDragOperationCopy = 1
+            _keep := sender
+            ret 1 as u64
+        end
+
+        func salam_drop_mac_over(_self: void*, _cmd: void*, sender: void*): u64:
+            _keep := sender
+            ret 1 as u64
+        end
+
+        func salam_drop_mac_exit(_self: void*, _cmd: void*, _sender: void*):
+            ret
+        end
+
+        func salam_drop_mac_perform(_self: void*, _cmd: void*, sender: void*): i8:
+            // Best-effort: extract file URLs from dragging pasteboard (NSFilenamesPboardType / public.file-url).
+            pb := _m_obj0(sender, "draggingPasteboard")
+            if pb == null:
+                ret 0 as i8
+            end
+            types := _m_obj0(pb, "types")
+            _keep := types
+            // Full extraction requires NSArray iteration; we dispatch an empty file event as scaffold
+            // so apps can wire native-side extraction where available.
+            mut files := Vector {} as Vector<str>
+            e := NewFileEvent(_m_point_x(sender), _m_point_y(sender), files, EFFECT_ALL)
+            _dispatch_drop(null, e)
+            files.Free()
+            ret 1 as i8
+        end
+    end
+
+    func _m_ensure_class():
+        if _mac_ready:
+            ret
+        end
+        cls := objc_allocateClassPair(objc_getClass("NSView"), "SalamDropTargetView", 0 as usize)
+        if cls != null:
+            proto := objc_getProtocol("NSDraggingDestination")
+            if proto != null:
+                _a := class_addProtocol(cls, proto)
+            end
+            _m1 := class_addMethod(cls, sel_registerName("draggingEntered:"), &salam_drop_mac_enter, "Q@:@")
+            _m2 := class_addMethod(cls, sel_registerName("draggingUpdated:"), &salam_drop_mac_over, "Q@:@")
+            _m3 := class_addMethod(cls, sel_registerName("draggingExited:"), &salam_drop_mac_exit, "v@:@")
+            _m4 := class_addMethod(cls, sel_registerName("performDragOperation:"), &salam_drop_mac_perform, "c@:@")
+            objc_registerClassPair(cls)
+            _mac_cls = cls
+        end
+        _mac_ready = true
+    end
+
+    func _os_enable(native: void*): bool:
+        _m_ensure_class()
+        if native == null:
+            ret false
+        end
+        // Register common drag types on the target view/window content view.
+        file_type := _m_ns("public.file-url")
+        text_type := _m_ns("public.utf8-plain-text")
+        types := _m_obj0(objc_getClass("NSMutableArray"), "array")
+        if types != null:
+            _m_obj1(types, "addObject:", file_type)
+            _m_obj1(types, "addObject:", text_type)
+            _m_obj1(native, "registerForDraggedTypes:", types)
+        end
+        ret true
+    end
+
+    func _os_disable(native: void*):
+        if native != null:
+            _m_obj1(native, "unregisterDraggedTypes", null)
+        end
+    end
+end
+
+// -------- Linux (GTK drag signals / X11 XDND abstraction, best-effort) --------
+if SALAM_OS_LINUX:
+    link dynamic "gtk-3"
+    link dynamic "gdk-3"
+    link dynamic "gobject-2.0"
+
+    extern:
+        func gtk_drag_dest_set(widget: void*, flags: int, targets: void*, n_targets: int, actions: int)
+        func gtk_drag_dest_unset(widget: void*)
+        func g_signal_connect_data(instance: void*, signal: str, handler: void*, data: void*, destroy: void*, flags: int): u64
+        func gtk_selection_data_get_uris(data: void*): void*
+        func gtk_selection_data_get_text(data: void*): void*
+        func g_strfreev(strv: void*)
+        func g_free(p: void*)
+    end
+
+    export:
+        func salam_drop_lx_enter(_widget: void*, _context: void*, _x: int, _y: int, _time: u32, data: void*): int:
+            native := data
+            e := NewFileEvent(_x, _y, Vector {}, EFFECT_ALL)
+            out := _dispatch_enter(native, e)
+            ret out.accepted ? 1 : 0
+        end
+
+        func salam_drop_lx_motion(_widget: void*, _context: void*, _x: int, _y: int, _time: u32, data: void*): int:
+            native := data
+            e := NewFileEvent(_x, _y, Vector {}, EFFECT_ALL)
+            out := _dispatch_over(native, e)
+            ret out.accepted ? 1 : 0
+        end
+
+        func salam_drop_lx_leave(_widget: void*, _context: void*, _time: u32, data: void*):
+            _dispatch_leave(data)
+        end
+
+        func salam_drop_lx_data(_widget: void*, _context: void*, _x: int, _y: int, selection: void*, _info: u32, _time: u32, data: void*):
+            native := data
+            mut files := Vector {} as Vector<str>
+            mut text := str.Clone("")
+            mut uri := str.Clone("")
+            if selection != null:
+                uris := gtk_selection_data_get_uris(selection)
+                if uris != null:
+                    // char** null-terminated array
+                    arr := uris as void**
+                    mut i := 0
+                    until arr[i] == null:
+                        files.Push(str.Clone(arr[i] as str))
+                        i++
+                    end
+                    g_strfreev(uris)
+                else:
+                    raw := gtk_selection_data_get_text(selection)
+                    if raw != null:
+                        mem.Free(text as void*)
+                        text = str.Clone(raw as str)
+                        g_free(raw)
+                    end
+                end
+            end
+            if files.Len() > 0:
+                e := NewFileEvent(_x, _y, files, EFFECT_ALL)
+                _dispatch_drop(native, e)
+            else:
+                e := NewTextEvent(_x, _y, text, uri, EFFECT_ALL)
+                _dispatch_drop(native, e)
+            end
+            mem.Free(text as void*)
+            mem.Free(uri as void*)
+        end
+    end
+
+    func _os_enable(native: void*): bool:
+        if native == null:
+            ret false
+        end
+        // GTK_DEST_DEFAULT_ALL = 7, GDK_ACTION_COPY = 1. Targets left null for best-effort;
+        // text/uri-list is commonly negotiated by GTK when targets are provided by source.
+        gtk_drag_dest_set(native, 7, null, 0, 1)
+        g_signal_connect_data(native, "drag-motion", &salam_drop_lx_motion, native, null, 0)
+        g_signal_connect_data(native, "drag-leave", &salam_drop_lx_leave, native, null, 0)
+        g_signal_connect_data(native, "drag-data-received", &salam_drop_lx_data, native, null, 0)
+        g_signal_connect_data(native, "drag-drop", &salam_drop_lx_enter, native, null, 0)
+        ret true
+    end
+
+    func _os_disable(native: void*):
+        if native != null:
+            gtk_drag_dest_unset(native)
+        end
+    end
+end
+
+// -------- Fallback for unsupported builds --------
+if not SALAM_OS_WINDOWS and not SALAM_OS_MAC and not SALAM_OS_LINUX:
+    func _os_enable(_native: void*): bool:
+        ret false
+    end
+
+    func _os_disable(_native: void*):
+        ret
+    end
+end

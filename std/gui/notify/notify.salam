@@ -1,0 +1,676 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "notify"
+@fa "اعلان"
+package notify
+
+import crypto
+import encoding.json
+import io
+import mem
+import os
+import os.shell
+import str
+import sync
+
+@en "Permission"
+@fa "اجازه"
+pub struct Permission:
+    @en "granted"
+    @fa "داده شده"
+    pub granted: bool = false
+    @en "denied"
+    @fa "رد شده"
+    pub denied: bool = false
+    @en "unknown"
+    @fa "نامشخص"
+    pub unknown: bool = true
+    @en "reason"
+    @fa "دلیل"
+    pub reason: str = ""
+end
+
+@en "Action"
+@fa "کنش"
+pub struct Action:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "label"
+    @fa "برچسب"
+    pub label: str = ""
+    @en "icon"
+    @fa "نماد"
+    pub icon: str = ""
+end
+
+@en "Notification"
+@fa "اعلان"
+pub struct Notification:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "title"
+    @fa "عنوان"
+    pub title: str = ""
+    @en "body"
+    @fa "متن"
+    pub body: str = ""
+    @en "subtitle"
+    @fa "زیرعنوان"
+    pub subtitle: str = ""
+    @en "icon"
+    @fa "نماد"
+    pub icon: str = ""
+    @en "sound"
+    @fa "صدا"
+    pub sound: str = ""
+    @en "urgency"
+    @fa "فوریت"
+    pub urgency: str = "normal"
+    @en "timeout_ms"
+    @fa "مهلت میلی ثانیه"
+    pub timeout_ms: int = -1
+    @en "actions"
+    @fa "کنش ها"
+    pub actions: Vector<Action> = Vector {}
+    @en "tag"
+    @fa "برچسب گروه"
+    pub tag: str = ""
+    @en "data"
+    @fa "داده"
+    pub data: str = ""
+end
+
+mut _lock := sync.NewMutex()
+mut _on_click := (_id: str): ret end
+mut _on_action := (_id: str, _action: str): ret end
+mut _seq := 0 as i64
+mut _shown := HashMap {} as HashMap<str, int>
+mut _permission := Permission { granted = true }
+
+func _next_id(): str:
+    sync.Lock(_lock)
+    _seq++
+    n := _seq
+    sync.Unlock(_lock)
+    base := "n-".Concat(str.FromInt(n))
+    defer mem.Free(base as void*)
+    ret str.Clone(base)
+end
+
+func _remember(id: str, native_id: int):
+    sync.Lock(_lock)
+    _shown.Put(str.Clone(id), native_id)
+    sync.Unlock(_lock)
+end
+
+func _forget(id: str): int:
+    sync.Lock(_lock)
+    mut native := -1
+    if _shown.Has(id):
+        native = _shown.Get(id)
+        _gone := _shown.Remove(id)
+    end
+    sync.Unlock(_lock)
+    ret native
+end
+
+func _find_by_native(native: int): str:
+    sync.Lock(_lock)
+    mut out := str.Clone("")
+    // Best-effort linear scan by remembering ids in parallel map is avoided;
+    // callers on Linux can pass logical id directly when known.
+    _keep := native
+    sync.Unlock(_lock)
+    ret out
+end
+
+@en "RequestPermission"
+@fa "درخواست اجازه"
+pub func RequestPermission(): Permission:
+    p := _os_request_permission()
+    sync.Lock(_lock)
+    _permission = p
+    sync.Unlock(_lock)
+    ret p
+end
+
+@en "PermissionStatus"
+@fa "وضعیت اجازه"
+pub func PermissionStatus(): Permission:
+    sync.Lock(_lock)
+    p := _permission
+    sync.Unlock(_lock)
+    ret p
+end
+
+@en "OnClick"
+@fa "هنگام کلیک"
+pub func OnClick(handler: func (str)):
+    sync.Lock(_lock)
+    _on_click = handler
+    sync.Unlock(_lock)
+end
+
+@en "OnAction"
+@fa "هنگام کنش"
+pub func OnAction(handler: func (str, str)):
+    sync.Lock(_lock)
+    _on_action = handler
+    sync.Unlock(_lock)
+end
+
+func _fire_click(id: str):
+    sync.Lock(_lock)
+    h := _on_click
+    sync.Unlock(_lock)
+    h(id)
+end
+
+func _fire_action(id: str, action: str):
+    sync.Lock(_lock)
+    h := _on_action
+    sync.Unlock(_lock)
+    h(id, action)
+end
+
+@en "Show"
+@fa "نمایش"
+pub func Show(note: Notification): str:
+    mut n := note
+    if n.id.Len() == 0:
+        n.id = _next_id()
+    end
+    perm := PermissionStatus()
+    if perm.denied:
+        ret str.Clone("")
+    end
+    native := _os_show(n)
+    if native >= 0:
+        _remember(n.id, native)
+        ret str.Clone(n.id)
+    end
+    if native == -2:
+        // shown but no native id (best-effort fallback)
+        _remember(n.id, -2)
+        ret str.Clone(n.id)
+    end
+    ret str.Clone("")
+end
+
+@en "Update"
+@fa "به‌روزرسانی"
+pub func Update(note: Notification): bool:
+    if note.id.Len() == 0:
+        ret false
+    end
+    old := _forget(note.id)
+    if old >= 0:
+        _os_close(note.id, old)
+    end
+    shown := Show(note)
+    ok := shown.Len() > 0
+    mem.Free(shown as void*)
+    ret ok
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(id: str): bool:
+    native := _forget(id)
+    if native == -1:
+        ret false
+    end
+    ret _os_close(id, native)
+end
+
+@en "CloseAll"
+@fa "بستن همه"
+pub func CloseAll():
+    sync.Lock(_lock)
+    keys := _shown.Keys()
+    sync.Unlock(_lock)
+    each k in keys:
+        _closed := Close(k)
+        mem.Free(k as void*)
+    end
+    keys.Free()
+end
+
+func _full_title(note: Notification): str:
+    if note.subtitle.Len() == 0:
+        ret str.Clone(note.title)
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, note.title)
+    str.BufAppend(b, " — ")
+    str.BufAppend(b, note.subtitle)
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func _urgency_byte(note: Notification): u8:
+    if note.urgency == "low":
+        ret 0 as u8
+    end
+    if note.urgency == "critical" or note.urgency == "high":
+        ret 2 as u8
+    end
+    ret 1 as u8
+end
+
+// -------- Linux (D-Bus org.freedesktop.Notifications) --------
+if SALAM_OS_LINUX:
+    link dynamic "gio-2.0"
+    link dynamic "gobject-2.0"
+    link dynamic "glib-2.0"
+
+    extern:
+        func g_bus_get_sync(kind: int, cancellable: void*, error: void*): void*
+        func g_variant_new(format: str, ...): void*
+        func g_variant_new_string(text: str): void*
+        func g_variant_new_int32(value: i32): void*
+        func g_variant_new_byte(value: u8): void*
+        func g_variant_new_boolean(value: int): void*
+        func g_variant_type_new(text: str): void*
+        func g_variant_builder_new(kind: void*): void*
+        func g_variant_builder_add(builder: void*, format: str, ...)
+        func g_variant_builder_unref(builder: void*)
+        func g_dbus_connection_call_sync(
+            connection: void*, destination: str, path: str, iface: str, method: str, params: void*,
+            reply: void*, flags: int, timeout: int, cancellable: void*, error: void*
+        ): void*
+        func g_dbus_connection_signal_subscribe(
+            connection: void*, sender: void*, iface: str, member: str, path: str, arg0: void*,
+            flags: int, callback: void*, data: void*, free_data: void*
+        ): u32
+        func g_variant_get(reply: void*, format: str, ...)
+        func g_variant_unref(value: void*)
+        func g_free(p: void*)
+    end
+
+    mut _lx_bus := null as void*
+    mut _lx_listening := false
+
+    export:
+        func salam_notify_lx_action(_connection: void*, _sender: str, _path: str, _iface: str, _signal: str, params: void*, _data: void*):
+            if params == null:
+                ret
+            end
+            // Params: (u id, s action_key)
+            mut nid: u32 = 0
+            mut action_key: str = null
+            g_variant_get(params, "(u&s)", &nid, &action_key)
+            if action_key != null:
+                if action_key == "default":
+                    _fire_click(str.FromInt(nid as i64))
+                else:
+                    _fire_action(str.FromInt(nid as i64), action_key)
+                end
+            end
+        end
+
+        func salam_notify_lx_closed(_connection: void*, _sender: str, _path: str, _iface: str, _signal: str, _params: void*, _data: void*):
+            ret
+        end
+    end
+
+    func _lx_ensure():
+        if _lx_bus == null:
+            _lx_bus = g_bus_get_sync(2, null, null)
+        end
+        if _lx_bus != null and not _lx_listening:
+            _lx_listening = true
+            _a := g_dbus_connection_signal_subscribe(
+                _lx_bus, null, "org.freedesktop.Notifications", "ActionInvoked",
+                "/org/freedesktop/Notifications", null, 0, &salam_notify_lx_action, null, null
+            )
+            _c := g_dbus_connection_signal_subscribe(
+                _lx_bus, null, "org.freedesktop.Notifications", "NotificationClosed",
+                "/org/freedesktop/Notifications", null, 0, &salam_notify_lx_closed, null, null
+            )
+        end
+    end
+
+    func _lx_play(sound: str):
+        name := sound == "alert" ? "dialog-warning" : "message-new-instant"
+        script := "( if command -v canberra-gtk-play >/dev/null 2>&1; then canberra-gtk-play -i " + name + " -d salam; elif command -v paplay >/dev/null 2>&1 && [ -r /usr/share/sounds/freedesktop/stereo/" + name + ".oga ]; then paplay /usr/share/sounds/freedesktop/stereo/" + name + ".oga; elif command -v pw-play >/dev/null 2>&1 && [ -r /usr/share/sounds/freedesktop/stereo/" + name + ".oga ]; then pw-play /usr/share/sounds/freedesktop/stereo/" + name + ".oga; fi ) >/dev/null 2>&1 &"
+        mut args := Vector {} as Vector<str>
+        defer args.Free()
+        args.Push("-c")
+        args.Push(script)
+        _result := shell.Run("/bin/sh", args)
+    end
+
+    func _os_request_permission(): Permission:
+        _lx_ensure()
+        if _lx_bus == null:
+            ret Permission { granted = false, denied = true, unknown = false, reason = "no D-Bus session bus" }
+        end
+        ret Permission { granted = true }
+    end
+
+    func _os_show(note: Notification): int:
+        _lx_ensure()
+        if _lx_bus == null:
+            ret -1
+        end
+        actions := g_variant_builder_new(g_variant_type_new("as"))
+        g_variant_builder_add(actions, "s", "default")
+        g_variant_builder_add(actions, "s", "Open")
+        each a in note.actions:
+            g_variant_builder_add(actions, "s", a.id)
+            g_variant_builder_add(actions, "s", a.label)
+        end
+        hints := g_variant_builder_new(g_variant_type_new("a{sv}"))
+        g_variant_builder_add(hints, "{sv}", "urgency", g_variant_new_byte(_urgency_byte(note)))
+        if note.tag.Len() > 0:
+            g_variant_builder_add(hints, "{sv}", "x-canonical-append", g_variant_new_string("true"))
+        end
+        if note.sound.Len() == 0:
+            g_variant_builder_add(hints, "{sv}", "suppress-sound", g_variant_new_boolean(1))
+        else:
+            name := note.sound == "alert" ? "dialog-warning" : "message-new-instant"
+            g_variant_builder_add(hints, "{sv}", "sound-name", g_variant_new_string(name))
+        end
+        if note.icon.Len() > 0:
+            g_variant_builder_add(hints, "{sv}", "image-path", g_variant_new_string(note.icon))
+        end
+        title := _full_title(note)
+        defer mem.Free(title as void*)
+        app_name := "Salam"
+        timeout := note.timeout_ms
+        params := g_variant_new("(susssasa{sv}i)", app_name, 0 as u32, note.icon, title, note.body, actions, hints, timeout)
+        g_variant_builder_unref(actions)
+        g_variant_builder_unref(hints)
+        reply := g_dbus_connection_call_sync(
+            _lx_bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications", "Notify", params, null, 0, 5000, null, null
+        )
+        if reply == null:
+            ret -1
+        end
+        mut nid: u32 = 0
+        g_variant_get(reply, "(u)", &nid)
+        g_variant_unref(reply)
+        if note.sound.Len() > 0:
+            _lx_play(note.sound)
+        end
+        ret nid as int
+    end
+
+    func _os_close(_id: str, native: int): bool:
+        _lx_ensure()
+        if _lx_bus == null or native < 0:
+            ret false
+        end
+        params := g_variant_new("(u)", native as u32)
+        reply := g_dbus_connection_call_sync(
+            _lx_bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications", "CloseNotification", params, null, 0, 3000, null, null
+        )
+        if reply != null:
+            g_variant_unref(reply)
+            ret true
+        end
+        ret false
+    end
+end
+
+// -------- Windows (Shell_NotifyIcon balloon, best-effort) --------
+if SALAM_OS_WINDOWS:
+    extern:
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+        func MultiByteToWideChar(code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32): i32
+        func LoadIconW(instance: void*, name: void*): void*
+        func LoadImageW(instance: void*, name: void*, kind: u32, cx: int, cy: int, flags: u32): void*
+    end
+
+    struct _WinSlot:
+        pub v: void* = null
+    end
+
+    func _w_wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        buf := mem.Allocate(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _w_proc(library: str, name: str): void*:
+        wide := _w_wide(library)
+        module := LoadLibraryW(wide)
+        mem.Free(wide)
+        if module == null:
+            ret null
+        end
+        ret GetProcAddress(module, name)
+    end
+
+    func _w_copy(dest: void*, text: str, max_chars: int):
+        wide := _w_wide(text)
+        out := dest as u16*
+        src := wide as u16*
+        mut i := 0
+        until i < max_chars - 1 and src[i] != (0 as u16):
+            out[i] = src[i]
+            i++
+        end
+        out[i] = 0 as u16
+        mem.Free(wide)
+    end
+
+    func _w_icon(path: str): void*:
+        if path.Len() > 0:
+            wide := _w_wide(path)
+            icon := LoadImageW(null, wide, 1 as u32, 0, 0, 0x10 as u32)
+            mem.Free(wide)
+            if icon != null:
+                ret icon
+            end
+        end
+        ret LoadIconW(null, (32512 as size) as void*)
+    end
+
+    mut _w_ready := false
+
+    func _w_nid(flags: u32): void*:
+        wide_ptr := sizeof(_WinSlot) as int
+        total := wide_ptr == 8 ? 976 : 956
+        data := mem.AllocateZeroed(total as u64)
+        (data as u32*)[0] = total as u32
+        id_at := wide_ptr * 2
+        (((data as i64) + (id_at as i64)) as u32*)[0] = 1 as u32
+        (((data as i64) + (id_at as i64) + 4) as u32*)[0] = flags
+        (((data as i64) + (id_at as i64) + 8) as u32*)[0] = 0x8001 as u32
+        ret data
+    end
+
+    func _w_icon_at(): i64:
+        ret sizeof(_WinSlot) as int == 8 ? 32 as i64 : 20 as i64
+    end
+
+    func _w_tip_at(): i64:
+        ret _w_icon_at() + (sizeof(_WinSlot) as i64)
+    end
+
+    func _w_info_at(): i64:
+        ret sizeof(_WinSlot) as int == 8 ? 304 as i64 : 288 as i64
+    end
+
+    func _w_title_at(): i64:
+        ret sizeof(_WinSlot) as int == 8 ? 820 as i64 : 804 as i64
+    end
+
+    func _w_flags_at(): i64:
+        ret sizeof(_WinSlot) as int == 8 ? 948 as i64 : 932 as i64
+    end
+
+    func _w_shell(action: u32, data: void*): bool:
+        f := _w_proc("shell32.dll", "Shell_NotifyIconW") as extern stdcall func (u32, void*) i32
+        if f == null:
+            ret false
+        end
+        ret f(action, data) != 0
+    end
+
+    func _os_request_permission(): Permission:
+        ret Permission { granted = true }
+    end
+
+    func _os_show(note: Notification): int:
+        data := _w_nid(0x10 as u32)
+        defer mem.Free(data)
+        info_flags := note.sound.Len() == 0 ? 0x10 as u32 : (note.sound == "alert" ? 2 as u32 : 1 as u32)
+        (((data as i64) + _w_flags_at()) as u32*)[0] = info_flags
+        title := _full_title(note)
+        defer mem.Free(title as void*)
+        _w_copy(((data as i64) + _w_info_at()) as void*, note.body, 256)
+        _w_copy(((data as i64) + _w_title_at()) as void*, title, 64)
+        if not _w_ready:
+            setup := _w_nid(0x03 as u32)
+            ((setup as i64 + _w_icon_at()) as _WinSlot*)[0].v = _w_icon(note.icon)
+            _added := _w_shell(0 as u32, setup)
+            mem.Free(setup)
+            _w_ready = true
+        end
+        ok := _w_shell(1 as u32, data)
+        ret ok ? -2 : -1
+    end
+
+    func _os_close(_id: str, _native: int): bool:
+        // Balloon toasts cannot be individually removed reliably via Shell_NotifyIcon;
+        // best-effort: remove icon state when all logical notifications are gone is managed by caller.
+        if _w_ready:
+            data := _w_nid(0 as u32)
+            _mod := _w_shell(1 as u32, data)
+            mem.Free(data)
+        end
+        ret true
+    end
+end
+
+// -------- macOS (NSUserNotification / osascript fallback) --------
+if SALAM_OS_MAC:
+    link framework "Cocoa"
+    link dynamic "objc"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(receiver: void*, selector: void*): void*
+    end
+
+    func _m_obj0(recv: void*, name: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*) void*
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _m_obj1(recv: void*, name: str, a1: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1)
+    end
+
+    func _m_ns(s: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _m_new(cls: str): void*:
+        ret _m_obj0(_m_obj0(objc_getClass(cls), "alloc"), "init")
+    end
+
+    func _m_deliver(note: Notification): bool:
+        center_cls := objc_getClass("NSUserNotificationCenter")
+        if center_cls != null:
+            center := _m_obj0(center_cls, "defaultUserNotificationCenter")
+            if center != null:
+                obj := _m_new("NSUserNotification")
+                if obj != null:
+                    title := _full_title(note)
+                    defer mem.Free(title as void*)
+                    _m_obj1(obj, "setTitle:", _m_ns(title))
+                    _m_obj1(obj, "setInformativeText:", _m_ns(note.body))
+                    if note.subtitle.Len() > 0:
+                        _m_obj1(obj, "setSubtitle:", _m_ns(note.subtitle))
+                    end
+                    if note.sound.Len() > 0:
+                        mac_sound := note.sound == "alert" ? "Basso" : "Glass"
+                        _m_obj1(obj, "setSoundName:", _m_ns(mac_sound))
+                    end
+                    _m_obj1(center, "deliverNotification:", obj)
+                    ret true
+                end
+            end
+        end
+        ret false
+    end
+
+    func _m_osascript(note: Notification): bool:
+        mut args := Vector {} as Vector<str>
+        defer args.Free()
+        title := _full_title(note)
+        defer mem.Free(title as void*)
+        escaped_body := str.Replace(str.Replace(note.body, "\\", "\\\\"), `"`, `\"`)
+        escaped_title := str.Replace(str.Replace(title, "\\", "\\\\"), `"`, `\"`)
+        args.Push("-e")
+        mut line := `display notification "` + escaped_body + `" with title "` + escaped_title + `"`
+        if note.subtitle.Len() > 0:
+            escaped_sub := str.Replace(str.Replace(note.subtitle, "\\", "\\\\"), `"`, `\"`)
+            line = line + ` subtitle "` + escaped_sub + `"`
+        end
+        if note.sound.Len() > 0:
+            mac_sound := note.sound == "alert" ? "Basso" : "Glass"
+            line = line + ` sound name "` + mac_sound + `"`
+        end
+        args.Push(line)
+        result := shell.Run("/usr/bin/osascript", args)
+        ret result.code == 0
+    end
+
+    func _os_request_permission(): Permission:
+        ret Permission { granted = true }
+    end
+
+    func _os_show(note: Notification): int:
+        if _m_deliver(note):
+            ret -2
+        end
+        ret _m_osascript(note) ? -2 : -1
+    end
+
+    func _os_close(_id: str, _native: int): bool:
+        // NSUserNotificationCenter removal needs delegate/tracking; best-effort no-op.
+        ret false
+    end
+end
+
+// -------- Fallback for unsupported/CEF-only builds --------
+if not SALAM_OS_LINUX and not SALAM_OS_WINDOWS and not SALAM_OS_MAC:
+    func _os_request_permission(): Permission:
+        ret Permission { granted = false, denied = true, unknown = false, reason = "unsupported platform" }
+    end
+
+    func _os_show(_note: Notification): int:
+        ret -1
+    end
+
+    func _os_close(_id: str, _native: int): bool:
+        ret false
+    end
+end

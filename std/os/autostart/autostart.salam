@@ -1,0 +1,441 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "autostart"
+@fa "اجرای خودکار"
+package autostart
+
+import io
+import os
+import fs
+import mem
+import str
+import filepath
+import os.user
+
+if SALAM_OS_WINDOWS:
+    link dynamic "advapi32"
+    extern:
+        func RegOpenKeyExW(hKey: void*, lpSubKey: void*, ulOptions: u32, samDesired: u32, phkResult: void*): int
+        func RegCreateKeyExW(hKey: void*, lpSubKey: void*, Reserved: u32, lpClass: void*, dwOptions: u32, samDesired: u32, lpSecurityAttributes: void*, phkResult: void*, lpdwDisposition: void*): int
+        func RegSetValueExW(hKey: void*, lpValueName: void*, Reserved: u32, dwType: u32, lpData: void*, cbData: u32): int
+        func RegDeleteValueW(hKey: void*, lpValueName: void*): int
+        func RegQueryValueExW(hKey: void*, lpValueName: void*, lpReserved: void*, lpType: void*, lpData: void*, lpcbData: void*): int
+        func RegCloseKey(hKey: void*): int
+        func MultiByteToWideChar(codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32): i32
+        func WideCharToMultiByte(codepage: u32, flags: u32, src: void*, srclen: i32, dst: void*, dstlen: i32, def: void*, used: void*): i32
+    end
+
+    const _HKEY_CURRENT_USER := (0x80000001 as u64) as void*
+    const _KEY_READ := 0x20019 as u32
+    const _KEY_WRITE := 0x20006 as u32
+    const _REG_SZ := 1 as u32
+    const _ERROR_SUCCESS := 0
+    const _ERROR_FILE_NOT_FOUND := 2
+
+    func _str_to_wide(s: str): void*:
+        n := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        if n <= 0:
+            ret mem.AllocateZeroed(2 as u64)
+        end
+        w := mem.Allocate((n * 2) as u64)
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, w, n)
+        ret w
+    end
+
+    func _wide_to_str(w: void*): str:
+        if w == null: ret str.Clone("") end
+        n := WideCharToMultiByte(65001 as u32, 0 as u32, w, 0 - 1, null, 0, null, null)
+        if n <= 0: ret str.Clone("") end
+        buf := mem.Allocate(n as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, w, 0 - 1, buf, n, null, null)
+        ret buf as str
+    end
+
+    func _run_key(): void*:
+        ret _str_to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
+    end
+
+    func _build_cmd(exec_path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 34)
+        str.BufAppend(sb, exec_path)
+        str.BufAppendChar(sb, 34)
+        n := args.Len()
+        mut i := 0
+        until i < n:
+            a := args.Get(i)
+            str.BufAppendChar(sb, 32)
+            if str.Contains(a, " ") or str.Contains(a, "\t") or str.Contains(a, "\""):
+                str.BufAppendChar(sb, 34)
+                str.BufAppend(sb, a)
+                str.BufAppendChar(sb, 34)
+            else:
+                str.BufAppend(sb, a)
+            end
+            i++
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _reg_set(app_id: str, cmd: str): bool:
+        sub := _run_key()
+        name := _str_to_wide(app_id)
+        phk := mem.AllocateZeroed(sizeof(void*) as u64)
+        rc := RegCreateKeyExW(_HKEY_CURRENT_USER, sub, 0 as u32, null, 0 as u32, _KEY_WRITE, null, phk, null)
+        mem.Free(sub)
+        if rc != _ERROR_SUCCESS:
+            mem.Free(name)
+            mem.Free(phk)
+            ret false
+        end
+        hkeyp := phk as void**
+        hkey := hkeyp[0]
+        mem.Free(phk)
+        wcmd := _str_to_wide(cmd)
+        // bytes including null terminator for UTF-16
+        blen := ((cmd.Len() + 1) * 2) as u32
+        rc = RegSetValueExW(hkey, name, 0 as u32, _REG_SZ, wcmd, blen)
+        mem.Free(wcmd)
+        mem.Free(name)
+        RegCloseKey(hkey)
+        ret rc == _ERROR_SUCCESS
+    end
+
+    func _reg_delete(app_id: str): bool:
+        sub := _run_key()
+        name := _str_to_wide(app_id)
+        phk := mem.AllocateZeroed(sizeof(void*) as u64)
+        rc := RegOpenKeyExW(_HKEY_CURRENT_USER, sub, 0 as u32, _KEY_WRITE, phk)
+        mem.Free(sub)
+        if rc != _ERROR_SUCCESS:
+            mem.Free(name)
+            mem.Free(phk)
+            // treat missing key as success
+            ret rc == _ERROR_FILE_NOT_FOUND
+        end
+        hkeyp := phk as void**
+        hkey := hkeyp[0]
+        mem.Free(phk)
+        rc = RegDeleteValueW(hkey, name)
+        mem.Free(name)
+        RegCloseKey(hkey)
+        ret rc == _ERROR_SUCCESS or rc == _ERROR_FILE_NOT_FOUND
+    end
+
+    func _reg_exists(app_id: str): bool:
+        sub := _run_key()
+        name := _str_to_wide(app_id)
+        phk := mem.AllocateZeroed(sizeof(void*) as u64)
+        rc := RegOpenKeyExW(_HKEY_CURRENT_USER, sub, 0 as u32, _KEY_READ, phk)
+        mem.Free(sub)
+        if rc != _ERROR_SUCCESS:
+            mem.Free(name)
+            mem.Free(phk)
+            ret false
+        end
+        hkeyp := phk as void**
+        hkey := hkeyp[0]
+        mem.Free(phk)
+        rc = RegQueryValueExW(hkey, name, null, null, null, null)
+        mem.Free(name)
+        RegCloseKey(hkey)
+        ret rc == _ERROR_SUCCESS
+    end
+end
+
+if SALAM_OS_MAC:
+    func _xml_escape(s: str): str:
+        mut t := str.Replace(s, "&", "&amp;")
+        defer mem.Free(t as void*)
+        mut t2 := str.Replace(t, "<", "&lt;")
+        defer mem.Free(t2 as void*)
+        mut t3 := str.Replace(t2, ">", "&gt;")
+        defer mem.Free(t3 as void*)
+        mut t4 := str.Replace(t3, "\"", "&quot;")
+        defer mem.Free(t4 as void*)
+        ret str.Replace(t4, "'", "&apos;")
+    end
+
+    func _launch_agents_dir(): str:
+        home := user.HomeDir()
+        la := filepath.Join(home, "Library")
+        defer mem.Free(la as void*)
+        ret filepath.Join(la, "LaunchAgents")
+    end
+
+    func _plist_path(app_id: str): str:
+        dir := _launch_agents_dir()
+        defer mem.Free(dir as void*)
+        name := app_id.Concat(".plist")
+        defer mem.Free(name as void*)
+        ret filepath.Join(dir, name)
+    end
+
+    func _ensure_dir(path: str):
+        if os.Exists(path) == false:
+            _mkdirs(path)
+        end
+    end
+
+    func _mkdirs(path: str):
+        if path.Len() == 0 or os.Exists(path): ret end
+        parent := filepath.Dir(path)
+        if parent.Len() > 0 and parent != path and parent != ".":
+            _mkdirs(parent)
+        end
+        mem.Free(parent as void*)
+        os.Mkdir(path)
+    end
+
+    func _build_plist(app_id: str, app_name: str, exec_path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        str.BufAppend(sb, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
+        str.BufAppend(sb, "<plist version=\"1.0\">\n<dict>\n")
+        str.BufAppend(sb, "  <key>Label</key>\n  <string>")
+        lbl := _xml_escape(app_id)
+        str.BufAppend(sb, lbl)
+        mem.Free(lbl as void*)
+        str.BufAppend(sb, "</string>\n")
+        if app_name.Len() > 0:
+            str.BufAppend(sb, "  <key>Program</key>\n  <string>")
+            exe := _xml_escape(exec_path)
+            str.BufAppend(sb, exe)
+            mem.Free(exe as void*)
+            str.BufAppend(sb, "</string>\n")
+        end
+        str.BufAppend(sb, "  <key>ProgramArguments</key>\n  <array>\n")
+        str.BufAppend(sb, "    <string>")
+        exe2 := _xml_escape(exec_path)
+        str.BufAppend(sb, exe2)
+        mem.Free(exe2 as void*)
+        str.BufAppend(sb, "</string>\n")
+        n := args.Len()
+        mut i := 0
+        until i < n:
+            str.BufAppend(sb, "    <string>")
+            ea := _xml_escape(args.Get(i))
+            str.BufAppend(sb, ea)
+            mem.Free(ea as void*)
+            str.BufAppend(sb, "</string>\n")
+            i++
+        end
+        str.BufAppend(sb, "  </array>\n")
+        str.BufAppend(sb, "  <key>RunAtLoad</key>\n  <true/>\n")
+        if app_name.Len() > 0:
+            str.BufAppend(sb, "  <key>ProcessType</key>\n  <string>Interactive</string>\n")
+        end
+        str.BufAppend(sb, "</dict>\n</plist>\n")
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+end
+
+if SALAM_OS_LINUX or SALAM_OS_BSD:
+    func _autostart_dir(): str:
+        home := user.HomeDir()
+        cfg := os.Env("XDG_CONFIG_HOME")
+        mut base := str.Clone("")
+        if cfg.Len() > 0:
+            base = str.Clone(cfg)
+        else:
+            base = filepath.Join(home, ".config")
+        end
+        out := filepath.Join(base, "autostart")
+        mem.Free(base as void*)
+        ret out
+    end
+
+    func _desktop_path(app_id: str): str:
+        dir := _autostart_dir()
+        defer mem.Free(dir as void*)
+        name := app_id.Concat(".desktop")
+        defer mem.Free(name as void*)
+        ret filepath.Join(dir, name)
+    end
+
+    func _mkdirs(path: str):
+        if path.Len() == 0 or os.Exists(path): ret end
+        parent := filepath.Dir(path)
+        if parent.Len() > 0 and parent != path and parent != ".":
+            _mkdirs(parent)
+        end
+        mem.Free(parent as void*)
+        os.Mkdir(path)
+    end
+
+    func _desktop_escape_value(s: str): str:
+        // Basic escaping for .desktop values
+        mut t := str.Replace(s, "\\", "\\\\")
+        defer mem.Free(t as void*)
+        mut t2 := str.Replace(t, "\n", "\\n")
+        ret t2
+    end
+
+    func _quote_exec_arg(a: str): str:
+        // Quote args containing spaces or special chars for Exec
+        needs := str.Contains(a, " ") or str.Contains(a, "\t") or str.Contains(a, "\"") or str.Contains(a, "'") or str.Contains(a, "\\") or str.Contains(a, "$") or str.Contains(a, "`")
+        if needs == false:
+            ret str.Clone(a)
+        end
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 34)
+        n := a.Len()
+        mut i := 0
+        until i < n:
+            ch := a.Substr(i, 1)
+            if ch == "\"" or ch == "\\" or ch == "$" or ch == "`":
+                str.BufAppendChar(sb, 92)
+            end
+            str.BufAppend(sb, ch)
+            mem.Free(ch as void*)
+            i++
+        end
+        str.BufAppendChar(sb, 34)
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _build_exec(exec_path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        q0 := _quote_exec_arg(exec_path)
+        str.BufAppend(sb, q0)
+        mem.Free(q0 as void*)
+        n := args.Len()
+        mut i := 0
+        until i < n:
+            str.BufAppendChar(sb, 32)
+            qa := _quote_exec_arg(args.Get(i))
+            str.BufAppend(sb, qa)
+            mem.Free(qa as void*)
+            i++
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _build_desktop(app_id: str, app_name: str, exec_path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "[Desktop Entry]\n")
+        str.BufAppend(sb, "Type=Application\n")
+        str.BufAppend(sb, "Version=1.0\n")
+        str.BufAppend(sb, "Name=")
+        nm := app_name.Len() > 0 ? _desktop_escape_value(app_name) : _desktop_escape_value(app_id)
+        str.BufAppend(sb, nm)
+        mem.Free(nm as void*)
+        str.BufAppend(sb, "\n")
+        str.BufAppend(sb, "Exec=")
+        ex := _build_exec(exec_path, args)
+        str.BufAppend(sb, ex)
+        mem.Free(ex as void*)
+        str.BufAppend(sb, "\n")
+        str.BufAppend(sb, "X-GNOME-Autostart-enabled=true\n")
+        str.BufAppend(sb, "Hidden=false\n")
+        str.BufAppend(sb, "NoDisplay=false\n")
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+end
+
+@en "Supported"
+@fa "پشتیبانی می‌شود"
+pub func Supported(): bool:
+    if SALAM_OS_WINDOWS or SALAM_OS_MAC or SALAM_OS_LINUX or SALAM_OS_BSD:
+        ret true
+    end
+    ret false
+end
+
+@en "Enable"
+@fa "فعال‌سازی"
+pub func Enable(app_id: str, app_name: str, exec_path: str, args: Vector<str>): bool:
+    if app_id.Len() == 0 or exec_path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        cmd := _build_cmd(exec_path, args)
+        defer mem.Free(cmd as void*)
+        ret _reg_set(app_id, cmd)
+    else SALAM_OS_MAC:
+        dir := _launch_agents_dir()
+        _mkdirs(dir)
+        mem.Free(dir as void*)
+        path := _plist_path(app_id)
+        defer mem.Free(path as void*)
+        content := _build_plist(app_id, app_name, exec_path, args)
+        defer mem.Free(content as void*)
+        ret io.WriteFile(path, content) >= 0
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        dir := _autostart_dir()
+        _mkdirs(dir)
+        mem.Free(dir as void*)
+        path := _desktop_path(app_id)
+        defer mem.Free(path as void*)
+        content := _build_desktop(app_id, app_name, exec_path, args)
+        defer mem.Free(content as void*)
+        ret io.WriteFile(path, content) >= 0
+    end
+    ret false
+end
+
+@en "Disable"
+@fa "غیرفعال‌سازی"
+pub func Disable(app_id: str): bool:
+    if app_id.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        ret _reg_delete(app_id)
+    else SALAM_OS_MAC:
+        path := _plist_path(app_id)
+        defer mem.Free(path as void*)
+        if os.Exists(path) == false: ret true end
+        ret os.Remove(path) == 0
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        path := _desktop_path(app_id)
+        defer mem.Free(path as void*)
+        if os.Exists(path) == false: ret true end
+        ret os.Remove(path) == 0
+    end
+    ret false
+end
+
+@en "IsEnabled"
+@fa "فعال است"
+pub func IsEnabled(app_id: str): bool:
+    if app_id.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        ret _reg_exists(app_id)
+    else SALAM_OS_MAC:
+        path := _plist_path(app_id)
+        defer mem.Free(path as void*)
+        ret os.Exists(path)
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        path := _desktop_path(app_id)
+        defer mem.Free(path as void*)
+        ret os.Exists(path)
+    end
+    ret false
+end
+
+@en "Status"
+@fa "وضعیت"
+pub func Status(app_id: str): str:
+    if Supported() == false: ret "unsupported" end
+    if IsEnabled(app_id): ret "enabled" end
+    ret "disabled"
+end

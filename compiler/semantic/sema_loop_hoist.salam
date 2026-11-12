@@ -1,0 +1,396 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func lh_name_eq(a: str, b: str): bool:
+    ret str.Equals(a, b) and str.Len(a) > 0
+end
+
+func lh_has_name(v &: Vector<str>, name: str): bool:
+    each n in v:
+        if lh_name_eq(n, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lh_add_name(v &: Vector<str>, name: str):
+    if str.Len(name) == 0 or lh_has_name(v, name):
+        ret
+    end
+    v.push(name)
+end
+
+func lh_remove_name(v &: Vector<str>, name: str):
+    mut out := Vector {} as Vector<str>
+    each n in v:
+        if not lh_name_eq(n, name):
+            out.push(n)
+        end
+    end
+    mut old := v
+    v = out
+    old.free()
+end
+
+func lh_expr_has_call(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_CALL or k == at.AST_LAMBDA or k == at.AST_MATCH or k == at.AST_TRY:
+        ret true
+    end
+    if k == at.AST_ASSIGN or k == at.AST_INCDEC:
+        ret true
+    end
+    n := at.Get(a, nid)
+    if k == at.AST_UNARY and (n.op == tok.TK_AMP or n.op == tok.TK_STAR):
+        # address-of/deref can create aliasing; be conservative in hoist exprs
+        ret true
+    end
+    if lh_expr_has_call(a, n.a) or lh_expr_has_call(a, n.b) or lh_expr_has_call(a, n.c) or lh_expr_has_call(a, n.d):
+        ret true
+    end
+    if lh_expr_has_call(a, n.ty):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if lh_expr_has_call(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lh_collect_reads(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    n := at.Get(a, nid)
+    if k == at.AST_IDENTIFIER:
+        lh_add_name(out, n.name)
+        ret
+    end
+    if k == at.AST_MEMBER:
+        lh_collect_reads(a, n.a, out)
+        ret
+    end
+    if k == at.AST_INDEX or k == at.AST_SLICE:
+        lh_collect_reads(a, n.a, out)
+        lh_collect_reads(a, n.b, out)
+        lh_collect_reads(a, n.c, out)
+        ret
+    end
+    lh_collect_reads(a, n.a, out)
+    lh_collect_reads(a, n.b, out)
+    lh_collect_reads(a, n.c, out)
+    lh_collect_reads(a, n.d, out)
+    repeat n.list.len() in i:
+        lh_collect_reads(a, n.list.get(i), out)
+    end
+end
+
+func lh_collect_writes_in(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    n := at.Get(a, nid)
+    if k == at.AST_ASSIGN:
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+            lh_add_name(out, at.Get(a, n.a).name)
+        else n.a != 0:
+            # member/index writes mutate base object state; conservatively treat base ident as written
+            lh_write_target_base(a, n.a, out)
+        end
+        lh_collect_writes_in(a, n.b, out)
+        ret
+    end
+    if k == at.AST_INCDEC:
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+            lh_add_name(out, at.Get(a, n.a).name)
+        else n.a != 0:
+            lh_write_target_base(a, n.a, out)
+        end
+        ret
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        lh_add_name(out, n.name)
+        lh_collect_writes_in(a, n.a, out)
+        ret
+    end
+    if k == at.AST_CALL:
+        # calls may mutate through refs/aliases; be conservative by not marking here,
+        # but hoist candidates are rejected if loop contains calls affecting their vars.
+        lh_collect_writes_in(a, n.a, out)
+        lh_collect_writes_in(a, n.b, out)
+        lh_collect_writes_in(a, n.c, out)
+        lh_collect_writes_in(a, n.d, out)
+        repeat n.list.len() in i:
+            lh_collect_writes_in(a, n.list.get(i), out)
+        end
+        ret
+    end
+    lh_collect_writes_in(a, n.a, out)
+    lh_collect_writes_in(a, n.b, out)
+    lh_collect_writes_in(a, n.c, out)
+    lh_collect_writes_in(a, n.d, out)
+    repeat n.list.len() in i:
+        lh_collect_writes_in(a, n.list.get(i), out)
+    end
+end
+
+func lh_write_target_base(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_IDENTIFIER:
+        lh_add_name(out, at.Get(a, nid).name)
+        ret
+    end
+    n := at.Get(a, nid)
+    if k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_SLICE or k == at.AST_UNARY:
+        lh_write_target_base(a, n.a, out)
+    end
+end
+
+func lh_loop_has_call(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_CALL:
+        ret true
+    end
+    n := at.Get(a, nid)
+    if lh_loop_has_call(a, n.a) or lh_loop_has_call(a, n.b) or lh_loop_has_call(a, n.c) or lh_loop_has_call(a, n.d):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if lh_loop_has_call(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lh_collect_addrs(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    n := at.Get(a, nid)
+    if k == at.AST_UNARY and n.op == tok.TK_AMP and n.a != 0:
+        # &x / &obj.field - conservatively mark base identifier
+        mut base := n.a
+        until true:
+            bk := at.KindOf(a, base)
+            if bk == at.AST_IDENTIFIER:
+                lh_add_name(out, at.Get(a, base).name)
+                break
+            end
+            bn := at.Get(a, base)
+            if bk == at.AST_MEMBER or bk == at.AST_INDEX or bk == at.AST_SLICE or bk == at.AST_UNARY:
+                base = bn.a
+                if base == 0:
+                    break
+                end
+            else:
+                lh_collect_reads(a, base, out)
+                break
+            end
+        end
+    end
+    lh_collect_addrs(a, n.a, out)
+    lh_collect_addrs(a, n.b, out)
+    lh_collect_addrs(a, n.c, out)
+    lh_collect_addrs(a, n.d, out)
+    repeat n.list.len() in i:
+        lh_collect_addrs(a, n.list.get(i), out)
+    end
+end
+
+func lh_collect_names_in_list(a &: at.Ast, list: Vector<int>, writes &: Vector<str>):
+    each id in list:
+        lh_collect_writes_in(a, id, writes)
+    end
+end
+
+func lh_stmt_target_name(a &: at.Ast, sid: int, init &: int): str:
+    init = 0
+    if sid == 0:
+        ret ""
+    end
+    k := at.KindOf(a, sid)
+    n := at.Get(a, sid)
+    if k == at.AST_VAR_DECL:
+        init = n.a
+        ret n.name
+    end
+    if k == at.AST_ASSIGN:
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+            init = n.b
+            ret at.Get(a, n.a).name
+        end
+        ret ""
+    end
+    if k == at.AST_EXPR_STMT and n.a != 0:
+        ret lh_stmt_target_name(a, n.a, init)
+    end
+    ret ""
+end
+
+func lh_is_simple_hoist_stmt(a &: at.Ast, sid: int, name &: str, init &: int): bool:
+    name = lh_stmt_target_name(a, sid, init)
+    if str.Len(name) == 0 or init == 0:
+        ret false
+    end
+    if lh_expr_has_call(a, init):
+        ret false
+    end
+    ret true
+end
+
+func lh_count_writes_of(a &: at.Ast, nid: int, name: str): int:
+    if nid == 0:
+        ret 0
+    end
+    k := at.KindOf(a, nid)
+    n := at.Get(a, nid)
+    mut c := 0
+    if k == at.AST_ASSIGN:
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER and lh_name_eq(at.Get(a, n.a).name, name):
+            c++
+        else n.a != 0 and at.KindOf(a, n.a) != at.AST_IDENTIFIER:
+            # member/index assign - count as write to base if base is target name
+            basek := at.KindOf(a, n.a)
+            if basek == at.AST_IDENTIFIER and lh_name_eq(at.Get(a, n.a).name, name):
+                c++
+            end
+        end
+        c += lh_count_writes_of(a, n.b, name)
+        ret c
+    end
+    if k == at.AST_INCDEC:
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER and lh_name_eq(at.Get(a, n.a).name, name):
+            c++
+        end
+        ret c
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        if lh_name_eq(n.name, name):
+            c++
+        end
+        c += lh_count_writes_of(a, n.a, name)
+        ret c
+    end
+    c += lh_count_writes_of(a, n.a, name)
+    c += lh_count_writes_of(a, n.b, name)
+    c += lh_count_writes_of(a, n.c, name)
+    c += lh_count_writes_of(a, n.d, name)
+    repeat n.list.len() in i:
+        c += lh_count_writes_of(a, n.list.get(i), name)
+    end
+    ret c
+end
+
+func lh_count_reads_of(a &: at.Ast, nid: int, name: str): int:
+    if nid == 0:
+        ret 0
+    end
+    k := at.KindOf(a, nid)
+    n := at.Get(a, nid)
+    mut c := 0
+    if k == at.AST_IDENTIFIER and lh_name_eq(n.name, name):
+        ret 1
+    end
+    c += lh_count_reads_of(a, n.a, name)
+    c += lh_count_reads_of(a, n.b, name)
+    c += lh_count_reads_of(a, n.c, name)
+    c += lh_count_reads_of(a, n.d, name)
+    repeat n.list.len() in i:
+        c += lh_count_reads_of(a, n.list.get(i), name)
+    end
+    ret c
+end
+
+func lh_reads_written_name(a &: at.Ast, nid: int, written &: Vector<str>): bool:
+    mut reads := Vector {} as Vector<str>
+    defer reads.free()
+    lh_collect_reads(a, nid, reads)
+    each r in reads:
+        if lh_has_name(written, r):
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func sema_check_loop_hoist(s &: Sema, a &: at.Ast, loop_id: int, body: int, cond: int, step: int, extra: int, bound1: str, bound2: str):
+    if body == 0 or at.KindOf(a, body) != at.AST_BLOCK:
+        ret
+    end
+    mut writes := Vector {} as Vector<str>
+    defer writes.free()
+    lh_collect_writes_in(a, body, writes)
+    lh_collect_writes_in(a, cond, writes)
+    lh_collect_writes_in(a, step, writes)
+    lh_collect_writes_in(a, extra, writes)
+    lh_add_name(writes, bound1)
+    lh_add_name(writes, bound2)
+    has_call := lh_loop_has_call(a, body) or lh_loop_has_call(a, cond) or lh_loop_has_call(a, step) or lh_loop_has_call(a, extra)
+    mut addrs := Vector {} as Vector<str>
+    defer addrs.free()
+    lh_collect_addrs(a, body, addrs)
+    lh_collect_addrs(a, cond, addrs)
+    lh_collect_addrs(a, step, addrs)
+    lh_collect_addrs(a, extra, addrs)
+
+    bn := at.Get(a, body)
+    mut i := 0
+    mut reported := false
+    until i < bn.list.len():
+        sid := bn.list.get(i)
+        mut name := ""
+        mut init := 0
+        if not lh_is_simple_hoist_stmt(a, sid, name, init):
+            break
+        end
+        if lh_count_writes_of(a, body, name) + lh_count_writes_of(a, cond, name) + lh_count_writes_of(a, step, name) + lh_count_writes_of(a, extra, name) != 1:
+            break
+        end
+        if lh_has_name(writes, name):
+            # target itself in writes from collection (e.g. decl) is expected once; but if also bound/other write treat carefully
+            # recount excludes bound1/bound2 names added artificially
+        end
+        if lh_reads_written_name(a, init, writes):
+            break
+        end
+        if has_call or lh_has_name(addrs, name) or lh_has_name(addrs, bound1) or lh_has_name(addrs, bound2):
+            # aliasing/calls anywhere in loop: too risky to hoist
+            break
+        end
+        # if init reads target name in odd ways, not possible for simple assign/decl; also reject if name is a loop bound
+        if lh_name_eq(name, bound1) or lh_name_eq(name, bound2):
+            break
+        end
+        serr(
+            s, 110, span_of(a, sid), co.Format1(
+                i18.Tr("loop-invariant statement: '%s' does not change inside the loop; move it before the loop"), co.ArgStr(name)
+            )
+        )
+        reported = true
+        i++
+    end
+    _ = loop_id
+    _ = reported
+end

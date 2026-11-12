@@ -3,6 +3,7 @@ package cli
 import io
 import os
 import str
+import filepath
 import mem
 import net.http
 
@@ -550,6 +551,66 @@ func update_cmd(opt &: dr.Dr): int:
     end
     println co.Format2(i18.Tr("salam is now %s (was %s)"), co.ArgStr(target), co.ArgStr(current))
     ret 0
+end
+
+func src_git(root: str, args: str): str:
+    res := os.RunCapture(upd_shell("git -C " + shell_arg(root) + " " + args + " 2>" + (SALAM_OS_WINDOWS ? "NUL" : "/dev/null")))
+    if res.code != 0:
+        ret ""
+    end
+    ret str.Trim(res.out)
+end
+
+func has_const(opt: dr.Dr, name: str): bool:
+    each def in opt.consts:
+        if str.Equals(def, name) or str.StartsWith(def, name + "="):
+            ret true
+        end
+    end
+    ret false
+end
+
+func stamp_source_build(opt &: dr.Dr):
+    if str.Len(opt.input) == 0 or not str.Equals(pth.PathBase(opt.input), "main.salam"):
+        ret
+    end
+    cdir := pth.PathDir(filepath.Abs(opt.input))
+    if not str.Equals(pth.PathBase(cdir), "compiler"):
+        ret
+    end
+    root := pth.PathDir(cdir)
+    vfile := pth.PathJoin(root, "VERSION")
+    if not os.Exists(vfile) or not os.Exists(pth.PathJoin(cdir, "sal_core.salam")):
+        ret
+    end
+    if not has_const(opt, "SALAM_VERSION"):
+        version := str.Trim(os.ReadFile(vfile))
+        if str.Len(version) > 0:
+            opt.consts.push("SALAM_VERSION=\"" + version + "\"")
+        end
+    end
+    if has_const(opt, "SALAM_GIT_COMMIT"):
+        ret
+    end
+    commit := src_git(root, "rev-parse HEAD")
+    if str.Len(commit) == 0:
+        opt.consts.push("SALAM_GIT_COMMIT=\"unknown\"")
+        opt.consts.push("SALAM_GIT_DATE=\"unknown\"")
+        opt.consts.push("SALAM_GIT_DIRTY=\"\"")
+        ret
+    end
+    opt.consts.push("SALAM_GIT_COMMIT=\"" + commit + "\"")
+    if not has_const(opt, "SALAM_GIT_DATE"):
+        opt.consts.push("SALAM_GIT_DATE=\"" + src_git(root, "show -s --format=%cI HEAD") + "\"")
+    end
+    if not has_const(opt, "SALAM_GIT_DIRTY"):
+        dirty := str.Len(src_git(root, "status --porcelain")) > 0
+        opt.consts.push("SALAM_GIT_DIRTY=\"" + (dirty ? "-dirty" : "") + "\"")
+    end
+end
+
+pub func StampSourceBuild(opt &: dr.Dr):
+    stamp_source_build(opt)
 end
 
 pub func UpdateCompareVersions(a: str, b: str): int:

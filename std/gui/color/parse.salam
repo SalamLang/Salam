@@ -470,7 +470,9 @@ func _gc_hue(p &: _GcP, t: _GcTok, name: str, out &: f64): bool:
         _GC_T_DIM:
             unit := _gc_text_of(p, t.u, t.b)
             defer _gc_free(unit)
-            switch _gc_lower_ascii(unit):
+            lower := _gc_lower_ascii(unit)
+            defer _gc_free(lower)
+            switch lower:
                 "deg": out = t.n ret true end
                 "rad": out = t.n * 180.0 / math.PI ret true end
                 "grad": out = t.n * 0.9 ret true end
@@ -535,7 +537,8 @@ func _gc_fn_hsl_hwb(p &: _GcP, name: str, hwb: bool, out &: Color): bool:
     defer a.vals.free()
     l1 := hwb ? "whiteness" : "saturation"
     l2 := hwb ? "blackness" : "lightness"
-    if not _gc_args(p, name, a) or not _gc_take(p, a, 3, name, "3 values (hue, " + l1 + ", " + l2 + ")"):
+    what := hwb ? "3 values (hue, whiteness, blackness)" : "3 values (hue, saturation, lightness)"
+    if not _gc_args(p, name, a) or not _gc_take(p, a, 3, name, what):
         ret false
     end
     mut h := 0.0
@@ -644,6 +647,7 @@ func _gc_fn_color(p &: _GcP, out &: Color): bool:
     mut shown := ""
     key := _gc_phrase(p, col, shown)
     defer _gc_free(key)
+    defer _gc_free(shown)
     sp := _gc_space_of_key(key, false)
     if sp < 0:
         ret _gc_fail(p, col, "unknown colour space '" + shown + "' in color(); use " + spaces)
@@ -653,6 +657,8 @@ func _gc_fn_color(p &: _GcP, out &: Color): bool:
     if _gc_peek(p).k == _GC_T_COMMA:
         p.i++
         a.comma = true
+    else:
+        a.spaced = true
     end
     if not _gc_args(p, "color", a) or not _gc_take(p, a, 3, "color", "3 channels after the colour space"):
         ret false
@@ -668,10 +674,10 @@ func _gc_fn_color(p &: _GcP, out &: Color): bool:
     ret true
 end
 
-func _gc_expect(p &: _GcP, k: int, what: str): bool:
+func _gc_expect(p &: _GcP, k: int, what: str, name: str, after: str): bool:
     t := _gc_peek(p)
     if t.k != k:
-        ret _gc_fail_at(p, t, "expected " + what + ", found " + _gc_tok_text(p, t))
+        ret _gc_fail_at(p, t, "expected " + what + name + after + ", found " + _gc_tok_text(p, t))
     end
     p.i++
     ret true
@@ -681,7 +687,7 @@ func _gc_fn_mix(p &: _GcP, name: str, depth: int, out &: Color): bool:
     first := _gc_peek(p)
     mut a := Color {}
     mut b := Color {}
-    if not _gc_color(p, depth + 1, a) or not _gc_expect(p, _GC_T_COMMA, "',' after the first colour of " + name + "(...)"):
+    if not _gc_color(p, depth + 1, a) or not _gc_expect(p, _GC_T_COMMA, "',' after the first colour of ", name, "(...)"):
         ret false
     end
     second := _gc_peek(p)
@@ -714,13 +720,14 @@ func _gc_fn_mix(p &: _GcP, name: str, depth: int, out &: Color): bool:
             mut shown := ""
             key := _gc_phrase(p, col, shown)
             defer _gc_free(key)
+            defer _gc_free(shown)
             sp = _gc_space_of_key(key, true)
             if sp < 0:
                 ret _gc_fail(p, col, "unknown colour space '" + shown + "' in " + name + "(); use oklab, oklch, lab, lch, srgb, srgb linear, hsl, hwb, display p3, a98 rgb, prophoto rgb, rec2020, xyz, xyz d50 or xyz d65")
             end
         end
     end
-    if not _gc_expect(p, _GC_T_RP, "')' to close " + name + "(...)"):
+    if not _gc_expect(p, _GC_T_RP, "')' to close ", name, "(...)"):
         ret false
     end
     out = _gc_mix_space(a, b, amount, sp)
@@ -730,7 +737,7 @@ end
 func _gc_fn_light_dark(p &: _GcP, name: str, depth: int, out &: Color): bool:
     mut a := Color {}
     mut b := Color {}
-    if not _gc_color(p, depth + 1, a) or not _gc_expect(p, _GC_T_COMMA, "',' after the light colour of " + name + "(...)") or not _gc_color(p, depth + 1, b) or not _gc_expect(p, _GC_T_RP, "')' to close " + name + "(...)"):
+    if not _gc_color(p, depth + 1, a) or not _gc_expect(p, _GC_T_COMMA, "',' after the light colour of ", name, "(...)") or not _gc_color(p, depth + 1, b) or not _gc_expect(p, _GC_T_RP, "')' to close ", name, "(...)"):
         ret false
     end
     out = LightDark(Light(a), Dark(b))
@@ -739,7 +746,6 @@ end
 
 func _gc_hex(p &: _GcP, t: _GcTok, out &: Color): bool:
     n := t.b - t.a - 1
-    shown := _gc_tok_text(p, t)
     if n == 0:
         ret _gc_fail_at(p, t, "'#' must be followed by 3, 4, 6 or 8 hex digits, like #3366aa")
     end
@@ -753,7 +759,7 @@ func _gc_hex(p &: _GcP, t: _GcTok, out &: Color): bool:
             v = _gc_hex_digit(c)
         end
         if v < 0:
-            ret _gc_fail(p, i + 1, shown + " is not a hex colour: '" + _gc_text_of(p, i, i + 1) + "' is not a hex digit (0-9, a-f)")
+            ret _gc_fail(p, i + 1, _gc_tok_text(p, t) + " is not a hex colour: '" + _gc_text_of(p, i, i + 1) + "' is not a hex digit (0-9, a-f)")
         end
         d.push(v)
         i++
@@ -774,7 +780,7 @@ func _gc_hex(p &: _GcP, t: _GcTok, out &: Color): bool:
         out = New((d.get(0) * 16 + d.get(1)) as f64 / 255.0, (d.get(2) * 16 + d.get(3)) as f64 / 255.0, (d.get(4) * 16 + d.get(5)) as f64 / 255.0, al as f64 / 255.0)
         ret true
     end
-    ret _gc_fail_at(p, t, shown + " has " + str.FromInt(n as i64) + " hex digits; a hex colour has 3, 4, 6 or 8")
+    ret _gc_fail_at(p, t, _gc_tok_text(p, t) + " has " + str.FromInt(n as i64) + " hex digits; a hex colour has 3, 4, 6 or 8")
 end
 
 func _gc_is_function_key(key: str): bool:
@@ -846,6 +852,7 @@ func _gc_color(p &: _GcP, depth: int, out &: Color): bool:
             mut shown := ""
             key := _gc_phrase(p, col, shown)
             defer _gc_free(key)
+            defer _gc_free(shown)
             if _gc_peek(p).k == _GC_T_LP:
                 p.i++
                 ret _gc_call(p, key, shown, col, depth, out)

@@ -1329,8 +1329,8 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   `os.Exists`). Lines split on `\n` only (a Windows `\r` stays), `Readline`
   returns `""` for a empty line and at EOF alike, and everything is `str`,
   so text only. `print`/`println` to a pipe or file are buffered:
-  `io.Flush()` pushes the buffer out, and a panic loses what is still in it
-  (`printerrln` is unbuffered).
+  `io.Flush()` pushes the buffer out; `printerrln`, a panic and `os.Exit`
+  write out what is still in it first (`printerrln` is unbuffered).
 - **`os`**: `Args Env Cwd Chdir Exit Abort Pid Run RunCapture Output Exists IsDir FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
   `Run`/`RunCapture`/`Output` hand the whole string to `/bin/sh` (never
   splice user input in); `RunCapture` captures stdout only (add `2>&1`).
@@ -2360,6 +2360,9 @@ are never translated, in either language.
 backend rather than defaulting to false, so test it with `defined` in either
 language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
 English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
+On the JS backend (`salam js` and page scripts) `SALAM_OS` and `SALAM_ARCH`
+are both `"js"` and every `SALAM_OS_*` / `SALAM_ARCH_*` flag is false, so an
+OS chain falls through to its `else:` there.
 
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
@@ -3064,6 +3067,14 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
   (`تابع جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
   same inside a name, so `آرگومان ها` and `آرگومان‌ها` are one name. Arabic
   `ي`/`ك` equal Persian `ی`/`ک`.
+- **Bidi control characters** (U+202A-U+202E, U+2066-U+2069, and the marks
+  U+200E, U+200F, U+061C) are an error in code, in either language. Inside a
+  string or a comment the embeddings, overrides and isolates are a warning,
+  while the marks are allowed there. `check --fix` writes the escape
+  (`"\u202E"`) in a `"..."`, `«...»` or `"""..."""` string and deletes the
+  character from a comment. A backtick string or a text block (where `\u` is
+  not decoded) and a character literal get no automatic fix. ZWNJ and ZWJ
+  are never flagged.
 - **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
   written with a ZWNJ or a space, but not glued together: `نادرستسرچاپ` is an
   unknown identifier.

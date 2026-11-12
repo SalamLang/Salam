@@ -1122,8 +1122,32 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 rts := str.Len(node.type_str) > 0 ? node.type_str : "i64"
                 ret make_llv(conv(v, s, a, make_llv(lr2, v.usize), rts), rts)
             end
-            # method-backed collections: try len() method call semantics via load+call path not directly available here;
-            # fall through to load_addr only if field exists, otherwise handled by semantic but codegen may need method dispatch.
+            if str.Len(ots) > 0 and not is_ptr_ts(ots):
+                ss := struct_sym(v, s, a, ots)
+                if ss != 0:
+                    mut fs := 0
+                    mut idx := field_index(s, ss, "len", fs)
+                    if idx < 0:
+                        idx = field_index(s, ss, "count", fs)
+                    end
+                    if idx < 0:
+                        idx = field_index(s, ss, "size", fs)
+                    end
+                    if idx < 0:
+                        idx = field_index(s, ss, "length", fs)
+                    end
+                    if idx >= 0:
+                        base := lv_addr_of(v, s, a, node.a).ptr
+                        fts := sm.ToString(s, sm.SymAt(s, fs).ty)
+                        gep := new_tmp(v)
+                        emit(v, gep + " = getelementptr inbounds " + struct_ltype(ots) + ", ptr " + base + ", i32 0, i32 " + co.I64Toa(idx as i64))
+                        ldr := new_tmp(v)
+                        emit(v, ldr + " = load " + ty_of(v, s, a, fts) + ", ptr " + gep + tbaa_suffix(v, s, fts, true))
+                        rts := str.Len(node.type_str) > 0 ? node.type_str : fts
+                        ret make_llv(conv(v, s, a, make_llv(ldr, fts), rts), rts)
+                    end
+                end
+            end
         end
         ret load_addr(v, s, a, n)
     end

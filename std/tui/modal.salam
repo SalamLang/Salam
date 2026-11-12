@@ -1,0 +1,293 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tui
+
+import term
+
+struct _ModalState:
+    pub title: str = ""
+    pub fixed: bool = false
+    pub w: int = 50
+    pub h: int = 40
+    pub visible: bool = false
+    pub closable: bool = true
+    pub rect: Rect = Rect {}
+end
+
+@en "ModalSize"
+@fa "اندازه‌مودال"
+pub enum ModalSize:
+    @en "Percent"
+    @fa "درصدی"
+    Percent(w: int, h: int)
+    @en "Fixed"
+    @fa "ثابت"
+    Fixed(w: int, h: int)
+end
+
+@en "Modal"
+@fa "مودال"
+pub struct Modal:
+    @en "BaseWidget"
+    @fa "ویجت پایه"
+    pub use BaseWidget
+
+    @en "border_style"
+    @fa "ظاهر کادر"
+    pub border_style: Style = StyleDefault
+
+    @en "takes_focus"
+    @fa "تمرکز می‌گیرد"
+    pub takes_focus: bool = true
+
+    @en "on_close"
+    @fa "هنگام بستن"
+    pub on_close: func () = (): end
+
+    slot: Vector<LayoutSlot> = Vector {}
+
+    @en "state"
+    @fa "وضعیت"
+    pub state: Vector<_ModalState> = Vector {}
+
+    func _get(): _ModalState:
+        ret this.state.get(0)
+    end
+
+    func _put(s: _ModalState):
+        this.state.set(0, s)
+    end
+
+    func _size(): ModalSize:
+        s := this._get()
+        if s.fixed:
+            ret ModalSize.Fixed(s.w, s.h)
+        end
+        ret ModalSize.Percent(s.w, s.h)
+    end
+
+    @en "add"
+    @fa "افزودن"
+    pub func add(child: dyn Widget):
+        if this.slot.len() > 0:
+            this.slot.set(0, LayoutSlot { child = child })
+            ret
+        end
+        _ := _slotAdd(this.slot, child)
+    end
+
+    @en "open"
+    @fa "باز کردن"
+    pub func open():
+        mut s := this._get()
+        s.visible = true
+        this._put(s)
+    end
+
+    @en "close"
+    @fa "بستن"
+    pub func close():
+        mut s := this._get()
+        s.visible = false
+        this._put(s)
+    end
+
+    @en "set_title"
+    @fa "تنظیم عنوان"
+    pub func set_title(t: str):
+        mut s := this._get()
+        s.title = t
+        this._put(s)
+    end
+
+    @en "set_size"
+    @fa "تنظیم اندازه"
+    pub func set_size(sz: ModalSize):
+        mut s := this._get()
+        s.fixed = _is_fixed(sz)
+        s.w = _size_w(sz)
+        s.h = _size_h(sz)
+        this._put(s)
+        this.set_bounds(s.rect)
+    end
+
+    @en "set_closable"
+    @fa "تنظیم امکان بستن"
+    pub func set_closable(b: bool):
+        mut s := this._get()
+        s.closable = b
+        this._put(s)
+    end
+
+    @en "set_bounds"
+    @fa "تنظیم محدوده"
+    pub func set_bounds(bounds: Rect):
+        _enter_pass()
+        r := FitRect(bounds, bounds)
+        mut s := this._get()
+        s.rect = r
+        this._put(s)
+        if this.slot.len() > 0:
+            n := BorderInset(BorderStyle.Single)
+            inner := InsetRect(this._dialog_rect(r), Insets { top = n, right = n, bottom = n, left = n })
+            this.slot.get(0).child.set_bounds(inner)
+        end
+        _leave_pass()
+    end
+
+    @en "bounds"
+    @fa "محدوده"
+    pub func bounds(): Rect:
+        ret this._get().rect
+    end
+
+    @en "preferred_size"
+    @fa "اندازه ترجیحی"
+    pub func preferred_size(max_width: int): Rect:
+        _ := max_width
+        ret _preferred_of(this._size())
+    end
+
+    @en "focusable"
+    @fa "تمرکز‌پذیر است"
+    pub func focusable(): bool:
+        ret this._get().visible and this.takes_focus
+    end
+
+    @en "hits"
+    @fa "اصابت‌پذیر است"
+    pub func hits(): bool:
+        ret this._get().visible
+    end
+
+    @en "visible"
+    @fa "نمایان است"
+    pub func visible(): bool:
+        ret this._get().visible
+    end
+
+    @en "handle_event"
+    @fa "پردازش رویداد"
+    pub func handle_event(event: Event): bool:
+        if not this._get().visible:
+            ret false
+        end
+        if this.slot.len() > 0 and not event.bubbled and this.slot.get(0).child.handle_event(event):
+            ret true
+        end
+        if this._get().closable and event.is_key(term.KeyEscape):
+            this.close()
+            this.on_close()
+            ret true
+        end
+        if event.kind == MouseEvent:
+            p := event.mouse_point()
+            if this.bounds().contains(p) and not this._dialog_rect(this.bounds()).contains(p):
+                ret true
+            end
+        end
+        ret false
+    end
+
+    @en "render"
+    @fa "ترسیم"
+    pub func render(buf: Buffer, bounds: Rect):
+        s := this._get()
+        if not s.visible:
+            ret
+        end
+        dialog := this._dialog_rect(bounds)
+        repeat bounds.height in j:
+            repeat bounds.width in i:
+                p := Point { x = bounds.x + i, y = bounds.y + j }
+                if not dialog.contains(p):
+                    mut cell := buf.get(p.x, p.y)
+                    cell.style = _dim(cell.style)
+                    buf.set(p.x, p.y, cell)
+                end
+            end
+        end
+        if dialog.width >= 2 and dialog.height >= 2:
+            DrawBorder(buf, dialog, BorderStyle.Single, this.border_style, s.title)
+        end
+    end
+
+    func _dialog_rect(bounds: Rect): Rect:
+        span := _span_of(this._size(), bounds)
+        x := bounds.x + (bounds.width - span.x) / 2
+        y := bounds.y + (bounds.height - span.y) / 2
+        ret Rect { x = x, y = y, width = span.x, height = span.y }
+    end
+end
+
+func _is_fixed(sz: ModalSize): bool:
+    ret match sz:
+        Fixed(_w, _h): true end
+        else: false end
+    end
+end
+
+func _size_w(sz: ModalSize): int:
+    ret match sz:
+        Fixed(w, _h): w end
+        Percent(w, _h): w end
+    end
+end
+
+func _size_h(sz: ModalSize): int:
+    ret match sz:
+        Fixed(_w, h): h end
+        Percent(_w, h): h end
+    end
+end
+
+func _preferred_of(sz: ModalSize): Rect:
+    ret match sz:
+        Fixed(w, h): Rect { width = w, height = h } end
+        else: Rect { width = -1, height = -1 } end
+    end
+end
+
+func _span_of(sz: ModalSize, bounds: Rect): Point:
+    ret match sz:
+        Fixed(w, h): Point { x = _fit_span(w, 0, bounds.width), y = _fit_span(h, 0, bounds.height) } end
+        Percent(w, h): Point { x = _fit_span(bounds.width * w / 100, 20, bounds.width), y = _fit_span(bounds.height * h / 100, 5, bounds.height) } end
+    end
+end
+
+func _fit_span(want: int, lo: int, room: int): int:
+    mut out := want
+    if out < lo:
+        out = lo
+    end
+    if out > room:
+        out = room
+    end
+    ret out
+end
+
+func _dim(under: Style): Style:
+    mut out := under
+    out.dim = true
+    ret out
+end
+
+@en "NewModal"
+@fa "مودال جدید"
+pub func NewModal(): Modal:
+    mut m := Modal {}
+    m.state.push(_ModalState {})
+    ret m
+end

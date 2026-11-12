@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import mem
+import os.signal
+
+extern:
+    func sigaction(sig: int, act: void*, old: void*): int
+end
+
+mut _thread_hits := 0
+
+func watcher(set: void*):
+    if signal.WaitWinch(set) == signal.WinchSignal:
+        _thread_hits++
+    end
+end
+
+func noop_one(_sig: int):
+    _ := _sig
+end
+
+func noop_two(_sig: int):
+    _ := _sig
+end
+
+func live_handler(sig: int): u64:
+    buf := mem.AllocateZeroed(256 as u64)
+    if buf == null: ret 0 end
+    _ := sigaction(sig, null, buf)
+    handler := (buf as u64*)[0]
+    mem.Free(buf)
+    ret handler
+end
+
+func test_supported():
+    testing.AssertTrue(signal.WinchSupported())
+end
+
+func test_install_restore():
+    before := signal.CurrentMask()
+    testing.AssertNotNil(before)
+    prev1 := signal.Install(signal.WinchSignal, &noop_one)
+    testing.AssertNotNil(prev1)
+    prev2 := signal.Install(signal.WinchSignal, &noop_two)
+    testing.AssertTrue(prev2 == null)
+    testing.AssertTrue(live_handler(signal.WinchSignal) == (&noop_one) as u64)
+    prev3 := signal.Install(signal.WinchSignal, &noop_one)
+    testing.AssertNotNil(prev3)
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, prev3))
+    held := signal.CurrentMask()
+    testing.AssertTrue(signal.IsSignal(held, signal.WinchSignal))
+    testing.AssertTrue(live_handler(signal.WinchSignal) == (&noop_one) as u64)
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, prev1))
+    after := signal.CurrentMask()
+    testing.AssertEqBool(signal.IsSignal(after, signal.WinchSignal), signal.IsSignal(before, signal.WinchSignal))
+    testing.AssertEqInt64(live_handler(signal.WinchSignal) as i64, 0)
+    testing.AssertTrue(signal.Restore(signal.WinchSignal, prev1))
+    mem.Free(held)
+    mem.Free(after)
+    mem.Free(prev3)
+    mem.Free(prev1)
+    mem.Free(before)
+end
+
+func test_blocked_self_signal_is_consumed():
+    signal.InstallWinchHandler()
+    set := signal.NewWinchSet()
+    testing.AssertTrue(set != null)
+    signal.BlockWinch()
+    signal.WakeWinch()
+    testing.AssertEqInt(signal.WaitWinch(set), signal.WinchSignal)
+    testing.AssertEqInt(signal.WaitWinch(null), signal.WaitInvalid)
+    mem.Free(set)
+end
+
+func test_thread_inherits_mask():
+    signal.InstallWinchHandler()
+    signal.BlockWinch()
+    set := signal.NewWinchSet()
+    h := spawn(watcher, set)
+    signal.WakeWinch()
+    join(h)
+    testing.AssertEqInt(_thread_hits, 1)
+    mem.Free(set)
+end
+
+func test_set_membership():
+    set := signal.NewSet()
+    testing.AssertTrue(set != null)
+    testing.AssertTrue(not signal.AddSignal(set, 0))
+    _ := signal.AddSignal(set, signal.WinchSignal)
+    _ := signal.AddSignal(set, 15)
+    testing.AssertTrue(signal.IsSignal(set, signal.WinchSignal))
+    testing.AssertTrue(signal.IsSignal(set, 15))
+    testing.AssertTrue(not signal.IsSignal(set, 1))
+    testing.AssertTrue(signal.DelSignal(set, signal.WinchSignal))
+    testing.AssertTrue(not signal.IsSignal(set, signal.WinchSignal))
+    mem.Free(set)
+end
+
+func test_windows_stubs():
+    testing.AssertFalse(signal.WinchSupported())
+    testing.AssertNil(signal.NewSet())
+    testing.AssertNil(signal.NewWinchSet())
+    testing.AssertNil(signal.InstallWinchHandler())
+    testing.AssertEqInt(signal.WaitWinch(null), 0)
+    testing.AssertFalse(signal.BlockWinch())
+    testing.AssertFalse(signal.WakeWinch())
+end
+
+func main:
+    if SALAM_OS_WINDOWS:
+        test_windows_stubs()
+        ret testing.Summary()
+    else:
+        test_supported()
+        test_install_restore()
+        test_blocked_self_signal_is_consumed()
+        test_thread_inherits_mask()
+        test_set_membership()
+        ret testing.Summary()
+    end
+end

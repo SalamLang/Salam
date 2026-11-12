@@ -66,16 +66,73 @@ struct SqlJob:
     pub schema_files: Vector<str> = Vector {}
     pub forced: bool = false
     pub run_dialect: int = 0 - 1
+    pub fa: bool = false
+    pub run_fa: bool = false
+    pub lang_set: bool = false
+    pub fa_files: int = 0
+    pub en_files: int = 0
+    pub text: str = ""
+    pub msg_lang: str = ""
 end
 
 func sql_sev_name(s: int): str:
     if s == sql.ERROR:
-        ret "error"
+        ret i18.Tr("error")
     end
     if s == sql.WARNING:
-        ret "warning"
+        ret i18.Tr("warning")
     end
-    ret "note"
+    ret i18.Tr("note")
+end
+
+func sql_use_lang(job &: SqlJob, file_fa: bool):
+    mut fa := file_fa
+    if not str.IsEmpty(job.msg_lang):
+        fa = str.Equals(job.msg_lang, "fa")
+    end
+    job.fa = fa
+    i18.SetMsgLang(fa ? "fa" : "en")
+    sql.SetMessageLanguage(fa ? "fa" : "en")
+end
+
+func sql_char_col(text: str, line: int, col: int): int:
+    n := str.Len(text)
+    if n == 0 or line < 1 or col <= 1:
+        ret col
+    end
+    mut at := 0
+    mut ln := 1
+    until ln < line:
+        nl := str.IndexFrom(text, "\n", at)
+        if nl < 0:
+            ret col
+        end
+        at = nl + 1
+        ln++
+    end
+    mut stop := str.IndexFrom(text, "\n", at)
+    if stop < 0:
+        stop = n
+    end
+    mut chars := 1
+    mut i := 0
+    until i < col - 1:
+        if at + i >= stop or (byte_at(text, at + i) & 0xC0) != 0x80:
+            chars++
+        end
+        i++
+    end
+    ret chars
+end
+
+func sql_summary_fa(job: SqlJob): bool:
+    if not str.IsEmpty(job.msg_lang):
+        ret str.Equals(job.msg_lang, "fa")
+    end
+    if job.lang_set:
+        ret job.run_fa
+    end
+    ret job.fa_files > 0 and job.en_files == 0
 end
 
 func word_after(text: str, start: int): str:
@@ -273,10 +330,11 @@ func sql_report(job &: SqlJob, file: str, base_line: int, base_col: int, r: sql.
         if d.line == 1:
             col = base_col + d.col - 1
         end
-        where := file + ":" + str.FromInt(line as i64) + ":" + str.FromInt(col as i64) + ": "
+        shown := sql_char_col(job.text, line, col)
+        where := file + ":" + str.FromInt(line as i64) + ":" + str.FromInt(shown as i64) + ": "
         println where + sql_sev_name(d.severity) + "[" + d.code + "]: " + d.message
         if not str.IsEmpty(d.help):
-            println "  help: " + d.help
+            println "  " + i18.Tr("help") + ": " + d.help
         end
         if d.severity == sql.ERROR:
             job.errors++
@@ -326,6 +384,14 @@ func sql_scan_salam(job &: SqlJob, path: str):
     job.files++
     quiet := lg.New(lg.LOG_OFF, false)
     pack := lx.Detect(sfile, lp.LP_EN)
+    file_fa := str.Equals(lp.Code(pack), "fa")
+    if file_fa:
+        job.fa_files++
+    else:
+        job.en_files++
+    end
+    sql_use_lang(job, file_fa)
+    job.text = sfile.text
     mut stream := tok.StreamNew(path)
     if lx.Run(quiet, pack, sfile, stream):
         d := sql_dialect_of_file(job, stream)
@@ -349,6 +415,7 @@ func sql_scan_salam(job &: SqlJob, path: str):
         end
     end
     tok.StreamFree(stream)
+    job.text = ""
     src.Free(sfile)
 end
 
@@ -362,7 +429,10 @@ func sql_scan_sql_file(job &: SqlJob, path: str):
     if not job.forced and job.run_dialect >= 0:
         d = sql.DialectOf(job.run_dialect)
     end
+    sql_use_lang(job, job.run_fa)
+    job.text = text
     sql_one(job, path, 1, 1, text, false, d)
+    job.text = ""
     mem.Free(text as void*)
 end
 
@@ -421,8 +491,11 @@ func sql_apply_schema_file(job &: SqlJob, path: str): bool:
         ret false
     end
     job.schema_files.push(filepath.Clean(path))
+    sql_use_lang(job, job.run_fa)
+    job.text = text
     mut r := sql.Apply(job.cat, text)
     sql_report(job, path, 1, 1, r)
+    job.text = ""
     ok := r.errors == 0
     sql.FreeReport(r)
     mem.Free(text as void*)
@@ -479,6 +552,10 @@ func sql_cmd(opt &: dr.Dr): int:
         ret 2
     end
     mut job := SqlJob {}
+    job.lang_set = opt.lang_set
+    job.msg_lang = opt.msg_lang
+    job.run_fa = str.Equals(opt.lang, "fa")
+    sql_use_lang(job, job.run_fa)
     job.dialect = str.IsEmpty(opt.sql_dialect) ? sql.DialectOf(sql.SQLITE) : sql.DialectNamed(opt.sql_dialect)
     if not str.IsEmpty(opt.sql_dialect):
         job.forced = true
@@ -528,14 +605,14 @@ func sql_cmd(opt &: dr.Dr): int:
         sf++
     end
     job.schema_files.free()
-    counted := "checked " + str.FromInt(job.queries as i64) + " statement(s) in "
-    scanned := counted + str.FromInt(job.files as i64) + " file(s): "
-    tally := str.FromInt(job.errors as i64) + " error(s), "
-    mut line := scanned + tally + str.FromInt(job.warnings as i64) + " warning(s)"
+    sql_use_lang(job, sql_summary_fa(job))
+    mut line := co.Format4(
+        i18.Tr("checked %d statement(s) in %d file(s): %d error(s), %d warning(s)"), co.ArgInt(job.queries as i64), co.ArgInt(job.files as i64), co.ArgInt(job.errors as i64), co.ArgInt(job.warnings as i64)
+    )
     if job.glued > 0:
-        line = line + "; " + str.FromInt(job.glued as i64) + " built by concatenation, not checked"
+        line += co.Format1(i18.Tr("; %d built by concatenation, not checked"), co.ArgInt(job.glued as i64))
     end
-    println line
+    println i18.LocalizeTypes(line)
     if job.errors > 0:
         ret 1
     end
@@ -577,6 +654,23 @@ func sql_collect_queries(job &: SqlJob, path: str, out &: Vector<sql.Query>, rep
     ret true
 end
 
+func sql_code_to_fa(opt &: dr.Dr, code: str, out &: str): bool:
+    path := "sql-generate.salam"
+    src.SetOverlay(path, code)
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        ret false
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut translated := ""
+    ok := translate_source(quiet, lp.LP_EN, lp.Load("fa"), tr_stdlib_root(opt), sf, translated)
+    src.Free(sf)
+    if ok:
+        out = tr_apply_marker(translated, "fa")
+    end
+    ret ok
+end
+
 func sql_generate(opt &: dr.Dr, job &: SqlJob, inputs: Vector<str>): int:
     if str.IsEmpty(opt.sql_schema):
         io.EPrintln(i18.Tr("salam: 'sql generate' needs --schema=PATH"))
@@ -611,18 +705,40 @@ func sql_generate(opt &: dr.Dr, job &: SqlJob, inputs: Vector<str>): int:
         mem.Free(code as void*)
         ret 1
     end
+    mut code_out := code
+    if str.Equals(opt.lang, "fa"):
+        mut fa_code := ""
+        if not sql_code_to_fa(opt, code, fa_code):
+            io.EPrintln(i18.Tr("salam: the generated code could not be written in Persian"))
+            mem.Free(code as void*)
+            ret 1
+        end
+        code_out = fa_code
+    end
     if str.IsEmpty(opt.output):
-        print code
+        print code_out
     else:
-        if io.WriteFile(opt.output, code) < 0:
+        if io.WriteFile(opt.output, code_out) < 0:
             io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(opt.output)))
             mem.Free(code as void*)
             ret 1
         end
-        println co.Format1(
-            i18.Tr("wrote %s"), co.ArgStr(opt.output)
-        ) + " (" + str.FromInt(job.queries as i64) + " queries)"
+        println co.Format2(i18.Tr("wrote %s (%d queries)"), co.ArgStr(opt.output), co.ArgInt(job.queries as i64))
     end
     mem.Free(code as void*)
     ret 0
+end
+
+pub func SqlCharColumn(text: str, line: int, col: int): int:
+    ret sql_char_col(text, line, col)
+end
+
+pub func SqlSummaryPersian(lang: str, lang_set: bool, msg_lang: str, fa_files: int, en_files: int): bool:
+    mut job := SqlJob {}
+    job.run_fa = str.Equals(lang, "fa")
+    job.lang_set = lang_set
+    job.msg_lang = msg_lang
+    job.fa_files = fa_files
+    job.en_files = en_files
+    ret sql_summary_fa(job)
 end

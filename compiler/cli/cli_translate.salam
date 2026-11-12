@@ -1237,6 +1237,8 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut angle_depth := 0
     mut alias_rhs := false
     mut css_attr := ""
+    mut css_list_attr := ""
+    mut css_list_paren := 0
     mut const_last := 0
     names := tr_declared_names(toks, n)
     defer names.free()
@@ -1336,8 +1338,14 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             lexeme = targetpack == lp.LP_FA ? lp.STDCALL_FA : "stdcall"
             ei = tok.StreamAt(toks, ce).end_index as int
             i = ce
-        else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and prev_kind == tok.TK_ASSIGN and str.Len(css_attr) > 0 and str.Len(tr_css_value_en(css_attr, str.Substr(text, bi, ei - bi))) > 0:
+        else (t.kind == tok.TK_INT or t.kind == tok.TK_FLOAT) and targetpack != lp.LP_FA and str.EndsWith(t.lexeme, "\xD9\xAA"):
+            lexeme = str.Substr(t.lexeme, 0, str.Len(t.lexeme) - 2) + "%"
+        else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and prev_kind == tok.TK_ASSIGN and not str.StartsWith(t.lexeme, "#") and str.Len(css_attr) > 0 and str.Len(tr_css_value_en(css_attr, str.Substr(text, bi, ei - bi))) > 0:
             lexeme = `"` + str.Replace(tr_css_value_en(css_attr, str.Substr(text, bi, ei - bi)), `"`, `\"`) + `"`
+        else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and (prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET) and str.Len(css_list_attr) > 0 and css_list_paren == 0 and str.Len(tr_css_value_en(css_list_attr, str.Substr(text, bi, ei - bi))) > 0:
+            lexeme = `"` + str.Replace(tr_css_value_en(css_list_attr, str.Substr(text, bi, ei - bi)), `"`, `\"`) + `"`
+        else t.kind == tok.TK_IDENT and t.layout_mode and targetpack != lp.LP_FA and (prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET or (prev_kind == tok.TK_ASSIGN and tr_next_kind(toks, i, n) == tok.TK_COMMA)) and str.Len(css_list_attr) > 0 and css_list_paren == 0 and not str.Equals(sm.LayoutCssValueEn(css_list_attr, t.lexeme), t.lexeme):
+            lexeme = sm.LayoutCssValueEn(css_list_attr, t.lexeme)
         else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and str.StartsWith(t.lexeme, "«") and str.EndsWith(t.lexeme, "»"):
             inner := str.Substr(t.lexeme, 2, str.Len(t.lexeme) - 4)
             lexeme = `"` + str.Replace(inner, `"`, `\"`) + `"`
@@ -1506,6 +1514,17 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             angle_depth--
         end
         if t.kind == tok.TK_LAYOUT_ATTR_NAME:
+            css_list_attr = t.lexeme
+            css_list_paren = 0
+        else t.kind == tok.TK_STMT_END or t.kind == tok.TK_LAYOUT_ELEMENT or t.kind == tok.TK_KW_END:
+            css_list_attr = ""
+            css_list_paren = 0
+        else t.kind == tok.TK_LPAREN and str.Len(css_list_attr) > 0:
+            css_list_paren++
+        else t.kind == tok.TK_RPAREN and css_list_paren > 0:
+            css_list_paren--
+        end
+        if t.kind == tok.TK_LAYOUT_ATTR_NAME:
             css_attr = t.lexeme
         else t.kind != tok.TK_ASSIGN and t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
             css_attr = ""
@@ -1624,6 +1643,20 @@ func translate_target_path(opt &: dr.Dr, p: str, single_input: bool): str:
     ret tr_default_output_file(p, opt.translate_lang)
 end
 
+func tr_stdlib_root(opt &: dr.Dr): str:
+    mut root := str.Len(opt.stdlib_path) > 0 ? opt.stdlib_path : "std"
+    if str.Len(opt.stdlib_path) > 0 and os.IsDir(pth.PathJoin(opt.stdlib_path, "std")):
+        root = pth.PathJoin(opt.stdlib_path, "std")
+    end
+    if str.Len(opt.stdlib_path) == 0 and not os.IsDir("std"):
+        sroot := sm.GetStdlibRoot()
+        if str.Len(sroot) > 0 and os.IsDir(sroot + "/std"):
+            root = sroot + "/std"
+        end
+    end
+    ret root
+end
+
 func translate_cmd(opt &: dr.Dr): int:
     if str.Len(opt.translate_lang) == 0:
         io.EPrintln(i18.Tr("salam: 'translate' requires a target language ('en' or 'fa')"))
@@ -1650,16 +1683,7 @@ func translate_cmd(opt &: dr.Dr): int:
     c.target = target
     c.fallback = fallback
     c.rewrite = opt.translate_rewrite
-    c.stdlib_root = str.Len(opt.stdlib_path) > 0 ? opt.stdlib_path : "std"
-    if str.Len(opt.stdlib_path) > 0 and os.IsDir(pth.PathJoin(opt.stdlib_path, "std")):
-        c.stdlib_root = pth.PathJoin(opt.stdlib_path, "std")
-    end
-    if str.Len(opt.stdlib_path) == 0 and not os.IsDir("std"):
-        sroot := sm.GetStdlibRoot()
-        if str.Len(sroot) > 0 and os.IsDir(sroot + "/std"):
-            c.stdlib_root = sroot + "/std"
-        end
-    end
+    c.stdlib_root = tr_stdlib_root(opt)
     single_input := inputs.len() == 1
     repeat inputs.len() in idx:
         p := inputs.get(idx)

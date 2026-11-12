@@ -70,7 +70,83 @@ func lib_proto_of(line: str, name: str): str:
     ret str.TrimRight(str.Substr(t, 0, str.Len(t) - 1)) + ";"
 end
 
-func write_lib_header(path: str, guard: str, cfiles &: Vector<str>, names &: Vector<str>): bool:
+func lib_param_names(a &: at.Ast, d: at.Node): str:
+    mut out := ""
+    repeat d.list.len() in i:
+        if i > 0:
+            out += ","
+        end
+        out += at.Get(a, d.list.get(i)).name
+    end
+    ret out
+end
+
+func lib_func_param_names(a &: at.Ast, prog: int, name: str): str:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret lib_param_names(a, d)
+        end
+    end
+    ret ""
+end
+
+func lib_is_ascii(s: str): bool:
+    repeat str.Len(s) in i:
+        if byte_at(s, i) >= 128:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lib_is_ident_byte(c: int): bool:
+    ret c == 95 or c >= 128 or (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func lib_named_params(proto: str, name: str, params: str): str:
+    if str.Len(params) == 0 or lib_is_ascii(params):
+        ret proto
+    end
+    lpar := str.IndexOf(proto, name + "(") + str.Len(name)
+    rpar := str.LastIndex(proto, ")")
+    if lpar < str.Len(name) or rpar <= lpar:
+        ret proto
+    end
+    inner := str.Substr(proto, lpar + 1, rpar - lpar - 1)
+    if str.Contains(inner, "("):
+        ret proto
+    end
+    mut parts := str.Split(inner, ", ")
+    mut wanted := str.Split(params, ",")
+    defer parts.free()
+    defer wanted.free()
+    if parts.len() != wanted.len():
+        ret proto
+    end
+    mut out := str.Substr(proto, 0, lpar + 1)
+    repeat parts.len() in i:
+        part := parts.get(i)
+        want := wanted.get(i)
+        if i > 0:
+            out += ", "
+        end
+        if lib_is_ascii(want):
+            out += part
+            continue
+        end
+        mut cut := str.Len(part)
+        until cut > 0 and lib_is_ident_byte(byte_at(part, cut - 1)):
+            cut--
+        end
+        out = out + str.Substr(part, 0, cut) + want
+    end
+    ret out + str.Substr(proto, rpar, str.Len(proto) - rpar)
+end
+
+func write_lib_header(
+    path: str, guard: str, cfiles &: Vector<str>, names &: Vector<str>, params &: Vector<str>
+): bool:
     mut sb := str.NewBuilder()
     str.BufAppend(sb, "#ifndef " + guard + "\n#define " + guard + "\n\n")
     str.BufAppend(sb, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n")
@@ -93,6 +169,9 @@ func write_lib_header(path: str, guard: str, cfiles &: Vector<str>, names &: Vec
             end
         end
         if str.Len(found) > 0:
+            if ni < params.len():
+                found = lib_named_params(found, name, params.get(ni))
+            end
             str.BufAppend(sb, found + "\n")
         end
     end

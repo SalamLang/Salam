@@ -1,0 +1,139 @@
+package lexer
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include i18n "../i18n.salam"
+
+const BIDI_IN_CODE := 0
+const BIDI_IN_STRING := 1
+const BIDI_IN_COMMENT := 2
+
+func bidi_at(s: str, n: int, i: int): int:
+    b0 := byte_at(s, i)
+    if b0 == 226 and i + 2 < n:
+        b1 := byte_at(s, i + 1)
+        b2 := byte_at(s, i + 2)
+        if b1 == 128 and ((b2 >= 170 and b2 <= 174) or b2 == 142 or b2 == 143):
+            ret 0x2000 + b2 - 128
+        end
+        if b1 == 129 and b2 >= 166 and b2 <= 169:
+            ret 0x2040 + b2 - 128
+        end
+    else b0 == 216 and i + 1 < n and byte_at(s, i + 1) == 156:
+        ret 0x061C
+    end
+    ret 0
+end
+
+func bidi_is_mark(cp: int): bool:
+    ret cp == 0x200E or cp == 0x200F or cp == 0x061C
+end
+
+func src_has_bidi(s: str, n: int): bool:
+    if str.Find(s, "\xE2\x80") < 0 and str.Find(s, "\xE2\x81") < 0 and str.Find(s, "\xD8\x9C") < 0:
+        ret false
+    end
+    repeat n in i:
+        if bidi_at(s, n, i) != 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func bidi_hex4(cp: int): str:
+    digits := "0123456789ABCDEF"
+    mut out := ""
+    mut shift := 12
+    until shift >= 0:
+        d := (cp >> shift) & 15
+        out += digits.substr(d, 1)
+        shift -= 4
+    end
+    ret out
+end
+
+func bidi_report(L &: Lx, cp: int, line: int, col: int, at_i: int, ctx: int, quoted: bool):
+    if ctx != BIDI_IN_CODE and bidi_is_mark(cp):
+        ret
+    end
+    hex := bidi_hex4(cp)
+    name := "U+" + hex
+    width := cp == 0x061C ? 2 : 3
+    if ctx == BIDI_IN_CODE:
+        L.had_error = true
+        lg.LogSpanHelp(
+            L.lgr, lg.PH_LEXER, lg.LOG_ERROR, L.file, line, col, at_i, width, i18n.Tr("delete it: outside strings and comments it only hides what the code really is"), co.Format1(
+                i18n.Tr("invisible Unicode bidirectional control character %s in code: it can make the code look different from what it compiles to"), co.ArgStr(name)
+            )
+        )
+        ret
+    end
+    mut f := lg.Fix {}
+    f.index = at_i
+    f.length = width
+    f.preferred = true
+    f.safe = true
+    mut msg := "Unicode bidirectional control character %s in a comment: it can make the code around it look different from what it compiles to"
+    mut help := i18n.Tr("delete it")
+    if ctx == BIDI_IN_STRING:
+        msg = "Unicode bidirectional control character %s in a string literal: it can make the code around it look different from what it compiles to"
+        help = co.Format1(i18n.Tr("if it is meant to be in the string, write it as the escape '%s'"), co.ArgStr("\\u" + hex))
+        if quoted:
+            mut slashes := 0
+            until at_i - slashes > 0 and byte_at(L.s, at_i - slashes - 1) == 92:
+                slashes++
+            end
+            if slashes % 2 == 1:
+                f.index = at_i - 1
+                f.length = width + 1
+            end
+            f.title = co.Format1(i18n.Tr("Write '%s'"), co.ArgStr("\\u" + hex))
+            f.text = "\\u" + hex
+            lg.StageFix(f)
+        end
+    else:
+        f.title = i18n.Tr("Delete the control character")
+        lg.StageFix(f)
+    end
+    lg.LogSpanHelp(
+        L.lgr, lg.PH_LEXER, lg.LOG_WARN, L.file, line, col, at_i, width, help, co.Format1(i18n.Tr(msg), co.ArgStr(name))
+    )
+end
+
+func bidi_check(L &: Lx, b: co.SrcPos, end_i: int, ctx: int, quoted: bool):
+    mut line := b.line as int
+    mut col := b.col as int
+    mut i := b.index as int
+    until i < end_i:
+        cp := bidi_at(L.s, L.n, i)
+        if cp != 0:
+            bidi_report(L, cp, line, col, i, ctx, quoted)
+        end
+        if byte_at(L.s, i) == 10:
+            line++
+            col = 1
+        else:
+            col++
+        end
+        i++
+    end
+end
+
+func bidi_check_token(L &: Lx, kind: int, b: co.SrcPos, end_i: int):
+    if kind == tok.TK_COMMENT_LINE or kind == tok.TK_COMMENT_BLOCK:
+        ret
+    end
+    if kind == tok.TK_STRING or kind == tok.TK_TRIPLE_STRING:
+        bidi_check(L, b, end_i, BIDI_IN_STRING, true)
+        ret
+    end
+    if kind == tok.TK_RAW_STRING or kind == tok.TK_CHAR or kind == tok.TK_UTF8_CHAR:
+        bidi_check(L, b, end_i, BIDI_IN_STRING, false)
+        ret
+    end
+    bidi_check(L, b, end_i, BIDI_IN_CODE, false)
+end

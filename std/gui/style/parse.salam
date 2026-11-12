@@ -1,0 +1,1290 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package style
+
+import str
+import gui.color
+
+func _norm_text(text: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut quoted := false
+    each ch in text:
+        if ch == "\"":
+            quoted = not quoted
+            str.BufAppend(b, ch)
+            continue
+        end
+        if quoted:
+            str.BufAppend(b, ch)
+            continue
+        end
+        cp := ch.len() == 1 ? (ch[0] as int) : 0
+        if cp == 9 or cp == 10 or cp == 13:
+            str.BufAppend(b, " ")
+            continue
+        end
+        if ch.len() == 1:
+            str.BufAppend(b, ch)
+            continue
+        end
+        mut c := 0
+        _n := str.CodePointAt(ch, 0, c)
+        d := str.DigitValue(c)
+        if d >= 0:
+            str.BufAppendChar(b, 48 + d)
+        else c == 0x066A:
+            str.BufAppend(b, "%")
+        else c == 0x060C:
+            str.BufAppend(b, ",")
+        else c == 0x066B:
+            str.BufAppend(b, ".")
+        else:
+            str.BufAppend(b, ch)
+        end
+    end
+    ret str.Trim(str.BufStr(b))
+end
+
+func _split_top(t: str, sep: int, parts &: Vector<str>, err &: str): bool:
+    mut depth := 0
+    mut quoted := false
+    mut at := 0
+    n := t.len()
+    repeat n in i:
+        c := t[i] as int
+        if c == 34:
+            quoted = not quoted
+            continue
+        end
+        if quoted:
+            continue
+        end
+        if c == 40 or c == 91:
+            depth++
+        else c == 41 or c == 93:
+            depth--
+            if depth < 0:
+                err = "a closing bracket has no opening one"
+                ret false
+            end
+        else c == sep and depth == 0:
+            parts.push(str.Trim(t.substr(at, i - at)))
+            at = i + 1
+        end
+    end
+    if quoted:
+        err = "a string is not closed with \""
+        ret false
+    end
+    if depth != 0:
+        err = "a bracket is not closed"
+        ret false
+    end
+    parts.push(str.Trim(t.substr(at, n - at)))
+    if sep == 44:
+        each p in parts:
+            if p == "":
+                err = "an empty value between commas"
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func _tokens(t: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut depth := 0
+    mut quoted := false
+    mut at := 0
+    n := t.len()
+    repeat n in i:
+        c := t[i] as int
+        if c == 34:
+            quoted = not quoted
+        else quoted:
+            continue
+        else c == 40 or c == 91:
+            depth++
+        else c == 41 or c == 93:
+            depth--
+        else c == 32 and depth == 0:
+            if i > at:
+                out.push(t.substr(at, i - at))
+            end
+            at = i + 1
+        end
+    end
+    if n > at:
+        out.push(t.substr(at, n - at))
+    end
+    ret out
+end
+
+func _is_quoted(t: str): bool:
+    n := t.len()
+    if n < 2 or t[0] != '"' or t[n - 1] != '"':
+        ret false
+    end
+    repeat n - 2 in i:
+        if t[i + 1] == '"':
+            ret false
+        end
+    end
+    ret true
+end
+
+func _unquote(t: str): str:
+    ret t.substr(1, t.len() - 2)
+end
+
+func _call_parts(t: str, name &: str, args &: str): bool:
+    n := t.len()
+    if n < 3 or t[n - 1] != ')':
+        ret false
+    end
+    open := str.IndexOf(t, "(")
+    if open <= 0:
+        ret false
+    end
+    mut depth := 0
+    repeat n - open in k:
+        i := open + k
+        c := t[i]
+        if c == '(':
+            depth++
+        else c == ')':
+            depth--
+            if depth == 0 and i != n - 1:
+                ret false
+            end
+        end
+    end
+    name = _name_key(str.Trim(t.substr(0, open)))
+    args = str.Trim(t.substr(open + 1, n - open - 2))
+    ret true
+end
+
+func _scan_number(t: str, at: int, v &: f64): int:
+    n := t.len()
+    mut i := at
+    if i < n and (t[i] == '-' or t[i] == '+'):
+        i++
+    end
+    mut digits := 0
+    until i < n and t[i] >= '0' and t[i] <= '9':
+        i++
+        digits++
+    end
+    if i < n and t[i] == '.':
+        i++
+        until i < n and t[i] >= '0' and t[i] <= '9':
+            i++
+            digits++
+        end
+    end
+    if digits == 0:
+        ret -1
+    end
+    v = t.substr(at, i - at).to_float()
+    ret i
+end
+
+func _unit_alias(name: str): str:
+    switch name:
+        "px", "پیکسل": ret "px" end
+        "percent", "pct", "درصد": ret "%" end
+        "em", "ام": ret "em" end
+        "rem", "رم": ret "rem" end
+        "vw": ret "vw" end
+        "vh": ret "vh" end
+        "vmin": ret "vmin" end
+        "vmax": ret "vmax" end
+        "fr", "سهم": ret "fr" end
+        "ms", "میلی ثانیه": ret "ms" end
+        "s", "ثانیه": ret "s" end
+        "deg", "درجه": ret "deg" end
+        "turn", "دور": ret "turn" end
+        "rad", "رادیان": ret "rad" end
+        "grad", "گراد": ret "grad" end
+    end
+    ret ""
+end
+
+func _quantity(t: str, v &: f64, unit &: str): bool:
+    mut name := ""
+    mut args := ""
+    if _call_parts(t, name, args):
+        u := _unit_alias(name)
+        if u == "":
+            ret false
+        end
+        mut x := 0.0
+        e := _scan_number(args, 0, x)
+        if e != args.len():
+            ret false
+        end
+        v = x
+        unit = u
+        ret true
+    end
+    mut x := 0.0
+    e := _scan_number(t, 0, x)
+    if e < 0:
+        ret false
+    end
+    rest := t.substr(e, t.len() - e)
+    if rest == "":
+        v = x
+        unit = ""
+        ret true
+    end
+    u := _unit_alias(_ascii_lower(rest))
+    if u == "" and rest != "%":
+        ret false
+    end
+    v = x
+    unit = rest == "%" ? "%" : u
+    ret true
+end
+
+func _len_add(l &: Len, v: f64, unit: str): bool:
+    switch unit:
+        "", "px": l.px += v ret true end
+        "%": l.pct += v ret true end
+        "em": l.em += v ret true end
+        "rem": l.rem += v ret true end
+        "vw": l.vw += v ret true end
+        "vh": l.vh += v ret true end
+        "vmin": l.vmin += v ret true end
+        "vmax": l.vmax += v ret true end
+        "fr": l.fr += v ret true end
+    end
+    ret false
+end
+
+func _len_neg(l: Len): bool:
+    pos := l.px > 0.0 or l.pct > 0.0 or l.em > 0.0 or l.rem > 0.0 or l.vw > 0.0 or l.vh > 0.0 or l.vmin > 0.0 or l.vmax > 0.0 or l.fr > 0.0
+    neg := l.px < 0.0 or l.pct < 0.0 or l.em < 0.0 or l.rem < 0.0 or l.vw < 0.0 or l.vh < 0.0 or l.vmin < 0.0 or l.vmax < 0.0 or l.fr < 0.0
+    ret neg and not pos
+end
+
+func _parse_len(t: str, fr: bool, percent: bool, l &: Len, err &: str): bool:
+    toks := _tokens(t)
+    defer toks.free()
+    if toks.len() == 0:
+        err = "a length is missing"
+        ret false
+    end
+    mut out := Len {}
+    mut sign := 1.0
+    mut expect_term := true
+    each tok in toks:
+        if expect_term:
+            mut v := 0.0
+            mut unit := ""
+            if not _quantity(tok, v, unit):
+                ret false
+            end
+            if unit == "fr" and not fr:
+                err = "fr is only for grid tracks"
+                ret false
+            end
+            if unit == "%" and not percent:
+                err = "a percent is not allowed here"
+                ret false
+            end
+            if not _len_add(out, sign * v, unit):
+                err = "'" + tok + "' is not a length"
+                ret false
+            end
+            expect_term = false
+        else tok == "+":
+            sign = 1.0
+            expect_term = true
+        else tok == "-":
+            sign = -1.0
+            expect_term = true
+        else:
+            err = "lengths are joined with + or -, and a list needs commas"
+            ret false
+        end
+    end
+    if expect_term:
+        err = "a length is missing after + or -"
+        ret false
+    end
+    if out.fr != 0.0 and (out.px != 0.0 or out.pct != 0.0 or out.em != 0.0 or out.rem != 0.0 or out.vw != 0.0 or out.vh != 0.0 or out.vmin != 0.0 or out.vmax != 0.0):
+        err = "fr cannot be added to other units"
+        ret false
+    end
+    l = out
+    ret true
+end
+
+func _parse_num(t: str, percent: bool, v &: f64, err &: str): bool:
+    toks := _tokens(t)
+    defer toks.free()
+    if toks.len() == 3 and toks.get(1) == "/":
+        mut a := 0.0
+        mut b := 0.0
+        mut ua := ""
+        mut ub := ""
+        if _quantity(toks.get(0), a, ua) and _quantity(toks.get(2), b, ub) and ua == "" and ub == "":
+            if b == 0.0:
+                err = "division by zero"
+                ret false
+            end
+            v = a / b
+            ret true
+        end
+        ret false
+    end
+    if toks.len() != 1:
+        ret false
+    end
+    mut x := 0.0
+    mut unit := ""
+    if not _quantity(t, x, unit):
+        ret false
+    end
+    if unit == "%":
+        if not percent:
+            err = "a percent is not allowed here"
+            ret false
+        end
+        v = x / 100.0
+        ret true
+    end
+    if unit != "":
+        err = "a plain number has no unit"
+        ret false
+    end
+    v = x
+    ret true
+end
+
+func _parse_time(t: str, v &: f64): bool:
+    mut x := 0.0
+    mut unit := ""
+    if not _quantity(t, x, unit):
+        ret false
+    end
+    if unit == "" or unit == "ms":
+        v = x
+        ret true
+    end
+    if unit == "s":
+        v = x * 1000.0
+        ret true
+    end
+    ret false
+end
+
+func _parse_angle(t: str, v &: f64): bool:
+    mut x := 0.0
+    mut unit := ""
+    if not _quantity(t, x, unit):
+        ret false
+    end
+    switch unit:
+        "", "deg": v = x ret true end
+        "turn": v = x * 360.0 ret true end
+        "rad": v = x * 57.29577951308232 ret true end
+        "grad": v = x * 0.9 ret true end
+    end
+    ret false
+end
+
+func _parse_ease(t: str, e &: Easing, err &: str): bool:
+    kw := _kw_lookup(t)
+    switch kw:
+        KW_LINEAR: e = Easing { kind = EASE_LINEAR } ret true end
+        KW_EASE: e = Easing { kind = EASE_EASE } ret true end
+        KW_EASE_IN: e = Easing { kind = EASE_IN } ret true end
+        KW_EASE_OUT: e = Easing { kind = EASE_OUT } ret true end
+        KW_EASE_IN_OUT: e = Easing { kind = EASE_IN_OUT } ret true end
+    end
+    mut name := ""
+    mut args := ""
+    if not _call_parts(t, name, args):
+        ret false
+    end
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    if not _split_top(args, 44, parts, err):
+        ret false
+    end
+    mut nums := Vector {} as Vector<f64>
+    defer nums.free()
+    each p in parts:
+        mut x := 0.0
+        mut perr := ""
+        if not _parse_num(p, false, x, perr):
+            err = "'" + p + "' is not a number"
+            ret false
+        end
+        nums.push(x)
+    end
+    if name == "ease" or name == "نرم":
+        if nums.len() != 4:
+            err = "ease takes 4 numbers, like ease(0.2, 0, 0, 1)"
+            ret false
+        end
+        if nums.get(0) < 0.0 or nums.get(0) > 1.0 or nums.get(2) < 0.0 or nums.get(2) > 1.0:
+            err = "the x values of ease must be from 0 to 1"
+            ret false
+        end
+        e = Easing { kind = EASE_CUBIC, x1 = nums.get(0), y1 = nums.get(1), x2 = nums.get(2), y2 = nums.get(3) }
+        ret true
+    end
+    if name == "steps" or name == "گام ها":
+        if nums.len() != 1 or nums.get(0) < 1.0 or nums.get(0) != ((nums.get(0) as int) as f64):
+            err = "steps takes one whole number from 1, like steps(4)"
+            ret false
+        end
+        e = Easing { kind = EASE_STEPS, steps = nums.get(0) as int }
+        ret true
+    end
+    if name == "spring" or name == "فنر":
+        if nums.len() != 2 or nums.get(0) <= 0.0 or nums.get(1) < 0.0:
+            err = "spring takes a stiffness above 0 and a damping from 0, like spring(170, 26)"
+            ret false
+        end
+        e = Easing { kind = EASE_SPRING, stiffness = nums.get(0), damping = nums.get(1) }
+        ret true
+    end
+    ret false
+end
+
+func _parse_color(t: str, c &: color.Color): bool:
+    if t == "" or _is_quoted(t):
+        ret false
+    end
+    ret color.Parse(t, c)
+end
+
+func _parse_stops(parts: Vector<str>, from: int, p &: Paint, err &: str): bool:
+    if parts.len() - from < 2:
+        err = "a gradient needs at least two colours"
+        ret false
+    end
+    mut i := from
+    until i < parts.len():
+        part := parts.get(i)
+        mut c := color.Color {}
+        if _parse_color(part, c):
+            p.stops.push(Stop { color = c })
+            i++
+            continue
+        end
+        toks := _tokens(part)
+        if toks.len() >= 2:
+            last := toks.get(toks.len() - 1)
+            head := str.Trim(part.substr(0, part.len() - last.len()))
+            mut at := Len {}
+            mut lerr := ""
+            if _parse_color(head, c) and _parse_len(last, false, true, at, lerr):
+                p.stops.push(Stop { color = c, at = at, has_at = true })
+                toks.free()
+                i++
+                continue
+            end
+        end
+        toks.free()
+        err = "'" + part + "' is not a colour stop; write a colour, or a colour and a position like red 40%"
+        ret false
+    end
+    ret true
+end
+
+func _parse_at(part: str, p &: Paint, err &: str): bool:
+    inner := part.substr(1, part.len() - 2)
+    mut xs := Vector {} as Vector<str>
+    defer xs.free()
+    if not _split_top(inner, 44, xs, err):
+        ret false
+    end
+    if xs.len() != 2:
+        err = "a gradient centre is [x, y], like [30%, 40%]"
+        ret false
+    end
+    mut x := Len {}
+    mut y := Len {}
+    if not _parse_len(xs.get(0), false, true, x, err) or not _parse_len(xs.get(1), false, true, y, err):
+        if err == "":
+            err = "a gradient centre is [x, y], like [30%, 40%]"
+        end
+        ret false
+    end
+    p.at_x = x
+    p.at_y = y
+    p.has_at = true
+    ret true
+end
+
+func _parse_paint(t: str, it &: Item, err &: str): int:
+    mut name := ""
+    mut args := ""
+    if not _call_parts(t, name, args):
+        ret 0
+    end
+    mut kind := 0
+    switch name:
+        "linear", "خطی": kind = PAINT_LINEAR break end
+        "radial", "شعاعی": kind = PAINT_RADIAL break end
+        "conic", "مخروطی": kind = PAINT_CONIC break end
+        "image", "تصویر": kind = PAINT_IMAGE break end
+    end
+    if kind == 0:
+        ret 0
+    end
+    if kind == PAINT_IMAGE:
+        if not _is_quoted(args):
+            err = "image takes a path in quotes, like image(\"photo.png\")"
+            ret -1
+        end
+        it = Item { kind = ITEM_PAINT, paint = Paint { kind = PAINT_IMAGE, path = _unquote(args) } }
+        ret 1
+    end
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    if not _split_top(args, 44, parts, err):
+        ret -1
+    end
+    mut p := Paint { kind = kind }
+    mut from := 0
+    if kind == PAINT_LINEAR and parts.len() > 0:
+        first := parts.get(0)
+        mut a := 0.0
+        side := _kw_lookup(first)
+        if side >= KW_TO_TOP and side <= KW_TO_BOTTOM_RIGHT:
+            p.side = side
+            from = 1
+        else _parse_angle(first, a):
+            p.angle = a
+            from = 1
+        end
+    end
+    if kind == PAINT_RADIAL and parts.len() > 0:
+        w := _kw_lookup(parts.get(0))
+        if w == KW_CIRCLE or w == KW_ELLIPSE:
+            p.circle = w == KW_CIRCLE
+            from = 1
+        end
+    end
+    if kind == PAINT_CONIC and parts.len() > 0:
+        mut a := 0.0
+        if _parse_angle(parts.get(0), a):
+            p.angle = a
+            from = 1
+        else:
+            p.angle = 0.0
+        end
+    end
+    if kind != PAINT_LINEAR and parts.len() > from and parts.get(from).len() > 1 and parts.get(from)[0] == '[':
+        if not _parse_at(parts.get(from), p, err):
+            ret -1
+        end
+        from++
+    end
+    if not _parse_stops(parts, from, p, err):
+        ret -1
+    end
+    it = Item { kind = ITEM_PAINT, paint = p }
+    ret 1
+end
+
+func _track_side(t: str, word &: int, l &: Len, err &: str): bool:
+    w := _kw_lookup(t)
+    if w == KW_AUTO or w == KW_MIN_CONTENT or w == KW_MAX_CONTENT:
+        word = w
+        ret true
+    end
+    mut x := Len {}
+    if not _parse_len(t, true, true, x, err):
+        ret false
+    end
+    if _len_neg(x):
+        err = "a track size cannot be negative"
+        ret false
+    end
+    word = 0
+    l = x
+    ret true
+end
+
+func _parse_tracks(t: str, inside: bool, out &: Vector<Item>, err &: str): bool:
+    mut name := ""
+    mut args := ""
+    if _call_parts(t, name, args):
+        mut parts := Vector {} as Vector<str>
+        defer parts.free()
+        if not _split_top(args, 44, parts, err):
+            ret false
+        end
+        if name == "minmax" or name == "کمینه بیشینه":
+            if parts.len() != 2:
+                err = "minmax takes two sizes, like minmax(100, 1fr)"
+                ret false
+            end
+            mut tr := Track { kind = TRACK_MINMAX }
+            if not _track_side(parts.get(0), tr.word, tr.len, err) or not _track_side(parts.get(1), tr.max_word, tr.max, err):
+                if err == "":
+                    err = "minmax takes two sizes, like minmax(100, 1fr)"
+                end
+                ret false
+            end
+            out.push(Item { kind = ITEM_TRACK, track = tr })
+            ret true
+        end
+        if name == "fit" or name == "متناسب":
+            mut l := Len {}
+            if parts.len() != 1 or not _parse_len(parts.get(0), false, true, l, err):
+                if err == "":
+                    err = "fit takes one length, like fit(200)"
+                end
+                ret false
+            end
+            out.push(Item { kind = ITEM_TRACK, track = Track { kind = TRACK_FIT, len = l } })
+            ret true
+        end
+        if name == "repeat" or name == "چندبار":
+            if inside:
+                err = "repeat cannot be inside repeat"
+                ret false
+            end
+            if parts.len() < 2:
+                err = "repeat takes a count and tracks, like repeat(3, 1fr)"
+                ret false
+            end
+            mut tr := Track { kind = TRACK_REPEAT }
+            w := _kw_lookup(parts.get(0))
+            if w == KW_FILL or w == KW_FIT:
+                tr.word = w
+            else:
+                mut n := 0.0
+                mut nerr := ""
+                if not _parse_num(parts.get(0), false, n, nerr) or n < 1.0 or n != ((n as int) as f64):
+                    err = "the count of repeat is a whole number from 1, fill or fit"
+                    ret false
+                end
+                if n > 10000.0:
+                    err = "the count of repeat is at most 10000"
+                    ret false
+                end
+                tr.count = n as int
+            end
+            mut inner := Vector {} as Vector<Item>
+            defer inner.free()
+            repeat parts.len() - 1 in k:
+                if not _parse_tracks(parts.get(k + 1), true, inner, err):
+                    ret false
+                end
+            end
+            tr.span = inner.len()
+            out.push(Item { kind = ITEM_TRACK, track = tr })
+            each x in inner:
+                out.push(x)
+            end
+            ret true
+        end
+    end
+    mut tr := Track { kind = TRACK_SIZE }
+    if not _track_side(t, tr.word, tr.len, err):
+        ret false
+    end
+    out.push(Item { kind = ITEM_TRACK, track = tr })
+    ret true
+end
+
+func _has(info: PropInfo, kind: int): bool:
+    ret (info.items & (1 << kind)) != 0
+end
+
+func _atom(info: PropInfo, t: str, it &: Item, err &: str): bool:
+    if _is_quoted(t):
+        if _has(info, ITEM_STR):
+            it = Item { kind = ITEM_STR, text = _unquote(t) }
+            ret true
+        end
+        err = "a string is not allowed here"
+        ret false
+    end
+    kw := _kw_lookup(t)
+    if kw > 0 and _word_in(info.words, _kw_en(kw)):
+        it = Item { kind = ITEM_WORD, word = kw }
+        ret true
+    end
+    if _has(info, ITEM_BOOL) and (kw == KW_TRUE or kw == KW_FALSE):
+        it = Item { kind = ITEM_BOOL, num = kw == KW_TRUE ? 1.0 : 0.0 }
+        ret true
+    end
+    if _has(info, ITEM_NUM):
+        mut v := 0.0
+        if _parse_num(t, info.percent, v, err):
+            it = Item { kind = ITEM_NUM, num = v }
+            ret true
+        end
+        if err != "" and not _has(info, ITEM_LEN):
+            ret false
+        end
+        err = ""
+    end
+    if _has(info, ITEM_INT):
+        mut v := 0.0
+        mut nerr := ""
+        if _parse_num(t, false, v, nerr) and str.IndexOf(t, ".") < 0:
+            it = Item { kind = ITEM_INT, num = v }
+            ret true
+        end
+    end
+    if _has(info, ITEM_LEN):
+        mut l := Len {}
+        if _parse_len(t, false, info.percent, l, err):
+            it = Item { kind = ITEM_LEN, len = l }
+            ret true
+        end
+        if err != "":
+            ret false
+        end
+    end
+    if _has(info, ITEM_TIME):
+        mut v := 0.0
+        if _parse_time(t, v):
+            it = Item { kind = ITEM_TIME, num = v }
+            ret true
+        end
+    end
+    if _has(info, ITEM_ANGLE):
+        mut v := 0.0
+        if _parse_angle(t, v):
+            it = Item { kind = ITEM_ANGLE, num = v }
+            ret true
+        end
+    end
+    if _has(info, ITEM_EASE):
+        mut e := Easing {}
+        if _parse_ease(t, e, err):
+            it = Item { kind = ITEM_EASE, ease = e }
+            ret true
+        end
+        if err != "":
+            ret false
+        end
+    end
+    if _has(info, ITEM_PAINT):
+        r := _parse_paint(t, it, err)
+        if r != 0:
+            ret r > 0
+        end
+    end
+    if _has(info, ITEM_COLOR):
+        mut c := color.Color {}
+        if _parse_color(t, c):
+            it = Item { kind = ITEM_COLOR, color = c }
+            ret true
+        end
+        if t.len() > 0 and (t[0] == '#' or str.IndexOf(t, "(") > 0):
+            err = color.Error(t)
+            ret false
+        end
+    end
+    if _has(info, ITEM_PROP):
+        id := PropByName(t)
+        if id >= 0:
+            if not _prop_info(id).animatable:
+                err = "'" + t + "' cannot be animated"
+                ret false
+            end
+            it = Item { kind = ITEM_PROP, word = id }
+            ret true
+        end
+    end
+    if info.kind == KIND_FONTS and str.IndexOf(t, "(") < 0 and str.IndexOf(t, "[") < 0 and t != "":
+        it = Item { kind = ITEM_STR, text = t }
+        ret true
+    end
+    ret false
+end
+
+func _word_list(words: str): str:
+    ret str.Replace(words, "|", ", ")
+end
+
+func _form(info: PropInfo): str:
+    mut f := ""
+    switch info.kind:
+        KIND_WORD:
+            f = "one of " + _word_list(info.words)
+            break
+        end
+        KIND_BOOL:
+            f = "true or false"
+            break
+        end
+        KIND_NUMBER:
+            f = "a number"
+            if info.high > info.low and info.high < 1000000.0:
+                f += " from " + _fmt(info.low) + " to " + _fmt(info.high)
+            else info.low > 0.0:
+                f += " above 0"
+            else not info.negative:
+                f += " from 0"
+            end
+            if info.percent:
+                f += " or a percent"
+            end
+            if _has(info, ITEM_LEN):
+                f += " or a length"
+            end
+            break
+        end
+        KIND_INT:
+            f = "a whole number"
+            if info.low >= 1.0:
+                f += " from " + _fmt(info.low)
+            else info.negative and info.id != P_ORDER and info.id != P_LAYER:
+                f += " (a grid line, negative counts from the end)"
+            end
+            break
+        end
+        KIND_LENGTH:
+            if info.max == 1:
+                f = "a length"
+            else info.max == 2:
+                f = "1 or 2 lengths"
+            else:
+                f = "1 to 4 lengths (top, end, bottom, start)"
+            end
+            if not info.negative:
+                f += ", not negative"
+            end
+            break
+        end
+        KIND_ANGLE:
+            f = info.max == 1 ? "an angle in degrees" : "1 or 2 angles in degrees"
+            break
+        end
+        KIND_COLOR:
+            f = info.max == 1 ? "a colour" : "1 to " + str.FromInt(info.max as i64) + " colours"
+            break
+        end
+        KIND_PAINT:
+            f = "colours, gradients like linear(90, red, blue) or image(\"photo.png\"), the top layer first"
+            break
+        end
+        KIND_TRACKS:
+            f = "grid tracks: lengths, 1fr, auto, minmax(100, 1fr), fit(200) or repeat(3, 1fr)"
+            break
+        end
+        KIND_BORDER:
+            f = "a width, a style (" + _word_list(info.words) + ") and a colour, in any order"
+            break
+        end
+        KIND_SHADOW:
+            f = "x, y, blur, spread, a colour and inset, with [ ] around each shadow when there are several"
+            break
+        end
+        KIND_TEXT_SHADOW:
+            f = "x, y, blur and a colour, with [ ] around each shadow when there are several"
+            break
+        end
+        KIND_TRANSITION:
+            f = "a duration, an easing and a delay, with [ ] around each transition when there are several"
+            break
+        end
+        KIND_PROPS:
+            f = "all, or the names of properties that can be animated"
+            break
+        end
+        KIND_FONTS:
+            f = "font families: names and sans, serif, mono, system"
+            break
+        end
+        KIND_STRINGS:
+            f = "strings like \"tnum\""
+            break
+        end
+    end
+    if info.kind == KIND_SHADOW:
+        f += ", or none"
+    else info.words != "" and info.kind != KIND_WORD and info.kind != KIND_BORDER and info.kind != KIND_FONTS and info.kind != KIND_PROPS:
+        f += ", or " + _word_list(info.words)
+    end
+    ret f
+end
+
+func _fail(info: PropInfo, text: str, why: str, err &: str): bool:
+    mut m := info.name + ": "
+    if why != "":
+        m += why + "; "
+    else:
+        m += "'" + text + "' is not valid; "
+    end
+    m += "expected " + _form(info) + ", for example " + info.name + " = " + info.example
+    err = m
+    ret false
+end
+
+func _alone(w: int): bool:
+    ret w == KW_NONE or w == KW_ALL or w == KW_COVER or w == KW_CONTAIN
+end
+
+func _check_item(info: PropInfo, it: Item, err &: str): bool:
+    if it.kind == ITEM_LEN and not info.negative and _len_neg(it.len):
+        err = "a negative length is not allowed"
+        ret false
+    end
+    if it.kind == ITEM_NUM or it.kind == ITEM_INT:
+        if info.high > info.low and (it.num < info.low or it.num > info.high):
+            err = _fmt(it.num) + " is out of range"
+            ret false
+        end
+        if info.id == P_COLUMN or info.id == P_ROW:
+            if it.num == 0.0:
+                err = "grid lines start at 1 (or -1 from the end)"
+                ret false
+            end
+        end
+    end
+    if (it.kind == ITEM_TIME) and it.num < 0.0:
+        err = "a time cannot be negative"
+        ret false
+    end
+    ret true
+end
+
+func _groups(parts: Vector<str>, groups &: Vector<str>, err &: str): bool:
+    mut bracketed := 0
+    each p in parts:
+        if p.len() >= 2 and p[0] == '[' and p[p.len() - 1] == ']':
+            bracketed++
+        end
+    end
+    if bracketed == 0:
+        groups.push(str.Join(parts, ", "))
+        ret true
+    end
+    if bracketed != parts.len():
+        err = "put [ ] around every item when there are several"
+        ret false
+    end
+    each p in parts:
+        groups.push(str.Trim(p.substr(1, p.len() - 2)))
+    end
+    ret true
+end
+
+func _parse_border(info: PropInfo, parts: Vector<str>, out &: Value, err &: str): bool:
+    if parts.len() > 3:
+        err = "too many values"
+        ret false
+    end
+    mut width := Item {}
+    mut st := Item {}
+    mut col := Item {}
+    each p in parts:
+        mut it := Item {}
+        if not _atom(info, p, it, err):
+            ret false
+        end
+        if it.kind == ITEM_LEN:
+            if width.kind != 0:
+                err = "two widths"
+                ret false
+            end
+            if _len_neg(it.len):
+                err = "a negative width is not allowed"
+                ret false
+            end
+            width = it
+        else it.kind == ITEM_WORD:
+            if st.kind != 0:
+                err = "two styles"
+                ret false
+            end
+            st = it
+        else:
+            if col.kind != 0:
+                err = "two colours"
+                ret false
+            end
+            col = it
+        end
+    end
+    if st.kind == 0:
+        st = Item { kind = ITEM_WORD, word = KW_SOLID }
+    end
+    if width.kind == 0:
+        width = Item { kind = ITEM_LEN, len = Len { px = st.word == KW_NONE ? 0.0 : 1.0 } }
+    end
+    if col.kind == 0:
+        col = Item { kind = ITEM_COLOR, color = color.Color { current = true } }
+    end
+    out.items.push(width)
+    out.items.push(st)
+    out.items.push(col)
+    out.starts.push(0)
+    ret true
+end
+
+func _parse_shadow_group(info: PropInfo, g: str, text: bool, out &: Value, err &: str): bool:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    if not _split_top(g, 44, parts, err):
+        ret false
+    end
+    mut lens := Vector {} as Vector<Item>
+    defer lens.free()
+    mut col := Item {}
+    mut inset := false
+    each p in parts:
+        mut it := Item {}
+        if not _atom(info, p, it, err):
+            if err == "":
+                err = "'" + p + "' is not a length or a colour"
+            end
+            ret false
+        end
+        if it.kind == ITEM_LEN:
+            lens.push(it)
+        else it.kind == ITEM_COLOR:
+            if col.kind != 0:
+                err = "two colours in one shadow"
+                ret false
+            end
+            col = it
+        else it.kind == ITEM_WORD and it.word == KW_INSET and not text:
+            inset = true
+        else:
+            err = "'" + p + "' cannot be part of a shadow"
+            ret false
+        end
+    end
+    most := text ? 3 : 4
+    if lens.len() < 2 or lens.len() > most:
+        err = text ? "a text shadow has 2 or 3 lengths: x, y and blur" : "a shadow has 2 to 4 lengths: x, y, blur and spread"
+        ret false
+    end
+    if lens.len() >= 3 and _len_neg(lens.get(2).len):
+        err = "the blur cannot be negative"
+        ret false
+    end
+    out.starts.push(out.items.len())
+    repeat most in i:
+        if i < lens.len():
+            out.items.push(lens.get(i))
+        else:
+            out.items.push(Item { kind = ITEM_LEN })
+        end
+    end
+    if col.kind == 0:
+        col = Item { kind = ITEM_COLOR, color = color.Color { current = true } }
+    end
+    out.items.push(col)
+    if not text:
+        out.items.push(Item { kind = ITEM_BOOL, num = inset ? 1.0 : 0.0 })
+    end
+    ret true
+end
+
+func _parse_transition_group(info: PropInfo, g: str, out &: Value, err &: str): bool:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    if not _split_top(g, 44, parts, err):
+        ret false
+    end
+    mut times := Vector {} as Vector<Item>
+    defer times.free()
+    mut ease := Item {}
+    each p in parts:
+        mut it := Item {}
+        if not _atom(info, p, it, err):
+            if err == "":
+                err = "'" + p + "' is not a time or an easing"
+            end
+            ret false
+        end
+        if it.kind == ITEM_TIME:
+            if it.num < 0.0:
+                err = "a time cannot be negative"
+                ret false
+            end
+            times.push(it)
+        else it.kind == ITEM_EASE:
+            if ease.kind != 0:
+                err = "two easings in one transition"
+                ret false
+            end
+            ease = it
+        else:
+            err = "'" + p + "' cannot be part of a transition"
+            ret false
+        end
+    end
+    if times.len() == 0 or times.len() > 2:
+        err = "a transition has a duration and maybe a delay"
+        ret false
+    end
+    if ease.kind == 0:
+        ease = Item { kind = ITEM_EASE, ease = Easing { kind = EASE_EASE } }
+    end
+    out.starts.push(out.items.len())
+    out.items.push(times.get(0))
+    out.items.push(ease)
+    if times.len() == 2:
+        out.items.push(times.get(1))
+    else:
+        out.items.push(Item { kind = ITEM_TIME })
+    end
+    ret true
+end
+
+func _parse_value(prop: int, text: str, out &: Value, err &: str): bool:
+    out = Value {}
+    if prop < 0 or prop >= PROP_COUNT:
+        err = "unknown property"
+        ret false
+    end
+    info := _prop_info(prop)
+    mut t := _norm_text(text)
+    if t == "":
+        ret _fail(info, text, "the value is empty", err)
+    end
+    if _is_quoted(t) and not _has(info, ITEM_STR):
+        t = _norm_text(_unquote(t))
+        if t == "":
+            ret _fail(info, text, "the value is empty", err)
+        end
+    end
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    mut why := ""
+    if not _split_top(t, 44, parts, why):
+        ret _fail(info, text, why, err)
+    end
+    if parts.len() == 1:
+        w := _kw_lookup(parts.get(0))
+        if w > 0 and _alone(w) and _word_in(info.words, _kw_en(w)) and info.kind != KIND_BORDER:
+            out.items.push(Item { kind = ITEM_WORD, word = w })
+            out.starts.push(0)
+            ret true
+        end
+        if w == KW_NONE and (info.kind == KIND_SHADOW or info.kind == KIND_TEXT_SHADOW or info.kind == KIND_TRANSITION or info.kind == KIND_STRINGS or info.kind == KIND_PAINT):
+            out.items.push(Item { kind = ITEM_WORD, word = w })
+            out.starts.push(0)
+            ret true
+        end
+    end
+    switch info.kind:
+        KIND_BORDER:
+            if not _parse_border(info, parts, out, why):
+                ret _fail(info, text, why, err)
+            end
+            ret true
+        end
+        KIND_SHADOW, KIND_TEXT_SHADOW, KIND_TRANSITION:
+            mut groups := Vector {} as Vector<str>
+            defer groups.free()
+            if not _groups(parts, groups, why):
+                ret _fail(info, text, why, err)
+            end
+            if groups.len() > info.max:
+                ret _fail(info, text, "too many groups (at most " + str.FromInt(info.max as i64) + ")", err)
+            end
+            each g in groups:
+                if info.kind == KIND_TRANSITION:
+                    if not _parse_transition_group(info, g, out, why):
+                        ret _fail(info, text, why, err)
+                    end
+                else not _parse_shadow_group(info, g, info.kind == KIND_TEXT_SHADOW, out, why):
+                    ret _fail(info, text, why, err)
+                end
+            end
+            ret true
+        end
+        KIND_TRACKS:
+            mut items := Vector {} as Vector<Item>
+            each p in parts:
+                w := _kw_lookup(p)
+                if w > 0 and _alone(w):
+                    ret _fail(info, text, "'" + p + "' must be the only value", err)
+                end
+                if not _parse_tracks(p, false, items, why):
+                    ret _fail(info, text, why, err)
+                end
+            end
+            mut total := 0
+            mut i := 0
+            until i < items.len():
+                tr := items.get(i).track
+                if tr.kind == TRACK_REPEAT:
+                    total += (tr.count > 0 ? tr.count : 1) * tr.span
+                    i += 1 + tr.span
+                else:
+                    total++
+                    i++
+                end
+            end
+            if total > 10000:
+                ret _fail(info, text, "too many tracks (" + str.FromInt(total as i64) + "); at most 10000 after repeats are expanded", err)
+            end
+            out.items = items
+            out.starts.push(0)
+            ret true
+        end
+    end
+    if parts.len() < info.min or parts.len() > info.max:
+        if parts.len() > info.max:
+            ret _fail(info, text, "too many values (at most " + str.FromInt(info.max as i64) + ")", err)
+        end
+        ret _fail(info, text, "too few values", err)
+    end
+    each p in parts:
+        mut it := Item {}
+        if not _atom(info, p, it, why):
+            ret _fail(info, text, why, err)
+        end
+        if it.kind == ITEM_WORD and _alone(it.word) and parts.len() > 1:
+            ret _fail(info, text, "'" + p + "' must be the only value", err)
+        end
+        if not _check_item(info, it, why):
+            ret _fail(info, text, why, err)
+        end
+        out.items.push(it)
+    end
+    out.starts.push(0)
+    ret true
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(prop: int, text: str, out &: Value): bool:
+    mut err := ""
+    ret _parse_value(prop, text, out, err)
+end
+
+@en "Error"
+@fa "خطا"
+pub func Error(prop: int, text: str): str:
+    mut err := ""
+    mut v := Value {}
+    if _parse_value(prop, text, v, err):
+        ret ""
+    end
+    ret err
+end

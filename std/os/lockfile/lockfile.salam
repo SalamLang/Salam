@@ -22,6 +22,7 @@ import mem
 import str
 import conv
 import filepath
+import os.shell
 import os.desktop.paths
 
 // Simple PID/lock file helpers for desktop apps (best-effort).
@@ -88,8 +89,11 @@ pub func IsStale(path: str): bool:
     end
     // Best-effort liveness check; may be conservative on some platforms.
     if SALAM_OS_WINDOWS:
+        // If the lock belongs to this process, it's not stale.
+        if pid == os.Pid(): ret false end
         ret false
     end
+    if pid == os.Pid(): ret false end
     // /proc/<pid> exists on Linux; on macOS/BSD fall back to kill -0.
     proc_path := "/proc/".Concat(conv.FormatInt(pid as i64))
     if os.Exists(proc_path):
@@ -99,13 +103,49 @@ pub func IsStale(path: str): bool:
     mem.Free(proc_path as void*)
     // Try shell probe (best-effort)
     cmd := "kill -0 ".Concat(conv.FormatInt(pid as i64)).Concat(" >/dev/null 2>&1; echo $?")
-    r := os.RunCapture(cmd)
+    r := shell.Exec(cmd)
     mem.Free(cmd as void*)
     out := str.Trim(r.out)
+    mem.Free(out as void*)
     mem.Free(r.out as void*)
+    mem.Free(r.err as void*)
     stale := out != "0"
     mem.Free(out as void*)
     ret stale
+end
+
+@en "OwnerPid"
+@fa "شناسه فرآیند مالک"
+pub func OwnerPid(path: str): int:
+    ret ReadPid(path)
+end
+
+@en "IsLockedByUs"
+@fa "توسط ما قفل شده"
+pub func IsLockedByUs(path: str): bool:
+    ret ReadPid(path) == os.Pid()
+end
+
+@en "TryAcquire"
+@fa "تلاش برای گرفتن"
+pub func TryAcquire(path: str): Lock:
+    ret Acquire(path, false)
+end
+
+@en "AcquireForApp"
+@fa "گرفتن برای برنامه"
+pub func AcquireForApp(app_id: str, name: str = "app.lock", force_stale: bool = true): Lock:
+    ret WithAppLock(app_id, name, force_stale)
+end
+
+@en "ReleasePath"
+@fa "رها کردن مسیر"
+pub func ReleasePath(path: str): bool:
+    mut lk := Lock { path = str.Clone(path), acquired = Exists(path) }
+    Release(lk)
+    ok := not Exists(path)
+    mem.Free(lk.path as void*)
+    ret ok
 end
 
 @en "Acquire"

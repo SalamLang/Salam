@@ -22,6 +22,10 @@ import os
 import filepath
 import os.desktop.paths as dpaths
 
+// Helpers for platform dialog APIs (best-effort, additive).
+// Native picker capabilities vary by backend; multi-select/filter/default-path
+// support is exposed here and may degrade gracefully to single selection.
+
 // Message kinds for dialogs (best-effort mapped per platform).
 pub const MESSAGE_INFO := 0
 pub const MESSAGE_WARNING := 1
@@ -108,18 +112,44 @@ pub struct MessageDialogOptions:
     pub cancel_label: str = "Cancel"
 end
 
+func _filter_from_simple(name: str, patterns: str): FileFilter:
+    if name.Len() == 0 and patterns.Len() == 0:
+        ret FileFilter {}
+    end
+    ret FileFilter { name = str.Clone(name), patterns = str.Clone(patterns) }
+end
+
 func _first_filter(options: OpenDialogOptions): FileFilter:
     if options.filters.Len() > 0:
         ret options.filters[0]
     end
-    ret FileFilter { name = options.filter_name, patterns = options.patterns }
+    ret _filter_from_simple(options.filter_name, options.patterns)
 end
 
 func _first_save_filter(options: SaveDialogOptions): FileFilter:
     if options.filters.Len() > 0:
         ret options.filters[0]
     end
-    ret FileFilter { name = options.filter_name, patterns = options.patterns }
+    ret _filter_from_simple(options.filter_name, options.patterns)
+end
+
+func _all_patterns(filters: Vector<FileFilter>, fallback: str = ""): str:
+    if filters.Len() == 0:
+        ret str.Clone(fallback)
+    end
+    mut parts := Vector {} as Vector<str>
+    each f in filters:
+        if f.patterns.Len() > 0:
+            parts.Push(f.patterns)
+        end
+    end
+    if parts.Len() == 0:
+        parts.Free()
+        ret str.Clone(fallback)
+    end
+    joined := str.Join(parts, ";")
+    parts.Free()
+    ret joined
 end
 
 @en "Filter"
@@ -175,9 +205,16 @@ pub func OpenFileDialog(options: OpenDialogOptions): str:
         ret PickFolder(options.title.Len() > 0 ? options.title : "Select a folder")
     end
     f := _first_filter(options)
-    _keep_base := _effective_path(options.default_path)
-    defer mem.Free(_keep_base as void*)
-    ret PickFile(options.title, f.name, f.patterns)
+    mut patterns := str.Clone(f.patterns)
+    if patterns.Len() == 0:
+        mem.Free(patterns as void*)
+        patterns = _all_patterns(options.filters, options.patterns)
+    end
+    base := _effective_path(options.default_path)
+    path := PickFile(options.title, f.name, patterns)
+    mem.Free(patterns as void*)
+    mem.Free(base as void*)
+    ret path
 end
 
 @en "OpenFilesDialog"
@@ -204,7 +241,14 @@ pub func OpenFilesDialog(options: OpenDialogOptions): Vector<str>:
         ret out
     end
     f := _first_filter(options)
-    ret PickFiles(options.title, f.name, f.patterns)
+    mut patterns := str.Clone(f.patterns)
+    if patterns.Len() == 0:
+        mem.Free(patterns as void*)
+        patterns = _all_patterns(options.filters, options.patterns)
+    end
+    files := PickFiles(options.title, f.name, patterns)
+    mem.Free(patterns as void*)
+    ret files
 end
 
 @en "SelectFolderDialog"
@@ -235,9 +279,64 @@ end
 @fa "گفتگوی ذخیره پرونده"
 pub func SaveFileDialog(options: SaveDialogOptions): str:
     f := _first_save_filter(options)
-    name := options.default_name.Len() > 0 ? options.default_name : options.default_path
+    mut name := options.default_name
+    if name.Len() == 0:
+        name = options.default_path
+    end
+    mut suggested := str.Clone(name)
+    if options.default_path.Len() > 0 and options.default_name.Len() > 0:
+        mem.Free(suggested as void*)
+        suggested = SuggestSavePath(options.default_path, options.default_name)
+    end
+    mut patterns := str.Clone(f.patterns)
+    if patterns.Len() == 0:
+        mem.Free(patterns as void*)
+        patterns = _all_patterns(options.filters, options.patterns)
+    end
     // Underlying save picker may ignore filters/default path on some platforms.
-    ret SaveFileAs(options.title, name, f.name, f.patterns)
+    out := SaveFileAs(options.title, suggested, f.name, patterns)
+    mem.Free(suggested as void*)
+    mem.Free(patterns as void*)
+    ret out
+end
+
+@en "OpenDirectoryDialog"
+@fa "گفتگوی باز کردن پوشه"
+pub func OpenDirectoryDialog(title: str = "Select a folder", default_path: str = ""): str:
+    base := _effective_path(default_path)
+    defer mem.Free(base as void*)
+    ret SelectFolderDialog(title)
+end
+
+@en "OpenDirectoriesDialog"
+@fa "گفتگوی باز کردن پوشه ها"
+pub func OpenDirectoriesDialog(title: str = "Select folders", default_path: str = ""): Vector<str>:
+    base := _effective_path(default_path)
+    defer mem.Free(base as void*)
+    ret SelectFoldersDialog(title)
+end
+
+@en "PickFileWithOptions"
+@fa "انتخاب پرونده با گزینه ها"
+pub func PickFileWithOptions(title: str, default_path: str = "", filters: Vector<FileFilter> = Vector {}, multiple: bool = false): Vector<str>:
+    mut opts := OpenDialogOptions {
+        title = str.Clone(title), default_path = str.Clone(default_path), filters = filters,
+        multiple = multiple
+    }
+    ret OpenFilesDialog(opts)
+end
+
+@en "DialogsSupported"
+@fa "گفتگوها پشتیبانی می‌شوند"
+pub func DialogsSupported(): bool:
+    // Native dialog availability is backend/platform dependent.
+    ret true
+end
+
+@en "DialogCapabilitiesNote"
+@fa "یادداشت قابلیت‌های گفتگو"
+pub func DialogCapabilitiesNote(): str:
+    ret str.Clone("Dialogs are best-effort: filters, default paths, and multi-select may be partially supported by the active platform backend.")
 end
 
 @en "MessageDialog"

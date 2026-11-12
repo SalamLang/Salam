@@ -26,6 +26,7 @@ import filepath
 import os.desktop.paths
 import os.desktop.sysinfo
 import os.desktop.capabilities
+import os.platform
 
 // Diagnostic bundle and app health helpers (best-effort, no automatic network upload).
 
@@ -137,6 +138,7 @@ pub func CollectPathsReport(app_id: str): str:
     state := paths.AppStateDir(app_id)
     logd := paths.AppLogDir(app_id)
     tmp := paths.AppTempDir(app_id)
+    runtime := paths.AppRuntimeDir(app_id)
     str.BufAppend(sb, "config: ")
     str.BufAppend(sb, cfg)
     str.BufAppend(sb, "\n")
@@ -152,6 +154,9 @@ pub func CollectPathsReport(app_id: str): str:
     str.BufAppend(sb, "logs: ")
     str.BufAppend(sb, logd)
     str.BufAppend(sb, "\n")
+    str.BufAppend(sb, "runtime: ")
+    str.BufAppend(sb, runtime)
+    str.BufAppend(sb, "\n")
     str.BufAppend(sb, "temp: ")
     str.BufAppend(sb, tmp)
     str.BufAppend(sb, "\n")
@@ -160,6 +165,7 @@ pub func CollectPathsReport(app_id: str): str:
     mem.Free(data as void*)
     mem.Free(state as void*)
     mem.Free(logd as void*)
+    mem.Free(runtime as void*)
     mem.Free(tmp as void*)
     ret str.BufStr(sb)
 end
@@ -168,9 +174,11 @@ end
 @fa "ایجاد بسته"
 pub func CreateBundle(opts: BundleOptions): BundleResult:
     app_id := opts.app_id.Len() > 0 ? opts.app_id : "app"
-    out_dir := opts.output_dir
+    mut out_dir := opts.output_dir
+    mut own_out_dir := false
     if out_dir.Len() == 0:
         out_dir = paths.AppTempDir(app_id)
+        own_out_dir = true
     end
     _mk := os.MkdirAll(out_dir)
     ts := conv.FormatInt(time.Now() as i64)
@@ -195,16 +203,20 @@ pub func CreateBundle(opts: BundleOptions): BundleResult:
         str.BufAppend(sb, opts.app_version)
         str.BufAppend(sb, "\n")
     end
-    str.BufAppend(sb, "\n")
+    str.BufAppend(sb, "platform: ")
+    str.BufAppend(sb, platform.OS())
+    str.BufAppend(sb, "\narch: ")
+    str.BufAppend(sb, platform.Arch())
+    str.BufAppend(sb, "\n\n")
     sys := CollectSystemReport()
     str.BufAppend(sb, sys)
     str.BufAppend(sb, "\n")
     mem.Free(sys as void*)
     str.BufAppend(sb, "== Paths ==\n")
-    paths := CollectPathsReport(app_id)
-    str.BufAppend(sb, paths)
+    paths_report := CollectPathsReport(app_id)
+    str.BufAppend(sb, paths_report)
     str.BufAppend(sb, "\n")
-    mem.Free(paths as void*)
+    mem.Free(paths_report as void*)
     if opts.include_logs and opts.log_path.Len() > 0:
         str.BufAppend(sb, "== Log (tail) ==\n")
         str.BufAppend(sb, "log_path: ")
@@ -221,12 +233,10 @@ pub func CreateBundle(opts: BundleOptions): BundleResult:
     mem.Free(content as void*)
     if not ok:
         mem.Free(path as void*)
-        mem.Free(out_dir as void*)
+        if own_out_dir: mem.Free(out_dir as void*) end
         ret BundleResult { ok = false, path = "", note = "failed to write bundle" }
     end
-    if opts.output_dir.Len() == 0:
-        mem.Free(out_dir as void*)
-    end
+    if own_out_dir: mem.Free(out_dir as void*) end
     ret BundleResult { ok = true, path = path, note = "diagnostic bundle created (local file only)" }
 end
 

@@ -344,9 +344,9 @@ StyleAttr:          prop (gui.style id), state (0 base, then hover, focus,
 - Transition period: an attribute that is not in the standard but is a
   known CSS attribute of today's schema, or a string value that the standard
   rejects but today's CSS check accepts, still builds for the web with
-  warning W167 ("not part of the Salam style standard"; the message shows
-  the standard form when one exists). The native target rejects it (E166).
-  After the pages are migrated, W167 becomes an error and the old CSS
+  warning W171 ("not part of the Salam style standard"; the message shows
+  the standard form when one exists). The native target rejects it (E170).
+  After the pages are migrated, W171 becomes an error and the old CSS
   attributes are deleted.
 
 ### Native builder (owned by the native branch)
@@ -397,7 +397,7 @@ Phase 2, two branches in parallel:
 Then:
 
 7. **Migrate pages**: a rewrite tool for common CSS values; tests, examples,
-   website; W167 becomes an error and the old CSS attributes go.
+   website; W171 becomes an error and the old CSS attributes go.
 8. **Same look check**: render pages on both targets and compare
    (headless browser in Docker or CI against `--ui=native` screenshots).
 9. **Docs**: website pages, the skill file, the book.

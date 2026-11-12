@@ -3069,9 +3069,12 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
   `ي`/`ك` equal Persian `ی`/`ک`.
 - **Bidi control characters** (U+202A-U+202E, U+2066-U+2069, and the marks
   U+200E, U+200F, U+061C) are an error in code, in either language. Inside a
-  string or a comment the embeddings, overrides and isolates are a warning
-  (write `"\u202E"` instead; `check --fix` does it), while the marks are
-  allowed there. ZWNJ and ZWJ are never flagged.
+  string or a comment the embeddings, overrides and isolates are a warning,
+  while the marks are allowed there. `check --fix` writes the escape
+  (`"\u202E"`) in a `"..."`, `«...»` or `"""..."""` string and deletes the
+  character from a comment. A backtick string or a text block (where `\u` is
+  not decoded) and a character literal get no automatic fix. ZWNJ and ZWJ
+  are never flagged.
 - **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
   written with a ZWNJ or a space, but not glued together: `نادرستسرچاپ` is an
   unknown identifier.

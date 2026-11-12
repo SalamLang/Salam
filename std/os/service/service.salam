@@ -24,6 +24,16 @@ import filepath
 import os.user
 import os.shell
 
+// Behavior notes:
+// - UserAgent: user-session agent (macOS LaunchAgent plist in ~/Library/LaunchAgents,
+//   Linux systemd --user unit in ~/.config/systemd/user, Windows HKCU Run entry).
+//   User agents may interact with the user's desktop/session.
+// - SystemService: system-wide daemon (macOS LaunchDaemon in /Library/LaunchDaemons,
+//   Linux system unit in /etc/systemd/system, Windows SCM service via sc.exe).
+//   System services typically run without GUI access (Windows Session 0 isolation)
+//   and often require administrative privileges to install/start/stop.
+// Platform support is best-effort and shell-command based where native APIs are absent.
+
 @en "Kind"
 @fa "نوع"
 pub enum Kind:
@@ -112,6 +122,65 @@ func _join_exec_sh(exec_path: str, args: Vector<str>): str:
     out := str.BufStr(sb)
     str.BufFree(sb)
     ret out
+end
+
+func _quote_cmd_arg(s: str): str:
+    // Best-effort quoting for Windows cmd/sc/reg command lines.
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 34)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "\"":
+            str.BufAppend(sb, "\"\"")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 34)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _join_exec_cmd(exec_path: str, args: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    q0 := _quote_cmd_arg(exec_path)
+    str.BufAppend(sb, q0)
+    mem.Free(q0 as void*)
+    n := args.Len()
+    mut i := 0
+    until i < n:
+        str.BufAppendChar(sb, 32)
+        qa := _quote_cmd_arg(args.Get(i))
+        str.BufAppend(sb, qa)
+        mem.Free(qa as void*)
+        i++
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "NewSpec"
+@fa "مشخصات جدید"
+pub func NewSpec(id: str, exec_path: str, args: Vector<str>, kind: Kind = Kind.UserAgent): Spec:
+    ret Spec { id = id, name = id, exec = exec_path, args = args, kind = kind, run_at_load = true, keep_alive = false }
+end
+
+@en "NewUserAgent"
+@fa "عامل کاربر جدید"
+pub func NewUserAgent(id: str, exec_path: str, args: Vector<str>): Spec:
+    ret NewSpec(id, exec_path, args, Kind.UserAgent)
+end
+
+@en "NewSystemService"
+@fa "سرویس سیستمی جدید"
+pub func NewSystemService(id: str, exec_path: str, args: Vector<str>): Spec:
+    ret NewSpec(id, exec_path, args, Kind.SystemService)
 end
 
 if SALAM_OS_MAC:
@@ -339,33 +408,18 @@ pub func Install(spec: Spec): bool:
         // Windows Services (SCM) run in Session 0 and cannot show GUI.
         // For UserAgent (GUI-session context), prefer HKCU Run autostart entry.
         if spec.kind == Kind.UserAgent:
-            mut sb := str.NewBuilder()
-            str.BufAppendChar(sb, 34)
-            str.BufAppend(sb, spec.exec)
-            str.BufAppendChar(sb, 34)
-            n := spec.args.Len()
-            mut i := 0
-            until i < n:
-                a := spec.args.Get(i)
-                str.BufAppendChar(sb, 32)
-                str.BufAppendChar(sb, 34)
-                str.BufAppend(sb, a)
-                str.BufAppendChar(sb, 34)
-                i++
-            end
-            cmdline := str.BufStr(sb)
-            str.BufFree(sb)
+            cmdline := _join_exec_cmd(spec.exec, spec.args)
             defer mem.Free(cmdline as void*)
-            // Use reg.exe for simplicity/best-effort
-            cmd := "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_sh(spec.id)).Concat(" /t REG_SZ /d ").Concat(_quote_sh(cmdline)).Concat(" /f")
+            // Use reg.exe for simplicity/best-effort (cmd-style quoting).
+            cmd := "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_cmd_arg(spec.id)).Concat(" /t REG_SZ /d ").Concat(_quote_cmd_arg(cmdline)).Concat(" /f")
             defer mem.Free(cmd as void*)
             ret shell.System(cmd) == 0
         else:
             // System service via sc.exe (requires privileges). Runs in Session 0 - no GUI.
-            bin := _join_exec_sh(spec.exec, spec.args)
+            bin := _join_exec_cmd(spec.exec, spec.args)
             defer mem.Free(bin as void*)
             // sc create expects binPath= "..."
-            cmd := "sc create ".Concat(spec.id).Concat(" binPath= ").Concat(_quote_sh(bin)).Concat(" start= auto")
+            cmd := "sc create ".Concat(spec.id).Concat(" binPath= ").Concat(_quote_cmd_arg(bin)).Concat(" start= auto")
             defer mem.Free(cmd as void*)
             ret shell.System(cmd) == 0
         end
@@ -397,7 +451,7 @@ pub func Uninstall(id: str, kind: Kind): bool:
         ret true
     else SALAM_OS_WINDOWS:
         if kind == Kind.UserAgent:
-            cmd := "reg delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_sh(id)).Concat(" /f")
+            cmd := "reg delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_cmd_arg(id)).Concat(" /f")
             defer mem.Free(cmd as void*)
             _ = shell.System(cmd)
             ret true
@@ -486,7 +540,7 @@ pub func IsInstalled(id: str, kind: Kind): bool:
         ret os.Exists(path)
     else SALAM_OS_WINDOWS:
         if kind == Kind.UserAgent:
-            cmd := "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_sh(id)).Concat(" >nul 2>&1")
+            cmd := "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_cmd_arg(id)).Concat(" >nul 2>&1")
             defer mem.Free(cmd as void*)
             ret shell.System(cmd) == 0
         else:
@@ -507,9 +561,15 @@ pub func Status(id: str, kind: Kind): str:
         defer mem.Free(args as void*)
         rc := _systemctl(kind, args)
         if rc == 0: ret "running" end
+        // Try to distinguish enabled/failed/stopped when installed.
+        show := "show -p ActiveState --value ".Concat(id).Concat(".service")
+        defer mem.Free(show as void*)
+        r := _systemctl(kind, show)
+        // _systemctl returns exit code only; fall back to basic classification.
+        if rc == 3: ret "stopped" end
         ret "installed"
     else SALAM_OS_MAC:
-        // launchctl list output parsing is non-trivial; report installed
+        // launchctl list output parsing is non-trivial; report installed/enabled.
         ret "installed"
     else SALAM_OS_WINDOWS:
         if kind == Kind.SystemService:
@@ -518,9 +578,28 @@ pub func Status(id: str, kind: Kind): str:
             r := shell.Exec(cmd)
             if str.Contains(r.out, "RUNNING"): ret "running" end
             if str.Contains(r.out, "STOPPED"): ret "stopped" end
+            if str.Contains(r.out, "START_PENDING") or str.Contains(r.out, "STOP_PENDING"): ret "pending" end
             ret "installed"
         end
-        ret "installed"
+        // UserAgent is a Run entry; treat presence as enabled-at-login.
+        ret "enabled"
     end
     ret "unknown"
+end
+
+@en "ConfigPath"
+@fa "مسیر پیکربندی"
+pub func ConfigPath(id: str, kind: Kind): str:
+    if id.Len() == 0: ret "" end
+    if SALAM_OS_MAC:
+        ret _plist_path(id, kind)
+    else SALAM_OS_LINUX:
+        ret _unit_path(id, kind)
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.UserAgent:
+            ret "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\" + id
+        end
+        ret "SCM:" + id
+    end
+    ret ""
 end

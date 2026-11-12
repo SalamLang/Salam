@@ -25,6 +25,16 @@ import os.shell
 import str
 import sync
 
+// Urgency/sound constants.
+pub const URGENCY_LOW := "low"
+pub const URGENCY_NORMAL := "normal"
+pub const URGENCY_CRITICAL := "critical"
+pub const URGENCY_HIGH := "high"
+
+pub const SOUND_NONE := ""
+pub const SOUND_DEFAULT := "default"
+pub const SOUND_ALERT := "alert"
+
 @en "Permission"
 @fa "اجازه"
 pub struct Permission:
@@ -40,6 +50,12 @@ pub struct Permission:
     @en "reason"
     @fa "دلیل"
     pub reason: str = ""
+
+    @en "Allowed"
+    @fa "مجاز"
+    pub func Allowed(): bool:
+        ret this.granted and not this.denied
+    end
 end
 
 @en "Action"
@@ -99,7 +115,21 @@ mut _on_click := (_id: str): ret end
 mut _on_action := (_id: str, _action: str): ret end
 mut _seq := 0 as i64
 mut _shown := HashMap {} as HashMap<str, int>
+mut _native_to_id := HashMap {} as HashMap<i64, str>
 mut _permission := Permission { granted = true }
+
+// Returns true on platforms that provide a native notification backend.
+@en "IsSupported"
+@fa "پشتیبانی می شود"
+pub func IsSupported(): bool:
+    ret _os_supported()
+end
+
+@en "NewAction"
+@fa "کنش تازه"
+pub func NewAction(id: str, label: str, icon: str = ""): Action:
+    ret Action { id = str.Clone(id), label = str.Clone(label), icon = str.Clone(icon) }
+end
 
 func _next_id(): str:
     sync.Lock(_lock)
@@ -114,6 +144,9 @@ end
 func _remember(id: str, native_id: int):
     sync.Lock(_lock)
     _shown.Put(str.Clone(id), native_id)
+    if native_id >= 0:
+        _native_to_id.Put(native_id as i64, str.Clone(id))
+    end
     sync.Unlock(_lock)
 end
 
@@ -124,18 +157,28 @@ func _forget(id: str): int:
         native = _shown.Get(id)
         _gone := _shown.Remove(id)
     end
+    if native >= 0 and _native_to_id.Has(native as i64):
+        old := _native_to_id.Get(native as i64)
+        _gone := _native_to_id.Remove(native as i64)
+        mem.Free(old as void*)
+    end
     sync.Unlock(_lock)
     ret native
 end
 
-func _find_by_native(native: int): str:
+func _logical_for(native: int, fallback: str): str:
     sync.Lock(_lock)
-    mut out := str.Clone("")
-    // Best-effort linear scan by remembering ids in parallel map is avoided;
-    // callers on Linux can pass logical id directly when known.
-    _keep := native
+    mut out := str.Clone(fallback)
+    if native >= 0 and _native_to_id.Has(native as i64):
+        mem.Free(out as void*)
+        out = str.Clone(_native_to_id.Get(native as i64))
+    end
     sync.Unlock(_lock)
     ret out
+end
+
+func _find_by_native(native: int): str:
+    ret _logical_for(native, "")
 end
 
 @en "RequestPermission"
@@ -187,12 +230,57 @@ func _fire_action(id: str, action: str):
     h(id, action)
 end
 
+// Convenience constructors for common notification shapes.
+@en "Text"
+@fa "متنی"
+pub func Text(title: str, body: str): Notification:
+    ret Notification { title = str.Clone(title), body = str.Clone(body), urgency = URGENCY_NORMAL }
+end
+
+@en "Simple"
+@fa "ساده"
+pub func Simple(title: str, body: str, icon: str = "", sound: str = SOUND_DEFAULT): Notification:
+    ret Notification {
+        title = str.Clone(title), body = str.Clone(body), icon = str.Clone(icon), sound = str.Clone(sound),
+        urgency = URGENCY_NORMAL
+    }
+end
+
+@en "Info"
+@fa "اطلاع"
+pub func Info(title: str, body: str): Notification:
+    ret Notification { title = str.Clone(title), body = str.Clone(body), urgency = URGENCY_LOW, sound = SOUND_DEFAULT }
+end
+
+@en "Warning"
+@fa "هشدار"
+pub func Warning(title: str, body: str): Notification:
+    ret Notification { title = str.Clone(title), body = str.Clone(body), urgency = URGENCY_NORMAL, sound = SOUND_ALERT }
+end
+
+@en "Error"
+@fa "خطا"
+pub func Error(title: str, body: str): Notification:
+    ret Notification { title = str.Clone(title), body = str.Clone(body), urgency = URGENCY_CRITICAL, sound = SOUND_ALERT }
+end
+
+@en "WithActions"
+@fa "با کنش ها"
+pub func WithActions(note: Notification, actions: Vector<Action>): Notification:
+    mut n := note
+    n.actions = actions
+    ret n
+end
+
 @en "Show"
 @fa "نمایش"
 pub func Show(note: Notification): str:
     mut n := note
     if n.id.Len() == 0:
         n.id = _next_id()
+    end
+    if n.urgency.Len() == 0:
+        n.urgency = URGENCY_NORMAL
     end
     perm := PermissionStatus()
     if perm.denied:
@@ -209,6 +297,14 @@ pub func Show(note: Notification): str:
         ret str.Clone(n.id)
     end
     ret str.Clone("")
+end
+
+// Show a simple title/body notification and return its logical id.
+@en "Send"
+@fa "ارسال"
+pub func Send(title: str, body: str): str:
+    note := Text(title, body)
+    ret Show(note)
 end
 
 @en "Update"
@@ -248,6 +344,7 @@ pub func CloseAll():
         mem.Free(k as void*)
     end
     keys.Free()
+    _os_cleanup()
 end
 
 func _full_title(note: Notification): str:
@@ -316,11 +413,15 @@ if SALAM_OS_LINUX:
             mut action_key: str = null
             g_variant_get(params, "(u&s)", &nid, &action_key)
             if action_key != null:
+                fallback := str.FromInt(nid as i64)
+                id := _logical_for(nid as int, fallback)
                 if action_key == "default":
-                    _fire_click(str.FromInt(nid as i64))
+                    _fire_click(id)
                 else:
-                    _fire_action(str.FromInt(nid as i64), action_key)
+                    _fire_action(id, action_key)
                 end
+                mem.Free(id as void*)
+                mem.Free(fallback as void*)
             end
         end
 
@@ -354,6 +455,14 @@ if SALAM_OS_LINUX:
         args.Push("-c")
         args.Push(script)
         _result := shell.Run("/bin/sh", args)
+    end
+
+    func _os_supported(): bool:
+        ret true
+    end
+
+    func _os_cleanup():
+        ret
     end
 
     func _os_request_permission(): Permission:
@@ -529,6 +638,19 @@ if SALAM_OS_WINDOWS:
         ret f(action, data) != 0
     end
 
+    func _os_supported(): bool:
+        ret true
+    end
+
+    func _os_cleanup():
+        if _w_ready:
+            data := _w_nid(0 as u32)
+            _removed := _w_shell(2 as u32, data)
+            mem.Free(data)
+            _w_ready = false
+        end
+    end
+
     func _os_request_permission(): Permission:
         ret Permission { granted = true }
     end
@@ -643,6 +765,14 @@ if SALAM_OS_MAC:
         ret result.code == 0
     end
 
+    func _os_supported(): bool:
+        ret true
+    end
+
+    func _os_cleanup():
+        ret
+    end
+
     func _os_request_permission(): Permission:
         ret Permission { granted = true }
     end
@@ -662,6 +792,14 @@ end
 
 // -------- Fallback for unsupported/CEF-only builds --------
 if not SALAM_OS_LINUX and not SALAM_OS_WINDOWS and not SALAM_OS_MAC:
+    func _os_supported(): bool:
+        ret false
+    end
+
+    func _os_cleanup():
+        ret
+    end
+
     func _os_request_permission(): Permission:
         ret Permission { granted = false, denied = true, unknown = false, reason = "unsupported platform" }
     end

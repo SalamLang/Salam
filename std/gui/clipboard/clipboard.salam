@@ -1,0 +1,460 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "clipboard"
+@fa "بریده‌دان"
+package clipboard
+
+import mem
+import str
+import io
+import os
+import os.shell
+
+/*
+ * Cross-platform clipboard access for native desktop apps (best-effort).
+ *
+ * Notes:
+ * - Text clipboard is the primary supported path on all platforms.
+ * - Image clipboard operations are best-effort and may be unavailable depending
+ *   on platform/runtime/tooling.
+ * - Linux falls back to Wayland (wl-copy/wl-paste) and X11 (xclip/xsel) tools.
+ * - Headless or missing-backend environments return false/empty results.
+ */
+
+mut _cb_last_error := ""
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _cb_last_error
+end
+
+func _cb_set_error(msg: str):
+    _cb_last_error = msg
+end
+
+func _cb_ok(): bool:
+    _cb_last_error = ""
+    ret true
+end
+
+if SALAM_OS_WINDOWS:
+    link dynamic "user32"
+    link dynamic "kernel32"
+
+    extern:
+        func OpenClipboard(hwnd: void*): int
+        func CloseClipboard(): int
+        func EmptyClipboard(): int
+        func IsClipboardFormatAvailable(format: u32): int
+        func GetClipboardData(format: u32): void*
+        func SetClipboardData(format: u32, handle: void*): void*
+        func GlobalAlloc(flags: u32, bytes: u64): void*
+        func GlobalLock(handle: void*): void*
+        func GlobalUnlock(handle: void*): int
+        func GlobalFree(handle: void*): void*
+        func GlobalSize(handle: void*): u64
+        func MultiByteToWideChar(code_page: u32, flags: u32, src: str, src_len: int, dst: void*, dst_len: int): int
+        func WideCharToMultiByte(code_page: u32, flags: u32, src: void*, src_len: int, dst: void*, dst_len: int, def_char: void*, used: void*): int
+    end
+
+    const _CF_UNICODETEXT := 13 as u32
+    const _CF_DIB := 8 as u32
+    const _GMEM_MOVEABLE := 2 as u32
+    const _CP_UTF8 := 65001 as u32
+
+    func _wide(s: str): void*:
+        needed := MultiByteToWideChar(_CP_UTF8, 0 as u32, s, 0 - 1, null, 0)
+        if needed <= 0:
+            ret null
+        end
+        bytes := ((needed + 1) as u64) * 2 as u64
+        buf := mem.AllocateZeroed(bytes)
+        MultiByteToWideChar(_CP_UTF8, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _narrow(wide: void*): str:
+        if wide == null:
+            ret str.Clone("")
+        end
+        needed := WideCharToMultiByte(_CP_UTF8, 0 as u32, wide, 0 - 1, null, 0, null, null)
+        if needed <= 0:
+            ret str.Clone("")
+        end
+        buf := mem.AllocateZeroed((needed + 1) as u64)
+        WideCharToMultiByte(_CP_UTF8, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
+        ret buf as str
+    end
+
+    @en "GetText"
+    @fa "گرفتن متن"
+    pub func GetText(): str:
+        if OpenClipboard(null) == 0:
+            _cb_set_error("OpenClipboard failed")
+            ret str.Clone("")
+        end
+        defer _closed := CloseClipboard()
+        handle := GetClipboardData(_CF_UNICODETEXT)
+        if handle == null:
+            _cb_ok()
+            ret str.Clone("")
+        end
+        locked := GlobalLock(handle)
+        if locked == null:
+            _cb_set_error("GlobalLock failed")
+            ret str.Clone("")
+        end
+        text := _narrow(locked)
+        GlobalUnlock(handle)
+        _cb_ok()
+        ret text
+    end
+
+    @en "SetText"
+    @fa "تنظیم متن"
+    pub func SetText(text: str): bool:
+        wide := _wide(text)
+        if wide == null:
+            _cb_set_error("UTF-16 conversion failed")
+            ret false
+        end
+        // Compute byte length of UTF-16 string including terminator.
+        mut chars := 0
+        p := wide as u16*
+        until p[chars] == (0 as u16):
+            chars++
+        end
+        bytes := ((chars + 1) as u64) * 2 as u64
+        hmem := GlobalAlloc(_GMEM_MOVEABLE, bytes)
+        if hmem == null:
+            mem.Free(wide)
+            _cb_set_error("GlobalAlloc failed")
+            ret false
+        end
+        locked := GlobalLock(hmem)
+        if locked == null:
+            GlobalFree(hmem)
+            mem.Free(wide)
+            _cb_set_error("GlobalLock failed")
+            ret false
+        end
+        mem.Copy(locked, wide, bytes)
+        GlobalUnlock(hmem)
+        mem.Free(wide)
+
+        if OpenClipboard(null) == 0:
+            GlobalFree(hmem)
+            _cb_set_error("OpenClipboard failed")
+            ret false
+        end
+        EmptyClipboard()
+        if SetClipboardData(_CF_UNICODETEXT, hmem) == null:
+            CloseClipboard()
+            GlobalFree(hmem)
+            _cb_set_error("SetClipboardData failed")
+            ret false
+        end
+        CloseClipboard()
+        ret _cb_ok()
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        ret IsClipboardFormatAvailable(_CF_UNICODETEXT) != 0
+    end
+
+    @en "Clear"
+    @fa "پاک کردن"
+    pub func Clear(): bool:
+        if OpenClipboard(null) == 0:
+            _cb_set_error("OpenClipboard failed")
+            ret false
+        end
+        ok := EmptyClipboard() != 0
+        CloseClipboard()
+        if not ok:
+            _cb_set_error("EmptyClipboard failed")
+            ret false
+        end
+        ret _cb_ok()
+    end
+
+    @en "GetImageBytes"
+    @fa "گرفتن بایت‌های تصویر"
+    pub func GetImageBytes(): str:
+        // Best-effort placeholder: CF_DIB extraction requires BMP header synthesis.
+        _cb_set_error("GetImageBytes is not implemented on Windows in this build")
+        ret str.Clone("")
+    end
+
+    @en "SetImageBytes"
+    @fa "تنظیم بایت‌های تصویر"
+    pub func SetImageBytes(_data: str, _mime: str = "image/png"): bool:
+        _cb_set_error("SetImageBytes is not implemented on Windows in this build")
+        ret false
+    end
+end
+
+if SALAM_OS_MAC:
+    link framework "AppKit"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(): void
+    end
+
+    func _objc0(recv: void*, name: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*) void*
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _objc1(recv: void*, name: str, a1: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1)
+    end
+
+    func _objc2(recv: void*, name: str, a1: void*, a2: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1, a2)
+    end
+
+    func _ns(s: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _utf8(v: void*): str:
+        if v == null:
+            ret str.Clone("")
+        end
+        fn := (&objc_msgSend) as extern func (void*, void*) str
+        ret str.Clone(fn(v, sel_registerName("UTF8String")))
+    end
+
+    func _pasteboard(): void*:
+        ret _objc0(objc_getClass("NSPasteboard"), "generalPasteboard")
+    end
+
+    @en "GetText"
+    @fa "گرفتن متن"
+    pub func GetText(): str:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret str.Clone("")
+        end
+        ty := _ns("public.utf8-plain-text")
+        val := _objc1(pb, "stringForType:", ty)
+        if val == null:
+            ty = _ns("NSStringPboardType")
+            val = _objc1(pb, "stringForType:", ty)
+        end
+        _cb_ok()
+        ret _utf8(val)
+    end
+
+    @en "SetText"
+    @fa "تنظیم متن"
+    pub func SetText(text: str): bool:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret false
+        end
+        _objc0(pb, "clearContents")
+        ty := _ns("public.utf8-plain-text")
+        ns_text := _ns(text)
+        fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) i8
+        ok := fn(pb, sel_registerName("setString:forType:"), ns_text, ty)
+        if ok == (0 as i8):
+            _cb_set_error("setString:forType failed")
+            ret false
+        end
+        ret _cb_ok()
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        pb := _pasteboard()
+        if pb == null:
+            ret false
+        end
+        types := _objc0(pb, "types")
+        if types == null:
+            ret false
+        end
+        ty := _ns("public.utf8-plain-text")
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret fn(types, sel_registerName("containsObject:"), ty) != (0 as i8)
+    end
+
+    @en "Clear"
+    @fa "پاک کردن"
+    pub func Clear(): bool:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret false
+        end
+        _objc0(pb, "clearContents")
+        ret _cb_ok()
+    end
+
+    @en "GetImageBytes"
+    @fa "گرفتن بایت‌های تصویر"
+    pub func GetImageBytes(): str:
+        _cb_set_error("GetImageBytes is not implemented on macOS in this build")
+        ret str.Clone("")
+    end
+
+    @en "SetImageBytes"
+    @fa "تنظیم بایت‌های تصویر"
+    pub func SetImageBytes(_data: str, _mime: str = "image/png"): bool:
+        _cb_set_error("SetImageBytes is not implemented on macOS in this build")
+        ret false
+    end
+end
+
+if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
+    func _has_cmd(name: str): bool:
+        r := shell.Exec("command -v " + name + " >/dev/null 2>&1")
+        ret r.code == 0
+    end
+
+    func _run_sh(script: str): shell.CmdResult:
+        mut args := Vector {} as Vector<str>
+        defer args.Free()
+        args.Push("-c")
+        args.Push(script)
+        ret shell.Run("/bin/sh", args)
+    end
+
+    func _run_with_stdin(script: str, text: str): shell.CmdResult:
+        // Best-effort: write text to a temp file and redirect stdin.
+        path := "/tmp/salam_clipboard_in.txt"
+        _w := io.WriteFile(path, text)
+        defer _r := os.Remove(path)
+        ret _run_sh(script + " < " + path)
+    end
+
+    @en "GetText"
+    @fa "گرفتن متن"
+    pub func GetText(): str:
+        mut r := shell.CmdResult { code = 127 }
+        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-paste"):
+            r = _run_sh("wl-paste --no-newline 2>/dev/null")
+            if r.code == 0:
+                _cb_ok()
+                ret r.out
+            end
+        end
+        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+            r = _run_sh("xclip -selection clipboard -o 2>/dev/null")
+            if r.code == 0:
+                _cb_ok()
+                ret r.out
+            end
+        end
+        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
+            r = _run_sh("xsel --clipboard --output 2>/dev/null")
+            if r.code == 0:
+                _cb_ok()
+                ret r.out
+            end
+        end
+        _cb_set_error("No clipboard backend available (need wl-paste, xclip, or xsel)")
+        ret str.Clone("")
+    end
+
+    @en "SetText"
+    @fa "تنظیم متن"
+    pub func SetText(text: str): bool:
+        mut r := shell.CmdResult { code = 127 }
+        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-copy"):
+            r = _run_with_stdin("wl-copy 2>/dev/null", text)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+            r = _run_with_stdin("xclip -selection clipboard 2>/dev/null", text)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
+            r = _run_with_stdin("xsel --clipboard --input 2>/dev/null", text)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        _cb_set_error("No clipboard backend available (need wl-copy, xclip, or xsel)")
+        ret false
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        t := GetText()
+        has := t.Len() > 0
+        if t.Len() > 0:
+            mem.Free(t as void*)
+        end
+        ret has
+    end
+
+    @en "Clear"
+    @fa "پاک کردن"
+    pub func Clear(): bool:
+        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-copy"):
+            r := _run_sh("wl-copy --clear 2>/dev/null || printf '' | wl-copy 2>/dev/null")
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+            r := _run_sh("printf '' | xclip -selection clipboard 2>/dev/null")
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
+            r := _run_sh("xsel --clipboard --clear 2>/dev/null")
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        _cb_set_error("No clipboard backend available to clear")
+        ret false
+    end
+
+    @en "GetImageBytes"
+    @fa "گرفتن بایت‌های تصویر"
+    pub func GetImageBytes(): str:
+        _cb_set_error("GetImageBytes is not implemented for Linux tool fallbacks in this build")
+        ret str.Clone("")
+    end
+
+    @en "SetImageBytes"
+    @fa "تنظیم بایت‌های تصویر"
+    pub func SetImageBytes(_data: str, _mime: str = "image/png"): bool:
+        _cb_set_error("SetImageBytes is not implemented for Linux tool fallbacks in this build")
+        ret false
+    end
+end

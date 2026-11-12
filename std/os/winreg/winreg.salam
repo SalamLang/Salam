@@ -19,53 +19,6 @@ package winreg
 import mem
 import str
 
-@en "Key"
-@fa "کلید"
-pub struct Key:
-    @en "handle"
-    @fa "دسته"
-    pub handle: void* = null
-    @en "ok"
-    @fa "معتبر"
-    pub ok: bool = false
-end
-
-@en "StringResult"
-@fa "نتیجه رشته"
-pub struct StringResult:
-    @en "value"
-    @fa "مقدار"
-    pub value: str = ""
-    @en "ok"
-    @fa "معتبر"
-    pub ok: bool = false
-end
-
-@en "IntResult"
-@fa "نتیجه عددی"
-pub struct IntResult:
-    @en "value"
-    @fa "مقدار"
-    pub value: i64 = 0
-    @en "ok"
-    @fa "معتبر"
-    pub ok: bool = false
-end
-
-@en "BinaryResult"
-@fa "نتیجه دودویی"
-pub struct BinaryResult:
-    @en "data"
-    @fa "داده"
-    pub data: void* = null
-    @en "size"
-    @fa "اندازه"
-    pub size: u32 = 0 as u32
-    @en "ok"
-    @fa "معتبر"
-    pub ok: bool = false
-end
-
 // Predefined roots
 pub const HKCR: i64 = 0x80000000
 pub const HKCU: i64 = 0x80000001
@@ -92,6 +45,59 @@ pub const KEY_ENUMERATE_SUB_KEYS: u32 = 0x0008 as u32
 
 // Options/dispositions
 pub const REG_OPTION_NON_VOLATILE: u32 = 0 as u32
+
+@en "Key"
+@fa "کلید"
+pub struct Key:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+@en "StringResult"
+@fa "نتیجه رشته"
+pub struct StringResult:
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "type"
+    @fa "نوع"
+    pub kind: u32 = 0 as u32
+end
+
+@en "IntResult"
+@fa "نتیجه عددی"
+pub struct IntResult:
+    @en "value"
+    @fa "مقدار"
+    pub value: i64 = 0
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "type"
+    @fa "نوع"
+    pub kind: u32 = 0 as u32
+end
+
+@en "BinaryResult"
+@fa "نتیجه دودویی"
+pub struct BinaryResult:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "size"
+    @fa "اندازه"
+    pub size: u32 = 0 as u32
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
 
 if SALAM_OS_WINDOWS:
     link dynamic "advapi32"
@@ -159,6 +165,27 @@ pub func Root(name: str): i64:
     else name == "HKCC" or name == "HKEY_CURRENT_CONFIG": ret HKCC
     end
     ret 0
+end
+
+@en "RootName"
+@fa "نام ریشه"
+pub func RootName(root: i64): str:
+    if root == HKCU: ret "HKCU"
+    else root == HKLM: ret "HKLM"
+    else root == HKCR: ret "HKCR"
+    else root == HKU: ret "HKU"
+    else root == HKCC: ret "HKCC"
+    end
+    ret ""
+end
+
+@en "JoinPath"
+@fa "پیوند مسیر"
+pub func JoinPath(parent: str, child: str): str:
+    if parent.Len() == 0: ret str.Clone(child) end
+    if child.Len() == 0: ret str.Clone(parent) end
+    if str.EndsWith(parent, "\\"): ret parent.Concat(child) end
+    ret parent.Concat("\\").Concat(child)
 end
 
 @en "IsSupported"
@@ -285,6 +312,7 @@ pub func GetString(k &: Key, name: str): StringResult:
         mut out := StringResult {}
         if status == 0:
             t := typ[0]
+            out.kind = t
             if t == REG_SZ or t == REG_EXPAND_SZ:
                 out.value = _from_wide(data)
                 out.ok = true
@@ -303,6 +331,16 @@ pub func GetString(k &: Key, name: str): StringResult:
         mem.Free(size as void*)
         mem.Free(data)
         ret out
+    end
+    ret StringResult {}
+end
+
+@en "GetExpandString"
+@fa "دریافت رشته قابل گسترش"
+pub func GetExpandString(k &: Key, name: str): StringResult:
+    r := GetString(k, name)
+    if r.ok and r.kind == REG_EXPAND_SZ:
+        ret r
     end
     ret StringResult {}
 end
@@ -329,6 +367,7 @@ pub func GetInt(k &: Key, name: str): IntResult:
         mut out := IntResult {}
         if status == 0:
             t := typ[0]
+            out.kind = t
             if t == REG_DWORD and size[0] >= (4 as u32):
                 out.value = (data as u32*)[0] as i64
                 out.ok = true
@@ -396,6 +435,26 @@ pub func SetString(k &: Key, name: str, value: str): bool:
         end
         bytes := ((chars + 1) * 2) as u32
         status := RegSetValueExW(k.handle, wname, 0 as u32, REG_SZ, wval, bytes)
+        mem.Free(wname)
+        mem.Free(wval)
+        ret status == 0
+    end
+    ret false
+end
+
+@en "SetExpandString"
+@fa "تنظیم رشته قابل گسترش"
+pub func SetExpandString(k &: Key, name: str, value: str): bool:
+    if SALAM_OS_WINDOWS:
+        if not k.ok or k.handle == null: ret false end
+        wname := _to_wide(name)
+        wval := _to_wide(value)
+        mut chars := 0
+        until (wval as u16*)[chars] != (0 as u16):
+            chars++
+        end
+        bytes := ((chars + 1) * 2) as u32
+        status := RegSetValueExW(k.handle, wname, 0 as u32, REG_EXPAND_SZ, wval, bytes)
         mem.Free(wname)
         mem.Free(wval)
         ret status == 0
@@ -500,4 +559,108 @@ pub func ListValues(k &: Key): Vector<str>:
         end
     end
     ret out
+end
+
+@en "KeyExists"
+@fa "کلید وجود دارد"
+pub func KeyExists(root: i64, path: str): bool:
+    if SALAM_OS_WINDOWS == false: ret false end
+    k := OpenKey(root, path, KEY_READ)
+    if k.ok:
+        Close(k)
+        ret true
+    end
+    ret false
+end
+
+@en "ValueExists"
+@fa "مقدار وجود دارد"
+pub func ValueExists(k &: Key, name: str): bool:
+    if SALAM_OS_WINDOWS == false: ret false end
+    if not k.ok or k.handle == null: ret false end
+    wname := _to_wide(name)
+    status := RegQueryValueExW(k.handle, wname, null, null, null, null)
+    mem.Free(wname)
+    ret status == 0
+end
+
+@en "FreeBinary"
+@fa "آزادسازی دودویی"
+pub func FreeBinary(r &: BinaryResult):
+    if r.data != null:
+        mem.Free(r.data)
+        r.data = null
+    end
+    r.size = 0 as u32
+    r.ok = false
+end
+
+@en "OpenHKCU"
+@fa "باز کردن HKCU"
+pub func OpenHKCU(path: str, access: u32): Key:
+    ret OpenKey(HKCU, path, access)
+end
+
+@en "OpenHKLM"
+@fa "باز کردن HKLM"
+pub func OpenHKLM(path: str, access: u32): Key:
+    ret OpenKey(HKLM, path, access)
+end
+
+@en "CreateHKCU"
+@fa "ساخت در HKCU"
+pub func CreateHKCU(path: str, access: u32): Key:
+    ret CreateKey(HKCU, path, access)
+end
+
+@en "CreateHKLM"
+@fa "ساخت در HKLM"
+pub func CreateHKLM(path: str, access: u32): Key:
+    ret CreateKey(HKLM, path, access)
+end
+
+@en "GetStringPath"
+@fa "دریافت رشته از مسیر"
+pub func GetStringPath(root: i64, path: str, name: str): StringResult:
+    k := OpenKey(root, path, KEY_READ)
+    if not k.ok: ret StringResult {} end
+    out := GetString(k, name)
+    Close(k)
+    ret out
+end
+
+@en "SetStringPath"
+@fa "تنظیم رشته در مسیر"
+pub func SetStringPath(root: i64, path: str, name: str, value: str): bool:
+    k := CreateKey(root, path, KEY_WRITE)
+    if not k.ok: ret false end
+    ok := SetString(k, name, value)
+    Close(k)
+    ret ok
+end
+
+@en "SetDwordPath"
+@fa "تنظیم عدد ۳۲ بیتی در مسیر"
+pub func SetDwordPath(root: i64, path: str, name: str, value: u32): bool:
+    k := CreateKey(root, path, KEY_WRITE)
+    if not k.ok: ret false end
+    ok := SetDword(k, name, value)
+    Close(k)
+    ret ok
+end
+
+@en "DeleteValuePath"
+@fa "حذف مقدار از مسیر"
+pub func DeleteValuePath(root: i64, path: str, name: str): bool:
+    k := OpenKey(root, path, KEY_WRITE)
+    if not k.ok: ret false end
+    ok := DeleteValue(k, name)
+    Close(k)
+    ret ok
+end
+
+@en "DeleteKeyPath"
+@fa "حذف کلید مسیر"
+pub func DeleteKeyPath(root: i64, path: str): bool:
+    ret DeleteKey(root, path)
 end

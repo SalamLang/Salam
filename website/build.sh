@@ -80,6 +80,12 @@ if [ "$examples" != skip ]; then
         }
     fi
     rm -f "$lessons" "$lessons.shard"
+    if [ "$shard_index" -eq 1 ]; then
+        sh website/check-blog-code.sh || {
+            echo "website: a magazine code block does not compile or its output differs" >&2
+            exit 1
+        }
+    fi
 fi
 [ "$examples" = only ] && exit 0
 

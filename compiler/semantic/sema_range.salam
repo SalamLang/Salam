@@ -79,6 +79,7 @@ pub struct Rg:
     pub fbody: int = 0
     pub lnames: HashMap<str, int> = HashMap {} as HashMap<str, int>
     pub nullc: HashMap<int, int> = HashMap {} as HashMap<int, int>
+    pub lang: str = ""
 end
 
 func rg_min(x: i64, y: i64): i64:
@@ -487,59 +488,58 @@ func rg_line(a &: at.Ast, nid: int): i64:
 end
 
 func rg_sym_text(r &: Rg, c: int, off: i64): str:
-    base := r.names.get(c) + ".len()"
+    mut tail := ".len()"
     if off > 0:
-        ret base + " + " + off
+        tail = tail + " + " + off
+    else off < 0:
+        tail = tail + " - " + (0 - off)
     end
-    if off < 0:
-        ret base + " - " + (0 - off)
-    end
-    ret base
+    ret r.names.get(c) + code_lang(tail, r.lang)
 end
 
-func rg_text(a &: at.Ast, nid: int, depth: int): str:
+func rg_text(a &: at.Ast, nid: int, depth: int, lang: str): str:
     if nid == 0 or depth > 4:
         ret ""
     end
     n := at.At(a, nid)
     k := n.kind
     if k == at.AST_IDENTIFIER:
-        ret n.name
+        ret written_name(a, nid)
     end
     if k == at.AST_THIS:
-        ret "this"
+        ret code_lang("this", lang)
     end
     if k == at.AST_LITERAL and (n.value_kind == tok.TV_INT or n.value_kind == tok.TV_CHAR):
         if wide_ts(n.type_str):
             v := wd.Make(n.value_hi, n.value_int)
-            ret str.Equals(n.type_str, "i128") ? wd.ToStringS(v) : wd.ToStringU(v)
+            ret code_lang(str.Equals(n.type_str, "i128") ? wd.ToStringS(v) : wd.ToStringU(v), lang)
         end
-        ret "" + (n.value_int as i64)
+        ret code_lang("" + (n.value_int as i64), lang)
     end
     if k == at.AST_CAST:
-        ret rg_text(a, n.a, depth + 1)
+        ret rg_text(a, n.a, depth + 1, lang)
     end
     if k == at.AST_MEMBER:
-        base := rg_text(a, n.a, depth + 1)
+        base := rg_text(a, n.a, depth + 1, lang)
         if str.Len(base) == 0:
             ret ""
         end
-        ret base + "." + n.name
+        ret base + "." + written_name(a, nid)
     end
     if k == at.AST_INDEX:
-        base2 := rg_text(a, n.a, depth + 1)
-        ix := rg_text(a, n.b, depth + 1)
+        base2 := rg_text(a, n.a, depth + 1, lang)
+        ix := rg_text(a, n.b, depth + 1, lang)
         if str.Len(base2) == 0 or str.Len(ix) == 0:
             ret ""
         end
         ret base2 + "[" + ix + "]"
     end
     if k == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER and at.ChildCount(a, nid) == 0:
-        recv := rg_text(a, at.At(a, n.a).a, depth + 1)
+        recv := rg_text(a, at.At(a, n.a).a, depth + 1, lang)
         if str.Len(recv) == 0:
             ret ""
         end
-        ret recv + "." + at.At(a, n.a).name + "()"
+        ret recv + "." + written_name(a, n.a) + "()"
     end
     if k == at.AST_BINARY:
         mut opx := ""
@@ -557,8 +557,8 @@ func rg_text(a &: at.Ast, nid: int, depth: int): str:
         if str.Len(opx) == 0:
             ret ""
         end
-        l := rg_text(a, n.a, depth + 1)
-        rt := rg_text(a, n.b, depth + 1)
+        l := rg_text(a, n.a, depth + 1, lang)
+        rt := rg_text(a, n.b, depth + 1, lang)
         if str.Len(l) == 0 or str.Len(rt) == 0:
             ret ""
         end
@@ -577,22 +577,22 @@ func rg_text(a &: at.Ast, nid: int, depth: int): str:
         else n.op == tok.TK_PERCENT_EQ:
             aop = " %= "
         end
-        al := rg_text(a, n.a, depth + 1)
-        ar := rg_text(a, n.b, depth + 1)
+        al := rg_text(a, n.a, depth + 1, lang)
+        ar := rg_text(a, n.b, depth + 1, lang)
         if str.Len(aop) == 0 or str.Len(al) == 0 or str.Len(ar) == 0:
             ret ""
         end
         ret al + aop + ar
     end
     if k == at.AST_INCDEC:
-        il := rg_text(a, n.a, depth + 1)
+        il := rg_text(a, n.a, depth + 1, lang)
         if str.Len(il) == 0:
             ret ""
         end
         ret il + (n.op == tok.TK_PLUS_PLUS ? "++" : "--")
     end
     if k == at.AST_UNARY and n.op == tok.TK_MINUS:
-        inner := rg_text(a, n.a, depth + 1)
+        inner := rg_text(a, n.a, depth + 1, lang)
         if str.Len(inner) == 0:
             ret ""
         end
@@ -601,8 +601,8 @@ func rg_text(a &: at.Ast, nid: int, depth: int): str:
     ret ""
 end
 
-func rg_text_or(a &: at.Ast, nid: int, alt: str): str:
-    t := rg_text(a, nid, 0)
+func rg_text_or(a &: at.Ast, nid: int, alt: str, lang: str): str:
+    t := rg_text(a, nid, 0, lang)
     if str.Len(t) == 0:
         ret alt
     end
@@ -672,13 +672,26 @@ func rg_sev_def(r &: Rg): int:
 end
 
 func rg_repeat_hint(r &: Rg, help: str): str:
-    if r.rdown:
-        ret help + "; " + i18.Tr("'repeat a to b' counts down when b is below a, so 'repeat 0 to xs.len() - 1 in i:' runs with i = 0 and i = -1 when xs is empty; count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
-    end
-    if not r.repeat_to:
+    if not r.rdown and not r.repeat_to:
         ret help
     end
-    ret help + "; " + i18.Tr("'repeat a to b' includes b itself, so count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
+    head := code_lang("repeat a to b", r.lang)
+    by_len := code_lang("repeat xs.len() in i:", r.lang)
+    by_each := code_lang("each i, x in xs:", r.lang)
+    mut why := ""
+    if r.rdown:
+        why = co.Format4(
+            i18.Tr("'%s' counts down when b is below a, so '%s' runs with i = 0 and i = -1 when xs is empty; count with '%s' or '%s'"), co.ArgStr(head), co.ArgStr(code_lang("repeat 0 to xs.len() - 1 in i:", r.lang)), co.ArgStr(by_len), co.ArgStr(by_each)
+        )
+    else:
+        why = co.Format3(
+            i18.Tr("'%s' includes b itself, so count with '%s' or '%s'"), co.ArgStr(head), co.ArgStr(by_len), co.ArgStr(by_each)
+        )
+    end
+    if str.Len(help) == 0:
+        ret why
+    end
+    ret co.Format2(i18.Tr("%s; %s"), co.ArgStr(help), co.ArgStr(why))
 end
 
 func rg_will(r &: Rg, sev: int): bool:
@@ -737,8 +750,8 @@ func rg_check_index(r &: Rg, a &: at.Ast, nid: int, cnode: int, cv: RgV, inode: 
     if not rg_will(r, sev):
         ret
     end
-    cname := rg_text_or(a, cnode, i18.Tr("the container"))
-    itext := inode != 0 and at.KindOf(a, inode) != at.AST_LITERAL ? rg_text(a, inode, 0) : ""
+    cname := rg_text_or(a, cnode, i18.Tr("the container"), r.lang)
+    itext := inode != 0 and at.KindOf(a, inode) != at.AST_LITERAL ? rg_text(a, inode, 0, r.lang) : ""
     iname := str.Len(itext) > 0 ? "'" + itext + "'" : i18.Tr("the index")
     if why == 1:
         rg_diag(
@@ -813,11 +826,11 @@ func rg_check_null(r &: Rg, a &: at.Ast, nid: int, pnode: int, pv: RgV):
     if not rg_will(r, pv.nul != RG_NUL_MAYBE ? rg_sev_def(r) : RG_WARN):
         ret
     end
-    pname := rg_text_or(a, pnode, i18.Tr("the pointer"))
+    pname := rg_text_or(a, pnode, i18.Tr("the pointer"), r.lang)
     if pv.nul == RG_NUL_NULL and pv.why != 0 and at.KindOf(a, pv.why) == at.AST_CALL:
         rg_diag(
             r, rg_sev_def(r), 152, nid, co.Format3(
-                i18.Tr("null pointer dereference: '%s' is null here, because '%s' always returns null (line %d)"), co.ArgStr(pname), co.ArgStr(rg_text_or(a, at.At(a, pv.why).a, i18.Tr("the function"))), co.ArgInt(rg_line(a, pv.why))
+                i18.Tr("null pointer dereference: '%s' is null here, because '%s' always returns null (line %d)"), co.ArgStr(pname), co.ArgStr(rg_text_or(a, at.At(a, pv.why).a, i18.Tr("the function"), r.lang)), co.ArgInt(rg_line(a, pv.why))
             ), co.Format1(i18.Tr("check 'if %s != null:' before using it"), co.ArgStr(pname))
         )
         ret
@@ -859,7 +872,7 @@ func rg_check_div(r &: Rg, a &: at.Ast, nid: int, dnode: int, dv: RgV, ts: str):
     if not rg_will(r, zero ? rg_sev_def(r) : RG_WARN):
         ret
     end
-    dname := rg_text_or(a, dnode, i18.Tr("the divisor"))
+    dname := rg_text_or(a, dnode, i18.Tr("the divisor"), r.lang)
     if zero:
         rg_diag(
             r, rg_sev_def(r), 150, nid, co.Format1(
@@ -899,14 +912,14 @@ func rg_fit(r &: Rg, a &: at.Ast, nid: int, res: RgV, ts: str): RgV:
     if not rg_will(r, above or below ? rg_sev_def(r) : RG_WARN):
         ret RgV {}
     end
-    ename := rg_text_or(a, nid, i18.Tr("this expression"))
-    hint := co.Format3(
-        i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(type_hi)
+    ename := rg_text_or(a, nid, i18.Tr("this expression"), r.lang)
+    hint := co.Format4(
+        i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as '%s' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(type_text_disp(ts)), co.ArgInt(tlo), co.ArgInt(type_hi), co.ArgStr(type_text_disp("i64"))
     )
     if above or below:
         rg_diag(
             r, rg_sev_def(r), 148, nid, co.Format3(
-                i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(ts)
+                i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(type_text_disp(ts))
             ), hint
         )
         ret RgV {}
@@ -914,7 +927,7 @@ func rg_fit(r &: Rg, a &: at.Ast, nid: int, res: RgV, ts: str): RgV:
     if may_hi:
         rg_diag(
             r, RG_WARN, 149, nid, co.Format3(
-                i18.Tr("possible integer overflow: '%s' can reach %d, which does not fit in '%s'"), co.ArgStr(ename), co.ArgInt(res.hi), co.ArgStr(ts)
+                i18.Tr("possible integer overflow: '%s' can reach %d, which does not fit in '%s'"), co.ArgStr(ename), co.ArgInt(res.hi), co.ArgStr(type_text_disp(ts))
             ), hint
         )
         ret RgV {}
@@ -922,7 +935,7 @@ func rg_fit(r &: Rg, a &: at.Ast, nid: int, res: RgV, ts: str): RgV:
     if may_lo:
         rg_diag(
             r, RG_WARN, 149, nid, co.Format3(
-                i18.Tr("possible integer overflow: '%s' can reach %d, which does not fit in '%s'"), co.ArgStr(ename), co.ArgInt(res.lo), co.ArgStr(ts)
+                i18.Tr("possible integer overflow: '%s' can reach %d, which does not fit in '%s'"), co.ArgStr(ename), co.ArgInt(res.lo), co.ArgStr(type_text_disp(ts))
             ), hint
         )
         ret RgV {}
@@ -1203,7 +1216,7 @@ func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
     _tr := cv_int_range(ts, tlo, type_hi)
     bits := fold_ts_bits(ts)
     if rg_lossy(ts, v) and rg_will(r, RG_WARN):
-        vtext := rg_text(a, n.a, 0)
+        vtext := rg_text(a, n.a, 0, r.lang)
         vname := str.Len(vtext) > 0 ? "'" + vtext + "'" : i18.Tr("the value")
         mut got := ""
         if rg_is_exact(v):
@@ -1211,8 +1224,8 @@ func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
         end
         rg_diag(
             r, RG_WARN, 154, nid, co.Format4(
-                i18.Tr("%s is %s, which does not fit in '%s'; the cast keeps only the low %d bits"), co.ArgStr(vname), co.ArgStr(rg_desc(v)), co.ArgStr(ts), co.ArgInt(bits as i64)
-            ) + got, i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
+                i18.Tr("%s is %s, which does not fit in '%s'; the cast keeps only the low %d bits"), co.ArgStr(vname), co.ArgStr(rg_desc(v)), co.ArgStr(type_text_disp(ts)), co.ArgInt(bits as i64)
+            ) + got, co.Format1(i18.Tr("use a wider type, or mask the bits you want on purpose, for example '%s'"), co.ArgStr(code_lang("(x & 255) as u8", r.lang)))
         )
     end
     if v.hlo and v.hhi and v.lo >= tlo and v.hi <= type_hi and v.big == 0:
@@ -1258,12 +1271,12 @@ func rg_const_overflow(s &: Sema, a &: at.Ast, nid: int, ok: bool, v: i64, up: b
     else:
         res.big = up ? 1 : 0 - 1
     end
-    ename := rg_text_or(a, nid, i18.Tr("this expression"))
+    ename := rg_text_or(a, nid, i18.Tr("this expression"), s.lang)
     serr_help(
         s, 148, span_of(a, nid), co.Format3(
-            i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(ts)
-        ), co.Format3(
-            i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(type_hi)
+            i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(type_text_disp(ts))
+        ), co.Format4(
+            i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as '%s' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(type_text_disp(ts)), co.ArgInt(tlo), co.ArgInt(type_hi), co.ArgStr(type_text_disp("i64"))
         )
     )
     ret true
@@ -1276,8 +1289,8 @@ func rg_warn_lossy_const(s &: Sema, a &: at.Ast, nid: int, v: i64):
     end
     swarn_help(
         s, 154, span_of(a, nid), co.Format4(
-            i18.Tr("%d does not fit in '%s'; the cast keeps only the low %d bits, giving %d"), co.ArgInt(v), co.ArgStr(ts), co.ArgInt(fold_ts_bits(ts) as i64), co.ArgInt(fold_wrap(ts, v))
-        ), i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
+            i18.Tr("%d does not fit in '%s'; the cast keeps only the low %d bits, giving %d"), co.ArgInt(v), co.ArgStr(type_text_disp(ts)), co.ArgInt(fold_ts_bits(ts) as i64), co.ArgInt(fold_wrap(ts, v))
+        ), co.Format1(i18.Tr("use a wider type, or mask the bits you want on purpose, for example '%s'"), co.ArgStr(code_lang("(x & 255) as u8", s.lang)))
     )
 end
 
@@ -1513,7 +1526,7 @@ func rg_ci_scan(s &: Sema, r &: Rg, a &: at.Ast, decl: int, nid: int, call: int,
             out_hi := nlen >= 0 and iv.hlo and iv.lo >= nlen and iv.big == 0
             out_lo := iv.hhi and iv.hi < 0 and iv.big == 0
             if (out_hi or out_lo) and rg_will(r, rg_sev_def(r)):
-                fname := rg_text_or(a, at.At(a, call).a, i18.Tr("the function"))
+                fname := rg_text_or(a, at.At(a, call).a, i18.Tr("the function"), r.lang)
                 mut have := ""
                 if nlen >= 0:
                     have = co.Format1(i18.Tr("%d elements"), co.ArgInt(nlen))
@@ -3148,10 +3161,12 @@ func rg_check_leaks(s &: Sema, a &: at.Ast, body: int):
         fl.push(0)
         rg_lk_walk(s, a, body, name, d, fl)
         if fl.get(0) == 0 and fl.get(1) == 0:
+            alloc := rg_strip(a, at.At(a, d).a)
+            alloc_text := rg_text_or(a, at.At(a, alloc).a, code_disp(s, a, "mem.Allocate"), s.lang)
             swarn_help(
-                s, 158, span_of(a, d), co.Format2(
-                    i18.Tr("the memory '%s' gets from mem.Allocate on line %d is never freed: nothing frees, returns, stores or passes it on before the function ends"), co.ArgStr(name), co.ArgInt(rg_line(a, d))
-                ), co.Format1(i18.Tr("free it with 'defer mem.Free(%s as void*)' on the line after the allocation"), co.ArgStr(name))
+                s, 158, span_of(a, d), co.Format3(
+                    i18.Tr("the memory '%s' gets from %s on line %d is never freed: nothing frees, returns, stores or passes it on before the function ends"), co.ArgStr(name), co.ArgStr(alloc_text), co.ArgInt(rg_line(a, d))
+                ), co.Format1(i18.Tr("free it with '%s' on the line after the allocation"), co.ArgStr(co.Format1(code_disp(s, a, "defer mem.Free(%s as void*)"), co.ArgStr(name))))
             )
         end
         fl.free()
@@ -3169,6 +3184,7 @@ pub func SemaCheckRanges(s &: Sema, a &: at.Ast, fnid: int):
     end
     rg_check_leaks(s, a, body)
     mut r := Rg {}
+    r.lang = s.lang
     r.mode = g_sm_ranges
     r.budget = RG_BUDGET
     repeat at.ChildCount(a, fnid) in i:

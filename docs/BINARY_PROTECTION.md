@@ -8,12 +8,16 @@ lets you remove the first two and makes the third less useful, so a casual
 `strings`, `nm`, `objdump` or decompiler pass learns much less.
 
 ```sh
-salam build main.salam --protect --release -o myapp
+salam build main.salam --backend=c --protect --release -o myapp
 ```
 
 `--protect` works on `salam build`, `salam run` and the other commands that
 compile through the C backend (`--obfuscate` is an alias). It is off by
-default, so a build without the flag behaves exactly as before.
+default, so a build without the flag behaves exactly as before. A compiler
+that has LLVM linked in, such as the release builds for Linux x86-64,
+macOS and Windows x86-64, builds with the LLVM backend unless told
+otherwise, so pass `--backend=c` (or name a C compiler with `--cc=`) with
+`--protect`.
 
 ## What `--protect` does
 
@@ -55,11 +59,11 @@ determined reverse engineer.
   payload can always be inspected. Protect those with a server-side API, not
   with `--protect`.
 - **The LLVM and native backends keep their string literals.** `--protect` on
-  `--backend=llvm` or `--backend=native` prints a warning: string obfuscation
-  is implemented in the C backend, which is the default for `build` and `run`.
-  Symbol stripping also happens there, after the C compiler has linked the
-  executable. If a platform builds with the native backend by default (Windows
-  on ARM64), pass `--backend=c` when you want both features.
+  an LLVM or native build prints a warning: string obfuscation is implemented
+  in the C backend only. Symbol stripping also happens there, after the C
+  compiler has linked the executable. With no `--backend`, a compiler picks
+  native on Windows on Arm, LLVM when it has LLVM linked in, and C otherwise,
+  so pass `--backend=c` when you want both features.
 - **A debugger still wins.** `--protect` is not an anti-debugging or anti-tamper
   system. If you need licence enforcement, put the check behind a network call
   and sign your releases.
@@ -67,7 +71,7 @@ determined reverse engineer.
 ## Recommended release recipe
 
 ```sh
-salam build src/main.salam --protect --release --lto -o dist/myapp
+salam build src/main.salam --backend=c --protect --release --lto -o dist/myapp
 ```
 
 - `--release` removes the safety checks.

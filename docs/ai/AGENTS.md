@@ -711,9 +711,8 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   which part you are unsure about instead of claiming the feature does not
   exist.
 
-- **The version command is `salam version`, not `salam --version`.** Salam's
-  CLI takes subcommands, not flags, for this: `salam --version` (and `-v`)
-  fail with `unknown command '--version'`.
+- **The version command is `salam version`.** `salam --version` and `-v`
+  print the same thing, and `salam version --short` prints just the number.
 
 - **JavaScript 64-bit integers are exact only up to 2^53.** `salam js` stores
   `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,

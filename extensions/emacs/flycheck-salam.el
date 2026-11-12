@@ -19,6 +19,14 @@
   "Return the platform's bit bucket."
   (if (memq system-type '(windows-nt ms-dos)) "NUL" "/dev/null"))
 
+(defun flycheck-salam--stdlib-args ()
+  "Return stdlib path arguments when configured."
+  (if (and (boundp 'salam-stdlib-path)
+           (stringp salam-stdlib-path)
+           (not (string-empty-p salam-stdlib-path)))
+      (list (concat "--stdlib-path=" salam-stdlib-path))
+    nil))
+
 (flycheck-define-checker salam
   "A Salam syntax and type checker.
 
@@ -31,7 +39,8 @@ running it or writing any artifact."
             (eval (concat "--xml-out=" (flycheck-salam--null-device)))
             "--error-style=gcc"
             "--log-level=error"
-            (eval (concat "--lang=" (salam--detect-lang))))
+            (eval (concat "--lang=" (salam--detect-lang)))
+            (eval (flycheck-salam--stdlib-args)))
   :error-patterns
   ((error line-start (file-name) ":" line ":" column ": error: " (message) line-end)
    (warning line-start (file-name) ":" line ":" column ": warning: " (message) line-end)

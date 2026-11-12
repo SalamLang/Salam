@@ -1,0 +1,208 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.style
+
+func _m_ident(m: f64[]):
+    m[0] = 1.0
+    m[1] = 0.0
+    m[2] = 0.0
+    m[3] = 1.0
+    m[4] = 0.0
+    m[5] = 0.0
+end
+
+func _m_mul(a: f64[], b: f64[], out: f64[]):
+    r0 := a[0] * b[0] + a[2] * b[1]
+    r1 := a[1] * b[0] + a[3] * b[1]
+    r2 := a[0] * b[2] + a[2] * b[3]
+    r3 := a[1] * b[2] + a[3] * b[3]
+    r4 := a[0] * b[4] + a[2] * b[5] + a[4]
+    r5 := a[1] * b[4] + a[3] * b[5] + a[5]
+    out[0] = r0
+    out[1] = r1
+    out[2] = r2
+    out[3] = r3
+    out[4] = r4
+    out[5] = r5
+end
+
+func _m_set(m: f64[], a: f64, b: f64, c: f64, d: f64, e: f64, f: f64):
+    m[0] = a
+    m[1] = b
+    m[2] = c
+    m[3] = d
+    m[4] = e
+    m[5] = f
+end
+
+func _m_rot(deg: f64, out: f64[]):
+    r := deg * math.PI / 180.0
+    mut s := math.Sin(r)
+    mut c := math.Cos(r)
+    if math.Abs(s) < 1.0e-12:
+        s = 0.0
+    end
+    if math.Abs(c) < 1.0e-12:
+        c = 0.0
+    end
+    _m_set(out, c, s, 0.0 - s, c, 0.0, 0.0)
+end
+
+func _m_apply(m: f64[], x: f64, y: f64, ox &: f64, oy &: f64):
+    ox = m[0] * x + m[2] * y + m[4]
+    oy = m[1] * x + m[3] * y + m[5]
+end
+
+func _m_invert(m: f64[], out: f64[]): bool:
+    det := m[0] * m[3] - m[1] * m[2]
+    if math.Abs(det) < 1.0e-12:
+        ret false
+    end
+    ia := m[3] / det
+    ib := 0.0 - m[1] / det
+    ic := 0.0 - m[2] / det
+    id := m[0] / det
+    ie := 0.0 - (ia * m[4] + ic * m[5])
+    iff := 0.0 - (ib * m[4] + id * m[5])
+    _m_set(out, ia, ib, ic, id, ie, iff)
+    ret true
+end
+
+func _m_bbox(m: f64[], x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
+    mut ax := 1.0e300
+    mut ay := 1.0e300
+    mut bx := -1.0e300
+    mut byy := -1.0e300
+    repeat 4 in i:
+        px := (i & 1) == 0 ? x0 : x1
+        py := (i & 2) == 0 ? y0 : y1
+        mut tx := 0.0
+        mut ty := 0.0
+        _m_apply(m, px, py, tx, ty)
+        ax = math.Min(ax, tx)
+        ay = math.Min(ay, ty)
+        bx = math.Max(bx, tx)
+        byy = math.Max(byy, ty)
+    end
+    x0 = ax
+    y0 = ay
+    x1 = bx
+    y1 = byy
+end
+
+func _own_transform(node: int, b: _Box): bool:
+    s := _e.cs[node]
+    if s.rotate == 0.0 and s.scale_x == 1.0 and s.scale_y == 1.0 and s.translate_x.px == 0.0 and s.translate_x.pct == 0.0 and s.translate_y.px == 0.0 and s.translate_y.pct == 0.0:
+        ret false
+    end
+    font := _e.us[node].font
+    ox := _abs_len(s.origin_x.len, font, b.w)
+    oy := _abs_len(s.origin_y.len, font, b.h)
+    tx := _abs_len(s.translate_x, font, b.w)
+    ty := _abs_len(s.translate_y, font, b.h)
+    mut m := paint.Identity()
+    if tx != 0.0 or ty != 0.0:
+        m = m.Then(paint.Translation(tx, ty))
+    end
+    if s.rotate != 0.0:
+        m = m.Then(paint.Rotation(s.rotate))
+    end
+    if s.scale_x != 1.0 or s.scale_y != 1.0:
+        m = m.Then(paint.Scaling(s.scale_x, s.scale_y))
+    end
+    if m.IsIdentity():
+        ret false
+    end
+    px := b.x + ox
+    py := b.y + oy
+    _e.xf[node] = paint.Translation(0.0 - px, 0.0 - py).Then(m).Then(paint.Translation(px, py))
+    ret true
+end
+
+func _xf_resize():
+    n := _e.dom.nodes.len()
+    _e.xf.clear()
+    _e.xf_on.clear()
+    repeat n:
+        _e.xf.push(paint.Identity())
+        _e.xf_on.push(false)
+    end
+end
+
+func _xf_update():
+    _xf_resize()
+    _e.xf_any = false
+    repeat _e.dom.nodes.len() in node:
+        if node >= _e.boxes.len() or not _e.boxes[node].shown:
+            continue
+        end
+        if _own_transform(node, _e.boxes[node]):
+            _e.xf_on[node] = true
+            _e.xf_any = true
+        end
+    end
+end
+
+func _xf_has(node: int): bool:
+    ret node >= 0 and node < _e.xf_on.len() and _e.xf_on[node]
+end
+
+func _xf_hash(node: int, h: i64): i64:
+    if not _xf_has(node):
+        ret h
+    end
+    t := _e.xf[node]
+    mut r := h
+    r = _hf(r, t.a)
+    r = _hf(r, t.b)
+    r = _hf(r, t.c)
+    r = _hf(r, t.d)
+    r = _hf(r, t.e)
+    r = _hf(r, t.f)
+    ret r
+end
+
+func _ancestor_transform(node: int): paint.Transform:
+    mut m := paint.Identity()
+    mut n := node
+    until n >= 0:
+        if _xf_has(n):
+            m = m.Then(_e.xf[n])
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret m
+end
+
+func _screen_bbox(node: int, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
+    r := paint.RectOf(x0, y0, x1 - x0, y1 - y0)
+    m := _ancestor_transform(node)
+    o := m.MapRect(r)
+    x0 = o.x
+    y0 = o.y
+    x1 = o.x + o.width
+    y1 = o.y + o.height
+end
+
+func _to_local(node: int, x: f64, y: f64, ox &: f64, oy &: f64):
+    m := _ancestor_transform(node)
+    inv := m.Invert()
+    p := inv.Apply(paint.Point { x = x, y = y })
+    ox = p.x
+    oy = p.y
+end

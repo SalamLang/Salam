@@ -113,6 +113,19 @@ def common_args(text):
     return args
 
 
+def switch_lint_args():
+    mode = setting("switch_lint", "off")
+    if mode in ("warn", "error", "fix"):
+        args = ["--switch-lint=" + mode]
+        minimum = setting("switch_lint_min", 4)
+        try:
+            args.append("--switch-lint-min=" + str(int(minimum)))
+        except (TypeError, ValueError):
+            args.append("--switch-lint-min=4")
+        return args
+    return []
+
+
 def format_source(text):
     workdir = tempfile.mkdtemp(prefix="salam-fmt-")
     path = os.path.join(workdir, "document.salam")
@@ -194,7 +207,7 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
             "--xml-out=" + null_device,
             "--error-style=gcc",
             "--log-level=error",
-        ] + common_args(text)
+        ] + common_args(text) + switch_lint_args()
         window = self.view.window()
         working_dir = os.path.dirname(path)
 

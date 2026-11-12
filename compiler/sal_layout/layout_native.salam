@@ -460,8 +460,11 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
                 ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
             else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
                 ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+            else ek == at.AST_CALL:
+                # Call-expression handlers: evaluate the call when the event fires.
+                ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
             else:
-                # Call/other expression handlers: evaluate the expression when fired.
+                # Other expression handlers: evaluate expression when fired.
                 ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
             end
             continue
@@ -725,11 +728,9 @@ func ln_key_attr(g &: LnGen, a &: at.Ast, el: int, want: str): int:
         end
         num := ln_dyn_num(val_str(a, an.a))
         if num >= 0 and num < g.lw.slots.Len():
-            ex := g.lw.slots.Get(num).expr
-            if ln_refs_state(a, ex):
-                ret 0
-            end
-            ret ex
+            # Preserve runtime/reactive key expressions so keyed scopes can track
+            # dynamic identity (including state-derived keys).
+            ret g.lw.slots.Get(num).expr
         end
         ret an.a
     end
@@ -1063,6 +1064,8 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
                     ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
                 else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
                     ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+                else ek == at.AST_CALL:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
                 else:
                     ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
                 end
@@ -1103,17 +1106,83 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
             if str.Len(prop) == 0:
                 prop = hyphenate(key)
             end
-            if str.Len(prop) > 0:
-                mv3 := is_dyn(v) ? v : attr_value_map(ai, v)
-                seen_style.Push(prop)
-                ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+            if dest == sm.LA_HTML_OR_CSS:
+                if is_dyn(v):
+                    if str.Len(prop) > 0:
+                        seen_style.Push(prop)
+                        ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(v))
+                    else:
+                        out2 := sm.LayoutAttrOut(ai)
+                        seen_attr.Push(out2)
+                        ln_call(g, g.nm.attr, ln_quote(out2) + g.nm.sep + ln_str_expr(v))
+                    end
+                else lo_all_digits(v):
+                    out2 := sm.LayoutAttrOut(ai)
+                    seen_attr.Push(out2)
+                    ln_call(g, g.nm.attr, ln_quote(out2) + g.nm.sep + ln_quote(v))
+                else:
+                    mv3 := attr_value_map(ai, v)
+                    if str.Len(prop) > 0:
+                        seen_style.Push(prop)
+                        ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                    else:
+                        out2 := sm.LayoutAttrOut(ai)
+                        seen_attr.Push(out2)
+                        ln_call(g, g.nm.attr, ln_quote(out2) + g.nm.sep + ln_str_expr(mv3))
+                    end
+                end
+            else:
+                if str.Len(prop) > 0:
+                    mv3 := is_dyn(v) ? v : attr_value_map(ai, v)
+                    seen_style.Push(prop)
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                end
             end
-        else dest == sm.LA_STYLE or dest == sm.LA_META or dest == sm.LA_CONTENT:
+        else dest == sm.LA_STYLE:
+            seen_attr.push("style")
+            ln_call(g, g.nm.attr, ln_quote("style") + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_META or dest == sm.LA_CONTENT:
             out := sm.LayoutAttrOut(ai)
             if str.Len(out) > 0:
                 mv4 := is_dyn(v) ? v : attr_value_map(ai, v)
                 seen_attr.Push(out)
                 ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv4))
+            end
+        end
+    end
+    if page_ei >= 0:
+        ekey := sm.LayoutElemKey(page_ei)
+        repeat sm.LayoutAttrCount() in d:
+            if not sm.LayoutAttrHasDefault(d) or not sm.LayoutCsvHas(sm.LayoutAttrScope(d), ekey):
+                continue
+            end
+            ddest := sm.LayoutAttrDest(d)
+            dout := sm.LayoutAttrOut(d)
+            ddef := sm.LayoutAttrDefault(d)
+            if ddest == sm.LA_HTML:
+                mut seen := false
+                repeat seen_attr.Len() in si:
+                    if str.Equals(seen_attr.get(si), dout):
+                        seen = true
+                    end
+                end
+                if not seen:
+                    ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+                end
+            else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
+                mut dprop := dout
+                if str.Len(dprop) == 0:
+                    continue
+                end
+                mut seen2 := false
+                repeat seen_style.Len() in sj:
+                    if str.Equals(seen_style.get(sj), dprop):
+                        seen2 = true
+                    end
+                end
+                if not seen2:
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(dprop) + g.nm.sep + ln_quote(ddef))
+                end
             end
         end
     end

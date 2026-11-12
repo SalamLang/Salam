@@ -776,36 +776,79 @@ func expand_component(
     defer ev_names.Free()
     mut ev_fns := Vector {} as Vector<int>
     defer ev_fns.Free()
+    mut bound_params := Vector {} as Vector<str>
+    defer bound_params.Free()
     repeat at.ChildCount(a, invocation) in i2:
         aid := at.Child(a, invocation, i2)
         an := at.Get(a, aid)
         if an.kind == at.AST_LAYOUT_ATTR:
             if lo_bub_is_handler(an.name):
-                ev_names.Push(lo_bub_event(an.name))
-                ev_fns.Push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
-            else is_content_word(an.name):
-                txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
-                copy_span(a, txt, aid)
-                at.SetName(a, txt, "content")
-                sub := subst_value(a, an.a, caller)
-                mut tn := at.Get(a, txt)
-                tn.a = sub
-                at.Put(a, txt, tn)
-                fr.content.Push(txt)
-                got_content = true
-                got_content_attr = true
-            else:
-                sub_val := lo_bub_value(ex, a, subst_value(a, an.a, caller))
-                if not comp_has_param(a, comp_def, an.name):
+                ev := lo_bub_event(an.name)
+                mut dup_ev := false
+                repeat ev_names.Len() in ei:
+                    if lp.IdentEqual(ev_names.Get(ei), ev):
+                        dup_ev = true
+                    end
+                end
+                if dup_ev:
                     lg.Log(
                         ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                            i18.Tr("component '%s' has no parameter '%s'"), co.ArgStr(comp_name), co.ArgStr(an.name)
+                            i18.Tr("component '%s' receives handler '%s' more than once"), co.ArgStr(comp_name), co.ArgStr(an.name)
                         )
                     )
                     ex.errors++
                 else:
-                    check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
-                    frame_set(fr, an.name, sub_val)
+                    ev_names.Push(ev)
+                    ev_fns.Push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
+                end
+            else is_content_word(an.name):
+                if got_content_attr:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                            i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"), co.ArgStr(comp_name)
+                        )
+                    )
+                    ex.errors++
+                else:
+                    txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
+                    copy_span(a, txt, aid)
+                    at.SetName(a, txt, "content")
+                    sub := subst_value(a, an.a, caller)
+                    mut tn := at.Get(a, txt)
+                    tn.a = sub
+                    at.Put(a, txt, tn)
+                    fr.content.Push(txt)
+                    got_content = true
+                    got_content_attr = true
+                end
+            else:
+                mut dup_param := false
+                repeat bound_params.Len() in bi:
+                    if str.Equals(bound_params.Get(bi), an.name):
+                        dup_param = true
+                    end
+                end
+                if dup_param:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("component '%s' parameter '%s' is provided more than once"), co.ArgStr(comp_name), co.ArgStr(an.name)
+                        )
+                    )
+                    ex.errors++
+                else:
+                    bound_params.Push(an.name)
+                    sub_val := lo_bub_value(ex, a, subst_value(a, an.a, caller))
+                    if not comp_has_param(a, comp_def, an.name):
+                        lg.Log(
+                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                                i18.Tr("component '%s' has no parameter '%s'"), co.ArgStr(comp_name), co.ArgStr(an.name)
+                            )
+                        )
+                        ex.errors++
+                    else:
+                        check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
+                        frame_set(fr, an.name, sub_val)
+                    end
                 end
             end
         else an.kind == at.AST_LAYOUT_ELEMENT:
@@ -818,6 +861,15 @@ func expand_component(
             end
             fr.content = cvec
             if fr.content.Len() > before:
+                got_content = true
+                got_content_children = true
+            end
+        else an.kind == at.AST_IF or an.kind == at.AST_EACH:
+            before2 := fr.content.Len()
+            mut cvec2 := fr.content
+            expand_item(ex, a, cvec2, aid, caller, dir, depth)
+            fr.content = cvec2
+            if fr.content.Len() > before2:
                 got_content = true
                 got_content_children = true
             end

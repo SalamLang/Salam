@@ -196,20 +196,29 @@ pub func Generate(
             continue
         end
         v := val_str(a, item.a)
+        dyn := str.IndexOf(v, char_from_code(2)) >= 0
         if str.Equals(item.name, "title"):
             cx.title = v
         else str.Equals(item.name, "lang"):
-            l := sm.LayoutDynValue("lang", i18.LayoutValue(v))
-            if str.Len(l) > 0:
-                cx.lang = l
+            if dyn:
+                cx.lang = v
+            else:
+                l := sm.LayoutDynValue("lang", i18.LayoutValue(v))
+                if str.Len(l) > 0:
+                    cx.lang = l
+                end
             end
         else str.Equals(item.name, "dir"):
-            d := sm.LayoutDynValue("dir", i18.LayoutValue(v))
-            if str.Len(d) > 0:
-                cx.dir = d
+            if dyn:
+                cx.dir = v
+            else:
+                d := sm.LayoutDynValue("dir", i18.LayoutValue(v))
+                if str.Len(d) > 0:
+                    cx.dir = d
+                end
             end
         else str.Equals(item.name, "repeat"):
-            if item.a != 0:
+            if not dyn and item.a != 0:
                 av := at.Get(a, item.a)
                 if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_INT:
                     r := av.value_int as i64
@@ -230,24 +239,57 @@ pub func Generate(
         mut rla := LoAttrs {}
         defer lo_free_attrs(rla)
         lo_collect_attrs(cx, a, layout_block, root_ei, "body", rla)
-        if str.Len(rla.css) > 0:
-            emit_rule(cx, css_rule(cx.compact, "body", rla.css))
+        mut rklass := ""
+        r_has := lo_class_for(cx, rla, rklass)
+        if r_has and (str.Len(rla.css) > 0 or str.Len(rla.hover) > 0 or str.Len(rla.focus) > 0 or str.Len(rla.focus_within) > 0 or str.Len(rla.active) > 0 or str.Len(rla.disabled) > 0 or str.Len(rla.checked) > 0 or str.Len(rla.invalid) > 0 or str.Len(rla.placeholder) > 0 or str.Len(rla.selection) > 0 or str.Len(rla.before) > 0 or str.Len(rla.after) > 0):
+            lo_emit_rules(cx, rla, rklass)
+        else:
+            if str.Len(rla.css) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body", rla.css))
+            end
+            if str.Len(rla.hover) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:hover", rla.hover))
+            end
+            if str.Len(rla.focus) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:focus", rla.focus))
+            end
+            if str.Len(rla.focus_within) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:focus-within", rla.focus_within))
+            end
+            if str.Len(rla.active) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:active", rla.active))
+            end
+            if str.Len(rla.disabled) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:disabled", rla.disabled))
+            end
+            if str.Len(rla.checked) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:checked", rla.checked))
+            end
+            if str.Len(rla.invalid) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body:invalid", rla.invalid))
+            end
+            if str.Len(rla.placeholder) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body::placeholder", rla.placeholder))
+            end
+            if str.Len(rla.selection) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body::selection", rla.selection))
+            end
+            if str.Len(rla.before) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body::before", rla.before))
+            end
+            if str.Len(rla.after) > 0:
+                emit_rule(cx, css_rule(cx.compact, "body::after", rla.after))
+            end
         end
-        if str.Len(rla.hover) > 0:
-            emit_rule(cx, css_rule(cx.compact, "body:hover", rla.hover))
+        classattr := ""
+        if r_has and rla.has_dynclass:
+            classattr = ` class="` + rklass + " " + rla.dynclass + `"`
+        else r_has:
+            classattr = ` class="` + rklass + `"`
+        else rla.has_dynclass:
+            classattr = ` class="` + rla.dynclass + `"`
         end
-        if str.Len(rla.focus) > 0:
-            emit_rule(cx, css_rule(cx.compact, "body:focus", rla.focus))
-        end
-        if str.Len(rla.active) > 0:
-            emit_rule(cx, css_rule(cx.compact, "body:active", rla.active))
-        end
-        if str.Len(rla.before) > 0:
-            emit_rule(cx, css_rule(cx.compact, "body::before", rla.before))
-        end
-        if str.Len(rla.after) > 0:
-            emit_rule(cx, css_rule(cx.compact, "body::after", rla.after))
-        end
+        cx.body_attr = rla.first + classattr + rla.rest
     end
 
     mut r0 := 0 as i64
@@ -282,6 +324,7 @@ pub func Generate(
     r.title = cx.title
     r.lang = cx.lang
     r.dir = cx.dir
+    r.body_attr = cx.body_attr
     lg.Log(
         log, lg.PH_CODEGEN, lg.LOG_INFO, co.Format3(
             "layout: %zu bytes HTML, %zu bytes CSS, %zu bytes JS", co.ArgUint(str.Len(r.html) as u64), co.ArgUint(str.Len(r.css) as u64), co.ArgUint(str.Len(r.js) as u64)
@@ -318,7 +361,9 @@ pub func Document(
             d += css_href
             d += `">`
         end
-        d += "</head><body>"
+        d += "</head><body"
+        d += r.body_attr
+        d += ">"
         d += r.html
         if inl:
             if str.Len(r.js) > 0:
@@ -359,7 +404,9 @@ pub func Document(
             d += css_href
             d += "\">\n"
         end
-        d += "</head>\n<body>\n"
+        d += "</head>\n<body"
+        d += r.body_attr
+        d += ">\n"
         d += r.html
         if inl:
             if str.Len(r.js) > 0:

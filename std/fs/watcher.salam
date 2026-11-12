@@ -1,0 +1,174 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "watcher"
+@fa "ناظر"
+package watcher
+
+import os
+import fs
+import mem
+import str
+import filepath
+import time
+import collections
+
+// Polling-based directory watcher abstraction (best-effort, cross-platform).
+// Not an OS-native event watcher; call Poll() periodically to detect changes.
+
+@en "EventKind"
+@fa "نوع رویداد"
+pub enum EventKind:
+    Created
+    Modified
+    Deleted
+end
+
+@en "Event"
+@fa "رویداد"
+pub struct Event:
+    @en "kind"
+    @fa "نوع"
+    pub kind: EventKind = EventKind.Modified
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+end
+
+@en "Watcher"
+@fa "ناظر"
+pub struct Watcher:
+    @en "root"
+    @fa "ریشه"
+    pub root: str = ""
+    @en "recursive"
+    @fa "بازگشتی"
+    pub recursive: bool = true
+    @en "fingerprints"
+    @fa "اثر انگشت"
+    pub fingerprints: collections.OrderedMap = collections.OrderedMap {}
+    @en "initialized"
+    @fa "آماده"
+    pub initialized: bool = false
+end
+
+func _fingerprint(path: str): str:
+    // Best-effort: size + mod time; falls back to size when mod time unavailable.
+    sz := os.FileSize(path)
+    mt := fs.ModTime(path)
+    mut sb := str.NewBuilder()
+    s1 := str.FromInt(sz)
+    s2 := str.FromInt(mt)
+    str.BufAppend(sb, s1)
+    str.BufAppendChar(sb, 58)
+    str.BufAppend(sb, s2)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(s1 as void*)
+    mem.Free(s2 as void*)
+    ret out
+end
+
+func _scan_dir(root: str, recursive: bool, out &: collections.OrderedMap):
+    if root.Len() == 0 or not os.Exists(root): ret end
+    entries := os.ListDir(root)
+    defer entries.Free()
+    repeat entries.Len() in i:
+        name := entries.Get(i)
+        p := filepath.Join(root, name)
+        fp := _fingerprint(p)
+        out.Set(p, fp)
+        mem.Free(fp as void*)
+        if os.IsDir(p) and recursive:
+            _scan_dir(p, recursive, out)
+        end
+        mem.Free(p as void*)
+    end
+end
+
+@en "New"
+@fa "جدید"
+pub func New(root: str, recursive: bool = true): Watcher:
+    ret Watcher { root = str.Clone(root), recursive = recursive, fingerprints = collections.OrderedMap {}, initialized = false }
+end
+
+@en "Snapshot"
+@fa "تصویر فوری"
+pub func Snapshot(w &: Watcher):
+    w.fingerprints.Free()
+    w.fingerprints = collections.OrderedMap {}
+    _scan_dir(w.root, w.recursive, w.fingerprints)
+    w.initialized = true
+end
+
+@en "Poll"
+@fa "بررسی"
+pub func Poll(w &: Watcher): Vector<Event>:
+    mut out := Vector {} as Vector<Event>
+    if not w.initialized:
+        Snapshot(w)
+        ret out
+    end
+
+    mut now := collections.OrderedMap {}
+    _scan_dir(w.root, w.recursive, now)
+
+    repeat now.Len() in i:
+        p := now.key_at(i)
+        v := now.val_at(i)
+        if not w.fingerprints.Has(p):
+            out.Push(Event { kind = EventKind.Created, path = str.Clone(p) })
+        else:
+            old := w.fingerprints.Get(p)
+            if old != v:
+                out.Push(Event { kind = EventKind.Modified, path = str.Clone(p) })
+            end
+        end
+    end
+
+    repeat w.fingerprints.Len() in i:
+        p := w.fingerprints.key_at(i)
+        if not now.Has(p):
+            out.Push(Event { kind = EventKind.Deleted, path = str.Clone(p) })
+        end
+    end
+
+    w.fingerprints.Free()
+    w.fingerprints = now
+    ret out
+end
+
+@en "PollSleepMs"
+@fa "بررسی با تاخیر"
+pub func PollSleepMs(w &: Watcher, ms: int): Vector<Event>:
+    time.Sleep(ms as i64)
+    ret Poll(w)
+end
+
+@en "Reset"
+@fa "بازنشانی"
+pub func Reset(w &: Watcher):
+    Snapshot(w)
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(w &: Watcher):
+    w.fingerprints.Free()
+    if w.root.Len() > 0:
+        mem.Free(w.root as void*)
+    end
+    w.root = ""
+    w.initialized = false
+end

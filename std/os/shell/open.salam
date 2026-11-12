@@ -1,0 +1,182 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "open"
+@fa "باز کردن"
+package open
+
+import os
+import mem
+import str
+import filepath
+import os.shell
+
+// Cross-platform helpers to open/reveal files and URLs, and best-effort trash/recycle.
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _quote_cmd(s: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 34)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "\"":
+            str.BufAppend(sb, "\"\"")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 34)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "OpenPath"
+@fa "باز کردن مسیر"
+pub func OpenPath(path: str): bool:
+    if path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        q := _quote_cmd(path)
+        cmd := "cmd /c start \"\" ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else SALAM_OS_MAC:
+        q := _quote_sh(path)
+        cmd := "open ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        q := _quote_sh(path)
+        cmd := "xdg-open ".Concat(q).Concat(" >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    end
+end
+
+@en "OpenURL"
+@fa "باز کردن نشانی"
+pub func OpenURL(url: str): bool:
+    if url.Len() == 0: ret false end
+    ret OpenPath(url)
+end
+
+@en "OpenFolder"
+@fa "باز کردن پوشه"
+pub func OpenFolder(path: str): bool:
+    if path.Len() == 0: ret false end
+    mut target := path
+    mut own := false
+    if not os.IsDir(path):
+        target = filepath.Dir(path)
+        own = true
+    end
+    ok := OpenPath(target)
+    if own:
+        mem.Free(target as void*)
+    end
+    ret ok
+end
+
+@en "Reveal"
+@fa "نمایش در مدیر پرونده"
+pub func Reveal(path: str): bool:
+    if path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        q := _quote_cmd(path)
+        cmd := "explorer /select,".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        _r := shell.System(cmd)
+        ret true
+    else SALAM_OS_MAC:
+        q := _quote_sh(path)
+        cmd := "open -R ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        // Best-effort: open containing folder (selection not standardized across Linux FMs).
+        ret OpenFolder(path)
+    end
+end
+
+@en "ShowInFolder"
+@fa "نمایش در پوشه"
+pub func ShowInFolder(path: str): bool:
+    ret Reveal(path)
+end
+
+@en "Trash"
+@fa "انتقال به سطل زباله"
+pub func Trash(path: str): bool:
+    if path.Len() == 0 or not os.Exists(path): ret false end
+    if SALAM_OS_WINDOWS:
+        // Best-effort: PowerShell recycle bin (may prompt depending on host policy).
+        q := _quote_cmd(path)
+        cmd := "powershell -NoProfile -Command \"Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(".Concat(q).Concat(", 'OnlyErrorDialogs', 'SendToRecycleBin')\"")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else SALAM_OS_MAC:
+        // osascript move to trash
+        mut esc := str.Replace(path, "\\", "\\\\")
+        defer mem.Free(esc as void*)
+        mut esc2 := str.Replace(esc, "\"", "\\\"")
+        defer mem.Free(esc2 as void*)
+        cmd := "osascript -e 'tell application \"Finder\" to delete POSIX file \"".Concat(esc2).Concat("\"' >/dev/null 2>&1")
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        // Prefer gio if available, fallback to trash-put, otherwise fail (no silent hard-delete).
+        q := _quote_sh(path)
+        cmd := "gio trash ".Concat(q).Concat(" >/dev/null 2>&1 || trash-put ").Concat(q).Concat(" >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    end
+end
+
+@en "MoveToTrash"
+@fa "انتقال به زباله‌دان"
+pub func MoveToTrash(path: str): bool:
+    ret Trash(path)
+end

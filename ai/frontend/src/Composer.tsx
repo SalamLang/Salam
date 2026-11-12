@@ -43,14 +43,28 @@ function pasteStamp(): string {
 }
 
 function clipboardFiles(data: DataTransfer): File[] {
-  const out: File[] = Array.from(data.files ?? []);
-  if (out.length > 0) return out;
+  const out: File[] = [];
+  const seen = new Set<string>();
+  const push = (file: File | null) => {
+    if (!file) return;
+    const key = `${file.name}|${file.size}|${file.type}|${file.lastModified}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(file);
+  };
+  for (const file of Array.from(data.files ?? [])) push(file);
   for (const item of Array.from(data.items ?? [])) {
     if (item.kind !== "file") continue;
-    const file = item.getAsFile();
-    if (file) out.push(file);
+    push(item.getAsFile());
   }
   return out;
+}
+
+function namedClipboardFile(file: File, i: number): File {
+  if (file.name) return file;
+  const mime = (file.type || "image/png").toLowerCase();
+  const ext = mime === "image/jpeg" ? "jpg" : mime === "image/gif" ? "gif" : mime === "image/webp" ? "webp" : "png";
+  return new File([file], `pasted-image-${pasteStamp()}-${i}.${ext}`, { type: file.type || "image/png", lastModified: Date.now() });
 }
 
 export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, autoFocus, bar, placeholder, note, draft, onDraftUsed, workspace }: Props) {
@@ -266,8 +280,26 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
     const onClipboard = clipboardFiles(e.clipboardData);
     if (onClipboard.length > 0) {
       e.preventDefault();
-      add(onClipboard);
+      add(onClipboard.map((f, i) => namedClipboardFile(f, i + 1)));
       return;
+    }
+    // Fallback for webviews where pasted images aren't exposed on the paste event:
+    // read image items from the async Clipboard API on the same user gesture.
+    if (navigator.clipboard?.read) {
+      void navigator.clipboard.read().then(async (items) => {
+        const files: File[] = [];
+        let idx = 0;
+        for (const item of items) {
+          const type = item.types.find((t) => t.startsWith("image/"));
+          if (!type) continue;
+          try {
+            const blob = await item.getType(type);
+            idx += 1;
+            files.push(namedClipboardFile(new File([blob], "", { type }), idx));
+          } catch {}
+        }
+        if (files.length > 0) add(files);
+      }).catch(() => {});
     }
     const pasted = e.clipboardData.getData("text/plain");
     if (!pasted) return;

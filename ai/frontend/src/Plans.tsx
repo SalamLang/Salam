@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type PlanTier, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
 import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
 import { getCampaignFields } from "./campaign";
 import { agent, isDesktop } from "./desktop";
 import { isFa, t } from "./i18n";
+import { Select } from "./Select";
 
 const GATEWAY_NAMES: Record<Gateway, string> = {
   zarinpal: t("زرین‌پال", "Zarinpal"),
@@ -17,7 +18,6 @@ const PAYMENT_WORDS: Record<Payment["status"], string> = {
   paid: t("پرداخت شده", "Paid"),
   failed: t("ناموفق", "Failed"),
   canceled: t("لغو شده", "Canceled"),
-  reversed: t("برگشت‌خورده", "Reversed"),
 };
 
 const RESULTS: Record<string, { tone: "ok" | "warn"; text: string }> = {
@@ -80,6 +80,34 @@ function limit(n: number, unit: string): string {
   return n === 0 ? t("نامحدود", "Unlimited") : `${fmtNum(n)} ${unit}`;
 }
 
+function tierOf(p: Plan, parallel: number): PlanTier | undefined {
+  return p.tiers?.find((x) => x.parallel === parallel) ?? p.tiers?.[0];
+}
+
+function effectivePlan(p: Plan, tier?: PlanTier): Plan {
+  if (!tier) return p;
+  return {
+    ...p,
+    parallel: tier.parallel,
+    price: tier.price,
+    usd: tier.usd,
+    chat_5h: tier.chat_5h,
+    chat_daily: tier.chat_daily,
+    chat_weekly: tier.chat_weekly,
+    api_5h: tier.api_5h,
+    api_daily: tier.api_daily,
+    api_weekly: tier.api_weekly,
+    max_input: tier.max_input,
+    max_output: tier.max_output,
+  };
+}
+
+function salePrice(p: Plan, tier?: PlanTier): number {
+  const base = tier ? tier.price : p.price;
+  const off = tier?.off ?? 0;
+  return Math.max(0, base - off);
+}
+
 function features(p: Plan): string[] {
   return [
     p.salam_only ? t("فقط کد زبان سلام می‌نویسد", "Writes Salam code only") : t("هر زبان برنامه‌نویسی و هر کاری", "Any programming language and any task"),
@@ -89,7 +117,7 @@ function features(p: Plan): string[] {
     t(`کلید API: ${limit(p.api_daily, "درخواست در روز")}`, `API key: ${limit(p.api_daily, "requests per day")}`),
     ...(p.api_weekly > 0 ? [t(`کلید API در هفته: ${fmtNum(p.api_weekly)} درخواست`, `API key per week: ${fmtNum(p.api_weekly)} requests`)] : []),
     ...(p.api_5h > 0 ? [t(`کلید API در ۵ ساعت: ${fmtNum(p.api_5h)} درخواست`, `API key per 5 hours: ${fmtNum(p.api_5h)} requests`)] : []),
-    t(`درخواست هم‌زمان: ${limit(p.parallel, "درخواست")}`, `Parallel requests: ${limit(p.parallel, "at a time")}`),
+    t(`نشست هم‌زمان: ${fmtNum(p.parallel)}`, `Concurrent sessions: ${fmtNum(p.parallel)}`),
     p.hours > 0 ? t(`${fmtNum(p.hours)} ساعته`, `${fmtNum(p.hours)} hours`) : p.days === 0 ? t("بدون انقضا", "No expiry") : t(`${fmtNum(p.days)} روزه`, `${fmtNum(p.days)} days`),
   ];
 }
@@ -107,7 +135,8 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeStatus, setCodeStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
   const [codeError, setCodeError] = useState("");
-  const [discounts, setDiscounts] = useState<Record<PlanId, { charge: number; discount: number } | "invalid" | undefined>>({});
+  const [discounts, setDiscounts] = useState<Record<string, { charge: number; discount: number } | "invalid" | undefined>>({});
+  const [selectedTier, setSelectedTier] = useState<Record<string, number>>({});
   const codeReq = useRef(0);
 
   const load = useCallback(async () => {
@@ -167,23 +196,25 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
     setCodeError("");
     const timer = window.setTimeout(() => {
       void Promise.all(
-        buyable.map((p) =>
-          api
-            .previewDiscount(p.id, trimmed)
-            .then((r) => ({ id: p.id, ok: true as const, charge: r.charge, discount: r.discount }))
-            .catch((e) => ({ id: p.id, ok: false as const, message: errText(e, t("کد تخفیف نامعتبر است.", "Invalid discount code.")) })),
-        ),
+        buyable.map((p) => {
+          const par = p.tiers && p.tiers.length > 0 ? (selectedTier[p.id] ?? p.tiers[0].parallel) : undefined;
+          const key = par !== undefined ? `${p.id}:${par}` : p.id;
+          return api
+            .previewDiscount(p.id, trimmed, par)
+            .then((r) => ({ key, ok: true as const, charge: r.charge, discount: r.discount }))
+            .catch((e) => ({ key, ok: false as const, message: errText(e, t("کد تخفیف نامعتبر است.", "Invalid discount code.")) }));
+        }),
       ).then((results) => {
         if (codeReq.current !== req) return;
-        const next: Record<PlanId, { charge: number; discount: number } | "invalid" | undefined> = {};
+        const next: Record<string, { charge: number; discount: number } | "invalid" | undefined> = {};
         let firstError = "";
         let anyValid = false;
         for (const r of results) {
           if (r.ok) {
-            next[r.id] = { charge: r.charge, discount: r.discount };
+            next[r.key] = { charge: r.charge, discount: r.discount };
             anyValid = true;
           } else {
-            next[r.id] = "invalid";
+            next[r.key] = "invalid";
             if (!firstError) firstError = r.message;
           }
         }
@@ -193,14 +224,14 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
       });
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [code, plans, active]);
+  }, [code, plans, active, selectedTier]);
 
-  const buy = async (plan: Plan) => {
+  const buy = async (plan: Plan, parallel?: number) => {
     if (gateways.length === 0) return;
-    setBusy(plan.id);
+    setBusy(parallel !== undefined ? `${plan.id}:${parallel}` : plan.id);
     try {
       const trimmed = code.trim();
-      const r = await api.checkout(plan.id, gateway, trimmed || undefined, getCampaignFields());
+      const r = await api.checkout(plan.id, gateway, trimmed || undefined, getCampaignFields(), parallel);
       if (isDesktop) {
         await agent.payUrl(r.url);
         setBusy(null);
@@ -313,13 +344,20 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
       ) : (
         <div className="plan-grid">
           {plans?.map((p) => {
+            const tier = p.tiers && p.tiers.length > 0 ? tierOf(p, selectedTier[p.id] ?? p.tiers[0].parallel) : undefined;
+            const ep = effectivePlan(p, tier);
             const mine = active?.id === p.id;
-            const featured = p.price > 0 && p.chat_daily === 0 && p.api_daily === 0 && plans.find((q) => q.price > 0 && q.chat_daily === 0 && q.api_daily === 0)?.id === p.id;
-            const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (p.price % 1000000 === 0 ? fmtNum(p.price / 1000000) : fmtNum(p.price)) : `$${fmtNum(p.usd)}`;
-            const unit = p.price === 0 ? "" : isFa ? (p.price % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
-            const period = p.price === 0 ? t("برای همیشه", "forever") : p.hours > 0 ? t(`فقط ${fmtNum(p.hours)} ساعت از لحظه‌ی خرید`, `${fmtNum(p.hours)} hours from the moment you buy`) : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);
-            const discount = discounts[p.id];
+            const featured = p.id === "unlimited" || (p.price > 0 && ep.chat_daily === 0 && ep.api_daily === 0 && p.id !== "trial");
+            const base = tier ? tier.price : p.price;
+            const off = tier?.off ?? 0;
+            const sale = salePrice(p, tier);
+            const discountKey = tier ? `${p.id}:${tier.parallel}` : p.id;
+            const discount = discounts[discountKey];
             const applied = discount && discount !== "invalid" ? discount : null;
+            const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (sale % 1000000 === 0 ? fmtNum(sale / 1000000) : fmtNum(sale)) : `$${fmtNum(ep.usd)}`;
+            const unit = p.price === 0 ? "" : isFa ? (sale % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
+            const period = p.price === 0 ? t("برای همیشه", "forever") : p.hours > 0 ? t(`فقط ${fmtNum(p.hours)} ساعت از لحظه‌ی خرید`, `${fmtNum(p.hours)} hours from the moment you buy`) : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز`, `${fmtNum(p.days)} days`);
+            const busyKey = tier ? `${p.id}:${tier.parallel}` : p.id;
             return (
               <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
                 {featured && <span className="plan-ribbon">{t("بیشترین امکانات", "Most capable")}</span>}
@@ -329,11 +367,28 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                   </span>
                   <h3>{planName(p.id, p.name)}</h3>
                 </header>
+                {p.tiers && p.tiers.length > 0 && (
+                  <div className="plan-tier-picker">
+                    <label>{t("نشست هم‌زمان", "Concurrent sessions")}</label>
+                    <Select
+                      value={String(tier?.parallel ?? p.tiers[0].parallel)}
+                      ariaLabel={t("تعداد نشست هم‌زمان", "Number of concurrent sessions")}
+                      options={p.tiers.map((opt) => ({ value: String(opt.parallel), label: t(`${fmtNum(opt.parallel)} نشست هم‌زمان`, `${fmtNum(opt.parallel)} concurrent sessions`) }))}
+                      onChange={(v) => setSelectedTier((s) => ({ ...s, [p.id]: Number(v) }))}
+                    />
+                  </div>
+                )}
                 <div className="plan-priceblock">
                   {applied ? (
                     <>
-                      <s className="plan-price-old">{toman(p.price)}</s>
+                      <s className="plan-price-old">{toman(sale)}</s>
                       <span className="plan-price">{toman(applied.charge)}</span>
+                    </>
+                  ) : off > 0 ? (
+                    <>
+                      <s className="plan-price-old">{toman(base)}</s>
+                      <span className="plan-price">{toman(sale)}</span>
+                      <span className="plan-off">{t(`${fmtNum(off)} تومان تخفیف`, `${fmtNum(off)} toman off`)}</span>
                     </>
                   ) : (
                     <>
@@ -345,7 +400,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                 <p className="plan-period">{period}</p>
                 {p.note && <p className="plan-note">{planNote(p.id, p.note)}</p>}
                 <ul className="plan-features">
-                  {features(p).map((f) => (
+                  {features(ep).map((f) => (
                     <li key={f}>
                       <span className="plan-tick" aria-hidden="true">
                         <IconCheck width={13} height={13} />
@@ -361,9 +416,9 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                 ) : p.id === "free" ? (
                   <span className="plan-state">{t("برای همه فعال است", "Active for everyone")}</span>
                 ) : (
-                  <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
-                    {busy === p.id ? <span className="spinner" /> : null}
-                    {busy === p.id ? t("در حال انتقال...", "Redirecting...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
+                  <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p, tier?.parallel)}>
+                    {busy === busyKey ? <span className="spinner" /> : null}
+                    {busy === busyKey ? t("در حال انتقال...", "Redirecting...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
                   </button>
                 )}
               </section>

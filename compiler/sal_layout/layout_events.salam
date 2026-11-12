@@ -28,6 +28,56 @@ func lo_ev_fresh_name(): str:
     ret "__sl_ev_" + co.U64Toa(g_lo_ev_seq as u64)
 end
 
+func lo_ev_new_param(a &: at.Ast, name: str, from: int): int:
+    id := at.NewNode(a, at.AST_PARAM)
+    copy_span(a, id, from)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func lo_ev_new_block(a &: at.Ast, items: Vector<int>, from: int): int:
+    blk := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, blk, from)
+    mut bn := at.Get(a, blk)
+    mut old := bn.list
+    bn.list = items
+    at.Put(a, blk, bn)
+    old.Free()
+    ret blk
+end
+
+func lo_ev_new_expr_stmt(a &: at.Ast, expr: int, from: int): int:
+    sid := at.NewNode(a, at.AST_EXPR_STMT)
+    copy_span(a, sid, from)
+    mut sn := at.Get(a, sid)
+    sn.a = expr
+    at.Put(a, sid, sn)
+    ret sid
+end
+
+func lo_ev_hoist_expr(a &: at.Ast, expr: int, ids &: Vector<int>, want_event: bool): str:
+    fid := at.NewNode(a, at.AST_FUNC_DEF)
+    copy_span(a, fid, expr)
+    name := lo_ev_fresh_name()
+    mut params := Vector {} as Vector<int>
+    if want_event:
+        params.Push(lo_ev_new_param(a, "event", expr))
+    end
+    mut items := Vector {} as Vector<int>
+    items.Push(lo_ev_new_expr_stmt(a, at.Clone(a, expr), expr))
+    body := lo_ev_new_block(a, items, expr)
+    mut fn := at.Get(a, fid)
+    fn.name = name
+    fn.list = params
+    fn.a = body
+    at.Put(a, fid, fn)
+    ids.Push(fid)
+    if want_event:
+        ret lo_ev_call_text(name, 1)
+    end
+    ret lo_ev_call_text(name, 0)
+end
+
 func lo_ev_call_text(name: str, nparams: int): str:
     if nparams <= 0:
         ret name + "()"
@@ -45,6 +95,32 @@ func lo_ev_is_simple_member(a &: at.Ast, nid: int): bool:
     end
     if n.kind == at.AST_MEMBER and str.Len(n.name) > 0:
         ret lo_ev_is_simple_member(a, n.a)
+    end
+    ret false
+end
+
+func lo_ev_is_simple_expr(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER or n.kind == at.AST_LITERAL:
+        ret true
+    end
+    if n.kind == at.AST_MEMBER and str.Len(n.name) > 0:
+        ret lo_ev_is_simple_expr(a, n.a)
+    end
+    if n.kind == at.AST_CALL:
+        if not lo_ev_is_simple_expr(a, n.a):
+            ret false
+        end
+        mut ok := true
+        repeat n.list.Len() in i:
+            if not lo_ev_is_simple_expr(a, n.list.Get(i)):
+                ok = false
+            end
+        end
+        ret ok
     end
     ret false
 end
@@ -160,24 +236,36 @@ func lo_ev_rewrite_attr(a &: at.Ast, prog: int, attr: int, ei: int, ids &: Vecto
         end
         call_text = lo_ev_call_text(expr, 0)
         attr_text = call_text
-    else v.kind == at.AST_CALL and lo_ev_is_simple_member(a, v.a) and v.list.Len() == 0:
-        expr := lo_ev_expr_text(a, v.a)
-        if str.Len(expr) == 0:
-            ret
-        end
-        if at.KindOf(a, v.a) == at.AST_IDENTIFIER:
-            np2 := lo_ev_prog_func_params(a, prog, expr)
-            if np2 < 0:
-                np2 = 0
+    else v.kind == at.AST_CALL:
+        if lo_ev_is_simple_member(a, v.a) and v.list.Len() == 0:
+            expr := lo_ev_expr_text(a, v.a)
+            if str.Len(expr) == 0:
+                ret
             end
-            call_text = lo_ev_call_text(expr, np2)
-            attr_text = lo_ev_attr_text(expr, np2)
+            if at.KindOf(a, v.a) == at.AST_IDENTIFIER:
+                np2 := lo_ev_prog_func_params(a, prog, expr)
+                if np2 < 0:
+                    np2 = 0
+                end
+                call_text = lo_ev_call_text(expr, np2)
+                attr_text = lo_ev_attr_text(expr, np2)
+            else:
+                call_text = expr + "()"
+                attr_text = call_text
+            end
+        else if lo_ev_is_simple_expr(a, v.a):
+            call_text = lo_ev_hoist_expr(a, an.a, ids, true)
+            attr_text = call_text
         else:
-            call_text = expr + "()"
+            call_text = lo_ev_hoist_expr(a, an.a, ids, true)
             attr_text = call_text
         end
+    else v.kind == at.AST_BINARY or v.kind == at.AST_UNARY or v.kind == at.AST_TERNARY or v.kind == at.AST_INDEX or v.kind == at.AST_PAREN or v.kind == at.AST_LITERAL:
+        call_text = lo_ev_hoist_expr(a, an.a, ids, true)
+        attr_text = call_text
     else:
-        ret
+        call_text = lo_ev_hoist_expr(a, an.a, ids, true)
+        attr_text = call_text
     end
     names.Push(call_text)
     mut n2 := at.Get(a, attr)

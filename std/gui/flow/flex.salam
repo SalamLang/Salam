@@ -41,6 +41,7 @@ struct FItem:
     pub al: int = 0
     pub pm: f64 = 0.0
     pub pc: f64 = 0.0
+    pub amin: bool = false
 end
 
 struct FLine:
@@ -190,6 +191,26 @@ func _resolve_flex(items &: Vector<FItem>, a: int, b: int, main: f64, gap: f64):
             end
         end
     end
+end
+
+func _auto_min(t &: Eng, it &: FItem, row: bool, mref: f64, inner_w: f64):
+    kn := t.nodes.ref(it.id)
+    mut cm := 0.0
+    mut spec := _UNK
+    if row:
+        spec = _size_def(kn.st.width, mref, it.ms + it.me)
+        cm = _intrinsic(t, it.id, true, inner_w)
+    else:
+        spec = _size_def(kn.st.height, mref, it.ms + it.me)
+        cm = _content_h(t, it.id, it.cross, inner_w)
+    end
+    if spec >= 0.0:
+        cm = _min(cm, spec)
+    end
+    it.minm = _max(it.minm, _min(cm, it.maxm))
+    it.maxm = _max(it.maxm, it.minm)
+    it.hyp = _clamp(it.base, it.minm, it.maxm)
+    it.amin = false
 end
 
 func _distribute(mode: int, free: f64, cnt: int, gap: f64): (f64, f64):
@@ -357,6 +378,7 @@ func _flex(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, f
         basis := kn2.st.basis
         mut b := _size_def(basis, mref, it.ms + it.me)
         mut bk := basis.kind
+        mut from_def := true
         if b < 0.0 and bk == LEN_AUTO:
             if row:
                 b = _size_def(kn2.st.width, mref, it.ms + it.me)
@@ -367,6 +389,7 @@ func _flex(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, f
             end
         end
         if b < 0.0:
+            from_def = false
             if row:
                 mut a := _AV_MAX
                 if bk == LEN_MIN_CONTENT:
@@ -386,20 +409,11 @@ func _flex(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, f
             auto_min = kn3.st.min_width.kind == LEN_AUTO and kn3.st.overflow_x == OVERFLOW_VISIBLE
         end
         if auto_min:
-            mut cm := 0.0
-            mut spec := _UNK
-            if row:
-                cm = _intrinsic(t, it.id, true, inner_w)
-                spec = _size_def(kn3.st.width, mref, it.ms + it.me)
+            if from_def:
+                _auto_min(t, items.ref(i), row, mref, inner_w)
             else:
-                cm = _compute(t, it.id, it.cross, _UNK, it.cross, inner_w, inner_h, false).h
-                spec = _size_def(kn3.st.height, mref, it.ms + it.me)
+                it.amin = true
             end
-            if spec >= 0.0:
-                cm = _min(cm, spec)
-            end
-            it.minm = _max(it.minm, _min(cm, it.maxm))
-            it.maxm = _max(it.maxm, it.minm)
         end
         it.hyp = _clamp(b, it.minm, it.maxm)
     end
@@ -453,6 +467,18 @@ func _flex(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, f
         main_size = _max(0.0, _clamp(big + pby, minh, maxh) - pby)
     end
     each ln in lines:
+        mut used := gap_main * ((ln.b - ln.a - 1) as f64)
+        repeat ln.b - ln.a in k:
+            it := items.get(ln.a + k)
+            used += it.hyp + it.ms + it.me
+        end
+        if used > main_size + _EPS:
+            repeat ln.b - ln.a in k:
+                if items.get(ln.a + k).amin:
+                    _auto_min(t, items.ref(ln.a + k), row, mref, inner_w)
+                end
+            end
+        end
         _resolve_flex(items, ln.a, ln.b, main_size, gap_main)
     end
     repeat items.len() in i:

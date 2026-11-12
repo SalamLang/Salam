@@ -304,7 +304,7 @@ func _intrinsic(t &: Eng, id: int, minmode: bool, pw0: f64): f64:
                 count++
             end
             gap := _gap(n.st.column_gap, _UNK)
-            if count > 1:
+            if count > 1 and lay != LAYOUT_FLOW:
                 sum += gap * ((count - 1) as f64)
             end
             if lay == LAYOUT_ROW:
@@ -490,6 +490,20 @@ func _compute(t &: Eng, id: int, kw0: f64, kh0: f64, aw0: f64, pw0: f64, ph0: f6
     ret out
 end
 
+func _content_h(t &: Eng, id: int, w: f64, pw: f64): f64:
+    n := t.nodes.ref(id)
+    if n.chk == w:
+        ret n.chv
+    end
+    _resolve_dir(t, id)
+    bx := _box(t, id, pw)
+    o := _run(t, id, w, _UNK, bx.pt + bx.pb, _INF, bx, false)
+    m := t.nodes.ref(id)
+    m.chk = w
+    m.chv = o.h
+    ret o.h
+end
+
 func _place(t &: Eng, id: int, kw: f64, kh: f64, aw: f64, pw: f64, ph: f64): Out:
     mut w := kw
     mut h := kh
@@ -587,25 +601,81 @@ func _out_of_flow(t &: Eng, id: int, kw: f64, kh: f64, bx: Box):
         end
         pos := kn.st.position
         if pos == POS_ABSOLUTE:
-            cw := _max(0.0, kw - bx.bl - bx.br)
-            ch := _max(0.0, kh - bx.bt - bx.bb)
-            _place_abs(t, k, id, cw, ch, bx, false)
-            kk := t.nodes.ref(k)
-            kk.x += bx.bl
-            kk.y += bx.bt
-            kk.in_fixed = false
+            _place_abs(t, k, id, kw, kh, bx, false)
         else pos == POS_FIXED:
-            _place_abs(t, k, id, _max(0.0, t.vw), _max(0.0, t.vh), Box {}, true)
-            kf := t.nodes.ref(k)
-            kf.in_fixed = true
+            _place_abs(t, k, id, kw, kh, bx, true)
         end
     end
 end
 
-func _place_abs(t &: Eng, k: int, parent: int, cw: f64, ch: f64, pbx: Box, fixed: bool):
+func _static_off(mode: int, free: f64): f64:
+    if mode == ALIGN_CENTER or mode == ALIGN_AROUND or mode == ALIGN_EVENLY:
+        ret free / 2.0
+    end
+    if mode == ALIGN_END:
+        ret free
+    end
+    ret 0.0
+end
+
+func _static_pos(t &: Eng, parent: int, kw: f64, kh: f64, pbx: Box, k: int, w: f64, h: f64, kb: Box): (f64, f64):
+    pn := t.nodes.ref(parent)
+    rtl := pn.rtl
+    iw := _max(0.0, kw - pbx.pl - pbx.pr)
+    ih := _max(0.0, kh - pbx.pt - pbx.pb)
+    lay := pn.st.layout
+    kn := t.nodes.ref(k)
+    mut al := kn.st.align_self
+    if al == ALIGN_AUTO:
+        al = pn.st.align
+    end
+    if al == ALIGN_STRETCH or al == ALIGN_BASELINE:
+        al = ALIGN_START
+    end
+    fx := iw - w - kb.ml - kb.mr
+    fy := ih - h - kb.mt - kb.mb
+    mut ox := 0.0
+    mut oy := 0.0
+    mut mirror_x := rtl
+    if lay == LAYOUT_ROW:
+        ox = _static_off(pn.st.justify, fx)
+        oy = _static_off(al, fy)
+        mirror_x = rtl != pn.st.reverse
+    else lay == LAYOUT_COLUMN:
+        ox = _static_off(al, fx)
+        oy = _static_off(pn.st.justify, fy)
+        if pn.st.reverse:
+            oy = fy - oy
+        end
+    else lay == LAYOUT_STACK:
+        mut js := kn.st.justify_self
+        if js == ALIGN_AUTO:
+            js = pn.st.justify
+        end
+        ox = _static_off(js, fx)
+        oy = _static_off(al, fy)
+    end
+    mut x := pbx.pl + kb.ml + ox
+    if mirror_x:
+        x = pbx.pl + iw - kb.mr - ox - w
+    end
+    ret x, pbx.pt + kb.mt + oy
+end
+
+func _place_abs(t &: Eng, k: int, parent: int, pw: f64, ph: f64, pbx: Box, fixed: bool):
     _resolve_dir(t, k)
     kn := t.nodes.ref(k)
     rtl := t.nodes.ref(parent).rtl
+    mut cw := _max(0.0, pw - pbx.bl - pbx.br)
+    mut ch := _max(0.0, ph - pbx.bt - pbx.bb)
+    mut ox := pbx.bl
+    mut oy := pbx.bt
+    if fixed:
+        cw = _max(0.0, t.vw)
+        ch = _max(0.0, t.vh)
+        ox = 0.0
+        oy = 0.0
+    end
     kb := _box(t, k, cw)
     mx := kb.ml + kb.mr
     my := kb.mt + kb.mb
@@ -631,7 +701,9 @@ func _place_abs(t &: Eng, k: int, parent: int, cw: f64, ch: f64, pbx: Box, fixed
     o := _place(t, k, w, h, _max(0.0, avail), cw, ch)
     w = o.w
     h = o.h
+    sx, sy := _static_pos(t, parent, pw, ph, pbx, k, w, h, kb)
     mut x := 0.0
+    mut static_x := false
     if l >= 0.0 and r >= 0.0:
         free := cw - l - r - w - mx
         if kb.aml and kb.amr:
@@ -643,18 +715,17 @@ func _place_abs(t &: Eng, k: int, parent: int, cw: f64, ch: f64, pbx: Box, fixed
         else:
             x = cw - r - kb.mr - w
         end
+        x += ox
     else l >= 0.0:
-        x = l + kb.ml
+        x = ox + l + kb.ml
     else r >= 0.0:
-        x = cw - r - kb.mr - w
-    else fixed:
-        x = kb.ml
-    else rtl:
-        x = cw - (pbx.pr - pbx.br) - kb.mr - w
+        x = ox + cw - r - kb.mr - w
     else:
-        x = (pbx.pl - pbx.bl) + kb.ml
+        x = sx
+        static_x = true
     end
     mut y := 0.0
+    mut static_y := false
     if tp >= 0.0 and bt >= 0.0:
         free := ch - tp - bt - h - my
         if kb.amt and kb.amb:
@@ -664,18 +735,21 @@ func _place_abs(t &: Eng, k: int, parent: int, cw: f64, ch: f64, pbx: Box, fixed
         else:
             y = tp + kb.mt
         end
+        y += oy
     else tp >= 0.0:
-        y = tp + kb.mt
+        y = oy + tp + kb.mt
     else bt >= 0.0:
-        y = ch - bt - kb.mb - h
-    else fixed:
-        y = kb.mt
+        y = oy + ch - bt - kb.mb - h
     else:
-        y = (pbx.pt - pbx.bt) + kb.mt
+        y = sy
+        static_y = true
     end
     kk := t.nodes.ref(k)
     kk.x = x
     kk.y = y
+    kk.in_fixed = fixed
+    kk.fsx = fixed and static_x
+    kk.fsy = fixed and static_y
 end
 
 func _extents(t &: Eng, id: int, bx: Box):
@@ -735,12 +809,34 @@ func _scroll_y(t &: Eng, id: int): f64:
     ret _clamp(n.sy, 0.0, _max(0.0, n.cy1 - ch))
 end
 
+func _view_x(t &: Eng, id: int): f64:
+    n := t.nodes.ref(id)
+    if n.in_fixed and not n.fsx:
+        ret n.x
+    end
+    if n.parent < 0:
+        ret n.x
+    end
+    ret n.x + _view_x(t, n.parent)
+end
+
+func _view_y(t &: Eng, id: int): f64:
+    n := t.nodes.ref(id)
+    if n.in_fixed and not n.fsy:
+        ret n.y
+    end
+    if n.parent < 0:
+        ret n.y
+    end
+    ret n.y + _view_y(t, n.parent)
+end
+
 func _rel_x(t &: Eng, id: int): f64:
     n := t.nodes.ref(id)
     p := n.parent
     if n.in_fixed:
         if p >= 0:
-            ret n.x - _abs_x(t, p)
+            ret _view_x(t, id) - _abs_x(t, p)
         end
         ret n.x
     end
@@ -759,7 +855,7 @@ func _rel_y(t &: Eng, id: int): f64:
     p := n.parent
     if n.in_fixed:
         if p >= 0:
-            ret n.y - _abs_y(t, p)
+            ret _view_y(t, id) - _abs_y(t, p)
         end
         ret n.y
     end

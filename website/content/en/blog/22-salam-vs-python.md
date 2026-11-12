@@ -58,7 +58,7 @@ func main:
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.free()
     each w in words:
-        counts.put(w, counts.get_or(w, 0) + 1)
+        counts.put(w, counts.GetOr(w, 0) + 1)
     end
     mut entries := Vector {} as Vector<Entry>
     defer entries.free()

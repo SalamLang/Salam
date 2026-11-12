@@ -365,8 +365,13 @@ func lay_fold(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int)
         ret lay_fold_unary(cx, a, nid, out, depth)
     end
     if n.kind == at.AST_BINARY and lay_is_calc_op(n.op) and lay_has_unit(a, nid, 0):
+        mut ckind := 0
+        if not lay_calc_kind(a, nid, ckind, 0):
+            ret lay_fold_err(cx, nid, i18.Tr("a layout value cannot add or subtract a length, an angle and a time"))
+        end
+        cunit := ckind == 2 ? "deg" : (ckind == 3 ? "ms" : "px")
         mut ctext := ""
-        crc := lay_calc_text(cx, a, nid, ctext, depth + 1)
+        crc := lay_calc_text(cx, a, nid, cunit, ctext, depth + 1)
         if crc != LF_OK:
             ret crc
         end
@@ -528,11 +533,49 @@ func lay_has_unit(a &: at.Ast, nid: int, depth: int): bool:
     ret false
 end
 
-func lay_calc_side(cx &: LayFoldCx, a &: at.Ast, nid: int, additive: bool, out &: str, depth: int): int:
+func lay_unit_kind(u: str): int:
+    if str.Equals(u, "deg") or str.Equals(u, "rad") or str.Equals(u, "turn"):
+        ret 2
+    end
+    if str.Equals(u, "ms") or str.Equals(u, "s"):
+        ret 3
+    end
+    if str.Len(u) == 0 or str.Equals(u, "%"):
+        ret 0
+    end
+    ret 1
+end
+
+func lay_calc_kind(a &: at.Ast, nid: int, kind &: int, depth: int): bool:
+    if nid == 0 or depth > 64:
+        ret true
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and (n.op == tok.TK_INT or n.op == tok.TK_FLOAT):
+        k := lay_unit_kind(LayoutNumUnit(n.name))
+        if k == 0:
+            ret true
+        end
+        if kind != 0 and kind != k:
+            ret false
+        end
+        kind = k
+        ret true
+    end
+    if n.kind == at.AST_BINARY:
+        ret lay_calc_kind(a, n.a, kind, depth + 1) and lay_calc_kind(a, n.b, kind, depth + 1)
+    end
+    if n.kind == at.AST_UNARY:
+        ret lay_calc_kind(a, n.a, kind, depth + 1)
+    end
+    ret true
+end
+
+func lay_calc_side(cx &: LayFoldCx, a &: at.Ast, nid: int, unit: str, additive: bool, out &: str, depth: int): int:
     n := at.Get(a, nid)
     if n.kind == at.AST_BINARY and lay_is_calc_op(n.op):
         mut inner := ""
-        rc := lay_calc_text(cx, a, nid, inner, depth + 1)
+        rc := lay_calc_text(cx, a, nid, unit, inner, depth + 1)
         if rc != LF_OK:
             ret rc
         end
@@ -544,31 +587,39 @@ func lay_calc_side(cx &: LayFoldCx, a &: at.Ast, nid: int, additive: bool, out &
     if rc2 != LF_OK:
         ret rc2
     end
-    if additive and not lay_has_unit(a, nid, 0) and lay_is_float(text) and not str.Equals(text, "0"):
-        text += "px"
+    if additive and not lay_has_unit(a, nid, 0) and lay_is_float(text):
+        text += unit
     end
     out = text
     ret LF_OK
 end
 
-func lay_calc_text(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: str, depth: int): int:
+func lay_calc_text(cx &: LayFoldCx, a &: at.Ast, nid: int, unit: str, out &: str, depth: int): int:
     if depth > 64:
         ret lay_fold_err(cx, nid, i18.Tr("layout value is nested too deeply (a constant that refers to itself?)"))
     end
     n := at.Get(a, nid)
     additive := n.op == tok.TK_PLUS or n.op == tok.TK_MINUS
     mut left := ""
-    rc := lay_calc_side(cx, a, n.a, additive, left, depth)
+    rc := lay_calc_side(cx, a, n.a, unit, additive, left, depth)
     if rc != LF_OK:
         ret rc
     end
     mut right := ""
-    rc2 := lay_calc_side(cx, a, n.b, additive, right, depth)
+    rc2 := lay_calc_side(cx, a, n.b, unit, additive, right, depth)
     if rc2 != LF_OK:
         ret rc2
     end
     out = left + " " + lay_op_text(n.op) + " " + right
     ret LF_OK
+end
+
+func lay_list_quotes(name: str): bool:
+    mut key := lay_attr_key(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ret str.Equals(str.Replace(str.Replace(key, "_", "-"), " ", "-"), "font-family")
 end
 
 func lay_list_commas(name: str): bool:
@@ -675,12 +726,18 @@ func lay_list_text(cx &: LayFoldCx, a &: at.Ast, vid: int, name: str, out &: str
         end
     end
     sep := (groups or lay_list_commas(name)) ? ", " : " "
+    quote := lay_list_quotes(name)
     mut text := ""
     repeat at.ChildCount(a, vid) in j:
         mut part := ""
-        rc := lay_item_text(cx, a, at.Child(a, vid, j), part, 1)
+        cid := at.Child(a, vid, j)
+        rc := lay_item_text(cx, a, cid, part, 1)
         if rc != LF_OK:
             ret rc
+        end
+        c := at.Get(a, cid)
+        if quote and c.kind == at.AST_LITERAL and c.value_kind == tok.TV_STRING and not str.StartsWith(part, "#"):
+            part = `"` + str.Replace(str.Replace(part, "\\", "\\\\"), `"`, `\"`) + `"`
         end
         if j > 0:
             text += sep
@@ -706,6 +763,9 @@ func lay_list_runtime(s &: Sema, a &: at.Ast, nid: int): int:
         end
         ret 0
     end
+    if n.kind == at.AST_CALL and not lay_is_css_function(s, a, nid):
+        ret nid
+    end
     if n.kind == at.AST_CALL or n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
         repeat at.ChildCount(a, nid) in i:
             r := lay_list_runtime(s, a, at.Child(a, nid, i))
@@ -730,7 +790,7 @@ func lay_fold_list_attr(s &: Sema, a &: at.Ast, attr: int, vid: int): bool:
     if bad != 0:
         serr(
             s, 129, span_of(a, bad), co.Format1(
-                i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(at.Get(a, bad).name)
+                i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(lay_expr_text(a, bad))
             )
         )
         ret false

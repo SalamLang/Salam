@@ -1,0 +1,201 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+
+func _new_ctl(): _Ctl:
+    mut c := _Ctl { uid = _uid_next }
+    _uid_next++
+    c.undo = Vector {} as Vector<str>
+    ret c
+end
+
+func _match_kid(od: _Dom, okids: Vector<int>, used &: Vector<bool>, nd: _Dom, k: int, nth: int): int:
+    kind := nd.nodes[k].kind
+    id := _attr(nd, k, "id")
+    key := _attr(nd, k, "key")
+    if id.len() > 0 or key.len() > 0:
+        repeat okids.len() in j:
+            o := okids[j]
+            if not used[j] and od.nodes[o].kind == kind:
+                if (id.len() > 0 and _attr(od, o, "id") == id) or (key.len() > 0 and _attr(od, o, "key") == key):
+                    ret j
+                end
+            end
+        end
+        ret -1
+    end
+    mut seen := 0
+    repeat okids.len() in j:
+        o := okids[j]
+        if od.nodes[o].kind == kind and _attr(od, o, "id").len() == 0 and _attr(od, o, "key").len() == 0:
+            if seen == nth:
+                if used[j]:
+                    ret -1
+                end
+                ret j
+            end
+            seen++
+        end
+    end
+    ret -1
+end
+
+func _carry(od: _Dom, oc: Vector<_Ctl>, o: int, nd: _Dom, nc &: Vector<_Ctl>, n: int):
+    mut c := oc[o]
+    k := nd.nodes[n].k
+    if k == _K_INPUT or k == _K_TEXTAREA or k == _K_SELECT:
+        ov := k == _K_TEXTAREA ? _text_of(od, o) : str.Clone(_attr(od, o, "value"))
+        nv := k == _K_TEXTAREA ? _text_of(nd, n) : str.Clone(_attr(nd, n, "value"))
+        if ov != nv:
+            c.has_value = false
+            c.caret = nv.len()
+            c.anchor = c.caret
+            c.text_scroll = 0.0
+        end
+        if _has_attr(od, o, "checked") != _has_attr(nd, n, "checked"):
+            c.has_checked = false
+        end
+        if k == _K_SELECT:
+            ok := od.nodes[o].kids.len()
+            if ok != nd.nodes[n].kids.len():
+                c.selected = -1
+                c.has_value = false
+            end
+        end
+        _sfree(ov)
+        _sfree(nv)
+    end
+    if k == _K_DETAILS or k == _K_DIALOG:
+        if _has_attr(od, o, "open") != _has_attr(nd, n, "open"):
+            c.open = _has_attr(nd, n, "open")
+        end
+    end
+    nc[n] = c
+end
+
+func _rec_match(od: _Dom, oc: Vector<_Ctl>, o: int, nd: _Dom, nc &: Vector<_Ctl>, n: int):
+    _carry(od, oc, o, nd, nc, n)
+    okids := od.nodes[o].kids
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    repeat okids.len():
+        used.push(false)
+    end
+    mut kinds := Vector {} as Vector<str>
+    defer kinds.free()
+    mut counts := Vector {} as Vector<int>
+    defer counts.free()
+    each k in nd.nodes[n].kids:
+        t := nd.nodes[k].kind
+        if t == "#text":
+            continue
+        end
+        mut nth := 0
+        mut slot := -1
+        repeat kinds.len() in q:
+            if kinds[q] == t:
+                slot = q
+            end
+        end
+        if _attr(nd, k, "id").len() == 0 and _attr(nd, k, "key").len() == 0:
+            if slot < 0:
+                kinds.push(t)
+                counts.push(1)
+            else:
+                nth = counts[slot]
+                counts[slot] = nth + 1
+            end
+        end
+        j := _match_kid(od, okids, used, nd, k, nth)
+        if j >= 0:
+            used[j] = true
+            _rec_match(od, oc, okids[j], nd, nc, k)
+        end
+    end
+end
+
+func _remap(old_node: int, oc: Vector<_Ctl>, nc: Vector<_Ctl>): int:
+    if old_node < 0 or old_node >= oc.len():
+        ret -1
+    end
+    uid := oc[old_node].uid
+    repeat nc.len() in i:
+        if nc[i].uid == uid:
+            ret i
+        end
+    end
+    ret -1
+end
+
+func _load_dom(nd0: _Dom):
+    mut nd := nd0
+    mut nc := Vector {} as Vector<_Ctl>
+    repeat nd.nodes.len():
+        nc.push(_Ctl {})
+    end
+    if _e.ready:
+        _rec_match(_e.dom, _e.ctl, 0, nd, nc, 0)
+    end
+    repeat nc.len() in i:
+        if nc[i].uid == 0:
+            nc[i] = _new_ctl()
+        end
+    end
+    mut focus := -1
+    mut hover := -1
+    mut popup := -1
+    mut capture := -1
+    if _e.ready:
+        focus = _remap(_e.focus, _e.ctl, nc)
+        hover = _remap(_e.hover, _e.ctl, nc)
+        popup = _remap(_e.popup, _e.ctl, nc)
+        capture = _remap(_e.capture, _e.ctl, nc)
+        _dom_free(_e.dom)
+        _e.ctl.free()
+        _reset_layout()
+    end
+    _e.dom = nd
+    _e.ctl = nc
+    _e.focus = focus
+    _e.hover = hover
+    _e.popup = popup
+    _e.capture = capture
+    if focus < 0:
+        repeat _e.ctl.len() in i:
+            mut c := _e.ctl.ref(i)
+            c.focused = false
+            c.focus_visible = false
+        end
+    end
+    if _e.dom.title.len() > 0 and _e.has_win:
+        _e.win.SetTitle(_e.dom.title)
+    end
+    _e.ready = true
+    _style_all()
+    _relayout()
+end
+
+func _relayout():
+    _layout()
+end
+
+func _rerun_view():
+    if not _e.view_set:
+        ret
+    end
+    _load_dom(_build_view())
+end

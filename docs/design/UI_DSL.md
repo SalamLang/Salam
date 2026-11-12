@@ -295,25 +295,109 @@ calls `Parse`; on failure it reports `Error` at the attribute. For web it
 emits `Css`; for native it emits `Source`. A dynamic value is parsed at run
 time on native and converted by a small JavaScript helper on web.
 
+### As built in phase 1
+
+The packages are on main: `gui.color` (#3141), `gui.flow` (#3146),
+`gui.style` (#3143), and the page literals (#3148). Their PR bodies list
+every decision taken where this document was silent; they are part of the
+contract. The main ones:
+
+- `gui.flow`: one `inset: Edges` field instead of separate sides,
+  `direction` is `DIR_INHERIT` by default, `text_align` and
+  `Size.baseline`/`Size.last_baseline` added; min width and min height
+  default to `auto` (content minimum); fixed and absolute boxes without
+  insets keep their static position; `flow` ignores `gap`; `column = -1`
+  is the last column.
+- `gui.style`: 137 properties (`tools/salam/style-properties.tsv`, generated
+  with `tools/salam/gen-style-table.salam`), `Style` fields per property
+  (`layout_kind` for `layout`), extra API `Get`, `Format`, `EaseAt`, `Info`;
+  web CSS relies on `BaseCss()` and `--salam-*` custom properties and nested
+  `&>*` rules, so it must go into a style sheet rule, never a `style`
+  attribute.
+- Page literals: a static list reaches the layout code folded by
+  `lay_list_text` / `LayoutListText` (`compiler/semantic/sema_layout_fold.salam`)
+  as CSS text joined with spaces; before folding it is `AST_TUPLE` (list) and
+  `AST_ARRAY_LIT` (group), and number tokens keep their unit
+  (`LayoutNumUnit`).
+
+## Phase 2 contracts
+
+### Attribute resolution in the compiler (owned by the web branch)
+
+One function decides, for every style attribute of every element, what the
+standard says about it. Both generators call it; neither looks at CSS text.
+
+```salam
+StyleAttr:          prop (gui.style id), state (0 base, then hover, focus,
+                    focus within, active, disabled, checked, invalid,
+                    placeholder, selection), static (bool), value (style.Value
+                    when static), expr (AST of the runtime expression when
+                    not static), kind of the runtime expression (number, str,
+                    other)
+```
+
+- The attribute name (en or fa, with an optional state prefix) is looked up
+  with `style.PropByName`. A static value is turned into canonical Salam
+  value text (list items joined with `", "`, groups in `[ ]`, Persian
+  keywords and digits as written) and parsed with `style.Parse`; a failure is
+  a compile error carrying `style.Error`.
+- Transition period: an attribute that is not in the standard but is a
+  known CSS attribute of today's schema, or a string value that the standard
+  rejects but today's CSS check accepts, still builds for the web with
+  warning W167 ("not part of the Salam style standard"; the message shows
+  the standard form when one exists). The native target rejects it (E166).
+  After the pages are migrated, W167 becomes an error and the old CSS
+  attributes are deleted.
+
+### Native builder (owned by the native branch)
+
+`gui.ui` keeps its scope, state, event and reconcile machinery and its
+`SALAM_UI_SCRIPT` test driver. Its node tree, style and layout are rebuilt
+on `gui.style`, `gui.flow`, `gui.paint` and `gui.typeset`. The generated
+program uses only this API:
+
+```salam
+ui.RunPage(patches: func () Vector<ui.Patch>, view: func (ui.Builder))
+ui.Patch            ordered (prop, style.Value) pairs; built once at start
+patch.Add(prop: int, v: style.Value)
+b.Title(s), b.Lang(s), b.Dir(s)
+b.Open(kind: str)          canonical English element name from std/layout
+                           ("box", "heading", "button", ...), never an HTML tag
+b.Patch(state: int, id: int)                 a static patch for this element
+b.Set(state: int, prop: int, v: style.Value) one dynamic typed value
+b.SetText(state: int, prop: int, text: str)  one dynamic value parsed at run time
+b.Id(s), b.Key(s), b.Attr(name, value), b.BoolAttr(name, value)
+b.Text(s), b.On(event, fn), b.Close()
+b.Scope(...), b.KeyedScope(...), b.Reactive(...), b.Instance(...), b.Fresh()
+```
+
+The element's computed style is `style.Default(kind)`, then `Inherit` from
+the parent, then its base patch and `Set` values, then the patches of every
+active state in a fixed order. Text inside a `flow` parent (text nodes and
+inline text elements such as bold, italic, code, link, span) is laid out as
+one paragraph through `gui.typeset` and measured as one `gui.flow` leaf, so
+it wraps across spans like the web does.
+
 ## Order of work
 
-Phase 1, in parallel, one branch and PR each:
+Phase 1 (done): page literals #3148, `gui.color` #3141, `gui.flow` #3146,
+`gui.style` #3143.
 
-1. **Compiler literals** (`feat/ui-values-syntax`): `50%`, `#hex`, unit
-   suffixes, comma value lists (en and fa), Persian digits, `٪` and `،`;
-   `fmt` and `translate` keep them; today's web generator emits CSS for them
-   so the PR is useful on its own.
-2. **gui.color** (`feat/gui-color`).
-3. **gui.flow** (`feat/gui-flow`).
-4. **gui.style** (`feat/gui-style`), built on gui.color.
+Phase 2, two branches in parallel:
 
-Phase 2, after phase 1 merges:
+5. **Web on the standard** (`feat/ui-standard-web`): attribute resolution;
+   `std/layout` gains the standard's properties (generated from
+   `style-properties.tsv`) with the transition rules above; web CSS from
+   `style.Css` with `style.BaseCss()` first; runtime values on web; page tests.
+6. **Native on the standard** (`feat/ui-standard-native`): `gui.ui` rebuilt
+   on the four packages with the builder above; `layout_native.salam` emits
+   it; delete `gui.css`, `gui.cssbox`, the HTML parser and `ui.Run(html)`
+   and their tests and website pages; `tests/*/ui` keep passing.
 
-5. **gui.ui on the standard**: typed builder, style, flow, paint, typeset;
-   delete `gui.css`, `gui.cssbox`, the HTML path and their tests and pages.
-6. **Compiler on the standard**: the `std/layout` schema shrinks to the
-   vocabulary with fa names; web CSS and native values come from
-   `gui.style`; error for anything outside the standard.
-7. **Migrate pages**: tests, examples, website; a rewrite tool for common
-   CSS strings.
-8. **Docs**: website pages, the skill file, the book.
+Then:
+
+7. **Migrate pages**: a rewrite tool for common CSS values; tests, examples,
+   website; W167 becomes an error and the old CSS attributes go.
+8. **Same look check**: render pages on both targets and compare
+   (headless browser in Docker or CI against `--ui=native` screenshots).
+9. **Docs**: website pages, the skill file, the book.

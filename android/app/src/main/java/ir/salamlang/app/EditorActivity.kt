@@ -577,6 +577,8 @@ class EditorActivity :
                 console.visibility = View.GONE
                 requestTokens()
                 requestCheck()
+            } else {
+                toast(R.string.translate_failed)
             }
         }
     }

@@ -475,7 +475,11 @@ final class EditorViewController: UIViewController, UITextViewDelegate {
         let out = Workspace.cache.appendingPathComponent("translated.salam")
         try? FileManager.default.removeItem(at: out)
         startJob(["translate", target, file.lastPathComponent, "--output=" + out.path], cwd: cwd, interactive: false) { [weak self] rc in
-            guard let self = self, rc == 0, let text = try? String(contentsOf: out, encoding: .utf8) else { return }
+            guard let self = self else { return }
+            guard rc == 0, let text = try? String(contentsOf: out, encoding: .utf8) else {
+                self.toast(L("translate_failed"))
+                return
+            }
             self.replaceAllText(text)
             self.setLang(target)
             self.saveNow()

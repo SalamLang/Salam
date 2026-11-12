@@ -19,7 +19,7 @@ This article puts the same small tasks side by side, compares how the two handle
 | Standard        | ISO C++ (C++20, C++23, C++26 in progress)        | One open source implementation, pre-1.0                         |
 | Compilers       | GCC, Clang, MSVC and others                      | The self-hosting `salam` compiler                               |
 | Code generation | Direct to machine code                           | Through C, through LLVM, or its own native backend              |
-| Memory          | RAII, smart pointers, manual `new`/`delete`      | Stack values, heap collections freed with `.free()` and `defer` |
+| Memory          | RAII, smart pointers, manual `new`/`delete`      | Stack values, heap collections freed with `.Free()` and `defer` |
 | Generics        | Templates, concepts                              | Generic functions and structs with interface bounds             |
 | Polymorphism    | Inheritance, virtual functions, `std::variant`   | Interfaces with `dyn`, enums with data, embedding with `use`    |
 | Errors          | Exceptions, `std::expected`                      | `throws`, `try`, `catch`, without stack unwinding               |
@@ -211,7 +211,7 @@ int main() {
 }
 ```
 
-Salam has no destructors. Values on the stack (numbers, structs, fixed arrays) need nothing, but heap collections such as `Vector` and `HashMap` must be freed. The idiom is to write `defer x.free()` right after creating one, so the cleanup sits next to the allocation and runs on every way out of the block:
+Salam has no destructors. Values on the stack (numbers, structs, fixed arrays) need nothing, but heap collections such as `Vector` and `HashMap` must be freed. The idiom is to write `defer x.Free()` right after creating one, so the cleanup sits next to the allocation and runs on every way out of the block:
 
 ```salam
 import sort
@@ -219,14 +219,14 @@ import sort
 func main:
     text := "the cat saw the dog and the dog saw the cat"
     words := text.split(" ")
-    defer words.free()
+    defer words.Free()
     mut counts := HashMap {} as HashMap<str, int>
-    defer counts.free()
+    defer counts.Free()
     each w in words:
         counts.put(w, counts.GetOr(w, 0) + 1)
     end
     mut keys := Vector {} as Vector<str>
-    defer keys.free()
+    defer keys.Free()
     each k, _ in counts:
         keys.push(k)
     end
@@ -297,7 +297,7 @@ On the project's 39-program benchmark Salam's average was 10.6 ms against 13.1 m
 
 ### Does Salam have RAII or destructors?
 
-No. Heap collections are freed explicitly with `.free()`, usually through `defer` right after they are created. The compiler and `salam memcheck` help find mistakes, but freeing memory is the programmer's job.
+No. Heap collections are freed explicitly with `.Free()`, usually through `defer` right after they are created. The compiler and `salam memcheck` help find mistakes, but freeing memory is the programmer's job.
 
 ### Can Salam call C++ libraries?
 

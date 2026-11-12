@@ -62,7 +62,7 @@ func main:
         end
     end
     println g.tensors.len(), "tensors,", unreadable, "in a weight type this package cannot expand"
-    g.free()
+    g.Free()
 end
 ```
 
@@ -119,7 +119,7 @@ func main:
     mut scores := outputs.get(0)
     println "output shape", tensor.ShapeString(scores)
     println "predicted class", tensor.ArgMaxAll(scores)
-    model.free()
+    model.Free()
 end
 ```
 
@@ -209,22 +209,22 @@ func main:
     repeat 600 in step:
         tape.reset()
         store.zero_grad()
-        logits := net.forward(tape, store, autograd.Input(tape, x))
+        logits := net.Forward(tape, store, autograd.Input(tape, x))
         loss := autograd.BCEWithLogits(tape, logits, autograd.Constant(tape, y))
         autograd.Backward(tape, loss)
-        adam.step(store)
+        adam.Step(store)
         if step % 200 == 0:
             println "step", step, "loss below 0.1:", autograd.Value(tape, loss).at(0) < 0.1
         end
     end
     tape.reset()
-    probs := tensor.Sigmoid(autograd.Value(tape, net.forward(tape, store, autograd.Input(tape, x))))
+    probs := tensor.Sigmoid(autograd.Value(tape, net.Forward(tape, store, autograd.Input(tape, x))))
     repeat 4 in i:
         println x.at2(i, 0), "xor", x.at2(i, 1), "->", (probs.at(i) + 0.5) as int
     end
-    tape.free()
-    adam.free()
-    store.free()
+    tape.Free()
+    adam.Free()
+    store.Free()
 end
 ```
 

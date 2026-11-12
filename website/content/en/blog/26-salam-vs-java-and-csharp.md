@@ -20,7 +20,7 @@ The JVM and the .NET runtime are among the most heavily engineered pieces of sof
 | -------------------- | --------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------- |
 | Compiled to          | JVM bytecode, then JIT                              | .NET IL, then JIT                                         | Native machine code, ahead of time                              |
 | Ahead-of-time option | GraalVM Native Image; AOT cache work in recent JDKs | Native AOT, ReadyToRun                                    | The only mode                                                   |
-| Memory               | Garbage collected                                   | Garbage collected                                         | Stack values; heap collections freed with `.free()` and `defer` |
+| Memory               | Garbage collected                                   | Garbage collected                                         | Stack values; heap collections freed with `.Free()` and `defer` |
 | Deployment           | A JVM plus your JARs, or a native image             | The .NET runtime plus your assemblies, or a native binary | One executable                                                  |
 | Generics             | Erased at runtime                                   | Reified, specialized for value types                      | Specialized per type at compile time                            |
 | Errors               | Exceptions, checked and unchecked                   | Exceptions                                                | `throws`, `try`, `catch`, no unwinding                          |
@@ -90,12 +90,12 @@ func main:
         Order { customer = "sara", amount = 30.0 },
     ]
     mut totals := HashMap {} as HashMap<str, f64>
-    defer totals.free()
+    defer totals.Free()
     each o in orders:
         totals.put(o.customer, totals.GetOr(o.customer, 0.0) + o.amount)
     end
     mut names := Vector {} as Vector<str>
-    defer names.free()
+    defer names.Free()
     each name, _ in totals:
         names.push(name)
     end
@@ -127,7 +127,7 @@ Neither Java nor C# is part of Salam's published [benchmark](/speed/), so there 
 
 A garbage collector removes a whole class of bugs: you cannot forget to free memory, and you cannot free it twice. Modern collectors such as ZGC and the .NET server GC keep pauses short even on large heaps. The costs are memory overhead (a collector needs headroom to work efficiently), some unpredictability, and CPU time spent collecting.
 
-Salam frees memory explicitly. Numbers, structs and fixed arrays live on the stack; `Vector`, `HashMap` and other heap collections are released with `.free()`, normally written as `defer x.free()` right after creation. That gives predictable memory use and no pauses, and it asks the programmer for discipline. The compiler helps by reporting some use-after-free and double-free patterns, and `salam memcheck` runs a program under Valgrind or AddressSanitizer, but Salam does not prove memory safety, and a forgotten `free` is a leak. For a team used to a collector, that is the biggest adjustment. [Memory management in Salam](/blog/memory-management-in-salam/) and [Native compilation without a VM or garbage collector](/blog/native-compilation-without-vm-or-gc/) go deeper.
+Salam frees memory explicitly. Numbers, structs and fixed arrays live on the stack; `Vector`, `HashMap` and other heap collections are released with `.Free()`, normally written as `defer x.Free()` right after creation. That gives predictable memory use and no pauses, and it asks the programmer for discipline. The compiler helps by reporting some use-after-free and double-free patterns, and `salam memcheck` runs a program under Valgrind or AddressSanitizer, but Salam does not prove memory safety, and a forgotten `free` is a leak. For a team used to a collector, that is the biggest adjustment. [Memory management in Salam](/blog/memory-management-in-salam/) and [Native compilation without a VM or garbage collector](/blog/native-compilation-without-vm-or-gc/) go deeper.
 
 ## A web endpoint {#web}
 
@@ -211,7 +211,7 @@ There is no published benchmark that compares them. Salam avoids JIT warm-up and
 
 ### Does Salam have a garbage collector?
 
-No. Values on the stack need nothing, and heap collections are freed with `.free()`, usually through `defer`. The compiler and `salam memcheck` help find mistakes.
+No. Values on the stack need nothing, and heap collections are freed with `.Free()`, usually through `defer`. The compiler and `salam memcheck` help find mistakes.
 
 ### Is GraalVM Native Image or .NET Native AOT the same as Salam's compilation?
 

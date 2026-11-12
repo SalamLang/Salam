@@ -19,7 +19,7 @@ So Salam is not a drop-in replacement for Python. It is an option for the parts 
 | Execution              | Interpreted bytecode (CPython); other implementations such as PyPy exist                            | Compiled ahead of time to native code; an interpreter (`salam exec`) for quick runs |
 | Typing                 | Dynamic; optional type hints checked by external tools                                              | Static with inference, checked by the compiler                                      |
 | Blocks                 | Indentation                                                                                         | A colon opens a block, `end` closes it                                              |
-| Memory                 | Reference counting plus a cycle collector                                                           | Manual: `.free()` and `defer`, with compile-time checks                             |
+| Memory                 | Reference counting plus a cycle collector                                                           | Manual: `.Free()` and `defer`, with compile-time checks                             |
 | Parallelism            | GIL in the default build; an optional free-threaded build (experimental in 3.13, supported in 3.14) | OS threads, a task pool, channels, atomics                                          |
 | Speed on the benchmark | About 56 times Salam's time                                                                         | In the same range as C and Rust                                                     |
 | Deployment             | Interpreter plus dependencies, or a bundler                                                         | One native executable                                                               |
@@ -54,14 +54,14 @@ end
 func main:
     text := "the cat sat on the mat and the dog sat on the log"
     words := str.Fields(text)
-    defer words.free()
+    defer words.Free()
     mut counts := HashMap {} as HashMap<str, int>
-    defer counts.free()
+    defer counts.Free()
     each w in words:
         counts.put(w, counts.GetOr(w, 0) + 1)
     end
     mut entries := Vector {} as Vector<Entry>
-    defer entries.free()
+    defer entries.Free()
     each w, n in counts:
         entries.push(Entry { word = w, count = n })
     end
@@ -183,7 +183,7 @@ Salam's [standard library](/std/) is unusually broad for a young language: HTTP 
 
 ## Memory and parallelism {#memory-concurrency}
 
-Python manages memory for you with reference counting and a cycle collector, which is a large part of why it is pleasant to write. Salam has no garbage collector: containers are freed with `.free()`, usually through `defer`, and a function that returns a new string or container hands its ownership to the caller. The compiler reports common mistakes such as use after free, but a forgotten `free` is a leak. In exchange, a Salam program's memory use follows what it allocates, with no collector and no boxed objects for plain numbers.
+Python manages memory for you with reference counting and a cycle collector, which is a large part of why it is pleasant to write. Salam has no garbage collector: containers are freed with `.Free()`, usually through `defer`, and a function that returns a new string or container hands its ownership to the caller. The compiler reports common mistakes such as use after free, but a forgotten `free` is a leak. In exchange, a Salam program's memory use follows what it allocates, with no collector and no boxed objects for plain numbers.
 
 For parallel CPU work, CPython's default build has a global interpreter lock, so threads do not run Python code in parallel; multiprocessing, native extensions or the optional free-threaded build (supported since Python 3.14) are the usual answers. Salam threads run in parallel on all cores, and `pool.ParallelFor`, `pool.Map` and the `go` keyword spread work across them, with mutexes, atomics and channels to coordinate. The [concurrency article](/blog/concurrency-in-salam/) has examples.
 
@@ -219,7 +219,7 @@ Yes, by a large margin on CPU-bound code. On the project's benchmark of 39 progr
 
 ### Is Salam easy to learn for Python programmers?
 
-Mostly yes. Loops, conditions and printing look similar, there are no braces or semicolons, and types are inferred for local variables. The new parts are declared types on functions and structs, `end` instead of indentation, and freeing heap memory with `defer x.free()`.
+Mostly yes. Loops, conditions and printing look similar, there are no braces or semicolons, and types are inferred for local variables. The new parts are declared types on functions and structs, `end` instead of indentation, and freeing heap memory with `defer x.Free()`.
 
 ### Can Salam replace Python for data science?
 

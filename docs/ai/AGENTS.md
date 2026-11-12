@@ -203,7 +203,7 @@ pieces first, then write them:
 - A function that can fail is `throws`, not a sentinel like `-1` or `""`.
   Callers use `try` or `try: ... catch e: ... end`. Offer an `...Or(value,
 fallback)` form only when a default is natural.
-- Cleanup goes in `defer` next to the thing it cleans (`defer v.free()`).
+- Cleanup goes in `defer` next to the thing it cleans (`defer v.Free()`).
 - Magic numbers become `const` names.
 
 **3. Small functions.** One job per function, a name that says the job, about
@@ -224,7 +224,7 @@ layout. A script of under about 40 lines may stay in one file.
 index bookkeeping, `match` instead of long `if` chains over an enum,
 `:=` with inference, `ret match ...` for a value, `a ? b : c` for a short
 choice, struct literals with named fields, `Vector<T>` and `HashMap<K, V>` with
-`.free()`, and `salam format` to finish. When the source language has classes,
+`.Free()`, and `salam format` to finish. When the source language has classes,
 exceptions, generics or dictionaries, map them to `struct`, `throws`,
 `<T>` and `HashMap` (see SKILL.md section 7).
 

@@ -114,7 +114,7 @@ func main:
     println "404:", by_status.GetOr(404, 0)
     println "500:", by_status.GetOr(500, 0)
     sync.Destroy(lock)
-    by_status.free()
+    by_status.Free()
 end
 ```
 
@@ -160,7 +160,7 @@ func main:
     end
     println "primes below 1000000:", total
     println "in the first block:", counts.get(0), "in the last:", counts.get(9)
-    counts.free()
+    counts.Free()
 end
 ```
 
@@ -243,7 +243,7 @@ func main:
     jobs.init(8)
     results.init(100)
     mut workers := Vector {} as Vector<i64>
-    defer workers.free()
+    defer workers.Free()
     repeat 3:
         workers.push(spawn(worker))
     end
@@ -261,9 +261,9 @@ func main:
         sum += v
     end
     println "results:", all.len(), "sum:", sum
-    all.free()
-    jobs.free()
-    results.free()
+    all.Free()
+    jobs.Free()
+    results.Free()
 end
 ```
 
@@ -281,7 +281,7 @@ func main:
     mut fast := chan.New(1) as chan.Chan<i64>
     mut slow := chan.New(1) as chan.Chan<i64>
     mut both := Vector {} as Vector<chan.Chan<i64>>
-    defer both.free()
+    defer both.Free()
     both.push(fast)
     both.push(slow)
 
@@ -299,8 +299,8 @@ func main:
     slow.close()
     println "after closing:", chan.Select(both, v, 50)
     pool.Stop(p)
-    fast.free()
-    slow.free()
+    fast.Free()
+    slow.Free()
 end
 ```
 

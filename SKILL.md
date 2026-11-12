@@ -94,7 +94,7 @@ When asked to convert program `X` (in some other language) into Salam:
    half-space where only one word is allowed (type names, constants, loop and
    `catch` variables, lambda and `extern:` parameters).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
-   (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
+   (unused = error, `until` = while, manual `.Free()`, integer `/` truncates,
    errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
 5. **Verify** with `salam exec file.salam` (interpreter) or `salam build
 file.salam --output=app` (§10). Fix every warning; most are hard errors.
@@ -358,7 +358,7 @@ end
   This is how much of the stdlib mutates its argument (`str.BufAppend(b &: StringBuilder, …)`).
 
 - **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
-  `defer v.free()`.
+  `defer v.Free()`.
 - **Closures/lambdas** are first-class typed values, always written
   `(params): ... end` with an explicit `ret` for the value:
   `(x: int): ret x * 2 end`, or several statements
@@ -1032,7 +1032,7 @@ reg := Vector {} as Vector<dyn Shape>                            // heterogeneou
 changing the original afterwards does not reach the field. Copying the
 struct shares the box, the same way copying a Vector shares its storage, so a
 method that changes state through one copy shows in the other. Release the
-box with `field.free()` when you are done with it. `copy()` shares the box
+box with `field.Free()` when you are done with it. `copy()` shares the box
 too, while `deep_copy()` boxes a deep copy of whatever value the field holds
 (a concrete type that holds a raw pointer is copied as a value, so the
 pointer itself is shared).
@@ -1217,7 +1217,7 @@ not the libraries.
   base-2^32 magnitude). Build: `Zero One FromInt FromUint Parse ParseBase ParseOr FromBytes Clone`; inspect: `Sign IsZero BitLen Bit IsOdd IsEven Cmp CmpAbs Equals Less Greater Min Max`; arithmetic: `Add Sub Mul Sqr Neg Abs AddInt SubInt MulInt Shl Shr`; division in **both** conventions - `DivMod Div Rem` truncate toward zero (matching Salam's `/` and `%`), `FloorDivMod FloorDiv FloorMod` round toward minus infinity, and `Mod` always lands in
   `[0, |m|)`; number theory `Pow Pow10 ModExp Gcd Lcm ExtGcd ModInverse Sqrt Factorial`; two's-complement bitwise `And Or Xor AndNot Not PopCount TrailingZeros`; out: `ToStr ToStrBase ToHex ToInt ToIntClamped ToFloat ToBytes ByteLen`. In-place forms (`Set SetInt AddTo SubFrom MulBy AddIntTo MulIntBy NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
   should not allocate per iteration. **Every returning function hands over a
-  fresh value the caller frees** (`defer x.free()`); operands are taken by
+  fresh value the caller frees** (`defer x.Free()`); operands are taken by
   value and are never mutated, so `Mul(x, x)` is fine. Not constant-time - for
   a secret exponent use the blinded routine in `std/ssh/bigint.salam`.
   `b := a` shares the limbs (an in-place call on `b` then frees what `a`
@@ -1273,7 +1273,7 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
   losses `MSELoss CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
-  `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
+  `tp.reset()` per step, `tp.Free()`. `GradCheck` does central differences.
 - **`ai.nn`**: `ParamStore` (owns values and grads; layers hold int handles)
   with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
   `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
@@ -1468,7 +1468,7 @@ func main:
 end
 ```
 
-### Collections (heap-allocated: call `.free()`, idiom `defer x.free()`)
+### Collections (heap-allocated: call `.Free()`, idiom `defer x.Free()`)
 
 - **`Vector<T>`** (built-in; also `import collections`): `push pop get(i) ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter copy free`; index via `v[i]` (read) / `v[i] = x` (write); free functions
   `contains index_of last_index_of count_of slice clone reverse swap extend`.
@@ -1656,7 +1656,7 @@ end
   returns a `MatchResult` value (`.ok .start .stop .count`) to read with
   `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
   `FindSubmatch FindAll FindAllN FindAllMatches Split SplitN` (all
-  `Vector`-returning, so `defer v.free()`) and `$1`/`${name}` rewriting with
+  `Vector`-returning, so `defer v.Free()`) and `$1`/`${name}` rewriting with
   `Expand ReplaceExpand ReplaceAllExpand`; `IsValid` checks a pattern. Syntax:
   `. [] \d \w \s \D \W \S ^ $ | (…) (?:…) (?<name>…) (?P<name>…) * + ? {n,m}`
   and the lazy `*? +? ?? {n,m}?`. **No `\b`** (it means `b`), **no `(?i)`**,
@@ -2031,7 +2031,7 @@ naive port into compile errors (each corresponds to a case in
    callback). Only mark something `mut` if you actually reassign it.
 3. **Reassignment requires `mut`.** `x := 1; x = 2` fails; use `mut x := 1`.
 4. **Heap collections must be freed.** `Vector/HashMap/Set/...` allocate; call
-   `.free()` (idiom: `defer v.free()` right after creation). Also free elements
+   `.Free()` (idiom: `defer v.Free()` right after creation). Also free elements
    when they own memory.
 5. **Integer `/` truncates** toward zero. **Bitwise operators (`& | ^ ~ << >>`)
    are supported on integers** with C precedence and compound forms
@@ -2111,7 +2111,7 @@ General mapping that applies to all source languages:
 | `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)                 |
 | `for i in range(n)`          | `repeat n in i:`                                                                            |
 | `for x in xs`                | `each x in xs:`                                                                             |
-| destructor / cleanup         | `defer x.free()`                                                                            |
+| destructor / cleanup         | `defer x.Free()`                                                                            |
 
 ### From PHP
 
@@ -2159,7 +2159,7 @@ General mapping that applies to all source languages:
   or `T[]` slices; `map`→`HashMap`.
 - **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
-  `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`
+  `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.Free()`
   (Salam does not borrow-check). Pattern `match` maps to Salam `match`.
 
 ---
@@ -2281,7 +2281,7 @@ mut ok := true
 v := jobs.recv(ok)                            // ok = false once closed AND drained
 v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
 jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
-jobs.close()   jobs.free()                    // also: try_send/try_recv/len/is_closed
+jobs.close()   jobs.Free()                    // also: try_send/try_recv/len/is_closed
 // constructor and free functions (T on the result):
 c := chan.New(8) as chan.Chan<i64>            // initialized, no separate init
 chan.Send(c, v)   chan.Recv(c, ok)            // Send/SendTimeout/TrySend, Recv/RecvTimeout/TryRecv
@@ -2983,7 +2983,7 @@ two closing angle brackets, not a shift.
 | `malloc/calloc/realloc/free`                 | `mem.Allocate / AllocateZeroed / Reallocate / Free`                                                                         |
 | `memcpy/memset/memmove`                      | `mem.Copy / mem.Set / mem.MemMove`                                                                                          |
 | `strlen/strcmp/strcpy/strcat`                | `str.Len / str.Compare / str.Clone / str.Concat` (+ `StringBuilder`)                                                        |
-| growable array / `realloc` buffer            | `Vector<T>` (`push/get(i)/set/len`), remember `.free()`                                                                     |
+| growable array / `realloc` buffer            | `Vector<T>` (`push/get(i)/set/len`), remember `.Free()`                                                                     |
 | hash table (symbol table)                    | `HashMap<K, V>`                                                                                                             |
 | `switch (x) { case … }` (fallthrough)        | **`switch x: … end`** - bare labels (no `case`/`default`), same fallthrough, `break` exits it (§2)                          |
 | `switch` used for exhaustive/tagged dispatch | `match x: … end` instead - exhaustive on enum/`Variant`, no fallthrough (§3)                                                |
@@ -3016,7 +3016,7 @@ two closing angle brackets, not a shift.
 - **AST nodes**: a `struct` per node kind, or one node `struct` with a `kind`
   `enum` field plus a `Variant` payload; walk with recursion and `match`.
 - **Arenas / lifetime**: `mem.Allocate`/`Free`; or lean on `Vector`/`HashMap`
-  ownership + `defer x.free()`. There is no borrow checker, so free deliberately.
+  ownership + `defer x.Free()`. There is no borrow checker, so free deliberately.
 - **Diagnostics**: return a `bool`/`Option` up the call chain and collect an
   error list (mirror `src/diag`); no exceptions to unwind.
 

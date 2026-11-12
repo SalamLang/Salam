@@ -117,7 +117,7 @@ end
 func fletcher16(data: str): int:
     mut a := 0
     mut b := 0
-    each c in data.bytes():
+    each c in data.Bytes():
         a = (a + (c as int)) % 255
         b = (b + a) % 255
     end

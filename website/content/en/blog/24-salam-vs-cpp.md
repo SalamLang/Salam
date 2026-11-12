@@ -218,21 +218,21 @@ import sort
 
 func main:
     text := "the cat saw the dog and the dog saw the cat"
-    words := text.split(" ")
+    words := text.Split(" ")
     defer words.Free()
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.Free()
     each w in words:
-        counts.put(w, counts.GetOr(w, 0) + 1)
+        counts.Put(w, counts.GetOr(w, 0) + 1)
     end
     mut keys := Vector {} as Vector<str>
     defer keys.Free()
     each k, _ in counts:
-        keys.push(k)
+        keys.Push(k)
     end
     sort.Sort(keys)
     each k in keys:
-        println k, counts.get(k)
+        println k, counts.Get(k)
     end
 end
 ```

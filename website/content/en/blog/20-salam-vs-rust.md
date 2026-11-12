@@ -91,9 +91,9 @@ end
 func main:
     mut shapes := Vector {} as Vector<Shape>
     defer shapes.Free()
-    shapes.push(Shape.Triangle(4.0, 3.0))
-    shapes.push(Shape.Rect(3.0, 4.5))
-    shapes.push(Shape.Square(5.0))
+    shapes.Push(Shape.Triangle(4.0, 3.0))
+    shapes.Push(Shape.Rect(3.0, 4.5))
+    shapes.Push(Shape.Square(5.0))
     mut total := 0.0
     each s in shapes:
         println s.name(), "area", area(s)
@@ -213,7 +213,7 @@ But it does not cover everything Rust's checker covers. This Salam program, the 
 ```salam fragment
 func main:
     mut names := Vector {} as Vector<str>
-    names.push("Sara")
+    names.Push("Sara")
     names.Free()
     println names.len()
 end

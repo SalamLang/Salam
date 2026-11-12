@@ -76,7 +76,7 @@ require('salam').setup({ lsp = true })
 Without the plugin, Neovim 0.11 needs only:
 
 ```lua
-vim.filetype.add({ extension = { salam = 'salam' } })
+vim.filetype.Add({ extension = { salam = 'salam' } })
 vim.lsp.config('salam', { cmd = { 'salam', 'lsp' }, filetypes = { 'salam' }, root_markers = { 'salam.salam', '.git' } })
 vim.lsp.enable('salam')
 ```

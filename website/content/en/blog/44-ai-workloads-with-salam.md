@@ -46,7 +46,7 @@ func main:
     end
     mut g := gguf.Gguf {}
     try:
-        g = gguf.LoadGguf(args.get(1))
+        g = gguf.LoadGguf(args.Get(1))
     catch e:
         println "not a readable GGUF file:", e.to_str()
         ret 1
@@ -99,24 +99,24 @@ func main:
         ret 1
     end
     mut ok := false
-    mut model := onnx.LoadOnnx(args.get(1), ok)
+    mut model := onnx.LoadOnnx(args.Get(1), ok)
     if not ok:
         println "cannot load:", model.error
         ret 1
     end
     mut features := Vector {} as Vector<f32>
     repeat 4 in i:
-        features.push(conv.ParseFloatOr(args.get(i + 2), 0.0) as f32)
+        features.Push(conv.ParseFloatOr(args.Get(i + 2), 0.0) as f32)
     end
     mut shape := tensor.Shape2(1, 4)
     mut inputs := Vector {} as Vector<tensor.Tensor>
-    inputs.push(tensor.FromArray(shape, features))
+    inputs.Push(tensor.FromArray(shape, features))
     mut outputs := onnx.Run(model, inputs, ok)
     if not ok:
         println "inference failed:", model.error
         ret 1
     end
-    mut scores := outputs.get(0)
+    mut scores := outputs.Get(0)
     println "output shape", tensor.ShapeString(scores)
     println "predicted class", tensor.ArgMaxAll(scores)
     model.Free()
@@ -138,7 +138,7 @@ import conv
 func rows(n: int, width: int, values: f64[]): tensor.Tensor:
     mut data := Vector {} as Vector<f32>
     each v in values:
-        data.push(v as f32)
+        data.Push(v as f32)
     end
     mut shape := tensor.Shape2(n, width)
     ret tensor.FromArray(shape, data)
@@ -189,7 +189,7 @@ import ai.tensor
 func table(values: f64[], n: int, width: int): tensor.Tensor:
     mut data := Vector {} as Vector<f32>
     each v in values:
-        data.push(v as f32)
+        data.Push(v as f32)
     end
     mut shape := tensor.Shape2(n, width)
     ret tensor.FromArray(shape, data)
@@ -201,9 +201,9 @@ func main:
     mut store := nn.ParamStore {}
     mut rng := tensor.NewRng(11)
     mut net := nn.Sequential {}
-    net.add(nn.NewLinear(store, "hidden", 2, 6, rng))
-    net.add(nn.TanhLayer {})
-    net.add(nn.NewLinear(store, "out", 6, 1, rng))
+    net.Add(nn.NewLinear(store, "hidden", 2, 6, rng))
+    net.Add(nn.TanhLayer {})
+    net.Add(nn.NewLinear(store, "out", 6, 1, rng))
     mut adam := optim.Adam { lr = 0.05 }
     mut tape := autograd.NewTape(1)
     repeat 600 in step:

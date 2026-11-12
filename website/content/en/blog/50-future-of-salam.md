@@ -61,9 +61,9 @@ func parse version(text: str): Version:
     parts := str.Split(str.TrimPrefix(text, "v"), ".")
     defer parts.Free()
     ret Version {
-        major = conv.AtoiOr(parts.get(0), 0),
-        minor = conv.AtoiOr(parts.get(1), 0),
-        patch = conv.AtoiOr(parts.get(2), 0),
+        major = conv.AtoiOr(parts.Get(0), 0),
+        minor = conv.AtoiOr(parts.Get(1), 0),
+        patch = conv.AtoiOr(parts.Get(2), 0),
     }
 end
 

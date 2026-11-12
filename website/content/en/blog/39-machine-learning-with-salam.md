@@ -38,7 +38,7 @@ import ai.tensor
 func from(rows: int, cols: int, values: f64[]): tensor.Tensor:
     mut data := Vector {} as Vector<f32>
     each v in values:
-        data.push(v as f32)
+        data.Push(v as f32)
     end
     mut shape := tensor.Shape2(rows, cols)
     ret tensor.FromArray(shape, data)
@@ -80,7 +80,7 @@ import conv
 func main:
     mut tape := autograd.NewTape(1)
     mut start := Vector {} as Vector<f32>
-    start.push(0.0 as f32)
+    start.Push(0.0 as f32)
     mut shape := tensor.Shape1(1)
     mut w := tensor.FromArray(shape, start)
     repeat 31 in step:
@@ -122,7 +122,7 @@ import ai.tensor
 func table(rows: int, cols: int, values: f64[]): tensor.Tensor:
     mut data := Vector {} as Vector<f32>
     each v in values:
-        data.push(v as f32)
+        data.Push(v as f32)
     end
     mut shape := tensor.Shape2(rows, cols)
     ret tensor.FromArray(shape, data)
@@ -134,9 +134,9 @@ func main:
     mut store := nn.ParamStore {}
     mut rng := tensor.NewRng(42)
     mut model := nn.Sequential {}
-    model.add(nn.NewLinear(store, "hidden", 2, 16, rng))
-    model.add(nn.ReluLayer {})
-    model.add(nn.NewLinear(store, "out", 16, 1, rng))
+    model.Add(nn.NewLinear(store, "hidden", 2, 16, rng))
+    model.Add(nn.ReluLayer {})
+    model.Add(nn.NewLinear(store, "out", 16, 1, rng))
     mut opt := optim.Adam { lr = 0.03 }
     mut tape := autograd.NewTape(1)
     repeat 600 in step:
@@ -183,8 +183,8 @@ import matrix
 
 func build(rows: int, cols: int, numbers: str): matrix.Matrix:
     mut data := Vector {} as Vector<f64>
-    each number in numbers.split(" "):
-        data.push(number.to_float())
+    each number in numbers.Split(" "):
+        data.Push(number.to_float())
     end
     ret matrix.FromArray(rows, cols, data)
 end

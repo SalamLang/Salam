@@ -125,8 +125,8 @@ func main:
     body := `{"model":"salam","messages":[{"role":"user","content":"` + json.Escape(question) + `"}]}`
     mut headers := HashMap {} as HashMap<str, str>
     defer headers.Free()
-    headers.insert("Authorization", "Bearer " + key)
-    headers.insert("Content-Type", "application/json")
+    headers.Insert("Authorization", "Bearer " + key)
+    headers.Insert("Content-Type", "application/json")
     res := http.PostWith("https://ai-api.salamlang.ir/chat/completions", body, headers)
     if res.err.len() > 0:
         println "request failed:", res.err

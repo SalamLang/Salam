@@ -51,8 +51,8 @@ end
 func main:
     mut points := Vector {} as Vector<Point>
     defer points.Free()
-    points.push(Point { x = 3.0, y = 4.0 })
-    points.push(Point { x = 1.0, y = 1.0 })
+    points.Push(Point { x = 3.0, y = 4.0 })
+    points.Push(Point { x = 1.0, y = 1.0 })
     each p in points:
         d := distance from origin(p)
         if d >= 2.0 and p.x != p.y:
@@ -125,7 +125,7 @@ The list comes from the source of the command, `compiler/cli/cli_translate.salam
 | Literal words                                   | `true`, `false`, `null`, `this` to `درست`, `نادرست`, `پوچ`, `این` |
 | The entry function                              | `main` to `ریشه`                                                  |
 | Primitive and built-in types in type positions  | `int` to `صحیح`, `Vector<str>` to `وکتور<رشته>`                   |
-| Built-in methods after a dot                    | `.push()` to `.بیفزا()`, `.len()` to `.طول()`                     |
+| Built-in methods after a dot                    | `.Push()` to `.بیفزا()`, `.len()` to `.طول()`                     |
 | Built-in functions                              | `len(x)` to `طول(x)`, `spawn` to `نخ‌ساز`                         |
 | Standard library imports and members            | `import math` to `واردسازی ریاضی`, `math.Sqrt` to `ریاضی.جذر`     |
 | Compile-time constants                          | `SALAM_OS_LINUX` to `سلام سیستم لینوکس`                           |
@@ -190,14 +190,14 @@ Because the text between tokens is never touched, comments and formatting surviv
 
 ## Limits, and how to check the result {#limits}
 
-The help text is candid about one trap: a method of your own that has the same name as a built-in container method, for example your own `.get()`, is renamed too at the call site. In practice the compiler accepts the Persian spelling for that call as well, so the program still runs, but read the output before using `--rewrite`.
+The help text is candid about one trap: a method of your own that has the same name as a built-in container method, for example your own `.Get()`, is renamed too at the call site. In practice the compiler accepts the Persian spelling for that call as well, so the program still runs, but read the output before using `--rewrite`.
 
 The other limit is coverage. The built-in method table in the translator lags the compiler's: `lower`, `upper` and `bytes` are not in it in the current release. Here is the English program:
 
 ```salam
 func main:
     word := "Salam"
-    println word.upper(), word.lower(), word.len()
+    println word.Upper(), word.Lower(), word.len()
 end
 ```
 
@@ -205,13 +205,13 @@ end
 SALAM salam 5
 ```
 
-After `salam translate fa`, `.len()` has become `.طول()` but `.upper()` and `.lower()` are still English, and the compiler says so, with the fix:
+After `salam translate fa`, `.len()` has become `.طول()` but `.Upper()` and `.Lower()` are still English, and the compiler says so, with the fix:
 
 ```text
 خطا[خطا۰۰۱]: شناسه‌ی 'upper' در یک فایل فارسی باید فارسی باشد
  --> shout.fa.salam:4:11
   |
-4 |     سرچاپ word.upper()، word.lower()، word.طول()
+4 |     سرچاپ word.Upper()، word.Lower()، word.طول()
   |           ^
   |
   = راهنما: نام فارسی آن 'بزرگ' است

@@ -34,7 +34,7 @@ Count the words in a sentence and print the three most common, most frequent fir
 from collections import Counter
 
 text = "the cat sat on the mat and the dog sat on the log"
-counts = Counter(text.split())
+counts = Counter(text.Split())
 top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
 for word, n in top:
     print(word, n)
@@ -58,19 +58,19 @@ func main:
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.Free()
     each w in words:
-        counts.put(w, counts.GetOr(w, 0) + 1)
+        counts.Put(w, counts.GetOr(w, 0) + 1)
     end
     mut entries := Vector {} as Vector<Entry>
     defer entries.Free()
     each w, n in counts:
-        entries.push(Entry { word = w, count = n })
+        entries.Push(Entry { word = w, count = n })
     end
     sort.SortBy(entries, (a: Entry, b: Entry):
         if a.count != b.count: ret a.count > b.count end
         ret str.Compare(a.word, b.word) < 0
     end)
     repeat 3 in i:
-        e := entries.get(i)
+        e := entries.Get(i)
         println e.word, e.count
     end
 end

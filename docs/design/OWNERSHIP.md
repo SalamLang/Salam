@@ -12,7 +12,7 @@ by-value argument) shares the heap buffer. After that:
 
 - `free()` on one copy leaves every other copy dangling;
 - `push` on one copy can `realloc` the buffer, so every other copy, every
-  `.ref(i)` pointer and every live iterator can dangle;
+  `.Ref(i)` pointer and every live iterator can dangle;
 - `mem.Free(s as void*)` on a string leaves every other name for it dangling.
 
 Nothing caught these. `SKILL.md` said it plainly: "Salam does not
@@ -36,7 +36,7 @@ function is registered right after definite initialization
 (`SemaOwnPost`). It only runs on functions that free something, call a
 function whose summary says it always frees an argument (see "Function
 summaries"), free in a `defer` and return a value, or (in warn mode) take a
-`.ref()` or `.iter()`, so most functions cost nothing.
+`.Ref()` or `.Iter()`, so most functions cost nothing.
 
 ### Control-flow graph
 
@@ -62,7 +62,7 @@ Every value is reached through an **access path**: `x`, `x.f`, `this.items`,
 | init         | a parameter, global or `this` read before any write                |
 | fresh        | an allocation site: a literal, a call result, a declaration        |
 | field        | the buffer held in field `f` of a token                            |
-| element `[]` | what `.ref(i)` points at, inside a container's buffer              |
+| element `[]` | what `.Ref(i)` points at, inside a container's buffer              |
 | old          | earlier allocations from a site that ran again (see recency below) |
 | null         | a `Vector`/`HashMap` after its own `free()` nulled the header      |
 
@@ -78,10 +78,10 @@ is seen through every other name.
   again (`v.len()` is 0) or freeing it again (a `defer v.Free()` after an
   explicit `v.Free()` frees a null pointer) is defined on every backend, so
   neither is reported; the same through a copy is E139 or E140.
-- `.copy()` and `.deep_copy()` build a new buffer, so `b := a.copy()` neither
+- `.Copy()` and `.DeepCopy()` build a new buffer, so `b := a.Copy()` neither
   shares nor moves `a`'s buffer.
 - `push`, `insert`, `reserve`, `resize_set`, `zeros`, `alloc` and `put` _may_
-  move the buffer, which invalidates copies, `.ref()` pointers and iterators.
+  move the buffer, which invalidates copies, `.Ref()` pointers and iterators.
 - Passing a path to a `&:` parameter, or calling a method on it, may give it
   new contents, so its freed state is forgotten. This keeps phase 1 free of
   false positives at the cost of missing bugs that cross calls (phase 3).
@@ -114,7 +114,7 @@ positive count at zero on `std/` and `compiler/`:
 | E141 | a returned value is freed by the function's own `defer`                               | on, warn       |
 | W142 | used after free on some paths                                                         | on, warn       |
 | W143 | freed twice on some paths                                                             | on, warn       |
-| W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
+| W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
 | W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | warn (default) |
 
 `--ownership=off|on|warn|error` picks the mode; `warn` is the default.
@@ -236,7 +236,7 @@ A local qualifies when:
   block (not a match arm). `x += e` needs a `str` right side;
 - an assignment whose right side reads `x` must have a fresh right side, so
   the new value can never alias the one being freed;
-- it is never passed by reference (`&:`), stored (`v.push(x)`, `y := x`,
+- it is never passed by reference (`&:`), stored (`v.Push(x)`, `y := x`,
   `y = x`, a struct field), freed by hand, or handed to a callee that keeps
   or returns its argument. Those make the old value reachable from somewhere
   the compiler cannot see, so the local keeps today's behavior.
@@ -280,7 +280,7 @@ whole call graph:
 - **grows** parameter _i_: some path pushes into a container reachable from
   it, which may move that buffer;
 - **returns an alias** of parameter _i_: for example
-  `At(a, id): Node* ... ret a.nodes.ref(id)`.
+  `At(a, id): Node* ... ret a.nodes.Ref(id)`.
 
 Sema records the resolved target of every call, so overloads, methods, package
 functions and generic instances all map to the right summary. Interface (`dyn`)
@@ -296,7 +296,7 @@ What the summaries buy:
   E139, even several calls deep (`forget(s)` calls `release(s)`, which frees
   it).
 - **Warnings across calls**: a may-free callee gives W142. In warn mode, a callee
-  that grows a container gives W144 on every copy and `.ref()` pointer taken
+  that grows a container gives W144 on every copy and `.Ref()` pointer taken
   before the call, including results of alias-returning functions such as
   `at.At`.
 
@@ -377,8 +377,8 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    - Release N ships with phases 1 to 5 (`--ownership=on` by default).
    - After N is the seed: report `b := a` of an owned `Vector`/`HashMap`
      followed by a use of `a` as a warn-mode move warning, and migrate std/
-     and compiler/ (`.copy()` or reorder) until `--ownership=warn` is clean.
+     and compiler/ (`.Copy()` or reorder) until `--ownership=warn` is clean.
    - Release N+1 makes `--ownership=error` the default and turns the move
-     warning into an error with a `.copy()` fix-it.
+     warning into an error with a `.Copy()` fix-it.
    - Each flip lands with the `tests/*/errors/own_*` expectations updated in
      both languages.

@@ -88,10 +88,10 @@ Here, for flavor, is the kind of code the compiler is made of: a tiny tokenizer 
 enum Kind: Number, Operator, Space, Unknown end
 
 func kind of(ch: str): Kind:
-    if "0123456789".includes(ch):
+    if "0123456789".Includes(ch):
         ret Kind.Number
     end
-    if "+-*/".includes(ch):
+    if "+-*/".Includes(ch):
         ret Kind.Operator
     end
     if ch == " ":
@@ -112,11 +112,11 @@ func main:
             continue
         end
         if digits != "":
-            tokens.push("NUMBER " + digits)
+            tokens.Push("NUMBER " + digits)
             digits = ""
         end
         if k == Kind.Operator:
-            tokens.push("OPERATOR " + ch)
+            tokens.Push("OPERATOR " + ch)
         end
     end
     each t in tokens:

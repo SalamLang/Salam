@@ -40,10 +40,10 @@ func main:
 
     mut cart := Vector {} as Vector<str>
     defer cart.Free()
-    cart.push("bread")
-    mut basket := cart.copy()
+    cart.Push("bread")
+    mut basket := cart.Copy()
     defer basket.Free()
-    basket.push("milk")
+    basket.Push("milk")
     println cart.len(), basket.len()
 end
 ```
@@ -73,7 +73,7 @@ end
 func count words(lines: str[]): int:
     mut total := 0
     each line in lines:
-        words := line.split(" ")
+        words := line.Split(" ")
         defer free words(words)
         total += words.len()
     end
@@ -95,7 +95,7 @@ main: last
 
 Writing `defer x.Free()` on the line right after `x` is created is the most important habit in Salam. Cleanup sits next to the allocation, where a reviewer can see it, and an early `ret` added later cannot skip it. The [defer lesson](/learn/defer/) has more examples.
 
-Notice `free words`. `line.split(" ")` returns a `Vector<str>` whose strings are themselves heap allocations, and `free()` on a `Vector` frees its own storage, not what the elements own. So the helper frees each string first, then the vector. That detail is easy to miss, which is why the next tools exist.
+Notice `free words`. `line.Split(" ")` returns a `Vector<str>` whose strings are themselves heap allocations, and `free()` on a `Vector` frees its own storage, not what the elements own. So the helper frees each string first, then the vector. That detail is easy to miss, which is why the next tools exist.
 
 ## Finding leaks with salam memcheck {#memcheck}
 
@@ -122,14 +122,14 @@ Since October 2026 (PR #2288), the compiler frees a local `Vector` or `HashMap` 
 func squares(n: int): Vector<int>:
     mut out := Vector {} as Vector<int>
     repeat n in i:
-        out.push(i * i)
+        out.Push(i * i)
     end
     ret out
 end
 
 func main:
     sq := squares(5)
-    println sq.len(), sq.get(4)
+    println sq.len(), sq.Get(4)
 end
 ```
 
@@ -225,15 +225,15 @@ The ownership checker (`compiler/semantic/sema_own.salam`) is a flow-sensitive a
 ```salam fragment
 func main:
     mut a := Vector {} as Vector<int>
-    a.push(1)
+    a.Push(1)
     b := a
     a.Free()
-    println b.get(0)
+    println b.Get(0)
 end
 ```
 
 ```text
-warning[W163]: 'a' is used after its buffer was moved on line 4; both names now share one buffer, so take 'a.copy()' where both are needed
+warning[W163]: 'a' is used after its buffer was moved on line 4; both names now share one buffer, so take 'a.Copy()' where both are needed
  --> o2.salam:5:5
   |
 5 |     a.Free()
@@ -243,13 +243,13 @@ warning[W163]: 'a' is used after its buffer was moved on line 4; both names now 
 error[E139]: 'b' is used after its storage was freed on line 5
  --> o2.salam:6:13
   |
-6 |     println b.get(0)
+6 |     println b.Get(0)
   |             ^
   |
   = help: a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy
 ```
 
-The codes cover the main cases: **E139** use after free, **E140** double free, **E141** a returned value that the function's own `defer` frees; **W142** and **W143** when only some paths do it; **W144** a copy, `.ref()` pointer or iterator kept across a call that may move the buffer; **W163** an owned container used after it was handed to another name. `--ownership=warn` is the default, `error` turns the warnings into errors, and `off` disables the checks along with the automatic frees. None of this costs anything at runtime; the analysis only reads the program.
+The codes cover the main cases: **E139** use after free, **E140** double free, **E141** a returned value that the function's own `defer` frees; **W142** and **W143** when only some paths do it; **W144** a copy, `.Ref()` pointer or iterator kept across a call that may move the buffer; **W163** an owned container used after it was handed to another name. `--ownership=warn` is the default, `error` turns the warnings into errors, and `off` disables the checks along with the automatic frees. None of this costs anything at runtime; the analysis only reads the program.
 
 It is important to be precise about what this is. It is **not a borrow checker**. Rust's borrow checker proves that safe code cannot have use-after-free or data races, and rejects programs it cannot prove. Salam's checker reports the mistakes it can see and stays quiet otherwise. Globals, indirect calls through function values and `dyn`, and the elements inside containers are outside its view, as `docs/design/OWNERSHIP.md` lists. It catches a lot, with no annotations and no new syntax, but it is a strong safety net, not a proof.
 

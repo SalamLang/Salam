@@ -58,10 +58,10 @@ func main:
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.Free()
     each word in words:
-        counts.put(word, counts.GetOr(word, 0) + 1)
+        counts.Put(word, counts.GetOr(word, 0) + 1)
     end
-    println "apple:", counts.get("apple")
-    println "pear:", counts.get("pear")
+    println "apple:", counts.Get("apple")
+    println "pear:", counts.Get("pear")
 end
 ```
 
@@ -85,7 +85,7 @@ Keywords are the easy part. A real program spends most of its words on library n
 ```salam fragment
 @en "Split"
 @fa "تفکیک کردن"
-pub pure func Split(s: str, delim: str): Vector<str>: ret s.split(delim) end
+pub pure func Split(s: str, delim: str): Vector<str>: ret s.Split(delim) end
 ```
 
 The [standard library](/std/) carries more than 21,000 `@fa` annotations, one for every public package, function, type, field and constant. That number is the real cost of a language pack. Translating 60 keywords takes an afternoon; naming every public symbol of a large standard library consistently takes a project. Salam even has a design document, [docs/design/naming-standard.md](https://github.com/SalamLang/Salam/blob/main/docs/design/naming-standard.md), with rules for how Persian names are written (spaces between words, never underscores) and how they stay in step when an English name changes.

@@ -90,16 +90,16 @@ func main:
     mut workers := Vector {} as Vector<i64>
     defer workers.Free()
     repeat 3:
-        workers.push(spawn(worker))
+        workers.Push(spawn(worker))
     end
     repeat 1 to 10 in i:
         jobs.send(i as i64)
     end
-    jobs.close()
+    jobs.Close()
     each t in workers:
         join(t)
     end
-    results.close()
+    results.Close()
     mut sum := 0 as i64
     mut ok := true
     until true:

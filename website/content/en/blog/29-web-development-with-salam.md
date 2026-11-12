@@ -241,8 +241,8 @@ end
 func main:
     mut skills := Vector {} as Vector<str>
     defer skills.Free()
-    skills.push("Salam")
-    skills.push("SQL & <HTML>")
+    skills.Push("Salam")
+    skills.Push("SQL & <HTML>")
     println Profile("Sara", skills, true)
 end
 ```

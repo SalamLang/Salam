@@ -172,7 +172,7 @@ interface Product {
 
 const app = express();
 
-app.get('/products/:id', (req, res) => {
+app.Get('/products/:id', (req, res) => {
   const p: Product = {
     id: Number(req.params.id),
     name: 'Notebook',

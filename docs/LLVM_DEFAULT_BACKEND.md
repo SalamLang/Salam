@@ -546,7 +546,7 @@ of scope. 20-line repro:
 
 ```salam
 repeat bases.len() in bi:
-    entries := os.ListDir(bases.get(bi))
+    entries := os.ListDir(bases.Get(bi))
     defer entries.Free()          // <- epilogue cannot see `entries`
     ...
 end

@@ -156,7 +156,7 @@ page:
     button:
         content = "Add a task"
         click = ():
-            tasks.push("Task " + next)
+            tasks.Push("Task " + next)
             next++
         end
     end

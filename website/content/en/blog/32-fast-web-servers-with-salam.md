@@ -117,7 +117,7 @@ func create(ctx: i64):
         ret
     end
     item := Item { id = items.len() + 1, name = str.Clone(name) }
-    items.push(item)
+    items.Push(item)
     http.SetStatus(ctx, 201)
     http.Json(ctx, json.Marshal(item))
 end
@@ -136,8 +136,8 @@ func main:
     println http.Status(a), http.Body(a)
 
     mut auth := http.NewHeaders()
-    auth.insert("Authorization", "Bearer demo-token")
-    auth.insert("Content-Type", "application/json")
+    auth.Insert("Authorization", "Bearer demo-token")
+    auth.Insert("Content-Type", "application/json")
     b := http.PostWith(base + "/items", `{"name":"tea"}`, auth)
     println http.Status(b), http.Body(b)
 

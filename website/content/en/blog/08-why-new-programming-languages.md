@@ -68,11 +68,11 @@ func main:
     mut counts := HashMap {} as HashMap<str, int>
     defer counts.Free()
     each w in words:
-        before := counts.has(w) ? counts.get(w) : 0
-        counts.put(w, before + 1)
+        before := counts.Has(w) ? counts.Get(w) : 0
+        counts.Put(w, before + 1)
     end
     each w in ["the", "and", "fox", "owl"]:
-        println w, counts.has(w) ? counts.get(w) : 0
+        println w, counts.Has(w) ? counts.Get(w) : 0
     end
 end
 ```

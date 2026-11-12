@@ -92,16 +92,16 @@ func main:
     mut totals := HashMap {} as HashMap<str, f64>
     defer totals.Free()
     each o in orders:
-        totals.put(o.customer, totals.GetOr(o.customer, 0.0) + o.amount)
+        totals.Put(o.customer, totals.GetOr(o.customer, 0.0) + o.amount)
     end
     mut names := Vector {} as Vector<str>
     defer names.Free()
     each name, _ in totals:
-        names.push(name)
+        names.Push(name)
     end
     sort.Sort(names)
     each name in names:
-        println name, conv.FormatFloatPrec(totals.get(name), 2)
+        println name, conv.FormatFloatPrec(totals.Get(name), 2)
     end
 end
 ```

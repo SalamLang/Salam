@@ -12,7 +12,7 @@ with a wrong answer:
 | ------------------------------------- | ----------------------------------------------------- |
 | `repeat 0 to 3 in i: xs[i]` on 3 items | aborts at runtime on the fourth pass                  |
 | `i := 5` then `xs[i]`                 | aborts at runtime                                     |
-| `v.push(1)` twice, then `v[5]`        | panics at runtime                                     |
+| `v.Push(1)` twice, then `v[5]`        | panics at runtime                                     |
 | `a := 2147483647 as i32; a + 1`       | prints `-2147483648`; undefined in a `--release` build |
 | 13! in an `int` (`i32`)                | prints a wrong number                                 |
 | `d := 0` then `10 / d`                | stops at runtime                                      |

@@ -1,0 +1,240 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import term
+import tui
+
+mut renders := 0
+
+mut clicks := 0
+
+struct App:
+    pub use tui.BaseWidget
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        renders++
+        buf.put_str(bounds.x, bounds.y, "app", tui.StyleDefault)
+    end
+end
+
+struct Spot:
+    pub use tui.BaseWidget
+    pub mark: str = "a"
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        if not event.is_char("r"):
+            ret false
+        end
+        if this.mark == "a":
+            this.mark = "b"
+        else:
+            this.mark = "a"
+        end
+        ret true
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.mark, tui.StyleDefault)
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func special(code: int): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code } }
+end
+
+func click(x: int, y: int): tui.Event:
+    seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
+    ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
+end
+
+func pump(s &: tui.Screen, ev: tui.Event): bool:
+    _ := s.post(ev)
+    mut got := tui.Event {}
+    _ := s.next_event(got)
+    ret s.dispatch(got)
+end
+
+func frame(s &: tui.Screen): str:
+    mut out := ""
+    repeat s.buffer.height in y:
+        if y > 0:
+            out += "|"
+        end
+        out += s.buffer.row_text(y)
+    end
+    ret out
+end
+
+func test_new_screen_state():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 8)
+    defer s.close()
+    testing.AssertFalse(s.running)
+    testing.AssertEqInt(s.buffer.width, 20)
+    testing.AssertEqInt(s.buffer.height, 8)
+    testing.AssertEqInt(s.tree.count(), 1)
+    testing.AssertEqInt(s.focused_id(), tui.NoWidget)
+    b := s.root.bounds()
+    testing.AssertEqInt(b.x, 0)
+    testing.AssertEqInt(b.y, 0)
+    testing.AssertEqInt(b.width, 20)
+    testing.AssertEqInt(b.height, 8)
+    testing.AssertTrue(s.dirty)
+    testing.AssertFalse(s.mouse_motion)
+end
+
+func test_run_exits_on_unconsumed_ctrl_c():
+    mut s := tui.NewScreen(App {}, 20, 8)
+    defer s.close()
+    renders = 0
+    testing.AssertTrue(s.post(key("\x03")))
+    s.run()
+    testing.AssertFalse(s.running)
+    testing.AssertEqInt(renders, 1)
+end
+
+func test_run_consumed_key_changes_state():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 8)
+    defer s.close()
+    spot := Spot {} as dyn tui.Widget
+    id := s.add(tui.RootId, spot)
+    s.widget(id).set_bounds(rect(0, 0, 1, 1))
+    testing.AssertEqInt(s.focused_id(), id)
+    testing.AssertTrue(s.post(key("r")))
+    testing.AssertTrue(s.post(key("\x03")))
+    s.run()
+    testing.AssertFalse(s.running)
+    testing.AssertEqStr(s.buffer.get(0, 0).ch, "b")
+end
+
+func test_close_without_stop():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
+    s.close()
+    testing.AssertFalse(s.running)
+end
+
+func test_start_after_close_is_a_noop():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
+    s.close()
+    s.start()
+    testing.AssertFalse(s.running)
+end
+
+func test_scripted_event_loop():
+    mut s := tui.NewScreen(App {}, 20, 8)
+    defer s.close()
+    s.set_keymap(tui.NewDefaultKeymap())
+    clicks = 0
+
+    inp := tui.NewInput() as dyn tui.Widget
+    inbox := s.add(tui.RootId, inp)
+    s.widget(inbox).set_bounds(rect(1, 1, 12, 1))
+
+    box := tui.NewCheckbox("Wrap", false) as dyn tui.Widget
+    wrapped := s.add(tui.RootId, box)
+    s.widget(wrapped).set_bounds(rect(1, 3, 12, 1))
+
+    mut btn := tui.NewButton("Run")
+    btn.on_click = (): clicks++ end
+    launch := s.add(tui.RootId, btn as dyn tui.Widget)
+    s.widget(launch).set_bounds(rect(1, 4, 12, 1))
+
+    testing.AssertEqInt(s.focused_id(), inbox)
+
+    testing.AssertTrue(pump(s, key("h")))
+    testing.AssertTrue(pump(s, key("i")))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(1, 1).ch, "h")
+    testing.AssertEqStr(s.buffer.get(2, 1).ch, "i")
+
+    testing.AssertTrue(pump(s, special(term.KeyTab)))
+    testing.AssertEqInt(s.focused_id(), wrapped)
+
+    testing.AssertTrue(pump(s, key(" ")))
+    s.present()
+    testing.AssertEqStr(s.buffer.get(2, 3).ch, "x")
+
+    testing.AssertTrue(pump(s, special(term.KeyTab)))
+    testing.AssertEqInt(s.focused_id(), launch)
+
+    testing.AssertTrue(pump(s, special(term.KeyEnter)))
+    testing.AssertEqInt(clicks, 1)
+
+    testing.AssertTrue(pump(s, special(term.KeyTab)))
+    testing.AssertEqInt(s.focused_id(), inbox)
+
+    testing.AssertTrue(pump(s, click(7, 4)))
+    testing.AssertEqInt(clicks, 2)
+    testing.AssertEqInt(s.focused_id(), inbox)
+
+    testing.AssertFalse(pump(s, tui.Event { kind = tui.ResizeEvent, width = 24, height = 10 }))
+    testing.AssertEqInt(s.buffer.width, 24)
+    testing.AssertEqInt(s.buffer.height, 10)
+    b := s.root.bounds()
+    testing.AssertEqInt(b.x, 0)
+    testing.AssertEqInt(b.y, 0)
+    testing.AssertEqInt(b.width, 24)
+    testing.AssertEqInt(b.height, 10)
+    testing.AssertEqStr(s.buffer.diff(), s.buffer.ansi())
+    s.present()
+    s.buffer.commit()
+
+    testing.AssertFalse(pump(s, tui.Event { kind = tui.TickEvent }))
+    testing.AssertFalse(s.running)
+
+    ev := key("\x03")
+    consumed := pump(s, ev)
+    testing.AssertFalse(consumed)
+    if not consumed and ev.is_ctrl("c"):
+        s.stop()
+    end
+    mut last := tui.Event {}
+    testing.AssertFalse(s.next_event(last))
+    testing.AssertFalse(s.running)
+
+    testing.AssertEqStr(frame(s), "app                     | hi                     |                        | [x] Wrap               | [   Run    ]           |                        |                        |                        |                        |                        ")
+end
+
+func test_post_stop_next_event_after_close_are_inert():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
+    s.close()
+    testing.AssertFalse(s.post(tui.Event { kind = tui.TickEvent }))
+    s.stop()
+    mut ev := tui.Event {}
+    testing.AssertFalse(s.next_event(ev))
+    testing.AssertFalse(s.running)
+end
+
+func main:
+    test_new_screen_state()
+    test_run_exits_on_unconsumed_ctrl_c()
+    test_run_consumed_key_changes_state()
+    test_close_without_stop()
+    test_start_after_close_is_a_noop()
+    test_scripted_event_loop()
+    test_post_stop_next_event_after_close_are_inert()
+    ret testing.Summary()
+end

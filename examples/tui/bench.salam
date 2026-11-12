@@ -1,0 +1,240 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import conv
+import mem
+import str
+import term
+import time
+import tui
+
+const Warmup := 100
+const Measured := 1000
+
+mut texts := Vector {} as Vector<str>
+mut rows_a := Vector {} as Vector<str>
+mut rows_b := Vector {} as Vector<str>
+mut input_a := tui.Input {}
+mut input_b := tui.Input {}
+mut box := tui.NewCheckbox("flag", false)
+mut slots := Vector {} as Vector<int>
+
+func heap(s: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, s)
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+func poke(s: str, digit: int):
+    p := (s as void*) as i8*
+    p[0] = (48 + (digit % 10)) as i8
+end
+func put_row(rows &: Vector<str>, n: int):
+    rows.set(n % rows.len(), "item " + term.PadLeft(str.FromInt(n % 10000), 4) + " ----------------")
+end
+func key(code: int, ch: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Key { code = code, ch = ch } }
+end
+func type_digit(w: dyn tui.Widget, digit: int):
+    ch := str.CharSubstr("0123456789", digit % 10, 1)
+    _ := w.handle_event(key(term.KeyBackspace, ""))
+    _ := w.handle_event(key(term.KeyChar, ch))
+end
+func mutate_all(n: int):
+    repeat texts.len() in i:
+        poke(texts.get(i), n)
+    end
+    put_row(rows_a, n)
+    put_row(rows_b, n + 3)
+    type_digit(input_b as dyn tui.Widget, n + 1)
+    _ := box.handle_event(key(term.KeySpace, ""))
+end
+func mutate_one(n: int):
+    w := n % 10
+    d := n / 10
+    if w < 5: poke(texts.get(w), d) ret end
+    if w == 5: put_row(rows_a, n) ret end
+    if w == 6: put_row(rows_b, n) ret end
+    if w == 7: type_digit(input_a as dyn tui.Widget, d) ret end
+    if w == 8: _ := box.handle_event(key(term.KeySpace, "")) ret end
+    type_digit(input_b as dyn tui.Widget, d)
+end
+func frame(screen &: tui.Screen, n: int, small: bool): int:
+    if small:
+        mutate_one(n)
+        screen.invalidate(slots.get(n % 10))
+    else:
+        mutate_all(n)
+        screen.dirty = true
+    end
+    screen.present()
+    out := screen.buffer.diff()
+    screen.buffer.commit()
+    ret out.len()
+end
+func report(mode: str, ms: f64, bytes: int):
+    println "mode " + mode
+    println "frames " + Measured
+    println "total_ms " + conv.FormatFloatPrec(ms, 3)
+    println "ms_per_frame " + conv.FormatFloatPrec(ms / (Measured as f64), 4)
+    println "bytes_per_frame " + (bytes / Measured)
+    if mem.IsMemDebug():
+        println "allocs " + mem.AllocCount()
+        println "frees " + mem.FreeCount()
+        println "live_bytes " + mem.LiveBytes()
+        println "peak_bytes " + mem.PeakBytes()
+    end
+end
+func fill_serializer_runs(buf &: tui.Buffer, swap: bool):
+    if swap:
+        buf.fill(tui.Rect { x = 0, y = 0, width = 80, height = 12 }, "x", tui.Style { reverse = true, underline = true })
+        buf.fill(tui.Rect { x = 0, y = 12, width = 80, height = 12 }, "x", tui.Style { bold = true, italic = true })
+    else:
+        buf.fill(tui.Rect { x = 0, y = 0, width = 80, height = 12 }, "x", tui.Style { bold = true, italic = true })
+        buf.fill(tui.Rect { x = 0, y = 12, width = 80, height = 12 }, "x", tui.Style { reverse = true, underline = true })
+    end
+end
+func report_serializer(mode: str, ms: f64, bytes: int, sgr_delta: int, allocs_delta: i64, frees_delta: i64, live_bytes_delta: i64, peak_bytes: i64):
+    println "mode " + mode
+    println "frames " + Measured
+    println "total_ms " + conv.FormatFloatPrec(ms, 3)
+    println "ms_per_frame " + conv.FormatFloatPrec(ms / (Measured as f64), 4)
+    println "bytes_per_frame " + (bytes / Measured)
+    println "sgr_builds_delta " + sgr_delta
+    println "sgr_builds_per_frame " + (sgr_delta / Measured)
+    if mem.IsMemDebug():
+        println "allocs_delta " + allocs_delta
+        println "frees_delta " + frees_delta
+        println "live_bytes_delta " + live_bytes_delta
+        println "peak_bytes " + peak_bytes
+    end
+end
+func serializer_frame(buf &: tui.Buffer, diff: bool, swap: bool): int:
+    if diff:
+        buf.clear()
+        fill_serializer_runs(buf, swap)
+        out := buf.diff()
+        buf.commit()
+        ret out.len()
+    end
+    ret buf.ansi().len()
+end
+func probe_serializer(mode: str, diff: bool):
+    mut buf := tui.NewBuffer(80, 24)
+    if not diff:
+        fill_serializer_runs(buf, false)
+    end
+    mut swap := false
+    repeat Warmup:
+        _ := serializer_frame(buf, diff, swap)
+        swap = not swap
+    end
+
+    sgr_before := tui.SgrBuilds()
+    mut allocs_before := 0 as i64
+    mut frees_before := 0 as i64
+    mut live_bytes_before := 0 as i64
+    if mem.IsMemDebug():
+        allocs_before = mem.AllocCount()
+        frees_before = mem.FreeCount()
+        live_bytes_before = mem.LiveBytes()
+    end
+    mut bytes := 0
+    t0 := time.NowNanos()
+    repeat Measured:
+        bytes += serializer_frame(buf, diff, swap)
+        swap = not swap
+    end
+    ms := time.ElapsedMs(t0, time.NowNanos())
+    sgr_delta := tui.SgrBuilds() - sgr_before
+    mut allocs_delta := 0 as i64
+    mut frees_delta := 0 as i64
+    mut live_bytes_delta := 0 as i64
+    mut peak_bytes := 0 as i64
+    if mem.IsMemDebug():
+        allocs_delta = mem.AllocCount() - allocs_before
+        frees_delta = mem.FreeCount() - frees_before
+        live_bytes_delta = mem.LiveBytes() - live_bytes_before
+        peak_bytes = mem.PeakBytes()
+    end
+    report_serializer(mode, ms, bytes, sgr_delta, allocs_delta, frees_delta, live_bytes_delta, peak_bytes)
+    buf.free()
+end
+func run_mode(screen &: tui.Screen, mode: str, small: bool):
+    repeat Warmup in i:
+        _ := frame(screen, i, small)
+    end
+    mut bytes := 0
+    t0 := time.NowNanos()
+    repeat Measured in i:
+        bytes += frame(screen, Warmup + i, small)
+    end
+    report(mode, time.ElapsedMs(t0, time.NowNanos()), bytes)
+end
+func add_child(root &: tui.Column, kids &: Vector<dyn tui.Widget>, w: dyn tui.Widget, h: int):
+    i := root.add(w)
+    root.set_height(i, tui.LayoutSize { kind = tui.SizeKind.Fixed, cells = h })
+    kids.push(w)
+end
+func main:
+    probe_serializer("serializer-ansi-80x24", false)
+    probe_serializer("serializer-diff-80x24", true)
+    println ""
+    texts.push(heap("0 text-header ......................"))
+    texts.push(heap("0 text-body ........................"))
+    texts.push(heap("0 text-mid ........................."))
+    texts.push(heap("0 text-foot ........................"))
+    texts.push(heap("0 go"))
+    repeat 8:
+        rows_a.push("item 0000 ----------------")
+        rows_b.push("item 0000 ----------------")
+    end
+    mut root := tui.NewColumn()
+    mut kids := Vector {} as Vector<dyn tui.Widget>
+    add_child(root, kids, tui.NewText(texts.get(0)) as dyn tui.Widget, 2)
+    add_child(root, kids, tui.NewText(texts.get(1)) as dyn tui.Widget, 4)
+    add_child(root, kids, tui.NewList(rows_a) as dyn tui.Widget, 18)
+    add_child(root, kids, tui.NewList(rows_b) as dyn tui.Widget, 16)
+    add_child(root, kids, tui.NewText(texts.get(2)) as dyn tui.Widget, 8)
+    input_a = tui.NewInput()
+    input_a.set_placeholder("Search")
+    add_child(root, kids, input_a as dyn tui.Widget, 1)
+    add_child(root, kids, box as dyn tui.Widget, 1)
+    add_child(root, kids, tui.NewButton(texts.get(4)) as dyn tui.Widget, 1)
+    input_b = tui.NewInput()
+    add_child(root, kids, input_b as dyn tui.Widget, 1)
+    add_child(root, kids, tui.NewText(texts.get(3)) as dyn tui.Widget, 8)
+    mut screen := tui.NewScreen(root as dyn tui.Widget, 200, 60)
+    defer screen.close()
+    mut kid_ids := Vector {} as Vector<int>
+    repeat kids.len() in i:
+        kid_ids.push(screen.add(tui.RootId, kids.get(i)))
+    end
+    slots.push(kid_ids.get(0))
+    slots.push(kid_ids.get(1))
+    slots.push(kid_ids.get(4))
+    slots.push(kid_ids.get(9))
+    slots.push(kid_ids.get(7))
+    slots.push(kid_ids.get(2))
+    slots.push(kid_ids.get(3))
+    slots.push(kid_ids.get(5))
+    slots.push(kid_ids.get(6))
+    slots.push(kid_ids.get(8))
+    kid_ids.free()
+    run_mode(screen, "full", false)
+    println ""
+    run_mode(screen, "small", true)
+    ret 0
+end

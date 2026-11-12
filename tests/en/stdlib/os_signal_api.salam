@@ -1,0 +1,93 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import mem
+import sync
+import os.signal
+
+func test_numbers():
+    testing.AssertEqInt(signal.SigInt, 2)
+    testing.AssertEqInt(signal.SigTerm, 15)
+    testing.AssertEqInt(signal.SigKill, 9)
+    testing.AssertEqInt(signal.SigWinch, signal.WinchSignal)
+    testing.AssertTrue(signal.SigUsr1 != signal.SigUsr2)
+end
+
+func test_raise_and_wait():
+    set := signal.NewSet()
+    defer mem.Free(set)
+    testing.AssertTrue(signal.AddSignal(set, signal.SigUsr1))
+    testing.AssertTrue(signal.AddSignal(set, signal.SigTerm))
+    testing.AssertTrue(signal.Block(set))
+    testing.AssertTrue(signal.Raise(signal.SigUsr1))
+    testing.AssertEqInt(signal.WaitSignal(set), signal.SigUsr1)
+    testing.AssertTrue(signal.Raise(signal.SigTerm))
+    testing.AssertEqInt(signal.WaitSignal(set), signal.SigTerm)
+    testing.AssertTrue(signal.Unblock(set))
+end
+
+func test_invalid():
+    testing.AssertEqInt(signal.WaitSignal(null), signal.WaitInvalid)
+    testing.AssertFalse(signal.Raise(0))
+    testing.AssertFalse(signal.Raise(-1))
+end
+
+func test_fill_and_set_mask():
+    all := signal.NewSet()
+    signal.FillSet(all)
+    testing.AssertTrue(signal.IsSignal(all, signal.SigTerm))
+    saved := signal.CurrentMask()
+    testing.AssertTrue(signal.SetMask(saved))
+    mem.Free(saved)
+    mem.Free(all)
+end
+
+func noop(_s: int):
+    _ := _s
+end
+
+func test_timed_wait_lasts():
+    prev := signal.Install(signal.SigUsr2, &noop)
+    testing.AssertNotNil(prev)
+    set := signal.NewSet()
+    testing.AssertTrue(signal.AddSignal(set, signal.SigUsr2))
+    out := mem.AllocateZeroed(8 as u64)
+    t0 := sync.NowMs()
+    testing.AssertEqInt(signal.WaitTimeout(set, out, 300), signal.WaitTimedOut)
+    testing.AssertTrue(sync.NowMs() - t0 >= 250)
+    mem.Free(out)
+    mem.Free(set)
+    testing.AssertTrue(signal.Restore(signal.SigUsr2, prev))
+    mem.Free(prev)
+end
+
+func test_windows_stubs():
+    testing.AssertEqInt(signal.WaitSignal(null), signal.WaitInvalid)
+    testing.AssertFalse(signal.Raise(signal.SigInt))
+end
+
+func main:
+    if SALAM_OS_WINDOWS:
+        test_windows_stubs()
+        ret testing.Summary()
+    else:
+        test_numbers()
+        test_raise_and_wait()
+        test_invalid()
+        test_timed_wait_lasts()
+        test_fill_and_set_mask()
+        ret testing.Summary()
+    end
+end

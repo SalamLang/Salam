@@ -1,0 +1,546 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import testing
+import term
+import tui
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func test_new_is_blank():
+    mut b := tui.NewBuffer(3, 2)
+    testing.AssertEqInt(b.cells.len(), 6)
+    testing.AssertEqStr(b.row_text(0), "   ")
+    testing.AssertEqStr(b.row_text(1), "   ")
+    testing.AssertEqInt(b.clip.width, 3)
+    testing.AssertEqInt(b.clip.height, 2)
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
+    b.free()
+    neg := tui.NewBuffer(-4, 2)
+    testing.AssertEqInt(neg.width, 0)
+    testing.AssertEqInt(neg.cells.len(), 0)
+end
+
+func test_set_get():
+    mut b := tui.NewBuffer(3, 2)
+    bold := tui.Style { bold = true }
+    b.set(2, 1, tui.Cell { ch = "x", style = bold })
+    testing.AssertEqStr(b.get(2, 1).ch, "x")
+    testing.AssertTrue(tui.StyleEq(b.get(2, 1).style, bold))
+    testing.AssertEqStr(b.row_text(1), "  x")
+    b.free()
+end
+
+func test_out_of_range_is_noop():
+    mut b := tui.NewBuffer(2, 2)
+    b.set(-1, 0, tui.Cell { ch = "a" })
+    b.set(2, 0, tui.Cell { ch = "b" })
+    b.set(0, 2, tui.Cell { ch = "c" })
+    b.set(0, -1, tui.Cell { ch = "d" })
+    testing.AssertEqStr(b.row_text(0), "  ")
+    testing.AssertEqStr(b.row_text(1), "  ")
+    testing.AssertEqStr(b.get(5, 5).ch, " ")
+    testing.AssertEqStr(b.row_text(9), "")
+    b.free()
+end
+
+func test_clip():
+    mut b := tui.NewBuffer(6, 1)
+    mut view := b
+    view.clip = rect(1, 0, 3, 1)
+    view.put_str(0, 0, "abcdef", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), " bcd  ")
+    testing.AssertEqInt(b.clip.width, 6)
+    b.free()
+end
+
+func test_put_str_codepoints():
+    mut b := tui.NewBuffer(6, 1)
+    b.put_str(1, 0, "سلام", tui.StyleDefault)
+    testing.AssertEqStr(b.get(1, 0).ch, "س")
+    testing.AssertEqStr(b.get(4, 0).ch, "م")
+    testing.AssertEqStr(b.get(5, 0).ch, " ")
+    b.put_str(4, 0, "xyz", tui.StyleDefault)
+    testing.AssertEqStr(b.get(5, 0).ch, "y")
+    b.free()
+end
+
+func test_display_cells():
+    mut b := tui.NewBuffer(4, 1)
+    b.put_str(0, 0, "中a", tui.StyleDefault)
+    testing.AssertEqStr(b.get(0, 0).ch, "中")
+    testing.AssertEqStr(b.get(1, 0).ch, "")
+    testing.AssertEqStr(b.get(2, 0).ch, "a")
+    testing.AssertEqStr(b.row_text(0), "中a ")
+    b.free()
+
+    mut exact := tui.NewBuffer(2, 1)
+    exact.put_str(0, 0, "中", tui.StyleDefault)
+    testing.AssertEqStr(exact.get(0, 0).ch, "中")
+    testing.AssertEqStr(exact.get(1, 0).ch, "")
+    exact.free()
+
+    mut edge := tui.NewBuffer(3, 1)
+    edge.put_str(2, 0, "中", tui.StyleDefault)
+    testing.AssertEqStr(edge.get(2, 0).ch, " ")
+    edge.free()
+
+    mut left_edge := tui.NewBuffer(2, 1)
+    left_edge.put_str(-1, 0, "中", tui.StyleDefault)
+    testing.AssertEqStr(left_edge.row_text(0), "  ")
+    left_edge.free()
+
+    mut clipped := tui.NewBuffer(4, 1)
+    clipped.clip = rect(0, 0, 3, 1)
+    clipped.put_str(2, 0, "中", tui.StyleDefault)
+    testing.AssertEqStr(clipped.get(2, 0).ch, " ")
+    testing.AssertEqStr(clipped.get(3, 0).ch, " ")
+    clipped.free()
+
+    mut zero := tui.NewBuffer(4, 1)
+    zero.put_str(0, 0, "e\u0301b", tui.StyleDefault)
+    testing.AssertEqStr(zero.row_text(0), "e\u0301b  ")
+    zero.free()
+
+    mut normalized := tui.NewBuffer(1, 1)
+    normalized.set(0, 0, tui.Cell { ch = "中" })
+    testing.AssertEqStr(normalized.get(0, 0).ch, " ")
+    normalized.set(0, 0, tui.Cell { ch = "\u200B" })
+    testing.AssertEqStr(normalized.get(0, 0).ch, " ")
+    normalized.set(0, 0, tui.Cell { ch = "" })
+    testing.AssertEqStr(normalized.get(0, 0).ch, " ")
+    normalized.free()
+
+    mut overwrite := tui.NewBuffer(3, 1)
+    overwrite.put_str(0, 0, "中a", tui.StyleDefault)
+    overwrite.set(1, 0, tui.Cell { ch = "x" })
+    testing.AssertEqStr(overwrite.row_text(0), " xa")
+    testing.AssertEqInt(tui.MeasureText(overwrite.row_text(0), 0).width, overwrite.width)
+    overwrite.clear()
+    overwrite.put_str(0, 0, "中a", tui.StyleDefault)
+    overwrite.set(0, 0, tui.Cell { ch = "y" })
+    testing.AssertEqStr(overwrite.row_text(0), "y a")
+    testing.AssertEqInt(tui.MeasureText(overwrite.row_text(0), 0).width, overwrite.width)
+    overwrite.clear()
+    overwrite.put_str(0, 0, "中a", tui.StyleDefault)
+    overwrite.fill(rect(1, 0, 1, 1), " ", tui.StyleDefault)
+    testing.AssertEqStr(overwrite.row_text(0), "  a")
+    testing.AssertEqInt(tui.MeasureText(overwrite.row_text(0), 0).width, overwrite.width)
+    overwrite.free()
+
+    mut filled := tui.NewBuffer(3, 1)
+    filled.fill(rect(0, 0, 3, 1), "中", tui.StyleDefault)
+    testing.AssertEqStr(filled.row_text(0), "   ")
+    filled.free()
+
+    mut invariant := tui.NewBuffer(5, 1)
+    invariant.put_str(0, 0, "中a", tui.StyleDefault)
+    testing.AssertEqInt(str.CharCount(invariant.row_text(0)), 4)
+    testing.AssertEqStr(invariant.row_text(0), "中a  ")
+    invariant.clear()
+    invariant.put_str(0, 0, "abcde", tui.StyleDefault)
+    testing.AssertEqInt(str.CharCount(invariant.row_text(0)), invariant.width)
+    invariant.free()
+
+    mut changed := tui.NewBuffer(3, 1)
+    changed.commit()
+    changed.put_str(0, 0, "中b", tui.StyleDefault)
+    testing.AssertEqStr(changed.diff(), term.SeqMoveTo(1, 1) + "中b")
+    changed.free()
+end
+
+func test_fill_and_clear():
+    mut b := tui.NewBuffer(4, 3)
+    b.fill(rect(1, 1, 5, 5), "#", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "    ")
+    testing.AssertEqStr(b.row_text(1), " ###")
+    testing.AssertEqStr(b.row_text(2), " ###")
+    b.clear()
+    testing.AssertEqStr(b.row_text(1), "    ")
+    b.free()
+end
+
+func test_resize():
+    mut b := tui.NewBuffer(2, 2)
+    b.set(0, 0, tui.Cell { ch = "x", style = tui.Style { bold = true } })
+    b.resize(4, 3)
+    testing.AssertEqInt(b.width, 4)
+    testing.AssertEqInt(b.height, 3)
+    testing.AssertEqStr(b.row_text(0), "    ")
+    testing.AssertEqStr(b.row_text(2), "    ")
+    testing.AssertEqStr(b.row_text(3), "")
+    testing.AssertEqStr(b.get(0, 0).ch, " ")
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
+    b.set(3, 2, tui.Cell { ch = "z" })
+    testing.AssertEqStr(b.row_text(2), "   z")
+    b.set(4, 2, tui.Cell { ch = "!" })
+    testing.AssertEqStr(b.get(4, 2).ch, " ")
+    testing.AssertEqStr(b.get(3, 2).ch, "z")
+    testing.AssertEqInt(b.clip.width, 4)
+    testing.AssertEqInt(b.clip.height, 3)
+    b.resize(-2, 1)
+    testing.AssertEqInt(b.width, 0)
+    testing.AssertEqInt(b.height, 1)
+    testing.AssertEqStr(b.row_text(0), "")
+    b.resize(0, 0)
+    testing.AssertEqInt(b.width, 0)
+    testing.AssertEqInt(b.height, 0)
+    testing.AssertEqStr(b.row_text(0), "")
+    b.free()
+end
+
+func test_resize_preserves_tier():
+    mut b := tui.NewBuffer(2, 2)
+    testing.AssertTrue(b.tier == tui.ColorTier.TrueColor)
+    b.tier = tui.ColorTier.Ansi16
+    b.resize(4, 3)
+    testing.AssertTrue(b.tier == tui.ColorTier.Ansi16)
+    b.resize(0, 0)
+    testing.AssertTrue(b.tier == tui.ColorTier.Ansi16)
+    b.free()
+end
+
+func test_ansi_serialization():
+    mut b := tui.NewBuffer(2, 2)
+    bold := tui.Style { bold = true }
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.set(1, 0, tui.Cell { ch = "b", style = bold })
+    b.set(0, 1, tui.Cell { ch = "c", style = bold })
+    b.set(1, 1, tui.Cell { ch = "d" })
+    seq_on := tui.StyleSgr(bold, tui.ColorTier.TrueColor)
+    seq_off := tui.StyleSgrOff(bold, tui.ColorTier.TrueColor)
+    want := term.SeqMoveTo(1, 1) + "a" + seq_on + "b" + term.SeqMoveTo(2, 1) + "c" + seq_off + "d"
+    testing.AssertEqStr(b.ansi(), want)
+    testing.AssertFalse(str.Contains(b.ansi(), term.Reset))
+    b.free()
+end
+
+func test_put_str_style():
+    mut b := tui.NewBuffer(3, 1)
+    bold := tui.Style { bold = true }
+    b.put_str(0, 0, "abc", bold)
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, bold))
+    testing.AssertTrue(tui.StyleEq(b.get(2, 0).style, bold))
+    testing.AssertEqStr(b.row_text(0), "abc")
+    b.free()
+end
+
+func test_off_grid_starts():
+    mut b := tui.NewBuffer(3, 2)
+    b.put_str(-1, 0, "ab", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "b  ")
+    b.clear()
+    b.put_str(0, -1, "xy", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "   ")
+    b.put_str(3, 0, "z", tui.StyleDefault)
+    b.put_str(0, 2, "z", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "   ")
+    testing.AssertEqStr(b.row_text(1), "   ")
+    b.free()
+end
+
+func test_fill_edges():
+    mut b := tui.NewBuffer(2, 2)
+    b.fill(rect(-1, -1, 3, 3), "#", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "##")
+    testing.AssertEqStr(b.row_text(1), "##")
+    b.clear()
+    b.fill(rect(2, 0, 1, 1), "#", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "  ")
+    b.free()
+
+    mut c := tui.NewBuffer(3, 3)
+    mut view := c
+    view.clip = rect(1, 1, 1, 1)
+    view.fill(rect(0, 0, 3, 3), "#", tui.StyleDefault)
+    testing.AssertEqStr(c.row_text(0), "   ")
+    testing.AssertEqStr(c.row_text(1), " # ")
+    testing.AssertEqStr(c.row_text(2), "   ")
+    c.free()
+end
+
+func test_clip_vs_grid():
+    mut b := tui.NewBuffer(3, 2)
+    mut view := b
+    view.clip = rect(1, 0, 1, 1)
+    view.set(0, 1, tui.Cell { ch = "x" })
+    testing.AssertEqStr(b.row_text(1), "   ")
+    view.set(1, 0, tui.Cell { ch = "y" })
+    testing.AssertEqStr(b.row_text(0), " y ")
+    testing.AssertEqStr(view.get(0, 0).ch, " ")
+    testing.AssertEqStr(view.get(1, 0).ch, "y")
+    testing.AssertEqStr(view.row_text(0), " y ")
+    view.clear()
+    testing.AssertEqStr(b.row_text(0), "   ")
+    testing.AssertEqStr(b.row_text(1), "   ")
+    b.free()
+end
+
+func test_focused_is_per_copy():
+    mut b := tui.NewBuffer(2, 1)
+    mut view := b
+    view.focused = true
+    testing.AssertTrue(view.focused)
+    testing.AssertFalse(b.focused)
+    b.free()
+end
+
+func test_diff_full_on_new():
+    mut b := tui.NewBuffer(2, 2)
+    bold := tui.Style { bold = true }
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.set(1, 0, tui.Cell { ch = "b", style = bold })
+    b.set(0, 1, tui.Cell { ch = "c", style = bold })
+    b.set(1, 1, tui.Cell { ch = "d" })
+    testing.AssertTrue(b.force_full)
+    testing.AssertEqStr(b.diff(), b.ansi())
+    b.free()
+end
+
+func test_commit_clears_diff():
+    mut b := tui.NewBuffer(2, 1)
+    b.set(0, 0, tui.Cell { ch = "x" })
+    b.commit()
+    testing.AssertFalse(b.force_full)
+    testing.AssertEqStr(b.diff(), "")
+    b.free()
+end
+
+func test_diff_single_cell():
+    mut b := tui.NewBuffer(3, 1)
+    b.commit()
+    b.set(1, 0, tui.Cell { ch = "x" })
+    want := term.SeqMoveTo(1, 2) + "x"
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_diff_adjacent_run():
+    mut b := tui.NewBuffer(4, 1)
+    b.commit()
+    b.set(1, 0, tui.Cell { ch = "a" })
+    b.set(2, 0, tui.Cell { ch = "b" })
+    want := term.SeqMoveTo(1, 2) + "ab"
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_diff_two_runs():
+    mut b := tui.NewBuffer(5, 1)
+    b.commit()
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.set(3, 0, tui.Cell { ch = "b" })
+    want := term.SeqMoveTo(1, 1) + "a" + term.SeqMoveTo(1, 4) + "b"
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_diff_style_only():
+    mut b := tui.NewBuffer(2, 1)
+    bold := tui.Style { bold = true }
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.commit()
+    b.set(0, 0, tui.Cell { ch = "a", style = bold })
+    want := term.SeqMoveTo(1, 1) + tui.StyleSgr(bold, tui.ColorTier.TrueColor) + "a" + tui.StyleSgrOff(bold, tui.ColorTier.TrueColor)
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_diff_reverse_only():
+    mut b := tui.NewBuffer(2, 1)
+    rev := tui.Style { reverse = true }
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.commit()
+    b.set(0, 0, tui.Cell { ch = "a", style = rev })
+    want := term.SeqMoveTo(1, 1) + tui.StyleSgr(rev, tui.ColorTier.TrueColor) + "a" + tui.StyleSgrOff(rev, tui.ColorTier.TrueColor)
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_clear_redraw_is_empty():
+    mut b := tui.NewBuffer(3, 1)
+    b.put_str(0, 0, "abc", tui.StyleDefault)
+    b.commit()
+    b.clear()
+    b.put_str(0, 0, "abc", tui.StyleDefault)
+    testing.AssertEqStr(b.diff(), "")
+    b.free()
+end
+
+func test_resize_forces_full():
+    mut b := tui.NewBuffer(2, 2)
+    b.set(0, 0, tui.Cell { ch = "x" })
+    b.commit()
+    testing.AssertEqStr(b.diff(), "")
+    b.resize(3, 1)
+    testing.AssertTrue(b.force_full)
+    testing.AssertEqInt(b.width, 3)
+    testing.AssertEqInt(b.height, 1)
+    testing.AssertEqStr(b.row_text(0), "   ")
+    testing.AssertEqStr(b.diff(), b.ansi())
+    b.free()
+end
+
+func test_front_shared_through_copies():
+    mut b := tui.NewBuffer(2, 1)
+    b.commit()
+    mut view := b
+    view.set(0, 0, tui.Cell { ch = "z" })
+    want := term.SeqMoveTo(1, 1) + "z"
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_diff_sparse_rows():
+    mut b := tui.NewBuffer(6, 3)
+    b.commit()
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.set(4, 2, tui.Cell { ch = "b" })
+    want := term.SeqMoveTo(1, 1) + "a" + term.SeqMoveTo(3, 5) + "b"
+    testing.AssertEqStr(b.diff(), want)
+    b.free()
+end
+
+func test_diff_identical_write():
+    mut b := tui.NewBuffer(3, 1)
+    b.commit()
+    b.set(1, 0, tui.Cell { ch = " " })
+    testing.AssertEqStr(b.diff(), "")
+    b.free()
+end
+
+func test_clear_round_trip():
+    mut b := tui.NewBuffer(4, 1)
+    b.put_str(0, 0, "ab", tui.StyleDefault)
+    b.commit()
+    b.clear()
+    want := term.SeqMoveTo(1, 1) + "  "
+    testing.AssertEqStr(b.diff(), want)
+    b.commit()
+    testing.AssertEqStr(b.diff(), "")
+    testing.AssertEqStr(b.row_text(0), "    ")
+    b.free()
+end
+
+func test_commit_front_matches_cells():
+    mut b := tui.NewBuffer(3, 2)
+    bold := tui.Style { bold = true }
+    b.set(0, 0, tui.Cell { ch = "a" })
+    b.set(2, 0, tui.Cell { ch = "b", style = bold })
+    b.set(1, 1, tui.Cell { ch = "c" })
+    b.commit()
+    repeat b.cells.len() in i:
+        testing.AssertEqStr(b.front.get(i).ch, b.cells.get(i).ch)
+        testing.AssertTrue(tui.StyleEq(b.front.get(i).style, b.cells.get(i).style))
+    end
+    b.free()
+end
+
+func test_diff_outside_clip():
+    mut b := tui.NewBuffer(4, 2)
+    b.commit()
+    b.clip = rect(1, 0, 2, 1)
+    b.set(0, 0, tui.Cell { ch = "x" })
+    testing.AssertEqStr(b.diff(), "")
+    b.free()
+end
+
+func test_put_str_reuses_glyph_strings():
+    mut b := tui.NewBuffer(4, 2)
+    b.put_str(0, 0, "a中", tui.StyleDefault)
+    b.put_str(0, 1, "a中", tui.StyleDefault)
+    first := b.get(0, 0).ch
+    wide := b.get(1, 0).ch
+    b.put_str(0, 0, "a中", tui.StyleDefault)
+    testing.AssertTrue(b.get(0, 0).ch as void* == first as void*)
+    testing.AssertTrue(b.get(0, 1).ch as void* == first as void*)
+    testing.AssertTrue(b.get(1, 1).ch as void* == wide as void*)
+    testing.AssertEqStr(b.row_text(1), "a中 ")
+    b.free()
+end
+
+func test_put_str_keeps_zero_width_marks():
+    mut b := tui.NewBuffer(6, 1)
+    b.put_str(0, 0, "e\u0301b\u200Cc", tui.StyleDefault)
+    testing.AssertEqStr(b.get(0, 0).ch, "e\u0301")
+    testing.AssertEqStr(b.get(1, 0).ch, "b\u200C")
+    testing.AssertEqStr(b.get(2, 0).ch, "c")
+    testing.AssertEqStr(b.row_text(0), "e\u0301b\u200Cc   ")
+    testing.AssertEqInt(tui.MeasureText(b.row_text(0), 0).width, 6)
+    testing.AssertEqStr(b.diff(), term.SeqMoveTo(1, 1) + "e\u0301b\u200Cc   ")
+    b.commit()
+    b.put_str(0, 0, "\u0301x\tz", tui.StyleDefault)
+    testing.AssertEqStr(b.row_text(0), "xzc   ")
+    b.free()
+
+    mut clipped := tui.NewBuffer(3, 1)
+    clipped.clip = rect(0, 0, 1, 1)
+    clipped.put_str(0, 0, "ab\u0301", tui.StyleDefault)
+    testing.AssertEqStr(clipped.row_text(0), "a  ")
+    clipped.free()
+end
+
+func test_emoji_presentation_is_wide():
+    each s in ["\U0001F680", "\U00002705", "\U0000274C", "\U00002B50", "\U000026A1", "\U0001F7E2", "\U0001FAE0", "\U0000231A"]:
+        testing.AssertEqInt(tui.MeasureText(s, 0).width, 2)
+    end
+    each s in ["\U00002764", "\U00002122", "a", "\U00000645"]:
+        testing.AssertEqInt(tui.MeasureText(s, 0).width, 1)
+    end
+    mut b := tui.NewBuffer(5, 1)
+    b.put_str(0, 0, "\U0001F680ab", tui.StyleDefault)
+    testing.AssertEqStr(b.get(1, 0).ch, "")
+    testing.AssertEqStr(b.get(2, 0).ch, "a")
+    b.free()
+end
+
+func main:
+    test_new_is_blank()
+    test_set_get()
+    test_out_of_range_is_noop()
+    test_clip()
+    test_put_str_codepoints()
+    test_display_cells()
+    test_fill_and_clear()
+    test_resize()
+    test_resize_preserves_tier()
+    test_ansi_serialization()
+    test_put_str_style()
+    test_off_grid_starts()
+    test_fill_edges()
+    test_clip_vs_grid()
+    test_focused_is_per_copy()
+    test_diff_full_on_new()
+    test_commit_clears_diff()
+    test_diff_single_cell()
+    test_diff_adjacent_run()
+    test_diff_two_runs()
+    test_diff_style_only()
+    test_diff_reverse_only()
+    test_clear_redraw_is_empty()
+    test_resize_forces_full()
+    test_front_shared_through_copies()
+    test_diff_sparse_rows()
+    test_diff_identical_write()
+    test_clear_round_trip()
+    test_commit_front_matches_cells()
+    test_diff_outside_clip()
+    test_put_str_reuses_glyph_strings()
+    test_put_str_keeps_zero_width_marks()
+    test_emoji_presentation_is_wide()
+    ret testing.Summary()
+end

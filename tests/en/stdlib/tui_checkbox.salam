@@ -1,0 +1,371 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import term
+import tui
+
+mut toggles := Vector {} as Vector<bool>
+
+struct Sink:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func click(x: int, y: int): tui.Event:
+    seq := "\x1b[<0;" + (x + 1) + ";" + (y + 1) + "M"
+    ret tui.Event { kind = tui.MouseEvent, key = term.Key { raw = seq }, mouse = term.DecodeMouse(seq) }
+end
+
+func sgr(s: tui.Style): str:
+    ret tui.StyleSgr(s, tui.ColorTier.TrueColor)
+end
+
+func sgr_off(s: tui.Style): str:
+    ret tui.StyleSgrOff(s, tui.ColorTier.TrueColor)
+end
+
+func row_of(c: tui.Checkbox, bufw: int, bw: int, focused: bool): str:
+    mut b := tui.NewBuffer(bufw, 1)
+    defer b.free()
+    b.focused = focused
+    c.render(b, rect(0, 0, bw, 1))
+    ret b.row_text(0)
+end
+
+func ansi_of(c: tui.Checkbox, bufw: int, bw: int, focused: bool): str:
+    mut b := tui.NewBuffer(bufw, 1)
+    defer b.free()
+    b.focused = focused
+    c.render(b, rect(0, 0, bw, 1))
+    ret b.ansi()
+end
+
+func test_defaults():
+    mut e := tui.NewCheckbox("Notify me", false)
+    testing.AssertFalse(e.checked())
+    testing.AssertEqStr(e.label, "Notify me")
+    testing.AssertFalse(e.disabled)
+    testing.AssertFalse(e.focusable())
+    testing.AssertTrue(e.hits())
+    e.set_bounds(rect(0, 0, 14, 1))
+    testing.AssertTrue(e.focusable())
+    e.disabled = true
+    testing.AssertFalse(e.focusable())
+    testing.AssertFalse(e.hits())
+    testing.AssertTrue(tui.NewCheckbox("", true).checked())
+end
+
+func test_getter_and_setter():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.set_checked(true)
+    testing.AssertTrue(e.checked())
+    testing.AssertEqStr(row_of(e, 14, 14, false), "[x] Notify me ")
+    testing.AssertTrue(e.checked())
+    e.set_checked(false)
+    testing.AssertFalse(e.checked())
+end
+
+func test_render_cb01_unchecked():
+    e := tui.NewCheckbox("Notify me", false)
+    testing.AssertEqStr(row_of(e, 14, 14, false), "[ ] Notify me ")
+end
+
+func test_render_cb05_narrow_label():
+    e := tui.NewCheckbox("Notify me", true)
+    testing.AssertEqStr(row_of(e, 6, 6, false), "[x] No")
+end
+
+func test_render_cb06_mark_only():
+    e := tui.NewCheckbox("Notify me", true)
+    testing.AssertEqStr(row_of(e, 3, 3, false), "[x]")
+end
+
+func test_render_cb07_two_cells():
+    e := tui.NewCheckbox("Notify me", true)
+    testing.AssertEqStr(row_of(e, 2, 2, false), "[x")
+end
+
+func test_render_cb08_one_cell():
+    e := tui.NewCheckbox("Notify me", false)
+    testing.AssertEqStr(row_of(e, 1, 1, false), "[")
+end
+
+func test_render_cb09_zero_width():
+    e := tui.NewCheckbox("Notify me", true)
+    blank := tui.NewBuffer(14, 1)
+    defer blank.free()
+    testing.AssertEqStr(ansi_of(e, 14, 0, false), blank.ansi())
+end
+
+func test_render_cb10_empty_label():
+    e := tui.NewCheckbox("", true)
+    testing.AssertEqStr(row_of(e, 5, 5, false), "[x]  ")
+end
+
+func test_render_wide_label():
+    mut e := tui.NewCheckbox("中文字", true)
+    mut b := tui.NewBuffer(6, 1)
+    defer b.free()
+    e.render(b, rect(0, 0, 6, 1))
+    testing.AssertEqStr(b.row_text(0), "[x] 中")
+    testing.AssertEqStr(b.get(0, 0).ch, "[")
+    testing.AssertEqStr(b.get(4, 0).ch, "中")
+    testing.AssertEqStr(b.get(5, 0).ch, "")
+end
+
+func test_render_cb02_checked_focused_bold():
+    e := tui.NewCheckbox("Notify me", true)
+    want := term.SeqMoveTo(1, 1) + sgr(tui.Style { bold = true }) + "[x] Notify me " + sgr_off(tui.Style { bold = true })
+    testing.AssertEqStr(ansi_of(e, 14, 14, true), want)
+end
+
+func test_render_cb03_checked_disabled_dim():
+    mut e := tui.NewCheckbox("Notify me", true)
+    e.disabled = true
+    want := term.SeqMoveTo(1, 1) + sgr(tui.Style { dim = true }) + "[x] Notify me " + sgr_off(tui.Style { dim = true })
+    testing.AssertEqStr(ansi_of(e, 14, 14, true), want)
+end
+
+func test_render_disabled_drops_caller_bold():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.box_style = tui.Style { bold = true }
+    e.label_style = tui.Style { bold = true }
+    e.disabled = true
+    dim := sgr(tui.Style { dim = true })
+    mut dimbuf := tui.NewBuffer(14, 1)
+    dimbuf.focused = true
+    e.render(dimbuf, rect(0, 0, 14, 1))
+    testing.AssertTrue(tui.StyleEq(dimbuf.get(2, 0).style, tui.Style { dim = true }))
+    testing.AssertTrue(tui.StyleEq(dimbuf.get(4, 0).style, tui.Style { dim = true }))
+    testing.AssertEqStr(dimbuf.ansi(), term.SeqMoveTo(1, 1) + dim + "[ ] Notify me " + sgr_off(tui.Style { dim = true }))
+    dimbuf.free()
+    e.disabled = false
+    bold := sgr(tui.Style { bold = true })
+    mut boldbuf := tui.NewBuffer(14, 1)
+    boldbuf.focused = true
+    e.render(boldbuf, rect(0, 0, 14, 1))
+    testing.AssertTrue(tui.StyleEq(boldbuf.get(2, 0).style, tui.Style { bold = true }))
+    testing.AssertTrue(tui.StyleEq(boldbuf.get(4, 0).style, tui.Style { bold = true }))
+    testing.AssertEqStr(boldbuf.ansi(), term.SeqMoveTo(1, 1) + bold + "[ ] Notify me " + sgr_off(tui.Style { bold = true }))
+    boldbuf.free()
+end
+
+func test_overlay_keeps_reverse():
+    mut e := tui.NewCheckbox("Reverse", false)
+    e.box_style = tui.Style { reverse = true }
+    e.label_style = tui.Style { reverse = true }
+    e.disabled = true
+    mut buf := tui.NewBuffer(9, 1)
+    e.render(buf, rect(0, 0, 9, 1))
+    testing.AssertTrue(tui.StyleEq(buf.get(2, 0).style, tui.Style { reverse = true, dim = true }))
+    buf.free()
+end
+
+func test_render_cb04_box_style_only():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.box_style = tui.Style { fg = tui.Green }
+    want := term.SeqMoveTo(1, 1) + sgr(tui.Style { fg = tui.Green }) + "[ ]" + sgr_off(tui.Style { fg = tui.Green }) + " Notify me "
+    testing.AssertEqStr(ansi_of(e, 14, 14, false), want)
+end
+
+func test_render_styled_label_frame():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.label_style = tui.Style { underline = true }
+    mut b := tui.NewBuffer(14, 1)
+    defer b.free()
+    e.render(b, rect(0, 0, 14, 1))
+    testing.AssertTrue(tui.StyleEq(b.get(0, 0).style, tui.StyleDefault))
+    testing.AssertTrue(tui.StyleEq(b.get(4, 0).style, tui.Style { underline = true }))
+    testing.AssertTrue(tui.StyleEq(b.get(13, 0).style, tui.Style { underline = true }))
+    want := term.SeqMoveTo(1, 1) + "[ ]" + sgr(tui.Style { underline = true }) + " Notify me " + sgr_off(tui.Style { underline = true })
+    testing.AssertEqStr(b.ansi(), want)
+end
+
+func test_sgr_memo_probe():
+    mut e := tui.NewCheckbox("Notify me", true)
+    buf := tui.NewBuffer(14, 1)
+    defer buf.free()
+    before := tui.SgrBuilds()
+    e.render(buf, rect(0, 0, 14, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    e.render(buf, rect(0, 0, 14, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    _ := buf.ansi()
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    e.box_style = tui.Style { fg = tui.Green }
+    e.render(buf, rect(0, 0, 14, 1))
+    testing.AssertEqInt(tui.SgrBuilds() - before, 0)
+    _ := buf.ansi()
+    testing.AssertEqInt(tui.SgrBuilds() - before, 2)
+end
+
+func test_preferred_size():
+    e := tui.NewCheckbox("Notify me", false)
+    ps := e.preferred_size(0)
+    testing.AssertEqInt(ps.width, 13)
+    testing.AssertEqInt(ps.height, 1)
+    testing.AssertEqInt(e.preferred_size(10).width, 10)
+    testing.AssertEqInt(tui.NewCheckbox("", false).preferred_size(0).width, 4)
+end
+
+func test_ck01_space_checks():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.on_toggle = (v: bool): toggles.push(v) end
+    e.set_bounds(rect(0, 0, 14, 1))
+    base := toggles.len()
+    testing.AssertTrue(e.handle_event(key(" ")))
+    testing.AssertTrue(e.checked())
+    testing.AssertEqInt(toggles.len(), base + 1)
+    testing.AssertTrue(toggles.get(base))
+end
+
+func test_ck02_space_unchecks():
+    mut e := tui.NewCheckbox("Notify me", true)
+    e.on_toggle = (v: bool): toggles.push(v) end
+    e.set_bounds(rect(0, 0, 14, 1))
+    base := toggles.len()
+    testing.AssertTrue(e.handle_event(key(" ")))
+    testing.AssertFalse(e.checked())
+    testing.AssertEqInt(toggles.len(), base + 1)
+    testing.AssertFalse(toggles.get(base))
+end
+
+func test_ck03_enter_bubbles():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.on_toggle = (v: bool): toggles.push(v) end
+    e.set_bounds(rect(0, 0, 14, 1))
+    base := toggles.len()
+    testing.AssertFalse(e.handle_event(key("\r")))
+    testing.AssertFalse(e.checked())
+    testing.AssertEqInt(toggles.len(), base)
+end
+
+func test_ck05_disabled_ignores_space_and_click():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.set_bounds(rect(0, 0, 14, 1))
+    e.disabled = true
+    base := toggles.len()
+    testing.AssertFalse(e.handle_event(key(" ")))
+    testing.AssertFalse(e.handle_event(click(5, 0)))
+    testing.AssertFalse(e.checked())
+    testing.AssertEqInt(toggles.len(), base)
+end
+
+func test_ck06_click_toggles_without_focus():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.on_toggle = (v: bool): toggles.push(v) end
+    e.set_bounds(rect(0, 0, 14, 1))
+    base := toggles.len()
+    testing.AssertTrue(e.handle_event(click(5, 0)))
+    testing.AssertTrue(e.checked())
+    testing.AssertEqInt(toggles.len(), base + 1)
+end
+
+func test_ck07_other_keys_bubble():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.set_bounds(rect(0, 0, 14, 1))
+    testing.AssertFalse(e.handle_event(key("x")))
+    testing.AssertFalse(e.checked())
+end
+
+func test_ck08_click_outside_bounds_misses():
+    mut e := tui.NewCheckbox("Notify me", false)
+    e.set_bounds(rect(0, 0, 14, 1))
+    testing.AssertFalse(e.handle_event(click(14, 0)))
+    testing.AssertFalse(e.handle_event(click(3, 1)))
+    testing.AssertFalse(e.checked())
+end
+
+func test_ck04_space_needs_focus():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    mut box := tui.NewCheckbox("Notify me", false)
+    box.on_toggle = (v: bool): toggles.push(v) end
+    w := box as dyn tui.Widget
+    id := s.add(tui.RootId, w)
+    s.widget(id).set_bounds(rect(0, 0, 14, 1))
+    other := s.add(tui.RootId, Sink {})
+    s.widget(other).set_bounds(rect(0, 1, 14, 1))
+    testing.AssertTrue(s.focus(other))
+    base := toggles.len()
+    testing.AssertFalse(s.dispatch(key(" ")))
+    testing.AssertEqInt(toggles.len(), base)
+    testing.AssertTrue(s.focus(id))
+    testing.AssertTrue(s.dispatch(key(" ")))
+    testing.AssertEqInt(toggles.len(), base + 1)
+    mut probe := tui.NewBuffer(14, 1)
+    defer probe.free()
+    w.render(probe, rect(0, 0, 14, 1))
+    testing.AssertEqStr(probe.row_text(0), "[x] Notify me ")
+end
+
+func test_click_reaches_unfocused_checkbox():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 24, 3)
+    defer s.close()
+    mut box := tui.NewCheckbox("Notify me", false)
+    box.on_toggle = (v: bool): toggles.push(v) end
+    id := s.add(tui.RootId, box as dyn tui.Widget)
+    s.widget(id).set_bounds(rect(0, 0, 14, 1))
+    other := s.add(tui.RootId, Sink {})
+    s.widget(other).set_bounds(rect(0, 1, 14, 1))
+    testing.AssertTrue(s.focus(other))
+    base := toggles.len()
+    testing.AssertTrue(s.dispatch(click(3, 0)))
+    testing.AssertEqInt(toggles.len(), base + 1)
+    testing.AssertEqInt(s.focused_id(), other)
+end
+
+func main:
+    test_defaults()
+    test_getter_and_setter()
+    test_render_cb01_unchecked()
+    test_render_cb05_narrow_label()
+    test_render_cb06_mark_only()
+    test_render_cb07_two_cells()
+    test_render_cb08_one_cell()
+    test_render_cb09_zero_width()
+    test_render_cb10_empty_label()
+    test_render_wide_label()
+    test_render_cb02_checked_focused_bold()
+    test_render_cb03_checked_disabled_dim()
+    test_render_disabled_drops_caller_bold()
+    test_overlay_keeps_reverse()
+    test_render_cb04_box_style_only()
+    test_render_styled_label_frame()
+    test_sgr_memo_probe()
+    test_preferred_size()
+    test_ck01_space_checks()
+    test_ck02_space_unchecks()
+    test_ck03_enter_bubbles()
+    test_ck05_disabled_ignores_space_and_click()
+    test_ck06_click_toggles_without_focus()
+    test_ck07_other_keys_bubble()
+    test_ck08_click_outside_bounds_misses()
+    test_ck04_space_needs_focus()
+    test_click_reaches_unfocused_checkbox()
+    toggles.free()
+    ret testing.Summary()
+end

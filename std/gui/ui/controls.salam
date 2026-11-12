@@ -17,7 +17,6 @@ package ui
 import str
 import math
 import ai.image
-import gui.css
 import gui.paint
 import gui.typeset
 
@@ -45,10 +44,10 @@ end
 
 func _option_nodes(node: int, out &: Vector<int>):
     each k in _e.dom.nodes[node].kids:
-        t := _e.dom.nodes[k].tag
-        if t == "option":
+        t := _e.dom.nodes[k].k
+        if t == _K_OPTION:
             out.push(k)
-        else t == "optgroup":
+        else t == _K_OPTGROUP:
             _option_nodes(k, out)
         end
     end
@@ -65,6 +64,17 @@ func _select_index(node: int): int:
     repeat opts.len() in i:
         if _has_attr(_e.dom, opts[i], "selected"):
             ret i
+        end
+    end
+    v := _attr(_e.dom, node, "value")
+    if v.len() > 0:
+        repeat opts.len() in j:
+            ov := _option_value(opts[j])
+            same := ov == v
+            _sfree(ov)
+            if same:
+                ret j
+            end
         end
     end
     ret opts.len() > 0 ? 0 : -1
@@ -85,11 +95,14 @@ func _control_value(node: int): str:
     if c.has_value:
         ret c.value
     end
-    tag := _e.dom.nodes[node].tag
-    if tag == "textarea":
+    k := _e.dom.nodes[node].k
+    if k == _K_TEXTAREA:
+        if _has_attr(_e.dom, node, "value"):
+            ret _attr(_e.dom, node, "value")
+        end
         ret _text_of(_e.dom, node)
     end
-    if tag == "select":
+    if k == _K_SELECT:
         mut opts := Vector {} as Vector<int>
         defer opts.free()
         _option_nodes(node, opts)
@@ -103,6 +116,25 @@ func _control_value(node: int): str:
 end
 
 func _is_checked(node: int): bool:
+    if node < 0 or node >= _e.ctl.len():
+        ret false
+    end
+    nd := _e.dom.nodes[node]
+    if nd.k == _K_OPTION:
+        sel := _ancestor_k(nd.parent, _K_SELECT)
+        if sel >= 0:
+            mut opts := Vector {} as Vector<int>
+            _option_nodes(sel, opts)
+            i := _select_index(sel)
+            hit := i >= 0 and i < opts.len() and opts[i] == node
+            opts.free()
+            ret hit
+        end
+        ret _has_attr(_e.dom, node, "selected")
+    end
+    if nd.k != _K_INPUT:
+        ret false
+    end
     c := _e.ctl[node]
     if c.has_checked:
         ret c.checked
@@ -115,7 +147,7 @@ func _control_shows_placeholder(node: int): bool:
         ret false
     end
     v := _control_value(node)
-    ret v.len() == 0 and _attr(_e.dom, node, "placeholder").len() > 0
+    ret v.len() == 0 and _e.ctl[node].preedit.len() == 0 and _attr(_e.dom, node, "placeholder").len() > 0
 end
 
 func _bullets(v: str): str:
@@ -130,8 +162,8 @@ func _bullets(v: str): str:
 end
 
 func _control_text(node: int): str:
-    tag := _e.dom.nodes[node].tag
-    if tag == "select":
+    k := _e.dom.nodes[node].k
+    if k == _K_SELECT:
         mut opts := Vector {} as Vector<int>
         defer opts.free()
         _option_nodes(node, opts)
@@ -153,14 +185,15 @@ func _control_text(node: int): str:
     end
     v := _control_value(node)
     pre := _e.ctl[node].preedit
-    if pre.len() > 0 and _e.ctl[node].focused and not (tag == "input" and _input_type(node) == "password"):
+    pw := _input_type(node) == "password"
+    if pre.len() > 0 and _e.ctl[node].focused and not pw:
         cp := math.MaxI(0, math.MinI(_e.ctl[node].caret, v.len()))
         ret v.substr(0, cp) + pre + v.substr(cp, v.len() - cp)
     end
     if v.len() == 0:
         ret str.Clone(_attr(_e.dom, node, "placeholder"))
     end
-    if tag == "input" and _input_type(node) == "password":
+    if pw:
         ret _bullets(v)
     end
     ret str.Clone(v)
@@ -168,14 +201,14 @@ end
 
 func _preedit_len(node: int): int:
     c := _e.ctl[node]
-    if c.preedit.len() == 0 or not c.focused or (_e.dom.nodes[node].tag == "input" and _input_type(node) == "password"):
+    if c.preedit.len() == 0 or not c.focused or _input_type(node) == "password":
         ret 0
     end
     ret c.preedit.len()
 end
 
 func _is_textarea(node: int): bool:
-    ret _e.dom.nodes[node].tag == "textarea"
+    ret _e.dom.nodes[node].k == _K_TEXTAREA
 end
 
 func _wraps(node: int): bool:
@@ -187,7 +220,7 @@ func _display_offset(node: int, off: int): int:
     if pl > 0:
         ret off >= _e.ctl[node].caret ? off + pl : off
     end
-    if _e.dom.nodes[node].tag == "input" and _input_type(node) == "password":
+    if _input_type(node) == "password":
         v := _control_value(node)
         n := str.CharCount(v.substr(0, off))
         ret n * 3
@@ -204,7 +237,7 @@ func _value_offset(node: int, doff: int): int:
         end
         ret doff < c + pl ? c : doff - pl
     end
-    if _e.dom.nodes[node].tag == "input" and _input_type(node) == "password":
+    if _input_type(node) == "password":
         v := _control_value(node)
         cps := doff / 3
         mut i := 0
@@ -222,54 +255,40 @@ func _value_offset(node: int, doff: int): int:
     ret doff
 end
 
-func _refresh_control(node: int):
-    fi := _e.node_ifc[node]
-    if fi < 0:
-        ret
+func _ctl_run(node: int): int:
+    if node < 0 or node >= _e.node_run.len():
+        ret -1
     end
-    mut f := _e.ifcs.ref(fi)
-    if f.spans.len() == 0:
-        ret
+    ri := _e.node_run[node]
+    if ri >= 0 and _e.runs[ri].control:
+        ret ri
     end
-    mut sp := f.spans[0]
-    if sp.text.len() > 0:
-        _sfree(sp.text)
-    end
-    sp.text = _control_text(node)
-    f.spans[0] = sp
-    _sfree(f.ckey)
-    f.ckey = ""
-    if f.has_para:
-        typeset.FreeParagraph(f.para)
-        f.has_para = false
-    end
-    if f.has_lay:
-        typeset.FreeLayout(f.lay)
-        f.has_lay = false
-    end
-    _free_alts(f)
-    _ifc_layout(fi, _control_wrap_width(fi))
-    _scroll_caret(node)
-    _damage_node(node)
+    ret -1
 end
 
-func _control_wrap_width(fi: int): f64:
-    f := _e.ifcs[fi]
-    if _wraps(f.owner):
-        ret f.w
+func _refresh_control(node: int):
+    ri := _ctl_run(node)
+    if ri < 0:
+        _damage_node(node)
+        ret
     end
-    ret 0.0
+    _retext_run(ri)
+    _e.dirty_layout = true
+    _e.dirty_place = true
+    if _e.dom.nodes[node].k == _K_TEXTAREA or _e.dom.nodes[node].k == _K_INPUT:
+        _layout()
+    end
+    _scroll_caret(node)
+    _damage_node(node)
+    _e.restyled.push(node)
 end
 
 func _scroll_caret(node: int):
-    if node < 0 or node >= _e.node_ifc.len() or node >= _e.ctl.len():
+    ri := _ctl_run(node)
+    if ri < 0 or not _e.runs[ri].has_lay:
         ret
     end
-    fi := _e.node_ifc[node]
-    if fi < 0 or not _e.ifcs[fi].has_lay:
-        ret
-    end
-    f := _e.ifcs[fi]
+    f := _e.runs[ri]
     c := _e.ctl[node]
     mut x := 0.0
     mut y := 0.0
@@ -312,11 +331,11 @@ func _scroll_caret(node: int):
 end
 
 func _scroll_text(node: int, dx: f64, dy: f64): bool:
-    fi := _e.node_ifc[node]
-    if fi < 0 or not _e.ifcs[fi].has_lay:
+    ri := _ctl_run(node)
+    if ri < 0 or not _e.runs[ri].has_lay:
         ret false
     end
-    f := _e.ifcs[fi]
+    f := _e.runs[ri]
     c := _e.ctl[node]
     maxx := _wraps(node) ? 0.0 : math.Max(0.0, f.lay.width - f.w + 1.0)
     maxy := math.Max(0.0, f.lay.height - f.h)
@@ -362,24 +381,24 @@ func _line_bounds(node: int, off: int, a &: int, b &: int):
 end
 
 func _line_move(node: int, off: int, dir: int, edge: bool): int:
-    fi := _e.node_ifc[node]
-    if fi < 0 or not _e.ifcs[fi].has_lay:
+    ri := _ctl_run(node)
+    if ri < 0 or not _e.runs[ri].has_lay:
         ret off
     end
-    f := _e.ifcs[fi]
+    f := _e.runs[ri]
     pos := typeset.TextPosition { offset = _display_offset(node, off) }
     r := typeset.CaretRect(f.para, f.lay, pos)
     if edge:
         nl := f.lay.lines.len()
+        if nl == 0:
+            ret off
+        end
         mut li := 0
         repeat nl in i:
             ln := f.lay.lines[i]
             if r.y >= ln.top and r.y < ln.top + ln.height:
                 li = i
             end
-        end
-        if nl == 0:
-            ret off
         end
         ln := f.lay.lines[li]
         mut x := 0.0
@@ -402,112 +421,12 @@ func _line_move(node: int, off: int, dir: int, edge: bool): int:
     ret _value_offset(node, hp.offset)
 end
 
-func _paint_selection(cv &: paint.Canvas, fi: int, tx: f64, ty: f64, alpha: f64):
-    f := _e.ifcs[fi]
-    c := _e.ctl[f.owner]
-    if not c.focused or c.caret == c.anchor or _control_shows_placeholder(f.owner) or not _is_text_input(f.owner):
-        ret
-    end
-    a := _display_offset(f.owner, math.MinI(c.caret, c.anchor))
-    b0 := math.MaxI(c.caret, c.anchor)
-    b := b0 == c.caret ? _display_offset(f.owner, b0) - _preedit_len(f.owner) : _display_offset(f.owner, b0)
-    mut rs := typeset.SelectionRects(f.para, f.lay, a, b)
-    each r in rs:
-        cv.FillRect(_rect(tx + r.x, ty + r.y, r.width, r.height), paint.Color { r = 0, g = 117, b = 255, a = (math.Round(77.0 * alpha) as int) })
-    end
-    rs.free()
-end
-
-func _paint_caret(cv &: paint.Canvas, fi: int, tx: f64, ty: f64, alpha: f64):
-    f := _e.ifcs[fi]
-    c := _e.ctl[f.owner]
-    if not c.focused or not _is_text_input(f.owner):
-        ret
-    end
-    mut off := 0
-    if not _control_shows_placeholder(f.owner):
-        off = _display_offset(f.owner, c.caret)
-    end
-    r := typeset.CaretRect(f.para, f.lay, typeset.TextPosition { offset = off })
-    cs := _style_of(f.owner)
-    col := cs.caret_color.a > 0 ? cs.caret_color : cs.color
-    pl := _preedit_len(f.owner)
-    if pl > 0:
-        mut rs := typeset.SelectionRects(f.para, f.lay, off - pl, off)
-        each u in rs:
-            cv.FillRect(_rect(tx + u.x, ty + u.y + u.height - 2.0, u.width, 1.0), _pca(cs.color, alpha))
-        end
-        rs.free()
-    end
-    cv.FillRect(_rect(tx + r.x, ty + r.y, 1.0, r.height), _pca(col, alpha))
-end
-
-func _popup_geometry(x &: f64, y &: f64, w &: f64, ih &: f64, n &: int):
-    node := _e.popup
-    b := _e.boxes[node]
-    cs := _style_of(node)
-    ih = math.Round(cs.font_size * 1.3)
-    mut opts := Vector {} as Vector<int>
-    _option_nodes(node, opts)
-    n = opts.len()
-    opts.free()
-    x = b.x
-    y = b.y + b.h
-    w = b.w
-    if y + ih * (n as f64) > _e.height and b.y - ih * (n as f64) >= 0.0:
-        y = b.y - ih * (n as f64)
-    end
-end
-
-func _paint_popup(cv &: paint.Canvas):
-    if _e.popup < 0 or _e.popup >= _e.boxes.len():
-        ret
-    end
-    node := _e.popup
-    mut x := 0.0
-    mut y := 0.0
-    mut w := 0.0
-    mut ih := 0.0
-    mut n := 0
-    _popup_geometry(x, y, w, ih, n)
-    s := _e.scale
-    cv.DrawShadow(_rect(x, y, w, ih * (n as f64)), paint.Radii {}, paint.Shadow { offset_y = 2.0 * s, blur = 6.0 * s, color = paint.Color { a = 70 } })
-    cv.FillRect(_rect(x, y, w, ih * (n as f64)), paint.Color { r = 255, g = 255, b = 255, a = 255 })
-    cv.DrawBorder(_rect(x, y, w, ih * (n as f64)), paint.Radii {}, paint.SolidBorder(s, paint.Color { r = 118, g = 118, b = 118, a = 255 }))
-    mut opts := Vector {} as Vector<int>
-    defer opts.free()
-    _option_nodes(node, opts)
-    cs := _style_of(node)
-    sel := _select_index(node)
-    c := _e.ctl[node]
-    repeat opts.len() in i:
-        oy := y + ih * (i as f64)
-        hl := c.anchor == i
-        if hl or (c.anchor < 0 and i == sel):
-            cv.FillRect(_rect(x + 1.0, oy, w - 2.0, ih), paint.Color { r = 30, g = 144, b = 255, a = 255 })
-        end
-        t := _text_of(_e.dom, opts[i])
-        mut spans := Vector {} as Vector<typeset.TextSpan>
-        spans.push(_span_of(cs, t, node))
-        mut p := typeset.NewParagraph(_fc, spans, typeset.ParagraphStyle {})
-        mut l := typeset.LayoutParagraph(p, _fc, 0.0)
-        tc := hl ? paint.Color { r = 255, g = 255, b = 255, a = 255 } : _pc(cs.color)
-        _draw_layout(cv, l, x + 4.0, oy + (ih - l.height) / 2.0, tc)
-        typeset.FreeLayout(l)
-        typeset.FreeParagraph(p)
-        spans.free()
-        _sfree(t)
-    end
-end
-
 func _set_value(node: int, v: str):
     mut c := _e.ctl.ref(node)
     old := c.value
     c.value = str.Clone(v)
     c.has_value = true
-    if old.len() > 0:
-        _sfree(old)
-    end
+    _sfree(old)
 end
 
 func _push_undo(node: int):
@@ -540,10 +459,10 @@ end
 
 func _grapheme_step(node: int, off: int, forward: bool, word: bool): int:
     v := _control_value(node)
-    fi := _e.node_ifc[node]
-    plain := not (_e.dom.nodes[node].tag == "input" and _input_type(node) == "password") and v.len() > 0
-    if fi >= 0 and plain and _e.ifcs[fi].has_para and _e.ifcs[fi].para.text == v:
-        p := _e.ifcs[fi].para
+    ri := _ctl_run(node)
+    plain := _input_type(node) != "password" and v.len() > 0
+    if ri >= 0 and plain and _e.runs[ri].has_para and _e.runs[ri].para.text == v:
+        p := _e.runs[ri].para
         if word:
             ret forward ? typeset.NextWordEnd(p, off) : typeset.PrevWordStart(p, off)
         end
@@ -561,7 +480,7 @@ func _replace_selection(node: int, text: str):
     a := math.MaxI(0, math.MinI(math.MinI(c.caret, c.anchor), v.len()))
     b := math.MinI(v.len(), math.MaxI(c.caret, c.anchor))
     mut ins := text
-    if _e.dom.nodes[node].tag == "input":
+    if _e.dom.nodes[node].k == _K_INPUT:
         ins = str.Replace(text, "\n", "")
     end
     nv := v.substr(0, a) + ins + v.substr(b, v.len() - b)
@@ -583,14 +502,34 @@ func _selected_text(node: int): str:
 end
 
 func _caret_from_point(node: int, x: f64, y: f64): int:
-    fi := _e.node_ifc[node]
-    if fi < 0 or not _e.ifcs[fi].has_lay or _control_shows_placeholder(node):
+    ri := _ctl_run(node)
+    if ri < 0 or not _e.runs[ri].has_lay or _control_shows_placeholder(node):
         ret 0
     end
-    f := _e.ifcs[fi]
+    f := _e.runs[ri]
     mut lx := x
     mut ly := y
     _to_local(node, x, y, lx, ly)
     pos := typeset.HitTest(f.para, f.lay, lx - f.x + _e.ctl[node].text_scroll, ly - f.y + _e.ctl[node].text_scroll_y)
     ret _value_offset(node, pos.offset)
+end
+
+func _range_frac(node: int): f64:
+    mut mn := 0.0
+    mut mx := 100.0
+    if _has_attr(_e.dom, node, "min"):
+        mn = _attr(_e.dom, node, "min").to_float()
+    end
+    if _has_attr(_e.dom, node, "max"):
+        mx = _attr(_e.dom, node, "max").to_float()
+    end
+    v := _control_value(node)
+    mut x := (mn + mx) / 2.0
+    if v.len() > 0:
+        x = v.to_float()
+    end
+    if mx <= mn:
+        ret 0.0
+    end
+    ret math.Max(0.0, math.Min(1.0, (x - mn) / (mx - mn)))
 end

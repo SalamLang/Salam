@@ -16,18 +16,85 @@
 @fa "رابط کاربری"
 package ui
 
-import str
-import gui.css
-import gui.cssbox
+import gui.flow
 import gui.paint
+import gui.style
 import gui.typeset
 import gui.window
 
+@en "STATE_BASE"
+@fa "حالت پایه"
+pub const STATE_BASE := 0
+
+@en "STATE_HOVER"
+@fa "حالت شناور"
+pub const STATE_HOVER := 1
+
+@en "STATE_FOCUS"
+@fa "حالت تمرکز"
+pub const STATE_FOCUS := 2
+
+@en "STATE_FOCUS_WITHIN"
+@fa "حالت تمرکز درون"
+pub const STATE_FOCUS_WITHIN := 3
+
+@en "STATE_ACTIVE"
+@fa "حالت فعال"
+pub const STATE_ACTIVE := 4
+
+@en "STATE_DISABLED"
+@fa "حالت غیرفعال"
+pub const STATE_DISABLED := 5
+
+@en "STATE_CHECKED"
+@fa "حالت تیک خورده"
+pub const STATE_CHECKED := 6
+
+@en "STATE_INVALID"
+@fa "حالت نامعتبر"
+pub const STATE_INVALID := 7
+
+@en "STATE_PLACEHOLDER"
+@fa "حالت جای نوشته"
+pub const STATE_PLACEHOLDER := 8
+
+@en "STATE_SELECTION"
+@fa "حالت گزینش"
+pub const STATE_SELECTION := 9
+
+const _STATES := 10
+
+const _K_TEXT := 0
+const _K_BOX := 1
+const _K_INLINE := 2
+const _K_BR := 3
+const _K_BUTTON := 4
+const _K_INPUT := 5
+const _K_TEXTAREA := 6
+const _K_SELECT := 7
+const _K_OPTION := 8
+const _K_OPTGROUP := 9
+const _K_LINK := 10
+const _K_IMAGE := 11
+const _K_LABEL := 12
+const _K_SUMMARY := 13
+const _K_DETAILS := 14
+const _K_DIALOG := 15
+const _K_FORM := 16
+const _K_ITEM := 17
+const _K_LIST := 18
+const _K_OLIST := 19
+const _K_PROGRESS := 20
+const _K_METER := 21
+const _K_PAGE := 22
+const _K_MEDIA := 23
+const _K_FIELDSET := 24
+const _K_TABLE_ROW := 25
+
 mut _e := _Engine {}
-mut _handler_names := Vector {} as Vector<str>
-mut _handler_fns := Vector {} as Vector<func ()>
-mut _page_paths := Vector {} as Vector<str>
-mut _page_views := Vector {} as Vector<func () str>
+mut _bd := _Dom {}
+mut _bstack := Vector {} as Vector<int>
+mut _patches := Vector {} as Vector<Patch>
 mut _event := Event {}
 mut _fc := typeset.FontCollection {}
 mut _fonts_ready := false
@@ -44,18 +111,8 @@ mut _navigator_set := false
 mut _navigator := (_url: str): ret false end
 mut _opened_urls := Vector {} as Vector<str>
 mut _clip_text := ""
-mut _clip_owned := false
-mut _bd := _Dom {}
-mut _pc_map := HashMap {} as HashMap<str, int>
-mut _pc_keys := Vector {} as Vector<str>
-mut _pc_para := Vector {} as Vector<typeset.Paragraph>
-mut _pc_lay := Vector {} as Vector<typeset.TextLayout>
-mut _pc_layw := Vector {} as Vector<f64>
-mut _pc_has_lay := Vector {} as Vector<bool>
-mut _pc_taken := Vector {} as Vector<bool>
-mut _pc_alt := Vector {} as Vector<Vector<typeset.TextLayout>>
-mut _pc_altw := Vector {} as Vector<Vector<f64>>
-mut _bstack := Vector {} as Vector<int>
+mut _def_keys := HashMap {} as HashMap<str, int>
+mut _def_styles := Vector {} as Vector<style.Style>
 
 @en "Options"
 @fa "گزینه‌ها"
@@ -72,9 +129,6 @@ pub struct Options:
     @en "resizable"
     @fa "تغییر اندازه پذیر"
     pub resizable: bool = true
-    @en "background"
-    @fa "پس زمینه"
-    pub background: str = ""
     @en "headless"
     @fa "بی سر"
     pub headless: bool = false
@@ -130,9 +184,9 @@ end
 @en "Profile"
 @fa "نمایه زمانی"
 pub struct Profile:
-    @en "parse_ms"
-    @fa "زمان تجزیه"
-    pub parse_ms: f64 = 0.0
+    @en "build_ms"
+    @fa "زمان ساخت"
+    pub build_ms: f64 = 0.0
     @en "style_ms"
     @fa "زمان سبک"
     pub style_ms: f64 = 0.0
@@ -145,6 +199,33 @@ pub struct Profile:
     @en "elements"
     @fa "شمار عنصرها"
     pub elements: int = 0
+end
+
+struct _Node:
+    pub kind: str = ""
+    pub k: int = 1
+    pub inl: bool = false
+    pub parent: int = -1
+    pub kids: Vector<int> = Vector {}
+    pub names: Vector<str> = Vector {}
+    pub values: Vector<str> = Vector {}
+    pub text: str = ""
+    pub pst: Vector<int> = Vector {}
+    pub pid: Vector<int> = Vector {}
+    pub dst: Vector<int> = Vector {}
+    pub dprop: Vector<int> = Vector {}
+    pub dval: Vector<style.Value> = Vector {}
+    pub smask: int = 0
+end
+
+struct _Dom:
+    pub nodes: Vector<_Node> = Vector {}
+    pub title: str = ""
+    pub lang: str = ""
+    pub dir: str = ""
+    pub ev_node: Vector<int> = Vector {}
+    pub ev_kind: Vector<str> = Vector {}
+    pub ev_fn: Vector<func ()> = Vector {}
 end
 
 struct _Ctl:
@@ -160,16 +241,15 @@ struct _Ctl:
     pub value_attr: str = ""
     pub has_checked: bool = false
     pub checked: bool = false
-    pub checked_attr: bool = false
     pub caret: int = 0
     pub anchor: int = 0
     pub preedit: str = ""
     pub open: bool = false
-    pub open_init: bool = false
     pub selected: int = -1
     pub undo: Vector<str> = Vector {}
     pub text_scroll: f64 = 0.0
     pub text_scroll_y: f64 = 0.0
+    pub states: int = 0
 end
 
 struct _Box:
@@ -184,46 +264,40 @@ struct _Box:
     pub clip_y1: f64 = 1.0e9
 end
 
-struct _Ifc:
+struct _Used:
+    pub font: f64 = 16.0
+    pub line: f64 = 24.0
+    pub color: paint.Color = paint.Color {}
+    pub outline_set: bool = false
+    pub family: str = "sans-serif"
+    pub ver: int = 0
+    pub ihash: i64 = 0
+    pub fhash: i64 = 0
+    pub phash: i64 = 0
+end
+
+struct _Run:
     pub owner: int = -1
-    pub cb: int = -1
-    pub control: bool = false
-    pub fixed_w: f64 = 0.0
-    pub fixed_h: f64 = 0.0
-    pub next: int = -1
-    pub pbw: f64 = 0.0
+    pub first: int = -1
+    pub fid: int = -1
+    pub nodes: Vector<int> = Vector {}
     pub spans: Vector<typeset.TextSpan> = Vector {}
     pub span_el: Vector<int> = Vector {}
-    pub span_atom: Vector<int> = Vector {}
-    pub atoms: Vector<int> = Vector {}
+    pub pstyle: typeset.ParagraphStyle = typeset.ParagraphStyle {}
     pub para: typeset.Paragraph = typeset.Paragraph {}
     pub has_para: bool = false
     pub lay: typeset.TextLayout = typeset.TextLayout {}
-    pub lay_w: f64 = -1.0
+    pub lay_w: f64 = -9.0
     pub has_lay: bool = false
-    pub pstyle: typeset.ParagraphStyle = typeset.ParagraphStyle {}
+    pub alt_lay: Vector<typeset.TextLayout> = Vector {}
+    pub alt_w: Vector<f64> = Vector {}
+    pub control: bool = false
     pub x: f64 = 0.0
     pub y: f64 = 0.0
     pub w: f64 = 0.0
     pub h: f64 = 0.0
-    pub marker: str = ""
-    pub marker_el: int = -1
-    pub ckey: str = ""
-    pub alt_lay: Vector<typeset.TextLayout> = Vector {}
-    pub alt_w: Vector<f64> = Vector {}
-end
-
-struct _Atom:
-    pub node: int = -1
-    pub ifc: int = -1
-    pub span: int = -1
-    pub mw: f64 = 0.0
-    pub mh: f64 = 0.0
-    pub baseline: f64 = 0.0
-    pub ox: f64 = 0.0
-    pub oy: f64 = 0.0
-    pub va: int = 0
-    pub va_set: bool = false
+    pub ver: int = 0
+    pub alive: bool = true
 end
 
 struct _Rec:
@@ -242,50 +316,35 @@ struct _Anim:
     pub start: i64 = 0
     pub duration: f64 = 0.0
     pub delay: f64 = 0.0
-    pub timing: css.Timing = css.Timing {}
-    pub from: css.Color = css.Color {}
-    pub to: css.Color = css.Color {}
-    pub from_f: f64 = 0.0
-    pub to_f: f64 = 0.0
+    pub ease: style.Easing = style.Easing {}
+    pub from: style.Value = style.Value {}
+    pub to: style.Value = style.Value {}
     pub done: bool = false
-    pub from_x: Vector<css.TransformFn> = Vector {}
-    pub to_x: Vector<css.TransformFn> = Vector {}
 end
 
 struct _Engine:
     pub ready: bool = false
     pub dom: _Dom = _Dom {}
-    pub sheet: css.Sheet = css.Sheet {}
-    pub has_sheet: bool = false
-    pub els: Vector<css.Element> = Vector {}
-    pub el_node: Vector<int> = Vector {}
-    pub node_el: Vector<int> = Vector {}
-    pub st: Vector<css.ComputedStyle> = Vector {}
-    pub sid: Vector<int> = Vector {}
-    pub env: css.Env = css.Env {}
+    pub ctl: Vector<_Ctl> = Vector {}
+    pub cs: Vector<style.Style> = Vector {}
+    pub us: Vector<_Used> = Vector {}
+    pub fid: Vector<int> = Vector {}
+    pub flow_node: Vector<int> = Vector {}
+    pub flow_run: Vector<int> = Vector {}
+    pub node_run: Vector<int> = Vector {}
+    pub in_run: Vector<int> = Vector {}
+    pub runs: Vector<_Run> = Vector {}
+    pub boxes: Vector<_Box> = Vector {}
+    pub xf: Vector<paint.Transform> = Vector {}
+    pub xf_on: Vector<bool> = Vector {}
+    pub xf_any: bool = false
+    pub tree: flow.Tree = flow.Tree {}
+    pub has_tree: bool = false
     pub width: f64 = 1024.0
     pub height: f64 = 768.0
     pub scale: f64 = 1.0
-    pub tree: cssbox.Tree = cssbox.Tree {}
-    pub has_tree: bool = false
-    pub node_cb: Vector<int> = Vector {}
-    pub cb_node: Vector<int> = Vector {}
-    pub cb_ifc: Vector<int> = Vector {}
-    pub cb_rep: Vector<int> = Vector {}
-    pub rep_w: Vector<f64> = Vector {}
-    pub rep_h: Vector<f64> = Vector {}
-    pub root_cb: int = -1
-    pub ifcs: Vector<_Ifc> = Vector {}
-    pub atoms: Vector<_Atom> = Vector {}
-    pub node_atom: Vector<int> = Vector {}
-    pub node_ifc: Vector<int> = Vector {}
-    pub boxes: Vector<_Box> = Vector {}
-    pub ctl: Vector<_Ctl> = Vector {}
-    pub doc_h: f64 = 0.0
-    pub doc_w: f64 = 0.0
-    pub vscroll: f64 = 0.0
-    pub canvas_bg: css.Color = css.Color { r = 255, g = 255, b = 255, a = 255 }
-    pub bg_override: str = ""
+    pub dark: bool = false
+    pub root_font: f64 = 16.0
     pub recs: Vector<_Rec> = Vector {}
     pub damage: paint.Region = paint.Region {}
     pub full: bool = true
@@ -297,10 +356,7 @@ struct _Engine:
     pub last_click: int = -1
     pub anims: Vector<_Anim> = Vector {}
     pub view_set: bool = false
-    pub view: func () str = (): ret "" end
-    pub compiled: bool = false
-    pub cview: func (Builder) = (_b: Builder): _bd.nodes.clear() end
-    pub prog: css.Program = css.Program {}
+    pub view: func (Builder) = (_b: Builder): _bstack.clear() end
     pub win: window.Window = window.Window {}
     pub has_win: bool = false
     pub canvas: paint.Canvas = paint.Canvas {}
@@ -310,51 +366,20 @@ struct _Engine:
     pub dirty_view: bool = false
     pub dirty_layout: bool = false
     pub dirty_style: bool = false
+    pub dirty_place: bool = false
+    pub dirty_dom: bool = false
     pub mx: f64 = 0.0
     pub my: f64 = 0.0
     pub drag_sel: bool = false
     pub order: Vector<int> = Vector {}
-    pub order_next: int = 0
-    pub script_mode: bool = false
     pub quit: bool = false
-    pub dirty_dom: bool = false
     pub last_damage_n: int = 0
     pub last_damage_area: int = 0
+    pub last_layout_calls: int = 0
+    pub last_layout_ms: f64 = 0.0
+    pub last_paint_ms: f64 = 0.0
+    pub last_style_ms: f64 = 0.0
     pub timer_id: int = -1
     pub script: str = ""
-    pub cb_key: Vector<i64> = Vector {}
-    pub cb_used: Vector<bool> = Vector {}
-    pub cb_meas: Vector<bool> = Vector {}
-    pub cb_want: Vector<bool> = Vector {}
-    pub cb_pkey: Vector<str> = Vector {}
-    pub cb_rw: Vector<f64> = Vector {}
-    pub cb_rh: Vector<f64> = Vector {}
-    pub key_map: HashMap<i64, int> = HashMap {}
-    pub node_ord: Vector<int> = Vector {}
-    pub root_ord: int = 0
-    pub link_p: Vector<int> = Vector {}
-    pub link_c: Vector<int> = Vector {}
-    pub free_cbs: Vector<int> = Vector {}
-    pub last_layout_calls: int = 0
-    pub vadv: HashMap<int, f64> = HashMap {}
-    pub vskip: Vector<int> = Vector {}
-    pub vtop: Vector<f64> = Vector {}
-    pub vh: Vector<f64> = Vector {}
-    pub vconts: Vector<int> = Vector {}
-    pub vrow0: Vector<int> = Vector {}
-    pub vrows: Vector<int> = Vector {}
-    pub vfix: bool = false
-    pub vmax: HashMap<int, f64> = HashMap {}
-    pub xf_any: bool = false
-    pub xf_on: Vector<bool> = Vector {}
-    pub xf_m: Vector<f64> = Vector {}
-    pub xf_l: Vector<f64> = Vector {}
-    pub fx_on: Vector<bool> = Vector {}
-    pub sub: Vector<f64> = Vector {}
-    pub sub_ok: bool = false
-    pub kids_sorted: Vector<bool> = Vector {}
-    pub anim_xf: bool = false
-    pub restyled: bool = false
-    pub dirty_place: bool = false
-    pub sheet_css: str = ""
+    pub restyled: Vector<int> = Vector {}
 end

@@ -1,0 +1,233 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "appearance"
+@fa "نمایه"
+package appearance
+
+import os
+import mem
+import str
+import os.shell
+
+// Theme/accent query helpers with best-effort polling-based watch support.
+// Native event subscriptions (registry callbacks, NSDistributedNotificationCenter,
+// portal/settings-daemon signals) are not wired; Poll()/Watch* use snapshots.
+
+@en "AppearanceInfo"
+@fa "اطلاعات نمایه"
+pub struct AppearanceInfo:
+    @en "theme"
+    @fa "پوسته"
+    pub theme: str = "light" // light|dark|unknown
+    @en "prefers_dark"
+    @fa "تیره ترجیحی"
+    pub prefers_dark: bool = false
+    @en "accent_color"
+    @fa "رنگ تاکیدی"
+    pub accent_color: str = "" // #RRGGBB when available
+    @en "source"
+    @fa "منبع"
+    pub source: str = ""
+end
+
+@en "AppearanceWatcher"
+@fa "پایشگر نمایه"
+pub struct AppearanceWatcher:
+    @en "last"
+    @fa "آخرین"
+    pub last: AppearanceInfo = AppearanceInfo {}
+    @en "initialized"
+    @fa "راه‌اندازی شده"
+    pub initialized: bool = false
+
+    @en "Poll"
+    @fa "بررسی"
+    pub mut func Poll(): bool: cur := Get()
+    mut changed := false
+    if not this.initialized:
+        changed = false
+        this.initialized = true
+    else:
+        if cur.theme != this.last.theme or cur.accent_color != this.last.accent_color or cur.prefers_dark != this.last.prefers_dark:
+            changed = true
+        end
+    end
+    this.last = cur
+    ret changed
+end
+end
+
+func _norm_hex(s: str): str:
+    t := str.Trim(s)
+    if t.Len() == 0: ret t end
+    low := str.Lower(t)
+    // Accept 0xRRGGBB or rgb(...) best-effort minimal normalization
+    if str.StartsWith(low, "0x") and low.Len() >= 8:
+        out := "#".Concat(low.Substr(2, 6))
+        mem.Free(low as void*)
+        mem.Free(t as void*)
+        ret out
+    end
+    mem.Free(low as void*)
+    if str.StartsWith(t, "#"):
+        ret t
+    end
+    ret t
+end
+
+@en "PrefersDarkMode"
+@fa "حالت تیره ترجیحی"
+pub func PrefersDarkMode(): bool:
+    if SALAM_OS_MAC:
+        r := shell.Exec("defaults read -g AppleInterfaceStyle 2>/dev/null")
+        out := str.Trim(r.out)
+        defer mem.Free(out as void*)
+        ret out == "Dark"
+    else SALAM_OS_WINDOWS:
+        r := shell.Exec("reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v AppsUseLightTheme 2>nul")
+        out := r.out
+        if str.Contains(out, "0x0"):
+            mem.Free(out as void*)
+            ret true
+        end
+        mem.Free(out as void*)
+        ret false
+    else:
+        scheme := os.Env("GTK_THEME")
+        if str.Contains(str.Lower(scheme), "dark"):
+            mem.Free(scheme as void*)
+            ret true
+        end
+        mem.Free(scheme as void*)
+        r := shell.Exec("gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null")
+        out := str.Trim(r.out)
+        low := str.Lower(out)
+        defer mem.Free(out as void*)
+        if str.Contains(low, "prefer-dark") or str.Contains(low, "dark"):
+            mem.Free(low as void*)
+            ret true
+        end
+        mem.Free(low as void*)
+        r2 := shell.Exec("gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null")
+        out2 := str.Trim(r2.out)
+        low2 := str.Lower(out2)
+        defer mem.Free(out2 as void*)
+        defer mem.Free(low2 as void*)
+        ret str.Contains(low2, "dark")
+    end
+end
+
+@en "Theme"
+@fa "پوسته"
+pub func Theme(): str:
+    if PrefersDarkMode(): ret str.Clone("dark") end
+    ret str.Clone("light")
+end
+
+@en "AccentColor"
+@fa "رنگ تاکیدی"
+pub func AccentColor(): str:
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("reg query HKCU\\Software\\Microsoft\\Windows\\DWM /v AccentColor 2>nul")
+        out := str.Trim(r.out)
+        // REG_DWORD value like 0xffd77800 (ABGR in practice) - best-effort raw hex string
+        idx := str.IndexOf(out, "0x")
+        if idx >= 0:
+            raw := out.Substr(idx, out.Len() - idx)
+            norm := _norm_hex(raw)
+            mem.Free(raw as void*)
+            mem.Free(out as void*)
+            mem.Free(r.out as void*)
+            ret norm
+        end
+        mem.Free(out as void*)
+        mem.Free(r.out as void*)
+        ret str.Clone("")
+    else SALAM_OS_MAC:
+        r := shell.Exec("defaults read -g AppleAccentColor 2>/dev/null")
+        out := str.Trim(r.out)
+        // Numeric accent id on macOS; map common values best-effort
+        if out == "-1":
+            mem.Free(out as void*)
+            mem.Free(r.out as void*)
+            ret str.Clone("#007aff")
+        end
+        if out == "0":
+            mem.Free(out as void*)
+            mem.Free(r.out as void*)
+            ret str.Clone("#ff3b30")
+        end
+        if out == "1":
+            mem.Free(out as void*)
+            mem.Free(r.out as void*)
+            ret str.Clone("#ff9500")
+        end
+        if out == "5":
+            mem.Free(out as void*)
+            mem.Free(r.out as void*)
+            ret str.Clone("#af52de")
+        end
+        if out == "6":
+            mem.Free(out as void*)
+            mem.Free(r.out as void*)
+            ret str.Clone("#ff2d55")
+        end
+        mem.Free(out as void*)
+        mem.Free(r.out as void*)
+        ret str.Clone("")
+    else:
+        r := shell.Exec("gsettings get org.gnome.desktop.interface accent-color 2>/dev/null")
+        out := str.Trim(r.out)
+        if out.Len() > 0 and out != "''":
+            // often returns a name like 'blue'; keep as-is for caller interpretation
+            mem.Free(r.out as void*)
+            ret out
+        end
+        mem.Free(out as void*)
+        mem.Free(r.out as void*)
+        ret str.Clone("")
+    end
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(): AppearanceInfo:
+    t := Theme()
+    dark := t == "dark"
+    ret AppearanceInfo {
+        theme = t, prefers_dark = dark, accent_color = AccentColor(), source = str.Clone("best-effort"),
+    }
+end
+
+@en "NewWatcher"
+@fa "پایشگر تازه"
+pub func NewWatcher(): AppearanceWatcher:
+    mut w := AppearanceWatcher {}
+    w.last = Get()
+    w.initialized = true
+    ret w
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    ret SALAM_OS_LINUX or SALAM_OS_WINDOWS or SALAM_OS_MAC
+end
+
+@en "CapabilityNote"
+@fa "یادداشت قابلیت"
+pub func CapabilityNote(): str:
+    ret str.Clone("Theme/accent are queried on-demand via OS settings/tools. No native change-event subscription is provided; use polling (AppearanceWatcher/Poll) for watcher-like behavior.")
+end

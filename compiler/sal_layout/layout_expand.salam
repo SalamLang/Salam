@@ -34,10 +34,21 @@ func slot_attr_name(a &: at.Ast, nid: int): str:
     if nid == 0:
         ret ""
     end
+    // Prefer explicit slot-routing attrs (`slot`/`جایگاه`), then provider name (`name`/`نام`).
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
         c := at.Get(a, cid)
-        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "name") or str.Equals(c.name, "نام") or str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه")):
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه")):
+            t := node_text(a, c.a)
+            if str.Len(t) > 0:
+                ret t
+            end
+        end
+    end
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "name") or str.Equals(c.name, "نام")):
             t := node_text(a, c.a)
             if str.Len(t) > 0:
                 ret t
@@ -45,6 +56,49 @@ func slot_attr_name(a &: at.Ast, nid: int): str:
         end
     end
     ret ""
+end
+
+func slot_strip_routing_attrs(a &: at.Ast, nid: int): int:
+    // Clone an element/slot node while removing slot-routing metadata attrs so
+    // routing hints (`slot`, `name`, Persian equivalents) do not leak into output.
+    if nid == 0:
+        ret 0
+    end
+    cp := at.Clone(a, nid)
+    if at.KindOf(a, nid) != at.AST_LAYOUT_ELEMENT:
+        ret cp
+    end
+    mut kept := Vector {} as Vector<int>
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه") or str.Equals(c.name, "name") or str.Equals(c.name, "نام")):
+            continue
+        end
+        kept.Push(at.Clone(a, cid))
+    end
+    mut cn := at.Get(a, cp)
+    mut old := cn.list
+    cn.list = kept
+    at.Put(a, cp, cn)
+    old.Free()
+    ret cp
+end
+
+func slot_provider_kind(a &: at.Ast, nid: int): int:
+    // 0: not a provider, 1: default provider wrapper, 2: named provider wrapper
+    if nid == 0 or at.KindOf(a, nid) != at.AST_LAYOUT_ELEMENT:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if not is_slot_placeholder_name(n.name):
+        ret 0
+    end
+    sname := slot_attr_name(a, nid)
+    if is_default_slot_name(sname):
+        ret 1
+    end
+    ret 2
 end
 
 func lo_dir_of(path: str): str:
@@ -898,10 +952,11 @@ func expand_component(
                     ev_fns.Push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
                 end
             else is_content_word(an.name):
+                // Treat content/children attrs as default slot content.
+                // Named slot routing via attrs is not supported; slot providers use element form.
                 slot_name := ""
                 if str.Equals(an.name, "slot") or str.Equals(an.name, "جایگاه"):
-                    // slot as attr not supported as text content; treat as default content attr fallback
-                    slot_name = ""
+                    slot_name = slot_attr_name(a, aid)
                 end
                 if is_default_slot_name(slot_name):
                     if got_content_attr:
@@ -958,63 +1013,75 @@ func expand_component(
                 end
             end
         else an.kind == at.AST_LAYOUT_ELEMENT:
-            if is_slot_placeholder_name(an.name):
-                sname := slot_attr_name(a, aid)
-                if is_default_slot_name(sname):
-                    before := fr.content.Len()
-                    expand_items(ex, a, fr.content, aid, caller, dir, depth)
-                    if fr.content.Len() > before:
-                        got_content = true
-                        got_content_children = true
-                    end
+            pk := slot_provider_kind(a, aid)
+            if pk == 1:
+                // Default slot provider wrapper: contributes to default/content slot.
+                before := fr.content.Len()
+                expand_items(ex, a, fr.content, aid, caller, dir, depth)
+                if fr.content.Len() > before:
+                    got_content = true
+                    got_content_children = true
                 else:
-                    mut dup_named := false
-                    repeat named_seen.Len() in ni:
-                        if str.Equals(named_seen.Get(ni), sname):
-                            dup_named = true
-                        end
-                    end
-                    if dup_named:
-                        lg.Log(
-                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                                i18.Tr("component '%s' receives named slot '%s' more than once"),
-                                co.ArgStr(comp_name), co.ArgStr(sname)
-                            )
-                        )
-                        ex.errors++
-                    else:
-                        named_seen.Push(sname)
-                    end
-                    mut svec := Vector {} as Vector<int>
-                    expand_items(ex, a, svec, aid, caller, dir, depth)
-                    if svec.Len() > 0:
-                        i := frame_ensure_slot(fr, sname)
-                        mut cur := fr.slot_nodes.Get(i)
-                        repeat svec.Len() in si:
-                            cur.Push(svec.Get(si))
-                        end
-                        fr.slot_nodes.Set(i, cur)
-                        fr.slot_provided.Set(i, true)
-                        got_content = true
-                        got_named_children = true
-                    else:
-                        frame_mark_slot(fr, sname)
-                    end
-                    svec.Free()
+                    // Explicit empty provider still marks default slot as provided.
+                    frame_mark_slot(fr, "default")
+                    got_content = true
+                    got_content_children = true
                 end
+            else pk == 2:
+                sname := slot_attr_name(a, aid)
+                mut dup_named := false
+                repeat named_seen.Len() in ni:
+                    if str.Equals(named_seen.Get(ni), sname):
+                        dup_named = true
+                    end
+                end
+                if dup_named:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("component '%s' receives named slot '%s' more than once"), co.ArgStr(comp_name),
+                            co.ArgStr(sname)
+                        )
+                    )
+                    ex.errors++
+                else:
+                    named_seen.Push(sname)
+                end
+                mut svec := Vector {} as Vector<int>
+                expand_items(ex, a, svec, aid, caller, dir, depth)
+                i := frame_ensure_slot(fr, sname)
+                if svec.Len() > 0:
+                    mut cur := fr.slot_nodes.Get(i)
+                    repeat svec.Len() in si:
+                        cur.Push(svec.Get(si))
+                    end
+                    fr.slot_nodes.Set(i, cur)
+                    fr.slot_provided.Set(i, true)
+                    got_content = true
+                    got_named_children = true
+                else:
+                    // Explicit named provider with empty/fallback-only content marks slot provided.
+                    fr.slot_provided.Set(i, true)
+                    got_content = true
+                    got_named_children = true
+                end
+                svec.Free()
             else:
                 routed_name := slot_attr_name(a, aid)
                 if not is_default_slot_name(routed_name) and (str.Len(routed_name) > 0):
                     // Child explicitly targets a named slot via slot/name attr.
-                    mut dup_named2 := false
-                    // allow multiple children into same named slot; only provider wrappers are "once"
-                    _dn := dup_named2
+                    // Multiple children may contribute to the same named slot.
                     mut tmp := Vector {} as Vector<int>
-                    expand_item(ex, a, tmp, aid, caller, dir, depth)
+                    mut cvec2 := Vector {} as Vector<int>
+                    stripped := slot_strip_routing_attrs(a, aid)
+                    expand_item(ex, a, cvec2, stripped, caller, dir, depth)
+                    repeat cvec2.Len() in ti:
+                        tmp.Push(cvec2.Get(ti))
+                    end
+                    cvec2.Free()
                     i2s := frame_ensure_slot(fr, routed_name)
                     mut cur2 := fr.slot_nodes.Get(i2s)
-                    repeat tmp.Len() in ti:
-                        cur2.Push(tmp.Get(ti))
+                    repeat tmp.Len() in ti2:
+                        cur2.Push(tmp.Get(ti2))
                     end
                     fr.slot_nodes.Set(i2s, cur2)
                     fr.slot_provided.Set(i2s, true)
@@ -1041,6 +1108,8 @@ func expand_component(
             end
         end
     end
+    // Default content precedence: attribute and child/default providers cannot both supply content.
+    // Named slots are independent and may coexist with default content.
     if got_content_attr and got_content_children:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
@@ -1380,21 +1449,23 @@ func expand_item(
         if fr.present and not fr.page and is_slot_placeholder_name(item.name):
             sname := slot_attr_name(a, iid)
             if is_default_slot_name(sname):
+                // Default slot precedence: explicit default slot provider/content first,
+                // otherwise fallback to unnamed/default-routed children collected in content.
+                mut tmpd := Vector {} as Vector<int>
+                if frame_slot_items(fr, "", tmpd) or frame_slot_items(fr, "default", tmpd) or frame_slot_items(fr, "content", tmpd) or frame_slot_items(fr, "children", tmpd) or frame_slot_items(fr, "محتوا", tmpd):
+                    repeat tmpd.Len() in ti:
+                        out.Push(at.Clone(a, tmpd.Get(ti)))
+                    end
+                    tmpd.Free()
+                    ret
+                end
+                tmpd.Free()
                 if fr.content.Len() > 0:
                     repeat fr.content.Len() in i:
                         out.Push(at.Clone(a, fr.content.Get(i)))
                     end
                     ret
                 end
-                mut tmp := Vector {} as Vector<int>
-                if frame_slot_items(fr, "", tmp) or frame_slot_items(fr, "default", tmp):
-                    repeat tmp.Len() in ti:
-                        out.Push(at.Clone(a, tmp.Get(ti)))
-                    end
-                    tmp.Free()
-                    ret
-                end
-                tmp.Free()
             else:
                 mut named := Vector {} as Vector<int>
                 if frame_slot_items(fr, sname, named):
@@ -1407,7 +1478,14 @@ func expand_item(
                 named.Free()
                 // Named slot not provided: render fallback content of the placeholder, if any.
             end
-            expand_items(ex, a, out, iid, fr, dir, depth)
+            // Fallback/default placeholder content: expand children but do not emit routing attrs.
+            // TODO: support scoped slot bindings/parameters when runtime/toolchain adds them.
+            mut fb := Vector {} as Vector<int>
+            expand_items(ex, a, fb, iid, fr, dir, depth)
+            repeat fb.Len() in fi:
+                out.Push(fb.Get(fi))
+            end
+            fb.Free()
             ret
         end
 

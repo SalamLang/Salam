@@ -1018,6 +1018,17 @@ func lay_comp_slot_name(a &: at.Ast, el: int): str:
     ret ""
 end
 
+func lay_comp_has_slot_name_attr(a &: at.Ast, el: int): bool:
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "name") or str.Equals(c.name, "نام") or str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه")):
+            ret true
+        end
+    end
+    ret false
+end
+
 func lay_comp_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     n := at.Get(a, nid)
     if n.kind == at.AST_EACH:
@@ -1097,14 +1108,7 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         cn := at.Get(a, cid)
         if lay_is_slot_placeholder(cn.name):
             sn := lay_comp_slot_name(a, cid)
-            mut has_slot_name_attr := false
-            repeat at.ChildCount(a, cid) in sni:
-                snid := at.Child(a, cid, sni)
-                snn := at.Get(a, snid)
-                if snn.kind == at.AST_LAYOUT_ATTR and (str.Equals(snn.name, "name") or str.Equals(snn.name, "نام") or str.Equals(snn.name, "slot") or str.Equals(snn.name, "جایگاه")):
-                    has_slot_name_attr = true
-                end
-            end
+            has_slot_name_attr := lay_comp_has_slot_name_attr(a, cid)
             if str.Len(sn) == 0:
                 if has_slot_name_attr:
                     serr(s, 18, span_of(a, cid), i18.Tr("slot name must be a fixed text value"))
@@ -1139,17 +1143,42 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             lay_comp_check_items(s, a, cid, ck)
             continue
         end
-        // Component invocations inside component bodies: basic slot-routing attr diagnostics.
+        // Component invocations inside component bodies: basic slot-routing/content-form diagnostics.
         if lay_is_component(ck, cn.name):
             mut provided_named := Vector {} as Vector<str>
             defer provided_named.Free()
+            mut has_default_attr := false
+            mut has_default_children := false
+            mut has_named_children := false
             repeat at.ChildCount(a, cid) in jn:
                 kid := at.Child(a, cid, jn)
                 kk := at.KindOf(a, kid)
-                if kk == at.AST_LAYOUT_ELEMENT:
+                if kk == at.AST_LAYOUT_ATTR:
+                    an := at.Get(a, kid).name
+                    if str.Equals(an, "content") or str.Equals(an, "children") or str.Equals(an, "محتوا"):
+                        has_default_attr = true
+                    end
+                    if str.Equals(an, "slot") or str.Equals(an, "جایگاه"):
+                        mut sv := ""
+                        if not lay_attr_text(a, kid, sv):
+                            serr(s, 18, span_of(a, kid), i18.Tr("slot routing attribute must be a fixed text value"))
+                        else sv != "default" and sv != "content" and sv != "children" and sv != "محتوا" and str.Len(sv) > 0:
+                            serr(
+                                s, 18, span_of(a, kid), co.Format1(
+                                    i18.Tr("named slot '%s' must be provided as a slot element, not as an attribute"),
+                                    co.ArgStr(sv)
+                                )
+                            )
+                        end
+                    end
+                else kk == at.AST_LAYOUT_ELEMENT:
                     if lay_is_slot_placeholder(at.Get(a, kid).name):
                         psn := lay_comp_slot_name(a, kid)
+                        has_name_attr := lay_comp_has_slot_name_attr(a, kid)
                         if str.Len(psn) == 0:
+                            if has_name_attr:
+                                serr(s, 18, span_of(a, kid), i18.Tr("slot name must be a fixed text value"))
+                            end
                             psn = "default"
                         end
                         if not lay_comp_slot_valid_name(psn):
@@ -1159,7 +1188,10 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
                                 )
                             )
                         end
-                        if not str.Equals(psn, "default"):
+                        if str.Equals(psn, "default") or str.Equals(psn, "content") or str.Equals(psn, "children") or str.Equals(psn, "محتوا"):
+                            has_default_children = true
+                        else:
+                            has_named_children = true
                             mut seenp := false
                             repeat provided_named.Len() in pni:
                                 if str.Equals(provided_named.Get(pni), psn):
@@ -1198,11 +1230,27 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
                             if has_route_attr:
                                 serr(s, 18, span_of(a, kid), i18.Tr("slot routing attribute must be a fixed text value"))
                             end
+                            has_default_children = true
+                        else rsn == "default" or rsn == "content" or rsn == "children" or rsn == "محتوا":
+                            has_default_children = true
+                        else:
+                            has_named_children = true
                         end
                         // TODO(toolchain): verify routed named slots exist on the target component definition when signatures are available.
                     end
+                else kk == at.AST_IF or kk == at.AST_EACH:
+                    has_default_children = true
                 end
             end
+            if has_default_attr and has_default_children:
+                serr(
+                    s, 114, span_of(a, cid), co.Format1(
+                        i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"),
+                        co.ArgStr(cn.name)
+                    )
+                )
+            end
+            _hnc := has_named_children
         end
         if not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
             if ck.unexpanded:

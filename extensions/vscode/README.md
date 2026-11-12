@@ -12,10 +12,10 @@ Language support for [Salam](https://github.com/SalamLang/Salam), in English and
   - outline, workspace symbols, folding, semantic highlighting that understands multi-word Persian names
   - signature help, quick fixes (did-you-mean, remove `mut`), and formatting through the compiler's formatter
 - **Debugging** with `salam dap`: press F5 in a Salam file to build it with debug information and debug it with gdb or lldb, with breakpoints, stepping and locals in the Salam source
-- **Syntax highlighting** for `.salam`, covering both keyword packs (English, Persian)
-- **Snippets** for the constructs you type most
-- **Run and build commands** that shell out to the `salam` compiler
-- **Language configuration**: comment toggling, bracket matching, auto-closing pairs
+- **Rich syntax highlighting** for `.salam` (English & Persian): keywords, types, built-ins, annotations, strings (including guillemets/text blocks), layout elements, operators, and TODO/FIXME markers
+- **Comprehensive snippets** for declarations, control flow, loops, imports/exports, collections, I/O and docs with English and Persian triggers
+- **Smart editing**: bracket/quote auto-closing (including `« »`), block-comment continuation, indentation/on-enter rules, and Salam file defaults
+- **Run, build, debug and task integration** via `salam` commands, LSP, DAP, problem matcher and task definitions
 
 ## Requirements
 

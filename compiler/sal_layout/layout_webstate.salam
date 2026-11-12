@@ -1286,6 +1286,7 @@ function salamWsSlot(i, key) {
         __salam_slots[fk] = e;
     }
     __salam_cur[i] = e.s;
+    window.salamWsAt = window.salamWsAt || function (ii, ss) { __salam_cur[ii] = ss; };
 }
 function salamWsFresh() {
     return __salam_wasfresh;
@@ -1299,6 +1300,11 @@ function __salam_drop(prefix, keep) {
         }
     }
 }
+function __salam_release(j) {
+    __salam_drop(j + "/", null);
+    delete __salam_marks[j];
+    delete __salam_cur[j];
+}
 function __salam_cleanup(n) {
     if (!n) {
         return;
@@ -1306,10 +1312,7 @@ function __salam_cleanup(n) {
     if (n.nodeType === 8) {
         var m = /^salam:(\d+)$/.exec(n.data);
         if (m) {
-            var j = m[1];
-            __salam_drop(j + "/", null);
-            delete __salam_marks[j];
-            delete __salam_cur[j];
+            __salam_release(m[1]);
         }
         return;
     }
@@ -1320,10 +1323,7 @@ function __salam_cleanup(n) {
     while ((c = w.nextNode())) {
         m2 = /^salam:(\d+)$/.exec(c.data);
         if (m2) {
-            var j2 = m2[1];
-            __salam_drop(j2 + "/", null);
-            delete __salam_marks[j2];
-            delete __salam_cur[j2];
+            __salam_release(m2[1]);
         }
     }
 }
@@ -1339,7 +1339,11 @@ function salamWsTouch(i) {
     }
     if (!__salam_queued) {
         __salam_queued = true;
-        Promise.resolve().then(__salam_flush);
+        if (typeof queueMicrotask === "function") {
+            queueMicrotask(__salam_flush);
+        } else {
+            Promise.resolve().then(__salam_flush);
+        }
     }
 }
 function __salam_find(i) {
@@ -1358,7 +1362,7 @@ function __salam_find(i) {
     return c && c.isConnected ? c : null;
 }
 function __salam_end(start) {
-    var n = start.nextSibling, d = "/" + start.data;
+    var n = start ? start.nextSibling : null, d = start ? "/" + start.data : "";
     while (n && !(n.nodeType === 8 && n.data === d)) {
         n = n.nextSibling;
     }
@@ -1422,9 +1426,18 @@ function __salam_patch(o, n, fresh) {
         }
     }
     if (o.nodeName === "TEXTAREA") {
-        if (o.defaultValue !== n.defaultValue) {
-            o.defaultValue = n.defaultValue;
-            o.value = n.defaultValue;
+        var nv = n.value;
+        if (o.value !== nv) {
+            o.value = nv;
+        }
+        __salam_kids(o, o.firstChild, null, Array.prototype.slice.call(n.childNodes), fresh);
+        return;
+    }
+    if (o.nodeName === "SELECT") {
+        var sv = n.value;
+        __salam_kids(o, o.firstChild, null, Array.prototype.slice.call(n.childNodes), fresh);
+        if (sv !== undefined && o.value !== sv) {
+            o.value = sv;
         }
         return;
     }
@@ -1500,13 +1513,17 @@ function __salam_render(i, fresh) {
     if (!e || !__salam_views[i]) {
         return;
     }
-    var t = document.createElement("template"), pr = __salam_rendering, ps = __salam_seen;
+    var t = document.createElement("template"), pr = __salam_rendering, ps = __salam_seen, html = "";
     __salam_rendering = String(i);
     __salam_seen = {};
-    t.innerHTML = __salam_views[i]();
-    __salam_drop(__salam_rendering + "/", __salam_seen);
-    __salam_rendering = pr;
-    __salam_seen = ps;
+    try {
+        html = __salam_views[i]() || "";
+    } finally {
+        __salam_drop(__salam_rendering + "/", __salam_seen);
+        __salam_rendering = pr;
+        __salam_seen = ps;
+    }
+    t.innerHTML = html;
     __salam_kids(s.parentNode, s.nextSibling, e, Array.prototype.slice.call(t.content.childNodes), fresh);
 }
 function __salam_mount(i) {
@@ -1523,29 +1540,33 @@ function __salam_mount(i) {
 }
 function __salam_flush() {
     __salam_queued = false;
-    var act = document.activeElement, ss = null, se = null;
+    var act = document.activeElement, ss = null, se = null, actId = act && act.id ? act.id : "";
     try {
         ss = act.selectionStart;
         se = act.selectionEnd;
     } catch (x) {
         ss = null;
+        se = null;
     }
-    var list = __salam_dirty.sort(function (a, b) {
+    var list = __salam_dirty.filter(function (v, i, a) {
+        return a.indexOf(v) === i;
+    }).sort(function (a, b) {
         return a - b;
     });
     __salam_dirty = [];
     for (var k = 0; k < list.length; k++) {
         __salam_mount(list[k]);
     }
-    if (act && act.isConnected && act !== document.activeElement && act.focus) {
+    var target = act && act.isConnected ? act : (actId ? document.getElementById(actId) : null);
+    if (target && target !== document.activeElement && target.focus) {
         try {
-            act.focus({ preventScroll: true });
+            target.focus({ preventScroll: true });
         } catch (x3) {
-            act.focus();
+            target.focus();
         }
         try {
-            if (ss !== null && typeof act.setSelectionRange === "function") {
-                act.setSelectionRange(ss, se);
+            if (ss !== null && typeof target.setSelectionRange === "function") {
+                target.setSelectionRange(ss, se);
             }
         } catch (x2) {
             ss = null;

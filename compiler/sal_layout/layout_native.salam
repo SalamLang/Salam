@@ -416,6 +416,10 @@ func ln_pseudo_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int):
 end
 
 func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
+    mut seen_attr := Vector {} as Vector<str>
+    mut seen_style := Vector {} as Vector<str>
+    defer seen_attr.Free()
+    defer seen_style.Free()
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
         an := at.Get(a, aid)
@@ -444,8 +448,9 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         end
         dest := sm.LayoutAttrDest(ai)
         vt := sm.LayoutAttrVtype(ai)
+        v := val_str(a, an.a)
         if vt == sm.VT_CODE:
-            num := ln_dyn_num(val_str(a, an.a))
+            num := ln_dyn_num(v)
             if num < 0 or num >= g.lw.slots.Len():
                 continue
             end
@@ -461,20 +466,26 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             end
             continue
         end
-        v := val_str(a, an.a)
         if dest == sm.LA_HTML:
             mut out := sm.LayoutAttrOut(ai)
             if str.IndexOf(out, "*") >= 0:
                 out = hyphenate(nm)
             end
-            if vt == sm.VT_BOOL or (vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false") or is_dyn(v))):
+            if vt == sm.VT_BOOL:
+                seen_attr.push(out)
+                ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
+            else vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false")):
+                seen_attr.push(out)
                 ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
             else str.Equals(out, "id"):
+                seen_attr.push(out)
                 ln_call(g, g.nm.id, ln_str_expr(v))
             else str.Equals(out, "data-key") or str.Equals(out, "key"):
+                seen_attr.push(out)
                 ln_call(g, g.nm.key, ln_str_expr(v))
             else:
                 mv := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.push(out)
                 ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv))
             end
         else dest == sm.LA_SOURCE:
@@ -482,12 +493,16 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             if str.Equals(tag, "a") or str.Equals(tag, "area") or str.Equals(tag, "base") or str.Equals(tag, "link"):
                 src_attr = "href"
             end
+            seen_attr.push(src_attr)
             ln_call(g, g.nm.attr, ln_quote(src_attr) + g.nm.sep + ln_str_expr(v))
         else dest == sm.LA_CLASS:
+            seen_attr.push("class")
             ln_call(g, g.nm.attr, ln_quote("class") + g.nm.sep + ln_str_expr(v))
         else dest == sm.LA_DIR or dest == sm.LA_LANG:
+            out := sm.LayoutAttrOut(ai)
             mv2 := is_dyn(v) ? v : attr_value_map(ai, v)
-            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_str_expr(mv2))
+            seen_attr.push(out)
+            ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv2))
         else dest == sm.LA_HTML_OR_CSS:
             out := sm.LayoutAttrOut(ai)
             mut prop := out
@@ -497,18 +512,22 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             if is_dyn(v):
                 # Dynamic values may resolve to CSS-like values at runtime; keep
                 # them as a style property for native parity with web dyn styles.
+                if str.Len(prop) == 0:
+                    prop = hyphenate(key)
+                end
+                seen_style.push(prop)
                 ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(v))
             else lo_all_digits(v):
+                seen_attr.push(out)
                 ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_quote(v))
             else:
                 mv3 := attr_value_map(ai, v)
-                # Non-numeric CSS-like values are applied as style text when a
-                # concrete property name is known; fall back to an attribute.
-                if str.Len(prop) > 0 and not str.Equals(prop, out):
-                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
-                else str.Len(prop) > 0 and str.IndexOf(prop, "-") >= 0:
+                # Non-numeric CSS-like values are applied as style text.
+                if str.Len(prop) > 0:
+                    seen_style.push(prop)
                     ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
                 else:
+                    seen_attr.push(out)
                     ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv3))
                 end
             end
@@ -518,11 +537,18 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
                 prop = hyphenate(key)
             end
             mv4 := is_dyn(v) ? v : attr_value_map(ai, v)
+            seen_style.push(prop)
             ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv4))
         else dest == sm.LA_STYLE:
+            seen_attr.push("style")
             ln_call(g, g.nm.attr, ln_quote("style") + g.nm.sep + ln_str_expr(v))
-        else dest == sm.LA_META:
-            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_META or dest == sm.LA_CONTENT:
+            mout := sm.LayoutAttrOut(ai)
+            if str.Len(mout) > 0:
+                mv5 := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.push(mout)
+                ln_call(g, g.nm.attr, ln_quote(mout) + g.nm.sep + ln_str_expr(mv5))
+            end
         end
     end
     if ei < 0:
@@ -537,13 +563,27 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         dout := sm.LayoutAttrOut(d)
         ddef := sm.LayoutAttrDefault(d)
         if ddest == sm.LA_HTML:
-            ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+            mut seen := false
+            repeat seen_attr.Len() in si:
+                if str.Equals(seen_attr.get(si), dout):
+                    seen = true
+                end
+            end
+            if not seen:
+                ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+            end
         else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
             mut dprop := dout
             if str.Len(dprop) == 0:
-                dprop = hyphenate(dout)
+                continue
             end
-            if str.Len(dprop) > 0:
+            mut seen2 := false
+            repeat seen_style.Len() in sj:
+                if str.Equals(seen_style.get(sj), dprop):
+                    seen2 = true
+                end
+            end
+            if not seen2:
                 ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(dprop) + g.nm.sep + ln_quote(ddef))
             end
         end
@@ -975,6 +1015,10 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
     mut have_lang := false
     mut have_dir := false
     page_ei := sm.LayoutElemLookup("page")
+    mut seen_attr := Vector {} as Vector<str>
+    mut seen_style := Vector {} as Vector<str>
+    defer seen_attr.Free()
+    defer seen_style.Free()
     repeat at.ChildCount(a, lb) in i:
         iid := at.Child(a, lb, i)
         item := at.Get(a, iid)
@@ -984,35 +1028,92 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
         v := val_str(a, item.a)
         if str.Equals(item.name, "title"):
             ln_call(g, g.nm.title, ln_str_expr(v))
-        else str.Equals(item.name, "lang"):
+            continue
+        end
+        if str.Equals(item.name, "lang"):
             l := is_dyn(v) ? v : sm.LayoutDynValue("lang", i18.LayoutValue(v))
             ln_call(g, g.nm.lang, ln_str_expr(str.Len(l) > 0 ? l : v))
             have_lang = true
-        else str.Equals(item.name, "dir"):
+            continue
+        end
+        if str.Equals(item.name, "dir"):
             d := is_dyn(v) ? v : sm.LayoutDynValue("dir", i18.LayoutValue(v))
             ln_call(g, g.nm.dir, ln_str_expr(str.Len(d) > 0 ? d : v))
             have_dir = true
-        else str.Equals(item.name, "content") or str.Equals(item.name, "favicon"):
             continue
-        else:
-            mut key := sm.LayoutAttrKey(item.name)
-            if str.Len(key) == 0:
-                key = item.name
-            end
-            ai := sm.LayoutAttrFor(page_ei, key)
-            if ai >= 0 and sm.LayoutAttrVtype(ai) == sm.VT_CODE:
-                num := ln_dyn_num(v)
-                if num >= 0 and num < g.lw.slots.Len():
-                    ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
-                    ek := at.KindOf(a, g.lw.slots.get(num).expr)
-                    if ek == at.AST_LAMBDA:
-                        ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
-                    else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
-                        ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
-                    else:
-                        ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
-                    end
+        end
+        if str.Equals(item.name, "content") or str.Equals(item.name, "favicon"):
+            continue
+        end
+        mut key := sm.LayoutAttrKey(item.name)
+        if str.Len(key) == 0:
+            key = item.name
+        end
+        ai := sm.LayoutAttrFor(page_ei, key)
+        if ai < 0:
+            continue
+        end
+        vt := sm.LayoutAttrVtype(ai)
+        if vt == sm.VT_CODE:
+            num := ln_dyn_num(v)
+            if num >= 0 and num < g.lw.slots.Len():
+                ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
+                ek := at.KindOf(a, g.lw.slots.get(num).expr)
+                if ek == at.AST_LAMBDA:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
+                else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+                else:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
                 end
+            end
+            continue
+        end
+        dest := sm.LayoutAttrDest(ai)
+        if dest == sm.LA_HTML:
+            mut out := sm.LayoutAttrOut(ai)
+            if str.IndexOf(out, "*") >= 0:
+                out = hyphenate(item.name)
+            end
+            if vt == sm.VT_BOOL or (vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false"))):
+                seen_attr.push(out)
+                ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
+            else:
+                mv := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.push(out)
+                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv))
+            end
+        else dest == sm.LA_SOURCE:
+            mout := sm.LayoutAttrOut(ai)
+            if str.Len(mout) == 0:
+                mout = "src"
+            end
+            seen_attr.push(mout)
+            ln_call(g, g.nm.attr, ln_quote(mout) + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_CLASS:
+            seen_attr.push("class")
+            ln_call(g, g.nm.attr, ln_quote("class") + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_DIR or dest == sm.LA_LANG:
+            out := sm.LayoutAttrOut(ai)
+            mv2 := is_dyn(v) ? v : attr_value_map(ai, v)
+            seen_attr.push(out)
+            ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv2))
+        else dest == sm.LA_CSS or dest == sm.LA_HTML_OR_CSS:
+            mut prop := sm.LayoutAttrOut(ai)
+            if str.Len(prop) == 0:
+                prop = hyphenate(key)
+            end
+            if str.Len(prop) > 0:
+                mv3 := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_style.push(prop)
+                ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+            end
+        else dest == sm.LA_STYLE or dest == sm.LA_META or dest == sm.LA_CONTENT:
+            out := sm.LayoutAttrOut(ai)
+            if str.Len(out) > 0:
+                mv4 := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.push(out)
+                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv4))
             end
         end
     end

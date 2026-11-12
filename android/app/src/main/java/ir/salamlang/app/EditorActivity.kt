@@ -100,6 +100,9 @@ class EditorActivity :
                 setSingleLine(true)
                 textDirection = View.TEXT_DIRECTION_LOCALE
                 textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { toggleEditorLanguage() }
             }
         titles.addView(title)
         titles.addView(subtitle)
@@ -550,7 +553,16 @@ class EditorActivity :
     }
 
     private fun translateFile() {
-        val target = if (lang == "fa") "en" else "fa"
+        translateTo(if (lang == "fa") "en" else "fa")
+    }
+
+    private fun toggleEditorLanguage() {
+        translateTo(if (lang == "fa") "en" else "fa")
+    }
+
+    private fun translateTo(target: String) {
+        if (target == lang) return
+        save()
         val out = File(Workspace.cache(this), "translated.salam")
         out.delete()
         startJob(

@@ -1431,13 +1431,13 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
 - **`tui`**: retained-mode full-screen terminal UI on top of `term`.
   `NewTerminalScreen(root)` then `start()` and **`defer screen.close()` on
   the next line** (restores the terminal); loop `until screen.next_event(ev):
-  screen.dispatch(ev) ... screen.present() end`, or `run()`. A widget is a
+screen.dispatch(ev) ... screen.present() end`, or `run()`. A widget is a
   struct with `pub use tui.BaseWidget` overriding `render(buf, bounds)` /
   `handle_event(ev): bool` / `focusable()`; add with `screen.add(parent, w)`
   (`RootId`), get back with `screen.widget(id)`. Widgets: `NewText NewInput
-  NewButton NewCheckbox NewList NewProgress NewSeparator NewTable
-  NewTableView NewModal`, `Panel {}`; layout `NewRow NewColumn NewGrid
-  NewStack` with `add` and `set_width(i, LayoutSize {...})`. Draw with
+NewButton NewCheckbox NewList NewProgress NewSeparator NewTable
+NewTableView NewModal`, `Panel {}`; layout `NewRow NewColumn NewGrid
+NewStack` with `add` and `set_width(i, LayoutSize {...})`. Draw with
   `buf.put_str(x, y, text, tui.Style { fg = tui.Cyan, bold = true })`,
   `fill`, `DrawBorder`. Focus: `focus focus_next push_focus pop_focus`,
   keys via `set_keymap(NewDefaultKeymap())`. Headless (tests, previews):

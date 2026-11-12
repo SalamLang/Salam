@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import gui.style
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -475,6 +476,55 @@ func lay_check_placement(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayChec
     end
 end
 
+func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str, sa: StyleAttr): bool:
+    vid := at.Get(a, aid).a
+    if vid == 0:
+        ret false
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) != 0:
+        ret false
+    end
+    if lay_list_runtime(s, a, vid) != 0:
+        ret false
+    end
+    text := StyleAttrText(a, vid)
+    mut val := style.Value {}
+    if not style.Parse(sa.prop, text, val):
+        serr(
+            s, 18, span_of(a, vid), co.Format3(
+                i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(name), co.ArgStr(text), co.ArgStr(style.Error(sa.prop, text))
+            )
+        )
+        ret true
+    end
+    lit := lay_mk_literal(a, vid, LayVal { kind = LV_STR, s = text })
+    mut an := at.Get(a, aid)
+    an.a = lit
+    at.Put(a, aid, an)
+    style_attr_remember(aid, sa.prop, sa.state)
+    ret true
+end
+
+func lay_warn_not_standard(s &: Sema, a &: at.Ast, aid: int, key: str):
+    mut v := ""
+    _got := lay_attr_text(a, aid, v)
+    hint := StyleStandardHint(key, v)
+    mut msg := ""
+    if str.Len(hint) > 0:
+        msg = co.Format2(
+            i18.Tr("'%s' is not part of the Salam style standard; use '%s' instead"), co.ArgStr(key), co.ArgStr(hint)
+        )
+    else:
+        msg = co.Format1(i18.Tr("'%s' is not part of the Salam style standard"), co.ArgStr(key))
+    end
+    if lay_native_target():
+        serr(s, UI_STANDARD_ERROR_CODE, span_of(a, aid), msg)
+    else:
+        swarn(s, UI_STANDARD_WARN_CODE, span_of(a, aid), msg)
+    end
+end
+
 func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
     e := g_lay_elems.get(ei)
     mut seen := Vector {} as Vector<str>
@@ -508,6 +558,10 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             continue
         end
         seen.push(name)
+        sa := ResolveStyleAttr(name)
+        if sa.ok and lay_check_style_attr(s, a, aid, ei, name, sa):
+            continue
+        end
         mut key := lay_attr_key(name)
         if str.Len(key) == 0:
             key = name
@@ -562,6 +616,9 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
         end
         av := g_lay_attrs.get(ai)
         lay_check_native_attr(s, a, aid, ai, key)
+        if av.dest == LA_CSS or av.dest == LA_HTML_OR_CSS:
+            lay_warn_not_standard(s, a, aid, key)
+        end
         if (av.dest == LA_CSS or pl > 0) and not e.styled:
             serr(
                 s, 113, span_of(a, aid), co.Format2(

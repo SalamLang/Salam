@@ -16,7 +16,6 @@ package layout
 
 import os
 import str
-import gui.css
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -32,8 +31,6 @@ include sm "../semantic/semantic.salam"
 include i18 "../i18n.salam"
 
 pub const NATIVE_PAGE_VIEW := "__salam_page"
-
-pub const NATIVE_STYLES := "__salam_styles"
 
 struct LnNames:
     pub kw_func: str = "func"
@@ -51,18 +48,18 @@ struct LnNames:
     pub sep: str = ", "
     pub entry: str = "main"
     pub import_ui: str = "gui.ui"
-    pub import_css: str = "gui.css"
+    pub import_style: str = "gui.style"
     pub ui: str = "ui"
-    pub css: str = "css"
+    pub style: str = "style"
     pub builder: str = "Builder"
-    pub program: str = "Program"
-    pub run: str = "RunCompiled"
+    pub patch: str = "Patch"
+    pub no_patches: str = "NoPatches"
+    pub run: str = "RunPage"
     pub open: str = "Open"
     pub close: str = "Close"
-    pub decls: str = "Decls"
-    pub dyn: str = "Dyn"
+    pub set: str = "Set"
+    pub set_text: str = "SetText"
     pub id: str = "Id"
-    pub klass: str = "Class"
     pub attr: str = "Attr"
     pub bool_attr: str = "BoolAttr"
     pub text: str = "Text"
@@ -91,12 +88,9 @@ end
 struct LnGen:
     pub lw: LoLower = LoLower {}
     pub cx: LoCtx = LoCtx {}
-    pub prog: css.Program = css.Program {}
     pub out: str = ""
     pub depth: int = 1
     pub nm: LnNames = LnNames {}
-    pub media_seq: int = 0
-    pub sel: Vector<str> = Vector {}
     pub a_node: int = 0
     pub rx: LnReact = LnReact {}
     pub in_comp: int = 0
@@ -109,18 +103,18 @@ func ln_names(pack: lp.Langpack): LnNames:
         ret n
     end
     n.import_ui = "رابط گرافیکی.رابط کاربری"
-    n.import_css = "رابط گرافیکی.سی اس اس"
+    n.import_style = "رابط گرافیکی.سبک"
     n.ui = "رابط کاربری"
-    n.css = "سی اس اس"
+    n.style = "سبک"
     n.builder = "سازنده‌صفحه"
-    n.program = "برنامه‌سبک"
-    n.run = "اجرای ترجمه شده"
+    n.patch = "وصله عنصر"
+    n.no_patches = "بی وصله"
+    n.run = "اجرای صفحه"
     n.open = "گشودن عنصر"
     n.close = "بستن عنصر"
-    n.decls = "اعلان های عنصر"
-    n.dyn = "سبک زمان اجرا"
+    n.set = "تنظیم سبک"
+    n.set_text = "تنظیم سبک متنی"
     n.id = "شناسه عنصر"
-    n.klass = "کلاس عنصر"
     n.attr = "ویژگی عنصر"
     n.bool_attr = "ویژگی دودویی عنصر"
     n.text = "متن فرزند"
@@ -320,39 +314,38 @@ func ln_bool_expr(g &: LnGen, v: str): str:
     ret str.Equals(v, "false") ? g.nm.kw_false : g.nm.kw_true
 end
 
-func ln_compile(g &: LnGen, text: str): int:
-    if str.Len(text) == 0:
-        ret 0 - 1
-    end
-    ret css.CompileDecls(g.prog, text)
-end
-
-func ln_top_sel(g &: LnGen): str:
-    if g.sel.len() == 0:
-        ret "body"
-    end
-    ret g.sel.get(g.sel.len() - 1)
-end
-
-func ln_has_media_child(a &: at.Ast, el: int): bool:
-    repeat at.ChildCount(a, el) in i:
-        cid := at.Child(a, el, i)
-        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
-            continue
-        end
-        ei := sm.LayoutElemOf(a, cid)
-        if ei >= 0 and str.Equals(sm.LayoutElemGenerator(ei), "media"):
-            ret true
-        end
-    end
-    ret false
-end
 
 func ln_event_name(out: str): str:
     if str.StartsWith(out, "on") and str.Len(out) > 2:
         ret str.Substr(out, 2, str.Len(out) - 2)
     end
     ret out
+end
+
+func ln_state_const(state: int): str:
+    names := ["STATE_BASE", "STATE_HOVER", "STATE_FOCUS", "STATE_FOCUS_WITHIN", "STATE_ACTIVE", "STATE_DISABLED", "STATE_CHECKED", "STATE_INVALID", "STATE_PLACEHOLDER", "STATE_SELECTION"]
+    if state < 0 or state >= len(names):
+        ret "STATE_BASE"
+    end
+    ret names[state]
+end
+
+func ln_style_attrs(g &: LnGen, a &: at.Ast, el: int):
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0:
+            continue
+        end
+        mut prop := 0
+        mut state := 0
+        if not sm.StyleAttrOf(aid, prop, state):
+            continue
+        end
+        v := val_str(a, an.a)
+        state_expr := g.nm.ui + "." + ln_state_const(state)
+        ln_call(g, g.nm.set_text, state_expr + g.nm.sep + co.I64Toa(prop as i64) + g.nm.sep + ln_quote(v))
+    end
 end
 
 func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
@@ -408,7 +401,7 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         else dest == sm.LA_SOURCE:
             ln_call(g, g.nm.attr, ln_quote(str.Equals(tag, "a") ? "href" : "src") + g.nm.sep + ln_str_expr(v))
         else dest == sm.LA_CLASS:
-            ln_call(g, g.nm.klass, ln_str_expr(v))
+            ln_call(g, g.nm.attr, ln_quote("class") + g.nm.sep + ln_str_expr(v))
         else dest == sm.LA_DIR or dest == sm.LA_LANG:
             mv2 := is_dyn(v) ? v : attr_value_map(ai, v)
             ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_str_expr(mv2))
@@ -475,23 +468,6 @@ func ln_pre_events_if(g &: LnGen, a &: at.Ast, nid: int, ei: int):
         else:
             ln_pre_events(g, a, n.c, ei)
         end
-    end
-end
-
-func ln_dynstyle(g &: LnGen, text: str):
-    if str.Len(text) == 0:
-        ret
-    end
-    mut parts := str.Split(text, ";")
-    defer parts.free()
-    each p in parts:
-        c := str.IndexOf(p, ":")
-        if c <= 0:
-            continue
-        end
-        prop := str.Trim(str.Substr(p, 0, c))
-        val := str.Substr(p, c + 1, str.Len(p) - c - 1)
-        ln_call(g, g.nm.dyn, ln_quote(prop) + g.nm.sep + ln_str_expr(val))
     end
 end
 
@@ -763,6 +739,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     ei := sm.LayoutElemOf(a, el)
     mut kind := sm.LK_NORMAL
     mut tag := "div"
+    mut ekey := "box"
     mut gen := ""
     mut in_head := false
     if ei >= 0:
@@ -770,6 +747,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
         if str.Len(sm.LayoutElemTag(ei)) > 0:
             tag = sm.LayoutElemTag(ei)
         end
+        ekey = sm.LayoutElemKey(ei)
         gen = sm.LayoutElemGenerator(ei)
         in_head = sm.LayoutElemInHead(ei)
     end
@@ -779,16 +757,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     if str.Len(la.gen) > 0:
         gen = la.gen
     end
-    if str.Equals(gen, "global"):
-        mut gsel := "*"
-        _hs := lo_attr_get(la, "selector", gsel)
-        css.CompileRule(g.prog, gsel, la.css, "")
-        ret
-    end
-    if str.Equals(gen, "media"):
-        mut cond := "all"
-        _hc := lo_attr_get(la, "condition", cond)
-        css.CompileRule(g.prog, ln_top_sel(g), la.css, cond)
+    if str.Equals(gen, "global") or str.Equals(gen, "media"):
         ret
     end
     if str.Equals(gen, "style") or str.Equals(gen, "script") or str.Equals(gen, "font_face") or in_head:
@@ -807,6 +776,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
             sz = 6
         end
         tag = "h" + co.U64Toa(sz as u64)
+        ekey = tag
     end
     if kind == sm.LK_VIRTUAL:
         ln_items(g, a, el)
@@ -820,32 +790,16 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     if deps.len() > 0:
         ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
     end
-    ln_call(g, g.nm.open, ln_quote(tag))
+    ln_call(g, g.nm.open, ln_quote(ekey))
     g.depth++
-    b0 := ln_compile(g, la.css)
-    b1 := ln_compile(g, la.hover)
-    b2 := ln_compile(g, la.focus)
-    b3 := ln_compile(g, la.active)
-    if b0 >= 0 or b1 >= 0 or b2 >= 0 or b3 >= 0:
-        ln_call(g, g.nm.decls, co.I64Toa(b0 as i64) + g.nm.sep + co.I64Toa(b1 as i64) + g.nm.sep + co.I64Toa(b2 as i64) + g.nm.sep + co.I64Toa(b3 as i64))
-    end
-    ln_dynstyle(g, la.dynstyle)
+    ln_style_attrs(g, a, el)
     ln_attrs(g, a, el, ei, tag)
-    if ln_has_media_child(a, el):
-        cls := "__salam_m" + co.U64Toa(g.media_seq as u64)
-        g.media_seq++
-        ln_call(g, g.nm.klass, ln_quote(cls))
-        g.sel.push("." + cls)
-    else:
-        g.sel.push(ln_top_sel(g))
-    end
     if la.has_content and kind != sm.LK_VOID:
         ln_call(g, g.nm.text, ln_str_expr(la.content))
     end
     if kind != sm.LK_VOID and kind != sm.LK_RAW:
         ln_items(g, a, el)
     end
-    _ps := g.sel.pop()
     g.depth--
     ln_call(g, g.nm.close, "")
     if deps.len() > 0:
@@ -883,25 +837,7 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
             ln_call(g, g.nm.dir, ln_quote("rtl"))
         end
     end
-    root_ei := sm.LayoutElemLookup("page")
-    if root_ei < 0:
-        ret
-    end
-    mut rla := LoAttrs {}
-    defer lo_free_attrs(rla)
-    lo_collect_attrs(g.cx, a, lb, root_ei, "body", rla)
-    if str.Len(rla.css) > 0:
-        css.CompileRule(g.prog, "body", rla.css, "")
-    end
-    if str.Len(rla.hover) > 0:
-        css.CompileRule(g.prog, "body:hover", rla.hover, "")
-    end
-    if str.Len(rla.focus) > 0:
-        css.CompileRule(g.prog, "body:focus", rla.focus, "")
-    end
-    if str.Len(rla.active) > 0:
-        css.CompileRule(g.prog, "body:active", rla.active, "")
-    end
+    ln_style_attrs(g, a, lb)
     repeat at.ChildCount(a, lb) in j:
         jid := at.Child(a, lb, j)
         jt := at.Get(a, jid)
@@ -994,14 +930,13 @@ end
 
 func ln_source(g &: LnGen, with_main: bool): str:
     n := g.nm
-    mut s := n.kw_import + " " + n.import_ui + "\n" + n.kw_import + " " + n.import_css + "\n\n"
+    mut s := n.kw_import + " " + n.import_ui + "\n\n"
     s += ln_rx_source(g)
     rline := "    __salam_b." + n.reactive + "(" + co.U64Toa(ln_rx_words(g.rx) as u64) + n.sep + "(__salam_w: " + n.t_int + "): " + n.kw_ret + " __salam_take(__salam_w) " + n.kw_end + n.sep + "(): __salam_sites() " + n.kw_end + ")\n"
     s += n.kw_func + " " + NATIVE_PAGE_VIEW + "(__salam_b: " + n.ui + "." + n.builder + "):\n" + rline + g.out + n.kw_end + "\n\n"
-    s += css.ProgramSource(g.prog, NATIVE_STYLES, n.css) + "\n"
     if with_main:
         s += n.kw_func + " " + n.entry + ":\n"
-        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + NATIVE_STYLES + "() " + n.kw_end + n.sep + "(__salam_b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(__salam_b) " + n.kw_end + ")\n"
+        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + n.ui + "." + n.no_patches + "() " + n.kw_end + n.sep + "(__salam_b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(__salam_b) " + n.kw_end + ")\n"
         s += n.kw_end + "\n"
     end
     ret s
@@ -1030,10 +965,8 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     defer g.lw.slots.free()
     defer g.lw.shadow.free()
     defer g.lw.funcs.free()
-    defer g.sel.free()
     defer g.row_keys.free()
     g.lw.prog = prog
-    g.prog = css.NewProgram()
     g.nm = ln_names(pack)
     g.cx.log = log
     g.cx.file = file
@@ -1049,10 +982,6 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     rdeps.free()
     ln_page_settings(g, a, lb, pack)
     ln_items(g, a, lb)
-    errs := css.ProgramErrors(g.prog)
-    repeat errs in ei:
-        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "native page style: " + css.ProgramError(g.prog, ei))
-    end
     is_fa := str.Equals(lp.Code(pack), "fa")
     mut text := ln_source(g, not ln_has_main(a, prog, pack))
     if is_fa:

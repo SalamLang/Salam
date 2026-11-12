@@ -1,0 +1,210 @@
+package semantic
+
+import str
+import gui.style
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+pub const UI_STANDARD_WARN_CODE := 171
+
+pub const UI_STANDARD_ERROR_CODE := 170
+
+pub const STYLE_STATE_BASE := 0
+
+pub const STYLE_STATE_HOVER := 1
+
+pub const STYLE_STATE_FOCUS := 2
+
+pub const STYLE_STATE_FOCUS_WITHIN := 3
+
+pub const STYLE_STATE_ACTIVE := 4
+
+pub const STYLE_STATE_DISABLED := 5
+
+pub const STYLE_STATE_CHECKED := 6
+
+pub const STYLE_STATE_INVALID := 7
+
+pub const STYLE_STATE_PLACEHOLDER := 8
+
+pub const STYLE_STATE_SELECTION := 9
+
+mut g_style_attr_node := Vector {} as Vector<int>
+
+mut g_style_attr_prop := Vector {} as Vector<int>
+
+mut g_style_attr_state := Vector {} as Vector<int>
+
+struct StyleAttr:
+    pub ok: bool = false
+    pub prop: int = 0
+    pub state: int = STYLE_STATE_BASE
+    pub is_static: bool = false
+    pub value: style.Value = style.Value {}
+    pub expr: int = 0
+    pub err: str = ""
+end
+
+func style_attr_remember(attr: int, prop: int, state: int):
+    g_style_attr_node.push(attr)
+    g_style_attr_prop.push(prop)
+    g_style_attr_state.push(state)
+end
+
+func style_state_prefix(name: str, rest &: str): int:
+    prefixes := ["hover", "focus within", "focus", "active", "disabled", "checked", "invalid", "placeholder", "selection"]
+    states := [STYLE_STATE_HOVER, STYLE_STATE_FOCUS_WITHIN, STYLE_STATE_FOCUS, STYLE_STATE_ACTIVE, STYLE_STATE_DISABLED, STYLE_STATE_CHECKED, STYLE_STATE_INVALID, STYLE_STATE_PLACEHOLDER, STYLE_STATE_SELECTION]
+    fa_prefixes := ["اشاره", "تمرکز درون", "تمرکز", "فشردن", "غیرفعال", "تیک\xE2\x80\x8Cخورده", "نامعتبر", "جای\xE2\x80\x8Cنوشته", "گزینش"]
+    repeat len(prefixes) in i:
+        p := prefixes[i]
+        pl := str.Len(p)
+        if str.Len(name) > pl + 1 and str.StartsWith(name, p):
+            sep := byte_at(name, pl)
+            if sep == 95 or sep == 32 or sep == 45:
+                rest = str.Substr(name, pl + 1, str.Len(name) - pl - 1)
+                ret states[i]
+            end
+        end
+        fp := fa_prefixes[i]
+        fpl := str.Len(fp)
+        if str.Len(name) > fpl + 1 and str.StartsWith(name, fp):
+            fsep := byte_at(name, fpl)
+            if fsep == 95 or fsep == 32 or fsep == 45 or (fsep == 226 and str.Len(name) > fpl + 3 and byte_at(name, fpl + 1) == 128 and byte_at(name, fpl + 2) == 140):
+                skip := fsep == 226 ? 3 : 1
+                rest = str.Substr(name, fpl + skip, str.Len(name) - fpl - skip)
+                ret states[i]
+            end
+        end
+    end
+    rest = name
+    ret STYLE_STATE_BASE
+end
+
+func style_attr_group_text(a &: at.Ast, nid: int): str:
+    mut text := ""
+    repeat at.ChildCount(a, nid) in i:
+        if i > 0:
+            text += ", "
+        end
+        text += style_attr_item_text(a, at.Child(a, nid, i))
+    end
+    ret text
+end
+
+func style_attr_item_text(a &: at.Ast, nid: int): str:
+    if nid == 0:
+        ret ""
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_ARRAY_LIT:
+        ret "[" + style_attr_group_text(a, nid) + "]"
+    end
+    if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
+        ret n.value_str
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_INT:
+        ret co.U64Toa(n.value_int) + LayoutNumUnit(n.name)
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_FLOAT:
+        ret co.Format1("%g", co.ArgFloat(n.value_float)) + LayoutNumUnit(n.name)
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_KW_TRUE:
+        ret "true"
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_KW_FALSE:
+        ret "false"
+    end
+    if n.kind == at.AST_UNARY and n.op == tok.TK_MINUS:
+        ret "-" + style_attr_item_text(a, n.a)
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        ret n.name
+    end
+    ret ""
+end
+
+pub func StyleAttrOf(attr: int, prop &: int, state &: int): bool:
+    repeat g_style_attr_node.len() in i:
+        if g_style_attr_node[i] == attr:
+            prop = g_style_attr_prop[i]
+            state = g_style_attr_state[i]
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func StyleAttrText(a &: at.Ast, vid: int): str:
+    if vid == 0:
+        ret ""
+    end
+    n := at.Get(a, vid)
+    if n.kind != at.AST_TUPLE:
+        ret style_attr_item_text(a, vid)
+    end
+    ret style_attr_group_text(a, vid)
+end
+
+pub func ResolveStyleAttr(name: str): StyleAttr:
+    mut sa := StyleAttr {}
+    mut rest := ""
+    sa.state = style_state_prefix(name, rest)
+    sa.prop = style.PropByName(rest)
+    sa.ok = sa.prop >= 0
+    ret sa
+end
+
+pub func StyleAttrRemember(attr: int, prop: int, state: int):
+    style_attr_remember(attr, prop, state)
+end
+
+pub func StyleAttrParseStatic(prop: int, text: str, out &: style.Value): bool:
+    ret style.Parse(prop, text, out)
+end
+
+pub func StyleAttrError(prop: int, text: str): str:
+    ret style.Error(prop, text)
+end
+
+pub func StyleStandardHint(key: str, value: str): str:
+    if str.Equals(key, "display"):
+        if str.Equals(value, "flex") or str.Equals(value, "grid"):
+            ret "layout = " + value
+        end
+        if str.Equals(value, "none"):
+            ret "visible = false"
+        end
+        ret "layout"
+    end
+    if str.Equals(key, "flex-direction") or str.Equals(key, "flex_direction"):
+        ret "layout"
+    end
+    if str.Equals(key, "position"):
+        ret "position"
+    end
+    if str.Equals(key, "float") or str.Equals(key, "clear"):
+        ret "layout = row"
+    end
+    if str.Equals(key, "visibility"):
+        ret "visible"
+    end
+    if str.Equals(key, "box-shadow") or str.Equals(key, "box_shadow"):
+        ret "shadow"
+    end
+    if str.Equals(key, "transform"):
+        ret "translate, rotate, scale, skew"
+    end
+    if str.Equals(key, "text-decoration") or str.Equals(key, "text_decoration"):
+        ret "decoration"
+    end
+    if str.Equals(key, "text-transform") or str.Equals(key, "text_transform"):
+        ret "transform text"
+    end
+    if str.Equals(key, "white-space") or str.Equals(key, "white_space"):
+        ret "white space"
+    end
+    ret ""
+end

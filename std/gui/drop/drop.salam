@@ -67,6 +67,24 @@ pub struct DropData:
     @en "effect"
     @fa "اثر"
     pub effect: int = EFFECT_COPY
+
+    @en "HasFiles"
+    @fa "پرونده دارد"
+    pub func HasFiles(): bool:
+        ret (this.kind & KIND_FILE) != 0 and this.files.Len() > 0
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        ret (this.kind & KIND_TEXT) != 0 and this.text.Len() > 0
+    end
+
+    @en "HasURI"
+    @fa "نشانی دارد"
+    pub func HasURI(): bool:
+        ret (this.kind & KIND_URI) != 0 and this.uri.Len() > 0
+    end
 end
 
 @en "DropEvent"
@@ -90,6 +108,24 @@ pub struct DropEvent:
     @en "accepted"
     @fa "پذیرفته"
     pub accepted: bool = true
+
+    @en "Accept"
+    @fa "پذیرفتن"
+    pub func Accept(effect: int = EFFECT_COPY): DropEvent:
+        mut e := this
+        e.accepted = true
+        e.selected_effect = effect
+        ret e
+    end
+
+    @en "Reject"
+    @fa "رد کردن"
+    pub func Reject(): DropEvent:
+        mut e := this
+        e.accepted = false
+        e.selected_effect = EFFECT_NONE
+        ret e
+    end
 end
 
 @en "DropHandlers"
@@ -119,9 +155,15 @@ end
 
 func _empty_handlers(): DropHandlers:
     ret DropHandlers {
-        on_enter = (e: DropEvent): ret e end, on_over = (e: DropEvent): ret e end, on_leave = (): ret end,
-        on_drop = (_e: DropEvent): ret end
+        on_enter = (e: DropEvent): ret e.Accept() end, on_over = (e: DropEvent): ret e.Accept() end,
+        on_leave = (): ret end, on_drop = (_e: DropEvent): ret end
     }
+end
+
+@en "NewHandlers"
+@fa "گرداننده های تازه"
+pub func NewHandlers(): DropHandlers:
+    ret _empty_handlers()
 end
 
 func _get_handlers(native: void*): DropHandlers:
@@ -280,14 +322,86 @@ pub func NewFileEvent(x: int, y: int, files: Vector<str>, allowed: int = EFFECT_
     ret DropEvent { x = x, y = y, allowed_effects = allowed, selected_effect = EFFECT_COPY, data = data, accepted = true }
 end
 
+// Convenience alias for file drops.
+pub func FilesEvent(x: int, y: int, files: Vector<str>): DropEvent:
+    ret NewFileEvent(x, y, files, EFFECT_ALL)
+end
+
 // Helper for platform backends to build a text/uri drop event.
 pub func NewTextEvent(x: int, y: int, text: str, uri: str = "", allowed: int = EFFECT_ALL): DropEvent:
     mut kind := KIND_TEXT
     if uri.Len() > 0:
         kind = kind | KIND_URI
     end
-    data := DropData { kind = kind, text = text, uri = uri, effect = EFFECT_COPY }
+    data := DropData { kind = kind, text = str.Clone(text), uri = str.Clone(uri), effect = EFFECT_COPY }
     ret DropEvent { x = x, y = y, allowed_effects = allowed, selected_effect = EFFECT_COPY, data = data, accepted = true }
+end
+
+// Convenience helper for URI drops.
+pub func URIEvent(x: int, y: int, uri: str): DropEvent:
+    ret NewTextEvent(x, y, "", uri, EFFECT_ALL)
+end
+
+// Convenience helper for plain-text drops.
+pub func TextEvent(x: int, y: int, text: str): DropEvent:
+    ret NewTextEvent(x, y, text, "", EFFECT_ALL)
+end
+
+@en "ClearHandlers"
+@fa "پاک کردن گرداننده ها"
+pub func ClearHandlers(native: void*):
+    if native == null:
+        ret
+    end
+    sync.Lock(_lock)
+    k := _key(native)
+    if _handlers.Has(k):
+        _gone := _handlers.Remove(k)
+    end
+    sync.Unlock(_lock)
+end
+
+@en "SetOnDrop"
+@fa "تنظیم هنگام رها کردن"
+pub func SetOnDrop(native: void*, handler: func (DropEvent)):
+    OnDrop(native, handler)
+end
+
+@en "SetOnDragEnter"
+@fa "تنظیم هنگام ورود کشیدن"
+pub func SetOnDragEnter(native: void*, handler: func (DropEvent) DropEvent):
+    OnDragEnter(native, handler)
+end
+
+@en "SetOnDragOver"
+@fa "تنظیم هنگام عبور کشیدن"
+pub func SetOnDragOver(native: void*, handler: func (DropEvent) DropEvent):
+    OnDragOver(native, handler)
+end
+
+@en "SetOnDragLeave"
+@fa "تنظیم هنگام خروج کشیدن"
+pub func SetOnDragLeave(native: void*, handler: func ()):
+    OnDragLeave(native, handler)
+end
+
+// Enable drop target and attach handlers in one call.
+@en "Attach"
+@fa "اتصال"
+pub func Attach(native: void*, handlers: DropHandlers): bool:
+    if native == null:
+        ret false
+    end
+    SetHandlers(native, handlers)
+    ret Enable(native)
+end
+
+// Disable and detach handlers for a native target.
+@en "Detach"
+@fa "جدا کردن"
+pub func Detach(native: void*):
+    Disable(native)
+    ClearHandlers(native)
 end
 
 // -------- Windows OLE drag-drop (IDropTarget COM scaffolding, best-effort) --------

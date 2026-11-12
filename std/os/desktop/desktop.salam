@@ -1,0 +1,383 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "desktop"
+@fa "میزکار"
+package desktop
+
+import os
+import io
+import mem
+import str
+import filepath
+import os.user
+import os.shell
+
+// Cross-platform desktop/OS integration helpers.
+// Most operations are best-effort and return bool/status instead of raising.
+// GUI-facing actions (open/reveal) depend on the host desktop environment.
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _quote_cmd(s: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 34)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "\"":
+            str.BufAppend(sb, "\"\"")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 34)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _safe_app_id(app_id: str): str:
+    if app_id.Len() == 0: ret str.Clone("default") end
+    // Best-effort: keep as-is; callers should pass filesystem-safe ids.
+    ret str.Clone(app_id)
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    ret true
+end
+
+@en "GetEnv"
+@fa "دریافت متغیر محیطی"
+pub func GetEnv(name: str): str:
+    ret os.Env(name)
+end
+
+@en "GetEnvOr"
+@fa "دریافت متغیر محیطی یا پیش‌فرض"
+pub func GetEnvOr(name: str, def: str): str:
+    v := os.Env(name)
+    if v.Len() == 0: ret str.Clone(def) end
+    ret v
+end
+
+@en "SetEnvNote"
+@fa "یادداشت تنظیم متغیر محیطی"
+pub func SetEnvNote():
+    // std/os currently exposes Env() getter only; process environment mutation
+    // is platform-specific and not provided by this helper module.
+end
+
+@en "HomeDir"
+@fa "پوشه خانگی"
+pub func HomeDir(): str:
+    ret user.HomeDir()
+end
+
+@en "Username"
+@fa "نام کاربری"
+pub func Username(): str:
+    ret user.Username()
+end
+
+@en "Hostname"
+@fa "نام میزبان"
+pub func Hostname(): str:
+    // Try common environment variables first (fast, no shell dependency).
+    if SALAM_OS_WINDOWS:
+        v := os.Env("COMPUTERNAME")
+        if v.Len() > 0: ret v end
+    else:
+        v := os.Env("HOSTNAME")
+        if v.Len() > 0: ret v end
+    end
+    // Best-effort fallback via shell command.
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("hostname")
+        out := str.Trim(r.out)
+        if out.Len() > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else:
+        r := shell.Exec("hostname")
+        out := str.Trim(r.out)
+        if out.Len() > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
+end
+
+@en "ExecutablePath"
+@fa "مسیر فایل اجرایی"
+pub func ExecutablePath(): str:
+    args := os.Args()
+    defer args.Free()
+    if args.Len() <= 0: ret str.Clone("") end
+    arg0 := str.Clone(args.Get(0))
+    defer mem.Free(arg0 as void*)
+    if arg0.Len() == 0: ret str.Clone("") end
+    // If already absolute, normalize; otherwise resolve relative to cwd when possible.
+    if filepath.IsAbs(arg0):
+        ret os.RealPath(arg0)
+    end
+    cwd := os.Cwd()
+    defer mem.Free(cwd as void*)
+    joined := filepath.Join(cwd, arg0)
+    defer mem.Free(joined as void*)
+    rp := os.RealPath(joined)
+    if rp.Len() > 0: ret rp end
+    ret str.Clone(joined)
+end
+
+@en "ExecutableDir"
+@fa "پوشه فایل اجرایی"
+pub func ExecutableDir(): str:
+    p := ExecutablePath()
+    defer mem.Free(p as void*)
+    if p.Len() == 0: ret str.Clone("") end
+    ret filepath.Dir(p)
+end
+
+@en "GetConfigDir"
+@fa "دریافت پوشه پیکربندی"
+pub func GetConfigDir(): str:
+    ret user.ConfigDir()
+end
+
+@en "GetCacheDir"
+@fa "دریافت پوشه حافظه پنهان"
+pub func GetCacheDir(): str:
+    ret user.CacheDir()
+end
+
+@en "GetAppDataDir"
+@fa "دریافت پوشه داده برنامه"
+pub func GetAppDataDir(): str:
+    if SALAM_OS_WINDOWS:
+        v := os.Env("APPDATA")
+        if v.Len() > 0: ret v end
+        v2 := os.Env("LOCALAPPDATA")
+        if v2.Len() > 0: ret v2 end
+        ret user.HomeDir()
+    else SALAM_OS_MAC:
+        home := user.HomeDir()
+        defer mem.Free(home as void*)
+        ret filepath.Join(home, "Library/Application Support")
+    else:
+        // Linux/BSD: prefer XDG data home, fallback to ~/.local/share
+        x := os.Env("XDG_DATA_HOME")
+        if x.Len() > 0: ret x end
+        home := user.HomeDir()
+        defer mem.Free(home as void*)
+        local := filepath.Join(home, ".local")
+        defer mem.Free(local as void*)
+        ret filepath.Join(local, "share")
+    end
+end
+
+@en "GetAppConfigDir"
+@fa "دریافت پوشه پیکربندی برنامه"
+pub func GetAppConfigDir(app_id: str): str:
+    base := GetConfigDir()
+    defer mem.Free(base as void*)
+    id := _safe_app_id(app_id)
+    defer mem.Free(id as void*)
+    ret filepath.Join(base, id)
+end
+
+@en "GetAppCacheDir"
+@fa "دریافت پوشه حافظه پنهان برنامه"
+pub func GetAppCacheDir(app_id: str): str:
+    base := GetCacheDir()
+    defer mem.Free(base as void*)
+    id := _safe_app_id(app_id)
+    defer mem.Free(id as void*)
+    ret filepath.Join(base, id)
+end
+
+@en "GetAppDataDirFor"
+@fa "دریافت پوشه داده برای برنامه"
+pub func GetAppDataDirFor(app_id: str): str:
+    base := GetAppDataDir()
+    defer mem.Free(base as void*)
+    id := _safe_app_id(app_id)
+    defer mem.Free(id as void*)
+    ret filepath.Join(base, id)
+end
+
+@en "EnsureDir"
+@fa "اطمینان از وجود پوشه"
+pub func EnsureDir(path: str): bool:
+    if path.Len() == 0: ret false end
+    if os.IsDir(path): ret true end
+    ret os.MkdirAll(path) == 0
+end
+
+@en "OpenURL"
+@fa "باز کردن نشانی"
+pub func OpenURL(url: str): bool:
+    if url.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        // Use cmd start; empty title argument ("") prevents URL being treated as title.
+        q := _quote_cmd(url)
+        cmd := "cmd /c start \"\" ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else SALAM_OS_MAC:
+        q := _quote_sh(url)
+        cmd := "open ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        q := _quote_sh(url)
+        cmd := "xdg-open ".Concat(q).Concat(" >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    end
+end
+
+@en "OpenFile"
+@fa "باز کردن پرونده"
+pub func OpenFile(path: str): bool:
+    if path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        q := _quote_cmd(path)
+        cmd := "cmd /c start \"\" ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else SALAM_OS_MAC:
+        q := _quote_sh(path)
+        cmd := "open ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        q := _quote_sh(path)
+        cmd := "xdg-open ".Concat(q).Concat(" >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    end
+end
+
+@en "OpenFolder"
+@fa "باز کردن پوشه"
+pub func OpenFolder(path: str): bool:
+    if path.Len() == 0: ret false end
+    mut target := path
+    if not os.IsDir(path):
+        // Open parent directory if a file path is provided.
+        target = filepath.Dir(path)
+    end
+    ok := OpenFile(target)
+    if target != path:
+        mem.Free(target as void*)
+    end
+    ret ok
+end
+
+@en "RevealInFileManager"
+@fa "نمایش در مدیر پرونده"
+pub func RevealInFileManager(path: str): bool:
+    if path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        q := _quote_cmd(path)
+        cmd := "explorer /select,".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        // explorer often returns non-zero even on success; treat launch attempt as success.
+        _r := shell.System(cmd)
+        ret true
+    else SALAM_OS_MAC:
+        q := _quote_sh(path)
+        cmd := "open -R ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        // No universal "reveal/select" across Linux file managers; open containing folder.
+        ret OpenFolder(path)
+    end
+end
+
+@en "PathExists"
+@fa "مسیر وجود دارد"
+pub func PathExists(path: str): bool:
+    ret os.Exists(path)
+end
+
+@en "ReadTextFile"
+@fa "خواندن پرونده متنی"
+pub func ReadTextFile(path: str): str:
+    ret io.ReadFile(path)
+end
+
+@en "WriteTextFile"
+@fa "نوشتن پرونده متنی"
+pub func WriteTextFile(path: str, data: str): bool:
+    ret io.WriteFile(path, data) >= 0
+end
+
+@en "JoinPath"
+@fa "پیوند مسیر"
+pub func JoinPath(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+@en "NormalizePath"
+@fa "نرمال‌سازی مسیر"
+pub func NormalizePath(path: str): str:
+    ret filepath.Clean(path)
+end
+
+@en "RealPath"
+@fa "مسیر واقعی"
+pub func RealPath(path: str): str:
+    ret os.RealPath(path)
+end
+
+@en "TempDir"
+@fa "پوشه موقت"
+pub func TempDir(): str:
+    ret os.TempDir()
+end

@@ -1,0 +1,258 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package style
+
+import math
+import gui.color
+
+func _mix(a: f64, b: f64, t: f64): f64:
+    ret a + (b - a) * t
+end
+
+func _lerp_len(a: Len, b: Len, t: f64): Len:
+    ret Len { px = _mix(a.px, b.px, t), pct = _mix(a.pct, b.pct, t), em = _mix(a.em, b.em, t), rem = _mix(a.rem, b.rem, t), vw = _mix(a.vw, b.vw, t), vh = _mix(a.vh, b.vh, t), vmin = _mix(a.vmin, b.vmin, t), vmax = _mix(a.vmax, b.vmax, t), fr = _mix(a.fr, b.fr, t) }
+end
+
+func _lerp_color(a: color.Color, b: color.Color, t: f64): color.Color:
+    if a.current or b.current:
+        ret t < 0.5 ? a : b
+    end
+    ret color.Lerp(a, b, t)
+end
+
+func _lerp_paint(a: Paint, b: Paint, t: f64, out &: Paint): bool:
+    if a.kind != b.kind or a.kind == PAINT_IMAGE or a.stops.len() != b.stops.len() or a.side != b.side or a.circle != b.circle or a.has_at != b.has_at:
+        ret false
+    end
+    mut p := Paint { kind = a.kind, color = _lerp_color(a.color, b.color, t), angle = _mix(a.angle, b.angle, t), side = a.side, circle = a.circle, at_x = _lerp_len(a.at_x, b.at_x, t), at_y = _lerp_len(a.at_y, b.at_y, t), has_at = a.has_at }
+    each i, s in a.stops:
+        o := b.stops.get(i)
+        if s.has_at != o.has_at:
+            ret false
+        end
+        p.stops.push(Stop { color = _lerp_color(s.color, o.color, t), at = _lerp_len(s.at, o.at, t), has_at = s.has_at })
+    end
+    out = p
+    ret true
+end
+
+func _lerp_item(a: Item, b: Item, t: f64, out &: Item): bool:
+    if a.kind != b.kind:
+        ret false
+    end
+    switch a.kind:
+        ITEM_LEN:
+            out = Item { kind = ITEM_LEN, len = _lerp_len(a.len, b.len, t) }
+            ret true
+        end
+        ITEM_NUM, ITEM_TIME, ITEM_ANGLE:
+            out = Item { kind = a.kind, num = _mix(a.num, b.num, t) }
+            ret true
+        end
+        ITEM_INT:
+            out = Item { kind = ITEM_INT, num = math.Round(_mix(a.num, b.num, t)) }
+            ret true
+        end
+        ITEM_COLOR:
+            out = Item { kind = ITEM_COLOR, color = _lerp_color(a.color, b.color, t) }
+            ret true
+        end
+        ITEM_PAINT:
+            mut p := Paint {}
+            if not _lerp_paint(a.paint, b.paint, t, p):
+                ret false
+            end
+            out = Item { kind = ITEM_PAINT, paint = p }
+            ret true
+        end
+        ITEM_WORD, ITEM_PROP:
+            if a.word != b.word:
+                ret false
+            end
+            out = a
+            ret true
+        end
+        ITEM_BOOL:
+            if a.num != b.num:
+                ret false
+            end
+            out = a
+            ret true
+        end
+    end
+    ret false
+end
+
+func _canonical(prop: int, v: Value): Value:
+    mut s := Style {}
+    Set(s, prop, v)
+    ret Get(s, prop)
+end
+
+func _pad_shadows(v: Value, groups: int, text: bool, like: Value): Value:
+    mut out := Value {}
+    each x in v.items:
+        out.items.push(x)
+    end
+    each x in v.starts:
+        out.starts.push(x)
+    end
+    size := text ? 4 : 6
+    mut g := v.starts.len()
+    until g < groups:
+        out.starts.push(out.items.len())
+        repeat size in k:
+            src := _it(like, g * size + k)
+            if src.kind == ITEM_COLOR:
+                mut c := src.color
+                if not c.current:
+                    c.a = 0.0
+                end
+                out.items.push(Item { kind = ITEM_COLOR, color = c })
+            else src.kind == ITEM_BOOL:
+                out.items.push(src)
+            else:
+                out.items.push(Item { kind = ITEM_LEN })
+            end
+        end
+        g++
+    end
+    ret out
+end
+
+func _cubic(x1: f64, y1: f64, x2: f64, y2: f64, t: f64): f64:
+    if t <= 0.0:
+        ret 0.0
+    end
+    if t >= 1.0:
+        ret 1.0
+    end
+    cx := 3.0 * x1
+    bx := 3.0 * (x2 - x1) - cx
+    ax := 1.0 - cx - bx
+    cy := 3.0 * y1
+    by_ := 3.0 * (y2 - y1) - cy
+    ay := 1.0 - cy - by_
+    mut lo := 0.0
+    mut hi := 1.0
+    mut s := t
+    repeat 40:
+        x := ((ax * s + bx) * s + cx) * s
+        if x < t:
+            lo = s
+        else:
+            hi = s
+        end
+        s = (lo + hi) / 2.0
+    end
+    ret ((ay * s + by_) * s + cy) * s
+end
+
+func _spring(k: f64, c: f64, t: f64): f64:
+    if t >= 1.0:
+        ret 1.0
+    end
+    if t <= 0.0:
+        ret 0.0
+    end
+    w0 := math.Sqrt(k)
+    z := c / (2.0 * w0)
+    mut settle := 0.0
+    if z <= 0.0:
+        settle = 8.0 * 3.141592653589793 / w0
+    else z < 1.0:
+        settle = 6.907755278982137 / (z * w0)
+    else:
+        settle = 6.907755278982137 / (w0 * (z - math.Sqrt(z * z - 1.0)))
+    end
+    tau := t * settle
+    if z < 1.0:
+        wd := w0 * math.Sqrt(1.0 - z * z)
+        ret 1.0 - math.Exp(0.0 - z * w0 * tau) * (math.Cos(wd * tau) + (z * w0 / wd) * math.Sin(wd * tau))
+    end
+    if z == 1.0:
+        ret 1.0 - math.Exp(0.0 - w0 * tau) * (1.0 + w0 * tau)
+    end
+    r := math.Sqrt(z * z - 1.0)
+    r1 := 0.0 - w0 * (z - r)
+    r2 := 0.0 - w0 * (z + r)
+    ret 1.0 + (r2 * math.Exp(r1 * tau) - r1 * math.Exp(r2 * tau)) / (r1 - r2)
+end
+
+@en "EaseAt"
+@fa "نرمش در"
+pub func EaseAt(e: Easing, t: f64): f64:
+    switch e.kind:
+        EASE_LINEAR: ret t end
+        EASE_EASE: ret _cubic(0.25, 0.1, 0.25, 1.0, t) end
+        EASE_IN: ret _cubic(0.42, 0.0, 1.0, 1.0, t) end
+        EASE_OUT: ret _cubic(0.0, 0.0, 0.58, 1.0, t) end
+        EASE_IN_OUT: ret _cubic(0.42, 0.0, 0.58, 1.0, t) end
+        EASE_CUBIC: ret _cubic(e.x1, e.y1, e.x2, e.y2, t) end
+        EASE_STEPS:
+            if t >= 1.0:
+                ret 1.0
+            end
+            n := e.steps < 1 ? 1.0 : e.steps as f64
+            ret math.Floor(t * n) / n
+        end
+        EASE_SPRING: ret _spring(e.stiffness, e.damping, t) end
+    end
+    ret t
+end
+
+@en "Lerp"
+@fa "میان یابی"
+pub func Lerp(prop: int, a: Value, b: Value, t: f64): Value:
+    if a.items.len() == 0 or b.items.len() == 0 or prop < 0 or prop >= PROP_COUNT or not _prop_info(prop).animatable:
+        ret t < 0.5 ? a : b
+    end
+    mut ca := _canonical(prop, a)
+    mut cb := _canonical(prop, b)
+    kind := _prop_info(prop).kind
+    if kind == KIND_SHADOW or kind == KIND_TEXT_SHADOW:
+        text := kind == KIND_TEXT_SHADOW
+        if ca.items.get(0).kind == ITEM_WORD and cb.items.get(0).kind == ITEM_WORD:
+            ret t < 0.5 ? a : b
+        end
+        if ca.items.get(0).kind == ITEM_WORD:
+            ca = _pad_shadows(Value {}, cb.starts.len(), text, cb)
+        end
+        if cb.items.get(0).kind == ITEM_WORD:
+            cb = _pad_shadows(Value {}, ca.starts.len(), text, ca)
+        end
+        if ca.starts.len() < cb.starts.len():
+            ca = _pad_shadows(ca, cb.starts.len(), text, cb)
+        end
+        if cb.starts.len() < ca.starts.len():
+            cb = _pad_shadows(cb, ca.starts.len(), text, ca)
+        end
+    end
+    if ca.items.len() != cb.items.len() or ca.starts.len() != cb.starts.len():
+        ret t < 0.5 ? a : b
+    end
+    mut out := Value {}
+    each x in ca.starts:
+        out.starts.push(x)
+    end
+    each i, x in ca.items:
+        mut r := Item {}
+        if not _lerp_item(x, cb.items.get(i), t, r):
+            ret t < 0.5 ? a : b
+        end
+        out.items.push(r)
+    end
+    ret out
+end

@@ -1,0 +1,154 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.paint
+import gui.style
+import gui.typeset
+
+func _rect(x: f64, y: f64, w: f64, h: f64): paint.Rect:
+    s := _e.scale
+    ret paint.Rect { x = x * s, y = y * s, width = w * s, height = h * s }
+end
+
+func _radii(s: style.Style, w: f64, h: f64, font: f64): paint.Radii:
+    tl := _abs_len(s.radius_top_start, font, math.Min(w, h))
+    tr := _abs_len(s.radius_top_end, font, math.Min(w, h))
+    br := _abs_len(s.radius_bottom_end, font, math.Min(w, h))
+    bl := _abs_len(s.radius_bottom_start, font, math.Min(w, h))
+    sc := _e.scale
+    ret paint.Radii { top_left_x = tl * sc, top_left_y = tl * sc, top_right_x = tr * sc, top_right_y = tr * sc, bottom_right_x = br * sc, bottom_right_y = br * sc, bottom_left_x = bl * sc, bottom_left_y = bl * sc }
+end
+
+func _bstyle(w: int): paint.BorderStyle:
+    switch w:
+        style.KW_NONE: ret paint.BorderStyle.None end
+        style.KW_DASHED: ret paint.BorderStyle.Dashed end
+        style.KW_DOTTED: ret paint.BorderStyle.Dotted end
+    end
+    ret paint.BorderStyle.Solid
+end
+
+func _paint_background(cv: paint.Canvas, b: _Box, s: style.Style, u: _Used):
+    if s.background.len() == 0:
+        ret
+    end
+    r := _rect(b.x, b.y, b.w, b.h)
+    radii := _radii(s, b.w, b.h, u.font)
+    each p in s.background:
+        if p.kind == style.PAINT_COLOR:
+            c := _ucol(p.color, u.color)
+            if c.a > 0:
+                cv.FillRoundedRect(r, radii, c)
+            end
+        else:
+            g := _paint_gradient(p, b.w, b.h, u)
+            cv.FillGradient(r, radii, g)
+        end
+    end
+end
+
+func _paint_gradient(p: style.Paint, w: f64, h: f64, u: _Used): paint.Gradient:
+    mut stops := Vector {} as Vector<paint.GradientStop>
+    each st in p.stops:
+        c := _ucol(st.color, u.color)
+        off := st.has_at ? _abs_len(st.at, u.font, math.Max(w, h)) / math.Max(1.0, math.Max(w, h)) : -1.0
+        stops.push(paint.GradientStop { pos = off, color = c })
+    end
+    ret paint.Gradient { stops = stops, angle = p.angle }
+end
+
+func _paint_border(cv: paint.Canvas, b: _Box, s: style.Style, u: _Used):
+    tw := s.border_top_style == style.KW_NONE ? 0.0 : _vp_len(s.border_top_width, u.font)
+    rw := s.border_end_style == style.KW_NONE ? 0.0 : _vp_len(s.border_end_width, u.font)
+    bw := s.border_bottom_style == style.KW_NONE ? 0.0 : _vp_len(s.border_bottom_width, u.font)
+    lw := s.border_start_style == style.KW_NONE ? 0.0 : _vp_len(s.border_start_width, u.font)
+    if tw == 0.0 and rw == 0.0 and bw == 0.0 and lw == 0.0:
+        ret
+    end
+    r := _rect(b.x, b.y, b.w, b.h)
+    radii := _radii(s, b.w, b.h, u.font)
+    sc := _e.scale
+    bd := paint.Border {
+        top_width = tw * sc, top_color = _ucol(s.border_top_color, u.color), top_style = _bstyle(s.border_top_style),
+        right_width = rw * sc, right_color = _ucol(s.border_end_color, u.color), right_style = _bstyle(s.border_end_style),
+        bottom_width = bw * sc, bottom_color = _ucol(s.border_bottom_color, u.color), bottom_style = _bstyle(s.border_bottom_style),
+        left_width = lw * sc, left_color = _ucol(s.border_start_color, u.color), left_style = _bstyle(s.border_start_style)
+    }
+    cv.DrawBorder(r, radii, bd)
+end
+
+func _paint_run(cv: paint.Canvas, ri: int):
+    f := _e.runs[ri]
+    if not f.has_lay:
+        ret
+    end
+    sc := _e.scale
+    ox := f.x * sc
+    oy := f.y * sc
+    repeat f.lay.glyphs.len() in i:
+        g := f.lay.glyphs[i]
+        mut run := typeset.GlyphRun {}
+        mut found := false
+        repeat f.lay.runs.len() in ri2:
+            r := f.lay.runs[ri2]
+            if i >= r.glyph_start and i < r.glyph_start + r.glyph_count:
+                run = r
+                found = true
+                break
+            end
+        end
+        if not found:
+            continue
+        end
+        font := typeset.FaceFont(_fc, run.face)
+        gx := ox + g.x * sc
+        gy := oy + g.y * sc
+        gm := typeset.CachedGlyph(_gcache, font, g.id, run.size * sc, gx)
+        m := paint.Mask { data = gm.data, width = gm.width, height = gm.height, stride = gm.stride, left = gm.left, top = gm.top }
+        el := run.span < f.span_el.len() ? f.span_el[run.span] : f.owner
+        s := el >= 0 and el < _e.cs.len() ? _e.cs[el] : style.Default("")
+        u := el >= 0 and el < _e.us.len() ? _e.us[el] : _Used {}
+        c := _ucol(s.color, u.color)
+        cv.DrawGlyph(m, typeset.GlyphOriginX(gx, gm), typeset.GlyphOriginY(gy, gm), c)
+    end
+end
+
+func _paint_node(cv: paint.Canvas, node: int):
+    b := _e.boxes[node]
+    if not b.shown:
+        ret
+    end
+    s := _e.cs[node]
+    u := _e.us[node]
+    _paint_background(cv, b, s, u)
+    _paint_border(cv, b, s, u)
+    nd := _e.dom.nodes[node]
+    if node < _e.node_run.len() and _e.node_run[node] >= 0:
+        _paint_run(cv, _e.node_run[node])
+    end
+    each k in nd.kids:
+        _paint_node(cv, k)
+    end
+end
+
+func _paint_all(cv: paint.Canvas):
+    cv.Clear(paint.Color { r = 255, g = 255, b = 255, a = 255 })
+    if _e.dom.nodes.len() == 0:
+        ret
+    end
+    _paint_node(cv, 0)
+end

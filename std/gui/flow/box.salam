@@ -226,7 +226,7 @@ end
 func _measure(t &: Eng, id: int, cw: f64, ch: f64): Size:
     n := t.nodes.ref(id)
     if n.lm_iw == cw and n.lm_ih == ch:
-        ret Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b }
+        ret Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b, last_baseline = n.lm_lb }
     end
     t.measure_calls++
     f := n.measure
@@ -236,7 +236,8 @@ func _measure(t &: Eng, id: int, cw: f64, ch: f64): Size:
     n.lm_w = _max(0.0, s.w)
     n.lm_h = _max(0.0, s.h)
     n.lm_b = s.baseline
-    ret Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b }
+    n.lm_lb = s.last_baseline
+    ret Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b, last_baseline = n.lm_lb }
 end
 
 func _leaf(n &: Node): bool:
@@ -363,14 +364,14 @@ func _compute(t &: Eng, id: int, kw0: f64, kh0: f64, aw0: f64, pw0: f64, ph0: f6
     end
     if final:
         if not n.dirty and n.has_final and n.fw == kw0 and n.fh == kh0 and n.fpw == pw and n.fph == ph:
-            ret Out { w = n.w, h = n.h, base = n.base }
+            ret Out { w = n.w, h = n.h, base = n.base, last = n.lbase }
         end
     else:
-        cn := n.cv.len() / 3
+        cn := n.cv.len() / 4
         repeat cn in i:
             j := i * 5
             if n.ck.get(j) == kw0 and n.ck.get(j + 1) == kh0 and n.ck.get(j + 2) == aw and n.ck.get(j + 3) == pw and n.ck.get(j + 4) == ph:
-                ret Out { w = n.cv.get(i * 3), h = n.cv.get(i * 3 + 1), base = n.cv.get(i * 3 + 2) }
+                ret Out { w = n.cv.get(i * 4), h = n.cv.get(i * 4 + 1), base = n.cv.get(i * 4 + 2), last = n.cv.get(i * 4 + 3) }
             end
         end
     end
@@ -457,6 +458,7 @@ func _compute(t &: Eng, id: int, kw0: f64, kh0: f64, aw0: f64, pw0: f64, ph0: f6
         m.w = out.w
         m.h = out.h
         m.base = out.base
+        m.lbase = out.last
         m.has_final = true
         m.dirty = false
         m.fw = kw0
@@ -467,12 +469,12 @@ func _compute(t &: Eng, id: int, kw0: f64, kh0: f64, aw0: f64, pw0: f64, ph0: f6
         _extents(t, id, bx)
     else:
         mut slot := m.cnext
-        if m.cv.len() / 3 < _CACHE:
-            slot = m.cv.len() / 3
+        if m.cv.len() / 4 < _CACHE:
+            slot = m.cv.len() / 4
             repeat 5:
                 m.ck.push(0.0)
             end
-            repeat 3:
+            repeat 4:
                 m.cv.push(0.0)
             end
         else:
@@ -483,9 +485,10 @@ func _compute(t &: Eng, id: int, kw0: f64, kh0: f64, aw0: f64, pw0: f64, ph0: f6
         m.ck.set(slot * 5 + 2, aw)
         m.ck.set(slot * 5 + 3, pw)
         m.ck.set(slot * 5 + 4, ph)
-        m.cv.set(slot * 3, out.w)
-        m.cv.set(slot * 3 + 1, out.h)
-        m.cv.set(slot * 3 + 2, out.base)
+        m.cv.set(slot * 4, out.w)
+        m.cv.set(slot * 4 + 1, out.h)
+        m.cv.set(slot * 4 + 2, out.base)
+        m.cv.set(slot * 4 + 3, out.last)
     end
     ret out
 end
@@ -528,7 +531,7 @@ func _run(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, fi
             end
             mut s := Size {}
             if (n.lm_ih == ch or n.lm_ih < 0.0) and (n.lm_iw == cw or (n.lm_w == cw and (n.lm_iw < 0.0 or n.lm_iw >= cw))):
-                s = Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b }
+                s = Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b, last_baseline = n.lm_lb }
             else:
                 s = _measure(t, id, cw, ch)
             end
@@ -540,7 +543,11 @@ func _run(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, fi
             if s.baseline >= 0.0:
                 b = bx.pt + s.baseline
             end
-            ret Out { w = kw, h = h, base = b }
+            mut lb := b
+            if s.last_baseline >= 0.0:
+                lb = bx.pt + s.last_baseline
+            end
+            ret Out { w = kw, h = h, base = b, last = lb }
         end
         mut h := kh
         if h < 0.0:
@@ -647,6 +654,18 @@ func _static_pos(t &: Eng, parent: int, kw: f64, kh: f64, pbx: Box, k: int, w: f
         if pn.st.reverse:
             oy = fy - oy
         end
+    else lay == LAYOUT_FLOW:
+        mut fx0 := kn.stx + kb.ml
+        if rtl:
+            fx0 = kn.stx - kb.mr - w
+        end
+        ret fx0, kn.sty + kb.mt
+    else lay == LAYOUT_GRID:
+        mut gx := pbx.bl + kb.ml
+        if rtl:
+            gx = kw - pbx.br - kb.mr - w
+        end
+        ret gx, pbx.bt + kb.mt
     else lay == LAYOUT_STACK:
         mut js := kn.st.justify_self
         if js == ALIGN_AUTO:
@@ -769,11 +788,11 @@ func _extents(t &: Eng, id: int, bx: Box):
         mut r := kx + kn.w + kn.bx.mr
         mut b := ky + kn.h + kn.bx.mb
         mut l := kx - kn.bx.ml
-        if kn.st.overflow_x == OVERFLOW_VISIBLE:
+        if kn.ovx == OVERFLOW_VISIBLE:
             r = _max(r, kx + kn.bx.bl + kn.cx1)
             l = _min(l, kx + kn.bx.bl + kn.cx0)
         end
-        if kn.st.overflow_y == OVERFLOW_VISIBLE:
+        if kn.ovy == OVERFLOW_VISIBLE:
             b = _max(b, ky + kn.bx.bt + kn.cy1)
         end
         x1 = _max(x1, r + (bx.pr - bx.br))
@@ -793,7 +812,7 @@ end
 
 func _scroll_x(t &: Eng, id: int): f64:
     n := t.nodes.ref(id)
-    if n.st.overflow_x == OVERFLOW_VISIBLE:
+    if n.ovx == OVERFLOW_VISIBLE:
         ret 0.0
     end
     cw := n.w - n.bx.bl - n.bx.br
@@ -802,7 +821,7 @@ end
 
 func _scroll_y(t &: Eng, id: int): f64:
     n := t.nodes.ref(id)
-    if n.st.overflow_y == OVERFLOW_VISIBLE:
+    if n.ovy == OVERFLOW_VISIBLE:
         ret 0.0
     end
     ch := n.h - n.bx.bt - n.bx.bb
@@ -896,10 +915,10 @@ func _sticky(t &: Eng, id: int, horiz: bool): f64:
     until s >= 0:
         cn := t.nodes.ref(cur)
         sn := t.nodes.ref(s)
-        mut ov := sn.st.overflow_y
+        mut ov := sn.ovy
         if horiz:
             pos += cn.x
-            ov = sn.st.overflow_x
+            ov = sn.ovx
         else:
             pos += cn.y
         end

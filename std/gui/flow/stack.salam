@@ -152,6 +152,55 @@ func _stack(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, 
     ret Out { w = kw, h = inner_h + pby, base = base }
 end
 
+func _inline_static(t &: Eng, id: int, items &: Vector<FItem>, lines &: Vector<FLine>, inner_w: f64, bx: Box):
+    n := t.nodes.ref(id)
+    rtl := n.rtl
+    mut prev := -1
+    each k in n.kids:
+        kn := t.nodes.ref(k)
+        if not kn.st.visible:
+            continue
+        end
+        if _in_flow(kn):
+            prev = k
+            continue
+        end
+        mut x := bx.pl
+        mut y := bx.pt
+        mut found := false
+        if prev >= 0:
+            repeat lines.len() in li:
+                ln := lines.get(li)
+                repeat ln.b - ln.a in j:
+                    it := items.get(ln.a + j)
+                    if it.id == prev:
+                        y = bx.pt + ln.off
+                        if rtl:
+                            x = bx.pl + it.pm - it.me
+                        else:
+                            x = bx.pl + it.pm + it.target + it.me
+                        end
+                        found = true
+                    end
+                end
+            end
+        end
+        if not found and lines.len() > 0:
+            l0 := lines.get(0)
+            y = bx.pt + l0.off
+            x = bx.pl + l0.start
+            if rtl:
+                x = bx.pl + inner_w - l0.start
+            end
+        else not found and rtl:
+            x = bx.pl + inner_w
+        end
+        kk := t.nodes.ref(k)
+        kk.stx = x
+        kk.sty = y
+    end
+end
+
 func _inline(t &: Eng, id: int, kw: f64, kh: f64, bx: Box, final: bool): Out:
     n := t.nodes.ref(id)
     rtl := n.rtl
@@ -206,7 +255,18 @@ func _inline(t &: Eng, id: int, kw: f64, kh: f64, bx: Box, final: bool): Out:
         it.target = _compute(t, it.id, _UNK, _UNK, _max(0.0, inner_w - it.ms - it.me), inner_w, inner_h, false).w
         o := _compute(t, it.id, it.target, _UNK, it.target, inner_w, inner_h, false)
         it.cross = o.h
-        it.bl = o.base
+        kn2 := t.nodes.ref(it.id)
+        if kn2.ovx != OVERFLOW_VISIBLE or kn2.ovy != OVERFLOW_VISIBLE or (kn2.kids.len() == 0 and not kn2.has_measure):
+            it.bl = o.h + it.ce
+        else kn2.kids.len() == 0 or kn2.st.layout == LAYOUT_FLOW:
+            if o.last >= 0.0:
+                it.bl = o.last
+            else:
+                it.bl = o.h + it.ce
+            end
+        else:
+            it.bl = o.base
+        end
     end
     mut lines := Vector {} as Vector<FLine>
     defer lines.free()
@@ -268,6 +328,8 @@ func _inline(t &: Eng, id: int, kw: f64, kh: f64, bx: Box, final: bool): Out:
         else ta == TEXT_JUSTIFY and li < lines.len() - 1 and cnt > 1 and free > 0.0:
             between += free / ((cnt - 1) as f64)
         end
+        lw := lines.ref(li)
+        lw.start = start
         mut p := start
         repeat cnt in k:
             it := items.ref(ln.a + k)
@@ -296,6 +358,15 @@ func _inline(t &: Eng, id: int, kw: f64, kh: f64, bx: Box, final: bool): Out:
             end
         end
     end
+    mut last := -1.0
+    if lines.len() > 0:
+        ll := lines.get(lines.len() - 1)
+        if ll.asc > 0.0:
+            last = bx.pt + ll.off + ll.asc
+        else:
+            last = bx.pt + ll.off + ll.cross
+        end
+    end
     if final:
         each it in items:
             _compute(t, it.id, it.target, it.cross, it.target, inner_w, inner_h, true)
@@ -304,6 +375,7 @@ func _inline(t &: Eng, id: int, kw: f64, kh: f64, bx: Box, final: bool): Out:
             kn.y = bx.pt + it.pc
             kn.in_fixed = false
         end
+        _inline_static(t, id, items, lines, inner_w, bx)
     end
-    ret Out { w = kw, h = content + pby, base = base }
+    ret Out { w = kw, h = content + pby, base = base, last = last }
 end

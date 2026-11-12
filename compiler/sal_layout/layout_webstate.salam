@@ -216,7 +216,7 @@ func ws_writes(r &: LnReact, wc &: WsCtx, a &: at.Ast, nid: int, locals: Vector<
             if callee.kind == at.AST_IDENTIFIER:
                 refp = ln_rx_ref_param(r, a, callee.name, i)
                 if refp < 0:
-                    refp = 0
+                    refp = 1
                 end
             else callee.kind == at.AST_LAMBDA:
                 refp = 0
@@ -614,8 +614,12 @@ func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
         if str.Len(key) == 0:
             key = an.name
         end
-        ai := sm.LayoutAttrFor(ei, key)
-        if ai < 0 or not str.Equals(sm.LayoutAttrOut(ai), want):
+        mut match := str.Equals(key, want) or str.Equals(an.name, want)
+        if not match:
+            ai := sm.LayoutAttrFor(ei, key)
+            match = ai >= 0 and str.Equals(sm.LayoutAttrOut(ai), want)
+        end
+        if not match:
             continue
         end
         num := ln_dyn_num(val_str(a, an.a))
@@ -632,6 +636,9 @@ func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
 end
 
 func ws_row_key(lw &: LoLower, a &: at.Ast, body: int): int:
+    if body == 0:
+        ret 0
+    end
     repeat at.ChildCount(a, body) in i:
         cid := at.Child(a, body, i)
         k := at.KindOf(a, cid)
@@ -643,10 +650,20 @@ func ws_row_key(lw &: LoLower, a &: at.Ast, body: int): int:
             if key == 0:
                 key = ws_key_attr(lw, a, cid, "id")
             end
-            ret key
+            if key != 0:
+                ret key
+            end
+            key = ws_row_key(lw, a, cid)
+            if key != 0:
+                ret key
+            end
+            continue
         end
-        if k == at.AST_IF and ln_rx_is_comp(a, cid):
-            ret ws_row_key(lw, a, at.Get(a, cid).b)
+        if (k == at.AST_IF and ln_rx_is_comp(a, cid)) or k == at.AST_LAYOUT_BLOCK:
+            key2 := ws_row_key(lw, a, at.KindOf(a, cid) == at.AST_LAYOUT_BLOCK ? cid : at.Get(a, cid).b)
+            if key2 != 0:
+                ret key2
+            end
         end
     end
     ret 0
@@ -705,7 +722,15 @@ func ws_ids(a &: at.Ast, nid: int):
         if n.a != 0 and str.Equals(key, "id") and at.KindOf(a, n.a) == at.AST_LITERAL:
             v := at.Get(a, n.a)
             if v.value_kind == tok.TV_STRING:
-                g_lo_ws_ids.push(v.value_str)
+                mut seen := false
+                each old in g_lo_ws_ids:
+                    if str.Equals(old, v.value_str):
+                        seen = true
+                    end
+                end
+                if not seen:
+                    g_lo_ws_ids.push(v.value_str)
+                end
             end
         end
         ret
@@ -829,6 +854,12 @@ func ws_view_source(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, i: int
     wc.multi.clear()
     mut body := "mut __salam_h := \"\"\n"
     if ws_kind(i) == WS_SINGLE:
+        repeat g_lo_ws_inst.Len() in rn:
+            if g_lo_ws_inst.get(rn) == i and ws_is_render(rn):
+                body += ws_name(rn) + " = " + ws_slot(lw, at.Clone(a, at.Get(a, g_lo_ws_decl.get(rn)).a)) + "\n"
+            end
+        end
+    else ws_kind(i) == WS_REGION:
         repeat g_lo_ws_inst.Len() in rn:
             if g_lo_ws_inst.get(rn) == i and ws_is_render(rn):
                 body += ws_name(rn) + " = " + ws_slot(lw, at.Clone(a, at.Get(a, g_lo_ws_decl.get(rn)).a)) + "\n"
@@ -1268,6 +1299,34 @@ function __salam_drop(prefix, keep) {
         }
     }
 }
+function __salam_cleanup(n) {
+    if (!n) {
+        return;
+    }
+    if (n.nodeType === 8) {
+        var m = /^salam:(\d+)$/.exec(n.data);
+        if (m) {
+            var j = m[1];
+            __salam_drop(j + "/", null);
+            delete __salam_marks[j];
+            delete __salam_cur[j];
+        }
+        return;
+    }
+    if (n.nodeType !== 1) {
+        return;
+    }
+    var w = document.createTreeWalker(n, NodeFilter.SHOW_COMMENT), c, m2;
+    while ((c = w.nextNode())) {
+        m2 = /^salam:(\d+)$/.exec(c.data);
+        if (m2) {
+            var j2 = m2[1];
+            __salam_drop(j2 + "/", null);
+            delete __salam_marks[j2];
+            delete __salam_cur[j2];
+        }
+    }
+}
 window.salamWsAt = function (i, s) {
     __salam_cur[i] = s;
 };
@@ -1431,6 +1490,7 @@ function __salam_kids(p, cur, stop, list, fresh) {
     }
     while (cur && cur !== stop) {
         var nx2 = cur.nextSibling;
+        __salam_cleanup(cur);
         p.removeChild(cur);
         cur = nx2;
     }
@@ -1477,10 +1537,14 @@ function __salam_flush() {
     for (var k = 0; k < list.length; k++) {
         __salam_mount(list[k]);
     }
-    if (act && act !== document.activeElement && act.isConnected && act.focus) {
-        act.focus();
+    if (act && act.isConnected && act !== document.activeElement && act.focus) {
         try {
-            if (ss !== null) {
+            act.focus({ preventScroll: true });
+        } catch (x3) {
+            act.focus();
+        }
+        try {
+            if (ss !== null && typeof act.setSelectionRange === "function") {
                 act.setSelectionRange(ss, se);
             }
         } catch (x2) {

@@ -2433,11 +2433,11 @@ page:
     header:
         background = "blue"
         color = "white"
-        padding = "24px"
-        heading: size = 1 content = "Welcome to Salam" font_size = "32px" end
+        padding = 24px
+        heading: size = 1 content = "Welcome to Salam" font_size = 32px end
     end
     box:                                   // generic container (div)
-        padding = "20px"
+        padding = 20px
         paragraph: content = "Generated from Salam." end
     end
     form:

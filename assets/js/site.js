@@ -275,54 +275,10 @@
 
     const escapeHtml = (text) =>
       text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const escapeAttr = (text) => escapeHtml(text).replace(/"/g, "&quot;");
-    const bold = (text) =>
-      escapeHtml(text).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    const safeHref = (url) => /^(https?:\/\/|mailto:)[^\s<>"]+$/i.test(url);
-    const anchor = (href, label) =>
-      `<a href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-    const linkRe =
-      /\[([^\]\n]+)\]\(\s*([^)\s]+)\s*\)|(?:https?:\/\/|mailto:)[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gi;
-    const trimUrl = (url) => {
-      let u = url;
-      for (;;) {
-        if (/[.,;:!?'\]]$/.test(u)) {
-          u = u.slice(0, -1);
-        } else if (
-          u.endsWith(")") &&
-          u.split("(").length < u.split(")").length
-        ) {
-          u = u.slice(0, -1);
-        } else {
-          return u;
-        }
-      }
-    };
-    const linkify = (text) => {
-      let out = "";
-      let at = 0;
-      for (const m of text.matchAll(linkRe)) {
-        out += bold(text.slice(at, m.index));
-        if (m[1] !== undefined) {
-          out += safeHref(m[2]) ? anchor(m[2], bold(m[1])) : bold(m[0]);
-          at = m.index + m[0].length;
-        } else {
-          const url = trimUrl(m[0]);
-          out += anchor(url, escapeHtml(url));
-          at = m.index + url.length;
-        }
-      }
-      return out + bold(text.slice(at));
-    };
     const inline = (text) =>
-      text
-        .split(/(`[^`\n]+`)/)
-        .map((part, i) =>
-          i % 2
-            ? `<code dir="ltr">${escapeHtml(part.slice(1, -1))}</code>`
-            : linkify(part),
-        )
-        .join("");
+      escapeHtml(text)
+        .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
     const words = new Map();
     for (const [attr, cls] of [
       ["data-kw", "k"],
@@ -332,17 +288,6 @@
       for (const w of (salamat.getAttribute(attr) || "").split(/\s+/)) {
         if (w) {
           words.set(w, cls);
-        }
-      }
-    }
-    const decls = new Map();
-    for (const [attr, cls] of [
-      ["data-declf", "f"],
-      ["data-decltype", "t"],
-    ]) {
-      for (const w of (salamat.getAttribute(attr) || "").split(/\s+/)) {
-        if (w) {
-          decls.set(w, cls);
         }
       }
     }
@@ -359,13 +304,9 @@
       const n = cps.length;
       let out = "";
       let i = 0;
-      let pending = "";
       while (i < n) {
         const ch = cps[i];
         let j = i + 1;
-        if (!identCp(ch) && ch !== " " && ch !== "\t") {
-          pending = "";
-        }
         if (ch === "/" && cps[i + 1] === "/") {
           out += span("c", cps.slice(i).join(""));
           break;
@@ -397,12 +338,8 @@
           while (k < n && (cps[k] === " " || cps[k] === "\t")) {
             k += 1;
           }
-          if (pending) {
-            out += span(pending, word);
-            pending = "";
-          } else if (words.has(word)) {
+          if (words.has(word)) {
             out += span(words.get(word), word);
-            pending = decls.get(word) || "";
           } else if (cps[k] === "(") {
             out += span("f", word);
           } else {

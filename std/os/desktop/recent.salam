@@ -60,6 +60,16 @@ func _kind_for(path: str): RecentKind:
     ret RecentKind.File
 end
 
+func _free_str_vec(v &: Vector<str>):
+    repeat v.Len() in i:
+        item := v.Get(i)
+        if item.Len() > 0:
+            mem.Free(item as void*)
+        end
+    end
+    v.Free()
+end
+
 func _read_lines(path: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     if not os.Exists(path): ret out end
@@ -72,6 +82,7 @@ func _read_lines(path: str): Vector<str>:
         if line.Len() > 0:
             out.Push(str.Clone(line))
         end
+        mem.Free(line as void*)
     end
     ret out
 end
@@ -118,8 +129,8 @@ pub func Add(app_id: str, path: str, limit: int = 20, kind: RecentKind = RecentK
 
     store := StoragePath(app_id, kind)
     defer mem.Free(store as void*)
-    existing := _read_lines(store)
-    defer existing.Free()
+    mut existing := _read_lines(store)
+    defer _free_str_vec(existing)
 
     mut out := Vector {} as Vector<str>
     out.Push(str.Clone(norm))
@@ -131,7 +142,7 @@ pub func Add(app_id: str, path: str, limit: int = 20, kind: RecentKind = RecentK
         out.Push(str.Clone(cur))
     end
     ok := _write_lines(store, out)
-    out.Free()
+    _free_str_vec(out)
     ret ok
 end
 
@@ -154,8 +165,8 @@ pub func List(app_id: str, limit: int = 20, kind: RecentKind = RecentKind.File):
     if app_id.Len() == 0: ret out end
     store := StoragePath(app_id, kind)
     defer mem.Free(store as void*)
-    lines := _read_lines(store)
-    defer lines.Free()
+    mut lines := _read_lines(store)
+    defer _free_str_vec(lines)
     max := _safe_limit(limit)
     repeat lines.Len() in i:
         if out.Len() >= max: break end
@@ -180,8 +191,8 @@ end
 @fa "ورودی‌ها"
 pub func Entries(app_id: str, limit: int = 20, kind: RecentKind = RecentKind.File): Vector<RecentEntry>:
     mut out := Vector {} as Vector<RecentEntry>
-    paths := List(app_id, limit, kind)
-    defer paths.Free()
+    mut paths := List(app_id, limit, kind)
+    defer _free_str_vec(paths)
     repeat paths.Len() in i:
         p := paths.Get(i)
         k := _kind_for(p)
@@ -198,8 +209,8 @@ pub func Remove(app_id: str, path: str, kind: RecentKind = RecentKind.File): boo
     defer mem.Free(norm as void*)
     store := StoragePath(app_id, kind)
     defer mem.Free(store as void*)
-    existing := _read_lines(store)
-    defer existing.Free()
+    mut existing := _read_lines(store)
+    defer _free_str_vec(existing)
     mut out := Vector {} as Vector<str>
     mut changed := false
     repeat existing.Len() in i:
@@ -211,11 +222,11 @@ pub func Remove(app_id: str, path: str, kind: RecentKind = RecentKind.File): boo
         out.Push(str.Clone(cur))
     end
     if not changed:
-        out.Free()
+        _free_str_vec(out)
         ret true
     end
     ok := _write_lines(store, out)
-    out.Free()
+    _free_str_vec(out)
     ret ok
 end
 
@@ -224,8 +235,8 @@ end
 pub func PruneMissing(app_id: str, kind: RecentKind = RecentKind.File): int:
     store := StoragePath(app_id, kind)
     defer mem.Free(store as void*)
-    existing := _read_lines(store)
-    defer existing.Free()
+    mut existing := _read_lines(store)
+    defer _free_str_vec(existing)
     mut out := Vector {} as Vector<str>
     mut removed := 0
     repeat existing.Len() in i:
@@ -237,7 +248,7 @@ pub func PruneMissing(app_id: str, kind: RecentKind = RecentKind.File): int:
         end
     end
     _ = _write_lines(store, out)
-    out.Free()
+    _free_str_vec(out)
     ret removed
 end
 
@@ -256,6 +267,36 @@ pub func ClearAll(app_id: str): bool:
     a := Clear(app_id, RecentKind.File)
     b := Clear(app_id, RecentKind.Directory)
     ret a and b
+end
+
+@en "Count"
+@fa "شمارش"
+pub func Count(app_id: str, kind: RecentKind = RecentKind.File): int:
+    items := List(app_id, 2147483647, kind)
+    n := items.Len()
+    _free_str_vec(items)
+    ret n
+end
+
+@en "Contains"
+@fa "دارد"
+pub func Contains(app_id: str, path: str, kind: RecentKind = RecentKind.File): bool:
+    if app_id.Len() == 0 or path.Len() == 0: ret false end
+    norm := _normalize(path)
+    defer mem.Free(norm as void*)
+    store := StoragePath(app_id, kind)
+    mut existing := _read_lines(store)
+    mem.Free(store as void*)
+    mut found := false
+    repeat existing.Len() in i:
+        cur := existing.Get(i)
+        if cur == norm or cur == path:
+            found = true
+            break
+        end
+    end
+    _free_str_vec(existing)
+    ret found
 end
 
 @en "Note"

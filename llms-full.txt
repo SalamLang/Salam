@@ -222264,6 +222264,724 @@ The example for this item is shown with the ones above: gui-webview-bundle-Main.
 
 ---
 
+# color
+
+https://salamlang.github.io/Salam/std/color/
+
+Colours for the Salam UI standard: every colour syntax in English and Persian, checked with clear errors, conversion between colour spaces, mixing in oklab, light and dark pairs, contrast and the CSS the web target emits.
+
+`color` is the colour package in Salam. It reads every colour a page may use, in the same syntax in page source, in a string and in a value computed at run time, and it turns a colour into what each target needs: a packed `u32` for the native renderer and CSS text for the web.
+
+A `Color` holds sRGB channels from 0 to 1 and an alpha. A colour from a wider gamut, such as `color(display p3, 1, 0, 0)`, keeps channels below 0 or above 1, so nothing is lost until it is drawn.
+
+What `Parse` accepts:
+
+- Names: all 148 CSS colour names plus `transparent` and `current` (the text colour), in any case and with or without spaces (`alice blue`), and Persian names such as `قرمز`, `آبی` and `قهوه ای`.
+
+- Hex: `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa`.
+
+- Functions: `rgb`, `rgba`, `hsl`, `hsla`, `hwb`, `lab`, `lch`, `oklab`, `oklch`, `cmyk` (also `device cmyk`) and `color(space, c1, c2, c3)` with the spaces `srgb`, `srgb linear`, `display p3`, `a98 rgb`, `prophoto rgb`, `rec2020`, `xyz`, `xyz d50` and `xyz d65`. Values are separated by commas, as in `rgb(51, 102, 170)`, or by spaces with `/` before the alpha, as in CSS. The hyphenated CSS spellings (`display-p3`) work too.
+
+- `mix(a, b, amount, space)`: `amount` is how much of `b`, as a number from 0 to 1 or a percent, 50% when left out; the space is oklab unless given.
+
+- `light dark(a, b)`: a colour with a light and a dark variant.
+
+- Numbers: a percent with `%` or `٪`, Persian digits, the Persian comma `،`, and hue angles as a bare number of degrees or with `deg`, `rad`, `grad` or `turn`.
+
+Things to know:
+
+- Values are checked, not clamped. `rgb(300, 0, 0)` is an error, not red. `Error` says what was expected and the column where the problem starts, and suggests a name when one is close.
+
+- `Css` writes what every current browser draws the same: `#rrggbb` or `#rrggbbaa` inside sRGB, `color(display-p3 ...)` for a wide gamut colour that fits Display P3, `oklch(...)` beyond that, `currentColor` and `light-dark(a, b)`.
+
+- `Argb` clamps each channel to sRGB, so a wide gamut colour is drawn as its nearest sRGB colour on the native target.
+
+- `cmyk` is the plain formula (red is `(1 - c) * (1 - k)`), with no printer profile.
+
+- `current` cannot be mixed while parsing, because the text colour is only known when the page is shown.
+
+## A light and dark palette
+
+A theme starts from one brand colour. Each role gets a `LightDark` pair, `Lighten` and `Darken` move the lightness in oklch and stay inside sRGB, and `Mix` works on both variants at once. `Contrast` then checks every pair against the 4.5 ratio that WCAG asks of body text, in light and in dark mode.
+
+color-guide-theme.salam
+
+```salam
+import color
+import math
+
+func r2(v: f64): f64:
+    ret math.Round(v * 100.0) / 100.0
+end
+
+func check(name: str, text: color.Color, back: color.Color):
+    light := color.Contrast(color.Light(text), color.Light(back))
+    dark := color.Contrast(color.Dark(text), color.Dark(back))
+    mut verdict := "ok"
+    if light < 4.5 or dark < 4.5:
+        verdict = "too low for body text"
+    end
+    println name, "light", r2(light), "dark", r2(dark), verdict
+end
+
+func main:
+    mut brand := color.Color {}
+    if not color.Parse("#3366aa", brand):
+        ret 1
+    end
+    page := color.LightDark(color.Hex(0xffffff), color.Hex(0x121212))
+    text := color.LightDark(color.Hex(0x1a1a1a), color.Hex(0xeeeeee))
+    accent := color.LightDark(brand, color.Lighten(brand, 0.2))
+    muted := color.Mix(text, page, 0.45)
+    hover := color.LightDark(color.Darken(brand, 0.08), color.Lighten(brand, 0.28))
+    println "page   ", color.Css(page)
+    println "text   ", color.Css(text)
+    println "accent ", color.Css(accent)
+    println "muted  ", color.Css(muted)
+    println "hover  ", color.Css(hover)
+    check("text on page  ", text, page)
+    check("accent on page", accent, page)
+    check("muted on page ", muted, page)
+end
+```
+
+Output:
+
+```text
+page    light-dark(#ffffff, #121212)
+text    light-dark(#1a1a1a, #eeeeee)
+accent  light-dark(#3366aa, #6ea3ec)
+muted   light-dark(#777777, #818181)
+hover   light-dark(#1b4f91, #8cbdff)
+text on page   light 17.4 dark 16.15 ok
+accent on page light 5.8 dark 7.25 ok
+muted on page  light 4.47 dark 4.82 too low for body text
+```
+
+## Checking colours that people type
+
+A settings screen that takes a colour as text needs to say what is wrong with it. `Error` returns an empty string for a colour `Parse` accepts, and otherwise one line with the column and the expected form, so it can be shown under the field as it is.
+
+color-guide-input.salam
+
+```salam
+import color
+
+func main:
+    inputs := ["#3366aa", "rgb(51 102 170 / 50%)", "hsl(210, 50%, 40%)", "mix(red, blue, 30%)", "rgb(300, 0, 0)", "hsl(210 50%)", "darkgrey", "dark grey", "darkgray", "lightgreem", "rgb(51, 102 170)", "#12345"]
+    mut accepted := 0
+    each text in inputs:
+        message := color.Error(text)
+        if message == "":
+            mut c := color.Color {}
+            color.Parse(text, c)
+            println "ok     ", text, "=>", color.Css(c)
+            accepted++
+        else:
+            println "refused", text
+            println "       ", message
+        end
+    end
+    println accepted, "of", inputs.Len(), "accepted"
+end
+```
+
+Output:
+
+```text
+ok      #3366aa => #3366aa
+ok      rgb(51 102 170 / 50%) => #3366aa80
+ok      hsl(210, 50%, 40%) => #336699
+ok      mix(red, blue, 30%) => #ba4d79
+refused rgb(300, 0, 0)
+        column 5: the red channel of rgb() must be 0 to 255, found 300
+refused hsl(210 50%)
+        column 12: hsl() takes 3 values (hue, saturation, lightness) and an optional alpha, found 2 values
+ok      darkgrey => #a9a9a9
+ok      dark grey => #a9a9a9
+ok      darkgray => #a9a9a9
+refused lightgreem
+        column 1: unknown colour name 'lightgreem'; did you mean 'lightgreen'?
+refused rgb(51, 102 170)
+        column 13: expected ',' between the values of rgb(...), found '170'
+refused #12345
+        column 1: '#12345' has 5 hex digits; a hex colour has 3, 4, 6 or 8
+7 of 12 accepted
+```
+
+## Types
+
+### `Color`
+
+```salam
+struct Color
+```
+
+A colour: sRGB channels from 0 to 1, an alpha, and an optional dark variant made by `light dark`. Channels may be below 0 or above 1 for colours outside sRGB.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `r` | `f64 = 0` | The red channel, 0 to 1 inside sRGB. |
+| `g` | `f64 = 0` | The green channel, 0 to 1 inside sRGB. |
+| `b` | `f64 = 0` | The blue channel, 0 to 1 inside sRGB. |
+| `a` | `f64 = 1` | The alpha, from 0 (transparent) to 1 (opaque), not premultiplied. |
+| `current` | `bool = false` | True for `current`, the text colour of the element; the channels are then unused. |
+| `has_dark` | `bool = false` | True when the colour has a dark variant, as made by `light dark(a, b)` or `LightDark`. |
+| `dark_r` | `f64 = 0` | The red channel of the dark variant. Read the dark variant with `Dark` instead of these fields. |
+| `dark_g` | `f64 = 0` | The green channel of the dark variant. |
+| `dark_b` | `f64 = 0` | The blue channel of the dark variant. |
+| `dark_a` | `f64 = 1` | The alpha of the dark variant. |
+| `dark_current` | `bool = false` | True when the dark variant is `current`. |
+
+color-Fields.salam
+
+```salam
+import color
+
+func main:
+    c := color.Rgba(51, 102, 170, 0.5)
+    println "r", c.r, "g", c.g, "b", c.b, "a", c.a, "current", c.current
+    wide := color.New(1.093, -0.227, -0.15, 1.0)
+    println "wide gamut red keeps channels outside 0 to 1:", wide.r, wide.g
+    println "argb", color.Argb(c), "back", color.Css(color.FromArgb(color.Argb(c)))
+    println "argb clamps", color.Argb(wide)
+end
+```
+
+Output:
+
+```text
+r 0.2 g 0.4 b 0.6666666666666666 a 0.5 current false
+wide gamut red keeps channels outside 0 to 1: 1.093 -0.227
+argb 2150852266 back #3366aa80
+argb clamps 4294901760
+```
+
+## Functions
+
+### `Parse`
+
+```salam
+func Parse(text: str, out &: Color): bool
+```
+
+Reads a colour in any syntax the package accepts into `out` and returns true. On an error it returns false and leaves `out` as it was; `Error` gives the message.
+
+color-Parse.salam
+
+```salam
+import color
+
+func main:
+    each text in ["#3366aa", "rgb(51, 102, 170)", "hsl(210, 50%, 40%)", "oklch(0.7 0.25 30)", "light dark(white, #222)", "قرمز", "rgb(51, 102)", "redd"]:
+        mut c := color.Color {}
+        if color.Parse(text, c):
+            println text, "=>", color.Css(c)
+        else:
+            println text, "=>", color.Error(text)
+        end
+    end
+end
+```
+
+Output:
+
+```text
+#3366aa => #3366aa
+rgb(51, 102, 170) => #3366aa
+hsl(210, 50%, 40%) => #336699
+oklch(0.7 0.25 30) => oklch(0.7 0.25 30)
+light dark(white, #222) => light-dark(#ffffff, #222222)
+قرمز => #ff0000
+rgb(51, 102) => column 12: rgb() takes 3 channels (red, green, blue) and an optional alpha, found 2 values
+redd => column 1: unknown colour name 'redd'; did you mean 'red'?
+```
+
+### `Error`
+
+```salam
+func Error(text: str): str
+```
+
+Returns an empty string when `Parse` accepts the text, and otherwise a message that starts with the column and says what was expected. The caller owns the string.
+
+The example for this item is shown with the ones above: color-Parse.salam
+
+### `New`
+
+```salam
+func New(r: f64, g: f64, b: f64, a: f64): Color
+```
+
+Makes a colour from sRGB channels and an alpha, all from 0 to 1. Channels outside 0 to 1 describe colours outside sRGB.
+
+color-Build.salam
+
+```salam
+import color
+
+func main:
+    println color.Css(color.Rgb(51, 102, 170))
+    println color.Css(color.Rgba(51, 102, 170, 0.5))
+    println color.Css(color.Hex(0x3366aa))
+    println color.Css(color.New(0.2, 0.4, 0.6, 1.0))
+    println color.Css(color.Hsl(210.0, 0.5, 0.4))
+    println color.Css(color.Hwb(194.0, 0.0, 0.0))
+    println color.Css(color.Lab(29.2345, 39.3825, 20.0664))
+    println color.Css(color.Lch(52.2345, 72.2, 56.2))
+    println color.Css(color.Oklab(0.40101, 0.1147, 0.0453))
+    println color.Css(color.Oklch(0.7, 0.25, 30.0))
+    println color.Css(color.Cmyk(0.0, 0.4, 0.6, 0.1))
+    println color.Css(color.WithAlpha(color.Hex(0x3366aa), 0.25))
+    println color.Css(color.Current())
+end
+```
+
+Output:
+
+```text
+#3366aa
+#3366aa80
+#3366aa
+#336699
+#336699
+#00c3ff
+#7d2329
+#c65d06
+#7d2329
+oklch(0.7 0.25 30)
+#e68a5c
+#3366aa40
+currentColor
+```
+
+### `Rgb`
+
+```salam
+func Rgb(r: int, g: int, b: int): Color
+```
+
+Makes an opaque colour from 8-bit channels, 0 to 255.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Rgba`
+
+```salam
+func Rgba(r: int, g: int, b: int, a: f64): Color
+```
+
+Makes a colour from 8-bit channels and an alpha from 0 to 1.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Hex`
+
+```salam
+func Hex(v: int): Color
+```
+
+Makes an opaque colour from a number written as `0xrrggbb`.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `FromArgb`
+
+```salam
+func FromArgb(v: u32): Color
+```
+
+Makes a colour from a packed `0xAARRGGBB` value, straight (not premultiplied) alpha.
+
+The example for this item is shown with the ones above: color-Fields.salam
+
+### `Argb`
+
+```salam
+func Argb(c: Color): u32
+```
+
+Packs a colour as `0xAARRGGBB` with straight alpha, clamping every channel to sRGB. Gives the light variant of a light dark colour and 0 for `current`.
+
+The example for this item is shown with the ones above: color-Fields.salam
+
+### `Hsl`
+
+```salam
+func Hsl(h: f64, s: f64, l: f64): Color
+```
+
+Makes a colour from a hue in degrees and a saturation and lightness from 0 to 1.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Hwb`
+
+```salam
+func Hwb(h: f64, w: f64, b: f64): Color
+```
+
+Makes a colour from a hue in degrees and a whiteness and blackness from 0 to 1.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Lab`
+
+```salam
+func Lab(l: f64, a: f64, b: f64): Color
+```
+
+Makes a colour from CIE Lab (D50): lightness 0 to 100 and the a and b axes.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Lch`
+
+```salam
+func Lch(l: f64, c: f64, h: f64): Color
+```
+
+Makes a colour from CIE LCh (D50): lightness 0 to 100, chroma and a hue in degrees.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Oklab`
+
+```salam
+func Oklab(l: f64, a: f64, b: f64): Color
+```
+
+Makes a colour from Oklab: lightness 0 to 1 and the a and b axes.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Oklch`
+
+```salam
+func Oklch(l: f64, c: f64, h: f64): Color
+```
+
+Makes a colour from Oklch: lightness 0 to 1, chroma and a hue in degrees.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Cmyk`
+
+```salam
+func Cmyk(c: f64, m: f64, y: f64, k: f64): Color
+```
+
+Makes a colour from cyan, magenta, yellow and black, each 0 to 1, with the plain formula and no printer profile.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `WithAlpha`
+
+```salam
+func WithAlpha(c: Color, a: f64): Color
+```
+
+Returns the colour with a new alpha, for both variants of a light dark colour.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `Current`
+
+```salam
+func Current(): Color
+```
+
+Returns `current`, the text colour of the element, which the renderer fills in.
+
+The example for this item is shown with the ones above: color-Build.salam
+
+### `LightDark`
+
+```salam
+func LightDark(light: Color, dark: Color): Color
+```
+
+Makes a colour with a light and a dark variant. A light dark argument gives its light variant to the first place and its dark variant to the second.
+
+color-LightDark.salam
+
+```salam
+import color
+
+func main:
+    c := color.LightDark(color.Hex(0x3366aa), color.Rgb(200, 220, 255))
+    println color.Css(c), color.HasDark(c), color.HasDark(color.Hex(0x3366aa))
+    println "light", color.Css(color.Light(c)), "dark", color.Css(color.Dark(c))
+    println "fields", c.has_dark, c.dark_r, c.dark_g, c.dark_b, c.dark_a, c.dark_current
+    mut t := color.Color {}
+    if color.Parse("light dark(current, white)", t):
+        println color.Css(t), t.current, t.dark_current
+    end
+    println "mix keeps both", color.Css(color.Mix(c, color.Hex(0xffffff), 0.5))
+end
+```
+
+Output:
+
+```text
+light-dark(#3366aa, #c8dcff) true false
+light #3366aa dark #c8dcff
+fields true 0.7843137254901961 0.8627450980392157 1 1 false
+light-dark(currentColor, #ffffff) true false
+mix keeps both light-dark(#97b2d6, #e3eeff)
+```
+
+### `Light`
+
+```salam
+func Light(c: Color): Color
+```
+
+Returns the light variant of a colour, or the colour itself when it has no dark variant.
+
+The example for this item is shown with the ones above: color-LightDark.salam
+
+### `Dark`
+
+```salam
+func Dark(c: Color): Color
+```
+
+Returns the dark variant of a colour, or the colour itself when it has no dark variant.
+
+The example for this item is shown with the ones above: color-LightDark.salam
+
+### `HasDark`
+
+```salam
+func HasDark(c: Color): bool
+```
+
+Reports whether the colour has a dark variant.
+
+The example for this item is shown with the ones above: color-LightDark.salam
+
+### `Css`
+
+```salam
+func Css(c: Color): str
+```
+
+Returns the CSS the web target writes for the colour: `#rrggbb` or `#rrggbbaa` inside sRGB, `color(display-p3 ...)` or `oklch(...)` outside it, `currentColor`, or `light-dark(a, b)`. The caller owns the string.
+
+color-Css.salam
+
+```salam
+import color
+
+func show(text: str):
+    mut c := color.Color {}
+    if color.Parse(text, c):
+        println text
+        println "  css   ", color.Css(c)
+        println "  source", color.Source(c)
+        println "  in sRGB", color.InGamut(c), "same as #f00", color.Equal(c, color.Hex(0xff0000))
+    end
+end
+
+func main:
+    show("red")
+    show("rgba(0, 0, 0, 0.25)")
+    show("color(display p3, 1, 0, 0)")
+    show("color(rec2020, 1, 0, 0)")
+    show("current")
+end
+```
+
+Output:
+
+```text
+red
+  css    #ff0000
+  source color.Rgb(255, 0, 0)
+  in sRGB true same as #f00 true
+rgba(0, 0, 0, 0.25)
+  css    #00000040
+  source color.Rgba(0, 0, 0, 0.25)
+  in sRGB true same as #f00 false
+color(display p3, 1, 0, 0)
+  css    color(display-p3 1 0 0)
+  source color.New(1.093066362, -0.226741974, -0.150134581, 1.0)
+  in sRGB false same as #f00 false
+color(rec2020, 1, 0, 0)
+  css    oklch(0.6871 0.3647 24.19)
+  source color.New(1.248219828, -0.387907503, -0.143514393, 1.0)
+  in sRGB false same as #f00 false
+current
+  css    currentColor
+  source color.Current()
+  in sRGB true same as #f00 false
+```
+
+### `Source`
+
+```salam
+func Source(c: Color): str
+```
+
+Returns a Salam expression, such as `color.Rgb(51, 102, 170)`, that builds the same colour without parsing. The caller owns the string.
+
+The example for this item is shown with the ones above: color-Css.salam
+
+### `Mix`
+
+```salam
+func Mix(a: Color, b: Color, amount: f64): Color
+```
+
+Mixes two colours in oklab with premultiplied alpha. `amount` is how much of `b`, clamped to 0 to 1. Light dark colours mix each variant.
+
+color-Mix.salam
+
+```salam
+import color
+
+func main:
+    red := color.Hex(0xff0000)
+    blue := color.Hex(0x0000ff)
+    println "Mix 30%", color.Css(color.Mix(red, blue, 0.3))
+    each space in ["oklab", "oklch", "srgb", "hsl"]:
+        println "MixIn", space, color.Css(color.MixIn(red, blue, 0.5, space))
+    end
+    clear := color.Rgba(255, 0, 0, 0.0)
+    repeat 5 in i:
+        t := i as f64 / 4.0
+        println "Lerp", t, color.Css(color.Lerp(clear, blue, t))
+    end
+end
+```
+
+Output:
+
+```text
+Mix 30% #ba4d79
+MixIn oklab #8c53a2
+MixIn oklch oklch(0.54 0.2854 326.64)
+MixIn srgb #800080
+MixIn hsl #ff00ff
+Lerp 0 #ff000000
+Lerp 0.25 #0000ff40
+Lerp 0.5 #0000ff80
+Lerp 0.75 #0000ffbf
+Lerp 1 #0000ff
+```
+
+### `MixIn`
+
+```salam
+func MixIn(a: Color, b: Color, amount: f64, space: str): Color
+```
+
+Like `Mix`, in the colour space named by `space` (`oklab`, `oklch`, `lab`, `lch`, `srgb`, `srgb linear`, `hsl`, `hwb`, `display p3`, `a98 rgb`, `prophoto rgb`, `rec2020`, `xyz`, `xyz d50`, `xyz d65`). Hues take the shorter arc. An unknown name mixes in oklab.
+
+The example for this item is shown with the ones above: color-Mix.salam
+
+### `Lerp`
+
+```salam
+func Lerp(a: Color, b: Color, t: f64): Color
+```
+
+Interpolates from `a` to `b` for transitions, in oklab with premultiplied alpha. `t` is not clamped, so an easing curve may overshoot. With `current` it switches at the middle.
+
+The example for this item is shown with the ones above: color-Mix.salam
+
+### `Luminance`
+
+```salam
+func Luminance(c: Color): f64
+```
+
+Returns the relative luminance from WCAG, 0 for black and 1 for white, of the colour clamped to sRGB.
+
+color-Contrast.salam
+
+```salam
+import color
+import math
+
+func r2(v: f64): f64:
+    ret math.Round(v * 100.0) / 100.0
+end
+
+func main:
+    white := color.Hex(0xffffff)
+    each hex in [0x777777, 0x3366aa, 0x1a1a1a]:
+        c := color.Hex(hex)
+        println color.Css(c), "luminance", r2(color.Luminance(c)), "contrast on white", r2(color.Contrast(c, white))
+    end
+    base := color.Hex(0x3366aa)
+    println "lighter", color.Css(color.Lighten(base, 0.1)), "darker", color.Css(color.Darken(base, 0.1))
+end
+```
+
+Output:
+
+```text
+#777777 luminance 0.18 contrast on white 4.48
+#3366aa luminance 0.13 contrast on white 5.8
+#1a1a1a luminance 0.01 contrast on white 17.4
+lighter #5084cb darker #15498a
+```
+
+### `Contrast`
+
+```salam
+func Contrast(a: Color, b: Color): f64
+```
+
+Returns the WCAG contrast ratio of two colours, from 1 to 21. Body text needs at least 4.5.
+
+The example for this item is shown with the ones above: color-Contrast.salam
+
+### `Lighten`
+
+```salam
+func Lighten(c: Color, amount: f64): Color
+```
+
+Raises the Oklch lightness by `amount` (0 to 1). A colour inside sRGB loses chroma where needed to stay inside it.
+
+The example for this item is shown with the ones above: color-Contrast.salam
+
+### `Darken`
+
+```salam
+func Darken(c: Color, amount: f64): Color
+```
+
+Lowers the Oklch lightness by `amount`, like `Lighten` the other way.
+
+The example for this item is shown with the ones above: color-Contrast.salam
+
+### `InGamut`
+
+```salam
+func InGamut(c: Color): bool
+```
+
+Reports whether the colour, and its dark variant if it has one, is inside sRGB, so that `Css` writes it as hex.
+
+The example for this item is shown with the ones above: color-Css.salam
+
+### `Equal`
+
+```salam
+func Equal(a: Color, b: Color): bool
+```
+
+Reports whether two colours are the same, comparing channels with a small tolerance, `current` and both variants.
+
+The example for this item is shown with the ones above: color-Css.salam
+
+
+---
+
 # gui.color
 
 https://salamlang.github.io/Salam/std/gui/color/

@@ -59,6 +59,9 @@ struct _Win:
     pub start_origin: str = ""
     pub inline_html: bool = false
     pub allow_navigation: Vector<str> = Vector {}
+    pub fullscreen_requested: bool = false
+    pub always_on_top_requested: bool = false
+    pub always_on_top_applied: bool = false
 end
 
 struct _Owned:
@@ -388,8 +391,9 @@ pub struct Window:
         // Best-effort placeholder: backend fullscreen API not uniformly exposed.
         sync.Lock(_pending_lock)
         if this.index >= 0 and this.index < _wins.Len():
-            mut w := _wins.Ref(this.index)
+            mut w := _wins[this.index]
             w.fullscreen_requested = enabled
+            _wins[this.index] = w
         end
         sync.Unlock(_pending_lock)
         if enabled:
@@ -417,9 +421,10 @@ pub struct Window:
         // Best-effort: backend always-on-top is not uniformly available.
         sync.Lock(_pending_lock)
         if this.index >= 0 and this.index < _wins.Len():
-            mut w := _wins.Ref(this.index)
+            mut w := _wins[this.index]
             w.always_on_top_requested = enabled
             w.always_on_top_applied = false
+            _wins[this.index] = w
         end
         sync.Unlock(_pending_lock)
         if enabled:
@@ -800,7 +805,7 @@ func _emit_to(index: int, event: str, raw_json: str):
     origins := _origins_json(index)
     str.BufAppend(b, origins)
     mem.Free(origins as void*)
-    str.BufAppend(b, ".Includes(location.origin)&&window.__salamBridge)window.__salamBridge.event(")
+    str.BufAppend(b, ".includes(location.origin)&&window.__salamBridge)window.__salamBridge.event(")
     name := _js_string(event)
     str.BufAppend(b, name)
     mem.Free(name as void*)
@@ -1017,6 +1022,9 @@ func _startup():
     if _cfg.name.Len() == 0:
         _cfg.name = _cfg.id
     end
+    if _cfg.scheme.Len() == 0:
+        _cfg.scheme = "app"
+    end
     _token = crypto.RandomHex(16)
     SetApp(_cfg.id, _cfg.name)
     dir := DataDir()
@@ -1132,6 +1140,10 @@ end
 pub func Init(config: Config):
     _cfg = config
     _inited = false
+    if _local_origin_text.Len() > 0:
+        mem.Free(_local_origin_text as void*)
+    end
+    _local_origin_text = ""
 end
 
 @en "CurrentConfig"
@@ -1170,12 +1182,18 @@ end
 @en "Command"
 @fa "فرمان"
 pub func Command(name: str, handler: func (Call)):
+    if name.Len() == 0:
+        ret
+    end
     _commands.Push(_Command { name = str.Clone(name), handler = handler })
 end
 
 @en "CommandAsync"
 @fa "فرمان ناهمگام"
 pub func CommandAsync(name: str, handler: func (Call)):
+    if name.Len() == 0:
+        ret
+    end
     _commands.Push(_Command { name = str.Clone(name), handler = handler, threaded = true })
 end
 
@@ -1263,9 +1281,10 @@ pub func Open(options: WindowOptions): Window:
         // Best-effort: record request; backend hook is not uniformly available.
         sync.Lock(_pending_lock)
         if index >= 0 and index < _wins.Len():
-            mut w := _wins.Ref(index)
+            mut w := _wins[index]
             w.always_on_top_requested = true
             w.always_on_top_applied = false
+            _wins[index] = w
         end
         sync.Unlock(_pending_lock)
         Trace("WindowOptions.always_on_top requested but not applied: backend support unavailable")
@@ -1273,8 +1292,9 @@ pub func Open(options: WindowOptions): Window:
     if options.fullscreen:
         sync.Lock(_pending_lock)
         if index >= 0 and index < _wins.Len():
-            mut w := _wins.Ref(index)
+            mut w := _wins[index]
             w.fullscreen_requested = true
+            _wins[index] = w
         end
         sync.Unlock(_pending_lock)
         view.Maximize()

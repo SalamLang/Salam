@@ -520,11 +520,18 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     pub func PreventSleep(): bool:
         // Best-effort: prefer systemd-inhibit if available.
         r := _run_sh("command -v systemd-inhibit >/dev/null 2>&1 && systemd-inhibit --what=idle:sleep --why='Salam power inhibit' sleep infinity >/dev/null 2>&1 & echo $!")
-        if r.code == 0 and r.out.Len() > 0:
-            _inhibit_cookie = r.out
+        if r.code == 0 and str.Trim(r.out).Len() > 0:
+            if _inhibit_cookie.Len() > 0:
+                mem.Free(_inhibit_cookie as void*)
+            end
+            _inhibit_cookie = str.Trim(r.out)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
             _sleep_inhibited = true
             ret _ok()
         end
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         _set_error("No supported sleep inhibitor available (systemd-inhibit/loginctl)")
         ret false
     end
@@ -534,10 +541,23 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     pub func AllowSleep(): bool:
         pid := conv.AtoiOr(_inhibit_cookie, 0)
         if pid > 0:
-            _ignored := _run_sh("kill " + str.FromInt(pid as i64) + " >/dev/null 2>&1")
+            mut args_kill := "kill " + str.FromInt(pid as i64) + " >/dev/null 2>&1"
+            _ignored := _run_sh(args_kill)
+            mem.Free(args_kill as void*)
+            mem.Free(_ignored.out as void*)
+            mem.Free(_ignored.err as void*)
+            if _inhibit_cookie.Len() > 0:
+                mem.Free(_inhibit_cookie as void*)
+            end
             _inhibit_cookie = ""
         else:
             _ignored := _run_sh("pkill -f 'systemd-inhibit .*sleep infinity' >/dev/null 2>&1")
+            mem.Free(_ignored.out as void*)
+            mem.Free(_ignored.err as void*)
+            if _inhibit_cookie.Len() > 0:
+                mem.Free(_inhibit_cookie as void*)
+            end
+            _inhibit_cookie = ""
         end
         _sleep_inhibited = false
         ret _ok()
@@ -678,7 +698,9 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
                     until j >= 0:
                         ch := out.out.Substr(j, 1)
                         if ch >= "0" and ch <= "9":
-                            digits = ch.Concat(digits)
+                            tmpd := ch.Concat(digits)
+                            if digits.Len() > 0: mem.Free(digits as void*) end
+                            digits = tmpd
                             j = j - 1
                         else:
                             if digits.Len() > 0:
@@ -687,12 +709,16 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
                                 j = j - 1
                             end
                         end
+                        mem.Free(ch as void*)
                     end
                     if digits.Len() > 0:
                         st.percent = conv.AtoiOr(digits, st.percent)
+                        mem.Free(digits as void*)
                     end
                 end
             end
+            mem.Free(out.out as void*)
+            mem.Free(out.err as void*)
         end
         _ok()
         ret st

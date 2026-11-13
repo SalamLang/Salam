@@ -14,6 +14,9 @@
 
 package webview
 
+import os
+import mem
+
 if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
     link dynamic "gtk-3"
     link dynamic "gdk-3"
@@ -219,12 +222,34 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
         if _lx_ready:
             ret true
         end
+        // Best-effort session awareness for diagnostics (Linux commonly runs under X11 or Wayland).
+        session_type := os.Env("XDG_SESSION_TYPE")
+        wayland := os.Env("WAYLAND_DISPLAY")
+        x11 := os.Env("DISPLAY")
         if _wv_app_id.Len() > 0:
             g_set_prgname(_wv_app_id)
         end
         if gtk_init_check(null, null) == 0:
+            mut hint := "GTK could not start (no usable graphical session)"
+            if session_type.Len() > 0:
+                hint = hint.Concat("; XDG_SESSION_TYPE=").Concat(session_type)
+            end
+            if wayland.Len() > 0:
+                hint = hint.Concat("; WAYLAND_DISPLAY=").Concat(wayland)
+            else x11.Len() == 0:
+                hint = hint.Concat("; DISPLAY/WAYLAND_DISPLAY are unset")
+            else:
+                hint = hint.Concat("; DISPLAY=").Concat(x11)
+            end
+            _wv_last_error = hint
+            mem.Free(session_type as void*)
+            mem.Free(wayland as void*)
+            mem.Free(x11 as void*)
             ret false
         end
+        mem.Free(session_type as void*)
+        mem.Free(wayland as void*)
+        mem.Free(x11 as void*)
         if _wv_app_name.Len() > 0:
             g_set_application_name(_wv_app_name)
         end
@@ -232,6 +257,7 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
             cache := _wv_data_dir.Concat("/cache")
             data := webkit_website_data_manager_new("base-data-directory", _wv_data_dir, "base-cache-directory", cache, null)
             _lx_context = webkit_web_context_new_with_website_data_manager(data)
+            mem.Free(cache as void*)
         else:
             _lx_context = webkit_web_context_get_default()
         end
@@ -252,20 +278,27 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
     end
 
     func _wv_bk_create(id: int, debug: bool, visible: bool): bool:
+        // Linux backend contract (WebKitGTK): requires a graphical session (X11 or Wayland)
+        // and compatible GTK/WebKitGTK runtime libraries. _wv_bk_iter() blocks in GTK.
+        // TODO(runtime): report structured capabilities (session backend/sandbox/version).
         until _lx_views.Len() <= id:
             _lx_views.Push(_LxView {})
         end
         if not _lx_startup():
-            _wv_last_error = "GTK could not start; is there a display?"
+            if _wv_last_error.Len() == 0:
+                _wv_last_error = "GTK/WebKitGTK could not start. Ensure a graphical session is active and WebKitGTK 4.1 is installed."
+            end
             ret false
         end
         window := gtk_window_new(0)
         if window == null:
+            _wv_last_error = "GTK could not create the top-level window (session/compositor unavailable?)"
             ret false
         end
         view := webkit_web_view_new_with_context(_lx_context)
         if view == null:
             gtk_widget_destroy(window)
+            _wv_last_error = "WebKitGTK could not create the web view (runtime package or sandbox issue)"
             ret false
         end
         manager := webkit_web_view_get_user_content_manager(view)
@@ -297,6 +330,8 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
     end
 
     func _wv_bk_iter():
+        // Blocks waiting for GTK events; keep behavior consistent with existing event-loop contract.
+        // TODO(runtime): consider a non-blocking/polling mode for tighter external scheduler integration.
         gtk_main_iteration_do(1)
     end
 

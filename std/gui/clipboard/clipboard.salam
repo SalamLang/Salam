@@ -568,7 +568,11 @@ end
 
 if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     func _has_cmd(name: str): bool:
-        r := shell.Exec("command -v " + name + " >/dev/null 2>&1")
+        cmd := "command -v " + name + " >/dev/null 2>&1"
+        r := shell.Exec(cmd)
+        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     end
 
@@ -588,30 +592,36 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
         ret _run_sh(script + " < " + path)
     end
 
+    func _env_nonempty(name: str): bool:
+        v := os.Env(name)
+        ok := v.Len() > 0
+        mem.Free(v as void*)
+        ret ok
+    end
+
     @en "GetText"
     @fa "گرفتن متن"
     pub func GetText(): str:
         mut r := shell.CmdResult { code = 127 }
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-paste"):
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
+        if have_wayland and _has_cmd("wl-paste"):
             r = _run_sh("wl-paste --no-newline 2>/dev/null")
             if r.code == 0:
                 _cb_ok()
                 ret r.out
             end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+        if have_x11 and _has_cmd("xclip"):
             r = _run_sh("xclip -selection clipboard -o 2>/dev/null")
             if r.code == 0:
                 _cb_ok()
                 ret r.out
             end
-        end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
-            r = _run_sh("xsel --clipboard --output 2>/dev/null")
-            if r.code == 0:
-                _cb_ok()
-                ret r.out
-            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
         _cb_set_error("No clipboard backend available (need wl-paste, xclip, or xsel)")
         ret str.Clone("")
@@ -620,24 +630,37 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @en "SetText"
     @fa "تنظیم متن"
     pub func SetText(text: str): bool:
-        mut r := shell.CmdResult { code = 127 }
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-copy"):
-            r = _run_with_stdin("wl-copy 2>/dev/null", text)
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
+        if have_wayland and _has_cmd("wl-copy"):
+            r := _run_with_stdin("wl-copy 2>/dev/null", text)
             if r.code == 0:
+                mem.Free(r.out as void*)
+                mem.Free(r.err as void*)
                 ret _cb_ok()
             end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
-            r = _run_with_stdin("xclip -selection clipboard 2>/dev/null", text)
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_with_stdin("xclip -selection clipboard 2>/dev/null", text)
             if r.code == 0:
+                mem.Free(r.out as void*)
+                mem.Free(r.err as void*)
                 ret _cb_ok()
             end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
-            r = _run_with_stdin("xsel --clipboard --input 2>/dev/null", text)
+        if have_x11 and _has_cmd("xsel"):
+            r := _run_with_stdin("xsel --clipboard --input 2>/dev/null", text)
             if r.code == 0:
+                mem.Free(r.out as void*)
+                mem.Free(r.err as void*)
                 ret _cb_ok()
             end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
         _cb_set_error("No clipboard backend available (need wl-copy, xclip, or xsel)")
         ret false
@@ -648,30 +671,39 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     pub func HasText(): bool:
         t := GetText()
         has := t.Len() > 0
-        if t.Len() > 0:
-            mem.Free(t as void*)
-        end
+        mem.Free(t as void*)
         ret has
     end
 
     @en "Clear"
     @fa "پاک کردن"
     pub func Clear(): bool:
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-copy"):
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
+        if have_wayland and _has_cmd("wl-copy"):
             r := _run_sh("wl-copy --clear 2>/dev/null || printf '' | wl-copy 2>/dev/null")
-            if r.code == 0:
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
                 ret _cb_ok()
             end
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+        if have_x11 and _has_cmd("xclip"):
             r := _run_sh("printf '' | xclip -selection clipboard 2>/dev/null")
-            if r.code == 0:
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
                 ret _cb_ok()
             end
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
+        if have_x11 and _has_cmd("xsel"):
             r := _run_sh("xsel --clipboard --clear 2>/dev/null")
-            if r.code == 0:
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
                 ret _cb_ok()
             end
         end
@@ -682,20 +714,25 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @en "GetHTML"
     @fa "گرفتن اچ‌تی‌ام‌ال"
     pub func GetHTML(): str:
-        mut r := shell.CmdResult { code = 127 }
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-paste"):
-            r = _run_sh("wl-paste --type text/html 2>/dev/null")
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
+        if have_wayland and _has_cmd("wl-paste"):
+            r := _run_sh("wl-paste --type text/html 2>/dev/null")
             if r.code == 0:
                 _cb_ok()
                 ret r.out
             end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
-            r = _run_sh("xclip -selection clipboard -t text/html -o 2>/dev/null")
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_sh("xclip -selection clipboard -t text/html -o 2>/dev/null")
             if r.code == 0:
                 _cb_ok()
                 ret r.out
             end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
         _cb_set_error("No clipboard backend available for HTML (need wl-paste or xclip)")
         ret str.Clone("")
@@ -704,16 +741,23 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @en "SetHTML"
     @fa "تنظیم اچ‌تی‌ام‌ال"
     pub func SetHTML(html: str, _alt_text: str = ""): bool:
-        mut r := shell.CmdResult { code = 127 }
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-copy"):
-            r = _run_with_stdin("wl-copy --type text/html 2>/dev/null", html)
-            if r.code == 0:
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
+        if have_wayland and _has_cmd("wl-copy"):
+            r := _run_with_stdin("wl-copy --type text/html 2>/dev/null", html)
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
                 ret _cb_ok()
             end
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
-            r = _run_with_stdin("xclip -selection clipboard -t text/html 2>/dev/null", html)
-            if r.code == 0:
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_with_stdin("xclip -selection clipboard -t text/html 2>/dev/null", html)
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
                 ret _cb_ok()
             end
         end
@@ -733,11 +777,15 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @en "GetImageBytes"
     @fa "گرفتن بایت‌های تصویر"
     pub func GetImageBytes(): str:
-        // Best-effort: try to fetch PNG from Wayland clipboard into memory-like temp file and read.
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-paste"):
+        // Best-effort: try to fetch PNG from Wayland clipboard into a temp file and read.
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        if have_wayland and _has_cmd("wl-paste"):
             path := "/tmp/salam_clipboard_img.png"
             r := _run_sh("wl-paste --type image/png > " + path + " 2>/dev/null")
-            if r.code == 0 and os.Exists(path):
+            ok := r.code == 0 and os.Exists(path)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
                 data := io.ReadFile(path)
                 _ = os.Remove(path)
                 _cb_ok()
@@ -758,13 +806,19 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
             _cb_set_error("Failed to stage image bytes for clipboard")
             ret false
         end
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
         mut ok := false
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and _has_cmd("wl-copy"):
+        if have_wayland and _has_cmd("wl-copy"):
             r := _run_sh("wl-copy --type " + mime + " < " + path + " 2>/dev/null")
             ok = r.code == 0
-        else os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        else have_x11 and _has_cmd("xclip"):
             r := _run_sh("xclip -selection clipboard -t " + mime + " -i " + path + " 2>/dev/null")
             ok = r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
         end
         _ = os.Remove(path)
         if not ok:
@@ -778,11 +832,13 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @fa "گرفتن مسیر تصویر"
     pub func GetImagePath(): str:
         t := GetText()
-        if t.Len() > 0 and os.Exists(str.Trim(t)):
-            _cb_ok()
-            ret str.Trim(t)
-        end
+        p := str.Trim(t)
         mem.Free(t as void*)
+        if p.Len() > 0 and os.Exists(p):
+            _cb_ok()
+            ret p
+        end
+        mem.Free(p as void*)
         _cb_set_error("No image path detected in clipboard text")
         ret str.Clone("")
     end
@@ -816,13 +872,15 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @en "Backend"
     @fa "پشتوانه"
     pub func Backend(): str:
-        if os.Env("WAYLAND_DISPLAY").Len() > 0 and (_has_cmd("wl-copy") or _has_cmd("wl-paste")):
+        have_wayland := _env_nonempty("WAYLAND_DISPLAY")
+        have_x11 := _env_nonempty("DISPLAY")
+        if have_wayland and (_has_cmd("wl-copy") or _has_cmd("wl-paste")):
             ret str.Clone("wayland-wl-clipboard")
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xclip"):
+        if have_x11 and _has_cmd("xclip"):
             ret str.Clone("x11-xclip")
         end
-        if os.Env("DISPLAY").Len() > 0 and _has_cmd("xsel"):
+        if have_x11 and _has_cmd("xsel"):
             ret str.Clone("x11-xsel")
         end
         if _has_cmd("termux-clipboard-get") or _has_cmd("termux-clipboard-set"):

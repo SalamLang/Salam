@@ -805,10 +805,14 @@ func ln_key_open(g &: LnGen, a &: at.Ast, site: int, key_expr: int):
         g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = at.Clone(a, key_expr) })
         ks = "(\"\" + " + ln_dyn_name(idx) + ")"
     end
-    // TODO(runtime/lifecycle): align keyed mount/update/unmount/cleanup hooks with webstate reconciliation semantics.
-    // Key identity parity: prefer stable explicit keys; each-index fallback is handled at expansion/lowering sites.
-    // Lifecycle dependency tracking hint: keyed scope identity is derived from ks; runtime owns hook scheduling/cleanup ordering.
-    // Cross-target parity: native keyed scopes and webstate row reconciliation should share mount/update/unmount/cleanup timing guarantees.
+    // Keyed scope lifecycle contract (source-level):
+    // - `ks` is the emitted row/component identity for this keyed scope (literal or runtime-derived expression).
+    // - Compiler emits scope boundaries only; runtime owns mount/update/unmount/cleanup hook scheduling, handler (re)binding,
+    //   and reconciliation/move/reuse behavior for keyed children.
+    // - When an `each` body has no stable explicit key and no key variable fallback is available, native lowering may emit a non-keyed scope path
+    //   (see ln_each/ln_comp), which reduces identity/lifecycle parity with webstate keyed reconciliation.
+    // TODO(runtime/toolchain): align native keyed mount/update/unmount/cleanup hooks, row identity stability/uniqueness checks, and handler lifecycle
+    //   semantics with webstate (including dynamic/state-derived keys) and validate cross-target parity.
     ln_line(g, "__salam_b." + g.nm.keyed + "(" + co.U64Toa(site as u64) + g.nm.sep + ks + g.nm.sep + "(__salam_b: " + g.nm.ui + "." + g.nm.builder + "):")
     g.depth++
 end
@@ -971,6 +975,8 @@ func ln_each(g &: LnGen, a &: at.Ast, nid: int):
     if rk == 0 and n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
         rk = n.c
     end
+    // Keyed-each parity note: if rk is 0, nested component scopes may not become keyed (ln_comp falls back to non-keyed Scope),
+    // so mount/update/unmount/cleanup identity across reorders/insertions can diverge from webstate until runtime/toolchain support lands.
     g.row_keys.Push(rk)
     ln_items(g, a, n.b)
     _rk := g.row_keys.Pop()

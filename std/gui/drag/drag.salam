@@ -21,6 +21,7 @@ import str
 import os
 import io
 import os.shell
+import filepath
 
 // Drag-source initiation abstractions (best-effort).
 //
@@ -105,6 +106,23 @@ func _quote_sh(s: str): str:
     str.BufAppendChar(sb, 39)
     out := str.BufStr(sb)
     str.BufFree(sb)
+    ret out
+end
+
+func _temp_dir(): str:
+    t := os.TempDir()
+    if t.Len() == 0:
+        ret str.Clone("/tmp")
+    end
+    ret t
+end
+
+func _stage_path(prefix: str, suffix: str): str:
+    dir := _temp_dir()
+    defer mem.Free(dir as void*)
+    base := prefix + str.FromInt(os.Pid() as i64) + "-" + str.FromInt(_last_payload_count as i64) + suffix
+    out := filepath.Join(dir, base)
+    mem.Free(base as void*)
     ret out
 end
 
@@ -289,27 +307,31 @@ pub func StartDrag(_native: void*, payload: DragPayload, _options: DragOptions =
             added++
         end
         // Best-effort fallback for text/URI payloads: stage content as a temporary file.
+        // Uses per-process temp paths to avoid collisions; cleanup is best-effort and not
+        // guaranteed because the helper runs detached in the background.
         if added == 0 and (payload.kind & SOURCE_URI) != 0 and payload.uri.Len() > 0:
-            path := "/tmp/salam-drag-uri.txt"
+            path := _stage_path("salam-drag-uri-", ".txt")
             _w := io.WriteFile(path, payload.uri)
             staged.Push(str.Clone(path))
             q := _quote_sh(path)
             str.BufAppend(sb, " ")
             str.BufAppend(sb, q)
             mem.Free(q as void*)
+            mem.Free(path as void*)
             added++
-            _set_error("Text/URI drag-source uses file-staging fallback on Linux")
+            _set_error("Text/URI drag-source uses file-staging fallback on Linux (temp file cleanup is best-effort)")
         end
         if added == 0 and (payload.kind & SOURCE_TEXT) != 0 and payload.text.Len() > 0:
-            path := "/tmp/salam-drag-text.txt"
+            path := _stage_path("salam-drag-text-", ".txt")
             _w := io.WriteFile(path, payload.text)
             staged.Push(str.Clone(path))
             q := _quote_sh(path)
             str.BufAppend(sb, " ")
             str.BufAppend(sb, q)
             mem.Free(q as void*)
+            mem.Free(path as void*)
             added++
-            _set_error("Text drag-source uses file-staging fallback on Linux")
+            _set_error("Text drag-source uses file-staging fallback on Linux (temp file cleanup is best-effort)")
         end
         if added == 0:
             staged.Free()

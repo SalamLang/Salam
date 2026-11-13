@@ -21,6 +21,7 @@ import str
 import io
 import os
 import os.shell
+import filepath
 
 /*
  * Cross-platform clipboard access for native desktop apps (best-effort).
@@ -585,11 +586,19 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     end
 
     func _run_with_stdin(script: str, text: str): shell.CmdResult:
-        // Best-effort: stage input in a temp file and redirect stdin.
-        path := "/tmp/salam_clipboard_in.txt"
+        // Best-effort: stage input in a per-process temp file and redirect stdin.
+        tdir := os.TempDir()
+        base := "salam_clipboard_in_" + str.FromInt(os.Pid() as i64) + ".txt"
+        path := filepath.Join(tdir.Len() > 0 ? tdir : "/tmp", base)
+        mem.Free(tdir as void*)
+        mem.Free(base as void*)
         _w := io.WriteFile(path, text)
         defer _r := os.Remove(path)
-        ret _run_sh(script + " < " + path)
+        cmd := script + " < " + path
+        res := _run_sh(cmd)
+        mem.Free(cmd as void*)
+        mem.Free(path as void*)
+        ret res
     end
 
     func _env_nonempty(name: str): bool:
@@ -845,34 +854,44 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
         // Best-effort: try to fetch PNG from Wayland or X11 clipboard into a temp file and read.
         have_wayland := _linux_has_wayland()
         have_x11 := _linux_has_x11()
+        tdir := os.TempDir()
+        base := "salam_clipboard_img_" + str.FromInt(os.Pid() as i64) + ".png"
+        path := filepath.Join(tdir.Len() > 0 ? tdir : "/tmp", base)
+        mem.Free(tdir as void*)
+        mem.Free(base as void*)
         if have_wayland and _has_cmd("wl-paste"):
-            path := "/tmp/salam_clipboard_img.png"
-            r := _run_sh("wl-paste --type image/png > " + path + " 2>/dev/null")
+            cmd := "wl-paste --type image/png > " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
             ok := r.code == 0 and os.Exists(path)
             mem.Free(r.out as void*)
             mem.Free(r.err as void*)
             if ok:
                 data := io.ReadFile(path)
                 _ = os.Remove(path)
+                mem.Free(path as void*)
                 _cb_ok()
                 ret data
             end
             _ = os.Remove(path)
         end
         if have_x11 and _has_cmd("xclip"):
-            path := "/tmp/salam_clipboard_img.png"
-            r := _run_sh("xclip -selection clipboard -t image/png -o > " + path + " 2>/dev/null")
+            cmd := "xclip -selection clipboard -t image/png -o > " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
             ok := r.code == 0 and os.Exists(path)
             mem.Free(r.out as void*)
             mem.Free(r.err as void*)
             if ok:
                 data := io.ReadFile(path)
                 _ = os.Remove(path)
+                mem.Free(path as void*)
                 _cb_ok()
                 ret data
             end
             _ = os.Remove(path)
         end
+        mem.Free(path as void*)
         _cb_set_error("GetImageBytes is not available (requires wl-paste image/png or xclip image/png)")
         ret str.Clone("")
     end
@@ -880,9 +899,14 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
     @en "SetImageBytes"
     @fa "تنظیم بایت‌های تصویر"
     pub func SetImageBytes(data: str, mime: str = "image/png"): bool:
-        path := "/tmp/salam_clipboard_img.bin"
+        tdir := os.TempDir()
+        base := "salam_clipboard_img_" + str.FromInt(os.Pid() as i64) + ".bin"
+        path := filepath.Join(tdir.Len() > 0 ? tdir : "/tmp", base)
+        mem.Free(tdir as void*)
+        mem.Free(base as void*)
         written := io.WriteFile(path, data)
         if written < 0:
+            mem.Free(path as void*)
             _cb_set_error("Failed to stage image bytes for clipboard")
             ret false
         end
@@ -890,17 +914,22 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
         have_x11 := _linux_has_x11()
         mut ok := false
         if have_wayland and _has_cmd("wl-copy"):
-            r := _run_sh("wl-copy --type " + mime + " < " + path + " 2>/dev/null")
+            cmd := "wl-copy --type " + mime + " < " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
             ok = r.code == 0
             mem.Free(r.out as void*)
             mem.Free(r.err as void*)
         else have_x11 and _has_cmd("xclip"):
-            r := _run_sh("xclip -selection clipboard -t " + mime + " -i " + path + " 2>/dev/null")
+            cmd := "xclip -selection clipboard -t " + mime + " -i " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
             ok = r.code == 0
             mem.Free(r.out as void*)
             mem.Free(r.err as void*)
         end
         _ = os.Remove(path)
+        mem.Free(path as void*)
         if not ok:
             _cb_set_error("No clipboard backend available for image bytes (need wl-copy or xclip)")
             ret false

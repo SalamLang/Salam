@@ -168,7 +168,7 @@ portable: the native cascade supports element, class and id selectors.
 | `link url = ...`        | another page of the app opens in the window; an `http(s)` address opens in the user's browser |
 | `font`                  | font loaded from the app's bundled assets                                                     |
 | `media condition = ...` | window size, orientation and OS dark mode                                                     |
-| `image url = ...`       | file decoded with the codecs in `std/ai/image`                                                |
+| `image url = ...`       | file decoded with the codecs in `std/image`                                                |
 
 ## Architecture
 
@@ -374,7 +374,7 @@ differently:
   size-bounded cache keyed by font, size, glyph and a quarter-pixel x
   position. Persian needs real OpenType shaping (GSUB for joining forms and
   ligatures, GPOS for kerning and marks); the presentation forms used by
-  `std/ai/image` today stay only as a fallback.
+  `std/image` today stay only as a fallback.
 - **Styles.** Slint ships widget libraries per style. A page already styles
   itself with CSS properties, so we ship one default style sheet and expose
   theme tokens as reactive state that follows the OS colour scheme.
@@ -749,7 +749,7 @@ Each phase is one pull request.
 1. **Paint and text.** `std/gui/paint` (canvas, paths, anti-aliased fill and
    stroke, rounded rects, borders, gradients, shadows, clipping, images) and
    `std/gui/text` (the TrueType, shaping and bidi code moved out of
-   `std/ai/image`, plus font fallback, line breaking and caret hit testing).
+   `std/image`, plus font fallback, line breaking and caret hit testing).
    Tests compare PNG output against checked-in images.
 2. **Windows.** `std/gui/window`: X11, Win32 and Cocoa windows that show a
    pixel buffer, an event loop with pointer, keyboard, text input, resize,

@@ -87,7 +87,7 @@ looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
   `graphql`, `net.proxy`, `db.sqlite`, `db.mysql`, `db.postgres`, `db.redis`
   and the other `db.*` drivers.
 - **AI**: `ai.ml`, `ai.tensor`, `ai.nn`, `ai.autograd`, `ai.optim`, `ai.llm`,
-  `ai.onnx`, `ai.gguf`, `ai.opencv`, `ai.image`.
+  `ai.onnx`, `ai.gguf`, `opencv`, `image`.
 - **Data**: `matrix`, `excel`, `stats`.
 - **Tooling**: `salam doc` (API HTML), `salam format`, `salam sql check` and
   `sql generate` against a schema, `salam memcheck` (ASan), `salam debug`

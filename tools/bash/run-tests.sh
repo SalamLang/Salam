@@ -1244,8 +1244,8 @@ if want opencv; then
     done
     ocvmockc=""
     for lang in $LANGS; do
-        [ -f "std/ai/opencv/native/mock/opencv_mock.c" ] && {
-            ocvmockc="std/ai/opencv/native/mock/opencv_mock.c"
+        [ -f "std/opencv/native/mock/opencv_mock.c" ] && {
+            ocvmockc="std/opencv/native/mock/opencv_mock.c"
             break
         }
     done

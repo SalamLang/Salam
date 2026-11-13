@@ -1,0 +1,785 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "ftpd"
+@fa "سرور اف‌تی‌پی"
+package ftpd
+
+import str
+import conv
+import mem
+import os
+import io
+import fs.dir
+import filepath
+import net.tcp
+import net.internal.rawsock
+import tls
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(stream: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "host"
+    @fa "میزبان"
+    pub host: str = "0.0.0.0"
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 21
+    @en "root"
+    @fa "ریشه"
+    pub root: str = "."
+    @en "allow_anonymous"
+    @fa "اجازه ناشناس"
+    pub allow_anonymous: bool = false
+    @en "anonymous_user"
+    @fa "کاربر ناشناس"
+    pub anonymous_user: str = "anonymous"
+    @en "user"
+    @fa "کاربر"
+    pub user: str = ""
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "passive_start"
+    @fa "شروع غیرفعال"
+    pub passive_start: int = 40000
+    @en "passive_end"
+    @fa "پایان غیرفعال"
+    pub passive_end: int = 40100
+    @en "tls_enabled"
+    @fa "تی‌ال‌اس فعال"
+    pub tls_enabled: bool = false
+    @en "cert_file"
+    @fa "پرونده گواهی"
+    pub cert_file: str = ""
+    @en "key_file"
+    @fa "پرونده کلید"
+    pub key_file: str = ""
+    @en "implicit_tls"
+    @fa "تی‌ال‌اس ضمنی"
+    pub implicit_tls: bool = false
+    @en "require_tls"
+    @fa "اجبار تی‌ال‌اس"
+    pub require_tls: bool = false
+end
+
+@en "Server"
+@fa "سرور"
+pub struct Server:
+    @en "config"
+    @fa "پیکربندی"
+    pub config: Config = Config {}
+    @en "listener"
+    @fa "شنونده"
+    pub listener: tcp.Server = tcp.Server {}
+    @en "running"
+    @fa "در حال اجرا"
+    pub running: bool = false
+    @en "tls_cfg"
+    @fa "پیکربندی تی‌ال‌اس"
+    pub tls_cfg: tls.ServerConfig = tls.ServerConfig {}
+end
+
+struct DataCtx:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub tls_idx: int = 0 - 1
+    pub secure: bool = false
+    pub ok: bool = false
+end
+
+struct Session:
+    pub srv: Server* = null
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+    pub data_prot: bool = false
+    pub logged_in: bool = false
+    pub user_name: str = ""
+    pub asked_user: bool = false
+    pub cwd: str = "/"
+    pub root_abs: str = ""
+    pub rename_from: str = ""
+    pub pasv_srv: tcp.Server = tcp.Server {}
+    pub pasv_port: int = 0
+    pub pasv_on: bool = false
+    pub rxbuf: str = ""
+    pub type_mode: str = "I"
+    pub quit: bool = false
+end
+
+mut _tls_slots := Vector {} as Vector<tls.Conn>
+
+func _slot_add(tc: tls.Conn): int:
+    _tls_slots.push(tc)
+    ret _tls_slots.len() - 1
+end
+
+func _slot_get(idx: int): tls.Conn:
+    ret _tls_slots.get(idx)
+end
+
+func _slot_set(idx: int, tc: tls.Conn):
+    _tls_slots.set(idx, tc)
+end
+
+func _slot_close(idx: int):
+    if idx < 0 or idx >= _tls_slots.len(): ret end
+    mut tc := _tls_slots.get(idx)
+    tls.Close(tc)
+    _tls_slots.set(idx, tc)
+end
+
+func _send_raw(s &: Session, line: str):
+    msg := line + "\r\n"
+    if s.secure and s.tls_idx >= 0:
+        mut tc := _slot_get(s.tls_idx)
+        tls.Write(tc, msg)
+        _slot_set(s.tls_idx, tc)
+    else:
+        tcp.Write(s.conn, msg)
+    end
+end
+
+func _reply(s &: Session, code: int, text: str):
+    _send_raw(s, str.FromInt(code as i64) + " " + text)
+end
+
+func _fill(s &: Session): bool:
+    mut chunk := ""
+    if s.secure and s.tls_idx >= 0:
+        mut tc := _slot_get(s.tls_idx)
+        chunk = tls.Read(tc, 4096)
+        _slot_set(s.tls_idx, tc)
+    else:
+        chunk = tcp.Read(s.conn, 4096)
+    end
+    if chunk.len() == 0: ret false end
+    s.rxbuf += chunk
+    ret true
+end
+
+func _read_line(s &: Session): str:
+    mut idx := s.rxbuf.find("\r\n")
+    mut spin := 0
+    until idx >= 0 or spin >= 300:
+        if not _fill(s):
+            spin = 300
+        else:
+            idx = s.rxbuf.find("\r\n")
+            spin++
+        end
+    end
+    if idx < 0:
+        mut idx2 := s.rxbuf.find("\n")
+        if idx2 < 0:
+            line := s.rxbuf
+            s.rxbuf = ""
+            ret line
+        end
+        line := s.rxbuf.substr(0, idx2)
+        s.rxbuf = s.rxbuf.substr(idx2 + 1, s.rxbuf.len() - idx2 - 1)
+        ret line
+    end
+    line := s.rxbuf.substr(0, idx)
+    s.rxbuf = s.rxbuf.substr(idx + 2, s.rxbuf.len() - idx - 2)
+    ret line
+end
+
+func _abs_path(p: str): str:
+    if p.len() == 0: ret os.Cwd() end
+    if filepath.IsAbs(p): ret filepath.Clean(p) end
+    ret filepath.Join(os.Cwd(), p)
+end
+
+func _clean_virtual(p: str): str:
+    mut parts := str.Split(p, "/")
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i >= parts.len():
+        part := parts.get(i)
+        if part == "" or part == ".":
+        else part == "..":
+            if out.len() > 0: out.pop() end
+        else:
+            out.push(part)
+        end
+        i++
+    end
+    mut res := "/"
+    i = 0
+    until i >= out.len():
+        if res != "/": res += "/" end
+        res += out.get(i)
+        i++
+    end
+    ret res
+end
+
+func _resolve_path(s: Session, arg: str): str:
+    mut v := arg
+    if v.len() == 0: v = s.cwd end
+    if v.len() == 0 or v.substr(0, 1) != "/":
+        if s.cwd == "/": v = "/" + v
+        else: v = s.cwd + "/" + v end
+    end
+    ret _clean_virtual(v)
+end
+
+func _fs_path(s: Session, virt: str): str:
+    if virt == "/": ret s.root_abs end
+    mut rel := virt
+    if rel.len() > 0 and rel.substr(0, 1) == "/": rel = rel.substr(1, rel.len() - 1) end
+    ret filepath.Join(s.root_abs, rel)
+end
+
+func _can_login(cfg: Config, user: str, pass: str): bool:
+    if cfg.allow_anonymous and str.ToLower(user) == str.ToLower(cfg.anonymous_user): ret true end
+    if cfg.user.len() == 0: ret false end
+    ret user == cfg.user and pass == cfg.password
+end
+
+func _tls_ready(srv: Server): bool:
+    ret srv.config.tls_enabled and srv.tls_cfg.ok
+end
+
+@en "NewConfig"
+@fa "پیکربندی نو"
+pub func NewConfig(): Config:
+    ret Config {}
+end
+
+@en "New"
+@fa "جدید"
+pub func New(cfg: Config): Server:
+    mut s := Server {}
+    s.config = cfg
+    if cfg.tls_enabled and cfg.cert_file.len() > 0 and cfg.key_file.len() > 0:
+        s.tls_cfg = tls.NewServerConfig(cfg.cert_file, cfg.key_file)
+    end
+    ret s
+end
+
+@en "Listen"
+@fa "گوش دادن"
+pub func Listen(srv &: Server): bool:
+    srv.listener = tcp.BindOn(srv.config.host, srv.config.port)
+    srv.running = tcp.Ok(srv.listener)
+    if srv.running: srv.config.port = tcp.Port(srv.listener) end
+    ret srv.running
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(srv &: Server):
+    srv.running = false
+    tcp.CloseServer(srv.listener)
+end
+
+@en "Port"
+@fa "درگاه"
+pub func Port(srv: Server): int:
+    ret srv.config.port
+end
+
+func _open_pasv(s &: Session): bool:
+    if s.pasv_on:
+        tcp.CloseServer(s.pasv_srv)
+        s.pasv_on = false
+    end
+    mut p := s.srv[0].config.passive_start
+    if p <= 0: p = 40000 end
+    mut endp := s.srv[0].config.passive_end
+    if endp < p: endp = p + 100 end
+    mut tries := 0
+    mut ok := false
+    until tries > 200 or ok:
+        cand := p + (tries % (endp - p + 1))
+        srv := tcp.BindOn(s.srv[0].config.host, cand)
+        if tcp.Ok(srv):
+            s.pasv_srv = srv
+            s.pasv_port = tcp.Port(srv)
+            s.pasv_on = true
+            ok = true
+        end
+        tries++
+    end
+    ret ok
+end
+
+func _data_accept(s &: Session): DataCtx:
+    mut d := DataCtx {}
+    if not s.pasv_on: ret d end
+    dc := tcp.Accept(s.pasv_srv)
+    tcp.CloseServer(s.pasv_srv)
+    s.pasv_on = false
+    if not tcp.ConnOk(dc): ret d end
+    d.conn = dc
+    d.ok = true
+    if s.data_prot and _tls_ready(s.srv[0]):
+        tc := tls.WrapServer(dc.fd, s.srv[0].tls_cfg)
+        d.tls_idx = _slot_add(tc)
+        d.secure = tc.open
+        d.ok = d.secure
+        if not d.ok: _slot_close(d.tls_idx) end
+    end
+    ret d
+end
+
+func _data_write(d &: DataCtx, payload: str): bool:
+    if not d.ok: ret false end
+    if d.secure and d.tls_idx >= 0:
+        mut tc := _slot_get(d.tls_idx)
+        n := tls.Write(tc, payload)
+        _slot_set(d.tls_idx, tc)
+        ret n > 0 or payload.len() == 0
+    end
+    tcp.Write(d.conn, payload)
+    ret true
+end
+
+func _data_close(d &: DataCtx):
+    if d.secure and d.tls_idx >= 0: _slot_close(d.tls_idx) end
+    if tcp.ConnOk(d.conn): tcp.Close(d.conn) end
+    d.ok = false
+end
+
+func _list_line(name: str, full: str): str:
+    mut isd := os.IsDir(full)
+    mut sz := os.FileSize(full)
+    if sz < 0: sz = 0 end
+    mut perm := "-rw-r--r--"
+    if isd: perm = "drwxr-xr-x" end
+    ret perm + " 1 owner group " + str.FromInt(sz) + " Jan 01 00:00 " + name
+end
+
+func _handle_pasv(s &: Session):
+    if not _open_pasv(s):
+        _reply(s, 425, "Cannot open passive port")
+        ret
+    end
+    p := s.pasv_port
+    p1 := p / 256
+    p2 := p % 256
+    // use 127,0,0,1 for local; host parsing omitted for simplicity
+    _reply(s, 227, "Entering Passive Mode (127,0,0,1," + str.FromInt(p1 as i64) + "," + str.FromInt(p2 as i64) + ")")
+end
+
+func _handle_epsv(s &: Session):
+    if not _open_pasv(s):
+        _reply(s, 425, "Cannot open passive port")
+        ret
+    end
+    _reply(s, 229, "Entering Extended Passive Mode (|||" + str.FromInt(s.pasv_port as i64) + "|)")
+end
+
+func _handle_list(s &: Session, arg: str):
+    virt := _resolve_path(s, arg)
+    full := _fs_path(s, virt)
+    if not os.Exists(full):
+        _reply(s, 550, "Not found")
+        ret
+    end
+    _reply(s, 150, "Opening data connection")
+    mut d := _data_accept(s)
+    if not d.ok:
+        _reply(s, 425, "Cannot open data connection")
+        ret
+    end
+    mut body := ""
+    if os.IsDir(full):
+        names := os.ListDir(full)
+        mut i := 0
+        until i >= names.len():
+            n := names.get(i)
+            if n != "." and n != "..":
+                body += _list_line(n, filepath.Join(full, n)) + "\r\n"
+            end
+            i++
+        end
+    else:
+        body += _list_line(filepath.Base(full), full) + "\r\n"
+    end
+    _data_write(d, body)
+    _data_close(d)
+    _reply(s, 226, "Transfer complete")
+end
+
+func _handle_nlst(s &: Session, arg: str):
+    virt := _resolve_path(s, arg)
+    full := _fs_path(s, virt)
+    _reply(s, 150, "Opening data connection")
+    mut d := _data_accept(s)
+    if not d.ok:
+        _reply(s, 425, "Cannot open data connection")
+        ret
+    end
+    mut body := ""
+    if os.IsDir(full):
+        names := os.ListDir(full)
+        mut i := 0
+        until i >= names.len():
+            n := names.get(i)
+            if n != "." and n != "..": body += n + "\r\n" end
+            i++
+        end
+    else:
+        body += filepath.Base(full) + "\r\n"
+    end
+    _data_write(d, body)
+    _data_close(d)
+    _reply(s, 226, "Transfer complete")
+end
+
+func _handle_retr(s &: Session, arg: str):
+    virt := _resolve_path(s, arg)
+    full := _fs_path(s, virt)
+    if not os.Exists(full) or os.IsDir(full):
+        _reply(s, 550, "Not a plain file")
+        ret
+    end
+    _reply(s, 150, "Opening data connection")
+    mut d := _data_accept(s)
+    if not d.ok:
+        _reply(s, 425, "Cannot open data connection")
+        ret
+    end
+    content := io.ReadFile(full)
+    _data_write(d, content)
+    _data_close(d)
+    _reply(s, 226, "Transfer complete")
+end
+
+func _handle_stor(s &: Session, arg: str):
+    virt := _resolve_path(s, arg)
+    full := _fs_path(s, virt)
+    dir := filepath.Dir(full)
+    if not os.Exists(dir): fs.dir.MkdirAll(dir) end
+    _reply(s, 150, "Opening data connection")
+    mut d := _data_accept(s)
+    if not d.ok:
+        _reply(s, 425, "Cannot open data connection")
+        ret
+    end
+    mut data := ""
+    mut okread := true
+    until not okread:
+        mut chunk := ""
+        if d.secure and d.tls_idx >= 0:
+            mut tc := _slot_get(d.tls_idx)
+            chunk = tls.Read(tc, 4096)
+            _slot_set(d.tls_idx, tc)
+        else:
+            chunk = tcp.Read(d.conn, 4096)
+        end
+        if chunk.len() == 0: okread = false
+        else: data += chunk end
+    end
+    _data_close(d)
+    io.WriteFile(full, data)
+    _reply(s, 226, "Transfer complete")
+end
+
+func _need_login(s &: Session): bool:
+    if not s.logged_in:
+        _reply(s, 530, "Please login with USER and PASS")
+        ret true
+    end
+    ret false
+end
+
+func _handle_cmd(s &: Session, line: str):
+    mut cmd := str.Trim(line)
+    if cmd.len() == 0: ret end
+    mut sp := cmd.find(" ")
+    mut verb := cmd
+    mut arg := ""
+    if sp >= 0:
+        verb = cmd.substr(0, sp)
+        arg = str.Trim(cmd.substr(sp + 1, cmd.len() - sp - 1))
+    end
+    up := str.ToUpper(verb)
+
+    if up == "USER":
+        s.user_name = arg
+        s.asked_user = true
+        s.logged_in = false
+        if s.srv[0].config.allow_anonymous and str.ToLower(arg) == str.ToLower(s.srv[0].config.anonymous_user):
+            s.logged_in = true
+            _reply(s, 230, "Anonymous login ok")
+        else:
+            _reply(s, 331, "Please specify the password")
+        end
+        ret
+    end
+    if up == "PASS":
+        if not s.asked_user:
+            _reply(s, 503, "Login with USER first")
+            ret
+        end
+        if _can_login(s.srv[0].config, s.user_name, arg):
+            s.logged_in = true
+            _reply(s, 230, "Login successful")
+        else:
+            s.logged_in = false
+            _reply(s, 530, "Login incorrect")
+        end
+        ret
+    end
+    if up == "QUIT":
+        _reply(s, 221, "Goodbye")
+        s.quit = true
+        ret
+    end
+    if up == "NOOP":
+        _reply(s, 200, "NOOP ok")
+        ret
+    end
+    if up == "SYST":
+        _reply(s, 215, "UNIX Type: L8")
+        ret
+    end
+    if up == "FEAT":
+        _send_raw(s, "211-Features:")
+        _send_raw(s, " UTF8")
+        _send_raw(s, " SIZE")
+        _send_raw(s, " MDTM")
+        _send_raw(s, " PASV")
+        _send_raw(s, " EPSV")
+        if _tls_ready(s.srv[0]):
+            _send_raw(s, " AUTH TLS")
+            _send_raw(s, " PBSZ")
+            _send_raw(s, " PROT")
+        end
+        _reply(s, 211, "End")
+        ret
+    end
+    if up == "OPTS":
+        _reply(s, 200, "OK")
+        ret
+    end
+    if up == "AUTH":
+        if str.ToUpper(arg) == "TLS" or str.ToUpper(arg) == "SSL":
+            if not _tls_ready(s.srv[0]):
+                _reply(s, 504, "TLS not configured")
+                ret
+            end
+            if s.secure:
+                _reply(s, 503, "Already secure")
+                ret
+            end
+            _reply(s, 234, "Proceed with TLS negotiation")
+            tc := tls.WrapServer(s.conn.fd, s.srv[0].tls_cfg)
+            s.tls_idx = _slot_add(tc)
+            s.secure = tc.open
+            if not s.secure:
+                _slot_close(s.tls_idx)
+                s.tls_idx = 0 - 1
+                s.quit = true
+            end
+            ret
+        end
+        _reply(s, 504, "AUTH type not supported")
+        ret
+    end
+    if up == "PBSZ":
+        _reply(s, 200, "PBSZ set to 0")
+        ret
+    end
+    if up == "PROT":
+        a := str.ToUpper(arg)
+        if a == "P":
+            if not s.secure:
+                _reply(s, 503, "AUTH TLS required first")
+                ret
+            end
+            s.data_prot = true
+            _reply(s, 200, "Protection level set to Private")
+            ret
+        end
+        if a == "C":
+            s.data_prot = false
+            _reply(s, 200, "Protection level set to Clear")
+            ret
+        end
+        _reply(s, 504, "Protection level not supported")
+        ret
+    end
+    if up == "TYPE":
+        s.type_mode = str.ToUpper(arg).substr(0, 1)
+        _reply(s, 200, "Type set")
+        ret
+    end
+
+    if s.srv[0].config.require_tls and not s.secure:
+        _reply(s, 530, "TLS required")
+        ret
+    end
+    if _need_login(s): ret end
+
+    if up == "PWD" or up == "XPWD":
+        _reply(s, 257, "\"" + s.cwd + "\"")
+        ret
+    end
+    if up == "CWD":
+        virt := _resolve_path(s, arg)
+        full := _fs_path(s, virt)
+        if not os.IsDir(full):
+            _reply(s, 550, "Directory not found")
+        else:
+            s.cwd = virt
+            _reply(s, 250, "Directory changed")
+        end
+        ret
+    end
+    if up == "CDUP":
+        virt := _resolve_path(s, "..")
+        s.cwd = virt
+        _reply(s, 250, "Directory changed")
+        ret
+    end
+    if up == "MKD" or up == "XMKD":
+        virt := _resolve_path(s, arg)
+        full := _fs_path(s, virt)
+        if fs.dir.MkdirAll(full): _reply(s, 257, "\"" + virt + "\" created")
+        else: _reply(s, 550, "Create failed") end
+        ret
+    end
+    if up == "RMD" or up == "XRMD":
+        virt := _resolve_path(s, arg)
+        full := _fs_path(s, virt)
+        if fs.dir.RemoveAll(full): _reply(s, 250, "Removed")
+        else: _reply(s, 550, "Remove failed") end
+        ret
+    end
+    if up == "DELE":
+        virt := _resolve_path(s, arg)
+        full := _fs_path(s, virt)
+        if os.Remove(full): _reply(s, 250, "Deleted")
+        else: _reply(s, 550, "Delete failed") end
+        ret
+    end
+    if up == "RNFR":
+        s.rename_from = _resolve_path(s, arg)
+        _reply(s, 350, "Ready for destination")
+        ret
+    end
+    if up == "RNTO":
+        if s.rename_from.len() == 0:
+            _reply(s, 503, "RNFR first")
+            ret
+        end
+        src := _fs_path(s, s.rename_from)
+        dst := _fs_path(s, _resolve_path(s, arg))
+        if os.Move(src, dst): _reply(s, 250, "Renamed")
+        else: _reply(s, 550, "Rename failed") end
+        s.rename_from = ""
+        ret
+    end
+    if up == "SIZE":
+        virt := _resolve_path(s, arg)
+        full := _fs_path(s, virt)
+        sz := os.FileSize(full)
+        if sz < 0: _reply(s, 550, "Could not get size")
+        else: _reply(s, 213, str.FromInt(sz)) end
+        ret
+    end
+    if up == "PASV":
+        _handle_pasv(s)
+        ret
+    end
+    if up == "EPSV":
+        _handle_epsv(s)
+        ret
+    end
+    if up == "LIST":
+        mut target := arg
+        if target == "-a" or target == "-la" or target == "-al": target = "" end
+        _handle_list(s, target)
+        ret
+    end
+    if up == "NLST":
+        _handle_nlst(s, arg)
+        ret
+    end
+    if up == "RETR":
+        _handle_retr(s, arg)
+        ret
+    end
+    if up == "STOR":
+        _handle_stor(s, arg)
+        ret
+    end
+
+    _reply(s, 502, "Command not implemented")
+end
+
+func _session_run(srv &: Server, conn: tcp.Conn):
+    mut s := Session {}
+    s.srv = &srv
+    s.conn = conn
+    s.root_abs = _abs_path(srv.config.root)
+    s.cwd = "/"
+    if srv.config.implicit_tls and _tls_ready(srv):
+        tc := tls.WrapServer(conn.fd, srv.tls_cfg)
+        s.tls_idx = _slot_add(tc)
+        s.secure = tc.open
+        if not s.secure:
+            _slot_close(s.tls_idx)
+            tcp.Close(conn)
+            ret
+        end
+    end
+    _reply(s, 220, "Salam FTP server ready")
+    until s.quit:
+        line := _read_line(s)
+        if line.len() == 0 and s.rxbuf.len() == 0 and not s.quit:
+            // likely closed
+            s.quit = true
+        else:
+            _handle_cmd(s, line)
+        end
+    end
+    if s.pasv_on: tcp.CloseServer(s.pasv_srv) end
+    if s.secure and s.tls_idx >= 0: _slot_close(s.tls_idx) end
+    tcp.Close(conn)
+end
+
+@en "ServeOnce"
+@fa "یک‌بار خدمت"
+pub func ServeOnce(srv &: Server): bool:
+    if not tcp.Ok(srv.listener): ret false end
+    conn := tcp.Accept(srv.listener)
+    if not tcp.ConnOk(conn): ret false end
+    _session_run(srv, conn)
+    ret true
+end
+
+@en "Serve"
+@fa "خدمت"
+pub func Serve(srv &: Server):
+    srv.running = true
+    until not srv.running:
+        conn := tcp.Accept(srv.listener)
+        if tcp.ConnOk(conn):
+            _session_run(srv, conn)
+        end
+    end
+end

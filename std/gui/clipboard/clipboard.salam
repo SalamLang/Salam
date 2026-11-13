@@ -232,7 +232,17 @@ if SALAM_OS_WINDOWS:
     @en "GetHTML"
     @fa "گرفتن اچ‌تی‌ام‌ال"
     pub func GetHTML(): str:
-        // Best-effort: HTML clipboard format registration/CF_HTML parsing not wired in this build.
+        // Best-effort: CF_HTML registration/parsing is not wired in this build.
+        // Fallback: if plain text is available, expose it as a degraded HTML/text result
+        // for callers that only need textual clipboard content.
+        if HasText():
+            t := GetText()
+            if t.Len() > 0:
+                _cb_set_error("HTML clipboard read unavailable on Windows; returning plain text fallback")
+                ret t
+            end
+            mem.Free(t as void*)
+        end
         _cb_set_error("HTML clipboard read is not implemented on Windows in this build")
         ret str.Clone("")
     end
@@ -240,6 +250,24 @@ if SALAM_OS_WINDOWS:
     @en "SetHTML"
     @fa "تنظیم اچ‌تی‌ام‌ال"
     pub func SetHTML(_html: str, _alt_text: str = ""): bool:
+        // Best-effort fallback: store alt_text/textual content so clipboard is not silently empty.
+        if alt_text.Len() > 0:
+            ok := SetText(alt_text)
+            if ok:
+                _cb_set_error("HTML clipboard write unavailable on Windows; stored alt_text fallback")
+            end
+            ret ok
+        end
+        text := str.StripTags(html)
+        if text.Len() > 0:
+            ok := SetText(text)
+            mem.Free(text as void*)
+            if ok:
+                _cb_set_error("HTML clipboard write unavailable on Windows; stored stripped-text fallback")
+            end
+            ret ok
+        end
+        mem.Free(text as void*)
         _cb_set_error("HTML clipboard write is not implemented on Windows in this build")
         ret false
     end
@@ -247,14 +275,15 @@ if SALAM_OS_WINDOWS:
     @en "HasHTML"
     @fa "اچ‌تی‌ام‌ال دارد"
     pub func HasHTML(): bool:
-        ret false
+        // Best-effort: CF_HTML is not wired; report degraded availability via plain text presence.
+        ret HasText()
     end
 
     @en "GetImageBytes"
     @fa "گرفتن بایت‌های تصویر"
     pub func GetImageBytes(): str:
         // Best-effort placeholder: CF_DIB/PNG extraction requires format synthesis/parsing.
-        _cb_set_error("GetImageBytes is not implemented on Windows in this build")
+        _cb_set_error("GetImageBytes is not implemented on Windows in this build (try GetImagePath if file paths are copied)")
         ret str.Clone("")
     end
 
@@ -268,6 +297,16 @@ if SALAM_OS_WINDOWS:
     @en "GetImagePath"
     @fa "گرفتن مسیر تصویر"
     pub func GetImagePath(): str:
+        // Best-effort fallback: CF_HDROP/file-list parsing is not wired, but copied paths may appear as text.
+        t := GetText()
+        p := str.Trim(t)
+        if p.Len() > 0 and os.Exists(p):
+            mem.Free(t as void*)
+            _cb_ok()
+            ret p
+        end
+        mem.Free(t as void*)
+        mem.Free(p as void*)
         _cb_set_error("Image path clipboard read is not implemented on Windows in this build")
         ret str.Clone("")
     end
@@ -275,8 +314,18 @@ if SALAM_OS_WINDOWS:
     @en "SetImagePath"
     @fa "تنظیم مسیر تصویر"
     pub func SetImagePath(_path: str): bool:
-        _cb_set_error("Image path clipboard write is not implemented on Windows in this build")
-        ret false
+        // Best-effort fallback: publish the path as text so receivers can still access it.
+        if path.Len() == 0:
+            _cb_set_error("Image path is empty")
+            ret false
+        end
+        ok := SetText(path)
+        if ok:
+            _cb_set_error("Image path clipboard write unavailable on Windows; stored path as text fallback")
+        else:
+            _cb_set_error("Image path clipboard write is not implemented on Windows in this build")
+        end
+        ret ok
     end
 
     @en "Backend"
@@ -450,13 +499,45 @@ if SALAM_OS_MAC:
     @en "SetImageBytes"
     @fa "تنظیم بایت‌های تصویر"
     pub func SetImageBytes(_data: str, _mime: str = "image/png"): bool:
-        _cb_set_error("SetImageBytes is not implemented on macOS in this build (use SetImagePath where possible)")
-        ret false
+        // Best-effort fallback: stage bytes to a temp file and set image from path when possible.
+        if data.Len() == 0:
+            _cb_set_error("SetImageBytes: empty data")
+            ret false
+        end
+        mut ext := ".bin"
+        lowm := str.ToLower(mime)
+        if str.Contains(lowm, "png"): ext = ".png"
+        else str.Contains(lowm, "jpeg") or str.Contains(lowm, "jpg"): ext = ".jpg"
+        else str.Contains(lowm, "gif"): ext = ".gif"
+        else str.Contains(lowm, "webp"): ext = ".webp"
+        end
+        path := "/tmp/salam_clipboard_img" + ext
+        mem.Free(lowm as void*)
+        written := io.WriteFile(path, data)
+        if written < 0:
+            _cb_set_error("SetImageBytes failed to stage temp file")
+            ret false
+        end
+        ok := SetImagePath(path)
+        if not ok:
+            _cb_set_error("SetImageBytes is not implemented on macOS in this build (use SetImagePath where possible)")
+        end
+        ret ok
     end
 
     @en "GetImagePath"
     @fa "گرفتن مسیر تصویر"
     pub func GetImagePath(): str:
+        // Best-effort fallback: check plain text for a file path.
+        t := GetText()
+        p := str.Trim(t)
+        if p.Len() > 0 and os.Exists(p):
+            mem.Free(t as void*)
+            _cb_ok()
+            ret p
+        end
+        mem.Free(t as void*)
+        mem.Free(p as void*)
         _cb_set_error("Image path clipboard read is not implemented on macOS in this build")
         ret str.Clone("")
     end
@@ -464,8 +545,18 @@ if SALAM_OS_MAC:
     @en "SetImagePath"
     @fa "تنظیم مسیر تصویر"
     pub func SetImagePath(_path: str): bool:
-        _cb_set_error("Image path clipboard write is not implemented on macOS in this build")
-        ret false
+        // Best-effort fallback: publish path as text.
+        if path.Len() == 0:
+            _cb_set_error("Image path is empty")
+            ret false
+        end
+        ok := SetText(path)
+        if ok:
+            _cb_set_error("Image path clipboard write unavailable on macOS; stored path as text fallback")
+        else:
+            _cb_set_error("Image path clipboard write is not implemented on macOS in this build")
+        end
+        ret ok
     end
 
     @en "Backend"
@@ -807,4 +898,52 @@ end
 @fa "گرفتن متن غنی"
 pub func GetRichText(): str:
     ret GetHTML()
+end
+
+@en "CanReadHTML"
+@fa "می‌تواند اچ‌تی‌ام‌ال بخواند"
+pub func CanReadHTML(): bool:
+    ret SupportsHTML()
+end
+
+@en "CanWriteHTML"
+@fa "می‌تواند اچ‌تی‌ام‌ال بنویسد"
+pub func CanWriteHTML(): bool:
+    ret SupportsHTML()
+end
+
+@en "CanReadImage"
+@fa "می‌تواند تصویر بخواند"
+pub func CanReadImage(): bool:
+    ret SupportsImages()
+end
+
+@en "CanWriteImage"
+@fa "می‌تواند تصویر بنویسد"
+pub func CanWriteImage(): bool:
+    ret SupportsImages()
+end
+
+@en "SetImageFromPath"
+@fa "تنظیم تصویر از مسیر"
+pub func SetImageFromPath(path: str): bool:
+    ret SetImagePath(path)
+end
+
+@en "GetImageAsPathHint"
+@fa "گرفتن تصویر به عنوان اشاره مسیر"
+pub func GetImageAsPathHint(): str:
+    ret GetImagePath()
+end
+
+@en "CopyText"
+@fa "کپی متن"
+pub func CopyText(text: str): bool:
+    ret SetText(text)
+end
+
+@en "PasteText"
+@fa "چسباندن متن"
+pub func PasteText(): str:
+    ret GetText()
 end

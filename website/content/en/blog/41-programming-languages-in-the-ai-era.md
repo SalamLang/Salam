@@ -6,6 +6,8 @@ keywords: AI programming, AI-assisted development, AI coding tools, programming 
 category: future
 summary: Code generators are good at languages they have seen millions of times and weak at everything else. A young language cannot change its training data, but it can change what happens after the first draft. What Salam does about it, and what any language designer can learn from it.
 date: 2026-11-11
+image: /assets/img/blog/programming-languages-in-the-ai-era-en.png
+image_alt: Cover image for "The future of programming languages in the age of AI: what makes a language ready for AI-assisted development"
 ---
 
 A programming language is ready for AI-assisted development when a code generator can find out, quickly and precisely, whether what it wrote is correct, and why not. **Training data favors old, popular languages, but the loop after the first draft is something a language controls: a strict compiler, diagnostics a program can parse, one authoritative reference, and tools that expose all of this to a model.** Salam, a young language with little public code to learn from, has invested in exactly that loop.

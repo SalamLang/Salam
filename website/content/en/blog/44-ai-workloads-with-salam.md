@@ -6,6 +6,8 @@ keywords: run LLM locally, gguf, onnx inference, AI inference without Python, ru
 category: future
 summary: Salam's standard library can read GGUF language models, run small Llama-family models on the processor and execute ONNX graphs, all in pure Salam. Here is what works, what it costs and what it is not meant for.
 date: 2026-11-11
+image: /assets/img/blog/ai-workloads-with-salam-en.png
+image_alt: Cover image for "Running AI workloads with Salam: loading GGUF language models, running ONNX and building ML tools without Python"
 ---
 
 Yes, you can run AI models from a Salam program, within clear limits. Salam's standard library has a GGUF reader (`ai.gguf`), a small Llama-family inference engine (`ai.llm`), an ONNX graph runner (`ai.onnx`) and the tensor, autograd and neural network packages underneath them. **AI inference in Salam means loading a trained model file and computing its outputs inside a native executable, with no Python interpreter and no outside runtime library.** It runs on the processor only, it is sized for small models, and it is not a replacement for llama.cpp, ONNX Runtime or PyTorch on a GPU.

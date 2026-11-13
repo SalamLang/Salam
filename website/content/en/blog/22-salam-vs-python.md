@@ -6,6 +6,8 @@ keywords: Salam vs Python, Python alternative, faster than Python, compiled lang
 category: compare
 summary: Salam reads almost like Python but compiles to native code with static types and no garbage collector. Here are the same programs in both, the measured speed difference, and the many cases where Python still wins.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-python-en.png
+image_alt: Cover image for "Salam vs Python: native speed with a simple syntax?"
 ---
 
 Salam and Python share a goal: code that is short and easy to read. They reach it in opposite ways. **Python is dynamically typed and usually runs on an interpreter; Salam is statically typed and compiles to native machine code.** On the project's benchmark of 39 small programs that use the same algorithm in every language, Python took about 56 times as long as Salam. Python, in return, has one of the largest library ecosystems of any language, an interactive workflow that data scientists rely on, and decades of tutorials, answers and production experience. Salam has a broad standard library and a small community.

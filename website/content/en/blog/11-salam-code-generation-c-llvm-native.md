@@ -6,6 +6,8 @@ keywords: compiler backend, LLVM backend, C as a compilation target, native code
 category: compiler
 summary: Salam can turn the same checked program into C, into LLVM IR or straight into machine code. A look inside each backend, real output from all three, and a practical guide to choosing.
 date: 2026-11-11
+image: /assets/img/blog/salam-code-generation-c-llvm-native-en.png
+image_alt: Cover image for "Three ways to generate code: Salam's C, LLVM and native backends compared"
 ---
 
 A **compiler backend** is the part of a compiler that turns a checked program into something a machine can run. Salam has three backends for native executables: a **C backend** that writes C and hands it to a C compiler, an **LLVM backend** that writes LLVM IR and lets LLVM optimize it, and a **native backend** that writes x86-64, ARM and RISC-V machine code itself and links it with a linker built into the compiler. All three sit behind the same frontend, so a program means the same thing whichever one you pick. This article shows what each produces, why each exists, and when to use which.

@@ -6,6 +6,8 @@ keywords: AI Persian code, AI code generation Persian, Persian programming langu
 category: future
 summary: Writing Persian code is a harder test for a code generator than writing English code, because there is so little of it to learn from. What goes wrong, what the Salam compiler catches in Persian, and three practical ways to get Persian programs that compile and do what you meant.
 date: 2026-11-11
+image: /assets/img/blog/can-ai-write-persian-code-en.png
+image_alt: Cover image for "Can AI write code in Persian? Generating and validating Persian Salam programs"
 ---
 
 Yes, AI tools can write code in Persian, but only reliably when something checks the result. **Salam is a programming language whose keywords, types, standard library and compiler messages all exist in Persian, so a Persian Salam program is real code that compiles to a native executable, not a translated comment.** That makes it a demanding test for code generators: Persian source code is rare in any training data, the script runs right to left, and small details such as a zero-width non-joiner or an Arabic letter variant change meaning. What makes the task workable is that the Salam compiler checks Persian code as strictly as English code and explains its errors in Persian.

@@ -6,6 +6,8 @@ keywords: Salam syntax, programming language syntax design, readable syntax, lan
 category: language
 summary: Why Salam code looks the way it does: the decisions behind its blocks, declarations, loops, pattern matching and names, what each one costs, and how they compare with the syntax of Python, Go, Ruby and Lua.
 date: 2026-11-11
+image: /assets/img/blog/salam-syntax-design-en.png
+image_alt: Cover image for "Designing Salam's syntax: readability, simplicity and power"
 ---
 
 Salam's syntax is designed to be read more than written: blocks open with a colon and close with `end`, variables are declared with `:=` and are immutable unless marked `mut`, functions return with `ret`, and logic is written with the words `and`, `or` and `not`. **The aim is code that a beginner can read aloud, that an experienced programmer can scan quickly, and that maps one to one onto a second, Persian spelling, without giving up static types, pattern matching or low-level control.** Where it had to choose between brevity and clarity, Salam usually chose clarity, and where it had to choose between flexibility and one obvious way, it usually chose one obvious way.

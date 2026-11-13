@@ -6,6 +6,8 @@ keywords: FFI, call C from Salam, C interop, foreign function interface, extern 
 category: build
 summary: Salam can call any C function after a one-line declaration, pass structs by value, hand its own functions to C as callbacks, load libraries at run time and even build libraries that C programs call. A practical guide with the rules that keep it safe.
 date: 2026-11-11
+image: /assets/img/blog/salam-c-interop-ffi-en.png
+image_alt: Cover image for "Calling C from Salam: how the FFI opens up the existing C ecosystem"
 ---
 
 A foreign function interface (FFI) is the mechanism that lets code in one language call functions written in another. Salam's FFI targets C, the language almost every operating system and library exposes: **to call a C function from Salam you declare its signature in an `extern:` block and call it like any Salam function, with no wrapper generator, no glue code and no runtime marshalling layer.** Structs can travel by value, Salam functions can be handed to C as callbacks, and a Salam program can be built into a shared library with a C header.

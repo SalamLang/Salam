@@ -6,6 +6,8 @@ keywords: multilingual programming, localized programming language, non-English 
 category: future
 summary: Salam compiles English and Persian source with one front end, one standard library and one set of error codes. This article takes the design apart and asks what it would take to add a third human language, and whether that is a good idea.
 date: 2026-11-11
+image: /assets/img/blog/multilingual-programming-future-en.png
+image_alt: Cover image for "Multilingual programming and the future of native-language code: could Salam's bilingual model work for other languages?"
 ---
 
 Multilingual programming means writing code whose keywords, library names and compiler messages are in a human language other than English, while still compiling to the same programs as everyone else. Salam is one working example: **every Salam keyword, built-in type, standard library name and diagnostic has an English and a Persian spelling, and both compile through the same frontend to the same executable.** The interesting question for the future is whether that model generalizes. Could the same compiler gain an Arabic, Turkish or Hindi spelling? This article explains how Salam's bilingual design (introduced in [One language, two scripts](/blog/one-language-two-scripts/)) actually works in the compiler, then works through what a third language would require. Everything about a third language here is analysis; no third language pack exists or is planned in the repository.

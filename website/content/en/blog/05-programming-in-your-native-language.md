@@ -6,6 +6,8 @@ keywords: programming in native language, learn programming in Persian, teaching
 category: language
 summary: English is the hidden prerequisite of most programming courses. This article looks at what removing it can achieve, what the research supports, and how a bilingual language lets a student start in Persian and finish in English.
 date: 2026-11-11
+image: /assets/img/blog/programming-in-your-native-language-en.png
+image_alt: Cover image for "Can programming in your native language change computer science education?"
 ---
 
 Programming in your native language means learning and writing code whose keywords, library names and error messages are in the language you think in, rather than in English. **It can lower one specific barrier to computer science education, the need to read technical English while also learning to think like a programmer, but it is not a shortcut around the hard part, which is learning to reason precisely about programs.** Whether that barrier matters depends on the learner: for a ten-year-old in Tehran or a first-year student who reads English slowly, it can be the difference between following a lesson and copying it.

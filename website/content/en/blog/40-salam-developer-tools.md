@@ -6,6 +6,8 @@ keywords: developer tools, language server, LSP, code formatter, test runner, RE
 category: build
 summary: A language is only as pleasant as its tools. Salam puts the compiler, language server, formatter, test runner, REPL, debugger launcher and memory checker in one executable, with plugins for eleven editors. What each tool does, with real output, and what is still missing.
 date: 2026-11-11
+image: /assets/img/blog/salam-developer-tools-en.png
+image_alt: Cover image for "The Salam developer toolchain: language server, editor plugins, debugger, formatter, REPL and test runner"
 ---
 
 The Salam toolchain is a single executable, `salam`, that contains the compiler and almost every tool around it. **The language server, formatter, test runner, REPL, documentation generator, debugger launcher and memory checker are all subcommands of the same program**, so they always agree with the compiler about the language, and editors get the same diagnostics you see on the command line. Plugins for eleven editors, a tree-sitter grammar and an online editor complete the set.

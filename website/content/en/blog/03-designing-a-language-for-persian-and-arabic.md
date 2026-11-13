@@ -6,6 +6,8 @@ keywords: non-English programming language, Persian keywords, Arabic programming
 category: language
 summary: What actually goes wrong when a programming language is written in Persian or Arabic script, from names with spaces to look-alike letters, and the concrete decisions Salam made for each problem.
 date: 2026-11-11
+image: /assets/img/blog/designing-a-language-for-persian-and-arabic-en.png
+image_alt: Cover image for "Beyond translated keywords: the real problems of designing a programming language for Persian and Arabic"
 ---
 
 A non-English programming language is one whose keywords, and ideally its library and error messages, are written in a human language other than English. **The hard part of building one for Persian or Arabic is not choosing the keywords; it is everything around them: names that naturally contain spaces, an invisible joining character, two Unicode encodings for the same letter, words with two meanings, a word order unlike English, and error messages, editors and tools that all have to agree.** Most attempts stop at a keyword table, and the result feels like English with a costume on.

@@ -6,6 +6,8 @@ keywords: how a compiler works, Salam compiler, compiler pipeline, lexer and par
 category: compiler
 summary: Follow a Salam program through the compiler: tokens, syntax tree, type checking and static checks, generated C or LLVM IR or machine code, and the final link, with real output from each stage.
 date: 2026-11-11
+image: /assets/img/blog/how-the-salam-compiler-works-en.png
+image_alt: Cover image for "From source code to executable: how the Salam compiler works, stage by stage"
 ---
 
 A compiler is a program that reads source code, checks that it means something, and translates it into a form a machine can run. The Salam compiler does this in five broad stages: it **lexes** the text into tokens, **parses** the tokens into a syntax tree, **analyzes** the tree for types and mistakes, **generates code** through one of three backends (C, LLVM or its own native code generator for x86-64, ARM and RISC-V), and **links** the result into an executable. This article follows a real program through each stage of the Salam compiler, with the actual output of every step.

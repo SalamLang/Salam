@@ -6,6 +6,8 @@ keywords: new programming languages, programming language design philosophy, why
 category: language
 summary: Every successful language of the last twenty years was built to fix a specific pain. This article looks at what drove Go, Rust, Swift, Kotlin and Zig, then at the gap Salam targets and the design decisions that follow from it.
 date: 2026-11-11
+image: /assets/img/blog/why-new-programming-languages-en.png
+image_alt: Cover image for "Why does the world still need new programming languages? Salam's design philosophy and goals"
 ---
 
 New programming languages keep appearing because the problems programmers face keep changing: hardware gains more cores, software moves to the network and the browser, security failures become expensive, and the people who program are no longer mostly English-speaking engineers in a few countries. **A new language is worth creating when it removes a cost that existing languages cannot remove without breaking their own users, and every widely adopted language of the last two decades started that way: as a fix for one specific pain.** Salam is a new language built around two such costs: the friction of using several languages for one product, and the requirement to work in English before you can program at all.

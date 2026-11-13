@@ -6,6 +6,8 @@ keywords: salam translate, translate code Persian English, code translator, Pers
 category: language
 summary: salam translate rewrites a Salam program from English to Persian or from Persian to English without touching your own names, comments or strings. Here is what it changes, how it decides, and what to check afterwards.
 date: 2026-11-11
+image: /assets/img/blog/salam-translate-persian-english-code-en.png
+image_alt: Cover image for "From Persian code to English and back: inside the salam translate tool"
 ---
 
 `salam translate` is the command in the Salam toolchain that converts a source file between the language's two spellings. **It rewrites a Salam program from English to Persian (`salam translate fa`) or from Persian to English (`salam translate en`): the keywords, the entry function, the primitive types, the built-in methods and functions, and the names of standard library packages and functions, while leaving your own identifiers, comments, strings and formatting exactly as they were.** The result is a new file that compiles to the same program.

@@ -6,6 +6,8 @@ keywords: bare metal programming, freestanding programming language, OS kernel d
 category: build
 summary: The same compiler that builds Salam web servers can emit a program that owns the machine: no libc, no syscalls, a tiny runtime and a kernel that boots in QEMU. Here is how it works and what you still have to write yourself.
 date: 2026-11-11
+image: /assets/img/blog/freestanding-salam-bare-metal-en.png
+image_alt: Cover image for "From command-line tools to operating system kernels: freestanding and bare-metal programming in Salam"
 ---
 
 Bare-metal programming means writing code that runs directly on the hardware, with no operating system underneath to provide files, processes or memory. **A freestanding build of Salam produces exactly that kind of program: an executable that calls no operating system, links no libc and no C start-up files, and makes no system calls.** The compiler emits one for x86-64, i686 and AArch64 through its LLVM backend and links a small runtime that supplies the few functions the generated code needs. The repository includes a complete Multiboot kernel written in Salam that boots in QEMU.

@@ -6,6 +6,8 @@ keywords: Salam AI, coding assistant, Salam Agent, MCP server, AI coding agent d
 category: future
 summary: Salam has its own assistant, a desktop agent that works in a folder on your computer, a hosted MCP server for the AI tools you already use, an API and a Telegram bot. What each one does, how they fit together, and which limits you set.
 date: 2026-11-11
+image: /assets/img/blog/salam-ai-and-salam-agent-en.png
+image_alt: Cover image for "Programming with AI in the Salam ecosystem: Salam AI, Salam Agent, the MCP server, the API and the Telegram bot"
 ---
 
 The Salam project runs its own AI tools for programmers. **Salam AI is a coding assistant built for the Salam programming language: it answers questions about the language, writes and fixes Salam code that it checks with the Salam compiler, and looks up real standard library functions instead of inventing them.** Around it sit four other ways in: Salam Agent, a desktop app that lets the assistant work in a folder on your computer; a hosted MCP server that gives other AI tools the Salam compiler and documentation; an API for your own programs; and a Telegram bot.

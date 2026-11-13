@@ -6,6 +6,8 @@ keywords: programming in Persian, bilingual programming language, Persian progra
 category: language
 summary: Salam is one language with two spellings. This article shows how a Persian file and an English file reach the same compiler, share one standard library, report errors in the reader's language and call each other's packages.
 date: 2026-11-11
+image: /assets/img/blog/one-language-two-scripts-en.png
+image_alt: Cover image for "One language, two scripts: how Salam lets you program in Persian and English with the same compiler"
 ---
 
 Programming in Persian with Salam means writing a complete program, from the entry function to the standard library calls and the error messages you read back, in Persian script, and getting exactly the same native executable an English program would produce. **Salam is a bilingual programming language: every keyword, built-in type, built-in method, standard library package and compiler diagnostic has an English spelling and a Persian spelling, and both spellings are the same language underneath.** There is no Persian dialect, no separate compiler and no preprocessor that rewrites Persian into English text before compiling.

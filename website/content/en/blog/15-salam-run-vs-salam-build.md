@@ -6,6 +6,8 @@ keywords: salam run, salam build, salam exec, compiled vs interpreted, Salam int
 category: compiler
 summary: Salam is a compiled language that also ships an interpreter and a REPL. What each of check, run, build and exec actually does, how they differ, and a simple guide to picking the right one.
 date: 2026-11-11
+image: /assets/img/blog/salam-run-vs-salam-build-en.png
+image_alt: Cover image for "Interpreted or compiled? salam run, salam exec and salam build explained"
 ---
 
 **Salam is a compiled language**: `salam build` turns a program into a native executable, and that executable is what you deploy. The toolchain also gives you three other ways to work with the same code. `salam check` stops before generating any code and only reports errors. `salam run` compiles to a temporary executable, runs it and throws it away. `salam exec` runs the program in an interpreter built into the compiler, with no C compiler, LLVM or linker involved. There is also a REPL, `salam cli`, for trying things a line at a time. All of them read the same source and apply the same checks. This article explains what each command does underneath and when to use it.

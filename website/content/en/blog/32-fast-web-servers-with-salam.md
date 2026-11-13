@@ -6,6 +6,8 @@ keywords: web server, HTTP router, WebSocket, gRPC, REST API, Salam net/http, HT
 category: build
 summary: Everything Salam's standard library offers for network services, from a ten-line HTTP server to WebSocket rooms and gRPC, how the server works inside, and what the router benchmark does and does not show.
 date: 2026-11-11
+image: /assets/img/blog/fast-web-servers-with-salam-en.png
+image_alt: Cover image for "Building fast web servers with Salam: HTTP, routing, middleware, WebSocket and gRPC"
 ---
 
 A web server in Salam is an ordinary compiled program built on the standard library: `net.http` accepts connections and parses requests, `net.router` picks a handler by method and path, and companion packages add middleware, sessions, validation, WebSocket, HTTP/2 and gRPC. **Salam's HTTP router and server compile to a native executable with no garbage collector and no external dependencies, and in the project's published benchmark they answered more requests per second than Go's standard library, Fiber, Express and PHP on the same machine.** That benchmark has caveats, and this article covers them along with the code.

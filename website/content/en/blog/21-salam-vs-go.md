@@ -6,6 +6,8 @@ keywords: Salam vs Go, Go alternative, web server performance, goroutines vs thr
 category: compare
 summary: Go's goroutines and garbage collector against Salam's threads, task pool, channels and manual memory, with the same programs in both languages and an honest reading of the HTTP benchmark.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-go-en.png
+image_alt: Cover image for "Salam vs Go: which is better for fast web servers and concurrent software?"
 ---
 
 Salam and Go are both compiled languages with simple syntax, fast builds, a strong standard library for networking and single-file deployment. They differ in two fundamental choices. **Go has goroutines, lightweight tasks scheduled by its runtime, and a garbage collector. Salam has neither: concurrency uses operating-system threads, a bounded task pool and channels, and heap memory is freed by hand.** That makes Go easier to write highly concurrent code in, and gives Salam lower and more predictable memory overhead with no collector running beside the program.

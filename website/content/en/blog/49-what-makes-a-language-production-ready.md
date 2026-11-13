@@ -6,6 +6,8 @@ keywords: production ready, enterprise adoption, language maturity, programming 
 category: future
 summary: Production readiness is not one feature but a dozen boring guarantees. This article lists them, then scores Salam honestly on each one, with the evidence from the repository and the gaps that remain.
 date: 2026-11-11
+image: /assets/img/blog/what-makes-a-language-production-ready-en.png
+image_alt: Cover image for "What makes a programming language ready for production? Salam against an enterprise adoption checklist"
 ---
 
 A programming language is ready for production when a business can depend on it for years without nasty surprises: code keeps compiling across upgrades, releases are trustworthy, security problems have a reporting path, tools and platforms are covered, people can be hired or trained, and the license fits the product. **Production readiness is a property of the whole project around a language, not of its compiler alone.** This article sets out a checklist that enterprise teams commonly use, in one form or another, and audits Salam against each item using what the repository actually contains. The verdict is mixed: Salam is strong on engineering and weak on the institutional guarantees that come with age.

@@ -6,7 +6,7 @@ keywords: زبان برنامه نویسی سلام, زبان سلام, سلام
 category: language
 summary: معرفی کامل زبان سلام از زبان و کامپایلر خودمیزبان تا کتابخانه‌ی استاندارد، ابزارها، سرعت اندازه‌گیری‌شده و محدودیت‌های واقعی یک زبان جوان.
 date: 2026-11-11
-image: /assets/img/blog/what-is-salam-programming-language-fa.svg
+image: /assets/img/blog/what-is-salam-programming-language-fa.png
 image_alt: کاور مقاله «زبان برنامه‌نویسی سلام چیست؟»
 ---
 

@@ -6,6 +6,8 @@ keywords: future of Salam, programming language roadmap, Salam 1.0, new programm
 category: future
 summary: A vision piece with its feet on the ground: where Salam stands in November 2026, what the history of Go, Rust, Python and Kotlin says about how languages grow, and the five milestones that would turn Salam into a durable ecosystem.
 date: 2026-11-11
+image: /assets/img/blog/future-of-salam-en.png
+image_alt: Cover image for "Salam in five to ten years: from an open source project to a global ecosystem, and what has to happen first"
 ---
 
 The future of Salam depends less on new features than on a few hard, slow milestones: a 1.0 release with a compatibility promise, a real third-party package ecosystem, a secure and shared governance model, and a home community large enough to sustain it. **Salam today is a pre-1.0, self-hosting, bilingual systems language with an unusually large standard library and a very small community.** This article is the last in the magazine's "future" category and, unlike most of the others, is openly speculative. It separates three things carefully: what exists now (checked against the repository), what the project's own design documents describe as planned, and what is this article's vision. Nothing here is an official roadmap.

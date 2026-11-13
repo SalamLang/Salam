@@ -6,6 +6,8 @@ keywords: Salam vs TypeScript, TypeScript alternative, full stack language, one 
 category: compare
 summary: TypeScript runs everywhere JavaScript does and owns the largest ecosystem in software. Salam takes another route to one language for the whole stack: a native server, a page language and a JavaScript backend. Here is how they differ in practice.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-typescript-en.png
+image_alt: Cover image for "Salam vs TypeScript: one language for the browser and the server?"
 ---
 
 Salam vs TypeScript is a comparison between two answers to the same wish: write the server and the browser code in one language. **TypeScript is a typed layer over JavaScript; its types are checked by the compiler and then erased, and the program runs on a JavaScript engine such as Node.js, Deno, Bun or a browser. Salam is a statically typed language that compiles to native code for the server and generates HTML, CSS and JavaScript for the browser.** Both are "full stack languages", but they get there from opposite ends.

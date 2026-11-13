@@ -6,6 +6,8 @@ keywords: web development with Salam, HTML CSS DSL, Salam page language, salam p
 category: build
 summary: Salam has a page language inside its compiler. You describe a page as a tree of elements, the compiler checks every element, attribute and CSS value, and you get HTML, CSS and JavaScript back. This article walks from a static page to components, events and pages rendered by a Salam server.
 date: 2026-11-11
+image: /assets/img/blog/web-development-with-salam-en.png
+image_alt: Cover image for "Web development with Salam: a built-in language that generates HTML, CSS and JavaScript"
 ---
 
 Web development with Salam starts with a feature most languages leave to templates and frameworks. **Salam's page language is a declarative language built into the compiler: you describe a web page as a tree of elements with attributes and styles, the compiler checks every element, attribute and CSS value against the HTML and CSS rules, and `salam page build` turns it into HTML, CSS and, when the page has event handlers, JavaScript.** The same language describes pages that a Salam web server renders for each request, and it works in English and in Persian.

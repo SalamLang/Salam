@@ -6,6 +6,8 @@ keywords: new programming language adoption, programming language ecosystem, how
 category: compare
 summary: Every popular language was once new, and most new languages never become popular. This article looks at what carried Go, Rust, Kotlin and others to adoption, and measures Salam against the same forces without pretending the gap is small.
 date: 2026-11-11
+image: /assets/img/blog/can-a-new-language-compete-en.png
+image_alt: Cover image for "Can a new programming language compete with decades-old ones? Salam's place in the global ecosystem"
 ---
 
 Can a new programming language compete with languages that have thirty or fifty years of libraries, books and developers behind them? **Yes, but almost never head-on. New languages that succeed do so by being clearly better at something specific, by riding a new platform, or by fitting into an ecosystem that already exists, and then they grow outward from that niche over many years.** Salam, a young compiled language you can write in English or Persian, faces exactly this question, and the honest answer for it is "not yet, and only in some places".

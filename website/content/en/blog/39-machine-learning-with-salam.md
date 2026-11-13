@@ -6,6 +6,8 @@ keywords: machine learning Salam, tensors, autograd, automatic differentiation, 
 category: build
 summary: Tensors, reverse-mode autograd, neural network layers, optimizers, scikit-learn style models, ONNX and GGUF readers: Salam's machine learning stack lives in the standard library and compiles to native code. A guided tour with programs that run, and a clear list of what it does not do.
 date: 2026-11-11
+image: /assets/img/blog/machine-learning-with-salam-en.png
+image_alt: Cover image for "Scientific computing and machine learning in Salam: tensors, matrices, autograd and neural networks"
 ---
 
 Machine learning in Salam is done with packages that ship with the compiler. **The standard library includes multi-dimensional tensors, reverse-mode automatic differentiation (autograd), neural network layers, optimizers, classic machine learning models, a 64-bit matrix library, and readers for ONNX and GGUF model files**, all written in Salam and compiled to native code with no Python and no external runtime. You can train a small network, fit a decision tree, solve a linear system or run an exported ONNX model inside an ordinary Salam program.

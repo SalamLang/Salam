@@ -6,6 +6,8 @@ keywords: Salam vs C, C alternative, C replacement language, manual memory manag
 category: compare
 summary: The same small programs written in C and in Salam, followed by an honest comparison of memory management, strings, safety checks, C interop, performance, tooling and maturity.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-c-en.png
+image_alt: Cover image for "Salam vs C: simpler code in the same native performance range?"
 ---
 
 Salam and C are both compiled, statically typed languages without a garbage collector, and on the project's benchmark they finish in the same performance range. The difference is in what you write and what the compiler checks for you. C gives you a small language, a huge ecosystem and complete control, at the price of undefined behavior and manual bookkeeping. Salam keeps manual memory management but adds growable containers, `defer`, bounds checks in development builds, type inference and a compiler that rejects many mistakes C accepts.

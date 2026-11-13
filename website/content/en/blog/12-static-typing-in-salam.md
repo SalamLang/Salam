@@ -6,6 +6,8 @@ keywords: static typing, type inference, statically typed language, type checkin
 category: compiler
 summary: Salam checks every type before it generates any code, infers most of them for you, and goes further than types: exhaustive matches, optional values, checked errors and compile-time range checks, with the real compiler messages.
 date: 2026-11-11
+image: /assets/img/blog/static-typing-in-salam-en.png
+image_alt: Cover image for "Static typing in Salam: catching bugs before the program runs"
 ---
 
 **Static typing means every value's type is known and checked when the program is compiled, not discovered while it runs.** Salam is a statically typed language: each variable, parameter, field and expression has one type, the compiler checks every use against it, and a program with a type error does not build. You rarely have to write the types of local variables, because the compiler infers them from their initial values, but you always write the types of function parameters and results. This article goes through what Salam checks, with the exact messages the compiler prints, and where its checks stop.

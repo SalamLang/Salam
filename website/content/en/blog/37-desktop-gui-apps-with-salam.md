@@ -6,6 +6,8 @@ keywords: desktop app Salam, GUI programming, WebView desktop app, Tauri alterna
 category: build
 summary: Salam has three ways to put a window on the screen: a web interface in the system's WebView, a native UI drawn by Salam from the page language, and raylib for games. What each one does, how to package it, and where each stops.
 date: 2026-11-11
+image: /assets/img/blog/desktop-gui-apps-with-salam-en.png
+image_alt: Cover image for "Desktop and GUI applications with Salam: from WebView apps to a native UI drawn by Salam itself"
 ---
 
 Salam can build desktop applications for Windows, macOS and Linux in three ways. **The `gui.webview` package builds a desktop app whose interface is HTML, CSS and JavaScript running in the web view the operating system already ships**, the same model as Tauri, with the program logic in Salam and no bundled browser. The `gui.ui` runtime takes a different route and draws a Salam page in a native window by itself, with no browser at all. For games and visual programs, `gui.raylib` binds the raylib library. One command, `salam bundle`, turns a project into installers for all three systems.

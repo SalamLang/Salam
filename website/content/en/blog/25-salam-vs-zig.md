@@ -6,6 +6,8 @@ keywords: Salam vs Zig, Zig alternative, Zig comptime, Zig allocators, low-level
 category: compare
 summary: Zig and Salam are both pre-1.0 systems languages with no garbage collector, a defer statement and a try keyword. They make very different choices about allocators, compile-time code and how much the standard library should do.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-zig-en.png
+image_alt: Cover image for "Salam vs Zig: two young compiled languages for low-level software"
 ---
 
 Salam vs Zig is a comparison between two young systems languages that look alike at first glance. **Zig is a low-level language designed as a better C: no hidden control flow, no hidden allocations, explicit allocators passed to whatever needs memory, and `comptime`, which runs ordinary Zig code at compile time. Salam is a statically typed systems language with a block syntax closer to Python or Lua, a large application-level standard library and source that can be written in English or Persian.** Both compile to native code, neither has a garbage collector, and both are still before their 1.0 release.

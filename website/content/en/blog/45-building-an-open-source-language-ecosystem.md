@@ -6,6 +6,8 @@ keywords: open source ecosystem, package manager, programming language ecosystem
 category: future
 summary: A language is only as useful as the code around it. This is how Salam's package manager, standard library, documentation and contributor process are built, and an honest account of how small the ecosystem still is.
 date: 2026-11-11
+image: /assets/img/blog/building-an-open-source-language-ecosystem-en.png
+image_alt: Cover image for "How a new programming language builds an open source ecosystem: packages, registry, documentation and contributors in Salam"
 ---
 
 An open source ecosystem is everything around a language that lets people reuse each other's work: a package manager, a place to find packages, a way to trust what you download, documentation, editor support, and a community that keeps all of it alive. For a new programming language, building that ecosystem is harder than building the compiler. This article looks at how Salam approaches it: a large standard library first, then a Git-based package manager with lockfiles and checksums, a registry, and tooling that makes packages usable in both English and Persian. It is also plain about the current state, which is early.

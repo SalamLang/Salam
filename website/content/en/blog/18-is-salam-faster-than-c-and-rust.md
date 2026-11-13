@@ -6,6 +6,8 @@ keywords: Salam performance, programming language benchmark, Salam vs C speed, S
 category: compiler
 summary: A methodology-first walk through Salam's published benchmark: what was measured, how, what the averages hide, where Salam loses, and why the honest summary is the same range as C and Rust.
 date: 2026-11-11
+image: /assets/img/blog/is-salam-faster-than-c-and-rust-en.png
+image_alt: Cover image for "Is Salam really faster than C and Rust? A careful reading of the benchmark"
 ---
 
 No, the benchmark does not show that Salam is faster than C or Rust in any general sense. It shows that on 39 small programs that use the same algorithm in every language, Salam's optimized build finished in the same range as C and Rust: an average of 10.6 ms for Salam, 11.7 ms for C and 11.3 ms for Rust. Salam was ahead of the fastest of C, C++, Rust and Go on 6 programs, level on 27 and behind on 6. Those gaps are small, the programs are short, and part of every number is process start-up rather than generated code.

@@ -6,6 +6,8 @@ keywords: Salam vs C++, C++ alternative, systems programming language, RAII vs d
 category: compare
 summary: C++ is the default language for performance-critical software and has forty years of libraries behind it. Salam is a young systems language with a smaller surface. This comparison puts the same code side by side and is plain about where each one wins.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-cpp-en.png
+image_alt: Cover image for "Salam vs C++: architecture, performance, tooling and systems programming"
 ---
 
 Salam vs C++ is a comparison between one of the largest programming languages ever built and a young one that deliberately stays small. **C++ is an ISO-standardized systems language with zero-cost abstractions, RAII, templates and decades of compilers, libraries and tools. Salam is a statically typed systems language that compiles to native code without a garbage collector, with a deliberately smaller feature set, one toolchain and source you can write in English or Persian.** Both produce fast native executables; they differ in how much language you have to learn and maintain to get there.

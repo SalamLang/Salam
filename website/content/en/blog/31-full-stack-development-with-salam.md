@@ -6,6 +6,8 @@ keywords: full stack development, one language frontend backend, full stack lang
 category: build
 summary: Salam can write the server, the database layer, the HTML and CSS, and the browser handlers in one language and one toolchain. This is how the pieces connect, with working code, and what is still missing.
 date: 2026-11-11
+image: /assets/img/blog/full-stack-development-with-salam-en.png
+image_alt: Cover image for "Full-stack development with one language: can Salam bring the frontend and the backend together?"
 ---
 
 Full-stack development with one language means writing the server, the data layer, the pages and the code that runs in the browser without switching languages at the boundary. Salam gets closer to that than most compiled languages: **one Salam program can serve HTTP, query a database, render typed HTML pages, and ship browser handlers that the same compiler translates to JavaScript.** It is not yet a replacement for a mature JavaScript stack on the client-side, and this article is precise about where the line is.

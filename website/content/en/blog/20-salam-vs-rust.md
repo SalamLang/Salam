@@ -6,6 +6,8 @@ keywords: Salam vs Rust, Rust alternative, borrow checker, memory safety, manual
 category: compare
 summary: Rust proves memory safety at compile time and Salam does not. This comparison shows what each language checks, the same programs in both, the measured speed and where each one is the better choice.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-rust-en.png
+image_alt: Cover image for "Salam vs Rust: performance, memory management, safety and low-level control"
 ---
 
 Salam and Rust are both compiled, statically typed languages with no garbage collector, enums that carry data, exhaustive pattern matching and native performance. The decisive difference is memory safety: **Rust has a borrow checker that proves at compile time that safe code has no use after free, no double free and no data races. Salam does not.** Salam frees heap memory by hand with `.Free()` and `defer`, catches a set of common mistakes with compile-time checks and warnings, and checks bounds at runtime in development builds. Those checks help, but they are not a proof.

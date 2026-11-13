@@ -6,6 +6,8 @@ keywords: scientific computing language, Julia alternative, numerical computing,
 category: compare
 summary: Python owns scientific computing through NumPy and its ecosystem, and Julia was designed for it. Salam brings a native compiler and a pure-Salam numerics library. This is what that library can do, what the benchmark rows measure, and where each language belongs.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-python-and-julia-en.png
+image_alt: Cover image for "Salam vs Python and Julia for scientific computing and numerical work"
 ---
 
 Which language should you use for scientific computing and numerical work: Python, Julia or something compiled? **Python is the dominant language of science and data work, fast in practice because NumPy, SciPy and PyTorch run their heavy loops in compiled C, C++ and Fortran. Julia is a language designed for numerical computing, compiled just in time through LLVM, with multiple dispatch and loops that run at compiled speed. Salam is a general-purpose compiled language whose standard library includes dense linear algebra, statistics, tensors, automatic differentiation and machine learning, all written in Salam.** Each one makes sense for a different kind of project.

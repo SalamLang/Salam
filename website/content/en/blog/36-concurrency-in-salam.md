@@ -6,6 +6,8 @@ keywords: concurrency, threads, channels, thread pool, parallel programming, go 
 category: build
 summary: Salam's concurrency is built on operating system threads with a bounded task pool on top. This guide covers each tool, from spawn and join to channels, select, groups and futures, with programs that run, and compares the model with Go, Rust and Java.
 date: 2026-11-11
+image: /assets/img/blog/concurrency-in-salam-en.png
+image_alt: Cover image for "Concurrent programming in Salam: threads, task pools, channels and synchronization"
 ---
 
 Concurrency is the ability of a program to make progress on several tasks at once, and on a multi-core processor to run them in parallel. **Salam's concurrency model is built on operating system threads: `spawn` and `join` start and wait for threads, the `go` keyword runs a call on a shared bounded task pool, channels pass values between threads, and the `sync` and `atomic` packages protect shared data.** There is no garbage collector to pause the threads and no `async`/`await`.

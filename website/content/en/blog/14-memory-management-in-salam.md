@@ -6,6 +6,8 @@ keywords: memory management, manual memory management, defer, ownership checker,
 category: compiler
 summary: A practical guide to memory in Salam: what is copied, what is shared, who frees what, how defer and compiler-inserted drops help, what the ownership checker catches at compile time and how memcheck finds the rest.
 date: 2026-11-11
+image: /assets/img/blog/memory-management-in-salam-en.png
+image_alt: Cover image for "Memory management in Salam: stack values, heap collections, defer and the ownership checker"
 ---
 
 **Memory management is how a program obtains memory for its data and gives it back when the data is no longer needed.** Salam has no garbage collector, so this is partly the programmer's job, but it is a much smaller job than in C. Plain values live on the stack and need no care at all. Heap collections such as `Vector` and `HashMap` are freed with `.Free()`, usually through `defer`, and the compiler inserts that call itself for local collections that never leave their scope. On top of that, an ownership checker finds use-after-free and double-free mistakes at compile time, and `salam memcheck` finds leaks at runtime. This article walks through each piece with programs and the compiler's real output.

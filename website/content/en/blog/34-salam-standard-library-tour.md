@@ -6,6 +6,8 @@ keywords: standard library, Salam std, Salam standard library, batteries include
 category: build
 summary: Salam ships more than 170 packages with the compiler. This tour walks through them by area, runs a few of them, and says where the library is deep, where it is thin, and what it costs to have so much in std.
 date: 2026-11-11
+image: /assets/img/blog/salam-standard-library-tour-en.png
+image_alt: Cover image for "A tour of Salam's standard library: from networking and cryptography to databases, images and AI"
 ---
 
 The Salam standard library is the set of packages that ships with the compiler, so a program can import them with no download, no package manager and no C library to install for most of them. **Salam's standard library has more than 170 documented packages, covering text and data formats, files and processes, HTTP and networking, cryptography and TLS, databases, mathematics, machine learning, audio, images and graphical user interfaces.** Each one has a page in the [library reference](/std/) with an example for every public function, and every package and function also has a Persian name.

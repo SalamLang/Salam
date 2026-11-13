@@ -6,6 +6,8 @@ keywords: Salam vs Java, Salam vs C#, native vs managed runtime, JIT vs AOT, gar
 category: compare
 summary: Java and C# run on managed runtimes with a JIT compiler and a garbage collector, backed by two of the largest ecosystems in software. Salam compiles ahead of time to native code with no collector. The differences reach from startup time to how a team writes code.
 date: 2026-11-11
+image: /assets/img/blog/salam-vs-java-and-csharp-en.png
+image_alt: Cover image for "Salam vs Java and C#: native code versus managed runtimes"
 ---
 
 Comparing Salam vs Java and C# is really comparing two ways to run a program. **Java and C# are managed languages: the compiler produces bytecode (JVM bytecode or .NET IL), and a runtime loads it, compiles hot code to machine code with a just-in-time (JIT) compiler and frees memory with a garbage collector. Salam compiles ahead of time (AOT) to a native executable, with no virtual machine, no JIT and no garbage collector.** Both Java and .NET can now also be compiled ahead of time, which narrows the gap in some places and not in others.

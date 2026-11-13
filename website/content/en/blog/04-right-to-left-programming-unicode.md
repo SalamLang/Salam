@@ -6,6 +6,8 @@ keywords: right-to-left programming, Unicode in programming languages, Persian d
 category: language
 summary: What it takes for a compiler, a standard library and an editor to handle code written right to left: source encoding, Persian digits, separators, strings as bytes and letters, the bidi algorithm and the traps that remain.
 date: 2026-11-11
+image: /assets/img/blog/right-to-left-programming-unicode-en.png
+image_alt: Cover image for "Right-to-left programming: how Salam handles Unicode, Persian digits and bidirectional text"
 ---
 
 Right-to-left programming means writing source code in a script such as Persian, Arabic or Hebrew, where text runs from the right edge of the line to the left. **For a programming language it involves three separate problems: the compiler must read the script correctly (letters, digits, punctuation), the standard library must process text in that script correctly (length, slicing, normalization, direction), and the editor must display a line that mixes right-to-left words with left-to-right symbols in a readable order.** Salam, which can be written entirely in Persian, has had to answer all three.

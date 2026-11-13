@@ -6,6 +6,8 @@ keywords: programming education, teaching programming, CS education, teaching co
 category: future
 summary: Salam lets a student start in Persian, move to English keywords without switching languages, and later read a production compiler written in the same language. What exists for teachers today, and what classrooms would still need.
 date: 2026-11-11
+image: /assets/img/blog/salam-in-programming-education-en.png
+image_alt: Cover image for "Salam in programming education: teaching beginners, computer science and compilers with one bilingual language"
 ---
 
 Salam can serve three stages of programming education with one language: a first course taught in the student's own language, a computer science curriculum that needs a real compiled language, and a compilers course that studies a compiler written in the very language the students already know. **Salam is a statically typed, compiled language whose keywords, standard library and error messages exist in both Persian and English, which makes it usable as a first language for Persian speakers and as a bridge to the English-keyword languages used in industry.** This article looks at what the project offers educators today, where it could fit in a curriculum, and what is still missing before schools and universities could rely on it.

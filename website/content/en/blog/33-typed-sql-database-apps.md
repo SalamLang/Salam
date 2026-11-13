@@ -6,6 +6,8 @@ keywords: typed SQL, SQL code generation, database driver, sqlc alternative, SQL
 category: build
 summary: How Salam talks to databases: one connection interface over SQLite, MySQL and PostgreSQL, migrations at start-up, a SQL checker that reads your schema, and a generator that turns annotated queries into typed functions.
 date: 2026-11-11
+image: /assets/img/blog/typed-sql-database-apps-en.png
+image_alt: Cover image for "Database applications in Salam: typed SQL, query checking and generated code"
 ---
 
 Typed SQL means that the types of a query's parameters and results come from the database schema, and that a misspelled column or table is caught before the query ever reaches a database. Salam provides this in its standard library: **`salam sql check` reads the SQL inside your `.salam` and `.sql` files and checks it against your `CREATE TABLE` statements, and `salam sql generate` turns annotated queries into typed Salam functions and row structs, in the spirit of Go's sqlc.** Underneath sit database drivers for SQLite, MySQL, MariaDB and PostgreSQL behind one shared interface.

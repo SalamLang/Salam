@@ -6,6 +6,8 @@ keywords: industrial use, enterprise software, cloud infrastructure, Salam in pr
 category: future
 summary: Salam has the technical pieces for web services, cloud tools, back-office software and systems work. It does not yet have the stability promise, ecosystem or support model most companies need. This is a map of the fit and the gaps.
 date: 2026-11-11
+image: /assets/img/blog/salam-in-industry-en.png
+image_alt: Cover image for "Where Salam could fit in industry: web services, cloud infrastructure, enterprise back offices and systems software"
 ---
 
 Salam could fit in industry wherever a team wants native performance, single-binary deployment and a large built-in standard library: HTTP and gRPC services, command-line and infrastructure tools, data-processing jobs, and back-office software, especially for Persian-speaking organizations. **Industrial use of a programming language means running it in software that a business depends on, with the stability, support, hiring and licensing that implies.** On that definition, Salam today is a candidate rather than an incumbent. The project publishes no case studies or list of production users, so this article is about technical fit and the conditions for adoption, not about who is already using it.

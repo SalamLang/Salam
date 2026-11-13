@@ -6,6 +6,8 @@ keywords: UI components, state management, event handling, reactive UI, Salam pa
 category: build
 summary: A practical guide to interactivity in Salam pages: handlers written in Salam, components with their own state, lists with keys, callbacks, events that bubble, and the compile-time checks around them.
 date: 2026-11-11
+image: /assets/img/blog/interactive-ui-components-state-events-en.png
+image_alt: Cover image for "Interactive user interfaces in Salam: components, state and event handling in the page language"
 ---
 
 Salam's page language handles UI components, state management and event handling without a separate frontend framework. You declare the page as a tree of elements, write event handlers as ordinary Salam functions, and the compiler turns the whole thing into HTML, CSS and JavaScript. **A component in Salam is a named piece of page with parameters; when it declares a variable that a handler changes and the view shows, that variable becomes state, and the page redraws only what depends on it.** The same page can also run in a native window drawn by Salam itself.

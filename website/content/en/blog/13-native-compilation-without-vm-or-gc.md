@@ -6,6 +6,8 @@ keywords: native compilation, no garbage collector, AOT compilation, ahead-of-ti
 category: compiler
 summary: Salam programs run as plain machine code with no virtual machine and no garbage collector. What that buys you, what it costs you, how memory is handled instead, and what the benchmarks do and do not show.
 date: 2026-11-11
+image: /assets/img/blog/native-compilation-without-vm-or-gc-en.png
+image_alt: Cover image for "Native compilation without a virtual machine or garbage collector: benefits, costs and performance"
 ---
 
 **Native compilation means translating a program into the processor's own machine code before it runs, so that the operating system can execute it directly, with no virtual machine or interpreter in between.** Salam compiles this way, ahead of time, and it also runs without a garbage collector: memory that a program allocates is given back at points the program (or the compiler, on its behalf) decides, not when a collector gets around to it. This combination is what C, C++, Rust and Zig offer, and it is different from Java, C#, Python, JavaScript and Go. This article explains what you gain from it, what you give up, and how Salam's measured performance should be read.

@@ -6,6 +6,8 @@ keywords: Salam WebAssembly, compile to WebAssembly, compile to JavaScript, wasm
 category: compiler
 summary: One source file, several destinations: native executables, WASI modules, browser JavaScript, web pages, edge workers, an in-browser editor, phone apps and bare metal, with the trade-offs of each.
 date: 2026-11-11
+image: /assets/img/blog/salam-webassembly-and-javascript-en.png
+image_alt: Cover image for "From native to WebAssembly and JavaScript: everywhere a Salam program can run"
 ---
 
 Salam programs can run as native executables, as WebAssembly modules, as JavaScript in a web browser, as request handlers on Cloudflare Workers, inside an online editor and on bare metal. To compile Salam to WebAssembly you build with `--target=wasm32-wasi`; to compile Salam to JavaScript you use `salam js`. The language and the standard library stay the same, but each destination has its own rules about threads, files, sockets and numbers, and those rules decide which target fits a job.

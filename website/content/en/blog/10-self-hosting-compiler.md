@@ -6,6 +6,8 @@ keywords: self-hosting compiler, bootstrapping a compiler, compiler bootstrappin
 category: compiler
 summary: The Salam compiler is written in Salam. This is the story of how it got there, how a release is bootstrapped from the previous one, what self-hosting buys a young language and what it costs.
 date: 2026-11-11
+image: /assets/img/blog/self-hosting-compiler-en.png
+image_alt: Cover image for "When a language builds itself: inside Salam's self-hosting compiler"
 ---
 
 A **self-hosting compiler** is a compiler written in the language it compiles. The Salam compiler is one: its source is about 340 files of Salam in the `compiler/` directory, and every release since August 2026 was compiled by an earlier `salam` binary. Getting there required **bootstrapping a compiler**: an older implementation, written in C, compiled the first Salam version of the compiler, and that C implementation was deleted from the repository on 20 August 2026. This article explains how bootstrapping works in general, how Salam did it, how a release is built today, and why a young language would take on the trouble.

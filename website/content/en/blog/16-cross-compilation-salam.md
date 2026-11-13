@@ -6,6 +6,8 @@ keywords: cross compilation, cross-compile Windows Linux macOS, Salam cross comp
 category: compiler
 summary: The --target flag, the three code generators behind it, the sysroots and linker built into the compiler, and an honest list of which targets are run in CI and which are only built.
 date: 2026-11-11
+image: /assets/img/blog/cross-compilation-salam-en.png
+image_alt: Cover image for "Cross-compilation in Salam: building for Linux, macOS, Windows and ARM from one machine"
 ---
 
 Cross-compilation means building an executable on one kind of machine that runs on another: a Windows `.exe` built on Linux, an ARM binary built on an x86-64 laptop, a macOS program built-in a Linux CI job. In Salam you ask for it with one flag, `--target`, followed by a target triple such as `x86_64-w64-windows-gnu` or `aarch64-linux-musl`. The compiler picks a code generator, finds a C runtime for that target, links the result and hands you a file for the other machine.

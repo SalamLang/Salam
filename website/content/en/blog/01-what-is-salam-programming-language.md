@@ -6,6 +6,8 @@ keywords: Salam programming language, what is Salam, SalamLang, Persian programm
 category: language
 summary: A complete introduction to Salam: the language, the self-hosting compiler, the standard library, the tools, the measured performance and the honest limits of a young language.
 date: 2026-11-11
+image: /assets/img/blog/what-is-salam-programming-language-en.svg
+image_alt: Cover image for "What is the Salam programming language?"
 ---
 
 Salam is an open source, general-purpose and systems programming language. It is statically typed, it compiles to native machine code, and its compiler is written in Salam itself. What makes it unusual is that every keyword, type, standard library package and compiler error message exists in two spellings, English and Persian, and both spellings compile to exactly the same program.

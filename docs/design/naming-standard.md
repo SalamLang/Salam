@@ -109,7 +109,7 @@ The 10 function violations are `contains`, `index_of`, `reverse`, `clone`,
 `jalali_date` (`std/layoutgen`).
 
 Violations by package, the biggest: `gui/raylib` 263, `unicode` 260,
-`metatrader` 188, `ai/ml` 141, `ai/opencv` 118, `collections` 97, `graphql` 88,
+`metatrader` 188, `ai/ml` 141, `opencv` 118, `collections` 97, `graphql` 88,
 `archive` 79, `excel` 68, `graph` 58, `term` 57, `encoding/protobuf` 57,
 `net/http2` 51. 101 packages have at least one violation. The full list is
 `tools/salam/std-naming-baseline.txt` (2489 lines, `class|package|name`).

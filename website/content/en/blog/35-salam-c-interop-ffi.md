@@ -201,7 +201,7 @@ func main:
 end
 ```
 
-The standard library uses exactly this mechanism for [db.sqlite](/std/db/sqlite/), [gui.raylib](/std/gui/raylib/), [ai.opencv](/std/ai/opencv/) and the GTK and WebKit engine of [gui.webview](/std/gui/webview/) on Linux. A third-party package that wraps a C library declares it in `salam.toml` under `[native.<lib>]`, with the system package names for apt, dnf, pacman, brew and winget, an optional prebuilt archive per platform, and the C sources to compile as a last resort; the [packages page](/packages/) explains the workflow.
+The standard library uses exactly this mechanism for [db.sqlite](/std/db/sqlite/), [gui.raylib](/std/gui/raylib/), [opencv](/std/opencv/) and the GTK and WebKit engine of [gui.webview](/std/gui/webview/) on Linux. A third-party package that wraps a C library declares it in `salam.toml` under `[native.<lib>]`, with the system package names for apt, dnf, pacman, brew and winget, an optional prebuilt archive per platform, and the C sources to compile as a last resort; the [packages page](/packages/) explains the workflow.
 
 ## Loading libraries at runtime and building libraries for C {#dynamic}
 

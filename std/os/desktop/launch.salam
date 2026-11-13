@@ -19,6 +19,7 @@ package launch
 import os
 import mem
 import str
+import filepath
 import os.shell
 
 func _quote_sh(s: str): str:
@@ -76,19 +77,31 @@ pub func OpenURL(url: str): bool:
         ret false
     end
     if SALAM_OS_WINDOWS:
-        cmd := "cmd /c start \"\" " + _quote_cmd(url)
+        q := _quote_cmd(url)
+        cmd := "cmd /c start \"\" " + q
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
         r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     else SALAM_OS_MAC:
-        cmd := "open " + _quote_sh(url)
+        q := _quote_sh(url)
+        cmd := "open " + q
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
         r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     else:
-        cmd := "xdg-open " + _quote_sh(url) + " >/dev/null 2>&1 || gio open " + _quote_sh(url) + " >/dev/null 2>&1"
+        q := _quote_sh(url)
+        cmd := "xdg-open " + q + " >/dev/null 2>&1 || gio open " + q + " >/dev/null 2>&1 || sensible-browser " + q + " >/dev/null 2>&1"
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
         r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     end
 end
@@ -100,19 +113,31 @@ pub func OpenPath(path: str): bool:
         ret false
     end
     if SALAM_OS_WINDOWS:
-        cmd := "cmd /c start \"\" " + _quote_cmd(path)
+        q := _quote_cmd(path)
+        cmd := "cmd /c start \"\" " + q
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
         r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     else SALAM_OS_MAC:
-        cmd := "open " + _quote_sh(path)
+        q := _quote_sh(path)
+        cmd := "open " + q
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
         r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     else:
-        cmd := "xdg-open " + _quote_sh(path) + " >/dev/null 2>&1 || gio open " + _quote_sh(path) + " >/dev/null 2>&1"
+        q := _quote_sh(path)
+        cmd := "xdg-open " + q + " >/dev/null 2>&1 || gio open " + q + " >/dev/null 2>&1"
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
         r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         ret r.code == 0
     end
 end
@@ -125,38 +150,60 @@ pub func Reveal(path: str): bool:
     end
     if SALAM_OS_WINDOWS:
         if os.Exists(path):
-            cmd := "explorer /select," + _quote_cmd(path)
+            q := _quote_cmd(path)
+            cmd := "explorer /select," + q
+            defer mem.Free(q as void*)
+            defer mem.Free(cmd as void*)
             r := shell.Exec(cmd)
-            mem.Free(cmd as void*)
-            ret r.code == 0 or r.code == 1
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            // explorer often returns 1 on success
+            ret true
         end
-        ret OpenPath(path)
+        parent := filepath.Dir(path)
+        defer mem.Free(parent as void*)
+        if parent.Len() > 0 and os.IsDir(parent):
+            ret OpenPath(parent)
+        end
+        ret false
     else SALAM_OS_MAC:
         if os.Exists(path):
-            cmd := "open -R " + _quote_sh(path)
+            q := _quote_sh(path)
+            cmd := "open -R " + q
+            defer mem.Free(q as void*)
+            defer mem.Free(cmd as void*)
             r := shell.Exec(cmd)
-            mem.Free(cmd as void*)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
             ret r.code == 0
         end
-        ret OpenPath(path)
+        parent := filepath.Dir(path)
+        defer mem.Free(parent as void*)
+        if parent.Len() > 0 and os.IsDir(parent):
+            ret OpenPath(parent)
+        end
+        ret false
     else:
-        // Best-effort: open containing folder.
-        parent := path
-        if os.Exists(path) and not os.IsDir(path):
-            // fallback to shell dirname
-            cmd := "dirname " + _quote_sh(path)
-            r := shell.Exec(cmd)
-            mem.Free(cmd as void*)
-            t := str.Trim(r.out)
-            if str.Len(t) > 0:
-                parent = t
-            end
+        if os.Exists(path):
+            q := _quote_sh(path)
+            sel := "nautilus --select " + q + " >/dev/null 2>&1 || dolphin --select " + q + " >/dev/null 2>&1 || nemo " + q + " >/dev/null 2>&1"
+            defer mem.Free(q as void*)
+            defer mem.Free(sel as void*)
+            r := shell.Exec(sel)
             mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if r.code == 0:
+                ret true
+            end
+        end
+        mut parent := str.Clone(path)
+        if os.Exists(path) and not os.IsDir(path):
+            tmp := filepath.Dir(path)
+            mem.Free(parent as void*)
+            parent = tmp
         end
         ok := OpenPath(parent)
-        if parent != path and str.Len(parent) > 0:
-            mem.Free(parent as void*)
-        end
+        mem.Free(parent as void*)
         ret ok
     end
 end
@@ -169,14 +216,12 @@ pub func RunDetached(command: str): bool:
     end
     if SALAM_OS_WINDOWS:
         cmd := "cmd /c start \"\" " + command
-        r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
-        ret r.code == 0
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
     else:
         cmd := "nohup " + command + " >/dev/null 2>&1 &"
-        r := shell.Exec(cmd)
-        mem.Free(cmd as void*)
-        ret r.code == 0
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
     end
 end
 

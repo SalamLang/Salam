@@ -626,8 +626,8 @@ func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
         if num >= 0 and num < lw.slots.Len():
             ex := lw.slots.Get(num).expr
             // Prefer static/stable keys for webstate keyed-each reconciliation.
-            // Runtime-state-dependent keys are intentionally rejected here to avoid
-            // churn; TODO(runtime): support stable derived keys with lifecycle hooks.
+            // Runtime-state-dependent keys are intentionally rejected here to avoid churn.
+            // TODO(runtime): support stable derived keys with explicit mount/update/unmount/cleanup lifecycle hook semantics.
             if ws_refs_state(lw, a, ex):
                 ret 0
             end
@@ -1255,7 +1255,7 @@ pub func WebStateRuntime(views: Vector<str>, inits: Vector<str>): str:
     s += "];\n"
     // TODO(runtime,lifecycle): expose explicit mount/update/unmount/cleanup hook points
     // (per-region/per-keyed-node) aligned with native lifecycle model when host APIs exist.
-    // Hook placeholders (optional host integration): window.__salam_lifecycle = { mount, update, unmount }
+    // Hook placeholders (optional host integration): window.__salam_lifecycle = { mount, update, unmount, cleanup }
     s += `var __salam_dirty = [];
 var __salam_queued = false;
 var __salam_marks = {};
@@ -1325,6 +1325,12 @@ function __salam_cleanup(n) {
     if (n.nodeType === 8) {
         var m = /^salam:(\d+)$/.exec(n.data);
         if (m) {
+            if (window.__salam_lifecycle && typeof window.__salam_lifecycle.unmount === "function") {
+                try { window.__salam_lifecycle.unmount(+m[1], n); } catch (x) {}
+            }
+            if (window.__salam_lifecycle && typeof window.__salam_lifecycle.cleanup === "function") {
+                try { window.__salam_lifecycle.cleanup(+m[1], n); } catch (x2) {}
+            }
             __salam_release(m[1]);
         }
         return;
@@ -1644,7 +1650,14 @@ function __salam_mount(i) {
         return;
     }
     var fresh = [], guard = 0;
+    var __salam_before = __salam_marks ? __salam_marks[i] : null;
     __salam_render(i, fresh);
+    if (window.__salam_lifecycle) {
+        var __salam_hook = __salam_before ? "update" : "mount";
+        if (typeof window.__salam_lifecycle[__salam_hook] === "function") {
+            try { window.__salam_lifecycle[__salam_hook](i); } catch (xlh) {}
+        }
+    }
     while (fresh.length && guard++ < 10000) {
         var j = fresh.shift();
         if (j === undefined || j === null) {
@@ -1661,6 +1674,9 @@ function __salam_mount(i) {
             }
         }
         __salam_render(j, fresh);
+        if (window.__salam_lifecycle && typeof window.__salam_lifecycle.mount === "function") {
+            try { window.__salam_lifecycle.mount(j); } catch (xm) {}
+        }
     }
 }
 function __salam_flush() {

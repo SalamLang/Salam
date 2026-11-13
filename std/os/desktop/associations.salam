@@ -74,12 +74,36 @@ end
 
 func _trim_dot(ext: str): str:
     e := str.Trim(ext)
-    if e.Len() > 0 and e.Substr(0, 1) == ".":
+    if e.Len() == 0: ret e end
+    head := e.Substr(0, 1)
+    if head == ".":
+        mem.Free(head as void*)
         t := e.Substr(1, e.Len() - 1)
         mem.Free(e as void*)
         ret t
     end
+    mem.Free(head as void*)
     ret e
+end
+
+func _desktop_sanitize(v: str): str:
+    // Prevent key/value or line injection in .desktop fields.
+    mut sb := str.NewBuilder()
+    n := v.Len()
+    mut i := 0
+    until i < n:
+        ch := v.Substr(i, 1)
+        if ch == "\n" or ch == "\r":
+            str.BufAppendChar(sb, 32)
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
 end
 
 @en "NormalizeExtension"
@@ -89,8 +113,13 @@ pub func NormalizeExtension(ext: str): str:
     low := str.Lower(e)
     mem.Free(e as void*)
     if low.Len() == 0: ret low end
-    if low.Substr(0, 1) == ".": ret low end
-    out := ".".Concat(low)
+    head := low.Substr(0, 1)
+    if head == ".":
+        mem.Free(head as void*)
+        ret low
+    end
+    mem.Free(head as void*)
+    out := str.Concat(".", low)
     mem.Free(low as void*)
     ret out
 end
@@ -121,8 +150,14 @@ pub func QueryDefaultForExtension(ext: str): str:
     defer mem.Free(e as void*)
     if SALAM_OS_WINDOWS:
         // Best-effort: query HKCU/HKCR assoc via cmd assoc/ftype is limited; return empty when unknown.
-        r := shell.Exec("cmd /c assoc " + e)
+        q := _quote_sh(e)
+        cmd := str.Concat("cmd /c assoc ", q)
+        mem.Free(q as void*)
+        r := shell.Exec(cmd)
+        mem.Free(cmd as void*)
         out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         if out.Len() > 0: ret out end
         mem.Free(out as void*)
         ret str.Clone("")
@@ -134,11 +169,15 @@ pub func QueryDefaultForExtension(ext: str): str:
         mime := MimeForExtension(e)
         defer mem.Free(mime as void*)
         q := _quote_sh(mime)
-        cmd := "xdg-mime query default ".Concat(q).Concat(" 2>/dev/null")
-        defer mem.Free(q as void*)
-        defer mem.Free(cmd as void*)
-        r := shell.Exec(cmd)
+        cmd := str.Concat("xdg-mime query default ", q)
+        cmd2 := str.Concat(cmd, " 2>/dev/null")
+        mem.Free(cmd as void*)
+        mem.Free(q as void*)
+        r := shell.Exec(cmd2)
+        mem.Free(cmd2 as void*)
         out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
         if out.Len() > 0: ret out end
         mem.Free(out as void*)
         ret str.Clone("")
@@ -159,7 +198,7 @@ pub func InfoForExtension(ext: str): AssociationInfo:
     mime := MimeForExtension(e)
     handler := QueryDefaultForExtension(e)
     supported := SALAM_OS_LINUX or SALAM_OS_WINDOWS or SALAM_OS_MAC
-    note := str.Clone("Best-effort query; registration support varies by platform and privileges.")
+    mut note := str.Clone("Best-effort query; registration support varies by platform and privileges.")
     if handler.Len() == 0:
         mem.Free(note as void*)
         note = str.Clone("No default handler found or query not supported on this host.")
@@ -173,29 +212,44 @@ pub func RegisterDesktopEntryLinux(app_id: str, app_name: str, exec_cmd: str, mi
     if not (SALAM_OS_LINUX or SALAM_OS_BSD): ret false end
     if app_id.Len() == 0 or exec_cmd.Len() == 0: ret false end
     home := os.Env("HOME")
-    if home.Len() == 0: ret false end
+    if home.Len() == 0:
+        mem.Free(home as void*)
+        ret false
+    end
+    defer mem.Free(home as void*)
     dir := filepath.Join(home, ".local/share/applications")
     defer mem.Free(dir as void*)
     _ = os.MkdirAll(dir)
-    path := filepath.Join(dir, app_id + ".desktop")
+    fname := str.Concat(app_id, ".desktop")
+    path := filepath.Join(dir, fname)
+    mem.Free(fname as void*)
     defer mem.Free(path as void*)
+
+    safe_name := _desktop_sanitize(app_name.Len() > 0 ? app_name : app_id)
+    safe_exec := _desktop_sanitize(exec_cmd)
+    defer mem.Free(safe_name as void*)
+    defer mem.Free(safe_exec as void*)
 
     mut sb := str.NewBuilder()
     str.BufAppend(sb, "[Desktop Entry]\n")
     str.BufAppend(sb, "Type=Application\n")
     str.BufAppend(sb, "Name=")
-    str.BufAppend(sb, app_name.Len() > 0 ? app_name : app_id)
+    str.BufAppend(sb, safe_name)
     str.BufAppend(sb, "\nExec=")
-    str.BufAppend(sb, exec_cmd)
+    str.BufAppend(sb, safe_exec)
     str.BufAppend(sb, "\nTerminal=false\n")
     if icon.Len() > 0:
+        safe_icon := _desktop_sanitize(icon)
+        defer mem.Free(safe_icon as void*)
         str.BufAppend(sb, "Icon=")
-        str.BufAppend(sb, icon)
+        str.BufAppend(sb, safe_icon)
         str.BufAppend(sb, "\n")
     end
     if mime_types.Len() > 0:
+        safe_mime := _desktop_sanitize(mime_types)
+        defer mem.Free(safe_mime as void*)
         str.BufAppend(sb, "MimeType=")
-        str.BufAppend(sb, mime_types)
+        str.BufAppend(sb, safe_mime)
         str.BufAppend(sb, "\n")
     end
     content := str.BufStr(sb)
@@ -212,11 +266,17 @@ pub func SetDefaultForMimeLinux(mime: str, desktop_file: str): bool:
     if mime.Len() == 0 or desktop_file.Len() == 0: ret false end
     q1 := _quote_sh(mime)
     q2 := _quote_sh(desktop_file)
-    cmd := "xdg-mime default ".Concat(q2).Concat(" ").Concat(q1).Concat(" >/dev/null 2>&1")
+    cmd := str.Concat("xdg-mime default ", q2)
+    cmd2 := str.Concat(cmd, " ")
+    cmd3 := str.Concat(cmd2, q1)
+    cmd4 := str.Concat(cmd3, " >/dev/null 2>&1")
+    mem.Free(cmd as void*)
+    mem.Free(cmd2 as void*)
+    mem.Free(cmd3 as void*)
     defer mem.Free(q1 as void*)
     defer mem.Free(q2 as void*)
-    defer mem.Free(cmd as void*)
-    ret shell.System(cmd) == 0
+    defer mem.Free(cmd4 as void*)
+    ret shell.System(cmd4) == 0
 end
 
 @en "RegisterFileAssociation"
@@ -225,8 +285,10 @@ pub func RegisterFileAssociation(ext: str, app_id: str, app_name: str, exec_cmd:
     e := NormalizeExtension(ext)
     mime := MimeForExtension(e)
     if SALAM_OS_LINUX or SALAM_OS_BSD:
+        desktop_file := str.Concat(app_id, ".desktop")
         ok1 := RegisterDesktopEntryLinux(app_id, app_name, exec_cmd, mime, "")
-        ok2 := SetDefaultForMimeLinux(mime, app_id + ".desktop")
+        ok2 := SetDefaultForMimeLinux(mime, desktop_file)
+        mem.Free(desktop_file as void*)
         mut note := str.Clone("User-level .desktop written; xdg-mime default set when available.")
         if not ok1 or not ok2:
             mem.Free(note as void*)
@@ -247,31 +309,55 @@ pub func OpenWith(app_cmd: str, target: str): bool:
     if app_cmd.Len() == 0 or target.Len() == 0: ret false end
     if SALAM_OS_WINDOWS:
         // Best-effort quoting for app command and target.
-        qa := "\"" + app_cmd + "\""
-        qt := "\"" + target + "\""
-        cmd := "cmd /c start \"\" ".Concat(qa).Concat(" ").Concat(qt)
-        defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        qa := str.Concat("\"", app_cmd)
+        qa2 := str.Concat(qa, "\"")
+        qt := str.Concat("\"", target)
+        qt2 := str.Concat(qt, "\"")
+        cmd := str.Concat("cmd /c start \"\" ", qa2)
+        cmd2 := str.Concat(cmd, " ")
+        cmd3 := str.Concat(cmd2, qt2)
+        mem.Free(qa as void*)
+        mem.Free(qa2 as void*)
+        mem.Free(qt as void*)
+        mem.Free(qt2 as void*)
+        mem.Free(cmd as void*)
+        mem.Free(cmd2 as void*)
+        defer mem.Free(cmd3 as void*)
+        ret shell.System(cmd3) == 0
     else SALAM_OS_MAC:
         qapp := _quote_sh(app_cmd)
         qt := _quote_sh(target)
-        cmd := "open -a ".Concat(qapp).Concat(" ").Concat(qt).Concat(" >/dev/null 2>&1")
+        cmd := str.Concat("open -a ", qapp)
+        cmd2 := str.Concat(cmd, " ")
+        cmd3 := str.Concat(cmd2, qt)
+        cmd4 := str.Concat(cmd3, " >/dev/null 2>&1")
+        mem.Free(cmd as void*)
+        mem.Free(cmd2 as void*)
+        mem.Free(cmd3 as void*)
         defer mem.Free(qapp as void*)
         defer mem.Free(qt as void*)
-        defer mem.Free(cmd as void*)
-        if shell.System(cmd) == 0: ret true end
+        defer mem.Free(cmd4 as void*)
+        if shell.System(cmd4) == 0: ret true end
         // Fallback: treat app_cmd as executable
         qt2 := _quote_sh(target)
-        cmd2 := app_cmd.Concat(" ").Concat(qt2).Concat(" >/dev/null 2>&1 &")
+        cmd5 := str.Concat(app_cmd, " ")
+        cmd6 := str.Concat(cmd5, qt2)
+        cmd7 := str.Concat(cmd6, " >/dev/null 2>&1 &")
+        mem.Free(cmd5 as void*)
+        mem.Free(cmd6 as void*)
         defer mem.Free(qt2 as void*)
-        defer mem.Free(cmd2 as void*)
-        ret shell.System(cmd2) == 0
+        defer mem.Free(cmd7 as void*)
+        ret shell.System(cmd7) == 0
     else:
         qt := _quote_sh(target)
-        cmd := app_cmd.Concat(" ").Concat(qt).Concat(" >/dev/null 2>&1 &")
+        cmd := str.Concat(app_cmd, " ")
+        cmd2 := str.Concat(cmd, qt)
+        cmd3 := str.Concat(cmd2, " >/dev/null 2>&1 &")
+        mem.Free(cmd as void*)
+        mem.Free(cmd2 as void*)
         defer mem.Free(qt as void*)
-        defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        defer mem.Free(cmd3 as void*)
+        ret shell.System(cmd3) == 0
     end
 end
 

@@ -43,11 +43,12 @@ const back = (gateway, query) => fetch(`${API}/billing/callback/${gateway}?${que
 console.log("plans");
 const plans = await api("GET", "/plans");
 const ids = (plans.json?.plans ?? []).map((p) => p.id);
-check("the six plans are listed", plans.res.status === 200 && ids.join(",") === "free,plus,pro,unlimited,unlimited2,unlimited3", ids);
+check("the plans are listed", plans.res.status === 200 && ids.join(",") === "free,trial,plus,pro,unlimited", ids);
 const priced = Object.fromEntries((plans.json?.plans ?? []).map((p) => [p.id, p.price]));
 check("the prices are 0, 3, 6 and 30 million toman, and the free plan runs one request at a time", priced.free === 0 && priced.plus === 3000000 && priced.pro === 6000000 && priced.unlimited === 30000000 && plans.json.plans.find((p) => p.id === "free").parallel === 1, priced);
 const unlimited = plans.json.plans.find((p) => p.id === "unlimited");
-check("the unlimited plan has no daily limit", unlimited.api_daily === 0 && unlimited.chat_daily === 0 && unlimited.parallel === 1 && unlimited.days === 30, unlimited);
+const tierParallels = (unlimited?.tiers ?? []).map((t) => t.parallel).join(",");
+check("the unlimited plan has no daily limit and selectable concurrent sessions", unlimited.api_daily === 0 && unlimited.chat_daily === 0 && unlimited.parallel === 1 && unlimited.days === 30 && tierParallels === "1,2,3,5,10", { unlimited, tierParallels });
 check("both gateways are on", (plans.json.gateways ?? []).includes("zarinpal") && plans.json.gateways.includes("zibal"), plans.json.gateways);
 
 console.log("a new account is free");
@@ -131,7 +132,7 @@ const grant = await api("POST", "/admin/subscriptions", admin, { email: BUYER, p
 check("an admin can give a paid plan away", grant.res.status === 201 && grant.json.plan === "unlimited", grant.json);
 const granted = await api("GET", "/billing/subscription", buyer);
 check("the gift is unlimited and lasts the plan days", granted.json.subscription.plan.id === "unlimited" && Math.abs(granted.json.subscription.expires - (now + 30 * DAY)) < 300 && granted.json.subscription.source === "admin", granted.json.subscription);
-check("an account on a gifted plan can still buy or renew any plan", (await api("POST", "/billing/checkout", buyer, { plan: "unlimited2", gateway: "zarinpal" })).res.status === 200);
+check("an account on a gifted plan can still buy or renew any plan", (await api("POST", "/billing/checkout", buyer, { plan: "unlimited", gateway: "zarinpal", parallel: 2 })).res.status === 200);
 const active = await api("GET", "/admin/subscriptions", admin);
 const mine = active.json.subscriptions.find((s) => s.user?.email === BUYER);
 check("active subscriptions carry the user and the plan", mine?.plan === "unlimited" && mine.status === "active" && mine.note === "تست مدیر", mine);

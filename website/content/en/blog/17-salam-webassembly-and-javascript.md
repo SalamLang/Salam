@@ -173,7 +173,7 @@ The JavaScript backend has limits that come from JavaScript itself:
 
 ## Web projects: salam web and the page language {#web}
 
-Salam also has a page language: a `page:` block describes HTML elements, CSS styles and events in Salam syntax, and `salam page build` turns it into HTML, CSS and JavaScript. `salam web` builds a whole web project, a page plus the Salam programs it loads with `script: src="app.salam"`, into one `.html` file, or into separate `.html`, `.css` and `.js` files with `--split`. The article [web development with Salam](/blog/web-development-with-salam/) and the course lessons from [page text](/learn/page-text/) onward cover the page language.
+Salam also has a page language: a `page:` block describes HTML elements, CSS styles and events in Salam syntax, and `salam page build` turns it into HTML, CSS and JavaScript. `salam web` builds a whole web project, a page plus the Salam programs it loads with `script: src="app.salam"`, into one `.html` file, or into separate `.html`, `.css` and `.js` files with `--split`. The article [web development with Salam](/blog/web-development-with-salam/) and the course lessons from [page text](/learn/page/text/) onward cover the page language.
 
 ## The online editor: the compiler in a browser tab {#editor}
 

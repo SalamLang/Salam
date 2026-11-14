@@ -164,7 +164,7 @@ The checks go further than names. Elements are checked against where they may ap
 
 The page language uses readable names where HTML is terse: `paragraph`, `heading` with a `size`, `list` and `item`, `ordered list`, `text area`, `block quote`. The HTML tag names work too (`div`, `p`, `a`, `img`, `li`), so you can write whichever you know. Some names depend on context: inside a `table`, `header`, `main` and `footer` become `thead`, `tbody` and `tfoot`, and `column` is a header cell in a header row and a data cell elsewhere. CSS properties are written with spaces instead of dashes (`border radius`, `font family`), and a prefix such as `hover` or `focus` applies a style in that state.
 
-Lessons [25](/learn/page-text/) to [30](/learn/page-head/) teach the elements group by group: text, page structure, media, tables, forms, and the document head with scripts and global attributes. Lessons [31](/learn/css-basics/) to [38](/learn/css-more/) do the same for CSS, from the box model through [layout with flex and grid](/learn/css-layout/), [responsive pages](/learn/css-responsive/) and [animation](/learn/css-motion/).
+Lessons [25](/learn/page/text/) to [30](/learn/page/head/) teach the elements group by group: text, page structure, media, tables, forms, and the document head with scripts and global attributes. Lessons [31](/learn/css/basics/) to [38](/learn/css/more/) do the same for CSS, from the box model through [layout with flex and grid](/learn/css/layout/), [responsive pages](/learn/css/responsive/) and [animation](/learn/css/motion/).
 
 Every name also has a Persian spelling, and a page written in Persian is right to left with `lang="fa"` without you saying so. This is the same kind of page in Persian:
 
@@ -218,7 +218,7 @@ page:
 end
 ```
 
-Each `Choice` counts its own votes, and clicking one redraws only that box, so focus and typed input elsewhere survive. The same page can run in a native window drawn by Salam with `salam run poll.salam --ui=native`, and `salam check --ui=native` reports the parts a native window cannot show. Lessons [39](/learn/events-mouse/) to [43](/learn/events-dom/) cover every event and the state model, and the article [Interactive user interfaces in Salam](/blog/interactive-ui-components-state-events/) goes deeper into components, state and events.
+Each `Choice` counts its own votes, and clicking one redraws only that box, so focus and typed input elsewhere survive. The same page can run in a native window drawn by Salam with `salam run poll.salam --ui=native`, and `salam check --ui=native` reports the parts a native window cannot show. Lessons [39](/learn/events/mouse/) to [43](/learn/events/dom/) cover every event and the state model, and the article [Interactive user interfaces in Salam](/blog/interactive-ui-components-state-events/) goes deeper into components, state and events.
 
 ## Pages with parameters: server-side rendering {#server-rendering}
 
@@ -313,9 +313,9 @@ Where it fits well: documentation sites, landing pages, dashboards, forms, admin
 The free course on this site teaches the page language in twenty-one lessons after the general language:
 
 1. [The layout language](/learn/layout/): the tour, from a first page to server rendering.
-2. [Pages and text](/learn/page-text/), [page structure](/learn/page-structure/), [media](/learn/page-media/), [tables](/learn/page-tables/), [forms](/learn/page-forms/) and [the head](/learn/page-head/): every element.
-3. [Styles and the box model](/learn/css-basics/) through [more CSS](/learn/css-more/): every property.
-4. [Mouse events](/learn/events-mouse/) through [state, the DOM and timers](/learn/events-dom/): interactivity.
+2. [Pages and text](/learn/page/text/), [page structure](/learn/page/structure/), [media](/learn/page/media/), [tables](/learn/page/tables/), [forms](/learn/page/forms/) and [the head](/learn/page/head/): every element.
+3. [Styles and the box model](/learn/css/basics/) through [more CSS](/learn/css/more/): every property.
+4. [Mouse events](/learn/events/mouse/) through [state, the DOM and timers](/learn/events/dom/): interactivity.
 5. [Six whole web projects](/learn/web-projects/): a landing page, a blog post, a sign-up form, a dashboard, a task list and a gallery.
 
 ## Frequently asked questions {#faq}

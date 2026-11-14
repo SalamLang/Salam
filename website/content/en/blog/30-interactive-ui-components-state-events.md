@@ -20,7 +20,7 @@ Interactivity enters through attributes named after browser events. `click`, `su
 
 There are two ways to make a page change after an event, and Salam supports both:
 
-- **The direct way.** A handler finds an element with the `dom` package and changes its text, class, style or attributes. This is the familiar DOM style, and the lessons on [mouse events](/learn/events-mouse/), [keyboard and forms](/learn/events-keys-forms/), [drag and touch](/learn/events-drag-touch/) and [media events](/learn/events-media-more/) use it to cover each event family.
+- **The direct way.** A handler finds an element with the `dom` package and changes its text, class, style or attributes. This is the familiar DOM style, and the lessons on [mouse events](/learn/events/mouse/), [keyboard and forms](/learn/events/keys-forms/), [drag and touch](/learn/events/drag-touch/) and [media events](/learn/events/media-more/) use it to cover each event family.
 - **The reactive way.** A handler only changes variables. The compiler knows which parts of the page read those variables and redraws exactly those parts. This is how components with state work, and it is the only style that also runs in a native window.
 
 The rest of the article starts with the first and moves to the second.
@@ -60,7 +60,7 @@ end
 
 Three details matter. First, `click = more` names the function; it does not call it. Writing `click = more()` is rejected, because the attribute wants the function itself (error E137; when the function writes page state, as `more` does here, the compiler reports the same mistake as E132). Second, `dom.ById("value")` is checked against the IDs that really exist in the same file, so a wrong id such as `dom.ById("count")` stops the build with E138 before the page ever reaches a browser. Third, the page has no `main`. A page program is driven entirely by its handlers, and adding a `main` makes the compiler report the handlers as unused functions.
 
-The `dom` package covers what a handler normally needs: finding elements (`ById`, `Query`, `QueryAll`), reading and writing text and values, classes and styles, creating and removing elements, timers (`SetTimeout`, `SetInterval`, `RequestFrame`), the event itself (`EventTarget`, `EventKey`, `PreventDefault`), and browser storage (`StoreSetStr`, `StoreGetStr`). The full list is on the [dom package page](/std/dom/), and the lesson on [state, the DOM and timers](/learn/events-dom/) builds a todo list, tabs, a stopwatch and a quiz with it.
+The `dom` package covers what a handler normally needs: finding elements (`ById`, `Query`, `QueryAll`), reading and writing text and values, classes and styles, creating and removing elements, timers (`SetTimeout`, `SetInterval`, `RequestFrame`), the event itself (`EventTarget`, `EventKey`, `PreventDefault`), and browser storage (`StoreSetStr`, `StoreGetStr`). The full list is on the [dom package page](/std/dom/), and the lesson on [state, the DOM and timers](/learn/events/dom/) builds a todo list, tabs, a stopwatch and a quiz with it.
 
 The direct style works well for small pages. Its weakness is the one every jQuery-era developer remembers: as soon as two handlers change the same element, you have to keep the variables and the page in step by hand. Salam's lesson recommends a discipline for that (state in variables, one drawing function), and the reactive model below removes the need for it.
 
@@ -288,4 +288,4 @@ A Salam page compiles to ordinary HTML, CSS and JavaScript, so it can sit next t
 
 ### Where can I learn the page language step by step?
 
-The free [Salam course](/learn/) has a full part on web pages, from [the first layout](/learn/layout/) and [page structure](/learn/page-structure/) through CSS to the event lessons and [six complete web projects](/learn/web-projects/), each with live previews.
+The free [Salam course](/learn/) has a full part on web pages, from [the first layout](/learn/layout/) and [page structure](/learn/page/structure/) through CSS to the event lessons and [six complete web projects](/learn/web-projects/), each with live previews.

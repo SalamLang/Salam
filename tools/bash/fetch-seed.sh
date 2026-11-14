@@ -59,22 +59,21 @@ done
 }
 
 resolve_latest_tag() {
-    eff=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
-        "https://github.com/$REPO/releases/latest" 2>/dev/null) || eff=
-    case ${eff:-} in
-    */releases/tag/*)
-        printf '%s' "${eff##*/tag/}"
-        return 0
-        ;;
-    esac
-    api=https://api.github.com/repos/$REPO/releases/latest
+    # Not /releases/latest: this repo also publishes non-compiler releases
+    # (agent, android, nightlies) and whichever was created last can steal
+    # GitHub's repo-wide "latest" flag. A compiler release tag is always
+    # plain "vX.Y.Z", so pick the newest release matching that shape.
+    api="https://api.github.com/repos/$REPO/releases?per_page=50"
     tok=${GH_TOKEN:-${GITHUB_TOKEN:-}}
     if [ -n "$tok" ]; then
-        body=$(curl -fsSL --retry 3 -H "Authorization: Bearer $tok" "$api") || body=
+        body=$(curl -fsSL --retry 3 -H "Authorization: Bearer $tok" -H "Accept: application/vnd.github+json" "$api") || body=
     else
-        body=$(curl -fsSL --retry 3 "$api") || body=
+        body=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" "$api") || body=
     fi
-    printf '%s' "${body:-}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+    printf '%s' "${body:-}" \
+        | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sed -n '1p'
 }
 
 if [ -z "$VERSION" ]; then

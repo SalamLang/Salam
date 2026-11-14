@@ -97,7 +97,19 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
-curl -fsSL --retry 3 -o "$tmp/seed.zip" "$url"
+if ! curl -fsSL --retry 3 -o "$tmp/seed.zip" "$url"; then
+    if [ "$tag" != "v0.6.3" ]; then
+        echo "warn: $asset not found for $tag, falling back to v0.6.3 seed" >&2
+        tag=v0.6.3
+        VERSION=0.6.3
+        asset="salam-${VERSION}-${SLUG}.zip"
+        url="https://github.com/$REPO/releases/download/$tag/$asset"
+        echo "seed asset : $asset ($tag)"
+        curl -fsSL --retry 3 -o "$tmp/seed.zip" "$url"
+    else
+        exit 1
+    fi
+fi
 unzip -q "$tmp/seed.zip" -d "$tmp/x"
 
 bin=$(find "$tmp/x" -name salam -type f 2>/dev/null | sed -n '1p')

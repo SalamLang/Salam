@@ -175,7 +175,7 @@ page:
 end
 ```
 
-`salam page build notes.salam` compiles `check` and `title problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events-dom/) ends with the same warning.
+`salam page build notes.salam` compiles `check` and `title problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events/dom/) ends with the same warning.
 
 Beyond single handlers there are three tools for the client-side:
 

@@ -24,7 +24,7 @@ pkg.intro <<
 <p><strong>Step 1 is the only setup there is.</strong> You do not write a schema description for this package; you hand it the <code>CREATE TABLE</code> statements you already have. Point <code>Apply</code> at your migration files in order and the catalog is the schema your program really runs against.</p>
 <p><strong>Step 2 is why you came.</strong> Five queries of the kind that live in every codebase, and five different ways of being wrong: a column name remembered in the plural, a column that belongs to the other table in the join, an INSERT that leaves out a NOT NULL column with no default, a number compared against a quoted word, and a DELETE with no WHERE. Each one is found without a database, and each one names what to do about it. The last is a warning rather than an error, because sometimes clearing a table is the intent - the point is that you decide, in a review, rather than at two in the morning.</p>
 <p><strong>Step 3 is the same five, put right</strong>, and it is worth running your own queries through this pair of steps once before reading any further. The quickest way is the command: <code>salam sql check src --schema=db</code> reads the SQL out of your <code>.salam</code> files as well as your <code>.sql</code> ones.</p>
-<p><strong>Step 4 is where it stops being a linter.</strong> Once the names resolve, the types follow: the placeholder is an <code>option.Option&lt;i64&gt;</code> because <code>year</code> can be null, <code>title</code> is a plain <code>str</code> because the column is NOT NULL. That is the signature your code should have, derived from the schema instead of remembered.</p>
+<p><strong>Step 4 is where it stops being a linter.</strong> Once the names resolve, the types follow: the placeholder is an <code>i64?</code> because <code>year</code> can be null, <code>title</code> is a plain <code>str</code> because the column is NOT NULL. That is the signature your code should have, derived from the schema instead of remembered.</p>
 <p><strong>Step 5 is the one that prevents the oldest bug in the book.</strong> <code>Fill</code> writes the values into the query with the quoting the engine wants - note what happens to the apostrophe in <code>O'Brien</code> - and because the query was lexed first, a <code>?</code> that lives inside a string is left alone.</p>
 <p><strong>Step 6 is the part you can stop writing by hand.</strong> Annotate a query with a name and a kind and the generated function has the parameters and the row struct that step 4 worked out. Run it with <code>salam sql generate queries --schema=db --output=gen/store.salam</code>.</p>
 <p>Two things to carry away. The schema is the DDL you already have, so nothing can drift out of step with it. And every one of these checks happens before the program runs, which is the only time a query mistake is cheap.</p>
@@ -43,6 +43,7 @@ only fault is that it stops in the middle - is a fragment rather than a statemen
 counted and skipped instead of being reported as a syntax error. The count is in the summary,
 so nothing is checked silently; a fragment is also the reason to bind values as placeholders
 instead of pasting them in.</p>
+<p>The messages come in the language of the file they are about: a Persian <code>.salam</code> file is answered in Persian, an English one in English, and <code>.sql</code> files, which have no language of their own, follow <code>--lang</code>. <code>--error-lang=en</code> or <code>--error-lang=fa</code> puts every message in one language. The summary line follows <code>--error-lang</code> when it is given, then <code>--lang</code>, and otherwise is Persian only when every Salam file checked was Persian. <code>salam sql generate --lang=fa</code> writes the generated functions in Persian Salam.</p>
 <p>Every diagnostic carries a code. <code>SQL0xx</code> is lexical, <code>SQL1xx</code> is syntax, <code>SQL2xx</code> is a dialect rule, <code>SQL3xx</code> is a name or a count that does not match the schema. Match on the code when you want to allow one particular thing; never match on the message.</p>
 
 <h2 id="guide-catalog">Your migrations are the schema</h2>
@@ -62,7 +63,7 @@ statement returns two columns, a <code>LIMIT</code> that is not a number, an agg
 <p>This is substitution, not a prepared statement: the database still parses one complete statement, and there is no plan reuse. Where the driver can prepare and bind, as sqlite can, that is still the better tool. Where it cannot, this is the safe way to get the values in, and it is one audited function rather than a quoting rule repeated at every call site.</p>
 
 <h2 id="guide-analyze">The type of every placeholder</h2>
-<p><code>Analyze</code> does everything <code>Check</code> does and also hands back what the query takes and what it returns. Each <code>Param</code> says which column it was compared with, in which table, and the type that column has; each <code>ResultCol</code> says the name the column comes back under, its type, and whether it can be null. <code>SalamType</code> turns that into the Salam type to read it into, so a LEFT JOIN gives you <code>option.Option&lt;i64&gt;</code> where an inner join gives you <code>i64</code>.</p>
+<p><code>Analyze</code> does everything <code>Check</code> does and also hands back what the query takes and what it returns. Each <code>Param</code> says which column it was compared with, in which table, and the type that column has; each <code>ResultCol</code> says the name the column comes back under, its type, and whether it can be null. <code>SalamType</code> turns that into the Salam type to read it into, so a LEFT JOIN gives you <code>i64?</code> where an inner join gives you <code>i64</code>.</p>
 {{example.db-sql-guide-analyze}}
 <p>That is enough to generate the binding code for a query, or to assert in a test that a query still takes and returns what the code around it believes. Placeholders are numbered in the order they appear, which is the order the driver binds them; for PostgreSQL the ordinal is the number in the <code>$n</code> itself, and a gap in those numbers is an error of its own.</p>
 <div class="table-wrap"><table>
@@ -81,7 +82,7 @@ statement returns two columns, a <code>LIMIT</code> that is not a number, an agg
 <h2 id="guide-generate">Generating the query functions</h2>
 <p>With the schema and the analysis in place, the last step is mechanical, so the package does it: annotate a <code>.sql</code> file the way sqlc does and <code>Generate</code> writes the Salam for it - a row struct per query, a typed function per query, each one checked against the schema as it is generated.</p>
 {{example.db-sql-guide-generate}}
-<p>The kinds are <code>:one</code> (the first row, with an <code>ok &amp;: bool</code> out parameter), <code>:many</code> (a <code>Vector</code> of rows), <code>:exec</code> (a bool) and <code>:execrows</code> (the number of rows changed). Parameters are named after the column each placeholder is compared with and typed from it; a column that can be null comes back as <code>option.Option&lt;T&gt;</code> and is read through <code>IsNull</code>. A query that does not resolve against the schema stops the generation with the query's name in the message, so a typo never reaches the generated file.</p>
+<p>The kinds are <code>:one</code> (the first row, with an <code>ok &amp;: bool</code> out parameter), <code>:many</code> (a <code>Vector</code> of rows), <code>:exec</code> (a bool) and <code>:execrows</code> (the number of rows changed). Parameters are named after the column each placeholder is compared with and typed from it; a column that can be null comes back as <code>T?</code> and is read through <code>IsNull</code>. A query that does not resolve against the schema stops the generation with the query's name in the message, so a typo never reaches the generated file.</p>
 <p>The command is <code>salam sql generate queries --schema=db --output=gen/store.salam --package=store</code>. The generated file takes a <code>dyn db.Connection</code>, so one set of functions serves SQLite, MySQL and PostgreSQL, and it picks each dialect's quoting from <code>c.Kind()</code> at run time.</p>
 
 >>
@@ -207,6 +208,7 @@ doc.FreeQueries = Release the queries and the text they own.
 doc.Generate = Write the Salam source for a whole query file: one row struct and one function per query, each analysed against the catalog first. A query that does not resolve is reported with its name and nothing is generated for it.
 doc.DialectOf = The dialect of one of <code>SQLITE</code>, <code>MYSQL</code>, <code>MARIADB</code> or <code>POSTGRES</code>.
 doc.DialectNamed = The dialect of a name such as <code>"sqlite"</code>, <code>"mysql"</code>, <code>"mariadb"</code> or <code>"postgres"</code>, which is what <code>db.SQLITE</code> and <code>c.Kind()</code> give you. An unknown name gives SQLite.
+doc.SetMessageLanguage = Pick the language of the messages and help texts the checks write from now on: "fa" for Persian, anything else for English, the default. The codes stay the same. It is one setting for the whole program.
 doc.FreeReport = Release a report.
 doc.DiagText = One diagnostic as a line of text, with its help line under it.
 doc.ReportText = A whole report as text, one diagnostic per block.
@@ -223,7 +225,7 @@ doc.ColumnCount = How many columns a table has, or 0 when there is no such table
 doc.ColumnAt = The column at this position of a table, or an empty <code>Column</code>.
 doc.HasColumn = Whether a table has a column of this name, ignoring case.
 doc.KindName = The name of a <code>TYPE_*</code> kind: <code>"int"</code>, <code>"text"</code>, and so on.
-doc.SalamType = The Salam type that reads a column of this kind: <code>i64</code>, <code>f64</code>, <code>bool</code> or <code>str</code>, wrapped in <code>option.Option</code> when the value can be null.
+doc.SalamType = The Salam type that reads a column of this kind: <code>i64</code>, <code>f64</code>, <code>bool</code> or <code>str</code>, made optional with <code>?</code> when the value can be null.
 doc.Check = Parse the SQL and resolve it against a catalog: unknown tables and columns, ambiguous columns, INSERT arity and required columns, and the writes that have no WHERE.
 doc.Analyze = Everything <code>Check</code> does, plus the type of every placeholder and of every column returned. Release it with <code>FreeAnalysis</code>.
 doc.FreeAnalysis = Release an analysis and the strings in it.
@@ -241,6 +243,7 @@ ex.Diag = db-sql-Methods
 ex.Report = db-sql-Methods
 ex.DialectOf = db-sql-Methods
 ex.DialectNamed = db-sql-Methods
+ex.SetMessageLanguage = db-sql-Methods
 ex.FreeReport = db-sql-Methods
 ex.DiagText = db-sql-Methods
 ex.ReportText = db-sql-Methods

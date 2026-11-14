@@ -137,7 +137,7 @@ func parse_type_named(p &: Ps, a &: at.Ast, n: int): int:
         p_advance(p)
     end
     at.SetName(a, n, nm)
-    if nm.len() == 0:
+    if nm.Len() == 0:
         ret n
     end
 
@@ -202,7 +202,22 @@ func parse_type_tuple(p &: Ps, a &: at.Ast, n: int): int:
     start := p_peek(p)
     p_advance(p)
     p_skip_terminators(p)
-    mut go := true
+    mut first := parse_type(p, a)
+    p_skip_terminators(p)
+    if p_at(p, tok.TK_QUESTION):
+        first = parse_type_optional(p, a, first)
+        p_skip_terminators(p)
+    end
+    if p_at(p, tok.TK_OR):
+        un := parse_type_union(p, a, first)
+        p_skip_terminators(p)
+        p_expect(p, tok.TK_RPAREN, "')' to close the grouped type")
+        parse_ptr_and_dims(p, a, un)
+        p_fin(p, a, un)
+        ret un
+    end
+    at.AddChild(a, n, first)
+    mut go := p_match(p, tok.TK_COMMA)
     until go:
         p_skip_terminators(p)
         at.AddChild(a, n, parse_type(p, a))
@@ -266,15 +281,18 @@ func type_is_optional(a &: at.Ast, t: int): bool:
         ret false
     end
     n := at.Get(a, t)
-    ret n.is_tuple and n.list.len() == 1
+    ret n.is_tuple and n.list.Len() == 1
 end
 
 func parse_type_decl(p &: Ps, a &: at.Ast): int:
-    inner := parse_type(p, a)
-    if not p_at(p, tok.TK_QUESTION):
+    mut inner := parse_type(p, a)
+    if p_at(p, tok.TK_QUESTION):
+        inner = parse_type_optional(p, a, inner)
+    end
+    if not p_at(p, tok.TK_OR):
         ret inner
     end
-    ret parse_type_optional(p, a, inner)
+    ret parse_type_union(p, a, inner)
 end
 
 func parse_type_optional(p &: Ps, a &: at.Ast, inner: int): int:
@@ -285,6 +303,24 @@ func parse_type_optional(p &: Ps, a &: at.Ast, inner: int): int:
     at.Put(a, n, nn)
     at.AddChild(a, n, inner)
     p_advance(p)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_type_union(p &: Ps, a &: at.Ast, first: int): int:
+    n := mk_from_node(a, at.AST_TYPE, first)
+    at.SetName(a, n, p.toks.pack == lp.LP_FA ? "گوناگون" : "Variant")
+    mut nn := at.Get(a, n)
+    nn.synthetic = true
+    at.Put(a, n, nn)
+    at.AddChild(a, n, first)
+    until p_match(p, tok.TK_OR):
+        mut mem := parse_type(p, a)
+        if p_at(p, tok.TK_QUESTION):
+            mem = parse_type_optional(p, a, mem)
+        end
+        at.AddChild(a, n, mem)
+    end
     p_fin(p, a, n)
     ret n
 end

@@ -1,10 +1,9 @@
 # Design: `salam lsp`, the Salam language server
 
-Status: **phase 1 and most of phase 2 implemented** on the `feat/lsp`
-branch (2026-10-22). `salam lsp` runs today in Visual Studio Code, Neovim,
+Status: **phase 1 and most of phase 2 implemented**. `salam lsp` runs today in Visual Studio Code, Neovim,
 Emacs, Sublime Text, Kate, Helix and JetBrains IDEs (through LSP4IJ); the
 user guide is [`docs/LSP.md`](../LSP.md) and the end-to-end tests are
-`tools/lsp/test_lsp.py`. What is built and what is left is listed under
+`tools/lsp/test_lsp.salam` (`salam run tools/lsp/test_lsp.salam ./salam`). What is built and what is left is listed under
 [Progress](#progress) at the end.
 
 The bar is GoLand: diagnostics as you type, completion that knows types,
@@ -345,7 +344,7 @@ Quick fixes:
   `each` / `repeat` / `until`, `return` to `ret`, `elif` to `else`,
   `let` / `var` to `:=` / `mut`, `=>` to `:`, `def` / `class` to `func` /
   `struct`. `p_foreign_error` already knows each case; it gains a fix.
-- Add `defer x.free()` where the ownership checker reports a leak, and remove
+- Add `defer x.Free()` where the ownership checker reports a leak, and remove
   a second `free` it reports as a double free.
 
 Refactorings (`refactor.*`):
@@ -562,7 +561,7 @@ transcript tests, so a client always sees an honest capability list.
 
 ## Progress
 
-Built, with tests in `tools/lsp/test_lsp.py`:
+Built, with tests in `tools/lsp/test_lsp.salam`:
 
 - `salam lsp` and the `--analyze` worker, one short-lived worker process per
   analysis instead of the long-lived one described above. It sidesteps the
@@ -593,7 +592,7 @@ Built, with tests in `tools/lsp/test_lsp.py`:
   lsp-mode), a JetBrains plugin on LSP4IJ (`extensions/jetbrains/plugin`,
   built with javac alone and smoke-tested in CI without an IDE), and
   documented setups for Sublime Text, Kate and Helix.
-- `tools/lsp/sweep.py` runs the worker on all 6,300 files under `tests/` and
+- `tools/lsp/sweep.salam` runs the worker on all 6,300 files under `tests/` and
   `std/` and checks that every reference spells the symbol it points at;
   it is clean.
 
@@ -602,7 +601,7 @@ Also built since:
 - `salam dap`, a Debug Adapter Protocol server that builds the program with
   debug information and hands the session to gdb (14+) or lldb-dap;
   breakpoints, stepping and locals work in `.salam` files. The Visual Studio Code
-  extension registers it; `tools/lsp/test_dap.py` drives a real gdb session in
+  extension registers it; `tools/lsp/test_dap.salam` drives a real gdb session in
   CI.
 - Pull diagnostics (`textDocument/diagnostic`, `workspace/diagnostic` from the
   index) and colour swatches for hex colours.

@@ -1,9 +1,9 @@
 pkg.en = core
 pkg.name = core
 pkg.group = Basics
-pkg.summary = The smallest package in Salam, for when the program must not carry on.
-pkg.title = The core package in Salam | Stopping a program with a clear message
-pkg.description = The core package in Salam and its Panic function, which stops a program with a clear message, with an example.
+pkg.summary = Stopping a program with a clear message, and Option for a value that may or may not be there.
+pkg.title = The core package in Salam | Panic and the Option type
+pkg.description = The core package in Salam: the Panic function for stopping a program with a clear message, and the Option type with Some, None, IsSome, IsNone, UnwrapOr, Unwrap and Expect, with examples.
 pkg.intro <<
 <p>The <code>core</code> package has exactly one function, but an important one. Sometimes a program reaches a point where carrying on makes no sense: data is corrupt, or a condition that "can never happen" has happened. In that case it is better to stop right there with a clear message than to quietly hand back a wrong answer.</p>
 <div class="note"><p>For ordinary errors, such as bad input from a user, declare the function <code>throws</code> and <code>throw</code> an <code>Error</code> instead, so that the caller decides what to do with <code>try</code> and <code>catch</code>. A panic is for when there is no correct way to continue, and <code>catch</code> does not stop it.</p></div>
@@ -19,15 +19,15 @@ pkg.intro <<
 <p>Because <code>Panic</code> never returns, the compiler accepts it as the last statement of a function with a result type. Put the unexpected value into the message: <code>unknown light: blue</code> tells you far more than <code>unreachable</code>.</p>
 <p>When the cases are the members of an enum, prefer <code>match</code>: it must cover every member, so the compiler finds the missing case for you and no <code>Panic</code> is needed.</p>
 
-<h2 id="guide-panic-or-result">Panic or Result?</h2>
-<p>The two work together. Anything that comes from outside the program, such as user input, files, the network or another service, can be wrong in normal operation, so it goes through <a href="/std/result/">result</a> and the caller decides what to do. Once the value has been checked, inner functions may treat a bad value as a programming error and panic.</p>
+<h2 id="guide-panic-or-result">Panic, or a value that reports failure?</h2>
+<p>The two work together. Anything that comes from outside the program, such as user input, files, the network or another service, can be wrong in normal operation, so make the function <code>throws</code> and let the caller decide with <code>try</code> and <code>catch</code>, or return a value that carries the failure, such as an enum you declare yourself with an <code>Err</code> case, or the <code>?</code> operator on one. Once the value has been checked, inner functions may treat a bad value as a programming error and panic.</p>
 {{example.core-guide-vs-result}}
 <div class="table-wrap"><table>
 <thead><tr><th>Situation</th><th>Use</th></tr></thead>
 <tbody>
-<tr><td>The user typed something invalid</td><td><code>Result</code> with an error message</td></tr>
-<tr><td>A file or server is missing</td><td><code>Result</code>, or the <code>Error</code> out-parameter of that package</td></tr>
-<tr><td>A value may be absent</td><td><a href="/std/option/">option</a></td></tr>
+<tr><td>The user typed something invalid</td><td><code>throws</code> and <code>throw</code> an <code>Error</code></td></tr>
+<tr><td>A file or server is missing</td><td><code>throws</code>, or the <code>Error</code> out-parameter of that package</td></tr>
+<tr><td>A value may be absent</td><td><code>Option</code>, below, or a field written <code>T?</code></td></tr>
 <tr><td>Your own code broke a rule it promised to keep</td><td><code>Panic</code></td></tr>
 <tr><td>A case that cannot happen by design</td><td><code>Panic</code>, or <code>match</code> on an enum</td></tr>
 </tbody>
@@ -36,13 +36,34 @@ pkg.intro <<
 <ul>
 <li>It writes <code>salam panic: </code> and your message to standard error, then calls the C <code>abort</code>. The process ends with signal <code>SIGABRT</code>, which a shell reports as exit status 134, and the system may write a core dump.</li>
 <li><code>defer</code> statements do not run, so open files are not flushed and temporary files stay behind.</li>
-<li>Text the program printed shortly before the panic can be lost when standard output is a pipe or a file, because <code>println</code> keeps it in a buffer that the panic does not write out. In a terminal every line appears. If the last lines matter, for example in a log a CI job reads, print them with <code>printerrln</code>, which is not buffered.</li>
+<li>Text the program printed before the panic is written out first, even when standard output is a pipe or a file and <code>println</code> was still holding it in its buffer, so the panic message comes after the last printed line.</li>
 <li>In a server, one bad request that panics takes down every other request too.</li>
 </ul>
 <p>That is the main reason to keep <code>Panic</code> for real bugs only.</p>
+
+<h2 id="option">Option: a value that may or may not be there</h2>
+<p>Sometimes the answer from a function is "nothing": a search found no match, or a setting was never given. Returning minus one or an empty string for that is convenient, and later forgotten, and then it is a bug. <code>Option&lt;T&gt;</code> makes it explicit: either there is a value of type <code>T</code>, or there is not. <code>T?</code> is short for <code>core.Option&lt;T&gt;</code> and needs no import: a field written <code>timeout: int?</code> may be left out of a literal, plain values wrap on their own, and <code>null</code> means empty. See <a href="/learn/structs/#optional">optional fields</a>.</p>
+<div class="note"><ul>
+<li><code>Option</code> is a plain struct with two fields, <code>value</code> and <code>present</code>, not an enum: test it with <code>is_some()</code> or <code>.present</code>, not with <code>match</code>, and the <code>?</code> try-operator does not work on it.</li>
+<li>Never read <code>.value</code> before checking. On an empty option it is the zero value of <code>T</code>: 0 for numbers, but for a <code>str</code> it is a null pointer, and printing or measuring it crashes the program.</li>
+<li>Build options only with <code>Some</code> and <code>None</code> (or plain assignment and <code>null</code> through <code>T?</code>), so the two fields always agree.</li>
+<li>The free functions <code>Some</code>, <code>None</code>, <code>IsSome</code>, <code>IsNone</code>, <code>UnwrapOr</code>, <code>Unwrap</code> and <code>Expect</code> need <code>import core</code> and the <code>core.</code> prefix; the methods <code>is_some()</code>, <code>is_none()</code>, <code>unwrap_or(x)</code> and <code>unwrap()</code> on a value already typed <code>T?</code> need neither.</li>
+</ul></div>
+<h3 id="option-lookup">A lookup that may find nothing</h3>
+<p>Looking something up is the classic case for an option. Returning an empty string for a missing phone number would be ambiguous, since an empty value could also be stored on purpose. A function that returns <code>str?</code> says plainly in its signature that the answer may be missing, and every caller has to deal with that.</p>
+{{example.core-guide-option-lookup}}
+<p><code>is_some()</code> followed by <code>.value</code> suits code that does two different things. When there is a sensible default, <code>unwrap_or</code> does the check and the fallback in one call, as the last line shows.</p>
+<h3 id="option-settings">Optional settings with defaults</h3>
+<p>An optional field tells "not given" apart from a real zero or an empty string, which a plain <code>int</code> field cannot. Give each optional field <code>null</code> as its default, so a struct literal can leave it out, and apply the real default at the point of use.</p>
+{{example.core-guide-option-settings}}
+<p>The third line shows why this matters: a width of 0 was given on purpose and is kept, while the first two fall back to 80.</p>
+<h3 id="option-first">Searching a list of structs</h3>
+<p>A search over a vector returns the first match or nothing. Here the program knows an open task must exist at that moment, so it uses <code>core.Expect</code>: if the assumption is ever wrong, the program stops with that sentence rather than carrying on with an empty name.</p>
+{{example.core-guide-option-first}}
+<p><code>core.Unwrap</code> stops with a generic message when the option is empty. Prefer <code>core.Expect</code>, whose message tells the reader which assumption failed, and keep it for assumptions that would be a bug in your own program, the same rule as <code>Panic</code> above. When the caller needs to know <em>why</em> something failed rather than just that a value is missing, make the function <code>throws</code> instead, or declare your own enum with an <code>Err</code> case.</p>
 >>
 
-doc.Panic = Stops the program where it stands: writes <code>salam panic: </code> and the message to standard error and aborts the process (exit status 134). It never returns, <code>defer</code> statements do not run, and buffered standard output that was not yet written can be lost. The example below is not run here, because it deliberately kills the program; its output looks like <code>salam panic: cannot divide by zero</code>.
+doc.Panic = Stops the program where it stands: writes <code>salam panic: </code> and the message to standard error and aborts the process (exit status 134). It never returns and <code>defer</code> statements do not run; standard output the program printed before it is written out first. The example below is not run here, because it deliberately kills the program; its output looks like <code>salam panic: cannot divide by zero</code>.
 doc.ErrorKind = The general category of an error. Code decides on the kind; the message is for people.
 doc.ErrorKind.Other = Any error that fits none of the other kinds. A <code>throw "message"</code> gets this kind.
 doc.ErrorKind.Syntax = The input does not follow its format, such as a missing comma in JSON.
@@ -126,6 +147,21 @@ doc.Tuple8.f5 = The sixth element, also written <code>t.5</code>.
 doc.Tuple8.f6 = The seventh element, also written <code>t.6</code>.
 doc.Tuple8.f7 = The eighth element, also written <code>t.7</code>.
 
+doc.Option = A struct that keeps a value and a "present or not" flag side by side. Build one with <code>Some</code> or <code>None</code>, so that the two fields always agree. Usually written <code>T?</code>.
+doc.Option.value = The value itself. When <code>present</code> is false this is the zero value of <code>T</code>; for a <code>str</code> that is a null pointer that crashes when used, so check <code>present</code> first.
+doc.Option.present = True when there is a value.
+doc.Option.is_some = The method form of <code>IsSome</code>: true when there is a value.
+doc.Option.is_none = The method form of <code>IsNone</code>: true when it is empty.
+doc.Option.unwrap_or = The method form of <code>UnwrapOr</code>: the value, or the fallback you supply when it is empty.
+doc.Option.unwrap = The method form of <code>Unwrap</code>: the value, or a panic when it is empty.
+doc.Some = Builds an option that holds a value.
+doc.None = Builds an empty option. The type <code>T</code> comes from where the value is used, such as the return type of the function.
+doc.IsSome = Returns true when the option holds a value.
+doc.IsNone = Returns true when the option is empty.
+doc.UnwrapOr = Returns the value, or the default you supplied when the option is empty.
+doc.Unwrap = Returns the value. If the option is empty, the program stops with the panic <code>called Unwrap on a None value</code>.
+doc.Expect = Like <code>Unwrap</code>, but stops with a message of your own when the option is empty; a good message makes the problem easy to find.
+
 ex.Throws = -
 ex.Tuple2 = -
 ex.Tuple3 = -
@@ -134,3 +170,14 @@ ex.Tuple5 = -
 ex.Tuple6 = -
 ex.Tuple7 = -
 ex.Tuple8 = -
+ex.Option.is_some = core-Methods
+ex.Option.is_none = core-Methods
+ex.Option.unwrap_or = core-Methods
+ex.Option.unwrap = core-Methods
+ex.Some = core-Option
+ex.None = core-Option
+ex.IsSome = core-Option
+ex.IsNone = core-Option
+ex.UnwrapOr = core-Option
+ex.Unwrap = core-Option
+ex.Expect = core-Option

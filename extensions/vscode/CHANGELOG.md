@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Editing and highlighting
+
+- Expanded snippets for control flow, loops, declarations, imports/exports, collections and I/O, with English and Persian triggers.
+- Added TODO/FIXME highlighting in comments and improved language configuration (guillemet pairs, block-comment continuation, on-enter rules).
+- Added Salam file defaults, a `salam` problem matcher and task definition for build/run integration.
+- Added semantic token scopes and improved editor suggestion defaults for richer LSP-driven coloring/completion.
+- Highlight `:=` as an assignment operator in the TextMate grammar.
+
 ### Language server
 
 - The extension starts the Salam language server (`salam lsp`) and gets diagnostics, completion, hover, go to definition, references, rename, outline, folding, semantic highlighting, signature help, quick fixes and formatting from it.

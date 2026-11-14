@@ -1,0 +1,641 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "shortcut"
+@fa "میانبر"
+package shortcut
+
+import str
+import os
+import os.shell
+
+/*
+ * Global shortcut / hotkey registration (best-effort, limited).
+ *
+ * This module provides:
+ * - Accelerator string parsing/normalization and key/modifier mapping helpers
+ * - Registration bookkeeping for host-driven dispatch integration
+ * - A platform abstraction for register/unregister
+ *
+ * Limitations:
+ * - macOS and Linux global hotkeys typically require event-loop integration,
+ *   accessibility permissions, or a compositor/X11 session. This implementation
+ *   is best-effort and may return unsupported on those platforms.
+ * - Windows uses RegisterHotKey/UnregisterHotKey; dispatch to callbacks/ids
+ *   requires the host application to pump WM_HOTKEY messages and call
+ *   DispatchHotkey(id).
+ * - "Registration" on unsupported platforms is not a live OS hook; use
+ *   IsSupported/AvailabilityReason and DispatchHotkey integration hooks.
+ */
+
+@en "Accelerator"
+@fa "شتاب‌دهنده"
+pub struct Accelerator:
+    @en "raw"
+    @fa "خام"
+    pub raw: str = ""
+    @en "normalized"
+    @fa "نرمال‌شده"
+    pub normalized: str = ""
+    @en "key"
+    @fa "کلید"
+    pub key: str = ""
+    @en "ctrl"
+    @fa "کنترل"
+    pub ctrl: bool = false
+    @en "alt"
+    @fa "دگرساز"
+    pub alt: bool = false
+    @en "shift"
+    @fa "شیفت"
+    pub shift: bool = false
+    @en "meta"
+    @fa "متا"
+    pub meta: bool = false
+    @en "valid"
+    @fa "معتبر"
+    pub valid: bool = false
+end
+
+mut _sc_last_error := ""
+mut _sc_next_id := 1
+mut _sc_ids := Vector {} as Vector<int>
+mut _sc_accels := Vector {} as Vector<str>
+
+@en "Registration"
+@fa "ثبت"
+pub struct Registration:
+    @en "id"
+    @fa "شناسه"
+    pub id: int = 0
+    @en "accel"
+    @fa "شتاب‌دهنده"
+    pub accel: str = ""
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+end
+
+func _sc_error(msg: str):
+    _sc_last_error = msg
+end
+
+func _sc_ok(): bool:
+    _sc_last_error = ""
+    ret true
+end
+
+func _is_primary_modifier(token: str): bool:
+    low := str.ToLower(token)
+    ok := low == "primary" or low == "cmdorctrl" or low == "commandorcontrol"
+    mem.Free(low as void*)
+    ret ok
+end
+
+func _normalize_key_token(token: str): str:
+    t := str.Trim(token)
+    low := str.ToLower(t)
+    if low == "return":
+        mem.Free(t as void*)
+        mem.Free(low as void*)
+        ret str.Clone("ENTER")
+    end
+    if low == "esc":
+        mem.Free(t as void*)
+        mem.Free(low as void*)
+        ret str.Clone("ESCAPE")
+    end
+    if low == " " or low == "spacebar":
+        mem.Free(t as void*)
+        mem.Free(low as void*)
+        ret str.Clone("SPACE")
+    end
+    if low == "plus":
+        mem.Free(t as void*)
+        mem.Free(low as void*)
+        ret str.Clone("+")
+    end
+    if str.StartsWith(low, "arrow"):
+        // ArrowLeft/ArrowRight/ArrowUp/ArrowDown -> LEFT/RIGHT/UP/DOWN
+        raw := t.Substr(5, t.Len())
+        suffix := str.ToUpper(raw)
+        mem.Free(raw as void*)
+        mem.Free(t as void*)
+        mem.Free(low as void*)
+        ret suffix
+    end
+    up := str.ToUpper(t)
+    mem.Free(t as void*)
+    mem.Free(low as void*)
+    ret up
+end
+
+func _remember(id: int, accel: str):
+    _sc_ids.Push(id)
+    _sc_accels.Push(str.Clone(accel))
+end
+
+func _forget(id: int): str:
+    mut i := 0
+    n := _sc_ids.Len()
+    until i < n:
+        if _sc_ids.Get(i) == id:
+            acc := _sc_accels.Get(i)
+            _sc_ids.RemoveAt(i)
+            _sc_accels.RemoveAt(i)
+            ret acc
+        end
+        i++
+    end
+    ret str.Clone("")
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _sc_last_error
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(accelerator: str): Accelerator:
+    mut a := Accelerator { raw = accelerator }
+    parts := str.Split(accelerator, "+")
+    defer parts.Free()
+    mut i := 0
+    n := parts.Len()
+    until i < n:
+        raw_token := parts.Get(i)
+        token := str.Trim(raw_token)
+        low := str.ToLower(token)
+        if low == "ctrl" or low == "control":
+            a.ctrl = true
+        else low == "alt" or low == "option":
+            a.alt = true
+        else low == "shift":
+            a.shift = true
+        else low == "meta" or low == "cmd" or low == "command" or low == "super" or low == "win":
+            a.meta = true
+        else _is_primary_modifier(token):
+            if SALAM_OS_MAC:
+                a.meta = true
+            else:
+                a.ctrl = true
+            end
+        else:
+            if a.key.Len() > 0:
+                mem.Free(a.key as void*)
+            end
+            a.key = _normalize_key_token(token)
+        end
+        mem.Free(raw_token as void*)
+        mem.Free(token as void*)
+        mem.Free(low as void*)
+        i++
+    end
+    a.valid = a.key.Len() > 0
+    a.normalized = Normalize(accelerator)
+    ret a
+end
+
+@en "Normalize"
+@fa "نرمال‌سازی"
+pub func Normalize(accelerator: str): str:
+    mut a := Accelerator { raw = accelerator }
+    parts := str.Split(accelerator, "+")
+    defer parts.Free()
+    mut i := 0
+    n := parts.Len()
+    until i < n:
+        raw_token := parts.Get(i)
+        token := str.Trim(raw_token)
+        low := str.ToLower(token)
+        if low == "ctrl" or low == "control":
+            a.ctrl = true
+        else low == "alt" or low == "option":
+            a.alt = true
+        else low == "shift":
+            a.shift = true
+        else low == "meta" or low == "cmd" or low == "command" or low == "super" or low == "win":
+            a.meta = true
+        else _is_primary_modifier(token):
+            if SALAM_OS_MAC:
+                a.meta = true
+            else:
+                a.ctrl = true
+            end
+        else:
+            if a.key.Len() > 0:
+                mem.Free(a.key as void*)
+            end
+            a.key = _normalize_key_token(token)
+        end
+        mem.Free(raw_token as void*)
+        mem.Free(token as void*)
+        mem.Free(low as void*)
+        i++
+    end
+    mut out := ""
+    if a.ctrl:
+        out = out + "Ctrl+"
+    end
+    if a.alt:
+        out = out + "Alt+"
+    end
+    if a.shift:
+        out = out + "Shift+"
+    end
+    if a.meta:
+        out = out + "Meta+"
+    end
+    out = out + a.key
+    if a.key.Len() > 0:
+        mem.Free(a.key as void*)
+    end
+    ret out
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    if SALAM_OS_WINDOWS:
+        ret true
+    end
+    ret false
+end
+
+@en "AvailabilityReason"
+@fa "دلیل در دسترس بودن"
+pub func AvailabilityReason(): str:
+    if SALAM_OS_WINDOWS:
+        ret str.Clone("Uses RegisterHotKey; host must pump WM_HOTKEY and call DispatchHotkey(id).")
+    else SALAM_OS_MAC:
+        ret str.Clone("Global hotkeys require macOS event-handler/run-loop integration and permissions; OS-level registration not wired in this build (use RegisterTracked + host dispatch).")
+    else:
+        disp := os.Env("DISPLAY")
+        way := os.Env("WAYLAND_DISPLAY")
+        dt := str.Trim(disp)
+        wt := str.Trim(way)
+        no_gui := dt.Len() == 0 and wt.Len() == 0
+        mem.Free(disp as void*)
+        mem.Free(way as void*)
+        mem.Free(dt as void*)
+        mem.Free(wt as void*)
+        if no_gui:
+            ret str.Clone("No GUI session detected (DISPLAY/WAYLAND_DISPLAY unset); global hotkeys unavailable.")
+        end
+        ret str.Clone("Global hotkeys require compositor/X11/Wayland integration; OS-level registration not wired in this build (use RegisterTracked + host dispatch).")
+    end
+end
+
+@en "IsRegistered"
+@fa "ثبت شده است"
+pub func IsRegistered(id: int): bool:
+    mut i := 0
+    n := _sc_ids.Len()
+    until i < n:
+        if _sc_ids.Get(i) == id:
+            ret true
+        end
+        i++
+    end
+    ret false
+end
+
+@en "GetAccelerator"
+@fa "دریافت شتاب‌دهنده"
+pub func GetAccelerator(id: int): str:
+    mut i := 0
+    n := _sc_ids.Len()
+    until i < n:
+        if _sc_ids.Get(i) == id:
+            ret str.Clone(_sc_accels.Get(i))
+        end
+        i++
+    end
+    ret str.Clone("")
+end
+
+@en "RegisteredCount"
+@fa "تعداد ثبت‌شده‌ها"
+pub func RegisteredCount(): int:
+    ret _sc_ids.Len()
+end
+
+@en "PollDispatchHint"
+@fa "راهنمای بررسی اعلان"
+pub func PollDispatchHint(): str:
+    // Non-blocking integration hint for hosts without native callback plumbing.
+    // Windows hosts should translate WM_HOTKEY(wParam=id) to DispatchHotkey(id).
+    ret str.Clone("Host event loop must forward platform hotkey events to DispatchHotkey(id).")
+end
+
+@en "CanRegister"
+@fa "می‌تواند ثبت کند"
+pub func CanRegister(): bool:
+    ret IsSupported()
+end
+
+@en "CapabilityStatus"
+@fa "وضعیت قابلیت"
+pub func CapabilityStatus(): str:
+    mut s := "supported=" + (IsSupported() ? "true" : "false")
+    s = s + ", registered=" + str.FromInt(RegisteredCount() as i64)
+    ret s
+end
+
+@en "RegisterTracked"
+@fa "ثبت پیگیری‌شده"
+pub func RegisterTracked(accelerator: str): Registration:
+    // Best-effort: on platforms without OS-level global hooks, keep bookkeeping so
+    // host integrations can map ids/accelerators and dispatch via DispatchHotkey.
+    a := Parse(accelerator)
+    if not a.valid:
+        if a.normalized.Len() > 0:
+            mem.Free(a.normalized as void*)
+        end
+        _sc_error("Missing key in accelerator")
+        ret Registration { accel = accelerator, ok = false }
+    end
+    if IsSupported():
+        mem.Free(a.normalized as void*)
+        ret Register(accelerator)
+    end
+    id := _sc_next_id
+    _sc_next_id++
+    _remember(id, a.normalized)
+    mem.Free(a.normalized as void*)
+    _sc_error(AvailabilityReason())
+    ret Registration { id = id, accel = GetAccelerator(id), ok = false }
+end
+
+@en "UnregisterTracked"
+@fa "لغو ثبت پیگیری‌شده"
+pub func UnregisterTracked(id: int): bool:
+    if IsSupported():
+        ret Unregister(id)
+    end
+    acc := _forget(id)
+    if acc.Len() == 0:
+        _sc_error("Unknown hotkey id")
+        ret false
+    end
+    mem.Free(acc as void*)
+    _sc_ok()
+    ret true
+end
+
+@en "KnownAccelerator"
+@fa "شتاب‌دهنده شناخته‌شده"
+pub func KnownAccelerator(accelerator: str): bool:
+    a := Parse(accelerator)
+    ok := a.valid
+    mem.Free(a.normalized as void*)
+    ret ok
+end
+
+@en "IsValid"
+@fa "معتبر است"
+pub func IsValid(accelerator: str): bool:
+    ret KnownAccelerator(accelerator)
+end
+
+@en "SupportsGlobalHotkeys"
+@fa "میانبرهای سراسری پشتیبانی می‌شوند"
+pub func SupportsGlobalHotkeys(): bool:
+    ret IsSupported()
+end
+
+@en "DispatchHotkey"
+@fa "اعلان میانبر"
+pub func DispatchHotkey(id: int): bool:
+    // Hook for host event loops (e.g. WM_HOTKEY on Windows) to acknowledge a
+    // hotkey id that was previously returned by Register().
+    mut i := 0
+    n := _sc_ids.Len()
+    until i < n:
+        if _sc_ids.Get(i) == id:
+            ret _sc_ok()
+        end
+        i++
+    end
+    _sc_error("Unknown hotkey id")
+    ret false
+end
+
+if SALAM_OS_WINDOWS:
+    link dynamic "user32"
+
+    extern:
+        func RegisterHotKey(hwnd: void*, id: int, modifiers: u32, vk: u32): int
+        func UnregisterHotKey(hwnd: void*, id: int): int
+    end
+
+    const _MOD_ALT := 0x0001 as u32
+    const _MOD_CONTROL := 0x0002 as u32
+    const _MOD_SHIFT := 0x0004 as u32
+    const _MOD_WIN := 0x0008 as u32
+
+    func _vk_from_key(key: str): u32:
+        if key.Len() == 1:
+            code := char_code(key)
+            if code >= 48 and code <= 57:
+                ret code as u32
+            end
+            if code >= 65 and code <= 90:
+                ret code as u32
+            end
+            if code >= 97 and code <= 122:
+                ret (code - 32) as u32
+            end
+        end
+        if key == "F1": ret 0x70 as u32 end
+        if key == "F2": ret 0x71 as u32 end
+        if key == "F3": ret 0x72 as u32 end
+        if key == "F4": ret 0x73 as u32 end
+        if key == "F5": ret 0x74 as u32 end
+        if key == "F6": ret 0x75 as u32 end
+        if key == "F7": ret 0x76 as u32 end
+        if key == "F8": ret 0x77 as u32 end
+        if key == "F9": ret 0x78 as u32 end
+        if key == "F10": ret 0x79 as u32 end
+        if key == "F11": ret 0x7A as u32 end
+        if key == "F12": ret 0x7B as u32 end
+        if key == "SPACE": ret 0x20 as u32 end
+        if key == "ENTER" or key == "RETURN": ret 0x0D as u32 end
+        if key == "ESC" or key == "ESCAPE": ret 0x1B as u32 end
+        if key == "TAB": ret 0x09 as u32 end
+        if key == "BACKSPACE": ret 0x08 as u32 end
+        if key == "DELETE" or key == "DEL": ret 0x2E as u32 end
+        if key == "INSERT" or key == "INS": ret 0x2D as u32 end
+        if key == "HOME": ret 0x24 as u32 end
+        if key == "END": ret 0x23 as u32 end
+        if key == "PAGEUP" or key == "PRIOR": ret 0x21 as u32 end
+        if key == "PAGEDOWN" or key == "NEXT": ret 0x22 as u32 end
+        if key == "LEFT": ret 0x25 as u32 end
+        if key == "UP": ret 0x26 as u32 end
+        if key == "RIGHT": ret 0x27 as u32 end
+        if key == "DOWN": ret 0x28 as u32 end
+        ret 0 as u32
+    end
+
+    @en "Register"
+    @fa "ثبت"
+    pub func Register(accelerator: str): Registration:
+        a := Parse(accelerator)
+        if not a.valid:
+            _sc_error("Missing key in accelerator")
+            ret Registration { accel = accelerator, ok = false }
+        end
+        vk := _vk_from_key(a.key)
+        if vk == (0 as u32):
+            _sc_error("Unsupported key in accelerator: " + a.key)
+            ret Registration { accel = a.normalized, ok = false }
+        end
+        mut mods := 0 as u32
+        if a.ctrl: mods = mods | _MOD_CONTROL end
+        if a.alt: mods = mods | _MOD_ALT end
+        if a.shift: mods = mods | _MOD_SHIFT end
+        if a.meta: mods = mods | _MOD_WIN end
+        id := _sc_next_id
+        _sc_next_id++
+        ok := RegisterHotKey(null, id, mods, vk) != 0
+        if not ok:
+            _sc_error("RegisterHotKey failed (accelerator may be reserved or unavailable)")
+            ret Registration { id = 0, accel = a.normalized, ok = false }
+        end
+        _remember(id, a.normalized)
+        _sc_ok()
+        ret Registration { id = id, accel = a.normalized, ok = true }
+    end
+
+    @en "PlatformKeyCode"
+    @fa "کد کلید سکو"
+    pub func PlatformKeyCode(accelerator: str): int:
+        a := Parse(accelerator)
+        code := _vk_from_key(a.key) as int
+        if a.normalized.Len() > 0:
+            mem.Free(a.normalized as void*)
+        end
+        ret code
+    end
+
+    @en "Unregister"
+    @fa "لغو ثبت"
+    pub func Unregister(id: int): bool:
+        ok := UnregisterHotKey(null, id) != 0
+        if not ok:
+            _sc_error("UnregisterHotKey failed")
+            ret false
+        end
+        acc := _forget(id)
+        if acc.Len() > 0:
+            mem.Free(acc as void*)
+        end
+        ret _sc_ok()
+    end
+end
+
+if SALAM_OS_MAC:
+    @en "Register"
+    @fa "ثبت"
+    pub func Register(accelerator: str): Registration:
+        a := Parse(accelerator)
+        if not a.valid:
+            _sc_error("Missing key in accelerator")
+            ret Registration { accel = accelerator, ok = false }
+        end
+        _sc_error(AvailabilityReason())
+        ret Registration { accel = a.normalized, ok = false }
+    end
+
+    @en "Unregister"
+    @fa "لغو ثبت"
+    pub func Unregister(_id: int): bool:
+        _sc_error(AvailabilityReason())
+        ret false
+    end
+
+    @en "PlatformKeyCode"
+    @fa "کد کلید سکو"
+    pub func PlatformKeyCode(_accelerator: str): int:
+        ret 0
+    end
+end
+
+if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
+    @en "Register"
+    @fa "ثبت"
+    pub func Register(accelerator: str): Registration:
+        a := Parse(accelerator)
+        if not a.valid:
+            _sc_error("Missing key in accelerator")
+            ret Registration { accel = accelerator, ok = false }
+        end
+        _sc_error(AvailabilityReason())
+        ret Registration { accel = a.normalized, ok = false }
+    end
+
+    @en "Unregister"
+    @fa "لغو ثبت"
+    pub func Unregister(_id: int): bool:
+        _sc_error(AvailabilityReason())
+        ret false
+    end
+
+    @en "PlatformKeyCode"
+    @fa "کد کلید سکو"
+    pub func PlatformKeyCode(_accelerator: str): int:
+        ret 0
+    end
+end
+
+@en "SupportsAcceleratorParsing"
+@fa "تجزیه شتاب‌دهنده پشتیبانی می‌شود"
+pub func SupportsAcceleratorParsing(): bool:
+    ret true
+end
+
+@en "TryRegister"
+@fa "تلاش برای ثبت"
+pub func TryRegister(accelerator: str): Registration:
+    // Prefer OS registration when supported; otherwise tracked best-effort registration.
+    if IsSupported():
+        ret Register(accelerator)
+    end
+    ret RegisterTracked(accelerator)
+end
+
+@en "TryUnregister"
+@fa "تلاش برای لغو ثبت"
+pub func TryUnregister(id: int): bool:
+    if IsSupported():
+        ret Unregister(id)
+    end
+    ret UnregisterTracked(id)
+end
+
+@en "UnregisterAllTracked"
+@fa "لغو ثبت همه پیگیری‌شده‌ها"
+pub func UnregisterAllTracked():
+    mut i := _sc_ids.Len() - 1
+    until i >= 0:
+        id := _sc_ids.Get(i)
+        _ = UnregisterTracked(id)
+        i--
+        if i >= _sc_ids.Len():
+            i = _sc_ids.Len() - 1
+        end
+    end
+end

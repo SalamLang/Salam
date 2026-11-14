@@ -1,0 +1,368 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "associations"
+@fa "انجمن‌ها"
+package associations
+
+import os
+import io
+import mem
+import str
+import filepath
+import os.shell
+import os.desktop.desktop
+
+// Best-effort file association/default app registration and query helpers.
+// Registration APIs are intentionally conservative: they create user-level
+// launcher/association artifacts where feasible (e.g. Linux .desktop + xdg-mime)
+// and return false or a descriptive note on platforms/hosts that require
+// elevated privileges, installer frameworks, or unsupported APIs.
+
+@en "AssociationInfo"
+@fa "اطلاعات انجمن"
+pub struct AssociationInfo:
+    @en "ext"
+    @fa "پسوند"
+    pub ext: str = ""
+    @en "mime"
+    @fa "مایم"
+    pub mime: str = ""
+    @en "handler"
+    @fa "گرداننده"
+    pub handler: str = ""
+    @en "supported"
+    @fa "پشتیبانی"
+    pub supported: bool = false
+    @en "note"
+    @fa "یادداشت"
+    pub note: str = ""
+end
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _trim_dot(ext: str): str:
+    e := str.Trim(ext)
+    if e.Len() == 0: ret e end
+    head := e.Substr(0, 1)
+    if head == ".":
+        mem.Free(head as void*)
+        t := e.Substr(1, e.Len() - 1)
+        mem.Free(e as void*)
+        ret t
+    end
+    mem.Free(head as void*)
+    ret e
+end
+
+func _desktop_sanitize(v: str): str:
+    // Prevent key/value or line injection in .desktop fields.
+    mut sb := str.NewBuilder()
+    n := v.Len()
+    mut i := 0
+    until i < n:
+        ch := v.Substr(i, 1)
+        if ch == "\n" or ch == "\r":
+            str.BufAppendChar(sb, 32)
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "NormalizeExtension"
+@fa "نرمال‌سازی پسوند"
+pub func NormalizeExtension(ext: str): str:
+    e := _trim_dot(ext)
+    low := str.Lower(e)
+    mem.Free(e as void*)
+    if low.Len() == 0: ret low end
+    head := low.Substr(0, 1)
+    if head == ".":
+        mem.Free(head as void*)
+        ret low
+    end
+    mem.Free(head as void*)
+    out := str.Concat(".", low)
+    mem.Free(low as void*)
+    ret out
+end
+
+@en "MimeForExtension"
+@fa "مایم برای پسوند"
+pub func MimeForExtension(ext: str): str:
+    e := NormalizeExtension(ext)
+    defer mem.Free(e as void*)
+    if e == ".txt": ret str.Clone("text/plain") end
+    if e == ".md": ret str.Clone("text/markdown") end
+    if e == ".html" or e == ".htm": ret str.Clone("text/html") end
+    if e == ".json": ret str.Clone("application/json") end
+    if e == ".pdf": ret str.Clone("application/pdf") end
+    if e == ".png": ret str.Clone("image/png") end
+    if e == ".jpg" or e == ".jpeg": ret str.Clone("image/jpeg") end
+    if e == ".svg": ret str.Clone("image/svg+xml") end
+    if e == ".csv": ret str.Clone("text/csv") end
+    if e == ".xml": ret str.Clone("application/xml") end
+    if e == ".zip": ret str.Clone("application/zip") end
+    ret str.Clone("application/octet-stream")
+end
+
+@en "QueryDefaultForExtension"
+@fa "پرس‌وجوی پیش‌فرض برای پسوند"
+pub func QueryDefaultForExtension(ext: str): str:
+    e := NormalizeExtension(ext)
+    defer mem.Free(e as void*)
+    if SALAM_OS_WINDOWS:
+        // Best-effort: query HKCU/HKCR assoc via cmd assoc/ftype is limited; return empty when unknown.
+        q := "\"" + e + "\""
+        cmd := str.Concat("cmd /c assoc ", q)
+        mem.Free(q as void*)
+        r := shell.Exec(cmd)
+        mem.Free(cmd as void*)
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if out.Len() > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else SALAM_OS_MAC:
+        // Best-effort: LaunchServices API not exposed; return empty.
+        ret str.Clone("")
+    else:
+        // xdg-mime needs a mime type; map common extensions.
+        mime := MimeForExtension(e)
+        defer mem.Free(mime as void*)
+        q := _quote_sh(mime)
+        cmd := str.Concat("xdg-mime query default ", q)
+        cmd2 := str.Concat(cmd, " 2>/dev/null")
+        mem.Free(cmd as void*)
+        mem.Free(q as void*)
+        r := shell.Exec(cmd2)
+        mem.Free(cmd2 as void*)
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if out.Len() > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
+end
+
+@en "QueryDefaultForMime"
+@fa "پرس‌وجوی پیش‌فرض برای مایم"
+pub func QueryDefaultForMime(mime: str): str:
+    if mime.Len() == 0: ret str.Clone("") end
+    ret desktop.GetDefaultHandler(mime)
+end
+
+@en "InfoForExtension"
+@fa "اطلاعات برای پسوند"
+pub func InfoForExtension(ext: str): AssociationInfo:
+    e := NormalizeExtension(ext)
+    mime := MimeForExtension(e)
+    handler := QueryDefaultForExtension(e)
+    supported := SALAM_OS_LINUX or SALAM_OS_WINDOWS or SALAM_OS_MAC
+    mut note := str.Clone("Best-effort query; registration support varies by platform and privileges.")
+    if handler.Len() == 0:
+        mem.Free(note as void*)
+        note = str.Clone("No default handler found or query not supported on this host.")
+    end
+    ret AssociationInfo { ext = e, mime = mime, handler = handler, supported = supported, note = note }
+end
+
+@en "RegisterDesktopEntryLinux"
+@fa "ثبت ورودی میزکار لینوکس"
+pub func RegisterDesktopEntryLinux(app_id: str, app_name: str, exec_cmd: str, mime_types: str = "", icon: str = ""): bool:
+    if not (SALAM_OS_LINUX or SALAM_OS_BSD): ret false end
+    if app_id.Len() == 0 or exec_cmd.Len() == 0: ret false end
+    home := os.Env("HOME")
+    if home.Len() == 0:
+        mem.Free(home as void*)
+        ret false
+    end
+    defer mem.Free(home as void*)
+    dir := filepath.Join(home, ".local/share/applications")
+    defer mem.Free(dir as void*)
+    _ = os.MkdirAll(dir)
+    fname := str.Concat(app_id, ".desktop")
+    path := filepath.Join(dir, fname)
+    mem.Free(fname as void*)
+    defer mem.Free(path as void*)
+
+    safe_name := _desktop_sanitize(app_name.Len() > 0 ? app_name : app_id)
+    safe_exec := _desktop_sanitize(exec_cmd)
+    defer mem.Free(safe_name as void*)
+    defer mem.Free(safe_exec as void*)
+
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "[Desktop Entry]\n")
+    str.BufAppend(sb, "Type=Application\n")
+    str.BufAppend(sb, "Name=")
+    str.BufAppend(sb, safe_name)
+    str.BufAppend(sb, "\nExec=")
+    str.BufAppend(sb, safe_exec)
+    str.BufAppend(sb, "\nTerminal=false\n")
+    if icon.Len() > 0:
+        safe_icon := _desktop_sanitize(icon)
+        defer mem.Free(safe_icon as void*)
+        str.BufAppend(sb, "Icon=")
+        str.BufAppend(sb, safe_icon)
+        str.BufAppend(sb, "\n")
+    end
+    if mime_types.Len() > 0:
+        safe_mime := _desktop_sanitize(mime_types)
+        defer mem.Free(safe_mime as void*)
+        str.BufAppend(sb, "MimeType=")
+        str.BufAppend(sb, safe_mime)
+        str.BufAppend(sb, "\n")
+    end
+    content := str.BufStr(sb)
+    str.BufFree(sb)
+    ok := io.WriteFile(path, content) >= 0
+    mem.Free(content as void*)
+    ret ok
+end
+
+@en "SetDefaultForMimeLinux"
+@fa "تنظیم پیش‌فرض برای مایم در لینوکس"
+pub func SetDefaultForMimeLinux(mime: str, desktop_file: str): bool:
+    if not (SALAM_OS_LINUX or SALAM_OS_BSD): ret false end
+    if mime.Len() == 0 or desktop_file.Len() == 0: ret false end
+    q1 := _quote_sh(mime)
+    q2 := _quote_sh(desktop_file)
+    cmd := str.Concat("xdg-mime default ", q2)
+    cmd2 := str.Concat(cmd, " ")
+    cmd3 := str.Concat(cmd2, q1)
+    cmd4 := str.Concat(cmd3, " >/dev/null 2>&1")
+    mem.Free(cmd as void*)
+    mem.Free(cmd2 as void*)
+    mem.Free(cmd3 as void*)
+    defer mem.Free(q1 as void*)
+    defer mem.Free(q2 as void*)
+    defer mem.Free(cmd4 as void*)
+    ret shell.System(cmd4) == 0
+end
+
+@en "RegisterFileAssociation"
+@fa "ثبت انجمن پرونده"
+pub func RegisterFileAssociation(ext: str, app_id: str, app_name: str, exec_cmd: str): AssociationInfo:
+    e := NormalizeExtension(ext)
+    mime := MimeForExtension(e)
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        desktop_file := str.Concat(app_id, ".desktop")
+        ok1 := RegisterDesktopEntryLinux(app_id, app_name, exec_cmd, mime, "")
+        ok2 := SetDefaultForMimeLinux(mime, desktop_file)
+        mem.Free(desktop_file as void*)
+        mut note := str.Clone("User-level .desktop written; xdg-mime default set when available.")
+        if not ok1 or not ok2:
+            mem.Free(note as void*)
+            note = str.Clone("Best-effort Linux registration attempted; xdg tools or permissions may be missing.")
+        end
+        handler := QueryDefaultForMime(mime)
+        ret AssociationInfo { ext = e, mime = mime, handler = handler, supported = ok1, note = note }
+    end
+    // Windows/macOS registration typically requires registry/plist changes and elevated or app-bundle context.
+    ret AssociationInfo {
+        ext = e, mime = mime, handler = str.Clone(""), supported = false, note = str.Clone("Registration is not automated on this platform in std; use installer/OS APIs. Query helpers are available.")
+    }
+end
+
+@en "OpenWith"
+@fa "باز کردن با"
+pub func OpenWith(app_cmd: str, target: str): bool:
+    if app_cmd.Len() == 0 or target.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        // Best-effort quoting for app command and target.
+        qa := str.Concat("\"", app_cmd)
+        qa2 := str.Concat(qa, "\"")
+        qt := str.Concat("\"", target)
+        qt2 := str.Concat(qt, "\"")
+        cmd := str.Concat("cmd /c start \"\" ", qa2)
+        cmd2 := str.Concat(cmd, " ")
+        cmd3 := str.Concat(cmd2, qt2)
+        mem.Free(qa as void*)
+        mem.Free(qa2 as void*)
+        mem.Free(qt as void*)
+        mem.Free(qt2 as void*)
+        mem.Free(cmd as void*)
+        mem.Free(cmd2 as void*)
+        defer mem.Free(cmd3 as void*)
+        ret shell.System(cmd3) == 0
+    else SALAM_OS_MAC:
+        qapp := _quote_sh(app_cmd)
+        qt := _quote_sh(target)
+        cmd := str.Concat("open -a ", qapp)
+        cmd2 := str.Concat(cmd, " ")
+        cmd3 := str.Concat(cmd2, qt)
+        cmd4 := str.Concat(cmd3, " >/dev/null 2>&1")
+        mem.Free(cmd as void*)
+        mem.Free(cmd2 as void*)
+        mem.Free(cmd3 as void*)
+        defer mem.Free(qapp as void*)
+        defer mem.Free(qt as void*)
+        defer mem.Free(cmd4 as void*)
+        if shell.System(cmd4) == 0: ret true end
+        // Fallback: treat app_cmd as executable
+        qt2 := _quote_sh(target)
+        cmd5 := str.Concat(app_cmd, " ")
+        cmd6 := str.Concat(cmd5, qt2)
+        cmd7 := str.Concat(cmd6, " >/dev/null 2>&1 &")
+        mem.Free(cmd5 as void*)
+        mem.Free(cmd6 as void*)
+        defer mem.Free(qt2 as void*)
+        defer mem.Free(cmd7 as void*)
+        ret shell.System(cmd7) == 0
+    else:
+        qt := _quote_sh(target)
+        cmd := str.Concat(app_cmd, " ")
+        cmd2 := str.Concat(cmd, qt)
+        cmd3 := str.Concat(cmd2, " >/dev/null 2>&1 &")
+        mem.Free(cmd as void*)
+        mem.Free(cmd2 as void*)
+        defer mem.Free(qt as void*)
+        defer mem.Free(cmd3 as void*)
+        ret shell.System(cmd3) == 0
+    end
+end
+
+@en "Note"
+@fa "یادداشت"
+pub func Note(): str:
+    ret str.Clone("File association registration/query is best-effort and platform-guarded. Full installer-level registration is out of scope for std helpers.")
+end

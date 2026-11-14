@@ -1,0 +1,1166 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "clipboard"
+@fa "بریده‌دان"
+package clipboard
+
+import mem
+import str
+import io
+import os
+import os.shell
+import filepath
+
+/*
+ * Cross-platform clipboard access for native desktop apps (best-effort).
+ *
+ * Notes:
+ * - Text clipboard is the primary supported path on all platforms.
+ * - HTML/rich text and image clipboard operations are best-effort and may be
+ *   unavailable depending on platform/runtime/tooling.
+ * - Linux falls back to Wayland (wl-copy/wl-paste), X11 (xclip/xsel), and
+ *   Termux clipboard tools when available.
+ * - Headless or missing-backend environments return false/empty results.
+ * - Snapshot/poll helpers are content-length/fingerprint hints, not OS events.
+ */
+
+mut _cb_last_error := ""
+mut _cb_last_snapshot := ""
+
+func _cb_set_error(msg: str):
+    _cb_last_error = msg
+end
+
+func _cb_ok(): bool:
+    _cb_last_error = ""
+    ret true
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _cb_last_error
+end
+
+@en "Snapshot"
+@fa "نمای لحظه‌ای"
+pub func Snapshot(): str:
+    // Best-effort change token based on clipboard text content.
+    t := GetText()
+    tok := str.Concat("text:", str.FromInt(t.Len() as i64))
+    mem.Free(t as void*)
+    ret tok
+end
+
+@en "HasChangedSince"
+@fa "از زمان قبل تغییر کرده"
+pub func HasChangedSince(previous_snapshot: str): bool:
+    cur := Snapshot()
+    defer mem.Free(cur as void*)
+    if previous_snapshot.Len() == 0:
+        ret cur.Len() > 0
+    end
+    ret cur != previous_snapshot
+end
+
+@en "PollChanged"
+@fa "بررسی تغییر"
+pub func PollChanged(): bool:
+    cur := Snapshot()
+    changed := _cb_last_snapshot.Len() == 0 or cur != _cb_last_snapshot
+    if _cb_last_snapshot.Len() > 0:
+        mem.Free(_cb_last_snapshot as void*)
+    end
+    _cb_last_snapshot = cur
+    ret changed
+end
+
+if SALAM_OS_WINDOWS:
+    link dynamic "user32"
+    link dynamic "kernel32"
+
+    extern:
+        func OpenClipboard(hwnd: void*): int
+        func CloseClipboard(): int
+        func EmptyClipboard(): int
+        func IsClipboardFormatAvailable(format: u32): int
+        func GetClipboardData(format: u32): void*
+        func SetClipboardData(format: u32, handle: void*): void*
+        func GlobalAlloc(flags: u32, bytes: u64): void*
+        func GlobalLock(handle: void*): void*
+        func GlobalUnlock(handle: void*): int
+        func GlobalFree(handle: void*): void*
+        func GlobalSize(handle: void*): u64
+        func MultiByteToWideChar(code_page: u32, flags: u32, src: str, src_len: int, dst: void*, dst_len: int): int
+        func WideCharToMultiByte(code_page: u32, flags: u32, src: void*, src_len: int, dst: void*, dst_len: int, def_char: void*, used: void*): int
+    end
+
+    const _CF_UNICODETEXT := 13 as u32
+    const _CF_DIB := 8 as u32
+    const _GMEM_MOVEABLE := 2 as u32
+    const _CP_UTF8 := 65001 as u32
+
+    func _wide(s: str): void*:
+        needed := MultiByteToWideChar(_CP_UTF8, 0 as u32, s, 0 - 1, null, 0)
+        if needed <= 0:
+            ret null
+        end
+        bytes := ((needed + 1) as u64) * 2 as u64
+        buf := mem.AllocateZeroed(bytes)
+        MultiByteToWideChar(_CP_UTF8, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _narrow(wide: void*): str:
+        if wide == null:
+            ret str.Clone("")
+        end
+        needed := WideCharToMultiByte(_CP_UTF8, 0 as u32, wide, 0 - 1, null, 0, null, null)
+        if needed <= 0:
+            ret str.Clone("")
+        end
+        buf := mem.AllocateZeroed((needed + 1) as u64)
+        WideCharToMultiByte(_CP_UTF8, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
+        ret buf as str
+    end
+
+    @en "GetText"
+    @fa "گرفتن متن"
+    pub func GetText(): str:
+        if OpenClipboard(null) == 0:
+            _cb_set_error("OpenClipboard failed")
+            ret str.Clone("")
+        end
+        defer _closed := CloseClipboard()
+        handle := GetClipboardData(_CF_UNICODETEXT)
+        if handle == null:
+            _cb_ok()
+            ret str.Clone("")
+        end
+        locked := GlobalLock(handle)
+        if locked == null:
+            _cb_set_error("GlobalLock failed")
+            ret str.Clone("")
+        end
+        text := _narrow(locked)
+        GlobalUnlock(handle)
+        _cb_ok()
+        ret text
+    end
+
+    @en "SetText"
+    @fa "تنظیم متن"
+    pub func SetText(text: str): bool:
+        wide := _wide(text)
+        if wide == null:
+            _cb_set_error("UTF-16 conversion failed")
+            ret false
+        end
+        // Compute byte length of UTF-16 string including terminator.
+        mut chars := 0
+        p := wide as u16*
+        until p[chars] == (0 as u16):
+            chars++
+        end
+        bytes := ((chars + 1) as u64) * 2 as u64
+        hmem := GlobalAlloc(_GMEM_MOVEABLE, bytes)
+        if hmem == null:
+            mem.Free(wide)
+            _cb_set_error("GlobalAlloc failed")
+            ret false
+        end
+        locked := GlobalLock(hmem)
+        if locked == null:
+            GlobalFree(hmem)
+            mem.Free(wide)
+            _cb_set_error("GlobalLock failed")
+            ret false
+        end
+        mem.Copy(locked, wide, bytes)
+        GlobalUnlock(hmem)
+        mem.Free(wide)
+
+        if OpenClipboard(null) == 0:
+            GlobalFree(hmem)
+            _cb_set_error("OpenClipboard failed")
+            ret false
+        end
+        EmptyClipboard()
+        if SetClipboardData(_CF_UNICODETEXT, hmem) == null:
+            CloseClipboard()
+            GlobalFree(hmem)
+            _cb_set_error("SetClipboardData failed")
+            ret false
+        end
+        CloseClipboard()
+        ret _cb_ok()
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        ret IsClipboardFormatAvailable(_CF_UNICODETEXT) != 0
+    end
+
+    @en "Clear"
+    @fa "پاک کردن"
+    pub func Clear(): bool:
+        if OpenClipboard(null) == 0:
+            _cb_set_error("OpenClipboard failed")
+            ret false
+        end
+        ok := EmptyClipboard() != 0
+        CloseClipboard()
+        if not ok:
+            _cb_set_error("EmptyClipboard failed")
+            ret false
+        end
+        ret _cb_ok()
+    end
+
+    @en "GetHTML"
+    @fa "گرفتن اچ‌تی‌ام‌ال"
+    pub func GetHTML(): str:
+        // Best-effort: CF_HTML registration/parsing is not wired in this build.
+        // Fallback: if plain text is available, expose it as a degraded HTML/text result
+        // for callers that only need textual clipboard content.
+        if HasText():
+            t := GetText()
+            if t.Len() > 0:
+                _cb_set_error("HTML clipboard read unavailable on Windows; returning plain text fallback")
+                ret t
+            end
+            mem.Free(t as void*)
+        end
+        _cb_set_error("HTML clipboard read is not implemented on Windows in this build")
+        ret str.Clone("")
+    end
+
+    @en "SetHTML"
+    @fa "تنظیم اچ‌تی‌ام‌ال"
+    pub func SetHTML(html: str, alt_text: str = ""): bool:
+        // Best-effort fallback: store alt_text/textual content so clipboard is not silently empty.
+        if alt_text.Len() > 0:
+            ok := SetText(alt_text)
+            if ok:
+                _cb_set_error("HTML clipboard write unavailable on Windows; stored alt_text fallback")
+            end
+            ret ok
+        end
+        text := str.StripTags(html)
+        if text.Len() > 0:
+            ok := SetText(text)
+            mem.Free(text as void*)
+            if ok:
+                _cb_set_error("HTML clipboard write unavailable on Windows; stored stripped-text fallback")
+            end
+            ret ok
+        end
+        mem.Free(text as void*)
+        _cb_set_error("HTML clipboard write is not implemented on Windows in this build")
+        ret false
+    end
+
+    @en "HasHTML"
+    @fa "اچ‌تی‌ام‌ال دارد"
+    pub func HasHTML(): bool:
+        // Best-effort: CF_HTML is not wired; report degraded availability via plain text presence.
+        ret HasText()
+    end
+
+    @en "GetImageBytes"
+    @fa "گرفتن بایت‌های تصویر"
+    pub func GetImageBytes(): str:
+        // Best-effort placeholder: CF_DIB/PNG extraction requires format synthesis/parsing.
+        _cb_set_error("GetImageBytes is not implemented on Windows in this build (try GetImagePath if file paths are copied)")
+        ret str.Clone("")
+    end
+
+    @en "SetImageBytes"
+    @fa "تنظیم بایت‌های تصویر"
+    pub func SetImageBytes(_data: str, _mime: str = "image/png"): bool:
+        _cb_set_error("SetImageBytes is not implemented on Windows in this build")
+        ret false
+    end
+
+    @en "GetImagePath"
+    @fa "گرفتن مسیر تصویر"
+    pub func GetImagePath(): str:
+        // Best-effort fallback: CF_HDROP/file-list parsing is not wired, but copied paths may appear as text.
+        t := GetText()
+        p := str.Trim(t)
+        if p.Len() > 0 and os.Exists(p):
+            mem.Free(t as void*)
+            _cb_ok()
+            ret p
+        end
+        mem.Free(t as void*)
+        mem.Free(p as void*)
+        _cb_set_error("Image path clipboard read is not implemented on Windows in this build")
+        ret str.Clone("")
+    end
+
+    @en "SetImagePath"
+    @fa "تنظیم مسیر تصویر"
+    pub func SetImagePath(path: str): bool:
+        // Best-effort fallback: publish the path as text so receivers can still access it.
+        if path.Len() == 0:
+            _cb_set_error("Image path is empty")
+            ret false
+        end
+        ok := SetText(path)
+        if ok:
+            _cb_set_error("Image path clipboard write unavailable on Windows; stored path as text fallback")
+        else:
+            _cb_set_error("Image path clipboard write is not implemented on Windows in this build")
+        end
+        ret ok
+    end
+
+    @en "Backend"
+    @fa "پشتوانه"
+    pub func Backend(): str:
+        ret str.Clone("win32")
+    end
+end
+
+if SALAM_OS_MAC:
+    link framework "AppKit"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(): void
+    end
+
+    func _objc0(recv: void*, name: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*) void*
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _objc1(recv: void*, name: str, a1: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1)
+    end
+
+    func _objc2(recv: void*, name: str, a1: void*, a2: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1, a2)
+    end
+
+    func _ns(s: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _utf8(v: void*): str:
+        if v == null:
+            ret str.Clone("")
+        end
+        fn := (&objc_msgSend) as extern func (void*, void*) str
+        ret str.Clone(fn(v, sel_registerName("UTF8String")))
+    end
+
+    func _pasteboard(): void*:
+        ret _objc0(objc_getClass("NSPasteboard"), "generalPasteboard")
+    end
+
+    @en "GetText"
+    @fa "گرفتن متن"
+    pub func GetText(): str:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret str.Clone("")
+        end
+        ty := _ns("public.utf8-plain-text")
+        val := _objc1(pb, "stringForType:", ty)
+        if val == null:
+            ty = _ns("NSStringPboardType")
+            val = _objc1(pb, "stringForType:", ty)
+        end
+        _cb_ok()
+        ret _utf8(val)
+    end
+
+    @en "SetText"
+    @fa "تنظیم متن"
+    pub func SetText(text: str): bool:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret false
+        end
+        _objc0(pb, "clearContents")
+        ty := _ns("public.utf8-plain-text")
+        ns_text := _ns(text)
+        fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) i8
+        ok := fn(pb, sel_registerName("setString:forType:"), ns_text, ty)
+        if ok == (0 as i8):
+            _cb_set_error("setString:forType failed")
+            ret false
+        end
+        ret _cb_ok()
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        pb := _pasteboard()
+        if pb == null:
+            ret false
+        end
+        types := _objc0(pb, "types")
+        if types == null:
+            ret false
+        end
+        ty := _ns("public.utf8-plain-text")
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret fn(types, sel_registerName("containsObject:"), ty) != (0 as i8)
+    end
+
+    @en "Clear"
+    @fa "پاک کردن"
+    pub func Clear(): bool:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret false
+        end
+        _objc0(pb, "clearContents")
+        ret _cb_ok()
+    end
+
+    @en "GetHTML"
+    @fa "گرفتن اچ‌تی‌ام‌ال"
+    pub func GetHTML(): str:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret str.Clone("")
+        end
+        ty := _ns("public.html")
+        val := _objc1(pb, "stringForType:", ty)
+        if val == null:
+            ty = _ns("Apple HTML pasteboard type")
+            val = _objc1(pb, "stringForType:", ty)
+        end
+        _cb_ok()
+        ret _utf8(val)
+    end
+
+    @en "SetHTML"
+    @fa "تنظیم اچ‌تی‌ام‌ال"
+    pub func SetHTML(html: str, alt_text: str = ""): bool:
+        pb := _pasteboard()
+        if pb == null:
+            _cb_set_error("NSPasteboard unavailable")
+            ret false
+        end
+        _objc0(pb, "clearContents")
+        fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) i8
+        ok_html := fn(pb, sel_registerName("setString:forType:"), _ns(html), _ns("public.html"))
+        if ok_html == (0 as i8):
+            _ = fn(pb, sel_registerName("setString:forType:"), _ns(html), _ns("Apple HTML pasteboard type"))
+        end
+        if alt_text.Len() > 0:
+            _ = fn(pb, sel_registerName("setString:forType:"), _ns(alt_text), _ns("public.utf8-plain-text"))
+        end
+        ret _cb_ok()
+    end
+
+    @en "HasHTML"
+    @fa "اچ‌تی‌ام‌ال دارد"
+    pub func HasHTML(): bool:
+        h := GetHTML()
+        has := h.Len() > 0
+        mem.Free(h as void*)
+        ret has
+    end
+
+    @en "GetImageBytes"
+    @fa "گرفتن بایت‌های تصویر"
+    pub func GetImageBytes(): str:
+        _cb_set_error("GetImageBytes is not implemented on macOS in this build (use GetImagePath where possible)")
+        ret str.Clone("")
+    end
+
+    @en "SetImageBytes"
+    @fa "تنظیم بایت‌های تصویر"
+    pub func SetImageBytes(data: str, mime: str = "image/png"): bool:
+        // Best-effort fallback: stage bytes to a temp file and set image from path when possible.
+        if data.Len() == 0:
+            _cb_set_error("SetImageBytes: empty data")
+            ret false
+        end
+        mut ext := ".bin"
+        lowm := str.ToLower(mime)
+        if str.Contains(lowm, "png"): ext = ".png"
+        else str.Contains(lowm, "jpeg") or str.Contains(lowm, "jpg"): ext = ".jpg"
+        else str.Contains(lowm, "gif"): ext = ".gif"
+        else str.Contains(lowm, "webp"): ext = ".webp"
+        end
+        path := "/tmp/salam_clipboard_img" + ext
+        mem.Free(lowm as void*)
+        written := io.WriteFile(path, data)
+        if written < 0:
+            _cb_set_error("SetImageBytes failed to stage temp file")
+            ret false
+        end
+        ok := SetImagePath(path)
+        if not ok:
+            _cb_set_error("SetImageBytes is not implemented on macOS in this build (use SetImagePath where possible)")
+        end
+        ret ok
+    end
+
+    @en "GetImagePath"
+    @fa "گرفتن مسیر تصویر"
+    pub func GetImagePath(): str:
+        // Best-effort fallback: check plain text for a file path.
+        t := GetText()
+        p := str.Trim(t)
+        if p.Len() > 0 and os.Exists(p):
+            mem.Free(t as void*)
+            _cb_ok()
+            ret p
+        end
+        mem.Free(t as void*)
+        mem.Free(p as void*)
+        _cb_set_error("Image path clipboard read is not implemented on macOS in this build")
+        ret str.Clone("")
+    end
+
+    @en "SetImagePath"
+    @fa "تنظیم مسیر تصویر"
+    pub func SetImagePath(path: str): bool:
+        // Best-effort fallback: publish path as text.
+        if path.Len() == 0:
+            _cb_set_error("Image path is empty")
+            ret false
+        end
+        ok := SetText(path)
+        if ok:
+            _cb_set_error("Image path clipboard write unavailable on macOS; stored path as text fallback")
+        else:
+            _cb_set_error("Image path clipboard write is not implemented on macOS in this build")
+        end
+        ret ok
+    end
+
+    @en "Backend"
+    @fa "پشتوانه"
+    pub func Backend(): str:
+        ret str.Clone("appkit")
+    end
+end
+
+if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
+    func _has_cmd(name: str): bool:
+        // Best-effort safety: quote command name for shell probing.
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "command -v ")
+        q := str.Replace(name, "'", "'\\''")
+        str.BufAppend(sb, "'")
+        str.BufAppend(sb, q)
+        str.BufAppend(sb, "' >/dev/null 2>&1")
+        mem.Free(q as void*)
+        cmd := str.BufStr(sb)
+        str.BufFree(sb)
+        r := shell.Exec(cmd)
+        mem.Free(cmd as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        ret r.code == 0
+    end
+
+    func _run_sh(script: str): shell.CmdResult:
+        mut args := Vector {} as Vector<str>
+        defer args.Free()
+        args.Push("-c")
+        args.Push(script)
+        ret shell.Run("/bin/sh", args)
+    end
+
+    func _run_with_stdin(script: str, text: str): shell.CmdResult:
+        // Best-effort: stage input in a per-process temp file and redirect stdin.
+        tdir := os.TempDir()
+        base := "salam_clipboard_in_" + str.FromInt(os.Pid() as i64) + ".txt"
+        path := filepath.Join(tdir.Len() > 0 ? tdir : "/tmp", base)
+        mem.Free(tdir as void*)
+        mem.Free(base as void*)
+        _w := io.WriteFile(path, text)
+        defer _r := os.Remove(path)
+        cmd := script + " < " + path
+        res := _run_sh(cmd)
+        mem.Free(cmd as void*)
+        mem.Free(path as void*)
+        ret res
+    end
+
+    func _env_nonempty(name: str): bool:
+        v := os.Env(name)
+        t := str.Trim(v)
+        ok := t.Len() > 0
+        mem.Free(v as void*)
+        mem.Free(t as void*)
+        ret ok
+    end
+
+    func _linux_has_wayland(): bool:
+        if not _env_nonempty("WAYLAND_DISPLAY"):
+            ret false
+        end
+        ret _has_cmd("wl-copy") or _has_cmd("wl-paste")
+    end
+
+    func _linux_has_x11(): bool:
+        if not _env_nonempty("DISPLAY"):
+            ret false
+        end
+        ret _has_cmd("xclip") or _has_cmd("xsel")
+    end
+
+    func _linux_has_termux(): bool:
+        if _has_cmd("termux-clipboard-get") or _has_cmd("termux-clipboard-set"):
+            ret true
+        end
+        prefix := os.Env("PREFIX")
+        p := str.Trim(prefix)
+        ok := str.Contains(p, "com.termux")
+        mem.Free(prefix as void*)
+        mem.Free(p as void*)
+        ret ok
+    end
+
+    @en "GetText"
+    @fa "گرفتن متن"
+    pub func GetText(): str:
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        have_termux := _linux_has_termux()
+        if have_wayland and _has_cmd("wl-paste"):
+            r := _run_sh("wl-paste --no-newline 2>/dev/null")
+            if r.code == 0:
+                mem.Free(r.err as void*)
+                _cb_ok()
+                ret r.out
+            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_sh("xclip -selection clipboard -o 2>/dev/null")
+            if r.code == 0:
+                mem.Free(r.err as void*)
+                _cb_ok()
+                ret r.out
+            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        if have_x11 and _has_cmd("xsel"):
+            r := _run_sh("xsel --clipboard --output 2>/dev/null")
+            if r.code == 0:
+                mem.Free(r.err as void*)
+                _cb_ok()
+                ret r.out
+            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        if have_termux and _has_cmd("termux-clipboard-get"):
+            r := _run_sh("termux-clipboard-get 2>/dev/null")
+            if r.code == 0:
+                mem.Free(r.err as void*)
+                _cb_ok()
+                ret r.out
+            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        _cb_set_error("No clipboard backend available (need wl-paste/wl-copy, xclip/xsel, or termux-clipboard tools)")
+        ret str.Clone("")
+    end
+
+    @en "SetText"
+    @fa "تنظیم متن"
+    pub func SetText(text: str): bool:
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        have_termux := _linux_has_termux()
+        if have_wayland and _has_cmd("wl-copy"):
+            r := _run_with_stdin("wl-copy 2>/dev/null", text)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_with_stdin("xclip -selection clipboard 2>/dev/null", text)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if have_x11 and _has_cmd("xsel"):
+            r := _run_with_stdin("xsel --clipboard --input 2>/dev/null", text)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        if have_termux and _has_cmd("termux-clipboard-set"):
+            r := _run_with_stdin("termux-clipboard-set 2>/dev/null", text)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if r.code == 0:
+                ret _cb_ok()
+            end
+        end
+        _cb_set_error("No clipboard backend available (need wl-paste/wl-copy, xclip/xsel, or termux-clipboard tools)")
+        ret false
+    end
+
+    @en "HasText"
+    @fa "متن دارد"
+    pub func HasText(): bool:
+        t := GetText()
+        has := t.Len() > 0
+        mem.Free(t as void*)
+        ret has
+    end
+
+    @en "Clear"
+    @fa "پاک کردن"
+    pub func Clear(): bool:
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        have_termux := _linux_has_termux()
+        if have_wayland and _has_cmd("wl-copy"):
+            r := _run_sh("wl-copy --clear 2>/dev/null || printf '' | wl-copy 2>/dev/null")
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                ret _cb_ok()
+            end
+        end
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_sh("printf '' | xclip -selection clipboard 2>/dev/null")
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                ret _cb_ok()
+            end
+        end
+        if have_x11 and _has_cmd("xsel"):
+            r := _run_sh("xsel --clipboard --clear 2>/dev/null")
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                ret _cb_ok()
+            end
+        end
+        if have_termux and _has_cmd("termux-clipboard-set"):
+            r := _run_sh("printf '' | termux-clipboard-set 2>/dev/null")
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                ret _cb_ok()
+            end
+        end
+        _cb_set_error("No clipboard backend available to clear")
+        ret false
+    end
+
+    @en "GetHTML"
+    @fa "گرفتن اچ‌تی‌ام‌ال"
+    pub func GetHTML(): str:
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        if have_wayland and _has_cmd("wl-paste"):
+            r := _run_sh("wl-paste --type text/html 2>/dev/null")
+            if r.code == 0:
+                mem.Free(r.err as void*)
+                _cb_ok()
+                ret r.out
+            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_sh("xclip -selection clipboard -t text/html -o 2>/dev/null")
+            if r.code == 0:
+                mem.Free(r.err as void*)
+                _cb_ok()
+                ret r.out
+            end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        _cb_set_error("No clipboard backend available for HTML (need wl-paste or xclip)")
+        ret str.Clone("")
+    end
+
+    @en "SetHTML"
+    @fa "تنظیم اچ‌تی‌ام‌ال"
+    pub func SetHTML(html: str, _alt_text: str = ""): bool:
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        if have_wayland and _has_cmd("wl-copy"):
+            r := _run_with_stdin("wl-copy --type text/html 2>/dev/null", html)
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                ret _cb_ok()
+            end
+        end
+        if have_x11 and _has_cmd("xclip"):
+            r := _run_with_stdin("xclip -selection clipboard -t text/html 2>/dev/null", html)
+            ok := r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                ret _cb_ok()
+            end
+        end
+        _cb_set_error("No clipboard backend available for HTML (need wl-copy or xclip)")
+        ret false
+    end
+
+    @en "HasHTML"
+    @fa "اچ‌تی‌ام‌ال دارد"
+    pub func HasHTML(): bool:
+        h := GetHTML()
+        has := h.Len() > 0
+        mem.Free(h as void*)
+        ret has
+    end
+
+    @en "GetImageBytes"
+    @fa "گرفتن بایت‌های تصویر"
+    pub func GetImageBytes(): str:
+        // Best-effort: try to fetch PNG from Wayland or X11 clipboard into a temp file and read.
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        tdir := os.TempDir()
+        base := "salam_clipboard_img_" + str.FromInt(os.Pid() as i64) + ".png"
+        path := filepath.Join(tdir.Len() > 0 ? tdir : "/tmp", base)
+        mem.Free(tdir as void*)
+        mem.Free(base as void*)
+        if have_wayland and _has_cmd("wl-paste"):
+            cmd := "wl-paste --type image/png > " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
+            ok := r.code == 0 and os.Exists(path)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                data := io.ReadFile(path)
+                _ = os.Remove(path)
+                mem.Free(path as void*)
+                _cb_ok()
+                ret data
+            end
+            _ = os.Remove(path)
+        end
+        if have_x11 and _has_cmd("xclip"):
+            cmd := "xclip -selection clipboard -t image/png -o > " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
+            ok := r.code == 0 and os.Exists(path)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            if ok:
+                data := io.ReadFile(path)
+                _ = os.Remove(path)
+                mem.Free(path as void*)
+                _cb_ok()
+                ret data
+            end
+            _ = os.Remove(path)
+        end
+        mem.Free(path as void*)
+        _cb_set_error("GetImageBytes is not available (requires wl-paste image/png or xclip image/png)")
+        ret str.Clone("")
+    end
+
+    @en "SetImageBytes"
+    @fa "تنظیم بایت‌های تصویر"
+    pub func SetImageBytes(data: str, mime: str = "image/png"): bool:
+        tdir := os.TempDir()
+        base := "salam_clipboard_img_" + str.FromInt(os.Pid() as i64) + ".bin"
+        path := filepath.Join(tdir.Len() > 0 ? tdir : "/tmp", base)
+        mem.Free(tdir as void*)
+        mem.Free(base as void*)
+        written := io.WriteFile(path, data)
+        if written < 0:
+            mem.Free(path as void*)
+            _cb_set_error("Failed to stage image bytes for clipboard")
+            ret false
+        end
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        mut ok := false
+        if have_wayland and _has_cmd("wl-copy"):
+            cmd := "wl-copy --type " + mime + " < " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
+            ok = r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        else have_x11 and _has_cmd("xclip"):
+            cmd := "xclip -selection clipboard -t " + mime + " -i " + path + " 2>/dev/null"
+            r := _run_sh(cmd)
+            mem.Free(cmd as void*)
+            ok = r.code == 0
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+        end
+        _ = os.Remove(path)
+        mem.Free(path as void*)
+        if not ok:
+            _cb_set_error("No clipboard backend available for image bytes (need wl-copy or xclip)")
+            ret false
+        end
+        ret _cb_ok()
+    end
+
+    @en "GetImagePath"
+    @fa "گرفتن مسیر تصویر"
+    pub func GetImagePath(): str:
+        t := GetText()
+        p := str.Trim(t)
+        mem.Free(t as void*)
+        if p.Len() > 0 and os.Exists(p):
+            _cb_ok()
+            ret p
+        end
+        mem.Free(p as void*)
+        _cb_set_error("No image path detected in clipboard text")
+        ret str.Clone("")
+    end
+
+    @en "SetImagePath"
+    @fa "تنظیم مسیر تصویر"
+    pub func SetImagePath(path: str): bool:
+        if not os.Exists(path):
+            _cb_set_error("Image path does not exist")
+            ret false
+        end
+        data := io.ReadFile(path)
+        mut mime := "image/png"
+        low := str.ToLower(path)
+        if str.EndsWith(low, ".jpg") or str.EndsWith(low, ".jpeg"):
+            mime = "image/jpeg"
+        else str.EndsWith(low, ".gif"):
+            mime = "image/gif"
+        else str.EndsWith(low, ".webp"):
+            mime = "image/webp"
+        end
+        ok := SetImageBytes(data, mime)
+        mem.Free(data as void*)
+        mem.Free(low as void*)
+        if ok:
+            _ = SetText(path)
+        end
+        ret ok
+    end
+
+    @en "Backend"
+    @fa "پشتوانه"
+    pub func Backend(): str:
+        have_wayland := _linux_has_wayland()
+        have_x11 := _linux_has_x11()
+        have_termux := _linux_has_termux()
+        if have_wayland and (_has_cmd("wl-copy") or _has_cmd("wl-paste")):
+            ret str.Clone("wayland-wl-clipboard")
+        end
+        if have_x11 and _has_cmd("xclip"):
+            ret str.Clone("x11-xclip")
+        end
+        if have_x11 and _has_cmd("xsel"):
+            ret str.Clone("x11-xsel")
+        end
+        if have_termux:
+            ret str.Clone("termux")
+        end
+        ret str.Clone("none")
+    end
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    b := Backend()
+    ok := b != "none"
+    mem.Free(b as void*)
+    ret ok
+end
+
+@en "SupportsText"
+@fa "متن پشتیبانی می‌شود"
+pub func SupportsText(): bool:
+    ret IsSupported()
+end
+
+@en "SupportsHTML"
+@fa "اچ‌تی‌ام‌ال پشتیبانی می‌شود"
+pub func SupportsHTML(): bool:
+    // API is available on supported platforms, but fidelity/backend support is best-effort.
+    ret IsSupported()
+end
+
+@en "SupportsImages"
+@fa "تصویر پشتیبانی می‌شود"
+pub func SupportsImages(): bool:
+    // Image clipboard operations are best-effort and platform/backend dependent.
+    ret IsSupported()
+end
+
+@en "HasImage"
+@fa "تصویر دارد"
+pub func HasImage(): bool:
+    b := GetImageBytes()
+    ok := b.Len() > 0
+    mem.Free(b as void*)
+    if ok:
+        ret true
+    end
+    p := GetImagePath()
+    okp := p.Len() > 0
+    mem.Free(p as void*)
+    ret okp
+end
+
+@en "CapabilityStatus"
+@fa "وضعیت قابلیت"
+pub func CapabilityStatus(): str:
+    b := Backend()
+    mut s := "backend=" + b
+    s = s + ", text=" + (SupportsText() ? "true" : "false")
+    s = s + ", html=best-effort"
+    s = s + ", image=best-effort"
+    mem.Free(b as void*)
+    ret s
+end
+
+@en "SessionKind"
+@fa "نوع نشست"
+pub func SessionKind(): str:
+    if SALAM_OS_WINDOWS:
+        ret str.Clone("windows")
+    else SALAM_OS_MAC:
+        ret str.Clone("macos")
+    else SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
+        w := os.Env("WAYLAND_DISPLAY")
+        wt := str.Trim(w)
+        if wt.Len() > 0:
+            mem.Free(w as void*)
+            mem.Free(wt as void*)
+            ret str.Clone("wayland")
+        end
+        mem.Free(w as void*)
+        mem.Free(wt as void*)
+        d := os.Env("DISPLAY")
+        dt := str.Trim(d)
+        if dt.Len() > 0:
+            mem.Free(d as void*)
+            mem.Free(dt as void*)
+            ret str.Clone("x11")
+        end
+        mem.Free(d as void*)
+        mem.Free(dt as void*)
+        ret str.Clone("headless-or-unknown")
+    end
+    ret str.Clone("unknown")
+end
+
+@en "HasDisplaySession"
+@fa "نشست نمایشی دارد"
+pub func HasDisplaySession(): bool:
+    kind := SessionKind()
+    ok := kind == "windows" or kind == "macos" or kind == "wayland" or kind == "x11"
+    mem.Free(kind as void*)
+    ret ok
+end
+
+@en "SetRichText"
+@fa "تنظیم متن غنی"
+pub func SetRichText(html: str, alt_text: str = ""): bool:
+    ret SetHTML(html, alt_text)
+end
+
+@en "GetRichText"
+@fa "گرفتن متن غنی"
+pub func GetRichText(): str:
+    ret GetHTML()
+end
+
+@en "CanReadHTML"
+@fa "می‌تواند اچ‌تی‌ام‌ال بخواند"
+pub func CanReadHTML(): bool:
+    ret SupportsHTML()
+end
+
+@en "CanWriteHTML"
+@fa "می‌تواند اچ‌تی‌ام‌ال بنویسد"
+pub func CanWriteHTML(): bool:
+    ret SupportsHTML()
+end
+
+@en "CanReadImage"
+@fa "می‌تواند تصویر بخواند"
+pub func CanReadImage(): bool:
+    ret SupportsImages()
+end
+
+@en "CanWriteImage"
+@fa "می‌تواند تصویر بنویسد"
+pub func CanWriteImage(): bool:
+    ret SupportsImages()
+end
+
+@en "SetImageFromPath"
+@fa "تنظیم تصویر از مسیر"
+pub func SetImageFromPath(path: str): bool:
+    ret SetImagePath(path)
+end
+
+@en "GetImageAsPathHint"
+@fa "گرفتن تصویر به عنوان اشاره مسیر"
+pub func GetImageAsPathHint(): str:
+    ret GetImagePath()
+end
+
+@en "CopyText"
+@fa "کپی متن"
+pub func CopyText(text: str): bool:
+    ret SetText(text)
+end
+
+@en "PasteText"
+@fa "چسباندن متن"
+pub func PasteText(): str:
+    ret GetText()
+end

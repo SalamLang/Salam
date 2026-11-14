@@ -3,9 +3,25 @@ call ale#Set('salam_options', '')
 
 function! ale_linters#salam#salam#GetCommand(buffer) abort
   let l:null = has('win32') ? 'NUL' : '/dev/null'
-  return '%e inspect %s --emit-symbol --xml-out=' . l:null
+  let l:args = ' inspect %s --emit-symbol --xml-out=' . l:null
         \ . ' --error-style=gcc --log-level=error '
-        \ . ale#Var(a:buffer, 'salam_options')
+
+  if exists('*salam#Lang')
+    let l:args .= '--lang=' . salam#Lang() . ' '
+  endif
+
+  let l:stdlib = get(g:, 'salam_stdlib_path', '')
+  if !empty(l:stdlib)
+    let l:args .= '--stdlib-path=' . ale#Escape(l:stdlib) . ' '
+  endif
+
+  let l:switch_lint = get(g:, 'salam_switch_lint', 'off')
+  if index(['warn', 'error', 'fix'], l:switch_lint) >= 0
+    let l:args .= '--switch-lint=' . l:switch_lint . ' '
+    let l:args .= '--switch-lint-min=' . string(get(g:, 'salam_switch_lint_min', 4)) . ' '
+  endif
+
+  return '%e' . l:args . ale#Var(a:buffer, 'salam_options')
 endfunction
 
 function! ale_linters#salam#salam#Handle(buffer, lines) abort

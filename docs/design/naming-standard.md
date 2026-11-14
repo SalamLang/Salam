@@ -1,21 +1,38 @@
 # Naming standard for public names
 
-Status: proposal, measured on `main` (0.6.3) on 2026-11-09. Nothing described
-here as a future step is implemented yet. Only the measurement tool
-(`tools/salam/check-naming.salam`) and its baseline exist.
+Status: enforced for **new** English public function/method names by
+`tools/salam/check-naming.salam` (baseline-aware). Existing violations may
+remain in the baseline while APIs are migrated; new public English
+functions/methods must follow this rule.
+
+Checked by `tools/salam/check-naming.salam` and its baseline
+`tools/salam/std-naming-baseline.txt` (CI: Public naming standard).
 
 ## The rule
 
-Everything that is public and a callable is PascalCase. Everything that is
-public and a stored value is snake_case.
+- **English public callable names** (package functions and methods): must be
+  **UpperCamelCase / PascalCase** (first letter of each word capitalized, no
+  underscores). Acronym-style names (e.g. `URL`, `HTTP`) are accepted.
+  Legacy lowercase/snake_case spellings are allowed **only as compatibility
+  aliases** when a PascalCase/Acronym canonical exists in the same scope
+  (so older Salam code can keep compiling while callers migrate).
+- **Persian identifiers**: public or otherwise, Persian names must **not
+  contain Latin/English letters** (`A-Z`, `a-z`). Use Persian words/spaces or
+  ZWNJ as appropriate.
+- **Stored public values** (struct fields, constants, package-level vars):
+  remain governed by the naming checker/baseline (snake_case/value naming
+  conventions per kind), except where a specific domain/mirror API requires
+  otherwise.
 
 | Public thing                                  | Style                       | Example                          |
 | --------------------------------------------- | --------------------------- | -------------------------------- |
-| package function                              | PascalCase                  | `str.StartsWith(s, p)`           |
-| method (struct, interface, built-in type)      | PascalCase                  | `v.Push(x)`, `s.StartsWith(p)`   |
-| struct field                                  | snake_case                  | `info.is_dir`                    |
-| constant                                      | snake_case                  | `const max_header_size := 8192`  |
-| package level variable                        | snake_case                  | `pub mut default_timeout := 30`  |
+| package function (English)                     | UpperCamelCase (PascalCase) | `str.StartsWith(s, p)`           |
+| method (English)                              | UpperCamelCase (PascalCase) | `v.Push(x)`, `s.StartsWith(p)`   |
+| compat alias (legacy English)                 | legacy spelling allowed     | `v.Push(x)` when `v.Push` exists |
+| Persian identifier                            | no Latin letters            | `تابع محاسبه` / `نام‌کاربر`      |
+| struct field                                  | snake_case / per checker    | `info.is_dir`                    |
+| constant                                      | per checker/baseline        | `const max_header_size := 8192`  |
+| package level variable                        | snake_case / per checker    | `pub mut default_timeout := 30`  |
 | type, interface, enum                         | PascalCase (already true)   | `HashMap`, `FileInfo`            |
 | enum member                                   | PascalCase                  | `Color.Red`                      |
 
@@ -52,12 +69,11 @@ rather than renaming each to snake_case.
    checked. `@external` names likewise.
 2. Operators: `pub func +`, and the `operator_*` hooks (`operator_index`,
    `operator_eq`, and so on).
-3. Protocol hooks the compiler calls by name. These are not meant to be typed
-   by people: `iter`, `has_next`, `next`, `key`, `value` (the `each` protocol),
-   `free`, `copy`, `deep_copy` (lifetime), `to_str`, `to_json`, `from_json`
-   (formatting and serialization), `hash`. They are lower case in the compiler
-   (the semantic pass alone has 238 string literals of built-in method names)
-   and in 20+ std packages. See open question 3 for whether they rename too.
+3. Protocol/operator hooks the compiler/runtime may require by specific name
+   (e.g. `operator_*`, and language/protocol hooks where applicable): keep the
+   required canonical/compat spellings so compiler and runtime dispatch remain
+   correct. Prefer providing UpperCamelCase public forms alongside required
+   legacy/protocol names when possible.
 4. `main`.
 5. Persian identifiers (see below).
 6. Mirror packages: a package whose job is to look like an external API
@@ -93,7 +109,7 @@ The 10 function violations are `contains`, `index_of`, `reverse`, `clone`,
 `jalali_date` (`std/layoutgen`).
 
 Violations by package, the biggest: `gui/raylib` 263, `unicode` 260,
-`metatrader` 188, `ai/ml` 141, `ai/opencv` 118, `collections` 97, `graphql` 88,
+`metatrader` 188, `ai/ml` 141, `opencv` 118, `collections` 97, `graphql` 88,
 `archive` 79, `excel` 68, `graph` 58, `term` 57, `encoding/protobuf` 57,
 `net/http2` 51. 101 packages have at least one violation. The full list is
 `tools/salam/std-naming-baseline.txt` (2489 lines, `class|package|name`).
@@ -150,9 +166,9 @@ methods with the same name are included:
 
 Another 555 are in Markdown, HTML and TeX (`website/`, `books/`, `docs/`).
 
-Most common: `.len(` 16422, `.push(` 14377, `.get(` 11424, `.free(` 7969, `.set(`
-2211, `.concat(` 2206, `.substr(` 1913, `.find(` 1093, `.put(` 926, `.has(` 585,
-`.to_int(` 457. Everything below `.pop(` is under 340 each.
+Most common: `.len(` 16422, `.Push(` 14377, `.Get(` 11424, `.Free(` 7969, `.Set(`
+2211, `.Concat(` 2206, `.Substr(` 1913, `.Find(` 1093, `.Put(` 926, `.Has(` 585,
+`.to_int(` 457. Everything below `.Pop(` is under 340 each.
 
 Also keyed by public names: 57960 `doc.` and `ex.` lines in 344 site std and
 guide content files, 13291 `@en` lines and 12768 `@fa` lines in std, and the
@@ -230,7 +246,7 @@ Nothing changes for Persian. The rule applies to the English identifier only:
    Error form later is E-coded, in the next free E number.
 3. The fixer is `salam check --fix` with `--naming-lint=fix`, the same switch
    the existing lints use. It must run on resolved member calls, not on text:
-   `.get(` is a built-in, a std method and a user method, `.ok` belongs to
+   `.Get(` is a built-in, a std method and a user method, `.ok` belongs to
    different structs, and a text rewrite cannot tell. The semantic pass already
    knows the receiver type at every member call, so it can emit exact edits
    (the switch lint does this today). It rewrites calls and declarations,
@@ -300,7 +316,7 @@ is not the compiler, it is phase 2 and 3 volume and the order against the seed.
    releases, or treat the 42 built-ins plus the protocol hooks as language
    keywords that stay lower case, like `len` and `append` in Go, and apply the
    rule only to std and user code. The first is the stated rule and costs 62148
-   call sites; the second leaves `.len()` and `.free()` untouched and costs
+   call sites; the second leaves `.len()` and `.Free()` untouched and costs
    nothing. Also: should `iter`, `has_next`, `next`, `to_str`, `free` and the
    `operator_*` names rename too, since a user struct implements them?
 4. Mirror packages. Exempt `gui/raylib`, `metatrader`, `llvm`, `net/http2`,

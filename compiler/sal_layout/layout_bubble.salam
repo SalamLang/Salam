@@ -77,13 +77,45 @@ func lo_bub_prog_has(a &: at.Ast, prog: int, name: str): bool:
     ret false
 end
 
+func lo_bub_prog_func(a &: at.Ast, prog: int, name: str): int:
+    if prog == 0 or str.Len(name) == 0:
+        ret 0
+    end
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret did
+        end
+    end
+    ret 0
+end
+
+func lo_bub_handler_stops(a &: at.Ast, h: int): bool:
+    // Salam component event bubbling/stop semantics (emit/stop). This is distinct from DOM event propagation
+    // handled by web/native runtimes; lowering should preserve both where applicable.
+    if h == 0:
+        ret false
+    end
+    if at.KindOf(a, h) == at.AST_LAMBDA:
+        ret lo_bub_has(a, h, LO_BUB_STOP, true)
+    end
+    if at.KindOf(a, h) == at.AST_IDENTIFIER:
+        fid := lo_bub_prog_func(a, g_lo_bub_prog, at.Get(a, h).name)
+        if fid != 0 and lo_bub_has(a, at.Get(a, fid).a, LO_BUB_STOP, true):
+            ret true
+        end
+    end
+    ret false
+end
+
 func lo_bub_reset(a &: at.Ast, prog: int):
-    g_lo_bub_name.clear()
-    g_lo_bub_fn.clear()
-    g_lo_bub_page.clear()
+    g_lo_bub_name.Clear()
+    g_lo_bub_fn.Clear()
+    g_lo_bub_page.Clear()
     g_lo_bub_prog = prog
     g_lo_bub_emit_ok = prog == 0 or not (lo_bub_prog_has(a, prog, "emit") or lo_bub_prog_has(a, prog, "برانگیز"))
-    g_lo_bub_stop_ok = prog == 0 or not (lo_bub_prog_has(a, prog, "stop") or lo_bub_prog_has(a, prog, "بایست"))
+    g_lo_bub_stop_ok = prog == 0 or not (lo_bub_prog_has(a, prog, "stop") or lo_bub_prog_has(a, prog, "stopPropagation") or lo_bub_prog_has(a, prog, "stop_propagation") or lo_bub_prog_has(a, prog, "بایست"))
 end
 
 func lo_bub_word(a &: at.Ast, call: int, which: int): bool:
@@ -98,7 +130,10 @@ func lo_bub_word(a &: at.Ast, call: int, which: int): bool:
     if which == LO_BUB_EMIT:
         ret g_lo_bub_emit_ok and (str.Equals(nm, "emit") or lp.IdentEqual(nm, "برانگیز"))
     end
-    ret g_lo_bub_stop_ok and (str.Equals(nm, "stop") or lp.IdentEqual(nm, "بایست"))
+    if not g_lo_bub_stop_ok:
+        ret false
+    end
+    ret str.Equals(nm, "stop") or str.Equals(nm, "stopPropagation") or str.Equals(nm, "stop_propagation") or lp.IdentEqual(nm, "بایست")
 end
 
 func lo_bub_stmt_call(a &: at.Ast, sid: int): int:
@@ -129,8 +164,8 @@ func lo_bub_has(a &: at.Ast, nid: int, which: int, root: bool): bool:
     if lo_bub_has(a, n.a, which, false) or lo_bub_has(a, n.b, which, false) or lo_bub_has(a, n.c, which, false) or lo_bub_has(a, n.d, which, false):
         ret true
     end
-    repeat n.list.len() in i:
-        if lo_bub_has(a, n.list.get(i), which, false):
+    repeat n.list.Len() in i:
+        if lo_bub_has(a, n.list.Get(i), which, false):
             ret true
         end
     end
@@ -170,7 +205,7 @@ func lo_bub_block(a &: at.Ast, items: Vector<int>, from: int): int:
     mut old := bn.list
     bn.list = items
     at.Put(a, blk, bn)
-    old.free()
+    old.Free()
     ret blk
 end
 
@@ -179,14 +214,14 @@ func lo_bub_call(a &: at.Ast, callee: int, arg: int, from: int): int:
     copy_span(a, call, from)
     mut args := Vector {} as Vector<int>
     if arg != 0:
-        args.push(arg)
+        args.Push(arg)
     end
     mut cn := at.Get(a, call)
     cn.a = callee
     mut old := cn.list
     cn.list = args
     at.Put(a, call, cn)
-    old.free()
+    old.Free()
     ret call
 end
 
@@ -194,8 +229,8 @@ func lo_bub_arity(a &: at.Ast, h: int): int:
     n := at.Get(a, h)
     if n.kind == at.AST_LAMBDA:
         mut c := 0
-        repeat n.list.len() in i:
-            if at.KindOf(a, n.list.get(i)) == at.AST_PARAM:
+        repeat n.list.Len() in i:
+            if at.KindOf(a, n.list.Get(i)) == at.AST_PARAM:
                 c++
             end
         end
@@ -212,7 +247,7 @@ func lo_bub_set_list(a &: at.Ast, nid: int, items: Vector<int>):
     mut old := n.list
     n.list = items
     at.Put(a, nid, n)
-    old.free()
+    old.Free()
 end
 
 func lo_bub_stop_body(a &: at.Ast, nid: int, keep: bool):
@@ -225,24 +260,24 @@ func lo_bub_stop_body(a &: at.Ast, nid: int, keep: bool):
     end
     if n.kind == at.AST_BLOCK:
         mut items := Vector {} as Vector<int>
-        repeat n.list.len() in i:
-            sid := n.list.get(i)
+        repeat n.list.Len() in i:
+            sid := n.list.Get(i)
             if lo_bub_word(a, lo_bub_stmt_call(a, sid), LO_BUB_STOP):
                 if keep:
                     asg := lo_bub_node(a, at.AST_ASSIGN, sid, lo_bub_ident(a, "__salam_go", sid), lo_bub_bool(a, false, sid))
                     at.SetOp(a, asg, tok.TK_ASSIGN)
-                    items.push(asg)
+                    items.Push(asg)
                 end
                 continue
             end
             s := at.Get(a, sid)
-            if keep and s.kind == at.AST_RETURN and s.a == 0:
+            if keep and s.kind == at.AST_RETURN:
                 mut rn := s
                 rn.a = lo_bub_ident(a, "__salam_go", sid)
                 at.Put(a, sid, rn)
             end
             lo_bub_stop_body(a, sid, keep)
-            items.push(sid)
+            items.Push(sid)
         end
         lo_bub_set_list(a, nid, items)
         ret
@@ -251,8 +286,8 @@ func lo_bub_stop_body(a &: at.Ast, nid: int, keep: bool):
     lo_bub_stop_body(a, n.b, keep)
     lo_bub_stop_body(a, n.c, keep)
     lo_bub_stop_body(a, n.d, keep)
-    repeat n.list.len() in j:
-        lo_bub_stop_body(a, n.list.get(j), keep)
+    repeat n.list.Len() in j:
+        lo_bub_stop_body(a, n.list.Get(j), keep)
     end
 end
 
@@ -273,15 +308,15 @@ func lo_bub_stopper(a &: at.Ast, lam: int, keep: bool): int:
     dn.name = "__salam_go"
     dn.is_mut = true
     at.Put(a, decl, dn)
-    items.push(decl)
+    items.Push(decl)
     mut last_ret := false
-    repeat b.list.len() in i:
-        sid := b.list.get(i)
-        items.push(sid)
+    repeat b.list.Len() in i:
+        sid := b.list.Get(i)
+        items.Push(sid)
         last_ret = at.KindOf(a, sid) == at.AST_RETURN
     end
     if not last_ret:
-        items.push(lo_bub_node(a, at.AST_RETURN, lam, lo_bub_ident(a, "__salam_go", lam), 0))
+        items.Push(lo_bub_node(a, at.AST_RETURN, lam, lo_bub_ident(a, "__salam_go", lam), 0))
     end
     lo_bub_set_list(a, body, items)
     ret lam
@@ -295,33 +330,36 @@ end
 func lo_bub_expand(ex &: LoExpand, a &: at.Ast, call: int, out &: Vector<int>):
     c := at.Get(a, call)
     mut name := ""
-    if c.list.len() >= 1:
-        nv := at.Get(a, c.list.get(0))
+    if c.list.Len() >= 1:
+        nv := at.Get(a, c.list.Get(0))
         if nv.kind == at.AST_LITERAL and nv.value_kind == tok.TV_STRING:
             name = nv.value_str
         end
     end
-    if str.Len(name) == 0 or c.list.len() > 2:
+    if str.Len(name) == 0 or c.list.Len() > 2:
         lo_bub_error(ex, i18.Tr("'emit' takes the event name as a string and at most one value, as in emit(\"saved\", value)"))
         ret
     end
-    value := c.list.len() == 2 ? c.list.get(1) : 0
+    value := c.list.Len() == 2 ? c.list.Get(1) : 0
     mut hs := Vector {} as Vector<int>
-    defer hs.free()
-    mut i := g_lo_bub_name.len() - 1
+    defer hs.Free()
+    mut i := g_lo_bub_name.Len() - 1
     until i >= 0:
-        if lp.IdentEqual(g_lo_bub_name.get(i), name):
-            hs.push(g_lo_bub_fn.get(i))
+        if lp.IdentEqual(g_lo_bub_name.Get(i), name):
+            hs.Push(g_lo_bub_fn.Get(i))
         end
         i--
     end
-    if hs.len() == 0:
+    if hs.Len() == 0:
         ret
     end
     mut needs := false
     each h in hs:
-        ar := lo_bub_arity(a, h)
-        if ar < 0 or ar > 1:
+        mut ar := lo_bub_arity(a, h)
+        if ar < 0:
+            ar = 0
+        end
+        if ar > 1:
             lo_bub_error(ex, co.Format1(i18.Tr("a handler for the event '%s' must be a function or a lambda with at most one parameter"), co.ArgStr(name)))
             ret
         end
@@ -345,41 +383,57 @@ func lo_bub_expand(ex &: LoExpand, a &: at.Ast, call: int, out &: Vector<int>):
             mut dn := at.Get(a, decl)
             dn.name = tmp
             at.Put(a, decl, dn)
-            out.push(decl)
+            out.Push(decl)
             argref = lo_bub_ident(a, tmp, call)
         end
     end
     mut rest := Vector {} as Vector<int>
-    mut k := hs.len() - 1
+    mut k := hs.Len() - 1
     until k >= 0:
-        h := hs.get(k)
+        h := hs.Get(k)
         ar := lo_bub_arity(a, h)
         arg := ar == 1 ? at.Clone(a, argref) : 0
-        stops := at.KindOf(a, h) == at.AST_LAMBDA and lo_bub_has(a, h, LO_BUB_STOP, true)
+        stops := lo_bub_handler_stops(a, h)
         mut callee := at.Clone(a, h)
-        if stops:
-            callee = lo_bub_stopper(a, callee, rest.len() > 0)
+        if stops and at.KindOf(a, h) == at.AST_LAMBDA:
+            callee = lo_bub_stopper(a, callee, rest.Len() > 0)
+        else stops and at.KindOf(a, h) == at.AST_IDENTIFIER:
+            fid := lo_bub_prog_func(a, g_lo_bub_prog, at.Get(a, h).name)
+            if fid != 0:
+                lam := at.NewNode(a, at.AST_LAMBDA)
+                copy_span(a, lam, h)
+                mut params := Vector {} as Vector<int>
+                fn := at.Get(a, fid)
+                repeat fn.list.Len() in pi:
+                    params.Push(at.Clone(a, fn.list.Get(pi)))
+                end
+                mut ln := at.Get(a, lam)
+                ln.list = params
+                ln.a = at.Clone(a, fn.a)
+                at.Put(a, lam, ln)
+                callee = lo_bub_stopper(a, lam, rest.Len() > 0)
+            end
         end
         cl := lo_bub_call(a, callee, arg, call)
-        if stops and rest.len() > 0:
+        if stops and rest.Len() > 0:
             iff := lo_bub_node(a, at.AST_IF, call, cl, lo_bub_block(a, rest, call))
             rest = Vector {} as Vector<int>
-            rest.push(iff)
+            rest.Push(iff)
         else:
             mut nr := Vector {} as Vector<int>
-            nr.push(lo_bub_node(a, at.AST_EXPR_STMT, call, cl, 0))
+            nr.Push(lo_bub_node(a, at.AST_EXPR_STMT, call, cl, 0))
             each r in rest:
-                nr.push(r)
+                nr.Push(r)
             end
-            rest.free()
+            rest.Free()
             rest = nr
         end
         k--
     end
     each r2 in rest:
-        out.push(r2)
+        out.Push(r2)
     end
-    rest.free()
+    rest.Free()
 end
 
 func lo_bub_walk(ex &: LoExpand, a &: at.Ast, nid: int):
@@ -389,15 +443,15 @@ func lo_bub_walk(ex &: LoExpand, a &: at.Ast, nid: int):
     n := at.Get(a, nid)
     if n.kind == at.AST_BLOCK:
         mut items := Vector {} as Vector<int>
-        repeat n.list.len() in i:
-            sid := n.list.get(i)
+        repeat n.list.Len() in i:
+            sid := n.list.Get(i)
             call := lo_bub_stmt_call(a, sid)
             if lo_bub_word(a, call, LO_BUB_EMIT):
                 lo_bub_expand(ex, a, call, items)
                 continue
             end
             lo_bub_walk(ex, a, sid)
-            items.push(sid)
+            items.Push(sid)
         end
         lo_bub_set_list(a, nid, items)
         ret
@@ -410,8 +464,8 @@ func lo_bub_walk(ex &: LoExpand, a &: at.Ast, nid: int):
     lo_bub_walk(ex, a, n.b)
     lo_bub_walk(ex, a, n.c)
     lo_bub_walk(ex, a, n.d)
-    repeat n.list.len() in j:
-        lo_bub_walk(ex, a, n.list.get(j))
+    repeat n.list.Len() in j:
+        lo_bub_walk(ex, a, n.list.Get(j))
     end
 end
 
@@ -425,19 +479,19 @@ func lo_bub_value(ex &: LoExpand, a &: at.Ast, vid: int): int:
 end
 
 func lo_bub_mark(): int:
-    ret g_lo_bub_name.len()
+    ret g_lo_bub_name.Len()
 end
 
 func lo_bub_pop(mark: int):
-    until g_lo_bub_name.len() > mark:
-        _n := g_lo_bub_name.pop()
-        _f := g_lo_bub_fn.pop()
+    until g_lo_bub_name.Len() > mark:
+        _n := g_lo_bub_name.Pop()
+        _f := g_lo_bub_fn.Pop()
     end
 end
 
 func lo_bub_push(name: str, fn: int):
-    g_lo_bub_name.push(name)
-    g_lo_bub_fn.push(fn)
+    g_lo_bub_name.Push(name)
+    g_lo_bub_fn.Push(fn)
 end
 
 func lo_bub_is_page_attr(iid: int): bool:
@@ -454,7 +508,7 @@ func lo_bub_page_handlers(ex &: LoExpand, a &: at.Ast, lb: int):
         cid := at.Child(a, lb, i)
         n := at.Get(a, cid)
         if n.kind == at.AST_LAYOUT_ATTR and lo_bub_is_handler(n.name) and n.a != 0:
-            g_lo_bub_page.push(cid)
+            g_lo_bub_page.Push(cid)
             lo_bub_push(lo_bub_event(n.name), lo_bub_value(ex, a, n.a))
         end
     end

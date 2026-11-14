@@ -1,0 +1,1211 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tui
+
+import chan
+import mem
+import sync
+import term
+import os.signal
+
+@en "PollMs"
+@fa "بازه پایش به میلی‌ثانیه"
+pub const PollMs := 20
+
+@en "EventCapacity"
+@fa "ظرفیت رویداد"
+pub const EventCapacity := 256
+
+const RegionLimit := 4
+
+const WinchRetryMs := 50
+
+struct InputContext:
+    pub events: chan.Chan<Event>
+    pub tick_ms: int = 0
+end
+
+struct WinchContext:
+    pub events: chan.Chan<Event>
+    pub width: int = 0
+    pub height: int = 0
+end
+
+@en "Screen"
+@fa "صفحه"
+pub struct Screen:
+    @en "events"
+    @fa "رویدادها"
+    pub events: chan.Chan<Event>
+
+    @en "root"
+    @fa "ریشه"
+    pub root: dyn Widget
+
+    @en "focused"
+    @fa "ویجت متمرکز"
+    pub focused: dyn Widget
+
+    @en "buffer"
+    @fa "بافر"
+    pub buffer: Buffer = Buffer {}
+
+    @en "glyphs"
+    @fa "نویسه‌ها"
+    pub glyphs: GlyphPolicy = GlyphPolicy.Unicode
+
+    @en "running"
+    @fa "در حال اجرا"
+    pub running: bool = false
+
+    @en "tree"
+    @fa "درخت"
+    pub tree: Tree = Tree {}
+
+    @en "tick_ms"
+    @fa "بازه تیک به میلی‌ثانیه"
+    pub tick_ms: int = 0
+
+    @en "mouse"
+    @fa "گزارش ماوس"
+    pub mouse: bool = false
+
+    @en "mouse_motion"
+    @fa "گزارش حرکت ماوس"
+    pub mouse_motion: bool = false
+
+    @en "keymap"
+    @fa "نگاشت کلید"
+    pub keymap: Keymap = Keymap {}
+
+    @en "dirty"
+    @fa "نیازمند بازترسیم"
+    pub dirty: bool = true
+
+    regions: Vector<Rect> = Vector {}
+
+    junction_arms: Vector<int> = Vector {} as Vector<int>
+
+    @en "focus_stack"
+    @fa "پشته تمرکز"
+    pub focus_stack: Vector<int> = Vector {}
+
+    glyphs_explicit: bool = false
+    attached: bool = false
+    closed: bool = false
+    input_thread: i64 = 0
+    winch_thread: i64 = 0
+    winch_snap: void* = null
+    freed: bool = false
+    term_state: term.TermState = term.TermState {}
+    stamps: HashMap<int, int> = HashMap {} as HashMap<int, int>
+    ztop: int = 0
+    restore: int = NoWidget
+
+    @en "add"
+    @fa "افزودن"
+    pub func Add(parent: int, w: dyn Widget): int:
+        this.dirty = true
+        id := this.tree.Add(parent, w)
+        if this.focus_stack.Len() == 0:
+            _ := this.focus(id)
+        end
+        ret id
+    end
+
+    @en "add"
+    @fa "افزودن"
+    pub func add(parent: int, w: dyn Widget): int:
+        ret this.Add(parent, w)
+    end
+
+    @en "raise"
+    @fa "آوردن به رو"
+    pub func Raise(ids: Vector<int>):
+        this.ztop++
+        stamp := this.ztop
+        repeat ids.Len() in i:
+            this.stamps.Put(ids.Get(i), stamp)
+        end
+        this.dirty = true
+        this.focus_after_raise()
+    end
+
+    @en "raise"
+    @fa "آوردن به رو"
+    pub func raise(ids: Vector<int>):
+        this.Raise(ids)
+    end
+
+    @en "unraise"
+    @fa "بازگرداندن ترتیب"
+    pub func Unraise(ids: Vector<int>):
+        repeat ids.Len() in i:
+            this.stamps.Put(ids.Get(i), 0)
+        end
+        this.dirty = true
+        this.focus_after_unraise()
+    end
+
+    @en "unraise"
+    @fa "بازگرداندن ترتیب"
+    pub func unraise(ids: Vector<int>):
+        this.Unraise(ids)
+    end
+
+    @en "raise_subtree"
+    @fa "آوردن زیردرخت به رو"
+    pub func RaiseSubtree(id: int):
+        if not this.tree.valid(id):
+            ret
+        end
+        ids := this.subtree_ids(id)
+        defer ids.Free()
+        this.raise(ids)
+    end
+
+    @en "raise_subtree"
+    @fa "آوردن زیردرخت به رو"
+    pub func raise_subtree(id: int):
+        this.RaiseSubtree(id)
+    end
+
+    @en "unraise_subtree"
+    @fa "بازگرداندن ترتیب زیردرخت"
+    pub func UnraiseSubtree(id: int):
+        if not this.tree.valid(id):
+            ret
+        end
+        ids := this.subtree_ids(id)
+        defer ids.Free()
+        this.unraise(ids)
+    end
+
+    @en "unraise_subtree"
+    @fa "بازگرداندن ترتیب زیردرخت"
+    pub func unraise_subtree(id: int):
+        this.UnraiseSubtree(id)
+    end
+
+    func subtree_ids(id: int): Vector<int>:
+        mut ids := Vector {} as Vector<int>
+        repeat this.tree.count() in c:
+            mut a := c
+            until a != NoWidget and a != id:
+                a = this.tree.parent(a)
+            end
+            if a == id:
+                ids.Push(c)
+            end
+        end
+        ret ids
+    end
+
+    func subtree_bounds(id: int): Rect:
+        ids := this.subtree_ids(id)
+        defer ids.Free()
+        mut has := false
+        mut x0 := 0
+        mut y0 := 0
+        mut x1 := 0
+        mut y1 := 0
+        repeat ids.Len() in i:
+            r := this.tree.Get(ids.Get(i)).Bounds()
+            if not r.IsEmpty():
+                if not has:
+                    x0 = r.x
+                    y0 = r.y
+                    x1 = r.right()
+                    y1 = r.bottom()
+                    has = true
+                else:
+                    if r.x < x0:
+                        x0 = r.x
+                    end
+                    if r.y < y0:
+                        y0 = r.y
+                    end
+                    if r.right() > x1:
+                        x1 = r.right()
+                    end
+                    if r.bottom() > y1:
+                        y1 = r.bottom()
+                    end
+                end
+            end
+        end
+        if not has:
+            ret Rect {}
+        end
+        ret Rect { x = x0, y = y0, width = x1 - x0, height = y1 - y0 }
+    end
+
+    @en "widget"
+    @fa "ویجت"
+    pub func Widget(id: int): dyn Widget:
+        ret this.tree.Get(id)
+    end
+
+    @en "widget"
+    @fa "ویجت"
+    pub func widget(id: int): dyn Widget:
+        ret this.Widget(id)
+    end
+
+    @en "focused_id"
+    @fa "شناسه متمرکز"
+    pub func FocusedId(): int:
+        if this.focus_stack.Len() == 0:
+            ret NoWidget
+        end
+        ret this.focus_stack.Get(this.focus_stack.Len() - 1)
+    end
+
+    @en "focused_id"
+    @fa "شناسه متمرکز"
+    pub func focused_id(): int:
+        ret this.FocusedId()
+    end
+
+    @en "can_focus"
+    @fa "تمرکز‌پذیر است"
+    pub func CanFocus(id: int): bool:
+        ret this.tree.valid(id) and this.visible_chain(id) and this.tree.Get(id).Focusable()
+    end
+
+    @en "can_focus"
+    @fa "تمرکز‌پذیر است"
+    pub func can_focus(id: int): bool:
+        ret this.CanFocus(id)
+    end
+
+    func visible_chain(id: int): bool:
+        mut cur := id
+        until cur != NoWidget:
+            if not this.tree.Get(cur).Visible():
+                ret false
+            end
+            cur = this.tree.parent(cur)
+        end
+        ret true
+    end
+
+    @en "focus"
+    @fa "تمرکز"
+    pub func Focus(id: int): bool:
+        if not this.can_focus(id):
+            ret false
+        end
+        if this.focus_stack.Len() == 0:
+            this.focus_stack.Push(id)
+        else:
+            this.focus_stack.Set(this.focus_stack.Len() - 1, id)
+        end
+        this.focus_changed()
+        ret true
+    end
+
+    @en "focus"
+    @fa "تمرکز"
+    pub func focus(id: int): bool:
+        ret this.Focus(id)
+    end
+
+    @en "push_focus"
+    @fa "تمرکز با ذخیره قبلی"
+    pub func PushFocus(id: int): bool:
+        if not this.can_focus(id):
+            ret false
+        end
+        this.focus_stack.Push(id)
+        this.focus_changed()
+        ret true
+    end
+
+    @en "push_focus"
+    @fa "تمرکز با ذخیره قبلی"
+    pub func push_focus(id: int): bool:
+        ret this.PushFocus(id)
+    end
+
+    @en "pop_focus"
+    @fa "بازیابی تمرکز"
+    pub func PopFocus(): bool:
+        if this.focus_stack.Len() == 0:
+            ret false
+        end
+        _ := this.focus_stack.Pop()
+        this.focus_changed()
+        this.revalidate_focus()
+        ret true
+    end
+
+    @en "pop_focus"
+    @fa "بازیابی تمرکز"
+    pub func pop_focus(): bool:
+        ret this.PopFocus()
+    end
+
+    @en "focus_next"
+    @fa "تمرکز بعدی"
+    pub func FocusNext(): bool:
+        ret this.focus_step(1)
+    end
+
+    @en "focus_next"
+    @fa "تمرکز بعدی"
+    pub func focus_next(): bool:
+        ret this.FocusNext()
+    end
+
+    @en "focus_prev"
+    @fa "تمرکز قبلی"
+    pub func FocusPrev(): bool:
+        ret this.focus_step(-1)
+    end
+
+    @en "focus_prev"
+    @fa "تمرکز قبلی"
+    pub func focus_prev(): bool:
+        ret this.FocusPrev()
+    end
+
+    @en "focus_up"
+    @fa "تمرکز بالا"
+    pub func FocusUp(): bool:
+        ret this.focus_toward(DirUp)
+    end
+
+    @en "focus_up"
+    @fa "تمرکز بالا"
+    pub func focus_up(): bool:
+        ret this.FocusUp()
+    end
+
+    @en "focus_down"
+    @fa "تمرکز پایین"
+    pub func FocusDown(): bool:
+        ret this.focus_toward(DirDown)
+    end
+
+    @en "focus_down"
+    @fa "تمرکز پایین"
+    pub func focus_down(): bool:
+        ret this.FocusDown()
+    end
+
+    @en "focus_left"
+    @fa "تمرکز چپ"
+    pub func FocusLeft(): bool:
+        ret this.focus_toward(DirLeft)
+    end
+
+    @en "focus_left"
+    @fa "تمرکز چپ"
+    pub func focus_left(): bool:
+        ret this.FocusLeft()
+    end
+
+    @en "focus_right"
+    @fa "تمرکز راست"
+    pub func FocusRight(): bool:
+        ret this.focus_toward(DirRight)
+    end
+
+    @en "focus_right"
+    @fa "تمرکز راست"
+    pub func focus_right(): bool:
+        ret this.FocusRight()
+    end
+
+    @en "fit_root"
+    @fa "جاسازی ریشه"
+    pub func FitRoot():
+        this.root.SetBounds(this.buffer.area())
+        this.dirty = true
+    end
+
+    @en "fit_root"
+    @fa "جاسازی ریشه"
+    pub func fit_root():
+        this.FitRoot()
+    end
+
+    @en "resize"
+    @fa "تغییر اندازه"
+    pub func Resize(width: int, height: int):
+        this.buffer.resize(width, height)
+        this.junction_arms.Free()
+        this.junction_arms = _new_junction_arms(width * height)
+        this.fit_root()
+    end
+
+    @en "resize"
+    @fa "تغییر اندازه"
+    pub func resize(width: int, height: int):
+        this.Resize(width, height)
+    end
+
+    @en "hit_test"
+    @fa "آزمون برخورد"
+    pub func HitTest(x: int, y: int): int:
+        p := Point { x = x, y = y }
+        order := this.paint_order()
+        defer order.Free()
+        mut i := order.Len() - 1
+        until i >= 0:
+            id := order.Get(i)
+            w := this.tree.Get(id)
+            if w.Bounds().Contains(p) and w.Hits() and this.visible_chain(id):
+                ret id
+            end
+            i--
+        end
+        ret NoWidget
+    end
+
+    @en "hit_test"
+    @fa "آزمون برخورد"
+    pub func hit_test(x: int, y: int): int:
+        ret this.HitTest(x, y)
+    end
+
+    @en "dispatch"
+    @fa "هدایت رویداد"
+    pub func Dispatch(event: Event): bool:
+        if event.kind == ResizeEvent:
+            this.resize(event.width, event.height)
+        end
+        this.revalidate_focus()
+        mut from := this.focused_id()
+        if event.kind == MouseEvent and event.mouse.ok:
+            p := event.mouse_point()
+            hit := this.hit_test(p.x, p.y)
+            if hit != NoWidget:
+                from = hit
+            end
+        end
+        id := this.tree.dispatch(from, event)
+        this.revalidate_focus()
+        mut consumed := id != NoWidget
+        if consumed:
+            this.queue_region(this.tree.Get(id).Bounds())
+            if event.kind == KeyEvent:
+                this.keymap.cancel_pending()
+            end
+        end
+        if not consumed and event.kind == KeyEvent:
+            consumed = this.keymap.handle(this, event)
+            if consumed:
+                this.dirty = true
+            end
+        end
+        ret consumed
+    end
+
+    @en "dispatch"
+    @fa "هدایت رویداد"
+    pub func dispatch(event: Event): bool:
+        ret this.Dispatch(event)
+    end
+
+    @en "set_keymap"
+    @fa "تنظیم نگاشت کلید"
+    pub func SetKeymap(km: Keymap):
+        this.keymap.Free()
+        this.keymap = km
+    end
+
+    @en "set_keymap"
+    @fa "تنظیم نگاشت کلید"
+    pub func set_keymap(km: Keymap):
+        this.SetKeymap(km)
+    end
+
+    func queue_region(r: Rect):
+        if r.IsEmpty():
+            this.dirty = true
+        else:
+            this.regions.Push(r)
+        end
+    end
+
+    @en "invalidate"
+    @fa "علامت‌گذاری برای بازترسیم"
+    pub func Invalidate(id: int):
+        if not this.tree.valid(id):
+            this.dirty = true
+            ret
+        end
+        this.queue_region(this.tree.Get(id).Bounds())
+    end
+
+    @en "invalidate"
+    @fa "علامت‌گذاری برای بازترسیم"
+    pub func invalidate(id: int):
+        this.Invalidate(id)
+    end
+
+    @en "invalidate_subtree"
+    @fa "علامت‌گذاری زیردرخت برای بازترسیم"
+    pub func InvalidateSubtree(id: int):
+        if not this.tree.valid(id):
+            this.dirty = true
+            ret
+        end
+        this.queue_region(this.subtree_bounds(id))
+    end
+
+    @en "invalidate_subtree"
+    @fa "علامت‌گذاری زیردرخت برای بازترسیم"
+    pub func invalidate_subtree(id: int):
+        this.InvalidateSubtree(id)
+    end
+
+    func needs_full(): bool:
+        if this.dirty or this.regions.Len() > RegionLimit:
+            ret true
+        end
+        mut sum := 0
+        repeat this.regions.Len() in i:
+            r := this.regions.Get(i)
+            if r.IsEmpty():
+                ret true
+            end
+            sum += r.width * r.height
+        end
+        ret sum * 2 > this.buffer.width * this.buffer.height
+    end
+
+    func draw_full():
+        this.buffer.Clear()
+        area := this.buffer.area()
+        focus := this.focused_id()
+        order := this.paint_order()
+        defer order.Free()
+        repeat order.Len() in i:
+            id := order.Get(i)
+            w := this.tree.Get(id)
+            b := w.Bounds()
+            visible := b.intersection(area)
+            if not visible.IsEmpty() and this.visible_chain(id):
+                mut view := this.buffer
+                view.clip = visible
+                view.focused = id == focus
+                view.glyphs = this.glyphs
+                w.Render(view, b)
+            end
+        end
+        this._record_junction_arms(area)
+    end
+
+    func draw_regions():
+        area := this.buffer.area()
+        focus := this.focused_id()
+        order := this.paint_order()
+        defer order.Free()
+        repeat this.regions.Len() in n:
+            r := this.regions.Get(n)
+            mut repaint := r.intersection(area)
+            if not repaint.IsEmpty():
+                if repaint.x > area.x:
+                    repaint.x--
+                    repaint.width++
+                end
+                if repaint.right() < area.right():
+                    repaint.width++
+                end
+                if repaint.y > area.y:
+                    repaint.y--
+                    repaint.height++
+                end
+                if repaint.bottom() < area.bottom():
+                    repaint.height++
+                end
+            end
+            this.buffer.fill(repaint, " ", StyleDefault)
+            repeat order.Len() in i:
+                id := order.Get(i)
+                w := this.tree.Get(id)
+                b := w.Bounds()
+                if b.intersects(repaint):
+                    mut visible := b.intersection(area)
+                    visible = visible.intersection(repaint)
+                    if not visible.IsEmpty() and this.visible_chain(id):
+                        mut view := this.buffer
+                        view.clip = visible
+                        view.focused = id == focus
+                        view.glyphs = this.glyphs
+                        w.Render(view, b)
+                    end
+                end
+            end
+            this._record_junction_arms(repaint)
+        end
+    end
+
+    func _record_junction_arms(area: Rect):
+        repeat area.height in dy:
+            repeat area.width in dx:
+                x := area.x + dx
+                y := area.y + dy
+                if x >= 0 and x < this.buffer.width and y >= 0 and y < this.buffer.height:
+                    this.junction_arms.Set(y * this.buffer.width + x, _arms(this.buffer.Get(x, y).ch))
+                end
+            end
+        end
+    end
+
+    @en "draw"
+    @fa "بازترسیم"
+    pub func Draw():
+        if not this.dirty and this.regions.Len() == 0:
+            ret
+        end
+        if this.needs_full():
+            this.draw_full()
+        else:
+            this.draw_regions()
+        end
+        _join_junctions(this.buffer, this.junction_arms, this.glyphs)
+    end
+
+    @en "draw"
+    @fa "بازترسیم"
+    pub func draw():
+        this.Draw()
+    end
+
+    @en "present"
+    @fa "نمایش تغییرات"
+    pub func Present():
+        if not this.dirty and this.regions.Len() == 0:
+            ret
+        end
+        this.draw()
+        if this.attached:
+            this.buffer.flush()
+        end
+        this.dirty = false
+        this.regions.Clear()
+    end
+
+    @en "present"
+    @fa "نمایش تغییرات"
+    pub func present():
+        this.Present()
+    end
+
+    @en "post"
+    @fa "صف‌گذاری رویداد"
+    pub func Post(event: Event): bool:
+        if this.freed:
+            ret false
+        end
+        ret this.events.send(event)
+    end
+
+    @en "post"
+    @fa "صف‌گذاری رویداد"
+    pub func post(event: Event): bool:
+        ret this.Post(event)
+    end
+
+    @en "next_event"
+    @fa "رویداد بعدی"
+    pub func NextEvent(event &: Event): bool:
+        if this.freed:
+            this.running = false
+            ret false
+        end
+        mut ok := true
+        got := this.events.recv(ok)
+        if not ok:
+            this.running = false
+            ret false
+        end
+        event = got
+        ret true
+    end
+
+    @en "next_event"
+    @fa "رویداد بعدی"
+    pub func next_event(event &: Event): bool:
+        ret this.NextEvent(event)
+    end
+
+    @en "set_glyphs"
+    @fa "تنظیم نویسه‌ها"
+    pub func SetGlyphs(policy: GlyphPolicy):
+        this.glyphs = policy
+        this.glyphs_explicit = true
+        this.dirty = true
+    end
+
+    @en "set_glyphs"
+    @fa "تنظیم نویسه‌ها"
+    pub func set_glyphs(policy: GlyphPolicy):
+        this.SetGlyphs(policy)
+    end
+
+    @en "start"
+    @fa "آغاز"
+    pub func Start():
+        if this.attached or this.closed:
+            ret
+        end
+        if signal.WinchSupported():
+            this.winch_snap = signal.InstallWinchHandler()
+            if this.winch_snap == null:
+                signal.BlockWinch()
+            end
+        end
+        this.term_state = term.MakeRaw(term.StdinFd)
+        mut setup := term.SeqEnterAltScreen() + term.SeqHideCursor() + term.SeqClearScreen()
+        if this.mouse_motion:
+            setup += term.SeqEnableMouseMotion()
+        else:
+            if this.mouse:
+                setup += term.SeqEnableMouse()
+            end
+        end
+        term.Emit(setup)
+        this.attached = true
+        size := term.Size()
+        this.resize(size.cols, size.rows)
+        this.buffer.tier = DetectTier()
+        if not this.glyphs_explicit:
+            this.glyphs = DetectGlyphPolicy()
+        end
+        if signal.WinchSupported():
+            wctx := mem.Allocate(sizeof(WinchContext) as u64) as WinchContext*
+            wctx[0] = WinchContext {
+                events = this.events, width = size.cols, height = size.rows
+            }
+            this.winch_thread = spawn(winch_loop, wctx)
+        end
+        ctx := mem.Allocate(sizeof(InputContext) as u64) as InputContext*
+        ctx[0] = InputContext { events = this.events, tick_ms = this.tick_ms }
+        this.input_thread = spawn(input_loop, ctx)
+        this.running = true
+    end
+
+    @en "start"
+    @fa "آغاز"
+    pub func start():
+        this.Start()
+    end
+
+    @en "stop"
+    @fa "توقف"
+    pub func Stop():
+        this.running = false
+        if this.freed:
+            ret
+        end
+        this.events.Close()
+    end
+
+    @en "stop"
+    @fa "توقف"
+    pub func stop():
+        this.Stop()
+    end
+
+    @en "close"
+    @fa "بستن"
+    pub func Close():
+        if this.closed:
+            ret
+        end
+        this.closed = true
+        this.stop()
+        if this.attached:
+            join(this.input_thread)
+            if this.winch_thread != 0:
+                signal.WakeWinch()
+                join(this.winch_thread)
+                this.winch_thread = 0
+            end
+            if this.winch_snap != null:
+                _ := signal.Restore(signal.WinchSignal, this.winch_snap)
+                mem.Free(this.winch_snap)
+                this.winch_snap = null
+            end
+            mut teardown := term.Reset + term.SeqShowCursor() + term.SeqExitAltScreen()
+            if this.mouse or this.mouse_motion:
+                teardown = term.SeqDisableMouse() + teardown
+            end
+            term.Emit(teardown)
+            _ := term.Restore(this.term_state)
+            this.attached = false
+        end
+        this.freed = true
+        this.events.Free()
+        this.tree.Free()
+        this.buffer.Free()
+        this.focus_stack.Free()
+        this.keymap.Free()
+        this.stamps.Free()
+        this.regions.Free()
+        this.junction_arms.Free()
+    end
+
+    @en "close"
+    @fa "بستن"
+    pub func close():
+        this.Close()
+    end
+
+    @en "run"
+    @fa "اجرا"
+    pub func Run():
+        this.loop(false, (): ret end)
+    end
+
+    @en "run"
+    @fa "اجرا"
+    pub func run():
+        this.Run()
+    end
+
+    @en "run_with_tick"
+    @fa "اجرا با تیک"
+    pub func RunWithTick(on_tick: func ()):
+        this.loop(true, on_tick)
+    end
+
+    @en "run_with_tick"
+    @fa "اجرا با تیک"
+    pub func run_with_tick(on_tick: func ()):
+        this.RunWithTick(on_tick)
+    end
+
+    func paints_before(a: int, b: int): bool:
+        sa := this.stamps.GetOr(a, 0)
+        sb := this.stamps.GetOr(b, 0)
+        ret sa < sb or (sa == sb and a < b)
+    end
+
+    func paint_order(): Vector<int>:
+        mut order := Vector {} as Vector<int>
+        n := this.tree.count()
+        repeat n in id:
+            order.Push(id)
+        end
+        mut i := 0
+        until i < n:
+            mut best := i
+            mut j := i + 1
+            until j < n:
+                if this.paints_before(order.Get(j), order.Get(best)):
+                    best = j
+                end
+                j++
+            end
+            if best != i:
+                kept := order.Get(i)
+                order.Set(i, order.Get(best))
+                order.Set(best, kept)
+            end
+            i++
+        end
+        ret order
+    end
+
+    func focus_changed():
+        old_bounds := this.focused.Bounds()
+        id := this.focused_id()
+        if id == NoWidget:
+            this.focused = this.root
+        else:
+            this.focused = this.tree.Get(id)
+        end
+        this.queue_region(old_bounds)
+        this.queue_region(this.focused.Bounds())
+    end
+
+    func revalidate_focus():
+        id := this.focused_id()
+        if id == NoWidget or this.can_focus(id):
+            ret
+        end
+        order := this.focus_order()
+        defer order.Free()
+        if order.Len() > 0:
+            _ := this.focus(order.Get(0))
+        else:
+            this.clear_focus()
+        end
+    end
+
+    func max_stamp(): int:
+        mut top := 0
+        mut it := this.stamps.Iter()
+        until it.HasNext():
+            v := it.Value()
+            if v > top:
+                top = v
+            end
+            it.Next()
+        end
+        ret top
+    end
+
+    func focus_order(): Vector<int>:
+        mut all := Vector {} as Vector<int>
+        mut layered := Vector {} as Vector<int>
+        top := this.max_stamp()
+        repeat this.tree.count() in id:
+            if this.can_focus(id):
+                all.Push(id)
+                if top > 0 and this.stamps.GetOr(id, 0) == top:
+                    layered.Push(id)
+                end
+            end
+        end
+        if layered.Len() > 0:
+            all.Free()
+            ret layered
+        end
+        layered.Free()
+        ret all
+    end
+
+    func order_index(order: Vector<int>, id: int): int:
+        repeat order.Len() in i:
+            if order.Get(i) == id:
+                ret i
+            end
+        end
+        ret -1
+    end
+
+    func focus_after_raise():
+        order := this.focus_order()
+        defer order.Free()
+        if order.Len() == 0:
+            ret
+        end
+        if this.order_index(order, this.focused_id()) >= 0:
+            ret
+        end
+        this.restore = this.focused_id()
+        _ := this.focus(order.Get(0))
+    end
+
+    func focus_after_unraise():
+        order := this.focus_order()
+        defer order.Free()
+        if this.max_stamp() == 0:
+            saved := this.restore
+            this.restore = NoWidget
+            if this.can_focus(saved):
+                _ := this.focus(saved)
+            else order.Len() > 0:
+                _ := this.focus(order.Get(0))
+            else:
+                this.clear_focus()
+            end
+            ret
+        end
+        if this.order_index(order, this.focused_id()) >= 0:
+            ret
+        end
+        if order.Len() > 0:
+            _ := this.focus(order.Get(0))
+        else:
+            this.clear_focus()
+        end
+    end
+
+    func clear_focus():
+        if this.focus_stack.Len() == 0:
+            ret
+        end
+        this.focus_stack.Clear()
+        this.focus_changed()
+    end
+
+    func focus_step(step: int): bool:
+        order := this.focus_order()
+        defer order.Free()
+        n := order.Len()
+        if n == 0:
+            ret false
+        end
+        idx := this.order_index(order, this.focused_id())
+        if idx < 0:
+            pick := step > 0 ? 0 : n - 1
+            ret this.focus(order.Get(pick))
+        end
+        next := (idx + step + n) % n
+        if next == idx:
+            ret false
+        end
+        ret this.focus(order.Get(next))
+    end
+
+    func focus_toward(dir: int): bool:
+        current := this.focused_id()
+        if current == NoWidget:
+            ret this.focus_next()
+        end
+        order := this.focus_order()
+        defer order.Free()
+        mut ids := Vector {} as Vector<int>
+        defer ids.Free()
+        mut rects := Vector {} as Vector<Rect>
+        defer rects.Free()
+        repeat order.Len() in i:
+            id := order.Get(i)
+            if id != current:
+                ids.Push(id)
+                rects.Push(this.tree.Get(id).Bounds())
+            end
+        end
+        pick := Nearest(this.tree.Get(current).Bounds(), rects, dir)
+        if pick < 0:
+            ret false
+        end
+        ret this.focus(ids.Get(pick))
+    end
+
+    func loop(ticking: bool, on_tick: func ()):
+        this.running = true
+        this.present()
+        mut ev := Event {}
+        until this.next_event(ev):
+            if ticking and ev.kind == TickEvent:
+                on_tick()
+                this.dirty = true
+            end
+            consumed := this.dispatch(ev)
+            if not consumed and ev.is_ctrl("c"):
+                this.stop()
+            end
+            if this.dirty or this.regions.Len() > 0:
+                this.present()
+            end
+        end
+    end
+end
+
+func input_loop(ctx: InputContext*):
+    c := ctx[0]
+    mem.Free(ctx as void*)
+    events := c.events
+    mut size := term.Size()
+    mut next_tick := sync.NowMs() + c.tick_ms
+    mut reading := true
+    until not events.is_closed():
+        mut wait := PollMs
+        if c.tick_ms > 0:
+            left := (next_tick - sync.NowMs()) as int
+            if left < wait:
+                wait = left < 0 ? 0 : left
+            end
+        end
+        if reading:
+            if term.KeyReady(wait):
+                k := term.ReadKey()
+                if k.code == term.KeyEOF:
+                    reading = false
+                end
+                if not events.send(key_event(k)):
+                    break
+                end
+            end
+        else:
+            sync.SleepMs(wait)
+        end
+        if not signal.WinchSupported():
+            now := term.Size()
+            if now.cols != size.cols or now.rows != size.rows:
+                size = now
+                resized := Event { kind = ResizeEvent, width = now.cols, height = now.rows }
+                if not events.send(resized):
+                    break
+                end
+            end
+        end
+        if c.tick_ms > 0 and sync.NowMs() >= next_tick:
+            next_tick = sync.NowMs() + c.tick_ms
+            tick := Event { kind = TickEvent }
+            if not events.send(tick):
+                break
+            end
+        end
+    end
+end
+
+func winch_loop(ctx: WinchContext*):
+    c := ctx[0]
+    mem.Free(ctx as void*)
+    events := c.events
+    mut width := c.width
+    mut height := c.height
+    set := signal.NewWinchSet()
+    until not events.is_closed():
+        n := signal.WaitWinch(set)
+        if n == 0:
+            break
+        end
+        if n < 0:
+            sync.SleepMs(WinchRetryMs)
+        else:
+            if events.is_closed():
+                break
+            end
+            now := term.Size()
+            if now.cols != width or now.rows != height:
+                width = now.cols
+                height = now.rows
+                resized := Event { kind = ResizeEvent, width = now.cols, height = now.rows }
+                if not events.send(resized):
+                    break
+                end
+            end
+        end
+    end
+    mem.Free(set)
+end
+
+func key_event(k: term.Key): Event:
+    if k.code == term.KeyMouse:
+        ret Event { kind = MouseEvent, key = k, mouse = term.DecodeMouse(k.raw) }
+    end
+    ret Event { kind = KeyEvent, key = k }
+end
+
+@en "NewScreen"
+@fa "صفحه جدید"
+pub func NewScreen(root: dyn Widget, width: int, height: int): Screen:
+    mut evch := chan.Chan {} as chan.Chan<Event>
+    evch.init(EventCapacity as i64)
+    mut s := Screen {
+        events = evch, root = root, focused = root, tree = NewTree(root), buffer = NewBuffer(width, height),
+        junction_arms = _new_junction_arms(width * height)
+    }
+    s.fit_root()
+    ret s
+end
+
+@en "NewTerminalScreen"
+@fa "صفحه ترمینال جدید"
+pub func NewTerminalScreen(root: dyn Widget): Screen:
+    size := term.Size()
+    ret NewScreen(root, size.cols, size.rows)
+end

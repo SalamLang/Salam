@@ -22,12 +22,12 @@ import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
 import { Usage } from "./Usage";
 import { Select } from "./Select";
-import { IconArrowLeft, IconBook, IconBug, IconCode, IconFolder, IconGlobe, IconMenu, IconMoon, IconPlus, IconSearch, IconShare, IconSun, IconSwap, IconTerminal } from "./icons";
+import { IconArrowLeft, IconBook, IconBug, IconCode, IconFolder, IconGlobe, IconLogout, IconMenu, IconMoon, IconPlus, IconSearch, IconShare, IconSun, IconSwap, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { ProjectDialog, ProjectPage, ProjectsHome, confirmDeleteProject } from "./Projects";
 import { useTheme } from "./theme";
-import { t } from "./i18n";
+import { isFa, setLang, t } from "./i18n";
 import { Checkbox } from "./Checkbox";
 import { pushToast } from "./Toasts";
 
@@ -174,6 +174,10 @@ export function App() {
   const [route, setRoute] = useState<Route>(INITIAL_PLACE.route);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
+  const activeChats = useMemo(
+    () => chats.filter((c) => c.state === "working" || c.state === "waiting" || c.state === "queued"),
+    [chats],
+  );
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsReady, setProjectsReady] = useState(false);
   const [projectScope, setProjectScope] = useState<string | null>(INITIAL_PLACE.project);
@@ -1060,16 +1064,17 @@ export function App() {
         user={user}
         plan={plan}
         projects={projects}
+        activeChats={activeChats}
         activeProject={projectScope}
         page={route === "admin-chat" || route === "admin-user" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
         onClose={() => setSidebar(false)}
         onNew={newChatHere}
-        onLogout={logout}
         onOpenProjects={() => navigate("/")}
         onOpenProject={openProject}
         onOpenOthers={openOthers}
+        onOpenChat={(id, pid) => openChat(id, false, pid)}
         onNewProject={() => setProjectDialog({ mode: "create" })}
       />
       <main className="main">
@@ -1115,6 +1120,18 @@ export function App() {
           </button>
           <button type="button" className="icon-button" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
             {theme === "dark" ? <IconSun /> : <IconMoon />}
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setLang(isFa ? "en" : "fa")}
+            aria-label={t("تغییر زبان به انگلیسی", "Switch to Persian")}
+            title={isFa ? "English" : "فارسی"}
+          >
+            <IconGlobe />
+          </button>
+          <button type="button" className="icon-button" onClick={logout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
+            <IconLogout />
           </button>
         </header>
         {route === "projects" ? (

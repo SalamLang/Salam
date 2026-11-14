@@ -1,0 +1,509 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import math
+import time
+import gui.color
+import gui.paint
+import gui.style
+
+func _default_style(key: str): style.Style:
+    if _def_keys.Has(key):
+        ret _def_styles[_def_keys.Get(key)]
+    end
+    s := style.Default(key)
+    _def_styles.Push(s)
+    _def_keys.Put(str.Clone(key), _def_styles.Len() - 1)
+    ret s
+end
+
+func _fam_name(f: str): str:
+    switch f:
+        "sans": ret "sans-serif" end
+        "serif": ret "serif" end
+        "mono": ret "monospace" end
+        "system": ret "system-ui" end
+    end
+    ret f
+end
+
+func _families(s: style.Style): str:
+    if s.font.Len() == 0:
+        ret "sans-serif"
+    end
+    mut parts := Vector {} as Vector<str>
+    defer parts.Free()
+    each f in s.font:
+        parts.Push(_fam_name(f))
+    end
+    ret str.Join(parts, ",")
+end
+
+func _hmix(h: i64, v: i64): i64:
+    ret (h ^ v) * (1099511628211 as i64)
+end
+
+func _hf(h: i64, v: f64): i64:
+    ret _hmix(h, (math.Round(v * 1024.0)) as i64)
+end
+
+func _hlen(h: i64, l: style.Len): i64:
+    mut r := _hf(h, l.px)
+    r = _hf(r, l.pct)
+    r = _hf(r, l.em)
+    r = _hf(r, l.rem)
+    r = _hf(r, l.vw)
+    r = _hf(r, l.vh)
+    r = _hf(r, l.vmin)
+    r = _hf(r, l.vmax)
+    ret _hf(r, l.fr)
+end
+
+func _hcol(h: i64, c: color.Color): i64:
+    mut r := _hf(h, c.r)
+    r = _hf(r, c.g)
+    r = _hf(r, c.b)
+    r = _hf(r, c.a)
+    r = _hmix(r, c.current ? 1 : 0)
+    if c.has_dark:
+        r = _hf(r, c.dark_r)
+        r = _hf(r, c.dark_g)
+        r = _hf(r, c.dark_b)
+        r = _hf(r, c.dark_a)
+        r = _hmix(r, c.dark_current ? 3 : 2)
+    end
+    ret r
+end
+
+func _hstr(h: i64, s: str): i64:
+    mut r := h
+    p := (s as void*) as u8*
+    repeat s.Len() in i:
+        r = _hmix(r, _hb(p, i) as i64)
+    end
+    ret _hmix(r, s.Len() as i64)
+end
+
+func _hshadows(h: i64, v: Vector<style.Shadow>): i64:
+    mut r := _hmix(h, v.Len() as i64)
+    each sh in v:
+        r = _hlen(r, sh.x)
+        r = _hlen(r, sh.y)
+        r = _hlen(r, sh.blur)
+        r = _hlen(r, sh.spread)
+        r = _hcol(r, sh.color)
+        r = _hmix(r, sh.inset ? 1 : 0)
+    end
+    ret r
+end
+
+func _ihash(s: style.Style): i64:
+    mut h := 1469598103934665603 as i64
+    h = _hmix(h, s.cursor as i64)
+    h = _hmix(h, s.interactive ? 1 : 0)
+    h = _hmix(h, s.selectable ? 1 : 0)
+    h = _hcol(h, s.accent)
+    h = _hcol(h, s.caret)
+    h = _hcol(h, s.scrollbar_thumb)
+    h = _hcol(h, s.scrollbar_track)
+    h = _hcol(h, s.color)
+    each f in s.font:
+        h = _hstr(h, f)
+    end
+    h = _hlen(h, s.font_size)
+    h = _hmix(h, s.font_weight as i64)
+    h = _hmix(h, s.italic ? 1 : 0)
+    h = _hf(h, s.line_height)
+    h = _hlen(h, s.line_height_len)
+    h = _hlen(h, s.letter_spacing)
+    h = _hlen(h, s.word_spacing)
+    h = _hmix(h, s.text_align as i64)
+    h = _hmix(h, s.transform_text as i64)
+    h = _hmix(h, s.wrap_text ? 1 : 0)
+    h = _hmix(h, s.direction as i64)
+    h = _hmix(h, s.white_space as i64)
+    h = _hshadows(h, s.text_shadow)
+    each f in s.font_features:
+        h = _hstr(h, f)
+    end
+    ret h
+end
+
+func _same_len(a: style.Len, b: style.Len): bool:
+    ret a.px == b.px and a.pct == b.pct and a.em == b.em and a.rem == b.rem and a.vw == b.vw and a.vh == b.vh and a.vmin == b.vmin and a.vmax == b.vmax and a.fr == b.fr
+end
+
+func _zero_len(l: style.Len): bool:
+    zero := style.Len {}
+    ret _same_len(l, zero)
+end
+
+func _inherit_fast(p: style.Style, c &: style.Style):
+    base := _default_style("")
+    if c.cursor == base.cursor:
+        c.cursor = p.cursor
+    end
+    if c.interactive == base.interactive:
+        c.interactive = p.interactive
+    end
+    if c.selectable == base.selectable:
+        c.selectable = p.selectable
+    end
+    if color.Equal(c.accent, base.accent):
+        c.accent = p.accent
+    end
+    if color.Equal(c.caret, base.caret):
+        c.caret = p.caret
+    end
+    if color.Equal(c.scrollbar_thumb, base.scrollbar_thumb) and color.Equal(c.scrollbar_track, base.scrollbar_track):
+        c.scrollbar_thumb = p.scrollbar_thumb
+        c.scrollbar_track = p.scrollbar_track
+    end
+    if color.Equal(c.color, base.color):
+        c.color = p.color
+    end
+    if c.font.Len() == 0:
+        c.font = p.font
+    end
+    if _same_len(c.font_size, base.font_size):
+        c.font_size = p.font_size
+    end
+    if c.font_weight == base.font_weight:
+        c.font_weight = p.font_weight
+    end
+    if c.italic == base.italic:
+        c.italic = p.italic
+    end
+    if c.line_height == base.line_height and _same_len(c.line_height_len, base.line_height_len):
+        c.line_height = p.line_height
+        c.line_height_len = p.line_height_len
+    end
+    if _same_len(c.letter_spacing, base.letter_spacing):
+        c.letter_spacing = p.letter_spacing
+    end
+    if _same_len(c.word_spacing, base.word_spacing):
+        c.word_spacing = p.word_spacing
+    end
+    if c.text_align == base.text_align:
+        c.text_align = p.text_align
+    end
+    if c.transform_text == base.transform_text:
+        c.transform_text = p.transform_text
+    end
+    if c.wrap_text == base.wrap_text:
+        c.wrap_text = p.wrap_text
+    end
+    if c.direction == base.direction:
+        c.direction = p.direction
+    end
+    if c.white_space == base.white_space:
+        c.white_space = p.white_space
+    end
+    if c.text_shadow.Len() == 0:
+        c.text_shadow = p.text_shadow
+    end
+    if c.font_features.Len() == 0:
+        c.font_features = p.font_features
+    end
+end
+
+func _vp_len(l: style.Len, font: f64): f64:
+    vw := _e.width
+    vh := _e.height
+    mn := math.Min(vw, vh)
+    mx := math.Max(vw, vh)
+    ret l.px + l.em * font + l.rem * _e.root_font + l.vw * vw / 100.0 + l.vh * vh / 100.0 + l.vmin * mn / 100.0 + l.vmax * mx / 100.0
+end
+
+func _abs_len(l: style.Len, font: f64, basis: f64): f64:
+    ret _vp_len(l, font) + l.pct * basis / 100.0
+end
+
+func _pcol(c: color.Color): paint.Color:
+    mut cc := c
+    if _e.dark and color.HasDark(c):
+        cc = color.Dark(c)
+    else color.HasDark(c):
+        cc = color.Light(c)
+    end
+    v := color.Argb(cc)
+    ret paint.Color { r = ((v >> 16) & 255) as int, g = ((v >> 8) & 255) as int, b = (v & 255) as int, a = ((v >> 24) & 255) as int }
+end
+
+func _ucol(c: color.Color, cur: paint.Color): paint.Color:
+    if c.current and not (c.has_dark and _e.dark and not c.dark_current):
+        ret paint.Color { r = cur.r, g = cur.g, b = cur.b, a = (math.Round((cur.a as f64) * c.a)) as int }
+    end
+    if _e.dark and c.has_dark and c.dark_current:
+        ret cur
+    end
+    ret _pcol(c)
+end
+
+func _calpha(c: paint.Color, alpha: f64): paint.Color:
+    ret paint.Color { r = c.r, g = c.g, b = c.b, a = (math.Round((c.a as f64) * alpha)) as int }
+end
+
+func _focus_within(node: int): bool:
+    ret _e.focus >= 0 and _is_ancestor(node, _e.focus)
+end
+
+func _is_disabled(node: int): bool:
+    if node < 0 or node >= _e.dom.nodes.Len():
+        ret false
+    end
+    k := _e.dom.nodes[node].k
+    if k == _K_BUTTON or k == _K_INPUT or k == _K_SELECT or k == _K_TEXTAREA or k == _K_OPTION or k == _K_FIELDSET:
+        if _has_attr(_e.dom, node, "disabled"):
+            ret true
+        end
+        fs := _ancestor_k(_e.dom.nodes[node].parent, _K_FIELDSET)
+        ret fs >= 0 and _has_attr(_e.dom, fs, "disabled")
+    end
+    ret false
+end
+
+func _is_invalid(node: int): bool:
+    if not _is_text_input(node) and _e.dom.nodes[node].k != _K_SELECT:
+        ret false
+    end
+    v := _control_value(node)
+    if _has_attr(_e.dom, node, "required") and v.Len() == 0:
+        ret true
+    end
+    if v.Len() == 0:
+        ret false
+    end
+    t := _input_type(node)
+    if t == "number":
+        p := (v as void*) as u8*
+        repeat v.Len() in i:
+            c := _hb(p, i)
+            if not ((c >= 48 and c <= 57) or c == 45 or c == 46 or c == 43 or c == 101 or c == 69):
+                ret true
+            end
+        end
+    end
+    if t == "email" and v.Find("@") <= 0:
+        ret true
+    end
+    ml := _attr(_e.dom, node, "minlength")
+    if ml.Len() > 0 and str.CharCount(v) < ml.ToInt():
+        ret true
+    end
+    ret false
+end
+
+func _states_of(node: int): int:
+    c := _e.ctl[node]
+    mut m := 1
+    if c.hovered:
+        m |= 1 << STATE_HOVER
+    end
+    if c.focused:
+        m |= 1 << STATE_FOCUS
+    end
+    if _focus_within(node):
+        m |= 1 << STATE_FOCUS_WITHIN
+    end
+    if c.pressed:
+        m |= 1 << STATE_ACTIVE
+    end
+    if _is_disabled(node):
+        m |= 1 << STATE_DISABLED
+    end
+    if _is_checked(node):
+        m |= 1 << STATE_CHECKED
+    end
+    if _is_invalid(node):
+        m |= 1 << STATE_INVALID
+    end
+    ret m
+end
+
+func _apply_state(s &: style.Style, nd: _Node, st: int, u &: _Used):
+    repeat nd.pst.Len() in i:
+        if nd.pst[i] == st:
+            p := _patches[nd.pid[i]]
+            repeat p.props.Len() in j:
+                pr := p.props[j]
+                style.Set(s, pr, p.values[j])
+                if pr == style.P_OUTLINE:
+                    u.outline_set = true
+                end
+            end
+        end
+    end
+    repeat nd.dst.Len() in k:
+        if nd.dst[k] == st:
+            pr := nd.dprop[k]
+            style.Set(s, pr, nd.dval[k])
+            if pr == style.P_OUTLINE:
+                u.outline_set = true
+            end
+        end
+    end
+end
+
+func _parent_el(node: int): int:
+    ret _e.dom.nodes[node].parent
+end
+
+func _target_style(node: int, u &: _Used): style.Style:
+    nd := _e.dom.nodes[node]
+    mut s := _default_style(_style_key(node))
+    p := nd.parent
+    mut pfont := _e.root_font
+    if p >= 0:
+        ps := _e.cs[p]
+        _inherit_fast(ps, s)
+        pfont = _e.us[p].font
+    else:
+        pfont = 16.0
+        if _e.dom.dir == "rtl":
+            s.direction = style.KW_RTL
+        else _e.dom.dir == "ltr":
+            s.direction = style.KW_LTR
+        end
+    end
+    states := _states_of(node)
+    mut c := _e.ctl.Ref(node)
+    c.states = states
+    u.outline_set = false
+    if nd.smask != 0:
+        repeat _STATES in st:
+            if st == STATE_PLACEHOLDER or st == STATE_SELECTION:
+                continue
+            end
+            if (states & (1 << st)) != 0 and (nd.smask & (1 << st)) != 0:
+                _apply_state(s, nd, st, u)
+            end
+        end
+    end
+    font := math.Max(0.0, _abs_len(s.font_size, pfont, pfont))
+    s.font_size = style.Px(font)
+    if p < 0:
+        _e.root_font = font
+    end
+    u.font = font
+    if not _zero_len(s.letter_spacing):
+        s.letter_spacing = style.Px(_abs_len(s.letter_spacing, font, font))
+    end
+    if not _zero_len(s.word_spacing):
+        s.word_spacing = style.Px(_abs_len(s.word_spacing, font, font))
+    end
+    if not _zero_len(s.line_height_len):
+        lh := _abs_len(s.line_height_len, font, font)
+        s.line_height_len = style.Px(lh)
+        u.line = lh
+    else:
+        u.line = s.line_height * font
+    end
+    ret s
+end
+
+func _finish_used(node: int, s: style.Style, u &: _Used):
+    p := _e.dom.nodes[node].parent
+    pc := p >= 0 ? _e.us[p].color : paint.Color { a = 255 }
+    u.color = _ucol(s.color, pc)
+    u.family = _families(s)
+    u.ihash = _hmix(_ihash(s), _e.dark ? 7 : 3)
+end
+
+func _compute(node: int):
+    mut u := _Used {}
+    s := _target_style(node, u)
+    mut d := s
+    _anim_apply(node, d)
+    _finish_used(node, d, u)
+    _e.cs[node] = d
+    old := _e.us[node]
+    u.ver = old.ver + 1
+    _e.us[node] = u
+end
+
+func _style_all():
+    t0 := time.MonoNanos()
+    n := _e.dom.nodes.Len()
+    _e.cs.Clear()
+    _e.us.Clear()
+    repeat n:
+        _e.cs.Push(style.Style {})
+        _e.us.Push(_Used {})
+    end
+    repeat n in i:
+        _compute(i)
+    end
+    _e.last_style_ms = ((time.MonoNanos() - t0) as f64) / 1000000.0
+end
+
+func _style_of(node: int): style.Style:
+    if node < 0 or node >= _e.cs.Len():
+        ret _default_style("")
+    end
+    ret _e.cs[node]
+end
+
+func _restyle_tree(node: int):
+    if node < 0 or node >= _e.cs.Len():
+        ret
+    end
+    old_i := _e.us[node].ihash
+    oldcs := _e.cs[node]
+    mut u := _Used {}
+    target := _target_style(node, u)
+    _anim_start(node, oldcs, target)
+    mut d := target
+    _anim_apply(node, d)
+    _finish_used(node, d, u)
+    _e.cs[node] = d
+    u.ver = _e.us[node].ver + 1
+    _e.us[node] = u
+    _e.restyled.Push(node)
+    if u.ihash != old_i:
+        each k in _e.dom.nodes[node].kids:
+            _restyle_tree(k)
+        end
+    end
+end
+
+func _restyle(node: int):
+    _restyle_tree(node)
+    _e.dirty_style = true
+end
+
+func _restyle_states():
+    repeat _e.dom.nodes.Len() in i:
+        nd := _e.dom.nodes[i]
+        if nd.k == _K_TEXT:
+            continue
+        end
+        if nd.smask > 1 or _is_control(i) or nd.k == _K_BUTTON or nd.k == _K_SUMMARY or nd.k == _K_OPTION:
+            m := _states_of(i)
+            if m != _e.ctl[i].states:
+                _restyle_tree(i)
+            end
+        end
+    end
+end
+
+func _scheme_changed():
+    _e.dark = not _e.dark
+    _style_all()
+    _e.dirty_layout = true
+    _e.full = true
+end

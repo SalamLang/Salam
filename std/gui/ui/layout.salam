@@ -16,16 +16,11 @@ package ui
 
 import str
 import math
-import gui.css
-import gui.cssbox
+import time
+import gui.flow
 import gui.paint
+import gui.style
 import gui.typeset
-
-const _OUT_NONE := 0
-const _OUT_BLOCK := 1
-const _OUT_INLINE := 2
-const _OUT_ATOM := 3
-const _VIRT_MIN := 200
 
 func _ensure_fonts():
     if _fonts_ready:
@@ -44,1463 +39,830 @@ func _ensure_gcache():
     end
 end
 
-func _is_replaced(tag: str): bool:
-    switch tag:
-        "img", "input", "select", "textarea", "progress", "meter", "canvas", "video", "iframe", "embed", "object", "audio":
-            ret true
-        end
-        else:
-            ret false
-        end
-    end
-    ret false
+func _details_open(node: int): bool:
+    ret _e.ctl[node].open
 end
 
-func _input_type(node: int): str:
-    t := _attr(_e.dom, node, "type")
-    if t.len() == 0:
-        ret "text"
+func _shown_by_parent(node: int): bool:
+    nd := _e.dom.nodes[node]
+    if _has_attr(_e.dom, node, "hidden"):
+        ret false
     end
-    ret t
+    if nd.k == _K_INPUT and _input_type(node) == "hidden":
+        ret false
+    end
+    if nd.k == _K_DIALOG and not _e.ctl[node].open:
+        ret false
+    end
+    p := nd.parent
+    if p >= 0 and _e.dom.nodes[p].k == _K_DETAILS and nd.k != _K_SUMMARY and not _details_open(p):
+        ret false
+    end
+    ret true
 end
 
-func _is_text_input(node: int): bool:
-    tag := _e.dom.nodes[node].tag
-    if tag == "textarea":
+func _is_leaf_kind(node: int): bool:
+    k := _e.dom.nodes[node].k
+    ret k == _K_INPUT or k == _K_TEXTAREA or k == _K_SELECT or k == _K_IMAGE or k == _K_MEDIA or k == _K_PROGRESS or k == _K_METER
+end
+
+func _inline_content(node: int): bool:
+    nd := _e.dom.nodes[node]
+    if nd.k == _K_TEXT:
         ret true
     end
-    if tag != "input":
+    if not nd.inl:
         ret false
     end
-    t := _input_type(node)
-    switch t:
-        "text", "password", "email", "search", "url", "tel", "number":
-            ret true
-        end
-        else:
-            ret false
-        end
+    s := _e.cs[node]
+    if nd.k == _K_BR:
+        ret true
     end
-    ret false
-end
-
-func _is_button_input(node: int): bool:
-    if _e.dom.nodes[node].tag != "input":
+    if s.layout_kind != style.KW_FLOW or s.position != style.KW_NORMAL or not s.visible:
         ret false
     end
-    t := _input_type(node)
-    ret t == "button" or t == "submit" or t == "reset"
-end
-
-func _has_block_desc(node: int): bool:
-    each k in _e.dom.nodes[node].kids:
-        i := _e.node_el[k]
-        if i >= 0:
-            cs := _e.st[i]
-            d := cs.display
-            if d != css.Display.None and d != css.Display.Inline and d != css.Display.InlineBlock and d != css.Display.InlineFlex and d != css.Display.InlineGrid and d != css.Display.InlineTable and d != css.Display.Contents:
-                if not _is_replaced(_e.dom.nodes[k].tag):
-                    ret true
-                end
-            end
-            if d == css.Display.Inline and _has_block_desc(k):
-                ret true
-            end
-        end
-    end
-    ret false
-end
-
-func _details_hidden(node: int): bool:
-    p := _e.dom.nodes[node].parent
-    if p < 0 or _e.dom.nodes[p].tag != "details":
+    if s.translate_x.px != 0.0 or s.rotate != 0.0 or s.scale_x != 1.0 or s.scale_y != 1.0 or s.opacity < 1.0:
         ret false
     end
-    if _details_open(p):
-        ret false
-    end
-    each k in _e.dom.nodes[p].kids:
-        if _e.dom.nodes[k].tag == "summary":
-            ret k != node
-        end
-    end
-    ret true
-end
-
-func _details_open(node: int): bool:
-    i := _e.node_el[node]
-    if i >= 0:
-        ret _e.els[i].HasAttr("open")
-    end
-    ret false
-end
-
-func _outer(node: int): int:
-    nd := _e.dom.nodes[node]
-    if _details_hidden(node):
-        ret _OUT_NONE
-    end
-    if nd.tag == "#text":
-        ret _OUT_INLINE
-    end
-    i := _e.node_el[node]
-    if i < 0:
-        ret _OUT_NONE
-    end
-    cs := _e.st[i]
-    switch cs.display:
-        css.Display.None:
-            ret _OUT_NONE
-        end
-        css.Display.Inline:
-            if nd.tag == "br":
-                ret _OUT_INLINE
-            end
-            if _is_replaced(nd.tag) or nd.tag == "button":
-                ret _OUT_ATOM
-            end
-            if cs.position == cssbox.Position.Absolute or cs.position == cssbox.Position.Fixed:
-                ret _OUT_BLOCK
-            end
-            if _has_block_desc(node):
-                ret _OUT_BLOCK
-            end
-            ret _OUT_INLINE
-        end
-        css.Display.InlineBlock, css.Display.InlineFlex, css.Display.InlineGrid, css.Display.InlineTable:
-            if cs.position == cssbox.Position.Absolute or cs.position == cssbox.Position.Fixed:
-                ret _OUT_BLOCK
-            end
-            ret _OUT_ATOM
-        end
-        else:
-            ret _OUT_BLOCK
-        end
-    end
-    ret _OUT_BLOCK
-end
-
-func _is_ws_text(s: str): bool:
-    p := (s as void*) as u8*
-    repeat s.len() in i:
-        if not _is_ws(_hb(p, i)):
+    each k in nd.kids:
+        if not _inline_content(k):
             ret false
         end
     end
     ret true
 end
 
-func _box_style(node: int, cs: css.ComputedStyle, blockify: bool): cssbox.Style:
-    mut st := css.ToBox(cs)
-    if css.NeedsBasis(cs):
-        st = css.ToBoxIn(cs, _e.width, _e.height)
+func _transform_text(s: style.Style, t: str): str:
+    switch s.transform_text:
+        style.KW_UPPER: ret str.Upper(t) end
+        style.KW_LOWER: ret str.Lower(t) end
+        style.KW_CAPITALIZE: ret str.Title(t) end
     end
-    if blockify:
-        if st.display == cssbox.Display.InlineBlock:
-            st.display = cssbox.Display.Block
-        else st.display == cssbox.Display.InlineFlex:
-            st.display = cssbox.Display.Flex
-        else st.display == cssbox.Display.InlineGrid:
-            st.display = cssbox.Display.Grid
-        else st.display == cssbox.Display.InlineTable:
-            st.display = cssbox.Display.Table
-        end
-    end
-    if node >= 0:
-        switch cs.display:
-            css.Display.TableCell:
-                cspan := _attr(_e.dom, node, "colspan")
-                if cspan.len() > 0:
-                    st.col_span = cspan.to_int()
-                end
-                rspan := _attr(_e.dom, node, "rowspan")
-                if rspan.len() > 0:
-                    st.row_span = rspan.to_int()
-                end
-                break
-            end
-            css.Display.TableColumn, css.Display.TableColumnGroup:
-                sp := _attr(_e.dom, node, "span")
-                if sp.len() > 0:
-                    st.col_span = sp.to_int()
-                end
-                break
-            end
-            else:
-                break
-            end
-        end
-    end
-    if node >= 0 and _e.dom.nodes[node].tag == "img":
-        iw := _e.rep_w[node]
-        ih := _e.rep_h[node]
-        if iw > 0.0 and ih > 0.0 and st.aspect_ratio == 0.0:
-            st.aspect_ratio = iw / ih
-        end
-    end
-    if st.overflow_x == cssbox.Overflow.Scroll or st.overflow_y == cssbox.Overflow.Scroll:
-        st.scrollbar_width = 0.0
-    end
-    ret st
+    ret str.Clone(t)
 end
 
-func _cb_grow(n: int):
-    until _e.cb_node.len() < n:
-        _e.cb_node.push(-1)
-        _e.cb_ifc.push(-1)
-        _e.cb_rep.push(-1)
-        _e.cb_key.push(-1 as i64)
-        _e.cb_used.push(false)
-        _e.cb_meas.push(false)
-        _e.cb_want.push(false)
-        _e.cb_pkey.push("")
-        _e.cb_rw.push(-1.0)
-        _e.cb_rh.push(-1.0)
-    end
-end
-
-func _new_cb(st: cssbox.Style, node: int): int:
-    mut key := -2 as i64
-    if node >= 0 and node < _e.node_ord.len():
-        ord := _e.node_ord[node]
-        _e.node_ord[node] = ord + 1
-        uid := node < _e.ctl.len() ? _e.ctl[node].uid : node
-        key = (uid as i64) * (1000003 as i64) + (ord as i64)
-    else:
-        key = (-2 - _e.root_ord) as i64
-        _e.root_ord++
-    end
-    mut cb := -1
-    if _e.key_map.has(key):
-        c := _e.key_map.get(key)
-        if c < _e.cb_used.len() and not _e.cb_used[c] and _e.cb_key[c] == key:
-            cb = c
-        end
-    end
-    if cb >= 0:
-        _e.tree.SetStyle(cb, st)
-    else _e.free_cbs.len() > 0:
-        cb = _e.free_cbs.pop()
-        _e.tree.SetStyle(cb, st)
-        _e.tree.MarkDirty(cb)
-    else:
-        cb = _e.tree.AddNode(st)
-        _cb_grow(cb + 1)
-    end
-    if _e.cb_key[cb] != key:
-        _e.cb_key[cb] = key
-        _e.key_map.put(key, cb)
-    end
-    _e.cb_used[cb] = true
-    _e.cb_node[cb] = node
-    ret cb
-end
-
-func _link(parent: int, child: int):
-    _e.link_p.push(parent)
-    _e.link_c.push(child)
-end
-
-func _measure_fn(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
-    ret _measure(mi)
-end
-
-func _attach_measure(cb: int):
-    _e.cb_want[cb] = true
-end
-
-func _begin_build():
-    if not _e.has_tree:
-        _e.tree = cssbox.Tree {}
-        _e.has_tree = true
-        _cb_clear()
-    end
-    n := _e.tree.NodeCount()
-    _cb_grow(n)
-    repeat n in c:
-        _e.cb_node[c] = -1
-        _e.cb_ifc[c] = -1
-        _e.cb_rep[c] = -1
-        _e.cb_used[c] = false
-        _e.cb_want[c] = false
-    end
-    _e.node_ord.free()
-    _e.node_ord = Vector {} as Vector<int>
-    repeat _e.dom.nodes.len():
-        _e.node_ord.push(0)
-    end
-    _e.root_ord = 0
-    _e.link_p.clear()
-    _e.link_c.clear()
-end
-
-func _end_build():
-    n := _e.tree.NodeCount()
-    mut cnt := Vector {} as Vector<int>
-    defer cnt.free()
-    repeat n + 1:
-        cnt.push(0)
-    end
-    each p in _e.link_p:
-        cnt[p + 1] += 1
-    end
-    repeat n in i:
-        cnt[i + 1] += cnt[i]
-    end
-    mut fill := Vector {} as Vector<int>
-    defer fill.free()
-    repeat n:
-        fill.push(0)
-    end
-    mut flat := Vector {} as Vector<int>
-    defer flat.free()
-    repeat _e.link_c.len():
-        flat.push(0)
-    end
-    repeat _e.link_p.len() in k:
-        p := _e.link_p[k]
-        flat[cnt[p] + fill[p]] = _e.link_c[k]
-        fill[p] += 1
-    end
-    mut kids := Vector {} as Vector<int>
-    defer kids.free()
-    repeat n in c:
-        if not _e.cb_used[c]:
-            if _e.cb_key[c] != (-1 as i64):
-                kids.clear()
-                if _e.tree.ChildCount(c) > 0:
-                    _e.tree.SetChildren(c, kids)
-                end
-                if _e.cb_meas[c]:
-                    _e.tree.ClearMeasure(c)
-                    _e.cb_meas[c] = false
-                end
-                if _e.key_map.has(_e.cb_key[c]) and _e.key_map.get(_e.cb_key[c]) == c:
-                    _e.key_map.remove(_e.cb_key[c])
-                end
-                _e.cb_key[c] = -1 as i64
-                _sfree(_e.cb_pkey[c])
-                _e.cb_pkey[c] = ""
-                _e.cb_rw[c] = -1.0
-                _e.cb_rh[c] = -1.0
-                _e.free_cbs.push(c)
-            end
-            continue
-        end
-        s0 := cnt[c]
-        e0 := cnt[c + 1]
-        mut same := _e.tree.ChildCount(c) == e0 - s0
-        if same:
-            repeat e0 - s0 in q:
-                if _e.tree.Child(c, q) != flat[s0 + q]:
-                    same = false
-                    break
-                end
-            end
-        end
-        if not same:
-            kids.clear()
-            repeat e0 - s0 in q:
-                kids.push(flat[s0 + q])
-            end
-            _e.tree.SetChildren(c, kids)
-        end
-        if _e.cb_want[c] and not _e.cb_meas[c]:
-            _e.tree.SetMeasure(c, (mi: cssbox.MeasureInput): ret _measure_fn(mi) end)
-            _e.cb_meas[c] = true
-        else not _e.cb_want[c] and _e.cb_meas[c]:
-            _e.tree.ClearMeasure(c)
-            _e.cb_meas[c] = false
-        end
-        rep := _e.cb_rep[c]
-        if rep >= 0:
-            if _e.cb_rw[c] != _e.rep_w[rep] or _e.cb_rh[c] != _e.rep_h[rep]:
-                _e.cb_rw[c] = _e.rep_w[rep]
-                _e.cb_rh[c] = _e.rep_h[rep]
-                _e.tree.MarkDirty(c)
-            end
-        end
-        fi := _e.cb_ifc[c]
-        if fi >= 0:
-            f := _e.ifcs[fi]
-            key := (f.control or f.atoms.len() > 0) ? "" : _para_key(f)
-            if key.len() == 0 or key != _e.cb_pkey[c]:
-                _e.tree.MarkDirty(c)
-            end
-            if key.len() > 0 and f.ckey.len() == 0:
-                mut fr := _e.ifcs.ref(fi)
-                fr.ckey = str.Clone(key)
-            end
-            _sfree(_e.cb_pkey[c])
-            _e.cb_pkey[c] = key
-        else _e.cb_pkey[c].len() > 0:
-            _sfree(_e.cb_pkey[c])
-            _e.cb_pkey[c] = ""
-            _e.tree.MarkDirty(c)
-        end
-    end
-end
-
-func _cb_clear():
-    each k in _e.cb_pkey:
-        _sfree(k)
-    end
-    _e.key_map.free()
-    _e.key_map = HashMap {} as HashMap<i64, int>
-    _e.cb_node.clear()
-    _e.cb_ifc.clear()
-    _e.cb_rep.clear()
-    _e.cb_key.clear()
-    _e.cb_used.clear()
-    _e.cb_meas.clear()
-    _e.cb_want.clear()
-    _e.cb_pkey.clear()
-    _e.cb_rw.clear()
-    _e.cb_rh.clear()
-    _e.free_cbs.clear()
-end
-
-func _drop_tree():
-    if _e.has_tree:
-        _e.tree.Free()
-        _e.has_tree = false
-    end
-    _cb_clear()
-    _e.key_map.free()
-    _e.key_map = HashMap {} as HashMap<i64, int>
-end
-
-func _new_ifc(owner: int, cb: int): int:
-    mut f := _Ifc { owner = owner, cb = cb }
-    f.spans = Vector {} as Vector<typeset.TextSpan>
-    f.span_el = Vector {} as Vector<int>
-    f.span_atom = Vector {} as Vector<int>
-    f.atoms = Vector {} as Vector<int>
-    cs := _style_of(owner)
-    f.pstyle = _pstyle(cs)
-    _e.ifcs.push(f)
-    idx := _e.ifcs.len() - 1
-    if owner >= 0 and owner < _e.node_ifc.len() and _e.node_ifc[owner] < 0:
-        _e.node_ifc[owner] = idx
-    else owner >= 0 and owner < _e.node_ifc.len():
-        mut j := _e.node_ifc[owner]
-        until _e.ifcs[j].next >= 0:
-            j = _e.ifcs[j].next
-        end
-        if j != idx:
-            mut pj := _e.ifcs.ref(j)
-            pj.next = idx
-        end
-    end
-    if cb >= 0:
-        _e.cb_ifc[cb] = idx
-        _attach_measure(cb)
-    end
-    ret idx
-end
-
-func _pstyle(cs: css.ComputedStyle): typeset.ParagraphStyle:
-    mut ps := typeset.ParagraphStyle {}
-    switch cs.text_align:
-        css.TextAlign.End: ps.align = typeset.TextAlign.End break end
-        css.TextAlign.Left: ps.align = typeset.TextAlign.Left break end
-        css.TextAlign.Right: ps.align = typeset.TextAlign.Right break end
-        css.TextAlign.Center: ps.align = typeset.TextAlign.Center break end
-        css.TextAlign.Justify: ps.align = typeset.TextAlign.Justify break end
-        else: ps.align = typeset.TextAlign.Start break end
-    end
-    ps.direction = cs.direction == cssbox.Direction.Rtl ? typeset.TextDirRTL : typeset.TextDirLTR
-    switch cs.white_space:
-        css.WhiteSpace.Pre: ps.white_space = typeset.WhiteSpace.Pre break end
-        css.WhiteSpace.NoWrap: ps.white_space = typeset.WhiteSpace.NoWrap break end
-        css.WhiteSpace.PreWrap, css.WhiteSpace.BreakSpaces: ps.white_space = typeset.WhiteSpace.PreWrap break end
-        else: ps.white_space = typeset.WhiteSpace.Normal break end
-    end
-    switch cs.overflow_wrap:
-        css.OverflowWrap.Anywhere: ps.overflow_wrap = typeset.OverflowWrap.Anywhere break end
-        css.OverflowWrap.BreakWord: ps.overflow_wrap = typeset.OverflowWrap.BreakWord break end
-        else: break end
-    end
-    ps.lang = _e.env.lang
-    ret ps
-end
-
-func _span_of(cs: css.ComputedStyle, text: str, el: int): typeset.TextSpan:
+func _span_for(el: int, text: str): typeset.TextSpan:
+    s := _e.cs[el]
+    u := _e.us[el]
     mut sp := typeset.TextSpan {}
     sp.text = text
-    sp.families = cs.font_family
-    sp.size = cs.font_size
-    sp.weight = cs.font_weight
-    sp.italic = cs.font_style != css.FontStyle.Normal
-    sp.letter_spacing = cs.letter_spacing
-    sp.word_spacing = cs.word_spacing
-    if not cs.line_height_normal:
-        sp.line_height = cs.line_height
-    end
-    sp.lang = _e.env.lang
+    sp.families = u.family
+    sp.size = u.font
+    sp.weight = s.font_weight
+    sp.italic = s.italic
+    sp.letter_spacing = s.letter_spacing.px
+    sp.word_spacing = s.word_spacing.px
+    sp.line_height = u.line
+    sp.lang = _e.dom.lang
     sp.tag = el
     ret sp
 end
 
-func _transform(cs: css.ComputedStyle, s: str): str:
-    switch cs.text_transform:
-        css.TextTransform.Uppercase: ret str.Upper(s) end
-        css.TextTransform.Lowercase: ret str.Lower(s) end
-        css.TextTransform.Capitalize: ret str.Title(s) end
-        else: ret str.Clone(s) end
+func _pstyle_of(owner: int): typeset.ParagraphStyle:
+    s := _e.cs[owner]
+    mut ps := typeset.ParagraphStyle {}
+    rtl := s.direction == style.KW_RTL
+    switch s.text_align:
+        style.KW_END: ps.align = typeset.TextAlign.End break end
+        style.KW_LEFT: ps.align = typeset.TextAlign.Left break end
+        style.KW_RIGHT: ps.align = typeset.TextAlign.Right break end
+        style.KW_CENTER: ps.align = typeset.TextAlign.Center break end
+        style.KW_JUSTIFY: ps.align = typeset.TextAlign.Justify break end
+        else: ps.align = typeset.TextAlign.Start break end
     end
-    ret str.Clone(s)
+    ps.direction = rtl ? typeset.TextDirRTL : (s.direction == style.KW_LTR ? typeset.TextDirLTR : typeset.TextDirAuto)
+    if s.direction == style.KW_AUTO:
+        ps.direction = typeset.TextDirLTR
+    end
+    keep := s.white_space == style.KW_KEEP
+    if keep:
+        ps.white_space = s.wrap_text ? typeset.WhiteSpace.PreWrap : typeset.WhiteSpace.Pre
+    else:
+        ps.white_space = s.wrap_text ? typeset.WhiteSpace.Normal : typeset.WhiteSpace.NoWrap
+    end
+    ps.overflow_wrap = typeset.OverflowWrap.BreakWord
+    if s.max_lines > 0:
+        ps.max_lines = s.max_lines
+        ps.ellipsis = true
+    else s.ellipsis:
+        ps.max_lines = 1
+        ps.ellipsis = true
+        ps.white_space = keep ? typeset.WhiteSpace.Pre : typeset.WhiteSpace.NoWrap
+    end
+    ps.lang = _e.dom.lang
+    ret ps
 end
 
-func _push_span(f &: _Ifc, sp: typeset.TextSpan, el: int, atom: int):
-    f.spans.push(sp)
-    f.span_el.push(el)
-    f.span_atom.push(atom)
-end
-
-func _ifc_add(fi: int, node: int):
+func _run_add(r &: _Run, node: int, owner: int):
     nd := _e.dom.nodes[node]
-    mut f := _e.ifcs.ref(fi)
-    if nd.tag == "#text":
-        el := _el_of(nd.parent)
-        cs := _style_of(el)
-        t := _transform(cs, nd.text)
-        _push_span(f, _span_of(cs, t, el), el, -1)
-        _sc_note_span(fi, f.spans.len() - 1, node)
+    if nd.k == _K_TEXT:
+        p := nd.parent
+        t := _transform_text(_e.cs[p], nd.text)
+        r.spans.Push(_span_for(p, t))
+        r.span_el.Push(p)
+        _e.in_run[node] = _e.runs.Len()
         ret
     end
-    o := _outer(node)
-    if o == _OUT_NONE:
-        ret
-    end
-    cs := _style_of(node)
-    if nd.tag == "br":
-        _push_span(f, _span_of(cs, " ", node), node, -1)
-        ret
-    end
-    if o == _OUT_ATOM:
-        ai := _build_atom(node, fi)
-        mut f2 := _e.ifcs.ref(fi)
-        _push_span(f2, _span_of(cs, "​", node), node, -1)
-        _push_span(f2, _span_of(cs, " ", node), node, ai)
-        f2.atoms.push(ai)
-        mut a := _e.atoms.ref(ai)
-        a.span = f2.spans.len() - 1
-        _push_span(f2, _span_of(cs, "​", node), node, -1)
+    _e.in_run[node] = _e.runs.Len()
+    if nd.k == _K_BR:
+        r.spans.Push(_span_for(node, str.Clone(" ")))
+        r.span_el.Push(node)
         ret
     end
     each k in nd.kids:
-        _ifc_add(fi, k)
+        _run_add(r, k, owner)
     end
 end
 
-func _build_atom(node: int, fi: int): int:
-    cb := _build_element(node, -1, false)
-    _e.atoms.push(_Atom { node = node, ifc = fi })
-    ai := _e.atoms.len() - 1
-    _e.node_atom[node] = ai
-    _e.node_cb[node] = cb
-    ret ai
-end
-
-func _marker_text(node: int, cs: css.ComputedStyle): str:
-    t := cs.list_style_type
-    switch t:
-        "none", "":
-            ret str.Clone("")
+func _ws_only(nodes: Vector<int>): bool:
+    each n in nodes:
+        nd := _e.dom.nodes[n]
+        if nd.k != _K_TEXT:
+            ret false
         end
-        "disc": ret str.Clone("•\u00A0 ") end
-        "circle": ret str.Clone("◦\u00A0 ") end
-        "square": ret str.Clone("▪\u00A0 ") end
-        "disclosure-closed": ret str.Clone(cs.direction == cssbox.Direction.Rtl ? "◂ " : "▸ ") end
-        "disclosure-open": ret str.Clone("▾ ") end
-        else:
-            break
-        end
-    end
-    mut idx := 1
-    p := _e.dom.nodes[node].parent
-    if p >= 0:
-        mut start := 1
-        st := _attr(_e.dom, p, "start")
-        if st.len() > 0:
-            start = st.to_int()
-        end
-        idx = start
-        each k in _e.dom.nodes[p].kids:
-            if k == node:
-                break
-            end
-            if _e.dom.nodes[k].tag == "li":
-                idx++
-            end
-        end
-    end
-    v := _attr(_e.dom, node, "value")
-    if v.len() > 0:
-        idx = v.to_int()
-    end
-    mut num := str.FromInt(idx as i64)
-    if t == "persian" or t == "arabic-indic" or (t == "decimal" and _e.env.lang.starts_with("fa")):
-        old := num
-        num = t == "arabic-indic" ? str.ToArabicDigits(old) : str.ToPersianDigits(old)
-        _sfree(old)
-    end
-    if t == "lower-alpha" or t == "lower-latin":
-        _sfree(num)
-        num = str.Clone(" ")
-        p2 := (num as void*) as u8*
-        p2[0] = (96 + ((idx - 1) % 26 + 1)) as u8
-    else t == "upper-alpha" or t == "upper-latin":
-        _sfree(num)
-        num = str.Clone(" ")
-        p2 := (num as void*) as u8*
-        p2[0] = (64 + ((idx - 1) % 26 + 1)) as u8
-    end
-    sep := ".\u00A0"
-    r := num + (t == "decimal" or t == "persian" or t == "arabic-indic" ? sep : ".\u00A0")
-    _sfree(num)
-    ret r
-end
-
-func _make_ifc(owner: int, cb: int, kids: Vector<int>): int:
-    fi := _new_ifc(owner, cb)
-    cs := _style_of(owner)
-    if cs.display == css.Display.ListItem and cs.list_style_position == css.ListPosition.Inside:
-        m := _marker_text(owner, cs)
-        if m.len() > 0:
-            mut f := _e.ifcs.ref(fi)
-            _push_span(f, _span_of(cs, m, owner), owner, -1)
-        end
-    end
-    each k in kids:
-        _ifc_add(fi, k)
-    end
-    ret fi
-end
-
-func _run_has_content(kids: Vector<int>, pre: bool): bool:
-    each k in kids:
-        nd := _e.dom.nodes[k]
-        if nd.tag == "#text":
-            if pre or not _is_ws_text(nd.text):
-                ret true
-            end
-        else:
-            ret true
-        end
-    end
-    ret false
-end
-
-func _flush_run(node: int, cbn: int, run &: Vector<int>):
-    if run.len() == 0:
-        ret
-    end
-    cs := _style_of(node)
-    pre := cs.white_space == css.WhiteSpace.Pre or cs.white_space == css.WhiteSpace.PreWrap
-    if _run_has_content(run, pre):
-        mut st := cssbox.Style {}
-        st.direction = cs.direction
-        anon := _new_cb(st, node)
-        _link(cbn, anon)
-        _make_ifc(node, anon, run)
-    end
-    run.clear()
-end
-
-func _virt_view(node: int, cs: css.ComputedStyle): f64:
-    if node < 0 or node == _e.dom.body or not (cs.overflow_y == cssbox.Overflow.Auto or cs.overflow_y == cssbox.Overflow.Scroll):
-        ret -1.0
-    end
-    if cs.height.kind == css.LenKind.Length and cs.height.calc.len() == 0 and not cs.height.has_pct and cs.height.px > 0.0:
-        ret cs.height.px
-    end
-    if cs.max_height.kind == css.LenKind.Length and cs.max_height.calc.len() == 0 and not cs.max_height.has_pct and cs.max_height.px > 0.0:
-        ret cs.max_height.px
-    end
-    ret -1.0
-end
-
-func _virt_rows(node: int, rows &: Vector<int>): bool:
-    each k in _e.dom.nodes[node].kids:
-        nd := _e.dom.nodes[k]
-        if nd.tag == "#text":
-            if not _is_ws_text(nd.text):
+        p := (nd.text as void*) as u8*
+        repeat nd.text.Len() in i:
+            if not _is_ws(_hb(p, i)):
                 ret false
             end
-            continue
-        end
-        o := _outer(k)
-        if o == _OUT_NONE:
-            continue
-        end
-        if o != _OUT_BLOCK:
-            ret false
-        end
-        kcs := _style_of(k)
-        if kcs.position != cssbox.Position.Static and kcs.position != cssbox.Position.Relative:
-            ret false
-        end
-        rows.push(k)
-    end
-    ret rows.len() >= _VIRT_MIN
-end
-
-func _row_uid(k: int): int:
-    if k < _e.ctl.len():
-        ret _e.ctl[k].uid
-    end
-    ret k
-end
-
-func _virt_build(node: int, cbn: int, view: f64, rows: Vector<int>):
-    mut known := 0.0
-    mut known_n := 0
-    each r in rows:
-        u := _row_uid(r)
-        if _e.vadv.has(u):
-            known += _e.vadv.get(u)
-            known_n++
         end
     end
-    mut avg := 20.0
-    if known_n > 0:
-        avg = known / (known_n as f64)
-    else:
-        _e.vfix = true
-    end
-    scroll := node < _e.ctl.len() ? _e.ctl[node].scroll_y : 0.0
-    lo := scroll - view
-    hi := scroll + 2.0 * view
-    mut top := 0.0
-    mut first := -1
-    mut last := -1
-    repeat rows.len() in i:
-        r := rows[i]
-        u := _row_uid(r)
-        a := _e.vadv.has(u) ? _e.vadv.get(u) : avg
-        _e.vtop[r] = top
-        _e.vh[r] = a
-        if top + a > lo and top < hi:
-            if first < 0:
-                first = i
-            end
-            last = i
-        end
-        top += a
-    end
-    if first < 0:
-        first = rows.len() - 1
-        last = rows.len() - 1
-    end
-    total := top
-    last_row := rows[last]
-    lu := _row_uid(last_row)
-    after := total - _e.vtop[last_row] - (_e.vadv.has(lu) ? _e.vadv.get(lu) : avg)
-    before := _e.vtop[rows[first]]
-    cs := _style_of(node)
-    if before > 0.0:
-        mut st := cssbox.Style {}
-        st.direction = cs.direction
-        st.height = cssbox.Px(before)
-        sp := _new_cb(st, node)
-        _link(cbn, sp)
-    end
-    _e.vconts.push(node)
-    _e.vrow0.push(_e.vrows.len())
-    repeat rows.len() in i:
-        r := rows[i]
-        if i < first or i > last:
-            _e.vskip[r] = node
-            continue
-        end
-        child := _build_element(r, cbn, false)
-        if child >= 0:
-            _e.node_cb[r] = child
-            _e.vrows.push(r)
-        end
-    end
-    if after > 0.0:
-        mut st := cssbox.Style {}
-        st.direction = cs.direction
-        st.height = cssbox.Px(after)
-        sp := _new_cb(st, node)
-        _link(cbn, sp)
-    end
-end
-
-func _virt_measure():
-    repeat _e.vconts.len() in v:
-        s0 := _e.vrow0[v]
-        e0 := v + 1 < _e.vrow0.len() ? _e.vrow0[v + 1] : _e.vrows.len()
-        mut k := s0
-        until k < e0:
-            r := _e.vrows[k]
-            l := _e.tree.Layout(_e.node_cb[r])
-            mut a := 0.0
-            if k + 1 < e0:
-                n2 := _e.tree.Layout(_e.node_cb[_e.vrows[k + 1]])
-                a = n2.abs_y - l.abs_y
-            else:
-                a = l.height + l.margin.top + l.margin.bottom
-            end
-            u := _row_uid(r)
-            if not _e.vadv.has(u) or math.Abs(_e.vadv.get(u) - a) > 0.01:
-                _e.vadv.put(u, a)
-                _e.vfix = true
-            end
-            k++
-        end
-        cont := _e.vconts[v]
-        cl := _e.tree.Layout(_e.node_cb[cont])
-        vh := cl.height - cl.border.top - cl.border.bottom - cl.scrollbar_height
-        newmax := math.Max(0.0, cl.scroll_height - vh)
-        cu := _row_uid(cont)
-        if _e.vmax.has(cu) and cont < _e.ctl.len():
-            oldmax := _e.vmax.get(cu)
-            sy := _e.ctl[cont].scroll_y
-            if sy >= oldmax - 0.5 and math.Abs(newmax - sy) > 0.5:
-                mut cc := _e.ctl.ref(cont)
-                cc.scroll_y = newmax
-                _e.vfix = true
-            end
-        end
-        _e.vmax.put(cu, newmax)
-    end
-end
-
-func _virt_reset():
-    n := _e.dom.nodes.len()
-    _e.vskip.free()
-    _e.vtop.free()
-    _e.vh.free()
-    _e.vskip = Vector {} as Vector<int>
-    _e.vtop = Vector {} as Vector<f64>
-    _e.vh = Vector {} as Vector<f64>
-    repeat n:
-        _e.vskip.push(-1)
-        _e.vtop.push(0.0)
-        _e.vh.push(0.0)
-    end
-    _e.vconts.clear()
-    _e.vrow0.clear()
-    _e.vrows.clear()
-end
-
-func _build_children(node: int, cbn: int, flex: bool):
-    nd := _e.dom.nodes[node]
-    mut any_block := false
-    each k in nd.kids:
-        o := _outer(k)
-        if o == _OUT_BLOCK:
-            any_block = true
-        end
-    end
-    cs := _style_of(node)
-    if any_block and not flex and nd.kids.len() >= _VIRT_MIN:
-        view := _virt_view(node, cs)
-        if view > 0.0:
-            mut rows := Vector {} as Vector<int>
-            if _virt_rows(node, rows):
-                _virt_build(node, cbn, view, rows)
-                rows.free()
-                ret
-            end
-            rows.free()
-        end
-    end
-    if not any_block and not flex:
-        pre := cs.white_space == css.WhiteSpace.Pre or cs.white_space == css.WhiteSpace.PreWrap
-        list_marker := cs.display == css.Display.ListItem and cs.list_style_position == css.ListPosition.Inside
-        if _run_has_content(nd.kids, pre) or list_marker:
-            _make_ifc(node, cbn, nd.kids)
-        end
-        ret
-    end
-    mut run := Vector {} as Vector<int>
-    defer run.free()
-    each k in nd.kids:
-        o := _outer(k)
-        if o == _OUT_NONE:
-            continue
-        end
-        if o == _OUT_BLOCK or (flex and _e.dom.nodes[k].tag != "#text"):
-            _flush_run(node, cbn, run)
-            child := _build_element(k, cbn, flex)
-            if child >= 0:
-                _e.node_cb[k] = child
-            end
-        else:
-            run.push(k)
-        end
-    end
-    _flush_run(node, cbn, run)
-end
-
-func _intrinsic(node: int, cs: css.ComputedStyle): bool:
-    tag := _e.dom.nodes[node].tag
-    fs := cs.font_size
-    mut w := 0.0
-    mut h := 0.0
-    switch tag:
-        "img":
-            src := _attr(_e.dom, node, "src")
-            k := _image_index(src)
-            if k >= 0 and _img_ok[k]:
-                w = _img_canvas[k].width as f64
-                h = _img_canvas[k].height as f64
-            end
-            break
-        end
-        "progress":
-            w = fs * 10.0
-            h = fs
-            break
-        end
-        "meter":
-            w = fs * 5.0
-            h = fs
-            break
-        end
-        "canvas":
-            w = 300.0
-            h = 150.0
-            break
-        end
-        "video", "iframe", "embed", "object":
-            w = 300.0
-            h = 150.0
-            break
-        end
-        "input":
-            t := _input_type(node)
-            switch t:
-                "checkbox", "radio":
-                    w = 13.0
-                    h = 13.0
-                    break
-                end
-                "range":
-                    w = 129.0
-                    h = 16.0
-                    break
-                end
-                "color":
-                    w = 50.0
-                    h = 27.0
-                    break
-                end
-                else:
-                    ret false
-                end
-            end
-            break
-        end
-        else:
-            ret false
-        end
-    end
-    _e.rep_w[node] = w
-    _e.rep_h[node] = h
     ret true
 end
 
-func _control_ifc(node: int, cb: int, cs: css.ComputedStyle):
-    tag := _e.dom.nodes[node].tag
-    fi := _new_ifc(node, cb)
-    mut f := _e.ifcs.ref(fi)
-    f.control = true
-    f.pstyle.white_space = tag == "textarea" ? typeset.WhiteSpace.PreWrap : typeset.WhiteSpace.Pre
-    fs := cs.font_size
-    if tag == "textarea":
-        cols := _attr(_e.dom, node, "cols")
-        nc := cols.len() > 0 ? cols.to_int() : 20
-        f.fixed_w = (nc as f64) * fs * 0.6 + 17.0
-    else tag == "select":
-        f.fixed_w = -1.0
+func _flush_run(owner: int, pfid: int, nodes &: Vector<int>):
+    if nodes.Len() == 0:
+        ret
+    end
+    if _ws_only(nodes) and _e.cs[owner].white_space != style.KW_KEEP:
+        nodes.Clear()
+        ret
+    end
+    mut r := _Run { owner = owner, first = nodes[0] }
+    r.nodes = Vector {} as Vector<int>
+    r.spans = Vector {} as Vector<typeset.TextSpan>
+    r.span_el = Vector {} as Vector<int>
+    r.alt_lay = Vector {} as Vector<typeset.TextLayout>
+    r.alt_w = Vector {} as Vector<f64>
+    each n in nodes:
+        r.nodes.Push(n)
+        _run_add(r, n, owner)
+    end
+    r.pstyle = _pstyle_of(owner)
+    mut fs := flow.FlowStyle {}
+    fs.text_align = flow.TEXT_START
+    id := _e.tree.Add(pfid, fs)
+    r.fid = id
+    _e.runs.Push(r)
+    ri := _e.runs.Len() - 1
+    _grow_ids(id)
+    _e.flow_run[id] = ri
+    _e.flow_node[id] = -1
+    _e.node_run[nodes[0]] = ri
+    _e.tree.SetMeasure(id, (fid: int, w: f64, h: f64): ret _measure_flow(fid, w, h) end)
+    nodes.Clear()
+end
+
+func _grow_ids(id: int):
+    until _e.flow_run.Len() <= id:
+        _e.flow_run.Push(-1)
+        _e.flow_node.Push(-1)
+    end
+end
+
+func _control_run(node: int):
+    mut r := _Run { owner = node, first = node, control = true }
+    r.nodes = Vector {} as Vector<int>
+    r.spans = Vector {} as Vector<typeset.TextSpan>
+    r.span_el = Vector {} as Vector<int>
+    r.alt_lay = Vector {} as Vector<typeset.TextLayout>
+    r.alt_w = Vector {} as Vector<f64>
+    r.spans.Push(_span_for(node, _control_text(node)))
+    r.span_el.Push(node)
+    mut ps := _pstyle_of(node)
+    if _e.dom.nodes[node].k == _K_TEXTAREA:
+        ps.white_space = typeset.WhiteSpace.PreWrap
     else:
-        sz := _attr(_e.dom, node, "size")
-        nc := sz.len() > 0 ? sz.to_int() : 20
-        f.fixed_w = (nc as f64) * fs * 0.55
-        if _input_type(node) == "number":
-            f.fixed_w -= 13.0
-        end
-    end
-    mut text := _control_text(node)
-    if tag == "select":
-        mut longest := ""
-        _select_longest(node, longest)
-        text = longest
-    end
-    _push_span(f, _span_of(cs, text, node), node, -1)
-    if tag == "textarea":
-        rows := _attr(_e.dom, node, "rows")
-        nr := rows.len() > 0 ? rows.to_int() : 2
-        lh := cs.line_height_normal ? fs * 1.2 : cs.line_height
-        f.fixed_h = (nr as f64) * lh
-    end
-end
-
-func _select_longest(node: int, out &: str):
-    each k in _e.dom.nodes[node].kids:
-        nd := _e.dom.nodes[k]
-        if nd.tag == "option":
-            t := _text_of(_e.dom, k)
-            if t.len() > out.len():
-                out = t
-            end
-        else nd.tag == "optgroup":
-            _select_longest(k, out)
-        end
-    end
-end
-
-func _build_element(node: int, parent_cb: int, blockify: bool): int:
-    i := _e.node_el[node]
-    if i < 0:
-        ret -1
-    end
-    cs := _e.st[i]
-    if cs.display == css.Display.None:
-        ret -1
-    end
-    tag := _e.dom.nodes[node].tag
-    replaced := _is_replaced(tag)
-    if replaced:
-        _intrinsic(node, cs)
-    end
-    st := _box_style(node, cs, blockify)
-    cb := _new_cb(st, node)
-    _e.node_cb[node] = cb
-    if parent_cb >= 0:
-        _link(parent_cb, cb)
-    end
-    if replaced:
-        if _intrinsic(node, cs):
-            _e.cb_rep[cb] = node
-            _attach_measure(cb)
-        else tag == "input" or tag == "textarea" or tag == "select":
-            _control_ifc(node, cb, cs)
-        end
-        ret cb
+        ps.white_space = typeset.WhiteSpace.Pre
+        ps.max_lines = 0
+        ps.ellipsis = false
     end
     if _is_button_input(node):
-        _control_ifc(node, cb, cs)
-        ret cb
+        ps.align = typeset.TextAlign.Center
     end
-    flex := cs.display == css.Display.Flex or cs.display == css.Display.InlineFlex or cs.display == css.Display.Grid or cs.display == css.Display.InlineGrid or cs.display == css.Display.TableRow
-    _build_children(node, cb, flex)
-    ret cb
+    r.pstyle = ps
+    _e.runs.Push(r)
+    _e.node_run[node] = _e.runs.Len() - 1
+end
+
+func _build_node(node: int, pfid: int):
+    nd := _e.dom.nodes[node]
+    fs := _flow_style(node)
+    id := _e.tree.Add(pfid, fs)
+    _e.fid[node] = id
+    _grow_ids(id)
+    _e.flow_node[id] = node
+    if _is_leaf_kind(node):
+        if _is_text_input(node) or nd.k == _K_SELECT or _is_button_input(node):
+            _control_run(node)
+        end
+        _e.tree.SetMeasure(id, (fid: int, w: f64, h: f64): ret _measure_flow(fid, w, h) end)
+        ret
+    end
+    is_flow := fs.layout == flow.LAYOUT_FLOW
+    mut run := Vector {} as Vector<int>
+    defer run.Free()
+    each k in nd.kids:
+        kn := _e.dom.nodes[k]
+        if kn.k == _K_TEXT or (is_flow and _inline_content(k)) or (kn.k == _K_BR):
+            run.Push(k)
+            continue
+        end
+        _flush_run(node, id, run)
+        if kn.k == _K_OPTION or kn.k == _K_OPTGROUP:
+            if nd.k == _K_SELECT:
+                continue
+            end
+        end
+        _build_node(k, id)
+    end
+    _flush_run(node, id, run)
+end
+
+func _free_run(r &: _Run):
+    each sp in r.spans:
+        _sfree(sp.text)
+    end
+    r.spans.Free()
+    r.span_el.Free()
+    r.nodes.Free()
+    if r.has_para:
+        typeset.FreeParagraph(r.para)
+        r.has_para = false
+    end
+    if r.has_lay:
+        typeset.FreeLayout(r.lay)
+        r.has_lay = false
+    end
+    repeat r.alt_lay.Len() in i:
+        mut l := r.alt_lay[i]
+        typeset.FreeLayout(l)
+    end
+    r.alt_lay.Free()
+    r.alt_w.Free()
+end
+
+func _reset_layout():
+    repeat _e.runs.Len() in i:
+        mut r := _e.runs.Ref(i)
+        _free_run(r)
+    end
+    _e.runs.Clear()
+    if _e.has_tree:
+        _e.tree.Free()
+        _e.has_tree = false
+    end
+    _e.fid.Clear()
+    _e.flow_node.Clear()
+    _e.flow_run.Clear()
+    _e.node_run.Clear()
+    _e.in_run.Clear()
+end
+
+func _build_tree():
+    _ensure_fonts()
+    _reset_layout()
+    _e.tree = flow.NewTree()
+    _e.has_tree = true
+    n := _e.dom.nodes.Len()
+    repeat n:
+        _e.fid.Push(-1)
+        _e.node_run.Push(-1)
+        _e.in_run.Push(-1)
+    end
+    if n > 0:
+        _build_node(0, -1)
+    end
+end
+
+func _run_para(ri: int):
+    if _e.runs[ri].has_para:
+        ret
+    end
+    mut r := _e.runs.Ref(ri)
+    if r.control and r.spans.Len() > 0 and r.spans[0].text.Len() == 0:
+        mut sp := r.spans[0]
+        sp.text = str.Clone(" ")
+        r.spans[0] = sp
+    end
+    r.para = typeset.NewParagraph(_fc, r.spans, r.pstyle)
+    r.has_para = true
+end
+
+func _run_layout(ri: int, width: f64):
+    _run_para(ri)
+    r0 := _e.runs[ri]
+    if r0.has_lay and r0.lay_w == width:
+        ret
+    end
+    mut r := _e.runs.Ref(ri)
+    repeat r.alt_w.Len() in i:
+        if r.alt_w[i] == width:
+            got := r.alt_lay[i]
+            r.alt_lay.RemoveAt(i)
+            r.alt_w.RemoveAt(i)
+            if r.has_lay:
+                r.alt_lay.Push(r.lay)
+                r.alt_w.Push(r.lay_w)
+            end
+            r.lay = got
+            r.lay_w = width
+            r.has_lay = true
+            ret
+        end
+    end
+    if r.has_lay:
+        if r.alt_lay.Len() >= 3:
+            mut old := r.alt_lay[0]
+            typeset.FreeLayout(old)
+            r.alt_lay.RemoveAt(0)
+            r.alt_w.RemoveAt(0)
+        end
+        r.alt_lay.Push(r.lay)
+        r.alt_w.Push(r.lay_w)
+    end
+    r.lay = typeset.LayoutParagraph(r.para, _fc, width)
+    r.lay_w = width
+    r.has_lay = true
+end
+
+func _run_drop_cache(ri: int):
+    mut r := _e.runs.Ref(ri)
+    if r.has_para:
+        typeset.FreeParagraph(r.para)
+        r.has_para = false
+    end
+    if r.has_lay:
+        typeset.FreeLayout(r.lay)
+        r.has_lay = false
+    end
+    repeat r.alt_lay.Len() in i:
+        mut l := r.alt_lay[i]
+        typeset.FreeLayout(l)
+    end
+    r.alt_lay.Clear()
+    r.alt_w.Clear()
+    r.lay_w = -9.0
+    r.ver++
+end
+
+func _wrap_width(ri: int, cw: f64): f64:
+    r := _e.runs[ri]
+    ws := r.pstyle.white_space
+    if ws == typeset.WhiteSpace.Pre or ws == typeset.WhiteSpace.NoWrap:
+        ret 0.0
+    end
+    if cw < 0.0:
+        ret 0.0
+    end
+    if cw == 0.0:
+        ret math.Max(0.01, typeset.MinContentWidth(r.para))
+    end
+    ret cw + 0.01
+end
+
+func _measure_run(ri: int, cw: f64): flow.Size:
+    _run_para(ri)
+    ww := _wrap_width(ri, cw)
+    _run_layout(ri, ww)
+    r := _e.runs[ri]
+    l := r.lay
+    mut w := l.width
+    if l.lines.Len() > 1 and cw > 0.0 and ww > 0.0:
+        w = math.Max(w, cw)
+    end
+    if cw > 0.0 and ww > 0.0:
+        w = math.Min(w, cw)
+    end
+    mut b := -1.0
+    mut lb := -1.0
+    if l.lines.Len() > 0:
+        b = l.lines[0].baseline
+        lb = l.lines[l.lines.Len() - 1].baseline
+    end
+    ret flow.Size { w = w, h = l.height, baseline = b, last_baseline = lb }
 end
 
 func _image_index(src: str): int:
-    if src.len() == 0:
-        ret -1
-    end
-    repeat _img_keys.len() in k:
-        if _img_keys[k] == src:
-            ret k
+    repeat _img_keys.Len() in i:
+        if _img_keys[i] == src:
+            ret i
         end
     end
     mut ok := false
     cv := _load_image(src, ok)
-    _img_keys.push(str.Clone(src))
-    _img_canvas.push(cv)
-    _img_ok.push(ok)
-    ret _img_keys.len() - 1
+    _img_keys.Push(str.Clone(src))
+    _img_canvas.Push(cv)
+    _img_ok.Push(ok)
+    ret _img_keys.Len() - 1
 end
 
-func _reset_layout():
-    _sc_spans_reset()
-    repeat _e.ifcs.len() in i:
-        mut f := _e.ifcs.ref(i)
-        if f.ckey.len() > 0 and f.has_para and not _pc_map.has(f.ckey):
-            _pc_put(f)
+func _natural(node: int, w &: f64, h &: f64): bool:
+    nd := _e.dom.nodes[node]
+    if nd.k == _K_IMAGE:
+        src := _attr(_e.dom, node, "src")
+        if src.Len() > 0:
+            k := _image_index(src)
+            if _img_ok[k]:
+                w = _img_canvas[k].width as f64
+                h = _img_canvas[k].height as f64
+                ret true
+            end
         end
-        _free_ifc(f)
+        w = 0.0
+        h = 0.0
+        ret false
     end
-    _e.ifcs.free()
-    _e.ifcs = Vector {} as Vector<_Ifc>
-    _e.atoms.free()
-    _e.atoms = Vector {} as Vector<_Atom>
-    n := _e.dom.nodes.len()
-    _e.node_cb.free()
-    _e.node_atom.free()
-    _e.node_ifc.free()
-    _e.rep_w.free()
-    _e.rep_h.free()
-    _e.node_cb = Vector {} as Vector<int>
-    _e.node_atom = Vector {} as Vector<int>
-    _e.node_ifc = Vector {} as Vector<int>
-    _e.rep_w = Vector {} as Vector<f64>
-    _e.rep_h = Vector {} as Vector<f64>
-    repeat n:
-        _e.node_cb.push(-1)
-        _e.node_atom.push(-1)
-        _e.node_ifc.push(-1)
-        _e.rep_w.push(0.0)
-        _e.rep_h.push(0.0)
-    end
+    w = 300.0
+    h = 150.0
+    ret true
 end
 
-func _free_ifc(f &: _Ifc):
-    repeat f.spans.len() in k:
-        sp := f.spans[k]
-        if f.span_atom[k] < 0 and sp.text.len() > 0 and not (sp.text == "​" or sp.text == " " or sp.text == " "):
-            _sfree(sp.text)
+func _measure_control(node: int, cw: f64, ch: f64): flow.Size:
+    nd := _e.dom.nodes[node]
+    s := _e.cs[node]
+    u := _e.us[node]
+    if nd.k == _K_IMAGE or nd.k == _K_MEDIA:
+        mut nw := 0.0
+        mut nh := 0.0
+        _natural(node, nw, nh)
+        wauto := s.width.word == style.KW_AUTO
+        hauto := s.height.word == style.KW_AUTO
+        if not wauto and cw >= 0.0 and nw > 0.0:
+            ret flow.Size { w = cw, h = cw * nh / nw }
         end
+        if wauto and not hauto and ch >= 0.0 and nh > 0.0:
+            ret flow.Size { w = ch * nw / nh, h = ch }
+        end
+        ret flow.Size { w = nw, h = nh }
     end
-    f.spans.free()
-    f.span_el.free()
-    f.span_atom.free()
-    f.atoms.free()
-    _sfree(f.ckey)
-    f.ckey = ""
-    if f.has_para:
-        typeset.FreeParagraph(f.para)
-        f.has_para = false
+    ri := _e.node_run[node]
+    if ri >= 0:
+        _run_para(ri)
+        mut lw := 0.0
+        if nd.k == _K_TEXTAREA and cw > 0.0:
+            lw = cw + 0.01
+        end
+        _run_layout(ri, lw)
+        r := _e.runs[ri]
+        mut w := r.lay.width
+        if nd.k == _K_SELECT:
+            mut longest := 0.0
+            mut opts := Vector {} as Vector<int>
+            _option_nodes(node, opts)
+            each o in opts:
+                t := _text_of(_e.dom, o)
+                tw := _text_width(node, t)
+                if tw > longest:
+                    longest = tw
+                end
+                _sfree(t)
+            end
+            opts.Free()
+            w = longest + 20.0
+        else nd.k == _K_INPUT and not _is_button_input(node):
+            w = 0.0
+        end
+        mut h := math.Max(r.lay.height, u.line)
+        if nd.k == _K_TEXTAREA:
+            h = u.line * 2.0
+        end
+        mut b := u.line * 0.75
+        if r.lay.lines.Len() > 0:
+            b = r.lay.lines[0].baseline
+        end
+        ret flow.Size { w = w, h = h, baseline = b, last_baseline = b }
     end
-    if f.has_lay:
-        typeset.FreeLayout(f.lay)
-        f.has_lay = false
+    if nd.k == _K_INPUT:
+        ret flow.Size { w = 0.0, h = 0.0, baseline = 13.0 }
     end
-    _free_alts(f)
+    ret flow.Size { w = 0.0, h = 0.0 }
 end
 
-func _free_alts(f &: _Ifc):
-    repeat f.alt_lay.len() in i:
-        mut l := f.alt_lay[i]
-        typeset.FreeLayout(l)
+func _text_width(node: int, t: str): f64:
+    mut spans := Vector {} as Vector<typeset.TextSpan>
+    spans.Push(_span_for(node, t))
+    mut p := typeset.NewParagraph(_fc, spans, typeset.ParagraphStyle {})
+    w := typeset.MaxContentWidth(p)
+    typeset.FreeParagraph(p)
+    spans.Free()
+    ret w
+end
+
+func _measure_flow(fid: int, cw: f64, ch: f64): flow.Size:
+    if fid < 0 or fid >= _e.flow_run.Len():
+        ret flow.Size {}
     end
-    f.alt_lay.free()
-    f.alt_w.free()
-    f.alt_lay = Vector {} as Vector<typeset.TextLayout>
-    f.alt_w = Vector {} as Vector<f64>
+    ri := _e.flow_run[fid]
+    if ri >= 0:
+        ret _measure_run(ri, cw)
+    end
+    node := _e.flow_node[fid]
+    if node >= 0:
+        ret _measure_control(node, cw, ch)
+    end
+    ret flow.Size {}
 end
 
 func _layout():
-    repeat 3:
-        _e.vfix = false
-        _layout_pass()
-        if not _e.vfix:
-            break
-        end
+    t0 := time.MonoNanos()
+    if not _e.has_tree:
+        _build_tree()
     end
-end
-
-func _layout_pass():
-    _ensure_fonts()
-    _reset_layout()
-    _virt_reset()
-    _begin_build()
-    mut rs := cssbox.Style {}
-    rs.width = cssbox.Px(_e.width)
-    rcs := _e.sheet.RootStyle()
-    rs.direction = rcs.direction
-    _e.root_cb = _new_cb(rs, -1)
-    if _e.dom.body >= 0:
-        _build_element(_e.dom.body, _e.root_cb, false)
-    end
-    _end_build()
     _e.tree.ResetCounters()
-    repeat _e.atoms.len() in k:
-        _compute_atom(k)
-    end
-    _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
+    _e.tree.Layout(_e.width, _e.height)
     _e.last_layout_calls = _e.tree.LayoutCalls()
-    _virt_measure()
     _place_all()
-    _pc_sweep()
+    _e.last_layout_ms = ((time.MonoNanos() - t0) as f64) / 1000000.0
 end
 
-func _compute_atom(k: int):
-    a := _e.atoms[k]
-    cb := _e.node_cb[a.node]
-    if cb < 0:
+func _relayout_all():
+    _reset_layout()
+    _layout()
+end
+
+func _sync_flow(node: int):
+    if node < 0 or node >= _e.fid.Len():
         ret
     end
-    _e.tree.Compute(cb, cssbox.MaxContentSpace(), cssbox.MaxContentSpace())
-    mut l := _e.tree.Layout(cb)
-    if l.width + l.margin.left + l.margin.right > _e.width:
-        _e.tree.Compute(cb, cssbox.Definite(_e.width), cssbox.MaxContentSpace())
-        l = _e.tree.Layout(cb)
-    end
-    mut at := _e.atoms.ref(k)
-    at.mw = l.width + l.margin.left + l.margin.right
-    at.mh = l.height + l.margin.top + l.margin.bottom
-    tag := _e.dom.nodes[a.node].tag
-    mut base := at.mh
-    if l.has_baseline and not (tag == "img" or (tag == "input" and not _is_text_input(a.node) and not _is_button_input(a.node))):
-        base = l.margin.top + l.baseline
-    end
-    at.baseline = _va_base(a.node, base, at.mh)
-    at.va = _va_kind(a.node)
-    at.va_set = false
-end
-
-func _face_for(sp: typeset.TextSpan, cp: int): int:
-    ret typeset.FaceForCodepoint(_fc, sp.families, sp.weight, sp.italic, cp)
-end
-
-func _patch_atoms(f &: _Ifc):
-    each ai in f.atoms:
-        a := _e.atoms[ai]
-        if a.span < 0:
-            continue
+    id := _e.fid[node]
+    if id < 0:
+        ri := _e.in_run[node]
+        if ri >= 0:
+            _retext_run(ri)
         end
-        mut sp := f.spans[a.span]
-        face := _face_for(sp, 0xA0)
-        mut asc := 0.8
-        mut desc := 0.2
-        if face >= 0:
-            fnt := typeset.FaceFont(_fc, face)
-            m := typeset.Metrics(fnt)
-            if m.units_per_em > 0:
-                asc = (m.ascent as f64) / (m.units_per_em as f64)
-                desc = (math.Abs(m.descent as f64)) / (m.units_per_em as f64)
-            end
-        end
-        tiny := a.va != _VA_NONE and not a.va_set
-        h := tiny ? 0.001 : math.Max(a.mh, 0.01)
-        mut s := 0.0
-        k := asc - desc
-        if k > 0.01 and not tiny:
-            s = (2.0 * a.baseline - h) / k
-        end
-        if math.Abs(s) < 0.001:
-            s = 0.001
-        end
-        sp.size = s
-        sp.line_height = h
-        sp.line_height_scale = 0.0
-        sp.word_spacing = 0.0
-        mut adv := 0.0
-        if face >= 0:
-            fnt := typeset.FaceFont(_fc, face)
-            g := typeset.GlyphIndex(fnt, 0xA0)
-            upm := typeset.UnitsPerEm(fnt)
-            if upm > 0:
-                adv = (typeset.GlyphAdvance(fnt, g) as f64) * s / (upm as f64)
-            end
-        end
-        sp.letter_spacing = a.mw - adv
-        f.spans[a.span] = sp
-    end
-end
-
-func _para_key(f: _Ifc): str:
-    if (f.control and _is_text_input(f.owner)) or f.atoms.len() > 0 or f.spans.len() == 0:
-        ret ""
-    end
-    mut b := str.NewBuilder()
-    ps := f.pstyle
-    str.BufAppend(b, (ps.align as int) + "|" + ps.direction + "|" + (ps.white_space as int) + "|" + (ps.overflow_wrap as int) + "|" + ps.max_lines + "|" + ps.ellipsis + "|" + ps.lang)
-    each sp in f.spans:
-        str.BufAppend(b, "\x01" + sp.families + "|" + sp.size + "|" + sp.weight + "|" + sp.italic + "|" + sp.letter_spacing + "|" + sp.word_spacing + "|" + sp.line_height + "|" + sp.line_height_scale + "|" + sp.tag + "|" + sp.lang + "\x02")
-        str.BufAppend(b, sp.text)
-    end
-    r := str.BufStr(b)
-    str.BufFree(b)
-    ret r
-end
-
-func _pc_put(f &: _Ifc):
-    _pc_keys.push(f.ckey)
-    _pc_para.push(f.para)
-    _pc_lay.push(f.lay)
-    _pc_layw.push(f.lay_w)
-    _pc_has_lay.push(f.has_lay)
-    _pc_taken.push(false)
-    _pc_alt.push(f.alt_lay)
-    _pc_altw.push(f.alt_w)
-    f.alt_lay = Vector {} as Vector<typeset.TextLayout>
-    f.alt_w = Vector {} as Vector<f64>
-    _pc_map.put(f.ckey, _pc_keys.len() - 1)
-    f.ckey = ""
-    f.has_para = false
-    f.has_lay = false
-end
-
-func _pc_sweep():
-    repeat _pc_keys.len() in i:
-        if not _pc_taken[i]:
-            mut p := _pc_para[i]
-            typeset.FreeParagraph(p)
-            if _pc_has_lay[i]:
-                mut l := _pc_lay[i]
-                typeset.FreeLayout(l)
-            end
-            mut al := _pc_alt[i]
-            repeat al.len() in j:
-                mut l2 := al[j]
-                typeset.FreeLayout(l2)
-            end
-            al.free()
-            mut aw := _pc_altw[i]
-            aw.free()
-        end
-        _sfree(_pc_keys[i])
-    end
-    _pc_map.free()
-    _pc_map = HashMap {} as HashMap<str, int>
-    _pc_keys.clear()
-    _pc_para.clear()
-    _pc_lay.clear()
-    _pc_layw.clear()
-    _pc_has_lay.clear()
-    _pc_taken.clear()
-    _pc_alt.clear()
-    _pc_altw.clear()
-end
-
-func _ifc_para(fi: int):
-    f0 := _e.ifcs[fi]
-    if f0.has_para:
         ret
     end
-    mut f := _e.ifcs.ref(fi)
-    _patch_atoms(f)
-    if f.control:
-        mut sp := f.spans[0]
-        if sp.text.len() == 0:
-            sp.text = str.Clone(" ")
-            f.spans[0] = sp
-        end
-    end
-    key := f.ckey.len() > 0 ? f.ckey : _para_key(_e.ifcs[fi])
-    if key.len() > 0 and _pc_map.has(key):
-        k := _pc_map.get(key)
-        if not _pc_taken[k]:
-            _pc_taken[k] = true
-            f.para = _pc_para[k]
-            f.has_para = true
-            if _pc_has_lay[k]:
-                f.lay = _pc_lay[k]
-                f.lay_w = _pc_layw[k]
-                f.has_lay = true
-            end
-            f.alt_lay.free()
-            f.alt_w.free()
-            f.alt_lay = _pc_alt[k]
-            f.alt_w = _pc_altw[k]
-            f.ckey = key
+    fs := _flow_style(node)
+    old := _e.tree.Style(id)
+    if not _flow_same(fs, old):
+        if fs.layout != old.layout and (fs.layout == flow.LAYOUT_FLOW or old.layout == flow.LAYOUT_FLOW):
+            _e.dirty_dom = true
             ret
         end
+        _e.tree.SetStyle(id, fs)
+        _e.dirty_layout = true
     end
-    f.para = typeset.NewParagraph(_fc, f.spans, f.pstyle)
-    f.has_para = true
-    f.ckey = key
+    each k in _e.dom.nodes[node].kids:
+        ri := _e.node_run[k]
+        if ri >= 0 and _e.runs[ri].owner == node:
+            _retext_run(ri)
+        end
+    end
+    cr := _e.node_run[node]
+    if cr >= 0 and _e.runs[cr].control:
+        _retext_run(cr)
+    end
 end
 
-func _ifc_layout(fi: int, width: f64):
-    _ifc_para(fi)
-    f0 := _e.ifcs[fi]
-    if f0.has_lay and f0.lay_w == width:
+func _retext_run(ri: int):
+    mut r := _e.runs.Ref(ri)
+    if r.control:
+        ctl := r.owner
+        each sp in r.spans:
+            _sfree(sp.text)
+        end
+        r.spans.Clear()
+        r.span_el.Clear()
+        r.spans.Push(_span_for(ctl, _control_text(ctl)))
+        r.span_el.Push(ctl)
+        _run_drop_cache(ri)
+        _e.dirty_layout = true
+        if r.fid >= 0:
+            _e.tree.MarkDirty(r.fid)
+        else _e.fid[ctl] >= 0:
+            _e.tree.MarkDirty(_e.fid[ctl])
+        end
         ret
     end
-    mut f := _e.ifcs.ref(fi)
-    mut k := -1
-    repeat f.alt_w.len() in i:
-        if f.alt_w[i] == width:
-            k = i
-        end
+    each sp in r.spans:
+        _sfree(sp.text)
     end
-    if k >= 0 and _va_tb_count(f0) == 0:
-        got := f.alt_lay[k]
-        f.alt_lay.remove_at(k)
-        f.alt_w.remove_at(k)
-        if f.has_lay:
-            f.alt_lay.push(f.lay)
-            f.alt_w.push(f.lay_w)
-        end
-        f.lay = got
-        f.lay_w = width
-        f.has_lay = true
+    r.spans.Clear()
+    r.span_el.Clear()
+    owner := r.owner
+    nodes := r.nodes
+    each n in nodes:
+        _run_add(r, n, owner)
+    end
+    r.pstyle = _pstyle_of(owner)
+    _run_drop_cache(ri)
+    if r.fid >= 0:
+        _e.tree.MarkDirty(r.fid)
+    end
+    _e.dirty_layout = true
+end
+
+func _place_all():
+    n := _e.dom.nodes.Len()
+    _e.boxes.Clear()
+    repeat n:
+        _e.boxes.Push(_Box {})
+    end
+    repeat _e.runs.Len() in i:
+        mut r := _e.runs.Ref(i)
+        r.w = 0.0
+    end
+    if n == 0 or _e.fid[0] < 0:
         ret
     end
-    if f.has_lay:
-        if f.alt_lay.len() >= 3:
-            mut old := f.alt_lay[0]
-            typeset.FreeLayout(old)
-            f.alt_lay.remove_at(0)
-            f.alt_w.remove_at(0)
-        end
-        f.alt_lay.push(f.lay)
-        f.alt_w.push(f.lay_w)
-    end
-    f.lay = typeset.LayoutParagraph(f.para, _fc, width)
-    f.lay_w = width
-    f.has_lay = true
-    _va_fix(fi, width)
+    _place(0, 0.0, 0.0, _Box {})
 end
 
-func _measure(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
-    cb := mi.node
-    if cb < 0 or cb >= _e.cb_ifc.len():
-        ret cssbox.Measured(0.0, 0.0)
+func _place(node: int, px: f64, py: f64, clip: _Box):
+    id := _e.fid[node]
+    s := _e.cs[node]
+    st := _e.tree.Style(id)
+    if not st.visible:
+        ret
     end
-    rep := _e.cb_rep[cb]
-    if rep >= 0:
-        ret cssbox.Measured(_e.rep_w[rep], _e.rep_h[rep])
+    x := px + _e.tree.X(id)
+    y := py + _e.tree.Y(id)
+    w := _e.tree.W(id)
+    h := _e.tree.H(id)
+    _e.boxes[node] = _Box { x = x, y = y, w = w, h = h, shown = true, clip_x0 = clip.clip_x0, clip_y0 = clip.clip_y0, clip_x1 = clip.clip_x1, clip_y1 = clip.clip_y1 }
+    mut kc := clip
+    if s.overflow_x != style.KW_VISIBLE or s.overflow_y != style.KW_VISIBLE or s.clip or _is_leaf_kind(node) or node == 0:
+        font := _e.us[node].font
+        bl := s.border_start_style == style.KW_NONE ? 0.0 : _vp_len(s.border_start_width, font)
+        br := s.border_end_style == style.KW_NONE ? 0.0 : _vp_len(s.border_end_width, font)
+        bt := s.border_top_style == style.KW_NONE ? 0.0 : _vp_len(s.border_top_width, font)
+        bb := s.border_bottom_style == style.KW_NONE ? 0.0 : _vp_len(s.border_bottom_width, font)
+        rtl := s.direction == style.KW_RTL
+        lx := rtl ? br : bl
+        rx := rtl ? bl : br
+        cx0 := s.clip ? x : x + lx
+        cy0 := s.clip ? y : y + bt
+        cx1 := s.clip ? x + w : x + w - rx
+        cy1 := s.clip ? y + h : y + h - bb
+        kc.clip_x0 = math.Max(kc.clip_x0, cx0)
+        kc.clip_y0 = math.Max(kc.clip_y0, cy0)
+        kc.clip_x1 = math.Min(kc.clip_x1, cx1)
+        kc.clip_y1 = math.Min(kc.clip_y1, cy1)
     end
-    fi := _e.cb_ifc[cb]
-    if fi < 0:
-        ret cssbox.Measured(0.0, 0.0)
+    cri := _e.node_run[node]
+    if cri >= 0 and _e.runs[cri].control:
+        _place_control_run(node, cri)
     end
-    _ifc_para(fi)
-    f := _e.ifcs[fi]
-    minc := typeset.MinContentWidth(f.para)
-    maxc := typeset.MaxContentWidth(f.para)
-    mut w := maxc
-    mut lw := maxc
-    if mi.has_known_width:
-        lw = math.Max(0.0, mi.known_width - _pbw(cb))
-        w = lw
-    else mi.available_width.kind == cssbox.SpaceKind.MinContent:
-        lw = minc
-        w = minc
-    else mi.available_width.kind == cssbox.SpaceKind.Definite:
-        av := mi.available_width.value
-        lw = av
-        w = math.Min(maxc, math.Max(minc, av))
-    end
-    if f.control:
-        _ifc_layout(fi, 0.0)
-        f2 := _e.ifcs[fi]
-        mut ch := f2.lay.height
-        if f2.fixed_h > 0.0:
-            ch = f2.fixed_h
+    each k in _e.dom.nodes[node].kids:
+        ri := _e.node_run[k]
+        if ri >= 0 and not _e.runs[ri].control:
+            _place_run(ri, x, y, kc)
         end
-        mut cw := f2.fixed_w
-        if cw < 0.0:
-            cw = f2.lay.width + 24.0
-        else _is_button_input(f2.owner):
-            cw = f2.lay.width
+        if _e.fid[k] >= 0:
+            _place(k, x, y, kc)
         end
-        mut base := ch
-        if f2.lay.lines.len() > 0:
-            base = f2.lay.lines[0].baseline
-        end
-        ret cssbox.MeasuredWithBaseline(cw, ch, base)
     end
-    _ifc_layout(fi, lw)
-    f2 := _e.ifcs[fi]
-    mut base := 0.0
-    if f2.lay.lines.len() > 0:
-        base = f2.lay.lines[0].baseline
-    end
-    ret cssbox.MeasuredWithBaseline(w, f2.lay.height, base)
 end
 
-func _pbw(cb: int): f64:
-    st := _e.tree.GetStyle(cb)
-    ret _px(st.padding.left) + _px(st.padding.right) + _px(st.border.left) + _px(st.border.right)
+func _place_run(ri: int, px: f64, py: f64, clip: _Box):
+    fid := _e.runs[ri].fid
+    if fid < 0:
+        ret
+    end
+    x := px + _e.tree.X(fid)
+    y := py + _e.tree.Y(fid)
+    w := _e.tree.W(fid)
+    h := _e.tree.H(fid)
+    ww := _wrap_width(ri, w)
+    _run_layout(ri, ww)
+    mut r := _e.runs.Ref(ri)
+    r.x = x
+    r.y = y
+    r.w = w
+    r.h = h
+    l := r.lay
+    each n in r.nodes:
+        if _e.dom.nodes[n].k != _K_TEXT:
+            _e.boxes[n] = _Box { x = x, y = y, w = 0.0, h = 0.0, shown = false, clip_x0 = clip.clip_x0, clip_y0 = clip.clip_y0, clip_x1 = clip.clip_x1, clip_y1 = clip.clip_y1 }
+        end
+    end
+    repeat l.lines.Len() in li:
+        line := l.lines[li]
+        mut k := line.run_start
+        until k < line.run_start + line.run_count:
+            gr := l.runs[k]
+            if gr.span >= 0 and gr.span < r.span_el.Len():
+                mut el := r.span_el[gr.span]
+                until el >= 0 and el != r.owner:
+                    _grow_box(el, x + gr.x, y + line.top, gr.width, line.height, clip)
+                    el = _e.dom.nodes[el].parent
+                end
+            end
+            k++
+        end
+    end
 end
 
-func _px(l: cssbox.Length): f64:
-    if l.kind == cssbox.LengthKind.Px:
-        ret l.value
+func _grow_box(el: int, x: f64, y: f64, w: f64, h: f64, clip: _Box):
+    b := _e.boxes[el]
+    if not b.shown:
+        _e.boxes[el] = _Box { x = x, y = y, w = w, h = h, shown = true, clip_x0 = clip.clip_x0, clip_y0 = clip.clip_y0, clip_x1 = clip.clip_x1, clip_y1 = clip.clip_y1 }
+        ret
     end
-    ret 0.0
+    x0 := math.Min(b.x, x)
+    y0 := math.Min(b.y, y)
+    x1 := math.Max(b.x + b.w, x + w)
+    y1 := math.Max(b.y + b.h, y + h)
+    _e.boxes[el] = _Box { x = x0, y = y0, w = x1 - x0, h = y1 - y0, shown = true, clip_x0 = b.clip_x0, clip_y0 = b.clip_y0, clip_x1 = b.clip_x1, clip_y1 = b.clip_y1 }
+end
+
+func _content_box(node: int): _Box:
+    b := _e.boxes[node]
+    s := _e.cs[node]
+    font := _e.us[node].font
+    bt := s.border_top_style == style.KW_NONE ? 0.0 : _vp_len(s.border_top_width, font)
+    bb := s.border_bottom_style == style.KW_NONE ? 0.0 : _vp_len(s.border_bottom_width, font)
+    bs := s.border_start_style == style.KW_NONE ? 0.0 : _vp_len(s.border_start_width, font)
+    be := s.border_end_style == style.KW_NONE ? 0.0 : _vp_len(s.border_end_width, font)
+    pt := _abs_len(s.padding_top, font, b.w)
+    pb := _abs_len(s.padding_bottom, font, b.w)
+    ps := _abs_len(s.padding_start, font, b.w)
+    pe := _abs_len(s.padding_end, font, b.w)
+    rtl := s.direction == style.KW_RTL
+    l := rtl ? be + pe : bs + ps
+    r := rtl ? bs + ps : be + pe
+    ret _Box { x = b.x + l, y = b.y + bt + pt, w = math.Max(0.0, b.w - l - r), h = math.Max(0.0, b.h - bt - bb - pt - pb), shown = b.shown }
+end
+
+func _padding_box(node: int): _Box:
+    b := _e.boxes[node]
+    s := _e.cs[node]
+    font := _e.us[node].font
+    bt := s.border_top_style == style.KW_NONE ? 0.0 : _vp_len(s.border_top_width, font)
+    bb := s.border_bottom_style == style.KW_NONE ? 0.0 : _vp_len(s.border_bottom_width, font)
+    bs := s.border_start_style == style.KW_NONE ? 0.0 : _vp_len(s.border_start_width, font)
+    be := s.border_end_style == style.KW_NONE ? 0.0 : _vp_len(s.border_end_width, font)
+    rtl := s.direction == style.KW_RTL
+    l := rtl ? be : bs
+    r := rtl ? bs : be
+    ret _Box { x = b.x + l, y = b.y + bt, w = math.Max(0.0, b.w - l - r), h = math.Max(0.0, b.h - bt - bb), shown = b.shown }
+end
+
+func _place_control_run(node: int, ri: int):
+    c := _content_box(node)
+    nd := _e.dom.nodes[node]
+    mut lw := 0.0
+    if nd.k == _K_TEXTAREA:
+        lw = c.w + 0.01
+    else _is_button_input(node):
+        lw = c.w + 0.01
+    end
+    _run_layout(ri, lw)
+    mut r := _e.runs.Ref(ri)
+    r.x = c.x
+    r.w = c.w
+    r.h = c.h
+    if nd.k == _K_TEXTAREA:
+        r.y = c.y
+    else:
+        r.y = c.y + (c.h - r.lay.height) / 2.0
+    end
+    if nd.k == _K_SELECT:
+        r.w = math.Max(0.0, c.w - 16.0)
+    end
+end
+
+func _scroll_max(node: int, mx &: f64, my &: f64):
+    id := _e.fid[node]
+    pb := _padding_box(node)
+    mx = math.Max(0.0, _e.tree.ContentW(id) - pb.w)
+    my = math.Max(0.0, _e.tree.ContentH(id) - pb.h)
+end
+
+func _is_scroller(node: int): bool:
+    s := _e.cs[node]
+    ret (s.overflow_x == style.KW_AUTO or s.overflow_x == style.KW_SCROLL or s.overflow_y == style.KW_AUTO or s.overflow_y == style.KW_SCROLL or node == 0) and _e.fid[node] >= 0
+end
+
+func _set_scroll(node: int, x: f64, y: f64): bool:
+    mut mx := 0.0
+    mut my := 0.0
+    _scroll_max(node, mx, my)
+    nx := math.Max(0.0, math.Min(mx, x))
+    ny := math.Max(0.0, math.Min(my, y))
+    c := _e.ctl[node]
+    if nx == c.scroll_x and ny == c.scroll_y:
+        ret false
+    end
+    mut cc := _e.ctl.Ref(node)
+    cc.scroll_x = nx
+    cc.scroll_y = ny
+    _e.tree.SetScroll(_e.fid[node], nx, ny)
+    _e.dirty_place = true
+    ret true
+end
+
+func _paint_rect(b: _Box): paint.Rect:
+    ret paint.RectOf(b.x, b.y, b.w, b.h)
 end

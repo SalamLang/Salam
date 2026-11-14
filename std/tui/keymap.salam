@@ -1,0 +1,423 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tui
+
+import str
+import sync
+import term
+
+const Sep := "\x1f"
+
+struct KeyOverride:
+    pub widget: int = NoWidget
+    pub action: func (Screen*, Event) bool = (_screen: Screen*, _event: Event): ret false end
+end
+
+struct KeyNode:
+    pub children: HashMap<str, int> = HashMap {} as HashMap<str, int>
+    pub bindings: Vector<KeyOverride> = Vector {}
+end
+
+@en "Keymap"
+@fa "نگاشت‌کلید"
+pub struct Keymap:
+    nodes: Vector<KeyNode> = Vector {}
+    pending: int = -1
+
+    @en "pending_timeout_ms"
+    @fa "مهلت توالی به میلی‌ثانیه"
+    pub pending_timeout_ms: int = 0
+
+    @en "pending_since_ms"
+    @fa "آغاز انتظار توالی به میلی‌ثانیه"
+    pub pending_since_ms: int = 0
+
+    @en "bind"
+    @fa "پیوند کلید"
+    pub func Bind(key: term.Key, action: func (Screen*, Event) bool):
+        this.bind_for(NoWidget, key, action)
+    end
+
+    @en "bind"
+    @fa "پیوند کلید"
+    pub func bind(key: term.Key, action: func (Screen*, Event) bool):
+        this.Bind(key, action)
+    end
+
+    @en "bind_for"
+    @fa "پیوند کلید برای ویجت"
+    pub func BindFor(widget_id: int, key: term.Key, action: func (Screen*, Event) bool):
+        this.ensure_root()
+        id := key_id(key)
+        mut child := this.nodes.Ref(0)[0].children.GetOr(id, -1)
+        if child < 0:
+            this.nodes.Push(KeyNode {})
+            child = this.nodes.Len() - 1
+            this.nodes.Ref(0)[0].children.Put(id, child)
+        end
+        put_override(this.nodes.Ref(child), widget_id, action)
+        this.pending = -1
+    end
+
+    @en "bind_for"
+    @fa "پیوند کلید برای ویجت"
+    pub func bind_for(widget_id: int, key: term.Key, action: func (Screen*, Event) bool):
+        this.BindFor(widget_id, key, action)
+    end
+
+    @en "bind_seq"
+    @fa "پیوند توالی"
+    pub func BindSeq(seq: str, action: func (Screen*, Event) bool):
+        this.bind_for_seq(NoWidget, seq, action)
+    end
+
+    @en "bind_seq"
+    @fa "پیوند توالی"
+    pub func bind_seq(seq: str, action: func (Screen*, Event) bool):
+        this.BindSeq(seq, action)
+    end
+
+    @en "bind_for_seq"
+    @fa "پیوند توالی برای ویجت"
+    pub func BindForSeq(widget_id: int, seq: str, action: func (Screen*, Event) bool):
+        if str.CharCount(seq) == 0:
+            ret
+        end
+        node := this.node_for_seq(seq)
+        put_override(this.nodes.Ref(node), widget_id, action)
+        this.pending = -1
+    end
+
+    @en "bind_for_seq"
+    @fa "پیوند توالی برای ویجت"
+    pub func bind_for_seq(widget_id: int, seq: str, action: func (Screen*, Event) bool):
+        this.BindForSeq(widget_id, seq, action)
+    end
+
+    @en "unbind"
+    @fa "لغو پیوند کلید"
+    pub func Unbind(key: term.Key):
+        this.unbind_for(NoWidget, key)
+    end
+
+    @en "unbind"
+    @fa "لغو پیوند کلید"
+    pub func unbind(key: term.Key):
+        this.Unbind(key)
+    end
+
+    @en "unbind_for"
+    @fa "لغو پیوند کلید برای ویجت"
+    pub func UnbindFor(widget_id: int, key: term.Key):
+        this.pending = -1
+        if this.nodes.Len() == 0:
+            ret
+        end
+        child := this.nodes.Ref(0)[0].children.GetOr(key_id(key), -1)
+        if child < 0:
+            ret
+        end
+        drop_override(this.nodes.Ref(child), widget_id)
+    end
+
+    @en "unbind_for"
+    @fa "لغو پیوند کلید برای ویجت"
+    pub func unbind_for(widget_id: int, key: term.Key):
+        this.UnbindFor(widget_id, key)
+    end
+
+    @en "unbind_for_seq"
+    @fa "لغو پیوند توالی برای ویجت"
+    pub func UnbindForSeq(widget_id: int, seq: str):
+        this.pending = -1
+        if str.CharCount(seq) == 0 or this.nodes.Len() == 0:
+            ret
+        end
+        node := this.find_node_for_seq(seq)
+        if node < 0:
+            ret
+        end
+        drop_override(this.nodes.Ref(node), widget_id)
+    end
+
+    @en "unbind_for_seq"
+    @fa "لغو پیوند توالی برای ویجت"
+    pub func unbind_for_seq(widget_id: int, seq: str):
+        this.UnbindForSeq(widget_id, seq)
+    end
+
+    @en "handle"
+    @fa "پردازش کلید"
+    pub func Handle(screen: Screen*, event: Event): bool:
+        if event.kind != KeyEvent:
+            ret false
+        end
+        if this.nodes.Len() == 0:
+            ret false
+        end
+        id := key_id(event.key)
+
+        if this.pending >= 0 and this.pending_timeout_ms > 0:
+            now := sync.NowMs() as int
+            if now - this.pending_since_ms > this.pending_timeout_ms:
+                this.pending = -1
+                this.pending_since_ms = 0
+            end
+        end
+
+        if this.pending >= 0:
+            p := this.pending
+            this.pending = -1
+            this.pending_since_ms = 0
+            next := this.nodes.Ref(p)[0].children.GetOr(id, -1)
+            if next >= 0:
+                if this.nodes.Ref(next)[0].children.Size() > 0:
+                    this.pending = next
+                    this.pending_since_ms = sync.NowMs() as int
+                    ret false
+                end
+                e_next := this.resolve(next, screen)
+                if e_next >= 0:
+                    act := this.nodes.Ref(next)[0].bindings.Get(e_next).action
+                    ret act(screen, event)
+                end
+            else:
+                e_prev := this.resolve(p, screen)
+                if e_prev >= 0:
+                    act := this.nodes.Ref(p)[0].bindings.Get(e_prev).action
+                    ret act(screen, event)
+                end
+            end
+        end
+
+        root_child := this.nodes.Ref(0)[0].children.GetOr(id, -1)
+        if root_child < 0:
+            ret false
+        end
+        if this.nodes.Ref(root_child)[0].children.Size() > 0:
+            this.pending = root_child
+            this.pending_since_ms = sync.NowMs() as int
+            ret false
+        end
+        e_root := this.resolve(root_child, screen)
+        if e_root >= 0:
+            act := this.nodes.Ref(root_child)[0].bindings.Get(e_root).action
+            ret act(screen, event)
+        end
+        ret false
+    end
+
+    @en "handle"
+    @fa "پردازش کلید"
+    pub func handle(screen: Screen*, event: Event): bool:
+        ret this.Handle(screen, event)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func Free():
+        repeat this.nodes.Len() in i:
+            node := this.nodes.Get(i)
+            node.children.Free()
+            node.bindings.Free()
+        end
+        this.nodes.Free()
+        this.pending = -1
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.Free()
+    end
+
+    @en "cancel_pending"
+    @fa "لغو توالی در انتظار"
+    pub func CancelPending():
+        this.pending = -1
+        this.pending_since_ms = 0
+    end
+
+    @en "cancel_pending"
+    @fa "لغو توالی در انتظار"
+    pub func cancel_pending():
+        this.CancelPending()
+    end
+
+    func ensure_root():
+        if this.nodes.Len() == 0:
+            this.nodes.Push(KeyNode {})
+        end
+    end
+
+    func node_for_seq(seq: str): int:
+        this.ensure_root()
+        mut cur := 0
+        n := str.CharCount(seq)
+        repeat n in i:
+            id := key_id(term.Decode(str.CharSubstr(seq, i, 1)))
+            mut child := this.nodes.Ref(cur)[0].children.GetOr(id, -1)
+            if child < 0:
+                this.nodes.Push(KeyNode {})
+                child = this.nodes.Len() - 1
+                this.nodes.Ref(cur)[0].children.Put(id, child)
+            end
+            cur = child
+        end
+        ret cur
+    end
+
+    func find_node_for_seq(seq: str): int:
+        mut cur := 0
+        n := str.CharCount(seq)
+        repeat n in i:
+            id := key_id(term.Decode(str.CharSubstr(seq, i, 1)))
+            child := this.nodes.Ref(cur)[0].children.GetOr(id, -1)
+            if child < 0:
+                ret -1
+            end
+            cur = child
+        end
+        ret cur
+    end
+
+    func resolve(idx: int, screen: Screen*): int:
+        node := this.nodes.Ref(idx)
+        mut from := screen[0].focused_id()
+        if not screen[0].tree.valid(from):
+            from = RootId
+        end
+        mut cur := from
+        until cur != NoWidget:
+            i := override_index(node, cur)
+            if i >= 0:
+                ret i
+            end
+            cur = screen[0].tree.parent(cur)
+        end
+        ret override_index(node, NoWidget)
+    end
+end
+
+func key_id(k: term.Key): str:
+    mut flags := k.ctrl ? "1" : "0"
+    flags += (k.alt ? "1" : "0")
+    flags += (k.shift ? "1" : "0")
+    if k.code == term.KeyChar:
+        ret "c" + Sep + k.ch + Sep + flags
+    end
+    if k.code == term.KeyUnknown:
+        ret "k" + Sep + k.code + Sep + flags + Sep + k.raw
+    end
+    ret "k" + Sep + k.code + Sep + flags
+end
+
+func override_index(node: KeyNode*, widget: int): int:
+    repeat node[0].bindings.Len() in i:
+        if node[0].bindings.Get(i).widget == widget:
+            ret i
+        end
+    end
+    ret -1
+end
+
+func put_override(node: KeyNode*, widget: int, action: func (Screen*, Event) bool):
+    repeat node[0].bindings.Len() in i:
+        if node[0].bindings.Get(i).widget == widget:
+            node[0].bindings.Set(i, KeyOverride { widget = widget, action = action })
+            ret
+        end
+    end
+    node[0].bindings.Push(KeyOverride { widget = widget, action = action })
+end
+
+func drop_override(node: KeyNode*, widget: int):
+    repeat node[0].bindings.Len() in i:
+        if node[0].bindings.Get(i).widget == widget:
+            _ := node[0].bindings.RemoveAt(i)
+            ret
+        end
+    end
+end
+
+func vim_home(screen: Screen*, _event: Event): bool:
+    mut moved := false
+    until screen[0].focus_up():
+        moved = true
+    end
+    ret moved
+end
+
+func vim_end(screen: Screen*, _event: Event): bool:
+    mut moved := false
+    until screen[0].focus_down():
+        moved = true
+    end
+    ret moved
+end
+
+func vim_back(screen: Screen*, _event: Event): bool:
+    if screen[0].focus_stack.Len() <= 1:
+        ret false
+    end
+    ret screen[0].pop_focus()
+end
+
+@en "NewKeymap"
+@fa "نگاشت کلید جدید"
+pub func NewKeymap(): Keymap:
+    ret Keymap {}
+end
+
+@en "NewDefaultKeymap"
+@fa "نگاشت کلید پیش‌فرض"
+pub func NewDefaultKeymap(): Keymap:
+    focus_next_action := (screen: Screen*, _event: Event): ret screen[0].focus_next() end
+    focus_up_action := (screen: Screen*, _event: Event): ret screen[0].focus_up() end
+    focus_down_action := (screen: Screen*, _event: Event): ret screen[0].focus_down() end
+    focus_left_action := (screen: Screen*, _event: Event): ret screen[0].focus_left() end
+    focus_right_action := (screen: Screen*, _event: Event): ret screen[0].focus_right() end
+
+    mut km := NewKeymap()
+    km.bind(term.Key { code = term.KeyTab }, focus_next_action)
+    km.bind(term.Key { code = term.KeyUp }, focus_up_action)
+    km.bind(term.Key { code = term.KeyDown }, focus_down_action)
+    km.bind(term.Key { code = term.KeyLeft }, focus_left_action)
+    km.bind(term.Key { code = term.KeyRight }, focus_right_action)
+    ret km
+end
+
+@en "NewVimKeymap"
+@fa "نگاشت کلید ویم"
+pub func NewVimKeymap(on_search: func (Screen*, Event) bool): Keymap:
+    focus_up_action := (screen: Screen*, _event: Event): ret screen[0].focus_up() end
+    focus_down_action := (screen: Screen*, _event: Event): ret screen[0].focus_down() end
+    focus_left_action := (screen: Screen*, _event: Event): ret screen[0].focus_left() end
+    focus_right_action := (screen: Screen*, _event: Event): ret screen[0].focus_right() end
+    vim_home_action := (screen: Screen*, event: Event): ret vim_home(screen, event) end
+    vim_end_action := (screen: Screen*, event: Event): ret vim_end(screen, event) end
+    vim_back_action := (screen: Screen*, event: Event): ret vim_back(screen, event) end
+
+    mut km := NewDefaultKeymap()
+    km.bind(term.Decode("h"), focus_left_action)
+    km.bind(term.Decode("j"), focus_down_action)
+    km.bind(term.Decode("k"), focus_up_action)
+    km.bind(term.Decode("l"), focus_right_action)
+    km.bind_seq("gg", vim_home_action)
+    km.bind(term.Decode("G"), vim_end_action)
+    km.bind(term.Key { code = term.KeyEscape }, vim_back_action)
+    km.bind(term.Decode("/"), on_search)
+    ret km
+end

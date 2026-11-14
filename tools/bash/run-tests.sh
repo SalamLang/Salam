@@ -97,6 +97,24 @@ $cerrs"
         fi
     }
 
+    wk_checkfix() {
+        jobdir="$WORK/chkfixjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        name=$(basename "$fabs")
+        cp "$fabs" "$jobdir/$name"
+        log=$( (cd "$jobdir" && "$SALAM_ABS" check "$name" --fix --no-color --log-level=error --lang="$lang" 2>/dev/null) | tr -d '\r')
+        golden="${fabs%.salam}.fixed"
+        if [ ! -f "$golden" ]; then
+            echo "FAIL $label (missing ${golden##*/})"
+        elif [ "$(tr -d '\r' <"$jobdir/$name")" != "$(tr -d '\r' <"$golden")" ]; then
+            echo "FAIL $label (rewritten file differs from ${golden##*/})"
+            diff "$golden" "$jobdir/$name" | head -20 | sed 's/^/  /'
+        else
+            wk_check "$expabs" "$log"
+        fi
+        rm -rf "$jobdir"
+    }
+
     wk_project() {
         jobdir="$WORK/projjob_${jobid}_$$"
         mkdir -p "$jobdir"
@@ -130,6 +148,12 @@ $cerrs"
             out=$(tmo "${SALAM_TEST_TIMEOUT:-20}" "$jobdir/host_$kind" </dev/null 2>&1 | tr -d '\r')
             if [ "$kind" = shared ]; then got=$out; elif [ "$out" != "$got" ]; then got="static differs: $out"; fi
         done
+        if [ -f "${fabs}.h" ] && ! diff -u "${fabs}.h" "$jobdir/$name/$name.h" >"$jobdir/h.diff" 2>&1; then
+            echo "FAIL $label (generated $name.h differs)"
+            sed 's/^/  /' "$jobdir/h.diff" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }
@@ -626,6 +650,7 @@ EOF_LAYOUT_NOT
         new) wk_new ;;
         project) wk_project ;;
         checkcmd) wk_checkcmd ;;
+        checkfix) wk_checkfix ;;
         lib) wk_lib ;;
         script) wk_script ;;
         expect) wk_expect ;;
@@ -896,6 +921,11 @@ if want check; then
             name=$(basename "$f" .out)
             [ -d "tests/$lang/check/$name" ] || continue
             add_job checkcmd "check/$lang/$name" "tests/$lang/check/$name" "$lang" "$f"
+        done
+        for f in tests/"$lang"/check/fix/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            add_job checkfix "check/$lang/fix/$name" "$f" "$lang" "tests/$lang/check/fix/$name.out"
         done
     done
 fi
@@ -1214,8 +1244,8 @@ if want opencv; then
     done
     ocvmockc=""
     for lang in $LANGS; do
-        [ -f "std/ai/opencv/native/mock/opencv_mock.c" ] && {
-            ocvmockc="std/ai/opencv/native/mock/opencv_mock.c"
+        [ -f "std/opencv/native/mock/opencv_mock.c" ] && {
+            ocvmockc="std/opencv/native/mock/opencv_mock.c"
             break
         }
     done

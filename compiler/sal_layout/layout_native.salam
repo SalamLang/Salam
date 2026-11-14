@@ -16,7 +16,6 @@ package layout
 
 import os
 import str
-import gui.css
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -32,8 +31,6 @@ include sm "../semantic/semantic.salam"
 include i18 "../i18n.salam"
 
 pub const NATIVE_PAGE_VIEW := "__salam_page"
-
-pub const NATIVE_STYLES := "__salam_styles"
 
 struct LnNames:
     pub kw_func: str = "func"
@@ -51,18 +48,18 @@ struct LnNames:
     pub sep: str = ", "
     pub entry: str = "main"
     pub import_ui: str = "gui.ui"
-    pub import_css: str = "gui.css"
+    pub import_style: str = "gui.style"
     pub ui: str = "ui"
-    pub css: str = "css"
+    pub style: str = "style"
     pub builder: str = "Builder"
-    pub program: str = "Program"
-    pub run: str = "RunCompiled"
+    pub patch: str = "Patch"
+    pub no_patches: str = "NoPatches"
+    pub run: str = "RunPage"
     pub open: str = "Open"
     pub close: str = "Close"
-    pub decls: str = "Decls"
-    pub dyn: str = "Dyn"
+    pub set: str = "Set"
+    pub set_text: str = "SetText"
     pub id: str = "Id"
-    pub klass: str = "Class"
     pub attr: str = "Attr"
     pub bool_attr: str = "BoolAttr"
     pub text: str = "Text"
@@ -91,12 +88,9 @@ end
 struct LnGen:
     pub lw: LoLower = LoLower {}
     pub cx: LoCtx = LoCtx {}
-    pub prog: css.Program = css.Program {}
     pub out: str = ""
     pub depth: int = 1
     pub nm: LnNames = LnNames {}
-    pub media_seq: int = 0
-    pub sel: Vector<str> = Vector {}
     pub a_node: int = 0
     pub rx: LnReact = LnReact {}
     pub in_comp: int = 0
@@ -109,18 +103,18 @@ func ln_names(pack: lp.Langpack): LnNames:
         ret n
     end
     n.import_ui = "رابط گرافیکی.رابط کاربری"
-    n.import_css = "رابط گرافیکی.سی اس اس"
+    n.import_style = "رابط گرافیکی.سبک"
     n.ui = "رابط کاربری"
-    n.css = "سی اس اس"
+    n.style = "سبک"
     n.builder = "سازنده‌صفحه"
-    n.program = "برنامه‌سبک"
-    n.run = "اجرای ترجمه شده"
+    n.patch = "وصله عنصر"
+    n.no_patches = "بی وصله"
+    n.run = "اجرای صفحه"
     n.open = "گشودن عنصر"
     n.close = "بستن عنصر"
-    n.decls = "اعلان های عنصر"
-    n.dyn = "سبک زمان اجرا"
+    n.set = "تنظیم سبک"
+    n.set_text = "تنظیم سبک متنی"
     n.id = "شناسه عنصر"
-    n.klass = "کلاس عنصر"
     n.attr = "ویژگی عنصر"
     n.bool_attr = "ویژگی دودویی عنصر"
     n.text = "متن فرزند"
@@ -262,7 +256,7 @@ func ln_parse(log: lg.Logger, a &: at.Ast, text: str, path: str, pack: lp.Langpa
     mut sf := src.New()
     sf.path = path
     sf.text = text
-    sf.len = text.len()
+    sf.len = text.Len()
     quiet := lg.New(lg.LOG_OFF, false)
     mut toks := tok.StreamNew(path)
     ok := lx.Run(quiet, pack, sf, toks)
@@ -320,34 +314,6 @@ func ln_bool_expr(g &: LnGen, v: str): str:
     ret str.Equals(v, "false") ? g.nm.kw_false : g.nm.kw_true
 end
 
-func ln_compile(g &: LnGen, text: str): int:
-    if str.Len(text) == 0:
-        ret 0 - 1
-    end
-    ret css.CompileDecls(g.prog, text)
-end
-
-func ln_top_sel(g &: LnGen): str:
-    if g.sel.len() == 0:
-        ret "body"
-    end
-    ret g.sel.get(g.sel.len() - 1)
-end
-
-func ln_has_media_child(a &: at.Ast, el: int): bool:
-    repeat at.ChildCount(a, el) in i:
-        cid := at.Child(a, el, i)
-        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
-            continue
-        end
-        ei := sm.LayoutElemOf(a, cid)
-        if ei >= 0 and str.Equals(sm.LayoutElemGenerator(ei), "media"):
-            ret true
-        end
-    end
-    ret false
-end
-
 func ln_event_name(out: str): str:
     if str.StartsWith(out, "on") and str.Len(out) > 2:
         ret str.Substr(out, 2, str.Len(out) - 2)
@@ -355,7 +321,64 @@ func ln_event_name(out: str): str:
     ret out
 end
 
-func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
+func ln_state_const(state: int): str:
+    names := ["STATE_BASE", "STATE_HOVER", "STATE_FOCUS", "STATE_FOCUS_WITHIN", "STATE_ACTIVE", "STATE_DISABLED", "STATE_CHECKED", "STATE_INVALID", "STATE_PLACEHOLDER", "STATE_SELECTION"]
+    if state < 0 or state >= len(names):
+        ret "STATE_BASE"
+    end
+    ret names[state]
+end
+
+func ln_style_attrs(g &: LnGen, a &: at.Ast, el: int):
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0:
+            continue
+        end
+        mut prop := 0
+        mut state := 0
+        if not sm.StyleAttrOf(aid, prop, state):
+            continue
+        end
+        v := val_str(a, an.a)
+        state_expr := g.nm.ui + "." + ln_state_const(state)
+        ln_call(g, g.nm.set_text, state_expr + g.nm.sep + co.I64Toa(prop as i64) + g.nm.sep + ln_str_expr(v))
+    end
+end
+
+func ln_pseudo_state(nm: str): int:
+    if str.StartsWith(nm, "hover_"):
+        ret sm.STYLE_STATE_HOVER
+    end
+    if str.StartsWith(nm, "focus_within_"):
+        ret sm.STYLE_STATE_FOCUS_WITHIN
+    end
+    if str.StartsWith(nm, "focus_"):
+        ret sm.STYLE_STATE_FOCUS
+    end
+    if str.StartsWith(nm, "active_"):
+        ret sm.STYLE_STATE_ACTIVE
+    end
+    if str.StartsWith(nm, "disabled_"):
+        ret sm.STYLE_STATE_DISABLED
+    end
+    if str.StartsWith(nm, "checked_"):
+        ret sm.STYLE_STATE_CHECKED
+    end
+    if str.StartsWith(nm, "invalid_"):
+        ret sm.STYLE_STATE_INVALID
+    end
+    if str.StartsWith(nm, "placeholder_"):
+        ret sm.STYLE_STATE_PLACEHOLDER
+    end
+    if str.StartsWith(nm, "selection_"):
+        ret sm.STYLE_STATE_SELECTION
+    end
+    ret 0 - 1
+end
+
+func ln_pseudo_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int):
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
         an := at.Get(a, aid)
@@ -363,7 +386,55 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             continue
         end
         nm := an.name
+        pl := sm.LayoutPseudoPrefixLen(nm)
+        if pl == 0:
+            continue
+        end
+        state := ln_pseudo_state(nm)
+        if state < 0:
+            continue
+        end
+        rest := str.Substr(nm, pl, str.Len(nm) - pl)
+        ai := sm.LayoutAttrFor(ei, rest)
+        mut prop := hyphenate(rest)
+        v := val_str(a, an.a)
+        mut mapped := v
+        if ai >= 0:
+            if str.Len(sm.LayoutAttrOut(ai)) > 0:
+                prop = sm.LayoutAttrOut(ai)
+            end
+            if not is_dyn(v):
+                mapped = attr_value_map(ai, v)
+            end
+        else not is_dyn(v):
+            mapped = quote_css_value_if_needed(v)
+        end
+        state_expr := g.nm.ui + "." + ln_state_const(state)
+        ln_call(g, g.nm.set_text, state_expr + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(is_dyn(v) ? v : mapped))
+    end
+end
+
+func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
+    mut seen_attr := Vector {} as Vector<str>
+    mut seen_style := Vector {} as Vector<str>
+    defer seen_attr.Free()
+    defer seen_style.Free()
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0:
+            continue
+        end
+        nm := an.name
+        mut sprop := 0
+        mut sstate := 0
+        if sm.StyleAttrOf(aid, sprop, sstate):
+            continue
+        end
         if sm.LayoutPseudoPrefixLen(nm) > 0:
+            continue
+        end
+        if str.Equals(nm, "repeat"):
             continue
         end
         mut key := sm.LayoutAttrKey(nm)
@@ -376,44 +447,110 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         end
         dest := sm.LayoutAttrDest(ai)
         vt := sm.LayoutAttrVtype(ai)
+        v := val_str(a, an.a)
         if vt == sm.VT_CODE:
-            num := ln_dyn_num(val_str(a, an.a))
-            if num < 0 or num >= g.lw.slots.len():
+            num := ln_dyn_num(v)
+            if num < 0 or num >= g.lw.slots.Len():
                 continue
             end
             ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
-            if at.KindOf(a, g.lw.slots.get(num).expr) == at.AST_LAMBDA:
+            ek := at.KindOf(a, g.lw.slots.Get(num).expr)
+            if ek == at.AST_LAMBDA:
                 ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
-            else:
+            else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
                 ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+            else ek == at.AST_CALL:
+                // Call-expression handlers: evaluate the call when the event fires.
+                ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
+            else:
+                // Other expression handlers: evaluate expression when fired.
+                ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
             end
             continue
         end
-        v := val_str(a, an.a)
         if dest == sm.LA_HTML:
             mut out := sm.LayoutAttrOut(ai)
             if str.IndexOf(out, "*") >= 0:
                 out = hyphenate(nm)
             end
-            if vt == sm.VT_BOOL or (vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false") or is_dyn(v))):
+            if vt == sm.VT_BOOL:
+                seen_attr.Push(out)
+                ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
+            else vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false")):
+                seen_attr.Push(out)
                 ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
             else str.Equals(out, "id"):
+                seen_attr.Push(out)
                 ln_call(g, g.nm.id, ln_str_expr(v))
-            else str.Equals(out, "data-key"):
+            else str.Equals(out, "data-key") or str.Equals(out, "key"):
+                seen_attr.Push(out)
                 ln_call(g, g.nm.key, ln_str_expr(v))
             else:
                 mv := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.Push(out)
                 ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv))
             end
         else dest == sm.LA_SOURCE:
-            ln_call(g, g.nm.attr, ln_quote(str.Equals(tag, "a") ? "href" : "src") + g.nm.sep + ln_str_expr(v))
+            mut src_attr := "src"
+            if str.Equals(tag, "a") or str.Equals(tag, "area") or str.Equals(tag, "base") or str.Equals(tag, "link"):
+                src_attr = "href"
+            end
+            seen_attr.Push(src_attr)
+            ln_call(g, g.nm.attr, ln_quote(src_attr) + g.nm.sep + ln_str_expr(v))
         else dest == sm.LA_CLASS:
-            ln_call(g, g.nm.klass, ln_str_expr(v))
+            seen_attr.Push("class")
+            ln_call(g, g.nm.attr, ln_quote("class") + g.nm.sep + ln_str_expr(v))
         else dest == sm.LA_DIR or dest == sm.LA_LANG:
+            out := sm.LayoutAttrOut(ai)
             mv2 := is_dyn(v) ? v : attr_value_map(ai, v)
-            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_str_expr(mv2))
-        else dest == sm.LA_HTML_OR_CSS and lo_all_digits(v):
-            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(ai)) + g.nm.sep + ln_quote(v))
+            seen_attr.Push(out)
+            ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv2))
+        else dest == sm.LA_HTML_OR_CSS:
+            out := sm.LayoutAttrOut(ai)
+            mut prop := out
+            if str.Len(prop) == 0:
+                prop = hyphenate(key)
+            end
+            if is_dyn(v):
+                // Dynamic values may resolve to CSS-like values at runtime; keep
+                // them as a style property for native parity with web dyn styles.
+                if str.Len(prop) == 0:
+                    prop = hyphenate(key)
+                end
+                seen_style.Push(prop)
+                ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(v))
+            else lo_all_digits(v):
+                seen_attr.Push(out)
+                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_quote(v))
+            else:
+                mv3 := attr_value_map(ai, v)
+                // Non-numeric CSS-like values are applied as style text.
+                if str.Len(prop) > 0:
+                    seen_style.Push(prop)
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                else:
+                    seen_attr.Push(out)
+                    ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv3))
+                end
+            end
+        else dest == sm.LA_CSS:
+            mut prop := sm.LayoutAttrOut(ai)
+            if str.Len(prop) == 0:
+                prop = hyphenate(key)
+            end
+            mv4 := is_dyn(v) ? v : attr_value_map(ai, v)
+            seen_style.Push(prop)
+            ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv4))
+        else dest == sm.LA_STYLE:
+            seen_attr.Push("style")
+            ln_call(g, g.nm.attr, ln_quote("style") + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_META or dest == sm.LA_CONTENT:
+            mout := sm.LayoutAttrOut(ai)
+            if str.Len(mout) > 0:
+                mv5 := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.Push(mout)
+                ln_call(g, g.nm.attr, ln_quote(mout) + g.nm.sep + ln_str_expr(mv5))
+            end
         end
     end
     if ei < 0:
@@ -424,8 +561,33 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         if not sm.LayoutAttrHasDefault(d) or not sm.LayoutCsvHas(sm.LayoutAttrScope(d), ekey):
             continue
         end
-        if sm.LayoutAttrDest(d) == sm.LA_HTML:
-            ln_call(g, g.nm.attr, ln_quote(sm.LayoutAttrOut(d)) + g.nm.sep + ln_quote(sm.LayoutAttrDefault(d)))
+        ddest := sm.LayoutAttrDest(d)
+        dout := sm.LayoutAttrOut(d)
+        ddef := sm.LayoutAttrDefault(d)
+        if ddest == sm.LA_HTML:
+            mut seen := false
+            repeat seen_attr.Len() in si:
+                if str.Equals(seen_attr.Get(si), dout):
+                    seen = true
+                end
+            end
+            if not seen:
+                ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+            end
+        else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
+            mut dprop := dout
+            if str.Len(dprop) == 0:
+                continue
+            end
+            mut seen2 := false
+            repeat seen_style.Len() in sj:
+                if str.Equals(seen_style.Get(sj), dprop):
+                    seen2 = true
+                end
+            end
+            if not seen2:
+                ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(dprop) + g.nm.sep + ln_quote(ddef))
+            end
         end
     end
 end
@@ -448,11 +610,14 @@ func ln_pre_events(g &: LnGen, a &: at.Ast, container: int, ei: int):
                 continue
             end
             vk := at.KindOf(a, an.a)
-            if vk != at.AST_LAMBDA and vk != at.AST_IDENTIFIER:
+            // Capture handler forms that can be evaluated as event callbacks.
+            // Lambda/identifier/member are the common forms; calls and other
+            // expression forms are also accepted for parity with web lowering.
+            if vk == at.AST_LAYOUT_BLOCK or vk == at.AST_LAYOUT_ELEMENT or vk == at.AST_LAYOUT_ATTR:
                 continue
             end
-            idx := g.lw.slots.len()
-            g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = an.a })
+            idx := g.lw.slots.Len()
+            g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = an.a })
             mut n2 := at.Get(a, cid)
             n2.a = mk_str(a, lo_mark("dyn", idx), cid)
             at.Put(a, cid, n2)
@@ -478,20 +643,27 @@ func ln_pre_events_if(g &: LnGen, a &: at.Ast, nid: int, ei: int):
     end
 end
 
-func ln_dynstyle(g &: LnGen, text: str):
-    if str.Len(text) == 0:
-        ret
-    end
-    mut parts := str.Split(text, ";")
-    defer parts.free()
-    each p in parts:
-        c := str.IndexOf(p, ":")
-        if c <= 0:
-            continue
+func ln_repeat_count(a &: at.Ast, el: int): i64:
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind == at.AST_LAYOUT_ATTR and str.Equals(an.name, "repeat") and an.a != 0:
+            av := at.Get(a, an.a)
+            if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_INT:
+                r := av.value_int as i64
+                ret r < 1 ? 1 as i64 : r
+            end
         end
-        prop := str.Trim(str.Substr(p, 0, c))
-        val := str.Substr(p, c + 1, str.Len(p) - c - 1)
-        ln_call(g, g.nm.dyn, ln_quote(prop) + g.nm.sep + ln_str_expr(val))
+    end
+    ret 1
+end
+
+func ln_element_n(g &: LnGen, a &: at.Ast, el: int):
+    nrep := ln_repeat_count(a, el)
+    mut i := 0 as i64
+    until i < nrep:
+        ln_element(g, a, el)
+        i++
     end
 end
 
@@ -500,7 +672,7 @@ func ln_items(g &: LnGen, a &: at.Ast, container: int):
         cid := at.Child(a, container, i)
         k := at.KindOf(a, cid)
         if k == at.AST_LAYOUT_ELEMENT:
-            ln_element(g, a, cid)
+            ln_element_n(g, a, cid)
         else k == at.AST_IF:
             if ln_rx_is_comp(a, cid):
                 ln_comp(g, a, cid)
@@ -514,6 +686,9 @@ func ln_items(g &: LnGen, a &: at.Ast, container: int):
 end
 
 func ln_scope_open(g &: LnGen, site: int):
+    // Reactive scope boundary (native): mount/update invalidation unit; cleanup hooks are runtime-defined.
+    // Lifecycle placeholder alignment: mount/update/unmount hook points (ln_rx_*/native scope lifecycle)
+    // are coordinated by runtime APIs; compiler emits scope boundaries only.
     ln_line(g, "__salam_b." + g.nm.scope + "(" + co.U64Toa(site as u64) + g.nm.sep + "(__salam_b: " + g.nm.ui + "." + g.nm.builder + "):")
     g.depth++
 end
@@ -529,8 +704,8 @@ func ln_refs_state(a &: at.Ast, nid: int): bool:
     if ln_refs_state(a, n.a) or ln_refs_state(a, n.b) or ln_refs_state(a, n.c) or ln_refs_state(a, n.d):
         ret true
     end
-    repeat n.list.len() in i:
-        if ln_refs_state(a, n.list.get(i)):
+    repeat n.list.Len() in i:
+        if ln_refs_state(a, n.list.Get(i)):
             ret true
         end
     end
@@ -554,12 +729,10 @@ func ln_key_attr(g &: LnGen, a &: at.Ast, el: int, want: str): int:
             continue
         end
         num := ln_dyn_num(val_str(a, an.a))
-        if num >= 0 and num < g.lw.slots.len():
-            ex := g.lw.slots.get(num).expr
-            if ln_refs_state(a, ex):
-                ret 0
-            end
-            ret ex
+        if num >= 0 and num < g.lw.slots.Len():
+            // Preserve runtime/reactive key expressions so keyed scopes can track
+            // dynamic identity (including state-derived keys).
+            ret g.lw.slots.Get(num).expr
         end
         ret an.a
     end
@@ -573,12 +746,50 @@ func ln_row_key(g &: LnGen, a &: at.Ast, container: int): int:
         if k == at.AST_LAYOUT_ELEMENT:
             mut key := ln_key_attr(g, a, cid, "data-key")
             if key == 0:
+                key = ln_key_attr(g, a, cid, "key")
+            end
+            if key == 0:
                 key = ln_key_attr(g, a, cid, "id")
             end
-            ret key
+            if key != 0:
+                ret key
+            end
+            key = ln_row_key(g, a, cid)
+            if key != 0:
+                ret key
+            end
+            continue
         end
         if k == at.AST_IF and ln_rx_is_comp(a, cid):
-            ret ln_row_key(g, a, at.Get(a, cid).b)
+            key2 := ln_row_key(g, a, at.Get(a, cid).b)
+            if key2 != 0:
+                ret key2
+            end
+        else k == at.AST_LAYOUT_BLOCK:
+            key3 := ln_row_key(g, a, cid)
+            if key3 != 0:
+                ret key3
+            end
+        else k == at.AST_IF:
+            // Transparent control wrappers in expanded output: search branches conservatively.
+            key4 := ln_row_key(g, a, at.Get(a, cid).b)
+            if key4 != 0:
+                ret key4
+            end
+            c := at.Get(a, cid).c
+            if c != 0:
+                if at.KindOf(a, c) == at.AST_IF:
+                    key5 := ln_row_key(g, a, c)
+                    if key5 != 0:
+                        ret key5
+                    end
+                else:
+                    key6 := ln_row_key(g, a, c)
+                    if key6 != 0:
+                        ret key6
+                    end
+                end
+            end
         end
     end
     ret 0
@@ -590,10 +801,18 @@ func ln_key_open(g &: LnGen, a &: at.Ast, site: int, key_expr: int):
     if kv.kind == at.AST_LITERAL:
         ks = ln_quote(val_str(a, key_expr))
     else:
-        idx := g.lw.slots.len()
-        g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = at.Clone(a, key_expr) })
+        idx := g.lw.slots.Len()
+        g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = at.Clone(a, key_expr) })
         ks = "(\"\" + " + ln_dyn_name(idx) + ")"
     end
+    // Keyed scope lifecycle contract (source-level):
+    // - `ks` is the emitted row/component identity for this keyed scope (literal or runtime-derived expression).
+    // - Compiler emits scope boundaries only; runtime owns mount/update/unmount/cleanup hook scheduling, handler (re)binding,
+    //   and reconciliation/move/reuse behavior for keyed children.
+    // - When an `each` body has no stable explicit key and no key variable fallback is available, native lowering may emit a non-keyed scope path
+    //   (see ln_each/ln_comp), which reduces identity/lifecycle parity with webstate keyed reconciliation.
+    // TODO(runtime/toolchain): align native keyed mount/update/unmount/cleanup hooks, row identity stability/uniqueness checks, and handler lifecycle
+    //   semantics with webstate (including dynamic/state-derived keys) and validate cross-target parity.
     ln_line(g, "__salam_b." + g.nm.keyed + "(" + co.U64Toa(site as u64) + g.nm.sep + ks + g.nm.sep + "(__salam_b: " + g.nm.ui + "." + g.nm.builder + "):")
     g.depth++
 end
@@ -605,11 +824,11 @@ end
 
 func ln_if_scoped(g &: LnGen, a &: at.Ast, nid: int):
     mut deps := Vector {} as Vector<int>
-    defer deps.free()
+    defer deps.Free()
     if g.in_comp == 0:
         ln_rx_cond(g.rx, g.lw, a, nid, deps)
     end
-    if deps.len() == 0:
+    if deps.Len() == 0:
         ln_if(g, a, nid)
         ret
     end
@@ -620,11 +839,11 @@ end
 
 func ln_each_scoped(g &: LnGen, a &: at.Ast, nid: int):
     mut deps := Vector {} as Vector<int>
-    defer deps.free()
+    defer deps.Free()
     if g.in_comp == 0:
         ln_rx_markers(g.rx, g.lw, a, val_str(a, at.Get(a, nid).a), deps)
     end
-    if deps.len() == 0:
+    if deps.Len() == 0:
         ln_each(g, a, nid)
         ret
     end
@@ -634,7 +853,7 @@ func ln_each_scoped(g &: LnGen, a &: at.Ast, nid: int):
 end
 
 func ln_is_render(gi: int): bool:
-    ret gi < g_lo_st_kind.len() and g_lo_st_kind.get(gi) == LI_RENDER
+    ret gi < g_lo_st_kind.Len() and g_lo_st_kind.Get(gi) == LI_RENDER
 end
 
 func ln_comp_has_stores(a &: at.Ast, blk: int, render: bool): bool:
@@ -658,8 +877,8 @@ func ln_comp_stores(g &: LnGen, a &: at.Ast, blk: int, kname: str, render: bool)
             continue
         end
         gs := co.U64Toa(sd.value_int)
-        idx := g.lw.slots.len()
-        g.lw.slots.push(LoSlot { kind = SL_TEXT, expr = sd.a })
+        idx := g.lw.slots.Len()
+        g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = sd.a })
         store := "__salam_st_" + gs
         tmp := "__salam_i_" + gs
         ln_line(g, tmp + " := " + ln_dyn_name(idx))
@@ -675,7 +894,7 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
     n := at.Get(a, nid)
     ci := n.value_int as int
     mut deps := Vector {} as Vector<int>
-    defer deps.free()
+    defer deps.Free()
     ln_rx_tree(g.rx, g.lw, a, n.b, deps)
     mut has_state := false
     repeat at.ChildCount(a, n.b) in i:
@@ -683,7 +902,7 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
             has_state = true
         end
     end
-    if deps.len() == 0 and not has_state:
+    if deps.Len() == 0 and not has_state:
         g.in_comp++
         ln_items(g, a, n.b)
         g.in_comp--
@@ -691,8 +910,8 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
     end
     site := ln_rx_site(g.rx, has_state ? ci : 0 - 1, deps)
     mut row_key := 0
-    if g.row_keys.len() > 0:
-        row_key = g.row_keys.get(g.row_keys.len() - 1)
+    if g.row_keys.Len() > 0:
+        row_key = g.row_keys.Get(g.row_keys.Len() - 1)
     end
     if row_key != 0:
         ln_key_open(g, a, site, row_key)
@@ -701,7 +920,7 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
     end
     if has_state:
         if not ln_rx_comp_has_state(g.rx, ci):
-            g.rx.st_comps.push(ci)
+            g.rx.st_comps.Push(ci)
         end
         cs := co.U64Toa(ci as u64)
         kname := "__salam_k_" + cs
@@ -752,9 +971,15 @@ func ln_each(g &: LnGen, a &: at.Ast, nid: int):
     head += "__salam_item_" + ns + " " + g.nm.kw_in + " " + ln_dyn_name(num) + ":"
     ln_line(g, head)
     g.depth++
-    g.row_keys.push(ln_row_key(g, a, n.b))
+    mut rk := ln_row_key(g, a, n.b)
+    if rk == 0 and n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+        rk = n.c
+    end
+    // Keyed-each parity note: if rk is 0, nested component scopes may not become keyed (ln_comp falls back to non-keyed Scope),
+    // so mount/update/unmount/cleanup identity across reorders/insertions can diverge from webstate until runtime/toolchain support lands.
+    g.row_keys.Push(rk)
     ln_items(g, a, n.b)
-    _rk := g.row_keys.pop()
+    _rk := g.row_keys.Pop()
     g.depth--
     ln_line(g, g.nm.kw_end)
 end
@@ -763,6 +988,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     ei := sm.LayoutElemOf(a, el)
     mut kind := sm.LK_NORMAL
     mut tag := "div"
+    mut ekey := "box"
     mut gen := ""
     mut in_head := false
     if ei >= 0:
@@ -770,6 +996,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
         if str.Len(sm.LayoutElemTag(ei)) > 0:
             tag = sm.LayoutElemTag(ei)
         end
+        ekey = sm.LayoutElemKey(ei)
         gen = sm.LayoutElemGenerator(ei)
         in_head = sm.LayoutElemInHead(ei)
     end
@@ -779,18 +1006,11 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     if str.Len(la.gen) > 0:
         gen = la.gen
     end
-    if str.Equals(gen, "global"):
-        mut gsel := "*"
-        _hs := lo_attr_get(la, "selector", gsel)
-        css.CompileRule(g.prog, gsel, la.css, "")
+    // global/media rules are compile-time style data, not native nodes.
+    if str.Equals(gen, "global") or str.Equals(gen, "media"):
         ret
     end
-    if str.Equals(gen, "media"):
-        mut cond := "all"
-        _hc := lo_attr_get(la, "condition", cond)
-        css.CompileRule(g.prog, ln_top_sel(g), la.css, cond)
-        ret
-    end
+    // Raw style/script/font metadata and head-only elements have no native widget.
     if str.Equals(gen, "style") or str.Equals(gen, "script") or str.Equals(gen, "font_face") or in_head:
         ret
     end
@@ -798,7 +1018,11 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
         mut sv := ""
         mut sz := 1
         if lo_attr_get(la, "size", sv) and str.Len(sv) > 0:
-            sz = lo_atoi(sv)
+            if is_dyn(sv):
+                sz = 1
+            else:
+                sz = lo_atoi(sv)
+            end
         end
         if sz < 1:
             sz = 1
@@ -807,48 +1031,34 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
             sz = 6
         end
         tag = "h" + co.U64Toa(sz as u64)
+        ekey = tag
     end
     if kind == sm.LK_VIRTUAL:
         ln_items(g, a, el)
         ret
     end
     mut deps := Vector {} as Vector<int>
-    defer deps.free()
+    defer deps.Free()
     if g.in_comp == 0:
         ln_rx_own(g.rx, g.lw, a, el, deps)
     end
-    if deps.len() > 0:
+    if deps.Len() > 0:
         ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
     end
-    ln_call(g, g.nm.open, ln_quote(tag))
+    ln_call(g, g.nm.open, ln_quote(ekey))
     g.depth++
-    b0 := ln_compile(g, la.css)
-    b1 := ln_compile(g, la.hover)
-    b2 := ln_compile(g, la.focus)
-    b3 := ln_compile(g, la.active)
-    if b0 >= 0 or b1 >= 0 or b2 >= 0 or b3 >= 0:
-        ln_call(g, g.nm.decls, co.I64Toa(b0 as i64) + g.nm.sep + co.I64Toa(b1 as i64) + g.nm.sep + co.I64Toa(b2 as i64) + g.nm.sep + co.I64Toa(b3 as i64))
-    end
-    ln_dynstyle(g, la.dynstyle)
+    ln_style_attrs(g, a, el)
+    ln_pseudo_attrs(g, a, el, ei)
     ln_attrs(g, a, el, ei, tag)
-    if ln_has_media_child(a, el):
-        cls := "__salam_m" + co.U64Toa(g.media_seq as u64)
-        g.media_seq++
-        ln_call(g, g.nm.klass, ln_quote(cls))
-        g.sel.push("." + cls)
-    else:
-        g.sel.push(ln_top_sel(g))
-    end
     if la.has_content and kind != sm.LK_VOID:
         ln_call(g, g.nm.text, ln_str_expr(la.content))
     end
     if kind != sm.LK_VOID and kind != sm.LK_RAW:
         ln_items(g, a, el)
     end
-    _ps := g.sel.pop()
     g.depth--
     ln_call(g, g.nm.close, "")
-    if deps.len() > 0:
+    if deps.Len() > 0:
         ln_scope_close(g)
     end
 end
@@ -856,6 +1066,11 @@ end
 func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
     mut have_lang := false
     mut have_dir := false
+    page_ei := sm.LayoutElemLookup("page")
+    mut seen_attr := Vector {} as Vector<str>
+    mut seen_style := Vector {} as Vector<str>
+    defer seen_attr.Free()
+    defer seen_style.Free()
     repeat at.ChildCount(a, lb) in i:
         iid := at.Child(a, lb, i)
         item := at.Get(a, iid)
@@ -865,14 +1080,161 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
         v := val_str(a, item.a)
         if str.Equals(item.name, "title"):
             ln_call(g, g.nm.title, ln_str_expr(v))
-        else str.Equals(item.name, "lang"):
+            continue
+        end
+        if str.Equals(item.name, "lang"):
             l := is_dyn(v) ? v : sm.LayoutDynValue("lang", i18.LayoutValue(v))
             ln_call(g, g.nm.lang, ln_str_expr(str.Len(l) > 0 ? l : v))
             have_lang = true
-        else str.Equals(item.name, "dir"):
+            continue
+        end
+        if str.Equals(item.name, "dir"):
             d := is_dyn(v) ? v : sm.LayoutDynValue("dir", i18.LayoutValue(v))
             ln_call(g, g.nm.dir, ln_str_expr(str.Len(d) > 0 ? d : v))
             have_dir = true
+            continue
+        end
+        if str.Equals(item.name, "content") or str.Equals(item.name, "favicon"):
+            continue
+        end
+        mut key := sm.LayoutAttrKey(item.name)
+        if str.Len(key) == 0:
+            key = item.name
+        end
+        ai := sm.LayoutAttrFor(page_ei, key)
+        if ai < 0:
+            continue
+        end
+        vt := sm.LayoutAttrVtype(ai)
+        if vt == sm.VT_CODE:
+            num := ln_dyn_num(v)
+            if num >= 0 and num < g.lw.slots.Len():
+                ev := ln_quote(ln_event_name(sm.LayoutAttrOut(ai)))
+                ek := at.KindOf(a, g.lw.slots.Get(num).expr)
+                if ek == at.AST_LAMBDA:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + ln_dyn_name(num))
+                else ek == at.AST_IDENTIFIER or ek == at.AST_MEMBER:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + "() " + g.nm.kw_end)
+                else ek == at.AST_CALL:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
+                else:
+                    ln_call(g, g.nm.on, ev + g.nm.sep + "(): " + ln_dyn_name(num) + " " + g.nm.kw_end)
+                end
+            end
+            continue
+        end
+        dest := sm.LayoutAttrDest(ai)
+        if dest == sm.LA_HTML:
+            mut out := sm.LayoutAttrOut(ai)
+            if str.IndexOf(out, "*") >= 0:
+                out = hyphenate(item.name)
+            end
+            if vt == sm.VT_BOOL or (vt == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false"))):
+                seen_attr.Push(out)
+                ln_call(g, g.nm.bool_attr, ln_quote(out) + g.nm.sep + ln_bool_expr(g, v))
+            else:
+                mv := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.Push(out)
+                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv))
+            end
+        else dest == sm.LA_SOURCE:
+            mout := sm.LayoutAttrOut(ai)
+            if str.Len(mout) == 0:
+                mout = "src"
+            end
+            seen_attr.Push(mout)
+            ln_call(g, g.nm.attr, ln_quote(mout) + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_CLASS:
+            seen_attr.Push("class")
+            ln_call(g, g.nm.attr, ln_quote("class") + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_DIR or dest == sm.LA_LANG:
+            out := sm.LayoutAttrOut(ai)
+            mv2 := is_dyn(v) ? v : attr_value_map(ai, v)
+            seen_attr.Push(out)
+            ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv2))
+        else dest == sm.LA_CSS or dest == sm.LA_HTML_OR_CSS:
+            mut prop := sm.LayoutAttrOut(ai)
+            if str.Len(prop) == 0:
+                prop = hyphenate(key)
+            end
+            if dest == sm.LA_HTML_OR_CSS:
+                if is_dyn(v):
+                    if str.Len(prop) > 0:
+                        seen_style.Push(prop)
+                        ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(v))
+                    else:
+                        out2 := sm.LayoutAttrOut(ai)
+                        seen_attr.Push(out2)
+                        ln_call(g, g.nm.attr, ln_quote(out2) + g.nm.sep + ln_str_expr(v))
+                    end
+                else lo_all_digits(v):
+                    out2 := sm.LayoutAttrOut(ai)
+                    seen_attr.Push(out2)
+                    ln_call(g, g.nm.attr, ln_quote(out2) + g.nm.sep + ln_quote(v))
+                else:
+                    mv3 := attr_value_map(ai, v)
+                    if str.Len(prop) > 0:
+                        seen_style.Push(prop)
+                        ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                    else:
+                        out2 := sm.LayoutAttrOut(ai)
+                        seen_attr.Push(out2)
+                        ln_call(g, g.nm.attr, ln_quote(out2) + g.nm.sep + ln_str_expr(mv3))
+                    end
+                end
+            else:
+                if str.Len(prop) > 0:
+                    mv3 := is_dyn(v) ? v : attr_value_map(ai, v)
+                    seen_style.Push(prop)
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(prop) + g.nm.sep + ln_str_expr(mv3))
+                end
+            end
+        else dest == sm.LA_STYLE:
+            seen_attr.Push("style")
+            ln_call(g, g.nm.attr, ln_quote("style") + g.nm.sep + ln_str_expr(v))
+        else dest == sm.LA_META or dest == sm.LA_CONTENT:
+            out := sm.LayoutAttrOut(ai)
+            if str.Len(out) > 0:
+                mv4 := is_dyn(v) ? v : attr_value_map(ai, v)
+                seen_attr.Push(out)
+                ln_call(g, g.nm.attr, ln_quote(out) + g.nm.sep + ln_str_expr(mv4))
+            end
+        end
+    end
+    if page_ei >= 0:
+        ekey := sm.LayoutElemKey(page_ei)
+        repeat sm.LayoutAttrCount() in d:
+            if not sm.LayoutAttrHasDefault(d) or not sm.LayoutCsvHas(sm.LayoutAttrScope(d), ekey):
+                continue
+            end
+            ddest := sm.LayoutAttrDest(d)
+            dout := sm.LayoutAttrOut(d)
+            ddef := sm.LayoutAttrDefault(d)
+            if ddest == sm.LA_HTML:
+                mut seen := false
+                repeat seen_attr.Len() in si:
+                    if str.Equals(seen_attr.Get(si), dout):
+                        seen = true
+                    end
+                end
+                if not seen:
+                    ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+                end
+            else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
+                mut dprop := dout
+                if str.Len(dprop) == 0:
+                    continue
+                end
+                mut seen2 := false
+                repeat seen_style.Len() in sj:
+                    if str.Equals(seen_style.Get(sj), dprop):
+                        seen2 = true
+                    end
+                end
+                if not seen2:
+                    ln_call(g, g.nm.set_text, g.nm.ui + ".STATE_BASE" + g.nm.sep + ln_quote(dprop) + g.nm.sep + ln_quote(ddef))
+                end
+            end
         end
     end
     if str.Equals(lp.Code(pack), "fa"):
@@ -883,25 +1245,8 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
             ln_call(g, g.nm.dir, ln_quote("rtl"))
         end
     end
-    root_ei := sm.LayoutElemLookup("page")
-    if root_ei < 0:
-        ret
-    end
-    mut rla := LoAttrs {}
-    defer lo_free_attrs(rla)
-    lo_collect_attrs(g.cx, a, lb, root_ei, "body", rla)
-    if str.Len(rla.css) > 0:
-        css.CompileRule(g.prog, "body", rla.css, "")
-    end
-    if str.Len(rla.hover) > 0:
-        css.CompileRule(g.prog, "body:hover", rla.hover, "")
-    end
-    if str.Len(rla.focus) > 0:
-        css.CompileRule(g.prog, "body:focus", rla.focus, "")
-    end
-    if str.Len(rla.active) > 0:
-        css.CompileRule(g.prog, "body:active", rla.active, "")
-    end
+    ln_style_attrs(g, a, lb)
+    ln_pseudo_attrs(g, a, lb, page_ei)
     repeat at.ChildCount(a, lb) in j:
         jid := at.Child(a, lb, j)
         jt := at.Get(a, jid)
@@ -912,7 +1257,7 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
 end
 
 func ln_state_type(g &: LnGen, gi: int): str:
-    lit := g_lo_st_lit.get(gi)
+    lit := g_lo_st_lit.Get(gi)
     if str.Equals(lit, "int"):
         ret g.nm.t_int
     end
@@ -935,8 +1280,8 @@ func ln_rx_source(g &: LnGen): str:
     repeat words in w:
         s += n.kw_mut + " " + ln_rx_word_name(w) + " := 0 " + n.kw_as + " " + n.t_i64 + "\n"
     end
-    repeat g_lo_st_comp.len() in gi:
-        if ln_rx_comp_has_state(g.rx, g_lo_st_comp.get(gi)):
+    repeat g_lo_st_comp.Len() in gi:
+        if ln_rx_comp_has_state(g.rx, g_lo_st_comp.Get(gi)):
             s += n.kw_mut + " __salam_st_" + co.U64Toa(gi as u64) + " := " + n.vec + " {} " + n.kw_as + " " + n.vec + "<" + ln_state_type(g, gi) + ">\n"
         end
     end
@@ -952,35 +1297,35 @@ func ln_rx_source(g &: LnGen): str:
     s += "    " + n.kw_ret + " __salam_t\n" + n.kw_end + "\n\n"
     s += n.kw_func + " __salam_sites():\n"
     s += "    " + n.ui + "." + n.site + "(0" + n.sep + "0 - 1" + n.sep + "0" + n.sep + "0)\n"
-    repeat g.rx.site_comp.len() in si:
+    repeat g.rx.site_comp.Len() in si:
         mut masks := Vector {} as Vector<int>
         repeat words:
-            masks.push(0)
+            masks.Push(0)
         end
-        repeat g.rx.dep_site.len() in di:
-            if g.rx.dep_site.get(di) == si:
-                id := g.rx.dep_id.get(di)
+        repeat g.rx.dep_site.Len() in di:
+            if g.rx.dep_site.Get(di) == si:
+                id := g.rx.dep_id.Get(di)
                 wi := id / LN_RX_BITS
-                masks.set(wi, masks.get(wi) | ln_rx_mask(id))
+                masks.Set(wi, masks.Get(wi) | ln_rx_mask(id))
             end
         end
-        comp := g.rx.site_comp.get(si)
+        comp := g.rx.site_comp.Get(si)
         cs := comp < 0 ? "0 - 1" : co.U64Toa(comp as u64)
         mut any := false
         repeat words in w3:
-            if masks.get(w3) != 0:
+            if masks.Get(w3) != 0:
                 any = true
-                s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + co.U64Toa(w3 as u64) + n.sep + co.U64Toa(masks.get(w3) as u64) + ")\n"
+                s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + co.U64Toa(w3 as u64) + n.sep + co.U64Toa(masks.Get(w3) as u64) + ")\n"
             end
         end
         if not any and comp >= 0:
             s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + "0" + n.sep + "0)\n"
         end
-        masks.free()
+        masks.Free()
     end
     s += n.kw_end + "\n\n"
     s += n.kw_func + " __salam_marks():\n"
-    repeat g.rx.ids.len() in id2:
+    repeat g.rx.ids.Len() in id2:
         s += "    " + ln_rx_word_name(id2 / LN_RX_BITS) + " |= " + co.U64Toa(ln_rx_mask(id2) as u64) + "\n"
     end
     each ci in g.rx.st_comps:
@@ -994,14 +1339,13 @@ end
 
 func ln_source(g &: LnGen, with_main: bool): str:
     n := g.nm
-    mut s := n.kw_import + " " + n.import_ui + "\n" + n.kw_import + " " + n.import_css + "\n\n"
+    mut s := n.kw_import + " " + n.import_ui + "\n\n"
     s += ln_rx_source(g)
     rline := "    __salam_b." + n.reactive + "(" + co.U64Toa(ln_rx_words(g.rx) as u64) + n.sep + "(__salam_w: " + n.t_int + "): " + n.kw_ret + " __salam_take(__salam_w) " + n.kw_end + n.sep + "(): __salam_sites() " + n.kw_end + ")\n"
     s += n.kw_func + " " + NATIVE_PAGE_VIEW + "(__salam_b: " + n.ui + "." + n.builder + "):\n" + rline + g.out + n.kw_end + "\n\n"
-    s += css.ProgramSource(g.prog, NATIVE_STYLES, n.css) + "\n"
     if with_main:
         s += n.kw_func + " " + n.entry + ":\n"
-        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + NATIVE_STYLES + "() " + n.kw_end + n.sep + "(__salam_b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(__salam_b) " + n.kw_end + ")\n"
+        s += "    " + n.ui + "." + n.run + "((): " + n.kw_ret + " " + n.ui + "." + n.no_patches + "() " + n.kw_end + n.sep + "(__salam_b: " + n.ui + "." + n.builder + "): " + NATIVE_PAGE_VIEW + "(__salam_b) " + n.kw_end + ")\n"
         s += n.kw_end + "\n"
     end
     ret s
@@ -1015,50 +1359,55 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     if lb == 0:
         ret false
     end
-    g_lo_st_comp.clear()
-    g_lo_st_name.clear()
-    g_lo_st_type.clear()
-    g_lo_st_lit.clear()
-    g_lo_st_kind.clear()
+    g_lo_st_comp.Clear()
+    g_lo_st_name.Clear()
+    g_lo_st_type.Clear()
+    g_lo_st_lit.Clear()
+    g_lo_st_kind.Clear()
     li_reset()
     g_lo_native_scopes = true
     _ex := ExpandBlock(log, pack, ct, a, prog, lb, lo_dir_of(file))
     g_lo_native_scopes = false
+    sm.LayoutSetValueLang(pack == lp.LP_FA)
+    defer sm.LayoutClearValueLang()
     sm.LayoutResolve(a, lb)
     mut g := LnGen {}
     defer ln_rx_free(g.rx)
-    defer g.lw.slots.free()
-    defer g.lw.shadow.free()
-    defer g.lw.funcs.free()
-    defer g.sel.free()
-    defer g.row_keys.free()
+    defer g.lw.slots.Free()
+    defer g.lw.shadow.Free()
+    defer g.lw.funcs.Free()
+    defer g.row_keys.Free()
     g.lw.prog = prog
-    g.prog = css.NewProgram()
     g.nm = ln_names(pack)
     g.cx.log = log
     g.cx.file = file
     g.cx.compact = true
     lo_collect_funcs(g.lw, a, prog)
     lo_shadow_globals(g.lw, a, prog)
-    ln_pre_events(g, a, lb, 0 - 1)
+    page_ei := sm.LayoutElemLookup("page")
+    ln_pre_events(g, a, lb, page_ei)
     lo_walk(g.lw, a, lb, 0, 0 - 1)
     ln_rx_init(g.rx, a, prog)
     mut rdeps := Vector {} as Vector<int>
     ln_rx_own(g.rx, g.lw, a, lb, rdeps)
     _root := ln_rx_site(g.rx, 0 - 1, rdeps)
-    rdeps.free()
+    rdeps.Free()
     ln_page_settings(g, a, lb, pack)
-    ln_items(g, a, lb)
-    errs := css.ProgramErrors(g.prog)
-    repeat errs in ei:
-        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "native page style: " + css.ProgramError(g.prog, ei))
+    mut page_repeat := ln_repeat_count(a, lb)
+    if page_repeat < 1:
+        page_repeat = 1
+    end
+    mut rpi := 0
+    until rpi >= page_repeat:
+        ln_items(g, a, lb)
+        rpi++
     end
     is_fa := str.Equals(lp.Code(pack), "fa")
     mut text := ln_source(g, not ln_has_main(a, prog, pack))
     if is_fa:
         text = ln_to_fa(text, pack)
     end
-    if os.Env("SALAM_NATIVE_DUMP").len() > 0:
+    if os.Env("SALAM_NATIVE_DUMP").Len() > 0:
         println text
     end
     base := at.Count(a)
@@ -1067,40 +1416,40 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
         ret false
     end
     mut chunks := Vector {} as Vector<str>
-    defer chunks.free()
+    defer chunks.Free()
     mut pn := at.Get(a, prog)
     mut list := Vector {} as Vector<int>
     repeat at.ChildCount(a, sp) in ci:
         cid := at.Child(a, sp, ci)
         if at.KindOf(a, cid) == at.AST_IMPORT and not lo_has_import(a, prog, at.Get(a, cid).name):
-            list.push(cid)
+            list.Push(cid)
         end
     end
     mut gvars := Vector {} as Vector<int>
-    defer gvars.free()
+    defer gvars.Free()
     repeat at.ChildCount(a, sp) in cv:
         vid := at.Child(a, sp, cv)
         if at.KindOf(a, vid) == at.AST_VAR_DECL:
             ln_rx_fix_types(a, vid)
             lo_span_tree(a, vid, lb, base)
-            gvars.push(vid)
+            gvars.Push(vid)
         end
     end
     mut placed := false
-    repeat pn.list.len() in k:
-        item := pn.list.get(k)
+    repeat pn.list.Len() in k:
+        item := pn.list.Get(k)
         ph := at.ToplevelOrderPhase(a, item)
         if not placed and (ph == at.AST_ORDER_VAR or ph == at.AST_ORDER_TYPEDEF or ph == at.AST_ORDER_FUNC):
             each gv in gvars:
-                list.push(gv)
+                list.Push(gv)
             end
             placed = true
         end
-        list.push(item)
+        list.Push(item)
     end
     if not placed:
         each gv2 in gvars:
-            list.push(gv2)
+            list.Push(gv2)
         end
     end
     repeat at.ChildCount(a, sp) in cj:
@@ -1111,8 +1460,8 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
         fnode := at.Get(a, cid2)
         if str.Equals(fnode.name, "__salam_marks"):
             blk := at.Get(a, fnode.a)
-            repeat blk.list.len() in ti:
-                g.rx.tmpl.push(blk.list.get(ti))
+            repeat blk.list.Len() in ti:
+                g.rx.tmpl.Push(blk.list.Get(ti))
             end
             continue
         end
@@ -1127,28 +1476,28 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
         mut fn3 := at.Get(a, cid2)
         fn3.file_boundary = true
         at.Put(a, cid2, fn3)
-        list.push(cid2)
+        list.Push(cid2)
     end
     mut old := pn.list
     pn.list = list
     at.Put(a, prog, pn)
-    old.free()
+    old.Free()
     ln_rx_mark_program(g.rx, a, prog)
     mut lbm := at.Get(a, lb)
     lbm.view_glue = true
     at.Put(a, lb, lbm)
     mut pn2 := at.Get(a, prog)
     mut kept := Vector {} as Vector<int>
-    repeat pn2.list.len() in ck:
-        cdid := pn2.list.get(ck)
+    repeat pn2.list.Len() in ck:
+        cdid := pn2.list.Get(ck)
         if at.KindOf(a, cdid) != at.AST_LAYOUT_COMPONENT:
-            kept.push(cdid)
+            kept.Push(cdid)
         end
     end
     mut old2 := pn2.list
     pn2.list = kept
     at.Put(a, prog, pn2)
-    old2.free()
+    old2.Free()
     lg.Log(log, lg.PH_DRIVER, lg.LOG_INFO, "page " + file + " compiled for a native window")
     ret true
 end

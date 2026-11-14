@@ -34,6 +34,14 @@ if !exists('g:salam_check_on_save')
   let g:salam_check_on_save = 0
 endif
 
+if !exists('g:salam_switch_lint')
+  let g:salam_switch_lint = 'off'
+endif
+
+if !exists('g:salam_switch_lint_min')
+  let g:salam_switch_lint_min = 4
+endif
+
 command! -nargs=* -complete=file SalamRun     call salam#Run(<q-args>)
 command! -nargs=* -complete=file SalamBuild   call salam#Build(<q-args>)
 command! -nargs=0                SalamCheck   call salam#Check()

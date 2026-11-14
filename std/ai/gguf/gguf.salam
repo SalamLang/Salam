@@ -78,15 +78,19 @@ pub struct MetaValue:
     @fa "آرایه رشته"
     pub strs: Vector<str> = Vector {}
 
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        this.ints.Free()
+        this.floats.Free()
+        _free_read_str(this.s)
+        repeat this.strs.Len() in i: _free_read_str(this.strs.Get(i)) end
+        this.strs.Free()
+    end
+
     @en "free"
     @fa "آزادسازی"
-    pub func free():
-        this.ints.free()
-        this.floats.free()
-        _free_read_str(this.s)
-        repeat this.strs.len() in i: _free_read_str(this.strs.get(i)) end
-        this.strs.free()
-    end
+    pub func free(): this.Free() end
 end
 
 @en "TensorInfo"
@@ -105,20 +109,19 @@ pub struct TensorInfo:
     @fa "جابجایی"
     pub offset: i64 = 0
 
-    @en "count"
+    @en "Count"
     @fa "شمار"
-    pub func count(): int:
+    pub func Count(): int:
         mut n := 1
-        repeat this.dims.len() in i: n *= this.dims.get(i) end
+        repeat this.dims.Len() in i: n *= this.dims.Get(i) end
         ret n
     end
 
-    @en "free"
-    @fa "آزادسازی"
-    pub func free():
-        _free_read_str(this.name)
-        this.dims.free()
-    end
+    @en "count"
+    @fa "شمار"
+    pub func count(): this.Count() end
+
+
 end
 
 @en "Gguf"
@@ -146,58 +149,58 @@ pub struct Gguf:
     @fa "بایت‌های خام"
     pub raw: compress.ByteBuf = compress.ByteBuf {}
 
-    @en "meta_index"
+    @en "MetaIndex"
     @fa "نمایه فراداده"
-    pub func meta_index(key: str): int:
-        repeat this.keys.len() in i:
-            if str.Equals(this.keys.get(i), key): ret i end
+    pub func MetaIndex(key: str): int:
+        repeat this.keys.Len() in i:
+            if str.Equals(this.keys.Get(i), key): ret i end
         end
         ret 0 - 1
     end
 
+    @en "meta_index"
+    @fa "نمایه فراداده"
+    pub func meta_index(key: str): this.MetaIndex(key) end
+
+    @en "MetaInt"
+    @fa "فراداده صحیح"
+    pub func MetaInt(key: str, dflt: i64): i64:
+        k := this.MetaIndex(key)
+        if k < 0: ret dflt end
+        ret this.values.Get(k).i
+    end
+
     @en "meta_int"
     @fa "فراداده صحیح"
-    pub func meta_int(key: str, dflt: i64): i64:
-        k := this.meta_index(key)
-        if k < 0: ret dflt end
-        ret this.values.get(k).i
+    pub func meta_int(key: str, dflt: i64): this.MetaInt(key, dflt) end
+
+    @en "MetaStr"
+    @fa "فراداده رشته"
+    pub func MetaStr(key: str): str:
+        k := this.MetaIndex(key)
+        if k < 0: ret "" end
+        ret this.values.Get(k).s
     end
 
     @en "meta_str"
     @fa "فراداده رشته"
-    pub func meta_str(key: str): str:
-        k := this.meta_index(key)
-        if k < 0: ret "" end
-        ret this.values.get(k).s
-    end
+    pub func meta_str(key: str): this.MetaStr(key) end
 
-    @en "tensor_index"
+    @en "TensorIndex"
     @fa "نمایه تانسور"
-    pub func tensor_index(name: str): int:
-        repeat this.tensors.len() in i:
-            t := this.tensors.get(i)
+    pub func TensorIndex(name: str): int:
+        repeat this.tensors.Len() in i:
+            t := this.tensors.Get(i)
             if str.Equals(t.name, name): ret i end
         end
         ret 0 - 1
     end
 
-    @en "free"
-    @fa "آزادسازی"
-    pub func free():
-        repeat this.keys.len() in i: _free_read_str(this.keys.get(i)) end
-        this.keys.free()
-        repeat this.values.len() in i:
-            mut v := this.values.get(i)
-            v.free()
-        end
-        this.values.free()
-        repeat this.tensors.len() in i:
-            mut t := this.tensors.get(i)
-            t.free()
-        end
-        this.tensors.free()
-        compress.BufFree(this.raw)
-    end
+    @en "tensor_index"
+    @fa "نمایه تانسور"
+    pub func tensor_index(name: str): this.TensorIndex(name) end
+
+
 end
 
 func _free_read_str(s: str):
@@ -268,17 +271,17 @@ func _read_value(rd &: compress.ByteReader, kind: int, v &: MetaValue) throws:
         v.elem_kind = ek
         repeat cnt as int:
             if ek == META_STRING:
-                v.strs.push(try _read_str(rd))
+                v.strs.Push(try _read_str(rd))
             else ek == 6 or ek == 12:
                 mut f := 0.0
                 mut iv := 0 as i64
                 try _read_scalar(rd, ek, iv, f)
-                v.floats.push(f)
+                v.floats.Push(f)
             else:
                 mut f := 0.0
                 mut iv := 0 as i64
                 try _read_scalar(rd, ek, iv, f)
-                v.ints.push(iv)
+                v.ints.Push(iv)
             end
         end
         ret
@@ -303,16 +306,16 @@ func _parse(g &: Gguf) throws:
     end
     repeat nkv as int:
         key := try _read_str(rd)
-        g.keys.push(key)
+        g.keys.Push(key)
         kind := try binary.ReadU32LE(rd)
         mut v := MetaValue {}
         try:
             _read_value(rd, kind, v)
         catch e:
-            v.free()
+            v.Free()
             throw e.with_path(str.Clone(key))
         end
-        g.values.push(v)
+        g.values.Push(v)
     end
     repeat ntensors as int:
         mut t := TensorInfo {}
@@ -323,15 +326,15 @@ func _parse(g &: Gguf) throws:
             if nd < 0 or nd > 8:
                 throw _gg_err(ErrorKind.Syntax, "tensor rank " + nd + " (at most 8)", at, "gguf.rank")
             end
-            repeat nd: t.dims.push(binary.ReadU64LE(rd) as int) end
+            repeat nd: t.dims.Push(binary.ReadU64LE(rd) as int) end
             t.ggml_type = binary.ReadU32LE(rd)
             t.offset = binary.ReadU64LE(rd)
         catch e:
             path := str.Clone(t.name)
-            t.free()
+            t.Free()
             throw e.with_path(path)
         end
-        g.tensors.push(t)
+        g.tensors.Push(t)
     end
     al := g.meta_int("general.alignment", 32)
     if al > 0: g.alignment = al as int end
@@ -349,7 +352,7 @@ pub func ParseGguf(buf: compress.ByteBuf): Gguf throws:
         _parse(g)
     catch e:
         g.raw = compress.ByteBuf {}
-        g.free()
+        g.Free()
         throw e.wrap("gguf")
     end
     ret g

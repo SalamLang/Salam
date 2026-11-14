@@ -1,0 +1,273 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "lockfile"
+@fa "پرونده قفل"
+package lockfile
+
+import os
+import io
+import mem
+import str
+import conv
+import filepath
+import os.shell
+import os.desktop.paths
+
+// Simple PID/lock file helpers for desktop apps (best-effort).
+// Not a replacement for robust OS-level advisory locks on all filesystems,
+// but useful for coarse single-instance/process coordination.
+
+@en "Lock"
+@fa "قفل"
+pub struct Lock:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "acquired"
+    @fa "گرفته‌شده"
+    pub acquired: bool = false
+end
+
+@en "PathForApp"
+@fa "مسیر برای برنامه"
+pub func PathForApp(app_id: str, name: str = "app.lock"): str:
+    dir := paths.AppRuntimeDir(app_id)
+    if str.Len(dir) == 0:
+        dir = paths.AppTempDir(app_id)
+    end
+    _mk := os.MkdirAll(dir)
+    mut fname := str.Clone("app.lock")
+    if str.Len(name) > 0:
+        mem.Free(fname as void*)
+        fname = str.Clone(name)
+    end
+    p := filepath.Join(dir, fname)
+    mem.Free(dir as void*)
+    mem.Free(fname as void*)
+    ret p
+end
+
+@en "ReadPid"
+@fa "خواندن شناسه فرآیند"
+pub func ReadPid(path: str): int:
+    if str.Len(path) == 0 or not os.Exists(path):
+        ret -1
+    end
+    text := io.ReadFile(path)
+    t := str.Trim(text)
+    mem.Free(text as void*)
+    if str.Len(t) == 0:
+        mem.Free(t as void*)
+        ret -1
+    end
+    pid := conv.ParseIntOr(t, -1)
+    mem.Free(t as void*)
+    ret pid
+end
+
+@en "IsStale"
+@fa "کهنه است"
+pub func IsStale(path: str): bool:
+    if str.Len(path) == 0 or not os.Exists(path):
+        ret true
+    end
+    pid := ReadPid(path)
+    if pid <= 0:
+        ret true
+    end
+    if pid == os.Pid():
+        ret false
+    end
+    // Best-effort liveness check; may be conservative on some platforms.
+    if SALAM_OS_WINDOWS:
+        pid_text := conv.FormatInt(pid as i64)
+        mut args := Vector {} as Vector<str>
+        args.Push("/FI")
+        args.Push("PID eq " + pid_text)
+        args.Push("/NH")
+        r := os.shell.Run("tasklist", args)
+        args.Free()
+        mem.Free(pid_text as void*)
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        // tasklist prints "INFO: No tasks..." when not found; treat presence of PID digits as alive.
+        if out.Len() == 0:
+            mem.Free(out as void*)
+            ret true
+        end
+        pid2 := conv.FormatInt(pid as i64)
+        alive := not str.Contains(out, "No tasks") and str.Contains(out, pid2)
+        mem.Free(pid2 as void*)
+        mem.Free(out as void*)
+        ret not alive
+    end
+    // /proc/<pid> exists on Linux; on macOS/BSD fall back to kill -0.
+    pid_text := conv.FormatInt(pid as i64)
+    proc_path := "/proc/".Concat(pid_text)
+    if os.Exists(proc_path):
+        mem.Free(proc_path as void*)
+        mem.Free(pid_text as void*)
+        ret false
+    end
+    mem.Free(proc_path as void*)
+    // Try shell probe (best-effort). Exit code 0 => process exists/signalable.
+    cmd := "kill -0 ".Concat(pid_text).Concat(" >/dev/null 2>&1; echo $?")
+    mem.Free(pid_text as void*)
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    out := str.Trim(r.out)
+    mem.Free(r.out as void*)
+    mem.Free(r.err as void*)
+    stale := out != "0"
+    mem.Free(out as void*)
+    ret stale
+end
+
+@en "OwnerPid"
+@fa "شناسه فرآیند مالک"
+pub func OwnerPid(path: str): int:
+    ret ReadPid(path)
+end
+
+@en "IsLockedByUs"
+@fa "توسط ما قفل شده"
+pub func IsLockedByUs(path: str): bool:
+    ret ReadPid(path) == os.Pid()
+end
+
+@en "TryAcquire"
+@fa "تلاش برای گرفتن"
+pub func TryAcquire(path: str): Lock:
+    ret Acquire(path, false)
+end
+
+@en "AcquireForApp"
+@fa "گرفتن برای برنامه"
+pub func AcquireForApp(app_id: str, name: str = "app.lock", force_stale: bool = true): Lock:
+    ret WithAppLock(app_id, name, force_stale)
+end
+
+@en "ReleasePath"
+@fa "رها کردن مسیر"
+pub func ReleasePath(path: str): bool:
+    mut lk := Lock { path = str.Clone(path), acquired = Exists(path) }
+    Release(lk)
+    ok := not Exists(path)
+    mem.Free(lk.path as void*)
+    ret ok
+end
+
+@en "Acquire"
+@fa "گرفتن"
+pub func Acquire(path: str, force_stale: bool = true): Lock:
+    mut lk := Lock { path = str.Clone(path), acquired = false }
+    if str.Len(path) == 0:
+        ret lk
+    end
+    parent := filepath.Dir(path)
+    _mk := os.MkdirAll(parent)
+    mem.Free(parent as void*)
+    if os.Exists(path):
+        if force_stale and IsStale(path):
+            _rm := os.Remove(path)
+        else:
+            ret lk
+        end
+    end
+    // Exclusive create is not universally exposed; best-effort create-if-missing.
+    if os.Exists(path):
+        ret lk
+    end
+    content := conv.FormatInt(os.Pid() as i64)
+    ok := io.WriteFile(path, content) >= 0
+    mem.Free(content as void*)
+    lk.acquired = ok
+    ret lk
+end
+
+@en "Release"
+@fa "رها کردن"
+pub func Release(lk &: Lock):
+    if str.Len(lk.path) == 0:
+        ret
+    end
+    if os.Exists(lk.path):
+        pid := ReadPid(lk.path)
+        if pid <= 0 or pid == os.Pid():
+            _rm := os.Remove(lk.path)
+        end
+    end
+    lk.acquired = false
+end
+
+@en "Exists"
+@fa "وجود دارد"
+pub func Exists(path: str): bool:
+    if str.Len(path) == 0:
+        ret false
+    end
+    ret os.Exists(path)
+end
+
+@en "IsLocked"
+@fa "قفل است"
+pub func IsLocked(path: str): bool:
+    ret Exists(path) and not IsStale(path)
+end
+
+@en "Refresh"
+@fa "تازه‌سازی"
+pub func Refresh(path: str): bool:
+    // Best-effort: rewrite PID for current process if we own the lock.
+    if not IsLockedByUs(path):
+        ret false
+    end
+    content := conv.FormatInt(os.Pid() as i64)
+    ok := io.WriteFile(path, content) >= 0
+    mem.Free(content as void*)
+    ret ok
+end
+
+@en "CleanStale"
+@fa "پاک‌سازی کهنه"
+pub func CleanStale(path: str): bool:
+    if str.Len(path) == 0 or not os.Exists(path):
+        ret false
+    end
+    if not IsStale(path):
+        ret false
+    end
+    _rm := os.Remove(path)
+    ret not os.Exists(path)
+end
+
+@en "CleanStaleForApp"
+@fa "پاک‌سازی کهنه برنامه"
+pub func CleanStaleForApp(app_id: str, name: str = "app.lock"): bool:
+    p := PathForApp(app_id, name)
+    ok := CleanStale(p)
+    mem.Free(p as void*)
+    ret ok
+end
+
+@en "WithAppLock"
+@fa "با قفل برنامه"
+pub func WithAppLock(app_id: str, name: str = "app.lock", force_stale: bool = true): Lock:
+    p := PathForApp(app_id, name)
+    lk := Acquire(p, force_stale)
+    mem.Free(p as void*)
+    ret lk
+end

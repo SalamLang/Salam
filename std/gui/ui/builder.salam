@@ -15,9 +15,33 @@
 package ui
 
 import str
-import gui.css
 import gui.paint
+import gui.style
 import gui.window
+
+@en "Patch"
+@fa "وصله‌سبک"
+pub struct Patch:
+    @en "props"
+    @fa "ویژگی‌ها"
+    pub props: Vector<int> = Vector {} as Vector<int>
+    @en "values"
+    @fa "مقدارها"
+    pub values: Vector<style.Value> = Vector {} as Vector<style.Value>
+
+    @en "Add"
+    @fa "بیفزا"
+    pub func Add(prop: int, v: style.Value):
+        this.props.Push(prop)
+        this.values.Push(v)
+    end
+
+    @en "Len"
+    @fa "طول"
+    pub func Len(): int:
+        ret this.props.Len()
+    end
+end
 
 @en "Builder"
 @fa "سازنده‌صفحه"
@@ -34,50 +58,60 @@ pub struct Builder:
     @en "Lang"
     @fa "زبان صفحه"
     pub func Lang(s: str):
-        _set_attr(_bd, _bd.html, "lang", s)
-        _bd.lang = _attr(_bd, _bd.html, "lang")
+        _sfree(_bd.lang)
+        _bd.lang = str.Clone(s)
     end
 
     @en "Dir"
     @fa "جهت صفحه"
     pub func Dir(s: str):
-        _set_attr(_bd, _bd.html, "dir", s)
-        _bd.dir = _attr(_bd, _bd.html, "dir")
+        _sfree(_bd.dir)
+        _bd.dir = str.Clone(s)
     end
 
     @en "Open"
     @fa "گشودن عنصر"
-    pub func Open(tag: str):
-        mut parent := _b_top()
-        if tag == "tr" and _bd.nodes[parent].tag == "table":
-            pk := _bd.nodes[parent].kids
-            if pk.len() > 0 and _bd.nodes[pk[pk.len() - 1]].tag == "tbody":
-                parent = pk[pk.len() - 1]
-            else:
-                parent = _new_node(_bd, "tbody", parent)
-            end
+    pub func Open(kind: str):
+        n := _new_node(_bd, kind, _b_top())
+        _bstack.Push(n)
+    end
+
+    @en "Patch"
+    @fa "وصله عنصر"
+    pub func Patch(state: int, id: int):
+        if id < 0 or id >= _patches.Len() or state < 0 or state >= _STATES:
+            ret
         end
-        n := _new_node(_bd, tag, parent)
-        _bstack.push(n)
+        mut nd := _bd.nodes.Ref(_b_top())
+        nd.pst.Push(state)
+        nd.pid.Push(id)
+        nd.smask |= 1 << state
     end
 
-    @en "Decls"
-    @fa "اعلان های عنصر"
-    pub func Decls(base: int, hover: int, focus: int, active: int):
-        mut nd := _bd.nodes.ref(_b_top())
-        nd.d_base = base
-        nd.d_hover = hover
-        nd.d_focus = focus
-        nd.d_active = active
+    @en "Set"
+    @fa "تنظیم سبک"
+    pub func Set(state: int, prop: int, v: style.Value):
+        if prop < 0 or prop >= style.PROP_COUNT or state < 0 or state >= _STATES:
+            ret
+        end
+        mut nd := _bd.nodes.Ref(_b_top())
+        nd.dst.Push(state)
+        nd.dprop.Push(prop)
+        nd.dval.Push(v)
+        nd.smask |= 1 << state
     end
 
-    @en "Dyn"
-    @fa "سبک زمان اجرا"
-    pub func Dyn(prop: str, value: str):
-        id := css.DynDecl(_e.prog, prop, value)
-        if id >= 0:
-            mut nd := _bd.nodes.ref(_b_top())
-            nd.dyn.push(id)
+    @en "SetText"
+    @fa "تنظیم سبک متنی"
+    pub func SetText(state: int, prop: int, text: str):
+        if prop < 0 or prop >= style.PROP_COUNT:
+            ret
+        end
+        mut v := style.Value {}
+        if style.Parse(prop, text, v):
+            this.Set(state, prop, v)
+        else:
+            println "ui: " + style.PropName(prop) + " = \"" + text + "\": " + style.Error(prop, text)
         end
     end
 
@@ -85,18 +119,6 @@ pub struct Builder:
     @fa "شناسه عنصر"
     pub func Id(s: str):
         _set_attr(_bd, _b_top(), "id", s)
-    end
-
-    @en "Class"
-    @fa "کلاس عنصر"
-    pub func Class(s: str):
-        top := _b_top()
-        old := _attr(_bd, top, "class")
-        if old.len() > 0:
-            _set_attr(_bd, top, "class", old + " " + s)
-        else:
-            _set_attr(_bd, top, "class", s)
-        end
     end
 
     @en "Key"
@@ -128,16 +150,16 @@ pub struct Builder:
     @en "On"
     @fa "رسیدگی رخداد"
     pub func On(event: str, fn: func ()):
-        _bd.ev_node.push(_b_top())
-        _bd.ev_kind.push(str.Clone(event))
-        _bd.ev_fn.push(fn)
+        _bd.ev_node.Push(_b_top())
+        _bd.ev_kind.Push(str.Clone(event))
+        _bd.ev_fn.Push(fn)
     end
 
     @en "Close"
     @fa "بستن عنصر"
     pub func Close():
-        if _bstack.len() > 1:
-            _x := _bstack.pop()
+        if _bstack.Len() > 1:
+            _x := _bstack.Pop()
         end
     end
 
@@ -173,51 +195,62 @@ pub struct Builder:
 end
 
 func _b_top(): int:
-    if _bstack.len() == 0:
+    if _bstack.Len() == 0:
         ret 0
     end
-    ret _bstack[_bstack.len() - 1]
+    ret _bstack[_bstack.Len() - 1]
 end
 
 func _b_begin():
     _bd = _Dom {}
     _bd.nodes = Vector {} as Vector<_Node>
-    root := _new_node(_bd, "#document", -1)
-    html := _new_node(_bd, "html", root)
-    head := _new_node(_bd, "head", html)
-    body := _new_node(_bd, "body", html)
-    _bd.html = html
-    _bd.head = head
-    _bd.body = body
-    _bstack.clear()
-    _bstack.push(body)
+    _bd.ev_node = Vector {} as Vector<int>
+    _bd.ev_kind = Vector {} as Vector<str>
+    _bd.ev_fn = Vector {} as Vector<func ()>
+    root := _new_node(_bd, "page", -1)
+    _bstack.Clear()
+    _bstack.Push(root)
 end
 
 func _build_view(): _Dom:
     _b_begin()
-    _sc_build_root(_e.cview)
+    _sc_build_root(_e.view)
     nd := _bd
     _bd = _Dom {}
-    _bstack.clear()
+    _bstack.Clear()
     ret nd
 end
 
-func _compiled_setup(program: func () css.Program, view: func (Builder)):
-    _e.prog = program()
+func _page_setup(patches: func () Vector<Patch>, view: func (Builder)):
+    _patches = patches()
     _sc_reset()
-    _e.compiled = true
-    _e.cview = view
+    _e.view = view
     _e.view_set = true
 end
 
-@en "RunCompiledWith"
-@fa "اجرای ترجمه شده با"
-pub func RunCompiledWith(program: func () css.Program, view: func (Builder), options: Options):
+@en "NewPatch"
+@fa "وصله تازه"
+pub func NewPatch(): Patch:
+    mut p := Patch {}
+    p.props = Vector {} as Vector<int>
+    p.values = Vector {} as Vector<style.Value>
+    ret p
+end
+
+@en "NoPatches"
+@fa "بی وصله"
+pub func NoPatches(): Vector<Patch>:
+    ret Vector {}
+end
+
+@en "RunPageWith"
+@fa "اجرای صفحه با"
+pub func RunPageWith(patches: func () Vector<Patch>, view: func (Builder), options: Options):
     if _e.ready:
         _free_engine()
         _e = _Engine {}
     end
-    _compiled_setup(program, view)
+    _page_setup(patches, view)
     nd := _build_view()
     if not _start_dom(nd, options):
         println "ui: cannot open a window:", window.LastError()
@@ -226,23 +259,47 @@ pub func RunCompiledWith(program: func () css.Program, view: func (Builder), opt
     _run_loop()
 end
 
-@en "RunCompiled"
-@fa "اجرای ترجمه شده"
-pub func RunCompiled(program: func () css.Program, view: func (Builder)):
-    RunCompiledWith(program, view, Options {})
+@en "RunPage"
+@fa "اجرای صفحه"
+pub func RunPage(patches: func () Vector<Patch>, view: func (Builder)):
+    RunPageWith(patches, view, Options {})
 end
 
-@en "RenderCompiled"
-@fa "نگاره ترجمه شده"
-pub func RenderCompiled(program: func () css.Program, view: func (Builder), width: int, height: int): paint.Canvas:
+@en "RenderPage"
+@fa "نگاره صفحه"
+pub func RenderPage(patches: func () Vector<Patch>, view: func (Builder), width: int, height: int): paint.Canvas:
+    ret RenderPageScaled(patches, view, width, height, 1.0)
+end
+
+@en "RenderPageScaled"
+@fa "نگاره صفحه با مقیاس"
+pub func RenderPageScaled(patches: func () Vector<Patch>, view: func (Builder), width: int, height: int, scale: f64): paint.Canvas:
     saved := _e
     _e = _Engine {}
-    _compiled_setup(program, view)
+    _page_setup(patches, view)
     nd := _build_view()
-    _render_dom(nd, width, height, 1.0)
+    _render_dom(nd, width, height, scale)
     out := _e.canvas
     _e.has_canvas = false
     _free_engine()
     _e = saved
     ret out
+end
+
+@en "DumpPage"
+@fa "گزارش صفحه"
+pub func DumpPage(patches: func () Vector<Patch>, view: func (Builder), width: int, height: int): str:
+    saved := _e
+    _e = _Engine {}
+    _page_setup(patches, view)
+    nd := _build_view()
+    _render_dom(nd, width, height, 1.0)
+    r := Dump()
+    if _e.has_canvas:
+        _e.canvas.Free()
+        _e.has_canvas = false
+    end
+    _free_engine()
+    _e = saved
+    ret r
 end

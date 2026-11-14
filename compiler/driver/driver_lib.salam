@@ -70,22 +70,98 @@ func lib_proto_of(line: str, name: str): str:
     ret str.TrimRight(str.Substr(t, 0, str.Len(t) - 1)) + ";"
 end
 
-func write_lib_header(path: str, guard: str, cfiles &: Vector<str>, names &: Vector<str>): bool:
+func lib_param_names(a &: at.Ast, d: at.Node): str:
+    mut out := ""
+    repeat d.list.Len() in i:
+        if i > 0:
+            out += ","
+        end
+        out += at.Get(a, d.list.Get(i)).name
+    end
+    ret out
+end
+
+func lib_func_param_names(a &: at.Ast, prog: int, name: str): str:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret lib_param_names(a, d)
+        end
+    end
+    ret ""
+end
+
+func lib_is_ascii(s: str): bool:
+    repeat str.Len(s) in i:
+        if byte_at(s, i) >= 128:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lib_is_ident_byte(c: int): bool:
+    ret c == 95 or c >= 128 or (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func lib_named_params(proto: str, name: str, params: str): str:
+    if str.Len(params) == 0 or lib_is_ascii(params):
+        ret proto
+    end
+    lpar := str.IndexOf(proto, name + "(") + str.Len(name)
+    rpar := str.LastIndex(proto, ")")
+    if lpar < str.Len(name) or rpar <= lpar:
+        ret proto
+    end
+    inner := str.Substr(proto, lpar + 1, rpar - lpar - 1)
+    if str.Contains(inner, "("):
+        ret proto
+    end
+    mut parts := str.Split(inner, ", ")
+    mut wanted := str.Split(params, ",")
+    defer parts.Free()
+    defer wanted.Free()
+    if parts.Len() != wanted.Len():
+        ret proto
+    end
+    mut out := str.Substr(proto, 0, lpar + 1)
+    repeat parts.Len() in i:
+        part := parts.Get(i)
+        want := wanted.Get(i)
+        if i > 0:
+            out += ", "
+        end
+        if lib_is_ascii(want):
+            out += part
+            continue
+        end
+        mut cut := str.Len(part)
+        until cut > 0 and lib_is_ident_byte(byte_at(part, cut - 1)):
+            cut--
+        end
+        out = out + str.Substr(part, 0, cut) + want
+    end
+    ret out + str.Substr(proto, rpar, str.Len(proto) - rpar)
+end
+
+func write_lib_header(
+    path: str, guard: str, cfiles &: Vector<str>, names &: Vector<str>, params &: Vector<str>
+): bool:
     mut sb := str.NewBuilder()
     str.BufAppend(sb, "#ifndef " + guard + "\n#define " + guard + "\n\n")
     str.BufAppend(sb, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n")
     str.BufAppend(sb, "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
-    repeat names.len() in ni:
-        name := names.get(ni)
+    repeat names.Len() in ni:
+        name := names.Get(ni)
         mut found := ""
-        repeat cfiles.len() in ci:
+        repeat cfiles.Len() in ci:
             if str.Len(found) > 0:
                 break
             end
-            lines := str.Split(os.ReadFile(cfiles.get(ci)), "\n")
-            defer lines.free()
-            repeat lines.len() in li:
-                p := lib_proto_of(lines.get(li), name)
+            lines := str.Split(os.ReadFile(cfiles.Get(ci)), "\n")
+            defer lines.Free()
+            repeat lines.Len() in li:
+                p := lib_proto_of(lines.Get(li), name)
                 if str.Len(p) > 0:
                     found = p
                     break
@@ -93,6 +169,9 @@ func write_lib_header(path: str, guard: str, cfiles &: Vector<str>, names &: Vec
             end
         end
         if str.Len(found) > 0:
+            if ni < params.Len():
+                found = lib_named_params(found, name, params.Get(ni))
+            end
             str.BufAppend(sb, found + "\n")
         end
     end
@@ -172,16 +251,16 @@ func lib_archive_cmd(opt &: Dr, use_tcc: bool, output: str, objs &: Vector<str>,
     str.BufAppend(sb, lib_archiver(opt, use_tcc))
     str.BufAppendChar(sb, 32)
     str.BufAppend(sb, shell_arg(output))
-    repeat objs.len() in i:
+    repeat objs.Len() in i:
         str.BufAppendChar(sb, 32)
-        str.BufAppend(sb, shell_arg(objs.get(i)))
+        str.BufAppend(sb, shell_arg(objs.Get(i)))
     end
-    repeat links.len() in j:
+    repeat links.Len() in j:
         mut mapped := Vector {} as Vector<str>
-        defer mapped.free()
-        if native_args(links.get(j), mapped):
-            repeat mapped.len() in k:
-                m := mapped.get(k)
+        defer mapped.Free()
+        if native_args(links.Get(j), mapped):
+            repeat mapped.Len() in k:
+                m := mapped.Get(k)
                 if str.Len(m) > 0 and byte_at(m, 0) != 45:
                     str.BufAppendChar(sb, 32)
                     str.BufAppend(sb, shell_arg(m))
@@ -226,8 +305,8 @@ func lib_write_msvc_import(opt &: Dr, output: str, stem: str, exports &: Vector<
     dir := pth.PathDir(output)
     def_path := pth.PathJoin(dir, stem + ".def")
     mut text := "LIBRARY " + pth.PathBase(output) + "\nEXPORTS\n"
-    repeat exports.len() in i:
-        text = text + "    " + exports.get(i) + "\n"
+    repeat exports.Len() in i:
+        text = text + "    " + exports.Get(i) + "\n"
     end
     if os.WriteFile(def_path, text) < 0:
         ret ""
@@ -280,8 +359,8 @@ func lib_ast_exports(a &: at.Ast, prog: int, names &: Vector<str>, protos &: Vec
             continue
         end
         mut ps := ""
-        repeat d.list.len() in pi:
-            p := at.Get(a, d.list.get(pi))
+        repeat d.list.Len() in pi:
+            p := at.Get(a, d.list.Get(pi))
             if pi > 0:
                 ps += ", "
             end
@@ -290,8 +369,8 @@ func lib_ast_exports(a &: at.Ast, prog: int, names &: Vector<str>, protos &: Vec
         if str.Len(ps) == 0:
             ps = "void"
         end
-        names.push(d.name)
-        protos.push(lib_c_type(a, d.ty) + " " + d.name + "(" + ps + ");")
+        names.Push(d.name)
+        protos.Push(lib_c_type(a, d.ty) + " " + d.name + "(" + ps + ");")
     end
 end
 
@@ -305,8 +384,8 @@ func llvm_lib_finish(lgr: lg.Logger, opt &: Dr, objpath: str, links: Vector<str>
             str.BufAppend(sb, "ar rcs ")
         end
         str.BufAppend(sb, shell_arg(final) + " " + shell_arg(objpath))
-        repeat links.len() in i:
-            l := links.get(i)
+        repeat links.Len() in i:
+            l := links.Get(i)
             if str.Len(l) > 0 and byte_at(l, 0) != 45 and link_spec_is_path(l):
                 str.BufAppend(sb, " " + shell_arg(l))
             end
@@ -323,8 +402,8 @@ func llvm_lib_finish(lgr: lg.Logger, opt &: Dr, objpath: str, links: Vector<str>
         end
         str.BufAppend(sb, lib_link_flags(opt, final, stem))
         str.BufAppend(sb, " -o " + shell_arg(final) + " " + shell_arg(objpath))
-        repeat links.len() in j:
-            l := links.get(j)
+        repeat links.Len() in j:
+            l := links.Get(j)
             if str.Len(l) == 0:
                 continue
             end
@@ -353,13 +432,13 @@ end
 func lib_write_api(opt &: Dr, a &: at.Ast, prog: int, final: str, stem: str): int:
     mut names := Vector {} as Vector<str>
     mut protos := Vector {} as Vector<str>
-    defer names.free()
-    defer protos.free()
+    defer names.Free()
+    defer protos.Free()
     lib_ast_exports(a, prog, names, protos)
     guard := lib_header_guard(stem)
     mut h := "#ifndef " + guard + "\n#define " + guard + "\n\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
-    repeat protos.len() in k:
-        h = h + protos.get(k) + "\n"
+    repeat protos.Len() in k:
+        h = h + protos.Get(k) + "\n"
     end
     h += "\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n"
     hdr := pth.PathJoin(pth.PathDir(final), stem + ".h")

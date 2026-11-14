@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import io
+import str
+
+const KEYWORDS := "tools/salam/style-keywords.tsv"
+const PROPERTIES := "tools/salam/style-properties.tsv"
+const NAMES_OUT := "std/gui/style/names.salam"
+const TABLE_OUT := "std/gui/style/table.salam"
+const LAYOUT_OUT := "std/layout/standard/properties.salam"
+
+func rows(path: str): Vector<Vector<str>>:
+    mut out := Vector {} as Vector<Vector<str>>
+    lines := str.Split(io.ReadFile(path), "\n")
+    each i, line in lines:
+        if i == 0 or str.Trim(line) == "":
+            continue
+        end
+        out.Push(str.Split(line, "\t"))
+    end
+    ret out
+end
+
+func item_bit(name: str): int:
+    names := ["", "LEN", "NUM", "INT", "BOOL", "TIME", "ANGLE", "COLOR", "WORD", "STR", "PAINT", "EASE", "TRACK", "PROP"]
+    each i, n in names:
+        if n == name and i > 0:
+            ret 1 << i
+        end
+    end
+    printerrln "gen-style-table: unknown item kind " + name
+    ret 0
+end
+
+func cell(v: str): str:
+    ret v == "-" ? "" : v
+end
+
+func flag(v: str): str:
+    ret v == "yes" ? "true" : "false"
+end
+
+func quoted(v: str): str:
+    ret str.Replace(v, "\"", "\\\"")
+end
+
+func banner(): str:
+    text := io.ReadFile("std/gui/style/style.salam")
+    cut := text.Find("*/")
+    ret text.Substr(0, cut + 2) + "\n"
+end
+
+func main:
+    kws := rows(KEYWORDS)
+    props := rows(PROPERTIES)
+    mut known := HashMap {} as HashMap<str, bool>
+    each k in kws:
+        known.Put(k.Get(1), true)
+    end
+    head := banner() + "\npackage style\n\n"
+    mut names := head
+    each i, k in kws:
+        names += "@en \"KW_" + k.Get(0) + "\"\n@fa \"" + k.Get(3) + "\"\npub const KW_" + k.Get(0) + " := " + (i + 1) + "\n\n"
+    end
+    names += "@en \"KEYWORD_COUNT\"\n@fa \"شمار\u200cواژه\u200cها\"\npub const KEYWORD_COUNT := " + (kws.Len() + 1) + "\n\n"
+    each i, p in props:
+        names += "@en \"P_" + p.Get(0) + "\"\n@fa \"ویژگی\u200c" + str.Replace(p.Get(2), " ", "\u200c") + "\"\npub const P_" + p.Get(0) + " := " + i + "\n\n"
+    end
+    names += "@en \"PROP_COUNT\"\n@fa \"شمار\u200cویژگی\u200cها\"\npub const PROP_COUNT := " + props.Len() + "\n"
+    mut table := head
+    table += "func _kw_en(id: int): str:\n    switch id:\n"
+    each i, k in kws:
+        table += "        " + (i + 1) + ": ret \"" + k.Get(1) + "\" end\n"
+    end
+    table += "    end\n    ret \"\"\nend\n\nfunc _kw_fa(id: int): str:\n    switch id:\n"
+    each i, k in kws:
+        table += "        " + (i + 1) + ": ret \"" + k.Get(2) + "\" end\n"
+    end
+    table += "    end\n    ret \"\"\nend\n\nfunc _prop_info(id: int): PropInfo:\n    switch id:\n"
+    mut bad := 0
+    each i, p in props:
+        words := cell(p.Get(9))
+        mut mask := 0
+        each it in str.Split(cell(p.Get(4)), " "):
+            if it != "":
+                mask |= item_bit(it)
+            end
+        end
+        if words != "":
+            mask |= item_bit("WORD")
+            each w in str.Split(words, "|"):
+                if not known.Has(w):
+                    printerrln "gen-style-table: " + p.Get(1) + " uses the unknown keyword " + w
+                    bad++
+                end
+            end
+        end
+        table += "        P_" + p.Get(0) + ": ret PropInfo { id = " + i + ", name = \"" + p.Get(1) + "\", fa = \"" + p.Get(2) + "\", kind = KIND_" + p.Get(3) + ", items = " + mask + ", min = " + p.Get(5) + ", max = " + p.Get(6) + ", low = " + p.Get(7) + ", high = " + p.Get(8) + ", words = \"" + words + "\", initial = \"" + quoted(p.Get(10)) + "\", inherited = " + flag(p.Get(11)) + ", animatable = " + flag(p.Get(12)) + ", negative = " + flag(p.Get(13)) + ", percent = " + flag(p.Get(14)) + ", example = \"" + quoted(p.Get(15)) + "\" } end\n"
+    end
+    table += "    end\n    ret PropInfo { id = -1 }\nend\n"
+    mut schema := banner() + "\npackage layout\n"
+    each p in props:
+        schema += "\n@en \"" + p.Get(1) + "\"\n@fa \"" + p.Get(2) + "\"\npub const standard_" + str.Lower(p.Get(0)) + " := LayoutAttribute { destination = \"standard\" value_type = \"standard\" generated_name = \"" + p.Get(1) + "\" }\n"
+    end
+    if bad > 0:
+        ret 1
+    end
+    io.WriteFile(NAMES_OUT, names)
+    io.WriteFile(TABLE_OUT, table)
+    io.WriteFile(LAYOUT_OUT, schema)
+    println "wrote", NAMES_OUT + ",", TABLE_OUT, "and", LAYOUT_OUT + ":", kws.Len(), "keywords,", props.Len(), "properties"
+    ret 0
+end

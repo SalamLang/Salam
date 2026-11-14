@@ -1,0 +1,197 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import tui
+
+struct Ring:
+    pub use tui.BaseWidget
+    pub x: int = 0
+    pub y: int = 0
+    pub w: int = 0
+    pub h: int = 0
+    pub glyphs: tui.BorderGlyphs = tui.BorderGlyphs {}
+    pub func render(buf: tui.Buffer, _bounds: tui.Rect):
+        tui.DrawBorderGlyphs(buf, rect(this.x, this.y, this.w, this.h), this.glyphs, tui.Style {}, "")
+    end
+end
+
+struct Rules:
+    pub use tui.BaseWidget
+    pub x: int = 0
+    pub vertical: str = "│"
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        mut vertical := this.vertical
+        if buf.glyphs == tui.GlyphPolicy.ASCII:
+            vertical = "|"
+        end
+        buf.Set(bounds.x, bounds.y, tui.Cell { ch = vertical })
+        buf.Set(bounds.x, bounds.y + 8, tui.Cell { ch = vertical })
+        buf.Set(bounds.x, bounds.y + 3, tui.Cell { ch = vertical })
+        buf.Set(bounds.x, bounds.y + 5, tui.Cell { ch = vertical })
+    end
+end
+
+struct CrossRule:
+    pub use tui.BaseWidget
+    pub horizontal: str = "─"
+
+    pub func render(buf: tui.Buffer, _bounds: tui.Rect):
+        mut horizontal := this.horizontal
+        if buf.glyphs == tui.GlyphPolicy.ASCII:
+            horizontal = "-"
+        end
+        repeat 7 in i:
+            buf.Set(2 + i, 4, tui.Cell { ch = horizontal })
+        end
+    end
+end
+
+struct InnerRule:
+    pub use tui.BaseWidget
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        repeat bounds.height in i:
+            buf.Set(bounds.x, bounds.y + i, tui.Cell { ch = "│" })
+        end
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func frame(s: tui.Screen): str:
+    mut out := ""
+    repeat s.buffer.height in y:
+        if y > 0: out += "|" end
+        out += s.buffer.row_text(y)
+    end
+    ret out
+end
+
+func scene(ring_glyphs: tui.BorderGlyphs, vertical: str, horizontal: str): tui.Screen:
+    mut s := tui.NewScreen(tui.BaseWidget {}, 12, 9)
+    rules := s.Add(tui.RootId, Rules { vertical = vertical } as dyn tui.Widget)
+    s.widget(rules).SetBounds(rect(5, 0, 1, 9))
+    cross := s.Add(tui.RootId, CrossRule { horizontal = horizontal } as dyn tui.Widget)
+    s.widget(cross).SetBounds(rect(0, 0, 12, 9))
+    id := s.Add(tui.RootId, Ring { x = 1, y = 1, w = 9, h = 7, glyphs = ring_glyphs } as dyn tui.Widget)
+    s.widget(id).SetBounds(rect(0, 0, 12, 9))
+    ret s
+end
+
+func test_weight(glyphs: tui.BorderGlyphs, vertical: str, horizontal: str, top: str, bottom: str, cross: str):
+    mut s := scene(glyphs, vertical, horizontal)
+    defer s.Close()
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(5, 1).ch, top)
+    testing.AssertEqStr(s.buffer.Get(5, 7).ch, bottom)
+    testing.AssertEqStr(s.buffer.Get(5, 4).ch, cross)
+    before := frame(s)
+    s.present()
+    testing.AssertEqStr(frame(s), before)
+    s.dirty = true
+    s.present()
+    testing.AssertEqStr(frame(s), before)
+end
+
+func test_partial_repaint():
+    mut s := scene(tui.GlyphsSingle(), "│", "─")
+    defer s.Close()
+    rules := 1
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(5, 1).ch, "┴")
+    s.invalidate(rules)
+    s.widget(rules).SetBounds(rect(2, 0, 1, 9))
+    s.invalidate(rules)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(5, 1).ch, "─")
+end
+
+func test_partial_repaint_inner_rule():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 12, 9)
+    defer s.Close()
+    rules := s.Add(tui.RootId, InnerRule {} as dyn tui.Widget)
+    s.widget(rules).SetBounds(rect(5, 2, 1, 5))
+    ring := s.Add(tui.RootId, Ring { x = 1, y = 1, w = 9, h = 7, glyphs = tui.GlyphsSingle() } as dyn tui.Widget)
+    s.widget(ring).SetBounds(rect(0, 0, 12, 9))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(5, 1).ch, "┬")
+
+    s.invalidate(rules)
+    s.widget(rules).SetBounds(rect(2, 2, 1, 5))
+    s.invalidate(rules)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(5, 1).ch, "─")
+    testing.AssertEqStr(s.buffer.Get(2, 1).ch, "┬")
+end
+
+func test_heavy_rule_light_ring():
+    mut s := scene(tui.GlyphsSingle(), "┃", "━")
+    defer s.Close()
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(5, 1).ch, "┸")
+    testing.AssertEqStr(s.buffer.Get(5, 0).ch, "┃")
+end
+
+func test_mixed_families():
+    test_weight(tui.GlyphsMixed(), "│", "━", "┷", "┯", "┿")
+    test_weight(tui.GlyphsSingle(), "┃", "─", "┸", "┰", "╂")
+    test_weight(tui.GlyphsDouble(), "│", "═", "╧", "╤", "╪")
+    test_weight(tui.GlyphsSingle(), "║", "─", "╨", "╥", "╫")
+end
+
+func test_no_mixed_glyph():
+    mut heavy_double := scene(tui.GlyphsDouble(), "┃", "━")
+    defer heavy_double.Close()
+    heavy_double.present()
+    testing.AssertEqStr(heavy_double.buffer.Get(5, 1).ch, "═")
+    testing.AssertEqStr(heavy_double.buffer.Get(5, 0).ch, "┃")
+
+    mut double_heavy := scene(tui.GlyphsHeavy(), "║", "═")
+    defer double_heavy.Close()
+    double_heavy.present()
+    testing.AssertEqStr(double_heavy.buffer.Get(5, 1).ch, "━")
+    testing.AssertEqStr(double_heavy.buffer.Get(5, 0).ch, "║")
+end
+
+func test_standalone_and_ascii():
+    mut standalone := tui.NewScreen(tui.BaseWidget {}, 12, 9)
+    defer standalone.Close()
+    id := standalone.Add(tui.RootId, Ring { x = 1, y = 1, w = 9, h = 7, glyphs = tui.GlyphsSingle() } as dyn tui.Widget)
+    standalone.widget(id).SetBounds(rect(0, 0, 12, 9))
+    standalone.present()
+    testing.AssertEqStr(frame(standalone), "            | ┌───────┐  | │       │  | │       │  | │       │  | │       │  | │       │  | └───────┘  |            ")
+
+    mut ascii := scene(tui.GlyphsSingle(), "│", "─")
+    defer ascii.Close()
+    ascii.set_glyphs(tui.GlyphPolicy.ASCII)
+    ascii.present()
+    testing.AssertEqStr(frame(ascii), "     |      | +-------+  | |       |  | |   |   |  | |-------|  | |   |   |  | |       |  | +-------+  |     |      ")
+end
+
+func main():
+    test_weight(tui.GlyphsSingle(), "│", "─", "┴", "┬", "┼")
+    test_weight(tui.GlyphsHeavy(), "┃", "━", "┻", "┳", "╋")
+    test_weight(tui.GlyphsDouble(), "║", "═", "╩", "╦", "╬")
+    test_partial_repaint()
+    test_partial_repaint_inner_rule()
+    test_heavy_rule_light_ring()
+    test_mixed_families()
+    test_no_mixed_glyph()
+    test_standalone_and_ascii()
+    ret testing.Summary()
+end

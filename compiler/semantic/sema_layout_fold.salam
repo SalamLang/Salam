@@ -62,7 +62,7 @@ func lay_const_sym(s &: Sema, name: str): int:
     if sid <= 0:
         ret 0
     end
-    sy := s.syms.get(sid)
+    sy := s.syms.Get(sid)
     if sy.kind == SYM_CONST and sy.decl != 0:
         ret sid
     end
@@ -93,8 +93,8 @@ end
 
 func lay_fold_ident(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
     name := at.Get(a, nid).name
-    repeat cx.shadow.len() in i:
-        if str.Equals(cx.shadow.get(i), name):
+    repeat cx.shadow.Len() in i:
+        if str.Equals(cx.shadow.Get(i), name):
             ret LF_RUNTIME
         end
     end
@@ -106,7 +106,7 @@ func lay_fold_ident(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth
     if init == 0:
         ret LF_RUNTIME
     end
-    cx.used.push(name)
+    cx.used.Push(name)
     ret lay_fold(cx, a, init, out, depth + 1)
 end
 
@@ -119,8 +119,8 @@ func lay_fold_array_base(cx &: LayFoldCx, a &: at.Ast, nid: int, depth: int): in
         ret nid
     end
     if n.kind == at.AST_IDENTIFIER:
-        repeat cx.shadow.len() in i:
-            if str.Equals(cx.shadow.get(i), n.name):
+        repeat cx.shadow.Len() in i:
+            if str.Equals(cx.shadow.Get(i), n.name):
                 ret 0
             end
         end
@@ -132,7 +132,7 @@ func lay_fold_array_base(cx &: LayFoldCx, a &: at.Ast, nid: int, depth: int): in
         if init == 0:
             ret 0
         end
-        cx.used.push(n.name)
+        cx.used.Push(n.name)
         ret lay_fold_array_base(cx, a, init, depth + 1)
     end
     ret 0
@@ -153,10 +153,10 @@ func lay_fold_index(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth
         ret LF_RUNTIME
     end
     an := at.Get(a, arr)
-    if iv.i < 0 as i64 or iv.i >= an.list.len() as i64:
+    if iv.i < 0 as i64 or iv.i >= an.list.Len() as i64:
         ret lay_fold_err(cx, nid, i18.Tr("layout value index is out of range"))
     end
-    ret lay_fold(cx, a, an.list.get(iv.i as int), out, depth + 1)
+    ret lay_fold(cx, a, an.list.Get(iv.i as int), out, depth + 1)
 end
 
 func lay_fold_unary(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
@@ -364,6 +364,20 @@ func lay_fold(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int)
     if n.kind == at.AST_UNARY:
         ret lay_fold_unary(cx, a, nid, out, depth)
     end
+    if n.kind == at.AST_BINARY and lay_is_calc_op(n.op) and lay_has_unit(a, nid, 0):
+        mut ckind := 0
+        if not lay_calc_kind(a, nid, ckind, 0):
+            ret lay_fold_err(cx, nid, i18.Tr("a layout value cannot add or subtract a length, an angle and a time"))
+        end
+        cunit := ckind == 2 ? "deg" : (ckind == 3 ? "ms" : "px")
+        mut ctext := ""
+        crc := lay_calc_text(cx, a, nid, cunit, ctext, depth + 1)
+        if crc != LF_OK:
+            ret crc
+        end
+        out = LayVal { kind = LV_STR, s = "calc(" + ctext + ")" }
+        ret LF_OK
+    end
     if n.kind == at.AST_BINARY:
         ret lay_fold_binary(cx, a, nid, out, depth)
     end
@@ -453,7 +467,7 @@ func lay_is_css_function(s &: Sema, a &: at.Ast, nid: int): bool:
         ret false
     end
     sid := scope_lookup(s, s.cur, callee.name)
-    ret sid <= 0 or s.syms.get(sid).kind != SYM_FUNC
+    ret sid <= 0 or s.syms.Get(sid).kind != SYM_FUNC
 end
 
 func lay_check_event_attr(s &: Sema, a &: at.Ast, attr: int, name: str): bool:
@@ -470,15 +484,14 @@ func lay_check_event_attr(s &: Sema, a &: at.Ast, attr: int, name: str): bool:
     end
     if v.kind == at.AST_IDENTIFIER:
         sid := scope_lookup(s, s.cur, v.name)
-        if sid > 0 and s.syms.get(sid).kind == SYM_FUNC:
+        if sid > 0 and s.syms.Get(sid).kind == SYM_FUNC:
             ret true
         end
-        serr(
-            s, 137, span_of(a, vid), co.Format2(
-                i18.Tr("event attribute '%s' calls the unknown function '%s'"), co.ArgStr(lay_attr_display(name)), co.ArgStr(v.name)
-            )
-        )
-        ret false
+        // In runtime pages this may be a parameter, state value, or other callable binding.
+        ret true
+    end
+    if v.kind == at.AST_MEMBER or v.kind == at.AST_INDEX or v.kind == at.AST_CALL:
+        ret true
     end
     mut what := i18.Tr("an expression")
     if v.kind == at.AST_LITERAL:
@@ -498,7 +511,328 @@ func lay_check_event_attr(s &: Sema, a &: at.Ast, attr: int, name: str): bool:
     ret false
 end
 
-func lay_fold_attr(s &: Sema, a &: at.Ast, attr: int, ai: int): bool:
+func lay_is_calc_op(op: int): bool:
+    ret op == tok.TK_PLUS or op == tok.TK_MINUS or op == tok.TK_STAR or op == tok.TK_SLASH
+end
+
+func lay_has_unit(a &: at.Ast, nid: int, depth: int): bool:
+    if nid == 0 or depth > 64:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL:
+        ret (n.op == tok.TK_INT or n.op == tok.TK_FLOAT) and str.Len(LayoutNumUnit(n.name)) > 0
+    end
+    if n.kind == at.AST_BINARY:
+        ret lay_is_calc_op(n.op) and (lay_has_unit(a, n.a, depth + 1) or lay_has_unit(a, n.b, depth + 1))
+    end
+    if n.kind == at.AST_UNARY:
+        ret lay_has_unit(a, n.a, depth + 1)
+    end
+    ret false
+end
+
+func lay_unit_kind(u: str): int:
+    if str.Equals(u, "deg") or str.Equals(u, "rad") or str.Equals(u, "turn"):
+        ret 2
+    end
+    if str.Equals(u, "ms") or str.Equals(u, "s"):
+        ret 3
+    end
+    if str.Len(u) == 0 or str.Equals(u, "%"):
+        ret 0
+    end
+    ret 1
+end
+
+func lay_calc_kind(a &: at.Ast, nid: int, kind &: int, depth: int): bool:
+    if nid == 0 or depth > 64:
+        ret true
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and (n.op == tok.TK_INT or n.op == tok.TK_FLOAT):
+        k := lay_unit_kind(LayoutNumUnit(n.name))
+        if k == 0:
+            ret true
+        end
+        if kind != 0 and kind != k:
+            ret false
+        end
+        kind = k
+        ret true
+    end
+    if n.kind == at.AST_BINARY:
+        ret lay_calc_kind(a, n.a, kind, depth + 1) and lay_calc_kind(a, n.b, kind, depth + 1)
+    end
+    if n.kind == at.AST_UNARY:
+        ret lay_calc_kind(a, n.a, kind, depth + 1)
+    end
+    ret true
+end
+
+func lay_calc_side(cx &: LayFoldCx, a &: at.Ast, nid: int, unit: str, additive: bool, out &: str, depth: int): int:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BINARY and lay_is_calc_op(n.op):
+        mut inner := ""
+        rc := lay_calc_text(cx, a, nid, unit, inner, depth + 1)
+        if rc != LF_OK:
+            ret rc
+        end
+        out = "(" + inner + ")"
+        ret LF_OK
+    end
+    mut text := ""
+    rc2 := lay_item_text(cx, a, nid, text, depth + 1)
+    if rc2 != LF_OK:
+        ret rc2
+    end
+    if additive and not lay_has_unit(a, nid, 0) and lay_is_float(text):
+        text += unit
+    end
+    out = text
+    ret LF_OK
+end
+
+func lay_calc_text(cx &: LayFoldCx, a &: at.Ast, nid: int, unit: str, out &: str, depth: int): int:
+    if depth > 64:
+        ret lay_fold_err(cx, nid, i18.Tr("layout value is nested too deeply (a constant that refers to itself?)"))
+    end
+    n := at.Get(a, nid)
+    additive := n.op == tok.TK_PLUS or n.op == tok.TK_MINUS
+    mut left := ""
+    rc := lay_calc_side(cx, a, n.a, unit, additive, left, depth)
+    if rc != LF_OK:
+        ret rc
+    end
+    mut right := ""
+    rc2 := lay_calc_side(cx, a, n.b, unit, additive, right, depth)
+    if rc2 != LF_OK:
+        ret rc2
+    end
+    out = left + " " + lay_op_text(n.op) + " " + right
+    ret LF_OK
+end
+
+func lay_list_quotes(name: str): bool:
+    mut key := lay_attr_key(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ret str.Equals(str.Replace(str.Replace(key, "_", "-"), " ", "-"), "font-family")
+end
+
+func lay_list_commas(name: str): bool:
+    mut key := lay_attr_key(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    k := str.Replace(str.Replace(key, "_", "-"), " ", "-")
+    ret str.Equals(k, "font-family") or str.Equals(k, "transition-property") or str.Equals(k, "will-change")
+end
+
+func lay_item_text(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: str, depth: int): int:
+    if nid == 0:
+        ret LF_RUNTIME
+    end
+    if depth > 64:
+        ret lay_fold_err(cx, nid, i18.Tr("layout value is nested too deeply (a constant that refers to itself?)"))
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and n.value_kind != tok.TV_STRING:
+        if n.op == tok.TK_INT:
+            out = co.U64Toa(n.value_int) + LayoutNumUnit(n.name)
+            ret LF_OK
+        end
+        if n.op == tok.TK_FLOAT:
+            out = co.Format1("%g", co.ArgFloat(n.value_float)) + LayoutNumUnit(n.name)
+            ret LF_OK
+        end
+    end
+    if n.kind == at.AST_UNARY and n.op == tok.TK_MINUS and n.a != 0 and at.KindOf(a, n.a) == at.AST_LITERAL:
+        mut inner := ""
+        rc := lay_item_text(cx, a, n.a, inner, depth + 1)
+        if rc != LF_OK:
+            ret rc
+        end
+        out = "-" + inner
+        ret LF_OK
+    end
+    if n.kind == at.AST_ARRAY_LIT or n.kind == at.AST_TUPLE:
+        mut text := ""
+        repeat at.ChildCount(a, nid) in i:
+            mut part := ""
+            rc2 := lay_item_text(cx, a, at.Child(a, nid, i), part, depth + 1)
+            if rc2 != LF_OK:
+                ret rc2
+            end
+            if i > 0:
+                text += " "
+            end
+            text += part
+        end
+        out = text
+        ret LF_OK
+    end
+    if n.kind == at.AST_IDENTIFIER and lay_const_decl(a, cx.prog, n.name) == 0:
+        repeat cx.shadow.Len() in si:
+            if str.Equals(cx.shadow.Get(si), n.name):
+                ret LF_RUNTIME
+            end
+        end
+        out = n.name
+        ret LF_OK
+    end
+    if n.kind == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        mut call := at.Get(a, n.a).name + "("
+        repeat at.ChildCount(a, nid) in ci:
+            argid := at.Child(a, nid, ci)
+            arg := at.Get(a, argid)
+            mut part2 := ""
+            rc3 := lay_item_text(cx, a, argid, part2, depth + 1)
+            if rc3 != LF_OK:
+                ret rc3
+            end
+            if ci > 0:
+                call += ", "
+            end
+            if arg.kind == at.AST_LITERAL and arg.value_kind == tok.TV_STRING and not str.StartsWith(part2, "#"):
+                call += `"` + part2 + `"`
+            else:
+                call += part2
+            end
+        end
+        out = call + ")"
+        ret LF_OK
+    end
+    mut v := LayVal {}
+    rc4 := lay_fold(cx, a, nid, v, depth + 1)
+    if rc4 != LF_OK:
+        ret rc4
+    end
+    out = lv_text(v)
+    ret LF_OK
+end
+
+func lay_list_text(cx &: LayFoldCx, a &: at.Ast, vid: int, name: str, out &: str): int:
+    n := at.Get(a, vid)
+    if n.kind != at.AST_TUPLE:
+        ret lay_item_text(cx, a, vid, out, 0)
+    end
+    mut groups := false
+    repeat at.ChildCount(a, vid) in i:
+        if at.KindOf(a, at.Child(a, vid, i)) == at.AST_ARRAY_LIT:
+            groups = true
+        end
+    end
+    sep := (groups or lay_list_commas(name)) ? ", " : " "
+    quote := lay_list_quotes(name)
+    mut text := ""
+    repeat at.ChildCount(a, vid) in j:
+        mut part := ""
+        cid := at.Child(a, vid, j)
+        rc := lay_item_text(cx, a, cid, part, 1)
+        if rc != LF_OK:
+            ret rc
+        end
+        c := at.Get(a, cid)
+        if quote and c.kind == at.AST_LITERAL and c.value_kind == tok.TV_STRING and not str.StartsWith(part, "#"):
+            part = `"` + str.Replace(str.Replace(part, "\\", "\\\\"), `"`, `\"`) + `"`
+        end
+        if j > 0:
+            text += sep
+        end
+        text += part
+    end
+    out = text
+    ret LF_OK
+end
+
+func lay_list_runtime(s &: Sema, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        sid := scope_lookup(s, s.cur, n.name)
+        if sid > 0:
+            k := s.syms.Get(sid).kind
+            if k == SYM_VAR or k == SYM_PARAM:
+                ret nid
+            end
+        end
+        ret 0
+    end
+    if n.kind == at.AST_CALL and not lay_is_css_function(s, a, nid):
+        ret nid
+    end
+    if n.kind == at.AST_CALL or n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in i:
+            r := lay_list_runtime(s, a, at.Child(a, nid, i))
+            if r != 0:
+                ret r
+            end
+        end
+        ret 0
+    end
+    if n.kind == at.AST_UNARY or n.kind == at.AST_BINARY:
+        r2 := lay_list_runtime(s, a, n.a)
+        if r2 != 0:
+            ret r2
+        end
+        ret lay_list_runtime(s, a, n.b)
+    end
+    ret 0
+end
+
+func lay_fold_list_attr(s &: Sema, a &: at.Ast, attr: int, vid: int, runtime: bool): bool:
+    bad := lay_list_runtime(s, a, vid)
+    if bad != 0:
+        if runtime:
+            ret true
+        end
+        serr(
+            s, 129, span_of(a, bad), co.Format1(
+                i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(lay_expr_text(a, bad))
+            )
+        )
+        ret false
+    end
+    mut cx := LayFoldCx { prog = s.program }
+    defer cx.shadow.Free()
+    defer cx.used.Free()
+    mut text := ""
+    rc := lay_list_text(cx, a, vid, at.Get(a, attr).name, text)
+    repeat cx.used.Len() in ui:
+        usid := lay_const_sym(s, cx.used.Get(ui))
+        if usid != 0:
+            mut usy := s.syms.Get(usid)
+            usy.used = true
+            s.syms.Set(usid, usy)
+        end
+    end
+    if rc == LF_REPORTED:
+        serr(s, 130, span_of(a, cx.err_node), cx.err_msg)
+        ret false
+    end
+    if rc == LF_RUNTIME:
+        if runtime:
+            ret true
+        end
+        serr(
+            s, 129, span_of(a, vid), co.Format1(
+                i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(lay_expr_text(a, vid))
+            )
+        )
+        ret false
+    end
+    lit := lay_mk_literal(a, vid, LayVal { kind = LV_STR, s = text })
+    mut an := at.Get(a, attr)
+    an.a = lit
+    at.Put(a, attr, an)
+    ret true
+end
+
+func lay_fold_attr(s &: Sema, a &: at.Ast, attr: int, ai: int, runtime: bool): bool:
     vid := at.Get(a, attr).a
     if vid == 0:
         ret true
@@ -507,31 +841,36 @@ func lay_fold_attr(s &: Sema, a &: at.Ast, attr: int, ai: int): bool:
     if v.kind == at.AST_LITERAL:
         ret true
     end
+    if v.kind == at.AST_TUPLE or v.kind == at.AST_ARRAY_LIT:
+        ret lay_fold_list_attr(s, a, attr, vid, runtime)
+    end
     if lay_is_css_function(s, a, vid):
         ret true
     end
     if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) == 0:
-        if ai >= 0 and g_lay_attrs.get(ai).dest == LA_CONTENT and scope_lookup(s, s.cur, v.name) > 0:
-            serr(
-                s, 129, span_of(a, vid), co.Format1(
-                    i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(v.name)
+        if ai >= 0 and g_lay_attrs.Get(ai).dest == LA_CONTENT and scope_lookup(s, s.cur, v.name) > 0:
+            if not runtime:
+                serr(
+                    s, 129, span_of(a, vid), co.Format1(
+                        i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(v.name)
+                    )
                 )
-            )
-            ret false
+                ret false
+            end
         end
         ret true
     end
     mut out := LayVal {}
     mut cx := LayFoldCx { prog = s.program }
-    defer cx.shadow.free()
-    defer cx.used.free()
+    defer cx.shadow.Free()
+    defer cx.used.Free()
     rc := lay_fold(cx, a, vid, out, 0)
-    repeat cx.used.len() in ui:
-        usid := lay_const_sym(s, cx.used.get(ui))
+    repeat cx.used.Len() in ui:
+        usid := lay_const_sym(s, cx.used.Get(ui))
         if usid != 0:
-            mut usy := s.syms.get(usid)
+            mut usy := s.syms.Get(usid)
             usy.used = true
-            s.syms.set(usid, usy)
+            s.syms.Set(usid, usy)
         end
     end
     if rc == LF_REPORTED:
@@ -539,6 +878,9 @@ func lay_fold_attr(s &: Sema, a &: at.Ast, attr: int, ai: int): bool:
         ret false
     end
     if rc == LF_RUNTIME:
+        if runtime:
+            ret true
+        end
         serr(
             s, 129, span_of(a, vid), co.Format1(
                 i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(lay_expr_text(a, vid))
@@ -546,7 +888,7 @@ func lay_fold_attr(s &: Sema, a &: at.Ast, attr: int, ai: int): bool:
         )
         ret false
     end
-    if v.kind == at.AST_IDENTIFIER and ai >= 0 and g_lay_attrs.get(ai).vtype != VT_STRING and lay_attr_value_ok(ai, v.name):
+    if v.kind == at.AST_IDENTIFIER and ai >= 0 and g_lay_attrs.Get(ai).vtype != VT_STRING and lay_attr_value_ok(ai, v.name):
         swarn(
             s, 131, span_of(a, vid), co.Format2(
                 i18.Tr("constant '%s' hides the layout value '%s'; quote the word to mean the value"), co.ArgStr(v.name), co.ArgStr(v.name)
@@ -620,14 +962,25 @@ end
 
 pub func LayoutFoldLiteral(a &: at.Ast, prog: int, nid: int, shadow: Vector<str>): int:
     mut cx := LayFoldCx { prog = prog }
-    defer cx.used.free()
-    repeat shadow.len() in i:
-        cx.shadow.push(shadow.get(i))
+    defer cx.used.Free()
+    repeat shadow.Len() in i:
+        cx.shadow.Push(shadow.Get(i))
     end
-    defer cx.shadow.free()
+    defer cx.shadow.Free()
     mut out := LayVal {}
     if lay_fold(cx, a, nid, out, 0) != LF_OK:
         ret 0
     end
     ret lay_mk_literal(a, nid, out)
+end
+
+pub func LayoutListText(a &: at.Ast, prog: int, vid: int, name: str): str:
+    mut cx := LayFoldCx { prog = prog }
+    defer cx.used.Free()
+    defer cx.shadow.Free()
+    mut out := ""
+    if lay_list_text(cx, a, vid, name, out) != LF_OK:
+        ret ""
+    end
+    ret out
 end

@@ -1,0 +1,430 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "drag"
+@fa "کشیدن"
+package drag
+
+import mem
+import str
+import os
+import io
+import os.shell
+import filepath
+
+// Drag-source initiation abstractions (best-effort).
+//
+// Native drag-and-drop source APIs are highly platform- and widget-toolkit-specific.
+// This module provides a portable, additive API surface and best-effort fallbacks:
+// - Stages drag payload descriptors for host integrations.
+// - On Linux, attempts to start an external drag helper when available (dragon,
+//   ripdrag) as a pragmatic desktop fallback.
+// - On Windows/macOS, returns false with a reason unless a host backend is wired.
+//
+// For drop-target handling, see gui.drop.
+
+pub const SOURCE_NONE := 0
+pub const SOURCE_FILES := 1
+pub const SOURCE_TEXT := 2
+pub const SOURCE_URI := 4
+pub const SOURCE_IMAGE_PATH := 8
+
+mut _last_error := ""
+mut _last_payload_kind := 0
+mut _last_payload_count := 0
+
+@en "DragPayload"
+@fa "بار کشیدن"
+pub struct DragPayload:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = SOURCE_NONE
+    @en "files"
+    @fa "پرونده‌ها"
+    pub files: Vector<str> = Vector {}
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+    @en "uri"
+    @fa "نشانی"
+    pub uri: str = ""
+    @en "image_path"
+    @fa "مسیر تصویر"
+    pub image_path: str = ""
+    @en "mime"
+    @fa "مایم"
+    pub mime: str = ""
+end
+
+@en "DragOptions"
+@fa "گزینه‌های کشیدن"
+pub struct DragOptions:
+    @en "allowed_effects"
+    @fa "اثرهای مجاز"
+    pub allowed_effects: int = 7
+    @en "preferred_effect"
+    @fa "اثر ترجیحی"
+    pub preferred_effect: int = 1
+end
+
+func _set_error(msg: str):
+    _last_error = msg
+end
+
+func _ok(): bool:
+    _last_error = ""
+    ret true
+end
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _temp_dir(): str:
+    t := os.TempDir()
+    if t.Len() == 0:
+        ret str.Clone("/tmp")
+    end
+    ret t
+end
+
+func _stage_path(prefix: str, suffix: str): str:
+    dir := _temp_dir()
+    defer mem.Free(dir as void*)
+    base := prefix + str.FromInt(os.Pid() as i64) + "-" + str.FromInt(_last_payload_count as i64) + suffix
+    out := filepath.Join(dir, base)
+    mem.Free(base as void*)
+    ret out
+end
+
+func _has_cmd(name: str): bool:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "command -v ")
+    q := str.Replace(name, "'", "'\\''")
+    str.BufAppend(sb, "'")
+    str.BufAppend(sb, q)
+    str.BufAppend(sb, "' >/dev/null 2>&1")
+    mem.Free(q as void*)
+    cmd := str.BufStr(sb)
+    str.BufFree(sb)
+    r := shell.Exec(cmd)
+    mem.Free(cmd as void*)
+    mem.Free(r.out as void*)
+    mem.Free(r.err as void*)
+    ret r.code == 0
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _last_error
+end
+
+@en "Supported"
+@fa "پشتیبانی‌شده"
+pub func Supported(): bool:
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        ret _has_cmd("dragon") or _has_cmd("dragon-drop") or _has_cmd("ripdrag")
+    end
+    // Native in-app drag-source initiation requires toolkit/backend hooks not exposed here.
+    ret false
+end
+
+@en "CapabilityStatus"
+@fa "وضعیت قابلیت"
+pub func CapabilityStatus(): str:
+    mut s := "supported=" + (Supported() ? "true" : "false")
+    s = s + ", kind=" + str.FromInt(_last_payload_kind as i64)
+    s = s + ", count=" + str.FromInt(_last_payload_count as i64)
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        w := os.Env("WAYLAND_DISPLAY")
+        wt := str.Trim(w)
+        if wt.Len() > 0:
+            s = s + ", session=wayland"
+        else:
+            d := os.Env("DISPLAY")
+            dt := str.Trim(d)
+            if dt.Len() > 0:
+                s = s + ", session=x11"
+            else:
+                s = s + ", session=headless-or-unknown"
+            end
+            mem.Free(d as void*)
+            mem.Free(dt as void*)
+        end
+        mem.Free(w as void*)
+        mem.Free(wt as void*)
+    else SALAM_OS_WINDOWS:
+        s = s + ", session=windows"
+    else SALAM_OS_MAC:
+        s = s + ", session=macos"
+    end
+    ret s
+end
+
+@en "CanStartDrag"
+@fa "می‌تواند کشیدن را آغاز کند"
+pub func CanStartDrag(): bool:
+    ret Supported()
+end
+
+@en "LastPayloadKind"
+@fa "آخرین نوع بار"
+pub func LastPayloadKind(): int:
+    ret _last_payload_kind
+end
+
+@en "LastPayloadCount"
+@fa "آخرین شمار بار"
+pub func LastPayloadCount(): int:
+    ret _last_payload_count
+end
+
+@en "Note"
+@fa "یادداشت"
+pub func Note(): str:
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        if Supported():
+            ret str.Clone("Best-effort drag source via external helper (dragon/ripdrag); text/URI payloads may use file-staging fallback.")
+        end
+        ret str.Clone("No external drag-source helper found (install dragon or ripdrag) and no native toolkit hook is wired.")
+    else SALAM_OS_WINDOWS:
+        ret str.Clone("Windows drag-source initiation (DoDragDrop/OLE) requires host widget integration; not wired in this std helper.")
+    else SALAM_OS_MAC:
+        ret str.Clone("macOS drag-source initiation (NSDraggingSource/NSPasteboard) requires host view integration; not wired in this std helper.")
+    end
+    ret str.Clone("Drag-source initiation is not supported on this platform.")
+end
+
+@en "NewFilesPayload"
+@fa "بار پرونده‌ها"
+pub func NewFilesPayload(files: Vector<str>): DragPayload:
+    mut p := DragPayload { kind = SOURCE_FILES, files = Vector {} }
+    repeat files.Len() in i:
+        p.files.Push(str.Clone(files.Get(i)))
+    end
+    ret p
+end
+
+@en "NewTextPayload"
+@fa "بار متن"
+pub func NewTextPayload(text: str): DragPayload:
+    ret DragPayload { kind = SOURCE_TEXT, text = str.Clone(text) }
+end
+
+@en "NewURIPayload"
+@fa "بار نشانی"
+pub func NewURIPayload(uri: str): DragPayload:
+    ret DragPayload { kind = SOURCE_URI, uri = str.Clone(uri) }
+end
+
+@en "NewImagePathPayload"
+@fa "بار مسیر تصویر"
+pub func NewImagePathPayload(path: str, mime: str = ""): DragPayload:
+    ret DragPayload { kind = SOURCE_IMAGE_PATH, image_path = str.Clone(path), mime = str.Clone(mime) }
+end
+
+@en "PayloadSummary"
+@fa "خلاصه بار"
+pub func PayloadSummary(p: DragPayload): str:
+    mut s := "kind=" + str.FromInt(p.kind as i64)
+    if p.files.Len() > 0:
+        s = s + " files=" + str.FromInt(p.files.Len() as i64)
+    end
+    if p.text.Len() > 0:
+        s = s + " text_len=" + str.FromInt(p.text.Len() as i64)
+    end
+    if p.uri.Len() > 0:
+        s = s + " uri=1"
+    end
+    if p.image_path.Len() > 0:
+        s = s + " image_path=1"
+    end
+    ret s
+end
+
+@en "StartDrag"
+@fa "آغاز کشیدن"
+pub func StartDrag(_native: void*, payload: DragPayload, _options: DragOptions = DragOptions {}): bool:
+    _last_payload_kind = payload.kind
+    _last_payload_count = payload.files.Len()
+    if payload.kind == SOURCE_NONE:
+        _set_error("Empty drag payload")
+        ret false
+    end
+
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        // Best-effort: delegate to external drag helpers (dragon/ripdrag) when available.
+        mut cmd := ""
+        if _has_cmd("dragon"):
+            cmd = "dragon --and-exit"
+        else _has_cmd("dragon-drop"):
+            cmd = "dragon-drop --and-exit"
+        else _has_cmd("ripdrag"):
+            cmd = "ripdrag -a -s 48"
+        end
+        if cmd.Len() == 0:
+            _set_error("No drag helper available (install dragon or ripdrag)")
+            ret false
+        end
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, cmd)
+        mut staged := Vector {} as Vector<str>
+        mut added := 0
+        if (payload.kind & SOURCE_IMAGE_PATH) != 0 and payload.image_path.Len() > 0:
+            q := _quote_sh(payload.image_path)
+            str.BufAppend(sb, " ")
+            str.BufAppend(sb, q)
+            mem.Free(q as void*)
+            added++
+        end
+        repeat payload.files.Len() in i:
+            q := _quote_sh(payload.files.Get(i))
+            str.BufAppend(sb, " ")
+            str.BufAppend(sb, q)
+            mem.Free(q as void*)
+            added++
+        end
+        // Best-effort fallback for text/URI payloads: stage content as a temporary file.
+        // Uses per-process temp paths to avoid collisions; cleanup is best-effort and not
+        // guaranteed because the helper runs detached in the background.
+        if added == 0 and (payload.kind & SOURCE_URI) != 0 and payload.uri.Len() > 0:
+            path := _stage_path("salam-drag-uri-", ".txt")
+            _w := io.WriteFile(path, payload.uri)
+            staged.Push(str.Clone(path))
+            q := _quote_sh(path)
+            str.BufAppend(sb, " ")
+            str.BufAppend(sb, q)
+            mem.Free(q as void*)
+            mem.Free(path as void*)
+            added++
+            _set_error("Text/URI drag-source uses file-staging fallback on Linux (temp file cleanup is best-effort)")
+        end
+        if added == 0 and (payload.kind & SOURCE_TEXT) != 0 and payload.text.Len() > 0:
+            path := _stage_path("salam-drag-text-", ".txt")
+            _w := io.WriteFile(path, payload.text)
+            staged.Push(str.Clone(path))
+            q := _quote_sh(path)
+            str.BufAppend(sb, " ")
+            str.BufAppend(sb, q)
+            mem.Free(q as void*)
+            mem.Free(path as void*)
+            added++
+            _set_error("Text drag-source uses file-staging fallback on Linux (temp file cleanup is best-effort)")
+        end
+        if added == 0:
+            staged.Free()
+            _set_error("Unsupported or empty drag payload for Linux helper fallback")
+            ret false
+        end
+        str.BufAppend(sb, " >/dev/null 2>&1 &")
+        final := str.BufStr(sb)
+        str.BufFree(sb)
+        ok := shell.System(final) == 0
+        mem.Free(final as void*)
+        if not ok:
+            repeat staged.Len() in si:
+                mem.Free(staged.Get(si) as void*)
+            end
+            staged.Free()
+            _set_error("Failed to start drag helper")
+            ret false
+        end
+        repeat staged.Len() in si:
+            mem.Free(staged.Get(si) as void*)
+        end
+        staged.Free()
+        // If a fallback warning was set above, keep it but still report success.
+        ret true
+    end
+
+    _set_error(Note())
+    ret false
+end
+
+@en "StartDragFiles"
+@fa "آغاز کشیدن پرونده‌ها"
+pub func StartDragFiles(native: void*, files: Vector<str>, options: DragOptions = DragOptions {}): bool:
+    p := NewFilesPayload(files)
+    ok := StartDrag(native, p, options)
+    repeat p.files.Len() in i:
+        mem.Free(p.files.Get(i) as void*)
+    end
+    p.files.Free()
+    ret ok
+end
+
+@en "StartDragText"
+@fa "آغاز کشیدن متن"
+pub func StartDragText(native: void*, text: str, options: DragOptions = DragOptions {}): bool:
+    p := NewTextPayload(text)
+    ok := StartDrag(native, p, options)
+    mem.Free(p.text as void*)
+    ret ok
+end
+
+@en "StartDragURI"
+@fa "آغاز کشیدن نشانی"
+pub func StartDragURI(native: void*, uri: str, options: DragOptions = DragOptions {}): bool:
+    p := NewURIPayload(uri)
+    ok := StartDrag(native, p, options)
+    mem.Free(p.uri as void*)
+    ret ok
+end
+
+@en "StartDragImagePath"
+@fa "آغاز کشیدن مسیر تصویر"
+pub func StartDragImagePath(native: void*, path: str, mime: str = "", options: DragOptions = DragOptions {}): bool:
+    p := NewImagePathPayload(path, mime)
+    ok := StartDrag(native, p, options)
+    mem.Free(p.image_path as void*)
+    mem.Free(p.mime as void*)
+    ret ok
+end
+
+@en "SupportsFiles"
+@fa "پرونده‌ها پشتیبانی می‌شوند"
+pub func SupportsFiles(): bool:
+    ret Supported()
+end
+
+@en "SupportsTextFallback"
+@fa "پشتیبان متن"
+pub func SupportsTextFallback(): bool:
+    ret SALAM_OS_LINUX or SALAM_OS_BSD ? Supported() : false
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    ret Supported()
+end

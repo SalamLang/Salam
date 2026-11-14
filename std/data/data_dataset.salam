@@ -42,30 +42,36 @@ pub struct BatchIter:
     @fa "جایگاه"
     pub pos: int = 0
 
-    @en "reset"
+    @en "Reset"
     @fa "بازنشانی"
-    pub func reset(epoch: i64):
+    pub func Reset(epoch: i64):
         n := this.x.rows
-        this.order.clear()
-        repeat n in i: this.order.push(i) end
+        this.order.Clear()
+        repeat n in i: this.order.Push(i) end
         if this.shuffle:
             mut g := matrix.NewRng(this.seed + epoch)
             mut i := n - 1
             until i > 0:
                 j := (g.next_float() * ((i + 1) as f64)) as int
-                t := this.order.get(i)
-                this.order.set(i, this.order.get(j))
-                this.order.set(j, t)
+                t := this.order.Get(i)
+                this.order.Set(i, this.order.Get(j))
+                this.order.Set(j, t)
                 i--
             end
         end
         this.pos = 0
     end
 
-    @en "next"
+    @en "reset"
+    @fa "بازنشانی"
+    pub func reset(epoch: i64):
+        this.Reset(epoch)
+    end
+
+    @en "Next"
     @fa "بعدی"
-    pub func next(x_out &: matrix.Matrix, y_out &: matrix.Matrix): bool:
-        n := this.order.len()
+    pub func Next(x_out &: matrix.Matrix, y_out &: matrix.Matrix): bool:
+        n := this.order.Len()
         if this.pos >= n: ret false end
         mut cnt := this.batch
         if this.pos + cnt > n: cnt = n - this.pos end
@@ -74,9 +80,35 @@ pub struct BatchIter:
         x_out = matrix.Zeros(cnt, this.x.cols)
         y_out = matrix.Zeros(cnt, this.y.cols)
         repeat cnt in i:
-            src := this.order.get(this.pos + i)
-            repeat this.x.cols in j: x_out.set(i, j, this.x.at(src, j)) end
-            repeat this.y.cols in j: y_out.set(i, j, this.y.at(src, j)) end
+            src := this.order.Get(this.pos + i)
+            repeat this.x.cols in j: x_out.Set(i, j, this.x.at(src, j)) end
+            repeat this.y.cols in j: y_out.Set(i, j, this.y.at(src, j)) end
+        end
+        this.pos += cnt
+        ret true
+    end
+
+    @en "next"
+    @fa "بعدی"
+    pub func next(x_out &: matrix.Matrix, y_out &: matrix.Matrix): bool:
+        ret this.Next(x_out, y_out)
+    end
+
+    @en "NextTensor"
+    @fa "بعدی تانسور"
+    pub func NextTensor(x_out &: tensor.Tensor, labels_out &: Vector<int>): bool:
+        n := this.order.Len()
+        if this.pos >= n: ret false end
+        mut cnt := this.batch
+        if this.pos + cnt > n: cnt = n - this.pos end
+        x_out.Free()
+        x_out = tensor.Zeros2(cnt, this.x.cols)
+        labels_out.Clear()
+        p := x_out.data.data
+        repeat cnt in i:
+            src := this.order.Get(this.pos + i)
+            repeat this.x.cols in j: p[i * this.x.cols + j] = this.x.at(src, j) as f32 end
+            labels_out.Push(this.y.at(src, 0) as int)
         end
         this.pos += cnt
         ret true
@@ -85,34 +117,30 @@ pub struct BatchIter:
     @en "next_tensor"
     @fa "بعدی تانسور"
     pub func next_tensor(x_out &: tensor.Tensor, labels_out &: Vector<int>): bool:
-        n := this.order.len()
-        if this.pos >= n: ret false end
-        mut cnt := this.batch
-        if this.pos + cnt > n: cnt = n - this.pos end
-        x_out.free()
-        x_out = tensor.Zeros2(cnt, this.x.cols)
-        labels_out.clear()
-        p := x_out.data.data
-        repeat cnt in i:
-            src := this.order.get(this.pos + i)
-            repeat this.x.cols in j: p[i * this.x.cols + j] = this.x.at(src, j) as f32 end
-            labels_out.push(this.y.at(src, 0) as int)
-        end
-        this.pos += cnt
-        ret true
+        ret this.NextTensor(x_out, labels_out)
     end
 
-    @en "batches_per_epoch"
+    @en "BatchesPerEpoch"
     @fa "شمار دسته در دور"
-    pub func batches_per_epoch(): int:
+    pub func BatchesPerEpoch(): int:
         n := this.x.rows
         if this.batch <= 0: ret 0 end
         ret (n + this.batch - 1) / this.batch
     end
 
+    @en "batches_per_epoch"
+    @fa "شمار دسته در دور"
+    pub func batches_per_epoch(): int:
+        ret this.BatchesPerEpoch()
+    end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free(): this.order.Free() end
+
     @en "free"
     @fa "آزادسازی"
-    pub func free(): this.order.free() end
+    pub func free(): this.Free() end
 end
 
 @en "MatrixDataset"
@@ -125,28 +153,44 @@ pub struct MatrixDataset:
     @fa "برچسب‌ها"
     pub y: matrix.Matrix = matrix.Matrix {}
 
+    @en "Len"
+    @fa "طول"
+    pub func Len(): int: ret this.x.rows end
+
     @en "len"
     @fa "طول"
-    pub func len(): int: ret this.x.rows end
+    pub func len(): int: ret this.Len() end
 
-    @en "batches"
+    @en "Batches"
     @fa "دسته‌ها"
-    pub func batches(batch: int, shuffle: bool, seed: i64): BatchIter:
+    pub func Batches(batch: int, shuffle: bool, seed: i64): BatchIter:
         mut it := BatchIter {}
         it.x = this.x
         it.y = this.y
         it.batch = batch
         it.shuffle = shuffle
         it.seed = seed
-        it.reset(0)
+        it.Reset(0)
         ret it
+    end
+
+    @en "batches"
+    @fa "دسته‌ها"
+    pub func batches(batch: int, shuffle: bool, seed: i64): BatchIter:
+        ret this.Batches(batch, shuffle, seed)
+    end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        matrix.Free(this.x)
+        matrix.Free(this.y)
     end
 
     @en "free"
     @fa "آزادسازی"
     pub func free():
-        matrix.Free(this.x)
-        matrix.Free(this.y)
+        this.Free()
     end
 end
 
@@ -160,6 +204,6 @@ end
 @fa "برچسب‌ها"
 pub func YLabels(y &: matrix.Matrix): Vector<int>:
     mut out := Vector {} as Vector<int>
-    repeat y.rows in i: out.push(y.at(i, 0) as int) end
+    repeat y.rows in i: out.Push(y.at(i, 0) as int) end
     ret out
 end

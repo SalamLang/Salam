@@ -35,7 +35,7 @@ This skill has two parts:
   Persian programs. Read Part I for semantics and Part II for spelling; the
   semantics never differ.
 
-There is also a 46-lesson human tutorial of the language, in Persian at
+There is also a 47-lesson human tutorial of the language, in Persian at
 **<https://www.salamlang.ir/learn/>** and in English at
 **<https://salamlang.github.io/Salam/learn/>** (one page per topic, every
 example compiled and run), and a reference page for every std package under
@@ -94,7 +94,7 @@ When asked to convert program `X` (in some other language) into Salam:
    half-space where only one word is allowed (type names, constants, loop and
    `catch` variables, lambda and `extern:` parameters).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
-   (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
+   (unused = error, `until` = while, manual `.Free()`, integer `/` truncates,
    errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
 5. **Verify** with `salam exec file.salam` (interpreter) or `salam build
 file.salam --output=app` (§10). Fix every warning; most are hard errors.
@@ -112,7 +112,8 @@ func main:
 end
 ```
 
-Blocks open with `:` and close with `end`. `{ … }` braces are also accepted. A
+Blocks open with `:` and close with `end`; braces do not open blocks
+(`func main {` and `if x {` are parse errors: "expected ':' to open block"). A
 single-statement body may follow the `:` on the same line: `if n < 2: ret n end`.
 Comments: `//` to end of line, `/* … */` across lines.
 
@@ -135,6 +136,9 @@ are parse errors ("declarations with a type annotation were removed"). Write
 `name: Type = value` survives only for struct fields and parameters.
 A `const` name must be a single word (`const MAX VALUE := 3` is a parse
 error); `mut` globals, locals and functions may still have multi-word names.
+A top-level `const` must be known at compile time: literals, other constants,
+operators and `sizeof`. A function call there (`const R := math.Sqrt(2.0)`)
+is E167; drop `const` (`R := math.Sqrt(2.0)`) to compute it at start-up.
 
 ### Printing
 
@@ -232,7 +236,7 @@ repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even d
 each x in xs:  println x  end         // iterate a collection/array/your own type
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
-each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
+each i, b in s.Bytes():  println b  end // the bytes of a str: b is a char, i the byte index
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -354,7 +358,7 @@ end
   This is how much of the stdlib mutates its argument (`str.BufAppend(b &: StringBuilder, …)`).
 
 - **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
-  `defer v.free()`.
+  `defer v.Free()`.
 - **Closures/lambdas** are first-class typed values, always written
   `(params): ... end` with an explicit `ret` for the value:
   `(x: int): ret x * 2 end`, or several statements
@@ -448,13 +452,13 @@ verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
 Iterate a string with `each`: `each ch in s` gives each code point as a `str`
 (`"س"`, `"👋"`), `each i, ch in s` adds the character number `i` (0, 1, 2, ...,
-the same index `s.char_at(i)` takes), and `each b in s.bytes()` /
-`each i, b in s.bytes()` walk the raw bytes as `char` with the byte index. It is
-one linear pass, so prefer it over `repeat s.char_count() in i: s.char_at(i)`,
+the same index `s.CharAt(i)` takes), and `each b in s.Bytes()` /
+`each i, b in s.Bytes()` walk the raw bytes as `char` with the byte index. It is
+one linear pass, so prefer it over `repeat s.CharCount() in i: s.CharAt(i)`,
 which rescans from the start on every step. Invalid UTF-8 bytes come out one
 byte at a time, so joining every `ch` gives back the original string. A
 character is a code point, not a grapheme cluster: `"👋🏽"` is two steps; use
-`str.Graphemes(s)` for user-perceived characters. `s.bytes()` is only valid as
+`str.Graphemes(s)` for user-perceived characters. `s.Bytes()` is only valid as
 the target of `each` (E065 otherwise); read single bytes with `s[i]`.
 
 **String/char literal forms** (values go into text with a ` ``` ` text block and
@@ -885,33 +889,40 @@ end
 calls) and may appear anywhere in an expression of a statement, except where
 it would run conditionally or repeatedly: the right side of `and`/`or`, a
 `?:` branch, an `until` or `else` condition, a `defer`, or a match expression
-arm (E140; store the value first). `func main throws:` prints
+arm (E156; store the value first). `func main throws:` prints
 `error: <message>` to stderr and exits 1. `continue` cannot leave a `try:`
 block yet; `break` can. Methods and interface methods may be `throws`;
-lambdas and `extern` functions cannot. `E139` unmarked throwing call, `E140`
-misplaced `try`, `E141` misplaced or mistyped `throw`, `E142` `try` with
-nothing that can throw.
+lambdas and `extern` functions cannot. `E155` unmarked throwing call, `E156`
+`try` in a spot that runs conditionally or repeatedly, `E157` `throw` outside a
+`throws` function or a `try:` block, `E142` `try` with nothing that can throw.
+(E139 to E141 are ownership errors: use after free, double free, returning a
+value the function's own `defer` frees; `--ownership=off|on|warn|error`, warn
+by default, `docs/design/OWNERSHIP.md`.)
 
-**Generic enums, `result.Result` and `?`:** an enum with data may take type
+**Generic enums and `?`:** an enum with data may take type
 parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
 built where its type is known - returned from a function, or with `as`:
-`Maybe.Nothing as Maybe<int>`. `import result` gives
-`result.Result<T, E>` (`Ok(value)` / `Err(error)`) plus `result.IsOk`,
-`IsErr`, `UnwrapOr(r, fallback)` and `Expect(r, msg)`. Inside a function that
-returns such an enum, a postfix `?` unwraps `Ok` and returns any `Err` early
+`Maybe.Nothing as Maybe<int>`. There is no stdlib `Result` type; declare your
+own `enum Result<T, E>: Ok(value: T), Err(error: E) end` where it is needed
+(or use `throws`/`try`/`catch`, §-on-throws, which covers most error-return
+cases without an enum at all). Inside a function that returns an Ok/Err-shaped
+enum, a postfix `?` unwraps `Ok` and returns any `Err` early
 (running `defer`s): it must be a statement's whole value - `x := f()?`,
 `x = f()?`, `f()?` or `ret f()?`.
 
 ```salam
-import result
-func parse(s: str): result.Result<int, str>:
-    if s == "7": ret result.Result.Ok(7) end
-    ret result.Result.Err("bad " + s)
+enum Result<T, E>:
+    Ok(value: T)
+    Err(error: E)
 end
-func sum(a: str, b: str): result.Result<int, str>:
+func parse(s: str): Result<int, str>:
+    if s == "7": ret Result.Ok(7) end
+    ret Result.Err("bad " + s)
+end
+func sum(a: str, b: str): Result<int, str>:
     x := parse(a)?
     y := parse(b)?
-    ret result.Result.Ok(x + y)
+    ret Result.Ok(x + y)
 end
 ```
 
@@ -926,40 +937,52 @@ bindings and runs only when the pattern matches; if it is false, matching
 continues with the next arm. A guarded arm does not count toward
 exhaustiveness, so keep an unguarded arm (or `else`) for that case.
 
-**`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
-Assign any member type; narrow it back with `match` on **type-name** patterns:
+**`A or B or …`** (Persian `A یا B یا …`) is a tagged union type: a value whose
+type is exactly one of the listed members (one slot sized to the largest
+member). Write it as a chain of member types joined by `or` wherever a type
+is expected - a parameter, a return type, a struct field, a local's declared
+type:
 
 ```salam
-mut v := 21 as Variant<i32, f64, str>   // initial cast is OK from a *member* type (i32)
-v = "offline"                            // then assign member-typed values directly
-label := match v:
-    i32 n: "int " + n end
-    f64 f: "float " + f end
-    str s: "text " + s end
+func describe(v: int or str or bool): str:
+    ret match v:
+        int n: "int " + n end
+        str s: "str " + s end
+        bool b: "bool " + b end
+    end
 end
 ```
 
-Assign a value whose type is exactly one of the members; **do not** write
-`"x" as Variant<…>` (casting a `str` into a Variant fails). Struct fields typed as
-a `Variant` coerce a member-typed literal automatically
-(`Reading { value = "offline" }`). Variant `match` needs the **compiled** backend,
-not `salam exec`; see §10.
+A plain value whose type is exactly one of the members coerces in
+automatically, in struct literals, assignments, arguments, returns and
+defaults (`Reading { value = "offline" }`). Narrow it back with `match` on
+**type-name** patterns (`int n: ... end`, `str s: ... end`). `match` on a
+union works on every backend, `salam exec` included.
 
-**`Option<T>`** (via `import option`) for maybe-absent values:
+In an expression position (after `as`), parenthesize the union so it is not
+read as the boolean `or` operator: `x as (int or str)`, not `x as int or str`
+(the latter parses as `(x as int) or str`). No parentheses are needed in a
+type position (`func f(v: int or str): ...`), since there is no expression to
+be ambiguous with there. Use `T?` below for "maybe absent", and a local
+`Result<T, E>` enum (or `throws`) for error returns.
+
+**`Option<T>`** (in `std/core`, `import core`) for maybe-absent values:
 
 ```salam
-o := option.Some(99)
-println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
+import core
+o := core.Some(99)
+println core.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
 ```
 
-**`T?`** is short for `option.Option<T>` and needs no import. A struct field of
+**`T?`** is short for `core.Option<T>` and needs no import by itself (only the
+free functions above need `import core`). A struct field of
 type `T?` may be omitted from a literal (it starts empty, unless it has its own
 default such as `retries: int? = 3`). Plain values wrap automatically in struct literals, assignments, arguments, returns and defaults,
 and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
 it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
 with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`
 and `value`. Check `is_some()` before using `value`: on an empty one it means
-nothing, and a `str` from `option.None()` is a null pointer that crashes. A `&: T?`
+nothing, and a `str` from `core.None()` is a null pointer that crashes. A `&: T?`
 parameter needs a `T?` variable, not a plain value. JSON:
 a `T?` field is an optional key, `null` decodes to empty, and an empty one
 encodes as `null` (or is left out with `@json "" "omitempty"`).
@@ -1009,7 +1032,7 @@ reg := Vector {} as Vector<dyn Shape>                            // heterogeneou
 changing the original afterwards does not reach the field. Copying the
 struct shares the box, the same way copying a Vector shares its storage, so a
 method that changes state through one copy shows in the other. Release the
-box with `field.free()` when you are done with it. `copy()` shares the box
+box with `field.Free()` when you are done with it. `copy()` shares the box
 too, while `deep_copy()` boxes a deep copy of whatever value the field holds
 (a concrete type that holds a raw pointer is copied as a value, so the
 pointer itself is shared).
@@ -1126,7 +1149,7 @@ not the libraries.
   `atomic`, `chan`) crash when used as a zero `{}` literal.
 - `b := a` on a heap value (`Vector`, `HashMap`, `bigint.Int`,
   `decimal.Dec`, `matrix.Matrix`, a struct holding one) shares the storage;
-  take a real copy with `v.copy()`, `collections.clone(v)` or the package's
+  take a real copy with `v.Copy()`, `collections.Clone(v)` or the package's
   `Clone`.
 
 ### Text & formatting
@@ -1139,9 +1162,9 @@ not the libraries.
   `CAFé`; use `unicode.ToUpper` per code point, or `EqualFold` to compare),
   and `Trim` strips only ASCII space, tab, CR and LF (a no-break space
   stays). `ToInt` returns a 32-bit `int` and clamps.
-  For prefix, suffix and substring tests write `s.starts_with(p)`, `s.ends_with(p)`
-  and `s.includes(sub)` (no import, same on every backend), not
-  `s.substr(0, n) == p`, `s.find(p) == 0` or a byte loop; an empty affix
+  For prefix, suffix and substring tests write `s.StartsWith(p)`, `s.EndsWith(p)`
+  and `s.Includes(sub)` (no import, same on every backend), not
+  `s.Substr(0, n) == p`, `s.Find(p) == 0` or a byte loop; an empty affix
   always matches. `CutPrefix`/`CutSuffix` return the rest and set an `ok`
   flag, the `*Fold` forms ignore case, `*Any` take a `Vector<str>`.
 - **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
@@ -1194,7 +1217,7 @@ not the libraries.
   base-2^32 magnitude). Build: `Zero One FromInt FromUint Parse ParseBase ParseOr FromBytes Clone`; inspect: `Sign IsZero BitLen Bit IsOdd IsEven Cmp CmpAbs Equals Less Greater Min Max`; arithmetic: `Add Sub Mul Sqr Neg Abs AddInt SubInt MulInt Shl Shr`; division in **both** conventions - `DivMod Div Rem` truncate toward zero (matching Salam's `/` and `%`), `FloorDivMod FloorDiv FloorMod` round toward minus infinity, and `Mod` always lands in
   `[0, |m|)`; number theory `Pow Pow10 ModExp Gcd Lcm ExtGcd ModInverse Sqrt Factorial`; two's-complement bitwise `And Or Xor AndNot Not PopCount TrailingZeros`; out: `ToStr ToStrBase ToHex ToInt ToIntClamped ToFloat ToBytes ByteLen`. In-place forms (`Set SetInt AddTo SubFrom MulBy AddIntTo MulIntBy NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
   should not allocate per iteration. **Every returning function hands over a
-  fresh value the caller frees** (`defer x.free()`); operands are taken by
+  fresh value the caller frees** (`defer x.Free()`); operands are taken by
   value and are never mutated, so `Mul(x, x)` is fine. Not constant-time - for
   a secret exponent use the blinded routine in `std/ssh/bigint.salam`.
   `b := a` shares the limbs (an in-place call on `b` then frees what `a`
@@ -1250,7 +1273,7 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
   losses `MSELoss CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
-  `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
+  `tp.reset()` per step, `tp.Free()`. `GradCheck` does central differences.
 - **`ai.nn`**: `ParamStore` (owns values and grads; layers hold int handles)
   with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
   `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
@@ -1306,8 +1329,8 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   `os.Exists`). Lines split on `\n` only (a Windows `\r` stays), `Readline`
   returns `""` for a empty line and at EOF alike, and everything is `str`,
   so text only. `print`/`println` to a pipe or file are buffered:
-  `io.Flush()` pushes the buffer out, and a panic loses what is still in it
-  (`printerrln` is unbuffered).
+  `io.Flush()` pushes the buffer out; `printerrln`, a panic and `os.Exit`
+  write out what is still in it first (`printerrln` is unbuffered).
 - **`os`**: `Args Env Cwd Chdir Exit Abort Pid Run RunCapture Output Exists IsDir FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
   `Run`/`RunCapture`/`Output` hand the whole string to `/bin/sh` (never
   splice user input in); `RunCapture` captures stdout only (add `2>&1`).
@@ -1331,6 +1354,16 @@ KillGroup Close`. Reads take a time in ms (0 only looks, negative waits
   timeout (`RunResult`, `Free` it). **`os.pty`** `Open(cmd, rows, cols):
 process.Child` runs a program on a pseudo terminal (POSIX only; type
   `\r` for Enter), `Resize GetSize Supported`.
+  **`os.signal`** (POSIX signals; Windows has safe stubs): block, then
+  wait. `NewSet AddSignal DelSignal IsSignal FillSet Block Unblock SetMask
+  CurrentMask` (sets are `void*`, `mem.Free` them), `WaitSignal(set)`
+  returns the number, `Wait`/`WaitTimeout(set, out, ms)` return
+  `WaitArrived WaitTimedOut WaitInvalid WaitFailed WaitBusy`, `Raise`,
+  `Install(sig, handler)`/`Restore(sig, snapshot)`, and `SigInt SigTerm
+  SigHup SigUsr1 SigWinch` etc. (USR1/USR2/CHLD/CONT/STOP/TSTP differ by OS).
+  Block in `main` **before** spawning threads, which inherit the mask; one
+  waiter per process; `WaitTimeout` needs an `Install` first. SIGWINCH:
+  `InstallWinchHandler NewWinchSet WaitWinch WakeWinch WinchSupported`.
   **`os.shell`** `Run Exec System` (code, stdout and stderr together),
   **`os.temp`** `File Directory Remove RemoveDir` (`Directory` returns `""`
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
@@ -1402,6 +1435,22 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   - Input: `Decode DecodeMouse` (pure, testable without a tty), `ReadKey GetKey ReadByte KeyReady ReadPassword`, `Key`/`MouseEvent`, `Key*` codes.
   - Progress: `NewBar BarSet BarAdd BarDraw BarFinish`, `NewSpinner SpinnerTick SpinnerStop SpinnerFree`, `FormatBytes FormatDuration`; off a
     terminal they write one plain final line.
+- **`tui`**: retained-mode full-screen terminal UI on top of `term`.
+  `NewTerminalScreen(root)` then `start()` and **`defer screen.Close()` on
+  the next line** (restores the terminal); loop `until screen.next_event(ev):
+screen.dispatch(ev) ... screen.present() end`, or `run()`. A widget is a
+  struct with `pub use tui.BaseWidget` overriding `render(buf, bounds)` /
+  `handle_event(ev): bool` / `focusable()`; add with `screen.Add(parent, w)`
+  (`RootId`), get back with `screen.widget(id)`. Widgets: `NewText NewInput
+NewButton NewCheckbox NewList NewProgress NewSeparator NewTable
+NewTableView NewModal`, `Panel {}`; layout `NewRow NewColumn NewGrid
+NewStack` with `add` and `set_width(i, LayoutSize {...})`. Draw with
+  `buf.put_str(x, y, text, tui.Style { fg = tui.Cyan, bold = true })`,
+  `fill`, `DrawBorder`. Focus: `focus focus_next push_focus pop_focus`,
+  keys via `set_keymap(NewDefaultKeymap())`. Headless (tests, previews):
+  `NewScreen(root, w, h)`, `post`/`dispatch`, `draw()`,
+  `buffer.row_text(y)`; never `start()` without a terminal. Resizes come
+  from SIGWINCH (`os.signal`), polled on Windows.
 
 ```salam
 import term
@@ -1419,22 +1468,22 @@ func main:
 end
 ```
 
-### Collections (heap-allocated: call `.free()`, idiom `defer x.free()`)
+### Collections (heap-allocated: call `.Free()`, idiom `defer x.Free()`)
 
 - **`Vector<T>`** (built-in; also `import collections`): `push pop get(i) ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter copy free`; index via `v[i]` (read) / `v[i] = x` (write); free functions
   `contains index_of last_index_of count_of slice clone reverse swap extend`.
-- **`HashMap<K,V>`**: `put(k,v) get(k) get_or(k, def) has(k) remove(k) size is_empty iter copy free`; iterate with `each k, v in m:`. `get` of a
+- **`HashMap<K,V>`**: `put(k,v) get(k) GetOr(k, def) has(k) remove(k) size is_empty iter copy free`; iterate with `each k, v in m:`. `get` of a
   missing key returns the zero value (a **null** `str` that crashes when
-  used), so test `has` or use `get_or`. Iteration is in hash order, which
+  used), so test `has` or use `GetOr`. Iteration is in hash order, which
   changes as the map grows; sort the keys when order shows. `get` returns a
   copy of a struct value: change it and `put` it back.
 - **`Set<T>`** (`add has remove size`), **`Stack<T>`** (`push pop peek size is_empty`), **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
   **`PriorityQueue<T>`** (`push pop peek`, a **min**-heap on `<`),
   **`LinkedList<T>`**, **`Counter<K>`** (`add add_n count distinct`),
-  **`OrderedMap`** (str to str in insertion order: `set get get_or has remove key_at val_at len`), **`Pair`**, **`CircularList`**.
-- Pitfalls: `b := a` shares the elements (`b.set(0, x)` changes `a`, a push on
-  one can move the other's memory); copy with `v.copy()`. `pop peek dequeue first last` and an index past the end stop the program on an empty
+  **`OrderedMap`** (str to str in insertion order: `set get GetOr has remove key_at val_at len`), **`Pair`**, **`CircularList`**.
+- Pitfalls: `b := a` shares the elements (`b.Set(0, x)` changes `a`, a push on
+  one can move the other's memory); copy with `v.Copy()`. `pop peek dequeue first last` and an index past the end stop the program on an empty
   structure (a `--release` build reads garbage instead).
 - **`sort`**: `Sort SortDesc SortBy StableSortBy Sorted SortedBy IsSorted SortIndex BinarySearch LowerBound UpperBound Min Max Reverse Swap` + named
   algorithms (`QuickSort MergeSort HeapSort IntroSort …`). Comparators:
@@ -1444,10 +1493,10 @@ end
   wrongly without error; `Min`/`Max` of an empty vector stop the program.
   Strings sort by code point, which is wrong for Persian (`پ چ ژ ک گ` after
   `و`).
-- **`option`**: `Some None IsSome IsNone Unwrap UnwrapOr Expect`, fields
-  `.present .value`. Never read `.value` unchecked: on an empty
-  `Option<str>` it is a null pointer and printing it segfaults. No `match`
-  and no `?` on an Option.
+- **`core`'s `Option<T>`**: `Some None IsSome IsNone Unwrap UnwrapOr Expect`, fields
+  `.present .value` (and the methods under `T?` above). Never read `.value`
+  unchecked: on an empty `Option<str>` it is a null pointer and printing it
+  segfaults. No `match` and no `?` on an Option.
 - **`dependency`**: dependency injection, google/wire style. Providers are keyed by a
   name you choose (no runtime type identity): `New()`,
   `Provide(c, "Service", "Repo", Service {}, (cx: dependency.Container): ... end)` (the
@@ -1455,9 +1504,12 @@ end
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
   (lazy singleton), `Built Count Error`, `Close` (cleanups in reverse build order).
-- **`result`**: `Result<T, E>` (`Ok`/`Err`) with `IsOk IsErr UnwrapOr Expect`
-  and postfix `?` (error types must match). There is no `Unwrap`, `map` or
-  `and_then`; `Expect` does not print the error.
+- **Error returns**: there is no stdlib `Result`. Prefer `throws`/`try`/`catch`
+  (see the throws section above); for an explicit `Ok`/`Err` value, declare
+  your own `enum Result<T, E>: Ok(value: T), Err(error: E) end` - postfix `?`
+  works on any such enum (error types must match). For "one of several
+  shapes" that are not an error/success pair, prefer an `or` type instead
+  of a hand-rolled enum.
 
 ### Data formats
 
@@ -1604,7 +1656,7 @@ end
   returns a `MatchResult` value (`.ok .start .stop .count`) to read with
   `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
   `FindSubmatch FindAll FindAllN FindAllMatches Split SplitN` (all
-  `Vector`-returning, so `defer v.free()`) and `$1`/`${name}` rewriting with
+  `Vector`-returning, so `defer v.Free()`) and `$1`/`${name}` rewriting with
   `Expand ReplaceExpand ReplaceAllExpand`; `IsValid` checks a pattern. Syntax:
   `. [] \d \w \s \D \W \S ^ $ | (…) (?:…) (?<name>…) (?P<name>…) * + ? {n,m}`
   and the lazy `*? +? ?? {n,m}?`. **No `\b`** (it means `b`), **no `(?i)`**,
@@ -1926,8 +1978,8 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
-- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
-- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `ai.tensor ai.autograd ai.nn ai.optim ai.ml ai.gguf ai.llm ai.onnx ai.image data npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview ai.opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
+- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`T?` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `T?` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
+- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `ai.tensor ai.autograd ai.nn ai.optim ai.ml ai.gguf ai.llm ai.onnx image data npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -1979,7 +2031,7 @@ naive port into compile errors (each corresponds to a case in
    callback). Only mark something `mut` if you actually reassign it.
 3. **Reassignment requires `mut`.** `x := 1; x = 2` fails; use `mut x := 1`.
 4. **Heap collections must be freed.** `Vector/HashMap/Set/...` allocate; call
-   `.free()` (idiom: `defer v.free()` right after creation). Also free elements
+   `.Free()` (idiom: `defer v.Free()` right after creation). Also free elements
    when they own memory.
 5. **Integer `/` truncates** toward zero. **Bitwise operators (`& | ^ ~ << >>`)
    are supported on integers** with C precedence and compound forms
@@ -1988,7 +2040,7 @@ naive port into compile errors (each corresponds to a case in
 6. **Errors are thrown and caught explicitly.** A function that can fail is
    declared `throws` and fails with `throw`; every call to it is marked `try`
    (pass the error on, only inside a `throws` function) or sits in a
-   `try: ... catch e: ... end` block. An unmarked call is E139. The error is
+   `try: ... catch e: ... end` block. An unmarked call is E155. The error is
    always the prelude type `Error`; nothing is unwound, `defer` runs, and
    panics (out-of-bounds index, `Unwrap` on None) are not caught.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
@@ -2047,19 +2099,19 @@ General mapping that applies to all source languages:
 | dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                              |
 | list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                                         |
 | set                          | `Set<T>`                                                                                    |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                                       |
+| tuple / record               | small `struct`, or `Pair`, or `A or B` for sum types                                        |
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                               |
 | exception / error            | `func f(): T throws`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                                        |
+| null / nil / None            | `null` (pointers) or `core.None()`                                                          |
 | lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                 |
-| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`                     |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `A or B or …`                    |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                                         |
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`                    |
 | `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)                  |
 | `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)                 |
 | `for i in range(n)`          | `repeat n in i:`                                                                            |
 | `for x in xs`                | `each x in xs:`                                                                             |
-| destructor / cleanup         | `defer x.free()`                                                                            |
+| destructor / cleanup         | `defer x.Free()`                                                                            |
 
 ### From PHP
 
@@ -2107,7 +2159,7 @@ General mapping that applies to all source languages:
   or `T[]` slices; `map`→`HashMap`.
 - **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
-  `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`
+  `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.Free()`
   (Salam does not borrow-check). Pattern `match` maps to Salam `match`.
 
 ---
@@ -2229,7 +2281,7 @@ mut ok := true
 v := jobs.recv(ok)                            // ok = false once closed AND drained
 v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
 jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
-jobs.close()   jobs.free()                    // also: try_send/try_recv/len/is_closed
+jobs.Close()   jobs.Free()                    // also: try_send/try_recv/len/is_closed
 // constructor and free functions (T on the result):
 c := chan.New(8) as chan.Chan<i64>            // initialized, no separate init
 chan.Send(c, v)   chan.Recv(c, ok)            // Send/SendTimeout/TrySend, Recv/RecvTimeout/TryRecv
@@ -2334,6 +2386,9 @@ are never translated, in either language.
 backend rather than defaulting to false, so test it with `defined` in either
 language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
 English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
+On the JS backend (`salam js` and page scripts) `SALAM_OS` and `SALAM_ARCH`
+are both `"js"` and every `SALAM_OS_*` / `SALAM_ARCH_*` flag is false, so an
+OS chain falls through to its `else:` there.
 
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
@@ -2378,11 +2433,11 @@ page:
     header:
         background = "blue"
         color = "white"
-        padding = "24px"
-        heading: size = 1 content = "Welcome to Salam" font_size = "32px" end
+        padding = 24px
+        heading: size = 1 content = "Welcome to Salam" font_size = 32px end
     end
     box:                                   // generic container (div)
-        padding = "20px"
+        padding = 20px
         paragraph: content = "Generated from Salam." end
     end
     form:
@@ -2541,7 +2596,7 @@ Rules, all checked at compile time:
 - The layout function is `pure`: no I/O, network, random numbers or global
   writes inside the UI (E012). Fetch data in the handler and pass it in.
   Reading a `Vector`/`HashMap` parameter is fine (`len`, `is_empty`, `get`,
-  `first`, `last`, `xs[i]`, `has`, `get_or`, `size`, `each x in xs`); a
+  `first`, `last`, `xs[i]`, `has`, `GetOr`, `size`, `each x in xs`); a
   method that changes it (`push`, `pop`, `set`, `put`, `remove`, `ref`) is E012.
 - Text and attribute values are always HTML-escaped; there is no raw-HTML type.
 - A runtime value for a URL attribute must be a `web.Url`, and a runtime CSS
@@ -2643,8 +2698,8 @@ salam add github.com/owner/repo         # add a GitHub package (import "github.c
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages
 salam update / salam update pkg@latest  # same-major updates by default; uninstall, deps clean too (docs/PACKAGES.md)
 salam build --lib[=static]              # .so/.dylib/.dll (or .a) + NAME.h from the entry file's export: block
-salam memcheck app.salam                # build with AddressSanitizer and run
-salam version                           # print the compiler version (NOT --version)
+salam memcheck app.salam                # run under Valgrind if installed, else build with AddressSanitizer
+salam version                           # print the compiler version (--version and -v work too)
 salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
@@ -2699,12 +2754,18 @@ Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
 - `salam help` lists every command: `build`, `check`, `test`, `obj`, `llvm`,
   `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`, `add`,
   `remove`, `update`, `deps`, `install`, `uninstall`, `search`, `format`,
-  `doc`, `translate`, `page`, `debug`, `memcheck`, `inspect`, `cli`,
+  `doc`, `translate`, `page`, `debug`, `memcheck`, `inspect`, `lsp`
+  (language server), `dap` (debug adapter, not on Windows yet), `cli`,
   `upgrade`, `version`, plus the two SQL commands (schema check and typed
   query generation).
-- Targets: the C backend is the default (`build`, `run`, `obj`, cross-compile
-  with `--target=<triple>`); `salam llvm` emits LLVM IR and `--backend=llvm`
-  builds with it (32-bit aware, `docs/PLATFORMS.md`); `--target=wasm32-wasi`
+- Targets: LLVM is the default backend when the compiler includes it
+  (the release builds for Linux, macOS and Windows), the C backend
+  (`--backend=c`, through tcc, gcc or clang) otherwise; Windows on Arm
+  defaults to the native backend. `--target=<triple>` cross-compiles with
+  `build`, `run` and `obj`; `salam llvm` emits LLVM IR (32-bit aware,
+  `docs/PLATFORMS.md`); `--backend=native` writes machine code itself for
+  x86-64, i686, AArch64, 32-bit ARM and RISC-V 64 Linux, x86-64, i686 and
+  AArch64 Windows, and x86-64 and arm64 macOS (`docs/NATIVE_BACKEND.md`); `--target=wasm32-wasi`
   builds WebAssembly; `salam js` and `salam web` target browsers;
   `--target=<arch>-unknown-none` with `--entry`, `--linker-script` and
   `--link-object` builds freestanding kernels (`docs/FREESTANDING.md`).
@@ -2812,7 +2873,7 @@ assets), and no outbound sockets, so `http.Get` cannot call another server from
 the module. A program that must call out uses a few lines of `fetch` in
 `worker.js` or a native host. `salam js` is for browsers, not a Worker module.
 
-Complete examples, built by CI: `tests/en/apps/cloudflare-worker-router`,
+Complete examples (in the repository, not built by CI for Wasm): `tests/en/apps/cloudflare-worker-router`,
 `-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook
 answers with the Bot API call itself, so no outbound call and no token at
 runtime; `setup/setup.salam` calls `setWebhook` from a native machine). The
@@ -2911,7 +2972,7 @@ two closing angle brackets, not a shift.
 | C                                            | Salam                                                                                                                       |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `typedef struct { … } T;`                    | `struct T: … end` (fields default private → add `pub`)                                                                      |
-| `union { … }` / tagged union                 | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                                                |
+| `union { … }` / tagged union                 | **`A or B or …`**, narrowed by `match` on type patterns                                                                     |
 | `enum { A, B=5 }`                            | `enum E: A, B = 5 end` (members on one line need commas; one per line needs none)                                           |
 | `#define NAME 3` (const)                     | `const NAME := 3`                                                                                                           |
 | `#define MAX(a,b) …` (macro fn)              | `inline func Max(a: int, b: int): int: … end`                                                                               |
@@ -2922,7 +2983,7 @@ two closing angle brackets, not a shift.
 | `malloc/calloc/realloc/free`                 | `mem.Allocate / AllocateZeroed / Reallocate / Free`                                                                         |
 | `memcpy/memset/memmove`                      | `mem.Copy / mem.Set / mem.MemMove`                                                                                          |
 | `strlen/strcmp/strcpy/strcat`                | `str.Len / str.Compare / str.Clone / str.Concat` (+ `StringBuilder`)                                                        |
-| growable array / `realloc` buffer            | `Vector<T>` (`push/get(i)/set/len`), remember `.free()`                                                                     |
+| growable array / `realloc` buffer            | `Vector<T>` (`push/get(i)/set/len`), remember `.Free()`                                                                     |
 | hash table (symbol table)                    | `HashMap<K, V>`                                                                                                             |
 | `switch (x) { case … }` (fallthrough)        | **`switch x: … end`** - bare labels (no `case`/`default`), same fallthrough, `break` exits it (§2)                          |
 | `switch` used for exhaustive/tagged dispatch | `match x: … end` instead - exhaustive on enum/`Variant`, no fallthrough (§3)                                                |
@@ -2955,7 +3016,7 @@ two closing angle brackets, not a shift.
 - **AST nodes**: a `struct` per node kind, or one node `struct` with a `kind`
   `enum` field plus a `Variant` payload; walk with recursion and `match`.
 - **Arenas / lifetime**: `mem.Allocate`/`Free`; or lean on `Vector`/`HashMap`
-  ownership + `defer x.free()`. There is no borrow checker, so free deliberately.
+  ownership + `defer x.Free()`. There is no borrow checker, so free deliberately.
 - **Diagnostics**: return a `bool`/`Option` up the call chain and collect an
   error list (mirror `src/diag`); no exceptions to unwind.
 
@@ -2984,6 +3045,12 @@ in dependency order:
 | `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                             |
 | `fmt`                                 | 1.0k                      | source formatter (`salam format`)                                   |
 
+The table is the retired C implementation, kept as the shape to port. The
+self-hosted compiler in `compiler/` keeps that shape and has grown past it:
+`nativegen` writes machine code with its own linker, `interp` is a bytecode VM
+with a garbage collector (`SALAM_VM=0` falls back to the tree walker), and
+LLVM is the default backend whenever the compiler includes it.
+
 **Suggested port order:** `core` → `token`/`source` → `lexer` → `ast` →
 `parser` → `semantic` → one backend (`codegen` C) → `driver`/`cli`, then the
 remaining backends and tools. Port module-by-module, keeping the existing C build
@@ -3011,7 +3078,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 - **Language directive:** a Persian file may state its language with
   `// زبان: فارسی` in its first 8 lines; an English file uses `// lang: en`.
   Mixed forms such as `// lang: fa` or `// زبان: en` are a compile error.
-- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`. There is no `اصلی` (`تابع اصلی` compiles as an ordinary function but the program has no entry point), and no `بسته اصلی` line is needed.
+- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`. There is no `اصلی`: a file with `تابع اصلی` and no `ریشه` fails to build with "نقطه‌ی ورود وجود ندارد: یک تابع 'ریشه' تعریف کنید" (no entry point), and no `بسته اصلی` line is needed.
   Its return value is the exit code, as in English (`برگشت ۱` to fail).
 - **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in
   number literals, mixed freely with ASCII. The decimal point is always `.`
@@ -3026,6 +3093,14 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
   (`تابع جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
   same inside a name, so `آرگومان ها` and `آرگومان‌ها` are one name. Arabic
   `ي`/`ك` equal Persian `ی`/`ک`.
+- **Bidi control characters** (U+202A-U+202E, U+2066-U+2069, and the marks
+  U+200E, U+200F, U+061C) are an error in code, in either language. Inside a
+  string or a comment the embeddings, overrides and isolates are a warning,
+  while the marks are allowed there. `check --fix` writes the escape
+  (`"\u202E"`) in a `"..."`, `«...»` or `"""..."""` string and deletes the
+  character from a comment. A backtick string or a text block (where `\u` is
+  not decoded) and a character literal get no automatic fix. ZWNJ and ZWJ
+  are never flagged.
 - **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
   written with a ZWNJ or a space, but not glued together: `نادرستسرچاپ` is an
   unknown identifier.
@@ -3103,8 +3178,12 @@ operators instead. `open` is gone as well: file IO is `import fs`, then
 the interpreter implement them in their own runtimes; prefer `os.Env` and
 `os.Args` in new code.
 
-**Stay English in Persian files:** the compile-time constants (`SALAM_OS`,
-`SALAM_OS_WINDOWS`, ...) and C names declared in `درون‌داد`.
+**Compile-time constants have Persian names** and a Persian file must use
+them: `SALAM_OS_LINUX` is `سلام سیستم لینوکس`, `SALAM_OS_WINDOWS` is
+`سلام سیستم ویندوز`, `SALAM_OS` is `سلام سیستم`, `SALAM_ARCH` is `سلام معماری`
+(the English spelling is E001, and the message names the Persian one;
+`salam translate fa` converts them). **Stay English in Persian files:** only
+the C names declared in `درون‌داد`.
 
 Two Persian words have two meanings, told apart by position:
 
@@ -3134,7 +3213,7 @@ are fine.
 | `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
 | `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
 | `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |
-| `Variant<...>`   | `گوناگون<...>`               |                  |                          |
+| `A or B`         | `A یا B`                     |                  |                          |
 
 Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 `اعشار` is **f32**; a float literal such as `۲.۵` is `اعشار۶۴`, so write
@@ -3192,7 +3271,7 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `عبارت باقاعده`, `collections` `مجموعه ها`, `mem` `حافظه`, `path` `مسیر`,
 `fs` `سیستم پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
-`log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
+`log` `گزارش`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
 (imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`,
 `db/typesense` `تایپسنس` (imported as `دیتابیس.تایپسنس`),
@@ -3372,8 +3451,8 @@ More forms, each checked with the current compiler:
     همگانی نژاد: رشته = ""
 پایان
 
-// Variant
-تابع شرح(م: گوناگون<صحیح، رشته>): رشته:
+// or type
+تابع شرح(م: صحیح یا رشته): رشته:
     برگشت همخوان م:
         صحیح ع: "عدد " + ع پایان
         رشته ر: "متن " + ر پایان
@@ -3407,9 +3486,9 @@ More forms, each checked with the current compiler:
     پایا جداکننده := "/"
 پایان
 
-// threads: spawn and join stay English
-ر := spawn(کارگر)
-join(ر)
+// threads: spawn and join are نخ‌ساز and نخ‌پیوند (the English names are E001)
+ر := نخ‌ساز(کارگر)
+نخ‌پیوند(ر)
 ```
 
 **چند مقدار برگشتی (چندتایی).** گونه‌ی برگشتی `(الف، ب)`، ساختن با `برگشت الف، ب`
@@ -3432,7 +3511,7 @@ join(ر)
 
 All of §6 applies. In addition:
 
-1. **Entry is `ریشه`:** `تابع ریشه:` ... `پایان`. A Persian file with `تابع main`, `تابع اصلی` or a `بسته اصلی` line has no entry point (the first two compile as ordinary functions, so the program builds and then does nothing).
+1. **Entry is `ریشه`:** `تابع ریشه:` ... `پایان`. A Persian file with `تابع main`, `تابع اصلی` or a `بسته اصلی` line has no entry point, and the build fails with "نقطه‌ی ورود وجود ندارد" (no entry point).
 2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
    like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In

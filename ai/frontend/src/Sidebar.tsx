@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import type { Project, Subscription, User } from "./api";
-import { isDesktop } from "./desktop";
-import { IconChart, IconChat, IconClose, IconFolder, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
-import { isFa, setLang, t } from "./i18n";
+import type { Chat, Project, Subscription, User } from "./api";
+import { isDesktop, useAgentUpdate } from "./desktop";
+import { IconBolt, IconChart, IconChat, IconClose, IconDownload, IconFolder, IconKey, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
+import { isFa, t } from "./i18n";
 import { fmtNum } from "./format";
+import { stateText } from "./Projects";
 
 type Props = {
   user: User;
   plan: Subscription | null;
   projects: Project[];
+  activeChats: Chat[];
   activeProject: string | null;
   open: boolean;
   onClose: () => void;
   onNew: () => void;
-  onLogout: () => void;
   onOpenProjects: () => void;
   onOpenProject: (id: string) => void;
   onOpenOthers: () => void;
+  onOpenChat: (id: string, projectId: string) => void;
   onNewProject: () => void;
   page: string;
   onNavigate: (path: string) => void;
@@ -29,6 +31,7 @@ export function Sidebar(p: Props) {
     scroller.current?.scrollTo({ top: 0 });
   }, [scope]);
   const [menu, setMenu] = useState(false);
+  const agentUpdate = useAgentUpdate();
   const wrap = useRef<HTMLDivElement>(null);
   const gear = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -84,6 +87,30 @@ export function Sidebar(p: Props) {
           {t("گفت‌وگوی تازه", "New chat")}
         </button>
         <div className="sidebar-scroll" ref={scroller}>
+          {p.activeChats.length > 0 && (
+            <div className="sidebar-projects">
+              <div className="sidebar-section-head">
+                <span className="sidebar-section-title static">
+                  <IconBolt width={14} height={14} />
+                  <span>{t("الان فعال", "Active now")}</span>
+                </span>
+              </div>
+              <div className="project-nav">
+                {p.activeChats.map((chat) => (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    className="project-link"
+                    onClick={() => pick(() => p.onOpenChat(chat.id, chat.project_id || ""))}
+                    title={stateText(chat)}
+                  >
+                    <span className={`chat-state ${chat.state ?? "idle"}`} aria-hidden="true" />
+                    <span className="project-link-name" dir="auto">{chat.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="sidebar-projects">
             <div className="sidebar-section-head">
               <button type="button" className={`sidebar-section-title ${p.page === "projects" ? "active" : ""}`} onClick={p.onOpenProjects}>
@@ -126,85 +153,92 @@ export function Sidebar(p: Props) {
           </div>
         </div>
         <div className="sidebar-foot">
-          <div className="avatar" aria-hidden="true">
-            {p.user.name.trim().charAt(0)}
-          </div>
-          <div className="who">
-            <strong dir="auto">{p.user.name}</strong>
-            <span dir="ltr">{p.user.email}</span>
-            {p.plan && (
+          {!isDesktop ? (
+            <a
+              href="https://www.salamlang.ir/agent/"
+              className="foot-banner"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <IconMonitor width={16} height={16} />
+              <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
+            </a>
+          ) : (
+            agentUpdate && (
+              <a
+                href={agentUpdate.url}
+                className="foot-banner foot-banner-update"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <IconDownload width={16} height={16} />
+                <span>{t(`به‌روزرسانی به نسخه‌ی ${agentUpdate.version}`, `Update to version ${agentUpdate.version}`)}</span>
+              </a>
+            )
+          )}
+          <div className="sidebar-foot-row">
+            <div className="avatar" aria-hidden="true">
+              {p.user.name.trim().charAt(0)}
+            </div>
+            <div className="who">
+              <strong dir="auto">{p.user.name}</strong>
+              <span dir="ltr">{p.user.email}</span>
+              {p.plan && (
+                <button
+                  type="button"
+                  className={`plan-chip ${p.plan.plan.id === "free" ? "free" : "ok"}`}
+                  onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/plans")))}
+                  title={t("دیدن پلن‌ها", "See plans")}
+                >
+                  <IconSpark width={12} height={12} />
+                  {isFa ? p.plan.plan.name : p.plan.plan.name_en || p.plan.plan.name}
+                  {p.plan.plan.id === "free" && <span className="plan-chip-cta">{t("ارتقا", "Upgrade")}</span>}
+                </button>
+              )}
+            </div>
+            <div className="settings-wrap" ref={wrap}>
               <button
                 type="button"
-                className={`plan-chip ${p.plan.plan.id === "free" ? "free" : "ok"}`}
-                onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/plans")))}
-                title={t("دیدن پلن‌ها", "See plans")}
+                className={`icon-button ${menu ? "active" : ""}`}
+                onClick={() => setMenu(!menu)}
+                aria-label={t("تنظیمات", "Settings")}
+                title={t("تنظیمات", "Settings")}
+                aria-haspopup="true"
+                aria-expanded={menu}
+                aria-controls="settings-menu"
+                ref={gear}
               >
-                <IconSpark width={12} height={12} />
-                {isFa ? p.plan.plan.name : p.plan.plan.name_en || p.plan.plan.name}
-                {p.plan.plan.id === "free" && <span className="plan-chip-cta">{t("ارتقا", "Upgrade")}</span>}
+                <IconSettings />
               </button>
-            )}
+              {menu && (
+                <nav className="settings-menu" id="settings-menu" aria-label={t("تنظیمات", "Settings")}>
+                  {items.map((item) => (
+                    <a
+                      key={item.path}
+                      href={item.path}
+                      className={`chat-link ${p.page === item.key ? "active" : ""}`}
+                      aria-current={p.page === item.key ? "page" : undefined}
+                      onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate(item.path)))}
+                    >
+                      {item.icon}
+                      <span>{item.label}</span>
+                    </a>
+                  ))}
+                  {p.user.admin && (
+                    <a
+                      href="/admin"
+                      className={`chat-link ${p.page === "admin" ? "active" : ""}`}
+                      aria-current={p.page === "admin" ? "page" : undefined}
+                      onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/admin")))}
+                    >
+                      <IconShield width={16} height={16} />
+                      <span>{t("مدیریت", "Admin")}</span>
+                    </a>
+                  )}
+                </nav>
+              )}
+            </div>
           </div>
-          <div className="settings-wrap" ref={wrap}>
-            <button
-              type="button"
-              className={`icon-button ${menu ? "active" : ""}`}
-              onClick={() => setMenu(!menu)}
-              aria-label={t("تنظیمات", "Settings")}
-              title={t("تنظیمات", "Settings")}
-              aria-haspopup="true"
-              aria-expanded={menu}
-              aria-controls="settings-menu"
-              ref={gear}
-            >
-              <IconSettings />
-            </button>
-            {menu && (
-              <nav className="settings-menu" id="settings-menu" aria-label={t("تنظیمات", "Settings")}>
-                {items.map((item) => (
-                  <a
-                    key={item.path}
-                    href={item.path}
-                    className={`chat-link ${p.page === item.key ? "active" : ""}`}
-                    aria-current={p.page === item.key ? "page" : undefined}
-                    onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate(item.path)))}
-                  >
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </a>
-                ))}
-                {!isDesktop && (
-                  <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer" onClick={() => pick(() => {})}>
-                    <IconMonitor width={16} height={16} />
-                    <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
-                  </a>
-                )}
-                {p.user.admin && (
-                  <a
-                    href="/admin"
-                    className={`chat-link ${p.page === "admin" ? "active" : ""}`}
-                    aria-current={p.page === "admin" ? "page" : undefined}
-                    onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/admin")))}
-                  >
-                    <IconShield width={16} height={16} />
-                    <span>{t("مدیریت", "Admin")}</span>
-                  </a>
-                )}
-              </nav>
-            )}
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setLang(isFa ? "en" : "fa")}
-            aria-label={t("تغییر زبان به انگلیسی", "Switch to Persian")}
-            title={isFa ? "English" : "فارسی"}
-          >
-            <IconGlobe />
-          </button>
-          <button type="button" className="icon-button" onClick={p.onLogout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
-            <IconLogout />
-          </button>
         </div>
       </aside>
     </>

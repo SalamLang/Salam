@@ -14,9 +14,23 @@
 
 package webview
 
+import str
+import mem
+import os
+import filepath
+import crypto
+import fs
+import io
+import os.user
+import os.shell
+import encoding.json
+import sync
+
 mut _menu_ids := Vector {} as Vector<str>
 mut _on_menu := (_id: str): ret end
 mut _on_tray_click := (): ret end
+mut _on_tray_double_click := (): ret end
+mut _on_tray_menu := (_id: str): ret end
 mut _on_second := (_args: Vector<str>): ret end
 mut _on_notify_click := (): ret end
 
@@ -38,14 +52,20 @@ pub struct MenuItem:
 end
 
 func _menu_id(id: str): int:
-    _menu_ids.push(str.Clone(id))
-    ret _menu_ids.len() + 999
+    _menu_ids.Push(str.Clone(id))
+    ret _menu_ids.Len() + 999
 end
 
 func _fire_menu(native: int):
     at := native - 1000
-    if at >= 0 and at < _menu_ids.len():
-        _on_menu(_menu_ids[at])
+    if at >= 0 and at < _menu_ids.Len():
+        id := _menu_ids[at]
+        _on_menu(id)
+        _on_tray_menu(id)
+        // Best-effort app-level event broadcast for menu actions.
+        encoded := json.Str(id)
+        Emit("__app:menu", encoded)
+        mem.Free(encoded as void*)
     end
 end
 
@@ -76,7 +96,7 @@ func _secret_file(key: str): str:
 end
 
 func _secret_id(): str:
-    ret _cfg.id.len() > 0 ? _cfg.id : "ir.salamlang.app"
+    ret _cfg.id.Len() > 0 ? _cfg.id : "ir.salamlang.app"
 end
 
 func _split_args(data: void*, size: int): Vector<str>:
@@ -88,7 +108,7 @@ func _split_args(data: void*, size: int): Vector<str>:
             piece := mem.Allocate((i - start + 1) as u64)
             mem.Copy(piece, ((data as i64) + (start as i64)) as void*, (i - start) as u64)
             (piece as u8*)[i - start] = 0 as u8
-            out.push(piece as str)
+            out.Push(piece as str)
             start = i + 1
         end
     end
@@ -121,10 +141,37 @@ pub func OpenURL(url: str): bool:
     ret false
 end
 
+@en "OpenMail"
+@fa "باز کردن نامه"
+pub func OpenMail(address_or_mailto: str): bool:
+    if address_or_mailto.Len() == 0:
+        ret false
+    end
+    if str.StartsWith(address_or_mailto, "mailto:"):
+        ret OpenURL(address_or_mailto)
+    end
+    mut url := str.Concat("mailto:", address_or_mailto)
+    ok := OpenURL(url)
+    mem.Free(url as void*)
+    ret ok
+end
+
 @en "PickFolder"
 @fa "انتخاب پوشه"
 pub func PickFolder(title: str = "Select a folder"): str:
     ret _os_pick(title, 1, "", "", "")
+end
+
+@en "SelectFolder"
+@fa "انتخاب پوشه"
+pub func SelectFolder(title: str = "Select a folder"): str:
+    ret PickFolder(title)
+end
+
+@en "SelectDirectory"
+@fa "انتخاب شاخه"
+pub func SelectDirectory(title: str = "Select a folder"): str:
+    ret PickFolder(title)
 end
 
 @en "PickFile"
@@ -133,10 +180,67 @@ pub func PickFile(title: str = "Open", filter_name: str = "", patterns: str = ""
     ret _os_pick(title, 0, "", filter_name, patterns)
 end
 
+@en "OpenFile"
+@fa "باز کردن پرونده"
+pub func OpenFile(title: str = "Open", filter_name: str = "", patterns: str = ""): str:
+    ret PickFile(title, filter_name, patterns)
+end
+
+@en "PickFiles"
+@fa "انتخاب پرونده ها"
+pub func PickFiles(title: str = "Open", filter_name: str = "", patterns: str = ""): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    // Best-effort: native picker backends currently expose single-selection in many
+    // builds. A successful pick returns a vector containing one path.
+    // Backends that support multi-select can wire a richer _os_pick_files later.
+    one := PickFile(title, filter_name, patterns)
+    if one.Len() > 0:
+        out.Push(one)
+    else:
+        mem.Free(one as void*)
+    end
+    ret out
+end
+
+@en "OpenFiles"
+@fa "باز کردن پرونده ها"
+pub func OpenFiles(title: str = "Open", filter_name: str = "", patterns: str = ""): Vector<str>:
+    ret PickFiles(title, filter_name, patterns)
+end
+
+@en "PickDirectories"
+@fa "انتخاب پوشه ها"
+pub func PickDirectories(title: str = "Select folders"): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    // Best-effort fallback: directory picker is typically single-selection.
+    one := PickFolder(title)
+    if one.Len() > 0:
+        out.Push(one)
+    else:
+        mem.Free(one as void*)
+    end
+    ret out
+end
+
+@en "SelectDirectories"
+@fa "انتخاب شاخه ها"
+pub func SelectDirectories(title: str = "Select folders"): Vector<str>:
+    ret PickDirectories(title)
+end
+
 @en "SaveFile"
 @fa "ذخیره پرونده"
 pub func SaveFile(title: str = "Save", default_name: str = ""): str:
     ret _os_pick(title, 2, default_name, "", "")
+end
+
+@en "SaveFileAs"
+@fa "ذخیره پرونده به نام"
+pub func SaveFileAs(title: str = "Save As", default_name: str = "", filter_name: str = "", patterns: str = ""): str:
+    // Best-effort: default path/filter support depends on platform picker backend.
+    _keep_filter_name := filter_name
+    _keep_patterns := patterns
+    ret _os_pick(title, 2, default_name, filter_name, patterns)
 end
 
 @en "Message"
@@ -151,16 +255,79 @@ pub func Confirm(title: str, text: str): bool:
     ret _os_message(title, text, true)
 end
 
+@en "InfoMessage"
+@fa "پیام اطلاع"
+pub func InfoMessage(title: str, text: str):
+    Message(title.Len() > 0 ? title : "Info", text)
+end
+
+@en "WarningMessage"
+@fa "پیام هشدار"
+pub func WarningMessage(title: str, text: str):
+    Message(title.Len() > 0 ? title : "Warning", text)
+end
+
+@en "ErrorMessage"
+@fa "پیام خطا"
+pub func ErrorMessage(title: str, text: str):
+    Message(title.Len() > 0 ? title : "Error", text)
+end
+
+@en "Question"
+@fa "پرسش"
+pub func Question(title: str, text: str): bool:
+    ret Confirm(title.Len() > 0 ? title : "Confirm", text)
+end
+
 @en "Notify"
 @fa "اعلان"
 pub func Notify(title: str, body: str, sound: str = ""): bool:
+    // Best-effort legacy bridge; for richer cross-platform notification API use gui.notify.
     ret _os_notify(title, body, sound)
+end
+
+@en "DesktopCapabilityReason"
+@fa "دلیل قابلیت رومیزی"
+pub func DesktopCapabilityReason(feature: str): str:
+    // TODO: wire to os.desktop.capabilities when webview system APIs need richer reporting.
+    if feature == "notify":
+        ret "Use gui.notify.CapabilitiesNote()/CapabilityStatus() for detailed backend limits."
+    else feature == "shortcuts":
+        ret "Use gui.shortcut.AvailabilityReason() and TryRegister for host-dispatch fallbacks."
+    else feature == "dragdrop":
+        ret "Use gui.drop.CapabilityNote() and gui.drag.Note() for platform-specific limits."
+    end
+    ret "Capability details are not available from this legacy bridge; consult os.desktop.capabilities."
+end
+
+@en "NotifyDefault"
+@fa "اعلان پیش‌فرض"
+pub func NotifyDefault(title: str, body: str): bool:
+    ret _os_notify(title, body, "default")
+end
+
+@en "NotifyAlert"
+@fa "اعلان هشدار"
+pub func NotifyAlert(title: str, body: str): bool:
+    ret _os_notify(title, body, "alert")
+end
+
+@en "NotifySilent"
+@fa "اعلان بی‌صدا"
+pub func NotifySilent(title: str, body: str): bool:
+    ret _os_notify(title, body, "")
 end
 
 @en "OnNotifyClick"
 @fa "هنگام کلیک اعلان"
 pub func OnNotifyClick(handler: func ()):
     _on_notify_click = handler
+end
+
+@en "FireNotifyClick"
+@fa "اجرای کلیک اعلان"
+pub func FireNotifyClick():
+    _on_notify_click()
 end
 
 @en "RequestAttention"
@@ -191,7 +358,7 @@ end
 @fa "خواندن راز"
 pub func SecretGet(key: str): str:
     stored := _os_secret_get(_secret_id(), key)
-    if stored.len() > 0:
+    if stored.Len() > 0:
         ret stored
     end
     path := _secret_file(key)
@@ -242,7 +409,7 @@ end
 @en "SetMenu"
 @fa "تنظیم منو"
 pub func SetMenu(window: Window, items: Vector<MenuItem>):
-    if window.index >= 0 and window.index < _wins.len():
+    if window.index >= 0 and window.index < _wins.Len():
         _os_set_menu(_wins[window.index].view, items)
     end
 end
@@ -251,6 +418,14 @@ end
 @fa "تنظیم سینی"
 pub func SetTray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
     _startup()
+    ret _os_set_tray(icon, tooltip, items)
+end
+
+@en "UpdateTray"
+@fa "به‌روزرسانی سینی"
+pub func UpdateTray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
+    // Best-effort portable update: remove + recreate.
+    _os_remove_tray()
     ret _os_set_tray(icon, tooltip, items)
 end
 
@@ -266,9 +441,61 @@ pub func OnTrayClick(handler: func ()):
     _on_tray_click = handler
 end
 
+@en "OnTrayDoubleClick"
+@fa "هنگام دوبار کلیک سینی"
+pub func OnTrayDoubleClick(handler: func ()):
+    _on_tray_double_click = handler
+end
+
+@en "OnTrayMenu"
+@fa "هنگام منوی سینی"
+pub func OnTrayMenu(handler: func (str)):
+    _on_tray_menu = handler
+end
+
 @en "SingleInstance"
 @fa "نمونه یکتا"
 pub func SingleInstance(on_second: func (Vector<str>)): bool:
-    _on_second = on_second
-    ret _os_single_instance()
+    _on_second = (args: Vector<str>):
+        on_second(args)
+        // App-level activation/deep-link forwarding hook.
+        HandleSecondInstanceArgs(args)
+    end
+    ok := _os_single_instance()
+    if ok:
+        // Primary instance: best-effort forwarding of current argv as activation.
+        args := os.Args()
+        HandleSecondInstanceArgs(args)
+        args.Free()
+    end
+    ret ok
+end
+
+@en "SingleInstanceActivate"
+@fa "فعال سازی نمونه یکتا"
+pub func SingleInstanceActivate(on_second: func (Vector<str>) = (_args: Vector<str>): ret end): bool:
+    ret SingleInstance(
+        (args: Vector<str>): on_second(args)
+        ActivateApp() end
+    )
+end
+
+@en "SystemFeaturesNote"
+@fa "یادداشت ویژگی‌های سامانه"
+pub func SystemFeaturesNote(): str:
+    // Best-effort/cross-platform contract:
+    // - Dialogs, menus, tray, notifications, secrets, and single-instance IPC depend on
+    //   platform backends and may degrade gracefully.
+    // - Secret storage tries native keychain/credential APIs first, then file fallback where implemented.
+    // TODO(runtime): expose per-feature support flags from native backends instead of static notes.
+    if SALAM_OS_WINDOWS:
+        ret str.Clone("Windows desktop integration uses Win32/WebView2 helpers where available; behavior depends on runtime and permissions.")
+    end
+    if SALAM_OS_MAC:
+        ret str.Clone("macOS desktop integration uses Cocoa/WebKit helpers where available; behavior depends on APIs, permissions, and session state.")
+    end
+    if SALAM_OS_LINUX:
+        ret str.Clone("Linux desktop integration is best-effort via GTK/portals/D-Bus where available; X11/Wayland differences may affect dialogs, tray, and focus behavior.")
+    end
+    ret str.Clone("Desktop system integration is platform dependent and may be partially implemented.")
 end

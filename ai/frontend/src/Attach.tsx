@@ -34,6 +34,13 @@ function extOf(name: string): string {
   return dot < 0 ? "" : base.slice(dot + 1);
 }
 
+const MIME_IMAGE: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
 export function fmtSize(n: number): string {
   if (n < 1024) return t(`${toPersianDigits(n)} بایت`, `${n} bytes`);
   if (n < 1024 * 1024) return t(`${toPersianDigits(Math.round(n / 1024))} کیلوبایت`, `${Math.round(n / 1024)} KB`);
@@ -50,26 +57,27 @@ export function acceptList(caps: Capabilities): string {
 export function kindOf(file: File, caps: Capabilities): { kind?: FileMeta["kind"]; problem?: string } {
   const ext = extOf(file.name);
   const base = file.name.split(/[\\/]/).pop()?.toLowerCase() ?? "";
-  if (IMAGE_EXTS.includes(ext)) {
+  const mime = (file.type || "").toLowerCase();
+  if (IMAGE_EXTS.includes(ext) || mime in MIME_IMAGE) {
     if (!caps.image) return { problem: t("مدل فعلی دستیار تصویر نمی‌پذیرد.", "The current assistant model does not accept images.") };
-    if (file.size > caps.max_image) return { problem: t(`تصویر «${file.name}» بزرگ‌تر از ${fmtSize(caps.max_image)} است.`, `The image "${file.name}" is larger than ${fmtSize(caps.max_image)}.`) };
+    if (file.size > caps.max_image) return { problem: t(`تصویر «${file.name || t("الحاقی", "clipboard")}» بزرگ‌تر از ${fmtSize(caps.max_image)} است.`, `The image "${file.name || "clipboard"}" is larger than ${fmtSize(caps.max_image)}.`) };
     return { kind: "image" };
   }
-  if (ext === "pdf") {
+  if (ext === "pdf" || mime === "application/pdf") {
     if (!caps.pdf) return { problem: t("مدل فعلی دستیار فایل PDF نمی‌پذیرد. متن آن را در یک فایل متنی بفرستید.", "The current assistant model does not accept PDF files. Send its text in a text file instead.") };
     if (file.size > caps.max_pdf) return { problem: t(`فایل «${file.name}» بزرگ‌تر از ${fmtSize(caps.max_pdf)} است.`, `The file "${file.name}" is larger than ${fmtSize(caps.max_pdf)}.`) };
     return { kind: "pdf" };
   }
-  if (ext === "zip") {
+  if (ext === "zip" || mime === "application/zip" || mime === "application/x-zip-compressed") {
     if (file.size > caps.max_archive) return { problem: t(`فایل «${file.name}» بزرگ‌تر از ${fmtSize(caps.max_archive)} است.`, `The file "${file.name}" is larger than ${fmtSize(caps.max_archive)}.`) };
     return { kind: "archive" };
   }
-  if (caps.text.includes(ext) || caps.text_names.includes(base)) {
+  if (caps.text.includes(ext) || caps.text_names.includes(base) || mime.startsWith("text/")) {
     if (file.size > caps.max_text) return { problem: t(`فایل «${file.name}» بزرگ‌تر از ${fmtSize(caps.max_text)} است.`, `The file "${file.name}" is larger than ${fmtSize(caps.max_text)}.`) };
     return { kind: "text" };
   }
   if (ext === "rar" || ext === "7z" || ext === "tar" || ext === "gz") return { problem: t(`فایل «${file.name}» را به ZIP تبدیل کنید؛ فقط ZIP باز می‌شود.`, `Convert "${file.name}" to ZIP; only ZIP archives can be opened.`) };
-  return { problem: t(`قالب فایل «${file.name}» پشتیبانی نمی‌شود. تصویر، فایل متنی یا کد، و ZIP پذیرفته می‌شود.`, `The format of "${file.name}" is not supported. Images, text or code files, and ZIP are accepted.`) };
+  return { problem: t(`قالب فایل «${file.name || t("الحاقی", "clipboard")}» پشتیبانی نمی‌شود. تصویر، فایل متنی یا کد، و ZIP پذیرفته می‌شود.`, `The format of "${file.name || "clipboard"}" is not supported. Images, text or code files, and ZIP are accepted.`) };
 }
 
 const encoder = new TextEncoder();

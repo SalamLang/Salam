@@ -1,0 +1,329 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import mem
+import gui.style
+
+func _sfree(s: str):
+    if s.Len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func _hb(p: u8*, i: int): int:
+    ret p[i] as int
+end
+
+func _is_ws(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 13 or c == 12
+end
+
+func _canon(name: str): str:
+    trimmed := str.Trim(name)
+    mut n := str.Lower(trimmed)
+    mem.Free(trimmed as void*)
+    if n.Find("_") >= 0:
+        old := n
+        n = str.Replace(old, "_", " ")
+        _sfree(old)
+    end
+    if n.Find("‌") >= 0:
+        old2 := n
+        n = str.Replace(old2, "‌", " ")
+        _sfree(old2)
+    end
+    ret n
+end
+
+func _kind_class(n: str, inl &: bool): int:
+    inl = false
+    switch n:
+        "#text": ret _K_TEXT end
+        "page", "body", "html", "root", "صفحه": ret _K_PAGE end
+        "span", "تکه", "bold", "b", "پررنگ", "strong", "قوی", "italic", "i", "کج", "emphasis", "em", "تاکید", "cite", "نام اثر", "variable", "var", "متغیر", "definition", "dfn", "تعریف", "code", "کد", "keyboard", "kbd", "صفحه کلید", "sample", "samp", "نمونه خروجی", "small", "ریز", "subscript", "sub", "زیرنویس", "superscript", "sup", "بالانویس", "mark", "highlight", "برجسته", "deleted", "del", "حذف شده", "strikethrough", "s", "خط خورده", "inserted", "ins", "افزوده", "underline", "u", "زیرخط", "abbreviation", "abbr", "کوته نوشت", "isolate", "bdi", "direction override", "bdo", "data", "داده", "time", "زمان", "output", "خروجی", "quote", "q", "نقل قول":
+            inl = true
+            ret _K_INLINE
+        end
+        "link", "a", "پیوند":
+            inl = true
+            ret _K_LINK
+        end
+        "label", "برچسب":
+            inl = true
+            ret _K_LABEL
+        end
+        "break", "br", "word break", "wbr", "شکست خط":
+            inl = true
+            ret _K_BR
+        end
+        "button", "دکمه": ret _K_BUTTON end
+        "input", "ورودی", "checkbox", "radio": ret _K_INPUT end
+        "text area", "textarea", "textarea input", "متن بلند": ret _K_TEXTAREA end
+        "select", "dropdown", "انتخاب": ret _K_SELECT end
+        "option", "گزینه": ret _K_OPTION end
+        "option group", "optgroup", "گروه گزینه": ret _K_OPTGROUP end
+        "image", "img", "تصویر", "picture", "عکس": ret _K_IMAGE end
+        "summary", "خلاصه": ret _K_SUMMARY end
+        "details", "جزئیات": ret _K_DETAILS end
+        "dialog", "پنجره گفتگو": ret _K_DIALOG end
+        "form", "فرم": ret _K_FORM end
+        "item", "li", "مورد": ret _K_ITEM end
+        "list", "ul", "فهرست", "menu", "منو": ret _K_LIST end
+        "ordered list", "numbered list", "ol", "فهرست شماره دار": ret _K_OLIST end
+        "progress", "پیشرفت": ret _K_PROGRESS end
+        "meter", "gauge", "سنجه": ret _K_METER end
+        "video", "ویدیو", "canvas", "بوم", "audio", "صدا": ret _K_MEDIA end
+        "field set", "fieldset", "گروه فیلد": ret _K_FIELDSET end
+        "row", "tr", "ردیف": ret _K_TABLE_ROW end
+    end
+    ret _K_BOX
+end
+
+func _new_node(d &: _Dom, kind: str, parent: int): int:
+    mut nd := _Node { parent = parent }
+    nd.kind = kind == "#text" ? "#text" : _canon(kind)
+    mut il := false
+    nd.k = _kind_class(nd.kind, il)
+    nd.inl = il
+    nd.kids = Vector {} as Vector<int>
+    nd.names = Vector {} as Vector<str>
+    nd.values = Vector {} as Vector<str>
+    nd.pst = Vector {} as Vector<int>
+    nd.pid = Vector {} as Vector<int>
+    nd.dst = Vector {} as Vector<int>
+    nd.dprop = Vector {} as Vector<int>
+    nd.dval = Vector {} as Vector<style.Value>
+    d.nodes.Push(nd)
+    id := d.nodes.Len() - 1
+    if parent >= 0:
+        mut p := d.nodes.Ref(parent)
+        p.kids.Push(id)
+    end
+    ret id
+end
+
+func _add_text(d &: _Dom, parent: int, text: str):
+    if text.Len() == 0:
+        ret
+    end
+    pk := d.nodes[parent].kids
+    if pk.Len() > 0 and d.nodes[pk[pk.Len() - 1]].k == _K_TEXT:
+        mut t := d.nodes.Ref(pk[pk.Len() - 1])
+        old := t.text
+        t.text = old + text
+        _sfree(old)
+        ret
+    end
+    id := _new_node(d, "#text", parent)
+    mut tn := d.nodes.Ref(id)
+    tn.text = str.Clone(text)
+end
+
+func _attr(d: _Dom, node: int, name: str): str:
+    if node < 0 or node >= d.nodes.Len():
+        ret ""
+    end
+    nd := d.nodes[node]
+    repeat nd.names.Len() in i:
+        if nd.names[i] == name:
+            ret nd.values[i]
+        end
+    end
+    ret ""
+end
+
+func _has_attr(d: _Dom, node: int, name: str): bool:
+    if node < 0 or node >= d.nodes.Len():
+        ret false
+    end
+    nd := d.nodes[node]
+    repeat nd.names.Len() in i:
+        if nd.names[i] == name:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _set_attr(d &: _Dom, node: int, name: str, value: str):
+    mut nd := d.nodes.Ref(node)
+    repeat nd.names.Len() in i:
+        if nd.names[i] == name:
+            _sfree(nd.values[i])
+            nd.values[i] = str.Clone(value)
+            ret
+        end
+    end
+    nd.names.Push(str.Clone(name))
+    nd.values.Push(str.Clone(value))
+end
+
+func _remove_attr(d &: _Dom, node: int, name: str):
+    mut nd := d.nodes.Ref(node)
+    repeat nd.names.Len() in i:
+        if nd.names[i] == name:
+            _sfree(nd.names[i])
+            _sfree(nd.values[i])
+            nd.names.RemoveAt(i)
+            nd.values.RemoveAt(i)
+            ret
+        end
+    end
+end
+
+func _collect_text(d: _Dom, node: int, b &: str.StringBuilder):
+    nd := d.nodes[node]
+    if nd.k == _K_TEXT:
+        str.BufAppend(b, nd.text)
+        ret
+    end
+    if nd.k == _K_BR:
+        str.BufAppend(b, "\n")
+        ret
+    end
+    each k in nd.kids:
+        _collect_text(d, k, b)
+    end
+end
+
+func _text_of(d: _Dom, node: int): str:
+    mut b := str.NewBuilder()
+    _collect_text(d, node, b)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _dom_free(d &: _Dom):
+    repeat d.nodes.Len() in i:
+        _free_node_data(d, i)
+    end
+    d.nodes.Free()
+    each k in d.ev_kind:
+        _sfree(k)
+    end
+    d.ev_node.Free()
+    d.ev_kind.Free()
+    d.ev_fn.Free()
+end
+
+func _free_node_data(d &: _Dom, i: int):
+    mut nd := d.nodes.Ref(i)
+    _sfree(nd.text)
+    nd.text = ""
+    each s in nd.names:
+        _sfree(s)
+    end
+    each s in nd.values:
+        _sfree(s)
+    end
+    nd.names.Free()
+    nd.values.Free()
+    nd.kids.Free()
+    nd.pst.Free()
+    nd.pid.Free()
+    nd.dst.Free()
+    nd.dprop.Free()
+    nd.dval.Free()
+end
+
+func _is_ancestor(a: int, n: int): bool:
+    mut c := n
+    until c >= 0:
+        if c == a:
+            ret true
+        end
+        c = _e.dom.nodes[c].parent
+    end
+    ret false
+end
+
+func _ancestor_k(node: int, k: int): int:
+    mut n := node
+    until n >= 0:
+        if _e.dom.nodes[n].k == k:
+            ret n
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret -1
+end
+
+func _input_type(node: int): str:
+    nd := _e.dom.nodes[node]
+    if nd.k != _K_INPUT:
+        ret ""
+    end
+    if nd.kind == "checkbox" or nd.kind == "radio":
+        ret nd.kind
+    end
+    t := _attr(_e.dom, node, "type")
+    if t.Len() == 0:
+        ret "text"
+    end
+    ret t
+end
+
+func _is_text_input(node: int): bool:
+    if node < 0 or node >= _e.dom.nodes.Len():
+        ret false
+    end
+    k := _e.dom.nodes[node].k
+    if k == _K_TEXTAREA:
+        ret true
+    end
+    if k != _K_INPUT:
+        ret false
+    end
+    switch _input_type(node):
+        "checkbox", "radio", "range", "color", "submit", "reset", "button", "hidden", "image", "file":
+            ret false
+        end
+        else:
+            ret true
+        end
+    end
+    ret true
+end
+
+func _is_button_input(node: int): bool:
+    t := _input_type(node)
+    ret t == "submit" or t == "reset" or t == "button"
+end
+
+func _is_control(node: int): bool:
+    k := _e.dom.nodes[node].k
+    ret k == _K_INPUT or k == _K_TEXTAREA or k == _K_SELECT
+end
+
+func _style_key(node: int): str:
+    nd := _e.dom.nodes[node]
+    if nd.k == _K_INPUT:
+        t := _input_type(node)
+        if t == "checkbox" or t == "radio":
+            ret t
+        end
+        if _is_button_input(node):
+            ret "button"
+        end
+        ret "input"
+    end
+    if nd.k == _K_PAGE:
+        ret "page"
+    end
+    ret nd.kind
+end

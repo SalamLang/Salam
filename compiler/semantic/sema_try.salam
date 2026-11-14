@@ -62,7 +62,7 @@ func try_enum_ref(a &: at.Ast, sp: co.SrcSpan, tname: str): int:
 end
 
 func try_ret_enum(s &: Sema, a &: at.Ast): str:
-    if s.cur_func == 0 or s.lam.len() > 0:
+    if s.cur_func == 0 or s.lam.Len() > 0:
         ret ""
     end
     sg := sig_at(s, s.cur_func)
@@ -76,14 +76,37 @@ func try_ret_enum(s &: Sema, a &: at.Ast): str:
     ret at.Get(a, at.Get(a, sg.decl).ty).name
 end
 
+func try_ret_error(s &: Sema, sp: co.SrcSpan):
+    if s.cur_func != 0 and s.lam.Len() == 0:
+        rt := sig_at(s, s.cur_func).ret_type
+        if enum_data_sym(s, rt) != 0:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("'?' returns the error early as an 'Err' member, but '%s', the return type of this function, has no member named 'Err'; name its error member 'Err', or make the function 'throws'"), co.ArgStr(type_disp(s, rt))
+                )
+            )
+            ret
+        end
+    end
+    serr(
+        s, 12, sp, i18.Tr("'?' needs the enclosing function to return an enum with an 'Err' member, such as a 'Result<T, E>' you declare, or a 'throws' function")
+    )
+end
+
+func try_unwrap_in_place(a &: at.Ast, t: int):
+    inner := at.Get(a, t).a
+    mut iv := at.Get(a, inner)
+    at.Put(a, t, iv)
+    iv.list = Vector {} as Vector<int>
+    at.Put(a, inner, iv)
+end
+
 func try_expand(s &: Sema, a &: at.Ast, st: int, t: int, out &: Vector<int>): bool:
     sp := span_of(a, t)
     ename := try_ret_enum(s, a)
     if str.Len(ename) == 0:
-        serr(
-            s, 12, sp, i18.Tr("'?' needs the enclosing function to return an enum with an 'Err' member, such as result.Result")
-        )
-        at.Put(a, t, at.Get(a, at.Get(a, t).a))
+        try_ret_error(s, sp)
+        try_unwrap_in_place(a, t)
         ret false
     end
     tag := str.FromInt(t as i64)
@@ -94,7 +117,7 @@ func try_expand(s &: Sema, a &: at.Ast, st: int, t: int, out &: Vector<int>): bo
     dv.a = at.Get(a, t).a
     dv.synthetic = true
     at.Put(a, d1, dv)
-    out.push(d1)
+    out.Push(d1)
 
     errn := "__tryerr" + tag
     ctor := new_node_at(a, at.AST_MEMBER, sp)
@@ -139,7 +162,7 @@ func try_expand(s &: Sema, a &: at.Ast, st: int, t: int, out &: Vector<int>): bo
     at.Put(a, m1, m1v)
     at.AddChild(a, m1, arm1)
     at.AddChild(a, m1, arm2)
-    out.push(m1)
+    out.Push(m1)
 
     sn := at.Get(a, st)
     if sn.kind == at.AST_EXPR_STMT and sn.a == t:
@@ -162,15 +185,15 @@ func try_expand(s &: Sema, a &: at.Ast, st: int, t: int, out &: Vector<int>): bo
     tv.list = Vector {} as Vector<int>
     at.Put(a, t, tv)
     at.AddChild(a, t, arm3)
-    out.push(st)
+    out.Push(st)
     ret true
 end
 
 func try_expand_block(s &: Sema, a &: at.Ast, block: int):
     list := at.Get(a, block).list
     mut any := false
-    repeat list.len() in i:
-        if try_slot(a, list.get(i)) != 0:
+    repeat list.Len() in i:
+        if try_slot(a, list.Get(i)) != 0:
             any = true
         end
     end
@@ -178,16 +201,16 @@ func try_expand_block(s &: Sema, a &: at.Ast, block: int):
         ret
     end
     mut out := Vector {} as Vector<int>
-    repeat list.len() in j:
-        st := list.get(j)
+    repeat list.Len() in j:
+        st := list.Get(j)
         t := try_slot(a, st)
         if t == 0 or not try_expand(s, a, st, t, out):
-            out.push(st)
+            out.Push(st)
         end
     end
     mut bv := at.Get(a, block)
     old := bv.list
     bv.list = out
     at.Put(a, block, bv)
-    old.free()
+    old.Free()
 end

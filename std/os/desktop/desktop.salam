@@ -1,0 +1,704 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "desktop"
+@fa "میزکار"
+package desktop
+
+import os
+import io
+import mem
+import str
+import filepath
+import os.user
+import os.shell
+import os.desktop.paths
+import os.shell.open as shellopen
+import os.desktop.recent as recent
+import os.desktop.associations as associations
+import os.desktop.capabilities as capabilities
+import os.desktop.appearance as appearance
+import os.desktop.display as display
+
+// Cross-platform desktop/OS integration helpers.
+// Most operations are best-effort and return bool/status instead of raising.
+// GUI-facing actions depend on host desktop tools and environment variables.
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _quote_cmd(s: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 34)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "\"":
+            str.BufAppend(sb, "\"\"")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 34)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _safe_app_id(app_id: str): str:
+    if app_id.Len() == 0: ret str.Clone("default") end
+    ret str.Clone(app_id)
+end
+
+func _first_nonempty(a: str, b: str): str:
+    if a.Len() > 0: ret str.Clone(a) end
+    ret str.Clone(b)
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    ret true
+end
+
+@en "Reason"
+@fa "دلیل"
+pub func Reason(feature: str): str:
+    ret capabilities.Reason(feature)
+end
+
+@en "GetCapabilityStatus"
+@fa "دریافت وضعیت قابلیت"
+pub func GetCapabilityStatus(feature: str): capabilities.FeatureStatus:
+    ret capabilities.GetStatus(feature)
+end
+
+@en "PrintCapabilities"
+@fa "چاپ قابلیت‌ها"
+pub func PrintCapabilities():
+    capabilities.PrintSummary()
+end
+
+@en "GetEnv"
+@fa "دریافت متغیر محیطی"
+pub func GetEnv(name: str): str:
+    ret os.Env(name)
+end
+
+@en "GetEnvOr"
+@fa "دریافت متغیر محیطی پیش‌فرض"
+pub func GetEnvOr(name: str, def: str): str:
+    v := os.Env(name)
+    if str.Len(v) == 0:
+        mem.Free(v as void*)
+        ret str.Clone(def)
+    end
+    ret v
+end
+
+@en "SetEnvNote"
+@fa "یادداشت تنظیم متغیر محیطی"
+pub func SetEnvNote(): str:
+    ret str.Clone("std/os currently exposes environment getters only; process environment mutation is platform-specific and not provided by this helper module.")
+end
+
+@en "HomeDir"
+@fa "پوشه خانگی"
+pub func HomeDir(): str:
+    ret user.HomeDir()
+end
+
+@en "Username"
+@fa "نام کاربری"
+pub func Username(): str:
+    ret user.Username()
+end
+
+@en "Hostname"
+@fa "نام میزبان"
+pub func Hostname(): str:
+    if SALAM_OS_WINDOWS:
+        v := os.Env("COMPUTERNAME")
+        if str.Len(v) > 0:
+            ret v
+        end
+        mem.Free(v as void*)
+    else:
+        v := os.Env("HOSTNAME")
+        if str.Len(v) > 0:
+            ret v
+        end
+        mem.Free(v as void*)
+    end
+    r := shell.Exec("hostname 2>/dev/null")
+    out := str.Trim(r.out)
+    mem.Free(r.out as void*)
+    mem.Free(r.err as void*)
+    if str.Len(out) > 0: ret out end
+    mem.Free(out as void*)
+    ret str.Clone("")
+end
+
+@en "ExecutablePath"
+@fa "مسیر فایل اجرایی"
+pub func ExecutablePath(): str:
+    args := os.Args()
+    defer args.Free()
+    if args.Len() <= 0: ret str.Clone("") end
+    arg0 := str.Clone(args.Get(0))
+    defer mem.Free(arg0 as void*)
+    if arg0.Len() == 0: ret str.Clone("") end
+    if filepath.IsAbs(arg0):
+        rp := os.RealPath(arg0)
+        if rp.Len() > 0: ret rp end
+        ret str.Clone(arg0)
+    end
+    cwd := os.Cwd()
+    defer mem.Free(cwd as void*)
+    joined := filepath.Join(cwd, arg0)
+    defer mem.Free(joined as void*)
+    rp := os.RealPath(joined)
+    if rp.Len() > 0: ret rp end
+    ret str.Clone(joined)
+end
+
+@en "ExecutableDir"
+@fa "پوشه فایل اجرایی"
+pub func ExecutableDir(): str:
+    p := ExecutablePath()
+    defer mem.Free(p as void*)
+    if p.Len() == 0: ret str.Clone("") end
+    ret filepath.Dir(p)
+end
+
+@en "GetConfigDir"
+@fa "دریافت پوشه پیکربندی"
+pub func GetConfigDir(): str:
+    ret paths.ConfigBaseDir()
+end
+
+@en "GetCacheDir"
+@fa "دریافت پوشه حافظه پنهان"
+pub func GetCacheDir(): str:
+    ret paths.CacheBaseDir()
+end
+
+@en "GetDataDir"
+@fa "دریافت پوشه داده"
+pub func GetDataDir(): str:
+    ret paths.DataBaseDir()
+end
+
+@en "GetStateDir"
+@fa "دریافت پوشه وضعیت"
+pub func GetStateDir(): str:
+    ret paths.StateBaseDir()
+end
+
+@en "GetLogDir"
+@fa "دریافت پوشه گزارش"
+pub func GetLogDir(): str:
+    ret paths.LogBaseDir()
+end
+
+@en "GetAppDataDir"
+@fa "دریافت پوشه داده برنامه"
+pub func GetAppDataDir(): str:
+    ret GetDataDir()
+end
+
+@en "GetAppConfigDir"
+@fa "دریافت پوشه پیکربندی برنامه"
+pub func GetAppConfigDir(app_id: str): str:
+    ret paths.AppConfigDir(app_id)
+end
+
+@en "GetAppCacheDir"
+@fa "دریافت پوشه حافظه پنهان برنامه"
+pub func GetAppCacheDir(app_id: str): str:
+    ret paths.AppCacheDir(app_id)
+end
+
+@en "GetAppDataDirFor"
+@fa "دریافت پوشه داده برای برنامه"
+pub func GetAppDataDirFor(app_id: str): str:
+    ret paths.AppDataDir(app_id)
+end
+
+@en "GetAppStateDir"
+@fa "دریافت پوشه وضعیت برنامه"
+pub func GetAppStateDir(app_id: str): str:
+    ret paths.AppStateDir(app_id)
+end
+
+@en "GetAppLogDir"
+@fa "دریافت پوشه گزارش برنامه"
+pub func GetAppLogDir(app_id: str): str:
+    ret paths.AppLogDir(app_id)
+end
+
+@en "GetAppRuntimeDir"
+@fa "دریافت پوشه اجرای برنامه"
+pub func GetAppRuntimeDir(app_id: str): str:
+    ret paths.AppRuntimeDir(app_id)
+end
+
+@en "EnsureDir"
+@fa "اطمینان از وجود پوشه"
+pub func EnsureDir(path: str): bool:
+    if path.Len() == 0: ret false end
+    if os.IsDir(path): ret true end
+    ret os.MkdirAll(path) == 0
+end
+
+@en "OpenURL"
+@fa "باز کردن نشانی"
+pub func OpenURL(url: str): bool:
+    ret shellopen.OpenURL(url)
+end
+
+@en "OpenPath"
+@fa "باز کردن مسیر"
+pub func OpenPath(path: str): bool:
+    ret shellopen.OpenPath(path)
+end
+
+@en "Reveal"
+@fa "نمایش"
+pub func Reveal(path: str): bool:
+    ret shellopen.Reveal(path)
+end
+
+@en "MoveToTrash"
+@fa "انتقال به زباله‌دان"
+pub func MoveToTrash(path: str): bool:
+    ret shellopen.MoveToTrash(path)
+end
+
+@en "OpenMail"
+@fa "باز کردن نامه"
+pub func OpenMail(address_or_mailto: str): bool:
+    if address_or_mailto.Len() == 0: ret false end
+    if str.StartsWith(address_or_mailto, "mailto:"):
+        ret OpenURL(address_or_mailto)
+    end
+    url := str.Concat("mailto:", address_or_mailto)
+    ok := OpenURL(url)
+    mem.Free(url as void*)
+    ret ok
+end
+
+@en "OpenFile"
+@fa "باز کردن پرونده"
+pub func OpenFile(path: str): bool:
+    ret shellopen.OpenPath(path)
+end
+
+@en "OpenFolder"
+@fa "باز کردن پوشه"
+pub func OpenFolder(path: str): bool:
+    ret shellopen.OpenFolder(path)
+end
+
+@en "RevealInFileManager"
+@fa "نمایش در مدیر پرونده"
+pub func RevealInFileManager(path: str): bool:
+    ret shellopen.Reveal(path)
+end
+
+@en "ShowInFolder"
+@fa "نمایش در پوشه"
+pub func ShowInFolder(path: str): bool:
+    ret RevealInFileManager(path)
+end
+
+@en "OpenWith"
+@fa "باز کردن با"
+pub func OpenWith(app: str, path: str): bool:
+    if shellopen.OpenWith(app, path): ret true end
+    ret associations.OpenWith(app, path)
+end
+
+@en "AddRecentFile"
+@fa "افزودن پرونده اخیر"
+pub func AddRecentFile(app_id: str, path: str, limit: int = 20): bool:
+    ret recent.AddFile(app_id, path, limit)
+end
+
+@en "AddRecentDirectory"
+@fa "افزودن پوشه اخیر"
+pub func AddRecentDirectory(app_id: str, path: str, limit: int = 20): bool:
+    ret recent.AddDirectory(app_id, path, limit)
+end
+
+@en "RecentFiles"
+@fa "پرونده‌های اخیر"
+pub func RecentFiles(app_id: str, limit: int = 20): Vector<str>:
+    ret recent.ListFiles(app_id, limit)
+end
+
+@en "RecentDirectories"
+@fa "پوشه‌های اخیر"
+pub func RecentDirectories(app_id: str, limit: int = 20): Vector<str>:
+    ret recent.ListDirectories(app_id, limit)
+end
+
+@en "QueryFileAssociation"
+@fa "پرس‌وجوی انجمن پرونده"
+pub func QueryFileAssociation(ext: str): associations.AssociationInfo:
+    ret associations.InfoForExtension(ext)
+end
+
+@en "RegisterFileAssociation"
+@fa "ثبت انجمن پرونده"
+pub func RegisterFileAssociation(ext: str, app_id: str, app_name: str, exec_cmd: str): associations.AssociationInfo:
+    ret associations.RegisterFileAssociation(ext, app_id, app_name, exec_cmd)
+end
+
+@en "TrashInfo"
+@fa "اطلاعات زباله"
+pub func TrashInfo(path: str): shellopen.TrashMetadata:
+    ret shellopen.TrashInfo(path)
+end
+
+@en "Trash"
+@fa "انتقال به سطل زباله"
+pub func Trash(path: str): bool:
+    ret shellopen.Trash(path)
+end
+
+@en "PathExists"
+@fa "مسیر وجود دارد"
+pub func PathExists(path: str): bool:
+    ret os.Exists(path)
+end
+
+@en "ReadTextFile"
+@fa "خواندن پرونده متنی"
+pub func ReadTextFile(path: str): str:
+    ret io.ReadFile(path)
+end
+
+@en "WriteTextFile"
+@fa "نوشتن پرونده متنی"
+pub func WriteTextFile(path: str, data: str): bool:
+    ret io.WriteFile(path, data) >= 0
+end
+
+@en "JoinPath"
+@fa "پیوند مسیر"
+pub func JoinPath(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+@en "NormalizePath"
+@fa "نرمال‌سازی مسیر"
+pub func NormalizePath(path: str): str:
+    ret filepath.Clean(path)
+end
+
+@en "RealPath"
+@fa "مسیر واقعی"
+pub func RealPath(path: str): str:
+    ret os.RealPath(path)
+end
+
+@en "TempDir"
+@fa "پوشه موقت"
+pub func TempDir(): str:
+    ret os.TempDir()
+end
+
+@en "SystemLocale"
+@fa "محلی سیستم"
+pub func SystemLocale(): str:
+    // Best-effort environment-based detection.
+    v := os.Env("LC_ALL")
+    if str.Len(v) > 0: ret v end
+    mem.Free(v as void*)
+    v2 := os.Env("LC_MESSAGES")
+    if str.Len(v2) > 0: ret v2 end
+    mem.Free(v2 as void*)
+    v3 := os.Env("LANG")
+    if str.Len(v3) > 0: ret v3 end
+    mem.Free(v3 as void*)
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("powershell -NoProfile -Command \"(Get-Culture).Name\" 2>nul")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+    else SALAM_OS_MAC:
+        r := shell.Exec("defaults read -g AppleLocale 2>/dev/null")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+    end
+    ret str.Clone("")
+end
+
+@en "SystemTimezone"
+@fa "منطقه زمانی سیستم"
+pub func SystemTimezone(): str:
+    tz := os.Env("TZ")
+    if str.Len(tz) > 0: ret tz end
+    mem.Free(tz as void*)
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("powershell -NoProfile -Command \"(Get-TimeZone).Id\" 2>nul")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+    else SALAM_OS_MAC:
+        r := shell.Exec("readlink /etc/localtime 2>/dev/null")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0:
+            idx := str.LastIndex(out, "zoneinfo/")
+            if idx >= 0:
+                part := out.Substr(idx + 9, str.Len(out) - idx - 9)
+                mem.Free(out as void*)
+                ret part
+            end
+            ret out
+        end
+        mem.Free(out as void*)
+    else:
+        if os.Exists("/etc/timezone"):
+            raw := io.ReadFile("/etc/timezone")
+            t := str.Trim(raw)
+            mem.Free(raw as void*)
+            if str.Len(t) > 0: ret t end
+            mem.Free(t as void*)
+        end
+        r := shell.Exec("readlink /etc/localtime 2>/dev/null")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0:
+            idx := str.LastIndex(out, "zoneinfo/")
+            if idx >= 0:
+                part := out.Substr(idx + 9, str.Len(out) - idx - 9)
+                mem.Free(out as void*)
+                ret part
+            end
+            ret out
+        end
+        mem.Free(out as void*)
+    end
+    ret str.Clone("")
+end
+
+@en "PrefersDarkMode"
+@fa "حالت تیره ترجیح داده می‌شود"
+pub func PrefersDarkMode(): bool:
+    ret appearance.PrefersDarkMode()
+end
+
+@en "SystemTheme"
+@fa "پوسته سیستم"
+pub func SystemTheme(): str:
+    ret appearance.Theme()
+end
+
+@en "GetDefaultBrowser"
+@fa "مرورگر پیش‌فرض"
+pub func GetDefaultBrowser(): str:
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("reg query HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice /v ProgId 2>nul")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else SALAM_OS_MAC:
+        // Best-effort: LaunchServices default handler for http (may vary by macOS version/tools)
+        r := shell.Exec("python3 -c \"from LaunchServices import LSGetApplicationForURL, kLSRolesAll; import CoreFoundation as CF; u=CF.CFURLCreateWithString(None,'http://example.com',None); r=LSGetApplicationForURL(u,kLSRolesAll,None,None); print(r[1] if r and r[1] else '')\" 2>/dev/null")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else:
+        r := shell.Exec("xdg-settings get default-web-browser 2>/dev/null")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
+end
+
+@en "GetDefaultMailClient"
+@fa "رایانامه پیش‌فرض"
+pub func GetDefaultMailClient(): str:
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("reg query HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\mailto\\UserChoice /v ProgId 2>nul")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else SALAM_OS_MAC:
+        ret str.Clone("")
+    else:
+        r := shell.Exec("xdg-settings get default-url-scheme-handler mailto 2>/dev/null")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
+end
+
+@en "GetDefaultHandler"
+@fa "برنامه پیش‌فرض"
+pub func GetDefaultHandler(scheme_or_mime: str): str:
+    if str.Len(scheme_or_mime) == 0: ret str.Clone("") end
+    if scheme_or_mime == "http" or scheme_or_mime == "https": ret GetDefaultBrowser() end
+    if scheme_or_mime == "mailto": ret GetDefaultMailClient() end
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        // Try URL scheme handler first, then MIME type query.
+        q := _quote_sh(scheme_or_mime)
+        cmd := "xdg-mime query default ".Concat(q).Concat(" 2>/dev/null")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        r := shell.Exec(cmd)
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+    end
+    ret str.Clone("")
+end
+
+@en "GetDisplayInfo"
+@fa "اطلاعات نمایشگر"
+pub func GetDisplayInfo(): str:
+    // Best-effort textual summary for diagnostics/hooks.
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("powershell -NoProfile -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 Name,CurrentHorizontalResolution,CurrentVerticalResolution | Format-List\"")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else SALAM_OS_MAC:
+        r := shell.Exec("system_profiler SPDisplaysDataType 2>/dev/null | sed -n '1,40p'")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        ret str.Clone("")
+    else:
+        r := shell.Exec("xrandr --current 2>/dev/null | grep '*' | head -n 5")
+        out := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        if str.Len(out) > 0: ret out end
+        mem.Free(out as void*)
+        r2 := shell.Exec("wlr-randr 2>/dev/null | sed -n '1,40p'")
+        out2 := str.Trim(r2.out)
+        mem.Free(r2.out as void*)
+        mem.Free(r2.err as void*)
+        if str.Len(out2) > 0: ret out2 end
+        mem.Free(out2 as void*)
+        ret str.Clone("")
+    end
+end
+
+@en "DesktopEnvironment"
+@fa "محیط رومیزی"
+pub func DesktopEnvironment(): str:
+    x := os.Env("XDG_CURRENT_DESKTOP")
+    if str.Len(x) > 0: ret x end
+    mem.Free(x as void*)
+    s := os.Env("DESKTOP_SESSION")
+    if str.Len(s) > 0: ret s end
+    mem.Free(s as void*)
+    if SALAM_OS_MAC: ret str.Clone("macOS") end
+    if SALAM_OS_WINDOWS: ret str.Clone("Windows Shell") end
+    ret str.Clone("")
+end
+
+@en "SessionKind"
+@fa "نوع نشست"
+pub func SessionKind(): str:
+    ret capabilities.SessionType()
+end
+
+@en "IsWaylandSession"
+@fa "نشست ویلند است"
+pub func IsWaylandSession(): bool:
+    ret capabilities.IsWaylandSession()
+end
+
+@en "IsX11Session"
+@fa "نشست ایکس۱۱ است"
+pub func IsX11Session(): bool:
+    ret capabilities.IsX11Session()
+end
+
+@en "PrimaryDisplaySummary"
+@fa "خلاصه نمایشگر اصلی"
+pub func PrimaryDisplaySummary(): str:
+    // Additive convenience wrapper over os.desktop.display; falls back to GetDisplayInfo text.
+    n := display.Count()
+    if n <= 0:
+        ret GetDisplayInfo()
+    end
+    w := display.Width(0)
+    h := display.Height(0)
+    sx := display.ScaleX(0)
+    sy := display.ScaleY(0)
+    mut s := "count=" + str.FromInt(n as i64)
+    s = s + ", primary=" + str.FromInt(w as i64) + "x" + str.FromInt(h as i64)
+    s = s + ", scale=" + str.FromInt(sx as i64) + "x" + str.FromInt(sy as i64)
+    ret s
+end

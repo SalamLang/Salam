@@ -27,14 +27,14 @@ func fix_group_end(i: int): int:
 end
 
 func fix_source(texts &: HashMap<str, str>, file: str): str:
-    if not texts.has(file):
+    if not texts.Has(file):
         mut text := ""
         if os.Exists(file) and not os.IsDir(file):
             text = io.ReadFile(file)
         end
-        texts.put(file, text)
+        texts.Put(file, text)
     end
-    ret texts.get(file)
+    ret texts.Get(file)
 end
 
 func fix_in_std(file: str): bool:
@@ -45,14 +45,14 @@ func fix_in_std(file: str): bool:
     ret str.StartsWith(file, pth.PathJoin(root, "std"))
 end
 
-func collect_safe_fixes(texts &: HashMap<str, str>, edits &: Vector<FixEdit>):
+func collect_safe_fixes(texts &: HashMap<str, str>, edits &: Vector<FixEdit>): int:
     mut done := HashMap {} as HashMap<int, bool>
-    defer done.free()
+    defer done.Free()
     mut i := 0
     until i < lg.FixCount():
         k := fix_group_end(i)
         f0 := lg.FixAt(i)
-        if f0.safe and f0.preferred and not done.has(f0.rec):
+        if f0.safe and f0.preferred and not done.Has(f0.rec):
             mut group := Vector {} as Vector<FixEdit>
             mut ok := true
             mut q := i
@@ -66,33 +66,44 @@ func collect_safe_fixes(texts &: HashMap<str, str>, edits &: Vector<FixEdit>):
                     ok = false
                     break
                 end
-                group.push(FixEdit { file = fq.file, b = b, e = e, text = nt })
+                group.Push(FixEdit { file = fq.file, b = b, e = e, text = nt })
                 q++
             end
             if ok:
                 each g in group:
-                    edits.push(g)
+                    edits.Push(g)
                 end
-                done.put(f0.rec, true)
+                done.Put(f0.rec, true)
             end
-            group.free()
+            group.Free()
         end
         i = k
     end
+    mut left := 0
+    mut seen := HashMap {} as HashMap<int, bool>
+    defer seen.Free()
+    repeat lg.FixCount() in j:
+        r := lg.FixAt(j).rec
+        if not done.Has(r) and not seen.Has(r):
+            seen.Put(r, true)
+            left++
+        end
+    end
+    ret left
 end
 
 func apply_file_fixes(file: str, text: str, edits: Vector<FixEdit>): int:
     mut mine := Vector {} as Vector<FixEdit>
-    defer mine.free()
+    defer mine.Free()
     each ed in edits:
         if not str.Equals(ed.file, file):
             continue
         end
-        mut at_i := mine.len()
-        until at_i > 0 and mine.get(at_i - 1).b > ed.b:
+        mut at_i := mine.Len()
+        until at_i > 0 and mine.Get(at_i - 1).b > ed.b:
             at_i--
         end
-        mine.insert(at_i, ed)
+        mine.Insert(at_i, ed)
     end
     mut out := str.NewBuilder()
     mut pos := 0
@@ -129,14 +140,14 @@ func apply_file_fixes(file: str, text: str, edits: Vector<FixEdit>): int:
     ret count
 end
 
-func apply_check_fixes(): int:
+func apply_check_fixes(left &: int): int:
     mut texts := HashMap {} as HashMap<str, str>
-    defer texts.free()
+    defer texts.Free()
     mut edits := Vector {} as Vector<FixEdit>
-    defer edits.free()
-    collect_safe_fixes(texts, edits)
+    defer edits.Free()
+    left = collect_safe_fixes(texts, edits)
     mut files := Vector {} as Vector<str>
-    defer files.free()
+    defer files.Free()
     each ed in edits:
         mut seen := false
         each f in files:
@@ -145,12 +156,12 @@ func apply_check_fixes(): int:
             end
         end
         if not seen:
-            files.push(ed.file)
+            files.Push(ed.file)
         end
     end
     mut total := 0
     each f in files:
-        n := apply_file_fixes(f, texts.get(f), edits)
+        n := apply_file_fixes(f, texts.Get(f), edits)
         if n > 0:
             println co.Format2(i18.Tr("%s: applied %d fix(es)"), co.ArgStr(f), co.ArgInt(n as i64))
             total += n
@@ -165,9 +176,12 @@ func check_fix(opt &: Dr): int:
     quiet.log_level = lg.LOG_OFF
     lg.SetRecord(true)
     _first := Inspect(quiet)
-    applied := apply_check_fixes()
+    mut left := 0
+    applied := apply_check_fixes(left)
     lg.SetRecord(false)
-    if applied == 0:
+    if applied == 0 and left > 0:
+        println i18.Tr("salam: nothing was fixed automatically; the fixes shown below are only suggestions, so apply them by hand")
+    else applied == 0:
         println i18.Tr("salam: nothing to fix automatically")
     end
     mut again := opt

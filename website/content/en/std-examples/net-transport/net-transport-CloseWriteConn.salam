@@ -1,0 +1,50 @@
+import mem
+import sync
+import net.transport
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+
+func count_then_answer():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut c := transport.Accept(l)
+    buf := mem.Allocate(4096 as u64)
+    mut total := 0
+    mut n := transport.Read(c, buf, 4096)
+    until n > 0:
+        total += n
+        n = transport.Read(c, buf, 4096)
+    end
+    mem.Free(buf)
+    mut reply := transport.FromStr("server read " + total + " bytes")
+    transport.WriteBytes(c, reply)
+    transport.FreeBytes(reply)
+    transport.ShutdownConn(c)
+    transport.Close(c)
+    transport.CloseListener(l)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(count_then_answer)
+    sync.Wait(ready)
+
+    mut c := transport.Dial("127.0.0.1", port, transport.Settings {})
+    if not transport.Ok(c):
+        println "dial failed:", c.err
+        ret
+    end
+    mut msg := transport.FromStr("first part, second part")
+    transport.WriteBytes(c, msg)
+    transport.FreeBytes(msg)
+    transport.CloseWriteConn(c)
+    buf := mem.Allocate(4096 as u64)
+    n := transport.Read(c, buf, 4096)
+    println (buf as str).Substr(0, n)
+    println "then", transport.Read(c, buf, 4096)
+    mem.Free(buf)
+    transport.Close(c)
+    join(t)
+end

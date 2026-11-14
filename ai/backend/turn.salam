@@ -42,14 +42,23 @@ mut RELAXED := HashMap {} as HashMap<str, str>
 mut TALLY := HashMap {} as HashMap<str, int>
 mut TALLIED := HashMap {} as HashMap<str, str>
 
+pub struct ChatInfo:
+    pub id: str = ""
+    pub source: str = ""
+    pub client_os: str = ""
+    pub client_browser: str = ""
+    pub client_version: str = ""
+    pub client_arch: str = ""
+end
+
 func check_due(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
     t := aistore.Now()
     mut due := false
-    if not CHECKED.has(sid):
-        CHECKED.put(sid, conv.FormatInt(t))
-    else t - (CHECKED.get(sid).to_int() as i64) >= CHECK_SECONDS:
-        CHECKED.put(sid, conv.FormatInt(t))
+    if not CHECKED.Has(sid):
+        CHECKED.Put(sid, conv.FormatInt(t))
+    else t - (CHECKED.Get(sid).ToInt() as i64) >= CHECK_SECONDS:
+        CHECKED.Put(sid, conv.FormatInt(t))
         due = true
     end
     _u := sync.Unlock(CHECK_LOCK)
@@ -82,36 +91,36 @@ end
 
 func asked_at(sid: str, created: i64): i64:
     _l := sync.Lock(CHECK_LOCK)
-    t := ASKED.has(sid) ? ASKED.get(sid) : created
+    t := ASKED.Has(sid) ? ASKED.Get(sid) : created
     _u := sync.Unlock(CHECK_LOCK)
     ret t
 end
 
 func retried(sid: str):
     _l := sync.Lock(CHECK_LOCK)
-    ASKED.put(sid, aistore.Now())
+    ASKED.Put(sid, aistore.Now())
     _u := sync.Unlock(CHECK_LOCK)
 end
 
 func relaxed(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
-    v := RELAXED.has(sid)
+    v := RELAXED.Has(sid)
     _u := sync.Unlock(CHECK_LOCK)
     ret v
 end
 
 func tally(sid: str, text: str, lines: int): int:
-    mark := text.len() + ":" + text.substr(0, text.len() < 80 ? text.len() : 80)
+    mark := text.Len() + ":" + text.Substr(0, text.Len() < 80 ? text.Len() : 80)
     _l := sync.Lock(CHECK_LOCK)
-    if TALLY.size() > 5000:
+    if TALLY.Size() > 5000:
         TALLY = HashMap {} as HashMap<str, int>
         TALLIED = HashMap {} as HashMap<str, str>
     end
-    mut total := TALLY.has(sid) ? TALLY.get(sid) : 0
-    if not TALLIED.has(sid) or TALLIED.get(sid) != mark:
+    mut total := TALLY.Has(sid) ? TALLY.Get(sid) : 0
+    if not TALLIED.Has(sid) or TALLIED.Get(sid) != mark:
         total += lines
-        TALLY.put(sid, total)
-        TALLIED.put(sid, mark)
+        TALLY.Put(sid, total)
+        TALLIED.Put(sid, mark)
     end
     _u := sync.Unlock(CHECK_LOCK)
     ret total
@@ -119,13 +128,13 @@ end
 
 func verify(sid: str, text: str): bool:
     _l := sync.Lock(CHECK_LOCK)
-    round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
-    if round >= FIX_ROUNDS or VERIFYING.has(sid):
-        busy := VERIFYING.has(sid)
+    round := ROUNDS.Has(sid) ? ROUNDS.Get(sid) : 0
+    if round >= FIX_ROUNDS or VERIFYING.Has(sid):
+        busy := VERIFYING.Has(sid)
         _u := sync.Unlock(CHECK_LOCK)
         ret busy
     end
-    VERIFYING.put(sid, "1")
+    VERIFYING.Put(sid, "1")
     _u := sync.Unlock(CHECK_LOCK)
     mut ask := ""
     mut foreign := ""
@@ -133,62 +142,66 @@ func verify(sid: str, text: str): bool:
         foreign = aipolicy.Foreign(text)
         lines := aipolicy.ForeignLines(text)
         total := tally(sid, text, lines)
-        if foreign.len() == 0 and aipolicy.Spread(total, lines):
+        if foreign.Len() == 0 and aipolicy.Spread(total, lines):
             foreign = "pieces of other-language code spread over this conversation (" + total + " lines in all)"
         end
     end
-    if foreign.len() > 0:
+    if foreign.Len() > 0:
         ask = aipolicy.LanguagePrompt(foreign)
     else:
         report := aicheck.Problems(text)
-        if report.len() > 0:
+        if report.Len() > 0:
             ask = fix_prompt(report)
         else not relaxed(sid):
             found := aipolicy.Practice(text)
-            if found.len() > 0:
+            if found.Len() > 0:
                 ask = aipolicy.PracticePrompt(found)
                 println "salam-ai practice check sent an answer back:", found
             end
         end
     end
     mut sent := false
-    if ask.len() > 0:
+    if ask.Len() > 0:
         ailive.Begin(sid)
         sent = aiengine.Followup(sid, ask)
     end
     _a := sync.Lock(CHECK_LOCK)
-    _v := VERIFYING.remove(sid)
+    _v := VERIFYING.Remove(sid)
     if sent:
-        ROUNDS.put(sid, round + 1)
-        ASKED.put(sid, aistore.Now())
+        ROUNDS.Put(sid, round + 1)
+        ASKED.Put(sid, aistore.Now())
     else:
-        ROUNDS.put(sid, FIX_ROUNDS)
+        ROUNDS.Put(sid, FIX_ROUNDS)
     end
     _b := sync.Unlock(CHECK_LOCK)
     ret sent
 end
 
-pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
-    if not u.ok or id.len() == 0:
+pub func SaveUsage(table: str, id: str, u: aiengine.Usage, model: str = ""):
+    if not u.ok or id.Len() == 0:
         ret
     end
     mut a := Vector {} as Vector<str>
-    a.push(conv.FormatInt(u.input))
-    a.push(conv.FormatInt(u.output))
-    a.push(conv.FormatInt(u.reasoning))
-    a.push(conv.FormatInt(u.cache_read))
-    a.push(conv.FormatInt(u.cache_write))
-    a.push(conv.FormatFloatPrec(u.cost, 8))
-    a.push(conv.FormatFloatPrec(u.cost_in, 8))
-    a.push(conv.FormatFloatPrec(u.cost_out, 8))
-    a.push(conv.FormatInt(u.tools as i64))
-    a.push(conv.FormatInt(u.steps as i64))
-    a.push(id)
+    a.Push(conv.FormatInt(u.input))
+    a.Push(conv.FormatInt(u.output))
+    a.Push(conv.FormatInt(u.reasoning))
+    a.Push(conv.FormatInt(u.cache_read))
+    a.Push(conv.FormatInt(u.cache_write))
+    a.Push(conv.FormatFloatPrec(u.cost, 8))
+    a.Push(conv.FormatFloatPrec(u.cost_in, 8))
+    a.Push(conv.FormatFloatPrec(u.cost_out, 8))
+    a.Push(conv.FormatInt(u.tools as i64))
+    a.Push(conv.FormatInt(u.steps as i64))
+    a.Push(id)
     mut extra := ""
     if table == "messages":
-        a.push(conv.FormatInt(u.ms))
-        a.push(conv.FormatInt(aistore.Now()))
+        a.Push(conv.FormatInt(u.ms))
+        a.Push(conv.FormatInt(aistore.Now()))
         extra = ", ms = ?12, finished = ?13"
+        if model.Len() > 0:
+            a.Push(model)
+            extra += ", model = ?14"
+        end
     end
     aistore.Lock()
     _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, cost_in = ?7, cost_out = ?8, tools = ?9, steps = ?10" + extra + " WHERE id = ?11", a)
@@ -196,15 +209,37 @@ pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
 end
 
 pub func OwnerEmail(engine_sid: str): str:
-    if engine_sid.len() == 0:
+    if engine_sid.Len() == 0:
         ret ""
     end
     mut a := Vector {} as Vector<str>
-    a.push(engine_sid)
+    a.Push(engine_sid)
     aistore.Lock()
     email := aistore.OneText("SELECT u.email FROM chats c JOIN users u ON u.id = c.user_id WHERE c.engine_sid = ?1", a)
     aistore.Unlock()
     ret email
+end
+
+pub func ChatInfoOf(engine_sid: str): ChatInfo:
+    mut c := ChatInfo {}
+    if engine_sid.Len() == 0:
+        ret c
+    end
+    mut a := Vector {} as Vector<str>
+    a.Push(engine_sid)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, source, client_os, client_browser, client_version, client_arch FROM chats WHERE engine_sid = ?1", a)
+    if aistore.Next(rows):
+        c.id = aistore.Text(rows, 0)
+        c.source = aistore.Text(rows, 1)
+        c.client_os = aistore.Text(rows, 2)
+        c.client_browser = aistore.Text(rows, 3)
+        c.client_version = aistore.Text(rows, 4)
+        c.client_arch = aistore.Text(rows, 5)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret c
 end
 
 pub func Init():
@@ -220,30 +255,30 @@ end
 
 pub func Forget(sid: str):
     _l := sync.Lock(CHECK_LOCK)
-    _r := CHECKED.remove(sid)
-    _o := ROUNDS.remove(sid)
-    _a := ASKED.remove(sid)
-    _x := RELAXED.remove(sid)
-    _t := TALLIED.remove(sid)
+    _r := CHECKED.Remove(sid)
+    _o := ROUNDS.Remove(sid)
+    _a := ASKED.Remove(sid)
+    _x := RELAXED.Remove(sid)
+    _t := TALLIED.Remove(sid)
     _u := sync.Unlock(CHECK_LOCK)
 end
 
 pub func Relax(sid: str, on_flag: bool):
     _l := sync.Lock(CHECK_LOCK)
     if on_flag:
-        RELAXED.put(sid, "1")
+        RELAXED.Put(sid, "1")
     else:
-        _r := RELAXED.remove(sid)
+        _r := RELAXED.Remove(sid)
     end
     _u := sync.Unlock(CHECK_LOCK)
 end
 
 pub func Plain(text: str): str:
-    if text.find(EM_S) < 0 and text.find(EN_S) < 0:
+    if text.Find(EM_S) < 0 and text.Find(EN_S) < 0:
         ret text
     end
     cps := str.CodePoints(text)
-    n := cps.len()
+    n := cps.Len()
     mut has := false
     each cp in cps:
         if dash(cp):
@@ -257,13 +292,13 @@ pub func Plain(text: str): str:
     defer str.BufFree(b)
     mut i := 0
     until i < n:
-        c := cps.get(i)
-        if c == 32 and i + 1 < n and dash(cps.get(i + 1)):
+        c := cps.Get(i)
+        if c == 32 and i + 1 < n and dash(cps.Get(i + 1)):
             if i + 2 >= n:
                 break
             end
-            if cps.get(i + 2) == 32:
-                prev := i > 0 ? cps.get(i - 1) : 32
+            if cps.Get(i + 2) == 32:
+                prev := i > 0 ? cps.Get(i - 1) : 32
                 if prev == 10 or i == 0:
                     str.BufAppend(b, " - ")
                 else:
@@ -278,8 +313,8 @@ pub func Plain(text: str): str:
             if i + 1 >= n:
                 break
             end
-            prev := i > 0 ? cps.get(i - 1) : 10
-            next := cps.get(i + 1)
+            prev := i > 0 ? cps.Get(i - 1) : 10
+            next := cps.Get(i + 1)
             if prev == 10 or prev == 32 or digit(prev) or digit(next) or c == EN:
                 str.BufAppend(b, "-")
             else:
@@ -303,7 +338,7 @@ end
 
 pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bool, want_steps: bool): aiengine.Reply:
     mut r := aiengine.Reply {}
-    if sid.len() == 0:
+    if sid.Len() == 0:
         r.failed = true
         r.done = true
         ret r
@@ -324,7 +359,7 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
         r.phase = phase
     else:
         r = aiengine.Poll(sid)
-        if not r.done and tracked and text.len() > r.text.len():
+        if not r.done and tracked and text.Len() > r.text.Len():
             r.text = text
             r.phase = phase
         end
@@ -341,8 +376,8 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
     else r.interrupted and aistore.Now() - asked_at(sid, created) > INTERRUPTED_SECONDS:
         aiengine.Abort(sid)
         r.done = true
-        r.failed = r.text.len() == 0
-    else r.done and r.failed and r.text.len() == 0 and aistore.Now() - created <= limit and aiengine.Retry(sid):
+        r.failed = r.text.Len() == 0
+    else r.done and r.failed and r.text.Len() == 0 and aistore.Now() - created <= limit and aiengine.Retry(sid):
         ailive.Begin(sid)
         retried(sid)
         r = aiengine.Reply {}
@@ -356,7 +391,7 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
     if stop:
         aiengine.Abort(sid)
     end
-    if check and r.done and not r.failed and r.text.len() > 0 and verify(sid, r.text):
+    if check and r.done and not r.failed and r.text.Len() > 0 and verify(sid, r.text):
         r.done = false
         r.text = ""
         r.phase = "checking"
@@ -364,7 +399,7 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
     if not r.done and aistore.Now() - created > limit:
         aiengine.Abort(sid)
         r.done = true
-        r.failed = r.text.len() == 0
+        r.failed = r.text.Len() == 0
         r.timed_out = true
     end
     if tracked and want_steps:

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
+import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type PlanTier, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
-import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
+import { IconBadgeCheck, IconCheck, IconChevronDown, IconSpark } from "./icons";
 import { getCampaignFields } from "./campaign";
 import { agent, isDesktop } from "./desktop";
 import { isFa, t } from "./i18n";
+import { Select } from "./Select";
 
 const GATEWAY_NAMES: Record<Gateway, string> = {
   zarinpal: t("زرین‌پال", "Zarinpal"),
@@ -44,6 +45,8 @@ export function planName(id: PlanId, fallback: string): string {
       return t("حرفه‌ای", "Pro");
     case "unlimited":
       return t("نامحدود", "Unlimited");
+    case "trial":
+      return t("آزمایشی نامحدود", "Unlimited trial");
     default:
       return fallback;
   }
@@ -54,13 +57,13 @@ function planNote(id: PlanId, fallback: string): string {
   if (known && (known.noteFa || known.noteEn)) return isFa ? known.noteFa : known.noteEn;
   switch (id) {
     case "free":
-      return t("برای آشنایی با دستیار سلام و کارهای کوچک", "To get to know the Salam assistant and for small tasks");
+      return t("برای شروع و آشنایی با سلام", "A simple start with Salam");
     case "plus":
-      return t("یک روز کاری سبک، تا ۷ ساعت، یا ۳ تا ۴ ساعت کار سنگین", "A light workday of up to 7 hours, or 3 to 4 hours of heavy work");
+      return t("برای کار و استفاده‌ی منظم هر روز", "For steady, everyday work");
     case "pro":
-      return t("هر روز دست‌کم ۸ ساعت کار کامل، با ایجنت‌هایی مثل Cline", "At least 8 full hours of work every day, with agents like Cline");
+      return t("برای کار جدی و حرفه‌ای روزانه", "For serious daily, professional work");
     case "unlimited":
-      return t("بدون سقف روزانه برای تیم‌ها و کار شبانه‌روزی", "No daily caps, for teams and round-the-clock work");
+      return t("برای تیم‌ها و کار بی‌وقفه", "For teams and nonstop work");
     default:
       return fallback;
   }
@@ -71,26 +74,54 @@ function errText(e: unknown, fallback: string) {
 }
 
 function toman(n: number): string {
-  if (n >= 1000000 && n % 1000000 === 0) return t(`${fmtNum(n / 1000000)} میلیون تومان`, `${fmtNum(n / 1000000)} million toman`);
+  if (n >= 1000000 && n % 1000000 === 0) return t(`${fmtNum(n / 1000000)} میلیون تومان`, `${fmtNum(n / 1000000)}M toman`);
   return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
 }
 
-function limit(n: number, unit: string): string {
-  return n === 0 ? t("نامحدود", "Unlimited") : `${fmtNum(n)} ${unit}`;
+function tierOf(p: Plan, parallel: number): PlanTier | undefined {
+  return p.tiers?.find((x) => x.parallel === parallel) ?? p.tiers?.[0];
+}
+
+function effectivePlan(p: Plan, tier?: PlanTier): Plan {
+  if (!tier) return p;
+  return { ...p, ...tier };
 }
 
 function features(p: Plan): string[] {
-  return [
-    p.salam_only ? t("فقط کد زبان سلام می‌نویسد", "Writes Salam code only") : t("هر زبان برنامه‌نویسی و هر کاری", "Any programming language and any task"),
-    t(`گفت‌وگو: ${limit(p.chat_daily, "پیام در روز")}`, `Chat: ${limit(p.chat_daily, "messages per day")}`),
-    ...(p.chat_weekly > 0 ? [t(`گفت‌وگو در هفته: ${fmtNum(p.chat_weekly)} پیام`, `Chat per week: ${fmtNum(p.chat_weekly)} messages`)] : []),
-    ...(p.chat_5h > 0 ? [t(`گفت‌وگو در ۵ ساعت: ${fmtNum(p.chat_5h)} پیام`, `Chat per 5 hours: ${fmtNum(p.chat_5h)} messages`)] : []),
-    t(`کلید API: ${limit(p.api_daily, "درخواست در روز")}`, `API key: ${limit(p.api_daily, "requests per day")}`),
-    ...(p.api_weekly > 0 ? [t(`کلید API در هفته: ${fmtNum(p.api_weekly)} درخواست`, `API key per week: ${fmtNum(p.api_weekly)} requests`)] : []),
-    ...(p.api_5h > 0 ? [t(`کلید API در ۵ ساعت: ${fmtNum(p.api_5h)} درخواست`, `API key per 5 hours: ${fmtNum(p.api_5h)} requests`)] : []),
-    t(`درخواست هم‌زمان: ${limit(p.parallel, "درخواست")}`, `Parallel requests: ${limit(p.parallel, "at a time")}`),
-    p.hours > 0 ? t(`${fmtNum(p.hours)} ساعته`, `${fmtNum(p.hours)} hours`) : p.days === 0 ? t("بدون انقضا", "No expiry") : t(`${fmtNum(p.days)} روزه`, `${fmtNum(p.days)} days`),
-  ];
+  switch (p.id) {
+    case "free":
+      return [
+        t("شروع سریع و رایگان", "Quick, free start"),
+        t("مناسب برای آشنایی و کارهای سبک", "Great for trying things out"),
+        t("دستیار ویژه‌ی کدنویسی سلام", "Focused on Salam coding"),
+      ];
+    case "trial":
+      return [
+        t("چند ساعت تجربه‌ی کامل امکانات", "A few hours of the full experience"),
+        t("بدون محدودیت زبان برنامه‌نویسی", "Use any programming language"),
+        t("راهی ساده برای امتحان قبل از انتخاب", "An easy way to try before choosing"),
+      ];
+    case "plus":
+      return [
+        t("برای کارهای روزمره و پروژه‌های شخصی", "For everyday tasks and personal projects"),
+        t("پاسخ‌گویی روان‌تر برای استفاده‌ی منظم", "Smoother for regular use"),
+        t("بدون محدودیت زبان و موضوع", "No language or topic limits"),
+      ];
+    case "pro":
+      return [
+        t("برای کار حرفه‌ای و پروژه‌های جدی", "For professional, serious projects"),
+        t("ظرفیت بیشتر برای استفاده‌ی سنگین", "More room for heavy use"),
+        t("انتخاب مطمئن برای کار روزانه", "A solid choice for daily work"),
+      ];
+    case "unlimited":
+      return [
+        t("آزادی عمل برای کارهای بزرگ و مداوم", "Freedom for big, ongoing work"),
+        t("قابل تنظیم برای یک نفر تا تیم", "Scales from solo to team"),
+        t("بهترین گزینه برای استفاده‌ی بی‌وقفه", "Best for nonstop use"),
+      ];
+    default:
+      return [t("دسترسی به امکانات دستیار سلام", "Access to Salam assistant features")];
+  }
 }
 
 export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
@@ -99,14 +130,16 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
   const [current, setCurrent] = useState<Subscription | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [gateway, setGateway] = useState<Gateway>("zibal");
-  const [busy, setBusy] = useState<PlanId | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [code, setCode] = useState("");
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeStatus, setCodeStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
   const [codeError, setCodeError] = useState("");
-  const [discounts, setDiscounts] = useState<Record<PlanId, { charge: number; discount: number } | "invalid" | undefined>>({});
+  const [discounts, setDiscounts] = useState<Record<string, { charge: number; discount: number } | "invalid" | undefined>>({});
+  const [selectedTier, setSelectedTier] = useState<Record<string, number>>({});
+  const [openDetails, setOpenDetails] = useState<Record<string, boolean>>({});
   const codeReq = useRef(0);
 
   const load = useCallback(async () => {
@@ -166,23 +199,25 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
     setCodeError("");
     const timer = window.setTimeout(() => {
       void Promise.all(
-        buyable.map((p) =>
-          api
-            .previewDiscount(p.id, trimmed)
-            .then((r) => ({ id: p.id, ok: true as const, charge: r.charge, discount: r.discount }))
-            .catch((e) => ({ id: p.id, ok: false as const, message: errText(e, t("کد تخفیف نامعتبر است.", "Invalid discount code.")) })),
-        ),
+        buyable.map((p) => {
+          const par = p.tiers && p.tiers.length > 0 ? (selectedTier[p.id] ?? p.tiers[0].parallel) : undefined;
+          const key = par !== undefined ? `${p.id}:${par}` : p.id;
+          return api
+            .previewDiscount(p.id, trimmed, par)
+            .then((r) => ({ key, ok: true as const, charge: r.charge, discount: r.discount }))
+            .catch((e) => ({ key, ok: false as const, message: errText(e, t("کد تخفیف نامعتبر است.", "Invalid discount code.")) }));
+        }),
       ).then((results) => {
         if (codeReq.current !== req) return;
-        const next: Record<PlanId, { charge: number; discount: number } | "invalid" | undefined> = {};
+        const next: Record<string, { charge: number; discount: number } | "invalid" | undefined> = {};
         let firstError = "";
         let anyValid = false;
         for (const r of results) {
           if (r.ok) {
-            next[r.id] = { charge: r.charge, discount: r.discount };
+            next[r.key] = { charge: r.charge, discount: r.discount };
             anyValid = true;
           } else {
-            next[r.id] = "invalid";
+            next[r.key] = "invalid";
             if (!firstError) firstError = r.message;
           }
         }
@@ -192,14 +227,14 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
       });
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [code, plans, active]);
+  }, [code, plans, active, selectedTier]);
 
-  const buy = async (plan: Plan) => {
+  const buy = async (plan: Plan, parallel?: number) => {
     if (gateways.length === 0) return;
-    setBusy(plan.id);
+    setBusy(parallel !== undefined ? `${plan.id}:${parallel}` : plan.id);
     try {
       const trimmed = code.trim();
-      const r = await api.checkout(plan.id, gateway, trimmed || undefined, getCampaignFields());
+      const r = await api.checkout(plan.id, gateway, trimmed || undefined, getCampaignFields(), parallel);
       if (isDesktop) {
         await agent.payUrl(r.url);
         setBusy(null);
@@ -214,9 +249,13 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
 
   return (
     <div className="page plans-page">
-      <header className="page-head">
-        <h2>{t("اشتراک‌ها", "Subscriptions")}</h2>
-        <p className="muted">{t("با یک اشتراک، سقف روزانه‌ی گفت‌وگو و کلید API شما بالا می‌رود و هر روز ساعت ۰۰:۰۰ به وقت تهران دوباره شارژ می‌شود. پرداخت از راه درگاه‌های داخلی انجام می‌شود.", "A subscription raises your daily limits for chat and API keys, and they reset every day at midnight Tehran time. Payment goes through Iranian payment gateways and is charged in toman.")}</p>
+      <header className="page-head plans-hero">
+        <h2>{t("پلنی که با کار شما هماهنگ است", "A plan that fits your work")}</h2>
+        <p className="muted">{t("ساده انتخاب کنید و با خیال راحت شروع کنید. جزئیات فنی در پس‌زمینه مدیریت می‌شود.", "Pick simply and start with confidence. The technical details are handled for you.")}</p>
+        <div className="plans-campaign" aria-label={t("تخفیف ویژه", "Special offer")}>
+          <span className="plans-campaign-badge">{t("٪۳۵ تخفیف ویژه", "35% special offer")}</span>
+          <span className="muted">{t("برای مدت محدود روی همه‌ی پلن‌ها", "Limited-time on all plans")}</span>
+        </div>
       </header>
 
       {result && (
@@ -235,7 +274,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
       )}
 
       {current && (
-        <section className="card panel current-plan">
+        <section className="card panel current-plan compact-current">
           <div className="panel-head">
             <h3>{t("اشتراک فعلی شما", "Your current subscription")}</h3>
           </div>
@@ -245,20 +284,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
             </strong>
             <span className="muted">
               {current.expires === 0 ? t("بدون تاریخ پایان", "No end date") : t(`تا ${fmtDate(current.expires)}`, `Until ${fmtDate(current.expires)}`)}
-              {current.source === "admin" ? t(" (هدیه‌ی مدیر)", " (gift from an admin)") : ""}
             </span>
-            <span className="muted">
-              {t("امروز:", "Today:")} {fmtNum(current.chat_used)} {t("پیام", "messages")}
-              {current.plan.chat_daily > 0 ? t(` از ${fmtNum(current.plan.chat_daily)}`, ` of ${fmtNum(current.plan.chat_daily)}`) : ""} {t("و", "and")} {fmtNum(current.api_used)} {t("درخواست API", "API requests")}
-              {current.plan.api_daily > 0 ? t(` از ${fmtNum(current.plan.api_daily)}`, ` of ${fmtNum(current.plan.api_daily)}`) : ""}
-            </span>
-            {(current.plan.chat_weekly > 0 || current.plan.api_weekly > 0) && (
-              <span className="muted">
-                {t("این هفته:", "This week:")} {fmtNum(current.chat_used_week)} {t("پیام", "messages")}
-                {current.plan.chat_weekly > 0 ? t(` از ${fmtNum(current.plan.chat_weekly)}`, ` of ${fmtNum(current.plan.chat_weekly)}`) : ""} {t("و", "and")} {fmtNum(current.api_used_week)} {t("درخواست API", "API requests")}
-                {current.plan.api_weekly > 0 ? t(` از ${fmtNum(current.plan.api_weekly)}`, ` of ${fmtNum(current.plan.api_weekly)}`) : ""}
-              </span>
-            )}
           </div>
         </section>
       )}
@@ -282,19 +308,19 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
               type="text"
               dir="ltr"
               value={code}
-              placeholder={t("مثلا SUMMER50", "e.g. SUMMER50")}
+              placeholder={t("کد خود را وارد کنید", "Enter your code")}
               onChange={(e) => setCode(e.target.value)}
             />
             {codeStatus === "checking" && <span className="spinner" />}
             {codeStatus === "valid" && (
               <span className="discount-code-ok">
-                <IconBadgeCheck width={14} height={14} /> {t("کد اعمال شد", "Code applied")}
+                <IconBadgeCheck width={14} height={14} /> {t("اعمال شد", "Applied")}
               </span>
             )}
           </div>
         ) : (
           <button type="button" className="link" onClick={() => setCodeOpen(true)}>
-            {t("یک کد تخفیف دارم", "I have a discount code")}
+            {t("کد تخفیف دارید؟", "Have a discount code?")}
           </button>
         )}
         {codeStatus === "invalid" && codeError && (
@@ -310,41 +336,65 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="plan-grid">
+        <div className="plan-grid plan-grid-compact">
           {plans?.map((p) => {
+            const tier = p.tiers && p.tiers.length > 0 ? tierOf(p, selectedTier[p.id] ?? p.tiers[0].parallel) : undefined;
+            const ep = effectivePlan(p, tier);
             const mine = active?.id === p.id;
-            const featured = p.price > 0 && p.chat_daily === 0 && p.api_daily === 0 && plans.find((q) => q.price > 0 && q.chat_daily === 0 && q.api_daily === 0)?.id === p.id;
-            const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (p.price % 1000000 === 0 ? fmtNum(p.price / 1000000) : fmtNum(p.price)) : `$${fmtNum(p.usd)}`;
-            const unit = p.price === 0 ? "" : isFa ? (p.price % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
-            const period = p.price === 0 ? t("برای همیشه", "forever") : p.hours > 0 ? t(`فقط ${fmtNum(p.hours)} ساعت از لحظه‌ی خرید`, `${fmtNum(p.hours)} hours from the moment you buy`) : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);
-            const discount = discounts[p.id];
+            const featured = p.id === "unlimited" || p.id === "pro";
+            const base = tier ? tier.price : p.price;
+            const campaignOff = base > 0 ? Math.floor(base * 35 / 100) : 0;
+            const campaignSale = Math.max(0, base - campaignOff);
+            const discountKey = tier ? `${p.id}:${tier.parallel}` : p.id;
+            const discount = discounts[discountKey];
             const applied = discount && discount !== "invalid" ? discount : null;
+            const finalCharge = applied ? applied.charge : campaignSale;
+            const showUsd = !isFa && base > 0;
+            const display = base === 0 ? t("رایگان", "Free") : showUsd ? `$${fmtNum(ep.usd ?? 0)}` : toman(finalCharge);
+            const originalDisplay = base === 0 ? "" : showUsd ? `$${fmtNum(Math.round((ep.usd ?? 0) / 0.65))}` : toman(base);
+            const period = p.price === 0 ? t("همیشه در دسترس", "Always available") : p.hours > 0 ? t("دسترسی کوتاه‌مدت", "Short-term access") : p.days === 0 ? t("بدون تاریخ انقضا", "No expiry") : t("دسترسی ماهانه", "Monthly access");
+            const busyKey = tier ? `${p.id}:${tier.parallel}` : p.id;
+            const detailsOpen = !!openDetails[p.id];
             return (
               <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
-                {featured && <span className="plan-ribbon">{t("بیشترین امکانات", "Most capable")}</span>}
+                {(featured || base > 0) && <span className="plan-ribbon">{base > 0 ? t("٪۳۵ تخفیف", "35% off") : t("پیشنهادی", "Popular")}</span>}
                 <header className="plan-head">
                   <span className="plan-icon" aria-hidden="true">
                     <IconSpark width={20} height={20} />
                   </span>
                   <h3>{planName(p.id, p.name)}</h3>
                 </header>
-                <div className="plan-priceblock">
-                  {applied ? (
+                <p className="plan-note">{planNote(p.id, p.note)}</p>
+
+                {p.tiers && p.tiers.length > 0 && (
+                  <div className="plan-tier-picker plan-tier-picker-prominent">
+                    <label>{t("ظرفیت هم‌زمان شما", "Your simultaneous capacity")}</label>
+                    <Select
+                      value={String(tier?.parallel ?? p.tiers[0].parallel)}
+                      ariaLabel={t("انتخاب ظرفیت هم‌زمان", "Choose simultaneous capacity")}
+                      options={p.tiers.map((opt) => ({ value: String(opt.parallel), label: t(`${fmtNum(opt.parallel)} کار هم‌زمان`, `${fmtNum(opt.parallel)} at once`) }))}
+                      onChange={(v) => setSelectedTier((s) => ({ ...s, [p.id]: Number(v) }))}
+                    />
+                    <span className="muted plan-tier-hint">{t("هر زمان خواستید می‌توانید بیشترش کنید.", "You can scale it up anytime.")}</span>
+                  </div>
+                )}
+
+                <div className="plan-priceblock plan-priceblock-attractive">
+                  {base > 0 ? (
                     <>
-                      <s className="plan-price-old">{toman(p.price)}</s>
-                      <span className="plan-price">{toman(applied.charge)}</span>
+                      <span className="plan-discount-pill">{t("٪۳۵ تخفیف", "35% off")}</span>
+                      <s className="plan-price-old">{originalDisplay}</s>
+                      <span className="plan-price plan-price-sale">{display}</span>
+                      {applied && applied.discount > 0 && <span className="plan-off">{t("کد تخفیف هم اعمال شد", "Extra code applied")}</span>}
                     </>
                   ) : (
-                    <>
-                      <span className="plan-price">{price}</span>
-                      {unit && <span className="plan-unit">{unit}</span>}
-                    </>
+                    <span className="plan-price">{display}</span>
                   )}
                 </div>
                 <p className="plan-period">{period}</p>
-                {p.note && <p className="plan-note">{planNote(p.id, p.note)}</p>}
-                <ul className="plan-features">
-                  {features(p).map((f) => (
+
+                <ul className="plan-features plan-features-compact">
+                  {features(ep).map((f) => (
                     <li key={f}>
                       <span className="plan-tick" aria-hidden="true">
                         <IconCheck width={13} height={13} />
@@ -353,6 +403,18 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                     </li>
                   ))}
                 </ul>
+
+                <button type="button" className="plan-more" onClick={() => setOpenDetails((s) => ({ ...s, [p.id]: !s[p.id] }))} aria-expanded={detailsOpen}>
+                  {t(detailsOpen ? "نمایش کمتر" : "جزئیات بیشتر", detailsOpen ? "Show less" : "More details")}
+                  <IconChevronDown width={14} height={14} className={detailsOpen ? "rot" : ""} />
+                </button>
+                {detailsOpen && (
+                  <div className="plan-details muted">
+                    <p>{p.id === "free" ? t("برای آشنایی و استفاده‌ی سبک مناسب است.", "Good for getting started and light use.") : p.id === "trial" ? t("یک شروع سریع برای تجربه‌ی کامل.", "A quick start to experience it fully.") : t("برای استفاده‌ی راحت و منعطف در طول دوره‌ی اشتراک.", "Comfortable, flexible use during your subscription.")}</p>
+                    <p>{t("سیاست استفاده‌ی منصفانه برای جلوگیری از سوءاستفاده اعمال می‌شود.", "Fair-use safeguards help keep things reliable for everyone.")}</p>
+                  </div>
+                )}
+
                 {mine ? (
                   <span className="plan-state ok">
                     <IconBadgeCheck width={16} height={16} /> {t("اشتراک فعلی شما", "Your current plan")}
@@ -360,9 +422,9 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                 ) : p.id === "free" ? (
                   <span className="plan-state">{t("برای همه فعال است", "Active for everyone")}</span>
                 ) : (
-                  <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
-                    {busy === p.id ? <span className="spinner" /> : null}
-                    {busy === p.id ? t("در حال انتقال...", "Redirecting...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
+                  <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p, tier?.parallel)}>
+                    {busy === busyKey ? <span className="spinner" /> : null}
+                    {busy === busyKey ? t("در حال انتقال...", "Redirecting...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t("انتخاب و پرداخت", "Choose & pay")}
                   </button>
                 )}
               </section>
@@ -371,18 +433,11 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
         </div>
       )}
 
-      <section className="card panel">
+      <section className="card panel plans-note">
         <div className="panel-head">
-          <h3>{t("محدودیت‌ها، صادقانه", "Limits, honestly")}</h3>
+          <h3>{t("نکته‌ای کوتاه", "A quick note")}</h3>
         </div>
-        <ul className="plan-limits">
-          <li>{t("پلن رایگان فقط برای زبان سلام است: دستیار در آن فقط کد سلام می‌نویسد. پلن‌های پولی محدودیت زبان ندارند و هر زبان برنامه‌نویسی و هر کار دیگری را انجام می‌دهند.", "The free plan is for the Salam language only: the assistant writes only Salam code. Paid plans have no language limit and handle any programming language and any other task.")}</li>
-          <li>{t("پلن‌های نامحدود سقف پیام و درخواست در روز و هفته ندارند. تعداد درخواست هم‌زمان هر پلن را روی کارت آن می‌بینید.", "Unlimited plans have no per-day or per-week message or request cap. Each plan's number of parallel requests is on its card.")}</li>
-          <li>{t("هر نوبت در پلن‌های نامحدود تا ۳۰ دقیقه می‌تواند ادامه پیدا کند. پلن‌های دیگر: گفت‌وگو ۱۰ دقیقه و ایجنت رومیزی ۱ ساعت برای هر نوبت.", "On Unlimited plans a single turn can run up to 30 minutes. Other plans: 10 minutes per chat turn and 1 hour per desktop agent turn.")}</li>
-          <li>{t("اگر نوبتی به سقف زمانی برسد، متن تا آن لحظه می‌ماند و با نوشتن «ادامه بده» از همان‌جا ادامه پیدا می‌کند.", "If a turn reaches its time limit, the text so far is kept and you can write \"continue\" to pick up from there.")}</li>
-          <li>{t("پیام‌هایی که مهمان‌ها از راه یک پیوند همکاری می‌فرستند هم از پیام‌ها و سهمیه‌ی پلن صاحب گفت‌وگو کم می‌شود. با رسیدن به سقف روزانه، پیوند خودکار متوقف می‌شود.", "Messages guests send through a collaborate link also count against the chat owner's plan and limits. When the daily limit is reached the link pauses itself.")}</li>
-          <li>{t("هر ابزار روی رایانه شما تا ۱۰ دقیقه برای پاسخ مهلت دارد و سرور برای دادن حافظه گاهی دوباره راه‌اندازی می‌شود. بستن برنامه یا قطع اینترنت رایانه شما کار را متوقف می‌کند، اما صفحه پس از وصل شدن دوباره به نوبت در حال اجرا برمی‌گردد.", "Each tool on your computer gets up to 10 minutes to answer, and the server sometimes restarts to free memory. Closing the app or losing your computer's internet pauses the work, but the page reattaches to the running turn when it reconnects.")}</li>
-        </ul>
+        <p className="muted">{t("همه‌ی پلن‌ها با هدف استفاده‌ی راحت طراحی شده‌اند و برای جلوگیری از سوءاستفاده، محدودیت‌های منصفانه‌ای در پس‌زمینه دارند. اگر به ظرفیت بیشتری نیاز دارید، پلن بالاتر یا گزینه‌های نامحدود بهترین انتخاب‌اند.", "Every plan is designed for comfortable use, with fair safeguards behind the scenes to prevent abuse. If you need more room, a higher plan or the unlimited options are the best fit.")}</p>
       </section>
 
       {payments.length > 0 && (

@@ -1,0 +1,963 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package flow
+
+struct Box:
+    pub pl: f64 = 0.0
+    pub pr: f64 = 0.0
+    pub pt: f64 = 0.0
+    pub pb: f64 = 0.0
+    pub bl: f64 = 0.0
+    pub br: f64 = 0.0
+    pub bt: f64 = 0.0
+    pub bb: f64 = 0.0
+    pub ml: f64 = 0.0
+    pub mr: f64 = 0.0
+    pub mt: f64 = 0.0
+    pub mb: f64 = 0.0
+    pub aml: bool = false
+    pub amr: bool = false
+    pub amt: bool = false
+    pub amb: bool = false
+end
+
+func _max(a: f64, b: f64): f64:
+    if a > b:
+        ret a
+    end
+    ret b
+end
+
+func _min(a: f64, b: f64): f64:
+    if a < b:
+        ret a
+    end
+    ret b
+end
+
+func _clamp(v: f64, lo: f64, hi: f64): f64:
+    ret _max(lo, _min(v, hi))
+end
+
+func _pick(e: Edges, side: int, rtl: bool): Len:
+    switch side:
+        0:
+            ret e.top
+        end
+        2:
+            ret e.bottom
+        end
+        1:
+            if e.right.kind != LEN_NONE:
+                ret e.right
+            end
+            if rtl:
+                ret e.start
+            end
+            ret e.end
+        end
+        else:
+            if e.left.kind != LEN_NONE:
+                ret e.left
+            end
+            if rtl:
+                ret e.end
+            end
+            ret e.start
+        end
+    end
+    ret e.top
+end
+
+func _rv(l: Len, ref: f64, dflt: f64): f64:
+    if l.kind == LEN_FIXED:
+        if ref >= 0.0:
+            ret l.px + l.pct * ref
+        end
+        ret l.px
+    end
+    ret dflt
+end
+
+func _inset(e: Edges, side: int, rtl: bool, ref: f64): f64:
+    l := _pick(e, side, rtl)
+    if l.kind != LEN_FIXED:
+        ret _UNK
+    end
+    if l.pct != 0.0 and ref < 0.0:
+        ret _UNK
+    end
+    ret l.px + l.pct * _max(ref, 0.0)
+end
+
+func _box(t &: Eng, id: int, pw: f64): Box:
+    n := t.nodes.Ref(id)
+    rtl := n.rtl
+    mut b := Box {}
+    b.bt = _max(0.0, _rv(_pick(n.st.border, 0, rtl), pw, 0.0))
+    b.br = _max(0.0, _rv(_pick(n.st.border, 1, rtl), pw, 0.0))
+    b.bb = _max(0.0, _rv(_pick(n.st.border, 2, rtl), pw, 0.0))
+    b.bl = _max(0.0, _rv(_pick(n.st.border, 3, rtl), pw, 0.0))
+    b.pt = b.bt + _max(0.0, _rv(_pick(n.st.padding, 0, rtl), pw, 0.0))
+    b.pr = b.br + _max(0.0, _rv(_pick(n.st.padding, 1, rtl), pw, 0.0))
+    b.pb = b.bb + _max(0.0, _rv(_pick(n.st.padding, 2, rtl), pw, 0.0))
+    b.pl = b.bl + _max(0.0, _rv(_pick(n.st.padding, 3, rtl), pw, 0.0))
+    mt := _pick(n.st.margin, 0, rtl)
+    mr := _pick(n.st.margin, 1, rtl)
+    mb := _pick(n.st.margin, 2, rtl)
+    ml := _pick(n.st.margin, 3, rtl)
+    b.amt = mt.kind == LEN_AUTO
+    b.amr = mr.kind == LEN_AUTO
+    b.amb = mb.kind == LEN_AUTO
+    b.aml = ml.kind == LEN_AUTO
+    b.mt = _rv(mt, pw, 0.0)
+    b.mr = _rv(mr, pw, 0.0)
+    b.mb = _rv(mb, pw, 0.0)
+    b.ml = _rv(ml, pw, 0.0)
+    ret b
+end
+
+func _size_def(l: Len, ref: f64, m: f64): f64:
+    if l.kind == LEN_FIXED:
+        if l.pct != 0.0 and ref < 0.0:
+            ret _UNK
+        end
+        ret _max(0.0, l.px + l.pct * _max(ref, 0.0))
+    end
+    if l.kind == LEN_FILL and ref >= 0.0:
+        ret _max(0.0, ref - m)
+    end
+    ret _UNK
+end
+
+func _min_len(t &: Eng, id: int, l: Len, ref: f64, m: f64, width: bool): f64:
+    switch l.kind:
+        LEN_FIXED:
+            ret _max(0.0, l.px + l.pct * _max(ref, 0.0))
+        end
+        LEN_FILL:
+            if ref >= 0.0:
+                ret _max(0.0, ref - m)
+            end
+            ret 0.0
+        end
+        LEN_MIN_CONTENT, LEN_FIT:
+            if width:
+                ret _intrinsic(t, id, true, ref)
+            end
+            ret 0.0
+        end
+        LEN_MAX_CONTENT:
+            if width:
+                ret _intrinsic(t, id, false, ref)
+            end
+            ret 0.0
+        end
+        else:
+            ret 0.0
+        end
+    end
+    ret 0.0
+end
+
+func _max_len(t &: Eng, id: int, l: Len, ref: f64, m: f64, width: bool): f64:
+    switch l.kind:
+        LEN_FIXED:
+            if l.pct != 0.0 and ref < 0.0:
+                ret _INF
+            end
+            ret _max(0.0, l.px + l.pct * _max(ref, 0.0))
+        end
+        LEN_FILL:
+            if ref >= 0.0:
+                ret _max(0.0, ref - m)
+            end
+            ret _INF
+        end
+        LEN_MIN_CONTENT:
+            if width:
+                ret _intrinsic(t, id, true, ref)
+            end
+            ret _INF
+        end
+        LEN_MAX_CONTENT, LEN_FIT:
+            if width:
+                ret _intrinsic(t, id, false, ref)
+            end
+            ret _INF
+        end
+        else:
+            ret _INF
+        end
+    end
+    ret _INF
+end
+
+func _in_flow(n &: Node): bool:
+    ret n.st.visible and n.st.position != POS_ABSOLUTE and n.st.position != POS_FIXED
+end
+
+func _resolve_dir(t &: Eng, id: int):
+    n := t.nodes.Ref(id)
+    d := n.st.direction
+    if d == DIR_RTL:
+        n.rtl = true
+    else d == DIR_LTR:
+        n.rtl = false
+    else n.parent >= 0:
+        n.rtl = t.nodes.Ref(n.parent).rtl
+    else:
+        n.rtl = false
+    end
+end
+
+func _measure(t &: Eng, id: int, cw: f64, ch: f64): Size:
+    n := t.nodes.Ref(id)
+    if n.lm_iw == cw and n.lm_ih == ch:
+        ret Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b, last_baseline = n.lm_lb }
+    end
+    t.measure_calls++
+    f := n.measure
+    s := f(id, cw, ch)
+    n.lm_iw = cw
+    n.lm_ih = ch
+    n.lm_w = _max(0.0, s.w)
+    n.lm_h = _max(0.0, s.h)
+    n.lm_b = s.baseline
+    n.lm_lb = s.last_baseline
+    ret Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b, last_baseline = n.lm_lb }
+end
+
+func _leaf(n &: Node): bool:
+    ret n.kids.Len() == 0 and n.has_measure
+end
+
+func _contrib(t &: Eng, kid: int, minmode: bool): f64:
+    mut a := _AV_MAX
+    if minmode:
+        a = _AV_MIN
+    end
+    o := _compute(t, kid, _UNK, _UNK, a, _UNK, _UNK, false)
+    n := t.nodes.Ref(kid)
+    ret o.w + _max(0.0, _rv(_pick(n.st.margin, 1, n.rtl), _UNK, 0.0)) + _max(0.0, _rv(_pick(n.st.margin, 3, n.rtl), _UNK, 0.0))
+end
+
+func _gap(l: Len, ref: f64): f64:
+    ret _max(0.0, _rv(l, ref, 0.0))
+end
+
+func _intrinsic(t &: Eng, id: int, minmode: bool, pw0: f64): f64:
+    n := t.nodes.Ref(id)
+    mut pw := pw0
+    if not n.upw:
+        pw = 0.0
+    end
+    if minmode and n.imin_pw == pw:
+        ret n.imin
+    end
+    if not minmode and n.imax_pw == pw:
+        ret n.imax
+    end
+    bx := _box(t, id, pw)
+    mut v := 0.0
+    if n.kids.Len() == 0:
+        if n.has_measure:
+            mut cw := -1.0
+            if minmode:
+                cw = 0.0
+            end
+            v = _measure(t, id, cw, -1.0).w
+        end
+    else:
+        lay := n.st.layout
+        if lay == LAYOUT_GRID:
+            v = _grid_intrinsic(t, id, minmode)
+        else:
+            mut sum := 0.0
+            mut big := 0.0
+            mut count := 0
+            each k in n.kids:
+                kn := t.nodes.Ref(k)
+                if not _in_flow(kn):
+                    continue
+                end
+                mut c := 0.0
+                b := _size_def(kn.st.basis, _UNK, 0.0)
+                if lay == LAYOUT_ROW and b >= 0.0:
+                    c = b + _max(0.0, _rv(_pick(kn.st.margin, 1, kn.rtl), _UNK, 0.0)) + _max(0.0, _rv(_pick(kn.st.margin, 3, kn.rtl), _UNK, 0.0))
+                else:
+                    c = _contrib(t, k, minmode)
+                end
+                sum += c
+                big = _max(big, c)
+                count++
+            end
+            gap := _gap(n.st.column_gap, _UNK)
+            if count > 1 and lay != LAYOUT_FLOW:
+                sum += gap * ((count - 1) as f64)
+            end
+            if lay == LAYOUT_ROW:
+                if minmode and n.st.wrap:
+                    v = big
+                else:
+                    v = sum
+                end
+            else lay == LAYOUT_FLOW:
+                if minmode:
+                    v = big
+                else:
+                    v = sum
+                end
+            else:
+                v = big
+            end
+        end
+    end
+    v += bx.pl + bx.pr
+    n2 := t.nodes.Ref(id)
+    if minmode:
+        n2.imin = v
+        n2.imin_pw = pw
+    else:
+        n2.imax = v
+        n2.imax_pw = pw
+    end
+    ret v
+end
+
+func _compute(t &: Eng, id: int, kw0: f64, kh0: f64, aw0: f64, pw0: f64, ph0: f64, final: bool): Out:
+    n := t.nodes.Ref(id)
+    if not n.st.visible:
+        if final:
+            n.w = 0.0
+            n.h = 0.0
+            n.x = 0.0
+            n.y = 0.0
+            n.dirty = false
+        end
+        ret Out {}
+    end
+    _resolve_dir(t, id)
+    mut aw := aw0
+    if kw0 >= 0.0:
+        aw = kw0
+    end
+    mut pw := pw0
+    if not n.upw:
+        pw = 0.0
+    end
+    mut ph := ph0
+    if not n.uph:
+        ph = 0.0
+    end
+    if final:
+        if not n.dirty and n.has_final and n.fw == kw0 and n.fh == kh0 and n.fpw == pw and n.fph == ph:
+            ret Out { w = n.w, h = n.h, base = n.base, last = n.lbase }
+        end
+    else:
+        cn := n.cv.Len() / 4
+        repeat cn in i:
+            j := i * 5
+            if n.ck.Get(j) == kw0 and n.ck.Get(j + 1) == kh0 and n.ck.Get(j + 2) == aw and n.ck.Get(j + 3) == pw and n.ck.Get(j + 4) == ph:
+                ret Out { w = n.cv.Get(i * 4), h = n.cv.Get(i * 4 + 1), base = n.cv.Get(i * 4 + 2), last = n.cv.Get(i * 4 + 3) }
+            end
+        end
+    end
+    t.layout_calls++
+    bx := _box(t, id, pw)
+    mx := bx.ml + bx.mr
+    my := bx.mt + bx.mb
+    pbx := bx.pl + bx.pr
+    pby := bx.pt + bx.pb
+    minw := _max(_min_len(t, id, n.st.min_width, pw, mx, true), pbx)
+    maxw := _max_len(t, id, n.st.max_width, pw, mx, true)
+    minh := _max(_min_len(t, id, n.st.min_height, ph, my, false), pby)
+    maxh := _max_len(t, id, n.st.max_height, ph, my, false)
+    mut kw := kw0
+    mut kh := kh0
+    if kw < 0.0:
+        kw = _size_def(n.st.width, pw, mx)
+        if kw >= 0.0:
+            kw = _clamp(kw, minw, maxw)
+        end
+    end
+    if kh < 0.0:
+        kh = _size_def(n.st.height, ph, my)
+        if kh >= 0.0:
+            kh = _clamp(kh, minh, maxh)
+        end
+    end
+    ar := n.st.aspect_ratio
+    if ar > 0.0:
+        if kw >= 0.0 and kh < 0.0:
+            kh = _clamp(kw / ar, minh, maxh)
+        else kh >= 0.0 and kw < 0.0:
+            kw = _clamp(kh * ar, minw, maxw)
+        end
+    end
+    if kw < 0.0:
+        mut a := aw
+        wk := n.st.width.kind
+        if wk == LEN_MIN_CONTENT:
+            a = _AV_MIN
+        else wk == LEN_MAX_CONTENT:
+            a = _AV_MAX
+        end
+        if _leaf(n):
+            mut cw := -1.0
+            if a >= 0.0:
+                cw = _max(0.0, a - pbx)
+            else a == _AV_MIN:
+                cw = 0.0
+            end
+            mut ch := -1.0
+            if kh >= 0.0:
+                ch = _max(0.0, kh - pby)
+            end
+            kw = _clamp(_measure(t, id, cw, ch).w + pbx, minw, maxw)
+        else:
+            if a == _AV_MIN:
+                kw = _intrinsic(t, id, true, pw)
+            else a == _AV_MAX:
+                kw = _intrinsic(t, id, false, pw)
+            else:
+                lo := _intrinsic(t, id, true, pw)
+                hi := _intrinsic(t, id, false, pw)
+                kw = _min(hi, _max(lo, a))
+            end
+            kw = _clamp(kw, minw, maxw)
+        end
+        if ar > 0.0 and kh < 0.0:
+            kh = _clamp(kw / ar, minh, maxh)
+        end
+    end
+    mut out := _run(t, id, kw, kh, minh, maxh, bx, final)
+    out.w = kw
+    if kh >= 0.0:
+        out.h = kh
+    else:
+        out.h = _clamp(out.h, minh, maxh)
+    end
+    if out.base < 0.0:
+        out.base = out.h
+    end
+    m := t.nodes.Ref(id)
+    if final:
+        m.w = out.w
+        m.h = out.h
+        m.base = out.base
+        m.lbase = out.last
+        m.has_final = true
+        m.dirty = false
+        m.fw = kw0
+        m.fh = kh0
+        m.fpw = pw
+        m.fph = ph
+        m.bx = bx
+        _extents(t, id, bx)
+    else:
+        mut slot := m.cnext
+        if m.cv.Len() / 4 < _CACHE:
+            slot = m.cv.Len() / 4
+            repeat 5:
+                m.ck.Push(0.0)
+            end
+            repeat 4:
+                m.cv.Push(0.0)
+            end
+        else:
+            m.cnext = (m.cnext + 1) % _CACHE
+        end
+        m.ck.Set(slot * 5, kw0)
+        m.ck.Set(slot * 5 + 1, kh0)
+        m.ck.Set(slot * 5 + 2, aw)
+        m.ck.Set(slot * 5 + 3, pw)
+        m.ck.Set(slot * 5 + 4, ph)
+        m.cv.Set(slot * 4, out.w)
+        m.cv.Set(slot * 4 + 1, out.h)
+        m.cv.Set(slot * 4 + 2, out.base)
+        m.cv.Set(slot * 4 + 3, out.last)
+    end
+    ret out
+end
+
+func _content_h(t &: Eng, id: int, w: f64, pw: f64): f64:
+    n := t.nodes.Ref(id)
+    if n.chk == w:
+        ret n.chv
+    end
+    _resolve_dir(t, id)
+    bx := _box(t, id, pw)
+    o := _run(t, id, w, _UNK, bx.pt + bx.pb, _INF, bx, false)
+    m := t.nodes.Ref(id)
+    m.chk = w
+    m.chv = o.h
+    ret o.h
+end
+
+func _place(t &: Eng, id: int, kw: f64, kh: f64, aw: f64, pw: f64, ph: f64): Out:
+    mut w := kw
+    mut h := kh
+    if w < 0.0 or h < 0.0:
+        o := _compute(t, id, w, h, aw, pw, ph, false)
+        w = o.w
+        h = o.h
+    end
+    ret _compute(t, id, w, h, w, pw, ph, true)
+end
+
+func _run(t &: Eng, id: int, kw: f64, kh: f64, minh: f64, maxh: f64, bx: Box, final: bool): Out:
+    n := t.nodes.Ref(id)
+    if n.kids.Len() == 0:
+        if n.has_measure:
+            pbx := bx.pl + bx.pr
+            pby := bx.pt + bx.pb
+            cw := _max(0.0, kw - pbx)
+            mut ch := -1.0
+            if kh >= 0.0:
+                ch = _max(0.0, kh - pby)
+            end
+            mut s := Size {}
+            if (n.lm_ih == ch or n.lm_ih < 0.0) and (n.lm_iw == cw or (n.lm_w == cw and (n.lm_iw < 0.0 or n.lm_iw >= cw))):
+                s = Size { w = n.lm_w, h = n.lm_h, baseline = n.lm_b, last_baseline = n.lm_lb }
+            else:
+                s = _measure(t, id, cw, ch)
+            end
+            mut h := kh
+            if h < 0.0:
+                h = s.h + pby
+            end
+            mut b := -1.0
+            if s.baseline >= 0.0:
+                b = bx.pt + s.baseline
+            end
+            mut lb := b
+            if s.last_baseline >= 0.0:
+                lb = bx.pt + s.last_baseline
+            end
+            ret Out { w = kw, h = h, base = b, last = lb }
+        end
+        mut h := kh
+        if h < 0.0:
+            h = bx.pt + bx.pb
+        end
+        ret Out { w = kw, h = h, base = -1.0 }
+    end
+    lay := n.st.layout
+    mut out := Out {}
+    if lay == LAYOUT_GRID:
+        out = _grid(t, id, kw, kh, minh, maxh, bx, final)
+    else lay == LAYOUT_STACK:
+        out = _stack(t, id, kw, kh, minh, maxh, bx, final)
+    else lay == LAYOUT_FLOW:
+        out = _inline(t, id, kw, kh, bx, final)
+    else:
+        out = _flex(t, id, kw, kh, minh, maxh, bx, final)
+    end
+    if final:
+        mut h := kh
+        if h < 0.0:
+            h = _clamp(out.h, minh, maxh)
+        end
+        _out_of_flow(t, id, kw, h, bx)
+    end
+    ret out
+end
+
+func _layout_root(t &: Eng, r: int, width: f64, height: f64):
+    n := t.nodes.Ref(r)
+    if not n.st.visible:
+        ret
+    end
+    _resolve_dir(t, r)
+    bx := _box(t, r, width)
+    mx := bx.ml + bx.mr
+    my := bx.mt + bx.mb
+    mut kw := _UNK
+    mut kh := _UNK
+    if n.st.width.kind == LEN_AUTO:
+        kw = _clamp(_max(0.0, width - mx), _max(_min_len(t, r, n.st.min_width, width, mx, true), bx.pl + bx.pr), _max_len(t, r, n.st.max_width, width, mx, true))
+    end
+    if n.st.height.kind == LEN_AUTO and n.st.aspect_ratio <= 0.0:
+        kh = _clamp(_max(0.0, height - my), _max(_min_len(t, r, n.st.min_height, height, my, false), bx.pt + bx.pb), _max_len(t, r, n.st.max_height, height, my, false))
+    end
+    _place(t, r, kw, kh, _max(0.0, width - mx), width, height)
+    m := t.nodes.Ref(r)
+    m.x = bx.ml
+    m.y = bx.mt
+end
+
+func _out_of_flow(t &: Eng, id: int, kw: f64, kh: f64, bx: Box):
+    n := t.nodes.Ref(id)
+    each k in n.kids:
+        kn := t.nodes.Ref(k)
+        if not kn.st.visible:
+            continue
+        end
+        pos := kn.st.position
+        if pos == POS_ABSOLUTE:
+            _place_abs(t, k, id, kw, kh, bx, false)
+        else pos == POS_FIXED:
+            _place_abs(t, k, id, kw, kh, bx, true)
+        end
+    end
+end
+
+func _static_off(mode: int, free: f64): f64:
+    if mode == ALIGN_CENTER or mode == ALIGN_AROUND or mode == ALIGN_EVENLY:
+        ret free / 2.0
+    end
+    if mode == ALIGN_END:
+        ret free
+    end
+    ret 0.0
+end
+
+func _static_pos(t &: Eng, parent: int, kw: f64, kh: f64, pbx: Box, k: int, w: f64, h: f64, kb: Box): (f64, f64):
+    pn := t.nodes.Ref(parent)
+    rtl := pn.rtl
+    iw := _max(0.0, kw - pbx.pl - pbx.pr)
+    ih := _max(0.0, kh - pbx.pt - pbx.pb)
+    lay := pn.st.layout
+    kn := t.nodes.Ref(k)
+    mut al := kn.st.align_self
+    if al == ALIGN_AUTO:
+        al = pn.st.align
+    end
+    if al == ALIGN_STRETCH or al == ALIGN_BASELINE:
+        al = ALIGN_START
+    end
+    fx := iw - w - kb.ml - kb.mr
+    fy := ih - h - kb.mt - kb.mb
+    mut ox := 0.0
+    mut oy := 0.0
+    mut mirror_x := rtl
+    if lay == LAYOUT_ROW:
+        ox = _static_off(pn.st.justify, fx)
+        oy = _static_off(al, fy)
+        mirror_x = rtl != pn.st.reverse
+    else lay == LAYOUT_COLUMN:
+        ox = _static_off(al, fx)
+        oy = _static_off(pn.st.justify, fy)
+        if pn.st.reverse:
+            oy = fy - oy
+        end
+    else lay == LAYOUT_FLOW:
+        mut fx0 := kn.stx + kb.ml
+        if rtl:
+            fx0 = kn.stx - kb.mr - w
+        end
+        ret fx0, kn.sty + kb.mt
+    else lay == LAYOUT_GRID:
+        mut gx := pbx.bl + kb.ml
+        if rtl:
+            gx = kw - pbx.br - kb.mr - w
+        end
+        ret gx, pbx.bt + kb.mt
+    else lay == LAYOUT_STACK:
+        mut js := kn.st.justify_self
+        if js == ALIGN_AUTO:
+            js = pn.st.justify
+        end
+        ox = _static_off(js, fx)
+        oy = _static_off(al, fy)
+    end
+    mut x := pbx.pl + kb.ml + ox
+    if mirror_x:
+        x = pbx.pl + iw - kb.mr - ox - w
+    end
+    ret x, pbx.pt + kb.mt + oy
+end
+
+func _place_abs(t &: Eng, k: int, parent: int, pw: f64, ph: f64, pbx: Box, fixed: bool):
+    _resolve_dir(t, k)
+    kn := t.nodes.Ref(k)
+    rtl := t.nodes.Ref(parent).rtl
+    mut cw := _max(0.0, pw - pbx.bl - pbx.br)
+    mut ch := _max(0.0, ph - pbx.bt - pbx.bb)
+    mut ox := pbx.bl
+    mut oy := pbx.bt
+    if fixed:
+        cw = _max(0.0, t.vw)
+        ch = _max(0.0, t.vh)
+        ox = 0.0
+        oy = 0.0
+    end
+    kb := _box(t, k, cw)
+    mx := kb.ml + kb.mr
+    my := kb.mt + kb.mb
+    l := _inset(kn.st.inset, 3, rtl, cw)
+    r := _inset(kn.st.inset, 1, rtl, cw)
+    tp := _inset(kn.st.inset, 0, rtl, ch)
+    bt := _inset(kn.st.inset, 2, rtl, ch)
+    mut w := _UNK
+    mut h := _UNK
+    if kn.st.width.kind == LEN_AUTO and l >= 0.0 and r >= 0.0 and kn.st.aspect_ratio <= 0.0:
+        w = _max(0.0, cw - l - r - mx)
+    end
+    if kn.st.height.kind == LEN_AUTO and tp >= 0.0 and bt >= 0.0 and (kn.st.aspect_ratio <= 0.0 or w < 0.0):
+        h = _max(0.0, ch - tp - bt - my)
+    end
+    mut avail := cw - mx
+    if l >= 0.0:
+        avail -= l
+    end
+    if r >= 0.0:
+        avail -= r
+    end
+    o := _place(t, k, w, h, _max(0.0, avail), cw, ch)
+    w = o.w
+    h = o.h
+    sx, sy := _static_pos(t, parent, pw, ph, pbx, k, w, h, kb)
+    mut x := 0.0
+    mut static_x := false
+    if l >= 0.0 and r >= 0.0:
+        free := cw - l - r - w - mx
+        if kb.aml and kb.amr:
+            x = l + free / 2.0
+        else kb.aml:
+            x = l + free + kb.ml
+        else kb.amr or not rtl:
+            x = l + kb.ml
+        else:
+            x = cw - r - kb.mr - w
+        end
+        x += ox
+    else l >= 0.0:
+        x = ox + l + kb.ml
+    else r >= 0.0:
+        x = ox + cw - r - kb.mr - w
+    else:
+        x = sx
+        static_x = true
+    end
+    mut y := 0.0
+    mut static_y := false
+    if tp >= 0.0 and bt >= 0.0:
+        free := ch - tp - bt - h - my
+        if kb.amt and kb.amb:
+            y = tp + free / 2.0
+        else kb.amt:
+            y = tp + free + kb.mt
+        else:
+            y = tp + kb.mt
+        end
+        y += oy
+    else tp >= 0.0:
+        y = oy + tp + kb.mt
+    else bt >= 0.0:
+        y = oy + ch - bt - kb.mb - h
+    else:
+        y = sy
+        static_y = true
+    end
+    kk := t.nodes.Ref(k)
+    kk.x = x
+    kk.y = y
+    kk.in_fixed = fixed
+    kk.fsx = fixed and static_x
+    kk.fsy = fixed and static_y
+end
+
+func _extents(t &: Eng, id: int, bx: Box):
+    n := t.nodes.Ref(id)
+    cw := _max(0.0, n.w - bx.bl - bx.br)
+    ch := _max(0.0, n.h - bx.bt - bx.bb)
+    mut x0 := 0.0
+    mut x1 := cw
+    mut y1 := ch
+    each k in n.kids:
+        kn := t.nodes.Ref(k)
+        if not kn.st.visible or kn.st.position == POS_FIXED:
+            continue
+        end
+        kx := kn.x - bx.bl
+        ky := kn.y - bx.bt
+        mut r := kx + kn.w + kn.bx.mr
+        mut b := ky + kn.h + kn.bx.mb
+        mut l := kx - kn.bx.ml
+        if kn.ovx == OVERFLOW_VISIBLE:
+            r = _max(r, kx + kn.bx.bl + kn.cx1)
+            l = _min(l, kx + kn.bx.bl + kn.cx0)
+        end
+        if kn.ovy == OVERFLOW_VISIBLE:
+            b = _max(b, ky + kn.bx.bt + kn.cy1)
+        end
+        x1 = _max(x1, r + (bx.pr - bx.br))
+        x0 = _min(x0, l - (bx.pl - bx.bl))
+        y1 = _max(y1, b + (bx.pb - bx.bb))
+    end
+    if n.rtl:
+        n.cx0 = x0
+        n.cx1 = cw
+    else:
+        n.cx0 = 0.0
+        n.cx1 = x1
+    end
+    n.cy0 = 0.0
+    n.cy1 = y1
+end
+
+func _scroll_x(t &: Eng, id: int): f64:
+    n := t.nodes.Ref(id)
+    if n.ovx == OVERFLOW_VISIBLE:
+        ret 0.0
+    end
+    cw := n.w - n.bx.bl - n.bx.br
+    ret _clamp(n.sx, n.cx0, _max(n.cx0, n.cx1 - cw))
+end
+
+func _scroll_y(t &: Eng, id: int): f64:
+    n := t.nodes.Ref(id)
+    if n.ovy == OVERFLOW_VISIBLE:
+        ret 0.0
+    end
+    ch := n.h - n.bx.bt - n.bx.bb
+    ret _clamp(n.sy, 0.0, _max(0.0, n.cy1 - ch))
+end
+
+func _view_x(t &: Eng, id: int): f64:
+    n := t.nodes.Ref(id)
+    if n.in_fixed and not n.fsx:
+        ret n.x
+    end
+    if n.parent < 0:
+        ret n.x
+    end
+    ret n.x + _view_x(t, n.parent)
+end
+
+func _view_y(t &: Eng, id: int): f64:
+    n := t.nodes.Ref(id)
+    if n.in_fixed and not n.fsy:
+        ret n.y
+    end
+    if n.parent < 0:
+        ret n.y
+    end
+    ret n.y + _view_y(t, n.parent)
+end
+
+func _rel_x(t &: Eng, id: int): f64:
+    n := t.nodes.Ref(id)
+    p := n.parent
+    if n.in_fixed:
+        if p >= 0:
+            ret _view_x(t, id) - _abs_x(t, p)
+        end
+        ret n.x
+    end
+    mut x := n.x
+    if p >= 0:
+        x -= _scroll_x(t, p)
+    end
+    if n.st.position == POS_STICKY:
+        x += _sticky(t, id, true)
+    end
+    ret x
+end
+
+func _rel_y(t &: Eng, id: int): f64:
+    n := t.nodes.Ref(id)
+    p := n.parent
+    if n.in_fixed:
+        if p >= 0:
+            ret _view_y(t, id) - _abs_y(t, p)
+        end
+        ret n.y
+    end
+    mut y := n.y
+    if p >= 0:
+        y -= _scroll_y(t, p)
+    end
+    if n.st.position == POS_STICKY:
+        y += _sticky(t, id, false)
+    end
+    ret y
+end
+
+func _stick(pos: f64, size: f64, ms: f64, me: f64, vstart: f64, view: f64, lo: f64, hi: f64, cstart: f64, cend: f64): f64:
+    mut d := 0.0
+    if lo >= 0.0 and pos < vstart + lo:
+        d = vstart + lo - pos
+    else hi >= 0.0 and pos + size > vstart + view - hi:
+        d = vstart + view - hi - (pos + size)
+    end
+    if d > 0.0:
+        d = _max(0.0, _min(d, cend - (pos + size + me)))
+    else d < 0.0:
+        d = _min(0.0, _max(d, cstart - (pos - ms)))
+    end
+    ret d
+end
+
+func _sticky(t &: Eng, id: int, horiz: bool): f64:
+    n := t.nodes.Ref(id)
+    p := n.parent
+    if p < 0:
+        ret 0.0
+    end
+    mut pos := 0.0
+    mut cur := id
+    mut s := p
+    until s >= 0:
+        cn := t.nodes.Ref(cur)
+        sn := t.nodes.Ref(s)
+        mut ov := sn.ovy
+        if horiz:
+            pos += cn.x
+            ov = sn.ovx
+        else:
+            pos += cn.y
+        end
+        if ov != OVERFLOW_VISIBLE:
+            break
+        end
+        cur = s
+        s = sn.parent
+    end
+    if s < 0:
+        ret 0.0
+    end
+    sn := t.nodes.Ref(s)
+    pn := t.nodes.Ref(p)
+    rtl := pn.rtl
+    if horiz:
+        mut ppos := pos - n.x
+        if p == s:
+            ppos = 0.0
+        end
+        view := sn.w - sn.bx.bl - sn.bx.br
+        lo := _inset(n.st.inset, 3, rtl, view)
+        hi := _inset(n.st.inset, 1, rtl, view)
+        mut cend := ppos + pn.w - pn.bx.pr
+        if p == s:
+            cend = sn.bx.bl + sn.cx1 - (sn.bx.pr - sn.bx.br)
+        end
+        ret _stick(pos, n.w, n.bx.ml, n.bx.mr, _scroll_x(t, s) + sn.bx.bl, view, lo, hi, ppos + pn.bx.pl, cend)
+    end
+    mut ppos := pos - n.y
+    if p == s:
+        ppos = 0.0
+    end
+    view := sn.h - sn.bx.bt - sn.bx.bb
+    lo := _inset(n.st.inset, 0, rtl, view)
+    hi := _inset(n.st.inset, 2, rtl, view)
+    mut cend := ppos + pn.h - pn.bx.pb
+    if p == s:
+        cend = sn.bx.bt + sn.cy1 - (sn.bx.pb - sn.bx.bb)
+    end
+    ret _stick(pos, n.h, n.bx.mt, n.bx.mb, _scroll_y(t, s) + sn.bx.bt, view, lo, hi, ppos + pn.bx.pt, cend)
+end

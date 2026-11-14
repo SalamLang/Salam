@@ -2,7 +2,7 @@
 
 ;; Author: The Salam Team
 ;; URL: https://github.com/SalamLang/Salam
-;; Version: 0.6.3
+;; Version: 0.6.4
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
@@ -66,6 +66,17 @@ An empty string lets the compiler find it."
   :type '(choice (const "exec") (const "run"))
   :group 'salam)
 
+(defcustom salam-switch-lint "off"
+  "Style check for if-chains that could be a switch (W145).
+Accepted values: \"off\", \"warn\", \"error\", \"fix\"."
+  :type '(choice (const "off") (const "warn") (const "error") (const "fix"))
+  :group 'salam)
+
+(defcustom salam-switch-lint-min 4
+  "Minimum number of if-cases to report when `salam-switch-lint' is enabled."
+  :type 'integer
+  :group 'salam)
+
 (defconst salam-conditional-keywords '("if" "else" "match" "switch" "اگر" "وگرنه" "همخوان" "ترابرد"))
 (defconst salam-loop-keywords '("until" "repeat" "each" "تا" "تکرار" "هر"))
 (defconst salam-statement-keywords '("ret" "end" "break" "continue" "defer" "to" "by" "in" "try" "catch" "throw" "برگشت" "پایان" "بشکن" "گذر" "دیرکن" "تا" "هر" "در" "تلاش" "گرفتن خطا" "پرتاب خطا"))
@@ -84,7 +95,7 @@ An empty string lets the compiler find it."
 (defconst salam-word-operators '("and" "or" "not" "eq" "neq" "lt" "gt" "lte" "gte" "و" "یا" "برابر" "نابرابر" "وارونه" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"))
 (defconst salam-contextual-keywords '("link" "static" "dynamic" "framework" "پیوند" "ایستا" "پویا" "چارچوب" "dyn" "go" "برو"))
 (defconst salam-directive-keywords '("mode" "title" "lang" "dir" "name" "version"))
-(defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float" "شمارنویسه" "char_count" "نویسه شماره" "char_at" "زیررشته نویسه" "char_substr" "بیاب نویسه" "char_find" "شروع با" "starts_with" "ختم با" "ends_with" "دربردارد" "includes" "رونوشت" "copy" "رونوشت عمیق" "deep_copy" "بایت ها" "bytes" "کوچک" "lower" "بزرگ" "upper" "تکرار" "repeat"))
+(defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float" "GetOr" "IsEmpty" "ToInt" "ToFloat" "ToStr" "Push" "Pop" "Get" "Set" "Has" "Put" "Remove" "Size" "Len" "Cap" "Free" "Iter" "HasNext" "Key" "Value" "Next" "Ref" "Read" "Write" "Seek" "Close" "Concat" "Substr" "Find" "Split" "Trim" "CharCount" "CharAt" "CharSubstr" "CharFind" "StartsWith" "EndsWith" "Includes" "Copy" "DeepCopy" "Bytes" "Lower" "Upper" "Repeat" "Readline" "شمارنویسه" "char_count" "نویسه شماره" "char_at" "زیررشته نویسه" "char_substr" "بیاب نویسه" "char_find" "شروع با" "starts_with" "ختم با" "ends_with" "دربردارد" "includes" "رونوشت" "copy" "رونوشت عمیق" "deep_copy" "بایت ها" "bytes" "کوچک" "lower" "بزرگ" "upper" "تکرار" "repeat" "Push" "Pop" "Get" "Ref" "Set" "Len" "Cap" "Free" "Put" "Has" "Remove" "Size" "Iter" "HasNext" "Key" "Value" "Next" "Read" "Readline" "Write" "Seek" "Close" "Concat" "Substr" "Find" "Split" "Trim" "ToInt" "ToFloat" "ToStr" "CharCount" "CharAt" "CharSubstr" "CharFind" "StartsWith" "EndsWith" "Includes" "Copy" "DeepCopy" "Bytes" "Lower" "Upper" "Repeat" "First" "Last" "Clear" "Reserve" "Alloc" "Insert" "RemoveAt" "IsEmpty" "GetOr" "Clone" "Swap" "Slice" "Extend" "PopBack" "PopFront" "PushBack" "PushFront" "Front" "Back" "FrontVal" "BackVal" "Peek" "Enqueue" "Dequeue" "Contains" "Add" "Discard" "Union" "Intersect" "Difference" "Top" "Count" "Fit" "Predict" "Score" "Transform" "FitPredict" "FitTransform" "InverseTransform" "PredictProba" "Decision" "Forward" "FreeAll" "Step" "SameShape" "SplitXy" "Render" "HandleEvent" "Focusable" "Hits" "Visible" "Bounds" "SetBounds" "PreferredSize" "Measure"))
 (defconst salam-end-keywords '("end" "پایان"))
 (defconst salam-else-keywords '("else" "catch" "وگرنه" "گرفتن خطا"))
 (defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "match" "switch" "try" "catch" "throw" "برگشت" "اگر" "وگرنه" "تا" "پایان" "بشکن" "گذر" "دیرکن" "تکرار" "هر" "در" "همخوان" "ترابرد" "تلاش" "گرفتن خطا" "پرتاب خطا" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "page" "package" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "include" "export" "throws" "بر" "ناپایا" "پایا" "گونه" "ساختار" "جداشمار" "واردسازی" "برگردان" "صفحه" "بسته" "درون‌داد" "میانجی" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "بخش" "کاربست" "فراخوانی" "برون‌داد" "تابع" "خطادار" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی" "and" "or" "not" "eq" "neq" "lt" "gt" "lte" "gte" "و" "یا" "برابر" "نابرابر" "وارونه" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"))
@@ -310,6 +321,13 @@ Return nil when there is none."
           (unless (string-empty-p salam-stdlib-path)
             (list (concat "--stdlib-path=" salam-stdlib-path)))))
 
+(defun salam--switch-lint-args ()
+  "Return switch-lint options when enabled."
+  (if (member salam-switch-lint '("warn" "error" "fix"))
+      (list (concat "--switch-lint=" salam-switch-lint)
+            (concat "--switch-lint-min=" (number-to-string salam-switch-lint-min)))
+    nil))
+
 (defun salam--null-device ()
   "Return the platform's bit bucket."
   (if (memq system-type '(windows-nt ms-dos)) "NUL" "/dev/null"))
@@ -350,7 +368,8 @@ command line containing nil."
                                 (concat "--xml-out=" (salam--null-device))
                                 "--error-style=gcc"
                                 "--log-level=error")
-                          (salam--common-args))))
+                          (salam--common-args)
+                          (salam--switch-lint-args))))
 
 (defun salam-format-buffer ()
   "Reformat the buffer with ‘salam format’, keeping point where it is."

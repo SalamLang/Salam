@@ -19,7 +19,104 @@ func is_include_attr(n: str): bool:
 end
 
 func is_content_word(n: str): bool:
-    ret str.Equals(n, "content") or str.Equals(n, "محتوا")
+    ret str.Equals(n, "content") or str.Equals(n, "children") or str.Equals(n, "محتوا") or str.Equals(n, "slot") or str.Equals(n, "جایگاه")
+end
+
+func is_slot_placeholder_name(n: str): bool:
+    ret str.Equals(n, "content") or str.Equals(n, "محتوا") or str.Equals(n, "slot") or str.Equals(n, "جایگاه")
+end
+
+func is_default_slot_name(name: str): bool:
+    ret str.Len(name) == 0 or str.Equals(name, "default") or str.Equals(name, "content") or str.Equals(name, "children") or str.Equals(name, "محتوا")
+end
+
+func slot_attr_name(a &: at.Ast, nid: int): str:
+    if nid == 0:
+        ret ""
+    end
+    // Prefer explicit slot-routing attrs (`slot`/`جایگاه`), then provider/placeholder name (`name`/`نام`).
+    // `name` is only treated as slot metadata for slot placeholder/provider nodes; regular elements must
+    // route via `slot`/`جایگاه` to avoid leaking/conflicting with HTML `name` attributes.
+    // Provider/routing attrs must be simple literal/text values; dynamic names are treated as unknown at expansion time.
+    is_placeholder := false
+    if at.KindOf(a, nid) == at.AST_LAYOUT_ELEMENT:
+        is_placeholder = is_slot_placeholder_name(at.Get(a, nid).name)
+    end
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه")):
+            t := node_text(a, c.a)
+            if str.Len(t) > 0:
+                ret t
+            end
+        end
+    end
+    if not is_placeholder:
+        ret ""
+    end
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "name") or str.Equals(c.name, "نام")):
+            t := node_text(a, c.a)
+            if str.Len(t) > 0:
+                ret t
+            end
+        end
+    end
+    ret ""
+end
+
+func slot_strip_routing_attrs(a &: at.Ast, nid: int): int:
+    // Clone an element/slot node while removing slot-routing metadata attrs so
+    // routing hints do not leak into generated output.
+    // Regular content elements: strip only `slot`/`جایگاه` (preserve HTML `name`).
+    // Slot placeholder/provider wrappers: strip routing/provider metadata attrs.
+    if nid == 0:
+        ret 0
+    end
+    cp := at.Clone(a, nid)
+    if at.KindOf(a, nid) != at.AST_LAYOUT_ELEMENT:
+        ret cp
+    end
+    is_placeholder := is_slot_placeholder_name(at.Get(a, nid).name)
+    mut kept := Vector {} as Vector<int>
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR:
+            if str.Equals(c.name, "slot") or str.Equals(c.name, "جایگاه"):
+                continue
+            end
+            if is_placeholder and (str.Equals(c.name, "name") or str.Equals(c.name, "نام")):
+                continue
+            end
+        end
+        kept.Push(at.Clone(a, cid))
+    end
+    mut cn := at.Get(a, cp)
+    mut old := cn.list
+    cn.list = kept
+    at.Put(a, cp, cn)
+    old.Free()
+    ret cp
+end
+
+func slot_provider_kind(a &: at.Ast, nid: int): int:
+    // 0: not a provider, 1: default provider wrapper, 2: named provider wrapper
+    if nid == 0 or at.KindOf(a, nid) != at.AST_LAYOUT_ELEMENT:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if not is_slot_placeholder_name(n.name):
+        ret 0
+    end
+    sname := slot_attr_name(a, nid)
+    if is_default_slot_name(sname):
+        ret 1
+    end
+    ret 2
 end
 
 func lo_dir_of(path: str): str:
@@ -77,18 +174,18 @@ func frame_lookup(f &: LoFrame, name: str, found &: bool): int:
             ret 0
         end
     end
-    repeat f.names.len() in i:
-        if str.Equals(f.names.get(i), name):
+    repeat f.names.Len() in i:
+        if str.Equals(f.names.Get(i), name):
             found = true
-            ret f.vals.get(i)
+            ret f.vals.Get(i)
         end
     end
     ret 0
 end
 
 func frame_cut(f &: LoFrame, mark: int):
-    until f.shadow.len() > mark:
-        _x := f.shadow.pop()
+    until f.shadow.Len() > mark:
+        _x := f.shadow.Pop()
     end
 end
 
@@ -112,27 +209,91 @@ func frame_derive(a &: at.Ast, f &: LoFrame, body: int):
         end
         sd := at.Get(a, sid)
         frame_set(f, sd.name, subst_value(a, sd.a, f))
-        f.derived.push(sd.name)
+        f.derived.Push(sd.name)
     end
 end
 
 func frame_free(f &: LoFrame):
-    f.names.free()
-    f.vals.free()
-    f.content.free()
-    f.derived.free()
-    f.shadow.free()
+    f.names.Free()
+    f.vals.Free()
+    f.content.Free()
+    repeat f.slot_nodes.Len() in i:
+        mut v := f.slot_nodes.Get(i)
+        v.Free()
+    end
+    f.slot_names.Free()
+    f.slot_nodes.Free()
+    f.slot_provided.Free()
+    f.derived.Free()
+    f.shadow.Free()
+end
+
+func frame_slot_index(f &: LoFrame, name: str): int:
+    repeat f.slot_names.Len() in i:
+        if str.Equals(f.slot_names.Get(i), name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func frame_ensure_slot(f &: LoFrame, name: str): int:
+    i := frame_slot_index(f, name)
+    if i >= 0:
+        ret i
+    end
+    f.slot_names.Push(name)
+    f.slot_nodes.Push(Vector {} as Vector<int>)
+    f.slot_provided.Push(false)
+    ret f.slot_names.Len() - 1
+end
+
+func frame_mark_slot(f &: LoFrame, name: str):
+    i := frame_ensure_slot(f, name)
+    f.slot_provided.Set(i, true)
+end
+
+func frame_push_slot(f &: LoFrame, name: str, nid: int):
+    i := frame_ensure_slot(f, name)
+    mut v := f.slot_nodes.Get(i)
+    v.Push(nid)
+    f.slot_nodes.Set(i, v)
+    f.slot_provided.Set(i, true)
+end
+
+func frame_slot_items(f &: LoFrame, name: str, out &: Vector<int>): bool:
+    i := frame_slot_index(f, name)
+    if i < 0 or not f.slot_provided.Get(i):
+        ret false
+    end
+    v := f.slot_nodes.Get(i)
+    repeat v.Len() in j:
+        out.Push(v.Get(j))
+    end
+    ret true
+end
+
+func frame_has_any_content(f &: LoFrame): bool:
+    if f.content.Len() > 0:
+        ret true
+    end
+    repeat f.slot_provided.Len() in i:
+        if f.slot_provided.Get(i):
+            ret true
+        end
+    end
+    ret false
 end
 
 func frame_set(f &: LoFrame, name: str, val: int):
-    repeat f.names.len() in i:
-        if str.Equals(f.names.get(i), name):
-            f.vals.set(i, val)
+    repeat f.names.Len() in i:
+        if str.Equals(f.names.Get(i), name):
+            f.vals.Set(i, val)
             ret
         end
     end
-    f.names.push(name)
-    f.vals.push(val)
+    f.names.Push(name)
+    f.vals.Push(val)
 end
 
 func interpolate(a &: at.Ast, s: str, f &: LoFrame): str:
@@ -193,10 +354,10 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
     end
     k := v.kind
     if k == at.AST_LAMBDA:
-        mark := f.shadow.len()
-        repeat v.list.len() in li:
-            if at.KindOf(a, v.list.get(li)) == at.AST_PARAM:
-                f.shadow.push(at.Get(a, v.list.get(li)).name)
+        mark := f.shadow.Len()
+        repeat v.list.Len() in li:
+            if at.KindOf(a, v.list.Get(li)) == at.AST_PARAM:
+                f.shadow.Push(at.Get(a, v.list.Get(li)).name)
             end
         end
         nbody := subst_block(a, v.a, f)
@@ -208,8 +369,8 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         mut cn := v
         cn.a = nbody
         mut params := Vector {} as Vector<int>
-        repeat v.list.len() in pi:
-            params.push(v.list.get(pi))
+        repeat v.list.Len() in pi:
+            params.Push(v.list.Get(pi))
         end
         cn.list = params
         cn.ext = 0
@@ -222,16 +383,16 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         nc := subst_value(a, v.c, f)
         mut args := Vector {} as Vector<int>
         mut changed := na != v.a or nb != v.b or nc != v.c
-        repeat v.list.len() in i:
-            arg := v.list.get(i)
+        repeat v.list.Len() in i:
+            arg := v.list.Get(i)
             sa := subst_value(a, arg, f)
             if sa != arg:
                 changed = true
             end
-            args.push(sa)
+            args.Push(sa)
         end
         if not changed:
-            args.free()
+            args.Free()
             ret vid
         end
         cp := at.NewNode(a, k)
@@ -242,8 +403,8 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         cn.list = args
         cn.ext = 0
         at.Put(a, cp, cn)
-        repeat at.Dims(a, v.ext).len() in d:
-            at.AddDim(a, cp, at.Dims(a, v.ext).get(d))
+        repeat at.Dims(a, v.ext).Len() in d:
+            at.AddDim(a, cp, at.Dims(a, v.ext).Get(d))
         end
         ret cp
     end
@@ -353,10 +514,10 @@ func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
     end
     if n.kind == at.AST_EACH:
         na := subst_value(a, n.a, f)
-        mark := f.shadow.len()
-        f.shadow.push(n.name)
+        mark := f.shadow.Len()
+        f.shadow.Push(n.name)
         if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
-            f.shadow.push(at.Get(a, n.c).name)
+            f.shadow.Push(at.Get(a, n.c).name)
         end
         nb := subst_stmt(a, n.b, f)
         frame_cut(f, mark)
@@ -374,9 +535,9 @@ func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
         na := subst_value(a, n.a, f)
         nc := subst_value(a, n.c, f)
         nd := subst_value(a, n.d, f)
-        rmark := f.shadow.len()
+        rmark := f.shadow.Len()
         if str.Len(n.name) > 0:
-            f.shadow.push(n.name)
+            f.shadow.Push(n.name)
         end
         nb := subst_stmt(a, n.b, f)
         frame_cut(f, rmark)
@@ -402,9 +563,9 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
     n := at.Get(a, nid)
     mut changed := false
     mut items := Vector {} as Vector<int>
-    mark := f.shadow.len()
-    repeat n.list.len() in i:
-        child := n.list.get(i)
+    mark := f.shadow.Len()
+    repeat n.list.Len() in i:
+        child := n.list.Get(i)
         if subst_missing_callback(a, child, f):
             changed = true
             continue
@@ -413,14 +574,14 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
         if s != child:
             changed = true
         end
-        items.push(s)
+        items.Push(s)
         if at.KindOf(a, child) == at.AST_VAR_DECL:
-            f.shadow.push(at.Get(a, child).name)
+            f.shadow.Push(at.Get(a, child).name)
         end
     end
     frame_cut(f, mark)
     if not changed:
-        items.free()
+        items.Free()
         ret nid
     end
     cp := at.NewNode(a, at.AST_BLOCK)
@@ -431,8 +592,8 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
 end
 
 func find_comp(ex &: LoExpand, name: str): int:
-    repeat ex.comp_name.len() in i:
-        if lp.IdentEqual(ex.comp_name.get(i), name):
+    repeat ex.comp_name.Len() in i:
+        if lp.IdentEqual(ex.comp_name.Get(i), name):
             ret i
         end
     end
@@ -442,15 +603,27 @@ end
 func body_has_content_sink(a &: at.Ast, node: int): bool:
     repeat at.ChildCount(a, node) in i:
         cid := at.Child(a, node, i)
-        c := at.Get(a, cid)
-        if c.kind != at.AST_LAYOUT_ELEMENT:
-            continue
-        end
-        if is_content_word(c.name):
-            ret true
-        end
-        if body_has_content_sink(a, cid):
-            ret true
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT:
+            c := at.Get(a, cid)
+            if is_slot_placeholder_name(c.name):
+                ret true
+            end
+            if body_has_content_sink(a, cid):
+                ret true
+            end
+        else k == at.AST_EACH:
+            if body_has_content_sink(a, at.Get(a, cid).b):
+                ret true
+            end
+        else k == at.AST_IF:
+            n := at.Get(a, cid)
+            if body_has_content_sink(a, n.b):
+                ret true
+            end
+            if n.c != 0 and body_has_content_sink(a, n.c):
+                ret true
+            end
         end
     end
     ret false
@@ -476,7 +649,8 @@ func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str):
             if p.kind == at.AST_PARAM and is_content_word(p.name):
                 lg.Log(
                     ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                        i18.Tr("component '%s': 'content' is reserved and cannot be a parameter"), co.ArgStr(d.name)
+                        i18.Tr("component '%s': '%s' is reserved and cannot be a parameter"), co.ArgStr(d.name),
+                        co.ArgStr(p.name)
                     )
                 )
                 ex.errors++
@@ -486,10 +660,10 @@ func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str):
         if d.a != 0:
             mother = body_has_content_sink(a, d.a)
         end
-        ex.comp_name.push(d.name)
-        ex.comp_def.push(did)
-        ex.comp_dir.push(dir)
-        ex.comp_mother.push(mother)
+        ex.comp_name.Push(d.name)
+        ex.comp_def.Push(did)
+        ex.comp_dir.Push(dir)
+        ex.comp_mother.Push(mother)
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_DEBUG, co.Format2(
                 "registered component '%s' (%s)", co.ArgStr(d.name), co.ArgStr(mother ? "mother" : "single")
@@ -518,8 +692,8 @@ func has_component_def(a &: at.Ast, program: int): bool:
 end
 
 func find_loaded(ex &: LoExpand, path: str): int:
-    repeat ex.loaded_path.len() in i:
-        if str.Equals(ex.loaded_path.get(i), path):
+    repeat ex.loaded_path.Len() in i:
+        if str.Equals(ex.loaded_path.Get(i), path):
             ret i
         end
     end
@@ -529,15 +703,15 @@ end
 func load_include(ex &: LoExpand, a &: at.Ast, path: str): int:
     cached := find_loaded(ex, path)
     if cached >= 0:
-        if ex.loaded_prog.get(cached) != 0:
+        if ex.loaded_prog.Get(cached) != 0:
             ret cached
         end
         ret 0 - 1
     end
-    li := ex.loaded_path.len()
-    ex.loaded_path.push(path)
-    ex.loaded_prog.push(0)
-    ex.loaded_dir.push(lo_dir_of(path))
+    li := ex.loaded_path.Len()
+    ex.loaded_path.Push(path)
+    ex.loaded_prog.Push(0)
+    ex.loaded_dir.Push(lo_dir_of(path))
     mut sf := src.New()
     if not src.Load(path, sf):
         lg.Log(
@@ -561,7 +735,7 @@ func load_include(ex &: LoExpand, a &: at.Ast, path: str): int:
         ex.errors++
         ret 0 - 1
     end
-    ex.loaded_prog.set(li, prog)
+    ex.loaded_prog.Set(li, prog)
     lg.Log(
         ex.log, lg.PH_DRIVER, lg.LOG_INFO, co.Format1("included layout %s", co.ArgStr(path))
     )
@@ -608,12 +782,27 @@ func scan_includes(
                 l := load_include(ex, a, path)
                 if l >= 0:
                     collect(
-                        ex, a, ex.loaded_prog.get(l), ex.loaded_dir.get(l), depth + 1
+                        ex, a, ex.loaded_prog.Get(l), ex.loaded_dir.Get(l), depth + 1
                     )
                 end
             end
         else item.kind == at.AST_LAYOUT_ELEMENT:
             scan_includes(ex, a, iid, dir, depth)
+        else item.kind == at.AST_EACH:
+            scan_includes(ex, a, item.b, dir, depth)
+        else item.kind == at.AST_IF:
+            scan_includes(ex, a, item.b, dir, depth)
+            mut else_n := item.c
+            until else_n == 0:
+                if at.KindOf(a, else_n) == at.AST_IF:
+                    en := at.Get(a, else_n)
+                    scan_includes(ex, a, en.b, dir, depth)
+                    else_n = en.c
+                else:
+                    scan_includes(ex, a, else_n, dir, depth)
+                    else_n = 0
+                end
+            end
         end
     end
 end
@@ -627,6 +816,17 @@ func comp_param_type(a &: at.Ast, comp_def: int, name: str): int:
         end
     end
     ret 0
+end
+
+func comp_has_param(a &: at.Ast, comp_def: int, name: str): bool:
+    repeat at.ChildCount(a, comp_def) in i:
+        pid := at.Child(a, comp_def, i)
+        p := at.Get(a, pid)
+        if p.kind == at.AST_PARAM and str.Equals(p.name, name):
+            ret true
+        end
+    end
+    ret false
 end
 
 func lit_value_category(a &: at.Ast, nid: int): int:
@@ -699,7 +899,8 @@ func check_component_arg_type(
     if not ok:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format4(
-                i18.Tr("component '%s' parameter '%s' expects '%s', got %s"), co.ArgStr(comp_name), co.ArgStr(param_name), co.ArgStr(tn.name), co.ArgStr(lit_category_name(cat))
+                i18.Tr("component '%s' parameter '%s' expects '%s', got %s"), co.ArgStr(comp_name),
+                co.ArgStr(param_name), co.ArgStr(tn.name), co.ArgStr(lit_category_name(cat))
             )
         )
         ex.errors++
@@ -707,9 +908,10 @@ func check_component_arg_type(
 end
 
 func expand_component(
-    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, invocation: int, ci: int, caller &: LoFrame, dir: str, depth: int
+    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, invocation: int, ci: int, caller &: LoFrame,
+    dir: str, depth: int
 ):
-    comp_name := ex.comp_name.get(ci)
+    comp_name := ex.comp_name.Get(ci)
     if depth > K_LO_MAX_DEPTH:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
@@ -721,7 +923,7 @@ func expand_component(
     end
     mut fr := LoFrame { present = true }
     defer frame_free(fr)
-    comp_def := ex.comp_def.get(ci)
+    comp_def := ex.comp_def.Get(ci)
 
     repeat at.ChildCount(a, comp_def) in i:
         pid := at.Child(a, comp_def, i)
@@ -732,51 +934,311 @@ func expand_component(
     end
 
     mut got_content := false
+    mut got_content_attr := false
+    mut got_content_children := false
+    mut got_named_children := false
     mut ev_names := Vector {} as Vector<str>
-    defer ev_names.free()
+    defer ev_names.Free()
     mut ev_fns := Vector {} as Vector<int>
-    defer ev_fns.free()
+    defer ev_fns.Free()
+    mut bound_params := Vector {} as Vector<str>
+    defer bound_params.Free()
+    mut named_seen := Vector {} as Vector<str>
+    defer named_seen.Free()
     repeat at.ChildCount(a, invocation) in i2:
         aid := at.Child(a, invocation, i2)
         an := at.Get(a, aid)
         if an.kind == at.AST_LAYOUT_ATTR:
             if lo_bub_is_handler(an.name):
-                ev_names.push(lo_bub_event(an.name))
-                ev_fns.push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
+                ev := lo_bub_event(an.name)
+                mut dup_ev := false
+                repeat ev_names.Len() in ei:
+                    if lp.IdentEqual(ev_names.Get(ei), ev):
+                        dup_ev = true
+                    end
+                end
+                if dup_ev:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("component '%s' receives handler '%s' more than once"), co.ArgStr(comp_name),
+                            co.ArgStr(an.name)
+                        )
+                    )
+                    ex.errors++
+                else:
+                    ev_names.Push(ev)
+                    ev_fns.Push(lo_bub_value(ex, a, subst_value(a, an.a, caller)))
+                end
             else is_content_word(an.name):
-                txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
-                copy_span(a, txt, aid)
-                at.SetName(a, txt, "content")
-                sub := subst_value(a, an.a, caller)
-                mut tn := at.Get(a, txt)
-                tn.a = sub
-                at.Put(a, txt, tn)
-                fr.content.push(txt)
-                got_content = true
+                // Treat content/children attrs as default slot content.
+                // Named slot routing via attrs is not supported; slot providers use element form.
+                slot_name := ""
+                if str.Equals(an.name, "slot") or str.Equals(an.name, "جایگاه"):
+                    slot_name = slot_attr_name(a, aid)
+                    if not is_default_slot_name(slot_name) and str.Len(slot_name) > 0:
+                        lg.Log(
+                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                                i18.Tr("component '%s': named slot '%s' must be provided as a slot element, not as an attribute"),
+                                co.ArgStr(comp_name), co.ArgStr(slot_name)
+                            )
+                        )
+                        ex.errors++
+                        continue
+                    end
+                end
+                if is_default_slot_name(slot_name):
+                    if got_content_attr:
+                        lg.Log(
+                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                                i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"),
+                                co.ArgStr(comp_name)
+                            )
+                        )
+                        ex.errors++
+                    else:
+                        txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
+                        copy_span(a, txt, aid)
+                        at.SetName(a, txt, "content")
+                        sub := subst_value(a, an.a, caller)
+                        mut tn := at.Get(a, txt)
+                        tn.a = sub
+                        at.Put(a, txt, tn)
+                        fr.content.Push(txt)
+                        got_content = true
+                        got_content_attr = true
+                    end
+                end
             else:
-                sub_val := lo_bub_value(ex, a, subst_value(a, an.a, caller))
-                check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
-                frame_set(fr, an.name, sub_val)
+                mut dup_param := false
+                repeat bound_params.Len() in bi:
+                    if str.Equals(bound_params.Get(bi), an.name):
+                        dup_param = true
+                    end
+                end
+                if dup_param:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("component '%s' parameter '%s' is provided more than once"), co.ArgStr(comp_name),
+                            co.ArgStr(an.name)
+                        )
+                    )
+                    ex.errors++
+                else:
+                    bound_params.Push(an.name)
+                    sub_val := lo_bub_value(ex, a, subst_value(a, an.a, caller))
+                    if not comp_has_param(a, comp_def, an.name):
+                        lg.Log(
+                            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                                i18.Tr("component '%s' has no parameter '%s'"), co.ArgStr(comp_name),
+                                co.ArgStr(an.name)
+                            )
+                        )
+                        ex.errors++
+                    else:
+                        check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
+                        frame_set(fr, an.name, sub_val)
+                    end
+                end
             end
         else an.kind == at.AST_LAYOUT_ELEMENT:
-            before := fr.content.len()
-            mut cvec := fr.content
-            expand_item(ex, a, cvec, aid, caller, dir, depth)
-            fr.content = cvec
-            if fr.content.len() > before:
-                got_content = true
+            pk := slot_provider_kind(a, aid)
+            if pk == 1:
+                // Default slot provider wrapper: contributes to default/content slot.
+                mut has_scoped_meta := false
+                repeat at.ChildCount(a, aid) in sai:
+                    sac := at.Get(a, at.Child(a, aid, sai))
+                    if sac.kind == at.AST_LAYOUT_ATTR and not str.Equals(sac.name, "slot") and not str.Equals(sac.name, "جایگاه") and not str.Equals(sac.name, "name") and not str.Equals(sac.name, "نام"):
+                        has_scoped_meta = true
+                    end
+                end
+                if has_scoped_meta:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(
+                            i18.Tr("component '%s': default slot provider has extra attributes treated as scoped slot parameter/binding metadata; full semantics require runtime/toolchain validation"),
+                            co.ArgStr(comp_name)
+                        )
+                    )
+                end
+                before := fr.content.Len()
+                expand_items(ex, a, fr.content, aid, caller, dir, depth)
+                if fr.content.Len() > before:
+                    got_content = true
+                    got_content_children = true
+                else:
+                    // Explicit empty provider still marks default slot as provided.
+                    frame_mark_slot(fr, "default")
+                    got_content = true
+                    got_content_children = true
+                end
+            else pk == 2:
+                sname := slot_attr_name(a, aid)
+                mut dup_named := false
+                repeat named_seen.Len() in ni:
+                    if str.Equals(named_seen.Get(ni), sname):
+                        dup_named = true
+                    end
+                end
+                if dup_named:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("component '%s' receives named slot '%s' more than once"), co.ArgStr(comp_name),
+                            co.ArgStr(sname)
+                        )
+                    )
+                    ex.errors++
+                    continue
+                end
+                mut has_scoped_meta2 := false
+                repeat at.ChildCount(a, aid) in sai2:
+                    sac2 := at.Get(a, at.Child(a, aid, sai2))
+                    if sac2.kind == at.AST_LAYOUT_ATTR and not str.Equals(sac2.name, "slot") and not str.Equals(sac2.name, "جایگاه") and not str.Equals(sac2.name, "name") and not str.Equals(sac2.name, "نام"):
+                        has_scoped_meta2 = true
+                    end
+                end
+                if has_scoped_meta2:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format2(
+                            i18.Tr("component '%s': named slot provider '%s' has extra attributes treated as scoped slot parameter/binding metadata; full semantics require runtime/toolchain validation"),
+                            co.ArgStr(comp_name), co.ArgStr(sname)
+                        )
+                    )
+                end
+                named_seen.Push(sname)
+                mut svec := Vector {} as Vector<int>
+                expand_items(ex, a, svec, aid, caller, dir, depth)
+                i := frame_ensure_slot(fr, sname)
+                if svec.Len() > 0:
+                    mut cur := fr.slot_nodes.Get(i)
+                    repeat svec.Len() in si:
+                        cur.Push(svec.Get(si))
+                    end
+                    fr.slot_nodes.Set(i, cur)
+                    fr.slot_provided.Set(i, true)
+                    got_content = true
+                    got_named_children = true
+                else:
+                    // Explicit named provider with empty/fallback-only content marks slot provided.
+                    // TODO(runtime): scoped slot params/bindings on provider wrappers need toolchain validation.
+                    fr.slot_provided.Set(i, true)
+                    got_content = true
+                    got_named_children = true
+                end
+                svec.Free()
+            else:
+                // Only explicit `slot`/`جایگاه` attrs route regular elements to named slots.
+                // `name`/`نام` on non-placeholder elements is preserved as a normal HTML attr.
+                routed_name := ""
+                mut routed_dynamic := false
+                repeat at.ChildCount(a, aid) in ri:
+                    rcid := at.Child(a, aid, ri)
+                    rc := at.Get(a, rcid)
+                    if rc.kind == at.AST_LAYOUT_ATTR and (str.Equals(rc.name, "slot") or str.Equals(rc.name, "جایگاه")):
+                        t := node_text(a, rc.a)
+                        if str.Len(t) > 0:
+                            routed_name = t
+                        else:
+                            routed_dynamic = true
+                        end
+                    end
+                end
+                if routed_dynamic and str.Len(routed_name) == 0:
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                            i18.Tr("component '%s': slot routing attribute must be a fixed text value"),
+                            co.ArgStr(comp_name)
+                        )
+                    )
+                    ex.errors++
+                    continue
+                end
+                if not is_default_slot_name(routed_name) and (str.Len(routed_name) > 0):
+                    // Child explicitly targets a named slot via slot attr.
+                    // Multiple children may contribute to the same named slot.
+                    mut tmp := Vector {} as Vector<int>
+                    mut cvec2 := Vector {} as Vector<int>
+                    stripped := slot_strip_routing_attrs(a, aid)
+                    expand_item(ex, a, cvec2, stripped, caller, dir, depth)
+                    repeat cvec2.Len() in ti:
+                        tmp.Push(cvec2.Get(ti))
+                    end
+                    cvec2.Free()
+                    i2s := frame_ensure_slot(fr, routed_name)
+                    mut cur2 := fr.slot_nodes.Get(i2s)
+                    repeat tmp.Len() in ti2:
+                        cur2.Push(tmp.Get(ti2))
+                    end
+                    fr.slot_nodes.Set(i2s, cur2)
+                    fr.slot_provided.Set(i2s, true)
+                    got_content = true
+                    got_named_children = true
+                    tmp.Free()
+                else:
+                    before := fr.content.Len()
+                    mut cvec := fr.content
+                    expand_item(ex, a, cvec, aid, caller, dir, depth)
+                    fr.content = cvec
+                    if fr.content.Len() > before:
+                        got_content = true
+                        got_content_children = true
+                    end
+                end
             end
+        else an.kind == at.AST_IF or an.kind == at.AST_EACH:
+            before2 := fr.content.Len()
+            expand_item(ex, a, fr.content, aid, caller, dir, depth)
+            if fr.content.Len() > before2:
+                got_content = true
+                got_content_children = true
+            end
+        end
+    end
+    // Default content precedence: attribute and child/default providers cannot both supply content.
+    // Named slots are independent and may coexist with default content.
+    if got_content_attr and got_content_children:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("component '%s' receives content twice; use either the content attribute or content children, not both"),
+                co.ArgStr(comp_name)
+            )
+        )
+        ex.errors++
+    end
+    _gnc := got_named_children
+    repeat at.ChildCount(a, comp_def) in pi:
+        pid := at.Child(a, comp_def, pi)
+        p := at.Get(a, pid)
+        if p.kind != at.AST_PARAM or is_content_word(p.name):
+            continue
+        end
+        if p.a != 0:
+            continue
+        end
+        mut provided := false
+        repeat bound_params.Len() in bi2:
+            if str.Equals(bound_params.Get(bi2), p.name):
+                provided = true
+            end
+        end
+        if not provided:
+            lg.Log(
+                ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                    i18.Tr("component '%s' is missing required parameter '%s'"), co.ArgStr(comp_name),
+                    co.ArgStr(p.name)
+                )
+            )
+            ex.errors++
         end
     end
     ev_mark := lo_bub_mark()
     defer lo_bub_pop(ev_mark)
-    repeat ev_names.len() in evi:
-        lo_bub_push(ev_names.get(evi), ev_fns.get(evi))
+    repeat ev_names.Len() in evi:
+        lo_bub_push(ev_names.Get(evi), ev_fns.Get(evi))
     end
-    if not ex.comp_mother.get(ci) and got_content:
+    if not ex.comp_mother.Get(ci) and frame_has_any_content(fr):
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                i18.Tr("component '%s' does not accept content (it has no `content:` placeholder)"), co.ArgStr(comp_name)
+                i18.Tr("component '%s' does not accept content (it has no `content:` placeholder)"),
+                co.ArgStr(comp_name)
             )
         )
         ex.errors++
@@ -787,25 +1249,26 @@ func expand_component(
         if li_has_storage(a, body):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("component '%s' has variables that change, which work only in pages built with 'salam page build' or --ui=native; keep the value in a mutable global instead"), co.ArgStr(comp_name)
+                    i18.Tr("component '%s' has variables that change, which work only in pages built with 'salam page build' or --ui=native; keep the value in a mutable global instead"),
+                    co.ArgStr(comp_name)
                 )
             )
             ex.errors++
         end
         frame_derive(a, fr, body)
-        expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+        expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
         ret
     end
     if web and not li_has_storage(a, body):
         frame_derive(a, fr, body)
-        expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci), depth + 1)
+        expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
         ret
     end
-    wi := g_lo_wi_mark.len()
+    wi := g_lo_wi_mark.Len()
     multi := web and g_lo_each_depth > 0
     if web:
-        g_lo_wi_mark.push(0)
-        g_lo_wi_kind.push(multi ? WS_MULTI : WS_SINGLE)
+        g_lo_wi_mark.Push(0)
+        g_lo_wi_kind.Push(multi ? WS_MULTI : WS_SINGLE)
     end
     mark := at.NewNode(a, at.AST_IF)
     copy_span(a, mark, invocation)
@@ -822,13 +1285,13 @@ func expand_component(
         kind := li_kind(sid)
         if kind == LI_DERIVED:
             frame_set(fr, sd.name, subst_value(a, sd.a, fr))
-            fr.derived.push(sd.name)
+            fr.derived.Push(sd.name)
             continue
         end
         mut gi := 0
         if web:
             gi = lo_web_state_index(ex, a, ci, sid)
-            g_lo_ws_kind.push(kind)
+            g_lo_ws_kind.Push(kind)
         else:
             gi = lo_state_index(ex, a, ci, sj, sid, kind)
         end
@@ -842,9 +1305,9 @@ func expand_component(
         dn.value_int = gi as u64
         dn.synthetic = true
         at.Put(a, decl, dn)
-        kids.push(decl)
+        kids.Push(decl)
         if web:
-            g_lo_ws_decl.push(decl)
+            g_lo_ws_decl.Push(decl)
             if multi:
                 frame_set(fr, sd.name, ws_cur_ref(a, gi, wi, sid))
             else:
@@ -854,12 +1317,12 @@ func expand_component(
             frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
         end
     end
-    expand_items(ex, a, kids, body, fr, ex.comp_dir.get(ci), depth + 1)
+    expand_items(ex, a, kids, body, fr, ex.comp_dir.Get(ci), depth + 1)
     mut bn := at.Get(a, blk)
     mut oldl := bn.list
     bn.list = kids
     at.Put(a, blk, bn)
-    oldl.free()
+    oldl.Free()
     mut mn := at.Get(a, mark)
     mn.name = "__salam_component"
     mn.synthetic = true
@@ -868,9 +1331,9 @@ func expand_component(
     mn.b = blk
     at.Put(a, mark, mn)
     if web:
-        g_lo_wi_mark.set(wi, mark)
+        g_lo_wi_mark.Set(wi, mark)
     end
-    out.push(mark)
+    out.Push(mark)
 end
 
 func lo_has_decls(a &: at.Ast, body: int): bool:
@@ -896,19 +1359,21 @@ end
 func lo_web_state_index(ex &: LoExpand, a &: at.Ast, ci: int, sid: int): int:
     sd := at.Get(a, sid)
     mut lit := ""
-    ty := lo_state_type(a, ex.comp_def.get(ci), sd.a, lit)
+    ty := lo_state_type(a, ex.comp_def.Get(ci), sd.a, lit)
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"),
+                co.ArgStr(ex.comp_name.Get(ci)), co.ArgStr(sd.name)
             )
         )
         ex.errors++
+        lit = "int"
     end
-    g_lo_ws_inst.push(g_lo_wi_mark.len() - 1)
-    g_lo_ws_type.push(ty)
-    g_lo_ws_lit.push(lit)
-    ret g_lo_ws_inst.len() - 1
+    g_lo_ws_inst.Push(g_lo_wi_mark.Len() - 1)
+    g_lo_ws_type.Push(ty)
+    g_lo_ws_lit.Push(lit)
+    ret g_lo_ws_inst.Len() - 1
 end
 
 func lo_ident(a &: at.Ast, name: str, from: int): int:
@@ -961,8 +1426,8 @@ end
 
 func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind: int): int:
     mut seen := 0
-    repeat g_lo_st_comp.len() in i:
-        if g_lo_st_comp.get(i) == ci:
+    repeat g_lo_st_comp.Len() in i:
+        if g_lo_st_comp.Get(i) == ci:
             if seen == j:
                 ret i
             end
@@ -971,22 +1436,23 @@ func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind
     end
     sd := at.Get(a, sid)
     mut lit := ""
-    ty := lo_state_type(a, ex.comp_def.get(ci), sd.a, lit)
+    ty := lo_state_type(a, ex.comp_def.Get(ci), sd.a, lit)
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"), co.ArgStr(ex.comp_name.get(ci)), co.ArgStr(sd.name)
+                i18.Tr("component '%s': give the variable '%s' a type, as in 'items := Vector {} as Vector<str>'"),
+                co.ArgStr(ex.comp_name.Get(ci)), co.ArgStr(sd.name)
             )
         )
         ex.errors++
         lit = "int"
     end
-    g_lo_st_comp.push(ci)
-    g_lo_st_kind.push(kind)
-    g_lo_st_name.push(sd.name)
-    g_lo_st_type.push(ty)
-    g_lo_st_lit.push(lit)
-    ret g_lo_st_comp.len() - 1
+    g_lo_st_comp.Push(ci)
+    g_lo_st_kind.Push(kind)
+    g_lo_st_name.Push(sd.name)
+    g_lo_st_type.Push(ty)
+    g_lo_st_lit.Push(lit)
+    ret g_lo_st_comp.Len() - 1
 end
 
 func expand_item(
@@ -1017,13 +1483,13 @@ func expand_item(
             if l < 0:
                 l = load_include(ex, a, path)
             end
-            if l >= 0 and ex.loaded_prog.get(l) != 0:
-                lprog := ex.loaded_prog.get(l)
+            if l >= 0 and ex.loaded_prog.Get(l) != 0:
+                lprog := ex.loaded_prog.Get(l)
                 lb := find_layout_block(a, lprog)
                 if lb != 0:
                     mut none := LoFrame {}
                     expand_items(
-                        ex, a, out, lb, none, ex.loaded_dir.get(l), depth + 1
+                        ex, a, out, lb, none, ex.loaded_dir.Get(l), depth + 1
                     )
                     frame_free(none)
                 else not has_component_def(a, lprog):
@@ -1041,7 +1507,8 @@ func expand_item(
             if not lo_bub_is_page_attr(iid):
                 lg.Log(
                     ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                        i18.Tr("'%s' handles an event that a component sends; write it where the component is used, or at the top of the page block"), co.ArgStr(item.name)
+                        i18.Tr("'%s' handles an event that a component sends; write it where the component is used, or at the top of the page block"),
+                        co.ArgStr(item.name)
                     )
                 )
                 ex.errors++
@@ -1053,7 +1520,7 @@ func expand_item(
         mut an := at.Get(a, attr)
         an.a = sub
         at.Put(a, attr, an)
-        out.push(attr)
+        out.Push(attr)
         ret
     end
     if item.kind == at.AST_LAYOUT_ELEMENT:
@@ -1063,22 +1530,57 @@ func expand_item(
             ret
         end
 
-        if fr.present and not fr.page and is_content_word(item.name):
-            if fr.content.len() > 0:
-                repeat fr.content.len() in i:
-                    out.push(fr.content.get(i))
+        if fr.present and not fr.page and is_slot_placeholder_name(item.name):
+            sname := slot_attr_name(a, iid)
+            if is_default_slot_name(sname):
+                // Default slot precedence: explicit default slot provider/content first,
+                // otherwise fallback to unnamed/default-routed children collected in content.
+                mut tmpd := Vector {} as Vector<int>
+                if frame_slot_items(fr, "", tmpd) or frame_slot_items(fr, "default", tmpd) or frame_slot_items(fr, "content", tmpd) or frame_slot_items(fr, "children", tmpd) or frame_slot_items(fr, "محتوا", tmpd):
+                    repeat tmpd.Len() in ti:
+                        out.Push(at.Clone(a, tmpd.Get(ti)))
+                    end
+                    tmpd.Free()
+                    ret
+                end
+                tmpd.Free()
+                if fr.content.Len() > 0:
+                    repeat fr.content.Len() in i:
+                        out.Push(at.Clone(a, fr.content.Get(i)))
+                    end
+                    ret
                 end
             else:
-                expand_items(ex, a, out, iid, fr, dir, depth)
+                mut named := Vector {} as Vector<int>
+                if frame_slot_items(fr, sname, named):
+                    repeat named.Len() in ni:
+                        out.Push(at.Clone(a, named.Get(ni)))
+                    end
+                    named.Free()
+                    ret
+                end
+                named.Free()
+                // Named slot not provided: render fallback content of the placeholder, if any.
             end
+            // Fallback/default placeholder content: expand children but do not emit routing attrs.
+            // Slot/scoped-slot contract (source-level): named/default routing and fallback content are expanded structurally, but scoped slot
+            // parameter bindings exposed via extra attrs on slot placeholders/providers are metadata-only today (warned in semantics, not forwarded).
+            // TODO(toolchain/runtime): define and implement scoped slot parameter binding/forwarding, payload typing, and target/runtime invocation semantics
+            //   (web/native parity), including fallback precedence when bindings are present.
+            mut fb := Vector {} as Vector<int>
+            expand_items(ex, a, fb, iid, fr, dir, depth)
+            repeat fb.Len() in fi:
+                out.Push(fb.Get(fi))
+            end
+            fb.Free()
             ret
         end
 
         el := at.NewNode(a, at.AST_LAYOUT_ELEMENT)
         copy_span(a, el, iid)
         at.SetName(a, el, item.name)
-        repeat at.Aliases(a, item.ext).len() in i2:
-            at.AddAlias(a, el, at.Aliases(a, item.ext).get(i2))
+        repeat at.Aliases(a, item.ext).Len() in i2:
+            at.AddAlias(a, el, at.Aliases(a, item.ext).Get(i2))
         end
         mut kids := Vector {} as Vector<int>
         expand_items(ex, a, kids, iid, fr, dir, depth)
@@ -1086,19 +1588,20 @@ func expand_item(
         mut old := en.list
         en.list = kids
         at.Put(a, el, en)
-        old.free()
-        out.push(el)
+        old.Free()
+        out.Push(el)
         ret
     end
     if item.kind == at.AST_IF:
-        out.push(expand_if(ex, a, iid, fr, dir, depth))
+        out.Push(expand_if(ex, a, iid, fr, dir, depth))
         ret
     end
     if item.kind == at.AST_VAR_DECL:
         if not li_known(iid):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                    i18.Tr("'%s' is declared inside an element, 'if' or 'each'; declare it at the top of the component or the page block"), co.ArgStr(item.name)
+                    i18.Tr("'%s' is declared inside an element, 'if' or 'each'; declare it at the top of the component or the page block"),
+                    co.ArgStr(item.name)
                 )
             )
             ex.errors++
@@ -1112,15 +1615,25 @@ func expand_item(
         cn.name = item.name
         cn.c = item.c
         cn.a = subst_value(a, item.a, fr)
+        mark := fr.shadow.Len()
+        if str.Len(item.name) > 0:
+            fr.shadow.Push(item.name)
+        end
+        if item.c != 0 and at.KindOf(a, item.c) == at.AST_IDENTIFIER:
+            fr.shadow.Push(at.Get(a, item.c).name)
+        end
         g_lo_each_depth++
         cn.b = expand_container(ex, a, item.b, fr, dir, depth)
         g_lo_each_depth--
+        until fr.shadow.Len() > mark:
+            _sh := fr.shadow.Pop()
+        end
         at.Put(a, cp, cn)
-        out.push(cp)
+        out.Push(cp)
         ret
     end
 
-    out.push(iid)
+    out.Push(iid)
 end
 
 func expand_container(ex &: LoExpand, a &: at.Ast, cid: int, fr &: LoFrame, dir: str, depth: int): int:
@@ -1132,7 +1645,7 @@ func expand_container(ex &: LoExpand, a &: at.Ast, cid: int, fr &: LoFrame, dir:
     mut old := bn.list
     bn.list = kids
     at.Put(a, blk, bn)
-    old.free()
+    old.Free()
     ret blk
 end
 

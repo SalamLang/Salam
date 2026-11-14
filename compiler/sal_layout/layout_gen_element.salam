@@ -1,6 +1,7 @@
 package layout
 
 import str
+import gui.style
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -17,13 +18,21 @@ struct LoAttrs:
     pub css: str = ""
     pub hover: str = ""
     pub focus: str = ""
+    pub focus_within: str = ""
     pub active: str = ""
+    pub disabled: str = ""
+    pub checked: str = ""
+    pub invalid: str = ""
+    pub placeholder: str = ""
+    pub selection: str = ""
     pub before: str = ""
     pub after: str = ""
     pub content: str = ""
     pub has_content: bool = false
     pub userclass: str = ""
     pub has_userclass: bool = false
+    pub dynclass: str = ""
+    pub has_dynclass: bool = false
     pub emitted: Vector<str> = Vector {}
     pub keys: Vector<str> = Vector {}
     pub vals: Vector<str> = Vector {}
@@ -142,9 +151,9 @@ func gen_element_n(
 end
 
 func lo_attr_get(la: LoAttrs, key: str, out &: str): bool:
-    repeat la.keys.len() in i:
-        if str.Equals(la.keys.get(i), key):
-            out = la.vals.get(i)
+    repeat la.keys.Len() in i:
+        if str.Equals(la.keys.Get(i), key):
+            out = la.vals.Get(i)
             ret true
         end
     end
@@ -152,12 +161,12 @@ func lo_attr_get(la: LoAttrs, key: str, out &: str): bool:
 end
 
 func lo_emit_attr(la &: LoAttrs, out: str, value: str, primary: bool, bare: bool):
-    repeat la.emitted.len() in i:
-        if str.Equals(la.emitted.get(i), out):
+    repeat la.emitted.Len() in i:
+        if str.Equals(la.emitted.Get(i), out):
             ret
         end
     end
-    la.emitted.push(out)
+    la.emitted.Push(out)
     piece := bare ? " " + out : " " + out + `="` + html_escape(value) + `"`
     if primary:
         la.first += piece
@@ -179,9 +188,13 @@ func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
         if str.Len(sm.LayoutAttrOut(ai)) > 0:
             prop = sm.LayoutAttrOut(ai)
         end
-        val = attr_value_map(ai, v)
+        if not is_dyn(v):
+            val = attr_value_map(ai, v)
+        end
     end
-    if str.Equals(rest, "content"):
+    if is_dyn(val):
+        // keep dynamic marker raw for runtime slot emission
+    else str.Equals(rest, "content"):
         val = css_string(v)
     else str.Equals(prop, "font-family"):
         val = css_font_family(val)
@@ -191,14 +204,28 @@ func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
     decl := css_decl(cx.compact, prop, val)
     if str.StartsWith(nm, "hover_"):
         la.hover += decl
+    else str.StartsWith(nm, "focus_within_"):
+        la.focus_within += decl
     else str.StartsWith(nm, "focus_"):
         la.focus += decl
     else str.StartsWith(nm, "active_"):
         la.active += decl
+    else str.StartsWith(nm, "disabled_"):
+        la.disabled += decl
+    else str.StartsWith(nm, "checked_"):
+        la.checked += decl
+    else str.StartsWith(nm, "invalid_"):
+        la.invalid += decl
+    else str.StartsWith(nm, "placeholder_"):
+        la.placeholder += decl
+    else str.StartsWith(nm, "selection_"):
+        la.selection += decl
     else str.StartsWith(nm, "before_"):
         la.before += decl
-    else:
+    else str.StartsWith(nm, "after_"):
         la.after += decl
+    else:
+        ret false
     end
     ret true
 end
@@ -213,6 +240,36 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
         end
         nm := an.name
         v := val_str(a, an.a)
+        mut sprop := 0
+        mut sstate := 0
+        if sm.StyleAttrOf(aid, sprop, sstate):
+            mut sval := style.Value {}
+            if style.Parse(sprop, v, sval):
+                decl := style.Css(sprop, sval) + ";"
+                if sstate == sm.STYLE_STATE_HOVER:
+                    la.hover += decl
+                else sstate == sm.STYLE_STATE_FOCUS_WITHIN:
+                    la.focus_within += decl
+                else sstate == sm.STYLE_STATE_FOCUS:
+                    la.focus += decl
+                else sstate == sm.STYLE_STATE_ACTIVE:
+                    la.active += decl
+                else sstate == sm.STYLE_STATE_DISABLED:
+                    la.disabled += decl
+                else sstate == sm.STYLE_STATE_CHECKED:
+                    la.checked += decl
+                else sstate == sm.STYLE_STATE_INVALID:
+                    la.invalid += decl
+                else sstate == sm.STYLE_STATE_PLACEHOLDER:
+                    la.placeholder += decl
+                else sstate == sm.STYLE_STATE_SELECTION:
+                    la.selection += decl
+                else:
+                    la.css += decl
+                end
+            end
+            continue
+        end
         if lo_pseudo(cx, la, ei, nm, v):
             continue
         end
@@ -220,8 +277,8 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
         if str.Len(key) == 0:
             key = nm
         end
-        la.keys.push(key)
-        la.vals.push(v)
+        la.keys.Push(key)
+        la.vals.Push(v)
         ai := sm.LayoutAttrFor(ei, key)
         if ai < 0:
             lg.Log(
@@ -244,15 +301,37 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
             la.content = v
             la.has_content = true
         else dest == sm.LA_CLASS:
-            la.userclass = v
-            la.has_userclass = true
+            if is_dyn(v):
+                if not la.has_dynclass:
+                    la.dynclass = v
+                    la.has_dynclass = true
+                else:
+                    la.dynclass += " " + v
+                end
+                la.emitted.Push("class")
+            else:
+                la.userclass = v
+                la.has_userclass = true
         else dest == sm.LA_STYLE:
-            la.inline_style = v
+            if is_dyn(v):
+                if str.Len(la.dynstyle) > 0 and byte_at(la.dynstyle, str.Len(la.dynstyle) - 1) != 59:
+                    la.dynstyle += ";"
+                end
+                la.dynstyle += v
+            else:
+                if str.Len(la.inline_style) > 0 and str.Len(v) > 0 and byte_at(la.inline_style, str.Len(la.inline_style) - 1) != 59:
+                    la.inline_style += ";"
+                end
+                la.inline_style = str.Len(la.inline_style) > 0 ? la.inline_style + v : v
         else dest == sm.LA_DIR or dest == sm.LA_LANG:
-            lo_emit_attr(la, sm.LayoutAttrOut(ai), mapped, primary, false)
+            lo_emit_attr(la, sm.LayoutAttrOut(ai), is_dyn(v) ? v : mapped, primary, false)
         else dest == sm.LA_SOURCE:
-            lo_emit_attr(la, str.Equals(tag, "a") ? "href" : "src", v, true, false)
-        else dest == sm.LA_HTML:
+            mut src_attr := "src"
+            if str.Equals(tag, "a") or str.Equals(tag, "area") or str.Equals(tag, "base") or str.Equals(tag, "link"):
+                src_attr = "href"
+            end
+            lo_emit_attr(la, src_attr, v, true, false)
+        else dest == sm.LA_HTML or dest == sm.LA_META:
             mut out := sm.LayoutAttrOut(ai)
             if str.IndexOf(out, "*") >= 0:
                 out = nm
@@ -260,21 +339,34 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
             vtb := sm.LayoutAttrVtype(ai)
             if vtb == sm.VT_BOOL and is_dyn(v):
                 if primary:
-                    la.first += v
+                    la.first += " " + v
                 else:
-                    la.rest += v
+                    la.rest += " " + v
                 end
+                la.emitted.Push(out)
             else vtb == sm.VT_BOOL or (vtb == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false"))):
                 if not str.Equals(v, "false"):
                     lo_emit_attr(la, out, "", primary, true)
                 end
             else:
-                lo_emit_attr(la, out, mapped, primary, false)
+                lo_emit_attr(la, out, is_dyn(v) ? v : mapped, primary, false)
             end
-        else (dest == sm.LA_HTML_OR_CSS or dest == sm.LA_CSS) and is_dyn(v):
+        else dest == sm.LA_HTML_OR_CSS and is_dyn(v):
             mut dprop := sm.LayoutAttrOut(ai)
             if str.Len(dprop) == 0:
                 dprop = hyphenate(key)
+            end
+            if str.Len(la.dynstyle) > 0 and byte_at(la.dynstyle, str.Len(la.dynstyle) - 1) != 59:
+                la.dynstyle += ";"
+            end
+            la.dynstyle += dprop + ":" + v + ";"
+        else dest == sm.LA_CSS and is_dyn(v):
+            mut dprop := sm.LayoutAttrOut(ai)
+            if str.Len(dprop) == 0:
+                dprop = hyphenate(key)
+            end
+            if str.Len(la.dynstyle) > 0 and byte_at(la.dynstyle, str.Len(la.dynstyle) - 1) != 59:
+                la.dynstyle += ";"
             end
             la.dynstyle += dprop + ":" + v + ";"
         else dest == sm.LA_HTML_OR_CSS:
@@ -328,10 +420,10 @@ end
 func lo_class_for(cx &: LoCtx, la &: LoAttrs, klass &: str): bool:
     klass = la.userclass
     mut has := la.has_userclass
-    needs := str.Len(la.css) > 0 or str.Len(la.hover) > 0 or str.Len(la.focus) > 0 or str.Len(la.active) > 0 or str.Len(la.before) > 0 or str.Len(la.after) > 0
+    needs := str.Len(la.css) > 0 or str.Len(la.hover) > 0 or str.Len(la.focus) > 0 or str.Len(la.focus_within) > 0 or str.Len(la.active) > 0 or str.Len(la.disabled) > 0 or str.Len(la.checked) > 0 or str.Len(la.invalid) > 0 or str.Len(la.placeholder) > 0 or str.Len(la.selection) > 0 or str.Len(la.before) > 0 or str.Len(la.after) > 0
     if needs and not has:
         sep := char_from_code(31)
-        key := la.css + sep + la.hover + sep + la.focus + sep + la.active + sep + la.before + sep + la.after
+        key := la.css + sep + la.hover + sep + la.focus + sep + la.focus_within + sep + la.active + sep + la.disabled + sep + la.checked + sep + la.invalid + sep + la.placeholder + sep + la.selection + sep + la.before + sep + la.after
         klass = class_for_key(cx, key)
         has = true
     end
@@ -348,8 +440,26 @@ func lo_emit_rules(cx &: LoCtx, la: LoAttrs, klass: str):
     if str.Len(la.focus) > 0:
         emit_rule(cx, css_rule(cx.compact, "." + klass + ":focus", la.focus))
     end
+    if str.Len(la.focus_within) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":focus-within", la.focus_within))
+    end
     if str.Len(la.active) > 0:
         emit_rule(cx, css_rule(cx.compact, "." + klass + ":active", la.active))
+    end
+    if str.Len(la.disabled) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":disabled", la.disabled))
+    end
+    if str.Len(la.checked) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":checked", la.checked))
+    end
+    if str.Len(la.invalid) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":invalid", la.invalid))
+    end
+    if str.Len(la.placeholder) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + "::placeholder", la.placeholder))
+    end
+    if str.Len(la.selection) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + "::selection", la.selection))
     end
     if str.Len(la.before) > 0:
         emit_rule(cx, css_rule(cx.compact, "." + klass + "::before", la.before))
@@ -360,9 +470,9 @@ func lo_emit_rules(cx &: LoCtx, la: LoAttrs, klass: str):
 end
 
 func lo_free_attrs(la &: LoAttrs):
-    la.emitted.free()
-    la.keys.free()
-    la.vals.free()
+    la.emitted.Free()
+    la.keys.Free()
+    la.vals.Free()
 end
 
 func gen_native(
@@ -506,7 +616,14 @@ func gen_element(
         lo_free_attrs(la)
         ret
     end
-    classattr := has_klass ? ` class="` + klass + `"` : ""
+    classattr := ""
+    if has_klass and la.has_dynclass:
+        classattr = ` class="` + klass + " " + la.dynclass + `"`
+    else has_klass:
+        classattr = ` class="` + klass + `"`
+    else la.has_dynclass:
+        classattr = ` class="` + la.dynclass + `"`
+    end
     open := "<" + tag + la.first + classattr + la.rest + ">"
     if in_head:
         cx.head += cx.compact ? open : "  " + open + "\n"
@@ -523,18 +640,21 @@ func gen_element(
         lo_free_attrs(la)
         ret
     end
-    esc := la.has_content ? html_escape(la.content) : ""
+    mut body := ""
+    if la.has_content:
+        body = is_dyn(la.content) ? la.content : html_escape(la.content)
+    end
     if has_child_elements(a, el):
         html_line(cx, open)
         cx.indent++
-        if la.has_content:
-            html_line(cx, esc)
+        if str.Len(body) > 0:
+            html_line(cx, body)
         end
         gen_children(cx, diag, a, el, klass, has_klass)
         cx.indent--
         html_line(cx, "</" + tag + ">")
     else:
-        html_line(cx, open + esc + "</" + tag + ">")
+        html_line(cx, open + body + "</" + tag + ">")
     end
     lo_free_attrs(la)
 end
@@ -559,10 +679,10 @@ func gen_font_face(cx &: LoCtx, la: LoAttrs):
     declared := lo_font_value(la, "type", "font_format")
     dir := lo_dir_of(cx.file)
     mut urls := str.Fields(lo_font_value(la, "url", ""))
-    defer urls.free()
+    defer urls.Free()
     mut src := ""
-    repeat urls.len() in i:
-        u := urls.get(i)
+    repeat urls.Len() in i:
+        u := urls.Get(i)
         fmt := sm.LayoutFontFormat(u, declared, dir)
         if str.Len(src) > 0:
             src += cx.compact ? "," : ", "
@@ -596,10 +716,10 @@ end
 func css_font_family(v: str): str:
     generic := ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "inherit", "initial", "unset", "revert"]
     mut parts := css_split_top(v)
-    defer parts.free()
+    defer parts.Free()
     mut out := ""
-    repeat parts.len() in i:
-        p := str.Trim(parts.get(i))
+    repeat parts.Len() in i:
+        p := str.Trim(parts.Get(i))
         if str.Len(p) == 0:
             continue
         end
@@ -637,11 +757,11 @@ func css_split_top(v: str): Vector<str>:
         else b == 41 and depth > 0:
             depth--
         else b == 44 and depth == 0:
-            out.push(str.Substr(v, start, i - start))
+            out.Push(str.Substr(v, start, i - start))
             start = i + 1
         end
     end
-    out.push(str.Substr(v, start, n - start))
+    out.Push(str.Substr(v, start, n - start))
     ret out
 end
 

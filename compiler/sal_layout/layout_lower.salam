@@ -48,8 +48,8 @@ func lo_mark(tag: str, n: int): str:
 end
 
 func lo_in_shadow(lw &: LoLower, name: str): bool:
-    repeat lw.shadow.len() in i:
-        if str.Equals(lw.shadow.get(i), name):
+    repeat lw.shadow.Len() in i:
+        if str.Equals(lw.shadow.Get(i), name):
             ret true
         end
     end
@@ -57,8 +57,8 @@ func lo_in_shadow(lw &: LoLower, name: str): bool:
 end
 
 func lo_is_prog_func(lw &: LoLower, name: str): bool:
-    repeat lw.funcs.len() in i:
-        if str.Equals(lw.funcs.get(i), name):
+    repeat lw.funcs.Len() in i:
+        if str.Equals(lw.funcs.Get(i), name):
             ret true
         end
     end
@@ -71,7 +71,7 @@ func lo_refs_runtime(lw &: LoLower, a &: at.Ast, nid: int): bool:
     end
     n := at.Get(a, nid)
     if n.kind == at.AST_IDENTIFIER:
-        ret lo_in_shadow(lw, n.name)
+        ret lo_in_shadow(lw, n.name) or lo_is_mut_global(lw, a, n.name)
     end
     if n.kind == at.AST_CALL:
         if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
@@ -81,17 +81,28 @@ func lo_refs_runtime(lw &: LoLower, a &: at.Ast, nid: int): bool:
         else:
             ret true
         end
-        repeat n.list.len() in i:
-            if lo_refs_runtime(lw, a, n.list.get(i)):
+        repeat n.list.Len() in i:
+            if lo_refs_runtime(lw, a, n.list.Get(i)):
                 ret true
             end
         end
+        if lo_refs_runtime(lw, a, n.a) or lo_refs_runtime(lw, a, n.b) or lo_refs_runtime(lw, a, n.c) or lo_refs_runtime(lw, a, n.d):
+            ret true
+        end
         ret false
     end
-    if n.kind == at.AST_MEMBER or n.kind == at.AST_INDEX:
+    if n.kind == at.AST_MEMBER or n.kind == at.AST_INDEX or n.kind == at.AST_SLICE:
         ret true
     end
-    ret lo_refs_runtime(lw, a, n.a) or lo_refs_runtime(lw, a, n.b) or lo_refs_runtime(lw, a, n.c)
+    if lo_refs_runtime(lw, a, n.a) or lo_refs_runtime(lw, a, n.b) or lo_refs_runtime(lw, a, n.c) or lo_refs_runtime(lw, a, n.d):
+        ret true
+    end
+    repeat n.list.Len() in i:
+        if lo_refs_runtime(lw, a, n.list.Get(i)):
+            ret true
+        end
+    end
+    ret false
 end
 
 func lo_slot_kind(el: int, ei: int, name: str): int:
@@ -99,7 +110,13 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
         if str.Equals(name, "title") or str.Equals(name, "content"):
             ret SL_TEXT
         end
-        ret SL_BAD
+        if str.Equals(name, "lang") or str.Equals(name, "dir"):
+            ret SL_ATTR
+        end
+        if str.Equals(name, "favicon"):
+            ret SL_URL
+        end
+        ret SL_ATTR
     end
     if sm.LayoutPseudoPrefixLen(name) > 0:
         ret SL_BAD
@@ -115,9 +132,18 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
     dest := sm.LayoutAttrDest(ai)
     vt := sm.LayoutAttrVtype(ai)
     if ei >= 0 and str.Equals(sm.LayoutElemGenerator(ei), "font_face"):
-        ret str.Equals(key, "url") ? SL_CSSURL : SL_BAD
+        if str.Equals(key, "url"):
+            ret SL_CSSURL
+        end
+        if str.Equals(key, "weight") or str.Equals(key, "style") or str.Equals(key, "display") or str.Equals(key, "range"):
+            ret SL_CSS
+        end
+        if dest == sm.LA_CONTENT or dest == sm.LA_SOURCE:
+            ret SL_CSS
+        end
+        ret SL_CSS
     end
-    if vt == sm.VT_ENUM or vt == sm.VT_DIR or vt == sm.VT_LANG or vt == sm.VT_CODE:
+    if vt == sm.VT_CODE:
         ret SL_BAD
     end
     if dest == sm.LA_CONTENT:
@@ -131,11 +157,23 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
     if dest == sm.LA_SOURCE:
         ret SL_URL
     end
+    if dest == sm.LA_CLASS:
+        ret SL_ATTR
+    end
+    if dest == sm.LA_DIR or dest == sm.LA_LANG:
+        ret SL_ATTR
+    end
     if dest == sm.LA_CSS or dest == sm.LA_HTML_OR_CSS:
+        if vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL:
+            ret SL_CSSURL
+        end
         ret SL_CSS
     end
-    if dest == sm.LA_HTML:
-        if vt == sm.VT_BOOL:
+    if dest == sm.LA_STYLE:
+        ret SL_CSS
+    end
+    if dest == sm.LA_HTML or dest == sm.LA_META:
+        if vt == sm.VT_BOOL or vt == sm.VT_BOOL_ENUM:
             ret SL_BOOL
         end
         if vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL:
@@ -143,7 +181,10 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
         end
         ret SL_ATTR
     end
-    ret SL_BAD
+    if vt == sm.VT_ENUM or vt == sm.VT_DIR or vt == sm.VT_LANG:
+        ret SL_ATTR
+    end
+    ret SL_ATTR
 end
 
 func lo_bool_out(ei: int, name: str): str:
@@ -159,12 +200,113 @@ func lo_bool_out(ei: int, name: str): str:
 end
 
 func lo_add_slot(lw &: LoLower, a &: at.Ast, from: int, sl0: LoSlot): int:
-    idx := lw.slots.len()
+    idx := lw.slots.Len()
     mut sl := sl0
     sl.loop = lw.loop
-    lw.slots.push(sl)
+    lw.slots.Push(sl)
     tag := sl.kind == SL_BAD ? "bad" : "dyn"
     ret mk_str(a, lo_mark(tag, idx), from)
+end
+
+func lo_list_runtime(lw &: LoLower, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in i:
+            r := lo_list_runtime(lw, a, at.Child(a, nid, i))
+            if r != 0:
+                ret nid
+            end
+        end
+        ret 0
+    end
+    if n.kind == at.AST_IDENTIFIER and lo_is_mut_global(lw, a, n.name):
+        ret nid
+    end
+    ret lo_refs_runtime(lw, a, nid) ? nid : 0
+end
+
+func lo_is_mut_global(lw &: LoLower, a &: at.Ast, name: str): bool:
+    if lw.prog == 0:
+        ret false
+    end
+    repeat at.ChildCount(a, lw.prog) in i:
+        d := at.Get(a, at.Child(a, lw.prog, i))
+        if d.kind == at.AST_VAR_DECL and d.is_mut and str.Equals(d.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_list_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int, vid: int):
+    an := at.Get(a, attr).name
+    k := lo_slot_kind(el, ei, an)
+    dyn := lo_list_runtime(lw, a, vid)
+    if dyn != 0:
+        if k == SL_IF or k == SL_EACH:
+            k = SL_ATTR
+        end
+        if k == SL_BAD or k == SL_BOOL:
+            mut key := sm.LayoutAttrKey(an)
+            if str.Len(key) == 0:
+                key = an
+            end
+            ai := sm.LayoutAttrFor(ei, key)
+            if sm.LayoutPseudoPrefixLen(an) > 0:
+                k = SL_CSS
+            else ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_CONTENT:
+                ek := ei >= 0 ? sm.LayoutElemKind(ei) : sm.LK_NORMAL
+                eg := ei >= 0 ? sm.LayoutElemGenerator(ei) : ""
+                if ek != sm.LK_RAW and not str.Equals(eg, "style") and not str.Equals(eg, "script"):
+                    k = SL_TEXT
+                else:
+                    k = SL_ATTR
+                end
+            else ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_SOURCE:
+                k = SL_URL
+            else ai >= 0 and (sm.LayoutAttrDest(ai) == sm.LA_CSS or sm.LayoutAttrDest(ai) == sm.LA_STYLE):
+                vt := sm.LayoutAttrVtype(ai)
+                k = (vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL) ? SL_CSSURL : SL_CSS
+            else ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_HTML_OR_CSS:
+                vt := sm.LayoutAttrVtype(ai)
+                k = (vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL) ? SL_CSSURL : SL_CSS
+            else ai >= 0 and (sm.LayoutAttrVtype(ai) == sm.VT_BOOL or sm.LayoutAttrVtype(ai) == sm.VT_BOOL_ENUM):
+                k = SL_BOOL
+            else:
+                k = SL_ATTR
+            end
+        end
+        mut sl := LoSlot { kind = k, expr = vid }
+        if k == SL_BOOL:
+            sl.out = lo_bool_out(ei, an)
+        end
+        mark := lo_add_slot(lw, a, vid, sl)
+        mut n1 := at.Get(a, attr)
+        n1.a = mark
+        at.Put(a, attr, n1)
+        ret
+    end
+    mut lit_name := an
+    if el != 0 and ei >= 0:
+        mut key := sm.LayoutAttrKey(an)
+        if str.Len(key) == 0:
+            key = an
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_CLASS:
+            lit_name = "class"
+        end
+    end
+    text := sm.LayoutListText(a, lw.prog, vid, lit_name)
+    if str.Len(text) == 0:
+        ret
+    end
+    mut n2 := at.Get(a, attr)
+    n2.a = mk_str(a, text, vid)
+    at.Put(a, attr, n2)
 end
 
 func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
@@ -175,6 +317,10 @@ func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
     end
     v := at.Get(a, vid)
     if v.kind == at.AST_LITERAL:
+        ret
+    end
+    if v.kind == at.AST_TUPLE or v.kind == at.AST_ARRAY_LIT:
+        lo_list_value(lw, a, attr, el, ei, vid)
         ret
     end
     lit := sm.LayoutFoldLiteral(a, lw.prog, vid, lw.shadow)
@@ -188,6 +334,39 @@ func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
         ret
     end
     k := lo_slot_kind(el, ei, an.name)
+    if k == SL_IF or k == SL_EACH:
+        k = SL_ATTR
+    end
+    if k == SL_BAD:
+        mut key := sm.LayoutAttrKey(an.name)
+        if str.Len(key) == 0:
+            key = an.name
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if sm.LayoutPseudoPrefixLen(an.name) > 0:
+            k = SL_CSS
+        else ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_CONTENT:
+            ek := ei >= 0 ? sm.LayoutElemKind(ei) : sm.LK_NORMAL
+            eg := ei >= 0 ? sm.LayoutElemGenerator(ei) : ""
+            if ek != sm.LK_RAW and not str.Equals(eg, "style") and not str.Equals(eg, "script"):
+                k = SL_TEXT
+            else:
+                k = SL_ATTR
+            end
+        else ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_SOURCE:
+            k = SL_URL
+        else ai >= 0 and (sm.LayoutAttrDest(ai) == sm.LA_CSS or sm.LayoutAttrDest(ai) == sm.LA_STYLE):
+            vt := sm.LayoutAttrVtype(ai)
+            k = (vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL) ? SL_CSSURL : SL_CSS
+        else ai >= 0 and sm.LayoutAttrDest(ai) == sm.LA_HTML_OR_CSS:
+            vt := sm.LayoutAttrVtype(ai)
+            k = (vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL) ? SL_CSSURL : SL_CSS
+        else ai >= 0 and (sm.LayoutAttrVtype(ai) == sm.VT_BOOL or sm.LayoutAttrVtype(ai) == sm.VT_BOOL_ENUM):
+            k = SL_BOOL
+        else:
+            k = SL_ATTR
+        end
+    end
     mut sl := LoSlot { kind = k, expr = vid }
     if k == SL_BOOL:
         sl.out = lo_bool_out(ei, an.name)
@@ -215,16 +394,16 @@ func lo_walk(lw &: LoLower, a &: at.Ast, container: int, el: int, ei: int):
             mut nn := at.Get(a, cid)
             nn.a = mark
             at.Put(a, cid, nn)
-            lw.shadow.push(n.name)
+            lw.shadow.Push(n.name)
             if n.c != 0:
-                lw.shadow.push(at.Get(a, n.c).name)
+                lw.shadow.Push(at.Get(a, n.c).name)
             end
             lw.loop++
             lo_walk(lw, a, n.b, el, ei)
             lw.loop--
-            _p1 := lw.shadow.pop()
+            _p1 := lw.shadow.Pop()
             if n.c != 0:
-                _p2 := lw.shadow.pop()
+                _p2 := lw.shadow.Pop()
             end
         end
     end
@@ -257,7 +436,7 @@ func lo_parse_text(log: lg.Logger, a &: at.Ast, text: str, path: str): int:
     mut sf := src.New()
     sf.path = path
     sf.text = text
-    sf.len = text.len()
+    sf.len = text.Len()
     quiet := lg.New(lg.LOG_OFF, false)
     mut toks := tok.StreamNew(path)
     ok := lx.Run(quiet, lp.Load("en"), sf, toks)
@@ -305,15 +484,15 @@ func lo_marker_at(doc: str, p: int, tag &: str, num &: int): int:
         num = 0 - 1
     else:
         tag = str.Substr(rest, 0, dash)
-        num = str.Substr(rest, dash + 1, str.Len(rest) - dash - 1).to_int()
+        num = str.Substr(rest, dash + 1, str.Len(rest) - dash - 1).ToInt()
     end
     ret close + 1
 end
 
 func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
     mut body := "mut _salam_b := " + lw.web + ".PageBegin()\n"
-    repeat lw.slots.len() in bi:
-        bs := lw.slots.get(bi)
+    repeat lw.slots.Len() in bi:
+        bs := lw.slots.Get(bi)
         if bs.kind == SL_BAD and bs.loop == 0:
             body += "_salam_v" + co.U64Toa(bi as u64) + " := __salam_dyn_" + co.U64Toa(bi as u64) + "\n"
         end
@@ -335,11 +514,11 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
             continue
         end
         if q > start:
-            body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.len() as u64))
-            chunks.push(str.Substr(doc, start, q - start))
+            body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64))
+            chunks.Push(str.Substr(doc, start, q - start))
         end
-        if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.len():
-            sl := lw.slots.get(num)
+        if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.Len():
+            sl := lw.slots.Get(num)
             vname := "_salam_v" + co.U64Toa(num as u64)
             if sl.kind == SL_IF:
                 body += "if __salam_dyn_" + co.U64Toa(num as u64) + ":\n"
@@ -356,8 +535,8 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
             else sl.kind == SL_BOOL:
                 body += vname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
                 body += "if " + vname + ":\n"
-                body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.len() as u64))
-                chunks.push(" " + sl.out)
+                body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64))
+                chunks.Push(" " + sl.out)
                 body += "end\n"
             else:
                 body += vname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
@@ -372,8 +551,8 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
         start = after
     end
     if start < n:
-        body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.len() as u64))
-        chunks.push(str.Substr(doc, start, n - start))
+        body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64))
+        chunks.Push(str.Substr(doc, start, n - start))
     end
     body += "ret " + lw.web + ".PageEnd(_salam_b)\n"
     ret "import " + lw.web + "\n\npure func __salam_view(): str:\n" + body + "end\n"
@@ -383,7 +562,7 @@ func lo_placeholder_num(name: str, prefix: str): int:
     if not str.StartsWith(name, prefix):
         ret 0 - 1
     end
-    ret str.Substr(name, str.Len(prefix), str.Len(name) - str.Len(prefix)).to_int()
+    ret str.Substr(name, str.Len(prefix), str.Len(name) - str.Len(prefix)).ToInt()
 end
 
 func lo_splice(lw &: LoLower, a &: at.Ast, nid: int, chunks: Vector<str>, from: int): int:
@@ -393,12 +572,12 @@ func lo_splice(lw &: LoLower, a &: at.Ast, nid: int, chunks: Vector<str>, from: 
     n := at.Get(a, nid)
     if n.kind == at.AST_IDENTIFIER:
         c := lo_placeholder_num(n.name, "__salam_chunk_")
-        if c >= 0 and c < chunks.len():
-            ret mk_str(a, chunks.get(c), from)
+        if c >= 0 and c < chunks.Len():
+            ret mk_str(a, chunks.Get(c), from)
         end
         d := lo_placeholder_num(n.name, "__salam_dyn_")
-        if d >= 0 and d < lw.slots.len():
-            ret lw.slots.get(d).expr
+        if d >= 0 and d < lw.slots.Len():
+            ret lw.slots.Get(d).expr
         end
         ret nid
     end
@@ -407,13 +586,13 @@ func lo_splice(lw &: LoLower, a &: at.Ast, nid: int, chunks: Vector<str>, from: 
     m.b = lo_splice(lw, a, n.b, chunks, from)
     m.c = lo_splice(lw, a, n.c, chunks, from)
     m.d = lo_splice(lw, a, n.d, chunks, from)
-    repeat n.list.len() in i:
-        m.list.set(i, lo_splice(lw, a, n.list.get(i), chunks, from))
+    repeat n.list.Len() in i:
+        m.list.Set(i, lo_splice(lw, a, n.list.Get(i), chunks, from))
     end
     if n.kind == at.AST_EACH:
         it := lo_placeholder_num(n.name, "__salam_item_")
-        if it >= 0 and it < lw.slots.len():
-            sl := lw.slots.get(it)
+        if it >= 0 and it < lw.slots.Len():
+            sl := lw.slots.Get(it)
             m.name = sl.item
             if sl.key != 0:
                 m.c = sl.key
@@ -441,8 +620,8 @@ func lo_span_tree(a &: at.Ast, nid: int, from: int, base: int):
     lo_span_tree(a, n.c, from, base)
     lo_span_tree(a, n.d, from, base)
     lo_span_tree(a, n.ty, from, base)
-    repeat n.list.len() in i:
-        lo_span_tree(a, n.list.get(i), from, base)
+    repeat n.list.Len() in i:
+        lo_span_tree(a, n.list.Get(i), from, base)
     end
 end
 
@@ -462,9 +641,9 @@ func lo_glue_slot(a &: at.Ast, nid: int): int:
         r = lo_glue_slot(a, n.b)
     end
     if r < 0:
-        repeat n.list.len() in i:
+        repeat n.list.Len() in i:
             if r < 0:
-                r = lo_glue_slot(a, n.list.get(i))
+                r = lo_glue_slot(a, n.list.Get(i))
             end
         end
     end
@@ -477,15 +656,15 @@ func lo_fix_glue_spans(lw &: LoLower, a &: at.Ast, nid: int, base: int):
     end
     n := at.Get(a, nid)
     if n.kind == at.AST_BLOCK:
-        repeat n.list.len() in i:
-            lo_fix_glue_spans(lw, a, n.list.get(i), base)
+        repeat n.list.Len() in i:
+            lo_fix_glue_spans(lw, a, n.list.Get(i), base)
         end
         ret
     end
     if n.kind == at.AST_IF or n.kind == at.AST_EACH or n.kind == at.AST_EXPR_STMT:
         k := lo_glue_slot(a, n.kind == at.AST_EXPR_STMT ? nid : n.a)
-        if k >= 0 and k < lw.slots.len():
-            lo_span_tree_shallow(a, nid, lw.slots.get(k).expr, base)
+        if k >= 0 and k < lw.slots.Len():
+            lo_span_tree_shallow(a, nid, lw.slots.Get(k).expr, base)
         end
     end
     if n.kind == at.AST_IF or n.kind == at.AST_EACH:
@@ -506,8 +685,8 @@ func lo_span_tree_shallow(a &: at.Ast, nid: int, from: int, base: int):
     lo_span_tree_shallow(a, n.a, from, base)
     if n.kind != at.AST_IF and n.kind != at.AST_EACH:
         lo_span_tree_shallow(a, n.b, from, base)
-        repeat n.list.len() in i:
-            lo_span_tree_shallow(a, n.list.get(i), from, base)
+        repeat n.list.Len() in i:
+            lo_span_tree_shallow(a, n.list.Get(i), from, base)
         end
     end
 end
@@ -516,7 +695,7 @@ func lo_collect_funcs(lw &: LoLower, a &: at.Ast, prog: int):
     repeat at.ChildCount(a, prog) in i:
         d := at.Get(a, at.Child(a, prog, i))
         if d.kind == at.AST_FUNC_DEF and str.Len(d.name) > 0:
-            lw.funcs.push(d.name)
+            lw.funcs.Push(d.name)
         end
     end
 end
@@ -525,7 +704,7 @@ func lo_shadow_globals(lw &: LoLower, a &: at.Ast, prog: int):
     repeat at.ChildCount(a, prog) in i:
         d := at.Get(a, at.Child(a, prog, i))
         if d.kind == at.AST_VAR_DECL and d.is_mut and str.Len(d.name) > 0:
-            lw.shadow.push(d.name)
+            lw.shadow.Push(d.name)
         end
     end
 end
@@ -537,14 +716,14 @@ func lo_lower_one(
     sm.LayoutResolve(a, lb)
     mut lw := LoLower { prog = prog }
     lw.web = lo_web_pkg(pack)
-    defer lw.slots.free()
-    defer lw.shadow.free()
-    defer lw.funcs.free()
+    defer lw.slots.Free()
+    defer lw.shadow.Free()
+    defer lw.funcs.Free()
     lo_collect_funcs(lw, a, prog)
     lbn := at.Get(a, lb)
     if lbn.b != 0:
         repeat at.ChildCount(a, lbn.b) in pi:
-            lw.shadow.push(at.Get(a, at.Child(a, lbn.b, pi)).name)
+            lw.shadow.Push(at.Get(a, at.Child(a, lbn.b, pi)).name)
         end
     end
     native := str.Equals(lbn.name, NATIVE_PAGE_VIEW)
@@ -569,7 +748,7 @@ func lo_lower_one(
         doc = Document(r, true, "", "", true)
     end
     mut chunks := Vector {} as Vector<str>
-    defer chunks.free()
+    defer chunks.Free()
     text := lo_build_source(lw, doc, chunks)
     base := at.Count(a)
     sp := lo_parse_text(log, a, text, file)
@@ -600,12 +779,12 @@ func lo_lower_one(
     mut params := Vector {} as Vector<int>
     if lbn.b != 0:
         repeat at.ChildCount(a, lbn.b) in pj:
-            params.push(at.Child(a, lbn.b, pj))
+            params.Push(at.Child(a, lbn.b, pj))
         end
     end
     mut oldp := fn.list
     fn.list = params
-    oldp.free()
+    oldp.Free()
     fn.file_boundary = true
     at.Put(a, fid, fn)
     if fn.ty != 0 and str.Equals(lp.Code(pack), "fa"):
@@ -674,60 +853,60 @@ pub func PrepareViews(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.A
         ret 0
     end
     mut views := Vector {} as Vector<int>
-    defer views.free()
+    defer views.Free()
     repeat at.ChildCount(a, prog) in i:
         did := at.Child(a, prog, i)
         d := at.Get(a, did)
         if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) > 0 and not d.view_glue:
-            views.push(did)
+            views.Push(did)
         end
     end
     mut frags := Vector {} as Vector<int>
-    defer frags.free()
+    defer frags.Free()
     repeat at.ChildCount(a, prog) in ci:
         cid := at.Child(a, prog, ci)
         c := at.Get(a, cid)
         if c.kind == at.AST_LAYOUT_COMPONENT and not c.view_glue and lo_all_typed(a, cid) and not lo_has_decls(a, c.a):
-            frags.push(cid)
+            frags.Push(cid)
         end
     end
-    if views.len() == 0 and frags.len() == 0:
+    if views.Len() == 0 and frags.Len() == 0:
         ret 0
     end
     mut imp := 0
     mut fns := Vector {} as Vector<int>
-    defer fns.free()
-    repeat views.len() in v:
-        fid := lo_lower_one(log, pack, ct, a, prog, views.get(v), file, imp, false)
+    defer fns.Free()
+    repeat views.Len() in v:
+        fid := lo_lower_one(log, pack, ct, a, prog, views.Get(v), file, imp, false)
         if fid != 0:
-            fns.push(fid)
+            fns.Push(fid)
         end
     end
-    repeat frags.len() in fi:
-        cid2 := frags.get(fi)
+    repeat frags.Len() in fi:
+        cid2 := frags.Get(fi)
         mut cn := at.Get(a, cid2)
         cn.view_glue = true
         at.Put(a, cid2, cn)
         flb := lo_fragment_block(a, cid2)
         fid2 := lo_lower_one(log, pack, ct, a, prog, flb, file, imp, true)
         if fid2 != 0:
-            fns.push(fid2)
+            fns.Push(fid2)
         end
     end
     mut pn := at.Get(a, prog)
     mut list := Vector {} as Vector<int>
     if imp != 0 and not lo_has_import(a, prog, lo_web_pkg(pack)):
-        list.push(imp)
+        list.Push(imp)
     end
-    repeat pn.list.len() in k:
-        list.push(pn.list.get(k))
+    repeat pn.list.Len() in k:
+        list.Push(pn.list.Get(k))
     end
-    repeat fns.len() in f:
-        list.push(fns.get(f))
+    repeat fns.Len() in f:
+        list.Push(fns.Get(f))
     end
     mut old := pn.list
     pn.list = list
     at.Put(a, prog, pn)
-    old.free()
-    ret fns.len()
+    old.Free()
+    ret fns.Len()
 end

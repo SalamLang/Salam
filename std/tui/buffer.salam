@@ -1,0 +1,554 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tui
+
+import env
+import mem
+import str
+import term
+import unicode
+
+mut _glyph_cps := HashMap {} as HashMap<int, str>
+
+mut _glyph_clusters := HashMap {} as HashMap<str, str>
+
+@en "GlyphPolicy"
+@fa "سیاست‌نویسه‌ها"
+pub enum GlyphPolicy:
+    @en "Unicode"
+    @fa "یونیکد"
+    Unicode
+    @en "ASCII"
+    @fa "اسکی"
+    ASCII
+end
+
+@en "Cell"
+@fa "سلول"
+pub struct Cell:
+    @en "ch"
+    @fa "نویسه"
+    pub ch: str = " "
+
+    @en "style"
+    @fa "ظاهر"
+    pub style: Style = StyleDefault
+end
+
+@en "Buffer"
+@fa "بافر"
+pub struct Buffer:
+    @en "width"
+    @fa "عرض"
+    pub width: int = 0
+
+    @en "height"
+    @fa "ارتفاع"
+    pub height: int = 0
+
+    @en "cells"
+    @fa "سلول‌ها"
+    pub cells: Vector<Cell> = Vector {}
+
+    @en "front"
+    @fa "بافر پیشین"
+    pub front: Vector<Cell> = Vector {}
+
+    @en "clip"
+    @fa "محدوده برش"
+    pub clip: Rect = Rect {}
+
+    @en "focused"
+    @fa "در تمرکز"
+    pub focused: bool = false
+
+    @en "tier"
+    @fa "سطح رنگ"
+    pub tier: ColorTier = ColorTier.TrueColor
+
+    @en "glyphs"
+    @fa "نویسه‌ها"
+    pub glyphs: GlyphPolicy = GlyphPolicy.Unicode
+
+    @en "force_full"
+    @fa "اجبار بازترسیم کامل"
+    pub force_full: bool = true
+
+    touched: Vector<bool> = Vector {}
+    row_touched: Vector<bool> = Vector {}
+
+    all_touched: bool = false
+
+    out_buf: str.StringBuilder = str.StringBuilder {}
+
+    @en "area"
+    @fa "محدوده"
+    pub func Area(): Rect:
+        ret Rect { width = this.width, height = this.height }
+    end
+
+    @en "area"
+    @fa "محدوده"
+    pub func area(): Rect:
+        ret this.Area()
+    end
+
+    @en "set"
+    @fa "تنظیم"
+    pub func Set(x: int, y: int, cell: Cell):
+        mut ch := cell.ch
+        if ch == "" and (x <= 0 or _char_width(this.Get(x - 1, y).ch) != 2):
+            ch = " "
+        else if ch != "" and _char_width(ch) != 1:
+            ch = " "
+        end
+        this._write(x, y, Cell { ch = ch, style = cell.style })
+    end
+
+    @en "set"
+    @fa "تنظیم"
+    pub func set(x: int, y: int, cell: Cell):
+        this.Set(x, y, cell)
+    end
+
+    func _write(x: int, y: int, cell: Cell):
+        if not this._writable(x, y):
+            ret
+        end
+        i := y * this.width + x
+        old := this.cells.Get(i)
+        if old.ch == "" and cell.ch != "" and x > 0:
+            this._store(x - 1, y, Cell { ch = " ", style = cell.style })
+        else if old.ch != "" and _char_width(old.ch) == 2 and cell.ch != old.ch and x + 1 < this.width and this.cells.Get(i + 1).ch == "":
+            this._store(x + 1, y, Cell { ch = " ", style = cell.style })
+        end
+        this._store(x, y, cell)
+    end
+
+    func _store(x: int, y: int, cell: Cell):
+        i := y * this.width + x
+        this.cells.Set(i, cell)
+        if not this.all_touched:
+            this.touched.Set(i, true)
+            this.row_touched.Set(y, true)
+        end
+    end
+
+    func _writable(x: int, y: int): bool:
+        p := Point { x = x, y = y }
+        ret this.area().Contains(p) and this.clip.Contains(p)
+    end
+
+    @en "get"
+    @fa "دریافت"
+    pub func Get(x: int, y: int): Cell:
+        p := Point { x = x, y = y }
+        if not this.area().Contains(p):
+            ret Cell {}
+        end
+        ret this.cells.Get(y * this.width + x)
+    end
+
+    @en "get"
+    @fa "دریافت"
+    pub func get(x: int, y: int): Cell:
+        ret this.Get(x, y)
+    end
+
+    @en "put_str"
+    @fa "نوشتن متن"
+    pub func PutStr(x: int, y: int, text: str, style: Style):
+        mut i := 0
+        mut col := 0
+        mut last := -1
+        n := text.Len()
+        until i < n:
+            mut cp := 0
+            next := str.CodePointAt(text, i, cp)
+            if next <= i:
+                break
+            end
+            i = next
+            if cp < 0:
+                cp = 0xFFFD
+            end
+            width := _cell_width(cp)
+            if width == 0:
+                if last >= 0 and not unicode.IsControl(cp):
+                    this._attach(last, y, cp)
+                end
+            else width == 1:
+                last = -1
+                if this._writable(x + col, y):
+                    last = x + col
+                end
+                this.Set(x + col, y, Cell { ch = _glyph(cp), style = style })
+                col++
+            else:
+                last = -1
+                left := this._writable(x + col, y)
+                right := this._writable(x + col + 1, y)
+                if left and right:
+                    this.Set(x + col, y, Cell { ch = " ", style = style })
+                    this.Set(x + col + 1, y, Cell { ch = " ", style = style })
+                    this._store(x + col, y, Cell { ch = _glyph(cp), style = style })
+                    this._store(x + col + 1, y, Cell { ch = "", style = style })
+                    last = x + col
+                else:
+                    if left:
+                        this.Set(x + col, y, Cell { ch = " ", style = style })
+                    end
+                    if right:
+                        this.Set(x + col + 1, y, Cell { ch = " ", style = style })
+                    end
+                end
+                col += 2
+            end
+        end
+    end
+
+    @en "put_str"
+    @fa "نوشتن متن"
+    pub func put_str(x: int, y: int, text: str, style: Style):
+        this.PutStr(x, y, text, style)
+    end
+
+    func _attach(x: int, y: int, cp: int):
+        if not this._writable(x, y):
+            ret
+        end
+        old := this.cells.Get(y * this.width + x)
+        if old.ch == "" or old.ch.Len() >= 32:
+            ret
+        end
+        this._store(x, y, Cell { ch = _cluster(old.ch, _glyph(cp)), style = old.style })
+    end
+
+    @en "fill"
+    @fa "پرکردن"
+    pub func Fill(r: Rect, ch: str, style: Style):
+        repeat r.height in dy:
+            repeat r.width in dx:
+                this.Set(r.x + dx, r.y + dy, Cell { ch = ch, style = style })
+            end
+        end
+    end
+
+    @en "fill"
+    @fa "پرکردن"
+    pub func fill(r: Rect, ch: str, style: Style):
+        this.Fill(r, ch, style)
+    end
+
+    @en "clear"
+    @fa "پاک‌سازی"
+    pub func Clear():
+        repeat this.cells.Len() in i:
+            this.cells.Set(i, Cell {})
+        end
+        this.all_touched = true
+    end
+
+    @en "clear"
+    @fa "پاک‌سازی"
+    pub func clear():
+        this.Clear()
+    end
+
+    @en "row_text"
+    @fa "متن ردیف"
+    pub func RowText(y: int): str:
+        if y < 0 or y >= this.height:
+            ret ""
+        end
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        repeat this.width in x:
+            ch := this.cells.Get(y * this.width + x).ch
+            if ch != "":
+                str.BufAppend(b, ch)
+            end
+        end
+        ret str.BufStr(b)
+    end
+
+    @en "row_text"
+    @fa "متن ردیف"
+    pub func row_text(y: int): str:
+        ret this.RowText(y)
+    end
+
+    @en "resize"
+    @fa "تغییر اندازه"
+    pub func Resize(width: int, height: int):
+        this.cells.Free()
+        this.front.Free()
+        this.touched.Free()
+        this.row_touched.Free()
+        fresh := NewBuffer(width, height)
+        this.width = fresh.width
+        this.height = fresh.height
+        this.cells = fresh.cells
+        this.front = fresh.front
+        this.touched = fresh.touched
+        this.row_touched = fresh.row_touched
+        this.all_touched = fresh.all_touched
+        this.clip = fresh.clip
+        this.force_full = fresh.force_full
+    end
+
+    @en "resize"
+    @fa "تغییر اندازه"
+    pub func resize(width: int, height: int):
+        this.Resize(width, height)
+    end
+
+    func _reset_out():
+        str.BufReset(this.out_buf)
+    end
+
+    @en "ansi"
+    @fa "خروجی کامل انسی"
+    pub func Ansi(): str:
+        this._reset_out()
+        mut style := StyleDefault
+        repeat this.height in y:
+            _append_free(this.out_buf, term.SeqMoveTo(y + 1, 1))
+            repeat this.width in x:
+                c := this.cells.Get(y * this.width + x)
+                if not StyleEq(c.style, style):
+                    _ := _append_sgr_off(this.out_buf, style, this.tier)
+                    _ := _append_sgr(this.out_buf, c.style, this.tier)
+                    style = c.style
+                end
+                str.BufAppend(this.out_buf, c.ch)
+            end
+        end
+        _ := _append_sgr_off(this.out_buf, style, this.tier)
+        ret str.BufStr(this.out_buf)
+    end
+
+    @en "ansi"
+    @fa "خروجی کامل انسی"
+    pub func ansi(): str:
+        ret this.Ansi()
+    end
+
+    @en "diff"
+    @fa "اختلاف"
+    pub func Diff(): str:
+        if this.force_full:
+            ret this.ansi()
+        end
+        this._reset_out()
+        mut style := StyleDefault
+        mut changed := false
+        repeat this.height in y:
+            if this.all_touched or this.row_touched.Get(y):
+                mut x := 0
+                until x < this.width:
+                    idx := y * this.width + x
+                    marked := this.all_touched or this.touched.Get(idx)
+                    if not marked or this.cells.Get(idx) == this.front.Get(idx):
+                        x++
+                    else:
+                        mut e := x + 1
+                        until e < this.width and (this.all_touched or this.touched.Get(y * this.width + e)) and this.cells.Get(y * this.width + e) != this.front.Get(y * this.width + e):
+                            e++
+                        end
+                        _append_free(this.out_buf, term.SeqMoveTo(y + 1, x + 1))
+                        mut i := x
+                        until i < e:
+                            c := this.cells.Get(y * this.width + i)
+                            if not StyleEq(c.style, style):
+                                _ := _append_sgr_off(this.out_buf, style, this.tier)
+                                _ := _append_sgr(this.out_buf, c.style, this.tier)
+                                style = c.style
+                            end
+                            str.BufAppend(this.out_buf, c.ch)
+                            i++
+                        end
+                        changed = true
+                        x = e
+                    end
+                end
+            end
+        end
+        if changed:
+            _ := _append_sgr_off(this.out_buf, style, this.tier)
+        end
+        ret str.BufStr(this.out_buf)
+    end
+
+    @en "diff"
+    @fa "اختلاف"
+    pub func diff(): str:
+        ret this.Diff()
+    end
+
+    @en "commit"
+    @fa "ثبت قاب"
+    pub func Commit():
+        if this.force_full or this.all_touched:
+            repeat this.cells.Len() in i:
+                this.front.Set(i, this.cells.Get(i))
+            end
+        else:
+            repeat this.height in y:
+                if this.row_touched.Get(y):
+                    base := y * this.width
+                    repeat this.width in x:
+                        i := base + x
+                        if this.touched.Get(i):
+                            this.front.Set(i, this.cells.Get(i))
+                        end
+                    end
+                end
+            end
+        end
+        if not this.all_touched:
+            repeat this.touched.Len() in i:
+                this.touched.Set(i, false)
+            end
+            repeat this.row_touched.Len() in y:
+                this.row_touched.Set(y, false)
+            end
+        end
+        this.all_touched = false
+        this.force_full = false
+    end
+
+    @en "commit"
+    @fa "ثبت قاب"
+    pub func commit():
+        this.Commit()
+    end
+
+    @en "flush"
+    @fa "ارسال به ترمینال"
+    pub func Flush():
+        out := this.diff()
+        if out != "":
+            term.Emit(out)
+        end
+        mem.Free(out as void*)
+        this.commit()
+    end
+
+    @en "flush"
+    @fa "ارسال به ترمینال"
+    pub func flush():
+        this.Flush()
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func Free():
+        this.cells.Free()
+        this.front.Free()
+        this.touched.Free()
+        this.row_touched.Free()
+        str.BufFree(this.out_buf)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.Free()
+    end
+end
+
+func _glyph(cp: int): str:
+    if _glyph_cps.Has(cp):
+        ret _glyph_cps.Get(cp)
+    end
+    mut b := str.NewBuilder()
+    str.BufAppendCp(b, cp)
+    g := str.BufStr(b)
+    str.BufFree(b)
+    _glyph_cps.Put(cp, g)
+    ret g
+end
+
+func _cluster(base: str, mark: str): str:
+    joined := base + mark
+    if _glyph_clusters.Has(joined):
+        pooled := _glyph_clusters.Get(joined)
+        mem.Free(joined as void*)
+        ret pooled
+    end
+    _glyph_clusters.Put(joined, joined)
+    ret joined
+end
+
+func _is_utf8_locale(v: str): bool:
+    u := str.Upper(v)
+    ret str.Contains(u, "UTF-8") or str.Contains(u, "UTF8")
+end
+
+@en "DetectGlyphPolicy"
+@fa "تشخیص سیاست نویسه‌ها"
+pub func DetectGlyphPolicy(): GlyphPolicy:
+    g := str.Lower(env.Get("SALAM_TUI_GLYPHS"))
+    if g == "ascii":
+        ret GlyphPolicy.ASCII
+    end
+    if g == "unicode":
+        ret GlyphPolicy.Unicode
+    end
+    if env.Get("TERM") == "dumb":
+        ret GlyphPolicy.ASCII
+    end
+    mut v := env.Get("LC_ALL")
+    if v.Len() == 0:
+        v = env.Get("LC_CTYPE")
+    end
+    if v.Len() == 0:
+        v = env.Get("LANG")
+    end
+    if v.Len() > 0 and not _is_utf8_locale(v):
+        ret GlyphPolicy.ASCII
+    end
+    ret GlyphPolicy.Unicode
+end
+
+@en "NewBuffer"
+@fa "بافر جدید"
+pub func NewBuffer(width: int, height: int): Buffer:
+    w := width < 0 ? 0 : width
+    h := height < 0 ? 0 : height
+    mut cells := Vector {} as Vector<Cell>
+    mut front := Vector {} as Vector<Cell>
+    mut touched := Vector {} as Vector<bool>
+    mut row_touched := Vector {} as Vector<bool>
+    repeat w * h:
+        cells.Push(Cell {})
+        front.Push(Cell {})
+        touched.Push(false)
+    end
+    repeat h:
+        row_touched.Push(false)
+    end
+    mut b := Buffer {
+        width = w
+        height = h
+        cells = cells
+        front = front
+        touched = touched
+        row_touched = row_touched
+    }
+    b.clip = b.area()
+    ret b
+end

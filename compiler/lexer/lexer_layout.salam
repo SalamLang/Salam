@@ -65,6 +65,10 @@ func layout_value_operand(L &: Lx): bool:
         scan_number(L)
         ret true
     end
+    if c == 35:
+        scan_color(L)
+        ret true
+    end
     if is_ident_start(c) and not (c >= 128 and layout_at_unicode_op(L)):
         if layout_css_word(L):
             ret true
@@ -265,6 +269,7 @@ func layout_value(L &: Lx):
     end
     st := L.layout_decl
     L.layout_decl = false
+    L.layout_attr = not st
     mut depth := 0
     mut want := true
     mut quest := 0
@@ -306,6 +311,20 @@ func layout_value(L &: Lx):
             scan_ident(L)
             want = true
             prev_ident = false
+            continue
+        end
+        comma := c == 44 or (c == 216 and peek2(L, 1) == 140)
+        if want and comma and not st:
+            eb := lx_pos(L)
+            error_at(L, eb, "a value is missing before ','")
+            scan_one(L)
+            continue
+        end
+        if not want and comma and not st:
+            scan_one(L)
+            want = true
+            prev_ident = false
+            layout_list_continue(L)
             continue
         end
         if want:
@@ -368,9 +387,57 @@ func layout_value(L &: Lx):
     end
 end
 
+func layout_value_line(L &: Lx): bool:
+    c := peek(L)
+    if c == 0:
+        ret false
+    end
+    if not is_ident_start(c) or layout_at_unicode_op(L):
+        ret true
+    end
+    w := layout_word_at(L)
+    if lp.LookupKeyword(L.pack, w) == tok.TK_KW_END or str.Equals(w, "end"):
+        ret false
+    end
+    mut j := 0
+    until L.pos + j < L.n:
+        b := peek2(L, j)
+        if b == 61:
+            ret peek2(L, j + 1) == 61
+        end
+        if b == 58:
+            ret false
+        end
+        if b == 10:
+            ret true
+        end
+        if is_ident_cont(b) or b == 32 or b == 9:
+            j++
+            continue
+        end
+        ret true
+    end
+    ret true
+end
+
+func layout_list_continue(L &: Lx):
+    layout_skip_inline_ws(L)
+    if peek(L) != 10:
+        ret
+    end
+    until peek(L) == 10:
+        adv(L)
+        layout_skip_inline_ws(L)
+    end
+    b := lx_pos(L)
+    if not layout_value_line(L):
+        error_at(L, b, "a value is missing after ','; a list continues on the next line only with another value")
+    end
+end
+
 func layout_try_end_inline(L &: Lx, b: co.SrcPos): bool:
     end_kw := lp.EndSpelling(L.pack)
-    klen := end_kw.len()
+    klen := end_kw.Len()
     mut matched_kw := ""
     mut matched_len := 0
     if L.pos + klen <= L.n and str.Equals(str.SubstrIn(L.s, L.pos, klen), end_kw):
@@ -608,6 +675,7 @@ func layout_step(L &: Lx):
     end
     if L.layout_sub == LX_SUB_VALUE:
         layout_value(L)
+        L.layout_attr = false
         L.layout_sub = LX_SUB_NAME
         ret
     end

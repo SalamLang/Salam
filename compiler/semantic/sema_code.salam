@@ -1,0 +1,212 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include tok "../token.salam"
+
+func code_word_start(b: int): bool:
+    ret (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
+end
+
+func code_word_char(b: int): bool:
+    ret code_word_start(b) or (b >= 48 and b <= 57)
+end
+
+func code_word_fa(w: str, after_dot: bool, call: bool): str:
+    if after_dot:
+        ret intrinsic_method_lang_form(w, "fa")
+    end
+    k := lp.LookupKeyword(lp.LP_EN, w)
+    if k != tok.TK_IDENT:
+        ret lp.Spelling(lp.LP_FA, k)
+    end
+    ty := i18.LocalizeTypeText(w, true)
+    if not str.Equals(ty, w):
+        ret ty
+    end
+    if call:
+        ret lp.BuiltinSpellOf(lp.LP_FA, w)
+    end
+    ret ""
+end
+
+func code_find(xs: Vector<str>, w: str): int:
+    repeat xs.Len() in i:
+        if str.Equals(xs.Get(i), w):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func code_xlate(code: str, pk_en: Vector<str>, pk_fa: Vector<str>): str:
+    n := str.Len(code)
+    mut out := ""
+    mut prev := 0
+    mut i := 0
+    until i < n:
+        b := byte_at(code, i)
+        if b == 37:
+            mut j := i + 1
+            until j < n and not code_word_start(byte_at(code, j)):
+                j++
+            end
+            until j < n and code_word_start(byte_at(code, j)):
+                j++
+            end
+            out += str.Substr(code, i, j - i)
+            prev = 120
+            i = j
+            continue
+        end
+        if b == 34:
+            mut j2 := i + 1
+            until j2 < n and byte_at(code, j2) != 34:
+                if byte_at(code, j2) == 92:
+                    j2++
+                end
+                j2++
+            end
+            if j2 < n:
+                j2++
+            end
+            out += str.Substr(code, i, j2 - i)
+            prev = 34
+            i = j2
+            continue
+        end
+        if code_word_start(b):
+            mut e := i + 1
+            until e < n and code_word_char(byte_at(code, e)):
+                e++
+            end
+            w := str.Substr(code, i, e - i)
+            after_dot := prev == 46
+            prev = 120
+            if not after_dot and e + 1 < n and byte_at(code, e) == 46 and code_word_start(byte_at(code, e + 1)):
+                mut e2 := e + 1
+                until e2 < n and code_word_char(byte_at(code, e2)):
+                    e2++
+                end
+                qi := code_find(pk_en, str.Substr(code, i, e2 - i))
+                if qi >= 0:
+                    out += pk_fa.Get(qi)
+                    i = e2
+                    continue
+                end
+            end
+            pi := after_dot ? 0 - 1 : code_find(pk_en, w)
+            if pi >= 0:
+                out += pk_fa.Get(pi)
+            else:
+                fa := code_word_fa(w, after_dot, e < n and byte_at(code, e) == 40)
+                out += str.Len(fa) > 0 ? fa : w
+            end
+            i = e
+            continue
+        end
+        if b >= 48 and b <= 57:
+            mut d := i + 1
+            until d < n and byte_at(code, d) >= 48 and byte_at(code, d) <= 57:
+                d++
+            end
+            out += str.ToPersianDigits(str.Substr(code, i, d - i))
+            prev = 48
+            i = d
+            continue
+        end
+        if b == 44:
+            out += "\xD8\x8C"
+        else:
+            out += str.Substr(code, i, 1)
+        end
+        if b != 32:
+            prev = b
+        end
+        i++
+    end
+    ret out
+end
+
+func code_lang(code: str, lang: str): str:
+    if lang0(lang) != 102:
+        ret code
+    end
+    ret code_xlate(code, Vector {} as Vector<str>, Vector {} as Vector<str>)
+end
+
+func code_disp(s &: Sema, a &: at.Ast, code: str): str:
+    if lang0(s.lang) != 102:
+        ret code
+    end
+    mut pk_en := Vector {} as Vector<str>
+    mut pk_fa := Vector {} as Vector<str>
+    repeat PackageCount(s) in i:
+        pkv := sym_at(s, PackageAt(s, i))
+        p := pkv.pkgname
+        if str.Len(p) == 0 or not str.Contains(code, p + ".") or code_find(pk_en, p) >= 0:
+            continue
+        end
+        mut pfa := pkv.decl != 0 ? alias_for_lang(at.Aliases(a, at.Get(a, pkv.decl).ext), s.lang) : ""
+        if str.Len(pfa) == 0:
+            pfa = p
+        end
+        pk_en.Push(p)
+        pk_fa.Push(pfa)
+        mut k := str.IndexFrom(code, p + ".", 0)
+        until k >= 0:
+            b := k + str.Len(p) + 1
+            mut e := b
+            until e < str.Len(code) and code_word_char(byte_at(code, e)):
+                e++
+            end
+            m := e > b ? scope_lookup_local(s, pkv.members, str.Substr(code, b, e - b)) : 0
+            if m != 0 and (k == 0 or not code_word_char(byte_at(code, k - 1))):
+                pk_en.Push(str.Substr(code, k, e - k))
+                pk_fa.Push(pfa + "." + sug_display_name(s, a, sym_at(s, m)))
+            end
+            k = str.IndexFrom(code, p + ".", e)
+        end
+    end
+    ret code_xlate(code, pk_en, pk_fa)
+end
+
+func type_text_disp(ts: str): str:
+    ret "\x01" + ts + "\x02"
+end
+
+func set_name_written(a &: at.Ast, nid: int, name: str):
+    n := at.Get(a, nid)
+    if not str.Equals(n.name, name) and at.Aliases(a, n.ext).Len() == 0:
+        at.AddAlias(a, nid, n.name)
+    end
+    at.SetName(a, nid, name)
+end
+
+func written_name(a &: at.Ast, nid: int): str:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER or n.kind == at.AST_MEMBER:
+        al := at.Aliases(a, n.ext)
+        if al.Len() > 0:
+            ret al.Get(0)
+        end
+    end
+    ret n.name
+end

@@ -33,84 +33,88 @@ mut PROJECT := ""
 
 func post(path: str, body: str):
     mut headers := HashMap {} as HashMap<str, str>
-    headers.put("Authorization", AUTH)
-    headers.put("Content-Type", "application/json")
-    headers.put("x-langfuse-ingestion-version", "4")
+    headers.Put("Authorization", AUTH)
+    headers.Put("Content-Type", "application/json")
+    headers.Put("x-langfuse-ingestion-version", "4")
     _r := http.Do("POST", BASE_URL + path, headers, body, http.RequestOptions { timeout_ms = SEND_MS })
 end
 
 func str_value(v: str): str:
     mut m := Vector {} as Vector<str>
-    m.push(json.Member("stringValue", v))
+    m.Push(json.Member("stringValue", v))
     ret json.Object(m)
 end
 
 func attr(key: str, value: str): str:
     mut m := Vector {} as Vector<str>
-    m.push(json.Member("key", key))
-    m.push(json.MemberRaw("value", str_value(value)))
+    m.Push(json.Member("key", key))
+    m.Push(json.MemberRaw("value", str_value(value)))
     ret json.Object(m)
 end
 
 func tags_attr(key: str, values: Vector<str>): str:
     mut items := Vector {} as Vector<str>
     each v in values:
-        items.push(str_value(v))
+        items.Push(str_value(v))
     end
     mut arr := Vector {} as Vector<str>
-    arr.push(json.MemberRaw("arrayValue", json.Object(one("values", json.Array(items)))))
+    arr.Push(json.MemberRaw("arrayValue", json.Object(one("values", json.Array(items)))))
     mut m := Vector {} as Vector<str>
-    m.push(json.Member("key", key))
-    m.push(json.MemberRaw("value", json.Object(arr)))
+    m.Push(json.Member("key", key))
+    m.Push(json.MemberRaw("value", json.Object(arr)))
     ret json.Object(m)
 end
 
 func one(key: str, raw: str): Vector<str>:
     mut v := Vector {} as Vector<str>
-    v.push(json.MemberRaw(key, raw))
+    v.Push(json.MemberRaw(key, raw))
     ret v
 end
 
 func usage_details(u: aiengine.Usage): str:
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberInt("input", u.input))
-    m.push(json.MemberInt("output", u.output + u.reasoning))
-    m.push(json.MemberInt("total", u.input + u.output + u.reasoning))
+    m.Push(json.MemberInt("input", u.input))
+    m.Push(json.MemberInt("output", u.output + u.reasoning))
+    m.Push(json.MemberInt("total", u.input + u.output + u.reasoning))
     ret json.Object(m)
 end
 
 func cost_details(u: aiengine.Usage): str:
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberRaw("input", conv.FormatFloatPrec(u.cost_in, 8)))
-    m.push(json.MemberRaw("output", conv.FormatFloatPrec(u.cost_out, 8)))
-    m.push(json.MemberRaw("total", conv.FormatFloatPrec(u.cost, 8)))
+    m.Push(json.MemberRaw("input", conv.FormatFloatPrec(u.cost_in, 8)))
+    m.Push(json.MemberRaw("output", conv.FormatFloatPrec(u.cost_out, 8)))
+    m.Push(json.MemberRaw("total", conv.FormatFloatPrec(u.cost, 8)))
     ret json.Object(m)
 end
 
 func hex_id(key: str, chars: int): str:
-    ret crypto.Sha256Hex(key).substr(0, chars)
+    ret crypto.Sha256Hex(key).Substr(0, chars)
+end
+
+func quoted(v: str): str:
+    ret "\"" + json.Escape(v) + "\""
 end
 
 func one_raw(raw: str): Vector<str>:
     mut v := Vector {} as Vector<str>
-    v.push(raw)
+    v.Push(raw)
     ret v
 end
 
 func one_str(s: str): Vector<str>:
     mut v := Vector {} as Vector<str>
-    v.push(s)
+    v.Push(s)
     ret v
 end
 
 func one_int(key: str, val: int): Vector<str>:
     mut v := Vector {} as Vector<str>
-    v.push(json.MemberInt(key, val as i64))
+    v.Push(json.MemberInt(key, val as i64))
     ret v
 end
 
 pub func Configure(url: str, public_key: str, secret_key: str, public_url: str, project: str):
-    if url.len() == 0 or public_key.len() == 0 or secret_key.len() == 0:
+    if url.Len() == 0 or public_key.Len() == 0 or secret_key.Len() == 0:
         ret
     end
     BASE_URL = str.TrimSuffix(url, "/")
@@ -120,55 +124,103 @@ pub func Configure(url: str, public_key: str, secret_key: str, public_url: str, 
 end
 
 pub func Enabled(): bool:
-    ret BASE_URL.len() > 0
+    ret BASE_URL.Len() > 0
 end
 
 pub func SessionUrl(session: str): str:
-    if PUBLIC_URL.len() == 0 or PROJECT.len() == 0 or session.len() == 0:
+    if PUBLIC_URL.Len() == 0 or PROJECT.Len() == 0 or session.Len() == 0:
         ret ""
     end
     ret PUBLIC_URL + "/project/" + PROJECT + "/sessions/" + session
 end
 
-pub func Send(sid: str, mid: str, model: str, u: aiengine.Usage, reply: str, failed: bool, session: str = "", source: str = "web", user: str = ""):
-    if not Enabled() or sid.len() == 0:
+pub func ModelAlias(model: str): str:
+    if model.Len() == 0:
+        ret ""
+    end
+    ret "model-" + hex_id(model, 10)
+end
+
+pub func RegisterPrompt(name: str, content: str):
+    if not Enabled() or name.Len() == 0 or content.Len() == 0:
         ret
     end
-    session_id := session.len() > 0 ? session : sid
+    mut labels := Vector {} as Vector<str>
+    labels.Push(quoted("production"))
+    mut m := Vector {} as Vector<str>
+    m.Push(json.Member("name", name))
+    m.Push(json.Member("type", "text"))
+    m.Push(json.Member("prompt", content))
+    m.Push(json.MemberRaw("labels", json.Array(labels)))
+    post("/api/public/v2/prompts", json.Object(m))
+end
+
+pub func Send(sid: str, mid: str, model: str, u: aiengine.Usage, reply: str, failed: bool, session: str = "", source: str = "web", user: str = "", client_os: str = "", client_browser: str = "", client_version: str = "", client_arch: str = "", attachments: str = "", key_name: str = "", key_id: str = "", project: str = "", prompt_name: str = ""):
+    if not Enabled() or sid.Len() == 0:
+        ret
+    end
+    session_id := session.Len() > 0 ? session : sid
     key := sid + ":" + mid
     trace_id := hex_id(key, 32)
     span_id := hex_id(key + ":span", 16)
     now_ns := time.NowMillis() * 1000000
     start_ns := u.ms > 0 ? now_ns - u.ms * 1000000 : now_ns
     mut attrs := Vector {} as Vector<str>
-    attrs.push(attr("langfuse.trace.name", "salam-chat-turn"))
-    attrs.push(attr("langfuse.session.id", session_id))
-    if user.len() > 0:
-        attrs.push(attr("langfuse.user.id", user))
+    attrs.Push(attr("langfuse.trace.name", "salam-chat-turn"))
+    attrs.Push(attr("langfuse.session.id", session_id))
+    if user.Len() > 0:
+        attrs.Push(attr("langfuse.user.id", user))
     end
-    attrs.push(attr("langfuse.observation.type", "generation"))
-    attrs.push(attr("langfuse.observation.model.name", model))
-    attrs.push(attr("langfuse.observation.output", reply))
-    attrs.push(attr("langfuse.observation.usage_details", usage_details(u)))
-    attrs.push(attr("langfuse.observation.cost_details", cost_details(u)))
-    attrs.push(attr("langfuse.observation.level", failed ? "ERROR" : "DEFAULT"))
-    attrs.push(attr("langfuse.trace.metadata.source", source))
-    attrs.push(tags_attr("langfuse.trace.tags", one_str(source)))
+    attrs.Push(attr("langfuse.observation.type", "generation"))
+    attrs.Push(attr("langfuse.observation.model.name", ModelAlias(model)))
+    attrs.Push(attr("langfuse.observation.output", reply))
+    attrs.Push(attr("langfuse.observation.usage_details", usage_details(u)))
+    attrs.Push(attr("langfuse.observation.cost_details", cost_details(u)))
+    attrs.Push(attr("langfuse.observation.level", failed ? "ERROR" : "DEFAULT"))
+    attrs.Push(attr("langfuse.trace.metadata.source", source))
+    if prompt_name.Len() > 0:
+        attrs.Push(attr("langfuse.observation.prompt.name", prompt_name))
+    end
+    if client_os.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.client_os", client_os))
+    end
+    if client_browser.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.client_browser", client_browser))
+    end
+    if client_version.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.client_version", client_version))
+    end
+    if client_arch.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.client_arch", client_arch))
+    end
+    if attachments.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.attachments", attachments))
+    end
+    if key_name.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.api_key_name", key_name))
+    end
+    if key_id.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.api_key_id", key_id))
+    end
+    if project.Len() > 0:
+        attrs.Push(attr("langfuse.trace.metadata.project", project))
+    end
+    attrs.Push(tags_attr("langfuse.trace.tags", one_str(source)))
     mut span := Vector {} as Vector<str>
-    span.push(json.Member("traceId", trace_id))
-    span.push(json.Member("spanId", span_id))
-    span.push(json.Member("name", "salam-chat-turn"))
-    span.push(json.MemberInt("kind", 1))
-    span.push(json.Member("startTimeUnixNano", conv.FormatInt(start_ns)))
-    span.push(json.Member("endTimeUnixNano", conv.FormatInt(now_ns)))
-    span.push(json.MemberRaw("attributes", json.Array(attrs)))
-    span.push(json.MemberRaw("status", json.Object(one_int("code", failed ? 2 : 1))))
+    span.Push(json.Member("traceId", trace_id))
+    span.Push(json.Member("spanId", span_id))
+    span.Push(json.Member("name", "salam-chat-turn"))
+    span.Push(json.MemberInt("kind", 1))
+    span.Push(json.Member("startTimeUnixNano", conv.FormatInt(start_ns)))
+    span.Push(json.Member("endTimeUnixNano", conv.FormatInt(now_ns)))
+    span.Push(json.MemberRaw("attributes", json.Array(attrs)))
+    span.Push(json.MemberRaw("status", json.Object(one_int("code", failed ? 2 : 1))))
     mut scope_span := Vector {} as Vector<str>
-    scope_span.push(json.MemberRaw("spans", json.Array(one_raw(json.Object(span)))))
+    scope_span.Push(json.MemberRaw("spans", json.Array(one_raw(json.Object(span)))))
     mut res_span := Vector {} as Vector<str>
-    res_span.push(json.MemberRaw("resource", json.Object(one("attributes", json.Array(one_raw(attr("service.name", "salam-ai")))))))
-    res_span.push(json.MemberRaw("scopeSpans", json.Array(one_raw(json.Object(scope_span)))))
+    res_span.Push(json.MemberRaw("resource", json.Object(one("attributes", json.Array(one_raw(attr("service.name", "salam-ai")))))))
+    res_span.Push(json.MemberRaw("scopeSpans", json.Array(one_raw(json.Object(scope_span)))))
     mut root := Vector {} as Vector<str>
-    root.push(json.MemberRaw("resourceSpans", json.Array(one_raw(json.Object(res_span)))))
+    root.Push(json.MemberRaw("resourceSpans", json.Array(one_raw(json.Object(res_span)))))
     post("/api/public/otel/v1/traces", json.Object(root))
 end

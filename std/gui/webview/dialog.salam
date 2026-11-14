@@ -1,0 +1,410 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "dialog"
+@fa "گفتگو"
+package webview
+
+import str
+import mem
+import os
+import filepath
+import os.desktop.paths as dpaths
+
+// Helpers for platform dialog APIs (best-effort, additive).
+// Native picker capabilities vary by backend; multi-select/filter/default-path
+// support is exposed here and may degrade gracefully to single selection.
+
+// Message kinds for dialogs (best-effort mapped per platform).
+pub const MESSAGE_INFO := 0
+pub const MESSAGE_WARNING := 1
+pub const MESSAGE_ERROR := 2
+pub const MESSAGE_QUESTION := 3
+
+@en "FileFilter"
+@fa "صافی پرونده"
+pub struct FileFilter:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "patterns"
+    @fa "الگوها"
+    pub patterns: str = ""
+end
+
+@en "OpenDialogOptions"
+@fa "گزینه های گفتگوی باز کردن"
+pub struct OpenDialogOptions:
+    @en "title"
+    @fa "عنوان"
+    pub title: str = "Open"
+    @en "default_path"
+    @fa "مسیر پیش فرض"
+    pub default_path: str = ""
+    @en "filter_name"
+    @fa "نام صافی"
+    pub filter_name: str = ""
+    @en "patterns"
+    @fa "الگوها"
+    pub patterns: str = ""
+    @en "filters"
+    @fa "صافی ها"
+    pub filters: Vector<FileFilter> = Vector {}
+    @en "multiple"
+    @fa "چندگانه"
+    pub multiple: bool = false
+    @en "directory"
+    @fa "پوشه"
+    pub directory: bool = false
+end
+
+@en "SaveDialogOptions"
+@fa "گزینه های گفتگوی ذخیره"
+pub struct SaveDialogOptions:
+    @en "title"
+    @fa "عنوان"
+    pub title: str = "Save"
+    @en "default_name"
+    @fa "نام پیش فرض"
+    pub default_name: str = ""
+    @en "default_path"
+    @fa "مسیر پیش فرض"
+    pub default_path: str = ""
+    @en "filter_name"
+    @fa "نام صافی"
+    pub filter_name: str = ""
+    @en "patterns"
+    @fa "الگوها"
+    pub patterns: str = ""
+    @en "filters"
+    @fa "صافی ها"
+    pub filters: Vector<FileFilter> = Vector {}
+end
+
+@en "MessageDialogOptions"
+@fa "گزینه های گفتگوی پیام"
+pub struct MessageDialogOptions:
+    @en "title"
+    @fa "عنوان"
+    pub title: str = ""
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+    @en "kind"
+    @fa "گونه"
+    pub kind: int = MESSAGE_INFO
+    @en "ok_label"
+    @fa "برچسب تایید"
+    pub ok_label: str = "OK"
+    @en "cancel_label"
+    @fa "برچسب انصراف"
+    pub cancel_label: str = "Cancel"
+end
+
+func _filter_from_simple(name: str, patterns: str): FileFilter:
+    if name.Len() == 0 and patterns.Len() == 0:
+        ret FileFilter {}
+    end
+    ret FileFilter { name = str.Clone(name), patterns = str.Clone(patterns) }
+end
+
+func _first_filter(options: OpenDialogOptions): FileFilter:
+    if options.filters.Len() > 0:
+        ret options.filters[0]
+    end
+    ret _filter_from_simple(options.filter_name, options.patterns)
+end
+
+func _first_save_filter(options: SaveDialogOptions): FileFilter:
+    if options.filters.Len() > 0:
+        ret options.filters[0]
+    end
+    ret _filter_from_simple(options.filter_name, options.patterns)
+end
+
+func _all_patterns(filters: Vector<FileFilter>, fallback: str = ""): str:
+    if filters.Len() == 0:
+        ret str.Clone(fallback)
+    end
+    mut parts := Vector {} as Vector<str>
+    each f in filters:
+        if f.patterns.Len() > 0:
+            parts.Push(f.patterns)
+        end
+    end
+    if parts.Len() == 0:
+        parts.Free()
+        ret str.Clone(fallback)
+    end
+    joined := str.Join(parts, ";")
+    parts.Free()
+    ret joined
+end
+
+@en "Filter"
+@fa "صافی"
+pub func Filter(name: str, patterns: str): FileFilter:
+    ret FileFilter { name = str.Clone(name), patterns = str.Clone(patterns) }
+end
+
+@en "FilterFromExtensions"
+@fa "صافی از پسوندها"
+pub func FilterFromExtensions(name: str, exts: Vector<str>): FileFilter:
+    pat := dpaths.BuildFilterPattern(exts)
+    ret FileFilter { name = str.Clone(name), patterns = pat }
+end
+
+@en "NormalizeDialogPath"
+@fa "نرمال‌سازی مسیر گفتگو"
+pub func NormalizeDialogPath(path: str): str:
+    ret dpaths.NormalizeForDialog(path)
+end
+
+@en "DefaultDialogDirectory"
+@fa "پوشه پیش‌فرض گفتگو"
+pub func DefaultDialogDirectory(preferred: str = ""): str:
+    ret dpaths.DefaultDialogPath(preferred)
+end
+
+func _effective_path(p: str): str:
+    if p.Len() == 0: ret DefaultDialogDirectory("") end
+    if os.Exists(p): ret NormalizeDialogPath(p) end
+    parent := filepath.Dir(p)
+    defer mem.Free(parent as void*)
+    if parent.Len() > 0 and os.IsDir(parent): ret NormalizeDialogPath(parent) end
+    ret DefaultDialogDirectory("")
+end
+
+@en "SuggestSavePath"
+@fa "پیشنهاد مسیر ذخیره"
+pub func SuggestSavePath(directory: str, filename: str): str:
+    dir := _effective_path(directory)
+    defer mem.Free(dir as void*)
+    name := filename.Len() > 0 ? str.Clone(filename) : str.Clone("untitled")
+    defer mem.Free(name as void*)
+    ret filepath.Join(dir, name)
+end
+
+@en "OpenFileDialog"
+@fa "گفتگوی باز کردن پرونده"
+pub func OpenFileDialog(options: OpenDialogOptions): str:
+    if options.directory:
+        base := _effective_path(options.default_path)
+        defer mem.Free(base as void*)
+        ret PickFolder(options.title.Len() > 0 ? options.title : "Select a folder")
+    end
+    f := _first_filter(options)
+    mut patterns := str.Clone(f.patterns)
+    if patterns.Len() == 0:
+        mem.Free(patterns as void*)
+        patterns = _all_patterns(options.filters, options.patterns)
+    end
+    base := _effective_path(options.default_path)
+    path := PickFile(options.title, f.name, patterns)
+    mem.Free(patterns as void*)
+    mem.Free(base as void*)
+    ret path
+end
+
+@en "OpenFilesDialog"
+@fa "گفتگوی باز کردن پرونده ها"
+pub func OpenFilesDialog(options: OpenDialogOptions): Vector<str>:
+    if options.directory:
+        mut dirs := Vector {} as Vector<str>
+        one_dir := SelectFolderDialog(options.title.Len() > 0 ? options.title : "Select a folder")
+        if one_dir.Len() > 0:
+            dirs.Push(one_dir)
+        else:
+            mem.Free(one_dir as void*)
+        end
+        ret dirs
+    end
+    if not options.multiple:
+        mut out := Vector {} as Vector<str>
+        one := OpenFileDialog(options)
+        if one.Len() > 0:
+            out.Push(one)
+        else:
+            mem.Free(one as void*)
+        end
+        ret out
+    end
+    f := _first_filter(options)
+    mut patterns := str.Clone(f.patterns)
+    if patterns.Len() == 0:
+        mem.Free(patterns as void*)
+        patterns = _all_patterns(options.filters, options.patterns)
+    end
+    files := PickFiles(options.title, f.name, patterns)
+    mem.Free(patterns as void*)
+    ret files
+end
+
+@en "SelectFolderDialog"
+@fa "گفتگوی انتخاب پوشه"
+pub func SelectFolderDialog(title: str = "Select a folder"): str:
+    ret PickFolder(title)
+end
+
+@en "SelectFoldersDialog"
+@fa "گفتگوی انتخاب پوشه ها"
+pub func SelectFoldersDialog(title: str = "Select folders"): Vector<str>:
+    ret PickDirectories(title)
+end
+
+@en "SelectDirectoryDialog"
+@fa "گفتگوی انتخاب شاخه"
+pub func SelectDirectoryDialog(title: str = "Select a folder"): str:
+    ret PickFolder(title)
+end
+
+@en "SelectDirectoriesDialog"
+@fa "گفتگوی انتخاب شاخه ها"
+pub func SelectDirectoriesDialog(title: str = "Select folders"): Vector<str>:
+    ret PickDirectories(title)
+end
+
+@en "SaveFileDialog"
+@fa "گفتگوی ذخیره پرونده"
+pub func SaveFileDialog(options: SaveDialogOptions): str:
+    f := _first_save_filter(options)
+    mut name := options.default_name
+    if name.Len() == 0:
+        name = options.default_path
+    end
+    mut suggested := str.Clone(name)
+    if options.default_path.Len() > 0 and options.default_name.Len() > 0:
+        mem.Free(suggested as void*)
+        suggested = SuggestSavePath(options.default_path, options.default_name)
+    end
+    mut patterns := str.Clone(f.patterns)
+    if patterns.Len() == 0:
+        mem.Free(patterns as void*)
+        patterns = _all_patterns(options.filters, options.patterns)
+    end
+    // Underlying save picker may ignore filters/default path on some platforms.
+    out := SaveFileAs(options.title, suggested, f.name, patterns)
+    mem.Free(suggested as void*)
+    mem.Free(patterns as void*)
+    ret out
+end
+
+@en "OpenDirectoryDialog"
+@fa "گفتگوی باز کردن پوشه"
+pub func OpenDirectoryDialog(title: str = "Select a folder", default_path: str = ""): str:
+    base := _effective_path(default_path)
+    defer mem.Free(base as void*)
+    ret SelectFolderDialog(title)
+end
+
+@en "OpenDirectoriesDialog"
+@fa "گفتگوی باز کردن پوشه ها"
+pub func OpenDirectoriesDialog(title: str = "Select folders", default_path: str = ""): Vector<str>:
+    base := _effective_path(default_path)
+    defer mem.Free(base as void*)
+    ret SelectFoldersDialog(title)
+end
+
+@en "PickFileWithOptions"
+@fa "انتخاب پرونده با گزینه ها"
+pub func PickFileWithOptions(title: str, default_path: str = "", filters: Vector<FileFilter> = Vector {}, multiple: bool = false): Vector<str>:
+    mut opts := OpenDialogOptions {
+        title = str.Clone(title), default_path = str.Clone(default_path), filters = filters,
+        multiple = multiple
+    }
+    ret OpenFilesDialog(opts)
+end
+
+@en "DialogsSupported"
+@fa "گفتگوها پشتیبانی می‌شوند"
+pub func DialogsSupported(): bool:
+    // Native dialog availability is backend/platform dependent.
+    ret true
+end
+
+@en "DialogCapabilitiesNote"
+@fa "یادداشت قابلیت‌های گفتگو"
+pub func DialogCapabilitiesNote(): str:
+    ret str.Clone("Dialogs are best-effort: filters, default paths, and multi-select may be partially supported by the active platform backend.")
+end
+
+@en "MessageDialog"
+@fa "گفتگوی پیام"
+pub func MessageDialog(options: MessageDialogOptions):
+    mut title := options.title
+    if title.Len() == 0:
+        if options.kind == MESSAGE_WARNING:
+            title = "Warning"
+        else options.kind == MESSAGE_ERROR:
+            title = "Error"
+        else options.kind == MESSAGE_QUESTION:
+            title = "Confirm"
+        else:
+            title = "Message"
+        end
+    end
+    if options.kind == MESSAGE_QUESTION:
+        _ok := Confirm(title, options.text)
+    else:
+        Message(title, options.text)
+    end
+end
+
+@en "Alert"
+@fa "هشدار"
+pub func Alert(title: str, text: str):
+    Message(title, text)
+end
+
+@en "Info"
+@fa "اطلاع"
+pub func Info(title: str, text: str):
+    Message(title.Len() > 0 ? title : "Info", text)
+end
+
+@en "Warning"
+@fa "هشدار پیام"
+pub func Warning(title: str, text: str):
+    Message(title.Len() > 0 ? title : "Warning", text)
+end
+
+@en "Error"
+@fa "خطا"
+pub func Error(title: str, text: str):
+    Message(title.Len() > 0 ? title : "Error", text)
+end
+
+@en "Ask"
+@fa "پرسش"
+pub func Ask(title: str, text: str): bool:
+    ret Confirm(title.Len() > 0 ? title : "Confirm", text)
+end
+
+@en "DialogBackendNote"
+@fa "یادداشت پشتیبان گفتگو"
+pub func DialogBackendNote(): str:
+    // Best-effort contract: filter/default-path/multi-select behavior depends on platform backend.
+    // Some backends may ignore patterns or default paths and may return single selections only.
+    // TODO(runtime): surface per-backend dialog capabilities (multi-select, directory multi, filters).
+    if SALAM_OS_WINDOWS:
+        ret str.Clone("Windows dialogs use native common dialogs when available; some options may be partially supported.")
+    end
+    if SALAM_OS_MAC:
+        ret str.Clone("macOS dialogs use NSOpenPanel/NSSavePanel where available; some options may be partially supported.")
+    end
+    if SALAM_OS_LINUX:
+        ret str.Clone("Linux dialogs are best-effort (GTK/portals); behavior can vary under X11 vs Wayland and by desktop environment.")
+    end
+    ret str.Clone("Dialog behavior is platform dependent and best-effort.")
+end

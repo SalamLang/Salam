@@ -150,28 +150,39 @@ The richer plugins also run, build, check and format through the compiler.
 
 ## 🛠️ The Compiler (`salam`)
 
-Salam is statically typed and compiled. The **general** language transpiles to [C](https://en.wikipedia.org/wiki/C_(programming_language)) and is
-built to a native executable; embedded **`layout:`** blocks compile to HTML/CSS/JS.
+Salam is statically typed and compiled. The **general** language compiles to a
+native executable through one of three backends, and embedded **`page:`**
+blocks compile to HTML/CSS/JS.
+
+| Backend  | Flag               | How it works                                                                                   |
+| -------- | ------------------ | ---------------------------------------------------------------------------------------------- |
+| LLVM     | `--backend=llvm`   | LLVM IR, optimized and linked in-process when the compiler has LLVM linked in                 |
+| C        | `--backend=c`      | C source handed to a C compiler (`tcc` by default, or any `--cc=PATH`)                         |
+| native   | `--backend=native` | the compiler writes the machine code and the object file itself (see below)                   |
+
+With no `--backend`, the compiler uses the native backend on a Windows on Arm
+host, LLVM when it has LLVM linked in (the release builds for Linux, macOS and
+Windows x86-64 do), and the C backend otherwise. `--cc=PATH` implies the C
+backend.
 
 ### Build
 
-Requires a C compiler. [**tcc**](https://bellard.org/tcc/) is the default backend (bundled math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/) also work.
-
-The compiler lives in [`compiler/`](compiler/) (a self-contained subproject:
-`src/`, `std/`, `tests/`, `tools/`, `Makefile`, `CMakeLists.txt`). Build it from
-there:
+The compiler is written in Salam and lives in [`compiler/`](compiler/), with
+the standard library in [`std/`](std/). Building it needs an existing `salam`
+(a release from the installer above is enough) as the seed:
 
 ```sh
-cd compiler
-sh tools/bash/build-compiler.sh   # quick build with tcc  ->  ./salam
-# or, with CMake (out-of-tree build, then run the test suite via ctest):
-cmake -B build && cmake --build build && ctest --test-dir build
-# or just: make            # (release build via the Makefile -> ../salam at the repo root)
+sh tools/bash/build-selfhost.sh                    # seed: the salam on PATH  ->  ./salam
+sh tools/bash/build-selfhost.sh --seed=/path/to/salam --output=/tmp/salam
+sh compiler/tools/bash/bootstrap.sh "$(command -v salam)"   # three stages and a fixpoint check, in build/selfhost
 ```
 
-There is no separate runtime library: `salam build` emits the small C runtime
-(print/strcat/pow/alloc and optional bounds checks) inline into the generated C, so
-compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
+`build-selfhost.sh` writes `salam` into the current directory and points the
+build at this checkout's `std/`. The result has no LLVM linked in, so it
+defaults to the C backend. To link LLVM in, build `libsalam_llvm.a` with
+`std/llvm/native/build.sh` and pass its directory as `--llvm=DIR`;
+`.github/workflows/compiler-release.yml` has the full release recipe,
+sysroots included.
 
 ### Usage
 
@@ -179,35 +190,39 @@ compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 # general language -> native executable
 salam build app.salam                          # -> app (app.exe on Windows)
 salam build app.salam --output=myapp           # then ./myapp
-salam cli build app.salam --keep-c             # optional 'cli' prefix; keep generated C
-salam obj app.salam                            # compile to .o only
+salam run app.salam                            # build and run, keep nothing
+salam exec app.salam                           # run with the interpreter, no C toolchain
+salam build app.salam --backend=c --emit-c     # write the generated C and stop
+salam obj app.salam                            # compile to an object file only
 
-# layout DSL -> website
-salam layout build page.salam                  # page.html + page.css + page.js
-salam layout build page.salam --inline         # one self-contained page.html
-salam layout build a.salam b.salam             # per-page html + merged style.css/script.js
+# page DSL -> website
+salam page build page.salam                    # page.html (+ .css/.js when needed)
+salam page build page.salam --inline           # one self-contained page.html
+salam page build a.salam b.salam               # per-page html + shared style/script
 
 # type-check without building (exit 1 on errors; --error-format=json for tools)
 salam check app.salam
 
-# inspect any stage (general or layout)
+# inspect any stage (general or page)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol
 salam inspect app.salam --log-level=trace
-salam build app.salam -DDEBUG                  # preprocessor define
+salam build app.salam -DDEBUG                  # conditional-compilation flag
 
-# format source in place (auto-detects nothing - pass --lang=fa for Persian files)
+# format source in place
 salam format app.salam                         # reformat one file
 salam format                                   # reformat every .salam under the cwd, recursively
-salam format compiler/src/ tests/              # reformat given files and/or directories
+salam format compiler/ tests/                  # reformat given files and/or directories
 salam format --check                           # report files that need formatting (exit 1 if any)
 salam format app.salam --tabs                  # indent with tabs (convert spaces to tabs)
-salam format compiler/src/ --indent=2          # indent with 2 spaces per level
+salam format compiler/ --indent=2              # indent with 2 spaces per level
 salam format page.salam --lang=fa              # Persian source
 
 # REPLs
 salam cli       # general
-salam layout    # layout
+salam page      # page DSL
 ```
+
+`salam help` lists every command and option.
 
 Hello, World:
 
@@ -219,18 +234,20 @@ end
 
 ### Cross-compilation
 
-Salam can produce executables and object files for other operating systems and
-architectures using the **LLVM backend**. Pass a full LLVM target triple with
-`--target=<triple>` to `build` or `obj`; when it is present the compiler routes
-through LLVM (`clang`/`llc`) instead of the default C backend, so `--cc` and
-`--keep-c` no longer apply. The output name follows the target's conventions
-(`.exe` for Windows, `.obj` for MSVC objects, none for ELF), and `--output`
-overrides it as usual - except that a Windows target still gets `.exe`
-appended to a name that lacks it, so the binary stays launchable there.
+Pass a full target triple with `--target=<triple>` to `build` or `obj`.
+A `--target` build goes through the LLVM backend, or through the native
+backend with `--backend=native`. The output name follows the target's
+conventions (`.exe` for Windows, `.obj` for MSVC objects, none for ELF), and
+`--output` overrides it as usual, except that a Windows target still gets
+`.exe` appended to a name that lacks it, so the binary stays launchable there.
 
 ```sh
 # Windows executable from Linux (MinGW target)
 salam build main.salam --target=x86_64-w64-windows-gnu --output=app.exe
+
+# static Linux executables for other architectures
+salam build main.salam --target=aarch64-linux-musl
+salam build main.salam --target=arm-linux-musleabihf
 
 # WebAssembly (WASI)
 salam build main.salam --target=wasm32-wasi --output=app.wasm
@@ -241,9 +258,39 @@ salam obj main.salam --target=x86_64-pc-windows-msvc      # -> main.obj
 
 The target is fully wired through the pipeline: the OS/arch predefined macros
 (`SALAM_OS_WINDOWS`, `SALAM_ARCH_X64`, …) describe the **target**, so
-`@if SALAM_OS_WINDOWS` selects the right branch, and `link dynamic|static|
+`if SALAM_OS_WINDOWS:` selects the right branch, and `link dynamic|static|
 framework "..."` directives are passed to the cross-linker (e.g.
 `link dynamic "user32"` → `-luser32`).
+
+**Prerequisites.** The Linux x86-64 release compiler has LLVM, LLD and
+sysroots linked in (musl for x86-64, aarch64, i686 and armhf, MinGW-w64 for
+x86-64 and i686, and wasm32-wasi), so cross-compiling to those targets needs
+nothing else installed; the Windows x86-64 one also embeds LLVM, LLD and
+MinGW-w64 and musl sysroots. A compiler without LLVM drives
+the system toolchain instead: `clang`/`llc` 22, `lld`, and a **sysroot** (the
+target's CRT, system import libraries and headers):
+
+```sh
+sudo apt install clang lld llvm        # toolchain (or an official LLVM release)
+```
+
+Sysroots are found in `$SALAM_SYSROOTS`, then in a `sysroots/` directory next
+to the compiler or its standard library (or `../share/salam/sysroots`,
+`../lib/salam/sysroots`). They are named by toolchain, not by the raw triple:
+`<arch>-w64-mingw32/` for `*-windows-gnu` (e.g. `x86_64-w64-mingw32/`) and
+`<arch>-linux-musl/` for `*-linux-musl` (e.g. `x86_64-linux-musl/`).
+`tools/bash/stage-sysroots.sh --out=DIR` stages them from installed MinGW
+and musl packages.
+
+> **MSVC / macOS targets.** Automatic sysroot discovery handles MinGW
+> (`*-windows-gnu`) and musl (`*-linux-musl`). Microsoft's and Apple's SDKs
+> are not redistributable, so for `*-windows-msvc` you supply a sysroot
+> yourself (e.g. [`xwin`](https://github.com/Jake-Shadle/xwin)) and drive
+> `clang` through `salam llvm`. On Linux, prefer the `-windows-gnu` (MinGW)
+> triple. For macOS, `--backend=native` writes Mach-O for
+> `x86_64-apple-macos` and `arm64-apple-macos` and links it with the
+> built-in linker, with or without an SDK; see
+> [docs/NATIVE_LINKER.md](docs/NATIVE_LINKER.md).
 
 ### Bare-metal kernels
 
@@ -262,128 +309,65 @@ console, and `std/baremetal` adds port I/O, `Halt`, `Panic`, direct VGA writes
 and a heap. `tests/kernel/` is a complete bootable Multiboot example; see
 [docs/FREESTANDING.md](docs/FREESTANDING.md).
 
-**Prerequisites.** Cross-compilation drives the LLVM toolchain, so you need a
-recent `clang`/`llc` (v22 is what the toolchain invokes) plus, for Windows
-targets, the LLVM linker `lld` and a **sysroot** (the target's CRT, system
-import libraries, and headers):
-
-```sh
-sudo apt install clang lld llvm        # toolchain (or an official LLVM release)
-```
-
-**Bundled sysroot (zero-setup for your users).** Build the compiler with
-`-DSALAM_BUNDLE_MINGW=ON` and a MinGW-w64 sysroot is staged into
-`<prefix>/share/salam/sysroots/<arch>-w64-mingw32/`; `salam build --target=…-windows-gnu`
-then discovers and passes it automatically, so end users need nothing extra:
-
-```sh
-# copy an existing sysroot (e.g. from the mingw-w64 package)
-cmake -B build -DSALAM_BUNDLE_MINGW=ON \
-      -DSALAM_MINGW_SYSROOT=/usr/x86_64-w64-mingw32
-# or download one (pin the hash for reproducibility)
-cmake -B build -DSALAM_BUNDLE_MINGW=ON \
-      -DSALAM_MINGW_URL=<llvm-mingw archive> -DSALAM_MINGW_SHA256=<hash>
-cmake --build build && cmake --install build
-```
-
-Point `$SALAM_SYSROOTS` at a directory holding per-target sysroot subdirectories
-to override or add targets without rebuilding. Automatic discovery names them by
-toolchain, not by the raw triple: `<arch>-w64-mingw32/` for `*-windows-gnu`
-(e.g. `x86_64-w64-mingw32/`) and `<arch>-linux-musl/` for `*-linux-musl`
-(e.g. `x86_64-linux-musl/`).
-
-> **MSVC / macOS targets.** Automatic sysroot discovery currently handles only
-> MinGW (`*-windows-gnu`) and musl (`*-linux-musl`). Microsoft's and Apple's SDKs
-> are not redistributable and aren't auto-discovered, so for `*-windows-msvc` and
-> `*-apple-darwin` you must supply a toolchain/sysroot yourself (e.g.
-> [`xwin`](https://github.com/Jake-Shadle/xwin) for MSVC) and drive `clang`
-> manually via `salam llvm` until first-class selection for those targets lands.
-> On Linux, prefer the `-windows-gnu` (MinGW) triple.
->
-> The LLVM backend supports a growing subset of the language; cross-compilation
-> works for self-contained programs and their imports within that subset.
-> Host-native builds without `--target` continue to use the fast C backend
-> (tcc/gcc/clang) and the full standard library.
-
 ### Native code generator
 
-`--backend=native` compiles straight to x86-64 machine code and writes the
-object file itself, with no assembler, C compiler or LLVM library involved. It
-targets Linux (ELF) and Windows (COFF, with unwind tables), and only needs a
-linker at the end: lld in-process when the compiler embeds LLVM, otherwise the
-system `cc` or `x86_64-w64-mingw32-gcc`.
+`--backend=native` compiles straight to machine code and writes the object
+file itself (ELF, COFF or Mach-O), with no assembler, C compiler or LLVM
+library involved. It targets x86-64, i686, AArch64, 32-bit ARM and RISC-V 64
+on Linux, x86-64, i686 and AArch64 on Windows, and x86-64 and arm64 on
+macOS. By default (`--linker=auto`) the compiler's own linker links the
+result whenever it can find every input; `--linker=system` hands the link to
+`cc` or the MinGW `gcc` instead.
 
 ```sh
 salam build main.salam --backend=native
 salam build main.salam --backend=native --target=x86_64-w64-windows-gnu
+salam build main.salam --backend=native --target=aarch64-linux-musl
 salam build main.salam --backend=native --emit-asm    # also writes main.s
 ```
 
 It shares llvmgen's lowering with the LLVM backend, so it covers the whole
 language and standard library, and it has its own optimizer (inlining, SROA,
 mem2reg, constant folding, jump threading, linear-scan register allocation).
+It is the default backend on Windows on Arm, where neither LLVM nor tcc ship.
 See [docs/NATIVE_BACKEND.md](docs/NATIVE_BACKEND.md) for how it works and how
-to test it.
+to test it, and [docs/NATIVE_LINKER.md](docs/NATIVE_LINKER.md) for the linker.
 
 ## 🐳 [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 
-The compiler ships a multi-stage [`Dockerfile`](compiler/docker/Dockerfile) and a
-[`docker-compose.yml`](compiler/docker/docker-compose.yml) built on [**Alpine Linux**](https://www.alpinelinux.org/)
-([musl](https://musl.libc.org/), the lightest practical base). The build context is the compiler root
-(`compiler/`). The image includes everything the compiler needs: a C compiler
-(`gcc` + `tcc`), the [**LLVM 22**](https://llvm.org/) backend (`clang-22`, `llc-22`, `opt-22`,
-`lli-22`), and [`make`](https://www.gnu.org/software/make/), no [CMake](https://cmake.org/) required.
-
-The compose file lives in `compiler/docker/`; pass it with `-f` so you can run
-from the repository root. There are two modes:
-
-### Development (live reload)
-
-The compiler tree is bind-mounted and `./salam` is **recompiled automatically on
-every change** to `src/` (powered by [`entr`](https://eradman.com/entrproject/), see
-[`tools/bash/docker-dev.sh`](tools/bash/docker-dev.sh)):
+[`docker/`](docker/) builds the runtime image published on Docker Hub as
+`basemax/salam`, for `linux/amd64`, `linux/arm64`, `linux/arm/v7` and
+`linux/386`. It is Debian `trixie-slim` with a **released** compiler bundle
+(`salam` plus `std/`, installed by `docker/install.sh` under `/opt/salam`)
+and `tcc` with the libc headers for the C backend. `salam` is the entrypoint
+and `/work` the working directory:
 
 ```sh
-docker compose -f compiler/docker/docker-compose.yml up dev   # build, then watch & rebuild
+docker run --rm -v "$PWD":/work basemax/salam build app.salam --output=app
+docker run --rm -v "$PWD":/work basemax/salam run app.salam
 ```
 
-Edit any file under `compiler/src/` on your host and the container rebuilds
-`./salam` incrementally. To get a shell inside the same environment:
+To build the image yourself:
 
 ```sh
-docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
+docker build -t salam docker                                   # newest release
+docker build -t salam --build-arg SALAM_VERSION=0.6.3 docker   # a chosen release
 ```
 
-### Production (copy & build)
-
-The production stage runs `COPY .` then `make && make install`, baking a fully
-built, self-contained compiler into the image. `salam` is the entrypoint, and the
-repository root is mounted at `/work` so shared `tests/` are reachable:
+[`docker/docker-compose.yml`](docker/docker-compose.yml) builds the same
+image and mounts the repository root at `/work`, so the shared `tests/` are
+reachable:
 
 ```sh
-docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build tests/en/basics/hello.salam --output=hello
-docker compose -f compiler/docker/docker-compose.yml run --rm prod layout build page.salam --inline
-docker compose -f compiler/docker/docker-compose.yml run --rm prod --help
+docker compose -f docker/docker-compose.yml run --rm salam build tests/en/basics/hello.salam --output=hello
+docker compose -f docker/docker-compose.yml run --rm salam page build page.salam --inline
 ```
 
-### Plain Docker (without Compose)
-
-Build with `compiler/` as the context (so the Dockerfile's `COPY .` picks up the
-compiler tree):
-
-```sh
-docker build --target prod -f compiler/docker/Dockerfile -t salam:prod compiler   # production image
-docker run --rm -v "$PWD":/work salam:prod build app.salam --output=app
-
-docker build --target dev  -f compiler/docker/Dockerfile -t salam:dev  compiler   # dev image
-docker run --rm -it -v "$PWD/compiler":/app salam:dev                             # live-rebuild loop
-```
-
-> The LLVM and Alpine versions are configurable build args
-> (`--build-arg LLVM_VERSION=22`, `--build-arg ALPINE_VERSION=edge`). LLVM 22
-> currently lives in Alpine's `edge` repositories, which is why `edge` is the
-> default base.
+The image runs a released compiler, not the one in your checkout. To rebuild
+`./salam` from your checkout on every change, run
+[`tools/bash/docker-dev.sh`](tools/bash/docker-dev.sh) on the host: it needs
+[`entr`](https://eradman.com/entrproject/) and a seed `salam`, watches
+`compiler/` and `std/`, and reruns `tools/bash/build-selfhost.sh`.
 
 ### Books (XeLaTeX)
 
@@ -669,36 +653,32 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 
 | Term | Definition |
 |---|---|
-| **[Alpine Linux](https://alpinelinux.org/)** | Lightweight Linux distribution built on musl libc. Used as the base image for Salam's Docker containers. |
 | **[AST (Abstract Syntax Tree)](https://en.wikipedia.org/wiki/Abstract_syntax_tree)** | Tree representation of parsed source code. Each node represents a construct (expression, statement, declaration). The Salam compiler builds an AST before semantic analysis and code generation. |
 | **[Biome](https://biomejs.dev/)** | Fast JavaScript/TypeScript linter and formatter. Run as a prek hook (`biome-check`). |
 | **[Bun](https://bun.sh/)** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers. |
 | **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface, the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern` declarations rely on the C ABI. |
 | **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
-| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
+| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the C compilers the C backend can use (`--cc=clang`), and the tool a compiler without LLVM linked in uses for `--target` builds. |
 | **[Cloudflare Workers](https://workers.cloudflare.com/)** | Serverless compute platform that runs JavaScript/TypeScript at the edge. The `runner/` workspace deploys to Cloudflare Workers via Wrangler. |
-| **[CMake](https://cmake.org/)** | Cross-platform build tool generator. The Salam compiler can be built with `cmake -B build && cmake --build build`. |
-| **[Codegen](https://en.wikipedia.org/wiki/Code_generation_(compiler))** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, or a WebAssembly module). |
+| **[Codegen](https://en.wikipedia.org/wiki/Code_generation_(compiler))** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, machine code, or JavaScript). |
 | **[Codespell](https://github.com/codespell-project/codespell)** | Spell checker for source code and documentation. Run as a prek hook to catch typos. |
-| **[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html)** | CMake's built-in test runner. Invoked with `ctest --test-dir build` after a CMake build of the compiler. |
 | **defer** | Salam keyword that schedules a statement or block to run at the end of the enclosing scope, regardless of how the scope is exited. |
-| **[Docker](https://www.docker.com/)** | Container platform used to build and run the Salam compiler in an isolated, reproducible environment. |
-| **[Docker Compose](https://docs.docker.com/compose/)** | Tool for defining and running multi-container Docker applications. Salam provides a `docker-compose.yml` in `compiler/docker/` with `dev` and `prod` service targets. |
+| **[Docker](https://www.docker.com/)** | Container platform. The `basemax/salam` image runs a released Salam compiler in an isolated, reproducible environment. |
+| **[Docker Compose](https://docs.docker.com/compose/)** | Tool for defining and running multi-container Docker applications. Salam provides a `docker-compose.yml` in `docker/` with one `salam` service that mounts the repository at `/work`. |
 | **[doctoc](https://github.com/thlorenz/doctoc)** | Tool that auto-generates a Table of Contents inside Markdown files. The TOC blocks in this readme and the Contributing Guide are maintained by doctoc. |
 | **[DSL (Domain-Specific Language)](https://en.wikipedia.org/wiki/Domain-specific_language)** | A language tailored to a specific problem domain. Salam includes a built-in layout DSL that compiles `.salam` files to HTML, CSS, and JavaScript. |
 | **[Emscripten](https://emscripten.org/)** | LLVM-based toolchain that compiles C/C++ to WebAssembly. Used to build `salam-wa.wasm` and `salam-wa.js` for the web playground. |
-| **[entr](https://eradman.com/entrproject/)** | Utility that re-runs a command whenever watched files change. Used in Salam's Docker dev mode to rebuild the compiler on source edits. |
+| **[entr](https://eradman.com/entrproject/)** | Utility that re-runs a command whenever watched files change. Used by `tools/bash/docker-dev.sh` to rebuild the compiler on source edits. |
 | **[FFI (Foreign Function Interface)](https://en.wikipedia.org/wiki/Foreign_function_interface)** | Mechanism for calling functions written in another language (typically C). Salam supports FFI via `extern` declarations. |
 | **[Fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo)** | A personal copy of a repository on GitHub. Contributors fork `SalamLang/Salam`, work in their fork, then open a pull request back to the original. |
-| **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. A C compiler supported by the Salam build tool. |
+| **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. One of the C compilers the C backend can use (`--cc=gcc`). |
 | **[Gitleaks](https://github.com/gitleaks/gitleaks)** | Secret-detection tool run as a prek audit hook to prevent accidental commits of API keys or credentials. |
 | **[GitHub Actions](https://docs.github.com/en/actions)** | Salam's CI/CD platform. Workflows are defined in `.github/workflows/`. |
-| **Layout DSL** | Salam's built-in sublanguage for describing UIs. `layout:` blocks, or `.salam` files processed with `salam layout build`, compile to HTML, CSS, and JavaScript. |
+| **Layout DSL** | Salam's built-in sublanguage for describing UIs. `page:` blocks, built with `salam page build`, compile to HTML, CSS, and JavaScript, or run in a native window with `--ui=native`. |
 | **[Lexer](https://en.wikipedia.org/wiki/Lexical_analysis)** | First stage of the compiler pipeline: reads source text and produces a stream of tokens. |
-| **[LLVM](https://llvm.org/)** | Low Level Virtual Machine, a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image). |
-| **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the repository root. |
+| **[LLVM](https://llvm.org/)** | Low Level Virtual Machine, a compiler infrastructure project. Salam's default backend when the compiler has LLVM 22 linked in, as the Linux, macOS and Windows x86-64 releases do. |
 | **[Markdownlint](https://github.com/igorshubovych/markdownlint-cli)** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs. |
-| **[musl](https://musl.libc.org/)** | A C standard library used by Alpine Linux. Salam's Docker images are based on Alpine + musl for a minimal footprint. |
+| **[musl](https://musl.libc.org/)** | A small C standard library. Salam embeds musl sysroots for static Linux cross builds (`--target=*-linux-musl`), and the `linux-x86_64-musl` release is a fully static compiler built against it. |
 | **[MyST (Markedly Structured Text)](https://mystmd.org/)** | Documentation toolchain that extends Markdown with roles, directives, and cross-references for technical writing. Configured via `myst.yml`; driven by the `mystmd` package (scripts `docs:myst` and `build:myst`). |
 | **[npm](https://www.npmjs.com/)** | Node Package Manager. Used alongside Bun for package management in the Salam monorepo. |
 | **[Parser](https://en.wikipedia.org/wiki/Parsing)** | Second stage of the compiler pipeline: consumes the token stream from the lexer and builds an AST. |
@@ -708,14 +688,14 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
 | **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `editor/` workspace. |
 | **[Read the Docs](https://readthedocs.org/)** | Free documentation hosting platform. Salam's MyST docs are automatically built and published there via `.readthedocs.yaml`. |
-| **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
+| **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam page` starts a page REPL. |
 | **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |
 | **[Semantic Analyzer](https://en.wikipedia.org/wiki/Semantic_analysis_(compilers))** | Third stage of the compiler pipeline: resolves names, checks types, and validates the AST before code generation. |
 | **[SemVer (Semantic Versioning)](https://semver.org/)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases. |
 | **[shfmt](https://github.com/mvdan/sh)** | Shell script formatter. Run as a prek manual-stage hook to normalise indentation and style in `.sh` files. |
 | **[Super-Linter](https://github.com/super-linter/super-linter)** | GitHub Actions workflow that runs a broad set of language-specific linters across the repository in CI. |
 | **[Tailwind CSS](https://tailwindcss.com/)** | Utility-first CSS framework. Used in the Salam monorepo workspaces; integrated via the `@tailwindcss/vite` plugin. |
-| **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script. |
+| **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The C backend's default C compiler, bundled with the Windows x86-64 and i686 releases. |
 | **[Tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing))** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs. |
 | **[TUI (Terminal User Interface)](https://en.wikipedia.org/wiki/Text-based_user_interface)** | Interactive, keyboard-driven interface rendered in the terminal. Bun's `bun update -i` flag opens a TUI for selecting which packages to upgrade. |
 | **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` workspace. |

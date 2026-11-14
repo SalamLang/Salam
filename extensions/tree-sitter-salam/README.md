@@ -55,7 +55,7 @@ cd extensions/tree-sitter-salam && tree-sitter generate && tree-sitter build -o 
 ```
 
 ```lua
-vim.treesitter.language.add('salam', { path = '/path/to/salam.so' })
+vim.treesitter.language.Add('salam', { path = '/path/to/salam.so' })
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'salam',
   callback = function(args) vim.treesitter.start(args.buf, 'salam') end,

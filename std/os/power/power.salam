@@ -1,0 +1,749 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "power"
+@fa "توان"
+package power
+
+import io
+import os
+import os.shell
+import str
+import conv
+
+/*
+ * System power/session info and actions (best-effort).
+ *
+ * Actions (shutdown/restart/logout/sleep/hibernate) are only executed when
+ * explicitly requested by calling the corresponding function.
+ * Availability depends on platform, permissions, and installed system tools.
+ */
+
+@en "PowerStatus"
+@fa "وضعیت توان"
+pub struct PowerStatus:
+    @en "on_ac"
+    @fa "روی برق"
+    pub on_ac: bool = false
+    @en "has_battery"
+    @fa "باتری دارد"
+    pub has_battery: bool = false
+    @en "charging"
+    @fa "در حال شارژ"
+    pub charging: bool = false
+    @en "low_power"
+    @fa "توان کم"
+    pub low_power: bool = false
+    @en "percent"
+    @fa "درصد"
+    pub percent: int = -1
+    @en "source"
+    @fa "منبع"
+    pub source: str = "unknown"
+    @en "status_text"
+    @fa "متن وضعیت"
+    pub status_text: str = ""
+end
+
+mut _power_last_error := ""
+mut _sleep_inhibited := false
+mut _sleep_inhibit_refs := 0
+
+func _set_error(msg: str):
+    _power_last_error = msg
+end
+
+func _ok(): bool:
+    _power_last_error = ""
+    ret true
+end
+
+func _run_sh(script: str): shell.CmdResult:
+    mut args := Vector {} as Vector<str>
+    defer args.Free()
+    args.Push("-c")
+    args.Push(script)
+    ret shell.Run("/bin/sh", args)
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _power_last_error
+end
+
+@en "IsSleepPrevented"
+@fa "جلوگیری از خواب فعال است"
+pub func IsSleepPrevented(): bool:
+    ret _sleep_inhibited
+end
+
+@en "BeginPreventSleep"
+@fa "شروع جلوگیری از خواب"
+pub func BeginPreventSleep(): bool:
+    _sleep_inhibit_refs = _sleep_inhibit_refs + 1
+    if _sleep_inhibited:
+        ret _ok()
+    end
+    ok := PreventSleep()
+    if not ok:
+        _sleep_inhibit_refs = _sleep_inhibit_refs - 1
+        if _sleep_inhibit_refs < 0: _sleep_inhibit_refs = 0 end
+    end
+    ret ok
+end
+
+@en "EndPreventSleep"
+@fa "پایان جلوگیری از خواب"
+pub func EndPreventSleep(): bool:
+    if _sleep_inhibit_refs > 0:
+        _sleep_inhibit_refs = _sleep_inhibit_refs - 1
+    end
+    if _sleep_inhibit_refs > 0:
+        ret _ok()
+    end
+    ret AllowSleep()
+end
+
+@en "RefreshInhibitState"
+@fa "بازخوانی وضعیت جلوگیری"
+pub func RefreshInhibitState(): bool:
+    if _sleep_inhibit_refs <= 0 and _sleep_inhibited:
+        ret AllowSleep()
+    end
+    ret _ok()
+end
+
+@en "IsOnACPower"
+@fa "روی برق شهر است"
+pub func IsOnACPower(): bool:
+    st := Status()
+    ret st.on_ac
+end
+
+@en "IsOnBattery"
+@fa "روی باتری است"
+pub func IsOnBattery(): bool:
+    st := Status()
+    ret st.has_battery and not st.on_ac
+end
+
+@en "IsLowPower"
+@fa "توان کم است"
+pub func IsLowPower(): bool:
+    st := Status()
+    if st.low_power:
+        ret true
+    end
+    ret st.percent >= 0 and st.percent <= 20 and not st.charging
+end
+
+@en "IsCharging"
+@fa "در حال شارژ است"
+pub func IsCharging(): bool:
+    st := Status()
+    ret st.charging
+end
+
+@en "StatusSummary"
+@fa "خلاصه وضعیت"
+pub func StatusSummary(): str:
+    st := Status()
+    mut s := "ac=" + (st.on_ac ? "yes" : "no")
+    s = s + ", battery=" + (st.has_battery ? "yes" : "no")
+    s = s + ", charging=" + (st.charging ? "yes" : "no")
+    s = s + ", low=" + (st.low_power ? "yes" : "no")
+    s = s + ", percent=" + str.FromInt(st.percent as i64)
+    if st.status_text.Len() > 0:
+        s = s + ", status=" + st.status_text
+    end
+    s = s + ", source=" + st.source
+    ret s
+end
+
+@en "BatteryPercent"
+@fa "درصد باتری"
+pub func BatteryPercent(): int:
+    st := Status()
+    ret st.percent
+end
+
+@en "CanShutdown"
+@fa "خاموش کردن ممکن است"
+pub func CanShutdown(): bool:
+    ret IsAvailable()
+end
+
+@en "CanRestart"
+@fa "راه‌اندازی دوباره ممکن است"
+pub func CanRestart(): bool:
+    ret IsAvailable()
+end
+
+@en "CanLogout"
+@fa "خروج ممکن است"
+pub func CanLogout(): bool:
+    ret IsAvailable()
+end
+
+@en "CanSleep"
+@fa "خواب ممکن است"
+pub func CanSleep(): bool:
+    ret IsAvailable()
+end
+
+@en "CanHibernate"
+@fa "خواب زمستانی ممکن است"
+pub func CanHibernate(): bool:
+    ret IsAvailable()
+end
+
+@en "ShutdownIfConfirmed"
+@fa "خاموش کردن در صورت تایید"
+pub func ShutdownIfConfirmed(confirm: bool): bool:
+    if not confirm:
+        _set_error("Shutdown requires explicit confirmation")
+        ret false
+    end
+    ret Shutdown()
+end
+
+@en "RestartIfConfirmed"
+@fa "راه‌اندازی دوباره در صورت تایید"
+pub func RestartIfConfirmed(confirm: bool): bool:
+    if not confirm:
+        _set_error("Restart requires explicit confirmation")
+        ret false
+    end
+    ret Restart()
+end
+
+@en "LogoutIfConfirmed"
+@fa "خروج در صورت تایید"
+pub func LogoutIfConfirmed(confirm: bool): bool:
+    if not confirm:
+        _set_error("Logout requires explicit confirmation")
+        ret false
+    end
+    ret Logout()
+end
+
+@en "SleepIfConfirmed"
+@fa "خواب در صورت تایید"
+pub func SleepIfConfirmed(confirm: bool): bool:
+    if not confirm:
+        _set_error("Sleep requires explicit confirmation")
+        ret false
+    end
+    ret Sleep()
+end
+
+@en "HibernateIfConfirmed"
+@fa "خواب زمستانی در صورت تایید"
+pub func HibernateIfConfirmed(confirm: bool): bool:
+    if not confirm:
+        _set_error("Hibernate requires explicit confirmation")
+        ret false
+    end
+    ret Hibernate()
+end
+
+@en "IsAvailable"
+@fa "در دسترس است"
+pub func IsAvailable(): bool:
+    ret true
+end
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+    link dynamic "powrprof"
+
+    extern:
+        func SetThreadExecutionState(flags: u32): u32
+        func ExitWindowsEx(flags: u32, reason: u32): int
+    end
+
+    const _ES_CONTINUOUS := 0x80000000 as u32
+    const _ES_SYSTEM_REQUIRED := 0x00000001 as u32
+    const _ES_AWAYMODE_REQUIRED := 0x00000040 as u32
+
+    @en "PreventSleep"
+    @fa "جلوگیری از خواب"
+    pub func PreventSleep(): bool:
+        flags := _ES_CONTINUOUS | _ES_SYSTEM_REQUIRED | _ES_AWAYMODE_REQUIRED
+        if SetThreadExecutionState(flags) == (0 as u32):
+            _set_error("SetThreadExecutionState failed")
+            ret false
+        end
+        _sleep_inhibited = true
+        ret _ok()
+    end
+
+    @en "AllowSleep"
+    @fa "اجازه خواب"
+    pub func AllowSleep(): bool:
+        if SetThreadExecutionState(_ES_CONTINUOUS) == (0 as u32):
+            _set_error("SetThreadExecutionState failed")
+            ret false
+        end
+        _sleep_inhibited = false
+        ret _ok()
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown(): bool:
+        r := shell.Exec("shutdown /s /t 0")
+        if r.code != 0:
+            _set_error("shutdown command failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Restart"
+    @fa "راه‌اندازی دوباره"
+    pub func Restart(): bool:
+        r := shell.Exec("shutdown /r /t 0")
+        if r.code != 0:
+            _set_error("restart command failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Logout"
+    @fa "خروج از نشست"
+    pub func Logout(): bool:
+        r := shell.Exec("shutdown /l")
+        if r.code != 0:
+            _set_error("logout command failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Sleep"
+    @fa "خواب"
+    pub func Sleep(): bool:
+        r := shell.Exec("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+        if r.code != 0:
+            _set_error("sleep command failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Hibernate"
+    @fa "خواب زمستانی"
+    pub func Hibernate(): bool:
+        r := shell.Exec("shutdown /h")
+        if r.code != 0:
+            _set_error("hibernate command failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Status"
+    @fa "وضعیت"
+    pub func Status(): PowerStatus:
+        mut st := PowerStatus { source = "windows" }
+        out := os.Output("wmic path Win32_Battery get BatteryStatus,EstimatedChargeRemaining /format:list 2>nul")
+        if str.Contains(out, "EstimatedChargeRemaining"):
+            st.has_battery = true
+            lines := out.Split("\n")
+            defer lines.Free()
+            mut i := 0
+            n := lines.Len()
+            until i < n:
+                line := lines.Get(i)
+                if str.Contains(line, "EstimatedChargeRemaining="):
+                    val := line.Substr(str.IndexOf(line, "=") + 1, line.Len())
+                    st.percent = conv.AtoiOr(val, -1)
+                end
+                if str.Contains(line, "BatteryStatus="):
+                    val := line.Substr(str.IndexOf(line, "=") + 1, line.Len())
+                    code := conv.AtoiOr(val, 0)
+                    st.charging = code == 2 or code == 6 or code == 7 or code == 8 or code == 9
+                    st.on_ac = code == 2 or code == 3 or code == 6 or code == 7 or code == 8 or code == 9
+                    st.status_text = str.Clone(val)
+                end
+                i++
+            end
+        else:
+            st.on_ac = true
+            st.has_battery = false
+        end
+        if st.percent >= 0 and st.percent <= 20 and not st.charging:
+            st.low_power = true
+        end
+        _ok()
+        ret st
+    end
+end
+
+if SALAM_OS_MAC:
+    mut _caffeinate_pid := 0
+
+    @en "PreventSleep"
+    @fa "جلوگیری از خواب"
+    pub func PreventSleep(): bool:
+        // Best-effort: launch caffeinate in background if available.
+        r := shell.Exec("command -v caffeinate >/dev/null 2>&1 && nohup caffeinate -dimsu >/dev/null 2>&1 & echo $!")
+        if r.code != 0:
+            _set_error("caffeinate not available")
+            ret false
+        end
+        _caffeinate_pid = conv.AtoiOr(r.out, 0)
+        _sleep_inhibited = true
+        ret _ok()
+    end
+
+    @en "AllowSleep"
+    @fa "اجازه خواب"
+    pub func AllowSleep(): bool:
+        if _caffeinate_pid > 0:
+            _ignored := shell.Exec("kill " + str.FromInt(_caffeinate_pid as i64) + " >/dev/null 2>&1")
+            _caffeinate_pid = 0
+        else:
+            _ignored := shell.Exec("pkill -f 'caffeinate -dimsu' >/dev/null 2>&1")
+        end
+        _sleep_inhibited = false
+        ret _ok()
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown(): bool:
+        r := shell.Exec("osascript -e 'tell app \"System Events\" to shut down'")
+        if r.code != 0:
+            _set_error("shutdown request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Restart"
+    @fa "راه‌اندازی دوباره"
+    pub func Restart(): bool:
+        r := shell.Exec("osascript -e 'tell app \"System Events\" to restart'")
+        if r.code != 0:
+            _set_error("restart request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Logout"
+    @fa "خروج از نشست"
+    pub func Logout(): bool:
+        r := shell.Exec("osascript -e 'tell app \"System Events\" to log out'")
+        if r.code != 0:
+            _set_error("logout request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Sleep"
+    @fa "خواب"
+    pub func Sleep(): bool:
+        r := shell.Exec("pmset sleepnow")
+        if r.code != 0:
+            _set_error("sleep request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Hibernate"
+    @fa "خواب زمستانی"
+    pub func Hibernate(): bool:
+        r := shell.Exec("pmset hibernatemode 25 && pmset sleepnow")
+        if r.code != 0:
+            _set_error("hibernate request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Status"
+    @fa "وضعیت"
+    pub func Status(): PowerStatus:
+        mut st := PowerStatus { source = "mac" }
+        out := os.Output("pmset -g batt 2>/dev/null")
+        if str.Contains(out, "InternalBattery") or str.Contains(out, "Battery"):
+            st.has_battery = true
+        end
+        if str.Contains(out, "AC Power"):
+            st.on_ac = true
+        end
+        if str.Contains(out, " charging") or str.Contains(out, "charging;") or str.Contains(out, "charging,"):
+            st.charging = true
+        end
+        if str.Contains(out, "discharging"):
+            st.on_ac = false
+            st.status_text = str.Clone("discharging")
+        else str.Contains(out, "charging"):
+            st.status_text = str.Clone("charging")
+        else str.Contains(out, "charged"):
+            st.status_text = str.Clone("charged")
+            st.on_ac = true
+        end
+        pct := str.IndexOf(out, "%")
+        if pct > 0:
+            mut i := pct - 1
+            mut digits := str.Clone("")
+            until i >= 0:
+                ch := out.Substr(i, 1)
+                if ch >= "0" and ch <= "9":
+                    tmp := ch.Concat(digits)
+                    mem.Free(digits as void*)
+                    digits = tmp
+                    i = i - 1
+                else:
+                    if digits.Len() > 0:
+                        i = 0 - 1
+                    else:
+                        i = i - 1
+                    end
+                end
+                mem.Free(ch as void*)
+            end
+            if digits.Len() > 0:
+                st.percent = conv.AtoiOr(digits, -1)
+            end
+            mem.Free(digits as void*)
+        end
+        if st.percent >= 0 and st.percent <= 20 and not st.charging:
+            st.low_power = true
+        end
+        _ok()
+        ret st
+    end
+end
+
+if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
+    mut _inhibit_cookie := ""
+
+    @en "PreventSleep"
+    @fa "جلوگیری از خواب"
+    pub func PreventSleep(): bool:
+        // Best-effort: prefer systemd-inhibit if available.
+        r := _run_sh("command -v systemd-inhibit >/dev/null 2>&1 && systemd-inhibit --what=idle:sleep --why='Salam power inhibit' sleep infinity >/dev/null 2>&1 & echo $!")
+        if r.code == 0 and str.Trim(r.out).Len() > 0:
+            if _inhibit_cookie.Len() > 0:
+                mem.Free(_inhibit_cookie as void*)
+            end
+            _inhibit_cookie = str.Trim(r.out)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            _sleep_inhibited = true
+            ret _ok()
+        end
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        _set_error("No supported sleep inhibitor available (systemd-inhibit/loginctl)")
+        ret false
+    end
+
+    @en "AllowSleep"
+    @fa "اجازه خواب"
+    pub func AllowSleep(): bool:
+        pid := conv.AtoiOr(_inhibit_cookie, 0)
+        if pid > 0:
+            mut args_kill := "kill " + str.FromInt(pid as i64) + " >/dev/null 2>&1"
+            _ignored := _run_sh(args_kill)
+            mem.Free(args_kill as void*)
+            mem.Free(_ignored.out as void*)
+            mem.Free(_ignored.err as void*)
+            if _inhibit_cookie.Len() > 0:
+                mem.Free(_inhibit_cookie as void*)
+            end
+            _inhibit_cookie = ""
+        else:
+            _ignored := _run_sh("pkill -f 'systemd-inhibit .*sleep infinity' >/dev/null 2>&1")
+            mem.Free(_ignored.out as void*)
+            mem.Free(_ignored.err as void*)
+            if _inhibit_cookie.Len() > 0:
+                mem.Free(_inhibit_cookie as void*)
+            end
+            _inhibit_cookie = ""
+        end
+        _sleep_inhibited = false
+        ret _ok()
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown(): bool:
+        r := _run_sh("systemctl poweroff >/dev/null 2>&1 || loginctl poweroff >/dev/null 2>&1 || shutdown -h now >/dev/null 2>&1")
+        if r.code != 0:
+            _set_error("shutdown request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Restart"
+    @fa "راه‌اندازی دوباره"
+    pub func Restart(): bool:
+        r := _run_sh("systemctl reboot >/dev/null 2>&1 || loginctl reboot >/dev/null 2>&1 || shutdown -r now >/dev/null 2>&1")
+        if r.code != 0:
+            _set_error("restart request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Logout"
+    @fa "خروج از نشست"
+    pub func Logout(): bool:
+        r := _run_sh("loginctl terminate-user \"$USER\" >/dev/null 2>&1 || gnome-session-quit --logout --no-prompt >/dev/null 2>&1")
+        if r.code != 0:
+            _set_error("logout request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Sleep"
+    @fa "خواب"
+    pub func Sleep(): bool:
+        r := _run_sh("systemctl suspend >/dev/null 2>&1 || loginctl suspend >/dev/null 2>&1")
+        if r.code != 0:
+            _set_error("sleep request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Hibernate"
+    @fa "خواب زمستانی"
+    pub func Hibernate(): bool:
+        r := _run_sh("systemctl hibernate >/dev/null 2>&1 || loginctl hibernate >/dev/null 2>&1")
+        if r.code != 0:
+            _set_error("hibernate request failed")
+            ret false
+        end
+        ret _ok()
+    end
+
+    @en "Status"
+    @fa "وضعیت"
+    pub func Status(): PowerStatus:
+        mut st := PowerStatus { source = "linux" }
+        // Best-effort: read power supplies in /sys/class/power_supply.
+        base := "/sys/class/power_supply"
+        dirs := os.ReadDir(base)
+        defer dirs.Free()
+        mut i := 0
+        n := dirs.Len()
+        mut saw_battery := false
+        until i < n:
+            name := dirs.Get(i)
+            tpath := base + "/" + name + "/type"
+            typ := io.ReadFile(tpath)
+            if str.Contains(typ, "Mains") or str.Contains(typ, "USB") or str.Contains(typ, "AC"):
+                online_path := base + "/" + name + "/online"
+                online := io.ReadFile(online_path)
+                if conv.AtoiOr(online, 0) == 1:
+                    st.on_ac = true
+                end
+                mem.Free(online_path as void*)
+                mem.Free(online as void*)
+            end
+            if str.Contains(typ, "Battery"):
+                saw_battery = true
+                st.has_battery = true
+                cap_path := base + "/" + name + "/capacity"
+                cap := io.ReadFile(cap_path)
+                p := conv.AtoiOr(cap, -1)
+                if p >= 0:
+                    st.percent = p
+                end
+                status_path := base + "/" + name + "/status"
+                status := io.ReadFile(status_path)
+                if st.status_text.Len() > 0:
+                    mem.Free(st.status_text as void*)
+                end
+                st.status_text = str.Trim(status)
+                if str.Contains(status, "Charging"):
+                    st.charging = true
+                    st.on_ac = true
+                end
+                if str.Contains(status, "Discharging"):
+                    st.on_ac = false
+                end
+                if str.Contains(status, "Full"):
+                    st.on_ac = true
+                end
+                mem.Free(cap_path as void*)
+                mem.Free(cap as void*)
+                mem.Free(status_path as void*)
+                mem.Free(status as void*)
+            end
+            mem.Free(tpath as void*)
+            mem.Free(typ as void*)
+            i++
+        end
+        if not saw_battery:
+            st.on_ac = true
+            st.has_battery = false
+            st.percent = -1
+        end
+        if st.percent >= 0 and st.percent <= 20 and not st.charging:
+            st.low_power = true
+        end
+        // Fallback to upower when /sys parsing is incomplete.
+        if st.has_battery and st.percent < 0:
+            out := _run_sh("command -v upower >/dev/null 2>&1 && upower -i $(upower -e | grep BAT | head -n1) 2>/dev/null")
+            if out.code == 0 and out.out.Len() > 0:
+                if str.Contains(out.out, "state:") and str.Contains(out.out, "charging"):
+                    st.charging = true
+                end
+                pct := str.IndexOf(out.out, "%")
+                if pct > 0:
+                    mut j := pct - 1
+                    mut digits := ""
+                    until j >= 0:
+                        ch := out.out.Substr(j, 1)
+                        if ch >= "0" and ch <= "9":
+                            tmpd := ch.Concat(digits)
+                            if digits.Len() > 0: mem.Free(digits as void*) end
+                            digits = tmpd
+                            j = j - 1
+                        else:
+                            if digits.Len() > 0:
+                                j = 0 - 1
+                            else:
+                                j = j - 1
+                            end
+                        end
+                        mem.Free(ch as void*)
+                    end
+                    if digits.Len() > 0:
+                        st.percent = conv.AtoiOr(digits, st.percent)
+                        mem.Free(digits as void*)
+                    end
+                end
+            end
+            mem.Free(out.out as void*)
+            mem.Free(out.err as void*)
+        end
+        _ok()
+        ret st
+    end
+end

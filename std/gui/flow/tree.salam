@@ -1,0 +1,640 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package flow
+
+const _CACHE := 4
+
+struct Out:
+    pub w: f64 = 0.0
+    pub h: f64 = 0.0
+    pub base: f64 = 0.0
+    pub last: f64 = -1.0
+end
+
+struct Node:
+    pub st: FlowStyle = FlowStyle {}
+    pub parent: int = -1
+    pub kids: Vector<int> = Vector {}
+    pub alive: bool = false
+    pub has_measure: bool = false
+    pub measure: func (int, f64, f64) Size = (_i: int, _w: f64, _h: f64): ret Size {} end
+    pub dirty: bool = true
+    pub ck: Vector<f64> = Vector {}
+    pub cv: Vector<f64> = Vector {}
+    pub cnext: int = 0
+    pub imin: f64 = -1.0
+    pub imin_pw: f64 = -9.0
+    pub imax: f64 = -1.0
+    pub imax_pw: f64 = -9.0
+    pub has_final: bool = false
+    pub fw: f64 = 0.0
+    pub fh: f64 = 0.0
+    pub fpw: f64 = 0.0
+    pub fph: f64 = 0.0
+    pub x: f64 = 0.0
+    pub y: f64 = 0.0
+    pub w: f64 = 0.0
+    pub h: f64 = 0.0
+    pub base: f64 = 0.0
+    pub cx0: f64 = 0.0
+    pub cy0: f64 = 0.0
+    pub cx1: f64 = 0.0
+    pub cy1: f64 = 0.0
+    pub sx: f64 = 0.0
+    pub sy: f64 = 0.0
+    pub rtl: bool = false
+    pub in_fixed: bool = false
+    pub bx: Box = Box {}
+    pub chk: f64 = -9.0
+    pub chv: f64 = 0.0
+    pub stx: f64 = 0.0
+    pub sty: f64 = 0.0
+    pub fsx: bool = false
+    pub fsy: bool = false
+    pub ovx: int = OVERFLOW_VISIBLE
+    pub ovy: int = OVERFLOW_VISIBLE
+    pub upw: bool = true
+    pub uph: bool = true
+    pub lm_iw: f64 = -9.0
+    pub lm_ih: f64 = -9.0
+    pub lm_w: f64 = 0.0
+    pub lm_h: f64 = 0.0
+    pub lm_b: f64 = -1.0
+    pub lm_lb: f64 = -1.0
+    pub lbase: f64 = -1.0
+end
+
+struct Eng:
+    pub nodes: Vector<Node> = Vector {}
+    pub free: Vector<int> = Vector {}
+    pub roots: Vector<int> = Vector {}
+    pub vw: f64 = -1.0
+    pub vh: f64 = -1.0
+    pub layout_calls: int = 0
+    pub measure_calls: int = 0
+end
+
+@en "Tree"
+@fa "درخت چیدمان"
+pub struct Tree:
+    e: Eng = Eng {}
+
+    @en "Add"
+    @fa "افزودن"
+    pub func Add(parent: int, style: FlowStyle): int:
+        mut id := -1
+        if this.e.free.Len() > 0:
+            id = this.e.free.Pop()
+            n := this.e.nodes.Ref(id)
+            n.st = _own_style(style)
+            n.parent = -1
+            n.kids.Clear()
+            n.alive = true
+            n.has_measure = false
+            _reset(n)
+        else:
+            this.e.nodes.Push(Node { st = _own_style(style), alive = true })
+            id = this.e.nodes.Len() - 1
+        end
+        _deps(this.e.nodes.Ref(id))
+        if this.Valid(parent):
+            pn := this.e.nodes.Ref(parent)
+            pn.kids.Push(id)
+            me := this.e.nodes.Ref(id)
+            me.parent = parent
+            _mark(this.e, parent)
+        else:
+            this.e.roots.Push(id)
+        end
+        ret id
+    end
+
+    @en "Valid"
+    @fa "معتبر"
+    pub func Valid(id: int): bool:
+        ret id >= 0 and id < this.e.nodes.Len() and this.e.nodes.Ref(id).alive
+    end
+
+    @en "Count"
+    @fa "شمار گره‌ها"
+    pub func Count(): int:
+        ret this.e.nodes.Len() - this.e.free.Len()
+    end
+
+    @en "Parent"
+    @fa "والد"
+    pub func Parent(id: int): int:
+        if not this.Valid(id):
+            ret -1
+        end
+        ret this.e.nodes.Ref(id).parent
+    end
+
+    @en "ChildCount"
+    @fa "شمار فرزندان"
+    pub func ChildCount(id: int): int:
+        if not this.Valid(id):
+            ret 0
+        end
+        ret this.e.nodes.Ref(id).kids.Len()
+    end
+
+    @en "Child"
+    @fa "فرزند"
+    pub func Child(id: int, index: int): int:
+        if not this.Valid(id):
+            ret -1
+        end
+        n := this.e.nodes.Ref(id)
+        if index < 0 or index >= n.kids.Len():
+            ret -1
+        end
+        ret n.kids.Get(index)
+    end
+
+    @en "Style"
+    @fa "سبک"
+    pub func Style(id: int): FlowStyle:
+        if not this.Valid(id):
+            ret FlowStyle {}
+        end
+        ret _own_style(this.e.nodes.Ref(id).st)
+    end
+
+    @en "SetStyle"
+    @fa "تنظیم سبک"
+    pub func SetStyle(id: int, style: FlowStyle):
+        if not this.Valid(id):
+            ret
+        end
+        n := this.e.nodes.Ref(id)
+        redir := n.st.direction != style.direction
+        owned := _own_style(style)
+        _free_style(n)
+        n.st = owned
+        _deps(n)
+        if redir:
+            _mark_subtree(this.e, id)
+        end
+        _mark(this.e, id)
+    end
+
+    @en "Remove"
+    @fa "حذف"
+    pub func Remove(id: int):
+        if not this.Valid(id):
+            ret
+        end
+        _detach(this.e, id)
+        _free_subtree(this.e, id)
+    end
+
+    @en "Move"
+    @fa "جابجایی"
+    pub func Move(id: int, parent: int, index: int):
+        if not this.Valid(id):
+            ret
+        end
+        if this.Valid(parent):
+            mut cur := parent
+            until cur >= 0:
+                if cur == id:
+                    ret
+                end
+                cur = this.e.nodes.Ref(cur).parent
+            end
+        end
+        _detach(this.e, id)
+        if this.Valid(parent):
+            p := this.e.nodes.Ref(parent)
+            if index < 0 or index >= p.kids.Len():
+                p.kids.Push(id)
+            else:
+                p.kids.Insert(index, id)
+            end
+            me := this.e.nodes.Ref(id)
+            me.parent = parent
+        else:
+            this.e.roots.Push(id)
+        end
+        _mark_subtree(this.e, id)
+        _mark(this.e, id)
+    end
+
+    @en "SetMeasure"
+    @fa "تنظیم سنجش"
+    pub func SetMeasure(id: int, fn: func (int, f64, f64) Size):
+        if not this.Valid(id):
+            ret
+        end
+        n := this.e.nodes.Ref(id)
+        n.measure = fn
+        n.has_measure = true
+        _mark(this.e, id)
+    end
+
+    @en "ClearMeasure"
+    @fa "حذف سنجش"
+    pub func ClearMeasure(id: int):
+        if not this.Valid(id):
+            ret
+        end
+        me := this.e.nodes.Ref(id)
+        me.has_measure = false
+        _mark(this.e, id)
+    end
+
+    @en "MarkDirty"
+    @fa "علامت تغییر"
+    pub func MarkDirty(id: int):
+        if this.Valid(id):
+            _mark(this.e, id)
+        end
+    end
+
+    @en "IsDirty"
+    @fa "تغییر کرده"
+    pub func IsDirty(id: int): bool:
+        if not this.Valid(id):
+            ret false
+        end
+        ret this.e.nodes.Ref(id).dirty
+    end
+
+    @en "Layout"
+    @fa "چیدن"
+    pub func Layout(width: f64, height: f64):
+        if width != this.e.vw or height != this.e.vh:
+            this.e.vw = width
+            this.e.vh = height
+            repeat this.e.nodes.Len() in i:
+                n := this.e.nodes.Ref(i)
+                if n.alive and n.st.position == POS_FIXED:
+                    _mark(this.e, i)
+                end
+            end
+        end
+        each r in this.e.roots:
+            _layout_root(this.e, r, width, height)
+        end
+    end
+
+    @en "X"
+    @fa "ایکس"
+    pub func X(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret _rel_x(this.e, id)
+    end
+
+    @en "Y"
+    @fa "ایگرگ"
+    pub func Y(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret _rel_y(this.e, id)
+    end
+
+    @en "W"
+    @fa "پهنا"
+    pub func W(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret this.e.nodes.Ref(id).w
+    end
+
+    @en "H"
+    @fa "بلندی"
+    pub func H(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret this.e.nodes.Ref(id).h
+    end
+
+    @en "AbsX"
+    @fa "ایکس مطلق"
+    pub func AbsX(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret _abs_x(this.e, id)
+    end
+
+    @en "AbsY"
+    @fa "ایگرگ مطلق"
+    pub func AbsY(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret _abs_y(this.e, id)
+    end
+
+    @en "Baseline"
+    @fa "خط پایه"
+    pub func Baseline(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret this.e.nodes.Ref(id).base
+    end
+
+    @en "ContentW"
+    @fa "پهنای محتوا"
+    pub func ContentW(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        n := this.e.nodes.Ref(id)
+        ret n.cx1 - n.cx0
+    end
+
+    @en "ContentH"
+    @fa "بلندی محتوا"
+    pub func ContentH(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        n := this.e.nodes.Ref(id)
+        ret n.cy1 - n.cy0
+    end
+
+    @en "SetScroll"
+    @fa "تنظیم پیمایش"
+    pub func SetScroll(id: int, x: f64, y: f64):
+        if not this.Valid(id):
+            ret
+        end
+        n := this.e.nodes.Ref(id)
+        n.sx = x
+        n.sy = y
+    end
+
+    @en "ScrollX"
+    @fa "پیمایش افقی"
+    pub func ScrollX(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret _scroll_x(this.e, id)
+    end
+
+    @en "ScrollY"
+    @fa "پیمایش عمودی"
+    pub func ScrollY(id: int): f64:
+        if not this.Valid(id):
+            ret 0.0
+        end
+        ret _scroll_y(this.e, id)
+    end
+
+    @en "Layer"
+    @fa "لایه"
+    pub func Layer(id: int): int:
+        if not this.Valid(id):
+            ret 0
+        end
+        ret this.e.nodes.Ref(id).st.layer
+    end
+
+    @en "PaintOrder"
+    @fa "ترتیب نقاشی"
+    pub func PaintOrder(id: int): Vector<int>:
+        mut out := Vector {} as Vector<int>
+        if not this.Valid(id):
+            ret out
+        end
+        n := this.e.nodes.Ref(id)
+        each k in n.kids:
+            kn := this.e.nodes.Ref(k)
+            if not kn.st.visible:
+                continue
+            end
+            mut at := out.Len()
+            until at > 0 and this.e.nodes.Ref(out.Get(at - 1)).st.layer > kn.st.layer:
+                at--
+            end
+            out.Insert(at, k)
+        end
+        ret out
+    end
+
+    @en "LayoutCalls"
+    @fa "شمار چیدن‌ها"
+    pub func LayoutCalls(): int:
+        ret this.e.layout_calls
+    end
+
+    @en "MeasureCalls"
+    @fa "شمار سنجش‌ها"
+    pub func MeasureCalls(): int:
+        ret this.e.measure_calls
+    end
+
+    @en "ResetCounters"
+    @fa "صفر کردن شمارنده‌ها"
+    pub func ResetCounters():
+        this.e.layout_calls = 0
+        this.e.measure_calls = 0
+    end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        repeat this.e.nodes.Len() in i:
+            n := this.e.nodes.Ref(i)
+            _free_style(n)
+            n.kids.Free()
+            n.ck.Free()
+            n.cv.Free()
+        end
+        this.e.nodes.Free()
+        this.e.free.Free()
+        this.e.roots.Free()
+        this.e = Eng {}
+    end
+end
+
+func _abs_x(t &: Eng, id: int): f64:
+    mut s := 0.0
+    mut cur := id
+    until cur >= 0:
+        s += _rel_x(t, cur)
+        cur = t.nodes.Ref(cur).parent
+    end
+    ret s
+end
+
+func _abs_y(t &: Eng, id: int): f64:
+    mut s := 0.0
+    mut cur := id
+    until cur >= 0:
+        s += _rel_y(t, cur)
+        cur = t.nodes.Ref(cur).parent
+    end
+    ret s
+end
+
+func _copy_tracks(v: Vector<Track>): Vector<Track>:
+    mut out := Vector {} as Vector<Track>
+    each tr in v:
+        mut c := tr
+        c.tracks = _copy_tracks(tr.tracks)
+        out.Push(c)
+    end
+    ret out
+end
+
+func _free_tracks(v &: Vector<Track>):
+    repeat v.Len() in i:
+        tr := v.Ref(i)
+        _free_tracks(tr.tracks)
+    end
+    v.Free()
+end
+
+func _own_style(style: FlowStyle): FlowStyle:
+    mut st := style
+    st.columns = _copy_tracks(style.columns)
+    st.rows = _copy_tracks(style.rows)
+    st.auto_columns.tracks = _copy_tracks(style.auto_columns.tracks)
+    st.auto_rows.tracks = _copy_tracks(style.auto_rows.tracks)
+    ret st
+end
+
+func _free_style(n &: Node):
+    _free_tracks(n.st.columns)
+    _free_tracks(n.st.rows)
+    _free_tracks(n.st.auto_columns.tracks)
+    _free_tracks(n.st.auto_rows.tracks)
+end
+
+func _pct(l: Len): bool:
+    ret l.kind == LEN_FILL or (l.kind == LEN_FIXED and l.pct != 0.0)
+end
+
+func _edges_pct(e: Edges): bool:
+    ret _pct(e.top) or _pct(e.end) or _pct(e.bottom) or _pct(e.start) or _pct(e.left) or _pct(e.right)
+end
+
+func _deps(n &: Node):
+    st := n.st
+    n.uph = _pct(st.height) or _pct(st.min_height) or _pct(st.max_height)
+    n.ovx = st.overflow_x
+    n.ovy = st.overflow_y
+    if n.ovx == OVERFLOW_VISIBLE and n.ovy != OVERFLOW_VISIBLE:
+        n.ovx = OVERFLOW_AUTO
+    end
+    if n.ovy == OVERFLOW_VISIBLE and n.ovx != OVERFLOW_VISIBLE:
+        n.ovy = OVERFLOW_AUTO
+    end
+    n.upw = _pct(st.width) or _pct(st.min_width) or _pct(st.max_width) or _edges_pct(st.padding) or _edges_pct(st.margin) or _edges_pct(st.border)
+end
+
+func _reset(n &: Node):
+    n.dirty = true
+    n.ck.Clear()
+    n.cv.Clear()
+    n.cnext = 0
+    n.imin_pw = -9.0
+    n.imax_pw = -9.0
+    n.chk = -9.0
+    n.has_final = false
+    n.lm_iw = -9.0
+    n.sx = 0.0
+    n.sy = 0.0
+    n.x = 0.0
+    n.y = 0.0
+    n.w = 0.0
+    n.h = 0.0
+    n.base = 0.0
+    n.cx0 = 0.0
+    n.cy0 = 0.0
+    n.cx1 = 0.0
+    n.cy1 = 0.0
+end
+
+func _mark(t &: Eng, id: int):
+    mut cur := id
+    until cur >= 0:
+        n := t.nodes.Ref(cur)
+        n.dirty = true
+        n.ck.Clear()
+        n.cv.Clear()
+        n.cnext = 0
+        n.imin_pw = -9.0
+        n.imax_pw = -9.0
+        n.chk = -9.0
+        if cur == id:
+            n.lm_iw = -9.0
+        end
+        cur = n.parent
+    end
+end
+
+func _mark_subtree(t &: Eng, id: int):
+    n := t.nodes.Ref(id)
+    n.dirty = true
+    n.has_final = false
+    each k in n.kids:
+        _mark_subtree(t, k)
+    end
+end
+
+func _detach(t &: Eng, id: int):
+    n := t.nodes.Ref(id)
+    p := n.parent
+    if p >= 0:
+        pn := t.nodes.Ref(p)
+        repeat pn.kids.Len() in i:
+            if pn.kids.Get(i) == id:
+                pn.kids.RemoveAt(i)
+                break
+            end
+        end
+        _mark(t, p)
+    else:
+        repeat t.roots.Len() in i:
+            if t.roots.Get(i) == id:
+                t.roots.RemoveAt(i)
+                break
+            end
+        end
+    end
+    n.parent = -1
+end
+
+func _free_subtree(t &: Eng, id: int):
+    n := t.nodes.Ref(id)
+    each k in n.kids:
+        _free_subtree(t, k)
+    end
+    n.kids.Clear()
+    n.alive = false
+    n.has_measure = false
+    n.parent = -1
+    _free_style(n)
+    n.st = FlowStyle {}
+    t.free.Push(id)
+end
+
+@en "NewTree"
+@fa "درخت تازه"
+pub func NewTree(): Tree:
+    ret Tree {}
+end

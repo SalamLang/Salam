@@ -1,0 +1,306 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "recent"
+@fa "موارد اخیر"
+package recent
+
+import io
+import os
+import mem
+import str
+import filepath
+import collections
+import os.desktop.paths
+
+// Best-effort recent files/directories tracking for desktop apps.
+// This module maintains an app-local plain-text log (one absolute path per line,
+// newest first) under the app's state/data directory. It does not modify
+// platform-global "Recent Items" databases; use as a portable fallback.
+
+@en "RecentKind"
+@fa "نوع مورد اخیر"
+pub enum RecentKind:
+    File
+    Directory
+end
+
+@en "RecentEntry"
+@fa "ورودی اخیر"
+pub struct RecentEntry:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "exists"
+    @fa "وجود دارد"
+    pub exists: bool = false
+    @en "kind"
+    @fa "نوع"
+    pub kind: RecentKind = RecentKind.File
+end
+
+func _safe_limit(limit: int): int:
+    if limit <= 0: ret 20 end
+    ret limit
+end
+
+func _kind_for(path: str): RecentKind:
+    if os.IsDir(path): ret RecentKind.Directory end
+    ret RecentKind.File
+end
+
+func _free_str_vec(v &: Vector<str>):
+    repeat v.Len() in i:
+        item := v.Get(i)
+        if item.Len() > 0:
+            mem.Free(item as void*)
+        end
+    end
+    v.Free()
+end
+
+func _read_lines(path: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if not os.Exists(path): ret out end
+    raw := io.ReadFile(path)
+    defer mem.Free(raw as void*)
+    lines := str.Split(raw, "\n")
+    defer lines.Free()
+    repeat lines.Len() in i:
+        line := str.Trim(lines.Get(i))
+        if line.Len() > 0:
+            out.Push(str.Clone(line))
+        end
+        mem.Free(line as void*)
+    end
+    ret out
+end
+
+func _write_lines(path: str, items: Vector<str>): bool:
+    mut sb := str.NewBuilder()
+    repeat items.Len() in i:
+        str.BufAppend(sb, items.Get(i))
+        str.BufAppend(sb, "\n")
+    end
+    content := str.BufStr(sb)
+    str.BufFree(sb)
+    ok := io.WriteFile(path, content) >= 0
+    mem.Free(content as void*)
+    ret ok
+end
+
+func _normalize(p: str): str:
+    if p.Len() == 0: ret str.Clone("") end
+    rp := os.RealPath(p)
+    if rp.Len() > 0: ret rp end
+    ret filepath.Clean(p)
+end
+
+@en "StoragePath"
+@fa "مسیر ذخیره‌سازی"
+pub func StoragePath(app_id: str, kind: RecentKind = RecentKind.File): str:
+    base := paths.AppStateDir(app_id)
+    defer mem.Free(base as void*)
+    _ = paths.EnsureDir(base)
+    if kind == RecentKind.Directory:
+        ret filepath.Join(base, "recent_dirs.txt")
+    end
+    ret filepath.Join(base, "recent_files.txt")
+end
+
+@en "Add"
+@fa "افزودن"
+pub func Add(app_id: str, path: str, limit: int = 20, kind: RecentKind = RecentKind.File): bool:
+    if app_id.Len() == 0 or path.Len() == 0: ret false end
+    norm := _normalize(path)
+    defer mem.Free(norm as void*)
+    if norm.Len() == 0: ret false end
+
+    store := StoragePath(app_id, kind)
+    defer mem.Free(store as void*)
+    mut existing := _read_lines(store)
+    defer _free_str_vec(existing)
+
+    mut out := Vector {} as Vector<str>
+    out.Push(str.Clone(norm))
+    max := _safe_limit(limit)
+    repeat existing.Len() in i:
+        cur := existing.Get(i)
+        if cur == norm: continue end
+        if out.Len() >= max: break end
+        out.Push(str.Clone(cur))
+    end
+    ok := _write_lines(store, out)
+    _free_str_vec(out)
+    ret ok
+end
+
+@en "AddFile"
+@fa "افزودن پرونده"
+pub func AddFile(app_id: str, path: str, limit: int = 20): bool:
+    ret Add(app_id, path, limit, RecentKind.File)
+end
+
+@en "AddDirectory"
+@fa "افزودن پوشه"
+pub func AddDirectory(app_id: str, path: str, limit: int = 20): bool:
+    ret Add(app_id, path, limit, RecentKind.Directory)
+end
+
+@en "List"
+@fa "فهرست"
+pub func List(app_id: str, limit: int = 20, kind: RecentKind = RecentKind.File): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if app_id.Len() == 0: ret out end
+    store := StoragePath(app_id, kind)
+    defer mem.Free(store as void*)
+    mut lines := _read_lines(store)
+    defer _free_str_vec(lines)
+    max := _safe_limit(limit)
+    repeat lines.Len() in i:
+        if out.Len() >= max: break end
+        out.Push(str.Clone(lines.Get(i)))
+    end
+    ret out
+end
+
+@en "ListFiles"
+@fa "فهرست پرونده‌ها"
+pub func ListFiles(app_id: str, limit: int = 20): Vector<str>:
+    ret List(app_id, limit, RecentKind.File)
+end
+
+@en "ListDirectories"
+@fa "فهرست پوشه‌ها"
+pub func ListDirectories(app_id: str, limit: int = 20): Vector<str>:
+    ret List(app_id, limit, RecentKind.Directory)
+end
+
+@en "Entries"
+@fa "ورودی‌ها"
+pub func Entries(app_id: str, limit: int = 20, kind: RecentKind = RecentKind.File): Vector<RecentEntry>:
+    mut out := Vector {} as Vector<RecentEntry>
+    mut paths := List(app_id, limit, kind)
+    defer _free_str_vec(paths)
+    repeat paths.Len() in i:
+        p := paths.Get(i)
+        k := _kind_for(p)
+        out.Push(RecentEntry { path = str.Clone(p), exists = os.Exists(p), kind = k })
+    end
+    ret out
+end
+
+@en "Remove"
+@fa "حذف"
+pub func Remove(app_id: str, path: str, kind: RecentKind = RecentKind.File): bool:
+    if app_id.Len() == 0 or path.Len() == 0: ret false end
+    norm := _normalize(path)
+    defer mem.Free(norm as void*)
+    store := StoragePath(app_id, kind)
+    defer mem.Free(store as void*)
+    mut existing := _read_lines(store)
+    defer _free_str_vec(existing)
+    mut out := Vector {} as Vector<str>
+    mut changed := false
+    repeat existing.Len() in i:
+        cur := existing.Get(i)
+        if cur == norm or cur == path:
+            changed = true
+            continue
+        end
+        out.Push(str.Clone(cur))
+    end
+    if not changed:
+        _free_str_vec(out)
+        ret true
+    end
+    ok := _write_lines(store, out)
+    _free_str_vec(out)
+    ret ok
+end
+
+@en "PruneMissing"
+@fa "پاکسازی موارد ناموجود"
+pub func PruneMissing(app_id: str, kind: RecentKind = RecentKind.File): int:
+    store := StoragePath(app_id, kind)
+    defer mem.Free(store as void*)
+    mut existing := _read_lines(store)
+    defer _free_str_vec(existing)
+    mut out := Vector {} as Vector<str>
+    mut removed := 0
+    repeat existing.Len() in i:
+        cur := existing.Get(i)
+        if os.Exists(cur):
+            out.Push(str.Clone(cur))
+        else:
+            removed++
+        end
+    end
+    _ = _write_lines(store, out)
+    _free_str_vec(out)
+    ret removed
+end
+
+@en "Clear"
+@fa "پاک کردن"
+pub func Clear(app_id: str, kind: RecentKind = RecentKind.File): bool:
+    store := StoragePath(app_id, kind)
+    defer mem.Free(store as void*)
+    if not os.Exists(store): ret true end
+    ret os.Remove(store) == 0
+end
+
+@en "ClearAll"
+@fa "پاک کردن همه"
+pub func ClearAll(app_id: str): bool:
+    a := Clear(app_id, RecentKind.File)
+    b := Clear(app_id, RecentKind.Directory)
+    ret a and b
+end
+
+@en "Count"
+@fa "شمارش"
+pub func Count(app_id: str, kind: RecentKind = RecentKind.File): int:
+    items := List(app_id, 2147483647, kind)
+    n := items.Len()
+    _free_str_vec(items)
+    ret n
+end
+
+@en "Contains"
+@fa "دارد"
+pub func Contains(app_id: str, path: str, kind: RecentKind = RecentKind.File): bool:
+    if app_id.Len() == 0 or path.Len() == 0: ret false end
+    norm := _normalize(path)
+    defer mem.Free(norm as void*)
+    store := StoragePath(app_id, kind)
+    mut existing := _read_lines(store)
+    mem.Free(store as void*)
+    mut found := false
+    repeat existing.Len() in i:
+        cur := existing.Get(i)
+        if cur == norm or cur == path:
+            found = true
+            break
+        end
+    end
+    _free_str_vec(existing)
+    ret found
+end
+
+@en "Note"
+@fa "یادداشت"
+pub func Note(): str:
+    ret str.Clone("App-local recent list (portable fallback). Platform-global recent-items integration is not performed by this module.")
+end

@@ -63,13 +63,75 @@ func exponent_follows(L &: Lx): bool:
     ret (sign == 43 or sign == 45) and at_digit(L, 2) != 0
 end
 
-func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool, named &: bool): bool:
+func unit_len_at(L &: Lx, k: int): int:
+    if not is_alpha(peek2(L, k)):
+        ret 0
+    end
+    units := ["px", "em", "rem", "vw", "vh", "vmin", "vmax", "fr", "ms", "s", "deg", "rad", "turn"]
+    repeat len(units) in i:
+        u := units[i]
+        ul := str.Len(u)
+        mut same := true
+        repeat ul in j:
+            if peek2(L, k + j) != co.ByteAt(u, j):
+                same = false
+                break
+            end
+        end
+        if same and (not is_ident_cont(peek2(L, k + ul)) or at_persian_punct_at(L, k + ul)):
+            ret ul
+        end
+    end
+    ret 0
+end
+
+func percent_text(clean: str): str:
+    n := str.Len(clean)
+    repeat n in i:
+        c := byte_at(clean, i)
+        if c == 101 or c == 69:
+            mut rest := str.Substr(clean, i + 1, n - i - 1)
+            if str.StartsWith(rest, "+"):
+                rest = str.Substr(rest, 1, str.Len(rest) - 1)
+            end
+            ex := rest.ToInt() - 2
+            ret str.Substr(clean, 0, i) + "e" + ex
+        end
+    end
+    ret clean + "e-2"
+end
+
+func percent_len(L &: Lx): int:
+    mut k := 0
+    if peek(L) == 37:
+        k = 1
+    else peek(L) == 217 and peek2(L, 1) == 170:
+        k = 2
+    else:
+        ret 0
+    end
+    c := peek2(L, k)
+    if c == 0 or c == 32 or c == 9 or c == 13 or c == 10 or c == 44 or c == 41 or c == 93 or c == 125 or (c == 216 and peek2(L, k + 1) == 140):
+        ret k
+    end
+    ret 0
+end
+
+func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool, named &: bool, unit &: bool): bool:
     mut is_float := false
     _n1 := scan_digits(L, 0, bad)
     if peek(L) == 46 and at_digit(L, 1) != 0:
         is_float = true
         adv(L)
         _n2 := scan_digits(L, 0, bad)
+    end
+    ulen := unit_len_at(L, 0)
+    if ulen > 0:
+        unit = true
+        repeat ulen:
+            adv(L)
+        end
+        ret is_float
     end
     if (peek(L) == 101 or peek(L) == 69) and (not L.layout_mode or exponent_follows(L)):
         is_float = true
@@ -86,6 +148,7 @@ func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool, named &: bool): bool:
             if peek(L) == 102:
                 is_float = true
             end
+            named = true
             skip_ident(L)
         else peek(L) == 102 and (not is_ident_cont(peek2(L, 1)) or at_persian_punct_at(L, 1)):
             is_float = true
@@ -99,7 +162,7 @@ func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool, named &: bool): bool:
 end
 
 func normalize_number(text: str): str:
-    tlen := text.len()
+    tlen := text.Len()
     mut out := str.NewBuilder()
     mut i := 0
     until i < tlen:
@@ -125,7 +188,7 @@ end
 func decode_number(clean: str, is_float: bool, overflow &: bool): tok.TokenValue:
     overflow = false
     if is_float:
-        ret tok.ValueFloat(clean.to_float())
+        ret tok.ValueFloat(clean.ToFloat())
     end
     c0 := byte_at(clean, 0)
     c1 := byte_at(clean, 1)
@@ -159,18 +222,30 @@ func scan_number(L &: Lx):
     )
     mut is_float := false
     mut named := false
+    mut unit := false
     if based:
         scan_based_int(L, b, bad)
     else:
-        is_float = scan_decimal(L, b, bad, named)
+        is_float = scan_decimal(L, b, bad, named, unit)
     end
     if bad:
         error_at(L, b, "misplaced '_' separator in numeric literal")
     end
+    if unit and not L.layout_attr:
+        error_at(L, b, "a unit suffix such as px, em, fr or ms belongs only in a page attribute value; write the plain number here")
+    end
+    mut pct := 0
+    if not based and not unit and not named:
+        pct = percent_len(L)
+    end
     text := lex_slice(L, start)
     clean := normalize_number(text)
     mut overflow := false
-    v := decode_number(clean, is_float, overflow)
+    mut v := decode_number(clean, is_float, overflow)
+    if pct > 0 and not L.layout_attr:
+        v = tok.ValueFloat(percent_text(clean).ToFloat())
+        is_float = true
+    end
     if str.Len(clean) > 0:
         mem.Free(clean as void*)
     end
@@ -180,10 +255,37 @@ func scan_number(L &: Lx):
     if is_float and v.fval * 0.5 == v.fval and v.fval != 0.0:
         error_at(L, b, "floating-point literal is out of range for f64")
     end
-    if not L.layout_mode and (named or at_letter(L)):
+    if pct > 0:
+        repeat pct:
+            adv(L)
+        end
+        emit_val(L, is_float ? tok.TK_FLOAT : tok.TK_INT, b, lex_slice(L, start), v)
+        ret
+    end
+    if not L.layout_mode and not unit and (named or at_letter(L)):
         error_at(L, b, "a name cannot start with a digit; put the digit after a letter, or add a space if you meant a number")
     end
     emit_val(L, is_float ? tok.TK_FLOAT : tok.TK_INT, b, text, v)
+end
+
+func scan_color(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    mut n := 0
+    until hexval(peek2(L, n + 1)) >= 0:
+        n++
+    end
+    after := peek2(L, n + 1)
+    ok := (n == 3 or n == 4 or n == 6 or n == 8) and (not is_ident_cont(after) or at_persian_punct_at(L, n + 1))
+    repeat n + 1:
+        adv(L)
+    end
+    if not ok:
+        skip_ident(L)
+        error_at(L, b, "a colour literal is '#' followed by 3, 4, 6 or 8 hex digits, as in #3366aa")
+    end
+    text := lex_slice(L, start)
+    emit_val(L, tok.TK_STRING, b, text, tok.ValueStr(text))
 end
 
 func at_letter(L &: Lx): bool:

@@ -118,43 +118,54 @@ pub struct Tape:
     @fa "مولد تصادفی"
     pub rng: tensor.Rng = tensor.Rng {}
 
+
+    @en "Len"
+    @fa "طول"
+    pub func Len(): int: ret this.len() end
     @en "len"
     @fa "طول"
-    pub func len(): int: ret this.vals.len() end
+    pub func len(): this.Len() end
+    @en "Reset"
+    @fa "بازنشانی"
+    pub func Reset():
+        n := this.vals.Len()
+        repeat n in i:
+            if this.owns_val.Get(i):
+                mut v := this.vals.Get(i)
+                v.Free()
+            end
+            if this.owns_grad.Get(i):
+                mut g := this.grads.Get(i)
+                g.Free()
+            end
+        end
+        this.vals.Clear()
+        this.grads.Clear()
+        this.owns_val.Clear()
+        this.owns_grad.Clear()
+        this.needs.Clear()
+        this.nodes.Clear()
+    end
 
     @en "reset"
     @fa "بازنشانی"
-    pub func reset():
-        n := this.vals.len()
-        repeat n in i:
-            if this.owns_val.get(i):
-                mut v := this.vals.get(i)
-                v.free()
-            end
-            if this.owns_grad.get(i):
-                mut g := this.grads.get(i)
-                g.free()
-            end
-        end
-        this.vals.clear()
-        this.grads.clear()
-        this.owns_val.clear()
-        this.owns_grad.clear()
-        this.needs.clear()
-        this.nodes.clear()
+    pub func reset(): this.Reset() end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        this.Reset()
+        this.vals.Free()
+        this.grads.Free()
+        this.owns_val.Free()
+        this.owns_grad.Free()
+        this.needs.Free()
+        this.nodes.Free()
     end
 
     @en "free"
     @fa "آزادسازی"
-    pub func free():
-        this.reset()
-        this.vals.free()
-        this.grads.free()
-        this.owns_val.free()
-        this.owns_grad.free()
-        this.needs.free()
-        this.nodes.free()
-    end
+    pub func free(): this.Free() end
 end
 
 func _alias(t &: tensor.Tensor): tensor.Tensor:
@@ -165,12 +176,12 @@ func _alias(t &: tensor.Tensor): tensor.Tensor:
 end
 
 func _push_val(tp &: Tape, t: tensor.Tensor, owned: bool, needs_grad: bool): int:
-    id := tp.vals.len()
-    tp.vals.push(t)
-    tp.grads.push(tensor.Tensor {})
-    tp.owns_val.push(owned)
-    tp.owns_grad.push(false)
-    tp.needs.push(needs_grad)
+    id := tp.vals.Len()
+    tp.vals.Push(t)
+    tp.grads.Push(tensor.Tensor {})
+    tp.owns_val.Push(owned)
+    tp.owns_grad.Push(false)
+    tp.needs.Push(needs_grad)
     ret id
 end
 
@@ -184,16 +195,16 @@ func _record(tp &: Tape, op: int, a: int, b: int, out: int, aux: int, s0: int, s
     n.s0 = s0
     n.s1 = s1
     n.f0 = f0
-    tp.nodes.push(n)
+    tp.nodes.Push(n)
 end
 
 func _grad_of(tp &: Tape, v: int): tensor.Tensor:
-    mut g := tp.grads.get(v)
-    if g.data.len() == 0:
-        val := tp.vals.get(v)
+    mut g := tp.grads.Get(v)
+    if g.data.Len() == 0:
+        val := tp.vals.Get(v)
         g = tensor.Zeros(val.shape)
-        tp.grads.set(v, g)
-        tp.owns_grad.set(v, true)
+        tp.grads.Set(v, g)
+        tp.owns_grad.Set(v, true)
     end
     ret g
 end
@@ -228,14 +239,14 @@ end
 @fa "پارامتر"
 pub func Param(tp &: Tape, val &: tensor.Tensor, grad &: tensor.Tensor): int:
     id := _push_val(tp, _alias(val), false, true)
-    tp.grads.set(id, _alias(grad))
+    tp.grads.Set(id, _alias(grad))
     ret id
 end
 
 @en "Value"
 @fa "مقدار"
 pub func Value(tp &: Tape, v: int): tensor.Tensor:
-    mut t := tp.vals.get(v)
+    mut t := tp.vals.Get(v)
     ret _alias(t)
 end
 
@@ -249,14 +260,14 @@ end
 @en "Backward"
 @fa "پس‌انتشار"
 pub func Backward(tp &: Tape, loss: int):
-    if loss < 0 or loss >= tp.vals.len(): ret end
+    if loss < 0 or loss >= tp.vals.Len(): ret end
     mut seed := _grad_of(tp, loss)
     tensor.SetAll(seed, 1.0)
-    mut i := tp.nodes.len() - 1
+    mut i := tp.nodes.Len() - 1
     until i >= 0:
-        mut n := tp.nodes.get(i)
-        g := tp.grads.get(n.out)
-        if g.data.len() > 0:
+        mut n := tp.nodes.Get(i)
+        g := tp.grads.Get(n.out)
+        if g.data.Len() > 0:
             _backprop_node(tp, n)
         end
         i--
@@ -266,17 +277,17 @@ end
 @en "GradCheck"
 @fa "بررسی گرادیان"
 pub func GradCheck(f: func (tensor.Tensor) f64, x &: tensor.Tensor, analytic &: tensor.Tensor, h: f64, tol: f64): bool:
-    if x.same_shape(analytic) == false: ret false end
+    if x.SameShape(analytic) == false: ret false end
     hx := _alias(x)
     n := x.numel()
     mut ok := true
     repeat n in k:
         orig := x.at(k)
-        x.set_at(k, orig + h)
+        x.SetAt(k, orig + h)
         fp := f(hx)
-        x.set_at(k, orig - h)
+        x.SetAt(k, orig - h)
         fm := f(hx)
-        x.set_at(k, orig)
+        x.SetAt(k, orig)
         numeric := (fp - fm) / (2.0 * h)
         want := analytic.at(k)
         mut diff := numeric - want

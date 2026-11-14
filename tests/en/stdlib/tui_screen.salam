@@ -1,0 +1,815 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import term
+import tui
+
+mut ticks := 0
+
+mut paint_at := 0
+
+mut seen_glyphs := tui.GlyphPolicy.Unicode
+
+struct ZBox:
+    pub use tui.BaseWidget
+    pub mark: str = "0"
+    pub can_focus: bool = false
+    pub allow_hits: bool = true
+
+    pub func focusable(): bool:
+        ret this.can_focus
+    end
+
+    pub func hits(): bool:
+        ret this.allow_hits
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(paint_at, bounds.y, this.mark, tui.StyleDefault)
+        paint_at++
+    end
+end
+
+struct GlyphProbe:
+    pub use tui.BaseWidget
+
+    pub func render(buf: tui.Buffer, _bounds: tui.Rect):
+        seen_glyphs = buf.glyphs
+    end
+end
+
+struct Frame:
+    pub use tui.BaseWidget
+    pub title: str = ""
+    pub seen: int = 0
+
+    pub func handle_event(event: tui.Event): bool:
+        if event.kind == tui.KeyEvent:
+            this.seen++
+        end
+        ret event.is_char("r")
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.title + " " + this.seen, tui.StyleDefault)
+    end
+end
+
+struct Spot:
+    pub use tui.BaseWidget
+    pub mark: str = "a"
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        if not event.is_char("r"):
+            ret false
+        end
+        if this.mark == "a":
+            this.mark = "b"
+        else:
+            this.mark = "a"
+        end
+        ret true
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.mark, tui.StyleDefault)
+    end
+end
+
+struct Flag:
+    pub use tui.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        mut ch := " "
+        if buf.focused:
+            ch = "*"
+        end
+        buf.put_str(bounds.x, bounds.y, ch, tui.StyleDefault)
+    end
+end
+
+struct Counter:
+    pub use tui.BaseWidget
+    pub ch: str = "1"
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, this.ch, tui.StyleDefault)
+        if this.ch == "1":
+            this.ch = "2"
+        else:
+            this.ch = "3"
+        end
+    end
+end
+
+struct Block:
+    pub use tui.BaseWidget
+    pub ch: str = "#"
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.fill(bounds, this.ch, tui.StyleDefault)
+    end
+end
+
+struct Shutter:
+    pub use tui.BaseWidget
+    pub shown: bool = true
+
+    pub func visible(): bool:
+        ret this.shown
+    end
+end
+
+func zstack(): tui.Screen:
+    mut s := tui.NewScreen(ZBox { mark = "0" }, 4, 1)
+    _ := s.Add(tui.RootId, ZBox { mark = "1", can_focus = true })
+    _ := s.Add(tui.RootId, ZBox { mark = "2", can_focus = true })
+    _ := s.Add(tui.RootId, ZBox { mark = "3" })
+    full := rect(0, 0, 4, 1)
+    repeat s.tree.count() in id:
+        s.widget(id).SetBounds(full)
+    end
+    ret s
+end
+
+func painted(s &: tui.Screen): str:
+    paint_at = 0
+    s.present()
+    ret s.buffer.row_text(0)
+end
+
+func id_vec(n: int, a: int, b: int): Vector<int>:
+    mut ids := Vector {} as Vector<int>
+    ids.Push(a)
+    if n >= 2:
+        ids.Push(b)
+    end
+    ret ids
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func test_new_screen_fits_root():
+    mut s := tui.NewScreen(Frame { title = "t" }, 20, 5)
+    defer s.Close()
+    testing.AssertEqInt(s.buffer.width, 20)
+    testing.AssertEqInt(s.buffer.height, 5)
+    testing.AssertEqInt(s.root.Bounds().width, 20)
+    testing.AssertEqInt(s.root.Bounds().height, 5)
+    testing.AssertEqInt(s.tree.count(), 1)
+    testing.AssertFalse(s.running)
+end
+
+func test_events_flow_through_channel():
+    mut s := tui.NewScreen(Frame { title = "app" }, 12, 3)
+    defer s.Close()
+    testing.AssertTrue(s.post(key("a")))
+    testing.AssertTrue(s.post(key("r")))
+    testing.AssertTrue(s.post(tui.Event { kind = tui.TickEvent }))
+    s.stop()
+    testing.AssertFalse(s.post(key("late")))
+
+    mut ev := tui.Event {}
+    mut kinds := ""
+    mut consumed := 0
+    until s.next_event(ev):
+        kinds += ev.kind
+        if s.dispatch(ev):
+            consumed++
+        end
+    end
+    testing.AssertEqStr(kinds, "114")
+    testing.AssertEqInt(consumed, 1)
+    testing.AssertFalse(s.next_event(ev))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "app 2       ")
+end
+
+func test_draw_order_and_clipping():
+    mut s := tui.NewScreen(Frame { title = "z" }, 6, 3)
+    defer s.Close()
+    a := s.Add(tui.RootId, Block { ch = "a" })
+    b := s.Add(tui.RootId, Block { ch = "b" })
+    c := s.Add(tui.RootId, Block { ch = "c" })
+    s.widget(a).SetBounds(rect(0, 1, 4, 2))
+    s.widget(b).SetBounds(rect(2, 1, 4, 1))
+    s.widget(c).SetBounds(rect(-2, 2, 3, 5))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "z 0   ")
+    testing.AssertEqStr(s.buffer.row_text(1), "aabbbb")
+    testing.AssertEqStr(s.buffer.row_text(2), "caaa  ")
+end
+
+func test_widget_clipped_to_own_bounds():
+    mut s := tui.NewScreen(Frame { title = "" }, 8, 2)
+    defer s.Close()
+    id := s.Add(tui.RootId, Frame { title = "xyzzy" })
+    s.widget(id).SetBounds(rect(2, 1, 3, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(1), "  xyz   ")
+end
+
+func test_zero_size_widget_is_skipped():
+    mut s := tui.NewScreen(Frame { title = "" }, 4, 1)
+    defer s.Close()
+    id := s.Add(tui.RootId, Block { ch = "x" })
+    s.widget(id).SetBounds(rect(1, 0, 0, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), " 0  ")
+end
+
+func test_hidden_container_is_not_painted():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 3)
+    defer s.Close()
+    sh := s.Add(tui.RootId, Shutter { shown = false })
+    kid := s.Add(sh, Block { ch = "H" })
+    sib := s.Add(tui.RootId, Block { ch = "S" })
+    s.widget(sh).SetBounds(rect(0, 0, 10, 1))
+    s.widget(kid).SetBounds(rect(0, 0, 10, 1))
+    s.widget(sib).SetBounds(rect(10, 0, 10, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "          SSSSSSSSSS")
+    s.invalidate(kid)
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "          SSSSSSSSSS")
+
+    mut shown := tui.NewScreen(tui.BaseWidget {}, 20, 3)
+    defer shown.Close()
+    sh2 := shown.Add(tui.RootId, Shutter {})
+    kid2 := shown.Add(sh2, Block { ch = "H" })
+    sib2 := shown.Add(tui.RootId, Block { ch = "S" })
+    shown.widget(sh2).SetBounds(rect(0, 0, 10, 1))
+    shown.widget(kid2).SetBounds(rect(0, 0, 10, 1))
+    shown.widget(sib2).SetBounds(rect(10, 0, 10, 1))
+    shown.present()
+    testing.AssertEqStr(shown.buffer.row_text(0), "HHHHHHHHHHSSSSSSSSSS")
+    shown.invalidate(kid2)
+    shown.present()
+    testing.AssertEqStr(shown.buffer.row_text(0), "HHHHHHHHHHSSSSSSSSSS")
+end
+
+func test_resize_event():
+    mut s := tui.NewScreen(Frame { title = "r" }, 10, 4)
+    defer s.Close()
+    resize := tui.Event { kind = tui.ResizeEvent, width = 30, height = 7 }
+    testing.AssertFalse(s.dispatch(resize))
+    testing.AssertEqInt(s.buffer.width, 30)
+    testing.AssertEqInt(s.buffer.height, 7)
+    testing.AssertEqInt(s.root.Bounds().width, 30)
+    testing.AssertEqInt(s.root.Bounds().height, 7)
+    testing.AssertTrue(s.dirty)
+    s.present()
+    testing.AssertFalse(s.dirty)
+    testing.AssertEqStr(s.buffer.row_text(6), "                              ")
+end
+
+func test_consumed_key_repaints_region_without_dirty():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.Close()
+    spot := s.Add(tui.RootId, Spot {})
+    counter := s.Add(tui.RootId, Counter {})
+    s.widget(spot).SetBounds(rect(0, 0, 1, 1))
+    s.widget(counter).SetBounds(rect(4, 0, 1, 1))
+    s.present()
+    testing.AssertFalse(s.dirty)
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "a")
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "1")
+    testing.AssertFalse(s.dispatch(key("x")))
+    testing.AssertFalse(s.dirty)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "1")
+    testing.AssertTrue(s.dispatch(key("r")))
+    testing.AssertFalse(s.dirty)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "b")
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "1")
+end
+
+func test_run_with_tick():
+    mut s := tui.NewScreen(Frame { title = "run" }, 10, 2)
+    defer s.Close()
+    ticks = 0
+    _ := s.post(tui.Event { kind = tui.TickEvent })
+    _ := s.post(key("x"))
+    _ := s.post(tui.Event { kind = tui.TickEvent })
+    _ := s.post(key("\x03"))
+    _ := s.post(key("y"))
+    s.run_with_tick((): ticks++ end)
+    testing.AssertEqInt(ticks, 2)
+    testing.AssertFalse(s.running)
+    testing.AssertEqStr(s.buffer.row_text(0), "run 1     ")
+    s.dirty = true
+    s.present()
+    testing.AssertEqStr(s.buffer.row_text(0), "run 3     ")
+end
+
+func test_ansi_frame():
+    mut b := tui.NewBuffer(3, 2)
+    defer b.Free()
+    bold := tui.Style { bold = true }
+    b.put_str(0, 0, "ab", bold)
+    b.put_str(0, 1, "c", tui.StyleDefault)
+    out := b.ansi()
+    seq_on := tui.StyleSgr(bold, tui.ColorTier.TrueColor)
+    seq_off := tui.StyleSgrOff(bold, tui.ColorTier.TrueColor)
+    want := term.SeqMoveTo(1, 1) + seq_on + "ab" + seq_off + " " + term.SeqMoveTo(2, 1) + "c  "
+    testing.AssertEqStr(out, want)
+end
+
+func test_close_is_idempotent():
+    mut s := tui.NewScreen(Frame { title = "c" }, 4, 1)
+    s.Close()
+    s.Close()
+    testing.AssertFalse(s.running)
+end
+
+func test_raise_paint_order():
+    mut s := zstack()
+    defer s.Close()
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqStr(painted(s), "0123")
+
+    mut ids := id_vec(1, 1, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0231")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "0123")
+
+    ids = id_vec(2, 1, 2)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0312")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "0123")
+
+    ids = id_vec(2, 2, 1)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0312")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise(ids)
+    ids.Free()
+
+    ids = id_vec(1, 2, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0132")
+    testing.AssertEqInt(s.focused_id(), 2)
+    s.unraise(ids)
+    testing.AssertEqInt(s.focused_id(), 1)
+    ids.Free()
+
+    ids = id_vec(2, 1, 2)
+    s.raise(ids)
+    ids.Free()
+    ids = id_vec(1, 1, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "0321")
+    testing.AssertEqInt(s.focused_id(), 1)
+    ids.Free()
+    ids = id_vec(2, 1, 2)
+    s.unraise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "0123")
+
+    ids = id_vec(2, 1, 99)
+    s.raise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "0231")
+    ids = id_vec(2, 99, -1)
+    s.unraise(ids)
+    s.unraise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "0231")
+    ids = id_vec(1, 1, 0)
+    s.unraise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "0123")
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_hits_false_still_paints():
+    mut s := tui.NewScreen(ZBox { mark = "0" }, 2, 1)
+    defer s.Close()
+    top := s.Add(tui.RootId, ZBox { mark = "1", allow_hits = false })
+    full := rect(0, 0, 2, 1)
+    s.widget(tui.RootId).SetBounds(full)
+    s.widget(top).SetBounds(full)
+    testing.AssertEqStr(painted(s), "01")
+    testing.AssertEqInt(s.hit_test(0, 0), tui.RootId)
+    testing.AssertEqInt(s.hit_test(1, 0), tui.RootId)
+end
+
+func test_resize_forces_full_repaint():
+    mut s := tui.NewScreen(Frame { title = "g" }, 8, 2)
+    defer s.Close()
+    counter := s.Add(tui.RootId, Counter {})
+    s.widget(counter).SetBounds(rect(0, 1, 1, 1))
+    big := tui.Event { kind = tui.ResizeEvent, width = 12, height = 3 }
+    testing.AssertFalse(s.dispatch(big))
+    testing.AssertEqInt(s.buffer.width, 12)
+    testing.AssertEqInt(s.buffer.height, 3)
+    testing.AssertEqInt(s.root.Bounds().width, 12)
+    testing.AssertEqInt(s.root.Bounds().height, 3)
+    testing.AssertEqStr(s.buffer.row_text(2), "            ")
+    testing.AssertTrue(s.buffer.force_full)
+    testing.AssertEqStr(s.buffer.diff(), s.buffer.ansi())
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 1).ch, "1")
+    s.buffer.commit()
+    testing.AssertFalse(s.buffer.force_full)
+    testing.AssertEqStr(s.buffer.diff(), "")
+    again := tui.Event { kind = tui.ResizeEvent, width = 12, height = 3 }
+    testing.AssertFalse(s.dispatch(again))
+    testing.AssertTrue(s.buffer.force_full)
+    testing.AssertEqStr(s.buffer.diff(), s.buffer.ansi())
+end
+
+func assert_rect(r: tui.Rect, x: int, y: int, w: int, h: int):
+    testing.AssertEqInt(r.x, x)
+    testing.AssertEqInt(r.y, y)
+    testing.AssertEqInt(r.width, w)
+    testing.AssertEqInt(r.height, h)
+end
+
+func test_resize_event_relayouts_container():
+    root := tui.NewColumn()
+    top := Block { ch = "a" } as dyn tui.Widget
+    bottom := Block { ch = "b" } as dyn tui.Widget
+    _ := root.Add(top)
+    _ := root.Add(bottom)
+    mut s := tui.NewScreen(root as dyn tui.Widget, 20, 10)
+    defer s.Close()
+    _ := s.Add(tui.RootId, top)
+    _ := s.Add(tui.RootId, bottom)
+    assert_rect(top.Bounds(), 0, 0, 20, 5)
+    assert_rect(bottom.Bounds(), 0, 5, 20, 5)
+
+    resize := tui.Event { kind = tui.ResizeEvent, width = 30, height = 12 }
+    testing.AssertFalse(s.dispatch(resize))
+    testing.AssertEqInt(s.buffer.width, 30)
+    testing.AssertEqInt(s.buffer.height, 12)
+    assert_rect(s.root.Bounds(), 0, 0, 30, 12)
+    assert_rect(top.Bounds(), 0, 0, 30, 6)
+    assert_rect(bottom.Bounds(), 0, 6, 30, 6)
+end
+
+func subtree_screen(): tui.Screen:
+    mut s := tui.NewScreen(ZBox { mark = "0" }, 6, 1)
+    _ := s.Add(tui.RootId, ZBox { mark = "1", can_focus = true })
+    overlay := s.Add(tui.RootId, ZBox { mark = "2" })
+    _ := s.Add(overlay, ZBox { mark = "3", can_focus = true })
+    _ := s.Add(overlay, ZBox { mark = "4", can_focus = true })
+    _ := s.Add(tui.RootId, ZBox { mark = "5" })
+    full := rect(0, 0, 6, 1)
+    repeat s.tree.count() in id:
+        s.widget(id).SetBounds(full)
+    end
+    ret s
+end
+
+func test_raise_subtree_paint_order():
+    mut s := subtree_screen()
+    defer s.Close()
+    testing.AssertEqStr(painted(s), "012345")
+    s.raise_subtree(2)
+    testing.AssertEqStr(painted(s), "015234")
+    s.unraise_subtree(2)
+    testing.AssertEqStr(painted(s), "012345")
+end
+
+func test_raise_subtree_hit_test():
+    mut s := subtree_screen()
+    defer s.Close()
+    testing.AssertEqInt(s.hit_test(0, 0), 5)
+    s.raise_subtree(2)
+    testing.AssertEqInt(s.hit_test(0, 0), 4)
+    s.unraise_subtree(2)
+    testing.AssertEqInt(s.hit_test(0, 0), 5)
+end
+
+func test_raise_subtree_leaf_matches_raise():
+    mut s := subtree_screen()
+    defer s.Close()
+    s.raise_subtree(1)
+    testing.AssertEqStr(painted(s), "023451")
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.unraise_subtree(1)
+    testing.AssertEqStr(painted(s), "012345")
+    ids := id_vec(1, 1, 0)
+    s.raise(ids)
+    testing.AssertEqStr(painted(s), "023451")
+    s.unraise(ids)
+    ids.Free()
+    testing.AssertEqStr(painted(s), "012345")
+end
+
+func test_raise_subtree_focus():
+    mut s := subtree_screen()
+    defer s.Close()
+    testing.AssertEqInt(s.focused_id(), 1)
+    s.raise_subtree(2)
+    testing.AssertEqInt(s.focused_id(), 3)
+    s.unraise_subtree(2)
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_present_with_nothing_pending_is_a_noop():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.Close()
+    counter := s.Add(tui.RootId, Counter {})
+    s.widget(counter).SetBounds(rect(0, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "1")
+    s.buffer.commit()
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "1")
+    testing.AssertEqStr(s.buffer.diff(), "")
+end
+
+func test_invalidate_targets_one_widget():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.Close()
+    spot := Spot {} as dyn tui.Widget
+    spot_id := s.Add(tui.RootId, spot)
+    counter := s.Add(tui.RootId, Counter {})
+    ghost := s.Add(tui.RootId, Spot {})
+    s.widget(spot_id).SetBounds(rect(0, 0, 1, 1))
+    s.widget(counter).SetBounds(rect(4, 0, 1, 1))
+    s.widget(ghost).SetBounds(rect(7, 0, 0, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "a")
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "1")
+    testing.AssertTrue(spot.HandleEvent(key("r")))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "a")
+    s.invalidate(spot_id)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "b")
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "1")
+    s.invalidate(99)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "2")
+    s.invalidate(ghost)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(4, 0).ch, "3")
+end
+
+func test_invalidate_subtree():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 10, 6)
+    defer s.Close()
+    parent := s.Add(tui.RootId, ZBox { mark = "p" })
+    kid_a := s.Add(parent, Counter {})
+    kid_b := s.Add(parent, Counter {})
+    outside := s.Add(tui.RootId, Counter {})
+    s.widget(parent).SetBounds(rect(0, 0, 1, 1))
+    s.widget(kid_a).SetBounds(rect(0, 1, 1, 1))
+    s.widget(kid_b).SetBounds(rect(2, 1, 1, 1))
+    s.widget(outside).SetBounds(rect(8, 5, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 1).ch, "1")
+    testing.AssertEqStr(s.buffer.Get(2, 1).ch, "1")
+    testing.AssertEqStr(s.buffer.Get(8, 5).ch, "1")
+    s.invalidate_subtree(parent)
+    testing.AssertFalse(s.dirty)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 1).ch, "2")
+    testing.AssertEqStr(s.buffer.Get(2, 1).ch, "2")
+    testing.AssertEqStr(s.buffer.Get(8, 5).ch, "1")
+
+    mut b := tui.NewScreen(tui.BaseWidget {}, 12, 4)
+    defer b.Close()
+    p := b.Add(tui.RootId, ZBox { mark = "p" })
+    spot := Spot {} as dyn tui.Widget
+    spot_id := b.Add(p, spot)
+    b.widget(p).SetBounds(rect(0, 0, 2, 1))
+    b.widget(spot_id).SetBounds(rect(4, 0, 1, 1))
+    b.present()
+    testing.AssertEqStr(b.buffer.Get(4, 0).ch, "a")
+    testing.AssertTrue(spot.HandleEvent(key("r")))
+    b.invalidate(p)
+    b.present()
+    testing.AssertEqStr(b.buffer.Get(4, 0).ch, "a")
+    b.invalidate_subtree(p)
+    testing.AssertFalse(b.dirty)
+    b.present()
+    testing.AssertEqStr(b.buffer.Get(4, 0).ch, "b")
+
+    mut k := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer k.Close()
+    k.present()
+    testing.AssertFalse(k.dirty)
+    k.invalidate_subtree(tui.NoWidget)
+    testing.AssertTrue(k.dirty)
+    k.present()
+    k.invalidate_subtree(k.tree.count())
+    testing.AssertTrue(k.dirty)
+
+    mut d := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer d.Close()
+    empty := d.Add(tui.RootId, Counter {})
+    d.present()
+    testing.AssertFalse(d.dirty)
+    d.invalidate_subtree(empty)
+    testing.AssertTrue(d.dirty)
+
+    mut e := tui.NewScreen(tui.BaseWidget {}, 10, 4)
+    defer e.Close()
+    band := e.Add(tui.RootId, ZBox { mark = "b" })
+    repeat 5 in i:
+        id := e.Add(band, ZBox { mark = "c" })
+        e.widget(id).SetBounds(rect(i + 1, 0, 1, 1))
+    end
+    e.widget(band).SetBounds(rect(0, 0, 1, 1))
+    distant := e.Add(tui.RootId, Counter {})
+    e.widget(distant).SetBounds(rect(0, 3, 1, 1))
+    e.present()
+    testing.AssertEqStr(e.buffer.Get(0, 3).ch, "1")
+    e.invalidate_subtree(band)
+    testing.AssertFalse(e.dirty)
+    e.present()
+    testing.AssertEqStr(e.buffer.Get(0, 3).ch, "1")
+
+    mut f := tui.NewScreen(tui.BaseWidget {}, 8, 4)
+    defer f.Close()
+    ghost := f.Add(tui.RootId, ZBox { mark = "p" })
+    fkid := f.Add(ghost, Counter {})
+    near := f.Add(tui.RootId, Counter {})
+    f.widget(fkid).SetBounds(rect(5, 2, 1, 1))
+    f.widget(near).SetBounds(rect(0, 0, 1, 1))
+    f.present()
+    testing.AssertEqStr(f.buffer.Get(0, 0).ch, "1")
+    f.invalidate_subtree(ghost)
+    testing.AssertFalse(f.dirty)
+    f.present()
+    testing.AssertEqStr(f.buffer.Get(5, 2).ch, "2")
+    testing.AssertEqStr(f.buffer.Get(0, 0).ch, "1")
+end
+
+func test_focus_change_repaints_old_and_new_only():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 8, 1)
+    defer s.Close()
+    a := s.Add(tui.RootId, Flag {})
+    b := s.Add(tui.RootId, Flag {})
+    counter := s.Add(tui.RootId, Counter {})
+    s.widget(a).SetBounds(rect(0, 0, 1, 1))
+    s.widget(b).SetBounds(rect(2, 0, 1, 1))
+    s.widget(counter).SetBounds(rect(6, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, "*")
+    testing.AssertEqStr(s.buffer.Get(2, 0).ch, " ")
+    testing.AssertEqStr(s.buffer.Get(6, 0).ch, "1")
+    testing.AssertTrue(s.focus_next())
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(0, 0).ch, " ")
+    testing.AssertEqStr(s.buffer.Get(2, 0).ch, "*")
+    testing.AssertEqStr(s.buffer.Get(6, 0).ch, "1")
+end
+
+func test_too_many_regions_repaint_everything():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 12, 1)
+    defer s.Close()
+    mut ids := Vector {} as Vector<int>
+    defer ids.Free()
+    repeat 5 in i:
+        id := s.Add(tui.RootId, Spot {})
+        s.widget(id).SetBounds(rect(i, 0, 1, 1))
+        ids.Push(id)
+    end
+    counter := s.Add(tui.RootId, Counter {})
+    s.widget(counter).SetBounds(rect(10, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(10, 0).ch, "1")
+    repeat 4 in i:
+        s.invalidate(ids.Get(i))
+    end
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(10, 0).ch, "1")
+    repeat 5 in i:
+        s.invalidate(ids.Get(i))
+    end
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(10, 0).ch, "2")
+end
+
+func test_wide_regions_repaint_everything():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 12, 1)
+    defer s.Close()
+    a := s.Add(tui.RootId, Spot {})
+    b := s.Add(tui.RootId, Spot {})
+    counter := s.Add(tui.RootId, Counter {})
+    s.widget(a).SetBounds(rect(0, 0, 4, 1))
+    s.widget(b).SetBounds(rect(8, 0, 4, 1))
+    s.widget(counter).SetBounds(rect(6, 0, 1, 1))
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(6, 0).ch, "1")
+    s.invalidate(a)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(6, 0).ch, "1")
+    s.invalidate(a)
+    s.invalidate(b)
+    s.present()
+    testing.AssertEqStr(s.buffer.Get(6, 0).ch, "2")
+end
+
+func test_raise_subtree_ignores_unknown_ids():
+    mut s := subtree_screen()
+    defer s.Close()
+    testing.AssertEqStr(painted(s), "012345")
+    s.raise_subtree(99)
+    s.raise_subtree(tui.NoWidget)
+    s.unraise_subtree(99)
+    s.unraise_subtree(tui.NoWidget)
+    testing.AssertFalse(s.dirty)
+    testing.AssertEqStr(painted(s), "012345")
+    testing.AssertEqInt(s.focused_id(), 1)
+end
+
+func test_set_glyphs_reaches_render():
+    mut s := tui.NewScreen(tui.BaseWidget {}, 4, 1)
+    defer s.Close()
+    id := s.Add(tui.RootId, GlyphProbe {})
+    s.widget(id).SetBounds(rect(0, 0, 1, 1))
+    s.present()
+    testing.AssertTrue(seen_glyphs == tui.GlyphPolicy.Unicode)
+    s.set_glyphs(tui.GlyphPolicy.ASCII)
+    s.present()
+    testing.AssertTrue(seen_glyphs == tui.GlyphPolicy.ASCII)
+    seen_glyphs = tui.GlyphPolicy.Unicode
+    s.invalidate(id)
+    s.present()
+    testing.AssertTrue(seen_glyphs == tui.GlyphPolicy.ASCII)
+end
+
+func test_helpers_without_a_terminal():
+    mut s := tui.NewTerminalScreen(tui.BaseWidget {})
+    defer s.Close()
+    s.fit_root()
+    testing.AssertEqInt(s.buffer.area().width, s.buffer.width)
+    testing.AssertEqInt(s.root.Bounds().width, s.buffer.width)
+    s.keymap.cancel_pending()
+    mut b := tui.NewBuffer(2, 1)
+    b.commit()
+    b.flush()
+    testing.AssertEqStr(b.diff(), "")
+    b.Free()
+end
+
+func main:
+    test_new_screen_fits_root()
+    test_events_flow_through_channel()
+    test_draw_order_and_clipping()
+    test_widget_clipped_to_own_bounds()
+    test_zero_size_widget_is_skipped()
+    test_hidden_container_is_not_painted()
+    test_resize_event()
+    test_consumed_key_repaints_region_without_dirty()
+    test_run_with_tick()
+    test_ansi_frame()
+    test_close_is_idempotent()
+    test_resize_forces_full_repaint()
+    test_resize_event_relayouts_container()
+    test_raise_paint_order()
+    test_hits_false_still_paints()
+    test_raise_subtree_paint_order()
+    test_raise_subtree_hit_test()
+    test_raise_subtree_leaf_matches_raise()
+    test_raise_subtree_focus()
+    test_raise_subtree_ignores_unknown_ids()
+    test_present_with_nothing_pending_is_a_noop()
+    test_invalidate_targets_one_widget()
+    test_invalidate_subtree()
+    test_focus_change_repaints_old_and_new_only()
+    test_too_many_regions_repaint_everything()
+    test_wide_regions_repaint_everything()
+    test_set_glyphs_reaches_render()
+    test_helpers_without_a_terminal()
+    ret testing.Summary()
+end

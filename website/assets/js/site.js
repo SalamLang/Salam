@@ -852,3 +852,231 @@
     });
   });
 })();
+
+  function siteSearch() {
+    const root = document.getElementById("site-search");
+    const toggle = document.querySelector(".site-search-toggle");
+    if (!root || !toggle) return;
+    const input = document.getElementById("site-search-input");
+    const results = root.querySelector(".site-search-results");
+    const status = root.querySelector(".site-search-status");
+    const closes = root.querySelectorAll("[data-search-close]");
+    const indexUrl = document.body.getAttribute("data-search-index") || "/search-index.json";
+    const lang = document.body.getAttribute("data-search-lang") || "en";
+    const msgEmpty = document.body.getAttribute("data-search-empty") || "";
+    const msgNone = document.body.getAttribute("data-search-none") || "No results found.";
+    const msgLoading = document.body.getAttribute("data-search-loading") || "Loading...";
+    let docs = null;
+    let prepared = null;
+    let loading = null;
+    let active = -1;
+
+    function norm(s) {
+      if (!s) return "";
+      let t = String(s).toLowerCase();
+      t = t.replace(/[\u064B-\u065F\u0670\u0640]/g, "");
+      t = t.replace(/[أإآٱ]/g, "ا").replace(/ى/g, "ی").replace(/ي/g, "ی").replace(/ئ/g, "ی");
+      t = t.replace(/ك/g, "ک").replace(/ة/g, "ه").replace(/ؤ/g, "و");
+      t = t.replace(/[۰-۹]/g, (d) => "0123456789"["۰۱۲۳۴۵۶۷۸۹".indexOf(d)]);
+      return t;
+    }
+
+    function tokens(s) {
+      const n = norm(s);
+      const out = [];
+      let cur = "";
+      for (let i = 0; i < n.length; i++) {
+        const c = n[i];
+        const code = n.charCodeAt(i);
+        const isWord = (code >= 48 && code <= 57) || (code >= 97 && code <= 122) || (code >= 0x0600 && code <= 0x06ff) || c === "_" || c === "-";
+        if (isWord) cur += c;
+        else if (cur) { if (cur.length > 1 || (cur >= "0" && cur <= "9")) out.push(cur); cur = ""; }
+      }
+      if (cur && (cur.length > 1 || (cur >= "0" && cur <= "9"))) out.push(cur);
+      return out;
+    }
+
+    function prepare() {
+      if (prepared || !docs) return;
+      prepared = docs.map((d, i) => {
+        const title = d.t || "";
+        const sec = d.s || "";
+        const text = d.x || "";
+        const hay = norm(title + "\n" + sec + "\n" + text);
+        const tt = tokens(title);
+        const st = tokens(sec);
+        return { i, d, hay, tt, st };
+      });
+    }
+
+    async function ensureIndex() {
+      if (docs) return true;
+      if (loading) return loading;
+      status.textContent = msgLoading;
+      loading = fetch(indexUrl, { credentials: "same-origin" })
+        .then((r) => { if (!r.ok) throw new Error("search index"); return r.json(); })
+        .then((j) => { docs = Array.isArray(j) ? j : (j && j.docs) || []; prepare(); status.textContent = ""; return true; })
+        .catch(() => { status.textContent = msgNone; return false; })
+        .finally(() => { loading = null; });
+      return loading;
+    }
+
+    function scoreDoc(p, qn, qts) {
+      let score = 0;
+      const d = p.d;
+      const titleN = norm(d.t || "");
+      if (titleN === qn) score += 120;
+      else if (titleN.indexOf(qn) !== -1) score += 60;
+      for (let i = 0; i < qts.length; i++) {
+        const qt = qts[i];
+        if (!qt) continue;
+        let matched = false;
+        for (let j = 0; j < p.tt.length; j++) {
+          const tt = p.tt[j];
+          if (tt === qt) { score += 20; matched = true; }
+          else if (tt.indexOf(qt) === 0) { score += 12; matched = true; }
+          else if (tt.indexOf(qt) !== -1) { score += 6; matched = true; }
+        }
+        for (let j = 0; j < p.st.length; j++) {
+          const st = p.st[j];
+          if (st === qt) { score += 10; matched = true; }
+          else if (st.indexOf(qt) === 0) { score += 6; matched = true; }
+          else if (st.indexOf(qt) !== -1) { score += 3; matched = true; }
+        }
+        if (!matched) {
+          const pos = p.hay.indexOf(qt);
+          if (pos === -1) return -1;
+          score += 2;
+          if (pos < 120) score += 1;
+        }
+      }
+      if (d.k === "page") score += 2;
+      if (d.k === "learn") score += 1;
+      if (d.k === "std") score += 1;
+      return score;
+    }
+
+    function esc(s) {
+      return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function snippet(text, qts) {
+      const s = String(text || "").replace(/\s+/g, " ").trim();
+      if (!s) return "";
+      let pos = -1;
+      const sn = norm(s);
+      for (let i = 0; i < qts.length; i++) {
+        const p = sn.indexOf(qts[i]);
+        if (p !== -1 && (pos === -1 || p < pos)) pos = p;
+      }
+      let start = pos > 40 ? pos - 40 : 0;
+      let end = Math.min(s.length, start + 170);
+      if (start > 0) start = s.indexOf(" ", start) + 1 || start;
+      let out = (start > 0 ? "… " : "") + s.slice(start, end) + (end < s.length ? " …" : "");
+      return esc(out);
+    }
+
+    function renderEmpty(msg) {
+      results.innerHTML = '<li class="site-search-empty">' + esc(msg) + '</li>';
+      active = -1;
+    }
+
+    function search(q) {
+      const qn = norm(q).trim();
+      if (!qn) { renderEmpty(msgEmpty); status.textContent = ""; return; }
+      if (!prepared) { renderEmpty(msgLoading); return; }
+      const qts = tokens(qn);
+      if (!qts.length) { renderEmpty(msgEmpty); return; }
+      const found = [];
+      for (let i = 0; i < prepared.length; i++) {
+        const sc = scoreDoc(prepared[i], qn, qts);
+        if (sc >= 0) found.push({ p: prepared[i], sc });
+      }
+      found.sort((a, b) => b.sc - a.sc || (a.p.d.t || "").length - (b.p.d.t || "").length);
+      const top = found.slice(0, 20);
+      status.textContent = top.length ? "" : msgNone;
+      if (!top.length) { renderEmpty(msgNone); return; }
+      let html = "";
+      for (let i = 0; i < top.length; i++) {
+        const d = top[i].p.d;
+        const sn = snippet(d.x || d.t || "", qts);
+        html += '<li class="site-search-item" role="option" id="sr-' + i + '" aria-selected="false">' +
+          '<a href="' + esc(d.u || "#") + '">' +
+          '<span class="site-search-item-title">' + esc(d.t || "") + '</span>' +
+          '<span class="site-search-item-meta">' + (d.s ? '<span class="site-search-item-tag">' + esc(d.s) + '</span>' : '') + '</span>' +
+          (sn ? '<span class="site-search-item-snippet">' + sn + '</span>' : '') +
+          '</a></li>';
+      }
+      results.innerHTML = html;
+      active = top.length ? 0 : -1;
+      updateActive();
+    }
+
+    function updateActive() {
+      const items = results.querySelectorAll(".site-search-item");
+      for (let i = 0; i < items.length; i++) {
+        const sel = i === active;
+        items[i].setAttribute("aria-selected", sel ? "true" : "false");
+      }
+      if (active >= 0 && items[active]) items[active].scrollIntoView({ block: "nearest" });
+    }
+
+    function openSearch() {
+      root.hidden = false;
+      document.documentElement.classList.add("search-lock");
+      toggle.setAttribute("aria-expanded", "true");
+      renderEmpty(msgEmpty);
+      ensureIndex().then((ok) => {
+        if (!ok) return;
+        if (input.value.trim()) search(input.value);
+        else status.textContent = "";
+      });
+      setTimeout(() => input && input.focus(), 10);
+    }
+
+    function closeSearch() {
+      root.hidden = true;
+      document.documentElement.classList.remove("search-lock");
+      toggle.setAttribute("aria-expanded", "false");
+      active = -1;
+    }
+
+    toggle.addEventListener("click", () => {
+      if (root.hidden) openSearch(); else closeSearch();
+    });
+    for (let i = 0; i < closes.length; i++) closes[i].addEventListener("click", closeSearch);
+    root.addEventListener("click", (e) => { if (e.target === root) closeSearch(); });
+
+    let timer = null;
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => search(input.value), 30);
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        if (root.hidden) openSearch(); else closeSearch();
+        return;
+      }
+      if (e.key === "/" && root.hidden && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const tag = (document.activeElement && document.activeElement.tagName) || "";
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && !(document.activeElement && document.activeElement.isContentEditable)) {
+          e.preventDefault();
+          openSearch();
+          return;
+        }
+      }
+      if (root.hidden) return;
+      const items = results.querySelectorAll(".site-search-item");
+      if (e.key === "Escape") { e.preventDefault(); closeSearch(); toggle.focus(); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); if (items.length) { active = Math.min(active + 1, items.length - 1); updateActive(); } }
+      else if (e.key === "ArrowUp") { e.preventDefault(); if (items.length) { active = Math.max(active - 1, 0); updateActive(); } }
+      else if (e.key === "Enter" && active >= 0 && items[active]) {
+        const a = items[active].querySelector("a");
+        if (a) { e.preventDefault(); a.click(); }
+      }
+    });
+  }
+
+  siteSearch();

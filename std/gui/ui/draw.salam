@@ -15,1000 +15,140 @@
 package ui
 
 import math
-import str
-import gui.css
-import gui.cssbox
 import gui.paint
+import gui.style
 import gui.typeset
-
-func _pc(c: css.Color): paint.Color:
-    ret paint.Color { r = c.r, g = c.g, b = c.b, a = c.a }
-end
-
-func _pca(c: css.Color, alpha: f64): paint.Color:
-    ret paint.Color { r = c.r, g = c.g, b = c.b, a = (math.Round((c.a as f64) * alpha) as int) }
-end
 
 func _rect(x: f64, y: f64, w: f64, h: f64): paint.Rect:
     s := _e.scale
     ret paint.Rect { x = x * s, y = y * s, width = w * s, height = h * s }
 end
 
-func _radii(cs: css.ComputedStyle, w: f64, h: f64): paint.Radii:
-    r := css.UsedRadii(cs, w, h)
-    s := _e.scale
-    ret paint.Radii { top_left_x = r.top_left_x * s, top_left_y = r.top_left_y * s, top_right_x = r.top_right_x * s, top_right_y = r.top_right_y * s, bottom_right_x = r.bottom_right_x * s, bottom_right_y = r.bottom_right_y * s, bottom_left_x = r.bottom_left_x * s, bottom_left_y = r.bottom_left_y * s }
+func _radii(s: style.Style, w: f64, h: f64, font: f64): paint.Radii:
+    tl := _abs_len(s.radius_top_start, font, math.Min(w, h))
+    tr := _abs_len(s.radius_top_end, font, math.Min(w, h))
+    br := _abs_len(s.radius_bottom_end, font, math.Min(w, h))
+    bl := _abs_len(s.radius_bottom_start, font, math.Min(w, h))
+    sc := _e.scale
+    ret paint.Radii { top_left_x = tl * sc, top_left_y = tl * sc, top_right_x = tr * sc, top_right_y = tr * sc, bottom_right_x = br * sc, bottom_right_y = br * sc, bottom_left_x = bl * sc, bottom_left_y = bl * sc }
 end
 
-func _inner_radii(r: paint.Radii, t: f64, rr: f64, b: f64, l: f64): paint.Radii:
-    ret paint.Radii { top_left_x = math.Max(0.0, r.top_left_x - l), top_left_y = math.Max(0.0, r.top_left_y - t), top_right_x = math.Max(0.0, r.top_right_x - rr), top_right_y = math.Max(0.0, r.top_right_y - t), bottom_right_x = math.Max(0.0, r.bottom_right_x - rr), bottom_right_y = math.Max(0.0, r.bottom_right_y - b), bottom_left_x = math.Max(0.0, r.bottom_left_x - l), bottom_left_y = math.Max(0.0, r.bottom_left_y - b) }
-end
-
-func _bstyle(s: css.BorderStyle): paint.BorderStyle:
-    switch s:
-        css.BorderStyle.None, css.BorderStyle.Hidden: ret paint.BorderStyle.None end
-        css.BorderStyle.Dashed: ret paint.BorderStyle.Dashed end
-        css.BorderStyle.Dotted: ret paint.BorderStyle.Dotted end
-        else: ret paint.BorderStyle.Solid end
+func _bstyle(w: int): paint.BorderStyle:
+    switch w:
+        style.KW_NONE: ret paint.BorderStyle.None end
+        style.KW_DASHED: ret paint.BorderStyle.Dashed end
+        style.KW_DOTTED: ret paint.BorderStyle.Dotted end
     end
     ret paint.BorderStyle.Solid
 end
 
-func _bwidth(b: css.BorderSide): f64:
-    if b.style == css.BorderStyle.None or b.style == css.BorderStyle.Hidden:
-        ret 0.0
-    end
-    ret b.width
-end
-
-func _tone_ch(m: f64, ch: int): int:
-    ret math.MinI(255, math.Floor(m * (ch as f64) / 255.0 * 255.99998) as int)
-end
-
-func _tone(c: css.Color, dark: bool): css.Color:
-    r := c.r as f64
-    g := c.g as f64
-    b := c.b as f64
-    if dark:
-        if r * r + g * g + b * b <= 3072.0:
-            ret css.Color { r = math.MinI(255, c.r + 84), g = math.MinI(255, c.g + 84), b = math.MinI(255, c.b + 84), a = c.a }
-        end
-        v := math.Max(r, math.Max(g, b)) / 255.0
-        m := math.Max(0.0, (v - 0.33) / v)
-        ret css.Color { r = _tone_ch(m, c.r), g = _tone_ch(m, c.g), b = _tone_ch(m, c.b), a = c.a }
-    end
-    if r * r + g * g + b * b <= 3072.0:
-        ret css.Color { r = math.MinI(255, c.r + 168), g = math.MinI(255, c.g + 168), b = math.MinI(255, c.b + 168), a = c.a }
-    end
-    if (255.0 - r) * (255.0 - r) + (255.0 - g) * (255.0 - g) + (255.0 - b) * (255.0 - b) < 1200.0:
-        ret c
-    end
-    v := math.Max(r, math.Max(g, b)) / 255.0
-    m := math.Min(1.0, v + 0.33) / v
-    ret css.Color { r = _tone_ch(m, c.r), g = _tone_ch(m, c.g), b = _tone_ch(m, c.b), a = c.a }
-end
-
-func _side_tone(c: css.Color, style: css.BorderStyle, side: int, outer: bool): css.Color:
-    mut st := style
-    if style == css.BorderStyle.Groove:
-        st = outer ? css.BorderStyle.Inset : css.BorderStyle.Outset
-    else style == css.BorderStyle.Ridge:
-        st = outer ? css.BorderStyle.Outset : css.BorderStyle.Inset
-    else style != css.BorderStyle.Inset and style != css.BorderStyle.Outset:
-        ret c
-    end
-    ret _tone(c, (side == 0 or side == 3) == (st == css.BorderStyle.Inset))
-end
-
-func _native_look(node: int, cs: css.ComputedStyle): bool:
-    if cs.appearance != "auto":
-        ret false
-    end
-    tag := _e.dom.nodes[node].tag
-    if tag == "button" or _is_button_input(node):
-        ret cs.border_top.style == css.BorderStyle.Outset
-    end
-    if _is_text_input(node) and tag == "input":
-        ret cs.border_top.style == css.BorderStyle.Inset
-    end
-    ret false
-end
-
-func _paint_bg_layer(cv &: paint.Canvas, bl: css.BgLayer, x: f64, y: f64, w: f64, h: f64, radii: paint.Radii, alpha: f64):
-    mut a := [x, y, w, h, 0.0, 0.0, 0.0, 0.0]
-    _paint_layer_in(cv, bl, a, radii, a, alpha)
-end
-
-func _paint_box(cv &: paint.Canvas, node: int, alpha: f64):
-    b := _e.boxes[node]
-    if not b.shown or _e.node_cb[node] < 0:
+func _paint_background(cv: paint.Canvas, b: _Box, s: style.Style, u: _Used):
+    if s.background.Len() == 0:
         ret
     end
-    cs := _style_of(node)
-    if cs.visibility != css.Visibility.Visible:
-        ret
-    end
-    radii := _radii(cs, b.w, b.h)
-    native := _native_look(node, cs)
-    s := _e.scale
-    mut n := cs.box_shadows.len() - 1
-    until n >= 0:
-        sh := cs.box_shadows[n]
-        if not sh.inset:
-            cv.DrawShadow(_rect(b.x, b.y, b.w, b.h), radii, paint.Shadow { offset_x = sh.x * s, offset_y = sh.y * s, blur = sh.blur * s, spread = sh.spread * s, color = _pca(sh.color, alpha) })
-        end
-        n--
-    end
-    mut bg := _anim_color(node, 1, cs.background_color)
-    if node == _e.dom.body and _body_bg_propagated():
-        bg = css.Color { a = 0 }
-    end
-    if native:
-        c := _e.ctl[node]
-        mut nb := css.Color { r = 239, g = 239, b = 239, a = 255 }
-        if _is_text_input(node):
-            nb = css.Color { r = 255, g = 255, b = 255, a = 255 }
-        else c.pressed:
-            nb = css.Color { r = 220, g = 220, b = 220, a = 255 }
-        else c.hovered:
-            nb = css.Color { r = 229, g = 229, b = 229, a = 255 }
-        end
-        if bg.r == 240 and bg.g == 240 and bg.b == 240 or bg.r == 255 and bg.g == 255 and bg.b == 255 or bg.a == 0:
-            bg = nb
-        end
-        nr := _is_text_input(node) ? paint.Uniform(2.0 * s) : paint.Uniform(2.0 * s)
-        cv.FillRoundedRect(_rect(b.x, b.y, b.w, b.h), nr, _pca(bg, alpha))
-        bc := c.hovered and not _is_text_input(node) ? css.Color { r = 79, g = 79, b = 79, a = 255 } : css.Color { r = 118, g = 118, b = 118, a = 255 }
-        cv.DrawBorder(_rect(b.x, b.y, b.w, b.h), nr, paint.SolidBorder(s, _pca(bc, alpha)))
-    else:
-        _paint_backgrounds(cv, node, cs, b, radii, bg, alpha)
-    end
-    mut n2 := cs.box_shadows.len() - 1
-    until n2 >= 0:
-        sh := cs.box_shadows[n2]
-        if sh.inset:
-            mut ia := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-            _area_of(node, b, css.BoxArea.PaddingBox, ia)
-            cv.DrawShadow(_rect(ia[0], ia[1], ia[2], ia[3]), _area_radii(radii, ia), paint.Shadow { offset_x = sh.x * s, offset_y = sh.y * s, blur = sh.blur * s, spread = sh.spread * s, color = _pca(sh.color, alpha), inset = true })
-        end
-        n2--
-    end
-    if not native and not _paint_border_image(cv, cs, b, alpha):
-        mut bt := _bwidth(cs.border_top)
-        mut br := _bwidth(cs.border_right)
-        mut bb := _bwidth(cs.border_bottom)
-        mut bl := _bwidth(cs.border_left)
-        rx := b.x
-        ry := b.y
-        rw := b.w
-        rh := b.h
-        if cs.border_collapse == css.BorderCollapse.Collapse and _table_part(cs.display):
-            bt = 0.0
-            br = 0.0
-            bb = 0.0
-            bl = 0.0
-        end
-        if bt > 0.0 or br > 0.0 or bb > 0.0 or bl > 0.0:
-            mut bd := paint.Border {}
-            bd.top_width = bt * s
-            bd.right_width = br * s
-            bd.bottom_width = bb * s
-            bd.left_width = bl * s
-            bd.top_color = _pca(_side_tone(cs.border_top.color, cs.border_top.style, 0, true), alpha)
-            bd.right_color = _pca(_side_tone(cs.border_right.color, cs.border_right.style, 1, true), alpha)
-            bd.bottom_color = _pca(_side_tone(cs.border_bottom.color, cs.border_bottom.style, 2, true), alpha)
-            bd.left_color = _pca(_side_tone(cs.border_left.color, cs.border_left.style, 3, true), alpha)
-            bd.top_style = _bstyle(cs.border_top.style)
-            bd.right_style = _bstyle(cs.border_right.style)
-            bd.bottom_style = _bstyle(cs.border_bottom.style)
-            bd.left_style = _bstyle(cs.border_left.style)
-            _draw_css_border(cv, _rect(rx, ry, rw, rh), radii, bd, cs, alpha)
-        end
-    end
-    _paint_replaced(cv, node, cs, b, alpha)
-end
-
-func _table_part(d: css.Display): bool:
-    switch d:
-        css.Display.Table, css.Display.InlineTable, css.Display.TableCell, css.Display.TableRow, css.Display.TableRowGroup, css.Display.TableHeaderGroup, css.Display.TableFooterGroup, css.Display.TableColumn, css.Display.TableColumnGroup:
-            ret true
-        end
+    r := _rect(b.x, b.y, b.w, b.h)
+    radii := _radii(s, b.w, b.h, u.font)
+    each p in s.background:
+        if p.kind == style.PAINT_COLOR:
+            c := _ucol(p.color, u.color)
+            if c.a > 0:
+                cv.FillRoundedRect(r, radii, c)
+            end
         else:
-            ret false
+            g := _paint_gradient(p, b.w, b.h, u)
+            cv.FillGradient(r, radii, g)
         end
     end
-    ret false
 end
 
-func _side_of(cs: css.ComputedStyle, side: int): css.BorderSide:
-    switch side:
-        0: ret cs.border_top end
-        1: ret cs.border_right end
-        2: ret cs.border_bottom end
-        else: ret cs.border_left end
+func _paint_gradient(p: style.Paint, w: f64, h: f64, u: _Used): paint.Gradient:
+    mut stops := Vector {} as Vector<paint.GradientStop>
+    each st in p.stops:
+        c := _ucol(st.color, u.color)
+        off := st.has_at ? _abs_len(st.at, u.font, math.Max(w, h)) / math.Max(1.0, math.Max(w, h)) : -1.0
+        stops.Push(paint.GradientStop { pos = off, color = c })
     end
-    ret cs.border_left
+    ret paint.Gradient { stops = stops, angle = p.angle }
 end
 
-func _paint_collapsed(cv &: paint.Canvas, node: int, alpha: f64):
-    b := _e.boxes[node]
-    cb := _e.node_cb[node]
-    if cb < 0 or not b.shown:
+func _paint_border(cv: paint.Canvas, b: _Box, s: style.Style, u: _Used):
+    tw := s.border_top_style == style.KW_NONE ? 0.0 : _vp_len(s.border_top_width, u.font)
+    rw := s.border_end_style == style.KW_NONE ? 0.0 : _vp_len(s.border_end_width, u.font)
+    bw := s.border_bottom_style == style.KW_NONE ? 0.0 : _vp_len(s.border_bottom_width, u.font)
+    lw := s.border_start_style == style.KW_NONE ? 0.0 : _vp_len(s.border_start_width, u.font)
+    if tw == 0.0 and rw == 0.0 and bw == 0.0 and lw == 0.0:
         ret
     end
-    mut segs := _e.tree.CollapsedBorders(cb)
-    defer segs.free()
-    s := _e.scale
-    each sg in segs:
-        own := sg.node >= 0 and sg.node < _e.cb_node.len() ? _e.cb_node[sg.node] : -1
-        if own < 0:
-            continue
-        end
-        mut ocs := _style_of(own)
-        mut sd := _side_of(ocs, sg.side)
-        if sd.style == css.BorderStyle.Inset:
-            sd.style = css.BorderStyle.Ridge
-        else sd.style == css.BorderStyle.Outset:
-            sd.style = css.BorderStyle.Groove
-        end
-        switch sg.side:
-            0: ocs.border_top = sd break end
-            1: ocs.border_right = sd break end
-            2: ocs.border_bottom = sd break end
-            else: ocs.border_left = sd break end
-        end
-        x0 := math.Round(b.x + sg.x)
-        y0 := math.Round(b.y + sg.y)
-        x1 := math.Round(b.x + sg.x + sg.width)
-        y1 := math.Round(b.y + sg.y + sg.height)
-        if x1 <= x0 or y1 <= y0:
-            continue
-        end
-        w := sg.vertical ? x1 - x0 : y1 - y0
-        col := _pca(_side_tone(sd.color, sd.style, sg.side, true), alpha)
-        bst := _bstyle(sd.style)
-        mut bd := paint.Border { top_color = col, right_color = col, bottom_color = col, left_color = col, top_style = bst, right_style = bst, bottom_style = bst, left_style = bst }
-        mut rx := x0
-        mut ry := y0
-        mut rw := x1 - x0
-        mut rh := y1 - y0
-        switch sg.side:
-            0:
-                bd.top_width = w * s
-                rh += w
-                break
-            end
-            1:
-                bd.right_width = w * s
-                rx -= w
-                rw += w
-                break
-            end
-            2:
-                bd.bottom_width = w * s
-                ry -= w
-                rh += w
-                break
-            end
-            else:
-                bd.left_width = w * s
-                rw += w
-                break
-            end
-        end
-        _draw_css_border(cv, _rect(rx, ry, rw, rh), paint.Radii {}, bd, ocs, alpha)
-    end
+    r := _rect(b.x, b.y, b.w, b.h)
+    radii := _radii(s, b.w, b.h, u.font)
+    sc := _e.scale
+    bd := paint.Border {
+        top_width = tw * sc, top_color = _ucol(s.border_top_color, u.color), top_style = _bstyle(s.border_top_style),
+        right_width = rw * sc, right_color = _ucol(s.border_end_color, u.color), right_style = _bstyle(s.border_end_style),
+        bottom_width = bw * sc, bottom_color = _ucol(s.border_bottom_color, u.color), bottom_style = _bstyle(s.border_bottom_style),
+        left_width = lw * sc, left_color = _ucol(s.border_start_color, u.color), left_style = _bstyle(s.border_start_style)
+    }
+    cv.DrawBorder(r, radii, bd)
 end
 
-func _paint_outline(cv &: paint.Canvas, node: int, alpha: f64):
-    b := _e.boxes[node]
-    if not b.shown:
-        ret
-    end
-    cs := _style_of(node)
-    if cs.outline.style == css.BorderStyle.None or cs.outline.style == css.BorderStyle.Hidden or cs.outline.width <= 0.0:
-        ret
-    end
-    s := _e.scale
-    mut col := cs.outline.color
-    mut w := cs.outline.width
-    if cs.outline.style == css.BorderStyle.Auto:
-        col = css.Color { r = 16, g = 16, b = 16, a = 255 }
-        w = 2.0
-    end
-    cv.DrawOutlineStyled(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), w * s, cs.outline_offset * s, _pca(col, alpha), cs.outline.style == css.BorderStyle.Auto ? paint.BorderStyle.Solid : _bstyle(cs.outline.style))
-end
-
-func _content_rect(node: int, b: _Box): _Box:
-    cb := _e.node_cb[node]
-    if cb < 0:
-        ret b
-    end
-    l := _e.tree.Layout(cb)
-    ret _Box { x = b.x + l.border.left + l.padding.left, y = b.y + l.border.top + l.padding.top, w = l.content_width, h = l.content_height, shown = true }
-end
-
-func _accent(cs: css.ComputedStyle): css.Color:
-    if cs.accent_auto:
-        ret css.Color { r = 0, g = 117, b = 255, a = 255 }
-    end
-    ret cs.accent_color
-end
-
-func _paint_replaced(cv &: paint.Canvas, node: int, cs: css.ComputedStyle, b: _Box, alpha: f64):
-    tag := _e.dom.nodes[node].tag
-    s := _e.scale
-    if tag == "img":
-        src := _attr(_e.dom, node, "src")
-        k := _image_index(src)
-        if k >= 0 and _img_ok[k]:
-            img := _img_canvas[k]
-            c := _content_rect(node, b)
-            mut fit := paint.ObjectFit.Fill
-            switch cs.object_fit:
-                css.ObjectFit.Contain: fit = paint.ObjectFit.Contain break end
-                css.ObjectFit.Cover: fit = paint.ObjectFit.Cover break end
-                css.ObjectFit.None: fit = paint.ObjectFit.None break end
-                css.ObjectFit.ScaleDown: fit = paint.ObjectFit.ScaleDown break end
-                else: break end
-            end
-            if fit == paint.ObjectFit.Fill:
-                cv.DrawImage(img, _rect(c.x, c.y, c.w, c.h), alpha)
-            else:
-                dst := paint.FitImage(fit, img.width, img.height, _rect(c.x, c.y, c.w, c.h), 0.5, 0.5)
-                cv.PushClip(_rect(c.x, c.y, c.w, c.h))
-                cv.DrawImage(img, dst, alpha)
-                cv.PopClip()
-            end
-        end
-        ret
-    end
-    if tag == "progress" or tag == "meter":
-        c := _content_rect(node, b)
-        v := _attr(_e.dom, node, "value").to_float()
-        mut mn := 0.0
-        mut mx := 1.0
-        if _has_attr(_e.dom, node, "max"):
-            mx = _attr(_e.dom, node, "max").to_float()
-        end
-        if tag == "meter" and _has_attr(_e.dom, node, "min"):
-            mn = _attr(_e.dom, node, "min").to_float()
-        end
-        mut frac := mx > mn ? (v - mn) / (mx - mn) : 0.0
-        frac = math.Max(0.0, math.Min(1.0, frac))
-        r := paint.Uniform(math.Min(c.h, 6.0) * s / 2.0)
-        track := tag == "meter" ? css.Color { r = 239, g = 239, b = 239, a = 255 } : css.Color { r = 239, g = 239, b = 239, a = 255 }
-        cv.FillRoundedRect(_rect(c.x, c.y, c.w, c.h), r, _pca(track, alpha))
-        cv.DrawBorder(_rect(c.x, c.y, c.w, c.h), r, paint.SolidBorder(s, _pca(css.Color { r = 118, g = 118, b = 118, a = 255 }, alpha)))
-        fill := tag == "meter" ? css.Color { r = 16, g = 125, b = 16, a = 255 } : _accent(cs)
-        if frac > 0.0:
-            cv.FillRoundedRect(_rect(c.x, c.y, c.w * frac, c.h), r, _pca(fill, alpha))
-        end
-        ret
-    end
-    if tag == "input":
-        t := _input_type(node)
-        c := _content_rect(node, b)
-        ctl := _e.ctl[node]
-        is_on := _is_checked(node)
-        acc := _accent(cs)
-        grey := ctl.hovered ? css.Color { r = 79, g = 79, b = 79, a = 255 } : css.Color { r = 118, g = 118, b = 118, a = 255 }
-        white := css.Color { r = 255, g = 255, b = 255, a = 255 }
-        if t == "checkbox":
-            r := paint.Uniform(2.0 * s)
-            if is_on:
-                cv.FillRoundedRect(_rect(c.x, c.y, c.w, c.h), r, _pca(acc, alpha))
-                mut p := paint.NewPath()
-                p.MoveTo((c.x + c.w * 0.22) * s, (c.y + c.h * 0.52) * s)
-                p.LineTo((c.x + c.w * 0.42) * s, (c.y + c.h * 0.72) * s)
-                p.LineTo((c.x + c.w * 0.78) * s, (c.y + c.h * 0.30) * s)
-                cv.StrokePath(p, paint.Stroke { width = 1.8 * s, cap = paint.LineCap.Round, join = paint.LineJoin.Round }, _pca(white, alpha))
-                p.Free()
-            else:
-                cv.FillRoundedRect(_rect(c.x, c.y, c.w, c.h), r, _pca(white, alpha))
-                cv.DrawBorder(_rect(c.x, c.y, c.w, c.h), r, paint.SolidBorder(s, _pca(grey, alpha)))
-            end
-            ret
-        end
-        if t == "radio":
-            r := paint.Uniform(c.w * s / 2.0)
-            if is_on:
-                cv.FillRoundedRect(_rect(c.x, c.y, c.w, c.h), r, _pca(acc, alpha))
-                cv.FillRoundedRect(_rect(c.x + 2.0, c.y + 2.0, c.w - 4.0, c.h - 4.0), paint.Uniform((c.w - 4.0) * s / 2.0), _pca(white, alpha))
-                cv.FillRoundedRect(_rect(c.x + 3.5, c.y + 3.5, c.w - 7.0, c.h - 7.0), paint.Uniform((c.w - 7.0) * s / 2.0), _pca(acc, alpha))
-            else:
-                cv.FillRoundedRect(_rect(c.x, c.y, c.w, c.h), r, _pca(white, alpha))
-                cv.DrawBorder(_rect(c.x, c.y, c.w, c.h), r, paint.SolidBorder(s, _pca(grey, alpha)))
-            end
-            ret
-        end
-        if t == "range":
-            frac := _range_frac(node)
-            ty := c.y + c.h / 2.0 - 4.0
-            cv.FillRoundedRect(_rect(c.x, ty, c.w, 8.0), paint.Uniform(4.0 * s), _pca(css.Color { r = 239, g = 239, b = 239, a = 255 }, alpha))
-            cv.DrawBorder(_rect(c.x, ty, c.w, 8.0), paint.Uniform(4.0 * s), paint.SolidBorder(s, _pca(css.Color { r = 178, g = 178, b = 178, a = 255 }, alpha)))
-            cv.FillRoundedRect(_rect(c.x, ty, c.w * frac, 8.0), paint.Uniform(4.0 * s), _pca(acc, alpha))
-            tx := c.x + (c.w - 16.0) * frac
-            cv.FillRoundedRect(_rect(tx, c.y, 16.0, 16.0), paint.Uniform(8.0 * s), _pca(acc, alpha))
-            ret
-        end
-        if t == "color":
-            v := _control_value(node)
-            mut col := css.Color { a = 255 }
-            if v.len() > 0:
-                _ok := css.ParseColor(v, col)
-            end
-            cv.FillRect(_rect(c.x, c.y, c.w, c.h), _pca(col, alpha))
-            ret
-        end
-    end
-    if tag == "select":
-        c := _content_rect(node, b)
-        col := cs.color
-        ax := cs.direction == cssbox.Direction.Rtl ? c.x + 4.0 : c.x + c.w - 12.0
-        ay := c.y + c.h / 2.0 - 2.0
-        mut p := paint.NewPath()
-        p.MoveTo(ax * s, ay * s)
-        p.LineTo((ax + 8.0) * s, ay * s)
-        p.LineTo((ax + 4.0) * s, (ay + 4.0) * s)
-        p.Close()
-        cv.FillPath(p, paint.FillRule.NonZero, _pca(col, alpha))
-        p.Free()
-    end
-end
-
-func _range_frac(node: int): f64:
-    mut mn := 0.0
-    mut mx := 100.0
-    if _has_attr(_e.dom, node, "min"):
-        mn = _attr(_e.dom, node, "min").to_float()
-    end
-    if _has_attr(_e.dom, node, "max"):
-        mx = _attr(_e.dom, node, "max").to_float()
-    end
-    v := _control_value(node)
-    mut x := (mn + mx) / 2.0
-    if v.len() > 0:
-        x = v.to_float()
-    end
-    if mx <= mn:
-        ret 0.0
-    end
-    ret math.Max(0.0, math.Min(1.0, (x - mn) / (mx - mn)))
-end
-
-func _decorated(el: int, owner: int, under &: bool, over &: bool, through &: bool, col &: css.Color):
-    mut n := el
-    until n >= 0:
-        i := _e.node_el[n]
-        if i >= 0:
-            cs := _e.st[i]
-            if cs.underline or cs.overline or cs.line_through:
-                if not (under or over or through):
-                    col = cs.color
-                end
-                under = under or cs.underline
-                over = over or cs.overline
-                through = through or cs.line_through
-            end
-        end
-        if n == owner:
-            break
-        end
-        n = _e.dom.nodes[n].parent
-    end
-end
-
-func _paint_ifc(cv &: paint.Canvas, fi: int, alpha: f64):
-    f := _e.ifcs[fi]
+func _paint_run(cv: paint.Canvas, ri: int):
+    f := _e.runs[ri]
     if not f.has_lay:
         ret
     end
-    s := _e.scale
-    ocs := _style_of(f.owner)
-    if ocs.visibility != css.Visibility.Visible:
-        ret
-    end
-    clipped := f.control
-    ta := f.control and _is_textarea(f.owner)
-    if clipped:
-        cv.PushClip(_rect(f.x - 1.0, f.y - (ta ? 0.0 : 2.0), (f.control and f.w <= 0.0) ? f.lay.width + 2.0 : f.w + 2.0, ta ? f.h : math.Max(f.h, f.lay.height) + 4.0))
-    end
-    tx := f.control ? f.x - _e.ctl[f.owner].text_scroll : f.x
-    ty := ta ? f.y - _e.ctl[f.owner].text_scroll_y : f.y
-    if f.control:
-        _paint_selection(cv, fi, tx, ty, alpha)
-    end
-    repeat f.lay.lines.len() in li:
-        line := f.lay.lines[li]
-        mut k := line.run_start
-        until k < line.run_start + line.run_count:
-            r := f.lay.runs[k]
-            if r.span >= 0 and r.span < f.span_el.len() and f.span_atom[r.span] < 0:
-                el := f.span_el[r.span]
-                mut n := el
-                until n >= 0 and n != f.owner:
-                    if _e.node_cb[n] >= 0:
-                        break
-                    end
-                    ics := _style_of(n)
-                    if ics.background_color.a > 0:
-                        cv.FillRect(_rect(tx + r.x, ty + line.top, r.width, line.height), _pca(_anim_color(n, 1, ics.background_color), alpha))
-                    end
-                    n = _e.dom.nodes[n].parent
-                end
-            end
-            k++
-        end
-    end
-    repeat f.lay.lines.len() in li:
-        line := f.lay.lines[li]
-        mut k := line.run_start
-        until k < line.run_start + line.run_count:
-            r := f.lay.runs[k]
-            if r.span >= 0 and r.span < f.span_el.len() and f.span_atom[r.span] < 0:
-                el := f.span_el[r.span]
-                cs := _style_of(el)
-                mut col := _anim_color(el, 0, cs.color)
-                if f.control and _control_shows_placeholder(f.owner):
-                    col = css.Color { r = 117, g = 117, b = 117, a = 255 }
-                end
-                if cs.visibility == css.Visibility.Visible:
-                    mut si := cs.text_shadows.len() - 1
-                    until si >= 0:
-                        sh := cs.text_shadows[si]
-                        sc := _pca(sh.color, alpha)
-                        if sh.blur > 0.0:
-                            mut ch := paint.FilterChain {}
-                            ch.Add(paint.NewFilter(paint.FilterKind.Blur, sh.blur * s / 2.0))
-                            cv.BeginFilterLayer(_rect(tx + r.x + sh.x - r.size, ty + line.top + sh.y - r.size, r.width + 2.0 * r.size, line.height + 2.0 * r.size), ch)
-                            _draw_run(cv, f.lay, r, tx + sh.x, ty + sh.y, sc)
-                            cv.EndLayerFiltered(ch, 1.0)
-                            ch.Free()
-                        else:
-                            _draw_run(cv, f.lay, r, tx + sh.x, ty + sh.y, sc)
-                        end
-                        si--
-                    end
-                    _draw_run(cv, f.lay, r, tx, ty, _pca(col, alpha))
-                    mut under := false
-                    mut over := false
-                    mut through := false
-                    mut dcol := col
-                    _decorated(el, f.owner, under, over, through, dcol)
-                    if under or over or through:
-                        th := math.Max(1.0, math.Round(r.size / 14.0))
-                        dc := _pca(dcol, alpha)
-                        base := ty + line.baseline
-                        if under:
-                            cv.FillRect(_rect(tx + r.x, math.Round(base + r.size * 0.1), r.width, th), dc)
-                        end
-                        if over:
-                            cv.FillRect(_rect(tx + r.x, base - r.size * 0.8, r.width, th), dc)
-                        end
-                        if through:
-                            cv.FillRect(_rect(tx + r.x, math.Round(base - r.size * 0.3), r.width, th), dc)
-                        end
-                    end
-                end
-            end
-            k++
-        end
-    end
-    if f.control:
-        _paint_caret(cv, fi, tx, ty, alpha)
-    end
-    if clipped:
-        cv.PopClip()
-    end
-end
-
-func _paint_marker(cv &: paint.Canvas, node: int, alpha: f64):
-    cs := _style_of(node)
-    if cs.display != css.Display.ListItem or cs.list_style_position == css.ListPosition.Inside:
-        ret
-    end
-    m := _marker_text(node, cs)
-    if m.len() == 0:
-        ret
-    end
-    b := _e.boxes[node]
-    mut base := b.y + cs.font_size
-    mut fi := _e.node_ifc[node]
-    if fi < 0:
-        fi = _first_ifc_in(node)
-    end
-    if fi >= 0 and _e.ifcs[fi].has_lay and _e.ifcs[fi].lay.lines.len() > 0:
-        base = _e.ifcs[fi].y + _e.ifcs[fi].lay.lines[0].baseline
-    end
-    mut spans := Vector {} as Vector<typeset.TextSpan>
-    spans.push(_span_of(cs, m, node))
-    rtl := cs.direction == cssbox.Direction.Rtl
-    mut mps := typeset.ParagraphStyle {}
-    mps.direction = rtl ? typeset.TextDirRTL : typeset.TextDirLTR
-    mut p := typeset.NewParagraph(_fc, spans, mps)
-    mut l := typeset.LayoutParagraph(p, _fc, 0.0)
-    mut minx := 0.0
-    if l.lines.len() > 0:
-        minx = l.lines[0].x
-    end
-    x0 := (rtl ? b.x + b.w : b.x - l.width) - minx
-    _draw_layout(cv, l, x0, base - (l.lines.len() > 0 ? l.lines[0].baseline : 0.0), _pca(cs.color, alpha))
-    typeset.FreeLayout(l)
-    typeset.FreeParagraph(p)
-    spans.free()
-    _sfree(m)
-end
-
-func _first_ifc_in(node: int): int:
-    each k in _e.dom.nodes[node].kids:
-        if k < _e.node_ifc.len():
-            if _e.node_ifc[k] >= 0:
-                ret _e.node_ifc[k]
-            end
-            if _e.node_cb[k] >= 0 and _e.node_atom[k] < 0:
-                r := _first_ifc_in(k)
-                if r >= 0:
-                    ret r
-                end
-                ret -1
+    sc := _e.scale
+    ox := f.x * sc
+    oy := f.y * sc
+    repeat f.lay.glyphs.Len() in i:
+        g := f.lay.glyphs[i]
+        mut run := typeset.GlyphRun {}
+        mut found := false
+        repeat f.lay.runs.Len() in ri2:
+            r := f.lay.runs[ri2]
+            if i >= r.glyph_start and i < r.glyph_start + r.glyph_count:
+                run = r
+                found = true
+                break
             end
         end
-    end
-    ret -1
-end
-
-func _draw_run(cv &: paint.Canvas, l: typeset.TextLayout, r: typeset.GlyphRun, x: f64, y: f64, col: paint.Color):
-    fnt := typeset.FaceFont(_fc, r.face)
-    if not typeset.FontValid(fnt):
-        ret
-    end
-    s := _e.scale
-    mut q := r.glyph_start
-    until q < r.glyph_start + r.glyph_count:
-        g := l.glyphs[q]
-        gx := (x + g.x) * s
-        gy := (y + g.y) * s
-        m := typeset.CachedGlyph(_gcache, fnt, g.id, r.size * s, gx)
-        if m.width > 0 and m.height > 0:
-            cv.DrawMask(paint.Mask { data = m.data, width = m.width, height = m.height, stride = m.stride }, typeset.GlyphOriginX(gx, m), typeset.GlyphOriginY(gy, m), col)
-        end
-        q++
-    end
-end
-
-func _draw_layout(cv &: paint.Canvas, l: typeset.TextLayout, x: f64, y: f64, col: paint.Color):
-    s := _e.scale
-    each r in l.runs:
-        fnt := typeset.FaceFont(_fc, r.face)
-        if not typeset.FontValid(fnt):
+        if not found:
             continue
         end
-        mut q := r.glyph_start
-        until q < r.glyph_start + r.glyph_count:
-            g := l.glyphs[q]
-            gx := (x + g.x) * s
-            gy := (y + g.y) * s
-            m := typeset.CachedGlyph(_gcache, fnt, g.id, r.size * s, gx)
-            if m.width > 0 and m.height > 0:
-                cv.DrawMask(paint.Mask { data = m.data, width = m.width, height = m.height, stride = m.stride }, typeset.GlyphOriginX(gx, m), typeset.GlyphOriginY(gy, m), col)
-            end
-            q++
-        end
+        font := typeset.FaceFont(_fc, run.face)
+        gx := ox + g.x * sc
+        gy := oy + g.y * sc
+        gm := typeset.CachedGlyph(_gcache, font, g.id, run.size * sc, gx)
+        m := paint.Mask { data = gm.data, width = gm.width, height = gm.height, stride = gm.stride, left = gm.left, top = gm.top }
+        el := run.span < f.span_el.Len() ? f.span_el[run.span] : f.owner
+        s := el >= 0 and el < _e.cs.Len() ? _e.cs[el] : style.Default("")
+        u := el >= 0 and el < _e.us.Len() ? _e.us[el] : _Used {}
+        c := _ucol(s.color, u.color)
+        cv.DrawGlyph(m, typeset.GlyphOriginX(gx, gm), typeset.GlyphOriginY(gy, gm), c)
     end
 end
 
-func _positioned(cs: css.ComputedStyle): bool:
-    ret cs.position != cssbox.Position.Static
-end
-
-func _collect_positioned(node: int, out &: Vector<int>):
-    each k in _e.dom.nodes[node].kids:
-        if _e.node_el[k] < 0:
-            continue
-        end
-        cs := _style_of(k)
-        if cs.display == css.Display.None:
-            continue
-        end
-        if _positioned(cs) and _e.node_cb[k] >= 0:
-            out.push(k)
-        else:
-            _collect_positioned(k, out)
-        end
-    end
-end
-
-func _zsort(v &: Vector<int>):
-    n := v.len()
-    repeat n in i:
-        mut j := i
-        until j > 0 and _style_of(v[j - 1]).z_index > _style_of(v[j]).z_index:
-            t := v[j - 1]
-            v[j - 1] = v[j]
-            v[j] = t
-            j--
-        end
-    end
-end
-
-func _in_region(node: int): bool:
-    if _e.full:
-        ret true
-    end
+func _paint_node(cv: paint.Canvas, node: int):
     b := _e.boxes[node]
     if not b.shown:
-        ret true
-    end
-    pad := 64.0
-    s := _e.scale
-    mut fx0 := b.x - pad
-    mut fy0 := b.y - pad
-    mut fx1 := b.x + b.w + pad
-    mut fy1 := b.y + b.h + pad
-    _screen_bbox(node, fx0, fy0, fx1, fy1)
-    x0 := (fx0 * s) as int
-    y0 := (fy0 * s) as int
-    x1 := (fx1 * s) as int
-    y1 := (fy1 * s) as int
-    repeat _e.damage.Count() in i:
-        r := _e.damage.At(i)
-        if x0 < r.x + r.width and r.x < x1 and y0 < r.y + r.height and r.y < y1:
-            ret true
-        end
-    end
-    ret false
-end
-
-func _push_box_clip(cv &: paint.Canvas, b: _Box): bool:
-    if b.clip_x0 <= -1.0e8 and b.clip_y0 <= -1.0e8 and b.clip_x1 >= 1.0e8 and b.clip_y1 >= 1.0e8:
-        ret false
-    end
-    x0 := math.Max(b.clip_x0, -1.0e6)
-    y0 := math.Max(b.clip_y0, -1.0e6)
-    x1 := math.Min(b.clip_x1, 1.0e6)
-    y1 := math.Min(b.clip_y1, 1.0e6)
-    cv.PushClip(_rect(x0, y0, math.Max(0.0, x1 - x0), math.Max(0.0, y1 - y0)))
-    ret true
-end
-
-func _paint_ctx(cv &: paint.Canvas, node: int, alpha0: f64, out_of_flow: bool):
-    if out_of_flow and not _sub_visible(node):
         ret
     end
-    cs := _style_of(node)
-    b := _e.boxes[node]
-    mut pushed := false
-    if out_of_flow:
-        pushed = _push_box_clip(cv, b)
+    s := _e.cs[node]
+    u := _e.us[node]
+    _paint_background(cv, b, s, u)
+    _paint_border(cv, b, s, u)
+    nd := _e.dom.nodes[node]
+    if node < _e.node_run.Len() and _e.node_run[node] >= 0:
+        _paint_run(cv, _e.node_run[node])
     end
-    xf := _own_has(node)
-    mut saved := [0.0, 0.0, 0.0, 0.0]
-    if xf:
-        cv.PushTransform(_own_device(node))
-        _vis_push(node, saved)
-    end
-    op := _anim_f(node, 2, cs.opacity)
-    backdrop := cs.backdrop_filters.len() > 0
-    if backdrop and b.shown and cs.visibility == css.Visibility.Visible:
-        mut bch := paint.FilterChain {}
-        _effect_chain(cs.backdrop_filters, bch)
-        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), _radii(cs, b.w, b.h), bch, op)
-        bch.Free()
-    end
-    mut chain := paint.FilterChain {}
-    filtered := cs.filters.len() > 0
-    if filtered:
-        _effect_chain(cs.filters, chain)
-    end
-    layered := op < 1.0 or filtered or backdrop
-    alpha := alpha0
-    if layered:
-        mut lr := [0.0, 0.0, 0.0, 0.0]
-        if not _sub_local(node, lr):
-            lr[0] = 0.0
-            lr[1] = 0.0
-            lr[2] = _e.width
-            lr[3] = math.Max(_e.height, _e.doc_h)
-        end
-        if filtered:
-            cv.BeginFilterLayer(_rect(lr[0] - 1.0, lr[1] - 1.0, lr[2] - lr[0] + 2.0, lr[3] - lr[1] + 2.0), chain)
-        else:
-            cv.BeginLayer(_rect(lr[0] - 1.0, lr[1] - 1.0, lr[2] - lr[0] + 2.0, lr[3] - lr[1] + 2.0))
-        end
-    end
-    if _in_region(node):
-        _paint_box(cv, node, alpha)
-    end
-    mut pos := Vector {} as Vector<int>
-    defer pos.free()
-    _collect_positioned(node, pos)
-    _zsort(pos)
-    each p in pos:
-        if _style_of(p).z_index < 0:
-            _paint_ctx(cv, p, alpha, true)
-        end
-    end
-    _paint_flow(cv, node, alpha)
-    each p in pos:
-        if _style_of(p).z_index >= 0:
-            _paint_ctx(cv, p, alpha, true)
-        end
-    end
-    _paint_outline(cv, node, alpha)
-    if layered:
-        if filtered:
-            cv.EndLayerFiltered(chain, op)
-        else:
-            cv.EndLayer(op)
-        end
-    end
-    chain.Free()
-    if xf:
-        cv.PopTransform()
-        _vis_pop(saved)
-    end
-    if pushed:
-        cv.PopClip()
+    each k in nd.kids:
+        _paint_node(cv, k)
     end
 end
 
-func _paint_flow(cv &: paint.Canvas, node: int, alpha: f64):
-    cs := _style_of(node)
-    b := _e.boxes[node]
-    mut clipped := false
-    if _e.node_cb[node] >= 0 and _is_clipper(cs) and b.shown:
-        l := _e.tree.Layout(_e.node_cb[node])
-        r := _radii(cs, b.w, b.h)
-        s := _e.scale
-        ir := _inner_radii(r, l.border.top * s, l.border.right * s, l.border.bottom * s, l.border.left * s)
-        cv.PushRoundedClip(_rect(b.x + l.border.left, b.y + l.border.top, b.w - l.border.left - l.border.right, b.h - l.border.top - l.border.bottom), ir)
-        clipped = true
+func _paint_all(cv: paint.Canvas):
+    cv.Clear(paint.Color { r = 255, g = 255, b = 255, a = 255 })
+    if _e.dom.nodes.Len() == 0:
+        ret
     end
-    if _e.node_cb[node] >= 0:
-        _paint_marker(cv, node, alpha)
-    end
-    mut fi := _e.node_ifc[node]
-    until fi >= 0:
-        if _in_region(node) or _ifc_in_region(fi):
-            _paint_ifc(cv, fi, alpha)
-        end
-        fi = _e.ifcs[fi].next
-    end
-    each k in _e.dom.nodes[node].kids:
-        if _e.node_el[k] < 0:
-            continue
-        end
-        kcs := _style_of(k)
-        if kcs.display == css.Display.None:
-            continue
-        end
-        if _positioned(kcs) and _e.node_cb[k] >= 0:
-            continue
-        end
-        if not _sub_visible(k):
-            continue
-        end
-        if _e.node_cb[k] < 0:
-            _paint_flow(cv, k, alpha)
-            continue
-        end
-        kop := _anim_f(k, 2, kcs.opacity)
-        if kop < 1.0 or _own_has(k) or (k < _e.fx_on.len() and _e.fx_on[k]):
-            _paint_ctx(cv, k, alpha, false)
-            continue
-        end
-        if _in_region(k):
-            _paint_box(cv, k, alpha)
-        end
-        _paint_flow(cv, k, alpha)
-        _paint_outline(cv, k, alpha)
-    end
-    if cs.border_collapse == css.BorderCollapse.Collapse and (cs.display == css.Display.Table or cs.display == css.Display.InlineTable):
-        _paint_collapsed(cv, node, alpha)
-    end
-    if _e.node_cb[node] >= 0 and _is_scroller(cs) and b.shown:
-        _paint_scrollbars(cv, node, alpha)
-    end
-    if clipped:
-        cv.PopClip()
-    end
-end
-
-func _ifc_in_region(fi: int): bool:
-    if _e.full:
-        ret true
-    end
-    f := _e.ifcs[fi]
-    s := _e.scale
-    mut fx0 := f.x - 32.0
-    mut fy0 := f.y - 32.0
-    mut fx1 := f.x + math.Max(f.w, f.lay.width) + 32.0
-    mut fy1 := f.y + math.Max(f.h, f.lay.height) + 32.0
-    _screen_bbox(f.owner, fx0, fy0, fx1, fy1)
-    x0 := (fx0 * s) as int
-    y0 := (fy0 * s) as int
-    x1 := (fx1 * s) as int
-    y1 := (fy1 * s) as int
-    repeat _e.damage.Count() in i:
-        r := _e.damage.At(i)
-        if x0 < r.x + r.width and r.x < x1 and y0 < r.y + r.height and r.y < y1:
-            ret true
-        end
-    end
-    ret false
-end
-
-func _paint_scrollbars(cv &: paint.Canvas, node: int, alpha: f64):
-    cb := _e.node_cb[node]
-    l := _e.tree.Layout(cb)
-    b := _e.boxes[node]
-    c := _e.ctl[node]
-    vw := b.w - l.border.left - l.border.right
-    vh := b.h - l.border.top - l.border.bottom
-    col := paint.Color { r = 0, g = 0, b = 0, a = (math.Round(90.0 * alpha) as int) }
-    if l.scroll_height > vh + 0.5 and vh > 0.0:
-        th := math.Max(16.0, vh * vh / l.scroll_height)
-        ty := (vh - th) * (c.scroll_y / (l.scroll_height - vh))
-        cv.FillRoundedRect(_rect(b.x + b.w - l.border.right - 8.0, b.y + l.border.top + ty, 6.0, th), paint.Uniform(3.0 * _e.scale), col)
-    end
-    if l.scroll_width > vw + 0.5 and vw > 0.0:
-        tw := math.Max(16.0, vw * vw / l.scroll_width)
-        tx := (vw - tw) * (c.scroll_x / (l.scroll_width - vw))
-        cv.FillRoundedRect(_rect(b.x + l.border.left + tx, b.y + b.h - l.border.bottom - 8.0, tw, 6.0), paint.Uniform(3.0 * _e.scale), col)
-    end
-end
-
-func _body_bg_propagated(): bool:
-    rs := _e.sheet.RootStyle()
-    ret rs.background_color.a == 0 and rs.backgrounds.len() == 0
-end
-
-func _canvas_color(): css.Color:
-    if _e.bg_override.len() > 0:
-        mut c := css.Color {}
-        if css.ParseColor(_e.bg_override, c):
-            ret c
-        end
-    end
-    rs := _e.sheet.RootStyle()
-    if rs.background_color.a > 0:
-        ret rs.background_color
-    end
-    if _e.dom.body >= 0 and _e.node_el[_e.dom.body] >= 0:
-        bs := _style_of(_e.dom.body)
-        if bs.background_color.a > 0:
-            ret bs.background_color
-        end
-    end
-    if _e.env.dark:
-        ret css.Color { r = 18, g = 18, b = 18, a = 255 }
-    end
-    ret css.Color { r = 255, g = 255, b = 255, a = 255 }
-end
-
-func _paint_all(cv &: paint.Canvas):
-    _ensure_gcache()
-    _vis_init()
-    if _e.full:
-        cv.ClearRegion()
-    else:
-        cv.SetRegion(_e.damage)
-    end
-    bgc := _canvas_color()
-    cv.FillRect(paint.Rect { x = 0.0, y = 0.0, width = cv.width as f64, height = cv.height as f64 }, paint.Color { r = bgc.r, g = bgc.g, b = bgc.b, a = 255 })
-    if _e.dom.body >= 0 and _e.node_cb[_e.dom.body] >= 0:
-        b := _e.boxes[_e.dom.body]
-        bs := _style_of(_e.dom.body)
-        if _body_bg_propagated() and bs.backgrounds.len() > 0:
-            mut k := bs.backgrounds.len() - 1
-            until k >= 0:
-                _paint_bg_layer(cv, bs.backgrounds[k], 0.0, 0.0 - _e.vscroll, math.Max(_e.width, b.x + b.w), math.Max(_e.height, _e.doc_h), paint.Radii {}, 1.0)
-                k--
-            end
-        end
-        _paint_ctx(cv, _e.dom.body, 1.0, false)
-    end
-    _paint_popup(cv)
-    cv.ClearRegion()
+    _paint_node(cv, 0)
 end

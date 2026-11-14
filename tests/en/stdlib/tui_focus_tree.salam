@@ -1,0 +1,221 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import str
+import term
+import tui
+
+mut visits := Vector {} as Vector<str>
+
+struct Group:
+    pub use tui.BaseWidget
+    pub name: str = ""
+    pub seen: int = 0
+    pub consume: bool = false
+
+    pub func handle_event(event: tui.Event): bool:
+        visits.Push(this.name)
+        this.seen++
+        ret this.consume and event.is_char("x")
+    end
+end
+
+struct Tile:
+    pub use tui.BaseWidget
+    pub name: str = ""
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: tui.Event): bool:
+        _ := event
+        visits.Push(this.name)
+        ret false
+    end
+
+    pub func render(buf: tui.Buffer, bounds: tui.Rect):
+        buf.put_str(bounds.x, bounds.y, str.CharSubstr(this.name, 0, 1), tui.StyleDefault)
+    end
+end
+
+func rect(x: int, y: int, w: int, h: int): tui.Rect:
+    ret tui.Rect { x = x, y = y, width = w, height = h }
+end
+
+func key(seq: str): tui.Event:
+    ret tui.Event { kind = tui.KeyEvent, key = term.Decode(seq) }
+end
+
+func trail(): str:
+    mut out := ""
+    each i, v in visits:
+        if i > 0:
+            out += ">"
+        end
+        out += v
+    end
+    visits.Clear()
+    ret out
+end
+
+func tree_screen(m: tui.Modal): tui.Screen:
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 8)
+    outer := s.Add(tui.RootId, Group { name = "outer" })
+    inner := s.Add(outer, Group { name = "inner", consume = true })
+    a := s.Add(inner, Tile { name = "a" })
+    b := s.Add(inner, Tile { name = "b" })
+    c := s.Add(outer, Tile { name = "c" })
+    mid := s.Add(tui.RootId, m)
+    m.Add(Tile { name = "m" })
+    tm := s.Add(mid, Tile { name = "m" })
+    s.widget(a).SetBounds(rect(2, 2, 4, 1))
+    s.widget(b).SetBounds(rect(8, 2, 4, 1))
+    s.widget(c).SetBounds(rect(2, 5, 4, 1))
+    s.widget(tm).SetBounds(rect(14, 2, 4, 1))
+    ret s
+end
+
+func test_nested_tree_shape():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertEqInt(s.tree.count(), 8)
+    testing.AssertEqInt(s.tree.parent(3), 2)
+    testing.AssertEqInt(s.tree.parent(2), 1)
+    testing.AssertEqInt(s.tree.parent(1), tui.RootId)
+    testing.AssertEqInt(s.tree.parent(0), tui.NoWidget)
+end
+
+func test_auto_focus_reaches_depth_three():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertFalse(s.can_focus(1))
+    testing.AssertFalse(s.can_focus(2))
+    testing.AssertFalse(s.can_focus(7))
+end
+
+func test_auto_focus_skips_hidden_subtree():
+    mut m := tui.NewModal()
+    mut s := tui.NewScreen(tui.BaseWidget {}, 20, 8)
+    defer s.Close()
+    mid := s.Add(tui.RootId, m)
+    tile := s.Add(mid, Tile { name = "t" })
+    testing.AssertEqInt(s.focused_id(), tui.NoWidget)
+    testing.AssertFalse(s.can_focus(tile))
+    m.open()
+    testing.AssertTrue(s.can_focus(tile))
+    testing.AssertTrue(s.focus(tile))
+end
+
+func test_focus_next_crosses_container_boundaries():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), 5)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.focus_prev())
+    testing.AssertEqInt(s.focused_id(), 5)
+    testing.AssertTrue(s.focus_prev())
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.focus_prev())
+    testing.AssertEqInt(s.focused_id(), 3)
+end
+
+func test_focus_rejects_containers():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertFalse(s.focus(1))
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertFalse(s.focus(2))
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertFalse(s.can_focus(1))
+end
+
+func test_spatial_focus_across_depth():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertTrue(s.focus(3))
+    testing.AssertTrue(s.focus_right())
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertFalse(s.focus_right())
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.focus(3))
+    testing.AssertTrue(s.focus_down())
+    testing.AssertEqInt(s.focused_id(), 5)
+end
+
+func test_push_pop_across_depth():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertEqInt(s.focus_stack.Len(), 1)
+    testing.AssertTrue(s.push_focus(5))
+    testing.AssertEqInt(s.focused_id(), 5)
+    testing.AssertEqInt(s.focus_stack.Len(), 2)
+    testing.AssertTrue(s.push_focus(4))
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertEqInt(s.focus_stack.Len(), 3)
+    testing.AssertTrue(s.pop_focus())
+    testing.AssertEqInt(s.focused_id(), 5)
+    testing.AssertTrue(s.pop_focus())
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertEqInt(s.focus_stack.Len(), 1)
+end
+
+func test_nested_dispatch_bubbles_depth_first():
+    mut s := tree_screen(tui.NewModal())
+    defer s.Close()
+    testing.AssertEqInt(s.focused_id(), 3)
+    visits.Clear()
+    testing.AssertTrue(s.dispatch(key("x")))
+    testing.AssertEqStr(trail(), "a>inner")
+end
+
+func test_raised_modal_layer_stays_focused_and_ordered():
+    mut m := tui.NewModal()
+    m.takes_focus = false
+    mut s := tree_screen(m)
+    defer s.Close()
+    m.open()
+    testing.AssertTrue(s.push_focus(7))
+    testing.AssertEqInt(s.focused_id(), 7)
+    s.raise_subtree(6)
+    testing.AssertEqInt(s.focused_id(), 7)
+    testing.AssertFalse(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), 7)
+    s.unraise_subtree(6)
+    testing.AssertTrue(s.pop_focus())
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.focus_next())
+    testing.AssertEqInt(s.focused_id(), 4)
+end
+
+func main:
+    test_nested_tree_shape()
+    test_auto_focus_reaches_depth_three()
+    test_auto_focus_skips_hidden_subtree()
+    test_focus_next_crosses_container_boundaries()
+    test_focus_rejects_containers()
+    test_spatial_focus_across_depth()
+    test_push_pop_across_depth()
+    test_nested_dispatch_bubbles_depth_first()
+    test_raised_modal_layer_stays_focused_and_ordered()
+    visits.Free()
+    ret testing.Summary()
+end

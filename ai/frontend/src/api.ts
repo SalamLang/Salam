@@ -243,6 +243,7 @@ export type AdminPlatforms = {
   platforms: { id: PlatformId; count: number }[];
   systems: { os: string; version: string; arch: string; count: number }[];
 };
+export type AdminModel = { model: string; alias: string; count: number };
 export type UserProfile = {
   id: number;
   name: string;
@@ -384,6 +385,20 @@ export type AdminChatRow = Chat & {
 };
 
 export type PlanId = string;
+export type PlanTier = {
+  parallel: number;
+  price: number;
+  usd: number;
+  off: number;
+  chat_5h: number;
+  chat_daily: number;
+  chat_weekly: number;
+  api_5h: number;
+  api_daily: number;
+  api_weekly: number;
+  max_input: number;
+  max_output: number;
+};
 export type Plan = {
   id: PlanId;
   name: string;
@@ -404,6 +419,9 @@ export type Plan = {
   sort: number;
   salam_only: boolean;
   hours: number;
+  max_input: number;
+  max_output: number;
+  tiers?: PlanTier[];
 };
 export type AdminPlan = Plan & { subscribers: number };
 export type Gateway = "zarinpal" | "zibal";
@@ -427,7 +445,7 @@ export type Payment = {
   plan_name: string;
   gateway: Gateway;
   amount: number;
-  status: "pending" | "verifying" | "paid" | "failed" | "canceled";
+  status: "pending" | "verifying" | "paid" | "failed" | "canceled" | "reversed";
   token: string;
   ref: string;
   card: string;
@@ -1481,6 +1499,7 @@ export const api = {
     ),
   adminPlatforms: (days: number) =>
     call<AdminPlatforms>("GET", `/admin/platforms?days=${days}`),
+  adminModels: () => call<{ models: AdminModel[] }>("GET", "/admin/models"),
   adminGuests: (offset: number) =>
     call<{ guests: AdminGuest[]; total: number }>(
       "GET",
@@ -1643,17 +1662,18 @@ export const api = {
     gateway: Gateway,
     code?: string,
     campaign?: CampaignFields,
+    parallel?: number,
   ) =>
     call<{ payment_id: number; gateway: Gateway; amount: number; url: string }>(
       "POST",
       "/billing/checkout",
-      { plan, gateway, code: code || undefined, ...campaign },
+      { plan, gateway, code: code || undefined, parallel: parallel || undefined, ...campaign },
     ),
-  previewDiscount: (plan: PlanId, code: string) =>
+  previewDiscount: (plan: PlanId, code: string, parallel?: number) =>
     call<{ code: string; price: number; charge: number; discount: number }>(
       "POST",
       "/billing/discount/preview",
-      { plan, code },
+      { plan, code, parallel: parallel || undefined },
     ),
   payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
   usage: () => call<UsageReport>("GET", "/usage"),
@@ -1690,6 +1710,8 @@ export const api = {
       "GET",
       `/admin/payments${query({ status: f.status, user: f.user, before: f.before })}`,
     ),
+  adminReversePayment: (id: number) =>
+    call<{ ok: boolean }>("POST", `/admin/payments/${id}/reverse`),
   adminCampaigns: (days: number) =>
     call<{ campaigns: Campaign[]; ready: boolean }>(
       "GET",

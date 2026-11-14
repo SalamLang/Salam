@@ -68,7 +68,8 @@ One page source, two targets:
 
 ```
 salam page build app.salam              -> app.html (web, unchanged)
-salam page run app.salam --ui=native    -> a native window, drawn by Salam
+salam run app.salam --ui=native         -> a native window, drawn by Salam
+salam build app.salam --ui=native       -> a native executable
 ```
 
 - The same syntax, elements, attributes and CSS properties on both targets.
@@ -86,10 +87,10 @@ salam page run app.salam --ui=native    -> a native window, drawn by Salam
 
 The compiler knows which UI target it is building for:
 
-| target   | how it is chosen                                          | `SALAM_UI_WEB` | `SALAM_UI_NATIVE` |
-| -------- | --------------------------------------------------------- | -------------- | ----------------- |
-| `web`    | default for every command                                 | true           | false             |
-| `native` | `--ui=native` (`salam check`, later `page run`, `bundle`) | false          | true              |
+| target   | how it is chosen                                                          | `SALAM_UI_WEB` | `SALAM_UI_NATIVE` |
+| -------- | ------------------------------------------------------------------------- | -------------- | ----------------- |
+| `web`    | default for every command                                                 | true           | false             |
+| `native` | `--ui=native` (`salam check`, `salam run`, `salam build`; later `bundle`) | false          | true              |
 
 Both names are compile-time constants, folded like `SALAM_OS_LINUX`. In
 Persian they are `سلام رابط وب` and `سلام رابط بومی`. Inside a page:
@@ -167,7 +168,7 @@ portable: the native cascade supports element, class and id selectors.
 | `link url = ...`        | another page of the app opens in the window; an `http(s)` address opens in the user's browser |
 | `font`                  | font loaded from the app's bundled assets                                                     |
 | `media condition = ...` | window size, orientation and OS dark mode                                                     |
-| `image url = ...`       | file decoded with the codecs in `std/ai/image`                                                |
+| `image url = ...`       | file decoded with the codecs in `std/image`                                                |
 
 ## Architecture
 
@@ -373,7 +374,7 @@ differently:
   size-bounded cache keyed by font, size, glyph and a quarter-pixel x
   position. Persian needs real OpenType shaping (GSUB for joining forms and
   ligatures, GPOS for kerning and marks); the presentation forms used by
-  `std/ai/image` today stay only as a fallback.
+  `std/image` today stay only as a fallback.
 - **Styles.** Slint ships widget libraries per style. A page already styles
   itself with CSS properties, so we ship one default style sheet and expose
   theme tokens as reactive state that follows the OS colour scheme.
@@ -430,11 +431,11 @@ shared by the native and the web targets), from two facts.
   passed to a child counts when the child calls it in its view), and anything
   a derived value it feeds is read by.
 
-| Written | Read by the view | Kind | What the compiler generates |
-|---|---|---|---|
-| yes | yes | state | per instance storage, write marks, the instance depends on it |
-| yes | no | instance variable | per instance storage, no marks, never re-runs anything |
-| no | either | derived value | its expression, worked out each time the instance runs |
+| Written | Read by the view | Kind              | What the compiler generates                                   |
+| ------- | ---------------- | ----------------- | ------------------------------------------------------------- |
+| yes     | yes              | state             | per instance storage, write marks, the instance depends on it |
+| yes     | no               | instance variable | per instance storage, no marks, never re-runs anything        |
+| no      | either           | derived value     | its expression, worked out each time the instance runs        |
 
 An instance variable starts from its value once, when the instance is made,
 and keeps it across re-runs; a derived value follows the parameters and the
@@ -748,7 +749,7 @@ Each phase is one pull request.
 1. **Paint and text.** `std/gui/paint` (canvas, paths, anti-aliased fill and
    stroke, rounded rects, borders, gradients, shadows, clipping, images) and
    `std/gui/text` (the TrueType, shaping and bidi code moved out of
-   `std/ai/image`, plus font fallback, line breaking and caret hit testing).
+   `std/image`, plus font fallback, line breaking and caret hit testing).
    Tests compare PNG output against checked-in images.
 2. **Windows.** `std/gui/window`: X11, Win32 and Cocoa windows that show a
    pixel buffer, an event loop with pointer, keyboard, text input, resize,
@@ -758,8 +759,9 @@ Each phase is one pull request.
    block, inline, flex, grid and table layout, absolute positioning, scrolling, painting,
    hit testing, event dispatch, focus order.
 4. **Native generator.** `compiler/sal_layout/layout_native.salam`,
-   `salam page run --ui=native`, `salam page shot` (render to PNG),
-   `ui.Run` for programs, `engine = "native"` in `salam bundle`.
+   `salam run --ui=native` and `salam build --ui=native`, `ui.Run` for
+   programs (done); `salam page shot` (render to PNG) and
+   `engine = "native"` in `salam bundle` (not yet).
 5. **Reactive state** on both targets, with two-way binding for inputs.
 6. **Widgets and input.** Every input type, text area, select with a popup,
    forms, details, dialog, progress, meter, tables, lists, text editing with

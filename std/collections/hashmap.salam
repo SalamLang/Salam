@@ -25,35 +25,57 @@ pub struct HashMap<K, V>:
     pub vals: V* = null
     @en "state"
     @fa "وضعیت خانه‌ها"
-    pub state: int* = null
+    pub state: i8* = null
     @en "cap"
     @fa "ظرفیت"
     pub cap: int = 0
+    mask: int = 0
     @en "count"
     @fa "شمار"
     pub count: int = 0
     @en "used"
     @fa "خانه‌های استفاده‌شده"
     pub used: int = 0
+    zbuf: V* = null
 
     pub func _index(k: K): int:
-        mut idx := (hash(k) % (this.cap as u64)) as int
+        mask := this.mask
+        mut idx := (hash(k) as int) & mask
         mut firstdel := 0 - 1
         kp := this.keys
+        stp := this.state
         go := true
         until go:
-            st := this.state[idx]
-            if st == 0:
+            st := stp[idx]
+            if st == (1 as i8):
+                if kp[idx] == k: ret idx end
+            else st == (0 as i8):
                 if firstdel >= 0: ret firstdel end
                 ret idx
-            else st == 1:
-                if kp[idx] == k: ret idx end
             else:
                 if firstdel < 0: firstdel = idx end
             end
-            idx = (idx + 1) % this.cap
+            idx = (idx + 1) & mask
         end
         ret idx
+    end
+
+    pub func _find(k: K): int:
+        mask := this.mask
+        mut idx := (hash(k) as int) & mask
+        kp := this.keys
+        stp := this.state
+        go := true
+        until go:
+            st := stp[idx]
+            if st == (1 as i8):
+                if kp[idx] == k: ret idx end
+            else st == (0 as i8):
+                ret 0 - 1
+            end
+            idx = (idx + 1) & mask
+        end
+        ret 0 - 1
     end
 
     pub func _resize(newcap: int):
@@ -61,103 +83,152 @@ pub struct HashMap<K, V>:
         ov := this.vals
         os := this.state
         oc := this.cap
-        this.keys = mem.MustAllocate((newcap as u64) * sizeof(K)) as K*
-        this.vals = mem.MustAllocate((newcap as u64) * sizeof(V)) as V*
-        this.state = mem.MustAllocateZeroed((newcap as u64) * sizeof(int)) as int*
-        this.cap = newcap
-        this.count = 0
-        this.used = 0
+        nk := mem.MustAllocate((newcap as u64) * sizeof(K)) as K*
+        nv := mem.MustAllocate((newcap as u64) * sizeof(V)) as V*
+        ns := mem.MustAllocateZeroed(newcap as u64) as i8*
+        mask := newcap - 1
+        okp := ok
+        ovp := ov
         repeat oc in i:
-            if os[i] == 1:
-                okp := ok
-                ovp := ov
-                this.put(okp[i], ovp[i])
+            if os[i] == (1 as i8):
+                k := okp[i]
+                mut idx := (hash(k) as int) & mask
+                until ns[idx] == (0 as i8):
+                    idx = (idx + 1) & mask
+                end
+                ns[idx] = 1 as i8
+                nk[idx] = k
+                nv[idx] = ovp[i]
             end
         end
         if ok != null: mem.Free(ok as void*) end
         if ov != null: mem.Free(ov as void*) end
         if os != null: mem.Free(os as void*) end
+        this.keys = nk
+        this.vals = nv
+        this.state = ns
+        this.cap = newcap
+        this.mask = newcap - 1
+        this.used = this.count
     end
 
-    @en "put"
+    @en "Put"
     @fa "قراردادن"
-    pub func put(k: K, v: V):
+    pub func Put(k: K, v: V):
         if this.cap == 0:
-            this._resize(8)
+            this._resize(16)
         else:
-            if (this.used + 1) * 10 >= this.cap * 7: this._resize(this.cap * 2) end
+            if (this.used + 1) * 5 >= this.cap * 3: this._resize(this.cap * 2) end
         end
         idx := this._index(k)
-        kp := this.keys
-        vp := this.vals
         st := this.state[idx]
-        if st != 1:
-            this.count++
-            if st == 0: this.used++ end
+        vp := this.vals
+        if st == (1 as i8):
+            vp[idx] = v
+            ret
         end
-        this.state[idx] = 1
+        this.count++
+        if st == (0 as i8): this.used++ end
+        this.state[idx] = 1 as i8
+        kp := this.keys
         kp[idx] = k
         vp[idx] = v
     end
 
+    @en "put"
+    @fa "قراردادن"
+    pub func put(k: K, v: V): this.Put(k, v) end
+
+    @en "Insert"
+    @fa "درج"
+    pub func Insert(k: K, v: V): this.Put(k, v) end
+
     @en "insert"
     @fa "درج"
-    pub func insert(k: K, v: V): this.put(k, v) end
+    pub func insert(k: K, v: V): this.Insert(k, v) end
+
+    @en "Has"
+    @fa "دارد"
+    pub func Has(k: K): bool:
+        if this.cap == 0: ret false end
+        ret this._find(k) >= 0
+    end
 
     @en "has"
     @fa "دارد"
-    pub func has(k: K): bool:
-        if this.cap == 0: ret false end
-        idx := this._index(k)
-        ret this.state[idx] == 1
+    pub func has(k: K): bool: ret this.Has(k) end
+
+    @en "Get"
+    @fa "دریافت"
+    pub func Get(k: K): V:
+        if this.cap != 0:
+            idx := this._find(k)
+            if idx >= 0:
+                vp := this.vals
+                ret vp[idx]
+            end
+        end
+        if this.zbuf == null:
+            this.zbuf = mem.MustAllocateZeroed(sizeof(V)) as V*
+        end
+        zp := this.zbuf
+        ret zp[0]
     end
 
     @en "get"
     @fa "دریافت"
-    pub func get(k: K): V:
-        if this.cap != 0:
-            idx := this._index(k)
+    pub func get(k: K): V: ret this.Get(k) end
+
+    @en "GetOr"
+    @fa "دریافت با پیش فرض"
+    pub func GetOr(k: K, def: V): V:
+        if this.cap == 0: ret def end
+        idx := this._find(k)
+        if idx >= 0:
             vp := this.vals
-            if this.state[idx] == 1: ret vp[idx] end
+            ret vp[idx]
         end
-        z := mem.MustAllocateZeroed(sizeof(V)) as V*
-        zv := z[0]
-        mem.Free(z as void*)
-        ret zv
+        ret def
     end
 
     @en "get_or"
     @fa "دریافت با پیش فرض"
-    pub func get_or(k: K, def: V): V:
-        if this.cap == 0: ret def end
-        idx := this._index(k)
-        vp := this.vals
-        if this.state[idx] == 1: ret vp[idx] end
-        ret def
-    end
+    pub func get_or(k: K, def: V): V: ret this.GetOr(k, def) end
 
-    @en "remove"
+    @en "Remove"
     @fa "حذف"
-    pub func remove(k: K): bool:
+    pub func Remove(k: K): bool:
         if this.cap == 0: ret false end
-        idx := this._index(k)
-        if this.state[idx] != 1: ret false end
-        this.state[idx] = 2
+        idx := this._find(k)
+        if idx < 0: ret false end
+        this.state[idx] = 2 as i8
         this.count--
         ret true
     end
 
+    @en "remove"
+    @fa "حذف"
+    pub func remove(k: K): bool: ret this.Remove(k) end
+
+    @en "Size"
+    @fa "اندازه"
+    pub func Size(): int: ret this.count end
+
     @en "size"
     @fa "اندازه"
-    pub func size(): int: ret this.count end
+    pub func size(): int: ret this.Size() end
+
+    @en "IsEmpty"
+    @fa "خالی است"
+    pub func IsEmpty(): bool: ret this.count == 0 end
 
     @en "is_empty"
     @fa "خالی است"
-    pub func is_empty(): bool: ret this.count == 0 end
+    pub func is_empty(): bool: ret this.IsEmpty() end
 
-    @en "iter"
+    @en "Iter"
     @fa "پیمایشگر"
-    pub func iter(): MapIter<K, V>:
+    pub func Iter(): MapIter<K, V>:
         it := MapIter {} as MapIter<K, V> it.keys = this.keys
         it.vals = this.vals
         it.state = this.state
@@ -166,19 +237,31 @@ pub struct HashMap<K, V>:
         ret it
     end
 
-    @en "free"
+    @en "iter"
+    @fa "پیمایشگر"
+    pub func iter(): MapIter<K, V>: ret this.Iter() end
+
+    @en "Free"
     @fa "آزادسازی"
-    pub func free():
+    pub func Free():
         if this.keys != null: mem.Free(this.keys as void*) end
         if this.vals != null: mem.Free(this.vals as void*) end
         if this.state != null: mem.Free(this.state as void*) end
+        if this.zbuf != null: mem.Free(this.zbuf as void*) end
         this.keys = null
         this.vals = null
         this.state = null
+        this.zbuf = null
         this.cap = 0
+        this.mask = 0
         this.count = 0
         this.used = 0
     end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free(): this.Free() end
+
 end
 
 @en "MapIter"
@@ -192,7 +275,7 @@ pub struct MapIter<K, V>:
     pub vals: V* = null
     @en "state"
     @fa "وضعیت خانه‌ها"
-    pub state: int* = null
+    pub state: i8* = null
     @en "cap"
     @fa "ظرفیت"
     pub cap: int = 0
@@ -202,35 +285,53 @@ pub struct MapIter<K, V>:
 
     pub func _seek():
         until this.pos < this.cap:
-            if this.state[this.pos] == 1: ret end
+            if this.state[this.pos] == (1 as i8): ret end
             this.pos++
         end
     end
 
-    @en "has_next"
+    @en "HasNext"
     @fa "بعدی دارد"
-    pub func has_next(): bool:
+    pub func HasNext(): bool:
         this._seek()
         ret this.pos < this.cap
     end
 
-    @en "key"
+    @en "has_next"
+    @fa "بعدی دارد"
+    pub func has_next(): bool: ret this.HasNext() end
+
+    @en "Key"
     @fa "کلید"
-    pub func key(): K:
+    pub func Key(): K:
         this._seek()
         kp := this.keys
         ret kp[this.pos]
     end
 
-    @en "value"
+    @en "key"
+    @fa "کلید"
+    pub func key(): K: ret this.Key() end
+
+    @en "Value"
     @fa "مقدار"
-    pub func value(): V:
+    pub func Value(): V:
         this._seek()
         vp := this.vals
         ret vp[this.pos]
     end
 
+    @en "value"
+    @fa "مقدار"
+    pub func value(): V: ret this.Value() end
+
+    @en "Next"
+    @fa "بعدی"
+    pub func Next(): this.pos++ end
+
     @en "next"
     @fa "بعدی"
-    pub func next(): this.pos++ end
+    pub func next(): this.Next() end
+
+
 end

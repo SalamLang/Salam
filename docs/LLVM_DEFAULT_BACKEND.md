@@ -1,7 +1,14 @@
 # Making LLVM the default backend
 
-Status: in progress. This document records what `salam build` does today, what
-blocks LLVM from becoming the default, and the plan for each remaining piece.
+Status: done. LLVM is the default backend of every compiler that has it
+linked in. This document is the work log of how that happened.
+
+Most of the log was written while Salam had two compilers: the C one in
+`c/src/` and the self-hosted one in `compiler/`. The C compiler was deleted
+(#1546), so only the self-hosted one is left. Sections that describe the C
+compiler's own build (its `Makefile`, `WITH_LLVM` and so on) are marked
+**historical**; they explain why things are the way they are but name files
+that no longer exist. Elsewhere the filenames point at `compiler/`.
 
 ## Why this is wanted
 
@@ -19,18 +26,35 @@ exists (see "Self-contained toolchain" below).
 
 ## What `salam build` does today
 
-| invocation                             | path                                        |
-| -------------------------------------- | ------------------------------------------- |
-| `salam build app.salam`                | Salam -> C -> bundled tcc                   |
-| `salam build app.salam --cc=gcc`       | Salam -> C -> system gcc, auto `-O2`        |
-| `salam build app.salam --backend=llvm` | Salam -> LLVM IR -> object, auto `-O2`      |
-| `salam build app.salam --target=T`     | Salam -> LLVM IR -> object -> lld           |
-| `salam llvm app.salam ...`             | Salam -> LLVM IR (explicit, all emit modes) |
+| invocation                               | path                                                    |
+| ---------------------------------------- | ------------------------------------------------------- |
+| `salam build app.salam`                  | see below                                               |
+| `salam build app.salam --backend=c`      | Salam -> C -> tcc (bundled on Windows), `-O2`           |
+| `salam build app.salam --cc=gcc`         | Salam -> C -> system gcc, `-O2` (`--cc` implies `c`)    |
+| `salam build app.salam --backend=llvm`   | Salam -> LLVM IR -> object -> lld, `-O2`, no C fallback |
+| `salam build app.salam --backend=native` | Salam -> IR -> machine code and object -> linker        |
+| `salam build app.salam --target=T`       | as without `--target`, cross-compiled for `T`           |
+| `salam llvm app.salam ...`               | Salam -> LLVM IR (explicit, all emit modes)             |
 
-The default comes from [`cli.c:38`](../c/src/cli/cli.c#L38) (`out->cc = "tcc"`),
-and the cross path is chosen at
-[`build.c:489`](../c/src/driver/build.c#L489). tcc is resolved to a _bundled_
-copy, which is why the default build works on a clean machine.
+With no `--backend` (`Dr.backend` is `"auto"`), `Build` in
+`compiler/driver/driver_build.salam` picks:
+
+1. the native backend on a Windows on Arm host (`native_by_default` in
+   `compiler/driver/driver_native.salam`), since neither LLVM nor tcc ship
+   for that host;
+2. otherwise LLVM, when the compiler has LLVM linked in (`use_llvm_backend`
+   in `compiler/driver/driver_proc.salam`, which asks
+   `compiler/llvm_bridge.salam`);
+3. otherwise the C backend.
+
+An LLVM build that reports an unsupported construct
+(`RC_LLVM_UNSUPPORTED`) or a failed link (`RC_LLVM_LINK_FAILED`) falls back
+to the C backend with a warning, unless `--backend=llvm` was passed.
+
+When this work started, the C compiler defaulted to tcc
+(`out->cc = "tcc"` in its `cli.c`) and only a `--target` build went through
+LLVM. tcc was resolved to a _bundled_ copy, which is why the default build
+worked on a clean machine.
 
 ## Backend coverage: the actual blocker
 
@@ -124,12 +148,13 @@ built-in work:
   `cg_call` has always done. Also taught `ll_func_ret`/`ll_func_params` the
   second prefix. Fixed 4 files.
 - **Layout declarations are skipped, not an error.** `AST_LAYOUT_BLOCK` /
-  `AST_LAYOUT_COMPONENT` are the HTML/UI DSL, lowered by `c/src/layout/` for
-  `layout-build`/`web` and never by a code generator - the C backend emits
+  `AST_LAYOUT_COMPONENT` are the HTML/UI DSL, lowered by the layout code
+  (then `c/src/layout/`, now `compiler/sal_layout/`) for `page build`/`web`
+  and never by a code generator - the C backend emits
   "layout block omitted in general (C) mode" and drops them. Reporting them
   as unsupported made 50 files look like backend gaps that the C backend
   does not compile either. Fixed 42 files.
-- **`d.free()` on an interface value** releases the box, not a vtable
+- **`d.Free()` on an interface value** releases the box, not a vtable
   method, so no slot could ever match ("interface 'Shape' has no method
   'free'").
 - **Assignment as an expression** (`a = b = c`): store, then reload the
@@ -159,8 +184,9 @@ end
 failed to find it (`address of an unknown identifier 'dir'` /
 `'dir' undeclared`). Passing the same value along _without calling it_
 worked, which is what made it look target-specific for so long. Fixed in
-`sema_call.c` and `compiler/semantic.salam` by recording the capture on the
-indirect-call path with the same condition the expression path uses.
+the semantic pass of both compilers (today `compiler/semantic/`) by
+recording the capture on the indirect-call path with the same condition the
+expression path uses.
 
 ### Still open
 
@@ -176,13 +202,19 @@ Three separate questions, often conflated:
 
 1. **Does a user compiling a Salam program need a toolchain?** No. This is
    the one that matters for "everybody can use salam", and it is done.
-2. **Does someone _building the C compiler from source_ need LLVM?** No -
-   it is used when present and skipped when absent.
+2. **Does someone _building the compiler from source_ need LLVM?** No -
+   it is used when present and skipped when absent. Today that means
+   `tools/bash/build-selfhost.sh` with or without `--llvm=DIR`.
 3. **Can Salam code itself drive static LLVM/lld?** Yes - `import llvm` now
    links and runs. What is left is wiring the self-hosted compiler's
    `NativeRun` to use it. See "The self-hosted compiler" below.
 
-The pieces:
+The pieces, as they were in the C compiler's `Makefile` (**historical**).
+Today `std/llvm/native/build.sh` builds `libsalam_llvm.a`,
+`tools/bash/build-embed.sh` builds `libsalam_embed.a` (sysroots and
+third-party libraries), and `tools/bash/build-selfhost.sh --llvm=DIR
+--embed=DIR` links both into the compiler by passing `-DSALAM_HAVE_LLVM` and
+`-DSALAM_HAVE_EMBED`:
 
 | piece                                      | flag                    | state              |
 | ------------------------------------------ | ----------------------- | ------------------ |
@@ -195,7 +227,7 @@ The pieces:
 | native build uses in-process lld           | -                       | added              |
 | merged `libsalam_llvm.a` for self-host     | `make libsalam-llvm`    | added              |
 
-### Now on by default
+### Now on by default (historical: the C compiler's Makefile)
 
 A plain `make -C c` previously produced a salam _without_ LLVM; the
 self-contained build was opt-in, so the shipped default was the one that
@@ -212,7 +244,7 @@ lld is probed separately because `llvm-config` knows nothing about it. A host
 missing either still builds, just without the LLVM path - a capability
 upgrade, not a new hard build dependency. `WITH_LLVM=0` opts out.
 
-### The stale-flags trap
+### The stale-flags trap (historical: the C compiler's Makefile)
 
 `CPPFLAGS` is assembled from the `WITH_*`/`SALAM_EMBED_*` switches, but the
 compile rules depended only on sources. Adding `SALAM_EMBED_MINGW_DIR` to an
@@ -254,7 +286,15 @@ tcc on PATH?  no      link/ld?       no
 
 Compiled at `-O2` and linked with nothing installed.
 
-### What was missing for native builds
+### What was missing for native builds (historical: the C compiler)
+
+Today the self-hosted compiler links in-process through `std/llvm`:
+`NativeRun` (`compiler/llvmgen/llvm_api.salam`) calls `Run` in
+`compiler/llvm_bridge.salam`, which hands the IR to `llvm.Run`
+(`std/llvm/run.salam`). That optimizes and emits the object in-process and
+links it with `LinkAuto` (`std/llvm/linker.salam`), using `HostLinkTriple`
+for a build without `--target`. The rest of this section is how the C
+compiler got there.
 
 `link_executable()` in `llvm_native.c` shells out to `gcc`/`clang`/`cc`/`tcc`
 for any build without `--target`, and `lld_can_link()` returns 0 when the
@@ -280,34 +320,35 @@ in-process linker can accept.
 
 ### Remaining work
 
-- **Release jobs must run `make self-contained`,** not plain `make`. The
-  LLVM/lld half is now automatic, but the _embedded sysroots_ still come
-  from `stage-sysroots`, and without them a cross target reports "no mingw
-  sysroot". The stale-flags fix above means this no longer silently
-  half-works, but the release workflow still has to ask for it.
+- ~~**Release jobs must run `make self-contained`.**~~ Done differently:
+  the release jobs in `.github/workflows/compiler-release.yml` stage the
+  sysroots (`tools/bash/stage-sysroots.sh`,
+  `tools/bash/stage-wasi-sysroot.sh`), build `libsalam_llvm.a` and
+  `libsalam_embed.a`, and pass both to `tools/bash/build-selfhost.sh`.
 - **macOS.** Deliberately not self-contained. Linking Mach-O requires
   libSystem from the installed SDK, which cannot legally be embedded and
   redistributed, so macOS uses the system linker. This is a licensing
   boundary, not a missing feature, and belongs in the release notes rather
   than being papered over.
-- **Binary size.** 217 MB static (417 MB for the merged archive).
+- **Binary size.** 217 MB static (417 MB for the merged archive), measured
+  on the C compiler's build.
   `LLVM_COMPONENTS := all` is pulled in because `WITH_LLD=1` needs it;
   trimming to the targets actually shipped is the obvious lever.
 
 ## The self-hosted compiler
 
-The goal is that `compiler/*.salam` gets the same in-process LLVM the C
-compiler has. Two things blocked it; both are now resolved, and what remains
-is pipeline work rather than a design problem.
+The goal was that `compiler/*.salam` gets the same in-process LLVM the C
+compiler had. Two things blocked it; both were resolved, and the release
+compilers have been built this way since.
 
 ### Blocker 1: gating the import (resolved - it already worked)
 
-`compiler/llvm.salam`'s header says std/llvm is deliberately not imported
+`compiler/llvm.salam`'s header said std/llvm was deliberately not imported
 because "condcomp.salam's flag set is a fixed list of 20 OS/arch bools -
 there is no user-definable flag to gate an opt-in the way the C's WITH_LLVM
-does". That is out of date. Both compilers already accept `-D`:
-`cc_push_define` in `condcomp_table.c` and in `compiler/condcomp.salam`, plus
-`-DNAME` / `--define=NAME` in the CLI.
+does". That was out of date. Both compilers already accepted `-D`
+(`cc_push_define` in `compiler/condcomp.salam`, then also in the C
+compiler's `condcomp_table.c`), plus `-DNAME` / `--define=NAME` in the CLI.
 
 Conditional imports work, verified directly:
 
@@ -348,7 +389,8 @@ else:
 end
 ```
 
-`make install` places it in `$(PREFIX)/lib` so the bare name resolves.
+The C compiler's `make install` placed it in `$(PREFIX)/lib` so the bare name
+resolved; today `build-selfhost.sh --llvm=DIR` passes `--libpath=DIR`.
 
 ### Verified: a Salam program with LLVM statically inside it
 
@@ -389,14 +431,15 @@ between the self-hosted backend and the std package:
 
 - **Package name.** Both were `package llvm`. Sema binds two same-named
   packages to one symbol, so whichever loses is silently unreachable -
-  "package function 'LldAvailable' not found". `compiler/llvm.salam` is now
+  "package function 'LldAvailable' not found". `compiler/llvm.salam` became
   `package llvmgen`.
 - **Filename.** A .salam file's generated C module is keyed by _filename_,
   not package, so `compiler/llvm.salam` and `std/llvm/llvm.salam` both
   produced `salam_mod_llvm.c` and clobbered each other, leaving the
   compiler's own types undeclared at their use sites ("unknown type size").
-  The file is now `compiler/llvmgen.salam`. Both importers alias it, so the
-  rename is invisible to callers.
+  The file became `compiler/llvmgen.salam` (today the `compiler/llvmgen/`
+  directory). Both importers alias it, so the rename is invisible to
+  callers.
 
 The gate itself lives in a third package, `compiler/llvm_bridge.salam`,
 because the flag can only be tested at _top level_: a `-D` name that was not
@@ -412,10 +455,12 @@ Verified: the self-hosted compiler builds and passes 73/73 with the flag
 off, and `salam build ... -DSALAM_HAVE_LLVM` gets all the way through
 codegen and per-module compilation with the bridge active.
 
-### Not yet verified
+### Not yet verified (resolved since)
 
-Linking the self-hosted compiler _against_ `libsalam_llvm.a` does not
-complete on this Windows host: gcc exits non-zero with no diagnostic while
+Resolved: the release compilers for Linux, macOS and Windows x86-64 are
+the self-hosted compiler linked against `libsalam_llvm.a` (see
+`.github/workflows/compiler-release.yml`). At the time,
+linking it did not complete on the Windows host this was written on: gcc exits non-zero with no diagnostic while
 linking against the 417 MB archive, consistent with resource exhaustion
 rather than a code defect (every individual module compiles clean, and the
 same archive links fine into a small Salam program - see the `import llvm`
@@ -424,17 +469,19 @@ command should be logged the way the in-process lld path now logs its argv.
 
 ## Flipping the default
 
-Applied. `driver_build()` now selects the backend as:
+Applied. The self-hosted driver (`Build` in
+`compiler/driver/driver_build.salam`) selects the backend as:
 
 ```
-LLVM, unless
+native, on a Windows on Arm host with no --backend
+otherwise LLVM, unless
   - --backend=c was passed, or
   - --cc=PATH was passed (naming a C compiler can only mean the C backend), or
-  - this salam was built without WITH_LLVM (nothing to switch to)
+  - this salam was built without LLVM linked in (nothing to switch to)
 ```
 
-`--backend=llvm|c` overrides in both directions, and the C backend stays a
-supported path rather than being deleted.
+`--backend=llvm|c|native` overrides it, and the C backend stays a supported
+path rather than being deleted.
 
 ### Why this is safe before backend parity is finished
 
@@ -442,9 +489,10 @@ supported path rather than being deleted.
 naively would regress every one of them, so the switch is paired with an
 automatic fallback:
 
-- `driver_llvm()` returns a distinct `SALAM_RC_LLVM_UNSUPPORTED` (7) for
-  "module emitted but incomplete", separate from real failures.
-- `driver_build()` retries on the C backend for exactly that code. Any other
+- `LlvmBuild` returns a distinct `RC_LLVM_UNSUPPORTED` (7) for "module
+  emitted but incomplete", and `RC_LLVM_LINK_FAILED` (8) for a failed
+  link, separate from real failures (`compiler/driver/driver.salam`).
+- `Build` retries on the C backend for exactly those codes. Any other
   non-zero code (bad source, failed link) is reported as-is and never
   retried, so a genuine mistake is not hidden behind a second compile.
 - `--backend=llvm` makes it a hard error instead, for CI and for closing the
@@ -480,7 +528,9 @@ no external toolchain involved.
    `-O0` default - that command exists to be read, and the tests under
    `tests/en/llvm` are there to catch bugs in the IR we emit, which running
    the optimizer over it would mask.
-5. Port everything to `compiler/llvm.salam` (see parity note).
+5. ~~Port everything to `compiler/llvm.salam` (see parity note).~~ Done;
+   the C compiler is gone and `compiler/llvmgen/` is the only LLVM
+   backend.
 
 ## Bugs found along the way
 
@@ -496,8 +546,8 @@ of scope. 20-line repro:
 
 ```salam
 repeat bases.len() in bi:
-    entries := os.ListDir(bases.get(bi))
-    defer entries.free()          // <- epilogue cannot see `entries`
+    entries := os.ListDir(bases.Get(bi))
+    defer entries.Free()          // <- epilogue cannot see `entries`
     ...
 end
 ```
@@ -524,16 +574,19 @@ the rule; `tests/en/general/defer_scope.salam` pins it.
 Reading `printf` as a value in `std/llvm/orc.salam` emitted
 `_Salam_llvm_printf_str` - a name that exists nowhere - because the C
 backend mangled unconditionally when it resolved the symbol. An extern keeps
-its declared C name. Fixed in `codegen_call.c` and `compiler/codegen.salam`.
+its declared C name. Fixed in the C backend's call lowering of both compilers
+(today `compiler/codegen/`).
 The LLVM backend's own address lowering, written in this pass, already had
 the extern check.
 
-## Parity: the self-hosted compiler
+## Parity: the self-hosted compiler (historical)
 
-`compiler/llvm.salam` is the self-hosted counterpart of
-`c/src/llvm/codegen_llvm*.c` and mirrors the same dispatch structure
-(`str.Equals(m, "concat")` where the C reads `!strcmp(m, "concat")`).
-Everything above is now ported, and the two compilers agree exactly.
+This section compared the two compilers while both existed. The self-hosted
+LLVM backend, then `compiler/llvm.salam` and today `compiler/llvmgen/`, was
+the counterpart of the C compiler's `c/src/llvm/codegen_llvm*.c` and
+mirrored the same dispatch structure (`str.Equals(m, "concat")` where the C
+read `!strcmp(m, "concat")`). Everything above was ported, and the two
+compilers agreed exactly.
 
 Verified by running the same 802-file sweep with both:
 
@@ -558,20 +611,20 @@ Zero differing files. The self-hosted compiler also passes 73/73 on
 | `ll_call_user` package/function preference                                       | `call_user`                                |
 | func-typed struct field -> indirect call                                         | `call_method`                              |
 | `SALAM_RC_LLVM_UNSUPPORTED` + C fallback                                         | `RC_LLVM_UNSUPPORTED` + `use_llvm_backend` |
-| `--backend=llvm\|c`, `--cc=` implies `c`                                         | same, in `cli.salam`                       |
+| `--backend=llvm\|c`, `--cc=` implies `c`                                         | same, in `compiler/cli/cli_parse.salam`    |
 | `--libpath=DIR`                                                                  | same, threaded through `Opts.lib_paths`    |
 | stray `.ll` cleanup on fallback                                                  | same                                       |
 | native build must not report "cross-compilation failed"                          | same                                       |
 
-Two C-side items have no self-hosted counterpart _yet_, both for the same
-reason - `NativeRun` still uses the shell-out toolchain path rather than
-`std/llvm`:
+Two C-side items had no self-hosted counterpart at the time, both for the
+same reason: `NativeRun` still used the shell-out toolchain path rather than
+`std/llvm`.
 
-- `native_host_link_triple` (in-process lld for a native build). The
-  self-hosted equivalent already exists as `std/llvm/linker.salam`'s
-  `LinkAuto`; it just is not called from `NativeRun`.
+- `native_host_link_triple` (in-process lld for a native build).
 - The lld argv debug log.
 
-Wiring `NativeRun` to prefer `std/llvm` under `-DSALAM_HAVE_LLVM` closes
-both, and is the single remaining step for full self-hosted
-self-containment.
+`NativeRun` now prefers `std/llvm` under `-DSALAM_HAVE_LLVM`: it calls
+`compiler/llvm_bridge.salam`, which runs LLVM in-process and links through
+`llvm.LinkAuto`, and it falls back to the shell-out path only when the
+compiler has no LLVM linked in. `HostLinkTriple` in `std/llvm` covers the
+first item. `std/llvm/linker.salam` does not log the lld argv.

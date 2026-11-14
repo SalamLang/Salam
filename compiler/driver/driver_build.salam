@@ -17,6 +17,7 @@ include cg "../codegen/codegen.salam"
 include co "../sal_core.salam"
 include pm "../pkgmgr/pkgmgr.salam"
 include pf "../prof_self.salam"
+include lv "../llvmgen/llvmgen.salam"
 
 func cc_is_bare_name(name: str): bool:
     if str.Len(name) == 0:
@@ -64,20 +65,20 @@ func win_from_project(opt &: Dr, pinfo: pm.PkgInfo, rdir: str):
     if str.Len(opt.win_manifest) == 0 and str.Len(pinfo.win_manifest) > 0:
         opt.win_manifest = pth.PathIsAbs(pinfo.win_manifest) ? pinfo.win_manifest : pth.PathJoin(rdir, pinfo.win_manifest)
     end
-    if pinfo.win_version.len() == 0:
+    if pinfo.win_version.Len() == 0:
         ret
     end
     mut vs := Vector {} as Vector<str>
     mut has_ver := false
     each kv in pinfo.win_version:
-        vs.push(kv)
+        vs.Push(kv)
         has_ver = has_ver or str.StartsWith(kv, "version=")
     end
     if not has_ver and str.Len(pinfo.version) > 0:
-        vs.push("version=" + pinfo.version)
+        vs.Push("version=" + pinfo.version)
     end
     each kv2 in opt.win_version:
-        vs.push(kv2)
+        vs.Push(kv2)
     end
     opt.win_version = vs
 end
@@ -116,7 +117,7 @@ end
 func build_impl(opt &: Dr): int:
     mut lib_stem := ""
     mut lib_export_pub := false
-    if opt.inputs.len() == 0 or (opt.inputs.len() == 1 and os.IsDir(opt.inputs.get(0))):
+    if opt.inputs.Len() == 0 or (opt.inputs.Len() == 1 and os.IsDir(opt.inputs.Get(0))):
         rlgr := lg.New(opt.log_level, resolve_color(opt.color))
         rpack := lp.Load(opt.lang)
         if rpack == lp.LP_NONE:
@@ -126,8 +127,8 @@ func build_impl(opt &: Dr): int:
             ret 2
         end
         mut rdir := "."
-        if opt.inputs.len() == 1:
-            rdir = opt.inputs.get(0)
+        if opt.inputs.Len() == 1:
+            rdir = opt.inputs.Get(0)
         end
         mut pinfo := pm.PkgInfo {}
         _pi := pm.ReadPackageInfo(rdir, pinfo)
@@ -143,10 +144,10 @@ func build_impl(opt &: Dr): int:
         if str.Len(first) == 0:
             ret 2
         end
-        if opt.inputs.len() == 0:
-            opt.inputs.push(first)
+        if opt.inputs.Len() == 0:
+            opt.inputs.Push(first)
         else:
-            opt.inputs.set(0, first)
+            opt.inputs.Set(0, first)
         end
         opt.input = first
         mut pname := pinfo.name
@@ -163,8 +164,8 @@ func build_impl(opt &: Dr): int:
         end
     end
 
-    if str.Len(opt.input) == 0 and opt.inputs.len() > 0:
-        opt.input = opt.inputs.get(0)
+    if str.Len(opt.input) == 0 and opt.inputs.Len() > 0:
+        opt.input = opt.inputs.Get(0)
     end
 
     werr := win_settings(opt)
@@ -232,7 +233,7 @@ func build_impl(opt &: Dr): int:
     end
     build_sig := build_signature(opt) + "|" + co.VERSION + "|" + co.GIT_COMMIT + co.GIT_DIRTY
     if opt.command == CMD_BUILD and not opt.force and str.Len(opt.lib_kind) == 0:
-        predicted_name := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.get(0))
+        predicted_name := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.Get(0))
         predicted_output := exe_name_for(predicted_name, opt.llvm_target)
         if build_up_to_date(scratch, build_sig, predicted_output):
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "up to date: " + predicted_output)
@@ -248,10 +249,10 @@ func build_impl(opt &: Dr): int:
 
     mut export_names := Vector {} as Vector<str>
     mut export_cnames := Vector {} as Vector<str>
-    defer export_names.free()
-    defer export_cnames.free()
-    repeat opt.exports.len() in exi:
-        spec := opt.exports.get(exi)
+    defer export_names.Free()
+    defer export_cnames.Free()
+    repeat opt.exports.Len() in exi:
+        spec := opt.exports.Get(exi)
         colon := str.IndexOf(spec, ":")
         if colon <= 0 or colon >= str.Len(spec) - 1:
             lg.Log(
@@ -261,8 +262,8 @@ func build_impl(opt &: Dr): int:
         end
         fname := str.Substr(spec, 0, colon)
         cname := str.Substr(spec, colon + 1, str.Len(spec) - colon - 1)
-        export_names.push(fname)
-        export_cnames.push(cname)
+        export_names.Push(fname)
+        export_cnames.Push(cname)
     end
 
     mut musl_tcc := MuslTcc {}
@@ -270,16 +271,17 @@ func build_impl(opt &: Dr): int:
     mut bundled := false
     mut found := false
     if not opt.cc_explicit and str.Equals(opt.cc, "tcc"):
-        ladder := ["clang", "gcc", "tcc"]
-        repeat ladder.len() in i:
+        ladder := ["clang", "gcc", "tcc", "cc"]
+        repeat ladder.Len() in i:
             if not found:
                 found = sm.FindBundledTool(ladder[i], resolved)
                 bundled = found
             end
         end
-        repeat ladder.len() in j:
+        repeat ladder.Len() in j:
             if not found:
                 found = sm.FindPathTool(ladder[j], resolved)
+                bundled = false
             end
         end
     else opt.cc_explicit and cc_is_bare_name(opt.cc):
@@ -287,7 +289,15 @@ func build_impl(opt &: Dr): int:
         bundled = found
         if not found:
             found = sm.FindPathTool(opt.cc, resolved)
+            bundled = false
         end
+        if not found:
+            found = sm.FindPathTool("cc", resolved)
+            bundled = false
+        end
+    else:
+        found = sm.FindPathTool("cc", resolved)
+        bundled = false
     end
     if found:
         mut origin := "host"
@@ -315,35 +325,37 @@ func build_impl(opt &: Dr): int:
     mut cfiles := Vector {} as Vector<str>
     mut generated := Vector {} as Vector<str>
     mut cdirty := Vector {} as Vector<int>
-    defer cfiles.free()
-    defer generated.free()
-    defer cdirty.free()
+    defer cfiles.Free()
+    defer generated.Free()
+    defer cdirty.Free()
     mut first_module := ""
     mut all_ok := true
     mut failed_files := Vector {} as Vector<str>
-    defer failed_files.free()
+    defer failed_files.Free()
 
     entry := lp.Entry(pack)
     mut has_entry := false
 
     mut links := Vector {} as Vector<str>
     mut link_kinds := Vector {} as Vector<str>
-    defer links.free()
-    defer link_kinds.free()
+    defer links.Free()
+    defer link_kinds.Free()
     mut lib_exports := Vector {} as Vector<str>
-    defer lib_exports.free()
+    mut lib_params := Vector {} as Vector<str>
+    defer lib_exports.Free()
+    defer lib_params.Free()
     if str.Len(opt.llvm_target) > 0:
         pm.SetNativePlatform(pm.PlatformOfTriple(opt.llvm_target))
     end
 
     mut hostlibs := ""
     if EmbeddedExtralibs("", hostlibs):
-        opt.lib_paths.push(hostlibs)
+        opt.lib_paths.Push(hostlibs)
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + hostlibs)
     end
 
     mut defs := Vector {} as Vector<str>
-    defer defs.free()
+    defer defs.Free()
     front_defs(opt, defs)
     use_tcc := str.Contains(opt.cc, "tcc")
     mut cc_def := "SALAM_CC_GCC"
@@ -352,24 +364,24 @@ func build_impl(opt &: Dr): int:
     else str.Contains(opt.cc, "clang"):
         cc_def = "SALAM_CC_CLANG"
     end
-    defs.push(cc_def)
+    defs.Push(cc_def)
 
     mut work := Vector {} as Vector<str>
-    defer work.free()
-    repeat opt.inputs.len() in ii:
-        work.push(opt.inputs.get(ii))
+    defer work.Free()
+    repeat opt.inputs.Len() in ii:
+        work.Push(opt.inputs.Get(ii))
     end
     memp := sm.ResolveImport("", "mem")
     if str.Len(memp) > 0 and os.Exists(memp):
-        work.push(memp)
+        work.Push(memp)
     end
     corep := sm.ResolveImport("", "core")
     if str.Len(corep) > 0 and os.Exists(corep):
-        work.push(corep)
+        work.Push(corep)
     end
 
-    if opt.inputs.len() > 0:
-        sm.SetProjectRootFrom(opt.inputs.get(0))
+    if opt.inputs.Len() > 0:
+        sm.SetProjectRootFrom(opt.inputs.Get(0))
     end
     defer sm.UnpinProjectRoot()
     mut a := at.NewAst()
@@ -380,22 +392,22 @@ func build_impl(opt &: Dr): int:
     mut w_entry := Vector {} as Vector<str>
     mut w_pkg := Vector {} as Vector<str>
     mut w_path := Vector {} as Vector<str>
-    defer w_global.free()
-    defer w_prog.free()
-    defer w_module.free()
-    defer w_entry.free()
-    defer w_pkg.free()
-    defer w_path.free()
+    defer w_global.Free()
+    defer w_prog.Free()
+    defer w_module.Free()
+    defer w_entry.Free()
+    defer w_pkg.Free()
+    defer w_path.Free()
 
     sm.DceReset()
     sm.DceEnable()
 
     mut wi := 0
-    until wi < work.len():
-        path := work.get(wi)
+    until wi < work.Len():
+        path := work.Get(wi)
         mut dup := false
         repeat wi in j:
-            if str.Equals(work.get(j), path):
+            if str.Equals(work.Get(j), path):
                 dup = true
             end
         end
@@ -424,8 +436,8 @@ func build_impl(opt &: Dr): int:
         if wi == 0:
             cg.SetRootPackage(modpkg)
         end
-        repeat prog_n.list.len() in di3:
-            d := at.Get(a, prog_n.list.get(di3))
+        repeat prog_n.list.Len() in di3:
+            d := at.Get(a, prog_n.list.Get(di3))
             if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, modentry):
                 has_entry = true
                 sm.DceMarkRoot(modpkg, modentry)
@@ -437,36 +449,39 @@ func build_impl(opt &: Dr): int:
             if str.Len(cprefix) == 0:
                 cprefix = lib_c_prefix(output_stem_of(path))
             end
-            repeat prog_n.list.len() in dpx:
-                d6 := at.Get(a, prog_n.list.get(dpx))
+            repeat prog_n.list.Len() in dpx:
+                d6 := at.Get(a, prog_n.list.Get(dpx))
                 if d6.kind == at.AST_FUNC_DEF and d6.is_pub and not d6.is_extern and d6.a != 0:
                     cname := cprefix + "_" + d6.name
                     sm.DceMarkRoot(modpkg, d6.name)
                     cg.AddExportOverride(modpkg, d6.name, cname)
-                    lib_exports.push(cname)
+                    lib_exports.Push(cname)
+                    lib_params.Push(lib_param_names(a, d6))
                 end
             end
         end
         if wi == 0 and str.Len(opt.lib_kind) > 0:
-            repeat prog_n.list.len() in dlx:
-                d5 := at.Get(a, prog_n.list.get(dlx))
+            repeat prog_n.list.Len() in dlx:
+                d5 := at.Get(a, prog_n.list.Get(dlx))
                 if d5.kind == at.AST_FUNC_DEF and d5.is_extern and d5.a != 0:
                     sm.DceMarkRoot(modpkg, d5.name)
-                    lib_exports.push(d5.name)
+                    lib_exports.Push(d5.name)
+                    lib_params.Push(lib_param_names(a, d5))
                 end
             end
-            repeat export_cnames.len() in ecx:
-                lib_exports.push(export_cnames.get(ecx))
+            repeat export_cnames.Len() in ecx:
+                lib_exports.Push(export_cnames.Get(ecx))
+                lib_params.Push(lib_func_param_names(a, prog, export_names.Get(ecx)))
             end
         end
-        if wi == 0 and export_names.len() > 0:
-            repeat prog_n.list.len() in di3x:
-                d4 := at.Get(a, prog_n.list.get(di3x))
+        if wi == 0 and export_names.Len() > 0:
+            repeat prog_n.list.Len() in di3x:
+                d4 := at.Get(a, prog_n.list.Get(di3x))
                 if d4.kind == at.AST_FUNC_DEF:
-                    repeat export_names.len() in exj:
-                        if str.Equals(d4.name, export_names.get(exj)):
+                    repeat export_names.Len() in exj:
+                        if str.Equals(d4.name, export_names.Get(exj)):
                             sm.DceMarkRoot(modpkg, d4.name)
-                            cg.AddExportOverride(modpkg, d4.name, export_cnames.get(exj))
+                            cg.AddExportOverride(modpkg, d4.name, export_cnames.Get(exj))
                         end
                     end
                 end
@@ -474,14 +489,14 @@ func build_impl(opt &: Dr): int:
         end
 
         idir := dir_of(path)
-        repeat prog_n.list.len() in di4:
-            did := prog_n.list.get(di4)
+        repeat prog_n.list.Len() in di4:
+            did := prog_n.list.Get(di4)
             d2 := at.Get(a, did)
             if d2.kind == at.AST_LINK:
                 if d2.value_kind == tok.TV_STRING and str.Len(d2.value_str) > 0:
                     mut seen := false
-                    repeat links.len() in lj:
-                        if str.Equals(links.get(lj), d2.value_str):
+                    repeat links.Len() in lj:
+                        if str.Equals(links.Get(lj), d2.value_str):
                             seen = true
                         end
                     end
@@ -489,17 +504,17 @@ func build_impl(opt &: Dr): int:
                         if not native_prepare(lgr, idir, d2.value_str, d2.name, opt.cc):
                             ret 2
                         end
-                        link_kinds.push(d2.name)
-                        links.push(d2.value_str)
+                        link_kinds.Push(d2.name)
+                        links.Push(d2.value_str)
                         def := link_define(d2.value_str)
                         mut dseen := false
-                        repeat defs.len() in dj:
-                            if str.Equals(defs.get(dj), def):
+                        repeat defs.Len() in dj:
+                            if str.Equals(defs.Get(dj), def):
                                 dseen = true
                             end
                         end
                         if not dseen:
-                            defs.push(def)
+                            defs.Push(def)
                         end
                     end
                 end
@@ -517,22 +532,22 @@ func build_impl(opt &: Dr): int:
             end
             ipath = pth.PathNormalize(ipath)
             mut known := false
-            repeat work.len() in wj:
-                if str.Equals(work.get(wj), ipath):
+            repeat work.Len() in wj:
+                if str.Equals(work.Get(wj), ipath):
                     known = true
                 end
             end
             if not known:
-                work.push(ipath)
+                work.Push(ipath)
             end
         end
 
-        w_global.push(gscope)
-        w_prog.push(prog)
-        w_module.push(module)
-        w_entry.push(modentry)
-        w_pkg.push(modpkg)
-        w_path.push(path)
+        w_global.Push(gscope)
+        w_prog.Push(prog)
+        w_module.Push(module)
+        w_entry.Push(modentry)
+        w_pkg.Push(modpkg)
+        w_path.Push(path)
         wi++
     end
 
@@ -545,27 +560,27 @@ func build_impl(opt &: Dr): int:
     mut cg_status := Vector {} as Vector<int>
     emit_modules(lgr, s, a, opt, scratch, w_global, w_prog, w_module, w_entry, w_pkg, w_path, cg_status)
     mut header_changed := false
-    repeat w_prog.len() in bi:
-        cpath := mod_c_path(scratch, w_module.get(bi))
-        hpath := mod_h_path(scratch, w_module.get(bi))
-        st := cg_status.get(bi)
+    repeat w_prog.Len() in bi:
+        cpath := mod_c_path(scratch, w_module.Get(bi))
+        hpath := mod_h_path(scratch, w_module.Get(bi))
+        st := cg_status.Get(bi)
         if st < 0:
             all_ok = false
-            failed_files.push(w_path.get(bi))
+            failed_files.Push(w_path.Get(bi))
         else:
-            cfiles.push(cpath)
-            cdirty.push(st)
+            cfiles.Push(cpath)
+            cdirty.Push(st)
             if st == 2:
                 header_changed = true
             end
-            generated.push(cpath)
-            generated.push(hpath)
+            generated.Push(cpath)
+            generated.Push(hpath)
         end
     end
-    cg_status.free()
+    cg_status.Free()
     if header_changed:
-        repeat cdirty.len() in hd:
-            cdirty.set(hd, 1)
+        repeat cdirty.Len() in hd:
+            cdirty.Set(hd, 1)
         end
     end
     sm.Free(s)
@@ -576,8 +591,8 @@ func build_impl(opt &: Dr): int:
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, abort_message(i18.Tr("build aborted: errors in source"), failed_files)
         )
         if not opt.keep_temp:
-            repeat generated.len() in gi1:
-                _rm1 := os.Remove(generated.get(gi1))
+            repeat generated.Len() in gi1:
+                _rm1 := os.Remove(generated.Get(gi1))
             end
         end
         ret 1
@@ -591,8 +606,8 @@ func build_impl(opt &: Dr): int:
             )
         )
         if not opt.keep_temp:
-            repeat generated.len() in gi2:
-                _rm2 := os.Remove(generated.get(gi2))
+            repeat generated.Len() in gi2:
+                _rm2 := os.Remove(generated.Get(gi2))
             end
         end
         ret 1
@@ -600,6 +615,16 @@ func build_impl(opt &: Dr): int:
 
     if opt.emit_c:
         ret 0
+
+    mut cc_probe := ""
+    if not sm.FindBundledTool(opt.cc, cc_probe) and not sm.FindPathTool(opt.cc, cc_probe):
+        mut bare_cc := opt.cc
+        if str.StartsWith(bare_cc, "\"") and str.EndsWith(bare_cc, "\"") and str.Len(bare_cc) > 2:
+            bare_cc = str.Substr(bare_cc, 1, str.Len(bare_cc) - 2)
+        end
+        if str.Len(bare_cc) == 0 or (cc_is_bare_name(bare_cc) and not sm.FindPathTool(bare_cc, cc_probe)):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, "no C compiler found on PATH; Salam will try the built-in linker for linking when object files are available, but compiling C output still requires a C compiler (install gcc/clang/tcc or a bundled toolchain)")
+        end
     end
 
     if str.Len(opt.lib_kind) > 0 and opt.command != CMD_OBJ:
@@ -612,8 +637,8 @@ func build_impl(opt &: Dr): int:
             io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(initc)))
             ret 2
         end
-        cfiles.push(initc)
-        cdirty.push(1)
+        cfiles.Push(initc)
+        cdirty.Push(1)
     end
 
     mut crc := 0
@@ -631,8 +656,8 @@ func build_impl(opt &: Dr): int:
     if opt.command == CMD_OBJ:
         dbg_flag := (opt.debug_info and no_tcc_opt) ? cc_debug_flag(opt) : ""
         mut oi := 0
-        until oi < cfiles.len() and crc == 0:
-            cf := cfiles.get(oi)
+        until oi < cfiles.Len() and crc == 0:
+            cf := cfiles.Get(oi)
             obj := str.Substr(cf, 0, str.Len(cf) - 2) + ".o"
             mut cmdb := str.NewBuilder()
             str.BufAppend(cmdb, opt.cc)
@@ -674,14 +699,14 @@ func build_impl(opt &: Dr): int:
     else:
         mut output := opt.output
         if str.Len(output) == 0:
-            output = output_stem_of(opt.inputs.get(0))
+            output = output_stem_of(opt.inputs.Get(0))
         end
         output = exe_name_for(output, opt.llvm_target)
         is_lib := str.Len(opt.lib_kind) > 0
         if is_lib:
             mut stem := lib_stem
             if str.Len(stem) == 0:
-                stem = output_stem_of(opt.inputs.get(0))
+                stem = output_stem_of(opt.inputs.Get(0))
             end
             lib_stem = stem
             output = lib_output_name(opt, stem)
@@ -714,8 +739,8 @@ func build_impl(opt &: Dr): int:
                     lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang")
                 )
                 if not opt.keep_temp:
-                    repeat generated.len() in gi3:
-                        _rm3 := os.Remove(generated.get(gi3))
+                    repeat generated.Len() in gi3:
+                        _rm3 := os.Remove(generated.Get(gi3))
                     end
                 end
                 ret 2
@@ -724,8 +749,8 @@ func build_impl(opt &: Dr): int:
         end
 
         mut link_defines := ""
-        repeat links.len() in li:
-            link_defines = link_defines + " -DSALAM_LINK_" + sanitize_ident(links.get(li))
+        repeat links.Len() in li:
+            link_defines = link_defines + " -DSALAM_LINK_" + sanitize_ident(links.Get(li))
         end
 
         if (not opt.lto or is_lib) and not musl_tcc.active:
@@ -736,16 +761,16 @@ func build_impl(opt &: Dr): int:
             sigtext := opt.cc + " " + opt_flag + pic_flag + " " + alias_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
             mut sig_pending := false
             if not file_unchanged(sigpath, sigtext):
-                repeat cfiles.len() in cd0:
-                    cdirty.set(cd0, 1)
+                repeat cfiles.Len() in cd0:
+                    cdirty.Set(cd0, 1)
                 end
                 sig_pending = true
             end
-            repeat cfiles.len() in ci2:
-                cf2 := cfiles.get(ci2)
+            repeat cfiles.Len() in ci2:
+                cf2 := cfiles.Get(ci2)
                 obj2 := str.Substr(cf2, 0, str.Len(cf2) - 2) + ".o"
-                objs.push(obj2)
-                if cdirty.get(ci2) == 0:
+                objs.Push(obj2)
+                if cdirty.Get(ci2) == 0:
                     continue
                 end
                 mut jb := str.NewBuilder()
@@ -763,20 +788,20 @@ func build_impl(opt &: Dr): int:
                 str.BufAppend(jb, shell_arg(cf2))
                 str.BufAppend(jb, " -o ")
                 str.BufAppend(jb, shell_arg(obj2))
-                jobs.push(str.BufStr(jb))
-                job_sizes.push(os.FileSize(cf2))
+                jobs.Push(str.BufStr(jb))
+                job_sizes.Push(os.FileSize(cf2))
                 str.BufFree(jb)
             end
             lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.len() as i64) + " object file" + plural_suffix(jobs.len()) + " in parallel, reused " + str.FromInt((cfiles.len() - jobs.len()) as i64) + " cached object" + plural_suffix(cfiles.len() - jobs.len())
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.Len() as i64) + " object file" + plural_suffix(jobs.Len()) + " in parallel, reused " + str.FromInt((cfiles.Len() - jobs.Len()) as i64) + " cached object" + plural_suffix(cfiles.Len() - jobs.Len())
             )
             _pt_cc := pf.Begin(pf.TP_CC, "")
             crc = compile_parallel(jobs, job_sizes)
             pf.End(pf.TP_CC, _pt_cc)
-            pf.Count(pf.TC_MODULES_BUILT, jobs.len() as i64)
-            pf.Count(pf.TC_MODULES_CACHED, (cfiles.len() - jobs.len()) as i64)
-            jobs.free()
-            job_sizes.free()
+            pf.Count(pf.TC_MODULES_BUILT, jobs.Len() as i64)
+            pf.Count(pf.TC_MODULES_CACHED, (cfiles.Len() - jobs.Len()) as i64)
+            jobs.Free()
+            job_sizes.Free()
             if crc != 0:
                 lg.Log(
                     lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
@@ -809,17 +834,17 @@ func build_impl(opt &: Dr): int:
                             str.BufAppend(cmdb2, " -Wl,--allow-multiple-definition")
                         end
                     end
-                    repeat objs.len() in oi2:
+                    repeat objs.Len() in oi2:
                         str.BufAppendChar(cmdb2, 32)
-                        str.BufAppend(cmdb2, shell_arg(objs.get(oi2)))
+                        str.BufAppend(cmdb2, shell_arg(objs.Get(oi2)))
                     end
                     str.BufAppend(cmdb2, lm)
-                    repeat opt.lib_paths.len() in lp2:
+                    repeat opt.lib_paths.Len() in lp2:
                         str.BufAppend(cmdb2, " -L")
-                        str.BufAppend(cmdb2, shell_arg(opt.lib_paths.get(lp2)))
+                        str.BufAppend(cmdb2, shell_arg(opt.lib_paths.Get(lp2)))
                     end
-                    repeat links.len() in li2:
-                        emit_link(cmdb2, lgr, links.get(li2), link_kinds.get(li2), use_tcc)
+                    repeat links.Len() in li2:
+                        emit_link(cmdb2, lgr, links.Get(li2), link_kinds.Get(li2), use_tcc)
                     end
                     cmdtext2 = str.BufStr(cmdb2)
                     str.BufFree(cmdb2)
@@ -828,6 +853,26 @@ func build_impl(opt &: Dr): int:
                 _pt_lk2 := pf.Begin(pf.TP_LINK, output)
                 crc = shell.System(cmdtext2)
                 pf.End(pf.TP_LINK, _pt_lk2)
+                if crc != 0 and not is_lib and objs.Len() > 0:
+                    mut lo := lv.Options {}
+                    lo.link_libs = links
+                    lo.link_kinds = link_kinds
+                    lo.lib_paths = opt.lib_paths
+                    lo.sysroot = ""
+                    lo.target_triple = opt.llvm_target
+                    if objs.Len() > 1:
+                        mut eo := Vector {} as Vector<str>
+                        repeat objs.Len() - 1 in ei:
+                            eo.Push(objs.Get(ei + 1))
+                        end
+                        lo.extra_objects = eo
+                    end
+                    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, "system linker unavailable or failed, trying built-in linker fallback: " + cmdtext2)
+                    brc := builtin_link_mode(lgr, objs.Get(0), output, opt.llvm_target, lo, "builtin")
+                    if brc == 0:
+                        crc = 0
+                    end
+                end
                 if crc != 0:
                     lg.Log(
                         lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
@@ -837,7 +882,7 @@ func build_impl(opt &: Dr): int:
                     rc = 3
                 else is_lib:
                     hdr := pth.PathJoin(pth.PathDir(output), lib_stem + ".h")
-                    _wh := write_lib_header(hdr, lib_header_guard(lib_stem), cfiles, lib_exports)
+                    _wh := write_lib_header(hdr, lib_header_guard(lib_stem), cfiles, lib_exports, lib_params)
                     if str.Equals(opt.lib_kind, "shared") and lib_targets_windows(opt):
                         implib := lib_write_msvc_import(opt, output, lib_stem, lib_exports)
                         if str.Len(implib) > 0:
@@ -857,7 +902,7 @@ func build_impl(opt &: Dr): int:
                     end
                 end
             end
-            objs.free()
+            objs.Free()
         else:
             mut lto_flag := ""
             if optimizing_build and not use_tcc:
@@ -908,19 +953,19 @@ func build_impl(opt &: Dr): int:
                 str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir + "/lib/crti.o"))
             end
 
-            repeat cfiles.len() in ci:
+            repeat cfiles.Len() in ci:
                 str.BufAppendChar(cmdb, 32)
-                str.BufAppend(cmdb, shell_arg(cfiles.get(ci)))
+                str.BufAppend(cmdb, shell_arg(cfiles.Get(ci)))
             end
             str.BufAppend(cmdb, lm)
 
-            repeat opt.lib_paths.len() in lp2b:
+            repeat opt.lib_paths.Len() in lp2b:
                 str.BufAppend(cmdb, " -L")
-                str.BufAppend(cmdb, shell_arg(opt.lib_paths.get(lp2b)))
+                str.BufAppend(cmdb, shell_arg(opt.lib_paths.Get(lp2b)))
             end
 
-            repeat links.len() in li2b:
-                emit_link(cmdb, lgr, links.get(li2b), link_kinds.get(li2b), use_tcc)
+            repeat links.Len() in li2b:
+                emit_link(cmdb, lgr, links.Get(li2b), link_kinds.Get(li2b), use_tcc)
             end
 
             if musl_tcc.active:

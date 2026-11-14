@@ -1,12 +1,6 @@
 ---
 name: 🤖 Salam Agent - Build & Release
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - agent/**
-      - .github/workflows/agent-release.yml
   push:
     branches:
       - main
@@ -31,7 +25,10 @@ env:
 jobs:
   version:
     name: Resolve version
-    runs-on: ${{ github.event_name != 'pull_request' && fromJSON('["self-hosted","linux","x64","salam-ci"]') || 'ubuntu-24.04' }}
+    if: |
+      github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:'))
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -55,6 +52,9 @@ jobs:
 
   check:
     name: Check (${{ matrix.os }})
+    if: |
+      github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -148,7 +148,7 @@ jobs:
   linux-i686:
     name: Linux i686
     needs: [version, check]
-    runs-on: ${{ github.event_name != 'pull_request' && fromJSON('["self-hosted","linux","x64","salam-ci"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -284,13 +284,25 @@ jobs:
   release:
     name: Checksums & release
     needs: [version, linux, linux-i686, windows, macos]
-    runs-on: ${{ github.event_name != 'pull_request' && fromJSON('["self-hosted","linux","x64","salam-ci"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'workflow_call' ||
+       (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')))
     permissions:
-      contents: read
+      contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
       - name: Download every build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -345,3 +357,37 @@ jobs:
           path: release/*
           if-no-files-found: error
           retention-days: 14
+      - name: Compute release tag and title
+        run: |
+          set -euo pipefail
+          {
+            echo "TAG=agent-v${VERSION}"
+            echo "RELEASE_TITLE=Salam Agent Release v${VERSION}"
+          } >> "$GITHUB_ENV"
+      - name: Delete existing prerelease tag if found
+        run: |
+          set -euo pipefail
+          pre=$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || true)
+          if [ "$pre" = "false" ]; then
+            echo "::error::$TAG is already published as a stable release; refusing to delete it."
+            exit 1
+          fi
+          if gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null; then
+            echo "Deleted existing release $TAG (and its tag)."
+          else
+            echo "No existing release $TAG."
+          fi
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" >/dev/null 2>&1 || true
+          git tag -d "$TAG" 2>/dev/null || true
+      - name: Publish Salam Agent release
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release/salam-agent-"$VERSION"-*)
+          sums=(release/SHA256SUMS release/SHA512SUMS)
+          [ "${#assets[@]}" -gt 0 ] || { echo "::error::no salam-agent-$VERSION files were built"; exit 1; }
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes "Salam Agent v${VERSION}" \
+            "${assets[@]}" "${sums[@]}"

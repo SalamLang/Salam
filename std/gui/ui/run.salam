@@ -1,0 +1,296 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import os
+import str
+import gui.paint
+import gui.reactive
+import gui.window
+
+func _free_engine():
+    if not _e.ready:
+        ret
+    end
+    _dom_free(_e.dom)
+    _e.ctl.Free()
+    _e.cs.Free()
+    _e.us.Free()
+    _e.boxes.Free()
+    _e.recs.Free()
+    _e.anims.Free()
+    _e.xf.Free()
+    _e.xf_on.Free()
+    if _e.has_canvas:
+        _e.canvas.Free()
+        _e.has_canvas = false
+    end
+    if _e.has_win:
+        _e.win.Close()
+        _e.has_win = false
+    end
+    _e.ready = false
+end
+
+func _open_window(o: Options): bool:
+    wo := window.Options {
+        title = o.title, width = o.width, height = o.height, resizable = o.resizable, headless = o.headless, scale = o.scale
+    }
+    _e.win = window.Open(wo)
+    _e.has_win = _e.win.IsOpen()
+    ret _e.has_win
+end
+
+func _env():
+    if _e.has_win:
+        sz := _e.win.Size()
+        _e.width = sz.width
+        _e.height = sz.height
+        _e.scale = _e.win.ScaleFactor()
+    end
+end
+
+func _start_dom(nd: _Dom, o: Options): bool:
+    if _e.ready:
+        view := _e.view
+        had := _e.view_set
+        _free_engine()
+        _e = _Engine {}
+        _e.view = view
+        _e.view_set = had
+    end
+    _e.dom = nd
+    _e.ctl = Vector {} as Vector<_Ctl>
+    repeat _e.dom.nodes.Len():
+        _e.ctl.Push(_new_ctl())
+    end
+    if not _open_window(o):
+        ret false
+    end
+    _env()
+    if o.title.Len() > 0:
+        _e.win.SetTitle(o.title)
+    end
+    _e.ready = true
+    _style_all()
+    _relayout()
+    if _e.dom.title.Len() > 0 and o.title.Len() == 0:
+        _e.win.SetTitle(_e.dom.title)
+    end
+    _e.full = true
+    _frame_update()
+    _paint_frame()
+    ret true
+end
+
+func _frame_update():
+    reactive.SetTime(_e.has_win ? window.Clock() : _now())
+    mut guard := 0
+    until (_e.dirty_view or _e.dirty_style or _e.dirty_layout) and guard < 4:
+        guard++
+        if _e.dirty_view and _sc_active():
+            _e.dirty_view = false
+            _sc_update()
+            continue
+        end
+        if _e.dirty_view:
+            _e.dirty_view = false
+            _e.dirty_style = false
+            _e.dirty_layout = false
+            _rerun_view()
+            continue
+        end
+        need := _e.dirty_layout
+        _e.dirty_style = false
+        _e.dirty_layout = false
+        if need:
+            _relayout()
+        end
+    end
+    if _e.dirty_place:
+        _e.dirty_place = false
+        _place_all()
+    end
+    _xf_update()
+    _anims_running()
+    _diff_records()
+end
+
+func _ensure_canvas(): bool:
+    pw := math.Ceil(_e.width * _e.scale) as int
+    ph := math.Ceil(_e.height * _e.scale) as int
+    if _e.has_canvas and _e.canvas.width == pw and _e.canvas.height == ph:
+        ret false
+    end
+    if _e.has_canvas:
+        _e.canvas.Free()
+    end
+    _e.canvas = paint.NewCanvas(pw, ph)
+    _e.has_canvas = true
+    ret true
+end
+
+func _paint_frame(): bool:
+    if _ensure_canvas():
+        _e.full = true
+    end
+    if not _e.full and _e.damage.IsEmpty():
+        ret false
+    end
+    _paint_all(_e.canvas)
+    if _e.has_win:
+        if _e.full:
+            _e.win.PresentAll(_e.canvas.pixels, _e.canvas.width, _e.canvas.height, _e.canvas.stride)
+        else:
+            mut dmg := Vector {} as Vector<window.Rect>
+            repeat _e.damage.Count() in i:
+                r := _e.damage.At(i)
+                dmg.Push(window.Rect { x = r.x, y = r.y, width = r.width, height = r.height })
+            end
+            _e.win.Present(_e.canvas.pixels, _e.canvas.width, _e.canvas.height, _e.canvas.stride, dmg)
+            dmg.Free()
+        end
+    end
+    _e.frames++
+    _e.full = false
+    _e.damage.Clear()
+    ret true
+end
+
+func _handle(ev: window.Event):
+    switch ev.kind:
+        window.EventKind.CloseRequested:
+            _e.quit = true
+            break
+        end
+        window.EventKind.Resized:
+            if ev.width > 0.0 and ev.height > 0.0:
+                _e.width = ev.width
+                _e.height = ev.height
+                _e.dirty_layout = true
+                _e.full = true
+            end
+            break
+        end
+        window.EventKind.ScaleChanged:
+            if ev.scale > 0.0:
+                _e.scale = ev.scale
+                _e.full = true
+            end
+            break
+        end
+        window.EventKind.RedrawRequested:
+            _e.full = true
+            break
+        end
+        else:
+            break
+        end
+    end
+end
+
+func _step(timeout: int): bool:
+    if _e.quit or not _e.has_win or not _e.win.IsOpen():
+        ret false
+    end
+    mut first := true
+    mut ev := window.Poll()
+    if ev.kind == window.EventKind.None and timeout != 0:
+        ev = window.Wait(timeout)
+    end
+    until ev.kind != window.EventKind.None or first:
+        first = false
+        if ev.kind != window.EventKind.None:
+            _handle(ev)
+        end
+        ev = window.Poll()
+        if _e.quit:
+            break
+        end
+    end
+    if _e.quit:
+        ret false
+    end
+    _frame_update()
+    _paint_frame()
+    ret true
+end
+
+func _run_loop():
+    mut go := true
+    until not go:
+        go = _step(16)
+    end
+end
+
+func _num(v: f64): str:
+    r := math.Round(v * 100.0) / 100.0
+    if r == math.Round(r):
+        ret str.FromInt(r as i64)
+    end
+    ret str.FromFloat(r)
+end
+
+func _dump_node(b &: str.StringBuilder, node: int, depth: int):
+    nd := _e.dom.nodes[node]
+    bx := _e.boxes[node]
+    repeat depth:
+        str.BufAppend(b, "  ")
+    end
+    str.BufAppend(b, nd.kind)
+    id := _attr(_e.dom, node, "id")
+    if id.Len() > 0:
+        str.BufAppend(b, "#" + id)
+    end
+    if bx.shown:
+        str.BufAppend(b, " " + _num(bx.x) + " " + _num(bx.y) + " " + _num(bx.w) + " " + _num(bx.h))
+    end
+    str.BufAppend(b, "\n")
+    each k in nd.kids:
+        _dump_node(b, k, depth + 1)
+    end
+end
+
+func _render_dom(nd: _Dom, width: int, height: int, scale: f64):
+    _e.dom = nd
+    _e.ctl = Vector {} as Vector<_Ctl>
+    repeat _e.dom.nodes.Len():
+        _e.ctl.Push(_new_ctl())
+    end
+    _e.width = width as f64
+    _e.height = height as f64
+    _e.scale = scale
+    _e.ready = true
+    _style_all()
+    _relayout()
+    _e.full = true
+    _diff_records()
+    _ensure_canvas()
+    _paint_all(_e.canvas)
+end
+
+@en "Dump"
+@fa "گزارش درخت"
+pub func Dump(): str:
+    if not _e.ready or _e.dom.nodes.Len() == 0:
+        ret str.Clone("")
+    end
+    mut b := str.NewBuilder()
+    _dump_node(b, 0, 0)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end

@@ -20,6 +20,7 @@ final class EditorViewController: UIViewController, UITextViewDelegate {
     private var checkWork: DispatchWorkItem?
     private var saveWork: DispatchWorkItem?
     private var runItem: UIBarButtonItem!
+    private var langItem: UIBarButtonItem!
 
     init(file: URL) {
         self.file = file
@@ -47,9 +48,11 @@ final class EditorViewController: UIViewController, UITextViewDelegate {
         runItem = UIBarButtonItem(image: UIImage(systemName: "play.fill"), style: .plain, target: self, action: #selector(toggleRun))
         runItem.tintColor = Palette.brand
         runItem.accessibilityLabel = L("run")
+        langItem = UIBarButtonItem(title: "EN", style: .plain, target: self, action: #selector(toggleLanguage))
+        langItem.tintColor = Palette.brand
         let more = UIBarButtonItem(title: nil, image: UIImage(systemName: "ellipsis.circle"), primaryAction: nil, menu: buildMenu())
         more.accessibilityLabel = L("more")
-        navigationItem.rightBarButtonItems = [more, runItem]
+        navigationItem.rightBarButtonItems = [more, runItem, langItem]
 
         buildFindBar()
         problems.contentHorizontalAlignment = .leading
@@ -114,6 +117,9 @@ final class EditorViewController: UIViewController, UITextViewDelegate {
         editor.lang = code
         symbols.setLang(code)
         editor.textAlignment = .natural
+        if langItem != nil {
+            langItem.title = code == "fa" ? "FA" : "EN"
+        }
         updateTitle()
     }
 
@@ -455,12 +461,25 @@ final class EditorViewController: UIViewController, UITextViewDelegate {
         }
     }
 
+    @objc private func toggleLanguage() {
+        translateTo(lang == "fa" ? "en" : "fa")
+    }
+
     private func translateFile() {
-        let target = lang == "fa" ? "en" : "fa"
+        translateTo(lang == "fa" ? "en" : "fa")
+    }
+
+    private func translateTo(_ target: String) {
+        if target == lang { return }
+        saveNow()
         let out = Workspace.cache.appendingPathComponent("translated.salam")
         try? FileManager.default.removeItem(at: out)
         startJob(["translate", target, file.lastPathComponent, "--output=" + out.path], cwd: cwd, interactive: false) { [weak self] rc in
-            guard let self = self, rc == 0, let text = try? String(contentsOf: out, encoding: .utf8) else { return }
+            guard let self = self else { return }
+            guard rc == 0, let text = try? String(contentsOf: out, encoding: .utf8) else {
+                self.toast(L("translate_failed"))
+                return
+            }
             self.replaceAllText(text)
             self.setLang(target)
             self.saveNow()

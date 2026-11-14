@@ -1,0 +1,646 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "autostart"
+@fa "اجرای خودکار"
+package autostart
+
+import io
+import os
+import fs
+import mem
+import str
+import filepath
+import os.user
+
+@en "Scope"
+@fa "دامنه"
+pub enum Scope:
+    User
+    System
+end
+
+@en "Entry"
+@fa "ورودی"
+pub struct Entry:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "description"
+    @fa "توضیحات"
+    pub description: str = ""
+    @en "icon"
+    @fa "نماد"
+    pub icon: str = ""
+    @en "exec_path"
+    @fa "مسیر اجرا"
+    pub exec_path: str = ""
+    @en "args"
+    @fa "آرگومان‌ها"
+    pub args: Vector<str> = Vector {} as Vector<str>
+    @en "working_dir"
+    @fa "پوشه کاری"
+    pub working_dir: str = ""
+    @en "terminal"
+    @fa "ترمینال"
+    pub terminal: bool = false
+    @en "scope"
+    @fa "دامنه"
+    pub scope: Scope = Scope.User
+end
+
+@en "StatusInfo"
+@fa "اطلاعات وضعیت"
+pub struct StatusInfo:
+    @en "supported"
+    @fa "پشتیبانی"
+    pub supported: bool = false
+    @en "enabled"
+    @fa "فعال"
+    pub enabled: bool = false
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "scope"
+    @fa "دامنه"
+    pub scope: Scope = Scope.User
+end
+
+if SALAM_OS_WINDOWS:
+    link dynamic "advapi32"
+    extern:
+        func RegOpenKeyExW(hKey: void*, lpSubKey: void*, ulOptions: u32, samDesired: u32, phkResult: void*): int
+        func RegCreateKeyExW(hKey: void*, lpSubKey: void*, Reserved: u32, lpClass: void*, dwOptions: u32, samDesired: u32, lpSecurityAttributes: void*, phkResult: void*, lpdwDisposition: void*): int
+        func RegSetValueExW(hKey: void*, lpValueName: void*, Reserved: u32, dwType: u32, lpData: void*, cbData: u32): int
+        func RegDeleteValueW(hKey: void*, lpValueName: void*): int
+        func RegQueryValueExW(hKey: void*, lpValueName: void*, lpReserved: void*, lpType: void*, lpData: void*, lpcbData: void*): int
+        func RegCloseKey(hKey: void*): int
+        func MultiByteToWideChar(codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32): i32
+        func WideCharToMultiByte(codepage: u32, flags: u32, src: void*, srclen: i32, dst: void*, dstlen: i32, def: void*, used: void*): i32
+    end
+
+    const _HKEY_CURRENT_USER := (0x80000001 as u64) as void*
+    const _HKEY_LOCAL_MACHINE := (0x80000002 as u64) as void*
+    const _KEY_READ := 0x20019 as u32
+    const _KEY_WRITE := 0x20006 as u32
+    const _REG_SZ := 1 as u32
+    const _ERROR_SUCCESS := 0
+    const _ERROR_FILE_NOT_FOUND := 2
+
+    func _root(scope: Scope): void*:
+        if scope == Scope.System: ret _HKEY_LOCAL_MACHINE end
+        ret _HKEY_CURRENT_USER
+    end
+
+    func _str_to_wide(s: str): void*:
+        n := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        if n <= 0:
+            ret mem.AllocateZeroed(2 as u64)
+        end
+        w := mem.Allocate((n * 2) as u64)
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, w, n)
+        ret w
+    end
+
+    func _wide_to_str(w: void*): str:
+        if w == null: ret str.Clone("") end
+        n := WideCharToMultiByte(65001 as u32, 0 as u32, w, 0 - 1, null, 0, null, null)
+        if n <= 0: ret str.Clone("") end
+        buf := mem.Allocate(n as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, w, 0 - 1, buf, n, null, null)
+        ret buf as str
+    end
+
+    func _run_key(): void*:
+        ret _str_to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
+    end
+
+    func _build_cmd(exec_path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 34)
+        // quote embedded quotes in path defensively
+        pn := exec_path.Len()
+        mut pi := 0
+        until pi < pn:
+            ch := exec_path.Substr(pi, 1)
+            if ch == "\"":
+                str.BufAppend(sb, "\"\"")
+            else:
+                str.BufAppend(sb, ch)
+            end
+            mem.Free(ch as void*)
+            pi++
+        end
+        str.BufAppendChar(sb, 34)
+        n := args.Len()
+        mut i := 0
+        until i < n:
+            a := args.Get(i)
+            str.BufAppendChar(sb, 32)
+            // Quote when needed (spaces, tabs, quotes, empty)
+            if a.Len() == 0 or str.Contains(a, " ") or str.Contains(a, "\t") or str.Contains(a, "\""):
+                str.BufAppendChar(sb, 34)
+                an := a.Len()
+                mut j := 0
+                until j < an:
+                    ch := a.Substr(j, 1)
+                    if ch == "\"":
+                        str.BufAppend(sb, "\"\"")
+                    else:
+                        str.BufAppend(sb, ch)
+                    end
+                    mem.Free(ch as void*)
+                    j++
+                end
+                str.BufAppendChar(sb, 34)
+            else:
+                str.BufAppend(sb, a)
+            end
+            i++
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _reg_set(app_id: str, cmd: str, scope: Scope): bool:
+        sub := _run_key()
+        name := _str_to_wide(app_id)
+        phk := mem.AllocateZeroed(sizeof(void*) as u64)
+        rc := RegCreateKeyExW(_root(scope), sub, 0 as u32, null, 0 as u32, _KEY_WRITE, null, phk, null)
+        mem.Free(sub)
+        if rc != _ERROR_SUCCESS:
+            mem.Free(name)
+            mem.Free(phk)
+            ret false
+        end
+        hkeyp := phk as void**
+        hkey := hkeyp[0]
+        mem.Free(phk)
+        wcmd := _str_to_wide(cmd)
+        // bytes including null terminator for UTF-16 (use actual wide length)
+        mut chars := 0
+        until (wcmd as u16*)[chars] != (0 as u16):
+            chars++
+        end
+        blen := ((chars + 1) * 2) as u32
+        rc = RegSetValueExW(hkey, name, 0 as u32, _REG_SZ, wcmd, blen)
+        mem.Free(wcmd)
+        mem.Free(name)
+        RegCloseKey(hkey)
+        ret rc == _ERROR_SUCCESS
+    end
+
+    func _reg_delete(app_id: str, scope: Scope): bool:
+        sub := _run_key()
+        name := _str_to_wide(app_id)
+        phk := mem.AllocateZeroed(sizeof(void*) as u64)
+        rc := RegOpenKeyExW(_root(scope), sub, 0 as u32, _KEY_WRITE, phk)
+        mem.Free(sub)
+        if rc != _ERROR_SUCCESS:
+            mem.Free(name)
+            mem.Free(phk)
+            // treat missing key as success
+            ret rc == _ERROR_FILE_NOT_FOUND
+        end
+        hkeyp := phk as void**
+        hkey := hkeyp[0]
+        mem.Free(phk)
+        rc = RegDeleteValueW(hkey, name)
+        mem.Free(name)
+        RegCloseKey(hkey)
+        ret rc == _ERROR_SUCCESS or rc == _ERROR_FILE_NOT_FOUND
+    end
+
+    func _reg_exists(app_id: str, scope: Scope): bool:
+        sub := _run_key()
+        name := _str_to_wide(app_id)
+        phk := mem.AllocateZeroed(sizeof(void*) as u64)
+        rc := RegOpenKeyExW(_root(scope), sub, 0 as u32, _KEY_READ, phk)
+        mem.Free(sub)
+        if rc != _ERROR_SUCCESS:
+            mem.Free(name)
+            mem.Free(phk)
+            ret false
+        end
+        hkeyp := phk as void**
+        hkey := hkeyp[0]
+        mem.Free(phk)
+        rc = RegQueryValueExW(hkey, name, null, null, null, null)
+        mem.Free(name)
+        RegCloseKey(hkey)
+        ret rc == _ERROR_SUCCESS
+    end
+end
+
+if SALAM_OS_MAC:
+    func _xml_escape(s: str): str:
+        mut t := str.Replace(s, "&", "&amp;")
+        defer mem.Free(t as void*)
+        mut t2 := str.Replace(t, "<", "&lt;")
+        defer mem.Free(t2 as void*)
+        mut t3 := str.Replace(t2, ">", "&gt;")
+        defer mem.Free(t3 as void*)
+        mut t4 := str.Replace(t3, "\"", "&quot;")
+        defer mem.Free(t4 as void*)
+        ret str.Replace(t4, "'", "&apos;")
+    end
+
+    func _launch_agents_dir(scope: Scope): str:
+        if scope == Scope.System:
+            ret str.Clone("/Library/LaunchDaemons")
+        end
+        home := user.HomeDir()
+        la := filepath.Join(home, "Library")
+        defer mem.Free(la as void*)
+        ret filepath.Join(la, "LaunchAgents")
+    end
+
+    func _plist_path(app_id: str, scope: Scope): str:
+        dir := _launch_agents_dir(scope)
+        defer mem.Free(dir as void*)
+        name := app_id.Concat(".plist")
+        defer mem.Free(name as void*)
+        ret filepath.Join(dir, name)
+    end
+
+    func _mkdirs(path: str):
+        if path.Len() == 0 or os.Exists(path): ret end
+        parent := filepath.Dir(path)
+        if parent.Len() > 0 and parent != path and parent != ".":
+            _mkdirs(parent)
+        end
+        mem.Free(parent as void*)
+        os.Mkdir(path)
+    end
+
+    func _build_plist(e: Entry): str:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        str.BufAppend(sb, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
+        str.BufAppend(sb, "<plist version=\"1.0\">\n<dict>\n")
+        str.BufAppend(sb, "  <key>Label</key>\n  <string>")
+        lbl := _xml_escape(e.id)
+        str.BufAppend(sb, lbl)
+        mem.Free(lbl as void*)
+        str.BufAppend(sb, "</string>\n")
+        if e.name.Len() > 0:
+            str.BufAppend(sb, "  <key>Program</key>\n  <string>")
+            exe := _xml_escape(e.exec_path)
+            str.BufAppend(sb, exe)
+            mem.Free(exe as void*)
+            str.BufAppend(sb, "</string>\n")
+        end
+        if e.working_dir.Len() > 0:
+            str.BufAppend(sb, "  <key>WorkingDirectory</key>\n  <string>")
+            wd := _xml_escape(e.working_dir)
+            str.BufAppend(sb, wd)
+            mem.Free(wd as void*)
+            str.BufAppend(sb, "</string>\n")
+        end
+        str.BufAppend(sb, "  <key>ProgramArguments</key>\n  <array>\n")
+        str.BufAppend(sb, "    <string>")
+        exe2 := _xml_escape(e.exec_path)
+        str.BufAppend(sb, exe2)
+        mem.Free(exe2 as void*)
+        str.BufAppend(sb, "</string>\n")
+        n := e.args.Len()
+        mut i := 0
+        until i < n:
+            str.BufAppend(sb, "    <string>")
+            ea := _xml_escape(e.args.Get(i))
+            str.BufAppend(sb, ea)
+            mem.Free(ea as void*)
+            str.BufAppend(sb, "</string>\n")
+            i++
+        end
+        str.BufAppend(sb, "  </array>\n")
+        str.BufAppend(sb, "  <key>RunAtLoad</key>\n  <true/>\n")
+        if e.scope == Scope.User:
+            str.BufAppend(sb, "  <key>ProcessType</key>\n  <string>Interactive</string>\n")
+        end
+        if e.name.Len() > 0 or e.description.Len() > 0:
+            // Informational only; launchd ignores unknown keys safely.
+            nm := e.name.Len() > 0 ? _xml_escape(e.name) : _xml_escape(e.description)
+            str.BufAppend(sb, "  <key>SalamDisplayName</key>\n  <string>")
+            str.BufAppend(sb, nm)
+            str.BufAppend(sb, "</string>\n")
+            mem.Free(nm as void*)
+        end
+        str.BufAppend(sb, "</dict>\n</plist>\n")
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+end
+
+if SALAM_OS_LINUX or SALAM_OS_BSD:
+    func _autostart_dir(scope: Scope): str:
+        if scope == Scope.System:
+            ret str.Clone("/etc/xdg/autostart")
+        end
+        home := user.HomeDir()
+        cfg := os.Env("XDG_CONFIG_HOME")
+        mut base := str.Clone("")
+        if str.Len(cfg) > 0:
+            base = str.Clone(cfg)
+        else:
+            base = filepath.Join(home, ".config")
+        end
+        out := filepath.Join(base, "autostart")
+        mem.Free(cfg as void*)
+        mem.Free(home as void*)
+        mem.Free(base as void*)
+        ret out
+    end
+
+    func _desktop_path(app_id: str, scope: Scope): str:
+        dir := _autostart_dir(scope)
+        defer mem.Free(dir as void*)
+        name := app_id.Concat(".desktop")
+        defer mem.Free(name as void*)
+        ret filepath.Join(dir, name)
+    end
+
+    func _mkdirs(path: str):
+        if path.Len() == 0 or os.Exists(path): ret end
+        parent := filepath.Dir(path)
+        if parent.Len() > 0 and parent != path and parent != ".":
+            _mkdirs(parent)
+        end
+        mem.Free(parent as void*)
+        os.Mkdir(path)
+    end
+
+    func _desktop_escape_value(s: str): str:
+        // Basic escaping for .desktop values
+        mut t := str.Replace(s, "\\", "\\\\")
+        defer mem.Free(t as void*)
+        mut t2 := str.Replace(t, "\n", "\\n")
+        ret t2
+    end
+
+    func _quote_exec_arg(a: str): str:
+        // Exec= follows freedesktop argument quoting rules (best-effort)
+        needs := str.Contains(a, " ") or str.Contains(a, "\t") or str.Contains(a, "\"") or str.Contains(a, "'") or str.Contains(a, "\\") or str.Contains(a, "$") or str.Contains(a, "`") or str.Contains(a, "%") or str.Contains(a, ">") or str.Contains(a, "<") or str.Contains(a, "|") or str.Contains(a, "&") or str.Contains(a, ";") or str.Contains(a, "(") or str.Contains(a, ")")
+        if needs == false:
+            ret str.Clone(a)
+        end
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 34)
+        n := a.Len()
+        mut i := 0
+        until i < n:
+            ch := a.Substr(i, 1)
+            // In .desktop Exec, backslash escapes " ` $ \ and sometimes others; keep conservative.
+            if ch == "\"" or ch == "\\" or ch == "$" or ch == "`":
+                str.BufAppendChar(sb, 92)
+            end
+            str.BufAppend(sb, ch)
+            mem.Free(ch as void*)
+            i++
+        end
+        str.BufAppendChar(sb, 34)
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _build_exec(exec_path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        q0 := _quote_exec_arg(exec_path)
+        str.BufAppend(sb, q0)
+        mem.Free(q0 as void*)
+        n := args.Len()
+        mut i := 0
+        until i < n:
+            str.BufAppendChar(sb, 32)
+            qa := _quote_exec_arg(args.Get(i))
+            str.BufAppend(sb, qa)
+            mem.Free(qa as void*)
+            i++
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _build_desktop(e: Entry): str:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "[Desktop Entry]\n")
+        str.BufAppend(sb, "Type=Application\n")
+        str.BufAppend(sb, "Version=1.0\n")
+        str.BufAppend(sb, "Name=")
+        nm := e.name.Len() > 0 ? _desktop_escape_value(e.name) : _desktop_escape_value(e.id)
+        str.BufAppend(sb, nm)
+        mem.Free(nm as void*)
+        str.BufAppend(sb, "\n")
+        if e.description.Len() > 0:
+            str.BufAppend(sb, "Comment=")
+            cm := _desktop_escape_value(e.description)
+            str.BufAppend(sb, cm)
+            mem.Free(cm as void*)
+            str.BufAppend(sb, "\n")
+        end
+        if e.icon.Len() > 0:
+            str.BufAppend(sb, "Icon=")
+            ic := _desktop_escape_value(e.icon)
+            str.BufAppend(sb, ic)
+            mem.Free(ic as void*)
+            str.BufAppend(sb, "\n")
+        end
+        str.BufAppend(sb, "Exec=")
+        ex := _build_exec(e.exec_path, e.args)
+        str.BufAppend(sb, ex)
+        mem.Free(ex as void*)
+        str.BufAppend(sb, "\n")
+        if e.working_dir.Len() > 0:
+            str.BufAppend(sb, "Path=")
+            wd := _desktop_escape_value(e.working_dir)
+            str.BufAppend(sb, wd)
+            mem.Free(wd as void*)
+            str.BufAppend(sb, "\n")
+        end
+        if e.terminal:
+            str.BufAppend(sb, "Terminal=true\n")
+        else:
+            str.BufAppend(sb, "Terminal=false\n")
+        end
+        str.BufAppend(sb, "X-GNOME-Autostart-enabled=true\n")
+        str.BufAppend(sb, "Hidden=false\n")
+        str.BufAppend(sb, "NoDisplay=false\n")
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+end
+
+@en "Supported"
+@fa "پشتیبانی می‌شود"
+pub func Supported(): bool:
+    if SALAM_OS_WINDOWS or SALAM_OS_MAC or SALAM_OS_LINUX or SALAM_OS_BSD:
+        ret true
+    end
+    ret false
+end
+
+@en "EntryPath"
+@fa "مسیر ورودی"
+pub func EntryPath(app_id: str, scope: Scope = Scope.User): str:
+    if app_id.Len() == 0: ret "" end
+    if SALAM_OS_WINDOWS:
+        // No file path; registry Run value under HKCU/HKLM.
+        if scope == Scope.System:
+            ret "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\" + app_id
+        end
+        ret "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\" + app_id
+    else SALAM_OS_MAC:
+        ret _plist_path(app_id, scope)
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        ret _desktop_path(app_id, scope)
+    end
+    ret ""
+end
+
+@en "EnableEntry"
+@fa "فعال‌سازی ورودی"
+pub func EnableEntry(e: Entry): bool:
+    if e.id.Len() == 0 or e.exec_path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        // System scope requires admin privileges; best-effort.
+        cmd := _build_cmd(e.exec_path, e.args)
+        defer mem.Free(cmd as void*)
+        ret _reg_set(e.id, cmd, e.scope)
+    else SALAM_OS_MAC:
+        dir := _launch_agents_dir(e.scope)
+        _mkdirs(dir)
+        mem.Free(dir as void*)
+        path := _plist_path(e.id, e.scope)
+        defer mem.Free(path as void*)
+        content := _build_plist(e)
+        defer mem.Free(content as void*)
+        ret io.WriteFile(path, content) >= 0
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        dir := _autostart_dir(e.scope)
+        _mkdirs(dir)
+        mem.Free(dir as void*)
+        path := _desktop_path(e.id, e.scope)
+        defer mem.Free(path as void*)
+        content := _build_desktop(e)
+        defer mem.Free(content as void*)
+        ret io.WriteFile(path, content) >= 0
+    end
+    ret false
+end
+
+@en "DisableEntry"
+@fa "غیرفعال‌سازی ورودی"
+pub func DisableEntry(app_id: str, scope: Scope = Scope.User): bool:
+    if app_id.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        ret _reg_delete(app_id, scope)
+    else SALAM_OS_MAC:
+        path := _plist_path(app_id, scope)
+        defer mem.Free(path as void*)
+        if os.Exists(path) == false: ret true end
+        ret os.Remove(path) == 0
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        path := _desktop_path(app_id, scope)
+        defer mem.Free(path as void*)
+        if os.Exists(path) == false: ret true end
+        ret os.Remove(path) == 0
+    end
+    ret false
+end
+
+@en "IsEnabledEntry"
+@fa "ورودی فعال است"
+pub func IsEnabledEntry(app_id: str, scope: Scope = Scope.User): bool:
+    if app_id.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        ret _reg_exists(app_id, scope)
+    else SALAM_OS_MAC:
+        path := _plist_path(app_id, scope)
+        defer mem.Free(path as void*)
+        ret os.Exists(path)
+    else SALAM_OS_LINUX or SALAM_OS_BSD:
+        path := _desktop_path(app_id, scope)
+        defer mem.Free(path as void*)
+        ret os.Exists(path)
+    end
+    ret false
+end
+
+@en "Enable"
+@fa "فعال‌سازی"
+pub func Enable(app_id: str, app_name: str, exec_path: str, args: Vector<str>): bool:
+    e := Entry { id = app_id, name = app_name, exec_path = exec_path, args = args, scope = Scope.User }
+    ret EnableEntry(e)
+end
+
+@en "EnableWithScope"
+@fa "فعال‌سازی با دامنه"
+pub func EnableWithScope(app_id: str, app_name: str, exec_path: str, args: Vector<str>, scope: Scope): bool:
+    e := Entry { id = app_id, name = app_name, exec_path = exec_path, args = args, scope = scope }
+    ret EnableEntry(e)
+end
+
+@en "Disable"
+@fa "غیرفعال‌سازی"
+pub func Disable(app_id: str): bool:
+    ret DisableEntry(app_id, Scope.User)
+end
+
+@en "DisableWithScope"
+@fa "غیرفعال‌سازی با دامنه"
+pub func DisableWithScope(app_id: str, scope: Scope): bool:
+    ret DisableEntry(app_id, scope)
+end
+
+@en "IsEnabled"
+@fa "فعال است"
+pub func IsEnabled(app_id: str): bool:
+    if IsEnabledEntry(app_id, Scope.User): ret true end
+    // Also report system-scope enablement if present
+    if IsEnabledEntry(app_id, Scope.System): ret true end
+    ret false
+end
+
+@en "IsEnabledWithScope"
+@fa "فعال است با دامنه"
+pub func IsEnabledWithScope(app_id: str, scope: Scope): bool:
+    ret IsEnabledEntry(app_id, scope)
+end
+
+@en "Status"
+@fa "وضعیت"
+pub func Status(app_id: str): str:
+    if Supported() == false: ret "unsupported" end
+    if IsEnabled(app_id): ret "enabled" end
+    ret "disabled"
+end
+
+@en "StatusInfoFor"
+@fa "اطلاعات وضعیت"
+pub func StatusInfoFor(app_id: str, scope: Scope = Scope.User): StatusInfo:
+    mut info := StatusInfo {}
+    info.supported = Supported()
+    info.scope = scope
+    info.enabled = IsEnabledEntry(app_id, scope)
+    info.path = EntryPath(app_id, scope)
+    ret info
+end

@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 type SalamBridge = {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -261,6 +261,107 @@ export function saveWorkspace(path: string) {
 export function folderName(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+export type AgentUpdate = { version: string; url: string };
+
+const LATEST_RELEASE_URL =
+  "https://api.github.com/repos/SalamLang/Salam/releases/latest";
+const LATEST_CACHE_KEY = "salam-agent-latest-check";
+const LATEST_CACHE_TTL = 6 * 60 * 60 * 1000;
+
+function parseVersion(v: string): number[] {
+  return v.split(".").map((n) => parseInt(n, 10) || 0);
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+  const a = parseVersion(latest);
+  const b = parseVersion(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+async function fetchLatestAgentVersion(): Promise<string | null> {
+  try {
+    const raw = localStorage.getItem(LATEST_CACHE_KEY);
+    if (raw) {
+      const cached = JSON.parse(raw) as { version: string; checkedAt: number };
+      if (
+        cached.version &&
+        Date.now() - cached.checkedAt < LATEST_CACHE_TTL
+      ) {
+        return cached.version;
+      }
+    }
+  } catch {}
+  try {
+    const res = await fetch(LATEST_RELEASE_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { tag_name?: string };
+    const version = (data.tag_name || "").replace(/^v/, "");
+    if (!version) return null;
+    try {
+      localStorage.setItem(
+        LATEST_CACHE_KEY,
+        JSON.stringify({ version, checkedAt: Date.now() }),
+      );
+    } catch {}
+    return version;
+  } catch {
+    return null;
+  }
+}
+
+/** The 32-bit/aarch64 names agent-release.yml publishes differ from Rust's
+ * own target_arch (`x86` there is `i686` here); macOS always ships a
+ * universal binary, so its arch never needs to match. */
+function agentAssetArch(arch: string): string {
+  return arch === "x86" ? "i686" : arch;
+}
+
+function agentDownloadUrl(
+  version: string,
+  os: AgentInfo["os"],
+  arch: string,
+): string | null {
+  const base = `https://github.com/SalamLang/Salam/releases/download/v${version}/salam-agent-${version}-`;
+  if (os === "windows") return `${base}windows-${agentAssetArch(arch)}.exe`;
+  if (os === "macos") return `${base}macos-universal.dmg`;
+  if (os === "linux") {
+    const a = agentAssetArch(arch);
+    return a === "i686" ? `${base}linux-i686.tar.gz` : `${base}linux-${a}.AppImage`;
+  }
+  return null;
+}
+
+/** Desktop-only: null until the current agent version and the latest
+ * release are both known, then null again if there is nothing newer. */
+export function useAgentUpdate(): AgentUpdate | null {
+  const [update, setUpdate] = useState<AgentUpdate | null>(null);
+  useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    (async () => {
+      const [info, latest] = await Promise.all([
+        agent.info().catch(() => null),
+        fetchLatestAgentVersion(),
+      ]);
+      if (cancelled || !info || !latest) return;
+      if (!isNewerVersion(latest, info.version)) return;
+      const url = agentDownloadUrl(latest, info.os, info.arch);
+      if (url) setUpdate({ version: latest, url });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return update;
 }
 
 export function useReturnReset(

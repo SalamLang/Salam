@@ -1,0 +1,622 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "service"
+@fa "سرویس"
+package service
+
+import io
+import os
+import mem
+import str
+import filepath
+import os.user
+import os.shell
+
+// Behavior notes:
+// - UserAgent: user-session agent (macOS LaunchAgent plist in ~/Library/LaunchAgents,
+//   Linux systemd --user unit in ~/.config/systemd/user, Windows HKCU Run entry).
+//   User agents may interact with the user's desktop/session.
+// - SystemService: system-wide daemon (macOS LaunchDaemon in /Library/LaunchDaemons,
+//   Linux system unit in /etc/systemd/system, Windows SCM service via sc.exe).
+//   System services typically run without GUI access (Windows Session 0 isolation)
+//   and often require administrative privileges to install/start/stop.
+// Platform support is best-effort and shell-command based where native APIs are absent.
+
+@en "Kind"
+@fa "نوع"
+pub enum Kind:
+    UserAgent
+    SystemService
+end
+
+@en "Spec"
+@fa "مشخصات"
+pub struct Spec:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "description"
+    @fa "توضیحات"
+    pub description: str = ""
+    @en "exec"
+    @fa "اجرا"
+    pub exec: str = ""
+    @en "args"
+    @fa "آرگومان‌ها"
+    pub args: Vector<str> = Vector {} as Vector<str>
+    @en "working_dir"
+    @fa "پوشه کاری"
+    pub working_dir: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: Kind = Kind.UserAgent
+    @en "run_at_load"
+    @fa "اجرا در بارگذاری"
+    pub run_at_load: bool = true
+    @en "keep_alive"
+    @fa "همیشه فعال"
+    pub keep_alive: bool = false
+end
+
+func _mkdirs(path: str):
+    if path.Len() == 0 or os.Exists(path): ret end
+    parent := filepath.Dir(path)
+    if parent.Len() > 0 and parent != path and parent != ".":
+        _mkdirs(parent)
+    end
+    mem.Free(parent as void*)
+    os.Mkdir(path)
+end
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _join_exec_sh(exec_path: str, args: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    q0 := _quote_sh(exec_path)
+    str.BufAppend(sb, q0)
+    mem.Free(q0 as void*)
+    n := args.Len()
+    mut i := 0
+    until i < n:
+        str.BufAppendChar(sb, 32)
+        qa := _quote_sh(args.Get(i))
+        str.BufAppend(sb, qa)
+        mem.Free(qa as void*)
+        i++
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _quote_cmd_arg(s: str): str:
+    // Best-effort quoting for Windows cmd/sc/reg command lines.
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 34)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "\"":
+            str.BufAppend(sb, "\"\"")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 34)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _join_exec_cmd(exec_path: str, args: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    q0 := _quote_cmd_arg(exec_path)
+    str.BufAppend(sb, q0)
+    mem.Free(q0 as void*)
+    n := args.Len()
+    mut i := 0
+    until i < n:
+        str.BufAppendChar(sb, 32)
+        qa := _quote_cmd_arg(args.Get(i))
+        str.BufAppend(sb, qa)
+        mem.Free(qa as void*)
+        i++
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "NewSpec"
+@fa "مشخصات جدید"
+pub func NewSpec(id: str, exec_path: str, args: Vector<str>, kind: Kind = Kind.UserAgent): Spec:
+    ret Spec { id = id, name = id, exec = exec_path, args = args, kind = kind, run_at_load = true, keep_alive = false }
+end
+
+@en "NewUserAgent"
+@fa "عامل کاربر جدید"
+pub func NewUserAgent(id: str, exec_path: str, args: Vector<str>): Spec:
+    ret NewSpec(id, exec_path, args, Kind.UserAgent)
+end
+
+@en "NewSystemService"
+@fa "سرویس سیستمی جدید"
+pub func NewSystemService(id: str, exec_path: str, args: Vector<str>): Spec:
+    ret NewSpec(id, exec_path, args, Kind.SystemService)
+end
+
+if SALAM_OS_MAC:
+    func _xml_escape(s: str): str:
+        mut t := str.Replace(s, "&", "&amp;")
+        defer mem.Free(t as void*)
+        mut t2 := str.Replace(t, "<", "&lt;")
+        defer mem.Free(t2 as void*)
+        mut t3 := str.Replace(t2, ">", "&gt;")
+        defer mem.Free(t3 as void*)
+        mut t4 := str.Replace(t3, "\"", "&quot;")
+        defer mem.Free(t4 as void*)
+        ret str.Replace(t4, "'", "&apos;")
+    end
+
+    func _plist_dir(kind: Kind): str:
+        if kind == Kind.SystemService:
+            ret str.Clone("/Library/LaunchDaemons")
+        end
+        home := user.HomeDir()
+        la := filepath.Join(home, "Library")
+        defer mem.Free(la as void*)
+        ret filepath.Join(la, "LaunchAgents")
+    end
+
+    func _plist_path(id: str, kind: Kind): str:
+        dir := _plist_dir(kind)
+        defer mem.Free(dir as void*)
+        name := id.Concat(".plist")
+        defer mem.Free(name as void*)
+        ret filepath.Join(dir, name)
+    end
+
+    func _build_plist(spec: Spec): str:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        str.BufAppend(sb, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
+        str.BufAppend(sb, "<plist version=\"1.0\">\n<dict>\n")
+        str.BufAppend(sb, "  <key>Label</key>\n  <string>")
+        lbl := _xml_escape(spec.id)
+        str.BufAppend(sb, lbl)
+        mem.Free(lbl as void*)
+        str.BufAppend(sb, "</string>\n")
+        str.BufAppend(sb, "  <key>ProgramArguments</key>\n  <array>\n")
+        str.BufAppend(sb, "    <string>")
+        exe := _xml_escape(spec.exec)
+        str.BufAppend(sb, exe)
+        mem.Free(exe as void*)
+        str.BufAppend(sb, "</string>\n")
+        n := spec.args.Len()
+        mut i := 0
+        until i < n:
+            str.BufAppend(sb, "    <string>")
+            ea := _xml_escape(spec.args.Get(i))
+            str.BufAppend(sb, ea)
+            mem.Free(ea as void*)
+            str.BufAppend(sb, "</string>\n")
+            i++
+        end
+        str.BufAppend(sb, "  </array>\n")
+        if spec.working_dir.Len() > 0:
+            str.BufAppend(sb, "  <key>WorkingDirectory</key>\n  <string>")
+            wd := _xml_escape(spec.working_dir)
+            str.BufAppend(sb, wd)
+            mem.Free(wd as void*)
+            str.BufAppend(sb, "</string>\n")
+        end
+        if spec.run_at_load:
+            str.BufAppend(sb, "  <key>RunAtLoad</key>\n  <true/>\n")
+        else:
+            str.BufAppend(sb, "  <key>RunAtLoad</key>\n  <false/>\n")
+        end
+        if spec.keep_alive:
+            str.BufAppend(sb, "  <key>KeepAlive</key>\n  <true/>\n")
+        end
+        str.BufAppend(sb, "</dict>\n</plist>\n")
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _launchctl(sub: str, path: str): int:
+        cmd := "launchctl ".Concat(sub).Concat(" ").Concat(_quote_sh(path))
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd)
+    end
+end
+
+if SALAM_OS_LINUX:
+    func _user_unit_dir(): str:
+        cfg := os.Env("XDG_CONFIG_HOME")
+        mut base := str.Clone("")
+        if str.Len(cfg) > 0:
+            base = str.Clone(cfg)
+        else:
+            home := user.HomeDir()
+            base = filepath.Join(home, ".config")
+            mem.Free(home as void*)
+        end
+        out := filepath.Join(base, "systemd/user")
+        mem.Free(cfg as void*)
+        mem.Free(base as void*)
+        ret out
+    end
+
+    func _system_unit_dir(): str:
+        ret str.Clone("/etc/systemd/system")
+    end
+
+    func _unit_dir(kind: Kind): str:
+        if kind == Kind.SystemService: ret _system_unit_dir() end
+        ret _user_unit_dir()
+    end
+
+    func _unit_path(id: str, kind: Kind): str:
+        dir := _unit_dir(kind)
+        defer mem.Free(dir as void*)
+        name := id.Concat(".service")
+        defer mem.Free(name as void*)
+        ret filepath.Join(dir, name)
+    end
+
+    func _build_unit(spec: Spec): str:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, "[Unit]\n")
+        if spec.description.Len() > 0:
+            str.BufAppend(sb, "Description=")
+            str.BufAppend(sb, spec.description)
+            str.BufAppend(sb, "\n")
+        else spec.name.Len() > 0:
+            str.BufAppend(sb, "Description=")
+            str.BufAppend(sb, spec.name)
+            str.BufAppend(sb, "\n")
+        else:
+            str.BufAppend(sb, "Description=")
+            str.BufAppend(sb, spec.id)
+            str.BufAppend(sb, "\n")
+        end
+        str.BufAppend(sb, "\n[Service]\n")
+        str.BufAppend(sb, "Type=simple\n")
+        if spec.working_dir.Len() > 0:
+            str.BufAppend(sb, "WorkingDirectory=")
+            str.BufAppend(sb, spec.working_dir)
+            str.BufAppend(sb, "\n")
+        end
+        str.BufAppend(sb, "ExecStart=")
+        ex := _join_exec_sh(spec.exec, spec.args)
+        str.BufAppend(sb, ex)
+        mem.Free(ex as void*)
+        str.BufAppend(sb, "\n")
+        if spec.keep_alive:
+            str.BufAppend(sb, "Restart=always\n")
+        else:
+            str.BufAppend(sb, "Restart=no\n")
+        end
+        str.BufAppend(sb, "\n[Install]\n")
+        if spec.kind == Kind.SystemService:
+            str.BufAppend(sb, "WantedBy=multi-user.target\n")
+        else:
+            str.BufAppend(sb, "WantedBy=default.target\n")
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _systemctl_user(args: str): int:
+        cmd := "systemctl --user ".Concat(args)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd)
+    end
+
+    func _systemctl_sys(args: str): int:
+        cmd := "systemctl ".Concat(args)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd)
+    end
+
+    func _systemctl(kind: Kind, args: str): int:
+        if kind == Kind.SystemService: ret _systemctl_sys(args) end
+        ret _systemctl_user(args)
+    end
+end
+
+@en "Supported"
+@fa "پشتیبانی می‌شود"
+pub func Supported(): bool:
+    if SALAM_OS_WINDOWS or SALAM_OS_MAC or SALAM_OS_LINUX:
+        ret true
+    end
+    ret false
+end
+
+@en "Install"
+@fa "نصب"
+pub func Install(spec: Spec): bool:
+    if spec.id.Len() == 0 or spec.exec.Len() == 0: ret false end
+    if SALAM_OS_MAC:
+        dir := _plist_dir(spec.kind)
+        _mkdirs(dir)
+        mem.Free(dir as void*)
+        path := _plist_path(spec.id, spec.kind)
+        defer mem.Free(path as void*)
+        content := _build_plist(spec)
+        defer mem.Free(content as void*)
+        if io.WriteFile(path, content) < 0: ret false end
+        // Best-effort load
+        _ = _launchctl("load", path)
+        ret true
+    else SALAM_OS_LINUX:
+        dir := _unit_dir(spec.kind)
+        _mkdirs(dir)
+        mem.Free(dir as void*)
+        path := _unit_path(spec.id, spec.kind)
+        defer mem.Free(path as void*)
+        content := _build_unit(spec)
+        defer mem.Free(content as void*)
+        if io.WriteFile(path, content) < 0: ret false end
+        _ = _systemctl(spec.kind, "daemon-reload")
+        if spec.run_at_load:
+            en := "enable ".Concat(spec.id).Concat(".service")
+            defer mem.Free(en as void*)
+            _ = _systemctl(spec.kind, en)
+        end
+        ret true
+    else SALAM_OS_WINDOWS:
+        // Windows Services (SCM) run in Session 0 and cannot show GUI.
+        // For UserAgent (GUI-session context), prefer HKCU Run autostart entry.
+        if spec.kind == Kind.UserAgent:
+            cmdline := _join_exec_cmd(spec.exec, spec.args)
+            defer mem.Free(cmdline as void*)
+            // Use reg.exe for simplicity/best-effort (cmd-style quoting).
+            cmd := "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_cmd_arg(spec.id)).Concat(" /t REG_SZ /d ").Concat(_quote_cmd_arg(cmdline)).Concat(" /f")
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        else:
+            // System service via sc.exe (requires privileges). Runs in Session 0 - no GUI.
+            bin := _join_exec_cmd(spec.exec, spec.args)
+            defer mem.Free(bin as void*)
+            // sc create expects binPath= "..."
+            sid := _quote_cmd_arg(spec.id)
+            cmd := "sc create ".Concat(sid).Concat(" binPath= ").Concat(_quote_cmd_arg(bin)).Concat(" start= auto")
+            mem.Free(sid as void*)
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        end
+    end
+    ret false
+end
+
+@en "Uninstall"
+@fa "حذف نصب"
+pub func Uninstall(id: str, kind: Kind): bool:
+    if id.Len() == 0: ret false end
+    if SALAM_OS_MAC:
+        path := _plist_path(id, kind)
+        defer mem.Free(path as void*)
+        _ = _launchctl("unload", path)
+        if os.Exists(path): ret os.Remove(path) == 0 end
+        ret true
+    else SALAM_OS_LINUX:
+        _ = Stop(id, kind)
+        dis := "disable ".Concat(id).Concat(".service")
+        defer mem.Free(dis as void*)
+        _ = _systemctl(kind, dis)
+        path := _unit_path(id, kind)
+        defer mem.Free(path as void*)
+        if os.Exists(path):
+            if os.Remove(path) != 0: ret false end
+        end
+        _ = _systemctl(kind, "daemon-reload")
+        ret true
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.UserAgent:
+            cmd := "reg delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_cmd_arg(id)).Concat(" /f")
+            defer mem.Free(cmd as void*)
+            _ = shell.System(cmd)
+            ret true
+        else:
+            _ = Stop(id, kind)
+            sid := _quote_cmd_arg(id)
+            cmd := "sc delete ".Concat(sid)
+            mem.Free(sid as void*)
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        end
+    end
+    ret false
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(id: str, kind: Kind): bool:
+    if id.Len() == 0: ret false end
+    if SALAM_OS_MAC:
+        path := _plist_path(id, kind)
+        defer mem.Free(path as void*)
+        ret _launchctl("load", path) == 0
+    else SALAM_OS_LINUX:
+        args := "start ".Concat(id).Concat(".service")
+        defer mem.Free(args as void*)
+        ret _systemctl(kind, args) == 0
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.UserAgent:
+            // No persistent daemon process guaranteed; user agents run at login.
+            ret false
+        else:
+            sid := _quote_cmd_arg(id)
+            cmd := "sc start ".Concat(sid)
+            mem.Free(sid as void*)
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        end
+    end
+    ret false
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(id: str, kind: Kind): bool:
+    if id.Len() == 0: ret false end
+    if SALAM_OS_MAC:
+        path := _plist_path(id, kind)
+        defer mem.Free(path as void*)
+        ret _launchctl("unload", path) == 0
+    else SALAM_OS_LINUX:
+        args := "stop ".Concat(id).Concat(".service")
+        defer mem.Free(args as void*)
+        ret _systemctl(kind, args) == 0
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.UserAgent:
+            ret false
+        else:
+            sid := _quote_cmd_arg(id)
+            cmd := "sc stop ".Concat(sid)
+            mem.Free(sid as void*)
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        end
+    end
+    ret false
+end
+
+@en "Restart"
+@fa "راه‌اندازی مجدد"
+pub func Restart(id: str, kind: Kind): bool:
+    if SALAM_OS_LINUX:
+        args := "restart ".Concat(id).Concat(".service")
+        defer mem.Free(args as void*)
+        ret _systemctl(kind, args) == 0
+    end
+    _ = Stop(id, kind)
+    ret Start(id, kind)
+end
+
+@en "IsInstalled"
+@fa "نصب شده"
+pub func IsInstalled(id: str, kind: Kind): bool:
+    if id.Len() == 0: ret false end
+    if SALAM_OS_MAC:
+        path := _plist_path(id, kind)
+        defer mem.Free(path as void*)
+        ret os.Exists(path)
+    else SALAM_OS_LINUX:
+        path := _unit_path(id, kind)
+        defer mem.Free(path as void*)
+        ret os.Exists(path)
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.UserAgent:
+            cmd := "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v ".Concat(_quote_cmd_arg(id)).Concat(" >nul 2>&1")
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        else:
+            sid := _quote_cmd_arg(id)
+            cmd := "sc query ".Concat(sid).Concat(" >nul 2>&1")
+            mem.Free(sid as void*)
+            defer mem.Free(cmd as void*)
+            ret shell.System(cmd) == 0
+        end
+    end
+    ret false
+end
+
+@en "Status"
+@fa "وضعیت"
+pub func Status(id: str, kind: Kind): str:
+    if IsInstalled(id, kind) == false: ret "not-installed" end
+    if SALAM_OS_LINUX:
+        args := "is-active ".Concat(id).Concat(".service")
+        defer mem.Free(args as void*)
+        rc := _systemctl(kind, args)
+        if rc == 0: ret "running" end
+        // Try to distinguish enabled/failed/stopped when installed.
+        show := "show -p ActiveState --value ".Concat(id).Concat(".service")
+        defer mem.Free(show as void*)
+        r := _systemctl(kind, show)
+        // _systemctl returns exit code only; fall back to basic classification.
+        if rc == 3: ret "stopped" end
+        ret "installed"
+    else SALAM_OS_MAC:
+        // launchctl list output parsing is non-trivial; report installed/enabled.
+        ret "installed"
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.SystemService:
+            sid := _quote_cmd_arg(id)
+            cmd := "sc query ".Concat(sid)
+            mem.Free(sid as void*)
+            defer mem.Free(cmd as void*)
+            r := shell.Exec(cmd)
+            mut st := "installed"
+            if str.Contains(r.out, "RUNNING"): st = "running" end
+            if str.Contains(r.out, "STOPPED"): st = "stopped" end
+            if str.Contains(r.out, "START_PENDING") or str.Contains(r.out, "STOP_PENDING"): st = "pending" end
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            ret st
+        end
+        // UserAgent is a Run entry; treat presence as enabled-at-login.
+        ret "enabled"
+    end
+    ret "unknown"
+end
+
+@en "ConfigPath"
+@fa "مسیر پیکربندی"
+pub func ConfigPath(id: str, kind: Kind): str:
+    if id.Len() == 0: ret "" end
+    if SALAM_OS_MAC:
+        ret _plist_path(id, kind)
+    else SALAM_OS_LINUX:
+        ret _unit_path(id, kind)
+    else SALAM_OS_WINDOWS:
+        if kind == Kind.UserAgent:
+            ret "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\" + id
+        end
+        ret "SCM:" + id
+    end
+    ret ""
+end

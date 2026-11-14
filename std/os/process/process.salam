@@ -131,28 +131,61 @@ if SALAM_OS_WINDOWS:
     end
 
     func _needs_quotes(s: str): bool:
-        if s.len() == 0: ret true end
-        ret str.Contains(s, " ")
+        if s.Len() == 0: ret true end
+        n := s.Len()
+        bytes := s as void* as u8*
+        mut i := 0
+        until i < n:
+            c := bytes[i] as int
+            if c == 32 or c == 9 or c == 10 or c == 11 or c == 34:
+                ret true
+            end
+            i++
+        end
+        ret false
     end
 
     func _append_token(sb &: str.StringBuilder, tok: str):
-        if _needs_quotes(tok):
-            str.BufAppendChar(sb, 34)
+        if not _needs_quotes(tok):
             str.BufAppend(sb, tok)
-            str.BufAppendChar(sb, 34)
-        else:
-            str.BufAppend(sb, tok)
+            ret
         end
+        n := tok.Len()
+        bytes := tok as void* as u8*
+        str.BufAppendChar(sb, 34)
+        mut slashes := 0
+        mut i := 0
+        until i < n:
+            c := bytes[i] as int
+            if c == 92:
+                slashes++
+                str.BufAppendChar(sb, 92)
+            else c == 34:
+                repeat slashes + 1:
+                    str.BufAppendChar(sb, 92)
+                end
+                str.BufAppendChar(sb, 34)
+                slashes = 0
+            else:
+                slashes = 0
+                str.BufAppendChar(sb, c)
+            end
+            i++
+        end
+        repeat slashes * 2:
+            str.BufAppendChar(sb, 92)
+        end
+        str.BufAppendChar(sb, 34)
     end
 
     func _build_cmdline(path: str, args: Vector<str>): str:
         mut sb := str.NewBuilder()
         _append_token(sb, path)
-        n := args.len()
+        n := args.Len()
         mut i := 0
         until i < n:
             str.BufAppendChar(sb, 32)
-            _append_token(sb, args.get(i))
+            _append_token(sb, args.Get(i))
             i++
         end
         out := str.BufStr(sb)
@@ -179,12 +212,12 @@ if SALAM_OS_WINDOWS:
     end
 else:
     func _build_argv(path: str, args: Vector<str>): void*:
-        n := args.len()
+        n := args.Len()
         arr := mem.Allocate(((n + 2) as u64) * (sizeof(str) as u64)) as str*
         arr[0] = path
         mut i := 0
         until i < n:
-            arr[i + 1] = args.get(i)
+            arr[i + 1] = args.Get(i)
             i++
         end
         arr[n + 1] = (null as void*) as str
@@ -288,11 +321,13 @@ if SALAM_OS_WINDOWS:
     @en "Start"
     @fa "شروع"
     pub func Start(path: str, args: Vector<str>): Process:
+        error.Clear()
         cmdline := _build_cmdline(path, args)
-        si := mem.AllocateZeroed(104 as u64)
+        si := mem.AllocateZeroed(_si_size() as u64)
         _u32_set(si, 0, _si_size() as u32)
         pi := mem.AllocateZeroed(24 as u64)
         ok := CreateProcessA(null, cmdline as void*, null, null, 0, 0, null, null, si, pi)
+        mem.Free(cmdline as void*)
         mem.Free(si)
         mut p := Process {}
         if ok == 0:
@@ -303,7 +338,7 @@ if SALAM_OS_WINDOWS:
         p.pid = _u32_at(pi, _pi_pid_at()) as int
         p.handle = _ptr_at(pi, 0)
         th := _ptr_at(pi, _word())
-        CloseHandle(th)
+        if th != null: CloseHandle(th) end
         mem.Free(pi)
         p.running = true
         ret p
@@ -312,14 +347,32 @@ if SALAM_OS_WINDOWS:
     @en "StartCaptured"
     @fa "شروع با ضبط"
     pub func StartCaptured(path: str, args: Vector<str>): Process:
+        error.Clear()
         out_path := temp.File()
         err_path := temp.File()
         out_h := _open_inheritable(out_path, 1073741824 as u32, 2 as u32)
         err_h := _open_inheritable(err_path, 1073741824 as u32, 2 as u32)
         in_h := _open_inheritable("NUL", 2147483648 as u32, 3 as u32)
 
+        mut p := Process {}
+        p.stdout_path = out_path
+        p.stderr_path = err_path
+        if out_h == null or err_h == null or in_h == null:
+            error.Set(error.ProcessFailed, "cannot open capture files", "StartCaptured", path, GetLastError())
+            if in_h != null: CloseHandle(in_h) end
+            if out_h != null: CloseHandle(out_h) end
+            if err_h != null: CloseHandle(err_h) end
+            os.Remove(out_path)
+            os.Remove(err_path)
+            mem.Free(p.stdout_path as void*)
+            mem.Free(p.stderr_path as void*)
+            p.stdout_path = ""
+            p.stderr_path = ""
+            ret p
+        end
+
         cmdline := _build_cmdline(path, args)
-        si := mem.AllocateZeroed(104 as u64)
+        si := mem.AllocateZeroed(_si_size() as u64)
         _u32_set(si, 0, _si_size() as u32)
         _u32_set(si, _si_flags_at(), 256 as u32)
         _ptr_set(si, _si_handles_at(), in_h)
@@ -328,23 +381,27 @@ if SALAM_OS_WINDOWS:
 
         pi := mem.AllocateZeroed(24 as u64)
         ok := CreateProcessA(null, cmdline as void*, null, null, 1, 0, null, null, si, pi)
+        mem.Free(cmdline as void*)
         mem.Free(si)
-        if in_h != null: CloseHandle(in_h) end
-        if out_h != null: CloseHandle(out_h) end
-        if err_h != null: CloseHandle(err_h) end
+        CloseHandle(in_h)
+        CloseHandle(out_h)
+        CloseHandle(err_h)
 
-        mut p := Process {}
-        p.stdout_path = out_path
-        p.stderr_path = err_path
         if ok == 0:
             error.Set(error.ProcessFailed, "CreateProcess failed", "StartCaptured", path, GetLastError())
             mem.Free(pi)
+            os.Remove(out_path)
+            os.Remove(err_path)
+            mem.Free(p.stdout_path as void*)
+            mem.Free(p.stderr_path as void*)
+            p.stdout_path = ""
+            p.stderr_path = ""
             ret p
         end
         p.pid = _u32_at(pi, _pi_pid_at()) as int
         p.handle = _ptr_at(pi, 0)
         th := _ptr_at(pi, _word())
-        CloseHandle(th)
+        if th != null: CloseHandle(th) end
         mem.Free(pi)
         p.running = true
         ret p
@@ -400,6 +457,7 @@ else:
     @en "Start"
     @fa "شروع"
     pub func Start(path: str, args: Vector<str>): Process:
+        error.Clear()
         argv := _build_argv(path, args)
         pid := _spawn_posix(path, argv, false, "", "")
         mem.Free(argv)
@@ -416,6 +474,7 @@ else:
     @en "StartCaptured"
     @fa "شروع با ضبط"
     pub func StartCaptured(path: str, args: Vector<str>): Process:
+        error.Clear()
         out_path := temp.File()
         err_path := temp.File()
         argv := _build_argv(path, args)
@@ -426,6 +485,12 @@ else:
         p.stderr_path = err_path
         if pid <= 0:
             error.Set(error.ProcessFailed, "posix_spawnp failed", "StartCaptured", path, 0 - pid)
+            os.Remove(out_path)
+            os.Remove(err_path)
+            mem.Free(p.stdout_path as void*)
+            mem.Free(p.stderr_path as void*)
+            p.stdout_path = ""
+            p.stderr_path = ""
             ret p
         end
         p.pid = pid
@@ -501,28 +566,44 @@ end
 @en "ReadStdout"
 @fa "خواندن خروجی"
 pub func ReadStdout(p: Process): str:
-    if p.stdout_path.len() == 0: ret "" end
+    if p.stdout_path.Len() == 0: ret str.Clone("") end
     ret io.ReadFile(p.stdout_path)
 end
 
 @en "ReadStderr"
 @fa "خواندن خطا"
 pub func ReadStderr(p: Process): str:
-    if p.stderr_path.len() == 0: ret "" end
+    if p.stderr_path.Len() == 0: ret str.Clone("") end
     ret io.ReadFile(p.stderr_path)
 end
 
 @en "Cleanup"
 @fa "پاکسازی"
 pub func Cleanup(p &: Process):
-    if p.stdout_path.len() > 0:
+    if p.stdout_path.Len() > 0:
         os.Remove(p.stdout_path)
+        mem.Free(p.stdout_path as void*)
         p.stdout_path = ""
     end
-    if p.stderr_path.len() > 0:
+    if p.stderr_path.Len() > 0:
         os.Remove(p.stderr_path)
+        mem.Free(p.stderr_path as void*)
         p.stderr_path = ""
     end
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(p &: Process):
+    // Best-effort release of process resources and capture files.
+    if SALAM_OS_WINDOWS:
+        if p.handle != null:
+            CloseHandle(p.handle)
+            p.handle = null
+        end
+    end
+    Cleanup(p)
+    p.running = false
 end
 
 @en "ExitCode"

@@ -1,0 +1,123 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import mem
+import os.signal
+
+mut _busy_status := 99
+mut _arrived_status := 99
+
+mut _out_a := null as void*
+mut _out_b := null as void*
+
+func raiser():
+    _ := signal.WakeWinch()
+end
+
+func waiter(set: void*, out: void*):
+    status := signal.Wait(set, out)
+    if status == signal.WaitBusy:
+        _busy_status = status
+        _ := signal.WakeWinch()
+    else:
+        _arrived_status = status
+    end
+end
+
+func waiter_a(set: void*):
+    waiter(set, _out_a)
+end
+
+func waiter_b(set: void*):
+    waiter(set, _out_b)
+end
+
+func test_three_raises_three_arrivals():
+    signal.InstallWinchHandler()
+    signal.BlockWinch()
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out)
+    mut arrivals := 0
+    mut numbers_ok := true
+    mut i := 0
+    until i < 3:
+        join(spawn(raiser))
+        if signal.Wait(set, out) == signal.WaitArrived:
+            arrivals++
+            if (out as i32*)[0] != signal.WinchSignal: numbers_ok = false end
+        end
+        i++
+    end
+    testing.AssertEqInt(arrivals, 3)
+    testing.AssertTrue(numbers_ok)
+    mem.Free(out)
+    mem.Free(set)
+end
+
+func test_invalid_arguments():
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out)
+    testing.AssertEqInt(signal.Wait(null, out), signal.WaitInvalid)
+    testing.AssertEqInt(signal.Wait(set, null), signal.WaitInvalid)
+    testing.AssertEqInt((out as i32*)[0], 0)
+    mem.Free(out)
+    mem.Free(set)
+end
+
+func test_second_waiter_is_busy():
+    signal.InstallWinchHandler()
+    signal.BlockWinch()
+    set := signal.NewWinchSet()
+    testing.AssertNotNil(set)
+    out_a := mem.AllocateZeroed(8 as u64)
+    out_b := mem.AllocateZeroed(8 as u64)
+    testing.AssertNotNil(out_a)
+    testing.AssertNotNil(out_b)
+    _out_a = out_a
+    _out_b = out_b
+    a := spawn(waiter_a, set)
+    b := spawn(waiter_b, set)
+    join(a)
+    join(b)
+    testing.AssertEqInt(_busy_status, signal.WaitBusy)
+    testing.AssertEqInt(_arrived_status, signal.WaitArrived)
+    mut numbers_ok := false
+    if (out_a as i32*)[0] == signal.WinchSignal and (out_b as i32*)[0] == 0:
+        numbers_ok = true
+    end
+    if (out_b as i32*)[0] == signal.WinchSignal and (out_a as i32*)[0] == 0:
+        numbers_ok = true
+    end
+    testing.AssertTrue(numbers_ok)
+    mem.Free(out_a)
+    mem.Free(out_b)
+    mem.Free(set)
+end
+
+func main:
+    if SALAM_OS_WINDOWS:
+        println "signals are POSIX only"
+        ret 0
+    else:
+        test_three_raises_three_arrivals()
+        test_invalid_arguments()
+        test_second_waiter_is_busy()
+        ret testing.Summary()
+    end
+end

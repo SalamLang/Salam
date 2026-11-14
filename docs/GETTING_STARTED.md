@@ -11,13 +11,11 @@
 
 ## ✅ Prerequisites
 
-| Requirement                        | Notes                                                                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| A C compiler                       | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) |
-| [CMake](https://cmake.org/) ≥ 3.15 | Optional - needed for the CMake build and test suite                                                                  |
-| [Git](https://git-scm.com/)        | To clone the repository                                                                                               |
-
-No other runtime or library is required. `salam build` inlines a small C runtime into every generated file, so programs link only `-lm`.
+| Requirement                 | Notes                                                                                                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Salam release             | The installer below. The Linux, macOS and Windows x86-64 releases have LLVM linked in and compile with it by default; the Windows on Arm release uses the native backend                  |
+| A C compiler (sometimes)    | Only for the C backend (`--backend=c`, or a compiler without LLVM): [tcc](https://bellard.org/tcc/) (bundled on Windows), [gcc](https://gcc.gnu.org/) or [clang](https://clang.llvm.org/) |
+| [Git](https://git-scm.com/) | To clone the repository                                                                                                                                                                   |
 
 ## ⚡ Quick Install
 
@@ -105,33 +103,24 @@ rebuild.
 
 ## 🔨 Build the Compiler from Source
 
-The compiler source lives in [`compiler/`](../compiler/). All build commands are run from that directory.
+The compiler is written in Salam. Its source lives in
+[`compiler/`](../compiler/) and the standard library in [`std/`](../std/).
+Building it needs an existing `salam` as the seed, such as a release from
+the installer above.
 
 ```sh
-cd compiler
+sh tools/bash/build-selfhost.sh                     # seed: the salam on PATH -> ./salam
+sh tools/bash/build-selfhost.sh --seed=/path/to/salam --output=/tmp/salam
 ```
 
-### ⚡ Quick build (tcc)
+`build-selfhost.sh` writes `salam` into the current directory and uses this
+checkout's `std/`. The result has no LLVM linked in, so it compiles with the
+C backend by default; pass `--llvm=DIR` with a `libsalam_llvm.a` built by
+`std/llvm/native/build.sh` to link LLVM in.
 
-```sh
-sh tools/bash/build-selfhost.sh   # produces ./salam
-```
-
-The `salam` binary is also copied to the repository root.
-
-### 🏗️ CMake build (with tests)
-
-```sh
-cmake -B build
-cmake --build build
-ctest --test-dir build   # run the test suite
-```
-
-### 🔧 Makefile build
-
-```sh
-make   # release build -> ../salam at the repo root
-```
+`compiler/tools/bash/bootstrap.sh <seed>` does a three-stage build with a
+fixpoint check, and `tools/bash/run-tests.sh` runs the compiler's test
+suite (`SALAM=./salam sh tools/bash/run-tests.sh <section>` for one section).
 
 ## 👋 Hello, World!
 
@@ -162,7 +151,7 @@ Hello, World!
 # compile to a native executable
 salam build app.salam --output=app
 
-# keep the generated C source for inspection
+# keep the generated temp files (C source, or LLVM IR) for inspection
 salam build app.salam --keep-temp
 
 # compile to an object file only
@@ -314,7 +303,7 @@ The whole library is installed with the compiler: the database clients
 (`db.sqlite`, `db.postgres`, `db.mysql`, `db.redis`, `db.opensearch`, ...),
 machine learning (`ai.tensor`, `ai.nn`, `ai.llm`, ...), audio, the network services
 (`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `gui.webview`,
-`ai.opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
+`opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
 finds them. Import them like any other library; there is nothing to add or
 download first:
 
@@ -522,14 +511,13 @@ salam page   # layout DSL REPL
 
 ## 🐳 Docker
 
-Run the compiler in Docker without a local toolchain:
+Run a released compiler in Docker without installing anything else:
 
 ```sh
-# production image - compile any .salam file
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build app.salam --output=app
+docker run --rm -v "$PWD":/work basemax/salam build app.salam --output=app
 
-# development mode - live-rebuild on source changes
-docker compose -f compiler/docker/docker-compose.yml up dev
+# or from a checkout, with the repository mounted at /work
+docker compose -f docker/docker-compose.yml run --rm salam build app.salam --output=app
 ```
 
 See the [Docker section in the main README](../README.md#-docker--docker-compose) for full details.
@@ -549,7 +537,7 @@ See the [Docker section in the main README](../README.md#-docker--docker-compose
 | [GitHub Releases](https://github.com/SalamLang/Salam/releases)                                                               | Pre-built binaries for Linux, macOS, and Windows                |
 | [Examples](../tests/en/)                                                                                                     | Ready-to-run programs covering basics, types, stdlib, and more  |
 | [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
-| [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |
+| [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, the three backends, release matrix            |
 | [Contributing Guide](../CONTRIBUTING.md)                                                                                     | How to fork, branch, build, and open a pull request             |
 | [Code of Conduct](../CODE_OF_CONDUCT.md)                                                                                     | Community standards                                             |
 | [Visual Studio Code extension](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) | Syntax highlighting and language support for Visual Studio Code |

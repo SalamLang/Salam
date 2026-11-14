@@ -1,0 +1,354 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "display"
+@fa "نمایشگر"
+package display
+
+import os
+import mem
+import str
+import conv
+import os.shell
+
+// Best-effort screen/display information. Fields may be unknown (-1/empty)
+// depending on platform, session type (headless/Wayland/RDP), and available tools.
+
+@en "Rect"
+@fa "ناحیه"
+pub struct Rect:
+    @en "x"
+    @fa "ایکس"
+    pub x: int = 0
+    @en "y"
+    @fa "وای"
+    pub y: int = 0
+    @en "width"
+    @fa "پهنا"
+    pub width: int = 0
+    @en "height"
+    @fa "بلندی"
+    pub height: int = 0
+end
+
+@en "MonitorInfo"
+@fa "اطلاعات نمایشگر"
+pub struct MonitorInfo:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "primary"
+    @fa "اصلی"
+    pub primary: bool = false
+    @en "width_px"
+    @fa "پهنا پیکسل"
+    pub width_px: int = -1
+    @en "height_px"
+    @fa "بلندی پیکسل"
+    pub height_px: int = -1
+    @en "scale_factor"
+    @fa "ضریب مقیاس"
+    pub scale_factor: f64 = 1.0
+    @en "refresh_hz"
+    @fa "نرخ نوسازی"
+    pub refresh_hz: f64 = -1.0
+    @en "work_area"
+    @fa "ناحیه کاری"
+    pub work_area: Rect = Rect {}
+    @en "bounds"
+    @fa "مرزها"
+    pub bounds: Rect = Rect {}
+end
+
+@en "DisplaySnapshot"
+@fa "گزارش نمایشگر"
+pub struct DisplaySnapshot:
+    @en "monitors"
+    @fa "نمایشگرها"
+    pub monitors: Vector<MonitorInfo> = Vector {}
+    @en "primary_index"
+    @fa "نمایه اصلی"
+    pub primary_index: int = -1
+    @en "source"
+    @fa "منبع"
+    pub source: str = ""
+    @en "note"
+    @fa "یادداشت"
+    pub note: str = ""
+end
+
+func _parse_first_int(text: str): int:
+    mut i := 0
+    n := text.Len()
+    mut digits := str.Clone("")
+    mut seen := false
+    until i < n:
+        ch := text.Substr(i, 1)
+        if ch >= "0" and ch <= "9":
+            next := digits.Concat(ch)
+            mem.Free(digits as void*)
+            digits = next
+            seen = true
+            mem.Free(ch as void*)
+        else:
+            is_sep := seen
+            mem.Free(ch as void*)
+            if is_sep: break end
+        end
+        i++
+    end
+    if not seen:
+        mem.Free(digits as void*)
+        ret -1
+    end
+    v := conv.AtoiOr(digits, -1)
+    mem.Free(digits as void*)
+    ret v
+end
+
+func _parse_scale_from_text(text: str): f64:
+    low := str.Lower(text)
+    defer mem.Free(low as void*)
+    if str.Contains(low, "200%") or str.Contains(low, "scale: 2") or str.Contains(low, "retina"):
+        ret 2.0
+    end
+    if str.Contains(low, "150%") or str.Contains(low, "scale: 1.5"):
+        ret 1.5
+    end
+    if str.Contains(low, "125%") or str.Contains(low, "scale: 1.25"):
+        ret 1.25
+    end
+    ret 1.0
+end
+
+func _default_monitor(): MonitorInfo:
+    mut m := MonitorInfo { id = str.Clone("default"), name = str.Clone("Default display"), primary = true }
+    m.scale_factor = ScaleFactor()
+    m.bounds = Rect { x = 0, y = 0, width = -1, height = -1 }
+    m.work_area = Rect { x = 0, y = 0, width = -1, height = -1 }
+    ret m
+end
+
+@en "ScaleFactor"
+@fa "ضریب مقیاس"
+pub func ScaleFactor(): f64:
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("powershell -NoProfile -Command \"try { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width | Out-Null; 1.0 } catch { 1.0 }\" 2>nul")
+        // DPI-aware scale requires host integration; best-effort environment fallback.
+        dpi := os.Env("SALAM_UI_SCALE")
+        if dpi.Len() > 0:
+            v := conv.ParseFloatOr(dpi, 1.0)
+            mem.Free(dpi as void*)
+            mem.Free(r.out as void*)
+            mem.Free(r.err as void*)
+            ret v
+        end
+        mem.Free(dpi as void*)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        ret 1.0
+    else SALAM_OS_MAC:
+        r := shell.Exec("system_profiler SPDisplaysDataType 2>/dev/null | grep -i -m1 'Retina\\|UI Looks like' || true")
+        sc := _parse_scale_from_text(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        ret sc
+    else:
+        // X11/Wayland heuristics.
+        gdk := os.Env("GDK_SCALE")
+        if gdk.Len() > 0:
+            v := conv.ParseFloatOr(gdk, 1.0)
+            mem.Free(gdk as void*)
+            ret v
+        end
+        mem.Free(gdk as void*)
+        qt := os.Env("QT_SCALE_FACTOR")
+        if qt.Len() > 0:
+            v := conv.ParseFloatOr(qt, 1.0)
+            mem.Free(qt as void*)
+            ret v
+        end
+        mem.Free(qt as void*)
+        r := shell.Exec("xrandr --current 2>/dev/null | head -n 5")
+        sc := _parse_scale_from_text(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        ret sc
+    end
+end
+
+@en "PrimaryResolution"
+@fa "وضوح اصلی"
+pub func PrimaryResolution(): Rect:
+    mut out := Rect { x = 0, y = 0, width = -1, height = -1 }
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("powershell -NoProfile -Command \"$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; \\\"$($s.Width)x$($s.Height)\\\"\" 2>nul")
+        text := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        idx := str.IndexOf(text, "x")
+        if idx > 0:
+            w := text.Substr(0, idx)
+            h := text.Substr(idx + 1, text.Len() - idx - 1)
+            out.width = conv.AtoiOr(w, -1)
+            out.height = conv.AtoiOr(h, -1)
+            mem.Free(w as void*)
+            mem.Free(h as void*)
+        end
+        mem.Free(text as void*)
+    else SALAM_OS_MAC:
+        r := shell.Exec("system_profiler SPDisplaysDataType 2>/dev/null | grep -m1 'Resolution:' | sed 's/.*Resolution: //'")
+        text := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        // e.g. "2560 x 1600 Retina" or "1920 x 1080"
+        parts := text.Split(" x ")
+        defer parts.Free()
+        if parts.Len() >= 2:
+            out.width = _parse_first_int(parts.Get(0))
+            out.height = _parse_first_int(parts.Get(1))
+        end
+        mem.Free(text as void*)
+    else:
+        r := shell.Exec("xrandr --current 2>/dev/null | grep '*' | head -n1 | awk '{print $1}'")
+        text := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        idx := str.IndexOf(text, "x")
+        if idx > 0:
+            w := text.Substr(0, idx)
+            h := text.Substr(idx + 1, text.Len() - idx - 1)
+            out.width = conv.AtoiOr(w, -1)
+            out.height = conv.AtoiOr(h, -1)
+            mem.Free(w as void*)
+            mem.Free(h as void*)
+        end
+        mem.Free(text as void*)
+    end
+    ret out
+end
+
+@en "WorkArea"
+@fa "ناحیه کاری"
+pub func WorkArea(): Rect:
+    // Best-effort. Many toolchains need window manager integration for exact work area.
+    mut wa := PrimaryResolution()
+    if SALAM_OS_WINDOWS:
+        r := shell.Exec("powershell -NoProfile -Command \"$s=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; \\\"$($s.X),$($s.Y),$($s.Width),$($s.Height)\\\"\" 2>nul")
+        text := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        parts := text.Split(",")
+        defer parts.Free()
+        if parts.Len() == 4:
+            wa.x = conv.AtoiOr(parts.Get(0), wa.x)
+            wa.y = conv.AtoiOr(parts.Get(1), wa.y)
+            wa.width = conv.AtoiOr(parts.Get(2), wa.width)
+            wa.height = conv.AtoiOr(parts.Get(3), wa.height)
+        end
+        mem.Free(text as void*)
+    end
+    ret wa
+end
+
+@en "Monitors"
+@fa "نمایشگرها"
+pub func Monitors(): Vector<MonitorInfo>:
+    mut list := Vector {} as Vector<MonitorInfo>
+    mut m := _default_monitor()
+    res := PrimaryResolution()
+    m.width_px = res.width
+    m.height_px = res.height
+    m.bounds = res
+    m.work_area = WorkArea()
+    list.Push(m)
+
+    // Best-effort multi-monitor parsing on Linux via xrandr connected outputs.
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        r := shell.Exec("xrandr --query 2>/dev/null | grep ' connected'")
+        trimmed := str.Trim(r.out)
+        mem.Free(r.out as void*)
+        mem.Free(r.err as void*)
+        lines := str.Split(trimmed, "\n")
+        defer lines.Free()
+        mem.Free(trimmed as void*)
+        if lines.Len() > 1:
+            // Replace default with parsed entries when possible.
+            // Free default monitor strings before discarding the vector.
+            mut di := 0
+            until di < list.Len():
+                dm := list.Get(di)
+                if dm.id.Len() > 0: mem.Free(dm.id as void*) end
+                if dm.name.Len() > 0: mem.Free(dm.name as void*) end
+                di++
+            end
+            list.Free()
+            mut list2 := Vector {} as Vector<MonitorInfo>
+            mut i := 0
+            until i < lines.Len():
+                line := lines.Get(i)
+                mut mi := MonitorInfo { id = str.FromInt(i as i64), primary = str.Contains(line, " primary ") }
+                // name is first token
+                sp := str.IndexOf(line, " ")
+                if sp > 0:
+                    mi.name = line.Substr(0, sp)
+                else:
+                    mi.name = str.Clone(line)
+                end
+                mi.scale_factor = ScaleFactor()
+                mi.bounds = Rect { x = 0, y = 0, width = -1, height = -1 }
+                mi.work_area = mi.bounds
+                list2.Push(mi)
+                i++
+            end
+            ret list2
+        end
+    end
+    ret list
+end
+
+@en "Snapshot"
+@fa "گزارش"
+pub func Snapshot(): DisplaySnapshot:
+    mut s := DisplaySnapshot { source = str.Clone("best-effort"), note = str.Clone("Resolution/scale/work-area may be unavailable in headless sessions or without platform tools.") }
+    s.monitors = Monitors()
+    mut i := 0
+    n := s.monitors.Len()
+    until i < n:
+        if s.monitors.Get(i).primary:
+            s.primary_index = i
+            break
+        end
+        i++
+    end
+    if s.primary_index < 0 and n > 0:
+        s.primary_index = 0
+    end
+    ret s
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    ret SALAM_OS_LINUX or SALAM_OS_WINDOWS or SALAM_OS_MAC or SALAM_OS_BSD
+end
+
+@en "CapabilityNote"
+@fa "یادداشت قابلیت"
+pub func CapabilityNote(): str:
+    ret str.Clone("Best-effort queries via platform tools (xrandr/system_profiler/PowerShell). Multi-monitor layout, exact work area, and per-monitor scale may require native windowing integration.")
+end

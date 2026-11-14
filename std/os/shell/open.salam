@@ -1,0 +1,421 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "open"
+@fa "باز کردن"
+package open
+
+import os
+import mem
+import str
+import filepath
+import os.shell
+
+mut _open_last_error := ""
+
+func _set_err(msg: str):
+    _open_last_error = str.Clone(msg)
+end
+
+func _clear_err():
+    _open_last_error = ""
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret str.Clone(_open_last_error)
+end
+
+@en "TrashMetadata"
+@fa "فراداده سطل زباله"
+pub struct TrashMetadata:
+    @en "original_path"
+    @fa "مسیر اصلی"
+    pub original_path: str = ""
+    @en "trash_path"
+    @fa "مسیر در زباله"
+    pub trash_path: str = ""
+    @en "info_path"
+    @fa "مسیر اطلاعات"
+    pub info_path: str = ""
+    @en "supported"
+    @fa "پشتیبانی"
+    pub supported: bool = false
+    @en "note"
+    @fa "یادداشت"
+    pub note: str = ""
+end
+
+// Cross-platform helpers to open/reveal files and URLs, "open with", and best-effort trash/recycle.
+// Operations are best-effort and platform-guarded. No silent hard-delete is performed by Trash.
+
+func _quote_sh(s: str): str:
+    if s.Len() == 0: ret str.Clone("''") end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 39)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "'\\''")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 39)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _quote_cmd(s: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, 34)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        ch := s.Substr(i, 1)
+        if ch == "\"":
+            str.BufAppend(sb, "\"\"")
+        else:
+            str.BufAppend(sb, ch)
+        end
+        mem.Free(ch as void*)
+        i++
+    end
+    str.BufAppendChar(sb, 34)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "OpenPath"
+@fa "باز کردن مسیر"
+pub func OpenPath(path: str): bool:
+    if path.Len() == 0:
+        _set_err("path is empty")
+        ret false
+    end
+    if not os.Exists(path):
+        // Allow opening URLs/schemes via this helper; existence check only for local-like paths.
+        if not str.Contains(path, "://") and not str.StartsWith(path, "mailto:"):
+            _set_err("path does not exist")
+            ret false
+        end
+    end
+    if SALAM_OS_WINDOWS:
+        q := _quote_cmd(path)
+        cmd := "cmd /c start \"\" ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ok := shell.System(cmd) == 0
+        if ok: _clear_err() else _set_err("failed to open path") end
+        ret ok
+    else SALAM_OS_MAC:
+        q := _quote_sh(path)
+        cmd := "open ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ok := shell.System(cmd) == 0
+        if ok: _clear_err() else _set_err("failed to open path") end
+        ret ok
+    else:
+        q := _quote_sh(path)
+        cmd := "xdg-open ".Concat(q).Concat(" >/dev/null 2>&1 || gio open ").Concat(q).Concat(" >/dev/null 2>&1 || sensible-browser ").Concat(q).Concat(" >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ok := shell.System(cmd) == 0
+        if ok: _clear_err() else _set_err("failed to open path") end
+        ret ok
+    end
+end
+
+@en "OpenWith"
+@fa "باز کردن با"
+pub func OpenWith(app: str, path: str): bool:
+    if app.Len() == 0 or path.Len() == 0: ret false end
+    if SALAM_OS_WINDOWS:
+        qa := _quote_cmd(app)
+        qp := _quote_cmd(path)
+        cmd := "cmd /c start \"\" ".Concat(qa).Concat(" ").Concat(qp)
+        defer mem.Free(qa as void*)
+        defer mem.Free(qp as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else SALAM_OS_MAC:
+        qa := _quote_sh(app)
+        qp := _quote_sh(path)
+        cmd := "open -a ".Concat(qa).Concat(" ").Concat(qp).Concat(" >/dev/null 2>&1")
+        defer mem.Free(qa as void*)
+        defer mem.Free(qp as void*)
+        defer mem.Free(cmd as void*)
+        if shell.System(cmd) == 0: ret true end
+        // Fallback: treat app as executable path/name
+        qa2 := _quote_sh(app)
+        qp2 := _quote_sh(path)
+        cmd2 := qa2.Concat(" ").Concat(qp2).Concat(" >/dev/null 2>&1 &")
+        defer mem.Free(qa2 as void*)
+        defer mem.Free(qp2 as void*)
+        defer mem.Free(cmd2 as void*)
+        ret shell.System(cmd2) == 0
+    else:
+        qa := _quote_sh(app)
+        qp := _quote_sh(path)
+        // Try executable-style first, then gio open with app context is not standard; best-effort direct launch.
+        cmd := qa.Concat(" ").Concat(qp).Concat(" >/dev/null 2>&1 &")
+        defer mem.Free(qa as void*)
+        defer mem.Free(qp as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    end
+end
+
+@en "OpenURL"
+@fa "باز کردن نشانی"
+pub func OpenURL(url: str): bool:
+    if url.Len() == 0: ret false end
+    ret OpenPath(url)
+end
+
+@en "OpenFolder"
+@fa "باز کردن پوشه"
+pub func OpenFolder(path: str): bool:
+    if path.Len() == 0: ret false end
+    mut target := path
+    mut own := false
+    if not os.IsDir(path):
+        target = filepath.Dir(path)
+        own = true
+    end
+    ok := OpenPath(target)
+    if own:
+        mem.Free(target as void*)
+    end
+    ret ok
+end
+
+@en "Reveal"
+@fa "نمایش در مدیر پرونده"
+pub func Reveal(path: str): bool:
+    if path.Len() == 0: ret false end
+    if not os.Exists(path):
+        // Robustness: if the target does not exist, try revealing its parent folder.
+        parent := filepath.Dir(path)
+        defer mem.Free(parent as void*)
+        if parent.Len() > 0 and os.IsDir(parent):
+            ret OpenPath(parent)
+        end
+        ret false
+    end
+    if SALAM_OS_WINDOWS:
+        q := _quote_cmd(path)
+        cmd := "explorer /select,".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        _r := shell.System(cmd)
+        // explorer often returns a non-zero status even on success.
+        ret true
+    else SALAM_OS_MAC:
+        q := _quote_sh(path)
+        cmd := "open -R ".Concat(q)
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        // Best-effort: try common file managers with selection, then fall back to opening folder.
+        q := _quote_sh(path)
+        sel := "nautilus --select ".Concat(q).Concat(" >/dev/null 2>&1 || dolphin --select ").Concat(q).Concat(" >/dev/null 2>&1 || nemo ").Concat(q).Concat(" >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(sel as void*)
+        if shell.System(sel) == 0: ret true end
+        ret OpenFolder(path)
+    end
+end
+
+@en "ShowInFolder"
+@fa "نمایش در پوشه"
+pub func ShowInFolder(path: str): bool:
+    ret Reveal(path)
+end
+
+@en "TrashInfo"
+@fa "اطلاعات زباله"
+pub func TrashInfo(path: str): TrashMetadata:
+    // Best-effort metadata discovery. On Linux (freedesktop trash), .trashinfo files
+    // under $XDG_DATA_HOME/Trash/info may exist after gio/trash-put, but mapping a
+    // source path to its trashed entry requires scanning; this helper reports capability
+    // and likely locations without modifying state.
+    if path.Len() == 0:
+        ret TrashMetadata { supported = false, note = str.Clone("Empty path") }
+    end
+    if SALAM_OS_LINUX or SALAM_OS_BSD:
+        x := os.Env("XDG_DATA_HOME")
+        mut base := ""
+        if x.Len() > 0:
+            base = str.Clone(x)
+        else:
+            home := os.Env("HOME")
+            if home.Len() > 0:
+                base = filepath.Join(home, ".local/share")
+            end
+            mem.Free(home as void*)
+        end
+        mem.Free(x as void*)
+        mut info := str.Clone("")
+        mut files := str.Clone("")
+        if base.Len() > 0:
+            trash := filepath.Join(base, "Trash")
+            info = filepath.Join(trash, "info")
+            files = filepath.Join(trash, "files")
+            mem.Free(trash as void*)
+        end
+        mut note := str.Clone("Freedesktop trash metadata lives in Trash/info (*.trashinfo). Exact entry lookup is not performed.")
+        if base.Len() == 0:
+            mem.Free(note as void*)
+            note = str.Clone("Could not determine XDG trash base directory.")
+        end
+        if base.Len() > 0: mem.Free(base as void*) end
+        mem.Free(files as void*)
+        ret TrashMetadata {
+            original_path = str.Clone(path), trash_path = str.Clone(""), info_path = info,
+            supported = true, note = note
+        }
+    else SALAM_OS_MAC:
+        ret TrashMetadata {
+            original_path = str.Clone(path), supported = true, note = str.Clone("macOS Finder trash metadata is managed by the OS; programmatic item-level metadata is not exposed by this helper.")
+        }
+    else SALAM_OS_WINDOWS:
+        ret TrashMetadata {
+            original_path = str.Clone(path), supported = true, note = str.Clone("Windows Recycle Bin metadata is managed by the shell ($I/$R records); item-level metadata is not exposed by this helper.")
+        }
+    end
+    ret TrashMetadata { original_path = str.Clone(path), supported = false, note = str.Clone("Trash metadata not supported on this platform.") }
+end
+
+@en "Trash"
+@fa "انتقال به سطل زباله"
+pub func Trash(path: str): bool:
+    if path.Len() == 0 or not os.Exists(path): ret false end
+    if SALAM_OS_WINDOWS:
+        // Best-effort: PowerShell recycle bin (may prompt depending on host policy).
+        q := _quote_cmd(path)
+        cmd := "powershell -NoProfile -Command \"Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(".Concat(q).Concat(", 'OnlyErrorDialogs', 'SendToRecycleBin')\"")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        if shell.System(cmd) == 0: ret true end
+        // Fallback for directories or hosts without VB FileIO assembly behavior
+        cmd2 := "powershell -NoProfile -Command \"Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(".Concat(q).Concat(", 'OnlyErrorDialogs', 'SendToRecycleBin')\"")
+        defer mem.Free(cmd2 as void*)
+        ret shell.System(cmd2) == 0
+    else SALAM_OS_MAC:
+        // osascript move to trash
+        mut esc := str.Replace(path, "\\", "\\\\")
+        defer mem.Free(esc as void*)
+        mut esc2 := str.Replace(esc, "\"", "\\\"")
+        defer mem.Free(esc2 as void*)
+        cmd := "osascript -e 'tell application \"Finder\" to delete POSIX file \"".Concat(esc2).Concat("\"' >/dev/null 2>&1")
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    else:
+        // Prefer gio if available, fallback to trash-put/kioclient5, otherwise fail (no silent hard-delete).
+        q := _quote_sh(path)
+        cmd := "gio trash ".Concat(q).Concat(" >/dev/null 2>&1 || trash-put ").Concat(q).Concat(" >/dev/null 2>&1 || kioclient5 move ").Concat(q).Concat(" trash:/ >/dev/null 2>&1")
+        defer mem.Free(q as void*)
+        defer mem.Free(cmd as void*)
+        ret shell.System(cmd) == 0
+    end
+end
+
+@en "MoveToTrash"
+@fa "انتقال به زباله‌دان"
+pub func MoveToTrash(path: str): bool:
+    ret Trash(path)
+end
+
+@en "IsSupported"
+@fa "پشتیبانی می‌شود"
+pub func IsSupported(): bool:
+    ret SALAM_OS_WINDOWS or SALAM_OS_MAC or SALAM_OS_LINUX or SALAM_OS_BSD or SALAM_OS_FREEBSD
+end
+
+@en "CanTrash"
+@fa "زباله‌دان پشتیبانی می‌شود"
+pub func CanTrash(): bool:
+    ret IsSupported()
+end
+
+@en "SessionKind"
+@fa "نوع نشست"
+pub func SessionKind(): str:
+    if SALAM_OS_WINDOWS:
+        ret str.Clone("windows")
+    else SALAM_OS_MAC:
+        ret str.Clone("macos")
+    else SALAM_OS_LINUX or SALAM_OS_BSD or SALAM_OS_FREEBSD:
+        w := os.Env("WAYLAND_DISPLAY")
+        wt := str.Trim(w)
+        if wt.Len() > 0:
+            mem.Free(w as void*)
+            mem.Free(wt as void*)
+            ret str.Clone("wayland")
+        end
+        mem.Free(w as void*)
+        mem.Free(wt as void*)
+        d := os.Env("DISPLAY")
+        dt := str.Trim(d)
+        if dt.Len() > 0:
+            mem.Free(d as void*)
+            mem.Free(dt as void*)
+            ret str.Clone("x11")
+        end
+        mem.Free(d as void*)
+        mem.Free(dt as void*)
+        ret str.Clone("headless-or-unknown")
+    end
+    ret str.Clone("unknown")
+end
+
+@en "HasDisplaySession"
+@fa "نشست نمایشی دارد"
+pub func HasDisplaySession(): bool:
+    kind := SessionKind()
+    ok := kind == "windows" or kind == "macos" or kind == "wayland" or kind == "x11"
+    mem.Free(kind as void*)
+    ret ok
+end
+
+@en "OpenMail"
+@fa "باز کردن نامه"
+pub func OpenMail(mailto_url: str): bool:
+    if mailto_url.Len() == 0:
+        ret false
+    end
+    if str.StartsWith(mailto_url, "mailto:"):
+        ret OpenURL(mailto_url)
+    end
+    mut url := "mailto:".Concat(mailto_url)
+    ok := OpenURL(url)
+    mem.Free(url as void*)
+    ret ok
+end
+
+@en "RevealPath"
+@fa "نمایش مسیر"
+pub func RevealPath(path: str): bool:
+    ret Reveal(path)
+end

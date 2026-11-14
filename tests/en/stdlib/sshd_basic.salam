@@ -1,21 +1,168 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
 package main
 
 import sshd
+import ssh
 import testing
+import net.tcp
+import fs.dir
+import sync
 
-func test_config_and_listen():
+const root := "/tmp/salam_sshd_std_test"
+
+mut srv := sshd.Server {}
+mut ready := sync.NewWaitGroup()
+
+mut once_srv := sshd.Server {}
+mut once_ready := sync.NewWaitGroup()
+
+mut raw_listener := tcp.Server {}
+mut raw_ready := sync.NewWaitGroup()
+mut raw_served := false
+
+func test_config(): sshd.Config:
     mut cfg := sshd.NewConfig()
     cfg.host = "127.0.0.1"
     cfg.port = 0
-    sshd.AddUser(cfg, "alice", "secret", "/tmp")
-    mut srv := sshd.New(cfg)
-    testing.AssertTrue(sshd.Listen(srv))
-    testing.AssertTrue(sshd.Port(srv) > 0)
-    sshd.Close(srv)
+    cfg.root = root
+    cfg.allow_shell = false
+    cfg.banner = "salam sshd test"
+    sshd.AddUser(cfg, "alice", "s3cret", "/")
+    ret cfg
+end
+
+func client_config(port: int): ssh.Config:
+    mut cfg := ssh.NewConfig("127.0.0.1", port, "alice")
+    ssh.WithPassword(cfg, "s3cret")
+    ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE)
+    ret cfg
+end
+
+func serve_forever():
+    srv = sshd.New(test_config())
+    if not sshd.Listen(srv):
+        sync.Done(ready)
+        ret
+    end
+    sync.Done(ready)
+    sshd.Serve(srv)
+end
+
+func serve_one():
+    once_srv = sshd.New(test_config())
+    if not sshd.Listen(once_srv):
+        sync.Done(once_ready)
+        ret
+    end
+    sync.Done(once_ready)
+    handled := sshd.ServeOnce(once_srv)
+    if not handled:
+        once_srv.running = false
+    end
+end
+
+// The protocol entry point that sshd itself uses, driven directly.
+func serve_raw():
+    raw_listener = tcp.BindOn("127.0.0.1", 0)
+    if not tcp.Ok(raw_listener):
+        sync.Done(raw_ready)
+        ret
+    end
+    sync.Done(raw_ready)
+    conn := tcp.Accept(raw_listener)
+    if not tcp.ConnOk(conn):
+        ret
+    end
+    mut cfg := ssh.ServerConfig {}
+    cfg.server_version = sshd.DefaultVersion
+    cfg.host_seed = "salam-sshd-test-host-seed"
+    cfg.banner = "salam sshd test"
+    cfg.enable_shell = false
+    mut users := Vector {} as Vector<ssh.ServerUser>
+    users.push(ssh.ServerUser { name = "alice", password = "s3cret", home = "/" })
+    cfg.users = users
+    raw_served = ssh.ServeConnection(conn.fd, cfg)
+end
+
+func test_serve_exec():
+    mut client := ssh.Connect(client_config(sshd.Port(srv)))
+    testing.AssertTrue(ssh.Ok(client))
+    result := ssh.Exec(client, "echo salam-sshd")
+    testing.AssertTrue(result.ok)
+    testing.AssertEqInt(result.exit_code, 0)
+    testing.AssertContains(result.stdout, "salam-sshd")
+    ssh.Close(client)
+end
+
+func test_serve_once():
+    mut client := ssh.Connect(client_config(sshd.Port(once_srv)))
+    testing.AssertTrue(ssh.Ok(client))
+    result := ssh.Exec(client, "echo serve-once")
+    testing.AssertTrue(result.ok)
+    testing.AssertContains(result.stdout, "serve-once")
+    ssh.Close(client)
+end
+
+func test_serve_connection():
+    mut client := ssh.Connect(client_config(tcp.Port(raw_listener)))
+    testing.AssertTrue(ssh.Ok(client))
+    result := ssh.Exec(client, "echo raw-entry")
+    testing.AssertTrue(result.ok)
+    testing.AssertContains(result.stdout, "raw-entry")
+    ssh.Close(client)
+end
+
+func stop_server(port: int):
+    srv.running = false
+    // Wake the blocking accept so the serving loop can see the new state.
+    wake := tcp.Dial("127.0.0.1", port)
+    tcp.Close(wake)
 end
 
 func main:
-    test_config_and_listen()
+    dir.RemoveAll(root)
+    dir.MkdirAll(root)
+    testing.AssertTrue(dir.IsDir(root))
+
+    sync.Add(ready, 1 as i64)
+    worker := spawn(serve_forever)
+    sync.Wait(ready)
+    test_serve_exec()
+    stop_server(sshd.Port(srv))
+    join(worker)
+    sshd.Close(srv)
+
+    dir.RemoveAll(root)
+    dir.MkdirAll(root)
+    sync.Add(once_ready, 1 as i64)
+    once_worker := spawn(serve_one)
+    sync.Wait(once_ready)
+    test_serve_once()
+    join(once_worker)
+    sshd.Close(once_srv)
+
+    sync.Add(raw_ready, 1 as i64)
+    raw_worker := spawn(serve_raw)
+    sync.Wait(raw_ready)
+    test_serve_connection()
+    join(raw_worker)
+    tcp.CloseServer(raw_listener)
+    testing.AssertTrue(raw_served)
+
+    dir.RemoveAll(root)
     testing.Summary()
     ret 0
 end

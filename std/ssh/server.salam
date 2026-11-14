@@ -1,0 +1,1546 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import crypto
+import encoding
+import fs
+import io
+import mem
+import net.internal.rawsock
+import os
+import os.process
+import os.pty
+import str
+import tls
+
+const _SRV_MAX_PACKET := 32768
+const _SRV_CHUNK := 32768
+const _SRV_POLL_MS := 20
+const _SRV_MAX_ROUNDS := 4000000
+const _SRV_DEFAULT_VERSION := "SSH-2.0-SalamServer_1.0"
+const _SRV_DEFAULT_SEED := "salam-ssh-host-key-seed"
+const _SRV_STREAM_WINDOW := 2097152
+
+@en "ServerUser"
+@fa "کاربر کارساز"
+pub struct ServerUser:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "home"
+    @fa "خانه"
+    pub home: str = "/"
+    @en "shell"
+    @fa "پوسته"
+    pub shell: str = "/bin/sh"
+
+end
+
+@en "ServerConfig"
+@fa "پیکربندی کارساز"
+pub struct ServerConfig:
+    @en "server_version"
+    @fa "نسخه کارساز"
+    pub server_version: str = "SSH-2.0-SalamServer_1.0"
+    @en "host_key_file"
+    @fa "پرونده کلید میزبان"
+    pub host_key_file: str = ""
+    @en "authorized_keys_file"
+    @fa "پرونده کلیدهای مجاز"
+    pub authorized_keys_file: str = ""
+    @en "allow_password"
+    @fa "اجازه گذرواژه"
+    pub allow_password: bool = true
+    @en "allow_publickey"
+    @fa "اجازه کلید عمومی"
+    pub allow_publickey: bool = true
+    @en "enable_exec"
+    @fa "اجرای فرمان"
+    pub enable_exec: bool = true
+    @en "enable_shell"
+    @fa "پوسته تعاملی"
+    pub enable_shell: bool = true
+    @en "enable_sftp"
+    @fa "پشتیبانی اس اف تی پی"
+    pub enable_sftp: bool = true
+    @en "root"
+    @fa "ریشه"
+    pub root: str = "."
+    @en "max_auth_tries"
+    @fa "حداکثر تلاش ورود"
+    pub max_auth_tries: int = 6
+    @en "banner"
+    @fa "پیام خوش‌آمد"
+    pub banner: str = ""
+    @en "host_seed"
+    @fa "دانه کلید میزبان"
+    pub host_seed: str = ""
+    @en "users"
+    @fa "کاربران"
+    pub users: Vector<ServerUser> = Vector {}
+end
+
+struct SrvHostKey:
+    pub ok: bool = false
+    pub ed: bool = false
+    pub ed_seed: Buf = Buf {}
+    pub ed_pub: Buf = Buf {}
+    pub blob: Buf = Buf {}
+    pub n: Buf = Buf {}
+    pub e: Buf = Buf {}
+    pub d: Buf = Buf {}
+    pub phi: Buf = Buf {}
+end
+
+struct SrvKexInfo:
+    pub kex: str = ""
+    pub hostkey: str = ""
+    pub cipher_c2s: str = ""
+    pub cipher_s2c: str = ""
+    pub mac_c2s: str = ""
+    pub mac_s2c: str = ""
+    pub ext_info: bool = false
+    pub ok: bool = false
+end
+
+struct SrvSession:
+    pub fd: i64 = 0 - 1
+    pub cfg: ServerConfig = ServerConfig {}
+    pub ps: PacketState = PacketState {}
+    pub session_id: Buf = Buf {}
+    pub client_ver: str = ""
+    pub server_ver: str = ""
+    pub user: str = ""
+    pub home: str = "/"
+    pub shell: str = "/bin/sh"
+    pub authorized: bool = false
+end
+
+struct SrvChannel:
+    pub id: int = 0
+    pub remote_id: u32 = 0 as u32
+    pub window: u32 = 0 as u32
+    pub peer_window: u32 = 0 as u32
+    pub peer_max: u32 = 32768 as u32
+    pub open: bool = false
+    pub eof_in: bool = false
+    pub closed: bool = false
+    pub close_sent: bool = false
+    pub rows: int = 24
+    pub cols: int = 80
+    pub term: str = ""
+    pub pending: Buf = Buf {}
+end
+
+func _srv_clean_virtual(path: str): str:
+    parts := str.Split(path, "/")
+    defer parts.free()
+    mut stack := Vector {} as Vector<str>
+    defer stack.free()
+    each p in parts:
+        if p.len() == 0 or str.Equals(p, "."):
+            continue
+        end
+        if str.Equals(p, ".."):
+            if stack.len() > 0:
+                _dropped := stack.pop()
+            end
+            continue
+        end
+        stack.push(p)
+    end
+    mut out := ""
+    each p in stack:
+        out = out + "/" + p
+    end
+    if out.len() == 0:
+        ret "/"
+    end
+    ret out
+end
+
+func _srv_root_abs(root: str): str:
+    mut base := root
+    if base.len() == 0:
+        base = "."
+    end
+    real := os.RealPath(base)
+    if real.len() > 0:
+        ret real
+    end
+    if str.StartsWith(base, "/"):
+        ret base
+    end
+    ret os.Cwd() + "/" + base
+end
+
+func _srv_home_dir(cfg: ServerConfig, user: ServerUser): str:
+    root_abs := _srv_root_abs(cfg.root)
+    home := _srv_clean_virtual(user.home)
+    if str.Equals(home, "/"):
+        ret root_abs
+    end
+    ret root_abs + home
+end
+
+func _srv_setup_command(cmd &: process.Command, cfg: ServerConfig, user: ServerUser, term: str):
+    mut dir := _srv_home_dir(cfg, user)
+    if not os.IsDir(dir):
+        dir = _srv_root_abs(cfg.root)
+    end
+    cmd.cwd = dir
+    cmd.Env("HOME", dir)
+    cmd.Env("USER", user.name)
+    cmd.Env("LOGNAME", user.name)
+    cmd.Env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+    if term.len() > 0:
+        cmd.Env("TERM", term)
+    end
+end
+
+func _srv_hostkey_free(hk &: SrvHostKey):
+    WipeBuf(hk.ed_seed)
+    WipeBuf(hk.ed_pub)
+    FreeBuf(hk.blob)
+    FreeBuf(hk.n)
+    FreeBuf(hk.e)
+    WipeBuf(hk.d)
+    WipeBuf(hk.phi)
+    hk.ok = false
+end
+
+func _srv_hostkey_from_identity(id: Identity): SrvHostKey:
+    mut hk := SrvHostKey {}
+    if not id.ok:
+        ret hk
+    end
+    hk.ed = id.ed
+    if id.ed:
+        hk.ed_seed = NewBuf(id.ed_seed.len)
+        BufPutBuf(hk.ed_seed, id.ed_seed)
+        hk.ed_pub = NewBuf(id.ed_pub.len)
+        BufPutBuf(hk.ed_pub, id.ed_pub)
+        hk.blob = NewBuf(64)
+        BufPutStringStr(hk.blob, HOSTKEY_ED25519)
+        BufPutStringBuf(hk.blob, hk.ed_pub)
+    else:
+        hk.n = NewBuf(id.n.len)
+        BufPutBuf(hk.n, id.n)
+        hk.e = NewBuf(id.e.len)
+        BufPutBuf(hk.e, id.e)
+        hk.d = NewBuf(id.d.len)
+        BufPutBuf(hk.d, id.d)
+        hk.phi = NewBuf(id.phi.len)
+        BufPutBuf(hk.phi, id.phi)
+        hk.blob = NewBuf(32 + hk.n.len + hk.e.len)
+        BufPutStringStr(hk.blob, HOSTKEY_SSH_RSA)
+        BufPutMpintBuf(hk.blob, hk.e)
+        BufPutMpintBuf(hk.blob, hk.n)
+    end
+    hk.ok = hk.blob.len > 0
+    ret hk
+end
+
+func _srv_hostkey_from_seed(seed: str): SrvHostKey:
+    mut material := seed
+    if material.len() == 0:
+        material = _SRV_DEFAULT_SEED
+    end
+    mut raw := NewBuf(32)
+    if material.len() >= 32:
+        BufPutBytes(raw, material as void*, 32)
+    else:
+        mut digest := NewBuf(32)
+        BufPutZeros(digest, 32)
+        crypto.Sha256Bytes(material as void*, material.len(), digest.p)
+        BufPutBytes(raw, digest.p, 32)
+        FreeBuf(digest)
+    end
+    mut hk := SrvHostKey {}
+    hk.ed = true
+    hk.ed_seed = raw
+    hk.ed_pub = NewBuf(32)
+    BufPutZeros(hk.ed_pub, 32)
+    tls.Ed25519PublicKey(hk.ed_seed.p, hk.ed_pub.p)
+    hk.blob = NewBuf(64)
+    BufPutStringStr(hk.blob, HOSTKEY_ED25519)
+    BufPutStringBuf(hk.blob, hk.ed_pub)
+    hk.ok = true
+    ret hk
+end
+
+func _srv_hostkey_load(cfg: ServerConfig): SrvHostKey:
+    if cfg.host_key_file.len() > 0:
+        mut id := _load_identity_file(cfg.host_key_file)
+        if id.ok:
+            mut hk := _srv_hostkey_from_identity(id)
+            _identity_free(id)
+            if hk.ok:
+                ret hk
+            end
+            _srv_hostkey_free(hk)
+        else:
+            _identity_free(id)
+        end
+    end
+    ret _srv_hostkey_from_seed(cfg.host_seed)
+end
+
+func _srv_hostkey_algos(hk: SrvHostKey): str:
+    if hk.ed:
+        ret HOSTKEY_ED25519
+    end
+    ret "rsa-sha2-256,rsa-sha2-512,ssh-rsa"
+end
+
+func _srv_hostkey_sign(hk: SrvHostKey, algo: str, h: Buf): Buf:
+    if hk.ed:
+        mut sig := NewBuf(64)
+        BufPutZeros(sig, 64)
+        tls.Ed25519Sign(hk.ed_seed.p, h.p, h.len, sig.p)
+        mut out := NewBuf(12 + 64)
+        BufPutStringStr(out, HOSTKEY_ED25519)
+        BufPutStringBuf(out, sig)
+        FreeBuf(sig)
+        ret out
+    end
+    kind := _hostkey_digest_kind(algo)
+    hlen := _rsa_hash_size(kind)
+    mut digest := NewBuf(hlen)
+    BufPutZeros(digest, hlen)
+    _hash_for_kind(kind, h.p, h.len, digest.p)
+    mut raw := NewBuf(hk.n.len)
+    BufPutZeros(raw, hk.n.len)
+    ok := _rsa_sign_pkcs1(kind, digest.p, hk.n, hk.e, hk.d, hk.phi, raw.p)
+    FreeBuf(digest)
+    if not ok:
+        FreeBuf(raw)
+        ret NewBuf(0)
+    end
+    mut out := NewBuf(12 + raw.len)
+    BufPutStringStr(out, algo)
+    BufPutStringBuf(out, raw)
+    FreeBuf(raw)
+    ret out
+end
+
+func _srv_build_kexinit(hostkeys: str): Buf:
+    mut b := NewBuf(256)
+    BufPutByte(b, SSH_MSG_KEXINIT)
+    mut cookie := NewBuf(16)
+    BufPutZeros(cookie, 16)
+    crypto.RandomBytes(cookie.p, 16)
+    BufPutBytes(b, cookie.p, 16)
+    FreeBuf(cookie)
+    BufPutStringStr(b, KEX_ALGORITHMS)
+    BufPutStringStr(b, hostkeys)
+    BufPutStringStr(b, CIPHER_ALGORITHMS)
+    BufPutStringStr(b, CIPHER_ALGORITHMS)
+    BufPutStringStr(b, MAC_ALGORITHMS)
+    BufPutStringStr(b, MAC_ALGORITHMS)
+    BufPutStringStr(b, COMPRESSION_ALGORITHMS)
+    BufPutStringStr(b, COMPRESSION_ALGORITHMS)
+    BufPutStringStr(b, "")
+    BufPutStringStr(b, "")
+    BufPutBool(b, false)
+    BufPutUint32(b, 0 as u32)
+    ret b
+end
+
+func _srv_parse_kexinit(payload: Buf, hostkeys: str): SrvKexInfo:
+    mut r := ReaderFromBuf(payload)
+    msgtype := RGetByte(r)
+    if r.bad or msgtype != SSH_MSG_KEXINIT:
+        ret SrvKexInfo {}
+    end
+    RSkip(r, 16)
+    kex_list := RGetNameList(r)
+    hostkey_list := RGetNameList(r)
+    enc_c2s := RGetNameList(r)
+    enc_s2c := RGetNameList(r)
+    mac_c2s := RGetNameList(r)
+    mac_s2c := RGetNameList(r)
+    comp_c2s := RGetNameList(r)
+    comp_s2c := RGetNameList(r)
+    _lang1 := RGetNameList(r)
+    _lang2 := RGetNameList(r)
+    _follows := RGetBool(r)
+    _reserved := RGetUint32(r)
+    if r.bad:
+        ret SrvKexInfo {}
+    end
+    mut info := SrvKexInfo {}
+    info.kex = NegotiateFirstMatch(kex_list, KEX_ALGORITHMS)
+    info.hostkey = NegotiateFirstMatch(hostkey_list, hostkeys)
+    info.cipher_c2s = NegotiateFirstMatch(enc_c2s, CIPHER_ALGORITHMS)
+    info.cipher_s2c = NegotiateFirstMatch(enc_s2c, CIPHER_ALGORITHMS)
+    info.mac_c2s = NegotiateFirstMatch(mac_c2s, MAC_ALGORITHMS)
+    info.mac_s2c = NegotiateFirstMatch(mac_s2c, MAC_ALGORITHMS)
+    comp_ok := NameListContains(comp_c2s, "none") and NameListContains(comp_s2c, "none")
+    // RFC 8308: only a client that advertises ext-info-c understands EXT_INFO.
+    info.ext_info = NameListContains(kex_list, "ext-info-c")
+    info.ok = info.kex.len() > 0 and info.hostkey.len() > 0 and info.cipher_c2s.len() > 0 and info.cipher_s2c.len() > 0 and info.mac_c2s.len() > 0 and info.mac_s2c.len() > 0 and comp_ok
+    ret info
+end
+
+func _srv_send_ext_info(sess &: SrvSession):
+    mut m := NewBuf(128)
+    BufPutByte(m, SSH_MSG_EXT_INFO)
+    BufPutUint32(m, 1 as u32)
+    BufPutStringStr(m, "server-sig-algs")
+    BufPutStringStr(m, "ssh-ed25519,rsa-sha2-512,rsa-sha2-256,ssh-rsa")
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_read_packet(sess &: SrvSession, ms: int): Buf:
+    if ms > 0:
+        if not rawsock.WaitReadable(sess.ps.sock, ms):
+            mut bad := NewBuf(1)
+            bad.bad = true
+            ret bad
+        end
+    end
+    ret _packet_recv(sess.ps)
+end
+
+func _srv_disconnect(sess &: SrvSession, reason: int, message: str):
+    mut m := NewBuf(64 + message.len())
+    BufPutByte(m, SSH_MSG_DISCONNECT)
+    BufPutUint32(m, reason as u32)
+    BufPutStringStr(m, message)
+    BufPutStringStr(m, "")
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_handshake(sock: rawsock.Socket, hk: SrvHostKey, cfg: ServerConfig): SrvSession:
+    mut sess := SrvSession {}
+    sess.cfg = cfg
+    sess.fd = sock.fd
+    sess.ps = _packet_state_new(sock)
+
+    mut ver := cfg.server_version
+    if ver.len() == 0:
+        ver = _SRV_DEFAULT_VERSION
+    end
+    if not str.StartsWith(ver, "SSH-2.0-"):
+        ver = "SSH-2.0-" + ver
+    end
+    sess.server_ver = ver
+    banner := ver + "\r\n"
+    sent := rawsock.SendBytes(sock, banner as void*, banner.len())
+    if sent != banner.len():
+        sess.authorized = false
+        ret sess
+    end
+    client_ver := _read_ident_line(sock)
+    if client_ver.len() == 0:
+        sess.authorized = false
+        ret sess
+    end
+    sess.client_ver = client_ver
+
+    hostkeys := _srv_hostkey_algos(hk)
+    mut skex := _srv_build_kexinit(hostkeys)
+    if not _packet_send(sess.ps, skex):
+        FreeBuf(skex)
+        sess.authorized = false
+        ret sess
+    end
+    mut ckex := _packet_recv(sess.ps)
+    if ckex.bad:
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        sess.authorized = false
+        ret sess
+    end
+    kinfo := _srv_parse_kexinit(ckex, hostkeys)
+    if not kinfo.ok:
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        _srv_disconnect(sess, SSH_DISCONNECT_KEY_EXCHANGE_FAILED, "no compatible algorithms")
+        sess.authorized = false
+        ret sess
+    end
+
+    sha256 := _kex_uses_sha256(kinfo.kex)
+    curve := _kex_is_curve25519(kinfo.kex)
+
+    mut initpkt := _packet_recv(sess.ps)
+    if initpkt.bad:
+        FreeBuf(initpkt)
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        sess.authorized = false
+        ret sess
+    end
+    mut ir := ReaderFromBuf(initpkt)
+    itype := RGetByte(ir)
+    if itype != SSH_MSG_KEXDH_INIT:
+        FreeBuf(initpkt)
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        sess.authorized = false
+        ret sess
+    end
+
+    mut client_pub := NewBuf(1)
+    mut server_pub := NewBuf(1)
+    mut k_mpint := NewBuf(1)
+    mut kex_ok := false
+
+    if curve:
+        mut qc := RGetStringCopy(ir)
+        if ir.bad or qc.len != 32:
+            FreeBuf(qc)
+            FreeBuf(initpkt)
+            FreeBuf(client_pub)
+            FreeBuf(server_pub)
+            FreeBuf(k_mpint)
+            FreeBuf(ckex)
+            FreeBuf(skex)
+            sess.authorized = false
+            ret sess
+        end
+        mut sk := NewBuf(32)
+        BufPutZeros(sk, 32)
+        crypto.RandomBytes(sk.p, 32)
+        mut qs := NewBuf(32)
+        BufPutZeros(qs, 32)
+        _x25519_base(sk.p, qs.p)
+        mut shared := NewBuf(32)
+        BufPutZeros(shared, 32)
+        if _x25519_shared(sk.p, qc.p, shared.p):
+            FreeBuf(client_pub)
+            client_pub = qc
+            FreeBuf(server_pub)
+            server_pub = qs
+            FreeBuf(k_mpint)
+            k_mpint = NewBuf(36)
+            BufPutMpintBytes(k_mpint, shared.p, 32)
+            kex_ok = true
+        else:
+            FreeBuf(qc)
+            FreeBuf(qs)
+        end
+        FreeBuf(shared)
+        FreeBuf(sk)
+    else:
+        mut peer := RGetMpintCopy(ir)
+        if not ir.bad and peer.len > 0:
+            kp := _dh14_generate()
+            mut shared := _dh14_shared(kp.secret, peer)
+            if shared.len > 0:
+                FreeBuf(client_pub)
+                client_pub = peer
+                FreeBuf(server_pub)
+                server_pub = NewBuf(kp.public.len)
+                BufPutBuf(server_pub, kp.public)
+                FreeBuf(k_mpint)
+                k_mpint = NewBuf(shared.len + 8)
+                BufPutMpintBytes(k_mpint, shared.p, shared.len)
+                kex_ok = true
+            else:
+                FreeBuf(peer)
+            end
+            FreeBuf(shared)
+            FreeBuf(kp.secret)
+            FreeBuf(kp.public)
+        else:
+            FreeBuf(peer)
+        end
+    end
+    FreeBuf(initpkt)
+
+    if not kex_ok:
+        FreeBuf(client_pub)
+        FreeBuf(server_pub)
+        FreeBuf(k_mpint)
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        sess.authorized = false
+        ret sess
+    end
+
+    mut h := _compute_exchange_hash(sha256, client_ver, ver, ckex, skex, hk.blob, client_pub, server_pub, k_mpint, curve)
+    mut sig := _srv_hostkey_sign(hk, kinfo.hostkey, h)
+    if sig.len == 0:
+        FreeBuf(h)
+        FreeBuf(sig)
+        FreeBuf(client_pub)
+        FreeBuf(server_pub)
+        FreeBuf(k_mpint)
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        sess.authorized = false
+        ret sess
+    end
+
+    mut reply := NewBuf(64 + hk.blob.len + server_pub.len + sig.len)
+    BufPutByte(reply, SSH_MSG_KEXDH_REPLY)
+    BufPutStringBuf(reply, hk.blob)
+    if curve:
+        BufPutStringBuf(reply, server_pub)
+    else:
+        BufPutMpintBuf(reply, server_pub)
+    end
+    BufPutStringBuf(reply, sig)
+    sent_reply := _packet_send(sess.ps, reply)
+    FreeBuf(reply)
+    FreeBuf(sig)
+    FreeBuf(client_pub)
+    FreeBuf(server_pub)
+    FreeBuf(skex)
+    FreeBuf(ckex)
+    if not sent_reply:
+        FreeBuf(k_mpint)
+        FreeBuf(h)
+        sess.authorized = false
+        ret sess
+    end
+
+    mut newkeys := NewBuf(1)
+    BufPutByte(newkeys, SSH_MSG_NEWKEYS)
+    if not _packet_send(sess.ps, newkeys):
+        FreeBuf(newkeys)
+        FreeBuf(k_mpint)
+        FreeBuf(h)
+        sess.authorized = false
+        ret sess
+    end
+    FreeBuf(newkeys)
+
+    mut peerkeys := _packet_recv(sess.ps)
+    peer_ok := not peerkeys.bad and peerkeys.len == 1 and _bget(peerkeys.p, 0) == SSH_MSG_NEWKEYS
+    FreeBuf(peerkeys)
+    if not peer_ok:
+        FreeBuf(k_mpint)
+        FreeBuf(h)
+        sess.authorized = false
+        ret sess
+    end
+
+    ekey_c2s := _cipher_key_len(kinfo.cipher_c2s)
+    ekey_s2c := _cipher_key_len(kinfo.cipher_s2c)
+    ivlen_c2s := _cipher_iv_len(kinfo.cipher_c2s)
+    ivlen_s2c := _cipher_iv_len(kinfo.cipher_s2c)
+    mkey_c2s := _mac_key_len(kinfo.mac_c2s)
+    mkey_s2c := _mac_key_len(kinfo.mac_s2c)
+
+    iv_c2s := _derive_key(sha256, k_mpint, h, h, KDF_IV_CTOS, ivlen_c2s)
+    iv_s2c := _derive_key(sha256, k_mpint, h, h, KDF_IV_STOC, ivlen_s2c)
+    mut key_c2s := _derive_key(sha256, k_mpint, h, h, KDF_KEY_CTOS, ekey_c2s)
+    mut key_s2c := _derive_key(sha256, k_mpint, h, h, KDF_KEY_STOC, ekey_s2c)
+    mac_c2s := _derive_key(sha256, k_mpint, h, h, KDF_MAC_CTOS, mkey_c2s)
+    mac_s2c := _derive_key(sha256, k_mpint, h, h, KDF_MAC_STOC, mkey_s2c)
+
+    sess.ps.cipher_read = _aes_init(key_c2s.p, ekey_c2s)
+    sess.ps.cipher_write = _aes_init(key_s2c.p, ekey_s2c)
+    sess.ps.counter_read = iv_c2s
+    sess.ps.counter_write = iv_s2c
+    sess.ps.mac_kind_read = _mac_kind_for(kinfo.mac_c2s)
+    sess.ps.mac_kind_write = _mac_kind_for(kinfo.mac_s2c)
+    sess.ps.mac_key_read = mac_c2s
+    sess.ps.mac_key_write = mac_s2c
+    sess.ps.block_size_read = 16
+    sess.ps.block_size_write = 16
+    sess.ps.encrypted = true
+    sess.ps.enc_read = true
+
+    if kinfo.ext_info:
+        _srv_send_ext_info(sess)
+    end
+
+    WipeBuf(key_c2s)
+    WipeBuf(key_s2c)
+    FreeBuf(k_mpint)
+    sess.session_id = h
+    ret sess
+end
+
+func _srv_key_blob_line(line: str): Buf:
+    t := str.Trim(line)
+    if t.len() == 0 or str.StartsWith(t, "#"):
+        ret NewBuf(0)
+    end
+    fields := str.Fields(t)
+    defer fields.free()
+    if fields.len() < 2:
+        ret NewBuf(0)
+    end
+    b64 := fields.get(1)
+    cap := (b64.len() * 3) / 4 + 8
+    mut out := NewBuf(cap)
+    BufPutZeros(out, cap)
+    mut got := 0
+    mut good := false
+    try:
+        got = encoding.Base64DecodeBytes(b64, out.p, cap)
+        good = true
+    catch:
+        good = false
+    end
+    if not good or got <= 0:
+        FreeBuf(out)
+        ret NewBuf(0)
+    end
+    out.len = got
+    ret out
+end
+
+func _srv_keys_match(text: str, keyblob: Buf): bool:
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut found := false
+    each line in lines:
+        if found:
+            continue
+        end
+        mut cand := _srv_key_blob_line(line)
+        if cand.len > 0:
+            if cand.len == keyblob.len and ConstantTimeEqual(cand.p, keyblob.p, cand.len):
+                found = true
+            end
+            FreeBuf(cand)
+        end
+    end
+    ret found
+end
+
+func _srv_authorized(cfg: ServerConfig, user: ServerUser, keyblob: Buf): bool:
+    if user.name.len() == 0:
+        ret false
+    end
+    if cfg.authorized_keys_file.len() > 0:
+        text := io.ReadFile(cfg.authorized_keys_file)
+        if text.len() > 0 and _srv_keys_match(text, keyblob):
+            ret true
+        end
+    end
+    ret false
+end
+
+func _srv_find_user(cfg: ServerConfig, name: str): ServerUser:
+    mut found := ServerUser {}
+    each u in cfg.users:
+        if found.name.len() == 0 and str.Equals(u.name, name):
+            found = u
+        end
+    end
+    ret found
+end
+
+func _srv_auth_methods(cfg: ServerConfig): str:
+    mut m := ""
+    if cfg.allow_publickey:
+        m = "publickey"
+    end
+    if cfg.allow_password:
+        if m.len() > 0:
+            m += ",password"
+        else:
+            m = "password"
+        end
+    end
+    ret m
+end
+
+func _srv_send_auth_failure(sess &: SrvSession, methods: str, partial: bool):
+    mut m := NewBuf(32 + methods.len())
+    BufPutByte(m, SSH_MSG_USERAUTH_FAILURE)
+    BufPutStringStr(m, methods)
+    BufPutBool(m, partial)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_auth_password(r &: Reader, cfg: ServerConfig, name: str): bool:
+    change := RGetBool(r)
+    password := RGetStringAsStr(r)
+    if r.bad or change or not cfg.allow_password:
+        ret false
+    end
+    user := _srv_find_user(cfg, name)
+    if user.name.len() == 0 or user.password.len() == 0:
+        ret false
+    end
+    if user.password.len() != password.len():
+        ret false
+    end
+    ret ConstantTimeEqual(user.password as void*, password as void*, password.len())
+end
+
+func _srv_auth_publickey(sess &: SrvSession, r &: Reader, cfg: ServerConfig, name: str): int:
+    has_sig := RGetBool(r)
+    algo := RGetStringAsStr(r)
+    mut keyblob := RGetStringCopy(r)
+    if r.bad:
+        FreeBuf(keyblob)
+        ret 0
+    end
+    user := _srv_find_user(cfg, name)
+    allowed := cfg.allow_publickey and user.name.len() > 0 and _srv_authorized(cfg, user, keyblob)
+    if not has_sig:
+        if allowed:
+            mut m := NewBuf(16 + algo.len() + keyblob.len)
+            BufPutByte(m, SSH_MSG_USERAUTH_PK_OK)
+            BufPutStringStr(m, algo)
+            BufPutStringBuf(m, keyblob)
+            _sent := _packet_send(sess.ps, m)
+            FreeBuf(m)
+            FreeBuf(keyblob)
+            ret 2
+        end
+        FreeBuf(keyblob)
+        ret 0
+    end
+    mut sig := RGetStringCopy(r)
+    if not allowed or r.bad:
+        FreeBuf(keyblob)
+        FreeBuf(sig)
+        ret 0
+    end
+    mut signed := NewBuf(128 + sess.session_id.len + name.len() + algo.len() + keyblob.len)
+    BufPutStringBuf(signed, sess.session_id)
+    BufPutByte(signed, SSH_MSG_USERAUTH_REQUEST)
+    BufPutStringStr(signed, name)
+    BufPutStringStr(signed, "ssh-connection")
+    BufPutStringStr(signed, "publickey")
+    BufPutBool(signed, true)
+    BufPutStringStr(signed, algo)
+    BufPutStringBuf(signed, keyblob)
+    mut hk := _hostkey_parse(keyblob)
+    ok := _hostkey_verify(hk, signed, sig)
+    _hostkey_free(hk)
+    FreeBuf(signed)
+    FreeBuf(keyblob)
+    FreeBuf(sig)
+    if ok:
+        ret 1
+    end
+    ret 0
+end
+
+func _srv_authenticate(sess &: SrvSession, cfg: ServerConfig): bool:
+    methods := _srv_auth_methods(cfg)
+    mut limit := cfg.max_auth_tries
+    if limit <= 0:
+        limit = 6
+    end
+    mut tries := 0
+    mut service_ok := false
+    until tries < limit:
+        mut pkt := _srv_read_packet(sess, 0)
+        if pkt.bad:
+            FreeBuf(pkt)
+            ret false
+        end
+        mut r := ReaderFromBuf(pkt)
+        mtype := RGetByte(r)
+        if mtype == SSH_MSG_SERVICE_REQUEST:
+            svc := RGetStringAsStr(r)
+            if r.bad or not str.Equals(svc, "ssh-userauth"):
+                FreeBuf(pkt)
+                _srv_disconnect(sess, SSH_DISCONNECT_SERVICE_NOT_AVAILABLE, "service not available")
+                ret false
+            end
+            mut acc := NewBuf(16 + svc.len())
+            BufPutByte(acc, SSH_MSG_SERVICE_ACCEPT)
+            BufPutStringStr(acc, svc)
+            _sent := _packet_send(sess.ps, acc)
+            FreeBuf(acc)
+            service_ok = true
+            if cfg.banner.len() > 0:
+                mut b := NewBuf(16 + cfg.banner.len())
+                BufPutByte(b, SSH_MSG_USERAUTH_BANNER)
+                BufPutStringStr(b, cfg.banner)
+                BufPutStringStr(b, "")
+                _banner := _packet_send(sess.ps, b)
+                FreeBuf(b)
+            end
+            FreeBuf(pkt)
+            continue
+        end
+        if mtype == SSH_MSG_IGNORE or mtype == SSH_MSG_DEBUG or mtype == SSH_MSG_EXT_INFO or mtype == SSH_MSG_UNIMPLEMENTED:
+            FreeBuf(pkt)
+            continue
+        end
+        if mtype == SSH_MSG_DISCONNECT:
+            FreeBuf(pkt)
+            ret false
+        end
+        if mtype != SSH_MSG_USERAUTH_REQUEST or not service_ok:
+            FreeBuf(pkt)
+            _srv_disconnect(sess, SSH_DISCONNECT_PROTOCOL_ERROR, "expected an authentication request")
+            ret false
+        end
+        name := RGetStringAsStr(r)
+        service := RGetStringAsStr(r)
+        method := RGetStringAsStr(r)
+        if r.bad or not str.Equals(service, "ssh-connection"):
+            tries++
+            _srv_send_auth_failure(sess, methods, false)
+            FreeBuf(pkt)
+            continue
+        end
+        mut reached := 0
+        if str.Equals(method, "password"):
+            if _srv_auth_password(r, cfg, name):
+                reached = 1
+            end
+        else if str.Equals(method, "publickey"):
+            reached = _srv_auth_publickey(sess, r, cfg, name)
+        end
+        if reached == 1:
+            mut okmsg := NewBuf(1)
+            BufPutByte(okmsg, SSH_MSG_USERAUTH_SUCCESS)
+            _sent := _packet_send(sess.ps, okmsg)
+            FreeBuf(okmsg)
+            user := _srv_find_user(cfg, name)
+            sess.user = user.name
+            sess.home = _srv_clean_virtual(user.home)
+            if user.shell.len() > 0:
+                sess.shell = user.shell
+            end
+            sess.authorized = true
+            FreeBuf(pkt)
+            ret true
+        end
+        if reached == 0:
+            tries++
+            if tries >= limit:
+                FreeBuf(pkt)
+                _srv_disconnect(sess, SSH_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE, "too many authentication failures")
+                ret false
+            end
+            _srv_send_auth_failure(sess, methods, false)
+        end
+        FreeBuf(pkt)
+    end
+    ret false
+end
+
+func _srv_send_open_confirm(sess &: SrvSession, ch &: SrvChannel):
+    mut m := NewBuf(32)
+    BufPutByte(m, SSH_MSG_CHANNEL_OPEN_CONFIRMATION)
+    BufPutUint32(m, ch.remote_id)
+    BufPutUint32(m, ch.id as u32)
+    BufPutUint32(m, _SRV_STREAM_WINDOW as u32)
+    BufPutUint32(m, _SRV_MAX_PACKET as u32)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+    ch.open = true
+    ch.window = _SRV_STREAM_WINDOW as u32
+end
+
+func _srv_send_open_failure(sess &: SrvSession, recipient: u32, reason: int, message: str):
+    mut m := NewBuf(32 + message.len())
+    BufPutByte(m, SSH_MSG_CHANNEL_OPEN_FAILURE)
+    BufPutUint32(m, recipient)
+    BufPutUint32(m, reason as u32)
+    BufPutStringStr(m, message)
+    BufPutStringStr(m, "")
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_chan_success(sess &: SrvSession, ch &: SrvChannel):
+    mut m := NewBuf(8)
+    BufPutByte(m, SSH_MSG_CHANNEL_SUCCESS)
+    BufPutUint32(m, ch.remote_id)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_chan_failure(sess &: SrvSession, ch &: SrvChannel):
+    mut m := NewBuf(8)
+    BufPutByte(m, SSH_MSG_CHANNEL_FAILURE)
+    BufPutUint32(m, ch.remote_id)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_window_credit(sess &: SrvSession, ch &: SrvChannel, n: int):
+    if n <= 0:
+        ret
+    end
+    if (ch.window as i64) > (n as i64):
+        ch.window -= (n as u32)
+        ret
+    end
+    add := (_SRV_STREAM_WINDOW as u32) - ch.window + (n as u32)
+    ch.window += add
+    mut m := NewBuf(16)
+    BufPutByte(m, SSH_MSG_CHANNEL_WINDOW_ADJUST)
+    BufPutUint32(m, ch.remote_id)
+    BufPutUint32(m, add)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_relay_window(sess &: SrvSession, ch &: SrvChannel): bool:
+    mut pkt := _srv_read_packet(sess, 0)
+    if pkt.bad:
+        FreeBuf(pkt)
+        ret false
+    end
+    mut r := ReaderFromBuf(pkt)
+    mtype := RGetByte(r)
+    if mtype == SSH_MSG_CHANNEL_WINDOW_ADJUST:
+        _cid := RGetUint32(r)
+        add := RGetUint32(r)
+        if not r.bad:
+            ch.peer_window += add
+        end
+    else if mtype == SSH_MSG_CHANNEL_DATA:
+        _cid := RGetUint32(r)
+        data := RGetStringView(r)
+        if not r.bad:
+            BufPutBytes(ch.pending, data.p, data.len)
+            _srv_window_credit(sess, ch, data.len)
+        end
+    else if mtype == SSH_MSG_CHANNEL_EXTENDED_DATA:
+        _cid := RGetUint32(r)
+        _dtype := RGetUint32(r)
+        data := RGetStringView(r)
+        if not r.bad:
+            _srv_window_credit(sess, ch, data.len)
+        end
+    else if mtype == SSH_MSG_CHANNEL_EOF:
+        ch.eof_in = true
+    else if mtype == SSH_MSG_CHANNEL_CLOSE:
+        ch.closed = true
+        FreeBuf(pkt)
+        ret false
+    else if mtype == SSH_MSG_DISCONNECT:
+        ch.closed = true
+        FreeBuf(pkt)
+        ret false
+    end
+    FreeBuf(pkt)
+    ret true
+end
+
+func _srv_send_data(sess &: SrvSession, ch &: SrvChannel, p: void*, n: int, ext: bool): bool:
+    mut sent := 0
+    until sent < n:
+        mut waits := 0
+        until ch.peer_window == (0 as u32) and not ch.closed and waits < _SRV_MAX_ROUNDS:
+            if not _srv_relay_window(sess, ch):
+                ret false
+            end
+            waits++
+        end
+        if ch.closed or ch.peer_window == (0 as u32):
+            ret false
+        end
+        mut chunk := n - sent
+        if chunk > _SRV_CHUNK:
+            chunk = _SRV_CHUNK
+        end
+        if ch.peer_max > (0 as u32) and (chunk as u32) > ch.peer_max:
+            chunk = ch.peer_max as int
+        end
+        if (chunk as u32) > ch.peer_window:
+            chunk = ch.peer_window as int
+        end
+        if chunk <= 0:
+            ret false
+        end
+        mut m := NewBuf(20 + chunk)
+        if ext:
+            BufPutByte(m, SSH_MSG_CHANNEL_EXTENDED_DATA)
+            BufPutUint32(m, ch.remote_id)
+            BufPutUint32(m, SSH_EXTENDED_DATA_STDERR as u32)
+        else:
+            BufPutByte(m, SSH_MSG_CHANNEL_DATA)
+            BufPutUint32(m, ch.remote_id)
+        end
+        BufPutString(m, (p as i64 + sent) as void*, chunk)
+        ok := _packet_send(sess.ps, m)
+        FreeBuf(m)
+        if not ok:
+            ret false
+        end
+        ch.peer_window -= (chunk as u32)
+        sent += chunk
+    end
+    ret true
+end
+
+func _srv_send_eof(sess &: SrvSession, ch &: SrvChannel):
+    if ch.close_sent:
+        ret
+    end
+    mut m := NewBuf(8)
+    BufPutByte(m, SSH_MSG_CHANNEL_EOF)
+    BufPutUint32(m, ch.remote_id)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+end
+
+func _srv_send_close(sess &: SrvSession, ch &: SrvChannel):
+    if ch.close_sent:
+        ret
+    end
+    mut m := NewBuf(8)
+    BufPutByte(m, SSH_MSG_CHANNEL_CLOSE)
+    BufPutUint32(m, ch.remote_id)
+    _sent := _packet_send(sess.ps, m)
+    FreeBuf(m)
+    ch.close_sent = true
+end
+
+func _srv_send_exit(sess &: SrvSession, ch &: SrvChannel, code: int):
+    if not ch.close_sent:
+        mut m := NewBuf(32)
+        BufPutByte(m, SSH_MSG_CHANNEL_REQUEST)
+        BufPutUint32(m, ch.remote_id)
+        BufPutStringStr(m, "exit-status")
+        BufPutBool(m, false)
+        BufPutUint32(m, code as u32)
+        _sent := _packet_send(sess.ps, m)
+        FreeBuf(m)
+    end
+    _srv_send_eof(sess, ch)
+    _srv_send_close(sess, ch)
+end
+
+func _srv_relay_packet(sess &: SrvSession, ch &: SrvChannel, child &: process.Child): bool:
+    mut pkt := _srv_read_packet(sess, 0)
+    if pkt.bad:
+        FreeBuf(pkt)
+        ret false
+    end
+    mut r := ReaderFromBuf(pkt)
+    mtype := RGetByte(r)
+    if mtype == SSH_MSG_CHANNEL_DATA:
+        _cid := RGetUint32(r)
+        data := RGetStringView(r)
+        if not r.bad:
+            _wrote := child.WriteBytes(data.p, data.len)
+            _srv_window_credit(sess, ch, data.len)
+        end
+    else if mtype == SSH_MSG_CHANNEL_EXTENDED_DATA:
+        _cid := RGetUint32(r)
+        _dtype := RGetUint32(r)
+        data := RGetStringView(r)
+        if not r.bad:
+            _srv_window_credit(sess, ch, data.len)
+        end
+    else if mtype == SSH_MSG_CHANNEL_WINDOW_ADJUST:
+        _cid := RGetUint32(r)
+        add := RGetUint32(r)
+        if not r.bad:
+            ch.peer_window += add
+        end
+    else if mtype == SSH_MSG_CHANNEL_EOF:
+        ch.eof_in = true
+        child.CloseStdin()
+    else if mtype == SSH_MSG_CHANNEL_CLOSE:
+        ch.closed = true
+        FreeBuf(pkt)
+        ret false
+    else if mtype == SSH_MSG_CHANNEL_REQUEST:
+        _cid := RGetUint32(r)
+        reqtype := RGetStringAsStr(r)
+        want := RGetBool(r)
+        if str.Equals(reqtype, "window-change"):
+            cols := RGetUint32(r) as int
+            rows := RGetUint32(r) as int
+            if child.h_out >= 0:
+                _resized := pty.Resize(child, rows, cols)
+            end
+            if want:
+                _srv_chan_success(sess, ch)
+            end
+        else:
+            if want:
+                _srv_chan_failure(sess, ch)
+            end
+        end
+    else if mtype == SSH_MSG_DISCONNECT:
+        ch.closed = true
+        FreeBuf(pkt)
+        ret false
+    end
+    FreeBuf(pkt)
+    ret true
+end
+
+func _srv_relay_process(sess &: SrvSession, ch &: SrvChannel, cmd &: process.Command, use_pty: bool): bool:
+    mut child := process.Child {}
+    if use_pty:
+        child = pty.Open(cmd, ch.rows, ch.cols)
+    end
+    if not child.ok:
+        child = process.Launch(cmd)
+    end
+    if not child.ok:
+        _srv_send_exit(sess, ch, 127)
+        ret false
+    end
+    mut out_done := false
+    mut err_done := child.h_err < 0
+    mut running := true
+    mut rounds := 0
+    until running and rounds < _SRV_MAX_ROUNDS:
+        rounds++
+        mut mask := 0
+        if not ch.closed:
+            if child.h_out >= 0:
+                mask = rawsock.WaitReadable2(sess.ps.sock, rawsock.FromFd(child.h_out), _SRV_POLL_MS)
+            else:
+                mask = 1
+            end
+        end
+        if (mask & 1) != 0:
+            if not _srv_relay_packet(sess, ch, child):
+                running = false
+                continue
+            end
+        end
+        if (mask & 2) != 0 and not out_done:
+            chunk := child.ReadAvailable(0)
+            if chunk.len > 0:
+                _sent := _srv_send_data(sess, ch, chunk.data as void*, chunk.len, false)
+                chunk.Free()
+            else if chunk.eof:
+                out_done = true
+            end
+        end
+        if not err_done:
+            echunk := child.ReadErrAvailable(0)
+            if echunk.len > 0:
+                _sent := _srv_send_data(sess, ch, echunk.data as void*, echunk.len, true)
+                echunk.Free()
+            else if echunk.eof:
+                err_done = true
+            end
+        end
+        _status := child.Wait(0)
+        if child.finished:
+            mut guard := 0
+            until guard < 1024:
+                d := child.ReadAvailable(0)
+                if d.len > 0:
+                    _sent := _srv_send_data(sess, ch, d.data as void*, d.len, false)
+                    d.Free()
+                    guard++
+                    continue
+                end
+                if d.eof:
+                    out_done = true
+                end
+                break
+            end
+            guard = 0
+            until guard < 1024:
+                d := child.ReadErrAvailable(0)
+                if d.len > 0:
+                    _sent := _srv_send_data(sess, ch, d.data as void*, d.len, true)
+                    d.Free()
+                    guard++
+                    continue
+                end
+                if d.eof:
+                    err_done = true
+                end
+                break
+            end
+            running = false
+        end
+    end
+    code := child.status.ReturnCode()
+    child.Close()
+    _srv_send_exit(sess, ch, code)
+    ret true
+end
+
+func _srv_session_user(sess: SrvSession): ServerUser:
+    ret ServerUser { name = sess.user, home = sess.home, shell = sess.shell, password = "" }
+end
+
+func _srv_run_exec(sess &: SrvSession, ch &: SrvChannel, cmdline: str):
+    mut cmd := process.NewCommand("/bin/sh")
+    cmd.Arg("-c")
+    cmd.Arg(cmdline)
+    _srv_setup_command(cmd, sess.cfg, _srv_session_user(sess), "")
+    cmd.stdin_mode = 1
+    cmd.stdout_mode = 1
+    cmd.stderr_mode = 1
+    cmd.new_group = true
+    _ran := _srv_relay_process(sess, ch, cmd, false)
+    cmd.Free()
+end
+
+func _srv_run_shell(sess &: SrvSession, ch &: SrvChannel):
+    mut shell := sess.shell
+    if shell.len() == 0:
+        shell = "/bin/sh"
+    end
+    mut cmd := process.NewCommand(shell)
+    _srv_setup_command(cmd, sess.cfg, _srv_session_user(sess), ch.term)
+    cmd.stdin_mode = 1
+    cmd.stdout_mode = 1
+    cmd.stderr_mode = 1
+    cmd.new_group = true
+    _ran := _srv_relay_process(sess, ch, cmd, true)
+    cmd.Free()
+end
+
+func _srv_handle_open(sess &: SrvSession, ch &: SrvChannel, r &: Reader, next_id: int):
+    ctype := RGetStringAsStr(r)
+    sender := RGetUint32(r)
+    win := RGetUint32(r)
+    maxp := RGetUint32(r)
+    if r.bad:
+        ret
+    end
+    if not str.Equals(ctype, "session") or ch.open:
+        _srv_send_open_failure(sess, sender, SSH_OPEN_ADMINISTRATIVELY_PROHIBITED, "only one session channel is supported")
+        ret
+    end
+    ch.id = next_id
+    ch.remote_id = sender
+    ch.peer_window = win
+    ch.peer_max = maxp
+    if ch.peer_max == (0 as u32) or ch.peer_max > (_SRV_MAX_PACKET as u32):
+        ch.peer_max = _SRV_MAX_PACKET as u32
+    end
+    ch.open = false
+    ch.eof_in = false
+    ch.closed = false
+    ch.close_sent = false
+    ch.window = _SRV_STREAM_WINDOW as u32
+    ch.pending.len = 0
+    _srv_send_open_confirm(sess, ch)
+end
+
+func _srv_handle_request(sess &: SrvSession, ch &: SrvChannel, r &: Reader, cfg: ServerConfig): bool:
+    _cid := RGetUint32(r)
+    reqtype := RGetStringAsStr(r)
+    want := RGetBool(r)
+    if r.bad or not ch.open:
+        if want and ch.open:
+            _srv_chan_failure(sess, ch)
+        end
+        ret true
+    end
+    if str.Equals(reqtype, "pty-req"):
+        term := RGetStringAsStr(r)
+        cols := RGetUint32(r) as int
+        rows := RGetUint32(r) as int
+        _pw := RGetUint32(r)
+        _ph := RGetUint32(r)
+        _modes := RGetStringView(r)
+        if r.bad:
+            if want:
+                _srv_chan_failure(sess, ch)
+            end
+            ret true
+        end
+        ch.term = term
+        if cols > 0:
+            ch.cols = cols
+        end
+        if rows > 0:
+            ch.rows = rows
+        end
+        if want:
+            _srv_chan_success(sess, ch)
+        end
+        ret true
+    end
+    if str.Equals(reqtype, "env"):
+        _name := RGetStringAsStr(r)
+        _value := RGetStringAsStr(r)
+        if want:
+            _srv_chan_success(sess, ch)
+        end
+        ret true
+    end
+    if str.Equals(reqtype, "window-change"):
+        cols := RGetUint32(r) as int
+        rows := RGetUint32(r) as int
+        if cols > 0:
+            ch.cols = cols
+        end
+        if rows > 0:
+            ch.rows = rows
+        end
+        if want:
+            _srv_chan_success(sess, ch)
+        end
+        ret true
+    end
+    if str.Equals(reqtype, "exec"):
+        cmdline := RGetStringAsStr(r)
+        if not cfg.enable_exec or r.bad:
+            if want:
+                _srv_chan_failure(sess, ch)
+            end
+            ret true
+        end
+        if want:
+            _srv_chan_success(sess, ch)
+        end
+        _srv_run_exec(sess, ch, cmdline)
+        ch.open = false
+        ret true
+    end
+    if str.Equals(reqtype, "shell"):
+        if not cfg.enable_shell:
+            if want:
+                _srv_chan_failure(sess, ch)
+            end
+            ret true
+        end
+        if want:
+            _srv_chan_success(sess, ch)
+        end
+        _srv_run_shell(sess, ch)
+        ch.open = false
+        ret true
+    end
+    if str.Equals(reqtype, "subsystem"):
+        name := RGetStringAsStr(r)
+        if str.Equals(name, "sftp") and cfg.enable_sftp:
+            if want:
+                _srv_chan_success(sess, ch)
+            end
+            _sftpserver_run(sess, ch)
+            ch.open = false
+            _srv_send_eof(sess, ch)
+            _srv_send_close(sess, ch)
+        else:
+            if want:
+                _srv_chan_failure(sess, ch)
+            end
+        end
+        ret true
+    end
+    if str.Equals(reqtype, "signal"):
+        _signal_name := RGetStringAsStr(r)
+        ret true
+    end
+    if str.Equals(reqtype, "x11-req") or str.Equals(reqtype, "auth-agent-req@openssh.com"):
+        if want:
+            _srv_chan_failure(sess, ch)
+        end
+        ret true
+    end
+    if want:
+        _srv_chan_failure(sess, ch)
+    end
+    ret true
+end
+
+func _srv_channel_loop(sess &: SrvSession, cfg: ServerConfig): bool:
+    mut ch := SrvChannel {}
+    ch.pending = NewBuf(1024)
+    mut next_id := 0
+    mut alive := true
+    mut rounds := 0
+    until alive and rounds < _SRV_MAX_ROUNDS:
+        rounds++
+        mut pkt := _srv_read_packet(sess, 0)
+        if pkt.bad:
+            FreeBuf(pkt)
+            alive = false
+            continue
+        end
+        mut r := ReaderFromBuf(pkt)
+        mtype := RGetByte(r)
+        if mtype == SSH_MSG_CHANNEL_OPEN:
+            _srv_handle_open(sess, ch, r, next_id)
+            next_id++
+        else if mtype == SSH_MSG_CHANNEL_REQUEST:
+            alive = _srv_handle_request(sess, ch, r, cfg)
+        else if mtype == SSH_MSG_CHANNEL_DATA:
+            _cid := RGetUint32(r)
+            data := RGetStringView(r)
+            if not r.bad:
+                BufPutBytes(ch.pending, data.p, data.len)
+                _srv_window_credit(sess, ch, data.len)
+            end
+        else if mtype == SSH_MSG_CHANNEL_EXTENDED_DATA:
+            _cid := RGetUint32(r)
+            _dtype := RGetUint32(r)
+            data := RGetStringView(r)
+            if not r.bad:
+                _srv_window_credit(sess, ch, data.len)
+            end
+        else if mtype == SSH_MSG_CHANNEL_WINDOW_ADJUST:
+            _cid := RGetUint32(r)
+            add := RGetUint32(r)
+            if not r.bad:
+                ch.peer_window += add
+            end
+        else if mtype == SSH_MSG_CHANNEL_EOF:
+            ch.eof_in = true
+        else if mtype == SSH_MSG_CHANNEL_CLOSE:
+            ch.closed = true
+            _srv_send_close(sess, ch)
+            alive = false
+        else if mtype == SSH_MSG_GLOBAL_REQUEST:
+            _name := RGetStringAsStr(r)
+            want_reply := RGetBool(r)
+            if want_reply:
+                mut m := NewBuf(1)
+                BufPutByte(m, SSH_MSG_REQUEST_FAILURE)
+                _sent := _packet_send(sess.ps, m)
+                FreeBuf(m)
+            end
+        else if mtype == SSH_MSG_DISCONNECT:
+            alive = false
+        end
+        FreeBuf(pkt)
+    end
+    FreeBuf(ch.pending)
+    ret true
+end
+
+@en "ServeConnection"
+@fa "سرویس اتصال"
+pub func ServeConnection(fd: i64, cfg: ServerConfig): bool:
+    if fd < 0:
+        ret false
+    end
+    sock := rawsock.FromFd(fd)
+    mut hk := _srv_hostkey_load(cfg)
+    if not hk.ok:
+        _srv_hostkey_free(hk)
+        rawsock.Close(sock)
+        ret false
+    end
+    mut sess := _srv_handshake(sock, hk, cfg)
+    _srv_hostkey_free(hk)
+    mut ok := false
+    if sess.session_id.len > 0:
+        if _srv_authenticate(sess, cfg):
+            ok = _srv_channel_loop(sess, cfg)
+        end
+    end
+    _packet_state_free(sess.ps)
+    FreeBuf(sess.session_id)
+    rawsock.Close(sock)
+    ret ok
+end

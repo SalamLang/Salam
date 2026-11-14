@@ -17,63 +17,115 @@ package main
 import ftpd
 import ftp
 import testing
-import os
-import fs
 import fs.dir
-import time
 import sync
+
+const root := "/tmp/salam_ftpd_std_test"
 
 mut srv := ftpd.Server {}
 mut ready := sync.NewWaitGroup()
-mut root := "/tmp/opencode/ftpd_test_root"
 
-func server_run():
-    fs.dir.MkdirAll(root)
+mut once_srv := ftpd.Server {}
+mut once_ready := sync.NewWaitGroup()
+
+func test_config(): ftpd.Config:
     mut cfg := ftpd.NewConfig()
     cfg.host = "127.0.0.1"
     cfg.port = 0
     cfg.root = root
     cfg.allow_anonymous = true
+    cfg.anonymous_user = "anonymous"
     cfg.passive_start = 45000
-    cfg.passive_end = 45100
-    srv = ftpd.New(cfg)
-    ftpd.Listen(srv)
-    sync.Done(ready)
-    // serve a few sessions
-    repeat 10 in i:
-        ftpd.ServeOnce(srv)
-    end
-    ftpd.Close(srv)
+    cfg.passive_end = 45000
+    ret cfg
 end
 
-func test_anonymous_basic():
-    c := ftp.Dial("127.0.0.1", ftpd.Port(srv))
+// The serving loop lives in its own thread so the client can connect to it.
+func serve_forever():
+    srv = ftpd.New(test_config())
+    if not ftpd.Listen(srv):
+        sync.Done(ready)
+        ret
+    end
+    sync.Done(ready)
+    ftpd.Serve(srv)
+end
+
+func serve_one():
+    once_srv = ftpd.New(test_config())
+    if not ftpd.Listen(once_srv):
+        sync.Done(once_ready)
+        ret
+    end
+    sync.Done(once_ready)
+    handled := ftpd.ServeOnce(once_srv)
+    if not handled:
+        once_srv.running = false
+    end
+end
+
+func test_anonymous_session():
+    mut c := ftp.Dial("127.0.0.1", ftpd.Port(srv))
     testing.AssertTrue(ftp.Ok(c))
-    testing.AssertTrue(ftp.Login(c, "anonymous", ""))
+    testing.AssertTrue(ftp.Login(c, "anonymous", "guest@example.com"))
     testing.AssertEqStr(ftp.Pwd(c), "/")
     testing.AssertTrue(ftp.Write(c, "hello.txt", "hello salam"))
     testing.AssertEqStr(ftp.Read(c, "hello.txt"), "hello salam")
+    testing.AssertTrue(ftp.Append(c, "hello.txt", " ftp"))
+    testing.AssertEqStr(ftp.Read(c, "hello.txt"), "hello salam ftp")
+    testing.AssertEqInt64(ftp.Size(c, "hello.txt"), 15)
     testing.AssertTrue(ftp.Mkdir(c, "docs"))
     testing.AssertTrue(ftp.Cwd(c, "docs"))
     testing.AssertEqStr(ftp.Pwd(c), "/docs")
     testing.AssertTrue(ftp.Write(c, "note.txt", "note"))
     testing.AssertTrue(ftp.CdUp(c))
-    names := ftp.NameList(c)
+    names := ftp.NameList(c, "/")
     testing.AssertTrue(names.len() >= 2)
-    testing.AssertTrue(ftp.Delete(c, "hello.txt"))
+    testing.AssertTrue(ftp.IsDir(c, "docs"))
+    testing.AssertTrue(ftp.Rename(c, "hello.txt", "renamed.txt"))
+    testing.AssertTrue(ftp.Exists(c, "renamed.txt"))
     testing.AssertFalse(ftp.Exists(c, "hello.txt"))
+    testing.AssertTrue(ftp.Delete(c, "renamed.txt"))
+    testing.AssertTrue(ftp.RemoveAll(c, "docs"))
+    ftp.Quit(c)
+    ftp.Close(c)
+end
+
+func test_serve_once():
+    mut c := ftp.Dial("127.0.0.1", ftpd.Port(once_srv))
+    testing.AssertTrue(ftp.Ok(c))
+    testing.AssertTrue(ftp.Login(c, "anonymous", ""))
+    testing.AssertTrue(ftp.Write(c, "once.txt", "one"))
+    testing.AssertEqStr(ftp.Read(c, "once.txt"), "one")
     ftp.Close(c)
 end
 
 func main:
-    fs.dir.RemoveAll(root)
+    dir.RemoveAll(root)
+    dir.MkdirAll(root)
+    testing.AssertTrue(dir.IsDir(root))
+
     sync.Add(ready, 1 as i64)
-    t := spawn(server_run)
+    worker := spawn(serve_forever)
     sync.Wait(ready)
-    time.Sleep(50)
-    test_anonymous_basic()
-    join(t)
-    fs.dir.RemoveAll(root)
+    test_anonymous_session()
+    srv.running = false
+    // Wake the blocking accept so the serving loop can see the new state.
+    mut wake := ftp.Dial("127.0.0.1", ftpd.Port(srv))
+    ftp.Close(wake)
+    join(worker)
+    ftpd.Close(srv)
+
+    dir.RemoveAll(root)
+    dir.MkdirAll(root)
+    sync.Add(once_ready, 1 as i64)
+    once_worker := spawn(serve_one)
+    sync.Wait(once_ready)
+    test_serve_once()
+    join(once_worker)
+    ftpd.Close(once_srv)
+
+    dir.RemoveAll(root)
     testing.Summary()
     ret 0
 end

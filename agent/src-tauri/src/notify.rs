@@ -321,9 +321,7 @@ pub fn away(app: &AppHandle) -> bool {
     let Some(w) = app.get_webview_window("main") else {
         return true;
     };
-    let base = !w.is_visible().unwrap_or(false)
-        || w.is_minimized().unwrap_or(false)
-        || !w.is_focused().unwrap_or(false);
+    let base = !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false) || !w.is_focused().unwrap_or(false);
     #[cfg(target_os = "macos")]
     {
         base || app_hidden(app)

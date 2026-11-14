@@ -14,6 +14,8 @@
 
 package ssh
 
+import tls
+
 const _AUTH_SERVICE := "ssh-connection"
 
 func _auth_request_service(t &: Transport): bool:
@@ -21,23 +23,38 @@ func _auth_request_service(t &: Transport): bool:
     BufPutByte(req, SSH_MSG_SERVICE_REQUEST)
     BufPutStringStr(req, "ssh-userauth")
     if not _packet_send(t.ps, req):
+        print "DBG service send failed\n"
         FreeBuf(req)
         ret false
     end
     FreeBuf(req)
-    mut reply := _packet_recv(t.ps)
-    if reply.bad:
+    mut ok := false
+    mut rounds := 0
+    until rounds >= 8:
+        mut reply := _packet_recv(t.ps)
+        if reply.bad:
+            ret false
+        end
+        mut r := ReaderFromBuf(reply)
+        msgtype := RGetByte(r)
+        print "DBG svc reply type="
+        print msgtype
+        print "\n"
+        if not r.bad:
+            if msgtype == SSH_MSG_SERVICE_ACCEPT:
+                FreeBuf(reply)
+                ok = true
+                break
+            end
+        end
+        FreeBuf(reply)
+        // Other layers may talk first: EXT_INFO after NEWKEYS, keepalives, stderr spam.
+        if msgtype == SSH_MSG_EXT_INFO or msgtype == SSH_MSG_IGNORE or msgtype == SSH_MSG_DEBUG or msgtype == SSH_MSG_UNIMPLEMENTED:
+            rounds++
+            continue
+        end
         ret false
     end
-    mut r := ReaderFromBuf(reply)
-    msgtype := RGetByte(r)
-    mut ok := false
-    if not r.bad:
-        if msgtype == SSH_MSG_SERVICE_ACCEPT:
-            ok = true
-        end
-    end
-    FreeBuf(reply)
     ret ok
 end
 
@@ -49,15 +66,24 @@ func _auth_send_and_await(t &: Transport, req: Buf): bool:
     until attempts < 5:
         mut reply := _packet_recv(t.ps)
         if reply.bad:
+            print "DBG auth recv bad\n"
             ret false
         end
         mut r := ReaderFromBuf(reply)
         msgtype := RGetByte(r)
+        print "DBG auth reply type="
+        print msgtype
+        print "\n"
         if msgtype == SSH_MSG_USERAUTH_SUCCESS:
             FreeBuf(reply)
             ret true
         end
         if msgtype == SSH_MSG_USERAUTH_BANNER:
+            FreeBuf(reply)
+            attempts++
+            continue
+        end
+        if msgtype == SSH_MSG_EXT_INFO or msgtype == SSH_MSG_IGNORE or msgtype == SSH_MSG_DEBUG or msgtype == SSH_MSG_UNIMPLEMENTED:
             FreeBuf(reply)
             attempts++
             continue
@@ -84,11 +110,56 @@ func _auth_password(t &: Transport, user: str, password: str): bool:
 end
 
 func _auth_pubkey_blob(id: Identity): Buf:
+    if id.ed:
+        mut eblob := NewBuf(8 + id.ed_pub.len)
+        BufPutStringStr(eblob, HOSTKEY_ED25519)
+        BufPutStringBuf(eblob, id.ed_pub)
+        ret eblob
+    end
     mut blob := NewBuf(16 + id.e.len + id.n.len)
     BufPutStringStr(blob, HOSTKEY_SSH_RSA)
     BufPutMpintBuf(blob, id.e)
     BufPutMpintBuf(blob, id.n)
     ret blob
+end
+
+func _auth_try_publickey_ed(t &: Transport, user: str, id: Identity): bool:
+    mut blob := _auth_pubkey_blob(id)
+    mut signed_data := NewBuf(64 + t.session_id.len + user.len() + blob.len)
+    BufPutStringBuf(signed_data, t.session_id)
+    BufPutByte(signed_data, SSH_MSG_USERAUTH_REQUEST)
+    BufPutStringStr(signed_data, user)
+    BufPutStringStr(signed_data, _AUTH_SERVICE)
+    BufPutStringStr(signed_data, "publickey")
+    BufPutBool(signed_data, true)
+    BufPutStringStr(signed_data, HOSTKEY_ED25519)
+    BufPutStringBuf(signed_data, blob)
+
+    mut sigbytes := NewBuf(64)
+    BufPutZeros(sigbytes, 64)
+    tls.Ed25519Sign(id.ed_seed.p, signed_data.p, signed_data.len, sigbytes.p)
+    FreeBuf(signed_data)
+
+    mut sigblob := NewBuf(12 + sigbytes.len)
+    BufPutStringStr(sigblob, HOSTKEY_ED25519)
+    BufPutStringBuf(sigblob, sigbytes)
+    FreeBuf(sigbytes)
+
+    mut req := NewBuf(64 + user.len() + blob.len + sigblob.len)
+    BufPutByte(req, SSH_MSG_USERAUTH_REQUEST)
+    BufPutStringStr(req, user)
+    BufPutStringStr(req, _AUTH_SERVICE)
+    BufPutStringStr(req, "publickey")
+    BufPutBool(req, true)
+    BufPutStringStr(req, HOSTKEY_ED25519)
+    BufPutStringBuf(req, blob)
+    BufPutStringBuf(req, sigblob)
+    FreeBuf(blob)
+    FreeBuf(sigblob)
+
+    ok := _auth_send_and_await(t, req)
+    FreeBuf(req)
+    ret ok
 end
 
 func _auth_try_publickey(t &: Transport, user: str, id: Identity, algo: str): bool:
@@ -146,6 +217,9 @@ end
 @en "AuthPublicKey"
 @fa "احراز هویت با کلید عمومی"
 func _auth_publickey(t &: Transport, user: str, id: Identity): bool:
+    if id.ed:
+        ret _auth_try_publickey_ed(t, user, id)
+    end
     if _auth_try_publickey(t, user, id, HOSTKEY_RSA_SHA256):
         ret true
     end

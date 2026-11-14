@@ -1,0 +1,1011 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import fs
+import mem
+import os
+import str
+
+extern:
+    func fseek(stream: void*, off: i64, whence: int): int
+end
+
+if not SALAM_OS_WINDOWS:
+    extern:
+        func symlink(target: str, path: str): int
+        func truncate(path: str, length: i64): int
+        func readlink(path: str, buf: void*, sz: usize): int
+    end
+end
+
+const _SFXP_SETSTAT := 9
+const _SFXP_FSETSTAT := 10
+const _SFXP_READLINK := 19
+const _SFXP_SYMLINK := 20
+const _SFXP_EXTENDED := 200
+const _SFXP_EXTENDED_REPLY := 201
+
+const _SFX_NO_SUCH_FILE := 2
+const _SFX_PERMISSION_DENIED := 3
+const _SFX_FAILURE := 4
+const _SFX_OP_UNSUPPORTED := 8
+
+const _SFTP_MAX_HANDLES := 128
+const _SFTP_DIR_BATCH := 64
+const _SFTP_MAX_FRAME := 262144
+
+struct SftpFileHandle:
+    pub h: str = ""
+    pub is_dir: bool = false
+    pub file: void* = null
+    pub path: str = ""
+    pub vpath: str = ""
+    pub entries: Vector<str> = Vector {}
+    pub index: int = 0
+    pub open: bool = false
+end
+
+struct SftpSessionState:
+    pub root: str = ""
+    pub home: str = "/"
+    pub handles: Vector<SftpFileHandle> = Vector {}
+    pub next: int = 0
+end
+
+if SALAM_OS_WINDOWS:
+    func _sftp_symlink(target: str, path: str): int:
+        _t := target
+        _p := path
+        ret 0 - 1
+    end
+
+    func _sftp_truncate(path: str, size: i64): int:
+        _pa := path
+        _s := size
+        ret 0 - 1
+    end
+
+    func _sftp_is_link(path: str): bool:
+        _pa := path
+        ret false
+    end
+
+    func _sftp_readlink(path: str): str:
+        _pa := path
+        ret ""
+    end
+else:
+    func _sftp_symlink(target: str, path: str): int:
+        ret symlink(target, path)
+    end
+
+    func _sftp_truncate(path: str, size: i64): int:
+        ret truncate(path, size)
+    end
+
+    func _sftp_is_link(path: str): bool:
+        buf := mem.Allocate(4 as u64)
+        n := readlink(path, buf, 4 as usize)
+        mem.Free(buf)
+        ret n >= 0
+    end
+
+    func _sftp_readlink(path: str): str:
+        mut cap := 1024
+        mut out := ""
+        mut done := false
+        until not done and cap <= 65536:
+            buf := mem.Allocate((cap + 1) as u64)
+            n := readlink(path, buf, cap as usize)
+            if n < 0:
+                mem.Free(buf)
+                done = true
+            else if n >= cap:
+                mem.Free(buf)
+                cap *= 4
+            else:
+                out = str.Clone(buf as str)
+                mem.Free(buf)
+                done = true
+            end
+        end
+        ret out
+    end
+end
+
+func _sftp_perm_bits(value: int): int:
+    mut v := value
+    if v < 0:
+        ret 420
+    end
+    if v > 777:
+        v %= 1000
+    end
+    hundreds := v / 100
+    tens := (v / 10) % 10
+    ones := v % 10
+    ret hundreds * 64 + tens * 8 + ones
+end
+
+func _sftp_mode_for(path: str): u32:
+    is_dir := os.IsDir(path)
+    mut perm := 420
+    if is_dir:
+        perm = 493
+    end
+    dec := fs.Permissions(path)
+    if dec >= 0:
+        perm = _sftp_perm_bits(dec)
+    end
+    if _sftp_is_link(path):
+        ret 0xA000 | 511
+    end
+    if is_dir:
+        ret (0x4000 | perm) as u32
+    end
+    ret (0x8000 | perm) as u32
+end
+
+func _sftp_put_attrs(b &: Buf, path: str, detailed: bool):
+    info := os.Stat(path)
+    mut size := info.size
+    if size < 0:
+        size = 0
+    end
+    mode := _sftp_mode_for(path)
+    mut mtime := 0
+    if detailed:
+        mtime = fs.ModTime(path) as int
+    end
+    if detailed:
+        BufPutUint32(b, 0x0000000D as u32)
+        BufPutUint64(b, size as u64)
+        BufPutUint32(b, mode)
+        BufPutUint32(b, mtime as u32)
+        BufPutUint32(b, mtime as u32)
+    else:
+        BufPutUint32(b, 0x00000005 as u32)
+        BufPutUint64(b, size as u64)
+        BufPutUint32(b, mode)
+    end
+end
+
+func _sftp_longname(name: str, path: str): str:
+    mut perm := "-rw-r--r--"
+    mut size := os.FileSize(path)
+    if size < 0:
+        size = 0
+    end
+    if os.IsDir(path):
+        perm = "drwxr-xr-x"
+        size = 4096
+    else if _sftp_is_link(path):
+        perm = "lrwxrwxrwx"
+    end
+    ret perm + " 1 owner group " + str.FromInt(size) + " Jan 01 00:00 " + name
+end
+
+func _sftp_body(msgtype: int, body: Buf): Buf:
+    mut frame := NewBuf(5 + body.len)
+    BufPutUint32(frame, (1 + body.len) as u32)
+    BufPutByte(frame, msgtype)
+    BufPutBuf(frame, body)
+    ret frame
+end
+
+func _sftp_send_frame(sess &: SrvSession, ch &: SrvChannel, frame: Buf):
+    _sent := _srv_send_data(sess, ch, frame.p, frame.len, false)
+end
+
+func _sftp_status(sess &: SrvSession, ch &: SrvChannel, id: u32, code: int, message: str):
+    mut body := NewBuf(32 + message.len())
+    BufPutUint32(body, id)
+    BufPutUint32(body, code as u32)
+    BufPutStringStr(body, message)
+    BufPutStringStr(body, "")
+    mut frame := _sftp_body(SSH_FXP_STATUS, body)
+    FreeBuf(body)
+    _sftp_send_frame(sess, ch, frame)
+    FreeBuf(frame)
+end
+
+func _sftp_reply_handle(sess &: SrvSession, ch &: SrvChannel, id: u32, handle: str):
+    mut body := NewBuf(16 + handle.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, handle)
+    mut frame := _sftp_body(SSH_FXP_HANDLE, body)
+    FreeBuf(body)
+    _sftp_send_frame(sess, ch, frame)
+    FreeBuf(frame)
+end
+
+func _sftp_reply_attrs(sess &: SrvSession, ch &: SrvChannel, id: u32, path: str, detailed: bool):
+    mut body := NewBuf(64)
+    BufPutUint32(body, id)
+    _sftp_put_attrs(body, path, detailed)
+    mut frame := _sftp_body(SSH_FXP_ATTRS, body)
+    FreeBuf(body)
+    _sftp_send_frame(sess, ch, frame)
+    FreeBuf(frame)
+end
+
+func _sftp_reply_name_count(sess &: SrvSession, ch &: SrvChannel, id: u32, name: str, longname: str):
+    mut body := NewBuf(64 + name.len() + longname.len())
+    BufPutUint32(body, id)
+    BufPutUint32(body, 1 as u32)
+    BufPutStringStr(body, name)
+    BufPutStringStr(body, longname)
+    BufPutUint32(body, 0 as u32)
+    mut frame := _sftp_body(SSH_FXP_NAME, body)
+    FreeBuf(body)
+    _sftp_send_frame(sess, ch, frame)
+    FreeBuf(frame)
+end
+
+func _sftp_join(st: SftpSessionState, path: str): str:
+    mut full := path
+    if not str.StartsWith(full, "/"):
+        if str.Equals(st.home, "/"):
+            full = "/" + full
+        else:
+            full = st.home + "/" + full
+        end
+    end
+    clean := _srv_clean_virtual(full)
+    if str.Equals(clean, "/"):
+        ret st.root
+    end
+    ret st.root + clean
+end
+
+func _sftp_virtual(st: SftpSessionState, path: str): str:
+    _root := st.root
+    mut full := path
+    if not str.StartsWith(full, "/"):
+        if str.Equals(st.home, "/"):
+            full = "/" + full
+        else:
+            full = st.home + "/" + full
+        end
+    end
+    ret _srv_clean_virtual(full)
+end
+
+func _sftp_inside(st: SftpSessionState, phys: str): bool:
+    real := os.RealPath(phys)
+    if real.len() == 0:
+        ret true
+    end
+    if str.Equals(real, st.root):
+        ret true
+    end
+    ret str.StartsWith(real, st.root + "/")
+end
+
+func _sftp_parent_inside(st: SftpSessionState, phys: str): bool:
+    mut dir := phys
+    mut cut := -1
+    mut i := dir.len() - 1
+    until i >= 0:
+        if str.CharAt(dir, i) == "/":
+            cut = i
+            break
+        end
+        i--
+    end
+    if cut > 0:
+        dir = dir.substr(0, cut)
+    else:
+        dir = st.root
+    end
+    ret _sftp_inside(st, dir)
+end
+
+func _sftp_find(st: SftpSessionState, handle: str): int:
+    mut found := 0 - 1
+    mut i := 0
+    until i < st.handles.len():
+        if found < 0 and str.Equals(st.handles.get(i).h, handle):
+            found = i
+        end
+        i++
+    end
+    ret found
+end
+
+func _sftp_new_handle(st &: SftpSessionState, is_dir: bool, file: void*, path: str, vpath: str, entries: Vector<str>): str:
+    st.next++
+    h := "salam-" + str.FromInt(st.next as i64)
+    mut e := SftpFileHandle {}
+    e.h = h
+    e.is_dir = is_dir
+    e.file = file
+    e.path = path
+    e.vpath = vpath
+    e.entries = entries
+    e.index = 0
+    e.open = true
+    st.handles.push(e)
+    ret h
+end
+
+func _sftp_free_handle(e &: SftpFileHandle):
+    if e.file != null:
+        _closed := fclose(e.file)
+        e.file = null
+    end
+    repeat e.entries.len() in i:
+        mem.Free(e.entries.get(i) as void*)
+    end
+    e.entries.free()
+    e.open = false
+end
+
+func _sftp_read_frame(sess &: SrvSession, ch &: SrvChannel): Buf:
+    mut guard := 0
+    until ch.pending.len < 4 and not ch.closed and not ch.eof_in and guard < 1000000:
+        if not _srv_relay_window(sess, ch):
+            break
+        end
+        guard++
+    end
+    if ch.pending.len < 4:
+        ret NewBuf(0)
+    end
+    mut head := ReaderFromBuf(ch.pending)
+    plen := RGetUint32(head) as int
+    if plen < 1 or plen > _SFTP_MAX_FRAME:
+        ret NewBuf(0)
+    end
+    until ch.pending.len < 4 + plen and not ch.closed and not ch.eof_in and guard < 1000000:
+        if not _srv_relay_window(sess, ch):
+            break
+        end
+        guard++
+    end
+    if ch.pending.len < 4 + plen:
+        ret NewBuf(0)
+    end
+    mut frame := NewBuf(plen)
+    BufPutBytes(frame, (ch.pending.p as i64 + 4) as void*, plen)
+    _buf_consume_front(ch.pending, 4 + plen)
+    ret frame
+end
+
+func _sftp_apply_attrs(phys: str, r &: Reader): bool:
+    flags := RGetUint32(r)
+    mut size := 0 as i64
+    mut has_size := false
+    mut perms := 0
+    mut has_perm := false
+    if (flags & 1 as u32) != (0 as u32):
+        size = RGetUint64(r) as i64
+        has_size = true
+    end
+    if (flags & 2 as u32) != (0 as u32):
+        _uid := RGetUint32(r)
+        _gid := RGetUint32(r)
+    end
+    if (flags & 4 as u32) != (0 as u32):
+        perms = RGetUint32(r) as int
+        has_perm = true
+    end
+    if (flags & 8 as u32) != (0 as u32):
+        _atime := RGetUint32(r)
+        _mtime := RGetUint32(r)
+    end
+    if r.bad:
+        ret false
+    end
+    if has_size:
+        _tr := _sftp_truncate(phys, size)
+    end
+    if has_perm:
+        _ch := fs.Chmod(phys, perms & 511)
+    end
+    ret true
+end
+
+func _sftp_op_open(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    pflags := RGetUint32(r)
+    _attrs := RGetUint32(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    if st.handles.len() >= _SFTP_MAX_HANDLES:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "too many open files")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_parent_inside(st, phys) or not _sftp_inside(st, phys):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    want_read := (pflags & (SSH_FXF_READ as u32)) != (0 as u32)
+    want_write := (pflags & (SSH_FXF_WRITE as u32)) != (0 as u32)
+    want_append := (pflags & (0x00000004 as u32)) != (0 as u32)
+    want_create := (pflags & (SSH_FXF_CREAT as u32)) != (0 as u32)
+    want_trunc := (pflags & (SSH_FXF_TRUNC as u32)) != (0 as u32)
+    mut mode := "rb"
+    if want_write:
+        if want_trunc:
+            mode = "w+b"
+        else if want_create:
+            if not os.Exists(phys):
+                _created := os.WriteFile(phys, "")
+            end
+            mode = "r+b"
+        else if want_append:
+            mode = "a+b"
+        else:
+            mode = "r+b"
+        end
+    end
+    f := fopen(phys, mode)
+    if f == null:
+        if want_read:
+            _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
+        else:
+            _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        end
+        ret
+    end
+    h := _sftp_new_handle(st, false, f, phys, _sftp_virtual(st, path), Vector {} as Vector<str>)
+    _sftp_reply_handle(sess, ch, id, h)
+end
+
+func _sftp_op_close(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    handle := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    idx := _sftp_find(st, handle)
+    if idx < 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    mut e := st.handles.get(idx)
+    _sftp_free_handle(e)
+    st.handles.set(idx, e)
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_read(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    handle := RGetStringAsStr(r)
+    offset := RGetUint64(r)
+    mut length := RGetUint32(r) as int
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    idx := _sftp_find(st, handle)
+    if idx < 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    e := st.handles.get(idx)
+    if not e.open or e.is_dir or e.file == null:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    if length <= 0:
+        length = _SRV_CHUNK
+    end
+    if length > _SRV_CHUNK:
+        length = _SRV_CHUNK
+    end
+    _pos := fseek(e.file, offset as i64, 0)
+    mut chunk := NewBuf(length)
+    BufPutZeros(chunk, length)
+    got := fread(chunk.p, 1 as u64, length as u64, e.file) as int
+    if got <= 0:
+        FreeBuf(chunk)
+        _sftp_status(sess, ch, id, SSH_FX_EOF, "end of file")
+        ret
+    end
+    mut body := NewBuf(16 + got)
+    BufPutUint32(body, id)
+    BufPutString(body, chunk.p, got)
+    mut frame := _sftp_body(SSH_FXP_DATA, body)
+    FreeBuf(body)
+    _sftp_send_frame(sess, ch, frame)
+    FreeBuf(frame)
+    FreeBuf(chunk)
+end
+
+func _sftp_op_write(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    handle := RGetStringAsStr(r)
+    offset := RGetUint64(r)
+    data := RGetStringView(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    idx := _sftp_find(st, handle)
+    if idx < 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    e := st.handles.get(idx)
+    if not e.open or e.is_dir or e.file == null:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    _pos := fseek(e.file, offset as i64, 0)
+    written := fwrite(data.p, 1 as u64, data.len as u64, e.file) as int
+    if written != data.len:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "short write")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_stat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys) or not os.Exists(phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
+        ret
+    end
+    _sftp_reply_attrs(sess, ch, id, phys, true)
+end
+
+func _sftp_op_lstat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys) or (not os.Exists(phys) and not _sftp_is_link(phys)):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
+        ret
+    end
+    _sftp_reply_attrs(sess, ch, id, phys, true)
+end
+
+func _sftp_op_fstat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    handle := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    idx := _sftp_find(st, handle)
+    if idx < 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    e := st.handles.get(idx)
+    if not e.open:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    _sftp_reply_attrs(sess, ch, id, e.path, true)
+end
+
+func _sftp_op_setstat(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    if not os.Exists(phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
+        ret
+    end
+    if not _sftp_apply_attrs(phys, r):
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad attributes")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_fsetstat(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    handle := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    idx := _sftp_find(st, handle)
+    if idx < 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    e := st.handles.get(idx)
+    if not e.open:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    if not _sftp_apply_attrs(e.path, r):
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad attributes")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_opendir(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    if st.handles.len() >= _SFTP_MAX_HANDLES:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "too many open files")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys) or not os.IsDir(phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such directory")
+        ret
+    end
+    names := os.ListDir(phys)
+    h := _sftp_new_handle(st, true, null, phys, _sftp_virtual(st, path), names)
+    _sftp_reply_handle(sess, ch, id, h)
+end
+
+func _sftp_op_readdir(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
+    handle := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    idx := _sftp_find(st, handle)
+    if idx < 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    mut e := st.handles.get(idx)
+    if not e.open or not e.is_dir:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
+        ret
+    end
+    total := e.entries.len()
+    if e.index >= total:
+        _sftp_status(sess, ch, id, SSH_FX_EOF, "end of directory")
+        ret
+    end
+    mut count := total - e.index
+    if count > _SFTP_DIR_BATCH:
+        count = _SFTP_DIR_BATCH
+    end
+    mut body := NewBuf(128 + count * 64)
+    BufPutUint32(body, id)
+    BufPutUint32(body, count as u32)
+    mut k := 0
+    until k < count:
+        name := e.entries.get(e.index + k)
+        mut child_virtual := e.vpath
+        if str.Equals(child_virtual, "/"):
+            child_virtual = "/" + name
+        else:
+            child_virtual = child_virtual + "/" + name
+        end
+        phys := _sftp_join(st, child_virtual)
+        BufPutStringStr(body, name)
+        BufPutStringStr(body, _sftp_longname(name, phys))
+        if os.Exists(phys) or _sftp_is_link(phys):
+            _sftp_put_attrs(body, phys, false)
+        else:
+            BufPutUint32(body, 0 as u32)
+        end
+        k++
+    end
+    mut frame := _sftp_body(SSH_FXP_NAME, body)
+    FreeBuf(body)
+    _sftp_send_frame(sess, ch, frame)
+    FreeBuf(frame)
+    e.index += count
+    st.handles.set(idx, e)
+end
+
+func _sftp_op_remove(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    if not os.Exists(phys) and not _sftp_is_link(phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
+        ret
+    end
+    if os.IsDir(phys):
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "is a directory")
+        ret
+    end
+    if os.Remove(phys) != 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "remove failed")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_mkdir(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    _attrs := RGetUint32(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_parent_inside(st, phys) or not _sftp_inside(st, phys):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    if os.Exists(phys):
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "already exists")
+        ret
+    end
+    if os.Mkdir(phys) != 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "mkdir failed")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_rmdir(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys) or str.Equals(phys, st.root):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    if not os.IsDir(phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such directory")
+        ret
+    end
+    if os.Rmdir(phys) != 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "rmdir failed")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_realpath(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    virt := _sftp_virtual(st, path)
+    _sftp_reply_name_count(sess, ch, id, virt, virt)
+end
+
+func _sftp_op_rename(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    old_path := RGetStringAsStr(r)
+    new_path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    old_phys := _sftp_join(st, old_path)
+    new_phys := _sftp_join(st, new_path)
+    if not _sftp_inside(st, old_phys) or not _sftp_parent_inside(st, new_phys) or not _sftp_inside(st, new_phys):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    if not os.Exists(old_phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
+        ret
+    end
+    if os.Move(old_phys, new_phys) != 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "rename failed")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_readlink(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    phys := _sftp_join(st, path)
+    if not _sftp_inside(st, phys) or not _sftp_is_link(phys):
+        _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such link")
+        ret
+    end
+    target := _sftp_readlink(phys)
+    _sftp_reply_name_count(sess, ch, id, target, target)
+end
+
+func _sftp_op_symlink(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    link_path := RGetStringAsStr(r)
+    target_path := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    link_phys := _sftp_join(st, link_path)
+    if not _sftp_parent_inside(st, link_phys) or not _sftp_inside(st, link_phys):
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
+    end
+    mut rc := _sftp_symlink(target_path, link_phys)
+    if rc != 0:
+        rc = _sftp_symlink(link_path, target_path)
+    end
+    if rc != 0:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "symlink failed")
+        ret
+    end
+    _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+end
+
+func _sftp_op_extended(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
+    op := RGetStringAsStr(r)
+    if r.bad:
+        _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
+        ret
+    end
+    if str.Equals(op, "posix-rename@openssh.com"):
+        old_path := RGetStringAsStr(r)
+        new_path := RGetStringAsStr(r)
+        old_phys := _sftp_join(st, old_path)
+        new_phys := _sftp_join(st, new_path)
+        if not _sftp_inside(st, old_phys) or not _sftp_parent_inside(st, new_phys):
+            _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+            ret
+        end
+        if os.Move(old_phys, new_phys) != 0:
+            _sftp_status(sess, ch, id, _SFX_FAILURE, "rename failed")
+            ret
+        end
+        _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+        ret
+    end
+    if str.Equals(op, "fsync@openssh.com"):
+        _handle := RGetStringAsStr(r)
+        _sftp_status(sess, ch, id, SSH_FX_OK, "ok")
+        ret
+    end
+    if str.Equals(op, "statvfs@openssh.com"):
+        path := RGetStringAsStr(r)
+        phys := _sftp_join(st, path)
+        _exists := os.Exists(phys)
+        mut body := NewBuf(96)
+        BufPutUint32(body, id)
+        BufPutUint64(body, 4096 as u64)
+        BufPutUint64(body, 4096 as u64)
+        BufPutUint64(body, 1048576 as u64)
+        BufPutUint64(body, 524288 as u64)
+        BufPutUint64(body, 524288 as u64)
+        BufPutUint64(body, 65536 as u64)
+        BufPutUint64(body, 65536 as u64)
+        BufPutUint64(body, 65536 as u64)
+        BufPutUint64(body, 0 as u64)
+        BufPutUint64(body, 0 as u64)
+        BufPutUint64(body, 255 as u64)
+        mut frame := _sftp_body(_SFXP_EXTENDED_REPLY, body)
+        FreeBuf(body)
+        _sftp_send_frame(sess, ch, frame)
+        FreeBuf(frame)
+        ret
+    end
+    _sftp_status(sess, ch, id, _SFX_OP_UNSUPPORTED, "unsupported operation")
+end
+
+func _sftp_server_loop(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState):
+    mut running := true
+    until running:
+        mut frame := _sftp_read_frame(sess, ch)
+        if frame.len == 0:
+            FreeBuf(frame)
+            running = false
+            continue
+        end
+        mtype := _bget(frame.p, 0)
+        mut r := NewReader((frame.p as i64 + 1) as void*, frame.len - 1)
+        if mtype == SSH_FXP_INIT:
+            mut body := NewBuf(64)
+            BufPutUint32(body, 3 as u32)
+            BufPutStringStr(body, "posix-rename@openssh.com")
+            BufPutStringStr(body, "1")
+            BufPutStringStr(body, "fsync@openssh.com")
+            BufPutStringStr(body, "1")
+            BufPutStringStr(body, "statvfs@openssh.com")
+            BufPutStringStr(body, "2")
+            mut out := _sftp_body(SSH_FXP_VERSION, body)
+            FreeBuf(body)
+            _sftp_send_frame(sess, ch, out)
+            FreeBuf(out)
+            FreeBuf(frame)
+            continue
+        end
+        id := RGetUint32(r)
+        if mtype == SSH_FXP_OPEN:
+            _sftp_op_open(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_CLOSE:
+            _sftp_op_close(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_READ:
+            _sftp_op_read(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_WRITE:
+            _sftp_op_write(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_STAT:
+            _sftp_op_stat(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_LSTAT:
+            _sftp_op_lstat(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_FSTAT:
+            _sftp_op_fstat(sess, ch, st, id, r)
+        else if mtype == _SFXP_SETSTAT:
+            _sftp_op_setstat(sess, ch, st, id, r)
+        else if mtype == _SFXP_FSETSTAT:
+            _sftp_op_fsetstat(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_OPENDIR:
+            _sftp_op_opendir(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_READDIR:
+            _sftp_op_readdir(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_REMOVE:
+            _sftp_op_remove(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_MKDIR:
+            _sftp_op_mkdir(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_RMDIR:
+            _sftp_op_rmdir(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_REALPATH:
+            _sftp_op_realpath(sess, ch, st, id, r)
+        else if mtype == SSH_FXP_RENAME:
+            _sftp_op_rename(sess, ch, st, id, r)
+        else if mtype == _SFXP_READLINK:
+            _sftp_op_readlink(sess, ch, st, id, r)
+        else if mtype == _SFXP_SYMLINK:
+            _sftp_op_symlink(sess, ch, st, id, r)
+        else if mtype == _SFXP_EXTENDED:
+            _sftp_op_extended(sess, ch, st, id, r)
+        else:
+            _sftp_status(sess, ch, id, _SFX_OP_UNSUPPORTED, "unsupported request")
+        end
+        FreeBuf(frame)
+    end
+end
+
+func _sftpserver_run(sess &: SrvSession, ch &: SrvChannel):
+    mut st := SftpSessionState {}
+    st.root = _srv_root_abs(sess.cfg.root)
+    st.home = _srv_clean_virtual(sess.home)
+    st.handles = Vector {} as Vector<SftpFileHandle>
+    _sftp_server_loop(sess, ch, st)
+    mut i := 0
+    until i < st.handles.len():
+        mut e := st.handles.get(i)
+        if e.open:
+            _sftp_free_handle(e)
+            st.handles.set(i, e)
+        end
+        i++
+    end
+    st.handles.free()
+end

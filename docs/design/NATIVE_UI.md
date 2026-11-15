@@ -168,7 +168,7 @@ portable: the native cascade supports element, class and id selectors.
 | `link url = ...`        | another page of the app opens in the window; an `http(s)` address opens in the user's browser |
 | `font`                  | font loaded from the app's bundled assets                                                     |
 | `media condition = ...` | window size, orientation and OS dark mode                                                     |
-| `image url = ...`       | file decoded with the codecs in `std/image`                                                |
+| `image url = ...`       | file decoded with the codecs in `std/image`                                                   |
 
 ## Architecture
 

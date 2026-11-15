@@ -748,13 +748,13 @@ be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is be
 
 Plans are defined in one table in `billing.salam` (seeded defaults, editable from the admin panel; limits per 5 hours/day/week, 0 means unlimited). Daily limits reset at midnight Tehran time and weekly limits on Saturday.
 
-| Plan    | Price (toman / USD)     | Lasts   | Chat per day         | API per day         | Concurrent sessions |
-| ------- | ----------------------- | ------- | -------------------- | ------------------- | ------------------- |
-| رایگان  | free                    | forever | `AI_CHAT_DAILY` (15) | `AI_API_DAILY` (60) | 1                   |
-| آزمایشی | 300,000 / $2            | 5 hours | no limit             | no limit            | 1                   |
-| کارمندی | 3,000,000 / $20         | 30 days | 80                   | 800                 | 2                   |
-| حرفه‌ای | 6,000,000 / $40         | 30 days | 250                  | 3000                | 3                   |
-| نامحدود | tiered (see below)      | 30 days | no limit             | no limit            | 1, 2, 3, 5, or 10   |
+| Plan    | Price (toman / USD) | Lasts   | Chat per day         | API per day         | Concurrent sessions |
+| ------- | ------------------- | ------- | -------------------- | ------------------- | ------------------- |
+| رایگان  | free                | forever | `AI_CHAT_DAILY` (15) | `AI_API_DAILY` (60) | 1                   |
+| آزمایشی | 300,000 / $2        | 5 hours | no limit             | no limit            | 1                   |
+| کارمندی | 3,000,000 / $20     | 30 days | 80                   | 800                 | 2                   |
+| حرفه‌ای | 6,000,000 / $40     | 30 days | 250                  | 3000                | 3                   |
+| نامحدود | tiered (see below)  | 30 days | no limit             | no limit            | 1, 2, 3, 5, or 10   |
 
 The **نامحدود (Unlimited)** plan is a single plan with selectable concurrency tiers (shown as a select box on the plans page): 1 (30M/$200), 2 (55M/$367), 3 (75M/$500), 5 (110M/$733), or 10 (180M/$1200) concurrent sessions.
 

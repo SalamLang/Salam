@@ -145,7 +145,7 @@ check by hand.
 Each file in `content/<lang>/blog/` is one article in Markdown, published at
 `/blog/<name>/` (`18-is-salam-faster-than-c-and-rust.md` becomes
 `/blog/is-salam-faster-than-c-and-rust/`; the number only sets the order). A
-Persian article uses the same file name as its English twin, so the two pages
+Persian article uses the same filename as its English twin, so the two pages
 get each other's `hreflang` link. The file starts with a front matter block:
 
 ```
@@ -164,7 +164,7 @@ updated: 2026-12-01
 `category` must be one of the words in `blog.categories` (in `blog.txt`),
 whose labels are `blog.cat.<word>`. `updated` is optional. The body supports
 `##`/`###` headings (give every `##` an id, `## Heading {#id}`, and keep the
-ids the same in both languages; they build the contents list), paragraphs,
+IDs the same in both languages; they build the contents list), paragraphs,
 `**bold**`, `*italic*`, `` `code` ``, links, `-` and `1.` lists, pipe tables,
 `> [!NOTE]`, `> [!TIP]` and `> [!WARNING]` callouts, `---`, a few inline tags
 (`<bdi>`, `<kbd>`, `<sub>`, `<sup>`) and `{{example.name}}` on a line of its own.
@@ -199,6 +199,15 @@ and so on), so the same design works in both directions.
 `.github/workflows/website-deploy.yml` builds on every pull request that
 touches the site. On `main` it also uploads `dist/fa` to `SSH_PATH_SITE` on the
 server through `.github/actions/deploy-ssh`, using the `SSH_*` secrets.
+
+To publish both languages by hand, run `sh website/deploy.sh`. It exports the
+commit into a temporary directory, builds `fa` and `en` (the English tree with
+`site.base = /en`), mirrors the result to `/hosts/salamlang.ir` and
+`/hosts/salamlang.ir-en`, adds the `/en/` nginx location when the server lacks
+it, and checks that both URLs answer. `--ref` publishes another commit,
+`--dry-run` stops after the build, `--skip-checks` publishes the pages a failing
+content gate would otherwise hold back, and the host and credentials come from
+the environment or `website/.deploy.env` (git-ignored).
 
 The site is served from `www.salamlang.ir`; the bare `salamlang.ir` redirects
 there. On the server, nginx needs a `www` block rooted at the deploy folder and

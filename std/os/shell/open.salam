@@ -20,23 +20,9 @@ import os
 import mem
 import str
 import filepath
-import os.shell
+import os.process
 
 mut _open_last_error := ""
-
-func _set_err(msg: str):
-    _open_last_error = str.Clone(msg)
-end
-
-func _clear_err():
-    _open_last_error = ""
-end
-
-@en "LastError"
-@fa "آخرین خطا"
-pub func LastError(): str:
-    ret str.Clone(_open_last_error)
-end
 
 @en "TrashMetadata"
 @fa "فراداده سطل زباله"
@@ -58,8 +44,42 @@ pub struct TrashMetadata:
     pub note: str = ""
 end
 
-// Cross-platform helpers to open/reveal files and URLs, "open with", and best-effort trash/recycle.
-// Operations are best-effort and platform-guarded. No silent hard-delete is performed by Trash.
+
+
+
+func _system(cmd: str): int:
+    if SALAM_OS_WINDOWS:
+        mut args := Vector {} as Vector<str>
+        args.Push("/c")
+        args.Push(cmd)
+        mut p := process.Start("cmd.exe", args)
+        args.Free()
+        if p.pid <= 0:
+            ret 127
+        end
+        ret process.Wait(p)
+    else:
+        mut args := Vector {} as Vector<str>
+        args.Push("-c")
+        args.Push(cmd)
+        mut p := process.Start("/bin/sh", args)
+        args.Free()
+        if p.pid <= 0:
+            ret 127
+        end
+        ret process.Wait(p)
+    end
+end
+
+
+
+func _set_err(msg: str):
+    _open_last_error = str.Clone(msg)
+end
+
+func _clear_err():
+    _open_last_error = ""
+end
 
 func _quote_sh(s: str): str:
     if s.Len() == 0: ret str.Clone("''") end
@@ -104,6 +124,17 @@ func _quote_cmd(s: str): str:
     ret out
 end
 
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret str.Clone(_open_last_error)
+end
+
+
+// Cross-platform helpers to open/reveal files and URLs, "open with", and best-effort trash/recycle.
+// Operations are best-effort and platform-guarded. No silent hard-delete is performed by Trash.
+
+
 @en "OpenPath"
 @fa "باز کردن مسیر"
 pub func OpenPath(path: str): bool:
@@ -123,24 +154,36 @@ pub func OpenPath(path: str): bool:
         cmd := "cmd /c start \"\" ".Concat(q)
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        ok := shell.System(cmd) == 0
-        if ok: _clear_err() else _set_err("failed to open path") end
+        ok := _system(cmd) == 0
+        if ok:
+            _clear_err()
+        else:
+            _set_err("failed to open path")
+        end
         ret ok
     else SALAM_OS_MAC:
         q := _quote_sh(path)
         cmd := "open ".Concat(q)
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        ok := shell.System(cmd) == 0
-        if ok: _clear_err() else _set_err("failed to open path") end
+        ok := _system(cmd) == 0
+        if ok:
+            _clear_err()
+        else:
+            _set_err("failed to open path")
+        end
         ret ok
     else:
         q := _quote_sh(path)
         cmd := "xdg-open ".Concat(q).Concat(" >/dev/null 2>&1 || gio open ").Concat(q).Concat(" >/dev/null 2>&1 || sensible-browser ").Concat(q).Concat(" >/dev/null 2>&1")
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        ok := shell.System(cmd) == 0
-        if ok: _clear_err() else _set_err("failed to open path") end
+        ok := _system(cmd) == 0
+        if ok:
+            _clear_err()
+        else:
+            _set_err("failed to open path")
+        end
         ret ok
     end
 end
@@ -156,7 +199,7 @@ pub func OpenWith(app: str, path: str): bool:
         defer mem.Free(qa as void*)
         defer mem.Free(qp as void*)
         defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        ret _system(cmd) == 0
     else SALAM_OS_MAC:
         qa := _quote_sh(app)
         qp := _quote_sh(path)
@@ -164,7 +207,7 @@ pub func OpenWith(app: str, path: str): bool:
         defer mem.Free(qa as void*)
         defer mem.Free(qp as void*)
         defer mem.Free(cmd as void*)
-        if shell.System(cmd) == 0: ret true end
+        if _system(cmd) == 0: ret true end
         // Fallback: treat app as executable path/name
         qa2 := _quote_sh(app)
         qp2 := _quote_sh(path)
@@ -172,7 +215,7 @@ pub func OpenWith(app: str, path: str): bool:
         defer mem.Free(qa2 as void*)
         defer mem.Free(qp2 as void*)
         defer mem.Free(cmd2 as void*)
-        ret shell.System(cmd2) == 0
+        ret _system(cmd2) == 0
     else:
         qa := _quote_sh(app)
         qp := _quote_sh(path)
@@ -181,7 +224,7 @@ pub func OpenWith(app: str, path: str): bool:
         defer mem.Free(qa as void*)
         defer mem.Free(qp as void*)
         defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        ret _system(cmd) == 0
     end
 end
 
@@ -227,7 +270,7 @@ pub func Reveal(path: str): bool:
         cmd := "explorer /select,".Concat(q)
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        _r := shell.System(cmd)
+        _r := _system(cmd)
         // explorer often returns a non-zero status even on success.
         ret true
     else SALAM_OS_MAC:
@@ -235,14 +278,14 @@ pub func Reveal(path: str): bool:
         cmd := "open -R ".Concat(q)
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        ret _system(cmd) == 0
     else:
         // Best-effort: try common file managers with selection, then fall back to opening folder.
         q := _quote_sh(path)
         sel := "nautilus --select ".Concat(q).Concat(" >/dev/null 2>&1 || dolphin --select ").Concat(q).Concat(" >/dev/null 2>&1 || nemo ").Concat(q).Concat(" >/dev/null 2>&1")
         defer mem.Free(q as void*)
         defer mem.Free(sel as void*)
-        if shell.System(sel) == 0: ret true end
+        if _system(sel) == 0: ret true end
         ret OpenFolder(path)
     end
 end
@@ -304,7 +347,6 @@ pub func TrashInfo(path: str): TrashMetadata:
             original_path = str.Clone(path), supported = true, note = str.Clone("Windows Recycle Bin metadata is managed by the shell ($I/$R records); item-level metadata is not exposed by this helper.")
         }
     end
-    ret TrashMetadata { original_path = str.Clone(path), supported = false, note = str.Clone("Trash metadata not supported on this platform.") }
 end
 
 @en "Trash"
@@ -317,11 +359,11 @@ pub func Trash(path: str): bool:
         cmd := "powershell -NoProfile -Command \"Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(".Concat(q).Concat(", 'OnlyErrorDialogs', 'SendToRecycleBin')\"")
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        if shell.System(cmd) == 0: ret true end
+        if _system(cmd) == 0: ret true end
         // Fallback for directories or hosts without VB FileIO assembly behavior
         cmd2 := "powershell -NoProfile -Command \"Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(".Concat(q).Concat(", 'OnlyErrorDialogs', 'SendToRecycleBin')\"")
         defer mem.Free(cmd2 as void*)
-        ret shell.System(cmd2) == 0
+        ret _system(cmd2) == 0
     else SALAM_OS_MAC:
         // osascript move to trash
         mut esc := str.Replace(path, "\\", "\\\\")
@@ -330,14 +372,14 @@ pub func Trash(path: str): bool:
         defer mem.Free(esc2 as void*)
         cmd := "osascript -e 'tell application \"Finder\" to delete POSIX file \"".Concat(esc2).Concat("\"' >/dev/null 2>&1")
         defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        ret _system(cmd) == 0
     else:
         // Prefer gio if available, fallback to trash-put/kioclient5, otherwise fail (no silent hard-delete).
         q := _quote_sh(path)
         cmd := "gio trash ".Concat(q).Concat(" >/dev/null 2>&1 || trash-put ").Concat(q).Concat(" >/dev/null 2>&1 || kioclient5 move ").Concat(q).Concat(" trash:/ >/dev/null 2>&1")
         defer mem.Free(q as void*)
         defer mem.Free(cmd as void*)
-        ret shell.System(cmd) == 0
+        ret _system(cmd) == 0
     end
 end
 
@@ -387,7 +429,6 @@ pub func SessionKind(): str:
         mem.Free(dt as void*)
         ret str.Clone("headless-or-unknown")
     end
-    ret str.Clone("unknown")
 end
 
 @en "HasDisplaySession"
@@ -408,7 +449,7 @@ pub func OpenMail(mailto_url: str): bool:
     if str.StartsWith(mailto_url, "mailto:"):
         ret OpenURL(mailto_url)
     end
-    mut url := "mailto:".Concat(mailto_url)
+    url := "mailto:".Concat(mailto_url)
     ok := OpenURL(url)
     mem.Free(url as void*)
     ret ok

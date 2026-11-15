@@ -58,46 +58,62 @@ done
     exit 2
 }
 
-resolve_latest_tag() {
-    eff=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
-        "https://github.com/$REPO/releases/latest" 2>/dev/null) || eff=
-    case ${eff:-} in
-    */releases/tag/*)
-        printf '%s' "${eff##*/tag/}"
-        return 0
-        ;;
-    esac
-    api=https://api.github.com/repos/$REPO/releases/latest
+resolve_tags() {
+    api="https://api.github.com/repos/$REPO/releases?per_page=50"
     tok=${GH_TOKEN:-${GITHUB_TOKEN:-}}
     if [ -n "$tok" ]; then
-        body=$(curl -fsSL --retry 3 -H "Authorization: Bearer $tok" "$api") || body=
+        body=$(curl -fsSL --retry 3 -H "Authorization: Bearer $tok" -H "Accept: application/vnd.github+json" "$api") || body=
     else
-        body=$(curl -fsSL --retry 3 "$api") || body=
+        body=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" "$api") || body=
     fi
-    printf '%s' "${body:-}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+    printf '%s' "${body:-}" \
+        | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true
 }
 
+tags=
 if [ -z "$VERSION" ]; then
-    tag=$(resolve_latest_tag)
-    [ -n "$tag" ] || {
-        echo "error: could not read the latest release tag from github.com or the API" >&2
+    tags=$(resolve_tags)
+    [ -n "$tags" ] || {
+        echo "error: could not read compiler release tags from github.com or the API" >&2
         echo "       (the API allows 60 unauthenticated calls an hour per IP - set" >&2
         echo "        GH_TOKEN, or pass --version to skip the lookup entirely)" >&2
         exit 1
     }
-    VERSION=${tag#v}
 else
-    tag=v$VERSION
+    case "$VERSION" in v*) preferred="$VERSION" ;; *) preferred="v$VERSION" ;; esac
+    tags=$(printf '%s\n%s\n' "$preferred" "$(resolve_tags)" | awk 'NF && !seen[$0]++')
 fi
 
-asset="salam-${VERSION}-${SLUG}.zip"
-url="https://github.com/$REPO/releases/download/$tag/$asset"
-
-echo "seed asset : $asset ($tag)"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
+
+asset=
+tag=
+url=
+tried=
+for t in $tags; do
+    v=${t#v}
+    candidate="salam-${v}-${SLUG}.zip"
+    candidate_url="https://github.com/$REPO/releases/download/$t/$candidate"
+    tried="${tried} ${candidate}"
+    if curl -fsIL --retry 2 -o /dev/null "$candidate_url"; then
+        tag=$t
+        VERSION=$v
+        asset=$candidate
+        url=$candidate_url
+        break
+    fi
+done
+
+[ -n "$asset" ] || {
+    echo "error: no published seed asset found for slug '$SLUG'; tried:${tried}" >&2
+    exit 1
+}
+
+echo "seed asset : $asset ($tag)"
 curl -fsSL --retry 3 -o "$tmp/seed.zip" "$url"
 unzip -q "$tmp/seed.zip" -d "$tmp/x"
 

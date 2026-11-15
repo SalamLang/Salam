@@ -318,15 +318,18 @@ pub fn compose(n: &Notice, prefs: &Prefs) -> (String, String) {
 }
 
 pub fn away(app: &AppHandle) -> bool {
-    let Some(w) = app.get_webview_window("main") else { return true };
-    if !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false) || !w.is_focused().unwrap_or(false) {
+    let Some(w) = app.get_webview_window("main") else {
         return true;
-    }
+    };
+    let base = !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false) || !w.is_focused().unwrap_or(false);
     #[cfg(target_os = "macos")]
-    if app_hidden(app) {
-        return true;
+    {
+        base || app_hidden(app)
     }
-    false
+    #[cfg(not(target_os = "macos"))]
+    {
+        base
+    }
 }
 
 #[cfg(target_os = "macos")]

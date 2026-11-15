@@ -514,7 +514,7 @@ Text types, and which one to reach for:
 | ------------------------------------ | --------------------------------------------------------------------------- |
 | Text of any language                 | `str` (UTF-8 bytes, like Go's `string`)                                     |
 | One byte, e.g. `'a'`                 | `char`                                                                      |
-| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.CharAt(0) == u'س'` works)              |
+| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.CharAt(0) == u'س'` works)               |
 | Code point of one character          | `c as int` for a `uchar` (`u'س' as int` is 1587), back with `1587 as uchar` |
 | Random access by code point (UTF-32) | `str.CodePoints(s)` -> `Vector<int>`, back with `str.FromCodePoints(v)`     |
 | UTF-16 for Windows or JS interop     | `text.ToUtf16` / `text.FromUtf16` / `text.Utf16Len`                         |
@@ -560,7 +560,7 @@ independent value:
 | Call               | Result                                                                  |
 | ------------------ | ----------------------------------------------------------------------- |
 | `x.Copy()`         | New storage for every container `x` holds directly; elements are shared |
-| `x.DeepCopy()`    | Fully independent copy, recursing through structs, enums and containers |
+| `x.DeepCopy()`     | Fully independent copy, recursing through structs, enums and containers |
 | `v.Copy(start)`    | Vector or str from `start` to the end                                   |
 | `v.Copy(s, count)` | At most `count` items from `s`                                          |
 | `v.Copy(s, n, st)` | Every `st`-th item; a negative `st` walks backwards (Vector only)       |

@@ -149,8 +149,8 @@ for f in "$PAGES"/*.salam; do
         /^(error|\[[0-9-]+ [0-9:]+\])/ { exit }
         { print }
     ' "$work/native-dump.log" >"$work/native.salam"
-    if ! grep -q '__salam_page' "$work/native.salam"; then
-        say "ERROR $name (no native program: $(head -1 "$work/native-dump.log"))"
+    if ! grep -q '__salam_page' "$work/native.salam" || grep -q 'build aborted' "$work/native-dump.log"; then
+        say "ERROR $name (no native program: $(grep -m1 "^error" "$work/native-dump.log" || head -1 "$work/native-dump.log"))"
         over=$((over + 1))
         continue
     fi

@@ -28,10 +28,15 @@ mut _sc_site_mask := Vector {} as Vector<i64>
 mut _sc_site_comp := Vector {} as Vector<int>
 mut _sc_runs := 0
 mut _sc_trace_state := 0
+mut _sc_built := 0
 mut _sc_invalid := false
 mut _sc_match := Vector {} as Vector<int>
 mut _sc_touch_comp := Vector {} as Vector<int>
 mut _sc_touch_slot := Vector {} as Vector<int>
+mut _sc_touch_mask := Vector {} as Vector<int>
+mut _sc_vs_site := Vector {} as Vector<int>
+mut _sc_vs_comp := Vector {} as Vector<int>
+mut _sc_vs_mask := Vector {} as Vector<int>
 mut _sc_slot_next := Vector {} as Vector<int>
 mut _sc_slot_free_c := Vector {} as Vector<int>
 mut _sc_slot_free_s := Vector {} as Vector<int>
@@ -145,10 +150,14 @@ func _sc_reset():
     _sc_words = 0
     _sc_site_mask.Clear()
     _sc_site_comp.Clear()
+    _sc_vs_site.Clear()
+    _sc_vs_comp.Clear()
+    _sc_vs_mask.Clear()
     _sc_runs = 0
     _sc_invalid = false
     _sc_touch_comp.Clear()
     _sc_touch_slot.Clear()
+    _sc_touch_mask.Clear()
     _sc_slot_next.Clear()
     _sc_slot_free_c.Clear()
     _sc_slot_free_s.Clear()
@@ -555,6 +564,7 @@ func _sc_rerun(id: int):
     fn := _sc[id].fn
     fn(Builder {})
     _sc_cur = -1
+    _sc_built += _bd.nodes.Len() - nbefore
     _sc_match = Vector {} as Vector<int>
     _e.dom = _bd
     _bd = _Dom {}
@@ -654,6 +664,19 @@ func _sc_rerun(id: int):
     _sc_runs++
 end
 
+func _sc_owner_slot(id: int, comp: int): int:
+    mut p := id
+    mut guard := 0
+    until p >= 0 and guard < 100000:
+        guard++
+        if _sc[p].comp == comp and _sc[p].slot >= 0:
+            ret _sc[p].slot
+        end
+        p = _sc[p].parent
+    end
+    ret -1
+end
+
 func _sc_depth(id: int): int:
     mut n := 0
     mut p := _sc[id].parent
@@ -727,9 +750,26 @@ func _sc_update():
         end
         if not hit and s.slot >= 0:
             repeat _sc_touch_comp.Len() in k:
-                if _sc_touch_comp[k] == s.comp and _sc_touch_slot[k] == s.slot:
+                if _sc_touch_mask[k] == -1 and _sc_touch_comp[k] == s.comp and _sc_touch_slot[k] == s.slot:
                     hit = true
                     reason = "instance state"
+                end
+            end
+        end
+        if not hit and s.site >= 0 and _sc_touch_comp.Len() > 0:
+            repeat _sc_vs_site.Len() in v:
+                if hit or _sc_vs_site[v] != s.site:
+                    continue
+                end
+                oslot := _sc_owner_slot(i, _sc_vs_comp[v])
+                if oslot < 0:
+                    continue
+                end
+                repeat _sc_touch_comp.Len() in k:
+                    if _sc_touch_comp[k] == _sc_vs_comp[v] and _sc_touch_slot[k] == oslot and (_sc_touch_mask[k] & _sc_vs_mask[v]) != 0:
+                        hit = true
+                        reason = "instance variable"
+                    end
                 end
             end
         end
@@ -742,6 +782,7 @@ func _sc_update():
     end
     _sc_touch_comp.Clear()
     _sc_touch_slot.Clear()
+    _sc_touch_mask.Clear()
     if dirty.Len() == 0:
         ret
     end
@@ -801,7 +842,31 @@ pub func TouchInstance(comp: int, slot: int):
     end
     _sc_touch_comp.Push(comp)
     _sc_touch_slot.Push(slot)
+    _sc_touch_mask.Push(-1)
     _e.dirty_view = true
+end
+
+@en "TouchInstanceVars"
+@fa "لمس متغیرهای نمونه"
+pub func TouchInstanceVars(comp: int, slot: int, mask: int):
+    if _sc_trace():
+        printerrln "ui trace: touch comp " + comp + " slot " + slot + " mask " + mask + (_sc_cur >= 0 ? " ignored while rendering" : "")
+    end
+    if _sc_cur >= 0:
+        ret
+    end
+    _sc_touch_comp.Push(comp)
+    _sc_touch_slot.Push(slot)
+    _sc_touch_mask.Push(mask)
+    _e.dirty_view = true
+end
+
+@en "ScopeVars"
+@fa "متغیرهای دامنه"
+pub func ScopeVars(site: int, comp: int, mask: int):
+    _sc_vs_site.Push(site)
+    _sc_vs_comp.Push(comp)
+    _sc_vs_mask.Push(mask)
 end
 
 @en "Invalidate"
@@ -809,6 +874,12 @@ end
 pub func Invalidate():
     _sc_invalid = true
     _e.dirty_view = true
+end
+
+@en "ScopeNodes"
+@fa "شمار گره های دامنه"
+pub func ScopeNodes(): int:
+    ret _sc_built
 end
 
 @en "ScopeRuns"

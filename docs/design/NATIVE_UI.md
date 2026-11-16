@@ -407,20 +407,28 @@ that builds a run of sibling elements, `b.Scope(site, (b: ui.Builder): ... end)`
 so the runtime can call it again on its own later.
 
 - The page itself is site 0.
-- Every component instance is one scope. Components are still expanded
-  inline, but the expanded body is wrapped in its own closure, and the whole
-  instance re-runs when anything it reads changes, as a React component does.
-  Inside a component there are no smaller scopes.
-- Outside components, an element whose own attributes or text read state is a
-  scope, an `if` whose condition reads state is a scope, and an `each` whose
-  collection reads state is a scope (the list scope). An element that reads
-  only loop variables is not a scope.
+- Every component instance that keeps state is one scope. Components are still
+  expanded inline, but the expanded body is wrapped in its own closure. The
+  instance scope re-runs only for the reads that no smaller scope covers:
+  values it computes for each run (a variable that is derived and also read
+  by a handler), and elements, conditions or collections that read such a
+  value.
+- An element whose own attributes or text read state is a scope, an `if`
+  whose condition reads state is a scope, and an `each` whose collection
+  reads state is a scope (the list scope). This holds inside components too.
+  An element that reads only loop variables is not a scope.
 
 Each site gets a dependency set at compile time: the mutable globals read by
 its own attributes, text, conditions and collections, not by nested scopes.
 Calls to functions of the same program count as reads of whatever those
 functions read. Component parameters are substituted into the body, so a
-parameter bound to `total` makes the instance depend on `total`.
+parameter bound to `total` makes the scopes that read it depend on `total`.
+A scope inside a component also depends on the variables of that component
+(or of an enclosing one, through a parameter) that it reads: each written
+variable of a component has a bit, and `ui.ScopeVars(site, comp, mask)`
+registers which bits the scope reads. The scope belongs to the instance that
+encloses it, so a write in one instance does not wake the same scope of
+another instance.
 
 ### Change marks
 
@@ -431,8 +439,10 @@ program that may write it: assignments, compound assignments, `++` and `--`,
 method calls other than the read only ones (`len`, `get`, `has`, ...), passing
 it to a `&:` parameter of a program function, and passing it to a function of
 another package (which cannot be checked, so it is assumed to write). A write
-to a component's state variable becomes `ui.TouchInstance(component, instance)`
-instead, so only that instance re-runs; a write to an instance variable gets no
+to a component's state variable becomes
+`ui.TouchInstanceVars(component, instance, bit)` instead, so only the scopes of
+that instance that read that variable re-run (`ui.TouchInstance` still marks
+all variables of an instance); a write to an instance variable gets no
 mark at all. A mark costs one OR into a global;
 handlers that change nothing run no extra code.
 

@@ -703,6 +703,20 @@ jobs:
           sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
             -- --libpath="$GITHUB_WORKSPACE/maclibs"
           ./salam version
+      - name: Cross-build an Intel seed compiler
+        continue-on-error: true
+        run: |
+          set -eu
+          export SALAM_STD="$PWD/std"
+          mkdir -p intel-seed
+          ./salam build --backend=c compiler/main.salam --target=x86_64-apple-darwin -o intel-seed/salam --log-level=warn
+          file intel-seed/salam
+      - name: Upload the Intel seed compiler
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-macos-intel-seed
+          path: intel-seed/salam
       - name: Verify salam is self-contained (no Homebrew dylibs)
         run: |
           set -eu
@@ -771,6 +785,185 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-macos
+          path: salam
+  build-macos-intel:
+    needs: [changes, build-macos]
+    continue-on-error: true
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for macOS (Intel)
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore Homebrew downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-intel-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            brew-dl-intel-${{ runner.arch }}-
+      - name: Install dependencies (static LLVM)
+        id: brewdeps
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
+          }
+          mkdir -p "$HOME/Library/Caches/Homebrew/downloads"
+          PKGS_BEFORE=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+
+          brew untap aws/tap || true
+          brew install llvm@22 ccache
+
+          brew link --overwrite --force llvm@22 \
+            || echo "::warning::brew could not link llvm@22; the absolute prefix below still governs the build"
+
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+
+          LLVM_VER="$("$LLVM_PREFIX/bin/llvm-config" --version)"
+          echo "llvm-config: $LLVM_VER  ($LLVM_PREFIX)"
+          case "$LLVM_VER" in
+          22.*) ;;
+          *)
+              echo "::error::expected LLVM 22 from the llvm@22 keg, got $LLVM_VER"
+              exit 1
+              ;;
+          esac
+
+          if command -v llvm-config >/dev/null 2>&1; then
+              BARE_VER="$(llvm-config --version 2>/dev/null || echo unknown)"
+              echo "bare llvm-config on PATH: $BARE_VER"
+              case "$BARE_VER" in
+              22.*) ;;
+              *) echo "::warning::a bare llvm-config on PATH is $BARE_VER, not 22" ;;
+              esac
+          fi
+
+          PKGS_AFTER=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'download cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'download cache changed; a fresh entry will be saved'
+          fi
+      - name: Save Homebrew downloads
+        if: steps.brewdeps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-intel-${{ runner.arch }}-${{ github.run_id }}
+      - name: Cache ccache (macOS)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-macos-intel-${{ github.run_id }}
+          restore-keys: |
+            ccache-macos-intel-
+      - name: Download the Intel seed compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-macos-intel-seed
+          path: seed
+      - name: Put the seed compiler on PATH
+        run: |
+          set -eu
+          chmod +x seed/salam
+          echo "$PWD/seed" >> "$GITHUB_PATH"
+          seed/salam version
+
+      - name: Build salam for macOS (embedded static LLVM)
+        run: |
+          set -eu
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          sh std/llvm/native/build.sh \
+            --llvm-config "$LLVM_PREFIX/bin/llvm-config" --out "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE/maclibs"
+          zstd_a="$(brew --prefix zstd)/lib/libzstd.a"
+          [ -f "$zstd_a" ] || {
+            echo "::error::no static libzstd at $zstd_a - the only other thing -lzstd" >&2
+            echo "  could resolve to is the dylib, which the check below rejects." >&2
+            exit 1
+          }
+          cp "$zstd_a" "$GITHUB_WORKSPACE/maclibs/"
+          sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
+            -- --libpath="$GITHUB_WORKSPACE/maclibs"
+          ./salam version
+      - name: Verify salam is self-contained (no Homebrew dylibs)
+        run: |
+          set -eu
+          echo "dylib dependencies of salam:"
+          otool -L salam
+          bad=$(otool -L salam | awk 'NR > 1 { print $1 }' \
+            | grep -E '^(/opt/homebrew/|/usr/local/(opt|Cellar|lib)/|.*/Cellar/)' || true)
+          if [ -n "$bad" ]; then
+            echo "ERROR: salam links non-system dylibs that will not exist on a user's Mac:"
+            echo "$bad"
+            echo ""
+            echo "These are Homebrew Cellar paths, usually versioned. dyld aborts at"
+            echo "startup on any machine without that exact formula version installed."
+            echo "Either drop the library, or link its"
+            echo "static archive instead of the dylib."
+            exit 1
+          fi
+          echo "OK: salam only links macOS system libraries."
+      - name: Smoke-test the embedded LLVM backend
+        run: |
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
+          ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
+      - name: Validate test suite (release gate)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        run: |
+          SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh exec errors layout llvm 2>&1 | tee /tmp/tests.log || true
+          grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
+            || { echo "::error::macOS test suite failed - blocking release"; exit 1; }
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-macos-x86_64"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$DIST/sysroots/wasm32-wasi"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for macOS - embedded LLVM toolchain."
+            echo ""
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam llvm  app.salam --jit      (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app     (native binary; uses the system"
+            echo "                                      clang/ld that ship with Xcode CLT)"
+            echo ""
+            echo "Note: macOS cannot be a fully-static, self-contained cross-compiler."
+            echo "Apple does not permit statically linking libSystem and the macOS SDK"
+            echo "is not redistributable, so linking uses Apple's toolchain. Cross-"
+            echo "compiling FROM Linux/Windows TO macOS is likewise not supported."
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-macos-x86_64.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-macos-x86_64.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-macos-x86_64.zip" "salam-${VERSION}-macos-x86_64.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-macos-intel-zip
+          path: |
+            salam-*-macos-x86_64.zip
+            salam-*-macos-x86_64.tar.gz
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-macos-intel
           path: salam
   build-windows:
     needs: changes
@@ -2147,6 +2340,7 @@ jobs:
       [
         build-linux,
         build-macos,
+        build-macos-intel,
         build-windows,
         build-windows-i686,
         build-windows-arm64,
@@ -2227,6 +2421,12 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-macos-zip
+          path: ./release
+      - name: Download macOS Intel archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-macos-intel-zip
           path: ./release
       - name: Download Windows i686 binary
         continue-on-error: true

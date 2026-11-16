@@ -1,0 +1,228 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import testing
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lo "../sal_layout/sal_layout.salam"
+
+quiet := lg.New(lg.LOG_OFF, false)
+
+func build(source_text: str, compact: bool): str:
+    mut sf := src.New()
+    sf.path = "<test>"
+    sf.text = source_text
+    sf.len = str.Len(source_text)
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew("<test>")
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", Vector {} as Vector<str>)
+    _ck := cc.PruneProgram(a, quiet, "<test>", table, prog)
+    _eerr := lo.Expand(quiet, pack, table, a, prog, "")
+    mut s := sm.New(quiet, "<test>", lp.Code(pack))
+    sm.SetCc(s, table)
+    _sok := sm.Run(s, a, prog)
+    lb := lo.FindLayout(a, prog)
+    mut diag := dg.NewDefault(2, false, 6)
+    r := lo.Generate(quiet, diag, "<test>", a, lb, compact, lp.Code(pack))
+    dg.Free(diag)
+    sm.Free(s)
+    at.FreeAst(a)
+    ret lo.Document(r, true, "", "", compact)
+end
+
+func is_space(c: str): bool:
+    ret str.Equals(c, " ") or str.Equals(c, "\n") or str.Equals(c, "\t") or str.Equals(c, "\r")
+end
+
+func is_name_char(c: str): bool:
+    if str.Len(c) != 1:
+        ret false
+    end
+    ok := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:."
+    ret str.IndexOf(ok, c) >= 0
+end
+
+func is_alpha(c: str): bool:
+    ret str.Len(c) == 1 and str.IndexOf("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", c) >= 0
+end
+
+func check_html(h: str): str:
+    n := str.Len(h)
+    mut i := 0
+    mut tags := 0
+    until i < n:
+        c := str.Substr(h, i, 1)
+        if not str.Equals(c, "<"):
+            i++
+            continue
+        end
+        if i + 1 >= n:
+            ret "stray '<' at the end"
+        end
+        c1 := str.Substr(h, i + 1, 1)
+        if str.Equals(c1, "!") or str.Equals(c1, "/"):
+            e := str.IndexOf(str.Substr(h, i, n - i), ">")
+            if e < 0:
+                ret "unterminated markup at " + str.FromInt(i)
+            end
+            i += e + 1
+            continue
+        end
+        if not is_alpha(c1):
+            ret "bad tag start at " + str.FromInt(i)
+        end
+        mut j := i + 1
+        until j < n and is_name_char(str.Substr(h, j, 1)):
+            j++
+        end
+        tag := str.Lower(str.Substr(h, i + 1, j - i - 1))
+        tags++
+        mut seen := Vector {} as Vector<str>
+        mut closed := false
+        until j < n and not closed:
+            until j < n and is_space(str.Substr(h, j, 1)):
+                j++
+            end
+            if j >= n:
+                ret "unterminated tag <" + tag + ">"
+            end
+            ch := str.Substr(h, j, 1)
+            if str.Equals(ch, ">"):
+                j++
+                closed = true
+                continue
+            end
+            if str.Equals(ch, "/"):
+                j++
+                continue
+            end
+            k := j
+            until j < n and is_name_char(str.Substr(h, j, 1)):
+                j++
+            end
+            name := str.Lower(str.Substr(h, k, j - k))
+            if str.Len(name) == 0:
+                ret "attribute without a name in <" + tag + "> near '" + str.Substr(h, k, 12) + "'"
+            end
+            if not is_alpha(str.Substr(name, 0, 1)):
+                ret "bad attribute name '" + name + "' in <" + tag + ">"
+            end
+            mut d := 0
+            until d < seen.Len():
+                if str.Equals(seen.Get(d), name):
+                    ret "duplicate attribute '" + name + "' in <" + tag + ">"
+                end
+                d++
+            end
+            seen.Push(name)
+            if j < n and str.Equals(str.Substr(h, j, 1), "="):
+                j++
+                if j >= n:
+                    ret "missing value for '" + name + "'"
+                end
+                q := str.Substr(h, j, 1)
+                if str.Equals(q, "\"") or str.Equals(q, "'"):
+                    rest := str.Substr(h, j + 1, n - j - 1)
+                    e := str.IndexOf(rest, q)
+                    if e < 0:
+                        ret "unterminated value for '" + name + "' in <" + tag + ">"
+                    end
+                    j += e + 2
+                    if j < n and not is_space(str.Substr(h, j, 1)) and not str.Equals(str.Substr(h, j, 1), ">") and not str.Equals(str.Substr(h, j, 1), "/"):
+                        ret "no space after the value of '" + name + "' in <" + tag + ">"
+                    end
+                else:
+                    ret "unquoted value for '" + name + "' in <" + tag + ">"
+                end
+            end
+        end
+        if not closed:
+            ret "unterminated tag <" + tag + ">"
+        end
+        if str.Equals(tag, "style") or str.Equals(tag, "script"):
+            rest := str.Substr(h, j, n - j)
+            e := str.IndexOf(rest, "</" + tag)
+            if e < 0:
+                ret "unterminated <" + tag + ">"
+            end
+            j += e
+        end
+        i = j
+    end
+    ret ""
+end
+
+func valid(source_text: str):
+    h1 := build(source_text, true)
+    e1 := check_html(h1)
+    testing.AssertMsg(str.Len(e1) == 0, e1 + " in: " + h1)
+    h2 := build(source_text, false)
+    e2 := check_html(h2)
+    testing.AssertMsg(str.Len(e2) == 0, e2 + " in: " + h2)
+end
+
+func validator_self_cases:
+    testing.AssertEqStr(check_html(`<p class="a" id='b'>x</p>`), "")
+    testing.AssertEqStr(check_html(`<h1 ="1">x</h1>`), "attribute without a name in <h1> near '=\"1\">x</h1>'")
+    testing.AssertEqStr(check_html(`<p a="1" A="2">x</p>`), "duplicate attribute 'a' in <p>")
+    testing.AssertEqStr(check_html(`<p 1a="1">x</p>`), "bad attribute name '1a' in <p>")
+    testing.AssertEqStr(check_html(`<input required disabled>`), "")
+    testing.AssertEqStr(check_html(`<input type="text"required>`), "no space after the value of 'type' in <input>")
+    testing.AssertEqStr(check_html("<p"), "unterminated tag <p>")
+end
+
+func heading_cases:
+    valid("page:\n    heading: size = 1 content = \"A\" end\n    heading: size = 6 content = \"B\" end\nend\n")
+    valid("page:\n    heading: level = 2 content = \"A\" end\nend\n")
+    valid("page:\n    heading: content = \"A\" end\nend\n")
+    valid("page:\n    heading: size = 9 content = \"A\" end\nend\n")
+end
+
+func page_meta_cases:
+    valid(
+        "page:\n    title = \"T\"\n    lang = \"english\"\n    dir = \"left to right\"\n    author = \"Ali\"\n" + "    description = \"d\"\n    keywords = \"a, b\"\n    theme color = #2563eb\n" + "    color scheme = \"light dark\"\n    robots = \"noindex\"\n    canonical = \"https://x.org/\"\n" + "    icon = \"/i.png\"\n    refresh = 30\n    og title = \"O\"\n    twitter card = \"summary\"\n" + "    viewport = \"width=device-width\"\n    charset = \"utf-8\"\n    paragraph: content = \"x\" end\nend\n"
+    )
+end
+
+func element_cases:
+    valid(
+        "page:\n    title = \"T\"\n    header: background = #2563eb color = \"white\" padding = 24px\n" + "        heading: size = 1 content = \"W\" end\n    end\n" + "    link: source = \"/p\" content = \"go\" end\n" + "    image: source = \"/i.png\" alt = \"a\" end\n" + "    input: type = \"text\" required = true disabled = false placeholder = \"p\" end\n" + "    button: hidden = true content = \"b\" end\n" + "    paragraph: id = \"a\" class = \"b\" content = \"c\" end\n" + "    table: row: column: content = \"x\" end end end\n" + "    list: item: content = \"i\" end end\n    box: tabindex = 1 role = \"main\" content = \"d\" end\nend\n"
+    )
+end
+
+func main:
+    i18.SetLang("en")
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+    validator_self_cases()
+    heading_cases()
+    page_meta_cases()
+    element_cases()
+    ret testing.Summary()
+end

@@ -52,6 +52,7 @@ shard_list() {
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
 "$SALAM" run website/check-std-coverage.salam --no-color --log-level=error
 "$SALAM" run website/check-code-words.salam --no-color --log-level=error
+sh website/check-quoted-sizes.sh
 
 jobs=$(nproc 2>/dev/null || echo 4)
 if [ "$examples" != skip ]; then

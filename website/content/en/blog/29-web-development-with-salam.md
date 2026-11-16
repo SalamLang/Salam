@@ -14,16 +14,16 @@ This article covers the whole path: a static page, what the compiler checks, com
 
 ## A first page {#first-page}
 
-A `page:` block is a tree. Each element opens with its name and a colon and closes with `end`; attributes and CSS properties are written inside it as `name = value` pairs, with no commas. Constants declared above the page can be used in any value, and a `component` is a reusable piece of page with parameters:
+A `page:` block is a tree. Each element opens with its name and a colon and closes with `end`; attributes and style properties are written inside it as `name = value` pairs, with no commas. Constants declared above the page can be used in any value, and a `component` is a reusable piece of page with parameters:
 
 ```salam
 const BRAND := "#0f766e"
 
 component Feature(name, text):
     box:
-        padding = "16px"
-        border = "1px solid #e2e8f0"
-        border radius = "12px"
+        padding = 16px
+        border = 1px, solid, #e2e8f0
+        radius = 12px
         heading: size = 3 content = name color = BRAND end
         paragraph: content = text end
     end
@@ -31,28 +31,27 @@ end
 
 page:
     title = "Acme Notes"
-    global: selector = "body" margin = "0" font family = "system-ui, sans-serif" end
     header:
         background = BRAND
-        color = "white"
-        padding = "24px"
+        color = white
+        padding = 24px
         heading: size = 1 content = "Acme Notes" end
         nav:
-            link: url = "/" content = "Home" color = "white" end
-            link: url = "/pricing" content = "Pricing" color = "white" margin = "0 12px" end
+            link: url = "/" content = "Home" color = white end
+            link: url = "/pricing" content = "Pricing" color = white margin = 0, 12px end
         end
     end
     main:
-        padding = "24px"
-        display = "grid"
-        grid template columns = "repeat(auto-fit, minmax(220px, 1fr))"
-        gap = "16px"
+        padding = 24px
+        layout = grid
+        columns = 1fr, 1fr, 1fr
+        gap = 16px
         Feature: name = "Fast" text = "Opens in a blink." end
         Feature: name = "Private" text = "Your notes stay on your device." end
         Feature: name = "Bilingual" text = "Write in English or Persian." end
     end
     footer:
-        padding = "24px"
+        padding = 24px
         paragraph: content = "Built with Salam" end
     end
 end
@@ -117,7 +116,7 @@ body {
 .e {
   padding: 24px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 16px;
 }
 .f {
@@ -162,7 +161,7 @@ The checks go further than names. Elements are checked against where they may ap
 
 ## Readable names for HTML and CSS {#names}
 
-The page language uses readable names where HTML is terse: `paragraph`, `heading` with a `size`, `list` and `item`, `ordered list`, `text area`, `block quote`. The HTML tag names work too (`div`, `p`, `a`, `img`, `li`), so you can write whichever you know. Some names depend on context: inside a `table`, `header`, `main` and `footer` become `thead`, `tbody` and `tfoot`, and `column` is a header cell in a header row and a data cell elsewhere. CSS properties are written with spaces instead of dashes (`border radius`, `font family`), and a prefix such as `hover` or `focus` applies a style in that state.
+The page language uses readable names where HTML is terse: `paragraph`, `heading` with a `size`, `list` and `item`, `ordered list`, `text area`, `block quote`. The HTML tag names work too (`div`, `p`, `a`, `img`, `li`), so you can write whichever you know. Some names depend on context: inside a `table`, `header`, `main` and `footer` become `thead`, `tbody` and `tfoot`, and `column` is a header cell in a header row and a data cell elsewhere. Style properties come from the page language's own vocabulary, with spaces in the names (`radius`, `font size`), and a prefix such as `hover` or `focus` applies a style in that state.
 
 Lessons [25](/learn/page/text/) to [30](/learn/page/head/) teach the elements group by group: text, page structure, media, tables, forms, and the document head with scripts and global attributes. Lessons [31](/learn/css/basics/) to [38](/learn/css/more/) do the same for CSS, from the box model through [layout with flex and grid](/learn/css/layout/), [responsive pages](/learn/css/responsive/) and [animation](/learn/css/motion/).
 
@@ -171,9 +170,9 @@ Every name also has a Persian spelling, and a page written in Persian is right t
 ```salam
 بخش ویژگی(نام، شرح):
     جعبه:
-        فاصله داخلی = "16px"
-        کادر = "1px solid #e2e8f0"
-        گردی کادر = "12px"
+        فاصله = 16px
+        کادر = 1px، توپر، #e2e8f0
+        گردی = 12px
         سرتیتر: اندازه = ۳ محتوا = نام پایان
         پاراگراف: محتوا = شرح پایان
     پایان
@@ -193,7 +192,7 @@ It builds to `<html lang="fa" dir="rtl">` with the same generated classes. Logic
 
 A `component` is defined once and used like a new element. Its parameters are set like attributes, and a `content: end` line inside it marks a slot where whatever you nest at the use site lands. To share components across pages, put them in their own file and write `include = "parts.salam"` at the top of the page.
 
-Components keep the generated CSS small, because two uses with identical styles share a class. They also bring one rule worth knowing: if two elements carry the same `class` but different styles, the compiler stops with error E136 rather than letting one silently override the other. Leave `class` off styled elements, or style a shared class once with a `global` rule.
+Components keep the generated CSS small, because two uses with identical styles share a class. They also bring one rule worth knowing: if two elements carry the same `class` but different styles, the compiler stops with error E136 rather than letting one silently override the other. Leave `class` off styled elements.
 
 ## Making pages interactive {#interactive}
 

@@ -11,6 +11,7 @@
 (integer) @number
 (float) @number.float
 (dimension) @number
+(color_literal) @constant
 (boolean) @boolean
 (null) @constant.builtin
 (this) @variable.builtin
@@ -56,7 +57,7 @@
 ["mut" "ناپایا" "const" "پایا" "pub" "همگانی" "inline" "درخط" "noinline" "نادرخط" "pure" "ناب" "noret" "نابرگشت" "deprecated" "بی‌کاره" "extern" "درون‌داد" "export" "برون‌داد" "static" "ایستا"] @keyword.modifier
 ["struct" "ساختار" "enum" "جداشمار" "interface" "میانجی" "type" "گونه" "impl" "کاربست" "on" "بر" "page" "component" "dyn" "use" "شامل"] @keyword.type
 ["end" "پایان" "defer" "دیرکن" "as" "برگردان"] @keyword
-["and" "و" "or" "یا" "not" "وارونه" "eq" "برابر" "neq" "نابرابر" "lt" "کوچکتر" "gt" "بزرگتر" "lte" "کوچکتربرابر" "gte" "بزرگتربرابر"] @keyword.operator
+["and" "و" "or" "یا" "not" "وارونه" "برابر" "نابرابر" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"] @keyword.operator
 ["print" "چاپ" "println" "سرچاپ" "printerr" "نادرست‌چاپ" "printerrln" "نادرست‌سرچاپ" "input" "ورودی"] @function.builtin
 
 ["+" "-" "*" "/" "%" "**" "^^" "==" "!=" "<" ">" "<=" ">=" "&&" "||" "!" "~" "&" "|" "^" "<<" ">>" "=" ":=" "+=" "-=" "*=" "/=" "%=" "^^=" "**=" "&=" "|=" "^=" "<<=" ">>=" "++" "--" "?"] @operator

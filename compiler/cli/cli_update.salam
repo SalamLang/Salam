@@ -24,7 +24,7 @@ else:
 end
 
 const UPD_RELEASES := "https://github.com/SalamLang/Salam/releases"
-const UPD_API := "https://api.github.com/repos/SalamLang/Salam/releases/latest"
+const UPD_API := "https://api.github.com/repos/SalamLang/Salam/releases?per_page=30"
 const UPD_RAW := "https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/"
 const UPD_AGENT := "SalamUpdate/1.0"
 
@@ -190,24 +190,42 @@ func upd_tag_after(s: str, marker: str): str:
     ret str.Substr(s, start, e - start)
 end
 
-func upd_json_tag(body: str): str:
-    at := str.Find(body, "\"tag_name\"")
-    if at < 0:
-        ret ""
+func upd_is_compiler_tag(tag: str): bool:
+    if str.Len(tag) == 0 or str.Contains(tag, "nightly"):
+        ret false
     end
-    colon := str.IndexFrom(body, ":", at)
-    if colon < 0:
-        ret ""
+    if str.StartsWith(tag, "v") or str.StartsWith(tag, "V"):
+        core := str.Substr(tag, 1, str.Len(tag) - 1)
+        ret upd_valid_version(core)
     end
-    q1 := str.IndexFrom(body, "\"", colon)
-    if q1 < 0:
-        ret ""
+    ret upd_valid_version(tag)
+end
+
+func upd_first_compiler_tag(body: str): str:
+    mut from := 0
+    until true:
+        at := str.IndexFrom(body, "\"tag_name\"", from)
+        if at < 0:
+            ret ""
+        end
+        colon := str.IndexFrom(body, ":", at)
+        if colon < 0:
+            ret ""
+        end
+        q1 := str.IndexFrom(body, "\"", colon)
+        if q1 < 0:
+            ret ""
+        end
+        q2 := str.IndexFrom(body, "\"", q1 + 1)
+        if q2 < 0:
+            ret ""
+        end
+        tag := str.Substr(body, q1 + 1, q2 - q1 - 1)
+        if upd_is_compiler_tag(tag):
+            ret tag
+        end
+        from = q2 + 1
     end
-    q2 := str.IndexFrom(body, "\"", q1 + 1)
-    if q2 < 0:
-        ret ""
-    end
-    ret str.Substr(body, q1 + 1, q2 - q1 - 1)
 end
 
 func upd_headers(): HashMap<str, str>:
@@ -228,7 +246,7 @@ func upd_latest_native(why &: str): str:
     r := http.GetWith(UPD_RELEASES + "/latest", upd_headers())
     if r.status >= 300 and r.status < 400:
         tag := upd_tag_after(http.GetHeader(r, "Location"), "/releases/tag/")
-        if str.Len(tag) > 0:
+        if upd_is_compiler_tag(tag):
             ret tag
         end
     end
@@ -243,7 +261,7 @@ func upd_latest_native(why &: str): str:
     end
     a := http.GetWith(UPD_API, ah)
     if a.status == 200:
-        tag := upd_json_tag(a.body)
+        tag := upd_first_compiler_tag(a.body)
         if str.Len(tag) > 0:
             ret tag
         end

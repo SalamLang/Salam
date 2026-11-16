@@ -738,7 +738,7 @@ candidate_tags() {
     printf '%s\n' "$_tags" |
         tr -d ' \011\015' |
         grep -v 'nightly' |
-        grep '.' |
+        grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+' |
         awk '!seen[$0]++' |
         head -n "$MAX_TAGS" || true
 }

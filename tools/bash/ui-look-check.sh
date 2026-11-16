@@ -1,7 +1,7 @@
 #!/bin/sh
 # Same-look check: renders each page of a directory twice, once as a web page
-# in headless Chromium and once as a native window (--ui=native, headless
-# window backend, `shot`), then compares the two PNGs pixel by pixel.
+# in headless Chromium and once through the native renderer (the program that
+# --ui=native generates, drawn by ui.RenderPage into a PNG), then compares the two PNGs pixel by pixel.
 #
 # Usage:
 #   tools/bash/ui-look-check.sh --salam PROG [--pages DIR] [--out DIR]
@@ -141,13 +141,36 @@ for f in "$PAGES"/*.salam; do
         continue
     fi
 
-    if ! (cd "$work" && "$SALAM" build "$f" --ui=native --output="$work/app" --no-color --log-level=error) >"$work/native-build.log" 2>&1; then
+    (cd "$work" && SALAM_NATIVE_DUMP=1 "$SALAM" build "$f" --ui=native --output="$work/dump-only" --no-color --log-level=error) >"$work/native-dump.log" 2>&1
+    awk '
+        /^func main:/ { skipping = 1; next }
+        skipping && /^end/ { skipping = 0; next }
+        skipping { next }
+        /^(error|\[[0-9-]+ [0-9:]+\])/ { exit }
+        { print }
+    ' "$work/native-dump.log" >"$work/native.salam"
+    if ! grep -q '__salam_page' "$work/native.salam"; then
+        say "ERROR $name (no native program: $(head -1 "$work/native-dump.log"))"
+        over=$((over + 1))
+        continue
+    fi
+    {
+        echo 'import gui.paint'
+        echo 'import os'
+        sed -E 's/^( *__salam_touched_[0-9]+) \|= 0$/\1 = 0/' "$work/native.salam"
+        echo 'func main:'
+        echo "    cv := ui.RenderPage((): ret ui.NoPatches() end, (__salam_b: ui.Builder): __salam_page(__salam_b) end, $W, $H)"
+        echo '    if not paint.SavePNG(cv, os.Env("LOOK_SHOT")):'
+        echo '        println "cannot write the screenshot"'
+        echo '    end'
+        echo 'end'
+    } >"$work/native-shot.salam"
+    if ! (cd "$work" && "$SALAM" build "$work/native-shot.salam" --output="$work/app" --no-color --log-level=error) >"$work/native-build.log" 2>&1; then
         say "ERROR $name (native build failed: $(head -1 "$work/native-build.log"))"
         over=$((over + 1))
         continue
     fi
-    printf 'shot %s\nquit\n' "$work/native.png" >"$work/shot.script"
-    (cd "$work" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="$work/shot.script" timeout 60 ./app) >"$work/native-run.log" 2>&1
+    (cd "$work" && LOOK_SHOT="$work/native.png" SALAM_WINDOW_BACKEND=headless timeout 60 ./app) >"$work/native-run.log" 2>&1
     if [ ! -s "$work/native.png" ]; then
         say "ERROR $name (no native screenshot: $(tail -1 "$work/native-run.log"))"
         over=$((over + 1))

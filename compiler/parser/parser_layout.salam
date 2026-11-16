@@ -18,7 +18,104 @@ func layout_decl_ahead(p &: Ps): bool:
     ret p_peekn(p, k).kind == tok.TK_COLON_ASSIGN
 end
 
+func when_key(name: str): str:
+    ret str.Lower(str.Replace(str.Replace(str.Trim(name), "_", " "), "-", " "))
+end
+
+func when_find(a &: at.Ast, parent: int, kept: Vector<int>, key: str): int:
+    repeat at.ChildCount(a, parent) in i:
+        oid := at.Child(a, parent, i)
+        if at.KindOf(a, oid) == at.AST_LAYOUT_ATTR and str.Equals(when_key(at.Get(a, oid).name), key):
+            ret oid
+        end
+    end
+    repeat kept.Len() in j:
+        kid := kept.Get(j)
+        if at.KindOf(a, kid) == at.AST_LAYOUT_ATTR and str.Equals(when_key(at.Get(a, kid).name), key):
+            ret kid
+        end
+    end
+    ret 0
+end
+
+func when_ternary(a &: at.Ast, cond: int, thenv: int, elsev: int): int:
+    n := mk_from_node(a, at.AST_TERNARY, cond)
+    mut m := at.Get(a, n)
+    m.a = at.Clone(a, cond)
+    m.b = thenv
+    m.c = elsev
+    at.Put(a, n, m)
+    ret n
+end
+
+func when_empty(a &: at.Ast, from: int): int:
+    lit := mk_from_node(a, at.AST_LITERAL, from)
+    at.SetOp(a, lit, tok.TK_STRING)
+    mut tv := tok.ValueNone()
+    tv.kind = tok.TV_STRING
+    tv.sval = ""
+    at.SetName(a, lit, "")
+    at.SetTokenValue(a, lit, tv)
+    ret lit
+end
+
+func when_lower(a &: at.Ast, parent: int):
+    mut found := false
+    repeat at.ChildCount(a, parent) in i:
+        if at.KindOf(a, at.Child(a, parent, i)) == at.AST_LAYOUT_WHEN:
+            found = true
+        end
+    end
+    if not found:
+        ret
+    end
+    mut kept := Vector {} as Vector<int>
+    repeat at.ChildCount(a, parent) in j:
+        cid := at.Child(a, parent, j)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_WHEN:
+            kept.Push(cid)
+            continue
+        end
+        mut ok := true
+        repeat at.ChildCount(a, cid) in q:
+            if at.KindOf(a, at.Child(a, cid, q)) != at.AST_LAYOUT_ATTR:
+                ok = false
+            end
+        end
+        if not ok:
+            kept.Push(cid)
+            continue
+        end
+        cond := at.Get(a, cid).a
+        repeat at.ChildCount(a, cid) in k:
+            gid := at.Child(a, cid, k)
+            g := at.Get(a, gid)
+            bid := when_find(a, parent, kept, when_key(g.name))
+            if bid != 0:
+                bv := at.Get(a, bid).a
+                mut bn := at.Get(a, bid)
+                bn.a = when_ternary(a, cond, g.a, bv)
+                at.Put(a, bid, bn)
+            else:
+                emp := when_empty(a, cond)
+                mut gn := at.Get(a, gid)
+                gn.a = when_ternary(a, cond, g.a, emp)
+                at.Put(a, gid, gn)
+                kept.Push(gid)
+            end
+        end
+    end
+    mut pn := at.Get(a, parent)
+    pn.list = kept
+    at.Put(a, parent, pn)
+end
+
 func layout_body_ex(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
+    layout_body_loop(p, a, parent, stop_else)
+    when_lower(a, parent)
+end
+
+func layout_body_loop(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
     until not p_at(p, tok.TK_KW_END) and not p_at_eof(p) and not (stop_else and p_at(p, tok.TK_KW_ELSE)):
         before := p.pos
         p_skip_terminators(p)

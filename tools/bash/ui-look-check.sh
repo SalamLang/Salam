@@ -179,8 +179,21 @@ for f in "$PAGES"/*.salam; do
 
     $IM_CONVERT "$work/web.png" -background white -alpha remove -gravity northwest -extent "${W}x${H}" "$work/web-fit.png"
     $IM_CONVERT "$work/native.png" -background white -alpha remove -gravity northwest -extent "${W}x${H}" "$work/native-fit.png"
-    diffpx=$($IM_COMPARE -metric AE -fuzz "${FUZZ}%" "$work/web-fit.png" "$work/native-fit.png" "$OUT/$name-diff.png" 2>&1 | awk '{ print int($1) }')
-    case "$diffpx" in '' | *[!0-9]*) diffpx=$((W * H)) ;; esac
+    cmpout=$($IM_COMPARE -metric AE -fuzz "${FUZZ}%" "$work/web-fit.png" "$work/native-fit.png" "$OUT/$name-diff.png" 2>&1)
+    cmprc=$?
+    diffpx=$(printf '%s' "$cmpout" | awk '{ print $1 }')
+    case "$diffpx" in
+    '' | *[!0-9]*)
+        say "ERROR $name (compare failed: $cmpout)"
+        over=$((over + 1))
+        continue
+        ;;
+    esac
+    if [ "$cmprc" -gt 1 ]; then
+        say "ERROR $name (compare exited $cmprc: $cmpout)"
+        over=$((over + 1))
+        continue
+    fi
     permille=$((diffpx * 1000 / (W * H)))
     pct="$((permille / 10)).$((permille % 10))"
     limit=$((TOLERANCE * 10))

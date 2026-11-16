@@ -75,6 +75,8 @@ struct LnNames:
     pub fresh: str = "Fresh"
     pub site: str = "ScopeSite"
     pub touch: str = "TouchInstance"
+    pub touch_vars: str = "TouchInstanceVars"
+    pub scope_vars: str = "ScopeVars"
     pub vec: str = "Vector"
     pub len: str = "len"
     pub push: str = "push"
@@ -130,6 +132,8 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.fresh = "نمونه تازه"
     n.site = "جایگاه دامنه"
     n.touch = "لمس نمونه"
+    n.touch_vars = "لمس متغیرهای نمونه"
+    n.scope_vars = "متغیرهای دامنه"
     n.vec = "وکتور"
     n.len = "طول"
     n.push = "بیفزا"
@@ -179,6 +183,22 @@ func ln_to_fa(text: str, fa: lp.Langpack): str:
             str.BufAppend(out, "،")
             i++
             continue
+        end
+        if i > 0 and byte_at(text, i - 1) == 32 and (b == 60 or b == 62 or b == 61 or b == 33):
+            mut olen := 0
+            if i + 2 < n and byte_at(text, i + 2) == 32 and i + 1 < n and byte_at(text, i + 1) == 61:
+                olen = 2
+            else i + 1 < n and byte_at(text, i + 1) == 32 and (b == 60 or b == 62):
+                olen = 1
+            end
+            if olen > 0:
+                cw := lp.FaCmpWordForSymbol(str.Substr(text, i, olen))
+                if str.Len(cw) > 0:
+                    str.BufAppend(out, cw)
+                    i += olen
+                    continue
+                end
+            end
         end
         if ln_is_word_start(b) and (i == 0 or not ln_is_word(byte_at(text, i - 1))):
             mut j := i
@@ -336,11 +356,12 @@ func ln_style_attrs(g &: LnGen, a &: at.Ast, el: int):
         if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0:
             continue
         end
-        mut prop := 0
-        mut state := 0
-        if not sm.StyleAttrOf(aid, prop, state):
+        sa := sm.ResolveStyleAttr(an.name)
+        if not sa.ok or sm.StyleAttrIsEvent(a, aid):
             continue
         end
+        prop := sa.prop
+        state := sa.state
         v := val_str(a, an.a)
         state_expr := g.nm.ui + "." + ln_state_const(state)
         ln_call(g, g.nm.set_text, state_expr + g.nm.sep + co.I64Toa(prop as i64) + g.nm.sep + ln_str_expr(v))
@@ -386,6 +407,9 @@ func ln_pseudo_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int):
             continue
         end
         nm := an.name
+        if sm.ResolveStyleAttr(nm).ok:
+            continue
+        end
         pl := sm.LayoutPseudoPrefixLen(nm)
         if pl == 0:
             continue
@@ -426,9 +450,7 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             continue
         end
         nm := an.name
-        mut sprop := 0
-        mut sstate := 0
-        if sm.StyleAttrOf(aid, sprop, sstate):
+        if sm.ResolveStyleAttr(nm).ok and not sm.StyleAttrIsEvent(a, aid):
             continue
         end
         if sm.LayoutPseudoPrefixLen(nm) > 0:
@@ -825,14 +847,23 @@ end
 func ln_if_scoped(g &: LnGen, a &: at.Ast, nid: int):
     mut deps := Vector {} as Vector<int>
     defer deps.Free()
-    if g.in_comp == 0:
-        ln_rx_cond(g.rx, g.lw, a, nid, deps)
-    end
-    if deps.Len() == 0:
+    g_ln_rx_vars.Clear()
+    ln_rx_cond(g.rx, g.lw, a, nid, deps)
+    mut vars := g_ln_rx_vars
+    g_ln_rx_vars = Vector {} as Vector<int>
+    defer vars.Free()
+    if deps.Len() == 0 and vars.Len() == 0:
         ln_if(g, a, nid)
         ret
     end
-    ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
+    if ln_rx_vars_split(vars):
+        ln_rx_unc_add(g.rx, deps, vars)
+        ln_if(g, a, nid)
+        ret
+    end
+    site := ln_rx_site(g.rx, 0 - 1, deps)
+    ln_rx_site_vars(g.rx, site, vars)
+    ln_scope_open(g, site)
     ln_if(g, a, nid)
     ln_scope_close(g)
 end
@@ -840,14 +871,23 @@ end
 func ln_each_scoped(g &: LnGen, a &: at.Ast, nid: int):
     mut deps := Vector {} as Vector<int>
     defer deps.Free()
-    if g.in_comp == 0:
-        ln_rx_markers(g.rx, g.lw, a, val_str(a, at.Get(a, nid).a), deps)
-    end
-    if deps.Len() == 0:
+    g_ln_rx_vars.Clear()
+    ln_rx_markers(g.rx, g.lw, a, val_str(a, at.Get(a, nid).a), deps)
+    mut vars := g_ln_rx_vars
+    g_ln_rx_vars = Vector {} as Vector<int>
+    defer vars.Free()
+    if deps.Len() == 0 and vars.Len() == 0:
         ln_each(g, a, nid)
         ret
     end
-    ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
+    if ln_rx_vars_split(vars):
+        ln_rx_unc_add(g.rx, deps, vars)
+        ln_each(g, a, nid)
+        ret
+    end
+    site := ln_rx_site(g.rx, 0 - 1, deps)
+    ln_rx_site_vars(g.rx, site, vars)
+    ln_scope_open(g, site)
     ln_each(g, a, nid)
     ln_scope_close(g)
 end
@@ -879,6 +919,16 @@ func ln_comp_stores(g &: LnGen, a &: at.Ast, blk: int, kname: str, render: bool)
         gs := co.U64Toa(sd.value_int)
         idx := g.lw.slots.Len()
         g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = sd.a })
+        if render:
+            mut sids := Vector {} as Vector<int>
+            defer sids.Free()
+            g_ln_rx_vars.Clear()
+            ln_rx_scan(g.rx, a, sd.a, sids)
+            mut svars := g_ln_rx_vars
+            g_ln_rx_vars = Vector {} as Vector<int>
+            defer svars.Free()
+            ln_rx_unc_add(g.rx, sids, svars)
+        end
         store := "__salam_st_" + gs
         tmp := "__salam_i_" + gs
         ln_line(g, tmp + " := " + ln_dyn_name(idx))
@@ -896,6 +946,7 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
     mut deps := Vector {} as Vector<int>
     defer deps.Free()
     ln_rx_tree(g.rx, g.lw, a, n.b, deps)
+    g_ln_rx_vars.Clear()
     mut has_state := false
     repeat at.ChildCount(a, n.b) in i:
         if at.KindOf(a, at.Child(a, n.b, i)) == at.AST_VAR_DECL:
@@ -908,7 +959,10 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
         g.in_comp--
         ret
     end
-    site := ln_rx_site(g.rx, has_state ? ci : 0 - 1, deps)
+    mut vars0 := Vector {} as Vector<int>
+    defer vars0.Free()
+    site := ln_rx_site(g.rx, has_state ? ci : 0 - 1, vars0)
+    g.rx.unc.Push(site)
     mut row_key := 0
     if g.row_keys.Len() > 0:
         row_key = g.row_keys.Get(g.row_keys.Len() - 1)
@@ -937,6 +991,7 @@ func ln_comp(g &: LnGen, a &: at.Ast, nid: int):
     g.in_comp++
     ln_items(g, a, n.b)
     g.in_comp--
+    _us := g.rx.unc.Pop()
     ln_scope_close(g)
 end
 
@@ -1039,11 +1094,21 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     end
     mut deps := Vector {} as Vector<int>
     defer deps.Free()
-    if g.in_comp == 0:
-        ln_rx_own(g.rx, g.lw, a, el, deps)
-    end
-    if deps.Len() > 0:
-        ln_scope_open(g, ln_rx_site(g.rx, 0 - 1, deps))
+    g_ln_rx_vars.Clear()
+    ln_rx_own(g.rx, g.lw, a, el, deps)
+    mut vars := g_ln_rx_vars
+    g_ln_rx_vars = Vector {} as Vector<int>
+    defer vars.Free()
+    mut scoped := false
+    if deps.Len() > 0 or vars.Len() > 0:
+        if ln_rx_vars_split(vars):
+            ln_rx_unc_add(g.rx, deps, vars)
+        else:
+            site := ln_rx_site(g.rx, 0 - 1, deps)
+            ln_rx_site_vars(g.rx, site, vars)
+            ln_scope_open(g, site)
+            scoped = true
+        end
     end
     ln_call(g, g.nm.open, ln_quote(ekey))
     g.depth++
@@ -1058,7 +1123,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     end
     g.depth--
     ln_call(g, g.nm.close, "")
-    if deps.Len() > 0:
+    if scoped:
         ln_scope_close(g)
     end
 end
@@ -1273,6 +1338,13 @@ func ln_state_type(g &: LnGen, gi: int): str:
     ret "__salam_type_" + co.U64Toa(gi as u64)
 end
 
+func ln_signed(v: int): str:
+    if v < 0:
+        ret "0 - " + co.U64Toa((0 - v) as u64)
+    end
+    ret co.U64Toa(v as u64)
+end
+
 func ln_rx_source(g &: LnGen): str:
     n := g.nm
     words := ln_rx_words(g.rx)
@@ -1318,8 +1390,13 @@ func ln_rx_source(g &: LnGen): str:
                 s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + co.U64Toa(w3 as u64) + n.sep + co.U64Toa(masks.Get(w3) as u64) + ")\n"
             end
         end
-        if not any and comp >= 0:
+        if not any:
             s += "    " + n.ui + "." + n.site + "(" + co.U64Toa(si as u64) + n.sep + cs + n.sep + "0" + n.sep + "0)\n"
+        end
+        repeat g.rx.vs_site.Len() in vi:
+            if g.rx.vs_site.Get(vi) == si:
+                s += "    " + n.ui + "." + n.scope_vars + "(" + co.U64Toa(si as u64) + n.sep + co.U64Toa(g.rx.vs_comp.Get(vi) as u64) + n.sep + ln_signed(g.rx.vs_mask.Get(vi)) + ")\n"
+            end
         end
         masks.Free()
     end
@@ -1328,9 +1405,10 @@ func ln_rx_source(g &: LnGen): str:
     repeat g.rx.ids.Len() in id2:
         s += "    " + ln_rx_word_name(id2 / LN_RX_BITS) + " |= " + co.U64Toa(ln_rx_mask(id2) as u64) + "\n"
     end
-    each ci in g.rx.st_comps:
-        cs2 := co.U64Toa(ci as u64)
-        s += "    " + n.ui + "." + n.touch + "(" + cs2 + n.sep + "__salam_k_" + cs2 + ")\n"
+    ln_rx_state_vars(g.rx)
+    each wgi in g.rx.st_vars:
+        wc := co.U64Toa(g_lo_st_comp.Get(wgi) as u64)
+        s += "    " + n.ui + "." + n.touch_vars + "(" + wc + n.sep + "__salam_k_" + wc + n.sep + ln_signed(ln_rx_var_bit(wgi)) + ")\n"
     end
     s += "    " + ln_rx_word_name(0) + " |= 0\n"
     s += n.kw_end + "\n\n"
@@ -1349,6 +1427,25 @@ func ln_source(g &: LnGen, with_main: bool): str:
         s += n.kw_end + "\n"
     end
     ret s
+end
+
+pub func NativeEntryOk(log: lg.Logger, a &: at.Ast, prog: int): bool:
+    if prog == 0:
+        ret true
+    end
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) > 0 and not d.view_glue:
+            lg.Log(
+                log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("page '%s' returns HTML text and cannot open a window: write an unnamed 'page:' for the native target"),
+                    co.ArgStr(d.name)
+                )
+            )
+            ret false
+        end
+    end
+    ret true
 end
 
 pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): bool:

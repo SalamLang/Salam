@@ -61,7 +61,7 @@ func lo_page_decls(a &: at.Ast, program: int, lb: int, fr &: LoFrame):
         gn.name = sd.name
         gn.a = init
         gn.ty = sd.ty
-        gn.is_mut = sd.is_mut
+        gn.is_mut = sd.is_mut or li_kind(sid) != LI_DERIVED
         at.Put(a, g, gn)
         hoist.Push(g)
     end
@@ -94,6 +94,92 @@ end
 
 func lo_doc_text(v: str): str:
     ret is_dyn(v) ? v : html_escape(v)
+end
+
+func lo_page_meta_spec(key: str): str:
+    if str.Equals(key, "viewport"):
+        ret "viewport:"
+    end
+    if str.Equals(key, "author") or str.Equals(key, "keywords") or str.Equals(key, "robots"):
+        ret "name:" + key
+    end
+    if str.Equals(key, "description"):
+        ret "name:description"
+    end
+    if str.Equals(key, "theme_color"):
+        ret "name:theme-color"
+    end
+    if str.Equals(key, "canonical"):
+        ret "link:canonical"
+    end
+    if str.Equals(key, "favicon"):
+        ret "link:icon"
+    end
+    if str.Equals(key, "refresh"):
+        ret "equiv:refresh"
+    end
+    if str.Equals(key, "charset"):
+        ret "charset:"
+    end
+    if str.Equals(key, "twitter_card") or str.Equals(key, "twitter_site") or str.Equals(key, "twitter_creator"):
+        ret "name:twitter:" + str.Substr(key, 8, str.Len(key) - 8)
+    end
+    if str.StartsWith(key, "og_"):
+        ret "prop:og:" + str.Substr(key, 3, str.Len(key) - 3)
+    end
+    ret ""
+end
+
+func lo_is_page_meta(name: str): bool:
+    mut key := sm.LayoutAttrKey(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ret str.Equals(key, "title") or str.Equals(key, "lang") or str.Equals(key, "dir") or str.Len(lo_page_meta_spec(key)) > 0
+end
+
+func lo_head_add(cx &: LoCtx, s: str):
+    if cx.compact:
+        cx.head += s
+    else:
+        cx.head += "  " + s + "\n"
+    end
+end
+
+func lo_page_head(cx &: LoCtx, page_ei: int, name: str, v: str):
+    mut key := sm.LayoutAttrKey(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    spec := lo_page_meta_spec(key)
+    if str.Len(spec) == 0:
+        ret
+    end
+    mut val := v
+    mut raw := v
+    if not is_dyn(v):
+        ai := sm.LayoutAttrFor(page_ei, key)
+        if ai >= 0:
+            val = attr_value_map(ai, v)
+        end
+        raw = val
+        val = html_escape(val)
+    end
+    kind := str.Substr(spec, 0, str.IndexOf(spec, ":"))
+    tail := str.Substr(spec, str.IndexOf(spec, ":") + 1, str.Len(spec) - str.IndexOf(spec, ":") - 1)
+    if str.Equals(kind, "name"):
+        lo_head_add(cx, `<meta name="` + tail + `" content="` + val + `">`)
+    else str.Equals(kind, "prop"):
+        lo_head_add(cx, `<meta property="` + tail + `" content="` + val + `">`)
+    else str.Equals(kind, "link"):
+        lo_head_add(cx, `<link rel="` + tail + `" href="` + val + `">`)
+    else str.Equals(kind, "equiv"):
+        lo_head_add(cx, `<meta http-equiv="` + tail + `" content="` + val + `">`)
+    else str.Equals(kind, "charset"):
+        cx.charset = raw
+    else str.Equals(kind, "viewport"):
+        cx.viewport = raw
+    end
 end
 
 pub func NewResult(): Result:
@@ -141,6 +227,7 @@ pub func ExpandPage(
     g_lo_ws_inst.Clear()
     g_lo_ws_decl.Clear()
     g_lo_ws_css = ""
+    g_lo_ws_std = false
     g_lo_wi_kind.Clear()
     g_lo_ws_type.Clear()
     g_lo_ws_lit.Clear()
@@ -236,13 +323,8 @@ pub func Generate(
                     body_repeat = r < 1 ? 1 as i64 : r
                 end
             end
-        else str.Equals(item.name, "favicon"):
-            hv := is_dyn(v) ? v : html_escape(v)
-            if compact:
-                cx.head += `<link rel="icon" href="` + hv + `">`
-            else:
-                cx.head += `  <link rel="icon" href="` + hv + "\">\n"
-            end
+        else:
+            lo_page_head(cx, sm.LayoutElemLookup("page"), item.name, v)
         end
     end
 
@@ -312,7 +394,7 @@ pub func Generate(
             if item.kind == at.AST_LAYOUT_ATTR:
                 if str.Equals(item.name, "content"):
                     html_line(cx, html_escape(val_str(a, item.a)))
-                else not str.Equals(item.name, "title") and not str.Equals(item.name, "lang") and not str.Equals(item.name, "dir") and not str.Equals(item.name, "repeat") and not str.Equals(item.name, "favicon"):
+                else not str.Equals(item.name, "title") and not str.Equals(item.name, "lang") and not str.Equals(item.name, "dir") and not str.Equals(item.name, "repeat") and not lo_is_page_meta(item.name):
                     lg.Log(
                         log, lg.PH_CODEGEN, lg.LOG_TRACE, co.Format1(
                             "ignoring document attribute '%s'", co.ArgStr(item.name)
@@ -337,6 +419,8 @@ pub func Generate(
     r.lang = cx.lang
     r.dir = cx.dir
     r.body_attr = cx.body_attr
+    r.charset = cx.charset
+    r.viewport = cx.viewport
     lg.Log(
         log, lg.PH_CODEGEN, lg.LOG_INFO, co.Format3(
             "layout: %zu bytes HTML, %zu bytes CSS, %zu bytes JS", co.ArgUint(str.Len(r.html) as u64),
@@ -355,8 +439,8 @@ pub func Document(
         d += r.lang
         d += `" dir="`
         d += r.dir
-        d += `"><head><meta charset="utf-8">`
-        d += `<meta name="viewport" content="width=device-width, initial-scale=1">`
+        d += `"><head><meta charset="` + lo_doc_text(r.charset) + `">`
+        d += `<meta name="viewport" content="` + lo_doc_text(r.viewport) + `">`
         d += "<title>"
         d += lo_doc_text(r.title)
         d += "</title>"
@@ -398,8 +482,8 @@ pub func Document(
         d += r.dir
         d += "\">\n"
         d += "<head>\n"
-        d += "  <meta charset=\"utf-8\">\n"
-        d += "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        d += `  <meta charset="` + lo_doc_text(r.charset) + "\">\n"
+        d += `  <meta name="viewport" content="` + lo_doc_text(r.viewport) + "\">\n"
         d += "  <title>"
         d += lo_doc_text(r.title)
         d += "</title>\n"

@@ -129,6 +129,16 @@ end
 
 func lay_localize_attr(a &: at.Ast, attr: int):
     name := at.Get(a, attr).name
+    sa := ResolveStyleAttr(name)
+    vnode := at.Get(a, attr).a
+    if sa.ok and (vnode == 0 or at.KindOf(a, vnode) != at.AST_LAMBDA):
+        states := ["", "hover_", "focus_", "focus_within_", "active_", "disabled_", "checked_", "invalid_", "placeholder_", "selection_"]
+        canon := states[sa.state] + style.PropName(sa.prop)
+        if not str.Equals(canon, name):
+            at.SetName(a, attr, canon)
+        end
+        ret
+    end
     key := lay_attr_key_exact(name)
     if str.Len(key) > 0:
         if not str.Equals(key, name):
@@ -522,6 +532,7 @@ func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str,
         ret false
     end
     v := at.Get(a, vid)
+    quoted := lay_attr_value_is_quoted_string(a, aid)
     if lay_native_target():
         if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) != 0:
             ret false
@@ -534,17 +545,23 @@ func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str,
             style_attr_remember_dyn(aid, sa.prop, sa.state)
             ret true
         end
-        if not lay_fold_attr(s, a, aid, 0 - 1, runtime):
+        if lay_list_runtime(s, a, vid) != 0:
+            if runtime:
+                style_attr_remember_dyn(aid, sa.prop, sa.state)
+            else:
+                _folded := lay_fold_attr(s, a, aid, 0 - 1, false)
+            end
             ret true
         end
-        vid = at.Get(a, aid).a
-        if lay_list_runtime(s, a, vid) != 0:
-            style_attr_remember_dyn(aid, sa.prop, sa.state)
-            ret true
+        if not (v.kind == at.AST_BINARY and (v.op == tok.TK_PLUS or v.op == tok.TK_MINUS)):
+            if not lay_fold_attr(s, a, aid, 0 - 1, runtime):
+                ret true
+            end
+            vid = at.Get(a, aid).a
         end
     end
     text := StyleAttrTextFor(a, vid, sa.prop)
-    if lay_attr_value_is_quoted_string(a, aid) and lay_quoted_size(text):
+    if quoted and lay_quoted_size(text):
         serr(
             s, 18, span_of(a, aid), co.Format2(
                 i18.Tr("invalid value for '%s': write the size %s without quotes"), co.ArgStr(lay_attr_display(name)),

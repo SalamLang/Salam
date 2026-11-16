@@ -127,7 +127,7 @@ Some apps need the same engine on every system. Building with `-DSALAM_WEBVIEW_C
 
 A web view still means depending on a browser engine and accepting its start time and memory use. Salam's second approach removes the browser entirely. A program written in the [page language](/learn/layout/) can be compiled with `--ui=native`, and the `gui.ui` runtime shows it in a native window that Salam draws pixel by pixel, the way Slint and Flutter draw their widgets instead of using the operating system's.
 
-The runtime is a stack of Salam packages: `gui.window` (X11, Win32, Cocoa and a headless backend), `gui.paint` (anti-aliased paths, borders, gradients, shadows), `gui.typeset` (TrueType fonts, shaping, bidirectional text and line breaking, so Persian works from the start), `gui.cssbox` (block, flex, grid and table layout), `gui.css` (the cascade) and `gui.reactive`. Here is a complete counter:
+The runtime is a stack of Salam packages: `gui.window` (X11, Win32, Cocoa and a headless backend), `gui.paint` (anti-aliased paths, borders, gradients, shadows), `gui.typeset` (TrueType fonts, shaping, bidirectional text and line breaking, so Persian works from the start), `gui.style` (the style standard), `gui.flow` (row, column, grid, stack and flow layout) and `gui.reactive`. Here is a complete counter:
 
 ```salam
 mut count := 0

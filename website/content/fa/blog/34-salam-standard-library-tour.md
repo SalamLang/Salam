@@ -170,7 +170,7 @@ true 42
 
 ## گرافیک، رابط گرافیکی و مرورگر {#gui}
 
-برای برنامه‌های رومیزی، [gui.webview](/std/gui/webview/) پنجره‌ای بومی دور HTML است با یک لایه‌ی کامل برنامه روی آن، و اجرای بومی رابط کاربری در [gui.ui](/std/gui/ui/) صفحه‌های سلام را بدون مرورگر رسم می‌کند، با [موتور CSS](/std/gui/css/)، [چیدمان جعبه](/std/gui/cssbox/)، [شکل‌دهی متن](/std/gui/typeset/) و [رسام](/std/gui/paint/) خودش. بازی‌ها از [gui.raylib](/std/gui/raylib/) استفاده می‌کنند. در مرورگر، [dom](/std/dom/) با عنصرها و رویدادهای صفحه کار می‌کند، [web.canvas](/std/web/canvas/) روی بوم نقاشی می‌کند و [web.keys](/std/web/keys/) وضعیت صفحه‌کلید را برای بازی‌ها دنبال می‌کند. مقاله‌های [برنامه‌های رومیزی و رابط گرافیکی](/blog/desktop-gui-apps-with-salam/) و [بخش‌های تعاملی رابط کاربری](/blog/interactive-ui-components-state-events/) این‌ها را پوشش می‌دهند.
+برای برنامه‌های رومیزی، [gui.webview](/std/gui/webview/) پنجره‌ای بومی دور HTML است با یک لایه‌ی کامل برنامه روی آن، و اجرای بومی رابط کاربری در [gui.ui](/std/gui/ui/) صفحه‌های سلام را بدون مرورگر رسم می‌کند، با [استاندارد سبک](/std/gui/style/)، [موتور چیدمان](/std/gui/flow/)، [شکل‌دهی متن](/std/gui/typeset/) و [رسام](/std/gui/paint/) خودش. بازی‌ها از [gui.raylib](/std/gui/raylib/) استفاده می‌کنند. در مرورگر، [dom](/std/dom/) با عنصرها و رویدادهای صفحه کار می‌کند، [web.canvas](/std/web/canvas/) روی بوم نقاشی می‌کند و [web.keys](/std/web/keys/) وضعیت صفحه‌کلید را برای بازی‌ها دنبال می‌کند. مقاله‌های [برنامه‌های رومیزی و رابط گرافیکی](/blog/desktop-gui-apps-with-salam/) و [بخش‌های تعاملی رابط کاربری](/blog/interactive-ui-components-state-events/) این‌ها را پوشش می‌دهند.
 
 ## بده‌بستان‌های یک کتابخانه‌ی استاندارد بزرگ {#limits}
 

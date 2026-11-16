@@ -1,8 +1,14 @@
 # Native UI from the page language
 
+Superseded by `UI_DSL.md`. The CSS engine (`gui.css`) and the CSS box layout
+(`gui.cssbox`) this document describes are gone: styles are typed values from
+`gui.style` and layout is `gui.flow`. What still holds here is target gating
+(the `native` schema field, E165 and W166), the reactive scope model and the
+phase list; read `UI_DSL.md` for everything about styles and layout.
+
 Status: a page runs in a native window with `salam run page.salam --ui=native`.
 The runtime is `std/gui/ui` on top of `gui.window`, `gui.paint`, `gui.typeset`,
-`gui.cssbox`, `gui.css` and `gui.reactive`. Later phases are planned below.
+`gui.style`, `gui.flow` and `gui.reactive`.
 
 ## Using it
 
@@ -25,22 +31,18 @@ salam build app.salam --ui=native     a native executable
 ```
 
 For a file with a page and no entry function, the compiler does all style work
-at compile time. Every declaration list, global rule and media rule is parsed,
-validated and shorthand-expanded by `gui.css` while the compiler runs, and the
-resulting typed style program is emitted as Salam code that rebuilds it from
-literals (`__salam_styles`). The page itself becomes `__salam_page(b)`, a
-function of `gui.ui` builder calls (`b.Open("div")`, `b.Decls(3, 4, -1, -1)`,
-`b.Text(...)`, `b.On("click", handler)`, `b.Close()`); runtime values, `if` and
-`each` stay ordinary Salam code. No HTML or CSS text is parsed when the program
-runs, apart from a style attribute whose value is itself a runtime expression.
+at compile time. Every style value is parsed and validated by `gui.style` while
+the compiler runs. The page becomes a function of `gui.ui` builder calls
+(`b.Open("box")`, `b.SetText(state, prop, text)`, `b.Text(...)`,
+`b.On("click", handler)`, `b.Close()`); runtime values, `if` and `each` stay
+ordinary Salam code. No HTML or CSS text is parsed when the program runs.
 After every handler the runtime runs the view again and reconciles the new tree
 with the old one, so a handler only changes the program's state; hover, focus,
 scroll positions and typed text survive. The page view reads the program's
 mutable globals. `SALAM_NATIVE_DUMP=1` prints the generated program.
 
 A program that has its own entry function keeps it, and can call
-`ui.RunCompiled((): ret __salam_styles() end, (b: ui.Builder): __salam_page(b) end)`,
-or build HTML documents with runtime `page Name(params):` views and `ui.Run`.
+`ui.RunPage((): ret ui.NoPatches() end, (b: ui.Builder): __salam_page(b) end)`.
 
 Tests run headless: `SALAM_WINDOW_BACKEND=headless` with `SALAM_UI_SCRIPT`
 naming a file of steps (`click #id`, `type text`, `key Tab`, `dump`,
@@ -180,7 +182,9 @@ page source -> parse -> condcomp (SALAM_UI_*) -> expand -> check (target aware)
                     web generator (today)                                   native generator (phase 4)
                     HTML + CSS + JS                                Salam code that builds a gui.ui tree
                                                                                             |
-                                         gui.ui:     style cascade, layout (block, inline, flex), paint, events, state
+                                         gui.ui:     builder, state patches, scopes, paint, events
+                                         gui.style:  typed property values, defaults, inheritance
+                                         gui.flow:   layout (column, row, grid, stack, flow)
                                          gui.text:   fonts, fallback, shaping, bidi, line breaking, caret
                                          gui.paint:  RGBA canvas, anti-aliased paths, borders, gradients, shadows, clip
                                          gui.window: OS window, event loop, blit (X11, Win32, Cocoa, headless PNG)
@@ -199,8 +203,7 @@ OS widgets (Win32 controls, Cocoa views, GTK widgets) each support a
 different, small subset of styling. A design with rounded corners,
 gradients, custom fonts and Persian text would look different on every OS
 or not work at all. Drawing every pixel, as Slint and Flutter do, gives the
-same result everywhere and lets the CSS properties a page already uses keep
-their meaning.
+same result everywhere.
 
 ### Default look
 
@@ -211,63 +214,9 @@ looks the same natively without changing any web output.
 
 ## Typed style values
 
-`css.ProgramSource` writes a program whose values were decided by the compiler.
-Loading it compares no strings and parses nothing.
-
-```
-p.AddTyped(14, 0, [css.DimId(1.5, 205)])                       margin-top: 1.5em
-p.AddTyped(59, 2, [css.ColorValue(0x111111ff, 0xeeeeeeff, 1)])  color: light-dark(#111, #eee)
-p.AddTyped(61, 0, [css.FnId(334), css.KwId(595), css.KwId(486), css.Comma(),
-    css.ColorValue(0xff0000ff, 0xff0000ff, 0), ...])            background-image: linear-gradient(...)
-```
-
-- Property: the integer id from `css.PropertyId`. Longhands are 0 to 121,
-  shorthands 200 to 244, logical properties 300 to 333 (`std/gui/css/props.salam`).
-  Shorthands are already expanded, so a program only holds longhands.
-- Flags: 1 is `!important`, 2 says the value depends on the colour scheme.
-- Keywords, units and function names: indices into one name table,
-  `std/gui/css/names.salam` (673 names, `css.KeywordId`/`css.KeywordName`). A
-  loaded keyword points at the table's static string, so nothing is copied or
-  freed. A name that is not in the table (a custom ident, a font family) stays
-  text: `Kw`, `KwAs` (keeps the spelling of a font family), `Dim`, `Fn`.
-- Lengths and angles: number and unit. Absolute lengths (in, cm, mm, q, pt,
-  pc) are already pixels and angles already degrees; em, rem, viewport units and
-  percentages stay as they are because they depend on the element and the
-  window. `calc()`, `min()`, `max()` and `clamp()` that need nothing from the
-  page are folded to one value; a negative folded length stays a `calc()` so the
-  property can still clamp it.
-- Colours: `ColorValue(light, dark, flags)`, straight RGBA `0xRRGGBBAA` for each
-  scheme. Flag 1 marks a value that differs between the schemes
-  (`light-dark()`, system colours), flag 2 a colour written in a syntax newer
-  than hex, names, `rgb()`, `hsl()` and `hwb()`. `currentColor`, and
-  expressions that use it such as `color-mix(in srgb, currentColor, red)`, stay
-  as written and resolve in the cascade.
-- `var()` and custom properties stay text (`AddVarDecl`), substituted per element.
-
-The IDs are stable: new properties and names are only appended, so an
-executable built by one compiler keeps its meaning with a newer `gui.css`.
-`AddDecl` (property by name, colours as hex pieces) still loads older programs.
-The same resolution runs for HTML-path style sheets when a declaration is
-parsed, so both paths reach the cascade with resolved colours.
-
-Measured on a 202-element page shaped like the one in `tools/bench/gui_ui.salam` (40
-cards in a grid) with a style sheet that uses hex, `rgba()`, `hsl()`, named, system and
-`light-dark()` colours, the minimum of 500 runs on one core of a loaded desktop
-(load average 16 on 6 cores), C backend:
-
-| step                                         | before |  typed |
-| -------------------------------------------- | -----: | -----: |
-| build the program (`__salam_styles()`)       |  30 us |   6 us |
-| program plus sheet with the user agent rules | 130 us |  62 us |
-| full style computation, 202 elements, cold   | 287 us | 281 us |
-
-Style computation hardly changed with typed values: it was dominated by copying
-large structures and by selector matching, not by reading values. Since then
-tokens carry their keyword id, values are applied with integer switches on those
-IDs, and the cascade passes the sheet, the element tree, the engine and the parent
-style by reference instead of copying them on every call. On the same page
-(minimum of 500 runs, one core, C backend) the full style computation went from
-282 us to 113 us; the keyword IDs alone did not move it, passing by reference did.
+Style values are the typed values of `gui.style`: the compiler checks each
+property and value with `style.Parse` and the runtime never reads CSS text.
+The value syntax and the property table are in `UI_DSL.md`.
 
 ### Colours
 
@@ -282,7 +231,7 @@ FieldText, Highlight, HighlightText, LinkText, VisitedText, ActiveText,
 GrayText, AccentColor, AccentColorText, Mark, MarkText, SelectedItem,
 SelectedItemText) with Chromium's light and dark values. The conversions use
 the CSS Color 4 matrices in f64. Every colour inside sRGB matches Chromium 156
-to the 8-bit value (`tests/*/stdlib/css/colors`). Out of gamut colours are
+to the 8-bit value (`tests/*/stdlib/gui_color`). Out of gamut colours are
 mapped with the CSS Color 4 gamut mapping algorithm (OKLCH chroma reduction,
 deltaEOK 0.02); Chromium clips them instead, so those values differ.
 
@@ -290,8 +239,8 @@ Gradients interpolate in the space named with `in <space> [<hue> hue]`;
 without it they use sRGB when every stop is a legacy colour and Oklab
 otherwise, as Chromium does. `gui.paint` interpolates premultiplied sRGB
 between stops, so the cascade splits each segment into 8 stops computed in the
-interpolation space. Stops are resolved when the gradient is painted
-(`css.GradientStops`), when the length of the gradient line is known: `calc()`
+interpolation space. Stops are resolved when the gradient is painted,
+when the length of the gradient line is known: `calc()`
 positions, missing and out of order positions are fixed up as CSS Images says,
 colour hints are replaced by nine stops placed as Blink places them, and each
 segment in a space other than sRGB is split into 35 pieces mixed in that space
@@ -302,7 +251,7 @@ OKLCH cases within 4, except `longer hue` around the gamut edge (21).
 
 Colours carry a `legacy` flag (hex, names, `rgb()`, `hsl()`, `hwb()`).
 Transitions and animations mix premultiplied sRGB when both colours are legacy and
-Oklab otherwise (`css.MixColors`), which matches Chromium's interpolated values to
+Oklab otherwise, which matches Chromium's interpolated values to
 the 8-bit level except for two half-level roundings in 24 samples.
 
 `border-image` (source, slice with `fill`, width, outset, repeat and the

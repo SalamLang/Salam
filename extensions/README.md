@@ -37,6 +37,11 @@ reads them out of the compiler at generation time:
 - `compiler/semantic/semantic.salam` gives the primitive type names, the
   intrinsic types (`Vector`, `HashMap`, `MapIter`, `File`, `Variant`) and the
   intrinsic method names.
+- `tools/salam/style-properties.tsv` and `tools/salam/style-keywords.tsv` give
+  the page style attributes (English and Persian names) and the keyword values
+  they accept. Attribute names, state prefixes and keyword values are
+  highlighted on a `name = value` line, and unit, percent and colour literals
+  are highlighted everywhere, from the same tables.
 
 A new keyword therefore reaches every editor at once, in both languages,
 by rerunning one command.

@@ -136,6 +136,230 @@ func _cv_end_layer_masked(cv &: Canvas, opacity: f64):
 end
 
 func _cv_end_layer_with(cv &: Canvas, opacity: f64, chain: FilterChain):
+    _cv_end_layer_mode(cv, opacity, chain, 0)
+end
+
+func _blend_code(m: BlendMode): int:
+    switch m:
+        BlendMode.Multiply: ret 1 end
+        BlendMode.Screen: ret 2 end
+        BlendMode.Overlay: ret 3 end
+        BlendMode.Darken: ret 4 end
+        BlendMode.Lighten: ret 5 end
+        BlendMode.ColorDodge: ret 6 end
+        BlendMode.ColorBurn: ret 7 end
+        BlendMode.HardLight: ret 8 end
+        BlendMode.SoftLight: ret 9 end
+        BlendMode.Difference: ret 10 end
+        BlendMode.Exclusion: ret 11 end
+        BlendMode.Hue: ret 12 end
+        BlendMode.Saturation: ret 13 end
+        BlendMode.Color: ret 14 end
+        BlendMode.Luminosity: ret 15 end
+        else: ret 0 end
+    end
+    ret 0
+end
+
+func _bl_hard(cb: f64, cs: f64): f64:
+    if cs <= 0.5:
+        ret cb * 2.0 * cs
+    end
+    t := 2.0 * cs - 1.0
+    ret cb + t - cb * t
+end
+
+func _bl_ch(mode: int, cb: f64, cs: f64): f64:
+    switch mode:
+        1: ret cb * cs end
+        2: ret cb + cs - cb * cs end
+        3: ret _bl_hard(cs, cb) end
+        4: ret cb < cs ? cb : cs end
+        5: ret cb > cs ? cb : cs end
+        6:
+            if cb <= 0.0:
+                ret 0.0
+            end
+            if cs >= 1.0:
+                ret 1.0
+            end
+            ret _minf(1.0, cb / (1.0 - cs))
+        end
+        7:
+            if cb >= 1.0:
+                ret 1.0
+            end
+            if cs <= 0.0:
+                ret 0.0
+            end
+            ret 1.0 - _minf(1.0, (1.0 - cb) / cs)
+        end
+        8: ret _bl_hard(cb, cs) end
+        9:
+            if cs <= 0.5:
+                ret cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+            end
+            mut d := math.Sqrt(cb)
+            if cb <= 0.25:
+                d = ((16.0 * cb - 12.0) * cb + 4.0) * cb
+            end
+            ret cb + (2.0 * cs - 1.0) * (d - cb)
+        end
+        10: ret cb > cs ? cb - cs : cs - cb end
+        11: ret cb + cs - 2.0 * cb * cs end
+    end
+    ret cs
+end
+
+func _bl_lum(c: f64[]): f64:
+    ret 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+end
+
+func _bl_clip(c: f64[]):
+    l := _bl_lum(c)
+    n := _minf(c[0], _minf(c[1], c[2]))
+    x := _maxf(c[0], _maxf(c[1], c[2]))
+    if n < 0.0:
+        repeat 3 in i:
+            c[i] = l + (c[i] - l) * l / (l - n)
+        end
+    end
+    if x > 1.0:
+        repeat 3 in i:
+            c[i] = l + (c[i] - l) * (1.0 - l) / (x - l)
+        end
+    end
+end
+
+func _bl_set_lum(c: f64[], l: f64):
+    d := l - _bl_lum(c)
+    c[0] += d
+    c[1] += d
+    c[2] += d
+    _bl_clip(c)
+end
+
+func _bl_sat(c: f64[]): f64:
+    ret _maxf(c[0], _maxf(c[1], c[2])) - _minf(c[0], _minf(c[1], c[2]))
+end
+
+func _bl_set_sat(c: f64[], s: f64):
+    mut mx := 0
+    mut mn := 0
+    repeat 3 in i:
+        if c[i] > c[mx]:
+            mx = i
+        end
+        if c[i] < c[mn]:
+            mn = i
+        end
+    end
+    if mx == mn:
+        c[0] = 0.0
+        c[1] = 0.0
+        c[2] = 0.0
+        ret
+    end
+    md := 3 - mx - mn
+    cmax := c[mx]
+    cmin := c[mn]
+    cmid := c[md]
+    c[md] = (cmid - cmin) * s / (cmax - cmin)
+    c[mx] = s
+    c[mn] = 0.0
+end
+
+func _bl_nonsep(mode: int, cb: f64[], cs: f64[], out: f64[]):
+    switch mode:
+        12:
+            out[0] = cs[0]
+            out[1] = cs[1]
+            out[2] = cs[2]
+            _bl_set_sat(out, _bl_sat(cb))
+            _bl_set_lum(out, _bl_lum(cb))
+            break
+        end
+        13:
+            out[0] = cb[0]
+            out[1] = cb[1]
+            out[2] = cb[2]
+            _bl_set_sat(out, _bl_sat(cs))
+            _bl_set_lum(out, _bl_lum(cb))
+            break
+        end
+        14:
+            out[0] = cs[0]
+            out[1] = cs[1]
+            out[2] = cs[2]
+            _bl_set_lum(out, _bl_lum(cb))
+            break
+        end
+        else:
+            out[0] = cb[0]
+            out[1] = cb[1]
+            out[2] = cb[2]
+            _bl_set_lum(out, _bl_lum(cs))
+            break
+        end
+    end
+end
+
+func _blend_layer(cv &: Canvas, buf: u32*, x0: int, y0: int, x1: int, y1: int, mode: int):
+    tp := cv.state.tpix
+    if tp == null:
+        ret
+    end
+    w := x1 - x0
+    mut cb := [0.0, 0.0, 0.0]
+    mut cs := [0.0, 0.0, 0.0]
+    mut bo := [0.0, 0.0, 0.0]
+    repeat y1 - y0 in y:
+        gy := y0 + y
+        if gy < cv.state.toy or gy >= cv.state.toy + cv.state.th:
+            continue
+        end
+        repeat w in x:
+            gx := x0 + x
+            if gx < cv.state.tox or gx >= cv.state.tox + cv.state.tw:
+                continue
+            end
+            sp := buf[y * w + x]
+            sa := ((sp >> 24) & (255 as u32)) as int
+            if sa == 0:
+                continue
+            end
+            dp := tp[(gy - cv.state.toy) * cv.state.tspx + (gx - cv.state.tox)]
+            da := ((dp >> 24) & (255 as u32)) as int
+            if da == 0:
+                continue
+            end
+            fsa := (sa as f64) / 255.0
+            fda := (da as f64) / 255.0
+            cs[0] = (((sp >> 16) & (255 as u32)) as f64) / 255.0 / fsa
+            cs[1] = (((sp >> 8) & (255 as u32)) as f64) / 255.0 / fsa
+            cs[2] = ((sp & (255 as u32)) as f64) / 255.0 / fsa
+            cb[0] = (((dp >> 16) & (255 as u32)) as f64) / 255.0 / fda
+            cb[1] = (((dp >> 8) & (255 as u32)) as f64) / 255.0 / fda
+            cb[2] = ((dp & (255 as u32)) as f64) / 255.0 / fda
+            if mode >= 12:
+                _bl_nonsep(mode, cb, cs, bo)
+            else:
+                bo[0] = _bl_ch(mode, cb[0], cs[0])
+                bo[1] = _bl_ch(mode, cb[1], cs[1])
+                bo[2] = _bl_ch(mode, cb[2], cs[2])
+            end
+            mut o := 0 as u32
+            repeat 3 in i:
+                m := (1.0 - fda) * cs[i] + fda * bo[i]
+                v := _clamp255(math.Floor(m * fsa * 255.0 + 0.5) as int)
+                o = (o << 8) | (v as u32)
+            end
+            buf[y * w + x] = (((sa as u32) << 24)) | o
+        end
+    end
+end
+
+func _cv_end_layer_mode(cv &: Canvas, opacity: f64, chain: FilterChain, mode: int):
     _cv_ready(cv)
     if cv.state.layers.Len() < 11:
         ret
@@ -158,6 +382,9 @@ func _cv_end_layer_with(cv &: Canvas, opacity: f64, chain: FilterChain):
     end
     if chain.items.Len() > 0:
         _apply_chain(cv, buf, x1 - x0, y1 - y0, chain)
+    end
+    if mode > 0:
+        _blend_layer(cv, buf, x0, y0, x1, y1, mode)
     end
     op := _clamp255(math.Floor(opacity * 255.0 + 0.5) as int)
     if op > 0:

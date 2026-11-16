@@ -2497,10 +2497,10 @@ page:
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
     header:
-        background = "blue"
-        color = "white"
+        background = blue
+        color = white
         padding = 24px
-        heading: size = 1 content = "Welcome to Salam" font_size = 32px end
+        heading: size = 1 content = "Welcome to Salam" font size = 32 end
     end
     box:                                   // generic container (div)
         padding = 20px
@@ -2683,7 +2683,7 @@ E127. The compiler never fetches over the network. Optional: `weight`
 ```salam
 page:
     font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
-    box: content = "hi" font family = "Estedad, sans-serif" end
+    box: content = "hi" font = "Estedad", sans end
 end
 ```
 

@@ -964,6 +964,16 @@ if want ui; then
     done
 fi
 
+if want uiexamples; then
+    for f in examples/ui/*.salam; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f" .salam)
+        add_job page "uiexamples/web/$name" "$f" "en" -
+        [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
+        add_job uinative "uiexamples/native/$name" "$f" "en" "${f%.salam}.out"
+    done
+fi
+
 if want new; then
     for lang in $LANGS; do
         for f in tests/"$lang"/new/*.out; do

@@ -1,0 +1,146 @@
+---
+name: 🪟 UI and pages - PR gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-pr-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        std/gui/ui/*
+        std/gui/style/*
+        std/gui/flow/*
+        std/gui/color/*
+        std/gui/paint/*
+        std/gui/typeset/*
+        std/gui/window/*
+        std/gui/reactive/*
+        std/layout/*
+        compiler/sal_layout/*
+        compiler/semantic/sema_layout*.salam
+        tools/salam/style-*.tsv
+        tests/*/page/*
+        tests/*/ui/*
+        tools/bash/run-tests.sh
+        tools/bash/run-one-build.sh
+        tools/bash/build-selfhost.sh
+        .github/workflows/ui-pr-gate.yml
+        .github/workflows/_changes.yml
+        .github/actions/setup-salam/*
+
+  compiler:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build the compiler
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the compiler built from this compiler source
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam
+          key: ui-gate-compiler-0.6.3-${{ hashFiles('compiler/**', 'VERSION', 'tools/bash/build-selfhost.sh') }}
+
+      - name: Install the pinned seed compiler
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+        with:
+          version: '0.6.3'
+
+      - name: Build the compiler
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          sh tools/bash/build-selfhost.sh
+
+      - name: Check the compiler runs
+        run: |
+          chmod +x salam
+          ./salam version | head -1
+
+      - name: Upload the compiler
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-gate-salam
+          path: salam
+          retention-days: 1
+          if-no-files-found: error
+
+  sections:
+    needs: compiler
+    name: ${{ matrix.section }} ${{ matrix.lang }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        section: [page, ui]
+        lang: [en, fa]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ui-gate-salam
+
+      - name: Install a C compiler
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Run the section headless
+        env:
+          SECTION: ${{ matrix.section }}
+          LANGS: ${{ matrix.lang }}
+          SALAM_WINDOW_BACKEND: headless
+        run: |
+          set -eu
+          chmod +x salam
+          SALAM="$GITHUB_WORKSPACE/salam" SALAM_STD="$GITHUB_WORKSPACE/std" \
+            sh tools/bash/run-tests.sh "$SECTION" 2>&1 | tee tests.log
+          grep -qE 'RESULT: [1-9][0-9]* passed, 0 failed' tests.log
+
+  gate:
+    if: always()
+    needs: [changes, compiler, sections]
+    name: UI and pages gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -eu
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*) exit 1 ;;
+          esac

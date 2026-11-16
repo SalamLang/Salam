@@ -945,6 +945,10 @@ if want testcmd; then
     add_job script "testcmd/en/flow" "tools/bash/test-salam-test.sh" "en" "tests/en/testcmd/flow.out"
 fi
 
+if want tools; then
+    add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
+fi
+
 if want protect; then
     add_job script "protect/en/flow" "tools/bash/test-protect.sh" "en" "tests/en/protect/flow.out"
 fi

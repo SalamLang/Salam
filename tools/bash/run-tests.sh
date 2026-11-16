@@ -593,7 +593,8 @@ EOF_LNOTS
                 if [ -f "$WORK/page_empty_$lang.html" ]; then
                     grep -vxFf "$WORK/page_empty_$lang.html" "$html" >"$novel"
                 else
-                    cp "$html" "$novel"
+                    : >"$novel"
+                    lmiss="(the empty baseline page failed to build)"
                 fi
                 while IFS= read -r want_txt; do
                     [ -n "$want_txt" ] || continue

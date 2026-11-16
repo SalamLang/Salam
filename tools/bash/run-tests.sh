@@ -1500,9 +1500,10 @@ if want port; then
 fi
 
 if want page; then
-    printf 'page:\nend\n' >"$WORK/page_empty.salam"
+    printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
+    printf 'صفحه:\nپایان\n' >"$WORK/page_empty_fa.salam"
     for lang in $LANGS; do
-        "$SALAM_ABS" page build "$WORK/page_empty.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
+        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
     done
     for lang in $LANGS; do
         for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \

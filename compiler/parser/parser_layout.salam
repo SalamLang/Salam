@@ -18,6 +18,69 @@ func layout_decl_ahead(p &: Ps): bool:
     ret p_peekn(p, k).kind == tok.TK_COLON_ASSIGN
 end
 
+func state_loose(name: str): str:
+    mut t := str.Replace(name, "\xE2\x80\x8C", "")
+    t = str.Replace(t, "\xD9\x8A", "\xDB\x8C")
+    t = str.Replace(t, "\xD9\x83", "\xDA\xA9")
+    t = str.Replace(t, " ", "")
+    t = str.Replace(t, "_", "")
+    ret str.Replace(t, "-", "")
+end
+
+k_state_en := ["hover", "focus within", "focus", "active", "disabled", "checked", "invalid", "placeholder", "selection"]
+
+k_state_fa := ["اشاره", "تمرکز درون", "تمرکز", "فشردن", "غیرفعال", "تیک\xE2\x80\x8Cخورده", "نامعتبر", "جای\xE2\x80\x8Cنوشته", "گزینش"]
+
+func state_block_name(name: str): str:
+    key := state_loose(name)
+    repeat len(k_state_en) in i:
+        if str.Equals(key, state_loose(k_state_en[i])):
+            ret k_state_en[i]
+        end
+        if str.Equals(key, state_loose(k_state_fa[i])):
+            ret k_state_fa[i]
+        end
+    end
+    ret ""
+end
+
+func state_has_prefix(name: str): bool:
+    repeat len(k_state_en) in i:
+        mut w := k_state_en[i]
+        repeat 2:
+            wl := str.Len(w)
+            if str.Len(name) > wl + 1 and str.StartsWith(name, w):
+                sep := byte_at(name, wl)
+                if sep == 95 or sep == 32 or sep == 45:
+                    ret true
+                end
+            end
+            w = k_state_fa[i]
+        end
+    end
+    ret false
+end
+
+func state_block_lower(a &: at.Ast, parent: int, el: int): bool:
+    canon := state_block_name(at.Get(a, el).name)
+    if str.Len(canon) == 0:
+        ret false
+    end
+    at.SetName(a, el, canon)
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ATTR or state_has_prefix(at.Get(a, cid).name):
+            ret false
+        end
+    end
+    repeat at.ChildCount(a, el) in j:
+        cid := at.Child(a, el, j)
+        at.SetName(a, cid, canon + " " + at.Get(a, cid).name)
+        at.AddChild(a, parent, cid)
+    end
+    ret true
+end
+
 func layout_body_ex(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
     until not p_at(p, tok.TK_KW_END) and not p_at_eof(p) and not (stop_else and p_at(p, tok.TK_KW_ELSE)):
         before := p.pos
@@ -36,7 +99,10 @@ func layout_body_ex(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
             p_error(p, "'else' without a matching 'if' in layout")
             p_advance(p)
         else p_at(p, tok.TK_LAYOUT_ELEMENT):
-            at.AddChild(a, parent, layout_element(p, a))
+            el := layout_element(p, a)
+            if not state_block_lower(a, parent, el):
+                at.AddChild(a, parent, el)
+            end
         else p_at(p, tok.TK_LAYOUT_ATTR_NAME):
             at.AddChild(a, parent, layout_attribute(p, a))
         else p_at(p, tok.TK_KW_MUT) or layout_decl_ahead(p):

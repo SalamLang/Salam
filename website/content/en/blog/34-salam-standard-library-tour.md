@@ -170,7 +170,7 @@ Audio is its own family: [audio](/std/audio/) for clips of samples, readers and 
 
 ## Graphics, GUI and the browser {#gui}
 
-For desktop programs there are [gui.webview](/std/gui/webview/), a native window around HTML with a whole application layer on top, and the native UI runtime in [gui.ui](/std/gui/ui/), which draws Salam pages without a browser using its own [CSS engine](/std/gui/css/), [box layout](/std/gui/cssbox/), [text shaping](/std/gui/typeset/) and [painter](/std/gui/paint/). Games use [gui.raylib](/std/gui/raylib/). In the browser, [dom](/std/dom/) works with page elements and events, [web.canvas](/std/web/canvas/) draws on a canvas, and [web.keys](/std/web/keys/) tracks keyboard state for games. The articles on [desktop and GUI applications](/blog/desktop-gui-apps-with-salam/) and [interactive UI components](/blog/interactive-ui-components-state-events/) cover them.
+For desktop programs there are [gui.webview](/std/gui/webview/), a native window around HTML with a whole application layer on top, and the native UI runtime in [gui.ui](/std/gui/ui/), which draws Salam pages without a browser using its own [style standard](/std/gui/style/), [layout engine](/std/gui/flow/), [text shaping](/std/gui/typeset/) and [painter](/std/gui/paint/). Games use [gui.raylib](/std/gui/raylib/). In the browser, [dom](/std/dom/) works with page elements and events, [web.canvas](/std/web/canvas/) draws on a canvas, and [web.keys](/std/web/keys/) tracks keyboard state for games. The articles on [desktop and GUI applications](/blog/desktop-gui-apps-with-salam/) and [interactive UI components](/blog/interactive-ui-components-state-events/) cover them.
 
 ## The trade-offs of a large standard library {#limits}
 

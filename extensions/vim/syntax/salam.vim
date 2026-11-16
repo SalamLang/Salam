@@ -25,7 +25,7 @@ syn keyword salamType         void bool char str uchar i8 i16 i32 int i64 u8 u16
 syn keyword salamType         auto خودکار تلقائي
 syn keyword salamBuiltinType  وکتور Vector نگاشت HashMap پیمایشگرنگاشت MapIter پرونده File گوناگون Variant
 syn keyword salamBuiltin      print println printerr printerrln input چاپ سرچاپ ورودی
-syn keyword salamOperatorWord and or not eq neq lt gt lte gte و یا برابر نابرابر وارونه کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر
+syn keyword salamOperatorWord and or not و یا برابر نابرابر وارونه کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر
 syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn go برو
 syn match salamStatement "\<\%(گرفتن خطا\|پرتاب خطا\)\>"
 syn match salamStorageClass "\<\%(درون‌داد\|برون‌داد\|بی‌کاره\)\>"
@@ -47,8 +47,12 @@ syn match salamNumber "\<0[oO]\o[0-7_]*\>"
 syn match salamFloat  "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*[eE][+-]\=[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*f\=\>"
 syn match salamFloat  "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\.[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\%([eE][+-]\=[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\)\=f\=\>"
 
+syn match salamColor "#\%(\x\{8}\|\x\{6}\|\x\{3,4}\)\>"
+syn match salamDimension "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\%(\.[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\)\=\%(vmin\|vmax\|turn\|rem\|deg\|rad\|px\|em\|vw\|vh\|fr\|ms\|s\)\>"
+syn match salamPercent "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\%(\.[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\)\=[%\u066a]\ze\%(\s\|[,)\]}\u060c]\|$\)"
+
 syn match salamAnnotation "@[A-Za-z_]\k*"
-syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|کوچکتربرابر\|بزرگتربرابر\|deprecated\|printerrln\|نادرست‌چاپ\|گرفتن خطا\|پرتاب خطا\|interface\|component\|continue\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|extern\|inline\|export\|throws\|ناپایا\|ساختار\|میانجی\|همگانی\|نادرخط\|کاربست\|خطادار\|نادرست\|وارونه\|کوچکتر\|بزرگتر\|until\|break\|defer\|match\|catch\|throw\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|بشکن\|تلاش\|func\|type\|enum\|page\|pure\|impl\|پایا\|گونه\|صفحه\|بسته\|درخط\|تابع\|true\|null\|درست\|this\|ret\|end\|try\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|and\|not\|neq\|lte\|gte\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|or\|eq\|lt\|gt\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
+syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|کوچکتربرابر\|بزرگتربرابر\|deprecated\|printerrln\|نادرست‌چاپ\|گرفتن خطا\|پرتاب خطا\|interface\|component\|continue\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|extern\|inline\|export\|throws\|ناپایا\|ساختار\|میانجی\|همگانی\|نادرخط\|کاربست\|خطادار\|نادرست\|وارونه\|کوچکتر\|بزرگتر\|until\|break\|defer\|match\|catch\|throw\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|بشکن\|تلاش\|func\|type\|enum\|page\|pure\|impl\|پایا\|گونه\|صفحه\|بسته\|درخط\|تابع\|true\|null\|درست\|this\|ret\|end\|try\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|and\|not\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|or\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
 
 syn match salamOperator "\.\.\.\|:=\|==\|!=\|<=\|>=\|\*\*=\|[-+*/%]=\|[-+*/%<>=&?]"
 syn match salamDelimiter "[(){}\[\],;]"
@@ -71,7 +75,7 @@ syn region salamTripleString start=+"""+ end=+"""+ keepend
 syn match  salamCharacter "u\='\%(\\\%(x\x\x\|u{\x\+}\|u\x\{4}\|.\)\|[^'\\]\)'"
 
 syn match salamFunctionCall "\k\+\ze\s*("
-syn match salamBuiltinMethod "\.\@<=\%(زیررشته نویسه\|نویسه شماره\|char_substr\|starts_with\|رونوشت عمیق\|char_count\|بیاب نویسه\|خواندن خط\|شمارنویسه\|char_find\|ends_with\|deep_copy\|داردبعدی\|has_next\|readline\|به اعشار\|to_float\|دربردارد\|includes\|دربیاور\|جابجایی\|زیررشته\|به صحیح\|char_at\|شروع با\|بایت ها\|آزادکن\|remove\|اندازه\|پیمایش\|خواندن\|concat\|substr\|پیراست\|to_int\|GetOr\|IsEmpty\|ToInt\|ToFloat\|ToStr\|Push\|Pop\|Get\|Set\|Has\|Put\|Remove\|Size\|Len\|Cap\|Free\|Iter\|HasNext\|Key\|Value\|Next\|Ref\|Read\|Write\|Seek\|Close\|Concat\|Substr\|Find\|Split\|Trim\|CharCount\|CharAt\|CharSubstr\|CharFind\|StartsWith\|EndsWith\|Includes\|Copy\|DeepCopy\|Bytes\|Lower\|Upper\|Repeat\|Readline\|ختم با\|رونوشت\|repeat\|بیفزا\|ارجاع\|بنشان\|ظرفیت\|مقدار\|value\|نوشتن\|write\|close\|پیوست\|بشکاف\|split\|bytes\|lower\|upper\|تکرار\|push\|بگیر\|free\|دارد\|size\|iter\|کلید\|بعدی\|next\|read\|seek\|ببند\|بیاب\|find\|trim\|copy\|کوچک\|بزرگ\|pop\|get\|ref\|set\|طول\|len\|cap\|درج\|put\|has\|حذف\|Push|Pop|Get|Ref|Set|Len|Cap|Free|Put|Has|Remove|Size|Iter|HasNext|Key|Value|Next|Read|Readline|Write|Seek|Close|Concat|Substr|Find|Split|Trim|ToInt|ToFloat|ToStr|CharCount|CharAt|CharSubstr|CharFind|StartsWith|EndsWith|Includes|Copy|DeepCopy|Bytes|Lower|Upper|Repeat|First|Last|Clear|Reserve|Alloc|Insert|RemoveAt|IsEmpty|GetOr|Clone|Swap|Slice|Extend|PopBack|PopFront|PushBack|PushFront|Front|Back|FrontVal|BackVal|Peek|Enqueue|Dequeue|Contains|Add|Discard|Union|Intersect|Difference|Top|Count|Fit|Predict|Score|Transform|FitPredict|FitTransform|InverseTransform|PredictProba|Decision|Forward|FreeAll|Step|SameShape|SplitXy|Render|HandleEvent|Focusable|Hits|Visible|Bounds|SetBounds|PreferredSize|Measure|key\)\>"
+syn match salamBuiltinMethod "\.\@<=\%(دریافت با پیش فرض\|زیررشته نویسه\|نویسه شماره\|char_substr\|starts_with\|رونوشت عمیق\|char_count\|بیاب نویسه\|خواندن خط\|شمارنویسه\|char_find\|ends_with\|deep_copy\|خالی است\|is_empty\|داردبعدی\|has_next\|readline\|به اعشار\|to_float\|دربردارد\|includes\|دربیاور\|جابجایی\|زیررشته\|به صحیح\|char_at\|شروع با\|بایت ها\|به رشته\|get_or\|آزادکن\|remove\|اندازه\|پیمایش\|خواندن\|concat\|substr\|پیراست\|to_int\|ختم با\|رونوشت\|repeat\|to_str\|بیفزا\|ارجاع\|بنشان\|ظرفیت\|مقدار\|value\|نوشتن\|write\|close\|پیوست\|بشکاف\|split\|bytes\|lower\|upper\|تکرار\|push\|بگیر\|free\|دارد\|size\|iter\|کلید\|بعدی\|next\|read\|seek\|ببند\|بیاب\|find\|trim\|copy\|کوچک\|بزرگ\|pop\|get\|ref\|set\|طول\|len\|cap\|درج\|put\|has\|حذف\|key\)\>"
 
 syn keyword salamTodo contained TODO FIXME XXX NOTE HACK
 syn region  salamBlockComment start="/\*" end="\*/" contains=salamTodo,@Spell fold
@@ -121,6 +125,9 @@ hi def link salamEscape        SpecialChar
 hi def link salamEscapeError   Error
 hi def link salamNumber        Number
 hi def link salamFloat         Float
+hi def link salamColor         Constant
+hi def link salamDimension     Number
+hi def link salamPercent       Number
 hi def link salamOperator      Operator
 hi def link salamOperatorWord  Operator
 hi def link salamDelimiter     Delimiter

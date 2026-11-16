@@ -79,12 +79,13 @@ RUN apt-get update \
         ca-certificates curl unzip gcc libc6-dev git \
     && rm -rf /var/lib/apt/lists/*
 ARG SALAM_SEED_SLUG=linux-x86_64
+ARG SALAM_SEED_VERSION=0.6.3
 COPY tools /repo/tools
 COPY compiler /repo/compiler
 COPY std /repo/std
 COPY VERSION /repo/VERSION
 WORKDIR /repo
-RUN sh tools/bash/fetch-seed.sh --slug "${SALAM_SEED_SLUG}" --out /repo/seed \
+RUN sh tools/bash/fetch-seed.sh --slug "${SALAM_SEED_SLUG}" --version "${SALAM_SEED_VERSION}" --out /repo/seed \
     && sh tools/bash/build-selfhost.sh --seed=/repo/seed/salam \
     --output=/repo/salam -- --target=x86_64-linux-musl
 RUN /repo/salam version

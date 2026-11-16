@@ -184,6 +184,22 @@ func ln_to_fa(text: str, fa: lp.Langpack): str:
             i++
             continue
         end
+        if i > 0 and byte_at(text, i - 1) == 32 and (b == 60 or b == 62 or b == 61 or b == 33):
+            mut olen := 0
+            if i + 2 < n and byte_at(text, i + 2) == 32 and i + 1 < n and byte_at(text, i + 1) == 61:
+                olen = 2
+            else i + 1 < n and byte_at(text, i + 1) == 32 and (b == 60 or b == 62):
+                olen = 1
+            end
+            if olen > 0:
+                cw := lp.FaCmpWordForSymbol(str.Substr(text, i, olen))
+                if str.Len(cw) > 0:
+                    str.BufAppend(out, cw)
+                    i += olen
+                    continue
+                end
+            end
+        end
         if ln_is_word_start(b) and (i == 0 or not ln_is_word(byte_at(text, i - 1))):
             mut j := i
             until j < n and ln_is_word(byte_at(text, j)):
@@ -340,11 +356,12 @@ func ln_style_attrs(g &: LnGen, a &: at.Ast, el: int):
         if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0:
             continue
         end
-        mut prop := 0
-        mut state := 0
-        if not sm.StyleAttrOf(aid, prop, state):
+        sa := sm.ResolveStyleAttr(an.name)
+        if not sa.ok or sm.StyleAttrIsEvent(a, aid):
             continue
         end
+        prop := sa.prop
+        state := sa.state
         v := val_str(a, an.a)
         state_expr := g.nm.ui + "." + ln_state_const(state)
         ln_call(g, g.nm.set_text, state_expr + g.nm.sep + co.I64Toa(prop as i64) + g.nm.sep + ln_str_expr(v))
@@ -390,6 +407,9 @@ func ln_pseudo_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int):
             continue
         end
         nm := an.name
+        if sm.ResolveStyleAttr(nm).ok:
+            continue
+        end
         pl := sm.LayoutPseudoPrefixLen(nm)
         if pl == 0:
             continue
@@ -430,9 +450,7 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             continue
         end
         nm := an.name
-        mut sprop := 0
-        mut sstate := 0
-        if sm.StyleAttrOf(aid, sprop, sstate):
+        if sm.ResolveStyleAttr(nm).ok and not sm.StyleAttrIsEvent(a, aid):
             continue
         end
         if sm.LayoutPseudoPrefixLen(nm) > 0:
@@ -1409,6 +1427,25 @@ func ln_source(g &: LnGen, with_main: bool): str:
         s += n.kw_end + "\n"
     end
     ret s
+end
+
+pub func NativeEntryOk(log: lg.Logger, a &: at.Ast, prog: int): bool:
+    if prog == 0:
+        ret true
+    end
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) > 0 and not d.view_glue:
+            lg.Log(
+                log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("page '%s' returns HTML text and cannot open a window: write an unnamed 'page:' for the native target"),
+                    co.ArgStr(d.name)
+                )
+            )
+            ret false
+        end
+    end
+    ret true
 end
 
 pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): bool:

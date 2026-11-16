@@ -36,9 +36,7 @@ EL_DIGIT := "0-9٠-٩۰-۹"
 VIM_ISKEYWORD := "@,48-57,_,192-255"
 
 STYLE_PROPS_SRC := "tools/salam/style-properties.tsv"
-STYLE_WORDS_SRC := "tools/salam/style-keywords.tsv"
 UNIT_WORDS := ["px", "em", "rem", "vw", "vh", "vmin", "vmax", "fr", "ms", "s", "deg", "rad", "turn"]
-STATE_WORDS := ["hover", "focus within", "focus", "active", "disabled", "checked", "invalid", "placeholder", "selection", "اشاره", "تمرکز درون", "تمرکز", "فشردن", "غیرفعال", "تیک\u200Cخورده", "نامعتبر", "جای\u200Cنوشته", "گزینش"]
 
 TK_FUNC := 10
 TK_RET := 11
@@ -259,7 +257,6 @@ contexts:
     - include: directives
     - include: comments
     - include: annotations
-    - include: style-attribute
     - include: strings
     - include: numbers
     - include: definitions
@@ -302,20 +299,6 @@ contexts:
       captures:
         1: punctuation.definition.annotation.salam
         2: storage.modifier.annotation.salam
-
-  style-attribute:
-    - match: '^\s*((?:(?:%%STYLESTATES%%)\s+)?(?:%%STYLEPROPS%%))\s*(=)(?!=)'
-      captures:
-        1: support.type.property-name.salam
-        2: keyword.operator.assignment.salam
-      push: style-value
-
-  style-value:
-    - match: '(?=\n)'
-      pop: true
-    - match: '{{nbb}}(?:%%STYLEVALUES%%){{nba}}'
-      scope: support.constant.property-value.salam
-    - include: main
 
   strings:
     - match: '"""'
@@ -634,8 +617,6 @@ syn match salamPercent "\<[%%DIGIT%%][%%DIGIT%%_]*\%(\.[%%DIGIT%%][%%DIGIT%%_]*\
 
 syn match salamAnnotation "@[A-Za-z_]\k*"
 syn match salamLayoutElement "^\s*\%(\%(%%ALLKW%%\)\>\)\@!\zs\k\+\ze\s*:\s*$"
-syn match salamStyleValue contained containedin=salamStyleLine "\<\%(%%STYLEVALUES%%\)\>"
-syn region salamStyleLine matchgroup=salamStyleName start="^\s*\zs\%(\%(%%STYLESTATES%%\)\s\+\)\=\%(%%STYLEPROPS%%\)\ze\s*=\%(=\)\@!" end="$" oneline keepend contains=TOP
 
 syn match salamOperator "\.\.\.\|:=\|==\|!=\|<=\|>=\|\*\*=\|[-+*/%]=\|[-+*/%<>=&?]"
 syn match salamDelimiter "[(){}\[\],;]"
@@ -711,8 +692,6 @@ hi def link salamFloat         Float
 hi def link salamColor         Constant
 hi def link salamDimension     Number
 hi def link salamPercent       Number
-hi def link salamStyleName     Type
-hi def link salamStyleValue    Constant
 hi def link salamOperator      Operator
 hi def link salamOperatorWord  Operator
 hi def link salamDelimiter     Delimiter
@@ -1904,7 +1883,6 @@ VSCODE_TPL := `{
     { "include": "#directives" },
     { "include": "#comments" },
     { "include": "#meta-annotations" },
-    { "include": "#style-attribute" },
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#definitions" },
@@ -2102,18 +2080,6 @@ VSCODE_TPL := `{
         { "name": "keyword.other.salam", "match": "%%NBB%%(?:%%CONTEXTUAL%%)%%NBA%%" }
       ]
     },
-    "style-attribute": {
-      "begin": "^\\s*((?:(?:%%STYLESTATES%%)\\s+)?(?:%%STYLEPROPS%%))\\s*(=)(?!=)",
-      "beginCaptures": {
-        "1": { "name": "support.type.property-name.salam" },
-        "2": { "name": "keyword.operator.assignment.salam" }
-      },
-      "end": "$",
-      "patterns": [
-        { "name": "support.constant.property-value.salam", "match": "%%NBB%%(?:%%STYLEVALUES%%)%%NBA%%" },
-        { "include": "$self" }
-      ]
-    },
     "layout-element": {
       "patterns": [
         {
@@ -2229,9 +2195,6 @@ struct Lex:
     pub booleans: Vector<str> = Vector {}
     pub nulls: Vector<str> = Vector {}
     pub blockOpen: Vector<str> = Vector {}
-    pub styleProps: Vector<str> = Vector {}
-    pub styleValues: Vector<str> = Vector {}
-    pub styleStates: Vector<str> = Vector {}
 end
 
 struct Snippet:
@@ -2637,7 +2600,7 @@ func build_lex(): Lex:
     out.booleans = collect(spellEn, kindEn, spellFa, kindFa, BOOLEAN_KINDS[:])
     out.nulls = collect(spellEn, kindEn, spellFa, kindFa, NULL_KINDS[:])
     out.blockOpen = collect(spellEn, kindEn, spellFa, kindFa, BLOCK_OPEN_KINDS[:])
-    load_style(out)
+    check_units()
     ret out
 end
 
@@ -2714,32 +2677,35 @@ func tsv_cell(line: str, col: int): str:
     ret cells.Get(col)
 end
 
-func load_style(lx &: Lex):
-    props := tsv_lines(STYLE_PROPS_SRC)
-    repeat props.Len() in i:
-        push_unique(lx.styleProps, tsv_cell(props.Get(i), 1))
-        push_unique(lx.styleProps, tsv_cell(props.Get(i), 2))
+func check_units():
+    text := read_source("compiler/lexer/lexer_number.salam")
+    key := "units := ["
+    at := str.IndexOf(text, key)
+    if at < 0:
+        printerrln "gen_syntaxes: cannot find the unit list in compiler/lexer/lexer_number.salam"
+        os.Exit(1)
     end
-    words := tsv_lines(STYLE_WORDS_SRC)
-    repeat words.Len() in i:
-        push_unique(lx.styleValues, tsv_cell(words.Get(i), 1))
-        push_unique(lx.styleValues, tsv_cell(words.Get(i), 2))
+    from := at + str.Len(key)
+    close := str.IndexFrom(text, "]", from)
+    got := str.Split(str.Replace(str.Substr(text, from, close - from), "\"", ""), ", ")
+    mut ok := got.Len() == len(UNIT_WORDS)
+    if ok:
+        repeat got.Len() in i:
+            if str.Trim(got.Get(i)) != UNIT_WORDS[i]:
+                ok = false
+            end
+        end
     end
-    push_arr(STATE_WORDS[:], lx.styleStates)
+    if not ok:
+        printerrln "gen_syntaxes: UNIT_WORDS differs from the unit list in compiler/lexer/lexer_number.salam"
+        os.Exit(1)
+    end
 end
 
 func units_alt(sep: str): str:
     mut v := Vector {} as Vector<str>
     push_arr(UNIT_WORDS[:], v)
     ret str.Join(sorted_desc(v), sep)
-end
-
-func style_alt(words: Vector<str>, space: str): str:
-    ret str.Replace(alt(words), " ", space)
-end
-
-func vim_style_alt(words: Vector<str>): str:
-    ret str.Replace(vim_alt(words), " ", "\\s\\+")
 end
 
 func parent_dir(path: str): str:
@@ -2790,9 +2756,6 @@ func emit_sublime_syntax(lx: Lex): str:
     s = str.Replace(s, "%%CONTEXTUAL%%", alt(lx.contextual))
     s = str.Replace(s, "%%ALLKW%%", alt(all_keywords(lx)))
     s = str.Replace(s, "%%UNITS%%", units_alt("|"))
-    s = str.Replace(s, "%%STYLESTATES%%", style_alt(lx.styleStates, "\\s+"))
-    s = str.Replace(s, "%%STYLEPROPS%%", style_alt(lx.styleProps, "\\s+"))
-    s = str.Replace(s, "%%STYLEVALUES%%", style_alt(lx.styleValues, "\\s+"))
     ret s
 end
 
@@ -3081,9 +3044,6 @@ func emit_vim_syntax(lx: Lex): str:
     s = str.Replace(s, "%%INTRMETHODS%%", vim_alt(lx.intrMethods))
     s = str.Replace(s, "%%ALLKW%%", vim_alt(all_keywords(lx)))
     s = str.Replace(s, "%%UNITS%%", units_alt("\\|"))
-    s = str.Replace(s, "%%STYLESTATES%%", vim_style_alt(lx.styleStates))
-    s = str.Replace(s, "%%STYLEPROPS%%", vim_style_alt(lx.styleProps))
-    s = str.Replace(s, "%%STYLEVALUES%%", vim_style_alt(lx.styleValues))
     ret s
 end
 
@@ -3415,9 +3375,6 @@ func emit_vscode_grammar(lx: Lex): str:
     s = str.Replace(s, "%%CONTEXTUAL%%", json.Escape(alt(lx.contextual)))
     s = str.Replace(s, "%%ALLKW%%", json.Escape(alt(all_keywords(lx))))
     s = str.Replace(s, "%%UNITS%%", units_alt("|"))
-    s = str.Replace(s, "%%STYLESTATES%%", json.Escape(style_alt(lx.styleStates, "\\s+")))
-    s = str.Replace(s, "%%STYLEPROPS%%", json.Escape(style_alt(lx.styleProps, "\\s+")))
-    s = str.Replace(s, "%%STYLEVALUES%%", json.Escape(style_alt(lx.styleValues, "\\s+")))
     ret json.IndentWith(json.Minify(s), "  ") + "\n"
 end
 

@@ -9,7 +9,7 @@ trap 'rm -f "$tmp"' EXIT
 
 scan() {
     awk -v file="$1" '
-        BEGIN { skipnames = "|content|title|alt|srcset|sizes|imagesizes|imagesrcset|placeholder|value|label|name|url|href|src|media|description|keywords|text|pattern|action|style|viewport|timeout|" }
+        BEGIN { skipnames = "|content|title|alt|srcset|sizes|imagesizes|imagesrcset|اندازه‌ها|اندازه‌های تصویر|مجموعه منبع|مجموعه منبع تصویر|placeholder|value|label|name|url|href|src|media|description|keywords|text|pattern|action|style|viewport|timeout|" }
         {
             line = $0
             gsub(/&quot;/, "\"", line)
@@ -20,7 +20,10 @@ scan() {
                 sub(/ *= .*$/, "", name)
                 n = split(name, w, " ")
                 key = w[n]
-                if (index(skipnames, "|" key "|") == 0) {
+                full = name
+                sub(/^ +/, "", full)
+                sub(/ +$/, "", full)
+                if (index(skipnames, "|" key "|") == 0 && index(skipnames, "|" full "|") == 0) {
                     print file ":" NR ": quoted size: " hit
                 }
                 line = substr(line, RSTART + RLENGTH)

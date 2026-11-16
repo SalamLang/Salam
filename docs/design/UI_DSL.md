@@ -210,6 +210,342 @@ Any style attribute may carry one prefix: `hover`, `focus`, `focus within`,
 as conditions on attributes in a later version; `light dark(a, b)` colours
 work from the start.
 
+## Reactivity
+
+The page writes plain variables and handlers; the compiler works out who
+depends on what, and the runtime re-runs exactly that. There is no virtual
+tree and no diff of a whole view: a re-run builds only the scope that read the
+changed value, and the existing patch step copies the differences into the
+live nodes. Nothing here adds a keyword: `name := value` stays the only way to
+declare state (see `NATIVE_UI.md`, "Component and page variables"). Each rule
+below is checkable: it names an example and the exact set of scopes that must
+re-run, and each has one test for the web target and one for the native
+target, written once and run on both (`tests/{en,fa}/page` and
+`tests/{en,fa}/ui`). `SALAM_UI_TRACE=1` prints every scope that re-ran and
+the value that made it run, on both targets, so a rule can be checked by eye.
+
+A scope is a component instance, the page, or an element, `if` or `each` of
+the page block that reads state (`NATIVE_UI.md`, "Scopes"). "Re-run set"
+below means the scopes that execute their view code again.
+
+Status: R1 to R4 and R8 exist today and get tests. R5, R7, R9 and R10 exist
+in part. R6, R11 and R12 are new. Syntax that inference cannot express is
+listed in "Open decisions" and is not implemented until the owner decides.
+
+### R1. Fine grained, decided at compile time
+
+A write marks the state it changes; only scopes whose dependency set contains
+that state re-run. The dependency sets are fixed when the page is compiled, so
+the runtime never records reads and never compares trees.
+
+```salam
+component Counter(name: str):
+    count := 0
+    button: id = name click = (): count++ end content = name + " " + count end
+end
+
+page:
+    heading: content = "Counter demo" end
+    Counter: name = "a" end
+    Counter: name = "b" end
+end
+```
+
+Pressing `a`: re-run set is the `a` instance. The heading, `b` and the page
+do not run. Pressing it ten times in a row re-runs it ten times and nothing
+else.
+
+### R2. Writes are batched, one render per frame
+
+Any number of writes inside one handler, timer callback, event delivery or
+animation step mark bits; the runtime renders once after the handler returns
+(web: one microtask after the last write, applied in the next frame; native:
+once per frame). The dirty set is a union, so the same scope never runs twice
+in a tick.
+
+```salam
+component Stepper:
+    a := 0
+    b := 0
+    button: id = "go" click = ():
+        a++
+        a++
+        b = a
+    end content = a + " " + b end
+end
+```
+
+Pressing `go`: three writes, re-run set is `Stepper` once. A write made while
+a render is running (a `mount` hook, a derived callback) joins the next tick,
+and a tick that finds nothing touched does no work at all: no view run, no
+restyle, no layout, no paint.
+
+### R3. Derived values are memoised
+
+A name that is read but never written (`double := count * 2`) is derived. It
+is evaluated once per tick, when something it reads was touched, and every
+scope that reads it shares the result. A scope re-runs for a derived value
+only when the result changed, not when its inputs changed.
+
+```salam
+component Parity:
+    n := 0
+    odd := n % 2
+    label := "parity " + odd
+    button: id = "inc" click = (): n += 2 end content = n end
+    paragraph: content = label end
+end
+```
+
+Pressing `inc` (n goes 0, 2, 4): `n` changes, `odd` is evaluated and is
+still 0, so `label` is not evaluated again and the paragraph does not
+run; only the button's scope runs. A chain of derived values costs one
+evaluation per link per tick at most, in dependency order, and nothing for
+links whose inputs did not move.
+
+### R4. Writing a parent's value from a child re-runs only its readers
+
+A child changes a parent's state through a callback parameter (as today:
+`NATIVE_UI.md`, "Callbacks"). The write inside the callback is a write to the
+parent's variable, so the re-run set is the scopes that read it, nothing
+above or below them.
+
+```salam
+component Field(label: str, set: func (str)):
+    box:
+        input: id = label input = (v: str): set(v) end end
+    end
+end
+
+component Form:
+    name := ""
+    greeting := "Hello " + name
+    box:
+        Field: label = "name" set = (v: str): name = v end end
+        Field: label = "city" set = (v: str): end end
+        paragraph: content = greeting end
+    end
+end
+```
+
+Typing in `name`: re-run set is the paragraph's scope only, reached through
+the derived `greeting` (R3). The `city` field and both `Field` instances do
+not re-run, so the input keeps focus, selection and typed text without any
+special case. Two way binding (`bind`, see Open decisions) is the same rule
+with the callback written by the compiler.
+
+### R5. Shared state: page variables and stores, no keyword
+
+State that several components use is declared once and read by name, as
+today with a page block variable or a program global. Inference handles it:
+a global that some scope reads and some code writes is state, wherever the
+component is placed.
+
+```salam
+cart := Vector<str>()
+
+component Badge:
+    box: content = "Cart: " + cart.Len() end
+end
+
+component Buy(item: str):
+    button: id = item click = (): cart.Push(item) end content = item end
+end
+
+page:
+    Badge: end
+    Buy: item = "tea" end
+    Buy: item = "milk" end
+end
+```
+
+Pressing `tea`: re-run set is `Badge`. The `Buy` instances do not run, because
+they only write `cart`. A struct of state in a package (`mut Store`, or a
+struct global) is the same: a scope depends on the fields it reads, a write to
+one field does not wake readers of another (field level marks for struct
+globals are new; today the whole global is one mark). No `provide`/`inject`
+pair is needed because every instance is expanded inside its parent and names
+resolve at compile time.
+
+### R6. Props flow down, events flow up
+
+A parent value passed as a component parameter makes the child depend on it;
+when the parent value changes the child re-runs, and only when the value
+changed (compared by value, the same cut-off as R3). A child never writes a
+parameter back; it calls a callback or `emit`s (`NATIVE_UI.md`, "Events that
+bubble"). A parent that re-runs for its own reasons does not re-run a child
+whose parameters hold the same values.
+
+```salam
+component Price(amount: int):
+    paragraph: content = amount end
+end
+
+component Shop:
+    qty := 1
+    note := ""
+    box:
+        button: id = "more" click = (): qty++ end content = "more" end
+        input: id = "note" input = (v: str): note = v end end
+        Price: amount = qty * 10 end
+    end
+end
+```
+
+Pressing `more`: re-run set is the `Price` instance and the `Shop` scope
+that reads `qty`; typing in `note` re-runs nothing that reads `qty`, so
+`Price` stays. Today a parent re-run re-runs every child natively; the rule
+makes it skip equal parameters.
+
+### R7. Effects, with cleanup, and mount and unmount
+
+Code that must run when something appears, disappears or changes, and
+undo itself afterwards, is a hook of the component (syntax in Open
+decisions). The re-run set of a hook is itself: it never re-runs a view
+unless it writes state.
+
+- `mount` runs once after the instance first appears in the tree, after the
+  tick's patch, so ids and focus exist.
+- `unmount` runs once when the instance leaves the tree (an `if` turned
+  false, a row removed, a page left). Cleanups of the instance run in
+  reverse order of registration.
+- An effect that names values (`watch`) runs after mount and again after a
+  tick in which one of those values changed, calling its previous cleanup
+  first.
+- A timer or subscription started in `mount` and stopped in the cleanup is
+  stopped exactly once, on both targets.
+
+```salam
+component Clock:
+    now := 0
+    on mount:
+        id := every(1000, (): now++ end)
+        ret (): stop_timer(id) end
+    end
+    paragraph: content = "tick " + now end
+end
+```
+
+`Clock` placed under an `if`: when the `if` turns false the cleanup runs and
+no tick ever writes `now` again; when it turns true, `now` restarts from 0
+(R8's rule for an instance that reappears). Re-run set per tick of the timer:
+the `Clock` instance.
+
+### R8. Keyed lists keep instance state across moves
+
+A row is matched by its `key` (or `id`) and its site, so inserting, removing
+or reordering rows moves each instance's variables, focus and typed text with
+its row, and only new keys run `mount`, only removed keys run `unmount`. A
+duplicate key among siblings is a compile error when it is a literal and a
+run time warning otherwise (E-number to be assigned).
+
+```salam
+component Row(name: str):
+    hits := 0
+    item: key = name content = name + " " + hits click = (): hits++ end end
+end
+
+page:
+    list:
+        each it in items:
+            Row: name = it end
+        end
+    end
+end
+```
+
+Click `b` twice, then move `b` before `a`: `b` shows 2 and `a` shows 0.
+Re-run set of the move: the `each` scope (to reorder), no `Row` instance
+runs; of a click: that `Row` only. Toggling one of 1000 rows re-runs one
+scope, not 1000.
+
+### R9. Async values: loading, error, value
+
+A value that arrives later (a fetch, a read, a computation on a worker) is
+state with three readable parts, so a view can show each without extra
+bookkeeping. Starting one is a call; its completion is one write, so it is
+batched and tracked like any other (R1, R2).
+
+```salam
+component Weather(city: str):
+    data := load(() : Report: fetch_report(city) end)
+    if data.loading: paragraph: content = "..." end end
+    if data.error != "": paragraph: content = data.error end end
+    if data.ready: paragraph: content = data.value.temp end end
+end
+```
+
+When the result arrives: re-run set is the scopes reading `data`. A new
+`city` starts a new load; an answer from the previous `city` that arrives
+late is dropped (no stale result), and `unmount` drops a pending result.
+Timers (`every`, `after`) follow the same rule: a callback runs as a handler,
+its writes batch into one tick, and a timer owned by an instance dies with it.
+
+### R10. No stale closures
+
+A handler, callback or effect reads the current value of the variables it
+names at the time it runs, never a copy taken when it was created. State
+lives in per instance storage, not in the closure, so there is nothing to
+go stale.
+
+```salam
+component Delay:
+    n := 0
+    seen := 0
+    button: id = "inc" click = (): n++ end content = n end
+    button: id = "snap" click = (): after(500, (): seen = n end) end content = seen end
+end
+```
+
+Pressing `inc` three times within the half second after pressing `snap`
+shows `seen` as 3, not 0. A callback inside `each` reads the row's loop
+variable as of the row it belongs to (web handlers inside `each` use the
+row component's variables, `NATIVE_UI.md`, "The escape hatch and the
+limits"). The test fails if a handler observes an earlier value than the
+state at call time.
+
+### R11. Same semantics, same tests, both targets
+
+Every rule above has one test written once in the page DSL, with the same
+expected output on the web (`salam page build` run in a headless browser or
+the JS test host) and natively (`ui.RenderPage`, `ui.DumpPage`, then the
+event driver). A test counts scope re-runs (`ui.ScopeRuns()` natively, the
+same counter in the page script on the web) and checks the counts in the rule's
+"re-run set". When the two targets differ, the rule is not met.
+
+### R12. Errors are visible, not silent
+
+- A variable that is written but never read by a view is an instance
+  variable (no marks, no re-runs) and says so in the trace.
+- A write the compiler cannot see is covered by `ui.Invalidate()`; the trace
+  names it as "full re-run" so it is easy to find and remove.
+- `SALAM_UI_TRACE=1` prints one line per scope run: the site, the instance
+  or element id, and the first touched value that matched
+  (`run page:2 Counter#1 because count`), one line per skipped derived
+  value (`skip even: unchanged`), and one per hook (`mount Clock#3`).
+
+### Open decisions for the owner
+
+Everything above keeps the "no state keyword" rule. These need a decision
+because inference cannot express them; none is implemented until decided.
+
+1. **Two way input binding.** `bind = name` as a plain attribute on `input`,
+   `select`, `checkbox`: it expands to `value = name` plus an input handler
+   that writes `name`. Without it, R4's callback form works and is the
+   fallback.
+2. **Lifecycle and effects.** `on mount:` and `on unmount:` blocks in a
+   component, and `on change name, other:` for an effect that names its
+   inputs, written like the existing `on saved` event handlers. Cleanup is
+   the returned lambda of the block. The alternative is attributes
+   (`mount = ...`) on the first element.
+3. **Async values.** `load(func)` returning a value with `.loading`, `.error`,
+   `.ready`, `.value`, and `every(ms, func)` / `after(ms, func)` timers owned
+   by the instance. All are ordinary std functions; only the owner link
+   (cleanup with the instance) is compiler work.
+4. **Duplicate key error number and field level marks for struct globals**
+   (R5, R8): behaviour changes that older pages could feel, so they are
+   flagged.
+
 ## Contracts between packages
 
 These are the boundaries the parallel work builds against. A package may add

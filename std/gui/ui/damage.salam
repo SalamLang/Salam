@@ -19,10 +19,20 @@ import str
 import gui.paint
 import gui.style
 
-func _filter_extent(s: style.Style): f64:
+func _filter_extent(s: style.Style, font: f64): f64:
+    b := _vp_len(s.blur, font)
+    if b > 0.0:
+        ret b * 3.0
+    end
+    ret 0.0
+end
+
+func _anc_ext(node: int): f64:
     mut e := 0.0
-    if s.blur.px > 0.0:
-        e += s.blur.px * 3.0
+    mut p := _e.dom.nodes[node].parent
+    until p >= 0:
+        e += _filter_extent(_e.cs[p], _e.us[p].font)
+        p = _e.dom.nodes[p].parent
     end
     ret e
 end
@@ -37,17 +47,22 @@ func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
     mut t := r[1]
     mut rr := r[2]
     mut bt := r[3]
-    if _xf_has(node):
+    ae := _anc_ext(node)
+    l -= ae
+    t -= ae
+    rr += ae
+    bt += ae
+    if _e.xf_any:
         _screen_bbox(node, l, t, rr, bt)
         l--
         t--
         rr++
         bt++
     else:
-        l = math.Max(l, b.clip_x0 - 1.0)
-        t = math.Max(t, b.clip_y0 - 1.0)
-        rr = math.Min(rr, b.clip_x1 + 1.0)
-        bt = math.Min(bt, b.clip_y1 + 1.0)
+        l = math.Max(l, b.clip_x0 - ae - 1.0)
+        t = math.Max(t, b.clip_y0 - ae - 1.0)
+        rr = math.Min(rr, b.clip_x1 + ae + 1.0)
+        bt = math.Min(bt, b.clip_y1 + ae + 1.0)
     end
     s := _e.scale
     x0 = math.Floor(l * s) as int
@@ -57,12 +72,14 @@ func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
     ret x1 > x0 and y1 > y0
 end
 
-func _node_key(node: int): i64:
+func _node_key(node: int, anc: i64): i64:
     mut h := 1469598103934665603 as i64
     b := _e.boxes[node]
     h = _hf(_hf(_hf(_hf(h, b.x), b.y), b.w), b.h)
     h = _hf(_hf(_hf(_hf(h, b.clip_x0), b.clip_y0), b.clip_x1), b.clip_y1)
     h = _hmix(h, _e.us[node].ihash)
+    h = _hmix(h, _e.us[node].phash)
+    h = _hmix(h, anc)
     c := _e.ctl[node]
     h = _hmix(h, (c.hovered ? 1 : 0) + (c.focused ? 2 : 0) + (c.pressed ? 4 : 0) + (c.focus_visible ? 8 : 0) + (c.open ? 16 : 0) + (_is_checked(node) ? 32 : 0))
     h = _hf(_hf(h, c.scroll_x), c.scroll_y)
@@ -130,7 +147,15 @@ func _diff_records():
     mut nrecs := Vector {} as Vector<_Rec>
     cw := math.Ceil(_e.width * _e.scale) as int
     ch := math.Ceil(_e.height * _e.scale) as int
+    mut anc := Vector {} as Vector<i64>
+    defer anc.Free()
     repeat _e.dom.nodes.Len() in node:
+        pa := _e.dom.nodes[node].parent
+        mut ah := 0 as i64
+        if pa >= 0:
+            ah = _hmix(_hmix(anc[pa], _e.us[pa].fhash), _xf_hash(pa, 0 as i64))
+        end
+        anc.Push(ah)
         mut x0 := 0
         mut y0 := 0
         mut x1 := 0
@@ -154,7 +179,7 @@ func _diff_records():
                 continue
             end
         end
-        key := _node_key(node)
+        key := _node_key(node, ah)
         nrecs.Push(_Rec { uid = uid, hash = key, x0 = x0, y0 = y0, x1 = x1, y1 = y1 })
         if old.Has(uid):
             oi := old.Get(uid)
@@ -176,6 +201,51 @@ func _diff_records():
     end
     _e.recs.Free()
     _e.recs = nrecs
+    _damage_backdrops()
+end
+
+func _damage_area(): i64:
+    mut a := 0 as i64
+    repeat _e.damage.Count() in i:
+        r := _e.damage.At(i)
+        a += (r.width as i64) * (r.height as i64)
+    end
+    ret a
+end
+
+func _damage_backdrops():
+    if _e.full:
+        ret
+    end
+    mut pass := 0
+    mut grew := true
+    until grew and pass < 4:
+        grew = false
+        pass++
+        repeat _e.dom.nodes.Len() in node:
+            if not _e.boxes[node].shown:
+                continue
+            end
+            s := _e.cs[node]
+            if _vp_len(s.backdrop_blur, _e.us[node].font) == 0.0 and s.backdrop_brightness == 1.0 and s.backdrop_contrast == 1.0 and s.backdrop_grayscale == 0.0 and s.backdrop_saturate == 1.0 and s.backdrop_sepia == 0.0 and s.backdrop_invert == 0.0 and s.backdrop_hue_rotate == 0.0:
+                continue
+            end
+            mut x0 := 0
+            mut y0 := 0
+            mut x1 := 0
+            mut y1 := 0
+            if not _ink(node, x0, y0, x1, y1):
+                continue
+            end
+            if _damage_hits(x0, y0, x1, y1):
+                before := _damage_area()
+                _damage_rect(x0, y0, x1, y1)
+                if _damage_area() > before:
+                    grew = true
+                end
+            end
+        end
+    end
 end
 
 func _damage_node(node: int):
@@ -188,52 +258,106 @@ func _damage_node(node: int):
     end
 end
 
+func _union_ink(r: f64[], l: f64, t: f64, rr: f64, bt: f64):
+    r[0] = math.Min(r[0], l)
+    r[1] = math.Min(r[1], t)
+    r[2] = math.Max(r[2], rr)
+    r[3] = math.Max(r[3], bt)
+end
+
+func _run_shadow_ext(f: _Run): f64:
+    mut ts := 0.0
+    each el in f.span_el:
+        each sh in _e.cs[el].text_shadow:
+            fo := _e.us[el].font
+            ts = math.Max(ts, math.Max(math.Abs(_vp_len(sh.x, fo)), math.Abs(_vp_len(sh.y, fo))) + _vp_len(sh.blur, fo) * 1.5 + 2.0)
+        end
+    end
+    ret ts
+end
+
 func _ink_page(node: int, r: f64[]): bool:
     b := _e.boxes[node]
     if not b.shown:
         ret false
     end
-    mut l := b.x
-    mut t := b.y
-    mut rr := b.x + b.w
-    mut bt := b.y + b.h
     s := _e.cs[node]
+    u := _e.us[node]
+    nd := _e.dom.nodes[node]
+    fo := u.font
+    r[0] = b.x
+    r[1] = b.y
+    r[2] = b.x + b.w
+    r[3] = b.y + b.h
     each sh in s.shadow:
         if not sh.inset:
-            e := sh.blur.px + math.Abs(sh.spread.px) + 2.0
-            l = math.Min(l, b.x + sh.x.px - e)
-            t = math.Min(t, b.y + sh.y.px - e)
-            rr = math.Max(rr, b.x + b.w + sh.x.px + e)
-            bt = math.Max(bt, b.y + b.h + sh.y.px + e)
+            e := math.Max(0.0, _vp_len(sh.blur, fo)) * 2.0 + math.Abs(_vp_len(sh.spread, fo)) + 2.0
+            dx := _vp_len(sh.x, fo)
+            dy := _vp_len(sh.y, fo)
+            _union_ink(r, b.x + dx - e, b.y + dy - e, b.x + b.w + dx + e, b.y + b.h + dy + e)
         end
     end
+    mut oe := 0.0
     if s.outline_style != style.KW_NONE:
-        o := math.Max(s.outline_width.px, 2.0) + math.Abs(s.outline_offset.px) + 1.0
-        l -= o
-        t -= o
-        rr += o
-        bt += o
-    end
-    if s.text_shadow.Len() > 0:
-        mut ts := 0.0
-        each sh in s.text_shadow:
-            ts = math.Max(ts, math.Max(math.Abs(sh.x.px), math.Abs(sh.y.px)) + sh.blur.px * 1.5 + 2.0)
+        ow := _vp_len(s.outline_width, fo)
+        if ow > 0.0:
+            oe = math.Max(0.0, _vp_len(s.outline_offset, fo)) + ow + 1.0
         end
-        l -= ts
-        t -= ts
-        rr += ts
-        bt += ts
     end
-    fe := _filter_extent(s)
+    if _focus_ring(node, u):
+        oe = math.Max(oe, 5.0)
+    end
+    if oe > 0.0:
+        _union_ink(r, b.x - oe, b.y - oe, b.x + b.w + oe, b.y + b.h + oe)
+    end
+    fe := _filter_extent(s, fo)
     if fe > 0.0:
-        l -= fe
-        t -= fe
-        rr += fe
-        bt += fe
+        _union_ink(r, r[0] - fe, r[1] - fe, r[2] + fe, r[3] + fe)
     end
-    r[0] = l
-    r[1] = t
-    r[2] = rr
-    r[3] = bt
+    if nd.k == _K_ITEM:
+        m := fo * 2.0
+        _union_ink(r, b.x - m, b.y, b.x + b.w + m, b.y + b.h)
+    end
+    each k in nd.kids:
+        ri := _e.node_run[k]
+        if ri >= 0 and not _e.runs[ri].control and _e.runs[ri].has_lay:
+            f := _e.runs[ri]
+            ts := _run_shadow_ext(f) + 2.0
+            _union_ink(r, f.x - ts, f.y - ts, f.x + math.Max(f.w, f.lay.width) + ts, f.y + math.Max(f.h, f.lay.height) + ts)
+        end
+    end
+    if node == _e.popup and _e.popup >= 0:
+        mut px := 0.0
+        mut py := 0.0
+        mut pw := 0.0
+        mut ih := 0.0
+        mut pn := 0
+        _pp_geo(px, py, pw, ih, pn)
+        _union_ink(r, px - 8.0, py - 8.0, px + pw + 8.0, py + ih * (pn as f64) + 12.0)
+    end
+    ret true
+end
+
+func _sub_ink(node: int, r: f64[]): bool:
+    if not _ink_page(node, r):
+        ret false
+    end
+    each k in _e.dom.nodes[node].kids:
+        if _e.fid[k] < 0 or not _e.boxes[k].shown:
+            continue
+        end
+        mut kr := [0.0, 0.0, 0.0, 0.0]
+        if not _sub_ink(k, kr):
+            continue
+        end
+        if _xf_has(k):
+            m := _e.xf[k].MapRect(paint.RectOf(kr[0], kr[1], kr[2] - kr[0], kr[3] - kr[1]))
+            kr[0] = m.x
+            kr[1] = m.y
+            kr[2] = m.x + m.width
+            kr[3] = m.y + m.height
+        end
+        _union_ink(r, kr[0], kr[1], kr[2], kr[3])
+    end
     ret true
 end

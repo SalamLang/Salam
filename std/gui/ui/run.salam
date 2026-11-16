@@ -15,6 +15,7 @@
 package ui
 
 import math
+import mem
 import os
 import str
 import gui.paint
@@ -85,6 +86,8 @@ func _start_dom(nd: _Dom, o: Options): bool:
         _e.win.SetTitle(o.title)
     end
     _e.ready = true
+    _e.script = o.script
+    _e.dark = window.CurrentColorScheme() == window.ColorScheme.Dark
     _style_all()
     _relayout()
     if _e.dom.title.Len() > 0 and o.title.Len() == 0:
@@ -96,10 +99,64 @@ func _start_dom(nd: _Dom, o: Options): bool:
     ret true
 end
 
+func _apply_states():
+    _e.states_dirty = false
+    _e.restyled.Clear()
+    _restyle_states()
+    each n in _e.restyled:
+        _sync_flow(n)
+    end
+    _e.restyled.Clear()
+    _e.dirty_style = true
+end
+
+func _anim_recompute(node: int):
+    old := _e.us[node].ihash
+    _compute(node)
+    _sync_flow(node)
+    if _e.us[node].ihash == old:
+        ret
+    end
+    each k in _e.dom.nodes[node].kids:
+        if k < _e.cs.Len() and _e.dom.nodes[k].k != _K_TEXT:
+            _anim_recompute(k)
+        end
+    end
+end
+
+func _anim_tick():
+    if _e.anims.Len() == 0:
+        ret
+    end
+    mut seen := Vector {} as Vector<int>
+    defer seen.Free()
+    repeat _e.anims.Len() in i:
+        a := _e.anims[i]
+        if a.done or a.node < 0 or a.node >= _e.cs.Len():
+            continue
+        end
+        mut dup := false
+        each s in seen:
+            if s == a.node:
+                dup = true
+            end
+        end
+        if not dup:
+            seen.Push(a.node)
+        end
+    end
+    each n in seen:
+        _anim_recompute(n)
+    end
+end
+
 func _frame_update():
     reactive.SetTime(_e.has_win ? window.Clock() : _now())
+    if _e.states_dirty:
+        _apply_states()
+    end
     mut guard := 0
-    until (_e.dirty_view or _e.dirty_style or _e.dirty_layout) and guard < 4:
+    until (_e.dirty_view or _e.dirty_style or _e.dirty_layout or _e.dirty_dom) and guard < 4:
         guard++
         if _e.dirty_view and _sc_active():
             _e.dirty_view = false
@@ -110,7 +167,16 @@ func _frame_update():
             _e.dirty_view = false
             _e.dirty_style = false
             _e.dirty_layout = false
+            _e.dirty_dom = false
             _rerun_view()
+            continue
+        end
+        if _e.dirty_dom:
+            _e.dirty_dom = false
+            _e.dirty_style = false
+            _e.dirty_layout = false
+            _style_all()
+            _relayout_all()
             continue
         end
         need := _e.dirty_layout
@@ -125,7 +191,9 @@ func _frame_update():
         _place_all()
     end
     _xf_update()
+    _anim_tick()
     _anims_running()
+    _update_ime()
     _diff_records()
 end
 
@@ -170,6 +238,17 @@ func _paint_frame(): bool:
     ret true
 end
 
+func _button_of(b: window.MouseButton): int:
+    switch b:
+        window.MouseButton.Middle: ret 1 end
+        window.MouseButton.Right: ret 2 end
+        window.MouseButton.Back: ret 3 end
+        window.MouseButton.Forward: ret 4 end
+        else: ret 0 end
+    end
+    ret 0
+end
+
 func _handle(ev: window.Event):
     switch ev.kind:
         window.EventKind.CloseRequested:
@@ -180,7 +259,7 @@ func _handle(ev: window.Event):
             if ev.width > 0.0 and ev.height > 0.0:
                 _e.width = ev.width
                 _e.height = ev.height
-                _e.dirty_layout = true
+                _e.dirty_dom = true
                 _e.full = true
             end
             break
@@ -194,6 +273,63 @@ func _handle(ev: window.Event):
         end
         window.EventKind.RedrawRequested:
             _e.full = true
+            break
+        end
+        window.EventKind.PointerMove, window.EventKind.PointerEnter:
+            _pointer_move(ev.x, ev.y)
+            break
+        end
+        window.EventKind.PointerLeave:
+            if _e.hover >= 0:
+                _fire(_e.hover, "mouseleave", false)
+                _set_hover(-1)
+            end
+            break
+        end
+        window.EventKind.PointerDown:
+            _pointer_down(ev.x, ev.y, _button_of(ev.button), ev.clicks, ev.modifiers)
+            break
+        end
+        window.EventKind.PointerUp:
+            _pointer_up(ev.x, ev.y, _button_of(ev.button), ev.clicks, ev.modifiers)
+            break
+        end
+        window.EventKind.Wheel:
+            _wheel(ev.delta_x, ev.delta_y, ev.delta_mode == window.WheelMode.Line)
+            break
+        end
+        window.EventKind.KeyDown:
+            _key_down(ev.key, ev.modifiers, "")
+            break
+        end
+        window.EventKind.KeyUp:
+            _key_up(ev.key, ev.modifiers)
+            break
+        end
+        window.EventKind.TextInput:
+            _text_input(ev.text)
+            break
+        end
+        window.EventKind.ImePreedit:
+            _ime(ev.text, false)
+            break
+        end
+        window.EventKind.ImeCommit:
+            _ime(ev.text, true)
+            break
+        end
+        window.EventKind.ColorSchemeChanged:
+            dark := ev.scheme == window.ColorScheme.Dark
+            if dark != _e.dark:
+                _e.dark = dark
+                _style_all()
+                _e.dirty_layout = true
+                _e.full = true
+            end
+            break
+        end
+        window.EventKind.FocusOut:
+            _e.states_dirty = true
             break
         end
         else:
@@ -230,10 +366,28 @@ func _step(timeout: int): bool:
 end
 
 func _run_loop():
+    mode := os.Env("SALAM_UI_SCRIPT")
+    script := str.Clone(mode)
+    mem.Free(mode as void*)
+    if _e.has_win and _e.win.IsHeadless():
+        window.SetManualClock(true)
+        if _e.script.Len() > 0:
+            _run_steps(_e.script)
+        else script.Len() > 0:
+            _run_script(script)
+        else:
+            _step(0)
+        end
+        _sfree(script)
+        _shutdown()
+        ret
+    end
+    _sfree(script)
     mut go := true
     until not go:
         go = _step(16)
     end
+    _shutdown()
 end
 
 func _num(v: f64): str:
@@ -277,6 +431,7 @@ func _render_dom(nd: _Dom, width: int, height: int, scale: f64):
     _style_all()
     _relayout()
     _e.full = true
+    _xf_update()
     _diff_records()
     _ensure_canvas()
     _paint_all(_e.canvas)

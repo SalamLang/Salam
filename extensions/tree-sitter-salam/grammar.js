@@ -398,7 +398,16 @@ module.exports = grammar({
       seq(field("tag", $.layout_name), ":", repeat($._layout_item), kw("end")),
 
     layout_attribute: ($) =>
-      seq(field("name", $.layout_name), "=", field("value", $._expression)),
+      seq(
+        field("name", $.layout_name),
+        "=",
+        field("value", $._attribute_value),
+      ),
+
+    _attribute_value: ($) => choice($._expression, $.value_list),
+
+    value_list: ($) =>
+      seq($._expression, repeat1(seq(COMMA, $._expression))),
 
     _statement: ($) =>
       choice(
@@ -596,6 +605,7 @@ module.exports = grammar({
         $.name,
         $.this,
         $.dimension,
+        $.color_literal,
         $.integer,
         $.float,
         $.string,
@@ -942,8 +952,13 @@ module.exports = grammar({
       token(
         prec(
           2,
-          /[0-9]+(\.[0-9]+)?(px|em|rem|deg|vh|vw|vmin|vmax|ms|s|fr|pt|ch|ex|%)/,
+          /[0-9\u0660-\u0669\u06f0-\u06f9]+([.\u066b][0-9\u0660-\u0669\u06f0-\u06f9]+)?(px|em|rem|vw|vh|vmin|vmax|fr|ms|s|deg|rad|turn|%|\u066a)/,
         ),
+      ),
+
+    color_literal: () =>
+      token(
+        prec(2, /#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})/),
       ),
 
     line_comment: () => token(seq("//", /[^\n]*/)),

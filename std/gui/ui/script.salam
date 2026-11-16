@@ -1,0 +1,381 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import math
+import mem
+import os
+import io
+import gui.paint
+import gui.style
+import gui.window
+
+func _plain_ident(s: str, from: int): bool:
+    p := (s as void*) as u8*
+    mut i := from
+    until i < s.Len():
+        c := p[i] as int
+        ok := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95 or c >= 128
+        if not ok:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func _text_match(node: int, want: str): int:
+    t := _text_of(_e.dom, node)
+    r := str.Trim(t)
+    same := r == want
+    _sfree(t)
+    _sfree(r)
+    ret same ? 1 : 0
+end
+
+func _text_leaf(n: int, want: str): bool:
+    if _e.dom.nodes[n].k == _K_TEXT or not _live(n) or _text_match(n, want) == 0:
+        ret false
+    end
+    each kid in _e.dom.nodes[n].kids:
+        if _e.dom.nodes[kid].k != _K_TEXT and _text_match(kid, want) == 1:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _selector_node(sel: str): int:
+    if sel.StartsWith("#") and sel.Len() > 1 and _plain_ident(sel, 1):
+        idv := sel.Substr(1, sel.Len() - 1)
+        r := _find_id(idv)
+        _sfree(idv)
+        ret r
+    end
+    if sel.StartsWith("@") and sel.Len() > 1:
+        kv := sel.Substr(1, sel.Len() - 1)
+        r := _find_key(kv)
+        _sfree(kv)
+        ret r
+    end
+    if sel.StartsWith("\"") and sel.EndsWith("\"") and sel.Len() > 2:
+        tv := sel.Substr(1, sel.Len() - 2)
+        mut found := -1
+        repeat _e.dom.nodes.Len() in n:
+            if found < 0 and _text_leaf(n, tv):
+                found = n
+            end
+        end
+        _sfree(tv)
+        ret found
+    end
+    kind := _canon(sel)
+    repeat _e.dom.nodes.Len() in n:
+        if _e.dom.nodes[n].k != _K_TEXT and _e.dom.nodes[n].kind == kind and _live(n):
+            _sfree(kind)
+            ret n
+        end
+    end
+    _sfree(kind)
+    ret -1
+end
+
+func _inject(ev0: window.Event):
+    mut ev := ev0
+    ev.window = _e.win.id
+    window.Inject(ev)
+end
+
+func _key_of(name: str): window.Key:
+    switch name:
+        "Tab": ret window.Key.Tab end
+        "Enter", "Return": ret window.Key.Enter end
+        "Escape", "Esc": ret window.Key.Escape end
+        "Backspace": ret window.Key.Backspace end
+        "Delete": ret window.Key.Delete end
+        "Space", " ": ret window.Key.Space end
+        "Left", "ArrowLeft": ret window.Key.Left end
+        "Right", "ArrowRight": ret window.Key.Right end
+        "Up", "ArrowUp": ret window.Key.Up end
+        "Down", "ArrowDown": ret window.Key.Down end
+        "Home": ret window.Key.Home end
+        "End": ret window.Key.End end
+        "PageUp": ret window.Key.PageUp end
+        "PageDown": ret window.Key.PageDown end
+        else: break end
+    end
+    if name.Len() == 1:
+        p := (name as void*) as u8*
+        mut c := _hb(p, 0)
+        if c >= 65 and c <= 90:
+            c += 32
+        end
+        if c >= 97 and c <= 122:
+            ret ((window.Key.A as int) + c - 97) as window.Key
+        end
+        if c >= 48 and c <= 57:
+            ret ((window.Key.Digit0 as int) + c - 48) as window.Key
+        end
+    end
+    ret window.Key.Unknown
+end
+
+func _center(n: int, x &: f64, y &: f64):
+    b := _e.boxes[n]
+    x = b.x + b.w / 2.0
+    y = b.y + b.h / 2.0
+    if _e.xf_any:
+        mut ox := x
+        mut oy := y
+        m := _ancestor_transform(n)
+        p := m.Apply(paint.Point { x = x, y = y })
+        ox = p.x
+        oy = p.y
+        x = ox
+        y = oy
+    end
+end
+
+func _click_at(x: f64, y: f64, times: int):
+    _inject(window.Event { kind = window.EventKind.PointerMove, x = x, y = y })
+    repeat times:
+        _inject(window.Event { kind = window.EventKind.PointerDown, x = x, y = y, button = window.MouseButton.Left })
+        _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
+    end
+end
+
+func _style_text(node: int, name: str): str:
+    pn := str.Replace(name, "-", " ")
+    prop := style.PropByName(pn)
+    _sfree(pn)
+    if prop < 0:
+        ret "unknown"
+    end
+    ret style.Format(prop, style.Get(_style_of(node), prop))
+end
+
+func _script_line(line0: str):
+    line := str.Trim(line0)
+    if line.Len() == 0 or line.StartsWith("#") or line.StartsWith("//"):
+        ret
+    end
+    sp := line.Find(" ")
+    cmd := sp < 0 ? line : line.Substr(0, sp)
+    arg := sp < 0 ? "" : str.Trim(line.Substr(sp + 1, line.Len() - sp - 1))
+    switch cmd:
+        "click", "dblclick", "tripleclick", "hover", "press", "release":
+            n := _selector_node(arg)
+            if n < 0 or n >= _e.boxes.Len() or not _e.boxes[n].shown:
+                println "ui script: no element matches", arg
+                break
+            end
+            _reveal(n)
+            mut x := 0.0
+            mut y := 0.0
+            _center(n, x, y)
+            if cmd == "hover":
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = x, y = y })
+            else cmd == "press":
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = x, y = y })
+                _inject(window.Event { kind = window.EventKind.PointerDown, x = x, y = y, button = window.MouseButton.Left })
+            else cmd == "release":
+                _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
+            else:
+                _click_at(x, y, cmd == "dblclick" ? 2 : (cmd == "tripleclick" ? 3 : 1))
+            end
+            break
+        end
+        "move":
+            parts := str.Fields(arg)
+            if parts.Len() >= 2:
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = parts[0].ToFloat(), y = parts[1].ToFloat() })
+            end
+            break
+        end
+        "key":
+            mut mods := 0
+            mut name := arg
+            until name.Find("+") > 0:
+                pre := name.Substr(0, name.Find("+"))
+                switch pre:
+                    "ctrl", "Ctrl", "control": mods |= window.mod_control break end
+                    "shift", "Shift": mods |= window.mod_shift break end
+                    "alt", "Alt": mods |= window.mod_alt break end
+                    else: mods |= window.mod_super break end
+                end
+                name = name.Substr(name.Find("+") + 1, name.Len() - name.Find("+") - 1)
+            end
+            k := _key_of(name)
+            _inject(window.Event { kind = window.EventKind.KeyDown, key = k, modifiers = mods })
+            if name.Len() == 1 and (mods & window.mod_control) == 0:
+                _inject(window.Event { kind = window.EventKind.TextInput, text = name, modifiers = mods })
+            end
+            _inject(window.Event { kind = window.EventKind.KeyUp, key = k, modifiers = mods })
+            break
+        end
+        "type":
+            _inject(window.Event { kind = window.EventKind.TextInput, text = arg })
+            break
+        end
+        "ime":
+            _inject(window.Event { kind = window.EventKind.ImePreedit, text = arg })
+            break
+        end
+        "commit":
+            _inject(window.Event { kind = window.EventKind.ImeCommit, text = arg })
+            break
+        end
+        "drag":
+            parts := str.Fields(arg)
+            if parts.Len() >= 4:
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = parts[0].ToFloat(), y = parts[1].ToFloat() })
+                _inject(window.Event { kind = window.EventKind.PointerDown, x = parts[0].ToFloat(), y = parts[1].ToFloat(), button = window.MouseButton.Left })
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = parts[2].ToFloat(), y = parts[3].ToFloat() })
+                _inject(window.Event { kind = window.EventKind.PointerUp, x = parts[2].ToFloat(), y = parts[3].ToFloat(), button = window.MouseButton.Left })
+            end
+            break
+        end
+        "sel":
+            if _e.focus >= 0:
+                c := _e.ctl[_e.focus]
+                println "sel", c.anchor, c.caret, "scroll", math.Round(c.text_scroll), math.Round(c.text_scroll_y), "pre", c.preedit
+            else:
+                println "sel none"
+            end
+            break
+        end
+        "scroll":
+            parts := str.Fields(arg)
+            if parts.Len() >= 2:
+                n := _selector_node(parts[0])
+                if n >= 0 and n < _e.boxes.Len():
+                    b := _e.boxes[n]
+                    _inject(window.Event { kind = window.EventKind.PointerMove, x = b.x + b.w / 2.0, y = b.y + b.h / 2.0 })
+                end
+                _inject(window.Event { kind = window.EventKind.Wheel, delta_y = parts[1].ToFloat(), delta_mode = window.WheelMode.Pixel })
+            end
+            break
+        end
+        "resize":
+            parts := str.Fields(arg)
+            if parts.Len() >= 2:
+                _e.win.SetSize(parts[0].ToFloat(), parts[1].ToFloat())
+            end
+            break
+        end
+        "wait":
+            window.Advance(arg.ToInt())
+            break
+        end
+        "scheme":
+            _inject(window.Event { kind = window.EventKind.ColorSchemeChanged, scheme = arg == "dark" ? window.ColorScheme.Dark : window.ColorScheme.Light })
+            break
+        end
+        "style":
+            parts := str.Fields(arg)
+            if parts.Len() >= 2:
+                _step(0)
+                n := _selector_node(parts[0])
+                if n < 0:
+                    println "ui script: no element matches", parts[0]
+                else:
+                    println "style", parts[0], parts[1], _style_text(n, parts[1])
+                end
+            end
+            break
+        end
+        "dump":
+            d := Dump()
+            print d
+            break
+        end
+        "shot":
+            _step(0)
+            _ok := paint.SavePNG(_e.canvas, arg)
+            break
+        end
+        "hash":
+            _step(0)
+            println "hash", _e.canvas.Hash()
+            break
+        end
+        "reveal":
+            n := _selector_node(arg)
+            if n >= 0:
+                _reveal(n)
+                _step(0)
+            end
+            break
+        end
+        "focus":
+            if _e.focus >= 0:
+                println "focus", _e.dom.nodes[_e.focus].kind + "#" + _attr(_e.dom, _e.focus, "id")
+            else:
+                println "focus none"
+            end
+            break
+        end
+        "quit":
+            _e.quit = true
+            break
+        end
+        else:
+            println "ui script: unknown step", cmd
+            break
+        end
+    end
+    _step(0)
+end
+
+func _run_steps(text: str):
+    mut lines := str.Split(text, "\n")
+    defer lines.Free()
+    each l in lines:
+        if _e.quit:
+            break
+        end
+        _script_line(l)
+    end
+end
+
+func _run_script(path: str): bool:
+    if not os.Exists(path):
+        println "ui script: cannot read", path
+        ret false
+    end
+    text := io.ReadFile(path)
+    _run_steps(text)
+    ret true
+end
+
+func _shutdown():
+    if _e.has_win and _e.win.IsOpen():
+        _e.win.Close()
+    end
+    _e.has_win = false
+end
+
+@en "RunSteps"
+@fa "اجرای گام ها"
+pub func RunSteps(steps: str):
+    if not _e.ready:
+        ret
+    end
+    if _e.has_win and _e.win.IsHeadless():
+        window.SetManualClock(true)
+    end
+    _run_steps(steps)
+end

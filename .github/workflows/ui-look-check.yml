@@ -1,0 +1,90 @@
+---
+name: 🖼️ UI - web and native same-look check
+on:
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tolerance:
+        description: 'Percent of pixels allowed to differ per page'
+        type: string
+        default: '2'
+      strict:
+        description: 'Fail the run when a page is over the tolerance'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-look-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  look:
+    name: Compare web and native renders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the compiler built from this compiler source
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam
+          key: ui-gate-compiler-0.6.3-${{ hashFiles('compiler/**', 'VERSION', 'tools/bash/build-selfhost.sh') }}
+
+      - name: Install the pinned seed compiler
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+        with:
+          version: '0.6.3'
+
+      - name: Build the compiler
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          sh tools/bash/build-selfhost.sh
+
+      - name: Install ImageMagick
+        run: |
+          set -eu
+          command -v compare >/dev/null 2>&1 || {
+            sudo apt-get update
+            sudo apt-get install -y imagemagick
+          }
+          command -v google-chrome
+
+      - name: Render every page twice and compare
+        env:
+          TOLERANCE: ${{ inputs.tolerance || '2' }}
+          LOOK_STRICT: ${{ inputs.strict && '1' || '0' }}
+        run: |
+          set -eu
+          chmod +x salam
+          rc=0
+          sh tools/bash/ui-look-check.sh --salam "$GITHUB_WORKSPACE/salam" \
+            --out "$RUNNER_TEMP/look" --tolerance "$TOLERANCE" || rc=$?
+          {
+            echo '### Same-look check'
+            echo '```'
+            cat "$RUNNER_TEMP/look/report.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Upload the screenshots and diffs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-look
+          path: ${{ runner.temp }}/look
+          retention-days: 14
+          if-no-files-found: ignore

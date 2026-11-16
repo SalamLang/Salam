@@ -1,0 +1,442 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import gui.style
+
+include tok "../token.salam"
+include lp "../langpack.salam"
+
+struct StyleCtx:
+    pub kind: int = 0
+    pub prop: int = 0 - 1
+    pub start: int = 0
+    pub end: int = 0
+    pub typed: str = ""
+end
+
+func style_states(en: bool): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    if en:
+        each s in ["hover", "focus within", "focus", "active", "disabled", "checked", "invalid", "placeholder", "selection"]:
+            v.Push(s)
+        end
+    else:
+        each s in ["اشاره", "تمرکز درون", "تمرکز", "فشردن", "غیرفعال", "تیک\xE2\x80\x8Cخورده", "نامعتبر", "جای\xE2\x80\x8Cنوشته", "گزینش"]:
+            v.Push(s)
+        end
+    end
+    ret v
+end
+
+func style_trim_left(s: str): str:
+    mut i := 0
+    n := str.Len(s)
+    until i < n and (byte_at(s, i) == 32 or byte_at(s, i) == 9):
+        i++
+    end
+    ret str.Substr(s, i, n - i)
+end
+
+func style_without_noise(line: str): str:
+    mut out := ""
+    n := str.Len(line)
+    mut i := 0
+    mut quote := false
+    until i < n:
+        b := byte_at(line, i)
+        if quote:
+            if b == 92:
+                i += 2
+                continue
+            end
+            if b == 34:
+                quote = false
+            end
+            i++
+            continue
+        end
+        if b == 34:
+            quote = true
+            i++
+            continue
+        end
+        if b == 47 and i + 1 < n and byte_at(line, i + 1) == 47:
+            break
+        end
+        out += str.Substr(line, i, 1)
+        i++
+    end
+    ret str.Trim(out)
+end
+
+func style_first_word(t: str): str:
+    mut j := 0
+    n := str.Len(t)
+    until j < n and is_ident_byte(byte_at(t, j)):
+        j++
+    end
+    ret str.Substr(t, 0, j)
+end
+
+func style_is_end(w: str): bool:
+    ret str.Equals(w, "end") or str.Equals(w, "پایان") or str.Equals(w, "تمام")
+end
+
+func style_is_page_word(w: str): bool:
+    ret str.Equals(w, "page") or str.Equals(w, "صفحه") or str.Equals(w, "component") or str.Equals(w, "بخش")
+end
+
+func style_is_else(w: str): bool:
+    ret str.Equals(w, "else") or str.Equals(w, "وگرنه")
+end
+
+func style_scan(text: str, upto: int): str:
+    mut stack := ""
+    lines := str.Split(text, "\n")
+    mut i := 0
+    until i < upto and i < lines.Len():
+        t := style_without_noise(lines.Get(i))
+        i++
+        if str.Len(t) == 0:
+            continue
+        end
+        w := style_first_word(t)
+        if style_is_end(w) and str.Len(w) == str.Len(t):
+            if str.Len(stack) > 0:
+                stack = str.Substr(stack, 0, str.Len(stack) - 1)
+            end
+            continue
+        end
+        if byte_at(t, str.Len(t) - 1) != 58:
+            continue
+        end
+        if style_is_else(w):
+            continue
+        end
+        if style_is_page_word(w):
+            stack += "L"
+            continue
+        end
+        mut top := ""
+        if str.Len(stack) > 0:
+            top = str.Substr(stack, str.Len(stack) - 1, 1)
+        end
+        if str.Equals(top, "L") or str.Equals(top, "E"):
+            at_eq := str.IndexOf(t, "=")
+            if at_eq >= 0 and str.StartsWith(style_trim_left(str.Substr(t, at_eq + 1, str.Len(t) - at_eq - 1)), "("):
+                stack += "C"
+            else:
+                stack += "E"
+            end
+        else:
+            stack += "C"
+        end
+    end
+    ret stack
+end
+
+func style_in_page(text: str, line: int): bool:
+    s := style_scan(text, line)
+    if str.Len(s) == 0:
+        ret false
+    end
+    top := str.Substr(s, str.Len(s) - 1, 1)
+    ret str.Equals(top, "L") or str.Equals(top, "E")
+end
+
+func style_state_of(name: str, rest &: str): str:
+    lowered := str.Lower(name)
+    en := style_states(true)
+    fa := style_states(false)
+    repeat en.Len() in i:
+        mut k := 0
+        until k < 2:
+            p := k == 0 ? en.Get(i) : fa.Get(i)
+            hay := k == 0 ? lowered : name
+            pl := str.Len(p)
+            k++
+            if str.Len(hay) > pl + 1 and str.StartsWith(hay, p):
+                sep := byte_at(hay, pl)
+                if sep == 95 or sep == 32 or sep == 45:
+                    rest = str.Substr(name, pl + 1, str.Len(name) - pl - 1)
+                    ret str.Substr(name, 0, pl)
+                end
+                if sep == 226 and str.Len(hay) > pl + 3 and byte_at(hay, pl + 1) == 128 and byte_at(hay, pl + 2) == 140:
+                    rest = str.Substr(name, pl + 3, str.Len(name) - pl - 3)
+                    ret str.Substr(name, 0, pl)
+                end
+            end
+        end
+    end
+    rest = name
+    ret ""
+end
+
+func style_prop_of(name: str): int:
+    mut rest := ""
+    _s := style_state_of(str.Trim(name), rest)
+    ret style.PropByName(str.Trim(rest))
+end
+
+func style_assign_at(before: str): int:
+    n := str.Len(before)
+    mut i := 0
+    until i < n:
+        b := byte_at(before, i)
+        if b == 61:
+            mut prev := 0
+            mut next := 0
+            if i > 0:
+                prev = byte_at(before, i - 1)
+            end
+            if i + 1 < n:
+                next = byte_at(before, i + 1)
+            end
+            if next == 61 or prev == 58 or prev == 60 or prev == 62 or prev == 33 or prev == 61:
+                ret 0 - 1
+            end
+            ret i
+        end
+        if b == 40 or b == 34 or b == 58 or b == 123:
+            ret 0 - 1
+        end
+        i++
+    end
+    ret 0 - 1
+end
+
+func style_context(text: str, line: int, lntext: str, off: int): StyleCtx:
+    mut ctx := StyleCtx {}
+    if not style_in_page(text, line):
+        ret ctx
+    end
+    before := str.Substr(lntext, 0, off)
+    body := style_trim_left(before)
+    indent := str.Len(before) - str.Len(body)
+    eq := style_assign_at(body)
+    if eq < 0:
+        n := str.Len(body)
+        mut i := 0
+        until i < n:
+            b := byte_at(body, i)
+            if not (is_ident_byte(b) or b == 32 or b == 45):
+                ret ctx
+            end
+            i++
+        end
+        ctx.kind = 1
+        ctx.start = indent
+        ctx.end = off
+        ctx.typed = body
+        ret ctx
+    end
+    prop := style_prop_of(str.Substr(body, 0, eq))
+    if prop < 0:
+        ret ctx
+    end
+    mut cut := eq
+    mut j := eq + 1
+    until j < str.Len(body):
+        b := byte_at(body, j)
+        if b == 44 or b == 91:
+            cut = j
+        end
+        j++
+    end
+    after := str.Substr(body, cut + 1, str.Len(body) - cut - 1)
+    trimmed := style_trim_left(after)
+    ctx.kind = 2
+    ctx.prop = prop
+    ctx.start = indent + cut + 1 + (str.Len(after) - str.Len(trimmed))
+    ctx.end = off
+    ctx.typed = trimmed
+    ret ctx
+end
+
+func style_is_en(pack: int): bool:
+    ret str.Equals(lp.Spelling(pack, tok.TK_KW_END), "end")
+end
+
+func style_value_forms(it: int): str:
+    mut forms := Vector {} as Vector<str>
+    if (it & (1 << style.ITEM_LEN)) != 0:
+        forms.Push("length (`8`, `50%`, `12px`, `1.5em`, `2rem`, `1fr`, `50vw`)")
+    end
+    if (it & (1 << style.ITEM_NUM)) != 0:
+        forms.Push("number")
+    end
+    if (it & (1 << style.ITEM_INT)) != 0:
+        forms.Push("integer")
+    end
+    if (it & (1 << style.ITEM_BOOL)) != 0:
+        forms.Push("`true` or `false`")
+    end
+    if (it & (1 << style.ITEM_TIME)) != 0:
+        forms.Push("time (`200`, `200ms`, `2s`)")
+    end
+    if (it & (1 << style.ITEM_ANGLE)) != 0:
+        forms.Push("angle (`45`, `45deg`, `0.5turn`, `1rad`)")
+    end
+    if (it & (1 << style.ITEM_COLOR)) != 0:
+        forms.Push("colour (`red`, `#3366aa`, `rgb(51, 102, 170)`)")
+    end
+    if (it & (1 << style.ITEM_STR)) != 0:
+        forms.Push("string")
+    end
+    if (it & (1 << style.ITEM_PAINT)) != 0:
+        forms.Push("paint (colour, `linear(90, red, blue)`)")
+    end
+    if (it & (1 << style.ITEM_EASE)) != 0:
+        forms.Push("easing (`ease`, `steps(4)`, `spring(200, 20)`)")
+    end
+    if (it & (1 << style.ITEM_TRACK)) != 0:
+        forms.Push("track (`1fr`, `minmax(100, 1fr)`, `repeat(3, 1fr)`)")
+    end
+    if (it & (1 << style.ITEM_PROP)) != 0:
+        forms.Push("property name")
+    end
+    ret str.Join(forms, ", ")
+end
+
+func style_keyword_names(id: int, en: bool): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    ids := style.PropKeywords(id)
+    each k in ids:
+        out.Push(en ? style.KeywordName(k) : style.KeywordFaName(k))
+    end
+    ret out
+end
+
+func style_hover_text(prop: int): str:
+    info := style.Info(prop)
+    mut md := "```salam\n" + info.name + " = " + info.example + "\n```\n\n"
+    md += "page style attribute `" + info.name + "` (Persian `" + info.fa + "`)\n\n"
+    forms := style_value_forms(info.items)
+    if str.Len(forms) > 0:
+        md += "values: " + forms + "\n\n"
+    end
+    words := style_keyword_names(prop, true)
+    if words.Len() > 0:
+        md += "keywords: `" + str.Join(words, "`, `") + "`\n\n"
+    end
+    if info.min == info.max:
+        md += "count: " + str.FromInt(info.min as i64) + "\n\n"
+    else:
+        md += "count: " + str.FromInt(info.min as i64) + " to " + str.FromInt(info.max as i64) + ", comma separated\n\n"
+    end
+    md += "default: `" + info.initial + "`\n\n"
+    md += "inherited: " + (info.inherited ? "yes" : "no") + ", animatable: " + (info.animatable ? "yes" : "no")
+    ret md
+end
+
+func style_edit_item(label: str, kind: int, detail: str, doc: str, line: int, c1: int, c2: int, new_text: str): str:
+    mut j := jw_new()
+    jw_obj(j)
+    jw_str(j, "label", label)
+    jw_int(j, "kind", kind)
+    jw_str(j, "detail", detail)
+    jw_str(j, "sortText", "0" + label)
+    jw_str(j, "filterText", label)
+    if str.Len(doc) > 0:
+        jw_kobj(j, "documentation")
+        jw_str(j, "kind", "markdown")
+        jw_str(j, "value", doc)
+        jw_end_obj(j)
+    end
+    jw_kobj(j, "textEdit")
+    jw_kobj(j, "range")
+    jw_kobj(j, "start")
+    jw_int(j, "line", line)
+    jw_int(j, "character", c1)
+    jw_end_obj(j)
+    jw_kobj(j, "end")
+    jw_int(j, "line", line)
+    jw_int(j, "character", c2)
+    jw_end_obj(j)
+    jw_end_obj(j)
+    jw_str(j, "newText", new_text)
+    jw_end_obj(j)
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func style_starts(label: str, typed: str): bool:
+    if str.Len(typed) == 0:
+        ret true
+    end
+    ret str.StartsWith(str.Lower(label), str.Lower(typed))
+end
+
+func add_style_completions(ctx: StyleCtx, pack: int, line: int, lntext: str, items &: Vector<str>):
+    if ctx.kind == 0:
+        ret
+    end
+    en := style_is_en(pack)
+    c1 := utf16_units(lntext, 0, ctx.start)
+    c2 := utf16_units(lntext, 0, ctx.end)
+    if ctx.kind == 1:
+        mut rest := ""
+        lead := style_state_of(ctx.typed, rest)
+        mut lead_text := ""
+        if str.Len(lead) > 0:
+            lead_text = str.Substr(ctx.typed, 0, str.Len(ctx.typed) - str.Len(rest))
+        else:
+            each st in style_states(en):
+                if style_starts(st, ctx.typed):
+                    items.Push(style_edit_item(st, 14, "state prefix", "", line, c1, c2, st + " "))
+                end
+            end
+        end
+        repeat style.PROP_COUNT in p:
+            info := style.Info(p)
+            name := en ? info.name : info.fa
+            full := lead_text + name
+            if style_starts(full, ctx.typed):
+                items.Push(style_edit_item(full, 10, info.example, style_hover_text(p), line, c1, c2, full + " = "))
+            end
+        end
+        ret
+    end
+    info := style.Info(ctx.prop)
+    each w in style_keyword_names(ctx.prop, en):
+        if style_starts(w, ctx.typed):
+            items.Push(style_edit_item(w, 12, "value of " + info.name, "", line, c1, c2, w))
+        end
+    end
+    if str.Len(ctx.typed) == 0 and str.Len(info.example) > 0:
+        items.Push(style_edit_item(info.example, 12, "example", "", line, c1, c2, info.example))
+    end
+end
+
+func style_hover_at(text: str, line: int, lntext: str, off: int): str:
+    if not style_in_page(text, line):
+        ret ""
+    end
+    eq := style_assign_at(lntext)
+    if eq < 0:
+        ret ""
+    end
+    lead := str.Len(lntext) - str.Len(style_trim_left(lntext))
+    if off < lead or off > eq:
+        ret ""
+    end
+    prop := style_prop_of(str.Substr(lntext, 0, eq))
+    if prop < 0:
+        ret ""
+    end
+    ret style_hover_text(prop)
+end

@@ -1844,85 +1844,41 @@ jobs:
           sh ../tools/bash/native-host-check.sh salam-windows-arm64/salam.exe ../tests/en/llvm/ll_fib.salam ../tests/en/llvm/ll_hashmap.salam ../tests/en/llvm/ll_float.salam
 
   build-linux-i686:
-    needs: changes
+    needs: [changes, build-linux]
     if: needs.changes.outputs.run == 'true'
-    name: Build Salam for Linux (32-bit / i686, embedded LLVM+LLD)
+    name: Build Salam for Linux (32-bit / i686, static cross-build)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Stage cross sysroots on host (system musl + mingw-w64) for the i686 container to embed
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev mingw-w64
-          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
-          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
-          ls -la sysroots
-      - name: Cache ccache (Linux i686)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Use this run's Linux salam as the cross compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: /tmp/ccache-i686
-          key: ccache-linux-i686-v2-${{ github.run_id }}
-          restore-keys: |
-            ccache-linux-i686-v2-
-      - name: Fetch a seed compiler for the container
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: sh tools/bash/fetch-seed.sh --slug linux-i686 --version 0.6.3 --out "$GITHUB_WORKSPACE/seed"
-
-      - name: Build + smoke-test inside an i386/debian container (native - no QEMU needed for i386 on amd64)
+          name: salam-linux
+          path: /tmp/host-salam
+      - name: Cross-build the i686 compiler from this checkout
         run: |
           set -eu
-          mkdir -p /tmp/ccache-i686
-          docker run --rm --platform=linux/386 \
-            -v "$PWD:/work" -w /work \
-            -v /tmp/ccache-i686:/root/.ccache \
-            -e CCACHE_DIR=/root/.ccache \
-            i386/debian:sid bash -euxc '
-              apt-get update
-              PKGS="build-essential ca-certificates ccache file git cmake ninja-build llvm-22-dev liblld-22-dev libpolly-22-dev libzstd-dev zlib1g-dev"
-              if ! apt-get install -y --no-install-recommends $PKGS; then
-                echo "::warning::i386 dependency resolution failed - retrying with the amd64 index as an Architecture: all fallback."
-                printf "deb [arch=amd64] http://deb.debian.org/debian sid main\n" > /etc/apt/sources.list.d/arch-all-fallback.list
-                apt-get update
-                apt-get install -y --no-install-recommends $PKGS
-              fi
-              git config --global --add safe.directory /work
-              ccache --max-size=300M >/dev/null 2>&1 || true
-              MUSL_SR=/work/sysroots/x86_64-linux-musl
-              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
-              sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
-              sh tools/bash/build-embed.sh --out /work \
-                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
-                --wasi /work/sysroots/wasm32-wasi
-              sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam
-              echo 1 > /work/.self_contained
-              file /work/salam
-              /work/salam version
-              export SALAM_STD=/work/std
-              printf "func main:\n    println \"ok-linux32\"\nend\n" > /tmp/smoke.salam
-              /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn && /tmp/smoke_exec
-              if [ "$(cat /work/.self_contained)" = 1 ]; then
-                /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
-                /work/salam build /tmp/smoke.salam --target=x86_64-w64-windows-gnu -o /work/.smoke_x86_64.exe --log-level=warn
-              fi
-            '
-          echo "SELF_CONTAINED=$(cat .self_contained)" >> "$GITHUB_ENV"
-          rm -f .self_contained
-      - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
-        if: env.SELF_CONTAINED == '1'
+          chmod +x /tmp/host-salam/salam
+          export SALAM_STD="$PWD/std"
+          /tmp/host-salam/salam build compiler/main.salam --target=i686-linux-musl \
+            -o salam --log-level=warn
+          chmod +x salam
+          file salam
+      - name: Smoke-test the i686 compiler (32-bit binaries run natively here)
         run: |
-          sudo chown "$(id -u):$(id -g)" .smoke_x86_64 .smoke_x86_64.exe
-          file .smoke_x86_64
-          chmod +x .smoke_x86_64
-          ./.smoke_x86_64
-          file .smoke_x86_64.exe
-          rm -f .smoke_x86_64 .smoke_x86_64.exe
+          set -eu
+          export SALAM_STD="$PWD/std"
+          ./salam version
+          printf 'func main:\n    println "ok-linux32"\nend\n' > smoke.salam
+          ./salam run smoke.salam --log-level=warn
+          ./salam build smoke.salam -o smoke_exec --log-level=warn
+          ./smoke_exec
+          rm -f smoke.salam smoke_exec
       - name: Stage versioned archive
         run: |
           set -eu
@@ -1933,24 +1889,15 @@ jobs:
           cp -r std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
-              echo "Salam for Linux (32-bit / i686) - flagship self-contained toolchain."
-            else
-              echo "Salam for Linux (32-bit / i686) - embedded LLVM (no in-process linker)."
-            fi
+            echo "Salam for Linux (32-bit / i686) - static build."
             echo ""
             echo "  ./salam version"
-            echo "  ./salam exec  app.salam                       (interpreter)"
-            echo "  ./salam llvm  app.salam --jit                 (run via built-in LLVM)"
-            echo "  ./salam build app.salam -o app                (native binary)"
-            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
-              echo ""
-              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
-              echo "compiled into salam itself):"
-              echo ""
-              echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
-              echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
-            fi
+            echo "  ./salam exec  app.salam           (interpreter)"
+            echo "  ./salam run   app.salam           (compile and run)"
+            echo "  ./salam build app.salam -o app    (native binary, built-in linker)"
+            echo ""
+            echo "This build has no LLVM backend; the C backend, the interpreter and"
+            echo "the built-in linker are all included. Statically linked against musl."
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-i686.zip" "$DIST" >/dev/null
           tar -czf "salam-${VERSION}-linux-i686.tar.gz" "$DIST"
@@ -1971,124 +1918,43 @@ jobs:
   build-linux-armhf:
     needs: [changes, build-linux]
     if: needs.changes.outputs.run == 'true'
-    name: Build Salam for Linux (armhf, embedded LLVM+LLD)
+    name: Build Salam for Linux (armhf, static cross-build)
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Stage cross sysroots on host (system musl + mingw-w64) for the armhf container to embed
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev mingw-w64
-          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
-          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
-      - name: Set up QEMU (armhf containers need user-mode emulation; i386 doesn't)
+      - name: Set up QEMU (to smoke-test the armhf binary)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm
-      - name: Cache ccache (Linux armhf)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /tmp/ccache-armhf
-          key: ccache-linux-armhf-v2-${{ github.run_id }}
-          restore-keys: |
-            ccache-linux-armhf-v2-
-      - name: Use this run's Linux salam as the seed compiler
+      - name: Use this run's Linux salam as the cross compiler
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux
           path: /tmp/host-salam
-
-      - name: Cross-build an armhf seed from this checkout
+      - name: Cross-build the armhf compiler from this checkout
         run: |
           set -eu
           chmod +x /tmp/host-salam/salam
           export SALAM_STD="$PWD/std"
-          mkdir -p seed
           /tmp/host-salam/salam build compiler/main.salam --target=arm-linux-musleabihf \
-            -o seed/salam --log-level=warn
-          chmod +x seed/salam
-          file seed/salam
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build the armhf builder image (cached)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .github/docker/armhf-builder
-          file: .github/docker/armhf-builder/Dockerfile
-          platforms: linux/arm/v7
-          tags: salam-armhf-builder:latest
-          load: true
-          push: false
-          cache-from: type=gha,scope=armhf-builder
-          cache-to: type=gha,mode=max,scope=armhf-builder
-
-      - name: Build + smoke-test inside an arm32v7/debian container (QEMU-emulated compile - slower)
+            -o salam --log-level=warn
+          chmod +x salam
+          file salam
+      - name: Smoke-test the armhf compiler under QEMU
         run: |
           set -eu
-          mkdir -p /tmp/ccache-armhf
-          log="$RUNNER_TEMP/armhf-build.log"
-          : >"$log"
-          docker run --rm --name armhf-build --platform=linux/arm/v7 \
-            --user "$(id -u):$(id -g)" \
-            -v "$PWD:/work" -w /work \
-            -v /tmp/ccache-armhf:/tmp/ccache \
-            -e CCACHE_DIR=/tmp/ccache -e HOME=/tmp \
-            salam-armhf-builder:latest bash -euxc '
-              git config --global --add safe.directory /work
-              ccache --max-size=300M >/dev/null 2>&1 || true
-              MUSL_SR=/work/sysroots/x86_64-linux-musl
-              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
-              sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
-              sh tools/bash/build-embed.sh --out /work \
-                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
-                --wasi /work/sysroots/wasm32-wasi
-              sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam --seed-is-builder
-              echo 1 > /work/.self_contained
-              file /work/salam
-              /work/salam version
-              export SALAM_STD=/work/std
-              printf "func main:\n    println \"ok-armhf\"\nend\n" > /tmp/smoke.salam
-              /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn
-              /tmp/smoke_exec
-              if [ "$(cat /work/.self_contained)" = 1 ]; then
-                /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
-                /work/salam build /tmp/smoke.salam --target=x86_64-w64-windows-gnu -o /work/.smoke_x86_64.exe --log-level=warn
-              fi
-            ' >"$log" 2>&1 &
-          build_pid=$!
-          tail -n +1 -f "$log" &
-          tail_pid=$!
-          while kill -0 "$build_pid" 2>/dev/null; do
-            sleep 30
-            idle=$(( $(date +%s) - $(stat -c %Y "$log") ))
-            if [ "$idle" -gt 1800 ]; then
-              echo "::error::the armhf build printed nothing for 30 minutes, it is stuck"
-              docker kill armhf-build || true
-            fi
-          done
-          build_rc=0
-          wait "$build_pid" || build_rc=$?
-          kill "$tail_pid" 2>/dev/null || true
-          [ "$build_rc" = 0 ] || exit "$build_rc"
-          echo "SELF_CONTAINED=$(cat .self_contained)" >> "$GITHUB_ENV"
-          rm -f .self_contained
-      - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
-        if: env.SELF_CONTAINED == '1'
-        run: |
-          sudo chown "$(id -u):$(id -g)" .smoke_x86_64 .smoke_x86_64.exe
-          file .smoke_x86_64
-          chmod +x .smoke_x86_64
-          ./.smoke_x86_64
-          file .smoke_x86_64.exe
-          rm -f .smoke_x86_64 .smoke_x86_64.exe
+          printf 'func main:\n    println "ok-armhf"\nend\n' > smoke.salam
+          docker run --rm --platform=linux/arm/v7 -v "$PWD:/work" -w /work \
+            -e SALAM_STD=/work/std debian:stable-slim sh -euc '
+              ./salam version
+              ./salam run smoke.salam --log-level=warn
+            '
+          rm -f smoke.salam
       - name: Stage versioned archive
         run: |
           set -eu
@@ -2099,24 +1965,15 @@ jobs:
           cp -r std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
-              echo "Salam for Linux (armhf) - flagship self-contained toolchain."
-            else
-              echo "Salam for Linux (armhf) - embedded LLVM (no in-process linker)."
-            fi
+            echo "Salam for Linux (armhf) - static build."
             echo ""
             echo "  ./salam version"
-            echo "  ./salam exec  app.salam                       (interpreter)"
-            echo "  ./salam llvm  app.salam --jit                 (run via built-in LLVM)"
-            echo "  ./salam build app.salam -o app                (native binary)"
-            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
-              echo ""
-              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
-              echo "compiled into salam itself):"
-              echo ""
-              echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
-              echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
-            fi
+            echo "  ./salam exec  app.salam           (interpreter)"
+            echo "  ./salam run   app.salam           (compile and run)"
+            echo "  ./salam build app.salam -o app    (native binary, built-in linker)"
+            echo ""
+            echo "This build has no LLVM backend; the C backend, the interpreter and"
+            echo "the built-in linker are all included. Statically linked against musl."
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-armhf.zip" "$DIST" >/dev/null
           tar -czf "salam-${VERSION}-linux-armhf.tar.gz" "$DIST"

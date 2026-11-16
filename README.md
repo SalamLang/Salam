@@ -150,20 +150,27 @@ The richer plugins also run, build, check and format through the compiler.
 
 ## 🛠️ The Compiler (`salam`)
 
-Salam is statically typed and compiled. The **general** language compiles to a
-native executable through one of three backends, and embedded **`page:`**
-blocks compile to HTML/CSS/JS.
+Salam is statically typed and compiled. It has **five generators**, each one
+a different way to run the same **general** language. Four of them produce
+a native executable or another target, and the fifth runs the program
+directly. Embedded **`page:`** blocks compile to HTML/CSS/JS.
 
-| Backend  | Flag               | How it works                                                                                   |
-| -------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-| LLVM     | `--backend=llvm`   | LLVM IR, optimized and linked in-process when the compiler has LLVM linked in                 |
-| C        | `--backend=c`      | C source handed to a C compiler (`tcc` by default, or any `--cc=PATH`)                         |
-| native   | `--backend=native` | the compiler writes the machine code and the object file itself (see below)                   |
+| Generator   | Flag or command                       | How it works                                                                                                                                 |
+| ----------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| LLVM        | `--backend=llvm`, `salam llvm --jit`  | LLVM IR, optimized and linked in-process when the compiler has LLVM linked in. `--jit` runs that IR at once through `lli`, with no artifact   |
+| C           | `--backend=c`                         | C source handed to a C compiler (`tcc` by default, or any `--cc=PATH`)                                                                       |
+| Native      | `--backend=native`                    | the compiler's own code generator writes the machine code and the object file, and its own linker links them (see below)                    |
+| JavaScript  | `salam js`                            | browser-ready JavaScript, or one self-contained `.html` page when the output name ends in `.html`                                            |
+| Interpreter | `salam exec`, `salam run --interp`    | a bytecode VM with a garbage collector, no C toolchain needed; `SALAM_VM=0` uses the older tree walker                                       |
 
 With no `--backend`, the compiler uses the native backend on a Windows on Arm
 host, LLVM when it has LLVM linked in (the release builds for Linux, macOS and
 Windows x86-64 do), and the C backend otherwise. `--cc=PATH` implies the C
 backend.
+
+Salam is implemented in Salam. The compiler, the standard library and the
+tooling are written in Salam and built by Salam itself, so Salam is designed,
+implemented and powered by Salam.
 
 ### Build
 
@@ -309,11 +316,12 @@ console, and `std/baremetal` adds port I/O, `Halt`, `Panic`, direct VGA writes
 and a heap. `tests/kernel/` is a complete bootable Multiboot example; see
 [docs/FREESTANDING.md](docs/FREESTANDING.md).
 
-### Native code generator
+### Native code generator and linker
 
 `--backend=native` compiles straight to machine code and writes the object
 file itself (ELF, COFF or Mach-O), with no assembler, C compiler or LLVM
-library involved. It targets x86-64, i686, AArch64, 32-bit ARM and RISC-V 64
+library involved. Salam's own native linker then produces the executable, so
+the generator and the linker are both part of Salam. It targets x86-64, i686, AArch64, 32-bit ARM and RISC-V 64
 on Linux, x86-64, i686 and AArch64 on Windows, and x86-64 and arm64 on
 macOS. By default (`--linker=auto`) the compiler's own linker links the
 result whenever it can find every input; `--linker=system` hands the link to

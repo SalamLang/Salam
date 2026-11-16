@@ -1,0 +1,978 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import io
+import os
+import str
+
+const KIND_WORD := 0
+const KIND_NUM := 1
+const KIND_STR := 2
+const KIND_PUNCT := 3
+const KIND_HEX := 4
+
+const VALUEWORDS := "|solid|dashed|dotted|double|none|auto|inset|bold|italic|normal|center|start|end|left|right|top|bottom|flex|grid|block|inline|absolute|relative|fixed|sticky|hidden|visible|scroll|white|black|red|green|blue|yellow|orange|purple|gray|grey|pink|brown|cyan|transparent|currentcolor|wrap|nowrap|column|row|stretch|baseline|cover|contain|repeat|no-repeat|ease|linear|ease-in|ease-out|ease-in-out|"
+
+const STATES := "|hover|focus|focus within|active|disabled|checked|invalid|placeholder|selection|"
+
+const KNOWN := "|font family|border radius|display|box sizing|align items|align content|align self|box shadow|justify content|flex wrap|flex direction|flex|flex grow|flex shrink|flex basis|z index|object fit|text decoration|text transform|font style|white space|visibility|pointer events|user select|text overflow|transition|position|margin|padding|gap|font size|width|height|min width|min height|max width|max height|aspect ratio|border|border top|border bottom|border left|border right|border color|border width|line height|letter spacing|word spacing|font weight|background|grid template columns|grid template rows|margin top|margin bottom|margin left|margin right|padding top|padding bottom|padding left|padding right|top|bottom|left|right|color|text align|shadow|text shadow|radius|justify|align|aspect ratio|text indent|scrollbar color|"
+
+struct Tok:
+    pub kind: int = 0
+    pub s: int = 0
+    pub e: int = 0
+    pub text: str = ""
+end
+
+struct Asg:
+    pub name: str = ""
+    pub state: str = ""
+    pub first: int = 0
+    pub at: int = 0
+    pub last: int = 0
+end
+
+struct Conv:
+    pub ok: bool = true
+    pub out: Vector<str> = Vector {}
+end
+
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func is_digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func is_alpha(c: int): bool:
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c >= 128
+end
+
+func is_hex(c: int): bool:
+    ret is_digit(c) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+end
+
+func tokenize(ln: str): Vector<Tok>:
+    mut toks := Vector {} as Vector<Tok>
+    n := str.Len(ln)
+    mut i := 0
+    until i < n:
+        c := byte_at(ln, i)
+        if c == 32 or c == 9 or c == 13:
+            i++
+            continue
+        end
+        if c == 47 and i + 1 < n and byte_at(ln, i + 1) == 47:
+            break
+        end
+        st := i
+        mut kind := KIND_PUNCT
+        if c == 34:
+            kind = KIND_STR
+            i++
+            until i < n and byte_at(ln, i) != 34:
+                if byte_at(ln, i) == 92:
+                    i++
+                end
+                i++
+            end
+            i++
+        else is_digit(c) or (c == 46 and i + 1 < n and is_digit(byte_at(ln, i + 1))):
+            kind = KIND_NUM
+            until i < n and (is_digit(byte_at(ln, i)) or byte_at(ln, i) == 46):
+                i++
+            end
+            until i < n and (is_alpha(byte_at(ln, i)) or byte_at(ln, i) == 37):
+                i++
+            end
+        else is_alpha(c):
+            kind = KIND_WORD
+            until i < n and (is_alpha(byte_at(ln, i)) or is_digit(byte_at(ln, i)) or (byte_at(ln, i) == 45 and i + 1 < n and is_alpha(byte_at(ln, i + 1)))):
+                i++
+            end
+        else c == 35:
+            kind = KIND_HEX
+            i++
+            until i < n and is_hex(byte_at(ln, i)):
+                i++
+            end
+        else:
+            i++
+        end
+        if i > n:
+            i = n
+        end
+        toks.Push(Tok { kind = kind, s = st, e = i, text = str.Substr(ln, st, i - st) })
+    end
+    ret toks
+end
+
+func max_i(a: int, b: int): int:
+    ret a > b ? a : b
+end
+
+func is_known(name: str): bool:
+    ret str.Contains(KNOWN, "|" + name + "|")
+end
+
+func is_state_word(w: str): bool:
+    ret str.Contains(STATES, "|" + w + "|")
+end
+
+func real_assign(ln: str, t: Tok): bool:
+    if t.kind != KIND_PUNCT or t.text != "=":
+        ret false
+    end
+    if t.e < str.Len(ln):
+        nx := byte_at(ln, t.e)
+        if nx == 61 or nx == 62:
+            ret false
+        end
+    end
+    if t.s > 0:
+        pv := byte_at(ln, t.s - 1)
+        if pv == 58 or pv == 33 or pv == 60 or pv == 62 or pv == 61:
+            ret false
+        end
+    end
+    ret true
+end
+
+func find_assigns(ln: str, toks: Vector<Tok>): Vector<Asg>:
+    mut out := Vector {} as Vector<Asg>
+    n := toks.len()
+    repeat n in t:
+        if not real_assign(ln, toks[t]):
+            continue
+        end
+        mut j0 := t
+        until j0 > 0 and toks[j0 - 1].kind == KIND_WORD and t - j0 < 6:
+            j0--
+        end
+        if j0 == t:
+            continue
+        end
+        mut found := false
+        mut s := j0
+        until s < t and not found:
+            mut words := ""
+            repeat s to t - 1 in k:
+                if words != "":
+                    words += " "
+                end
+                words += str.Lower(toks[k].text)
+            end
+            mut state := ""
+            mut base := words
+            if is_state_word(toks[s].text):
+                state = toks[s].text
+                base = ""
+                repeat s + 1 to max_i(s + 1, t - 1) in k:
+                    if k >= t:
+                        break
+                    end
+                    if base != "":
+                        base += " "
+                    end
+                    base += str.Lower(toks[k].text)
+                end
+                if s + 1 < t and is_state_word(toks[s].text + " " + toks[s + 1].text):
+                    state = toks[s].text + " " + toks[s + 1].text
+                    base = ""
+                    repeat s + 2 to max_i(s + 2, t - 1) in k:
+                        if k >= t:
+                            break
+                        end
+                        if base != "":
+                            base += " "
+                        end
+                        base += str.Lower(toks[k].text)
+                    end
+                end
+            end
+            mut prefix_ok := true
+            if s > j0 and j0 > 0 and toks[j0 - 1].text == "=":
+                prefix_ok = true
+            else s > j0:
+                repeat j0 to s - 1 in q:
+                    if not str.Contains(VALUEWORDS, "|" + str.Lower(toks[q].text) + "|"):
+                        prefix_ok = false
+                    end
+                end
+            end
+            if base != "" and prefix_ok and is_known(base):
+                out.Push(Asg { name = base, state = state, first = s, at = t, last = t })
+                found = true
+            end
+            s++
+        end
+        if not found:
+            mut fst := t - 1
+            if j0 > 0 and toks[j0 - 1].text != "=":
+                fst = j0
+            end
+            out.Push(Asg { name = "", first = fst, at = t, last = t })
+        end
+    end
+    ret out
+end
+
+func unquote(v: str): str:
+    n := str.Len(v)
+    if n >= 2 and byte_at(v, 0) == 34 and byte_at(v, n - 1) == 34:
+        ret str.Substr(v, 1, n - 2)
+    end
+    ret v
+end
+
+func is_quoted(v: str): bool:
+    n := str.Len(v)
+    ret n >= 2 and byte_at(v, 0) == 34 and byte_at(v, n - 1) == 34
+end
+
+func split_top(v: str, sep: int): Vector<str>:
+    mut parts := Vector {} as Vector<str>
+    n := str.Len(v)
+    mut depth := 0
+    mut start := 0
+    mut inq := false
+    repeat n in i:
+        c := byte_at(v, i)
+        if c == 34:
+            inq = not inq
+        end
+        if inq:
+            continue
+        end
+        if c == 40 or c == 91:
+            depth++
+        else c == 41 or c == 93:
+            depth--
+        end
+        is_sep := sep == 32 ? (c == 32 or c == 9) : c == sep
+        if is_sep and depth == 0:
+            piece := str.Trim(str.Substr(v, start, i - start))
+            if piece != "":
+                parts.Push(piece)
+            end
+            start = i + 1
+        end
+    end
+    last := str.Trim(str.Substr(v, start, n - start))
+    if last != "":
+        parts.Push(last)
+    end
+    ret parts
+end
+
+func join_with(parts: Vector<str>, sep: str): str:
+    mut out := ""
+    each i, p in parts:
+        if i > 0:
+            out += sep
+        end
+        out += p
+    end
+    ret out
+end
+
+func fix_percent(v: str): str:
+    mut out := v
+    out = str.Replace(out, " %", "%")
+    ret out
+end
+
+func ok1(text: str): Conv:
+    mut c := Conv {}
+    c.out.Push(text)
+    ret c
+end
+
+func bad(): Conv:
+    ret Conv { ok = false }
+end
+
+func keyword_or_quoted(w: str): str:
+    if w == "end":
+        ret "\"end\""
+    end
+    ret w
+end
+
+func has_css_fn(v: str): bool:
+    ret str.Contains(v, "var(") or str.Contains(v, "calc(") or str.Contains(v, "clamp(") or str.Contains(v, "min(") or str.Contains(v, "max(") or str.Contains(v, "env(") or str.Contains(v, "color-mix(") or str.Contains(v, "--")
+end
+
+func space_list(v: str): str:
+    inner := unquote(v)
+    if str.Contains(inner, ","):
+        ret comma_clean(inner)
+    end
+    parts := split_top(inner, 32)
+    if parts.len() == 1:
+        ret fix_percent(parts[0])
+    end
+    mut flat := Vector {} as Vector<str>
+    each p in parts:
+        flat.Push(p)
+    end
+    ret join_with(flat, ", ")
+end
+
+func comma_clean(v: str): str:
+    parts := split_top(v, 44)
+    ret join_with(parts, ", ")
+end
+
+func simple_value(v: str): Conv:
+    if has_css_fn(v):
+        ret bad()
+    end
+    inner := fix_percent(unquote(v))
+    if str.Contains(inner, ","):
+        ret ok1(comma_clean(inner))
+    end
+    ret ok1(inner)
+end
+
+func list_value(v: str): Conv:
+    if has_css_fn(v):
+        ret bad()
+    end
+    ret ok1(space_list(v))
+end
+
+func map_flex_word(w: str): str:
+    if w == "flex-start" or w == "start":
+        ret "start"
+    end
+    if w == "flex-end" or w == "end":
+        ret "\"end\""
+    end
+    if w == "space-between":
+        ret "between"
+    end
+    if w == "space-around":
+        ret "around"
+    end
+    if w == "space-evenly":
+        ret "evenly"
+    end
+    ret w
+end
+
+func gradient_value(v: str): str:
+    if str.StartsWith(v, "linear-gradient("):
+        inner := str.Substr(v, 16, str.Len(v) - 17)
+        parts := split_top(inner, 44)
+        mut out := Vector {} as Vector<str>
+        each i, p in parts:
+            mut q := p
+            if i == 0 and str.EndsWith(q, "deg"):
+                q = str.Substr(q, 0, str.Len(q) - 3)
+            end
+            out.Push(q)
+        end
+        ret "linear(" + join_with(out, ", ") + ")"
+    end
+    ret ""
+end
+
+func size_keyword(w: str): str:
+    if w == "xx-small":
+        ret "0.5625rem"
+    end
+    if w == "x-small":
+        ret "0.625rem"
+    end
+    if w == "small":
+        ret "0.8125rem"
+    end
+    if w == "medium":
+        ret "1rem"
+    end
+    if w == "large":
+        ret "1.125rem"
+    end
+    if w == "x-large":
+        ret "1.5rem"
+    end
+    if w == "xx-large":
+        ret "2rem"
+    end
+    ret ""
+end
+
+func first_time_word(v: str): str:
+    parts := split_top(v, 32)
+    each p in parts:
+        if str.EndsWith(p, "ms") or (str.EndsWith(p, "s") and byte_at(p, 0) >= 48 and byte_at(p, 0) <= 57):
+            ret p
+        end
+    end
+    ret ""
+end
+
+func modern_rgb(v: str): str:
+    mut out := v
+    mut guard := 0
+    until guard < 8:
+        at := str.Find(out, "rgb(")
+        if at < 0:
+            break
+        end
+        close := at + str.Find(str.Substr(out, at, str.Len(out) - at), ")")
+        inner := str.Substr(out, at + 4, close - at - 4)
+        if not str.Contains(inner, " ") or str.Contains(inner, ","):
+            out = str.Substr(out, 0, at) + "RGB(" + str.Substr(out, at + 4, str.Len(out) - at - 4)
+            guard++
+            continue
+        end
+        mut alpha := ""
+        mut chans := inner
+        if str.Contains(inner, "/"):
+            halves := str.Split(inner, "/")
+            chans = str.Trim(halves[0])
+            alpha = str.Trim(halves[1])
+        end
+        mut a := "1"
+        if alpha != "":
+            if str.EndsWith(alpha, "%"):
+                pct := str.ToFloat(str.Substr(alpha, 0, str.Len(alpha) - 1))
+                a = str.FromFloat(pct / 100.0)
+            else:
+                a = alpha
+            end
+        end
+        parts := split_top(chans, 32)
+        out = str.Substr(out, 0, at) + "rgba(" + join_with(parts, ", ") + ", " + a + str.Substr(out, close, str.Len(out) - close)
+        guard++
+    end
+    ret str.Replace(out, "RGB(", "rgb(")
+end
+
+func convert_box_shadow(v: str): Conv:
+    if not is_quoted(v):
+        ret ok1(v)
+    end
+    if str.Contains(v, "var(") or str.Contains(v, "calc("):
+        ret bad()
+    end
+    inner := modern_rgb(unquote(v))
+    if inner == "none":
+        ret ok1("none")
+    end
+    layers := split_top(inner, 44)
+    mut groups := Vector {} as Vector<str>
+    each layer in layers:
+        words := split_top(layer, 32)
+        mut parts := Vector {} as Vector<str>
+        each w in words:
+            parts.Push(w)
+        end
+        groups.Push("[" + join_with(parts, ", ") + "]")
+    end
+    ret ok1(join_with(groups, ", "))
+end
+
+func convert_transition(v: str): Conv:
+    inner := unquote(v)
+    if inner == "none":
+        ret ok1("none")
+    end
+    first := split_top(inner, 44)
+    if first.len() == 0:
+        ret bad()
+    end
+    mut dur := ""
+    mut ease := ""
+    each item in first:
+        t := first_time_word(item)
+        if dur == "" and t != "":
+            dur = t
+        end
+        if ease == "" and (str.Contains(item, "ease") or str.Contains(item, "linear")):
+            parts := split_top(item, 32)
+            each p in parts:
+                if str.StartsWith(p, "ease") or p == "linear":
+                    ease = p
+                end
+            end
+        end
+    end
+    if dur == "":
+        ret bad()
+    end
+    if ease != "":
+        ret ok1(dur + ", " + str.Replace(ease, "-", " "))
+    end
+    ret ok1(dur)
+end
+
+func convert_one(name: str, raw: str, seg_col: bool): Conv:
+    v := str.Trim(raw)
+    if name == "font family":
+        if not is_quoted(v) and not str.Contains(v, ","):
+            ret ok1("font = " + v)
+        end
+        if has_css_fn(v):
+            ret bad()
+        end
+        items := split_top(unquote(v), 44)
+        mut out := Vector {} as Vector<str>
+        each it in items:
+            w := unquote(it)
+            if w == "system-ui" or w == "-apple-system":
+                out.Push("system")
+            else w == "sans-serif":
+                out.Push("sans")
+            else w == "serif":
+                out.Push("serif")
+            else w == "monospace":
+                out.Push("mono")
+            else:
+                out.Push("\"" + w + "\"")
+            end
+        end
+        ret ok1("font = " + join_with(out, ", "))
+    end
+    if name == "border radius" or name == "radius":
+        r := list_value(v)
+        if not r.ok:
+            ret r
+        end
+        ret ok1("radius = " + r.out[0])
+    end
+    if name == "display":
+        w := unquote(v)
+        if w == "flex" or w == "inline-flex":
+            if seg_col:
+                ret Conv {}
+            end
+            ret ok1("layout = row")
+        end
+        if w == "grid" or w == "inline-grid":
+            ret ok1("layout = grid")
+        end
+        if w == "none":
+            ret ok1("visible = false")
+        end
+        if w == "block" or w == "inline" or w == "inline-block" or w == "flow-root":
+            ret Conv {}
+        end
+        ret bad()
+    end
+    if name == "flex direction":
+        w := unquote(v)
+        if w == "column":
+            ret ok1("layout = column")
+        end
+        if w == "row":
+            ret ok1("layout = row")
+        end
+        ret bad()
+    end
+    if name == "box sizing":
+        ret Conv {}
+    end
+    if name == "position":
+        w := unquote(v)
+        if w == "relative" or w == "static":
+            ret Conv {}
+        end
+        ret ok1("position = " + w)
+    end
+    if name == "box shadow" or name == "shadow" or name == "text shadow":
+        r := convert_box_shadow(v)
+        if not r.ok:
+            ret r
+        end
+        ret ok1((name == "text shadow" ? "text shadow" : "shadow") + " = " + r.out[0])
+    end
+    if name == "justify content" or name == "align items" or name == "align self" or name == "align content" or name == "justify" or name == "align":
+        mut target := "align"
+        if name == "justify content" or name == "justify":
+            target = "justify"
+        else name == "align self":
+            target = "align self"
+        else name == "align content":
+            target = "align content"
+        end
+        ret ok1(target + " = " + map_flex_word(unquote(v)))
+    end
+    if name == "flex wrap":
+        w := unquote(v)
+        if w == "wrap":
+            ret ok1("wrap = true")
+        end
+        if w == "nowrap":
+            ret ok1("wrap = false")
+        end
+        ret bad()
+    end
+    if name == "flex":
+        w := str.Replace(unquote(v), ",", " ")
+        parts := split_top(w, 32)
+        if parts.len() == 1 and w != "auto" and w != "none":
+            ret ok1("grow = " + w)
+        end
+        if parts.len() == 3:
+            mut out := Vector {} as Vector<str>
+            out.Push("grow = " + parts[0])
+            out.Push("shrink = " + parts[1])
+            out.Push("basis = " + (parts[2] == "0" ? "0" : parts[2]))
+            ret Conv { out = out }
+        end
+        ret bad()
+    end
+    if name == "flex grow" or name == "flex shrink" or name == "flex basis":
+        base := str.Substr(name, 5, str.Len(name) - 5)
+        ret ok1(base + " = " + unquote(v))
+    end
+    if name == "z index":
+        ret ok1("layer = " + unquote(v))
+    end
+    if name == "object fit":
+        ret ok1("image fit = " + str.Replace(unquote(v), "-", " "))
+    end
+    if name == "text decoration":
+        w := unquote(v)
+        if w == "none" or w == "underline" or w == "overline":
+            ret ok1("decoration = " + w)
+        end
+        if w == "line-through":
+            ret ok1("decoration = strike")
+        end
+        ret bad()
+    end
+    if name == "text transform":
+        w := unquote(v)
+        if w == "uppercase":
+            ret ok1("transform text = upper")
+        end
+        if w == "lowercase":
+            ret ok1("transform text = lower")
+        end
+        ret ok1("transform text = " + w)
+    end
+    if name == "font style":
+        w := unquote(v)
+        if w == "italic" or w == "oblique":
+            ret ok1("italic = true")
+        end
+        ret ok1("italic = false")
+    end
+    if name == "white space":
+        w := unquote(v)
+        if w == "normal" or w == "keep":
+            ret ok1("white space = " + w)
+        end
+        if w == "nowrap":
+            ret ok1("wrap text = false")
+        end
+        if w == "pre":
+            mut out := Vector {} as Vector<str>
+            out.Push("white space = keep")
+            out.Push("wrap text = false")
+            ret Conv { out = out }
+        end
+        if w == "pre-wrap" or w == "pre-line" or w == "break-spaces":
+            ret ok1("white space = keep")
+        end
+        ret bad()
+    end
+    if name == "visibility":
+        w := unquote(v)
+        if w == "hidden":
+            ret ok1("visible = false")
+        end
+        ret ok1("visible = true")
+    end
+    if name == "pointer events":
+        ret ok1("interactive = " + (unquote(v) == "none" ? "false" : "true"))
+    end
+    if name == "user select":
+        ret ok1("selectable = " + (unquote(v) == "none" ? "false" : "true"))
+    end
+    if name == "text overflow":
+        ret ok1("ellipsis = " + (unquote(v) == "ellipsis" ? "true" : "false"))
+    end
+    if name == "transition":
+        r := convert_transition(v)
+        if not r.ok:
+            ret r
+        end
+        ret ok1("transition = " + r.out[0])
+    end
+    if name == "grid template columns" or name == "grid template rows":
+        target := name == "grid template columns" ? "columns" : "rows"
+        if has_css_fn(v):
+            ret bad()
+        end
+        inner := unquote(v)
+        if str.Contains(inner, "repeat("):
+            ret ok1(target + " = " + inner)
+        end
+        ret ok1(target + " = " + space_list(inner))
+    end
+    if name == "font size":
+        w := unquote(v)
+        kw := size_keyword(w)
+        if kw != "":
+            ret ok1("font size = " + kw)
+        end
+        r := simple_value(v)
+        if not r.ok:
+            ret r
+        end
+        ret ok1("font size = " + r.out[0])
+    end
+    if name == "background":
+        w := unquote(v)
+        g := gradient_value(w)
+        if g != "":
+            ret ok1("background = " + g)
+        end
+        if has_css_fn(v) or str.Contains(w, "gradient(") or str.Contains(w, "url("):
+            ret bad()
+        end
+        ret ok1("background = " + (is_quoted(v) ? w : v))
+    end
+    if name == "color":
+        w := unquote(v)
+        if has_css_fn(v):
+            ret bad()
+        end
+        ret ok1("color = " + w)
+    end
+    if name == "scrollbar color":
+        ret ok1("scrollbar color = " + comma_clean(str.Replace(unquote(v), " ", ",")))
+    end
+    if name == "text indent":
+        ret ok1("text indent = " + unquote(v))
+    end
+    if name == "aspect ratio":
+        ret ok1("aspect ratio = " + unquote(v))
+    end
+    if name == "margin" or name == "padding" or name == "gap" or name == "border" or name == "border top" or name == "border bottom" or name == "border left" or name == "border right" or name == "border color" or name == "border width":
+        r := list_value(v)
+        if not r.ok:
+            ret r
+        end
+        ret ok1(name + " = " + r.out[0])
+    end
+    if name == "text align":
+        ret ok1("text align = " + keyword_or_quoted(unquote(v)))
+    end
+    if name == "font weight" or name == "line height" or name == "letter spacing" or name == "word spacing" or name == "width" or name == "height" or name == "min width" or name == "min height" or name == "max width" or name == "max height" or name == "top" or name == "bottom" or name == "left" or name == "right" or name == "margin top" or name == "margin bottom" or name == "margin left" or name == "margin right" or name == "padding top" or name == "padding bottom" or name == "padding left" or name == "padding right":
+        r := simple_value(v)
+        if not r.ok:
+            ret r
+        end
+        ret ok1(name + " = " + r.out[0])
+    end
+    ret bad()
+end
+
+func segment_has_column(lines: Vector<str>, lo: int, hi: int): bool:
+    repeat lo to hi - 1 in i:
+        l := lines[i]
+        if (str.Contains(l, "flex direction") or str.Contains(l, "flex_direction")) and str.Contains(l, "column"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func line_is_boundary(ln: str): bool:
+    toks := tokenize(ln)
+    n := toks.len()
+    repeat n in i:
+        t := toks[i]
+        if t.kind == KIND_WORD and t.text == "end":
+            ret true
+        end
+        if t.kind == KIND_PUNCT and t.text == ":" and i > 0 and toks[i - 1].kind == KIND_WORD and i + 1 <= n:
+            if i + 1 == n or toks[i + 1].text != "=":
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func in_component_call(toks: Vector<Tok>, idx: int): bool:
+    mut j := idx - 1
+    until j >= 1:
+        if toks[j].kind == KIND_PUNCT and toks[j].text == ":" and toks[j - 1].kind == KIND_WORD:
+            c := byte_at(toks[j - 1].text, 0)
+            ret c >= 65 and c <= 90
+        end
+        j--
+    end
+    ret false
+end
+
+func migrate_line(ln: str, seg_col: bool, report &: Vector<str>, label: str): str:
+    toks := tokenize(ln)
+    asgs := find_assigns(ln, toks)
+    n := asgs.len()
+    mut result := ln
+    mut k := n - 1
+    until k >= 0:
+        a := asgs[k]
+        if a.name == "" or in_component_call(toks, a.first):
+            k--
+            continue
+        end
+        mut stop := toks.len()
+        if k + 1 < n:
+            stop = asgs[k + 1].first
+        end
+        mut vend := a.at + 1
+        mut depth := 0
+        until vend < stop:
+            t := toks[vend]
+            if t.kind == KIND_WORD and t.text == "end" and depth == 0 and vend > a.at + 1:
+                break
+            end
+            if t.kind == KIND_PUNCT and (t.text == "(" or t.text == "["):
+                depth++
+            end
+            if t.kind == KIND_PUNCT and (t.text == ")" or t.text == "]"):
+                depth--
+            end
+            vend++
+        end
+        if vend == a.at + 1:
+            k--
+            continue
+        end
+        vs := toks[a.at + 1].s
+        ve := toks[vend - 1].e
+        raw := str.Substr(ln, vs, ve - vs)
+        r := convert_one(a.name, raw, seg_col)
+        if not r.ok:
+            report.Push(label + ": " + a.name + " = " + str.Trim(raw))
+            k--
+            continue
+        end
+        mut pieces := Vector {} as Vector<str>
+        each o in r.out:
+            if a.state != "":
+                pieces.Push(a.state + " " + o)
+            else:
+                pieces.Push(o)
+            end
+        end
+        rep := join_with(pieces, " ")
+        ns := toks[a.first].s
+        before := str.Substr(result, 0, ns)
+        after := str.Substr(result, ve, str.Len(result) - ve)
+        mut tail := after
+        if rep == "" and str.StartsWith(tail, " "):
+            tail = str.Substr(tail, 1, str.Len(tail) - 1)
+        end
+        result = before + rep + tail
+        k--
+    end
+    ret result
+end
+
+func migrate_text(src: str, label: str, report &: Vector<str>): str:
+    lines := str.Split(src, "\n")
+    n := lines.len()
+    mut seg_starts := Vector {} as Vector<int>
+    mut seg_of := Vector {} as Vector<int>
+    mut cur := 0
+    repeat n in i:
+        if line_is_boundary(lines[i]):
+            seg_starts.Push(i)
+            cur = seg_starts.len() - 1
+        end
+        seg_of.Push(cur)
+    end
+    mut seg_col := Vector {} as Vector<bool>
+    each i, st in seg_starts:
+        mut hi := n
+        if i + 1 < seg_starts.len():
+            hi = seg_starts[i + 1]
+        end
+        seg_col.Push(segment_has_column(lines, st, hi))
+    end
+    mut out := Vector {} as Vector<str>
+    repeat n in i:
+        col := seg_col.len() > 0 and seg_of[i] < seg_col.len() and seg_starts[seg_of[i]] <= i and seg_col[seg_of[i]]
+        migrated := migrate_line(lines[i], col, report, label + ":" + (i + 1))
+        if str.Trim(migrated) == "global: end" and str.Trim(lines[i]) != "global: end":
+            continue
+        end
+        out.Push(migrated)
+    end
+    ret join_with(out, "\n")
+end
+
+func is_page_file(src: str): bool:
+    ret str.StartsWith(src, "page:") or str.Contains(src, "\npage:") or str.Contains(src, "\ncomponent ")
+end
+
+func main:
+    args := os.Args()
+    mut write := false
+    mut files := Vector {} as Vector<str>
+    each i, a in args:
+        if i == 0:
+            continue
+        end
+        if a == "--write":
+            write = true
+        else:
+            files.Push(a)
+        end
+    end
+    if files.len() == 0:
+        printerrln "usage: migrate-style [--write] file.salam..."
+        ret 2
+    end
+    mut report := Vector {} as Vector<str>
+    each f in files:
+        src := io.ReadFile(f)
+        if not is_page_file(src):
+            if not write:
+                println src
+            end
+            continue
+        end
+        out := migrate_text(src, f, report)
+        if write:
+            if out != src:
+                _ := io.WriteFile(f, out)
+            end
+        else:
+            println out
+        end
+    end
+    each r in report:
+        printerrln "cannot convert " + r
+    end
+    ret report.len() > 0 ? 1 : 0
+end

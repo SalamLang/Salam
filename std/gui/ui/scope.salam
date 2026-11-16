@@ -14,6 +14,7 @@
 
 package ui
 
+import os
 import str
 
 mut _sc := Vector {} as Vector<_Scope>
@@ -26,6 +27,7 @@ mut _sc_take := (_w: int): ret 0 as i64 end
 mut _sc_site_mask := Vector {} as Vector<i64>
 mut _sc_site_comp := Vector {} as Vector<int>
 mut _sc_runs := 0
+mut _sc_trace_state := 0
 mut _sc_invalid := false
 mut _sc_match := Vector {} as Vector<int>
 mut _sc_touch_comp := Vector {} as Vector<int>
@@ -667,7 +669,20 @@ func _sc_fast_text(): bool:
     ret false
 end
 
+func _sc_trace(): bool:
+    if _sc_trace_state == 0:
+        _sc_trace_state = 1
+        if os.Env("SALAM_UI_TRACE").Len() > 0:
+            _sc_trace_state = 2
+        end
+    end
+    ret _sc_trace_state == 2
+end
+
 func _sc_full():
+    if _sc_trace():
+        printerrln "ui trace: full re-run"
+    end
     _sc_invalid = false
     _sc_runs++
     _load_dom(_build_view())
@@ -692,16 +707,21 @@ func _sc_update():
     end
     mut dirty := Vector {} as Vector<int>
     defer dirty.Free()
+    mut why := Vector {} as Vector<str>
+    defer why.Free()
     repeat _sc.Len() in i:
         s := _sc[i]
         if not s.alive:
             continue
         end
         mut hit := false
+        mut reason := ""
         if s.site >= 0 and s.site < _sc_site_comp.Len() and any:
             repeat _sc_words in w:
-                if (_sc_site_mask[s.site * _sc_words + w] & _sc_touched[w]) != 0:
+                m := _sc_site_mask[s.site * _sc_words + w] & _sc_touched[w]
+                if m != 0:
                     hit = true
+                    reason = "global word " + w + " bits " + (m as int)
                 end
             end
         end
@@ -709,11 +729,13 @@ func _sc_update():
             repeat _sc_touch_comp.Len() in k:
                 if _sc_touch_comp[k] == s.comp and _sc_touch_slot[k] == s.slot:
                     hit = true
+                    reason = "instance state"
                 end
             end
         end
         if hit:
             dirty.Push(i)
+            why.Push(reason)
             mut sd := _sc.Ref(i)
             sd.dirty = true
         end
@@ -738,6 +760,9 @@ func _sc_update():
     repeat maxd + 1 in level:
         repeat dirty.Len() in j:
             if depth[j] == level and _sc[dirty[j]].alive and _sc[dirty[j]].dirty:
+                if _sc_trace():
+                    printerrln "ui trace: run scope " + dirty[j] + " site " + _sc[dirty[j]].site + " comp " + _sc[dirty[j]].comp + " slot " + _sc[dirty[j]].slot + " because " + why[j]
+                end
                 _sc_rerun(dirty[j])
             end
         end

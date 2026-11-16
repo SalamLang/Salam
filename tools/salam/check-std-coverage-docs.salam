@@ -422,6 +422,49 @@ func has_importer(c: Corpus, rel: str): bool:
     ret false
 end
 
+func is_upper(c: str): bool:
+    ret c >= "A" and c <= "Z"
+end
+
+func is_lower(c: str): bool:
+    ret c >= "a" and c <= "z"
+end
+
+func snake_of(name: str): str:
+    mut out := ""
+    n := name.Len()
+    repeat n in i:
+        c := name.Substr(i, 1)
+        up := is_upper(c)
+        if up and i > 0:
+            p := name.Substr(i - 1, 1)
+            mut next_low := false
+            if i + 1 < n:
+                next_low = is_lower(name.Substr(i + 1, 1))
+            end
+            if is_lower(p) or (p >= "0" and p <= "9") or (is_upper(p) and next_low):
+                out += "_"
+            end
+        end
+        if up:
+            out += c.Lower()
+        else:
+            out += c
+        end
+    end
+    ret out
+end
+
+func legacy_key(s: Sym): str:
+    if s.kind != "func" and s.kind != "method":
+        ret s.key
+    end
+    if not is_upper(s.base.Substr(0, 1)):
+        ret s.key
+    end
+    ret s.key.Substr(0, s.key.Len() - s.base.Len()) + snake_of(s.base)
+end
+
 func add_gap(gaps &: HashMap<str, bool>, a: str, b: str, c: str):
     mut line := a + "|" + b
     if c != "":
@@ -530,31 +573,40 @@ func compute(root: str, only: HashMap<str, bool>, syms &: Vector<Sym>, pkgs &: V
             compare_sets(gaps, rel, "ex.", pen.exs, pfa.exs)
             compare_sets(gaps, rel, "", pen.guides, pfa.guides)
         end
+        mut canon := HashMap {} as HashMap<str, bool>
+        each c in syms:
+            if c.pkg == rel and legacy_key(c) != c.key:
+                canon.Put(legacy_key(c), true)
+            end
+        end
         each s in syms:
             if s.pkg != rel:
+                continue
+            end
+            if (s.kind == "func" or s.kind == "method") and canon.Has(s.key):
                 continue
             end
             if not s.has_fa:
                 add_gap(gaps, "no-fa-name", rel, s.key)
             end
             if has_en:
-                if not pen.docs.Has(s.key):
+                if not pen.docs.Has(s.key) and not pen.docs.Has(legacy_key(s)):
                     add_gap(gaps, "no-doc-en", rel, s.key)
                 end
-                if doc_key_needs_ex(s) and not pen.exs.Has(s.key):
+                if doc_key_needs_ex(s) and not pen.exs.Has(s.key) and not pen.exs.Has(legacy_key(s)):
                     add_gap(gaps, "no-ex-en", rel, s.key)
                 end
             end
             if has_fa:
-                if not pfa.docs.Has(s.key):
+                if not pfa.docs.Has(s.key) and not pfa.docs.Has(legacy_key(s)):
                     add_gap(gaps, "no-doc-fa", rel, s.key)
                 end
-                if doc_key_needs_ex(s) and not pfa.exs.Has(s.key):
+                if doc_key_needs_ex(s) and not pfa.exs.Has(s.key) and not pfa.exs.Has(legacy_key(s)):
                     add_gap(gaps, "no-ex-fa", rel, s.key)
                 end
             end
             if s.kind == "func" or s.kind == "method":
-                if tested_en and not mentions(en_corpus, rel, s.base):
+                if tested_en and not mentions(en_corpus, rel, s.base) and not mentions(en_corpus, rel, snake_of(s.base)):
                     add_gap(gaps, "untested-en", rel, s.key)
                 end
                 if tested_fa and s.has_fa and not mentions(fa_corpus, rel, s.fa):

@@ -175,6 +175,80 @@ func lo_emit_attr(la &: LoAttrs, out: str, value: str, primary: bool, bare: bool
     end
 end
 
+func lo_state_append(la &: LoAttrs, state: int, decl: str):
+    if state == sm.STYLE_STATE_HOVER:
+        la.hover += decl
+    else state == sm.STYLE_STATE_FOCUS:
+        la.focus += decl
+    else state == sm.STYLE_STATE_FOCUS_WITHIN:
+        la.focus_within += decl
+    else state == sm.STYLE_STATE_ACTIVE:
+        la.active += decl
+    else state == sm.STYLE_STATE_DISABLED:
+        la.disabled += decl
+    else state == sm.STYLE_STATE_CHECKED:
+        la.checked += decl
+    else state == sm.STYLE_STATE_INVALID:
+        la.invalid += decl
+    else state == sm.STYLE_STATE_PLACEHOLDER:
+        la.placeholder += decl
+    else state == sm.STYLE_STATE_SELECTION:
+        la.selection += decl
+    else:
+        la.css += decl
+    end
+end
+
+func lo_state_text(la: LoAttrs, state: int): str:
+    if state == sm.STYLE_STATE_HOVER:
+        ret la.hover
+    end
+    if state == sm.STYLE_STATE_FOCUS:
+        ret la.focus
+    end
+    if state == sm.STYLE_STATE_FOCUS_WITHIN:
+        ret la.focus_within
+    end
+    if state == sm.STYLE_STATE_ACTIVE:
+        ret la.active
+    end
+    if state == sm.STYLE_STATE_DISABLED:
+        ret la.disabled
+    end
+    if state == sm.STYLE_STATE_CHECKED:
+        ret la.checked
+    end
+    if state == sm.STYLE_STATE_INVALID:
+        ret la.invalid
+    end
+    if state == sm.STYLE_STATE_PLACEHOLDER:
+        ret la.placeholder
+    end
+    if state == sm.STYLE_STATE_SELECTION:
+        ret la.selection
+    end
+    ret la.css
+end
+
+func lo_state_suffix(state: int): str:
+    suffixes := ["", ":hover", ":focus", ":focus-within", ":active", ":disabled", ":checked", ":invalid", "::placeholder", "::selection"]
+    if state < 0 or state >= len(suffixes):
+        ret ""
+    end
+    ret suffixes[state]
+end
+
+func lo_pseudo_state(nm: str): int:
+    names := ["hover_", "focus_within_", "focus_", "active_", "disabled_", "checked_", "invalid_", "placeholder_", "selection_"]
+    states := [sm.STYLE_STATE_HOVER, sm.STYLE_STATE_FOCUS_WITHIN, sm.STYLE_STATE_FOCUS, sm.STYLE_STATE_ACTIVE, sm.STYLE_STATE_DISABLED, sm.STYLE_STATE_CHECKED, sm.STYLE_STATE_INVALID, sm.STYLE_STATE_PLACEHOLDER, sm.STYLE_STATE_SELECTION]
+    repeat len(names) in i:
+        if str.StartsWith(nm, names[i]):
+            ret states[i]
+        end
+    end
+    ret 0 - 1
+end
+
 func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
     pl := sm.LayoutPseudoPrefixLen(nm)
     if pl == 0:
@@ -202,24 +276,9 @@ func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
         end
     end
     decl := css_decl(cx.compact, prop, val)
-    if str.StartsWith(nm, "hover_"):
-        la.hover += decl
-    else str.StartsWith(nm, "focus_within_"):
-        la.focus_within += decl
-    else str.StartsWith(nm, "focus_"):
-        la.focus += decl
-    else str.StartsWith(nm, "active_"):
-        la.active += decl
-    else str.StartsWith(nm, "disabled_"):
-        la.disabled += decl
-    else str.StartsWith(nm, "checked_"):
-        la.checked += decl
-    else str.StartsWith(nm, "invalid_"):
-        la.invalid += decl
-    else str.StartsWith(nm, "placeholder_"):
-        la.placeholder += decl
-    else str.StartsWith(nm, "selection_"):
-        la.selection += decl
+    st := lo_pseudo_state(nm)
+    if st >= 0:
+        lo_state_append(la, st, decl)
     else str.StartsWith(nm, "before_"):
         la.before += decl
     else str.StartsWith(nm, "after_"):
@@ -228,6 +287,16 @@ func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
         ret false
     end
     ret true
+end
+
+func lo_std_class(la &: LoAttrs, v: str):
+    if not la.has_dynclass:
+        la.dynclass = v
+        la.has_dynclass = true
+    else:
+        la.dynclass += " " + v
+    end
+    la.emitted.Push("class")
 end
 
 func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &: LoAttrs):
@@ -243,30 +312,29 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
         mut sprop := 0
         mut sstate := 0
         if sm.StyleAttrOf(aid, sprop, sstate):
+            lo_state_append(la, sstate, sm.StyleAttrCss(aid) + ";")
+            continue
+        end
+        if sm.StyleAttrDynOf(aid, sprop, sstate):
+            lo_std_class(la, v)
+            continue
+        end
+        sa := sm.ResolveStyleAttr(nm)
+        if sa.ok and not sm.StyleAttrIsEvent(a, aid) and not sm.LayoutNativeTarget() and ei >= 0:
+            if sm.StyleTextIsRuntime(v):
+                lo_std_class(la, v)
+                continue
+            end
             mut sval := style.Value {}
-            if style.Parse(sprop, v, sval):
-                decl := style.Css(sprop, sval) + ";"
-                if sstate == sm.STYLE_STATE_HOVER:
-                    la.hover += decl
-                else sstate == sm.STYLE_STATE_FOCUS_WITHIN:
-                    la.focus_within += decl
-                else sstate == sm.STYLE_STATE_FOCUS:
-                    la.focus += decl
-                else sstate == sm.STYLE_STATE_ACTIVE:
-                    la.active += decl
-                else sstate == sm.STYLE_STATE_DISABLED:
-                    la.disabled += decl
-                else sstate == sm.STYLE_STATE_CHECKED:
-                    la.checked += decl
-                else sstate == sm.STYLE_STATE_INVALID:
-                    la.invalid += decl
-                else sstate == sm.STYLE_STATE_PLACEHOLDER:
-                    la.placeholder += decl
-                else sstate == sm.STYLE_STATE_SELECTION:
-                    la.selection += decl
-                else:
-                    la.css += decl
-                end
+            if style.Parse(sa.prop, sm.StyleStaticText(sa.prop, v), sval):
+                lo_state_append(la, sa.state, style.Css(sa.prop, sval) + ";")
+            else:
+                lg.Log(
+                    cx.log, lg.PH_CODEGEN, lg.LOG_ERROR, co.Format3(
+                        i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(nm), co.ArgStr(v),
+                        co.ArgStr(style.Error(sa.prop, sm.StyleStaticText(sa.prop, v)))
+                    )
+                )
             end
             continue
         end
@@ -434,35 +502,11 @@ end
 
 func lo_emit_rules(cx &: LoCtx, la: LoAttrs, klass: str):
     csel := "." + str.Replace(str.Trim(klass), " ", ".")
-    if str.Len(la.css) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel, la.css))
-    end
-    if str.Len(la.hover) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":hover", la.hover))
-    end
-    if str.Len(la.focus) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":focus", la.focus))
-    end
-    if str.Len(la.focus_within) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":focus-within", la.focus_within))
-    end
-    if str.Len(la.active) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":active", la.active))
-    end
-    if str.Len(la.disabled) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":disabled", la.disabled))
-    end
-    if str.Len(la.checked) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":checked", la.checked))
-    end
-    if str.Len(la.invalid) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + ":invalid", la.invalid))
-    end
-    if str.Len(la.placeholder) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + "::placeholder", la.placeholder))
-    end
-    if str.Len(la.selection) > 0:
-        emit_rule(cx, css_rule(cx.compact, csel + "::selection", la.selection))
+    repeat 10 in st:
+        body := lo_state_text(la, st)
+        if str.Len(body) > 0:
+            emit_rule(cx, css_rule(cx.compact, csel + lo_state_suffix(st), body))
+        end
     end
     if str.Len(la.before) > 0:
         emit_rule(cx, css_rule(cx.compact, csel + "::before", la.before))

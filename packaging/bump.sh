@@ -59,7 +59,7 @@ sum_opt() {
 
 if [ -z "$SEED_VERSION" ]; then
     echo "==> resolving the bootstrap seed release"
-    SEED_VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" |
+    SEED_VERSION=$(curl -fsSL ${GH_TOKEN:+-H} ${GH_TOKEN:+"Authorization: Bearer $GH_TOKEN"} "https://api.github.com/repos/$REPO/releases?per_page=100" |
         grep -o '"tag_name": *"[^"]*"' |
         sed 's/.*"v\([^"]*\)"$/\1/' |
         grep -E '^[0-9]+(\.[0-9]+)*$' |

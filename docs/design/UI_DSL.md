@@ -199,16 +199,19 @@ and wrapped onto lines, baseline aligned; text elements use it.
 | `transition properties` | list of property names (default all) |
 | easing keywords | `linear` `ease` `ease in` `ease out` `ease in out` `steps(n)` `ease(x1, y1, x2, y2)` `spring(stiffness, damping)` |
 
-Keyframe animations get their own page syntax later (a named `animation:`
-block), not part of the first version.
+Keyframe animations, enter and exit, shared elements and springs are
+designed in `UI_BEHAVIOUR.md` (section 6).
 
 ### States and conditions
 
 Any style attribute may carry one prefix: `hover`, `focus`, `focus within`,
 `active`, `disabled`, `checked`, `invalid`, `placeholder`, `selection`
-(`hover background = #ffeecc`). Screen conditions and dark mode are written
-as conditions on attributes in a later version; `light dark(a, b)` colours
-work from the start.
+(`hover background = #ffeecc`). Screen size, dark mode, container size and
+state of attributes are written as `when` blocks (`UI_STATES_THEMES.md`,
+section 1); design tokens and themes are in section 2 of that file;
+`light dark(a, b)` colours work from the start. The standard components,
+accessibility and assets are in `UI_COMPONENTS.md`; navigation, forms and
+`bind`, testing, hot reload and gestures are in `UI_BEHAVIOUR.md`.
 
 ## Reactivity
 
@@ -532,7 +535,7 @@ because inference cannot express them; none is implemented until decided.
 1. **Two way input binding.** `bind = name` as a plain attribute on `input`,
    `select`, `checkbox`: it expands to `value = name` plus an input handler
    that writes `name`. Without it, R4's callback form works and is the
-   fallback.
+   fallback. Decided: `bind` is accepted (`UI_BEHAVIOUR.md`, section 8).
 2. **Lifecycle and effects.** `on mount:` and `on unmount:` blocks in a
    component, and `on change name, other:` for an effect that names its
    inputs, written like the existing `on saved` event handlers. Cleanup is

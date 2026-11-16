@@ -17,138 +17,285 @@ package ui
 import math
 import gui.paint
 import gui.style
-import gui.typeset
 
-func _rect(x: f64, y: f64, w: f64, h: f64): paint.Rect:
-    s := _e.scale
-    ret paint.Rect { x = x * s, y = y * s, width = w * s, height = h * s }
-end
-
-func _radii(s: style.Style, w: f64, h: f64, font: f64): paint.Radii:
-    tl := _abs_len(s.radius_top_start, font, math.Min(w, h))
-    tr := _abs_len(s.radius_top_end, font, math.Min(w, h))
-    br := _abs_len(s.radius_bottom_end, font, math.Min(w, h))
-    bl := _abs_len(s.radius_bottom_start, font, math.Min(w, h))
-    sc := _e.scale
-    ret paint.Radii { top_left_x = tl * sc, top_left_y = tl * sc, top_right_x = tr * sc, top_right_y = tr * sc, bottom_right_x = br * sc, bottom_right_y = br * sc, bottom_left_x = bl * sc, bottom_left_y = bl * sc }
-end
-
-func _bstyle(w: int): paint.BorderStyle:
+func _blend_of(w: int): paint.BlendMode:
     switch w:
-        style.KW_NONE: ret paint.BorderStyle.None end
-        style.KW_DASHED: ret paint.BorderStyle.Dashed end
-        style.KW_DOTTED: ret paint.BorderStyle.Dotted end
+        style.KW_MULTIPLY: ret paint.BlendMode.Multiply end
+        style.KW_SCREEN: ret paint.BlendMode.Screen end
+        style.KW_OVERLAY: ret paint.BlendMode.Overlay end
+        style.KW_DARKEN: ret paint.BlendMode.Darken end
+        style.KW_LIGHTEN: ret paint.BlendMode.Lighten end
+        style.KW_COLOR_DODGE: ret paint.BlendMode.ColorDodge end
+        style.KW_COLOR_BURN: ret paint.BlendMode.ColorBurn end
+        style.KW_HARD_LIGHT: ret paint.BlendMode.HardLight end
+        style.KW_SOFT_LIGHT: ret paint.BlendMode.SoftLight end
+        style.KW_DIFFERENCE: ret paint.BlendMode.Difference end
+        style.KW_EXCLUSION: ret paint.BlendMode.Exclusion end
+        style.KW_HUE: ret paint.BlendMode.Hue end
+        style.KW_SATURATION: ret paint.BlendMode.Saturation end
+        style.KW_COLOR: ret paint.BlendMode.Color end
+        style.KW_LUMINOSITY: ret paint.BlendMode.Luminosity end
     end
-    ret paint.BorderStyle.Solid
+    ret paint.BlendMode.Normal
 end
 
-func _paint_background(cv: paint.Canvas, b: _Box, s: style.Style, u: _Used):
-    if s.background.Len() == 0:
-        ret
+func _add_filter(ch &: paint.FilterChain, kind: paint.FilterKind, v: f64, ident: f64):
+    if v != ident:
+        ch.Add(paint.NewFilter(kind, v))
     end
-    r := _rect(b.x, b.y, b.w, b.h)
-    radii := _radii(s, b.w, b.h, u.font)
-    each p in s.background:
-        if p.kind == style.PAINT_COLOR:
-            c := _ucol(p.color, u.color)
-            if c.a > 0:
-                cv.FillRoundedRect(r, radii, c)
+end
+
+func _fill_chain(ch &: paint.FilterChain, blur: f64, br: f64, co: f64, gr: f64, sa: f64, se: f64, inv: f64, hue: f64):
+    if blur > 0.0:
+        ch.Add(paint.NewFilter(paint.FilterKind.Blur, blur * _e.scale))
+    end
+    _add_filter(ch, paint.FilterKind.Brightness, br, 1.0)
+    _add_filter(ch, paint.FilterKind.Contrast, co, 1.0)
+    _add_filter(ch, paint.FilterKind.Grayscale, gr, 0.0)
+    _add_filter(ch, paint.FilterKind.Saturate, sa, 1.0)
+    _add_filter(ch, paint.FilterKind.Sepia, se, 0.0)
+    _add_filter(ch, paint.FilterKind.Invert, inv, 0.0)
+    _add_filter(ch, paint.FilterKind.HueRotate, hue, 0.0)
+end
+
+func _chain_of(s: style.Style, font: f64): paint.FilterChain:
+    mut ch := paint.FilterChain {}
+    _fill_chain(ch, _vp_len(s.blur, font), s.brightness, s.contrast, s.grayscale, s.saturate, s.sepia, s.invert, s.hue_rotate)
+    ret ch
+end
+
+func _backdrop_chain_of(s: style.Style, font: f64): paint.FilterChain:
+    mut ch := paint.FilterChain {}
+    _fill_chain(ch, _vp_len(s.backdrop_blur, font), s.backdrop_brightness, s.backdrop_contrast, s.backdrop_grayscale, s.backdrop_saturate, s.backdrop_sepia, s.backdrop_invert, s.backdrop_hue_rotate)
+    ret ch
+end
+
+func _dev_xf(node: int): paint.Transform:
+    sc := _e.scale
+    ret paint.Scaling(1.0 / sc, 1.0 / sc).Then(_e.xf[node]).Then(paint.Scaling(sc, sc))
+end
+
+func _eff_opacity(node: int, s: style.Style): f64:
+    mut op := math.Max(0.0, math.Min(1.0, s.opacity))
+    nd := _e.dom.nodes[node]
+    dim := nd.k == _K_BUTTON or nd.k == _K_INPUT or nd.k == _K_SELECT or nd.k == _K_TEXTAREA
+    if dim and _is_disabled_state(node) and (nd.smask & (1 << STATE_DISABLED)) == 0:
+        op *= 0.5
+    end
+    ret op
+end
+
+func _in_damage(node: int, l: f64, t: f64, r: f64, b: f64): bool:
+    if _e.full:
+        ret true
+    end
+    mut x0 := l
+    mut y0 := t
+    mut x1 := r
+    mut y1 := b
+    if _e.xf_any:
+        _screen_bbox(node, x0, y0, x1, y1)
+    end
+    sc := _e.scale
+    ret _damage_hits(math.Floor(x0 * sc) as int - 1, math.Floor(y0 * sc) as int - 1, math.Ceil(x1 * sc) as int + 1, math.Ceil(y1 * sc) as int + 1)
+end
+
+func _kid_order(node: int): Vector<int>:
+    nd := _e.dom.nodes[node]
+    mut out := Vector {} as Vector<int>
+    mut sorted := false
+    each k in nd.kids:
+        out.Push(k)
+        ks := _e.cs[k]
+        if ks.layer != 0 or ks.order != 0:
+            sorted = true
+        end
+    end
+    if not sorted:
+        ret out
+    end
+    n := out.Len()
+    repeat n in i:
+        mut j := i
+        mut go := true
+        until go and j > 0:
+            a := _e.cs[out[j - 1]]
+            c := _e.cs[out[j]]
+            if a.layer < c.layer or (a.layer == c.layer and a.order <= c.order):
+                go = false
+            else:
+                t := out[j - 1]
+                out[j - 1] = out[j]
+                out[j] = t
+                j--
             end
+        end
+    end
+    ret out
+end
+
+func _clip_rect_of(node: int, b: _Box, g: _Geo, s: style.Style, radii: paint.Radii, out &: Vector<paint.Rect>, outr &: Vector<paint.Radii>): int:
+    mut n := 0
+    ox := s.overflow_x != style.KW_VISIBLE
+    oy := s.overflow_y != style.KW_VISIBLE
+    leaf := _is_leaf_kind(node)
+    if s.clip:
+        out.Push(_rect(b.x, b.y, b.w, b.h))
+        outr.Push(radii)
+        n++
+    end
+    if ox or oy or leaf:
+        pb := _pad_box(g, b)
+        big := 1.0e5
+        if ox and oy or leaf:
+            out.Push(_rect(pb.x, pb.y, pb.w, pb.h))
+            outr.Push(_pad_radii(g, b))
+        else ox:
+            out.Push(_rect(pb.x, pb.y - big, pb.w, pb.h + 2.0 * big))
+            outr.Push(paint.Radii {})
         else:
-            g := _paint_gradient(p, b.w, b.h, u)
-            cv.FillGradient(r, radii, g)
+            out.Push(_rect(pb.x - big, pb.y, pb.w + 2.0 * big, pb.h))
+            outr.Push(paint.Radii {})
         end
+        n++
     end
+    ret n
 end
 
-func _paint_gradient(p: style.Paint, w: f64, h: f64, u: _Used): paint.Gradient:
-    mut stops := Vector {} as Vector<paint.GradientStop>
-    each st in p.stops:
-        c := _ucol(st.color, u.color)
-        off := st.has_at ? _abs_len(st.at, u.font, math.Max(w, h)) / math.Max(1.0, math.Max(w, h)) : -1.0
-        stops.Push(paint.GradientStop { pos = off, color = c })
-    end
-    ret paint.Gradient { stops = stops, angle = p.angle }
+func _paint_box(cv &: paint.Canvas, node: int, b: _Box, g: _Geo, s: style.Style, u: _Used, radii: paint.Radii):
+    _paint_outer_shadows(cv, b, s, u, radii)
+    _paint_background(cv, b, g, s, u, radii)
+    _paint_inset_shadows(cv, b, g, s, u)
+    _paint_border(cv, b, g, s, u, radii)
+    _paint_chrome(cv, node, b, g, s, u)
+    _paint_state_overlay(cv, node, b, radii)
 end
 
-func _paint_border(cv: paint.Canvas, b: _Box, s: style.Style, u: _Used):
-    tw := s.border_top_style == style.KW_NONE ? 0.0 : _vp_len(s.border_top_width, u.font)
-    rw := s.border_end_style == style.KW_NONE ? 0.0 : _vp_len(s.border_end_width, u.font)
-    bw := s.border_bottom_style == style.KW_NONE ? 0.0 : _vp_len(s.border_bottom_width, u.font)
-    lw := s.border_start_style == style.KW_NONE ? 0.0 : _vp_len(s.border_start_width, u.font)
-    if tw == 0.0 and rw == 0.0 and bw == 0.0 and lw == 0.0:
-        ret
-    end
-    r := _rect(b.x, b.y, b.w, b.h)
-    radii := _radii(s, b.w, b.h, u.font)
-    sc := _e.scale
-    bd := paint.Border {
-        top_width = tw * sc, top_color = _ucol(s.border_top_color, u.color), top_style = _bstyle(s.border_top_style),
-        right_width = rw * sc, right_color = _ucol(s.border_end_color, u.color), right_style = _bstyle(s.border_end_style),
-        bottom_width = bw * sc, bottom_color = _ucol(s.border_bottom_color, u.color), bottom_style = _bstyle(s.border_bottom_style),
-        left_width = lw * sc, left_color = _ucol(s.border_start_color, u.color), left_style = _bstyle(s.border_start_style)
-    }
-    cv.DrawBorder(r, radii, bd)
-end
-
-func _paint_run(cv: paint.Canvas, ri: int):
-    f := _e.runs[ri]
-    if not f.has_lay:
-        ret
-    end
-    sc := _e.scale
-    ox := f.x * sc
-    oy := f.y * sc
-    repeat f.lay.glyphs.Len() in i:
-        g := f.lay.glyphs[i]
-        mut run := typeset.GlyphRun {}
-        mut found := false
-        repeat f.lay.runs.Len() in ri2:
-            r := f.lay.runs[ri2]
-            if i >= r.glyph_start and i < r.glyph_start + r.glyph_count:
-                run = r
-                found = true
-                break
+func _paint_children(cv &: paint.Canvas, node: int):
+    mut ord := _kid_order(node)
+    each k in ord:
+        ri := _e.node_run[k]
+        if ri >= 0 and not _e.runs[ri].control:
+            f := _e.runs[ri]
+            ts := _run_shadow_ext(f) + 4.0
+            if _in_damage(node, f.x - ts, f.y - ts, f.x + math.Max(f.w, f.lay.width) + ts, f.y + math.Max(f.h, f.lay.height) + ts):
+                _paint_run(cv, ri)
             end
         end
-        if not found:
-            continue
+        if _e.fid[k] >= 0:
+            _paint_node(cv, k)
         end
-        font := typeset.FaceFont(_fc, run.face)
-        gx := ox + g.x * sc
-        gy := oy + g.y * sc
-        gm := typeset.CachedGlyph(_gcache, font, g.id, run.size * sc, gx)
-        m := paint.Mask { data = gm.data, width = gm.width, height = gm.height, stride = gm.stride, left = gm.left, top = gm.top }
-        el := run.span < f.span_el.Len() ? f.span_el[run.span] : f.owner
-        s := el >= 0 and el < _e.cs.Len() ? _e.cs[el] : style.Default("")
-        u := el >= 0 and el < _e.us.Len() ? _e.us[el] : _Used {}
-        c := _ucol(s.color, u.color)
-        cv.DrawGlyph(m, typeset.GlyphOriginX(gx, gm), typeset.GlyphOriginY(gy, gm), c)
     end
+    ord.Free()
 end
 
-func _paint_node(cv: paint.Canvas, node: int):
+func _paint_content(cv &: paint.Canvas, node: int, b: _Box, g: _Geo, s: style.Style, u: _Used, radii: paint.Radii):
+    mut rects := Vector {} as Vector<paint.Rect>
+    mut rads := Vector {} as Vector<paint.Radii>
+    n := _clip_rect_of(node, b, g, s, radii, rects, rads)
+    repeat n in i:
+        if _has_radius(rads[i]):
+            cv.PushRoundedClip(rects[i], rads[i])
+        else:
+            cv.PushClip(rects[i])
+        end
+    end
+    cri := _e.node_run[node]
+    if cri >= 0 and _e.runs[cri].control and _e.runs[cri].has_lay:
+        _paint_run(cv, cri)
+    end
+    _paint_marker(cv, node, b, s, u)
+    _paint_children(cv, node)
+    repeat n:
+        cv.PopClip()
+    end
+    rects.Free()
+    rads.Free()
+    _paint_scrollbars(cv, node, b, g, s, u)
+end
+
+func _paint_node(cv &: paint.Canvas, node: int):
     b := _e.boxes[node]
     if not b.shown:
         ret
     end
+    nd := _e.dom.nodes[node]
+    if nd.k == _K_TEXT:
+        ret
+    end
     s := _e.cs[node]
     u := _e.us[node]
-    _paint_background(cv, b, s, u)
-    _paint_border(cv, b, s, u)
-    nd := _e.dom.nodes[node]
-    if node < _e.node_run.Len() and _e.node_run[node] >= 0:
-        _paint_run(cv, _e.node_run[node])
+    op := _eff_opacity(node, s)
+    if op <= 0.0:
+        ret
     end
-    each k in nd.kids:
-        _paint_node(cv, k)
+    mut chain := _chain_of(s, u.font)
+    mut bchain := _backdrop_chain_of(s, u.font)
+    defer chain.Free()
+    defer bchain.Free()
+    filtered := not chain.IsEmpty()
+    backdrop := not bchain.IsEmpty()
+    blended := s.blend != style.KW_NORMAL
+    layered := op < 1.0 or filtered or blended
+    g := _geo(s, u.font, b.w, b.h)
+    radii := _radii_of(g, b)
+    mut lr := [0.0, 0.0, 0.0, 0.0]
+    if layered:
+        if not _sub_ink(node, lr):
+            ret
+        end
+        if not _in_damage(node, lr[0], lr[1], lr[2], lr[3]):
+            ret
+        end
+    end
+    xf := _xf_has(node)
+    if xf:
+        cv.PushTransform(_dev_xf(node))
+    end
+    if backdrop and _in_damage(node, b.x, b.y, b.x + b.w, b.y + b.h):
+        cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), radii, bchain, op)
+    end
+    if layered:
+        fe := _filter_extent(s, u.font) + 1.0
+        lrect := _rect(lr[0] - fe, lr[1] - fe, lr[2] - lr[0] + 2.0 * fe, lr[3] - lr[1] + 2.0 * fe)
+        if filtered:
+            cv.BeginFilterLayer(lrect, chain)
+        else:
+            cv.BeginLayer(lrect)
+        end
+    end
+    mut own := [0.0, 0.0, 0.0, 0.0]
+    _ink_page(node, own)
+    if filtered or _in_damage(node, own[0], own[1], own[2], own[3]):
+        _paint_box(cv, node, b, g, s, u, radii)
+    end
+    _paint_content(cv, node, b, g, s, u, radii)
+    _paint_outline(cv, node, b, g, s, u)
+    if layered:
+        if blended:
+            cv.EndLayerBlend(chain, op, _blend_of(s.blend))
+        else filtered:
+            cv.EndLayerFiltered(chain, op)
+        else:
+            cv.EndLayer(op)
+        end
+    end
+    if xf:
+        cv.PopTransform()
     end
 end
 
-func _paint_all(cv: paint.Canvas):
-    cv.Clear(paint.Color { r = 255, g = 255, b = 255, a = 255 })
-    if _e.dom.nodes.Len() == 0:
-        ret
+func _paint_all(cv &: paint.Canvas):
+    _ensure_gcache()
+    if _e.full:
+        cv.ClearRegion()
+    else:
+        cv.SetRegion(_e.damage)
     end
-    _paint_node(cv, 0)
+    cv.Clear(_e.dark ? paint.Color { r = 18, g = 18, b = 18, a = 255 } : paint.Color { r = 255, g = 255, b = 255, a = 255 })
+    if _e.dom.nodes.Len() > 0 and _e.boxes.Len() > 0:
+        _paint_node(cv, 0)
+        _paint_popup(cv)
+    end
+    cv.ClearRegion()
 end

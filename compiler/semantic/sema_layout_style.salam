@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import os
 import gui.style
 
 include co "../sal_core.salam"
@@ -41,6 +42,10 @@ mut g_style_attr_state := Vector {} as Vector<int>
 mut g_style_attr_css := Vector {} as Vector<str>
 
 mut g_style_quote_strs := false
+
+mut g_style_src_path := ""
+
+mut g_style_src_text := ""
 
 mut g_style_dyn_node := Vector {} as Vector<int>
 
@@ -238,6 +243,39 @@ func style_num_eval(a &: at.Ast, nid: int, out &: f64): bool:
     ret false
 end
 
+func style_has_fa_marks(text: str): bool:
+    mut inq := false
+    mut prev := 0
+    each ch in text.Bytes():
+        b := ch as int
+        if b == 34:
+            inq = not inq
+        end
+        if not inq and ((prev == 219 and b >= 176 and b <= 185) or (prev == 217 and b >= 160 and b <= 171) or (prev == 216 and b == 140)):
+            ret true
+        end
+        prev = b
+    end
+    ret false
+end
+
+func style_source_marks(a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    if n.synthetic or str.Len(n.src_file) == 0 or n.end_index <= n.begin_index:
+        ret false
+    end
+    if not str.Equals(n.src_file, g_style_src_path):
+        g_style_src_path = n.src_file
+        g_style_src_text = os.ReadFile(n.src_file)
+    end
+    b := n.begin_index as int
+    e := n.end_index as int
+    if e > str.Len(g_style_src_text) or b < 0:
+        ret false
+    end
+    ret style_has_fa_marks(str.Substr(g_style_src_text, b, e - b))
+end
+
 pub func StyleAttrOf(attr: int, prop &: int, state &: int): bool:
     repeat g_style_attr_node.Len() in i:
         if g_style_attr_node[i] == attr:
@@ -359,6 +397,26 @@ pub func StyleStaticText(prop: int, text: str): str:
     ret text
 end
 
+pub func StyleAttrIsIntrinsicSize(a &: at.Ast, aid: int, ei: int, sa: StyleAttr): bool:
+    if ei < 0 or sa.state != 0 or lay_native_target():
+        ret false
+    end
+    tag := g_lay_elems.Get(ei).tag
+    if not str.Equals(tag, "img") and not str.Equals(tag, "canvas") and not str.Equals(tag, "video"):
+        ret false
+    end
+    pname := style.Info(sa.prop).name
+    if not str.Equals(pname, "width") and not str.Equals(pname, "height"):
+        ret false
+    end
+    vid := at.Get(a, aid).a
+    if vid == 0:
+        ret false
+    end
+    v := at.Get(a, vid)
+    ret v.kind == at.AST_LITERAL and v.op == tok.TK_INT and str.Len(LayoutNumUnit(v.name)) == 0
+end
+
 pub func StyleAttrIsEvent(a &: at.Ast, aid: int): bool:
     key := lay_attr_key_exact(at.Get(a, aid).name)
     if str.Len(key) == 0:
@@ -386,4 +444,12 @@ pub func StyleNumText(a &: at.Ast, nid: int, out &: str): bool:
     end
     out = co.Format1("%.10g", co.ArgFloat(x))
     ret true
+end
+
+pub func StyleTextHasFaMarks(text: str): bool:
+    ret style_has_fa_marks(text)
+end
+
+pub func StyleSourceHasFaMarks(a &: at.Ast, nid: int): bool:
+    ret style_source_marks(a, nid)
 end

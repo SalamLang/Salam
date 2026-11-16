@@ -1,0 +1,258 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.paint
+import gui.style
+
+func _stop_frac(st: style.Stop, glen: f64, font: f64, conic: bool): f64:
+    if not st.has_at:
+        ret -1.0
+    end
+    if conic:
+        ret (st.at.px + st.at.pct * 3.6) / 360.0
+    end
+    ret _abs_len(st.at, font, glen) / math.Max(1.0, glen)
+end
+
+func _side_angle(side: int, w: f64, h: f64): f64:
+    th := math.Atan2(h, w) * 180.0 / math.PI
+    switch side:
+        style.KW_TO_TOP: ret 0.0 end
+        style.KW_TO_RIGHT: ret 90.0 end
+        style.KW_TO_BOTTOM: ret 180.0 end
+        style.KW_TO_LEFT: ret 270.0 end
+        style.KW_TO_TOP_RIGHT: ret th end
+        style.KW_TO_BOTTOM_RIGHT: ret 180.0 - th end
+        style.KW_TO_BOTTOM_LEFT: ret 180.0 + th end
+        style.KW_TO_TOP_LEFT: ret 360.0 - th end
+    end
+    ret 180.0
+end
+
+func _make_gradient(p: style.Paint, w: f64, h: f64, u: _Used, g &: paint.Gradient): bool:
+    sc := _e.scale
+    mut glen := w
+    mut conic := false
+    switch p.kind:
+        style.PAINT_LINEAR:
+            ang := p.side != 0 ? _side_angle(p.side, w, h) : p.angle
+            g.kind = paint.GradientKind.Linear
+            g.angle = ang
+            rad := ang * math.PI / 180.0
+            glen = math.Abs(w * math.Sin(rad)) + math.Abs(h * math.Cos(rad))
+            break
+        end
+        style.PAINT_RADIAL:
+            cx := p.has_at ? _abs_len(p.at_x, u.font, w) : w / 2.0
+            cy := p.has_at ? _abs_len(p.at_y, u.font, h) : h / 2.0
+            pt := paint.RadialSize(w, h, cx, cy, p.circle, paint.RadialExtent.FarthestCorner)
+            g.kind = paint.GradientKind.Radial
+            g.cx = cx * sc
+            g.cy = cy * sc
+            g.rx = pt.x * sc
+            g.ry = pt.y * sc
+            glen = pt.x
+            break
+        end
+        style.PAINT_CONIC:
+            cx := p.has_at ? _abs_len(p.at_x, u.font, w) : w / 2.0
+            cy := p.has_at ? _abs_len(p.at_y, u.font, h) : h / 2.0
+            g.kind = paint.GradientKind.Conic
+            g.cx = cx * sc
+            g.cy = cy * sc
+            g.angle = p.angle
+            conic = true
+            break
+        end
+        else:
+            ret false
+        end
+    end
+    each st in p.stops:
+        g.AddStop(_stop_frac(st, glen, u.font, conic), _ucol(st.color, u.color))
+    end
+    ret g.stops.Len() > 0
+end
+
+func _tile_axis(p0: f64, plen: f64, start0: f64, size: f64, step0: f64, repeating: bool, out: f64[]): int:
+    if size <= 0.0 or step0 <= 0.0:
+        ret 0
+    end
+    mut start := start0
+    if not repeating:
+        out[0] = start
+        out[1] = step0
+        ret start < p0 + plen and start + size > p0 ? 1 : 0
+    end
+    if start > p0:
+        start -= math.Ceil((start - p0) / step0) * step0
+    else start + step0 <= p0:
+        start += math.Floor((p0 - start) / step0) * step0
+    end
+    out[0] = start
+    out[1] = step0
+    ret math.Max(0.0, math.Ceil((p0 + plen - start) / step0)) as int
+end
+
+func _pos_frac(d: style.Dim, rtl: bool): f64:
+    switch d.word:
+        style.KW_CENTER: ret 0.5 end
+        style.KW_START: ret rtl ? 1.0 : 0.0 end
+        style.KW_END: ret rtl ? 0.0 : 1.0 end
+        style.KW_LEFT, style.KW_TOP: ret 0.0 end
+        style.KW_RIGHT, style.KW_BOTTOM: ret 1.0 end
+    end
+    ret 0.0
+end
+
+func _pos_axis(d: style.Dim, rtl: bool, avail: f64, font: f64): f64:
+    if d.word == 0:
+        ret _vp_len(d.len, font) + d.len.pct * avail / 100.0
+    end
+    ret _pos_frac(d, rtl) * avail
+end
+
+func _layer_size(s: style.Style, iw: f64, ih: f64, ow: f64, oh: f64, font: f64, tw &: f64, th &: f64):
+    tw = ow
+    th = oh
+    sx := s.background_size_x
+    sy := s.background_size_y
+    if sx.word == style.KW_COVER or sx.word == style.KW_CONTAIN:
+        if iw > 0.0 and ih > 0.0:
+            fx := ow / iw
+            fy := oh / ih
+            f := sx.word == style.KW_COVER ? math.Max(fx, fy) : math.Min(fx, fy)
+            tw = iw * f
+            th = ih * f
+        end
+        ret
+    end
+    wa := sx.word != 0
+    ha := sy.word != 0
+    if wa and ha:
+        if iw > 0.0:
+            tw = iw
+            th = ih
+        end
+        ret
+    end
+    if ha:
+        tw = _abs_len(sx.len, font, ow)
+        th = iw > 0.0 ? tw * ih / iw : oh
+        ret
+    end
+    if wa:
+        th = _abs_len(sy.len, font, oh)
+        tw = iw > 0.0 ? th * iw / ih : ow
+        ret
+    end
+    tw = _abs_len(sx.len, font, ow)
+    th = _abs_len(sy.len, font, oh)
+end
+
+func _paint_bg_layer(cv &: paint.Canvas, p: style.Paint, s: style.Style, u: _Used, org: _Box, clip: _Box, clip_r: paint.Radii, rtl: bool):
+    if org.w <= 0.0 or org.h <= 0.0:
+        ret
+    end
+    mut iw := 0.0
+    mut ih := 0.0
+    mut ik := -1
+    if p.kind == style.PAINT_IMAGE:
+        ik = _image_index(p.path)
+        if ik < 0 or not _img_ok[ik]:
+            ret
+        end
+        iw = _img_canvas[ik].width as f64
+        ih = _img_canvas[ik].height as f64
+        if iw <= 0.0 or ih <= 0.0:
+            ret
+        end
+    end
+    mut tw := org.w
+    mut th := org.h
+    _layer_size(s, iw, ih, org.w, org.h, u.font, tw, th)
+    if tw <= 0.0 or th <= 0.0:
+        ret
+    end
+    rx := s.background_repeat == style.KW_TRUE or s.background_repeat == style.KW_X
+    ry := s.background_repeat == style.KW_TRUE or s.background_repeat == style.KW_Y
+    sx := org.x + _pos_axis(s.background_x, rtl, org.w - tw, u.font)
+    sy := org.y + _pos_axis(s.background_y, rtl, org.h - th, u.font)
+    mut ax := [0.0, 0.0]
+    mut ay := [0.0, 0.0]
+    nx := _tile_axis(clip.x, clip.w, sx, tw, tw, rx, ax)
+    ny := _tile_axis(clip.y, clip.h, sy, th, th, ry, ay)
+    if nx <= 0 or ny <= 0:
+        ret
+    end
+    single := nx == 1 and ny == 1
+    exact := single and ax[0] == clip.x and ay[0] == clip.y and tw >= clip.w and th >= clip.h
+    pushed := (not exact) or (ik >= 0 and _has_radius(clip_r))
+    if pushed:
+        cv.PushRoundedClip(_rect(clip.x, clip.y, clip.w, clip.h), clip_r)
+    end
+    if ik >= 0:
+        img := _img_canvas[ik]
+        if single:
+            cv.DrawImage(img, _rect(ax[0], ay[0], tw, th), 1.0)
+        else:
+            cv.DrawImageTiled(img, _rect(ax[0], ay[0], ax[1] * (nx as f64), ay[1] * (ny as f64)), _rect(ax[0], ay[0], tw, th), 1.0)
+        end
+    else:
+        mut gr := paint.Gradient {}
+        if _make_gradient(p, tw, th, u, gr):
+            if single:
+                rr := exact ? clip_r : paint.Radii {}
+                cv.FillGradient(_rect(ax[0], ay[0], tw, th), rr, gr)
+            else:
+                sc := _e.scale
+                pw := math.MaxI(1, math.Round(tw * sc) as int)
+                ph := math.MaxI(1, math.Round(th * sc) as int)
+                mut tile := paint.NewCanvas(pw, ph)
+                tile.FillGradient(paint.Rect { x = 0.0, y = 0.0, width = pw as f64, height = ph as f64 }, paint.Radii {}, gr)
+                cv.DrawImageTiled(tile, _rect(ax[0], ay[0], ax[1] * (nx as f64), ay[1] * (ny as f64)), _rect(ax[0], ay[0], tw, th), 1.0)
+                tile.Free()
+            end
+        end
+        gr.Free()
+    end
+    if pushed:
+        cv.PopClip()
+    end
+end
+
+func _paint_background(cv &: paint.Canvas, b: _Box, g: _Geo, s: style.Style, u: _Used, radii: paint.Radii):
+    if s.background.Len() == 0 or b.w <= 0.0 or b.h <= 0.0:
+        ret
+    end
+    rtl := _is_rtl(s)
+    pb := _pad_box(g, b)
+    pr := _pad_radii(g, b)
+    mut i := s.background.Len() - 1
+    until i >= 0:
+        p := s.background[i]
+        if p.kind == style.PAINT_COLOR:
+            c := _ucol(p.color, u.color)
+            if c.a > 0:
+                cv.FillRoundedRect(_rect(b.x, b.y, b.w, b.h), radii, c)
+            end
+        else:
+            _paint_bg_layer(cv, p, s, u, pb, pb, pr, rtl)
+        end
+        i--
+    end
+end

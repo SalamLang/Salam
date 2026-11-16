@@ -1,0 +1,317 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.paint
+import gui.style
+import gui.typeset
+
+func _state_style(node: int, st: int, u &: _Used): style.Style:
+    mut s := _e.cs[node]
+    nd := _e.dom.nodes[node]
+    if (nd.smask & (1 << st)) != 0:
+        _apply_state(s, nd, st, u)
+    end
+    ret s
+end
+
+func _draw_grun(cv &: paint.Canvas, l: typeset.TextLayout, gr: typeset.GlyphRun, ox: f64, oy: f64, col: paint.Color):
+    font := typeset.FaceFont(_fc, gr.face)
+    if not typeset.FontValid(font):
+        ret
+    end
+    sc := _e.scale
+    last := gr.glyph_start + gr.glyph_count
+    mut q := gr.glyph_start
+    until q < last:
+        g := l.glyphs[q]
+        gx := (ox + g.x) * sc
+        gy := (oy + g.y) * sc
+        gm := typeset.CachedGlyph(_gcache, font, g.id, gr.size * sc, gx)
+        if gm.width > 0 and gm.height > 0:
+            m := paint.Mask { data = gm.data, width = gm.width, height = gm.height, stride = gm.stride }
+            cv.DrawMask(m, typeset.GlyphOriginX(gx, gm), typeset.GlyphOriginY(gy, gm), col)
+        end
+        q++
+    end
+end
+
+func _draw_grun_shadow(cv &: paint.Canvas, l: typeset.TextLayout, gr: typeset.GlyphRun, line: typeset.LineBox, ox: f64, oy: f64, sh: style.Shadow, u: _Used):
+    sc := _e.scale
+    dx := _vp_len(sh.x, u.font)
+    dy := _vp_len(sh.y, u.font)
+    blur := math.Max(0.0, _vp_len(sh.blur, u.font))
+    col := _ucol(sh.color, u.color)
+    if blur <= 0.0:
+        _draw_grun(cv, l, gr, ox + dx, oy + dy, col)
+        ret
+    end
+    mut ch := paint.FilterChain {}
+    ch.Add(paint.NewFilter(paint.FilterKind.Blur, blur * sc / 2.0))
+    pad := gr.size + blur
+    cv.BeginFilterLayer(_rect(ox + gr.x + dx - pad, oy + line.top + dy - pad, gr.width + 2.0 * pad, line.height + 2.0 * pad), ch)
+    _draw_grun(cv, l, gr, ox + dx, oy + dy, col)
+    cv.EndLayerFiltered(ch, 1.0)
+    ch.Free()
+end
+
+func _deco_find(el: int, owner: int, kind: int): int:
+    mut n := el
+    until n >= 0:
+        if _e.cs[n].decoration == kind:
+            ret n
+        end
+        if n == owner:
+            break
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret -1
+end
+
+func _wavy(cv &: paint.Canvas, x0: f64, x1: f64, y: f64, th: f64, col: paint.Color):
+    mut p := paint.NewPath()
+    step := th * 2.0
+    amp := th * 1.2
+    p.MoveTo(x0, y + th / 2.0)
+    mut x := x0
+    mut up := true
+    until x < x1:
+        nx := math.Min(x1, x + step)
+        p.QuadTo((x + nx) / 2.0, y + th / 2.0 + (up ? 0.0 - amp : amp), nx, y + th / 2.0)
+        up = not up
+        x = nx
+    end
+    cv.StrokePath(p, paint.Stroke { width = th, cap = paint.LineCap.Butt, join = paint.LineJoin.Round }, col)
+    p.Free()
+end
+
+func _deco_line(cv &: paint.Canvas, x0: f64, x1: f64, y: f64, th: f64, st: int, col: paint.Color):
+    if x1 <= x0:
+        ret
+    end
+    switch st:
+        style.KW_DOUBLE:
+            cv.FillRect(paint.Rect { x = x0, y = y, width = x1 - x0, height = th }, col)
+            cv.FillRect(paint.Rect { x = x0, y = y + th * 2.0, width = x1 - x0, height = th }, col)
+            break
+        end
+        style.KW_DASHED:
+            mut x := x0
+            until x < x1:
+                cv.FillRect(paint.Rect { x = x, y = y, width = math.Min(th * 3.0, x1 - x), height = th }, col)
+                x += th * 5.0
+            end
+            break
+        end
+        style.KW_DOTTED:
+            mut x := x0
+            until x < x1:
+                cv.FillRect(paint.Rect { x = x, y = y, width = math.Min(th, x1 - x), height = th }, col)
+                x += th * 2.0
+            end
+            break
+        end
+        style.KW_WAVY:
+            _wavy(cv, x0, x1, y, th, col)
+            break
+        end
+        else:
+            cv.FillRect(paint.Rect { x = x0, y = y, width = x1 - x0, height = th }, col)
+            break
+        end
+    end
+end
+
+func _paint_decoration(cv &: paint.Canvas, owner: int, el: int, gr: typeset.GlyphRun, line: typeset.LineBox, ox: f64, oy: f64):
+    sc := _e.scale
+    x0 := (ox + gr.x) * sc
+    x1 := (ox + gr.x + gr.width) * sc
+    base := (oy + line.baseline) * sc
+    size := gr.size * sc
+    repeat 3 in k:
+        kind := k == 0 ? style.KW_UNDERLINE : (k == 1 ? style.KW_OVERLINE : style.KW_STRIKE)
+        n := _deco_find(el, owner, kind)
+        if n < 0:
+            continue
+        end
+        s := _e.cs[n]
+        u := _e.us[n]
+        mut th := math.Max(1.0, math.Round(size / 14.0))
+        if s.decoration_thickness.word == 0:
+            th = math.Max(1.0, _vp_len(s.decoration_thickness.len, u.font) * sc)
+        end
+        col := _ucol(s.decoration_color, u.color)
+        mut y := base + size * 0.1
+        if k == 1:
+            y = base - size * 0.8
+        else k == 2:
+            y = base - size * 0.3
+        end
+        _deco_line(cv, x0, x1, math.Round(y), th, s.decoration_style, col)
+    end
+end
+
+func _inline_chain(el: int, owner: int, out &: Vector<int>):
+    mut n := el
+    until n >= 0 and n != owner:
+        out.Push(n)
+        n = _e.dom.nodes[n].parent
+    end
+end
+
+func _paint_inline_bgs(cv &: paint.Canvas, f: _Run, ox: f64, oy: f64):
+    l := f.lay
+    repeat l.lines.Len() in li:
+        line := l.lines[li]
+        mut k := line.run_start
+        until k < line.run_start + line.run_count:
+            gr := l.runs[k]
+            k++
+            if gr.span < 0 or gr.span >= f.span_el.Len():
+                continue
+            end
+            mut chain := Vector {} as Vector<int>
+            _inline_chain(f.span_el[gr.span], f.owner, chain)
+            mut ci := chain.Len() - 1
+            until ci >= 0:
+                n := chain[ci]
+                ci--
+                s := _e.cs[n]
+                if s.background.Len() == 0:
+                    continue
+                end
+                seg := _Box { x = ox + gr.x, y = oy + line.top, w = gr.width, h = line.height, shown = true }
+                u := _e.us[n]
+                g := _geo(s, u.font, seg.w, seg.h)
+                _paint_background(cv, seg, g, s, u, _radii_of(g, seg))
+            end
+            chain.Free()
+        end
+    end
+end
+
+func _paint_selection(cv &: paint.Canvas, node: int, f: _Run, ox: f64, oy: f64):
+    c := _e.ctl[node]
+    if not c.focused or c.caret == c.anchor or _control_shows_placeholder(node) or not _is_text_input(node) or not f.has_para:
+        ret
+    end
+    a := _display_offset(node, math.MinI(c.caret, c.anchor))
+    b0 := math.MaxI(c.caret, c.anchor)
+    b := b0 == c.caret ? _display_offset(node, b0) - _preedit_len(node) : _display_offset(node, b0)
+    mut u := _e.us[node]
+    ss := _state_style(node, STATE_SELECTION, u)
+    mut col := paint.Color { r = 0, g = 117, b = 255, a = 77 }
+    if ss.background.Len() > 0 and ss.background[0].kind == style.PAINT_COLOR:
+        col = _ucol(ss.background[0].color, u.color)
+    else:
+        ac := _ucol(_e.cs[node].accent, u.color)
+        col = paint.Color { r = ac.r, g = ac.g, b = ac.b, a = 77 }
+    end
+    mut rs := typeset.SelectionRects(f.para, f.lay, a, b)
+    each r in rs:
+        cv.FillRect(_rect(ox + r.x, oy + r.y, r.width, r.height), col)
+    end
+    rs.Free()
+end
+
+func _paint_caret(cv &: paint.Canvas, node: int, f: _Run, ox: f64, oy: f64):
+    c := _e.ctl[node]
+    if not c.focused or not _is_text_input(node) or not f.has_para:
+        ret
+    end
+    mut off := 0
+    if not _control_shows_placeholder(node):
+        off = _display_offset(node, c.caret)
+    end
+    r := typeset.CaretRect(f.para, f.lay, typeset.TextPosition { offset = off })
+    s := _e.cs[node]
+    u := _e.us[node]
+    col := _ucol(s.caret, u.color)
+    pl := _preedit_len(node)
+    if pl > 0:
+        mut rs := typeset.SelectionRects(f.para, f.lay, off - pl, off)
+        each q in rs:
+            cv.FillRect(_rect(ox + q.x, oy + q.y + q.height - 1.0, q.width, 1.0), u.color)
+        end
+        rs.Free()
+    end
+    sc := _e.scale
+    w := math.Max(1.0, math.Round(sc))
+    rr := _rect(ox + r.x, oy + r.y, 0.0, r.height)
+    cv.FillRect(paint.Rect { x = rr.x, y = rr.y, width = w, height = rr.height }, col)
+end
+
+func _paint_run(cv &: paint.Canvas, ri: int):
+    f := _e.runs[ri]
+    if not f.has_lay:
+        ret
+    end
+    l := f.lay
+    ctl := f.control
+    mut ox := f.x
+    mut oy := f.y
+    mut pushed := false
+    if ctl:
+        c := _e.ctl[f.owner]
+        ox -= c.text_scroll
+        if _is_textarea(f.owner):
+            oy -= c.text_scroll_y
+        end
+        cb := _content_box(f.owner)
+        cv.PushClip(_rect(cb.x - 1.0, cb.y, cb.w + 2.0, cb.h))
+        pushed = true
+        _paint_selection(cv, f.owner, f, ox, oy)
+    else:
+        _paint_inline_bgs(cv, f, ox, oy)
+    end
+    mut ph := false
+    mut phc := paint.Color { r = 117, g = 117, b = 117, a = 255 }
+    if ctl and _control_shows_placeholder(f.owner):
+        ph = true
+        mut pu := _e.us[f.owner]
+        ps := _state_style(f.owner, STATE_PLACEHOLDER, pu)
+        if (_e.dom.nodes[f.owner].smask & (1 << STATE_PLACEHOLDER)) != 0:
+            phc = _ucol(ps.color, pu.color)
+        end
+    end
+    repeat l.lines.Len() in li:
+        line := l.lines[li]
+        mut k := line.run_start
+        until k < line.run_start + line.run_count:
+            gr := l.runs[k]
+            k++
+            if gr.span < 0 or gr.span >= f.span_el.Len():
+                continue
+            end
+            el := f.span_el[gr.span]
+            s := _e.cs[el]
+            u := _e.us[el]
+            each sh in s.text_shadow:
+                _draw_grun_shadow(cv, l, gr, line, ox, oy, sh, u)
+            end
+            col := ph ? phc : u.color
+            _draw_grun(cv, l, gr, ox, oy, col)
+            _paint_decoration(cv, f.owner, el, gr, line, ox, oy)
+        end
+    end
+    if ctl:
+        _paint_caret(cv, f.owner, f, ox, oy)
+    end
+    if pushed:
+        cv.PopClip()
+    end
+end

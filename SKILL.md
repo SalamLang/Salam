@@ -20,7 +20,8 @@ description: >-
 
 Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
-**`page:`** blocks compile to HTML/CSS/JS. It can also be run with an
+**`page:`** blocks describe a user interface once and compile to two targets, a web
+page (HTML, CSS and JS) or a native desktop window. It can also be run with an
 interpreter (`salam exec`, pure compute only) that compiles each function to
 register bytecode on first call (`SALAM_VM=0` falls back to the plain
 tree-walker), and cross-compiled via LLVM. Source can be written in English or Persian, with the same grammar and
@@ -56,7 +57,7 @@ example compiled and run), and a reference page for every std package under
 6. Compiler rules & top pitfalls ← **read this before writing**
 7. Translating from PHP / TS-JS / Python / C-Go-Rust
 8. FFI, concurrency, conditional compilation
-9. Layout DSL (HTML/CSS/JS)
+9. Layout DSL (one page language, web and native)
 10. Tooling & verification (downloads, what Salam can do, Cloudflare Workers)
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
@@ -2417,12 +2418,77 @@ UEFI object format. See `docs/FREESTANDING.md`.
 
 ---
 
-## 9. Layout DSL (HTML/CSS/JS)
+## 9. Layout DSL (one page language, web and native)
 
 A `page:` block (either its own `.salam` file built with `salam page build`,
-or embedded after a general program) declares a UI tree that compiles to HTML +
-CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
-`name = value` pairs** (no commas needed) written inside the element.
+or embedded after a general program) declares a UI tree. The same source has two
+targets: **web** (HTML, CSS and JS, `salam page build`) and **native** (a window
+drawn by Salam, `--ui=native`). Elements open with `:` … `end`; **attributes and
+style properties are `name = value` pairs** (no commas needed) written inside
+the element.
+
+**Style standard, not CSS.** Salam has its own style vocabulary in the spirit of
+QML, defined in `docs/design/UI_DSL.md` and listed with values, defaults and
+Persian names in `tools/salam/style-properties.tsv` (website: `/learn/style-reference/`).
+Every property works on both targets. Write the standard names and never raw
+CSS: there is no `style:` element, no `inline style`, no `global:` rules and no
+CSS strings. The web target turns the standard into CSS for you.
+
+```salam
+page:
+    title = "Cards"
+    box:
+        layout = grid
+        columns = repeat(fill, minmax(160, 1fr))
+        gap = 12
+        padding = 16
+        max width = 720
+        margin = 0, auto
+        box:
+            padding = 8, 16
+            radius = 8
+            border = 1, solid, #3366aa
+            background = linear(90, #eef4ff, white)
+            hover background = #ffeecc
+            transition = 200ms, ease out
+            paragraph: color = #1e3a8a content = "A card" end
+        end
+    end
+end
+```
+
+Vocabulary in short:
+
+- Container: `layout = column|row|grid|stack|flow` (default `column`), `gap`,
+  `align` (cross axis), `justify` (main axis: `start center end between around
+  evenly`), `wrap`, `reverse`, `columns`/`rows` (`200, 1fr`,
+  `repeat(fill, minmax(140, 1fr))`), `auto flow`.
+- Child: `grow`, `shrink`, `basis`, `align self`, `column`, `row`, `column span`,
+  `row span`, `order`, `position = absolute`, `top`/`start`/`end`/`bottom`, `layer`.
+- Box: `width`, `height` (length, `fill`, `fit`, `auto`), `min`/`max` versions,
+  `aspect ratio`, `padding`, `margin` (1 to 4 values, or `x`/`y`/side names),
+  `overflow`, `visible`, `clip`. Every box is border-box.
+- Look: `background` (colour, `linear(...)`, `radial(...)`, `image("x.png")`),
+  `border = 2, solid, red`, `radius`, `outline`, `shadow = 0, 4, 8, #00000040`,
+  `opacity`, filters (`blur`, `grayscale`...), transforms (`translate`, `rotate`,
+  `scale`, `skew`), `cursor`.
+- Text (inherited): `color`, `font`, `font size`, `font weight`, `italic`,
+  `line height`, `text align`, `decoration`, `max lines`, `ellipsis`.
+- Motion: `transition = 200ms, ease out`, `transition properties`.
+- States prefix any style property: `hover`, `focus`, `focus within`, `active`,
+  `disabled`, `checked`, `invalid`, `placeholder`, `selection`
+  (`hover background = #ffeecc`).
+- Values: bare numbers use the natural unit (pixels, milliseconds, degrees);
+  `50%`, `12px`, `1.5em`, `1fr`, `200ms`, `45deg`; comma lists (`padding = 8, 16`);
+  `[...]` groups (`shadow = [0, 4, 8, black], [0, 1, 2, red]`); length sums
+  (`100% - 20`); colours unquoted (`red`, `#3366aa`, `rgb(...)`, `hsl(...)`,
+  `mix(red, blue, 30%)`, `light dark(white, black)`); any Salam expression
+  (`width = w`, `gap = n * 2`). Persian names and keywords work everywhere.
+
+Old CSS-only names (`display`, `flex wrap`, `grid template columns`,
+`box sizing`, `border radius`, `box shadow`, `font family`) are not part of the
+standard: the web build still accepts them with warning W171 during the
+migration and the native build rejects them (E170). Use the standard form.
 
 ```salam
 //! mode: layout | title: Web page        // optional editor directive
@@ -2451,7 +2517,8 @@ end
 **Web and native targets.** Pages are built for the web by default.
 `salam run page.salam --ui=native` (and `salam build ... --ui=native`) runs
 the same page in a native window drawn by Salam (`std/gui/ui`,
-`docs/design/NATIVE_UI.md`). The rule: handlers only change state, never the
+`docs/design/UI_DSL.md`). Only web metadata (SEO, `meta`, `head link`) is web
+only. The rule: handlers only change state, never the
 page. State is mutable globals plus variables declared with a plain
 `name := value` line at the top of a `component` body or of the page block
 (Persian `شمار := ۰`; there is no keyword). The compiler classifies each one
@@ -2528,29 +2595,22 @@ name for each element: `url` is `href` on `link`/`head link` and `src` on
 Global attributes (`id`, `class`, `title`, `lang`, `dir`, `hidden`, `tabindex`,
 `role`, `content`, `repeat`), ARIA (`aria label` ... and any `aria <name>`), data
 attributes (`data view`, or any `data <name>` which becomes `data-<name>`),
-and every `on<event>` handler work on all elements. All standard CSS properties
-are registered (`background color`, `z index`, ...), with `hover`/`focus`/
-`active`/`before`/`after` prefixes (`hover color = "red"`; in Persian `اشاره`,
-`تمرکز`, `فشردن`, `پیش‌از`, `پس‌از`).
+and every `on<event>` handler work on all elements. Style properties come from
+the standard vocabulary above, with state prefixes (`hover color = red`).
 
-**CSS values are checked.** Almost every property validates its value
-(keyword, length, number, time, angle, color, ...) and accepts Persian keywords
-and units: `نمایش = "فلکس"`, `فضا = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`.
-Shorthands are checked too: `border = "1 solid red"`, `font = "bold 16/1.5
-serif"`, `transition = "opacity 0.3s ease"`, `transform = "rotate(45deg)"`,
-`box shadow = "0 2 4 black"`. Bare numbers in a shorthand get `px`, except zero.
-A wrong value is E018. Only `grid`, `grid template` and `offset` still pass
-through unchecked. The full list with status per property is
-`docs/CSS_PROPERTIES.md`.
+**Style values are checked.** Every standard property validates its value
+(keyword, length, number, time, angle, colour, list shape) at compile time, with
+a message that shows the expected form: `border = 2, solid, #3366aa`,
+`transition = 200ms, ease out`, `radius = 8`. Persian names and keywords work:
+`چیدمان = ردیف`, `شکاف = 8`. A string is parsed with the same syntax
+(`color = "red"` equals `color = red`). A wrong value is an error.
 
 **Values are expressions.** An attribute value can use constants, operators
 and parentheses, and a static layout folds it at compile time:
 `box: content = 4 * 10 end` prints `40`; `title = SITE + " | Home"` reads a
-global `const`; `width = WIDE + "px"`, `margin = -5`, `size = N > 3 ? 2 : 3`.
+global `const`; `width = WIDE`, `margin = -5`, `size = N > 3 ? 2 : 3`.
 Word operators (`and`, `or`, `not`, `و`, `یا`) need parentheses:
-`content = (A and B)`. Unquoted CSS words keep their hyphens
-(`justify content = space-between`, `background = linear-gradient(red, blue)`),
-so write subtraction with spaces (`a - b`). A static layout cannot read a
+`content = (A and B)`. Write subtraction with spaces (`a - b`). A static layout cannot read a
 variable or call a Salam function (E129); a bad fold (division by zero,
 overflow, `true + 1`) is E130. A constant named like a value word
 (`const red := ...` then `color = red`) wins, with W131.
@@ -2603,9 +2663,8 @@ Rules, all checked at compile time:
   value must be a `web.Color`, a `web.Length` or a number (E135). Build them
   with `web.ParseUrl(s, ok)`, `web.ParseColor`, `web.ParseLength`, `web.Px(n)`,
   `web.Rgb(r, g, b)`. Their fields are private, so they cannot be forged (E017).
-  A runtime CSS value is written as an inline `style`; class CSS stays static.
-- Enum-like attributes, `heading size`, `hover ...` styles and `style`/`script`
-  bodies must be known at compile time (E132); pick between fixed variants with
+- Enum-like attributes, `heading size` and state styles
+  must be known at compile time (E132); pick between fixed variants with
   `if`. `if`/`each` need a runtime layout (E133). A fixed `id` inside `each`
   would repeat (E134). A runtime font `url` needs a static `type`.
 - Typed components can be called directly (`Card("x", 1)`) and return their
@@ -2629,9 +2688,8 @@ end
 ```
 
 **Safety.** URL-typed attributes reject `javascript:`, `vbscript:` and any
-`data:` that is not image/font/audio/video. CSS values cannot contain
-`{ } ; < >` or line breaks. A `style`/`script` body cannot contain
-`</style` or `</script`. Quoted CSS strings are escaped.
+`data:` that is not image/font/audio/video. Style values are parsed by the
+standard, so they cannot carry raw CSS or markup.
 
 **Everything is checked at compile time**:
 
@@ -2668,9 +2726,10 @@ a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
 the JS that validates and normalises Jalali dates. The schema format is
 documented in `docs/LAYOUT_SCHEMA.md`.
 
-Build: `salam page build page.salam` → `page.html` + `page.css` + `page.js`;
-`--inline` → one self-contained HTML file; multiple files → per-page HTML with
-merged `style.css`/`script.js`.
+Build for the web: `salam page build page.salam` → `page.html` + `page.css` +
+`page.js`; `--inline` → one self-contained HTML file; multiple files → per-page
+HTML with merged `style.css`/`script.js`. Run natively:
+`salam run page.salam --ui=native`.
 
 ---
 
@@ -2684,7 +2743,7 @@ salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
-salam page build page.salam [--inline]# layout DSL → HTML/CSS/JS
+salam page build page.salam [--inline]# layout DSL → web page (run/build a window with --ui=native)
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
@@ -3642,9 +3701,10 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>       |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |
 
-The web page lessons that follow the layout lesson (all under `https://www.salamlang.ir/learn/`, and in English under
-`https://salamlang.github.io/Salam/learn/`) teach every element, attribute, CSS property and event of the page language with a
-checked example for each: `page-text`, `page-structure`, `page-media`, `page-tables`, `page-forms`, `page-head` for HTML;
-`css-basics`, `css-text`, `css-backgrounds`, `css-borders`, `css-layout`, `css-responsive`, `css-motion`, `css-more` for CSS;
+The page lessons that follow the layout lesson (all under `https://www.salamlang.ir/learn/`, and in English under
+`https://salamlang.github.io/Salam/learn/`) teach every element, attribute and event of the page language with a
+checked example for each: `page-text`, `page-structure`, `page-media`, `page-tables`, `page-forms`, `page-head` for elements;
+`css-basics`, `css-text`, `css-backgrounds`, `css-borders`, `css-layout`, `css-responsive`, `css-motion`, `css-more` for the
+style standard (the URLs keep the old `css` prefix), `layout/native` for native apps and `style-reference` for every property;
 `events-mouse`, `events-keys-forms`, `events-drag-touch`, `events-media-more`, `events-dom` for JavaScript behaviour, and
 `web-projects` for whole pages.

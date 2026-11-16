@@ -71,8 +71,8 @@ A `component` is a piece of page you define once and use like a new element. Its
 ```salam
 component Plan(name: str, price: int):
     box:
-        border = "1px solid #ddd"
-        border radius = 12
+        border = 1px, solid, #ddd
+        radius = 12
         padding = 16
         heading: size = 2 content = name end
         paragraph: content = "$" + price + " a month" end

@@ -789,22 +789,25 @@ jobs:
         with:
           name: salam-linux
           path: /tmp/host-salam
-      - name: Cross-build an x86_64 macOS compiler from this checkout
+      - name: Emit the compiler as C for x86_64 macOS
         run: |
           set -eu
           chmod +x /tmp/host-salam/salam
           export SALAM_STD="$PWD/std"
-          mkdir -p intel-seed
-          /tmp/host-salam/salam build compiler/main.salam --target=x86_64-apple-darwin \
-            -o intel-seed/salam --log-level=warn
-          file intel-seed/salam
-          file intel-seed/salam | grep -q 'Mach-O 64-bit x86_64' \
-            || { echo "::error::the Intel seed is not an x86_64 Mach-O binary"; exit 1; }
-      - name: Upload the Intel seed compiler
+          mkdir -p emit
+          cd emit
+          /tmp/host-salam/salam build --backend=c --emit-c --target=x86_64-apple-darwin \
+            ../compiler/main.salam -o intel-seed --log-level=warn || true
+          n=$(find .salam-build -name 'salam_mod_*.c' | wc -l)
+          echo "emitted $n C files"
+          [ "$n" -gt 100 ] || { echo "::error::too few C files were emitted"; exit 1; }
+          tar -czf ../intel-seed-c.tar.gz .salam-build
+          ls -la ../intel-seed-c.tar.gz
+      - name: Upload the generated C
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: salam-macos-intel-seed
-          path: intel-seed/salam
+          name: salam-macos-intel-seed-c
+          path: intel-seed-c.tar.gz
   build-macos-intel:
     needs: [changes, build-macos-intel-seed]
     continue-on-error: true
@@ -886,18 +889,30 @@ jobs:
           key: ccache-macos-intel-${{ github.run_id }}
           restore-keys: |
             ccache-macos-intel-
-      - name: Download the Intel seed compiler
+      - name: Download the generated C for the seed compiler
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: salam-macos-intel-seed
-          path: seed
-      - name: Put the seed compiler on PATH
+          name: salam-macos-intel-seed-c
+          path: seed-c
+      - name: Compile the seed compiler natively
         run: |
           set -eu
+          mkdir -p seed
+          tar -xzf seed-c/intel-seed-c.tar.gz -C seed-c
+          cd seed-c/.salam-build
+          cat > cc-one.sh <<'EOF'
+          #!/bin/sh
+          exec clang -O1 -w -I. -c "$1" -o "${1%.c}.o"
+          EOF
+          chmod +x cc-one.sh
+          find . -maxdepth 1 -name 'salam_mod_*.c' -print0 \
+            | xargs -0 -n 1 -P "$(sysctl -n hw.ncpu)" ./cc-one.sh
+          clang -o "$GITHUB_WORKSPACE/seed/salam" salam_mod_*.o -lm -lpthread
+          cd "$GITHUB_WORKSPACE"
+          file seed/salam
           chmod +x seed/salam
           echo "$PWD/seed" >> "$GITHUB_PATH"
           seed/salam version
-
       - name: Build salam for macOS (embedded static LLVM)
         run: |
           set -eu

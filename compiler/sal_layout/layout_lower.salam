@@ -24,6 +24,7 @@ const SL_CSSURL := 6
 const SL_IF := 7
 const SL_EACH := 8
 const SL_BAD := 9
+const SL_STD := 10
 
 struct LoSlot:
     pub kind: int = 0
@@ -32,6 +33,8 @@ struct LoSlot:
     pub item: str = ""
     pub key: int = 0
     pub loop: int = 0
+    pub prop: int = 0
+    pub state: int = 0
 end
 
 struct LoLower:
@@ -241,10 +244,63 @@ func lo_is_mut_global(lw &: LoLower, a &: at.Ast, name: str): bool:
     ret false
 end
 
+func lo_cat(a &: at.Ast, l: int, r: int, from: int): int:
+    n := at.NewNode(a, at.AST_BINARY)
+    copy_span(a, n, from)
+    mut m := at.Get(a, n)
+    m.op = tok.TK_PLUS
+    m.a = l
+    m.b = r
+    at.Put(a, n, m)
+    ret n
+end
+
+func lo_std_text(lw &: LoLower, a &: at.Ast, nid: int, from: int): int:
+    n := at.Get(a, nid)
+    if n.kind != at.AST_TUPLE and n.kind != at.AST_ARRAY_LIT and lo_list_runtime(lw, a, nid) != 0:
+        ret nid
+    end
+    if n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
+        mut out := mk_str(a, n.kind == at.AST_ARRAY_LIT ? "[" : "", from)
+        repeat at.ChildCount(a, nid) in i:
+            if i > 0:
+                out = lo_cat(a, out, mk_str(a, ", ", from), from)
+            end
+            out = lo_cat(a, out, lo_std_text(lw, a, at.Child(a, nid, i), from), from)
+        end
+        if n.kind == at.AST_ARRAY_LIT:
+            out = lo_cat(a, out, mk_str(a, "]", from), from)
+        end
+        ret out
+    end
+    if lo_list_runtime(lw, a, nid) != 0:
+        ret lo_cat(a, mk_str(a, "", from), nid, from)
+    end
+    ret mk_str(a, sm.LayoutListText(a, lw.prog, nid, ""), from)
+end
+
+func lo_std_slot(lw &: LoLower, a &: at.Ast, attr: int, el: int, vid: int): bool:
+    if sm.LayoutNativeTarget() or el == 0:
+        ret false
+    end
+    sa := sm.ResolveStyleAttr(at.Get(a, attr).name)
+    if not sa.ok:
+        ret false
+    end
+    mark := lo_add_slot(lw, a, vid, LoSlot { kind = SL_STD, expr = lo_std_text(lw, a, vid, vid), prop = sa.prop, state = sa.state })
+    mut n1 := at.Get(a, attr)
+    n1.a = mark
+    at.Put(a, attr, n1)
+    ret true
+end
+
 func lo_list_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int, vid: int):
     an := at.Get(a, attr).name
     mut k := lo_slot_kind(el, ei, an)
     dyn := lo_list_runtime(lw, a, vid)
+    if dyn != 0 and lo_std_slot(lw, a, attr, el, vid):
+        ret
+    end
     if dyn != 0:
         if k == SL_IF or k == SL_EACH:
             k = SL_ATTR
@@ -304,8 +360,12 @@ func lo_list_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int, vid:
     if str.Len(text) == 0:
         ret
     end
+    folded := mk_str(a, text, vid)
+    mut fl := at.Get(a, folded)
+    fl.synthetic = true
+    at.Put(a, folded, fl)
     mut n2 := at.Get(a, attr)
-    n2.a = mk_str(a, text, vid)
+    n2.a = folded
     at.Put(a, attr, n2)
 end
 
@@ -331,6 +391,9 @@ func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
         ret
     end
     if not lo_refs_runtime(lw, a, vid):
+        ret
+    end
+    if lo_std_slot(lw, a, attr, el, vid):
         ret
     end
     mut k := lo_slot_kind(el, ei, an.name)
@@ -529,6 +592,11 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
                     head += "__salam_key_" + co.U64Toa(num as u64) + ", "
                 end
                 body += head + "__salam_item_" + co.U64Toa(num as u64) + " in __salam_dyn_" + co.U64Toa(num as u64) + ":\n"
+            else sl.kind == SL_STD:
+                seq++
+                lvname := vname + "_" + co.U64Toa(seq as u64)
+                body += lvname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
+                body += lo_web_call(lw, "PageStyle", co.I64Toa(sl.prop as i64) + ", " + co.I64Toa(sl.state as i64) + ", " + lvname)
             else sl.kind == SL_BAD:
                 if sl.loop > 0:
                     body += vname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"

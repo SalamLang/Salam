@@ -38,6 +38,16 @@ mut g_style_attr_prop := Vector {} as Vector<int>
 
 mut g_style_attr_state := Vector {} as Vector<int>
 
+mut g_style_attr_css := Vector {} as Vector<str>
+
+mut g_style_quote_strs := false
+
+mut g_style_dyn_node := Vector {} as Vector<int>
+
+mut g_style_dyn_prop := Vector {} as Vector<int>
+
+mut g_style_dyn_state := Vector {} as Vector<int>
+
 struct StyleAttr:
     pub ok: bool = false
     pub prop: int = 0
@@ -48,10 +58,17 @@ struct StyleAttr:
     pub err: str = ""
 end
 
-func style_attr_remember(attr: int, prop: int, state: int):
+func style_attr_remember(attr: int, prop: int, state: int, css: str):
     g_style_attr_node.Push(attr)
     g_style_attr_prop.Push(prop)
     g_style_attr_state.Push(state)
+    g_style_attr_css.Push(css)
+end
+
+func style_attr_remember_dyn(attr: int, prop: int, state: int):
+    g_style_dyn_node.Push(attr)
+    g_style_dyn_prop.Push(prop)
+    g_style_dyn_state.Push(state)
 end
 
 func style_state_prefix(name: str, rest &: str): int:
@@ -103,7 +120,13 @@ func style_attr_item_text(a &: at.Ast, nid: int): str:
         ret "[" + style_attr_group_text(a, nid) + "]"
     end
     if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
+        if g_style_quote_strs and not str.StartsWith(n.value_str, "\""):
+            ret "\"" + n.value_str + "\""
+        end
         ret n.value_str
+    end
+    if n.kind == at.AST_BINARY and (n.op == tok.TK_PLUS or n.op == tok.TK_MINUS):
+        ret style_attr_item_text(a, n.a) + (n.op == tok.TK_PLUS ? " + " : " - ") + style_attr_item_text(a, n.b)
     end
     if n.kind == at.AST_LITERAL and n.op == tok.TK_INT:
         ret co.U64Toa(n.value_int) + LayoutNumUnit(n.name)
@@ -123,7 +146,96 @@ func style_attr_item_text(a &: at.Ast, nid: int): str:
     if n.kind == at.AST_IDENTIFIER:
         ret n.name
     end
+    if n.kind == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        mut call := at.Get(a, n.a).name + "("
+        repeat at.ChildCount(a, nid) in i:
+            argid := at.Child(a, nid, i)
+            if i > 0:
+                call += ", "
+            end
+            arg := at.Get(a, argid)
+            if arg.kind == at.AST_LITERAL and arg.value_kind == tok.TV_STRING and not str.StartsWith(arg.value_str, "#"):
+                call += `"` + arg.value_str + `"`
+            else:
+                call += style_attr_item_text(a, argid)
+            end
+        end
+        ret call + ")"
+    end
     ret ""
+end
+
+func style_loose(name: str): str:
+    mut t := str.Replace(name, "\xE2\x80\x8C", "")
+    t = str.Replace(t, "\xD9\x8A", "\xDB\x8C")
+    t = str.Replace(t, "\xD9\x83", "\xDA\xA9")
+    t = str.Replace(t, " ", "")
+    t = str.Replace(t, "_", "")
+    ret str.Lower(t)
+end
+
+func style_prop_loose(name: str): int:
+    mut ascii := true
+    each b in name.Bytes():
+        if (b as int) >= 128:
+            ascii = false
+        end
+    end
+    if ascii:
+        ret 0 - 1
+    end
+    want := style_loose(name)
+    repeat style.PROP_COUNT in i:
+        info := style.Info(i)
+        if str.Equals(style_loose(info.name), want) or str.Equals(style_loose(info.fa), want):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func style_num_eval(a &: at.Ast, nid: int, out &: f64): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_INT and str.Len(LayoutNumUnit(n.name)) == 0:
+        out = n.value_int as f64
+        ret true
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_FLOAT and str.Len(LayoutNumUnit(n.name)) == 0:
+        out = n.value_float
+        ret true
+    end
+    if n.kind == at.AST_UNARY and n.op == tok.TK_MINUS:
+        mut x := 0.0
+        if not style_num_eval(a, n.a, x):
+            ret false
+        end
+        out = 0.0 - x
+        ret true
+    end
+    if n.kind == at.AST_BINARY and (n.op == tok.TK_PLUS or n.op == tok.TK_MINUS or n.op == tok.TK_STAR or n.op == tok.TK_SLASH):
+        mut l := 0.0
+        mut r := 0.0
+        if not style_num_eval(a, n.a, l) or not style_num_eval(a, n.b, r):
+            ret false
+        end
+        if n.op == tok.TK_PLUS:
+            out = l + r
+        else n.op == tok.TK_MINUS:
+            out = l - r
+        else n.op == tok.TK_STAR:
+            out = l * r
+        else:
+            if r == 0.0:
+                ret false
+            end
+            out = l / r
+        end
+        ret true
+    end
+    ret false
 end
 
 pub func StyleAttrOf(attr: int, prop &: int, state &: int): bool:
@@ -135,6 +247,13 @@ pub func StyleAttrOf(attr: int, prop &: int, state &: int): bool:
         end
     end
     ret false
+end
+
+pub func StyleAttrTextFor(a &: at.Ast, vid: int, prop: int): str:
+    g_style_quote_strs = (style.Info(prop).items & 512) != 0
+    t := StyleAttrText(a, vid)
+    g_style_quote_strs = false
+    ret t
 end
 
 pub func StyleAttrText(a &: at.Ast, vid: int): str:
@@ -153,13 +272,13 @@ pub func ResolveStyleAttr(name: str): StyleAttr:
     mut rest := ""
     sa.state = style_state_prefix(name, rest)
     sa.prop = style.PropByName(rest)
+    if sa.prop < 0:
+        sa.prop = style_prop_loose(rest)
+    end
     sa.ok = sa.prop >= 0
     ret sa
 end
 
-pub func StyleAttrRemember(attr: int, prop: int, state: int):
-    style_attr_remember(attr, prop, state)
-end
 
 pub func StyleAttrParseStatic(prop: int, text: str, out &: style.Value): bool:
     ret style.Parse(prop, text, out)
@@ -207,4 +326,64 @@ pub func StyleStandardHint(key: str, value: str): str:
         ret "white space"
     end
     ret ""
+end
+
+pub func StyleAttrCss(attr: int): str:
+    repeat g_style_attr_node.Len() in i:
+        if g_style_attr_node[i] == attr:
+            ret g_style_attr_css[i]
+        end
+    end
+    ret ""
+end
+
+pub func StyleAttrDynOf(attr: int, prop &: int, state &: int): bool:
+    repeat g_style_dyn_node.Len() in i:
+        if g_style_dyn_node[i] == attr:
+            prop = g_style_dyn_prop[i]
+            state = g_style_dyn_state[i]
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func StyleTextIsRuntime(text: str): bool:
+    ret str.IndexOf(text, char_from_code(2)) >= 0
+end
+
+pub func StyleStaticText(prop: int, text: str): str:
+    if (style.Info(prop).items & 512) != 0 and not str.StartsWith(text, "\"") and not str.StartsWith(text, "["):
+        ret "\"" + text + "\""
+    end
+    ret text
+end
+
+pub func StyleAttrIsEvent(a &: at.Ast, aid: int): bool:
+    key := lay_attr_key_exact(at.Get(a, aid).name)
+    if str.Len(key) == 0:
+        ret false
+    end
+    ai := lay_attr_for(0 - 1, key)
+    if ai < 0 or g_lay_attrs.Get(ai).vtype != VT_CODE:
+        ret false
+    end
+    vid := at.Get(a, aid).a
+    if vid == 0:
+        ret false
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_LAMBDA:
+        ret true
+    end
+    ret v.kind == at.AST_LITERAL and v.value_kind == tok.TV_STRING and str.IndexOf(v.value_str, "(") >= 0
+end
+
+pub func StyleNumText(a &: at.Ast, nid: int, out &: str): bool:
+    mut x := 0.0
+    if at.KindOf(a, nid) != at.AST_BINARY or not style_num_eval(a, nid, x):
+        ret false
+    end
+    out = co.Format1("%.10g", co.ArgFloat(x))
+    ret true
 end

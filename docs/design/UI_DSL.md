@@ -703,7 +703,7 @@ ui.Patch            ordered (prop, style.Value) pairs; built once at start
 patch.Add(prop: int, v: style.Value)
 b.Title(s), b.Lang(s), b.Dir(s)
 b.Open(kind: str)          canonical English element name from std/layout
-                           ("box", "heading", "button", ...), never an HTML tag
+                           ("box", "h1" to "h6", "button", ...), never an HTML tag
 b.Patch(state: int, id: int)                 a static patch for this element
 b.Set(state: int, prop: int, v: style.Value) one dynamic typed value
 b.SetText(state: int, prop: int, text: str)  one dynamic value parsed at run time

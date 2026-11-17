@@ -10,7 +10,7 @@ true [right-to-left](https://en.wikipedia.org/wiki/Right-to-left_script); Englis
 
 **The editor itself is written entirely in Salam**, not hand-authored HTML/CSS/JS:
 
-- `page.salam` - the page structure and all styling (toolbar, panes, dropdown,
+- `page.salam` and `ui.salam` - the page structure, the shared components (toolbar, segmented control, toggle, dropdown, icon button, panes) and the colours, written with the standard style attributes of the page language and compiled by `salam web`. Only style that the standard cannot express stays as a small raw block in `page.salam`: classes the app script toggles, markup the script injects, mask icons, the mobile menu.
   theming, responsive layout), compiled by the **layout DSL** (`salam web`).
 - `app.salam` - all interactivity (state, i18n, the live syntax highlighter,
   line numbers, Wasm boot, run/compile dispatch, keyboard shortcuts, resizable

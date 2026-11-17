@@ -98,6 +98,19 @@ func ifs_find(a &: at.Ast, kept: Vector<int>, key: str): int:
     ret 0
 end
 
+func ifs_declared_after(a &: at.Ast, parent: int, from: int, key: str): bool:
+    repeat at.ChildCount(a, parent) in i:
+        if i <= from:
+            continue
+        end
+        oid := at.Child(a, parent, i)
+        if at.KindOf(a, oid) == at.AST_LAYOUT_ATTR and str.Equals(ifs_key(at.Get(a, oid).name), key):
+            ret true
+        end
+    end
+    ret false
+end
+
 func ifs_ternary(a &: at.Ast, cond: int, thenv: int, elsev: int): int:
     n := mk_from_node(a, at.AST_TERNARY, cond)
     mut m := at.Get(a, n)
@@ -116,6 +129,9 @@ func ifs_empty(a &: at.Ast, from: int): int:
     tv.sval = ""
     at.SetName(a, lit, "")
     at.SetTokenValue(a, lit, tv)
+    mut ln := at.Get(a, lit)
+    ln.synthetic = true
+    at.Put(a, lit, ln)
     ret lit
 end
 
@@ -181,11 +197,33 @@ func if_block_attr(a &: at.Ast, blk: int, key: str): int:
     ret 0
 end
 
+func if_chain_has(a &: at.Ast, n: int, key: str): bool:
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        if if_block_attr(a, c.b, key) != 0:
+            ret true
+        end
+        if c.c == 0:
+            break
+        end
+        if at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            ret if_block_attr(a, c.c, key) != 0
+        end
+    end
+    ret false
+end
+
 func if_chain_value(a &: at.Ast, n: int, key: str, basev: int): int:
     if n == 0:
         ret basev != 0 ? at.Clone(a, basev) : 0
     end
     c := at.Get(a, n)
+    if not if_chain_has(a, n, key):
+        ret basev != 0 ? at.Clone(a, basev) : ifs_empty(a, c.a)
+    end
     mut rest := 0
     if c.c == 0:
         rest = basev != 0 ? at.Clone(a, basev) : ifs_empty(a, c.a)
@@ -314,6 +352,9 @@ func ifs_lower(p &: Ps, a &: at.Ast, parent: int):
         env_note_chain(a, cid)
         repeat keys.Len() in k:
             bid := ifs_find(a, kept, keys.Get(k))
+            if bid == 0 and ifs_declared_after(a, parent, j, keys.Get(k)):
+                continue
+            end
             basev := bid != 0 ? at.Get(a, bid).a : 0
             result := if_chain_value(a, cid, keys.Get(k), basev)
             if bid != 0:

@@ -1259,7 +1259,11 @@ func expand_component(
         expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
         ret
     end
-    if web and not li_has_storage(a, body):
+    mut hparams := Vector {} as Vector<str>
+    if web and g_lo_each_depth > 0:
+        hparams = lo_handler_params(a, ex.comp_def.Get(ci), body)
+    end
+    if web and not li_has_storage(a, body) and hparams.Len() == 0:
         frame_derive(a, fr, body)
         expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
         ret
@@ -1276,13 +1280,31 @@ func expand_component(
     copy_span(a, blk, invocation)
     mut kids := Vector {} as Vector<int>
     mut sj := 0
-    repeat at.ChildCount(a, body) in bi:
-        sid := at.Child(a, body, bi)
+    mut all := Vector {} as Vector<int>
+    each hp in hparams:
+        hd := at.NewNode(a, at.AST_VAR_DECL)
+        copy_span(a, hd, invocation)
+        mut hn := at.Get(a, hd)
+        hn.name = hp
+        hn.a = lo_ident(a, hp, invocation)
+        hn.synthetic = true
+        at.Put(a, hd, hn)
+        all.Push(hd)
+    end
+    nsynth := all.Len()
+    repeat at.ChildCount(a, body) in bi0:
+        all.Push(at.Child(a, body, bi0))
+    end
+    repeat all.Len() in bi:
+        sid := all.Get(bi)
         if at.KindOf(a, sid) != at.AST_VAR_DECL:
             continue
         end
         sd := at.Get(a, sid)
         mut kind := li_kind(sid)
+        if bi < nsynth:
+            kind = LI_RENDER
+        end
         if kind == LI_DERIVED and not web and g_lo_native_scopes and lo_memo_ok(a, sd.a, fr, ci):
             kind = LI_MEMO
         end
@@ -1337,6 +1359,55 @@ func expand_component(
         g_lo_wi_mark.Set(wi, mark)
     end
     out.Push(mark)
+end
+
+func lo_hr_walk(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        mut shadow := Vector {} as Vector<str>
+        li_rd_lambda(a, nid, shadow, out)
+        shadow.Free()
+        ret
+    end
+    lo_hr_walk(a, n.a, out)
+    lo_hr_walk(a, n.b, out)
+    lo_hr_walk(a, n.c, out)
+    lo_hr_walk(a, n.d, out)
+    each c in n.list:
+        lo_hr_walk(a, c, out)
+    end
+end
+
+func lo_handler_params(a &: at.Ast, comp_def: int, body: int): Vector<str>:
+    mut seen := Vector {} as Vector<str>
+    lo_hr_walk(a, body, seen)
+    mut out := Vector {} as Vector<str>
+    each name in seen:
+        if not comp_has_param(a, comp_def, name) or is_content_word(name):
+            continue
+        end
+        mut declared := false
+        repeat at.ChildCount(a, body) in i:
+            cid := at.Child(a, body, i)
+            if at.KindOf(a, cid) == at.AST_VAR_DECL and str.Equals(at.Get(a, cid).name, name):
+                declared = true
+            end
+        end
+        mut dup := false
+        each o in out:
+            if str.Equals(o, name):
+                dup = true
+            end
+        end
+        if not declared and not dup:
+            out.Push(name)
+        end
+    end
+    seen.Free()
+    ret out
 end
 
 func lo_has_decls(a &: at.Ast, body: int): bool:

@@ -984,6 +984,8 @@ if want ui; then
 fi
 
 if want uiexamples; then
+    printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
+    "$SALAM_ABS" page build "$WORK/page_empty_en.salam" --inline --no-minify --output="$WORK/page_empty_en.html" --no-color --log-level=error --lang=en >/dev/null 2>&1 || rm -f "$WORK/page_empty_en.html"
     for f in examples/ui/*.salam; do
         [ -e "$f" ] || continue
         name=$(basename "$f" .salam)

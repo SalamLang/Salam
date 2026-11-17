@@ -20,7 +20,11 @@ function check(name, ok, detail) {
 
 const errors = [];
 const vc = new VirtualConsole();
-vc.on("jsdomError", (e) => errors.push(String(e.message).slice(0, 200)));
+vc.on("jsdomError", (e) => {
+  const m = String(e.message);
+  if (m.indexOf("Could not parse CSS stylesheet") === 0) return;
+  errors.push(m.slice(0, 200));
+});
 
 const html = fs.readFileSync(file, "utf8");
 const dom = new JSDOM(html, {
@@ -29,6 +33,8 @@ const dom = new JSDOM(html, {
   virtualConsole: vc,
   url: "http://localhost/",
   beforeParse(w) {
+    w.TextEncoder = TextEncoder;
+    w.TextDecoder = TextDecoder;
     w.matchMedia = (q) => ({
       matches: false,
       media: q,

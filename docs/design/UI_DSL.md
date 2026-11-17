@@ -742,3 +742,18 @@ Then:
 8. **Same look check**: render pages on both targets and compare
    (headless browser in Docker or CI against `--ui=native` screenshots).
 9. **Docs**: website pages, the skill file, the book.
+
+## What is escaped on the web target
+
+Every string from a page reaches the output through one of these paths, and each is checked by a fixture named `edge_inject_*` in tests/{en,fa}/page.
+
+| place | rule |
+| --- | --- |
+| text nodes (`content`) | `<`, `>` and `&` become entities |
+| attribute values (`id`, `class`, `title`, `alt`, `data-*`, `aria-*`) | `"`, `<`, `>` and `&` become entities |
+| `href`, `src`, `action` and other address attributes | only http, https, mailto, tel and relative addresses; `javascript:` is an error (E018) |
+| page head (`title`, `meta`) | attribute and text escaping as above |
+| style values that take strings (`font`, `font features`, ...) | the value is written in double quotes; a value with an escaped quote is rejected by the parser |
+| `image("...")` in a style value | `javascript:`, `vbscript:` and `data:text/html` addresses are an error |
+| the generated style sheet | `</` is written `<\/`, so no style value can end the style element |
+| runtime style values | parsed with the same grammar, written with DOM text nodes (never as HTML) |

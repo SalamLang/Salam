@@ -15,7 +15,7 @@ import { QueuePanel } from "./Queue";
 import { Connect } from "./Connect";
 import { Connections, TelegramLink, integrationsLoader } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
-import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, mention, type AgentMode, type PathStatus } from "./desktop";
+import { agent, hasSavedMode, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, mention, type AgentMode, type PathStatus } from "./desktop";
 import { extraPathProblem, pathErrorText, projectPathProblem, projectPathUnset } from "./paths";
 import { Keys } from "./Keys";
 import { announce, announceGuest } from "./Notify";
@@ -180,6 +180,9 @@ export function App() {
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsReady, setProjectsReady] = useState(false);
+  const projectsRef = useRef<Project[]>([]);
+  projectsRef.current = projects;
+  const [newLang, setNewLang] = useState(false);
   const [projectScope, setProjectScope] = useState<string | null>(INITIAL_PLACE.project);
   const [projectDialog, setProjectDialog] = useState<{ mode: "create" } | { mode: "edit"; project: Project } | null>(null);
   const [projectBusy, setProjectBusy] = useState(false);
@@ -519,10 +522,15 @@ export function App() {
       if (id) goChat(id, known, replace);
       else goNew(known ?? null, replace);
       stick.current = true;
+      const home = projectsRef.current.find((p) => p.id === known);
+      if (!id) setNewLang(home?.any_lang === true);
       if (isDesktop) {
-        const m = id ? savedMode(id) : "ask";
+        const m = id && hasSavedMode(id) ? savedMode(id) : (home?.agent_mode ?? "ask");
         setMode(m);
-        if (id) agent.setMode(id, m).catch(() => {});
+        if (id) {
+          saveMode(id, m);
+          agent.setMode(id, m).catch(() => {});
+        }
       }
       if (!id) {
         setMessages([]);
@@ -775,6 +783,29 @@ export function App() {
       saveMode(activeId, m);
       agent.setMode(activeId, m).catch(() => {});
     }
+    rememberForProject({ agent_mode: m });
+  };
+
+  const rememberForProject = (patch: { agent_mode?: AgentMode; any_lang?: boolean }) => {
+    const home = activeChat ? activeChat.project_id : projectScope;
+    if (!home) return;
+    setProjects((ps) => ps.map((p) => (p.id === home ? { ...p, ...patch } : p)));
+    api.projectDefaults(home, patch).catch(() => {});
+  };
+
+  const changeLang = async (on: boolean) => {
+    if (activeId) {
+      try {
+        await api.setChatLang(activeId, on);
+      } catch {
+        notify(t("ذخیره‌ی این گزینه ناموفق بود.", "Could not save this option."));
+        return;
+      }
+      setChats((cs) => cs.map((c) => (c.id === activeId ? { ...c, any_lang: on } : c)));
+    } else {
+      setNewLang(on);
+    }
+    rememberForProject({ any_lang: on });
   };
 
   const send = async (text: string, files: OutgoingFile[] = [], previews: Pending[] = []): Promise<boolean> => {
@@ -802,6 +833,7 @@ export function App() {
           start.cloud = true;
         }
         if (projectScope) start.project_id = projectScope;
+        else if (newLang) start.any_lang = true;
         const r = await api.createChat(start);
         id = r.chat.id;
         if (r.chat.agent) {
@@ -1270,7 +1302,8 @@ export function App() {
               placeholder={agentChat ? t("بگویید روی این پروژه چه کاری انجام شود…", "Tell me what to do in this project…") : undefined}
               note={agentChat ? t("دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار یا «همه‌چیز» را انتخاب کنید.", "The assistant asks before changing files or running commands, unless you choose automatic or \"everything\" mode.") : undefined}
               bar={
-                isDesktop && (!activeChat || activeChat.agent) ? (
+                <>
+                {isDesktop && (!activeChat || activeChat.agent) ? (
                   <AgentBar
                     info={tools.info}
                     workspace={effWorkspace}
@@ -1289,7 +1322,18 @@ export function App() {
                     }}
                     onMode={changeMode}
                   />
-                ) : undefined
+                ) : undefined}
+                {user?.general && (
+                  <div className="agent-bar">
+                    <Checkbox
+                      checked={activeChat ? activeChat.any_lang === true : newLang}
+                      onChange={changeLang}
+                      label={t("اجازه‌ی نوشتن به زبان‌های دیگر", "Allow other languages than Salam")}
+                      hint={t("پیش‌فرض خاموش است و فقط سلام نوشته می‌شود. با خاموش ماندن، توکن ورودی کمتری مصرف می‌شود.", "Off by default: only Salam is written, which saves input tokens.")}
+                    />
+                  </div>
+                )}
+                </>
               }
             />
           </>
@@ -1299,6 +1343,7 @@ export function App() {
         <ProjectDialog
           project={projectDialog.mode === "edit" ? projectDialog.project : null}
           busy={projectBusy}
+          general={user?.general === true}
           running={projectDialog.mode === "edit" && (projects.find((p) => p.id === projectDialog.project.id)?.live ?? 0) > 0}
           onSave={saveProject}
           onClose={() => setProjectDialog(null)}

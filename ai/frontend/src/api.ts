@@ -1,11 +1,12 @@
 import type { CampaignFields } from "./campaign";
-import { isDesktop, type ProjectContext } from "./desktop";
+import { type AgentMode, isDesktop, type ProjectContext } from "./desktop";
 import { isFa, lang, t } from "./i18n";
 export type User = {
   id: number;
   name: string;
   email: string;
   admin?: boolean;
+  general?: boolean;
 };
 export type Chat = {
   id: string;
@@ -17,6 +18,7 @@ export type Chat = {
   workspace?: string;
   extra_path?: string;
   project_id?: string;
+  any_lang?: boolean;
   shared?: ShareKind[];
   state?: "working" | "queued" | "waiting" | "idle" | "offline";
   phase?: "thinking" | "writing" | "tool";
@@ -39,6 +41,8 @@ export type Project = {
   last: number;
   path?: string;
   master_prompt?: string;
+  agent_mode?: AgentMode;
+  any_lang?: boolean;
 };
 export type ProjectInput = {
   name: string;
@@ -47,6 +51,8 @@ export type ProjectInput = {
   color?: string;
   emoji?: string;
   path?: string;
+  agent_mode?: AgentMode;
+  any_lang?: boolean;
 };
 export type ChatStart = {
   device_id?: string;
@@ -54,6 +60,7 @@ export type ChatStart = {
   cloud?: boolean;
   project_id?: string;
   extra_path?: string;
+  any_lang?: boolean;
 };
 export type ShareKind = "view" | "collab";
 export type ShareState =
@@ -1322,6 +1329,10 @@ export const api = {
     call<{ project: Project }>("POST", "/projects", body),
   updateProject: (id: string, body: ProjectInput) =>
     call<{ project: Project }>("PATCH", `/projects/${id}`, body),
+  projectDefaults: (
+    id: string,
+    body: { agent_mode?: AgentMode; any_lang?: boolean },
+  ) => call<{ ok: boolean }>("PATCH", `/projects/${id}/defaults`, body),
   deleteProject: (id: string) =>
     call<{ ok: boolean }>("DELETE", `/projects/${id}`),
   moveChat: (id: string, projectId: string) =>
@@ -1427,6 +1438,10 @@ export const api = {
   setChatExtra: (id: string, extraPath: string) =>
     call<{ ok: boolean; extra_path: string }>("PATCH", `/chats/${id}`, {
       extra_path: extraPath,
+    }),
+  setChatLang: (id: string, any_lang: boolean) =>
+    call<{ ok: boolean; any_lang: boolean }>("PATCH", `/chats/${id}`, {
+      any_lang,
     }),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
@@ -1667,7 +1682,13 @@ export const api = {
     call<{ payment_id: number; gateway: Gateway; amount: number; url: string }>(
       "POST",
       "/billing/checkout",
-      { plan, gateway, code: code || undefined, parallel: parallel || undefined, ...campaign },
+      {
+        plan,
+        gateway,
+        code: code || undefined,
+        parallel: parallel || undefined,
+        ...campaign,
+      },
     ),
   previewDiscount: (plan: PlanId, code: string, parallel?: number) =>
     call<{ code: string; price: number; charge: number; discount: number }>(

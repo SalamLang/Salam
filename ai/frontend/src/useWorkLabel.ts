@@ -18,13 +18,21 @@ export function useWorkLabel(next: WorkLabel): WorkLabel {
     if (same(next, shown)) return;
     const now = Date.now();
     let wait = Math.max(0, changedAt.current + MIN_CHANGE_MS - now);
-    if (!next.specific && shown.specific) wait = Math.max(wait, specificAt.current + KEEP_SPECIFIC_MS - now);
+    if (!next.specific && shown.specific)
+      wait = Math.max(wait, specificAt.current + KEEP_SPECIFIC_MS - now);
     const id = window.setTimeout(() => {
       changedAt.current = Date.now();
       setShown(next);
     }, wait);
     return () => window.clearTimeout(id);
-  }, [next.text, next.subject, next.specific, shown.text, shown.subject, shown.specific]);
+  }, [
+    next.text,
+    next.subject,
+    next.specific,
+    shown.text,
+    shown.subject,
+    shown.specific,
+  ]);
 
   return shown;
 }

@@ -77,6 +77,7 @@ struct LnNames:
     pub touch: str = "TouchInstance"
     pub touch_vars: str = "TouchInstanceVars"
     pub scope_vars: str = "ScopeVars"
+    pub derive: str = "ScopeDerive"
     pub vec: str = "Vector"
     pub len: str = "len"
     pub push: str = "push"
@@ -134,6 +135,7 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.touch = "لمس نمونه"
     n.touch_vars = "لمس متغیرهای نمونه"
     n.scope_vars = "متغیرهای دامنه"
+    n.derive = "اشتقاق دامنه"
     n.vec = "وکتور"
     n.len = "طول"
     n.push = "بیفزا"
@@ -893,7 +895,11 @@ func ln_each_scoped(g &: LnGen, a &: at.Ast, nid: int):
 end
 
 func ln_is_render(gi: int): bool:
-    ret gi < g_lo_st_kind.Len() and g_lo_st_kind.Get(gi) == LI_RENDER
+    ret gi < g_lo_st_kind.Len() and (g_lo_st_kind.Get(gi) == LI_RENDER or g_lo_st_kind.Get(gi) == LI_MEMO)
+end
+
+func ln_is_memo(gi: int): bool:
+    ret gi < g_lo_st_kind.Len() and g_lo_st_kind.Get(gi) == LI_MEMO
 end
 
 func ln_comp_has_stores(a &: at.Ast, blk: int, render: bool): bool:
@@ -919,7 +925,31 @@ func ln_comp_stores(g &: LnGen, a &: at.Ast, blk: int, kname: str, render: bool)
         gs := co.U64Toa(sd.value_int)
         idx := g.lw.slots.Len()
         g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = sd.a })
-        if render:
+        if render and ln_is_memo(sd.value_int as int):
+            mgi := sd.value_int as int
+            mut known := false
+            each kg in g.rx.memo_gi:
+                if kg == mgi:
+                    known = true
+                end
+            end
+            if not known:
+                mut mids := Vector {} as Vector<int>
+                defer mids.Free()
+                g_ln_rx_vars.Clear()
+                ln_rx_scan(g.rx, a, sd.a, mids)
+                mut mask := 0
+                each vg in g_ln_rx_vars:
+                    mask |= ln_rx_var_bit(vg)
+                end
+                msl := g.lw.slots.Len()
+                g.lw.slots.Push(LoSlot { kind = SL_TEXT, expr = at.Clone(a, sd.a) })
+                g.rx.memo_gi.Push(mgi)
+                g.rx.memo_comp.Push(g_lo_st_comp.Get(mgi))
+                g.rx.memo_slot.Push(msl)
+                g.rx.memo_mask.Push(mask)
+            end
+        else render:
             mut sids := Vector {} as Vector<int>
             defer sids.Free()
             g_ln_rx_vars.Clear()
@@ -1400,7 +1430,49 @@ func ln_rx_source(g &: LnGen): str:
         end
         masks.Free()
     end
+    repeat g.rx.st_comps.Len() in dci:
+        dc := g.rx.st_comps.Get(dci)
+        mut dhas := false
+        repeat g.rx.memo_gi.Len() in dm0:
+            if g.rx.memo_comp.Get(dm0) == dc:
+                dhas = true
+            end
+        end
+        if dhas:
+            s += "    " + n.ui + "." + n.derive + "(" + co.U64Toa(dc as u64) + n.sep + "(__salam_a: " + n.t_int + n.sep + "__salam_b: " + n.t_int + "): " + n.kw_ret + " __salam_derive_" + co.U64Toa(dc as u64) + "(__salam_a" + n.sep + "__salam_b) " + n.kw_end + ")\n"
+        end
+    end
     s += n.kw_end + "\n\n"
+    repeat g.rx.st_comps.Len() in dci2:
+        dc2 := g.rx.st_comps.Get(dci2)
+        mut dtext := ""
+        repeat g.rx.memo_gi.Len() in dm:
+            if g.rx.memo_comp.Get(dm) != dc2:
+                continue
+            end
+            gs := co.U64Toa(g.rx.memo_gi.Get(dm) as u64)
+            ks := "__salam_k_" + co.U64Toa(dc2 as u64)
+            dtext += "    " + n.kw_mut + " __salam_c_" + gs + " := 1\n"
+            dtext += "    " + n.kw_if + " (__salam_o & " + ln_signed(g.rx.memo_mask.Get(dm)) + ") == 0:\n"
+            dtext += "        __salam_c_" + gs + " = 0\n"
+            dtext += "    " + n.kw_end + "\n"
+            dtext += "    " + n.kw_if + " __salam_c_" + gs + " == 1:\n"
+            dtext += "        __salam_n_" + gs + " := " + ln_dyn_name(g.rx.memo_slot.Get(dm)) + "\n"
+            dtext += "        " + n.kw_if + " __salam_n_" + gs + " == __salam_st_" + gs + "[" + ks + "]:\n"
+            dtext += "            __salam_c_" + gs + " = 0\n"
+            dtext += "        " + n.kw_else + ":\n"
+            dtext += "            __salam_st_" + gs + "[" + ks + "] = __salam_n_" + gs + "\n"
+            dtext += "            __salam_o |= " + ln_signed(ln_rx_var_bit(g.rx.memo_gi.Get(dm))) + "\n"
+            dtext += "        " + n.kw_end + "\n"
+            dtext += "    " + n.kw_end + "\n"
+        end
+        if str.Len(dtext) > 0:
+            s += n.kw_func + " __salam_derive_" + co.U64Toa(dc2 as u64) + "(__salam_k_" + co.U64Toa(dc2 as u64) + ": " + n.t_int + n.sep + "__salam_m: " + n.t_int + "): " + n.t_int + ":\n"
+            s += "    " + n.kw_mut + " __salam_o := __salam_m\n"
+            s += dtext
+            s += "    " + n.kw_ret + " __salam_o\n" + n.kw_end + "\n\n"
+        end
+    end
     s += n.kw_func + " __salam_marks():\n"
     repeat g.rx.ids.Len() in id2:
         s += "    " + ln_rx_word_name(id2 / LN_RX_BITS) + " |= " + co.U64Toa(ln_rx_mask(id2) as u64) + "\n"
@@ -1561,6 +1633,13 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
                 g.rx.tmpl.Push(blk.list.Get(ti))
             end
             continue
+        end
+        if str.StartsWith(fnode.name, "__salam_derive_"):
+            dbody := lo_splice(g.lw, a, fnode.a, chunks, lb)
+            mut dfn := at.Get(a, cid2)
+            dfn.a = dbody
+            at.Put(a, cid2, dfn)
+            lo_fix_glue_spans(g.lw, a, dbody, base)
         end
         if str.Equals(fnode.name, NATIVE_PAGE_VIEW):
             body := lo_splice(g.lw, a, fnode.a, chunks, lb)

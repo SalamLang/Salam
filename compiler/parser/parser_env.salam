@@ -1,0 +1,147 @@
+package parser
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+
+k_env_en := ["dark", "light", "compact", "regular", "wide", "touch", "mouse", "landscape", "portrait", "reduced motion", "high contrast", "rtl", "ltr", "screen width", "screen height"]
+
+k_env_fa := ["تیره", "روشن", "فشرده", "معمولی", "عریض", "لمسی", "ماوس", "افقی", "عمودی", "حرکت کم", "کنتراست بالا", "راست\xE2\x80\x8Cچین", "چپ\xE2\x80\x8Cچین", "عرض صفحه", "ارتفاع صفحه"]
+
+k_env_name := ["dark", "light", "compact", "regular", "wide", "touch", "mouse", "landscape", "portrait", "reduced", "contrast", "rtl", "ltr", "w", "h"]
+
+mut g_env_used := false
+
+func env_loose(s: str): str:
+    ret str.Lower(str.Replace(str.Replace(s, "\xE2\x80\x8C", ""), " ", ""))
+end
+
+func env_lookup(words: str): int:
+    key := env_loose(words)
+    repeat len(k_env_en) in i:
+        if str.Equals(env_loose(k_env_en[i]), key) or str.Equals(env_loose(k_env_fa[i]), key):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func env_phrase_len(i: int): int:
+    ret str.Fields(k_env_en[i]).Len()
+end
+
+func env_rewrite_cond(p &: Ps):
+    mut i := skip_comments_from(p, p.pos)
+    until i < p.count - 1:
+        t := p.toks.toks.Get(i)
+        if t.kind == tok.TK_COLON or t.kind == tok.TK_STMT_END or t.kind == tok.TK_EOF:
+            break
+        end
+        if t.kind != tok.TK_IDENT:
+            i = skip_comments_from(p, i + 1)
+            continue
+        end
+        mut hit := 0 - 1
+        mut next := 0 - 1
+        n1 := skip_comments_from(p, i + 1)
+        if n1 < p.count and p.toks.toks.Get(n1).kind == tok.TK_IDENT:
+            hit = env_lookup(t.lexeme + " " + p.toks.toks.Get(n1).lexeme)
+            next = n1
+        end
+        if hit < 0 or env_phrase_len(hit) != 2:
+            hit = env_lookup(t.lexeme)
+            next = 0 - 1
+            if hit >= 0 and env_phrase_len(hit) != 1:
+                hit = 0 - 1
+            end
+        end
+        if hit >= 0:
+            mut nt := t
+            nt.lexeme = "__env_" + k_env_name[hit]
+            p.toks.toks.Set(i, nt)
+            if next >= 0:
+                mut ct := p.toks.toks.Get(next)
+                ct.kind = tok.TK_COMMENT_BLOCK
+                p.toks.toks.Set(next, ct)
+            end
+        end
+        i = skip_comments_from(p, i + 1)
+    end
+end
+
+func env_node_has(a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_IDENTIFIER and str.StartsWith(n.name, "__env_"):
+        ret true
+    end
+    if env_node_has(a, n.a) or env_node_has(a, n.b) or env_node_has(a, n.c):
+        ret true
+    end
+    repeat n.list.Len() in i:
+        if env_node_has(a, n.list.Get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func env_note(a &: at.Ast, cond: int):
+    if env_node_has(a, cond):
+        g_env_used = true
+    end
+end
+
+func env_revert(a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_IDENTIFIER and str.StartsWith(n.name, "__env_"):
+        key := str.Substr(n.name, 6, str.Len(n.name) - 6)
+        repeat len(k_env_name) in i:
+            if str.Equals(k_env_name[i], key) and env_phrase_len(i) == 1:
+                at.SetName(a, id, k_env_en[i])
+            end
+        end
+    end
+    env_revert(a, n.a)
+    env_revert(a, n.b)
+    env_revert(a, n.c)
+    repeat n.list.Len() in j:
+        env_revert(a, n.list.Get(j))
+    end
+end
+
+func env_revert_chain(a &: at.Ast, n: int):
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        env_revert(a, c.a)
+        if c.c != 0 and at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            cur = 0
+        end
+    end
+end
+
+func env_note_chain(a &: at.Ast, n: int):
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        env_note(a, c.a)
+        if c.c != 0 and at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            cur = 0
+        end
+    end
+end
+
+pub func EnvUsed(): bool:
+    ret g_env_used
+end

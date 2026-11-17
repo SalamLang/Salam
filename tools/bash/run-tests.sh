@@ -987,14 +987,22 @@ if want ui; then
 fi
 
 if want uiexamples; then
-    printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
-    "$SALAM_ABS" page build "$WORK/page_empty_en.salam" --inline --no-minify --output="$WORK/page_empty_en.html" --no-color --log-level=error --lang=en >/dev/null 2>&1 || rm -f "$WORK/page_empty_en.html"
-    for f in examples/ui/*.salam; do
-        [ -e "$f" ] || continue
-        name=$(basename "$f" .salam)
-        add_job page "uiexamples/web/$name" "$f" "en" -
-        [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
-        add_job uinative "uiexamples/native/$name" "$f" "en" "${f%.salam}.out"
+    for lang in en fa; do
+        dirx=examples/ui
+        [ "$lang" = fa ] && dirx=examples/ui/fa
+        if [ "$lang" = fa ]; then
+            printf 'صفحه:\nپایان\n' >"$WORK/page_empty_fa.salam"
+        else
+            printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
+        fi
+        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
+        for f in "$dirx"/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            add_job page "uiexamples/web/$lang/$name" "$f" "$lang" -
+            [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
+            add_job uinative "uiexamples/native/$lang/$name" "$f" "$lang" "${f%.salam}.out"
+        done
     done
 fi
 

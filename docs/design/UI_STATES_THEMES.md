@@ -63,7 +63,10 @@ prefixes: `hover background = ...`) is the conditional style block, and
 elements, text or `each` stays the structural `if`. The compiler tells the
 two apart by scanning the body, not by a keyword; a body that mixes style
 attributes with elements is E175 (split it into two `if` blocks). Several
-`if` blocks may follow each other. A condition is a Salam expression of
+`if` blocks may follow each other. A style `if` only sees declarations that
+come before it, so a later declaration of the same attribute is a duplicate
+attribute error. The condition is copied into each attribute it guards, so it
+must not change state. A condition is a Salam expression of
 type `bool`, or one of the environment conditions below, joined with `and`,
 `or`, `not`.
 

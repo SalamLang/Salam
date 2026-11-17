@@ -55,10 +55,22 @@ const controls = [
 ];
 for (const s of controls) check("control " + s, q(s) !== null);
 check("mode buttons carry data-value", q('#mode-seg [data-value="layout"]') !== null);
+check("the code area is a direct child of the editor wrap", q("#code").parentElement === q("#edwrap"));
 check("language buttons carry data-value", q('#lang-seg [data-value="fa"]') !== null);
 
 setTimeout(() => {
   check("no script errors on load", errors.length === 0, errors.join(" | "));
+
+  const code = q("#code");
+  let text = "func main:\n";
+  for (let i = 0; i < 1500; i++) text += "    println " + i + "\n";
+  code.value = text + "end\n";
+  code.dispatchEvent(new dom.window.InputEvent("input", { inputType: "insertFromPaste" }));
+  check("one line number per line", d.querySelectorAll("#ln-inner .ln-row").length === code.value.split("\n").length);
+  check("the line number column widens for four digits", /4ch/.test(q("#ln").style.width), q("#ln").style.width);
+  code.value = "func main:\nend\n";
+  code.dispatchEvent(new dom.window.InputEvent("input", { inputType: "insertFromPaste" }));
+  check("line numbers shrink with the code", d.querySelectorAll("#ln-inner .ln-row").length === 3);
 
   q('#lang-seg [data-value="fa"]').click();
   check("fa switches dir to rtl", d.documentElement.dir === "rtl");

@@ -1847,6 +1847,102 @@ func expand_if(ex &: LoExpand, a &: at.Ast, iid: int, fr &: LoFrame, dir: str, d
     ret cp
 end
 
+func is_bind_attr(n: str): bool:
+    ret str.Equals(n, "bind") or str.Equals(n, "پیوند")
+end
+
+func lo_bind_str_ref(a &: at.Ast, nid: int, text: str): int:
+    id := at.NewNode(a, at.AST_IDENTIFIER)
+    copy_span(a, id, nid)
+    at.SetName(a, id, text)
+    ret id
+end
+
+func lo_bind_lambda(a &: at.Ast, from: int, target: int, fa: bool, checkbox: bool): int:
+    lam := at.NewNode(a, at.AST_LAMBDA)
+    copy_span(a, lam, from)
+    mut rhs := 0
+    if checkbox:
+        rhs = at.NewNode(a, at.AST_UNARY)
+        copy_span(a, rhs, from)
+        at.SetOp(a, rhs, tok.TK_NOT)
+        mut un := at.Get(a, rhs)
+        un.a = at.Clone(a, target)
+        at.Put(a, rhs, un)
+    else:
+        param := at.NewNode(a, at.AST_PARAM)
+        copy_span(a, param, from)
+        at.SetName(a, param, "__bind_v")
+        ty := at.NewNode(a, at.AST_TYPE)
+        copy_span(a, ty, from)
+        at.SetName(a, ty, fa ? "رشته" : "str")
+        at.SetTypeNode(a, param, ty)
+        at.AddChild(a, lam, param)
+        rhs = lo_bind_str_ref(a, from, "__bind_v")
+    end
+    asg := at.NewNode(a, at.AST_ASSIGN)
+    copy_span(a, asg, from)
+    at.SetOp(a, asg, tok.TK_ASSIGN)
+    mut an := at.Get(a, asg)
+    an.a = at.Clone(a, target)
+    an.b = rhs
+    at.Put(a, asg, an)
+    blk := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, blk, from)
+    at.AddChild(a, blk, asg)
+    mut lm := at.Get(a, lam)
+    lm.a = blk
+    at.Put(a, lam, lm)
+    ret lam
+end
+
+func lo_bind_expand(ex &: LoExpand, a &: at.Ast, out &: Vector<int>, iid: int, container: int, fr &: LoFrame):
+    item := at.Get(a, iid)
+    fa := str.Equals(item.name, "پیوند")
+    el := at.Get(a, container)
+    is_input := str.Equals(el.name, "input") or str.Equals(el.name, "ورودی")
+    mut kind := ""
+    repeat at.ChildCount(a, container) in k:
+        c := at.Get(a, at.Child(a, container, k))
+        if c.kind == at.AST_LAYOUT_ATTR and (str.Equals(c.name, "type") or str.Equals(c.name, "نوع")) and c.a != 0:
+            v := at.Get(a, c.a)
+            if v.kind == at.AST_LITERAL and v.value_kind == tok.TV_STRING:
+                kind = v.value_str
+            end
+        end
+    end
+    target := subst_value(a, item.a, fr)
+    tk := target == 0 ? 0 : at.KindOf(a, target)
+    textual := str.Len(kind) == 0 or str.Equals(kind, "text") or str.Equals(kind, "password") or str.Equals(kind, "email") or str.Equals(kind, "search") or str.Equals(kind, "url") or str.Equals(kind, "tel")
+    checkbox := str.Equals(kind, "checkbox")
+    if not is_input or not (textual or checkbox):
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("'bind' works on a text field or a checkbox (an input with no type, text, password, email, search, url, tel or checkbox)")
+        )
+        ex.errors++
+        ret
+    end
+    if tk != at.AST_IDENTIFIER and tk != at.AST_MEMBER and tk != at.AST_INDEX:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("'bind' needs a variable, a field or a vector element")
+        )
+        ex.errors++
+        ret
+    end
+    vattr := at.Clone(a, iid)
+    mut vn := at.Get(a, vattr)
+    vn.name = checkbox ? (fa ? "تیک خورده" : "checked") : (fa ? "مقدار" : "value")
+    vn.a = at.Clone(a, target)
+    at.Put(a, vattr, vn)
+    out.Push(vattr)
+    hattr := at.Clone(a, iid)
+    mut hn := at.Get(a, hattr)
+    hn.name = checkbox ? (fa ? "تغییر" : "change") : (fa ? "ورودی" : "input")
+    hn.a = lo_bind_lambda(a, iid, target, fa, checkbox)
+    at.Put(a, hattr, hn)
+    out.Push(hattr)
+end
+
 func expand_items(
     ex &: LoExpand, a &: at.Ast, out &: Vector<int>, container: int, fr &: LoFrame, dir: str, depth: int
 ):
@@ -1858,6 +1954,12 @@ func expand_items(
         ret
     end
     repeat at.ChildCount(a, container) in i:
-        expand_item(ex, a, out, at.Child(a, container, i), fr, dir, depth)
+        cid := at.Child(a, container, i)
+        ci := at.Get(a, cid)
+        if ci.kind == at.AST_LAYOUT_ATTR and is_bind_attr(ci.name) and ci.a != 0:
+            lo_bind_expand(ex, a, out, cid, container, fr)
+            continue
+        end
+        expand_item(ex, a, out, cid, fr, dir, depth)
     end
 end

@@ -83,7 +83,14 @@ pub fn apply_edit(old: &str, old_text: &str, new_text: &str, all: bool) -> Resul
     if old_text.is_empty() {
         return Err("old_text is empty; use write_file to create a file.".to_string());
     }
-    let count = old.matches(old_text).count();
+    let mut old_text = old_text.to_string();
+    let mut new_text = new_text.to_string();
+    let mut count = old.matches(old_text.as_str()).count();
+    if count == 0 && old.contains("\r\n") && !old_text.contains('\r') {
+        old_text = old_text.replace('\n', "\r\n");
+        new_text = new_text.replace('\n', "\r\n");
+        count = old.matches(old_text.as_str()).count();
+    }
     if count == 0 {
         return Err("old_text was not found in the file. Read the file again and copy the text exactly.".to_string());
     }
@@ -93,9 +100,9 @@ pub fn apply_edit(old: &str, old_text: &str, new_text: &str, all: bool) -> Resul
         ));
     }
     let out = if all {
-        old.replace(old_text, new_text)
+        old.replace(old_text.as_str(), new_text.as_str())
     } else {
-        old.replacen(old_text, new_text, 1)
+        old.replacen(old_text.as_str(), new_text.as_str(), 1)
     };
     Ok((out, if all { count } else { 1 }))
 }
@@ -135,6 +142,7 @@ mod tests {
         assert_eq!(apply_edit("a b a", "a", "c", true).unwrap(), ("c b c".to_string(), 2));
         assert!(apply_edit("abc", "x", "y", false).unwrap_err().contains("not found"));
         assert!(apply_edit("abc", "", "y", false).is_err());
+        assert_eq!(apply_edit("a\r\nb\r\nc", "a\nb", "x\ny", false).unwrap().0, "x\r\ny\r\nc");
     }
 
     #[test]

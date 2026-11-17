@@ -1259,7 +1259,11 @@ func expand_component(
         expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
         ret
     end
-    if web and not li_has_storage(a, body):
+    mut hparams := Vector {} as Vector<str>
+    if web and g_lo_each_depth > 0:
+        hparams = lo_handler_params(a, ex.comp_def.Get(ci), body)
+    end
+    if web and not li_has_storage(a, body) and hparams.Len() == 0:
         frame_derive(a, fr, body)
         expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
         ret
@@ -1276,13 +1280,34 @@ func expand_component(
     copy_span(a, blk, invocation)
     mut kids := Vector {} as Vector<int>
     mut sj := 0
-    repeat at.ChildCount(a, body) in bi:
-        sid := at.Child(a, body, bi)
+    mut all := Vector {} as Vector<int>
+    each hp in hparams:
+        hd := at.NewNode(a, at.AST_VAR_DECL)
+        copy_span(a, hd, invocation)
+        mut hn := at.Get(a, hd)
+        hn.name = hp
+        hn.a = lo_ident(a, hp, invocation)
+        hn.synthetic = true
+        at.Put(a, hd, hn)
+        all.Push(hd)
+    end
+    nsynth := all.Len()
+    repeat at.ChildCount(a, body) in bi0:
+        all.Push(at.Child(a, body, bi0))
+    end
+    repeat all.Len() in bi:
+        sid := all.Get(bi)
         if at.KindOf(a, sid) != at.AST_VAR_DECL:
             continue
         end
         sd := at.Get(a, sid)
-        kind := li_kind(sid)
+        mut kind := li_kind(sid)
+        if bi < nsynth:
+            kind = LI_RENDER
+        end
+        if kind == LI_DERIVED and not web and g_lo_native_scopes and lo_memo_ok(a, sd.a, fr, ci):
+            kind = LI_MEMO
+        end
         if kind == LI_DERIVED:
             frame_set(fr, sd.name, subst_value(a, sd.a, fr))
             fr.derived.Push(sd.name)
@@ -1334,6 +1359,55 @@ func expand_component(
         g_lo_wi_mark.Set(wi, mark)
     end
     out.Push(mark)
+end
+
+func lo_hr_walk(a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        mut shadow := Vector {} as Vector<str>
+        li_rd_lambda(a, nid, shadow, out)
+        shadow.Free()
+        ret
+    end
+    lo_hr_walk(a, n.a, out)
+    lo_hr_walk(a, n.b, out)
+    lo_hr_walk(a, n.c, out)
+    lo_hr_walk(a, n.d, out)
+    each c in n.list:
+        lo_hr_walk(a, c, out)
+    end
+end
+
+func lo_handler_params(a &: at.Ast, comp_def: int, body: int): Vector<str>:
+    mut seen := Vector {} as Vector<str>
+    lo_hr_walk(a, body, seen)
+    mut out := Vector {} as Vector<str>
+    each name in seen:
+        if not comp_has_param(a, comp_def, name) or is_content_word(name):
+            continue
+        end
+        mut declared := false
+        repeat at.ChildCount(a, body) in i:
+            cid := at.Child(a, body, i)
+            if at.KindOf(a, cid) == at.AST_VAR_DECL and str.Equals(at.Get(a, cid).name, name):
+                declared = true
+            end
+        end
+        mut dup := false
+        each o in out:
+            if str.Equals(o, name):
+                dup = true
+            end
+        end
+        if not declared and not dup:
+            out.Push(name)
+        end
+    end
+    seen.Free()
+    ret out
 end
 
 func lo_has_decls(a &: at.Ast, body: int): bool:
@@ -1424,6 +1498,92 @@ func lo_state_type(a &: at.Ast, comp_def: int, init: int, lit &: str): int:
     ret 0
 end
 
+func lo_memo_type(a &: at.Ast, nid: int, fr &: LoFrame, ci: int, reads &: int): str:
+    if nid == 0:
+        ret ""
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_INT:
+            ret "int"
+        end
+        if n.value_kind == tok.TV_FLOAT:
+            ret "f64"
+        end
+        if n.value_kind == tok.TV_BOOL:
+            ret "bool"
+        end
+        if n.value_kind == tok.TV_STRING and str.IndexOf(n.value_str, "{") < 0:
+            ret "str"
+        end
+        ret ""
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        mut found := false
+        bound := frame_lookup(fr, n.name, found)
+        if not found or bound == 0:
+            ret ""
+        end
+        b := at.Get(a, bound)
+        if b.kind != at.AST_INDEX or not b.synthetic or b.a == 0 or b.b == 0:
+            ret ""
+        end
+        ia := at.Get(a, b.a)
+        ib := at.Get(a, b.b)
+        if not str.Equals(ib.name, "__salam_k_" + co.U64Toa(ci as u64)) or not str.StartsWith(ia.name, "__salam_st_"):
+            ret ""
+        end
+        gi := str.Substr(ia.name, 11, str.Len(ia.name) - 11).ToInt()
+        if gi < 0 or gi >= g_lo_st_kind.Len() or gi >= g_lo_st_lit.Len():
+            ret ""
+        end
+        k := g_lo_st_kind.Get(gi)
+        if k != LI_STATE and k != LI_MEMO:
+            ret ""
+        end
+        reads++
+        ret g_lo_st_lit.Get(gi)
+    end
+    if n.kind == at.AST_UNARY:
+        t := lo_memo_type(a, n.a, fr, ci, reads)
+        if str.Len(t) == 0:
+            ret ""
+        end
+        if n.op == tok.TK_NOT:
+            ret "bool"
+        end
+        ret t
+    end
+    if n.kind == at.AST_BINARY:
+        l := lo_memo_type(a, n.a, fr, ci, reads)
+        r := lo_memo_type(a, n.b, fr, ci, reads)
+        if str.Len(l) == 0 or str.Len(r) == 0:
+            ret ""
+        end
+        if n.op >= tok.TK_EQ and n.op <= tok.TK_OR:
+            ret "bool"
+        end
+        if str.Equals(l, "str") or str.Equals(r, "str"):
+            ret "str"
+        end
+        if str.Equals(l, "f64") or str.Equals(r, "f64"):
+            ret "f64"
+        end
+        ret l
+    end
+    ret ""
+end
+
+func lo_memo_ok(a &: at.Ast, vid: int, fr &: LoFrame, ci: int): bool:
+    mut reads := 0
+    t := lo_memo_type(a, vid, fr, ci, reads)
+    if str.Len(t) == 0 or reads == 0:
+        ret false
+    end
+    g_lo_memo_lit = t
+    ret true
+end
+
 func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind: int): int:
     mut seen := 0
     repeat g_lo_st_comp.Len() in i:
@@ -1436,7 +1596,12 @@ func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind
     end
     sd := at.Get(a, sid)
     mut lit := ""
-    ty := lo_state_type(a, ex.comp_def.Get(ci), sd.a, lit)
+    mut ty := 0
+    if kind == LI_MEMO:
+        lit = g_lo_memo_lit
+    else:
+        ty = lo_state_type(a, ex.comp_def.Get(ci), sd.a, lit)
+    end
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(

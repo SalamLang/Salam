@@ -377,6 +377,7 @@ module.exports = grammar({
 
     component_definition: ($) =>
       seq(
+        optional(kw("pub")),
         alias($._component_keyword, "component"),
         field("name", $.name),
         optional($.parameter_list),

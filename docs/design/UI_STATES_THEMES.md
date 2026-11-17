@@ -45,7 +45,7 @@ component Seg(items: Vector<str>, value: str, pick: func (str)):
                 color = theme.color.muted
                 hover color = theme.color.fg
                 transition = 150ms
-                when it == value:
+                if it == value:
                     background = theme.color.accent
                     color = theme.color.on accent
                     font weight = semibold
@@ -56,9 +56,14 @@ component Seg(items: Vector<str>, value: str, pick: func (str)):
 end
 ```
 
-`when condition:` ... `end` is allowed inside any element and holds style
-attributes only (also state prefixes: `hover background = ...`). Several
-`when` blocks may follow each other. A condition is a Salam expression of
+Decision (2026-11-16): there is no `when` keyword. `if condition:` ... `end`
+inside an element whose body holds style attributes only (also state
+prefixes: `hover background = ...`) is the conditional style block, and
+`else` and `else if` work as for any `if`. An `if` whose body holds
+elements, text or `each` stays the structural `if`. The compiler tells the
+two apart by scanning the body, not by a keyword; a body that mixes style
+attributes with elements is E175 (split it into two `if` blocks). Several
+`if` blocks may follow each other. A condition is a Salam expression of
 type `bool`, or one of the environment conditions below, joined with `and`,
 `or`, `not`.
 
@@ -76,21 +81,21 @@ type `bool`, or one of the environment conditions below, joined with `and`,
 | `in card hover`, `in card focus within`, `in card active` | a state of the nearest ancestor whose `group = card` |
 
 The six names `dark`, `compact`, `regular`, `wide`, `touch`, `mouse` are
-reserved inside `when`; a local variable of the same name is E172 (rename it).
+reserved inside a style `if`; a local variable of the same name is E172 (rename it).
 
 ### Rules
 
 1. **Cascade is flat.** No selectors, no specificity. The order of strength
-   is: base attributes, then every `when` block in source order, then state
-   prefixes in the fixed order of `UI_DSL.md` (a state prefix inside a `when`
+   is: base attributes, then every style `if` block in source order, then state
+   prefixes in the fixed order of `UI_DSL.md` (a state prefix inside a style `if`
    counts as a state prefix). Later wins at the same level.
 2. **No descendant selectors.** A parent never styles a descendant by name.
    Use a parameter (`Seg(compact = true)`), a `group` condition
    (`in card hover`), or a theme token. This is what removes
    `:root[data-theme="light"] .dd-item.sel` (the theme does it) and
-   `.controls .seg-btn` (the button reads `when screen width < 1025` itself).
+   `.controls .seg-btn` (the button reads `if screen width < 1025` itself).
 3. **Container conditions.** `container = true` marks an element as a query
-   container; `container = "card"` names it and `when card width < 400`
+   container; `container = "card"` names it and `if card width < 400`
    targets that one. A container condition with no container ancestor is
    E174. A container's own size must not depend on its children's reaction to
    the condition (no loop): a rule that changes the container's size is
@@ -98,11 +103,11 @@ reserved inside `when`; a local variable of the same name is E172 (rename it).
    third change in the same frame is ignored with the trace line
    `container loop`.
 4. **Values can be conditional too**, for one attribute: any expression,
-   `padding = if wide: 24 else: 12 end`. Prefer `when` for more than one
+   `padding = if wide: 24 else: 12 end`. Prefer a style `if` for more than one
    attribute.
 5. **Structure** stays `if`: a condition that adds or removes elements is an
-   `if`, not a `when` (`when` never changes the tree, so state, focus and
-   text survive it).
+   `if` with elements, not a style `if` (a style `if` never changes the tree, so
+   state, focus and text survive it).
 6. **Mobile menu.** `body.menu-open .controls { transform: translateX(0) }`
    becomes state plus a condition:
 
@@ -113,12 +118,12 @@ page:
     header:
         button: id = "menu-toggle" content = "Menu" click = (): menu = !menu end
             visible = false
-            when compact: visible = true end
+            if compact: visible = true end
         end
         nav: id = "controls" position = fixed, end = 0, top = 0
             width = 330
             translate = 0
-            when compact and not menu: translate = 110%, 0 end
+            if compact and not menu: translate = 110%, 0 end
             transition = 300ms
         end
     end
@@ -137,8 +142,8 @@ end
 
 ### Targets
 
-- **web**: a static `when` on environment conditions becomes `@media` and
-  `@container` rules in the page sheet. A reactive `when` becomes one boolean
+- **web**: a static style `if` on environment conditions becomes `@media` and
+  `@container` rules in the page sheet. A reactive style `if` becomes one boolean
   attribute per distinct condition on the element (`data-w3`) set by the
   existing patch step; the sheet has `[data-w3]{...}`. Names are generated and
   per component, never written by the user and never in the DOM API, so
@@ -146,7 +151,7 @@ end
   unless the page forces a scheme (section 2), when it becomes
   `[data-scheme=dark]`.
 - **native**: `Style` is computed as `Default`, `Inherit`, base patch, then
-  the patch of each true `when` block, then states. Each reactive condition is
+  the patch of each true style `if` block, then states. Each reactive condition is
   a dependency of the element's style scope; environment conditions are
   window signals (resize, scheme, input kind) that restyle only elements that
   name that condition. Container conditions are checked after layout; a
@@ -157,29 +162,37 @@ end
 | code | kind | message |
 | --- | --- | --- |
 | E172 | error | `'dark' is a reserved condition name; rename the variable` |
-| E173 | error | `a 'when' condition must be a bool or an environment condition, found <type>` |
+| E173 | error | `a style 'if' condition must be a bool or an environment condition, found <type>` |
 | E174 | error | `'container' condition used outside an element marked container` |
-| E175 | error | `'when' holds style attributes only; use 'if' to add or remove elements` |
-| W176 | warning | `'when' condition is always true or always false` |
+| E175 | error | `an 'if' cannot hold style attributes together with elements; split it into two 'if' blocks` |
+| W176 | warning | `style 'if' condition is always true or always false` |
 | E177 | error | `no ancestor has group 'card'` |
+
+### Implementation note
+
+The first implementation lowers a style `if` in the parser into one
+conditional value per attribute (`x = c ? v : <earlier value of x>`, an empty
+text meaning no declaration when there is no earlier value), so both targets
+reuse the runtime style values. Attribute names are matched by their written
+spelling. Environment conditions will need real `@media` rules on the web.
 
 ### Decisions taken
 
 | # | decision |
 | --- | --- |
-| V1 | `when cond:` blocks inside an element; no class names, no selectors, no descendant rules |
-| V2 | flat cascade: base, `when` in source order, then states |
+| V1 | `if cond:` blocks of style attributes inside an element (no new keyword); no class names, no selectors, no descendant rules |
+| V2 | flat cascade: base, style `if` in source order, then states |
 | V3 | environment conditions are words (`dark`, `compact`, `touch`, `screen width < n`), usable on both targets |
 | V4 | container queries through `container = true or "name"` |
 | V5 | ancestor state through `group = name` and `in name hover` |
-| V6 | `when` never changes the tree; structure is `if` |
+| V6 | a style `if` never changes the tree; the body decides: attributes only means style, elements mean structure |
 | V7 | JS custom properties become state read in an attribute value |
 | V8 | add `tab size`, `touch action`; do not add `will change` |
 
 ### First implementation steps
 
-1. Parser: `when` block in the layout block grammar, `group` and `container`
-   attributes; AST node `AST_WHEN` (lowered like state prefixes in
+1. Parser: style `if` blocks in the layout block grammar, `group` and `container`
+   attributes; a style flag on the `if` node (lowered like state prefixes in
    `sema_layout_fold.salam`). Test: errors E172 to E177 in `tests/*/page/errors`.
 2. Web: static environment conditions to `@media`/`@container`; reactive ones
    to the boolean attribute. Test: build, check the sheet text.

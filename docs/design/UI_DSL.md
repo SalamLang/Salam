@@ -207,7 +207,7 @@ designed in `UI_BEHAVIOUR.md` (section 6).
 Any style attribute may carry one prefix: `hover`, `focus`, `focus within`,
 `active`, `disabled`, `checked`, `invalid`, `placeholder`, `selection`
 (`hover background = #ffeecc`). Screen size, dark mode, container size and
-state of attributes are written as `when` blocks (`UI_STATES_THEMES.md`,
+state of attributes are written as style `if` blocks (`UI_STATES_THEMES.md`,
 section 1); design tokens and themes are in section 2 of that file;
 `light dark(a, b)` colours work from the start. The standard components,
 accessibility and assets are in `UI_COMPONENTS.md`; navigation, forms and
@@ -703,7 +703,7 @@ ui.Patch            ordered (prop, style.Value) pairs; built once at start
 patch.Add(prop: int, v: style.Value)
 b.Title(s), b.Lang(s), b.Dir(s)
 b.Open(kind: str)          canonical English element name from std/layout
-                           ("box", "h1" to "h6", "button", ...), never an HTML tag
+                           ("box", "heading", "button", ...), never an HTML tag
 b.Patch(state: int, id: int)                 a static patch for this element
 b.Set(state: int, prop: int, v: style.Value) one dynamic typed value
 b.SetText(state: int, prop: int, text: str)  one dynamic value parsed at run time

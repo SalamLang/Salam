@@ -13,7 +13,7 @@ scan() {
         {
             line = $0
             gsub(/&quot;/, "\"", line)
-            while (match(line, /[A-Za-z_\307-\377][^=:",\[]* *= *("-?[0-9.]+ ?(px|em|rem|%|vh|vw|vmin|vmax|ms|s|deg|pt|fr|ex|ch|cm|mm|in)"|"#[0-9a-fA-F]+")/)) {
+            while (match(line, /[^[:space:][:digit:]=:",[#.-][^=:",[]* *= *("-?[0-9.]+ ?(px|em|rem|%|vh|vw|vmin|vmax|ms|s|deg|pt|fr|ex|ch|cm|mm|in)"|"#[0-9a-fA-F]+")/)) {
                 hit = substr(line, RSTART, RLENGTH)
                 name = hit
                 sub(/ *=.*$/, "", name)

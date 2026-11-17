@@ -731,7 +731,7 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
         end
         av := g_lay_attrs.Get(ai)
         lay_check_native_attr(s, a, aid, ai, key)
-        if av.dest == LA_CSS or av.dest == LA_HTML_OR_CSS:
+        if av.dest == LA_CSS or (av.dest == LA_HTML_OR_CSS and style.PropByName(key) < 0):
             lay_warn_not_standard(s, a, aid, key)
         end
         if (av.dest == LA_CSS or pl > 0) and not e.styled:
@@ -1028,6 +1028,52 @@ func lay_is_handler(name: str): bool:
     ret lay_handler_prefix_len(name) > 0
 end
 
+func lay_state_name(name: str): bool:
+    mut rest := ""
+    st := style_state_prefix(name + " x", rest)
+    ret st != STYLE_STATE_BASE and str.Equals(rest, "x")
+end
+
+func lay_check_state_block(s &: Sema, a &: at.Ast, nid: int, name: str): bool:
+    mut rest := ""
+    if not lay_state_name(name):
+        ret false
+    end
+    mut holds := true
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        mut inner := ""
+        if k == at.AST_LAYOUT_ELEMENT:
+            if style_state_prefix(at.Get(a, cid).name + " x", rest) != STYLE_STATE_BASE:
+                inner = at.Get(a, cid).name
+            end
+        else k == at.AST_LAYOUT_ATTR:
+            mut r2 := ""
+            an := at.Get(a, cid).name
+            if style_state_prefix(an, r2) != STYLE_STATE_BASE:
+                inner = str.Replace(str.Substr(an, 0, str.Len(an) - str.Len(r2) - 1), "_", " ")
+            end
+        end
+        if str.Len(inner) > 0:
+            serr(
+                s, 231, span_of(a, cid), co.Format2(
+                    i18.Tr("state blocks cannot be nested: '%s' inside '%s'; write the state prefix on each attribute instead"),
+                    co.ArgStr(inner), co.ArgStr(name)
+                )
+            )
+        else k != at.AST_LAYOUT_ATTR and holds:
+            holds = false
+            serr(
+                s, 230, span_of(a, cid), co.Format1(
+                    i18.Tr("a '%s' block holds style attributes only; move elements and conditions out of it"), co.ArgStr(name)
+                )
+            )
+        end
+    end
+    ret true
+end
+
 func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     mut sib := Vector {} as Vector<int>
     defer sib.Free()
@@ -1042,6 +1088,9 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             continue
         end
         cn := at.Get(a, cid)
+        if not lay_is_component(ck, cn.name) and lay_check_state_block(s, a, cid, cn.name):
+            continue
+        end
         if lay_is_component(ck, cn.name):
             ck.stack.Push(0 - 1)
             lay_check_children(s, a, cid, ck)
@@ -1248,6 +1297,9 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             continue
         end
         cn := at.Get(a, cid)
+        if not lay_is_component(ck, cn.name) and lay_check_state_block(s, a, cid, cn.name):
+            continue
+        end
         if lay_is_slot_placeholder(cn.name):
             mut sn := lay_comp_slot_name(a, cid)
             has_slot_name_attr := lay_comp_has_slot_name_attr(a, cid)
@@ -1414,7 +1466,7 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             end
             _hnc := has_named_children
         end
-        if not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
+        if not lay_is_component(ck, cn.name) and not lay_state_name(cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
             if ck.unexpanded:
                 swarn(
                     s, 2, span_of(a, cid), co.Format1(

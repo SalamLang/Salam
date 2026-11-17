@@ -406,8 +406,7 @@ module.exports = grammar({
 
     _attribute_value: ($) => choice($._expression, $.value_list),
 
-    value_list: ($) =>
-      seq($._expression, repeat1(seq(COMMA, $._expression))),
+    value_list: ($) => seq($._expression, repeat1(seq(COMMA, $._expression))),
 
     _statement: ($) =>
       choice(
@@ -957,9 +956,7 @@ module.exports = grammar({
       ),
 
     color_literal: () =>
-      token(
-        prec(2, /#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})/),
-      ),
+      token(prec(2, /#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})/)),
 
     line_comment: () => token(seq("//", /[^\n]*/)),
 

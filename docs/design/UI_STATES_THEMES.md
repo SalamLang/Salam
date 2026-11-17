@@ -160,6 +160,36 @@ end
   name that condition. Container conditions are checked after layout; a
   crossing restyles the subtree and lays out again once.
 
+### State blocks
+
+A state can also be written as a block. It is an alias of the prefixed form:
+
+```salam
+button:
+    background = blue
+    hover:
+        background = navy
+        padding = 12
+    end
+    focus within:
+        border = 2, solid, red
+    end
+end
+```
+
+means `hover background = navy`, `hover padding = 12` and
+`focus within border = 2, solid, red`. Every state of the prefix table
+(`hover`, `focus`, `focus within`, `active`, `disabled`, `checked`, `invalid`,
+`placeholder`, `selection`, and the Persian names written with spaces) works as
+a block name. The parser rewrites the block into prefixed attributes, so the
+web sheet and the native state patches are the ones the prefixed form makes.
+Inside a conditional block the cascade stays base, conditional blocks in source
+order, then states.
+
+A state block holds style attributes only (E230) and does not nest (E231).
+`before` and `after` are not state blocks: they are web-only pseudo content, not
+part of the state table, and have no native meaning.
+
 ### Diagnostics
 
 | code | kind | message |
@@ -170,6 +200,8 @@ end
 | E175 | error | `an 'if' cannot hold style attributes together with elements; split it into two 'if' blocks` |
 | W176 | warning | `style 'if' condition is always true or always false` |
 | E177 | error | `no ancestor has group 'card'` |
+| E230 | error | `a 'hover' block holds style attributes only; move elements and conditions out of it` |
+| E231 | error | `state blocks cannot be nested: 'focus' inside 'hover'; write the state prefix on each attribute instead` |
 
 ### Implementation note
 

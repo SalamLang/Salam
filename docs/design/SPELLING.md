@@ -12,12 +12,12 @@ exact name is not defined is looked up under its other spelling.
 
 Only call positions are resolved, and only when the exact name is missing:
 
-| Call                     | Looked up as                               |
-| ------------------------ | ------------------------------------------ |
-| `pkg.parse_header(x)`    | `pkg.ParseHeader`                          |
-| `build_name()`           | `BuildName`, a function in scope           |
-| `value.add_item(3)`      | the method `AddItem` of the value's type  |
-| `pkg.ParseHeader(x)`     | `pkg.parse_header` if only that one exists |
+| Call                  | Looked up as                               |
+| --------------------- | ------------------------------------------ |
+| `pkg.parse_header(x)` | `pkg.ParseHeader`                          |
+| `build_name()`        | `BuildName`, a function in scope           |
+| `value.add_item(3)`   | the method `AddItem` of the value's type   |
+| `pkg.ParseHeader(x)`  | `pkg.parse_header` if only that one exists |
 
 The exact name always wins. If both `total` and `Total` exist, each call
 reaches the one it names. Builtins (`len`, `char_code`, `print`, ...) are never
@@ -41,11 +41,11 @@ function that really is defined that way, reports nothing.
 
 `--spelling=MODE` controls it:
 
-| Mode            | Effect                                              |
-| --------------- | --------------------------------------------------- |
-| `warn` (default) | W175, the call compiles                            |
-| `error`         | the same finding is E175                            |
-| `off`           | silent                                              |
+| Mode             | Effect                   |
+| ---------------- | ------------------------ |
+| `warn` (default) | W175, the call compiles  |
+| `error`          | the same finding is E175 |
+| `off`            | silent                   |
 
 ## Bootstrap order
 

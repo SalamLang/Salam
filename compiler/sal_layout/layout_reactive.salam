@@ -32,6 +32,9 @@ k_ln_rx_readonly := [
     "دربردارد", "رونوشت", "رونوشت عمیق", "پیوست"
 ]
 
+mut g_ln_rx_vars := Vector {} as Vector<int>
+mut g_ln_rx_wvars := Vector {} as Vector<int>
+
 struct LnReact:
     pub states: Vector<str> = Vector {}
     pub ids: Vector<str> = Vector {}
@@ -43,6 +46,11 @@ struct LnReact:
     pub dep_id: Vector<int> = Vector {}
     pub st_comps: Vector<int> = Vector {}
     pub tmpl: Vector<int> = Vector {}
+    pub st_vars: Vector<int> = Vector {}
+    pub vs_site: Vector<int> = Vector {}
+    pub vs_comp: Vector<int> = Vector {}
+    pub vs_mask: Vector<int> = Vector {}
+    pub unc: Vector<int> = Vector {}
 end
 
 func ln_rx_free(r &: LnReact):
@@ -56,6 +64,11 @@ func ln_rx_free(r &: LnReact):
     r.dep_id.Free()
     r.st_comps.Free()
     r.tmpl.Free()
+    r.st_vars.Free()
+    r.vs_site.Free()
+    r.vs_comp.Free()
+    r.vs_mask.Free()
+    r.unc.Free()
 end
 
 func ln_rx_has(v: Vector<str>, name: str): bool:
@@ -116,6 +129,11 @@ func ln_rx_scan(r &: LnReact, a &: at.Ast, nid: int, out &: Vector<int>):
         // Cross-target parity: webstate reconciliation and native keyed scopes must converge on key stability, update ordering, and cleanup guarantees.
         if ln_rx_has(r.states, n.name):
             ln_rx_add(out, ln_rx_id(r, n.name))
+        else str.StartsWith(n.name, "__salam_st_"):
+            vgi := str.Substr(n.name, 11, str.Len(n.name) - 11).ToInt()
+            if vgi >= 0:
+                ln_rx_add(g_ln_rx_vars, vgi)
+            end
         end
         ret
     end
@@ -235,6 +253,76 @@ func ln_rx_site(r &: LnReact, comp: int, deps: Vector<int>): int:
     ret id
 end
 
+func ln_rx_state_vars(r &: LnReact):
+    r.st_vars.Clear()
+    repeat g_lo_st_comp.Len() in gi:
+        if ln_rx_comp_has_state(r, g_lo_st_comp.Get(gi)) and (gi >= g_lo_st_kind.Len() or g_lo_st_kind.Get(gi) == LI_STATE):
+            r.st_vars.Push(gi)
+        end
+    end
+end
+
+func ln_rx_var_bit(gi: int): int:
+    mut idx := 0
+    repeat gi in j:
+        if g_lo_st_comp.Get(j) == g_lo_st_comp.Get(gi) and (j >= g_lo_st_kind.Len() or g_lo_st_kind.Get(j) == LI_STATE):
+            idx++
+        end
+    end
+    ret 1 << (idx % 62)
+end
+
+func ln_rx_vs_add(r &: LnReact, site: int, comp: int, mask: int):
+    repeat r.vs_site.Len() in i:
+        if r.vs_site.Get(i) == site and r.vs_comp.Get(i) == comp:
+            r.vs_mask.Set(i, r.vs_mask.Get(i) | mask)
+            ret
+        end
+    end
+    r.vs_site.Push(site)
+    r.vs_comp.Push(comp)
+    r.vs_mask.Push(mask)
+end
+
+func ln_rx_vars_split(vars: Vector<int>): bool:
+    each gi in vars:
+        if gi < g_lo_st_kind.Len() and g_lo_st_kind.Get(gi) == LI_RENDER:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_rx_site_vars(r &: LnReact, site: int, vars: Vector<int>):
+    each gi in vars:
+        if gi >= g_lo_st_comp.Len():
+            continue
+        end
+        k := gi < g_lo_st_kind.Len() ? g_lo_st_kind.Get(gi) : LI_STATE
+        if k == LI_STATE:
+            ln_rx_vs_add(r, site, g_lo_st_comp.Get(gi), ln_rx_var_bit(gi))
+        else k == LI_RENDER:
+            ln_rx_vs_add(r, site, g_lo_st_comp.Get(gi), 0 - 1)
+        end
+    end
+end
+
+func ln_rx_site_ids(r &: LnReact, site: int, deps: Vector<int>):
+    each d in deps:
+        r.dep_site.Push(site)
+        r.dep_id.Push(d)
+    end
+end
+
+func ln_rx_unc_add(r &: LnReact, deps: Vector<int>, vars: Vector<int>):
+    if r.unc.Len() == 0:
+        ret
+    end
+    site := r.unc.Get(r.unc.Len() - 1)
+    ln_rx_site_ids(r, site, deps)
+    ln_rx_site_vars(r, site, vars)
+end
+
 func ln_rx_words(r &: LnReact): int:
     w := (r.ids.Len() + LN_RX_BITS - 1) / LN_RX_BITS
     ret w < 1 ? 1 : w
@@ -290,6 +378,7 @@ func ln_rx_note(r &: LnReact, a &: at.Ast, target: int, locals: Vector<str>, ids
         gi := str.Substr(name, 11, str.Len(name) - 11).ToInt()
         if gi >= 0 and gi < g_lo_st_comp.Len() and (gi >= g_lo_st_kind.Len() or g_lo_st_kind.Get(gi) == LI_STATE):
             ln_rx_add(comps, g_lo_st_comp.Get(gi))
+            ln_rx_add(g_ln_rx_wvars, gi)
         end
         ret
     end
@@ -489,6 +578,7 @@ func ln_rx_block(r &: LnReact, a &: at.Ast, blk: int, locals0: Vector<str>):
         end
         mut ids := Vector {} as Vector<int>
         mut comps := Vector {} as Vector<int>
+        g_ln_rx_wvars.Clear()
         ln_rx_writes(r, a, sid, locals, ids, comps)
         each id in ids:
             if id < r.tmpl.Len():
@@ -496,9 +586,9 @@ func ln_rx_block(r &: LnReact, a &: at.Ast, blk: int, locals0: Vector<str>):
                 changed = true
             end
         end
-        each ci in comps:
-            repeat r.st_comps.Len() in k:
-                if r.st_comps.Get(k) == ci and r.ids.Len() + k < r.tmpl.Len():
+        each wg in g_ln_rx_wvars:
+            repeat r.st_vars.Len() in k:
+                if r.st_vars.Get(k) == wg and r.ids.Len() + k < r.tmpl.Len():
                     items.Push(at.Clone(a, r.tmpl.Get(r.ids.Len() + k)))
                     changed = true
                 end

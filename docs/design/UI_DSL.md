@@ -207,7 +207,7 @@ designed in `UI_BEHAVIOUR.md` (section 6).
 Any style attribute may carry one prefix: `hover`, `focus`, `focus within`,
 `active`, `disabled`, `checked`, `invalid`, `placeholder`, `selection`
 (`hover background = #ffeecc`). Screen size, dark mode, container size and
-state of attributes are written as `when` blocks (`UI_STATES_THEMES.md`,
+state of attributes are written as style `if` blocks (`UI_STATES_THEMES.md`,
 section 1); design tokens and themes are in section 2 of that file;
 `light dark(a, b)` colours work from the start. The standard components,
 accessibility and assets are in `UI_COMPONENTS.md`; navigation, forms and
@@ -231,8 +231,10 @@ A scope is a component instance, the page, or an element, `if` or `each` of
 the page block that reads state (`NATIVE_UI.md`, "Scopes"). "Re-run set"
 below means the scopes that execute their view code again.
 
-Status: R1 to R4 and R8 exist today and get tests. R5, R7, R9 and R10 exist
-in part. R6, R11 and R12 are new. Syntax that inference cannot express is
+Status: R1, R2, R4 and R8 exist today and get tests; R1 now holds inside
+components on the native target (the web target still re-runs a whole
+instance). R5, R7, R9 and R10 exist in part. R3, R6, R11 and R12 are new:
+R12 has `SALAM_UI_TRACE`. Syntax that inference cannot express is
 listed in "Open decisions" and is not implemented until the owner decides.
 
 ### R1. Fine grained, decided at compile time

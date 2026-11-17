@@ -195,7 +195,10 @@ Every layout test lives under `tests/{en,fa}/layout/`, split by subject:
 | `errors/`     | everything that must be rejected                            |
 
 A success test is a page build plus `// EXPECT:` substrings, with
-`// EXPECT-NOT:` for text that must not appear. A failure test is
+`// EXPECT-NOT:` for text that must not appear. A success `// EXPECT:` is
+matched only against the lines the page adds to the empty page's output, so
+the base stylesheet cannot satisfy it; `// EXPECT-BASE:` (Persian `انتظار پایه`)
+checks the whole output, for defaults such as `<html lang="en" dir="ltr">`. A failure test is
 `// EXPECT: E0xx` plus `// EXPECT-MSG:`. A `.salam` file left directly in
 `tests/{en,fa}/layout/` belongs to no subdirectory and so would never run;
 the runner reports that as a failure rather than skipping it. Run the lot, or

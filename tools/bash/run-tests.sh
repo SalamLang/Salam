@@ -589,13 +589,28 @@ EOF_LNOTS
             lbad=""
             lfirst=""
             if [ -f "$html" ]; then
+                novel="$html.novel"
+                if [ -f "$WORK/page_empty_$lang.html" ]; then
+                    grep -vxFf "$WORK/page_empty_$lang.html" "$html" >"$novel"
+                else
+                    : >"$novel"
+                    lmiss="(the empty baseline page failed to build)"
+                fi
+                while IFS= read -r want_txt; do
+                    [ -n "$want_txt" ] || continue
+                    [ -n "$lfirst" ] || lfirst="$want_txt"
+                    grep -qF -- "$want_txt" "$novel" || lmiss="$want_txt"
+                done <<EOF_LAYOUT
+$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+EOF_LAYOUT
                 while IFS= read -r want_txt; do
                     [ -n "$want_txt" ] || continue
                     [ -n "$lfirst" ] || lfirst="$want_txt"
                     grep -qF -- "$want_txt" "$html" || lmiss="$want_txt"
-                done <<EOF_LAYOUT
-$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-EOF_LAYOUT
+                done <<EOF_LAYOUT_BASE
+$(grep -oE '(EXPECT-BASE|انتظار پایه): .*' "$f" | sed -E 's/^(EXPECT-BASE|انتظار پایه): //' | tr -d '\r')
+EOF_LAYOUT_BASE
+                rm -f "$novel"
                 while IFS= read -r bad_txt; do
                     [ -n "$bad_txt" ] || continue
                     grep -qF -- "$bad_txt" "$html" && lbad="$bad_txt"
@@ -1495,6 +1510,11 @@ if want port; then
 fi
 
 if want page; then
+    printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
+    printf 'صفحه:\nپایان\n' >"$WORK/page_empty_fa.salam"
+    for lang in $LANGS; do
+        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
+    done
     for lang in $LANGS; do
         for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \
             tests/"$lang"/web_errors/*.salam; do

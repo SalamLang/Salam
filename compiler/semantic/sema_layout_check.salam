@@ -129,6 +129,15 @@ end
 
 func lay_localize_attr(a &: at.Ast, attr: int):
     name := at.Get(a, attr).name
+    sa := ResolveStyleAttr(name)
+    if sa.ok and not StyleAttrIsEvent(a, attr):
+        states := ["", "hover_", "focus_", "focus_within_", "active_", "disabled_", "checked_", "invalid_", "placeholder_", "selection_"]
+        canon := states[sa.state] + style.PropName(sa.prop)
+        if not str.Equals(canon, name):
+            at.SetName(a, attr, canon)
+        end
+        ret
+    end
     key := lay_attr_key_exact(name)
     if str.Len(key) > 0:
         if not str.Equals(key, name):
@@ -494,44 +503,92 @@ func lay_attr_value_is_quoted_string(a &: at.Ast, aid: int): bool:
         ret false
     end
     v := at.Get(a, vid)
-    ret v.kind == at.AST_LITERAL and v.value_kind == tok.TV_STRING
+    ret v.kind == at.AST_LITERAL and v.value_kind == tok.TV_STRING and not v.synthetic
 end
 
-func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str, sa: StyleAttr): bool:
-    vid := at.Get(a, aid).a
+func lay_size_token(t: str): bool:
+    ret css_is_dim(t, css_length_units()) or css_is_dim(t, "%") or (lay_is_float(t) and not str.Equals(t, ""))
+end
+
+func lay_quoted_size(text: str): bool:
+    vt := str.Trim(text)
+    if lay_size_token(vt):
+        ret true
+    end
+    mut parts := str.Fields(vt)
+    defer parts.Free()
+    repeat parts.Len() in qi:
+        if lay_size_token(str.Trim(parts.Get(qi))):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str, sa: StyleAttr, runtime: bool): bool:
+    mut vid := at.Get(a, aid).a
     if vid == 0:
         ret false
     end
     v := at.Get(a, vid)
-    if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) != 0:
-        ret false
-    end
-    if lay_list_runtime(s, a, vid) != 0:
-        ret false
-    end
-    text := StyleAttrText(a, vid)
-    if lay_attr_value_is_quoted_string(a, aid):
-        vt := str.Trim(text)
-        mut quoted_size := css_is_dim(vt, css_length_units()) or css_is_dim(vt, "%") or (lay_is_float(vt) and not str.Equals(vt, ""))
-        if not quoted_size:
-            mut parts := str.Fields(vt)
-            defer parts.Free()
-            repeat parts.Len() in qi:
-                qt := str.Trim(parts.Get(qi))
-                if css_is_dim(qt, css_length_units()) or css_is_dim(qt, "%") or (lay_is_float(qt) and not str.Equals(qt, "")):
-                    quoted_size = true
-                end
-            end
+    quoted := lay_attr_value_is_quoted_string(a, aid)
+    mut numtext := ""
+    mut skipfold := false
+    src_marks := StyleSourceHasFaMarks(a, vid)
+    if lay_native_target():
+        if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) != 0:
+            ret false
         end
-        if quoted_size:
-            serr(
-                s, 18, span_of(a, aid), co.Format2(
-                    i18.Tr("invalid value for '%s': write the size %s without quotes"), co.ArgStr(lay_attr_display(name)),
-                    co.ArgStr(text)
-                )
-            )
+        if lay_list_runtime(s, a, vid) != 0:
+            ret false
+        end
+    else:
+        if v.kind == at.AST_LITERAL and v.value_kind == tok.TV_STRING and StyleTextIsRuntime(v.value_str):
+            style_attr_remember_dyn(aid, sa.prop, sa.state)
             ret true
         end
+        if lay_list_runtime(s, a, vid) != 0:
+            if runtime:
+                style_attr_remember_dyn(aid, sa.prop, sa.state)
+            else:
+                _folded := lay_fold_attr(s, a, aid, 0 - 1, false)
+            end
+            ret true
+        end
+        if StyleNumText(a, vid, numtext):
+            skipfold = true
+        end
+        if not skipfold and not (v.kind == at.AST_BINARY and (v.op == tok.TK_PLUS or v.op == tok.TK_MINUS) and (style.Info(sa.prop).items & 2) != 0):
+            if not lay_fold_attr(s, a, aid, 0 - 1, runtime):
+                ret true
+            end
+            vid = at.Get(a, aid).a
+        end
+    end
+    mut text := StyleAttrTextFor(a, vid, sa.prop)
+    if skipfold:
+        text = numtext
+    end
+    if lay_native_target() and str.IndexOf(text, char_from_code(2)) >= 0:
+        ret true
+    end
+    if quoted and lay_quoted_size(text):
+        serr(
+            s, 18, span_of(a, aid), co.Format2(
+                i18.Tr("invalid value for '%s': write the size %s without quotes"), co.ArgStr(lay_attr_display(name)),
+                co.ArgStr(text)
+            )
+        )
+        ret true
+    end
+    if FilePack(s, at.Get(a, aid).src_file) != 2 and (src_marks or StyleTextHasFaMarks(text)):
+        serr(
+            s, 18, span_of(a, vid), co.Format3(
+                i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(name), co.ArgStr(text),
+                co.ArgStr(i18.Tr("a value written with English digits and marks (this is an English file)"))
+            )
+        )
+        ret true
     end
     mut val := style.Value {}
     if not style.Parse(sa.prop, text, val):
@@ -547,14 +604,16 @@ func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str,
     mut an := at.Get(a, aid)
     an.a = lit
     at.Put(a, aid, an)
-    style_attr_remember(aid, sa.prop, sa.state)
+    style_attr_remember(aid, sa.prop, sa.state, style.Css(sa.prop, val))
     ret true
 end
 
 func lay_warn_not_standard(s &: Sema, a &: at.Ast, aid: int, key: str):
     mut v := ""
-    _got := lay_attr_text(a, aid, v)
-    hint := StyleStandardHint(key, v)
+    if not lay_attr_text(a, aid, v):
+        ret
+    end
+    hint := StyleStandardHint(key, i18.LayoutValue(v))
     mut msg := ""
     if str.Len(hint) > 0:
         msg = co.Format2(
@@ -610,7 +669,10 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             continue
         end
         sa := ResolveStyleAttr(name)
-        if sa.ok and lay_check_style_attr(s, a, aid, ei, name, sa):
+        if sa.ok and not StyleAttrIsEvent(a, aid) and not StyleAttrIsIntrinsicSize(a, aid, ei, sa) and lay_check_style_attr(s, a, aid, ei, name, sa, ck.runtime):
+            if str.Len(StyleAttrCss(aid)) > 0:
+                decls.Push(name + "=" + StyleAttrCss(aid))
+            end
             continue
         end
         mut key := lay_attr_key(name)

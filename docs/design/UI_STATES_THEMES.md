@@ -67,6 +67,15 @@ attributes with elements is E175 (split it into two `if` blocks). Several
 type `bool`, or one of the environment conditions below, joined with `and`,
 `or`, `not`.
 
+A style condition must have no side effects. The compiler lowers a style
+`if` into one conditional value per attribute, so each attribute reads the
+condition by itself; a condition that changes state (`if next():`) could give
+different answers to different attributes of the same block. Keep it to
+reads of variables, comparisons and pure calls. Source order decides
+precedence: an `if` block overrides only attributes written before it, and an
+attribute written after the block replaces what the block set. An attribute
+that has no earlier value is simply not declared while the condition is false.
+
 | condition | true when |
 | --- | --- |
 | any `bool` expression (`it == value`, `open`, `count > 3`) | the expression is true; it is reactive: a write to a name it reads re-evaluates it and nothing else (R1 and R3 of `UI_DSL.md`) |

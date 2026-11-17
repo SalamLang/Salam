@@ -269,6 +269,7 @@ func main:
     router.Get(r, "/projects", list_projects)
     router.Post(r, "/projects", create_project)
     router.Patch(r, "/projects/:id", update_project)
+    router.Patch(r, "/projects/:id/defaults", project_defaults)
     router.Delete(r, "/projects/:id", delete_project)
     router.Get(r, "/chats/:id", get_chat)
     router.Get(r, "/capabilities", capabilities)
@@ -306,7 +307,7 @@ func main:
     aicloud.Routes(r)
     ailogin.Routes(r)
     aispeech.Routes(r)
-    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/me/master", "/chats", "/chats/:id", "/chats/:id/project", "/projects", "/projects/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/chats/:id/shares", "/chats/:id/shares/:kind", "/chats/:id/shares/:kind/regenerate", "/shares/:token", "/shares/:token/messages", "/capabilities", "/chats/:id/files/:fid", "/chats/:id/calls/:cid/image"]:
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/me/master", "/chats", "/chats/:id", "/chats/:id/project", "/projects", "/projects/:id", "/projects/:id/defaults", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/chats/:id/shares", "/chats/:id/shares/:kind", "/chats/:id/shares/:kind/regenerate", "/shares/:token", "/shares/:token/messages", "/capabilities", "/chats/:id/files/:fid", "/chats/:id/calls/:cid/image"]:
         router.Options(r, path, preflight)
     end
     mut s := http.NewServer(port)
@@ -537,6 +538,9 @@ func me(ctx: i64):
     end
     aistore.Finish(rows)
     aistore.Unlock()
+    if str.EndsWith(out, "}"):
+        out = out.Substr(0, out.Len() - 1) + `, "general": ` + (aiweb.GeneralMode(i64s(uid)) ? "true" : "false") + "}"
+    end
     reply(ctx, 200, `{"user": ` + out + "}")
 end
 
@@ -626,6 +630,20 @@ func with_project(obj: str, project: str): str:
     ret obj.Substr(0, obj.Len() - 1) + `, "project_id": ` + json.Str(project) + "}"
 end
 
+func agent_mode(v: str): str:
+    if v == "auto" or v == "readonly" or v == "everything":
+        ret v
+    end
+    ret "ask"
+end
+
+func with_lang(obj: str, any_lang: str): str:
+    if any_lang != "1" or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    ret obj.Substr(0, obj.Len() - 1) + `, "any_lang": true}`
+end
+
 func with_extra(obj: str, extra: str): str:
     if extra.Len() == 0 or not str.EndsWith(obj, "}"):
         ret obj
@@ -684,7 +702,7 @@ func bool_flag(v: bool): str:
     ret "0"
 end
 
-func project_json(id: str, name: str, desc: str, color: str, emoji: str, pinned: str, created: str, updated: str, chats: str, live: str, last: str, path: str, master: str): str:
+func project_json(id: str, name: str, desc: str, color: str, emoji: str, pinned: str, created: str, updated: str, chats: str, live: str, last: str, path: str, master: str, mode: str, any_lang: str): str:
     mut m := Vector {} as Vector<str>
     m.Push(json.Member("id", id))
     m.Push(json.Member("name", name))
@@ -699,6 +717,8 @@ func project_json(id: str, name: str, desc: str, color: str, emoji: str, pinned:
     m.Push(json.MemberRaw("last", last.Len() > 0 ? last : "0"))
     m.Push(json.Member("path", path))
     m.Push(json.Member("master_prompt", master))
+    m.Push(json.Member("agent_mode", mode))
+    m.Push(json.MemberBool("any_lang", any_lang == "1"))
     ret json.Object(m)
 end
 
@@ -770,10 +790,10 @@ func list_chats(ctx: i64):
         args.Push(filter)
     end
     aistore.Lock()
-    sql := "SELECT id, title, updated, device_id, workspace, cloud, " + "COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), ''), " + "COALESCE((SELECT COUNT(*) FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' AND m.status = 'pending'), 0), " + "COALESCE((SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(activity, '\"kind\":\"', -1), '\"', 1) FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' AND m.status = 'pending' ORDER BY id DESC LIMIT 1), ''), " + "COALESCE((SELECT COUNT(*) FROM chat_queue q WHERE q.chat_id = chats.id), 0), " + "COALESCE((SELECT COUNT(*) FROM bridge_calls b WHERE b.chat_id = chats.id AND b.state = 'pending'), 0), " + "COALESCE((SELECT status FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' ORDER BY id DESC LIMIT 1), ''), " + "project_id, extra_path " + "FROM chats WHERE " + where + " ORDER BY updated DESC LIMIT 200"
+    sql := "SELECT id, title, updated, device_id, workspace, cloud, " + "COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), ''), " + "COALESCE((SELECT COUNT(*) FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' AND m.status = 'pending'), 0), " + "COALESCE((SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(activity, '\"kind\":\"', -1), '\"', 1) FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' AND m.status = 'pending' ORDER BY id DESC LIMIT 1), ''), " + "COALESCE((SELECT COUNT(*) FROM chat_queue q WHERE q.chat_id = chats.id), 0), " + "COALESCE((SELECT COUNT(*) FROM bridge_calls b WHERE b.chat_id = chats.id AND b.state = 'pending'), 0), " + "COALESCE((SELECT status FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' ORDER BY id DESC LIMIT 1), ''), " + "project_id, extra_path, any_lang " + "FROM chats WHERE " + where + " ORDER BY updated DESC LIMIT 200"
     mut rows := aistore.Stmt(sql, args)
     until aistore.Next(rows):
-        mut item := with_extra(with_project(with_shared(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)), aistore.Text(rows, 6)), aistore.Text(rows, 12)), aistore.Text(rows, 13))
+        mut item := with_lang(with_extra(with_project(with_shared(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)), aistore.Text(rows, 6)), aistore.Text(rows, 12)), aistore.Text(rows, 13)), aistore.Text(rows, 14))
         item = with_chat_state(item, aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 3), aistore.Text(rows, 11))
         items.Push(item)
     end
@@ -826,6 +846,16 @@ func create_chat(ctx: i64):
     else:
         device = "0"
     end
+    mut any_lang := "0"
+    if aiweb.GeneralMode(i64s(uid)):
+        if project.Len() > 0:
+            aistore.Lock()
+            any_lang = aistore.OneText("SELECT any_lang FROM projects WHERE id = ?1", one(project))
+            aistore.Unlock()
+        else json.Get(body, "any_lang") == "true":
+            any_lang = "1"
+        end
+    end
     mut cloud := "0"
     if device == "0" and json.Get(body, "cloud") == "true":
         if not aicloud.Enabled():
@@ -850,14 +880,15 @@ func create_chat(ctx: i64):
     a.Push(aiweb.ClientBrowserLabel(ctx))
     a.Push(aiweb.ClientVersion(ctx))
     a.Push(aiweb.ClientArch(ctx))
+    a.Push(any_lang)
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud, project_id, extra_path, source, client_os, client_browser, client_version, client_arch) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)", a)
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud, project_id, extra_path, source, client_os, client_browser, client_version, client_arch, any_lang) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)", a)
     aistore.Unlock()
     if not ok:
         fail(ctx, 500, "server", "ساخت گفت‌وگو ناموفق بود.")
         ret
     end
-    reply(ctx, 201, `{"chat": ` + with_extra(with_project(chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace, cloud), project), extra) + "}")
+    reply(ctx, 201, `{"chat": ` + with_lang(with_extra(with_project(chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace, cloud), project), extra), any_lang) + "}")
 end
 
 func sync_pending(id: str, sid: str):
@@ -966,9 +997,9 @@ func get_chat(ctx: i64):
     mut items := Vector {} as Vector<str>
     mut head := ""
     aistore.Lock()
-    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud, COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), ''), project_id, extra_path FROM chats WHERE id = ?1", one(id))
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud, COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), ''), project_id, extra_path, any_lang FROM chats WHERE id = ?1", one(id))
     if aistore.Next(crow):
-        head = with_extra(with_project(with_shared(chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5)), aistore.Text(crow, 6)), aistore.Text(crow, 7)), aistore.Text(crow, 8))
+        head = with_lang(with_extra(with_project(with_shared(chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5)), aistore.Text(crow, 6)), aistore.Text(crow, 7)), aistore.Text(crow, 8)), aistore.Text(crow, 9))
     end
     aistore.Finish(crow)
     mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms, effort, guest FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
@@ -1045,6 +1076,20 @@ func rename_chat(ctx: i64):
         aistore.Lock()
         _x := aistore.Run("UPDATE chats SET extra_path = ?1 WHERE id = ?2 AND user_id = ?3", three(extra, id, i64s(uid)))
         aistore.Unlock()
+    end
+    if json.Has(body, "any_lang"):
+        if own_chat(uid, id).Len() == 0:
+            fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+            ret
+        end
+        flag := (json.Get(body, "any_lang") == "true" and aiweb.GeneralMode(i64s(uid))) ? "1" : "0"
+        aistore.Lock()
+        _g := aistore.Run("UPDATE chats SET any_lang = ?1 WHERE id = ?2 AND user_id = ?3", three(flag, id, i64s(uid)))
+        aistore.Unlock()
+        if not json.Has(body, "title"):
+            reply(ctx, 200, `{"ok": true, "any_lang": ` + (flag == "1" ? "true" : "false") + "}")
+            ret
+        end
     end
     if not json.Has(body, "title"):
         reply(ctx, 200, `{"ok": true, "extra_path": ` + json.Str(extra) + "}")
@@ -1142,10 +1187,10 @@ func list_projects(ctx: i64):
     end
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    sql := "SELECT p.id, p.name, p.description, p.color, p.emoji, p.pinned, p.created, p.updated, " + "(SELECT COUNT(*) FROM chats c WHERE c.project_id = p.id), " + "(SELECT COUNT(*) FROM chats c JOIN messages m ON m.chat_id = c.id AND m.role = 'assistant' AND m.status = 'pending' WHERE c.project_id = p.id), " + "COALESCE((SELECT MAX(c.updated) FROM chats c WHERE c.project_id = p.id), p.updated), p.path, COALESCE(p.master_prompt, '') " + "FROM projects p WHERE p.user_id = ?1 AND p.archived = 0 ORDER BY p.pinned DESC, COALESCE((SELECT MAX(c.updated) FROM chats c WHERE c.project_id = p.id), p.updated) DESC LIMIT 200"
+    sql := "SELECT p.id, p.name, p.description, p.color, p.emoji, p.pinned, p.created, p.updated, " + "(SELECT COUNT(*) FROM chats c WHERE c.project_id = p.id), " + "(SELECT COUNT(*) FROM chats c JOIN messages m ON m.chat_id = c.id AND m.role = 'assistant' AND m.status = 'pending' WHERE c.project_id = p.id), " + "COALESCE((SELECT MAX(c.updated) FROM chats c WHERE c.project_id = p.id), p.updated), p.path, COALESCE(p.master_prompt, ''), p.agent_mode, p.any_lang " + "FROM projects p WHERE p.user_id = ?1 AND p.archived = 0 ORDER BY p.pinned DESC, COALESCE((SELECT MAX(c.updated) FROM chats c WHERE c.project_id = p.id), p.updated) DESC LIMIT 200"
     mut rows := aistore.Stmt(sql, one(i64s(uid)))
     until aistore.Next(rows):
-        items.Push(project_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6), aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 11), aistore.Text(rows, 12)))
+        items.Push(project_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6), aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 11), aistore.Text(rows, 12), aistore.Text(rows, 13), aistore.Text(rows, 14)))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -1175,6 +1220,8 @@ func create_project(ctx: i64):
         end
     end
     master := aimaster.Project(json.Get(body, "master_prompt"))
+    mode := agent_mode(json.Get(body, "agent_mode"))
+    any_lang := (json.Get(body, "any_lang") == "true" and aiweb.GeneralMode(i64s(uid))) ? "1" : "0"
     id := crypto.RandomHex(12)
     t := i64s(aistore.Now())
     mut a := four(id, i64s(uid), name, desc)
@@ -1184,14 +1231,16 @@ func create_project(ctx: i64):
     a.Push(t)
     a.Push(path)
     a.Push(master)
+    a.Push(mode)
+    a.Push(any_lang)
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO projects (id, user_id, name, description, color, emoji, created, updated, path, master_prompt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)", a)
+    ok := aistore.Run("INSERT INTO projects (id, user_id, name, description, color, emoji, created, updated, path, master_prompt, agent_mode, any_lang) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)", a)
     aistore.Unlock()
     if not ok:
         fail(ctx, 500, "server", "ساخت پروژه ناموفق بود.")
         ret
     end
-    reply(ctx, 201, `{"project": ` + project_json(id, name, desc, color, emoji, "0", t, t, "0", "0", t, path, master) + "}")
+    reply(ctx, 201, `{"project": ` + project_json(id, name, desc, color, emoji, "0", t, t, "0", "0", t, path, master, mode, any_lang) + "}")
 end
 
 func update_project(ctx: i64):
@@ -1218,7 +1267,15 @@ func update_project(ctx: i64):
     created := aistore.OneText("SELECT created FROM projects WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
     old := aistore.OneText("SELECT path FROM projects WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
     mut master := aistore.OneText("SELECT COALESCE(master_prompt, '') FROM projects WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
+    mut mode := aistore.OneText("SELECT agent_mode FROM projects WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
+    mut any_lang := aistore.OneText("SELECT any_lang FROM projects WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
     aistore.Unlock()
+    if has_field(body, "agent_mode"):
+        mode = agent_mode(json.Get(body, "agent_mode"))
+    end
+    if has_field(body, "any_lang"):
+        any_lang = (json.Get(body, "any_lang") == "true" and aiweb.GeneralMode(i64s(uid))) ? "1" : "0"
+    end
     sent_master := has_field(body, "master_prompt")
     if sent_master:
         master = aimaster.Project(json.Get(body, "master_prompt"))
@@ -1244,18 +1301,43 @@ func update_project(ctx: i64):
     a.Push(id)
     a.Push(i64s(uid))
     a.Push(bool_flag(sent_master))
+    a.Push(mode)
+    a.Push(any_lang)
     aistore.Lock()
     if path != old and project_running(id):
         aistore.Unlock()
         fail(ctx, 409, "path_locked", PATH_LOCKED)
         ret
     end
-    _u := aistore.Run("UPDATE projects SET name = ?1, description = ?2, color = ?3, emoji = ?4, updated = ?5, path = ?6, master_prompt = CASE WHEN ?10 = '1' THEN ?7 ELSE master_prompt END WHERE id = ?8 AND user_id = ?9", a)
+    _u := aistore.Run("UPDATE projects SET name = ?1, description = ?2, color = ?3, emoji = ?4, updated = ?5, path = ?6, master_prompt = CASE WHEN ?10 = '1' THEN ?7 ELSE master_prompt END, agent_mode = ?11, any_lang = ?12 WHERE id = ?8 AND user_id = ?9", a)
     if path != old:
         _w := aistore.Run("UPDATE chats SET workspace = ?1 WHERE project_id = ?2 AND user_id = ?3 AND device_id <> 0", three(path, id, i64s(uid)))
     end
     aistore.Unlock()
-    reply(ctx, 200, `{"project": ` + project_json(id, name, desc, color, emoji, "0", created, t, "0", "0", t, path, master) + "}")
+    reply(ctx, 200, `{"project": ` + project_json(id, name, desc, color, emoji, "0", created, t, "0", "0", t, path, master, mode, any_lang) + "}")
+end
+
+func project_defaults(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if not project_owned(uid, id):
+        fail(ctx, 404, "not_found", "این پروژه پیدا نشد.")
+        ret
+    end
+    body := http.Body(ctx)
+    flag := (json.Get(body, "any_lang") == "true" and aiweb.GeneralMode(i64s(uid))) ? "1" : "0"
+    aistore.Lock()
+    if has_field(body, "agent_mode"):
+        _m := aistore.Run("UPDATE projects SET agent_mode = ?1 WHERE id = ?2 AND user_id = ?3", three(agent_mode(json.Get(body, "agent_mode")), id, i64s(uid)))
+    end
+    if has_field(body, "any_lang"):
+        _l := aistore.Run("UPDATE projects SET any_lang = ?1 WHERE id = ?2 AND user_id = ?3", three(flag, id, i64s(uid)))
+    end
+    aistore.Unlock()
+    reply(ctx, 200, `{"ok": true}`)
 end
 
 func delete_project(ctx: i64):
@@ -1479,7 +1561,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         ret false
     end
     recall := fresh ? aimemory.Recall(i64s(uid), id) : ""
-    free := aiweb.GeneralMode(i64s(uid))
+    free := aiweb.ChatGeneral(id)
     mut free_system := ""
     if free:
         free_system = aipolicy.GeneralSystem(aiweb.OperatorText(i64s(uid)))

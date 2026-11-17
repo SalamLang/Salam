@@ -15,9 +15,12 @@
 package main
 
 import os
+import os.shell
 import str
 
 const VERSION_FILE := "VERSION"
+const README_FILE := "README.md"
+const RELEASES_REPO := "SalamLang/Salam"
 
 struct Site:
     pub path: str = ""
@@ -191,12 +194,89 @@ func sync_all(want: str): int:
     ret changed
 end
 
+func readme_sites(): Vector<Site>:
+    mut v := Vector {} as Vector<Site>
+    v.Push(Site { path = README_FILE, prefix = "--dir ./bin --version ", suffix = "`" })
+    v.Push(Site { path = README_FILE, prefix = "`irm ... ", suffix = " | iex`" })
+    v.Push(Site { path = README_FILE, prefix = "that \"", suffix = "\" is parsed" })
+    v.Push(Site { path = README_FILE, prefix = "Tools\\Salam --version ", suffix = "\"" })
+    v.Push(Site { path = README_FILE, prefix = "SALAM_VERSION = \"", suffix = "\"" })
+    v.Push(Site { path = README_FILE, prefix = ".bat\" --version ", suffix = "\n" })
+    v.Push(Site { path = README_FILE, prefix = "--build-arg SALAM_VERSION=", suffix = " docker" })
+    ret v
+end
+
+func latest_release(): str:
+    mut args := Vector {} as Vector<str>
+    defer args.Free()
+    args.Push("api")
+    args.Push("repos/" + RELEASES_REPO + "/releases?per_page=50")
+    args.Push("--jq")
+    args.Push("[.[] | select(.prerelease == false and .draft == false and (.tag_name | test(\"^v[0-9]+[.][0-9]+[.][0-9]+$\")))][0].tag_name")
+    r := shell.Run("gh", args)
+    if r.code != 0:
+        println "error: could not ask GitHub for the latest release:", str.Trim(r.err)
+        ret ""
+    end
+    tag := str.Trim(r.out)
+    if tag.Len() < 2 or tag.Substr(0, 1) != "v":
+        println "error: no published release found"
+        ret ""
+    end
+    ret tag.Substr(1, tag.Len() - 1)
+end
+
+func readme_check(): int:
+    mut first := ""
+    mut bad := 0
+    all := readme_sites()
+    defer all.Free()
+    each site in all:
+        body := os.ReadFile(site.path)
+        got := read_at(body, site.prefix, site.suffix)
+        if got.Len() == 0:
+            println "  NO ANCHOR     ", site.path, "- expected", site.prefix
+            bad++
+        else:
+            if first.Len() == 0: first = got end
+            if got != first:
+                println "  MISMATCH      ", site.path, "- has", got, "but the others have", first
+                bad++
+            end
+        end
+    end
+    ret bad
+end
+
+func readme_sync(want: str): int:
+    mut changed := 0
+    all := readme_sites()
+    defer all.Free()
+    each site in all:
+        body := os.ReadFile(site.path)
+        got := read_at(body, site.prefix, site.suffix)
+        if got.Len() == 0:
+            println "  NO ANCHOR     ", site.path, "- expected", site.prefix
+        else:
+            if got != want:
+                _n := os.WriteFile(site.path, write_at(body, site.prefix, site.suffix, want))
+                println "  updated       ", site.path, got, "->", want
+                changed++
+            end
+        end
+    end
+    ret changed
+end
+
 func usage():
     println "usage: salam run tools/salam/update-version.salam <new-version|sync|check>"
     println ""
     println "  <new-version>  write it to VERSION, then update every other site"
     println "  sync           leave VERSION alone, bring the other sites to it"
     println "  check          report disagreements and exit 1; changes nothing"
+    println "  readme [x.y.z] write the latest released version into the README examples;"
+    println "                 without a version it asks GitHub for the newest published release,"
+    println "                 never the upcoming one in VERSION"
 end
 
 func main:
@@ -213,7 +293,9 @@ func main:
         want := read_version_file()
         println "checking every version site against", VERSION_FILE, "=", want
         println ""
-        bad := check_all(want)
+        mut bad := check_all(want)
+        println "checking that the README examples agree with each other (they follow the last release, not VERSION)"
+        bad += readme_check()
         println ""
         if bad == 0:
             println "all version sites agree on", want
@@ -222,6 +304,25 @@ func main:
         println bad, "site(s) disagree with", VERSION_FILE
         println "run: salam run tools/salam/update-version.salam sync"
         ret 1
+    end
+
+    if mode == "readme":
+        mut want := ""
+        if args.Len() > 2:
+            want = args.Get(2)
+        else:
+            want = latest_release()
+        end
+        if is_valid_version(want) == false:
+            println "error: no usable release version for the README"
+            ret 1
+        end
+        println "README examples -> latest released version", want
+        println ""
+        changed := readme_sync(want)
+        println ""
+        println changed, "place(s) updated"
+        ret 0
     end
 
     if mode == "sync" or mode == "--sync":

@@ -2461,7 +2461,7 @@ Vocabulary in short:
 
 - Container: `layout = column|row|grid|stack|flow` (default `column`), `gap`,
   `align` (cross axis), `justify` (main axis: `start center end between around
-  evenly`), `wrap`, `reverse`, `columns`/`rows` (`200, 1fr`,
+evenly`), `wrap`, `reverse`, `columns`/`rows` (`200, 1fr`,
   `repeat(fill, minmax(140, 1fr))`), `auto flow`.
 - Child: `grow`, `shrink`, `basis`, `align self`, `column`, `row`, `column span`,
   `row span`, `order`, `position = absolute`, `top`/`start`/`end`/`bottom`, `layer`.

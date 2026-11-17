@@ -246,8 +246,12 @@ export function savedMode(chat: string): AgentMode {
   return m === "auto" || m === "readonly" || m === "everything" ? m : "ask";
 }
 
+export function hasSavedMode(chat: string): boolean {
+  return read(MODE_KEY + chat) !== "";
+}
+
 export function saveMode(chat: string, mode: AgentMode) {
-  write(MODE_KEY + chat, mode === "ask" ? "" : mode);
+  write(MODE_KEY + chat, mode);
 }
 
 export function savedWorkspace(): string {
@@ -290,10 +294,7 @@ async function fetchLatestAgentVersion(): Promise<string | null> {
     const raw = localStorage.getItem(LATEST_CACHE_KEY);
     if (raw) {
       const cached = JSON.parse(raw) as { version: string; checkedAt: number };
-      if (
-        cached.version &&
-        Date.now() - cached.checkedAt < LATEST_CACHE_TTL
-      ) {
+      if (cached.version && Date.now() - cached.checkedAt < LATEST_CACHE_TTL) {
         return cached.version;
       }
     }
@@ -335,7 +336,9 @@ function agentDownloadUrl(
   if (os === "macos") return `${base}macos-universal.dmg`;
   if (os === "linux") {
     const a = agentAssetArch(arch);
-    return a === "i686" ? `${base}linux-i686.tar.gz` : `${base}linux-${a}.AppImage`;
+    return a === "i686"
+      ? `${base}linux-i686.tar.gz`
+      : `${base}linux-${a}.AppImage`;
   }
   return null;
 }

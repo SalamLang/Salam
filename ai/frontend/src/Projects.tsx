@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Chat, Project, ProjectInput } from "./api";
+import { Checkbox } from "./Checkbox";
 import { confirmDialog } from "./Confirm";
 import { fmtDate, fmtNum } from "./format";
 import { t } from "./i18n";
@@ -83,17 +84,19 @@ type DialogProps = {
   project: Project | null;
   busy?: boolean;
   running?: boolean;
+  general?: boolean;
   onSave: (input: ProjectInput) => void;
   onClose: () => void;
 };
 
-export function ProjectDialog({ project, busy, running, onSave, onClose }: DialogProps) {
+export function ProjectDialog({ project, busy, running, general, onSave, onClose }: DialogProps) {
   const [name, setName] = useState(project?.name ?? "");
   const [description, setDescription] = useState(project?.description ?? "");
   const [master, setMaster] = useState(project?.master_prompt ?? "");
   const [color, setColor] = useState(project?.color || PROJECT_COLORS[0]);
   const [emoji, setEmoji] = useState(project?.emoji ?? "");
   const [path, setPath] = useState(project?.path ?? "");
+  const [anyLang, setAnyLang] = useState(project?.any_lang === true);
   const [pathError, setPathError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
   // Keep the latest onClose without re-running the mount effect below: the
@@ -125,6 +128,7 @@ export function ProjectDialog({ project, busy, running, onSave, onClose }: Dialo
     if (!trimmed || busy || needsPath) return;
     const input: ProjectInput = { name: trimmed, description: description.trim(), master_prompt: master.trim(), color, emoji };
     if (path !== (project?.path ?? "")) input.path = path;
+    if (general) input.any_lang = anyLang;
     onSave(input);
   };
   const pickPath = async () => {
@@ -247,6 +251,14 @@ export function ProjectDialog({ project, busy, running, onSave, onClose }: Dialo
           )}
           {pathError && <small className="error">{pathError}</small>}
         </div>
+        {general && (
+          <Checkbox
+            checked={anyLang}
+            onChange={setAnyLang}
+            label={t("اجازه‌ی نوشتن به زبان‌های دیگر", "Allow other languages than Salam")}
+            hint={t("پیش‌فرض خاموش است و فقط سلام نوشته می‌شود. گفت‌وگوهای تازه‌ی این پروژه همین را به ارث می‌برند.", "Off by default: only Salam is written. New chats in this project inherit it.")}
+          />
+        )}
         <label className="field">
           <span>{t("پرامپت اصلی پروژه", "Project master prompt")}</span>
           <MasterField

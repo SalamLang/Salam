@@ -35,6 +35,9 @@ function check(name, ok, detail) {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
   await page.goto("file://" + path.resolve(file));
   await page.waitForTimeout(100);
   const text = (sel) => page.$eval(sel, (e) => e.textContent).catch(() => null);

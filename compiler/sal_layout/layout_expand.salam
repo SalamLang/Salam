@@ -1305,6 +1305,9 @@ func expand_component(
         if bi < nsynth:
             kind = LI_RENDER
         end
+        if kind == LI_DERIVED and not web and g_lo_native_scopes and lo_memo_ok(a, sd.a, fr, ci):
+            kind = LI_MEMO
+        end
         if kind == LI_DERIVED:
             frame_set(fr, sd.name, subst_value(a, sd.a, fr))
             fr.derived.Push(sd.name)
@@ -1495,6 +1498,92 @@ func lo_state_type(a &: at.Ast, comp_def: int, init: int, lit &: str): int:
     ret 0
 end
 
+func lo_memo_type(a &: at.Ast, nid: int, fr &: LoFrame, ci: int, reads &: int): str:
+    if nid == 0:
+        ret ""
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_INT:
+            ret "int"
+        end
+        if n.value_kind == tok.TV_FLOAT:
+            ret "f64"
+        end
+        if n.value_kind == tok.TV_BOOL:
+            ret "bool"
+        end
+        if n.value_kind == tok.TV_STRING and str.IndexOf(n.value_str, "{") < 0:
+            ret "str"
+        end
+        ret ""
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        mut found := false
+        bound := frame_lookup(fr, n.name, found)
+        if not found or bound == 0:
+            ret ""
+        end
+        b := at.Get(a, bound)
+        if b.kind != at.AST_INDEX or not b.synthetic or b.a == 0 or b.b == 0:
+            ret ""
+        end
+        ia := at.Get(a, b.a)
+        ib := at.Get(a, b.b)
+        if not str.Equals(ib.name, "__salam_k_" + co.U64Toa(ci as u64)) or not str.StartsWith(ia.name, "__salam_st_"):
+            ret ""
+        end
+        gi := str.Substr(ia.name, 11, str.Len(ia.name) - 11).ToInt()
+        if gi < 0 or gi >= g_lo_st_kind.Len() or gi >= g_lo_st_lit.Len():
+            ret ""
+        end
+        k := g_lo_st_kind.Get(gi)
+        if k != LI_STATE and k != LI_MEMO:
+            ret ""
+        end
+        reads++
+        ret g_lo_st_lit.Get(gi)
+    end
+    if n.kind == at.AST_UNARY:
+        t := lo_memo_type(a, n.a, fr, ci, reads)
+        if str.Len(t) == 0:
+            ret ""
+        end
+        if n.op == tok.TK_NOT:
+            ret "bool"
+        end
+        ret t
+    end
+    if n.kind == at.AST_BINARY:
+        l := lo_memo_type(a, n.a, fr, ci, reads)
+        r := lo_memo_type(a, n.b, fr, ci, reads)
+        if str.Len(l) == 0 or str.Len(r) == 0:
+            ret ""
+        end
+        if n.op >= tok.TK_EQ and n.op <= tok.TK_OR:
+            ret "bool"
+        end
+        if str.Equals(l, "str") or str.Equals(r, "str"):
+            ret "str"
+        end
+        if str.Equals(l, "f64") or str.Equals(r, "f64"):
+            ret "f64"
+        end
+        ret l
+    end
+    ret ""
+end
+
+func lo_memo_ok(a &: at.Ast, vid: int, fr &: LoFrame, ci: int): bool:
+    mut reads := 0
+    t := lo_memo_type(a, vid, fr, ci, reads)
+    if str.Len(t) == 0 or reads == 0:
+        ret false
+    end
+    g_lo_memo_lit = t
+    ret true
+end
+
 func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind: int): int:
     mut seen := 0
     repeat g_lo_st_comp.Len() in i:
@@ -1507,7 +1596,12 @@ func lo_state_index(ex &: LoExpand, a &: at.Ast, ci: int, j: int, sid: int, kind
     end
     sd := at.Get(a, sid)
     mut lit := ""
-    ty := lo_state_type(a, ex.comp_def.Get(ci), sd.a, lit)
+    mut ty := 0
+    if kind == LI_MEMO:
+        lit = g_lo_memo_lit
+    else:
+        ty = lo_state_type(a, ex.comp_def.Get(ci), sd.a, lit)
+    end
     if ty == 0 and str.Len(lit) == 0:
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(

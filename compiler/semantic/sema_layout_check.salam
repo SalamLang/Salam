@@ -525,15 +525,61 @@ func lay_quoted_size(text: str): bool:
     ret false
 end
 
+func lay_has_empty_fallback(a &: at.Ast, nid: int): bool:
+    if nid != 0 and at.KindOf(a, nid) == at.AST_LITERAL:
+        w := at.Get(a, nid)
+        ret w.synthetic and w.value_kind == tok.TV_STRING and str.Len(w.value_str) == 0
+    end
+    if nid == 0 or at.KindOf(a, nid) != at.AST_TERNARY:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.c != 0 and at.KindOf(a, n.c) == at.AST_LITERAL:
+        l := at.Get(a, n.c)
+        if l.synthetic and l.value_kind == tok.TV_STRING and str.Len(l.value_str) == 0:
+            ret true
+        end
+    end
+    ret lay_has_empty_fallback(a, n.b) or lay_has_empty_fallback(a, n.c)
+end
+
+func lay_text_branch(s &: Sema, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret nid
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_TERNARY:
+        mut m := n
+        m.b = lay_text_branch(s, a, n.b)
+        m.c = lay_text_branch(s, a, n.c)
+        at.Put(a, nid, m)
+        ret nid
+    end
+    if n.kind == at.AST_IDENTIFIER and scope_lookup(s, s.cur, n.name) <= 0 and lay_const_sym(s, n.name) == 0:
+        ret lay_mk_literal(a, nid, LayVal { kind = LV_STR, s = n.name })
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_INT:
+        ret lay_mk_literal(a, nid, LayVal { kind = LV_STR, s = co.U64Toa(n.value_int) + LayoutNumUnit(n.name) })
+    end
+    if n.kind == at.AST_LITERAL and n.op == tok.TK_FLOAT:
+        ret lay_mk_literal(a, nid, LayVal { kind = LV_STR, s = co.Format1("%g", co.ArgFloat(n.value_float)) + LayoutNumUnit(n.name) })
+    end
+    ret nid
+end
+
 func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str, sa: StyleAttr, runtime: bool): bool:
     mut vid := at.Get(a, aid).a
     if vid == 0:
         ret false
     end
+    if lay_has_empty_fallback(a, vid):
+        vid = lay_text_branch(s, a, vid)
+    end
     v := at.Get(a, vid)
     quoted := lay_attr_value_is_quoted_string(a, aid)
     mut numtext := ""
     mut skipfold := false
+    empty_fallback := lay_has_empty_fallback(a, vid)
     src_marks := StyleSourceHasFaMarks(a, vid)
     if lay_native_target():
         if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) != 0:
@@ -568,6 +614,9 @@ func lay_check_style_attr(s &: Sema, a &: at.Ast, aid: int, _ei: int, name: str,
     mut text := StyleAttrTextFor(a, vid, sa.prop)
     if skipfold:
         text = numtext
+    end
+    if str.Len(text) == 0 and empty_fallback:
+        ret true
     end
     if lay_native_target() and str.IndexOf(text, char_from_code(2)) >= 0:
         ret true
@@ -1731,4 +1780,8 @@ pub func LayoutNumUnit(lexeme: str): str:
         ret ""
     end
     ret str.Substr(lexeme, i, n - i)
+end
+
+pub func LayoutHasEmptyFallback(a &: at.Ast, nid: int): bool:
+    ret lay_has_empty_fallback(a, nid)
 end

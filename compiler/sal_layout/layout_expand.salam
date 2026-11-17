@@ -591,13 +591,57 @@ func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
     ret cp
 end
 
-func find_comp(ex &: LoExpand, name: str): int:
+func find_comp_from(ex &: LoExpand, name: str, prog: int): int:
+    mut pubi := 0 - 1
+    mut anyi := 0 - 1
     repeat ex.comp_name.Len() in i:
-        if lp.IdentEqual(ex.comp_name.Get(i), name):
+        if not lp.IdentEqual(ex.comp_name.Get(i), name):
+            continue
+        end
+        if ex.comp_prog.Get(i) == prog:
             ret i
         end
+        if pubi < 0 and ex.comp_pub.Get(i):
+            pubi = i
+        end
+        if anyi < 0:
+            anyi = i
+        end
     end
-    ret 0 - 1
+    if pubi >= 0:
+        ret pubi
+    end
+    ret anyi
+end
+
+func report_private_component(ex &: LoExpand, a &: at.Ast, invocation: int, ci: int):
+    n := at.Get(a, invocation)
+    comp_name := ex.comp_name.Get(ci)
+    mut where := pth.PathBase(ex.comp_file.Get(ci))
+    if str.Len(where) == 0:
+        where = "?"
+    end
+    lg.LogAtHelp(
+        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, ex.cur_file, n.begin_line as int, n.begin_col as int, co.Format1(
+            i18.Tr("mark it 'pub' where it is defined: 'pub component %s'"), co.ArgStr(comp_name)
+        ), co.Format2(
+            i18.Tr("E232: component '%s' is private to '%s'; it cannot be used from another file"), co.ArgStr(comp_name),
+            co.ArgStr(where)
+        )
+    )
+    ex.errors++
+end
+
+func expand_comp_body(
+    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, body: int, fr &: LoFrame, ci: int, depth: int
+):
+    saved_prog := ex.cur_prog
+    saved_file := ex.cur_file
+    ex.cur_prog = ex.comp_prog.Get(ci)
+    ex.cur_file = ex.comp_file.Get(ci)
+    expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth)
+    ex.cur_prog = saved_prog
+    ex.cur_file = saved_file
 end
 
 func body_has_content_sink(a &: at.Ast, node: int): bool:
@@ -629,14 +673,26 @@ func body_has_content_sink(a &: at.Ast, node: int): bool:
     ret false
 end
 
-func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str):
+func comp_clash(ex &: LoExpand, name: str, prog: int, is_pub: bool): bool:
+    repeat ex.comp_name.Len() in i:
+        if not lp.IdentEqual(ex.comp_name.Get(i), name):
+            continue
+        end
+        if ex.comp_prog.Get(i) == prog or (is_pub and ex.comp_pub.Get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str, file: str):
     repeat at.ChildCount(a, program) in i:
         did := at.Child(a, program, i)
         d := at.Get(a, did)
         if d.kind != at.AST_LAYOUT_COMPONENT:
             continue
         end
-        if find_comp(ex, d.name) >= 0:
+        if comp_clash(ex, d.name, program, d.is_pub):
             lg.Log(
                 ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(
                     i18.Tr("duplicate component '%s' ignored"), co.ArgStr(d.name)
@@ -663,6 +719,9 @@ func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str):
         ex.comp_name.Push(d.name)
         ex.comp_def.Push(did)
         ex.comp_dir.Push(dir)
+        ex.comp_file.Push(file)
+        ex.comp_prog.Push(program)
+        ex.comp_pub.Push(d.is_pub)
         ex.comp_mother.Push(mother)
         lg.Log(
             ex.log, lg.PH_DRIVER, lg.LOG_DEBUG, co.Format2(
@@ -742,21 +801,21 @@ func load_include(ex &: LoExpand, a &: at.Ast, path: str): int:
     ret li
 end
 
-func collect(ex &: LoExpand, a &: at.Ast, program: int, dir: str, depth: int):
-    register_components(ex, a, program, dir)
+func collect(ex &: LoExpand, a &: at.Ast, program: int, dir: str, file: str, depth: int):
+    register_components(ex, a, program, dir, file)
     repeat at.ChildCount(a, program) in i:
         did := at.Child(a, program, i)
         d := at.Get(a, did)
         if d.kind == at.AST_LAYOUT_BLOCK:
-            scan_includes(ex, a, did, dir, depth)
+            scan_includes(ex, a, did, dir, file, depth)
         else d.kind == at.AST_LAYOUT_COMPONENT:
-            scan_includes(ex, a, d.a, dir, depth)
+            scan_includes(ex, a, d.a, dir, file, depth)
         end
     end
 end
 
 func scan_includes(
-    ex &: LoExpand, a &: at.Ast, container: int, dir: str, depth: int
+    ex &: LoExpand, a &: at.Ast, container: int, dir: str, file: str, depth: int
 ):
     if container == 0 or depth > K_LO_MAX_DEPTH:
         ret
@@ -782,24 +841,24 @@ func scan_includes(
                 l := load_include(ex, a, path)
                 if l >= 0:
                     collect(
-                        ex, a, ex.loaded_prog.Get(l), ex.loaded_dir.Get(l), depth + 1
+                        ex, a, ex.loaded_prog.Get(l), ex.loaded_dir.Get(l), path, depth + 1
                     )
                 end
             end
         else item.kind == at.AST_LAYOUT_ELEMENT:
-            scan_includes(ex, a, iid, dir, depth)
+            scan_includes(ex, a, iid, dir, file, depth)
         else item.kind == at.AST_EACH:
-            scan_includes(ex, a, item.b, dir, depth)
+            scan_includes(ex, a, item.b, dir, file, depth)
         else item.kind == at.AST_IF:
-            scan_includes(ex, a, item.b, dir, depth)
+            scan_includes(ex, a, item.b, dir, file, depth)
             mut else_n := item.c
             until else_n != 0:
                 if at.KindOf(a, else_n) == at.AST_IF:
                     en := at.Get(a, else_n)
-                    scan_includes(ex, a, en.b, dir, depth)
+                    scan_includes(ex, a, en.b, dir, file, depth)
                     else_n = en.c
                 else:
-                    scan_includes(ex, a, else_n, dir, depth)
+                    scan_includes(ex, a, else_n, dir, file, depth)
                     else_n = 0
                 end
             end
@@ -1267,7 +1326,7 @@ func expand_component(
             ex.errors++
         end
         frame_derive(a, fr, body)
-        expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
+        expand_comp_body(ex, a, out, body, fr, ci, depth + 1)
         ret
     end
     mut hparams := Vector {} as Vector<str>
@@ -1276,7 +1335,7 @@ func expand_component(
     end
     if web and not li_has_storage(a, body) and hparams.Len() == 0:
         frame_derive(a, fr, body)
-        expand_items(ex, a, out, body, fr, ex.comp_dir.Get(ci), depth + 1)
+        expand_comp_body(ex, a, out, body, fr, ci, depth + 1)
         ret
     end
     wi := g_lo_wi_mark.Len()
@@ -1353,7 +1412,7 @@ func expand_component(
             frame_set(fr, sd.name, lo_state_ref(a, gi, ci, sid))
         end
     end
-    expand_items(ex, a, kids, body, fr, ex.comp_dir.Get(ci), depth + 1)
+    expand_comp_body(ex, a, kids, body, fr, ci, depth + 1)
     mut bn := at.Get(a, blk)
     mut oldl := bn.list
     bn.list = kids
@@ -1664,9 +1723,15 @@ func expand_item(
                 lb := find_layout_block(a, lprog)
                 if lb != 0:
                     mut none := LoFrame {}
+                    saved_prog := ex.cur_prog
+                    saved_file := ex.cur_file
+                    ex.cur_prog = lprog
+                    ex.cur_file = path
                     expand_items(
                         ex, a, out, lb, none, ex.loaded_dir.Get(l), depth + 1
                     )
+                    ex.cur_prog = saved_prog
+                    ex.cur_file = saved_file
                     frame_free(none)
                 else not has_component_def(a, lprog):
                     lg.Log(
@@ -1700,8 +1765,12 @@ func expand_item(
         ret
     end
     if item.kind == at.AST_LAYOUT_ELEMENT:
-        ci := find_comp(ex, item.name)
+        ci := find_comp_from(ex, item.name, ex.cur_prog)
         if ci >= 0:
+            if not ex.comp_pub.Get(ci) and ex.comp_prog.Get(ci) != ex.cur_prog:
+                report_private_component(ex, a, iid, ci)
+                ret
+            end
             expand_component(ex, a, out, iid, ci, fr, dir, depth)
             ret
         end

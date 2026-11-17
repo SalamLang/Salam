@@ -114,7 +114,7 @@ runs:
           echo "::warning::the server's host key is not pinned; add an SSH_KNOWN_HOSTS secret to stop trusting whatever key the network returns"
           ssh-keygen -lf "$dir/known_hosts" || true
         fi
-        ssh_opts=(-p "$PORT" -o "UserKnownHostsFile=$dir/known_hosts" -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ConnectTimeout=20)
+        ssh_opts=(-p "$PORT" -o "UserKnownHostsFile=$dir/known_hosts" -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=20 -o ConnectionAttempts=3)
         prefix=()
         if [ -n "$KEY" ]; then
           printf '%s\n' "$KEY" > "$dir/id"
@@ -131,7 +131,20 @@ runs:
         remote="$USER_NAME@$HOST"
         dest="${TARGET%/}"
         run_ssh() { "${prefix[@]}" ssh "${ssh_opts[@]}" "$remote" "$@"; }
-        run_ssh "mkdir -p '$dest'"
+        retry() {
+          local n=1 rc=0
+          while true; do
+            rc=0
+            "$@" || rc=$?
+            if [ "$rc" -eq 0 ]; then return 0; fi
+            if [ "$rc" -ne 255 ] && [ "$rc" -ne 30 ] && [ "$rc" -ne 35 ] && [ "$rc" -ne 12 ]; then return "$rc"; fi
+            if [ "$n" -ge 5 ]; then return "$rc"; fi
+            echo "::warning::connection to the server failed (exit $rc), retrying in $((n * 20))s (attempt $n of 4)"
+            sleep $((n * 20))
+            n=$((n + 1))
+          done
+        }
+        retry run_ssh "mkdir -p '$dest'"
         excludes=(--exclude='.well-known/' --exclude='.htaccess' --exclude='.user.ini' --exclude='cgi-bin/')
         tar_excludes=()
         read -r -a extra <<< "$EXCLUDE"
@@ -139,14 +152,17 @@ runs:
           excludes+=("--exclude=$pat")
           tar_excludes+=("--exclude=$pat")
         done
-        if run_ssh "command -v rsync" >/dev/null 2>&1; then
-          "${prefix[@]}" rsync -rlz --delete --delay-updates \
+        have_rsync=0
+        if retry run_ssh "command -v rsync" >/dev/null 2>&1; then have_rsync=1; fi
+        if [ "$have_rsync" -eq 1 ]; then
+          retry "${prefix[@]}" rsync -rlz --delete --delay-updates \
             --chmod=D755,F644 "${excludes[@]}" \
             -e "ssh ${ssh_opts[*]}" \
             "${SRC%/}/" "$remote:$dest/"
         else
           echo "::warning::rsync is not installed on the server; copying with tar, so files removed from the build stay on the server"
-          tar -C "$SRC" "${tar_excludes[@]}" -czf - . | run_ssh "tar -xzf - -C '$dest'"
+          tar_up() { tar -C "$SRC" "${tar_excludes[@]}" -czf - . | run_ssh "tar -xzf - -C '$dest'"; }
+          retry tar_up
         fi
         echo "deployed to $HOST:$dest"
 

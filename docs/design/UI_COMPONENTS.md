@@ -2,7 +2,7 @@
 
 Status: proposed design (2026-11-16), extends `UI_DSL.md`. Conditions
 (`when`) and tokens (`theme.group.name`) are the ones of `UI_STATES_THEMES.md`.
-Codes continue from that file: this one uses E184 to E199 and W184 to W199.
+Codes continue from that file: this one uses E184 to E199 and W184 to W199, and E232 (private component).
 
 ## 3. The standard component set
 
@@ -90,6 +90,38 @@ widget exposes the few attributes it allows (`width`, `grow`, `margin`);
 everything else is a token, so a widget cannot be broken by a style from
 outside. A user who needs more copies the widget (it is page code).
 
+### Visibility: `pub component`
+
+A component belongs to the file that defines it. Without `pub` it is private:
+the file's own page and the other components of that file use it, and a page
+in another file that `include`s it does not. `pub component Card` (Persian
+`همگانی بخش Card`, the same `همگانی` as `pub` everywhere) can be used from any
+file that includes its file. The rule is the one of functions and structs, it
+is checked while the page is expanded, so it is identical on the web and the
+native target.
+
+```salam
+pub component Panel(title: str):
+    Frame: content = title end
+end
+
+component Frame:
+    box: padding = 8 children: end end
+end
+```
+
+- A public component may use the private components of its own file; they
+  expand correctly when `Panel` is used from another file, because the lookup
+  of a name inside a body starts in the file of that body.
+- Two files may each have a private component of the same name; each file
+  sees its own. Two public components of one name still clash (the second is
+  ignored with the warning that exists today).
+- A name is looked up in the using file first, then among public components.
+  A private component of another file is never found by accident: it is
+  reported as E232.
+- `pub page` stays an error (a page is not shared by name), and the standard
+  kit components of this chapter are always visible.
+
 ### Run time content
 
 Markup injected at run time (`SetHtml` in the editor, for highlighting and for
@@ -115,6 +147,7 @@ become typed:
 
 | code | kind | message |
 | --- | --- | --- |
+| E232 | error | `component 'Hidden' is private to 'parts.salam'; it cannot be used from another file` (hint: `mark it 'pub' where it is defined: 'pub component Hidden'`) |
 | W184 | warning | `component 'Button' hides the standard component of the same name` |
 | E185 | error | `'children' used outside a component` |
 | E186 | error | `a component may place 'children' only once; name the second one` |

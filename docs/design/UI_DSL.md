@@ -649,7 +649,7 @@ contract. The main ones:
   default to `auto` (content minimum); fixed and absolute boxes without
   insets keep their static position; `flow` ignores `gap`; `column = -1`
   is the last column.
-- `gui.style`: 137 properties (`tools/salam/style-properties.tsv`, generated
+- `gui.style`: 139 properties (`tools/salam/style-properties.tsv`, generated
   with `tools/salam/gen-style-table.salam`), `Style` fields per property
   (`layout_kind` for `layout`), extra API `Get`, `Format`, `EaseAt`, `Info`;
   web CSS relies on `BaseCss()` and `--salam-*` custom properties and nested

@@ -518,7 +518,10 @@ EOF_LNOTS
         mkdir -p "$ujob"
         (cd "$ujob" && "$SALAM_ABS" build "$fabs" --ui=native --output="$ujob/app" --no-color --log-level=error --lang="$lang") >"$ujob/build.log" 2>&1
         if [ -x "$ujob/app" ]; then
-            got=$(cd "$ujob" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 ./app 2>&1 | tr -d '\r')
+            (cd "$ujob" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 ./app >"$ujob/run.out" 2>&1)
+            urc=$?
+            got=$(tr -d '\r' <"$ujob/run.out")
+            [ "$urc" = 124 ] && got="<timed out after 60 seconds> $got"
         else
             got="<build failed> $(head -5 "$ujob/build.log")"
         fi
@@ -980,6 +983,18 @@ if want ui; then
             [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
             add_job uinative "ui/$lang/$name" "$f" "$lang" "${f%.salam}.out"
         done
+    done
+fi
+
+if want uiexamples; then
+    printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
+    "$SALAM_ABS" page build "$WORK/page_empty_en.salam" --inline --no-minify --output="$WORK/page_empty_en.html" --no-color --log-level=error --lang=en >/dev/null 2>&1 || rm -f "$WORK/page_empty_en.html"
+    for f in examples/ui/*.salam; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f" .salam)
+        add_job page "uiexamples/web/$name" "$f" "en" -
+        [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
+        add_job uinative "uiexamples/native/$name" "$f" "en" "${f%.salam}.out"
     done
 fi
 

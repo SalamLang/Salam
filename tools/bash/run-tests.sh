@@ -518,7 +518,10 @@ EOF_LNOTS
         mkdir -p "$ujob"
         (cd "$ujob" && "$SALAM_ABS" build "$fabs" --ui=native --output="$ujob/app" --no-color --log-level=error --lang="$lang") >"$ujob/build.log" 2>&1
         if [ -x "$ujob/app" ]; then
-            got=$(cd "$ujob" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 ./app 2>&1 | tr -d '\r')
+            (cd "$ujob" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 ./app >"$ujob/run.out" 2>&1)
+            urc=$?
+            got=$(tr -d '\r' <"$ujob/run.out")
+            [ "$urc" = 124 ] && got="<timed out after 60 seconds> $got"
         else
             got="<build failed> $(head -5 "$ujob/build.log")"
         fi

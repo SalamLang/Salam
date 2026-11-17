@@ -1,5 +1,8 @@
 package parser
 
+import gui.style
+import str
+
 include tok "../token.salam"
 include at "../ast.salam"
 
@@ -81,27 +84,27 @@ func state_block_lower(a &: at.Ast, parent: int, el: int): bool:
     ret true
 end
 
-func when_key(name: str): str:
+func ifs_key(name: str): str:
     ret str.Lower(str.Replace(str.Replace(str.Trim(name), "_", " "), "-", " "))
 end
 
-func when_find(a &: at.Ast, parent: int, kept: Vector<int>, key: str): int:
+func ifs_find(a &: at.Ast, parent: int, kept: Vector<int>, key: str): int:
     repeat at.ChildCount(a, parent) in i:
         oid := at.Child(a, parent, i)
-        if at.KindOf(a, oid) == at.AST_LAYOUT_ATTR and str.Equals(when_key(at.Get(a, oid).name), key):
+        if at.KindOf(a, oid) == at.AST_LAYOUT_ATTR and str.Equals(ifs_key(at.Get(a, oid).name), key):
             ret oid
         end
     end
     repeat kept.Len() in j:
         kid := kept.Get(j)
-        if at.KindOf(a, kid) == at.AST_LAYOUT_ATTR and str.Equals(when_key(at.Get(a, kid).name), key):
+        if at.KindOf(a, kid) == at.AST_LAYOUT_ATTR and str.Equals(ifs_key(at.Get(a, kid).name), key):
             ret kid
         end
     end
     ret 0
 end
 
-func when_ternary(a &: at.Ast, cond: int, thenv: int, elsev: int): int:
+func ifs_ternary(a &: at.Ast, cond: int, thenv: int, elsev: int): int:
     n := mk_from_node(a, at.AST_TERNARY, cond)
     mut m := at.Get(a, n)
     m.a = at.Clone(a, cond)
@@ -111,7 +114,7 @@ func when_ternary(a &: at.Ast, cond: int, thenv: int, elsev: int): int:
     ret n
 end
 
-func when_empty(a &: at.Ast, from: int): int:
+func ifs_empty(a &: at.Ast, from: int): int:
     lit := mk_from_node(a, at.AST_LITERAL, from)
     at.SetOp(a, lit, tok.TK_STRING)
     mut tv := tok.ValueNone()
@@ -122,10 +125,179 @@ func when_empty(a &: at.Ast, from: int): int:
     ret lit
 end
 
-func when_lower(a &: at.Ast, parent: int):
+func if_state_strip(name: str): str:
+    prefixes := ["hover", "focus within", "focus", "active", "disabled", "checked", "invalid", "placeholder", "selection", "اشاره", "تمرکز درون", "تمرکز", "فشردن", "غیرفعال", "نامعتبر", "گزینش"]
+    key := ifs_key(name)
+    repeat len(prefixes) in i:
+        pk := ifs_key(prefixes[i])
+        if str.Len(key) > str.Len(pk) + 1 and str.StartsWith(key, pk + " "):
+            ret str.Substr(key, str.Len(pk) + 1, str.Len(key) - str.Len(pk) - 1)
+        end
+    end
+    ret key
+end
+
+func if_attr_is_style(a &: at.Ast, id: int): bool:
+    if at.KindOf(a, id) != at.AST_LAYOUT_ATTR:
+        ret false
+    end
+    ret style.PropByName(if_state_strip(at.Get(a, id).name)) >= 0
+end
+
+func if_block_style(a &: at.Ast, blk: int, nattr &: int): bool:
+    repeat at.ChildCount(a, blk) in i:
+        if not if_attr_is_style(a, at.Child(a, blk, i)):
+            ret false
+        end
+        nattr++
+    end
+    ret true
+end
+
+func if_chain_style(a &: at.Ast, n: int): bool:
+    mut nattr := 0
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        if not if_block_style(a, c.b, nattr):
+            ret false
+        end
+        if c.c == 0:
+            break
+        end
+        if at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            if not if_block_style(a, c.c, nattr):
+                ret false
+            end
+            break
+        end
+    end
+    ret nattr > 0
+end
+
+func if_block_attr(a &: at.Ast, blk: int, key: str): int:
+    repeat at.ChildCount(a, blk) in i:
+        cid := at.Child(a, blk, i)
+        if str.Equals(ifs_key(at.Get(a, cid).name), key):
+            ret cid
+        end
+    end
+    ret 0
+end
+
+func if_chain_value(a &: at.Ast, n: int, key: str, basev: int): int:
+    if n == 0:
+        ret basev != 0 ? at.Clone(a, basev) : 0
+    end
+    c := at.Get(a, n)
+    mut rest := 0
+    if c.c == 0:
+        rest = basev != 0 ? at.Clone(a, basev) : ifs_empty(a, c.a)
+    else at.KindOf(a, c.c) == at.AST_IF:
+        rest = if_chain_value(a, c.c, key, basev)
+    else:
+        hit := if_block_attr(a, c.c, key)
+        if hit != 0:
+            rest = at.Get(a, hit).a
+        else:
+            rest = basev != 0 ? at.Clone(a, basev) : ifs_empty(a, c.a)
+        end
+    end
+    hit2 := if_block_attr(a, c.b, key)
+    mut thenv := 0
+    if hit2 != 0:
+        thenv = at.Get(a, hit2).a
+    else:
+        thenv = basev != 0 ? at.Clone(a, basev) : ifs_empty(a, c.a)
+    end
+    ret ifs_ternary(a, c.a, thenv, rest)
+end
+
+func if_chain_keys(a &: at.Ast, n: int, keys &: Vector<str>, firsts &: Vector<int>):
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        mut blocks := Vector {} as Vector<int>
+        blocks.Push(c.b)
+        if c.c != 0 and at.KindOf(a, c.c) != at.AST_IF:
+            blocks.Push(c.c)
+        end
+        repeat blocks.Len() in bi:
+            repeat at.ChildCount(a, blocks.Get(bi)) in i:
+                cid := at.Child(a, blocks.Get(bi), i)
+                k := ifs_key(at.Get(a, cid).name)
+                mut seen := false
+                repeat keys.Len() in q:
+                    if str.Equals(keys.Get(q), k):
+                        seen = true
+                    end
+                end
+                if not seen:
+                    keys.Push(k)
+                    firsts.Push(cid)
+                end
+            end
+        end
+        if c.c != 0 and at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            cur = 0
+        end
+        blocks.Free()
+    end
+end
+
+func if_block_mix(a &: at.Ast, blk: int, attrs &: bool, kids &: bool):
+    repeat at.ChildCount(a, blk) in i:
+        cid := at.Child(a, blk, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            if if_attr_is_style(a, cid):
+                attrs = true
+            end
+        else k == at.AST_LAYOUT_ELEMENT or k == at.AST_EACH or k == at.AST_IF:
+            kids = true
+        end
+    end
+end
+
+func if_chain_mixed(a &: at.Ast, n: int): bool:
+    mut attrs := false
+    mut kids := false
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        if_block_mix(a, c.b, attrs, kids)
+        if c.c == 0:
+            break
+        end
+        if at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            if_block_mix(a, c.c, attrs, kids)
+            break
+        end
+    end
+    ret attrs and kids
+end
+
+func ifs_lower(p &: Ps, a &: at.Ast, parent: int):
+    repeat at.ChildCount(a, parent) in mi:
+        mid := at.Child(a, parent, mi)
+        if at.KindOf(a, mid) == at.AST_IF and if_chain_mixed(a, mid):
+            mn := at.Get(a, mid)
+            lg.LogAt(
+                p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, mn.begin_line as int, mn.begin_col as int, i18.Tr("E175: an 'if' cannot hold style attributes together with elements; split it into two 'if' blocks")
+            )
+            p.had_error = true
+        end
+    end
     mut found := false
     repeat at.ChildCount(a, parent) in i:
-        if at.KindOf(a, at.Child(a, parent, i)) == at.AST_LAYOUT_WHEN:
+        cid0 := at.Child(a, parent, i)
+        if at.KindOf(a, cid0) == at.AST_IF and if_chain_style(a, cid0):
             found = true
         end
     end
@@ -135,38 +307,31 @@ func when_lower(a &: at.Ast, parent: int):
     mut kept := Vector {} as Vector<int>
     repeat at.ChildCount(a, parent) in j:
         cid := at.Child(a, parent, j)
-        if at.KindOf(a, cid) != at.AST_LAYOUT_WHEN:
+        if at.KindOf(a, cid) != at.AST_IF or not if_chain_style(a, cid):
             kept.Push(cid)
             continue
         end
-        mut ok := true
-        repeat at.ChildCount(a, cid) in q:
-            if at.KindOf(a, at.Child(a, cid, q)) != at.AST_LAYOUT_ATTR:
-                ok = false
-            end
-        end
-        if not ok:
-            kept.Push(cid)
-            continue
-        end
-        cond := at.Get(a, cid).a
-        repeat at.ChildCount(a, cid) in k:
-            gid := at.Child(a, cid, k)
-            g := at.Get(a, gid)
-            bid := when_find(a, parent, kept, when_key(g.name))
+        mut keys := Vector {} as Vector<str>
+        mut firsts := Vector {} as Vector<int>
+        if_chain_keys(a, cid, keys, firsts)
+        repeat keys.Len() in k:
+            bid := ifs_find(a, parent, kept, keys.Get(k))
+            basev := bid != 0 ? at.Get(a, bid).a : 0
+            result := if_chain_value(a, cid, keys.Get(k), basev)
             if bid != 0:
-                bv := at.Get(a, bid).a
                 mut bn := at.Get(a, bid)
-                bn.a = when_ternary(a, cond, g.a, bv)
+                bn.a = result
                 at.Put(a, bid, bn)
             else:
-                emp := when_empty(a, cond)
+                gid := firsts.Get(k)
                 mut gn := at.Get(a, gid)
-                gn.a = when_ternary(a, cond, g.a, emp)
+                gn.a = result
                 at.Put(a, gid, gn)
                 kept.Push(gid)
             end
         end
+        keys.Free()
+        firsts.Free()
     end
     mut pn := at.Get(a, parent)
     pn.list = kept
@@ -175,7 +340,7 @@ end
 
 func layout_body_ex(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
     layout_body_loop(p, a, parent, stop_else)
-    when_lower(a, parent)
+    ifs_lower(p, a, parent)
 end
 
 func layout_body_loop(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
@@ -192,8 +357,6 @@ func layout_body_loop(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
             at.AddChild(a, parent, n)
         else p_at(p, tok.TK_KW_EACH):
             at.AddChild(a, parent, layout_each(p, a))
-        else p_at(p, tok.TK_KW_WHEN):
-            at.AddChild(a, parent, layout_when(p, a))
         else p_at(p, tok.TK_KW_ELSE):
             p_error(p, "'else' without a matching 'if' in layout")
             p_advance(p)
@@ -239,6 +402,7 @@ func layout_if_tail(p &: Ps, a &: at.Ast, n: int):
             ps_set_c(a, n, else_b)
             p_expect(p, tok.TK_KW_END, "'end' to close the layout 'if'")
         else:
+            _chained := p_match(p, tok.TK_KW_IF)
             m := p_mk(p, a, at.AST_IF)
             layout_if_tail(p, a, m)
             ps_set_c(a, n, m)
@@ -271,19 +435,6 @@ func layout_each(p &: Ps, a &: at.Ast): int:
     p_fin(p, a, body)
     ps_set_b(a, n, body)
     p_expect(p, tok.TK_KW_END, "'end' to close the layout 'each'")
-    p_fin(p, a, n)
-    p_skip_terminators(p)
-    ret n
-end
-
-func layout_when(p &: Ps, a &: at.Ast): int:
-    n := p_mk(p, a, at.AST_LAYOUT_WHEN)
-    p_advance(p)
-    ps_set_a(a, n, parse_expr(p, a))
-    p_expect(p, tok.TK_COLON, "':' after the 'when' condition")
-    p_skip_terminators(p)
-    layout_body_ex(p, a, n, false)
-    p_expect(p, tok.TK_KW_END, "'end' to close the layout 'when'")
     p_fin(p, a, n)
     p_skip_terminators(p)
     ret n

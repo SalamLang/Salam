@@ -363,12 +363,18 @@ function __stAtom(d, t) {
   if (d.m & 4) {
     n = __stNumber(t, d.pc);
     if (n !== null) {
+      if (d.hi !== undefined && (n < d.lo || n > d.hi)) {
+        return null;
+      }
       return __stFmt(n);
     }
   }
   if (d.m & 8) {
     n = __stNumber(t, false);
     if (n !== null && t.indexOf(".") < 0) {
+      if (d.hi !== undefined && (n < d.lo || n > d.hi)) {
+        return null;
+      }
       return __stFmt(n);
     }
   }

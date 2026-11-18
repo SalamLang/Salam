@@ -92,8 +92,8 @@ that has no earlier value is simply not declared while the condition is false.
 | `container width < 400`, `container height ...` | the nearest ancestor with `container = true` |
 | `in card hover`, `in card focus within`, `in card active` | a state of the nearest ancestor whose `group = card` |
 
-Environment words are recognised only inside a style `if` condition (and
-inside an element `if` as the single words below). Persian spellings are
+Environment words are recognised only inside a style `if` condition; an
+element `if` keeps ordinary variables only. Persian spellings are
 accepted too (`تیره`, `فشرده`, `عریض`, `لمسی`, `عرض صفحه`, `حرکت کم`). The
 words are `dark`, `light`, `compact`, `regular`, `wide`, `touch`, `mouse`,
 `landscape`, `portrait`, `reduced motion`, `high contrast`, `rtl`, `ltr`,

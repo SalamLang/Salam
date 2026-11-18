@@ -20,7 +20,7 @@ In exchange, Salam is a smaller language with a gentler learning curve, a large 
 | Memory safety guarantee | Yes, for safe code; `unsafe` blocks opt out                                             | No guarantee; bounds checks in development builds, ownership checks, AddressSanitizer via `salam memcheck` |
 | Data races              | Prevented at compile time by `Send` and `Sync`                                          | Your responsibility: mutexes, atomics, channels                                                            |
 | Sum types and matching  | `enum` with data, exhaustive `match`                                                    | `enum` with data, exhaustive `match`                                                                       |
-| Errors                  | `Result<T, E>` with `?`                                                                 | `throws`, `try`, `catch`; or your own `Result` enum with postfix `?`                                       |
+| Errors                  | `Result<T, E>` with `?`                                                                 | `throw`, `try`, `catch`; or your own `Result` enum with postfix `?`                                       |
 | Generics                | Traits, monomorphized generics                                                          | Interfaces, generics with bounds                                                                           |
 | Code generation         | LLVM (other backends in progress)                                                       | LLVM, C or Salam's own native backend                                                                      |
 | Package ecosystem       | crates.io, very large                                                                   | Large standard library, few third-party packages                                                           |
@@ -112,7 +112,7 @@ total: 44.5
 
 The two print the same numbers. In both languages, removing an arm from the `match` is a compile error, because the compiler checks that every member is handled (the [enums lesson](/learn/enums/) covers Salam's version). The visible differences are small: Salam enum values have a built-in `name()`, and it needs `defer shapes.Free()` where Rust's `Vec` frees itself when it goes out of scope.
 
-## Error handling: Result and ? against throws and try {#errors}
+## Error handling: Result and ? against throw and try {#errors}
 
 Rust returns errors as values of type `Result<T, E>`, and `?` passes an error up to the caller:
 
@@ -137,12 +137,12 @@ fn main() {
 }
 ```
 
-Salam's usual tool is a function marked `throws`. `try` passes an error to the caller, and `try:` with `catch` handles it. Errors are values of type `Error` with a kind, a message and a code, so this is still explicit error passing, written differently:
+Salam's usual tool is a function marked `throw`. `try` passes an error to the caller, and `try:` with `catch` handles it. Errors are values of type `Error` with a kind, a message and a code, so this is still explicit error passing, written differently:
 
 ```salam
 import conv
 
-func parse_port(text: str): int throws:
+func parse port(text: str): int throw:
     n := try conv.ParseInt(text)
     if n < 1 or n > 65535:
         throw "port out of range: " + n
@@ -153,7 +153,7 @@ end
 func main:
     each arg in ["8080", "0", "http"]:
         try:
-            println arg, "-> port", parse_port(arg)
+            println arg, "-> port", parse port(arg)
         catch e:
             println arg, "-> error:", e.message
         end

@@ -45,8 +45,8 @@ x, y = y, x                   // assign several mut targets at once
 
 - The type is `(A, B)` with 2 to 8 elements. It works wherever a type does:
   parameters, struct fields, `Vector<(int, str)>`, `HashMap<str, (int, int)>`,
-  nested `((int, int), str)`, function types, and `throws`
-  (`func f(): (i64, bool) throws`, then `a, b := try f()`).
+  nested `((int, int), str)`, function types, and `throw`
+  (`func f(): (i64, bool) throw`, then `a, b := try f()`).
 - `ret a, b` and `(a, b)` build a tuple. With an expected type (a return type,
   a parameter, a field) the elements take the declared element types, so
   `ret 1, 2` fits `(i64, u8)`.

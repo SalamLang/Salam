@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.17
+
 ### Editing and highlighting
 
 - Expanded snippets for control flow, loops, declarations, imports/exports, collections and I/O, with English and Persian triggers.

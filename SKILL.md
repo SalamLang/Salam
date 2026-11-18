@@ -135,8 +135,9 @@ const MAX := 100         // compile-time constant
 are parse errors ("declarations with a type annotation were removed"). Write
 `name := value` and use `as` when the inferred type is not the one you want.
 `name: Type = value` survives only for struct fields and parameters.
-A `const` name must be a single word (`const MAX VALUE := 3` is a parse
-error); `mut` globals, locals and functions may still have multi-word names.
+A `const` name must be a single word (a spaced name such as `MAX VALUE` is a parse
+error); `mut` globals, locals and functions may still have multi-word names in
+Persian files.
 A top-level `const` must be known at compile time: literals, other constants,
 operators and `sizeof`. A function call there (`const R := math.Sqrt(2.0)`)
 is E167; drop `const` (`R := math.Sqrt(2.0)`) to compute it at start-up.
@@ -341,9 +342,11 @@ end
 - **Default values are constants or expressions of globals**; a default may not
   refer to another parameter (`func f(a: int, b: int = a)` is E001 unknown
   identifier `a`). Use an overload instead.
-- **Multi-word names**: identifiers may contain spaces, e.g.
-  `func make counter()`, `func is weekend(d: Day)`, `pet name: str`. A call is
-  `is weekend(d)`; a field access `dog.pet name`.
+- **Multi-word names**: an English name is one word joined with `_`:
+  `func make_counter()`, `func is_weekend(d: Day)`, `pet_name: str`. Spaces in
+  an English name are the compile error E234. Persian names are written with
+  spaces: `تابع روز تعطیل(ر: روز)`, a call is `روز تعطیل(ر)`, a field access
+  `سگ.نام حیوان`.
 - **Modifiers**: `pub inline noinline pure noret deprecated` (combine freely),
   e.g. `pub inline pure func Area(w: f64, h: f64): f64: ret w * h end`. They
   work on struct methods too, in the same order:
@@ -818,9 +821,9 @@ language any more. An arm's block may hold statements, and its value (when
 `match` is used as an expression) is the bare expression it ends with.
 
 **A comma (`,` or Persian `،`) is required between enum members** - a bare
-newline is not enough, because member names may contain spaces
-(`enum Status: not started, in progress, done end`) and a newline alone can't
-tell where one multi-word name ends and the next begins. Leaving out the
+newline is not enough, because Persian member names may contain
+spaces and a newline alone can't tell where one multi-word name ends and the
+next begins (`enum Status: not_started, in_progress, done end`). Leaving out the
 comma is a compile error (`'end'`/EOF right after a member with no comma
 before it).
 
@@ -856,7 +859,7 @@ a `str` that becomes one of kind `ErrorKind.Other`. `Error` and `ErrorKind`
 need no import (`import error` only for `KindName`, `RetryPolicy`, ...).
 
 ```salam
-func parse port(text: str): int throws:
+func parse_port(text: str): int throws:
     if text == "":
         throw Error.New(ErrorKind.InvalidArgument, "empty port")
     end
@@ -864,11 +867,11 @@ func parse port(text: str): int throws:
 end
 
 func load(text: str): int throws:
-    p := try parse port(text)          // passes any error to the caller
+    p := try parse_port(text)          // passes any error to the caller
     ret p * 2
 end
 
-func load config(text: str): int throws:
+func load_config(text: str): int throws:
     try:
         ret load(text)
     catch e:
@@ -877,9 +880,9 @@ func load config(text: str): int throws:
 end
 
 func main:
-    port := try parse port("") catch 8080   // fallback value on error
+    port := try parse_port("") catch 8080   // fallback value on error
     try:                                 // calls inside need no 'try'
-        println load config("80"), port
+        println load_config("80"), port
     catch e:                             // e: Error (kind, message, code, path, line, column)
         println e.to_str()
     end

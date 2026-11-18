@@ -8,6 +8,23 @@ functions/methods must follow this rule.
 Checked by `tools/salam/check-naming.salam` and its baseline
 `tools/salam/std-naming-baseline.txt` (CI: Public naming standard).
 
+## No spaces in English names (E234)
+
+A name in an English file is one word: `parse_port`, or `ParsePort` for a
+type or component. Several words separated by spaces are the compile error
+E234, for functions, variables, parameters, fields, methods, types,
+components and packages:
+
+```
+error: E234: the name 'parse port' has spaces, but a name in an English file is one word
+help: join the words with '_' ('parse_port'), or use PascalCase ('ParsePort') for a type or component
+```
+
+Persian files keep multi word names with spaces. `salam translate` joins the
+words of a Persian name with `_` when it writes English. Words inside a page
+or component layout block (attribute names such as `min width`) are part of
+the layout language and are not names.
+
 ## The rule
 
 - **English public callable names** (package functions and methods): must be

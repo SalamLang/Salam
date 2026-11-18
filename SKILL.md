@@ -1615,6 +1615,7 @@ end
   `Decode`/`DecodeWith` (throw on a bad escape) to a `QueryMap` with
   `Set Add Remove Retain Encode`; missing and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
   and `${NAME}` only sees lines above it.
+- **`slug`** (`import encoding.slug`): `Make(text)` and `MakeWith(text, opts)` turn a title in any language into a URL slug (Persian, Arabic, Cyrillic, Greek, Latin accents, Hebrew, Hindi, Thai, kana and Hangul are transliterated by tables; emoji dropped; `&` `%` `@` spelled as words). `Transliterate(text, lang)`, `DetectScript`, `Unique(slug, exists)` and `Numbered`, `IsSlug` and `IsSlugWith`. `Options` has `separator lowercase max_length lang keep_unicode keep_han trim collapse allow symbols identifier fallback` plus `AddStopWords` and `AddReplacement` (free with `FreeOptions`); presets `DefaultOptions URL Filename Snake Identifier Unicode`. Pure and thread-safe; every returned `str` is the caller's. `max_length` cuts between words; Persian short vowels are not guessed.
 - **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. The four decoders
   throw: `Base64Decode(s): str` reads both alphabets (`+/` and `-_`),
   optional padding and whitespace, and throw `Syntax` (bad character, data

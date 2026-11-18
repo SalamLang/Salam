@@ -604,10 +604,43 @@ func p_throws_type(a &: at.Ast, owner: int, rt: int): int:
     ret t
 end
 
+func p_at_throws(p &: Ps): bool:
+    ret p_at(p, tok.TK_KW_THROW) or p_at(p, tok.TK_KW_THROWS)
+end
+
+func p_throws_quiet_file(file: str): bool:
+    ret str.StartsWith(file, "std/") or str.Find(file, "/std/") >= 0 or str.StartsWith(file, "compiler/") or str.Find(file, "/compiler/") >= 0
+end
+
+func p_warn_old_throws(p &: Ps):
+    if p_throws_quiet_file(p.file):
+        ret
+    end
+    t := p_peek(p)
+    mut f := lg.Fix {}
+    f.index = t.begin_index as int
+    f.length = t.end_index as int - t.begin_index as int
+    f.preferred = true
+    f.safe = true
+    f.title = i18.Tr("Write 'throw'")
+    f.text = "throw"
+    if not str.Equals(t.lexeme, "throws"):
+        f.text = "پرتاب خطا"
+    end
+    lg.StageFix(f)
+    lg.LogSpanHelp(
+        p.lgr, lg.PH_PARSER, lg.LOG_WARN, p.file, t.begin_line as int, t.begin_col as int, f.index, f.length, i18.Tr("write 'throw' after the signature; 'throws' is the old spelling and will be removed"), i18.Tr("W234: 'throws' is deprecated, use 'throw'")
+    )
+end
+
 func p_apply_throws(p &: Ps, a &: at.Ast, n: int, rt: int): int:
-    if not p_match(p, tok.TK_KW_THROWS):
+    if not p_at_throws(p):
         ret rt
     end
+    if p_at(p, tok.TK_KW_THROWS):
+        p_warn_old_throws(p)
+    end
+    p_advance(p)
     mut fv := at.Get(a, n)
     fv.is_throws = true
     at.Put(a, n, fv)
@@ -633,7 +666,7 @@ func p_try_return_type(p &: Ps, a &: at.Ast, out_type &: int): bool:
     p.ret_type = false
     tname := at.Get(a, t).name
     valid_name := tname.Len() > 0 and not str.Equals(tname, "<error>")
-    if valid_name and (p_at(p, tok.TK_COLON) or p_at(p, tok.TK_STMT_END) or p_at(p, tok.TK_KW_THROWS) or p_at_eof(p)):
+    if valid_name and (p_at(p, tok.TK_COLON) or p_at(p, tok.TK_STMT_END) or p_at_throws(p) or p_at_eof(p)):
         p.panic = save_panic
         out_type = t
         ret true

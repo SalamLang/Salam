@@ -23,74 +23,9 @@ import os
 import os.shell
 import filepath
 
-/*
- * Cross-platform clipboard access for native desktop apps (best-effort).
- *
- * Notes:
- * - Text clipboard is the primary supported path on all platforms.
- * - HTML/rich text and image clipboard operations are best-effort and may be
- *   unavailable depending on platform/runtime/tooling.
- * - Linux falls back to Wayland (wl-copy/wl-paste), X11 (xclip/xsel), and
- *   Termux clipboard tools when available.
- * - Headless or missing-backend environments return false/empty results.
- * - Snapshot/poll helpers are content-length/fingerprint hints, not OS events.
- */
-
-mut _cb_last_error := ""
-mut _cb_last_snapshot := ""
-
-func _cb_set_error(msg: str):
-    _cb_last_error = msg
-end
-
-func _cb_ok(): bool:
-    _cb_last_error = ""
-    ret true
-end
-
-@en "LastError"
-@fa "آخرین خطا"
-pub func LastError(): str:
-    ret _cb_last_error
-end
-
-@en "Snapshot"
-@fa "نمای لحظه‌ای"
-pub func Snapshot(): str:
-    // Best-effort change token based on clipboard text content.
-    t := GetText()
-    tok := str.Concat("text:", str.FromInt(t.Len() as i64))
-    mem.Free(t as void*)
-    ret tok
-end
-
-@en "HasChangedSince"
-@fa "از زمان قبل تغییر کرده"
-pub func HasChangedSince(previous_snapshot: str): bool:
-    cur := Snapshot()
-    defer mem.Free(cur as void*)
-    if previous_snapshot.Len() == 0:
-        ret cur.Len() > 0
-    end
-    ret cur != previous_snapshot
-end
-
-@en "PollChanged"
-@fa "بررسی تغییر"
-pub func PollChanged(): bool:
-    cur := Snapshot()
-    changed := _cb_last_snapshot.Len() == 0 or cur != _cb_last_snapshot
-    if _cb_last_snapshot.Len() > 0:
-        mem.Free(_cb_last_snapshot as void*)
-    end
-    _cb_last_snapshot = cur
-    ret changed
-end
-
 if SALAM_OS_WINDOWS:
     link dynamic "user32"
     link dynamic "kernel32"
-
     extern:
         func OpenClipboard(hwnd: void*): int
         func CloseClipboard(): int
@@ -106,12 +41,72 @@ if SALAM_OS_WINDOWS:
         func MultiByteToWideChar(code_page: u32, flags: u32, src: str, src_len: int, dst: void*, dst_len: int): int
         func WideCharToMultiByte(code_page: u32, flags: u32, src: void*, src_len: int, dst: void*, dst_len: int, def_char: void*, used: void*): int
     end
+end
 
+if SALAM_OS_MAC:
+    link framework "AppKit"
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(): void
+    end
+end
+
+/*
+ * Cross-platform clipboard access for native desktop apps (best-effort).
+ *
+ * Notes:
+ * - Text clipboard is the primary supported path on all platforms.
+ * - HTML/rich text and image clipboard operations are best-effort and may be
+ *   unavailable depending on platform/runtime/tooling.
+ * - Linux falls back to Wayland (wl-copy/wl-paste), X11 (xclip/xsel), and
+ *   Termux clipboard tools when available.
+ * - Headless or missing-backend environments return false/empty results.
+ * - Snapshot/poll helpers are content-length/fingerprint hints, not OS events.
+ */
+
+if SALAM_OS_WINDOWS:
     const _CF_UNICODETEXT := 13 as u32
     const _CF_DIB := 8 as u32
     const _GMEM_MOVEABLE := 2 as u32
     const _CP_UTF8 := 65001 as u32
+end
 
+mut _cb_last_error := ""
+mut _cb_last_snapshot := ""
+
+func _strip_tags(markup: str): str:
+    mut sb := str.NewBuilder()
+    mut depth := 0
+    repeat markup.Len() in i:
+        ch := markup.Substr(i, 1)
+        if ch == "<":
+            depth++
+        else ch == ">":
+            if depth > 0:
+                depth--
+            end
+        else:
+            if depth == 0:
+                str.BufAppend(sb, ch)
+            end
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _cb_set_error(msg: str):
+    _cb_last_error = msg
+end
+
+func _cb_ok(): bool:
+    _cb_last_error = ""
+    ret true
+end
+
+if SALAM_OS_WINDOWS:
     func _wide(s: str): void*:
         needed := MultiByteToWideChar(_CP_UTF8, 0 as u32, s, 0 - 1, null, 0)
         if needed <= 0:
@@ -259,7 +254,7 @@ if SALAM_OS_WINDOWS:
             end
             ret ok
         end
-        text := str.StripTags(html)
+        text := _strip_tags(html)
         if text.Len() > 0:
             ok := SetText(text)
             mem.Free(text as void*)
@@ -337,14 +332,6 @@ if SALAM_OS_WINDOWS:
 end
 
 if SALAM_OS_MAC:
-    link framework "AppKit"
-
-    extern:
-        func objc_getClass(name: str): void*
-        func sel_registerName(name: str): void*
-        func objc_msgSend(): void
-    end
-
     func _objc0(recv: void*, name: str): void*:
         fn := (&objc_msgSend) as extern func (void*, void*) void*
         ret fn(recv, sel_registerName(name))
@@ -385,8 +372,8 @@ if SALAM_OS_MAC:
             _cb_set_error("NSPasteboard unavailable")
             ret str.Clone("")
         end
-        ty := _ns("public.utf8-plain-text")
-        val := _objc1(pb, "stringForType:", ty)
+        mut ty := _ns("public.utf8-plain-text")
+        mut val := _objc1(pb, "stringForType:", ty)
         if val == null:
             ty = _ns("NSStringPboardType")
             val = _objc1(pb, "stringForType:", ty)
@@ -451,8 +438,8 @@ if SALAM_OS_MAC:
             _cb_set_error("NSPasteboard unavailable")
             ret str.Clone("")
         end
-        ty := _ns("public.html")
-        val := _objc1(pb, "stringForType:", ty)
+        mut ty := _ns("public.html")
+        mut val := _objc1(pb, "stringForType:", ty)
         if val == null:
             ty = _ns("Apple HTML pasteboard type")
             val = _objc1(pb, "stringForType:", ty)
@@ -506,7 +493,7 @@ if SALAM_OS_MAC:
             ret false
         end
         mut ext := ".bin"
-        lowm := str.ToLower(mime)
+        lowm := str.Lower(mime)
         if str.Contains(lowm, "png"): ext = ".png"
         else str.Contains(lowm, "jpeg") or str.Contains(lowm, "jpg"): ext = ".jpg"
         else str.Contains(lowm, "gif"): ext = ".gif"
@@ -602,9 +589,9 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
         mem.Free(tdir as void*)
         mem.Free(base as void*)
         _w := io.WriteFile(path, text)
-        defer _r := os.Remove(path)
         cmd := script + " < " + path
         res := _run_sh(cmd)
+        _r := os.Remove(path)
         mem.Free(cmd as void*)
         mem.Free(path as void*)
         ret res
@@ -970,7 +957,7 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
         end
         data := io.ReadFile(path)
         mut mime := "image/png"
-        low := str.ToLower(path)
+        low := str.Lower(path)
         if str.EndsWith(low, ".jpg") or str.EndsWith(low, ".jpeg"):
             mime = "image/jpeg"
         else str.EndsWith(low, ".gif"):
@@ -1007,6 +994,45 @@ if SALAM_OS_LINUX or SALAM_OS_FREEBSD or SALAM_OS_ANDROID or SALAM_OS_WASM:
         end
         ret str.Clone("none")
     end
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _cb_last_error
+end
+
+@en "Snapshot"
+@fa "نمای لحظه‌ای"
+pub func Snapshot(): str:
+    // Best-effort change token based on clipboard text content.
+    t := GetText()
+    tok := str.Concat("text:", str.FromInt(t.Len() as i64))
+    mem.Free(t as void*)
+    ret tok
+end
+
+@en "HasChangedSince"
+@fa "از زمان قبل تغییر کرده"
+pub func HasChangedSince(previous_snapshot: str): bool:
+    cur := Snapshot()
+    defer mem.Free(cur as void*)
+    if previous_snapshot.Len() == 0:
+        ret cur.Len() > 0
+    end
+    ret cur != previous_snapshot
+end
+
+@en "PollChanged"
+@fa "بررسی تغییر"
+pub func PollChanged(): bool:
+    cur := Snapshot()
+    changed := _cb_last_snapshot.Len() == 0 or cur != _cb_last_snapshot
+    if _cb_last_snapshot.Len() > 0:
+        mem.Free(_cb_last_snapshot as void*)
+    end
+    _cb_last_snapshot = cur
+    ret changed
 end
 
 @en "IsSupported"
@@ -1058,9 +1084,9 @@ end
 pub func CapabilityStatus(): str:
     b := Backend()
     mut s := "backend=" + b
-    s = s + ", text=" + (SupportsText() ? "true" : "false")
-    s = s + ", html=best-effort"
-    s = s + ", image=best-effort"
+    s += ", text=" + (SupportsText() ? "true" : "false")
+    s += ", html=best-effort"
+    s += ", image=best-effort"
     mem.Free(b as void*)
     ret s
 end
@@ -1092,8 +1118,9 @@ pub func SessionKind(): str:
         mem.Free(d as void*)
         mem.Free(dt as void*)
         ret str.Clone("headless-or-unknown")
+    else:
+        ret str.Clone("unknown")
     end
-    ret str.Clone("unknown")
 end
 
 @en "HasDisplaySession"

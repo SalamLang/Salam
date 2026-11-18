@@ -99273,6 +99273,37 @@ true
 func to_str(): str
 ```
 
+The canonical text of the value, the same as String: 36 lowercase characters.
+
+encoding-uuid-Buffer.salam
+
+```salam
+import encoding.uuid
+import mem
+
+func main:
+    id := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    buf := mem.Allocate(16 as u64)
+    defer mem.Free(buf)
+    uuid.ToBuffer(id, buf)
+    p := buf as u8*
+    println p[0], p[15]
+    back := uuid.FromBuffer(buf)
+    println back.to_str()
+    println back.hi == id.hi, back.lo == id.lo
+    println uuid.Equal(back, id)
+end
+```
+
+Output:
+
+```text
+248 246
+f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+true true
+true
+```
+
 ## Constants and variables
 
 ### `VARIANT_NCS`
@@ -99670,7 +99701,7 @@ func ToBuffer(u: UUID, out: void*)
 
 Writes the 16 bytes to the memory out points at. The buffer must hold at least 16 bytes.
 
-The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+The example for this item is shown with the ones above: encoding-uuid-Buffer.salam
 
 ### `FromBuffer`
 
@@ -99680,7 +99711,7 @@ func FromBuffer(src: void*): UUID
 
 Reads 16 bytes from the memory src points at.
 
-The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+The example for this item is shown with the ones above: encoding-uuid-Buffer.salam
 
 ### `NamespaceDNS`
 
@@ -100423,6 +100454,41 @@ A 128 bit identifier: a 48 bit millisecond timestamp and 80 random bits. It is a
 | `hi` | `i64 = 0` | The upper 40 bits of the 80 random bits. |
 | `lo` | `i64 = 0` | The lower 40 bits of the 80 random bits. |
 
+encoding-ulid-Bytes.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    r := ulid.Parse("01ARYZ6S41TSV4RRFFQ69G5FAV")
+    mut raw := ulid.Bytes(r.id)
+    defer raw.free()
+    println raw.len(), raw.get(0), raw.get(15)
+    back := ulid.FromBytes(raw)
+    println back.ok, ulid.Equal(back.id, r.id)
+    mut wire := ulid.ToUUIDBytes(r.id)
+    defer wire.free()
+    println wire.len(), ulid.Equal(ulid.FromUUIDBytes(wire).id, r.id)
+    mut tail := ulid.Entropy(r.id)
+    defer tail.free()
+    println tail.len(), r.id.hi, r.id.lo
+    mut short := Vector {} as Vector<u8>
+    defer short.free()
+    short.push(1 as u8)
+    println ulid.FromBytes(short).err == ulid.ERR_BYTES
+end
+```
+
+Output:
+
+```text
+16 1 91
+true true
+16 true
+10 921107718639 797035380059
+true
+```
+
 ### `Result`
 
 ```salam
@@ -100436,6 +100502,30 @@ What parsing and the generators return: `ok`, the `id` and an `err` code.
 | `ok` | `bool = false` | True when the operation worked. |
 | `id` | `ULID` | The id; the zero id when `ok` is false. |
 | `err` | `int = 0` | One of the error codes, `OK` on success. |
+
+encoding-ulid-Parse.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    r := ulid.Parse("01arYz6s41TsV4RrffQ69g5fav")
+    println r.ok, ulid.Time(r.id), ulid.String(r.id)
+    bad := ulid.Parse("01ARYZ6S41TSV4RRFFQ69G5FAU")
+    println bad.ok, bad.err == ulid.ERR_CHAR
+    println ulid.ParseStrict("01arYz6s41TsV4RrffQ69g5fav").ok
+    println ulid.IsValid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"), ulid.IsValid("8ZZZZZZZZZZZZZZZZZZZZZZZZZ")
+end
+```
+
+Output:
+
+```text
+true 1469918176385 01ARYZ6S41TSV4RRFFQ69G5FAV
+false true
+false
+true false
+```
 
 ### `Generator`
 
@@ -100452,6 +100542,43 @@ A monotonic generator. It owns a lock and its last id, so the copies of one Gene
 | `clock` | `func(): i64` | The function that returns the current time in milliseconds. |
 | `entropy` | `func(): i64` | The function that returns 40 random bits, or a negative number when it fails. |
 
+encoding-ulid-Next.salam
+
+```salam
+import encoding.ulid
+
+mut tick := 100 as i64
+
+func clock(): i64:
+    ret tick
+end
+
+func source(): i64:
+    ret 1
+end
+
+func main:
+    g := ulid.NewGeneratorWith((): ret clock() end, (): ret source() end)
+    defer ulid.Free(g)
+    first := ulid.Next(g)
+    second := ulid.Next(g)
+    println ulid.String(first.id)
+    println ulid.String(second.id)
+    println ulid.Less(first.id, second.id)
+    forced := ulid.NextAt(g, 50)
+    println ulid.Time(forced.id), ulid.Less(second.id, forced.id)
+end
+```
+
+Output:
+
+```text
+00000000340000000100000001
+00000000340000000100000002
+true
+100 true
+```
+
 ## Constants and variables
 
 ### `MAX_TIME`
@@ -100462,6 +100589,39 @@ const MAX_TIME: i64 = 281474976710655
 
 The largest timestamp a ULID can hold, 281474976710655 milliseconds (48 bits), which is the year 10889.
 
+encoding-ulid-Errors.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    each code in [ulid.OK, ulid.ERR_LENGTH, ulid.ERR_CHAR, ulid.ERR_OVERFLOW, ulid.ERR_TIME, ulid.ERR_ENTROPY, ulid.ERR_BYTES, 99]:
+        println code, ulid.ErrorText(code)
+    end
+    r := ulid.Parse("short")
+    println r.ok, r.err, ulid.IsZero(r.id)
+    println ulid.MAX_TIME
+    top := ulid.MaxAt(ulid.MAX_TIME)
+    println top.time, top.hi, top.lo
+end
+```
+
+Output:
+
+```text
+0 ok
+1 a ULID is 26 characters
+2 invalid character in ULID
+3 ULID value is larger than 7ZZZZZZZZZZZZZZZZZZZZZZZZZ
+4 timestamp is outside 0 to 281474976710655
+5 the entropy source failed
+6 wrong number of bytes
+99 unknown error
+false 1 true
+281474976710655
+281474976710655 1099511627775 1099511627775
+```
+
 ### `OK`
 
 ```salam
@@ -100469,6 +100629,8 @@ const OK: i32 = 0
 ```
 
 Error code 0: nothing went wrong.
+
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
 
 ### `ERR_LENGTH`
 
@@ -100478,6 +100640,8 @@ const ERR_LENGTH: i32 = 1
 
 The text is not 26 characters long.
 
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
+
 ### `ERR_CHAR`
 
 ```salam
@@ -100485,6 +100649,8 @@ const ERR_CHAR: i32 = 2
 ```
 
 The text has a character outside the Crockford alphabet, such as U.
+
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
 
 ### `ERR_OVERFLOW`
 
@@ -100494,6 +100660,8 @@ const ERR_OVERFLOW: i32 = 3
 
 The value is larger than 7ZZZZZZZZZZZZZZZZZZZZZZZZZ (first character above 7), or an increment would overflow the 80 random bits.
 
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
+
 ### `ERR_TIME`
 
 ```salam
@@ -100501,6 +100669,8 @@ const ERR_TIME: i32 = 4
 ```
 
 The timestamp is outside 0 to MAX_TIME.
+
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
 
 ### `ERR_ENTROPY`
 
@@ -100510,6 +100680,8 @@ const ERR_ENTROPY: i32 = 5
 
 The entropy source reported a failure; no id was made and the generator state did not change.
 
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
+
 ### `ERR_BYTES`
 
 ```salam
@@ -100517,6 +100689,8 @@ const ERR_BYTES: i32 = 6
 ```
 
 A byte list had the wrong length (16 for FromBytes, 10 for FromParts).
+
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
 
 ## Functions
 
@@ -100562,6 +100736,8 @@ func FromBytes(b: Vector<u8>): Result
 
 Reads the 16 byte binary form (6 bytes of time, 10 of randomness, big endian).
 
+The example for this item is shown with the ones above: encoding-ulid-Bytes.salam
+
 ### `FromUUIDBytes`
 
 ```salam
@@ -100569,6 +100745,8 @@ func FromUUIDBytes(b: Vector<u8>): Result
 ```
 
 The same as FromBytes: a ULID fits the 16 bytes of a UUID.
+
+The example for this item is shown with the ones above: encoding-ulid-Bytes.salam
 
 ### `String`
 
@@ -100578,6 +100756,40 @@ func String(id: ULID): str
 
 The 26 character canonical text, uppercase Crockford base32.
 
+encoding-ulid-New.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    a := ulid.New()
+    b := ulid.NewString()
+    println ulid.String(a).len(), b.len()
+    println ulid.Less(a, ulid.Parse(b).id)
+    at := ulid.NewAt(1469918176385)
+    println at.ok, ulid.Time(at.id), at.id.time
+    println ulid.NewAt(ulid.MAX_TIME + 1).err == ulid.ERR_TIME
+    println ulid.Now() > 1700000000000
+    last := ulid.Last(ulid.Default())
+    println last.ok, ulid.Less(a, last.id)
+    fresh := ulid.NewGenerator()
+    defer ulid.Free(fresh)
+    println ulid.Last(fresh).err == ulid.ERR_TIME
+end
+```
+
+Output:
+
+```text
+26 26
+true
+true 1469918176385 1469918176385
+true
+true
+true true
+true
+```
+
 ### `Bytes`
 
 ```salam
@@ -100585,6 +100797,8 @@ func Bytes(id: ULID): Vector<u8>
 ```
 
 The 16 byte binary form. Free the vector.
+
+The example for this item is shown with the ones above: encoding-ulid-Bytes.salam
 
 ### `ToUUIDBytes`
 
@@ -100594,6 +100808,8 @@ func ToUUIDBytes(id: ULID): Vector<u8>
 
 The same 16 bytes, for code that stores or sends them as a UUID.
 
+The example for this item is shown with the ones above: encoding-ulid-Bytes.salam
+
 ### `Entropy`
 
 ```salam
@@ -100602,6 +100818,8 @@ func Entropy(id: ULID): Vector<u8>
 
 The 10 random bytes. Free the vector.
 
+The example for this item is shown with the ones above: encoding-ulid-Bytes.salam
+
 ### `Time`
 
 ```salam
@@ -100609,6 +100827,8 @@ func Time(id: ULID): i64
 ```
 
 The timestamp in milliseconds.
+
+The example for this item is shown with the ones above: encoding-ulid-New.salam
 
 ### `Compare`
 
@@ -100655,6 +100875,8 @@ func Equal(a: ULID, b: ULID): bool
 
 True when two ids are the same.
 
+The example for this item is shown with the ones above: encoding-ulid-Bytes.salam
+
 ### `Less`
 
 ```salam
@@ -100662,6 +100884,8 @@ func Less(a: ULID, b: ULID): bool
 ```
 
 True when the first id is older than the second, or smaller in the random part at the same time.
+
+The example for this item is shown with the ones above: encoding-ulid-Next.salam
 
 ### `IsZero`
 
@@ -100711,29 +100935,7 @@ func Parse(s: str): Result
 
 Reads 26 characters. Lowercase is accepted, I and L mean 1, O means 0, U is refused, and a first character above 7 is ERR_OVERFLOW.
 
-encoding-ulid-Parse.salam
-
-```salam
-import encoding.ulid
-
-func main:
-    r := ulid.Parse("01arYz6s41TsV4RrffQ69g5fav")
-    println r.ok, ulid.Time(r.id), ulid.String(r.id)
-    bad := ulid.Parse("01ARYZ6S41TSV4RRFFQ69G5FAU")
-    println bad.ok, bad.err == ulid.ERR_CHAR
-    println ulid.ParseStrict("01arYz6s41TsV4RrffQ69g5fav").ok
-    println ulid.IsValid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"), ulid.IsValid("8ZZZZZZZZZZZZZZZZZZZZZZZZZ")
-end
-```
-
-Output:
-
-```text
-true 1469918176385 01ARYZ6S41TSV4RRFFQ69G5FAV
-false true
-false
-true false
-```
+The example for this item is shown with the ones above: encoding-ulid-Parse.salam
 
 ### `ParseStrict`
 
@@ -100773,6 +100975,8 @@ func NewGenerator(): Generator
 
 A generator with the system clock and the operating system random source.
 
+The example for this item is shown with the ones above: encoding-ulid-New.salam
+
 ### `NewGeneratorWith`
 
 ```salam
@@ -100781,42 +100985,7 @@ func NewGeneratorWith(clock: func(): i64, entropy: func(): i64): Generator
 
 A generator with your own clock and entropy functions, for tests and for sources that can fail. The entropy function returns 40 random bits (0 to 1099511627775) or a negative number on failure, which makes Next report ERR_ENTROPY.
 
-encoding-ulid-Next.salam
-
-```salam
-import encoding.ulid
-
-mut tick := 100 as i64
-
-func clock(): i64:
-    ret tick
-end
-
-func source(): i64:
-    ret 1
-end
-
-func main:
-    g := ulid.NewGeneratorWith((): ret clock() end, (): ret source() end)
-    defer ulid.Free(g)
-    first := ulid.Next(g)
-    second := ulid.Next(g)
-    println ulid.String(first.id)
-    println ulid.String(second.id)
-    println ulid.Less(first.id, second.id)
-    forced := ulid.NextAt(g, 50)
-    println ulid.Time(forced.id), ulid.Less(second.id, forced.id)
-end
-```
-
-Output:
-
-```text
-00000000340000000100000001
-00000000340000000100000002
-true
-100 true
-```
+The example for this item is shown with the ones above: encoding-ulid-Next.salam
 
 ### `Next`
 
@@ -100878,6 +101047,8 @@ func Last(g: Generator): Result
 
 The last id the generator made, or ERR_TIME when it has made none yet.
 
+The example for this item is shown with the ones above: encoding-ulid-New.salam
+
 ### `Free`
 
 ```salam
@@ -100885,6 +101056,8 @@ func Free(g: Generator)
 ```
 
 Releases a generator made by NewGenerator or NewGeneratorWith.
+
+The example for this item is shown with the ones above: encoding-ulid-Next.salam
 
 ### `Default`
 
@@ -100894,6 +101067,8 @@ func Default(): Generator
 
 The process wide generator behind New, NewString and NewBatch. Do not free it.
 
+The example for this item is shown with the ones above: encoding-ulid-New.salam
+
 ### `New`
 
 ```salam
@@ -100901,6 +101076,8 @@ func New(): ULID
 ```
 
 A new id from the default generator, using the system clock and the operating system random source. Ids from one process are strictly increasing, even from many threads at once.
+
+The example for this item is shown with the ones above: encoding-ulid-New.salam
 
 ### `NewString`
 
@@ -100910,6 +101087,8 @@ func NewString(): str
 
 Shorthand for String(New()).
 
+The example for this item is shown with the ones above: encoding-ulid-New.salam
+
 ### `NewAt`
 
 ```salam
@@ -100917,6 +101096,8 @@ func NewAt(ms: i64): Result
 ```
 
 An id for a chosen millisecond with fresh random bits. It keeps no state, so two calls in one millisecond are not ordered; use a Generator when order matters. Fails with ERR_TIME outside 0 to MAX_TIME.
+
+The example for this item is shown with the ones above: encoding-ulid-New.salam
 
 ### `NewBatch`
 
@@ -100936,6 +101117,8 @@ func ErrorText(code: int): str
 
 A short English message for an error code.
 
+The example for this item is shown with the ones above: encoding-ulid-Errors.salam
+
 ### `Now`
 
 ```salam
@@ -100943,6 +101126,8 @@ func Now(): i64
 ```
 
 The system clock in milliseconds since the Unix epoch, kept inside 0 to MAX_TIME.
+
+The example for this item is shown with the ones above: encoding-ulid-New.salam
 
 
 ---

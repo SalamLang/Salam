@@ -17,7 +17,7 @@ The frontend of a compiler (lexer, parser, semantic analysis) answers "is this p
 Every language project has to decide how much of that to build itself. Some reuse a whole existing compiler by generating C. Many reuse LLVM. A few write everything. Salam does all three, and the [compiler pipeline article](/blog/how-the-salam-compiler-works/) shows where they plug in. Here is the program we will push through each one:
 
 ```salam
-func sum squares(n: int): int:
+func sum_squares(n: int): int:
     mut total := 0
     repeat 1 to n in i:
         total += i * i
@@ -26,7 +26,7 @@ func sum squares(n: int): int:
 end
 
 func main:
-    println sum squares(10)
+    println sum_squares(10)
 end
 ```
 
@@ -80,7 +80,7 @@ What it costs: you need a C compiler on the machine, and output quality depends 
 salam llvm sum.salam -o sum.ll
 ```
 
-This is the start of `sum squares` before optimization (`salam llvm` defaults to `-O0`, because the command exists to be read):
+This is the start of `sum_squares` before optimization (`salam llvm` defaults to `-O0`, because the command exists to be read):
 
 ```text
 define internal i32 @salam_sum_20squares_i32(i32 %arg0) nounwind {
@@ -99,7 +99,7 @@ L1_rbody:
   store i32 %t18, ptr %v.total.0
 ```
 
-The multi-word name `sum squares` becomes `salam_sum_20squares_i32` (the space is encoded as `_20`), and every local is a stack slot that LLVM's optimizer will later promote to registers. A real `salam build` with this backend optimizes at `-O2`, or `-O3` with `--release`.
+The multi-word name `sum_squares` becomes `salam_sum_20squares_i32` (the space is encoded as `_20`), and every local is a stack slot that LLVM's optimizer will later promote to registers. A real `salam build` with this backend optimizes at `-O2`, or `-O3` with `--release`.
 
 Unlike the C path, the whole program goes into **one** LLVM module, so the optimizer sees across package boundaries and drops whatever the program never uses. In the main release builds, LLVM and its linker lld are linked into the `salam` binary itself, with sysroots for the cross targets, so the LLVM backend needs no outside tools at all. A build of `salam` without embedded LLVM can still use this backend by calling `clang` from `PATH`.
 
@@ -119,7 +119,7 @@ You can see the result with `--emit-asm`, which writes the machine code as assem
     mov ecx, 385
 ```
 
-The native backend inlined `sum squares`, evaluated the whole ten-step loop at compile time, and kept only the constant `385` and the code that turns it into decimal digits for printing. No call to `sum squares` and none of its loop is left.
+The native backend inlined `sum_squares`, evaluated the whole ten-step loop at compile time, and kept only the constant `385` and the code that turns it into decimal digits for printing. No call to `sum_squares` and none of its loop is left.
 
 The `--cpu` option chooses an instruction-set level on x86-64: the default baseline, `x86-64-v2` (SSE4.1 vector code) or `x86-64-v3` and `x86-64-v4`, which let loops vectorize with 256-bit AVX2 registers but require a CPU that has them. There is no runtime dispatch, so a build either runs everywhere or needs AVX2 everywhere.
 

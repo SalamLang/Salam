@@ -243,7 +243,8 @@ How a name with several words is written depends on the language:
 
 - **English: no whitespace, ever.** Use `snake_case` for functions, variables,
   parameters and fields, and `PascalCase` for types, enums and the `pub` API
-  (as the std does): `parse_colour`, `red_value`, `Rgb`.
+  (as the std does): `parse_colour`, `red_value`, `Rgb`. A name with spaces in
+  an English file is the compile error E234.
 - **Persian: separate the words with spaces.** That is the standard, and the
   compiler accepts it for functions, methods, parameters, struct fields, enum
   members and variables: `تابع خواندن رنگ(متن ورودی: رشته)`,
@@ -450,15 +451,15 @@ an unmarked call is `E155`. The error is always the built-in `Error`
 (`e.kind`, `e.message`, `e.to_str()`), which needs no import.
 
 ```salam
-func parse port(text: str): int throw:
+func parse_port(text: str): int throw:
     if text == "": throw Error.New(ErrorKind.InvalidArgument, "empty port") end
     ret text.to_int()
 end
 
 func main:
-    port := try parse port("") catch 8080       // fallback on error
+    port := try parse_port("") catch 8080       // fallback on error
     try:
-        println parse port("80") + port
+        println parse_port("80") + port
     catch e:
         println "bad port:", e.message
     end
@@ -677,9 +678,9 @@ caught by it and still targets an enclosing loop.
 ## 12. Enum members on one line need commas
 
 `enum E: A, B, C end` - on a single line the comma between members is
-mandatory, because member names may contain spaces (`enum Status: not
-started, in progress, done end`): `enum E: A B end` declares one member named
-`A B`. One member per line works without commas:
+mandatory, because a Persian member name may contain spaces: in a Persian file,
+`enum E: A B end` declares one member named `A B`; in an English file it is
+the error E234. One member per line works without commas:
 
 ```salam
 enum Color:

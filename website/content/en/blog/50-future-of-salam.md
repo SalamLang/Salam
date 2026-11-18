@@ -57,7 +57,7 @@ struct Version:
     pub patch: int
 end
 
-func parse version(text: str): Version:
+func parse_version(text: str): Version:
     parts := str.Split(str.TrimPrefix(text, "v"), ".")
     defer parts.Free()
     ret Version {
@@ -67,7 +67,7 @@ func parse version(text: str): Version:
     }
 end
 
-func breaking upgrade(from: Version, next: Version): bool:
+func breaking_upgrade(from: Version, next: Version): bool:
     if from.major == 0:
         ret next.major > 0 or next.minor != from.minor
     end
@@ -78,9 +78,9 @@ func main:
     olds := ["v0.6.2", "v0.5.9", "v1.4.0", "v1.9.2"]
     news := ["v0.6.3", "v0.6.0", "v1.9.2", "v2.0.0"]
     repeat olds.len() in i:
-        a := parse version(olds[i])
-        b := parse version(news[i])
-        verdict := breaking upgrade(a, b) ? "may break code" : "should be compatible"
+        a := parse_version(olds[i])
+        b := parse_version(news[i])
+        verdict := breaking_upgrade(a, b) ? "may break code" : "should be compatible"
         println olds[i], "->", news[i], verdict
     end
 end

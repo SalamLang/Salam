@@ -39,11 +39,11 @@ struct Order:
     pub count: int
 end
 
-func line total(o: Order): int:
+func line_total(o: Order): int:
     ret o.price * o.count
 end
 
-func box for(total: int): Box:
+func box_for(total: int): Box:
     if total >= 500:
         ret Box.Large
     else total >= 200:
@@ -60,11 +60,11 @@ func main:
     ]
     mut sum := 0
     each o in orders:
-        t := line total(o)
+        t := line_total(o)
         println o.item, t
         sum += t
     end
-    packing := match box for(sum):
+    packing := match box_for(sum):
         Small: "a small box" end
         Medium: "a medium box" end
         Large: "a large box" end
@@ -276,7 +276,7 @@ A few things exist only because Persian is written differently from English:
 - **Digits.** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits are accepted in number literals and can be mixed with ASCII digits. The decimal point is always `.`; the Persian decimal separator `٫` is not accepted.
 - **The Persian comma** `،` works everywhere `,` does: arguments, parameters, array and struct literals, enum members and match patterns.
 - **Guillemets.** `«...»` is a string literal in a Persian file, equivalent to `"..."`.
-- **Multi-word names.** Identifiers may contain spaces or the zero-width non-joiner (ZWNJ), and the two are interchangeable: `کتاب ها` and `کتاب‌ها` are the same name. The Arabic letters `ي` and `ك` are treated as the Persian `ی` and `ک`, so code typed on an Arabic keyboard layout still matches.
+- **Multi-word names.** In a Persian file, identifiers may contain spaces or the zero-width non-joiner (ZWNJ), and the two are interchangeable: `کتاب ها` and `کتاب‌ها` are the same name. The Arabic letters `ي` and `ك` are treated as the Persian `ی` and `ک`, so code typed on an Arabic keyboard layout still matches.
 
 The reasons behind these rules are the subject of [designing a language for Persian and Arabic](/blog/designing-a-language-for-persian-and-arabic/).
 

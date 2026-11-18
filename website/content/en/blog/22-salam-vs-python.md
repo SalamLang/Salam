@@ -82,7 +82,7 @@ on 2
 sat 2
 ```
 
-Both print the same three lines. The Salam version is longer, and the reasons are worth naming: types are declared on the struct, the containers are freed with `defer`, and there is no ready-made counting type. On the other hand, much of it will look familiar to a Python programmer: `each w in words` is `for w in words`, `each w, n in counts` is `for w, n in counts.items()`, `repeat 3 in i` is `for i in range(3)`, and there are no braces or semicolons. Salam even prints like Python's `print`, joining its arguments with spaces.
+Both print the same three lines. The Salam version is longer, and the reasons are worth naming: types are declared on the struct, the containers are freed with `defer`, and there is no ready-made counting type. On the other hand, much of it will look familiar to a Python programmer: `each w in words` is `for w in words`, `each w, n in counts` is `for w, n in counts.items()`, `repeat 3 in i` is `for_i in range(3)`, and there are no braces or semicolons. Salam even prints like Python's `print`, joining its arguments with spaces.
 
 ## Static types against dynamic types {#typing}
 
@@ -141,8 +141,8 @@ And the Salam source, from the same directory:
 
 ```salam
 func main:
-    mut best steps := 0 as i64
-    mut best n := 1 as i64
+    mut best_steps := 0 as i64
+    mut best_n := 1 as i64
     mut n := 1 as i64
     until n <= 30000:
         mut m := n
@@ -155,14 +155,14 @@ func main:
             end
             c++
         end
-        if c > best steps:
-            best steps = c
-            best n = n
+        if c > best_steps:
+            best_steps = c
+            best_n = n
         end
         n++
     end
-    println best steps
-    println best n
+    println best_steps
+    println best_n
 end
 ```
 
@@ -171,7 +171,7 @@ end
 26623
 ```
 
-The two are nearly line for line the same (Salam writes `until cond:` for a loop that runs while the condition holds, and allows spaces in names like `best steps`). Python took 245.7 ms, Salam 3.7 ms. The reason is structural, not clever: CPython executes bytecode and works with boxed integer objects, while Salam compiles the loop to machine instructions on 64-bit integers.
+The two are nearly line for line the same (Salam writes `until cond:` for a loop that runs while the condition holds, and allows spaces in names like `best_steps`). Python took 245.7 ms, Salam 3.7 ms. The reason is structural, not clever: CPython executes bytecode and works with boxed integer objects, while Salam compiles the loop to machine instructions on 64-bit integers.
 
 Two caveats keep the comparison fair. First, the programs are short, so interpreter start-up is part of Python's times, and the ratio varies by program: on recursive Fibonacci it was about 19 times, on the game of life almost a thousand. Second, real Python code that does heavy numeric work calls into libraries written in C. Programs 40 to 42 of the suite use NumPy in Python and Salam's `matrix` and `tensor` packages: Python finished the 400 by 400 matrix multiplication in 121.8 ms, against 14.3 ms for Salam and 42.5 ms for C's hand-written loops. With NumPy, Python stays within a few times of compiled code; without it, it is one to two orders of magnitude behind. The [benchmark article](/blog/is-salam-faster-than-c-and-rust/) explains the method and its limits.
 

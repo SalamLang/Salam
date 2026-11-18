@@ -22,13 +22,13 @@ import mem
 mut PORT := 0
 mut ready := sync.NewWaitGroup()
 mut outbox := Vector {} as Vector<str>
-mut server log := ""
-mut saw pong := false
-mut biggest post := 0
-mut pending blob ack := 0 - 1
+mut server_log := ""
+mut saw_pong := false
+mut biggest_post := 0
+mut pending_blob_ack := 0 - 1
 mut running := true
 
-func header value(head: str, name: str): int:
+func header_value(head: str, name: str): int:
     lower := str.Lower(head)
     at := str.Find(lower, name)
     if at < 0:
@@ -45,7 +45,7 @@ func header value(head: str, name: str): int:
     ret str.Trim(head.Substr(colon + 1, stop - colon - 1)).ToInt()
 end
 
-func read request(c: tcp.Conn, target &: str, body &: str): bool:
+func read_request(c: tcp.Conn, target &: str, body &: str): bool:
     mut buf := ""
     mut going := true
     until going:
@@ -61,7 +61,7 @@ func read request(c: tcp.Conn, target &: str, body &: str): bool:
     split := str.Find(buf, "\r\n\r\n")
     head := buf.Substr(0, split)
     mut rest := buf.Substr(split + 4, buf.Len() - split - 4)
-    mut want := header value(head, "content-length")
+    mut want := header_value(head, "content-length")
     until rest.Len() < want:
         chunk := tcp.Read(c, 8192)
         if chunk.Len() == 0:
@@ -77,7 +77,7 @@ func read request(c: tcp.Conn, target &: str, body &: str): bool:
     ret true
 end
 
-func ack id of(text: str): int:
+func ack_id_of(text: str): int:
     mut i := 1
     mut id := 0
     mut seen := false
@@ -97,47 +97,47 @@ func ack id of(text: str): int:
     ret id
 end
 
-func handle payload(payload: str):
+func handle_payload(payload: str):
     if payload.Len() == 0:
         ret
     end
     if str.StartsWith(payload, "b"):
-        server log += "binary=" + payload.Substr(1, payload.Len() - 1) + ";"
-        if pending blob ack >= 0:
-            outbox.Push("43" + pending blob ack + "[true]")
-            pending blob ack = 0 - 1
+        server_log += "binary=" + payload.Substr(1, payload.Len() - 1) + ";"
+        if pending_blob_ack >= 0:
+            outbox.Push("43" + pending_blob_ack + "[true]")
+            pending_blob_ack = 0 - 1
         end
         ret
     end
     kind := socketio.EngineKind(payload)
     rest := socketio.EngineBody(payload)
     if kind == socketio.EIO_PONG:
-        saw pong = true
+        saw_pong = true
     else kind == socketio.EIO_CLOSE:
-        server log += "client closed the session;"
+        server_log += "client closed the session;"
         running = false
     else kind == socketio.EIO_MESSAGE:
         if rest == "0":
             outbox.Push(`40{"sid":"polling-nsp"}`)
-            server log += "joined;"
+            server_log += "joined;"
         else str.StartsWith(rest, "2") and str.Contains(rest, `"echo"`):
-            server log += "echo;"
+            server_log += "echo;"
             outbox.Push(`42["echoed","over polling"]`)
         else str.StartsWith(rest, "2") and str.Contains(rest, `"held"`):
-            server log += "held " + rest.Substr(1, rest.Len() - 1) + ";"
+            server_log += "held " + rest.Substr(1, rest.Len() - 1) + ";"
         else str.StartsWith(rest, "5") and str.Contains(rest, `"upload"`):
             dash := str.Find(rest, "-")
-            server log += "attachments=" + rest.Substr(1, dash - 1) + ";"
-            pending blob ack = ack id of("x" + rest.Substr(dash + 1, rest.Len() - dash - 1))
+            server_log += "attachments=" + rest.Substr(1, dash - 1) + ";"
+            pending_blob_ack = ack_id_of("x" + rest.Substr(dash + 1, rest.Len() - dash - 1))
         else str.StartsWith(rest, "2") and str.Contains(rest, `"fetch"`):
             outbox.Push(`451-["blob",{"_placeholder":true,"num":0}]`)
             outbox.Push("bCQAH/w==")
         else str.StartsWith(rest, "2") and str.Contains(rest, `"sum"`):
-            id := ack id of(rest)
-            server log += "sum#" + id + ";"
+            id := ack_id_of(rest)
+            server_log += "sum#" + id + ";"
             outbox.Push("43" + id + "[7]")
         else rest == "1":
-            server log += "left the namespace;"
+            server_log += "left the namespace;"
         end
     end
 end
@@ -145,16 +145,16 @@ end
 func serve(c: tcp.Conn):
     mut target := ""
     mut body := ""
-    if not read request(c, target, body):
+    if not read_request(c, target, body):
         ret
     end
     if str.StartsWith(target, "POST"):
         mut items := socketio.SplitPayloads(body)
-        if items.Len() > biggest post:
-            biggest post = items.Len()
+        if items.Len() > biggest_post:
+            biggest_post = items.Len()
         end
         repeat items.Len() in i:
-            handle payload(items.Get(i))
+            handle_payload(items.Get(i))
         end
         items.Free()
         tcp.WriteHTTP(c, "200 OK", "text/html", "ok")
@@ -171,12 +171,12 @@ func serve(c: tcp.Conn):
         tcp.WriteHTTP(c, "200 OK", "text/plain; charset=UTF-8", socketio.EncodeEngine(socketio.EIO_PING, ""))
         ret
     end
-    body out := socketio.JoinPayloads(outbox)
+    body_out := socketio.JoinPayloads(outbox)
     outbox.Clear()
-    tcp.WriteHTTP(c, "200 OK", "text/plain; charset=UTF-8", body out)
+    tcp.WriteHTTP(c, "200 OK", "text/plain; charset=UTF-8", body_out)
 end
 
-func http server():
+func http_server():
     srv := tcp.Bind(0)
     PORT = tcp.Port(srv)
     sync.Done(ready)
@@ -197,7 +197,7 @@ end
 
 func main:
     sync.Add(ready, 1 as i64)
-    t := spawn(http server)
+    t := spawn(http_server)
     sync.Wait(ready)
 
     mut o := socketio.NewOptions()
@@ -260,12 +260,12 @@ func main:
     socketio.EventFree(blob)
 
     socketio.RunFor(c, 800)
-    println "answered the heartbeat:", saw pong
+    println "answered the heartbeat:", saw_pong
     println "nothing held any more:", socketio.Buffered(c)
-    println "most packets in one request:", biggest post
+    println "most packets in one request:", biggest_post
 
     socketio.Close(c)
     println "connected after close:", socketio.IsConnected(c)
     join(t)
-    println "server saw:", server log
+    println "server saw:", server_log
 end

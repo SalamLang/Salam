@@ -87,7 +87,7 @@ Here, for flavor, is the kind of code the compiler is made of: a tiny tokenizer 
 ```salam
 enum Kind: Number, Operator, Space, Unknown end
 
-func kind of(ch: str): Kind:
+func kind_of(ch: str): Kind:
     if "0123456789".Includes(ch):
         ret Kind.Number
     end
@@ -106,7 +106,7 @@ func main:
     mut tokens := Vector {} as Vector<str>
     defer tokens.Free()
     each ch in source + " ":
-        k := kind of(ch)
+        k := kind_of(ch)
         if k == Kind.Number:
             digits += ch
             continue

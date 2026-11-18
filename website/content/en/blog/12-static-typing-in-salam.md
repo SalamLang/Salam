@@ -245,7 +245,7 @@ Hello, Reza Karimi
 
 The type makes the absence visible in every signature. It is not as airtight as Rust's `Option`, though: reading `.value` without checking `is_some()` first is not a compile error, and on an empty `str?` it gives a null string. Prefer `unwrap_or` when there is a sensible default.
 
-## Errors as values, and checked throws {#errors}
+## Errors as values, and checked errors {#errors}
 
 Salam gives you two ways to make failure part of a function's type.
 
@@ -288,7 +288,7 @@ sum: 9
 error: not a digit: x
 ```
 
-The second is `throws`. A function declared `throws` can `throw` an `Error`, and the compiler requires every call to it to be marked: `try` passes the error on, `try ... catch value` supplies a fallback, and a `try:` block handles it. Nothing is unwound behind your back, and `defer` still runs. Forgetting the mark is a compile error, which is what separates this from exceptions in Java, C# or Python:
+The second is `throw`. A function declared `throw` can `throw` an `Error`, and the compiler requires every call to it to be marked: `try` passes the error on, `try ... catch value` supplies a fallback, and a `try:` block handles it. Nothing is unwound behind your back, and `defer` still runs. Forgetting the mark is a compile error, which is what separates this from exceptions in Java, C# or Python:
 
 ```text
 error[E155]: this call can throw an error: mark it with 'try' to pass the error on, or put it inside a 'try:' block to handle it

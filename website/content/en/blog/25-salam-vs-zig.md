@@ -1,7 +1,7 @@
 ---
 title: Salam vs Zig: two young compiled languages for low-level software
 seo_title: Salam vs Zig: Errors, Allocators, comptime and C Interop
-description: Salam vs Zig side by side: error unions and throws, explicit allocators vs defer and free, comptime vs conditional compilation, C interop and cross-compilation.
+description: Salam vs Zig side by side: error unions and throw, explicit allocators vs defer and free, comptime vs conditional compilation, C interop and cross-compilation.
 keywords: Salam vs Zig, Zig alternative, Zig comptime, Zig allocators, low-level programming language, C interop, cross-compilation, systems programming without garbage collector, error handling Zig try
 category: compare
 summary: Zig and Salam are both pre-1.0 systems languages with no garbage collector, a defer statement and a try keyword. They make very different choices about allocators, compile-time code and how much the standard library should do.
@@ -21,13 +21,13 @@ Zig first appeared in 2016, created by Andrew Kelley, and is developed by the Zi
 | Design goal      | A simpler, safer replacement for C                    | A readable systems language for apps, servers and low-level code        |
 | Syntax           | C-like, braces and semicolons                         | Blocks with `:` and `end`, no semicolons, English or Persian keywords   |
 | Memory           | Explicit allocators, passed as arguments              | One global allocator for collections; `mem` arenas and pools on request |
-| Errors           | Error unions (`!T`), `try`, `catch`, `errdefer`       | `throws`, `try`, `catch`; errors carry a kind, a message and a position |
+| Errors           | Error unions (`!T`), `try`, `catch`, `errdefer`       | `throw`, `try`, `catch`; errors carry a kind, a message and a position |
 | Compile time     | `comptime`: run any Zig code while compiling          | Constants, conditional compilation, `-D` flags, monomorphized generics  |
 | C interop        | Imports C headers; `zig cc` compiles C and C++        | `extern:` declarations; calls follow the C ABI on every backend         |
 | Standard library | Lower level: data structures, I/O, HTTP, JSON, crypto | Application level: HTTP router, databases, JSON, TLS, images, ML        |
 | Status           | Pre-1.0, breaking changes between releases            | Pre-1.0, breaking changes between releases                              |
 
-## Error handling: error unions and throws {#errors}
+## Error handling: error unions and throw {#errors}
 
 The two languages ended up with surprisingly similar error handling. Here is a function that parses a TCP port in each, and a loop that reports good and bad inputs. In Zig, a function that can fail returns an error union, `try` passes an error up, and `if`/`else` with captures handles both outcomes:
 
@@ -52,12 +52,12 @@ pub fn main() void {
 }
 ```
 
-In Salam, a function that can fail is marked `throws`, every call to it is marked `try` or sits inside a `try` block, and `catch` handles the error:
+In Salam, a function that can fail is marked `throw`, every call to it is marked `try` or sits inside a `try` block, and `catch` handles the error:
 
 ```salam
 import conv
 
-func parse port(text: str): int throws:
+func parse port(text: str): int throw:
     n := try conv.Atoi(text)
     if n < 1 or n > 65535:
         throw Error.New(ErrorKind.OutOfRange, "port out of range: " + text)

@@ -20,7 +20,7 @@ Three properties hold across the library and are worth knowing before you use it
 
 - **Most of it is written in Salam.** HTTP, TLS 1.3, the PostgreSQL and MySQL protocols, JSON, compression, ONNX inference and the native UI's layout engine are Salam code compiled with your program. A few packages wrap C libraries that already exist and that nobody should rewrite: [db.sqlite](/std/db/sqlite/), [gui.raylib](/std/gui/raylib/), [opencv](/std/opencv/) and the system web view in [gui.webview](/std/gui/webview/).
 - **Heap values are yours to free.** Packages that return a `Vector`, a buffer or an owned string say so, and you free them with `.Free()` or the package's `Free` function, usually through `defer`. The [memory lesson](/learn/memory/) explains the rules.
-- **Errors use the language's own mechanisms.** Functions that can fail either return a status the caller checks or are marked `throws`, in which case the compiler makes you handle them with `try`.
+- **Errors use the language's own mechanisms.** Functions that can fail either return a status the caller checks or are marked `throw`, in which case the compiler makes you handle them with `try`.
 
 ## Text, data formats and encodings {#text}
 
@@ -42,7 +42,7 @@ struct Invoice:
     pub paid: bool = false
 end
 
-func main throws:
+func main throw:
     inv := Invoice { number = "INV-1403-0042", total = 125000 }
     text := json.Marshal(inv)
     println text
@@ -93,7 +93,7 @@ import crypto
 import jwt
 import compress
 
-func main throws:
+func main throw:
     println crypto.Sha256Hex("salam")
     println crypto.HmacSha256Hex("server-key", "order=42&amount=1250")
 

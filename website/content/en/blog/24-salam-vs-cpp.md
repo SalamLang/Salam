@@ -22,7 +22,7 @@ This article puts the same small tasks side by side, compares how the two handle
 | Memory          | RAII, smart pointers, manual `new`/`delete`      | Stack values, heap collections freed with `.Free()` and `defer` |
 | Generics        | Templates, concepts                              | Generic functions and structs with interface bounds             |
 | Polymorphism    | Inheritance, virtual functions, `std::variant`   | Interfaces with `dyn`, enums with data, embedding with `use`    |
-| Errors          | Exceptions, `std::expected`                      | `throws`, `try`, `catch`, without stack unwinding               |
+| Errors          | Exceptions, `std::expected`                      | `throw`, `try`, `catch`, without stack unwinding               |
 | Build           | CMake, Meson, Bazel; vcpkg or Conan for packages | One command: `salam build`, `salam test`, `salam add`           |
 | Ecosystem       | Enormous, every domain                           | Large standard library, small community                         |
 
@@ -247,7 +247,7 @@ the 4
 
 The Salam version is longer, partly because `HashMap` iterates in hash order and the keys have to be sorted, and partly because every collection needs its `defer`. Forgetting one leaks memory. To make that less likely, the compiler reports some use-after-free and double-free patterns before the program runs, an ownership checker warns about suspicious transfers, and `salam memcheck` runs a program under Valgrind or AddressSanitizer. None of that is a proof. C++ is not memory-safe either (dangling references, iterator invalidation and undefined behavior are all still possible), but RAII removes the most common leak by construction. The article [Memory management in Salam](/blog/memory-management-in-salam/) and the memory lesson go into detail.
 
-On errors, C++ offers exceptions, which unwind the stack and run destructors, and since C++23 `std::expected` for error values. Salam's `throws`, `throw`, `try` and `catch` read like exceptions but are passed back as ordinary return values: nothing is unwound, `defer` statements run, and every call that can fail must be marked with `try` or sit inside a `try` block, so the possible failure points are visible in the source.
+On errors, C++ offers exceptions, which unwind the stack and run destructors, and since C++23 `std::expected` for error values. Salam's `throw`, `try` and `catch` read like exceptions but are passed back as ordinary return values: nothing is unwound, `defer` statements run, and every call that can fail must be marked with `try` or sit inside a `try` block, so the possible failure points are visible in the source.
 
 ## Performance: same range, measured {#performance}
 

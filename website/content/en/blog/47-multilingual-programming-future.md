@@ -74,7 +74,7 @@ Line for line the two are the same program. `واردسازی` is `import`, `ر�
 
 ### Layer 1: keyword tables
 
-The keywords live in `compiler/langpack.salam` as parallel tables: a list of token kinds, and for each language pack the spelling of each kind. There are 60 keyword spellings per pack, from `func` and `ret` to `try`, `catch` and `throws`; the [keywords lesson](/learn/keywords/) lists them side by side. The lexer looks up an identifier in the active pack's table and turns it into the same token kind either way, so the parser never sees which language it came from.
+The keywords live in `compiler/langpack.salam` as parallel tables: a list of token kinds, and for each language pack the spelling of each kind. There are 60 keyword spellings per pack, from `func` and `ret` to `try`, `catch` and `throw`; the [keywords lesson](/learn/keywords/) lists them side by side. The lexer looks up an identifier in the active pack's table and turns it into the same token kind either way, so the parser never sees which language it came from.
 
 One detail shows why this is harder than a word list. Persian does not have a separate word for every English keyword. `تا` serves as both `until` (the while loop) and `to` (in `repeat 1 to 5`), and `هر` serves as both `each` and `by` (the step in `repeat 0 to 20 by 2`). The lexer resolves those by context: inside a `repeat` header `تا` means `to`, elsewhere it means `until`. A natural-language spelling is not always one-to-one with the English one, and the compiler has to carry that context.
 

@@ -354,12 +354,26 @@
         !"\u060c\u061b\u061f\u00ab\u00bb\u00a0".includes(ch));
     const span = (cls, text) =>
       `<span class="tok-${cls}">${escapeHtml(text)}</span>`;
-    const highlightLine = (line) => {
+    const tripleAt = (cps, at) =>
+      cps[at] === '"' && cps[at + 1] === '"' && cps[at + 2] === '"';
+    const highlightLine = (line, state) => {
       const cps = [...line];
       const n = cps.length;
       let out = "";
       let i = 0;
       let pending = "";
+      if (state.triple) {
+        let k = 0;
+        while (k < n && !tripleAt(cps, k)) {
+          k += 1;
+        }
+        if (k >= n) {
+          return span("s", line);
+        }
+        state.triple = false;
+        i = k + 3;
+        out += span("s", cps.slice(0, i).join(""));
+      }
       while (i < n) {
         const ch = cps[i];
         let j = i + 1;
@@ -370,7 +384,18 @@
           out += span("c", cps.slice(i).join(""));
           break;
         }
-        if (ch === '"' || ch === "`" || ch === "\u00ab") {
+        if (tripleAt(cps, i)) {
+          j = i + 3;
+          while (j < n && !tripleAt(cps, j)) {
+            j += 1;
+          }
+          if (j < n) {
+            j += 3;
+          } else {
+            state.triple = true;
+          }
+          out += span("s", cps.slice(i, j).join(""));
+        } else if (ch === '"' || ch === "`" || ch === "\u00ab") {
           const close = ch === "\u00ab" ? "\u00bb" : ch;
           while (j < n && cps[j] !== close) {
             if (cps[j] === "\\") {
@@ -447,10 +472,11 @@
         }
       }
       let last = blockDir;
+      const state = { triple: false };
       const rows = lines.map((line) => {
         const d = shell ? "ltr" : strongDir(line) || last;
         last = d;
-        const html = colored ? highlightLine(line) : escapeHtml(line);
+        const html = colored ? highlightLine(line, state) : escapeHtml(line);
         return `<span class="salamat-line" dir="${d}">${html || " "}</span>`;
       });
       return `<pre dir="${blockDir}"><code>${rows.join("")}</code></pre>`;

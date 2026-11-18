@@ -120,8 +120,10 @@ positive count at zero on `std/` and `compiler/`:
 
 E176 covers user code only (not `std/`). `input`, `trim`, `upper`, `lower`,
 `repeat`, `substr` and `concat` count as returning a new string, so
-`s := x.Trim()`, `print input "p"` and a chain such as `x.Trim().Upper()` are
-freed for you, and a bare `x.Trim()` or `input "p"` statement is rejected.
+`s := x.Trim()`, `print input "p"` and `s := x.Trim().Upper()` are freed for
+you, including the intermediate strings of a chain. A bare statement such as
+`x.Trim()`, `x.Trim().Upper()` or `input "p"` is rejected, because nothing
+holds the result.
 Keep the result in a variable that is used, or free it with `mem.Free`.
 `--ownership=off` skips the check.
 

@@ -1,0 +1,363 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package slug
+
+import str
+import mem
+
+func _sub(s: str, start: int, cnt: int): str:
+    if cnt <= 0:
+        ret str.Clone("")
+    end
+    r := mem.MustAllocateZeroed((cnt + 1) as u64)
+    mem.Copy(r, (((s as void*) as i64) + (start as i64)) as void*, cnt as u64)
+    ret r as str
+end
+
+func _free(s: str):
+    mem.Free(s as void*)
+end
+
+func _lang_norm(lang: str): str:
+    n := lang.Len()
+    bp := lang as u8*
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < n and bp[i] != 45 and bp[i] != 95:
+        mut c := bp[i] as int
+        if c >= 65 and c <= 90: c += 32 end
+        str.BufAppendChar(b, c)
+        i++
+    end
+    mut r := str.BufStr(b)
+    str.BufFree(b)
+    if r == "nb" or r == "nn":
+        _free(r)
+        r = str.Clone("no")
+    else r == "fas" or r == "per":
+        _free(r)
+        r = str.Clone("fa")
+    end
+    ret r
+end
+
+func _has_cp(cps: Vector<int>, a: int, z: int): bool:
+    repeat cps.len() in i:
+        c := cps.get(i)
+        if c >= a and c <= z: ret true end
+    end
+    ret false
+end
+
+func _auto_lang(cps: Vector<int>): str:
+    dom := _dominant(cps)
+    if dom == S_ARABIC:
+        repeat cps.len() in i:
+            c := cps.get(i)
+            if c == 0x67E or c == 0x686 or c == 0x698 or c == 0x6AF or c == 0x6A9 or c == 0x6CC:
+                ret "fa"
+            end
+        end
+        ret "ar"
+    end
+    if dom == S_CYRILLIC:
+        repeat cps.len() in i:
+            c := cps.get(i)
+            if c == 0x456 or c == 0x457 or c == 0x454 or c == 0x491 or c == 0x406 or c == 0x407 or c == 0x404 or c == 0x490:
+                ret "uk"
+            end
+            if c == 0x452 or c == 0x45B or c == 0x459 or c == 0x45A or c == 0x45F or c == 0x402 or c == 0x40B:
+                ret "sr"
+            end
+            if c == 0x45E: ret "be" end
+        end
+        ret "ru"
+    end
+    if dom == S_GREEK: ret "el" end
+    if dom == S_HEBREW: ret "he" end
+    if dom == S_DEVANAGARI: ret "hi" end
+    ret ""
+end
+
+func _apply_repl(text: str, pairs: Vector<str>): str:
+    n := text.Len()
+    bp := text as u8*
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < n:
+        mut hit := false
+        mut k := 0
+        until k < pairs.len() and not hit:
+            f := pairs.get(k)
+            fl := f.Len()
+            fp := f as u8*
+            if fl > 0 and i + fl <= n and bp[i] == fp[0]:
+                mut j := 1
+                until j < fl and bp[i + j] == fp[j]:
+                    j++
+                end
+                if j == fl:
+                    str.BufAppend(b, pairs.get(k + 1))
+                    i += fl
+                    hit = true
+                end
+            end
+            k += 2
+        end
+        if not hit:
+            str.BufAppendChar(b, bp[i] as int)
+            i++
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _convert(text: str, o: Options, raw: bool): str:
+    mut src := text
+    mut owned := false
+    if not raw and o.replacements.len() > 0:
+        src = _apply_repl(text, o.replacements)
+        owned = true
+    end
+    mut cps := Vector {} as Vector<int>
+    defer cps.free()
+    _decode(src, cps)
+    mut lang := _lang_norm(o.lang)
+    if lang.Len() == 0:
+        _free(lang)
+        lang = str.Clone(_auto_lang(cps))
+    end
+    c := _Ctx { lang = lang, keep = o.keep_unicode and not raw, han = o.keep_han, lower = o.lowercase, allow = o.allow, sym = o.symbols, raw = raw }
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < cps.len():
+        i += _step(b, c, cps, i)
+    end
+    mut r := str.BufStr(b)
+    str.BufFree(b)
+    _free(lang)
+    if owned: _free(src) end
+    if o.lowercase and not raw:
+        rp := r as u8*
+        repeat r.Len() in k:
+            v := rp[k] as int
+            if v >= 65 and v <= 90: rp[k] = (v + 32) as u8 end
+        end
+    end
+    ret r
+end
+
+func _eq_ci(a: str, b: str): bool:
+    n := a.Len()
+    if n != b.Len(): ret false end
+    ap := a as u8*
+    bp := b as u8*
+    repeat n in i:
+        mut x := ap[i] as int
+        mut y := bp[i] as int
+        if x >= 65 and x <= 90: x += 32 end
+        if y >= 65 and y <= 90: y += 32 end
+        if x != y: ret false end
+    end
+    ret true
+end
+
+func _is_stop(w: str, stop: Vector<str>): bool:
+    repeat stop.len() in i:
+        if _eq_ci(w, stop.get(i)): ret true end
+    end
+    ret false
+end
+
+func _cplen(s: str): int:
+    n := s.Len()
+    bp := s as u8*
+    mut cnt := 0
+    repeat n in i:
+        if ((bp[i] as int) & 0xC0) != 0x80: cnt++ end
+    end
+    ret cnt
+end
+
+func _cut_cp(s: str, maxcp: int): str:
+    n := s.Len()
+    bp := s as u8*
+    mut cnt := 0
+    mut i := 0
+    until i < n:
+        if ((bp[i] as int) & 0xC0) != 0x80:
+            if cnt == maxcp: break end
+            cnt++
+        end
+        i++
+    end
+    ret _sub(s, 0, i)
+end
+
+func _free_all(v: Vector<str>):
+    repeat v.len() in i:
+        _free(v.get(i))
+    end
+end
+
+func _strip_edges(words &: Vector<str>, allow: str):
+    until words.len() > 0:
+        w := words.get(0)
+        n := w.Len()
+        bp := w as u8*
+        mut k := 0
+        until k < n and _has_allow(allow, bp[k] as int):
+            k++
+        end
+        if k == 0: break end
+        words.set(0, _sub(w, k, n - k))
+        _free(w)
+        if k == n: words.remove_at(0) end
+    end
+    until words.len() > 0:
+        last := words.len() - 1
+        w := words.get(last)
+        n := w.Len()
+        bp := w as u8*
+        mut k := n
+        until k > 0 and _has_allow(allow, bp[k - 1] as int):
+            k--
+        end
+        if k == n: break end
+        words.set(last, _sub(w, 0, k))
+        _free(w)
+        if k == 0: words.remove_at(last) end
+    end
+end
+
+func _finish(r: str, o: Options, stop: Vector<str>): str:
+    n := r.Len()
+    bp := r as u8*
+    mut words := Vector {} as Vector<str>
+    mut skipped := Vector {} as Vector<str>
+    lead := n > 0 and bp[0] == 1
+    trail := n > 0 and bp[n - 1] == 1
+    sepn := _cplen(o.separator)
+    mut total := 0
+    mut early := false
+    mut s := 0
+    mut i := 0
+    until i <= n and not early:
+        if i == n or bp[i] == 1:
+            if i > s or not o.collapse:
+                w := _sub(r, s, i - s)
+                if stop.len() > 0 and i > s and _is_stop(w, stop):
+                    skipped.push(w)
+                else:
+                    words.push(w)
+                    total += _cplen(w) + sepn
+                    if o.max_length > 0 and total > o.max_length + sepn + 1: early = true end
+                end
+            end
+            s = i + 1
+        end
+        i++
+    end
+    if words.len() == 0 and skipped.len() > 0:
+        words.free()
+        words = skipped
+    else:
+        _free_all(skipped)
+        skipped.free()
+    end
+    if o.trim and not early:
+        if not o.collapse:
+            until words.len() > 0 and words.get(0).Len() == 0:
+                _free(words.get(0))
+                words.remove_at(0)
+            end
+            until words.len() > 0 and words.get(words.len() - 1).Len() == 0:
+                _free(words.get(words.len() - 1))
+                words.remove_at(words.len() - 1)
+            end
+        end
+        if o.allow.Len() > 0: _strip_edges(words, o.allow) end
+    end
+    mut used := 0
+    mut sum := 0
+    mut hard := false
+    until used < words.len() and not hard:
+        wl := _cplen(words.get(used))
+        add := used == 0 ? wl : sepn + wl
+        if o.max_length > 0 and sum + add > o.max_length:
+            if used == 0: hard = true end
+            break
+        end
+        sum += add
+        used++
+    end
+    mut b := str.NewBuilder()
+    if lead and not o.trim and o.collapse: str.BufAppend(b, o.separator) end
+    if hard:
+        cut := _cut_cp(words.get(0), o.max_length)
+        str.BufAppend(b, cut)
+        _free(cut)
+    else:
+        repeat used in k:
+            if k > 0: str.BufAppend(b, o.separator) end
+            str.BufAppend(b, words.get(k))
+        end
+    end
+    if trail and not o.trim and o.collapse: str.BufAppend(b, o.separator) end
+    _free_all(words)
+    words.free()
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func _stop_list(o: Options): Vector<str>:
+    mut stop := Vector {} as Vector<str>
+    repeat o.stop_words.len() in i:
+        r := _convert(o.stop_words.get(i), o, false)
+        n := r.Len()
+        bp := r as u8*
+        mut s := 0
+        mut k := 0
+        until k <= n:
+            if k == n or bp[k] == 1:
+                if k > s: stop.push(_sub(r, s, k - s)) end
+                s = k + 1
+            end
+            k++
+        end
+        _free(r)
+    end
+    ret stop
+end
+
+func _post(slug: str, o: Options): str:
+    mut s := slug
+    if o.identifier and s.Len() > 0:
+        c := (s as u8*)[0] as int
+        if c >= 48 and c <= 57:
+            t := "_" + s
+            _free(s)
+            s = t
+        end
+    end
+    if s.Len() == 0:
+        _free(s)
+        ret str.Clone(o.fallback)
+    end
+    ret s
+end

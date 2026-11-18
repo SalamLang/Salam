@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package ulid
+
+import sync
+import mem
+import crypto
+
+func _sys_entropy(): i64:
+    buf := mem.Allocate(5 as u64)
+    crypto.RandomBytes(buf, 5)
+    p := buf as u8*
+    mut v := 0 as i64
+    repeat 5 in k:
+        v = (v << 8) | (p[k] as i64)
+    end
+    mem.Free(buf)
+    ret v
+end
+
+func _fresh(g: Generator, t: i64): Result:
+    e := g.entropy
+    a := e()
+    b := e()
+    if a < 0 or b < 0 or a > _MASK40 or b > _MASK40: ret _fail(ERR_ENTROPY) end
+    st := g.state
+    st[0] = t
+    st[1] = a
+    st[2] = b
+    ret _ok(ULID { time = t, hi = a, lo = b })
+end
+
+func _next_locked(g: Generator, ms: i64): Result:
+    if ms < 0 or ms > MAX_TIME: ret _fail(ERR_TIME) end
+    st := g.state
+    last := st[0]
+    if last < 0 or ms > last: ret _fresh(g, ms) end
+    inc := Increment(ULID { time = last, hi = st[1], lo = st[2] })
+    if inc.ok:
+        st[1] = inc.id.hi
+        st[2] = inc.id.lo
+        ret inc
+    end
+    if last >= MAX_TIME: ret _fail(ERR_OVERFLOW) end
+    ret _fresh(g, last + 1)
+end
+
+@en "NewGenerator"
+@fa "تولیدکننده جدید"
+pub func NewGenerator(): Generator:
+    ret NewGeneratorWith((): ret Now() end, (): ret _sys_entropy() end)
+end
+
+@en "NewGeneratorWith"
+@fa "تولیدکننده جدید با"
+pub func NewGeneratorWith(clock: func () i64, entropy: func () i64): Generator:
+    st := mem.AllocateZeroed(32 as u64) as i64*
+    st[0] = -1
+    ret Generator { state = st, mu = sync.NewMutex(), clock = clock, entropy = entropy }
+end
+
+@en "Next"
+@fa "بعدی"
+pub func Next(g: Generator): Result:
+    c := g.clock
+    ms := c()
+    sync.Lock(g.mu)
+    r := _next_locked(g, ms)
+    sync.Unlock(g.mu)
+    ret r
+end
+
+@en "NextAt"
+@fa "بعدی برای"
+pub func NextAt(g: Generator, ms: i64): Result:
+    sync.Lock(g.mu)
+    r := _next_locked(g, ms)
+    sync.Unlock(g.mu)
+    ret r
+end
+
+@en "Batch"
+@fa "دسته"
+pub func Batch(g: Generator, n: int): Vector<ULID>:
+    mut out := Vector {} as Vector<ULID>
+    c := g.clock
+    ms := c()
+    sync.Lock(g.mu)
+    mut i := 0
+    until i < n:
+        r := _next_locked(g, ms)
+        if not r.ok: break end
+        out.push(r.id)
+        i++
+    end
+    sync.Unlock(g.mu)
+    ret out
+end
+
+@en "Last"
+@fa "آخرین"
+pub func Last(g: Generator): Result:
+    sync.Lock(g.mu)
+    st := g.state
+    mut r := _fail(ERR_TIME)
+    if st[0] >= 0:
+        r = _ok(ULID { time = st[0], hi = st[1], lo = st[2] })
+    end
+    sync.Unlock(g.mu)
+    ret r
+end
+
+@en "Free"
+@fa "آزادکن"
+pub func Free(g: Generator):
+    mem.Free(g.state as void*)
+    sync.Destroy(g.mu)
+end

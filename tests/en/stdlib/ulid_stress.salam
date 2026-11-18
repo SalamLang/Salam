@@ -1,0 +1,93 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import encoding.ulid
+import pool
+import mem
+
+const TASKS := 16
+const PER := 4000
+
+mut g_frozen := 424242 as i64
+
+func frozen_clock(): i64:
+    ret g_frozen
+end
+
+func zero_entropy(): i64:
+    ret 1099511627775
+end
+
+func collect(g: ulid.Generator, out: i64*, task: i64):
+    base := task * PER * 3
+    repeat PER in k:
+        r := ulid.Next(g)
+        out[base + k * 3] = r.id.time
+        out[base + k * 3 + 1] = r.id.hi
+        out[base + k * 3 + 2] = r.id.lo
+    end
+end
+
+func entry(out: i64*, task: int, k: int): ulid.ULID:
+    base := (task * PER + k) * 3
+    ret ulid.ULID { time = out[base], hi = out[base + 1], lo = out[base + 2] }
+end
+
+func check(label: str, out: i64*):
+    mut ordered := true
+    repeat TASKS in t:
+        repeat PER - 1 in k:
+            if ulid.Compare(entry(out, t, k), entry(out, t, k + 1)) >= 0:
+                ordered = false
+            end
+        end
+    end
+    mut seen := HashMap {} as HashMap<str, bool>
+    defer seen.free()
+    mut unique := true
+    repeat TASKS in t:
+        repeat PER in k:
+            s := ulid.String(entry(out, t, k))
+            if seen.has(s):
+                unique = false
+            end
+            seen.put(s, true)
+        end
+    end
+    println label, "per thread strictly increasing:", ordered
+    println label, "all unique:", unique, seen.size() == TASKS * PER
+end
+
+func run(label: str, g: ulid.Generator):
+    out := mem.AllocateZeroed((TASKS * PER * 3 * 8) as u64) as i64*
+    pool.ParallelFor(TASKS as i64, 8 as i64, (task: i64): collect(g, out, task) end)
+    check(label, out)
+    mem.Free(out as void*)
+end
+
+func main:
+    real := ulid.NewGenerator()
+    defer ulid.Free(real)
+    run("system clock:", real)
+
+    frozen := ulid.NewGeneratorWith((): ret frozen_clock() end, (): ret zero_entropy() end)
+    defer ulid.Free(frozen)
+    run("frozen clock, worst entropy:", frozen)
+    last := ulid.Last(frozen)
+    println "clock moved ahead only by overflow:", last.id.time >= g_frozen
+
+    shared := ulid.Default()
+    run("default generator:", shared)
+end

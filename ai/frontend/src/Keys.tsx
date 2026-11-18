@@ -18,7 +18,7 @@ const SHORT_PROMPT = t("یک برنامه‌ی کوتاه سلام بنویس.",
 const SALAM_CHAT = `import net.http
 import encoding.json
 
-func main throws:
+func main throw:
     mut headers := http.NewHeaders()
     headers.put("Authorization", "Bearer sk-salam-KEY")
     headers.put("Content-Type", "application/json")

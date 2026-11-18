@@ -26,7 +26,7 @@ not guessable, so verify with tools rather than assuming.
 5. **Standard library before your own helper.** Search for the job first
    (`conv.ParseHex` for `int(s, 16)`, `json`, `regex`, `str`, `sort`) and write
    a function only when nothing fits. Then design with `struct`, `enum`,
-   `interface`, generics and `throws`, keep functions small, and split a real
+   `interface`, generics and `throw`, keep functions small, and split a real
    program into files unless the user asked for one. The full checklist is
    section 0 of `docs/ai/AGENTS.md`. Name your own functions, variables and
    fields in the language of the file: Persian identifiers in a Persian

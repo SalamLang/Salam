@@ -78,7 +78,7 @@ When asked to convert program `X` (in some other language) into Salam:
 1. **Understand `X`**: its entry point, data types, control flow, external I/O,
    and dependencies.
 2. **Map constructs** to Salam using §7 (class→`struct`, interface→`interface`,
-   generics→`<T>`, exceptions→`throws`/`try`/`catch`, dict→`HashMap`,
+   generics→`<T>`, exceptions→`throw`/`try`/`catch`, dict→`HashMap`,
    list→`Vector`, etc.).
 3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
    `http`, `regex`, `math`, `sort`, `collections`, `db`, …). This comes before
@@ -86,7 +86,7 @@ When asked to convert program `X` (in some other language) into Salam:
    loop. Search §5 and `std/` for the job, and write your own function only
    when nothing fits. Unless the user asked for a single file, also design
    with `struct`, `enum`, `interface` and generics, report failure with
-   `throws`, keep functions small, and split a real program into files (see
+   `throw`, keep functions small, and split a real program into files (see
    `docs/ai/AGENTS.md` section 0 and the learn lesson "Best practices").
    Name your own identifiers in the language of the file: Persian names in a
    Persian program, English names in an English one, never mixed. English
@@ -96,7 +96,7 @@ When asked to convert program `X` (in some other language) into Salam:
    `catch` variables, lambda and `extern:` parameters).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.Free()`, integer `/` truncates,
-   errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
+   errors through `throw`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
 5. **Verify** with `salam exec file.salam` (interpreter) or `salam build
 file.salam --output=app` (§10). Fix every warning; most are hard errors.
 
@@ -402,8 +402,8 @@ x, y = y, x                   // assign several targets at once (swap)
 
 - A tuple is a value type that works wherever a type does: parameters,
   struct fields (`pos: (int, int)`), `Vector<(int, str)>`,
-  `HashMap<str, (int, int)>`, nested `((int, int), str)`, and with `throws`
-  (`func f(): (i64, bool) throws`, then `a, b := try f()`). Lambdas can return
+  `HashMap<str, (int, int)>`, nested `((int, int), str)`, and with `throw`
+  (`func f(): (i64, bool) throw`, then `a, b := try f()`). Lambdas can return
   one: `(x: int): ret x, x * 2 end`. `ret 1, 2` takes the declared element
   types, so it fits `(i64, u8)`.
 - Destructuring needs exactly as many names as elements (E158); the usual
@@ -850,25 +850,25 @@ println area(Shape.Rect(3.0, 4.0))
 println Shape.Circle(2.0)          // Circle(r = 2)
 ```
 
-**Errors: `throws`, `throw`, `try`, `catch`.** Add `throws` after the return
+**Errors: `throw`, `try`, `catch`.** Add `throw` after the return
 type (or after the parameters when there is none). `throw` takes an `Error`, or
 a `str` that becomes one of kind `ErrorKind.Other`. `Error` and `ErrorKind`
 need no import (`import error` only for `KindName`, `RetryPolicy`, ...).
 
 ```salam
-func parse port(text: str): int throws:
+func parse port(text: str): int throw:
     if text == "":
         throw Error.New(ErrorKind.InvalidArgument, "empty port")
     end
     ret text.to_int()
 end
 
-func load(text: str): int throws:
+func load(text: str): int throw:
     p := try parse port(text)          // passes any error to the caller
     ret p * 2
 end
 
-func load config(text: str): int throws:
+func load config(text: str): int throw:
     try:
         ret load(text)
     catch e:
@@ -890,12 +890,12 @@ end
 calls) and may appear anywhere in an expression of a statement, except where
 it would run conditionally or repeatedly: the right side of `and`/`or`, a
 `?:` branch, an `until` or `else` condition, a `defer`, or a match expression
-arm (E156; store the value first). `func main throws:` prints
+arm (E156; store the value first). `func main throw:` prints
 `error: <message>` to stderr and exits 1. `continue` cannot leave a `try:`
-block yet; `break` can. Methods and interface methods may be `throws`;
-lambdas and `extern` functions cannot. `E155` unmarked throwing call, `E156`
+block yet; `break` can. Methods and interface methods may be `throw`;
+lambdas and `extern` functions cannot. `W234` the old spelling `throws` (use `throw`), `E155` unmarked throwing call, `E156`
 `try` in a spot that runs conditionally or repeatedly, `E157` `throw` outside a
-`throws` function or a `try:` block, `E142` `try` with nothing that can throw.
+`throw` function or a `try:` block, `E142` `try` with nothing that can throw.
 (E139 to E141 are ownership errors: use after free, double free, returning a
 value the function's own `defer` frees; `--ownership=off|on|warn|error`, warn
 by default, `docs/design/OWNERSHIP.md`.)
@@ -905,7 +905,7 @@ parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
 built where its type is known - returned from a function, or with `as`:
 `Maybe.Nothing as Maybe<int>`. There is no stdlib `Result` type; declare your
 own `enum Result<T, E>: Ok(value: T), Err(error: E) end` where it is needed
-(or use `throws`/`try`/`catch`, §-on-throws, which covers most error-return
+(or use `throw`/`try`/`catch`, §-on-throw, which covers most error-return
 cases without an enum at all). Inside a function that returns an Ok/Err-shaped
 enum, a postfix `?` unwraps `Ok` and returns any `Err` early
 (running `defer`s): it must be a statement's whole value - `x := f()?`,
@@ -965,7 +965,7 @@ read as the boolean `or` operator: `x as (int or str)`, not `x as int or str`
 (the latter parses as `(x as int) or str`). No parentheses are needed in a
 type position (`func f(v: int or str): ...`), since there is no expression to
 be ambiguous with there. Use `T?` below for "maybe absent", and a local
-`Result<T, E>` enum (or `throws`) for error returns.
+`Result<T, E>` enum (or `throw`) for error returns.
 
 **`Option<T>`** (in `std/core`, `import core`) for maybe-absent values:
 
@@ -1176,7 +1176,7 @@ not the libraries.
 - **`conv`**: `FormatInt FormatUint FormatHex FormatBool FormatFloat`
   (shortest round-trip) `FormatFloatShort` (6 digits, like `%g`)
   `FormatFloatPrec IsNaNF`. The parsers `ParseInt` (i64), `Atoi` (int),
-  `ParseFloat`, `ParseBool` and `ParseHex` all `throws` (context `conv`):
+  `ParseFloat`, `ParseBool` and `ParseHex` all `throw` (context `conv`):
   `Syntax` for an empty string, a sign with no digits or any stray character
   (`12abc`, `1_000`, `1,5`, `12.5` in `ParseInt`, `"True"`), with
   offset/line/column of that character; `OutOfRange` (`conv.overflow`) past
@@ -1282,7 +1282,7 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   `LastStep`, the `Layer` interface with `Sequential` and the
   `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
   init `XavierUniform XavierNormal KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
-  (SLMT, `.gz` aware) and the `*Buf` forms; the loaders `throws` (`nn.crc`,
+  (SLMT, `.gz` aware) and the `*Buf` forms; the loaders `throw` (`nn.crc`,
   `nn.param_count`, `nn.shape`, ...) and write nothing unless the whole file matches.
 - **`ai.optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
   `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
@@ -1295,15 +1295,15 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   rows only.
 - **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
-  `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throws`.
+  `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throw`.
 - **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`;
-  every reader and `ToMatrix` `throws` (`npy.bad_magic`, `npy.dtype`, `npy.truncated`, `npy.missing_key`).
+  every reader and `ToMatrix` `throw` (`npy.bad_magic`, `npy.dtype`, `npy.truncated`, `npy.missing_key`).
 - **`ai.onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
   graphs (`Conv Gemm MatMul` activations, pooling, the norms, shape ops,
   reductions, `Gather Slice Where Cast` and more, about 65 ops); anything
   else fails with the op named in `model.error`.
 - **`ai.gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
-  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`; all three `throws`
+  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`; all three `throw`
   (`ParseGguf` owns the buffer only on success). `tensor.ReadTensor` throws too.
 - **`ai.llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
   SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache, tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
@@ -1505,8 +1505,8 @@ end
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
   (lazy singleton), `Built Count Error`, `Close` (cleanups in reverse build order).
-- **Error returns**: there is no stdlib `Result`. Prefer `throws`/`try`/`catch`
-  (see the throws section above); for an explicit `Ok`/`Err` value, declare
+- **Error returns**: there is no stdlib `Result`. Prefer `throw`/`try`/`catch`
+  (see the throw section above); for an explicit `Ok`/`Err` value, declare
   your own `enum Result<T, E>: Ok(value: T), Err(error: E) end` - postfix `?`
   works on any such enum (error types must match). For "one of several
   shapes" that are not an error/success pair, prefer an `or` type instead
@@ -1519,7 +1519,7 @@ end
   `Object(members) Array(items)`
   `Member/MemberInt/MemberBool/MemberFloat/MemberRaw Str`. Typed codecs the
   compiler derives per type:
-  `Marshal(v) MarshalIndent Unmarshal(text, out) UnmarshalLenient` (both `throws`),
+  `Marshal(v) MarshalIndent Unmarshal(text, out) UnmarshalLenient` (both `throw`),
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
   `@json "" "omitempty"/"optional"/"string"` for the rest. A Persian file
   spells the marker `@جیسون` and an English file `@json`; the other spelling is
@@ -1531,7 +1531,7 @@ end
   `@doc "..."` marker on a struct, enum or field becomes its `description`
   (one `@doc` per definition); `SchemaEnvelope`/`SchemaMerge` give the parts.
   Also `GetPath(text, "a.b.0.c")`, `Items Unquote`, and the dynamic tree
-  `Decode(text): value.Value throws` / `Encode(v, opts)` / `EncodeDefault`.
+  `Decode(text): value.Value throw` / `Encode(v, opts)` / `EncodeDefault`.
   Pitfalls: **`GetInt` returns a 32-bit `int` and clamps** (3000000000 reads
   as 2147483647): read IDs and timestamps by `Unmarshal` into an `i64`.
   `Get GetInt Has` see only the top level (`GetPath` for nested). `Unmarshal`
@@ -1550,12 +1550,12 @@ end
     `WellFormed` first). Ignores namespaces and mixed-content order: fine
     for a config file.
   - **Full `Document`** (an arena of `int` node handles, strict parsing with
-    line/column errors, namespaces, bounded entity expansion): `Parse(text) ParseWith(text, opts)` (both `throws`), `WellFormed(text): bool`, `ParseOptions`
+    line/column errors, namespaces, bounded entity expansion): `Parse(text) ParseWith(text, opts)` (both `throw`), `WellFormed(text): bool`, `ParseOptions`
     (`preserve_whitespace keep_comments namespaces expand_entities max_depth`; whitespace-only text is dropped by default). Read `Root Kind Name LocalName NamespaceURI Parent ChildCount ChildAt Elements ElementsNamed FirstElementNamed Descendants NextSibling AttributeValue AttributeValueNS Text Line Column`; edit `NewDocument CreateElement CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
     `Write WriteIndent WriteNode Canonical`. `Free(d)`, `FreeList(list)`.
   - **XPath 1.0**: `Select(d, context, expr): NodeList` (context `-1` =
     document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`,
-    all `throws` on a bad expression (context `xpath`, column inside it);
+    all `throw` on a bad expression (context `xpath`, column inside it);
     all axes and the core function library, no variables, no namespace axis.
     Name tests match the name as written, prefix included: use
     `local-name()`/`namespace-uri()` when the prefix may vary. Attributes
@@ -1567,16 +1567,16 @@ end
   `*a`, `<<:`; an anchored map silently drops the rest of the document);
   `yes`/`no`/`on`/`off` are strings; `GetInt` is 32-bit and wraps; every path
   call reparses, so `Decode` once for many reads.
-- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str> throws`,
-  `WriteLine(Vector<str>): str`, `ReadAll ToValue` (`throws`) `WriteAll FreeTable FromValue`, and the
+- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str> throw`,
+  `WriteLine(Vector<str>): str`, `ReadAll ToValue` (`throw`) `WriteAll FreeTable FromValue`, and the
   `ReadLineWith ReadAllWith WriteLineWith WriteAllWith ToValueWith FromValueWith` forms taking
   `CSVOptions { header separator keep_blank }` (`separator = ";"` or `"\t"`). RFC 4180: quoted
-  fields may hold line breaks. Broken input throws `Syntax` with line/column and a code:
+  fields may hold line breaks. Broken input throw `Syntax` with line/column and a code:
   `csv.unterminated_quote`, `csv.text_after_quote` (`"Pen" ,blue`), `csv.bare_quote` (`5'11"`),
   `csv.multiple_rows` (`ReadLine` got two rows), `csv.duplicate_header` (`ToValue`). Empty lines
   are skipped unless `keep_blank`; spaces are kept; writers never fail.
-- **`toml`** (`import encoding.toml`): `Decode(text): value.Value throws`,
-  `Valid`, `Encode(v): str throws`. `Decode` is strict: duplicate keys and
+- **`toml`** (`import encoding.toml`): `Decode(text): value.Value throw`,
+  `Valid`, `Encode(v): str throw`. `Decode` is strict: duplicate keys and
   tables, bare words (`mode = fast`), bad escapes and numbers and text after a
   value all throw with the line and column. Triple quoted strings throw
   `Unsupported` and dates stay strings; `Encode` throws `Unsupported` for a
@@ -1594,7 +1594,7 @@ end
   `TranscodeStrict` throws, **`msgpack`**
   `Marshal Unmarshal UnmarshalBytes` (the two readers throw; no bin/ext types, string map keys
   only, trailing bytes ignored), **`binary`** `WriteU32BE ReadI64LE ...`
-  (every `Read*` `throws` `UnexpectedEnd`, code `binary.unexpected_end`, with the
+  (every `Read*` `throw` `UnexpectedEnd`, code `binary.unexpected_end`, with the
   offset, and leaves the reader in place; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
   silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
@@ -1614,7 +1614,7 @@ end
   and `${NAME}` only sees lines above it.
 - **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. The four decoders
   throw: `Base64Decode(s): str` reads both alphabets (`+/` and `-_`),
-  optional padding and whitespace, and throws `Syntax` (bad character, data
+  optional padding and whitespace, and throw `Syntax` (bad character, data
   after `=`, too much `=`) or `UnexpectedEnd` (one char into a group,
   missing `=`); `Base64DecodeBytes(s, out, cap): int` also throws
   `OutOfRange` when `cap` is too small; `HexDecode` throws on an odd length
@@ -1652,7 +1652,7 @@ end
   are not evaluated; rows and columns count from 0.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
   one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. `Compile` and every
-  `...Str` function `throws` `Syntax` (code `regex.invalid`, `offset` where the
+  `...Str` function `throw` `Syntax` (code `regex.invalid`, `offset` where the
   pattern breaks); functions taking a `Regex` cannot fail. Captures: `FindMatch`
   returns a `MatchResult` value (`.ok .start .stop .count`) to read with
   `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
@@ -1689,10 +1689,10 @@ end
   `FromUTCParts` rolls over (30 February is 1 March) while the parsers
   throw on impossible days. `Sleep` takes milliseconds.
   - **`Duration`** (nanoseconds, so it cannot be read in the wrong unit):
-    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration(s): Duration throws`/
+    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration(s): Duration throw`/
     `ParseDurationOr(s, fallback)`; `SleepFor SinceDuration DurationBetween AddDuration`.
   - **Parsing**: `ParseISO ParseISOIn ParseHTTPDate ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`)
-    return the `i64` epoch and `throws` (`Syntax`, `UnexpectedEnd`, or `OutOfRange`
+    return the `i64` epoch and `throw` (`Syntax`, `UnexpectedEnd`, or `OutOfRange`
     for month 13 / hour 25 / 30 February, with `offset` and a `time.*` code;
     a bad layout is `InvalidArgument`); `ParseISONanos` keeps the fraction
     (nanoseconds since the epoch); `ParseISOOr(s, fallback)` never throws. An unzoned string is
@@ -1905,7 +1905,7 @@ SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
     `Verify VerifyHS256 IsValid DefaultOptions OptionsFor`; `Decode` (parses,
     verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience SecondsRemaining`; `IsSupportedAlg`.
     `Decode Verify VerifyHS256 Sign* SignJSON Issue IssueFor IssuePair Check B64UrlDecode`
-    are `throws` (`IsValid` is the bool form): the `Error` carries a `jwt.*`
+    are `throw` (`IsValid` is the bool form): the `Error` carries a `jwt.*`
     `code` (`malformed bad_base64 bad_json` are `Syntax`;
     `bad_alg bad_typ crit` are `Unsupported`; `empty_secret` is `InvalidArgument`;
     `alg_mismatch bad_signature expired not_yet_valid issued_in_future bad_claim`
@@ -2039,8 +2039,8 @@ naive port into compile errors (each corresponds to a case in
    (`&= |= ^= <<= >>=`), but they require integer operands (a bitwise op on a
    float is a compile error).
 6. **Errors are thrown and caught explicitly.** A function that can fail is
-   declared `throws` and fails with `throw`; every call to it is marked `try`
-   (pass the error on, only inside a `throws` function) or sits in a
+   declared `throw` and fails with `throw`; every call to it is marked `try`
+   (pass the error on, only inside a `throw` function) or sits in a
    `try: ... catch e: ... end` block. An unmarked call is E155. The error is
    always the prelude type `Error`; nothing is unwound, `defer` runs, and
    panics (out-of-bounds index, `Unwrap` on None) are not caught.
@@ -2102,7 +2102,7 @@ General mapping that applies to all source languages:
 | set                          | `Set<T>`                                                                                    |
 | tuple / record               | small `struct`, or `Pair`, or `A or B` for sum types                                        |
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                               |
-| exception / error            | `func f(): T throws`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
+| exception / error            | `func f(): T throw`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
 | null / nil / None            | `null` (pointers) or `core.None()`                                                          |
 | lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                 |
 | enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `A or B or …`                    |
@@ -3200,7 +3200,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
 | `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
 | `try`               | `تلاش`              | `catch`                   | `گرفتن خطا`                   |
-| `throw`             | `پرتاب خطا`         | `throws`                  | `خطادار`                      |
+| `throw`             | `پرتاب خطا`         |                           |                               |
 
 Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`

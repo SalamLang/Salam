@@ -80,7 +80,7 @@ Accepted values: \"off\", \"warn\", \"error\", \"fix\"."
 (defconst salam-conditional-keywords '("if" "else" "match" "switch" "اگر" "وگرنه" "همخوان" "ترابرد"))
 (defconst salam-loop-keywords '("until" "repeat" "each" "تا" "تکرار" "هر"))
 (defconst salam-statement-keywords '("ret" "end" "break" "continue" "defer" "to" "by" "in" "try" "catch" "throw" "برگشت" "پایان" "بشکن" "گذر" "دیرکن" "تا" "هر" "در" "تلاش" "گرفتن خطا" "پرتاب خطا"))
-(defconst salam-storage-keywords '("mut" "const" "extern" "pub" "inline" "noinline" "pure" "noret" "deprecated" "export" "throws" "ناپایا" "پایا" "درون‌داد" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "برون‌داد" "خطادار"))
+(defconst salam-storage-keywords '("mut" "const" "extern" "pub" "inline" "noinline" "pure" "noret" "deprecated" "export" "ناپایا" "پایا" "درون‌داد" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "برون‌داد"))
 (defconst salam-other-keywords '("on" "as" "page" "impl" "بر" "برگردان" "صفحه" "کاربست"))
 (defconst salam-function-keywords '("func" "تابع"))
 (defconst salam-structure-keywords '("type" "struct" "enum" "interface" "component" "گونه" "ساختار" "جداشمار" "میانجی" "بخش"))

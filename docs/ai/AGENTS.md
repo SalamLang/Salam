@@ -166,7 +166,7 @@ rules 1, 6 and 7.
 **1. The standard library first, your own code last.** Before you write a
 helper, check whether `std` already has it. A hand-written parser, formatter,
 sorter, hasher or splitter is almost always a defect: it is longer, slower and
-misses the edge cases the std version handles and reports through `throws`.
+misses the edge cases the std version handles and reports through `throw`.
 
 1. Search: `salam_stdlib_search` with a word for the job (`hex`, `split`,
    `base64`, `sha256`, `trim`), then `salam_stdlib_symbols` with `query` for
@@ -200,7 +200,7 @@ pieces first, then write them:
   the type is known at compile time and `dyn Iface` for a mixed collection.
 - A function or container that is the same for many types is generic
   (`func Max<T>(a: T, b: T): T`, `struct Stack<T>`), not copied per type.
-- A function that can fail is `throws`, not a sentinel like `-1` or `""`.
+- A function that can fail is `throw`, not a sentinel like `-1` or `""`.
   Callers use `try` or `try: ... catch e: ... end`. Offer an `...Or(value,
 fallback)` form only when a default is natural.
 - Cleanup goes in `defer` next to the thing it cleans (`defer v.Free()`).
@@ -225,7 +225,7 @@ index bookkeeping, `match` instead of long `if` chains over an enum,
 `:=` with inference, `ret match ...` for a value, `a ? b : c` for a short
 choice, struct literals with named fields, `Vector<T>` and `HashMap<K, V>` with
 `.Free()`, and `salam format` to finish. When the source language has classes,
-exceptions, generics or dictionaries, map them to `struct`, `throws`,
+exceptions, generics or dictionaries, map them to `struct`, `throw`,
 `<T>` and `HashMap` (see SKILL.md section 7).
 
 **6. Name things in the language of the file.** A Persian program
@@ -281,7 +281,7 @@ input:
 ```salam
 import conv
 
-func hex_to_decimal(hex: str): i64 throws:
+func hex_to_decimal(hex: str): i64 throw:
     ret try conv.ParseHex(hex)
 end
 ```
@@ -441,16 +441,16 @@ end
 Parameter and variable names cannot be keywords. `in`, `to`, `by`, `on`,
 `type`, `each`, `match`, `eq`, `lt`, `gt` and the other words in
 `salam_keywords` are all reserved, so `func scale(v: f64, by: f64)` does not
-parse. `try`, `catch`, `throw` and `throws` are reserved too.
+parse. `try`, `catch`, `throw` and `throw` are reserved too.
 
-A function that can fail is declared `throws` and fails with `throw`. Every
+A function that can fail is declared `throw` and fails with `throw`. Every
 call to it needs `try` (which passes the error to the caller, so the caller
-must be `throws` too) or a surrounding `try: ... catch e: ... end` block;
+must be `throw` too) or a surrounding `try: ... catch e: ... end` block;
 an unmarked call is `E155`. The error is always the built-in `Error`
 (`e.kind`, `e.message`, `e.to_str()`), which needs no import.
 
 ```salam
-func parse port(text: str): int throws:
+func parse port(text: str): int throw:
     if text == "": throw Error.New(ErrorKind.InvalidArgument, "empty port") end
     ret text.to_int()
 end

@@ -56,7 +56,7 @@ If you have used Go, Rust, Swift or Python, most of Salam will look familiar. Th
 | Compilation      | Ahead of time to native code, through C, LLVM or Salam's own native backend                         |
 | Memory           | No garbage collector; values live on the stack, heap containers are freed with `.Free()` or `defer` |
 | Data types       | Structs with methods, enums that carry data, tuples, generics, interfaces, `T?` optionals           |
-| Errors           | `Result` values with `try`, plus `throws`, `throw` and `try`/`catch`                                |
+| Errors           | `Result` values with `try`, plus `throw` and `try`/`catch`                                |
 | Concurrency      | Threads, a bounded task pool, the `go` keyword, channels, futures, atomics                          |
 | Targets          | Linux, macOS, Windows, WebAssembly, JavaScript, Android, iOS and freestanding bare metal            |
 | Source languages | English and Persian, with one shared standard library                                               |

@@ -100,12 +100,12 @@ Release notes are generated from merged pull requests; there is no hand-written 
 
 **Memory safety.** Salam has no garbage collector and no borrow checker. Array and vector accesses are bounds-checked in normal builds, the compiler warns about ownership mistakes, and `salam memcheck` runs a program under AddressSanitizer. Two caveats belong in any risk assessment: freeing heap memory is the programmer's job, and a `--release` build strips bounds checks for speed. For code that parses hostile input, Rust's compile-time guarantees are stronger; the [Salam vs Rust article](/blog/salam-vs-rust/) compares the two fairly.
 
-**Error handling** is explicit, which helps auditing. Functions that can fail are marked `throws`, and callers must handle or propagate the error:
+**Error handling** is explicit, which helps auditing. Functions that can fail are marked `throw`, and callers must handle or propagate the error:
 
 ```salam
 import conv
 
-func parse port(text: str): int throws:
+func parse port(text: str): int throw:
     port := try conv.Atoi(text)
     if port < 1 or port > 65535:
         throw Error { message = "port out of range: " + text }

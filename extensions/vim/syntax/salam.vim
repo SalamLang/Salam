@@ -16,7 +16,7 @@ syn sync minlines=60 maxlines=400
 syn keyword salamConditional  if else match switch اگر وگرنه همخوان ترابرد
 syn keyword salamRepeat       until repeat each تا تکرار هر
 syn keyword salamStatement    ret end break continue defer to by in try catch throw برگشت پایان بشکن گذر دیرکن تا هر در تلاش
-syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated export throws ناپایا پایا همگانی درخط نادرخط ناب نابرگشت خطادار
+syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated export ناپایا پایا همگانی درخط نادرخط ناب نابرگشت
 syn keyword salamKeyword      on as page impl بر برگردان صفحه کاربست
 syn keyword salamBoolean      true false درست نادرست
 syn keyword salamNull         null پوچ

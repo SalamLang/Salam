@@ -24,7 +24,7 @@ struct Point:
     pub y: int
 end
 
-func move right(p &: Point, steps: int):
+func move_right(p &: Point, steps: int):
     p.x += steps
 end
 
@@ -35,7 +35,7 @@ func main:
     println a.x, b.x
 
     mut c := a
-    move right(c, 5)
+    move_right(c, 5)
     println c.x
 
     mut cart := Vector {} as Vector<str>
@@ -63,18 +63,18 @@ Without `copy()`, `basket := cart` would copy only the header. Both names would 
 ```salam
 import mem
 
-func free words(words: Vector<str>):
+func free_words(words: Vector<str>):
     each w in words:
         mem.Free(w as void*)
     end
     words.Free()
 end
 
-func count words(lines: str[]): int:
+func count_words(lines: str[]): int:
     mut total := 0
     each line in lines:
         words := line.Split(" ")
-        defer free words(words)
+        defer free_words(words)
         total += words.len()
     end
     ret total
@@ -83,7 +83,7 @@ end
 func main:
     defer println "main: last"
     defer println "main: second to last"
-    println "words:", count words(["peace be with you", "salam"])
+    println "words:", count_words(["peace be with you", "salam"])
 end
 ```
 
@@ -95,11 +95,11 @@ main: last
 
 Writing `defer x.Free()` on the line right after `x` is created is the most important habit in Salam. Cleanup sits next to the allocation, where a reviewer can see it, and an early `ret` added later cannot skip it. The [defer lesson](/learn/defer/) has more examples.
 
-Notice `free words`. `line.Split(" ")` returns a `Vector<str>` whose strings are themselves heap allocations, and `free()` on a `Vector` frees its own storage, not what the elements own. So the helper frees each string first, then the vector. That detail is easy to miss, which is why the next tools exist.
+Notice `free_words`. `line.Split(" ")` returns a `Vector<str>` whose strings are themselves heap allocations, and `free()` on a `Vector` frees its own storage, not what the elements own. So the helper frees each string first, then the vector. That detail is easy to miss, which is why the next tools exist.
 
 ## Finding leaks with salam memcheck {#memcheck}
 
-`salam memcheck app.salam` builds the program with debug information and runs it under Valgrind when it is installed, or with AddressSanitizer otherwise, and reports leaks and invalid accesses with Salam filenames and line numbers. Here is its report for an earlier version of `count words`, saved as `d1.salam`, that used a plain `defer words.Free()` and so never freed the word strings (two inner stack frames removed):
+`salam memcheck app.salam` builds the program with debug information and runs it under Valgrind when it is installed, or with AddressSanitizer otherwise, and reports leaks and invalid accesses with Salam filenames and line numbers. Here is its report for an earlier version of `count_words`, saved as `d1.salam`, that used a plain `defer words.Free()` and so never freed the word strings (two inner stack frames removed):
 
 ```text
 ==47772== 14 bytes in 3 blocks are definitely lost in loss record 4 of 4
@@ -112,7 +112,7 @@ Notice `free words`. `line.Split(" ")` returns a `Vector<str>` whose strings are
 salam memcheck: errors detected (exit 1). Review the output above.
 ```
 
-The trace points at line 4 of that file, the `split` call, through the mangled name of `count words`. With the helper in place, the same command prints `definitely lost: 0 bytes in 0 blocks` and `salam memcheck: no memory errors detected.` Run it on anything meant to run for a long time, such as a server, a daemon or a game loop. `salam build --asan` builds the AddressSanitizer checks into an ordinary executable instead.
+The trace points at line 4 of that file, the `split` call, through the mangled name of `count_words`. With the helper in place, the same command prints `definitely lost: 0 bytes in 0 blocks` and `salam memcheck: no memory errors detected.` Run it on anything meant to run for a long time, such as a server, a daemon or a game loop. `salam build --asan` builds the AddressSanitizer checks into an ordinary executable instead.
 
 ## Automatic drop: frees the compiler writes for you {#automatic-drop}
 

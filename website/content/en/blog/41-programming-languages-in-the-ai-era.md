@@ -139,7 +139,7 @@ Some properties make a language easier for generators, and most of them are simp
 - **A standard library with real names.** When the library is large and documented by the same pipeline, the most common hallucination, an invented function, is caught by a search tool or by the compiler's did-you-mean.
 - **Tests as the specification.** Compiler errors are tested by small programs that must produce a given code, and those programs double as examples for each error.
 
-Some properties work against generators, and Salam has them too. Its syntax is unfamiliar, it still changes before 1.0, and multi-word names such as `reading time` are legal, which surprises anyone, human or model, who expects identifiers without spaces. The [syntax design article](/blog/salam-syntax-design/) explains why those choices were made anyway.
+Some properties work against generators, and Salam has them too. Its syntax is unfamiliar, it still changes before 1.0, and multi-word names such as `reading_time` are legal, which surprises anyone, human or model, who expects identifiers without spaces. The [syntax design article](/blog/salam-syntax-design/) explains why those choices were made anyway.
 
 ## What a compiler cannot check {#limits}
 

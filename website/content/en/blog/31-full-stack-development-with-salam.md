@@ -68,7 +68,7 @@ page NotesPage(items: Vector<Note>, problem: str):
     end
 end
 
-func text problem(text: str): str:
+func text_problem(text: str): str:
     if text.len() == 0:
         ret "write something first"
     end
@@ -84,7 +84,7 @@ end
 
 func add(ctx: i64):
     text := http.Form(ctx, "text")
-    problem := text problem(text)
+    problem := text_problem(text)
     if problem != "":
         http.SetStatus(ctx, 422)
         http.Html(ctx, NotesPage(notes, problem))
@@ -144,7 +144,7 @@ A server-rendered page with forms is already a complete application, and for man
 ```salam
 import dom
 
-func title problem(title: str): str:
+func title_problem(title: str): str:
     if title.len() == 0:
         ret "write something first"
     end
@@ -155,7 +155,7 @@ func title problem(title: str): str:
 end
 
 func check(e: i64):
-    problem := title problem(dom.GetValue(dom.ById("text")))
+    problem := title_problem(dom.GetValue(dom.ById("text")))
     dom.SetText(dom.ById("hint"), problem)
     if problem != "":
         dom.PreventDefault(e)
@@ -175,7 +175,7 @@ page:
 end
 ```
 
-`salam page build notes.salam` compiles `check` and `title problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events/dom/) ends with the same warning.
+`salam page build notes.salam` compiles `check` and `title_problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events/dom/) ends with the same warning.
 
 Beyond single handlers there are three tools for the client-side:
 

@@ -130,7 +130,7 @@ A pleasant side effect: English `until` confuses newcomers, because Salam's `unt
 
 ## Multi-word names and the zero-width non-joiner {#multi-word-names}
 
-Persian writes many single concepts as two or more words: `شمار رقم‌ها` (digit count), `جمع کل` (grand total). Forcing them into `snake_case` or gluing them together produces something no Persian reader would write. So Salam allows spaces inside names, in both languages: `func line total(o: Order)` is legal English Salam, and `تابع جمع ردیف(...)` is legal Persian.
+Persian writes many single concepts as two or more words: `شمار رقم‌ها` (digit count), `جمع کل` (grand total). Forcing them into `snake_case` or gluing them together produces something no Persian reader would write. So Salam allows spaces inside names, in both languages: `func line_total(o: Order)` is legal English Salam, and `تابع جمع ردیف(...)` is legal Persian.
 
 Persian adds a second problem: the **zero-width non-joiner** (ZWNJ, U+200C). It separates two parts of a word without a visible space, as in `رقم‌ها` (digits). Writers are inconsistent about it; the same word appears with a ZWNJ, with a space, or glued together, and on screen the first two look nearly the same. Salam's decision:
 

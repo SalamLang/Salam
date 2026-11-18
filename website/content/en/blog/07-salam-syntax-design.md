@@ -26,7 +26,7 @@ Four ideas explain most of Salam's syntax:
 Every block in Salam opens with `:` and closes with `end`: functions, conditions, loops, structs, enums, match arms. A short block may sit on one line.
 
 ```salam
-func sign of(n: int): str:
+func sign_of(n: int): str:
     if n < 0: ret "negative" end
     if n == 0: ret "zero" end
     ret "positive"
@@ -34,7 +34,7 @@ end
 
 func main:
     each n in [-4, 0, 9]:
-        println n, sign of(n)
+        println n, sign_of(n)
     end
 end
 ```
@@ -180,7 +180,7 @@ rectangle, 3 by 1
 
 ## Names with spaces {#multi-word-names}
 
-A Salam name may contain spaces: `sign of`, `line total`, `is weekend`. A call then reads like a phrase: `sign of(n)`. This exists mainly for Persian, where many concepts are naturally two words and gluing them together looks wrong, but it works in English too.
+A Salam name may contain spaces: `sign_of`, `line_total`, `is_weekend`. A call then reads like a phrase: `sign_of(n)`. This exists mainly for Persian, where many concepts are naturally two words and gluing them together looks wrong, but it works in English too.
 
 It has two rules that keep it unambiguous. The words of a name may not include a keyword (`distance to origin` fails because `to` is a keyword), and `const` names must be a single word. Some teams will prefer `snake_case` for English code anyway, and that is fine; underscores are ordinary characters.
 
@@ -258,7 +258,7 @@ end
 Salam:
 
 ```salam
-func sum even(numbers: int[]): int:
+func sum_even(numbers: int[]): int:
     mut total := 0
     each n in numbers:
         if n % 2 == 0:
@@ -269,7 +269,7 @@ func sum even(numbers: int[]): int:
 end
 
 func main:
-    println sum even([1, 2, 3, 4, 5, 6])
+    println sum_even([1, 2, 3, 4, 5, 6])
 end
 ```
 
@@ -318,4 +318,4 @@ Salam has no `while` keyword; `until c:` loops while `c` is true. Its Persian sp
 
 ### Can variable names in Salam contain spaces?
 
-Yes. Names such as `line total` or `is weekend` are single identifiers, which helps especially in Persian. A multi-word name may not contain a keyword, and constants must be one word.
+Yes. Names such as `line_total` or `is_weekend` are single identifiers, which helps especially in Persian. A multi-word name may not contain a keyword, and constants must be one word.

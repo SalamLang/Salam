@@ -142,7 +142,7 @@ Salam's usual tool is a function marked `throws`. `try` passes an error to the c
 ```salam
 import conv
 
-func parse port(text: str): int throws:
+func parse_port(text: str): int throws:
     n := try conv.ParseInt(text)
     if n < 1 or n > 65535:
         throw "port out of range: " + n
@@ -153,7 +153,7 @@ end
 func main:
     each arg in ["8080", "0", "http"]:
         try:
-            println arg, "-> port", parse port(arg)
+            println arg, "-> port", parse_port(arg)
         catch e:
             println arg, "-> error:", e.message
         end

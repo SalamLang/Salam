@@ -257,16 +257,16 @@ enum Result<T, E>:
     Err(error: E)
 end
 
-func parse digit(s: str): Result<int, str>:
+func parse_digit(s: str): Result<int, str>:
     if s.len() != 1 or not "0123456789".Includes(s):
         ret Result.Err("not a digit: " + s)
     end
     ret Result.Ok(s.to_int())
 end
 
-func add digits(a: str, b: str): Result<int, str>:
-    x := parse digit(a)?
-    y := parse digit(b)?
+func add_digits(a: str, b: str): Result<int, str>:
+    x := parse_digit(a)?
+    y := parse_digit(b)?
     ret Result.Ok(x + y)
 end
 
@@ -278,8 +278,8 @@ func show(r: Result<int, str>):
 end
 
 func main:
-    show(add digits("4", "5"))
-    show(add digits("4", "x"))
+    show(add_digits("4", "5"))
+    show(add_digits("4", "x"))
 end
 ```
 

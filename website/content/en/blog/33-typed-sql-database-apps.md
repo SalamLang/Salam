@@ -53,7 +53,7 @@ func migrate(c: dyn db.Connection):
     db.FreeMigrator(m)
 end
 
-func add customer(c: dyn db.Connection, email: str, name: str): i64:
+func add_customer(c: dyn db.Connection, email: str, name: str): i64:
     sql := "INSERT INTO customers (email, name) VALUES (" + db.QuoteLiteral(email) + ", " + db.QuoteLiteral(name) + ")"
     if not db.Run(c, sql):
         println "insert failed:", c.Error()
@@ -66,9 +66,9 @@ func main:
     c := sqlite.Conn(sqlite.Open(":memory:"))
     migrate(c)
     migrate(c)
-    id := add customer(c, "sara@example.com", "Sara")
-    add customer(c, "omid@example.com", "Omid O'Neil")
-    add customer(c, "sara@example.com", "Sara again")
+    id := add_customer(c, "sara@example.com", "Sara")
+    add_customer(c, "omid@example.com", "Omid O'Neil")
+    add_customer(c, "sara@example.com", "Sara again")
     println "customers:", db.QueryInt(c, "SELECT COUNT(*) FROM customers")
     rows := c.Query("SELECT id, name FROM customers ORDER BY id")
     until rows.Next():

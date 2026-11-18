@@ -98907,6 +98907,2046 @@ The example for this item is shown with the ones above: data-Batch.salam
 
 ---
 
+# encoding.uuid
+
+https://salamlang.github.io/Salam/std/encoding/uuid/
+
+UUIDs as RFC 9562 defines them: versions 1 to 8, nil and max, strict parsing, and generation that is safe from many threads.
+
+A UUID is a 128 bit identifier that can be made on any machine without asking a server. This package follows RFC 9562, which replaced RFC 4122, and checks its output against the test vectors of that RFC. A `UUID` is a small value of two 64 bit halves, so it is cheap to copy, compare and use as a key.
+
+Which version to use:
+
+| Version | Made by | Use it for |
+| --- | --- | --- |
+| 4 | `NewV4`, `New` | Plain random ids. The default choice. |
+| 7 | `NewV7` | Database keys and anything you sort or index: the time comes first, so new ids land at the end of an index. |
+| 5 | `NewV5` | The same name must always give the same id, for example an id for a URL. |
+| 3 | `NewV3` | Like 5 with MD5, only to match ids that already exist. |
+| 1 and 6 | `NewV1`, `NewV6` | Time based ids that other systems expect. Version 6 is version 1 reordered so it sorts by time; prefer it for new code. |
+| 8 | `NewV8` | Your own layout in the 122 free bits. |
+
+The random versions read only the operating system secure random source. The package never uses `std/rand`, which is not meant for identifiers. If the secure source cannot be read the process stops, because an id built from anything weaker would be a security hole; there is no half working mode to handle.
+
+## Making an id
+
+`New` makes a random version 4 id and `String` writes it as the usual 36 characters. `Nil` and `Max` are the all zero and all one ids. Printing a `UUID` with `println` writes the same text.
+
+encoding-uuid-guide-basics.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.New()
+    println uuid.String(id).len(), uuid.Version(id), uuid.Variant(id) == uuid.VARIANT_RFC
+    text := uuid.NewString()
+    println uuid.IsValid(text), text.len()
+    println uuid.Nil()
+    println uuid.Max()
+    println uuid.IsNil(uuid.Nil()), uuid.IsNil(id)
+end
+```
+
+Output:
+
+```text
+36 4 true
+true 36
+00000000-0000-0000-0000-000000000000
+ffffffff-ffff-ffff-ffff-ffffffffffff
+true false
+```
+
+## Reading and writing text
+
+`Parse` accepts the canonical form, the form in braces, the `urn:uuid:` form and the form with no hyphens, in capitals or not. It is strict: no spaces around the text, every hyphen where it belongs, nothing but hex digits. It returns a `ParseResult` with `ok`, `id` and `error`. Use `MustParse` for literals in your own code and `ParseOr` when you have a fallback. `String`, `Upper`, `Compact`, `Braced` and `URN` write the other direction.
+
+encoding-uuid-guide-parse.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    forms := [
+        "f81d4fae-7dec-11d0-a765-00a0c91e6bf6", "F81D4FAE-7DEC-11D0-A765-00A0C91E6BF6",
+        "f81d4fae7dec11d0a76500a0c91e6bf6", "{f81d4fae-7dec-11d0-a765-00a0c91e6bf6}",
+        "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6", "f81d4fae-7dec-11d0-a765",
+        "f81d4fae-7dec-11d0-a765-00a0c91e6bfz"
+    ]
+    each text in forms:
+        r := uuid.Parse(text)
+        if r.ok:
+            println "ok   ", uuid.String(r.id)
+        else:
+            println "error", r.error
+        end
+    end
+    id := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    println uuid.Upper(id)
+    println uuid.Compact(id)
+    println uuid.Braced(id)
+    println uuid.URN(id)
+end
+```
+
+Output:
+
+```text
+ok    f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+ok    f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+ok    f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+ok    f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+ok    f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+error uuid: invalid length 23
+error uuid: invalid character at position 35
+F81D4FAE-7DEC-11D0-A765-00A0C91E6BF6
+f81d4fae7dec11d0a76500a0c91e6bf6
+{f81d4fae-7dec-11d0-a765-00a0c91e6bf6}
+urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+```
+
+## Ids made from names
+
+Version 5 (and 3) hashes a namespace id and a name, so the same pair always gives the same id. The four namespaces of the RFC are `NamespaceDNS`, `NamespaceURL`, `NamespaceOID` and `NamespaceX500`; you can also use any UUID of your own as a namespace. The values below are the ones printed in RFC 9562.
+
+encoding-uuid-guide-names.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    dns := uuid.NamespaceDNS()
+    println uuid.NewV5(dns, "www.example.com")
+    println uuid.NewV3(dns, "www.example.com")
+    println uuid.NewV5(dns, "www.example.com") == uuid.NewV5(dns, "www.example.com")
+    println uuid.Equal(uuid.NewV5(dns, "python.org"), uuid.NewV5(uuid.NamespaceURL(), "python.org"))
+end
+```
+
+Output:
+
+```text
+2ed6657d-e927-568b-95e1-2665a8aea6a2
+5df41881-3aed-3515-88a7-2f4a814cf09e
+true
+false
+```
+
+## Time based ids
+
+Versions 1, 6 and 7 carry a time. `UnixMillis` and `UnixNanos` read it back, `Timestamp` gives the raw 60 bit count of version 1 and 6. The `From...Parts` functions build an id from exact parts, which is how the tests pin the RFC test vectors. `NewV7` returns a larger id on every call, even in the same millisecond, even from other threads, and even when the clock is set back. `NewV1` and `NewV6` never repeat either: ids in the same 100 nanosecond tick move the time forward by one tick, and a clock that jumps far back changes the clock sequence as RFC 9562 asks. Their node is random per process with the multicast bit set, never a real network address.
+
+encoding-uuid-guide-time.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    v1 := uuid.FromV1Parts(0x1EC9414C232AB00, 0x33C8, 0x9F6BDECED846)
+    v6 := uuid.FromV6Parts(0x1EC9414C232AB00, 0x33C8, 0x9F6BDECED846)
+    v7 := uuid.FromV7Parts(1645557742000, 0xCC3, 0x18C4DC0C0C07398F)
+    println v1
+    println v6
+    println v7
+    println uuid.UnixMillis(v1), uuid.UnixMillis(v6), uuid.UnixMillis(v7)
+    println uuid.ClockSequence(v1), uuid.Node(v1) == 0x9F6BDECED846
+
+    first := uuid.NewV7()
+    second := uuid.NewV7()
+    println uuid.Less(first, second), uuid.String(first) < uuid.String(second)
+    println uuid.UnixMillis(second) - uuid.UnixMillis(first) < 1000
+end
+```
+
+Output:
+
+```text
+c232ab00-9414-11ec-b3c8-9f6bdeced846
+1ec9414c-232a-6b00-b3c8-9f6bdeced846
+017f22e2-79b0-7cc3-98c4-dc0c0c07398f
+1645557742000 1645557742000 1645557742000
+13256 true
+true true
+true
+```
+
+## Many threads at once
+
+All the generators can be called from any number of threads, with `go`, `spawn` or a pool. The clock state, the version 7 counter and the buffer of random bytes sit behind locks of their own, so there are no duplicates and no id goes backwards in a thread. The example makes 8000 ids from 8 tasks and counts the different ones.
+
+encoding-uuid-guide-threads.salam
+
+```salam
+import encoding.uuid
+import mem
+import pool
+
+const WORKERS := 8
+const PER := 1000
+
+mut slots := null as u64*
+
+func produce(worker: int):
+    repeat PER in i:
+        id := uuid.NewV7()
+        slot := (worker * PER + i) * 2
+        slots[slot] = id.hi
+        slots[slot + 1] = id.lo
+    end
+end
+
+func main:
+    slots = mem.Allocate((WORKERS * PER * 16) as u64) as u64*
+    repeat WORKERS in worker:
+        go produce(worker)
+    end
+    pool.GoWait()
+    mut seen := HashMap {} as HashMap<str, int>
+    defer seen.free()
+    repeat WORKERS * PER in i:
+        seen.put(uuid.Compact(uuid.UUID { hi = slots[i * 2], lo = slots[i * 2 + 1] }), 1)
+    end
+    println "generated", WORKERS * PER, "unique", seen.size()
+    mem.Free(slots as void*)
+end
+```
+
+Output:
+
+```text
+generated 8000 unique 8000
+```
+
+## Short forms
+
+`Base64URL` writes an id in 22 characters that are safe in a URL and `Base32` in 26 lowercase characters that are safe in a file name or a host name. Reading them back is as strict as `Parse`: the unused bits must be zero, so one id has one text.
+
+encoding-uuid-guide-short.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    short := uuid.Base64URL(id)
+    println short, short.len()
+    println uuid.Base32(id)
+    back := uuid.FromBase64URL(short)
+    println back.ok, uuid.Equal(back.id, id)
+    println uuid.FromBase64URL("too short").error
+end
+```
+
+Output:
+
+```text
+-B1Prn3sEdCnZQCgyR5r9g 22
+7aou7lt55qi5bj3facqmshtl6y
+true true
+uuid: base64url text must have 22 characters
+```
+
+## Custom ids and bytes
+
+Version 8 keeps the version and variant bits and leaves the rest to you: `FromV8Parts` takes the three fields of the RFC and `NewV8` takes two 64 bit halves. `Bytes` and `FromBytes` convert to the 16 bytes in network order, and `ToBuffer` and `FromBuffer` do the same for raw memory.
+
+encoding-uuid-guide-custom.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    custom := uuid.FromV8Parts(0x2489E9AD2EE2, 0xE00, 0xEC932D5F69181C0)
+    println custom, uuid.Version(custom), uuid.Variant(custom) == uuid.VARIANT_RFC
+    other := uuid.NewV8(0x0123456789ABCDEF as u64, 0xFEDCBA9876543210 as u64)
+    println other
+    mut bytes := uuid.Bytes(other)
+    println bytes.len(), bytes.get(0), bytes.get(15)
+    println uuid.Equal(uuid.FromBytes(bytes), other)
+    bytes.free()
+    batch := uuid.Batch(3)
+    println batch.len()
+    batch.free()
+end
+```
+
+Output:
+
+```text
+2489e9ad-2ee2-8e00-8ec9-32d5f69181c0 8 true
+01234567-89ab-8def-bedc-ba9876543210
+16 1 16
+true
+3
+```
+
+What people get wrong:
+
+- Using version 4 as a primary key in a big table. Random keys scatter writes over the whole index; version 7 keeps them together.
+
+- Hiding secrets in the time of a version 1, 6 or 7 id. The time can be read back by anyone who has the id.
+
+- Expecting version 5 to be secret. It is a hash of public values, anyone who knows the name can compute it.
+
+- Comparing the text of ids made in different cases. Compare with `Equal`, or write both with `String`.
+
+- Forgetting to free the vectors from `Bytes`, `Batch` and `BatchV7`.
+
+For random bytes and tokens see crypto; for hex and base64 of arbitrary data see encoding.
+
+## Types
+
+### `ParseResult`
+
+```salam
+struct ParseResult
+```
+
+What Parse returns: ok says whether the text was a UUID, id is the value and error says what was wrong.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | True when the text was a valid UUID. |
+| `id` | `UUID` | The parsed value, the nil UUID when ok is false. |
+| `error` | `str = ""` | A short description of the problem, empty when ok is true. |
+
+encoding-uuid-Parse.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    r := uuid.Parse("{F81D4FAE-7DEC-11D0-A765-00A0C91E6BF6}")
+    println r.ok, uuid.String(r.id)
+    bad := uuid.Parse("not a uuid")
+    println bad.ok, bad.error
+    println uuid.ParseOr("nope", uuid.Nil())
+end
+```
+
+Output:
+
+```text
+true f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+false uuid: invalid length 10
+00000000-0000-0000-0000-000000000000
+```
+
+### `UUID`
+
+```salam
+struct UUID
+```
+
+A 128 bit identifier kept as two unsigned 64 bit halves, hi (the first eight bytes) and lo (the last eight). It is a plain value: copy it, compare it with Equal and Compare, print it with println.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `hi` | `u64 = 0` | The first eight bytes, most significant first. |
+| `lo` | `u64 = 0` | The last eight bytes, most significant first. |
+
+encoding-uuid-Bytes.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    mut bytes := uuid.Bytes(id)
+    defer bytes.free()
+    println bytes.len(), bytes.get(0), bytes.get(15)
+    println uuid.Equal(uuid.FromBytes(bytes), id)
+end
+```
+
+Output:
+
+```text
+16 248 246
+true
+```
+
+#### `to_str`
+
+```salam
+func to_str(): str
+```
+
+## Constants and variables
+
+### `VARIANT_NCS`
+
+```salam
+const VARIANT_NCS: i32 = 0
+```
+
+Variant of old NCS identifiers, the top bit of the variant field is 0.
+
+encoding-uuid-NewV4.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    a := uuid.NewV4()
+    b := uuid.NewV4()
+    println uuid.Version(a), uuid.Variant(a) == uuid.VARIANT_RFC
+    println uuid.Equal(a, b), uuid.Compare(a, a)
+end
+```
+
+Output:
+
+```text
+4 true
+false 0
+```
+
+### `VARIANT_RFC`
+
+```salam
+const VARIANT_RFC: i32 = 1
+```
+
+The variant of RFC 9562 and RFC 4122, bits 10. Every version 1 to 8 UUID made here has it.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `VARIANT_MICROSOFT`
+
+```salam
+const VARIANT_MICROSOFT: i32 = 2
+```
+
+Variant reserved for old Microsoft GUIDs, bits 110.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `VARIANT_FUTURE`
+
+```salam
+const VARIANT_FUTURE: i32 = 3
+```
+
+Variant reserved for the future, bits 111.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+## Functions
+
+### `Parse`
+
+```salam
+func Parse(s: str): ParseResult
+```
+
+Reads a UUID from text. It accepts the canonical form, the form in braces, the urn:uuid: form and the form with no hyphens, in any case. Everything else is an error: spaces, a missing or misplaced hyphen, a character that is not a hex digit, a wrong length.
+
+The example for this item is shown with the ones above: encoding-uuid-Parse.salam
+
+### `ParseOr`
+
+```salam
+func ParseOr(s: str, fallback: UUID): UUID
+```
+
+Parses text and returns the fallback when it is not a UUID.
+
+The example for this item is shown with the ones above: encoding-uuid-Parse.salam
+
+### `IsValid`
+
+```salam
+func IsValid(s: str): bool
+```
+
+True when Parse would accept the text.
+
+The example for this item is shown with the ones above: encoding-uuid-Parse.salam
+
+### `MustParse`
+
+```salam
+func MustParse(s: str): UUID
+```
+
+Parses text and stops the program with a message on standard error and exit code 2 when it is not a UUID. For literals in your own code.
+
+encoding-uuid-Formats.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    println uuid.String(id)
+    println uuid.Upper(id)
+    println uuid.Compact(id)
+    println uuid.Braced(id)
+    println uuid.URN(id)
+end
+```
+
+Output:
+
+```text
+f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+F81D4FAE-7DEC-11D0-A765-00A0C91E6BF6
+f81d4fae7dec11d0a76500a0c91e6bf6
+{f81d4fae-7dec-11d0-a765-00a0c91e6bf6}
+urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+```
+
+### `FromV4Parts`
+
+```salam
+func FromV4Parts(hi: u64, lo: u64): UUID
+```
+
+Builds a version 4 UUID from two given random halves, for tests that need a fixed value.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `FromV7Parts`
+
+```salam
+func FromV7Parts(unix_ms: i64, rand_a: i64, rand_b: i64): UUID
+```
+
+Builds a version 7 UUID from a Unix time in milliseconds, 12 bits rand_a and 62 bits rand_b. This is the deterministic builder behind NewV7.
+
+encoding-uuid-FromV7Parts.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.FromV7Parts(1645557742000, 0xCC3, 0x18C4DC0C0C07398F)
+    println id
+    println uuid.UnixMillis(id)
+end
+```
+
+Output:
+
+```text
+017f22e2-79b0-7cc3-98c4-dc0c0c07398f
+1645557742000
+```
+
+### `FromV8Parts`
+
+```salam
+func FromV8Parts(custom_a: i64, custom_b: i64, custom_c: i64): UUID
+```
+
+Builds a version 8 UUID from 48 bits custom_a, 12 bits custom_b and 62 bits custom_c, the layout of RFC 9562.
+
+encoding-uuid-Custom.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    custom := uuid.FromV8Parts(0x2489E9AD2EE2, 0xE00, 0xEC932D5F69181C0)
+    println custom, uuid.Version(custom), uuid.Variant(custom) == uuid.VARIANT_RFC
+    other := uuid.NewV8(0x0123456789ABCDEF as u64, 0xFEDCBA9876543210 as u64)
+    println other
+    println uuid.Stamp(0 as u64, 0 as u64, 9)
+end
+```
+
+Output:
+
+```text
+2489e9ad-2ee2-8e00-8ec9-32d5f69181c0 8 true
+01234567-89ab-8def-bedc-ba9876543210
+00000000-0000-9000-8000-000000000000
+```
+
+### `NewV4`
+
+```salam
+func NewV4(): UUID
+```
+
+A random UUID, version 4. It has 122 random bits from the operating system secure random source and nothing else. The source is read in large blocks under a lock, so it is safe from many threads.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `NewV7`
+
+```salam
+func NewV7(): UUID
+```
+
+A UUID made of the Unix time in milliseconds followed by a counter and random bits, version 7. Every call returns a larger UUID than the one before, in the whole process and across threads, even when the clock stands still or goes back.
+
+encoding-uuid-NewV7.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    ids := uuid.BatchV7(5)
+    defer ids.free()
+    mut ordered := true
+    repeat ids.len() - 1 in i:
+        if not uuid.Less(ids.get(i), ids.get(i + 1)): ordered = false end
+    end
+    println "version", uuid.Version(ids.get(0)), "ordered", ordered
+    println uuid.HasTime(ids.get(0))
+end
+```
+
+Output:
+
+```text
+version 7 ordered true
+true
+```
+
+### `NewV8`
+
+```salam
+func NewV8(hi: u64, lo: u64): UUID
+```
+
+A custom UUID: your 128 bits with the version 8 and RFC variant bits written over them.
+
+The example for this item is shown with the ones above: encoding-uuid-Custom.salam
+
+### `Nil`
+
+```salam
+func Nil(): UUID
+```
+
+The nil UUID, all 128 bits zero.
+
+encoding-uuid-New.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.New()
+    println uuid.String(id).len(), uuid.Version(id), uuid.Variant(id) == uuid.VARIANT_RFC
+    println uuid.IsValid(uuid.NewString())
+    println uuid.Nil(), uuid.IsNil(uuid.Nil()), uuid.IsNil(id)
+    println uuid.Max(), uuid.IsMax(uuid.Max())
+    ids := uuid.Batch(3)
+    println ids.len()
+    ids.free()
+end
+```
+
+Output:
+
+```text
+36 4 true
+true
+00000000-0000-0000-0000-000000000000 true false
+ffffffff-ffff-ffff-ffff-ffffffffffff true
+3
+```
+
+### `Max`
+
+```salam
+func Max(): UUID
+```
+
+The max UUID, all 128 bits one.
+
+The example for this item is shown with the ones above: encoding-uuid-New.salam
+
+### `IsNil`
+
+```salam
+func IsNil(u: UUID): bool
+```
+
+True when every bit is zero.
+
+The example for this item is shown with the ones above: encoding-uuid-New.salam
+
+### `IsMax`
+
+```salam
+func IsMax(u: UUID): bool
+```
+
+True when every bit is one.
+
+The example for this item is shown with the ones above: encoding-uuid-New.salam
+
+### `Equal`
+
+```salam
+func Equal(a: UUID, b: UUID): bool
+```
+
+True when two UUIDs have the same 128 bits.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `Compare`
+
+```salam
+func Compare(a: UUID, b: UUID): int
+```
+
+Returns -1, 0 or 1. The order is the order of the bytes, so it is also the order of the canonical text, and version 6 and 7 UUIDs sort by time.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `Less`
+
+```salam
+func Less(a: UUID, b: UUID): bool
+```
+
+True when a sorts before b.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV7.salam
+
+### `Version`
+
+```salam
+func Version(u: UUID): int
+```
+
+The version number from the four version bits, 0 to 15.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `Variant`
+
+```salam
+func Variant(u: UUID): int
+```
+
+The layout of the identifier: one of the VARIANT_ constants.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV4.salam
+
+### `Byte`
+
+```salam
+func Byte(u: UUID, i: int): int
+```
+
+The byte at position 0 to 15, or 0 when the position is out of range.
+
+The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+
+### `Bytes`
+
+```salam
+func Bytes(u: UUID): Vector<u8>
+```
+
+The 16 bytes in network order as a vector. Free it when done.
+
+The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+
+### `FromBytes`
+
+```salam
+func FromBytes(b: Vector<u8>): UUID
+```
+
+Builds a UUID from a vector of exactly 16 bytes. Any other length gives the nil UUID.
+
+The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+
+### `ToBuffer`
+
+```salam
+func ToBuffer(u: UUID, out: void*)
+```
+
+Writes the 16 bytes to the memory out points at. The buffer must hold at least 16 bytes.
+
+The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+
+### `FromBuffer`
+
+```salam
+func FromBuffer(src: void*): UUID
+```
+
+Reads 16 bytes from the memory src points at.
+
+The example for this item is shown with the ones above: encoding-uuid-Bytes.salam
+
+### `NamespaceDNS`
+
+```salam
+func NamespaceDNS(): UUID
+```
+
+The namespace UUID for fully qualified domain names, 6ba7b810-9dad-11d1-80b4-00c04fd430c8.
+
+encoding-uuid-NewV5.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.NewV5(uuid.NamespaceDNS(), "www.example.com")
+    println id
+    println uuid.Version(id)
+    println uuid.NewV3(uuid.NamespaceDNS(), "www.example.com")
+end
+```
+
+Output:
+
+```text
+2ed6657d-e927-568b-95e1-2665a8aea6a2
+5
+5df41881-3aed-3515-88a7-2f4a814cf09e
+```
+
+### `NamespaceURL`
+
+```salam
+func NamespaceURL(): UUID
+```
+
+The namespace UUID for URLs, 6ba7b811-9dad-11d1-80b4-00c04fd430c8.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV5.salam
+
+### `NamespaceOID`
+
+```salam
+func NamespaceOID(): UUID
+```
+
+The namespace UUID for ISO object identifiers, 6ba7b812-9dad-11d1-80b4-00c04fd430c8.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV5.salam
+
+### `NamespaceX500`
+
+```salam
+func NamespaceX500(): UUID
+```
+
+The namespace UUID for X.500 distinguished names, 6ba7b814-9dad-11d1-80b4-00c04fd430c8.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV5.salam
+
+### `FromV1Parts`
+
+```salam
+func FromV1Parts(ts: i64, clock_seq: int, node: i64): UUID
+```
+
+Builds a version 1 UUID from a 60 bit timestamp (100 nanosecond steps since 1582-10-15), a 14 bit clock sequence and a 48 bit node. The deterministic builder behind NewV1.
+
+encoding-uuid-Time.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    v1 := uuid.FromV1Parts(0x1EC9414C232AB00, 0x33C8, 0x9F6BDECED846)
+    v6 := uuid.FromV6Parts(0x1EC9414C232AB00, 0x33C8, 0x9F6BDECED846)
+    println v1
+    println v6
+    println uuid.UnixMillis(v1), uuid.ClockSequence(v6), uuid.Node(v1) == 0x9F6BDECED846
+    println uuid.Timestamp(v1) == uuid.Timestamp(v6)
+    a := uuid.NewV1()
+    b := uuid.NewV1()
+    println uuid.Timestamp(a) < uuid.Timestamp(b), uuid.Node(a) == uuid.NodeID()
+    own := uuid.NewV1WithNode(0x0123456789AB)
+    println uuid.Node(own) == 0x0123456789AB, uuid.Version(uuid.NewV6())
+end
+```
+
+Output:
+
+```text
+c232ab00-9414-11ec-b3c8-9f6bdeced846
+1ec9414c-232a-6b00-b3c8-9f6bdeced846
+1645557742000 13256 true
+true
+true true
+true 6
+```
+
+### `FromV6Parts`
+
+```salam
+func FromV6Parts(ts: i64, clock_seq: int, node: i64): UUID
+```
+
+Builds a version 6 UUID from the same parts as FromV1Parts. Version 6 is version 1 with the time bits reordered so the text sorts by time.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `NewV1`
+
+```salam
+func NewV1(): UUID
+```
+
+A time based UUID, version 1: the current time, a clock sequence and the process node. It never repeats: when two calls land in the same tick the time is moved forward by one tick, and when the clock jumps far back the clock sequence is changed.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `NewV1WithNode`
+
+```salam
+func NewV1WithNode(node: i64): UUID
+```
+
+Like NewV1 with the 48 bit node you give instead of the random one.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `NewV6`
+
+```salam
+func NewV6(): UUID
+```
+
+A time ordered UUID, version 6. It carries the same information as version 1 but sorts by time.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `HasTime`
+
+```salam
+func HasTime(u: UUID): bool
+```
+
+True for a version 1, 6 or 7 UUID of the RFC variant.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV7.salam
+
+### `Timestamp`
+
+```salam
+func Timestamp(u: UUID): i64
+```
+
+The raw 60 bit timestamp of a version 1 or 6 UUID, or 0 for other versions.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `UnixNanos`
+
+```salam
+func UnixNanos(u: UUID): i64
+```
+
+The time inside a version 1, 6 or 7 UUID as nanoseconds since 1970, or 0 for other versions.
+
+The example for this item is shown with the ones above: encoding-uuid-FromV7Parts.salam
+
+### `UnixMillis`
+
+```salam
+func UnixMillis(u: UUID): i64
+```
+
+The same time in milliseconds.
+
+The example for this item is shown with the ones above: encoding-uuid-FromV7Parts.salam
+
+### `ClockSequence`
+
+```salam
+func ClockSequence(u: UUID): int
+```
+
+The 14 bit clock sequence of a version 1 or 6 UUID, or 0.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `Node`
+
+```salam
+func Node(u: UUID): i64
+```
+
+The 48 bit node of a version 1 or 6 UUID, or 0.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `Base64URL`
+
+```salam
+func Base64URL(u: UUID): str
+```
+
+The UUID as 22 characters of URL safe base64 without padding.
+
+encoding-uuid-Base64URL.salam
+
+```salam
+import encoding.uuid
+
+func main:
+    id := uuid.MustParse("f81d4fae-7dec-11d0-a765-00a0c91e6bf6")
+    println uuid.Base64URL(id)
+    println uuid.Base32(id)
+    println uuid.FromBase32(uuid.Base32(id)).ok
+end
+```
+
+Output:
+
+```text
+-B1Prn3sEdCnZQCgyR5r9g
+7aou7lt55qi5bj3facqmshtl6y
+true
+```
+
+### `FromBase64URL`
+
+```salam
+func FromBase64URL(s: str): ParseResult
+```
+
+Reads the 22 character form back. The extra bits must be zero, so every UUID has exactly one text.
+
+The example for this item is shown with the ones above: encoding-uuid-Base64URL.salam
+
+### `Base32`
+
+```salam
+func Base32(u: UUID): str
+```
+
+The UUID as 26 lowercase characters of RFC 4648 base32 without padding.
+
+The example for this item is shown with the ones above: encoding-uuid-Base64URL.salam
+
+### `FromBase32`
+
+```salam
+func FromBase32(s: str): ParseResult
+```
+
+Reads the 26 character form back, in either case.
+
+The example for this item is shown with the ones above: encoding-uuid-Base64URL.salam
+
+### `Stamp`
+
+```salam
+func Stamp(hi: u64, lo: u64, version: int): UUID
+```
+
+Writes a version and the RFC variant over any 128 bits (hi and lo) and returns the result.
+
+The example for this item is shown with the ones above: encoding-uuid-Custom.salam
+
+### `NewV3`
+
+```salam
+func NewV3(ns: UUID, name: str): UUID
+```
+
+A name based UUID using MD5, version 3. The same namespace and name always give the same UUID. Prefer NewV5 unless you must match existing version 3 ids.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV5.salam
+
+### `NewV5`
+
+```salam
+func NewV5(ns: UUID, name: str): UUID
+```
+
+A name based UUID using SHA-1, version 5. The same namespace and name always give the same UUID, on every machine and in every language that follows RFC 9562.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV5.salam
+
+### `String`
+
+```salam
+func String(u: UUID): str
+```
+
+The canonical lowercase text, 36 characters: 8-4-4-4-12 hexadecimal digits.
+
+The example for this item is shown with the ones above: encoding-uuid-Parse.salam
+
+### `Upper`
+
+```salam
+func Upper(u: UUID): str
+```
+
+The canonical text in capitals.
+
+The example for this item is shown with the ones above: encoding-uuid-Formats.salam
+
+### `Compact`
+
+```salam
+func Compact(u: UUID): str
+```
+
+Lowercase without hyphens, 32 characters.
+
+The example for this item is shown with the ones above: encoding-uuid-Formats.salam
+
+### `Braced`
+
+```salam
+func Braced(u: UUID): str
+```
+
+The canonical text in curly braces, the form Microsoft tools write.
+
+The example for this item is shown with the ones above: encoding-uuid-Formats.salam
+
+### `URN`
+
+```salam
+func URN(u: UUID): str
+```
+
+The canonical text with the urn:uuid: prefix.
+
+The example for this item is shown with the ones above: encoding-uuid-Formats.salam
+
+### `NodeID`
+
+```salam
+func NodeID(): i64
+```
+
+The 48 bit node this process puts in version 1 and 6 UUIDs: random, with the multicast bit set as RFC 9562 asks, so it never equals a real network card address.
+
+The example for this item is shown with the ones above: encoding-uuid-Time.salam
+
+### `New`
+
+```salam
+func New(): UUID
+```
+
+Makes a random version 4 UUID from the secure random source. The same as NewV4.
+
+The example for this item is shown with the ones above: encoding-uuid-New.salam
+
+### `NewString`
+
+```salam
+func NewString(): str
+```
+
+Makes a random version 4 UUID and returns it as lowercase text.
+
+The example for this item is shown with the ones above: encoding-uuid-New.salam
+
+### `Batch`
+
+```salam
+func Batch(n: int): Vector<UUID>
+```
+
+Makes n random version 4 UUIDs. Free the vector when done.
+
+The example for this item is shown with the ones above: encoding-uuid-Custom.salam
+
+### `BatchV7`
+
+```salam
+func BatchV7(n: int): Vector<UUID>
+```
+
+Makes n version 7 UUIDs in order. Each one is larger than the one before. Free the vector when done.
+
+The example for this item is shown with the ones above: encoding-uuid-NewV7.salam
+
+
+---
+
+# encoding.ulid
+
+https://salamlang.github.io/Salam/std/encoding/ulid/
+
+Sortable unique identifiers: ULID text and binary forms, a thread safe monotonic generator, and range bounds for queries.
+
+A ULID is a 128 bit identifier made of a 48 bit timestamp in milliseconds and 80 random bits, written as 26 characters of Crockford base32. It is the sortable alternative to a random UUID: the text sorts in the order the ids were made, so a database index stays compact and a range of time is a range of ids. This package follows the ULID specification and is written in Salam.
+
+The text uses the digits and the letters without I, L, O and U. The largest id is `7ZZZZZZZZZZZZZZZZZZZZZZZZZ`, because 130 bits are used to hold 128. Parsing accepts lowercase, reads I and L as 1 and O as 0, and refuses U and anything above that largest id.
+
+| Piece | What it is |
+| --- | --- |
+| `ULID` | The value: `time` plus two 40 bit halves of the randomness. Compare with `Compare`, `Equal` and `Less`. |
+| `New`, `NewString`, `NewBatch` | Ids from the default generator. Strictly increasing in one process, safe from any number of threads. |
+| `Generator` | The monotonic generator of the specification, one lock around the last id. `NewGeneratorWith` takes your clock and entropy. |
+| `Parse`, `String` | Text in and out. `Bytes` and `FromBytes` give the 16 bytes, also the bytes of a UUID. |
+| `FromParts` | A time and 10 given bytes: no randomness, for exact tests. |
+| `MinAt`, `MaxAt` | The first and the last id of a millisecond, the bounds of a range query. |
+
+## Make, print and read back
+
+`New` gives the next id of the default generator and `String` writes the 26 characters. `NewAt` makes an id for a time you choose. Every id is a value: copy it, compare it, keep it in a struct.
+
+encoding-ulid-guide-basics.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    id := ulid.New()
+    text := ulid.String(id)
+    println "length:", text.Len()
+    back := ulid.Parse(text)
+    println "round trip:", back.ok and ulid.Equal(back.id, id)
+    println "close to now:", ulid.Time(id) - ulid.Now() < 5000
+    stamp := ulid.NewAt(1469918176385)
+    println ulid.String(stamp.id).Len(), ulid.Time(stamp.id)
+end
+```
+
+Output:
+
+```text
+length: 26
+round trip: true
+close to now: true
+26 1469918176385
+```
+
+## Parsing and the rules of the text
+
+`Parse` follows the specification: lowercase and the aliases I, L and O are accepted, U is not, and the first character may not be above 7 because the value would not fit in 128 bits. `ParseStrict` wants exactly what `String` writes. Errors are codes, with `ErrorText` for a message.
+
+encoding-ulid-guide-parse.salam
+
+```salam
+import encoding.ulid
+
+func show(text: str):
+    r := ulid.Parse(text)
+    if r.ok:
+        println text, "->", ulid.Time(r.id), ulid.String(r.id)
+    else:
+        println text, "->", ulid.ErrorText(r.err)
+    end
+end
+
+func main:
+    show("01ARYZ6S41TSV4RRFFQ69G5FAV")
+    show("01aryz6s41tsv4rrffq69g5fav")
+    show("O1ARYZ6S41TSV4RRFFQ69G5FAV")
+    show("7ZZZZZZZZZZZZZZZZZZZZZZZZZ")
+    show("80000000000000000000000000")
+    show("01ARYZ6S41TSV4RRFFQ69G5FAU")
+    show("01ARYZ6S41")
+    println ulid.ParseStrict("01aryz6s41tsv4rrffq69g5fav").ok
+    println ulid.ParseStrict("01ARYZ6S41TSV4RRFFQ69G5FAV").ok
+end
+```
+
+Output:
+
+```text
+01ARYZ6S41TSV4RRFFQ69G5FAV -> 1469918176385 01ARYZ6S41TSV4RRFFQ69G5FAV
+01aryz6s41tsv4rrffq69g5fav -> 1469918176385 01ARYZ6S41TSV4RRFFQ69G5FAV
+O1ARYZ6S41TSV4RRFFQ69G5FAV -> 1469918176385 01ARYZ6S41TSV4RRFFQ69G5FAV
+7ZZZZZZZZZZZZZZZZZZZZZZZZZ -> 281474976710655 7ZZZZZZZZZZZZZZZZZZZZZZZZZ
+80000000000000000000000000 -> ULID value is larger than 7ZZZZZZZZZZZZZZZZZZZZZZZZZ
+01ARYZ6S41TSV4RRFFQ69G5FAU -> invalid character in ULID
+01ARYZ6S41 -> a ULID is 26 characters
+false
+true
+```
+
+## Order and range queries
+
+Text order is time order, so ids sort by a plain string sort. To select the ids of a time window ask for everything between `MinAt(start)` and `MaxAt(end)`; in SQL that is a `BETWEEN` on the id column.
+
+encoding-ulid-guide-order.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    mut ids := Vector {} as Vector<ulid.ULID>
+    defer ids.free()
+    mut mark := 1700000000000 as i64
+    repeat 4:
+        ids.push(ulid.MinAt(mark))
+        mark += 1500
+    end
+    repeat ids.len() in i:
+        println ulid.String(ids.get(i))
+    end
+
+    low := ulid.MinAt(1700000001000)
+    high := ulid.MaxAt(1700000003000)
+    println "range:", ulid.String(low), ulid.String(high)
+    repeat ids.len() in i:
+        inside := ulid.Compare(ids.get(i), low) >= 0 and ulid.Compare(ids.get(i), high) <= 0
+        println i, inside
+    end
+end
+```
+
+Output:
+
+```text
+01HF7YAT000000000000000000
+01HF7YAVEW0000000000000000
+01HF7YAWXR0000000000000000
+01HF7YAYCM0000000000000000
+range: 01HF7YATZ80000000000000000 01HF7YAWXRZZZZZZZZZZZZZZZZ
+0 false
+1 true
+2 true
+3 false
+```
+
+## The monotonic generator
+
+Two ids made in the same millisecond must still sort in the order they were made. A `Generator` does what the specification says: in a new millisecond it draws fresh randomness, in the same one it adds 1 to the last random part, and when the clock moves back it keeps the last timestamp. If the 80 bits ever overflow, the timestamp moves one millisecond ahead instead of failing. The example uses a fake clock and a fixed entropy function so every character is known.
+
+encoding-ulid-guide-monotonic.salam
+
+```salam
+import encoding.ulid
+
+mut now_ms := 1000 as i64
+mut chunk := 7 as i64
+
+func clock(): i64:
+    ret now_ms
+end
+
+func source(): i64:
+    ret chunk
+end
+
+func main:
+    g := ulid.NewGeneratorWith((): ret clock() end, (): ret source() end)
+    defer ulid.Free(g)
+    repeat 3:
+        println ulid.String(ulid.Next(g).id)
+    end
+    now_ms = 1001
+    chunk = 9
+    println ulid.String(ulid.Next(g).id)
+    now_ms = 900
+    last := ulid.Next(g)
+    println "clock went back:", ulid.Time(last.id), ulid.String(last.id)
+    println ulid.String(ulid.Increment(last.id).id)
+end
+```
+
+Output:
+
+```text
+00000000Z80000000700000007
+00000000Z80000000700000008
+00000000Z80000000700000009
+00000000Z90000000900000009
+clock went back: 1001 00000000Z9000000090000000A
+00000000Z9000000090000000B
+```
+
+## Many threads
+
+The default generator and every `Generator` guard their state with a mutex, so threads share one without duplicates and without going out of order: every thread sees its own ids increase, and all ids together are distinct. `NewBatch` takes the lock once for n ids. The cost is one lock and one clock read per id.
+
+encoding-ulid-guide-threads.salam
+
+```salam
+import encoding.ulid
+import pool
+import mem
+
+const WORKERS := 8
+const EACH := 500
+
+func main:
+    out := mem.AllocateZeroed((WORKERS * EACH * 3 * 8) as u64) as i64*
+    shared := ulid.Default()
+    pool.ParallelFor(WORKERS as i64, 4 as i64, (task: i64):
+        repeat EACH in k:
+            id := ulid.New()
+            slot := ((task * EACH + k) * 3) as int
+            out[slot] = id.time
+            out[slot + 1] = id.hi
+            out[slot + 2] = id.lo
+        end
+    end)
+    mut seen := HashMap {} as HashMap<str, bool>
+    defer seen.free()
+    repeat WORKERS * EACH in n:
+        id := ulid.ULID { time = out[n * 3], hi = out[n * 3 + 1], lo = out[n * 3 + 2] }
+        seen.put(ulid.String(id), true)
+    end
+    println "ids:", WORKERS * EACH, "distinct:", seen.size()
+    println ulid.Last(shared).ok
+    mem.Free(out as void*)
+end
+```
+
+Output:
+
+```text
+ids: 4000 distinct: 4000
+true
+```
+
+## When the random source fails
+
+The built in source reads the operating system random generator through `crypto.RandomBytes`, which stops the program if the system cannot give random bytes: a weak id is never made. A source of your own, passed to `NewGeneratorWith`, can fail politely by returning a negative number. `Next` then returns `ERR_ENTROPY` and leaves the generator untouched, so the next call can succeed.
+
+encoding-ulid-guide-entropy.salam
+
+```salam
+import encoding.ulid
+
+mut failing := true
+
+func clock(): i64:
+    ret 5000
+end
+
+func source(): i64:
+    if failing:
+        ret -1
+    end
+    ret 123456
+end
+
+func main:
+    g := ulid.NewGeneratorWith((): ret clock() end, (): ret source() end)
+    defer ulid.Free(g)
+    r := ulid.Next(g)
+    println r.ok, r.err == ulid.ERR_ENTROPY, ulid.ErrorText(r.err)
+    println "state untouched:", ulid.Last(g).ok
+    failing = false
+    ok := ulid.Next(g)
+    println ok.ok, ulid.String(ok.id)
+end
+```
+
+Output:
+
+```text
+false true the entropy source failed
+state untouched: false
+true 00000004W800003RJ000003RJ0
+```
+
+## Bytes, UUIDs and fixed ids
+
+`Bytes` gives 16 bytes, big endian, the same size as a UUID, and `FromBytes` reads them back; the package does not depend on a UUID type, only on the bytes. `FromParts` builds an id from a time and 10 bytes you pick, which is how tests get exact answers. Free the byte vectors.
+
+encoding-ulid-guide-bytes.salam
+
+```salam
+import encoding.ulid
+import str
+
+func hex(data: Vector<u8>): str:
+    digits := "0123456789abcdef"
+    mut out := ""
+    repeat data.len() in i:
+        code := data.get(i) as int
+        out = out + str.Substr(digits, code / 16, 1) + str.Substr(digits, code % 16, 1)
+    end
+    ret out
+end
+
+func main:
+    r := ulid.Parse("01ARYZ6S41TSV4RRFFQ69G5FAV")
+    raw := ulid.ToUUIDBytes(r.id)
+    defer raw.free()
+    println raw.len(), hex(raw)
+    back := ulid.FromUUIDBytes(raw)
+    println back.ok, ulid.String(back.id)
+
+    mut seed := Vector {} as Vector<u8>
+    defer seed.free()
+    repeat 10 in i:
+        seed.push((i * 3) as u8)
+    end
+    made := ulid.FromParts(1469918176385, seed)
+    println ulid.String(made.id)
+    part := ulid.Entropy(made.id)
+    defer part.free()
+    println hex(part)
+end
+```
+
+Output:
+
+```text
+16 01563df36481d6764c61efb99302bd5b
+true 01ARYZ6S41TSV4RRFFQ69G5FAV
+01ARYZ6S41001GC28C1W91A60V
+000306090c0f1215181b
+```
+
+What people get wrong:
+
+- Expecting `NewAt` to be ordered inside one millisecond. It keeps no state; use a `Generator`.
+
+- Treating the time as secret. The first 10 characters are the creation time, readable by anyone who sees the id.
+
+- Comparing text with lowercase or aliases without `Parse`: `01arz` and `01ARZ` are the same id but different strings.
+
+- Forgetting to `Free` a generator or to free the vectors of `Bytes`, `Entropy` and `Batch`.
+
+- Comparing ids made by different generators or machines for strict order: clocks differ, so only ids of one generator are strictly ordered.
+
+## Types
+
+### `ULID`
+
+```salam
+struct ULID
+```
+
+A 128 bit identifier: a 48 bit millisecond timestamp and 80 random bits. It is a plain value, copy it freely. Ids compare in the same order as their times.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `time` | `i64 = 0` | The timestamp in milliseconds since the Unix epoch. |
+| `hi` | `i64 = 0` | The upper 40 bits of the 80 random bits. |
+| `lo` | `i64 = 0` | The lower 40 bits of the 80 random bits. |
+
+### `Result`
+
+```salam
+struct Result
+```
+
+What parsing and the generators return: `ok`, the `id` and an `err` code.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | True when the operation worked. |
+| `id` | `ULID` | The id; the zero id when `ok` is false. |
+| `err` | `int = 0` | One of the error codes, `OK` on success. |
+
+### `Generator`
+
+```salam
+struct Generator
+```
+
+A monotonic generator. It owns a lock and its last id, so the copies of one Generator share state and any number of threads may call it. Release it with Free.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `state` | `i64*` | The shared last timestamp and random parts, behind the lock. |
+| `mu` | `sync.Mutex` | The lock that guards the state. |
+| `clock` | `func(): i64` | The function that returns the current time in milliseconds. |
+| `entropy` | `func(): i64` | The function that returns 40 random bits, or a negative number when it fails. |
+
+## Constants and variables
+
+### `MAX_TIME`
+
+```salam
+const MAX_TIME: i64 = 281474976710655
+```
+
+The largest timestamp a ULID can hold, 281474976710655 milliseconds (48 bits), which is the year 10889.
+
+### `OK`
+
+```salam
+const OK: i32 = 0
+```
+
+Error code 0: nothing went wrong.
+
+### `ERR_LENGTH`
+
+```salam
+const ERR_LENGTH: i32 = 1
+```
+
+The text is not 26 characters long.
+
+### `ERR_CHAR`
+
+```salam
+const ERR_CHAR: i32 = 2
+```
+
+The text has a character outside the Crockford alphabet, such as U.
+
+### `ERR_OVERFLOW`
+
+```salam
+const ERR_OVERFLOW: i32 = 3
+```
+
+The value is larger than 7ZZZZZZZZZZZZZZZZZZZZZZZZZ (first character above 7), or an increment would overflow the 80 random bits.
+
+### `ERR_TIME`
+
+```salam
+const ERR_TIME: i32 = 4
+```
+
+The timestamp is outside 0 to MAX_TIME.
+
+### `ERR_ENTROPY`
+
+```salam
+const ERR_ENTROPY: i32 = 5
+```
+
+The entropy source reported a failure; no id was made and the generator state did not change.
+
+### `ERR_BYTES`
+
+```salam
+const ERR_BYTES: i32 = 6
+```
+
+A byte list had the wrong length (16 for FromBytes, 10 for FromParts).
+
+## Functions
+
+### `FromParts`
+
+```salam
+func FromParts(ms: i64, entropy: Vector<u8>): Result
+```
+
+Builds an id from a timestamp and exactly 10 entropy bytes, with no randomness, so tests can know every character.
+
+encoding-ulid-FromParts.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    mut seed := Vector {} as Vector<u8>
+    defer seed.free()
+    repeat 10 in i:
+        seed.push((i + 1) as u8)
+    end
+    r := ulid.FromParts(1469918176385, seed)
+    println r.ok, ulid.String(r.id)
+    println ulid.FromParts(-1, seed).ok, ulid.FromParts(ulid.MAX_TIME + 1, seed).ok
+    println ulid.String(ulid.FromParts(ulid.MAX_TIME, seed).id)
+end
+```
+
+Output:
+
+```text
+true 01ARYZ6S41041061050R3GG28A
+false false
+7ZZZZZZZZZ041061050R3GG28A
+```
+
+### `FromBytes`
+
+```salam
+func FromBytes(b: Vector<u8>): Result
+```
+
+Reads the 16 byte binary form (6 bytes of time, 10 of randomness, big endian).
+
+### `FromUUIDBytes`
+
+```salam
+func FromUUIDBytes(b: Vector<u8>): Result
+```
+
+The same as FromBytes: a ULID fits the 16 bytes of a UUID.
+
+### `String`
+
+```salam
+func String(id: ULID): str
+```
+
+The 26 character canonical text, uppercase Crockford base32.
+
+### `Bytes`
+
+```salam
+func Bytes(id: ULID): Vector<u8>
+```
+
+The 16 byte binary form. Free the vector.
+
+### `ToUUIDBytes`
+
+```salam
+func ToUUIDBytes(id: ULID): Vector<u8>
+```
+
+The same 16 bytes, for code that stores or sends them as a UUID.
+
+### `Entropy`
+
+```salam
+func Entropy(id: ULID): Vector<u8>
+```
+
+The 10 random bytes. Free the vector.
+
+### `Time`
+
+```salam
+func Time(id: ULID): i64
+```
+
+The timestamp in milliseconds.
+
+### `Compare`
+
+```salam
+func Compare(a: ULID, b: ULID): int
+```
+
+-1, 0 or 1 by time first, then by the random part.
+
+encoding-ulid-Compare.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    early := ulid.MinAt(1000)
+    late := ulid.MaxAt(1000)
+    println ulid.Compare(early, late), ulid.Compare(late, early), ulid.Compare(early, early)
+    println ulid.String(early)
+    println ulid.String(late)
+    println ulid.IsZero(ulid.MinAt(0)), ulid.IsZero(early)
+    step := ulid.Increment(early)
+    println ulid.String(step.id)
+    println ulid.Increment(late).ok
+end
+```
+
+Output:
+
+```text
+-1 1 0
+00000000Z80000000000000000
+00000000Z8ZZZZZZZZZZZZZZZZ
+true false
+00000000Z80000000000000001
+false
+```
+
+### `Equal`
+
+```salam
+func Equal(a: ULID, b: ULID): bool
+```
+
+True when two ids are the same.
+
+### `Less`
+
+```salam
+func Less(a: ULID, b: ULID): bool
+```
+
+True when the first id is older than the second, or smaller in the random part at the same time.
+
+### `IsZero`
+
+```salam
+func IsZero(id: ULID): bool
+```
+
+True for the all zero id.
+
+The example for this item is shown with the ones above: encoding-ulid-Compare.salam
+
+### `MinAt`
+
+```salam
+func MinAt(ms: i64): ULID
+```
+
+The smallest id of a millisecond (random part all zero). Use it as the lower bound of a range query. The time is clamped to 0 to MAX_TIME.
+
+The example for this item is shown with the ones above: encoding-ulid-Compare.salam
+
+### `MaxAt`
+
+```salam
+func MaxAt(ms: i64): ULID
+```
+
+The largest id of a millisecond (random part all ones), the upper bound of a range query.
+
+The example for this item is shown with the ones above: encoding-ulid-Compare.salam
+
+### `Increment`
+
+```salam
+func Increment(id: ULID): Result
+```
+
+The id right after this one, with the random part grown by one. Fails with ERR_OVERFLOW when it is already all ones.
+
+The example for this item is shown with the ones above: encoding-ulid-Compare.salam
+
+### `Parse`
+
+```salam
+func Parse(s: str): Result
+```
+
+Reads 26 characters. Lowercase is accepted, I and L mean 1, O means 0, U is refused, and a first character above 7 is ERR_OVERFLOW.
+
+encoding-ulid-Parse.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    r := ulid.Parse("01arYz6s41TsV4RrffQ69g5fav")
+    println r.ok, ulid.Time(r.id), ulid.String(r.id)
+    bad := ulid.Parse("01ARYZ6S41TSV4RRFFQ69G5FAU")
+    println bad.ok, bad.err == ulid.ERR_CHAR
+    println ulid.ParseStrict("01arYz6s41TsV4RrffQ69g5fav").ok
+    println ulid.IsValid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"), ulid.IsValid("8ZZZZZZZZZZZZZZZZZZZZZZZZZ")
+end
+```
+
+Output:
+
+```text
+true 1469918176385 01ARYZ6S41TSV4RRFFQ69G5FAV
+false true
+false
+true false
+```
+
+### `ParseStrict`
+
+```salam
+func ParseStrict(s: str): Result
+```
+
+Reads only the canonical form: uppercase, no aliases.
+
+The example for this item is shown with the ones above: encoding-ulid-Parse.salam
+
+### `ParseOr`
+
+```salam
+func ParseOr(s: str, fallback: ULID): ULID
+```
+
+Parse, or the fallback id when the text is not valid.
+
+The example for this item is shown with the ones above: encoding-ulid-Parse.salam
+
+### `IsValid`
+
+```salam
+func IsValid(s: str): bool
+```
+
+True when Parse accepts the text.
+
+The example for this item is shown with the ones above: encoding-ulid-Parse.salam
+
+### `NewGenerator`
+
+```salam
+func NewGenerator(): Generator
+```
+
+A generator with the system clock and the operating system random source.
+
+### `NewGeneratorWith`
+
+```salam
+func NewGeneratorWith(clock: func(): i64, entropy: func(): i64): Generator
+```
+
+A generator with your own clock and entropy functions, for tests and for sources that can fail. The entropy function returns 40 random bits (0 to 1099511627775) or a negative number on failure, which makes Next report ERR_ENTROPY.
+
+encoding-ulid-Next.salam
+
+```salam
+import encoding.ulid
+
+mut tick := 100 as i64
+
+func clock(): i64:
+    ret tick
+end
+
+func source(): i64:
+    ret 1
+end
+
+func main:
+    g := ulid.NewGeneratorWith((): ret clock() end, (): ret source() end)
+    defer ulid.Free(g)
+    first := ulid.Next(g)
+    second := ulid.Next(g)
+    println ulid.String(first.id)
+    println ulid.String(second.id)
+    println ulid.Less(first.id, second.id)
+    forced := ulid.NextAt(g, 50)
+    println ulid.Time(forced.id), ulid.Less(second.id, forced.id)
+end
+```
+
+Output:
+
+```text
+00000000340000000100000001
+00000000340000000100000002
+true
+100 true
+```
+
+### `Next`
+
+```salam
+func Next(g: Generator): Result
+```
+
+The next id of a generator. In a new millisecond the random part is fresh; in the same millisecond, or when the clock went back, the previous random part grows by one. If the 80 bits run out the timestamp moves one millisecond ahead. Safe from many threads.
+
+The example for this item is shown with the ones above: encoding-ulid-Next.salam
+
+### `NextAt`
+
+```salam
+func NextAt(g: Generator, ms: i64): Result
+```
+
+Like Next with the time given instead of read from the clock. A time before the last id keeps the last timestamp.
+
+The example for this item is shown with the ones above: encoding-ulid-Next.salam
+
+### `Batch`
+
+```salam
+func Batch(g: Generator, n: int): Vector<ULID>
+```
+
+Makes n ids under one lock with one clock read. A failing entropy source ends the batch early, so check the length. Free the vector.
+
+encoding-ulid-Batch.salam
+
+```salam
+import encoding.ulid
+
+func main:
+    ids := ulid.NewBatch(5)
+    defer ids.free()
+    mut increasing := ids.len() == 5
+    repeat ids.len() - 1 in i:
+        if not ulid.Less(ids.get(i), ids.get(i + 1)):
+            increasing = false
+        end
+    end
+    println ids.len(), increasing
+end
+```
+
+Output:
+
+```text
+5 true
+```
+
+### `Last`
+
+```salam
+func Last(g: Generator): Result
+```
+
+The last id the generator made, or ERR_TIME when it has made none yet.
+
+### `Free`
+
+```salam
+func Free(g: Generator)
+```
+
+Releases a generator made by NewGenerator or NewGeneratorWith.
+
+### `Default`
+
+```salam
+func Default(): Generator
+```
+
+The process wide generator behind New, NewString and NewBatch. Do not free it.
+
+### `New`
+
+```salam
+func New(): ULID
+```
+
+A new id from the default generator, using the system clock and the operating system random source. Ids from one process are strictly increasing, even from many threads at once.
+
+### `NewString`
+
+```salam
+func NewString(): str
+```
+
+Shorthand for String(New()).
+
+### `NewAt`
+
+```salam
+func NewAt(ms: i64): Result
+```
+
+An id for a chosen millisecond with fresh random bits. It keeps no state, so two calls in one millisecond are not ordered; use a Generator when order matters. Fails with ERR_TIME outside 0 to MAX_TIME.
+
+### `NewBatch`
+
+```salam
+func NewBatch(n: int): Vector<ULID>
+```
+
+Makes n ids from the default generator under one lock, so they are consecutive and increasing. Free the vector.
+
+The example for this item is shown with the ones above: encoding-ulid-Batch.salam
+
+### `ErrorText`
+
+```salam
+func ErrorText(code: int): str
+```
+
+A short English message for an error code.
+
+### `Now`
+
+```salam
+func Now(): i64
+```
+
+The system clock in milliseconds since the Unix epoch, kept inside 0 to MAX_TIME.
+
+
+---
+
 # encoding.slug
 
 https://salamlang.github.io/Salam/std/encoding/slug/

@@ -53,24 +53,22 @@ func _lang_norm(lang: str): str:
     ret r
 end
 
-func _has_cp(cps: Vector<int>, a: int, z: int): bool:
-    repeat cps.len() in i:
-        c := cps.get(i)
-        if c >= a and c <= z: ret true end
-    end
-    ret false
-end
-
 func _auto_lang(cps: Vector<int>): str:
     dom := _dominant(cps)
     if dom == S_ARABIC:
         repeat cps.len() in i:
             c := cps.get(i)
-            if c == 0x67E or c == 0x686 or c == 0x698 or c == 0x6AF or c == 0x6A9 or c == 0x6CC:
+            if c == 0x67E or c == 0x686 or c == 0x698 or c == 0x6AF or c == 0x6A9 or c == 0x6CC or (c >= 0x6F0 and c <= 0x6F9):
                 ret "fa"
             end
         end
-        ret "ar"
+        repeat cps.len() in i:
+            c := cps.get(i)
+            if c == 0x629 or c == 0x649 or c == 0x64A or c == 0x643 or c == 0x623 or c == 0x625 or c == 0x671:
+                ret "ar"
+            end
+        end
+        ret "fa"
     end
     if dom == S_CYRILLIC:
         repeat cps.len() in i:
@@ -127,15 +125,15 @@ func _apply_repl(text: str, pairs: Vector<str>): str:
 end
 
 func _convert(text: str, o: Options, raw: bool): str:
-    mut src := text
-    mut owned := false
-    if not raw and o.replacements.len() > 0:
-        src = _apply_repl(text, o.replacements)
-        owned = true
-    end
     mut cps := Vector {} as Vector<int>
     defer cps.free()
-    _decode(src, cps)
+    if not raw and o.replacements.len() > 0:
+        src := _apply_repl(text, o.replacements)
+        _decode(src, cps)
+        _free(src)
+    else:
+        _decode(text, cps)
+    end
     mut lang := _lang_norm(o.lang)
     if lang.Len() == 0:
         _free(lang)
@@ -150,7 +148,6 @@ func _convert(text: str, o: Options, raw: bool): str:
     mut r := str.BufStr(b)
     str.BufFree(b)
     _free(lang)
-    if owned: _free(src) end
     if o.lowercase and not raw:
         rp := r as u8*
         repeat r.Len() in k:
@@ -212,6 +209,14 @@ func _free_all(v: Vector<str>):
     repeat v.len() in i:
         _free(v.get(i))
     end
+end
+
+func _glue(a: str, w: str, allow: str): bool:
+    if allow.Len() == 0: ret false end
+    an := a.Len()
+    if an > 0 and _has_allow(allow, (a as u8*)[an - 1] as int): ret true end
+    if w.Len() > 0 and _has_allow(allow, (w as u8*)[0] as int): ret true end
+    ret false
 end
 
 func _strip_edges(words &: Vector<str>, allow: str):
@@ -297,7 +302,8 @@ func _finish(r: str, o: Options, stop: Vector<str>): str:
     mut hard := false
     until used < words.len() and not hard:
         wl := _cplen(words.get(used))
-        add := used == 0 ? wl : sepn + wl
+        mut add := wl
+        if used > 0 and not _glue(words.get(used - 1), words.get(used), o.allow): add += sepn end
         if o.max_length > 0 and sum + add > o.max_length:
             if used == 0: hard = true end
             break
@@ -313,7 +319,7 @@ func _finish(r: str, o: Options, stop: Vector<str>): str:
         _free(cut)
     else:
         repeat used in k:
-            if k > 0: str.BufAppend(b, o.separator) end
+            if k > 0 and not _glue(words.get(k - 1), words.get(k), o.allow): str.BufAppend(b, o.separator) end
             str.BufAppend(b, words.get(k))
         end
     end

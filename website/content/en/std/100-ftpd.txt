@@ -1,74 +1,101 @@
 pkg.en = ftpd
 pkg.name = ftpd
 pkg.group = Network
-pkg.summary = An FTP and FTPS server for hosting files over FTP with optional TLS.
-pkg.title = The ftpd package in Salam | FTP server
-pkg.description = The ftpd package in Salam: run an FTP server with user or anonymous access, passive transfers, file operations, and explicit or implicit TLS (FTPS) for secure control and data channels.
+pkg.summary = An FTP and FTPS server that shares a directory with a login, passive transfers and optional TLS.
+pkg.title = The ftpd package in Salam | FTP and FTPS server
+pkg.description = The ftpd package in Salam: serve a directory over FTP with a user or anonymous login, passive transfers on a port range, and explicit or implicit TLS (FTPS), with examples.
 pkg.import = ftpd
 pkg.intro <<
-<p>This package runs an FTP server in Salam. It can serve files from a root directory to FTP clients, with plain FTP or secure FTPS. For secure deployments, enable TLS and use explicit FTPS (<code>AUTH TLS</code>) or implicit FTPS so that credentials and data can be protected.</p>
-<p>Supported features include passive mode transfers (PASV/EPSV), basic authentication (configured user/password or anonymous access), common file and directory commands, and TLS protection levels for the data channel (<code>PROT C</code>/<code>PROT P</code>) when TLS is configured.</p>
+<p>This package is an FTP server written in Salam. Give it a root directory, a user and a password, call <code>Listen</code> and then <code>Serve</code>, and any FTP client can list, upload, download, rename and delete files below that directory. Paths are resolved inside the root, but a symbolic link inside it that points elsewhere is followed, so keep links out of a directory you serve. It is the other half of the <a href="/std/ftp/">ftp</a> client package, and the two work together.</p>
+<p>It speaks plain FTP and FTPS. Transfers use passive mode (<code>PASV</code> and <code>EPSV</code>) on a port range you choose, so open that range in the firewall. Login is either one configured user with a password, or anonymous access when <code>allow_anonymous</code> is on; with neither, nobody can log in. With a certificate and a key the server also takes explicit FTPS (<code>AUTH TLS</code>, then <code>PROT P</code> for the data connection) and, with <code>implicit_tls</code>, implicit FTPS where the connection is encrypted from the first byte.</p>
+<p>What to know before you use it:</p>
+<ul>
+<li><strong>There is one user.</strong> <code>user</code> and <code>password</code> describe a single account; a list of accounts, per-user directories and permissions are not part of this package.</li>
+<li><strong>Clients are served one after another.</strong> <code>Serve</code> handles one connection to the end before it accepts the next, so it suits a small drop box or a build artefact server, not a busy public one.</li>
+<li><strong>Plain FTP sends the password in the clear.</strong> Turn on <code>tls_enabled</code> with <code>cert_file</code> and <code>key_file</code>, and set <code>require_tls</code> so that the server refuses <code>USER</code> and <code>PASS</code> until the connection is encrypted. A client has to start TLS before it sends the password; a client that sends it first has already leaked it, so <code>require_tls</code> protects only clients that behave.</li>
+<li><strong>Port 0 picks a free port</strong>, and <code>Port</code> tells you which. That is how the examples and the tests run without clashing with anything.</li>
+</ul>
 
-<h2 id="guide-basic">Run a basic FTP server</h2>
-<p>Create a configuration, choose a host, port and root directory, then listen and serve incoming connections.</p>
-{{example.ftpd-basic}}
+<h2 id="guide-serve">Serve a directory with a login</h2>
+<p>Make a configuration with <code>NewConfig</code>, set the root, the user, the password and the passive port range, create the server with <code>New</code>, and call <code>Listen</code>. <code>Listen</code> is false when the port is taken or you may not use it; check it before <code>Serve</code>, which runs until the server is stopped. Ports below 1024, including the usual 21, need extra rights on most systems, which is why the example uses 2121.</p>
+{{example.ftpd-serve-files}}
+<p>The example binds to the loopback address and reads the password from the <code>FTP_PASSWORD</code> variable, so it never listens for other machines with a password written in the page; plain FTP should not leave the machine, use FTPS for that. It runs until it is stopped, so it is only checked here. Point any client at it, for example the <a href="/std/ftp/">ftp</a> package with <code>Dial</code> and <code>Login</code> using the same user and password.</p>
 
-<h2 id="guide-ftps">Run a secure FTPS server</h2>
-<p>Provide a certificate and key to enable TLS. Clients can upgrade with <code>AUTH TLS</code> and protect data transfers with <code>PROT P</code>. You can also require TLS before login.</p>
+<h2 id="guide-ftps">Encrypt the connection with FTPS</h2>
+<p>A certificate and a private key in PEM files turn on TLS. A client then upgrades the connection with <code>AUTH TLS</code> and protects the file data with <code>PROT P</code>. <code>require_tls</code> goes one step further and refuses <code>USER</code> and <code>PASS</code> until that has happened, so the server will not even try a login on a plain connection, though a password a misbehaving client already sent is gone. With <code>implicit_tls</code> the server expects TLS from the very first byte, the older FTPS style that uses its own port.</p>
 {{example.ftpd-ftps}}
+<p>If the certificate or the key cannot be read, TLS stays off even when <code>tls_enabled</code> is true, so test the setup with a real client once before you trust it.</p>
+
+<h2 id="guide-listen">Defaults and a free port</h2>
+<p>A fresh configuration listens on all interfaces on port 21, serves the current directory, and lets nobody in until you set a user or turn on anonymous access. Passive transfers use ports 40000 to 40100. The program below shows the defaults, then binds to port 0 on the loopback address to find out which port the system gave it. Nothing connects, so it runs without a network.</p>
+{{example.ftpd-listen}}
+<p>After <code>Listen</code> the configuration inside the server holds the real port, which is what <code>Port</code> returns. <code>Close</code> stops the server and releases the port.</p>
 
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
 <tbody>
-<tr><td>Create configuration</td><td><code>NewConfig</code> and set fields on <code>Config</code></td></tr>
-<tr><td>Create server</td><td><code>New</code></td></tr>
-<tr><td>Start listening</td><td><code>Listen</code></td></tr>
-<tr><td>Accept and handle one client</td><td><code>ServeOnce</code></td></tr>
-<tr><td>Run accept loop</td><td><code>Serve</code></td></tr>
-<tr><td>Stop server</td><td><code>Close</code></td></tr>
+<tr><td>Start from the defaults</td><td><code>NewConfig</code>, then set the fields of <code>Config</code></td></tr>
+<tr><td>Create the server</td><td><code>New</code></td></tr>
+<tr><td>Open the port</td><td><code>Listen</code>, then <code>Port</code> to read it</td></tr>
+<tr><td>Serve clients until stopped</td><td><code>Serve</code></td></tr>
+<tr><td>Serve exactly one client</td><td><code>ServeOnce</code></td></tr>
+<tr><td>Stop and free the port</td><td><code>Close</code></td></tr>
 </tbody>
 </table></div>
 >>
 
-doc.Config = Configuration for the FTP server.
-doc.Config.host = Host/interface to bind.
-doc.Config.port = Port to listen on.
-doc.Config.root = Root directory exposed to clients.
-doc.Config.allow_anonymous = Allow anonymous login.
-doc.Config.anonymous_user = Username treated as anonymous.
-doc.Config.user = Username for authenticated access.
-doc.Config.password = Password for authenticated access.
-doc.Config.passive_start = Start of passive port range.
-doc.Config.passive_end = End of passive port range.
-doc.Config.tls_enabled = Enable TLS/FTPS support.
-doc.Config.cert_file = TLS certificate file path.
-doc.Config.key_file = TLS private key file path.
-doc.Config.implicit_tls = Use implicit TLS on accept.
-doc.Config.require_tls = Require TLS before login commands.
-doc.Server = A running FTP server instance.
-ex.Server = ftpd-basic
-doc.Server.config = Server configuration.
-ex.Server.config = ftpd-basic
-doc.Server.listener = TCP listener.
-ex.Server.listener = ftpd-basic
-doc.Server.running = Server running state.
-ex.Server.running = ftpd-basic
-doc.Server.tls_cfg = Loaded TLS server configuration.
-ex.Server.tls_cfg = ftpd-basic
-doc.NewConfig = Creates a default server configuration.
-ex.NewConfig = ftpd-basic
-doc.New = Creates a server from configuration.
-ex.New = ftpd-basic
-doc.Listen = Starts listening on the configured host and port.
-ex.Listen = ftpd-basic
-doc.Close = Stops the server and closes the listener.
-doc.Port = Returns the listening port.
-doc.ServeOnce = Accepts and serves one client connection.
-ex.ServeOnce = ftpd-basic
-doc.Serve = Runs the server accept loop.
-ex.Serve = ftpd-basic
-
-ex.NewConfig = ftpd-basic
-ex.Listen = ftpd-basic
-ex.Serve = ftpd-basic
+doc.Config = The configuration of an FTP server.
+ex.Config = ftpd-Config
+doc.Config.host = The address to listen on; <code>0.0.0.0</code> means every interface.
+ex.Config.host = ftpd-Config
+doc.Config.port = The port to listen on; 21 by default, and 0 lets the system choose one.
+ex.Config.port = ftpd-Config
+doc.Config.root = The directory the clients see as <code>/</code>; nothing above it can be reached.
+ex.Config.root = ftpd-Config
+doc.Config.allow_anonymous = Lets clients log in as the anonymous user without a password; off by default.
+ex.Config.allow_anonymous = ftpd-Config
+doc.Config.anonymous_user = The name that counts as anonymous; <code>anonymous</code> by default.
+ex.Config.anonymous_user = ftpd-Config
+doc.Config.user = The name of the one account that may log in with a password.
+ex.Config.user = ftpd-Config
+doc.Config.password = The password of that account.
+ex.Config.password = ftpd-Config
+doc.Config.passive_start = The first port of the range used for passive data connections; 40000 by default.
+ex.Config.passive_start = ftpd-Config
+doc.Config.passive_end = The last port of that range; 40100 by default.
+ex.Config.passive_end = ftpd-Config
+doc.Config.tls_enabled = Turns on FTPS; it needs <code>cert_file</code> and <code>key_file</code> as well.
+ex.Config.tls_enabled = ftpd-Config
+doc.Config.cert_file = The path of the certificate in PEM form.
+ex.Config.cert_file = ftpd-Config
+doc.Config.key_file = The path of the private key in PEM form.
+ex.Config.key_file = ftpd-Config
+doc.Config.implicit_tls = Expects TLS from the first byte of the connection, as implicit FTPS does.
+ex.Config.implicit_tls = ftpd-Config
+doc.Config.require_tls = Refuses login until the connection has been encrypted.
+ex.Config.require_tls = ftpd-Config
+doc.Server = A running FTP server.
+ex.Server = ftpd-Server
+doc.Server.config = The configuration the server was made with; after <code>Listen</code> its port is the real one.
+ex.Server.config = ftpd-Server
+doc.Server.listener = The listening socket.
+ex.Server.listener = ftpd-Server
+doc.Server.running = True after <code>Listen</code> worked and until <code>Close</code> is called.
+ex.Server.running = ftpd-Server
+doc.Server.tls_cfg = The TLS settings loaded from the certificate and key; empty when TLS is off.
+ex.Server.tls_cfg = ftpd-Server
+doc.NewConfig = A configuration with the defaults: port 21, the current directory as root, no login allowed yet.
+ex.NewConfig = ftpd-Config
+doc.New = Makes a server from a configuration and loads the certificate when TLS is on. It does not listen yet.
+ex.New = ftpd-Server
+doc.Listen = Opens the port; false when it could not be bound.
+ex.Listen = ftpd-Server
+doc.Close = Stops the server and frees the port.
+ex.Close = ftpd-Server
+doc.Port = The port the server listens on; the real one after <code>Listen</code> when the configuration said 0.
+ex.Port = ftpd-Server
+doc.ServeOnce = Waits for one client, serves it until it quits, and returns true; false when the port is not open or the accept failed.
+ex.ServeOnce = ftpd-Serve
+doc.Serve = Serves clients one after another until <code>running</code> becomes false or the listener fails.
+ex.Serve = ftpd-Serve

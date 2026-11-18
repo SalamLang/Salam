@@ -113,6 +113,8 @@ static const char *const SALAM_KEYWORDS[] = {
     "\332\257\330\261\331\201\330\252\331\206 \330\256\330\267\330\247",
     "throw",
     "\331\276\330\261\330\252\330\247\330\250 \330\256\330\267\330\247",
+    "throws",
+    "\330\256\330\267\330\247\330\257\330\247\330\261",
     "static",
     "\330\247\333\214\330\263\330\252\330\247",
     "use",
@@ -120,7 +122,7 @@ static const char *const SALAM_KEYWORDS[] = {
     "dyn",
 };
 
-#define SALAM_KEYWORD_COUNT 115
+#define SALAM_KEYWORD_COUNT 117
 
 static const char *const SALAM_LAYOUT_WORDS[] = {
     "page",

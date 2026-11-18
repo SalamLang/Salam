@@ -116,6 +116,16 @@ positive count at zero on `std/` and `compiler/`:
 | W143 | freed twice on some paths                                                             | on, warn       |
 | W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
 | W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | warn (default) |
+| E176 | a call that returns a new heap string is a bare statement, so the result is dropped   | on, warn       |
+
+E176 covers user code only (not `std/`). `input`, `trim`, `upper`, `lower`,
+`repeat`, `substr` and `concat` count as returning a new string, so
+`s := x.Trim()`, `print input "p"` and `s := x.Trim().Upper()` are freed for
+you, including the intermediate strings of a chain. A bare statement such as
+`x.Trim()`, `x.Trim().Upper()` or `input "p"` is rejected, because nothing
+holds the result.
+Keep the result in a variable that is used, or free it with `mem.Free`.
+`--ownership=off` skips the check.
 
 `--ownership=off|on|warn|error` picks the mode; `warn` is the default.
 `on` reports the errors plus W142 and W143; `warn` adds W144, which needs a

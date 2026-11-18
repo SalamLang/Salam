@@ -5,6 +5,7 @@ import str
 include co "../sal_core.salam"
 include at "../ast.salam"
 include tok "../token.salam"
+include i18 "../i18n.salam"
 
 pub const SF_MARK := "__own_free"
 pub const SF_MARK_VEC := "__own_free_vec"
@@ -450,7 +451,7 @@ end
 
 func sf_tmp_arg_ok(s &: Sema, a &: at.Ast, call: int, ai: int): bool:
     t := at.Child(a, call, ai)
-    if t == 0 or sf_is_print(a, at.At(a, call).a):
+    if t == 0:
         ret false
     end
     if not sf_is_concat(a, t):
@@ -458,7 +459,32 @@ func sf_tmp_arg_ok(s &: Sema, a &: at.Ast, call: int, ai: int): bool:
             ret false
         end
     end
+    if sf_is_print(a, at.At(a, call).a):
+        ret true
+    end
     ret su_arg_effect(s, a, call, ai + 1) == SU_READ
+end
+
+func sf_recv_read_key(key: str): bool:
+    ret sf_fresh_str_method(key) or str.Equals(key, "len") or str.Equals(key, "find") or str.Equals(key, "starts_with") or str.Equals(key, "ends_with") or str.Equals(key, "includes") or str.Equals(key, "to_int") or str.Equals(key, "to_float") or str.Equals(key, "char_count") or str.Equals(key, "compare")
+end
+
+func sf_tmp_recv_ok(s &: Sema, a &: at.Ast, call: int): bool:
+    callee := at.At(a, call).a
+    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER:
+        ret false
+    end
+    obj := at.At(a, callee).a
+    if obj == 0 or not str.Equals(at.At(a, obj).type_str, "str"):
+        ret false
+    end
+    if not sf_recv_read_key(su_method_key(at.At(a, callee).name)):
+        ret false
+    end
+    if at.KindOf(a, obj) != at.AST_CALL or not su_call_fresh(s, a, obj):
+        ret false
+    end
+    ret true
 end
 
 func sf_tmp_valid(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, st: int, t: int): bool:
@@ -548,6 +574,10 @@ func sf_tmp_hoist(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
                 cslot.Push(ai)
             end
         end
+        if sf_tmp_recv_ok(s, a, call):
+            cands.Push(call)
+            cslot.Push(0 - 1)
+        end
     end
     calls.Free()
     if cands.Len() == 0:
@@ -559,7 +589,11 @@ func sf_tmp_hoist(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
     su_par_build(a, st, 0, pm)
     mut ts := Vector {} as Vector<int>
     repeat cands.Len() in ti:
-        ts.Push(at.Child(a, cands.Get(ti), cslot.Get(ti)))
+        if cslot.Get(ti) < 0:
+            ts.Push(at.At(a, at.At(a, cands.Get(ti)).a).a)
+        else:
+            ts.Push(at.Child(a, cands.Get(ti), cslot.Get(ti)))
+        end
     end
     mut added := 0
     repeat cands.Len() in q:
@@ -576,7 +610,8 @@ func sf_tmp_hoist(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
             end
             ancestor = su_parent(pm, ancestor)
         end
-        if nested or not sf_tmp_valid(s, a, pm, st, t):
+        vt := ai < 0 ? call : t
+        if nested or not sf_tmp_valid(s, a, pm, st, vt):
             continue
         end
         sp := span_of(a, t)
@@ -593,9 +628,15 @@ func sf_tmp_hoist(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
         iv.type_str = tts
         iv.sema_type = tst
         at.Put(a, idn, iv)
-        mut cv := at.Get(a, call)
-        cv.list.Set(ai, idn)
-        at.Put(a, call, cv)
+        if ai < 0:
+            mut mv := at.Get(a, at.At(a, call).a)
+            mv.a = idn
+            at.Put(a, at.At(a, call).a, mv)
+        else:
+            mut cv := at.Get(a, call)
+            cv.list.Set(ai, idn)
+            at.Put(a, call, cv)
+        end
         pos := idx + added
         mut bv := at.Get(a, blk)
         bv.list.Insert(pos, decl)
@@ -930,6 +971,23 @@ func sf_acc_rewrite(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, 
     refs.Free()
 end
 
+func sf_report_discarded(s &: Sema, a &: at.Ast, body: int):
+    if pkg_in_stdlib(s.file):
+        ret
+    end
+    mut stmts := Vector {} as Vector<int>
+    su_collect_kind(a, body, at.AST_EXPR_STMT, stmts)
+    repeat stmts.Len() in i:
+        e := at.At(a, stmts.Get(i)).a
+        if e != 0 and at.KindOf(a, e) == at.AST_CALL and str.Equals(at.At(a, e).type_str, "str") and su_call_fresh(s, a, e):
+            serr_help(
+                s, 176, span_of(a, e), i18.Tr("this call returns a new heap string and the result is thrown away, so it is never freed"), i18.Tr("keep the result in a variable that is used so the compiler frees it, or free it yourself with mem.Free(x as void*)")
+            )
+        end
+    end
+    stmts.Free()
+end
+
 pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
     if g_sm_ownership == 0 or fnid == 0 or s.in_derive or s.requal:
         ret
@@ -938,6 +996,7 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
     if body == 0:
         ret
     end
+    sf_report_discarded(s, a, body)
     sf_hoist(s, a, body, false)
     mut cs := Vector {} as Vector<SfCand>
     mut seen := Vector {} as Vector<str>

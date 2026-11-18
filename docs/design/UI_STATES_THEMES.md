@@ -97,9 +97,9 @@ inside an element `if` as the single words below). Persian spellings are
 accepted too (`تیره`, `فشرده`, `عریض`, `لمسی`, `عرض صفحه`, `حرکت کم`). The
 words are `dark`, `light`, `compact`, `regular`, `wide`, `touch`, `mouse`,
 `landscape`, `portrait`, `reduced motion`, `high contrast`, `rtl`, `ltr`,
-`screen width` and `screen height`. They take priority over a local variable
-of the same name inside a style `if`; rename the variable if it must be read
-there.
+`screen width` and `screen height`. A variable, state or parameter declared
+with the same name keeps its meaning (`dark := false` and `if dark:` read the
+variable), so existing pages do not change; rename it to use the word.
 
 Status: the web target implements all of the words above, for example
 `if compact and not open:` or `if touch and screen width < 500:`. The
@@ -220,7 +220,7 @@ part of the state table, and have no native meaning.
 
 | code | kind | message |
 | --- | --- | --- |
-| E172 | reserved | not emitted: an environment word wins over a variable of the same name inside a style `if` |
+| E172 | reserved | not emitted: a declared name of the same spelling wins over the environment word |
 | E233 | error | `environment words in a style 'if' are not available on the native target yet` |
 | E173 | error | `a style 'if' condition must be a bool or an environment condition, found <type>` |
 | E174 | error | `'container' condition used outside an element marked container` |

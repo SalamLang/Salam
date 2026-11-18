@@ -44,7 +44,7 @@ struct Point:
     pub y: f64 = 0.0
 end
 
-func distance from origin(p: Point): f64:
+func distance_from_origin(p: Point): f64:
     ret math.Sqrt(p.x * p.x + p.y * p.y)
 end
 
@@ -54,7 +54,7 @@ func main:
     points.Push(Point { x = 3.0, y = 4.0 })
     points.Push(Point { x = 1.0, y = 1.0 })
     each p in points:
-        d := distance from origin(p)
+        d := distance_from_origin(p)
         if d >= 2.0 and p.x != p.y:
             println str.Upper("far:"), d
         else:
@@ -111,7 +111,7 @@ near: 1.4142135623730951
 points: 2 true
 ```
 
-The output is identical, because the program is identical. Look at what moved and what did not. `import str` became `واردسازی رشته` and `math.Sqrt` became `ریاضی.جذر`, the Persian names the standard library declares. `f64` became `اعشار۶۴`, `Vector` became `وکتور`, `.push` and `.free` became `.بیفزا` and `.آزادکن`, and `main` became `ریشه`. The comparisons became the Persian comparison words `بزرگتربرابر` and `نابرابر`, the commas became the Persian comma `،`, and `true` became `درست`. Meanwhile `Point`, `distance from origin`, `points`, `p` and `d` are unchanged, the comment is still in English, and so are the strings.
+The output is identical, because the program is identical. Look at what moved and what did not. `import str` became `واردسازی رشته` and `math.Sqrt` became `ریاضی.جذر`, the Persian names the standard library declares. `f64` became `اعشار۶۴`, `Vector` became `وکتور`, `.push` and `.free` became `.بیفزا` and `.آزادکن`, and `main` became `ریشه`. The comparisons became the Persian comparison words `بزرگتربرابر` and `نابرابر`, the commas became the Persian comma `،`, and `true` became `درست`. Meanwhile `Point`, `distance_from_origin`, `points`, `p` and `d` are unchanged, the comment is still in English, and so are the strings.
 
 A Persian reader would now rename `Point` to `نقطه` and so on. The tool deliberately leaves that to a person, for reasons explained below.
 

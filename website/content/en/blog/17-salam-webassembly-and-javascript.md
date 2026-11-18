@@ -30,7 +30,7 @@ The native targets have their own article on [cross-compilation](/blog/cross-com
 The program below runs on three of them unchanged. It uses compile-time flags to say where it is running: `SALAM_JS` is defined only when the JavaScript backend compiles the file, and `SALAM_ARCH_WASM` is true for WebAssembly builds.
 
 ```salam
-func is prime(n: int): bool:
+func is_prime(n: int): bool:
     if n < 2: ret false end
     mut d := 2
     until d * d <= n:
@@ -44,7 +44,7 @@ func main:
     mut found := ""
     mut count := 0
     repeat 2 to 50 in n:
-        if is prime(n):
+        if is_prime(n):
             found += " " + n
             count++
         end

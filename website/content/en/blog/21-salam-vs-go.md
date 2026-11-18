@@ -129,7 +129,7 @@ import pool
 
 mut found := atomic.NewI64(0 as i64)
 
-func is prime(n: i64): bool:
+func is_prime(n: i64): bool:
     if n < 2: ret false end
     mut d := 2 as i64
     until d * d <= n:
@@ -139,11 +139,11 @@ func is prime(n: i64): bool:
     ret true
 end
 
-func count range(lo: i64, hi: i64):
+func count_range(lo: i64, hi: i64):
     mut n := 0 as i64
     mut x := lo
     until x < hi:
-        if is prime(x): n++ end
+        if is_prime(x): n++ end
         x++
     end
     _ := atomic.Add(found, n)
@@ -152,7 +152,7 @@ end
 func main:
     repeat 8 in i:
         lo := (i as i64) * 25000
-        go count range(lo, lo + 25000)
+        go count_range(lo, lo + 25000)
     end
     pool.GoWait()
     println "primes below 200000:", atomic.Load(found)

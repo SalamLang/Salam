@@ -198,7 +198,7 @@ import str
 mut server := websocket.Server {}
 mut hub := websocket.NewHub()
 
-func accept two():
+func accept_two():
     repeat 2:
         conn := websocket.Accept(server)
         room := str.Replace(conn.path, "/rooms/", "")
@@ -209,7 +209,7 @@ end
 func main:
     server = websocket.Listen(0)
     port := websocket.Port(server)
-    t := spawn(accept two)
+    t := spawn(accept_two)
     mut ali := websocket.Dial("127.0.0.1", port, "/rooms/prices")
     mut sara := websocket.Dial("127.0.0.1", port, "/rooms/prices")
     join(t)

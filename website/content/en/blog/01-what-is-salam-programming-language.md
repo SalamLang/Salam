@@ -66,7 +66,7 @@ Variables are immutable unless you ask otherwise: `name := "Sara"` cannot be rea
 
 ## A taste of real code {#taste}
 
-The next program uses a struct, an array literal, a function with a multi-word name, an `each` loop and compound assignment. It is short, but it shows how Salam code tends to read.
+The next program uses a struct, an array literal, a function with a snake_case name, an `each` loop and compound assignment. It is short, but it shows how Salam code tends to read.
 
 ```salam
 struct Book:
@@ -74,7 +74,7 @@ struct Book:
     pub pages: int
 end
 
-func reading time(b: Book): int:
+func reading_time(b: Book): int:
     ret b.pages / 40
 end
 
@@ -86,7 +86,7 @@ func main:
     ]
     mut total := 0
     each b in books:
-        hours := reading time(b)
+        hours := reading_time(b)
         println b.title, "takes about", hours, "hours"
         total += b.pages
     end
@@ -101,7 +101,7 @@ SICP takes about 16 hours
 Pages in total: 1165
 ```
 
-Two details stand out. First, `reading time` is a single function name made of two words. Salam allows spaces inside names so that a call can read like a sentence, which matters even more in Persian, where many concepts are naturally written as two words. Second, the fields are marked `pub`: struct fields are private to their package unless you say otherwise, so the public surface of a type is always explicit.
+Two details stand out. First, `reading_time` is a single function name made of two words. Salam allows spaces inside names so that a call can read like a sentence, which matters even more in Persian, where many concepts are naturally written as two words. Second, the fields are marked `pub`: struct fields are private to their package unless you say otherwise, so the public surface of a type is always explicit.
 
 ## One language, two spellings {#bilingual}
 

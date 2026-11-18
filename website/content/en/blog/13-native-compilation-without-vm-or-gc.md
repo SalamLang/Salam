@@ -59,7 +59,7 @@ If nothing collects garbage, something else has to free memory. In Salam it work
 Here is what that looks like in a program that reuses one buffer instead of allocating a new one for every batch of readings. `clear()` empties the `Vector` but keeps its storage, so after the first batch there are no allocations at all, and `defer` frees the storage once, when `main` ends:
 
 ```salam
-func fill readings(buf &: Vector<f64>, hour: int):
+func fill_readings(buf &: Vector<f64>, hour: int):
     buf.Clear()
     repeat 6 in i:
         buf.Push(20.0 + ((hour * 2 + i % 3) as f64) * 0.5)
@@ -79,7 +79,7 @@ func main:
     defer buf.Free()
     buf.Reserve(6)
     repeat 3 in hour:
-        fill readings(buf, hour)
+        fill_readings(buf, hour)
         println "hour", hour, "mean", mean(buf), "of", buf.len(), "readings"
     end
 end

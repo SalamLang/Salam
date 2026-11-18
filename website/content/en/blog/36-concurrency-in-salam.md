@@ -42,7 +42,7 @@ struct Range:
     pub sum: i64 = 0
 end
 
-func add squares(r: Range*):
+func add_squares(r: Range*):
     mut total := 0 as i64
     repeat r[0].first to r[0].last in i:
         total += i * i
@@ -50,17 +50,17 @@ func add squares(r: Range*):
     r[0].sum = total
 end
 
-func new range(first: i64, last: i64): Range*:
+func new_range(first: i64, last: i64): Range*:
     r := mem.Allocate(sizeof(Range)) as Range*
     r[0] = Range { first = first, last = last }
     ret r
 end
 
 func main:
-    low := new range(1, 500000)
-    high := new range(500001, 1000000)
-    t1 := spawn(add squares, low)
-    t2 := spawn(add squares, high)
+    low := new_range(1, 500000)
+    high := new_range(500001, 1000000)
+    t1 := spawn(add_squares, low)
+    t2 := spawn(add_squares, high)
     join(t1)
     join(t2)
     println "first half:", low[0].sum
@@ -133,7 +133,7 @@ Often all you want is the same loop body over many indices, spread across the co
 ```salam
 import pool
 
-func is prime(n: i64): bool:
+func is_prime(n: i64): bool:
     if n < 2: ret false end
     mut d := 2 as i64
     until d * d <= n:
@@ -143,17 +143,17 @@ func is prime(n: i64): bool:
     ret true
 end
 
-func count primes(block: i64): i64:
+func count_primes(block: i64): i64:
     mut found := 0 as i64
     start := block * 100000
     repeat start to start + 99999 in n:
-        if is prime(n): found++ end
+        if is_prime(n): found++ end
     end
     ret found
 end
 
 func main:
-    counts := pool.Map(10, pool.CPUCount(), (b: i64): ret count primes(b) end)
+    counts := pool.Map(10, pool.CPUCount(), (b: i64): ret count_primes(b) end)
     mut total := 0 as i64
     repeat counts.len() in i:
         total += counts.Get(i)
@@ -169,7 +169,7 @@ primes below 1000000: 78498
 in the first block: 9592 in the last: 7224
 ```
 
-Results land in their own slots, so the output is the same whatever order the blocks finished in. The [pool reference](/std/pool/) gives the rules: never rely on the order of turns, keep each turn large enough to be worth a thread (chunks, not single items), and do not print from the loop body. Note `until d * d <= n:` in `is prime`: Salam's `until` loops _while_ its condition is true, which surprises people coming from Ruby.
+Results land in their own slots, so the output is the same whatever order the blocks finished in. The [pool reference](/std/pool/) gives the rules: never rely on the order of turns, keep each turn large enough to be worth a thread (chunks, not single items), and do not print from the loop body. Note `until d * d <= n:` in `is_prime`: Salam's `until` loops _while_ its condition is true, which surprises people coming from Ruby.
 
 ## Error groups and futures {#tasks}
 
@@ -185,7 +185,7 @@ func check(row: int): str:
     ret ""
 end
 
-func slow sum(n: i64): i64:
+func slow_sum(n: i64): i64:
     mut s := 0 as i64
     repeat n in i:
         s += i
@@ -202,8 +202,8 @@ func main:
     pool.GroupStop(g)
 
     p := pool.New(2, 8)
-    a := pool.Async(p, (): ret slow sum(1000000) end)
-    b := pool.Async(p, (): ret slow sum(2000) end)
+    a := pool.Async(p, (): ret slow_sum(1000000) end)
+    b := pool.Async(p, (): ret slow_sum(2000) end)
     println "a =", pool.Await(a), "b =", pool.Await(b)
     pool.Release(a)
     pool.Release(b)

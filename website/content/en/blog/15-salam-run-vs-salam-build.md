@@ -22,7 +22,7 @@ date: 2026-11-11
 The REPL (`salam cli`) is a fifth way in, covered below. One program can go through all of them unchanged. Here is a prime sieve that we will use throughout:
 
 ```salam
-func count primes(limit: int): int:
+func count_primes(limit: int): int:
     mut composite := Vector {} as Vector<bool>
     defer composite.Free()
     repeat limit + 1:
@@ -45,7 +45,7 @@ end
 
 func main:
     each limit in [100, 10000, 1000000]:
-        println "primes up to", limit, "=", count primes(limit)
+        println "primes up to", limit, "=", count_primes(limit)
     end
 end
 ```

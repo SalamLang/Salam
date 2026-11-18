@@ -27,6 +27,8 @@ const SL_BAD := 9
 const SL_STD := 10
 
 mut g_lo_env_nodes := Vector {} as Vector<int>
+mut g_lo_env_native_said := false
+mut g_lo_env_injected := false
 
 struct LoSlot:
     pub kind: int = 0
@@ -1014,45 +1016,23 @@ func lo_has_lambda(a &: at.Ast, nid: int): bool:
     ret false
 end
 
-func lo_env_decl_text(native: bool): str:
-    mut t := ""
-    if not native:
-        t += "import dom\n"
-    end
-    t += "mut envx_dark := false\nmut envx_light := true\nmut envx_touch := false\nmut envx_mouse := true\n"
+func lo_env_decl_text(): str:
+    mut t := "mut envx_dark := false\nmut envx_light := true\nmut envx_touch := false\nmut envx_mouse := true\n"
     t += "mut envx_reduced := false\nmut envx_contrast := false\nmut envx_rtl := false\nmut envx_ltr := true\n"
     t += "mut envx_w := 1024\nmut envx_h := 768\nmut envx_compact := false\nmut envx_regular := true\nmut envx_wide := false\n"
     t += "mut envx_landscape := true\nmut envx_portrait := false\n"
-    if native:
-        ret t
-    end
-    t += "mut envx_hook := envx_watch()\n"
-    t += "func envx_query(q: str): bool:\n    ret dom.GetBool(dom.CallS1(dom.Window(), \"matchMedia\", q), \"matches\")\nend\n"
-    t += "func envx_rtl_now(): bool:\n    ret dom.GetStyle(dom.Query(\"html\"), \"direction\") == \"rtl\"\nend\n"
-    t += "func envx_sync():\n"
-    t += "    d := envx_query(\"(prefers-color-scheme: dark)\")\n    if d != envx_dark:\n        envx_dark = d\n        envx_light = not d\n    end\n"
-    t += "    c := envx_query(\"(pointer: coarse)\")\n    if c != envx_touch:\n        envx_touch = c\n        envx_mouse = not c\n    end\n"
-    t += "    m := envx_query(\"(prefers-reduced-motion: reduce)\")\n    if m != envx_reduced:\n        envx_reduced = m\n    end\n"
-    t += "    h := envx_query(\"(prefers-contrast: more)\")\n    if h != envx_contrast:\n        envx_contrast = h\n    end\n"
-    t += "    r := envx_rtl_now()\n    if r != envx_rtl:\n        envx_rtl = r\n        envx_ltr = not r\n    end\n"
-    t += "    w := dom.WinWidth() as int\n    v := dom.WinHeight() as int\n"
-    t += "    if w != envx_w:\n        envx_w = w\n    end\n    if v != envx_h:\n        envx_h = v\n    end\n"
-    t += "    if (w < 600) != envx_compact:\n        envx_compact = w < 600\n    end\n"
-    t += "    if (w >= 600 and w <= 1024) != envx_regular:\n        envx_regular = w >= 600 and w <= 1024\n    end\n"
-    t += "    if (w > 1024) != envx_wide:\n        envx_wide = w > 1024\n    end\n"
-    t += "    if (w >= v) != envx_landscape:\n        envx_landscape = w >= v\n        envx_portrait = w < v\n    end\n"
-    t += "end\n"
-    t += "func envx_watch(): bool:\n"
-    t += "    dom.OnReady((): envx_sync() end)\n"
-    t += "    dom.OnResize((): envx_sync() end)\n"
-    t += "    dom.OnEvent(dom.CallS1(dom.Window(), \"matchMedia\", \"(prefers-color-scheme: dark)\"), \"change\", (): envx_sync() end)\n"
-    t += "    dom.OnEvent(dom.CallS1(dom.Window(), \"matchMedia\", \"(prefers-reduced-motion: reduce)\"), \"change\", (): envx_sync() end)\n"
-    t += "    ret true\nend\n"
     ret t
 end
 
 func lo_env_inject(log: lg.Logger, a &: at.Ast, prog: int):
-    if prog == 0 or not ps.EnvUsed():
+    if prog == 0 or not ps.EnvInProgram(a, prog):
+        ret
+    end
+    if sm.LayoutNativeTarget():
+        if not g_lo_env_native_said:
+            g_lo_env_native_said = true
+            lg.Log(log, lg.PH_PARSER, lg.LOG_ERROR, i18.Tr("E233: environment words in a style 'if' are not available on the native target yet; use a bool variable or a state instead"))
+        end
         ret
     end
     repeat at.ChildCount(a, prog) in i:
@@ -1061,19 +1041,15 @@ func lo_env_inject(log: lg.Logger, a &: at.Ast, prog: int):
             ret
         end
     end
-    snippet := ln_parse(log, a, lo_env_decl_text(sm.LayoutNativeTarget()), "<salam-env>", lp.Load("en"))
+    snippet := ln_parse(log, a, lo_env_decl_text(), "<salam-env>", lp.Load("en"))
     if snippet == 0:
         ret
     end
     repeat at.ChildCount(a, snippet) in j:
         sid := at.Child(a, snippet, j)
-        if at.KindOf(a, sid) == at.AST_FUNC_DEF or str.Equals(at.Get(a, sid).name, "envx_hook"):
-            mut sn := at.Get(a, sid)
-            sn.synthetic = true
-            at.Put(a, sid, sn)
-        end
         at.AddChild(a, prog, sid)
         g_lo_env_nodes.Push(sid)
+        g_lo_env_injected = true
     end
 end
 

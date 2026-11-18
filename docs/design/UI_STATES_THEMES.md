@@ -92,8 +92,25 @@ that has no earlier value is simply not declared while the condition is false.
 | `container width < 400`, `container height ...` | the nearest ancestor with `container = true` |
 | `in card hover`, `in card focus within`, `in card active` | a state of the nearest ancestor whose `group = card` |
 
-The six names `dark`, `compact`, `regular`, `wide`, `touch`, `mouse` are
-reserved inside a style `if`; a local variable of the same name is E172 (rename it).
+Environment words are recognised only inside a style `if` condition (and
+inside an element `if` as the single words below). Persian spellings are
+accepted too (`تیره`, `فشرده`, `عریض`, `لمسی`, `عرض صفحه`, `حرکت کم`). The
+words are `dark`, `light`, `compact`, `regular`, `wide`, `touch`, `mouse`,
+`landscape`, `portrait`, `reduced motion`, `high contrast`, `rtl`, `ltr`,
+`screen width` and `screen height`. They take priority over a local variable
+of the same name inside a style `if`; rename the variable if it must be read
+there.
+
+Status: the web target implements all of the words above, for example
+`if compact and not open:` or `if touch and screen width < 500:`. The
+compiler keeps one hidden value per word, filled from `matchMedia` and the
+window size before the first paint and refreshed on resize and on scheme,
+motion and pointer changes; a change re-renders the views, so an environment
+word can be mixed freely with state in one condition. `container width`,
+`in card hover` and `lang = "fa"` are planned and not implemented yet. On the
+native target an environment word in a style `if` is the compile error E233
+until the window signals described below are wired in; the rest of the page is
+unaffected.
 
 ### Rules
 
@@ -203,7 +220,8 @@ part of the state table, and have no native meaning.
 
 | code | kind | message |
 | --- | --- | --- |
-| E172 | error | `'dark' is a reserved condition name; rename the variable` |
+| E172 | reserved | not emitted: an environment word wins over a variable of the same name inside a style `if` |
+| E233 | error | `environment words in a style 'if' are not available on the native target yet` |
 | E173 | error | `a style 'if' condition must be a bool or an environment condition, found <type>` |
 | E174 | error | `'container' condition used outside an element marked container` |
 | E175 | error | `an 'if' cannot hold style attributes together with elements; split it into two 'if' blocks` |

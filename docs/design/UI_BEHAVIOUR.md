@@ -290,6 +290,14 @@ or an element of a vector (`rows[i].qty`); anything else is E211. For a
 number or other non text target, the input converts; text that does not
 convert keeps what the user typed, sets `invalid`, and does not write.
 
+Implemented so far: `bind` on an `input` with no type or a text type (`text`,
+`password`, `email`, `search`, `url`, `tel`), which needs a `str` variable, and on
+`type = "checkbox"`, which needs a `bool`. Number, select, textarea, radio and
+slider targets, and the conversion above, are not done; they report an error.
+On the web, a focused field is rewritten when the bound value moved away from
+what the field shows (a clear after a button), and left alone while the user
+types.
+
 ```salam
 form := Signup()
 

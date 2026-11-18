@@ -16,6 +16,7 @@ package main
 
 import encoding.json
 import env
+import fs
 import net.http
 import str
 import time
@@ -183,7 +184,34 @@ func api_headers(token: str): HashMap<str, str>:
     ret headers
 end
 
-func request(url: str, method: str, body: str, extra: HashMap<str, str>, timeout: int): str throws:
+func body_problem(text: str, model: bool): str:
+    if text == "":
+        if model:
+            ret "empty response body"
+        end
+        ret ""
+    end
+    if json.Valid(text) == false:
+        ret "invalid JSON"
+    end
+    if model == false:
+        ret ""
+    end
+    if json.Has(text, "error"):
+        ret "error object: " + clip(json.GetPath(text, "error.message"), 200)
+    end
+    content := json.GetPath(text, "choices.0.message.content")
+    if content == "" or content == "null":
+        ret "no message content"
+    end
+    ret ""
+end
+
+func retry_base(): int:
+    ret env.GetInt("SALAM_AI_RETRY_WAIT", 10 as i64) as int
+end
+
+func request(url: str, method: str, body: str, extra: HashMap<str, str>, timeout: int, model: bool): str throws:
     mut headers := http.NewHeaders()
     headers.Put("User-Agent", AGENT)
     each key, value in extra:
@@ -206,24 +234,23 @@ func request(url: str, method: str, body: str, extra: HashMap<str, str>, timeout
         if status == 0:
             failure = "network error for " + url + ": " + problem
         else status == 429 or status >= 500:
-            failure = "HTTP " + str.FromInt(status) + " from " + url + ": " + clip(text, 800)
+            failure = "HTTP " + str.FromInt(status) + " from " + url + ": " + clip(text, 300)
             wait = retry_after
         else status >= 400:
             throw "HTTP " + str.FromInt(status) + " from " + url + ": " + clip(text, 800)
         else:
-            if text.Len() == 0:
-                ret ""
+            clean := text.Trim()
+            problem_body := body_problem(clean, model)
+            if problem_body == "":
+                ret clean
             end
-            if json.Valid(text) == false:
-                throw "invalid JSON from " + url
-            end
-            ret text
+            failure = problem_body + " from " + url + " (HTTP " + str.FromInt(status) + "), body starts: " + clip(clean, 300)
         end
         if attempt == RETRIES:
             throw failure
         end
         if wait == 0:
-            wait = 10 * attempt
+            wait = retry_base() * attempt
         end
         if wait > 60:
             wait = 60
@@ -236,7 +263,7 @@ func request(url: str, method: str, body: str, extra: HashMap<str, str>, timeout
 end
 
 func github_call(gh: GitHub, method: str, path: str, body: str): str throws:
-    ret try request(gh.base + path, method, body, api_headers(gh.token), 60)
+    ret try request(gh.base + path, method, body, api_headers(gh.token), 60, false)
 end
 
 func github_paged(gh: GitHub, path: str, limit: int): Vector<str> throws:
@@ -398,7 +425,7 @@ func ask_model(prompt: str): str throws:
     headers.Put("Authorization", "Bearer " + env.Get("SALAM_AI_API_KEY"))
     headers.Put("Content-Type", "application/json")
     headers.Put("X-Salam-Project", env.GetOr("SALAM_AI_PROJECT", "salam-pr-review"))
-    response := try request(base + "/chat/completions", "POST", chat_body(prompt), headers, 300)
+    response := try request(base + "/chat/completions", "POST", chat_body(prompt), headers, 240, true)
     content := json.GetPath(response, "choices.0.message.content")
     if content == "":
         throw "unexpected API response: " + clip(response, 1200)
@@ -561,6 +588,18 @@ func is_model_auth_error(message: str): bool:
     ret message.StartsWith("HTTP 401 ") or message.StartsWith("HTTP 403 ")
 end
 
+func is_model_error(message: str): bool:
+    ret message.Includes("/chat/completions")
+end
+
+func note_summary(text: str):
+    path := env.GetOr("GITHUB_STEP_SUMMARY", "")
+    if path == "":
+        ret
+    end
+    _n := fs.Append(path, text + "\n")
+end
+
 func main(): int:
     token := env.GetOr("GITHUB_TOKEN", "")
     repo := env.GetOr("GITHUB_REPOSITORY", "")
@@ -590,6 +629,12 @@ func main(): int:
                 ret 0
             end
             ret 1
+        end
+        if is_model_error(message):
+            notice := "The Salam AI review was skipped because the model service did not return a usable answer (up to " + str.FromInt(RETRIES) + " attempts were made). Last problem: " + clip(message, 600)
+            println "::warning::" + clip(notice, 900)
+            note_summary("### Salam AI review skipped\n\n" + notice + "\n\nThe review is advisory; re-run the job to try again.")
+            ret 0
         end
         println "::error::Salam AI review failed: " + message
         ret 1

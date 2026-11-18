@@ -1,0 +1,117 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package uuid
+
+import crypto
+import mem
+import sync
+import time
+
+const _GREG_OFFSET := 122192928000000000
+const _RBUF_SIZE := 4096
+const _CTR_MASK41 := 0x1FFFFFFFFFF
+const _CTR_LIMIT := 0x40000000000
+const _SKEW_LIMIT := 100000000
+
+mut _mu := sync.NewMutex()
+mut _rmu := sync.NewMutex()
+mut _rbuf := null as void*
+mut _rpos := 0
+mut _last_ts := 0 as i64
+mut _seq := 0 as u64
+mut _node := 0 as u64
+mut _state_ready := false
+mut _v7_ms := 0 as i64
+mut _v7_ctr := 0 as u64
+
+func _random_pair(hi &: u64, lo &: u64):
+    sync.Lock(_rmu)
+    if _rbuf == null:
+        _rbuf = mem.Allocate(_RBUF_SIZE as u64)
+        _rpos = _RBUF_SIZE
+    end
+    if _rpos + 16 > _RBUF_SIZE:
+        crypto.RandomBytes(_rbuf, _RBUF_SIZE)
+        _rpos = 0
+    end
+    p := ((_rbuf as i64) + (_rpos as i64)) as u8*
+    hi = _be64(p, 0)
+    lo = _be64(p, 8)
+    _rpos += 16
+    sync.Unlock(_rmu)
+end
+
+func _now_gregorian(): i64:
+    ret time.NowNanos() / 100 + _GREG_OFFSET
+end
+
+func _init_state():
+    if not _state_ready:
+        mut a := 0 as u64
+        mut b := 0 as u64
+        _random_pair(a, b)
+        _seq = a & (0x3FFF as u64)
+        _node = (b & (0xFFFFFFFFFFFF as u64)) | (0x010000000000 as u64)
+        _state_ready = true
+    end
+end
+
+func _next_v1(ts &: i64, seq &: u64, node &: u64):
+    now := _now_gregorian()
+    sync.Lock(_mu)
+    _init_state()
+    if now > _last_ts:
+        _last_ts = now
+    else:
+        if _last_ts - now > (_SKEW_LIMIT as i64):
+            _seq = (_seq + (1 as u64)) & (0x3FFF as u64)
+            _last_ts = now
+        else:
+            _last_ts++
+        end
+    end
+    ts = _last_ts
+    seq = _seq
+    node = _node
+    sync.Unlock(_mu)
+end
+
+func _next_v7(ms &: i64, ctr &: u64, seed: u64):
+    now := time.NowMillis()
+    sync.Lock(_mu)
+    if now > _v7_ms:
+        _v7_ms = now
+        _v7_ctr = seed & (_CTR_MASK41 as u64)
+    else:
+        _v7_ctr++
+        if _v7_ctr >= (_CTR_LIMIT as u64):
+            _v7_ms++
+            _v7_ctr = seed & (_CTR_MASK41 as u64)
+        end
+    end
+    ms = _v7_ms
+    ctr = _v7_ctr
+    sync.Unlock(_mu)
+end
+
+@en "NodeID"
+@fa "شناسه گره"
+pub func NodeID(): u64:
+    sync.Lock(_mu)
+    _init_state()
+    n := _node
+    sync.Unlock(_mu)
+    ret n
+end

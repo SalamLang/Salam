@@ -20,6 +20,10 @@ import str
 import net.tcp
 import ssh
 
+@en "DefaultVersion"
+@fa "نسخه پیش فرض"
+pub const DefaultVersion := "SSH-2.0-SalamServer_1.0"
+
 @en "User"
 @fa "کاربر"
 pub struct User:
@@ -45,7 +49,7 @@ pub struct Config:
     pub port: int = 22
     @en "server_version"
     @fa "نسخه سرور"
-    pub server_version: str = ssh.ClientVersion
+    pub server_version: str = DefaultVersion
     @en "host_key_file"
     @fa "پرونده کلید میزبان"
     pub host_key_file: str = ""
@@ -58,6 +62,24 @@ pub struct Config:
     @en "allow_publickey"
     @fa "اجازه کلید عمومی"
     pub allow_publickey: bool = true
+    @en "root"
+    @fa "ریشه"
+    pub root: str = "."
+    @en "allow_exec"
+    @fa "اجازه اجرای فرمان"
+    pub allow_exec: bool = true
+    @en "allow_shell"
+    @fa "اجازه پوسته"
+    pub allow_shell: bool = true
+    @en "allow_sftp"
+    @fa "اجازه اس‌اف‌تی‌پی"
+    pub allow_sftp: bool = true
+    @en "banner"
+    @fa "پیام خوش‌آمد"
+    pub banner: str = ""
+    @en "host_seed"
+    @fa "دانه کلید میزبان"
+    pub host_seed: str = ""
     @en "users"
     @fa "کاربران"
     pub users: Vector<User> = Vector {} as Vector<User>
@@ -75,6 +97,27 @@ pub struct Server:
     @en "running"
     @fa "در حال اجرا"
     pub running: bool = false
+end
+
+func _ssh_config(cfg: Config): ssh.ServerConfig:
+    mut sc := ssh.ServerConfig {}
+    sc.server_version = cfg.server_version
+    sc.host_key_file = cfg.host_key_file
+    sc.authorized_keys_file = cfg.authorized_keys_file
+    sc.allow_password = cfg.allow_password
+    sc.allow_publickey = cfg.allow_publickey
+    sc.enable_exec = cfg.allow_exec
+    sc.enable_shell = cfg.allow_shell
+    sc.enable_sftp = cfg.allow_sftp
+    sc.root = cfg.root
+    sc.banner = cfg.banner
+    sc.host_seed = cfg.host_seed
+    mut users := Vector {} as Vector<ssh.ServerUser>
+    each u in cfg.users:
+        users.push(ssh.ServerUser { name = u.name, password = u.password, home = u.home })
+    end
+    sc.users = users
+    ret sc
 end
 
 @en "NewConfig"
@@ -129,9 +172,7 @@ pub func ServeOnce(srv &: Server): bool:
     if not tcp.Ok(srv.listener): ret false end
     conn := tcp.Accept(srv.listener)
     if not tcp.ConnOk(conn): ret false end
-    // Initial scaffold: SSH server protocol handling (key exchange, auth, channels)
-    // will be implemented in follow-up iterations.
-    tcp.Close(conn)
+    _served := ssh.ServeConnection(conn.fd, _ssh_config(srv.config))
     ret true
 end
 
@@ -140,9 +181,10 @@ end
 pub func Serve(srv &: Server):
     srv.running = true
     until not srv.running:
-        conn := tcp.Accept(srv.listener)
-        if tcp.ConnOk(conn):
-            tcp.Close(conn)
+        if not tcp.Ok(srv.listener):
+            srv.running = false
+            break
         end
+        _served := ServeOnce(srv)
     end
 end

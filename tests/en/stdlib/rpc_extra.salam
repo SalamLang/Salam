@@ -23,10 +23,10 @@ import net.tcp
 import testing
 import sync
 
-mut srv wg := sync.NewWaitGroup()
-mut bound port := 0
+mut srv_wg := sync.NewWaitGroup()
+mut bound_port := 0
 mut server := rpc.NewServer(0, rpc.RPC_CODEC_JSON)
-mut line server := tcp.Server {}
+mut line_server := tcp.Server {}
 
 func half(slot: i64):
     rpc.ReplyFloat(slot, rpc.CallParamFloat(slot, "x", 0) / 2.0)
@@ -50,26 +50,26 @@ func deny(slot: i64):
     rpc.FailWithData(slot, 0 - 32001, "denied", value.ValueString("why"))
 end
 
-func web entry(ctx: i64):
+func web_entry(ctx: i64):
     http.Json(ctx, rpc.HandleText(http.Body(ctx)))
 end
 
-func serve loopback():
+func serve_loopback():
     rpc.SetFraming(server, rpc.RPC_FRAME_HEADER)
     rpc.Listen(server)
-    bound port = rpc.Port(server)
-    sync.Done(srv wg)
+    bound_port = rpc.Port(server)
+    sync.Done(srv_wg)
     rpc.ServeCount(server, 1)
     rpc.StopServer(server)
 end
 
-func serve line():
-    c := tcp.Accept(line server)
+func serve_line():
+    c := tcp.Accept(line_server)
     testing.AssertEqInt(rpc.ServeConn(c.fd, rpc.RPC_CODEC_JSON, rpc.RPC_FRAME_LINE), 2)
     tcp.Close(c)
 end
 
-func check constructors():
+func check_constructors():
     mut args := value.NewValueArray()
     value.ArrayPush(args, value.ValueInt(7 as i64))
     value.ArrayPush(args, value.ValueString("txt"))
@@ -122,7 +122,7 @@ func check constructors():
     testing.AssertEqStr(rpc.JsonEncodeResponses(rs).Substr(0, 1), "[")
 end
 
-func check codecs():
+func check_codecs():
     mut args := value.NewValueArray()
     value.ArrayPush(args, value.ValueInt(8 as i64))
     req := rpc.NewRequest("half", args, 21 as i64)
@@ -155,16 +155,16 @@ func check codecs():
 
     mut top := rpc.EncodeTopLevelError(rpc.RPC_CODEC_MSGPACK, rpc.StdError(rpc.RPC_PARSE_ERROR))
     testing.AssertTrue(compress.BufLen(top) > 0)
-    mut top json := rpc.EncodeTopLevelError(rpc.RPC_CODEC_JSON, rpc.StdError(rpc.RPC_PARSE_ERROR))
-    testing.AssertContains(compress.BufToStrUnsafe(top json), "Parse error")
-    compress.BufFree(top json)
+    mut top_json := rpc.EncodeTopLevelError(rpc.RPC_CODEC_JSON, rpc.StdError(rpc.RPC_PARSE_ERROR))
+    testing.AssertContains(compress.BufToStrUnsafe(top_json), "Parse error")
+    compress.BufFree(top_json)
     compress.BufFree(top)
     compress.BufFree(one)
     compress.BufFree(packed)
     compress.BufFree(wire)
 end
 
-func check handlers():
+func check_handlers():
     mut r := rpc.HandleText(`{"jsonrpc":"2.0","method":"info","params":[1,2,3],"id":1}`)
     testing.AssertContains(r, `"result": "info:3:false:true"`)
     r = rpc.HandleText(`{"jsonrpc":"2.0","method":"half","params":{"x":5},"id":2}`)
@@ -178,7 +178,7 @@ func check handlers():
     testing.AssertContains(r, `"data": "why"`)
 end
 
-func check stream helpers():
+func check_stream_helpers():
     mut s := rpc.NewMemStream()
     testing.AssertEqInt(rpc.StreamPending(s), 0)
     rpc.FeedStr(s, "abc\nde")
@@ -197,13 +197,13 @@ func check stream helpers():
     compress.BufFree(framed)
 end
 
-func check live calls():
-    sync.Add(srv wg, 1 as i64)
-    t := spawn(serve loopback)
-    sync.Wait(srv wg)
-    testing.AssertTrue(bound port > 0)
+func check_live_calls():
+    sync.Add(srv_wg, 1 as i64)
+    t := spawn(serve_loopback)
+    sync.Wait(srv_wg)
+    testing.AssertTrue(bound_port > 0)
 
-    conn := tcp.Dial("127.0.0.1", bound port)
+    conn := tcp.Dial("127.0.0.1", bound_port)
     testing.AssertTrue(tcp.ConnOk(conn))
     mut c := rpc.ClientFromFd(conn.fd, rpc.RPC_CODEC_JSON)
     rpc.ClientSetFraming(c, rpc.RPC_FRAME_HEADER)
@@ -231,9 +231,9 @@ func check live calls():
 
     join(t)
 
-    line server = tcp.Bind(0)
-    t2 := spawn(serve line)
-    raw := tcp.Dial("127.0.0.1", tcp.Port(line server))
+    line_server = tcp.Bind(0)
+    t2 := spawn(serve_line)
+    raw := tcp.Dial("127.0.0.1", tcp.Port(line_server))
     testing.AssertTrue(tcp.ConnOk(raw))
     testing.AssertTrue(rpc.WriteFrameStr(raw.fd, rpc.RPC_FRAME_LINE, `{"jsonrpc":"2.0","method":"half","params":[3],"id":1}`))
     mut body := compress.BufFromStr(`{"jsonrpc":"2.0","method":"flag","params":[true],"id":2}`)
@@ -250,12 +250,12 @@ func check live calls():
     compress.BufFree(body)
     tcp.Close(raw)
     join(t2)
-    tcp.CloseServer(line server)
+    tcp.CloseServer(line_server)
 end
 
-func check web call():
+func check_web_call():
     mut r := router.NewRouter()
-    router.Post(r, "/rpc", web entry)
+    router.Post(r, "/rpc", web_entry)
     mut s := http.NewServer(0)
     http.Use(s, r)
     port := http.RunBackgroundPort(s)
@@ -271,7 +271,7 @@ func check web call():
     testing.AssertEqStr(rpc.ErrorMessage(down), "HTTP request failed")
 end
 
-func check registry():
+func check_registry():
     names := rpc.ListMethods()
     testing.AssertEqInt(names.Len(), 5)
     testing.AssertEqInt(rpc.MethodCount(), 5)
@@ -289,13 +289,13 @@ func main:
     rpc.Register("nothing", nothing)
     rpc.Register("deny", deny)
 
-    check constructors()
-    check codecs()
-    check handlers()
-    check stream helpers()
-    check live calls()
-    check web call()
+    check_constructors()
+    check_codecs()
+    check_handlers()
+    check_stream_helpers()
+    check_live_calls()
+    check_web_call()
     testing.AssertEqInt(rpc.ServeStdio(rpc.RPC_FRAME_LINE), 0)
-    check registry()
+    check_registry()
     ret testing.Summary()
 end

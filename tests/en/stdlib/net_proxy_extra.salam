@@ -19,39 +19,39 @@ import net.tcp
 import mem
 import testing
 
-mut http server := tcp.Server {}
-mut socks server := tcp.Server {}
-mut seen first := ""
-mut seen second := ""
-mut socks greeting := 0
-mut socks auth user := 0
-mut socks auth pass := 0
+mut http_server := tcp.Server {}
+mut socks_server := tcp.Server {}
+mut seen_first := ""
+mut seen_second := ""
+mut socks_greeting := 0
+mut socks_auth_user := 0
+mut socks_auth_pass := 0
 
-func chain proxy():
-    c := tcp.Accept(http server)
-    seen first = tcp.Read(c, 4096)
+func chain_proxy():
+    c := tcp.Accept(http_server)
+    seen_first = tcp.Read(c, 4096)
     tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
-    seen second = tcp.Read(c, 4096)
-    tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
-    echo := tcp.Read(c, 128)
-    tcp.Write(c, "tunnel:" + echo)
-    tcp.Close(c)
-end
-
-func auth http proxy():
-    c := tcp.Accept(http server)
-    seen first = tcp.Read(c, 4096)
+    seen_second = tcp.Read(c, 4096)
     tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
     echo := tcp.Read(c, 128)
     tcp.Write(c, "tunnel:" + echo)
     tcp.Close(c)
 end
 
-func auth socks proxy():
-    c := tcp.Accept(socks server)
+func auth_http_proxy():
+    c := tcp.Accept(http_server)
+    seen_first = tcp.Read(c, 4096)
+    tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+    echo := tcp.Read(c, 128)
+    tcp.Write(c, "tunnel:" + echo)
+    tcp.Close(c)
+end
+
+func auth_socks_proxy():
+    c := tcp.Accept(socks_server)
     greet := mem.Allocate(16 as u64)
     n := tcp.ReadBytes(c, greet, 16)
-    socks greeting = n
+    socks_greeting = n
     reply := mem.Allocate(2 as u64)
     rp := reply as i8*
     rp[0] = 5 as i8
@@ -61,8 +61,8 @@ func auth socks proxy():
     auth := mem.Allocate(64 as u64)
     ap := auth as i8*
     tcp.ReadBytes(c, auth, 64)
-    socks auth user = ap[1] as int
-    socks auth pass = ap[2 + socks auth user] as int
+    socks_auth_user = ap[1] as int
+    socks_auth_pass = ap[2 + socks_auth_user] as int
     rp[0] = 1 as i8
     rp[1] = 0 as i8
     tcp.WriteBytes(c, reply, 2)
@@ -92,42 +92,42 @@ func auth socks proxy():
     mem.Free(done)
 end
 
-func check http auth():
-    http server = tcp.Bind(0)
-    t := spawn(auth http proxy)
-    p := proxy.NewHTTPProxyAuth("127.0.0.1:" + tcp.Port(http server), "user", "pass")
+func check_http_auth():
+    http_server = tcp.Bind(0)
+    t := spawn(auth_http_proxy)
+    p := proxy.NewHTTPProxyAuth("127.0.0.1:" + tcp.Port(http_server), "user", "pass")
     conn := proxy.Dial(p, "target.example.com", 443)
     testing.AssertTrue(tcp.ConnOk(conn))
     tcp.Write(conn, "hi")
     testing.AssertEqStr(tcp.Read(conn, 128), "tunnel:hi")
     tcp.Close(conn)
     join(t)
-    tcp.CloseServer(http server)
-    testing.AssertContains(seen first, "CONNECT target.example.com:443 HTTP/1.1")
-    testing.AssertContains(seen first, "Proxy-Authorization: Basic dXNlcjpwYXNz")
+    tcp.CloseServer(http_server)
+    testing.AssertContains(seen_first, "CONNECT target.example.com:443 HTTP/1.1")
+    testing.AssertContains(seen_first, "Proxy-Authorization: Basic dXNlcjpwYXNz")
 end
 
-func check socks auth():
-    socks server = tcp.Bind(0)
-    t := spawn(auth socks proxy)
-    p := proxy.NewSOCKS5ProxyAuth("127.0.0.1:" + tcp.Port(socks server), "user", "secret")
+func check_socks_auth():
+    socks_server = tcp.Bind(0)
+    t := spawn(auth_socks_proxy)
+    p := proxy.NewSOCKS5ProxyAuth("127.0.0.1:" + tcp.Port(socks_server), "user", "secret")
     conn := proxy.Dial(p, "target.example.com", 443)
     testing.AssertTrue(tcp.ConnOk(conn))
     tcp.Write(conn, "yo")
     testing.AssertEqStr(tcp.Read(conn, 128), "tunnel:yo")
     tcp.Close(conn)
     join(t)
-    tcp.CloseServer(socks server)
-    testing.AssertEqInt(socks greeting, 4)
-    testing.AssertEqInt(socks auth user, 4)
-    testing.AssertEqInt(socks auth pass, 6)
+    tcp.CloseServer(socks_server)
+    testing.AssertEqInt(socks_greeting, 4)
+    testing.AssertEqInt(socks_auth_user, 4)
+    testing.AssertEqInt(socks_auth_pass, 6)
 end
 
-func check chain():
-    http server = tcp.Bind(0)
-    t := spawn(chain proxy)
+func check_chain():
+    http_server = tcp.Bind(0)
+    t := spawn(chain_proxy)
     mut c := proxy.NewChain()
-    proxy.Add(c, proxy.NewHTTPProxy("127.0.0.1:" + tcp.Port(http server)))
+    proxy.Add(c, proxy.NewHTTPProxy("127.0.0.1:" + tcp.Port(http_server)))
     proxy.Add(c, proxy.NewHTTPProxy("second.example.com:8080"))
     conn := proxy.DialChain(c, "target.example.com", 443)
     testing.AssertTrue(tcp.ConnOk(conn))
@@ -135,9 +135,9 @@ func check chain():
     testing.AssertEqStr(tcp.Read(conn, 128), "tunnel:ab")
     tcp.Close(conn)
     join(t)
-    tcp.CloseServer(http server)
-    testing.AssertContains(seen first, "CONNECT second.example.com:8080 HTTP/1.1")
-    testing.AssertContains(seen second, "CONNECT target.example.com:443 HTTP/1.1")
+    tcp.CloseServer(http_server)
+    testing.AssertContains(seen_first, "CONNECT second.example.com:8080 HTTP/1.1")
+    testing.AssertContains(seen_second, "CONNECT target.example.com:443 HTTP/1.1")
 
     empty := proxy.NewChain()
     dead := proxy.DialChain(empty, "127.0.0.1", 1)
@@ -145,8 +145,8 @@ func check chain():
 end
 
 func main:
-    check http auth()
-    check socks auth()
-    check chain()
+    check_http_auth()
+    check_socks_auth()
+    check_chain()
     ret testing.Summary()
 end

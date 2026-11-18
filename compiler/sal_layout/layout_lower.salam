@@ -26,6 +26,10 @@ const SL_EACH := 8
 const SL_BAD := 9
 const SL_STD := 10
 
+mut g_lo_env_nodes := Vector {} as Vector<int>
+mut g_lo_env_native_said := false
+mut g_lo_env_injected := false
+
 struct LoSlot:
     pub kind: int = 0
     pub expr: int = 0
@@ -1012,7 +1016,110 @@ func lo_has_lambda(a &: at.Ast, nid: int): bool:
     ret false
 end
 
-pub func PrepareViews(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): int:
+func lo_env_decl_text(): str:
+    mut t := "mut envx_dark := false\nmut envx_light := true\nmut envx_touch := false\nmut envx_mouse := true\n"
+    t += "mut envx_reduced := false\nmut envx_contrast := false\nmut envx_rtl := false\nmut envx_ltr := true\n"
+    t += "mut envx_w := 1024\nmut envx_h := 768\nmut envx_compact := false\nmut envx_regular := true\nmut envx_wide := false\n"
+    t += "mut envx_landscape := true\nmut envx_portrait := false\n"
+    ret t
+end
+
+func lo_env_inject(log: lg.Logger, a &: at.Ast, prog: int):
+    if prog == 0 or not ps.EnvInProgram(a, prog):
+        ret
+    end
+    if sm.LayoutNativeTarget():
+        if not g_lo_env_native_said:
+            g_lo_env_native_said = true
+            lg.Log(log, lg.PH_PARSER, lg.LOG_ERROR, i18.Tr("E233: environment words in a style 'if' are not available on the native target yet; use a bool variable or a state instead"))
+        end
+        ret
+    end
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_VAR_DECL and str.Equals(d.name, "envx_w"):
+            ret
+        end
+    end
+    snippet := ln_parse(log, a, lo_env_decl_text(), "<salam-env>", lp.Load("en"))
+    if snippet == 0:
+        ret
+    end
+    repeat at.ChildCount(a, snippet) in j:
+        sid := at.Child(a, snippet, j)
+        at.AddChild(a, prog, sid)
+        g_lo_env_nodes.Push(sid)
+        g_lo_env_injected = true
+    end
+end
+
+func lo_env_order(a &: at.Ast, prog: int):
+    if g_lo_env_nodes.Len() == 0:
+        ret
+    end
+    mut mine := Vector {} as Vector<int>
+    defer mine.Free()
+    mut rest := Vector {} as Vector<int>
+    defer rest.Free()
+    repeat at.ChildCount(a, prog) in i:
+        id := at.Child(a, prog, i)
+        mut is_mine := false
+        each e in g_lo_env_nodes:
+            if e == id:
+                is_mine = true
+            end
+        end
+        if is_mine:
+            mine.Push(id)
+        else:
+            rest.Push(id)
+        end
+    end
+    mut order := Vector {} as Vector<int>
+    defer order.Free()
+    each id in rest:
+        kd := at.KindOf(a, id)
+        if kd == at.AST_IMPORT or kd == at.AST_LINK or (kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern):
+            order.Push(id)
+        end
+    end
+    each id in mine:
+        if at.KindOf(a, id) == at.AST_IMPORT:
+            order.Push(id)
+        end
+    end
+    each id in mine:
+        if at.KindOf(a, id) == at.AST_VAR_DECL and not str.Equals(at.Get(a, id).name, "envx_hook"):
+            order.Push(id)
+        end
+    end
+    each id in rest:
+        kd := at.KindOf(a, id)
+        if not (kd == at.AST_IMPORT or kd == at.AST_LINK or (kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern)):
+            order.Push(id)
+        end
+    end
+    each id in mine:
+        kd := at.KindOf(a, id)
+        if kd != at.AST_IMPORT and kd != at.AST_VAR_DECL:
+            order.Push(id)
+        end
+    end
+    each id in mine:
+        if str.Equals(at.Get(a, id).name, "envx_hook"):
+            order.Push(id)
+        end
+    end
+    mut pn := at.Get(a, prog)
+    pn.list = Vector {} as Vector<int>
+    each id in order:
+        pn.list.Push(id)
+    end
+    at.Put(a, prog, pn)
+    g_lo_env_nodes.Clear()
+end
+
+func lo_prepare_views(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): int:
     if prog == 0:
         ret 0
     end
@@ -1073,4 +1180,13 @@ pub func PrepareViews(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.A
     at.Put(a, prog, pn)
     old.Free()
     ret fns.Len()
+end
+
+pub func PrepareViews(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): int:
+    lo_env_inject(log, a, prog)
+    r := lo_prepare_views(log, pack, ct, a, prog, file)
+    if prog != 0:
+        lo_env_order(a, prog)
+    end
+    ret r
 end

@@ -1,0 +1,46 @@
+import encoding.uuid
+import mem
+
+const THREADS := 8
+const PER := 3000
+
+mut slots := null as u64*
+mut bad := null as i64*
+
+func worker(arg: i64*):
+    t := arg[0] as int
+    mut prev := uuid.Nil()
+    repeat PER in i:
+        u := uuid.NewV7()
+        at := (t * PER + i) * 2
+        slots[at] = u.hi
+        slots[at + 1] = u.lo
+        if i > 0 and uuid.Compare(prev, u) >= 0: atomic_add(bad, 1 as i64) end
+        prev = u
+    end
+end
+
+func main:
+    slots = mem.Allocate((THREADS * PER * 16) as u64) as u64*
+    bad = mem.AllocateZeroed(8 as u64) as i64*
+    args := mem.Allocate((THREADS * 8) as u64) as i64*
+    mut handles := Vector {} as Vector<i64>
+    defer handles.free()
+    repeat THREADS in t:
+        args[t] = t as i64
+        handles.push(spawn(worker, ((args as i64) + (t * 8) as i64) as i64*))
+    end
+    repeat THREADS in t:
+        join(handles.get(t))
+    end
+    mut seen := HashMap {} as HashMap<str, int>
+    defer seen.free()
+    repeat THREADS * PER in i:
+        u := uuid.UUID { hi = slots[i * 2], lo = slots[i * 2 + 1] }
+        seen.put(uuid.Compact(u), 1)
+    end
+    println "v7 total", THREADS * PER, "unique", seen.size(), "violations", atomic_load(bad)
+    mem.Free(slots as void*)
+    mem.Free(bad as void*)
+    mem.Free(args as void*)
+end

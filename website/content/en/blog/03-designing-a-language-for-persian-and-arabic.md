@@ -93,7 +93,7 @@ This program uses both meanings of both words:
 202611 6
 ```
 
-Running `salam translate en` on it shows how the compiler reads each `تا` and `هر`: the loop becomes `until`, the repeat header becomes `repeat ۰ to ۲۰ by ۱۰ in ای`, and the last loop becomes `each`. The Persian digits stay as they are, a multi-word name in an English file is written with underscores (`شمار_رقم_ها`), and the English file runs with the same output:
+Running `salam translate en` on it shows how the compiler reads each `تا` and `هر`: the loop becomes `until`, the repeat header becomes `repeat ۰ to ۲۰ by ۱۰ in ای`, and the last loop becomes `each`. The tool also renames identifiers it knows (`شمار` becomes `count`, `عدد` becomes `number`). The block below is the same program written by hand as an English file: the Persian names stay, a multi-word name is joined with underscores (`شمار_رقم_ها`), and it runs with the same output:
 
 ```salam
 // lang: en

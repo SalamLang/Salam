@@ -20,7 +20,7 @@ In exchange, Salam is a smaller language with a gentler learning curve, a large 
 | Memory safety guarantee | Yes, for safe code; `unsafe` blocks opt out                                             | No guarantee; bounds checks in development builds, ownership checks, AddressSanitizer via `salam memcheck` |
 | Data races              | Prevented at compile time by `Send` and `Sync`                                          | Your responsibility: mutexes, atomics, channels                                                            |
 | Sum types and matching  | `enum` with data, exhaustive `match`                                                    | `enum` with data, exhaustive `match`                                                                       |
-| Errors                  | `Result<T, E>` with `?`                                                                 | `throw`, `try`, `catch`; or your own `Result` enum with postfix `?`                                       |
+| Errors                  | `Result<T, E>` with `?`                                                                 | `throw`, `try`, `catch`; or your own `Result` enum with postfix `?`                                        |
 | Generics                | Traits, monomorphized generics                                                          | Interfaces, generics with bounds                                                                           |
 | Code generation         | LLVM (other backends in progress)                                                       | LLVM, C or Salam's own native backend                                                                      |
 | Package ecosystem       | crates.io, very large                                                                   | Large standard library, few third-party packages                                                           |
@@ -142,7 +142,7 @@ Salam's usual tool is a function marked `throw`. `try` passes an error to the ca
 ```salam
 import conv
 
-func parse port(text: str): int throw:
+func parse_port(text: str): int throw:
     n := try conv.ParseInt(text)
     if n < 1 or n > 65535:
         throw "port out of range: " + n
@@ -153,7 +153,7 @@ end
 func main:
     each arg in ["8080", "0", "http"]:
         try:
-            println arg, "-> port", parse port(arg)
+            println arg, "-> port", parse_port(arg)
         catch e:
             println arg, "-> error:", e.message
         end

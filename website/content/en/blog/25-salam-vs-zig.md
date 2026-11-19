@@ -21,7 +21,7 @@ Zig first appeared in 2016, created by Andrew Kelley, and is developed by the Zi
 | Design goal      | A simpler, safer replacement for C                    | A readable systems language for apps, servers and low-level code        |
 | Syntax           | C-like, braces and semicolons                         | Blocks with `:` and `end`, no semicolons, English or Persian keywords   |
 | Memory           | Explicit allocators, passed as arguments              | One global allocator for collections; `mem` arenas and pools on request |
-| Errors           | Error unions (`!T`), `try`, `catch`, `errdefer`       | `throw`, `try`, `catch`; errors carry a kind, a message and a position |
+| Errors           | Error unions (`!T`), `try`, `catch`, `errdefer`       | `throw`, `try`, `catch`; errors carry a kind, a message and a position  |
 | Compile time     | `comptime`: run any Zig code while compiling          | Constants, conditional compilation, `-D` flags, monomorphized generics  |
 | C interop        | Imports C headers; `zig cc` compiles C and C++        | `extern:` declarations; calls follow the C ABI on every backend         |
 | Standard library | Lower level: data structures, I/O, HTTP, JSON, crypto | Application level: HTTP router, databases, JSON, TLS, images, ML        |
@@ -57,7 +57,7 @@ In Salam, a function that can fail is marked `throw`, every call to it is marked
 ```salam
 import conv
 
-func parse port(text: str): int throw:
+func parse_port(text: str): int throw:
     n := try conv.Atoi(text)
     if n < 1 or n > 65535:
         throw Error.New(ErrorKind.OutOfRange, "port out of range: " + text)
@@ -68,7 +68,7 @@ end
 func main:
     each text in ["8080", "70000", "http"]:
         try:
-            println "port", parse port(text)
+            println "port", parse_port(text)
         catch e:
             println "bad:", e.message
         end
@@ -82,7 +82,7 @@ bad: port out of range: 70000
 bad: invalid character 'h'
 ```
 
-The shape is the same: no exceptions, no stack unwinding, every failure point visible at the call site, and `defer` statements still run. Both also have a one-line fallback: Zig writes `parsePort(text) catch 8080`, Salam writes `try parse port(text) catch 8080`.
+The shape is the same: no exceptions, no stack unwinding, every failure point visible at the call site, and `defer` statements still run. Both also have a one-line fallback: Zig writes `parsePort(text) catch 8080`, Salam writes `try parse_port(text) catch 8080`.
 
 The difference is what an error carries. A Zig error is a name from an error set, and that is all; extra details travel through a separate diagnostics value when you need them, and Zig's error return traces show where an error came from in debug builds. A Salam error is a value of the built-in `Error` type with a kind, a message, an optional code and, for parsers, the line and column, so `json: missing key 'age' (line 1, column 1)` comes straight out of the standard library. Zig has `errdefer`, which runs only when the function returns an error; Salam has no equivalent and uses `defer` or an explicit `catch`.
 

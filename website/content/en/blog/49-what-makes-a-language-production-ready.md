@@ -105,7 +105,7 @@ Release notes are generated from merged pull requests; there is no hand-written 
 ```salam
 import conv
 
-func parse port(text: str): int throw:
+func parse_port(text: str): int throw:
     port := try conv.Atoi(text)
     if port < 1 or port > 65535:
         throw Error { message = "port out of range: " + text }
@@ -116,7 +116,7 @@ end
 func main:
     each text in ["8080", "http", "70000"]:
         try:
-            println "listening on", parse port(text)
+            println "listening on", parse_port(text)
         catch e:
             println "config error:", e.to_str()
         end

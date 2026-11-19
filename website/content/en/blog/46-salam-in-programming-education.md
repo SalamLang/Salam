@@ -26,7 +26,7 @@ The basic exercise every introductory course reaches in its first weeks is a loo
 تابع مقسوم علیه مشترک(الف: صحیح، ب: صحیح): صحیح:
     ناپایا ایکس := الف
     ناپایا ایگرگ := ب
-    تا ایگرگ != ۰:
+    تا ایگرگ نابرابر ۰:
         باقی := ایکس % ایگرگ
         ایکس = ایگرگ
         ایگرگ = باقی

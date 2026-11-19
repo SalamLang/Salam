@@ -67,7 +67,7 @@ This program uses both meanings of both words:
 تابع شمار رقم‌ها(عدد: صحیح): صحیح:
     ناپایا ن := عدد
     ناپایا تعداد := ۰
-    تا ن > ۰:
+    تا ن بزرگتر ۰:
         ن /= ۱۰
         تعداد++
     پایان
@@ -93,11 +93,11 @@ This program uses both meanings of both words:
 202611 6
 ```
 
-Running `salam translate en` on it shows how the compiler reads each `تا` and `هر`: the loop becomes `until`, the repeat header becomes `repeat ۰ to ۲۰ by ۱۰ in ای`, and the last loop becomes `each`. The Persian identifiers and digits stay as they are, and the English file runs with the same output:
+Running `salam translate en` on it shows how the compiler reads each `تا` and `هر`: the loop becomes `until`, the repeat header becomes `repeat ۰ to ۲۰ by ۱۰ in ای`, and the last loop becomes `each`. The tool also renames identifiers it knows (`شمار` becomes `count`, `عدد` becomes `number`). The block below is the same program written by hand as an English file: the Persian names stay, a multi-word name is joined with underscores (`شمار_رقم_ها`), and it runs with the same output:
 
 ```salam
 // lang: en
-func شمار رقم‌ها(عدد: int): int:
+func شمار_رقم_ها(عدد: int): int:
     mut ن := عدد
     mut تعداد := ۰
     until ن > ۰:
@@ -112,7 +112,7 @@ func main:
         println "گام", ای
     end
     each عدد in [۷, ۱۴۰۵, ۲۰۲۶۱۱]:
-        println عدد, شمار رقم ها(عدد)
+        println عدد, شمار_رقم_ها(عدد)
     end
 end
 ```
@@ -130,7 +130,7 @@ A pleasant side effect: English `until` confuses newcomers, because Salam's `unt
 
 ## Multi-word names and the zero-width non-joiner {#multi-word-names}
 
-Persian writes many single concepts as two or more words: `شمار رقم‌ها` (digit count), `جمع کل` (grand total). Forcing them into `snake_case` or gluing them together produces something no Persian reader would write. So Salam allows spaces inside names, in both languages: `func line_total(o: Order)` is legal English Salam, and `تابع جمع ردیف(...)` is legal Persian.
+Persian writes many single concepts as two or more words: `شمار رقم‌ها` (digit count), `جمع کل` (grand total). Forcing them into `snake_case` or gluing them together produces something no Persian reader would write. So Salam allows spaces inside Persian names: `تابع جمع ردیف(...)` is legal Persian. In an English file a name is one word, so write `line_total` or `LineTotal`.
 
 Persian adds a second problem: the **zero-width non-joiner** (ZWNJ, U+200C). It separates two parts of a word without a visible space, as in `رقم‌ها` (digits). Writers are inconsistent about it; the same word appears with a ZWNJ, with a space, or glued together, and on screen the first two look nearly the same. Salam's decision:
 

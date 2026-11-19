@@ -168,7 +168,7 @@ console.log("fallback models");
 const fallbackSession = await account("fallback@test.ir", "Fallback");
 const fallbackKey = (await api("POST", "/keys", fallbackSession, { name: "fallback-bot" })).json.secret;
 const limitedApi = await (await chat(fallbackKey, { model: "salam", messages: [{ role: "user", content: "rate limited api" }] })).json();
-check("a rate limited turn is answered by the first fallback model", (limitedApi.choices?.[0]?.message?.content ?? "").startsWith("Echo: rate limited api via backup-one"), limitedApi);
+check("a rate limited turn is answered by the first fallback model", (limitedApi.choices?.[0]?.message?.content ?? "").startsWith("Echo: rate limited api via fallback one"), limitedApi);
 const fallbackChat = await api("POST", "/chats", fallbackSession, {});
 const limitedSent = await api("POST", `/chats/${fallbackChat.json.chat.id}/messages`, fallbackSession, { text: "rate limited chat" });
 let limitedPoll;
@@ -177,7 +177,7 @@ for (let i = 0; i < 60; i += 1) {
   if (limitedPoll.json.status !== "pending") break;
   await new Promise((r) => setTimeout(r, 500));
 }
-check("a rate limited chat answer comes from a fallback model", limitedPoll.json.status === "done" && limitedPoll.json.body.startsWith("Echo: rate limited chat via backup-one"), limitedPoll.json);
+check("a rate limited chat answer comes from a fallback model", limitedPoll.json.status === "done" && limitedPoll.json.body.startsWith("Echo: rate limited chat via fallback one"), limitedPoll.json);
 const allLimited = await (await chat(fallbackKey, { model: "salam", messages: [{ role: "user", content: "always limited" }] })).text();
 check("a turn every model refuses still fails cleanly", allLimited.includes("engine_failed"), allLimited.slice(-200));
 

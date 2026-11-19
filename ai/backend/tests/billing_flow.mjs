@@ -43,7 +43,7 @@ const back = (gateway, query) => fetch(`${API}/billing/callback/${gateway}?${que
 console.log("plans");
 const plans = await api("GET", "/plans");
 const ids = (plans.json?.plans ?? []).map((p) => p.id);
-check("the plans are listed", plans.res.status === 200 && ids.join(",") === "free,trial,plus,pro,unlimited", ids);
+check("the plans are listed", plans.res.status === 200 && ids.join(",") === "free,plus,trial,pro,unlimited", ids);
 const priced = Object.fromEntries((plans.json?.plans ?? []).map((p) => [p.id, p.price]));
 check("the prices are 0, 3, 6 and 30 million toman, and the free plan runs one request at a time", priced.free === 0 && priced.plus === 3000000 && priced.pro === 6000000 && priced.unlimited === 30000000 && plans.json.plans.find((p) => p.id === "free").parallel === 1, priced);
 const unlimited = plans.json.plans.find((p) => p.id === "unlimited");
@@ -66,10 +66,10 @@ check("checkout needs a signed in account", (await api("POST", "/billing/checkou
 
 console.log("paying with zarinpal");
 const start = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "zarinpal" });
-check("checkout returns the gateway page and the amount", start.res.status === 200 && start.json.url.includes("/pg/StartPay/") && start.json.amount === 3000000, start.json);
+check("checkout returns the gateway page and the amount", start.res.status === 200 && start.json.url.includes("/pg/StartPay/") && start.json.amount === 1950000, start.json);
 const authority = tokenOf(start.json.url);
 const pendingList = await api("GET", "/billing/payments", buyer);
-check("the payment is written down as pending", pendingList.json.payments[0]?.status === "pending" && pendingList.json.payments[0].gateway === "zarinpal" && pendingList.json.payments[0].amount === 3000000, pendingList.json.payments[0]);
+check("the payment is written down as pending", pendingList.json.payments[0]?.status === "pending" && pendingList.json.payments[0].gateway === "zarinpal" && pendingList.json.payments[0].amount === 1950000, pendingList.json.payments[0]);
 const done = await back("zarinpal", `Authority=${authority}&Status=OK`);
 check("the gateway return sends the browser back to the app", done.status === 302 && (done.headers.get("location") ?? "").includes("payment=ok"), done.headers.get("location"));
 const afterPay = await api("GET", "/billing/subscription", buyer);

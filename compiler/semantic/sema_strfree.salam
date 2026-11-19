@@ -988,6 +988,69 @@ func sf_report_discarded(s &: Sema, a &: at.Ast, body: int):
     stmts.Free()
 end
 
+func sf_report_owned_structs(s &: Sema, a &: at.Ast, body: int):
+    if pkg_in_stdlib(s.file):
+        ret
+    end
+    mut decls := Vector {} as Vector<int>
+    su_collect_kind(a, body, at.AST_VAR_DECL, decls)
+    if decls.Len() == 0:
+        decls.Free()
+        ret
+    end
+    mut pm := HashMap {} as HashMap<int, int>
+    su_par_build(a, body, 0, pm)
+    repeat decls.Len() in di:
+        d := decls.Get(di)
+        init := at.At(a, d).a
+        if init == 0 or at.At(a, d).is_mut:
+            continue
+        end
+        fields := su_own_fields_expr(s, a, init)
+        if str.Len(fields) == 0 or str.Equals(fields, "*"):
+            continue
+        end
+        name := at.At(a, d).name
+        mut same := 0
+        repeat decls.Len() in dj:
+            if str.Equals(at.At(a, decls.Get(dj)).name, name):
+                same++
+            end
+        end
+        if same != 1:
+            continue
+        end
+        mut refs := Vector {} as Vector<int>
+        su_collect_refs(a, body, name, refs)
+        mut handled := ","
+        mut escaped := false
+        repeat refs.Len() in ri:
+            r := refs.Get(ri)
+            p := su_parent(pm, r)
+            if su_in_lambda(a, pm, r) or p == 0 or at.KindOf(a, p) != at.AST_MEMBER or at.At(a, p).a != r:
+                escaped = true
+            else su_fields_has(fields, at.At(a, p).name) and su_classify(s, a, pm, p) != SU_READ:
+                handled = handled + at.At(a, p).name + ","
+            end
+        end
+        refs.Free()
+        if escaped:
+            continue
+        end
+        parts := str.Split(fields, ",")
+        each f in parts:
+            if not str.Contains(handled, "," + f + ","):
+                serr_help(
+                    s, 250, span_of(a, d), co.Format2(i18.Tr("'%s.%s' owns a heap string that is never freed"), co.ArgStr(name), co.ArgStr(f)), i18.Tr("free the field with mem.Free(x.field as void*), or return or store the struct so its new owner frees it")
+                )
+            end
+        end
+        parts.Free()
+    end
+    pm.Free()
+    decls.Free()
+end
+
 pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
     if g_sm_ownership == 0 or fnid == 0 or s.in_derive or s.requal:
         ret
@@ -997,6 +1060,7 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
         ret
     end
     sf_report_discarded(s, a, body)
+    sf_report_owned_structs(s, a, body)
     sf_hoist(s, a, body, false)
     mut cs := Vector {} as Vector<SfCand>
     mut seen := Vector {} as Vector<str>
@@ -1036,6 +1100,12 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
                 if su_in_lambda(a, pm, r) or not (cl == SU_READ or (c.kind != 0 and cl == SU_GROW)) or sf_assigned(a, pm, r):
                     c.ok = false
                 end
+            end
+            if refs.Len() == 0 and c.use == 0:
+                init0 := at.At(a, c.decl).a
+                uid := ea_ident(a, c.name, span_of(a, c.decl))
+                sf_typed(a, uid, at.At(a, init0).type_str, at.At(a, init0).sema_type)
+                c.use = uid
             end
             refs.Free()
             cs.Set(ci, c)

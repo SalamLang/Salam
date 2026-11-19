@@ -161,20 +161,57 @@ func tr_ctx_to_en(name: str): str:
     ret ""
 end
 
+func tr_safe_name(targetpack: int, name: str): str:
+    mut out := targetpack == lp.LP_FA ? nt.TranslateIdentifierEnToFa(name) : nt.TranslateIdentifierFaToEn(name)
+    if targetpack == lp.LP_FA and str.Contains(out, " "):
+        parts := str.Split(out, " ")
+        mut bad := false
+        each part in parts:
+            if lp.LookupKeyword(targetpack, part) != tok.TK_IDENT:
+                bad = true
+            end
+        end
+        if bad:
+            out = str.Join(parts, "\u200C")
+        end
+        parts.Free()
+    end
+    if str.Len(out) > 0 and lp.LookupKeyword(targetpack, out) != tok.TK_IDENT:
+        out += "_"
+    end
+    ret out
+end
+
 func tr_type_word(targetpack: int, name: str): str:
     mapped := targetpack == lp.LP_FA ? tr_type_to_fa(name) : tr_type_to_en(name)
     if str.Len(mapped) > 0:
         ret mapped
     end
-    ret targetpack == lp.LP_FA ? nt.TranslateIdentifierEnToFa(name) : nt.TranslateIdentifierFaToEn(name)
+    ret tr_safe_name(targetpack, name)
+end
+
+func tr_snake(name: str): str:
+    mut out := ""
+    repeat name.len() in i:
+        c := name.Substr(i, 1)
+        low := str.Lower(c)
+        if c != low and i > 0:
+            out += "_"
+        end
+        out += low
+    end
+    ret out
 end
 
 func tr_method_word(targetpack: int, name: str): str:
-    mapped := targetpack == lp.LP_FA ? tr_method_to_fa(name) : tr_method_to_en(name)
+    mut mapped := targetpack == lp.LP_FA ? tr_method_to_fa(name) : tr_method_to_en(name)
+    if str.Len(mapped) == 0 and targetpack == lp.LP_FA:
+        mapped = tr_method_to_fa(tr_snake(name))
+    end
     if str.Len(mapped) > 0:
         ret mapped
     end
-    ret targetpack == lp.LP_FA ? nt.TranslateIdentifierEnToFa(name) : nt.TranslateIdentifierFaToEn(name)
+    ret tr_safe_name(targetpack, name)
 end
 
 func tr_ctx_word(targetpack: int, name: str): str:
@@ -1642,9 +1679,10 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             lexeme = targetpack == lp.LP_FA ? "\xD8\x8C" : ","
         else t.kind >= tok.TK_EQ and t.kind <= tok.TK_GE:
             sym := compare_symbol(t.kind)
-            if targetpack != lp.LP_FA or t.layout_mode:
+            never_generic := t.kind == tok.TK_EQ or t.kind == tok.TK_NE or t.kind == tok.TK_LE or t.kind == tok.TK_GE
+            if targetpack != lp.LP_FA:
                 lexeme = sym
-            else not str.Equals(t.lexeme, sym) or tr_in_gap(gaps, bi):
+            else not str.Equals(t.lexeme, sym) or tr_in_gap(gaps, bi) or (never_generic and angle_depth == 0):
                 lexeme = lp.Spelling(targetpack, t.kind)
                 if not tr_is_space(text, bi - 1, sfile.len):
                     lexeme = " " + lexeme
@@ -1682,10 +1720,7 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             end
         end
         if not skip_emit and t.kind == tok.TK_IDENT and str.Equals(lexeme, t.lexeme) and not in_import and prev_kind != tok.TK_KW_EXTERN and prev_kind != tok.TK_META:
-            mut tr_ident := targetpack == lp.LP_FA ? nt.TranslateIdentifierEnToFa(t.lexeme) : nt.TranslateIdentifierFaToEn(t.lexeme)
-            if str.Len(tr_ident) > 0 and lp.LookupKeyword(targetpack, tr_ident) != tok.TK_IDENT:
-                tr_ident += "_"
-            end
+            tr_ident := tr_safe_name(targetpack, t.lexeme)
             if str.Len(tr_ident) > 0 and not str.Equals(tr_ident, t.lexeme):
                 lexeme = tr_ident
             end

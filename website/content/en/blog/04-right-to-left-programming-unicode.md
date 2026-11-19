@@ -14,7 +14,7 @@ This article goes through each layer with runnable programs: how the Salam lexer
 
 ## What makes right-to-left code different {#what-rtl-means}
 
-A Persian line of code is not simply an English line written backwards. A statement such as `اگر ک > ۱۰:` contains Persian words, a Persian digit sequence, an ASCII operator and an ASCII colon. Unicode stores these characters in the order they were typed (logical order) and leaves the screen order to the **Unicode Bidirectional Algorithm**, usually called the bidi algorithm. It assigns each character a direction class: Persian letters are strongly right to left, Latin letters strongly left to right, digits weakly directional, and spaces and most punctuation neutral, taking the direction of their surroundings.
+A Persian line of code is not simply an English line written backwards. A statement such as `اگر ک بزرگتر ۱۰:` contains Persian words, a Persian digit sequence, an ASCII operator and an ASCII colon. Unicode stores these characters in the order they were typed (logical order) and leaves the screen order to the **Unicode Bidirectional Algorithm**, usually called the bidi algorithm. It assigns each character a direction class: Persian letters are strongly right to left, Latin letters strongly left to right, digits weakly directional, and spaces and most punctuation neutral, taking the direction of their surroundings.
 
 The compiler only ever sees logical order, so for the compiler right-to-left code is a matter of character sets and rules. The human sees display order, so for the human it is a matter of rendering. Most confusion about "RTL programming" comes from mixing those two views.
 

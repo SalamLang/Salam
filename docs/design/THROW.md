@@ -28,19 +28,26 @@ methods, interface methods and function types.
 
 ## The old spelling
 
-`throws` (Persian `خطادار`) used to mark the signature. It still compiles and
-means the same, but reports W234 with a quick fix that writes `throw`:
+`throws` (Persian `خطادار`) used to mark the signature. It is not a keyword
+any more, so it can be used as a name. In a signature it is the error E237,
+with a quick fix that writes `throw`:
 
 ```
-warning[W234]: 'throws' is deprecated, use 'throw'
+error[E237]: 'throws' is no longer a keyword; write 'throw'
+ --> a.salam:1:21
+  |
+1 | func f(x: int): int throws:
+  |                     ^
+  |
+  = help: write 'throw' after the signature, for example 'func f(): int throw:'
+  = fix: Write 'throw'
 ```
 
-`salam format` rewrites `throws` to `throw`. Files under `std/` and `compiler/`
-do not report W234 until they are converted.
+## History
 
-## Removal plan
-
-1. This change: the parser accepts `throw` in a signature, `throws` warns, all
-   examples, tests, docs and editor grammars use `throw`.
-2. After the next release, once the seed compiler knows `throw`, `std/` and
-   `compiler/` are converted and the `throws` keyword is removed.
+1. Stage 1 (#3640, in 0.6.18): the parser accepted `throw` in a signature,
+   `throws` warned with W234, and all examples, tests, docs and editor
+   grammars moved to `throw`.
+2. Stage 2: the CI seed moved to 0.6.18, the first release that reads `throw`
+   in a signature. `std/` and the scripts the released compiler runs were
+   converted, and the `throws` keyword was removed.

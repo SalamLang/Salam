@@ -161,6 +161,33 @@ func tr_ctx_to_en(name: str): str:
     ret ""
 end
 
+func tr_ffi_names(toks: tok.TokenStream, n: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks, i)
+        if (t.kind == tok.TK_KW_EXTERN or t.kind == tok.TK_KW_EXPORT) and i + 1 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_COLON:
+            c0 := t.begin_col
+            mut j := i + 2
+            until j < n:
+                u := tok.StreamAt(toks, j)
+                first_on_line := j > 0 and tok.StreamAt(toks, j - 1).kind == tok.TK_STMT_END
+                if first_on_line and u.kind != tok.TK_STMT_END and u.begin_col <= c0:
+                    break
+                end
+                if u.kind == tok.TK_KW_FUNC and j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT:
+                    out.Push(tok.StreamAt(toks, j + 1).lexeme)
+                end
+                j++
+            end
+            i = j
+        else:
+            i++
+        end
+    end
+    ret out
+end
+
 func tr_safe_name(targetpack: int, name: str): str:
     mut out := targetpack == lp.LP_FA ? nt.TranslateIdentifierEnToFa(name) : nt.TranslateIdentifierFaToEn(name)
     if targetpack == lp.LP_FA and str.Contains(out, " "):
@@ -692,6 +719,13 @@ func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i:
         if str.Len(found) > 0 and tr_next_is_call(toks, best_j, n):
             ret found
         end
+    end
+    if tr_core_idx >= 0:
+        core_found := tr_member_words(std_root, tr_pkg_dir.Get(tr_core_idx), toks, i, n, from_fa, true, best_j)
+        if str.Len(core_found) > 0 and tr_next_is_call(toks, best_j, n):
+            ret core_found
+        end
+        best_j = i
     end
     builtin := tr_builtin_words(targetpack, toks, i, n, from_fa, best_j)
     if str.Len(builtin) > 0:
@@ -1565,6 +1599,8 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
     mut gaps := Vector {} as Vector<int>
     defer gaps.Free()
     tr_compare_gaps(srcpack, sfile, gaps)
+    mut ffi_names := tr_ffi_names(toks, n)
+    defer ffi_names.Free()
     mut rule_needs_at := 0 - 1
     mut rule_group_at := 0 - 1
     mut rule_group_last := 0 - 1
@@ -1762,7 +1798,7 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
                 end
             end
         end
-        if not skip_emit and t.kind == tok.TK_IDENT and str.Equals(lexeme, t.lexeme) and not in_import and prev_kind != tok.TK_KW_EXTERN and prev_kind != tok.TK_META:
+        if not skip_emit and t.kind == tok.TK_IDENT and str.Equals(lexeme, t.lexeme) and not in_import and prev_kind != tok.TK_KW_EXTERN and prev_kind != tok.TK_META and not tr_has_ident(ffi_names, t.lexeme):
             tr_ident := tr_safe_name(targetpack, t.lexeme)
             if str.Len(tr_ident) > 0 and not str.Equals(tr_ident, t.lexeme):
                 lexeme = tr_ident

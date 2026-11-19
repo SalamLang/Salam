@@ -390,6 +390,62 @@ func sf_fresh_str_method(key: str): bool:
     ret str.Equals(key, "substr") or str.Equals(key, "concat") or str.Equals(key, "trim") or str.Equals(key, "upper") or str.Equals(key, "lower") or str.Equals(key, "repeat")
 end
 
+func su_fields_has(list: str, name: str): bool:
+    ret str.Contains("," + list + ",", "," + name + ",")
+end
+
+func su_fields_meet(x: str, y: str): str:
+    if str.Equals(x, "*"):
+        ret y
+    end
+    if str.Equals(y, "*"):
+        ret x
+    end
+    mut out := ""
+    each part in str.Split(x, ","):
+        if str.Len(part) > 0 and su_fields_has(y, part):
+            out = str.Len(out) > 0 ? out + "," + part : part
+        end
+    end
+    ret out
+end
+
+func su_own_fields_expr(s &: Sema, a &: at.Ast, e: int): str:
+    if e == 0:
+        ret ""
+    end
+    k := at.KindOf(a, e)
+    if k == at.AST_CAST:
+        ret su_own_fields_expr(s, a, at.At(a, e).a)
+    end
+    if k == at.AST_CALL:
+        cfi := su_fn_idx(s, su_call_decl(s, e))
+        if cfi < 0 or cfi >= s.sum_ownf.Len() or pkg_in_stdlib(s.own_file.Get(cfi)):
+            ret ""
+        end
+        ret s.sum_ownf.Get(cfi)
+    end
+    if k == at.AST_STRUCT_LIT:
+        ts := at.At(a, e).type_str
+        if sf_cont_kind(ts) != 0 or str.Equals(ts, "str"):
+            ret ""
+        end
+        mut out := ""
+        repeat at.ChildCount(a, e) in i:
+            fld := at.Child(a, e, i)
+            if fld != 0 and at.KindOf(a, fld) == at.AST_FIELD_INIT:
+                v := at.At(a, fld).a
+                if v != 0 and str.Equals(at.At(a, v).type_str, "str") and (sf_is_concat(a, v) or (at.KindOf(a, v) == at.AST_CALL and su_call_fresh(s, a, v))):
+                    nm := at.At(a, fld).name
+                    out = str.Len(out) > 0 ? out + "," + nm : nm
+                end
+            end
+        end
+        ret out
+    end
+    ret ""
+end
+
 func su_call_fresh(s &: Sema, a &: at.Ast, call: int): bool:
     if not s.sum_ready or call == 0 or at.KindOf(a, call) != at.AST_CALL:
         ret false
@@ -720,6 +776,20 @@ func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
             changed = true
         end
     end
+    if str.Len(s.sum_ownf.Get(fi)) > 0:
+        mut orets := Vector {} as Vector<int>
+        su_collect_kind(a, body, at.AST_RETURN, orets)
+        mut acc := orets.Len() > 0 ? "*" : ""
+        repeat orets.Len() in oq:
+            acc = su_fields_meet(acc, su_own_fields_expr(s, a, at.At(a, orets.Get(oq)).a))
+        end
+        orets.Free()
+        nf := su_fields_meet(s.sum_ownf.Get(fi), acc)
+        if not str.Equals(nf, s.sum_ownf.Get(fi)):
+            s.sum_ownf.Set(fi, nf)
+            changed = true
+        end
+    end
     pm.Free()
     ret changed
 end
@@ -850,6 +920,7 @@ func su_infer(s &: Sema, a &: at.Ast, start: int):
             s.sp_gf.Push("")
         end
         s.sum_fresh.Push(true)
+        s.sum_ownf.Push("*")
         s.sum_ralias.Push(0 - 1)
         s.sum_rchain.Push("")
         s.sum_rref.Push(false)
@@ -868,6 +939,11 @@ func su_infer(s &: Sema, a &: at.Ast, start: int):
             if su_analyze(s, a, start + fk):
                 changed = true
             end
+        end
+    end
+    repeat s.sum_ownf.Len() - start in ok:
+        if changed or str.Equals(s.sum_ownf.Get(start + ok), "*"):
+            s.sum_ownf.Set(start + ok, "")
         end
     end
     if changed:

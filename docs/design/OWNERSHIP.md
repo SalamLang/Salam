@@ -117,6 +117,7 @@ positive count at zero on `std/` and `compiler/`:
 | W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
 | W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | warn (default) |
 | E176 | a call that returns a new heap string is a bare statement, so the result is dropped   | on, warn       |
+| E250 | a local holds a struct whose fresh heap string field is never freed or handed on      | on, warn       |
 
 E176 covers user code only (not `std/`). `input`, `trim`, `upper`, `lower`,
 `repeat`, `substr` and `concat` count as returning a new string, so
@@ -126,6 +127,16 @@ you, including the intermediate strings of a chain. A bare statement such as
 holds the result.
 Keep the result in a variable that is used, or free it with `mem.Free`.
 `--ownership=off` skips the check.
+
+E250 follows a struct that owns a fresh heap string through function returns:
+`u := ask()` where `ask` returns `User { name = input "n" }` makes `u` the
+owner of `u.name`. If every use of `u` only reads that field, the string is
+never freed and the compiler rejects the declaration. Only functions written in
+user code are followed; a struct returned by a `std/` function is never
+reported, because std offers no way to free its fields. Free it with
+`mem.Free(u.name as void*)`, or return or store `u` so its new owner frees it.
+Any use of `u` as a whole (passing it, returning it, copying it) counts as
+handing it on.
 
 `--ownership=off|on|warn|error` picks the mode; `warn` is the default.
 `on` reports the errors plus W142 and W143; `warn` adds W144, which needs a

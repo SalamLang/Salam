@@ -343,6 +343,115 @@ func layout_resolve(a &: at.Ast, lb: int):
     // so keyword-language rejection needs schema alias language metadata and/or original-name tracking.
 end
 
+mut g_lay_sp_comps := Vector {} as Vector<str>
+
+func lay_has_sep(name: str): bool:
+    ret str.IndexOf(name, "_") >= 0 or str.IndexOf(name, "-") >= 0
+end
+
+func lay_official_attr(name: str): str:
+    if not lay_has_sep(name):
+        ret ""
+    end
+    sa := ResolveStyleAttr(name)
+    if sa.ok:
+        states := ["", "hover ", "focus ", "focus within ", "active ", "disabled ", "checked ", "invalid ", "placeholder ", "selection "]
+        official := states[sa.state] + style.PropName(sa.prop)
+        if lay_has_sep(official) or str.Equals(official, name):
+            ret ""
+        end
+        ret official
+    end
+    key := lay_attr_key_exact(name)
+    if str.Len(key) == 0 or lay_has_sep(key) or str.Equals(key, name):
+        ret ""
+    end
+    ret key
+end
+
+func lay_official_elem(name: str): str:
+    if not lay_has_sep(name):
+        ret ""
+    end
+    repeat g_lay_sp_comps.Len() in i:
+        if str.Equals(g_lay_sp_comps.Get(i), name):
+            ret ""
+        end
+    end
+    ei := lay_elem_lookup(name)
+    if ei < 0:
+        ret ""
+    end
+    key := g_lay_elems.Get(ei).key
+    if lay_has_sep(key) or str.Equals(key, name):
+        ret ""
+    end
+    ret key
+end
+
+func lay_spelling_report(s &: Sema, a &: at.Ast, nid: int, official: str):
+    n := at.Get(a, nid)
+    if n.synthetic or str.Len(n.src_file) == 0 or FilePack(s, n.src_file) != 1:
+        ret
+    end
+    serr_help(
+        s, 235, span_of(a, nid), co.Format1(i18.Tr("'%s' is an official page name, and an English file writes it with spaces, not '_' or '-'"), co.ArgStr(n.name)),
+        co.Format1(i18.Tr("write '%s'"), co.ArgStr(official))
+    )
+end
+
+func lay_spelling_walk(s &: Sema, a &: at.Ast, nid: int, owner_official: bool):
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        ck := at.KindOf(a, cid)
+        if ck == at.AST_LAYOUT_ATTR:
+            if owner_official:
+                official := lay_official_attr(at.Get(a, cid).name)
+                if str.Len(official) > 0:
+                    lay_spelling_report(s, a, cid, official)
+                end
+            end
+        else ck == at.AST_IF or ck == at.AST_EACH:
+            lay_spelling_control(s, a, cid, owner_official)
+        else ck == at.AST_LAYOUT_ELEMENT:
+            nm := at.Get(a, cid).name
+            official := lay_official_elem(nm)
+            if str.Len(official) > 0:
+                lay_spelling_report(s, a, cid, official)
+            end
+            lay_spelling_walk(s, a, cid, lay_elem_lookup(nm) >= 0)
+        end
+    end
+end
+
+func lay_spelling_control(s &: Sema, a &: at.Ast, nid: int, owner_official: bool):
+    n := at.Get(a, nid)
+    lay_spelling_walk(s, a, n.b, owner_official)
+    if n.kind == at.AST_IF and n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lay_spelling_control(s, a, n.c, owner_official)
+        else:
+            lay_spelling_walk(s, a, n.c, owner_official)
+        end
+    end
+end
+
+func lay_check_spelling(s &: Sema, a &: at.Ast, body: int):
+    if body == 0:
+        ret
+    end
+    g_lay_sp_comps.Clear()
+    if s.program != 0:
+        repeat at.ChildCount(a, s.program) in pi:
+            pid := at.Child(a, s.program, pi)
+            if at.KindOf(a, pid) == at.AST_LAYOUT_COMPONENT:
+                g_lay_sp_comps.Push(at.Get(a, pid).name)
+            end
+        end
+    end
+    lay_spelling_walk(s, a, body, true)
+end
+
 func lay_token_display(t: str): str:
     if str.Len(t) > 0 and byte_at(t, 0) == 35:
         ret t
@@ -1560,6 +1669,7 @@ func sema_check_layout_component(s &: Sema, a &: at.Ast, nid: int):
             ck.comps.Push(at.Get(a, pid).name)
         end
     end
+    lay_check_spelling(s, a, at.Get(a, nid).a)
     ck.unexpanded = lay_tree_has_include(a, at.Get(a, nid).a)
     ck.stack.Push(lay_elem_by_key("page"))
     lay_comp_check_items(s, a, at.Get(a, nid).a, ck)
@@ -1637,6 +1747,7 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
             )
         end
     end
+    lay_check_spelling(s, a, nid)
     layout_resolve(a, nid)
     root := lay_elem_by_key("page")
     if lay_elem_attr(a, nid, "repeat") != 0 and lay_subtree_has_id(a, nid):

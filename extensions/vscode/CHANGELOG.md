@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.18
+
 ## 0.6.17
 
 ### Editing and highlighting

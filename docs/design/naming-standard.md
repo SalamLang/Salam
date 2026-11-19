@@ -37,7 +37,7 @@ error: E235: 'font_size' is an official page name, and an English file writes it
 help: write 'font size'
 ```
 
-Names you declare yourself (components, parameters, variables, ids, class
+Names you declare yourself (components, parameters, variables, IDs, class
 names, string values) are not official names and are not checked.
 
 ## The rule

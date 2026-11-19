@@ -117,7 +117,7 @@ curl https://ai-api.salamlang.ir/chat/completions \
 
 تابع ریشه:
     کلید := سیستم عامل.متغیر محیطی("SALAM_AI_KEY")
-    اگر کلید.طول() == ۰:
+    اگر کلید.طول() برابر ۰:
         سرچاپ "متغیر SALAM_AI_KEY را با کلیدی از صفحه‌ی کلیدهای دستیار هوشمند سلام مقدار بدهید"
         برگشت ۱
     پایان
@@ -128,7 +128,7 @@ curl https://ai-api.salamlang.ir/chat/completions \
     سرآیندها.درج("Authorization"، "Bearer " + کلید)
     سرآیندها.درج("Content-Type"، "application/json")
     پاسخ := اچ تی تی پی.ارسال با("https://ai-api.salamlang.ir/chat/completions"، بدنه، سرآیندها)
-    اگر پاسخ.خطا.طول() > ۰:
+    اگر پاسخ.خطا.طول() بزرگتر ۰:
         سرچاپ "درخواست شکست خورد:"، پاسخ.خطا
         برگشت ۱
     پایان

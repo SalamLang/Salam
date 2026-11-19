@@ -2,7 +2,7 @@
 // integrity checks, processing into chats and memories, de-duplication, undo.
 // No assistant engine is needed.
 //
-//   API=http://127.0.0.1:8080 node ai/backend/tests/chatgpt_flow.mjs
+//   API=http://127.0.0.1:18090 node ai/backend/tests/chatgpt_flow.mjs
 //
 // Set CHATGPT_EXPORT_DIR to an unzipped export to replay it as well.
 
@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 
-const API = (process.env.API ?? "http://127.0.0.1:8080").replace(/\/$/, "");
+const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const stamp = Date.now().toString(36);
 
 let passed = 0;

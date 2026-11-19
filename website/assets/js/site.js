@@ -437,6 +437,12 @@
             STYLE_UNITS.has(cps.slice(j, u).join(""))
           ) {
             j = u;
+          } else if (
+            u === j &&
+            (cps[j] === "%" || cps[j] === "\u066a") &&
+            (j + 1 >= n || /[\s,)\]}\u060c]/.test(cps[j + 1]))
+          ) {
+            j += 1;
           }
           out += span("n", cps.slice(i, j).join(""));
         } else if (identCp(ch)) {

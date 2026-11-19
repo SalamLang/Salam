@@ -25,7 +25,7 @@ function esc(s: string): string {
 }
 
 const TOKEN =
-  /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*)|("(?:\\.|[^"\\])*"|`[^`]*`|«[^»]*»|'(?:\\.|[^'\\])')|([0-9۰-۹]+(?:\.[0-9۰-۹]+)?)|([A-Za-z_\u0600-\u06FF\u200c][A-Za-z0-9_\u0600-\u06FF\u200c]*)/g;
+  /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*)|("(?:\\.|[^"\\])*"|`[^`]*`|«[^»]*»|'(?:\\.|[^'\\])')|([0-9۰-۹٠-٩]+(?:[.٫][0-9۰-۹٠-٩]+)?(?:(?:vmin|vmax|turn|rem|deg|rad|px|em|vw|vh|fr|ms|s)(?![A-Za-z0-9_\u0600-\u06FF\u200c])|[%٪](?=[\s,)\]}،]|$))?)|([A-Za-z_\u0600-\u06FF\u200c][A-Za-z0-9_\u0600-\u06FF\u200c]*)/g;
 
 export function highlight(code: string, lang: string): string {
   const l = lang.toLowerCase();

@@ -62,6 +62,11 @@ const other = await account("desk-other@test.ir", "Other");
 const freeBefore = ((await api("GET", "/admin/plans", admin)).json?.plans ?? []).find((p) => p.id === "free")?.chat_5h ?? 8;
 const raised = await api("PUT", "/admin/plans/free", admin, { chat_5h: 30 });
 check("the free plan allows enough messages for this suite", raised.res.status === 200, raised.json);
+process.once("uncaughtException", async (error) => {
+  await api("PUT", "/admin/plans/free", admin, { chat_5h: freeBefore }).catch(() => {});
+  console.error(error);
+  process.exit(1);
+});
 const made = await api("POST", "/bridge/devices", session, { name: "لپ‌تاپ", os: "linux" });
 check("registering a device returns its secret once", made.res.status === 201 && made.json.secret.startsWith("sd-") && made.json.device.os === "linux", made.json);
 const device = made.json.device;

@@ -244,7 +244,10 @@ How a name with several words is written depends on the language:
 - **English: no whitespace, ever.** Use `snake_case` for functions, variables,
   parameters and fields, and `PascalCase` for types, enums and the `pub` API
   (as the std does): `parse_colour`, `red_value`, `Rgb`. A name with spaces in
-  an English file is the compile error E234.
+  an English file is the compile error E234. The one exception is the page
+  and component layout language, whose official attribute and element names
+  have spaces (`font size`, `text area`); writing them with `_` or `-`
+  (`font_size`) is the compile error E235.
 - **Persian: separate the words with spaces.** That is the standard, and the
   compiler accepts it for functions, methods, parameters, struct fields, enum
   members and variables: `تابع خواندن رنگ(متن ورودی: رشته)`,

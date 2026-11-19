@@ -405,9 +405,14 @@ module.exports = grammar({
         field("value", $._attribute_value),
       ),
 
-    _attribute_value: ($) => choice($._expression, $.value_list),
+    _attribute_value: ($) => choice($._layout_value, $.value_list),
 
-    value_list: ($) => seq($._expression, repeat1(seq(COMMA, $._expression))),
+    value_list: ($) =>
+      seq($._layout_value, repeat1(seq(COMMA, $._layout_value))),
+
+    _layout_value: ($) => choice($._expression, $.track_repeat),
+
+    track_repeat: ($) => seq(kw("repeat"), $.argument_list),
 
     _statement: ($) =>
       choice(

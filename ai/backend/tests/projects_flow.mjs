@@ -1,9 +1,9 @@
 // Tests project spaces against a running API. No assistant engine is needed:
 // everything here is organization only.
 //
-//   API=http://127.0.0.1:8080 node ai/backend/tests/projects_flow.mjs
+//   API=http://127.0.0.1:18090 node ai/backend/tests/projects_flow.mjs
 
-const API = (process.env.API ?? "http://127.0.0.1:8080").replace(/\/$/, "");
+const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const stamp = Date.now().toString(36);
 
 let passed = 0;

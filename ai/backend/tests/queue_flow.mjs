@@ -38,9 +38,17 @@ async function until(what, fn, seconds = 60) {
   return null;
 }
 
+const adminEmail = process.env.ADMIN_EMAIL ?? "admin@test.ir";
+const adminReg = await api("POST", "/auth/register", undefined, { name: "Admin", email: adminEmail, password: "password-123" });
+const adminToken = adminReg.json?.token ?? (await api("POST", "/auth/login", undefined, { email: adminEmail, password: "password-123" })).json?.token;
+async function lift(email) {
+  const gift = await api("POST", "/admin/subscriptions", adminToken, { email, plan: "unlimited", note: "flow test" });
+  check("the account is lifted past the free plan caps", gift.res.status === 201, gift.json);
+}
 const email = `queue-${Date.now()}@test.ir`;
 const reg = await api("POST", "/auth/register", undefined, { name: "Queue", email, password: "password-123" });
 const token = reg.json.token;
+await lift(email);
 const made = await api("POST", "/chats", token);
 const chat = made.json.chat.id;
 const messages = async () => (await api("GET", `/chats/${chat}`, token)).json;

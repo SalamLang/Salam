@@ -32,8 +32,8 @@ async function account(email, name) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function ask(token, text) {
-  const chat = (await api("POST", "/chats", token, {})).json.chat.id;
+async function ask(token, text, anyLang = false) {
+  const chat = (await api("POST", "/chats", token, anyLang ? { any_lang: true } : {})).json.chat.id;
   return ask_in(token, chat, text);
 }
 
@@ -62,12 +62,13 @@ check("an admin sets operator text for one user", text.res.status === 200 && tex
 const gift = await api("POST", "/admin/subscriptions", admin, { email, plan: "plus", note: "policy test" });
 check("a paid plan is given", gift.res.status === 201, gift.json);
 
-const free = await ask(user, "show policy");
+check("a lifted account's chat stays under the Salam-only policy until it opts in", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
+const free = await ask(user, "show policy", true);
 check("the user is answered by the plain profile", /agent=raw/.test(free), free);
 check("without the Salam policy text", !/system=salam/.test(free) && /reminder=false/.test(free), free);
 
 const freeDevice = await api("POST", "/bridge/devices", user, { name: "Policy desktop", os: "macos" });
-const freeAgentChat = await api("POST", "/chats", user, { device_id: freeDevice.json?.device.id, workspace: "/tmp/ws" });
+const freeAgentChat = await api("POST", "/chats", user, { device_id: freeDevice.json?.device.id, workspace: "/tmp/ws", any_lang: true });
 const freeAgent = await ask_in(user, freeAgentChat.json?.chat.id, "show policy");
 check("a lifted account's desktop chat uses the desktop plain profile", /agent=salam-agent-raw/.test(freeAgent), freeAgent);
 check("without the Salam policy text in the desktop chat", !/system=salam/.test(freeAgent), freeAgent);
@@ -81,7 +82,7 @@ check("other users keep the limit in the desktop agent too", /agent=salam-agent 
 
 const listed = await api("GET", `/admin/users?q=${encodeURIComponent(email)}`, admin);
 const row = listed.json?.users?.[0];
-check("the admin list splits the dollar cost", row?.cost_in > 0 && row?.cost_out > 0 && Math.abs(row.cost_in + row.cost_out - 0.0036) < 0.0001, row);
+check("the admin list splits the dollar cost", row?.cost_in > 0 && row?.cost_out > 0 && Math.abs(row.cost_in + row.cost_out - 0.0048) < 0.0001, row);
 
 const summary = await api("GET", "/admin/summary", admin);
 const all = summary.json?.usage?.find((p) => p.key === "all");
@@ -96,12 +97,13 @@ const cancel = await api("DELETE", `/admin/subscriptions/${gift.json.subscriptio
 check("the plan is canceled", cancel.res.status === 200 || cancel.res.status === 204, cancel.res.status);
 check("a free account is under the Salam-only policy again", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
 
-check("python in an unlabeled fence is sent back to be written in Salam", (await ask(user, "review then fix please")).startsWith("Rewritten in Salam"));
-const spread = (await api("POST", "/chats", user, {})).json.chat.id;
+const fresh = await account(`policy-fresh-${Date.now()}@test.ir`, "Fresh User");
+check("python in an unlabeled fence is sent back to be written in Salam", (await ask(fresh, "review then fix please")).startsWith("Rewritten in Salam"));
+const spread = (await api("POST", "/chats", fresh, {})).json.chat.id;
 const askMore = async (text) => {
-  const sent = await api("POST", `/chats/${spread}/messages`, user, { text });
+  const sent = await api("POST", `/chats/${spread}/messages`, fresh, { text });
   for (let i = 0; i < 150; i += 1) {
-    const r = await api("GET", `/chats/${spread}/messages/${sent.json.assistant.id}`, user);
+    const r = await api("GET", `/chats/${spread}/messages/${sent.json.assistant.id}`, fresh);
     if (r.json?.status && r.json.status !== "pending") return r.json.body;
     await sleep(300);
   }

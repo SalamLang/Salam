@@ -72,8 +72,16 @@ async function guestAnswered(tok, mid) {
   });
 }
 
+const adminEmail = process.env.ADMIN_EMAIL ?? "admin@test.ir";
+const adminReg = await api("POST", "/auth/register", undefined, { name: "Admin", email: adminEmail, password: "password-123" });
+const adminToken = adminReg.json?.token ?? (await api("POST", "/auth/login", undefined, { email: adminEmail, password: "password-123" })).json?.token;
+async function lift(email) {
+  const gift = await api("POST", "/admin/subscriptions", adminToken, { email, plan: "unlimited", note: "flow test" });
+  check("the account is lifted past the free plan caps", gift.res.status === 201, gift.json);
+}
 const email = `share-owner-${Date.now()}@test.ir`;
 const owner = await account(email, "Share Owner");
+await lift(email);
 const stranger = await account(`share-stranger-${Date.now()}@test.ir`, "Stranger");
 const chat = (await api("POST", "/chats", owner)).json.chat.id;
 const secretChat = (await api("POST", "/chats", owner)).json.chat.id;

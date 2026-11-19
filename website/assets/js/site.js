@@ -347,6 +347,21 @@
       }
     }
     const DIGIT = /[0-9\u06f0-\u06f9\u0660-\u0669]/;
+    const STYLE_UNITS = new Set([
+      "px",
+      "em",
+      "rem",
+      "vw",
+      "vh",
+      "vmin",
+      "vmax",
+      "fr",
+      "ms",
+      "s",
+      "deg",
+      "rad",
+      "turn",
+    ]);
     const identCp = (ch) =>
       ch === "_" ||
       /[A-Za-z0-9]/.test(ch) ||
@@ -409,6 +424,23 @@
           while (
             j < n &&
             (DIGIT.test(cps[j]) || cps[j] === "." || cps[j] === "_")
+          ) {
+            j += 1;
+          }
+          let u = j;
+          while (u < n && /[A-Za-z]/.test(cps[u])) {
+            u += 1;
+          }
+          if (
+            u > j &&
+            (u >= n || !identCp(cps[u])) &&
+            STYLE_UNITS.has(cps.slice(j, u).join(""))
+          ) {
+            j = u;
+          } else if (
+            u === j &&
+            (cps[j] === "%" || cps[j] === "\u066a") &&
+            (j + 1 >= n || /[\s,)\]}\u060c]/.test(cps[j + 1]))
           ) {
             j += 1;
           }

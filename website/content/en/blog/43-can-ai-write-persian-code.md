@@ -39,7 +39,7 @@ A Persian Salam program uses Persian keywords, Persian names and, if you like, P
     سبد خرید.بیفزا(کالا { نام = «چای»، تعداد = ۳، قیمت = ۶۰ })
     کل := جمع سبد(سبد خرید)
     سرچاپ «جمع کل:»، کل
-    اگر کل > ۳۰۰:
+    اگر کل بزرگتر ۳۰۰:
         سرچاپ «ارسال رایگان است»
     وگرنه:
         سرچاپ «هزینه‌ی ارسال اضافه می‌شود»
@@ -107,7 +107,7 @@ Normalization works in the other direction. The compiler treats Arabic and Persi
 تابع ریشه:
     تعداد کتاب‌ها := ۱۲
     سرچاپ تعداد كتاب ها + ۳
-    سرچاپ «یک» == «يک»
+    سرچاپ «یک» برابر «يک»
 پایان
 ```
 

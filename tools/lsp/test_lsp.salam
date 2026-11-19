@@ -51,6 +51,49 @@ func main:
 end
 `
 
+const SEM_PAGE := `page:
+    box:
+        columns = repeat(2, 1fr)
+        padding = 8, 16
+        transition = 150ms, ease out
+        width = 50%
+    end
+end
+`
+
+const SEM_COMPONENT := `component Demo(change):
+    box:
+        columns = repeat(2, 1fr)
+        padding = 8, 16
+        transition = 150ms, ease out
+        width = 50%
+    end
+end
+`
+
+const COMPONENT_STYLE_SRC := `component Demo(n):
+    box:
+        wid
+        hover bac
+        align = c
+        gap = 8
+    end
+end
+
+func main:
+    wid := 1
+    println wid
+end
+`
+
+const PUB_COMPONENT_STYLE_SRC := `pub component Demo(n):
+    box:
+        wid
+        align = c
+    end
+end
+`
+
 const QF_SEMA := `import math
 
 struct P:
@@ -885,6 +928,53 @@ func style_attrs(s: Server):
     s.notify("textDocument/didClose", doc_id(uri))
 end
 
+func sem_data(s: Server, uri: str, text: str): value.Value:
+    did_open(s, uri, text)
+    _wait := s.diagnostics(uri)
+    ret jpath(s.request("textDocument/semanticTokens/full", doc_id(uri)), "result.data")
+end
+
+func component_attrs(s: Server):
+    uri := uri_of(g_root + "/tests/lsp/qf/style_component.salam")
+    did_open(s, uri, COMPONENT_STYLE_SRC)
+    _wait := s.diagnostics(uri)
+    names := labels(res(s.request("textDocument/completion", at(uri, pos(COMPONENT_STYLE_SRC, "wid\n", 3)))))
+    check("component: attribute names", has_item(names, "width") and not has_item(names, "gap"), head(joined(sorted_strs(names)), 300))
+    states := labels(res(s.request("textDocument/completion", at(uri, pos(COMPONENT_STYLE_SRC, "hover bac", 9)))))
+    check("component: state prefix then attribute", has_item(states, "hover background"), head(joined(sorted_strs(states)), 300))
+    vals := labels(res(s.request("textDocument/completion", at(uri, pos(COMPONENT_STYLE_SRC, "align = c", 9)))))
+    check("component: keyword values of one attribute", has_item(vals, "center") and not has_item(vals, "stretch"), head(joined(sorted_strs(vals)), 300))
+    s.notify("textDocument/didClose", doc_id(uri))
+
+    pub_uri := uri_of(g_root + "/tests/lsp/qf/style_pub_component.salam")
+    did_open(s, pub_uri, PUB_COMPONENT_STYLE_SRC)
+    _pub_wait := s.diagnostics(pub_uri)
+    pub_names := labels(res(s.request("textDocument/completion", at(pub_uri, pos(PUB_COMPONENT_STYLE_SRC, "wid\n", 3)))))
+    check("component: attribute names in a pub component", has_item(pub_names, "width") and not has_item(pub_names, "gap"), head(joined(sorted_strs(pub_names)), 300))
+    pub_vals := labels(res(s.request("textDocument/completion", at(pub_uri, pos(PUB_COMPONENT_STYLE_SRC, "align = c", 9)))))
+    check("component: keyword values in a pub component", has_item(pub_vals, "center") and not has_item(pub_vals, "stretch"), head(joined(sorted_strs(pub_vals)), 300))
+    s.notify("textDocument/didClose", doc_id(pub_uri))
+
+    page_uri := uri_of(g_root + "/tests/lsp/qf/sem_page.salam")
+    comp_uri := uri_of(g_root + "/tests/lsp/qf/sem_component.salam")
+    a := sem_data(s, page_uri, SEM_PAGE)
+    b := sem_data(s, comp_uri, SEM_COMPONENT)
+    mut same := jlen(a) > 5 and jlen(a) == jlen(b)
+    mut unit_whole := false
+    repeat jlen(a) in i:
+        if i >= 5 and same and jint(jidx(a, i)) != jint(jidx(b, i)):
+            same = false
+        end
+        if i % 5 == 2 and jint(jidx(a, i)) == 5:
+            unit_whole = true
+        end
+    end
+    check("component: semantic tokens of a body match a page body", same, str.FromInt(jlen(a) as i64) + " vs " + str.FromInt(jlen(b) as i64))
+    check("component: 150ms is one token", unit_whole, str.FromInt(jlen(a) as i64))
+    s.notify("textDocument/didClose", doc_id(page_uri))
+    s.notify("textDocument/didClose", doc_id(comp_uri))
+end
+
 func switch_lint(exe: str):
     path := g_root + "/tests/lsp/qf/switch_lint.salam"
     repeat 2 in m:
@@ -1247,6 +1337,7 @@ func main:
     quick_fixes(s)
     interfaces(s)
     style_attrs(s)
+    component_attrs(s)
     package_check(s)
     code := s.stop()
     check("shutdown then exit ends with status 0", code == 0, "")

@@ -28,7 +28,7 @@ date: 2026-11-11
 
 ## یک برنامه به فارسی و به انگلیسی {#twin-programs}
 
-این یک برنامه‌ی کوچک به انگلیسی است: یک جداشمار، یک ساختار، تابعی با نام دوکلمه‌ای، آرایه‌ای از ساختارهای لفظی، حلقه‌ی `each` و عبارت `match`.
+این یک برنامه‌ی کوچک به انگلیسی است: یک جداشمار، یک ساختار، تابعی با نام دوکلمه‌ای (با خط زیر)، آرایه‌ای از ساختارهای لفظی، حلقه‌ی `each` و عبارت `match`.
 
 ```salam
 enum Box: Small, Medium, Large end
@@ -39,11 +39,11 @@ struct Order:
     pub count: int
 end
 
-func line total(o: Order): int:
+func line_total(o: Order): int:
     ret o.price * o.count
 end
 
-func box for(total: int): Box:
+func box_for(total: int): Box:
     if total >= 500:
         ret Box.Large
     else total >= 200:
@@ -60,11 +60,11 @@ func main:
     ]
     mut sum := 0
     each o in orders:
-        t := line total(o)
+        t := line_total(o)
         println o.item, t
         sum += t
     end
-    packing := match box for(sum):
+    packing := match box_for(sum):
         Small: "a small box" end
         Medium: "a medium box" end
         Large: "a large box" end

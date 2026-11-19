@@ -97,6 +97,10 @@ func probe_path(language: str): str:
     ret FIXTURES + "/probe_" + language + ".salam"
 end
 
+func component_path(language: str): str:
+    ret FIXTURES + "/probe_component_" + language + ".salam"
+end
+
 func parse_driver_json(text: str, path: str, out &: Styles, reason &: str): bool:
     mut v := value.ValueNull()
     try:
@@ -311,6 +315,8 @@ func rows(): Vector<Row>:
     out.Push(Row { category = "dimension", en = "1fr", fa = "۱fr" })
     out.Push(Row { category = "dimension", en = "50vw", fa = "۵۰vw" })
     out.Push(Row { category = "dimension", en = "200ms", fa = "۲۰۰ms" })
+    out.Push(Row { category = "dimension", en = "150ms", fa = "۱۵۰ms" })
+    out.Push(Row { category = "dimension", en = "0.3s", fa = "۰.۳s" })
     out.Push(Row { category = "dimension", en = "45deg", fa = "۴۵deg" })
     out.Push(Row { category = "dimension", en = "0.5turn", fa = "۰.۵turn" })
     out.Push(Row { category = "colour", en = "#3366aa", fa = "#3366aa" })
@@ -435,6 +441,56 @@ func compare(
     distinct.Free()
 end
 
+func compare_components(
+    per_language &: Vector<Styles>, in_components &: Vector<Styles>, problems &: Vector<str>
+):
+    mut which := 0
+    until which < in_components.Len():
+        page := per_language.Get(which)
+        comp := in_components.Get(which)
+        mut i := 0
+        until i < comp.tokens.Len():
+            token := comp.tokens.Get(i)
+            mut j := 0
+            until j < page.tokens.Len():
+                if page.tokens.Get(j) == token and page.styles.Get(j) != comp.styles.Get(i):
+                    problems.Push(
+                        "component: \"" + token + "\" (" + language_name(which) + ") is " + comp.styles.Get(i) + " in a component but " + page.styles.Get(j) + " in a page"
+                    )
+                end
+                j++
+            end
+            i++
+        end
+        text := io.ReadFile(component_path(language_name(which)))
+        mut table := rows()
+        mut r := 0
+        until r < table.Len():
+            token := spelling(table.Get(r), which)
+            if (table.Get(r).category == "dimension" or table.Get(r).category == "percent" or table.Get(r).category == "colour") and str.Contains(text, token):
+                mut in_page := false
+                mut in_comp := false
+                mut k := 0
+                until k < page.tokens.Len():
+                    if page.tokens.Get(k) == token: in_page = true end
+                    k++
+                end
+                k = 0
+                until k < comp.tokens.Len():
+                    if comp.tokens.Get(k) == token: in_comp = true end
+                    k++
+                end
+                if in_page and not in_comp:
+                    problems.Push("component: \"" + token + "\" (" + language_name(which) + ") is not one token in a component")
+                end
+            end
+            r++
+        end
+        table.Free()
+        which++
+    end
+end
+
 func check(engine: int, name: str, definitions: str): int:
     println name + ":"
     mut per_language := Vector {} as Vector<Styles>
@@ -461,10 +517,25 @@ func check(engine: int, name: str, definitions: str): int:
         ret 1
     end
 
+    mut in_components := Vector {} as Vector<Styles>
+    mut which_c := 0
+    until which_c < 2:
+        mut found := Styles {}
+        mut reason := ""
+        if not read_styles(engine, component_path(language_name(which_c)), definitions, found, reason):
+            println "  FAIL: " + reason
+            broken = true
+        end
+        in_components.Push(found)
+        which_c++
+    end
+
     mut problems := Vector {} as Vector<str>
     mut cat_names := Vector {} as Vector<str>
     mut cat_styles := Vector {} as Vector<str>
     compare(per_language, problems, cat_names, cat_styles)
+    compare_components(per_language, in_components, problems)
+    if broken: problems.Push("a component probe could not be read") end
 
     mut order := sorted_categories()
     mut o := 0
@@ -500,6 +571,13 @@ func check(engine: int, name: str, definitions: str): int:
         f++
     end
     per_language.Free()
+    mut fc := 0
+    until fc < in_components.Len():
+        mut cs := in_components.Get(fc)
+        styles_free(cs)
+        fc++
+    end
+    in_components.Free()
     problems.Free()
     cat_names.Free()
     cat_styles.Free()

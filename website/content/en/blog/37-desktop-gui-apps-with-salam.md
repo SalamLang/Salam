@@ -160,21 +160,27 @@ body 8 21 1008 81
     button#add "+1" focused 8 80 36 22
 ```
 
-You can also drive `gui.ui` from an ordinary program. `Handle` registers a named handler, the view is a function that returns the document, and the `headless` and `script` options run it without a display, which is how this example runs on the website's build machine:
+You can also drive `gui.ui` from an ordinary program. A `Builder` builds the elements and event handlers (`Open`, `On`), `RunPageWith` runs the view, and the `headless` and `script` options run it without a display, which is how this example runs on the website's build machine:
 
 ```salam
 import gui.ui
 
 mut done := 0
 
-func view(): str:
-    ret `<!doctype html><html><head><title>Tasks</title></head><body><h1>Done: ` + done + `</h1><button id="finish" onclick="finish()">Finish one</button></body></html>`
+func view(b: ui.Builder):
+    b.Title("Tasks")
+    b.Open("box")
+    b.Open("button")
+    b.Id("finish")
+    b.Text("Finish one")
+    b.On("click", (): done++ end)
+    b.Close()
+    b.Close()
 end
 
 func main:
-    ui.Handle("finish", (): done++ end)
     opts := ui.Options { title = "Tasks", width = 320.0, height = 200.0, headless = true, script = "click #finish\nclick #finish\nquit" }
-    ui.RunWith((): ret view() end, opts)
+    ui.RunPageWith((): ret ui.NoPatches() end, (b: ui.Builder): view(b) end, opts)
     println "tasks finished:", done
 end
 ```

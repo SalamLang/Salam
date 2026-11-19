@@ -2093,30 +2093,30 @@ When the compiler complains, fix the code; do not try to suppress the check.
 
 General mapping that applies to all source languages:
 
-| Source concept               | Salam                                                                                       |
-| ---------------------------- | ------------------------------------------------------------------------------------------- |
-| class                        | `struct` with `pub` fields + methods (`this` receiver)                                      |
-| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                                 |
-| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`            |
-| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining                   |
-| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                                      |
-| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                                      |
-| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                              |
-| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                                         |
-| set                          | `Set<T>`                                                                                    |
-| tuple / record               | small `struct`, or `Pair`, or `A or B` for sum types                                        |
-| string ops                   | `str.*` package + `+` concatenation + `len()`                                               |
+| Source concept               | Salam                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------ |
+| class                        | `struct` with `pub` fields + methods (`this` receiver)                                     |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                                |
+| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`           |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining                  |
+| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                                     |
+| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                                     |
+| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                             |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                                        |
+| set                          | `Set<T>`                                                                                   |
+| tuple / record               | small `struct`, or `Pair`, or `A or B` for sum types                                       |
+| string ops                   | `str.*` package + `+` concatenation + `len()`                                              |
 | exception / error            | `func f(): T throw`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
-| null / nil / None            | `null` (pointers) or `core.None()`                                                          |
-| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                 |
-| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `A or B or …`                    |
-| module / package / import    | `package name` + `import pkg` (only `pub` exported)                                         |
-| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`                    |
-| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)                  |
-| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)                 |
-| `for i in range(n)`          | `repeat n in i:`                                                                            |
-| `for x in xs`                | `each x in xs:`                                                                             |
-| destructor / cleanup         | `defer x.Free()`                                                                            |
+| null / nil / None            | `null` (pointers) or `core.None()`                                                         |
+| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `A or B or …`                   |
+| module / package / import    | `package name` + `import pkg` (only `pub` exported)                                        |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`                   |
+| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)                 |
+| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)                |
+| `for i in range(n)`          | `repeat n in i:`                                                                           |
+| `for x in xs`                | `each x in xs:`                                                                            |
+| destructor / cleanup         | `defer x.Free()`                                                                           |
 
 ### From PHP
 
@@ -2433,7 +2433,7 @@ the element.
 
 **Style standard, not CSS.** Salam has its own style vocabulary in the spirit of
 QML, defined in `docs/design/UI_DSL.md` and listed with values, defaults and
-Persian names in `tools/salam/style-properties.tsv` (website: `/learn/style-reference/`).
+Persian names in `tools/salam/style-properties.tsv` (site: `/learn/style-reference/`).
 Every property works on both targets. Write the standard names and never raw
 CSS: there is no `style:` element, no `inline style`, no `global:` rules and no
 CSS strings. The web target turns the standard into CSS for you.
@@ -3251,7 +3251,7 @@ the C names declared in `درون‌داد`.
 Two Persian words have two meanings, told apart by position:
 
 - `تا` is `until` at the start of a statement and `to` inside a `تکرار`
-  header: `تا ک < ۳:` loops while `ک < ۳`; `تکرار ۱ تا ۵ در ای:` counts 1..5.
+  header: `تا ک کوچکتر ۳:` loops while `ک کوچکتر ۳`; `تکرار ۱ تا ۵ در ای:` counts 1..5.
   Persian `تا` reads naturally as "while", so the §2 polarity trap is less
   likely, but the rule is the same: the loop runs **while** the condition
   holds.
@@ -3390,14 +3390,14 @@ Give your own `pub` API both spellings the same way:
     نام := "سارا"                        // immutable
     ناپایا ک := ۰                        // mutable
     ع := ۲.۵ برگردان اعشار۶۴             // cast with برگردان
-    اگر ک > ۱۰ و ک < ۲۰:
+    اگر ک بزرگتر ۱۰ و ک کوچکتر ۲۰:
         سرچاپ "بین"
-    وگرنه ک == ۰:                        // else-if
+    وگرنه ک برابر ۰:                        // else-if
         سرچاپ "صفر"
     وگرنه:
         سرچاپ "دیگر"
     پایان
-    تا ک < ۳:                            // while
+    تا ک کوچکتر ۳:                            // while
         ک++
     پایان
     تکرار ۳:                             // three times
@@ -3450,7 +3450,7 @@ More forms, each checked with the current compiler:
 // lambdas: no return type, captured by value
 دوبرابر := (ع: صحیح): برگشت ع * ۲ پایان
 رده := (نمره: صحیح):
-    برگشت نمره >= ۱۰ ? "قبول" : "مردود"
+    برگشت نمره بزرگتربرابر ۱۰ ? "قبول" : "مردود"
 پایان
 تابع به‌کاربردن(ر: تابع (صحیح) صحیح، مقدار: صحیح): صحیح:
     برگشت ر(مقدار)
@@ -3464,18 +3464,18 @@ More forms, each checked with the current compiler:
 تابع مساحت(ش: شکل): اعشار۶۴:
     برگشت همخوان ش:
         دایره(ر): ۳.۱۴ * ر * ر پایان
-        مستطیل(پ، ب) اگر پ == ب: پ * پ پایان
+        مستطیل(پ، ب) اگر پ برابر ب: پ * پ پایان
         مستطیل(پ، ب): پ * ب پایان
     پایان
 پایان
 
 // switch on true replaces an if chain
 ترابرد درست:
-    ک < ۰:
+    ک کوچکتر ۰:
         سرچاپ "منفی"
         بشکن
     پایان
-    ک == ۳ یا ک == ۴:
+    ک برابر ۳ یا ک برابر ۴:
         سرچاپ "سه یا چهار"
         بشکن
     پایان
@@ -3489,7 +3489,7 @@ More forms, each checked with the current compiler:
     تابع رتبه(): صحیح: برگشت طول(این) پایان
 پایان
 تابع بالاتر<ت: رتبه‌دار>(الف: ت، ب: ت): صحیح:
-    اگر الف.رتبه() > ب.رتبه():
+    اگر الف.رتبه() بزرگتر ب.رتبه():
         برگشت الف.رتبه()
     پایان
     برگشت ب.رتبه()
@@ -3628,9 +3628,9 @@ A command-line program with a struct, a vector, a map and a match:
 پایان
 
 تابع سطح از(نمره: صحیح): سطح:
-    اگر نمره >= ۱۷:
+    اگر نمره بزرگتربرابر ۱۷:
         برگشت سطح.زیاد
-    وگرنه نمره >= ۱۲:
+    وگرنه نمره بزرگتربرابر ۱۲:
         برگشت سطح.متوسط
     پایان
     برگشت سطح.کم

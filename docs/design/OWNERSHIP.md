@@ -137,6 +137,8 @@ reported, because std offers no way to free its fields. Free it with
 `mem.Free(u.name as void*)`, or return or store `u` so its new owner frees it.
 Any use of `u` as a whole (passing it, returning it, copying it) counts as
 handing it on.
+A bare statement that calls such a function (`ask()` on its own) is rejected
+the same way, because nothing holds the result.
 
 `--ownership=off|on|warn|error` picks the mode; `warn` is the default.
 `on` reports the errors plus W142 and W143; `warn` adds W144, which needs a

@@ -105,7 +105,7 @@ async function voiceSection() {
   const heard = await sent(7007, from, /^I heard: "hello "world", this is a test"$/);
   check("a voice note is transcribed and shown back", !!heard, textsTo(await log(), 7007).slice(-3));
   check("the transcript is a reply to the voice message", heard?.args.reply_parameters?.message_id === mid, heard?.args);
-  check("the transcript is then answered like a typed message", !!(await sent(7007, from, /Echo: hello/)));
+  check("the transcript is then answered like a typed message", !!(await sent(7007, from, /Echo: hello|Tool said/)));
   const first = (await mode("ok")).last;
   check("the speech service got the exact audio in the bot language", first?.size === ogg.length && first.language === "en" && first.authorized, first);
   check("a voice note was fetched from the file endpoint", (await downloads()).some((d) => d.path === "voice/file_1.oga" && d.tokenOk));
@@ -119,7 +119,7 @@ async function voiceSection() {
   from = await mark();
   await media(7007, "audio", { file_id: "a1", file_size: mp3.length, duration: 20, title: "Song", performer: "Band", mime_type: "audio/mpeg", file_name: "song.mp3" });
   check("an mp3 audio file is accepted", !!(await sent(7007, from, /^I heard: /)));
-  await lastText(7007, /Echo: hello/);
+  await lastText(7007, /Echo: hello|Tool said/);
 
   from = await mark();
   await media(7007, "document", { file_id: "w1", file_size: wav.length, mime_type: "audio/x-wav", file_name: "clip.wav" });
@@ -127,7 +127,7 @@ async function voiceSection() {
   from = await mark();
   await media(7007, "video_note", { file_id: "n1", file_size: mp4.length, duration: 5, length: 240 });
   check("a video note is accepted", !!(await sent(7007, from, /^I heard: /)));
-  await lastText(7007, /Echo: hello/);
+  await lastText(7007, /Echo: hello|Tool said/);
 
   from = await mark();
   await media(7007, "document", { file_id: "pdf", file_size: 14, mime_type: "application/pdf", file_name: "a.pdf" });
@@ -140,7 +140,7 @@ async function voiceSection() {
   from = await mark();
   await media(7007, "audio", { file_id: "a1", file_size: mp3.length, duration: 20, mime_type: "audio/mpeg" });
   check("music with no speech says lyrics may be missed", !!(await sent(7007, from, /Only speech is converted into text, so song lyrics may be missed/)));
-  check("an empty transcript is not sent to the assistant", !(await log()).slice(from).some((c) => c.method === "sendMessage" && /Echo/.test(c.args.text ?? "")));
+  check("an empty transcript is not sent to the assistant", !(await log()).slice(from).some((c) => c.method === "sendMessage" && /Echo|Tool said/.test(c.args.text ?? "")));
 
   await mode("ok");
   from = await mark();
@@ -202,7 +202,7 @@ async function voiceSection() {
   check("with the speech service down the user is told to send text", !!(await sent(9009, from, /Voice messages are not available right now\. Please send your message as text/)));
   check("nothing is fetched while voice is off", !(await log()).slice(from).some((c) => c.method === "getFile"));
   await say(9009, "typed text still works");
-  check("typed messages keep working while voice is off", !!(await lastText(9009, /Echo: typed text still works/)));
+  check("typed messages keep working while voice is off", !!(await lastText(9009, /Echo: typed text still works|Tool said/)));
   await mode("ok");
   await sleep(1500);
 
@@ -226,7 +226,7 @@ async function voiceSection() {
   await media(8008, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
   check("a guest in Persian is answered in Persian", !!(await sent(8008, from, /^شنیدم: «/)));
   check("the language sent to the service follows the bot language", (await mode("ok")).last.language === "fa");
-  await lastText(8008, /Echo:/);
+  await lastText(8008, /Echo:|Tool said/);
   await sleep(500);
   for (const n of [1, 2]) {
     from = await mark();
@@ -263,11 +263,11 @@ async function main() {
   check("welcome has a login button", /\/telegram\?code=[0-9a-f]{32}$/.test(loginUrl), loginUrl);
 
   await say(1001, "hello bot");
-  const answer = await lastText(1001, /Echo:/);
+  const answer = await lastText(1001, /Echo:[\s\S]*Guest messages left/);
   check("guest gets an answer", !!answer, textsTo(await log(), 1001));
 
   await say(1001, "second one");
-  await lastText(1001, /Guest messages/);
+  await lastText(1001, /Guest messages are used up/);
   await sleep(500);
   await say(1001, "third one");
   const limited = await lastText(1001, /message limit/);

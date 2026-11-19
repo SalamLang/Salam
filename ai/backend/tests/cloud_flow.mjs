@@ -60,8 +60,13 @@ async function ask(token, chat, text) {
 async function main() {
   const email = `cloud-${Date.now()}@test.ir`;
   const tgid = 7000000 + (Date.now() % 1000000);
+  const adminEmail = process.env.ADMIN_EMAIL ?? "admin@test.ir";
+  const adminReg = await api("POST", "/auth/register", null, { name: "Admin", email: adminEmail, password: "password-123" });
+  const adminToken = adminReg.json?.token ?? (await api("POST", "/auth/login", null, { email: adminEmail, password: "password-123" })).json?.token;
   const reg = await api("POST", "/auth/register", null, { name: "Cloud Dev", email, password: "password123" });
   const token = reg.json.token;
+  const gift = await api("POST", "/admin/subscriptions", adminToken, { email, plan: "unlimited", note: "cloud flow" });
+  check("the account is lifted past the free plan caps", gift.res.status === 201, gift.json);
 
   const overview = await api("GET", "/integrations", token);
   check("sandbox and token storage are on", overview.json?.sandbox === true && overview.json?.storage === true, overview.json);
@@ -121,7 +126,9 @@ async function main() {
   r = await ask(token, chat, 'tool: github_api {"path": "/user/keys"}');
   check("credential endpoints are blocked", /manages account credentials/.test(r.body ?? ""), r);
 
-  const mreg = await api("POST", "/auth/register", null, { name: "Mcp Dev", email: `mcp-${Date.now()}@test.ir`, password: "password123" });
+  const mcpEmail = `mcp-${Date.now()}@test.ir`;
+  const mreg = await api("POST", "/auth/register", null, { name: "Mcp Dev", email: mcpEmail, password: "password123" });
+  await api("POST", "/admin/subscriptions", adminToken, { email: mcpEmail, plan: "unlimited", note: "cloud flow" });
   const mtoken = mreg.json.token;
   await api("POST", "/integrations/github/token", mtoken, { token: GH_TOKEN });
   const mchat = (await api("POST", "/chats", mtoken, { cloud: true })).json.chat.id;

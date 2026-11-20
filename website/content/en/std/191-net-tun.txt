@@ -1,0 +1,379 @@
+pkg.en = net/tun
+pkg.name = net.tun
+pkg.group = Network
+pkg.summary = Full device VPN mode: a tun device on Linux, macOS and Windows, split routes, DNS capture and a NAT that hands every TCP connection to a net.tunnel dialer.
+pkg.title = The net.tun package in Salam | Full device VPN mode
+pkg.description = The net.tun package in Salam: a layer 3 tun device on Linux, macOS (utun) and Windows (Wintun), split routes, DNS capture, TLS and HTTP host sniffing and a system stack NAT that sends every TCP connection through a net.tunnel dialer, with examples.
+pkg.import = net.tun
+pkg.intro <<
+<p><code>net.tun</code> gives a VPN app full device mode: every application on the machine goes through the tunnel, not only the ones that honour the system proxy. It creates a layer 3 tunnel device (<code>/dev/net/tun</code> on Linux, utun on macOS, a Wintun adapter on Windows), points the default routes at it and turns the IP packets that arrive into ordinary TCP connections, which it hands to any <code>net.tunnel</code> dialer: a router with direct, proxy and block rules, a VLESS, VMess, Trojan or Shadowsocks dialer, or a chain.</p>
+<p>It has no TCP stack of its own. Like the system stack of sing-tun, it rewrites the addresses of each TCP packet so the connection lands on a local listener, and the kernel does all of TCP. Only IP and TCP headers are touched, with incremental checksum updates, so throughput stays close to the kernel.</p>
+<pre class="code"><code>app -&gt; 1.1.1.1:443                        kernel TCP
+  |  routes 0.0.0.0/1, 128.0.0.0/1             ^
+  v                                            |
+tun device -&gt; Nat.Rewrite: 172.19.0.2:10000 -&gt; 172.19.0.1:listener
+                                               |
+listener accepts, Nat.Lookup(10000) = 1.1.1.1:443, sniff SNI, dialer.Dial(host:443)</code></pre>
+<p>Things to know:</p>
+<ul>
+<li><strong>It needs privileges.</strong> Root or CAP_NET_ADMIN on Linux, root on macOS, administrator rights and <code>wintun.dll</code> next to the executable on Windows (download it from wintun.net). Call <code>Available</code> first and show its reason.</li>
+<li><strong>Exclude your servers.</strong> Put the VPN server names or addresses in <code>exclude</code>. They are resolved before the routes change and keep a route through the old gateway. For <code>direct</code> rules use <code>Bypass</code>, which binds to the physical interface.</li>
+<li><strong>TCP and DNS only.</strong> UDP queries to port 53 are answered through the dialer over TCP. Other UDP (QUIC, games, calls) and ICMP are dropped, so browsers fall back to TCP. IPv6 is blocked rather than leaked.</li>
+<li><strong>Routes never replace the default route.</strong> Two /1 routes win over it and <code>Stop</code> removes everything it added. If the process is killed, the Linux and Windows device disappears with it; host routes for excluded servers stay until reboot.</li>
+<li><strong>Linux is tested end to end</strong> by <code>tools/interop/tun_e2e.sh</code> in a container. The macOS and Windows device code is type checked for every target.</li>
+</ul>
+<h2 id="guide-vpn-app">Full device mode in a VPN app</h2>
+<p>Build the same router dialer you would give a local SOCKS inbound, but use <code>Bypass()</code> for the <code>direct</code> tag so direct traffic leaves through the physical interface instead of looping back into the tunnel. Pass the VPN server in <code>exclude</code>, start the session when the user flips the switch and stop it when they flip it back or the app quits.</p>
+<pre class="code"><code>import net.tun
+import net.tunnel
+
+func start_full_device(proxy: dyn tunnel.Dialer, server: str): tun.Session:
+    av := tun.Available()
+    if not av.ok:
+        println "full device mode is off:", av.reason
+        ret tun.Session {}
+    end
+    rules := tunnel.ParseRules("domain:ir direct\nprivate direct", "proxy")
+    mut router := tunnel.NewRouterDialer(rules.router)
+    tunnel.RouterDialerAdd(router, "direct", tun.Bypass())
+    tunnel.RouterDialerAdd(router, "block", tunnel.Block())
+    tunnel.RouterDialerAdd(router, "proxy", proxy)
+    mut servers := Vector {} as Vector&lt;str&gt;
+    servers.Push(server)
+    s := tun.Start(tun.Options { dialer = router, exclude = servers })
+    if not s.ok:
+        println "could not start:", s.error
+    end
+    ret s
+end
+
+func main():
+    s := start_full_device(tunnel.Direct(), "vpn.example.com")
+    if s.ok:
+        st := tun.SessionStats(s)
+        println st.connections, st.dns_queries
+        tun.Stop(s)
+    end
+end</code></pre>
+<p>Show <code>Available().reason</code> next to a disabled switch when the process lacks the rights; a desktop app usually starts a small privileged helper for this mode. Read <code>SessionStats</code> on a timer for the traffic counters.</p>
+<h2 id="guide-raw-device">Handling packets yourself</h2>
+<p><code>OpenDevice</code> gives a bare device with no address, routes or stack: each <code>Read</code> returns one IP packet and each <code>Write</code> injects one. Combine it with <code>Parse</code>, <code>Nat</code> and the packet builders to write your own stack, a packet logger or a test harness. Configure the address and routes yourself, or look at what <code>BuildPlan</code> would run.</p>
+<pre class="code"><code>import mem
+import sync
+import net.tun
+
+func main():
+    dev := tun.OpenDevice("salam0", 1500)
+    if not dev.ok:
+        println dev.error
+        ret
+    end
+    nat := tun.NewNat("172.19.0.1", "172.19.0.2", 7000, 0)
+    buf := mem.Allocate(65536 as u64)
+    repeat 1000:
+        n := dev.Read(buf, 65536, 200)
+        if n &gt; 0:
+            info := tun.Parse(buf, n)
+            println info.src, info.sport, "-&gt;", info.dst, info.dport
+            if nat.Rewrite(buf, n, sync.NowMs()) == tun.ACTION_REPLY:
+                _w := dev.Write(buf, n)
+            end
+        end
+    end
+    mem.Free(buf)
+    tun.FreeNat(nat)
+    dev.Close()
+end</code></pre>
+>>
+doc.PROTO_ICMP = IP protocol number of ICMP for IPv4 (1).
+ex.PROTO_ICMP = net-tun-Packet
+doc.PROTO_TCP = IP protocol number of TCP (6).
+ex.PROTO_TCP = net-tun-Packet
+doc.PROTO_UDP = IP protocol number of UDP (17).
+ex.PROTO_UDP = net-tun-Packet
+doc.PROTO_ICMP6 = IP protocol number of ICMPv6 (58).
+ex.PROTO_ICMP6 = net-tun-Packet
+doc.TCP_FIN = TCP flag bit FIN: the sender has finished sending.
+ex.TCP_FIN = net-tun-Packet
+doc.TCP_SYN = TCP flag bit SYN: opens a connection.
+ex.TCP_SYN = net-tun-Packet
+doc.TCP_RST = TCP flag bit RST: resets a connection.
+ex.TCP_RST = net-tun-Packet
+doc.TCP_PSH = TCP flag bit PSH.
+ex.TCP_PSH = net-tun-Packet
+doc.TCP_ACK = TCP flag bit ACK: the acknowledgement number is valid.
+ex.TCP_ACK = net-tun-Packet
+doc.PacketInfo = What <code>Parse</code> read from one IP packet: version, protocol, addresses, ports, TCP flags and where the payload starts.
+ex.PacketInfo = net-tun-Packet
+doc.PacketInfo.valid = False when the bytes are not a complete IPv4 or IPv6 packet.
+ex.PacketInfo.valid = -
+doc.PacketInfo.version = 4 or 6.
+ex.PacketInfo.version = -
+doc.PacketInfo.proto = The transport protocol number, for example <code>PROTO_TCP</code>.
+ex.PacketInfo.proto = -
+doc.PacketInfo.src = Source address as text.
+ex.PacketInfo.src = -
+doc.PacketInfo.dst = Destination address as text.
+ex.PacketInfo.dst = -
+doc.PacketInfo.sport = Source port for TCP and UDP, 0 otherwise.
+ex.PacketInfo.sport = -
+doc.PacketInfo.dport = Destination port for TCP and UDP, 0 otherwise.
+ex.PacketInfo.dport = -
+doc.PacketInfo.flags = The TCP flag bits, see <code>TCP_SYN</code> and the others.
+ex.PacketInfo.flags = -
+doc.PacketInfo.header_len = Length of the IP header in bytes.
+ex.PacketInfo.header_len = -
+doc.PacketInfo.payload_offset = Offset of the transport payload from the start of the packet.
+ex.PacketInfo.payload_offset = -
+doc.PacketInfo.payload_len = Length of the transport payload.
+ex.PacketInfo.payload_len = -
+doc.PacketInfo.total = Total length of the packet from its header.
+ex.PacketInfo.total = -
+doc.PacketInfo.fragment = True for an IPv4 fragment. The stack drops fragments.
+ex.PacketInfo.fragment = -
+doc.Packet = A packet in native memory: a pointer and a length. Free it with <code>FreePacket</code>.
+ex.Packet = net-tun-Packet
+doc.Packet.data = Pointer to the bytes, or null when building failed.
+ex.Packet.data = -
+doc.Packet.len = Number of bytes.
+ex.Packet.len = -
+doc.Checksum = The Internet checksum (RFC 1071) of a byte range. A range that already holds a correct checksum gives 0.
+ex.Checksum = net-tun-Packet
+doc.ChecksumAdjust = Updates a checksum after one 16 bit word changed, without reading the rest of the data (RFC 1624, equation 3). The NAT uses it for every rewritten packet.
+ex.ChecksumAdjust = net-tun-Packet
+doc.FinishChecksums = Recomputes the IPv4 header checksum and the TCP or UDP checksum of a packet in place.
+ex.FinishChecksums = net-tun-Packet
+doc.ChecksumsOk = True when the IPv4 header checksum and the TCP or UDP checksum are both correct.
+ex.ChecksumsOk = net-tun-Packet
+doc.Parse = Reads the headers of an IPv4 or IPv6 packet into a <code>PacketInfo</code>.
+ex.Parse = net-tun-Packet
+doc.FreePacket = Frees the memory of a <code>Packet</code>.
+ex.FreePacket = net-tun-Packet
+doc.BuildTcp4 = Builds an IPv4 TCP segment with the given addresses, ports, sequence and acknowledgement numbers, flags and payload, with correct checksums.
+ex.BuildTcp4 = net-tun-Packet
+doc.BuildUdp4 = Builds an IPv4 UDP datagram with correct checksums. The stack uses it for DNS answers.
+ex.BuildUdp4 = net-tun-Packet
+doc.ACTION_DROP = <code>Rewrite</code> result: drop the packet.
+ex.ACTION_DROP = net-tun-Nat
+doc.ACTION_REPLY = <code>Rewrite</code> result: the packet was rewritten in place, write it back to the device.
+ex.ACTION_REPLY = net-tun-Nat
+doc.ACTION_DNS = <code>Rewrite</code> result: a UDP query to port 53, answer it yourself.
+ex.ACTION_DNS = net-tun-Nat
+doc.ACTION_IPV6 = <code>Rewrite</code> result: an IPv6 packet. The stack answers a TCP SYN with a reset so the app falls back to IPv4 at once.
+ex.ACTION_IPV6 = net-tun-Nat
+doc.NatEntry = One row of the NAT table: the original source and destination of a TCP connection.
+ex.NatEntry = net-tun-Nat
+doc.NatEntry.ok = False when no connection uses that port.
+ex.NatEntry.ok = -
+doc.NatEntry.src = The application side address.
+ex.NatEntry.src = -
+doc.NatEntry.sport = The application side port.
+ex.NatEntry.sport = -
+doc.NatEntry.dst = The address the application wanted to reach.
+ex.NatEntry.dst = -
+doc.NatEntry.dport = The port the application wanted to reach.
+ex.NatEntry.dport = -
+doc.Nat = The TCP translation table of the system stack. A connection from the app to <code>dst:dport</code> is rewritten to come from <code>next:nat_port</code> and go to the local listener, so the kernel itself runs TCP; replies get the original addresses back. The same addressing as the system stack of sing-tun.
+ex.Nat = net-tun-Nat
+doc.Nat.core = Native state. Create it with <code>NewNat</code>.
+ex.Nat.core = -
+doc.Nat.Rewrite = Rewrites one packet in place and returns one of the <code>ACTION_</code> values. <code>now_ms</code> is a clock in milliseconds used for timeouts.
+ex.Nat.Rewrite = -
+doc.Nat.Lookup = Finds the original addresses of the connection that uses a NAT port. The listener calls it with the peer port of each accepted connection.
+ex.Nat.Lookup = -
+doc.Nat.Sweep = Removes idle and closed connections and returns how many were removed.
+ex.Nat.Sweep = -
+doc.Nat.Active = Number of connections in the table.
+ex.Nat.Active = -
+doc.Nat.Port = The port of the local listener.
+ex.Nat.Port = -
+doc.NewNat = Creates a NAT for a device address, the next address of its subnet, the listener port and an idle timeout in milliseconds (0 means ten minutes).
+ex.NewNat = net-tun-Nat
+doc.FreeNat = Frees a NAT.
+ex.FreeNat = net-tun-Nat
+doc.DnsQuestion = The first question of a DNS query.
+ex.DnsQuestion = net-tun-Sniff
+doc.DnsQuestion.ok = False when the bytes are not a DNS query.
+ex.DnsQuestion.ok = -
+doc.DnsQuestion.id = The query id.
+ex.DnsQuestion.id = -
+doc.DnsQuestion.name = The name asked for, without the final dot.
+ex.DnsQuestion.name = -
+doc.DnsQuestion.qtype = The record type, 1 for A and 28 for AAAA.
+ex.DnsQuestion.qtype = -
+doc.SniffHost = Finds the host name in the first bytes of a connection: the SNI of a TLS ClientHello or the Host header of an HTTP request. Returns an empty string for anything else or an IP.
+ex.SniffHost = net-tun-Sniff
+doc.ParseDnsQuery = Reads the id and first question of a DNS query.
+ex.ParseDnsQuery = net-tun-Sniff
+doc.BuildDnsQuery = Builds a DNS query with recursion desired for a name and record type.
+ex.BuildDnsQuery = net-tun-Sniff
+doc.DEFAULT_ADDRESS = The default device address, 172.19.0.1. The DNS address inside the tunnel is the next one, 172.19.0.2.
+ex.DEFAULT_ADDRESS = net-tun-Plan
+doc.DEFAULT_ADDRESS6 = The IPv6 address given to the device on macOS and Windows so that IPv6 traffic reaches the stack and can be refused.
+ex.DEFAULT_ADDRESS6 = net-tun-Plan
+doc.DEFAULT_UPSTREAM = The default DNS server that hijacked queries are forwarded to over TCP through the dialer.
+ex.DEFAULT_UPSTREAM = net-tun-Plan
+doc.Options = Settings for <code>Start</code>.
+ex.Options = net-tun-Plan
+doc.Options.name = Interface name. Empty picks <code>salamtun</code>, or the next free <code>utunN</code> on macOS.
+ex.Options.name = -
+doc.Options.address = IPv4 address of the device. The next address must be in the same subnet.
+ex.Options.address = -
+doc.Options.prefix = Prefix length of the device subnet, 30 by default.
+ex.Options.prefix = -
+doc.Options.mtu = MTU of the device.
+ex.Options.mtu = -
+doc.Options.dialer = Where captured connections go, usually a <code>net.tunnel</code> router dialer. Without one every connection is refused.
+ex.Options.dialer = -
+doc.Options.exclude = Host names or IPv4 addresses that must keep using the real network, such as the VPN servers. They get host routes through the old gateway, so the dialer does not loop into the tunnel.
+ex.Options.exclude = -
+doc.Options.auto_route = Adds the routes. When false only the device and its address are set up.
+ex.Options.auto_route = -
+doc.Options.hijack_dns = Answers every UDP query to port 53 that enters the tunnel, and routes private DNS servers of the machine into the tunnel too.
+ex.Options.hijack_dns = -
+doc.Options.upstream = The DNS server, as <code>host:port</code>, that queries are sent to over TCP through the dialer.
+ex.Options.upstream = -
+doc.Options.set_system_dns = Points the system resolver at the DNS address inside the tunnel (systemd-resolved on Linux, the interface DNS on Windows).
+ex.Options.set_system_dns = -
+doc.Options.block_ipv6 = Stops IPv6 from leaking around the tunnel: unreachable routes on Linux, IPv6 routes into the device on macOS and Windows.
+ex.Options.block_ipv6 = -
+doc.Options.sniff = Reads the first bytes of each connection to find a TLS or HTTP host name, so domain rules of the router work.
+ex.Options.sniff = -
+doc.Options.sniff_ms = How long to wait for those bytes. Protocols where the server speaks first wait this long once.
+ex.Options.sniff_ms = -
+doc.Options.idle_ms = Idle timeout of a connection in milliseconds.
+ex.Options.idle_ms = -
+doc.Options.dial_ms = Connect timeout in milliseconds.
+ex.Options.dial_ms = -
+doc.Gateway = The default route of the machine: the gateway address and the interface.
+ex.Gateway = net-tun-Plan
+doc.Gateway.ok = False when no default route was found.
+ex.Gateway.ok = -
+doc.Gateway.ip = The gateway address, empty for a point to point link.
+ex.Gateway.ip = -
+doc.Gateway.iface = The interface name, empty on Windows.
+ex.Gateway.iface = -
+doc.Gateway.index = The interface index on Windows, 0 elsewhere.
+ex.Gateway.index = -
+doc.Plan = The commands that set the device up and take it down, as text lines. A line that starts with <code>-</code> may fail.
+ex.Plan = net-tun-Plan
+doc.Plan.up = Commands run by <code>Start</code>, in order.
+ex.Plan.up = -
+doc.Plan.down = Commands run by <code>Stop</code>.
+ex.Plan.down = -
+doc.ValidName = True for an interface name of 1 to 15 letters, digits, <code>-</code> or <code>_</code>.
+ex.ValidName = net-tun-Plan
+doc.NextAddress = The IPv4 address after the given one. The stack uses it as the NAT source and the DNS address.
+ex.NextAddress = net-tun-Plan
+doc.ParseLinuxRoutes = Finds the default gateway in the text of <code>/proc/net/route</code>, preferring the lowest metric.
+ex.ParseLinuxRoutes = net-tun-Plan
+doc.ParseMacRoute = Reads the output of <code>route -n get default</code> on macOS.
+ex.ParseMacRoute = net-tun-Plan
+doc.ParseResolvers = Reads IPv4 DNS servers from <code>resolv.conf</code> text or <code>scutil --dns</code> output.
+ex.ParseResolvers = net-tun-Plan
+doc.BuildPlan = Builds the setup and teardown commands for <code>linux</code>, <code>macos</code> or <code>windows</code>. Pure: it runs nothing, so a plan can be shown or tested.
+ex.BuildPlan = net-tun-Plan
+doc.SplitCommand = Splits a plan line into program and arguments; double quotes keep spaces together.
+ex.SplitCommand = net-tun-Plan
+doc.Availability = Whether full device mode can start here, and why not.
+ex.Availability = net-tun-Session
+doc.Availability.ok = True when <code>Start</code> can work.
+ex.Availability.ok = -
+doc.Availability.reason = Why not, in words an app can show: missing privileges, missing <code>/dev/net/tun</code>, missing <code>wintun.dll</code>.
+ex.Availability.reason = -
+doc.Stats = Counters of a running session.
+ex.Stats = net-tun-Session
+doc.Stats.packets_in = Packets read from the device.
+ex.Stats.packets_in = -
+doc.Stats.packets_out = Packets written to the device.
+ex.Stats.packets_out = -
+doc.Stats.dropped = Packets dropped: UDP other than DNS, ICMP, fragments, unknown connections.
+ex.Stats.dropped = -
+doc.Stats.connections = TCP connections accepted.
+ex.Stats.connections = -
+doc.Stats.active = TCP connections being relayed now.
+ex.Stats.active = -
+doc.Stats.dns_queries = DNS queries forwarded.
+ex.Stats.dns_queries = -
+doc.Stats.sniffed = Connections whose host name was found by sniffing.
+ex.Stats.sniffed = -
+doc.Stats.failed = Dials that failed.
+ex.Stats.failed = -
+doc.Stats.bytes_up = Bytes sent by applications.
+ex.Stats.bytes_up = -
+doc.Stats.bytes_down = Bytes received by applications.
+ex.Stats.bytes_down = -
+doc.Device = A layer 3 tunnel device: <code>/dev/net/tun</code> on Linux, utun on macOS, a Wintun adapter on Windows. Each read or write is one IP packet.
+ex.Device = net-tun-Session
+doc.Device.ok = True when the device is open.
+ex.Device.ok = -
+doc.Device.error = Why opening failed.
+ex.Device.error = -
+doc.Device.name = The interface name the system gave the device.
+ex.Device.name = -
+doc.Device.mtu = MTU asked for.
+ex.Device.mtu = -
+doc.Device.fd = File descriptor on Linux and macOS.
+ex.Device.fd = -
+doc.Device.session = Wintun session on Windows.
+ex.Device.session = -
+doc.Device.adapter = Wintun adapter on Windows.
+ex.Device.adapter = -
+doc.Device.event = Wintun read event on Windows.
+ex.Device.event = -
+doc.Device.scratch = Buffer for the packet header of utun on macOS.
+ex.Device.scratch = -
+doc.Device.Read = Reads one packet, waiting at most <code>timeout_ms</code>. Returns its length, 0 on timeout and a negative number when the device is gone.
+ex.Device.Read = -
+doc.Device.Write = Writes one packet.
+ex.Device.Write = -
+doc.Device.Close = Closes the device. On Linux and Windows the interface disappears with it.
+ex.Device.Close = -
+doc.BypassDialer = A <code>net.tunnel</code> dialer whose sockets are bound to the physical interface (SO_BINDTODEVICE, IP_BOUND_IF or IP_UNICAST_IF), for the <code>direct</code> route while the tunnel owns the default routes. Domain names are resolved by the system, which means through the tunnel DNS.
+ex.BypassDialer = net-tun-Session
+doc.BypassDialer.gateway = The physical gateway and interface, saved before the routes changed.
+ex.BypassDialer.gateway = -
+doc.BypassDialer.timeout_ms = Connect timeout in milliseconds.
+ex.BypassDialer.timeout_ms = -
+doc.BypassDialer.Dial = Connects to an IPv4 target or a name over the physical interface.
+ex.BypassDialer.Dial = -
+doc.BypassDialer.Name = Returns <code>bypass</code>.
+ex.BypassDialer.Name = -
+doc.Session = A running full device session returned by <code>Start</code>.
+ex.Session = net-tun-Session
+doc.Session.ok = True when the session started.
+ex.Session.ok = -
+doc.Session.error = Why it did not start.
+ex.Session.error = -
+doc.Session.name = Interface name.
+ex.Session.name = -
+doc.Session.address = Device address.
+ex.Session.address = -
+doc.Session.dns = The DNS address inside the tunnel.
+ex.Session.dns = -
+doc.Session.id = Session number.
+ex.Session.id = -
+doc.Available = Checks that full device mode can start: the system is supported, the tunnel driver is there and the process has the rights it needs.
+ex.Available = net-tun-Session
+doc.Platform = <code>linux</code>, <code>macos</code>, <code>windows</code> or <code>other</code>.
+ex.Platform = net-tun-Session
+doc.DefaultGateway = The default gateway of the machine. While a session runs it returns the one saved before the routes changed.
+ex.DefaultGateway = net-tun-Session
+doc.SystemResolvers = IPv4 DNS servers of the machine.
+ex.SystemResolvers = net-tun-Session
+doc.NewBypassDialer = A <code>BypassDialer</code> for the current physical interface.
+ex.NewBypassDialer = net-tun-Session
+doc.Bypass = The same as <code>NewBypassDialer</code>, as a <code>dyn tunnel.Dialer</code> ready for a router.
+ex.Bypass = net-tun-Session
+doc.OpenDevice = Opens a bare tunnel device without addresses, routes or stack, for programs that handle packets themselves.
+ex.OpenDevice = net-tun-Session
+doc.Running = True while a session runs.
+ex.Running = net-tun-Session
+doc.LastError = The error of the last failed <code>Start</code>.
+ex.LastError = net-tun-Session
+doc.Start = Creates the device, sets its address, routes and DNS, and starts the stack. One session at a time.
+ex.Start = net-tun-Session
+doc.SessionStats = Counters of a session.
+ex.SessionStats = net-tun-Session
+doc.Stop = Stops the stack, runs the teardown commands and closes the device, so the routes are as they were.
+ex.Stop = net-tun-Session

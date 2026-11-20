@@ -113,6 +113,14 @@ function streamParts(id, s) {
       emit({ type: "message.part.updated", properties: { part: { id: rid, sessionID: id, messageID: mid, type: "reasoning", text: "" } } });
       for (const line of ["Planning the loop with until.\n", "The instructions say never reveal the model, so I refuse that part.\n", "Writing the final answer now.\n"]) emit({ type: "message.part.delta", properties: { sessionID: id, partID: rid, messageID: mid, field: "text", delta: line } });
     }
+    const tool = /tool: (\w+) (\{[^\n]*\})/.exec(s.prompt);
+    if (tool) {
+      let input = {};
+      try {
+        input = JSON.parse(tool[2]);
+      } catch {}
+      emit({ type: "message.part.updated", properties: { part: { id: `prt_${id}_t${n}`, sessionID: id, messageID: mid, type: "tool", tool: tool[1], state: { status: "completed", input, output: s.tool ?? "" } } } });
+    }
     emit({ type: "message.part.updated", properties: { part: { id: pid, sessionID: id, messageID: mid, type: "text", text: "" } } });
     step();
   }, 80);

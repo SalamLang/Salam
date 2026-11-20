@@ -1,4 +1,3 @@
-"use strict";
 const fs = require("fs");
 const { JSDOM, VirtualConsole } = require("jsdom");
 
@@ -49,14 +48,40 @@ const d = dom.window.document;
 const q = (s) => d.querySelector(s);
 
 const controls = [
-  "#menu-toggle", "#mode-seg", "#lang-seg", "#dd-button", "#dd-list", "#theme",
-  "#autorun", "#run", "#copy-code", "#copy-out", "#view-seg", "#code", "#hl",
-  "#ln", "#output", "#preview", "#gutter", "#ac", "#anim-bar", "#scrim",
+  "#menu-toggle",
+  "#mode-seg",
+  "#lang-seg",
+  "#dd-button",
+  "#dd-list",
+  "#theme",
+  "#autorun",
+  "#run",
+  "#copy-code",
+  "#copy-out",
+  "#view-seg",
+  "#code",
+  "#hl",
+  "#ln",
+  "#output",
+  "#preview",
+  "#gutter",
+  "#ac",
+  "#anim-bar",
+  "#scrim",
 ];
 for (const s of controls) check("control " + s, q(s) !== null);
-check("mode buttons carry data-value", q('#mode-seg [data-value="layout"]') !== null);
-check("the code area is a direct child of the editor wrap", q("#code").parentElement === q("#edwrap"));
-check("language buttons carry data-value", q('#lang-seg [data-value="fa"]') !== null);
+check(
+  "mode buttons carry data-value",
+  q('#mode-seg [data-value="layout"]') !== null,
+);
+check(
+  "the code area is a direct child of the editor wrap",
+  q("#code").parentElement === q("#edwrap"),
+);
+check(
+  "language buttons carry data-value",
+  q('#lang-seg [data-value="fa"]') !== null,
+);
 
 setTimeout(() => {
   check("no script errors on load", errors.length === 0, errors.join(" | "));
@@ -65,29 +90,56 @@ setTimeout(() => {
   let text = "func main:\n";
   for (let i = 0; i < 1500; i++) text += "    println " + i + "\n";
   code.value = text + "end\n";
-  code.dispatchEvent(new dom.window.InputEvent("input", { inputType: "insertFromPaste" }));
-  check("one line number per line", d.querySelectorAll("#ln-inner .ln-row").length === code.value.split("\n").length);
-  check("the line number column widens for four digits", /4ch/.test(q("#ln").style.width), q("#ln").style.width);
+  code.dispatchEvent(
+    new dom.window.InputEvent("input", { inputType: "insertFromPaste" }),
+  );
+  check(
+    "one line number per line",
+    d.querySelectorAll("#ln-inner .ln-row").length ===
+      code.value.split("\n").length,
+  );
+  check(
+    "the line number column widens for four digits",
+    /4ch/.test(q("#ln").style.width),
+    q("#ln").style.width,
+  );
   code.value = "func main:\nend\n";
-  code.dispatchEvent(new dom.window.InputEvent("input", { inputType: "insertFromPaste" }));
-  check("line numbers shrink with the code", d.querySelectorAll("#ln-inner .ln-row").length === 3);
+  code.dispatchEvent(
+    new dom.window.InputEvent("input", { inputType: "insertFromPaste" }),
+  );
+  check(
+    "line numbers shrink with the code",
+    d.querySelectorAll("#ln-inner .ln-row").length === 3,
+  );
 
   q('#lang-seg [data-value="fa"]').click();
   check("fa switches dir to rtl", d.documentElement.dir === "rtl");
-  check("fa button becomes active", q('#lang-seg [data-value="fa"]').classList.contains("active"));
+  check(
+    "fa button becomes active",
+    q('#lang-seg [data-value="fa"]').classList.contains("active"),
+  );
   q('#lang-seg [data-value="en"]').click();
   check("en switches dir to ltr", d.documentElement.dir === "ltr");
 
   const before = q("#theme .theme-lbl").textContent;
   q("#theme").click();
-  check("theme button changes the label", q("#theme .theme-lbl").textContent !== before);
+  check(
+    "theme button changes the label",
+    q("#theme .theme-lbl").textContent !== before,
+  );
 
   const on = q("#autorun").classList.contains("on");
   q("#autorun").click();
-  check("auto-run button toggles", q("#autorun").classList.contains("on") !== on);
+  check(
+    "auto-run button toggles",
+    q("#autorun").classList.contains("on") !== on,
+  );
 
   q("#dd-button").click();
-  check("examples list opens", q("#dd-list").hidden === false && q("#dd-list").children.length > 0);
+  check(
+    "examples list opens",
+    q("#dd-list").hidden === false && q("#dd-list").children.length > 0,
+  );
 
   q("#menu-toggle").click();
   check("menu button opens the menu", d.body.classList.contains("menu-open"));
@@ -95,9 +147,71 @@ setTimeout(() => {
   check("scrim closes the menu", !d.body.classList.contains("menu-open"));
 
   q('#mode-seg [data-value="layout"]').click();
-  check("layout mode becomes active", q('#mode-seg [data-value="layout"]').classList.contains("active"));
+  check(
+    "layout mode becomes active",
+    q('#mode-seg [data-value="layout"]').classList.contains("active"),
+  );
 
-  check("no script errors after clicks", errors.length === 0, errors.join(" | "));
-  console.log(failures === 0 ? "editor page ok" : failures + " check(s) failed");
+  const gutter = q("#gutter");
+  const split = q("#main-split");
+  const PE = dom.window.PointerEvent || dom.window.MouseEvent;
+  const ptr = (target, type, x, buttons) =>
+    target.dispatchEvent(
+      new PE(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        clientX: x,
+        clientY: 200,
+        buttons,
+      }),
+    );
+  let captured = false;
+  gutter.setPointerCapture = () => {
+    captured = true;
+  };
+  const drag = (endWith) => {
+    ptr(gutter, "pointerdown", 500, 1);
+    ptr(gutter, "pointermove", 420, 1);
+    const during = split.style.gridTemplateColumns;
+    endWith();
+    const after = split.style.gridTemplateColumns;
+    ptr(d.body, "pointermove", 300, 0);
+    ptr(d.body, "pointermove", 300, 1);
+    return { during, after, later: split.style.gridTemplateColumns };
+  };
+  const ends = [
+    ["a release over the preview", () => {}],
+    ["pointercancel", () => ptr(gutter, "pointercancel", 420, 0)],
+    ["lostpointercapture", () => ptr(gutter, "lostpointercapture", 420, 0)],
+    [
+      "a window blur",
+      () => dom.window.dispatchEvent(new dom.window.Event("blur")),
+    ],
+  ];
+  for (const [what, end] of ends) {
+    split.style.gridTemplateColumns = "";
+    const r = drag(end);
+    check(
+      "the gutter resizes while dragged (" + what + ")",
+      r.during === "420px 6px 1fr",
+      r.during,
+    );
+    check(
+      "the gutter stops after " + what,
+      r.later === r.after && !gutter.classList.contains("dragging"),
+      r.after + " then " + r.later,
+    );
+  }
+  check("the gutter captures the pointer", captured);
+
+  check(
+    "no script errors after clicks",
+    errors.length === 0,
+    errors.join(" | "),
+  );
+  console.log(
+    failures === 0 ? "editor page ok" : failures + " check(s) failed",
+  );
   process.exit(failures === 0 ? 0 : 1);
 }, 1500);

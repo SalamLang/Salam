@@ -16,7 +16,7 @@ syn sync minlines=60 maxlines=400
 syn keyword salamConditional  if else match switch اگر وگرنه همخوان ترابرد
 syn keyword salamRepeat       until repeat each تا تکرار هر
 syn keyword salamStatement    ret end break continue defer to by in try catch throw برگشت پایان بشکن گذر دیرکن تا هر در تلاش
-syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated export throws ناپایا پایا همگانی درخط نادرخط ناب نابرگشت خطادار
+syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated export ناپایا پایا همگانی درخط نادرخط ناب نابرگشت
 syn keyword salamKeyword      on as page impl بر برگردان صفحه کاربست
 syn keyword salamBoolean      true false درست نادرست
 syn keyword salamNull         null پوچ
@@ -52,7 +52,7 @@ syn match salamDimension "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06
 syn match salamPercent "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\%(\.[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\)\=[%\u066a]\ze\%(\s\|[,)\]}\u060c]\|$\)"
 
 syn match salamAnnotation "@[A-Za-z_]\k*"
-syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|کوچکتربرابر\|بزرگتربرابر\|deprecated\|printerrln\|نادرست‌چاپ\|گرفتن خطا\|پرتاب خطا\|interface\|component\|continue\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|extern\|inline\|export\|throws\|ناپایا\|ساختار\|میانجی\|همگانی\|نادرخط\|کاربست\|خطادار\|نادرست\|وارونه\|کوچکتر\|بزرگتر\|until\|break\|defer\|match\|catch\|throw\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|بشکن\|تلاش\|func\|type\|enum\|page\|pure\|impl\|پایا\|گونه\|صفحه\|بسته\|درخط\|تابع\|true\|null\|درست\|this\|ret\|end\|try\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|and\|not\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|or\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
+syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|کوچکتربرابر\|بزرگتربرابر\|deprecated\|printerrln\|نادرست‌چاپ\|گرفتن خطا\|پرتاب خطا\|interface\|component\|continue\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|extern\|inline\|export\|ناپایا\|ساختار\|میانجی\|همگانی\|نادرخط\|کاربست\|نادرست\|وارونه\|کوچکتر\|بزرگتر\|until\|break\|defer\|match\|catch\|throw\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|بشکن\|تلاش\|func\|type\|enum\|page\|pure\|impl\|پایا\|گونه\|صفحه\|بسته\|درخط\|تابع\|true\|null\|درست\|this\|ret\|end\|try\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|and\|not\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|or\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
 
 syn match salamOperator "\.\.\.\|:=\|==\|!=\|<=\|>=\|\*\*=\|[-+*/%]=\|[-+*/%<>=&?]"
 syn match salamDelimiter "[(){}\[\],;]"

@@ -79,7 +79,7 @@ RUN apt-get update \
         ca-certificates curl unzip gcc libc6-dev git \
     && rm -rf /var/lib/apt/lists/*
 ARG SALAM_SEED_SLUG=linux-x86_64
-ARG SALAM_SEED_VERSION=0.6.18
+ARG SALAM_SEED_VERSION=0.6.19
 COPY tools /repo/tools
 COPY compiler /repo/compiler
 COPY std /repo/std

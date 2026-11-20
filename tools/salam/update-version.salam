@@ -202,6 +202,9 @@ func readme_sites(): Vector<Site>:
     v.Push(Site { path = README_FILE, prefix = "SALAM_VERSION = \"", suffix = "\"" })
     v.Push(Site { path = README_FILE, prefix = ".bat\" --version ", suffix = "\n" })
     v.Push(Site { path = README_FILE, prefix = "--build-arg SALAM_VERSION=", suffix = " docker" })
+    v.Push(Site { path = "benchmark/docker/Dockerfile", prefix = "ARG SALAM_SEED_VERSION=", suffix = "\n" })
+    v.Push(Site { path = "ai/backend/Dockerfile", prefix = "ARG SALAM_VERSION=", suffix = "\n" })
+    v.Push(Site { path = "tools/mcp/Dockerfile", prefix = "ARG SALAM_VERSION=", suffix = "\n" })
     ret v
 end
 
@@ -273,9 +276,10 @@ func usage():
     println "  <new-version>  write it to VERSION, then update every other site"
     println "  sync           leave VERSION alone, bring the other sites to it"
     println "  check          report disagreements and exit 1; changes nothing"
-    println "  readme [x.y.z] write the latest released version into the README examples;"
-    println "                 without a version it asks GitHub for the newest published release,"
-    println "                 never the upcoming one in VERSION"
+    println "  readme [x.y.z] write the latest released version into the README examples and"
+    println "                 the Dockerfile seed pins; without a version it asks GitHub for the"
+    println "                 newest published release, never the upcoming one in VERSION."
+    println "                 A version bump runs this step too."
 end
 
 func main:
@@ -292,20 +296,26 @@ func main:
         want := read_version_file()
         println "checking every version site against", VERSION_FILE, "=", want
         println ""
-        mut bad := check_all(want)
-        println "checking that the README examples agree with each other (they follow the last release, not VERSION)"
-        bad += readme_check()
+        bad := check_all(want)
+        println "checking that the README examples and Dockerfile seed pins agree (they follow the last release, not VERSION)"
+        rbad := readme_check()
         println ""
-        if bad == 0:
+        if bad == 0 and rbad == 0:
             println "all version sites agree on", want
             ret 0
         end
-        println bad, "site(s) disagree with", VERSION_FILE
-        println "run: salam run tools/salam/update-version.salam sync"
+        if bad > 0:
+            println bad, "site(s) disagree with", VERSION_FILE
+            println "run: salam run tools/salam/update-version.salam sync"
+        end
+        if rbad > 0:
+            println rbad, "README example(s) or seed pin(s) disagree"
+            println "run: salam run tools/salam/update-version.salam readme"
+        end
         ret 1
     end
 
-    if mode == "readme":
+    if mode == "readme" or mode == "release":
         mut want := ""
         if args.Len() > 2:
             want = args.Get(2)
@@ -316,7 +326,7 @@ func main:
             println "error: no usable release version for the README"
             ret 1
         end
-        println "README examples -> latest released version", want
+        println "README examples and seed pins -> latest released version", want
         println ""
         changed := readme_sync(want)
         println ""
@@ -356,6 +366,15 @@ func main:
     println "  updated       ", VERSION_FILE, old, "->", mode
     changed := sync_all(mode)
     println ""
-    println changed + 1, "file(s) updated"
+    rel := latest_release()
+    mut pinned := 0
+    if is_valid_version(rel):
+        println "README examples and seed pins -> latest released version", rel
+        pinned = readme_sync(rel)
+    else:
+        println "note: README examples and seed pins not updated; run 'readme' once GitHub is reachable"
+    end
+    println ""
+    println changed + 1 + pinned, "file(s) updated"
     ret 0
 end

@@ -1,0 +1,179 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package wifi
+
+if SALAM_OS_MAC:
+    import mem
+    import os.dl
+    import str
+end
+
+if SALAM_OS_MAC:
+    link dynamic "objc"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(receiver: void*, selector: void*): void*
+        func objc_autoreleasePoolPush(): void*
+        func objc_autoreleasePoolPop(pool: void*)
+    end
+
+    mut _m_tried := false
+    mut _m_lib := null as void*
+
+    func _m0(recv: void*, name: str): void*:
+        f := (&objc_msgSend) as extern func (void*, void*) void*
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _m_long(recv: void*, name: str): i64:
+        f := (&objc_msgSend) as extern func (void*, void*) i64
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _m_bool(recv: void*, name: str): bool:
+        f := (&objc_msgSend) as extern func (void*, void*) i8
+        ret f(recv, sel_registerName(name)) != (0 as i8)
+    end
+
+    func _m_long_arg(recv: void*, name: str, a: i64): i64:
+        f := (&objc_msgSend) as extern func (void*, void*, i64) i64
+        ret f(recv, sel_registerName(name), a)
+    end
+
+    func _m_at(recv: void*, i: int): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, u64) void*
+        ret f(recv, sel_registerName("objectAtIndex:"), i as u64)
+    end
+
+    func _m_text(ns: void*): str:
+        if ns == null:
+            ret str.Clone("")
+        end
+        raw := _m0(ns, "UTF8String")
+        if raw == null:
+            ret str.Clone("")
+        end
+        ret str.Clone(raw as str)
+    end
+
+    func _m_name(ns: void*, nul &: bool): str:
+        nul = false
+        out := _m_text(ns)
+        if ns == null:
+            ret out
+        end
+        want := _m_long_arg(ns, "lengthOfBytesUsingEncoding:", 4 as i64)
+        if want != (out.Len() as i64):
+            nul = true
+            mem.Free(out as void*)
+            ret str.Clone("")
+        end
+        ret out
+    end
+
+    func _m_status(itf: void*): Status:
+        mut s := _blank("corewlan")
+        s.interface = _swap(s.interface, _m_text(_m0(itf, "interfaceName")))
+        if not _m_bool(itf, "powerOn"):
+            s.state = State.Disconnected
+            s.reason = "Wi-Fi is turned off"
+            ret s
+        end
+        repeat 3:
+            mode := _m_long(itf, "interfaceMode")
+            if mode == (3 as i64):
+                s.state = State.Disconnected
+                s.reason = "the interface is a hotspot, not a client"
+                ret s
+            end
+            if mode != (1 as i64) and mode != (2 as i64):
+                s.state = State.Disconnected
+                s.reason = "not associated with a network"
+                ret s
+            end
+            ssid := _m0(itf, "ssid")
+            bssid := _m0(itf, "bssid")
+            mut nul := false
+            name := _m_name(ssid, nul)
+            raw_mac := _m_text(bssid)
+            mac := raw_mac.Lower()
+            mem.Free(raw_mac as void*)
+            security := SecurityFromMac(_m_long(itf, "security") as int)
+            rssi := _m_long(itf, "rssiValue") as int
+            ssid2 := _m0(itf, "ssid")
+            bssid2 := _m0(itf, "bssid")
+            mut nul2 := false
+            name2 := _m_name(ssid2, nul2)
+            mac2 := _m_text(bssid2)
+            same := (ssid == null) == (ssid2 == null) and (bssid == null) == (bssid2 == null) and nul == nul2 and name == name2 and (mac.Len() == 0 or str.EqualFold(mac, mac2))
+            mem.Free(name2 as void*)
+            mem.Free(mac2 as void*)
+            if same:
+                s.state = State.Connected
+                s.ssid = _swap(s.ssid, name)
+                s.ssid_known = ssid != null and not nul
+                if nul:
+                    s.reason = "the SSID contains a NUL byte"
+                else ssid == null:
+                    s.reason = "the system withheld the SSID: allow Location Services for this app"
+                end
+                s.bssid = _swap(s.bssid, mac)
+                s.security = security
+                s.signal = SignalFromDbm(rssi)
+                ret s
+            end
+            mem.Free(name as void*)
+            mem.Free(mac as void*)
+        end
+        s.state = State.Unknown
+        s.reason = "the network changed while it was being read"
+        ret s
+    end
+
+    func _mac_scan(): Vector<Status>:
+        mut out := Vector {} as Vector<Status>
+        if not _m_tried:
+            _m_tried = true
+            _m_lib = dl.Open("/System/Library/Frameworks/CoreWLAN.framework/CoreWLAN")
+        end
+        mut cls := null as void*
+        if _m_lib != null:
+            cls = objc_getClass("CWWiFiClient")
+        end
+        if cls == null:
+            mut missing := _blank("corewlan")
+            missing.reason = "CoreWLAN is not available on this system"
+            out.Push(missing)
+            ret out
+        end
+        pool := objc_autoreleasePoolPush()
+        client := _m0(cls, "sharedWiFiClient")
+        if client != null:
+            list := _m0(client, "interfaces")
+            if list != null:
+                n := _m_long(list, "count") as int
+                repeat n in i:
+                    itf := _m_at(list, i)
+                    if itf != null:
+                        out.Push(_m_status(itf))
+                    end
+                end
+            end
+        end
+        objc_autoreleasePoolPop(pool)
+        ret out
+    end
+end

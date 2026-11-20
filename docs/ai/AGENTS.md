@@ -445,7 +445,7 @@ end
 Parameter and variable names cannot be keywords. `in`, `to`, `by`, `on`,
 `type`, `each`, `match`, `eq`, `lt`, `gt` and the other words in
 `salam_keywords` are all reserved, so `func scale(v: f64, by: f64)` does not
-parse. `try`, `catch`, `throw` and `throws` are reserved too.
+parse. `try`, `catch` and `throw` are reserved too.
 
 A function that can fail is declared `throw` and fails with `throw`. Every
 call to it needs `try` (which passes the error to the caller, so the caller

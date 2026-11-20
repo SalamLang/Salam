@@ -466,7 +466,7 @@ func p_munch_name(p &: Ps): str:
     mut first := true
     head := p_peek(p)
     line := head.begin_line
-    until p_at(p, tok.TK_IDENT) and p_peek(p).begin_line == line:
+    until p_at(p, tok.TK_IDENT) and p_peek(p).begin_line == line and (first or not p_at_old_throws(p)):
         if not first:
             b += " "
         end
@@ -642,18 +642,16 @@ func p_throws_type(a &: at.Ast, owner: int, rt: int): int:
     ret t
 end
 
+func p_at_old_throws(p &: Ps): bool:
+    t := p_peek(p)
+    ret t.kind == tok.TK_IDENT and (str.Equals(t.lexeme, "throws") or str.Equals(t.lexeme, "خطادار"))
+end
+
 func p_at_throws(p &: Ps): bool:
-    ret p_at(p, tok.TK_KW_THROW) or p_at(p, tok.TK_KW_THROWS)
+    ret p_at(p, tok.TK_KW_THROW) or p_at_old_throws(p)
 end
 
-func p_throws_quiet_file(file: str): bool:
-    ret str.StartsWith(file, "std/") or str.Find(file, "/std/") >= 0 or str.StartsWith(file, "compiler/") or str.Find(file, "/compiler/") >= 0
-end
-
-func p_warn_old_throws(p &: Ps):
-    if p_throws_quiet_file(p.file):
-        ret
-    end
+func p_old_throws_error(p &: Ps):
     t := p_peek(p)
     mut f := lg.Fix {}
     f.index = t.begin_index as int
@@ -667,16 +665,17 @@ func p_warn_old_throws(p &: Ps):
     f.title = co.Format1(i18.Tr("Write '%s'"), co.ArgStr(f.text))
     lg.StageFix(f)
     lg.LogSpanHelp(
-        p.lgr, lg.PH_PARSER, lg.LOG_WARN, p.file, t.begin_line as int, t.begin_col as int, f.index, f.length, i18.Tr("write 'throw' after the signature; 'throws' is the old spelling and will be removed"), i18.Tr("W234: 'throws' is deprecated, use 'throw'")
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, f.index, f.length, i18.Tr("write 'throw' after the signature, for example 'func f(): int throw:'"), i18.Tr("E237: 'throws' is no longer a keyword; write 'throw'")
     )
+    p.had_error = true
 end
 
 func p_apply_throws(p &: Ps, a &: at.Ast, n: int, rt: int): int:
     if not p_at_throws(p):
         ret rt
     end
-    if p_at(p, tok.TK_KW_THROWS):
-        p_warn_old_throws(p)
+    if p_at_old_throws(p):
+        p_old_throws_error(p)
     end
     p_advance(p)
     mut fv := at.Get(a, n)

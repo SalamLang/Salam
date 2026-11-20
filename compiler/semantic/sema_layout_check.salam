@@ -350,34 +350,45 @@ func lay_has_sep(name: str): bool:
     ret str.IndexOf(name, "_") >= 0 or str.IndexOf(name, "-") >= 0
 end
 
+func lay_official_base(name: str): str:
+    sa := ResolveStyleAttr(name)
+    if sa.ok and sa.state == STYLE_STATE_BASE:
+        ret style.PropName(sa.prop)
+    end
+    ret lay_attr_key_exact(name)
+end
+
 func lay_official_attr(name: str): str:
     if not lay_has_sep(name):
         ret ""
     end
-    sa := ResolveStyleAttr(name)
-    if sa.ok:
-        states := ["", "hover ", "focus ", "focus within ", "active ", "disabled ", "checked ", "invalid ", "placeholder ", "selection "]
-        official := states[sa.state] + style.PropName(sa.prop)
-        if lay_has_sep(official) or str.Equals(official, name):
-            ret ""
-        end
-        ret official
-    end
-    key := lay_attr_key_exact(name)
-    if str.Len(key) == 0 or lay_has_sep(key) or str.Equals(key, name):
+    mut rest := ""
+    st := style_state_prefix(name, rest)
+    base := lay_official_base(rest)
+    if str.Len(base) == 0:
         ret ""
     end
-    ret key
+    states := ["", "hover ", "focus ", "focus within ", "active ", "disabled ", "checked ", "invalid ", "placeholder ", "selection "]
+    official := states[st] + base
+    if lay_has_sep(official) or str.Equals(official, name):
+        ret ""
+    end
+    ret official
+end
+
+func lay_is_comp(name: str): bool:
+    l := lay_loose(name)
+    repeat g_lay_sp_comps.Len() in i:
+        if str.Equals(g_lay_sp_comps.Get(i), name) or str.Equals(lay_loose(g_lay_sp_comps.Get(i)), l):
+            ret true
+        end
+    end
+    ret false
 end
 
 func lay_official_elem(name: str): str:
-    if not lay_has_sep(name):
+    if not lay_has_sep(name) or lay_is_comp(name):
         ret ""
-    end
-    repeat g_lay_sp_comps.Len() in i:
-        if str.Equals(g_lay_sp_comps.Get(i), name):
-            ret ""
-        end
     end
     if lay_elem_lookup(name) < 0:
         ret ""
@@ -417,15 +428,25 @@ func lay_spelling_report(s &: Sema, a &: at.Ast, nid: int, official: str, verify
     )
 end
 
+func lay_spelling_attr(s &: Sema, a &: at.Ast, aid: int):
+    official := lay_official_attr(at.Get(a, aid).name)
+    if str.Len(official) > 0:
+        lay_spelling_report(s, a, aid, official, true)
+    end
+end
+
 func lay_spelling_walk(s &: Sema, a &: at.Ast, nid: int, owner_official: bool):
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
         ck := at.KindOf(a, cid)
         if ck == at.AST_LAYOUT_ATTR:
             if owner_official:
-                official := lay_official_attr(at.Get(a, cid).name)
-                if str.Len(official) > 0:
-                    lay_spelling_report(s, a, cid, official, true)
+                lay_spelling_attr(s, a, cid)
+                repeat at.ChildCount(a, cid) in q:
+                    folded := at.Child(a, cid, q)
+                    if at.KindOf(a, folded) == at.AST_LAYOUT_ATTR:
+                        lay_spelling_attr(s, a, folded)
+                    end
                 end
             end
         else ck == at.AST_IF or ck == at.AST_EACH:
@@ -436,7 +457,7 @@ func lay_spelling_walk(s &: Sema, a &: at.Ast, nid: int, owner_official: bool):
             if str.Len(official) > 0:
                 lay_spelling_report(s, a, cid, official, false)
             end
-            lay_spelling_walk(s, a, cid, lay_elem_lookup(nm) >= 0)
+            lay_spelling_walk(s, a, cid, not lay_is_comp(nm) and lay_elem_lookup(nm) >= 0)
         end
     end
 end
@@ -1728,6 +1749,8 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
     end
     lbnode := at.Get(a, nid)
     if str.Len(lbnode.name) > 0 and not lbnode.view_glue:
+        lay_ensure()
+        lay_check_spelling(s, a, nid)
         ret
     end
     lay_ensure()

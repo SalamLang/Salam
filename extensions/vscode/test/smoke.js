@@ -23,12 +23,24 @@ const extPath = path.resolve(
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "salam-vscode-smoke-"));
 const fakeCompiler = path.join(work, "fake-salam");
+const callsLog = path.join(work, "calls.log");
+
+function calls(sub) {
+  if (!fs.existsSync(callsLog)) return [];
+  return fs
+    .readFileSync(callsLog, "utf8")
+    .split("\n")
+    .filter((l) => l !== "")
+    .map((l) => JSON.parse(l))
+    .filter((a) => a[0] === sub);
+}
 fs.writeFileSync(
   fakeCompiler,
   [
     "#!/usr/bin/env node",
     'const fs = require("fs");',
     "const a = process.argv.slice(2);",
+    `fs.appendFileSync(${JSON.stringify(callsLog)}, JSON.stringify(a) + "\\n");`,
     `if (a[0] === "lsp") process.exit(${lspMode ? 0 : 1});`,
     'if (a[0] === "format") {',
     '  fs.writeFileSync(a[1], fs.readFileSync(a[1], "utf8").replace(/  +/g, " "));',
@@ -263,46 +275,52 @@ async function main() {
   const dirty = makeDoc("dirty.salam", "// LANG: EN\nfunc main:\nend\n", true);
   const fc = q(fakeCompiler);
 
-  await runCommand(
-    "salam.run",
-    en,
-    `${fc} exec ${q(en.uri.fsPath)} ${q("--lang=en")}`,
-  );
-  await runCommand(
-    "salam.run",
-    fa,
-    `${fc} exec ${q(fa.uri.fsPath)} ${q("--lang=fa")}`,
-  );
-  await runCommand(
-    "salam.exec",
-    plain,
-    `${fc} exec ${q(plain.uri.fsPath)} ${q("--lang=en")}`,
-  );
-  await runCommand(
-    "salam.run",
-    dirty,
-    `${fc} exec ${q(dirty.uri.fsPath)} ${q("--lang=en")}`,
-  );
-  config["run.command"] = "run";
-  await runCommand(
-    "salam.run",
-    en,
-    `${fc} run ${q(en.uri.fsPath)} ${q("--lang=en")}`,
-  );
-  config["run.command"] = "exec";
+  const lang = (pack) => (pack ? ` ${q(`--lang=${pack}`)}` : "");
+  for (const pack of ["", "en", "fa"]) {
+    config.languagePack = pack || "auto";
+    await runCommand(
+      "salam.run",
+      en,
+      `${fc} exec ${q(en.uri.fsPath)}${lang(pack)}`,
+    );
+    await runCommand(
+      "salam.run",
+      fa,
+      `${fc} exec ${q(fa.uri.fsPath)}${lang(pack)}`,
+    );
+    await runCommand(
+      "salam.exec",
+      plain,
+      `${fc} exec ${q(plain.uri.fsPath)}${lang(pack)}`,
+    );
+    await runCommand(
+      "salam.run",
+      dirty,
+      `${fc} exec ${q(dirty.uri.fsPath)}${lang(pack)}`,
+    );
+    config["run.command"] = "run";
+    await runCommand(
+      "salam.run",
+      en,
+      `${fc} run ${q(en.uri.fsPath)}${lang(pack)}`,
+    );
+    config["run.command"] = "exec";
 
-  const exe = process.platform === "win32" ? ".exe" : "";
-  await runCommand(
-    "salam.build",
-    en,
-    `${fc} build ${q(en.uri.fsPath)} ${q(`--output=${path.join(work, `en${exe}`)}`)} ${q("--lang=en")}`,
-  );
+    const exe = process.platform === "win32" ? ".exe" : "";
+    await runCommand(
+      "salam.build",
+      en,
+      `${fc} build ${q(en.uri.fsPath)} ${q(`--output=${path.join(work, `en${exe}`)}`)}${lang(pack)}`,
+    );
+  }
+  config.languagePack = "auto";
 
   activeEditor = { document: en };
   messages.length = 0;
   commands.get("salam.check")();
   await waitFor(() => messages.length > 0, "salam.check reports");
   assert.deepStrictEqual(messages, ["info: Salam: no problems found."]);
+  assert.ok(!calls("inspect")[0].some((x) => x.startsWith("--lang")));
 
   commands.get("salam.emitTokens")();
   commands.get("salam.emitAst")();
@@ -327,6 +345,11 @@ async function main() {
       { ...edits[0].range },
       { sl: 0, sc: 0, el: 4, ec: 0 },
     );
+    assert.ok(!calls("format")[0].some((x) => x.startsWith("--lang")));
+    config.languagePack = "fa";
+    await formatter.provideDocumentFormattingEdits(spaced);
+    config.languagePack = "auto";
+    assert.ok(calls("format")[1].includes("--lang=fa"));
   }
 
   activeEditor = undefined;

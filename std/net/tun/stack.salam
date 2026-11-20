@@ -1,0 +1,493 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import mem
+import str
+import sync
+import pool
+import atomic
+import os.shell
+import net.tcp
+import net.tunnel
+import net.internal.rawsock
+
+mut _cur := null as void*
+mut _cur_gw := Gateway {}
+mut _last_error := ""
+
+struct _Stack:
+    pub dev: Device = Device {}
+    pub nat: Nat = Nat {}
+    pub listener: tcp.Server = tcp.Server {}
+    pub wmu: sync.Mutex = sync.Mutex {}
+    pub running: atomic.Flag = atomic.Flag {}
+    pub loop_done: atomic.Flag = atomic.Flag {}
+    pub accept_done: atomic.Flag = atomic.Flag {}
+    pub workers: pool.Pool = pool.Pool {}
+    pub dialer: dyn tunnel.Dialer = tunnel.BlockDialer {}
+    pub upstream: tunnel.Addr = tunnel.Addr {}
+    pub address: str = ""
+    pub next: str = ""
+    pub plan: Plan = Plan {}
+    pub gateway: Gateway = Gateway {}
+    pub sniff: bool = true
+    pub sniff_ms: int = 300
+    pub idle_ms: int = 0
+    pub dns: bool = true
+    pub block6: bool = true
+    pub relay: tunnel.Stats = tunnel.Stats {}
+    pub c_in: atomic.I64 = atomic.I64 {}
+    pub c_out: atomic.I64 = atomic.I64 {}
+    pub c_drop: atomic.I64 = atomic.I64 {}
+    pub c_conn: atomic.I64 = atomic.I64 {}
+    pub c_active: atomic.I64 = atomic.I64 {}
+    pub c_dns: atomic.I64 = atomic.I64 {}
+    pub c_sniff: atomic.I64 = atomic.I64 {}
+    pub c_fail: atomic.I64 = atomic.I64 {}
+end
+
+func _send(sp: _Stack*, ptr: void*, n: int):
+    sync.Lock(sp[0].wmu)
+    w := sp[0].dev.Write(ptr, n)
+    sync.Unlock(sp[0].wmu)
+    if w > 0:
+        atomic.Add(sp[0].c_out, 1 as i64)
+    end
+end
+
+func _read_full(s: dyn tunnel.Stream, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        k := s.ReadBytes(((buf as i64) + (got as i64)) as void*, n - got)
+        if k <= 0:
+            ret false
+        end
+        got += k
+    end
+    ret true
+end
+
+func _write_full(s: dyn tunnel.Stream, buf: void*, n: int): bool:
+    mut put := 0
+    until put < n:
+        k := s.WriteBytes(((buf as i64) + (put as i64)) as void*, n - put)
+        if k <= 0:
+            ret false
+        end
+        put += k
+    end
+    ret true
+end
+
+func _dns_job(sp: _Stack*, pkt: void*, n: int):
+    info := Parse(pkt, n)
+    if not info.valid or info.payload_len <= 0 or info.payload_len > 4096:
+        mem.Free(pkt)
+        ret
+    end
+    atomic.Add(sp[0].c_dns, 1 as i64)
+    up := sp[0].dialer.Dial(sp[0].upstream)
+    if not up.Ok():
+        atomic.Add(sp[0].c_fail, 1 as i64)
+        mem.Free(pkt)
+        ret
+    end
+    up.SetDeadline(5000)
+    q := mem.AllocateZeroed((info.payload_len + 2) as u64) as u8*
+    _put16(q, 0, info.payload_len)
+    mem.Copy(((q as i64) + (2 as i64)) as void*, ((pkt as i64) + (info.payload_offset as i64)) as void*, info.payload_len as u64)
+    mut ok := _write_full(up, q as void*, info.payload_len + 2)
+    mem.Free(q as void*)
+    hdr := mem.AllocateZeroed(4 as u64) as u8*
+    if ok:
+        ok = _read_full(up, hdr as void*, 2)
+    end
+    rlen := _u16(hdr, 0)
+    mem.Free(hdr as void*)
+    if ok and rlen > 0 and rlen <= 65000:
+        body := mem.Allocate(rlen as u64)
+        if _read_full(up, body, rlen):
+            reply := BuildUdp4(info.dst, info.dport, info.src, info.sport, body, rlen)
+            if reply.data != null:
+                _send(sp, reply.data, reply.len)
+            end
+            FreePacket(reply)
+        end
+        mem.Free(body)
+    end
+    up.Close()
+    mem.Free(pkt)
+end
+
+func _sniff_read(s: dyn tunnel.Stream, buf: void*, ms: int): int:
+    s.SetDeadline(ms)
+    start := sync.NowMs()
+    mut got := 0
+    until got < 16384:
+        k := s.ReadBytes(((buf as i64) + (got as i64)) as void*, 16384 - got)
+        if k <= 0:
+            break
+        end
+        got += k
+        if got >= _sniff_want(buf as u8*, got):
+            break
+        end
+        if sync.NowMs() - start >= (ms as i64):
+            break
+        end
+    end
+    s.SetDeadline(0)
+    ret got
+end
+
+func _serve(sp: _Stack*, c: tcp.Conn):
+    e := sp[0].nat.Lookup(tcp.PeerPort(c))
+    if not e.ok:
+        tcp.Close(c)
+        ret
+    end
+    atomic.Add(sp[0].c_conn, 1 as i64)
+    atomic.Add(sp[0].c_active, 1 as i64)
+    tcp.SetNoDelay(c, true)
+    down := tunnel.WrapTcp(c)
+    mut target := tunnel.NewAddr(e.dst, e.dport)
+    mut peek := null as void*
+    mut pn := 0
+    if sp[0].sniff:
+        peek = mem.Allocate(16384 as u64)
+        pn = _sniff_read(down, peek, sp[0].sniff_ms)
+        if pn > 0:
+            host := SniffHost(peek, pn)
+            if host.Len() > 0:
+                target = tunnel.NewAddr(host, e.dport)
+                atomic.Add(sp[0].c_sniff, 1 as i64)
+            end
+        end
+    end
+    up := sp[0].dialer.Dial(target)
+    if not up.Ok() or (pn > 0 and not _write_full(up, peek, pn)):
+        atomic.Add(sp[0].c_fail, 1 as i64)
+        atomic.Add(sp[0].c_active, 0 - 1 as i64)
+        up.Close()
+        down.Close()
+        if peek != null:
+            mem.Free(peek)
+        end
+        ret
+    end
+    if peek != null:
+        mem.Free(peek)
+    end
+    _r := tunnel.RelayWith(down, up, sp[0].relay, sp[0].idle_ms)
+    atomic.Add(sp[0].c_active, 0 - 1 as i64)
+end
+
+func _packet_loop(sp: _Stack*):
+    buf := mem.Allocate(65536 as u64)
+    mut last_sweep := sync.NowMs()
+    until atomic.Get(sp[0].running):
+        n := sp[0].dev.Read(buf, 65535, 200)
+        now := sync.NowMs()
+        if now - last_sweep > (5000 as i64):
+            _g := sp[0].nat.Sweep(now)
+            last_sweep = now
+        end
+        if n < 0:
+            break
+        end
+        if n == 0:
+            continue
+        end
+        atomic.Add(sp[0].c_in, 1 as i64)
+        act := sp[0].nat.Rewrite(buf, n, now)
+        if act == ACTION_REPLY:
+            _send(sp, buf, n)
+        else act == ACTION_DNS and sp[0].dns:
+            copy := mem.Allocate(n as u64)
+            mem.Copy(copy, buf, n as u64)
+            if not pool.Submit(sp[0].workers, (): _dns_job(sp, copy, n) end):
+                mem.Free(copy)
+            end
+        else act == ACTION_IPV6 and sp[0].block6:
+            rst := _tcp_rst6(buf, n)
+            if rst.data != null:
+                _send(sp, rst.data, rst.len)
+            else:
+                atomic.Add(sp[0].c_drop, 1 as i64)
+            end
+            FreePacket(rst)
+        else:
+            atomic.Add(sp[0].c_drop, 1 as i64)
+        end
+    end
+    mem.Free(buf)
+    atomic.Set(sp[0].loop_done, true)
+end
+
+func _accept_loop(sp: _Stack*):
+    until atomic.Get(sp[0].running):
+        c := tcp.Accept(sp[0].listener)
+        if not tcp.ConnOk(c):
+            if atomic.Get(sp[0].running):
+                sync.SleepMs(20)
+            end
+            continue
+        end
+        if not atomic.Get(sp[0].running):
+            tcp.Close(c)
+            break
+        end
+        if not pool.Submit(sp[0].workers, (): _serve(sp, c) end):
+            tcp.Close(c)
+        end
+    end
+    atomic.Set(sp[0].accept_done, true)
+end
+
+func _run_line(line: str): str:
+    optional := line.StartsWith("-")
+    cmd := optional ? line.Substr(1, line.Len() - 1) : str.Clone(line)
+    parts := _split_command(cmd)
+    defer parts.Free()
+    mem.Free(cmd as void*)
+    if parts.Len() == 0:
+        ret ""
+    end
+    mut args := Vector {} as Vector<str>
+    defer args.Free()
+    repeat parts.Len() - 1 in i:
+        args.Push(parts[i + 1])
+    end
+    r := shell.Run(parts[0], args)
+    if r.code == 0 or optional:
+        ret ""
+    end
+    msg := r.err.Trim()
+    ret line + " failed (exit " + str.FromInt(r.code as i64) + ")" + (msg.Len() > 0 ? ": " + msg : "")
+end
+
+func _run_down(pl: Plan):
+    each line in pl.down:
+        _e := _run_line(line)
+    end
+end
+
+func _default_name(): str:
+    if _platform() == "macos":
+        ret ""
+    end
+    ret "salamtun"
+end
+
+func _resolve_hosts(names: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each h in names:
+        if _ip4(h) >= 0:
+            if not _has(out, h):
+                out.Push(str.Clone(h))
+            end
+            continue
+        end
+        if tunnel.IsIP(h):
+            continue
+        end
+        ips := rawsock.ResolveAll(h)
+        each ip in ips:
+            if _ip4(ip) >= 0 and not _has(out, ip):
+                out.Push(str.Clone(ip))
+            end
+        end
+        ips.Free()
+    end
+    ret out
+end
+
+func _fail(msg: str): Session:
+    _last_error = msg
+    ret Session { error = msg }
+end
+
+@en "Available"
+@fa "در دسترس بودن"
+pub func Available(): Availability:
+    ret _available()
+end
+
+@en "Platform"
+@fa "سکو"
+pub func Platform(): str:
+    ret _platform()
+end
+
+@en "DefaultGateway"
+@fa "دروازه پیش‌فرض"
+pub func DefaultGateway(): Gateway:
+    if _cur != null:
+        ret _cur_gw
+    end
+    ret _gateway()
+end
+
+@en "SystemResolvers"
+@fa "نام‌یاب‌های سامانه"
+pub func SystemResolvers(): Vector<str>:
+    ret _resolvers()
+end
+
+@en "NewBypassDialer"
+@fa "شماره‌گیر دورزن تازه"
+pub func NewBypassDialer(): BypassDialer:
+    ret BypassDialer { gateway = DefaultGateway() }
+end
+
+@en "Bypass"
+@fa "دورزن"
+pub func Bypass(): dyn tunnel.Dialer:
+    ret NewBypassDialer()
+end
+
+@en "OpenDevice"
+@fa "باز کردن دستگاه"
+pub func OpenDevice(name: str, mtu: int): Device:
+    if name.Len() > 0 and not ValidName(name):
+        ret Device { error = "invalid interface name: use 1 to 15 letters, digits, '-' or '_'" }
+    end
+    ret _dev_open(name, mtu > 0 ? mtu : 1500)
+end
+
+@en "Running"
+@fa "در حال اجرا"
+pub func Running(): bool:
+    ret _cur != null
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _last_error
+end
+
+@en "Start"
+@fa "آغاز"
+pub func Start(opts: Options): Session:
+    if _cur != null:
+        ret _fail("a tun session is already running")
+    end
+    av := _available()
+    if not av.ok:
+        ret _fail(av.reason)
+    end
+    mut name := opts.name
+    if name.Len() == 0:
+        name = _default_name()
+    end
+    if name.Len() > 0 and not ValidName(name):
+        ret _fail("invalid interface name: use 1 to 15 letters, digits, '-' or '_'")
+    end
+    if opts.prefix < 1 or opts.prefix > 30 or _ip4(opts.address) < 0:
+        ret _fail("address must be an IPv4 address with a prefix of 30 or less")
+    end
+    next := _next_ip(opts.address)
+    if _net_of(next, opts.prefix) != _net_of(opts.address, opts.prefix):
+        ret _fail("the address must leave room for the next address in its subnet")
+    end
+    upstream := tunnel.ParseAddr(opts.upstream.Len() > 0 ? opts.upstream : DEFAULT_UPSTREAM)
+    if opts.hijack_dns and not upstream.valid:
+        ret _fail("invalid DNS upstream " + opts.upstream)
+    end
+    gw := _gateway()
+    if opts.auto_route and not gw.ok:
+        ret _fail("cannot find the default gateway of this machine")
+    end
+    hosts := _resolve_hosts(opts.exclude)
+    resolvers := _resolvers()
+    dev := _dev_open(name, opts.mtu > 0 ? opts.mtu : 1500)
+    if not dev.ok:
+        ret _fail(dev.error)
+    end
+    pl := BuildPlan(_platform(), dev.name, opts, gw, hosts, resolvers, _exe())
+    hosts.Free()
+    resolvers.Free()
+    each line in pl.up:
+        err := _run_line(line)
+        if err.Len() > 0:
+            _run_down(pl)
+            dev.Close()
+            ret _fail(err)
+        end
+    end
+    srv := tcp.BindOn(opts.address, 0)
+    if not tcp.Ok(srv):
+        _run_down(pl)
+        dev.Close()
+        ret _fail("cannot listen on " + opts.address + " inside the tun device")
+    end
+    nat := NewNat(opts.address, next, tcp.Port(srv), opts.idle_ms)
+    sp := mem.AllocateZeroed(sizeof(_Stack) as u64) as _Stack*
+    sp[0] = _Stack {
+        dev = dev, nat = nat, listener = srv, wmu = sync.NewMutex(), running = atomic.NewFlag(true),
+        loop_done = atomic.NewFlag(false), accept_done = atomic.NewFlag(false),
+        workers = pool.NewElastic(2 as i64, 512 as i64, 4096 as i64), dialer = opts.dialer, upstream = upstream,
+        address = str.Clone(opts.address), next = next, plan = pl, gateway = gw, sniff = opts.sniff,
+        sniff_ms = opts.sniff_ms > 0 ? opts.sniff_ms : 300, idle_ms = opts.idle_ms, dns = opts.hijack_dns,
+        block6 = opts.block_ipv6, relay = tunnel.NewStats(), c_in = atomic.NewI64(0 as i64), c_out = atomic.NewI64(0 as i64),
+        c_drop = atomic.NewI64(0 as i64), c_conn = atomic.NewI64(0 as i64), c_active = atomic.NewI64(0 as i64),
+        c_dns = atomic.NewI64(0 as i64), c_sniff = atomic.NewI64(0 as i64), c_fail = atomic.NewI64(0 as i64)
+    }
+    _cur = sp as void*
+    _cur_gw = gw
+    _t1 := spawn(_packet_loop, sp)
+    _t2 := spawn(_accept_loop, sp)
+    _last_error = ""
+    ret Session { ok = true, name = dev.name, address = str.Clone(opts.address), dns = str.Clone(next), id = 1 }
+end
+
+@en "SessionStats"
+@fa "آمار نشست"
+pub func SessionStats(s: Session): Stats:
+    if _cur == null or not s.ok:
+        ret Stats {}
+    end
+    sp := _cur as _Stack*
+    ret Stats {
+        packets_in = atomic.Load(sp[0].c_in), packets_out = atomic.Load(sp[0].c_out), dropped = atomic.Load(sp[0].c_drop),
+        connections = atomic.Load(sp[0].c_conn), active = atomic.Load(sp[0].c_active), dns_queries = atomic.Load(sp[0].c_dns),
+        sniffed = atomic.Load(sp[0].c_sniff), failed = atomic.Load(sp[0].c_fail),
+        bytes_up = sp[0].relay.Up(), bytes_down = sp[0].relay.Down()
+    }
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(s: Session):
+    if _cur == null or not s.ok:
+        ret
+    end
+    sp := _cur as _Stack*
+    atomic.Set(sp[0].running, false)
+    host := sp[0].address
+    port := tcp.Port(sp[0].listener)
+    tcp.WakeServer(host, port)
+    tcp.CloseServer(sp[0].listener)
+    mut waited := 0
+    until waited < 3000 and not (atomic.Get(sp[0].loop_done) and atomic.Get(sp[0].accept_done)):
+        sync.SleepMs(20)
+        waited += 20
+    end
+    _run_down(sp[0].plan)
+    sp[0].dev.Close()
+    _cur = null
+    _cur_gw = Gateway {}
+end

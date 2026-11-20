@@ -1,0 +1,694 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import io
+import mem
+import str
+import os
+import os.shell
+import net.internal.rawsock
+
+if SALAM_OS_LINUX and not SALAM_OS_ANDROID:
+    extern:
+        func open(path: str, flags: int, ...): int
+        func ioctl(fd: int, req: usize, ...): int
+        func read(fd: int, buf: void*, size: u64): i64
+        func write(fd: int, buf: void*, size: u64): i64
+        func close(fd: int): int
+        func poll(fds: void*, nfds: usize, timeout: int): int
+        func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
+        func getsockopt(s: int, level: int, optname: int, optval: void*, optlen: void*): int
+        func connect(fd: int, addr: void*, size: int): int
+    end
+
+    func _platform(): str:
+        ret "linux"
+    end
+
+    func _cap_net_admin(): bool:
+        text := io.ReadFile("/proc/self/status")
+        defer mem.Free(text as void*)
+        lines := text.Split("\n")
+        defer lines.Free()
+        each line in lines:
+            if line.StartsWith("CapEff:"):
+                v := _after_colon(line)
+                n := v.Len()
+                if n < 4:
+                    ret false
+                end
+                digit := v.Substr(n - 4, 1)
+                d := _hexv(digit)
+                mem.Free(digit as void*)
+                ret d >= 0 and (d & (1 as i64)) != 0
+            end
+        end
+        ret false
+    end
+
+    func _available(): Availability:
+        if not os.Exists("/dev/net/tun"):
+            ret Availability { reason = "/dev/net/tun is missing: load the tun kernel module or pass the device to the container" }
+        end
+        if not _cap_net_admin():
+            ret Availability { reason = "creating a tun device needs root or the CAP_NET_ADMIN capability" }
+        end
+        ret Availability { ok = true }
+    end
+
+    func _poll_in(fd: int, timeout_ms: int): int:
+        pfd := mem.AllocateZeroed(8 as u64)
+        ((pfd as i64) as i32*)[0] = fd
+        ((pfd as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+        r := poll(pfd, 1 as usize, timeout_ms)
+        mem.Free(pfd)
+        ret r
+    end
+
+    func _dev_open(name: str, mtu: int): Device:
+        fd := open("/dev/net/tun", 2 | 524288)
+        if fd < 0:
+            ret Device { error = "cannot open /dev/net/tun (needs root or CAP_NET_ADMIN)" }
+        end
+        ifr := mem.AllocateZeroed(40 as u64) as u8*
+        q := name as u8*
+        k := name.Len()
+        repeat k in i:
+            ifr[i] = q[i]
+        end
+        ((ifr as i64 + (16 as i64)) as i16*)[0] = (1 | 4096) as i16
+        if ioctl(fd, 1074025674 as usize, ifr as void*) < 0:
+            mem.Free(ifr as void*)
+            close(fd)
+            ret Device { error = "TUNSETIFF failed for " + name + " (needs root or CAP_NET_ADMIN, or the name is taken)" }
+        end
+        mut sb := str.NewBuilder()
+        mut i := 0
+        until i < 16 and ifr[i] != (0 as u8):
+            str.BufAppendChar(sb, ifr[i] as int)
+            i++
+        end
+        got := str.BufStr(sb)
+        str.BufFree(sb)
+        mem.Free(ifr as void*)
+        ret Device { ok = true, name = got, mtu = mtu, fd = fd as i64 }
+    end
+
+    func _dev_read(d: Device, buf: void*, max: int, timeout_ms: int): int:
+        r := _poll_in(d.fd as int, timeout_ms)
+        if r == 0:
+            ret 0
+        end
+        if r < 0:
+            ret 0
+        end
+        n := read(d.fd as int, buf, max as u64)
+        if n <= (0 as i64):
+            ret 0 - 1
+        end
+        ret n as int
+    end
+
+    func _dev_write(d: Device, ptr: void*, n: int): int:
+        ret write(d.fd as int, ptr, n as u64) as int
+    end
+
+    func _dev_close(d: Device):
+        close(d.fd as int)
+    end
+
+    func _gateway(): Gateway:
+        text := io.ReadFile("/proc/net/route")
+        defer mem.Free(text as void*)
+        ret ParseLinuxRoutes(text)
+    end
+
+    func _resolvers(): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        each path in ["/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"]:
+            text := io.ReadFile(path)
+            found := ParseResolvers(text)
+            each r in found:
+                if not _has(out, r) and not r.StartsWith("127."):
+                    out.Push(r)
+                end
+            end
+            found.Free()
+            mem.Free(text as void*)
+        end
+        ret out
+    end
+
+    func _exe(): str:
+        ret ""
+    end
+
+    func _bind_iface(fd: i64, gw: Gateway): bool:
+        if gw.iface.Len() == 0:
+            ret false
+        end
+        ret setsockopt(fd as int, 1, 25, gw.iface as void*, gw.iface.Len() + 1) == 0
+    end
+
+    func _connect4(fd: i64, ip: str, port: int, timeout_ms: int): bool:
+        sa := _sockaddr4(ip, port, false)
+        if sa == null:
+            ret false
+        end
+        sock := rawsock.FromFd(fd)
+        rawsock.SetNonBlocking(sock, true)
+        r := connect(fd as int, sa, 16)
+        mem.Free(sa)
+        mut ok := r == 0
+        if not ok:
+            pfd := mem.AllocateZeroed(8 as u64)
+            ((pfd as i64) as i32*)[0] = fd as i32
+            ((pfd as i64 + (4 as i64)) as i16*)[0] = 4 as i16
+            if poll(pfd, 1 as usize, timeout_ms) > 0:
+                err := mem.AllocateZeroed(8 as u64)
+                size := mem.AllocateZeroed(8 as u64)
+                ((size as i64) as i32*)[0] = 4 as i32
+                if getsockopt(fd as int, 1, 4, err, size) == 0:
+                    ok = ((err as i64) as i32*)[0] == (0 as i32)
+                end
+                mem.Free(err)
+                mem.Free(size)
+            end
+            mem.Free(pfd)
+        end
+        rawsock.SetNonBlocking(sock, false)
+        ret ok
+    end
+end
+
+if SALAM_OS_MAC:
+    extern:
+        func socket(domain: int, kind: int, protocol: int): int
+        func ioctl(fd: int, req: usize, ...): int
+        func read(fd: int, buf: void*, size: u64): i64
+        func write(fd: int, buf: void*, size: u64): i64
+        func close(fd: int): int
+        func poll(fds: void*, nfds: usize, timeout: int): int
+        func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
+        func getsockopt(s: int, level: int, optname: int, optval: void*, optlen: void*): int
+        func connect(fd: int, addr: void*, size: int): int
+        func geteuid(): u32
+        func if_nametoindex(name: str): u32
+    end
+
+    func _platform(): str:
+        ret "macos"
+    end
+
+    func _available(): Availability:
+        if geteuid() != (0 as u32):
+            ret Availability { reason = "creating a utun device needs root; run the app with administrator rights or from a privileged helper" }
+        end
+        ret Availability { ok = true }
+    end
+
+    func _poll_in(fd: int, timeout_ms: int): int:
+        pfd := mem.AllocateZeroed(8 as u64)
+        ((pfd as i64) as i32*)[0] = fd
+        ((pfd as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+        r := poll(pfd, 1 as usize, timeout_ms)
+        mem.Free(pfd)
+        ret r
+    end
+
+    func _utun_unit(name: str): int:
+        if not name.StartsWith("utun") or name.Len() < 5:
+            ret 0
+        end
+        tail := name.Substr(4, name.Len() - 4)
+        n := _decv(tail)
+        mem.Free(tail as void*)
+        ret n < 0 ? 0 : n + 1
+    end
+
+    func _dev_open(name: str, mtu: int): Device:
+        fd := socket(32, 2, 2)
+        if fd < 0:
+            ret Device { error = "cannot open a PF_SYSTEM control socket" }
+        end
+        info := mem.AllocateZeroed(100 as u64) as u8*
+        ctl := "com.apple.net.utun_control"
+        q := ctl as u8*
+        repeat ctl.Len() in i:
+            info[4 + i] = q[i]
+        end
+        if ioctl(fd, 3227799043 as usize, info as void*) < 0:
+            mem.Free(info as void*)
+            close(fd)
+            ret Device { error = "CTLIOCGINFO failed for com.apple.net.utun_control" }
+        end
+        id_le := ((info as i64) as u32*)[0]
+        mem.Free(info as void*)
+        sa := mem.AllocateZeroed(32 as u64) as u8*
+        sa[0] = 32 as u8
+        sa[1] = 32 as u8
+        ((sa as i64 + (2 as i64)) as u16*)[0] = 2 as u16
+        ((sa as i64 + (4 as i64)) as u32*)[0] = id_le
+        ((sa as i64 + (8 as i64)) as u32*)[0] = _utun_unit(name) as u32
+        r := connect(fd, sa as void*, 32)
+        mem.Free(sa as void*)
+        if r < 0:
+            close(fd)
+            ret Device { error = "connecting the utun control socket failed (needs root, or " + name + " is taken)" }
+        end
+        buf := mem.AllocateZeroed(64 as u64) as u8*
+        size := mem.AllocateZeroed(8 as u64)
+        ((size as i64) as u32*)[0] = 64 as u32
+        _g := getsockopt(fd, 2, 2, buf as void*, size)
+        mut sb := str.NewBuilder()
+        mut i := 0
+        until i < 63 and buf[i] != (0 as u8):
+            str.BufAppendChar(sb, buf[i] as int)
+            i++
+        end
+        got := str.BufStr(sb)
+        str.BufFree(sb)
+        mem.Free(buf as void*)
+        mem.Free(size)
+        ret Device { ok = true, name = got, mtu = mtu, fd = fd as i64, scratch = mem.AllocateZeroed(65544 as u64) }
+    end
+
+    func _dev_read(d: Device, buf: void*, max: int, timeout_ms: int): int:
+        r := _poll_in(d.fd as int, timeout_ms)
+        if r <= 0:
+            ret 0
+        end
+        mut want := max + 4
+        if want > 65540:
+            want = 65540
+        end
+        n := read(d.fd as int, d.scratch, want as u64) as int
+        if n <= 0:
+            ret 0 - 1
+        end
+        if n <= 4:
+            ret 0
+        end
+        mem.Copy(buf, ((d.scratch as i64) + (4 as i64)) as void*, (n - 4) as u64)
+        ret n - 4
+    end
+
+    func _dev_write(d: Device, ptr: void*, n: int): int:
+        if n <= 0 or n > 65536:
+            ret 0 - 1
+        end
+        out := mem.AllocateZeroed((n + 4) as u64) as u8*
+        out[3] = ((((ptr as u8*)[0] as int) >> 4) == 6 ? 30 : 2) as u8
+        mem.Copy(((out as i64) + (4 as i64)) as void*, ptr, n as u64)
+        w := write(d.fd as int, out as void*, (n + 4) as u64) as int
+        mem.Free(out as void*)
+        ret w < 4 ? w : w - 4
+    end
+
+    func _dev_close(d: Device):
+        close(d.fd as int)
+        if d.scratch != null:
+            mem.Free(d.scratch)
+        end
+    end
+
+    func _gateway(): Gateway:
+        text := _shell_text("route -n get default")
+        defer mem.Free(text as void*)
+        ret ParseMacRoute(text)
+    end
+
+    func _resolvers(): Vector<str>:
+        text := _shell_text("scutil --dns")
+        defer mem.Free(text as void*)
+        ret ParseResolvers(text)
+    end
+
+    func _exe(): str:
+        ret ""
+    end
+
+    func _bind_iface(fd: i64, gw: Gateway): bool:
+        if gw.iface.Len() == 0:
+            ret false
+        end
+        idx := if_nametoindex(gw.iface)
+        if idx == (0 as u32):
+            ret false
+        end
+        v := mem.AllocateZeroed(4 as u64)
+        ((v as i64) as u32*)[0] = idx
+        r := setsockopt(fd as int, 0, 25, v, 4)
+        mem.Free(v)
+        ret r == 0
+    end
+
+    func _connect4(fd: i64, ip: str, port: int, timeout_ms: int): bool:
+        sa := _sockaddr4(ip, port, true)
+        if sa == null:
+            ret false
+        end
+        sock := rawsock.FromFd(fd)
+        rawsock.SetNonBlocking(sock, true)
+        r := connect(fd as int, sa, 16)
+        mem.Free(sa)
+        mut ok := r == 0
+        if not ok:
+            pfd := mem.AllocateZeroed(8 as u64)
+            ((pfd as i64) as i32*)[0] = fd as i32
+            ((pfd as i64 + (4 as i64)) as i16*)[0] = 4 as i16
+            if poll(pfd, 1 as usize, timeout_ms) > 0:
+                err := mem.AllocateZeroed(8 as u64)
+                size := mem.AllocateZeroed(8 as u64)
+                ((size as i64) as u32*)[0] = 4 as u32
+                if getsockopt(fd as int, 65535, 4103, err, size) == 0:
+                    ok = ((err as i64) as i32*)[0] == (0 as i32)
+                end
+                mem.Free(err)
+                mem.Free(size)
+            end
+            mem.Free(pfd)
+        end
+        rawsock.SetNonBlocking(sock, false)
+        ret ok
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+        func MultiByteToWideChar(code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32): i32
+        func WideCharToMultiByte(code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*, used: void*): i32
+        func GetModuleFileNameW(module: void*, buf: void*, size: u32): u32
+        func WaitForSingleObject(handle: void*, ms: u32): u32
+        func GetLastError(): u32
+        func setsockopt(s: usize, level: int, optname: int, optval: void*, optlen: int): int
+        func connect(s: usize, addr: void*, addrlen: int): int
+    end
+
+    mut _wt_lib := null as void*
+    mut _wt_create := null as void*
+    mut _wt_close := null as void*
+    mut _wt_start := null as void*
+    mut _wt_end := null as void*
+    mut _wt_event := null as void*
+    mut _wt_recv := null as void*
+    mut _wt_release := null as void*
+    mut _wt_alloc := null as void*
+    mut _wt_send := null as void*
+
+    func _platform(): str:
+        ret "windows"
+    end
+
+    func _w_wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        buf := mem.AllocateZeroed(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _w_lib(name: str): void*:
+        wide := _w_wide(name)
+        m := LoadLibraryW(wide)
+        mem.Free(wide)
+        ret m
+    end
+
+    func _wt_load(): bool:
+        if _wt_lib != null:
+            ret true
+        end
+        lib := _w_lib("wintun.dll")
+        if lib == null:
+            ret false
+        end
+        _wt_create = GetProcAddress(lib, "WintunCreateAdapter")
+        _wt_close = GetProcAddress(lib, "WintunCloseAdapter")
+        _wt_start = GetProcAddress(lib, "WintunStartSession")
+        _wt_end = GetProcAddress(lib, "WintunEndSession")
+        _wt_event = GetProcAddress(lib, "WintunGetReadWaitEvent")
+        _wt_recv = GetProcAddress(lib, "WintunReceivePacket")
+        _wt_release = GetProcAddress(lib, "WintunReleaseReceivePacket")
+        _wt_alloc = GetProcAddress(lib, "WintunAllocateSendPacket")
+        _wt_send = GetProcAddress(lib, "WintunSendPacket")
+        if _wt_create == null or _wt_start == null or _wt_recv == null or _wt_send == null or _wt_alloc == null or _wt_release == null or _wt_event == null:
+            ret false
+        end
+        _wt_lib = lib
+        ret true
+    end
+
+    func _is_admin(): bool:
+        lib := _w_lib("shell32.dll")
+        if lib == null:
+            ret false
+        end
+        fp := GetProcAddress(lib, "IsUserAnAdmin")
+        if fp == null:
+            ret false
+        end
+        f := fp as extern func () int
+        ret f() != 0
+    end
+
+    func _available(): Availability:
+        if SALAM_ARCH_X86:
+            ret Availability { reason = "full device mode is not supported on 32-bit Windows" }
+        end
+        if not _wt_load():
+            ret Availability { reason = "wintun.dll was not found: download it from https://www.wintun.net and place the dll for this architecture next to the executable" }
+        end
+        if not _is_admin():
+            ret Availability { reason = "creating a Wintun adapter needs administrator rights" }
+        end
+        ret Availability { ok = true }
+    end
+
+    func _dev_open(name: str, mtu: int): Device:
+        if SALAM_ARCH_X86:
+            ret Device { error = "full device mode is not supported on 32-bit Windows" }
+        end
+        if not _wt_load():
+            ret Device { error = "wintun.dll was not found next to the executable" }
+        end
+        wname := _w_wide(name)
+        wtype := _w_wide("Salam")
+        create := _wt_create as extern func (void*, void*, void*) void*
+        adapter := create(wname, wtype, null)
+        mem.Free(wname)
+        mem.Free(wtype)
+        if adapter == null:
+            ret Device { error = "WintunCreateAdapter failed (needs administrator rights)" }
+        end
+        start := _wt_start as extern func (void*, u32) void*
+        session := start(adapter, 4194304 as u32)
+        if session == null:
+            closer := _wt_close as extern func (void*)
+            closer(adapter)
+            ret Device { error = "WintunStartSession failed" }
+        end
+        ev := _wt_event as extern func (void*) void*
+        ret Device { ok = true, name = str.Clone(name), mtu = mtu, session = session, adapter = adapter, event = ev(session) }
+    end
+
+    func _dev_read(d: Device, buf: void*, max: int, timeout_ms: int): int:
+        recv := _wt_recv as extern func (void*, void*) void*
+        size := mem.AllocateZeroed(8 as u64)
+        mut pk := recv(d.session, size)
+        if pk == null:
+            if GetLastError() != (259 as u32):
+                mem.Free(size)
+                ret 0 - 1
+            end
+            _w := WaitForSingleObject(d.event, timeout_ms as u32)
+            pk = recv(d.session, size)
+        end
+        if pk == null:
+            mem.Free(size)
+            ret 0
+        end
+        mut n := ((size as i64) as u32*)[0] as int
+        mem.Free(size)
+        if n > max:
+            n = max
+        end
+        mem.Copy(buf, pk, n as u64)
+        release := _wt_release as extern func (void*, void*)
+        release(d.session, pk)
+        ret n
+    end
+
+    func _dev_write(d: Device, ptr: void*, n: int): int:
+        alloc := _wt_alloc as extern func (void*, u32) void*
+        out := alloc(d.session, n as u32)
+        if out == null:
+            ret 0 - 1
+        end
+        mem.Copy(out, ptr, n as u64)
+        send := _wt_send as extern func (void*, void*)
+        send(d.session, out)
+        ret n
+    end
+
+    func _dev_close(d: Device):
+        if d.session != null and _wt_end != null:
+            ender := _wt_end as extern func (void*)
+            ender(d.session)
+        end
+        if d.adapter != null and _wt_close != null:
+            closer := _wt_close as extern func (void*)
+            closer(d.adapter)
+        end
+    end
+
+    func _gateway(): Gateway:
+        lib := _w_lib("iphlpapi.dll")
+        if lib == null:
+            ret Gateway {}
+        end
+        fp := GetProcAddress(lib, "GetBestRoute")
+        if fp == null:
+            ret Gateway {}
+        end
+        row := mem.AllocateZeroed(64 as u64) as u8*
+        best := fp as extern func (u32, u32, void*) u32
+        r := best(134744072 as u32, 0 as u32, row as void*)
+        if r != (0 as u32):
+            mem.Free(row as void*)
+            ret Gateway {}
+        end
+        hop := ((row[12] as i64) << 24) | ((row[13] as i64) << 16) | ((row[14] as i64) << 8) | (row[15] as i64)
+        idx := ((row as i64 + (16 as i64)) as u32*)[0] as int
+        mem.Free(row as void*)
+        mut ip := _ip4s(hop)
+        if hop == (0 as i64):
+            mem.Free(ip as void*)
+            ip = ""
+        end
+        ret Gateway { ok = idx > 0, ip = ip, index = idx }
+    end
+
+    func _resolvers(): Vector<str>:
+        ret Vector {}
+    end
+
+    func _exe(): str:
+        wbuf := mem.AllocateZeroed(4096 as u64)
+        n := GetModuleFileNameW(null, wbuf, 2047 as u32)
+        if n == (0 as u32):
+            mem.Free(wbuf)
+            ret ""
+        end
+        out := mem.AllocateZeroed(4096 as u64)
+        _k := WideCharToMultiByte(65001 as u32, 0 as u32, wbuf, 0 - 1, out, 4095, null, null)
+        mem.Free(wbuf)
+        ret out as str
+    end
+
+    func _bind_iface(fd: i64, gw: Gateway): bool:
+        if gw.index <= 0:
+            ret false
+        end
+        v := mem.AllocateZeroed(4 as u64) as u8*
+        _put32(v, 0, gw.index as i64)
+        r := setsockopt(fd as usize, 0, 31, v as void*, 4)
+        mem.Free(v as void*)
+        ret r == 0
+    end
+
+    func _connect4(fd: i64, ip: str, port: int, _timeout_ms: int): bool:
+        sa := _sockaddr4(ip, port, false)
+        if sa == null:
+            ret false
+        end
+        r := connect(fd as usize, sa, 16)
+        mem.Free(sa)
+        ret r == 0
+    end
+end
+
+if not SALAM_OS_WINDOWS and not SALAM_OS_MAC and not (SALAM_OS_LINUX and not SALAM_OS_ANDROID):
+    func _platform(): str:
+        ret "other"
+    end
+
+    func _available(): Availability:
+        ret Availability { reason = "full device mode is not supported on this system" }
+    end
+
+    func _dev_open(name: str, _mtu: int): Device:
+        ret Device { error = "full device mode is not supported on this system: " + name }
+    end
+
+    func _dev_read(_d: Device, _buf: void*, _max: int, _timeout_ms: int): int:
+        ret 0 - 1
+    end
+
+    func _dev_write(_d: Device, _ptr: void*, _n: int): int:
+        ret 0 - 1
+    end
+
+    func _dev_close(d: Device):
+        _x := d.fd
+    end
+
+    func _gateway(): Gateway:
+        ret Gateway {}
+    end
+
+    func _resolvers(): Vector<str>:
+        ret Vector {}
+    end
+
+    func _exe(): str:
+        ret ""
+    end
+
+    func _bind_iface(_fd: i64, _gw: Gateway): bool:
+        ret false
+    end
+
+    func _connect4(_fd: i64, _ip: str, _port: int, _timeout_ms: int): bool:
+        ret false
+    end
+end
+
+func _shell_text(cmd: str): str:
+    r := shell.Exec(cmd)
+    if r.code != 0:
+        ret ""
+    end
+    ret r.out
+end
+
+func _sockaddr4(ip: str, port: int, bsd: bool): void*:
+    a := _ip4(ip)
+    if a < 0:
+        ret null
+    end
+    sa := mem.AllocateZeroed(16 as u64) as u8*
+    if bsd:
+        sa[0] = 16 as u8
+        sa[1] = 2 as u8
+    else:
+        sa[0] = 2 as u8
+        sa[1] = 0 as u8
+    end
+    _put16(sa, 2, port)
+    _put32(sa, 4, a)
+    ret sa as void*
+end

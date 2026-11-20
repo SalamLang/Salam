@@ -16,7 +16,7 @@ In exchange, Salam is a smaller language with a gentler learning curve, a large 
 
 |                         | Rust                                                                                    | Salam                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Memory management       | Ownership, borrowing and lifetimes, checked by the compiler; `Drop` frees automatically | Manual: `.Free()`, usually through `defer`; compile-time warnings for common mistakes                      |
+| Memory management       | Ownership, borrowing and lifetimes, checked by the compiler; `Drop` frees automatically | Manual: `.Free()`, usually through `defer`; compile-time errors for common mistakes                        |
 | Memory safety guarantee | Yes, for safe code; `unsafe` blocks opt out                                             | No guarantee; bounds checks in development builds, ownership checks, AddressSanitizer via `salam memcheck` |
 | Data races              | Prevented at compile time by `Send` and `Sync`                                          | Your responsibility: mutexes, atomics, channels                                                            |
 | Sum types and matching  | `enum` with data, exhaustive `match`                                                    | `enum` with data, exhaustive `match`                                                                       |
@@ -206,7 +206,7 @@ error[E139]: 'p' is used after its storage was freed on line 6
   = help: a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy
 ```
 
-The ownership checker also reports freeing twice (`E140`), returning something the function's own `defer` frees (`E141`), the same mistakes on only some paths (warnings `W142` and `W143`), and keeping a pointer or copy across a call that may grow a `Vector` or `HashMap` and move its storage (`W144`). It costs nothing at runtime, and `--ownership=error` turns its warnings into errors.
+The ownership checker also reports freeing twice (`E140`), returning something the function's own `defer` frees (`E141`), the same mistakes on only some paths (`E256` and `E257`), and keeping a pointer or copy across a call that may grow a `Vector` or `HashMap` and move its storage (`E258`). All of them stop the build, and it costs nothing at runtime.
 
 But it does not cover everything Rust's checker covers. This Salam program, the direct counterpart of the Rust example above, compiles today without a diagnostic:
 

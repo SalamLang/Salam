@@ -233,7 +233,7 @@ end
 ```
 
 ```text
-warning[W163]: 'a' is used after its buffer was moved on line 4; both names now share one buffer, so take 'a.Copy()' where both are needed
+error[E259]: 'a' is used after its buffer was moved on line 4; both names now share one buffer, so take 'a.Copy()' where both are needed
  --> o2.salam:5:5
   |
 5 |     a.Free()
@@ -249,7 +249,7 @@ error[E139]: 'b' is used after its storage was freed on line 5
   = help: a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy
 ```
 
-The codes cover the main cases: **E139** use after free, **E140** double free, **E141** a returned value that the function's own `defer` frees; **W142** and **W143** when only some paths do it; **W144** a copy, `.Ref()` pointer or iterator kept across a call that may move the buffer; **W163** an owned container used after it was handed to another name. `--ownership=warn` is the default, `error` turns the warnings into errors, and `off` disables the checks along with the automatic frees. None of this costs anything at runtime; the analysis only reads the program.
+The codes cover the main cases: **E139** use after free, **E140** double free, **E141** a returned value that the function's own `defer` frees; **E256** and **E257** when only some paths do it; **E258** a copy, `.Ref()` pointer or iterator kept across a call that may move the buffer; **E259** an owned container used after it was handed to another name. Every one of them stops the build by default. `--ownership=warn` turns the last four back into the warnings **W142**, **W143**, **W144** and **W163** for code that is being migrated, and `off` disables the checks along with the automatic frees. None of this costs anything at runtime; the analysis only reads the program.
 
 It is important to be precise about what this is. It is **not a borrow checker**. Rust's borrow checker proves that safe code cannot have use-after-free or data races, and rejects programs it cannot prove. Salam's checker reports the mistakes it can see and stays quiet otherwise. Globals, indirect calls through function values and `dyn`, and the elements inside containers are outside its view, as `docs/design/OWNERSHIP.md` lists. It catches a lot, with no annotations and no new syntax, but it is a strong safety net, not a proof.
 

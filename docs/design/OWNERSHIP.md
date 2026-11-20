@@ -107,17 +107,17 @@ positive count at zero on `std/` and `compiler/`:
 
 ## Diagnostics
 
-| Code | When                                                                                  | Mode           |
-| ---- | ------------------------------------------------------------------------------------- | -------------- |
-| E139 | a path is used after its storage was freed on every path                              | on, warn       |
-| E140 | storage is freed twice on every path                                                  | on, warn       |
-| E141 | a returned value is freed by the function's own `defer`                               | on, warn       |
-| W142 | used after free on some paths                                                         | on, warn       |
-| W143 | freed twice on some paths                                                             | on, warn       |
-| W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
-| W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | warn (default) |
-| E176 | a call that returns a new heap string is a bare statement, so the result is dropped   | on, warn       |
-| E250 | a local holds a struct whose fresh heap string field is never freed or handed on      | on, warn       |
+| Code        | When                                                                                  | Mode                  |
+| ----------- | ------------------------------------------------------------------------------------- | --------------------- |
+| E139        | a path is used after its storage was freed on every path                              | on, warn, error       |
+| E140        | storage is freed twice on every path                                                  | on, warn, error       |
+| E141        | a returned value is freed by the function's own `defer`                               | on, warn, error       |
+| E256 / W142 | used after free on some paths                                                         | error (default) / on, warn |
+| E257 / W143 | freed twice on some paths                                                             | error (default) / on, warn |
+| E258 / W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | error (default) / warn |
+| E259 / W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | error (default) / warn |
+| E176        | a call that returns a new heap string is a bare statement, so the result is dropped   | on, warn, error       |
+| E250        | a local holds a struct whose fresh heap string field is never freed or handed on      | on, warn, error       |
 
 E176 covers user code only (not `std/`). `input`, `trim`, `upper`, `lower`,
 `repeat`, `substr` and `concat` count as returning a new string, so
@@ -140,12 +140,16 @@ handing it on.
 A bare statement that calls such a function (`ask()` on its own) is rejected
 the same way, because nothing holds the result.
 
-`--ownership=off|on|warn|error` picks the mode; `warn` is the default.
+`--ownership=off|on|warn|error` picks the mode; `error` is the default since
+2026-11-20, so every memory issue stops the build. The four checks that are
+warnings in the other modes get their own error codes there (W142 is E256,
+W143 is E257, W144 is E258, W163 is E259), because E142 already names the
+`try` check. `warn` keeps them as warnings for code that is being migrated;
 `on` reports the errors plus W142 and W143; `warn` adds W144, which needs a
 wider relevance scan. Measured on 2026-11-03: `salam check` on typical test
 programs that import std took 0 to 9% longer (0.77s to 0.84s for
 `image_demo`), and on `compiler/main.salam`, which is unusually heavy on
-containers, 10.2s to 15.1s. `error` turns the warnings into errors.
+containers, 10.2s to 15.1s.
 
 W144 became the default once `--ownership=warn` reported nothing on
 `compiler/`, `std/` and the test programs. Two fixes in the stale-bit

@@ -77,6 +77,7 @@ struct LnNames:
     pub touch_vars: str = "TouchInstanceVars"
     pub scope_vars: str = "ScopeVars"
     pub derive: str = "ScopeDerive"
+    pub env: str = "Env"
     pub vec: str = "Vector"
     pub len: str = "len"
     pub push: str = "push"
@@ -138,6 +139,7 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.touch_vars = "لمس متغیرهای نمونه"
     n.scope_vars = "متغیرهای دامنه"
     n.derive = "اشتقاق دامنه"
+    n.env = "محیط صفحه"
     n.vec = "وکتور"
     n.len = "طول"
     n.push = "بیفزا"
@@ -611,20 +613,20 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
             continue
         end
         ddest := sm.LayoutAttrDest(d)
-        dout := sm.LayoutAttrOut(d)
+        def_out := sm.LayoutAttrOut(d)
         ddef := sm.LayoutAttrDefault(d)
         if ddest == sm.LA_HTML:
             mut seen := false
             repeat seen_attr.Len() in si:
-                if str.Equals(seen_attr.Get(si), dout):
+                if str.Equals(seen_attr.Get(si), def_out):
                     seen = true
                 end
             end
             if not seen:
-                ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+                ln_call(g, g.nm.attr, ln_quote(def_out) + g.nm.sep + ln_quote(ddef))
             end
         else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
-            dprop := dout
+            dprop := def_out
             if str.Len(dprop) == 0:
                 continue
             end
@@ -1223,6 +1225,9 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
         if str.Equals(item.name, "content") or str.Equals(item.name, "favicon"):
             continue
         end
+        if sm.ResolveStyleAttr(item.name).ok and not sm.StyleAttrIsEvent(a, iid) and not ln_is_ev_attr(g, iid):
+            continue
+        end
         mut key := sm.LayoutAttrKey(item.name)
         if str.Len(key) == 0:
             key = item.name
@@ -1334,20 +1339,20 @@ func ln_page_settings(g &: LnGen, a &: at.Ast, lb: int, pack: lp.Langpack):
                 continue
             end
             ddest := sm.LayoutAttrDest(d)
-            dout := sm.LayoutAttrOut(d)
+            def_out := sm.LayoutAttrOut(d)
             ddef := sm.LayoutAttrDefault(d)
             if ddest == sm.LA_HTML:
                 mut seen := false
                 repeat seen_attr.Len() in si:
-                    if str.Equals(seen_attr.Get(si), dout):
+                    if str.Equals(seen_attr.Get(si), def_out):
                         seen = true
                     end
                 end
                 if not seen:
-                    ln_call(g, g.nm.attr, ln_quote(dout) + g.nm.sep + ln_quote(ddef))
+                    ln_call(g, g.nm.attr, ln_quote(def_out) + g.nm.sep + ln_quote(ddef))
                 end
             else ddest == sm.LA_CSS or ddest == sm.LA_HTML_OR_CSS:
-                dprop := dout
+                dprop := def_out
                 if str.Len(dprop) == 0:
                     continue
                 end
@@ -1518,11 +1523,66 @@ func ln_rx_source(g &: LnGen): str:
     ret s
 end
 
+func ln_env_pair(n: LnNames, name: str, value: str): str:
+    mut s := "    " + n.kw_if + " envx_" + name + " != (" + value + "):\n"
+    s += "        envx_" + name + " = (" + value + ")\n"
+    s += "    " + n.kw_end + "\n"
+    ret s
+end
+
+func ln_env_source(n: LnNames): str:
+    ps0 := ["w", "h", "dark", "touch", "reduced", "contrast", "rtl"]
+    mut s := n.kw_func + " __salam_env_set("
+    repeat len(ps0) in i:
+        if i > 0:
+            s += n.sep
+        end
+        s += "__salam_" + ps0[i] + ": " + (i < 2 ? n.t_int : n.t_bool)
+    end
+    s += "):\n"
+    s += ln_env_pair(n, "w", "__salam_w")
+    s += ln_env_pair(n, "h", "__salam_h")
+    s += ln_env_pair(n, "dark", "__salam_dark")
+    s += ln_env_pair(n, "light", "not __salam_dark")
+    s += ln_env_pair(n, "touch", "__salam_touch")
+    s += ln_env_pair(n, "mouse", "not __salam_touch")
+    s += ln_env_pair(n, "reduced", "__salam_reduced")
+    s += ln_env_pair(n, "contrast", "__salam_contrast")
+    s += ln_env_pair(n, "rtl", "__salam_rtl")
+    s += ln_env_pair(n, "ltr", "not __salam_rtl")
+    s += ln_env_pair(n, "compact", "__salam_w < 600")
+    s += ln_env_pair(n, "regular", "__salam_w >= 600 and __salam_w <= 1024")
+    s += ln_env_pair(n, "wide", "__salam_w > 1024")
+    s += ln_env_pair(n, "landscape", "__salam_w >= __salam_h")
+    s += ln_env_pair(n, "portrait", "__salam_w < __salam_h")
+    s += n.kw_end + "\n\n"
+    ret s
+end
+
+func ln_env_line(n: LnNames): str:
+    ps0 := ["w", "h", "dark", "touch", "reduced", "contrast", "rtl"]
+    mut params := ""
+    mut args := ""
+    repeat len(ps0) in i:
+        if i > 0:
+            params += n.sep
+            args += n.sep
+        end
+        params += "__salam_e_" + ps0[i] + ": " + (i < 2 ? n.t_int : n.t_bool)
+        args += "__salam_e_" + ps0[i]
+    end
+    ret "    __salam_b." + n.env + "((" + params + "): __salam_env_set(" + args + ") " + n.kw_end + ")\n"
+end
+
 func ln_source(g &: LnGen, with_main: bool): str:
     n := g.nm
     mut s := n.kw_import + " " + n.import_ui + "\n\n"
     s += ln_rx_source(g)
-    rline := "    __salam_b." + n.reactive + "(" + co.U64Toa(ln_rx_words(g.rx) as u64) + n.sep + "(__salam_w: " + n.t_int + "): " + n.kw_ret + " __salam_take(__salam_w) " + n.kw_end + n.sep + "(): __salam_sites() " + n.kw_end + ")\n"
+    mut rline := "    __salam_b." + n.reactive + "(" + co.U64Toa(ln_rx_words(g.rx) as u64) + n.sep + "(__salam_w: " + n.t_int + "): " + n.kw_ret + " __salam_take(__salam_w) " + n.kw_end + n.sep + "(): __salam_sites() " + n.kw_end + ")\n"
+    if g_lo_env_injected:
+        s += ln_env_source(n)
+        rline += ln_env_line(n)
+    end
     s += n.kw_func + " " + NATIVE_PAGE_VIEW + "(__salam_b: " + n.ui + "." + n.builder + "):\n" + rline + g.out + n.kw_end + "\n\n"
     if with_main:
         s += n.kw_func + " " + n.entry + ":\n"
@@ -1569,6 +1629,7 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &:
     g_lo_root_file = file
     g_lo_expand_errors += ExpandBlock(log, pack, ct, a, prog, lb, lo_dir_of(file))
     g_lo_native_scopes = false
+    lo_env_inject(log, a, prog)
     sm.LayoutSetValueLang(pack == lp.LP_FA)
     defer sm.LayoutClearValueLang()
     sm.LayoutResolve(a, lb)

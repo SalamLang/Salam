@@ -15,6 +15,7 @@
 @fa "وای‌فای"
 package wifi
 
+import mem
 import str
 
 @en "State"
@@ -142,6 +143,41 @@ end
 
 func _same_bssid(a: str, b: str): bool:
     ret a.Len() > 0 and str.EqualFold(a, b)
+end
+
+func _is_mac(t: str): bool:
+    if t.Len() != 17:
+        ret false
+    end
+    repeat 17 in i:
+        c := _byte_at(t, i)
+        if i % 3 == 2:
+            if c != 58:
+                ret false
+            end
+        else _hex_digit(c) < 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _blank(backend: str): Status:
+    ret Status { interface = str.Clone(""), ssid = str.Clone(""), bssid = str.Clone(""), backend = backend }
+end
+
+func _swap(old: str, next: str): str:
+    mem.Free(old as void*)
+    ret next
+end
+
+func _has_nul(p: void*, n: int): bool:
+    repeat n in i:
+        if ((p as u8*)[i]) as int == 0:
+            ret true
+        end
+    end
+    ret false
 end
 
 func _mac_text(p: void*): str:
@@ -345,6 +381,7 @@ end
 pub func DecodeSsid(text: str): str:
     mut b := str.NewBuilder()
     n := text.Len()
+    mut nul := false
     mut i := 0
     until i < n:
         c := _byte_at(text, i)
@@ -352,6 +389,9 @@ pub func DecodeSsid(text: str): str:
             hi := _hex_digit(_byte_at(text, i + 2))
             lo := _hex_digit(_byte_at(text, i + 3))
             if hi >= 0 and lo >= 0:
+                if hi * 16 + lo == 0:
+                    nul = true
+                end
                 str.BufAppendChar(b, hi * 16 + lo)
                 i += 4
                 continue
@@ -362,6 +402,10 @@ pub func DecodeSsid(text: str): str:
     end
     out := str.BufStr(b)
     str.BufFree(b)
+    if nul:
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
     ret out
 end
 
@@ -386,7 +430,8 @@ end
 @en "ParseIwLink"
 @fa "تجزیه پیوند آی دبلیو"
 pub func ParseIwLink(text: str, iface: str): Status:
-    mut s := Status { interface = iface, backend = "iw", state = State.Unknown }
+    mut s := _blank("iw")
+    s.interface = _swap(s.interface, str.Clone(iface))
     lines := text.Split("\n")
     defer lines.Free()
     each raw in lines:
@@ -398,12 +443,16 @@ pub func ParseIwLink(text: str, iface: str): Status:
             rest := _after(line, "Connected to ")
             parts := rest.Split(" ")
             if parts.Len() > 0:
-                s.bssid = _lower(parts[0])
+                s.bssid = _swap(s.bssid, _lower(parts[0]))
             end
             parts.Free()
         else line.StartsWith("SSID:"):
-            s.ssid = DecodeSsid(_after(line, "SSID:"))
-            s.ssid_known = true
+            raw := _after(line, "SSID:")
+            s.ssid = _swap(s.ssid, DecodeSsid(raw))
+            s.ssid_known = s.ssid.Len() > 0
+            if raw.Len() > 0 and not s.ssid_known:
+                s.reason = "the SSID contains a NUL byte"
+            end
         else line.StartsWith("signal:"):
             parts := _after(line, "signal:").Split(" ")
             if parts.Len() > 0:
@@ -412,7 +461,7 @@ pub func ParseIwLink(text: str, iface: str): Status:
             parts.Free()
         end
     end
-    if s.state == State.Connected and not s.ssid_known:
+    if s.state == State.Connected and not s.ssid_known and s.reason.Len() == 0:
         s.reason = "iw reported no SSID"
     end
     ret s
@@ -509,22 +558,27 @@ end
 @en "ParseWlanConnection"
 @fa "تجزیه اتصال ویندوز"
 pub func ParseWlanConnection(p: void*, n: int): Status:
-    mut s := Status { backend = "wlanapi" }
+    mut s := _blank("wlanapi")
     if p == null or n < 604:
         s.reason = "short WLAN_CONNECTION_ATTRIBUTES"
         ret s
     end
     s.state = _u32_at(p, 0) == 1 ? State.Connected : State.Disconnected
     len := _u32_at(p, 520)
-    if len > 0 and len <= 32:
-        s.ssid = _bytes_text((p as i64 + 524 as i64) as void*, len)
+    at := (p as i64 + 524 as i64) as void*
+    if len > 0 and len <= 32 and _has_nul(at, len):
+        s.reason = "the SSID contains a NUL byte"
+    else len > 0 and len <= 32:
+        s.ssid = _swap(s.ssid, _bytes_text(at, len))
         s.ssid_known = true
     else s.state == State.Connected:
         s.reason = "the system did not report the SSID"
     end
-    s.bssid = _mac_text((p as i64 + 560 as i64) as void*)
-    if s.bssid == "00:00:00:00:00:00":
-        s.bssid = ""
+    mac := _mac_text((p as i64 + 560 as i64) as void*)
+    if mac == "00:00:00:00:00:00":
+        mem.Free(mac as void*)
+    else:
+        s.bssid = _swap(s.bssid, mac)
     end
     quality := _u32_at(p, 576)
     s.signal = quality <= 100 ? quality : -1
@@ -554,22 +608,49 @@ end
 @en "Current"
 @fa "وضعیت کنونی"
 pub func Current(): Status:
-    all := _os_scan()
-    defer all.Free()
+    mut all := _os_scan()
     if all.Len() == 0:
-        ret Status { state = State.NoWifi, backend = Supported() ? "none" : "unsupported", reason = Supported() ? "no wireless interface" : "no Wi-Fi backend for this platform" }
+        all.Free()
+        mut none := _blank(Supported() ? "none" : "unsupported")
+        none.state = State.NoWifi
+        none.reason = Supported() ? "no wireless interface" : "no Wi-Fi backend for this platform"
+        ret none
     end
-    each s in all:
-        if s.state == State.Connected:
-            ret s
+    mut pick := 0
+    mut best := 0
+    repeat all.Len() in i:
+        rank := all[i].state == State.Connected ? 2 : (all[i].state == State.Disconnected ? 1 : 0)
+        if rank > best:
+            best = rank
+            pick = i
         end
     end
-    each s in all:
-        if s.state == State.Disconnected:
-            ret s
+    chosen := all[pick]
+    repeat all.Len() in i:
+        if i != pick:
+            FreeStatus(all[i])
         end
     end
-    ret all[0]
+    all.Free()
+    ret chosen
+end
+
+@en "FreeStatus"
+@fa "آزادسازی وضعیت"
+pub func FreeStatus(s: Status):
+    mem.Free(s.interface as void*)
+    mem.Free(s.ssid as void*)
+    mem.Free(s.bssid as void*)
+end
+
+@en "FreeStatuses"
+@fa "آزادسازی وضعیت ها"
+pub func FreeStatuses(list: Vector<Status>):
+    each s in list:
+        FreeStatus(s)
+    end
+    mut owned := list
+    owned.Free()
 end
 
 @en "Changed"
@@ -591,10 +672,11 @@ pub func Classify(s: Status, trusted: Vector<str>): Trust:
         ret Trust.NotWifi
     end
     each t in trusted:
-        if s.ssid_known and t == s.ssid:
-            ret Trust.Trusted
-        end
-        if _same_bssid(s.bssid, t):
+        if _is_mac(t):
+            if _same_bssid(s.bssid, t):
+                ret Trust.Trusted
+            end
+        else s.ssid_known and t == s.ssid:
             ret Trust.Trusted
         end
     end

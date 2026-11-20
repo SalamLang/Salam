@@ -14,6 +14,7 @@
 package wifi
 
 if SALAM_OS_MAC:
+    import mem
     import os.dl
     import str
 end
@@ -47,6 +48,11 @@ if SALAM_OS_MAC:
         ret f(recv, sel_registerName(name)) != (0 as i8)
     end
 
+    func _m_long_arg(recv: void*, name: str, a: i64): i64:
+        f := (&objc_msgSend) as extern func (void*, void*, i64) i64
+        ret f(recv, sel_registerName(name), a)
+    end
+
     func _m_at(recv: void*, i: int): void*:
         f := (&objc_msgSend) as extern func (void*, void*, u64) void*
         ret f(recv, sel_registerName("objectAtIndex:"), i as u64)
@@ -63,31 +69,77 @@ if SALAM_OS_MAC:
         ret str.Clone(raw as str)
     end
 
+    func _m_name(ns: void*, nul &: bool): str:
+        nul = false
+        out := _m_text(ns)
+        if ns == null:
+            ret out
+        end
+        want := _m_long_arg(ns, "lengthOfBytesUsingEncoding:", 4 as i64)
+        if want != (out.Len() as i64):
+            nul = true
+            mem.Free(out as void*)
+            ret str.Clone("")
+        end
+        ret out
+    end
+
     func _m_status(itf: void*): Status:
-        mut s := Status { backend = "corewlan" }
-        s.interface = _m_text(_m0(itf, "interfaceName"))
+        mut s := _blank("corewlan")
+        s.interface = _swap(s.interface, _m_text(_m0(itf, "interfaceName")))
         if not _m_bool(itf, "powerOn"):
             s.state = State.Disconnected
             s.reason = "Wi-Fi is turned off"
             ret s
         end
-        ssid := _m0(itf, "ssid")
-        mode := _m_long(itf, "interfaceMode")
-        if ssid == null and mode != (1 as i64):
-            s.state = State.Disconnected
-            ret s
+        repeat 3:
+            mode := _m_long(itf, "interfaceMode")
+            if mode == (3 as i64):
+                s.state = State.Disconnected
+                s.reason = "the interface is a hotspot, not a client"
+                ret s
+            end
+            if mode != (1 as i64) and mode != (2 as i64):
+                s.state = State.Disconnected
+                s.reason = "not associated with a network"
+                ret s
+            end
+            ssid := _m0(itf, "ssid")
+            bssid := _m0(itf, "bssid")
+            mut nul := false
+            name := _m_name(ssid, nul)
+            raw_mac := _m_text(bssid)
+            mac := raw_mac.Lower()
+            mem.Free(raw_mac as void*)
+            security := SecurityFromMac(_m_long(itf, "security") as int)
+            rssi := _m_long(itf, "rssiValue") as int
+            ssid2 := _m0(itf, "ssid")
+            bssid2 := _m0(itf, "bssid")
+            mut nul2 := false
+            name2 := _m_name(ssid2, nul2)
+            mac2 := _m_text(bssid2)
+            same := (ssid == null) == (ssid2 == null) and (bssid == null) == (bssid2 == null) and nul == nul2 and name == name2 and (mac.Len() == 0 or str.EqualFold(mac, mac2))
+            mem.Free(name2 as void*)
+            mem.Free(mac2 as void*)
+            if same:
+                s.state = State.Connected
+                s.ssid = _swap(s.ssid, name)
+                s.ssid_known = ssid != null and not nul
+                if nul:
+                    s.reason = "the SSID contains a NUL byte"
+                else ssid == null:
+                    s.reason = "the system withheld the SSID: allow Location Services for this app"
+                end
+                s.bssid = _swap(s.bssid, mac)
+                s.security = security
+                s.signal = SignalFromDbm(rssi)
+                ret s
+            end
+            mem.Free(name as void*)
+            mem.Free(mac as void*)
         end
-        s.state = State.Connected
-        if ssid != null:
-            s.ssid = _m_text(ssid)
-            s.ssid_known = true
-        else:
-            s.reason = "the system withheld the SSID: allow Location Services for this app"
-        end
-        s.bssid = _m_text(_m0(itf, "bssid")).Lower()
-        s.security = SecurityFromMac(_m_long(itf, "security") as int)
-        rssi := _m_long(itf, "rssiValue") as int
-        s.signal = SignalFromDbm(rssi)
+        s.state = State.Unknown
+        s.reason = "the network changed while it was being read"
         ret s
     end
 
@@ -102,7 +154,9 @@ if SALAM_OS_MAC:
             cls = objc_getClass("CWWiFiClient")
         end
         if cls == null:
-            out.Push(Status { state = State.Unknown, backend = "corewlan", reason = "CoreWLAN is not available on this system" })
+            mut missing := _blank("corewlan")
+            missing.reason = "CoreWLAN is not available on this system"
+            out.Push(missing)
             ret out
         end
         pool := objc_autoreleasePoolPush()

@@ -20,7 +20,7 @@ end
 
 if SALAM_OS_WINDOWS:
     extern:
-        func LoadLibraryW(name: void*): void*
+        func GetModuleHandleW(name: void*): void*
         func GetProcAddress(module: void*, name: str): void*
         func MultiByteToWideChar(code_page: u32, flags: u32, text: str, length: i32, wide: void*, wide_len: i32): i32
         func WideCharToMultiByte(
@@ -54,9 +54,18 @@ if SALAM_OS_WINDOWS:
     func _w_fn(name: str): void*:
         if not _w_tried:
             _w_tried = true
-            wide := _w_wide("wlanapi.dll")
-            _w_lib = LoadLibraryW(wide)
-            mem.Free(wide)
+            k32 := _w_wide("kernel32.dll")
+            kernel := GetModuleHandleW(k32)
+            mem.Free(k32)
+            if kernel != null:
+                loader := GetProcAddress(kernel, "LoadLibraryExW")
+                if loader != null:
+                    load := loader as extern stdcall func (void*, void*, u32) void*
+                    wide := _w_wide("wlanapi.dll")
+                    _w_lib = load(wide, null, 0x800 as u32)
+                    mem.Free(wide)
+                end
+            end
         end
         if _w_lib == null:
             ret null
@@ -82,19 +91,25 @@ if SALAM_OS_WINDOWS:
             parsed := ParseWlanConnection(data, size)
             f(data)
             s.state = parsed.state
-            s.ssid = parsed.ssid
+            s.ssid = _swap(s.ssid, parsed.ssid)
             s.ssid_known = parsed.ssid_known
-            s.bssid = parsed.bssid
+            s.bssid = _swap(s.bssid, parsed.bssid)
             s.security = parsed.security
             s.signal = parsed.signal
             s.reason = parsed.reason
+            mem.Free(parsed.interface as void*)
             ret s
         end
         if data != null:
             f(data)
         end
-        if s.state == State.Connected:
-            s.reason = rc == (5 as u32) ? "access denied: allow location access for desktop apps to read the SSID" : "WlanQueryInterface failed"
+        if rc == (5023 as u32):
+            s.state = State.Disconnected
+            s.reason = "the interface disconnected during the query"
+        else rc == (5 as u32):
+            s.reason = "access denied: allow location access for desktop apps to read the network"
+        else:
+            s.reason = "WlanQueryInterface failed"
         end
         ret s
     end
@@ -117,17 +132,25 @@ if SALAM_OS_WINDOWS:
         opened := o(2 as u32, null, cells, (cells as i64 + 8 as i64) as void*)
         handle := ((cells as i64 + 8 as i64) as void**)[0]
         if opened != (0 as u32) or handle == null:
+            mut failed := _blank("wlanapi")
+            failed.reason = "WlanOpenHandle failed: is the WLAN AutoConfig service running?"
+            out.Push(failed)
             ret out
         end
         listed := e(handle, null, (cells as i64 + 16 as i64) as void*)
         list := ((cells as i64 + 16 as i64) as void**)[0]
+        if listed != (0 as u32) or list == null:
+            mut failed := _blank("wlanapi")
+            failed.reason = "WlanEnumInterfaces failed"
+            out.Push(failed)
+        end
         if listed == (0 as u32) and list != null:
             n := _u32_at(list, 0)
             repeat n in i:
                 item := (list as i64 + (8 + i * 532) as i64) as void*
                 st := _u32_at(item, 528)
-                mut s := Status { backend = "wlanapi" }
-                s.interface = _w_utf8((item as i64 + 16 as i64) as void*)
+                mut s := _blank("wlanapi")
+                s.interface = _swap(s.interface, _w_utf8((item as i64 + 16 as i64) as void*))
                 if st == 1:
                     s.state = State.Connected
                     s = _w_query(handle, item, s)

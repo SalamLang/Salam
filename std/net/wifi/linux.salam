@@ -23,26 +23,59 @@ end
 
 if SALAM_OS_LINUX:
     mut _g_lib := null as void*
-    mut _g_tried := false
+    mut _g_lib_tried := false
     mut _g_bus := null as void*
 
     func _g(name: str): void*:
         ret dl.Sym(_g_lib, name)
     end
 
-    func _g_ready(): bool:
-        if not _g_tried:
-            _g_tried = true
+    func _g_loaded(): bool:
+        if not _g_lib_tried:
+            _g_lib_tried = true
             _g_lib = dl.Open("libgio-2.0.so.0")
-            if _g_lib != null:
-                get := _g("g_bus_get_sync")
-                if get != null:
-                    f := get as extern func (int, void*, void*) void*
-                    _g_bus = f(1, null, null)
-                end
-            end
         end
-        ret _g_bus != null
+        ret _g_lib != null
+    end
+
+    func _g_ready(): bool:
+        if not _g_loaded():
+            ret false
+        end
+        is_closed := _g("g_dbus_connection_is_closed")
+        unref := _g("g_object_unref")
+        address := _g("g_dbus_address_get_for_bus_sync")
+        connect := _g("g_dbus_connection_new_for_address_sync")
+        keep := _g("g_dbus_connection_set_exit_on_close")
+        gfree := _g("g_free")
+        if is_closed == null or unref == null or address == null or connect == null or keep == null or gfree == null:
+            ret false
+        end
+        if _g_bus != null:
+            closed := is_closed as extern func (void*) int
+            if closed(_g_bus) == 0:
+                ret true
+            end
+            drop := unref as extern func (void*)
+            drop(_g_bus)
+            _g_bus = null
+        end
+        addr_of := address as extern func (int, void*, void*) void*
+        addr := addr_of(1, null, null)
+        if addr == null:
+            ret false
+        end
+        open := connect as extern func (void*, int, void*, void*, void*) void*
+        conn := open(addr, 9, null, null, null)
+        release := gfree as extern func (void*)
+        release(addr)
+        if conn == null:
+            ret false
+        end
+        stay := keep as extern func (void*, int)
+        stay(conn, 0)
+        _g_bus = conn
+        ret true
     end
 
     func _gv_unref(v: void*):
@@ -95,7 +128,8 @@ if SALAM_OS_LINUX:
         ret -1
     end
 
-    func _gv_bytes(v: void*): str:
+    func _gv_bytes(v: void*, nul &: bool): str:
+        nul = false
         if v == null or _gv_type(v) != "ay":
             ret str.Clone("")
         end
@@ -103,10 +137,15 @@ if SALAM_OS_LINUX:
         defer mem.Free(cell)
         f := _g("g_variant_get_fixed_array") as extern func (void*, void*, usize) void*
         p := f(v, cell, 1 as usize)
+        n := ((cell as usize*)[0]) as int
         if p == null:
             ret str.Clone("")
         end
-        ret _bytes_text(p, ((cell as usize*)[0]) as int)
+        if _has_nul(p, n):
+            nul = true
+            ret str.Clone("")
+        end
+        ret _bytes_text(p, n)
     end
 
     func _nm_call(path: str, iface: str, method: str, params: void*): void*:
@@ -177,33 +216,65 @@ if SALAM_OS_LINUX:
 
     func _nm_status(dev: str): Status:
         base := "org.freedesktop.NetworkManager.Device"
-        mut s := Status { backend = "networkmanager" }
-        s.interface = _nm_text(dev, base, "Interface")
-        st := _nm_int(dev, base, "State")
-        ap := _nm_text(dev, base + ".Wireless", "ActiveAccessPoint")
-        if st == 10:
-            s.state = State.Unknown
-            s.reason = "not managed by NetworkManager"
-            ret s
-        end
-        s.state = st == 100 ? State.Connected : State.Disconnected
-        if ap.Len() == 0 or ap == "/":
-            if s.state == State.Connected:
-                s.state = State.Disconnected
-            end
-            ret s
-        end
         apif := "org.freedesktop.NetworkManager.AccessPoint"
-        v := _nm_prop(ap, apif, "Ssid")
-        s.ssid = _gv_bytes(v)
-        _gv_unref(v)
-        s.ssid_known = s.ssid.Len() > 0
-        if not s.ssid_known and s.state == State.Connected:
-            s.reason = "hidden network"
+        mut s := _blank("networkmanager")
+        s.interface = _swap(s.interface, _nm_text(dev, base, "Interface"))
+        repeat 3:
+            st := _nm_int(dev, base, "State")
+            ap := _nm_text(dev, base + ".Wireless", "ActiveAccessPoint")
+            if st < 0:
+                mem.Free(ap as void*)
+                s.reason = "could not read the device state"
+                ret s
+            end
+            if st == 10:
+                mem.Free(ap as void*)
+                s.reason = "not managed by NetworkManager"
+                ret s
+            end
+            if ap.Len() == 0 or ap == "/":
+                mem.Free(ap as void*)
+                s.state = State.Disconnected
+                ret s
+            end
+            mut nul := false
+            v := _nm_prop(ap, apif, "Ssid")
+            name := _gv_bytes(v, nul)
+            _gv_unref(v)
+            raw_mac := _nm_text(ap, apif, "HwAddress")
+            mac := raw_mac.Lower()
+            mem.Free(raw_mac as void*)
+            strength := _nm_int(ap, apif, "Strength")
+            flags := _nm_int(ap, apif, "Flags")
+            wpa := _nm_int(ap, apif, "WpaFlags")
+            rsn := _nm_int(ap, apif, "RsnFlags")
+            st2 := _nm_int(dev, base, "State")
+            ap2 := _nm_text(dev, base + ".Wireless", "ActiveAccessPoint")
+            same := st2 == st and ap2 == ap
+            mem.Free(ap2 as void*)
+            mem.Free(ap as void*)
+            if same:
+                s.state = st == 100 ? State.Connected : State.Disconnected
+                s.ssid = _swap(s.ssid, name)
+                s.ssid_known = s.ssid.Len() > 0
+                if nul:
+                    s.reason = "the SSID contains a NUL byte"
+                else not s.ssid_known and s.state == State.Connected:
+                    s.reason = "hidden network"
+                end
+                s.bssid = _swap(s.bssid, mac)
+                s.signal = strength
+                if flags < 0 or wpa < 0 or rsn < 0:
+                    s.security = Security.Unknown
+                else:
+                    s.security = SecurityFromNm(flags, wpa, rsn)
+                end
+                ret s
+            end
+            mem.Free(name as void*)
+            mem.Free(mac as void*)
         end
-        s.bssid = _nm_text(ap, apif, "HwAddress").Lower()
-        s.signal = _nm_int(ap, apif, "Strength")
-        s.security = SecurityFromNm(_nm_int(ap, apif, "Flags"), _nm_int(ap, apif, "WpaFlags"), _nm_int(ap, apif, "RsnFlags"))
+        s.reason = "the access point changed while it was being read"
         ret s
     end
 
@@ -219,6 +290,7 @@ if SALAM_OS_LINUX:
             if os.Exists(dir + "/wireless") or os.Exists(dir + "/phy80211"):
                 out.Push(str.Clone(n))
             end
+            mem.Free(n as void*)
         end
         ret out
     end
@@ -282,11 +354,15 @@ if SALAM_OS_LINUX:
         each d in devs:
             if _nm_int(d, "org.freedesktop.NetworkManager.Device", "DeviceType") == 2:
                 mut s := _nm_status(d)
-                if s.state == State.Unknown and iw.Len() > 0:
-                    s = _iw_status(iw, s.interface)
+                if s.state == State.Unknown and iw.Len() > 0 and s.interface.Len() > 0:
+                    name := str.Clone(s.interface)
+                    FreeStatus(s)
+                    s = _iw_status(iw, name)
+                    mem.Free(name as void*)
                 end
                 out.Push(s)
             end
+            mem.Free(d as void*)
         end
         names := _lx_sys_names()
         defer names.Free()
@@ -301,14 +377,18 @@ if SALAM_OS_LINUX:
                 if not _has_iface(out, n):
                     out.Push(_iw_status(iw, n))
                 end
+                mem.Free(n as void*)
             end
             found.Free()
         end
         each n in names:
             if not _has_iface(out, n):
-                reason := nm_ok ? "not reported by NetworkManager" : "NetworkManager and iw are not available"
-                out.Push(Status { interface = n, backend = "sysfs", reason = reason })
+                mut s := _blank("sysfs")
+                s.interface = _swap(s.interface, str.Clone(n))
+                s.reason = nm_ok ? "not reported by NetworkManager" : "NetworkManager and iw are not available"
+                out.Push(s)
             end
+            mem.Free(n as void*)
         end
         ret out
     end

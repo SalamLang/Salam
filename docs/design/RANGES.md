@@ -154,7 +154,9 @@ comparisons and `+ - *`. A variable counts only when all of these hold:
 
 A condition that evaluates to false is E251: the body never runs. One that
 evaluates to true is E252 only if the body also has no way out and no call:
-no `break`, `ret`, `throw`, `try`, `defer`, lambda or call of any kind, since
+no `break`, `ret`, `throw`, `try`, `defer`, lambda or call of any kind,
+and is not just `continue` (the deliberate spin loop that E104 asks for, used by
+`noret` functions that never return), since
 a call can block, exit or panic. That keeps `until true:` with an `accept`
 or `Sleep` in it, and every spin on a global, a field or a `&:` parameter,
 out of the check. Constant conditions such as `until false:` are still

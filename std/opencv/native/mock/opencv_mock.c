@@ -1,4 +1,4 @@
-/* Salam Programming Language (2024-2026) - std/opencv TEST-ONLY mock shim
+/* Salam Programming Language (2018-2026) - std/opencv TEST-ONLY mock shim
  *
  * This is NOT OpenCV. It is a small, deterministic, dependency-free
  * stand-in for native/opencv_shim.cpp's ABI (opencv_shim.hpp), written in

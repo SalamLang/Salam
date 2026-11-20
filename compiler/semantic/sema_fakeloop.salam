@@ -1,0 +1,438 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+pub const FAKELOOP_DEAD_CODE := 251
+pub const FAKELOOP_FOREVER_CODE := 252
+
+const FL_UNKNOWN := 0
+const FL_BOOL := 1
+const FL_INT := 2
+const FL_LIMIT := 1000000000
+const FL_DEPTH := 6
+
+struct FlVal:
+    pub kind: int = 0
+    pub v: i64 = 0 as i64
+end
+
+struct Fl:
+    pub fnid: int = 0
+    pub loop: int = 0
+    pub loop_begin: i64 = 0 as i64
+    pub loop_end: i64 = 0 as i64
+    pub outer_begin: Vector<i64> = Vector {}
+    pub outer_end: Vector<i64> = Vector {}
+    pub chain: Vector<int> = Vector {}
+end
+
+func fl_free(f &: Fl):
+    f.outer_begin.Free()
+    f.outer_end.Free()
+    f.chain.Free()
+end
+
+func fl_is_loop(k: int): bool:
+    ret k == at.AST_UNTIL or k == at.AST_FOR or k == at.AST_REPEAT or k == at.AST_EACH
+end
+
+func fl_is_binding(k: int): bool:
+    ret k == at.AST_VAR_DECL or k == at.AST_CONST_DECL or k == at.AST_PARAM or k == at.AST_REPEAT or k == at.AST_EACH or k == at.AST_MATCH_PATTERN or k == at.AST_VARIANT_UNWRAP or k == at.AST_MATCH_ARM or k == at.AST_TRY_BLOCK or k == at.AST_DESTRUCT
+end
+
+func fl_is_cmp(op: int): bool:
+    ret op == tok.TK_EQ or op == tok.TK_NE or op == tok.TK_LT or op == tok.TK_GT or op == tok.TK_LE or op == tok.TK_GE
+end
+
+func fl_shape_ok(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LITERAL:
+        ret n.value_kind == tok.TV_BOOL or n.value_kind == tok.TV_INT
+    end
+    if k == at.AST_IDENTIFIER:
+        ret true
+    end
+    if k == at.AST_UNARY:
+        ret (n.op == tok.TK_NOT or n.op == tok.TK_MINUS) and fl_shape_ok(a, n.a)
+    end
+    if k == at.AST_BINARY:
+        op := n.op
+        if fl_is_cmp(op) or op == tok.TK_AND or op == tok.TK_OR or op == tok.TK_PLUS or op == tok.TK_MINUS or op == tok.TK_STAR:
+            ret fl_shape_ok(a, n.a) and fl_shape_ok(a, n.b)
+        end
+    end
+    ret false
+end
+
+func fl_quiet_kind(k: int): bool:
+    ret k == at.AST_BLOCK or k == at.AST_VAR_DECL or k == at.AST_CONST_DECL or k == at.AST_ASSIGN or k == at.AST_INCDEC or k == at.AST_IF or k == at.AST_UNTIL or k == at.AST_FOR or k == at.AST_REPEAT or k == at.AST_EACH or k == at.AST_SWITCH or k == at.AST_CASE or k == at.AST_CASE_ITEM or k == at.AST_CONTINUE or k == at.AST_EXPR_STMT or k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_CAST or k == at.AST_LITERAL or k == at.AST_IDENTIFIER or k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_SLICE or k == at.AST_TERNARY or k == at.AST_ARRAY_LIT or k == at.AST_STRUCT_LIT or k == at.AST_FIELD_INIT or k == at.AST_THIS or k == at.AST_TYPE
+end
+
+func fl_quiet(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret true
+    end
+    n := at.At(a, nid)
+    if not fl_quiet_kind(n.kind):
+        ret false
+    end
+    if not fl_quiet(a, n.a) or not fl_quiet(a, n.b) or not fl_quiet(a, n.c) or not fl_quiet(a, n.d):
+        ret false
+    end
+    repeat at.ChildCount(a, nid) in i:
+        if not fl_quiet(a, at.Child(a, nid, i)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func fl_only_continue(a &: at.Ast, body: int): bool:
+    if body == 0 or at.KindOf(a, body) != at.AST_BLOCK or at.ChildCount(a, body) == 0:
+        ret false
+    end
+    repeat at.ChildCount(a, body) in i:
+        if at.KindOf(a, at.Child(a, body, i)) != at.AST_CONTINUE:
+            ret false
+        end
+    end
+    ret true
+end
+
+func fl_count_bindings(a &: at.Ast, nid: int, name: str, decl &: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.At(a, nid)
+    mut cnt := 0
+    if fl_is_binding(n.kind) and str.Equals(n.name, name):
+        cnt++
+        decl = nid
+    end
+    if n.kind == at.AST_EACH and n.c != 0 and str.Equals(at.At(a, n.c).name, name):
+        cnt++
+    end
+    if n.kind == at.AST_DESTRUCT:
+        repeat at.ChildCount(a, nid) in j:
+            c := at.Child(a, nid, j)
+            if c != 0 and str.Equals(at.At(a, c).name, name):
+                cnt++
+            end
+        end
+    end
+    cnt += fl_count_bindings(a, n.a, name, decl)
+    cnt += fl_count_bindings(a, n.b, name, decl)
+    cnt += fl_count_bindings(a, n.c, name, decl)
+    cnt += fl_count_bindings(a, n.d, name, decl)
+    repeat at.ChildCount(a, nid) in i:
+        cnt += fl_count_bindings(a, at.Child(a, nid, i), name, decl)
+    end
+    ret cnt
+end
+
+func fl_ref_writes(a &: at.Ast, pm &: HashMap<int, int>, r: int): bool:
+    n := at.At(a, r)
+    if n.ref_arg or n.ref_arg_ptr:
+        ret true
+    end
+    p := su_parent(pm, r)
+    if p == 0:
+        ret false
+    end
+    pn := at.At(a, p)
+    k := pn.kind
+    if k == at.AST_ASSIGN:
+        ret pn.a == r
+    end
+    if k == at.AST_INCDEC or k == at.AST_DESTRUCT or k == at.AST_TUPLE:
+        ret true
+    end
+    if k == at.AST_UNARY:
+        ret pn.op == tok.TK_AMP
+    end
+    if k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_SLICE or k == at.AST_CALL:
+        ret pn.a == r
+    end
+    ret false
+end
+
+func fl_in_outer(f &: Fl, pos: i64): bool:
+    repeat f.outer_begin.Len() in i:
+        if pos >= f.outer_begin.Get(i) and pos < f.outer_end.Get(i):
+            ret true
+        end
+    end
+    ret false
+end
+
+func fl_var(a &: at.Ast, pm &: HashMap<int, int>, f &: Fl, nid: int, depth: int): FlVal:
+    out := FlVal {}
+    name := at.At(a, nid).name
+    if str.Len(name) == 0 or depth > FL_DEPTH:
+        ret out
+    end
+    mut decl := 0
+    if fl_count_bindings(a, f.fnid, name, decl) != 1 or decl == 0:
+        ret out
+    end
+    dk := at.KindOf(a, decl)
+    dn := at.At(a, decl)
+    if (dk != at.AST_VAR_DECL and dk != at.AST_CONST_DECL) or dn.a == 0 or dn.synthetic:
+        ret out
+    end
+    dp := su_parent(pm, decl)
+    mut on_chain := false
+    repeat f.chain.Len() in i:
+        if f.chain.Get(i) == dp:
+            on_chain = true
+        end
+    end
+    if not on_chain:
+        ret out
+    end
+    if dp != f.loop and (dn.begin_index as i64) >= f.loop_begin:
+        ret out
+    end
+    mut refs := Vector {} as Vector<int>
+    su_collect_refs(a, f.fnid, name, refs)
+    mut clean := true
+    repeat refs.Len() in j:
+        r := refs.Get(j)
+        if fl_ref_writes(a, pm, r):
+            pos := at.At(a, r).begin_index as i64
+            if pos < f.loop_end or fl_in_outer(f, pos):
+                clean = false
+            end
+        end
+    end
+    refs.Free()
+    if not clean:
+        ret out
+    end
+    ret fl_eval(a, pm, f, dn.a, depth + 1)
+end
+
+func fl_eval(a &: at.Ast, pm &: HashMap<int, int>, f &: Fl, nid: int, depth: int): FlVal:
+    mut out := FlVal {}
+    if nid == 0 or depth > FL_DEPTH:
+        ret out
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LITERAL:
+        if n.value_kind == tok.TV_BOOL:
+            out.kind = FL_BOOL
+            out.v = n.value_bool ? 1 as i64 : 0 as i64
+        else n.value_kind == tok.TV_INT and n.value_hi == (0 as u64) and n.value_int < (FL_LIMIT as u64):
+            out.kind = FL_INT
+            out.v = n.value_int as i64
+        end
+        ret out
+    end
+    if k == at.AST_IDENTIFIER:
+        ret fl_var(a, pm, f, nid, depth)
+    end
+    if k == at.AST_UNARY:
+        x := fl_eval(a, pm, f, n.a, depth + 1)
+        if n.op == tok.TK_NOT and x.kind == FL_BOOL:
+            out.kind = FL_BOOL
+            out.v = x.v == (0 as i64) ? 1 as i64 : 0 as i64
+        else n.op == tok.TK_MINUS and x.kind == FL_INT:
+            out.kind = FL_INT
+            out.v = (0 as i64) - x.v
+        end
+        ret out
+    end
+    if k != at.AST_BINARY:
+        ret out
+    end
+    l := fl_eval(a, pm, f, n.a, depth + 1)
+    r := fl_eval(a, pm, f, n.b, depth + 1)
+    if l.kind == FL_UNKNOWN or r.kind != l.kind:
+        ret out
+    end
+    op := n.op
+    if l.kind == FL_BOOL:
+        if op == tok.TK_AND:
+            out.v = (l.v != (0 as i64) and r.v != (0 as i64)) ? 1 as i64 : 0 as i64
+        else op == tok.TK_OR:
+            out.v = (l.v != (0 as i64) or r.v != (0 as i64)) ? 1 as i64 : 0 as i64
+        else op == tok.TK_EQ:
+            out.v = l.v == r.v ? 1 as i64 : 0 as i64
+        else op == tok.TK_NE:
+            out.v = l.v != r.v ? 1 as i64 : 0 as i64
+        else:
+            ret out
+        end
+        out.kind = FL_BOOL
+        ret out
+    end
+    if fl_is_cmp(op):
+        mut t := false
+        if op == tok.TK_EQ:
+            t = l.v == r.v
+        else op == tok.TK_NE:
+            t = l.v != r.v
+        else op == tok.TK_LT:
+            t = l.v < r.v
+        else op == tok.TK_GT:
+            t = l.v > r.v
+        else op == tok.TK_LE:
+            t = l.v <= r.v
+        else:
+            t = l.v >= r.v
+        end
+        out.kind = FL_BOOL
+        out.v = t ? 1 as i64 : 0 as i64
+        ret out
+    end
+    if str.StartsWith(n.type_str, "u") or str.Len(n.type_str) == 0:
+        ret out
+    end
+    mut res := 0 as i64
+    if op == tok.TK_PLUS:
+        res = l.v + r.v
+    else op == tok.TK_MINUS:
+        res = l.v - r.v
+    else op == tok.TK_STAR:
+        res = l.v * r.v
+    else:
+        ret out
+    end
+    if res >= (FL_LIMIT as i64) or res <= (0 as i64) - (FL_LIMIT as i64):
+        ret out
+    end
+    out.kind = FL_INT
+    out.v = res
+    ret out
+end
+
+func fl_loop_parts(a &: at.Ast, nid: int, cond &: int, body &: int, post &: int):
+    n := at.At(a, nid)
+    cond = 0
+    body = 0
+    post = 0
+    if n.kind == at.AST_UNTIL:
+        cond = n.a
+        body = n.b
+    else n.kind == at.AST_FOR:
+        cond = n.b
+        body = n.d
+        post = n.c
+    end
+end
+
+func fl_collect_loops(a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    if (n.kind == at.AST_UNTIL or n.kind == at.AST_FOR) and not n.synthetic:
+        mut cond := 0
+        mut body := 0
+        mut post := 0
+        fl_loop_parts(a, nid, cond, body, post)
+        if cond != 0 and fl_shape_ok(a, cond):
+            out.Push(nid)
+        end
+    end
+    fl_collect_loops(a, n.a, out)
+    fl_collect_loops(a, n.b, out)
+    fl_collect_loops(a, n.c, out)
+    fl_collect_loops(a, n.d, out)
+    repeat at.ChildCount(a, nid) in i:
+        fl_collect_loops(a, at.Child(a, nid, i), out)
+    end
+end
+
+func fl_report(s &: Sema, code: int, sp: co.SrcSpan, msg: str, help: str):
+    serr_help(s, code, sp, msg, help)
+end
+
+func fl_check_loop(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, fnid: int, nid: int):
+    mut f := Fl {}
+    defer fl_free(f)
+    f.fnid = fnid
+    f.loop = nid
+    ln := at.At(a, nid)
+    f.loop_begin = ln.begin_index as i64
+    f.loop_end = ln.end_index as i64
+    mut cur := nid
+    mut guard := 0
+    until cur != 0 and guard < 4096:
+        guard++
+        f.chain.Push(cur)
+        cur = su_parent(pm, cur)
+        if cur != 0 and cur != nid and fl_is_loop(at.KindOf(a, cur)):
+            cn := at.At(a, cur)
+            f.outer_begin.Push(cn.begin_index as i64)
+            f.outer_end.Push(cn.end_index as i64)
+        end
+    end
+    mut cond := 0
+    mut body := 0
+    mut post := 0
+    fl_loop_parts(a, nid, cond, body, post)
+    v := fl_eval(a, pm, f, cond, 0)
+    if v.kind != FL_BOOL:
+        ret
+    end
+    csp := span_of(a, cond)
+    if v.v == (0 as i64):
+        fl_report(
+            s, FAKELOOP_DEAD_CODE, csp, i18.Tr("the condition of this loop is always false, so its body never runs"), i18.Tr("the loop runs while its condition is true, and nothing it reads can change before the loop starts; remove the loop or fix the condition")
+        )
+        ret
+    end
+    if fl_quiet(a, body) and fl_quiet(a, post) and not fl_only_continue(a, body):
+        fl_report(
+            s, FAKELOOP_FOREVER_CODE, csp, i18.Tr("the condition of this loop is always true and nothing in its body can end it, so it never stops"), i18.Tr("change a value the condition reads inside the loop, or leave it with 'break' or 'ret'; a loop that waits in a call, like a server loop, is not reported")
+        )
+    end
+end
+
+pub func SemaCheckFakeLoops(s &: Sema, a &: at.Ast, fnid: int):
+    if g_sm_ranges == 0 or fnid == 0 or s.requal or s.in_derive:
+        ret
+    end
+    body := at.At(a, fnid).a
+    if body == 0:
+        ret
+    end
+    mut loops := Vector {} as Vector<int>
+    fl_collect_loops(a, body, loops)
+    if loops.Len() == 0:
+        loops.Free()
+        ret
+    end
+    mut pm := HashMap {} as HashMap<int, int>
+    su_par_build(a, fnid, 0, pm)
+    repeat loops.Len() in i:
+        fl_check_loop(s, a, pm, fnid, loops.Get(i))
+    end
+    pm.Free()
+    loops.Free()
+end

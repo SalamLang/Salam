@@ -35,7 +35,7 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_STT_SECRET`                                                    | bearer token for the speech service, when it sets `STT_SECRET`                                                                                                                                                                                                                                                                                                                                                                             | empty                                                                 |
 | `AI_STT_MAX_BYTES`                                                 | largest recording the API accepts                                                                                                                                                                                                                                                                                                                                                                                                          | `4194304`                                                             |
 | `AI_STT_TIMEOUT_SECONDS`                                           | how long one conversion may take, queue included; keep it under the proxy timeouts                                                                                                                                                                                                                                                                                                                                                         | `90`                                                                  |
-| `AI_STT_CONCURRENCY`                                               | conversions in flight from this API, across all users; more answer 503. Never more than the machine's processor count minus one, so a hung speech service cannot take every worker of the HTTP server                                                                                                                                                                                                                                                                                                                                                                     | `4`                                                                   |
+| `AI_STT_CONCURRENCY`                                               | conversions in flight from this API, across all users; more answer 503. Never more than the machine's processor count minus one, so a hung speech service cannot take every worker of the HTTP server                                                                                                                                                                                                                                      | `4`                                                                   |
 | `AI_STT_HOURLY`, `AI_STT_SECONDS_HOURLY`                           | each user's conversions and seconds of audio per hour (0 turns a limit off)                                                                                                                                                                                                                                                                                                                                                                | `30`, `600`                                                           |
 | `AI_STT_HEALTH_SECONDS`                                            | how long a look at the speech service's health is remembered                                                                                                                                                                                                                                                                                                                                                                               | `30`                                                                  |
 | `AI_BRIDGE_SECRET`                                                 | bearer token the engine sends to `/bridge/mcp`; at least 16 characters                                                                                                                                                                                                                                                                                                                                                                     | empty (the bridge refuses every call)                                 |
@@ -743,6 +743,59 @@ reply = client.chat.completions.create(
 tests it against a running API, with `ai/backend/tests/engine_mock.mjs` standing in for the
 assistant engine. The two idle cases wait for the backend to give up, so `START_SECONDS` has to
 be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is behaving.
+
+### Anthropic-compatible API
+
+The same host also speaks the Anthropic Messages API, so the official Anthropic
+SDKs and agents built on them (Claude Code among them) work with `base_url` set
+to it, the same `sk-salam-...` key and model `salam`:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="https://ai-api.salamlang.ir", api_key="sk-salam-...")
+message = client.messages.create(
+    model="salam",
+    max_tokens=4096,
+    messages=[{"role": "user", "content": "Write hello world in Salam"}],
+)
+```
+
+```bash
+ANTHROPIC_BASE_URL=https://ai-api.salamlang.ir ANTHROPIC_AUTH_TOKEN=sk-salam-... claude
+```
+
+| Method and path                          | Purpose                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /v1/messages`                      | `system`, `messages`, `tools`, optional `stream`, `thinking`, `metadata` |
+| `POST /v1/messages/count_tokens`         | the same body; returns an estimate in `input_tokens`                     |
+| `GET /v1/models`, `GET /v1/models/salam` | one list that both the OpenAI and the Anthropic SDKs read                |
+
+- The key goes in `x-api-key` or `Authorization: Bearer`. Errors use the
+  Anthropic envelope (`{"type": "error", "error": {"type": ...}}`) with the
+  usual types: `authentication_error`, `invalid_request_error`,
+  `rate_limit_error`, `overloaded_error` and so on.
+- A request runs through the same path as `/chat/completions`: the same
+  limits, logging, policy, tool handling and engine loop. `system` (a string
+  or text blocks), `tool_use`, `tool_result` (with `is_error`) and text
+  `document` blocks are flattened into one turn; images, thinking blocks and
+  `cache_control` are ignored. Typed server tools such as `web_search` are not
+  offered to the assistant; custom tools with an `input_schema` are.
+- When the assistant calls a caller tool the answer has `tool_use` blocks
+  (`input` is always an object) and `stop_reason: tool_use`. Otherwise it is
+  `end_turn`, or `max_tokens` when the turn was cut off.
+- Streams send the standard events: `message_start`, then `content_block_*`
+  for each block, `ping` as keepalive, `message_delta` and `message_stop`. A
+  tool call arrives whole in one `input_json_delta`. When the request turns
+  `thinking` on, the assistant's steps stream as `thinking` blocks before the
+  text. A failure before any text is an `error` event.
+- `max_tokens`, `temperature`, `tool_choice` and `output_config` other than
+  `effort` are accepted and not read. `output_config.effort` maps to the
+  effort levels. `metadata.user_id` is logged as the end user. Usage numbers
+  are estimates (4 characters per token), and cache counts are always 0.
+- The proxy must send `/v1/messages` and `/v1/messages/count_tokens` (and the
+  `/anthropic` and `/anthropic/v1` prefixes) to the streaming listener with
+  buffering off, like the OpenAI paths above.
 
 ### Plans and payments
 

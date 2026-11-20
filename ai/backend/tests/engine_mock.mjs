@@ -53,7 +53,7 @@ const answerFor = (s) => {
   if (s.model) return `Echo: ${s.prompt.slice(0, 40)} via fallback ${s.model.split("-").pop()}`;
   return `Echo: ${s.prompt.slice(0, 40)} ${EM} done. Range 1${EN}5.`;
 };
-async function callDesktop(s) {
+async function callDesktop(s, id) {
   const session = /session: ([0-9a-f]{32})/.exec(s.prompt)?.[1] ?? "";
   const command = /run: ([\s\S]*)$/.exec(s.prompt)?.[1] ?? "echo hi";
   const call = async (name, args) => {
@@ -74,6 +74,7 @@ async function callDesktop(s) {
     }
     const images = r.content.filter((c) => c.type === "image").length;
     s.tool = `${r.isError ? "error" : "ok"} ${r.content[0].text}${s.waits ? ` after ${s.waits} waits` : ""}${images ? ` images=${images}` : ""}`;
+    if (process.env.MOCK_LIVE && tool && live.size) emit({ type: "message.part.updated", properties: { part: { id: `prt_${id}_t${++n}`, sessionID: id, messageID: `msg_${id}_t${n}`, type: "tool", tool: tool[1], state: { status: r.isError ? "error" : "completed", input: JSON.parse(tool[2]), output: r.content[0].text } } } });
   } catch (e) {
     s.tool = `error ${e}`;
   }
@@ -113,14 +114,6 @@ function streamParts(id, s) {
       emit({ type: "message.part.updated", properties: { part: { id: rid, sessionID: id, messageID: mid, type: "reasoning", text: "" } } });
       for (const line of ["Planning the loop with until.\n", "The instructions say never reveal the model, so I refuse that part.\n", "Writing the final answer now.\n"]) emit({ type: "message.part.delta", properties: { sessionID: id, partID: rid, messageID: mid, field: "text", delta: line } });
     }
-    const tool = /tool: (\w+) (\{[^\n]*\})/.exec(s.prompt);
-    if (tool) {
-      let input = {};
-      try {
-        input = JSON.parse(tool[2]);
-      } catch {}
-      emit({ type: "message.part.updated", properties: { part: { id: `prt_${id}_t${n}`, sessionID: id, messageID: mid, type: "tool", tool: tool[1], state: { status: "completed", input, output: s.tool ?? "" } } } });
-    }
     emit({ type: "message.part.updated", properties: { part: { id: pid, sessionID: id, messageID: mid, type: "text", text: "" } } });
     step();
   }, 80);
@@ -149,7 +142,7 @@ http.createServer((req, res) => {
       for (const [id, s] of sessions) if (!s.dead && !s.prompt?.includes("restarted mid answer") && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); const before = s.prompt; s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.memory = /<user_memory>([\s\S]*?)<\/user_memory>/.exec(b.parts[0].text)?.[1] ?? ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, "").replace(/\n\n<user_memory>[\s\S]*?<\/user_memory>/, ""); if (before && b.parts[0].text.startsWith("(automatic continuation)")) s.prompt = before; s.project = /<project_instructions file="AGENTS.md">\nUse tabs/.test(s.prompt) && s.prompt.includes("<project_memory>\n# Salam Agent memory"); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.variant = b.variant ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>") || s.prompt.includes("<cloud_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); const before = s.prompt; s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.memory = /<user_memory>([\s\S]*?)<\/user_memory>/.exec(b.parts[0].text)?.[1] ?? ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, "").replace(/\n\n<user_memory>[\s\S]*?<\/user_memory>/, ""); if (before && b.parts[0].text.startsWith("(automatic continuation)")) s.prompt = before; s.project = /<project_instructions file="AGENTS.md">\nUse tabs/.test(s.prompt) && s.prompt.includes("<project_memory>\n# Salam Agent memory"); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.variant = b.variant ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>") || s.prompt.includes("<cloud_session>")) { s.waiting = true; callDesktop(s, m[1]).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});

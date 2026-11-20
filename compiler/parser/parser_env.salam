@@ -11,7 +11,127 @@ k_env_fa := ["تیره", "روشن", "فشرده", "معمولی", "عریض", "
 
 k_env_name := ["dark", "light", "compact", "regular", "wide", "touch", "mouse", "landscape", "portrait", "reduced", "contrast", "rtl", "ltr", "w", "h"]
 
+k_env_member_en := ["dark", "light", "compact", "regular", "wide", "touch", "mouse", "landscape", "portrait", "reduced motion", "high contrast", "rtl", "ltr", "width", "height"]
+
+k_env_member_fa := ["تیره", "روشن", "فشرده", "معمولی", "عریض", "لمسی", "ماوس", "افقی", "عمودی", "حرکت کم", "کنتراست بالا", "راست\xE2\x80\x8Cچین", "چپ\xE2\x80\x8Cچین", "عرض", "ارتفاع"]
+
 mut g_env_used := false
+
+mut g_env_page_at := Vector {} as Vector<str>
+
+func env_is_page(name: str): bool:
+    ret str.Equals(name, "page") or str.Equals(name, "صفحه")
+end
+
+func env_reserved_at(p &: Ps, line: u32, col: u32, name: str):
+    if not env_is_page(name):
+        ret
+    end
+    lg.LogAt(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, line as int, col as int, co.Format1(
+            i18.Tr("E253: '%s' is reserved inside pages and components, it reads the window (page.width, page.height, page.dark, ...); choose another name"),
+            co.ArgStr(name)
+        )
+    )
+    p.had_error = true
+end
+
+func env_reserved_node(p &: Ps, a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    env_reserved_at(p, n.begin_line, n.begin_col, n.name)
+end
+
+func env_reserved_params(p &: Ps, a &: at.Ast, holder: int):
+    if holder == 0:
+        ret
+    end
+    repeat at.ChildCount(a, holder) in i:
+        cid := at.Child(a, holder, i)
+        if at.KindOf(a, cid) == at.AST_PARAM:
+            env_reserved_node(p, a, cid)
+        end
+    end
+end
+
+func env_member_lookup(words: str): int:
+    key := env_loose(words)
+    repeat len(k_env_member_en) in i:
+        if str.Equals(env_loose(k_env_member_en[i]), key) or str.Equals(env_loose(k_env_member_fa[i]), key):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func env_member_words(i: int): int:
+    ret str.Fields(k_env_member_en[i]).Len()
+end
+
+func env_at_key(file: str, line: u32, col: u32): str:
+    ret file + ":" + (line as int) + ":" + (col as int)
+end
+
+func env_member_tok(k: int): bool:
+    ret k == tok.TK_IDENT or k == tok.TK_LAYOUT_ATTR_NAME
+end
+
+func env_page_member(p &: Ps, i: int): bool:
+    t := p.toks.toks.Get(i)
+    d := skip_comments_from(p, i + 1)
+    if d >= p.count or p.toks.toks.Get(d).kind != tok.TK_DOT:
+        ret false
+    end
+    m1 := skip_comments_from(p, d + 1)
+    if m1 >= p.count or not env_member_tok(p.toks.toks.Get(m1).kind):
+        ret false
+    end
+    mut hit := 0 - 1
+    mut last := m1
+    m2 := skip_comments_from(p, m1 + 1)
+    if m2 < p.count and env_member_tok(p.toks.toks.Get(m2).kind):
+        hit = env_member_lookup(p.toks.toks.Get(m1).lexeme + " " + p.toks.toks.Get(m2).lexeme)
+        if hit >= 0 and env_member_words(hit) == 2:
+            last = m2
+        else:
+            hit = 0 - 1
+        end
+    end
+    if hit < 0:
+        hit = env_member_lookup(p.toks.toks.Get(m1).lexeme)
+        if hit >= 0 and env_member_words(hit) != 1:
+            hit = 0 - 1
+        end
+    end
+    if hit < 0:
+        mt := p.toks.toks.Get(m1)
+        lg.LogAt(
+            p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, mt.begin_line as int, mt.begin_col as int, co.Format1(
+                i18.Tr("E254: 'page' has no property '%s'; use width, height, dark, light, compact, regular, wide, touch, mouse, landscape, portrait, rtl, ltr, reduced motion or high contrast"),
+                co.ArgStr(mt.lexeme)
+            )
+        )
+        p.had_error = true
+        ret true
+    end
+    mut nt := t
+    nt.lexeme = "envx_" + k_env_name[hit]
+    p.toks.toks.Set(i, nt)
+    g_env_page_at.Push(env_at_key(p.file, t.begin_line, t.begin_col))
+    mut j := d
+    until j <= last:
+        mut ct := p.toks.toks.Get(j)
+        if not is_comment_kind(ct.kind):
+            ct.kind = tok.TK_COMMENT_BLOCK
+            p.toks.toks.Set(j, ct)
+        end
+        j++
+    end
+    g_env_used = true
+    ret true
+end
 
 func env_loose(s: str): str:
     ret str.Lower(str.Replace(str.Replace(s, "\xE2\x80\x8C", ""), " ", ""))
@@ -64,6 +184,10 @@ func env_rewrite_cond(p &: Ps):
             break
         end
         if t.kind != tok.TK_IDENT or (i > 0 and p.toks.toks.Get(i - 1).kind == tok.TK_DOT):
+            i = skip_comments_from(p, i + 1)
+            continue
+        end
+        if env_is_page(t.lexeme) and env_page_member(p, i):
             i = skip_comments_from(p, i + 1)
             continue
         end
@@ -126,12 +250,21 @@ func env_note(a &: at.Ast, cond: int):
     end
 end
 
-func env_revert(a &: at.Ast, id: int):
+func env_revert(a &: at.Ast, id: int, file: str):
     if id == 0:
         ret
     end
     n := at.Get(a, id)
+    mut from_page := false
     if n.kind == at.AST_IDENTIFIER and str.StartsWith(n.name, "envx_"):
+        key0 := env_at_key(file, n.begin_line, n.begin_col)
+        each k0 in g_env_page_at:
+            if str.Equals(k0, key0):
+                from_page = true
+            end
+        end
+    end
+    if n.kind == at.AST_IDENTIFIER and str.StartsWith(n.name, "envx_") and not from_page:
         key := str.Substr(n.name, 5, str.Len(n.name) - 5)
         repeat len(k_env_name) in i:
             if str.Equals(k_env_name[i], key) and env_phrase_len(i) == 1:
@@ -139,19 +272,19 @@ func env_revert(a &: at.Ast, id: int):
             end
         end
     end
-    env_revert(a, n.a)
-    env_revert(a, n.b)
-    env_revert(a, n.c)
+    env_revert(a, n.a, file)
+    env_revert(a, n.b, file)
+    env_revert(a, n.c, file)
     repeat n.list.Len() in j:
-        env_revert(a, n.list.Get(j))
+        env_revert(a, n.list.Get(j), file)
     end
 end
 
-func env_revert_chain(a &: at.Ast, n: int):
+func env_revert_chain(a &: at.Ast, n: int, file: str):
     mut cur := n
     until cur != 0:
         c := at.Get(a, cur)
-        env_revert(a, c.a)
+        env_revert(a, c.a, file)
         if c.c != 0 and at.KindOf(a, c.c) == at.AST_IF:
             cur = c.c
         else:

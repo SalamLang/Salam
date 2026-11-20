@@ -25,6 +25,21 @@ words of a Persian name with `_` when it writes English. Words inside a page
 or component layout block (attribute names such as `min width`) are part of
 the layout language and are not names.
 
+## One official spelling in the layout language (E235)
+
+Inside `page` and `component` blocks an English file writes the official
+attribute and element names with spaces: `font size`, `border radius`,
+`hover background`, `text area`. The underscore and hyphen spellings of an
+official name (`font_size`, `border-radius`) are the compile error E235:
+
+```
+error: E235: 'font_size' is an official page name, and an English file writes it with spaces, not '_' or '-'
+help: write 'font size'
+```
+
+Names you declare yourself (components, parameters, variables, IDs, class
+names, string values) are not official names and are not checked.
+
 ## The rule
 
 - **English public callable names** (package functions and methods): must be

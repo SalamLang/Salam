@@ -295,6 +295,68 @@ func if_block_mix(a &: at.Ast, blk: int, attrs &: bool, kids &: bool):
     end
 end
 
+func if_std_prefix(name: str): str:
+    words := str.Fields(if_state_strip(name))
+    defer words.Free()
+    tail := words.Len() > 0 and str.Len(words.Get(0)) > 0 and byte_at(words.Get(0), 0) >= 128
+    mut k := words.Len() - 1
+    until k >= 1:
+        mut cand := ""
+        repeat k in i:
+            if i > 0:
+                cand += " "
+            end
+            cand += tail ? words.Get(words.Len() - k + i) : words.Get(i)
+        end
+        if style.PropByName(cand) >= 0:
+            ret cand
+        end
+        k--
+    end
+    ret ""
+end
+
+func if_legacy_attrs(p &: Ps, a &: at.Ast, n: int):
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        mut blocks := Vector {} as Vector<int>
+        blocks.Push(c.b)
+        if c.c != 0 and at.KindOf(a, c.c) != at.AST_IF:
+            blocks.Push(c.c)
+        end
+        each blk in blocks:
+            if blk == 0:
+                continue
+            end
+            repeat at.ChildCount(a, blk) in i:
+                cid := at.Child(a, blk, i)
+                if at.KindOf(a, cid) != at.AST_LAYOUT_ATTR or if_attr_is_style(a, cid):
+                    continue
+                end
+                an := at.Get(a, cid)
+                sug := if_std_prefix(an.name)
+                if str.Len(sug) == 0:
+                    continue
+                end
+                lg.LogAt(
+                    p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, an.begin_line as int, an.begin_col as int, co.Format2(
+                        i18.Tr("E255: '%s' is not part of the Salam style standard, so an 'if' cannot change it; use '%s'"),
+                        co.ArgStr(an.name), co.ArgStr(sug)
+                    )
+                )
+                p.had_error = true
+            end
+        end
+        blocks.Free()
+        if c.c != 0 and at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            cur = 0
+        end
+    end
+end
+
 func if_chain_mixed(a &: at.Ast, n: int): bool:
     mut attrs := false
     mut kids := false
@@ -315,11 +377,38 @@ func if_chain_mixed(a &: at.Ast, n: int): bool:
     ret attrs and kids
 end
 
+func if_attach_block(a &: at.Ast, blk: int, key: str, holder: int):
+    repeat at.ChildCount(a, blk) in i:
+        cid := at.Child(a, blk, i)
+        if cid != holder and str.Equals(ifs_key(at.Get(a, cid).name), key):
+            at.AddChild(a, holder, cid)
+        end
+    end
+end
+
+func if_chain_attach(a &: at.Ast, n: int, key: str, holder: int):
+    mut cur := n
+    until cur != 0:
+        c := at.Get(a, cur)
+        if_attach_block(a, c.b, key, holder)
+        if c.c == 0:
+            break
+        end
+        if at.KindOf(a, c.c) == at.AST_IF:
+            cur = c.c
+        else:
+            if_attach_block(a, c.c, key, holder)
+            break
+        end
+    end
+end
+
 func ifs_lower(p &: Ps, a &: at.Ast, parent: int):
     repeat at.ChildCount(a, parent) in mi:
         mid := at.Child(a, parent, mi)
         if at.KindOf(a, mid) == at.AST_IF and not if_chain_style(a, mid):
-            env_revert_chain(a, mid)
+            env_revert_chain(a, mid, p.file)
+            if_legacy_attrs(p, a, mid)
         end
         if at.KindOf(a, mid) == at.AST_IF and if_chain_mixed(a, mid):
             mn := at.Get(a, mid)
@@ -361,12 +450,14 @@ func ifs_lower(p &: Ps, a &: at.Ast, parent: int):
                 mut bn := at.Get(a, bid)
                 bn.a = result
                 at.Put(a, bid, bn)
+                if_chain_attach(a, cid, keys.Get(k), bid)
             else:
                 gid := firsts.Get(k)
                 mut gn := at.Get(a, gid)
                 gn.a = result
                 at.Put(a, gid, gn)
                 kept.Push(gid)
+                if_chain_attach(a, cid, keys.Get(k), gid)
             end
         end
         keys.Free()
@@ -407,7 +498,9 @@ func layout_body_loop(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
         else p_at(p, tok.TK_LAYOUT_ATTR_NAME):
             at.AddChild(a, parent, layout_attribute(p, a))
         else p_at(p, tok.TK_KW_MUT) or layout_decl_ahead(p):
-            at.AddChild(a, parent, parse_var_decl(p, a))
+            vd := parse_var_decl(p, a)
+            env_reserved_node(p, a, vd)
+            at.AddChild(a, parent, vd)
             p_skip_terminators(p)
         else:
             p_error(p, "unexpected token inside page block")
@@ -466,6 +559,10 @@ func layout_each(p &: Ps, a &: at.Ast): int:
         p_advance(p)
     end
     at.SetName(a, n, p_name(p, "expected a name after 'each' in layout"))
+    env_reserved_node(p, a, n)
+    if at.Get(a, n).c != 0:
+        env_reserved_node(p, a, at.Get(a, n).c)
+    end
     p_expect(p, tok.TK_KW_IN, "'in' before the collection, as in 'each item in items:'")
     ps_set_a(a, n, parse_expr(p, a))
     p_expect(p, tok.TK_COLON, "':' after the layout 'each' header")
@@ -552,6 +649,7 @@ func parse_layout_block(p &: Ps, a &: at.Ast): int:
         if p_match(p, tok.TK_LPAREN):
             parse_params(p, a, params)
             p_expect(p, tok.TK_RPAREN, "')' after layout parameters")
+            env_reserved_params(p, a, params)
         end
         p_fin(p, a, params)
         ps_set_b(a, n, params)
@@ -572,6 +670,7 @@ func parse_component(p &: Ps, a &: at.Ast): int:
     if p_match(p, tok.TK_LPAREN):
         parse_params(p, a, n)
         p_expect(p, tok.TK_RPAREN, "')' after component parameters")
+        env_reserved_params(p, a, n)
     end
     p_expect(p, tok.TK_COLON, "':' after component header")
     p_skip_terminators(p)

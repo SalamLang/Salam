@@ -36,8 +36,15 @@ if [ "${1:-}" = "--worker" ]; then
             "$@"
         fi
     }
+    wk_norm() {
+        case "$1" in
+        *'<meta name="generator" content="Salam/'*) printf '%s' "$1" | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g' ;;
+        *) printf '%s' "$1" ;;
+        esac
+    }
     wk_check() { # <expected-file> <got>
         want=$(tr -d '\r' <"$1")
+        set -- "$1" "$(wk_norm "$2")"
         if [ "$2" = "$want" ]; then
             echo "PASS $label"
         else
@@ -283,6 +290,7 @@ $cerrs"
             return
         fi
         rm -rf "$jobdir"
+        got=$(wk_norm "$got")
         ok=1
         missing=""
         while IFS= read -r l || [ -n "$l" ]; do

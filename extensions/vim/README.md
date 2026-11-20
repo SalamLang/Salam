@@ -64,7 +64,7 @@ its full path.
 
 ```vim
 let g:salam_compiler       = 'salam'
-let g:salam_lang           = 'auto'    " auto | en | fa | ar
+let g:salam_lang           = 'auto'    " auto | en | fa
 let g:salam_run_command    = 'exec'    " exec | run
 let g:salam_format_indent  = '4'       " tab, or 1-16
 let g:salam_format_on_save = 0

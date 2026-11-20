@@ -108,7 +108,7 @@ The same values are also members of the reserved name `page` (`صفحه`):
 `page.mouse`, `page.reduced motion`, `page.high contrast`, `page.rtl` and
 `page.ltr` (Persian `صفحه.عرض`, `صفحه.ارتفاع`, `صفحه.فشرده`, ...). These
 work in style `if` blocks and in element `if` blocks, because they cannot
-collide with a user name: inside a page or a component `page` cannot be
+collide with a declared name: inside a page or a component `page` cannot be
 declared as a variable, parameter or loop name (E253), and an unknown member
 is E254. Outside pages and components `page` is an ordinary name.
 

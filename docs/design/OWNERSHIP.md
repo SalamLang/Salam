@@ -107,17 +107,17 @@ positive count at zero on `std/` and `compiler/`:
 
 ## Diagnostics
 
-| Code        | When                                                                                  | Mode                  |
-| ----------- | ------------------------------------------------------------------------------------- | --------------------- |
-| E139        | a path is used after its storage was freed on every path                              | on, warn, error       |
-| E140        | storage is freed twice on every path                                                  | on, warn, error       |
-| E141        | a returned value is freed by the function's own `defer`                               | on, warn, error       |
+| Code        | When                                                                                  | Mode                       |
+| ----------- | ------------------------------------------------------------------------------------- | -------------------------- |
+| E139        | a path is used after its storage was freed on every path                              | on, warn, error            |
+| E140        | storage is freed twice on every path                                                  | on, warn, error            |
+| E141        | a returned value is freed by the function's own `defer`                               | on, warn, error            |
 | E256 / W142 | used after free on some paths                                                         | error (default) / on, warn |
 | E257 / W143 | freed twice on some paths                                                             | error (default) / on, warn |
-| E258 / W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | error (default) / warn |
-| E259 / W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | error (default) / warn |
-| E176        | a call that returns a new heap string is a bare statement, so the result is dropped   | on, warn, error       |
-| E250        | a local holds a struct whose fresh heap string field is never freed or handed on      | on, warn, error       |
+| E258 / W144 | a copy, `.Ref()` pointer or iterator used after a call that may have moved the buffer | error (default) / warn     |
+| E259 / W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | error (default) / warn     |
+| E176        | a call that returns a new heap string is a bare statement, so the result is dropped   | on, warn, error            |
+| E250        | a local holds a struct whose fresh heap string field is never freed or handed on      | on, warn, error            |
 
 E176 covers user code only (not `std/`). `input`, `trim`, `upper`, `lower`,
 `repeat`, `substr` and `concat` count as returning a new string, so

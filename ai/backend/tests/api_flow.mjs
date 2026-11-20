@@ -350,6 +350,104 @@ check("a caller tool named like one of ours is never offered to the model", rese
 const noTools = await (await chat(toolKey, { model: "salam", tools: toolSpec, messages: [{ role: "user", content: "just say hello" }] })).json();
 check("an answer that needs no tool still comes back as text", noTools.choices?.[0]?.finish_reason === "stop" && typeof noTools.choices?.[0]?.message?.content === "string", noTools.choices?.[0]);
 
+console.log("anthropic clients");
+const anthSession = await account("anthropic@test.ir", "Anthropic");
+const anthKey = (await api("POST", "/keys", anthSession, { name: "anthropic-bot" })).json.secret;
+const AV = { "anthropic-version": "2023-06-01" };
+async function messages(key, body, { bearer = false, path = "/v1/messages", headers = {} } = {}) {
+  const auth = bearer ? { Authorization: `Bearer ${key}` } : { "x-api-key": key };
+  return fetch(V1 + path, { method: "POST", headers: { "Content-Type": "application/json", ...AV, ...auth, ...headers }, body: JSON.stringify(body) });
+}
+function anthEvents(raw) {
+  return raw
+    .split("\n\n")
+    .map((b) => b.trim())
+    .filter(Boolean)
+    .map((b) => {
+      const name = /^event: (.*)$/m.exec(b)?.[1];
+      const data = /^data: (.*)$/m.exec(b)?.[1];
+      let json = null;
+      try {
+        json = JSON.parse(data);
+      } catch {}
+      return { name, json };
+    });
+}
+function blocksOf(list) {
+  const blocks = [];
+  for (const e of list) {
+    if (e.name === "content_block_start") blocks[e.json.index] = { ...e.json.content_block, text: e.json.content_block.text ?? "", thinking: "", json: "", stopped: false };
+    if (e.name === "content_block_delta") {
+      const b = blocks[e.json.index];
+      if (e.json.delta.type === "text_delta") b.text += e.json.delta.text;
+      if (e.json.delta.type === "thinking_delta") b.thinking += e.json.delta.thinking;
+      if (e.json.delta.type === "input_json_delta") b.json += e.json.delta.partial_json;
+    }
+    if (e.name === "content_block_stop") blocks[e.json.index].stopped = true;
+  }
+  return blocks;
+}
+const anthWrong = await messages("sk-salam-wrong", { model: "salam", max_tokens: 100, messages: [{ role: "user", content: "hi" }] });
+const anthWrongBody = await anthWrong.json();
+check("anthropic: a wrong key gets 401 authentication_error", anthWrong.status === 401 && anthWrongBody.type === "error" && anthWrongBody.error.type === "authentication_error", anthWrongBody);
+const anthBad = await messages(anthKey, { model: "salam", max_tokens: 100 });
+check("anthropic: missing messages is a 400 invalid_request_error", anthBad.status === 400 && (await anthBad.json()).error?.type === "invalid_request_error");
+const counted = await (await messages(anthKey, { model: "salam", system: "Be brief.", messages: [{ role: "user", content: "How long is this?" }] }, { path: "/v1/messages/count_tokens" })).json();
+check("anthropic: count_tokens returns an estimate", Number.isInteger(counted.input_tokens) && counted.input_tokens > 0, counted);
+const anthModels = await (await fetch(`${V1}/v1/models`, { headers: AV })).json();
+check("anthropic: /v1/models has the Anthropic list shape too", anthModels.data?.[0]?.id === "salam" && anthModels.data[0].type === "model" && typeof anthModels.data[0].display_name === "string" && anthModels.has_more === false && anthModels.first_id === "salam", anthModels);
+const oneModel = await fetch(`${V1}/v1/models/salam`, { headers: AV });
+check("anthropic: /v1/models/salam returns the model", oneModel.status === 200 && (await oneModel.json()).id === "salam");
+const noModel = await fetch(`${V1}/v1/models/other`, { headers: AV });
+check("anthropic: an unknown model is not_found_error", noModel.status === 404 && (await noModel.json()).error?.type === "not_found_error");
+const getMessages = await fetch(`${V1}/v1/messages`, { headers: AV });
+check("anthropic: GET /v1/messages is a not_found_error", getMessages.status === 404 && (await getMessages.json()).error?.type === "not_found_error");
+const aPlain = await messages(anthKey, { model: "claude-sonnet", max_tokens: 1024, system: [{ type: "text", text: "Be brief.", cache_control: { type: "ephemeral" } }], messages: [{ role: "user", content: [{ type: "text", text: "What is Salam?" }] }], metadata: { user_id: "end-user-9" } }, { headers: { "X-Salam-Project": "anthropic-bot-project" } });
+const ap = await aPlain.json();
+check("anthropic: a message has the Anthropic shape", aPlain.status === 200 && ap.type === "message" && ap.role === "assistant" && ap.id.startsWith("msg_") && ap.model === "salam" && ap.stop_reason === "end_turn" && ap.stop_sequence === null && ap.content[0].type === "text" && Number.isInteger(ap.usage.input_tokens) && Number.isInteger(ap.usage.output_tokens), ap);
+check("anthropic: system blocks reach the engine as caller context", ap.content?.[0]?.text?.includes("<caller_instructions>"), ap.content);
+const aBearer = await (await messages(anthKey, { model: "salam", max_tokens: 100, messages: [{ role: "user", content: "with a bearer token" }] }, { bearer: true })).json();
+check("anthropic: Authorization Bearer works like x-api-key", aBearer.type === "message" && aBearer.content[0].text.startsWith("Echo:"), aBearer);
+const aStream = await messages(anthKey, { model: "salam", max_tokens: 1024, stream: true, messages: [{ role: "user", content: "Stream please" }] });
+const aEvents = anthEvents(await aStream.text());
+const aBlocks = blocksOf(aEvents);
+const named = aEvents.map((e) => e.name);
+check("anthropic: streaming uses text/event-stream", aStream.headers.get("content-type").startsWith("text/event-stream"));
+check("anthropic: the stream opens with message_start and closes with message_delta then message_stop", named[0] === "message_start" && aEvents[0].json.message.role === "assistant" && named.at(-1) === "message_stop" && named.at(-2) === "message_delta" && aEvents.at(-2).json.delta.stop_reason === "end_turn" && aEvents.every((e) => e.json), named);
+check("anthropic: streamed text is the whole answer in a closed text block", aBlocks.length === 1 && aBlocks[0].type === "text" && aBlocks[0].stopped && aBlocks[0].text.startsWith("Echo: Stream please") && !DASHES.test(aBlocks[0].text), aBlocks);
+const aToolSpec = [{ name: "write_to_file", description: "Write content to a file on the user's machine", input_schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } }, { type: "web_search_20250305", name: "web_search" }];
+const aCalled = await (await messages(anthKey, { model: "salam", max_tokens: 4096, tools: aToolSpec, messages: [{ role: "user", content: "write a factorial program and write it to a file" }] })).json();
+const aUse = aCalled.content?.find((b) => b.type === "tool_use");
+check("anthropic: a caller tool comes back as a tool_use block", aCalled.stop_reason === "tool_use" && aUse?.name === "write_to_file" && aUse.id.startsWith("toolu_"), aCalled);
+check("anthropic: tool_use input is an object with the arguments", aUse?.input?.path === "factorial.salam" && typeof aUse.input === "object", aUse);
+const aStreamTool = await messages(anthKey, { model: "salam", max_tokens: 4096, stream: true, tools: aToolSpec, messages: [{ role: "user", content: "write a factorial program and write it to a file" }] });
+const aStEvents = anthEvents(await aStreamTool.text());
+const aStBlocks = blocksOf(aStEvents);
+const aStUse = aStBlocks.find((b) => b?.type === "tool_use");
+check("anthropic: a streamed tool call arrives whole with stop_reason tool_use", aStUse?.name === "write_to_file" && JSON.parse(aStUse.json).path === "factorial.salam" && aStUse.stopped && aStEvents.at(-2)?.json?.delta?.stop_reason === "tool_use" && aStEvents.at(-1)?.name === "message_stop", aStEvents.map((e) => e.name));
+const aRunSpec = [{ name: "run_commands", description: "Run shell commands", input_schema: { type: "object", properties: { commands: { type: "string" } }, required: ["commands"] } }];
+const aRound = await (await messages(anthKey, { model: "salam", max_tokens: 4096, tools: aRunSpec, messages: [
+  { role: "user", content: "list the project files" },
+  { role: "assistant", content: [{ type: "text", text: "Let me look." }, { type: "tool_use", id: "toolu_abc", name: "run_commands", input: { commands: "ls" } }] },
+  { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_abc", content: [{ type: "text", text: "main.salam" }] }, { type: "text", text: "what did you find?" }] },
+] })).json();
+check("anthropic: a tool_result round trip answers with text", aRound.type === "message" && aRound.stop_reason === "end_turn" && aRound.content[0].type === "text", aRound);
+const aRoundLog = (await api("GET", "/keys/requests", anthSession)).json.requests[0];
+check("anthropic: tool_use and tool_result reach the engine as history", aRoundLog.prompt.includes(`{"tool": "run_commands", "arguments": `) && aRoundLog.prompt.includes(`"ls"`) && aRoundLog.prompt.includes("run_commands returned:\nmain.salam") && aRoundLog.prompt.includes("what did you find?"), aRoundLog.prompt.slice(-400));
+const aLogged = (await api("GET", "/keys/requests", anthSession)).json.requests.find((r) => r.project === "anthropic-bot-project");
+check("anthropic: the project header and metadata.user_id are logged", aLogged?.end_user === "end-user-9" && aLogged.model === "salam", aLogged);
+const aCut = anthEvents(await (await messages(anthKey, { model: "salam", max_tokens: 1024, stream: true, messages: [{ role: "user", content: "fail midway please" }] })).text());
+check("anthropic: an engine failure half way ends with stop_reason max_tokens", aCut.at(-1)?.name === "message_stop" && aCut.at(-2)?.json?.delta?.stop_reason === "max_tokens" && blocksOf(aCut)[0]?.text.startsWith("Echo: fail midway"), aCut.slice(-3));
+const aDead = anthEvents(await (await messages(anthKey, { model: "salam", max_tokens: 1024, stream: true, messages: [{ role: "user", content: "never start" }] })).text());
+check("anthropic: a turn the engine never starts ends with an error event", aDead[0]?.name === "message_start" && aDead.at(-1)?.name === "error" && aDead.at(-1).json.type === "error", aDead.map((e) => e.name));
+const aPrefixed = await (await messages(anthKey, { model: "salam", max_tokens: 100, messages: [{ role: "user", content: "with the anthropic prefix" }] }, { path: "/anthropic/v1/messages" })).json();
+check("anthropic: a base URL ending in /anthropic works", aPrefixed.type === "message" && aPrefixed.content[0].text.startsWith("Echo:"), aPrefixed);
+const aThink = anthEvents(await (await messages(anthKey, { model: "salam", max_tokens: 4096, stream: true, thinking: { type: "adaptive" }, messages: [{ role: "user", content: "think aloud please" }] })).text());
+const aThinkBlocks = blocksOf(aThink);
+const firstText = aThinkBlocks.findIndex((b) => b.type === "text");
+check("anthropic: with thinking on, blocks are numbered in order and each one closes", firstText >= 0 && aThinkBlocks.every((b) => b && b.stopped) && aThink.at(-1)?.name === "message_stop", aThink.map((e) => e.name));
+check("anthropic: thinking blocks come before the text", aThinkBlocks.every((b, i) => b.type !== "thinking" || i < firstText) && aThinkBlocks[firstText].text.includes("Done thinking"), aThinkBlocks.map((b) => b.type));
+
 console.log("long conversations");
 const longSession = await account("long-turns@test.ir", "Long Turns");
 const longKey = (await api("POST", "/keys", longSession, { name: "long-turns-bot" })).json.secret;

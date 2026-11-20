@@ -333,15 +333,31 @@ server.listen(0, "127.0.0.1", async () => {
     });
     const cols = () =>
       page.$eval("#main-split", (e) => e.style.gridTemplateColumns);
+    const dragClasses = () =>
+      page.evaluate(
+        () =>
+          document.querySelector("#gutter").classList.contains("dragging") ||
+          document.querySelector("#main-split").classList.contains("resizing"),
+      );
+    const before = await cols();
     await page.mouse.move(g.x, g.y);
     await page.mouse.down();
     await page.mouse.move(g.x - 80, g.y, { steps: 4 });
+    const during = await cols();
     await page.mouse.move(pv.x, pv.y, { steps: 4 });
     await page.mouse.up();
+    check(
+      "the drag classes clear on a release over the preview",
+      !(await dragClasses()),
+    );
     const released = await cols();
     await page.mouse.move(box.x + 100, box.y + 100, { steps: 4 });
     const later = await cols();
-    check("the gutter resizes while dragged", released !== "", released);
+    check(
+      "the gutter resizes while dragged",
+      during !== "" && during !== before,
+      before + " then " + during,
+    );
     check(
       "the gutter stops on a release over the preview",
       later === released,

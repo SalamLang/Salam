@@ -155,12 +155,12 @@ setTimeout(() => {
   const gutter = q("#gutter");
   const split = q("#main-split");
   const PE = dom.window.PointerEvent || dom.window.MouseEvent;
-  const ptr = (target, type, x, buttons) =>
+  const ptr = (target, type, x, buttons, pointerId = 1) =>
     target.dispatchEvent(
       new PE(type, {
         bubbles: true,
         cancelable: true,
-        pointerId: 1,
+        pointerId,
         clientX: x,
         clientY: 200,
         buttons,
@@ -170,39 +170,63 @@ setTimeout(() => {
   gutter.setPointerCapture = () => {
     captured = true;
   };
+  const cols = () => split.style.gridTemplateColumns;
+  const cleared = () =>
+    !gutter.classList.contains("dragging") &&
+    !split.classList.contains("resizing");
   const drag = (endWith) => {
+    split.style.gridTemplateColumns = "";
     ptr(gutter, "pointerdown", 500, 1);
     ptr(gutter, "pointermove", 420, 1);
-    const during = split.style.gridTemplateColumns;
+    const during = cols();
     endWith();
-    const after = split.style.gridTemplateColumns;
-    ptr(d.body, "pointermove", 300, 0);
+    const ended = cleared();
+    const after = cols();
     ptr(d.body, "pointermove", 300, 1);
-    return { during, after, later: split.style.gridTemplateColumns };
+    return { during, ended, after, later: cols() };
   };
   const ends = [
-    ["a release over the preview", () => {}],
+    ["pointerup", () => ptr(gutter, "pointerup", 420, 0)],
     ["pointercancel", () => ptr(gutter, "pointercancel", 420, 0)],
     ["lostpointercapture", () => ptr(gutter, "lostpointercapture", 420, 0)],
+    ["a window pointerup", () => ptr(d.body, "pointerup", 420, 0)],
     [
       "a window blur",
       () => dom.window.dispatchEvent(new dom.window.Event("blur")),
     ],
+    ["a move with no button held", () => ptr(d.body, "pointermove", 360, 0)],
   ];
   for (const [what, end] of ends) {
-    split.style.gridTemplateColumns = "";
     const r = drag(end);
     check(
       "the gutter resizes while dragged (" + what + ")",
       r.during === "420px 6px 1fr",
       r.during,
     );
+    check("the drag classes clear on " + what, r.ended);
     check(
-      "the gutter stops after " + what,
-      r.later === r.after && !gutter.classList.contains("dragging"),
+      "the split stays put after " + what,
+      r.later === r.after,
       r.after + " then " + r.later,
     );
   }
+
+  split.style.gridTemplateColumns = "";
+  ptr(gutter, "pointerdown", 500, 1);
+  ptr(gutter, "pointermove", 420, 1);
+  ptr(d.body, "pointermove", 250, 1, 2);
+  check(
+    "a second pointer does not move the split",
+    cols() === "420px 6px 1fr",
+    cols(),
+  );
+  ptr(d.body, "pointerup", 250, 0, 2);
+  ptr(d.body, "pointercancel", 250, 0, 2);
+  check("a second pointer does not end the drag", !cleared());
+  ptr(gutter, "pointermove", 400, 1);
+  check("the first pointer still drags", cols() === "400px 6px 1fr", cols());
+  ptr(gutter, "pointerup", 400, 0);
+  check("the first pointer ends the drag", cleared());
   check("the gutter captures the pointer", captured);
 
   check(

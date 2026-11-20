@@ -92,25 +92,46 @@ that has no earlier value is simply not declared while the condition is false.
 | `container width < 400`, `container height ...` | the nearest ancestor with `container = true` |
 | `in card hover`, `in card focus within`, `in card active` | a state of the nearest ancestor whose `group = card` |
 
-Environment words are recognised only inside a style `if` condition; an
-element `if` keeps ordinary variables only. Persian spellings are
-accepted too (`تیره`, `فشرده`, `عریض`, `لمسی`, `عرض صفحه`, `حرکت کم`). The
-words are `dark`, `light`, `compact`, `regular`, `wide`, `touch`, `mouse`,
-`landscape`, `portrait`, `reduced motion`, `high contrast`, `rtl`, `ltr`,
-`screen width` and `screen height`. A variable, state or parameter declared
-with the same name keeps its meaning (`dark := false` and `if dark:` read the
-variable), so existing pages do not change; rename it to use the word.
+Environment words are recognised inside an `if` condition in a page or a
+component. Persian spellings are accepted too (`تیره`, `فشرده`, `عریض`,
+`لمسی`, `عرض صفحه`, `حرکت کم`). The bare words are `dark`, `light`,
+`compact`, `regular`, `wide`, `touch`, `mouse`, `landscape`, `portrait`,
+`reduced motion`, `high contrast`, `rtl`, `ltr`, `screen width` and
+`screen height`. A variable, state or parameter declared with the same name
+keeps its meaning (`dark := false` and `if dark:` read the variable), and a
+bare one-word env word in an element `if` reads the variable of that name, so
+existing pages do not change.
 
-Status: the web target implements all of the words above, for example
-`if compact and not open:` or `if touch and screen width < 500:`. The
-compiler keeps one hidden value per word, filled from `matchMedia` and the
-window size before the first paint and refreshed on resize and on scheme,
-motion and pointer changes; a change re-renders the views, so an environment
-word can be mixed freely with state in one condition. `container width`,
-`in card hover` and `lang = "fa"` are planned and not implemented yet. On the
-native target an environment word in a style `if` is the compile error E233
-until the window signals described below are wired in; the rest of the page is
-unaffected.
+The same values are also members of the reserved name `page` (`صفحه`):
+`page.width`, `page.height`, `page.compact`, `page.regular`, `page.wide`,
+`page.landscape`, `page.portrait`, `page.dark`, `page.light`, `page.touch`,
+`page.mouse`, `page.reduced motion`, `page.high contrast`, `page.rtl` and
+`page.ltr` (Persian `صفحه.عرض`, `صفحه.ارتفاع`, `صفحه.فشرده`, ...). These
+work in style `if` blocks and in element `if` blocks, because they cannot
+collide with a user name: inside a page or a component `page` cannot be
+declared as a variable, parameter or loop name (E253), and an unknown member
+is E254. Outside pages and components `page` is an ordinary name.
+
+Status:
+
+- Web: every word is kept as one hidden value, filled from `matchMedia` and
+  the window size before the first paint and refreshed on resize and on
+  scheme, motion and pointer changes; a change re-renders the views. A style
+  `if` on the page block itself whose condition uses only environment words,
+  `and`, `or`, `not` and comparisons of `page.width`/`page.height` with
+  numbers is compiled to a CSS `@media` rule on the body class instead
+  (`page.width >= 400 and page.height < 900` becomes
+  `@media (width >= 400px) and (height < 900px)`), so it needs no script.
+  Such an `if` mixed with page-level state is not supported yet (E129), as
+  for any page-level state.
+- Native: the compiler injects the same hidden values and a setter, registered
+  with `Builder.Env`; `gui.ui` calls it before the first frame and again on
+  `Resized` and `ColorSchemeChanged` with the logical window size, so the
+  scopes that read a value re-run and the layout is computed at the new size.
+  `touch`, `reduced motion` and `high contrast` are false on desktop for now
+  (the only OS query for the last two spawns a process per call).
+- `container width`, `in card hover` and `lang = "fa"` are planned and not
+  implemented yet.
 
 ### Rules
 
@@ -221,7 +242,8 @@ part of the state table, and have no native meaning.
 | code | kind | message |
 | --- | --- | --- |
 | E172 | reserved | not emitted: a declared name of the same spelling wins over the environment word |
-| E233 | error | `environment words in a style 'if' are not available on the native target yet` |
+| E253 | error | `'page' is reserved inside pages and components, it reads the window (page.width, page.height, page.dark, ...); choose another name` |
+| E254 | error | `'page' has no property '<name>'; use width, height, dark, ...` |
 | E173 | error | `a style 'if' condition must be a bool or an environment condition, found <type>` |
 | E174 | error | `'container' condition used outside an element marked container` |
 | E175 | error | `an 'if' cannot hold style attributes together with elements; split it into two 'if' blocks` |

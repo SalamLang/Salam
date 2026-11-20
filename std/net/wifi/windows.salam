@@ -1,0 +1,144 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package wifi
+
+if SALAM_OS_WINDOWS:
+    import mem
+    import str
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+        func MultiByteToWideChar(code_page: u32, flags: u32, text: str, length: i32, wide: void*, wide_len: i32): i32
+        func WideCharToMultiByte(
+            code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*,
+            used: void*
+        ): i32
+    end
+
+    mut _w_lib := null as void*
+    mut _w_tried := false
+
+    func _w_wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, -1, null, 0)
+        buf := mem.AllocateZeroed(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, -1, buf, needed + 1)
+        ret buf
+    end
+
+    func _w_utf8(wide: void*): str:
+        needed := WideCharToMultiByte(65001 as u32, 0 as u32, wide, -1, null, 0, null, null)
+        if needed <= 1:
+            ret str.Clone("")
+        end
+        buf := mem.AllocateZeroed((needed + 1) as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, wide, -1, buf, needed, null, null)
+        out := str.Clone(buf as str)
+        mem.Free(buf)
+        ret out
+    end
+
+    func _w_fn(name: str): void*:
+        if not _w_tried:
+            _w_tried = true
+            wide := _w_wide("wlanapi.dll")
+            _w_lib = LoadLibraryW(wide)
+            mem.Free(wide)
+        end
+        if _w_lib == null:
+            ret null
+        end
+        ret GetProcAddress(_w_lib, name)
+    end
+
+    func _w_query(handle: void*, guid: void*, base: Status): Status:
+        mut s := base
+        query := _w_fn("WlanQueryInterface")
+        free := _w_fn("WlanFreeMemory")
+        if query == null or free == null:
+            ret s
+        end
+        q := query as extern stdcall func (void*, void*, int, void*, void*, void*, void*) u32
+        f := free as extern stdcall func (void*)
+        cells := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(cells)
+        rc := q(handle, guid, 7, null, cells, (cells as i64 + 8 as i64) as void*, null)
+        size := ((cells as u32*)[0]) as int
+        data := ((cells as i64 + 8 as i64) as void**)[0]
+        if rc == (0 as u32) and data != null:
+            parsed := ParseWlanConnection(data, size)
+            f(data)
+            s.state = parsed.state
+            s.ssid = parsed.ssid
+            s.ssid_known = parsed.ssid_known
+            s.bssid = parsed.bssid
+            s.security = parsed.security
+            s.signal = parsed.signal
+            s.reason = parsed.reason
+            ret s
+        end
+        if data != null:
+            f(data)
+        end
+        if s.state == State.Connected:
+            s.reason = rc == (5 as u32) ? "access denied: allow location access for desktop apps to read the SSID" : "WlanQueryInterface failed"
+        end
+        ret s
+    end
+
+    func _win_scan(): Vector<Status>:
+        mut out := Vector {} as Vector<Status>
+        open := _w_fn("WlanOpenHandle")
+        enumerate := _w_fn("WlanEnumInterfaces")
+        free := _w_fn("WlanFreeMemory")
+        close := _w_fn("WlanCloseHandle")
+        if open == null or enumerate == null or free == null or close == null:
+            ret out
+        end
+        o := open as extern stdcall func (u32, void*, void*, void*) u32
+        e := enumerate as extern stdcall func (void*, void*, void*) u32
+        f := free as extern stdcall func (void*)
+        c := close as extern stdcall func (void*, void*) u32
+        cells := mem.AllocateZeroed(24 as u64)
+        defer mem.Free(cells)
+        opened := o(2 as u32, null, cells, (cells as i64 + 8 as i64) as void*)
+        handle := ((cells as i64 + 8 as i64) as void**)[0]
+        if opened != (0 as u32) or handle == null:
+            ret out
+        end
+        listed := e(handle, null, (cells as i64 + 16 as i64) as void*)
+        list := ((cells as i64 + 16 as i64) as void**)[0]
+        if listed == (0 as u32) and list != null:
+            n := _u32_at(list, 0)
+            repeat n in i:
+                item := (list as i64 + (8 + i * 532) as i64) as void*
+                st := _u32_at(item, 528)
+                mut s := Status { backend = "wlanapi" }
+                s.interface = _w_utf8((item as i64 + 16 as i64) as void*)
+                if st == 1:
+                    s.state = State.Connected
+                    s = _w_query(handle, item, s)
+                else:
+                    s.state = State.Disconnected
+                end
+                out.Push(s)
+            end
+            f(list)
+        end
+        _rc := c(handle, null)
+        ret out
+    end
+end

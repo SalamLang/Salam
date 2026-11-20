@@ -1,4 +1,4 @@
-# Salam Programming Language (2024-2026)
+# Salam Programming Language (2018-2026)
 #
 # Builds the CEF backend of std/gui/webview:
 #

@@ -35,14 +35,14 @@ Getting `Could not create SSL/TLS secure channel` from the PowerShell command (c
 
 ## Settings
 
-| Setting              | Default | Description                                                |
-| -------------------- | ------- | ---------------------------------------------------------- |
-| `salam.compilerPath` | `salam` | Path to the `salam` executable                             |
-| `salam.languagePack` | `auto`  | Keyword pack passed as `--lang` (`auto`, `en`, `fa`, `ar`) |
-| `salam.run.command`  | `run`   | Subcommand used by the run command                         |
-| `salam.lsp.enable`   | `true`  | Run the language server                                    |
-| `salam.lsp.messages` | `auto`  | Language of server messages: `auto`, `en`, `fa`            |
-| `salam.trace.server` | `off`   | Log the protocol traffic to the output panel               |
+| Setting              | Default | Description                                                                      |
+| -------------------- | ------- | -------------------------------------------------------------------------------- |
+| `salam.compilerPath` | `salam` | Path to the `salam` executable                                                   |
+| `salam.languagePack` | `auto`  | Keyword pack passed as `--lang` (`en`, `fa`); `auto` lets the compiler detect it |
+| `salam.run.command`  | `run`   | Subcommand used by the run command                                               |
+| `salam.lsp.enable`   | `true`  | Run the language server                                                          |
+| `salam.lsp.messages` | `auto`  | Language of server messages: `auto`, `en`, `fa`                                  |
+| `salam.trace.server` | `off`   | Log the protocol traffic to the output panel                                     |
 
 The language server needs a Salam release that has `salam lsp`. With an older compiler the extension falls back to formatting through `salam format` and says so in the Salam output panel. `Salam: Restart Language Server` restarts it after you update the compiler.
 

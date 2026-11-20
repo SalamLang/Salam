@@ -15,8 +15,6 @@ M.config = {
 local namespace = vim.api.nvim_create_namespace('salam')
 local group = vim.api.nvim_create_augroup('salam_nvim', { clear = true })
 
-local PERSIAN_ONLY = '[\u{67e}\u{686}\u{698}\u{6af}\u{6a9}\u{6cc}]'
-
 local SEVERITY = {
   error = vim.diagnostic.severity.ERROR,
   warning = vim.diagnostic.severity.WARN,
@@ -24,31 +22,19 @@ local SEVERITY = {
   info = vim.diagnostic.severity.INFO,
 }
 
-local function head_of(bufnr)
-  return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, 200, false), '\n')
-end
-
-function M.lang(bufnr)
-  if M.config.lang ~= 'auto' then
+function M.lang()
+  if M.config.lang == 'en' or M.config.lang == 'fa' then
     return M.config.lang
   end
-
-  local head = head_of(bufnr or 0)
-
-  local code = head:match('lang%s*:%s*(%a%a)') or head:match('LANG%s*:%s*(%a%a)')
-  if code then
-    return code:lower()
-  end
-
-  if vim.fn.match(head, '\\v' .. PERSIAN_ONLY) >= 0 then
-    return 'fa'
-  end
-  local arabic = select(2, head:gsub('[\216-\219][\128-\191]', ''))
-  return arabic >= 3 and 'ar' or 'en'
+  return nil
 end
 
-local function common_args(bufnr)
-  local args = { '--lang=' .. M.lang(bufnr) }
+local function common_args()
+  local args = {}
+  local lang = M.lang()
+  if lang then
+    table.insert(args, '--lang=' .. lang)
+  end
   if M.config.stdlib_path ~= '' then
     table.insert(args, '--stdlib-path=' .. M.config.stdlib_path)
   end
@@ -99,7 +85,7 @@ function M.check(bufnr)
     '--xml-out=' .. null_device(),
     '--error-format=json',
     '--log-level=error',
-  }, common_args(bufnr))
+  }, common_args())
 
   local function publish(lines)
     if vim.api.nvim_buf_is_valid(bufnr) then
@@ -144,7 +130,7 @@ function M.format(bufnr)
     tmp,
     '--indent=' .. M.config.indent,
     '--error-style=gcc',
-  }, common_args(bufnr))
+  }, common_args())
 
   local output = vim.fn.system(cmd)
   if vim.v.shell_error ~= 0 then

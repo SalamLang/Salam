@@ -1,0 +1,428 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import mem
+import str
+import net.tunnel
+
+func _mask(prefix: int): str:
+    mut bits := prefix
+    if bits < 0:
+        bits = 0
+    end
+    if bits > 32:
+        bits = 32
+    end
+    mut v := 0 as i64
+    repeat bits in i:
+        v |= (1 as i64) << (31 - i)
+    end
+    ret _ip4s(v)
+end
+
+func _private4(ip: str): bool:
+    a := _ip4(ip)
+    if a < 0:
+        ret false
+    end
+    b0 := (a >> 24) & 255
+    b1 := (a >> 16) & 255
+    if b0 == 10 or (b0 == 192 and b1 == 168) or (b0 == 172 and b1 >= 16 and b1 <= 31):
+        ret true
+    end
+    ret (b0 == 100 and b1 >= 64 and b1 <= 127) or (b0 == 169 and b1 == 254)
+end
+
+func _hexv(s: str): i64:
+    k := s.Len()
+    if k == 0 or k > 15:
+        ret 0 - 1
+    end
+    p := s as u8*
+    mut v := 0 as i64
+    repeat k in i:
+        c := p[i] as int
+        mut d := 0 - 1
+        if c >= 48 and c <= 57:
+            d = c - 48
+        else c >= 97 and c <= 102:
+            d = c - 87
+        else c >= 65 and c <= 70:
+            d = c - 55
+        end
+        if d < 0:
+            ret 0 - 1
+        end
+        v = v * (16 as i64) + (d as i64)
+    end
+    ret v
+end
+
+func _decv(s: str): int:
+    k := s.Len()
+    if k == 0 or k > 9:
+        ret 0 - 1
+    end
+    p := s as u8*
+    mut v := 0
+    repeat k in i:
+        c := p[i] as int
+        if c < 48 or c > 57:
+            ret 0 - 1
+        end
+        v = v * 10 + (c - 48)
+    end
+    ret v
+end
+
+func _hex_le_ip(h: str): str:
+    if h.Len() != 8:
+        ret ""
+    end
+    mut v := 0 as i64
+    repeat 4 in i:
+        part := h.Substr(i * 2, 2)
+        byte := _hexv(part)
+        mem.Free(part as void*)
+        if byte < 0:
+            ret ""
+        end
+        v |= byte << (i * 8)
+    end
+    ret _ip4s(v)
+end
+
+func _fields(line: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut sb := str.NewBuilder()
+    k := line.Len()
+    p := line as u8*
+    repeat k in i:
+        c := p[i] as int
+        if c == 32 or c == 9 or c == 13:
+            if str.BufLen(sb) > (0 as i64):
+                out.Push(str.BufStr(sb))
+                str.BufReset(sb)
+            end
+        else:
+            str.BufAppendChar(sb, c)
+        end
+    end
+    if str.BufLen(sb) > (0 as i64):
+        out.Push(str.BufStr(sb))
+    end
+    str.BufFree(sb)
+    ret out
+end
+
+func _after_colon(line: str): str:
+    at := line.Find(":")
+    if at < 0:
+        ret ""
+    end
+    ret line.Substr(at + 1, line.Len() - at - 1).Trim()
+end
+
+func _has(v: Vector<str>, s: str): bool:
+    each x in v:
+        if x == s:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _next_ip(ip: str): str:
+    a := _ip4(ip)
+    if a < 0:
+        ret ""
+    end
+    ret _ip4s((a + 1) & (4294967295 as i64))
+end
+
+func _net_of(ip: str, prefix: int): str:
+    a := _ip4(ip)
+    m := _ip4(_mask(prefix))
+    if a < 0:
+        ret ""
+    end
+    ret _ip4s(a & m)
+end
+
+func _plan_linux(dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>): Plan:
+    mut pl := Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+    next := _next_ip(opts.address)
+    pl.up.Push("ip addr add " + opts.address + "/" + str.FromInt(opts.prefix as i64) + " dev " + dev)
+    pl.up.Push("ip link set dev " + dev + " mtu " + str.FromInt(opts.mtu as i64) + " up")
+    if not opts.auto_route:
+        ret pl
+    end
+    each h in hosts:
+        if gw.ip.Len() > 0:
+            pl.up.Push("ip route replace " + h + "/32 via " + gw.ip + " dev " + gw.iface + " onlink")
+        else:
+            pl.up.Push("ip route replace " + h + "/32 dev " + gw.iface)
+        end
+        pl.down.Push("-ip route del " + h + "/32")
+    end
+    if opts.hijack_dns:
+        each r in resolvers:
+            if _private4(r) and not _has(hosts, r):
+                pl.up.Push("-ip route replace " + r + "/32 dev " + dev)
+            end
+        end
+    end
+    pl.up.Push("ip route replace 0.0.0.0/1 dev " + dev)
+    pl.up.Push("ip route replace 128.0.0.0/1 dev " + dev)
+    if opts.block_ipv6:
+        pl.up.Push("-ip -6 route replace unreachable ::/1")
+        pl.up.Push("-ip -6 route replace unreachable 8000::/1")
+        pl.down.Push("-ip -6 route del unreachable ::/1")
+        pl.down.Push("-ip -6 route del unreachable 8000::/1")
+    end
+    if opts.hijack_dns and opts.set_system_dns:
+        pl.up.Push("-resolvectl dns " + dev + " " + next)
+        pl.up.Push("-resolvectl domain " + dev + " ~.")
+        pl.up.Push("-resolvectl default-route " + dev + " true")
+        pl.down.Push("-resolvectl revert " + dev)
+    end
+    ret pl
+end
+
+func _plan_macos(dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>): Plan:
+    mut pl := Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+    pl.up.Push("ifconfig " + dev + " inet " + opts.address + " " + opts.address + " netmask " + _mask(opts.prefix) + " mtu " + str.FromInt(opts.mtu as i64) + " up")
+    pl.up.Push("-route -q -n add -net " + _net_of(opts.address, opts.prefix) + "/" + str.FromInt(opts.prefix as i64) + " -interface " + dev)
+    if not opts.auto_route:
+        ret pl
+    end
+    each h in hosts:
+        if gw.ip.Len() > 0:
+            pl.up.Push("route -q -n add -host " + h + " " + gw.ip)
+        else:
+            pl.up.Push("route -q -n add -host " + h + " -interface " + gw.iface)
+        end
+        pl.down.Push("-route -q -n delete -host " + h)
+    end
+    if opts.hijack_dns:
+        each r in resolvers:
+            if _private4(r) and not _has(hosts, r) and r != gw.ip:
+                pl.up.Push("-route -q -n add -host " + r + " -interface " + dev)
+                pl.down.Push("-route -q -n delete -host " + r)
+            end
+        end
+    end
+    pl.up.Push("route -q -n add -net 0.0.0.0/1 -interface " + dev)
+    pl.up.Push("route -q -n add -net 128.0.0.0/1 -interface " + dev)
+    if opts.block_ipv6:
+        pl.up.Push("-ifconfig " + dev + " inet6 " + DEFAULT_ADDRESS6 + " prefixlen 126")
+        pl.up.Push("-route -q -n add -inet6 -net ::/1 -interface " + dev)
+        pl.up.Push("-route -q -n add -inet6 -net 8000::/1 -interface " + dev)
+    end
+    ret pl
+end
+
+func _plan_windows(dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>, exe: str): Plan:
+    mut pl := Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+    next := _next_ip(opts.address)
+    pl.up.Push("netsh interface ipv4 set address name=" + dev + " source=static address=" + opts.address + " mask=" + _mask(opts.prefix))
+    pl.up.Push("-netsh interface ipv4 set subinterface " + dev + " mtu=" + str.FromInt(opts.mtu as i64) + " store=active")
+    pl.up.Push("-netsh interface ipv4 set interface " + dev + " metric=1")
+    if exe.Len() > 0:
+        rule := "salam-tun-" + dev
+        pl.up.Push("-netsh advfirewall firewall add rule name=" + rule + " dir=in action=allow protocol=TCP enable=yes profile=any program=\"" + exe + "\"")
+        pl.down.Push("-netsh advfirewall firewall delete rule name=" + rule)
+    end
+    if not opts.auto_route:
+        ret pl
+    end
+    each h in hosts:
+        mut line := "route add " + h + " mask 255.255.255.255 " + (gw.ip.Len() > 0 ? gw.ip : "0.0.0.0") + " metric 1"
+        if gw.index > 0:
+            line = line + " if " + str.FromInt(gw.index as i64)
+        end
+        pl.up.Push(line)
+        pl.down.Push("-route delete " + h + " mask 255.255.255.255")
+    end
+    if opts.hijack_dns:
+        if opts.set_system_dns:
+            pl.up.Push("-netsh interface ipv4 set dnsservers name=" + dev + " source=static address=" + next + " register=none validate=no")
+        end
+        each r in resolvers:
+            if _private4(r) and not _has(hosts, r) and r != gw.ip:
+                pl.up.Push("-netsh interface ipv4 add route prefix=" + r + "/32 interface=" + dev + " store=active")
+            end
+        end
+    end
+    pl.up.Push("netsh interface ipv4 add route prefix=0.0.0.0/1 interface=" + dev + " store=active")
+    pl.up.Push("netsh interface ipv4 add route prefix=128.0.0.0/1 interface=" + dev + " store=active")
+    if opts.block_ipv6:
+        pl.up.Push("-netsh interface ipv6 add address interface=" + dev + " address=" + DEFAULT_ADDRESS6 + "/126 store=active")
+        pl.up.Push("-netsh interface ipv6 add route prefix=::/1 interface=" + dev + " store=active")
+        pl.up.Push("-netsh interface ipv6 add route prefix=8000::/1 interface=" + dev + " store=active")
+    end
+    ret pl
+end
+
+func _split_command(line: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut sb := str.NewBuilder()
+    mut quoted := false
+    p := line as u8*
+    k := line.Len()
+    repeat k in i:
+        c := p[i] as int
+        if c == 34:
+            quoted = not quoted
+        else c == 32 and not quoted:
+            if str.BufLen(sb) > (0 as i64):
+                out.Push(str.BufStr(sb))
+                str.BufReset(sb)
+            end
+        else:
+            str.BufAppendChar(sb, c)
+        end
+    end
+    if str.BufLen(sb) > (0 as i64):
+        out.Push(str.BufStr(sb))
+    end
+    str.BufFree(sb)
+    ret out
+end
+
+@en "ValidName"
+@fa "نام معتبر"
+pub func ValidName(name: str): bool:
+    k := name.Len()
+    if k == 0 or k > 15:
+        ret false
+    end
+    p := name as u8*
+    repeat k in i:
+        c := p[i] as int
+        ok := (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 95
+        if not ok:
+            ret false
+        end
+    end
+    ret true
+end
+
+@en "NextAddress"
+@fa "نشانی بعدی"
+pub func NextAddress(address: str): str:
+    ret _next_ip(address)
+end
+
+@en "ParseLinuxRoutes"
+@fa "تجزیه مسیرهای لینوکس"
+pub func ParseLinuxRoutes(text: str): Gateway:
+    lines := text.Split("\n")
+    defer lines.Free()
+    mut best := Gateway {}
+    mut best_metric := 0 - 1
+    each line in lines:
+        f := _fields(line)
+        defer f.Free()
+        if f.Len() < 8 or f[0] == "Iface":
+            continue
+        end
+        if f[1] != "00000000" or f[7] != "00000000":
+            continue
+        end
+        flags := _hexv(f[3])
+        if flags < 0 or (flags & 1) == 0:
+            continue
+        end
+        metric := _decv(f[6])
+        if best.ok and metric >= best_metric:
+            continue
+        end
+        mut gw_ip := _hex_le_ip(f[2])
+        if gw_ip == "0.0.0.0":
+            gw_ip = ""
+        end
+        best = Gateway { ok = true, ip = gw_ip, iface = str.Clone(f[0]) }
+        best_metric = metric
+    end
+    ret best
+end
+
+@en "ParseMacRoute"
+@fa "تجزیه مسیر مک"
+pub func ParseMacRoute(text: str): Gateway:
+    lines := text.Split("\n")
+    defer lines.Free()
+    mut gw := Gateway {}
+    each line in lines:
+        t := line.Trim()
+        if t.StartsWith("gateway:"):
+            v := _after_colon(t)
+            if tunnel.IsIP(v):
+                gw.ip = v
+            end
+        else t.StartsWith("interface:"):
+            gw.iface = _after_colon(t)
+        end
+    end
+    gw.ok = gw.iface.Len() > 0
+    ret gw
+end
+
+@en "ParseResolvers"
+@fa "تجزیه نام‌یاب‌ها"
+pub func ParseResolvers(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    lines := text.Split("\n")
+    defer lines.Free()
+    each line in lines:
+        t := line.Trim()
+        mut v := ""
+        if t.StartsWith("nameserver"):
+            f := _fields(t)
+            if f.Len() >= 2 and f[0] == "nameserver":
+                v = str.Clone(f[1])
+            else f.Len() >= 3 and f[1] == ":":
+                v = str.Clone(f[2])
+            end
+            f.Free()
+        end
+        if v.Len() > 0 and _ip4(v) >= 0 and not _has(out, v):
+            out.Push(v)
+        end
+    end
+    ret out
+end
+
+@en "BuildPlan"
+@fa "ساخت نقشه"
+pub func BuildPlan(platform: str, dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>, exe: str): Plan:
+    if platform == "linux":
+        ret _plan_linux(dev, opts, gw, hosts, resolvers)
+    end
+    if platform == "macos":
+        ret _plan_macos(dev, opts, gw, hosts, resolvers)
+    end
+    if platform == "windows":
+        ret _plan_windows(dev, opts, gw, hosts, resolvers, exe)
+    end
+    ret Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+end
+
+@en "SplitCommand"
+@fa "شکستن فرمان"
+pub func SplitCommand(line: str): Vector<str>:
+    ret _split_command(line)
+end

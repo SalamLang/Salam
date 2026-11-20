@@ -1,0 +1,284 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import mem
+import str
+import net.tunnel
+
+@en "DnsQuestion"
+@fa "پرسش نام‌یابی"
+pub struct DnsQuestion:
+    @en "ok"
+    @fa "درست"
+    pub ok: bool = false
+    @en "id"
+    @fa "شناسه"
+    pub id: int = 0
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "qtype"
+    @fa "نوع پرسش"
+    pub qtype: int = 0
+end
+
+func _host_char(c: int): bool:
+    ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 46 or c == 95
+end
+
+func _clean_host(p: u8*, off: int, n: int): str:
+    if n <= 0 or n > 253:
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    repeat n in i:
+        c := p[off + i] as int
+        if not _host_char(c):
+            str.BufFree(sb)
+            ret ""
+        end
+        mut lc := c
+        if c >= 65 and c <= 90:
+            lc = c + 32
+        end
+        str.BufAppendChar(sb, lc)
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    if out.EndsWith("."):
+        trimmed := out.Substr(0, out.Len() - 1)
+        mem.Free(out as void*)
+        ret trimmed
+    end
+    if tunnel.IsIP(out):
+        mem.Free(out as void*)
+        ret ""
+    end
+    ret out
+end
+
+func _tls_sni(p: u8*, n: int): str:
+    if n < 43 or _b(p, 0) != 22 or _b(p, 5) != 1:
+        ret ""
+    end
+    rec := 5 + _u16(p, 3)
+    mut end_at := rec < n ? rec : n
+    mut i := 5 + 4 + 2 + 32
+    if i >= end_at:
+        ret ""
+    end
+    i += 1 + _b(p, i)
+    if i + 2 > end_at:
+        ret ""
+    end
+    i += 2 + _u16(p, i)
+    if i + 1 > end_at:
+        ret ""
+    end
+    i += 1 + _b(p, i)
+    if i + 2 > end_at:
+        ret ""
+    end
+    ext_end := i + 2 + _u16(p, i)
+    if ext_end < end_at:
+        end_at = ext_end
+    end
+    i += 2
+    until i + 4 <= end_at:
+        kind := _u16(p, i)
+        size := _u16(p, i + 2)
+        body := i + 4
+        if body + size > end_at:
+            ret ""
+        end
+        if kind == 0 and size >= 5:
+            mut j := body + 2
+            list_end := body + size
+            until j + 3 <= list_end:
+                name_type := _b(p, j)
+                name_len := _u16(p, j + 1)
+                if j + 3 + name_len > list_end:
+                    ret ""
+                end
+                if name_type == 0:
+                    ret _clean_host(p, j + 3, name_len)
+                end
+                j += 3 + name_len
+            end
+            ret ""
+        end
+        i = body + size
+    end
+    ret ""
+end
+
+func _starts(p: u8*, n: int, word: str): bool:
+    k := word.Len()
+    if n < k:
+        ret false
+    end
+    w := word as u8*
+    repeat k in i:
+        if p[i] != w[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _http_host(p: u8*, n: int): str:
+    mut method := false
+    each m in ["GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "]:
+        if _starts(p, n, m):
+            method = true
+        end
+    end
+    if not method:
+        ret ""
+    end
+    mut i := 0
+    until i + 6 < n:
+        if p[i] == (10 as u8):
+            if i + 1 < n and (p[i + 1] == (13 as u8) or p[i + 1] == (10 as u8)):
+                ret ""
+            end
+            a := (p[i + 1] as int) | 32
+            b := (p[i + 2] as int) | 32
+            c := (p[i + 3] as int) | 32
+            d := (p[i + 4] as int) | 32
+            if a == 104 and b == 111 and c == 115 and d == 116 and p[i + 5] == (58 as u8):
+                mut s := i + 6
+                until s < n and (p[s] == (32 as u8) or p[s] == (9 as u8)):
+                    s++
+                end
+                mut e := s
+                until e < n and p[e] != (13 as u8) and p[e] != (10 as u8) and p[e] != (58 as u8) and p[e] != (32 as u8):
+                    e++
+                end
+                if p[s] == (91 as u8):
+                    ret ""
+                end
+                ret _clean_host(p, s, e - s)
+            end
+        end
+        i++
+    end
+    ret ""
+end
+
+func _sniff_want(p: u8*, n: int): int:
+    if n >= 5 and _b(p, 0) == 22:
+        want := 5 + _u16(p, 3)
+        ret want > 16384 ? 16384 : want
+    end
+    ret n
+end
+
+func _put_name(p: u8*, at: int, name: str): int:
+    parts := name.Split(".")
+    defer parts.Free()
+    mut i := at
+    each part in parts:
+        k := part.Len()
+        if k == 0:
+            continue
+        end
+        if k > 63:
+            ret 0 - 1
+        end
+        p[i] = k as u8
+        i++
+        w := part as u8*
+        repeat k in j:
+            p[i + j] = w[j]
+        end
+        i += k
+    end
+    p[i] = 0 as u8
+    ret i + 1
+end
+
+@en "SniffHost"
+@fa "شناسایی میزبان"
+pub func SniffHost(ptr: void*, n: int): str:
+    if ptr == null or n <= 0:
+        ret ""
+    end
+    p := ptr as u8*
+    if _b(p, 0) == 22:
+        ret _tls_sni(p, n)
+    end
+    ret _http_host(p, n)
+end
+
+@en "ParseDnsQuery"
+@fa "تجزیه پرسش نام‌یابی"
+pub func ParseDnsQuery(ptr: void*, n: int): DnsQuestion:
+    p := ptr as u8*
+    if ptr == null or n < 17:
+        ret DnsQuestion {}
+    end
+    if (_b(p, 2) & 128) != 0 or _u16(p, 4) < 1:
+        ret DnsQuestion {}
+    end
+    mut i := 12
+    mut sb := str.NewBuilder()
+    mut first := true
+    mut ok := false
+    until i < n:
+        k := _b(p, i)
+        if k == 0:
+            i++
+            ok = true
+            break
+        end
+        if k > 63 or i + 1 + k > n:
+            break
+        end
+        if not first:
+            str.BufAppend(sb, ".")
+        end
+        first = false
+        repeat k in j:
+            str.BufAppendChar(sb, p[i + 1 + j] as int)
+        end
+        i += 1 + k
+    end
+    name := str.BufStr(sb)
+    str.BufFree(sb)
+    if not ok or i + 4 > n:
+        mem.Free(name as void*)
+        ret DnsQuestion {}
+    end
+    ret DnsQuestion { ok = true, id = _u16(p, 0), name = name, qtype = _u16(p, i) }
+end
+
+@en "BuildDnsQuery"
+@fa "ساخت پرسش نام‌یابی"
+pub func BuildDnsQuery(id: int, name: str, qtype: int): Packet:
+    size := 12 + name.Len() + 2 + 4
+    p := mem.AllocateZeroed(size as u64) as u8*
+    _put16(p, 0, id & 65535)
+    _put16(p, 2, 256)
+    _put16(p, 4, 1)
+    end_at := _put_name(p, 12, name)
+    if end_at < 0:
+        mem.Free(p as void*)
+        ret Packet {}
+    end
+    _put16(p, end_at, qtype)
+    _put16(p, end_at + 2, 1)
+    ret Packet { data = p as void*, len = end_at + 4 }
+end

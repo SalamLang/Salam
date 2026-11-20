@@ -86,7 +86,7 @@ See [`docs/LSP.md`](../../docs/LSP.md) for the server's options.
 | Setting           | Default   | Meaning                                                                                                                           |
 | ----------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `compiler_path`   | `"salam"` | Compiler executable; an absolute path when it is not on `PATH`.                                                                   |
-| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` reads a `// زبان: فارسی` or `// lang: en` directive, then falls back to script detection. |
+| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` passes nothing and the compiler detects the language of each file. |
 | `format_indent`   | `"4"`     | `--indent` for the formatter: `tab`, or 1-16 spaces.                                                                              |
 | `format_on_save`  | `false`   | Reformat on every save.                                                                                                           |
 | `stdlib_path`     | `""`      | `--stdlib-path` for `std/...` imports.                                                                                            |

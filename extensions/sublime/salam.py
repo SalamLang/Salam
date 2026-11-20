@@ -2,7 +2,6 @@
 # pylint: disable=import-error,too-few-public-methods,consider-using-f-string
 
 import os
-import re
 import subprocess
 import tempfile
 
@@ -14,15 +13,6 @@ SYNTAX_SCOPE = "source.salam"
 OUTPUT_PANEL = "salam"
 
 GCC_DIAGNOSTIC = r"^(.+?):([0-9]+):([0-9]+): (?:error|warning): (.*)$"
-
-PERSIAN_ONLY = "پچژگکی"
-ARABIC_RANGES = (
-    (0x0600, 0x06FF),
-    (0x0750, 0x077F),
-    (0x08A0, 0x08FF),
-    (0xFB50, 0xFDFF),
-    (0xFE70, 0xFEFF),
-)
 
 
 def settings():
@@ -74,39 +64,15 @@ def run_compiler(args, cwd=None):
         return None, "", "cannot run {0!r}: {1}".format(command[0], exc)
 
 
-def is_arabic_script(codepoint):
-    for low, high in ARABIC_RANGES:
-        if low <= codepoint <= high:
-            return True
-    return False
-
-
-def directive_lang(head):
-    match = re.search(r"(?:lang|LANG|زبان)\s*:\s*([A-Za-z]{2})", head)
-    return match.group(1).lower() if match else ""
-
-
-def detect_lang(text):
+def lang_args():
     choice = setting("language_pack", "auto")
     if choice in ("en", "fa"):
-        return choice
-
-    head = text[:4000]
-    from_directive = directive_lang(head)
-    if from_directive:
-        return from_directive
-
-    arabic = 0
-    for char in head:
-        if char in PERSIAN_ONLY:
-            return "fa"
-        if is_arabic_script(ord(char)):
-            arabic += 1
-    return "fa" if arabic >= 3 else "en"
+        return ["--lang=" + choice]
+    return []
 
 
-def common_args(text):
-    args = ["--lang=" + detect_lang(text)]
+def common_args():
+    args = lang_args()
     stdlib = setting("stdlib_path", "")
     if stdlib:
         args.append("--stdlib-path=" + stdlib)
@@ -133,7 +99,7 @@ def format_source(text):
         with open(path, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
         args = ["format", path, "--indent=" + str(setting("format_indent", "4"))]
-        code, out, err = run_compiler(args + common_args(text), cwd=workdir)
+        code, out, err = run_compiler(args + common_args(), cwd=workdir)
         if code != 0:
             return None, (err or out).strip() or "salam format exited {0}".format(code)
         with open(path, "r", encoding="utf-8") as handle:
@@ -198,7 +164,6 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
         if self.view.is_dirty():
             self.view.run_command("save")
 
-        text = self.view.substr(sublime.Region(0, self.view.size()))
         null_device = "NUL" if os.name == "nt" else "/dev/null"
         args = [
             "inspect",
@@ -207,7 +172,7 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
             "--xml-out=" + null_device,
             "--error-style=gcc",
             "--log-level=error",
-        ] + common_args(text) + switch_lint_args()
+        ] + common_args() + switch_lint_args()
         window = self.view.window()
         working_dir = os.path.dirname(path)
 

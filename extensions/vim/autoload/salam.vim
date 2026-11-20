@@ -1,9 +1,6 @@
 let s:cpo_save = &cpo
 set cpo&vim
 
-let s:persian_only = '[پچژگکی]'
-let s:arabic_script = '[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]'
-
 function! s:Opt(name, default) abort
   return get(g:, a:name, a:default)
 endfunction
@@ -19,28 +16,15 @@ function! s:NullDevice() abort
 endfunction
 
 function! salam#Lang() abort
-  if index(['en', 'fa', 'ar'], s:Opt('salam_lang', 'auto')) >= 0
-    return s:Opt('salam_lang', 'auto')
-  endif
-
-  let l:head = join(getline(1, min([line('$'), 200])), "\n")
-
-  let l:directive = matchlist(l:head, '\%(lang\|LANG\|زبان\)\s*:\s*\([A-Za-z][A-Za-z]\)')
-  if !empty(l:directive)
-    return tolower(l:directive[1])
-  endif
-
-  if l:head =~# s:persian_only
-    return 'fa'
-  endif
-  if strchars(substitute(l:head, '\%(' . s:arabic_script . '\)\@!.', '', 'g')) >= 3
-    return 'ar'
-  endif
-  return 'en'
+  let l:lang = s:Opt('salam_lang', 'auto')
+  return index(['en', 'fa'], l:lang) >= 0 ? l:lang : ''
 endfunction
 
 function! s:CommonArgs() abort
-  let l:args = ['--lang=' . salam#Lang()]
+  let l:args = []
+  if !empty(salam#Lang())
+    call add(l:args, '--lang=' . salam#Lang())
+  endif
   let l:stdlib = s:Opt('salam_stdlib_path', '')
   if !empty(l:stdlib)
     call add(l:args, '--stdlib-path=' . l:stdlib)

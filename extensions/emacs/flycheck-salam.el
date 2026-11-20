@@ -48,7 +48,7 @@ running it or writing any artifact."
             (eval (concat "--xml-out=" (flycheck-salam--null-device)))
             "--error-style=gcc"
             "--log-level=error"
-            (eval (concat "--lang=" (salam--detect-lang)))
+            (eval (salam--lang-args))
             (eval (flycheck-salam--stdlib-args))
             (eval (flycheck-salam--switch-lint-args)))
   :error-patterns

@@ -18,6 +18,8 @@ mut g_lay_sp_hit_off := Vector {} as Vector<str>
 
 mut g_lay_sp_path := ""
 
+mut g_lay_sp_reported := Vector {} as Vector<str>
+
 struct LayCheck:
     pub stack: Vector<int> = Vector {}
     pub ids: Vector<str> = Vector {}
@@ -376,7 +378,7 @@ func lay_official_attr(name: str): str:
     end
     states := ["", "hover ", "focus ", "focus within ", "active ", "disabled ", "checked ", "invalid ", "placeholder ", "selection "]
     official := states[st] + base
-    if lay_has_sep(official) or str.Equals(official, name):
+    if lay_has_sep(official) or str.Equals(official, name) or not str.Contains(official, " "):
         ret ""
     end
     ret official
@@ -400,13 +402,13 @@ func lay_official_elem(name: str): str:
         ret ""
     end
     sp := lay_elem_spelling(name)
-    if str.Contains(sp, " "):
-        ret sp
+    if not str.Contains(sp, " "):
+        ret ""
     end
-    ret str.Replace(str.Replace(name, "_", " "), "-", " ")
+    ret sp
 end
 
-func lay_written_as(a &: at.Ast, nid: int, path: str): bool:
+func lay_source_is(a &: at.Ast, nid: int, path: str, text: str): bool:
     n := at.Get(a, nid)
     if str.Len(path) == 0 or n.end_index <= n.begin_index:
         ret false
@@ -416,11 +418,35 @@ func lay_written_as(a &: at.Ast, nid: int, path: str): bool:
         g_style_src_text = os.ReadFile(path)
     end
     b := n.begin_index as int
-    nl := str.Len(n.name)
+    nl := str.Len(text)
     if b < 0 or b + nl > str.Len(g_style_src_text):
         ret false
     end
-    ret str.Equals(str.Substr(g_style_src_text, b, nl), n.name)
+    ret str.Equals(str.Substr(g_style_src_text, b, nl), text)
+end
+
+func lay_written_as(a &: at.Ast, nid: int, path: str): bool:
+    ret lay_source_is(a, nid, path, at.Get(a, nid).name)
+end
+
+func lay_spelling_path(a &: at.Ast, nid: int): str:
+    path := at.Get(a, nid).src_file
+    if str.Len(path) == 0:
+        ret g_lay_sp_path
+    end
+    ret path
+end
+
+func lay_spelling_first(a &: at.Ast, nid: int, path: str): bool:
+    n := at.Get(a, nid)
+    key := path + ":" + n.begin_line + ":" + n.begin_col
+    repeat g_lay_sp_reported.Len() in i:
+        if str.Equals(g_lay_sp_reported.Get(i), key):
+            ret false
+        end
+    end
+    g_lay_sp_reported.Push(key)
+    ret true
 end
 
 func lay_spelling_report(a &: at.Ast, nid: int, official: str, verify: bool):
@@ -437,9 +463,33 @@ func lay_spelling_report(a &: at.Ast, nid: int, official: str, verify: bool):
 end
 
 func lay_spelling_attr(a &: at.Ast, aid: int):
-    official := lay_official_attr(at.Get(a, aid).name)
-    if str.Len(official) > 0:
-        lay_spelling_report(a, aid, official, true)
+    name := at.Get(a, aid).name
+    official := lay_official_attr(name)
+    if str.Len(official) == 0:
+        ret
+    end
+    path := lay_spelling_path(a, aid)
+    if lay_source_is(a, aid, path, name):
+        lay_spelling_report(a, aid, official, false)
+        ret
+    end
+    mut rest := ""
+    st := style_state_prefix(name, rest)
+    if st != STYLE_STATE_BASE and lay_source_is(a, aid, path, rest):
+        written := lay_official_attr(rest)
+        if str.Len(written) > 0:
+            lay_spelling_report(a, aid, written, false)
+        end
+    end
+end
+
+func lay_spelling_folded(a &: at.Ast, aid: int):
+    repeat at.ChildCount(a, aid) in q:
+        folded := at.Child(a, aid, q)
+        if at.KindOf(a, folded) == at.AST_LAYOUT_ATTR:
+            lay_spelling_attr(a, folded)
+            lay_spelling_folded(a, folded)
+        end
     end
 end
 
@@ -450,12 +500,7 @@ func lay_spelling_walk(a &: at.Ast, nid: int, owner_official: bool):
         if ck == at.AST_LAYOUT_ATTR:
             if owner_official:
                 lay_spelling_attr(a, cid)
-                repeat at.ChildCount(a, cid) in q:
-                    folded := at.Child(a, cid, q)
-                    if at.KindOf(a, folded) == at.AST_LAYOUT_ATTR:
-                        lay_spelling_attr(a, folded)
-                    end
-                end
+                lay_spelling_folded(a, cid)
             end
         else ck == at.AST_IF or ck == at.AST_EACH:
             lay_spelling_control(a, cid, owner_official)
@@ -511,6 +556,9 @@ func lay_check_spelling(s &: Sema, a &: at.Ast, body: int):
             path = s.file
         end
         if FilePack(s, path) != 1:
+            continue
+        end
+        if not lay_spelling_first(a, nid, path):
             continue
         end
         serr_help(
@@ -1980,11 +2028,16 @@ pub func LayoutSpellingLower(log: lg.Logger, a &: at.Ast, prog: int, body: int, 
         end
     end
     lay_spelling_walk(a, body, true)
+    mut reported := 0
     repeat g_lay_sp_hit_node.Len() in i:
         n := at.Get(a, g_lay_sp_hit_node.Get(i))
+        if not lay_spelling_first(a, g_lay_sp_hit_node.Get(i), lay_spelling_path(a, g_lay_sp_hit_node.Get(i))):
+            continue
+        end
+        reported++
         msg := co.Format1(i18.Tr("'%s' is an official page name, and an English file writes it with spaces, not '_' or '-'"), co.ArgStr(n.name))
         help := co.Format1(i18.Tr("write '%s'"), co.ArgStr(g_lay_sp_hit_off.Get(i)))
         lg.LogAtHelp(log, lg.PH_SEMANTIC, lg.LOG_ERROR, file, n.begin_line as int, n.begin_col as int, help, "E235: " + msg)
     end
-    ret g_lay_sp_hit_node.Len()
+    ret reported
 end

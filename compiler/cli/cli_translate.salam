@@ -1329,6 +1329,30 @@ func tr_css_value_en(attr: str, raw: str): str:
     ret str.Equals(mapped, inner) ? "" : mapped
 end
 
+func tr_style_words(toks: tok.TokenStream, i: int, n: int, attr: str, fa: bool, best_j &: int): str:
+    line := tok.StreamAt(toks, i).begin_line
+    mut words := ""
+    mut best := ""
+    mut j := i
+    until j < n and j < i + 5:
+        tj := tok.StreamAt(toks, j)
+        if tj.begin_line != line or not tr_word_kind(tj.kind):
+            break
+        end
+        if j > i:
+            words += " "
+        end
+        words += tj.lexeme
+        mapped := sm.StyleValueSpelling(attr, words, fa)
+        if str.Len(mapped) > 0:
+            best = mapped
+            best_j = j
+        end
+        j++
+    end
+    ret best
+end
+
 func tr_ensure_dir(path: str):
     dir := pth.PathDir(path)
     if str.Len(dir) > 0:
@@ -1676,6 +1700,10 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             lexeme = `"` + str.Replace(tr_css_value_en(css_attr, str.Substr(text, bi, ei - bi)), `"`, `\"`) + `"`
         else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and (prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET) and str.Len(css_list_attr) > 0 and not tr_user_attr(el_comp, comp_names, css_list_attr) and css_list_paren == 0 and str.Len(tr_css_value_en(css_list_attr, str.Substr(text, bi, ei - bi))) > 0:
             lexeme = `"` + str.Replace(tr_css_value_en(css_list_attr, str.Substr(text, bi, ei - bi)), `"`, `\"`) + `"`
+        else t.kind == tok.TK_IDENT and t.layout_mode and str.Len(css_list_attr) > 0 and css_list_paren == 0 and (prev_kind == tok.TK_ASSIGN or prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET) and not tr_user_attr(el_comp, comp_names, css_list_attr) and not tr_has(names, t.lexeme) and str.Len(tr_style_words(toks, i, n, css_list_attr, targetpack == lp.LP_FA, kw_j)) > 0:
+            lexeme = tr_style_words(toks, i, n, css_list_attr, targetpack == lp.LP_FA, kw_j)
+            ei = tok.StreamAt(toks, kw_j).end_index as int
+            i = kw_j
         else t.kind == tok.TK_IDENT and t.layout_mode and not tr_user_attr(el_comp, comp_names, css_list_attr) and targetpack != lp.LP_FA and (prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET or (prev_kind == tok.TK_ASSIGN and tr_next_kind(toks, i, n) == tok.TK_COMMA)) and str.Len(css_list_attr) > 0 and css_list_paren == 0 and str.Len(sm.LayoutCssValueEn(css_list_attr, t.lexeme)) > 0 and not str.Equals(sm.LayoutCssValueEn(css_list_attr, t.lexeme), t.lexeme):
             lexeme = sm.LayoutCssValueEn(css_list_attr, t.lexeme)
         else t.kind == tok.TK_STRING and targetpack == lp.LP_FA and prev_kind == tok.TK_ASSIGN and str.Len(css_attr) > 0 and not tr_user_attr(el_comp, comp_names, css_attr) and str.Len(tr_css_value_fa(css_attr, str.Substr(text, bi, ei - bi))) > 0:
@@ -1689,7 +1717,13 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             want_fa := targetpack == lp.LP_FA
             el_top := el_comp.Len() > 0 ? el_comp.Get(el_comp.Len() - 1) : false
             is_user := t.kind == tok.TK_LAYOUT_ELEMENT ? tr_has_ident(comp_names, t.lexeme) : (el_top and tr_has_ident(comp_names, t.lexeme))
-            mapped := is_user ? tr_safe_name(targetpack, t.lexeme) : (t.kind == tok.TK_LAYOUT_ELEMENT ? sm.LayoutElemSpelling(t.lexeme, want_fa) : sm.LayoutAttrSpelling(t.lexeme, want_fa))
+            mut mapped := is_user ? tr_safe_name(targetpack, t.lexeme) : (t.kind == tok.TK_LAYOUT_ELEMENT ? sm.LayoutElemSpelling(t.lexeme, want_fa) : sm.LayoutAttrSpelling(t.lexeme, want_fa))
+            if str.Len(mapped) == 0 and not is_user and t.kind == tok.TK_LAYOUT_ATTR_NAME:
+                mapped = sm.StyleAttrSpelling(t.lexeme, want_fa)
+            end
+            if str.Len(mapped) == 0:
+                mapped = t.lexeme
+            end
             if str.Len(mapped) > 0:
                 raw_name := str.Substr(text, bi, ei - bi)
                 mut tail := ""

@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024-2026)
+ * Salam Programming Language (2018-2026)
  *
  * Dependency-free stand-in for cef_shim.cc, linked instead of the real shim
  * when a program is built with -DSALAM_WEBVIEW_CEF -DSALAM_WEBVIEW_CEF_MOCK.

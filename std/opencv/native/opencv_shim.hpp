@@ -1,4 +1,4 @@
-// Salam Programming Language (2024-2026) - std/opencv native shim
+// Salam Programming Language (2018-2026) - std/opencv native shim
 //
 // A flat, versioned extern "C" ABI bridging Salam's FFI (which can only
 // bind plain C symbols - see SKILL.md section 8) to OpenCV's C++ API

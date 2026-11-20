@@ -85,6 +85,7 @@ mut menu_open := false
 mut copy_flash_timer := 0 as i64
 mut wasm_timer := 0 as i64
 mut dragging := false
+mut drag_pointer := 0.0
 mut ac_list := ""
 mut ac_sel := 0 - 1
 mut ac_on := false
@@ -1010,6 +1011,13 @@ func last_failed(): bool:
     ret dom.Call0(g_module, "_salam_web_last_failed") == 1
 end
 
+func load_preview(doc: str):
+    fresh := dom.Call1(el_preview, "cloneNode", 0.0)
+    dom.SetStr(fresh, "srcdoc", doc)
+    _r := salam_js_call(el_preview, "replaceWith", fresh)
+    el_preview = fresh
+end
+
 func run():
     if g_wasm_ready == false: ret end
     src := dom.GetValue(el_code)
@@ -1022,10 +1030,10 @@ func run():
         anim.Hide()
         res := fn_build_layout(src, g_lang)
         if last_failed() == false:
-            dom.SetStr(el_preview, "srcdoc", res)
+            load_preview(res)
             set_status("done", "ok")
         else:
-            dom.SetStr(el_preview, "srcdoc", "<pre dir=\"auto\" style=\"white-space:pre-wrap;padding:16px;color:#c0392b;text-align:start\">" + esc_html(res) + "</pre>")
+            load_preview("<pre dir=\"auto\" style=\"white-space:pre-wrap;padding:16px;color:#c0392b;text-align:start\">" + esc_html(res) + "</pre>")
             set_status("error", "err")
         end
     else:
@@ -1619,6 +1627,11 @@ end
 
 func on_gutter_move(ev: i64):
     if dragging == false: ret end
+    if dom.GetNum(ev, "pointerId") != drag_pointer: ret end
+    if dom.GetNum(ev, "buttons") == 0.0:
+        on_gutter_up()
+        ret
+    end
     is_rows := dom.WinWidth() <= 900.0
     if is_rows:
         y := dom.EventY(ev)
@@ -1971,14 +1984,25 @@ func on_code_scroll():
     dom.SetStyle(el_ln_inner, "transform", "translateY(-" + top + "px)")
 end
 
-func on_gutter_down():
+func on_gutter_down(ev: i64):
+    if dragging: ret end
+    dom.PreventDefault(ev)
+    drag_pointer = dom.GetNum(ev, "pointerId")
+    _c := dom.Call1(el_gutter, "setPointerCapture", drag_pointer)
     dragging = true
     dom.AddClass(el_gutter, "dragging")
+    dom.AddClass(el_split, "resizing")
 end
 
 func on_gutter_up():
+    if dragging == false: ret end
     dragging = false
     dom.RemoveClass(el_gutter, "dragging")
+    dom.RemoveClass(el_split, "resizing")
+end
+
+func on_gutter_end(ev: i64):
+    if dom.GetNum(ev, "pointerId") == drag_pointer: on_gutter_up() end
 end
 
 func on_window_resize():
@@ -2035,9 +2059,14 @@ func wire_events():
     dom.OnEvent(el_code, "click", (): ret ac_hide() end)
     dom.OnEventE(el_ac, "mousedown", (ev: i64): ret on_ac_mousedown(ev) end)
 
-    dom.OnEventE(el_gutter, "pointerdown", (_ev: i64): ret on_gutter_down() end)
+    dom.OnEventE(el_gutter, "pointerdown", (ev: i64): ret on_gutter_down(ev) end)
     dom.OnWindowE("pointermove", (ev: i64): ret on_gutter_move(ev) end)
-    dom.OnWindow("pointerup", (): ret on_gutter_up() end)
+    dom.OnEventE(el_gutter, "pointerup", (ev: i64): ret on_gutter_end(ev) end)
+    dom.OnEventE(el_gutter, "pointercancel", (ev: i64): ret on_gutter_end(ev) end)
+    dom.OnEventE(el_gutter, "lostpointercapture", (ev: i64): ret on_gutter_end(ev) end)
+    dom.OnWindowE("pointerup", (ev: i64): ret on_gutter_end(ev) end)
+    dom.OnWindowE("pointercancel", (ev: i64): ret on_gutter_end(ev) end)
+    dom.OnWindow("blur", (): ret on_gutter_up() end)
     dom.OnResize((): ret on_window_resize() end)
     dom.OnEventE(dom.Document(), "click", (ev: i64): ret on_document_click(ev) end)
 end

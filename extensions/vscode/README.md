@@ -38,7 +38,7 @@ Getting `Could not create SSL/TLS secure channel` from the PowerShell command (c
 | Setting              | Default | Description                                                |
 | -------------------- | ------- | ---------------------------------------------------------- |
 | `salam.compilerPath` | `salam` | Path to the `salam` executable                             |
-| `salam.languagePack` | `auto`  | Keyword pack passed as `--lang` (`auto`, `en`, `fa`, `ar`) |
+| `salam.languagePack` | `auto`  | Keyword pack passed as `--lang` (`en`, `fa`); `auto` lets the compiler detect it |
 | `salam.run.command`  | `run`   | Subcommand used by the run command                         |
 | `salam.lsp.enable`   | `true`  | Run the language server                                    |
 | `salam.lsp.messages` | `auto`  | Language of server messages: `auto`, `en`, `fa`            |

@@ -21,7 +21,7 @@ something. This file gives it one syntax.
 ### What React and QML do
 
 React has no styling of its own: a class name is computed in JavaScript
-(`className={active ? "btn on" : "btn"}`) and the stylesheet is somewhere
+(`className={active ? "btn on" : "btn"}`) and the style sheet is somewhere
 else, so nothing checks that the class exists. Libraries add variants
 (cva, Tailwind `data-[state=on]:`), still as strings. QML has `states:
 State { when: cond; PropertyChanges {...} }`, typed and checked, but
@@ -87,7 +87,7 @@ that has no earlier value is simply not declared while the condition is false.
 | `compact`, `regular`, `wide` | named width classes: below 600, 600 to 1024, above 1024; one place to change them (`screen classes` in the theme, section 2) |
 | `landscape`, `portrait` | window shape |
 | `touch`, `mouse` | primary input kind |
-| `reduced motion`, `high contrast` | user settings; section 2 and `accessibility section of `UI_COMPONENTS.md` |
+| `reduced motion`, `high contrast` | user settings; section 2 and the accessibility section of `UI_COMPONENTS.md` |
 | `rtl`, `lang = "fa"` | text direction, page language |
 | `container width < 400`, `container height ...` | the nearest ancestor with `container = true` |
 | `in card hover`, `in card focus within`, `in card active` | a state of the nearest ancestor whose `group = card` |
@@ -161,26 +161,26 @@ Status:
 6. **Mobile menu.** `body.menu-open .controls { transform: translateX(0) }`
    becomes state plus a condition:
 
-```salam
-menu := false
+   ```salam
+   menu := false
 
-page:
-    header:
-        button: id = "menu-toggle" content = "Menu" click = (): menu = !menu end
-            visible = false
-            if compact: visible = true end
-        end
-        nav: id = "controls" position = fixed, end = 0, top = 0
-            width = 330
-            translate = 0
-            if compact and not menu: translate = 110%, 0 end
-            transition = 300ms
-        end
-    end
-end
-```
+   page:
+       header:
+           button: id = "menu-toggle" content = "Menu" click = (): menu = !menu end
+               visible = false
+               if compact: visible = true end
+           end
+           nav: id = "controls" position = fixed, end = 0, top = 0
+               width = 330
+               translate = 0
+               if compact and not menu: translate = 110%, 0 end
+               transition = 300ms
+           end
+       end
+   end
+   ```
 
-7. **Run time values replace JS-set custom properties.** `--row-a` set from a
+7. **Runtime values replace JS-set custom properties.** `--row-a` set from a
    drag handler is `rows = row_a, 6, 1fr` with `row_a := 1fr` as state; the
    gutter writes `row_a` and nothing else re-runs (R4).
 8. **Other editor leftovers**, each one standard property: `tab size = 4`
@@ -289,7 +289,7 @@ spelling. Environment conditions will need real `@media` rules on the web.
 
 ## 2. Theming and design tokens
 
-### What React and QML do
+### What React and QML do (themes)
 
 React has no theme: libraries bring one (CSS variables, a context provider,
 MUI `createTheme`), checked by TypeScript at best. CSS has custom properties,
@@ -297,7 +297,7 @@ untyped and global strings. QML has `palette` and `Material.theme`, typed, but
 one fixed set of names. Dark mode is `prefers-color-scheme` or a class set by
 JavaScript, and the page needs both.
 
-### What we do
+### What we do (themes)
 
 A **theme** is a named, typed set of tokens. A token is read as
 `theme.group.name` anywhere a value is accepted. The group fixes the type;
@@ -354,7 +354,7 @@ end
 - `theme = auto` (the default when the program declares themes with both
   schemes): use the theme whose `scheme` matches the system, `Light` or
   `Dark`, and follow changes. `theme = Dark` pins one. `theme = expr`
-  where `expr` is state (`mode := auto`) switches at run time.
+  where `expr` is state (`mode := auto`) switches at runtime.
 - `theme = Name` on any element themes that subtree. `theme color accent =
   red` overrides one token for the subtree: per-component theming without
   a second theme. A component declares the tokens it reads in its own
@@ -364,7 +364,7 @@ end
   standard component set (`UI_COMPONENTS.md`). `light dark(a, b)` still works
   for a one-off colour.
 
-### Targets
+### Targets (themes)
 
 - **web**: each theme becomes a rule of custom properties on a scheme
   attribute, `[data-theme=Dark]{--t-color-bg:#0f1115;...}`; a token read is
@@ -390,18 +390,18 @@ a `str` of the canonical text (not a CSS string), and `set_theme(Dark)`
 writes the page's theme state. Tokens never produce CSS text in user
 code.
 
-### Diagnostics
+### Diagnostics (themes)
 
 | code | kind | message |
 | --- | --- | --- |
 | E178 | error | `theme 'Dark' lacks token 'color.on accent' defined by 'Light'` |
 | E179 | error | `token 'color.accent' is not a colour: <gui.style error>` (the group's type) |
-| E180 | error | `no token 'theme.color.acent'` (with the nearest name as a hint) |
+| E180 | error | `no token 'theme.color.brand2'` (with the nearest name as a hint) |
 | E181 | error | `'extends' cycle: Dark, Light, Dark` |
 | W182 | warning | `token 'space.lg' is never used` (only for themes in the page's own file) |
 | W183 | warning | `'fg' on 'bg' has contrast 2.9:1, below 4.5:1 for text` (only when both resolve statically; see accessibility) |
 
-### Decisions taken
+### Decisions taken (themes)
 
 | # | decision |
 | --- | --- |
@@ -409,13 +409,13 @@ code.
 | T2 | `extends` for light/dark and brand variants; all tokens must exist (E178) |
 | T3 | `theme = auto` follows the OS; `theme = Name` or state pins it; subtree `theme` on any element |
 | T4 | `theme color accent = red` overrides one token for a subtree (per component theming) |
-| T5 | web uses custom properties as an output detail, native keeps token ids; the user never writes `var()` |
+| T5 | web uses custom properties as an output detail, native keeps token IDs; the user never writes `var()` |
 | T6 | keep `light dark(a, b)` for one-offs |
 | T7 | theme switches animate through `transition`; `reduced motion` turns it off |
 | T8 | breakpoints are tokens (`screen classes`), so `compact` means one thing everywhere |
 | T9 | contrast check W183 at compile time for static pairs |
 
-### First implementation steps
+### First implementation steps (themes)
 
 1. Parse `theme` declarations (top level, like `component`), check token
    types with `gui.style.Parse` by group; E178 to E181.

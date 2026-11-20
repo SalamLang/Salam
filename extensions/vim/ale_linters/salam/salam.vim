@@ -6,7 +6,7 @@ function! ale_linters#salam#salam#GetCommand(buffer) abort
   let l:args = ' inspect %s --emit-symbol --xml-out=' . l:null
         \ . ' --error-style=gcc --log-level=error '
 
-  if exists('*salam#Lang')
+  if exists('*salam#Lang') && !empty(salam#Lang())
     let l:args .= '--lang=' . salam#Lang() . ' '
   endif
 

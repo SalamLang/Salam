@@ -119,6 +119,8 @@ shapes, each now excluded:
 | W153 | a pointer that is null on some paths reaching the read                       |
 | W154 | an explicit cast of a known value that does not fit and loses bits          |
 | W158 | memory from `mem.Allocate` that nothing frees, returns, stores or passes on |
+| E251 | a loop condition that only reads locals nothing changes and is always false |
+| E252 | the same, always true, in a loop whose body has no call and no way out       |
 
 A literal index or slice bound on a fixed array, or a literal index into a
 constant string (`xs[3]` on three elements, `xs[2:1]`, `"ab"[7]`), is checked
@@ -133,6 +135,33 @@ when `A` is `1 << 20`; this is the rule Go, Swift and Rust apply to
 constants. Tests that check how each backend wraps at runtime now pass
 their operands through a function, which is what code that wants runtime
 wrapping looks like.
+
+### Loops that never run or never stop (E251, E252)
+
+`sema_fakeloop.salam` runs right after the range pass, once per function, and
+looks at every `until` and `for` loop whose condition is made only of
+`true`/`false`, integer literals, local variables, `not`, `and`, `or`,
+comparisons and `+ - *`. A variable counts only when all of these hold:
+
+- the function binds that name exactly once (no parameter, loop variable,
+  pattern or lambda parameter shares it), as a local with an initializer
+  the same rules can evaluate, declared in a scope that encloses the loop;
+- every write to it (assignment, `++`, `--`, a `&:` argument, a method call
+  or index on it, a tuple assignment) sits after the end of the loop in the
+  source and outside every loop that also contains this one. A write before
+  or inside the loop, in a lambda that precedes it, or in an outer loop's
+  later iterations leaves the condition unknown.
+
+A condition that evaluates to false is E251: the body never runs. One that
+evaluates to true is E252 only if the body also has no way out and no call:
+no `break`, `ret`, `throw`, `try`, `defer`, lambda or call of any kind,
+and is not just `continue` (the deliberate spin loop that E104 asks for, used by
+`noret` functions that never return), since
+a call can block, exit or panic. That keeps `until true:` with an `accept`
+or `Sleep` in it, and every spin on a global, a field or a `&:` parameter,
+out of the check. Constant conditions such as `until false:` are still
+reported by the type checker as E068 first; these codes cover conditions that
+only become constant through a variable. `--range-checks=off` turns both off.
 
 ### `repeat a to b` counts down
 

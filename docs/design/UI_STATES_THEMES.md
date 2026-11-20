@@ -122,8 +122,11 @@ Status:
   numbers is compiled to a CSS `@media` rule on the body class instead
   (`page.width >= 400 and page.height < 900` becomes
   `@media (width >= 400px) and (height < 900px)`), so it needs no script.
-  Such an `if` mixed with page-level state is not supported yet (E129), as
-  for any page-level state.
+  An earlier branch of an `if` chain that does not set the property still
+  blocks the later ones (`not (...)` is added to their queries). Not lowered:
+  `page.rtl`, `page.ltr`, comparisons with a non-integer number, branch values
+  that read a variable, and conditions mixed with page-level state; on the
+  page block those stay E129 for now, as for any page-level state.
 - Native: the compiler injects the same hidden values and a setter, registered
   with `Builder.Env`; `gui.ui` calls it before the first frame and again on
   `Resized` and `ColorSchemeChanged` with the logical window size, so the

@@ -27,6 +27,7 @@ struct LoAttrs:
     pub selection: str = ""
     pub before: str = ""
     pub after: str = ""
+    pub media: str = ""
     pub content: str = ""
     pub has_content: bool = false
     pub userclass: str = ""
@@ -325,6 +326,7 @@ end
 
 func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &: LoAttrs):
     required := ei >= 0 ? sm.LayoutElemRequired(ei) : ""
+    la.media = lo_em_rules(a, el, cx.compact)
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
         an := at.Get(a, aid)
@@ -521,14 +523,57 @@ end
 func lo_class_for(cx &: LoCtx, la &: LoAttrs, klass &: str): bool:
     klass = la.userclass
     mut has := la.has_userclass
-    needs := str.Len(la.css) > 0 or str.Len(la.hover) > 0 or str.Len(la.focus) > 0 or str.Len(la.focus_within) > 0 or str.Len(la.active) > 0 or str.Len(la.disabled) > 0 or str.Len(la.checked) > 0 or str.Len(la.invalid) > 0 or str.Len(la.placeholder) > 0 or str.Len(la.selection) > 0 or str.Len(la.before) > 0 or str.Len(la.after) > 0
-    if needs and not has:
+    needs := str.Len(la.css) > 0 or str.Len(la.hover) > 0 or str.Len(la.focus) > 0 or str.Len(la.focus_within) > 0 or str.Len(la.active) > 0 or str.Len(la.disabled) > 0 or str.Len(la.checked) > 0 or str.Len(la.invalid) > 0 or str.Len(la.placeholder) > 0 or str.Len(la.selection) > 0 or str.Len(la.before) > 0 or str.Len(la.after) > 0 or str.Len(la.media) > 0
+    if needs and (not has or str.Len(la.media) > 0):
         sep := char_from_code(31)
-        key := la.css + sep + la.hover + sep + la.focus + sep + la.focus_within + sep + la.active + sep + la.disabled + sep + la.checked + sep + la.invalid + sep + la.placeholder + sep + la.selection + sep + la.before + sep + la.after
-        klass = class_for_key(cx, key)
+        key := la.css + sep + la.hover + sep + la.focus + sep + la.focus_within + sep + la.active + sep + la.disabled + sep + la.checked + sep + la.invalid + sep + la.placeholder + sep + la.selection + sep + la.before + sep + la.after + sep + la.media
+        gen_klass := class_for_key(cx, key)
+        klass = has ? la.userclass + " " + gen_klass : gen_klass
         has = true
     end
     ret has
+end
+
+func lo_em_apply(media: str, sel: str): str:
+    mk := char_from_code(29)
+    ek := char_from_code(30)
+    mut parts := css_split_top(sel)
+    defer parts.Free()
+    mut out := ""
+    mut i := 0
+    n := str.Len(media)
+    until i < n:
+        s := str.IndexFrom(media, mk, i)
+        if s < 0:
+            out += str.Substr(media, i, n - i)
+            break
+        end
+        e := str.IndexFrom(media, ek, s)
+        if e < 0:
+            out += str.Substr(media, i, n - i)
+            break
+        end
+        out += str.Substr(media, i, s - i)
+        suffix := str.Substr(media, s + 1, e - s - 1)
+        mut first := true
+        each p in parts:
+            t := str.Trim(p)
+            if str.Len(t) == 0:
+                continue
+            end
+            if not first:
+                out += ", "
+            end
+            out += t + suffix
+            first = false
+        end
+        i = e + 1
+    end
+    ret out
+end
+
+func lo_class_sel(klass: str): str:
+    ret "." + str.Replace(str.Trim(klass), " ", ".")
 end
 
 func lo_emit_rules(cx &: LoCtx, la: LoAttrs, klass: str):
@@ -544,6 +589,9 @@ func lo_emit_rules(cx &: LoCtx, la: LoAttrs, klass: str):
     end
     if str.Len(la.after) > 0:
         emit_rule(cx, css_rule(cx.compact, csel + "::after", la.after))
+    end
+    if str.Len(la.media) > 0:
+        emit_rule(cx, lo_em_apply(la.media, csel))
     end
 end
 
@@ -572,14 +620,17 @@ func gen_native(
         ret false
     end
     if str.Equals(gen, "media"):
-        sel := parent_has_class ? parent_class : "body"
+        psel := parent_has_class ? lo_class_sel(parent_class) : "body"
         mut cond := "all"
         _hc := lo_attr_get(la, "condition", cond)
-        inner := css_rule(cx.compact, "." + sel, la.css)
+        inner := css_rule(cx.compact, psel, la.css)
         if cx.compact:
             emit_rule(cx, "@media " + cond + "{" + inner + "}")
         else:
             emit_rule(cx, "@media " + cond + " { " + inner + " }")
+        end
+        if str.Len(la.media) > 0:
+            emit_rule(cx, "@media " + cond + "{" + lo_em_apply(la.media, psel) + "}")
         end
         ret true
     end
@@ -600,6 +651,9 @@ func gen_native(
         mut sel := "*"
         _hs := lo_attr_get(la, "selector", sel)
         emit_rule(cx, css_rule(cx.compact, sel, la.css))
+        if str.Len(la.media) > 0:
+            emit_rule(cx, lo_em_apply(la.media, sel))
+        end
         ret true
     end
     if str.Equals(gen, "script"):

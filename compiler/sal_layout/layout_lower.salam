@@ -33,6 +33,7 @@ mut g_lo_em_lb := Vector {} as Vector<int>
 mut g_lo_em_attr := Vector {} as Vector<int>
 mut g_lo_em_query := Vector {} as Vector<str>
 mut g_lo_em_val := Vector {} as Vector<int>
+mut g_lo_em_keep := false
 
 struct LoSlot:
     pub kind: int = 0
@@ -873,6 +874,9 @@ func lo_lower_one(
         g_lo_expand_errors += sm.LayoutSpellingLower(log, a, prog, lb, file)
     end
     sm.LayoutResolve(a, lb)
+    if str.Equals(at.Get(a, lb).name, NATIVE_PAGE_VIEW) == false:
+        lo_env_media_block(a, prog, lb)
+    end
     mut lw := LoLower { prog = prog }
     lw.web = lo_web_pkg(pack)
     defer lw.slots.Free()
@@ -1034,6 +1038,34 @@ func lo_env_decl_text(): str:
     ret t
 end
 
+func lo_em_rules(a &: at.Ast, owner: int, compact: bool): str:
+    sel := char_from_code(29)
+    mut out := ""
+    repeat g_lo_em_lb.Len() in i:
+        if g_lo_em_lb.Get(i) != owner:
+            continue
+        end
+        sa := sm.ResolveStyleAttr(at.Get(a, g_lo_em_attr.Get(i)).name)
+        if not sa.ok:
+            continue
+        end
+        mut v := style.Value {}
+        text := sm.StyleAttrTextFor(a, g_lo_em_val.Get(i), sa.prop)
+        if not style.Parse(sa.prop, text, v):
+            continue
+        end
+        decl := style.Css(sa.prop, v)
+        q := g_lo_em_query.Get(i)
+        ssel := sel + lo_state_suffix(sa.state) + char_from_code(30)
+        if compact:
+            out += "@media " + q + "{" + ssel + "{" + decl + "}}"
+        else:
+            out += "@media " + q + " { " + ssel + " { " + decl + "; } }"
+        end
+    end
+    ret out
+end
+
 func lo_em_reset():
     g_lo_em_lb.Clear()
     g_lo_em_attr.Clear()
@@ -1061,6 +1093,9 @@ func lo_em_static(a &: at.Ast, prog: int, id: int): bool:
         ret true
     end
     if n.kind == at.AST_IDENTIFIER:
+        if str.StartsWith(n.name, "__salam") or str.StartsWith(n.name, "envx_"):
+            ret false
+        end
         repeat at.ChildCount(a, prog) in j:
             d := at.Get(a, at.Child(a, prog, j))
             if (d.kind == at.AST_VAR_DECL or d.kind == at.AST_CONST_DECL) and str.Equals(d.name, n.name):
@@ -1179,15 +1214,67 @@ func lo_em_query(a &: at.Ast, id: int): str:
     ret "(" + l2 + op + r2 + ")"
 end
 
-func lo_env_media(a &: at.Ast, prog: int):
-    lb := find_layout_block(a, prog)
-    if lb == 0:
+func lo_em_decls(a &: at.Ast, nid: int, names &: Vector<str>):
+    if nid == 0:
         ret
     end
+    n := at.Get(a, nid)
+    if (n.kind == at.AST_VAR_DECL or n.kind == at.AST_EACH or n.kind == at.AST_PARAM) and str.Len(n.name) > 0:
+        names.Push(n.name)
+    end
+    if n.kind == at.AST_EACH and n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+        names.Push(at.Get(a, n.c).name)
+    end
+    if n.kind == at.AST_LAYOUT_ATTR:
+        ret
+    end
+    lo_em_decls(a, n.b, names)
+    lo_em_decls(a, n.c, names)
+    repeat n.list.Len() in i:
+        lo_em_decls(a, n.list.Get(i), names)
+    end
+end
+
+func lo_em_names_hit(a &: at.Ast, id: int, names: Vector<str>): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_IDENTIFIER:
+        each d in names:
+            if str.Equals(d, n.name):
+                ret true
+            end
+        end
+        ret false
+    end
+    if lo_em_names_hit(a, n.a, names) or lo_em_names_hit(a, n.b, names):
+        ret true
+    end
+    repeat n.list.Len() in i:
+        if lo_em_names_hit(a, n.list.Get(i), names):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_em_value_ok(a &: at.Ast, prog: int, id: int, names: Vector<str>, prop: int): bool:
+    if not lo_em_static(a, prog, id):
+        ret false
+    end
+    if lo_em_names_hit(a, id, names):
+        ret false
+    end
+    mut v := style.Value {}
+    ret style.Parse(prop, sm.StyleAttrTextFor(a, id, prop), v)
+end
+
+func lo_em_owner(a &: at.Ast, prog: int, owner: int, names: Vector<str>):
     mut kept := Vector {} as Vector<int>
     mut changed := false
-    repeat at.ChildCount(a, lb) in i:
-        aid := at.Child(a, lb, i)
+    repeat at.ChildCount(a, owner) in i:
+        aid := at.Child(a, owner, i)
         an := at.Get(a, aid)
         if an.kind != at.AST_LAYOUT_ATTR or an.a == 0 or at.KindOf(a, an.a) != at.AST_TERNARY or not sm.ResolveStyleAttr(an.name).ok:
             kept.Push(aid)
@@ -1207,7 +1294,7 @@ func lo_env_media(a &: at.Ast, prog: int):
                 break
             end
             empty := sm.LayoutHasEmptyFallback(a, cur) and str.Len(val_str(a, t.b)) == 0
-            if not empty and not lo_em_static(a, prog, t.b):
+            if not empty and not lo_em_value_ok(a, prog, t.b, names, sa0.prop):
                 ok = false
                 break
             end
@@ -1219,7 +1306,8 @@ func lo_env_media(a &: at.Ast, prog: int):
             blocked = str.Len(blocked) > 0 ? lo_em_group(blocked) + " and " + lo_em_group(nq) : nq
             cur = t.c
         end
-        if ok and not (sm.LayoutHasEmptyFallback(a, an.a) and str.Len(val_str(a, cur)) == 0) and not lo_em_static(a, prog, cur):
+        base_empty := sm.LayoutHasEmptyFallback(a, an.a) and str.Len(val_str(a, cur)) == 0
+        if ok and not base_empty and not lo_em_value_ok(a, prog, cur, names, sa0.prop):
             ok = false
         end
         if ok and sa0.state != 0 and str.Len(lo_state_suffix(sa0.state)) == 0:
@@ -1233,7 +1321,7 @@ func lo_env_media(a &: at.Ast, prog: int):
         end
         mut k := queries.Len() - 1
         until k >= 0:
-            g_lo_em_lb.Push(lb)
+            g_lo_em_lb.Push(owner)
             g_lo_em_attr.Push(aid)
             g_lo_em_query.Push(queries.Get(k))
             g_lo_em_val.Push(vals.Get(k))
@@ -1242,7 +1330,7 @@ func lo_env_media(a &: at.Ast, prog: int):
         queries.Free()
         vals.Free()
         changed = true
-        if sm.LayoutHasEmptyFallback(a, an.a) and str.Len(val_str(a, cur)) == 0:
+        if base_empty:
             continue
         end
         mut n2 := at.Get(a, aid)
@@ -1251,14 +1339,51 @@ func lo_env_media(a &: at.Ast, prog: int):
         kept.Push(aid)
     end
     if changed:
-        mut bn := at.Get(a, lb)
+        mut bn := at.Get(a, owner)
         mut old := bn.list
         bn.list = kept
-        at.Put(a, lb, bn)
+        at.Put(a, owner, bn)
         old.Free()
     else:
         kept.Free()
     end
+end
+
+func lo_em_walk(a &: at.Ast, prog: int, nid: int, names: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ELEMENT:
+        lo_em_owner(a, prog, nid, names)
+    end
+    if n.kind == at.AST_IF or n.kind == at.AST_EACH:
+        lo_em_walk(a, prog, n.b, names)
+        lo_em_walk(a, prog, n.c, names)
+        ret
+    end
+    if n.kind != at.AST_LAYOUT_ELEMENT and n.kind != at.AST_LAYOUT_BLOCK and n.kind != at.AST_BLOCK:
+        ret
+    end
+    m := at.Get(a, nid)
+    repeat m.list.Len() in i:
+        lo_em_walk(a, prog, m.list.Get(i), names)
+    end
+end
+
+func lo_env_media_block(a &: at.Ast, prog: int, lb: int):
+    if lb == 0 or sm.LayoutNativeTarget() or not ps.EnvInProgram(a, lb):
+        ret
+    end
+    mut names := Vector {} as Vector<str>
+    defer names.Free()
+    lo_em_decls(a, lb, names)
+    lo_em_owner(a, prog, lb, names)
+    lo_em_walk(a, prog, lb, names)
+end
+
+func lo_env_media(a &: at.Ast, prog: int):
+    lo_env_media_block(a, prog, find_layout_block(a, prog))
 end
 
 func lo_env_inject(log: lg.Logger, a &: at.Ast, prog: int):
@@ -1419,37 +1544,14 @@ func lo_prepare_views(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.A
 end
 
 pub func PrepareViews(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): int:
+    if not g_lo_em_keep:
+        lo_em_reset()
+    end
+    g_lo_em_keep = false
     lo_env_inject(log, a, prog)
     r := lo_prepare_views(log, pack, ct, a, prog, file)
     if prog != 0:
         lo_env_order(a, prog)
     end
     ret r
-end
-
-pub func EnvMediaCss(a &: at.Ast, lb: int, sel: str, compact: bool): str:
-    mut out := ""
-    repeat g_lo_em_lb.Len() in i:
-        if g_lo_em_lb.Get(i) != lb:
-            continue
-        end
-        sa := sm.ResolveStyleAttr(at.Get(a, g_lo_em_attr.Get(i)).name)
-        if not sa.ok:
-            continue
-        end
-        mut v := style.Value {}
-        text := sm.StyleAttrTextFor(a, g_lo_em_val.Get(i), sa.prop)
-        if not style.Parse(sa.prop, text, v):
-            continue
-        end
-        decl := style.Css(sa.prop, v)
-        q := g_lo_em_query.Get(i)
-        ssel := sel + lo_state_suffix(sa.state)
-        if compact:
-            out += "@media " + q + "{" + ssel + "{" + decl + "}}"
-        else:
-            out += "@media " + q + " { " + ssel + " { " + decl + "; } }"
-        end
-    end
-    ret out
 end

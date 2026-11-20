@@ -117,16 +117,21 @@ Status:
 - Web: every word is kept as one hidden value, filled from `matchMedia` and
   the window size before the first paint and refreshed on resize and on
   scheme, motion and pointer changes; a change re-renders the views. A style
-  `if` on the page block itself whose condition uses only environment words,
-  `and`, `or`, `not` and comparisons of `page.width`/`page.height` with
-  numbers is compiled to a CSS `@media` rule on the body class instead
+  `if` on the page block, an element or an element inside a component whose
+  condition uses only environment words, `and`, `or`, `not` and comparisons
+  of `page.width`/`page.height` with numbers, and whose values are constant,
+  is compiled to a CSS `@media` rule on that element's class instead
   (`page.width >= 400 and page.height < 900` becomes
   `@media (width >= 400px) and (height < 900px)`), so it needs no script.
-  An earlier branch of an `if` chain that does not set the property still
-  blocks the later ones (`not (...)` is added to their queries). Not lowered:
-  `page.rtl`, `page.ltr`, comparisons with a non-integer number, branch values
-  that read a variable, and conditions mixed with page-level state; on the
-  page block those stay E129 for now, as for any page-level state.
+  The `@media` text is part of the class key, so two elements with the same
+  base style but different conditions get different classes. An earlier
+  branch of an `if` chain that does not set the property still blocks the
+  later ones (`not (...)` is added to their queries). Not lowered, and kept
+  on the script path: `page.rtl`, `page.ltr`, comparisons with a non-integer
+  number, values that read a variable or parameter, and conditions mixed with
+  state; on the page block itself those stay E129 for now, as for any
+  page-level state. An `if` that shows or hides elements always uses the
+  script path.
 - Native: the compiler injects the same hidden values and a setter, registered
   with `Builder.Env`; `gui.ui` calls it before the first frame and again on
   `Resized` and `ColorSchemeChanged` with the logical window size, so the

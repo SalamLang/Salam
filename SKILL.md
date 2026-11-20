@@ -896,7 +896,7 @@ it would run conditionally or repeatedly: the right side of `and`/`or`, a
 arm (E156; store the value first). `func main throw:` prints
 `error: <message>` to stderr and exits 1. `continue` cannot leave a `try:`
 block yet; `break` can. Methods and interface methods may be `throw`;
-lambdas and `extern` functions cannot. `W234` the old spelling `throws` (use `throw`), `E155` unmarked throwing call, `E156`
+lambdas and `extern` functions cannot. `E237` the removed spelling `throws` (write `throw`), `E155` unmarked throwing call, `E156`
 `try` in a spot that runs conditionally or repeatedly, `E157` `throw` outside a
 `throw` function or a `try:` block, `E142` `try` with nothing that can throw.
 (E139 to E141 are ownership errors: use after free, double free, returning a

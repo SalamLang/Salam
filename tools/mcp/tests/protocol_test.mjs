@@ -734,7 +734,7 @@ async function testAgentTools() {
       }),
       call(15, "salam_check", { source: "func main:\n    ret 0\nend\n", files: { "../evil.salam": "x" } }),
       call(16, "salam_check", { path: "tools/mcp/tests/fixtures/ok.salam", source: "func main:\n    ret 0\nend\n" }),
-      call(17, "salam_exec", { source: "func main:\n    mut i := 0\n    until i >= 0:\n        i += 1\n        if i > 1000: i = 0 end\n    end\n    ret 0\nend\n" }),
+      call(17, "salam_exec", { source: "func main:\n    mut i := 0\n    until i >= 0:\n        i++\n        if i > 1000: i = 0 end\n    end\n    ret 0\nend\n" }),
       call(18, "salam_check", { path: "tools/mcp/tests/fixtures/missing.salam" }),
       { jsonrpc: "2.0", id: 19, method: "prompts/list", params: { _meta: meta } },
       { jsonrpc: "2.0", id: 20, method: "prompts/get", params: { _meta: meta, name: "salam-write", arguments: { task: "print the first ten squares" } } },

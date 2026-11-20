@@ -63,7 +63,7 @@ func main:
 end`;
 
 type Example = { title: string; lang: string; code: string; note?: ReactNode };
-type Tab = { id: string; label: string; install?: string; file?: string; run?: string; examples: Example[] };
+type Tab = { id: string; label: string; library?: string; install?: string; file?: string; run?: string; examples: Example[] };
 
 function buildTabs(key: string): Tab[] {
   const pyClient = `from openai import OpenAI
@@ -75,6 +75,19 @@ client = OpenAI(
   const jsClient = `import OpenAI from "openai";
 
 const client = new OpenAI({
+  baseURL: "${API_BASE_URL}",
+  apiKey: "${key}",
+  defaultHeaders: { "X-Salam-Project": "my-project" },
+});`;
+  const pyAnthropic = `import anthropic
+
+client = anthropic.Anthropic(
+    base_url="${API_BASE_URL}",
+    api_key="${key}",
+)`;
+  const jsAnthropic = `import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
   baseURL: "${API_BASE_URL}",
   apiKey: "${key}",
   defaultHeaders: { "X-Salam-Project": "my-project" },
@@ -112,6 +125,21 @@ const client = new OpenAI({
     ]
   }'`,
         },
+        {
+          title: t("ساختار Anthropic", "Anthropic format"),
+          lang: "bash",
+          code: `curl ${API_BASE_URL}/v1/messages \\
+  -H "x-api-key: ${key}" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${API_MODEL}",
+    "max_tokens": 4096,
+    "messages": [
+      {"role": "user", "content": "${SAMPLE_PROMPT}"}
+    ]
+  }'`,
+        },
       ],
     },
     {
@@ -132,6 +160,7 @@ const client = new OpenAI({
     {
       id: "python",
       label: "Python",
+      library: "OpenAI",
       install: "pip install openai",
       file: "chat.py",
       run: "python chat.py",
@@ -168,6 +197,7 @@ print()`,
     {
       id: "js",
       label: "JavaScript",
+      library: "OpenAI",
       install: "npm install openai",
       file: "chat.mjs",
       run: "node chat.mjs",
@@ -197,6 +227,102 @@ for await (const chunk of stream) {
   process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
 }
 process.stdout.write("\\n");`,
+        },
+      ],
+    },
+    {
+      id: "anthropic-python",
+      label: "Anthropic Python",
+      library: "Anthropic",
+      install: "pip install anthropic",
+      file: "chat.py",
+      run: "python chat.py",
+      examples: [
+        {
+          title: "Python",
+          lang: "python",
+          code: `${pyAnthropic}
+
+message = client.messages.create(
+    model="${API_MODEL}",
+    max_tokens=4096,
+    messages=[{"role": "user", "content": "${SAMPLE_PROMPT}"}],
+    extra_headers={"X-Salam-Project": "my-project"},
+)
+print(message.content[0].text)`,
+        },
+        {
+          title: t("پاسخ جریانی", "Streaming"),
+          lang: "python",
+          code: `${pyAnthropic}
+
+with client.messages.stream(
+    model="${API_MODEL}",
+    max_tokens=4096,
+    messages=[{"role": "user", "content": "${SAMPLE_PROMPT}"}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+print()`,
+        },
+      ],
+    },
+    {
+      id: "anthropic-js",
+      label: "Anthropic JS",
+      library: "Anthropic",
+      install: "npm install @anthropic-ai/sdk",
+      file: "chat.mjs",
+      run: "node chat.mjs",
+      examples: [
+        {
+          title: "JavaScript",
+          lang: "javascript",
+          code: `${jsAnthropic}
+
+const message = await client.messages.create({
+  model: "${API_MODEL}",
+  max_tokens: 4096,
+  messages: [{ role: "user", content: "${SAMPLE_PROMPT}" }],
+});
+console.log(message.content[0].text);`,
+        },
+        {
+          title: t("پاسخ جریانی", "Streaming"),
+          lang: "javascript",
+          code: `${jsAnthropic}
+
+const stream = client.messages.stream({
+  model: "${API_MODEL}",
+  max_tokens: 4096,
+  messages: [{ role: "user", content: "${SAMPLE_PROMPT}" }],
+});
+stream.on("text", (text) => process.stdout.write(text));
+await stream.finalMessage();
+process.stdout.write("\\n");`,
+        },
+      ],
+    },
+    {
+      id: "agents",
+      label: t("ایجنت‌ها", "Agents"),
+      examples: [
+        {
+          title: "Claude Code",
+          lang: "bash",
+          code: `export ANTHROPIC_BASE_URL="${API_BASE_URL}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+export ANTHROPIC_MODEL="${API_MODEL}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${API_MODEL}"
+claude`,
+          note: t("هر ابزار یا ایجنتی که با API ساختار Anthropic کار می‌کند، با همین نشانی پایه و کلید به دستیار سلام وصل می‌شود.", "Any tool or agent that speaks the Anthropic API connects to Salam AI with the same base URL and key."),
+        },
+        {
+          title: t("ایجنت‌های سازگار با OpenAI", "OpenAI-compatible agents"),
+          lang: "bash",
+          code: `export OPENAI_BASE_URL="${API_BASE_URL}"
+export OPENAI_API_KEY="${key}"`,
+          note: t("ابزارهایی مثل Cline و opencode با فراخوانی ابزار بومی کار می‌کنند. مدل را salam بگذارید.", "Tools such as Cline and opencode work with native tool calling. Set the model to salam."),
         },
       ],
     },
@@ -245,7 +371,7 @@ function Examples({ secret }: { secret: string }) {
       <div role="tabpanel" id={`panel-${current.id}`} aria-labelledby={`tab-${current.id}`}>
         {current.install && (
           <p className="muted small example-install">
-            {t("ابتدا کتابخانه‌ی رسمی OpenAI را نصب کنید:", "First install the official OpenAI library:")} <code className="inline-code" dir="ltr">{current.install}</code>
+            {t(`ابتدا کتابخانه‌ی رسمی ${current.library ?? "OpenAI"} را نصب کنید:`, `First install the official ${current.library ?? "OpenAI"} library:`)} <code className="inline-code" dir="ltr">{current.install}</code>
           </p>
         )}
         {current.file && current.run && (
@@ -399,7 +525,7 @@ export function Keys({ notify }: { notify: (msg: string, ok?: boolean) => void }
       <header className="page-head">
         <h2>{t("کلیدهای API", "API keys")}</h2>
         <p className="muted">
-          {t("دستیار سلام را در برنامه‌های خودتان به کار ببرید. این API با کلاینت‌های OpenAI سازگار است، پس کافی است نشانی پایه و مدل را عوض کنید و یک کلید شخصی بسازید.", "Use Salam AI in your own apps. The API is compatible with OpenAI clients, so just change the base URL and model and create a personal key.")}
+          {t("دستیار سلام را در برنامه‌های خودتان به کار ببرید. این API هم با کلاینت‌های OpenAI و هم با کلاینت‌ها و ایجنت‌های Anthropic سازگار است، پس کافی است نشانی پایه و مدل را عوض کنید و یک کلید شخصی بسازید.", "Use Salam AI in your own apps. The API works with both OpenAI clients and Anthropic clients and agents, so just change the base URL and model and create a personal key.")}
         </p>
       </header>
 

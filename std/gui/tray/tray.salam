@@ -1,0 +1,411 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+@en "tray"
+@fa "سینی"
+package tray
+
+import mem
+import str
+import sync
+import image
+
+mut _ready := false
+mut _mu := sync.Mutex {}
+mut _queue := Vector {} as Vector<Event>
+mut _wake_set := false
+mut _wake := (): ret end
+mut _error := ""
+mut _want := false
+mut _items := Vector {} as Vector<Item>
+mut _tooltip := ""
+mut _icon_path := ""
+mut _icon := image.Image {}
+mut _menu_rev := 1
+mut _dirty_icon := false
+mut _dirty_tip := false
+mut _dirty_menu := false
+
+@en "EventKind"
+@fa "گونه رویداد"
+pub enum EventKind:
+    @en "Click"
+    @fa "کلیک"
+    Click, @en "DoubleClick"
+    @fa "دوبار کلیک"
+    DoubleClick, @en "Menu"
+    @fa "انتخاب گزینه"
+    Menu
+end
+
+@en "Item"
+@fa "گزینه"
+pub struct Item:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "label"
+    @fa "برچسب"
+    pub label: str = ""
+    @en "enabled"
+    @fa "فعال"
+    pub enabled: bool = true
+    @en "checked"
+    @fa "تیک خورده"
+    pub checked: bool = false
+    @en "separator"
+    @fa "جداکننده"
+    pub separator: bool = false
+end
+
+@en "Event"
+@fa "رویداد"
+pub struct Event:
+    @en "kind"
+    @fa "نوع"
+    pub kind: EventKind = EventKind.Click
+    @en "id"
+    @fa "شناسه گزینه"
+    pub id: str = ""
+end
+
+func _init():
+    if not _ready:
+        _mu = sync.NewMutex()
+        _tooltip = str.Clone("")
+        _icon_path = str.Clone("")
+        _ready = true
+    end
+end
+
+func _lock():
+    _init()
+    _l := sync.Lock(_mu)
+end
+
+func _unlock():
+    _u := sync.Unlock(_mu)
+end
+
+func _set_error(text: str):
+    _error = text
+end
+
+func _clone_items(items: Vector<Item>): Vector<Item>:
+    mut out := Vector {} as Vector<Item>
+    each it in items:
+        out.Push(Item {
+            id = str.Clone(it.id), label = str.Clone(it.label), enabled = it.enabled, checked = it.checked,
+            separator = it.separator
+        })
+    end
+    ret out
+end
+
+func _free_items(items &: Vector<Item>):
+    repeat items.Len() in i:
+        it := items[i]
+        mem.Free(it.id as void*)
+        mem.Free(it.label as void*)
+    end
+    items.Free()
+    items = Vector {} as Vector<Item>
+end
+
+func _fit_icon(img: image.Image, limit: int): image.Image:
+    big := img.width > img.height ? img.width : img.height
+    if big <= limit or img.pixels == null:
+        ret img
+    end
+    mut nw := img.width * limit / big
+    mut nh := img.height * limit / big
+    if nw < 1:
+        nw = 1
+    end
+    if nh < 1:
+        nh = 1
+    end
+    out := image.New(nw, nh)
+    src := img.pixels as u8*
+    dst := out.pixels as u8*
+    repeat nh in y:
+        y0 := y * img.height / nh
+        mut y1 := (y + 1) * img.height / nh
+        if y1 <= y0:
+            y1 = y0 + 1
+        end
+        repeat nw in x:
+            x0 := x * img.width / nw
+            mut x1 := (x + 1) * img.width / nw
+            if x1 <= x0:
+                x1 = x0 + 1
+            end
+            mut r := 0 as i64
+            mut g := 0 as i64
+            mut b := 0 as i64
+            mut a := 0 as i64
+            mut n := 0 as i64
+            mut yy := y0
+            until yy < y1:
+                mut xx := x0
+                until xx < x1:
+                    k := (yy * img.width + xx) * 4
+                    pa := src[k + 3] as i64
+                    r += (src[k] as i64) * pa
+                    g += (src[k + 1] as i64) * pa
+                    b += (src[k + 2] as i64) * pa
+                    a += pa
+                    n++
+                    xx++
+                end
+                yy++
+            end
+            d := (y * nw + x) * 4
+            if a > 0:
+                dst[d] = (r / a) as u8
+                dst[d + 1] = (g / a) as u8
+                dst[d + 2] = (b / a) as u8
+            end
+            dst[d + 3] = (a / n) as u8
+        end
+    end
+    mut old := img
+    image.Free(old)
+    ret out
+end
+
+func _load_icon(path: str): bool:
+    if _icon.pixels != null:
+        image.Free(_icon)
+    end
+    _icon = image.Image {}
+    mem.Free(_icon_path as void*)
+    _icon_path = str.Clone(path)
+    if path.Len() == 0:
+        ret true
+    end
+    if str.EndsWithFold(path, ".png"):
+        mut ok := false
+        img := image.OpenPNG(path, ok)
+        if not ok:
+            ret false
+        end
+        _icon = _fit_icon(img, 64)
+    end
+    ret true
+end
+
+func _push(ev: Event):
+    _lock()
+    _queue.Push(ev)
+    _unlock()
+    if _wake_set:
+        _wake()
+    end
+end
+
+func _item_count(): int:
+    ret _items.Len()
+end
+
+func _menu_id_at(index: int): str:
+    if index < 0 or index >= _items.Len():
+        ret ""
+    end
+    ret str.Clone(_items[index].id)
+end
+
+func _push_menu(index: int):
+    _lock()
+    id := _menu_id_at(index)
+    _unlock()
+    if id.Len() > 0:
+        _push(Event { kind = EventKind.Menu, id = id })
+    end
+end
+
+func _push_kind(kind: EventKind):
+    _push(Event { kind = kind, id = "" })
+end
+
+@en "Supported"
+@fa "پشتیبانی شده"
+pub func Supported(): bool:
+    _init()
+    ret _os_supported()
+end
+
+@en "Backend"
+@fa "سامانه پشتیبان"
+pub func Backend(): str:
+    ret _os_backend()
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _error
+end
+
+@en "Show"
+@fa "نمایش"
+pub func Show(icon: str, tooltip: str, items: Vector<Item>): bool:
+    _init()
+    if not _os_supported():
+        if _error.Len() == 0:
+            _set_error("the system tray is not available")
+        end
+        ret false
+    end
+    _lock()
+    loaded := _load_icon(icon)
+    mem.Free(_tooltip as void*)
+    _tooltip = str.Clone(tooltip)
+    _free_items(_items)
+    _items = _clone_items(items)
+    _menu_rev++
+    _want = true
+    _dirty_icon = true
+    _dirty_tip = true
+    _dirty_menu = true
+    _unlock()
+    if not loaded:
+        _set_error("cannot read the tray icon " + icon)
+        ret false
+    end
+    _set_error("")
+    ret _os_apply()
+end
+
+@en "SetMenu"
+@fa "تنظیم منو"
+pub func SetMenu(items: Vector<Item>):
+    _lock()
+    _free_items(_items)
+    _items = _clone_items(items)
+    _menu_rev++
+    _dirty_menu = true
+    want := _want
+    _unlock()
+    if want:
+        _a := _os_apply()
+    end
+end
+
+@en "SetTooltip"
+@fa "تنظیم راهنما"
+pub func SetTooltip(text: str):
+    _lock()
+    mem.Free(_tooltip as void*)
+    _tooltip = str.Clone(text)
+    _dirty_tip = true
+    want := _want
+    _unlock()
+    if want:
+        _a := _os_apply()
+    end
+end
+
+@en "SetIcon"
+@fa "تنظیم نماد"
+pub func SetIcon(path: str): bool:
+    _lock()
+    loaded := _load_icon(path)
+    _dirty_icon = true
+    want := _want
+    _unlock()
+    if not loaded:
+        _set_error("cannot read the tray icon " + path)
+        ret false
+    end
+    if want:
+        ret _os_apply()
+    end
+    ret true
+end
+
+@en "Hide"
+@fa "پنهان کردن"
+pub func Hide():
+    _lock()
+    was := _want
+    _want = false
+    _unlock()
+    if was:
+        _a := _os_apply()
+    end
+end
+
+@en "IsShown"
+@fa "نمایان است"
+pub func IsShown(): bool:
+    _lock()
+    out := _want
+    _unlock()
+    ret out
+end
+
+@en "SetWake"
+@fa "تنظیم بیدارباش"
+pub func SetWake(wake: func ()):
+    _init()
+    _wake = wake
+    _wake_set = true
+end
+
+@en "Post"
+@fa "فرستادن رویداد"
+pub func Post(event: Event):
+    _push(event)
+end
+
+@en "Take"
+@fa "برداشتن رویداد"
+pub func Take(out &: Event): bool:
+    _lock()
+    defer _unlock()
+    if _queue.Len() == 0:
+        ret false
+    end
+    out = _queue[0]
+    _queue.RemoveAt(0)
+    ret true
+end
+
+@en "Pending"
+@fa "رویدادهای مانده"
+pub func Pending(): int:
+    _lock()
+    n := _queue.Len()
+    _unlock()
+    ret n
+end
+
+@en "NewItem"
+@fa "گزینه تازه"
+pub func NewItem(id: str, label: str): Item:
+    ret Item { id = id, label = label }
+end
+
+@en "CheckItem"
+@fa "گزینه تیک دار"
+pub func CheckItem(id: str, label: str, checked: bool): Item:
+    ret Item { id = id, label = label, checked = checked }
+end
+
+@en "Separator"
+@fa "خط جدا"
+pub func Separator(): Item:
+    ret Item { separator = true }
+end

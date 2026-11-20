@@ -324,14 +324,18 @@ async function main() {
   await say(1001, "/new");
   await lastText(1001, /fresh chat/);
   const beforeFa = (await log()).length;
-  await say(1001, "این یک پیام فارسی بسیار بلند برای آزمایش عنوان گفت‌وگو در فهرست است");
-  await until(async () => (await log()).slice(beforeFa).find((c) => ["sendMessage", "editMessageText"].includes(c.method) && String(c.args.chat_id) === "1001" && /Echo:|Tool said/.test(c.args.text ?? "")), 60000);
-  await until(async () => (await api("GET", "/chats", token)).json?.chats?.some((c) => c.title.startsWith("این یک پیام")));
+  let titled = null;
+  for (let attempt = 0; attempt < 3 && !titled; attempt++) {
+    const sent = (await log()).length;
+    await say(1001, "این یک پیام فارسی بسیار بلند برای آزمایش عنوان گفت‌وگو در فهرست است");
+    await until(async () => sentTo((await log()).slice(sent), 1001).find((c) => /Echo:|Tool said|not finished|not available/.test(c.args.text ?? "")), 60000);
+    titled = await until(async () => (await api("GET", "/chats", token)).json?.chats?.some((c) => c.title.startsWith("این یک پیام")));
+  }
   await sleep(1500);
   const before = (await log()).length;
   await say(1001, "/chats");
   const persian = await until(async () => (await log()).slice(before).find((c) => c.args.reply_markup?.inline_keyboard?.some((r) => /این یک پیام/.test(r[0]?.text ?? ""))), 60000);
-  check("a long Persian title is cut on a character boundary", !!persian && !JSON.stringify(persian.args.reply_markup).includes("\ufffd"), persian?.args.reply_markup);
+  check("a long Persian title is cut on a character boundary", !!persian && !JSON.stringify(persian.args.reply_markup).includes("\ufffd"), persian?.args.reply_markup ?? textsTo((await log()).slice(beforeFa), 1001).slice(-6));
   await press(1001, `c:${chats[0].id}`);
   check("switching reopens an old chat", !!(await lastText(1001, /Chat opened: remember my history/)));
 

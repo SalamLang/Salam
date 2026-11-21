@@ -1,0 +1,133 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.postgres
+import net.tcp
+import sync
+import mem
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+
+func send(c: tcp.Conn, bytes: Vector<int>):
+    n := bytes.Len()
+    buf := mem.Allocate(n as u64)
+    p := buf as u8*
+    repeat n in i:
+        p[i] = bytes.Get(i) as u8
+    end
+    tcp.WriteBytes(c, buf, n)
+    mem.Free(buf)
+end
+
+func drain(c: tcp.Conn):
+    buf := mem.Allocate(1024 as u64)
+    tcp.ReadBytes(c, buf, 1024)
+    mem.Free(buf)
+end
+
+func auth(code: int, extra: Vector<int>): Vector<int>:
+    mut m := Vector {} as Vector<int>
+    m.Push(82)
+    m.Push(0)
+    m.Push(0)
+    m.Push(0)
+    m.Push(8 + extra.Len())
+    m.Push(0)
+    m.Push(0)
+    m.Push(0)
+    m.Push(code)
+    repeat extra.Len() in i:
+        m.Push(extra.Get(i))
+    end
+    ret m
+end
+
+func sasl_offer(): Vector<int>:
+    mut mech := Vector {} as Vector<int>
+    name := "SCRAM-SHA-256"
+    repeat name.Len() in i:
+        mech.Push(name[i] as int)
+    end
+    mech.Push(0)
+    mech.Push(0)
+    ret auth(10, mech)
+end
+
+func ready_for_query(): Vector<int>:
+    mut m := Vector {} as Vector<int>
+    m.Push(90)
+    m.Push(0)
+    m.Push(0)
+    m.Push(0)
+    m.Push(5)
+    m.Push(73)
+    ret m
+end
+
+func serve():
+    srv := tcp.Bind(0)
+    port = tcp.Port(srv)
+    sync.Done(ready)
+    repeat 4 in k:
+        c := tcp.Accept(srv)
+        buf := mem.Allocate(1024 as u64)
+        tcp.ReadBytes(c, buf, 1024)
+        mem.Free(buf)
+        if k == 0:
+            send(c, sasl_offer())
+            drain(c)
+            mut done := auth(0, Vector {} as Vector<int>)
+            rq := ready_for_query()
+            repeat rq.Len() in i:
+                done.Push(rq.Get(i))
+            end
+            send(c, done)
+        else k == 1:
+            send(c, sasl_offer())
+            drain(c)
+            send(c, auth(3, Vector {} as Vector<int>))
+        else k == 2:
+            send(c, auth(11, Vector {} as Vector<int>))
+        else:
+            mut both := auth(0, Vector {} as Vector<int>)
+            repeat ready_for_query().Len() in i:
+                both.Push(ready_for_query().Get(i))
+            end
+            send(c, both)
+        end
+        drain(c)
+        tcp.Close(c)
+    end
+    tcp.CloseServer(srv)
+end
+
+func attempt(label: str):
+    d := postgres.Open("host=127.0.0.1 port=" + port + " user=u password=p dbname=d sslmode=disable connect_timeout=5")
+    println label + ": " + postgres.Ok(d)
+    if not postgres.Ok(d):
+        println "  " + postgres.Error(d)
+    end
+    postgres.Close(d)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(ready)
+    attempt("ok without signature")
+    attempt("cleartext after scram offer")
+    attempt("challenge without offer")
+    attempt("trust auth")
+    join(t)
+end

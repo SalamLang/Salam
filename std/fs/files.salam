@@ -29,9 +29,20 @@ extern:
     func ftell(fp: void*): int
 end
 
+extern:
+    func fflush(stream: void*): int
+end
+
 if SALAM_OS_WINDOWS:
     extern:
         func MoveFileExA(existing: str, new_path: str, flags: int): int
+        func _fileno(fp: void*): int
+        func _commit(fd: int): int
+    end
+else:
+    extern:
+        func fileno(fp: void*): int
+        func fsync(fd: int): int
     end
 end
 
@@ -62,8 +73,22 @@ pub struct FileInfo:
 end
 
 if SALAM_OS_WINDOWS:
+    func _sync_file(fp: void*): int:
+        if fflush(fp) != 0: ret 0 - 1 end
+        if _commit(_fileno(fp)) != 0: ret 0 - 1 end
+        ret 0
+    end
+else:
+    func _sync_file(fp: void*): int:
+        if fflush(fp) != 0: ret 0 - 1 end
+        if fsync(fileno(fp)) != 0: ret 0 - 1 end
+        ret 0
+    end
+end
+
+if SALAM_OS_WINDOWS:
     func _atomic_rename(tmp: str, path: str): int:
-        if MoveFileExA(tmp, path, 1) == 0: ret 0 - 1 end
+        if MoveFileExA(tmp, path, 9) == 0: ret 0 - 1 end
         ret 0
     end
 else:
@@ -270,12 +295,27 @@ pub func Append(path: str, data: str): int: ret _write_binary(path, "ab", data) 
 @en "AtomicWrite"
 @fa "نوشتن اتمی"
 pub func AtomicWrite(path: str, data: str): int:
-    tmp := path.Concat(".tmp")
-    if _write_binary(tmp, "wb", data) < 0:
+    mut tmp := path.Concat(".").Concat(crypto.RandomHex(8)).Concat(".tmp")
+    mut tries := 0
+    until tries < 8 and os.Exists(tmp):
+        tmp = path.Concat(".").Concat(crypto.RandomHex(8)).Concat(".tmp")
+        tries++
+    end
+    f := os.Open(tmp, "wb")
+    if f == null:
+        error.Set(error.IOError, "atomic write failed", "AtomicWrite", path, 0)
+        ret 0 - 1
+    end
+    n := io.Write(f, data)
+    synced := _sync_file(f as void*)
+    io.Close(f)
+    if n < 0 or synced != 0:
+        os.Remove(tmp)
         error.Set(error.IOError, "atomic write failed", "AtomicWrite", path, 0)
         ret 0 - 1
     end
     if _atomic_rename(tmp, path) != 0:
+        os.Remove(tmp)
         error.Set(error.IOError, "atomic rename failed", "AtomicWrite", path, 0)
         ret 0 - 1
     end

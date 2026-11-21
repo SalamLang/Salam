@@ -48,6 +48,15 @@ step test crash --format=teamcity
 "$salam" test crash --report="$work/crash.tsv" >/dev/null 2>&1
 printf 'crash report: '
 cat "$work/crash.tsv"
+mkdir crashexit
+{
+    printf '// EXPECT-EXIT: 0\n'
+    printf 'func test_oob():\n    mut v := Vector {} as Vector<int>\n    defer v.Free()\n    v.push(1)\n'
+    printf '    testing.AssertEqInt(v[0] + v.pop() + v.pop(), 2)\nend\n'
+} >crashexit/panic_test.salam
+"$salam" test crashexit --report="$work/crashexit.tsv" >/dev/null 2>&1
+printf 'crash with expected exit report: '
+cat "$work/crashexit.tsv"
 mkdir -p expect
 printf '// EXPECT: hello\n// EXPECT-NOT: goodbye\n// EXPECT-EXIT: 0\nfunc main:\n    println "hello"\nend\n' >expect/out.test.salam
 step test expect/out.test.salam

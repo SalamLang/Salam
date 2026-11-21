@@ -85,6 +85,83 @@ func js_refs(text: str, name: str): bool:
     end
 end
 
+func js_lit_rhs(rhs: str): bool:
+    n := str.Len(rhs)
+    if n < 2 or byte_at(rhs, 0) != 91:
+        ret false
+    end
+    mut i := 0
+    until i < n:
+        c := byte_at(rhs, i)
+        if c == 34:
+            i++
+            until i < n and byte_at(rhs, i) != 34:
+                if byte_at(rhs, i) == 92:
+                    i++
+                end
+                i++
+            end
+            i++
+            continue
+        end
+        if not ((c >= 48 and c <= 57) or c == 91 or c == 93 or c == 44 or c == 46 or c == 45 or c == 32):
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func js_lit_global(line: str, name &: str): bool:
+    t := str.Trim(line)
+    if not str.StartsWith(t, "const ") or not str.EndsWith(t, ";"):
+        ret false
+    end
+    eqp := str.IndexFrom(t, " = ", 6)
+    if eqp <= 6:
+        ret false
+    end
+    nm := str.Substr(t, 6, eqp - 6)
+    repeat str.Len(nm) in k:
+        c := byte_at(nm, k)
+        if not (is_alnum(c) or c == 95 or c == 36):
+            ret false
+        end
+    end
+    if not js_lit_rhs(str.Substr(t, eqp + 3, str.Len(t) - eqp - 4)):
+        ret false
+    end
+    name = nm
+    ret true
+end
+
+func js_prune_globals(globals: Vector<str>, code: str): Vector<str>:
+    mut keep_text := code
+    repeat globals.Len() in gi:
+        each line in str.Split(globals.Get(gi), "\n"):
+            mut nm := ""
+            if not js_lit_global(line, nm):
+                keep_text += line + "\n"
+            end
+        end
+    end
+    mut out := Vector {} as Vector<str>
+    repeat globals.Len() in gi2:
+        mut kept := ""
+        each line in str.Split(globals.Get(gi2), "\n"):
+            mut nm := ""
+            if js_lit_global(line, nm) and not js_refs(keep_text, nm):
+                continue
+            end
+            if str.Len(line) > 0:
+                kept += line + "\n"
+            end
+        end
+        out.Push(kept)
+    end
+    ret out
+end
+
 func js_mods_free(mods &: JsMods):
     mods.globals.Free()
     mods.seg_mod.Free()
@@ -372,10 +449,23 @@ func js_build_bundle(
     str.BufAppend(
         js, minify_ws ? `(function(){"use strict";` : "(function () {\n\"use strict\";\n\n"
     )
+    mut used_code := boot + "\n"
+    repeat seg_names.Len() in ui:
+        if seg_used.Get(ui) != 0:
+            used_code += seg_texts.Get(ui)
+        end
+    end
+    pruned := js_prune_globals(mods.globals, used_code)
+    repeat seg_names.Len() in sgi2:
+        if seg_used.Get(sgi2) != 0:
+            str.BufAppend(js, seg_texts.Get(sgi2))
+            str.BufAppendChar(js, minify_ws ? 32 : 10)
+        end
+    end
     mut have_globals := false
     mut m3 := mods.count - 1
     until m3 >= 0:
-        if str.Len(mods.globals.Get(m3)) > 0:
+        if str.Len(pruned.Get(m3)) > 0:
             have_globals = true
         end
         m3--
@@ -383,16 +473,10 @@ func js_build_bundle(
     if have_globals:
         mut m4 := mods.count - 1
         until m4 >= 0:
-            str.BufAppend(js, mods.globals.Get(m4))
+            str.BufAppend(js, pruned.Get(m4))
             m4--
         end
         str.BufAppendChar(js, minify_ws ? 32 : 10)
-    end
-    repeat seg_names.Len() in sgi2:
-        if seg_used.Get(sgi2) != 0:
-            str.BufAppend(js, seg_texts.Get(sgi2))
-            str.BufAppendChar(js, minify_ws ? 32 : 10)
-        end
     end
     if not minify_ws:
         str.BufAppend(js, "// Run the program once the DOM is ready.\n")
@@ -517,10 +601,26 @@ func collect_event_js(
     str.BufAppend(
         js, minify_ws ? `(function(){"use strict";` : "(function () {\n\"use strict\";\n\n"
     )
+    mut page_code := out.globals_src
+    repeat out.fn_texts.Len() in pi3:
+        page_code += out.fn_texts.Get(pi3)
+    end
+    repeat seg_names.Len() in ui2:
+        if seg_used.Get(ui2) != 0:
+            page_code += seg_texts.Get(ui2)
+        end
+    end
+    pruned := js_prune_globals(mods.globals, page_code)
+    repeat seg_names.Len() in sgi2:
+        if seg_used.Get(sgi2) != 0:
+            str.BufAppend(js, seg_texts.Get(sgi2))
+            str.BufAppendChar(js, minify_ws ? 32 : 10)
+        end
+    end
     mut gm := mods.count - 1
     until gm >= 0:
-        if str.Len(mods.globals.Get(gm)) > 0:
-            str.BufAppend(js, mods.globals.Get(gm))
+        if str.Len(pruned.Get(gm)) > 0:
+            str.BufAppend(js, pruned.Get(gm))
             str.BufAppendChar(js, minify_ws ? 32 : 10)
         end
         gm--
@@ -529,14 +629,16 @@ func collect_event_js(
         str.BufAppend(js, out.globals_src)
         str.BufAppendChar(js, minify_ws ? 32 : 10)
     end
-    repeat seg_names.Len() in sgi2:
-        if seg_used.Get(sgi2) != 0:
-            str.BufAppend(js, seg_texts.Get(sgi2))
-            str.BufAppendChar(js, minify_ws ? 32 : 10)
-        end
-    end
     repeat out.fn_texts.Len() in fi2:
         str.BufAppend(js, out.fn_texts.Get(fi2))
+        str.BufAppendChar(js, minify_ws ? 32 : 10)
+    end
+    if lo.RoutesActive():
+        mut rrt := lo.RouteRuntime(jg.Ident("__salam_route_set"), jg.Ident("__salam_route_check"))
+        if minify_ws:
+            rrt = mn.Js(rrt)
+        end
+        str.BufAppend(js, rrt)
         str.BufAppendChar(js, minify_ws ? 32 : 10)
     end
     wcount := lo.WebStateCount()

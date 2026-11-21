@@ -1,0 +1,297 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "notify"
+
+import mem
+import str
+import sync
+import os.shell
+import net.tcp
+import net.udp
+import net.tun
+import net.tunnel
+
+mut failures := 0
+mut _seen := Vector {} as Vector<str>
+
+struct MapDialer:
+    pub hits: Vector<str> = Vector {}
+
+    pub func Dial(target: tunnel.Addr): dyn tunnel.Stream:
+        if target.host == "127.0.0.1":
+            ret tunnel.WrapTcp(tcp.DialTimeout(target.host, target.port, 3000))
+        end
+        if target.port == 9000:
+            ret tunnel.WrapTcp(tcp.DialTimeout("127.0.0.1", 9091, 3000))
+        end
+        println "dialer target", target.host, target.port
+        _seen.Push(target.host + ":" + str.FromInt(target.port as i64))
+        ret tunnel.WrapTcp(tcp.DialTimeout("127.0.0.1", 9090, 3000))
+    end
+
+    pub func Name(): str:
+        ret "map"
+    end
+end
+
+func echo_server(srv: tcp.Server):
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            continue
+        end
+        data := tcp.Read(c, 4096)
+        _w := tcp.Write(c, "echo:" + str.Clone(data.Len() > 0 ? data.Substr(0, 4) : ""))
+        tcp.Close(c)
+    end
+end
+
+func dns_server(srv: tcp.Server):
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            continue
+        end
+        buf := mem.AllocateZeroed(1024 as u64) as u8*
+        n := tcp.ReadBytes(c, buf as void*, 1024)
+        if n > 14:
+            qlen := (buf[0] as int) * 256 + (buf[1] as int)
+            q := ((buf as i64) + (2 as i64)) as u8*
+            out := mem.AllocateZeroed(1024 as u64) as u8*
+            repeat qlen in i:
+                out[2 + i] = q[i]
+            end
+            r := ((out as i64) + (2 as i64)) as u8*
+            r[2] = 129 as u8
+            r[3] = 128 as u8
+            r[7] = 1 as u8
+            mut at := qlen
+            ans := [192, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 10, 99, 0, 5]
+            repeat 16 in i:
+                r[at + i] = ans[i] as u8
+            end
+            at += 16
+            out[0] = ((at >> 8) & 255) as u8
+            out[1] = (at & 255) as u8
+            _w := tcp.WriteBytes(c, out as void*, at + 2)
+            mem.Free(out as void*)
+        end
+        mem.Free(buf as void*)
+        tcp.Close(c)
+    end
+end
+
+func check(name: str, ok: bool):
+    if ok:
+        println "ok  ", name
+    else:
+        println "FAIL", name
+        failures++
+    end
+end
+
+func seen(target: str): bool:
+    each t in _seen:
+        if t == target:
+            ret true
+        end
+    end
+    ret false
+end
+
+func put(p: u8*, at: int, bytes: int[]): int:
+    repeat bytes.Len() in i:
+        p[at + i] = bytes[i] as u8
+    end
+    ret at + bytes.Len()
+end
+
+func put_str(p: u8*, at: int, s: str): int:
+    q := s as u8*
+    repeat s.Len() in i:
+        p[at + i] = q[i]
+    end
+    ret at + s.Len()
+end
+
+func client_hello(host: str, with_padding: bool): tun.Packet:
+    buf := mem.AllocateZeroed(1024 as u64) as u8*
+    hl := host.Len()
+    ext := mem.AllocateZeroed(512 as u64) as u8*
+    mut e := 0
+    if with_padding:
+        e = put(ext, e, [0, 21, 0, 4, 0, 0, 0, 0])
+    end
+    e = put(ext, e, [0, 0, 0, hl + 5, 0, hl + 3, 0, 0, hl])
+    e = put_str(ext, e, host)
+    e = put(ext, e, [0, 43, 0, 3, 2, 3, 4])
+    mut body := 0
+    body_start := 9
+    mut i := body_start
+    i = put(buf, i, [3, 3])
+    repeat 32 in k:
+        buf[i + k] = k as u8
+    end
+    i += 32
+    i = put(buf, i, [0])
+    i = put(buf, i, [0, 2, 19, 1])
+    i = put(buf, i, [1, 0])
+    i = put(buf, i, [(e >> 8) & 255, e & 255])
+    repeat e in k:
+        buf[i + k] = ext[k]
+    end
+    i += e
+    body = i - body_start
+    hs := body + 4
+    _a := put(buf, 0, [22, 3, 1, (hs >> 8) & 255, hs & 255, 1, 0, (body >> 8) & 255, body & 255])
+    mem.Free(ext as void*)
+    ret tun.Packet { data = buf as void*, len = i }
+end
+
+func bulk_thread(p: void*):
+    srv := tcp.Server { fd = p as i64 }
+    chunk := mem.AllocateZeroed(65536 as u64) as u8*
+    repeat 65536 in i:
+        chunk[i] = (i % 251) as u8
+    end
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            continue
+        end
+        repeat 320:
+            _w := tcp.WriteBytes(c, chunk as void*, 65536)
+        end
+        tcp.Close(c)
+    end
+end
+
+func echo_thread(p: void*):
+    echo_server(tcp.Server { fd = p as i64 })
+end
+
+func dns_thread(p: void*):
+    dns_server(tcp.Server { fd = p as i64 })
+end
+
+func main(): int:
+    av := tun.Available()
+    if not av.ok:
+        println "FAIL available:", av.reason
+        ret 1
+    end
+    es := tcp.BindOn("127.0.0.1", 9090)
+    ds := tcp.BindOn("127.0.0.1", 5353)
+    bs := tcp.BindOn("127.0.0.1", 9091)
+    _a := spawn(echo_thread, es.fd as void*)
+    _b := spawn(dns_thread, ds.fd as void*)
+    _c := spawn(bulk_thread, bs.fd as void*)
+    before := shell.Exec("ip route")
+    check("default gateway found", tun.DefaultGateway().ok)
+    mut ex := Vector {} as Vector<str>
+    ex.Push("203.0.113.9")
+    s := tun.Start(tun.Options { name = "salamtun", dialer = MapDialer {}, upstream = "127.0.0.1:5353", exclude = ex })
+    check("session started " + s.error, s.ok and s.name == "salamtun" and s.dns == "172.19.0.2")
+    if not s.ok:
+        ret 1
+    end
+    routes := shell.Exec("ip route")
+    check("split routes into the tun", routes.out.Includes("0.0.0.0/1 dev salamtun") and routes.out.Includes("128.0.0.0/1 dev salamtun"))
+    check("excluded host goes to the gateway", routes.out.Includes("203.0.113.9 via"))
+    r6 := shell.Exec("ip -6 route show type unreachable")
+    check("ipv6 is blocked", r6.out.Includes("::/1") and r6.out.Includes("8000::/1"))
+
+    c := tcp.DialTimeout("10.99.0.5", 80, 3000)
+    _w := tcp.Write(c, "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+    check("http relayed", tcp.Read(c, 100) == "echo:GET ")
+    tcp.Close(c)
+    check("http host sniffed", seen("example.test:80"))
+
+    c2 := tcp.DialTimeout("10.99.0.7", 22, 3000)
+    sync.SleepMs(500)
+    _w3 := tcp.Write(c2, "SSH-2.0-test\r\n")
+    check("server first protocol relayed", tcp.Read(c2, 100) == "echo:SSH-")
+    tcp.Close(c2)
+    check("no sniff keeps the ip", seen("10.99.0.7:22"))
+
+    hello := client_hello("sni.example.test", true)
+    c3 := tcp.DialTimeout("10.99.0.6", 443, 3000)
+    _w4 := tcp.WriteBytes(c3, hello.data, hello.len)
+    check("tls relayed", tcp.Read(c3, 100).Len() > 0)
+    tcp.Close(c3)
+    tun.FreePacket(hello)
+    check("tls sni sniffed", seen("sni.example.test:443"))
+
+    t0 := sync.NowMs()
+    bc := tcp.DialTimeout("10.99.0.8", 9000, 3000)
+    rb := mem.AllocateZeroed(65536 as u64) as u8*
+    mut total := 0 as i64
+    mut bad := 0
+    until true:
+        k := tcp.ReadBytes(bc, rb as void*, 65536)
+        if k <= 0:
+            break
+        end
+        repeat k in i:
+            if rb[i] != (((total + (i as i64)) % (65536 as i64)) % (251 as i64)) as u8:
+                bad++
+            end
+        end
+        total += k as i64
+    end
+    tcp.Close(bc)
+    println "bulk ms", sync.NowMs() - t0
+    check("20 MiB bulk transfer intact", total == (20971520 as i64) and bad == 0)
+
+    q := tun.BuildDnsQuery(777, "www.example.test", 1)
+    u := udp.Open()
+    _s := udp.SendBytes(u, "10.99.0.53", 53, q.data, q.len)
+    buf := mem.AllocateZeroed(512 as u64) as u8*
+    mut host := ""
+    mut port := 0
+    n := udp.ReceiveBytes(u, buf as void*, 512, host, port)
+    check("dns answered from the queried address", n > 20 and host == "10.99.0.53" and port == 53)
+    check("dns answer forwarded", n > 20 and (buf[0] as int) * 256 + (buf[1] as int) == 777 and buf[n - 4] == (10 as u8) and buf[n - 1] == (5 as u8))
+    udp.Close(u)
+    tun.FreePacket(q)
+
+    bd := tun.NewBypassDialer()
+    out := bd.Dial(tunnel.NewAddr("1.1.1.1", 80))
+    if out.Ok():
+        _w5 := out.Write("HEAD / HTTP/1.1\r\nHost: one.one.one.one\r\nConnection: close\r\n\r\n")
+        out.SetDeadline(5000)
+        check("bypass dialer leaves through the physical link", out.Read(8) == "HTTP/1.1")
+        out.Close()
+    else:
+        println "skip bypass dialer: no internet in this container"
+    end
+
+    st := tun.SessionStats(s)
+    check("stats counted", st.packets_in > (0 as i64) and st.connections >= (4 as i64) and st.sniffed >= (2 as i64) and st.dns_queries == (1 as i64))
+
+    tun.Stop(s)
+    after := shell.Exec("ip route")
+    check("routes restored", after.out == before.out)
+    links := shell.Exec("ip link")
+    check("device removed", not links.out.Includes("salamtun"))
+    r6b := shell.Exec("ip -6 route show type unreachable")
+    check("ipv6 routes restored", not r6b.out.Includes("::/1"))
+    check("not running", not tun.Running())
+    if failures > 0:
+        println failures, "checks failed"
+        ret 1
+    end
+    println "all checks passed"
+    ret 0
+end

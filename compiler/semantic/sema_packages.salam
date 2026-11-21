@@ -238,9 +238,36 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     pkv.pkgname = str.Len(prog_name) > 0 ? prog_name : "main"
     pkv.decl = prog
     sym_put(s, pk, pkv)
+    check_package_name_clash(s, a, path, pkv.pkgname, imp)
     s.pkg_cache_paths.Push(path)
     s.pkg_cache_syms.Push(pk)
     ret pk
+end
+
+func check_package_name_clash(s &: Sema, a &: at.Ast, path: str, name: str, imp: int):
+    if str.Equals(name, "main") or str.Equals(path, s.pkg_prelude_path):
+        ret
+    end
+    npath := pth.PathNormalize(path)
+    repeat s.pkg_cache_paths.Len() in i:
+        other := s.pkg_cache_paths.Get(i)
+        if str.Equals(other, s.pkg_prelude_path) or str.Equals(pth.PathNormalize(other), npath):
+            continue
+        end
+        if str.Equals(sym_at(s, s.pkg_cache_syms.Get(i)).pkgname, name):
+            msg := co.Format3(
+                i18.Tr("package name '%s' is claimed by two different files ('%s' and '%s'); rename one of them"), co.ArgStr(name), co.ArgStr(other), co.ArgStr(path)
+            )
+            if str.Contains(other, "@v") and str.Contains(path, "@v"):
+                serr_help(
+                    s, 8, span_of(a, imp), msg, str.Trim(i18.Tr("  two major versions of one package are in this build; to be used beside the older one, the newer major needs its own entry file and package name (for example greet2.salam with 'package greet2')"))
+                )
+            else:
+                serr(s, 8, span_of(a, imp), msg)
+            end
+            ret
+        end
+    end
 end
 
 func report_package_import(s &: Sema, sp: co.SrcSpan, spec: str, path: str, code: int):

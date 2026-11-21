@@ -227,6 +227,21 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         data := new_tmp(v)
         emit(v, data + " = extractvalue { ptr, i64 } " + sv.ref + ", 0")
         idxv := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+        if v.safe:
+            slen := new_tmp(v)
+            emit(v, slen + " = extractvalue { ptr, i64 } " + sv.ref + ", 1")
+            sinL := new_lbl(v, "bc_in")
+            soobL := new_lbl(v, "bc_oob")
+            sck := new_tmp(v)
+            emit(v, sck + " = icmp ult i64 " + idxv + ", " + slen)
+            emit_term(v, "br i1 " + sck + ", label %" + sinL + ", label %" + soobL)
+            emit_label(v, soobL)
+            need(v, LV_H_OUTBUF)
+            emit(v, "call void @salam_out_flush()")
+            emit(v, new_tmp(v) + " = call i64 @salam_idx(i64 " + idxv + ", i64 " + slen + ")")
+            emit_term(v, "unreachable")
+            emit_label(v, sinL)
+        end
         r := new_tmp(v)
         emit(
             v, r + " = getelementptr inbounds " + ty_of(v, s, a, ets) + ", ptr " + data + ", i64 " + idxv
@@ -398,6 +413,24 @@ func lv_array_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(nn.list.Len() > 0 ? cur : "zeroinitializer", ats)
 end
 
+func lv_slice_check(v &: Lv, lo: str, hi: str, blen: str):
+    c1 := new_tmp(v)
+    c2 := new_tmp(v)
+    ok := new_tmp(v)
+    emit(v, c1 + " = icmp ule i64 " + lo + ", " + hi)
+    emit(v, c2 + " = icmp ule i64 " + hi + ", " + blen)
+    emit(v, ok + " = and i1 " + c1 + ", " + c2)
+    inL := new_lbl(v, "sl_in")
+    oobL := new_lbl(v, "sl_oob")
+    emit_term(v, "br i1 " + ok + ", label %" + inL + ", label %" + oobL)
+    emit_label(v, oobL)
+    need(v, LV_H_OUTBUF)
+    emit(v, "call void @salam_out_flush()")
+    emit(v, new_tmp(v) + " = call i64 @salam_slice_oob(i64 " + lo + ", i64 " + hi + ", i64 " + blen + ")")
+    emit_term(v, "unreachable")
+    emit_label(v, inL)
+end
+
 func lv_slice_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     sts := nn.type_str
@@ -429,6 +462,9 @@ func lv_slice_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     end
 
     hi := nn.c != 0 ? conv(v, s, a, lv_expr(v, s, a, nn.c), "i64") : blen
+    if v.safe:
+        lv_slice_check(v, lo, hi, blen)
+    end
     len2 := new_tmp(v)
     emit(v, len2 + " = sub i64 " + hi + ", " + lo)
 

@@ -17,7 +17,7 @@ on:
         default: ''
 env:
   # Release-gate test suites; set to "false" to ship a release while failing tests are fixed.
-  RELEASE_TESTS: 'false'
+  RELEASE_TESTS: 'true'
   CCACHE_COMPRESS: '1'
   CCACHE_COMPRESSLEVEL: '9'
 
@@ -2225,6 +2225,58 @@ jobs:
           name: salam-linux-aarch64
           path: salam
 
+  native-gate:
+    name: Native backend gate passed for this commit
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      startsWith(github.event.head_commit.message, 'release:')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for the native backend gate run on this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          deadline=$(($(date +%s) + 345 * 60))
+          while :; do
+            run=$(gh run list -R "$REPO" --workflow native-backend-gate.yml --commit "$SHA" --event push \
+              --limit 1 --json databaseId,status,conclusion \
+              --jq '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"' || true)
+            if [ -n "$run" ]; then
+              read -r id state result <<< "$run"
+              if [ "$state" = completed ]; then
+                if [ "$result" = success ]; then
+                  linux=$(gh run view "$id" -R "$REPO" --json jobs \
+                    --jq '[.jobs[] | select(.name == "linux")] | .[0].conclusion // ""')
+                  if [ "$linux" = success ]; then
+                    echo "native backend gate run $id passed"
+                    exit 0
+                  fi
+                  echo "::error::native backend gate run $id succeeded but its linux job ended with '${linux:-not run}', so the gate did not test this commit: https://github.com/$REPO/actions/runs/$id"
+                  exit 1
+                fi
+                echo "::error::native backend gate run $id ended with '$result': https://github.com/$REPO/actions/runs/$id"
+                echo "A release is immutable once published, so it is stopped here. Fix the gate and push a new release commit."
+                exit 1
+              fi
+              echo "native backend gate run $id is $state"
+            else
+              echo "native backend gate run for $SHA has not started yet"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::timed out waiting for the native backend gate on $SHA"
+              exit 1
+            fi
+            sleep 60
+          done
+
   create-release:
     if: |
       !cancelled() && !failure() &&
@@ -2246,6 +2298,7 @@ jobs:
         build-linux-armhf,
         build-linux-aarch64,
         build-linux-musl,
+        native-gate,
       ]
     permissions:
       contents: write

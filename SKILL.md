@@ -477,6 +477,12 @@ the target of `each` (E065 otherwise); read single bytes with `s[i]`.
 | `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                       |
 | `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                             |
 
+An escape the table does not list is the compile error E260 (`"\d"` is not
+`"d"`: write `"\\d"` or a backtick string, which is what `regex` patterns
+want). `\x` takes exactly two hex digits, `\u` four and `\U` eight; a
+surrogate (`\uD800`) or a value above `\U0010FFFF` is E260 too, and so is a
+`\u` escape above 7F in a one-byte `'c'` literal (write `u"\u0645"`).
+
 **Prefer backtick strings for any text containing literal `"`**: JSON blobs,
 `regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:
 

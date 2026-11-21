@@ -747,6 +747,59 @@ asset_url() {
     printf '%s/download/v%s/salam-%s-%s.zip' "$RELEASES_URL" "$1" "$1" "$2"
 }
 
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v sha256 >/dev/null 2>&1; then
+        sha256 -q "$1"
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+
+verify_archive() {
+    if [ -n "${SALAM_SKIP_CHECKSUM:-}" ]; then
+        warn "SALAM_SKIP_CHECKSUM is set; the archive was not verified"
+        return 0
+    fi
+
+    _want=$(fetch_to_stdout "$URL.sha256" 2>/dev/null | awk 'NF {print $1; exit}' || true)
+
+    case "$_want" in
+    *[!0-9a-fA-F]* | "")
+        warn "no checksum is published for $ASSET; the archive was not verified"
+        return 0
+        ;;
+    esac
+
+    if [ "${#_want}" != 64 ]; then
+        warn "the published checksum for $ASSET is malformed; the archive was not verified"
+        return 0
+    fi
+
+    if ! _got=$(sha256_of "$ARCHIVE") || [ -z "$_got" ]; then
+        warn "no sha256 tool found (sha256sum, shasum, openssl); the archive was not verified"
+        return 0
+    fi
+
+    _want=$(printf '%s' "$_want" | tr 'A-F' 'a-f')
+    _got=$(printf '%s' "$_got" | tr 'A-F' 'a-f')
+
+    if [ "$_want" != "$_got" ]; then
+        die "the checksum of $ASSET does not match the published one" \
+            "expected $_want" \
+            "got      $_got" \
+            "the download is corrupt or was replaced on the way; nothing was installed" \
+            "try again, or download it by hand from $RELEASES_URL"
+    fi
+
+    info "sha256 verified: $_got"
+}
+
 printf '\n' >&2
 printf '  %sSalam Programming Language installer%s\n' "$C_GOOD" "$C_OFF" >&2
 printf '  https://github.com/%s\n' "$REPO" >&2
@@ -1284,6 +1337,8 @@ if [ "$MAGIC" != "PK" ]; then
         "something between here and GitHub replaced it - usually a proxy or a captive portal" \
         "download it by hand from $RELEASES_URL"
 fi
+
+verify_archive
 
 step "Extracting $ASSET"
 

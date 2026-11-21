@@ -26,7 +26,8 @@ check() {
 mkdir -p "$T/site" "$T/secret"
 cat >"$T/site/app.salam" <<'SAL'
 page:
-    box: content = "hello" end
+    title = "Dev"
+    content = "hello"
 end
 SAL
 echo "outside" >"$T/secret/key.txt"
@@ -34,16 +35,17 @@ echo "asset" >"$T/site/logo.txt"
 ln -s "$T/secret/key.txt" "$T/site/leak.txt"
 echo "stale" >"$T/site/index.html"
 
-"$SALAM" serve "$T/site" --port="$PORT" --spa=x.html >"$T/spa.log" 2>&1
+"$SALAM" serve "$T/site/app.salam" --port="$PORT" --spa=x.html >"$T/spa.log" 2>&1
 check "spa rejected" "$?" "2"
 
 mkdir "$T/dirmain"
 mkdir "$T/dirmain/main.salam"
 "$SALAM" serve "$T/dirmain" --port="$PORT" >"$T/dm.log" 2>&1 &
 DM=$!
-sleep 1
-kill "$DM" 2>/dev/null
+sleep 2
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" 2>/dev/null)
+kill "$DM" 2>/dev/null
+wait "$DM" 2>/dev/null
 check "dir named main.salam is static" "$code" "200"
 
 "$SALAM" serve "$T/site/app.salam" --port="$PORT" >"$T/serve.log" 2>&1 &

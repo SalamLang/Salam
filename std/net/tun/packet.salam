@@ -1,0 +1,441 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import mem
+import str
+import net.tunnel
+
+@en "proto_icmp"
+@fa "پروتکل آی سی ام پی"
+pub const proto_icmp := 1
+@en "proto_tcp"
+@fa "پروتکل تی سی پی"
+pub const proto_tcp := 6
+@en "proto_udp"
+@fa "پروتکل یو دی پی"
+pub const proto_udp := 17
+@en "proto_icmp6"
+@fa "پروتکل آی سی ام پی شش"
+pub const proto_icmp6 := 58
+
+@en "tcp_fin"
+@fa "پرچم پایان‌دادن"
+pub const tcp_fin := 1
+@en "tcp_syn"
+@fa "پرچم همگام‌سازی"
+pub const tcp_syn := 2
+@en "tcp_rst"
+@fa "پرچم بازنشانی"
+pub const tcp_rst := 4
+@en "tcp_psh"
+@fa "پرچم فشار"
+pub const tcp_psh := 8
+@en "tcp_ack"
+@fa "پرچم تایید"
+pub const tcp_ack := 16
+
+@en "PacketInfo"
+@fa "مشخصات‌بسته"
+pub struct PacketInfo:
+    @en "valid"
+    @fa "معتبر"
+    pub valid: bool = false
+    @en "version"
+    @fa "نسخه"
+    pub version: int = 0
+    @en "proto"
+    @fa "پروتکل"
+    pub proto: int = 0
+    @en "src"
+    @fa "مبدا"
+    pub src: str = ""
+    @en "dst"
+    @fa "مقصد"
+    pub dst: str = ""
+    @en "sport"
+    @fa "درگاه مبدا"
+    pub sport: int = 0
+    @en "dport"
+    @fa "درگاه مقصد"
+    pub dport: int = 0
+    @en "flags"
+    @fa "پرچم‌ها"
+    pub flags: int = 0
+    @en "header_len"
+    @fa "طول سرآیند"
+    pub header_len: int = 0
+    @en "payload_offset"
+    @fa "آغاز داده"
+    pub payload_offset: int = 0
+    @en "payload_len"
+    @fa "طول داده"
+    pub payload_len: int = 0
+    @en "total"
+    @fa "طول‌کل"
+    pub total: int = 0
+    @en "fragment"
+    @fa "تکه"
+    pub fragment: bool = false
+end
+
+@en "Packet"
+@fa "بسته‌خام"
+pub struct Packet:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+end
+
+func _b(p: u8*, i: int): int:
+    ret p[i] as int
+end
+
+func _u16(p: u8*, i: int): int:
+    ret (p[i] as int) * 256 + (p[i + 1] as int)
+end
+
+func _put16(p: u8*, i: int, v: int):
+    p[i] = ((v >> 8) & 255) as u8
+    p[i + 1] = (v & 255) as u8
+end
+
+func _u32(p: u8*, i: int): i64:
+    ret ((_u16(p, i) as i64) << 16) | (_u16(p, i + 2) as i64)
+end
+
+func _put32(p: u8*, i: int, v: i64):
+    _put16(p, i, ((v >> 16) & 65535) as int)
+    _put16(p, i + 2, (v & 65535) as int)
+end
+
+func _ip4(s: str): i64:
+    b := tunnel.ParseIPv4(s)
+    defer b.Free()
+    if b.Len() != 4:
+        ret 0 - 1
+    end
+    ret ((b[0] as i64) << 24) | ((b[1] as i64) << 16) | ((b[2] as i64) << 8) | (b[3] as i64)
+end
+
+func _ip4s(v: i64): str:
+    mut sb := str.NewBuilder()
+    repeat 4 in k:
+        if k > 0:
+            str.BufAppend(sb, ".")
+        end
+        part := str.FromInt((v >> ((3 - k) * 8)) & 255)
+        str.BufAppend(sb, part)
+        mem.Free(part as void*)
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _ip6s(p: u8*, off: int): str:
+    mut v := Vector {} as Vector<int>
+    defer v.Free()
+    repeat 16 in i:
+        v.Push(p[off + i] as int)
+    end
+    ret tunnel.FormatIP(v)
+end
+
+func _fold(sum: i64): int:
+    mut s := sum
+    until s > (65535 as i64):
+        s = (s & 65535) + (s >> 16)
+    end
+    ret s as int
+end
+
+func _sum(p: u8*, off: int, n: int): i64:
+    mut s := 0 as i64
+    mut i := 0
+    until i + 1 < n:
+        s += _u16(p, off + i) as i64
+        i += 2
+    end
+    if i < n:
+        s += ((p[off + i] as int) * 256) as i64
+    end
+    ret s
+end
+
+func _pseudo4(p: u8*, ihl: int, proto: int, len: int): i64:
+    ret _sum(p, 12, 8) + (proto as i64) + (len as i64) + _sum(p, ihl, len)
+end
+
+func _l4_sum_off(proto: int): int:
+    if proto == proto_tcp:
+        ret 16
+    end
+    if proto == proto_udp:
+        ret 6
+    end
+    ret 0 - 1
+end
+
+func _build4(src: str, dst: str, proto: int, l4_len: int): Packet:
+    s := _ip4(src)
+    d := _ip4(dst)
+    if s < 0 or d < 0:
+        ret Packet {}
+    end
+    total := 20 + l4_len
+    p := mem.AllocateZeroed(total as u64) as u8*
+    p[0] = 69 as u8
+    _put16(p, 2, total)
+    _put16(p, 6, 16384)
+    p[8] = 64 as u8
+    p[9] = proto as u8
+    _put32(p, 12, s)
+    _put32(p, 16, d)
+    ret Packet { data = p as void*, len = total }
+end
+
+func _tcp_rst6(ptr: void*, n: int): Packet:
+    p := ptr as u8*
+    if n < 60 or _b(p, 6) != proto_tcp:
+        ret Packet {}
+    end
+    flags := _b(p, 53)
+    if (flags & tcp_syn) == 0 or (flags & tcp_ack) != 0:
+        ret Packet {}
+    end
+    o := mem.AllocateZeroed(60 as u64) as u8*
+    o[0] = 96 as u8
+    _put16(o, 4, 20)
+    o[6] = proto_tcp as u8
+    o[7] = 64 as u8
+    repeat 16 in i:
+        o[8 + i] = p[24 + i]
+        o[24 + i] = p[8 + i]
+    end
+    _put16(o, 40, _u16(p, 42))
+    _put16(o, 42, _u16(p, 40))
+    _put32(o, 48, (_u32(p, 44) + 1) & (4294967295 as i64))
+    o[52] = 80 as u8
+    o[53] = (tcp_rst | tcp_ack) as u8
+    s := _sum(o, 8, 32) + (proto_tcp as i64) + (20 as i64) + _sum(o, 40, 20)
+    _put16(o, 56, 65535 - _fold(s))
+    ret Packet { data = o as void*, len = 60 }
+end
+
+@en "Checksum"
+@fa "جمع آزما"
+pub func Checksum(p: void*, n: int): int:
+    ret 65535 - _fold(_sum(p as u8*, 0, n))
+end
+
+@en "ChecksumAdjust"
+@fa "به‌روزرسانی جمع آزما"
+pub func ChecksumAdjust(sum: int, old_word: int, new_word: int): int:
+    x := ((65535 - sum) as i64) + ((65535 - old_word) as i64) + (new_word as i64)
+    ret 65535 - _fold(x)
+end
+
+@en "FinishChecksums"
+@fa "تکمیل جمع آزماها"
+pub func FinishChecksums(ptr: void*, n: int):
+    p := ptr as u8*
+    if n < 20 or (_b(p, 0) >> 4) != 4:
+        ret
+    end
+    ihl := (_b(p, 0) & 15) * 4
+    total := _u16(p, 2)
+    if ihl < 20 or total > n or total < ihl:
+        ret
+    end
+    _put16(p, 10, 0)
+    _put16(p, 10, 65535 - _fold(_sum(p, 0, ihl)))
+    proto := _b(p, 9)
+    at := _l4_sum_off(proto)
+    if at < 0 or total - ihl < at + 2:
+        ret
+    end
+    _put16(p, ihl + at, 0)
+    mut c := 65535 - _fold(_pseudo4(p, ihl, proto, total - ihl))
+    if c == 0 and proto == proto_udp:
+        c = 65535
+    end
+    _put16(p, ihl + at, c)
+end
+
+@en "ChecksumsOk"
+@fa "درستی جمع آزماها"
+pub func ChecksumsOk(ptr: void*, n: int): bool:
+    p := ptr as u8*
+    if n < 20 or (_b(p, 0) >> 4) != 4:
+        ret false
+    end
+    ihl := (_b(p, 0) & 15) * 4
+    total := _u16(p, 2)
+    if ihl < 20 or total > n or total < ihl:
+        ret false
+    end
+    if _fold(_sum(p, 0, ihl)) != 65535:
+        ret false
+    end
+    proto := _b(p, 9)
+    at := _l4_sum_off(proto)
+    if at < 0:
+        ret true
+    end
+    if total - ihl < at + 2:
+        ret false
+    end
+    if proto == proto_udp and _u16(p, ihl + at) == 0:
+        ret true
+    end
+    ret _fold(_pseudo4(p, ihl, proto, total - ihl)) == 65535
+end
+
+@en "Parse"
+@fa "تجزیه‌بسته"
+pub func Parse(ptr: void*, n: int): PacketInfo:
+    p := ptr as u8*
+    mut info := PacketInfo {}
+    if n < 1:
+        ret info
+    end
+    ver := _b(p, 0) >> 4
+    info.version = ver
+    if ver == 6:
+        if n < 40:
+            ret info
+        end
+        plen := _u16(p, 4)
+        if 40 + plen > n:
+            ret info
+        end
+        info.proto = _b(p, 6)
+        info.src = _ip6s(p, 8)
+        info.dst = _ip6s(p, 24)
+        info.header_len = 40
+        info.total = 40 + plen
+        info.payload_offset = 40
+        info.payload_len = plen
+        if (info.proto == proto_tcp and plen >= 20) or (info.proto == proto_udp and plen >= 8):
+            info.sport = _u16(p, 40)
+            info.dport = _u16(p, 42)
+            if info.proto == proto_tcp:
+                info.flags = _b(p, 53) & 63
+                doff := (_b(p, 52) >> 4) * 4
+                info.payload_offset = 40 + doff
+                info.payload_len = plen - doff
+            else:
+                info.payload_offset = 48
+                info.payload_len = plen - 8
+            end
+        end
+        info.valid = true
+        ret info
+    end
+    if ver != 4 or n < 20:
+        ret info
+    end
+    ihl := (_b(p, 0) & 15) * 4
+    total := _u16(p, 2)
+    if ihl < 20 or total < ihl or total > n:
+        ret info
+    end
+    frag := _u16(p, 6)
+    info.fragment = (frag & 8191) != 0 or (frag & 8192) != 0
+    info.proto = _b(p, 9)
+    info.src = _ip4s(_u32(p, 12))
+    info.dst = _ip4s(_u32(p, 16))
+    info.header_len = ihl
+    info.total = total
+    info.payload_offset = ihl
+    info.payload_len = total - ihl
+    if info.proto == proto_tcp:
+        if total - ihl < 20:
+            ret info
+        end
+        doff := (_b(p, ihl + 12) >> 4) * 4
+        if doff < 20 or doff > total - ihl:
+            ret info
+        end
+        info.sport = _u16(p, ihl)
+        info.dport = _u16(p, ihl + 2)
+        info.flags = _b(p, ihl + 13) & 63
+        info.payload_offset = ihl + doff
+        info.payload_len = total - ihl - doff
+    else info.proto == proto_udp:
+        if total - ihl < 8:
+            ret info
+        end
+        info.sport = _u16(p, ihl)
+        info.dport = _u16(p, ihl + 2)
+        info.payload_offset = ihl + 8
+        info.payload_len = total - ihl - 8
+    end
+    info.valid = true
+    ret info
+end
+
+@en "FreePacket"
+@fa "آزادسازی‌بسته"
+pub func FreePacket(pk: Packet):
+    if pk.data != null:
+        mem.Free(pk.data)
+    end
+end
+
+@en "BuildTcp4"
+@fa "ساخت بسته‌ی تی سی پی"
+pub func BuildTcp4(src: str, sport: int, dst: str, dport: int, seq: i64, ack: i64, flags: int, data: void*, n: int): Packet:
+    pk := _build4(src, dst, proto_tcp, 20 + n)
+    if pk.data == null:
+        ret pk
+    end
+    p := pk.data as u8*
+    _put16(p, 20, sport)
+    _put16(p, 22, dport)
+    _put32(p, 24, seq)
+    _put32(p, 28, ack)
+    p[32] = 80 as u8
+    p[33] = (flags & 63) as u8
+    _put16(p, 34, 65535)
+    q := data as u8*
+    repeat n in i:
+        p[40 + i] = q[i]
+    end
+    FinishChecksums(pk.data, pk.len)
+    ret pk
+end
+
+@en "BuildUdp4"
+@fa "ساخت بسته‌ی یو دی پی"
+pub func BuildUdp4(src: str, sport: int, dst: str, dport: int, data: void*, n: int): Packet:
+    pk := _build4(src, dst, proto_udp, 8 + n)
+    if pk.data == null:
+        ret pk
+    end
+    p := pk.data as u8*
+    _put16(p, 20, sport)
+    _put16(p, 22, dport)
+    _put16(p, 24, 8 + n)
+    q := data as u8*
+    repeat n in i:
+        p[28 + i] = q[i]
+    end
+    FinishChecksums(pk.data, pk.len)
+    ret pk
+end

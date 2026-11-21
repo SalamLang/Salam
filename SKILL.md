@@ -437,12 +437,16 @@ x, y = y, x                   // assign several targets at once (swap)
 **Primitives:** `i8 i16 i32 i64 i128`, `u8 u16 u32 u64 u128`, `usize size`,
 `f32 f64`, `bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
 `float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**Float to integer:** `x as T` for any integer `T` truncates toward zero and
+saturates: a value above or below the range of `T` gives its max or min, and
+NaN gives 0 (`1e20 as i32` is 2147483647, `-1.5 as u8` is 0), the same on every
+backend and in constant expressions.
 **128-bit integers:** `i128` and `u128` work on every backend and target, with
 the same operators as the other widths: `hi := ((a as u128) * (b as u128)) >> 64`
 compiles to one `mul` on 64-bit targets. A literal above `u64` takes the
 smallest of `i128`, `u128` that holds it; `x := 1 as u128 << 100`, `0xFF_FF as
 u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
-Shift counts mask to 0-127. A float cast saturates and NaN gives 0. They cannot
+Shift counts mask to 0-127. A float cast saturates like the other widths. They cannot
 index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
 refuses them, and an `extern` function can use them only on 64-bit targets
 (E160). On `salam js` they are exact BigInts, but a value that passes through
@@ -1139,7 +1143,7 @@ not the libraries.
 - A `str` ends at its first zero byte. Binary data (images, archives, keys,
   packets) passed through any `str` function or field is silently cut there:
   use the `*Bytes`/`Raw`/`ByteBuf`/pointer-and-length forms the package
-  offers (`archive.ReadBinaryFile`, `crypto.Sha256Bytes`, `tcp.ReadBytes`,
+  offers (`fs.ReadAllBytes`, `crypto.Sha256Bytes`, `tcp.ReadBytes`,
   `aws.S3GetBytes`, `Message.data`).
 - Almost nothing panics. Failure is an empty string, `0`, `-1`, `false`, an
   empty vector, a `0x0` matrix or an `err &:` out-parameter, so check the
@@ -1377,10 +1381,11 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
   `IsLinux IsWindows IsMac IsWasm OS Arch IsX64 IsArm64`, **`os.error`**
   `Last LastCode LastMessage HasError Clear` (the last file/process error).
-- **`fs`** (one `import fs` is enough for files): `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime AccessedTime CreatedTime Chmod Permissions Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha1Hex Sha256Hex Sha512Hex` (`CreatedTime` is 0 on most Linux file systems). `import fs.file` still works but is deprecated: it forwards every function to `fs`. **Not binary-safe**: every
-  read, write and digest goes through `str` and stops at the first NUL
-  (`ReadBytes` too); use `archive.ReadBinaryFile`/`WriteBinaryFile` and
-  `crypto.Sha256Bytes`. `Exists` is true for directories too; `AtomicWrite`
+- **`fs`** (one `import fs` is enough for files): `Open Close ReadText ReadAll ReadBytes ReadAllBytes ReadLines WriteText WriteBytes WriteAllBytes Append AtomicWrite Size ModTime AccessedTime CreatedTime Chmod Permissions Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha1Hex Sha256Hex Sha512Hex` (`CreatedTime` is 0 on most Linux file systems). `import fs.file` still works but is deprecated: it forwards every function to `fs`. **Binary data**: the `str` reads and writes
+  (`ReadText ReadAll ReadBytes WriteText WriteBytes Append`) stop at the
+  first NUL; use `ReadAllBytes(path): Vector<u8>` (free it; empty when
+  missing) and `WriteAllBytes(path, v)`. The `*Hex` digests hash the real
+  bytes and return `""` for an unreadable file. `Exists` is true for directories too; `AtomicWrite`
   resets permissions to the default.
 - **`fs.dir`**: `Mkdir MkdirAll Remove RemoveAll List ListDirs ListFiles Walk Copy Move Exists IsDir Size`. `Exists` is true only for a directory;
   `Copy`/`Move` merge into an existing target; `RemoveAll Walk Size Copy`

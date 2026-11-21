@@ -1,0 +1,75 @@
+import mem
+import net.tun
+
+func hex4(v: int): str:
+    digits := "0123456789abcdef"
+    mut out := ""
+    repeat 4 in i:
+        d := (v >> ((3 - i) * 4)) & 15
+        out += digits.Substr(d, 1)
+    end
+    ret out
+end
+
+func main():
+    hdr := mem.AllocateZeroed(20 as u64) as u8*
+    bytes := [69, 0, 0, 115, 0, 0, 64, 0, 64, 17, 0, 0, 192, 168, 0, 1, 192, 168, 0, 199]
+    repeat 20 in i:
+        hdr[i] = bytes[i] as u8
+    end
+    sum := tun.Checksum(hdr as void*, 20)
+    println "ipv4 header checksum", hex4(sum)
+    hdr[10] = ((sum >> 8) & 255) as u8
+    hdr[11] = (sum & 255) as u8
+    println "verifies", tun.Checksum(hdr as void*, 20) == 0
+    mem.Free(hdr as void*)
+
+    println "adjust", hex4(tun.ChecksumAdjust(0xdd2f, 0x5555, 0x3285))
+
+    payload := "hello"
+    pk := tun.BuildTcp4("172.19.0.1", 40000, "93.184.216.34", 443, 1000 as i64, 0 as i64, tun.tcp_syn, payload as void*, 5)
+    println "tcp packet", pk.len, tun.ChecksumsOk(pk.data, pk.len)
+    info := tun.Parse(pk.data, pk.len)
+    println "parsed", info.valid, info.version, info.proto, info.src, info.sport, info.dst, info.dport, info.flags, info.payload_len
+
+    nat := tun.NewNat("172.19.0.1", "172.19.0.2", 7000, 0)
+    act := nat.Rewrite(pk.data, pk.len, 1000 as i64)
+    out := tun.Parse(pk.data, pk.len)
+    println "forward", act == tun.action_reply, out.src, out.sport, out.dst, out.dport, tun.ChecksumsOk(pk.data, pk.len)
+    entry := nat.Lookup(out.sport)
+    println "lookup", entry.ok, entry.src, entry.sport, entry.dst, entry.dport
+    again := tun.BuildTcp4("172.19.0.1", 40000, "93.184.216.34", 443, 1001 as i64, 0 as i64, tun.tcp_ack, payload as void*, 5)
+    _a := nat.Rewrite(again.data, again.len, 1001 as i64)
+    same := tun.Parse(again.data, again.len)
+    println "same port", same.sport == out.sport, nat.Active()
+
+    reply := tun.BuildTcp4("172.19.0.1", 7000, "172.19.0.2", out.sport, 5000 as i64, 1001 as i64, tun.tcp_syn | tun.tcp_ack, null, 0)
+    back := nat.Rewrite(reply.data, reply.len, 1002 as i64)
+    rb := tun.Parse(reply.data, reply.len)
+    println "reply", back == tun.action_reply, rb.src, rb.sport, rb.dst, rb.dport, rb.flags, tun.ChecksumsOk(reply.data, reply.len)
+
+    stray := tun.BuildTcp4("172.19.0.1", 7000, "172.19.0.2", 12345, 1 as i64, 1 as i64, tun.tcp_ack, null, 0)
+    println "unknown reply dropped", nat.Rewrite(stray.data, stray.len, 1003 as i64) == tun.action_drop
+
+    dns := tun.BuildUdp4("172.19.0.1", 5353, "172.19.0.2", 53, payload as void*, 5)
+    println "dns", nat.Rewrite(dns.data, dns.len, 1004 as i64) == tun.action_dns, tun.ChecksumsOk(dns.data, dns.len)
+    other := tun.BuildUdp4("172.19.0.1", 5353, "8.8.8.8", 443, payload as void*, 5)
+    println "other udp dropped", nat.Rewrite(other.data, other.len, 1005 as i64) == tun.action_drop
+    loop := tun.BuildTcp4("172.19.0.1", 40001, "127.0.0.1", 80, 1 as i64, 0 as i64, tun.tcp_syn, null, 0)
+    println "loopback dropped", nat.Rewrite(loop.data, loop.len, 1006 as i64) == tun.action_drop
+
+    rst := tun.BuildTcp4("172.19.0.1", 40000, "93.184.216.34", 443, 1002 as i64, 0 as i64, tun.tcp_rst, null, 0)
+    _r := nat.Rewrite(rst.data, rst.len, 2000 as i64)
+    println "swept early", nat.Sweep(5000 as i64)
+    println "swept closed", nat.Sweep(20000 as i64), nat.Active()
+
+    tun.FreePacket(pk)
+    tun.FreePacket(again)
+    tun.FreePacket(reply)
+    tun.FreePacket(stray)
+    tun.FreePacket(dns)
+    tun.FreePacket(other)
+    tun.FreePacket(loop)
+    tun.FreePacket(rst)
+    tun.FreeNat(nat)
+end

@@ -619,7 +619,7 @@ func _parse_http(ctx: i64, req: str, req_len: int):
     mut pos := first_crlf + 2
     mut body_start := 0 - 1
     mut cl_seen := false
-    mut cl_first := 0
+    mut cl_first := 0 as i64
     until pos < n:
         if pos + 1 < n and _scan_crlf(req, pos, pos + 2) == pos:
             body_start = pos + 2
@@ -824,38 +824,35 @@ func _str_of(ptr: void *, n: int): str:
     ret r as str
 end
 
-func _bad_cl_value(head: str, colon: int, line_end: int, seen &: bool, first &: int): bool:
+func _cl_number(t: str): i64:
+    n := t.Len()
+    if n == 0 or n > 15: ret 0 - 1 as i64 end
+    tp := t as u8 *
+    mut v := 0 as i64
+    mut k := 0
+    until k < n:
+        c := tp[k] as int
+        if c < 48 or c > 57: ret 0 - 1 as i64 end
+        v = v * 10 + ((c - 48) as i64)
+        k++
+    end
+    ret v
+end
+
+func _bad_cl_value(head: str, colon: int, line_end: int, seen &: bool, first &: i64): bool:
     raw := head.Substr(colon + 1, line_end - colon - 1)
     t := str.Trim(raw)
     mem.Free(raw as void *)
-    if t.Len() == 0:
-        mem.Free(t as void *)
-        ret true
-    end
-    tp := t as u8 *
-    mut k := 0
-    until k < t.Len():
-        c := tp[k] as int
-        if c < 48 or c > 57:
-            mem.Free(t as void *)
-            ret true
-        end
-        k++
-    end
-    if t.Len() > 15:
-        mem.Free(t as void *)
-        ret true
-    end
-    v := t.ToInt()
+    v := _cl_number(t)
     mem.Free(t as void *)
-    if v < 0: ret true end
+    if v < 0 as i64: ret true end
     if seen and v != first: ret true end
     seen = true
     first = v
     ret false
 end
 
-func _content_length(head: str, head_len: int): int:
+func _content_length(head: str, head_len: int): i64:
     mut pos := 0
     until pos < head_len:
         line_end := _scan_crlf(head, pos, head_len)
@@ -866,18 +863,9 @@ func _content_length(head: str, head_len: int): int:
                 raw := head.Substr(colon + 1, line_end - colon - 1)
                 t := str.Trim(raw)
                 mem.Free(raw as void *)
-                mut valid := t.Len() > 0 and t.Len() <= 15
-                tp := t as u8 *
-                mut k := 0
-                until valid and k < t.Len():
-                    c := tp[k] as int
-                    if c < 48 or c > 57: valid = false end
-                    k++
-                end
-                mut v := 0
-                if valid: v = t.ToInt() end
+                v := _cl_number(t)
                 mem.Free(t as void *)
-                if valid and v > 0: ret v end
+                if v > 0 as i64: ret v end
                 ret 0
             end
         end
@@ -907,6 +895,10 @@ func _bytes_slice(s: str, off: int, n: int): str:
     ret _str_of(((s as void *) as i64 + off) as void *, n)
 end
 
+func _body_too_large(head_len: int, cl: i64): bool:
+    ret cl > (_max_body_bytes as i64) or (head_len as i64) + cl >= (2147483647 as i64)
+end
+
 // Reads one request. Lengths are tracked explicitly (req_len, pending_len)
 // so bodies may carry NUL bytes; header scanning stops before the body.
 func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
@@ -928,7 +920,12 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
             mut need := head_len
             vend := one.Find(" ")
             if vend > 0 and _has_body_at(one, vend):
-                need = head_len + _content_length(one, head_len)
+                cl := _content_length(one, head_len)
+                if _body_too_large(head_len, cl):
+                    oversize = 413
+                    ret ""
+                end
+                need = head_len + (cl as int)
             end
             if need == got:
                 req_len = got
@@ -979,12 +976,13 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
     mut need := head_len
     vend := buf.Find(" ")
     if vend > 0 and _has_body_at(buf, vend):
-        need = head_len + _content_length(buf, head_len)
-        if need - head_len > _max_body_bytes:
+        cl := _content_length(buf, head_len)
+        if _body_too_large(head_len, cl):
             mem.Free(buf as void *)
             oversize = 413
             ret ""
         end
+        need = head_len + (cl as int)
         if blen < need:
             full := mem.Allocate((need + 1) as u64)
             mem.Copy(full, buf as void *, blen as u64)
@@ -1266,6 +1264,17 @@ func _send_static(slot: int, fd: i64, url: str, file: str, shdr: str, keep: bool
     ret _send_file(fd, file, ct, shdr, keep)
 end
 
+func _spa_wanted(method: str, path: str, accept: str): bool:
+    if not str.Equals(method, "GET") and not str.Equals(method, "HEAD"):
+        ret false
+    end
+    if str.Contains(accept, "text/html"):
+        ret true
+    end
+    slash := str.LastIndex(path, "/")
+    ret str.IndexFrom(path, ".", slash + 1) < 0
+end
+
 func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
     if req_len == 0:
         keep = false
@@ -1323,7 +1332,15 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
         end
     end
     if static_handled == false:
-        dispatched := _dispatch(r, ctx)
+        mut dispatched := _dispatch(r, ctx)
+        if dispatched == false and r.has_static and r.spa_index.Len() > 0 and _spa_wanted(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_kv_get(ctx, 0, "Accept")):
+            spa := filepath.Join(r.static_dir, r.spa_index)
+            if os.Exists(spa) and os.IsDir(spa) == false and _send_file(fd, spa, mime.MimeType(spa), shdr, keep) == 1:
+                _ctx_mark_sent(ctx)
+                dispatched = true
+            end
+            mem.Free(spa as void *)
+        end
         if dispatched == false:
             salam_ctx_set_status(ctx, 404)
             salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")

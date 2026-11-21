@@ -1,0 +1,421 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package tray
+
+import thread
+
+if SALAM_OS_WINDOWS:
+    link dynamic "user32"
+    link dynamic "gdi32"
+
+    extern:
+        func GetModuleHandleW(name: void*): void*
+        func RegisterClassExW(cls: void*): u16
+        func CreateWindowExW(
+            ex_style: u32, class_name: void*, window_name: void*, style: u32, x: int, y: int, width: int,
+            height: int, parent: void*, menu: void*, instance: void*, param: void*
+        ): void*
+        func DefWindowProcW(hwnd: void*, msg: u32, wparam: usize, lparam: size): size
+        func GetMessageW(msg: void*, hwnd: void*, filter_min: u32, filter_max: u32): int
+        func TranslateMessage(msg: void*): int
+        func DispatchMessageW(msg: void*): size
+        func PostMessageW(hwnd: void*, msg: u32, wparam: usize, lparam: size): int
+        func SetForegroundWindow(hwnd: void*): int
+        func CreatePopupMenu(): void*
+        func AppendMenuW(menu: void*, flags: u32, id: usize, label: void*): int
+        func TrackPopupMenu(menu: void*, flags: u32, x: int, y: int, reserved: int, hwnd: void*, rect: void*): int
+        func GetCursorPos(point: void*): int
+        func CreateIconIndirect(info: void*): void*
+        func CreateDIBSection(hdc: void*, info: void*, usage: u32, bits: void*, section: void*, offset: u32): void*
+        func CreateBitmap(width: int, height: int, planes: u32, bits: u32, data: void*): void*
+        func DeleteObject(object: void*): int
+        func LoadImageW(instance: void*, name: void*, kind: u32, cx: int, cy: int, flags: u32): void*
+        func LoadIconW(instance: void*, name: void*): void*
+        func MultiByteToWideChar(code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32): i32
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+    end
+    if SALAM_ARCH_X86:
+        extern:
+            func VirtualAlloc(addr: void*, size: void*, kind: u32, protect: u32): void*
+            func VirtualProtect(addr: void*, size: void*, protect: u32, old: void*): int
+        end
+    end
+
+    mut _wt_started := false
+    mut _wt_hwnd := null as void*
+    mut _wt_added := false
+    mut _wt_icon := null as void*
+    mut _wt_own_icon := false
+    mut _wt_taskbar := 0 as u32
+    mut _wt_proc := null as void*
+
+    struct _WtSlot:
+        pub v: void* = null
+    end
+
+    struct _WtClass:
+        pub size: u32 = 0 as u32
+        pub style: u32 = 0 as u32
+        pub proc: void* = null
+        pub class_extra: i32 = 0
+        pub window_extra: i32 = 0
+        pub instance: void* = null
+        pub icon: void* = null
+        pub cursor: void* = null
+        pub background: void* = null
+        pub menu_name: void* = null
+        pub class_name: void* = null
+        pub icon_small: void* = null
+    end
+
+    struct _WtIconInfo:
+        pub icon: i32 = 1
+        pub hot_x: u32 = 0 as u32
+        pub hot_y: u32 = 0 as u32
+        pub mask: void* = null
+        pub color: void* = null
+    end
+
+    export:
+        func salam_tray_w32_proc(hwnd: void*, msg: u32, wparam: usize, lparam: size): size:
+            ret _wt_message(hwnd, msg, wparam, lparam)
+        end
+    end
+
+    if SALAM_ARCH_X86:
+        func _wt_thunk(fn: void*, words: int): void*:
+            page := VirtualAlloc(null, (4096 as i64) as void*, 0x3000 as u32, 4 as u32)
+            if page == null:
+                ret fn
+            end
+            code := page as u8*
+            size_bytes := words * 4
+            mut at := 0
+            repeat words:
+                code[at] = 0xFF as u8
+                code[at + 1] = 0x74 as u8
+                code[at + 2] = 0x24 as u8
+                code[at + 3] = size_bytes as u8
+                at += 4
+            end
+            addr := fn as i64
+            code[at] = 0xB8 as u8
+            repeat 4 in i:
+                code[at + 1 + i] = ((addr >> (i * 8)) & (0xFF as i64)) as u8
+            end
+            code[at + 5] = 0xFF as u8
+            code[at + 6] = 0xD0 as u8
+            code[at + 7] = 0x83 as u8
+            code[at + 8] = 0xC4 as u8
+            code[at + 9] = size_bytes as u8
+            code[at + 10] = 0xC2 as u8
+            code[at + 11] = size_bytes as u8
+            code[at + 12] = 0 as u8
+            old := mem.Allocate(8 as u64)
+            _done := VirtualProtect(page, (4096 as i64) as void*, 0x20 as u32, old)
+            mem.Free(old)
+            ret page
+        end
+    else:
+        func _wt_thunk(fn: void*, _words: int): void*:
+            ret fn
+        end
+    end
+
+    func _wt_wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, -1, null, 0)
+        buf := mem.AllocateZeroed(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, -1, buf, needed + 1)
+        ret buf
+    end
+
+    func _wt_proc_of(library: str, name: str): void*:
+        wide := _wt_wide(library)
+        module := LoadLibraryW(wide)
+        mem.Free(wide)
+        if module == null:
+            ret null
+        end
+        ret GetProcAddress(module, name)
+    end
+
+    func _wt_ptr(): int:
+        ret sizeof(_WtSlot) as int
+    end
+
+    func _wt_icon_at(): i64:
+        ret _wt_ptr() == 8 ? 32 as i64 : 20 as i64
+    end
+
+    func _wt_notify(action: u32, flags: u32): bool:
+        f := _wt_proc_of("shell32.dll", "Shell_NotifyIconW")
+        if f == null:
+            ret false
+        end
+        total := _wt_ptr() == 8 ? 976 : 956
+        data := mem.AllocateZeroed(total as u64)
+        defer mem.Free(data)
+        base := data as i64
+        (data as u32*)[0] = total as u32
+        ((base + (_wt_ptr() as i64)) as _WtSlot*)[0].v = _wt_hwnd
+        id_at := (_wt_ptr() * 2) as i64
+        ((base + id_at) as u32*)[0] = 1 as u32
+        ((base + id_at + 4) as u32*)[0] = flags
+        ((base + id_at + 8) as u32*)[0] = 0x8001 as u32
+        ((base + _wt_icon_at()) as _WtSlot*)[0].v = _wt_icon
+        tip_at := _wt_icon_at() + (_wt_ptr() as i64)
+        _lock()
+        wide := _wt_wide(_tooltip)
+        _unlock()
+        src := wide as u16*
+        dst := (base + tip_at) as u16*
+        mut i := 0
+        until i < 127 and src[i] != (0 as u16):
+            dst[i] = src[i]
+            i++
+        end
+        mem.Free(wide)
+        call := f as extern stdcall func (u32, void*) i32
+        ret call(action, data) != 0
+    end
+
+    func _wt_free_icon():
+        if _wt_icon != null and _wt_own_icon:
+            destroy := _wt_proc_of("user32.dll", "DestroyIcon")
+            if destroy != null:
+                call := destroy as extern stdcall func (void*) i32
+                _d := call(_wt_icon)
+            end
+        end
+        _wt_icon = null
+        _wt_own_icon = false
+    end
+
+    func _wt_icon_from_pixels(): void*:
+        w := _icon.width
+        h := _icon.height
+        header := mem.AllocateZeroed(44 as u64)
+        (header as u32*)[0] = 40 as u32
+        (header as i32*)[1] = w
+        (header as i32*)[2] = 0 - h
+        ((header as i64 + 12) as u16*)[0] = 1 as u16
+        ((header as i64 + 14) as u16*)[0] = 32 as u16
+        bits := mem.AllocateZeroed(8 as u64)
+        color := CreateDIBSection(null, header, 0 as u32, bits, null, 0 as u32)
+        mem.Free(header)
+        if color == null:
+            mem.Free(bits)
+            ret null
+        end
+        dst := (bits as _WtSlot*)[0].v as u8*
+        mem.Free(bits)
+        src := _icon.pixels as u8*
+        repeat w * h in i:
+            k := i * 4
+            dst[k] = src[k + 2]
+            dst[k + 1] = src[k + 1]
+            dst[k + 2] = src[k]
+            dst[k + 3] = src[k + 3]
+        end
+        row := ((w + 15) / 16) * 2
+        zeros := mem.AllocateZeroed((row * h) as u64)
+        mask := CreateBitmap(w, h, 1 as u32, 1 as u32, zeros)
+        mem.Free(zeros)
+        info := mem.AllocateZeroed(sizeof(_WtIconInfo) as u64) as _WtIconInfo*
+        info[0].icon = 1
+        info[0].mask = mask
+        info[0].color = color
+        icon := CreateIconIndirect(info as void*)
+        mem.Free(info as void*)
+        _a := DeleteObject(color)
+        _b := DeleteObject(mask)
+        ret icon
+    end
+
+    func _wt_load_icon():
+        _wt_free_icon()
+        _lock()
+        if _icon.pixels != null:
+            _wt_icon = _wt_icon_from_pixels()
+            _wt_own_icon = _wt_icon != null
+        else _icon_path.Len() > 0:
+            wide := _wt_wide(_icon_path)
+            _wt_icon = LoadImageW(null, wide, 1 as u32, 0, 0, 0x50 as u32)
+            mem.Free(wide)
+            _wt_own_icon = _wt_icon != null
+        end
+        _unlock()
+        if _wt_icon == null:
+            _wt_icon = LoadIconW(null, (32512 as size) as void*)
+            _wt_own_icon = false
+        end
+    end
+
+    func _wt_apply():
+        _lock()
+        want := _want
+        icon := _dirty_icon
+        _dirty_icon = false
+        _dirty_tip = false
+        _dirty_menu = false
+        _unlock()
+        if want:
+            if icon or _wt_icon == null:
+                _wt_load_icon()
+            end
+            if not _wt_added:
+                _wt_added = _wt_notify(0 as u32, 0x07 as u32)
+                if not _wt_added:
+                    _set_error("Shell_NotifyIconW refused the tray icon")
+                end
+            else:
+                _m := _wt_notify(1 as u32, 0x07 as u32)
+            end
+        else _wt_added:
+            _r := _wt_notify(2 as u32, 0 as u32)
+            _wt_added = false
+        end
+    end
+
+    func _wt_popup(hwnd: void*):
+        menu := CreatePopupMenu()
+        _lock()
+        repeat _items.Len() in i:
+            it := _items[i]
+            if it.separator:
+                _s := AppendMenuW(menu, 0x800 as u32, 0 as usize, null)
+            else:
+                mut flags := 0 as u32
+                if not it.enabled:
+                    flags |= 1 as u32
+                end
+                if it.checked:
+                    flags |= 8 as u32
+                end
+                label := _wt_wide(it.label)
+                _a := AppendMenuW(menu, flags, (i + 1) as usize, label)
+                mem.Free(label)
+            end
+        end
+        _unlock()
+        point := mem.AllocateZeroed(8 as u64)
+        _p := GetCursorPos(point)
+        x := (point as i32*)[0]
+        y := (point as i32*)[1]
+        mem.Free(point)
+        _f := SetForegroundWindow(hwnd)
+        cmd := TrackPopupMenu(menu, (0x100 | 0x80 | 0x2) as u32, x, y, 0, hwnd, null)
+        _n := PostMessageW(hwnd, 0 as u32, 0 as usize, 0 as size)
+        destroy := _wt_proc_of("user32.dll", "DestroyMenu")
+        if destroy != null:
+            call := destroy as extern stdcall func (void*) i32
+            _d := call(menu)
+        end
+        if cmd > 0:
+            _push_menu(cmd - 1)
+        end
+    end
+
+    func _wt_message(hwnd: void*, msg: u32, wparam: usize, lparam: size): size:
+        m := msg as int
+        if m == 0x8001:
+            event := (lparam as i64) & (0xFFFF as i64)
+            if event == (0x202 as i64):
+                _push_kind(EventKind.Click)
+            else event == (0x203 as i64):
+                _push_kind(EventKind.DoubleClick)
+            else event == (0x205 as i64) or event == (0x7B as i64):
+                _wt_popup(hwnd)
+            end
+            ret 0
+        end
+        if m == 0x8002:
+            _wt_apply()
+            ret 0
+        end
+        if _wt_taskbar != (0 as u32) and msg == _wt_taskbar:
+            _wt_added = false
+            _wt_apply()
+            ret 0
+        end
+        ret DefWindowProcW(hwnd, msg, wparam, lparam)
+    end
+
+    func _wt_create(): bool:
+        instance := GetModuleHandleW(null)
+        class_name := _wt_wide("SalamTrayWindow")
+        _wt_proc = _wt_thunk(&salam_tray_w32_proc, 4)
+        cls := mem.AllocateZeroed(sizeof(_WtClass) as u64) as _WtClass*
+        cls[0].size = sizeof(_WtClass) as u32
+        cls[0].proc = _wt_proc
+        cls[0].instance = instance
+        cls[0].class_name = class_name
+        _atom := RegisterClassExW(cls as void*)
+        mem.Free(cls as void*)
+        title := _wt_wide("SalamTray")
+        _wt_hwnd = CreateWindowExW(
+            0 as u32, class_name, title, 0x80000000 as u32, 0, 0, 0, 0, null, null, instance, null
+        )
+        mem.Free(title)
+        register := _wt_proc_of("user32.dll", "RegisterWindowMessageW")
+        if register != null:
+            call := register as extern stdcall func (void*) u32
+            name := _wt_wide("TaskbarCreated")
+            _wt_taskbar = call(name)
+            mem.Free(name)
+        end
+        ret _wt_hwnd != null
+    end
+
+    func _wt_thread(_arg: void*):
+        if not _wt_create():
+            _set_error("cannot create the tray message window")
+            ret
+        end
+        _wt_apply()
+        msg := mem.AllocateZeroed(64 as u64)
+        until GetMessageW(msg, null, 0 as u32, 0 as u32) > 0:
+            _t := TranslateMessage(msg)
+            _d := DispatchMessageW(msg)
+        end
+        mem.Free(msg)
+    end
+
+    func _os_backend(): str:
+        ret "win32"
+    end
+
+    func _os_supported(): bool:
+        ret _wt_proc_of("shell32.dll", "Shell_NotifyIconW") != null
+    end
+
+    func _os_apply(): bool:
+        if not _wt_started:
+            _wt_started = true
+            t := thread.SpawnStack(_wt_thread, null, 0 as u64)
+            if not thread.Valid(t):
+                _wt_started = false
+                _set_error("cannot start the tray thread")
+                ret false
+            end
+            ret true
+        end
+        if _wt_hwnd != null:
+            _p := PostMessageW(_wt_hwnd, 0x8002 as u32, 0 as usize, 0 as size)
+        end
+        ret true
+    end
+end

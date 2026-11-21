@@ -269554,6 +269554,2742 @@ r.payload_len = plen
 r.consumed = used + 4 + plen
 ret r
 end
+package tun
+import mem
+import net.tcp
+import net.tunnel
+import net.internal.rawsock
+func _bypass_one(gw: Gateway, ip: str, port: int, timeout_ms: int): dyn tunnel.Stream:
+sock := rawsock.Open(2, 1)
+if not rawsock.Ok(sock):
+ret tunnel.ClosedStream {}
+end
+if not _bind_iface(sock.fd, gw) and gw.iface.Len() + gw.index > 0:
+rawsock.Close(sock)
+ret tunnel.ClosedStream {}
+end
+if not _connect4(sock.fd, ip, port, timeout_ms):
+rawsock.Close(sock)
+ret tunnel.ClosedStream {}
+end
+c := tcp.ConnFromFd(sock.fd)
+tcp.SetNoDelay(c, true)
+ret tunnel.WrapTcp(c)
+end
+func _bypass_dial(gw: Gateway, target: tunnel.Addr, timeout_ms: int): dyn tunnel.Stream:
+if not target.valid:
+ret tunnel.ClosedStream {}
+end
+if _ip4(target.host) >= 0:
+ret _bypass_one(gw, target.host, target.port, timeout_ms)
+end
+if tunnel.IsIP(target.host):
+ret tunnel.ClosedStream {}
+end
+ips := rawsock.ResolveAll(target.host)
+defer ips.Free()
+each ip in ips:
+if _ip4(ip) >= 0:
+s := _bypass_one(gw, ip, target.port, timeout_ms)
+if s.Ok():
+ret s
+end
+end
+end
+ret tunnel.ClosedStream {}
+end
+package tun
+import io
+import mem
+import str
+import os
+import os.shell
+import net.internal.rawsock
+if SALAM_OS_LINUX and not SALAM_OS_ANDROID:
+extern:
+func open(path: str, flags: int, ...): int
+func ioctl(fd: int, req: usize, ...): int
+func read(fd: int, buf: void*, size: u64): i64
+func write(fd: int, buf: void*, size: u64): i64
+func close(fd: int): int
+func poll(fds: void*, nfds: usize, timeout: int): int
+func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
+func getsockopt(s: int, level: int, optname: int, optval: void*, optlen: void*): int
+func connect(fd: int, addr: void*, size: int): int
+end
+func _platform(): str:
+ret "linux"
+end
+func _cap_net_admin(): bool:
+text := io.ReadFile("/proc/self/status")
+defer _free_text(text)
+lines := text.Split("\n")
+defer lines.Free()
+each line in lines:
+if line.StartsWith("CapEff:"):
+v := _after_colon(line)
+n := v.Len()
+if n < 4:
+ret false
+end
+digit := v.Substr(n - 4, 1)
+d := _hexv(digit)
+mem.Free(digit as void*)
+ret d >= 0 and (d & (1 as i64)) != 0
+end
+end
+ret false
+end
+func _available(): Availability:
+if not os.Exists("/dev/net/tun"):
+ret Availability { reason = "/dev/net/tun is missing: load the tun kernel module or pass the device to the container" }
+end
+if not _cap_net_admin():
+ret Availability { reason = "creating a tun device needs root or the CAP_NET_ADMIN capability" }
+end
+ret Availability { ok = true }
+end
+func _poll_in(fd: int, timeout_ms: int): int:
+pfd := mem.AllocateZeroed(8 as u64)
+((pfd as i64) as i32*)[0] = fd
+((pfd as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+r := poll(pfd, 1 as usize, timeout_ms)
+mem.Free(pfd)
+ret r
+end
+func _dev_open(name: str, mtu: int): Device:
+fd := open("/dev/net/tun", 2 | 524288)
+if fd < 0:
+ret Device { error = "cannot open /dev/net/tun (needs root or CAP_NET_ADMIN)" }
+end
+ifr := mem.AllocateZeroed(40 as u64) as u8*
+q := name as u8*
+k := name.Len()
+repeat k in i:
+ifr[i] = q[i]
+end
+((ifr as i64 + (16 as i64)) as i16*)[0] = (1 | 4096) as i16
+if ioctl(fd, 1074025674 as usize, ifr as void*) < 0:
+mem.Free(ifr as void*)
+close(fd)
+ret Device { error = "TUNSETIFF failed for " + name + " (needs root or CAP_NET_ADMIN, or the name is taken)" }
+end
+mut sb := str.NewBuilder()
+mut i := 0
+until i < 16 and ifr[i] != (0 as u8):
+str.BufAppendChar(sb, ifr[i] as int)
+i++
+end
+got := str.BufStr(sb)
+str.BufFree(sb)
+mem.Free(ifr as void*)
+ret Device { ok = true, name = got, mtu = mtu, fd = fd as i64 }
+end
+func _dev_read(d: Device, buf: void*, max: int, timeout_ms: int): int:
+r := _poll_in(d.fd as int, timeout_ms)
+if r == 0:
+ret 0
+end
+if r < 0:
+ret 0
+end
+n := read(d.fd as int, buf, max as u64)
+if n <= (0 as i64):
+ret 0 - 1
+end
+ret n as int
+end
+func _dev_write(d: Device, ptr: void*, n: int): int:
+ret write(d.fd as int, ptr, n as u64) as int
+end
+func _dev_close(d: Device):
+close(d.fd as int)
+end
+func _gateway(): Gateway:
+text := io.ReadFile("/proc/net/route")
+defer _free_text(text)
+ret ParseLinuxRoutes(text)
+end
+func _resolvers(): Vector<str>:
+mut out := Vector {} as Vector<str>
+each path in ["/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"]:
+text := io.ReadFile(path)
+found := ParseResolvers(text)
+each r in found:
+if not _has(out, r) and not r.StartsWith("127."):
+out.Push(r)
+end
+end
+found.Free()
+_free_text(text)
+end
+ret out
+end
+func _exe(): str:
+ret ""
+end
+func _bind_iface(fd: i64, gw: Gateway): bool:
+if gw.iface.Len() == 0:
+ret false
+end
+ret setsockopt(fd as int, 1, 25, gw.iface as void*, gw.iface.Len() + 1) == 0
+end
+func _connect4(fd: i64, ip: str, port: int, timeout_ms: int): bool:
+sa := _sockaddr4(ip, port, false)
+if sa == null:
+ret false
+end
+sock := rawsock.FromFd(fd)
+rawsock.SetNonBlocking(sock, true)
+r := connect(fd as int, sa, 16)
+mem.Free(sa)
+mut ok := r == 0
+if not ok:
+pfd := mem.AllocateZeroed(8 as u64)
+((pfd as i64) as i32*)[0] = fd as i32
+((pfd as i64 + (4 as i64)) as i16*)[0] = 4 as i16
+if poll(pfd, 1 as usize, timeout_ms) > 0:
+err := mem.AllocateZeroed(8 as u64)
+size := mem.AllocateZeroed(8 as u64)
+((size as i64) as i32*)[0] = 4 as i32
+if getsockopt(fd as int, 1, 4, err, size) == 0:
+ok = ((err as i64) as i32*)[0] == (0 as i32)
+end
+mem.Free(err)
+mem.Free(size)
+end
+mem.Free(pfd)
+end
+rawsock.SetNonBlocking(sock, false)
+ret ok
+end
+end
+if SALAM_OS_MAC:
+extern:
+func socket(domain: int, kind: int, protocol: int): int
+func ioctl(fd: int, req: usize, ...): int
+func read(fd: int, buf: void*, size: u64): i64
+func write(fd: int, buf: void*, size: u64): i64
+func close(fd: int): int
+func poll(fds: void*, nfds: usize, timeout: int): int
+func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
+func getsockopt(s: int, level: int, optname: int, optval: void*, optlen: void*): int
+func connect(fd: int, addr: void*, size: int): int
+func geteuid(): u32
+func if_nametoindex(name: str): u32
+end
+func _platform(): str:
+ret "macos"
+end
+func _available(): Availability:
+if geteuid() != (0 as u32):
+ret Availability { reason = "creating a utun device needs root; run the app with administrator rights or from a privileged helper" }
+end
+ret Availability { ok = true }
+end
+func _poll_in(fd: int, timeout_ms: int): int:
+pfd := mem.AllocateZeroed(8 as u64)
+((pfd as i64) as i32*)[0] = fd
+((pfd as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+r := poll(pfd, 1 as usize, timeout_ms)
+mem.Free(pfd)
+ret r
+end
+func _utun_unit(name: str): int:
+if not name.StartsWith("utun") or name.Len() < 5:
+ret 0
+end
+tail := name.Substr(4, name.Len() - 4)
+n := _decv(tail)
+mem.Free(tail as void*)
+ret n < 0 ? 0 : n + 1
+end
+func _dev_open(name: str, mtu: int): Device:
+fd := socket(32, 2, 2)
+if fd < 0:
+ret Device { error = "cannot open a PF_SYSTEM control socket" }
+end
+info := mem.AllocateZeroed(100 as u64) as u8*
+ctl := "com.apple.net.utun_control"
+q := ctl as u8*
+repeat ctl.Len() in i:
+info[4 + i] = q[i]
+end
+if ioctl(fd, 3227799043 as usize, info as void*) < 0:
+mem.Free(info as void*)
+close(fd)
+ret Device { error = "CTLIOCGINFO failed for com.apple.net.utun_control" }
+end
+id_le := ((info as i64) as u32*)[0]
+mem.Free(info as void*)
+sa := mem.AllocateZeroed(32 as u64) as u8*
+sa[0] = 32 as u8
+sa[1] = 32 as u8
+((sa as i64 + (2 as i64)) as u16*)[0] = 2 as u16
+((sa as i64 + (4 as i64)) as u32*)[0] = id_le
+((sa as i64 + (8 as i64)) as u32*)[0] = _utun_unit(name) as u32
+r := connect(fd, sa as void*, 32)
+mem.Free(sa as void*)
+if r < 0:
+close(fd)
+ret Device { error = "connecting the utun control socket failed (needs root, or " + name + " is taken)" }
+end
+buf := mem.AllocateZeroed(64 as u64) as u8*
+size := mem.AllocateZeroed(8 as u64)
+((size as i64) as u32*)[0] = 64 as u32
+_g := getsockopt(fd, 2, 2, buf as void*, size)
+mut sb := str.NewBuilder()
+mut i := 0
+until i < 63 and buf[i] != (0 as u8):
+str.BufAppendChar(sb, buf[i] as int)
+i++
+end
+got := str.BufStr(sb)
+str.BufFree(sb)
+mem.Free(buf as void*)
+mem.Free(size)
+ret Device { ok = true, name = got, mtu = mtu, fd = fd as i64, scratch = mem.AllocateZeroed(65544 as u64) }
+end
+func _dev_read(d: Device, buf: void*, max: int, timeout_ms: int): int:
+r := _poll_in(d.fd as int, timeout_ms)
+if r <= 0:
+ret 0
+end
+mut want := max + 4
+if want > 65540:
+want = 65540
+end
+n := read(d.fd as int, d.scratch, want as u64) as int
+if n <= 0:
+ret 0 - 1
+end
+if n <= 4:
+ret 0
+end
+mem.Copy(buf, ((d.scratch as i64) + (4 as i64)) as void*, (n - 4) as u64)
+ret n - 4
+end
+func _dev_write(d: Device, ptr: void*, n: int): int:
+if n <= 0 or n > 65536:
+ret 0 - 1
+end
+out := mem.AllocateZeroed((n + 4) as u64) as u8*
+out[3] = ((((ptr as u8*)[0] as int) >> 4) == 6 ? 30 : 2) as u8
+mem.Copy(((out as i64) + (4 as i64)) as void*, ptr, n as u64)
+w := write(d.fd as int, out as void*, (n + 4) as u64) as int
+mem.Free(out as void*)
+ret w < 4 ? w : w - 4
+end
+func _dev_close(d: Device):
+close(d.fd as int)
+if d.scratch != null:
+mem.Free(d.scratch)
+end
+end
+func _gateway(): Gateway:
+text := _shell_text("route -n get default")
+defer _free_text(text)
+ret ParseMacRoute(text)
+end
+func _resolvers(): Vector<str>:
+text := _shell_text("scutil --dns")
+defer _free_text(text)
+ret ParseResolvers(text)
+end
+func _exe(): str:
+ret ""
+end
+func _bind_iface(fd: i64, gw: Gateway): bool:
+if gw.iface.Len() == 0:
+ret false
+end
+idx := if_nametoindex(gw.iface)
+if idx == (0 as u32):
+ret false
+end
+v := mem.AllocateZeroed(4 as u64)
+((v as i64) as u32*)[0] = idx
+r := setsockopt(fd as int, 0, 25, v, 4)
+mem.Free(v)
+ret r == 0
+end
+func _connect4(fd: i64, ip: str, port: int, timeout_ms: int): bool:
+sa := _sockaddr4(ip, port, true)
+if sa == null:
+ret false
+end
+sock := rawsock.FromFd(fd)
+rawsock.SetNonBlocking(sock, true)
+r := connect(fd as int, sa, 16)
+mem.Free(sa)
+mut ok := r == 0
+if not ok:
+pfd := mem.AllocateZeroed(8 as u64)
+((pfd as i64) as i32*)[0] = fd as i32
+((pfd as i64 + (4 as i64)) as i16*)[0] = 4 as i16
+if poll(pfd, 1 as usize, timeout_ms) > 0:
+err := mem.AllocateZeroed(8 as u64)
+size := mem.AllocateZeroed(8 as u64)
+((size as i64) as u32*)[0] = 4 as u32
+if getsockopt(fd as int, 65535, 4103, err, size) == 0:
+ok = ((err as i64) as i32*)[0] == (0 as i32)
+end
+mem.Free(err)
+mem.Free(size)
+end
+mem.Free(pfd)
+end
+rawsock.SetNonBlocking(sock, false)
+ret ok
+end
+end
+if SALAM_OS_WINDOWS:
+extern:
+func LoadLibraryW(name: void*): void*
+func GetProcAddress(module: void*, name: str): void*
+func MultiByteToWideChar(code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32): i32
+func WideCharToMultiByte(code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*, used: void*): i32
+func GetModuleFileNameW(module: void*, buf: void*, size: u32): u32
+func WaitForSingleObject(handle: void*, ms: u32): u32
+func GetLastError(): u32
+func setsockopt(s: usize, level: int, optname: int, optval: void*, optlen: int): int
+func connect(s: usize, addr: void*, addrlen: int): int
+end
+mut _wt_lib := null as void*
+mut _wt_create := null as void*
+mut _wt_close := null as void*
+mut _wt_start := null as void*
+mut _wt_end := null as void*
+mut _wt_event := null as void*
+mut _wt_recv := null as void*
+mut _wt_release := null as void*
+mut _wt_alloc := null as void*
+mut _wt_send := null as void*
+func _platform(): str:
+ret "windows"
+end
+func _w_wide(s: str): void*:
+needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+buf := mem.AllocateZeroed(((needed + 1) as u64) * (2 as u64))
+MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+ret buf
+end
+func _w_lib(name: str): void*:
+wide := _w_wide(name)
+m := LoadLibraryW(wide)
+mem.Free(wide)
+ret m
+end
+func _wt_load(): bool:
+if _wt_lib != null:
+ret true
+end
+lib := _w_lib("wintun.dll")
+if lib == null:
+ret false
+end
+_wt_create = GetProcAddress(lib, "WintunCreateAdapter")
+_wt_close = GetProcAddress(lib, "WintunCloseAdapter")
+_wt_start = GetProcAddress(lib, "WintunStartSession")
+_wt_end = GetProcAddress(lib, "WintunEndSession")
+_wt_event = GetProcAddress(lib, "WintunGetReadWaitEvent")
+_wt_recv = GetProcAddress(lib, "WintunReceivePacket")
+_wt_release = GetProcAddress(lib, "WintunReleaseReceivePacket")
+_wt_alloc = GetProcAddress(lib, "WintunAllocateSendPacket")
+_wt_send = GetProcAddress(lib, "WintunSendPacket")
+if _wt_create == null or _wt_start == null or _wt_recv == null or _wt_send == null or _wt_alloc == null or _wt_release == null or _wt_event == null:
+ret false
+end
+_wt_lib = lib
+ret true
+end
+func _is_admin(): bool:
+lib := _w_lib("shell32.dll")
+if lib == null:
+ret false
+end
+fp := GetProcAddress(lib, "IsUserAnAdmin")
+if fp == null:
+ret false
+end
+f := fp as extern func () int
+ret f() != 0
+end
+func _w_x86(): bool:
+ret SALAM_ARCH_X86
+end
+func _available(): Availability:
+if _w_x86():
+ret Availability { reason = "full device mode is not supported on 32-bit Windows" }
+end
+if not _wt_load():
+ret Availability { reason = "wintun.dll was not found: download it from https://www.wintun.net and place the dll for this architecture next to the executable" }
+end
+if not _is_admin():
+ret Availability { reason = "creating a Wintun adapter needs administrator rights" }
+end
+ret Availability { ok = true }
+end
+func _dev_open(name: str, mtu: int): Device:
+if _w_x86():
+ret Device { error = "full device mode is not supported on 32-bit Windows" }
+end
+if not _wt_load():
+ret Device { error = "wintun.dll was not found next to the executable" }
+end
+wname := _w_wide(name)
+wtype := _w_wide("Salam")
+create := _wt_create as extern func (void*, void*, void*) void*
+adapter := create(wname, wtype, null)
+mem.Free(wname)
+mem.Free(wtype)
+if adapter == null:
+ret Device { error = "WintunCreateAdapter failed (needs administrator rights)" }
+end
+start := _wt_start as extern func (void*, u32) void*
+session := start(adapter, 4194304 as u32)
+if session == null:
+closer := _wt_close as extern func (void*)
+closer(adapter)
+ret Device { error = "WintunStartSession failed" }
+end
+ev := _wt_event as extern func (void*) void*
+ret Device { ok = true, name = str.Clone(name), mtu = mtu, session = session, adapter = adapter, event = ev(session) }
+end
+func _dev_read(d: Device, buf: void*, max: int, timeout_ms: int): int:
+recv := _wt_recv as extern func (void*, void*) void*
+size := mem.AllocateZeroed(8 as u64)
+mut pk := recv(d.session, size)
+if pk == null:
+if GetLastError() != (259 as u32):
+mem.Free(size)
+ret 0 - 1
+end
+_w := WaitForSingleObject(d.event, timeout_ms as u32)
+pk = recv(d.session, size)
+end
+if pk == null:
+mem.Free(size)
+ret 0
+end
+mut n := ((size as i64) as u32*)[0] as int
+mem.Free(size)
+if n > max:
+n = max
+end
+mem.Copy(buf, pk, n as u64)
+release := _wt_release as extern func (void*, void*)
+release(d.session, pk)
+ret n
+end
+func _dev_write(d: Device, ptr: void*, n: int): int:
+alloc := _wt_alloc as extern func (void*, u32) void*
+out := alloc(d.session, n as u32)
+if out == null:
+ret 0 - 1
+end
+mem.Copy(out, ptr, n as u64)
+send := _wt_send as extern func (void*, void*)
+send(d.session, out)
+ret n
+end
+func _dev_close(d: Device):
+if d.session != null and _wt_end != null:
+ender := _wt_end as extern func (void*)
+ender(d.session)
+end
+if d.adapter != null and _wt_close != null:
+closer := _wt_close as extern func (void*)
+closer(d.adapter)
+end
+end
+func _gateway(): Gateway:
+lib := _w_lib("iphlpapi.dll")
+if lib == null:
+ret Gateway {}
+end
+fp := GetProcAddress(lib, "GetBestRoute")
+if fp == null:
+ret Gateway {}
+end
+row := mem.AllocateZeroed(64 as u64) as u8*
+best := fp as extern func (u32, u32, void*) u32
+r := best(134744072 as u32, 0 as u32, row as void*)
+if r != (0 as u32):
+mem.Free(row as void*)
+ret Gateway {}
+end
+hop := ((row[12] as i64) << 24) | ((row[13] as i64) << 16) | ((row[14] as i64) << 8) | (row[15] as i64)
+idx := ((row as i64 + (16 as i64)) as u32*)[0] as int
+mem.Free(row as void*)
+mut ip := _ip4s(hop)
+if hop == (0 as i64):
+mem.Free(ip as void*)
+ip = ""
+end
+ret Gateway { ok = idx > 0, ip = ip, index = idx }
+end
+func _resolvers(): Vector<str>:
+ret Vector {}
+end
+func _exe(): str:
+wbuf := mem.AllocateZeroed(4096 as u64)
+n := GetModuleFileNameW(null, wbuf, 2047 as u32)
+if n == (0 as u32):
+mem.Free(wbuf)
+ret ""
+end
+out := mem.AllocateZeroed(4096 as u64)
+_k := WideCharToMultiByte(65001 as u32, 0 as u32, wbuf, 0 - 1, out, 4095, null, null)
+mem.Free(wbuf)
+ret out as str
+end
+func _bind_iface(fd: i64, gw: Gateway): bool:
+if gw.index <= 0:
+ret false
+end
+v := mem.AllocateZeroed(4 as u64) as u8*
+_put32(v, 0, gw.index as i64)
+r := setsockopt(fd as usize, 0, 31, v as void*, 4)
+mem.Free(v as void*)
+ret r == 0
+end
+func _connect4(fd: i64, ip: str, port: int, _timeout_ms: int): bool:
+sa := _sockaddr4(ip, port, false)
+if sa == null:
+ret false
+end
+r := connect(fd as usize, sa, 16)
+mem.Free(sa)
+ret r == 0
+end
+end
+if not SALAM_OS_WINDOWS and not SALAM_OS_MAC and not (SALAM_OS_LINUX and not SALAM_OS_ANDROID):
+func _platform(): str:
+ret "other"
+end
+func _available(): Availability:
+ret Availability { reason = "full device mode is not supported on this system" }
+end
+func _dev_open(name: str, _mtu: int): Device:
+ret Device { error = "full device mode is not supported on this system: " + name }
+end
+func _dev_read(_d: Device, _buf: void*, _max: int, _timeout_ms: int): int:
+ret 0 - 1
+end
+func _dev_write(_d: Device, _ptr: void*, _n: int): int:
+ret 0 - 1
+end
+func _dev_close(d: Device):
+_x := d.fd
+end
+func _gateway(): Gateway:
+ret Gateway {}
+end
+func _resolvers(): Vector<str>:
+ret Vector {}
+end
+func _exe(): str:
+ret ""
+end
+func _bind_iface(_fd: i64, _gw: Gateway): bool:
+ret false
+end
+func _connect4(_fd: i64, _ip: str, _port: int, _timeout_ms: int): bool:
+ret false
+end
+end
+func _shell_text(cmd: str): str:
+r := shell.Exec(cmd)
+if r.code != 0:
+ret ""
+end
+ret r.out
+end
+func _sockaddr4(ip: str, port: int, bsd: bool): void*:
+a := _ip4(ip)
+if a < 0:
+ret null
+end
+sa := mem.AllocateZeroed(16 as u64) as u8*
+if bsd:
+sa[0] = 16 as u8
+sa[1] = 2 as u8
+else:
+sa[0] = 2 as u8
+sa[1] = 0 as u8
+end
+_put16(sa, 2, port)
+_put32(sa, 4, a)
+ret sa as void*
+end
+func _free_text(s: str):
+if s.Len() > 0:
+mem.Free(s as void*)
+end
+end
+package tun
+import mem
+import sync
+@en "action_drop"
+@fa "کنش دورریختن"
+pub const action_drop := 0
+@en "action_reply"
+@fa "کنش بازفرستادن"
+pub const action_reply := 1
+@en "action_dns"
+@fa "کنش نام‌یابی"
+pub const action_dns := 2
+@en "action_ipv6"
+@fa "کنش آی‌پی۶"
+pub const action_ipv6 := 3
+const _NAT_FIRST := 10000
+const _NAT_SLOT := 32
+const _NAT_CLOSING_MS := 10000
+struct _NatCore:
+pub mu: sync.Mutex = sync.Mutex {}
+pub addr: i64 = 0 as i64
+pub next: i64 = 0 as i64
+pub port: int = 0
+pub table: void* = null
+pub index: HashMap<i64, int> = HashMap {}
+pub cursor: int = 10000
+pub live: int = 0
+pub idle_ms: i64 = 600000 as i64
+end
+@en "NatEntry"
+@fa "ردیف ترجمه"
+pub struct NatEntry:
+@en "ok"
+@fa "درست"
+pub ok: bool = false
+@en "src"
+@fa "مبدا"
+pub src: str = ""
+@en "sport"
+@fa "درگاه مبدا"
+pub sport: int = 0
+@en "dst"
+@fa "مقصد"
+pub dst: str = ""
+@en "dport"
+@fa "درگاه مقصد"
+pub dport: int = 0
+end
+@en "Nat"
+@fa "ترجمه نشانی"
+pub struct Nat:
+@en "core"
+@fa "هسته"
+pub core: void* = null
+@en "Rewrite"
+@fa "بازنویسی"
+pub func Rewrite(ptr: void*, n: int, now_ms: i64): int:
+if this.core == null or n < 20:
+ret action_drop
+end
+p := ptr as u8*
+ver := _b(p, 0) >> 4
+if ver == 6:
+ret action_ipv6
+end
+if ver != 4:
+ret action_drop
+end
+ihl := (_b(p, 0) & 15) * 4
+total := _u16(p, 2)
+if ihl < 20 or total < ihl or total > n:
+ret action_drop
+end
+frag := _u16(p, 6)
+if (frag & 8191) != 0 or (frag & 8192) != 0:
+ret action_drop
+end
+proto := _b(p, 9)
+dst := _u32(p, 16)
+if _special4(dst):
+ret action_drop
+end
+if proto == proto_udp:
+if total - ihl >= 8 and _u16(p, ihl + 2) == 53:
+ret action_dns
+end
+ret action_drop
+end
+if proto != proto_tcp or total - ihl < 20:
+ret action_drop
+end
+doff := (_b(p, ihl + 12) >> 4) * 4
+if doff < 20 or doff > total - ihl:
+ret action_drop
+end
+c := this.core as _NatCore*
+src := _u32(p, 12)
+sport := _u16(p, ihl)
+dport := _u16(p, ihl + 2)
+flags := _b(p, ihl + 13)
+sync.Lock(c[0].mu)
+defer sync.Unlock(c[0].mu)
+if src == c[0].addr and sport == c[0].port:
+if dport < _NAT_FIRST:
+ret action_drop
+end
+e := _slot(c, dport)
+if (_u16(e, 12) & 1) == 0 or dst != c[0].next:
+ret action_drop
+end
+_observe(e, flags, true, now_ms)
+_rewrite_tcp4(p, ihl, _u32(e, 4), _u16(e, 10), _u32(e, 0), _u16(e, 8))
+ret action_reply
+end
+if dst == c[0].addr or dst == c[0].next:
+ret action_drop
+end
+port := _forward_port(c, src, sport, dst, dport, flags, now_ms)
+if port == 0:
+ret action_drop
+end
+_rewrite_tcp4(p, ihl, c[0].next, port, c[0].addr, c[0].port)
+ret action_reply
+end
+@en "Lookup"
+@fa "جستجو"
+pub func Lookup(nat_port: int): NatEntry:
+if this.core == null or nat_port < _NAT_FIRST or nat_port > 65535:
+ret NatEntry {}
+end
+c := this.core as _NatCore*
+sync.Lock(c[0].mu)
+defer sync.Unlock(c[0].mu)
+e := _slot(c, nat_port)
+if (_u16(e, 12) & 1) == 0:
+ret NatEntry {}
+end
+ret NatEntry { ok = true, src = _ip4s(_u32(e, 0)), sport = _u16(e, 8), dst = _ip4s(_u32(e, 4)), dport = _u16(e, 10) }
+end
+@en "Sweep"
+@fa "پاکسازی"
+pub func Sweep(now_ms: i64): int:
+if this.core == null:
+ret 0
+end
+c := this.core as _NatCore*
+sync.Lock(c[0].mu)
+defer sync.Unlock(c[0].mu)
+mut gone := 0
+mut p := _NAT_FIRST
+until p <= 65535:
+if _expired(c, _slot(c, p), now_ms):
+_free_slot(c, p)
+gone++
+end
+p++
+end
+ret gone
+end
+@en "Active"
+@fa "فعال‌ها"
+pub func Active(): int:
+if this.core == null:
+ret 0
+end
+c := this.core as _NatCore*
+sync.Lock(c[0].mu)
+defer sync.Unlock(c[0].mu)
+ret c[0].live
+end
+@en "Port"
+@fa "درگاه شنونده"
+pub func Port(): int:
+if this.core == null:
+ret 0
+end
+ret (this.core as _NatCore*)[0].port
+end
+end
+func _slot(c: _NatCore*, port: int): u8*:
+ret ((c[0].table as i64) + ((port * _NAT_SLOT) as i64)) as u8*
+end
+func _slot_last(e: u8*): i64:
+ret ((e as i64 + (16 as i64)) as i64*)[0]
+end
+func _slot_set_last(e: u8*, v: i64):
+((e as i64 + (16 as i64)) as i64*)[0] = v
+end
+func _slot_key(e: u8*): i64:
+ret ((e as i64 + (24 as i64)) as i64*)[0]
+end
+func _slot_set_key(e: u8*, v: i64):
+((e as i64 + (24 as i64)) as i64*)[0] = v
+end
+func _observe(e: u8*, flags: int, reverse: bool, now: i64):
+mut st := _u16(e, 12)
+if (flags & tcp_rst) != 0:
+st |= 8
+else (flags & tcp_fin) != 0:
+st |= (reverse ? 4 : 2)
+if (st & 6) == 6:
+st |= 8
+end
+end
+_put16(e, 12, st)
+_slot_set_last(e, now)
+end
+func _free_slot(c: _NatCore*, port: int):
+e := _slot(c, port)
+if (_u16(e, 12) & 1) == 0:
+ret
+end
+key := _slot_key(e)
+if c[0].index.Has(key) and c[0].index.Get(key) == port:
+c[0].index.Remove(key)
+end
+mem.Set(e as void*, 0, _NAT_SLOT as u64)
+c[0].live--
+end
+func _expired(c: _NatCore*, e: u8*, now: i64): bool:
+st := _u16(e, 12)
+if (st & 1) == 0:
+ret false
+end
+age := now - _slot_last(e)
+if (st & 8) != 0:
+ret age > (_NAT_CLOSING_MS as i64)
+end
+ret age > c[0].idle_ms
+end
+func _alloc(c: _NatCore*, now: i64): int:
+span := 65536 - _NAT_FIRST
+repeat span:
+p := c[0].cursor
+c[0].cursor = p + 1
+if c[0].cursor > 65535:
+c[0].cursor = _NAT_FIRST
+end
+e := _slot(c, p)
+if _expired(c, e, now):
+_free_slot(c, p)
+end
+if (_u16(e, 12) & 1) == 0:
+ret p
+end
+end
+ret 0
+end
+func _forward_port(c: _NatCore*, src: i64, sport: int, dst: i64, dport: int, flags: int, now: i64): int:
+key := (dst << 32) | ((sport as i64) << 16) | (dport as i64)
+if c[0].index.Has(key):
+p := c[0].index.Get(key)
+e := _slot(c, p)
+fresh := (flags & tcp_syn) != 0 and (flags & tcp_ack) == 0 and (_u16(e, 12) & 8) != 0
+if _u32(e, 0) == src and not fresh:
+_observe(e, flags, false, now)
+ret p
+end
+_free_slot(c, p)
+end
+p := _alloc(c, now)
+if p == 0:
+ret 0
+end
+e := _slot(c, p)
+_put32(e, 0, src)
+_put32(e, 4, dst)
+_put16(e, 8, sport)
+_put16(e, 10, dport)
+_put16(e, 12, 1)
+_slot_set_key(e, key)
+_slot_set_last(e, now)
+c[0].index.Put(key, p)
+c[0].live++
+_observe(e, flags, false, now)
+ret p
+end
+func _rewrite_tcp4(p: u8*, ihl: int, new_src: i64, new_sport: int, new_dst: i64, new_dport: int):
+mut ip_sum := _u16(p, 10)
+mut tcp_sum := _u16(p, ihl + 16)
+repeat 2 in k:
+old_s := _u16(p, 12 + k * 2)
+new_s := ((new_src >> ((1 - k) * 16)) & 65535) as int
+ip_sum = ChecksumAdjust(ip_sum, old_s, new_s)
+tcp_sum = ChecksumAdjust(tcp_sum, old_s, new_s)
+old_d := _u16(p, 16 + k * 2)
+new_d := ((new_dst >> ((1 - k) * 16)) & 65535) as int
+ip_sum = ChecksumAdjust(ip_sum, old_d, new_d)
+tcp_sum = ChecksumAdjust(tcp_sum, old_d, new_d)
+end
+tcp_sum = ChecksumAdjust(tcp_sum, _u16(p, ihl), new_sport)
+tcp_sum = ChecksumAdjust(tcp_sum, _u16(p, ihl + 2), new_dport)
+_put32(p, 12, new_src)
+_put32(p, 16, new_dst)
+_put16(p, ihl, new_sport)
+_put16(p, ihl + 2, new_dport)
+_put16(p, 10, ip_sum)
+_put16(p, ihl + 16, tcp_sum)
+end
+func _special4(a: i64): bool:
+top := (a >> 24) & 255
+if top == 0 or top == 127 or top >= 224:
+ret true
+end
+ret false
+end
+@en "NewNat"
+@fa "ترجمه نشانی تازه"
+pub func NewNat(address: str, next: str, listen_port: int, idle_ms: int): Nat:
+a := _ip4(address)
+b := _ip4(next)
+if a < 0 or b < 0 or listen_port <= 0 or listen_port > 65535:
+ret Nat {}
+end
+c := mem.AllocateZeroed(sizeof(_NatCore) as u64) as _NatCore*
+c[0] = _NatCore { mu = sync.NewMutex(), addr = a, next = b, port = listen_port, table = mem.AllocateZeroed((65536 * _NAT_SLOT) as u64), index = HashMap {} as HashMap<i64, int>, cursor = _NAT_FIRST, idle_ms = (idle_ms > 0 ? idle_ms : 600000) as i64 }
+ret Nat { core = c as void* }
+end
+@en "FreeNat"
+@fa "آزادسازی ترجمه"
+pub func FreeNat(nat: Nat):
+if nat.core == null:
+ret
+end
+c := nat.core as _NatCore*
+c[0].index.Free()
+mem.Free(c[0].table)
+mem.Free(nat.core)
+end
+package tun
+import mem
+import str
+import net.tunnel
+@en "proto_icmp"
+@fa "پروتکل آی سی ام پی"
+pub const proto_icmp := 1
+@en "proto_tcp"
+@fa "پروتکل تی سی پی"
+pub const proto_tcp := 6
+@en "proto_udp"
+@fa "پروتکل یو دی پی"
+pub const proto_udp := 17
+@en "proto_icmp6"
+@fa "پروتکل آی سی ام پی شش"
+pub const proto_icmp6 := 58
+@en "tcp_fin"
+@fa "پرچم پایان‌دادن"
+pub const tcp_fin := 1
+@en "tcp_syn"
+@fa "پرچم همگام‌سازی"
+pub const tcp_syn := 2
+@en "tcp_rst"
+@fa "پرچم بازنشانی"
+pub const tcp_rst := 4
+@en "tcp_psh"
+@fa "پرچم فشار"
+pub const tcp_psh := 8
+@en "tcp_ack"
+@fa "پرچم تایید"
+pub const tcp_ack := 16
+@en "PacketInfo"
+@fa "مشخصات‌بسته"
+pub struct PacketInfo:
+@en "valid"
+@fa "معتبر"
+pub valid: bool = false
+@en "version"
+@fa "نسخه"
+pub version: int = 0
+@en "proto"
+@fa "پروتکل"
+pub proto: int = 0
+@en "src"
+@fa "مبدا"
+pub src: str = ""
+@en "dst"
+@fa "مقصد"
+pub dst: str = ""
+@en "sport"
+@fa "درگاه مبدا"
+pub sport: int = 0
+@en "dport"
+@fa "درگاه مقصد"
+pub dport: int = 0
+@en "flags"
+@fa "پرچم‌ها"
+pub flags: int = 0
+@en "header_len"
+@fa "طول سرآیند"
+pub header_len: int = 0
+@en "payload_offset"
+@fa "آغاز داده"
+pub payload_offset: int = 0
+@en "payload_len"
+@fa "طول داده"
+pub payload_len: int = 0
+@en "total"
+@fa "طول‌کل"
+pub total: int = 0
+@en "fragment"
+@fa "تکه"
+pub fragment: bool = false
+end
+@en "Packet"
+@fa "بسته‌خام"
+pub struct Packet:
+@en "data"
+@fa "داده"
+pub data: void* = null
+@en "len"
+@fa "طول"
+pub len: int = 0
+end
+func _b(p: u8*, i: int): int:
+ret p[i] as int
+end
+func _u16(p: u8*, i: int): int:
+ret (p[i] as int) * 256 + (p[i + 1] as int)
+end
+func _put16(p: u8*, i: int, v: int):
+p[i] = ((v >> 8) & 255) as u8
+p[i + 1] = (v & 255) as u8
+end
+func _u32(p: u8*, i: int): i64:
+ret ((_u16(p, i) as i64) << 16) | (_u16(p, i + 2) as i64)
+end
+func _put32(p: u8*, i: int, v: i64):
+_put16(p, i, ((v >> 16) & 65535) as int)
+_put16(p, i + 2, (v & 65535) as int)
+end
+func _ip4(s: str): i64:
+b := tunnel.ParseIPv4(s)
+defer b.Free()
+if b.Len() != 4:
+ret 0 - 1
+end
+ret ((b[0] as i64) << 24) | ((b[1] as i64) << 16) | ((b[2] as i64) << 8) | (b[3] as i64)
+end
+func _ip4s(v: i64): str:
+mut sb := str.NewBuilder()
+repeat 4 in k:
+if k > 0:
+str.BufAppend(sb, ".")
+end
+part := str.FromInt((v >> ((3 - k) * 8)) & 255)
+str.BufAppend(sb, part)
+mem.Free(part as void*)
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+ret out
+end
+func _ip6s(p: u8*, off: int): str:
+mut v := Vector {} as Vector<int>
+defer v.Free()
+repeat 16 in i:
+v.Push(p[off + i] as int)
+end
+ret tunnel.FormatIP(v)
+end
+func _fold(sum: i64): int:
+mut s := sum
+until s > (65535 as i64):
+s = (s & 65535) + (s >> 16)
+end
+ret s as int
+end
+func _sum(p: u8*, off: int, n: int): i64:
+mut s := 0 as i64
+mut i := 0
+until i + 1 < n:
+s += _u16(p, off + i) as i64
+i += 2
+end
+if i < n:
+s += ((p[off + i] as int) * 256) as i64
+end
+ret s
+end
+func _pseudo4(p: u8*, ihl: int, proto: int, len: int): i64:
+ret _sum(p, 12, 8) + (proto as i64) + (len as i64) + _sum(p, ihl, len)
+end
+func _l4_sum_off(proto: int): int:
+if proto == proto_tcp:
+ret 16
+end
+if proto == proto_udp:
+ret 6
+end
+ret 0 - 1
+end
+func _build4(src: str, dst: str, proto: int, l4_len: int): Packet:
+s := _ip4(src)
+d := _ip4(dst)
+if s < 0 or d < 0:
+ret Packet {}
+end
+total := 20 + l4_len
+p := mem.AllocateZeroed(total as u64) as u8*
+p[0] = 69 as u8
+_put16(p, 2, total)
+_put16(p, 6, 16384)
+p[8] = 64 as u8
+p[9] = proto as u8
+_put32(p, 12, s)
+_put32(p, 16, d)
+ret Packet { data = p as void*, len = total }
+end
+func _tcp_rst6(ptr: void*, n: int): Packet:
+p := ptr as u8*
+if n < 60 or _b(p, 6) != proto_tcp:
+ret Packet {}
+end
+flags := _b(p, 53)
+if (flags & tcp_syn) == 0 or (flags & tcp_ack) != 0:
+ret Packet {}
+end
+o := mem.AllocateZeroed(60 as u64) as u8*
+o[0] = 96 as u8
+_put16(o, 4, 20)
+o[6] = proto_tcp as u8
+o[7] = 64 as u8
+repeat 16 in i:
+o[8 + i] = p[24 + i]
+o[24 + i] = p[8 + i]
+end
+_put16(o, 40, _u16(p, 42))
+_put16(o, 42, _u16(p, 40))
+_put32(o, 48, (_u32(p, 44) + 1) & (4294967295 as i64))
+o[52] = 80 as u8
+o[53] = (tcp_rst | tcp_ack) as u8
+s := _sum(o, 8, 32) + (proto_tcp as i64) + (20 as i64) + _sum(o, 40, 20)
+_put16(o, 56, 65535 - _fold(s))
+ret Packet { data = o as void*, len = 60 }
+end
+@en "Checksum"
+@fa "جمع آزما"
+pub func Checksum(p: void*, n: int): int:
+ret 65535 - _fold(_sum(p as u8*, 0, n))
+end
+@en "ChecksumAdjust"
+@fa "به‌روزرسانی جمع آزما"
+pub func ChecksumAdjust(sum: int, old_word: int, new_word: int): int:
+x := ((65535 - sum) as i64) + ((65535 - old_word) as i64) + (new_word as i64)
+ret 65535 - _fold(x)
+end
+@en "FinishChecksums"
+@fa "تکمیل جمع آزماها"
+pub func FinishChecksums(ptr: void*, n: int):
+p := ptr as u8*
+if n < 20 or (_b(p, 0) >> 4) != 4:
+ret
+end
+ihl := (_b(p, 0) & 15) * 4
+total := _u16(p, 2)
+if ihl < 20 or total > n or total < ihl:
+ret
+end
+_put16(p, 10, 0)
+_put16(p, 10, 65535 - _fold(_sum(p, 0, ihl)))
+proto := _b(p, 9)
+at := _l4_sum_off(proto)
+if at < 0 or total - ihl < at + 2:
+ret
+end
+_put16(p, ihl + at, 0)
+mut c := 65535 - _fold(_pseudo4(p, ihl, proto, total - ihl))
+if c == 0 and proto == proto_udp:
+c = 65535
+end
+_put16(p, ihl + at, c)
+end
+@en "ChecksumsOk"
+@fa "درستی جمع آزماها"
+pub func ChecksumsOk(ptr: void*, n: int): bool:
+p := ptr as u8*
+if n < 20 or (_b(p, 0) >> 4) != 4:
+ret false
+end
+ihl := (_b(p, 0) & 15) * 4
+total := _u16(p, 2)
+if ihl < 20 or total > n or total < ihl:
+ret false
+end
+if _fold(_sum(p, 0, ihl)) != 65535:
+ret false
+end
+proto := _b(p, 9)
+at := _l4_sum_off(proto)
+if at < 0:
+ret true
+end
+if total - ihl < at + 2:
+ret false
+end
+if proto == proto_udp and _u16(p, ihl + at) == 0:
+ret true
+end
+ret _fold(_pseudo4(p, ihl, proto, total - ihl)) == 65535
+end
+@en "Parse"
+@fa "تجزیه‌بسته"
+pub func Parse(ptr: void*, n: int): PacketInfo:
+p := ptr as u8*
+mut info := PacketInfo {}
+if n < 1:
+ret info
+end
+ver := _b(p, 0) >> 4
+info.version = ver
+if ver == 6:
+if n < 40:
+ret info
+end
+plen := _u16(p, 4)
+if 40 + plen > n:
+ret info
+end
+info.proto = _b(p, 6)
+info.src = _ip6s(p, 8)
+info.dst = _ip6s(p, 24)
+info.header_len = 40
+info.total = 40 + plen
+info.payload_offset = 40
+info.payload_len = plen
+if (info.proto == proto_tcp and plen >= 20) or (info.proto == proto_udp and plen >= 8):
+info.sport = _u16(p, 40)
+info.dport = _u16(p, 42)
+if info.proto == proto_tcp:
+info.flags = _b(p, 53) & 63
+doff := (_b(p, 52) >> 4) * 4
+info.payload_offset = 40 + doff
+info.payload_len = plen - doff
+else:
+info.payload_offset = 48
+info.payload_len = plen - 8
+end
+end
+info.valid = true
+ret info
+end
+if ver != 4 or n < 20:
+ret info
+end
+ihl := (_b(p, 0) & 15) * 4
+total := _u16(p, 2)
+if ihl < 20 or total < ihl or total > n:
+ret info
+end
+frag := _u16(p, 6)
+info.fragment = (frag & 8191) != 0 or (frag & 8192) != 0
+info.proto = _b(p, 9)
+info.src = _ip4s(_u32(p, 12))
+info.dst = _ip4s(_u32(p, 16))
+info.header_len = ihl
+info.total = total
+info.payload_offset = ihl
+info.payload_len = total - ihl
+if info.proto == proto_tcp:
+if total - ihl < 20:
+ret info
+end
+doff := (_b(p, ihl + 12) >> 4) * 4
+if doff < 20 or doff > total - ihl:
+ret info
+end
+info.sport = _u16(p, ihl)
+info.dport = _u16(p, ihl + 2)
+info.flags = _b(p, ihl + 13) & 63
+info.payload_offset = ihl + doff
+info.payload_len = total - ihl - doff
+else info.proto == proto_udp:
+if total - ihl < 8:
+ret info
+end
+info.sport = _u16(p, ihl)
+info.dport = _u16(p, ihl + 2)
+info.payload_offset = ihl + 8
+info.payload_len = total - ihl - 8
+end
+info.valid = true
+ret info
+end
+@en "FreePacket"
+@fa "آزادسازی‌بسته"
+pub func FreePacket(pk: Packet):
+if pk.data != null:
+mem.Free(pk.data)
+end
+end
+@en "BuildTcp4"
+@fa "ساخت بسته‌ی تی سی پی"
+pub func BuildTcp4(src: str, sport: int, dst: str, dport: int, seq: i64, ack: i64, flags: int, data: void*, n: int): Packet:
+pk := _build4(src, dst, proto_tcp, 20 + n)
+if pk.data == null:
+ret pk
+end
+p := pk.data as u8*
+_put16(p, 20, sport)
+_put16(p, 22, dport)
+_put32(p, 24, seq)
+_put32(p, 28, ack)
+p[32] = 80 as u8
+p[33] = (flags & 63) as u8
+_put16(p, 34, 65535)
+q := data as u8*
+repeat n in i:
+p[40 + i] = q[i]
+end
+FinishChecksums(pk.data, pk.len)
+ret pk
+end
+@en "BuildUdp4"
+@fa "ساخت بسته‌ی یو دی پی"
+pub func BuildUdp4(src: str, sport: int, dst: str, dport: int, data: void*, n: int): Packet:
+pk := _build4(src, dst, proto_udp, 8 + n)
+if pk.data == null:
+ret pk
+end
+p := pk.data as u8*
+_put16(p, 20, sport)
+_put16(p, 22, dport)
+_put16(p, 24, 8 + n)
+q := data as u8*
+repeat n in i:
+p[28 + i] = q[i]
+end
+FinishChecksums(pk.data, pk.len)
+ret pk
+end
+package tun
+import mem
+import str
+import net.tunnel
+func _mask(prefix: int): str:
+mut bits := prefix
+if bits < 0:
+bits = 0
+end
+if bits > 32:
+bits = 32
+end
+mut v := 0 as i64
+repeat bits in i:
+v |= (1 as i64) << (31 - i)
+end
+ret _ip4s(v)
+end
+func _private4(ip: str): bool:
+a := _ip4(ip)
+if a < 0:
+ret false
+end
+b0 := (a >> 24) & 255
+b1 := (a >> 16) & 255
+if b0 == 10 or (b0 == 192 and b1 == 168) or (b0 == 172 and b1 >= 16 and b1 <= 31):
+ret true
+end
+ret (b0 == 100 and b1 >= 64 and b1 <= 127) or (b0 == 169 and b1 == 254)
+end
+func _hexv(s: str): i64:
+k := s.Len()
+if k == 0 or k > 15:
+ret 0 - 1
+end
+p := s as u8*
+mut v := 0 as i64
+repeat k in i:
+c := p[i] as int
+mut d := 0 - 1
+if c >= 48 and c <= 57:
+d = c - 48
+else c >= 97 and c <= 102:
+d = c - 87
+else c >= 65 and c <= 70:
+d = c - 55
+end
+if d < 0:
+ret 0 - 1
+end
+v = v * (16 as i64) + (d as i64)
+end
+ret v
+end
+func _decv(s: str): int:
+k := s.Len()
+if k == 0 or k > 9:
+ret 0 - 1
+end
+p := s as u8*
+mut v := 0
+repeat k in i:
+c := p[i] as int
+if c < 48 or c > 57:
+ret 0 - 1
+end
+v = v * 10 + (c - 48)
+end
+ret v
+end
+func _hex_le_ip(h: str): str:
+if h.Len() != 8:
+ret ""
+end
+mut v := 0 as i64
+repeat 4 in i:
+part := h.Substr(i * 2, 2)
+byte := _hexv(part)
+mem.Free(part as void*)
+if byte < 0:
+ret ""
+end
+v |= byte << (i * 8)
+end
+ret _ip4s(v)
+end
+func _fields(line: str): Vector<str>:
+mut out := Vector {} as Vector<str>
+mut sb := str.NewBuilder()
+k := line.Len()
+p := line as u8*
+repeat k in i:
+c := p[i] as int
+if c == 32 or c == 9 or c == 13:
+if str.BufLen(sb) > (0 as i64):
+out.Push(str.BufStr(sb))
+str.BufReset(sb)
+end
+else:
+str.BufAppendChar(sb, c)
+end
+end
+if str.BufLen(sb) > (0 as i64):
+out.Push(str.BufStr(sb))
+end
+str.BufFree(sb)
+ret out
+end
+func _after_colon(line: str): str:
+at := line.Find(":")
+if at < 0:
+ret ""
+end
+ret line.Substr(at + 1, line.Len() - at - 1).Trim()
+end
+func _has(v: Vector<str>, s: str): bool:
+each x in v:
+if x == s:
+ret true
+end
+end
+ret false
+end
+func _next_ip(ip: str): str:
+a := _ip4(ip)
+if a < 0:
+ret ""
+end
+ret _ip4s((a + 1) & (4294967295 as i64))
+end
+func _net_of(ip: str, prefix: int): str:
+a := _ip4(ip)
+m := _ip4(_mask(prefix))
+if a < 0:
+ret ""
+end
+ret _ip4s(a & m)
+end
+func _plan_linux(dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>): Plan:
+mut pl := Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+next := _next_ip(opts.address)
+pl.up.Push("ip addr add " + opts.address + "/" + str.FromInt(opts.prefix as i64) + " dev " + dev)
+pl.up.Push("ip link set dev " + dev + " mtu " + str.FromInt(opts.mtu as i64) + " up")
+if not opts.auto_route:
+ret pl
+end
+each h in hosts:
+if gw.ip.Len() > 0:
+pl.up.Push("ip route replace " + h + "/32 via " + gw.ip + " dev " + gw.iface + " onlink")
+else:
+pl.up.Push("ip route replace " + h + "/32 dev " + gw.iface)
+end
+pl.down.Push("-ip route del " + h + "/32")
+end
+if opts.hijack_dns:
+each r in resolvers:
+if _private4(r) and not _has(hosts, r):
+pl.up.Push("-ip route replace " + r + "/32 dev " + dev)
+end
+end
+end
+pl.up.Push("ip route replace 0.0.0.0/1 dev " + dev)
+pl.up.Push("ip route replace 128.0.0.0/1 dev " + dev)
+if opts.block_ipv6:
+pl.up.Push("-ip -6 route replace unreachable ::/1")
+pl.up.Push("-ip -6 route replace unreachable 8000::/1")
+pl.down.Push("-ip -6 route del unreachable ::/1")
+pl.down.Push("-ip -6 route del unreachable 8000::/1")
+end
+if opts.hijack_dns and opts.set_system_dns:
+pl.up.Push("-resolvectl dns " + dev + " " + next)
+pl.up.Push("-resolvectl domain " + dev + " ~.")
+pl.up.Push("-resolvectl default-route " + dev + " true")
+pl.down.Push("-resolvectl revert " + dev)
+end
+ret pl
+end
+func _plan_macos(dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>): Plan:
+mut pl := Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+pl.up.Push("ifconfig " + dev + " inet " + opts.address + " " + opts.address + " netmask " + _mask(opts.prefix) + " mtu " + str.FromInt(opts.mtu as i64) + " up")
+pl.up.Push("-route -q -n add -net " + _net_of(opts.address, opts.prefix) + "/" + str.FromInt(opts.prefix as i64) + " -interface " + dev)
+if not opts.auto_route:
+ret pl
+end
+each h in hosts:
+if gw.ip.Len() > 0:
+pl.up.Push("route -q -n add -host " + h + " " + gw.ip)
+else:
+pl.up.Push("route -q -n add -host " + h + " -interface " + gw.iface)
+end
+pl.down.Push("-route -q -n delete -host " + h)
+end
+if opts.hijack_dns:
+each r in resolvers:
+if _private4(r) and not _has(hosts, r) and r != gw.ip:
+pl.up.Push("-route -q -n add -host " + r + " -interface " + dev)
+pl.down.Push("-route -q -n delete -host " + r)
+end
+end
+end
+pl.up.Push("route -q -n add -net 0.0.0.0/1 -interface " + dev)
+pl.up.Push("route -q -n add -net 128.0.0.0/1 -interface " + dev)
+if opts.block_ipv6:
+pl.up.Push("-ifconfig " + dev + " inet6 " + default_address6 + " prefixlen 126")
+pl.up.Push("-route -q -n add -inet6 -net ::/1 -interface " + dev)
+pl.up.Push("-route -q -n add -inet6 -net 8000::/1 -interface " + dev)
+end
+ret pl
+end
+func _plan_windows(dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>, exe: str): Plan:
+mut pl := Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+next := _next_ip(opts.address)
+pl.up.Push("netsh interface ipv4 set address name=" + dev + " source=static address=" + opts.address + " mask=" + _mask(opts.prefix))
+pl.up.Push("-netsh interface ipv4 set subinterface " + dev + " mtu=" + str.FromInt(opts.mtu as i64) + " store=active")
+pl.up.Push("-netsh interface ipv4 set interface " + dev + " metric=1")
+if exe.Len() > 0:
+rule := "salam-tun-" + dev
+pl.up.Push("-netsh advfirewall firewall add rule name=" + rule + " dir=in action=allow protocol=TCP enable=yes profile=any program=\"" + exe + "\"")
+pl.down.Push("-netsh advfirewall firewall delete rule name=" + rule)
+end
+if not opts.auto_route:
+ret pl
+end
+each h in hosts:
+mut line := "route add " + h + " mask 255.255.255.255 " + (gw.ip.Len() > 0 ? gw.ip : "0.0.0.0") + " metric 1"
+if gw.index > 0:
+line = line + " if " + str.FromInt(gw.index as i64)
+end
+pl.up.Push(line)
+pl.down.Push("-route delete " + h + " mask 255.255.255.255")
+end
+if opts.hijack_dns:
+if opts.set_system_dns:
+pl.up.Push("-netsh interface ipv4 set dnsservers name=" + dev + " source=static address=" + next + " register=none validate=no")
+end
+each r in resolvers:
+if _private4(r) and not _has(hosts, r) and r != gw.ip:
+pl.up.Push("-netsh interface ipv4 add route prefix=" + r + "/32 interface=" + dev + " store=active")
+end
+end
+end
+pl.up.Push("netsh interface ipv4 add route prefix=0.0.0.0/1 interface=" + dev + " store=active")
+pl.up.Push("netsh interface ipv4 add route prefix=128.0.0.0/1 interface=" + dev + " store=active")
+if opts.block_ipv6:
+pl.up.Push("-netsh interface ipv6 add address interface=" + dev + " address=" + default_address6 + "/126 store=active")
+pl.up.Push("-netsh interface ipv6 add route prefix=::/1 interface=" + dev + " store=active")
+pl.up.Push("-netsh interface ipv6 add route prefix=8000::/1 interface=" + dev + " store=active")
+end
+ret pl
+end
+func _split_command(line: str): Vector<str>:
+mut out := Vector {} as Vector<str>
+mut sb := str.NewBuilder()
+mut quoted := false
+p := line as u8*
+k := line.Len()
+repeat k in i:
+c := p[i] as int
+if c == 34:
+quoted = not quoted
+else c == 32 and not quoted:
+if str.BufLen(sb) > (0 as i64):
+out.Push(str.BufStr(sb))
+str.BufReset(sb)
+end
+else:
+str.BufAppendChar(sb, c)
+end
+end
+if str.BufLen(sb) > (0 as i64):
+out.Push(str.BufStr(sb))
+end
+str.BufFree(sb)
+ret out
+end
+@en "ValidName"
+@fa "نام معتبر"
+pub func ValidName(name: str): bool:
+k := name.Len()
+if k == 0 or k > 15:
+ret false
+end
+p := name as u8*
+repeat k in i:
+c := p[i] as int
+ok := (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 95
+if not ok:
+ret false
+end
+end
+ret true
+end
+@en "NextAddress"
+@fa "نشانی بعدی"
+pub func NextAddress(address: str): str:
+ret _next_ip(address)
+end
+@en "ParseLinuxRoutes"
+@fa "تجزیه مسیرهای لینوکس"
+pub func ParseLinuxRoutes(text: str): Gateway:
+lines := text.Split("\n")
+defer lines.Free()
+mut best := Gateway {}
+mut best_metric := 0 - 1
+each line in lines:
+f := _fields(line)
+defer f.Free()
+if f.Len() < 8 or f[0] == "Iface":
+continue
+end
+if f[1] != "00000000" or f[7] != "00000000":
+continue
+end
+flags := _hexv(f[3])
+if flags < 0 or (flags & 1) == 0:
+continue
+end
+metric := _decv(f[6])
+if best.ok and metric >= best_metric:
+continue
+end
+mut gw_ip := _hex_le_ip(f[2])
+if gw_ip == "0.0.0.0":
+gw_ip = ""
+end
+best = Gateway { ok = true, ip = gw_ip, iface = str.Clone(f[0]) }
+best_metric = metric
+end
+ret best
+end
+@en "ParseMacRoute"
+@fa "تجزیه مسیر مک"
+pub func ParseMacRoute(text: str): Gateway:
+lines := text.Split("\n")
+defer lines.Free()
+mut gw := Gateway {}
+each line in lines:
+t := line.Trim()
+if t.StartsWith("gateway:"):
+v := _after_colon(t)
+if tunnel.IsIP(v):
+gw.ip = v
+end
+else t.StartsWith("interface:"):
+gw.iface = _after_colon(t)
+end
+end
+gw.ok = gw.iface.Len() > 0
+ret gw
+end
+@en "ParseResolvers"
+@fa "تجزیه نام‌یاب‌ها"
+pub func ParseResolvers(text: str): Vector<str>:
+mut out := Vector {} as Vector<str>
+lines := text.Split("\n")
+defer lines.Free()
+each line in lines:
+t := line.Trim()
+mut v := ""
+if t.StartsWith("nameserver"):
+f := _fields(t)
+if f.Len() >= 2 and f[0] == "nameserver":
+v = str.Clone(f[1])
+else f.Len() >= 3 and f[1] == ":":
+v = str.Clone(f[2])
+end
+f.Free()
+end
+if v.Len() > 0 and _ip4(v) >= 0 and not _has(out, v):
+out.Push(v)
+end
+end
+ret out
+end
+@en "BuildPlan"
+@fa "ساخت نقشه"
+pub func BuildPlan(platform: str, dev: str, opts: Options, gw: Gateway, hosts: Vector<str>, resolvers: Vector<str>, exe: str): Plan:
+if platform == "linux":
+ret _plan_linux(dev, opts, gw, hosts, resolvers)
+end
+if platform == "macos":
+ret _plan_macos(dev, opts, gw, hosts, resolvers)
+end
+if platform == "windows":
+ret _plan_windows(dev, opts, gw, hosts, resolvers, exe)
+end
+ret Plan { up = Vector {} as Vector<str>, down = Vector {} as Vector<str> }
+end
+@en "SplitCommand"
+@fa "شکستن فرمان"
+pub func SplitCommand(line: str): Vector<str>:
+ret _split_command(line)
+end
+package tun
+import mem
+import str
+import net.tunnel
+@en "DnsQuestion"
+@fa "پرسش نام‌یابی"
+pub struct DnsQuestion:
+@en "ok"
+@fa "درست"
+pub ok: bool = false
+@en "id"
+@fa "شناسه"
+pub id: int = 0
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "qtype"
+@fa "نوع‌پرسش"
+pub qtype: int = 0
+end
+func _host_char(c: int): bool:
+ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 46 or c == 95
+end
+func _clean_host(p: u8*, off: int, n: int): str:
+if n <= 0 or n > 253:
+ret ""
+end
+mut sb := str.NewBuilder()
+repeat n in i:
+c := p[off + i] as int
+if not _host_char(c):
+str.BufFree(sb)
+ret ""
+end
+mut lc := c
+if c >= 65 and c <= 90:
+lc = c + 32
+end
+str.BufAppendChar(sb, lc)
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+if out.EndsWith("."):
+trimmed := out.Substr(0, out.Len() - 1)
+mem.Free(out as void*)
+ret trimmed
+end
+if tunnel.IsIP(out):
+mem.Free(out as void*)
+ret ""
+end
+ret out
+end
+func _tls_sni(p: u8*, n: int): str:
+if n < 43 or _b(p, 0) != 22 or _b(p, 5) != 1:
+ret ""
+end
+rec := 5 + _u16(p, 3)
+mut end_at := rec < n ? rec : n
+mut i := 5 + 4 + 2 + 32
+if i >= end_at:
+ret ""
+end
+i += 1 + _b(p, i)
+if i + 2 > end_at:
+ret ""
+end
+i += 2 + _u16(p, i)
+if i + 1 > end_at:
+ret ""
+end
+i += 1 + _b(p, i)
+if i + 2 > end_at:
+ret ""
+end
+ext_end := i + 2 + _u16(p, i)
+if ext_end < end_at:
+end_at = ext_end
+end
+i += 2
+until i + 4 <= end_at:
+kind := _u16(p, i)
+size := _u16(p, i + 2)
+body := i + 4
+if body + size > end_at:
+ret ""
+end
+if kind == 0 and size >= 5:
+mut j := body + 2
+list_end := body + size
+until j + 3 <= list_end:
+name_type := _b(p, j)
+name_len := _u16(p, j + 1)
+if j + 3 + name_len > list_end:
+ret ""
+end
+if name_type == 0:
+ret _clean_host(p, j + 3, name_len)
+end
+j += 3 + name_len
+end
+ret ""
+end
+i = body + size
+end
+ret ""
+end
+func _starts(p: u8*, n: int, word: str): bool:
+k := word.Len()
+if n < k:
+ret false
+end
+w := word as u8*
+repeat k in i:
+if p[i] != w[i]:
+ret false
+end
+end
+ret true
+end
+func _http_host(p: u8*, n: int): str:
+mut method := false
+each m in ["GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "]:
+if _starts(p, n, m):
+method = true
+end
+end
+if not method:
+ret ""
+end
+mut i := 0
+until i + 6 < n:
+if p[i] == (10 as u8):
+if i + 1 < n and (p[i + 1] == (13 as u8) or p[i + 1] == (10 as u8)):
+ret ""
+end
+a := (p[i + 1] as int) | 32
+b := (p[i + 2] as int) | 32
+c := (p[i + 3] as int) | 32
+d := (p[i + 4] as int) | 32
+if a == 104 and b == 111 and c == 115 and d == 116 and p[i + 5] == (58 as u8):
+mut s := i + 6
+until s < n and (p[s] == (32 as u8) or p[s] == (9 as u8)):
+s++
+end
+mut e := s
+until e < n and p[e] != (13 as u8) and p[e] != (10 as u8) and p[e] != (58 as u8) and p[e] != (32 as u8):
+e++
+end
+if p[s] == (91 as u8):
+ret ""
+end
+ret _clean_host(p, s, e - s)
+end
+end
+i++
+end
+ret ""
+end
+func _sniff_want(p: u8*, n: int): int:
+if n >= 5 and _b(p, 0) == 22:
+want := 5 + _u16(p, 3)
+ret want > 16384 ? 16384 : want
+end
+ret n
+end
+func _put_name(p: u8*, at: int, name: str): int:
+parts := name.Split(".")
+defer parts.Free()
+mut i := at
+each part in parts:
+k := part.Len()
+if k == 0:
+continue
+end
+if k > 63:
+ret 0 - 1
+end
+p[i] = k as u8
+i++
+w := part as u8*
+repeat k in j:
+p[i + j] = w[j]
+end
+i += k
+end
+p[i] = 0 as u8
+ret i + 1
+end
+@en "SniffHost"
+@fa "شناسایی میزبان"
+pub func SniffHost(ptr: void*, n: int): str:
+if ptr == null or n <= 0:
+ret ""
+end
+p := ptr as u8*
+if _b(p, 0) == 22:
+ret _tls_sni(p, n)
+end
+ret _http_host(p, n)
+end
+@en "ParseDnsQuery"
+@fa "تجزیه پرسش نام‌یابی"
+pub func ParseDnsQuery(ptr: void*, n: int): DnsQuestion:
+p := ptr as u8*
+if ptr == null or n < 17:
+ret DnsQuestion {}
+end
+if (_b(p, 2) & 128) != 0 or _u16(p, 4) < 1:
+ret DnsQuestion {}
+end
+mut i := 12
+mut sb := str.NewBuilder()
+mut first := true
+mut ok := false
+until i < n:
+k := _b(p, i)
+if k == 0:
+i++
+ok = true
+break
+end
+if k > 63 or i + 1 + k > n:
+break
+end
+if not first:
+str.BufAppend(sb, ".")
+end
+first = false
+repeat k in j:
+str.BufAppendChar(sb, p[i + 1 + j] as int)
+end
+i += 1 + k
+end
+name := str.BufStr(sb)
+str.BufFree(sb)
+if not ok or i + 4 > n:
+mem.Free(name as void*)
+ret DnsQuestion {}
+end
+ret DnsQuestion { ok = true, id = _u16(p, 0), name = name, qtype = _u16(p, i) }
+end
+@en "BuildDnsQuery"
+@fa "ساخت پرسش نام‌یابی"
+pub func BuildDnsQuery(id: int, name: str, qtype: int): Packet:
+size := 12 + name.Len() + 2 + 4
+p := mem.AllocateZeroed(size as u64) as u8*
+_put16(p, 0, id & 65535)
+_put16(p, 2, 256)
+_put16(p, 4, 1)
+end_at := _put_name(p, 12, name)
+if end_at < 0:
+mem.Free(p as void*)
+ret Packet {}
+end
+_put16(p, end_at, qtype)
+_put16(p, end_at + 2, 1)
+ret Packet { data = p as void*, len = end_at + 4 }
+end
+package tun
+import mem
+import str
+import sync
+import pool
+import atomic
+import os.shell
+import net.tcp
+import net.tunnel
+import net.internal.rawsock
+mut _cur := null as void*
+mut _cur_gw := Gateway {}
+mut _last_error := ""
+struct _Stack:
+pub dev: Device = Device {}
+pub nat: Nat = Nat {}
+pub listener: tcp.Server = tcp.Server {}
+pub wmu: sync.Mutex = sync.Mutex {}
+pub running: atomic.Flag = atomic.Flag {}
+pub loop_done: atomic.Flag = atomic.Flag {}
+pub accept_done: atomic.Flag = atomic.Flag {}
+pub workers: pool.Pool = pool.Pool {}
+pub dialer: dyn tunnel.Dialer = tunnel.BlockDialer {}
+pub upstream: tunnel.Addr = tunnel.Addr {}
+pub address: str = ""
+pub next: str = ""
+pub plan: Plan = Plan {}
+pub gateway: Gateway = Gateway {}
+pub sniff: bool = true
+pub sniff_ms: int = 300
+pub idle_ms: int = 0
+pub dns: bool = true
+pub block6: bool = true
+pub relay: tunnel.Stats = tunnel.Stats {}
+pub c_in: atomic.I64 = atomic.I64 {}
+pub c_out: atomic.I64 = atomic.I64 {}
+pub c_drop: atomic.I64 = atomic.I64 {}
+pub c_conn: atomic.I64 = atomic.I64 {}
+pub c_active: atomic.I64 = atomic.I64 {}
+pub c_dns: atomic.I64 = atomic.I64 {}
+pub c_sniff: atomic.I64 = atomic.I64 {}
+pub c_fail: atomic.I64 = atomic.I64 {}
+end
+func _send(sp: _Stack*, ptr: void*, n: int):
+sync.Lock(sp[0].wmu)
+w := sp[0].dev.Write(ptr, n)
+sync.Unlock(sp[0].wmu)
+if w > 0:
+atomic.Add(sp[0].c_out, 1 as i64)
+end
+end
+func _read_full(s: dyn tunnel.Stream, buf: void*, n: int): bool:
+mut got := 0
+until got < n:
+k := s.ReadBytes(((buf as i64) + (got as i64)) as void*, n - got)
+if k <= 0:
+ret false
+end
+got += k
+end
+ret true
+end
+func _write_full(s: dyn tunnel.Stream, buf: void*, n: int): bool:
+mut put := 0
+until put < n:
+k := s.WriteBytes(((buf as i64) + (put as i64)) as void*, n - put)
+if k <= 0:
+ret false
+end
+put += k
+end
+ret true
+end
+func _dns_job(sp: _Stack*, pkt: void*, n: int):
+info := Parse(pkt, n)
+if not info.valid or info.payload_len <= 0 or info.payload_len > 4096:
+mem.Free(pkt)
+ret
+end
+atomic.Add(sp[0].c_dns, 1 as i64)
+up := sp[0].dialer.Dial(sp[0].upstream)
+if not up.Ok():
+atomic.Add(sp[0].c_fail, 1 as i64)
+mem.Free(pkt)
+ret
+end
+up.SetDeadline(5000)
+q := mem.AllocateZeroed((info.payload_len + 2) as u64) as u8*
+_put16(q, 0, info.payload_len)
+mem.Copy(((q as i64) + (2 as i64)) as void*, ((pkt as i64) + (info.payload_offset as i64)) as void*, info.payload_len as u64)
+mut ok := _write_full(up, q as void*, info.payload_len + 2)
+mem.Free(q as void*)
+hdr := mem.AllocateZeroed(4 as u64) as u8*
+if ok:
+ok = _read_full(up, hdr as void*, 2)
+end
+rlen := _u16(hdr, 0)
+mem.Free(hdr as void*)
+if ok and rlen > 0 and rlen <= 65000:
+body := mem.Allocate(rlen as u64)
+if _read_full(up, body, rlen):
+reply := BuildUdp4(info.dst, info.dport, info.src, info.sport, body, rlen)
+if reply.data != null:
+_send(sp, reply.data, reply.len)
+end
+FreePacket(reply)
+end
+mem.Free(body)
+end
+up.Close()
+mem.Free(pkt)
+end
+func _sniff_read(s: dyn tunnel.Stream, buf: void*, ms: int): int:
+s.SetDeadline(ms)
+start := sync.NowMs()
+mut got := 0
+until got < 16384:
+k := s.ReadBytes(((buf as i64) + (got as i64)) as void*, 16384 - got)
+if k <= 0:
+break
+end
+got += k
+if got >= _sniff_want(buf as u8*, got):
+break
+end
+if sync.NowMs() - start >= (ms as i64):
+break
+end
+end
+s.SetDeadline(0)
+ret got
+end
+func _serve(sp: _Stack*, c: tcp.Conn):
+e := sp[0].nat.Lookup(tcp.PeerPort(c))
+if not e.ok:
+tcp.Close(c)
+ret
+end
+atomic.Add(sp[0].c_conn, 1 as i64)
+atomic.Add(sp[0].c_active, 1 as i64)
+tcp.SetNoDelay(c, true)
+down := tunnel.WrapTcp(c)
+mut target := tunnel.NewAddr(e.dst, e.dport)
+mut peek := null as void*
+mut pn := 0
+if sp[0].sniff:
+peek = mem.Allocate(16384 as u64)
+pn = _sniff_read(down, peek, sp[0].sniff_ms)
+if pn > 0:
+host := SniffHost(peek, pn)
+if host.Len() > 0:
+target = tunnel.NewAddr(host, e.dport)
+atomic.Add(sp[0].c_sniff, 1 as i64)
+end
+end
+end
+up := sp[0].dialer.Dial(target)
+if not up.Ok() or (pn > 0 and not _write_full(up, peek, pn)):
+atomic.Add(sp[0].c_fail, 1 as i64)
+atomic.Add(sp[0].c_active, 0 - 1 as i64)
+up.Close()
+down.Close()
+if peek != null:
+mem.Free(peek)
+end
+ret
+end
+if peek != null:
+mem.Free(peek)
+end
+_r := tunnel.RelayWith(down, up, sp[0].relay, sp[0].idle_ms)
+atomic.Add(sp[0].c_active, 0 - 1 as i64)
+end
+func _packet_loop(sp: _Stack*):
+buf := mem.Allocate(65536 as u64)
+mut last_sweep := sync.NowMs()
+until atomic.Get(sp[0].running):
+n := sp[0].dev.Read(buf, 65535, 200)
+now := sync.NowMs()
+if now - last_sweep > (5000 as i64):
+_g := sp[0].nat.Sweep(now)
+last_sweep = now
+end
+if n < 0:
+break
+end
+if n == 0:
+continue
+end
+atomic.Add(sp[0].c_in, 1 as i64)
+act := sp[0].nat.Rewrite(buf, n, now)
+if act == action_reply:
+_send(sp, buf, n)
+else act == action_dns and sp[0].dns:
+copy := mem.Allocate(n as u64)
+mem.Copy(copy, buf, n as u64)
+if not pool.Submit(sp[0].workers, (): _dns_job(sp, copy, n) end):
+mem.Free(copy)
+end
+else act == action_ipv6 and sp[0].block6:
+rst := _tcp_rst6(buf, n)
+if rst.data != null:
+_send(sp, rst.data, rst.len)
+else:
+atomic.Add(sp[0].c_drop, 1 as i64)
+end
+FreePacket(rst)
+else:
+atomic.Add(sp[0].c_drop, 1 as i64)
+end
+end
+mem.Free(buf)
+atomic.Set(sp[0].loop_done, true)
+end
+func _accept_loop(sp: _Stack*):
+until atomic.Get(sp[0].running):
+c := tcp.Accept(sp[0].listener)
+if not tcp.ConnOk(c):
+if atomic.Get(sp[0].running):
+sync.SleepMs(20)
+end
+continue
+end
+if not atomic.Get(sp[0].running):
+tcp.Close(c)
+break
+end
+if not pool.Submit(sp[0].workers, (): _serve(sp, c) end):
+tcp.Close(c)
+end
+end
+atomic.Set(sp[0].accept_done, true)
+end
+func _run_line(line: str): str:
+optional := line.StartsWith("-")
+cmd := optional ? line.Substr(1, line.Len() - 1) : str.Clone(line)
+parts := _split_command(cmd)
+defer parts.Free()
+mem.Free(cmd as void*)
+if parts.Len() == 0:
+ret ""
+end
+mut args := Vector {} as Vector<str>
+defer args.Free()
+repeat parts.Len() - 1 in i:
+args.Push(parts[i + 1])
+end
+r := shell.Run(parts[0], args)
+if r.code == 0 or optional:
+ret ""
+end
+msg := r.err.Trim()
+ret line + " failed (exit " + str.FromInt(r.code as i64) + ")" + (msg.Len() > 0 ? ": " + msg : "")
+end
+func _run_down(pl: Plan):
+each line in pl.down:
+_e := _run_line(line)
+end
+end
+func _default_name(): str:
+if _platform() == "macos":
+ret ""
+end
+ret "salamtun"
+end
+func _resolve_hosts(names: Vector<str>): Vector<str>:
+mut out := Vector {} as Vector<str>
+each h in names:
+if _ip4(h) >= 0:
+if not _has(out, h):
+out.Push(str.Clone(h))
+end
+continue
+end
+if tunnel.IsIP(h):
+continue
+end
+ips := rawsock.ResolveAll(h)
+each ip in ips:
+if _ip4(ip) >= 0 and not _has(out, ip):
+out.Push(str.Clone(ip))
+end
+end
+ips.Free()
+end
+ret out
+end
+func _fail(msg: str): Session:
+_last_error = msg
+ret Session { error = msg }
+end
+@en "Available"
+@fa "در‌دسترس بودن"
+pub func Available(): Availability:
+ret _available()
+end
+@en "Platform"
+@fa "سکو"
+pub func Platform(): str:
+ret _platform()
+end
+@en "DefaultGateway"
+@fa "دروازه پیش‌فرض"
+pub func DefaultGateway(): Gateway:
+if _cur != null:
+ret _cur_gw
+end
+ret _gateway()
+end
+@en "SystemResolvers"
+@fa "نام‌یاب‌های سامانه"
+pub func SystemResolvers(): Vector<str>:
+ret _resolvers()
+end
+@en "NewBypassDialer"
+@fa "شماره‌گیر دورزن تازه"
+pub func NewBypassDialer(): BypassDialer:
+ret BypassDialer { gateway = DefaultGateway() }
+end
+@en "Bypass"
+@fa "دورزن"
+pub func Bypass(): dyn tunnel.Dialer:
+ret NewBypassDialer()
+end
+@en "OpenDevice"
+@fa "باز کردن دستگاه"
+pub func OpenDevice(name: str, mtu: int): Device:
+if name.Len() > 0 and not ValidName(name):
+ret Device { error = "invalid interface name: use 1 to 15 letters, digits, '-' or '_'" }
+end
+ret _dev_open(name, mtu > 0 ? mtu : 1500)
+end
+@en "Running"
+@fa "در‌حال اجرا"
+pub func Running(): bool:
+ret _cur != null
+end
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+ret _last_error
+end
+@en "Start"
+@fa "آغاز"
+pub func Start(opts: Options): Session:
+if _cur != null:
+ret _fail("a tun session is already running")
+end
+av := _available()
+if not av.ok:
+ret _fail(av.reason)
+end
+mut name := opts.name
+if name.Len() == 0:
+name = _default_name()
+end
+if name.Len() > 0 and not ValidName(name):
+ret _fail("invalid interface name: use 1 to 15 letters, digits, '-' or '_'")
+end
+if opts.prefix < 1 or opts.prefix > 30 or _ip4(opts.address) < 0:
+ret _fail("address must be an IPv4 address with a prefix of 30 or less")
+end
+next := _next_ip(opts.address)
+if _net_of(next, opts.prefix) != _net_of(opts.address, opts.prefix):
+ret _fail("the address must leave room for the next address in its subnet")
+end
+upstream := tunnel.ParseAddr(opts.upstream.Len() > 0 ? opts.upstream : default_upstream)
+if opts.hijack_dns and not upstream.valid:
+ret _fail("invalid DNS upstream " + opts.upstream)
+end
+gw := _gateway()
+if opts.auto_route and not gw.ok:
+ret _fail("cannot find the default gateway of this machine")
+end
+hosts := _resolve_hosts(opts.exclude)
+resolvers := _resolvers()
+dev := _dev_open(name, opts.mtu > 0 ? opts.mtu : 1500)
+if not dev.ok:
+ret _fail(dev.error)
+end
+pl := BuildPlan(_platform(), dev.name, opts, gw, hosts, resolvers, _exe())
+hosts.Free()
+resolvers.Free()
+each line in pl.up:
+err := _run_line(line)
+if err.Len() > 0:
+_run_down(pl)
+dev.Close()
+ret _fail(err)
+end
+end
+srv := tcp.BindOn(opts.address, 0)
+if not tcp.Ok(srv):
+_run_down(pl)
+dev.Close()
+ret _fail("cannot listen on " + opts.address + " inside the tun device")
+end
+nat := NewNat(opts.address, next, tcp.Port(srv), opts.idle_ms)
+sp := mem.AllocateZeroed(sizeof(_Stack) as u64) as _Stack*
+sp[0] = _Stack {
+dev = dev, nat = nat, listener = srv, wmu = sync.NewMutex(), running = atomic.NewFlag(true),
+loop_done = atomic.NewFlag(false), accept_done = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 4096 as i64),
+dialer = opts.dialer, upstream = upstream, address = str.Clone(opts.address), next = next, plan = pl,
+gateway = gw, sniff = opts.sniff, sniff_ms = opts.sniff_ms > 0 ? opts.sniff_ms : 300, idle_ms = opts.idle_ms,
+dns = opts.hijack_dns, block6 = opts.block_ipv6, relay = tunnel.NewStats(), c_in = atomic.NewI64(0 as i64),
+c_out = atomic.NewI64(0 as i64), c_drop = atomic.NewI64(0 as i64), c_conn = atomic.NewI64(0 as i64),
+c_active = atomic.NewI64(0 as i64), c_dns = atomic.NewI64(0 as i64), c_sniff = atomic.NewI64(0 as i64),
+c_fail = atomic.NewI64(0 as i64)
+}
+_cur = sp as void*
+_cur_gw = gw
+_t1 := spawn(_packet_loop, sp)
+_t2 := spawn(_accept_loop, sp)
+_last_error = ""
+ret Session { ok = true, name = dev.name, address = str.Clone(opts.address), dns = str.Clone(next), id = 1 }
+end
+@en "SessionStats"
+@fa "آمار نشست"
+pub func SessionStats(s: Session): Stats:
+if _cur == null or not s.ok:
+ret Stats {}
+end
+sp := _cur as _Stack*
+ret Stats {
+packets_in = atomic.Load(sp[0].c_in), packets_out = atomic.Load(sp[0].c_out), dropped = atomic.Load(sp[0].c_drop),
+connections = atomic.Load(sp[0].c_conn), active = atomic.Load(sp[0].c_active), dns_queries = atomic.Load(sp[0].c_dns),
+sniffed = atomic.Load(sp[0].c_sniff), failed = atomic.Load(sp[0].c_fail), bytes_up = sp[0].relay.Up(),
+bytes_down = sp[0].relay.Down()
+}
+end
+@en "Stop"
+@fa "توقف"
+pub func Stop(s: Session):
+if _cur == null or not s.ok:
+ret
+end
+sp := _cur as _Stack*
+atomic.Set(sp[0].running, false)
+host := sp[0].address
+port := tcp.Port(sp[0].listener)
+tcp.WakeServer(host, port)
+tcp.CloseServer(sp[0].listener)
+mut waited := 0
+until waited < 3000 and not (atomic.Get(sp[0].loop_done) and atomic.Get(sp[0].accept_done)):
+sync.SleepMs(20)
+waited += 20
+end
+_run_down(sp[0].plan)
+sp[0].dev.Close()
+_cur = null
+_cur_gw = Gateway {}
+end
+@en "net/tun"
+@fa "تون"
+package tun
+import net.tunnel
+@en "default_address"
+@fa "نشانی پیش‌فرض"
+pub const default_address := "172.19.0.1"
+@en "default_address6"
+@fa "نشانی پیش‌فرض شش"
+pub const default_address6 := "fdfe:dcba:9876::1"
+@en "default_upstream"
+@fa "نام‌یاب بالادست پیش‌فرض"
+pub const default_upstream := "1.1.1.1:53"
+@en "Options"
+@fa "گزینه‌ها"
+pub struct Options:
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "address"
+@fa "نشانی"
+pub address: str = "172.19.0.1"
+@en "prefix"
+@fa "پیشوند"
+pub prefix: int = 30
+@en "mtu"
+@fa "بیشینه‌بسته"
+pub mtu: int = 1500
+@en "dialer"
+@fa "شماره‌گیر"
+pub dialer: dyn tunnel.Dialer = tunnel.BlockDialer {}
+@en "exclude"
+@fa "استثناها"
+pub exclude: Vector<str> = Vector {}
+@en "auto_route"
+@fa "مسیریابی خودکار"
+pub auto_route: bool = true
+@en "hijack_dns"
+@fa "ربودن نام‌یابی"
+pub hijack_dns: bool = true
+@en "upstream"
+@fa "نام‌یاب بالادست"
+pub upstream: str = "1.1.1.1:53"
+@en "set_system_dns"
+@fa "تنظیم نام‌یاب سامانه"
+pub set_system_dns: bool = true
+@en "block_ipv6"
+@fa "بستن آی‌پی۶"
+pub block_ipv6: bool = true
+@en "sniff"
+@fa "شناسایی دامنه"
+pub sniff: bool = true
+@en "sniff_ms"
+@fa "مهلت شناسایی"
+pub sniff_ms: int = 300
+@en "idle_ms"
+@fa "مهلت بیکاری"
+pub idle_ms: int = 600000
+@en "dial_ms"
+@fa "مهلت اتصال"
+pub dial_ms: int = 10000
+end
+@en "Gateway"
+@fa "دروازه"
+pub struct Gateway:
+@en "ok"
+@fa "درست"
+pub ok: bool = false
+@en "ip"
+@fa "نشانی دروازه"
+pub ip: str = ""
+@en "iface"
+@fa "رابط"
+pub iface: str = ""
+@en "index"
+@fa "شماره رابط"
+pub index: int = 0
+end
+@en "Plan"
+@fa "نقشه"
+pub struct Plan:
+@en "up"
+@fa "برپایی"
+pub up: Vector<str> = Vector {}
+@en "down"
+@fa "برچیدن"
+pub down: Vector<str> = Vector {}
+end
+@en "Availability"
+@fa "دسترس‌پذیری"
+pub struct Availability:
+@en "ok"
+@fa "درست"
+pub ok: bool = false
+@en "reason"
+@fa "دلیل"
+pub reason: str = ""
+end
+@en "Stats"
+@fa "آمار"
+pub struct Stats:
+@en "packets_in"
+@fa "بسته‌های‌ورودی"
+pub packets_in: i64 = 0 as i64
+@en "packets_out"
+@fa "بسته‌های‌خروجی"
+pub packets_out: i64 = 0 as i64
+@en "dropped"
+@fa "دورریخته‌ها"
+pub dropped: i64 = 0 as i64
+@en "connections"
+@fa "اتصال‌ها"
+pub connections: i64 = 0 as i64
+@en "active"
+@fa "اتصال‌های فعال"
+pub active: i64 = 0 as i64
+@en "dns_queries"
+@fa "پرسش‌های نام‌یابی"
+pub dns_queries: i64 = 0 as i64
+@en "sniffed"
+@fa "دامنه‌های شناسایی‌شده"
+pub sniffed: i64 = 0 as i64
+@en "failed"
+@fa "اتصال‌های ناموفق"
+pub failed: i64 = 0 as i64
+@en "bytes_up"
+@fa "بایت‌های بالارو"
+pub bytes_up: i64 = 0 as i64
+@en "bytes_down"
+@fa "بایت‌های پایین‌رو"
+pub bytes_down: i64 = 0 as i64
+end
+@en "Device"
+@fa "دستگاه"
+pub struct Device:
+@en "ok"
+@fa "درست"
+pub ok: bool = false
+@en "error"
+@fa "خطا"
+pub error: str = ""
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "mtu"
+@fa "بیشینه‌بسته"
+pub mtu: int = 1500
+@en "fd"
+@fa "توصیف‌گر"
+pub fd: i64 = 0 - 1
+@en "session"
+@fa "نشست وین‌تون"
+pub session: void* = null
+@en "adapter"
+@fa "آداپتور"
+pub adapter: void* = null
+@en "event"
+@fa "رویداد خواندن"
+pub event: void* = null
+@en "scratch"
+@fa "میانگیر"
+pub scratch: void* = null
+@en "Read"
+@fa "خواندن"
+pub func Read(buf: void*, max: int, timeout_ms: int): int:
+if not this.ok:
+ret 0 - 1
+end
+ret _dev_read(this[0], buf, max, timeout_ms)
+end
+@en "Write"
+@fa "نوشتن"
+pub func Write(ptr: void*, n: int): int:
+if not this.ok:
+ret 0 - 1
+end
+ret _dev_write(this[0], ptr, n)
+end
+@en "Close"
+@fa "بستن"
+pub func Close():
+if this.ok:
+_dev_close(this[0])
+end
+end
+end
+@en "BypassDialer"
+@fa "شماره‌گیر دورزن"
+pub struct BypassDialer:
+@en "gateway"
+@fa "دروازه فیزیکی"
+pub gateway: Gateway = Gateway {}
+@en "timeout_ms"
+@fa "مهلت اتصال"
+pub timeout_ms: int = 10000
+@en "Dial"
+@fa "اتصال"
+pub func Dial(target: tunnel.Addr): dyn tunnel.Stream:
+ret _bypass_dial(this.gateway, target, this.timeout_ms)
+end
+@en "Name"
+@fa "نام"
+pub func Name(): str:
+ret "bypass"
+end
+end
+@en "Session"
+@fa "نشست"
+pub struct Session:
+@en "ok"
+@fa "درست"
+pub ok: bool = false
+@en "error"
+@fa "خطا"
+pub error: str = ""
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "address"
+@fa "نشانی"
+pub address: str = ""
+@en "dns"
+@fa "نشانی نام‌یاب"
+pub dns: str = ""
+@en "id"
+@fa "شناسه"
+pub id: int = 0
+end
 @en "net/tunnel"
 @fa "تونل"
 package tunnel

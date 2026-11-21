@@ -116,6 +116,7 @@ else:
                 mem.Free(buf)
                 cap *= 4
             else:
+                _bput(buf, n, 0)
                 out = str.Clone(buf as str)
                 mem.Free(buf)
                 done = true
@@ -159,16 +160,22 @@ func _sftp_mode_for(path: str, follow: bool): u32:
 end
 
 func _sftp_put_attrs(b &: Buf, path: str, detailed: bool, follow: bool):
-    info := os.Stat(path)
-    mut size := info.size
+    own_link := not follow and _sftp_is_link(path)
+    mut size := 0 as i64
+    mut mtime := 0
+    if own_link:
+        size = _sftp_readlink(path).len() as i64
+    else:
+        info := os.Stat(path)
+        size = info.size
+        if detailed:
+            mtime = fs.ModTime(path) as int
+        end
+    end
     if size < 0:
         size = 0
     end
     mode := _sftp_mode_for(path, follow)
-    mut mtime := 0
-    if detailed:
-        mtime = fs.ModTime(path) as int
-    end
     if detailed:
         BufPutUint32(b, 0x0000000D as u32)
         BufPutUint64(b, size as u64)
@@ -183,6 +190,9 @@ func _sftp_put_attrs(b &: Buf, path: str, detailed: bool, follow: bool):
 end
 
 func _sftp_longname(name: str, path: str): str:
+    if _sftp_is_link(path):
+        ret "lrwxrwxrwx 1 owner group " + str.FromInt(_sftp_readlink(path).len() as i64) + " Jan 01 00:00 " + name
+    end
     mut perm := "-rw-r--r--"
     mut size := os.FileSize(path)
     if size < 0:
@@ -191,8 +201,6 @@ func _sftp_longname(name: str, path: str): str:
     if os.IsDir(path):
         perm = "drwxr-xr-x"
         size = 4096
-    else if _sftp_is_link(path):
-        perm = "lrwxrwxrwx"
     end
     ret perm + " 1 owner group " + str.FromInt(size) + " Jan 01 00:00 " + name
 end
@@ -254,8 +262,24 @@ func _sftp_reply_name_count(sess &: SrvSession, ch &: SrvChannel, id: u32, name:
     FreeBuf(frame)
 end
 
+func _sftp_client_path(path: str): str:
+    mut out := path
+    if SALAM_OS_WINDOWS:
+        out = str.Replace(path, "\\", "/")
+    end
+    ret out
+end
+
+func _sftp_canon(p: str): str:
+    mut out := p
+    if SALAM_OS_WINDOWS:
+        out = str.Replace(p, "\\", "/").Lower()
+    end
+    ret out
+end
+
 func _sftp_join(st: SftpSessionState, path: str): str:
-    mut full := path
+    mut full := _sftp_client_path(path)
     if not str.StartsWith(full, "/"):
         if str.Equals(st.home, "/"):
             full = "/" + full
@@ -272,7 +296,7 @@ end
 
 func _sftp_virtual(st: SftpSessionState, path: str): str:
     _root := st.root
-    mut full := path
+    mut full := _sftp_client_path(path)
     if not str.StartsWith(full, "/"):
         if str.Equals(st.home, "/"):
             full = "/" + full
@@ -284,10 +308,15 @@ func _sftp_virtual(st: SftpSessionState, path: str): str:
 end
 
 func _sftp_under(st: SftpSessionState, real: str): bool:
-    if str.Equals(real, st.root) or str.Equals(st.root, "/"):
+    root := _sftp_canon(st.root)
+    r := _sftp_canon(real)
+    if str.Equals(r, root) or str.Equals(root, "/"):
         ret true
     end
-    ret str.StartsWith(real, st.root + "/")
+    if str.EndsWith(root, "/"):
+        ret str.StartsWith(r, root)
+    end
+    ret str.StartsWith(r, root + "/")
 end
 
 func _sftp_dir_of(st: SftpSessionState, phys: str): str:
@@ -341,11 +370,13 @@ func _sftp_link_target(st: SftpSessionState, link_phys: str, target: str): str:
     if parent.len() == 0 or not _sftp_under(st, parent):
         ret ""
     end
+    root := _sftp_canon(st.root)
+    here := _sftp_canon(parent)
     mut rel := ""
-    if str.Equals(st.root, "/"):
-        rel = parent
-    else if not str.Equals(parent, st.root):
-        rel = parent.substr(st.root.len() + 1, parent.len() - st.root.len() - 1)
+    if str.Equals(root, "/"):
+        rel = here
+    else if not str.Equals(here, root):
+        rel = here.substr(root.len() + 1, here.len() - root.len() - 1)
     end
     base_parts := str.Split(rel, "/")
     defer base_parts.free()
@@ -358,12 +389,13 @@ func _sftp_link_target(st: SftpSessionState, link_phys: str, target: str): str:
     end
     mut segs := Vector {} as Vector<str>
     defer segs.free()
-    if not str.StartsWith(target, "/"):
+    wanted := _sftp_client_path(target)
+    if not str.StartsWith(wanted, "/"):
         each p in base:
             segs.push(p)
         end
     end
-    target_parts := str.Split(target, "/")
+    target_parts := str.Split(wanted, "/")
     defer target_parts.free()
     mut escaped := false
     each p in target_parts:
@@ -402,10 +434,12 @@ func _sftp_link_target(st: SftpSessionState, link_phys: str, target: str): str:
         i++
     end
     if out.len() == 0:
-        ret "."
+        out = "."
+    else if str.EndsWith(out, "/"):
+        out = out.substr(0, out.len() - 1)
     end
-    if str.EndsWith(out, "/"):
-        ret out.substr(0, out.len() - 1)
+    if not _sftp_inside(st, parent + "/" + out):
+        ret ""
     end
     ret out
 end
@@ -834,7 +868,7 @@ func _sftp_op_remove(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState,
         _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
         ret
     end
-    if os.IsDir(phys):
+    if os.IsDir(phys) and not _sftp_is_link(phys):
         _sftp_status(sess, ch, id, _SFX_FAILURE, "is a directory")
         ret
     end

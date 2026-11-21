@@ -238501,6 +238501,35 @@ end
 end
 ret str.BufStr(b)
 end
+func _real_canon(p: str): str:
+mut out := str.Clone(p)
+if SALAM_OS_WINDOWS:
+mem.Free(out as void *)
+out = str.Replace(p, "\\", "/").Lower()
+end
+ret out
+end
+func _static_within(root: str, target: str): bool:
+rroot := os.RealPath(root)
+rtarget := os.RealPath(target)
+mut ok := false
+if rroot.Len() > 0 and rtarget.Len() > 0:
+cr := _real_canon(rroot)
+ct := _real_canon(rtarget)
+if ct == cr or cr == "/":
+ok = true
+else str.EndsWith(cr, "/"):
+ok = str.StartsWith(ct, cr)
+else:
+ok = str.StartsWith(ct, cr + "/")
+end
+mem.Free(cr as void *)
+mem.Free(ct as void *)
+end
+mem.Free(rroot as void *)
+mem.Free(rtarget as void *)
+ret ok
+end
 func _safe_static_path(root: str, rel: str): str:
 croot := filepath.Clean(root)
 joined := filepath.Join(croot, rel)
@@ -238641,17 +238670,30 @@ _ctx_mark_sent(ctx)
 static_handled = true
 else _eq_at(path, 0, prefix):
 relraw := path.Substr(prefix.Len(), path.Len() - prefix.Len())
+nul_in_path := str.Contains(relraw, "%00")
 rel := UrlDecode(relraw)
 mem.Free(relraw as void *)
-target := _safe_static_path(r.static_dir, rel)
+mut target := _safe_static_path(r.static_dir, rel)
 mem.Free(rel as void *)
+if nul_in_path:
+mem.Free(target as void *)
+target = str.Clone("")
+salam_ctx_set_status(ctx, 400)
+salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+salam_ctx_set(ctx, 5, "400 Bad Request")
+static_handled = true
+end
+if target.Len() > 0 and os.Exists(target) and not _static_within(r.static_dir, target):
+mem.Free(target as void *)
+target = str.Clone("")
+end
 if target.Len() > 0:
 if os.IsDir(target) and str.EndsWith(path, "/") == false:
 _static_dir_redirect(ctx, path)
 static_handled = true
 else os.IsDir(target):
 idx := filepath.Join(target, "index.html")
-if os.Exists(idx) and os.IsDir(idx) == false:
+if os.Exists(idx) and os.IsDir(idx) == false and _static_within(r.static_dir, idx):
 if _send_static(slot, fd, path, idx, shdr, keep) == 1:
 _ctx_mark_sent(ctx)
 static_handled = true

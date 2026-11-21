@@ -222,7 +222,7 @@ struct User:
 end
 
 func greeting(u: User): str:
-    if u.nickname.is_some():
+    if u.nickname.IsSome():
         ret "Hi, " + u.nickname.value
     end
     ret "Hello, " + u.name
@@ -233,7 +233,7 @@ func main:
     b := User { name = "Reza Karimi", age = 31 }
     println greeting(a)
     println greeting(b)
-    println b.age.unwrap_or(0), a.age.unwrap_or(0)
+    println b.age.UnwrapOr(0), a.age.UnwrapOr(0)
 end
 ```
 

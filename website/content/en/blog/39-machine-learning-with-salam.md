@@ -84,7 +84,7 @@ func main:
     mut shape := tensor.Shape1(1)
     mut w := tensor.FromArray(shape, start)
     repeat 31 in step:
-        tape.reset()
+        tape.Reset()
         x := autograd.Watch(tape, w)
         diff := autograd.AddScalar(tape, x, -3.0)
         loss := autograd.Sum(tape, autograd.Mul(tape, diff, diff))
@@ -140,7 +140,7 @@ func main:
     mut opt := optim.Adam { lr = 0.03 }
     mut tape := autograd.NewTape(1)
     repeat 600 in step:
-        tape.reset()
+        tape.Reset()
         store.zero_grad()
         logits := model.Forward(tape, store, autograd.Input(tape, x))
         loss := autograd.BCEWithLogits(tape, logits, autograd.Constant(tape, y))
@@ -150,7 +150,7 @@ func main:
             println "step", step, "loss below 0.1:", autograd.Value(tape, loss).at(0) < 0.1
         end
     end
-    tape.reset()
+    tape.Reset()
     probs := tensor.Sigmoid(autograd.Value(tape, model.Forward(tape, store, autograd.Input(tape, x))))
     repeat 4 in i:
         println x.at2(i, 0), "xor", x.at2(i, 1), "->", (probs.at(i) + 0.5) as int

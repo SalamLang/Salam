@@ -51,10 +51,10 @@ func main:
         println "not a readable GGUF file:", e.to_str()
         ret 1
     end
-    arch := g.meta_str("general.architecture")
-    println "model:", g.meta_str("general.name"), "(" + arch + ")"
-    println "layers:", g.meta_int(arch + ".block_count", 0)
-    println "context:", g.meta_int(arch + ".context_length", 0)
+    arch := g.MetaStr("general.architecture")
+    println "model:", g.MetaStr("general.name"), "(" + arch + ")"
+    println "layers:", g.MetaInt(arch + ".block_count", 0)
+    println "context:", g.MetaInt(arch + ".context_length", 0)
     mut unreadable := 0
     repeat g.tensors.len() in i:
         if gguf.TensorBytes(g, i) < 0:
@@ -207,7 +207,7 @@ func main:
     mut adam := optim.Adam { lr = 0.05 }
     mut tape := autograd.NewTape(1)
     repeat 600 in step:
-        tape.reset()
+        tape.Reset()
         store.zero_grad()
         logits := net.Forward(tape, store, autograd.Input(tape, x))
         loss := autograd.BCEWithLogits(tape, logits, autograd.Constant(tape, y))
@@ -217,7 +217,7 @@ func main:
             println "step", step, "loss below 0.1:", autograd.Value(tape, loss).at(0) < 0.1
         end
     end
-    tape.reset()
+    tape.Reset()
     probs := tensor.Sigmoid(autograd.Value(tape, net.Forward(tape, store, autograd.Input(tape, x))))
     repeat 4 in i:
         println x.at2(i, 0), "xor", x.at2(i, 1), "->", (probs.at(i) + 0.5) as int

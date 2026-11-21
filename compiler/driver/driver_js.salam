@@ -112,6 +112,63 @@ func js_lit_rhs(rhs: str): bool:
     ret true
 end
 
+func js_scalar_rhs(rhs: str): bool:
+    n := str.Len(rhs)
+    if n == 0:
+        ret false
+    end
+    if str.Equals(rhs, "true") or str.Equals(rhs, "false") or str.Equals(rhs, "null"):
+        ret true
+    end
+    if byte_at(rhs, 0) == 91:
+        ret js_lit_rhs(rhs)
+    end
+    if byte_at(rhs, 0) == 34:
+        mut i := 1
+        until i < n and byte_at(rhs, i) != 34:
+            if byte_at(rhs, i) == 92:
+                i++
+            end
+            i++
+        end
+        ret i == n - 1
+    end
+    mut i := 0
+    until i < n:
+        c := byte_at(rhs, i)
+        if not ((c >= 48 and c <= 57) or c == 45 or c == 46):
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func js_simple_global(line: str): bool:
+    t := str.Trim(line)
+    mut kw := 0
+    if str.StartsWith(t, "const "):
+        kw = 6
+    else str.StartsWith(t, "let "):
+        kw = 4
+    end
+    if kw == 0 or not str.EndsWith(t, ";"):
+        ret false
+    end
+    eqp := str.IndexFrom(t, " = ", kw)
+    if eqp <= kw:
+        ret false
+    end
+    nm := str.Substr(t, kw, eqp - kw)
+    repeat str.Len(nm) in k:
+        c := byte_at(nm, k)
+        if not (is_alnum(c) or c == 95 or c == 36):
+            ret false
+        end
+    end
+    ret js_scalar_rhs(str.Substr(t, eqp + 3, str.Len(t) - eqp - 4))
+end
+
 func js_lit_global(line: str, name &: str): bool:
     t := str.Trim(line)
     if not str.StartsWith(t, "const ") or not str.EndsWith(t, ";"):
@@ -135,7 +192,7 @@ func js_lit_global(line: str, name &: str): bool:
     ret true
 end
 
-func js_prune_globals(globals: Vector<str>, code: str): Vector<str>:
+func js_prune_globals(globals: Vector<str>, code: str, hoisted &: str): Vector<str>:
     mut keep_text := code
     repeat globals.Len() in gi:
         each line in str.Split(globals.Get(gi), "\n"):
@@ -151,6 +208,10 @@ func js_prune_globals(globals: Vector<str>, code: str): Vector<str>:
         each line in str.Split(globals.Get(gi2), "\n"):
             mut nm := ""
             if js_lit_global(line, nm) and not js_refs(keep_text, nm):
+                continue
+            end
+            if js_simple_global(line):
+                hoisted += str.Trim(line) + "\n"
                 continue
             end
             if str.Len(line) > 0:
@@ -455,7 +516,8 @@ func js_build_bundle(
             used_code += seg_texts.Get(ui)
         end
     end
-    pruned := js_prune_globals(mods.globals, used_code)
+    mut hoisted := ""
+    pruned := js_prune_globals(mods.globals, used_code, hoisted)
     repeat seg_names.Len() in sgi2:
         if seg_used.Get(sgi2) != 0:
             str.BufAppend(js, seg_texts.Get(sgi2))
@@ -469,6 +531,9 @@ func js_build_bundle(
             have_globals = true
         end
         m3--
+    end
+    if str.Len(hoisted) > 0:
+        str.BufAppend(js, hoisted)
     end
     if have_globals:
         mut m4 := mods.count - 1
@@ -610,12 +675,16 @@ func collect_event_js(
             page_code += seg_texts.Get(ui2)
         end
     end
-    pruned := js_prune_globals(mods.globals, page_code)
+    mut hoisted := ""
+    pruned := js_prune_globals(mods.globals, page_code, hoisted)
     repeat seg_names.Len() in sgi2:
         if seg_used.Get(sgi2) != 0:
             str.BufAppend(js, seg_texts.Get(sgi2))
             str.BufAppendChar(js, minify_ws ? 32 : 10)
         end
+    end
+    if str.Len(hoisted) > 0:
+        str.BufAppend(js, hoisted)
     end
     mut gm := mods.count - 1
     until gm >= 0:

@@ -32,7 +32,7 @@ end
 func _map_op(x &: tensor.Tensor, op: str, a1: f64, a2: f64): tensor.Tensor:
     out := tensor.Clone(x)
     p := out.data.data
-    repeat out.numel() in k:
+    repeat out.Numel() in k:
         v := p[k] as f64
         mut r := v
         if str.Equals(op, "Erf"): r = _erf(v)
@@ -98,7 +98,7 @@ func _pow(model &: Model, node &: Node, env &: _Env): bool:
     out := tensor.Clone(ea)
     p := out.data.data
     pb := eb.data.data
-    repeat out.numel() in k: p[k] = math.Pow(p[k] as f64, pb[k] as f64) as f32 end
+    repeat out.Numel() in k: p[k] = math.Pow(p[k] as f64, pb[k] as f64) as f32 end
     ea.Free()
     eb.Free()
     _emit(node, env, 0, out)
@@ -134,7 +134,7 @@ func _variadic(model &: Model, node &: Node, env &: _Env): bool:
         out.Free()
         p := ea.data.data
         pb := eb.data.data
-        repeat ea.numel() in k:
+        repeat ea.Numel() in k:
             if str.Equals(node.op, "Min"):
                 if pb[k] < p[k]: p[k] = pb[k] end
             else str.Equals(node.op, "Max"):
@@ -160,16 +160,16 @@ func _reduce(model &: Model, node &: Node, env &: _Env): bool:
     k := node.AttrIndex("axes")
     if k >= 0:
         a := node.attrs.Get(k)
-        repeat a.ints.Len() in i: axes.Push(_norm_axis(a.ints.Get(i), x.rank())) end
+        repeat a.ints.Len() in i: axes.Push(_norm_axis(a.ints.Get(i), x.Rank())) end
     else if node.inputs.Len() > 1 and str.Len(node.inputs.Get(1)) > 0:
         mut t := tensor.Empty()
         if _in(model, node, env, 1, t) == false:
             axes.Free()
             ret false
         end
-        repeat t.numel() in i: axes.Push(_norm_axis(t.at(i) as i64, x.rank())) end
+        repeat t.Numel() in i: axes.Push(_norm_axis(t.At(i) as i64, x.Rank())) end
     else:
-        repeat x.rank() in i: axes.Push(i) end
+        repeat x.Rank() in i: axes.Push(i) end
     end
     repeat axes.Len() in i:
         repeat axes.Len() - 1 - i in j:
@@ -183,7 +183,7 @@ func _reduce(model &: Model, node &: Node, env &: _Env): bool:
     mut cur := tensor.Clone(x)
     repeat axes.Len() in i:
         ax := axes.Get(i)
-        if ax < 0 or ax >= cur.rank():
+        if ax < 0 or ax >= cur.Rank():
             axes.Free()
             cur.Free()
             model.error = node.op + ": axis out of range"
@@ -212,15 +212,15 @@ func _gather(model &: Model, node &: Node, env &: _Env): bool:
     mut x := tensor.Empty()
     mut idx := tensor.Empty()
     if _in(model, node, env, 0, x) == false or _in(model, node, env, 1, idx) == false: ret false end
-    if idx.rank() > 1:
+    if idx.Rank() > 1:
         model.error = str.Clone("Gather: only scalar or 1-D indices are supported")
         ret false
     end
-    ax := _norm_axis(node.AttrInt("axis", 0), x.rank())
-    dim := ax >= 0 and ax < x.rank() ? x.dim(ax) : 0
+    ax := _norm_axis(node.AttrInt("axis", 0), x.Rank())
+    dim := ax >= 0 and ax < x.Rank() ? x.Dim(ax) : 0
     mut ids := Vector {} as Vector<int>
-    repeat idx.numel() in i:
-        mut v := idx.at(i) as int
+    repeat idx.Numel() in i:
+        mut v := idx.At(i) as int
         if v < 0: v += dim end
         ids.Push(v)
     end
@@ -230,13 +230,13 @@ func _gather(model &: Model, node &: Node, env &: _Env): bool:
         model.error = str.Clone("Gather: index out of range")
         ret false
     end
-    if idx.rank() == 0 and y.rank() > 1:
+    if idx.Rank() == 0 and y.Rank() > 1:
         mut shape := Vector {} as Vector<int>
-        repeat y.rank() in i:
-            if i != ax: shape.Push(y.dim(i)) end
+        repeat y.Rank() in i:
+            if i != ax: shape.Push(y.Dim(i)) end
         end
         if shape.Len() == 0: shape.Push(1) end
-        _ok := y.reshape_(shape)
+        _ok := y.Reshape(shape)
         shape.Free()
     end
     _emit(node, env, 0, y)
@@ -272,13 +272,13 @@ func _slice(model &: Model, node &: Node, env &: _Env): bool:
     end
     mut cur := tensor.Clone(x)
     repeat starts.Len() in i:
-        ax := _norm_axis(axes.Get(i) as i64, cur.rank())
-        if ax < 0 or ax >= cur.rank():
+        ax := _norm_axis(axes.Get(i) as i64, cur.Rank())
+        if ax < 0 or ax >= cur.Rank():
             cur.Free()
             model.error = str.Clone("Slice: axis out of range")
             ret false
         end
-        n := cur.dim(ax)
+        n := cur.Dim(ax)
         mut lo := starts.Get(i)
         mut hi := ends.Get(i)
         if lo < 0: lo += n end
@@ -301,25 +301,25 @@ end
 func _split(model &: Model, node &: Node, env &: _Env): bool:
     mut x := tensor.Empty()
     if _in(model, node, env, 0, x) == false: ret false end
-    ax := _norm_axis(node.AttrInt("axis", 0), x.rank())
-    if ax < 0 or ax >= x.rank():
+    ax := _norm_axis(node.AttrInt("axis", 0), x.Rank())
+    if ax < 0 or ax >= x.Rank():
         model.error = str.Clone("Split: axis out of range")
         ret false
     end
     mut sizes := Vector {} as Vector<int>
     if _int_list(model, node, env, "split", 1, sizes) == false or sizes.Len() == 0:
         parts := node.outputs.Len()
-        if parts == 0 or x.dim(ax) % parts != 0:
+        if parts == 0 or x.Dim(ax) % parts != 0:
             sizes.Free()
             model.error = str.Clone("Split: cannot divide axis evenly")
             ret false
         end
-        repeat parts: sizes.Push(x.dim(ax) / parts) end
+        repeat parts: sizes.Push(x.Dim(ax) / parts) end
     end
     mut off := 0
     repeat sizes.Len() in i:
         len := sizes.Get(i)
-        if off + len > x.dim(ax):
+        if off + len > x.Dim(ax):
             sizes.Free()
             model.error = str.Clone("Split: sizes exceed the axis")
             ret false
@@ -334,8 +334,8 @@ end
 func _shape_op(model &: Model, node &: Node, env &: _Env): bool:
     mut x := tensor.Empty()
     if _in(model, node, env, 0, x) == false: ret false end
-    mut out := tensor.Zeros1(x.rank())
-    repeat x.rank() in i: out.SetAt(i, x.dim(i) as f64) end
+    mut out := tensor.Zeros1(x.Rank())
+    repeat x.Rank() in i: out.SetAt(i, x.Dim(i) as f64) end
     _emit(node, env, 0, out)
     ret true
 end
@@ -345,8 +345,8 @@ func _expand(model &: Model, node &: Node, env &: _Env): bool:
     mut sh := tensor.Empty()
     if _in(model, node, env, 0, x) == false or _in(model, node, env, 1, sh) == false: ret false end
     mut shape := Vector {} as Vector<int>
-    repeat sh.numel() in i:
-        mut d := sh.at(i) as int
+    repeat sh.Numel() in i:
+        mut d := sh.At(i) as int
         if d < 0: d = 1 end
         shape.Push(d)
     end
@@ -399,11 +399,11 @@ func _prelu(model &: Model, node &: Node, env &: _Env): bool:
     out := tensor.Clone(x)
     p := out.data.data
     ps := sl.data.data
-    ns := sl.numel()
-    inner := x.rank() > 2 ? x.numel() / (x.dim(0) * x.dim(1)) : 1
-    chan := x.rank() > 1 ? x.dim(1) : 1
+    ns := sl.Numel()
+    inner := x.Rank() > 2 ? x.Numel() / (x.Dim(0) * x.Dim(1)) : 1
+    chan := x.Rank() > 1 ? x.Dim(1) : 1
     zero := 0.0 as f32
-    repeat out.numel() in k:
+    repeat out.Numel() in k:
         if p[k] < zero:
             mut s := ps[0]
             if ns > 1:
@@ -428,26 +428,26 @@ func _layernorm(model &: Model, node &: Node, env &: _Env): bool:
     end
     eps := node.AttrFloat("epsilon", 0.00001)
     instance := str.Equals(node.op, "InstanceNormalization")
-    mut ax := _norm_axis(node.AttrInt("axis", 0 - 1), x.rank())
+    mut ax := _norm_axis(node.AttrInt("axis", 0 - 1), x.Rank())
     if instance: ax = 2 end
-    if ax < 1 or ax > x.rank():
+    if ax < 1 or ax > x.Rank():
         model.error = node.op + ": axis out of range"
         ret false
     end
     mut inner := 1
-    repeat x.rank() in i:
-        if i >= ax: inner *= x.dim(i) end
+    repeat x.Rank() in i:
+        if i >= ax: inner *= x.Dim(i) end
     end
     if inner == 0:
         model.error = node.op + ": empty normalization axis"
         ret false
     end
-    outer := x.numel() / inner
+    outer := x.Numel() / inner
     out := tensor.Clone(x)
     p := out.data.data
-    nsc := scale.numel()
-    nb := bias.numel()
-    chan := x.rank() > 1 ? x.dim(1) : 1
+    nsc := scale.Numel()
+    nb := bias.Numel()
+    chan := x.Rank() > 1 ? x.Dim(1) : 1
     repeat outer in r:
         base := r * inner
         mut mean := 0.0
@@ -465,9 +465,9 @@ func _layernorm(model &: Model, node &: Node, env &: _Env): bool:
             mut idx := k
             if instance: idx = r % chan end
             mut s := 1.0
-            if nsc > 0: s = scale.at(idx % nsc) end
+            if nsc > 0: s = scale.At(idx % nsc) end
             mut b := 0.0
-            if nb > 0: b = bias.at(idx % nb) end
+            if nb > 0: b = bias.At(idx % nb) end
             p[base + k] = (v * s + b) as f32
         end
     end
@@ -488,7 +488,7 @@ func _int_list(model &: Model, node &: Node, env &: _Env, name: str, k: int, out
         model.error = node.op + ": unbound input " + node.inputs.Get(k)
         ret false
     end
-    repeat t.numel() in i: out.Push(t.at(i) as int) end
+    repeat t.Numel() in i: out.Push(t.At(i) as int) end
     ret true
 end
 

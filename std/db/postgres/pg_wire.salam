@@ -445,6 +445,7 @@ if not SALAM_DB_MOCK:
         client_first_bare := "n=,r=" + nonce
         server_sig := mem.Allocate(32 as u64)
         defer mem.Free(server_sig)
+        mut scram := 0
         until true:
             mut kind := 0
             mut body := 0 as i64
@@ -467,6 +468,14 @@ if not SALAM_DB_MOCK:
                 ret true
             else if kind == 82:
                 code := _rd_i32(p, body)
+                if scram != 0 and scram != 3 and code != 11 and code != 12:
+                    c[0].err = "the server broke off the SCRAM exchange\n"
+                    ret false
+                end
+                if scram == 3 and code != 0:
+                    c[0].err = "unexpected authentication request after SCRAM\n"
+                    ret false
+                end
                 if code == 3:
                     if not _pg_send_password(c, c[0].password):
                         ret false
@@ -480,6 +489,7 @@ if not SALAM_DB_MOCK:
                         c[0].err = "the server asks for a SASL mechanism this client does not support\n"
                         ret false
                     end
+                    scram = 1
                     client_first := "n,," + client_first_bare
                     mut o2 := _out_new()
                     defer mem.Free(o2.p)
@@ -492,6 +502,11 @@ if not SALAM_DB_MOCK:
                         ret false
                     end
                 else if code == 11:
+                    if scram != 1:
+                        c[0].err = "unexpected SCRAM challenge from the server\n"
+                        ret false
+                    end
+                    scram = 2
                     server_first := _copy_str(p, body + 4, blen - 4)
                     final := _pg_scram(c, nonce, client_first_bare, server_first, server_sig)
                     if final.Len() == 0:
@@ -507,12 +522,17 @@ if not SALAM_DB_MOCK:
                         ret false
                     end
                 else if code == 12:
+                    if scram != 2:
+                        c[0].err = "unexpected SCRAM completion from the server\n"
+                        ret false
+                    end
                     server_final := _copy_str(p, body + 4, blen - 4)
                     want := "v=" + encoding.Base64EncodeBytes(server_sig, 32)
                     if server_final != want:
                         c[0].err = "the server's SCRAM signature did not verify\n"
                         ret false
                     end
+                    scram = 3
                 else if code != 0:
                     c[0].err = "authentication method " + conv.FormatInt(code) + " is not supported\n"
                     ret false

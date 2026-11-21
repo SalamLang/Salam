@@ -137,6 +137,76 @@ func get_src_line(text: str, text_len: int, lineno: int): str:
     ret text.Substr(start, ll)
 end
 
+func special_len(bp: i8*, i: int, n: int): int:
+    c := ub(bp, i)
+    if c < 32 and c != 9:
+        ret 1
+    end
+    if c == 127:
+        ret 1
+    end
+    if c == 194 and i + 1 < n:
+        c2 := ub(bp, i + 1)
+        if c2 >= 128 and c2 <= 159:
+            ret 2
+        end
+    end
+    if c == 226 and i + 2 < n:
+        c2 := ub(bp, i + 1)
+        c3 := ub(bp, i + 2)
+        if c2 == 128 and c3 >= 170 and c3 <= 174:
+            ret 3
+        end
+        if c2 == 129 and c3 >= 166 and c3 <= 169:
+            ret 3
+        end
+    end
+    ret 0
+end
+
+func hex4u(cp: int): str:
+    tbl := "0123456789ABCDEF"
+    ret tbl.Substr((cp / 4096) % 16, 1) + tbl.Substr((cp / 256) % 16, 1) + tbl.Substr((cp / 16) % 16, 1) + tbl.Substr(cp % 16, 1)
+end
+
+func special_cp(bp: i8*, i: int, sl: int): int:
+    if sl == 1:
+        ret ub(bp, i)
+    end
+    if sl == 2:
+        ret ub(bp, i + 1)
+    end
+    ret (ub(bp, i) - 224) * 4096 + (ub(bp, i + 1) - 128) * 64 + (ub(bp, i + 2) - 128)
+end
+
+func special_text(bp: i8*, i: int, sl: int): str:
+    if sl == 1:
+        ret "\\x" + hex2(ub(bp, i))
+    end
+    ret "<U+" + hex4u(special_cp(bp, i, sl)) + ">"
+end
+
+func clean_text(s: str): str:
+    n := str.Len(s)
+    bp := (s as void*) as i8*
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < n:
+        c := ub(bp, i)
+        sl := special_len(bp, i, n)
+        if sl > 0 and c != 10 and c != 13:
+            str.BufAppend(b, special_text(bp, i, sl))
+            i += sl
+        else:
+            str.BufAppendChar(b, c)
+            i++
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
 func visual_col(line_buf: str, byte_off: int): int:
     bp := (line_buf as void*) as i8*
     n := str.Len(line_buf)
@@ -145,10 +215,17 @@ func visual_col(line_buf: str, byte_off: int): int:
     until i < byte_off:
         if i < n and bp[i] == (9 as i8):
             vis += TAB_WIDTH - (vis % TAB_WIDTH)
+            i++
+        else i < n and special_len(bp, i, n) > 0:
+            sl := special_len(bp, i, n)
+            vis += str.Len(special_text(bp, i, sl))
+            i += sl
         else i >= n or (ub(bp, i) & 0xC0) != 0x80:
             vis++
+            i++
+        else:
+            i++
         end
-        i++
     end
     ret vis
 end
@@ -175,6 +252,28 @@ func char_col(src_text: str, src_len: int, line: int, col: int): int:
     ret chars + 1
 end
 
+func char_span(src_text: str, src_len: int, line: int, col: int, length: int): int:
+    if length <= 0 or col <= 0 or str.Len(src_text) == 0:
+        ret length
+    end
+    n := src_extent(src_text, src_len)
+    start := line_start(src_text, n, line)
+    if start < 0:
+        ret length
+    end
+    bp := (src_text as void*) as i8*
+    mut chars := 0
+    mut i := 0
+    until i < length:
+        p := start + col - 1 + i
+        if p >= n or (ub(bp, p) & 0xC0) != 0x80:
+            chars++
+        end
+        i++
+    end
+    ret chars
+end
+
 func expand_line(line_buf: str): str:
     bp := (line_buf as void*) as i8*
     n := str.Len(line_buf)
@@ -182,15 +281,22 @@ func expand_line(line_buf: str): str:
     mut colv := 0
     mut i := 0
     until i < n:
+        sl := special_len(bp, i, n)
         if bp[i] == (9 as i8):
             spn := TAB_WIDTH - (colv % TAB_WIDTH)
             str.BufAppend(b, spaces(spn))
             colv += spn
+            i++
+        else sl > 0:
+            t := special_text(bp, i, sl)
+            str.BufAppend(b, t)
+            colv += str.Len(t)
+            i += sl
         else:
             str.BufAppendChar(b, ub(bp, i))
             colv++
+            i++
         end
-        i++
     end
     r := str.BufStr(b)
     str.BufFree(b)
@@ -269,6 +375,10 @@ func json_escape(s: str): str:
             str.BufAppend(b, "\\t")
         else c < 32:
             str.BufAppend(b, "\\u00" + hex2(c))
+        else special_len(bp, i, n) > 0:
+            sl := special_len(bp, i, n)
+            str.BufAppend(b, "\\u" + hex4u(special_cp(bp, i, sl)))
+            i += sl - 1
         else:
             str.BufAppendChar(b, c)
         end
@@ -296,6 +406,14 @@ func xml_escape(s: str): str:
             str.BufAppend(b, "&quot;")
         else c == 39:
             str.BufAppend(b, "&apos;")
+        else special_len(bp, i, n) > 0 and c != 10 and c != 13:
+            sl := special_len(bp, i, n)
+            if sl == 1:
+                str.BufAppend(b, special_text(bp, i, sl))
+            else:
+                str.BufAppend(b, "&#x" + hex4u(special_cp(bp, i, sl)) + ";")
+            end
+            i += sl - 1
         else:
             str.BufAppendChar(b, c)
         end
@@ -358,23 +476,30 @@ pub func RenderAt(
         lvl = "error"
     end
     if format == RF_JSON:
-        ret RenderJson(lvl, code, is_error, file, line, col, length, msg, help)
+        ret RenderJson(
+            lvl, code, is_error, file, line, char_col(src_text, src_len, line, col), char_span(src_text, src_len, line, col, length), msg, help
+        )
     end
     if format == RF_XML:
-        ret RenderXml(lvl, code, is_error, file, line, col, length, msg, help)
+        ret RenderXml(
+            lvl, code, is_error, file, line, char_col(src_text, src_len, line, col), char_span(src_text, src_len, line, col, length), msg, help
+        )
     end
+    cfile := clean_text(file)
+    cmsg := clean_text(msg)
+    chelp := clean_text(help)
     if style == RS_GCC:
         ret RenderGcc(
-            lvl, code, is_error, file, line, col, length, src_text, src_len, msg, help, color
+            lvl, code, is_error, cfile, line, col, length, src_text, src_len, cmsg, chelp, color
         )
     end
     if style == RS_CLANG:
         ret RenderClang(
-            lvl, code, is_error, file, line, col, length, src_text, src_len, msg, help, color
+            lvl, code, is_error, cfile, line, col, length, src_text, src_len, cmsg, chelp, color
         )
     end
     ret RenderRust(
-        lvl, code, is_error, file, line, col, length, src_text, src_len, msg, help, color
+        lvl, code, is_error, cfile, line, col, length, src_text, src_len, cmsg, chelp, color
     )
 end
 

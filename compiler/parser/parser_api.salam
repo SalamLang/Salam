@@ -149,32 +149,50 @@ func parse_toplevel_if_tail(p &: Ps, a &: at.Ast): int:
     if not p_recurse_enter(p, "if/else chain nested too deeply"):
         ret p_mk(p, a, at.AST_IF)
     end
-    n := p_mk(p, a, at.AST_IF)
-    ps_set_a(a, n, parse_cond_expr(p, a))
-    b := p_mk(p, a, at.AST_BLOCK)
-    ps_set_b(a, n, b)
-    p_expect(p, tok.TK_COLON, "':' after if condition")
-    fill_toplevel_block_body(p, a, b)
-    p_fin(p, a, b)
-    p_skip_terminators(p)
-    if p_match(p, tok.TK_KW_ELSE):
-        p_match(p, tok.TK_KW_IF)
-        if not p_at(p, tok.TK_COLON):
-            ps_set_c(a, n, parse_toplevel_if_tail(p, a))
-        else:
-            c := p_mk(p, a, at.AST_BLOCK)
-            ps_set_c(a, n, c)
-            p_expect(p, tok.TK_COLON, "':' after else")
-            fill_toplevel_block_body(p, a, c)
-            p_expect(p, tok.TK_KW_END, "'end' to close if")
-            p_fin(p, a, c)
+    mut arms := Vector {} as Vector<int>
+    defer arms.Free()
+    mut over := false
+    mut go := true
+    until go:
+        go = false
+        n := p_mk(p, a, at.AST_IF)
+        if arms.Len() < PS_MAX_IF_ARMS:
+            if arms.Len() > 0:
+                ps_set_c(a, arms.Get(arms.Len() - 1), n)
+            end
+            arms.Push(n)
+        else not over:
+            over = true
+            p_error_at(p, p_peek(p), "this if/else chain has too many arms; split it into smaller functions or use a match")
         end
-    else:
-        p_expect(p, tok.TK_KW_END, "'end' to close if")
+        ps_set_a(a, n, parse_cond_expr(p, a))
+        b := p_mk(p, a, at.AST_BLOCK)
+        ps_set_b(a, n, b)
+        p_expect(p, tok.TK_COLON, "':' after if condition")
+        fill_toplevel_block_body(p, a, b)
+        p_fin(p, a, b)
+        p_skip_terminators(p)
+        if p_match(p, tok.TK_KW_ELSE):
+            p_match(p, tok.TK_KW_IF)
+            if not p_at(p, tok.TK_COLON):
+                go = true
+            else:
+                c := p_mk(p, a, at.AST_BLOCK)
+                ps_set_c(a, n, c)
+                p_expect(p, tok.TK_COLON, "':' after else")
+                fill_toplevel_block_body(p, a, c)
+                p_expect(p, tok.TK_KW_END, "'end' to close if")
+                p_fin(p, a, c)
+            end
+        else:
+            p_expect(p, tok.TK_KW_END, "'end' to close if")
+        end
     end
-    p_fin(p, a, n)
+    each arm in arms:
+        p_fin(p, a, arm)
+    end
     p_recurse_leave(p)
-    ret n
+    ret arms.Get(0)
 end
 
 func parse_toplevel_if(p &: Ps, a &: at.Ast): int:

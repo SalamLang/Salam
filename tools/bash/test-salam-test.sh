@@ -45,6 +45,9 @@ mkdir crash
 } >crash/panic_test.salam
 step test crash
 step test crash --format=teamcity
+"$salam" test crash --report="$work/crash.tsv" >/dev/null 2>&1
+printf 'crash report: '
+cat "$work/crash.tsv"
 mkdir -p expect
 printf '// EXPECT: hello\n// EXPECT-NOT: goodbye\n// EXPECT-EXIT: 0\nfunc main:\n    println "hello"\nend\n' >expect/out.test.salam
 step test expect/out.test.salam

@@ -1238,6 +1238,8 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
     mut prior_bad := 0
     mut crashed := 0
     mut rounds := 0
+    mut out_of_time := false
+    begun := time.NowMicros()
     mut res := run_test_exe(exe, timeout, "", "")
     mut resuming := true
     until resuming:
@@ -1267,39 +1269,75 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
             prior_count++
             prior_bad++
             after = name
-            res.Free()
-            res = run_test_exe(exe, timeout, after, conv.FormatInt(prior_count as i64) + " " + conv.FormatInt(prior_bad as i64))
+            mut left := timeout
+            if timeout > 0:
+                left = timeout - ((time.NowMicros() - begun) / 1000) as int
+            end
+            if timeout > 0 and left <= 0:
+                out_of_time = true
+                resuming = false
+            else:
+                res.Free()
+                res = run_test_exe(exe, left, after, conv.FormatInt(prior_count as i64) + " " + conv.FormatInt(prior_bad as i64))
+            end
         end
     end
     _rm := os.Remove(exe)
+    timed_out := res.timed_out or out_of_time
+    mut bad_tests := prior_bad
+    if not out_of_time:
+        each f in tf.fns:
+            if test_failed_mark(opt.test_format, res.stdout, f.name):
+                bad_tests++
+            end
+        end
+        if timed_out or not res.started:
+            still := crashed_test(tf, opt.test_format, res.stdout)
+            if str.Len(still) > 0:
+                why := timed_out ? "timed out" : "could not start"
+                if teamcity:
+                    str.BufAppend(all_out, "##teamcity[testFailed name='" + tc_value(still) + "' message='" + why + "']\n")
+                    str.BufAppend(all_out, "##teamcity[testFinished name='" + tc_value(still) + "']\n")
+                else:
+                    str.BufAppend(all_out, "--- FAIL: " + still + " (" + why + ")\n")
+                end
+                bad_tests++
+            end
+        end
+    end
     out_text := str.BufStr(all_out)
     err_text := str.BufStr(all_err)
     c := check_script_output(ex, path, out_text, err_text)
     want := expected_exit(ex)
-    mut failed := c.failed + crashed
+    mut failed := c.failed + bad_tests
+    mut file_failed := false
     mut reason := ""
     if crashed > 0:
         reason = conv.FormatInt(crashed as i64) + " test(s) crashed"
     end
-    if res.timed_out:
-        failed++
+    if timed_out:
+        file_failed = true
         reason = "timed out"
     else not res.started:
-        failed++
+        file_failed = true
         reason = "could not start"
     else want >= 0:
         if res.status.signaled or res.status.code != want:
-            failed++
+            file_failed = true
             reason = status_reason(res.status)
         end
     else res.status.signaled:
-        failed++
+        file_failed = true
         reason = status_reason(res.status)
-    else res.status.code != 0:
+    else res.status.code != 0 and bad_tests == 0:
+        file_failed = true
+        reason = "tests failed"
+    end
+    if file_failed:
         failed++
-        if str.Len(reason) == 0:
-            reason = "tests failed"
-        end
+    end
+    if failed > 0 and str.Len(reason) == 0:
+        reason = "tests failed"
     end
     if str.Len(out_text) > 0:
         print out_text
@@ -1309,7 +1347,7 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
     end
     if failed > 0:
         if teamcity:
-            if crashed == 0 or str.Len(c.detail) > 0:
+            if crashed == 0 or file_failed or str.Len(c.detail) > 0:
                 print_teamcity_fail(path, pth.PathBase(path), reason, c.detail)
             end
         else:
@@ -1318,13 +1356,17 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
                 print c.detail
                 println "  --- output ---"
                 print_indented(clip_text(out_text + err_text, kTestOutputClip))
-            else res.timed_out or not res.started or res.status.signaled or (str.Len(out_text) == 0 and str.Len(err_text) == 0):
+            else timed_out or not res.started or res.status.signaled or (str.Len(out_text) == 0 and str.Len(err_text) == 0):
                 println "FAIL " + path + ": " + reason
             end
         end
     end
     if str.Len(opt.test_report) > 0:
-        write_report(opt, failed > 0 ? "fail" : "pass", selected, failed > 0 ? 0 : selected, failed, reason)
+        mut passed := selected - bad_tests
+        if file_failed or passed < 0:
+            passed = 0
+        end
+        write_report(opt, failed > 0 ? "fail" : "pass", selected, passed, failed, reason)
     end
     res.Free()
     ret failed > 0 ? 1 : 0

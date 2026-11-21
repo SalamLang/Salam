@@ -168756,23 +168756,21 @@ image.Free(old)
 ret out
 end
 func _load_icon(path: str): bool:
-if _icon.pixels != null:
-image.Free(_icon)
-end
-_icon = image.Image {}
-mem.Free(_icon_path as void*)
-_icon_path = str.Clone(path)
-if path.Len() == 0:
-ret true
-end
-if str.EndsWithFold(path, ".png"):
+mut fresh := image.Image {}
+if path.Len() > 0 and str.EndsWithFold(path, ".png"):
 mut ok := false
 img := image.OpenPNG(path, ok)
 if not ok:
 ret false
 end
-_icon = _fit_icon(img, 64)
+fresh = _fit_icon(img, 64)
 end
+if _icon.pixels != null:
+image.Free(_icon)
+end
+_icon = fresh
+mem.Free(_icon_path as void*)
+_icon_path = str.Clone(path)
 ret true
 end
 func _push(ev: Event):
@@ -237743,6 +237741,16 @@ ret 1
 end
 ret _send_file(fd, file, ct, shdr, keep)
 end
+func _spa_wanted(method: str, path: str, accept: str): bool:
+if not str.Equals(method, "GET") and not str.Equals(method, "HEAD"):
+ret false
+end
+if str.Contains(accept, "text/html"):
+ret true
+end
+slash := str.LastIndex(path, "/")
+ret str.IndexFrom(path, ".", slash + 1) < 0
+end
 func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
 if req_len == 0:
 keep = false
@@ -237800,7 +237808,15 @@ mem.Free(target as void *)
 end
 end
 if static_handled == false:
-dispatched := _dispatch(r, ctx)
+mut dispatched := _dispatch(r, ctx)
+if dispatched == false and r.has_static and r.spa_index.Len() > 0 and _spa_wanted(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_kv_get(ctx, 0, "Accept")):
+spa := filepath.Join(r.static_dir, r.spa_index)
+if os.Exists(spa) and os.IsDir(spa) == false and _send_file(fd, spa, mime.MimeType(spa), shdr, keep) == 1:
+_ctx_mark_sent(ctx)
+dispatched = true
+end
+mem.Free(spa as void *)
+end
 if dispatched == false:
 salam_ctx_set_status(ctx, 404)
 salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
@@ -245432,6 +245448,7 @@ pub cache: i64 = -1
 pub fastcgi: str = ""
 pub fastcgi_index: str = ""
 pub fastcgi_timeout: int = 0
+pub fallback: str = ""
 end
 struct FcgiParam:
 pub site: int = 0
@@ -245663,6 +245680,13 @@ else:
 rule.fastcgi = fh + ":" + str.FromInt(fp as i64)
 end
 end
+else str.Equals(name, "fallback"):
+v := _joined(d, node)
+if not str.StartsWith(v, "/") or str.Contains(v, ".."):
+_problem(c, file, n.line, n.col, "fallback needs a file path under the root that starts with /, such as \"/index.html\"")
+else:
+rule.fallback = v
+end
 else str.Equals(name, "fastcgi_index"):
 rule.fastcgi_index = _joined(d, node)
 else str.Equals(name, "fastcgi_timeout"):
@@ -245731,7 +245755,7 @@ if cn.block:
 _problem(c, file, cn.line, cn.col, "'" + name + "' cannot be used inside a location")
 else:
 if not _apply_common(c, file, d, ch, name, rule, site, idx):
-_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a location" + _suggest(name, "root|alias|index|redirect|code|return|cache|header|error page|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout"))
+_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a location" + _suggest(name, "root|alias|index|redirect|code|return|cache|header|error page|fallback|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout"))
 end
 end
 end
@@ -245775,7 +245799,7 @@ _problem(c, file, cn.line, cn.col, "default must be true or false")
 end
 else:
 if not _apply_common(c, file, d, ch, name, rule, site, -1):
-_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a site" + _suggest(name, "listen|names|default|root|index|redirect|code|return|cache|header|error page|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout|location"))
+_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a site" + _suggest(name, "listen|names|default|root|index|redirect|code|return|cache|header|error page|fallback|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout|location"))
 end
 end
 end
@@ -246395,6 +246419,22 @@ func _effective_alias(loc: int): str:
 if loc < 0: ret "" end
 ret _cfg.locations.Get(loc).rule.alias
 end
+func _effective_fallback(site: int, loc: int): str:
+if loc >= 0 and _cfg.locations.Get(loc).rule.fallback.Len() > 0:
+ret _cfg.locations.Get(loc).rule.fallback
+end
+ret _cfg.sites.Get(site).rule.fallback
+end
+func _page_request(method: str, path: str, accept: str): bool:
+if not str.Equals(method, "GET") and not str.Equals(method, "HEAD"):
+ret false
+end
+if str.Contains(accept, "text/html"):
+ret true
+end
+slash := str.LastIndex(path, "/")
+ret str.IndexFrom(path, ".", slash + 1) < 0
+end
 func _effective_index(site: int, loc: int): str:
 if loc >= 0 and _cfg.locations.Get(loc).rule.index.Len() > 0:
 ret _cfg.locations.Get(loc).rule.index
@@ -246915,6 +246955,13 @@ http.SetHeader(ctx, "Allow", "GET, HEAD")
 status = 405
 else:
 status = _serve_file(ctx, site, loc, root, rel, path, query)
+fb := _effective_fallback(site, loc)
+if status == 404 and fb.Len() > 0 and _page_request(method, path, http.Header(ctx, "Accept")):
+target := http.Own(ctx, root + fb)
+if os.Exists(target) and not os.IsDir(target):
+status = _send_target(ctx, site, loc, target)
+end
+end
 end
 if status == 404:
 _fail(ctx, site, loc, root, 404, "404 Not Found")
@@ -254320,6 +254367,9 @@ pub static_listing: bool = false
 @en "fallback"
 @fa "مدیر پیش‌فرض"
 pub fallback: i64 = 0
+@en "spa_index"
+@fa "پرونده پشتیبان"
+pub spa_index: str = ""
 @en "idx"
 @fa "جدول نمایه"
 pub idx: Vector<int> = Vector {}
@@ -254581,6 +254631,11 @@ end
 @fa "تنظیم مدیر پیش‌فرض"
 pub func SetFallback(r &: Router, fn: i64):
 r.fallback = fn
+end
+@en "SpaFallback"
+@fa "تنظیم پرونده پشتیبان"
+pub func SpaFallback(r &: Router, file: str):
+r.spa_index = file
 end
 @en "ParamGet"
 @fa "دریافت پارامتر"

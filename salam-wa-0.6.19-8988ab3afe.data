@@ -79732,7 +79732,8 @@ if not sent:
 ret false
 end
 mut cfg := tls.NewConfig(h)
-cfg.insecure_skip_verify = mode != "VERIFY_IDENTITY"
+cfg.insecure_skip_verify = mode != "VERIFY_IDENTITY" and mode != "VERIFY_CA"
+cfg.skip_hostname_check = mode == "VERIFY_CA"
 cfg.ca_file = os.Env("SALAM_MYSQL_SSL_CA")
 c[0].tc = tls.WrapClient(c[0].fd, cfg)
 c[0].use_tls = true
@@ -79740,7 +79741,7 @@ if not tls.ConnOk(c[0].tc):
 _my_fail(c, _MY_CR_CONN_HOST_ERROR, "TLS handshake failed: " + tls.ConnError(c[0].tc))
 ret false
 end
-else if mode == "REQUIRED" or mode == "VERIFY_IDENTITY":
+else if mode == "REQUIRED" or mode == "VERIFY_CA" or mode == "VERIFY_IDENTITY":
 _my_fail(c, _MY_CR_CONN_HOST_ERROR, "the server does not support TLS, but it was required")
 ret false
 end
@@ -85776,6 +85777,7 @@ nonce := crypto.RandomHex(18)
 client_first_bare := "n=,r=" + nonce
 server_sig := mem.Allocate(32 as u64)
 defer mem.Free(server_sig)
+mut scram := 0
 until true:
 mut kind := 0
 mut body := 0 as i64
@@ -85798,6 +85800,14 @@ else if kind == 90:
 ret true
 else if kind == 82:
 code := _rd_i32(p, body)
+if scram != 0 and scram != 3 and code != 11 and code != 12:
+c[0].err = "the server broke off the SCRAM exchange\n"
+ret false
+end
+if scram == 3 and code != 0:
+c[0].err = "unexpected authentication request after SCRAM\n"
+ret false
+end
 if code == 3:
 if not _pg_send_password(c, c[0].password):
 ret false
@@ -85811,6 +85821,7 @@ if not _has_mech(p, body + 4, body + blen, "SCRAM-SHA-256"):
 c[0].err = "the server asks for a SASL mechanism this client does not support\n"
 ret false
 end
+scram = 1
 client_first := "n,," + client_first_bare
 mut o2 := _out_new()
 defer mem.Free(o2.p)
@@ -85823,6 +85834,11 @@ if not _pg_send(c, o2):
 ret false
 end
 else if code == 11:
+if scram != 1:
+c[0].err = "unexpected SCRAM challenge from the server\n"
+ret false
+end
+scram = 2
 server_first := _copy_str(p, body + 4, blen - 4)
 final := _pg_scram(c, nonce, client_first_bare, server_first, server_sig)
 if final.Len() == 0:
@@ -85838,12 +85854,17 @@ if not _pg_send(c, o3):
 ret false
 end
 else if code == 12:
+if scram != 2:
+c[0].err = "unexpected SCRAM completion from the server\n"
+ret false
+end
 server_final := _copy_str(p, body + 4, blen - 4)
 want := "v=" + encoding.Base64EncodeBytes(server_sig, 32)
 if server_final != want:
 c[0].err = "the server's SCRAM signature did not verify\n"
 ret false
 end
+scram = 3
 else if code != 0:
 c[0].err = "authentication method " + conv.FormatInt(code) + " is not supported\n"
 ret false
@@ -122769,6 +122790,14 @@ i++
 end
 ret digits > 0
 end
+func _int_fits(raw: str): bool:
+try:
+_v := conv.ParseInt(raw)
+ret true
+catch:
+ret false
+end
+end
 func _kind_hint(kind: int): str:
 if kind == 1: ret " <string>"
 else kind == 2: ret " <int>"
@@ -122882,7 +122911,7 @@ end
 end
 repeat fs.names.Len() in k:
 kind := fs.kinds.Get(k)
-if (kind == 2 or kind == 3) and fs.was_set.Get(k) and not _valid_number(fs.vals.Get(k), kind):
+if (kind == 2 or kind == 3) and fs.was_set.Get(k) and not (_valid_number(fs.vals.Get(k), kind) and (kind != 2 or _int_fits(fs.vals.Get(k)))):
 fs.err = "invalid " + (kind == 2 ? "int" : "float") + " value for --" + fs.names.Get(k) + ": " + fs.vals.Get(k)
 ret false
 end
@@ -123389,9 +123418,19 @@ func ferror(stream: void*): int
 func fseek(fp: void*, off: int, whence: int): int
 func ftell(fp: void*): int
 end
+extern:
+func fflush(stream: void*): int
+end
 if SALAM_OS_WINDOWS:
 extern:
 func MoveFileExA(existing: str, new_path: str, flags: int): int
+func _fileno(fp: void*): int
+func _commit(fd: int): int
+end
+else:
+extern:
+func fileno(fp: void*): int
+func fsync(fd: int): int
 end
 end
 const _IO_CHUNK := 65536
@@ -123419,8 +123458,21 @@ pub permissions: int = 0
 pub exists: bool = false
 end
 if SALAM_OS_WINDOWS:
+func _sync_file(fp: void*): int:
+if fflush(fp) != 0: ret 0 - 1 end
+if _commit(_fileno(fp)) != 0: ret 0 - 1 end
+ret 0
+end
+else:
+func _sync_file(fp: void*): int:
+if fflush(fp) != 0: ret 0 - 1 end
+if fsync(fileno(fp)) != 0: ret 0 - 1 end
+ret 0
+end
+end
+if SALAM_OS_WINDOWS:
 func _atomic_rename(tmp: str, path: str): int:
-if MoveFileExA(tmp, path, 1) == 0: ret 0 - 1 end
+if MoveFileExA(tmp, path, 9) == 0: ret 0 - 1 end
 ret 0
 end
 else:
@@ -123610,12 +123662,27 @@ pub func Append(path: str, data: str): int: ret _write_binary(path, "ab", data) 
 @en "AtomicWrite"
 @fa "نوشتن اتمی"
 pub func AtomicWrite(path: str, data: str): int:
-tmp := path.Concat(".tmp")
-if _write_binary(tmp, "wb", data) < 0:
+mut tmp := path.Concat(".").Concat(crypto.RandomHex(8)).Concat(".tmp")
+mut tries := 0
+until tries < 8 and os.Exists(tmp):
+tmp = path.Concat(".").Concat(crypto.RandomHex(8)).Concat(".tmp")
+tries++
+end
+f := os.Open(tmp, "wb")
+if f == null:
+error.Set(error.IOError, "atomic write failed", "AtomicWrite", path, 0)
+ret 0 - 1
+end
+n := io.Write(f, data)
+synced := _sync_file(f as void*)
+io.Close(f)
+if n < 0 or synced != 0:
+os.Remove(tmp)
 error.Set(error.IOError, "atomic write failed", "AtomicWrite", path, 0)
 ret 0 - 1
 end
 if _atomic_rename(tmp, path) != 0:
+os.Remove(tmp)
 error.Set(error.IOError, "atomic rename failed", "AtomicWrite", path, 0)
 ret 0 - 1
 end
@@ -124463,6 +124530,7 @@ pub func HasMeta(pattern: str): bool: ret filepath.HasMeta(pattern) end
 @fa "ناظر"
 package watcher
 import os
+import fs
 import mem
 import str
 import filepath
@@ -124503,7 +124571,7 @@ pub initialized: bool = false
 end
 func _fingerprint(path: str): str:
 sz := os.FileSize(path)
-mt := os.FileSize(path)
+mt := fs.ModTime(path)
 mut sb := str.NewBuilder()
 s1 := str.FromInt(sz)
 s2 := str.FromInt(mt)
@@ -209146,7 +209214,22 @@ end
 @fa "خط ها"
 pub func Lines(path: str): Vector<str>:
 text := ReadFile(path)
-ret text.Trim().Split("\n")
+parts := text.Split("\n")
+defer parts.Free()
+out := Vector {} as Vector<str>
+mut n := parts.Len()
+if n > 0 and parts.Get(n - 1).Len() == 0: n-- end
+mut i := 0
+until i < n:
+line := parts.Get(i)
+if str.EndsWith(line, "\r"):
+out.Push(line.Substr(0, line.Len() - 1))
+else:
+out.Push(line)
+end
+i++
+end
+ret out
 end
 @en "EPrint"
 @fa "نوشتن خطا"
@@ -210257,22 +210340,35 @@ value := _member_all(text, key, count)
 if count > 1 and dup.Len() == 0: dup = key end
 ret value
 end
+func _digit_run(bp: i8*, n: int, from: int): int:
+mut i := from
+until i < n and _ub(bp, i) >= 48 and _ub(bp, i) <= 57:
+i++
+end
+ret i
+end
 func _numeric_raw(raw: str): bool:
 n := raw.Len()
 if n == 0: ret false end
 bp := _bp(raw)
-first := _ub(bp, 0)
-if first != 45 and (first < 48 or first > 57): ret false end
-mut digits := 0
-repeat n in i:
-c := _ub(bp, i)
-if c >= 48 and c <= 57:
-digits++
-else c != 45 and c != 43 and c != 46 and c != 101 and c != 69:
+mut i := 0
+if _ub(bp, 0) == 45: i = 1 end
+if i >= n: ret false end
+first := _ub(bp, i)
+if first == 48:
+i++
+else first >= 49 and first <= 57:
+i = _digit_run(bp, n, i)
+else:
 ret false
 end
+if i < n and _ub(bp, i) == 46:
+i++
+frac := i
+i = _digit_run(bp, n, i)
+if i == frac: ret false end
 end
-ret digits > 0
+ret i == n
 end
 func _time_claim(payload: str, key: str, dup &: str): i64 throw:
 raw := _once(payload, key, dup)
@@ -323998,6 +324094,9 @@ pub ca_file: str = ""
 @en "insecure_skip_verify"
 @fa "بدون بررسی گواهی"
 pub insecure_skip_verify: bool = false
+@en "skip_hostname_check"
+@fa "بدون بررسی نام میزبان"
+pub skip_hostname_check: bool = false
 @en "alpn"
 @fa "پروتکل برنامه"
 pub alpn: str = ""
@@ -324650,7 +324749,7 @@ end
 repeat h.ncerts in i:
 chain[i] = _newreader(_bufptr(h.certs, _cert_start(h, i)), _cert_len(h, i))
 end
-vr := _verify_chain(chain, h.ncerts, roots, c.host, _now_stamp())
+vr := _verify_chain_host(chain, h.ncerts, roots, c.host, _now_stamp(), not cfg.skip_hostname_check)
 if vr != VERR_NONE:
 _rec_send_alert(h.rec, 2, ALERT_BAD_CERTIFICATE)
 ret _conn_fail(c, "certificate verification failed: " + _verr_str(vr))
@@ -335798,6 +335897,9 @@ end
 ret _newreader(_bufptr(r.der, o), l)
 end
 func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: i64): int:
+ret _verify_chain_host(chain, nchain, roots, host, now, true)
+end
+func _verify_chain_host(chain: Reader[8], nchain: int, roots: Roots, host: str, now: i64, check_host: bool): int:
 if nchain < 1:
 ret VERR_PARSE
 end
@@ -335816,7 +335918,7 @@ terr := _cert_time_ok(leaf, now)
 if terr != VERR_NONE:
 ret terr
 end
-if not _cert_match_host(leaf, host):
+if check_host and not _cert_match_host(leaf, host):
 ret VERR_HOSTNAME
 end
 if leaf.has_eku and not leaf.eku_server_auth:

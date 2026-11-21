@@ -1,0 +1,202 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package driver
+
+import os
+import str
+import io
+import time
+import net.http
+import net.router
+import net.mime
+
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+
+const k_dev_reload := `<script>(function(){var v=null;function poll(){fetch("/__salam_build",{cache:"no-store"}).then(function(r){return r.text();}).then(function(t){if(v===null){v=t;}else if(t!==v){location.reload();}}).catch(function(){});}setInterval(poll,700);poll();})();</script>`
+
+mut g_dev_root := ""
+mut g_dev_out := ""
+mut g_dev_entry := ""
+mut g_dev_exe := ""
+mut g_dev_build := 0
+mut g_dev_sig := 0 as i64
+
+
+func dev_quote(s: str): str:
+    if SALAM_OS_WINDOWS:
+        ret "\"" + s + "\""
+    end
+    ret "'" + str.Replace(s, "'", "'\\''") + "'"
+end
+
+func dev_escape(s: str): str:
+    ret str.Replace(str.Replace(str.Replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+end
+
+func dev_scan(dir: str, sig &: i64, depth: int):
+    if depth > 8:
+        ret
+    end
+    each name in os.ListDir(dir):
+        full := join_path2(dir, name)
+        if os.IsDir(full):
+            if not str.StartsWith(name, ".") and not str.Equals(name, "node_modules"):
+                dev_scan(full, sig, depth + 1)
+            end
+        else str.EndsWith(name, ".salam"):
+            mut size := 0 as i64
+            mut mt := 0 as i64
+            if http.FileStat(full, size, mt):
+                sig = (sig * 31 + mt % 1000003 + size % 1000003 + str.Len(full) as i64) % 1000000007
+            end
+        end
+    end
+end
+
+func dev_signature(): i64:
+    mut sig := 0 as i64
+    dev_scan(g_dev_root, sig, 0)
+    ret sig
+end
+
+func dev_build(): bool:
+    html := join_path2(g_dev_out, "index.html")
+    log := join_path2(g_dev_out, "build.log")
+    _rm := os.Remove(html)
+    cmd := dev_quote(g_dev_exe) + " web " + dev_quote(g_dev_entry) + " --output=" + dev_quote(html) + " --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
+    rc := os.Run(cmd)
+    ok := rc == 0 and os.Exists(html)
+    mut page := ""
+    if ok:
+        page = io.ReadFile(html)
+        cut := str.LastIndex(page, "</body>")
+        if cut >= 0:
+            page = str.Substr(page, 0, cut) + k_dev_reload + str.Substr(page, cut, page.Len() - cut)
+        else:
+            page += k_dev_reload
+        end
+    else:
+        page = `<!doctype html><html><head><meta charset="utf-8"><title>Build failed</title></head>`
+        page += `<body style="margin:0;background:#1e1e1e;color:#eee;font:14px/1.5 monospace">`
+        page += `<pre style="margin:0;padding:24px;white-space:pre-wrap">` + dev_escape(io.ReadFile(log)) + "</pre>"
+        page += k_dev_reload + "</body></html>"
+    end
+    _w := io.WriteFile(html, page)
+    g_dev_build++
+    ret ok
+end
+
+func dev_watch():
+    until true:
+        time.Sleep(400)
+        sig := dev_signature()
+        if sig != g_dev_sig:
+            g_dev_sig = sig
+            ok := dev_build()
+            io.EPrintln(ok ? "salam: rebuilt " + g_dev_entry : "salam: build failed, the page shows the errors")
+        end
+    end
+end
+
+func dev_build_id(ctx: i64):
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.Text(ctx, http.Own(ctx, co.I64Toa(g_dev_build as i64)))
+end
+
+func dev_page_path(method: str, path: str, accept: str): bool:
+    if not str.Equals(method, "GET") and not str.Equals(method, "HEAD"):
+        ret false
+    end
+    if str.Contains(accept, "text/html"):
+        ret true
+    end
+    slash := str.LastIndex(path, "/")
+    ret str.IndexFrom(path, ".", slash + 1) < 0
+end
+
+func dev_handle(ctx: i64):
+    path := http.Own(ctx, http.UrlDecode(http.Path(ctx)))
+    if not str.Contains(path, "..") and not str.Contains(path, "/.") and not str.Equals(path, "/"):
+        f := http.Own(ctx, join_path2(g_dev_root, str.Substr(path, 1, path.Len() - 1)))
+        if os.Exists(f) and not os.IsDir(f):
+            _ok := http.File(ctx, f, mime.MimeType(f))
+            ret
+        end
+    end
+    if dev_page_path(http.Method(ctx), path, http.Header(ctx, "Accept")):
+        http.SetHeader(ctx, "Cache-Control", "no-store")
+        _ok2 := http.File(ctx, http.Own(ctx, join_path2(g_dev_out, "index.html")), "text/html; charset=utf-8")
+        ret
+    end
+    http.SetStatus(ctx, 404)
+    http.Text(ctx, "404 Not Found")
+end
+
+func dev_entry_of(arg: str): str:
+    if str.EndsWith(arg, ".salam") and os.Exists(arg) and not os.IsDir(arg):
+        ret arg
+    end
+    mut dir := arg
+    if str.Len(dir) == 0:
+        dir = "."
+    end
+    if not os.IsDir(dir) or os.Exists(join_path2(dir, "index.html")):
+        ret ""
+    end
+    mainf := join_path2(dir, "main.salam")
+    if os.Exists(mainf):
+        ret mainf
+    end
+    ret ""
+end
+
+func dev_serve(entry: str, host: str, port: int): int:
+    g_dev_entry = os.RealPath(entry)
+    if str.Len(g_dev_entry) == 0:
+        g_dev_entry = entry
+    end
+    g_dev_root = dir_of(g_dev_entry)
+    if str.Len(g_dev_root) == 0:
+        g_dev_root = "."
+    end
+    mut exe := ""
+    if not sm.ExePath(exe):
+        exe = "salam"
+    end
+    g_dev_exe = exe
+    g_dev_out = join_path2(os.TempDir(), "salam-serve-" + co.I64Toa(os.Pid() as i64))
+    _mk := os.MkdirAll(g_dev_out)
+    g_dev_sig = dev_signature()
+    if not dev_build():
+        io.EPrintln("salam: build failed, the page shows the errors")
+    end
+    mut r := router.NewRouter()
+    router.Get(r, "/__salam_build", dev_build_id)
+    router.SetFallback(r, dev_handle)
+    mut s := http.NewServer(port)
+    http.SetHost(s, host)
+    http.EnableAccessLog(s)
+    http.Use(s, r)
+    addr := host + ":" + co.I64Toa(port as i64)
+    if not http.RunBackground(s):
+        io.EPrintln("salam: cannot listen on " + addr)
+        ret 2
+    end
+    _t := spawn(dev_watch)
+    println "salam: serving " + entry + " at http://" + addr + "/ (rebuilds on save, the page reloads itself; Ctrl+C to stop)"
+    until true:
+        time.Sleep(60000)
+    end
+end

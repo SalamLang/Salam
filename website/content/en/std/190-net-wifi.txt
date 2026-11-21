@@ -1,0 +1,125 @@
+pkg.en = net/wifi
+pkg.name = net.wifi
+pkg.group = Network
+pkg.summary = The Wi-Fi network the machine is on: name, access point, security and signal, with a trust check for clients that connect a VPN on untrusted networks.
+pkg.title = The net.wifi package in Salam | Current Wi-Fi network and trust
+pkg.description = The net.wifi package in Salam: read the current Wi-Fi network (SSID, BSSID, security, signal) on Linux, Windows and macOS, watch it for changes and decide whether it is trusted, so a VPN client can connect by itself on untrusted Wi-Fi.
+pkg.import = net.wifi
+pkg.intro <<
+<p><code>net.wifi</code> tells a program which Wi-Fi network the machine is on and how that network is protected. It was written for VPN clients that offer "connect automatically on untrusted Wi-Fi", but anything that cares about the network it runs on can use it. It only reads: it never scans on its own, never joins a network and never asks for passwords.</p>
+<p>Each platform uses what the system already has, loaded when it is first needed, so importing the package adds no build dependency and a missing piece makes a call return an empty or unknown result instead of failing:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Platform</th><th>Source</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Linux</td><td>NetworkManager over the system D-Bus (through <code>libgio-2.0</code>), then <code>iw</code>, then <code>/sys/class/net</code></td><td>Without NetworkManager the security comes from <code>iw dev X scan dump</code>, which may be empty until the system scans.</td></tr>
+<tr><td>Windows</td><td><code>wlanapi.dll</code>, loaded only from System32</td><td>Since Windows 11 24H2 reading the current network needs location access for desktop apps. Without it the interface is still reported as connected, but <code>ssid_known</code> is false and <code>security</code> is <code>Unknown</code>, so <code>Classify</code> answers <code>Unknown</code> and the caller decides. There is no workaround.</td></tr>
+<tr><td>macOS</td><td>CoreWLAN</td><td>Since macOS 14 the network name needs Location Services permission; without it <code>ssid_known</code> is false and <code>reason</code> says why. A station or ad hoc (IBSS) interface counts as connected; an interface acting as a hotspot, or in no mode, counts as disconnected.</td></tr>
+<tr><td>Other systems</td><td>none</td><td><code>Supported</code> is false and <code>Current</code> reports <code>NoWifi</code>.</td></tr>
+</tbody>
+</table></div>
+<p>Things to know:</p>
+<ul>
+<li><strong>The trusted list wins.</strong> A network that matches a trusted entry is <code>Trusted</code> even when it is open, OWE or WEP: a user may trust their own open network. The rules below apply only when no trusted entry matches.</li>
+<li><strong>Unknown is not untrusted.</strong> When no trusted entry matches and the system hides the network name, <code>Classify</code> answers <code>Unknown</code> unless the network is open, has only WEP or uses OWE (anyone can join those). Decide yourself what an unknown network means; the package never guesses for you.</li>
+<li><strong>Two kinds of trusted entry.</strong> An entry shaped like an access point address (six pairs of hex digits joined by colons, such as <code>de:ad:be:ef:00:01</code>) matches only the BSSID, without case. Every other entry matches only the network name, exactly: SSIDs are case sensitive, so "Home" and "home" are different networks.</li>
+<li><strong>A name with a NUL byte is not a name.</strong> Such an SSID could be cut short and match a trusted entry, so <code>ssid</code> stays empty and <code>ssid_known</code> is false.</li>
+<li><strong>You own the strings.</strong> A <code>Status</code> from <code>Current</code>, <code>Interfaces</code>, <code>ParseIwLink</code> or <code>ParseWlanConnection</code> owns its <code>interface</code>, <code>ssid</code> and <code>bssid</code> text. Release it with <code>FreeStatus</code>, or a whole list with <code>FreeStatuses</code>, when you are done; <code>backend</code> and <code>reason</code> are fixed text and need nothing. Never pass a <code>Status</code> you built yourself to these functions.</li>
+<li><strong>Polling, not events.</strong> Call <code>Current</code> every few seconds and compare with <code>Changed</code>; it ignores the signal so a moving laptop does not look like a new network.</li>
+<li><strong>The parsers are public.</strong> <code>ParseIwLink</code>, <code>ParseIwScan</code>, <code>ParseWlanConnection</code> and the <code>SecurityFrom</code> functions are what the backends use, exposed so tests and tools can feed them recorded output.</li>
+</ul>
+<h2 id="guide-current">The current network</h2>
+<p><code>Current</code> returns one <code>Status</code>: the connected interface if there is one, otherwise a disconnected one, otherwise an interface whose state could not be read (<code>Unknown</code>, with the cause in <code>reason</code>). Only when no wireless interface exists at all is the state <code>NoWifi</code>. Check <code>state</code> first, then <code>ssid_known</code> before you use <code>ssid</code>. <code>Interfaces</code> returns every wireless interface instead.</p>
+{{example.net-wifi-guide-current}}
+<h2 id="guide-trust">Trusted and untrusted networks</h2>
+<p><code>Classify</code> takes the list of networks the user trusts and returns a <code>Trust</code>. A match on the list is always <code>Trusted</code>, even for an open network. When nothing on the list matches, <code>Untrusted</code> means the network is known, or it is open, OWE or WEP, and <code>Unknown</code> means the system did not say which network it is. <code>NotWifi</code> means the machine is not on Wi-Fi at all, for example on a cable. <code>IsUntrusted</code> is the short form for the one answer that should start a VPN.</p>
+{{example.net-wifi-guide-trust}}
+<h2 id="guide-watch">Watching for a new network</h2>
+<p>Keep the last <code>Status</code>, read a new one on a timer and act only when <code>Changed</code> says so. Free the one you no longer keep. Run the loop on a worker thread in a desktop app, so a slow D-Bus or wlanapi answer never blocks the window.</p>
+{{example.net-wifi-guide-watch}}
+>>
+doc.State = Whether a Wi-Fi interface is connected: Unknown, NoWifi, Disconnected or Connected.
+doc.State.Unknown = The backend could not tell, for example an interface NetworkManager does not manage and iw is missing, a failed read, or a network that changed while it was being read.
+doc.State.NoWifi = The machine has no wireless interface, or the platform has no Wi-Fi backend.
+doc.State.Disconnected = There is a Wi-Fi interface but it is not associated with a network as a client, Wi-Fi is turned off, or (on macOS) the interface is acting as a hotspot.
+doc.State.Connected = The interface is associated with a network.
+doc.Security = How the network protects its traffic, from the weakest to the strongest: Open, Owe, Wep, Wpa, Wpa2, Wpa3 and Enterprise, or Unknown.
+doc.Security.Unknown = The backend did not report the security, or reported a mode this package does not know.
+doc.Security.Open = No encryption: anyone nearby can join and read the traffic.
+doc.Security.Owe = Opportunistic Wireless Encryption (Enhanced Open): encrypted, but anyone can join.
+doc.Security.Wep = WEP, broken for many years.
+doc.Security.Wpa = WPA with a shared password.
+doc.Security.Wpa2 = WPA2 with a shared password.
+doc.Security.Wpa3 = WPA3 (SAE) with a shared password, including WPA2/WPA3 transition networks.
+doc.Security.Enterprise = 802.1X login with a user account (WPA, WPA2 or WPA3 Enterprise).
+doc.Trust = The answer of Classify: NotWifi, Unknown, Trusted or Untrusted.
+doc.Trust.NotWifi = The machine is not connected to Wi-Fi.
+doc.Trust.Unknown = Connected and no trusted entry matches, but the system did not say which network it is and its security does not settle it. Also the answer when the state itself is unknown.
+doc.Trust.Trusted = A trusted entry matches the network name or the access point, whatever the security of the network.
+doc.Trust.Untrusted = No trusted entry matches, and the network name is known, or the network is open, OWE or WEP.
+doc.Status = One wireless interface and the network it is on.
+doc.Status.state = Whether the interface is connected.
+doc.Status.interface = The interface name, such as wlan0 or en0, or the adapter description on Windows.
+doc.Status.ssid = The network name. Only meaningful when ssid_known is true; empty otherwise.
+doc.Status.ssid_known = True when the system reported a usable network name. False on a hidden network, when the system needs a permission first, or when the name contains a NUL byte.
+doc.Status.bssid = The access point address in lowercase, aa:bb:cc:dd:ee:ff, or empty.
+doc.Status.security = How the network is protected.
+doc.Status.signal = The signal quality from 0 to 100, or -1 when unknown.
+doc.Status.backend = Where the answer came from: networkmanager, iw, sysfs, wlanapi, corewlan, none or unsupported.
+doc.Status.reason = Why something is missing, for example why the network name is not known. Empty when nothing is.
+doc.Status.IsConnected = True when the state is Connected.
+doc.Status.IsInsecure = True when anyone can join the network: Open, Owe or Wep.
+doc.Supported = True when this platform has a Wi-Fi backend: Linux, Windows and macOS.
+doc.Current = The connected interface, or else a disconnected one, or else an interface whose state is Unknown; a Status with state NoWifi only when there is no wireless interface. Never fails. Release the result with FreeStatus.
+doc.Interfaces = Every wireless interface the backend reports. A backend that fails (for example WlanOpenHandle on Windows) gives one entry with state Unknown and the cause in reason. Release the list with FreeStatuses.
+doc.Changed = True when two results name a different interface, network, access point, security or state. The signal is ignored.
+doc.Classify = Decides whether a status is a trusted network. An entry shaped like aa:bb:cc:dd:ee:ff matches only the BSSID, without case; any other entry matches only the network name, exactly. A match wins over everything, even an open network. When no entry matches: a known name is Untrusted, an open, OWE or WEP network is Untrusted, and anything else is Unknown.
+doc.IsUntrusted = True when Classify answers Untrusted. Unknown and NotWifi are false.
+doc.StateName = The name of a state: unknown, no-wifi, disconnected or connected.
+doc.SecurityName = The name of a security mode: unknown, open, owe, wep, wpa, wpa2, wpa3 or enterprise.
+doc.TrustName = The name of a trust answer: not-wifi, unknown, trusted or untrusted.
+doc.SignalFromDbm = Turns a signal level in dBm into 0 to 100 (-50 dBm and above is 100, -100 dBm and below is 0). Values of 0 or more mean unknown and give -1.
+doc.SecurityFromNm = Maps the Flags, WpaFlags and RsnFlags of a NetworkManager access point to a security mode.
+doc.SecurityFromWlan = Maps a Windows DOT11_AUTH_ALGORITHM and DOT11_CIPHER_ALGORITHM, and whether 802.1X is on, to a security mode.
+doc.SecurityFromMac = Maps a CoreWLAN CWSecurity value to a security mode.
+doc.DecodeSsid = Turns the \xNN escapes that iw prints for bytes outside plain ASCII back into the bytes of the name. A name with a NUL byte gives an empty result.
+doc.ParseIwDev = The interface names in the output of iw dev.
+doc.ParseIwLink = Reads the output of iw dev NAME link into a Status for that interface. Release it with FreeStatus.
+doc.ParseIwScan = Finds the access point with the given address in the output of iw dev NAME scan dump and returns its security.
+doc.ParseWlanConnection = Reads a WLAN_CONNECTION_ATTRIBUTES buffer from WlanQueryInterface into a Status. Release it with FreeStatus.
+doc.FreeStatus = Releases the interface, ssid and bssid text of a Status that Current, ParseIwLink or ParseWlanConnection returned. Do not use the Status afterwards, and never pass one you built yourself.
+doc.FreeStatuses = Releases every Status in a list from Interfaces, then the list itself.
+ex.State = net-wifi-State
+ex.Security = net-wifi-Security
+ex.Trust = net-wifi-Trust
+ex.Status = net-wifi-Current
+ex.Status.state = net-wifi-Current
+ex.Status.interface = net-wifi-Current
+ex.Status.ssid = net-wifi-Current
+ex.Status.ssid_known = net-wifi-Current
+ex.Status.bssid = net-wifi-Current
+ex.Status.security = net-wifi-Current
+ex.Status.signal = net-wifi-Current
+ex.Status.backend = net-wifi-Current
+ex.Status.reason = net-wifi-Current
+ex.Status.IsConnected = net-wifi-State
+ex.Status.IsInsecure = net-wifi-Security
+ex.Supported = net-wifi-Current
+ex.Current = net-wifi-Current
+ex.Interfaces = net-wifi-Interfaces
+ex.Changed = net-wifi-Watch
+ex.Classify = net-wifi-Trust
+ex.IsUntrusted = net-wifi-Trust
+ex.StateName = net-wifi-State
+ex.SecurityName = net-wifi-Security
+ex.TrustName = net-wifi-State
+ex.SignalFromDbm = net-wifi-Security
+ex.SecurityFromNm = net-wifi-Security
+ex.SecurityFromWlan = net-wifi-Security
+ex.SecurityFromMac = net-wifi-Security
+ex.DecodeSsid = net-wifi-Parsers
+ex.ParseIwDev = net-wifi-Parsers
+ex.ParseIwLink = net-wifi-Parsers
+ex.ParseIwScan = net-wifi-Parsers
+ex.ParseWlanConnection = net-wifi-Windows
+ex.FreeStatus = net-wifi-Current
+ex.FreeStatuses = net-wifi-Interfaces

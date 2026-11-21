@@ -644,20 +644,7 @@ func split_args(s: str): Vector<str>:
     ret out
 end
 
-func run_captured(opt &: Dr, path: str, timeout_ms: int): FileRun:
-    if opt.interp:
-        mut cmd := process.NewCommand(test_self_exe())
-        cmd.Arg("exec")
-        cmd.Arg(path)
-        cmd.Arg("--no-color")
-        cmd.Arg("--log-level=warn")
-        if timeout_ms > 0:
-            cmd.Arg("--timeout=" + conv.FormatInt(timeout_ms as i64))
-        end
-        r := process.RunCommand(cmd, "", parent_timeout(timeout_ms))
-        cmd.Free()
-        ret FileRun { built = true, res = r }
-    end
+func build_test_exe(opt &: Dr, path: str): str:
     mut exe_suffix := ""
     if SALAM_OS_WINDOWS:
         exe_suffix = ".exe"
@@ -673,12 +660,104 @@ func run_captured(opt &: Dr, path: str, timeout_ms: int): FileRun:
     brc := Build(child)
     if brc != 0:
         _rm := os.Remove(tmp)
-        ret FileRun { built = false }
+        ret ""
     end
-    exe := str.Len(child.exe_path) > 0 ? child.exe_path : tmp
+    ret str.Len(child.exe_path) > 0 ? child.exe_path : tmp
+end
+
+func run_test_exe(exe: str, timeout_ms: int, after: str, prior: str): process.RunResult:
     mut cmd := process.NewCommand(exe)
+    if str.Len(after) > 0:
+        cmd.Env("SALAM_TEST_AFTER", after)
+        cmd.Env("SALAM_TEST_PRIOR", prior)
+    end
     r := process.RunCommand(cmd, "", timeout_ms > 0 ? timeout_ms : 0 - 1)
     cmd.Free()
+    ret r
+end
+
+func status_failed(st: process.Status): bool:
+    ret st.signaled or st.code != 0
+end
+
+func status_reason(st: process.Status): str:
+    if st.signaled:
+        ret "killed by signal " + conv.FormatInt(st.signal as i64)
+    end
+    ret "exit code " + conv.FormatInt(st.code as i64)
+end
+
+func test_begun(format: str, out: str, name: str): bool:
+    if str.Equals(format, "teamcity"):
+        ret str.Contains(out, "##teamcity[testStarted name='" + tc_value(name) + "'")
+    end
+    ret has_line(out, "=== RUN   " + name)
+end
+
+func test_ended(format: str, out: str, name: str): bool:
+    if str.Equals(format, "teamcity"):
+        ret has_line(out, "##teamcity[testFinished name='" + tc_value(name) + "']")
+    end
+    ret has_line(out, "--- PASS: " + name) or has_line(out, "--- FAIL: " + name)
+end
+
+func test_failed_mark(format: str, out: str, name: str): bool:
+    if str.Equals(format, "teamcity"):
+        ret str.Contains(out, "##teamcity[testFailed name='" + tc_value(name) + "'")
+    end
+    ret has_line(out, "--- FAIL: " + name)
+end
+
+func crashed_test(tf: TestFile, format: str, out: str): str:
+    mut last := ""
+    each f in tf.fns:
+        if test_begun(format, out, f.name):
+            last = f.name
+        end
+    end
+    if str.Len(last) > 0 and test_ended(format, out, last):
+        ret ""
+    end
+    ret last
+end
+
+func crash_text(r: process.RunResult): str:
+    lines := str.Split(r.stderr, "\n")
+    defer lines.Free()
+    each raw in lines:
+        line := str.Trim(raw)
+        if str.StartsWith(line, "salam panic: ") or str.StartsWith(line, "salam: "):
+            ret line
+        end
+    end
+    if r.status.signaled:
+        ret status_reason(r.status)
+    end
+    if r.status.code != 0:
+        ret status_reason(r.status)
+    end
+    ret "the test ended the process"
+end
+
+func run_captured(opt &: Dr, path: str, timeout_ms: int): FileRun:
+    if opt.interp:
+        mut cmd := process.NewCommand(test_self_exe())
+        cmd.Arg("exec")
+        cmd.Arg(path)
+        cmd.Arg("--no-color")
+        cmd.Arg("--log-level=warn")
+        if timeout_ms > 0:
+            cmd.Arg("--timeout=" + conv.FormatInt(timeout_ms as i64))
+        end
+        r := process.RunCommand(cmd, "", parent_timeout(timeout_ms))
+        cmd.Free()
+        ret FileRun { built = true, res = r }
+    end
+    exe := build_test_exe(opt, path)
+    if str.Len(exe) == 0:
+        ret FileRun { built = false }
+    end
+    r := run_test_exe(exe, timeout_ms, "", "")
     _rm2 := os.Remove(exe)
     ret FileRun { built = true, res = r }
 end
@@ -985,13 +1064,13 @@ func run_script_file(opt &: Dr, path: str, ex: Expectations): int:
         failed++
         reason = "could not start"
     else want >= 0:
-        if res.status.code != want:
+        if res.status.signaled or res.status.code != want:
             failed++
-            reason = "exit code " + conv.FormatInt(res.status.code as i64)
+            reason = status_reason(res.status)
         end
-    else res.status.code != 0:
+    else status_failed(res.status):
         failed++
-        reason = "exit code " + conv.FormatInt(res.status.code as i64)
+        reason = status_reason(res.status)
     end
     if failed > 0 and str.Len(reason) == 0:
         reason = conv.FormatInt(failed as i64) + " check(s) failed"
@@ -1137,8 +1216,8 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
         end
         ret rc
     end
-    fr := run_captured(opt, vpath, timeout)
-    if not fr.built:
+    exe := build_test_exe(opt, vpath)
+    if str.Len(exe) == 0:
         if str.Equals(opt.test_format, "teamcity"):
             print_teamcity_fail(path, pth.PathBase(path), "build failed", "")
         else:
@@ -1149,11 +1228,59 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
         write_report(opt, "fail", selected, 0, selected, "build failed")
         ret 1
     end
-    res := fr.res
-    c := check_script_output(ex, path, res.stdout, res.stderr)
+    teamcity := str.Equals(opt.test_format, "teamcity")
+    mut all_out := str.NewBuilder()
+    defer str.BufFree(all_out)
+    mut all_err := str.NewBuilder()
+    defer str.BufFree(all_err)
+    mut after := ""
+    mut prior_count := 0
+    mut prior_bad := 0
+    mut crashed := 0
+    mut rounds := 0
+    mut res := run_test_exe(exe, timeout, "", "")
+    mut resuming := true
+    until resuming:
+        str.BufAppend(all_out, res.stdout)
+        str.BufAppend(all_err, res.stderr)
+        name := (res.timed_out or not res.started) ? "" : crashed_test(tf, opt.test_format, res.stdout)
+        rounds++
+        if str.Len(name) == 0 or str.Equals(name, after) or rounds > tf.fns.Len():
+            resuming = false
+        else:
+            why := crash_text(res)
+            if teamcity:
+                str.BufAppend(all_out, "##teamcity[testFailed name='" + tc_value(name) + "' message='" + tc_value(why) + "']\n")
+                str.BufAppend(all_out, "##teamcity[testFinished name='" + tc_value(name) + "']\n")
+            else:
+                str.BufAppend(all_out, "--- FAIL: " + name + " (" + why + ")\n")
+            end
+            crashed++
+            each f in tf.fns:
+                if test_ended(opt.test_format, res.stdout, f.name):
+                    prior_count++
+                    if test_failed_mark(opt.test_format, res.stdout, f.name):
+                        prior_bad++
+                    end
+                end
+            end
+            prior_count++
+            prior_bad++
+            after = name
+            res.Free()
+            res = run_test_exe(exe, timeout, after, conv.FormatInt(prior_count as i64) + " " + conv.FormatInt(prior_bad as i64))
+        end
+    end
+    _rm := os.Remove(exe)
+    out_text := str.BufStr(all_out)
+    err_text := str.BufStr(all_err)
+    c := check_script_output(ex, path, out_text, err_text)
     want := expected_exit(ex)
-    mut failed := c.failed
+    mut failed := c.failed + crashed
     mut reason := ""
+    if crashed > 0:
+        reason = conv.FormatInt(crashed as i64) + " test(s) crashed"
+    end
     if res.timed_out:
         failed++
         reason = "timed out"
@@ -1161,30 +1288,37 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
         failed++
         reason = "could not start"
     else want >= 0:
-        if res.status.code != want:
+        if res.status.signaled or res.status.code != want:
             failed++
-            reason = "exit code " + conv.FormatInt(res.status.code as i64)
+            reason = status_reason(res.status)
         end
+    else res.status.signaled:
+        failed++
+        reason = status_reason(res.status)
     else res.status.code != 0:
         failed++
-        reason = "tests failed"
+        if str.Len(reason) == 0:
+            reason = "tests failed"
+        end
     end
-    if str.Len(res.stdout) > 0:
-        print res.stdout
+    if str.Len(out_text) > 0:
+        print out_text
     end
-    if str.Len(res.stderr) > 0:
-        printerr res.stderr
+    if str.Len(err_text) > 0:
+        printerr err_text
     end
     if failed > 0:
-        if str.Equals(opt.test_format, "teamcity"):
-            print_teamcity_fail(path, pth.PathBase(path), reason, c.detail)
+        if teamcity:
+            if crashed == 0 or str.Len(c.detail) > 0:
+                print_teamcity_fail(path, pth.PathBase(path), reason, c.detail)
+            end
         else:
             if str.Len(c.detail) > 0:
                 println "FAIL " + path + ": " + conv.FormatInt(failed as i64) + " check(s) failed"
                 print c.detail
                 println "  --- output ---"
-                print_indented(clip_text(res.stdout + res.stderr, kTestOutputClip))
-            else res.timed_out or not res.started or (str.Len(res.stdout) == 0 and str.Len(res.stderr) == 0):
+                print_indented(clip_text(out_text + err_text, kTestOutputClip))
+            else res.timed_out or not res.started or res.status.signaled or (str.Len(out_text) == 0 and str.Len(err_text) == 0):
                 println "FAIL " + path + ": " + reason
             end
         end
@@ -1271,8 +1405,8 @@ func run_worker():
                 status = "fail"
                 reason = "timed out"
             else str.Len(status) == 0:
-                status = res.status.code == 0 ? "pass" : "fail"
-                reason = status == "pass" ? "" : "exit code " + conv.FormatInt(res.status.code as i64)
+                status = status_failed(res.status) ? "fail" : "pass"
+                reason = status == "pass" ? "" : status_reason(res.status)
             end
             mut r := JobResult {
                 path = path, status = status, reason = reason, out = str.Clone(res.stdout), err = str.Clone(res.stderr),

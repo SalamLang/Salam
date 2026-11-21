@@ -35,6 +35,16 @@ step test broken
 mkdir exits
 printf 'func main:\n    ret 3\nend\n' >exits/three_test.salam
 step test exits lib/strings_test.salam
+mkdir crash
+{
+    printf 'func test_ok():\n    testing.AssertEqInt(1, 1)\nend\n'
+    printf 'func test_oob():\n    mut v := Vector {} as Vector<int>\n    defer v.Free()\n    v.push(1)\n'
+    printf '    testing.AssertEqInt(v[0] + v.pop() + v.pop(), 2)\nend\n'
+    printf 'func test_after():\n    testing.AssertEqInt(1, 2)\nend\n'
+    printf 'func test_last():\n    testing.AssertEqInt(3, 3)\nend\n'
+} >crash/panic_test.salam
+step test crash
+step test crash --format=teamcity
 mkdir -p expect
 printf '// EXPECT: hello\n// EXPECT-NOT: goodbye\n// EXPECT-EXIT: 0\nfunc main:\n    println "hello"\nend\n' >expect/out.test.salam
 step test expect/out.test.salam

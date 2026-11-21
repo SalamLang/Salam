@@ -973,6 +973,7 @@ fi
 
 if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
+    add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
 fi
 
 if want protect; then

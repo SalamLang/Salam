@@ -13,7 +13,7 @@ cd "$work" || exit 1
 
 printf '\357\273\277func main:\n    println "bom ok"\nend\n' >bom.salam
 printf 'func main:\n    println "a"\nend\n\000 garbage ((((\n' >nul.salam
-printf 'func main:\n    x\377\376 := 1\n    println 1\nend\n' >badutf.salam
+printf 'func main:\n    println "a\377\376b"\nend\n' >badutf.salam
 printf 'func main:\n    println "\330\263\331\204\330\247\331\205\342\200\214\330\257\331\206\333\214\330\247"\nend\n' >persian.salam
 printf 'func main:\n    println "hidden"\nend\n' >noperm.salam
 
@@ -34,7 +34,8 @@ chmod 000 noperm.salam
 echo "== run noperm.salam"
 if [ -r noperm.salam ]; then
     echo "cannot read source file 'noperm.salam': permission denied or the file cannot be opened"
-    echo "exit 2"
+    echo "build aborted: errors in source (noperm.salam)"
+    echo "exit 1"
 else
     "$salam" run noperm.salam --no-color >out.txt 2>&1
     rc=$?

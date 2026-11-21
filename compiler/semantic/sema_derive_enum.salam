@@ -2,7 +2,10 @@ package semantic
 
 import str
 
+include co "../sal_core.salam"
 include at "../ast.salam"
+include i18 "../i18n.salam"
+include tok "../token.salam"
 
 const ENUM_OP_NAME := 0
 const ENUM_OP_FROMSTRING := 1
@@ -116,4 +119,140 @@ end
 
 func sema_derive_enum_names(s &: Sema, a &: at.Ast, t: int): str:
     ret derive_enum_one(s, a, t, "_enum_names_", ENUM_OP_NAMES)
+end
+
+func enum_has_value(s &: Sema, esym: int, v: i64): bool:
+    mems := scope_at(s, sym_at(s, esym).members).symbols
+    repeat mems.Len() in i:
+        m := sym_at(s, mems.Get(i))
+        if m.kind == SYM_ENUM_MEMBER and m.enum_value == v:
+            ret true
+        end
+    end
+    ret false
+end
+
+func enum_check_source(s &: Sema, esym: int, fname: str): str:
+    ev := sym_at(s, esym)
+    mut cond := ""
+    mems := scope_at(s, ev.members).symbols
+    repeat mems.Len() in i:
+        m := sym_at(s, mems.Get(i))
+        if m.kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        if str.Len(cond) > 0:
+            cond += " and "
+        end
+        cond += "_v != " + m.enum_value
+    end
+    if str.Len(cond) == 0:
+        ret ""
+    end
+    mut out := "func " + fname + "(_v: i64): i64:\n"
+    out += "    if " + cond + ":\n"
+    out += "        salam_panic(\"value \" + _v + \" is not a valid " + ev.name + "\")\n"
+    ret out + "    end\n    ret _v\nend\n"
+end
+
+func enum_check_fn(s &: Sema, a &: at.Ast, t: int): str:
+    esym := ty_at(s, t).decl
+    if esym == 0 or sym_at(s, esym).members == 0 or s.program == 0:
+        ret ""
+    end
+    fname := "_enum_check_" + derive_key(type_to_string(s, t))
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    text := enum_check_source(s, esym, fname)
+    if str.Len(text) == 0:
+        ret ""
+    end
+    if scope_lookup(s, s.global, "salam_panic") == 0:
+        pprog := derive_parse(s, a, "extern:\n    noret func salam_panic(msg: str)\nend\n", "<derived>")
+        if pprog != 0:
+            _pf := derive_install_all(s, a, pprog, "salam_panic", 0)
+        end
+    end
+    derive_registry_claim(s, fname)
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.Set(slot - 1, fn)
+    ret fname
+end
+
+func enum_cast_guard(s &: Sema, a &: at.Ast, nid: int, target: int, src: int):
+    if target < 0 or src < 0 or type_is_error(s, src) or type_is_error(s, target):
+        ret
+    end
+    et := type_undistinct(s, target)
+    ev := ty_at(s, et)
+    if ev.kind != TY_ENUM or ev.enum_val_kind != tok.TV_INT or ev.decl == 0:
+        ret
+    end
+    if not type_is_integer(s, src) or type_is_wide(s, src):
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.a == 0:
+        ret
+    end
+    mut cv := ConstVal {}
+    if const_eval(s, a, n.a, cv, 0):
+        if cv.kind == CV_INT and not enum_has_value(s, ev.decl, cv.i):
+            serr(
+                s, 23, span_of(a, nid), co.Format2(
+                    i18.Tr("value %d is not a valid '%s'"), co.ArgInt(cv.i), co.ArgStr(type_disp(s, target))
+                )
+            )
+        end
+        ret
+    end
+    if not g_sm_enum_checks or s.in_derive or n.synthetic:
+        ret
+    end
+    fname := enum_check_fn(s, a, et)
+    if str.Len(fname) == 0:
+        ret
+    end
+    sp := span_of(a, n.a)
+    i64t := sema_ty(s, TY_I64)
+    mut arg := n.a
+    if ty_at(s, src).kind != TY_I64:
+        tnode := g_type_to_ast(s, a, i64t, sp)
+        _tt := sema_decorate(s, a, tnode, i64t)
+        arg = new_node_at(a, at.AST_CAST, sp)
+        mut cv2 := at.Get(a, arg)
+        cv2.a = n.a
+        cv2.ty = tnode
+        cv2.synthetic = true
+        at.Put(a, arg, cv2)
+        _ct := sema_decorate(s, a, arg, i64t)
+    end
+    callee := new_node_at(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, callee, fname)
+    mut kv := at.Get(a, callee)
+    kv.synthetic = true
+    at.Put(a, callee, kv)
+    call := new_node_at(a, at.AST_CALL, sp)
+    mut wv := at.Get(a, call)
+    wv.a = callee
+    wv.synthetic = true
+    at.Put(a, call, wv)
+    at.AddChild(a, call, arg)
+    _cd := sema_decorate(s, a, call, i64t)
+    mut nv := at.Get(a, nid)
+    nv.a = call
+    at.Put(a, nid, nv)
 end

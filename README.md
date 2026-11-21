@@ -22,15 +22,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 </div>
 
-[![Compiler - Clone & Build](https://github.com/SalamLang/Salam/actions/workflows/compiler-clone-build.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-clone-build.yml)
 [![Compiler - Build & Release](https://github.com/SalamLang/Salam/actions/workflows/compiler-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-release.yml)
 [![Editor - Playground (WebAssembly)](https://github.com/SalamLang/Salam/actions/workflows/editor-playground-deploy.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/editor-playground-deploy.yml)
-[![Books - Build & Validate PDFs](https://github.com/SalamLang/Salam/actions/workflows/books-build-pdf.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/books-build-pdf.yml)
-[![Lint - Super-Linter](https://github.com/SalamLang/Salam/actions/workflows/lint-super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-super-linter.yml)
-[![Lint - Prek Standard Hooks](https://github.com/SalamLang/Salam/actions/workflows/lint-prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-prek.yml)
-[![Lint - Prek Manual Hooks](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-manual.yml)
-[![Lint - Prek Audit Hooks](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-audit.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-audit.yml)
-[![PR - Pull Request Labeler](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
 [![Dependabot Updates](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
 [![GitHub Pages Build Deployment](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
 [![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg?label=VS%20Code%20Marketplace%20Version)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)

@@ -1,0 +1,84 @@
+import mem
+import net.tun
+
+func put(p: u8*, at: int, bytes: int[]): int:
+    repeat bytes.Len() in i:
+        p[at + i] = bytes[i] as u8
+    end
+    ret at + bytes.Len()
+end
+
+func put_str(p: u8*, at: int, s: str): int:
+    q := s as u8*
+    repeat s.Len() in i:
+        p[at + i] = q[i]
+    end
+    ret at + s.Len()
+end
+
+func client_hello(host: str, with_padding: bool): tun.Packet:
+    buf := mem.AllocateZeroed(1024 as u64) as u8*
+    hl := host.Len()
+    ext := mem.AllocateZeroed(512 as u64) as u8*
+    mut ext_len := 0
+    if with_padding:
+        ext_len = put(ext, ext_len, [0, 21, 0, 4, 0, 0, 0, 0])
+    end
+    ext_len = put(ext, ext_len, [0, 0, 0, hl + 5, 0, hl + 3, 0, 0, hl])
+    ext_len = put_str(ext, ext_len, host)
+    ext_len = put(ext, ext_len, [0, 43, 0, 3, 2, 3, 4])
+    mut body := 0
+    body_start := 9
+    mut i := body_start
+    i = put(buf, i, [3, 3])
+    repeat 32 in k:
+        buf[i + k] = k as u8
+    end
+    i += 32
+    i = put(buf, i, [0])
+    i = put(buf, i, [0, 2, 19, 1])
+    i = put(buf, i, [1, 0])
+    i = put(buf, i, [(ext_len >> 8) & 255, ext_len & 255])
+    repeat ext_len in k:
+        buf[i + k] = ext[k]
+    end
+    i += ext_len
+    body = i - body_start
+    hs := body + 4
+    _a := put(buf, 0, [22, 3, 1, (hs >> 8) & 255, hs & 255, 1, 0, (body >> 8) & 255, body & 255])
+    mem.Free(ext as void*)
+    ret tun.Packet { data = buf as void*, len = i }
+end
+
+func main():
+    a := client_hello("Example.COM", false)
+    println "sni", tun.SniffHost(a.data, a.len)
+    b := client_hello("cdn.example.org", true)
+    println "sni after padding", tun.SniffHost(b.data, b.len)
+    println "sni truncated", tun.SniffHost(b.data, 40).Len()
+    ip := client_hello("1.2.3.4", false)
+    println "sni ip ignored", tun.SniffHost(ip.data, ip.len).Len()
+    tun.FreePacket(a)
+    tun.FreePacket(b)
+    tun.FreePacket(ip)
+
+    req := "GET /index.html HTTP/1.1\r\nUser-Agent: x\r\nhOsT:  www.Example.net:8080\r\nAccept: */*\r\n\r\n"
+    println "http host", tun.SniffHost(req as void*, req.Len())
+    none := "GET / HTTP/1.1\r\nAccept: */*\r\n\r\nHost: late.example\r\n"
+    println "host after headers", tun.SniffHost(none as void*, none.Len()).Len()
+    ssh := "SSH-2.0-OpenSSH_9.6\r\n"
+    println "ssh", tun.SniffHost(ssh as void*, ssh.Len()).Len()
+
+    q := tun.BuildDnsQuery(4660, "www.example.com", 1)
+    println "dns query bytes", q.len
+    parsed := tun.ParseDnsQuery(q.data, q.len)
+    println "dns parsed", parsed.ok, parsed.id, parsed.name, parsed.qtype
+    p := q.data as u8*
+    p[2] = 129 as u8
+    println "dns response rejected", tun.ParseDnsQuery(q.data, q.len).ok
+    println "dns short rejected", tun.ParseDnsQuery(q.data, 14).ok
+    tun.FreePacket(q)
+    aaaa := tun.BuildDnsQuery(1, "ipv6.example.", 28)
+    println "aaaa", tun.ParseDnsQuery(aaaa.data, aaaa.len).name, tun.ParseDnsQuery(aaaa.data, aaaa.len).qtype
+    tun.FreePacket(aaaa)
+end

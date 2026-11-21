@@ -96,6 +96,45 @@ func cg_div_guard(g &: Cg, a &: at.Ast, op: int, lts: str, b: int, eb: str): str
     ret "((" + cg_ctype(bn.type_str) + ")SALAM_NZ(" + eb + ", " + (is_mod ? "1" : "0") + "))"
 end
 
+func cg_sdiv_bits(a &: at.Ast, op: int, ts: str, b: int): int:
+    is_div := op == tok.TK_SLASH or op == tok.TK_SLASH_EQ
+    is_mod := op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ
+    if not is_div and not is_mod:
+        ret 0
+    end
+    if not cg_is_int_typestr(ts) or cg_is_unsigned_typestr(ts):
+        ret 0
+    end
+    if b != 0:
+        bn := at.Get(a, b)
+        if bn.kind == at.AST_LITERAL and bn.op == tok.TK_INT and bn.value_int != (0 - 1) as u64:
+            ret 0
+        end
+    end
+    bits := cg_int_ts_bits(ts)
+    ret bits >= 32 ? bits : 0
+end
+
+func cg_sdiv_call(op: int, bits: int, ea: str, eb: str): str:
+    ct := bits == 32 ? "int32_t" : "int64_t"
+    is_mod := op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ
+    ret (is_mod ? "salam_smod" : "salam_sdiv") + co.I64Toa(bits as i64) + "((" + ct + ")(" + ea + "), (" + ct + ")(" + eb + "))"
+end
+
+func cg_sdiv_assign(g &: Cg, a &: at.Ast, n: int, ea: str, eb: str): str:
+    nn := at.Get(a, n)
+    lts := at.Get(a, nn.a).type_str
+    cts := cg_common_int_typestr(lts, at.Get(a, nn.b).type_str)
+    bits := cg_sdiv_bits(a, nn.op, cts, nn.b)
+    if bits == 0:
+        ret ""
+    end
+    g.tmpn++
+    p := "__dv" + g.tmpn
+    lct := cg_ctype(lts)
+    ret "({ " + lct + " *" + p + " = &(" + ea + "); *" + p + " = (" + lct + ")" + cg_sdiv_call(nn.op, bits, "*" + p, eb) + "; })"
+end
+
 func cg_op(k: int): str:
     if k == tok.TK_PLUS:
         ret "+"
@@ -1308,6 +1347,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             end
             if cg_op_is_cmp(nn.op):
                 ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"
+            end
+            dbits := cg_sdiv_bits(a, nn.op, cts, nn.b)
+            if dbits != 0:
+                ret "((" + cty + ")" + cg_sdiv_call(nn.op, dbits, eaq, cg_div_guard(g, a, nn.op, an.type_str, nn.b, ebq)) + ")"
             end
             ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + aty + ")(" + cg_div_guard(g, a, nn.op, an.type_str, nn.b, ebq) + ")))"
         end

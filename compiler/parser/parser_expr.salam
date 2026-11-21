@@ -449,14 +449,37 @@ func parse_led(p &: Ps, a &: at.Ast, lhs: int, op: int, w: int): int:
     ret make_binary(a, op, lhs, rhs)
 end
 
+func p_in_open_group(p &: Ps): bool:
+    mut i := p.pos - 1
+    mut depth := 0
+    until i >= 0:
+        k := p.toks.toks.Get(i).kind
+        if k == tok.TK_STMT_END:
+            ret false
+        end
+        if k == tok.TK_RPAREN or k == tok.TK_RBRACKET or k == tok.TK_RBRACE:
+            depth++
+        else k == tok.TK_LPAREN or k == tok.TK_LBRACKET or k == tok.TK_LBRACE:
+            if depth == 0:
+                ret true
+            end
+            depth--
+        end
+        i--
+    end
+    ret false
+end
+
 func p_question_is_postfix(p &: Ps): bool:
     k := p_peek2(p).kind
     if k == tok.TK_STMT_END or k == tok.TK_EOF or k == tok.TK_RPAREN or k == tok.TK_COMMA or k == tok.TK_RBRACKET or k == tok.TK_RBRACE or k == tok.TK_DOT or k == tok.TK_KW_END or k == tok.TK_FAT_ARROW or k == tok.TK_QUESTION:
         ret true
     end
+    in_group := p_in_open_group(p)
     mut depth := 0
     mut colons := 0
     mut questions := 0
+    mut in_type := false
     mut i := 1
     until true:
         tt := p_peekn(p, i)
@@ -464,6 +487,24 @@ func p_question_is_postfix(p &: Ps): bool:
         if t == tok.TK_STMT_END or t == tok.TK_EOF:
             ret colons <= questions
         end
+        if t == tok.TK_KW_AS:
+            in_type = true
+            i++
+            continue
+        end
+        if in_type and (t == tok.TK_IDENT or t == tok.TK_DOT or t == tok.TK_STAR):
+            i++
+            continue
+        end
+        if t == tok.TK_QUESTION and in_type:
+            ak := p_peekn(p, i + 1).kind
+            if ak == tok.TK_STMT_END or ak == tok.TK_EOF or ak == tok.TK_RPAREN or ak == tok.TK_RBRACKET or ak == tok.TK_RBRACE or ak == tok.TK_COMMA or ak == tok.TK_COLON:
+                in_type = false
+                i++
+                continue
+            end
+        end
+        in_type = false
         if t == tok.TK_LPAREN or t == tok.TK_LBRACKET or t == tok.TK_LBRACE:
             depth++
         else t == tok.TK_RPAREN or t == tok.TK_RBRACKET or t == tok.TK_RBRACE:
@@ -475,7 +516,7 @@ func p_question_is_postfix(p &: Ps): bool:
             questions++
         else t == tok.TK_COLON and depth == 0:
             nt := p_peekn(p, i + 1)
-            if nt.kind == tok.TK_STMT_END or nt.kind == tok.TK_EOF or nt.begin_line != tt.end_line:
+            if nt.kind == tok.TK_STMT_END or nt.kind == tok.TK_EOF or (nt.begin_line != tt.end_line and not in_group):
                 ret colons <= questions
             end
             colons++

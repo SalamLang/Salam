@@ -1358,6 +1358,54 @@ func find_root(): str:
     ret start
 end
 
+func default_std(exe: str):
+    if not os.Exists("/bin/sh"):
+        ret
+    end
+    dir := temp.Directory()
+    bin := dir + "/bin"
+    mut mk := process.NewCommand("/bin/sh")
+    mk.Arg("-c")
+    mk.Arg("mkdir -p \"$1\" && ln -s \"$2\" \"$1/salam\" && ln -s \"$3\" \"$1/std\"")
+    mk.Arg("sh")
+    mk.Arg(bin)
+    mk.Arg(exe)
+    mk.Arg(g_std)
+    made := process.RunCommand(mk, "", 60000)
+    if made.status.ReturnCode() != 0:
+        _r0 := temp.RemoveDir(dir)
+        fatal("cannot link the compiler for the default std test: " + head(made.stderr, 200))
+    end
+    mut cmd := process.NewCommand(bin + "/salam")
+    cmd.Arg("lsp")
+    cmd.Env("SALAM_STD", "")
+    cmd.stdin_mode = process.Pipe
+    cmd.stdout_mode = process.Pipe
+    cmd.stderr_mode = process.Null
+    ch := process.Launch(cmd)
+    if not ch.ok:
+        fatal("cannot start the linked compiler: " + ch.error)
+    end
+    mut s := Server { ch = ch }
+    _i := initialize(s, json.Str(uri_of(dir)), "{}", "")
+    path := dir + "/stdcheck.salam"
+    text := "import io\n\nfunc main:\n    io.EPrintln(\"hi\")\nend\n"
+    _w := fs.WriteText(path, text)
+    uri := uri_of(path)
+    did_open(s, uri, text)
+    d := s.diagnostics(uri)
+    list := jget(d, "diagnostics")
+    mut e008 := false
+    repeat jlen(list) in i:
+        if jstr(jget(jidx(list, i), "code")) == "E008":
+            e008 = true
+        end
+    end
+    check("std: found next to the binary with no --stdlib-path or SALAM_STD", jlen(list) == 0 and not e008, head(dump(list), 300))
+    _c := s.stop()
+    _r := temp.RemoveDir(dir)
+end
+
 func main:
     g_root = find_root()
     g_std = g_root + "/std"
@@ -1407,6 +1455,7 @@ func main:
     project(exe)
     pull_and_colors(exe)
     check_cli(exe)
+    default_std(exe)
 
     println "RESULT: " + g_passed + " passed, " + g_failed + " failed"
     if g_failed > 0:

@@ -231,24 +231,24 @@ mut results := chan.Chan {} as chan.Chan<i64>
 func worker():
     mut ok := true
     until true:
-        n := jobs.recv(ok)
+        n := jobs.Recv(ok)
         if not ok:
             break
         end
-        results.send(n * n)
+        results.Send(n * n)
     end
 end
 
 func main:
-    jobs.init(8)
-    results.init(100)
+    jobs.Init(8)
+    results.Init(100)
     mut workers := Vector {} as Vector<i64>
     defer workers.Free()
     repeat 3:
         workers.Push(spawn(worker))
     end
     repeat 1 to 100 in i:
-        jobs.send(i as i64)
+        jobs.Send(i as i64)
     end
     jobs.Close()
     each w in workers:
@@ -286,7 +286,7 @@ func main:
     both.Push(slow)
 
     p := pool.New(2, 4)
-    pool.Submit(p, (): fast.send(1 as i64) end)
+    pool.Submit(p, (): fast.Send(1 as i64) end)
 
     mut v := 0 as i64
     which := chan.Select(both, v, 1000)

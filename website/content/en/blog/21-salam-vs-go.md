@@ -76,24 +76,24 @@ mut results := chan.Chan {} as chan.Chan<i64>
 func worker():
     mut ok := true
     until true:
-        n := jobs.recv(ok)
+        n := jobs.Recv(ok)
         if not ok:
             break
         end
-        results.send(n * n)
+        results.Send(n * n)
     end
 end
 
 func main:
-    jobs.init(4)
-    results.init(16)
+    jobs.Init(4)
+    results.Init(16)
     mut workers := Vector {} as Vector<i64>
     defer workers.Free()
     repeat 3:
         workers.Push(spawn(worker))
     end
     repeat 1 to 10 in i:
-        jobs.send(i as i64)
+        jobs.Send(i as i64)
     end
     jobs.Close()
     each t in workers:
@@ -103,7 +103,7 @@ func main:
     mut sum := 0 as i64
     mut ok := true
     until true:
-        v := results.recv(ok)
+        v := results.Recv(ok)
         if not ok:
             break
         end

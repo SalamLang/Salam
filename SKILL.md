@@ -887,7 +887,7 @@ func load_config(text: str): int throw:
     try:
         ret load(text)
     catch e:
-        throw e.wrap("loading config")  // rethrow with context
+        throw e.Wrap("loading config")  // rethrow with context
     end
 end
 

@@ -260,7 +260,7 @@ func main:
     _ := db.Run(c, "INSERT INTO orders (customer_id, total_cents) VALUES (1, 400)")
     orders := OrdersFor(c, 1 as i64)
     each o in orders:
-        println o.id, o.total_cents, o.note.unwrap_or("(no note)")
+        println o.id, o.total_cents, o.note.UnwrapOr("(no note)")
     end
     orders.Free()
     _ := c.Close()

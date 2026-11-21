@@ -65,6 +65,77 @@ func cg_self_cmp_same(a &: at.Ast, x: int, y: int, depth: int): bool:
     ret false
 end
 
+func cg_f2i_const(fv: f64, bits: int, uns: bool): str:
+    if fv != fv:
+        ret "0"
+    end
+    if uns:
+        if fv < 1.0:
+            ret "0"
+        end
+        if bits >= 64:
+            if fv >= 18446744073709551616.0:
+                ret "18446744073709551615ULL"
+            end
+            if fv >= 9223372036854775808.0:
+                ret co.U64Toa(((fv - 9223372036854775808.0) as i64 as u64) + ((1 as u64) << (63 as u64))) + "ULL"
+            end
+            ret co.I64Toa(fv as i64) + "ULL"
+        end
+        top := (1 as u64) << (bits as u64)
+        if fv >= (top as f64):
+            ret co.U64Toa(top - (1 as u64)) + "ULL"
+        end
+        ret co.I64Toa(fv as i64) + "ULL"
+    end
+    half := (1 as u64) << ((bits - 1) as u64)
+    if fv >= (half as f64):
+        ret co.U64Toa(half - (1 as u64)) + "LL"
+    end
+    if fv < 0.0 - (half as f64):
+        ret "(-" + co.U64Toa(half - (1 as u64)) + "LL - 1)"
+    end
+    ret co.I64Toa(fv as i64) + "LL"
+end
+
+func cg_f2i_target(tgt: str): bool:
+    if str.Equals(tgt, "int") or str.Equals(tgt, "uint"):
+        ret true
+    end
+    ret cg_is_int_typestr(tgt)
+end
+
+func cg_f2i(a &: at.Ast, src: int, tgt: str, e: str): str:
+    mut ts := tgt
+    if str.Equals(ts, "int"):
+        ts = "i32"
+    else str.Equals(ts, "uint"):
+        ts = "u32"
+    end
+    if not cg_is_int_typestr(ts):
+        ret ""
+    end
+    bits := cg_int_ts_bits(ts)
+    sn := at.Get(a, src)
+    if sn.kind == at.AST_LITERAL and sn.op == tok.TK_FLOAT:
+        ret "(" + cg_f2i_const(sn.value_float, bits, cg_is_unsigned_typestr(ts)) + ")"
+    end
+    if cg_is_unsigned_typestr(ts):
+        switch bits:
+            8: ret "salam_f2u((double)(" + e + "), 256.0, 255u)" end
+            16: ret "salam_f2u((double)(" + e + "), 65536.0, 65535u)" end
+            32: ret "salam_f2u((double)(" + e + "), 4294967296.0, 4294967295u)" end
+        end
+        ret "salam_f2u((double)(" + e + "), 18446744073709551616.0, UINT64_MAX)"
+    end
+    switch bits:
+        8: ret "salam_f2s((double)(" + e + "), 128.0, 127)" end
+        16: ret "salam_f2s((double)(" + e + "), 32768.0, 32767)" end
+        32: ret "salam_f2s((double)(" + e + "), 2147483648.0, 2147483647)" end
+    end
+    ret "salam_f2s((double)(" + e + "), 9223372036854775808.0, INT64_MAX)"
+end
+
 func cg_self_cmp(a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     op := nn.op
@@ -1447,6 +1518,11 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if str.Equals(tgt, "bool") and str.Len(sts) > 0 and not str.Equals(sts, "bool") and not str.Equals(sts, "str"):
             ret "((bool)((" + cg_expr(g, s, a, nn.a) + ") != 0))"
+        end
+        if str.Equals(sts, "f64") or str.Equals(sts, "f32") or str.Equals(sts, "float"):
+            if cg_f2i_target(tgt):
+                ret "((" + cg_ctype(tgt) + ")" + cg_f2i(a, nn.a, tgt, cg_expr(g, s, a, nn.a)) + ")"
+            end
         end
         ret "((" + cg_ctype(tgt) + ")(" + cg_expr(g, s, a, nn.a) + "))"
     end

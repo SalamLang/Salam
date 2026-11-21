@@ -19,7 +19,7 @@ On the project's own HTTP router benchmark Salam's server answered more requests
 | Concurrency     | Goroutines (M:N scheduling by the runtime), channels, `select`             | OS threads (`spawn`), a bounded task pool (`go f(x)`), channels, `chan.Select`, futures |
 | Blocking I/O    | Parks the goroutine; the runtime multiplexes sockets                       | Blocks the thread; the HTTP server uses an event loop with a worker pool on Linux       |
 | Memory          | Garbage collected                                                          | Manual: `.Free()` and `defer`, with compile-time ownership checks                       |
-| Errors          | `error` values, `if err != nil`                                            | `throw`, `try`, `catch`, or result enums                                               |
+| Errors          | `error` values, `if err != nil`                                            | `throw`, `try`, `catch`, or result enums                                                |
 | Generics        | Since Go 1.18                                                              | Yes, with interface bounds                                                              |
 | Sum types       | No (interfaces and type switches)                                          | Enums with data and exhaustive `match`                                                  |
 | HTTP            | `net/http` in the standard library, frameworks such as Gin, Echo and Fiber | `net/http` and `net/router` in the standard library                                     |

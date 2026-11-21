@@ -2,6 +2,13 @@ package lexer
 
 import str
 
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include i18n "../i18n.salam"
+
+const ESC_IN_STRING := 0
+const ESC_IN_GUILLEMET := 1
+
 func simple_escape(e: int): int:
     if e == 110:
         ret 10
@@ -130,4 +137,139 @@ func decode_char(lex: str): u64:
         ret cp
     end
     ret c1 as u64
+end
+
+func esc_error(L &: Lx, at_i: int, line: int, col: int, width: int, help: str, msg: str):
+    L.had_error = true
+    lg.LogSpanHelp(
+        L.lgr, lg.PH_LEXER, lg.LOG_ERROR, L.file, line, col, at_i, width, help, msg
+    )
+end
+
+func esc_hex_count(L &: Lx, from: int, stop: int, maxn: int): int:
+    mut n := 0
+    until n < maxn and from + n < stop and hexval(byte_at(L.s, from + n)) >= 0:
+        n++
+    end
+    ret n
+end
+
+func esc_hex_value(L &: Lx, from: int, n: int): u32:
+    mut v := 0 as u32
+    repeat n in k:
+        v = v * (16 as u32) + (hexval(byte_at(L.s, from + k)) as u32)
+    end
+    ret v
+end
+
+func esc_is_scalar(cp: u32): bool:
+    ret cp <= (0x10FFFF as u32) and (cp < (0xD800 as u32) or cp > (0xDFFF as u32))
+end
+
+func esc_hex_digits_msg(e: int): str:
+    if e == 120:
+        ret "E260: '\\x' needs exactly two hex digits, as in '\\x41'"
+    end
+    if e == 117:
+        ret "E260: '\\u' needs exactly four hex digits, as in '\\u0645'; write '\\U' and eight digits for a code point above FFFF"
+    end
+    ret "E260: '\\U' needs exactly eight hex digits, as in '\\U0001F600'"
+end
+
+func esc_check_hex(L &: Lx, i: int, stop: int, line: int, col: int, e: int, in_char: bool): int:
+    want := e == 120 ? LX_ESC_HEX_X : (e == 117 ? LX_ESC_HEX_U : LX_ESC_HEX_BIG_U)
+    n := esc_hex_count(L, i + 2, stop, want)
+    if n != want:
+        esc_error(L, i, line, col, 2 + n, "", i18n.Tr(esc_hex_digits_msg(e)))
+        ret 2 + n
+    end
+    if e == 120:
+        ret 2 + n
+    end
+    cp := esc_hex_value(L, i + 2, n)
+    text := lx_sub(L, i, 2 + n)
+    if not esc_is_scalar(cp):
+        esc_error(L, i, line, col, 2 + n, "", co.Format1(i18n.Tr("E260: '%s' is not a Unicode character: surrogates D800 to DFFF and values above 10FFFF are not allowed"), co.ArgStr(text)))
+    else in_char and cp > (127 as u32):
+        esc_error(L, i, line, col, 2 + n, "", co.Format2(i18n.Tr("E260: a char literal holds one byte, so '%s' does not fit; write u\"%s\" for a Unicode character"), co.ArgStr(text), co.ArgStr(text)))
+    end
+    ret 2 + n
+end
+
+func esc_char_width(L &: Lx, i: int): int:
+    mut k := 1
+    if byte_at(L.s, i) >= 192:
+        until k < 4 and i + k < L.n and byte_at(L.s, i + k) >= 128 and byte_at(L.s, i + k) < 192:
+            k++
+        end
+    end
+    ret k
+end
+
+func esc_check_one(L &: Lx, i: int, stop: int, line: int, col: int, ctx: int): int:
+    e := byte_at(L.s, i + 1)
+    if simple_escape(e) >= 0:
+        ret 2
+    end
+    if e == 10 or e == 13:
+        ret 1
+    end
+    if e == 120 or e == 117 or e == 85:
+        ret esc_check_hex(L, i, stop, line, col, e, false)
+    end
+    if ctx == ESC_IN_GUILLEMET and e == 194 and (byte_at(L.s, i + 2) == 171 or byte_at(L.s, i + 2) == 187):
+        ret 3
+    end
+    if bidi_at(L.s, L.n, i + 1) != 0:
+        ret 1
+    end
+    width := 1 + esc_char_width(L, i + 1)
+    if not g_lx_probe:
+        mut f := lg.Fix {}
+        f.title = i18n.Tr("Double the backslash")
+        f.index = i
+        f.length = 0
+        f.text = "\\"
+        f.preferred = true
+        lg.StageFix(f)
+    end
+    esc_error(L, i, line, col, width, i18n.Tr("write '\\\\' for a backslash, or put the text in a raw `...` string"), co.Format1(i18n.Tr("E260: unknown escape '%s' in a string"), co.ArgStr(lx_sub(L, i, width))))
+    ret width
+end
+
+func check_escapes(L &: Lx, b: co.SrcPos, from: int, stop: int, ctx: int):
+    mut i := b.index as int
+    mut line := b.line as int
+    mut col := b.col as int
+    until i < stop:
+        c := byte_at(L.s, i)
+        if c == 92 and i >= from and i + 1 < stop:
+            w := esc_check_one(L, i, stop, line, col, ctx)
+            i += w
+            col += w
+            continue
+        end
+        if c == 10:
+            line++
+            col = 1
+        else:
+            col++
+        end
+        i++
+    end
+end
+
+func check_char_escape(L &: Lx, epos: co.SrcPos, esc: int, stop: int):
+    i := epos.index as int
+    line := epos.line as int
+    col := epos.col as int
+    if esc == 120 or esc == 117 or esc == 85:
+        _w := esc_check_hex(L, i, stop, line, col, esc, true)
+        ret
+    end
+    if simple_escape(esc) >= 0 or esc == 10 or esc == 13:
+        ret
+    end
+    width := 1 + esc_char_width(L, i + 1)
+    esc_error(L, i, line, col, width, i18n.Tr("a char escape is one of \\n \\t \\r \\0 \\a \\b \\f \\v \\\\ \\' \\\" or \\x and two hex digits"), co.Format1(i18n.Tr("E260: unknown escape '%s' in a char literal"), co.ArgStr(lx_sub(L, i, width))))
 end

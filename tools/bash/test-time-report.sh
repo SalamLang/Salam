@@ -27,7 +27,11 @@ fi
 printf 'func main:\n    println "hi"\nend\n' >t.salam
 
 echo "== time report"
-"$salam" build t.salam --backend=c --cc="$cc" --force --time-report --no-color >report.txt 2>&1
+if ! "$salam" build t.salam --backend=c --cc="$cc" --force --time-report --no-color >report.txt 2>&1; then
+    echo "build failed"
+    cat report.txt
+    exit 1
+fi
 for word in "ast nodes" "arena" "peak rss 0 B"; do
     if grep -q "$word" report.txt; then
         echo "report prints: $word"

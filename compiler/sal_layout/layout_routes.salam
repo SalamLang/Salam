@@ -209,6 +209,23 @@ func lo_rt_optional_names(pattern: str): Vector<str>:
     ret out
 end
 
+func lo_rt_unnamed_param(pattern: str): bool:
+    mut i := 0
+    n := pattern.Len()
+    until i < n:
+        mut e := str.IndexFrom(pattern, "/", i)
+        if e < 0:
+            e = n
+        end
+        seg := str.Substr(pattern, i, e - i)
+        if str.Equals(seg, ":") or str.Equals(seg, ":?"):
+            ret true
+        end
+        i = e + 1
+    end
+    ret false
+end
+
 func lo_rt_has(v: Vector<str>, s: str): bool:
     each x in v:
         if str.Equals(x, s):
@@ -252,6 +269,9 @@ func lo_rt_is_outlet(name: str): bool:
 end
 
 func lo_rt_href_expr(a &: at.Ast, val: int): int:
+    if not g_lo_routes_web:
+        ret val
+    end
     lit := at.Get(a, val)
     if lit.kind == at.AST_LITERAL and lit.value_kind == tok.TV_STRING:
         target := lit.value_str
@@ -458,7 +478,7 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     t += "func __salam_route_make(__salam_u: " + s + ", __salam_out &: " + s + "): " + rt + ":\n"
     t += "    mut __salam_t := __salam_u\n"
     t += "    mut __salam_n := 0\n"
-    t += "    until __salam_n < 8:\n"
+    t += "    until __salam_n <= 8:\n"
     t += "        mut __salam_p := \"\"\n"
     t += "        mut __salam_q := \"\"\n"
     t += "        " + nm.pkg + "." + nm.split_f + "(__salam_t" + nm.sep + "__salam_p" + nm.sep + "__salam_q)\n"
@@ -504,6 +524,9 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     t += "        __salam_route_set(" + nm.pkg + "." + nm.resolve_f + "(" + r + "." + nm.path + nm.sep + "__salam_r)" + nm.sep + "1)\n"
     t += "    else __salam_pat != " + r + "." + nm.pattern + ":\n"
     t += "        " + r + " = " + rt + " { " + nm.path + " = " + r + "." + nm.path + nm.sep + nm.query + " = " + r + "." + nm.query + nm.sep + nm.pattern + " = __salam_pat }\n"
+    if g_lo_routes_web:
+        t += "        salamRouteTitle(__salam_route_title(__salam_pat))\n"
+    end
     t += "    end\n"
     t += "end\n\n"
     t += "func " + nm.go + "(__salam_u: " + s + "):\n"
@@ -698,7 +721,7 @@ func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &:
                     errs++
                 end
             else str.Equals(cn.name, "base"):
-                if cn.a == 0 or at.Get(a, cn.a).kind != at.AST_LITERAL:
+                if cn.a == 0 or at.Get(a, cn.a).kind != at.AST_LITERAL or at.Get(a, cn.a).value_kind != tok.TV_STRING:
                     lo_rt_error(log, a, c, i18.Tr("write base = \"/app\" with a text value"), i18.Tr("E256: unknown routes setting value"))
                     errs++
                 else:
@@ -726,6 +749,11 @@ func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &:
                 continue
             end
             r.pattern = nav.Normalize(r.pattern)
+            if lo_rt_unnamed_param(r.pattern):
+                lo_rt_error(log, a, c, i18.Tr("name every parameter, as in /users/:id or /users/:id?"), co.Format1(i18.Tr("E258: route pattern '%s' has a parameter with no name"), co.ArgStr(r.pattern)))
+                errs++
+                continue
+            end
         end
         mut dup := false
         each prev in routes:
@@ -761,6 +789,8 @@ func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &:
         cdef := lo_rt_find_comp(a, prog, r.comp)
         if cdef != 0:
             names := lo_rt_pattern_params(r.pattern)
+            opts := lo_rt_optional_names(r.pattern)
+            mut defaults := 0
             repeat at.ChildCount(a, cdef) in pi:
                 pid := at.Child(a, cdef, pi)
                 pn := at.Get(a, pid)
@@ -768,6 +798,13 @@ func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &:
                     continue
                 end
                 tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
+                if pn.a != 0 and lo_rt_has(opts, pn.name):
+                    defaults++
+                    if defaults == 4:
+                        lo_rt_error(log, a, c, i18.Tr("give a default value to at most three of the optional parameters; the others get an empty text or 0 when their segment is missing"), co.Format1(i18.Tr("E259: route '%s' has more than three optional parameters with default values"), co.ArgStr(r.pattern)))
+                        errs++
+                    end
+                end
                 if lo_rt_has(names, pn.name):
                     if tn.Len() > 0 and not lo_rt_is_int_type(tn) and not lo_rt_is_str_type(tn):
                         lo_rt_error(log, a, c, i18.Tr("route parameters fill str and int component parameters"), co.Format2(i18.Tr("E259: parameter '%s' of component '%s' must be str or int to come from the path"), co.ArgStr(pn.name), co.ArgStr(r.comp)))
@@ -955,6 +992,7 @@ function salamRouteWrite(u, how) {
                 location.replace(url);
             }
         } catch (x2) {
+            __salam_rt_last = null;
         }
     }
 }
@@ -973,17 +1011,20 @@ function salamRouteTitle(t) {
 }
 function __salam_rt_arrive(e) {
     var u = __salam_rt_here();
-    if (u === __salam_rt_last) {
-        return;
-    }
-    __salam_rt_last = u;
-    SETFN(u, 2);
     var st = e && e.state;
     if (st && typeof st.x === "number") {
         setTimeout(function () {
             window.scrollTo(st.x, st.y);
         }, 0);
     }
+    if (u === __salam_rt_last) {
+        return;
+    }
+    __salam_rt_last = u;
+    SETFN(u, 2);
+}
+function __salam_rt_doc(u) {
+    return !__salam_rt_hash || (u.pathname === location.pathname && u.search === location.search);
 }
 function __salam_rt_mark() {
     var cur = __salam_rt_here(), q = cur.indexOf("?");
@@ -997,7 +1038,10 @@ function __salam_rt_mark() {
             u = new URL(a.getAttribute("href"), location.href);
         } catch (x) {
         }
-        var p = u && u.origin === location.origin ? __salam_rt_app(u.pathname, "", u.hash) : null;
+        var p = u && u.origin === location.origin && __salam_rt_doc(u) ? __salam_rt_app(u.pathname, "", u.hash) : null;
+        if (p !== null && p.indexOf("?") >= 0) {
+            p = p.slice(0, p.indexOf("?"));
+        }
         if (p !== null && __salam_rt_dec(p) === cur && (__salam_rt_hash ? u.hash.length > 1 : true)) {
             a.setAttribute("aria-current", "page");
         } else if (a.getAttribute("aria-current") === "page") {
@@ -1028,7 +1072,7 @@ if (typeof window !== "undefined") {
         } catch (x) {
             return;
         }
-        if (u.origin !== location.origin) {
+        if (u.origin !== location.origin || !__salam_rt_doc(u)) {
             return;
         }
         if (!__salam_rt_hash && u.pathname === location.pathname && u.search === location.search && u.hash) {

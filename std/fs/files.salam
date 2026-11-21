@@ -19,12 +19,24 @@ import crypto
 import str
 import filepath
 import os.error
+import mem
+
+extern:
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func ferror(stream: void*): int
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
+end
 
 if SALAM_OS_WINDOWS:
     extern:
         func MoveFileExA(existing: str, new_path: str, flags: int): int
     end
 end
+
+const _IO_CHUNK := 65536
+const _MAX_BYTES := 2147483647
 
 @en "FileInfo"
 @fa "اطلاعات پرونده"
@@ -72,6 +84,94 @@ func _write_binary(path: str, mode: str, data: str): int:
     n := io.Write(f, data)
     io.Close(f)
     ret n
+end
+
+func _read_all_bytes(path: str, ok &: bool): Vector<u8>:
+    ok = false
+    mut out := Vector {} as Vector<u8>
+    f := os.Open(path, "rb")
+    if f == null: ret out end
+    fp := f as void*
+    mut cap := _IO_CHUNK as i64
+    if fseek(fp, 0, 2) == 0:
+        hint := ftell(fp) as i64
+        if hint > (0 as i64) and hint < (1073741824 as i64): cap = hint + 1 end
+    end
+    fseek(fp, 0, 0)
+    mut buf := mem.MustAllocate(cap as u64)
+    mut used := 0 as i64
+    mut failed := false
+    until 1 == 1:
+        if used == cap:
+            if cap >= (_MAX_BYTES as i64):
+                failed = true
+                break
+            end
+            cap *= 2
+            if cap > (_MAX_BYTES as i64): cap = _MAX_BYTES as i64 end
+            buf = mem.MustReallocate(buf, cap as u64)
+        end
+        got := fread(((buf as i64) + used) as void*, 1 as u64, (cap - used) as u64, fp)
+        if got == 0 as u64: break end
+        used += got as i64
+    end
+    if ferror(fp) != 0: failed = true end
+    io.Close(f)
+    if failed:
+        mem.Free(buf)
+        ret out
+    end
+    if used > (0 as i64):
+        out.Alloc(used as int)
+        mem.Copy(out.data as void*, buf, used as u64)
+    end
+    mem.Free(buf)
+    ok = true
+    ret out
+end
+
+func _hex_digest(d: void*, n: int): str:
+    mut sb := str.NewBuilder()
+    bp := d as u8*
+    repeat n in i:
+        b := bp[i] as int
+        hi := b >> 4
+        lo := b & 15
+        str.BufAppendChar(sb, hi < 10 ? 48 + hi : 87 + hi)
+        str.BufAppendChar(sb, lo < 10 ? 48 + lo : 87 + lo)
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _file_digest(p: str, kind: int, op: str): str:
+    mut ok := false
+    data := _read_all_bytes(p, ok)
+    defer data.Free()
+    if ok == false:
+        error.Set(error.IOError, "read failed", op, p, 0)
+        ret ""
+    end
+    out := mem.MustAllocateZeroed(64 as u64)
+    defer mem.Free(out)
+    src := data.data as void*
+    n := data.Len()
+    mut size := 0
+    if kind == 0:
+        crypto.Md5Bytes(src, n, out)
+        size = 16
+    else kind == 1:
+        crypto.Sha1Bytes(src, n, out)
+        size = 20
+    else kind == 2:
+        crypto.Sha256Bytes(src, n, out)
+        size = 32
+    else:
+        crypto.Sha512Bytes(src, n, out)
+        size = 64
+    end
+    ret _hex_digest(out, size)
 end
 
 @en "Open"
@@ -122,6 +222,46 @@ pub func WriteText(path: str, data: str): int: ret _write_binary(path, "wb", dat
 @en "WriteBytes"
 @fa "نوشتن بایت‌ها"
 pub func WriteBytes(path: str, data: str): int: ret _write_binary(path, "wb", data) end
+
+@en "ReadAllBytes"
+@fa "خواندن همه بایت‌ها"
+pub func ReadAllBytes(path: str): Vector<u8>:
+    mut ok := false
+    out := _read_all_bytes(path, ok)
+    if ok == false:
+        error.Set(error.IOError, "read failed", "ReadAllBytes", path, 0)
+    end
+    ret out
+end
+
+@en "WriteAllBytes"
+@fa "نوشتن همه بایت‌ها"
+pub func WriteAllBytes(path: str, data: Vector<u8>): int:
+    f := os.Open(path, "wb")
+    if f == null:
+        error.Set(error.IOError, "open for writing failed", "WriteAllBytes", path, 0)
+        ret 0 - 1
+    end
+    n := data.Len()
+    buf := mem.MustAllocate(_IO_CHUNK as u64)
+    mut off := 0
+    mut failed := false
+    until off < n and failed == false:
+        mut k := n - off
+        if k > _IO_CHUNK: k = _IO_CHUNK end
+        mem.Copy(buf, ((data.data as i64) + (off as i64)) as void*, k as u64)
+        put := fwrite(buf, 1 as u64, k as u64, f as void*)
+        if put != (k as u64): failed = true end
+        off += k
+    end
+    mem.Free(buf)
+    io.Close(f)
+    if failed:
+        error.Set(error.IOError, "write failed", "WriteAllBytes", path, 0)
+        ret 0 - 1
+    end
+    ret n
+end
 
 @en "Append"
 @fa "افزودن"
@@ -186,9 +326,13 @@ end
 @fa "وضعیت"
 pub func Stat(p: str): FileInfo:
     if os.Exists(p) == false: ret FileInfo { exists = false } end
-    ret FileInfo {
-        size = Size(p), mod_time = ModTime(p), accessed_time = AccessedTime(p), created_time = CreatedTime(p), permissions = Permissions(p), exists = true
-    }
+    m := _meta(p)
+    if m.ok == false:
+        ret FileInfo { size = Size(p), mod_time = 0 - 1, accessed_time = 0 - 1, created_time = 0 - 1, permissions = 0 - 1, exists = true }
+    end
+    mut born := m.btime
+    if born < (0 as i64): born = 0 end
+    ret FileInfo { size = m.size, mod_time = m.mtime, accessed_time = m.atime, created_time = born, permissions = m.mode & 4095, exists = true }
 end
 
 @en "Copy"
@@ -231,16 +375,16 @@ pub func Exists(p: str): bool: ret os.Exists(p) end
 
 @en "Md5Hex"
 @fa "هش ام‌دی۵"
-pub func Md5Hex(p: str): str: ret crypto.Md5Hex(io.ReadFile(p)) end
+pub func Md5Hex(p: str): str: ret _file_digest(p, 0, "Md5Hex") end
 
 @en "Sha1Hex"
 @fa "هش شا۱"
-pub func Sha1Hex(p: str): str: ret crypto.Sha1Hex(io.ReadFile(p)) end
+pub func Sha1Hex(p: str): str: ret _file_digest(p, 1, "Sha1Hex") end
 
 @en "Sha256Hex"
 @fa "هش شا۲۵۶"
-pub func Sha256Hex(p: str): str: ret crypto.Sha256Hex(io.ReadFile(p)) end
+pub func Sha256Hex(p: str): str: ret _file_digest(p, 2, "Sha256Hex") end
 
 @en "Sha512Hex"
 @fa "هش شا۵۱۲"
-pub func Sha512Hex(p: str): str: ret crypto.Sha512Hex(io.ReadFile(p)) end
+pub func Sha512Hex(p: str): str: ret _file_digest(p, 3, "Sha512Hex") end

@@ -306715,6 +306715,7 @@ func _identity_free(k &: Identity):
 WipeBuf(k.d)
 WipeBuf(k.phi)
 WipeBuf(k.ed_seed)
+FreeBuf(k.ed_pub)
 FreeBuf(k.n)
 FreeBuf(k.e)
 k.ok = false
@@ -306762,6 +306763,27 @@ _big_free(qm1)
 _big_free(phi)
 ret out
 end
+func _parse_openssh_ed25519(pr &: Reader): Identity:
+pubv := RGetStringView(pr)
+privv := RGetStringView(pr)
+if pr.bad or pubv.len != 32 or privv.len != 64:
+ret _identity_bad()
+end
+mut id := Identity {}
+id.ed = true
+id.ed_seed = NewBuf(32)
+BufPutBytes(id.ed_seed, privv.p, 32)
+id.ed_pub = NewBuf(32)
+BufPutZeros(id.ed_pub, 32)
+tls.Ed25519PublicKey(id.ed_seed.p, id.ed_pub.p)
+stored := (privv.p as i64 + 32) as void*
+id.ok = ConstantTimeEqual(id.ed_pub.p, pubv.p, 32) and ConstantTimeEqual(id.ed_pub.p, stored, 32)
+if not id.ok:
+_identity_free(id)
+ret _identity_bad()
+end
+ret id
+end
 func _parse_openssh_body(r &: Reader): Identity:
 mut magic := NewBuf(_OPENSSH_MAGIC.Len() + 1)
 repeat _OPENSSH_MAGIC.Len() + 1:
@@ -306791,6 +306813,9 @@ if pr.bad or check1 != check2:
 ret _identity_bad()
 end
 keytype := RGetStringAsStr(pr)
+if str.Equals(keytype, "ssh-ed25519"):
+ret _parse_openssh_ed25519(pr)
+end
 if not str.Equals(keytype, "ssh-rsa"):
 ret _identity_bad()
 end
@@ -307955,6 +307980,16 @@ AM2h9YWksx0443ouaPtPU8C1XULOlcYfozZnfCD7/RC8hdNiVxqappjEpjmeE/LI3/WCln
 t7mv2ZysJVlEBdMBsAAAATYWxpQERFU0tUT1AtNTVBU1ZUTA==
 -----END OPENSSH PRIVATE KEY-----
 """
+const _PK_ED_PUB := "d5bfa4a5170620bb147d4e538f3fcb2157355cf502dbb84c7b5c767bb99086b7"
+const _PK_ED_OPENSSH := """
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACDVv6SlFwYguxR9TlOPP8shVzVc9QLbuEx7XHZ7uZCGtwAAAIjIX2WoyF9l
+qAAAAAtzc2gtZWQyNTUxOQAAACDVv6SlFwYguxR9TlOPP8shVzVc9QLbuEx7XHZ7uZCGtw
+AAAEBYkd3HijOdRQYDm8KXXVr3Kv0reQrmwZ8dVy+dOD27n9W/pKUXBiC7FH1OU48/yyFX
+NVz1Atu4THtcdnu5kIa3AAAAAAECAwQF
+-----END OPENSSH PRIVATE KEY-----
+"""
 func _pk_check(id: Identity, n_hex: str, e_hex: str, d_hex: str, phi_hex: str, label: str):
 _ck(id.ok, label + ": parses successfully")
 if not id.ok:
@@ -307998,6 +308033,38 @@ _ck(not fake.ok, "privatekey: an OpenSSH-tagged block with a bad magic/body is r
 badpem := "-----BEGIN RSA PRIVATE KEY-----\n!!!not-valid-base64!!!\n-----END RSA PRIVATE KEY-----\n"
 badid := _load_identity_pem(badpem)
 _ck(not badid.ok, "privatekey: a corrupted PKCS#1 PEM body is rejected, not crashed on")
+id_ed := _load_identity_pem(_PK_ED_OPENSSH)
+_ck(id_ed.ok and id_ed.ed, "privatekey: an OpenSSH ed25519 key parses")
+if id_ed.ok:
+_ckhex(_hex_of(id_ed.ed_pub.p, id_ed.ed_pub.len), _PK_ED_PUB, "privatekey: ed25519 public key matches ssh-keygen -y")
+end
+mut id_edm := id_ed
+_identity_free(id_edm)
+edpath := dir + "/salam_ssh_selftest_id_ed25519"
+_wrote_ed := io.WriteFile(edpath, _PK_ED_OPENSSH)
+mut hk_file := _srv_hostkey_from_file(edpath)
+_ck(hk_file.ok and hk_file.ed, "hostkey: an ed25519 host key file loads")
+_srv_hostkey_free(hk_file)
+_ck(HostKeyFileOk(edpath), "hostkey: HostKeyFileOk accepts an ed25519 key file")
+_removed_ed := os.Remove(edpath)
+_ck(not HostKeyFileOk(edpath), "hostkey: HostKeyFileOk rejects a missing file")
+mut none_cfg := ServerConfig {}
+mut hk_none := _srv_hostkey_load(none_cfg)
+_ck(not hk_none.ok, "hostkey: no key file and no key gives no host key")
+_srv_hostkey_free(hk_none)
+none_cfg.host_key_hex = "00"
+mut hk_short := _srv_hostkey_load(none_cfg)
+_ck(not hk_short.ok, "hostkey: a short host_key_hex is rejected")
+_srv_hostkey_free(hk_short)
+first := NewHostKey()
+second := NewHostKey()
+_ck(first.len() == 64 and not str.Equals(first, second), "hostkey: NewHostKey gives a fresh 32 byte key each time")
+none_cfg.host_key_hex = first
+mut hk_a := _srv_hostkey_load(none_cfg)
+mut hk_b := _srv_hostkey_load(none_cfg)
+_ck(hk_a.ok and hk_b.ok and ConstantTimeEqual(hk_a.ed_pub.p, hk_b.ed_pub.p, 32), "hostkey: the same host_key_hex gives the same key")
+_srv_hostkey_free(hk_a)
+_srv_hostkey_free(hk_b)
 end
 package ssh
 const _RSA_TV_N := "c1ba848ca7709a56853f3ab248f650505753ed6fa69c50bdfaf0960391ace24e3a01f996a46488f16d7960ee9c5903166bd3dfed7c18366a621144de00e704666d85df47b8940f0854d2b9f5b199ad5da15f5ee028dd8155688d5dbc1497530abefdb8aead999e45b894a165fa87a883845f42b2e0eda79474d8d87f83d48fe3"
@@ -308171,7 +308238,6 @@ const _SRV_CHUNK := 32768
 const _SRV_POLL_MS := 20
 const _SRV_MAX_ROUNDS := 4000000
 const _SRV_DEFAULT_VERSION := "SSH-2.0-SalamServer_1.0"
-const _SRV_DEFAULT_SEED := "salam-ssh-host-key-seed"
 const _SRV_STREAM_WINDOW := 2097152
 struct SrvHostKey:
 pub ok: bool = false
@@ -308281,9 +308347,9 @@ pub login_grace_ms: int = 120000
 @en "banner"
 @fa "پیام خوش‌آمد"
 pub banner: str = ""
-@en "host_seed"
-@fa "دانه کلید میزبان"
-pub host_seed: str = ""
+@en "host_key_hex"
+@fa "کلید میزبان شانزدهی"
+pub host_key_hex: str = ""
 @en "users"
 @fa "کاربران"
 pub users: Vector<ServerUser> = Vector {}
@@ -308391,22 +308457,38 @@ end
 hk.ok = hk.blob.len > 0
 ret hk
 end
-func _srv_hostkey_from_seed(seed: str): SrvHostKey:
-mut material := seed
-if material.len() == 0:
-material = _SRV_DEFAULT_SEED
+func _srv_hex_nibble(c: int): int:
+if c >= 48 and c <= 57:
+ret c - 48
+end
+if c >= 97 and c <= 102:
+ret c - 87
+end
+if c >= 65 and c <= 70:
+ret c - 55
+end
+ret 0 - 1
+end
+func _srv_hostkey_from_hex(material: str): SrvHostKey:
+mut hk := SrvHostKey {}
+if material.len() != 64:
+ret hk
 end
 mut raw := NewBuf(32)
-if material.len() >= 32:
-BufPutBytes(raw, material as void*, 32)
+mut good := true
+repeat 32 in i:
+hi := _srv_hex_nibble(_bget(material as void*, i * 2))
+lo := _srv_hex_nibble(_bget(material as void*, i * 2 + 1))
+if hi < 0 or lo < 0:
+good = false
 else:
-mut digest := NewBuf(32)
-BufPutZeros(digest, 32)
-crypto.Sha256Bytes(material as void*, material.len(), digest.p)
-BufPutBytes(raw, digest.p, 32)
-FreeBuf(digest)
+BufPutByte(raw, hi * 16 + lo)
 end
-mut hk := SrvHostKey {}
+end
+if not good:
+WipeBuf(raw)
+ret hk
+end
 hk.ed = true
 hk.ed_seed = raw
 hk.ed_pub = NewBuf(32)
@@ -308418,21 +308500,20 @@ BufPutStringBuf(hk.blob, hk.ed_pub)
 hk.ok = true
 ret hk
 end
-func _srv_hostkey_load(cfg: ServerConfig): SrvHostKey:
-if cfg.host_key_file.len() > 0:
-mut id := _load_identity_file(cfg.host_key_file)
-if id.ok:
-mut hk := _srv_hostkey_from_identity(id)
+func _srv_hostkey_from_file(path: str): SrvHostKey:
+mut id := _load_identity_file(path)
+hk := _srv_hostkey_from_identity(id)
 _identity_free(id)
-if hk.ok:
 ret hk
 end
-_srv_hostkey_free(hk)
-else:
-_identity_free(id)
+func _srv_hostkey_load(cfg: ServerConfig): SrvHostKey:
+if cfg.host_key_hex.len() > 0:
+ret _srv_hostkey_from_hex(cfg.host_key_hex)
 end
+if cfg.host_key_file.len() > 0:
+ret _srv_hostkey_from_file(cfg.host_key_file)
 end
-ret _srv_hostkey_from_seed(cfg.host_seed)
+ret SrvHostKey {}
 end
 func _srv_hostkey_algos(hk: SrvHostKey): str:
 if hk.ed:
@@ -309652,6 +309733,19 @@ end
 _packet_state_free(sess.ps)
 FreeBuf(sess.session_id)
 rawsock.Close(sock)
+ret ok
+end
+@en "NewHostKey"
+@fa "کلید میزبان نو"
+pub func NewHostKey(): str:
+ret crypto.RandomHex(32)
+end
+@en "HostKeyFileOk"
+@fa "پرونده کلید میزبان درست"
+pub func HostKeyFileOk(path: str): bool:
+mut hk := _srv_hostkey_from_file(path)
+ok := hk.ok
+_srv_hostkey_free(hk)
 ret ok
 end
 package ssh
@@ -311959,6 +312053,7 @@ end
 package sshd
 import str
 import chan
+import io
 import mem
 import net.tcp
 import pool
@@ -311969,6 +312064,7 @@ import fs
 pub const DefaultVersion := "SSH-2.0-SalamServer_1.0"
 struct _Shared:
 pub config: Config = Config {}
+pub host_key: str = ""
 pub jobs: chan.Chan<i64> = chan.Chan {} as chan.Chan<i64>
 pub active: i64* = null
 end
@@ -312024,9 +312120,6 @@ pub allow_sftp: bool = true
 @en "banner"
 @fa "پیام خوش‌آمد"
 pub banner: str = ""
-@en "host_seed"
-@fa "دانه کلید میزبان"
-pub host_seed: str = ""
 @en "max_connections"
 @fa "بیشینه اتصال همزمان"
 pub max_connections: int = 64
@@ -312049,11 +312142,13 @@ pub listener: tcp.Server = tcp.Server {}
 @en "running"
 @fa "در حال اجرا"
 pub running: bool = false
+pub _host_key: str = ""
 end
-func _ssh_config(cfg: Config): ssh.ServerConfig:
+func _ssh_config(cfg: Config, host_key: str): ssh.ServerConfig:
 mut sc := ssh.ServerConfig {}
 sc.server_version = cfg.server_version
 sc.host_key_file = cfg.host_key_file
+sc.host_key_hex = host_key
 sc.authorized_keys_file = cfg.authorized_keys_file
 sc.allow_password = cfg.allow_password
 sc.allow_publickey = cfg.allow_publickey
@@ -312062,7 +312157,6 @@ sc.enable_shell = cfg.allow_shell
 sc.enable_sftp = cfg.allow_sftp
 sc.root = cfg.root
 sc.banner = cfg.banner
-sc.host_seed = cfg.host_seed
 sc.login_grace_ms = cfg.login_grace_ms
 mut users := Vector {} as Vector<ssh.ServerUser>
 each u in cfg.users:
@@ -312075,7 +312169,7 @@ func _serve_next(sh: _Shared*, jobs: chan.Chan<i64>):
 mut ok := false
 fd := jobs.Recv(ok)
 if ok:
-_served := ssh.ServeConnection(fd, _ssh_config(sh.config))
+_served := ssh.ServeConnection(fd, _ssh_config(sh.config, sh.host_key))
 _left := atomic_add(sh.active, 0 - 1 as i64)
 end
 end
@@ -312094,9 +312188,20 @@ end
 @en "Listen"
 @fa "گوش دادن"
 pub func Listen(srv &: Server): bool:
-if srv.config.host_key_file.len() > 0 and not fs.Exists(srv.config.host_key_file):
+srv._host_key = ""
+if srv.config.host_key_file.len() > 0:
+if not fs.Exists(srv.config.host_key_file):
+io.EPrintln("sshd: host key file not found: " + srv.config.host_key_file)
 srv.running = false
 ret false
+end
+if not ssh.HostKeyFileOk(srv.config.host_key_file):
+io.EPrintln("sshd: cannot load host key file (need an unencrypted OpenSSH ed25519 or RSA private key): " + srv.config.host_key_file)
+srv.running = false
+ret false
+end
+else:
+srv._host_key = ssh.NewHostKey()
 end
 srv.listener = tcp.BindOn(srv.config.host, srv.config.port)
 srv.running = tcp.Ok(srv.listener)
@@ -312129,7 +312234,7 @@ pub func ServeOnce(srv &: Server): bool:
 if not tcp.Ok(srv.listener): ret false end
 conn := tcp.Accept(srv.listener)
 if not tcp.ConnOk(conn): ret false end
-_served := ssh.ServeConnection(conn.fd, _ssh_config(srv.config))
+_served := ssh.ServeConnection(conn.fd, _ssh_config(srv.config, srv._host_key))
 ret true
 end
 @en "Serve"
@@ -312142,6 +312247,7 @@ cap = 1
 end
 sh := mem.AllocateZeroed(sizeof(_Shared) as u64) as _Shared*
 sh.config = srv.config
+sh.host_key = srv._host_key
 sh.jobs = chan.Chan {} as chan.Chan<i64>
 sh.jobs.Init(cap as i64)
 sh.active = mem.AllocateZeroed(8 as u64) as i64*

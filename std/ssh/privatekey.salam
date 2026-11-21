@@ -40,6 +40,7 @@ func _identity_free(k &: Identity):
     WipeBuf(k.d)
     WipeBuf(k.phi)
     WipeBuf(k.ed_seed)
+    FreeBuf(k.ed_pub)
     FreeBuf(k.n)
     FreeBuf(k.e)
     k.ok = false
@@ -90,6 +91,28 @@ func _phi_from_pq(p: Buf, q: Buf): Buf:
     ret out
 end
 
+func _parse_openssh_ed25519(pr &: Reader): Identity:
+    pubv := RGetStringView(pr)
+    privv := RGetStringView(pr)
+    if pr.bad or pubv.len != 32 or privv.len != 64:
+        ret _identity_bad()
+    end
+    mut id := Identity {}
+    id.ed = true
+    id.ed_seed = NewBuf(32)
+    BufPutBytes(id.ed_seed, privv.p, 32)
+    id.ed_pub = NewBuf(32)
+    BufPutZeros(id.ed_pub, 32)
+    tls.Ed25519PublicKey(id.ed_seed.p, id.ed_pub.p)
+    stored := (privv.p as i64 + 32) as void*
+    id.ok = ConstantTimeEqual(id.ed_pub.p, pubv.p, 32) and ConstantTimeEqual(id.ed_pub.p, stored, 32)
+    if not id.ok:
+        _identity_free(id)
+        ret _identity_bad()
+    end
+    ret id
+end
+
 func _parse_openssh_body(r &: Reader): Identity:
     mut magic := NewBuf(_OPENSSH_MAGIC.Len() + 1)
     repeat _OPENSSH_MAGIC.Len() + 1:
@@ -121,6 +144,9 @@ func _parse_openssh_body(r &: Reader): Identity:
         ret _identity_bad()
     end
     keytype := RGetStringAsStr(pr)
+    if str.Equals(keytype, "ssh-ed25519"):
+        ret _parse_openssh_ed25519(pr)
+    end
     if not str.Equals(keytype, "ssh-rsa"):
         ret _identity_bad()
     end

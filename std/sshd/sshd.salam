@@ -17,6 +17,7 @@ package sshd
 
 import str
 import chan
+import io
 import mem
 import net.tcp
 import pool
@@ -80,9 +81,6 @@ pub struct Config:
     @en "banner"
     @fa "پیام خوش‌آمد"
     pub banner: str = ""
-    @en "host_seed"
-    @fa "دانه کلید میزبان"
-    pub host_seed: str = ""
     @en "max_connections"
     @fa "بیشینه اتصال همزمان"
     pub max_connections: int = 64
@@ -106,18 +104,21 @@ pub struct Server:
     @en "running"
     @fa "در حال اجرا"
     pub running: bool = false
+    pub _host_key: str = ""
 end
 
 struct _Shared:
     pub config: Config = Config {}
+    pub host_key: str = ""
     pub jobs: chan.Chan<i64> = chan.Chan {} as chan.Chan<i64>
     pub active: i64* = null
 end
 
-func _ssh_config(cfg: Config): ssh.ServerConfig:
+func _ssh_config(cfg: Config, host_key: str): ssh.ServerConfig:
     mut sc := ssh.ServerConfig {}
     sc.server_version = cfg.server_version
     sc.host_key_file = cfg.host_key_file
+    sc.host_key_hex = host_key
     sc.authorized_keys_file = cfg.authorized_keys_file
     sc.allow_password = cfg.allow_password
     sc.allow_publickey = cfg.allow_publickey
@@ -126,7 +127,6 @@ func _ssh_config(cfg: Config): ssh.ServerConfig:
     sc.enable_sftp = cfg.allow_sftp
     sc.root = cfg.root
     sc.banner = cfg.banner
-    sc.host_seed = cfg.host_seed
     sc.login_grace_ms = cfg.login_grace_ms
     mut users := Vector {} as Vector<ssh.ServerUser>
     each u in cfg.users:
@@ -140,7 +140,7 @@ func _serve_next(sh: _Shared*, jobs: chan.Chan<i64>):
     mut ok := false
     fd := jobs.Recv(ok)
     if ok:
-        _served := ssh.ServeConnection(fd, _ssh_config(sh.config))
+        _served := ssh.ServeConnection(fd, _ssh_config(sh.config, sh.host_key))
         _left := atomic_add(sh.active, 0 - 1 as i64)
     end
 end
@@ -162,9 +162,20 @@ end
 @en "Listen"
 @fa "گوش دادن"
 pub func Listen(srv &: Server): bool:
-    if srv.config.host_key_file.len() > 0 and not fs.Exists(srv.config.host_key_file):
-        srv.running = false
-        ret false
+    srv._host_key = ""
+    if srv.config.host_key_file.len() > 0:
+        if not fs.Exists(srv.config.host_key_file):
+            io.EPrintln("sshd: host key file not found: " + srv.config.host_key_file)
+            srv.running = false
+            ret false
+        end
+        if not ssh.HostKeyFileOk(srv.config.host_key_file):
+            io.EPrintln("sshd: cannot load host key file (need an unencrypted OpenSSH ed25519 or RSA private key): " + srv.config.host_key_file)
+            srv.running = false
+            ret false
+        end
+    else:
+        srv._host_key = ssh.NewHostKey()
     end
     srv.listener = tcp.BindOn(srv.config.host, srv.config.port)
     srv.running = tcp.Ok(srv.listener)
@@ -201,7 +212,7 @@ pub func ServeOnce(srv &: Server): bool:
     if not tcp.Ok(srv.listener): ret false end
     conn := tcp.Accept(srv.listener)
     if not tcp.ConnOk(conn): ret false end
-    _served := ssh.ServeConnection(conn.fd, _ssh_config(srv.config))
+    _served := ssh.ServeConnection(conn.fd, _ssh_config(srv.config, srv._host_key))
     ret true
 end
 
@@ -215,6 +226,7 @@ pub func Serve(srv &: Server):
     end
     sh := mem.AllocateZeroed(sizeof(_Shared) as u64) as _Shared*
     sh.config = srv.config
+    sh.host_key = srv._host_key
     sh.jobs = chan.Chan {} as chan.Chan<i64>
     sh.jobs.Init(cap as i64)
     sh.active = mem.AllocateZeroed(8 as u64) as i64*

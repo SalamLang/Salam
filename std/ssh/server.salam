@@ -31,7 +31,6 @@ const _SRV_CHUNK := 32768
 const _SRV_POLL_MS := 20
 const _SRV_MAX_ROUNDS := 4000000
 const _SRV_DEFAULT_VERSION := "SSH-2.0-SalamServer_1.0"
-const _SRV_DEFAULT_SEED := "salam-ssh-host-key-seed"
 const _SRV_STREAM_WINDOW := 2097152
 
 @en "ServerUser"
@@ -91,9 +90,9 @@ pub struct ServerConfig:
     @en "banner"
     @fa "پیام خوش‌آمد"
     pub banner: str = ""
-    @en "host_seed"
-    @fa "دانه کلید میزبان"
-    pub host_seed: str = ""
+    @en "host_key_hex"
+    @fa "کلید میزبان شانزدهی"
+    pub host_key_hex: str = ""
     @en "users"
     @fa "کاربران"
     pub users: Vector<ServerUser> = Vector {}
@@ -266,22 +265,39 @@ func _srv_hostkey_from_identity(id: Identity): SrvHostKey:
     ret hk
 end
 
-func _srv_hostkey_from_seed(seed: str): SrvHostKey:
-    mut material := seed
-    if material.len() == 0:
-        material = _SRV_DEFAULT_SEED
+func _srv_hex_nibble(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+func _srv_hostkey_from_hex(material: str): SrvHostKey:
+    mut hk := SrvHostKey {}
+    if material.len() != 64:
+        ret hk
     end
     mut raw := NewBuf(32)
-    if material.len() >= 32:
-        BufPutBytes(raw, material as void*, 32)
-    else:
-        mut digest := NewBuf(32)
-        BufPutZeros(digest, 32)
-        crypto.Sha256Bytes(material as void*, material.len(), digest.p)
-        BufPutBytes(raw, digest.p, 32)
-        FreeBuf(digest)
+    mut good := true
+    repeat 32 in i:
+        hi := _srv_hex_nibble(_bget(material as void*, i * 2))
+        lo := _srv_hex_nibble(_bget(material as void*, i * 2 + 1))
+        if hi < 0 or lo < 0:
+            good = false
+        else:
+            BufPutByte(raw, hi * 16 + lo)
+        end
     end
-    mut hk := SrvHostKey {}
+    if not good:
+        WipeBuf(raw)
+        ret hk
+    end
     hk.ed = true
     hk.ed_seed = raw
     hk.ed_pub = NewBuf(32)
@@ -294,21 +310,21 @@ func _srv_hostkey_from_seed(seed: str): SrvHostKey:
     ret hk
 end
 
+func _srv_hostkey_from_file(path: str): SrvHostKey:
+    mut id := _load_identity_file(path)
+    hk := _srv_hostkey_from_identity(id)
+    _identity_free(id)
+    ret hk
+end
+
 func _srv_hostkey_load(cfg: ServerConfig): SrvHostKey:
-    if cfg.host_key_file.len() > 0:
-        mut id := _load_identity_file(cfg.host_key_file)
-        if id.ok:
-            mut hk := _srv_hostkey_from_identity(id)
-            _identity_free(id)
-            if hk.ok:
-                ret hk
-            end
-            _srv_hostkey_free(hk)
-        else:
-            _identity_free(id)
-        end
+    if cfg.host_key_hex.len() > 0:
+        ret _srv_hostkey_from_hex(cfg.host_key_hex)
     end
-    ret _srv_hostkey_from_seed(cfg.host_seed)
+    if cfg.host_key_file.len() > 0:
+        ret _srv_hostkey_from_file(cfg.host_key_file)
+    end
+    ret SrvHostKey {}
 end
 
 func _srv_hostkey_algos(hk: SrvHostKey): str:
@@ -1584,5 +1600,20 @@ pub func ServeConnection(fd: i64, cfg: ServerConfig): bool:
     _packet_state_free(sess.ps)
     FreeBuf(sess.session_id)
     rawsock.Close(sock)
+    ret ok
+end
+
+@en "NewHostKey"
+@fa "کلید میزبان نو"
+pub func NewHostKey(): str:
+    ret crypto.RandomHex(32)
+end
+
+@en "HostKeyFileOk"
+@fa "پرونده کلید میزبان درست"
+pub func HostKeyFileOk(path: str): bool:
+    mut hk := _srv_hostkey_from_file(path)
+    ok := hk.ok
+    _srv_hostkey_free(hk)
     ret ok
 end

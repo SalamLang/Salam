@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.websocket
+import net.tcp
+import sync
+import str
+import mem
+
+mut RAW_PORT := 0
+mut WS_PORT := 0
+mut ready := sync.NewWaitGroup()
+mut ready2 := sync.NewWaitGroup()
+
+func frame(c: tcp.Conn, b0: int, n: int):
+    hl := n < 126 ? 2 : 4
+    buf := mem.Allocate((hl + n) as u64)
+    bp := buf as i8*
+    bp[0] = b0 as i8
+    if n < 126:
+        bp[1] = n as i8
+    else:
+        bp[1] = 126 as i8
+        bp[2] = (n / 256) as i8
+        bp[3] = (n % 256) as i8
+    end
+    repeat n in i:
+        bp[hl + i] = 97 as i8
+    end
+    tcp.WriteBytes(c, buf, hl + n)
+    mem.Free(buf)
+end
+
+func handshake(c: tcp.Conn): bool:
+    mut req := ""
+    until not str.Contains(req, "\r\n\r\n"):
+        chunk := tcp.Read(c, 4096)
+        if chunk.Len() == 0:
+            ret false
+        end
+        req += chunk
+    end
+    tcp.Write(c, websocket.HandshakeResponse(req))
+    ret true
+end
+
+func raw_server():
+    srv := tcp.Bind(0)
+    RAW_PORT = tcp.Port(srv)
+    sync.Done(ready)
+    repeat 4 in k:
+        c := tcp.Accept(srv)
+        tcp.SetReadDeadline(c, 3000)
+        if handshake(c):
+            if k == 0:
+                frame(c, 1, 600)
+                frame(c, 128, 600)
+            else k == 1:
+                frame(c, 128 + 9, 126)
+            else k == 2:
+                frame(c, 9, 4)
+            else:
+                frame(c, 128 + 1, 600)
+            end
+            waited := tcp.Read(c, 64)
+            mem.Free(waited as void*)
+        end
+        tcp.Close(c)
+    end
+    tcp.CloseServer(srv)
+end
+
+func ws_server():
+    srv := websocket.Listen(0)
+    WS_PORT = websocket.Port(srv)
+    sync.Done(ready2)
+    repeat 2 in k:
+        mut c := websocket.Accept(srv)
+        m := websocket.Poll(c, 3000)
+        println "server got:", k, m.kind == websocket.TEXT, m.text, "open:", websocket.IsOpen(c)
+        websocket.Stop(c)
+    end
+    websocket.CloseServer(srv)
+end
+
+func attempt(label: str, limit: int):
+    mut c := websocket.Dial("127.0.0.1", RAW_PORT, "/")
+    c.max_message = limit
+    m := websocket.Poll(c, 3000)
+    println label + ": kind=" + m.kind + " open=" + websocket.IsOpen(c)
+    websocket.Stop(c)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(raw_server)
+    sync.Wait(ready)
+    attempt("fragments over the limit", 1000)
+    attempt("control frame of 126 bytes", 16777216)
+    attempt("fragmented control frame", 16777216)
+    attempt("single frame within the limit", 1000)
+    join(t)
+
+    sync.Add(ready2, 1 as i64)
+    t2 := spawn(ws_server)
+    sync.Wait(ready2)
+    mut good := websocket.Dial("127.0.0.1", WS_PORT, "/")
+    websocket.SendText(good, "hi")
+    websocket.Stop(good)
+    bad := tcp.Dial("127.0.0.1", WS_PORT)
+    tcp.Write(bad, websocket.HandshakeRequest("127.0.0.1", "/", "dGhlIHNhbXBsZSBub25jZQ=="))
+    answer := tcp.Read(bad, 4096)
+    println "handshake answered:", str.Contains(answer, "101")
+    frame(bad, 129, 2)
+    join(t2)
+    tcp.Close(bad)
+end

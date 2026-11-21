@@ -1,0 +1,78 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package main
+
+import sshd
+import sync
+import testing
+import time
+import net.tcp
+
+mut srv := sshd.Server {}
+mut ready := sync.NewWaitGroup()
+
+func serve():
+    mut cfg := sshd.NewConfig()
+    cfg.host = "127.0.0.1"
+    cfg.port = 0
+    cfg.root = "/tmp"
+    cfg.allow_shell = false
+    cfg.login_grace_ms = 1500
+    sshd.AddUser(cfg, "alice", "s3cret", "/")
+    srv = sshd.New(cfg)
+    if not sshd.Listen(srv):
+        sync.Done(ready)
+        ret
+    end
+    sync.Done(ready)
+    sshd.Serve(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    worker := spawn(serve)
+    sync.Wait(ready)
+    port := sshd.Port(srv)
+
+    idle := tcp.Dial("127.0.0.1", port)
+    testing.AssertTrue(tcp.ConnOk(idle))
+    tcp.SetReadDeadline(idle, 10000)
+    first := tcp.Read(idle, 8)
+    testing.AssertEqStr(first, "SSH-2.0-")
+
+    second := tcp.Dial("127.0.0.1", port)
+    tcp.SetReadDeadline(second, 1000)
+    banner := tcp.Read(second, 8)
+    testing.AssertEqStr(banner, "SSH-2.0-")
+    tcp.Close(second)
+
+    started := time.NowMillis()
+    mut rest := tcp.Read(idle, 256)
+    until rest.len() > 0 and time.NowMillis() - started < 10000:
+        rest = tcp.Read(idle, 256)
+    end
+    waited := time.NowMillis() - started
+    testing.AssertTrue(rest.len() == 0)
+    testing.AssertTrue(waited < 8000)
+    tcp.Close(idle)
+
+    srv.running = false
+    wake := tcp.Dial("127.0.0.1", port)
+    tcp.Close(wake)
+    join(worker)
+    sshd.Close(srv)
+    testing.Summary()
+    ret 0
+end

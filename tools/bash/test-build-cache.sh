@@ -34,16 +34,32 @@ build() {
 
 echo "== edit in the same second"
 prog v1
-build || { echo "build failed"; cat build.log; exit 1; }
+build || {
+    echo "build failed"
+    cat build.log
+    exit 1
+}
 echo "first: $(./q)"
 prog v2
-build || { echo "build failed"; cat build.log; exit 1; }
+build || {
+    echo "build failed"
+    cat build.log
+    exit 1
+}
 echo "second: $(./q)"
 
 echo "== unchanged project"
 sleep 2
-build || { echo "build failed"; cat build.log; exit 1; }
-build || { echo "build failed"; cat build.log; exit 1; }
+build || {
+    echo "build failed"
+    cat build.log
+    exit 1
+}
+build || {
+    echo "build failed"
+    cat build.log
+    exit 1
+}
 if grep -q "up to date" build.log; then
     echo "repeat: up to date"
 else
@@ -51,13 +67,21 @@ else
 fi
 
 echo "== flags"
-build --protect || { echo "build failed"; cat build.log; exit 1; }
+build --protect || {
+    echo "build failed"
+    cat build.log
+    exit 1
+}
 if grep -q "up to date" build.log; then
     echo "protect: skipped"
 else
     echo "protect: rebuilt"
 fi
-build --protect || { echo "build failed"; cat build.log; exit 1; }
+build --protect || {
+    echo "build failed"
+    cat build.log
+    exit 1
+}
 if grep -q "up to date" build.log; then
     echo "protect again: up to date"
 else

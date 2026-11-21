@@ -1,0 +1,100 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package main
+
+import ftpd
+import ftp
+import io
+import os
+import testing
+import fs.dir
+import sync
+
+if not SALAM_OS_WINDOWS:
+    extern:
+        func symlink(target: str, path: str): int
+    end
+end
+
+const base := "/tmp/salam_ftpd_jail_test"
+const root := "/tmp/salam_ftpd_jail_test/root"
+const outside := "/tmp/salam_ftpd_jail_test/out"
+
+mut srv := ftpd.Server {}
+mut ready := sync.NewWaitGroup()
+
+if SALAM_OS_WINDOWS:
+    func plant(target: str, path: str): bool:
+        _t := target
+        _p := path
+        ret false
+    end
+else:
+    func plant(target: str, path: str): bool:
+        ret symlink(target, path) == 0
+    end
+end
+
+func serve_one():
+    mut cfg := ftpd.NewConfig()
+    cfg.host = "127.0.0.1"
+    cfg.port = 0
+    cfg.root = root
+    cfg.allow_anonymous = true
+    cfg.passive_start = 45010
+    cfg.passive_end = 45010
+    srv = ftpd.New(cfg)
+    if not ftpd.Listen(srv):
+        sync.Done(ready)
+        ret
+    end
+    sync.Done(ready)
+    _handled := ftpd.ServeOnce(srv)
+end
+
+func main:
+    dir.RemoveAll(base)
+    dir.MkdirAll(root)
+    dir.MkdirAll(outside)
+    io.WriteFile(outside + "/f.txt", "outside")
+    dang := plant(outside + "/new.txt", root + "/dang")
+    up := plant(outside + "/f.txt", root + "/up")
+    dlink := plant(outside, root + "/d")
+    testing.AssertTrue(SALAM_OS_WINDOWS or (dang and up and dlink))
+
+    sync.Add(ready, 1 as i64)
+    worker := spawn(serve_one)
+    sync.Wait(ready)
+    mut c := ftp.Dial("127.0.0.1", ftpd.Port(srv))
+    testing.AssertTrue(ftp.Login(c, "anonymous", ""))
+    testing.AssertTrue(not dang or not ftp.Write(c, "dang", "planted"))
+    testing.AssertTrue(not up or not ftp.Write(c, "up", "planted"))
+    testing.AssertTrue(not dlink or not ftp.Write(c, "d/new.txt", "planted"))
+    testing.AssertTrue(not up or ftp.Read(c, "up").len() == 0)
+    testing.AssertTrue(ftp.Write(c, "ok.txt", "first"))
+    testing.AssertTrue(ftp.Write(c, "ok.txt", "inside"))
+    testing.AssertEqStr(ftp.Read(c, "ok.txt"), "inside")
+    _slashed := ftp.Write(c, "..\\out\\back.txt", "planted")
+    ftp.Close(c)
+    join(worker)
+    ftpd.Close(srv)
+
+    testing.AssertFalse(os.Exists(outside + "/new.txt"))
+    testing.AssertFalse(os.Exists(outside + "/back.txt"))
+    testing.AssertEqStr(io.ReadFile(outside + "/f.txt"), "outside")
+    dir.RemoveAll(base)
+    testing.Summary()
+    ret 0
+end

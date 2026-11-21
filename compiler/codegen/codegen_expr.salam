@@ -65,6 +65,77 @@ func cg_self_cmp_same(a &: at.Ast, x: int, y: int, depth: int): bool:
     ret false
 end
 
+func cg_f2i_const(fv: f64, bits: int, uns: bool): str:
+    if fv != fv:
+        ret "0"
+    end
+    if uns:
+        if fv < 1.0:
+            ret "0"
+        end
+        if bits >= 64:
+            if fv >= 18446744073709551616.0:
+                ret "18446744073709551615ULL"
+            end
+            if fv >= 9223372036854775808.0:
+                ret co.U64Toa(((fv - 9223372036854775808.0) as i64 as u64) + ((1 as u64) << (63 as u64))) + "ULL"
+            end
+            ret co.I64Toa(fv as i64) + "ULL"
+        end
+        top := (1 as u64) << (bits as u64)
+        if fv >= (top as f64):
+            ret co.U64Toa(top - (1 as u64)) + "ULL"
+        end
+        ret co.I64Toa(fv as i64) + "ULL"
+    end
+    half := (1 as u64) << ((bits - 1) as u64)
+    if fv >= (half as f64):
+        ret co.U64Toa(half - (1 as u64)) + "LL"
+    end
+    if fv < 0.0 - (half as f64):
+        ret "(-" + co.U64Toa(half - (1 as u64)) + "LL - 1)"
+    end
+    ret co.I64Toa(fv as i64) + "LL"
+end
+
+func cg_f2i_target(tgt: str): bool:
+    if str.Equals(tgt, "int") or str.Equals(tgt, "uint"):
+        ret true
+    end
+    ret cg_is_int_typestr(tgt)
+end
+
+func cg_f2i(a &: at.Ast, src: int, tgt: str, e: str): str:
+    mut ts := tgt
+    if str.Equals(ts, "int"):
+        ts = "i32"
+    else str.Equals(ts, "uint"):
+        ts = "u32"
+    end
+    if not cg_is_int_typestr(ts):
+        ret ""
+    end
+    bits := cg_int_ts_bits(ts)
+    sn := at.Get(a, src)
+    if sn.kind == at.AST_LITERAL and sn.op == tok.TK_FLOAT:
+        ret "(" + cg_f2i_const(sn.value_float, bits, cg_is_unsigned_typestr(ts)) + ")"
+    end
+    if cg_is_unsigned_typestr(ts):
+        switch bits:
+            8: ret "salam_f2u((double)(" + e + "), 256.0, 255u)" end
+            16: ret "salam_f2u((double)(" + e + "), 65536.0, 65535u)" end
+            32: ret "salam_f2u((double)(" + e + "), 4294967296.0, 4294967295u)" end
+        end
+        ret "salam_f2u((double)(" + e + "), 18446744073709551616.0, UINT64_MAX)"
+    end
+    switch bits:
+        8: ret "salam_f2s((double)(" + e + "), 128.0, 127)" end
+        16: ret "salam_f2s((double)(" + e + "), 32768.0, 32767)" end
+        32: ret "salam_f2s((double)(" + e + "), 2147483648.0, 2147483647)" end
+    end
+    ret "salam_f2s((double)(" + e + "), 9223372036854775808.0, INT64_MAX)"
+end
+
 func cg_self_cmp(a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     op := nn.op
@@ -94,6 +165,45 @@ func cg_div_guard(g &: Cg, a &: at.Ast, op: int, lts: str, b: int, eb: str): str
         ret eb
     end
     ret "((" + cg_ctype(bn.type_str) + ")SALAM_NZ(" + eb + ", " + (is_mod ? "1" : "0") + "))"
+end
+
+func cg_sdiv_bits(a &: at.Ast, op: int, ts: str, b: int): int:
+    is_div := op == tok.TK_SLASH or op == tok.TK_SLASH_EQ
+    is_mod := op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ
+    if not is_div and not is_mod:
+        ret 0
+    end
+    if not cg_is_int_typestr(ts) or cg_is_unsigned_typestr(ts):
+        ret 0
+    end
+    if b != 0:
+        bn := at.Get(a, b)
+        if bn.kind == at.AST_LITERAL and bn.op == tok.TK_INT and bn.value_int != (0 - 1) as u64:
+            ret 0
+        end
+    end
+    bits := cg_int_ts_bits(ts)
+    ret bits >= 32 ? bits : 0
+end
+
+func cg_sdiv_call(op: int, bits: int, ea: str, eb: str): str:
+    ct := bits == 32 ? "int32_t" : "int64_t"
+    is_mod := op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ
+    ret (is_mod ? "salam_smod" : "salam_sdiv") + co.I64Toa(bits as i64) + "((" + ct + ")(" + ea + "), (" + ct + ")(" + eb + "))"
+end
+
+func cg_sdiv_assign(g &: Cg, a &: at.Ast, n: int, ea: str, eb: str): str:
+    nn := at.Get(a, n)
+    lts := at.Get(a, nn.a).type_str
+    cts := cg_common_int_typestr(lts, at.Get(a, nn.b).type_str)
+    bits := cg_sdiv_bits(a, nn.op, cts, nn.b)
+    if bits == 0:
+        ret ""
+    end
+    g.tmpn++
+    p := "__dv" + g.tmpn
+    lct := cg_ctype(lts)
+    ret "({ " + lct + " *" + p + " = &(" + ea + "); *" + p + " = (" + lct + ")" + cg_sdiv_call(nn.op, bits, "*" + p, eb) + "; })"
 end
 
 func cg_op(k: int): str:
@@ -1309,6 +1419,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             if cg_op_is_cmp(nn.op):
                 ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"
             end
+            dbits := cg_sdiv_bits(a, nn.op, cts, nn.b)
+            if dbits != 0:
+                ret "((" + cty + ")" + cg_sdiv_call(nn.op, dbits, eaq, cg_div_guard(g, a, nn.op, an.type_str, nn.b, ebq)) + ")"
+            end
             ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + aty + ")(" + cg_div_guard(g, a, nn.op, an.type_str, nn.b, ebq) + ")))"
         end
         ea3 := cg_expr(g, s, a, nn.a)
@@ -1404,6 +1518,11 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if str.Equals(tgt, "bool") and str.Len(sts) > 0 and not str.Equals(sts, "bool") and not str.Equals(sts, "str"):
             ret "((bool)((" + cg_expr(g, s, a, nn.a) + ") != 0))"
+        end
+        if str.Equals(sts, "f64") or str.Equals(sts, "f32") or str.Equals(sts, "float"):
+            if cg_f2i_target(tgt):
+                ret "((" + cg_ctype(tgt) + ")" + cg_f2i(a, nn.a, tgt, cg_expr(g, s, a, nn.a)) + ")"
+            end
         end
         ret "((" + cg_ctype(tgt) + ")(" + cg_expr(g, s, a, nn.a) + "))"
     end
@@ -1555,23 +1674,26 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         g.tmpn++
         t := g.tmpn
         a_ts := at.Get(a, nn.a).type_str
+        sf := g.safe ? "1" : "0"
         if cg_is_slice_ts(a_ts):
             if nn.c != 0:
-                ret "({ salam_slice __sl" + t + "; salam_slice_sub(&__sl" + t + ", " + base + ", " + lo + ", " + cg_expr(g, s, a, nn.c) + ", 1, (int64_t)sizeof(" + ec3 + ")); __sl" + t + "; })"
+                ret "({ salam_slice __sl" + t + "; salam_slice_sub(&__sl" + t + ", " + base + ", " + lo + ", " + cg_expr(g, s, a, nn.c) + ", 1, (int64_t)sizeof(" + ec3 + "), " + sf + "); __sl" + t + "; })"
             end
-            ret "({ salam_slice __sl" + t + "; salam_slice_sub(&__sl" + t + ", " + base + ", " + lo + ", 0, 0, (int64_t)sizeof(" + ec3 + ")); __sl" + t + "; })"
+            ret "({ salam_slice __sl" + t + "; salam_slice_sub(&__sl" + t + ", " + base + ", " + lo + ", 0, 0, (int64_t)sizeof(" + ec3 + "), " + sf + "); __sl" + t + "; })"
         end
+        asz := array_size_of(a_ts)
         mut hi := ""
         if nn.c != 0:
             hi = cg_expr(g, s, a, nn.c)
         else:
-            hi = co.I64Toa(array_size_of(a_ts))
+            hi = co.I64Toa(asz)
         end
+        blen := (g.safe and str.Contains(a_ts, "[")) ? co.I64Toa(asz) : "-1"
         if at.KindOf(a, nn.a) == at.AST_ARRAY_LIT:
             lit := cg_expr_value(g, s, a, nn.a)
-            ret "salam_slice_make((void*)(" + lit + "), " + lo + ", " + hi + ", (int64_t)sizeof(" + ec3 + "))"
+            ret "salam_slice_make((void*)(" + lit + "), " + lo + ", " + hi + ", (int64_t)sizeof(" + ec3 + "), " + blen + ")"
         end
-        ret "({ salam_slice __sl" + t + "; salam_slice_new(&__sl" + t + ", (void*)(" + base + "), " + lo + ", " + hi + ", (int64_t)sizeof(" + ec3 + ")); __sl" + t + "; })"
+        ret "({ salam_slice __sl" + t + "; salam_slice_new(&__sl" + t + ", (void*)(" + base + "), " + lo + ", " + hi + ", (int64_t)sizeof(" + ec3 + "), " + blen + "); __sl" + t + "; })"
     end
     if k == at.AST_MATCH:
         ret cg_match_expr(g, s, a, n)

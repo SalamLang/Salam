@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import str
+import os
+import io
+import net.http
+import net.httpd
+import net.router
+import net.tcp
+
+mut site_port := 0
+
+func prepare(root: str):
+    os.RemoveAll(root)
+    os.MkdirAll(root + "/app/assets")
+    os.MkdirAll(root + "/plain")
+    io.WriteFile(root + "/app/index.html", "spa shell")
+    io.WriteFile(root + "/app/assets/app.js", "js")
+    io.WriteFile(root + "/plain/index.html", "plain")
+end
+
+func fetch(base: str, path: str, accept: str): http.Response:
+    mut h := http.NewHeaders()
+    if accept.Len() > 0:
+        h.Put("Accept", accept)
+    end
+    ret http.Do("GET", base + path, h, "", http.RequestOptions {})
+end
+
+func test_router(root: str):
+    port := tcp.FreePort()
+    mut r := router.NewRouter()
+    router.Static(r, "/", root + "/app")
+    router.SpaFallback(r, "index.html")
+    testing.AssertEqStr(r.spa_index, "index.html")
+    mut s := http.NewServer(port)
+    http.SetHost(s, "127.0.0.1")
+    http.Use(s, r)
+    testing.AssertTrue(http.RunBackground(s))
+    _ := tcp.WaitListening("127.0.0.1", port, 5000)
+    base := "http://127.0.0.1:" + port
+    a := fetch(base, "/users/42", "")
+    testing.AssertEqInt(a.status, 200)
+    testing.AssertEqStr(a.body, "spa shell")
+    testing.AssertContains(http.GetHeader(a, "Content-Type"), "text/html")
+    b := fetch(base, "/assets/app.js", "")
+    testing.AssertEqStr(b.body, "js")
+    c := fetch(base, "/assets/missing.js", "")
+    testing.AssertEqInt(c.status, 404)
+    d := fetch(base, "/blog/v1.2", "text/html,application/xhtml+xml")
+    testing.AssertEqInt(d.status, 200)
+    testing.AssertEqStr(d.body, "spa shell")
+    e := fetch(base, "/", "")
+    testing.AssertEqStr(e.body, "spa shell")
+end
+
+func config_text(root: str): str:
+    t := `
+server:
+    site:
+        listen = @PORT@
+        names = "localhost"
+        root = "@ROOT@/app"
+        fallback = "/index.html"
+        location "/assets/": cache = 30d end
+    end
+    site:
+        listen = @PORT@
+        names = "127.0.0.1"
+        root = "@ROOT@/plain"
+    end
+end
+`
+    ret str.Replace(str.Replace(t, "@ROOT@", root), "@PORT@", str.FromInt(site_port as i64))
+end
+
+func serve_loop():
+    httpd.Run()
+end
+
+func test_config(root: str):
+    site_port = tcp.FreePort()
+    testing.AssertTrue(httpd.LoadText(config_text(root), "spa.salam"))
+    t := spawn(serve_loop)
+    _ := tcp.WaitListening("127.0.0.1", site_port, 5000)
+    app := "http://localhost:" + site_port
+    a := fetch(app, "/settings/profile", "")
+    testing.AssertEqInt(a.status, 200)
+    testing.AssertEqStr(a.body, "spa shell")
+    b := fetch(app, "/assets/missing.css", "")
+    testing.AssertEqInt(b.status, 404)
+    c := fetch(app, "/assets/app.js", "")
+    testing.AssertEqStr(c.body, "js")
+    d := fetch(app, "/post/a.b", "text/html")
+    testing.AssertEqStr(d.body, "spa shell")
+    plain := "http://127.0.0.1:" + site_port
+    e := fetch(plain, "/settings", "")
+    testing.AssertEqInt(e.status, 404)
+    httpd.Stop()
+    join(t)
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        fallback = \"index.html\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "fallback needs a file path")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        fallbak = \"/index.html\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "did you mean 'fallback'?")
+end
+
+func main:
+    root := os.TempDir() + "/salam_spa_" + tcp.FreePort()
+    prepare(root)
+    test_router(root)
+    test_config(root)
+    os.RemoveAll(root)
+    testing.Summary()
+    ret 0
+end

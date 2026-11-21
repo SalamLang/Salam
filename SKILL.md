@@ -437,12 +437,16 @@ x, y = y, x                   // assign several targets at once (swap)
 **Primitives:** `i8 i16 i32 i64 i128`, `u8 u16 u32 u64 u128`, `usize size`,
 `f32 f64`, `bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
 `float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**Float to integer:** `x as T` for any integer `T` truncates toward zero and
+saturates: a value above or below the range of `T` gives its max or min, and
+NaN gives 0 (`1e20 as i32` is 2147483647, `-1.5 as u8` is 0), the same on every
+backend and in constant expressions.
 **128-bit integers:** `i128` and `u128` work on every backend and target, with
 the same operators as the other widths: `hi := ((a as u128) * (b as u128)) >> 64`
 compiles to one `mul` on 64-bit targets. A literal above `u64` takes the
 smallest of `i128`, `u128` that holds it; `x := 1 as u128 << 100`, `0xFF_FF as
 u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
-Shift counts mask to 0-127. A float cast saturates and NaN gives 0. They cannot
+Shift counts mask to 0-127. A float cast saturates like the other widths. They cannot
 index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
 refuses them, and an `extern` function can use them only on 64-bit targets
 (E160). On `salam js` they are exact BigInts, but a value that passes through
@@ -476,6 +480,12 @@ the target of `each` (E065 otherwise); read single bytes with `s[i]`.
 | `` `text` `` | `str`                    | **none, fully raw**                              | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
 | `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                       |
 | `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                             |
+
+An escape the table does not list is the compile error E260 (`"\d"` is not
+`"d"`: write `"\\d"` or a backtick string, which is what `regex` patterns
+want). `\x` takes exactly two hex digits, `\u` four and `\U` eight; a
+surrogate (`\uD800`) or a value above `\U0010FFFF` is E260 too, and so is a
+`\u` escape above 7F in a one-byte `'c'` literal (write `u"\u0645"`).
 
 **Prefer backtick strings for any text containing literal `"`**: JSON blobs,
 `regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:

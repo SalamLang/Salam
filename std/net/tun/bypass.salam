@@ -1,0 +1,60 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import mem
+import net.tcp
+import net.tunnel
+import net.internal.rawsock
+
+func _bypass_one(gw: Gateway, ip: str, port: int, timeout_ms: int): dyn tunnel.Stream:
+    sock := rawsock.Open(2, 1)
+    if not rawsock.Ok(sock):
+        ret tunnel.ClosedStream {}
+    end
+    if not _bind_iface(sock.fd, gw) and gw.iface.Len() + gw.index > 0:
+        rawsock.Close(sock)
+        ret tunnel.ClosedStream {}
+    end
+    if not _connect4(sock.fd, ip, port, timeout_ms):
+        rawsock.Close(sock)
+        ret tunnel.ClosedStream {}
+    end
+    c := tcp.ConnFromFd(sock.fd)
+    tcp.SetNoDelay(c, true)
+    ret tunnel.WrapTcp(c)
+end
+
+func _bypass_dial(gw: Gateway, target: tunnel.Addr, timeout_ms: int): dyn tunnel.Stream:
+    if not target.valid:
+        ret tunnel.ClosedStream {}
+    end
+    if _ip4(target.host) >= 0:
+        ret _bypass_one(gw, target.host, target.port, timeout_ms)
+    end
+    if tunnel.IsIP(target.host):
+        ret tunnel.ClosedStream {}
+    end
+    ips := rawsock.ResolveAll(target.host)
+    defer ips.Free()
+    each ip in ips:
+        if _ip4(ip) >= 0:
+            s := _bypass_one(gw, ip, target.port, timeout_ms)
+            if s.Ok():
+                ret s
+            end
+        end
+    end
+    ret tunnel.ClosedStream {}
+end

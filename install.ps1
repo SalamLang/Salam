@@ -957,6 +957,64 @@ function Test-ZipFile {
     }
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+
+    $stream = New-Object System.IO.FileStream(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read)
+
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = $sha.ComputeHash($stream)
+    }
+    finally {
+        $stream.Close()
+    }
+
+    $hex = New-Object System.Text.StringBuilder
+    foreach ($b in $bytes) {
+        $null = $hex.Append($b.ToString("x2"))
+    }
+
+    return $hex.ToString()
+}
+
+function Confirm-ArchiveChecksum {
+    param([string]$Path, [string]$Url, [string]$Name)
+
+    if ($env:SALAM_SKIP_CHECKSUM) {
+        Write-Warn "SALAM_SKIP_CHECKSUM is set; the archive was not verified"
+        return
+    }
+
+    $text = Get-UrlText -Url ($Url + ".sha256")
+    $want = ""
+
+    if ($text) {
+        $parts = $text.Trim() -split "\s+"
+        $want = $parts[0].ToLower()
+    }
+
+    if ($want -notmatch "^[0-9a-f]{64}$") {
+        Write-Warn "no checksum is published for $Name; the archive was not verified"
+        return
+    }
+
+    $got = Get-Sha256Hex -Path $Path
+
+    if ($got -ne $want) {
+        Fail ("the checksum of $Name does not match the published one.`r`n" +
+            "       expected $want`r`n" +
+            "       got      $got`r`n" +
+            "       the download is corrupt or was replaced on the way; nothing was installed")
+    }
+
+    Write-Info "sha256 verified: $got"
+}
+
 # ---------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------
@@ -1598,6 +1656,8 @@ try {
     if ($size -lt 1024 -or !(Test-ZipFile $archive)) {
         Fail "the downloaded file is not a zip archive - try again"
     }
+
+    Confirm-ArchiveChecksum -Path $archive -Url $url -Name $asset
 
     Write-Step "Extracting $asset"
     Write-Info ("archive size: " + (Format-Size $size))

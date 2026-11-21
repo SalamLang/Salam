@@ -1,0 +1,196 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package tray
+
+if SALAM_OS_MAC:
+    link framework "Cocoa"
+    link dynamic "objc"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(receiver: void*, selector: void*): void*
+        func objc_allocateClassPair(superclass: void*, name: str, extra: usize): void*
+        func objc_registerClassPair(cls: void*)
+        func class_addMethod(cls: void*, selector: void*, imp: void*, types: str): i8
+        func objc_autoreleasePoolPush(): void*
+        func objc_autoreleasePoolPop(pool: void*)
+    end
+
+    mut _mt_item := null as void*
+    mut _mt_target := null as void*
+
+    struct _MtSize:
+        pub w: f64 = 0.0
+        pub h: f64 = 0.0
+    end
+
+    export:
+        func salam_tray_mac_action(_this: void*, _cmd: void*, sender: void*):
+            tag := _mt_long0(sender, "tag")
+            if tag > (0 as i64):
+                _push_menu((tag - (1 as i64)) as int)
+            end
+        end
+    end
+
+    func _mt0(recv: void*, name: str): void*:
+        f := (&objc_msgSend) as extern func (void*, void*) void*
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _mt1(recv: void*, name: str, a: void*): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret f(recv, sel_registerName(name), a)
+    end
+
+    func _mt3(recv: void*, name: str, a: void*, b: void*, c: void*): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, void*, void*, void*) void*
+        ret f(recv, sel_registerName(name), a, b, c)
+    end
+
+    func _mt_i(recv: void*, name: str, a: i64):
+        f := (&objc_msgSend) as extern func (void*, void*, i64) void*
+        _r := f(recv, sel_registerName(name), a)
+    end
+
+    func _mt_b(recv: void*, name: str, a: bool):
+        f := (&objc_msgSend) as extern func (void*, void*, i8) void*
+        _r := f(recv, sel_registerName(name), a ? 1 as i8 : 0 as i8)
+    end
+
+    func _mt_f(recv: void*, name: str, a: f64): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, f64) void*
+        ret f(recv, sel_registerName(name), a)
+    end
+
+    func _mt_size(recv: void*, name: str, value: _MtSize):
+        f := (&objc_msgSend) as extern func (void*, void*, _MtSize) void*
+        _r := f(recv, sel_registerName(name), value)
+    end
+
+    func _mt_long0(recv: void*, name: str): i64:
+        f := (&objc_msgSend) as extern func (void*, void*) i64
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _mt_string(s: str): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret f(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _mt_target_object(): void*:
+        if _mt_target == null:
+            cls := objc_allocateClassPair(objc_getClass("NSObject"), "SalamTrayTarget", 0 as usize)
+            if cls != null:
+                _a := class_addMethod(cls, sel_registerName("salamTrayAction:"), &salam_tray_mac_action, "v@:@")
+                objc_registerClassPair(cls)
+                _mt_target = _mt0(_mt0(cls, "alloc"), "init")
+            end
+        end
+        ret _mt_target
+    end
+
+    func _mt_menu(): void*:
+        menu := _mt0(_mt0(objc_getClass("NSMenu"), "alloc"), "init")
+        _mt_b(menu, "setAutoenablesItems:", false)
+        target := _mt_target_object()
+        action := sel_registerName("salamTrayAction:")
+        repeat _items.Len() in i:
+            it := _items[i]
+            if it.separator:
+                _mt1(menu, "addItem:", _mt0(objc_getClass("NSMenuItem"), "separatorItem"))
+                continue
+            end
+            entry := _mt3(
+                _mt0(objc_getClass("NSMenuItem"), "alloc"), "initWithTitle:action:keyEquivalent:",
+                _mt_string(it.label), action, _mt_string("")
+            )
+            _mt1(entry, "setTarget:", target)
+            _mt_i(entry, "setTag:", (i + 1) as i64)
+            _mt_b(entry, "setEnabled:", it.enabled)
+            _mt_i(entry, "setState:", it.checked ? 1 as i64 : 0 as i64)
+            _mt1(menu, "addItem:", entry)
+            _mt0(entry, "release")
+        end
+        ret menu
+    end
+
+    func _mt_apply():
+        _lock()
+        want := _want
+        icon := _dirty_icon
+        tip := _dirty_tip
+        menu := _dirty_menu
+        _dirty_icon = false
+        _dirty_tip = false
+        _dirty_menu = false
+        _unlock()
+        bar := _mt0(objc_getClass("NSStatusBar"), "systemStatusBar")
+        if not want:
+            if _mt_item != null:
+                _mt1(bar, "removeStatusItem:", _mt_item)
+                _mt0(_mt_item, "release")
+                _mt_item = null
+            end
+            ret
+        end
+        fresh := _mt_item == null
+        if fresh:
+            _mt_item = _mt0(_mt_f(bar, "statusItemWithLength:", -1.0), "retain")
+        end
+        button := _mt0(_mt_item, "button")
+        _lock()
+        if icon or fresh:
+            mut image := null as void*
+            if _icon_path.Len() > 0:
+                image = _mt1(_mt0(objc_getClass("NSImage"), "alloc"), "initWithContentsOfFile:", _mt_string(_icon_path))
+            end
+            if image != null:
+                _mt_size(image, "setSize:", _MtSize { w = 18.0, h = 18.0 })
+                _mt1(button, "setImage:", image)
+                _mt1(button, "setTitle:", _mt_string(""))
+                _mt0(image, "release")
+            else:
+                _mt1(button, "setTitle:", _mt_string(_tooltip))
+            end
+        end
+        if tip or fresh:
+            _mt1(button, "setToolTip:", _mt_string(_tooltip))
+        end
+        if menu or fresh:
+            built := _mt_menu()
+            _mt1(_mt_item, "setMenu:", built)
+            _mt0(built, "release")
+        end
+        _unlock()
+    end
+
+    func _os_backend(): str:
+        ret "cocoa"
+    end
+
+    func _os_supported(): bool:
+        ret objc_getClass("NSStatusBar") != null
+    end
+
+    func _os_apply(): bool:
+        pool := objc_autoreleasePoolPush()
+        _mt0(objc_getClass("NSApplication"), "sharedApplication")
+        _mt_apply()
+        objc_autoreleasePoolPop(pool)
+        ret true
+    end
+end

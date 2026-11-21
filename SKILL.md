@@ -900,8 +900,12 @@ lambdas and `extern` functions cannot. `E237` the removed spelling `throws` (wri
 `try` in a spot that runs conditionally or repeatedly, `E157` `throw` outside a
 `throw` function or a `try:` block, `E142` `try` with nothing that can throw.
 (E139 to E141 are ownership errors: use after free, double free, returning a
-value the function's own `defer` frees; `--ownership=off|on|warn|error`, warn
-by default, `docs/design/OWNERSHIP.md`.)
+value the function's own `defer` frees. The same mistakes on only some paths
+are E256 and E257, a pointer or copy kept across a call that may grow its
+Vector or HashMap is E258, and a container used after it was handed to another
+name is E259; take `.Copy()` where both names are needed.
+`--ownership=off|on|warn|error`, error by default; `warn` turns E256 to E259
+back into W142, W143, W144 and W163. See `docs/design/OWNERSHIP.md`.)
 
 **Generic enums and `?`:** an enum with data may take type
 parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is

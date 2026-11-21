@@ -19,7 +19,9 @@ include co "sal_core.salam"
 
 g_mn_pairs := "++--+=-=*=/=%===!=<=>=&&||**=><<>>???..."
 g_mn_css_drop_prev := "{}:;,>+~("
-g_mn_css_drop_next := "{}:;,>+~)"
+g_mn_css_drop_next := "{}:;,>+~)!"
+g_mn_html_block := "|html|head|body|title|meta|link|style|script|base|noscript|template|div|p|ul|ol|li|dl|dt|dd|section|header|footer|nav|main|article|aside|h1|h2|h3|h4|h5|h6|table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col|form|fieldset|legend|hr|br|blockquote|figure|figcaption|details|summary|dialog|option|optgroup|select|!doctype|"
+g_mn_html_raw := "|script|style|textarea|pre|title|"
 
 func byte_at(s: str, i: int): int:
     bp := (s as void*) as i8*
@@ -261,7 +263,8 @@ func js_regex_allowed(out &: str.StringBuilder): bool:
     c := sb_byte(out, j - 1)
     if js_word_char(c):
         kw := [
-            "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await", "if", "while"
+            "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case",
+            "do", "else", "yield", "await", "if", "while"
         ]
         each w in kw:
             if js_ends_with_word(out, j, w):
@@ -304,6 +307,160 @@ func js_needs_space(prevc: int, nextc: int): bool:
         ret true
     end
     ret false
+end
+
+func css_colon_in_selector(s: str, from: int, n: int): bool:
+    mut j := from
+    until j < n:
+        c := byte_at(s, j)
+        if c == 123:
+            ret true
+        end
+        if c == 59 or c == 125:
+            ret false
+        end
+        j++
+    end
+    ret false
+end
+
+func lower_byte(c: int): int:
+    if c >= 65 and c <= 90:
+        ret c + 32
+    end
+    ret c
+end
+
+func html_name_char(c: int): bool:
+    ret is_alnum(c) or c == 45 or c == 95 or c == 58 or c == 33
+end
+
+func word_in_set(set: str, s: str, start: int, len: int): bool:
+    if len <= 0:
+        ret false
+    end
+    m := set.Len()
+    mut k := 0
+    until k + len + 1 < m:
+        if byte_at(set, k) == 124 and byte_at(set, k + len + 1) == 124:
+            mut t := 0
+            until t < len and byte_at(set, k + 1 + t) == lower_byte(byte_at(s, start + t)):
+                t++
+            end
+            if t == len:
+                ret true
+            end
+        end
+        k++
+    end
+    ret false
+end
+
+func html_raw_end(s: str, from: int, n: int, name_at: int, name_len: int): int:
+    mut j := from
+    until j + 1 < n:
+        if byte_at(s, j) == 60 and byte_at(s, j + 1) == 47 and j + 2 + name_len <= n:
+            mut t := 0
+            until t < name_len and lower_byte(byte_at(s, j + 2 + t)) == lower_byte(byte_at(s, name_at + t)):
+                t++
+            end
+            if t == name_len:
+                after := j + 2 + name_len < n ? byte_at(s, j + 2 + name_len) : 62
+                if after == 62 or after == 47 or is_space(after):
+                    ret j
+                end
+            end
+        end
+        j++
+    end
+    ret n
+end
+
+func html_copy_tag(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    mut pend := false
+    until i < n:
+        c := byte_at(s, i)
+        if c == 34 or c == 39:
+            if pend and sb_last(out) != 61:
+                co.SbPutc(out, 32)
+                pend = false
+            end
+            q := c
+            co.SbPutc(out, c)
+            i++
+            until i < n and byte_at(s, i) != q:
+                co.SbPutc(out, byte_at(s, i))
+                i++
+            end
+            if i < n:
+                co.SbPutc(out, q)
+                i++
+            end
+            continue
+        end
+        if is_space(c):
+            pend = true
+            i++
+            continue
+        end
+        if c == 62:
+            co.SbPutc(out, c)
+            ret i + 1
+        end
+        if pend and c != 61 and sb_last(out) != 61 and not (c == 47 and (sb_last(out) == 34 or sb_last(out) == 39)):
+            co.SbPutc(out, 32)
+        end
+        pend = false
+        co.SbPutc(out, c)
+        i++
+    end
+    ret i
+end
+
+func bytes_at(s: str, i: int, n: int, word: str): bool:
+    wl := word.Len()
+    if i + wl > n:
+        ret false
+    end
+    mut t := 0
+    until t < wl:
+        if byte_at(s, i + t) != byte_at(word, t):
+            ret false
+        end
+        t++
+    end
+    ret true
+end
+
+func html_keep_comment(s: str, i: int, n: int): bool:
+    ret bytes_at(s, i + 4, n, "salam") or bytes_at(s, i + 4, n, "/salam") or bytes_at(s, i + 4, n, "[if")
+end
+
+func html_comment_end(s: str, from: int, n: int): int:
+    mut j := from
+    until j + 2 < n:
+        if byte_at(s, j) == 45 and byte_at(s, j + 1) == 45 and byte_at(s, j + 2) == 62:
+            ret j + 3
+        end
+        j++
+    end
+    ret n
+end
+
+func html_next_is_block(s: str, j: int, n: int): bool:
+    if j >= n or byte_at(s, j) != 60:
+        ret false
+    end
+    mut k := j + 1
+    if k < n and byte_at(s, k) == 47:
+        k++
+    end
+    st := k
+    until k < n and html_name_char(byte_at(s, k)):
+        k++
+    end
+    ret word_in_set(g_mn_html_block, s, st, k - st)
 end
 
 pub func Js(src: str): str:
@@ -390,6 +547,9 @@ pub func Css(src: str): str:
                 drop = prevc == 0 or prevc == 40 or nextc == 41
             else:
                 drop = prevc == 0 or nextc == 0 or in_set(g_mn_css_drop_prev, prevc) or in_set(g_mn_css_drop_next, nextc)
+                if drop and nextc == 58 and prevc != 0 and not in_set(g_mn_css_drop_prev, prevc) and css_colon_in_selector(src, j, n):
+                    drop = false
+                end
             end
             if not drop:
                 co.SbPutc(out, 32)
@@ -407,7 +567,7 @@ pub func Css(src: str): str:
         else (
             c == 123 or c == 58 or c == 59 or c == 44 or c == 62 or c == 43 or c == 126
         ) and paren_depth == 0:
-            if sb_last(out) == 32:
+            if sb_last(out) == 32 and not (c == 58 and css_colon_in_selector(src, i, n)):
                 sb_drop(out)
             end
         end
@@ -415,6 +575,81 @@ pub func Css(src: str): str:
         i++
     end
     sb_trim_ws(out)
+    res := co.Strdup(co.SbCstr(out))
+    co.SbFree(out)
+    ret res
+end
+
+pub func Html(src: str): str:
+    mut out := co.SbNew()
+    n := src.Len()
+    mut i := 0
+    mut after_block := true
+    mut last_tag := true
+    until i < n:
+        c := byte_at(src, i)
+        if c == 60 and i + 3 < n and byte_at(src, i + 1) == 33 and byte_at(src, i + 2) == 45 and byte_at(src, i + 3) == 45:
+            e := html_comment_end(src, i + 4, n)
+            if html_keep_comment(src, i, n):
+                mut k := i
+                until k < e:
+                    co.SbPutc(out, byte_at(src, k))
+                    k++
+                end
+                after_block = false
+                last_tag = true
+            end
+            i = e
+            continue
+        end
+        if c == 60 and i + 1 < n and (is_alpha(byte_at(src, i + 1)) or byte_at(src, i + 1) == 47 or byte_at(src, i + 1) == 33):
+            closing := byte_at(src, i + 1) == 47
+            mut k := closing ? i + 2 : i + 1
+            st := k
+            until k < n and html_name_char(byte_at(src, k)):
+                k++
+            end
+            nl := k - st
+            i = html_copy_tag(out, src, i, n)
+            after_block = word_in_set(g_mn_html_block, src, st, nl)
+            last_tag = true
+            if not closing and word_in_set(g_mn_html_raw, src, st, nl) and sb_last(out) == 62:
+                e := html_raw_end(src, i, n, st, nl)
+                until i < e:
+                    co.SbPutc(out, byte_at(src, i))
+                    i++
+                end
+            end
+            continue
+        end
+        if is_space(c):
+            mut j := i
+            until j < n and is_space(byte_at(src, j)):
+                j++
+            end
+            next_tag := j + 1 < n and byte_at(src, j) == 60 and (is_alpha(byte_at(src, j + 1)) or byte_at(src, j + 1) == 47 or byte_at(src, j + 1) == 33)
+            if sb_len(out) == 0 or j >= n:
+                i = j
+                continue
+            end
+            if last_tag and next_tag:
+                if not after_block and not html_next_is_block(src, j, n):
+                    co.SbPutc(out, 32)
+                end
+            else:
+                until i < j:
+                    co.SbPutc(out, byte_at(src, i))
+                    i++
+                end
+            end
+            i = j
+            continue
+        end
+        co.SbPutc(out, c)
+        after_block = false
+        last_tag = false
+        i++
+    end
     res := co.Strdup(co.SbCstr(out))
     co.SbFree(out)
     ret res

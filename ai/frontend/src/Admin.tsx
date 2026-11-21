@@ -801,6 +801,7 @@ const PAY_WORDS: Record<Payment["status"], string> = {
   paid: t("پرداخت شده", "Paid"),
   failed: t("ناموفق", "Failed"),
   canceled: t("لغو شده", "Canceled"),
+  reversed: t("برگشت‌خورده", "Reversed"),
 };
 
 const GATEWAY_WORDS: Record<string, string> = { zarinpal: t("زرین‌پال", "Zarinpal"), zibal: t("زیبال", "Zibal") };
@@ -853,7 +854,6 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
   const [saving, setSaving] = useState(false);
   const fresh = plan === null;
   const free = plan?.id === "free";
-  const hasTiers = d.tiers.length > 0 || plan?.id === "unlimited";
   const set = <K extends keyof PlanDraft>(k: K, v: PlanDraft[K]) => setD((old) => ({ ...old, [k]: v }));
   const setTier = (i: number, k: keyof TierDraft, v: string) => setD((old) => {
     const tiers = old.tiers.slice();

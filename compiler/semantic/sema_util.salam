@@ -621,6 +621,29 @@ func local_canon(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): str:
     ret scope_member_canon(s, a, s.global, name, sp)
 end
 
+func sym_by_qual_name(s &: Sema, name: str, kind: int): int:
+    own := OwnPackageSym(s, name, kind)
+    if own != 0:
+        ret own
+    end
+    repeat PackageCount(s) in p:
+        pkv := sym_at(s, PackageAt(s, p))
+        if pkv.kind == SYM_PACKAGE and pkv.members != 0:
+            syms := scope_at(s, pkv.members).symbols
+            repeat syms.Len() in i:
+                m := sym_at(s, syms.Get(i))
+                if m.kind == kind and m.ty != TYPE_NONE and (kind == SYM_STRUCT or kind == SYM_ENUM) and str.Equals(ty_at(s, m.ty).name, name):
+                    ret syms.Get(i)
+                end
+                if m.kind == kind and kind == SYM_INTERFACE and str.Len(m.pkgname) > 0 and str.Equals(QualTypeName(m.pkgname, m.name), name):
+                    ret syms.Get(i)
+                end
+            end
+        end
+    end
+    ret 0
+end
+
 func sema_lookup_iface(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan, why &: str): int:
     why = ""
     if str.Len(name) == 0:
@@ -645,7 +668,7 @@ func sema_lookup_iface(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan, why &:
                 until i < syms.Len():
                     m := sym_at(s, syms.Get(i))
                     if m.kind == SYM_INTERFACE and str.Len(m.name) > 0 and str.Len(m.pkgname) > 0:
-                        if str.Equals(m.pkgname + "_" + m.name, name):
+                        if str.Equals(QualTypeName(m.pkgname, m.name), name):
                             ret syms.Get(i)
                         end
                     end
@@ -663,6 +686,10 @@ func sema_lookup_iface(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan, why &:
         pk2 = scope_lookup(s, s.global, pname)
     end
     if pk2 == 0 or sym_at(s, pk2).kind != SYM_PACKAGE:
+        qual := sym_by_qual_name(s, name, SYM_INTERFACE)
+        if qual != 0:
+            ret qual
+        end
         why = "unknown package"
         ret 0
     end
@@ -759,7 +786,7 @@ func sema_use_decl_file(s &: Sema, a &: at.Ast, did: int): str:
 end
 
 pub func OwnPackageSym(s &: Sema, name: str, kind: int): int:
-    own := s.pkg + "_"
+    own := s.pkg + "."
     if not str.StartsWith(name, own):
         ret 0
     end

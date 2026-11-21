@@ -282562,7 +282562,6 @@ package websocket
 import net.internal.rawsock
 import mem
 import str
-import rand
 import encoding
 import crypto
 import tls
@@ -282653,6 +282652,9 @@ pub binlen: int = 0
 @en "bincap"
 @fa "ظرفیت بافر دودویی"
 pub bincap: int = 0
+@en "max_message"
+@fa "بیشینه اندازه پیام"
+pub max_message: int = 16777216
 end
 @en "Message"
 @fa "پیام"
@@ -282758,6 +282760,13 @@ if fd < 0:
 ret
 end
 rawsock.SetNoDelay(rawsock.FromFd(fd), true)
+end
+func _new_key(): str:
+raw := mem.Allocate(16 as u64)
+crypto.RandomBytes(raw, 16)
+key := encoding.Base64EncodeBytes(raw, 16)
+mem.Free(raw)
+ret key
 end
 func _new_conn(fd: i64, client: bool): Conn:
 ret Conn { fd = fd, open = false, client = client, buf = mem.Allocate(4096 as u64), blen = 0, bcap = 4096 }
@@ -282865,7 +282874,7 @@ if not tls.ConnOk(tc):
 c.open = false
 ret c
 end
-key := encoding.Base64Encode(rand.Alnum(16))
+key := _new_key()
 req := HandshakeRequestWith(host, path, key, extra)
 n := tls.Write(tc, req)
 _tls_put(c.tls_idx, tc)
@@ -283002,10 +283011,17 @@ func _frame_size(c &: Conn): int:
 if c.blen < 2:
 ret 0
 end
+b0 := _bget(c.buf, 0)
 b1 := _bget(c.buf, 1)
 masked := b1 / 128
 mut plen := (b1 % 128) as i64
 mut hlen := 2
+if not c.client and masked == 0:
+ret 0 - 1
+end
+if b0 % 16 >= 8 and (b0 / 128 == 0 or plen > 125):
+ret 0 - 1
+end
 if plen == 126:
 if c.blen < 4:
 ret 0
@@ -283020,11 +283036,14 @@ mut v := 0 as i64
 repeat 8 in k:
 v = v * 256 + (_bget(c.buf, 2 + k) as i64)
 end
-if v < (0 as i64) or v > 104857600:
+if v < (0 as i64) or v > (c.max_message as i64):
 ret 0 - 1
 end
 plen = v
 hlen = 10
+end
+if plen > (c.max_message as i64):
+ret 0 - 1
 end
 if masked == 1:
 hlen += 4
@@ -283078,10 +283097,13 @@ _bput(buf, 2 + k, ((p64 / _pow2(8 * (7 - k))) % 256) as int)
 end
 end
 if c.client:
-m0 := rand.Int32Range(0, 255)
-m1 := rand.Int32Range(0, 255)
-m2 := rand.Int32Range(0, 255)
-m3 := rand.Int32Range(0, 255)
+mk4 := mem.Allocate(4 as u64)
+crypto.RandomBytes(mk4, 4)
+m0 := _bget(mk4, 0)
+m1 := _bget(mk4, 1)
+m2 := _bget(mk4, 2)
+m3 := _bget(mk4, 3)
+mem.Free(mk4)
 _bput(buf, hlen, m0)
 _bput(buf, hlen + 1, m1)
 _bput(buf, hlen + 2, m2)
@@ -283272,7 +283294,7 @@ if s.fd < 0:
 ret c
 end
 _no_delay(s.fd)
-key := encoding.Base64Encode(rand.Alnum(16))
+key := _new_key()
 req := HandshakeRequestWith(host, path, key, extra)
 n := rawsock.Send(s, req)
 if n <= 0:
@@ -283395,6 +283417,11 @@ if opcode == 1 or opcode == 2:
 c.acc_kind = opcode
 c.acc = ""
 _bin_reset(c)
+end
+if (c.acc.Len() as i64) + (c.binlen as i64) + (plen as i64) > (c.max_message as i64):
+Close(c)
+going = false
+ret msg
 end
 if c.acc_kind == 2:
 _bin_append(c, hlen, plen, masked, moff)

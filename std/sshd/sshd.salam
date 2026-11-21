@@ -16,8 +16,11 @@
 package sshd
 
 import str
+import chan
 import io
+import mem
 import net.tcp
+import pool
 import ssh
 import fs
 
@@ -78,6 +81,12 @@ pub struct Config:
     @en "banner"
     @fa "پیام خوش‌آمد"
     pub banner: str = ""
+    @en "max_connections"
+    @fa "بیشینه اتصال همزمان"
+    pub max_connections: int = 64
+    @en "login_grace_ms"
+    @fa "مهلت ورود میلی‌ثانیه"
+    pub login_grace_ms: int = 120000
     @en "users"
     @fa "کاربران"
     pub users: Vector<User> = Vector {} as Vector<User>
@@ -98,6 +107,13 @@ pub struct Server:
     pub _host_key: str = ""
 end
 
+struct _Shared:
+    pub config: Config = Config {}
+    pub host_key: str = ""
+    pub jobs: chan.Chan<i64> = chan.Chan {} as chan.Chan<i64>
+    pub active: i64* = null
+end
+
 func _ssh_config(cfg: Config, host_key: str): ssh.ServerConfig:
     mut sc := ssh.ServerConfig {}
     sc.server_version = cfg.server_version
@@ -111,12 +127,22 @@ func _ssh_config(cfg: Config, host_key: str): ssh.ServerConfig:
     sc.enable_sftp = cfg.allow_sftp
     sc.root = cfg.root
     sc.banner = cfg.banner
+    sc.login_grace_ms = cfg.login_grace_ms
     mut users := Vector {} as Vector<ssh.ServerUser>
     each u in cfg.users:
         users.push(ssh.ServerUser { name = u.name, password = u.password, home = u.home })
     end
     sc.users = users
     ret sc
+end
+
+func _serve_next(sh: _Shared*, jobs: chan.Chan<i64>):
+    mut ok := false
+    fd := jobs.Recv(ok)
+    if ok:
+        _served := ssh.ServeConnection(fd, _ssh_config(sh.config, sh.host_key))
+        _left := atomic_add(sh.active, 0 - 1 as i64)
+    end
 end
 
 @en "NewConfig"
@@ -194,11 +220,39 @@ end
 @fa "خدمت"
 pub func Serve(srv &: Server):
     srv.running = true
+    mut cap := srv.config.max_connections
+    if cap < 1:
+        cap = 1
+    end
+    sh := mem.AllocateZeroed(sizeof(_Shared) as u64) as _Shared*
+    sh.config = srv.config
+    sh.host_key = srv._host_key
+    sh.jobs = chan.Chan {} as chan.Chan<i64>
+    sh.jobs.Init(cap as i64)
+    sh.active = mem.AllocateZeroed(8 as u64) as i64*
+    jobs := sh.jobs
+    workers := pool.NewElastic(1 as i64, cap as i64, cap as i64)
+    task := (): _serve_next(sh, jobs) end
     until srv.running:
         if not tcp.Ok(srv.listener):
             srv.running = false
             break
         end
-        _served := ServeOnce(srv)
+        conn := tcp.Accept(srv.listener)
+        if not tcp.ConnOk(conn):
+            continue
+        end
+        if not srv.running or atomic_load(sh.active) >= (cap as i64):
+            tcp.Close(conn)
+            continue
+        end
+        _taken := atomic_add(sh.active, 1 as i64)
+        _queued := jobs.Send(conn.fd)
+        _submitted := pool.Submit(workers, task)
     end
+    pool.Stop(workers)
+    jobs.Close()
+    jobs.Free()
+    mem.Free(sh.active as void*)
+    mem.Free(sh as void*)
 end

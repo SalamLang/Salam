@@ -13,6 +13,7 @@
 
 package ssh
 
+import chan
 import crypto
 import encoding
 import fs
@@ -83,6 +84,9 @@ pub struct ServerConfig:
     @en "max_auth_tries"
     @fa "حداکثر دفعات ورود"
     pub max_auth_tries: int = 6
+    @en "login_grace_ms"
+    @fa "مهلت ورود میلی‌ثانیه"
+    pub login_grace_ms: int = 120000
     @en "banner"
     @fa "پیام خوش‌آمد"
     pub banner: str = ""
@@ -104,6 +108,12 @@ struct SrvHostKey:
     pub e: Buf = Buf {}
     pub d: Buf = Buf {}
     pub phi: Buf = Buf {}
+end
+
+struct SrvGrace:
+    pub fd: i64 = 0 - 1
+    pub ms: i64 = 0
+    pub done: chan.Chan<i64> = chan.Chan {} as chan.Chan<i64>
 end
 
 struct SrvKexInfo:
@@ -1467,6 +1477,41 @@ func _srv_handle_request(sess &: SrvSession, ch &: SrvChannel, r &: Reader, cfg:
     ret true
 end
 
+func _srv_grace_watch(g: SrvGrace*):
+    mut ok := false
+    _v := g.done.RecvTimeout(ok, g.ms)
+    if not ok:
+        rawsock.Shutdown(rawsock.FromFd(g.fd))
+    end
+end
+
+func _srv_login(sess &: SrvSession, sock: rawsock.Socket, hk: SrvHostKey, cfg: ServerConfig): bool:
+    sess = _srv_handshake(sock, hk, cfg)
+    ret sess.session_id.len > 0 and _srv_authenticate(sess, cfg)
+end
+
+func _srv_login_in_time(sess &: SrvSession, sock: rawsock.Socket, hk: SrvHostKey, cfg: ServerConfig): bool:
+    if cfg.login_grace_ms <= 0:
+        ret _srv_login(sess, sock, hk, cfg)
+    end
+    g := mem.AllocateZeroed(sizeof(SrvGrace) as u64) as SrvGrace*
+    g.fd = sock.fd
+    g.ms = cfg.login_grace_ms as i64
+    g.done = chan.Chan {} as chan.Chan<i64>
+    g.done.Init(1 as i64)
+    mut authed := false
+    th := spawn(_srv_grace_watch, g)
+    if th != 0:
+        authed = _srv_login(sess, sock, hk, cfg)
+        _sent := g.done.Send(1 as i64)
+        join(th)
+    end
+    g.done.Close()
+    g.done.Free()
+    mem.Free(g as void*)
+    ret authed
+end
+
 func _srv_channel_loop(sess &: SrvSession, cfg: ServerConfig): bool:
     mut ch := SrvChannel {}
     ch.pending = NewBuf(1024)
@@ -1545,13 +1590,12 @@ pub func ServeConnection(fd: i64, cfg: ServerConfig): bool:
         rawsock.Close(sock)
         ret false
     end
-    mut sess := _srv_handshake(sock, hk, cfg)
+    mut sess := SrvSession {}
+    authed := _srv_login_in_time(sess, sock, hk, cfg)
     _srv_hostkey_free(hk)
     mut ok := false
-    if sess.session_id.len > 0:
-        if _srv_authenticate(sess, cfg):
-            ok = _srv_channel_loop(sess, cfg)
-        end
+    if authed:
+        ok = _srv_channel_loop(sess, cfg)
     end
     _packet_state_free(sess.ps)
     FreeBuf(sess.session_id)

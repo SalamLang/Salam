@@ -21,11 +21,23 @@ import filepath
 
 mut g_src_loaded := Vector {} as Vector<str>
 mut g_src_overlay := HashMap {} as HashMap<str, str>
+mut g_src_error := ""
 
 pub struct SourceFile:
     pub path: str = ""
     pub text: str = ""
     pub len: int = 0
+    pub nul_at: int = 0 - 1
+end
+
+func has_bom(text: str): bool:
+    ret str.StartsWith(text, "\xEF\xBB\xBF")
+end
+
+func drop_bom(text: str):
+    n := text.Len()
+    p := text as void*
+    _moved := mem.MemMove(p, ((p as i64) + (3 as i64)) as void*, (n - 2) as u64)
 end
 
 pub func New(): SourceFile:
@@ -48,19 +60,46 @@ pub func Load(path: str, sf &: SourceFile): bool:
             sf.path = path
             sf.text = otext
             sf.len = otext.Len()
+            sf.nul_at = 0 - 1
             g_src_loaded.Push(path)
             ret true
         end
     end
-    if not os.Exists(path) or os.IsDir(path):
+    g_src_error = ""
+    if not os.Exists(path):
+        g_src_error = "no such file"
         ret false
     end
+    if os.IsDir(path):
+        g_src_error = "it is a directory"
+        ret false
+    end
+    f := os.Open(path, "rb")
+    if f == null:
+        g_src_error = "permission denied or the file cannot be opened"
+        ret false
+    end
+    f.Close()
+    size := os.FileSize(path)
     text := io.ReadFile(path)
+    mut want := size
+    if has_bom(text):
+        want = size - (3 as i64)
+        drop_bom(text)
+    end
     sf.path = path
     sf.text = text
     sf.len = text.Len()
+    sf.nul_at = 0 - 1
+    if size >= (0 as i64) and want > (sf.len as i64):
+        sf.nul_at = sf.len
+    end
     g_src_loaded.Push(path)
     ret true
+end
+
+pub func ReadError(): str:
+    ret g_src_error
 end
 
 pub func Peek(path: str): str:
@@ -73,7 +112,11 @@ pub func Peek(path: str): str:
     if not os.Exists(path) or os.IsDir(path):
         ret ""
     end
-    ret io.ReadFile(path)
+    text := io.ReadFile(path)
+    if has_bom(text):
+        drop_bom(text)
+    end
+    ret text
 end
 
 pub func LoadedPaths(): Vector<str>:

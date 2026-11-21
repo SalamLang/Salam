@@ -13,8 +13,9 @@ produces binaries for them.
     by construction.
   - The **LLVM backend** (`--backend=llvm`, and the default when the compiler
     has LLVM linked in) is pointer-width aware and emits 32-bit IR for a
-    32-bit `--target` (see below). The i686 and armhf release compilers
-    embed LLVM and LLD, so they use it by default.
+    32-bit `--target` (see below). The Linux i686 and armhf release compilers
+    do not have LLVM linked in (their release readme says so), so there the
+    default is the C backend and the built-in linker.
   - The **native backend** (`--backend=native`) writes i686 and 32-bit ARM
     machine code itself, as well as x86-64, AArch64 and RISC-V 64.
 

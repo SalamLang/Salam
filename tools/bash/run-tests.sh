@@ -974,6 +974,7 @@ fi
 if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
     add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
+    add_job script "tools/en/build-cache" "tools/bash/test-build-cache.sh" "en" "tests/en/tools/build_cache.out"
 fi
 
 if want crash && [ "$(uname -s 2>/dev/null)" = Linux ] && command -v python3 >/dev/null 2>&1; then

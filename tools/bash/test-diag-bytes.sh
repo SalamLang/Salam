@@ -21,11 +21,18 @@ show() {
     if grep -q "$(printf '\033')" out.txt; then
         echo "raw escape byte reached the output"
     fi
+    if grep -q "$(printf '\342\200\256')" out.txt || grep -q "$(printf '\342\201\246')" out.txt; then
+        echo "raw bidi character reached the output"
+    fi
     grep -vE '^ *[0-9]* *\|? *$' out.txt | sed -e 's/^\[[0-9: -]*\]//'
     echo "exit $rc"
 }
 
+printf 'func main:\n    a\342\200\256b := 1\n    println a\342\201\246b\nend\n' >bidi.salam
+
 show check esc.salam --no-color
+show check bidi.salam --no-color
+show check bidi.salam --error-format=json
 show check esc.salam --error-format=json
 show check fa.salam --no-color
 show check fa.salam --error-format=json

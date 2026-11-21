@@ -976,6 +976,12 @@ if want tools; then
     add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
 fi
 
+if want crash && [ "$(uname -s 2>/dev/null)" = Linux ] && command -v python3 >/dev/null 2>&1; then
+    case "$(uname -m 2>/dev/null)" in
+    x86_64 | aarch64) add_job script "crash/en/flow" "tools/bash/test-crash-flush.sh" "en" "tests/en/crash/flow.out" ;;
+    esac
+fi
+
 if want protect; then
     add_job script "protect/en/flow" "tools/bash/test-protect.sh" "en" "tests/en/protect/flow.out"
 fi
@@ -1004,7 +1010,8 @@ if want uiexamples; then
         else
             printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
         fi
-        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
+        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" \
+            --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
         for f in "$dirx"/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
@@ -1535,7 +1542,8 @@ if want page; then
     printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
     printf 'صفحه:\nپایان\n' >"$WORK/page_empty_fa.salam"
     for lang in $LANGS; do
-        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
+        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" \
+            --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
     done
     for lang in $LANGS; do
         for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \

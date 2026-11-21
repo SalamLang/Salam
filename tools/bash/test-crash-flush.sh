@@ -1,7 +1,7 @@
 #!/bin/sh
 # Tests that a program killed by a fatal signal still prints the output it
 # had buffered, says which signal killed it, and still dies by that signal,
-# with stdout in a pipe, on the C and native backends.
+# with stdout in a pipe, on the C, native and LLVM backends.
 
 set -u
 
@@ -44,18 +44,16 @@ func main:
 end
 SRC
 
-for backend in c native; do
+for backend in c native llvm; do
     for prog in segv deep; do
         echo "== $backend $prog"
         if ! "$salam" build "$prog.salam" --backend="$backend" --output="$prog-$backend" --log-level=error >build.txt 2>&1; then
             cat build.txt
             continue
         fi
-        {
-            "./$prog-$backend" 2>err.txt
-            echo $? >rc.txt
-        } | cat >out.txt
-        cat out.txt err.txt
+        sh -c '"./$0" 2>err.txt; echo $? >rc.txt' "$prog-$backend" 2>/dev/null | cat >out.txt
+        grep -v '^Segmentation fault' err.txt >err2.txt
+        cat out.txt err2.txt
         echo "exit $(cat rc.txt)"
     done
 done

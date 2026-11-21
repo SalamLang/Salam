@@ -121,6 +121,11 @@ Parallel runs are deterministic: each file's output is printed in sorted file
 order after it finishes, so two runs produce the same text. Each test file is
 compiled into its own temporary directory, so parallel builds never share state.
 
+A test that crashes the program (a panic, an out of range index, a fatal
+signal) is reported as `--- FAIL: name` with the panic text, and the tests
+after it in the same file still run. With `--interp` the crash fails the file,
+but the remaining tests in that file do not run.
+
 ## Exit codes
 
 - `0`: every selected test passed (skipped files do not fail the run)

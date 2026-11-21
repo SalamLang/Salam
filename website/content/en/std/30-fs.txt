@@ -17,7 +17,7 @@ pkg.intro <<
 <li>Using <code>Exists</code> to mean "is a file". It is true for directories too; combine it with <code>fs.dir.IsDir</code>.</li>
 </ul>
 <p>Times are whole seconds since the start of 1970 (Unix time), as an <code>i64</code>. Every function returns <code>-1</code> when the path does not exist or the system cannot answer.</p>
-<p>Write permissions in octal, such as <code>0o644</code>, meaning the owner reads and writes and everyone else reads. <code>Permissions</code> returns the same digits as an ordinary number, such as <code>644</code>, so that it reads easily. The two are not the same number (<code>0o644</code> is 420), so never pass the result of <code>Permissions</code> back to <code>Chmod</code> unchanged.</p>
+<p>Write permissions in octal, such as <code>0o644</code>, meaning the owner reads and writes and everyone else reads. <code>Permissions</code> returns the mode as that same number, so <code>fs.Permissions(p) == 0o644</code> is true for such a file and <code>Chmod(p, Permissions(p))</code> changes nothing. Printed as an ordinary number it shows in decimal (<code>0o644</code> prints as 420); compare it with an <code>0o</code> literal, or pick the three digits out with <code>(p &gt;&gt; 6) &amp; 7</code>, <code>(p &gt;&gt; 3) &amp; 7</code> and <code>p &amp; 7</code>.</p>
 <h2 id="guide-config">Read a settings file line by line</h2>
 <p><code>ReadLines</code> splits a file at its line breaks and drops a trailing <code>\r</code>, so a file saved on Windows reads the same as one saved on Linux. That makes simple <code>key = value</code> files easy: trim each line, skip blank lines and comments, and split at the first <code>=</code>.</p>
 {{example.fs-guide-config}}
@@ -42,7 +42,7 @@ pkg.intro <<
 <p>An HTTP server usually wants <a href="/std/net/mime/">net.mime</a> instead: its <code>MimeType</code> adds <code>; charset=utf-8</code> to text types and knows web fonts, and the package also parses <code>Content-Type</code> headers and multipart bodies.</p>
 
 <h2 id="guide-private">Keep a secret file private</h2>
-<p>A new file gets the system default permissions, usually <code>644</code>, which lets every account on the machine read it. For tokens, keys and passwords, write the file and then narrow it to <code>0o600</code>. Keep the two notations apart: <code>Chmod</code> takes octal (<code>0o600</code>), while <code>Permissions</code> gives the same digits back as an ordinary number (<code>600</code>). That is why <code>p % 100 == 0</code> below means that the group and everyone else have no rights at all.</p>
+<p>A new file gets the system default permissions, usually <code>644</code>, which lets every account on the machine read it. For tokens, keys and passwords, write the file and then narrow it to <code>0o600</code>. <code>Chmod</code> and <code>Permissions</code> use the same number, so <code>(p &amp; 0o077) == 0</code> below means that the group and everyone else have no rights at all.</p>
 {{example.fs-guide-private}}
 
 <h2 id="guide-rwx">Reading the permission digits</h2>
@@ -67,8 +67,8 @@ pkg.intro <<
 <h2 id="guide-platforms">Platform notes</h2>
 <ul>
 <li><code>CreatedTime</code> is <code>0</code> where the file system does not record a creation time, which is common on Linux. Use <code>ModTime</code> when you need a value that is always there.</li>
-<li>On Linux, macOS and BSD the time functions and <code>Permissions</code> run the system <code>stat</code> command through the shell, with the path quoted. That is quick for a handful of files, but over thousands of files in a loop the process starts add up. <code>Chmod</code> calls the system directly.</li>
-<li>Windows has no Unix permission bits, only a read only flag, so <code>Chmod</code> can only switch that flag, and <code>Permissions</code> returns 292 (<code>0o444</code>) for a read only file and 438 (<code>0o666</code>) otherwise: the octal value, not the digits it gives on Unix. Write permission logic for Unix and test it there.</li>
+<li>The time functions, <code>Permissions</code> and <code>Stat</code> ask the system directly (<code>statx</code> on Linux, <code>stat</code> on Android, macOS and FreeBSD), so they are cheap enough to call in a loop. They follow symbolic links. OpenBSD and NetBSD still run the system <code>stat</code> command through the shell.</li>
+<li>Windows has no Unix permission bits, only a read only flag, so <code>Chmod</code> can only switch that flag (the owner's write bit, <code>0o200</code>), and <code>Permissions</code> returns <code>0o444</code> for a read only file and <code>0o666</code> otherwise, with the execute bits added for directories and programs. Write permission logic for Unix and test it there.</li>
 </ul>
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
@@ -92,7 +92,7 @@ doc.FileInfo.size = The size in bytes.
 doc.FileInfo.mod_time = When it was last changed.
 doc.FileInfo.accessed_time = When it was last read.
 doc.FileInfo.created_time = When it was created.
-doc.FileInfo.permissions = The permissions, as octal digits such as <code>644</code>.
+doc.FileInfo.permissions = The permission bits, the same number <code>Chmod</code> takes, such as <code>0o644</code>.
 doc.FileInfo.exists = True when the path exists (a directory counts); the other fields are 0 when it does not.
 doc.Open = Opens a file to work through it piece by piece; the modes are the same as <a href="/std/os/">os.Open</a>. Returns null when it cannot.
 doc.Close = Closes an open file.
@@ -108,11 +108,11 @@ doc.Size = The size of a file in bytes; -1 when it is missing or is a directory.
 doc.ModTime = When the file's content was last changed, in Unix seconds; -1 when the path does not exist.
 doc.AccessedTime = When the file was last read, in Unix seconds. Many systems update it lazily or not at all (<code>noatime</code>), so do not rely on it.
 doc.CreatedTime = When the file was created, in Unix seconds, or zero where the file system does not keep it.
-doc.Permissions = A file's permissions as their octal digits read as a decimal number, such as <code>644</code>; -1 when the path does not exist. On Windows it returns 292 or 438 instead.
-doc.Chmod = Changes a file's permissions; give them in octal, such as <code>0o644</code>. Returns 0 on success and -1 on failure. On Windows only the read only flag can change.
+doc.Permissions = A file's permission bits (with setuid, setgid and sticky), the same number <code>Chmod</code> takes: <code>0o644</code> for a file only its owner can change. -1 when the path does not exist. On Windows <code>0o444</code> or <code>0o666</code>.
+doc.Chmod = Changes a file's permissions; give them in octal, such as <code>0o644</code>, or pass back what <code>Permissions</code> returned. Returns 0 on success and -1 on failure. On Windows only the read only flag can change.
 doc.Extension = The file's extension with its dot and its original case, such as <code>.JPG</code>; empty when there is none.
 doc.MimeType = The file's MIME type from its extension, ignoring case, for serving it over the web; <code>application/octet-stream</code> for an unknown extension. The file is not opened.
-doc.Stat = Everything about a file at once. On Unix it runs the system <code>stat</code> command four times, so it is not faster than the single calls.
+doc.Stat = Everything about a file at once, from one system call.
 doc.Copy = Copies a file's bytes, replacing the destination; permissions are not copied. 0 or -1.
 doc.Move = Moves a file by renaming it, so it fails (-1) between two disks. <code>fs.dir.Move</code> can copy instead.
 doc.Rename = Renames a file; the same as <code>Move</code>.

@@ -975,7 +975,7 @@ if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
 fi
 
-if want crash && [ "$(uname -s 2>/dev/null)" = Linux ]; then
+if want crash && [ "$(uname -s 2>/dev/null)" = Linux ] && command -v python3 >/dev/null 2>&1; then
     case "$(uname -m 2>/dev/null)" in
     x86_64 | aarch64) add_job script "crash/en/flow" "tools/bash/test-crash-flush.sh" "en" "tests/en/crash/flow.out" ;;
     esac

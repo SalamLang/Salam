@@ -44,6 +44,21 @@ func main:
 end
 SRC
 
+cat >run.py <<'PY'
+import subprocess
+import sys
+
+p = subprocess.run([sys.argv[1]], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+sys.stdout.write(p.stdout.decode("utf-8", "replace"))
+for line in p.stderr.decode("utf-8", "replace").splitlines():
+    if not line.startswith("Segmentation fault"):
+        print(line)
+if p.returncode < 0:
+    print("exit %d" % (128 - p.returncode))
+else:
+    print("exit-code %d" % p.returncode)
+PY
+
 for backend in c native llvm; do
     for prog in segv deep; do
         echo "== $backend $prog"
@@ -51,9 +66,6 @@ for backend in c native llvm; do
             cat build.txt
             continue
         fi
-        sh -c '"./$0" 2>err.txt; echo $? >rc.txt' "$prog-$backend" 2>/dev/null | cat >out.txt
-        grep -v '^Segmentation fault' err.txt >err2.txt
-        cat out.txt err2.txt
-        echo "exit $(cat rc.txt)"
+        python3 -I run.py "./$prog-$backend"
     done
 done

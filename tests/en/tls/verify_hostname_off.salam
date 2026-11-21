@@ -1,0 +1,62 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import ssl
+import tls
+import net.tcp
+import sync
+
+mut tls_port := 0
+mut ready := sync.NewWaitGroup()
+
+func serve():
+    srv := tcp.Bind(0)
+    tls_port = tcp.Port(srv)
+    sync.Done(ready)
+    ctx := ssl.NewServerContext("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    repeat 4:
+        c := tcp.Accept(srv)
+        conn := ssl.Wrap(ctx, c.fd)
+        if ssl.Accept(conn):
+            ssl.Read(conn, 16)
+        end
+        ssl.Close(conn)
+        tcp.Close(c)
+    end
+    ssl.CloseContext(ctx)
+    tcp.CloseServer(srv)
+end
+
+func attempt(label: str, name: str, ca: str, skip_host: bool):
+    mut cfg := tls.NewConfig(name)
+    cfg.ca_file = ca
+    cfg.skip_hostname_check = skip_host
+    mut c := tls.Dial("127.0.0.1", tls_port, cfg)
+    println label + ": " + tls.ConnOk(c)
+    if not tls.ConnOk(c):
+        println "  " + tls.ConnError(c)
+    end
+    tls.Close(c)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(ready)
+    good := "tests/fixtures/ssl/server.crt"
+    attempt("matching name", "127.0.0.1", good, false)
+    attempt("wrong name", "wrong.example", good, false)
+    attempt("wrong name, hostname check off", "wrong.example", good, true)
+    attempt("untrusted chain, hostname check off", "wrong.example", "tests/fixtures/ssl/other.crt", true)
+    join(t)
+end

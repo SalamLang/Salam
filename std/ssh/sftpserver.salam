@@ -139,7 +139,7 @@ func _sftp_perm_bits(value: int): int:
     ret hundreds * 64 + tens * 8 + ones
 end
 
-func _sftp_mode_for(path: str): u32:
+func _sftp_mode_for(path: str, follow: bool): u32:
     is_dir := os.IsDir(path)
     mut perm := 420
     if is_dir:
@@ -149,7 +149,7 @@ func _sftp_mode_for(path: str): u32:
     if dec >= 0:
         perm = _sftp_perm_bits(dec)
     end
-    if _sftp_is_link(path):
+    if not follow and _sftp_is_link(path):
         ret 0xA000 | 511
     end
     if is_dir:
@@ -158,13 +158,13 @@ func _sftp_mode_for(path: str): u32:
     ret (0x8000 | perm) as u32
 end
 
-func _sftp_put_attrs(b &: Buf, path: str, detailed: bool):
+func _sftp_put_attrs(b &: Buf, path: str, detailed: bool, follow: bool):
     info := os.Stat(path)
     mut size := info.size
     if size < 0:
         size = 0
     end
-    mode := _sftp_mode_for(path)
+    mode := _sftp_mode_for(path, follow)
     mut mtime := 0
     if detailed:
         mtime = fs.ModTime(path) as int
@@ -231,10 +231,10 @@ func _sftp_reply_handle(sess &: SrvSession, ch &: SrvChannel, id: u32, handle: s
     FreeBuf(frame)
 end
 
-func _sftp_reply_attrs(sess &: SrvSession, ch &: SrvChannel, id: u32, path: str, detailed: bool):
+func _sftp_reply_attrs(sess &: SrvSession, ch &: SrvChannel, id: u32, path: str, detailed: bool, follow: bool):
     mut body := NewBuf(64)
     BufPutUint32(body, id)
-    _sftp_put_attrs(body, path, detailed)
+    _sftp_put_attrs(body, path, detailed, follow)
     mut frame := _sftp_body(SSH_FXP_ATTRS, body)
     FreeBuf(body)
     _sftp_send_frame(sess, ch, frame)
@@ -283,34 +283,131 @@ func _sftp_virtual(st: SftpSessionState, path: str): str:
     ret _srv_clean_virtual(full)
 end
 
-func _sftp_inside(st: SftpSessionState, phys: str): bool:
-    real := os.RealPath(phys)
-    if real.len() == 0:
-        ret true
-    end
-    if str.Equals(real, st.root):
+func _sftp_under(st: SftpSessionState, real: str): bool:
+    if str.Equals(real, st.root) or str.Equals(st.root, "/"):
         ret true
     end
     ret str.StartsWith(real, st.root + "/")
 end
 
-func _sftp_parent_inside(st: SftpSessionState, phys: str): bool:
-    mut dir := phys
+func _sftp_dir_of(st: SftpSessionState, phys: str): str:
     mut cut := -1
-    mut i := dir.len() - 1
+    mut i := phys.len() - 1
     until i >= 0:
-        if str.CharAt(dir, i) == "/":
+        if str.CharAt(phys, i) == "/":
             cut = i
             break
         end
         i--
     end
     if cut > 0:
-        dir = dir.substr(0, cut)
-    else:
-        dir = st.root
+        ret phys.substr(0, cut)
     end
-    ret _sftp_inside(st, dir)
+    ret st.root
+end
+
+func _sftp_real_inside(st: SftpSessionState, phys: str): bool:
+    real := os.RealPath(phys)
+    ret real.len() > 0 and _sftp_under(st, real)
+end
+
+func _sftp_inside(st: SftpSessionState, phys: str): bool:
+    if os.Exists(phys) or _sftp_is_link(phys):
+        ret _sftp_real_inside(st, phys)
+    end
+    dir := _sftp_dir_of(st, phys)
+    if str.Equals(dir, phys):
+        ret false
+    end
+    ret _sftp_real_inside(st, dir)
+end
+
+func _sftp_parent_inside(st: SftpSessionState, phys: str): bool:
+    ret _sftp_real_inside(st, _sftp_dir_of(st, phys))
+end
+
+func _sftp_entry_inside(st: SftpSessionState, phys: str): bool:
+    if str.Equals(phys, st.root):
+        ret true
+    end
+    ret _sftp_parent_inside(st, phys)
+end
+
+func _sftp_link_target(st: SftpSessionState, link_phys: str, target: str): str:
+    if target.len() == 0:
+        ret ""
+    end
+    parent := os.RealPath(_sftp_dir_of(st, link_phys))
+    if parent.len() == 0 or not _sftp_under(st, parent):
+        ret ""
+    end
+    mut rel := ""
+    if str.Equals(st.root, "/"):
+        rel = parent
+    else if not str.Equals(parent, st.root):
+        rel = parent.substr(st.root.len() + 1, parent.len() - st.root.len() - 1)
+    end
+    base_parts := str.Split(rel, "/")
+    defer base_parts.free()
+    mut base := Vector {} as Vector<str>
+    defer base.free()
+    each p in base_parts:
+        if p.len() > 0:
+            base.push(p)
+        end
+    end
+    mut segs := Vector {} as Vector<str>
+    defer segs.free()
+    if not str.StartsWith(target, "/"):
+        each p in base:
+            segs.push(p)
+        end
+    end
+    target_parts := str.Split(target, "/")
+    defer target_parts.free()
+    mut escaped := false
+    each p in target_parts:
+        if p.len() == 0 or str.Equals(p, "."):
+            continue
+        end
+        if str.Equals(p, ".."):
+            if segs.len() == 0:
+                escaped = true
+            else:
+                _dropped := segs.pop()
+            end
+            continue
+        end
+        segs.push(p)
+    end
+    if escaped:
+        ret ""
+    end
+    mut common := 0
+    until common < base.len() and common < segs.len() and str.Equals(base.get(common), segs.get(common)):
+        common++
+    end
+    mut out := ""
+    mut i := common
+    until i < base.len():
+        out += "../"
+        i++
+    end
+    i = common
+    until i < segs.len():
+        if i > common:
+            out += "/"
+        end
+        out += segs.get(i)
+        i++
+    end
+    if out.len() == 0:
+        ret "."
+    end
+    if str.EndsWith(out, "/"):
+        ret out.substr(0, out.len() - 1)
+    end
+    ret out
 end
 
 func _sftp_find(st: SftpSessionState, handle: str): int:
@@ -566,7 +663,7 @@ func _sftp_op_stat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState,
         _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
         ret
     end
-    _sftp_reply_attrs(sess, ch, id, phys, true)
+    _sftp_reply_attrs(sess, ch, id, phys, true, true)
 end
 
 func _sftp_op_lstat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
@@ -576,11 +673,11 @@ func _sftp_op_lstat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState
         ret
     end
     phys := _sftp_join(st, path)
-    if not _sftp_inside(st, phys) or (not os.Exists(phys) and not _sftp_is_link(phys)):
+    if not _sftp_entry_inside(st, phys) or (not os.Exists(phys) and not _sftp_is_link(phys)):
         _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
         ret
     end
-    _sftp_reply_attrs(sess, ch, id, phys, true)
+    _sftp_reply_attrs(sess, ch, id, phys, true, false)
 end
 
 func _sftp_op_fstat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState, id: u32, r &: Reader):
@@ -599,7 +696,7 @@ func _sftp_op_fstat(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionState
         _sftp_status(sess, ch, id, _SFX_FAILURE, "invalid handle")
         ret
     end
-    _sftp_reply_attrs(sess, ch, id, e.path, true)
+    _sftp_reply_attrs(sess, ch, id, e.path, true, true)
 end
 
 func _sftp_op_setstat(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
@@ -708,7 +805,7 @@ func _sftp_op_readdir(sess &: SrvSession, ch &: SrvChannel, st &: SftpSessionSta
         BufPutStringStr(body, name)
         BufPutStringStr(body, _sftp_longname(name, phys))
         if os.Exists(phys) or _sftp_is_link(phys):
-            _sftp_put_attrs(body, phys, false)
+            _sftp_put_attrs(body, phys, false, false)
         else:
             BufPutUint32(body, 0 as u32)
         end
@@ -729,7 +826,7 @@ func _sftp_op_remove(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState,
         ret
     end
     phys := _sftp_join(st, path)
-    if not _sftp_inside(st, phys):
+    if not _sftp_parent_inside(st, phys):
         _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
         ret
     end
@@ -812,11 +909,11 @@ func _sftp_op_rename(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState,
     end
     old_phys := _sftp_join(st, old_path)
     new_phys := _sftp_join(st, new_path)
-    if not _sftp_inside(st, old_phys) or not _sftp_parent_inside(st, new_phys) or not _sftp_inside(st, new_phys):
+    if not _sftp_parent_inside(st, old_phys) or not _sftp_parent_inside(st, new_phys) or not _sftp_inside(st, new_phys):
         _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
         ret
     end
-    if not os.Exists(old_phys):
+    if not os.Exists(old_phys) and not _sftp_is_link(old_phys):
         _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such file")
         ret
     end
@@ -834,7 +931,7 @@ func _sftp_op_readlink(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionStat
         ret
     end
     phys := _sftp_join(st, path)
-    if not _sftp_inside(st, phys) or not _sftp_is_link(phys):
+    if not _sftp_entry_inside(st, phys) or not _sftp_is_link(phys):
         _sftp_status(sess, ch, id, _SFX_NO_SUCH_FILE, "no such link")
         ret
     end
@@ -843,21 +940,23 @@ func _sftp_op_readlink(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionStat
 end
 
 func _sftp_op_symlink(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionState, id: u32, r &: Reader):
-    link_path := RGetStringAsStr(r)
     target_path := RGetStringAsStr(r)
+    link_path := RGetStringAsStr(r)
     if r.bad:
         _sftp_status(sess, ch, id, _SFX_FAILURE, "bad request")
         ret
     end
     link_phys := _sftp_join(st, link_path)
-    if not _sftp_parent_inside(st, link_phys) or not _sftp_inside(st, link_phys):
+    if str.Equals(link_phys, st.root) or not _sftp_parent_inside(st, link_phys):
         _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
         ret
     end
-    mut rc := _sftp_symlink(target_path, link_phys)
-    if rc != 0:
-        rc = _sftp_symlink(link_path, target_path)
+    target := _sftp_link_target(st, link_phys, target_path)
+    if target.len() == 0:
+        _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
+        ret
     end
+    rc := _sftp_symlink(target, link_phys)
     if rc != 0:
         _sftp_status(sess, ch, id, _SFX_FAILURE, "symlink failed")
         ret
@@ -876,7 +975,7 @@ func _sftp_op_extended(sess &: SrvSession, ch &: SrvChannel, st: SftpSessionStat
         new_path := RGetStringAsStr(r)
         old_phys := _sftp_join(st, old_path)
         new_phys := _sftp_join(st, new_path)
-        if not _sftp_inside(st, old_phys) or not _sftp_parent_inside(st, new_phys):
+        if not _sftp_parent_inside(st, old_phys) or not _sftp_parent_inside(st, new_phys) or not _sftp_inside(st, new_phys):
             _sftp_status(sess, ch, id, _SFX_PERMISSION_DENIED, "permission denied")
             ret
         end

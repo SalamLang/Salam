@@ -1,0 +1,106 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.internal.rawsock
+import os.temp
+import os
+import io
+import filepath
+import time
+import net.tcp
+
+if not SALAM_OS_WINDOWS:
+    extern:
+        func symlink(target: str, path: str): int
+    end
+end
+
+mut web_port := 0
+mut _dir := ""
+
+if SALAM_OS_WINDOWS:
+    func plant(target: str, path: str): bool:
+        _t := target
+        _p := path
+        ret false
+    end
+else:
+    func plant(target: str, path: str): bool:
+        ret symlink(target, path) == 0
+    end
+end
+
+func run_server():
+    mut r := router.NewRouter()
+    router.Static(r, "/s", filepath.Join(_dir, "root"))
+    mut s := http.NewServer(web_port)
+    http.Use(s, r)
+    http.Run(s)
+end
+
+func fetch(path: str): str:
+    sock := rawsock.Connect("127.0.0.1", web_port)
+    rawsock.Send(sock, "GET " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    mut buf := ""
+    until true:
+        chunk := rawsock.Recv(sock, 8192)
+        if chunk.Len() == 0: break end
+        buf += chunk
+    end
+    rawsock.Close(sock)
+    if buf.Len() < 12: ret "none" end
+    at := buf.Find("\r\n\r\n")
+    status := buf.Substr(9, 3)
+    ret status + " " + buf.Substr(at + 4, buf.Len() - at - 4)
+end
+
+func main:
+    dir := filepath.Join(temp.Directory(), "salam_net_http_static_jail_test")
+    os.RemoveAll(dir)
+    _dir = dir
+    os.Mkdir(dir)
+    rootd := filepath.Join(dir, "root")
+    sibd := filepath.Join(dir, "root-sibling")
+    os.Mkdir(rootd)
+    os.Mkdir(sibd)
+    io.WriteFile(filepath.Join(rootd, "index.html"), "index page")
+    io.WriteFile(filepath.Join(rootd, "a.txt"), "inside")
+    io.WriteFile(filepath.Join(dir, "secret.txt"), "outside secret")
+    io.WriteFile(filepath.Join(sibd, "s.txt"), "sibling secret")
+    linked := plant(filepath.Join(dir, "secret.txt"), filepath.Join(rootd, "link.txt"))
+    plant(sibd, filepath.Join(rootd, "sib"))
+    plant(filepath.Join(rootd, "a.txt"), filepath.Join(rootd, "alias.txt"))
+    web_port = tcp.FreePort()
+    _t := spawn(run_server)
+    mut tries := 0
+    mut probe := rawsock.Connect("127.0.0.1", web_port)
+    until not rawsock.Ok(probe) and tries < 300:
+        time.Sleep(10)
+        probe = rawsock.Connect("127.0.0.1", web_port)
+        tries++
+    end
+    rawsock.Close(probe)
+
+    println "plain file: " + fetch("/s/a.txt")
+    println "index by directory: " + fetch("/s/")
+    println "nul truncation: " + fetch("/s/index.html%00.png").Substr(0, 3)
+    println "nul truncation, lower case: " + fetch("/s/a.txt%00").Substr(0, 3)
+    if linked:
+        println "link out of the root: " + fetch("/s/link.txt").Substr(0, 3)
+        println "link to a sibling directory: " + fetch("/s/sib/s.txt").Substr(0, 3)
+        println "link inside the root: " + fetch("/s/alias.txt")
+    end
+    os.RemoveAll(dir)
+end

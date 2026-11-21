@@ -231729,6 +231729,413 @@ pub comment: str = ""
 @fa "شناسه خارجی"
 pub external_id: str = ""
 end
+@en "nav"
+@fa "ناوبری"
+package nav
+import str
+@en "Route"
+@fa "مسیر"
+pub struct Route:
+@en "path"
+@fa "نشانی"
+pub path: str = "/"
+@en "query"
+@fa "پرسمان"
+pub query: str = ""
+@en "pattern"
+@fa "الگو"
+pub pattern: str = ""
+end
+@en "History"
+@fa "تاریخچه"
+pub struct History:
+@en "entries"
+@fa "مدخل ها"
+pub entries: Vector<str> = Vector {}
+@en "index"
+@fa "جایگاه"
+pub index: int = 0
+end
+func _ch(s: str, i: int): str:
+ret str.Substr(s, i, 1)
+end
+func _skip_slashes(s: str, from: int): int:
+mut i := from
+n := s.Len()
+until i < n and str.Equals(_ch(s, i), "/"):
+i++
+end
+ret i
+end
+func _segments(s: str): Vector<str>:
+mut out := Vector {} as Vector<str>
+n := s.Len()
+mut i := _skip_slashes(s, 0)
+until i < n:
+mut e := str.IndexFrom(s, "/", i)
+if e < 0:
+e = n
+end
+out.Push(str.Substr(s, i, e - i))
+i = _skip_slashes(s, e)
+end
+ret out
+end
+func _take(v: Vector<str>, n: int): Vector<str>:
+mut out := Vector {} as Vector<str>
+mut i := 0
+until i < n and i < v.Len():
+out.Push(v.Get(i))
+i++
+end
+ret out
+end
+func _is_splat(seg: str): bool:
+ret str.StartsWith(seg, "*")
+end
+func _is_param(seg: str): bool:
+ret str.StartsWith(seg, ":")
+end
+func _is_optional(seg: str): bool:
+ret _is_param(seg) and str.EndsWith(seg, "?")
+end
+func _param_name(seg: str): str:
+if _is_splat(seg):
+ret seg.Len() > 1 ? str.Substr(seg, 1, seg.Len() - 1) : "*"
+end
+mut n := seg.Len() - 1
+if _is_optional(seg):
+n--
+end
+ret str.Substr(seg, 1, n)
+end
+func _hex(c: str): int:
+i := str.IndexFrom("0123456789abcdef0123456789ABCDEF", c, 0)
+if i < 0:
+ret 0 - 1
+end
+ret i % 16
+end
+func _escaped(code: int): str:
+if code == 47:
+ret "/"
+end
+if code == 37:
+ret "%"
+end
+if code == 38:
+ret "&"
+end
+if code == 61:
+ret "="
+end
+if code == 35:
+ret "#"
+end
+if code == 63:
+ret "?"
+end
+if code == 43:
+ret "+"
+end
+ret ""
+end
+func _join_rest(segs: Vector<str>, from: int): str:
+mut out := ""
+mut i := from
+until i < segs.Len():
+if i > from:
+out += "/"
+end
+out += segs.Get(i)
+i++
+end
+ret out
+end
+func _capture(pattern: str, path: str, name: str, value &: str): bool:
+ps := _segments(pattern)
+xs := _segments(path)
+mut i := 0
+until i < ps.Len():
+p := ps.Get(i)
+if _is_splat(p):
+if str.Equals(_param_name(p), name):
+value = _join_rest(xs, i)
+end
+ret true
+end
+if i >= xs.Len():
+if not _is_optional(p):
+ret false
+end
+else _is_param(p):
+if str.Equals(_param_name(p), name):
+value = xs.Get(i)
+end
+else not str.Equals(p, xs.Get(i)):
+ret false
+end
+i++
+end
+ret xs.Len() <= ps.Len()
+end
+@en "Unescape"
+@fa "بازگشایی"
+pub func Unescape(s: str): str:
+if str.IndexFrom(s, "%", 0) < 0:
+ret s
+end
+mut out := ""
+n := s.Len()
+mut i := 0
+mut start := 0
+until i < n:
+if str.Equals(_ch(s, i), "%") and i + 2 < n:
+hi := _hex(_ch(s, i + 1))
+lo := _hex(_ch(s, i + 2))
+if hi >= 0 and lo >= 0:
+rep := _escaped(hi * 16 + lo)
+if rep.Len() > 0:
+out += str.Substr(s, start, i - start)
+out += rep
+i += 3
+start = i
+continue
+end
+end
+end
+i++
+end
+out += str.Substr(s, start, n - start)
+ret out
+end
+@en "Normalize"
+@fa "یکسان سازی"
+pub func Normalize(path: str): str:
+segs := _segments(path)
+mut keep := Vector {} as Vector<str>
+each s in segs:
+if str.Equals(s, ".."):
+keep = _take(keep, keep.Len() - 1)
+else not str.Equals(s, "."):
+keep.Push(s)
+end
+end
+ret "/" + _join_rest(keep, 0)
+end
+@en "SplitUrl"
+@fa "جداسازی نشانی"
+pub func SplitUrl(url: str, path &: str, query &: str):
+mut u := url
+h := str.IndexFrom(u, "#", 0)
+if h >= 0:
+u = str.Substr(u, 0, h)
+end
+q := str.IndexFrom(u, "?", 0)
+if q >= 0:
+query = str.Substr(u, q + 1, u.Len() - q - 1)
+path = str.Substr(u, 0, q)
+else:
+query = ""
+path = u
+end
+end
+@en "Resolve"
+@fa "حل نشانی"
+pub func Resolve(current: str, target: str): str:
+if target.Len() == 0:
+ret current
+end
+mut cpath := ""
+mut cquery := ""
+SplitUrl(current, cpath, cquery)
+if str.StartsWith(target, "?"):
+ret Normalize(cpath) + target
+end
+mut tpath := ""
+mut tquery := ""
+SplitUrl(target, tpath, tquery)
+mut full := tpath
+if not str.StartsWith(tpath, "/"):
+full = cpath + "/" + tpath
+end
+mut out := Normalize(full)
+if tquery.Len() > 0:
+out += "?" + tquery
+end
+ret out
+end
+@en "Match"
+@fa "تطبیق"
+pub func Match(pattern: str, path: str): bool:
+mut v := ""
+ret _capture(pattern, path, "", v)
+end
+@en "Param"
+@fa "پارامتر"
+pub func Param(pattern: str, path: str, name: str): str:
+mut v := ""
+if not _capture(pattern, path, name, v):
+ret ""
+end
+ret Unescape(v)
+end
+@en "Query"
+@fa "مقدار پرسمان"
+pub func Query(query: str, name: str): str:
+n := query.Len()
+mut i := 0
+until i < n:
+mut e := str.IndexFrom(query, "&", i)
+if e < 0:
+e = n
+end
+pair := str.Substr(query, i, e - i)
+sep := str.IndexFrom(pair, "=", 0)
+key := sep < 0 ? pair : str.Substr(pair, 0, sep)
+if str.Equals(Unescape(str.Replace(key, "+", " ")), name):
+if sep < 0:
+ret ""
+end
+ret Unescape(str.Replace(str.Substr(pair, sep + 1, pair.Len() - sep - 1), "+", " "))
+end
+i = e + 1
+end
+ret ""
+end
+@en "Rank"
+@fa "رتبه"
+pub func Rank(pattern: str): int:
+segs := _segments(pattern)
+mut r := segs.Len() * 4
+each s in segs:
+if _is_splat(s):
+r -= 5
+else _is_optional(s):
+r++
+else _is_param(s):
+r += 2
+else:
+r += 3
+end
+end
+ret r
+end
+@en "IsInt"
+@fa "عدد صحیح است"
+pub func IsInt(s: str): bool:
+n := s.Len()
+mut i := str.StartsWith(s, "-") ? 1 : 0
+if i >= n:
+ret false
+end
+until i < n:
+if str.IndexFrom("0123456789", _ch(s, i), 0) < 0:
+ret false
+end
+i++
+end
+ret true
+end
+@en "Href"
+@fa "نشانی صفحه"
+pub func Href(hash: bool, base: str, path: str): str:
+if hash:
+ret "#" + path
+end
+mut b := base
+if str.EndsWith(b, "/"):
+b = str.Substr(b, 0, b.Len() - 1)
+end
+ret b + path
+end
+@en "StripBase"
+@fa "برداشتن پایه"
+pub func StripBase(base: str, path: str): str:
+mut b := base
+if str.EndsWith(b, "/"):
+b = str.Substr(b, 0, b.Len() - 1)
+end
+if b.Len() == 0 or str.Equals(path, b):
+ret b.Len() == 0 ? Normalize(path) : "/"
+end
+if str.StartsWith(path, b + "/"):
+ret Normalize(str.Substr(path, b.Len(), path.Len() - b.Len()))
+end
+ret Normalize(path)
+end
+@en "NewHistory"
+@fa "تاریخچه جدید"
+pub func NewHistory(start: str): History:
+mut h := History {}
+h.entries.Push(start)
+h.index = 0
+ret h
+end
+@en "Current"
+@fa "کنونی"
+pub func Current(h: History): str:
+if h.index < 0 or h.index >= h.entries.Len():
+ret "/"
+end
+ret h.entries.Get(h.index)
+end
+@en "Push"
+@fa "افزودن"
+pub func Push(h &: History, path: str):
+h.entries = _take(h.entries, h.index + 1)
+h.entries.Push(path)
+h.index = h.entries.Len() - 1
+end
+@en "Replace"
+@fa "جایگزینی"
+pub func Replace(h &: History, path: str):
+if h.index < 0 or h.index >= h.entries.Len():
+Push(h, path)
+ret
+end
+h.entries.Set(h.index, path)
+end
+@en "CanBack"
+@fa "عقب ممکن"
+pub func CanBack(h: History): bool:
+ret h.index > 0
+end
+@en "CanForward"
+@fa "جلو ممکن"
+pub func CanForward(h: History): bool:
+ret h.index + 1 < h.entries.Len()
+end
+@en "Back"
+@fa "عقب"
+pub func Back(h &: History): bool:
+if h.index <= 0:
+ret false
+end
+h.index--
+ret true
+end
+@en "Forward"
+@fa "جلو"
+pub func Forward(h &: History): bool:
+if h.index + 1 >= h.entries.Len():
+ret false
+end
+h.index++
+ret true
+end
+@en "Reset"
+@fa "بازنشانی"
+pub func Reset(h &: History, path: str):
+h.entries.Clear()
+h.entries.Push(path)
+h.index = 0
+end
+@en "Depth"
+@fa "ژرفا"
+pub func Depth(h: History): int:
+ret h.index + 1
+end
 @en "net/censor"
 @fa "سانسورشکن"
 package censor

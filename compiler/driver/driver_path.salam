@@ -109,6 +109,104 @@ func scratch_dir(): str:
     ret dir
 end
 
+if SALAM_OS_WINDOWS:
+    func lock_dir_open(path: str): int:
+        ret -1
+    end
+
+    func lock_fd_take(fd: int): bool:
+        ret true
+    end
+
+    func lock_fd_drop(fd: int):
+        ret
+    end
+else:
+    func lock_dir_open(path: str): int:
+        mut flags := 0o100 | 2 | 0o2000000
+        if SALAM_OS_MAC:
+            flags = 0x200 | 2 | 0x1000000
+        end
+        ret open(path, flags, 0o600)
+    end
+
+    func lock_fd_take(fd: int): bool:
+        ret flock(fd, 2) == 0
+    end
+
+    func lock_fd_drop(fd: int):
+        _u := flock(fd, 8)
+        _c := close(fd)
+    end
+end
+
+func lock_scratch(scratch: str): int:
+    ret lock_scratch_named(scratch, ".build.lock")
+end
+
+func unlock_scratch(fd: int):
+    if fd >= 0:
+        lock_fd_drop(fd)
+    end
+end
+
+func abs_of(p: str): str:
+    if pth.PathIsAbs(p):
+        ret pth.PathNormalize(p)
+    end
+    ret pth.PathNormalize(pth.PathJoin(os.Cwd(), p))
+end
+
+func entry_key(entry: str): str:
+    mut h1 := 2166136261 as u64
+    mut h2 := 5381 as u64
+    repeat str.Len(entry) in i:
+        b := byte_at(entry, i) as u64
+        h1 = ((h1 ^ b) * (16777619 as u64)) & (4294967295 as u64)
+        h2 = ((h2 * (33 as u64)) + b) & (4294967295 as u64)
+    end
+    ret str.FromInt(h1 as i64) + "-" + str.FromInt(h2 as i64)
+end
+
+func scratch_for(opt &: Dr): str:
+    if str.Len(os.Env("SALAM_BUILD_DIR")) > 0 or opt.inputs.Len() == 0:
+        ret scratch_dir()
+    end
+    base := scratch_dir()
+    key := entry_key(abs_of(opt.inputs.Get(0)))
+    claim := lock_scratch_named(base, ".claim.lock")
+    owner := pth.PathJoin(base, ".owner")
+    mut cur := ""
+    if os.Exists(owner):
+        cur = os.ReadFile(owner)
+    end
+    mut dir := base
+    if str.Len(cur) == 0 or str.Equals(cur, key):
+        if not str.Equals(cur, key):
+            _w := os.WriteFile(owner, key)
+        end
+    else:
+        dir = pth.PathJoin(base, key)
+        if os.MkdirAll(dir) != 0:
+            dir = base
+        end
+    end
+    unlock_scratch(claim)
+    ret dir
+end
+
+func lock_scratch_named(scratch: str, name: str): int:
+    fd := lock_dir_open(pth.PathJoin(scratch, name))
+    if fd < 0:
+        ret -1
+    end
+    if not lock_fd_take(fd):
+        lock_fd_drop(fd)
+        ret -1
+    end
+    ret fd
+end
+
 func manifest_path(scratch: str): str:
     ret pth.PathJoin(scratch, "salam_build.manifest")
 end

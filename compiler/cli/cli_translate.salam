@@ -16,6 +16,7 @@ package cli
 import os
 import io
 import str
+import os.process
 
 include pth "../sal_path.salam"
 include dr "../driver/driver.salam"
@@ -61,6 +62,8 @@ mut tr_pkg_en := Vector {} as Vector<str>
 mut tr_pkg_fa := Vector {} as Vector<str>
 mut tr_pkg_dir := Vector {} as Vector<str>
 mut tr_core_idx := 0 - 1
+mut tr_ovr_src := Vector {} as Vector<str>
+mut tr_ovr_dst := Vector {} as Vector<str>
 
 struct TrBind:
     pub name: str = ""
@@ -77,6 +80,7 @@ struct TrCtx:
     pub fallback: int = 0
     pub rewrite: bool = false
     pub stdlib_root: str = ""
+    pub stdlib_arg: str = ""
     pub total: int = 0
     pub changed: int = 0
     pub ok: int = 0
@@ -187,7 +191,7 @@ func tr_ffi_names(toks: tok.TokenStream, n: int): Vector<str>:
     ret out
 end
 
-func tr_safe_name(targetpack: int, name: str): str:
+func tr_safe_name_raw(targetpack: int, name: str): str:
     mut out := targetpack == lp.LP_FA ? nt.TranslateIdentifierEnToFa(name) : nt.TranslateIdentifierFaToEn(name)
     if targetpack == lp.LP_FA and str.Contains(out, " "):
         parts := str.Split(out, " ")
@@ -206,6 +210,64 @@ func tr_safe_name(targetpack: int, name: str): str:
         out += "_"
     end
     ret out
+end
+
+func tr_safe_name(targetpack: int, name: str): str:
+    repeat tr_ovr_src.Len() in i:
+        if str.Equals(tr_ovr_src.Get(i), name):
+            ret tr_ovr_dst.Get(i)
+        end
+    end
+    ret tr_safe_name_raw(targetpack, name)
+end
+
+func tr_has_str(items: Vector<str>, v: str): bool:
+    repeat items.Len() in i:
+        if str.Equals(items.Get(i), v):
+            ret true
+        end
+    end
+    ret false
+end
+
+func tr_build_overrides(targetpack: int, names: Vector<str>):
+    tr_ovr_src.Clear()
+    tr_ovr_dst.Clear()
+    mut srcs := Vector {} as Vector<str>
+    defer srcs.Free()
+    mut raws := Vector {} as Vector<str>
+    defer raws.Free()
+    each nm in names:
+        if not tr_has_str(srcs, nm):
+            srcs.Push(nm)
+            raws.Push(tr_safe_name_raw(targetpack, nm))
+        end
+    end
+    mut taken := Vector {} as Vector<str>
+    defer taken.Free()
+    repeat srcs.Len() in i:
+        if not tr_has_str(taken, raws.Get(i)):
+            taken.Push(raws.Get(i))
+        end
+    end
+    mut used := Vector {} as Vector<str>
+    defer used.Free()
+    repeat srcs.Len() in i:
+        raw := raws.Get(i)
+        if not tr_has_str(used, raw):
+            used.Push(raw)
+            continue
+        end
+        mut k := 2
+        mut cand := raw + "_" + k
+        until tr_has_str(taken, cand) or tr_has_str(used, cand):
+            k++
+            cand = raw + "_" + k
+        end
+        used.Push(cand)
+        tr_ovr_src.Push(srcs.Get(i))
+        tr_ovr_dst.Push(cand)
+    end
 end
 
 func tr_type_word(targetpack: int, name: str): str:
@@ -1359,6 +1421,23 @@ func tr_ensure_dir(path: str):
     end
 end
 
+func tr_check_clean(path: str, lang: str, stdlib_arg: str): bool:
+    mut exe := ""
+    if not sm.ExePath(exe):
+        ret true
+    end
+    mut cmd := process.NewCommand(exe)
+    cmd.Arg("check")
+    cmd.Arg(path)
+    cmd.Arg("--lang=" + lang)
+    cmd.Arg("--no-color")
+    if str.Len(stdlib_arg) > 0:
+        cmd.Arg("--stdlib-path=" + stdlib_arg)
+    end
+    r := process.RunCommand(cmd, "", 120000)
+    ret r.started and r.status.ReturnCode() == 0
+end
+
 func translate_one_file(c &: TrCtx, src_path: str, dst_path: str):
     mut sfile := src.New()
     if not src.Load(src_path, sfile):
@@ -1399,6 +1478,10 @@ func translate_one_file(c &: TrCtx, src_path: str, dst_path: str):
     end
     c.changed++
     println co.Format2(i18.Tr("translated %s -> %s"), co.ArgStr(src_path), co.ArgStr(dst_path))
+    if tr_check_clean(src_path, lp.Code(srcpack), c.stdlib_arg) and not tr_check_clean(dst_path, lp.Code(c.target), c.stdlib_arg):
+        io.EPrintln(co.Format1(i18.Tr("the translated file '%s' does not compile, run 'salam check' on it for the errors"), co.ArgStr(dst_path)))
+        c.errors++
+    end
 end
 
 func translate_walk(c &: TrCtx, src_dir: str, dst_dir: str):
@@ -1492,6 +1575,7 @@ func translate_cmd(opt &: dr.Dr): int:
     c.fallback = fallback
     c.rewrite = opt.translate_rewrite
     c.stdlib_root = tr_stdlib_root(opt)
+    c.stdlib_arg = opt.stdlib_path
     single_input := inputs.Len() == 1
     repeat inputs.Len() in idx:
         p := inputs.Get(idx)
@@ -1582,6 +1666,7 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
     mut const_last := 0
     names := tr_declared_names(toks, n)
     defer names.Free()
+    tr_build_overrides(targetpack, names)
     method_names := tr_method_names(toks, n)
     defer method_names.Free()
     comp_names := tr_component_names(toks, n)

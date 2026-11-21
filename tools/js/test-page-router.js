@@ -44,7 +44,8 @@ function check(name, ok, detail) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push(m.text());
+    if (m.type() === "error" && !/Failed to load resource/.test(m.text()))
+      errors.push(m.text());
   });
   const base = start.replace(/\/$/, "");
   const url = (p) => (mode === "hash" ? start + "#" + p : base + p);

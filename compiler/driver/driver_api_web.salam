@@ -31,6 +31,40 @@ func ui_web_only(lgr: lg.Logger, opt: Dr): bool:
     ret false
 end
 
+func spa_htaccess(base: str, html_name: str): str:
+    mut b := base
+    if not str.EndsWith(b, "/"):
+        b += "/"
+    end
+    mut t := "# Written by salam for a page router in history mode: every path that\n"
+    t += "# is not a file or a folder gets the app, so /users/3 loads it.\n"
+    t += "<IfModule mod_rewrite.c>\n"
+    t += "    RewriteEngine On\n"
+    t += "    RewriteBase " + b + "\n"
+    t += "    RewriteRule ^" + str.Replace(html_name, ".", "\\.") + "$ - [L]\n"
+    t += "    RewriteCond %{REQUEST_FILENAME} !-f\n"
+    t += "    RewriteCond %{REQUEST_FILENAME} !-d\n"
+    t += "    RewriteRule . " + b + html_name + " [L]\n"
+    t += "</IfModule>\n"
+    ret t
+end
+
+func write_spa_files(lgr &: lg.Logger, html_path: str):
+    if not lo.RoutesActive() or lo.RoutesHash():
+        ret
+    end
+    dir := dir_of(html_path)
+    target := join_path2(str.Len(dir) > 0 ? dir : ".", ".htaccess")
+    if os.Exists(target):
+        old := io.ReadFile(target)
+        if not str.Contains(old, "Written by salam for a page router"):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(i18.Tr("%s exists and was not written by salam; add a fallback to index.html yourself for history mode routes"), co.ArgStr(target)))
+            ret
+        end
+    end
+    _w := write_file(lgr, target, spa_htaccess(lo.RoutesBase(), base_name(html_path)))
+end
+
 func serve_index_wants_spa(dir: str): bool:
     idx := join_path2(dir, "index.html")
     if not os.Exists(idx) or os.IsDir(idx):
@@ -124,6 +158,8 @@ pub func LayoutBuild(opt &: Dr): int:
     mut charsets := Vector {} as Vector<str>
     mut viewports := Vector {} as Vector<str>
     mut body_attrs := Vector {} as Vector<str>
+    mut routers := Vector {} as Vector<str>
+    defer routers.Free()
     defer modules.Free()
     defer htmls.Free()
     defer csss.Free()
@@ -235,6 +271,7 @@ pub func LayoutBuild(opt &: Dr): int:
         charsets.Push(r.charset)
         viewports.Push(r.viewport)
         body_attrs.Push(r.body_attr)
+        routers.Push(r.router)
         sm.Free(s)
         at.FreeAst(a)
     end
@@ -266,9 +303,13 @@ pub func LayoutBuild(opt &: Dr): int:
         r.charset = charsets.Get(oi)
         r.viewport = viewports.Get(oi)
         r.body_attr = body_attrs.Get(oi)
+        r.router = routers.Get(oi)
         mut html_path := mod + ".html"
         if not multi and str.Len(opt.output) > 0:
             html_path = opt.output
+        end
+        if not multi:
+            write_spa_files(lgr, html_path)
         end
         if opt.inline_mode:
             _w := write_file(lgr, html_path, lo.Document(r, true, "", "", minify_ws))
@@ -280,7 +321,7 @@ pub func LayoutBuild(opt &: Dr): int:
                 mcss += r.css
             end
             if str.Len(r.js) > 0:
-                if str.Len(mjs) > 0:
+                if str.Len(mjs) > 0 and not str.EndsWith(str.TrimRight(mjs), ";"):
                     mjs += minify_ws ? ";" : ";\n"
                 end
                 mjs += r.js
@@ -501,6 +542,9 @@ pub func Web(opt &: Dr): int:
             if not write_file(lgr, html_path, lo.Document(r, true, "", "", minify_ws)):
                 rc = 2
             end
+        end
+        if rc == 0:
+            write_spa_files(lgr, html_path)
         end
         if rc == 0:
             lg.Log(

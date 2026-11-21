@@ -1,0 +1,1057 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+import nav
+import os
+import io
+
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include at "../ast.salam"
+include tok "../token.salam"
+
+mut g_lo_routes_on := false
+mut g_lo_routes_hash := false
+mut g_lo_routes_base := ""
+mut g_lo_routes_web := false
+
+struct LoRoute:
+    pub pattern: str = ""
+    pub comp: str = ""
+    pub node: int = 0
+    pub guard: int = 0 - 1
+    pub redirect: int = 0 - 1
+    pub title: int = 0 - 1
+    pub rank: int = 0
+end
+
+struct LoRouteNames:
+    pub fa: bool = false
+    pub pkg: str = "nav"
+    pub route_t: str = "Route"
+    pub path: str = "path"
+    pub query: str = "query"
+    pub pattern: str = "pattern"
+    pub match_f: str = "Match"
+    pub param_f: str = "Param"
+    pub param_int_f: str = "ParamInt"
+    pub is_int_f: str = "IsInt"
+    pub split_f: str = "SplitUrl"
+    pub norm_f: str = "Normalize"
+    pub resolve_f: str = "Resolve"
+    pub query_f: str = "Query"
+    pub new_hist_f: str = "NewHistory"
+    pub push_f: str = "Push"
+    pub replace_f: str = "Replace"
+    pub back_f: str = "Back"
+    pub forward_f: str = "Forward"
+    pub current_f: str = "Current"
+    pub len: str = "Len"
+    pub route: str = "route"
+    pub go: str = "go"
+    pub replace: str = "replace"
+    pub back: str = "go_back"
+    pub forward: str = "go_forward"
+    pub route_param: str = "route_param"
+    pub route_query: str = "route_query"
+    pub sep: str = ", "
+    pub t_str: str = "str"
+    pub t_int: str = "int"
+end
+
+func lo_rt_names(pack: lp.Langpack): LoRouteNames:
+    mut n := LoRouteNames {}
+    if not str.Equals(lp.Code(pack), "fa"):
+        ret n
+    end
+    zw := "\xE2\x80\x8C"
+    n.fa = true
+    n.pkg = "ناوبری"
+    n.route_t = "مسیر"
+    n.path = "نشانی"
+    n.query = "پرسمان"
+    n.pattern = "الگو"
+    n.match_f = "تطبیق"
+    n.param_f = "پارامتر"
+    n.param_int_f = "پارامتر عددی"
+    n.is_int_f = "عدد صحیح است"
+    n.split_f = "جداسازی نشانی"
+    n.norm_f = "یکسان سازی"
+    n.resolve_f = "حل نشانی"
+    n.query_f = "مقدار پرسمان"
+    n.new_hist_f = "تاریخچه جدید"
+    n.push_f = "افزودن"
+    n.replace_f = "جایگزینی"
+    n.back_f = "عقب"
+    n.forward_f = "جلو"
+    n.current_f = "کنونی"
+    n.len = "طول"
+    n.route = "مسیر" + zw + "کنونی"
+    n.go = "برو"
+    n.replace = "جایگزین" + zw + "کن"
+    n.back = "برگرد"
+    n.forward = "پیش" + zw + "برو"
+    n.route_param = "پارامتر" + zw + "مسیر"
+    n.route_query = "پرسمان" + zw + "مسیر"
+    n.sep = "، "
+    n.t_str = "رشته"
+    n.t_int = "صحیح"
+    ret n
+end
+
+func lo_rt_quote(s: str): str:
+    ret "\"" + str.Replace(str.Replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
+end
+
+func lo_rt_lit(a &: at.Ast, nid: int): str:
+    if nid == 0:
+        ret ""
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
+        ret n.value_str
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        ret n.name
+    end
+    ret ""
+end
+
+func lo_rt_error(log: lg.Logger, a &: at.Ast, nid: int, help: str, msg: str):
+    n := at.Get(a, nid)
+    lg.LogAtHelp(log, lg.PH_DRIVER, lg.LOG_ERROR, g_lo_root_file, n.begin_line as int, n.begin_col as int, help, msg)
+end
+
+func lo_rt_attr(a &: at.Ast, el: int, name: str): int:
+    repeat at.ChildCount(a, el) in i:
+        c := at.Child(a, el, i)
+        cn := at.Get(a, c)
+        if cn.kind == at.AST_LAYOUT_ATTR and str.Equals(cn.name, name):
+            ret c
+        end
+    end
+    ret 0
+end
+
+func lo_rt_find_comp(a &: at.Ast, prog: int, name: str): int:
+    repeat at.ChildCount(a, prog) in i:
+        c := at.Child(a, prog, i)
+        cn := at.Get(a, c)
+        if cn.kind == at.AST_LAYOUT_COMPONENT and str.Equals(cn.name, name):
+            ret c
+        end
+    end
+    ret 0
+end
+
+func lo_rt_is_int_type(t: str): bool:
+    ret str.Equals(t, "int") or str.Equals(t, "i64") or str.Equals(t, "i32") or str.Equals(t, "صحیح") or str.Equals(t, "صحیح۶۴") or str.Equals(t, "صحیح۳۲")
+end
+
+func lo_rt_is_str_type(t: str): bool:
+    ret str.Equals(t, "str") or str.Equals(t, "رشته")
+end
+
+func lo_rt_pattern_params(pattern: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    n := pattern.Len()
+    until i < n:
+        mut e := str.IndexFrom(pattern, "/", i)
+        if e < 0:
+            e = n
+        end
+        seg := str.Substr(pattern, i, e - i)
+        if str.StartsWith(seg, ":"):
+            mut nm := str.Substr(seg, 1, seg.Len() - 1)
+            if str.EndsWith(nm, "?"):
+                nm = str.Substr(nm, 0, nm.Len() - 1)
+            end
+            out.Push(nm)
+        else str.StartsWith(seg, "*") and seg.Len() > 1:
+            out.Push(str.Substr(seg, 1, seg.Len() - 1))
+        end
+        i = e + 1
+    end
+    ret out
+end
+
+func lo_rt_optional_names(pattern: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    n := pattern.Len()
+    until i < n:
+        mut e := str.IndexFrom(pattern, "/", i)
+        if e < 0:
+            e = n
+        end
+        seg := str.Substr(pattern, i, e - i)
+        if str.StartsWith(seg, ":") and str.EndsWith(seg, "?") and seg.Len() > 2:
+            out.Push(str.Substr(seg, 1, seg.Len() - 2))
+        end
+        i = e + 1
+    end
+    ret out
+end
+
+func lo_rt_has(v: Vector<str>, s: str): bool:
+    each x in v:
+        if str.Equals(x, s):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_rt_subst(a &: at.Ast, nid: int, exprs: Vector<int>): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER and str.StartsWith(n.name, "__salam_rx_"):
+        repeat exprs.Len() in k:
+            if str.Equals(n.name, "__salam_rx_" + co.I64Toa(k as i64)):
+                ret at.Clone(a, exprs.Get(k))
+            end
+        end
+        ret nid
+    end
+    mut m := at.Get(a, nid)
+    m.a = lo_rt_subst(a, n.a, exprs)
+    m.b = lo_rt_subst(a, n.b, exprs)
+    m.c = lo_rt_subst(a, n.c, exprs)
+    m.d = lo_rt_subst(a, n.d, exprs)
+    repeat n.list.Len() in i:
+        m.list.Set(i, lo_rt_subst(a, n.list.Get(i), exprs))
+    end
+    at.Put(a, nid, m)
+    ret nid
+end
+
+func lo_rt_is_link(name: str): bool:
+    ret str.Equals(name, "link") or str.Equals(name, "Link") or str.Equals(name, "a") or str.Equals(name, "پیوند")
+end
+
+func lo_rt_is_outlet(name: str): bool:
+    ret str.Equals(name, "Outlet") or str.Equals(name, "outlet") or str.Equals(name, "نمای مسیر")
+end
+
+func lo_rt_href_expr(a &: at.Ast, val: int): int:
+    lit := at.Get(a, val)
+    if lit.kind == at.AST_LITERAL and lit.value_kind == tok.TV_STRING:
+        target := lit.value_str
+        if str.StartsWith(target, "/") or str.StartsWith(target, "?"):
+            ret mk_str(a, nav.Href(g_lo_routes_hash, g_lo_routes_base, target), val)
+        end
+        ret val
+    end
+    if g_lo_routes_hash:
+        ret lo_cat(a, mk_str(a, "#", val), val, val)
+    end
+    if g_lo_routes_base.Len() > 0:
+        mut b := g_lo_routes_base
+        if str.EndsWith(b, "/"):
+            b = str.Substr(b, 0, b.Len() - 1)
+        end
+        ret lo_cat(a, mk_str(a, b, val), val, val)
+    end
+    ret val
+end
+
+func lo_rt_walk(log: lg.Logger, a &: at.Ast, nid: int, outlets &: int, errs &: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ELEMENT:
+        if lo_rt_is_outlet(n.name):
+            outlets++
+            if not g_lo_routes_on:
+                lo_rt_error(
+                    log, a, nid, i18.Tr("add a 'routes:' block that maps paths to components, for example \"/\" : Home"),
+                    i18.Tr("E257: 'Outlet' shows the component of the current route, but this program has no routes block")
+                )
+                errs++
+            else:
+                at.SetName(a, nid, "__salam_outlet")
+            end
+        else lo_rt_is_link(n.name):
+            if str.Equals(n.name, "Link"):
+                at.SetName(a, nid, "link")
+            end
+            repeat at.ChildCount(a, nid) in i:
+                c := at.Child(a, nid, i)
+                cn := at.Get(a, c)
+                if cn.kind == at.AST_LAYOUT_ATTR and (str.Equals(cn.name, "to") or str.Equals(cn.name, "مقصد")) and cn.a != 0:
+                    mut m := at.Get(a, c)
+                    m.name = str.Equals(cn.name, "to") ? "url" : "نشانی"
+                    m.a = lo_rt_href_expr(a, cn.a)
+                    at.Put(a, c, m)
+                end
+            end
+        end
+    end
+    if n.kind == at.AST_LAYOUT_ATTR:
+        ret
+    end
+    lo_rt_walk(log, a, n.a, outlets, errs)
+    lo_rt_walk(log, a, n.b, outlets, errs)
+    lo_rt_walk(log, a, n.c, outlets, errs)
+    each c in n.list:
+        lo_rt_walk(log, a, c, outlets, errs)
+    end
+end
+
+func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, prog: int): str:
+    s := nm.t_str
+    mut t := "func __salam_route_pick(__salam_p: " + s + nm.sep + "__salam_r &: " + s + "): " + s + ":\n"
+    each r in routes:
+        q := lo_rt_quote(r.pattern)
+        mut cond := nm.pkg + "." + nm.match_f + "(" + q + nm.sep + "__salam_p)"
+        cdef := lo_rt_find_comp(a, prog, r.comp)
+        if cdef != 0:
+            names := lo_rt_pattern_params(r.pattern)
+            repeat at.ChildCount(a, cdef) in pi:
+                pid := at.Child(a, cdef, pi)
+                pn := at.Get(a, pid)
+                if pn.kind == at.AST_PARAM and pn.ty != 0 and lo_rt_has(names, pn.name) and lo_rt_is_int_type(at.Get(a, pn.ty).name):
+                    pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + "__salam_p" + nm.sep + lo_rt_quote(pn.name) + ")"
+                    if lo_rt_has(lo_rt_optional_names(r.pattern), pn.name):
+                        cond += " and (" + pv + " == \"\" or " + nm.pkg + "." + nm.is_int_f + "(" + pv + "))"
+                    else:
+                        cond += " and " + nm.pkg + "." + nm.is_int_f + "(" + pv + ")"
+                    end
+                end
+            end
+        end
+        t += "    if " + cond + ":\n"
+        if r.guard >= 0:
+            if r.redirect >= 0:
+                t += "        if not (__salam_rx_" + co.I64Toa(r.guard as i64) + "):\n"
+                t += "            __salam_r = __salam_rx_" + co.I64Toa(r.redirect as i64) + "\n"
+                t += "            ret \"\"\n"
+                t += "        end\n"
+                t += "        ret " + q + "\n"
+            else:
+                t += "        if __salam_rx_" + co.I64Toa(r.guard as i64) + ":\n"
+                t += "            ret " + q + "\n"
+                t += "        end\n"
+            end
+        else r.redirect >= 0:
+            t += "        __salam_r = __salam_rx_" + co.I64Toa(r.redirect as i64) + "\n"
+            t += "        ret \"\"\n"
+        else:
+            t += "        ret " + q + "\n"
+        end
+        t += "    end\n"
+    end
+    t += "    ret \"\"\nend\n\n"
+    ret t
+end
+
+func lo_rt_title_source(nm: LoRouteNames, routes: Vector<LoRoute>): str:
+    s := nm.t_str
+    mut t := "func __salam_route_title(__salam_p: " + s + "): " + s + ":\n"
+    each r in routes:
+        if r.title >= 0:
+            t += "    if __salam_p == " + lo_rt_quote(r.pattern) + ":\n"
+            t += "        ret __salam_rx_" + co.I64Toa(r.title as i64) + "\n"
+            t += "    end\n"
+        end
+    end
+    t += "    ret \"\"\nend\n\n"
+    ret t
+end
+
+func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, prog: int): str:
+    mut t := "component __salam_outlet:\n"
+    mut first := true
+    each r in routes:
+        q := lo_rt_quote(r.pattern)
+        mut base_cond := nm.route + "." + nm.pattern + " == " + q
+        if r.guard >= 0:
+            base_cond += " and (__salam_rx_" + co.I64Toa(r.guard as i64) + ")"
+        end
+        names := lo_rt_pattern_params(r.pattern)
+        opts := lo_rt_optional_names(r.pattern)
+        mut pnames := Vector {} as Vector<str>
+        mut pfuncs := Vector {} as Vector<str>
+        mut vary := Vector {} as Vector<str>
+        cdef := lo_rt_find_comp(a, prog, r.comp)
+        if cdef != 0:
+            repeat at.ChildCount(a, cdef) in pi:
+                pid := at.Child(a, cdef, pi)
+                pn := at.Get(a, pid)
+                if pn.kind != at.AST_PARAM or not lo_rt_has(names, pn.name):
+                    continue
+                end
+                tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
+                pnames.Push(pn.name)
+                pfuncs.Push(lo_rt_is_int_type(tn) ? nm.param_int_f : nm.param_f)
+                if pn.a != 0 and lo_rt_has(opts, pn.name) and vary.Len() < 3:
+                    vary.Push(pn.name)
+                end
+            end
+        end
+        mut combos := 1
+        repeat vary.Len():
+            combos *= 2
+        end
+        repeat combos in mask:
+            mut cond := base_cond
+            mut call := "        " + r.comp + ":"
+            repeat pnames.Len() in k:
+                pname := pnames.Get(k)
+                pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + nm.route + "." + nm.path + nm.sep + lo_rt_quote(pname) + ")"
+                mut vk := 0 - 1
+                repeat vary.Len() in vj:
+                    if str.Equals(vary.Get(vj), pname):
+                        vk = vj
+                    end
+                end
+                if vk >= 0:
+                    mut bit := mask
+                    repeat vk:
+                        bit /= 2
+                    end
+                    if bit % 2 == 0:
+                        cond += " and " + pv + " == \"\""
+                        continue
+                    end
+                    cond += " and " + pv + " != \"\""
+                end
+                call += " " + pname + " = " + nm.pkg + "." + pfuncs.Get(k) + "(" + q + nm.sep + nm.route + "." + nm.path + nm.sep + lo_rt_quote(pname) + ")"
+            end
+            t += (first ? "    if " : "    else ") + cond + ":\n"
+            first = false
+            t += call + " end\n"
+        end
+    end
+    if not first:
+        t += "    end\n"
+    end
+    t += "end\n\n"
+    ret t
+end
+
+func lo_rt_glue_source(nm: LoRouteNames): str:
+    s := nm.t_str
+    i := nm.t_int
+    r := nm.route
+    rt := nm.pkg + "." + nm.route_t
+    mut t := ""
+    t += "func __salam_route_make(__salam_u: " + s + ", __salam_out &: " + s + "): " + rt + ":\n"
+    t += "    mut __salam_t := __salam_u\n"
+    t += "    mut __salam_n := 0\n"
+    t += "    until __salam_n < 8:\n"
+    t += "        mut __salam_p := \"\"\n"
+    t += "        mut __salam_q := \"\"\n"
+    t += "        " + nm.pkg + "." + nm.split_f + "(__salam_t" + nm.sep + "__salam_p" + nm.sep + "__salam_q)\n"
+    t += "        __salam_p = " + nm.pkg + "." + nm.norm_f + "(__salam_p)\n"
+    t += "        mut __salam_red := \"\"\n"
+    t += "        __salam_pat := __salam_route_pick(__salam_p" + nm.sep + "__salam_red)\n"
+    t += "        if __salam_red." + nm.len + "() == 0:\n"
+    t += "            __salam_out = __salam_q." + nm.len + "() > 0 ? __salam_p + \"?\" + __salam_q : __salam_p\n"
+    t += "            ret " + rt + " { " + nm.path + " = __salam_p" + nm.sep + nm.query + " = __salam_q" + nm.sep + nm.pattern + " = __salam_pat }\n"
+    t += "        end\n"
+    t += "        __salam_t = " + nm.pkg + "." + nm.resolve_f + "(__salam_p" + nm.sep + "__salam_red)\n"
+    t += "        __salam_n++\n"
+    t += "    end\n"
+    t += "    __salam_out = __salam_t\n"
+    t += "    ret " + rt + " { " + nm.path + " = __salam_t }\n"
+    t += "end\n\n"
+    t += "func __salam_route_url(): " + s + ":\n"
+    t += "    ret " + r + "." + nm.query + "." + nm.len + "() > 0 ? " + r + "." + nm.path + " + \"?\" + " + r + "." + nm.query + " : " + r + "." + nm.path + "\n"
+    t += "end\n\n"
+    t += "func __salam_route_set(__salam_u: " + s + ", __salam_how: " + i + "):\n"
+    t += "    mut __salam_url := \"\"\n"
+    t += "    __salam_next := __salam_route_make(__salam_u" + nm.sep + "__salam_url)\n"
+    t += "    " + r + " = __salam_next\n"
+    if g_lo_routes_web:
+        t += "    if __salam_how < 2:\n"
+        t += "        salamRouteWrite(__salam_url" + nm.sep + "__salam_how)\n"
+        t += "    else __salam_url != __salam_u:\n"
+        t += "        salamRouteWrite(__salam_url" + nm.sep + "1)\n"
+        t += "    end\n"
+        t += "    salamRouteTitle(__salam_route_title(" + r + "." + nm.pattern + "))\n"
+    else:
+        t += "    if __salam_how == 0:\n"
+        t += "        " + nm.pkg + "." + nm.push_f + "(__salam_hist" + nm.sep + "__salam_url)\n"
+        t += "    else:\n"
+        t += "        " + nm.pkg + "." + nm.replace_f + "(__salam_hist" + nm.sep + "__salam_url)\n"
+        t += "    end\n"
+    end
+    t += "end\n\n"
+    t += "func __salam_route_check():\n"
+    t += "    mut __salam_r := \"\"\n"
+    t += "    __salam_pat := __salam_route_pick(" + r + "." + nm.path + nm.sep + "__salam_r)\n"
+    t += "    if __salam_r." + nm.len + "() > 0:\n"
+    t += "        __salam_route_set(" + nm.pkg + "." + nm.resolve_f + "(" + r + "." + nm.path + nm.sep + "__salam_r)" + nm.sep + "1)\n"
+    t += "    else __salam_pat != " + r + "." + nm.pattern + ":\n"
+    t += "        " + r + " = " + rt + " { " + nm.path + " = " + r + "." + nm.path + nm.sep + nm.query + " = " + r + "." + nm.query + nm.sep + nm.pattern + " = __salam_pat }\n"
+    t += "    end\n"
+    t += "end\n\n"
+    t += "func " + nm.go + "(__salam_u: " + s + "):\n"
+    t += "    __salam_route_set(" + nm.pkg + "." + nm.resolve_f + "(__salam_route_url()" + nm.sep + "__salam_u)" + nm.sep + "0)\n"
+    t += "end\n\n"
+    t += "func " + nm.replace + "(__salam_u: " + s + "):\n"
+    t += "    __salam_route_set(" + nm.pkg + "." + nm.resolve_f + "(__salam_route_url()" + nm.sep + "__salam_u)" + nm.sep + "1)\n"
+    t += "end\n\n"
+    if g_lo_routes_web:
+        t += "func " + nm.back + "():\n    salamRouteMove(0 - 1)\nend\n\n"
+        t += "func " + nm.forward + "():\n    salamRouteMove(1)\nend\n\n"
+    else:
+        t += "func " + nm.back + "():\n"
+        t += "    if " + nm.pkg + "." + nm.back_f + "(__salam_hist):\n"
+        t += "        __salam_route_set(" + nm.pkg + "." + nm.current_f + "(__salam_hist)" + nm.sep + "2)\n"
+        t += "    end\nend\n\n"
+        t += "func " + nm.forward + "():\n"
+        t += "    if " + nm.pkg + "." + nm.forward_f + "(__salam_hist):\n"
+        t += "        __salam_route_set(" + nm.pkg + "." + nm.current_f + "(__salam_hist)" + nm.sep + "2)\n"
+        t += "    end\nend\n\n"
+    end
+    t += "func " + nm.route_param + "(__salam_n: " + s + "): " + s + ":\n"
+    t += "    ret " + nm.pkg + "." + nm.param_f + "(" + r + "." + nm.pattern + nm.sep + r + "." + nm.path + nm.sep + "__salam_n)\n"
+    t += "end\n\n"
+    t += "func " + nm.route_query + "(__salam_n: " + s + "): " + s + ":\n"
+    t += "    ret " + nm.pkg + "." + nm.query_f + "(" + r + "." + nm.query + nm.sep + "__salam_n)\n"
+    t += "end\n\n"
+    t += "func __salam_route_keep():\n"
+    t += "    " + nm.go + "(\"/\")\n"
+    t += "    " + nm.replace + "(\"/\")\n"
+    t += "    " + nm.back + "()\n"
+    t += "    " + nm.forward + "()\n"
+    t += "    __salam_k1 := " + nm.route_param + "(\"\")\n"
+    t += "    __salam_k2 := " + nm.route_query + "(\"\")\n"
+    t += "end\n\n"
+    ret t
+end
+
+func lo_rt_header_source(nm: LoRouteNames, need_import: bool, home: str): str:
+    s := nm.t_str
+    i := nm.t_int
+    mut t := ""
+    if need_import:
+        t += "import " + nm.pkg + "\n\n"
+    end
+    if g_lo_routes_web:
+        t += "extern:\n"
+        t += "    func salamRouteWrite(__salam_u: " + s + nm.sep + "__salam_how: " + i + ")\n"
+        t += "    func salamRouteMove(__salam_d: " + i + ")\n"
+        t += "    func salamRouteTitle(__salam_t: " + s + ")\n"
+        t += "end\n\n"
+        t += "mut " + nm.route + " := " + nm.pkg + "." + nm.route_t + " { " + nm.path + " = \"/\"" + nm.sep + nm.pattern + " = " + lo_rt_quote(home) + " }\n"
+    else:
+        t += "mut " + nm.route + " := " + nm.pkg + "." + nm.route_t + " { " + nm.path + " = \"/\"" + nm.sep + nm.pattern + " = " + lo_rt_quote(home) + " }\n"
+        t += "mut __salam_hist := " + nm.pkg + "." + nm.new_hist_f + "(\"/\")\n"
+    end
+    ret t + "\n"
+end
+
+func lo_rt_user_names(nm: LoRouteNames): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.Push(nm.route)
+    v.Push(nm.go)
+    v.Push(nm.replace)
+    v.Push(nm.back)
+    v.Push(nm.forward)
+    v.Push(nm.route_param)
+    v.Push(nm.route_query)
+    ret v
+end
+
+func lo_rt_order(a &: at.Ast, prog: int, mine: Vector<int>):
+    mut my_imports := Vector {} as Vector<int>
+    defer my_imports.Free()
+    mut my_externs := Vector {} as Vector<int>
+    defer my_externs.Free()
+    mut vars := Vector {} as Vector<int>
+    defer vars.Free()
+    mut tail := Vector {} as Vector<int>
+    defer tail.Free()
+    each id in mine:
+        kd := at.KindOf(a, id)
+        if kd == at.AST_IMPORT:
+            my_imports.Push(id)
+        else kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern:
+            my_externs.Push(id)
+        else kd == at.AST_VAR_DECL:
+            vars.Push(id)
+        else:
+            tail.Push(id)
+        end
+    end
+    mut front := Vector {} as Vector<int>
+    defer front.Free()
+    mut consts := Vector {} as Vector<int>
+    defer consts.Free()
+    mut rest := Vector {} as Vector<int>
+    defer rest.Free()
+    repeat at.ChildCount(a, prog) in i:
+        id := at.Child(a, prog, i)
+        mut is_mine := false
+        each m in mine:
+            if m == id:
+                is_mine = true
+            end
+        end
+        if is_mine:
+            continue
+        end
+        kd := at.KindOf(a, id)
+        if kd == at.AST_IMPORT or kd == at.AST_LINK or (kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern):
+            front.Push(id)
+        else kd == at.AST_CONST_DECL:
+            consts.Push(id)
+        else:
+            rest.Push(id)
+        end
+    end
+    mut order := Vector {} as Vector<int>
+    defer order.Free()
+    each id in my_imports:
+        order.Push(id)
+    end
+    each id in front:
+        order.Push(id)
+    end
+    each id in my_externs:
+        order.Push(id)
+    end
+    each id in consts:
+        order.Push(id)
+    end
+    each id in vars:
+        order.Push(id)
+    end
+    each id in rest:
+        order.Push(id)
+    end
+    each id in tail:
+        if at.KindOf(a, id) != at.AST_FUNC_DEF:
+            order.Push(id)
+        end
+    end
+    mut first_fn := true
+    each id in tail:
+        if at.KindOf(a, id) == at.AST_FUNC_DEF:
+            if first_fn:
+                mut fd := at.Get(a, id)
+                fd.file_boundary = true
+                at.Put(a, id, fd)
+                first_fn = false
+            end
+            order.Push(id)
+        end
+    end
+    mut pn := at.Get(a, prog)
+    pn.list = Vector {} as Vector<int>
+    each id in order:
+        pn.list.Push(id)
+    end
+    at.Put(a, prog, pn)
+end
+
+func lo_rt_imports_nav(a &: at.Ast, prog: int, nm: LoRouteNames): bool:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_IMPORT and (str.Equals(d.name, nm.pkg) or str.Equals(d.name, "nav") or str.Equals(d.name, "ناوبری")):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &: Vector<LoRoute>, exprs &: Vector<int>): int:
+    mut errs := 0
+    body := at.Get(a, rnode).a
+    if body == 0:
+        ret 0
+    end
+    repeat at.ChildCount(a, body) in i:
+        c := at.Child(a, body, i)
+        cn := at.Get(a, c)
+        if cn.kind == at.AST_LAYOUT_ATTR:
+            v := lo_rt_lit(a, cn.a)
+            if str.Equals(cn.name, "mode"):
+                if str.Equals(v, "hash") or str.Equals(v, "هش"):
+                    g_lo_routes_hash = true
+                else str.Equals(v, "history") or str.Equals(v, "تاریخچه"):
+                    g_lo_routes_hash = false
+                else:
+                    lo_rt_error(log, a, c, i18.Tr("write mode = history (clean paths, needs a server fallback) or mode = hash (#/path, works on any static host)"), i18.Tr("E256: unknown routes setting value"))
+                    errs++
+                end
+            else str.Equals(cn.name, "base"):
+                if cn.a == 0 or at.Get(a, cn.a).kind != at.AST_LITERAL:
+                    lo_rt_error(log, a, c, i18.Tr("write base = \"/app\" with a text value"), i18.Tr("E256: unknown routes setting value"))
+                    errs++
+                else:
+                    g_lo_routes_base = nav.Normalize(v)
+                    if str.Equals(g_lo_routes_base, "/"):
+                        g_lo_routes_base = ""
+                    end
+                end
+            else:
+                lo_rt_error(log, a, c, i18.Tr("a routes block takes mode and base, and lines such as \"/users/:id\" : User"), co.Format1(i18.Tr("E256: unknown routes setting '%s'"), co.ArgStr(cn.name)))
+                errs++
+            end
+            continue
+        end
+        if cn.kind != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        mut r := LoRoute { comp = cn.name, node = c }
+        pa := lo_rt_attr(a, c, "path")
+        r.pattern = pa != 0 ? lo_rt_lit(a, at.Get(a, pa).a) : ""
+        if not str.Equals(r.pattern, "*"):
+            if not str.StartsWith(r.pattern, "/"):
+                lo_rt_error(log, a, c, i18.Tr("a route pattern starts with /, as in \"/users/:id\", or is \"*\" for every other path"), co.Format1(i18.Tr("E258: route pattern '%s' does not start with /"), co.ArgStr(r.pattern)))
+                errs++
+                continue
+            end
+            r.pattern = nav.Normalize(r.pattern)
+        end
+        mut dup := false
+        each prev in routes:
+            if str.Equals(prev.pattern, r.pattern):
+                dup = true
+            end
+        end
+        if dup:
+            lo_rt_error(log, a, c, i18.Tr("each pattern may appear once; remove the second line"), co.Format1(i18.Tr("E258: route pattern '%s' is listed twice"), co.ArgStr(r.pattern)))
+            errs++
+            continue
+        end
+        repeat at.ChildCount(a, c) in k:
+            ac := at.Child(a, c, k)
+            an := at.Get(a, ac)
+            if an.kind != at.AST_LAYOUT_ATTR or str.Equals(an.name, "path"):
+                continue
+            end
+            if str.Equals(an.name, "guard"):
+                r.guard = exprs.Len()
+                exprs.Push(an.a)
+            else str.Equals(an.name, "redirect"):
+                r.redirect = exprs.Len()
+                exprs.Push(an.a)
+            else str.Equals(an.name, "title"):
+                r.title = exprs.Len()
+                exprs.Push(an.a)
+            else:
+                lo_rt_error(log, a, ac, i18.Tr("a route line takes guard, redirect and title"), co.Format1(i18.Tr("E256: unknown routes setting '%s'"), co.ArgStr(an.name)))
+                errs++
+            end
+        end
+        cdef := lo_rt_find_comp(a, prog, r.comp)
+        if cdef != 0:
+            names := lo_rt_pattern_params(r.pattern)
+            repeat at.ChildCount(a, cdef) in pi:
+                pid := at.Child(a, cdef, pi)
+                pn := at.Get(a, pid)
+                if pn.kind != at.AST_PARAM:
+                    continue
+                end
+                tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
+                if lo_rt_has(names, pn.name):
+                    if tn.Len() > 0 and not lo_rt_is_int_type(tn) and not lo_rt_is_str_type(tn):
+                        lo_rt_error(log, a, c, i18.Tr("route parameters fill str and int component parameters"), co.Format2(i18.Tr("E259: parameter '%s' of component '%s' must be str or int to come from the path"), co.ArgStr(pn.name), co.ArgStr(r.comp)))
+                        errs++
+                    end
+                else pn.a == 0:
+                    lo_rt_error(log, a, c, co.Format1(i18.Tr("add :%s to the pattern, or give the parameter a default value"), co.ArgStr(pn.name)), co.Format3(i18.Tr("E259: component '%s' needs parameter '%s', but route '%s' does not provide it"), co.ArgStr(r.comp), co.ArgStr(pn.name), co.ArgStr(r.pattern)))
+                    errs++
+                end
+            end
+        end
+        r.rank = nav.Rank(r.pattern)
+        mut placed := false
+        mut sorted := Vector {} as Vector<LoRoute>
+        each prev in routes:
+            if not placed and r.rank > prev.rank:
+                sorted.Push(r)
+                placed = true
+            end
+            sorted.Push(prev)
+        end
+        if not placed:
+            sorted.Push(r)
+        end
+        routes = sorted
+    end
+    ret errs
+end
+
+pub func RoutesActive(): bool:
+    ret g_lo_routes_on and g_lo_routes_web
+end
+
+pub func RoutesHash(): bool:
+    ret g_lo_routes_hash
+end
+
+pub func RoutesBase(): str:
+    ret g_lo_routes_base
+end
+
+pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, web: bool): int:
+    g_lo_routes_on = false
+    g_lo_routes_hash = false
+    g_lo_routes_base = ""
+    g_lo_routes_web = web
+    mut rnode := 0
+    mut errs := 0
+    repeat at.ChildCount(a, prog) in i:
+        c := at.Child(a, prog, i)
+        cn := at.Get(a, c)
+        if cn.kind == at.AST_LAYOUT_COMPONENT and str.Equals(cn.name, "__salam_routes"):
+            if rnode != 0:
+                lo_rt_error(log, a, c, i18.Tr("put every route in one routes block"), i18.Tr("E256: a program has at most one routes block"))
+                errs++
+            else:
+                rnode = c
+            end
+        end
+    end
+    nm := lo_rt_names(pack)
+    mut routes := Vector {} as Vector<LoRoute>
+    mut exprs := Vector {} as Vector<int>
+    if rnode != 0:
+        g_lo_routes_on = true
+        errs += lo_rt_collect(log, a, prog, rnode, routes, exprs)
+        mut pn := at.Get(a, prog)
+        mut keep := Vector {} as Vector<int>
+        each id in pn.list:
+            kd := at.KindOf(a, id)
+            if kd == at.AST_LAYOUT_COMPONENT and str.Equals(at.Get(a, id).name, "__salam_routes"):
+                continue
+            end
+            if kd == at.AST_FUNC_DEF or kd == at.AST_VAR_DECL or kd == at.AST_LAYOUT_COMPONENT or kd == at.AST_STRUCT_DEF:
+                nmv := at.Get(a, id).name
+                each u in lo_rt_user_names(nm):
+                    if str.Equals(u, nmv):
+                        lo_rt_error(log, a, id, i18.Tr("rename it; the routes block defines this name for navigation"), co.Format1(i18.Tr("E258: '%s' is defined by the routes block"), co.ArgStr(nmv)))
+                        errs++
+                    end
+                end
+            end
+            keep.Push(id)
+        end
+        pn.list = keep
+        at.Put(a, prog, pn)
+    end
+    mut outlets := 0
+    repeat at.ChildCount(a, prog) in j:
+        lo_rt_walk(log, a, at.Child(a, prog, j), outlets, errs)
+    end
+    if rnode == 0 or errs > 0:
+        ret errs
+    end
+    mut home := ""
+    each r in routes:
+        if home.Len() == 0 and r.guard < 0 and r.redirect < 0 and nav.Match(r.pattern, "/"):
+            home = r.pattern
+        end
+    end
+    mut text := lo_rt_header_source(nm, not lo_rt_imports_nav(a, prog, nm), home)
+    text += lo_rt_pick_source(nm, routes, a, prog)
+    text += lo_rt_title_source(nm, routes)
+    text += lo_rt_glue_source(nm)
+    text += lo_rt_outlet_source(nm, routes, a, prog)
+    if nm.fa:
+        text = ln_to_fa(text, pack)
+    end
+    if str.Len(os.Env("SALAM_ROUTES_DUMP")) > 0:
+        io.EPrintln(text)
+    end
+    base := at.Count(a)
+    sp := ln_parse(log, a, text, "<salam-routes>", pack)
+    if sp == 0:
+        lo_rt_error(log, a, rnode, i18.Tr("this is a compiler bug; please report it with the routes block"), i18.Tr("E256: the routes block could not be lowered"))
+        ret errs + 1
+    end
+    mut mine := Vector {} as Vector<int>
+    defer mine.Free()
+    repeat at.ChildCount(a, sp) in k:
+        cid := at.Child(a, sp, k)
+        lo_span_tree(a, cid, rnode, base)
+        _s := lo_rt_subst(a, cid, exprs)
+        at.AddChild(a, prog, cid)
+        mine.Push(cid)
+    end
+    lo_rt_order(a, prog, mine)
+    ret errs
+end
+
+pub func RouteRuntime(set_fn: str, check_fn: str): str:
+    mut b := g_lo_routes_base
+    if str.EndsWith(b, "/"):
+        b = str.Substr(b, 0, b.Len() - 1)
+    end
+    hash := g_lo_routes_hash ? "true" : "false"
+    mut t := "var __salam_rt_hash = " + hash + ", __salam_rt_base = " + lo_rt_quote(b) + ", __salam_rt_last = null;\n"
+    t += `function __salam_rt_dec(s) {
+    return String(s).split(/(%(?:2[fF]|25|26|3[dD]|23|3[fF]|2[bB]))/).map(function (part, i) {
+        if (i % 2) {
+            return part.toUpperCase();
+        }
+        try {
+            return decodeURIComponent(part);
+        } catch (x) {
+            return part;
+        }
+    }).join("");
+}
+function __salam_rt_app(pathname, search, hash) {
+    if (__salam_rt_hash) {
+        return hash.length > 1 && hash.charAt(1) === "/" ? hash.slice(1) : "/";
+    }
+    var p = __salam_rt_dec(pathname), b = __salam_rt_base;
+    if (b) {
+        if (p === b) {
+            p = "/";
+        } else if (p.indexOf(b + "/") === 0) {
+            p = p.slice(b.length);
+        } else {
+            return null;
+        }
+    }
+    return p + search;
+}
+function __salam_rt_here() {
+    return __salam_rt_dec(__salam_rt_app(location.pathname, location.search, location.hash) || "/");
+}
+function salamRouteWrite(u, how) {
+    var url = __salam_rt_hash ? "#" + u : __salam_rt_base + u;
+    __salam_rt_last = u;
+    try {
+        if (how === 0) {
+            history.replaceState({ salam: 1, x: window.scrollX, y: window.scrollY }, "");
+            history.pushState({ salam: 1 }, "", url);
+            window.scrollTo(0, 0);
+        } else {
+            history.replaceState(history.state, "", url);
+        }
+    } catch (x) {
+        try {
+            if (how === 0) {
+                location.assign(url);
+            } else {
+                location.replace(url);
+            }
+        } catch (x2) {
+        }
+    }
+}
+function salamRouteMove(d) {
+    history.go(d);
+}
+var __salam_rt_title0 = null;
+function salamRouteTitle(t) {
+    if (typeof document === "undefined") {
+        return;
+    }
+    if (__salam_rt_title0 === null) {
+        __salam_rt_title0 = document.title;
+    }
+    document.title = t ? t : __salam_rt_title0;
+}
+function __salam_rt_arrive(e) {
+    var u = __salam_rt_here();
+    if (u === __salam_rt_last) {
+        return;
+    }
+    __salam_rt_last = u;
+    SETFN(u, 2);
+    var st = e && e.state;
+    if (st && typeof st.x === "number") {
+        setTimeout(function () {
+            window.scrollTo(st.x, st.y);
+        }, 0);
+    }
+}
+function __salam_rt_mark() {
+    var cur = __salam_rt_here(), q = cur.indexOf("?");
+    if (q >= 0) {
+        cur = cur.slice(0, q);
+    }
+    var links = document.querySelectorAll("a[href]");
+    for (var i = 0; i < links.length; i++) {
+        var a = links[i], u = null;
+        try {
+            u = new URL(a.getAttribute("href"), location.href);
+        } catch (x) {
+        }
+        var p = u && u.origin === location.origin ? __salam_rt_app(u.pathname, "", u.hash) : null;
+        if (p !== null && __salam_rt_dec(p) === cur && (__salam_rt_hash ? u.hash.length > 1 : true)) {
+            a.setAttribute("aria-current", "page");
+        } else if (a.getAttribute("aria-current") === "page") {
+            a.removeAttribute("aria-current");
+        }
+    }
+}
+function __salam_after_flush() {
+    CHECKFN();
+    __salam_rt_mark();
+}
+if (typeof window !== "undefined") {
+    window.addEventListener("popstate", __salam_rt_arrive);
+    if (__salam_rt_hash) {
+        window.addEventListener("hashchange", __salam_rt_arrive);
+    }
+    document.addEventListener("click", function (e) {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+            return;
+        }
+        var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+        if (!a || (a.target && a.target !== "_self") || a.hasAttribute("download") || /\bexternal\b/.test(a.getAttribute("rel") || "")) {
+            return;
+        }
+        var u = null;
+        try {
+            u = new URL(a.getAttribute("href"), location.href);
+        } catch (x) {
+            return;
+        }
+        if (u.origin !== location.origin) {
+            return;
+        }
+        if (!__salam_rt_hash && u.pathname === location.pathname && u.search === location.search && u.hash) {
+            return;
+        }
+        if (!__salam_rt_hash && /\.[^\/]+$/.test(u.pathname.slice(u.pathname.lastIndexOf("/") + 1))) {
+            return;
+        }
+        var p = __salam_rt_app(u.pathname, u.search, u.hash);
+        if (p === null || (__salam_rt_hash && !(u.hash.length > 1 && u.hash.charAt(1) === "/"))) {
+            return;
+        }
+        e.preventDefault();
+        p = __salam_rt_dec(p);
+        if (p === __salam_rt_last) {
+            return;
+        }
+        SETFN(p, 0);
+    });
+    __salam_rt_last = __salam_rt_here();
+    SETFN(__salam_rt_last, 2);
+    setTimeout(__salam_rt_mark, 0);
+}
+`
+    ret str.Replace(str.Replace(t, "SETFN", set_fn), "CHECKFN", check_fn)
+end

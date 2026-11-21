@@ -1139,7 +1139,7 @@ not the libraries.
 - A `str` ends at its first zero byte. Binary data (images, archives, keys,
   packets) passed through any `str` function or field is silently cut there:
   use the `*Bytes`/`Raw`/`ByteBuf`/pointer-and-length forms the package
-  offers (`archive.ReadBinaryFile`, `crypto.Sha256Bytes`, `tcp.ReadBytes`,
+  offers (`fs.ReadAllBytes`, `crypto.Sha256Bytes`, `tcp.ReadBytes`,
   `aws.S3GetBytes`, `Message.data`).
 - Almost nothing panics. Failure is an empty string, `0`, `-1`, `false`, an
   empty vector, a `0x0` matrix or an `err &:` out-parameter, so check the
@@ -1377,10 +1377,11 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
   `IsLinux IsWindows IsMac IsWasm OS Arch IsX64 IsArm64`, **`os.error`**
   `Last LastCode LastMessage HasError Clear` (the last file/process error).
-- **`fs`** (one `import fs` is enough for files): `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime AccessedTime CreatedTime Chmod Permissions Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha1Hex Sha256Hex Sha512Hex` (`CreatedTime` is 0 on most Linux file systems). `import fs.file` still works but is deprecated: it forwards every function to `fs`. **Not binary-safe**: every
-  read, write and digest goes through `str` and stops at the first NUL
-  (`ReadBytes` too); use `archive.ReadBinaryFile`/`WriteBinaryFile` and
-  `crypto.Sha256Bytes`. `Exists` is true for directories too; `AtomicWrite`
+- **`fs`** (one `import fs` is enough for files): `Open Close ReadText ReadAll ReadBytes ReadAllBytes ReadLines WriteText WriteBytes WriteAllBytes Append AtomicWrite Size ModTime AccessedTime CreatedTime Chmod Permissions Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha1Hex Sha256Hex Sha512Hex` (`CreatedTime` is 0 on most Linux file systems). `import fs.file` still works but is deprecated: it forwards every function to `fs`. **Binary data**: the `str` reads and writes
+  (`ReadText ReadAll ReadBytes WriteText WriteBytes Append`) stop at the
+  first NUL; use `ReadAllBytes(path): Vector<u8>` (free it; empty when
+  missing) and `WriteAllBytes(path, v)`. The `*Hex` digests hash the real
+  bytes and return `""` for an unreadable file. `Exists` is true for directories too; `AtomicWrite`
   resets permissions to the default.
 - **`fs.dir`**: `Mkdir MkdirAll Remove RemoveAll List ListDirs ListFiles Walk Copy Move Exists IsDir Size`. `Exists` is true only for a directory;
   `Copy`/`Move` merge into an existing target; `RemoveAll Walk Size Copy`

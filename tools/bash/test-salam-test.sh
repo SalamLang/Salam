@@ -57,6 +57,13 @@ mkdir crashexit
 "$salam" test crashexit --report="$work/crashexit.tsv" >/dev/null 2>&1
 printf 'crash with expected exit report: '
 cat "$work/crashexit.tsv"
+mkdir nonl
+printf 'func test_print():\n    print "hello"\n    testing.AssertEqInt(1, 1)\nend\n' >nonl/print_test.salam
+step test nonl
+step test nonl --format=teamcity
+export SALAM_TEST_AFTER=test_print SALAM_TEST_PRIOR="1 1"
+step test nonl
+unset SALAM_TEST_AFTER SALAM_TEST_PRIOR
 mkdir -p expect
 printf '// EXPECT: hello\n// EXPECT-NOT: goodbye\n// EXPECT-EXIT: 0\nfunc main:\n    println "hello"\nend\n' >expect/out.test.salam
 step test expect/out.test.salam

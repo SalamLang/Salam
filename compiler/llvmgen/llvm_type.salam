@@ -816,6 +816,46 @@ func enum_backed_float(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): bool:
     ret e != 0 and sm.SymAt(s, e).enum_val_kind == tok.TV_FLOAT
 end
 
+func pow2_text(k: int): str:
+    switch k:
+        7: ret "128.0" end
+        8: ret "256.0" end
+        15: ret "32768.0" end
+        16: ret "65536.0" end
+        31: ret "2147483648.0" end
+        32: ret "4294967296.0" end
+        63: ret "9223372036854775808.0" end
+    end
+    ret "18446744073709551616.0"
+end
+
+func float_to_int_sat(v &: Lv, x: str, lf: str, ity: str, sgn: bool, bits: int): str:
+    t := new_tmp(v)
+    emit(v, t + " = " + (sgn ? "fptosi" : "fptoui") + " " + lf + " " + x + " to " + ity)
+    hic := new_tmp(v)
+    emit(v, hic + " = fcmp oge " + lf + " " + x + ", " + pow2_text(sgn ? bits - 1 : bits))
+    loc := new_tmp(v)
+    if sgn:
+        emit(v, loc + " = fcmp olt " + lf + " " + x + ", -" + pow2_text(bits - 1))
+    else:
+        emit(v, loc + " = fcmp ult " + lf + " " + x + ", 0.0")
+    end
+    mx := sgn ? co.U64Toa(((1 as u64) << ((bits - 1) as u64)) - (1 as u64)) : "-1"
+    mn := sgn ? "-" + co.U64Toa((1 as u64) << ((bits - 1) as u64)) : "0"
+    r1 := new_tmp(v)
+    emit(v, r1 + " = select i1 " + loc + ", " + ity + " " + mn + ", " + ity + " " + t)
+    r2 := new_tmp(v)
+    emit(v, r2 + " = select i1 " + hic + ", " + ity + " " + mx + ", " + ity + " " + r1)
+    if not sgn:
+        ret r2
+    end
+    nanc := new_tmp(v)
+    emit(v, nanc + " = fcmp uno " + lf + " " + x + ", 0.0")
+    r3 := new_tmp(v)
+    emit(v, r3 + " = select i1 " + nanc + ", " + ity + " 0, " + ity + " " + r2)
+    ret r3
+end
+
 func conv(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, to_ts: str): str:
     from := str.Len(val.ts) > 0 ? val.ts : "i32"
     if str.Equals(from, to_ts):
@@ -884,10 +924,7 @@ func conv(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, to_ts: str): str:
         ret r
     end
     if ff and ti:
-        emit(
-            v, r + " = " + (is_signed_ts(to_ts) ? "fptosi" : "fptoui") + " " + lf + " " + val.ref + " to " + lt_at
-        )
-        ret r
+        ret float_to_int_sat(v, val.ref, lf, lt_at, is_signed_ts(to_ts), int_bits(v, to_ts))
     end
     if fi and tp:
         emit(v, r + " = inttoptr " + lf + " " + val.ref + " to ptr")

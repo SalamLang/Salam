@@ -13,6 +13,11 @@
 
 package ssh
 
+import crypto
+import io
+import os
+import str
+
 func _selftest_sftp():
     mut b0 := NewBuf(4)
     BufPutUint32(b0, 0 as u32)
@@ -99,4 +104,48 @@ func _selftest_sftp():
     _buf_consume_front(cf4, 100)
     _ck(cf4.len == 0, "consume-front: consuming more than len clamps to empty rather than going negative")
     FreeBuf(cf4)
+
+    _selftest_sftp_jail()
+end
+
+func _selftest_sftp_jail_clean(base: str):
+    each name in ["/root/dang", "/root/up", "/root/d", "/out/f.txt", "/out/new"]:
+        _gone := os.Remove(base + name)
+    end
+    each name in ["/root/sub", "/root", "/out", ""]:
+        _gone := os.Rmdir(base + name)
+    end
+end
+
+func _selftest_sftp_jail():
+    base := os.TempDir() + "/salam_ssh_selftest_jail_" + crypto.RandomHex(8)
+    _ck(os.Mkdir(base) == 0, "sftp jail: a fresh test directory is created")
+    _made_root := os.Mkdir(base + "/root")
+    _made_sub := os.Mkdir(base + "/root/sub")
+    _made_out := os.Mkdir(base + "/out")
+    _wrote := io.WriteFile(base + "/out/f.txt", "outside")
+    mut st := SftpSessionState {}
+    st.root = os.RealPath(base + "/root")
+    _ck(st.root.len() > 0, "sftp jail: the test root resolves")
+    _ck(_sftp_inside(st, st.root + "/new.txt"), "sftp jail: a new file in the root is inside")
+    _ck(_sftp_inside(st, st.root + "/sub"), "sftp jail: a directory in the root is inside")
+
+    dang := _sftp_symlink(base + "/out/new", st.root + "/dang") == 0
+    up := _sftp_symlink(base + "/out/f.txt", st.root + "/up") == 0
+    dlink := _sftp_symlink(base + "/out", st.root + "/d") == 0
+    _ck(SALAM_OS_WINDOWS or (dang and up and dlink), "sftp jail: test links are planted")
+    _ck(not dang or not _sftp_inside(st, st.root + "/dang"), "sftp jail: a dangling link that points outside is refused")
+    _ck(not up or not _sftp_inside(st, st.root + "/up"), "sftp jail: a link to a file outside is refused")
+    _ck(not up or _sftp_entry_inside(st, st.root + "/up"), "sftp jail: the link entry itself can still be removed")
+    _ck(not dlink or not _sftp_inside(st, st.root + "/d/x"), "sftp jail: a new file under a link to an outside directory is refused")
+    _ck(not dlink or _sftp_link_target(st, st.root + "/d/l", "x").len() == 0, "sftp jail: no link is made inside an outside directory")
+    _ck(not dlink or _sftp_link_target(st, st.root + "/l", "/d/f").len() == 0, "sftp jail: a target reached through a link to an outside directory is refused")
+    _ck(not os.Exists(base + "/out/new"), "sftp jail: nothing was created outside the root")
+
+    _ck(str.Equals(_sftp_link_target(st, st.root + "/sub/l", "../f"), "../f"), "sftp jail: a relative target stays relative")
+    _ck(str.Equals(_sftp_link_target(st, st.root + "/l", "/sub/f"), "sub/f"), "sftp jail: an absolute target is taken from the root")
+    _ck(str.Equals(_sftp_link_target(st, st.root + "/sub/l", "/f"), "../f"), "sftp jail: an absolute target from a subdirectory climbs to the root")
+    _ck(_sftp_link_target(st, st.root + "/sub/l", "../../etc/passwd").len() == 0, "sftp jail: a relative target above the root is refused")
+    _ck(_sftp_link_target(st, st.root + "/l", "/../f").len() == 0, "sftp jail: an absolute target above the root is refused")
+    _selftest_sftp_jail_clean(base)
 end

@@ -7,6 +7,15 @@ include co "../sal_core.salam"
 include at "../ast.salam"
 include sm "../semantic/semantic.salam"
 
+struct CrashAbi:
+    pub sa: bool = false
+    pub sa_flags_at: int = 0
+    pub sa_flags: str = "0"
+    pub ss_size_at: int = 0
+    pub si_addr_at: int = 0
+    pub bus: int = 7
+end
+
 func dl_host(): str:
     ret triple.HostDatalayout()
 end
@@ -89,6 +98,10 @@ func emit_prologue(v &: Lv, a &: at.Ast):
     declare_libc(v, a, "fflush", "declare i32 @fflush(ptr) nounwind\n")
     declare_libc(v, a, "signal", "declare ptr @signal(i32, ptr) nounwind\n")
     declare_libc(v, a, "raise", "declare i32 @raise(i32) nounwind\n")
+    if crash_on(v):
+        declare_libc(v, a, "sigaction", "declare i32 @sigaction(i32, ptr, ptr) nounwind\n")
+        declare_libc(v, a, "sigaltstack", "declare i32 @sigaltstack(ptr, ptr) nounwind\n")
+    end
     declare_libc(v, a, isatty_name(v), "declare i32 @" + isatty_name(v) + "(i32) nounwind\n")
     if target_is_windows_of(v.triple):
         declare_libc(v, a, "_write", "declare i32 @_write(i32, ptr, i32) nounwind\n")
@@ -357,6 +370,179 @@ func emit_charstr(v &: Lv):
     )
 end
 
+func crash_triple(v &: Lv): str:
+    if str.Len(v.triple) > 0:
+        ret v.triple
+    end
+    mut osn := "unknown"
+    if SALAM_OS_MAC:
+        osn = "apple-darwin"
+    else SALAM_OS_ANDROID:
+        osn = "linux-android"
+    else SALAM_OS_LINUX:
+        osn = "linux-gnu"
+    else SALAM_OS_BSD:
+        osn = "unknown-freebsd"
+    else SALAM_OS_WINDOWS:
+        osn = "windows"
+    end
+    mut arch := "unknown"
+    if SALAM_ARCH_X64:
+        arch = "x86_64"
+    else SALAM_ARCH_ARM64:
+        arch = "aarch64"
+    else SALAM_ARCH_RISCV64:
+        arch = "riscv64"
+    else SALAM_ARCH_X86:
+        arch = "i686"
+    else SALAM_ARCH_ARM:
+        arch = "arm"
+    end
+    ret arch + "-" + osn
+end
+
+func crash_on(v &: Lv): bool:
+    if v.jit or v.freestanding:
+        ret false
+    end
+    t := crash_triple(v)
+    ret not target_is_windows_of(t) and not str.Contains(t, "wasm") and not str.Contains(t, "emscripten")
+end
+
+func crash_abi(v &: Lv): CrashAbi:
+    t := crash_triple(v)
+    dash := str.IndexOf(t, "-")
+    arch := dash < 0 ? t : str.Substr(t, 0, dash)
+    apple := str.Contains(t, "apple") or str.Contains(t, "darwin") or str.Contains(t, "macos")
+    bsd := apple or str.Contains(t, "bsd") or str.Contains(t, "dragonfly")
+    linux := str.Contains(t, "linux") and not str.Contains(t, "android")
+    wide := str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64") or str.Equals(arch, "arm64") or str.Equals(arch, "riscv64")
+    x86 := str.Equals(arch, "i386") or str.Equals(arch, "i486") or str.Equals(arch, "i586") or str.Equals(arch, "i686")
+    arm32 := (str.StartsWith(arch, "arm") or str.StartsWith(arch, "thumb")) and not str.StartsWith(arch, "arm64")
+    mut c := CrashAbi { bus = bsd ? 10 : 7 }
+    if apple and wide and v.ptr_bits == 64:
+        c.sa = true
+        c.sa_flags_at = 12
+        c.sa_flags = "69"
+        c.ss_size_at = 8
+        c.si_addr_at = 24
+    else linux and wide and v.ptr_bits == 64:
+        c.sa = true
+        c.sa_flags_at = 136
+        c.sa_flags = "-2013265916"
+        c.ss_size_at = 16
+        c.si_addr_at = 16
+    else linux and (x86 or arm32) and v.ptr_bits == 32:
+        c.sa = true
+        c.sa_flags_at = 132
+        c.sa_flags = "-2013265916"
+        c.ss_size_at = 8
+        c.si_addr_at = 12
+    end
+    ret c
+end
+
+func crash_msg(b &: str.StringBuilder, name: str, text: str):
+    n := str.Len(text) + 1
+    str.BufAppend(b, "@salam_crash_" + name + " = private unnamed_addr constant [" + co.I64Toa(n as i64) + " x i8] c\"" + text + "\\0A\"\n")
+end
+
+func crash_say(name: str, text: str, u: str): str:
+    ret "  call void @salam_crash_say(ptr @salam_crash_" + name + ", " + u + " " + co.I64Toa((str.Len(text) + 1) as i64) + ")\n  br label %out\n"
+end
+
+func crash_helper(v &: Lv): str:
+    c := crash_abi(v)
+    u := v.usize
+    bus := co.I64Toa(c.bus as i64)
+    segv := "SIGSEGV (segmentation fault)"
+    ovf := "SIGSEGV (stack overflow)"
+    busm := "SIGBUS (bus error)"
+    fpe := "SIGFPE (arithmetic error)"
+    ill := "SIGILL (illegal instruction)"
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "@salam_crash_busy = internal global i32 0\n@salam_crash_top = internal global " + u + " 0\n")
+    if c.sa:
+        str.BufAppend(b, "@salam_crash_stack = internal global [65536 x i8] zeroinitializer, align 16\n")
+    end
+    str.BufAppend(b, "@salam_crash_pre = private unnamed_addr constant [20 x i8] c\"salam: fatal signal \"\n")
+    crash_msg(b, "segv", segv)
+    crash_msg(b, "ovf", ovf)
+    crash_msg(b, "bus", busm)
+    crash_msg(b, "fpe", fpe)
+    crash_msg(b, "ill", ill)
+    str.BufAppend(b, "define internal void @salam_crash_say(ptr %m, " + u + " %n) nounwind {\nentry:\n")
+    str.BufAppend(b, "  %a = call " + u + " @write(i32 2, ptr @salam_crash_pre, " + u + " 20)\n")
+    str.BufAppend(b, "  %b = call " + u + " @write(i32 2, ptr %m, " + u + " %n)\n  ret void\n}\n")
+    str.BufAppend(b, "define internal void @salam_out_onsig(i32 %s, ptr %info, ptr %ctx) nounwind {\nentry:\n")
+    str.BufAppend(b, "  %busy = load volatile i32, ptr @salam_crash_busy\n  %idle = icmp eq i32 %busy, 0\n  br i1 %idle, label %first, label %out\n")
+    str.BufAppend(b, "first:\n  store volatile i32 1, ptr @salam_crash_busy\n  call void @salam_out_flush_l()\n")
+    str.BufAppend(b, "  %is11 = icmp eq i32 %s, 11\n  br i1 %is11, label %segv, label %n1\n")
+    str.BufAppend(b, "n1:\n  %isbus = icmp eq i32 %s, " + bus + "\n  br i1 %isbus, label %bus, label %n2\n")
+    str.BufAppend(b, "n2:\n  %is8 = icmp eq i32 %s, 8\n  br i1 %is8, label %fpe, label %n3\n")
+    str.BufAppend(b, "n3:\n  %is4 = icmp eq i32 %s, 4\n  br i1 %is4, label %ill, label %out\n")
+    str.BufAppend(b, "segv:\n")
+    if c.sa:
+        str.BufAppend(b, "  %top = load " + u + ", ptr @salam_crash_top\n  %hasi = icmp ne ptr %info, null\n")
+        str.BufAppend(b, "  %hast = icmp ne " + u + " %top, 0\n  %chk = and i1 %hasi, %hast\n  br i1 %chk, label %addr, label %segvmsg\n")
+        str.BufAppend(b, "addr:\n  %ap = getelementptr i8, ptr %info, " + u + " " + co.I64Toa(c.si_addr_at as i64) + "\n")
+        str.BufAppend(b, "  %at = load " + u + ", ptr %ap\n  %below = icmp ult " + u + " %at, %top\n")
+        str.BufAppend(b, "  %dist = sub " + u + " %top, %at\n  %near = icmp ult " + u + " %dist, 67108864\n")
+        str.BufAppend(b, "  %ovf = and i1 %below, %near\n  br i1 %ovf, label %ovfmsg, label %segvmsg\n")
+    else:
+        str.BufAppend(b, "  br label %segvmsg\n")
+    end
+    str.BufAppend(b, "ovfmsg:\n" + crash_say("ovf", ovf, u))
+    str.BufAppend(b, "segvmsg:\n" + crash_say("segv", segv, u))
+    str.BufAppend(b, "bus:\n" + crash_say("bus", busm, u))
+    str.BufAppend(b, "fpe:\n" + crash_say("fpe", fpe, u))
+    str.BufAppend(b, "ill:\n" + crash_say("ill", ill, u))
+    str.BufAppend(b, "out:\n  %d = call ptr @signal(i32 %s, ptr null)\n  %r = call i32 @raise(i32 %s)\n  ret void\n}\n")
+    str.BufAppend(b, "define internal void @salam_crash_init() nounwind {\nentry:\n")
+    str.BufAppend(b, "  %here = alloca i8, align 1\n  %ss = alloca [4 x " + u + "], align 8\n  %act = alloca [40 x i32], align 8\n")
+    str.BufAppend(b, "  store volatile i8 0, ptr %here\n  %top = ptrtoint ptr %here to " + u + "\n  store " + u + " %top, ptr @salam_crash_top\n")
+    if c.sa:
+        ssz := v.ptr_bits == 32 ? "16" : "32"
+        str.BufAppend(b, "  call void @llvm.memset.p0." + u + "(ptr %ss, i8 0, " + u + " " + ssz + ", i1 false)\n")
+        str.BufAppend(b, "  store ptr @salam_crash_stack, ptr %ss\n")
+        str.BufAppend(b, "  %ssz = getelementptr i8, ptr %ss, " + u + " " + co.I64Toa(c.ss_size_at as i64) + "\n")
+        str.BufAppend(b, "  store " + u + " 65536, ptr %ssz\n  %sr = call i32 @sigaltstack(ptr %ss, ptr null)\n")
+        str.BufAppend(b, "  %sok = icmp eq i32 %sr, 0\n  br i1 %sok, label %s0, label %nostack\n")
+        str.BufAppend(b, "nostack:\n  store " + u + " 0, ptr @salam_crash_top\n  br label %s0\n")
+    else:
+        str.BufAppend(b, "  br label %s0\n")
+    end
+    sigs := [11, c.bus, 8, 4, 6]
+    repeat 5 in k:
+        ks := co.I64Toa(k as i64)
+        sg := co.I64Toa(sigs[k] as i64)
+        nx := "s" + co.I64Toa((k + 1) as i64)
+        str.BufAppend(b, "s" + ks + ":\n")
+        if c.sa:
+            str.BufAppend(b, "  call void @llvm.memset.p0." + u + "(ptr %act, i8 0, " + u + " 160, i1 false)\n")
+            str.BufAppend(b, "  store ptr @salam_out_onsig, ptr %act\n")
+            str.BufAppend(b, "  %fp" + ks + " = getelementptr i8, ptr %act, " + u + " " + co.I64Toa(c.sa_flags_at as i64) + "\n")
+            str.BufAppend(b, "  store i32 " + c.sa_flags + ", ptr %fp" + ks + "\n")
+            str.BufAppend(b, "  %ar" + ks + " = call i32 @sigaction(i32 " + sg + ", ptr %act, ptr null)\n")
+            str.BufAppend(b, "  %aok" + ks + " = icmp eq i32 %ar" + ks + ", 0\n  br i1 %aok" + ks + ", label %" + nx + ", label %p" + ks + "\n")
+            str.BufAppend(b, "p" + ks + ":\n  %pr" + ks + " = call ptr @signal(i32 " + sg + ", ptr @salam_out_onsig)\n")
+            str.BufAppend(b, "  store " + u + " 0, ptr @salam_crash_top\n  br label %" + nx + "\n")
+        else:
+            str.BufAppend(b, "  %pr" + ks + " = call ptr @signal(i32 " + sg + ", ptr @salam_out_onsig)\n  br label %" + nx + "\n")
+        end
+    end
+    str.BufAppend(b, "s5:\n  %o2 = call ptr @signal(i32 2, ptr @salam_out_onsig)\n  %o2i = ptrtoint ptr %o2 to " + u + "\n")
+    str.BufAppend(b, "  %ig2 = icmp eq " + u + " %o2i, 1\n  br i1 %ig2, label %k2, label %t15\n")
+    str.BufAppend(b, "k2:\n  %ign2 = inttoptr " + u + " 1 to ptr\n  %r2 = call ptr @signal(i32 2, ptr %ign2)\n  br label %t15\n")
+    str.BufAppend(b, "t15:\n  %o15 = call ptr @signal(i32 15, ptr @salam_out_onsig)\n  %o15i = ptrtoint ptr %o15 to " + u + "\n")
+    str.BufAppend(b, "  %ig15 = icmp eq " + u + " %o15i, 1\n  br i1 %ig15, label %k15, label %done\n")
+    str.BufAppend(b, "k15:\n  %ign15 = inttoptr " + u + " 1 to ptr\n  %r15 = call ptr @signal(i32 15, ptr %ign15)\n  br label %done\n")
+    str.BufAppend(b, "done:\n  ret void\n}\n")
+    text := str.BufStr(b)
+    str.BufFree(b)
+    ret text
+end
+
 func onsig_helper(v &: Lv): str:
     if v.jit:
         ret ""
@@ -445,7 +631,7 @@ end
 
 func emit_outbuf(v &: Lv):
     out_hg(
-        v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" + "@salam_obn = internal global i64 0\n" + "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" + "define internal void @salam_out_flush_l() nounwind {\n" + "entry:\n" + "  call void @salam_out_flush_fd_l(i32 1)\n" + "  ret void\n" + "}\n" + outbuf_lock(v) + "define internal void @salam_out_flush() nounwind {\n" + "entry:\n" + "  %n = load i64, ptr @salam_obn\n" + "  %z = icmp eq i64 %n, 0\n" + "  br i1 %z, label %done, label %do\n" + "do:\n" + "  call void @salam_out_lock()\n" + "  call void @salam_out_flush_fd_l(i32 1)\n" + "  call void @salam_out_unlock()\n" + "  br label %done\n" + "done:\n" + "  ret void\n" + "}\n" + onsig_helper(v) + "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" + "entry:\n" + "  %obn = load i64, ptr @salam_obn\n" + "  %sum = add i64 %obn, %n\n" + "  %over = icmp ugt i64 %sum, 65536\n" + "  br i1 %over, label %flush, label %chk\n" + "flush:\n" + "  call void @salam_out_flush_l()\n" + "  br label %chk\n" + "chk:\n" + "  %big = icmp uge i64 %n, 65536\n" + "  br i1 %big, label %direct, label %copy\n" + "direct:\n" + wpre(v, "%n", "%ndw") + "  %rd = call " + v.usize + " @" + write_name(v) + "(i32 1, ptr %s, " + v.usize + " " + wref(v, "%n", "%ndw") + ")\n" + "  ret void\n" + "copy:\n" + "  %obn2 = load i64, ptr @salam_obn\n" + "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" + "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" + "  %newn = add i64 %obn2, %n\n" + "  store i64 %newn, ptr @salam_obn\n" + "  ret void\n" + "}\n" + "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " + "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n" + outbuf_extra(v) + "\n"
+        v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" + "@salam_obn = internal global i64 0\n" + "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" + "define internal void @salam_out_flush_l() nounwind {\n" + "entry:\n" + "  call void @salam_out_flush_fd_l(i32 1)\n" + "  ret void\n" + "}\n" + outbuf_lock(v) + "define internal void @salam_out_flush() nounwind {\n" + "entry:\n" + "  %n = load i64, ptr @salam_obn\n" + "  %z = icmp eq i64 %n, 0\n" + "  br i1 %z, label %done, label %do\n" + "do:\n" + "  call void @salam_out_lock()\n" + "  call void @salam_out_flush_fd_l(i32 1)\n" + "  call void @salam_out_unlock()\n" + "  br label %done\n" + "done:\n" + "  ret void\n" + "}\n" + (crash_on(v) ? crash_helper(v) : onsig_helper(v)) + "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" + "entry:\n" + "  %obn = load i64, ptr @salam_obn\n" + "  %sum = add i64 %obn, %n\n" + "  %over = icmp ugt i64 %sum, 65536\n" + "  br i1 %over, label %flush, label %chk\n" + "flush:\n" + "  call void @salam_out_flush_l()\n" + "  br label %chk\n" + "chk:\n" + "  %big = icmp uge i64 %n, 65536\n" + "  br i1 %big, label %direct, label %copy\n" + "direct:\n" + wpre(v, "%n", "%ndw") + "  %rd = call " + v.usize + " @" + write_name(v) + "(i32 1, ptr %s, " + v.usize + " " + wref(v, "%n", "%ndw") + ")\n" + "  ret void\n" + "copy:\n" + "  %obn2 = load i64, ptr @salam_obn\n" + "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" + "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" + "  %newn = add i64 %obn2, %n\n" + "  store i64 %newn, ptr @salam_obn\n" + "  ret void\n" + "}\n" + "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " + "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n" + outbuf_extra(v) + "\n"
     )
 end
 

@@ -191,6 +191,24 @@ func lo_rt_pattern_params(pattern: str): Vector<str>:
     ret out
 end
 
+func lo_rt_optional_names(pattern: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    n := pattern.Len()
+    until i < n:
+        mut e := str.IndexFrom(pattern, "/", i)
+        if e < 0:
+            e = n
+        end
+        seg := str.Substr(pattern, i, e - i)
+        if str.StartsWith(seg, ":") and str.EndsWith(seg, "?") and seg.Len() > 2:
+            out.Push(str.Substr(seg, 1, seg.Len() - 2))
+        end
+        i = e + 1
+    end
+    ret out
+end
+
 func lo_rt_has(v: Vector<str>, s: str): bool:
     each x in v:
         if str.Equals(x, s):
@@ -312,7 +330,12 @@ func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, p
                 pid := at.Child(a, cdef, pi)
                 pn := at.Get(a, pid)
                 if pn.kind == at.AST_PARAM and pn.ty != 0 and lo_rt_has(names, pn.name) and lo_rt_is_int_type(at.Get(a, pn.ty).name):
-                    cond += " and " + nm.pkg + "." + nm.is_int_f + "(" + nm.pkg + "." + nm.param_f + "(" + q + nm.sep + "__salam_p" + nm.sep + lo_rt_quote(pn.name) + "))"
+                    pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + "__salam_p" + nm.sep + lo_rt_quote(pn.name) + ")"
+                    if lo_rt_has(lo_rt_optional_names(r.pattern), pn.name):
+                        cond += " and (" + pv + " == \"\" or " + nm.pkg + "." + nm.is_int_f + "(" + pv + "))"
+                    else:
+                        cond += " and " + nm.pkg + "." + nm.is_int_f + "(" + pv + ")"
+                    end
                 end
             end
         end
@@ -360,12 +383,17 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
     mut first := true
     each r in routes:
         q := lo_rt_quote(r.pattern)
-        t += (first ? "    if " : "    else ") + nm.route + "." + nm.pattern + " == " + q + ":\n"
-        first = false
-        mut call := "        " + r.comp + ":"
+        mut base_cond := nm.route + "." + nm.pattern + " == " + q
+        if r.guard >= 0:
+            base_cond += " and (__salam_rx_" + co.I64Toa(r.guard as i64) + ")"
+        end
+        names := lo_rt_pattern_params(r.pattern)
+        opts := lo_rt_optional_names(r.pattern)
+        mut pnames := Vector {} as Vector<str>
+        mut pfuncs := Vector {} as Vector<str>
+        mut vary := Vector {} as Vector<str>
         cdef := lo_rt_find_comp(a, prog, r.comp)
         if cdef != 0:
-            names := lo_rt_pattern_params(r.pattern)
             repeat at.ChildCount(a, cdef) in pi:
                 pid := at.Child(a, cdef, pi)
                 pn := at.Get(a, pid)
@@ -373,11 +401,46 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
                     continue
                 end
                 tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
-                fname := lo_rt_is_int_type(tn) ? nm.param_int_f : nm.param_f
-                call += " " + pn.name + " = " + nm.pkg + "." + fname + "(" + q + nm.sep + nm.route + "." + nm.path + nm.sep + lo_rt_quote(pn.name) + ")"
+                pnames.Push(pn.name)
+                pfuncs.Push(lo_rt_is_int_type(tn) ? nm.param_int_f : nm.param_f)
+                if pn.a != 0 and lo_rt_has(opts, pn.name) and vary.Len() < 3:
+                    vary.Push(pn.name)
+                end
             end
         end
-        t += call + " end\n"
+        mut combos := 1
+        repeat vary.Len():
+            combos *= 2
+        end
+        repeat combos in mask:
+            mut cond := base_cond
+            mut call := "        " + r.comp + ":"
+            repeat pnames.Len() in k:
+                pname := pnames.Get(k)
+                pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + nm.route + "." + nm.path + nm.sep + lo_rt_quote(pname) + ")"
+                mut vk := 0 - 1
+                repeat vary.Len() in vj:
+                    if str.Equals(vary.Get(vj), pname):
+                        vk = vj
+                    end
+                end
+                if vk >= 0:
+                    mut bit := mask
+                    repeat vk:
+                        bit /= 2
+                    end
+                    if bit % 2 == 0:
+                        cond += " and " + pv + " == \"\""
+                        continue
+                    end
+                    cond += " and " + pv + " != \"\""
+                end
+                call += " " + pname + " = " + nm.pkg + "." + pfuncs.Get(k) + "(" + q + nm.sep + nm.route + "." + nm.path + nm.sep + lo_rt_quote(pname) + ")"
+            end
+            t += (first ? "    if " : "    else ") + cond + ":\n"
+            first = false
+            t += call + " end\n"
+        end
     end
     if not first:
         t += "    end\n"
@@ -513,24 +576,30 @@ func lo_rt_user_names(nm: LoRouteNames): Vector<str>:
 end
 
 func lo_rt_order(a &: at.Ast, prog: int, mine: Vector<int>):
-    mut front := Vector {} as Vector<int>
-    defer front.Free()
+    mut my_imports := Vector {} as Vector<int>
+    defer my_imports.Free()
+    mut my_externs := Vector {} as Vector<int>
+    defer my_externs.Free()
     mut vars := Vector {} as Vector<int>
     defer vars.Free()
     mut tail := Vector {} as Vector<int>
     defer tail.Free()
     each id in mine:
         kd := at.KindOf(a, id)
-        if kd == at.AST_IMPORT or (kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern):
-            front.Push(id)
+        if kd == at.AST_IMPORT:
+            my_imports.Push(id)
+        else kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern:
+            my_externs.Push(id)
         else kd == at.AST_VAR_DECL:
             vars.Push(id)
         else:
             tail.Push(id)
         end
     end
-    mut order := Vector {} as Vector<int>
-    defer order.Free()
+    mut front := Vector {} as Vector<int>
+    defer front.Free()
+    mut consts := Vector {} as Vector<int>
+    defer consts.Free()
     mut rest := Vector {} as Vector<int>
     defer rest.Free()
     repeat at.ChildCount(a, prog) in i:
@@ -546,12 +615,25 @@ func lo_rt_order(a &: at.Ast, prog: int, mine: Vector<int>):
         end
         kd := at.KindOf(a, id)
         if kd == at.AST_IMPORT or kd == at.AST_LINK or (kd == at.AST_FUNC_DEF and at.Get(a, id).is_extern):
-            order.Push(id)
+            front.Push(id)
+        else kd == at.AST_CONST_DECL:
+            consts.Push(id)
         else:
             rest.Push(id)
         end
     end
+    mut order := Vector {} as Vector<int>
+    defer order.Free()
+    each id in my_imports:
+        order.Push(id)
+    end
     each id in front:
+        order.Push(id)
+    end
+    each id in my_externs:
+        order.Push(id)
+    end
+    each id in consts:
         order.Push(id)
     end
     each id in vars:
@@ -839,7 +921,7 @@ function __salam_rt_app(pathname, search, hash) {
     if (__salam_rt_hash) {
         return hash.length > 1 && hash.charAt(1) === "/" ? hash.slice(1) : "/";
     }
-    var p = pathname, b = __salam_rt_base;
+    var p = __salam_rt_dec(pathname), b = __salam_rt_base;
     if (b) {
         if (p === b) {
             p = "/";
@@ -866,6 +948,14 @@ function salamRouteWrite(u, how) {
             history.replaceState(history.state, "", url);
         }
     } catch (x) {
+        try {
+            if (how === 0) {
+                location.assign(url);
+            } else {
+                location.replace(url);
+            }
+        } catch (x2) {
+        }
     }
 }
 function salamRouteMove(d) {
@@ -942,6 +1032,9 @@ if (typeof window !== "undefined") {
             return;
         }
         if (!__salam_rt_hash && u.pathname === location.pathname && u.search === location.search && u.hash) {
+            return;
+        }
+        if (!__salam_rt_hash && /\.[^\/]+$/.test(u.pathname.slice(u.pathname.lastIndexOf("/") + 1))) {
             return;
         }
         var p = __salam_rt_app(u.pathname, u.search, u.hash);

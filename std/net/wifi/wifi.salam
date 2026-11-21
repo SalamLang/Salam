@@ -1,0 +1,706 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "wifi"
+@fa "وای‌فای"
+package wifi
+
+import mem
+import str
+
+@en "State"
+@fa "وضعیت اتصال"
+pub enum State:
+    @en "Unknown"
+    @fa "نامعلوم"
+    Unknown, @en "NoWifi"
+    @fa "بدون وای فای"
+    NoWifi, @en "Disconnected"
+    @fa "قطع"
+    Disconnected, @en "Connected"
+    @fa "وصل"
+    Connected
+end
+
+@en "Security"
+@fa "امنیت شبکه"
+pub enum Security:
+    @en "Unknown"
+    @fa "امنیت نامعلوم"
+    Unknown, @en "Open"
+    @fa "باز"
+    Open, @en "Owe"
+    @fa "باز رمزشده"
+    Owe, @en "Wep"
+    @fa "وپ"
+    Wep, @en "Wpa"
+    @fa "دبلیو پی ای"
+    Wpa, @en "Wpa2"
+    @fa "دبلیو پی ای دو"
+    Wpa2, @en "Wpa3"
+    @fa "دبلیو پی ای سه"
+    Wpa3, @en "Enterprise"
+    @fa "سازمانی"
+    Enterprise
+end
+
+@en "Trust"
+@fa "اعتماد"
+pub enum Trust:
+    @en "NotWifi"
+    @fa "روی وای فای نیست"
+    NotWifi, @en "Unknown"
+    @fa "اعتماد نامعلوم"
+    Unknown, @en "Trusted"
+    @fa "مورد اعتماد"
+    Trusted, @en "Untrusted"
+    @fa "نامطمئن"
+    Untrusted
+end
+
+@en "Status"
+@fa "وضعیت"
+pub struct Status:
+    @en "state"
+    @fa "حالت"
+    pub state: State = State.Unknown
+    @en "interface"
+    @fa "رابط"
+    pub interface: str = ""
+    @en "ssid"
+    @fa "نام شبکه"
+    pub ssid: str = ""
+    @en "ssid_known"
+    @fa "نام شبکه معلوم"
+    pub ssid_known: bool = false
+    @en "bssid"
+    @fa "نشانی نقطه دسترسی"
+    pub bssid: str = ""
+    @en "security"
+    @fa "امنیت"
+    pub security: Security = Security.Unknown
+    @en "signal"
+    @fa "قدرت سیگنال"
+    pub signal: int = -1
+    @en "backend"
+    @fa "پشتوانه"
+    pub backend: str = ""
+    @en "reason"
+    @fa "دلیل"
+    pub reason: str = ""
+
+    @en "IsConnected"
+    @fa "وصل است"
+    pub func IsConnected(): bool:
+        ret this.state == State.Connected
+    end
+
+    @en "IsInsecure"
+    @fa "ناامن است"
+    pub func IsInsecure(): bool:
+        ret this.security == Security.Open or this.security == Security.Owe or this.security == Security.Wep
+    end
+end
+
+func _hex_digit(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret -1
+end
+
+func _byte_at(s: str, i: int): int:
+    ret ((s as u8*)[i]) as int
+end
+
+func _trim(s: str): str:
+    ret s.Trim()
+end
+
+func _after(line: str, prefix: str): str:
+    ret line.Substr(prefix.Len(), line.Len() - prefix.Len()).Trim()
+end
+
+func _lower(s: str): str:
+    ret s.Lower()
+end
+
+func _same_bssid(a: str, b: str): bool:
+    ret a.Len() > 0 and str.EqualFold(a, b)
+end
+
+func _is_mac(t: str): bool:
+    if t.Len() != 17:
+        ret false
+    end
+    repeat 17 in i:
+        c := _byte_at(t, i)
+        if i % 3 == 2:
+            if c != 58:
+                ret false
+            end
+        else _hex_digit(c) < 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _blank(backend: str): Status:
+    ret Status { interface = str.Clone(""), ssid = str.Clone(""), bssid = str.Clone(""), backend = backend }
+end
+
+func _swap(old: str, next: str): str:
+    mem.Free(old as void*)
+    ret next
+end
+
+func _has_nul(p: void*, n: int): bool:
+    repeat n in i:
+        if ((p as u8*)[i]) as int == 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _mac_text(p: void*): str:
+    mut b := str.NewBuilder()
+    digits := "0123456789abcdef"
+    repeat 6 in i:
+        v := ((p as u8*)[i]) as int
+        if i > 0:
+            str.BufAppend(b, ":")
+        end
+        str.BufAppendChar(b, _byte_at(digits, v >> 4))
+        str.BufAppendChar(b, _byte_at(digits, v & 15))
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func _bytes_text(p: void*, n: int): str:
+    mut b := str.NewBuilder()
+    repeat n in i:
+        str.BufAppendChar(b, ((p as u8*)[i]) as int)
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func _u32_at(p: void*, off: int): int:
+    ret (((p as i64 + off as i64) as u32*)[0]) as int
+end
+
+func _os_scan(): Vector<Status>:
+    if SALAM_OS_LINUX:
+        ret _lx_scan()
+    else:
+        if SALAM_OS_WINDOWS:
+            ret _win_scan()
+        else:
+            if SALAM_OS_MAC:
+                ret _mac_scan()
+            else:
+                ret Vector {}
+            end
+        end
+    end
+end
+
+@en "StateName"
+@fa "نام وضعیت"
+pub func StateName(s: State): str:
+    ret match s:
+        State.Unknown: "unknown" end
+        State.NoWifi: "no-wifi" end
+        State.Disconnected: "disconnected" end
+        State.Connected: "connected" end
+    end
+end
+
+@en "SecurityName"
+@fa "نام امنیت"
+pub func SecurityName(s: Security): str:
+    ret match s:
+        Security.Unknown: "unknown" end
+        Security.Open: "open" end
+        Security.Owe: "owe" end
+        Security.Wep: "wep" end
+        Security.Wpa: "wpa" end
+        Security.Wpa2: "wpa2" end
+        Security.Wpa3: "wpa3" end
+        Security.Enterprise: "enterprise" end
+    end
+end
+
+@en "TrustName"
+@fa "نام اعتماد"
+pub func TrustName(t: Trust): str:
+    ret match t:
+        Trust.NotWifi: "not-wifi" end
+        Trust.Unknown: "unknown" end
+        Trust.Trusted: "trusted" end
+        Trust.Untrusted: "untrusted" end
+    end
+end
+
+@en "SignalFromDbm"
+@fa "سیگنال از دسی بل"
+pub func SignalFromDbm(dbm: int): int:
+    if dbm >= 0:
+        ret -1
+    end
+    mut q := 2 * (dbm + 100)
+    if q < 0:
+        q = 0
+    end
+    if q > 100:
+        q = 100
+    end
+    ret q
+end
+
+@en "SecurityFromNm"
+@fa "امنیت از نتورک منیجر"
+pub func SecurityFromNm(flags: int, wpa: int, rsn: int): Security:
+    if (rsn & 0x2200) != 0 or (wpa & 0x2200) != 0:
+        ret Security.Enterprise
+    end
+    if (rsn & 0x400) != 0:
+        ret Security.Wpa3
+    end
+    if (rsn & 0x100) != 0:
+        ret Security.Wpa2
+    end
+    if (wpa & 0x100) != 0:
+        ret Security.Wpa
+    end
+    if (rsn & 0x1800) != 0:
+        ret Security.Owe
+    end
+    if wpa != 0 or rsn != 0:
+        ret Security.Unknown
+    end
+    if (flags & 1) != 0:
+        ret Security.Wep
+    end
+    ret Security.Open
+end
+
+@en "SecurityFromWlan"
+@fa "امنیت از ویندوز"
+pub func SecurityFromWlan(auth: int, cipher: int, onex: bool): Security:
+    if onex:
+        ret Security.Enterprise
+    end
+    switch auth:
+        1, 2:
+            if cipher == 1 or cipher == 5 or cipher == 0x101:
+                ret Security.Wep
+            end
+            if cipher == 0:
+                ret Security.Open
+            end
+            ret Security.Unknown
+        end
+        3, 6, 8, 11:
+            ret Security.Enterprise
+        end
+        4:
+            ret Security.Wpa
+        end
+        7:
+            ret Security.Wpa2
+        end
+        9:
+            ret Security.Wpa3
+        end
+        10:
+            ret Security.Owe
+        end
+        else:
+            ret Security.Unknown
+        end
+    end
+    ret Security.Unknown
+end
+
+@en "SecurityFromMac"
+@fa "امنیت از مک"
+pub func SecurityFromMac(code: int): Security:
+    switch code:
+        0:
+            ret Security.Open
+        end
+        1, 6:
+            ret Security.Wep
+        end
+        2, 3:
+            ret Security.Wpa
+        end
+        4, 5:
+            ret Security.Wpa2
+        end
+        7, 8, 9, 10, 12:
+            ret Security.Enterprise
+        end
+        11, 13:
+            ret Security.Wpa3
+        end
+        14, 15:
+            ret Security.Owe
+        end
+        else:
+            ret Security.Unknown
+        end
+    end
+    ret Security.Unknown
+end
+
+@en "DecodeSsid"
+@fa "رمزگشایی نام شبکه"
+pub func DecodeSsid(text: str): str:
+    mut b := str.NewBuilder()
+    n := text.Len()
+    mut nul := false
+    mut i := 0
+    until i < n:
+        c := _byte_at(text, i)
+        if c == 92 and i + 3 < n and _byte_at(text, i + 1) == 120:
+            hi := _hex_digit(_byte_at(text, i + 2))
+            lo := _hex_digit(_byte_at(text, i + 3))
+            if hi >= 0 and lo >= 0:
+                if hi * 16 + lo == 0:
+                    nul = true
+                end
+                str.BufAppendChar(b, hi * 16 + lo)
+                i += 4
+                continue
+            end
+        end
+        str.BufAppendChar(b, c)
+        i++
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    if nul:
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
+    ret out
+end
+
+@en "ParseIwDev"
+@fa "تجزیه فهرست آی دبلیو"
+pub func ParseIwDev(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    lines := text.Split("\n")
+    defer lines.Free()
+    each raw in lines:
+        line := _trim(raw)
+        if line.StartsWith("Interface "):
+            name := _after(line, "Interface ")
+            if name.Len() > 0:
+                out.Push(name)
+            end
+        end
+    end
+    ret out
+end
+
+@en "ParseIwLink"
+@fa "تجزیه پیوند آی دبلیو"
+pub func ParseIwLink(text: str, iface: str): Status:
+    mut s := _blank("iw")
+    s.interface = _swap(s.interface, str.Clone(iface))
+    lines := text.Split("\n")
+    defer lines.Free()
+    each raw in lines:
+        line := _trim(raw)
+        if line.StartsWith("Not connected"):
+            s.state = State.Disconnected
+        else line.StartsWith("Connected to "):
+            s.state = State.Connected
+            rest := _after(line, "Connected to ")
+            parts := rest.Split(" ")
+            if parts.Len() > 0:
+                s.bssid = _swap(s.bssid, _lower(parts[0]))
+            end
+            parts.Free()
+        else line.StartsWith("SSID:"):
+            raw := _after(line, "SSID:")
+            s.ssid = _swap(s.ssid, DecodeSsid(raw))
+            s.ssid_known = s.ssid.Len() > 0
+            if raw.Len() > 0 and not s.ssid_known:
+                s.reason = "the SSID contains a NUL byte"
+            end
+        else line.StartsWith("signal:"):
+            parts := _after(line, "signal:").Split(" ")
+            if parts.Len() > 0:
+                s.signal = SignalFromDbm(parts[0].ToInt())
+            end
+            parts.Free()
+        end
+    end
+    if s.state == State.Connected and not s.ssid_known and s.reason.Len() == 0:
+        s.reason = "iw reported no SSID"
+    end
+    ret s
+end
+
+@en "ParseIwScan"
+@fa "تجزیه پویش آی دبلیو"
+pub func ParseIwScan(text: str, bssid: str): Security:
+    lines := text.Split("\n")
+    defer lines.Free()
+    mut inside := false
+    mut found := false
+    mut privacy := false
+    mut wpa := false
+    mut rsn := false
+    mut block := ""
+    mut psk_wpa := false
+    mut psk_rsn := false
+    mut sae := false
+    mut onex := false
+    mut owe := false
+    each raw in lines:
+        if raw.StartsWith("BSS "):
+            if found:
+                break
+            end
+            addr := raw.Substr(4, raw.Len() - 4).Split("(")
+            inside = addr.Len() > 0 and _same_bssid(_trim(addr[0]), bssid)
+            addr.Free()
+            if inside:
+                found = true
+            end
+            continue
+        end
+        if not inside:
+            continue
+        end
+        line := _trim(raw)
+        if line.StartsWith("capability:") and line.Includes("Privacy"):
+            privacy = true
+        else line.StartsWith("WPA:"):
+            wpa = true
+            block = "wpa"
+        else line.StartsWith("RSN:"):
+            rsn = true
+            block = "rsn"
+        else line.StartsWith("* Authentication suites:"):
+            suites := _after(line, "* Authentication suites:")
+            if suites.Includes("802.1X") or suites.Includes("SUITE-B"):
+                onex = true
+            end
+            if suites.Includes("SAE"):
+                sae = true
+            end
+            if suites.Includes("OWE"):
+                owe = true
+            end
+            if suites.Includes("PSK"):
+                if block == "rsn":
+                    psk_rsn = true
+                else:
+                    psk_wpa = true
+                end
+            end
+        end
+    end
+    if not found:
+        ret Security.Unknown
+    end
+    if onex:
+        ret Security.Enterprise
+    end
+    if sae:
+        ret Security.Wpa3
+    end
+    if psk_rsn:
+        ret Security.Wpa2
+    end
+    if psk_wpa:
+        ret Security.Wpa
+    end
+    if owe:
+        ret Security.Owe
+    end
+    if wpa or rsn:
+        ret Security.Unknown
+    end
+    if privacy:
+        ret Security.Wep
+    end
+    ret Security.Open
+end
+
+@en "ParseWlanConnection"
+@fa "تجزیه اتصال ویندوز"
+pub func ParseWlanConnection(p: void*, n: int): Status:
+    mut s := _blank("wlanapi")
+    if p == null or n < 604:
+        s.reason = "short WLAN_CONNECTION_ATTRIBUTES"
+        ret s
+    end
+    s.state = _u32_at(p, 0) == 1 ? State.Connected : State.Disconnected
+    len := _u32_at(p, 520)
+    at := (p as i64 + 524 as i64) as void*
+    if len > 0 and len <= 32 and _has_nul(at, len):
+        s.reason = "the SSID contains a NUL byte"
+    else len > 0 and len <= 32:
+        s.ssid = _swap(s.ssid, _bytes_text(at, len))
+        s.ssid_known = true
+    else s.state == State.Connected:
+        s.reason = "the system did not report the SSID"
+    end
+    mac := _mac_text((p as i64 + 560 as i64) as void*)
+    if mac == "00:00:00:00:00:00":
+        mem.Free(mac as void*)
+    else:
+        s.bssid = _swap(s.bssid, mac)
+    end
+    quality := _u32_at(p, 576)
+    s.signal = quality <= 100 ? quality : -1
+    s.security = SecurityFromWlan(_u32_at(p, 596), _u32_at(p, 600), _u32_at(p, 592) != 0)
+    if _u32_at(p, 588) == 0 and s.security == Security.Unknown:
+        s.security = Security.Open
+    end
+    ret s
+end
+
+@en "Supported"
+@fa "پشتیبانی می شود"
+pub func Supported(): bool:
+    if SALAM_OS_LINUX:
+        ret true
+    else:
+        ret SALAM_OS_WINDOWS or SALAM_OS_MAC
+    end
+end
+
+@en "Interfaces"
+@fa "رابط ها"
+pub func Interfaces(): Vector<Status>:
+    ret _os_scan()
+end
+
+@en "Current"
+@fa "وضعیت کنونی"
+pub func Current(): Status:
+    mut all := _os_scan()
+    if all.Len() == 0:
+        all.Free()
+        mut none := _blank(Supported() ? "none" : "unsupported")
+        none.state = State.NoWifi
+        none.reason = Supported() ? "no wireless interface" : "no Wi-Fi backend for this platform"
+        ret none
+    end
+    pick := BestIndex(all)
+    chosen := all[pick]
+    repeat all.Len() in i:
+        if i != pick:
+            FreeStatus(all[i])
+        end
+    end
+    all.Free()
+    ret chosen
+end
+
+@en "BestIndex"
+@fa "شماره بهترین رابط"
+pub func BestIndex(list: Vector<Status>): int:
+    if list.Len() == 0:
+        ret -1
+    end
+    mut pick := 0
+    mut best := 0
+    repeat list.Len() in i:
+        rank := list[i].state == State.Connected ? 2 : (list[i].state == State.Disconnected ? 1 : 0)
+        if rank > best:
+            best = rank
+            pick = i
+        end
+    end
+    ret pick
+end
+
+@en "FreeStatus"
+@fa "آزادسازی وضعیت"
+pub func FreeStatus(s: Status):
+    mem.Free(s.interface as void*)
+    mem.Free(s.ssid as void*)
+    mem.Free(s.bssid as void*)
+end
+
+@en "FreeStatuses"
+@fa "آزادسازی وضعیت ها"
+pub func FreeStatuses(list: Vector<Status>):
+    each s in list:
+        FreeStatus(s)
+    end
+    mut owned := list
+    owned.Free()
+end
+
+@en "Changed"
+@fa "تغییر کرده"
+pub func Changed(a: Status, b: Status): bool:
+    if a.state != b.state or a.ssid_known != b.ssid_known or a.security != b.security:
+        ret true
+    end
+    ret a.ssid != b.ssid or a.interface != b.interface or not str.EqualFold(a.bssid, b.bssid)
+end
+
+@en "Classify"
+@fa "سنجش اعتماد"
+pub func Classify(s: Status, trusted: Vector<str>): Trust:
+    if s.state == State.Unknown:
+        ret Trust.Unknown
+    end
+    if s.state != State.Connected:
+        ret Trust.NotWifi
+    end
+    each t in trusted:
+        if _is_mac(t):
+            if _same_bssid(s.bssid, t):
+                ret Trust.Trusted
+            end
+        else s.ssid_known and t == s.ssid:
+            ret Trust.Trusted
+        end
+    end
+    if s.ssid_known:
+        ret Trust.Untrusted
+    end
+    if s.IsInsecure():
+        ret Trust.Untrusted
+    end
+    ret Trust.Unknown
+end
+
+@en "IsUntrusted"
+@fa "نامطمئن است"
+pub func IsUntrusted(s: Status, trusted: Vector<str>): bool:
+    ret Classify(s, trusted) == Trust.Untrusted
+end

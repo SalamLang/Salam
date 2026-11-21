@@ -1,0 +1,367 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tun
+
+import mem
+import sync
+
+@en "action_drop"
+@fa "کنش دورریختن"
+pub const action_drop := 0
+@en "action_reply"
+@fa "کنش بازفرستادن"
+pub const action_reply := 1
+@en "action_dns"
+@fa "کنش نام‌یابی"
+pub const action_dns := 2
+@en "action_ipv6"
+@fa "کنش آی‌پی۶"
+pub const action_ipv6 := 3
+
+const _NAT_FIRST := 10000
+const _NAT_SLOT := 32
+const _NAT_CLOSING_MS := 10000
+
+struct _NatCore:
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub addr: i64 = 0 as i64
+    pub next: i64 = 0 as i64
+    pub port: int = 0
+    pub table: void* = null
+    pub index: HashMap<i64, int> = HashMap {}
+    pub cursor: int = 10000
+    pub live: int = 0
+    pub idle_ms: i64 = 600000 as i64
+end
+
+@en "NatEntry"
+@fa "ردیف ترجمه"
+pub struct NatEntry:
+    @en "ok"
+    @fa "درست"
+    pub ok: bool = false
+    @en "src"
+    @fa "مبدا"
+    pub src: str = ""
+    @en "sport"
+    @fa "درگاه مبدا"
+    pub sport: int = 0
+    @en "dst"
+    @fa "مقصد"
+    pub dst: str = ""
+    @en "dport"
+    @fa "درگاه مقصد"
+    pub dport: int = 0
+end
+
+@en "Nat"
+@fa "ترجمه نشانی"
+pub struct Nat:
+    @en "core"
+    @fa "هسته"
+    pub core: void* = null
+
+    @en "Rewrite"
+    @fa "بازنویسی"
+    pub func Rewrite(ptr: void*, n: int, now_ms: i64): int:
+        if this.core == null or n < 20:
+            ret action_drop
+        end
+        p := ptr as u8*
+        ver := _b(p, 0) >> 4
+        if ver == 6:
+            ret action_ipv6
+        end
+        if ver != 4:
+            ret action_drop
+        end
+        ihl := (_b(p, 0) & 15) * 4
+        total := _u16(p, 2)
+        if ihl < 20 or total < ihl or total > n:
+            ret action_drop
+        end
+        frag := _u16(p, 6)
+        if (frag & 8191) != 0 or (frag & 8192) != 0:
+            ret action_drop
+        end
+        proto := _b(p, 9)
+        dst := _u32(p, 16)
+        if _special4(dst):
+            ret action_drop
+        end
+        if proto == proto_udp:
+            if total - ihl >= 8 and _u16(p, ihl + 2) == 53:
+                ret action_dns
+            end
+            ret action_drop
+        end
+        if proto != proto_tcp or total - ihl < 20:
+            ret action_drop
+        end
+        doff := (_b(p, ihl + 12) >> 4) * 4
+        if doff < 20 or doff > total - ihl:
+            ret action_drop
+        end
+        c := this.core as _NatCore*
+        src := _u32(p, 12)
+        sport := _u16(p, ihl)
+        dport := _u16(p, ihl + 2)
+        flags := _b(p, ihl + 13)
+        sync.Lock(c[0].mu)
+        defer sync.Unlock(c[0].mu)
+        if src == c[0].addr and sport == c[0].port:
+            if dport < _NAT_FIRST:
+                ret action_drop
+            end
+            e := _slot(c, dport)
+            if (_u16(e, 12) & 1) == 0 or dst != c[0].next:
+                ret action_drop
+            end
+            _observe(e, flags, true, now_ms)
+            _rewrite_tcp4(p, ihl, _u32(e, 4), _u16(e, 10), _u32(e, 0), _u16(e, 8))
+            ret action_reply
+        end
+        if dst == c[0].addr or dst == c[0].next:
+            ret action_drop
+        end
+        port := _forward_port(c, src, sport, dst, dport, flags, now_ms)
+        if port == 0:
+            ret action_drop
+        end
+        _rewrite_tcp4(p, ihl, c[0].next, port, c[0].addr, c[0].port)
+        ret action_reply
+    end
+
+    @en "Lookup"
+    @fa "جستجو"
+    pub func Lookup(nat_port: int): NatEntry:
+        if this.core == null or nat_port < _NAT_FIRST or nat_port > 65535:
+            ret NatEntry {}
+        end
+        c := this.core as _NatCore*
+        sync.Lock(c[0].mu)
+        defer sync.Unlock(c[0].mu)
+        e := _slot(c, nat_port)
+        if (_u16(e, 12) & 1) == 0:
+            ret NatEntry {}
+        end
+        ret NatEntry { ok = true, src = _ip4s(_u32(e, 0)), sport = _u16(e, 8), dst = _ip4s(_u32(e, 4)), dport = _u16(e, 10) }
+    end
+
+    @en "Sweep"
+    @fa "پاکسازی"
+    pub func Sweep(now_ms: i64): int:
+        if this.core == null:
+            ret 0
+        end
+        c := this.core as _NatCore*
+        sync.Lock(c[0].mu)
+        defer sync.Unlock(c[0].mu)
+        mut gone := 0
+        mut p := _NAT_FIRST
+        until p <= 65535:
+            if _expired(c, _slot(c, p), now_ms):
+                _free_slot(c, p)
+                gone++
+            end
+            p++
+        end
+        ret gone
+    end
+
+    @en "Active"
+    @fa "فعال‌ها"
+    pub func Active(): int:
+        if this.core == null:
+            ret 0
+        end
+        c := this.core as _NatCore*
+        sync.Lock(c[0].mu)
+        defer sync.Unlock(c[0].mu)
+        ret c[0].live
+    end
+
+    @en "Port"
+    @fa "درگاه شنونده"
+    pub func Port(): int:
+        if this.core == null:
+            ret 0
+        end
+        ret (this.core as _NatCore*)[0].port
+    end
+end
+
+func _slot(c: _NatCore*, port: int): u8*:
+    ret ((c[0].table as i64) + ((port * _NAT_SLOT) as i64)) as u8*
+end
+
+func _slot_last(e: u8*): i64:
+    ret ((e as i64 + (16 as i64)) as i64*)[0]
+end
+
+func _slot_set_last(e: u8*, v: i64):
+    ((e as i64 + (16 as i64)) as i64*)[0] = v
+end
+
+func _slot_key(e: u8*): i64:
+    ret ((e as i64 + (24 as i64)) as i64*)[0]
+end
+
+func _slot_set_key(e: u8*, v: i64):
+    ((e as i64 + (24 as i64)) as i64*)[0] = v
+end
+
+func _observe(e: u8*, flags: int, reverse: bool, now: i64):
+    mut st := _u16(e, 12)
+    if (flags & tcp_rst) != 0:
+        st |= 8
+    else (flags & tcp_fin) != 0:
+        st |= (reverse ? 4 : 2)
+        if (st & 6) == 6:
+            st |= 8
+        end
+    end
+    _put16(e, 12, st)
+    _slot_set_last(e, now)
+end
+
+func _free_slot(c: _NatCore*, port: int):
+    e := _slot(c, port)
+    if (_u16(e, 12) & 1) == 0:
+        ret
+    end
+    key := _slot_key(e)
+    if c[0].index.Has(key) and c[0].index.Get(key) == port:
+        c[0].index.Remove(key)
+    end
+    mem.Set(e as void*, 0, _NAT_SLOT as u64)
+    c[0].live--
+end
+
+func _expired(c: _NatCore*, e: u8*, now: i64): bool:
+    st := _u16(e, 12)
+    if (st & 1) == 0:
+        ret false
+    end
+    age := now - _slot_last(e)
+    if (st & 8) != 0:
+        ret age > (_NAT_CLOSING_MS as i64)
+    end
+    ret age > c[0].idle_ms
+end
+
+func _alloc(c: _NatCore*, now: i64): int:
+    span := 65536 - _NAT_FIRST
+    repeat span:
+        p := c[0].cursor
+        c[0].cursor = p + 1
+        if c[0].cursor > 65535:
+            c[0].cursor = _NAT_FIRST
+        end
+        e := _slot(c, p)
+        if _expired(c, e, now):
+            _free_slot(c, p)
+        end
+        if (_u16(e, 12) & 1) == 0:
+            ret p
+        end
+    end
+    ret 0
+end
+
+func _forward_port(c: _NatCore*, src: i64, sport: int, dst: i64, dport: int, flags: int, now: i64): int:
+    key := (dst << 32) | ((sport as i64) << 16) | (dport as i64)
+    if c[0].index.Has(key):
+        p := c[0].index.Get(key)
+        e := _slot(c, p)
+        fresh := (flags & tcp_syn) != 0 and (flags & tcp_ack) == 0 and (_u16(e, 12) & 8) != 0
+        if _u32(e, 0) == src and not fresh:
+            _observe(e, flags, false, now)
+            ret p
+        end
+        _free_slot(c, p)
+    end
+    p := _alloc(c, now)
+    if p == 0:
+        ret 0
+    end
+    e := _slot(c, p)
+    _put32(e, 0, src)
+    _put32(e, 4, dst)
+    _put16(e, 8, sport)
+    _put16(e, 10, dport)
+    _put16(e, 12, 1)
+    _slot_set_key(e, key)
+    _slot_set_last(e, now)
+    c[0].index.Put(key, p)
+    c[0].live++
+    _observe(e, flags, false, now)
+    ret p
+end
+
+func _rewrite_tcp4(p: u8*, ihl: int, new_src: i64, new_sport: int, new_dst: i64, new_dport: int):
+    mut ip_sum := _u16(p, 10)
+    mut tcp_sum := _u16(p, ihl + 16)
+    repeat 2 in k:
+        old_s := _u16(p, 12 + k * 2)
+        new_s := ((new_src >> ((1 - k) * 16)) & 65535) as int
+        ip_sum = ChecksumAdjust(ip_sum, old_s, new_s)
+        tcp_sum = ChecksumAdjust(tcp_sum, old_s, new_s)
+        old_d := _u16(p, 16 + k * 2)
+        new_d := ((new_dst >> ((1 - k) * 16)) & 65535) as int
+        ip_sum = ChecksumAdjust(ip_sum, old_d, new_d)
+        tcp_sum = ChecksumAdjust(tcp_sum, old_d, new_d)
+    end
+    tcp_sum = ChecksumAdjust(tcp_sum, _u16(p, ihl), new_sport)
+    tcp_sum = ChecksumAdjust(tcp_sum, _u16(p, ihl + 2), new_dport)
+    _put32(p, 12, new_src)
+    _put32(p, 16, new_dst)
+    _put16(p, ihl, new_sport)
+    _put16(p, ihl + 2, new_dport)
+    _put16(p, 10, ip_sum)
+    _put16(p, ihl + 16, tcp_sum)
+end
+
+func _special4(a: i64): bool:
+    top := (a >> 24) & 255
+    if top == 0 or top == 127 or top >= 224:
+        ret true
+    end
+    ret false
+end
+
+@en "NewNat"
+@fa "ترجمه نشانی تازه"
+pub func NewNat(address: str, next: str, listen_port: int, idle_ms: int): Nat:
+    a := _ip4(address)
+    b := _ip4(next)
+    if a < 0 or b < 0 or listen_port <= 0 or listen_port > 65535:
+        ret Nat {}
+    end
+    c := mem.AllocateZeroed(sizeof(_NatCore) as u64) as _NatCore*
+    c[0] = _NatCore { mu = sync.NewMutex(), addr = a, next = b, port = listen_port, table = mem.AllocateZeroed((65536 * _NAT_SLOT) as u64), index = HashMap {} as HashMap<i64, int>, cursor = _NAT_FIRST, idle_ms = (idle_ms > 0 ? idle_ms : 600000) as i64 }
+    ret Nat { core = c as void* }
+end
+
+@en "FreeNat"
+@fa "آزادسازی ترجمه"
+pub func FreeNat(nat: Nat):
+    if nat.core == null:
+        ret
+    end
+    c := nat.core as _NatCore*
+    c[0].index.Free()
+    mem.Free(c[0].table)
+    mem.Free(nat.core)
+end

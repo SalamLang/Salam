@@ -67209,11 +67209,11 @@ func dirfd(d: void*): int
 end
 if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 extern:
-func syscall(nr: i64, a: i64, b: i64, c: i64): i64
+func syscall(nr: i64, a: i64, b: i64, c: i64, d: i64, e: i64): i64
 end
 else:
 extern:
-func syscall(nr: int, a: int, b: int, c: int): int
+func syscall(nr: int, a: int, b: int, c: int, d: int, e: int): int
 end
 end
 end
@@ -67394,11 +67394,11 @@ func _gd_nr(): i64: ret 61 end
 end
 if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 func _getdents(fd: int, buf: void*, cap: int): i64:
-ret syscall(_gd_nr(), fd as i64, buf as i64, cap as i64)
+ret syscall(_gd_nr(), fd as i64, buf as i64, cap as i64, 0 as i64, 0 as i64)
 end
 else:
 func _getdents(fd: int, buf: void*, cap: int): i64:
-ret syscall(_gd_nr() as int, fd, (buf as i64) as int, cap)
+ret syscall(_gd_nr() as int, fd, (buf as i64) as int, cap, 0, 0)
 end
 end
 export:
@@ -123316,11 +123316,21 @@ import crypto
 import str
 import filepath
 import os.error
+import mem
+extern:
+func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+func ferror(stream: void*): int
+func fseek(fp: void*, off: int, whence: int): int
+func ftell(fp: void*): int
+end
 if SALAM_OS_WINDOWS:
 extern:
 func MoveFileExA(existing: str, new_path: str, flags: int): int
 end
 end
+const _IO_CHUNK := 65536
+const _MAX_BYTES := 2147483647
 @en "FileInfo"
 @fa "اطلاعات پرونده"
 pub struct FileInfo:
@@ -123365,6 +123375,91 @@ n := io.Write(f, data)
 io.Close(f)
 ret n
 end
+func _read_all_bytes(path: str, ok &: bool): Vector<u8>:
+ok = false
+mut out := Vector {} as Vector<u8>
+f := os.Open(path, "rb")
+if f == null: ret out end
+fp := f as void*
+mut cap := _IO_CHUNK as i64
+if fseek(fp, 0, 2) == 0:
+hint := ftell(fp) as i64
+if hint > (0 as i64) and hint < (1073741824 as i64): cap = hint + 1 end
+end
+fseek(fp, 0, 0)
+mut buf := mem.MustAllocate(cap as u64)
+mut used := 0 as i64
+mut failed := false
+until 1 == 1:
+if used == cap:
+if cap >= (_MAX_BYTES as i64):
+failed = true
+break
+end
+cap *= 2
+if cap > (_MAX_BYTES as i64): cap = _MAX_BYTES as i64 end
+buf = mem.MustReallocate(buf, cap as u64)
+end
+got := fread(((buf as i64) + used) as void*, 1 as u64, (cap - used) as u64, fp)
+if got == 0 as u64: break end
+used += got as i64
+end
+if ferror(fp) != 0: failed = true end
+io.Close(f)
+if failed:
+mem.Free(buf)
+ret out
+end
+if used > (0 as i64):
+out.Alloc(used as int)
+mem.Copy(out.data as void*, buf, used as u64)
+end
+mem.Free(buf)
+ok = true
+ret out
+end
+func _hex_digest(d: void*, n: int): str:
+mut sb := str.NewBuilder()
+bp := d as u8*
+repeat n in i:
+b := bp[i] as int
+hi := b >> 4
+lo := b & 15
+str.BufAppendChar(sb, hi < 10 ? 48 + hi : 87 + hi)
+str.BufAppendChar(sb, lo < 10 ? 48 + lo : 87 + lo)
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+ret out
+end
+func _file_digest(p: str, kind: int, op: str): str:
+mut ok := false
+data := _read_all_bytes(p, ok)
+defer data.Free()
+if ok == false:
+error.Set(error.IOError, "read failed", op, p, 0)
+ret ""
+end
+out := mem.MustAllocateZeroed(64 as u64)
+defer mem.Free(out)
+src := data.data as void*
+n := data.Len()
+mut size := 0
+if kind == 0:
+crypto.Md5Bytes(src, n, out)
+size = 16
+else kind == 1:
+crypto.Sha1Bytes(src, n, out)
+size = 20
+else kind == 2:
+crypto.Sha256Bytes(src, n, out)
+size = 32
+else:
+crypto.Sha512Bytes(src, n, out)
+size = 64
+end
+ret _hex_digest(out, size)
+end
 @en "Open"
 @fa "بازکردن"
 pub func Open(path: str, mode: str): File*: ret os.Open(path, mode) end
@@ -123406,6 +123501,44 @@ pub func WriteText(path: str, data: str): int: ret _write_binary(path, "wb", dat
 @en "WriteBytes"
 @fa "نوشتن بایت‌ها"
 pub func WriteBytes(path: str, data: str): int: ret _write_binary(path, "wb", data) end
+@en "ReadAllBytes"
+@fa "خواندن همه بایت‌ها"
+pub func ReadAllBytes(path: str): Vector<u8>:
+mut ok := false
+out := _read_all_bytes(path, ok)
+if ok == false:
+error.Set(error.IOError, "read failed", "ReadAllBytes", path, 0)
+end
+ret out
+end
+@en "WriteAllBytes"
+@fa "نوشتن همه بایت‌ها"
+pub func WriteAllBytes(path: str, data: Vector<u8>): int:
+f := os.Open(path, "wb")
+if f == null:
+error.Set(error.IOError, "open for writing failed", "WriteAllBytes", path, 0)
+ret 0 - 1
+end
+n := data.Len()
+buf := mem.MustAllocate(_IO_CHUNK as u64)
+mut off := 0
+mut failed := false
+until off < n and failed == false:
+mut k := n - off
+if k > _IO_CHUNK: k = _IO_CHUNK end
+mem.Copy(buf, ((data.data as i64) + (off as i64)) as void*, k as u64)
+put := fwrite(buf, 1 as u64, k as u64, f as void*)
+if put != (k as u64): failed = true end
+off += k
+end
+mem.Free(buf)
+io.Close(f)
+if failed:
+error.Set(error.IOError, "write failed", "WriteAllBytes", path, 0)
+ret 0 - 1
+end
+ret n
+end
 @en "Append"
 @fa "افزودن"
 pub func Append(path: str, data: str): int: ret _write_binary(path, "ab", data) end
@@ -123464,10 +123597,13 @@ end
 @fa "وضعیت"
 pub func Stat(p: str): FileInfo:
 if os.Exists(p) == false: ret FileInfo { exists = false } end
-ret FileInfo {
-size = Size(p), mod_time = ModTime(p), accessed_time = AccessedTime(p), created_time = CreatedTime(p),
-permissions = Permissions(p), exists = true
-}
+m := _meta(p)
+if m.ok == false:
+ret FileInfo { size = Size(p), mod_time = 0 - 1, accessed_time = 0 - 1, created_time = 0 - 1, permissions = 0 - 1, exists = true }
+end
+mut born := m.btime
+if born < (0 as i64): born = 0 end
+ret FileInfo { size = m.size, mod_time = m.mtime, accessed_time = m.atime, created_time = born, permissions = m.mode & 4095, exists = true }
 end
 @en "Copy"
 @fa "کپی"
@@ -123504,78 +123640,221 @@ end
 pub func Exists(p: str): bool: ret os.Exists(p) end
 @en "Md5Hex"
 @fa "هش ام‌دی۵"
-pub func Md5Hex(p: str): str: ret crypto.Md5Hex(io.ReadFile(p)) end
+pub func Md5Hex(p: str): str: ret _file_digest(p, 0, "Md5Hex") end
 @en "Sha1Hex"
 @fa "هش شا۱"
-pub func Sha1Hex(p: str): str: ret crypto.Sha1Hex(io.ReadFile(p)) end
+pub func Sha1Hex(p: str): str: ret _file_digest(p, 1, "Sha1Hex") end
 @en "Sha256Hex"
 @fa "هش شا۲۵۶"
-pub func Sha256Hex(p: str): str: ret crypto.Sha256Hex(io.ReadFile(p)) end
+pub func Sha256Hex(p: str): str: ret _file_digest(p, 2, "Sha256Hex") end
 @en "Sha512Hex"
 @fa "هش شا۵۱۲"
-pub func Sha512Hex(p: str): str: ret crypto.Sha512Hex(io.ReadFile(p)) end
+pub func Sha512Hex(p: str): str: ret _file_digest(p, 3, "Sha512Hex") end
 @en "fs"
 @fa "سیستم پرونده"
 package fs
 import mem
 import str
-extern:
-func fgetc(stream: void*): int
-end
 if SALAM_OS_WINDOWS:
 extern:
-func GetFileAttributesExA(path: str, level: int, data: void*): int
-func _chmod(path: str, mode: int): int
+func MultiByteToWideChar(codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32): i32
+func _wstat64(path: void*, buf: void*): int
+func _wchmod(path: void*, mode: int): int
+end
+else SALAM_OS_ANDROID:
+extern:
+func chmod(path: str, mode: int): int
+end
+if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
+extern:
+func stat64(path: str, buf: void*): int
+end
+else:
+extern:
+func stat(path: str, buf: void*): int
+end
+end
+else SALAM_OS_LINUX:
+extern:
+func chmod(path: str, mode: int): int
+end
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+extern:
+func syscall(nr: i64, a: i64, b: i64, c: i64, d: i64, e: i64): i64
+func stat(path: str, buf: void*): int
+end
+else:
+extern:
+func syscall(nr: int, a: int, b: int, c: int, d: int, e: int): int
+end
+end
+else SALAM_OS_MAC or SALAM_OS_FREEBSD:
+extern:
+func chmod(path: str, mode: int): int
+func stat(path: str, buf: void*): int
 end
 else:
 extern:
 func chmod(path: str, mode: int): int
+func fgetc(stream: void*): int
 func popen(cmd: str, mode: str): void*
 func pclose(fp: void*): int
 end
 end
-func _byte_at(base: void*, off: i64): int:
-p := ((base as i64) + off) as u8*
-ret p[0] as int
+struct _Meta:
+pub ok: bool = false
+pub size: i64 = 0
+pub mode: int = 0
+pub atime: i64 = 0
+pub mtime: i64 = 0
+pub btime: i64 = 0
 end
-func _u32_at(base: void*, off: i64): u32:
-p := ((base as i64) + off) as u32*
-ret p[0]
+func _at(base: void*, off: int): void*:
+ret ((base as i64) + (off as i64)) as void*
 end
-func _filetime_to_unix(low: u32, high: u32): i64:
-combined := (high as u64) * (4294967296 as u64) + (low as u64)
-epoch := 116444736000000000 as u64
-if combined < epoch: ret 0 end
-ret ((combined - epoch) / (10000000 as u64)) as i64
+func _i64_at(base: void*, off: int): i64:
+ret (_at(base, off) as i64*)[0]
+end
+func _u16_at(base: void*, off: int): int:
+ret (_at(base, off) as u16*)[0] as int
+end
+func _u32_at(base: void*, off: int): int:
+ret (_at(base, off) as u32*)[0] as int
+end
+func _u32_wide_at(base: void*, off: int): i64:
+ret (_at(base, off) as u32*)[0] as i64
 end
 if SALAM_OS_WINDOWS:
-func _fs_times(path: str): i64*:
-buf := mem.MustAllocateZeroed(40 as u64)
-out := mem.MustAllocate(24 as u64) as i64*
-ok := GetFileAttributesExA(path, 0, buf)
-if ok == 0:
-out[0] = 0 - 1
-out[1] = 0 - 1
-out[2] = 0 - 1
-mem.Free(buf)
-ret out
+func _wide(path: str): void*:
+n := MultiByteToWideChar(65001 as u32, 0 as u32, path, 0 - 1, null, 0)
+if n <= 0:
+ret mem.MustAllocateZeroed(2 as u64)
 end
-ctime := _filetime_to_unix(_u32_at(buf, 4), _u32_at(buf, 8))
-atime := _filetime_to_unix(_u32_at(buf, 12), _u32_at(buf, 16))
-mtime := _filetime_to_unix(_u32_at(buf, 20), _u32_at(buf, 24))
-out[0] = mtime
-out[1] = atime
-out[2] = ctime
-mem.Free(buf)
-ret out
+w := mem.MustAllocateZeroed((n * 2) as u64)
+MultiByteToWideChar(65001 as u32, 0 as u32, path, 0 - 1, w, n)
+ret w
 end
+func _meta(path: str): _Meta:
+buf := mem.MustAllocateZeroed(64 as u64)
+defer mem.Free(buf)
+w := _wide(path)
+r := _wstat64(w, buf)
+mem.Free(w)
+if r != 0: ret _Meta {} end
+ret _Meta {
+ok = true, mode = _u16_at(buf, 6), size = _i64_at(buf, 24), atime = _i64_at(buf, 32), mtime = _i64_at(buf, 40),
+btime = _i64_at(buf, 48)
+}
+end
+func _chmod_path(path: str, mode: int): int:
+w := _wide(path)
+r := _wchmod(w, mode)
+mem.Free(w)
+ret r
+end
+else SALAM_OS_ANDROID:
+func _from_stat(buf: void*, mode_at: int, size_at: int, atime_at: int, mtime_at: int, wide: bool): _Meta:
+mut m := _Meta { ok = true, mode = _u32_at(buf, mode_at), size = _i64_at(buf, size_at) }
+if wide:
+m.atime = _i64_at(buf, atime_at)
+m.mtime = _i64_at(buf, mtime_at)
+else:
+m.atime = _u32_wide_at(buf, atime_at)
+m.mtime = _u32_wide_at(buf, mtime_at)
+end
+ret m
+end
+func _meta(path: str): _Meta:
+buf := mem.MustAllocateZeroed(256 as u64)
+defer mem.Free(buf)
+if SALAM_ARCH_X86:
+if stat64(path, buf) != 0: ret _Meta {} end
+ret _from_stat(buf, 16, 44, 64, 72, false)
+else SALAM_ARCH_ARM:
+if stat64(path, buf) != 0: ret _Meta {} end
+ret _from_stat(buf, 16, 48, 72, 80, false)
+else SALAM_ARCH_X64:
+if stat(path, buf) != 0: ret _Meta {} end
+ret _from_stat(buf, 24, 48, 72, 88, true)
+else:
+if stat(path, buf) != 0: ret _Meta {} end
+ret _from_stat(buf, 16, 48, 72, 88, true)
+end
+end
+func _chmod_path(path: str, mode: int): int: ret chmod(path, mode) end
+else SALAM_OS_LINUX:
+if SALAM_ARCH_X64:
+func _statx_nr(): i64: ret 332 end
+else SALAM_ARCH_X86:
+func _statx_nr(): i64: ret 383 end
+else SALAM_ARCH_ARM:
+func _statx_nr(): i64: ret 397 end
+else:
+func _statx_nr(): i64: ret 291 end
+end
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+func _statx(path: str, buf: void*): bool:
+ret syscall(_statx_nr(), (0 - 100) as i64, (path as void*) as i64, 0 as i64, 4095 as i64, buf as i64) == (0 as i64)
+end
+else:
+func _statx(path: str, buf: void*): bool:
+ret syscall(_statx_nr() as int, 0 - 100, ((path as void*) as i64) as int, 0, 4095, (buf as i64) as int) == 0
+end
+end
+if SALAM_ARCH_X64:
+func _stat_fallback(path: str, buf: void*): _Meta:
+if stat(path, buf) != 0: ret _Meta {} end
+ret _Meta { ok = true, mode = _u32_at(buf, 24), size = _i64_at(buf, 48), atime = _i64_at(buf, 72), mtime = _i64_at(buf, 88) }
+end
+else SALAM_ARCH_ARM64 or SALAM_ARCH_RISCV64:
+func _stat_fallback(path: str, buf: void*): _Meta:
+if stat(path, buf) != 0: ret _Meta {} end
+ret _Meta { ok = true, mode = _u32_at(buf, 16), size = _i64_at(buf, 48), atime = _i64_at(buf, 72), mtime = _i64_at(buf, 88) }
+end
+else:
+func _stat_fallback(path: str, buf: void*): _Meta: ret _Meta {} end
+end
+func _meta(path: str): _Meta:
+buf := mem.MustAllocateZeroed(256 as u64)
+defer mem.Free(buf)
+if _statx(path, buf) == false: ret _stat_fallback(path, buf) end
+mut born := 0 as i64
+if (_u32_at(buf, 0) & 2048) != 0: born = _i64_at(buf, 80) end
+ret _Meta {
+ok = true, mode = _u16_at(buf, 28), size = _i64_at(buf, 40), atime = _i64_at(buf, 64), mtime = _i64_at(buf, 112),
+btime = born
+}
+end
+func _chmod_path(path: str, mode: int): int: ret chmod(path, mode) end
+else SALAM_OS_MAC:
+func _meta(path: str): _Meta:
+buf := mem.MustAllocateZeroed(256 as u64)
+defer mem.Free(buf)
+if stat(path, buf) != 0: ret _Meta {} end
+ret _Meta {
+ok = true, mode = _u16_at(buf, 4), atime = _i64_at(buf, 32), mtime = _i64_at(buf, 48), btime = _i64_at(buf, 80),
+size = _i64_at(buf, 96)
+}
+end
+func _chmod_path(path: str, mode: int): int: ret chmod(path, mode) end
+else SALAM_OS_FREEBSD:
+func _meta(path: str): _Meta:
+buf := mem.MustAllocateZeroed(256 as u64)
+defer mem.Free(buf)
+if stat(path, buf) != 0: ret _Meta {} end
+ret _Meta {
+ok = true, mode = _u16_at(buf, 24), atime = _i64_at(buf, 48), mtime = _i64_at(buf, 64), btime = _i64_at(buf, 96),
+size = _i64_at(buf, 112)
+}
+end
+func _chmod_path(path: str, mode: int): int: ret chmod(path, mode) end
 else:
 func _fs_shell_quote(path: str): str:
 mut sb := str.NewBuilder()
 str.BufAppendChar(sb, 39)
-pp := path as void*
+bp := path as u8*
 repeat path.Len() in i:
-c := _byte_at(pp, i as i64)
+c := bp[i] as int
 if c == 39:
 str.BufAppend(sb, "'\\''")
 else:
@@ -123587,15 +123866,11 @@ out := str.BufStr(sb)
 str.BufFree(sb)
 ret out
 end
-func _fs_stat_field(path: str, fmt: str): i64:
+func _fs_stat_field(path: str, fmt: str, base: int): i64:
 quoted := _fs_shell_quote(path)
 defer mem.Free(quoted as void*)
 mut cb := str.NewBuilder()
-if SALAM_OS_MAC or SALAM_OS_BSD:
 str.BufAppend(cb, "stat -f ")
-else:
-str.BufAppend(cb, "stat -c ")
-end
 str.BufAppend(cb, fmt)
 str.BufAppend(cb, " ")
 str.BufAppend(cb, quoted)
@@ -123605,126 +123880,72 @@ str.BufFree(cb)
 fp := popen(cmd, "r")
 mem.Free(cmd as void*)
 if fp == null: ret 0 - 1 end
-mut sb := str.NewBuilder()
+mut v := 0 as i64
+mut digits := 0
+mut neg := false
+mut bad := false
 mut c := fgetc(fp)
 until c != -1 and c != 10:
-str.BufAppendChar(sb, c)
+if c == 45 and digits == 0:
+neg = true
+else c >= 48 and c < 48 + base and digits < 18:
+v = v * (base as i64) + ((c - 48) as i64)
+digits++
+else:
+bad = true
+end
 c = fgetc(fp)
 end
-line := str.BufStr(sb)
-str.BufFree(sb)
 pclose(fp)
-defer mem.Free(line as void*)
-if line.Len() == 0: ret 0 - 1 end
-lp := line as void*
-mut k := 0
-neg := _byte_at(lp, 0 as i64) == 45
-if neg: k = 1 end
-if k >= line.Len() or line.Len() - k > 18: ret 0 - 1 end
-mut v := 0 as i64
-until k < line.Len():
-c2 := _byte_at(lp, k as i64)
-if c2 < 48 or c2 > 57: ret 0 - 1 end
-v = v * 10 + ((c2 - 48) as i64)
-k++
-end
+if bad or digits == 0: ret 0 - 1 end
 if neg: ret 0 - v end
 ret v
 end
+func _meta(path: str): _Meta:
+m := _fs_stat_field(path, "%Lp", 8)
+if m < (0 as i64): ret _Meta {} end
+b := _fs_stat_field(path, "%B", 10)
+ret _Meta {
+ok = true, mode = m as int, size = _fs_stat_field(path, "%z", 10), atime = _fs_stat_field(path, "%a", 10),
+mtime = _fs_stat_field(path, "%m", 10), btime = b < (0 as i64) ? 0 as i64 : b
+}
 end
-if SALAM_OS_WINDOWS:
+func _chmod_path(path: str, mode: int): int: ret chmod(path, mode) end
+end
 @en "ModTime"
 @fa "زمان تغییر"
 pub func ModTime(path: str): i64:
-t := _fs_times(path)
-v := t[0]
-mem.Free(t as void*)
-ret v
+m := _meta(path)
+if m.ok == false: ret 0 - 1 end
+ret m.mtime
 end
 @en "AccessedTime"
 @fa "زمان دسترسی"
 pub func AccessedTime(path: str): i64:
-t := _fs_times(path)
-v := t[1]
-mem.Free(t as void*)
-ret v
+m := _meta(path)
+if m.ok == false: ret 0 - 1 end
+ret m.atime
 end
 @en "CreatedTime"
 @fa "زمان ایجاد"
 pub func CreatedTime(path: str): i64:
-t := _fs_times(path)
-v := t[2]
-mem.Free(t as void*)
-ret v
+m := _meta(path)
+if m.ok == false: ret 0 - 1 end
+if m.btime < (0 as i64): ret 0 end
+ret m.btime
 end
 @en "Chmod"
 @fa "تغییر مجوز"
 pub func Chmod(path: str, mode: int): int:
-if _chmod(path, mode) == 0: ret 0 end
+if _chmod_path(path, mode & 4095) == 0: ret 0 end
 ret 0 - 1
 end
 @en "Permissions"
 @fa "مجوزها"
 pub func Permissions(path: str): int:
-buf := mem.MustAllocateZeroed(40 as u64)
-ok := GetFileAttributesExA(path, 0, buf)
-if ok == 0:
-mem.Free(buf)
-ret 0 - 1
-end
-attrs := _u32_at(buf, 0)
-mem.Free(buf)
-is_dir := ((attrs as int) / 16) % 2 == 1
-if (attrs as int) % 2 == 1:
-if is_dir: ret 555 end
-ret 444
-end
-if is_dir: ret 777 end
-ret 666
-end
-else:
-@en "ModTime"
-@fa "زمان تغییر"
-pub func ModTime(path: str): i64:
-if SALAM_OS_MAC or SALAM_OS_BSD:
-ret _fs_stat_field(path, "%m")
-else:
-ret _fs_stat_field(path, "%Y")
-end
-end
-@en "AccessedTime"
-@fa "زمان دسترسی"
-pub func AccessedTime(path: str): i64:
-if SALAM_OS_MAC or SALAM_OS_BSD:
-ret _fs_stat_field(path, "%a")
-else:
-ret _fs_stat_field(path, "%X")
-end
-end
-@en "CreatedTime"
-@fa "زمان ایجاد"
-pub func CreatedTime(path: str): i64:
-if SALAM_OS_MAC or SALAM_OS_BSD:
-ret _fs_stat_field(path, "%B")
-else:
-ret _fs_stat_field(path, "%W")
-end
-end
-@en "Chmod"
-@fa "تغییر مجوز"
-pub func Chmod(path: str, mode: int): int:
-if chmod(path, mode) == 0: ret 0 end
-ret 0 - 1
-end
-@en "Permissions"
-@fa "مجوزها"
-pub func Permissions(path: str): int:
-if SALAM_OS_MAC or SALAM_OS_BSD:
-ret _fs_stat_field(path, "%Lp") as int
-else:
-ret _fs_stat_field(path, "%a") as int
-end
-end
+m := _meta(path)
+if m.ok == false: ret 0 - 1 end
+ret m.mode & 4095
 end
 @en "meta"
 @fa "فراداده"
@@ -310355,28 +310576,15 @@ end
 ret out
 end
 end
-func _sftp_perm_bits(value: int): int:
-mut v := value
-if v < 0:
-ret 420
-end
-if v > 777:
-v %= 1000
-end
-hundreds := v / 100
-tens := (v / 10) % 10
-ones := v % 10
-ret hundreds * 64 + tens * 8 + ones
-end
 func _sftp_mode_for(path: str): u32:
 is_dir := os.IsDir(path)
 mut perm := 420
 if is_dir:
 perm = 493
 end
-dec := fs.Permissions(path)
-if dec >= 0:
-perm = _sftp_perm_bits(dec)
+bits := fs.Permissions(path)
+if bits >= 0:
+perm = bits & 511
 end
 if _sftp_is_link(path):
 ret 0xA000 | 511

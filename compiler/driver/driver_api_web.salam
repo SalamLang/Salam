@@ -49,6 +49,39 @@ func spa_htaccess(base: str, html_name: str): str:
     ret t
 end
 
+func route_page_copy(html: str, title: str): str:
+    if str.Len(title) == 0:
+        ret html
+    end
+    a := str.IndexOf(html, "<title>")
+    b := str.IndexOf(html, "</title>")
+    if a < 0 or b < a:
+        ret html
+    end
+    esc := str.Replace(str.Replace(str.Replace(title, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+    ret str.Substr(html, 0, a + 7) + esc + str.Substr(html, b, str.Len(html) - b)
+end
+
+func write_route_pages(lgr &: lg.Logger, html_path: str):
+    dir := dir_of(html_path)
+    root := str.Len(dir) > 0 ? dir : "."
+    html := io.ReadFile(html_path)
+    if not str.Contains(html, co.ROUTER_HISTORY_META):
+        ret
+    end
+    nf := join_path2(root, "404.html")
+    if not os.Exists(nf) or str.Contains(io.ReadFile(nf), co.ROUTER_HISTORY_META):
+        _w0 := write_file(lgr, nf, html)
+    end
+    pats := lo.RoutesStatic()
+    repeat pats.Len() in i:
+        rel := str.Substr(pats.Get(i), 1, str.Len(pats.Get(i)) - 1)
+        pdir := join_path2(root, rel)
+        _mk := os.MkdirAll(pdir)
+        _w := write_file(lgr, join_path2(pdir, "index.html"), route_page_copy(html, lo.RoutesStaticTitle(i)))
+    end
+end
+
 func write_spa_files(lgr &: lg.Logger, html_path: str): bool:
     if not lo.RoutesActive() or lo.RoutesHash():
         ret true
@@ -313,6 +346,9 @@ pub func LayoutBuild(opt &: Dr): int:
         end
         if opt.inline_mode:
             _w := write_file(lgr, html_path, lo.Document(r, true, "", "", minify_ws))
+            if not multi:
+                write_route_pages(lgr, html_path)
+            end
         else multi:
             _w := write_file(
                 lgr, html_path, lo.Document(r, false, "style.css", "script.js", minify_ws)
@@ -546,6 +582,9 @@ pub func Web(opt &: Dr): int:
         if rc == 0 and not write_spa_files(lgr, html_path):
             rc = 2
         end
+        if rc == 0 and not opt.split:
+            write_route_pages(lgr, html_path)
+        end
         if rc == 0:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format3(
@@ -580,6 +619,10 @@ pub func Serve(opt &: Dr): int:
     end
     dev_entry := dev_entry_of(opt.input)
     if str.Len(dev_entry) > 0:
+        if str.Len(opt.serve_spa) > 0:
+            io.EPrintln("salam: --spa does not apply when serving a page source, the page handles its own routes")
+            ret 2
+        end
         mut dhost := opt.serve_host
         if str.Len(dhost) == 0:
             dhost = "127.0.0.1"

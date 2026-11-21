@@ -153,9 +153,11 @@ a bare `println` is an error, so write `println ""` for an empty line.
 rules: it always takes a prompt and never parentheses. Write `input ""` or
 `input "prompt"` (Persian `ورودی ""` / `ورودی "پیام"`); a bare `input` and
 `input()` are errors. The prompt is printed first, with no newline. A
-variable works as the prompt (`input label`), but only that name is the
-prompt: `input label + "x"` appends `"x"` to the line read. For a computed
-prompt, start with a string: `input "> " + label`.
+variable works as the prompt (`input label`). The whole expression after
+`input` is the prompt, so `input label + "x"` prints `label` and then `x`, and
+the line read is not changed; a computed prompt is written the same way
+(`input "> " + label`). To use the answer in an expression, assign it first:
+`line := input "> "`, then `line + "x"`.
 
 ```salam
 println ""
@@ -192,10 +194,10 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the comparison
-words `eq neq lt gt lte gte` for `== != < > <= >=` (Persian `برابر نابرابر
-کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر`; `کوچکتر برابر` and `بزرگتر برابر`
-with a space work too), the logical words
+`+ - * / %`, `**` (power, float result), `== != < > <= >=` (Persian files may
+also write the words `برابر نابرابر کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر`;
+`کوچکتر برابر` and `بزرگتر برابر` with a space work too; English files have no
+comparison words, `eq` and `lt` are errors there), the logical words
 `and or not` (Persian `و یا وارونه`), ternary `cond ? a : b`, compound
 `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**. Power is `**`,
 right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
@@ -885,7 +887,7 @@ func load_config(text: str): int throw:
     try:
         ret load(text)
     catch e:
-        throw e.wrap("loading config")  // rethrow with context
+        throw e.Wrap("loading config")  // rethrow with context
     end
 end
 
@@ -998,8 +1000,8 @@ type `T?` may be omitted from a literal (it starts empty, unless it has its own
 default such as `retries: int? = 3`). Plain values wrap automatically in struct literals, assignments, arguments, returns and defaults,
 and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
 it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
-with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`
-and `value`. Check `is_some()` before using `value`: on an empty one it means
+with `IsSome()`, `IsNone()`, `UnwrapOr(f)`, `Unwrap()`, or the fields `present`
+and `value`. Check `IsSome()` before using `value`: on an empty one it means
 nothing, and a `str` from `core.None()` is a null pointer that crashes. A `&: T?`
 parameter needs a `T?` variable, not a plain value. JSON:
 a `T?` field is an optional key, `null` decodes to empty, and an empty one
@@ -1011,7 +1013,7 @@ struct Client:
     pub timeout: int?
 end
 c := Client { host = "x", timeout = 30 }
-println c.timeout.unwrap_or(5)
+println c.timeout.UnwrapOr(5)
 ```
 
 **Pointers & `null`:** `T*` is a pointer, `p[0]` dereferences, `null` is the
@@ -1124,8 +1126,9 @@ path (Persian `فراخوانی`): `include "util.salam"` (relative to this file
 `include str` and a path starting with `./` are all compile errors, and a missing
 or unreadable include stops the build. A file may declare `package <name>`
 (default `main`).
-Only `pub` symbols are importable. **Function names are `PascalCase`; collection
-methods are `snake_case`.**
+Only `pub` symbols are importable. **Function and method names are
+`PascalCase`; the old `snake_case` method spellings still compile but warn
+(`W175`).**
 
 **Everything below is real; signatures come from `std/`.** When unsure of
 an exact signature, grep the package file.
@@ -2295,13 +2298,13 @@ import atomic
 import ctx
 
 mut jobs := chan.Chan {} as chan.Chan<i64>
-jobs.init(64 as i64)                          // n >= 1 buffered, 0 = rendezvous
-jobs.send(v)                                  // blocks while full; false if closed
+jobs.Init(64 as i64)                          // n >= 1 buffered, 0 = rendezvous
+jobs.Send(v)                                  // blocks while full; false if closed
 mut ok := true
-v := jobs.recv(ok)                            // ok = false once closed AND drained
-v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
-jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
-jobs.Close()   jobs.Free()                    // also: try_send/try_recv/len/is_closed
+v := jobs.Recv(ok)                            // ok = false once closed AND drained
+v2 := jobs.RecvTimeout(ok, 500 as i64)       // ok = false: timed out OR closed
+jobs.SendTimeout(v, 500 as i64)              // false if it could not be delivered
+jobs.Close()   jobs.Free()                    // also: TrySend/TryRecv/Len/IsClosed
 // constructor and free functions (T on the result):
 c := chan.New(8) as chan.Chan<i64>            // initialized, no separate init
 chan.Send(c, v)   chan.Recv(c, ok)            // Send/SendTimeout/TrySend, Recv/RecvTimeout/TryRecv
@@ -2317,9 +2320,9 @@ pool.ParallelFor(n, 8 as i64, (i: i64): body(i) end)   // self-scheduling worker
 pool.ParallelForAuto(n, (i: i64): body(i) end)         // one worker per CPU
 pool.CPUCount()
 
-mut hits := atomic.NewI64(0 as i64)
+hits := atomic.NewI64(0 as i64)
 _ := atomic.Add(hits, 1 as i64)               // Load/Store/Swap/CompareAndSwap
-mut stop := atomic.NewFlag(false)
+stop := atomic.NewFlag(false)
 if atomic.TestAndSet(stop): /* exactly one caller wins */ end
 
 root := ctx.Background()                      // free the root LAST
@@ -2329,8 +2332,8 @@ ctx.Cancel(job)   ctx.Err(job)                // "" | "cancelled" | "deadline ex
 ctx.Free(job)   ctx.Free(root)
 ```
 
-`init(0)` makes a rendezvous channel: `send` does not return until a receiver
-takes the value, so the two threads meet instead of queueing. `try_send` is
+`Init(0)` makes a rendezvous channel: `Send` does not return until a receiver
+takes the value, so the two threads meet instead of queueing. `TrySend` is
 always false on one - there is no way to know a receiver is parked without
 waiting.
 
@@ -3216,8 +3219,8 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
-| `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
-| `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
+| `==` / `!=`         | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
+| `<` / `>`           | `کوچکتر` / `بزرگتر` | `<=` / `>=`               | `کوچکتربرابر` / `بزرگتربرابر` |
 | `try`               | `تلاش`              | `catch`                   | `گرفتن خطا`                   |
 | `throw`             | `پرتاب خطا`         |                           |                               |
 

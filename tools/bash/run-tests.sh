@@ -974,6 +974,9 @@ fi
 if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
     add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
+    add_job script "tools/en/diag-bytes" "tools/bash/test-diag-bytes.sh" "en" "tests/en/tools/diag_bytes.out"
+    add_job script "tools/en/build-dir" "tools/bash/test-build-dir.sh" "en" "tests/en/tools/build_dir.out"
+    add_job script "tools/en/time-report" "tools/bash/test-time-report.sh" "en" "tests/en/tools/time_report.out"
     add_job script "tools/en/build-cache" "tools/bash/test-build-cache.sh" "en" "tests/en/tools/build_cache.out"
 fi
 
@@ -1550,12 +1553,12 @@ if want page; then
         for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \
             tests/"$lang"/web_errors/*.salam; do
             [ -e "$stray" ] || continue
-            subs="elements/, style/, components/, pages/ or errors/"
+            subs="elements/, style/, components/, pages/, projects/ or errors/"
             note_result \
                 "FAIL page/$lang ($stray is in no page subdirectory, so nothing runs it; move it into $subs)" \
                 "page/$lang/stray/$(basename "$stray" .salam)"
         done
-        for sub in elements style components pages errors; do
+        for sub in elements style components pages projects errors; do
             [ -d "tests/$lang/page/$sub" ] || continue
             want_sub "page/$sub" || continue
             for f in tests/"$lang"/page/"$sub"/*.salam; do

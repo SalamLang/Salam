@@ -16,6 +16,7 @@ package driver
 import os
 import str
 import io
+import fs
 import time
 import net.http
 import net.router
@@ -24,7 +25,8 @@ import net.mime
 include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
 
-const k_dev_reload := `<script>(function(){var v=null;function poll(){fetch("/__salam_build",{cache:"no-store"}).then(function(r){return r.text();}).then(function(t){if(v===null){v=t;}else if(t!==v){location.reload();}}).catch(function(){});}setInterval(poll,700);poll();})();</script>`
+const k_dev_reload_head := `<script>(function(){var v="`
+const k_dev_reload_tail := `";function poll(){fetch("/__salam_build",{cache:"no-store"}).then(function(r){return r.text();}).then(function(t){if(t!==v){location.reload();}}).catch(function(){});}setInterval(poll,700);poll();})();</script>`
 
 mut g_dev_root := ""
 mut g_dev_out := ""
@@ -45,11 +47,17 @@ func dev_escape(s: str): str:
     ret str.Replace(str.Replace(str.Replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
 end
 
+func dev_reload_script(id: int): str:
+    ret k_dev_reload_head + co.I64Toa(id as i64) + k_dev_reload_tail
+end
+
 func dev_scan(dir: str, sig &: i64, depth: int):
     if depth > 8:
         ret
     end
-    each name in os.ListDir(dir):
+    entries := os.ListDir(dir)
+    defer entries.Free()
+    each name in entries:
         full := join_path2(dir, name)
         if os.IsDir(full):
             if not str.StartsWith(name, ".") and not str.Equals(name, "node_modules"):
@@ -71,31 +79,34 @@ func dev_signature(): i64:
     ret sig
 end
 
-func dev_build(): bool:
+func dev_build(): int:
     html := join_path2(g_dev_out, "index.html")
     log := join_path2(g_dev_out, "build.log")
     _rm := os.Remove(html)
     cmd := dev_quote(g_dev_exe) + " web " + dev_quote(g_dev_entry) + " --output=" + dev_quote(html) + " --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
     rc := os.Run(cmd)
     ok := rc == 0 and os.Exists(html)
+    reload := dev_reload_script(g_dev_build + 1)
     mut page := ""
     if ok:
         page = io.ReadFile(html)
         cut := str.LastIndex(page, "</body>")
         if cut >= 0:
-            page = str.Substr(page, 0, cut) + k_dev_reload + str.Substr(page, cut, page.Len() - cut)
+            page = str.Substr(page, 0, cut) + reload + str.Substr(page, cut, page.Len() - cut)
         else:
-            page += k_dev_reload
+            page += reload
         end
     else:
         page = `<!doctype html><html><head><meta charset="utf-8"><title>Build failed</title></head>`
         page += `<body style="margin:0;background:#1e1e1e;color:#eee;font:14px/1.5 monospace">`
         page += `<pre style="margin:0;padding:24px;white-space:pre-wrap">` + dev_escape(io.ReadFile(log)) + "</pre>"
-        page += k_dev_reload + "</body></html>"
+        page += reload + "</body></html>"
     end
-    _w := io.WriteFile(html, page)
+    if io.WriteFile(html, page) != page.Len():
+        ret 2
+    end
     g_dev_build++
-    ret ok
+    ret ok ? 0 : 1
 end
 
 func dev_watch():
@@ -103,9 +114,14 @@ func dev_watch():
         time.Sleep(400)
         sig := dev_signature()
         if sig != g_dev_sig:
-            g_dev_sig = sig
-            ok := dev_build()
-            io.EPrintln(ok ? "salam: rebuilt " + g_dev_entry : "salam: build failed, the page shows the errors")
+            st := dev_build()
+            if st == 2:
+                io.EPrintln("salam: cannot write the built page, retrying")
+                time.Sleep(1600)
+            else:
+                g_dev_sig = sig
+                io.EPrintln(st == 0 ? "salam: rebuilt " + g_dev_entry : "salam: build failed, the page shows the errors")
+            end
         end
     end
 end
@@ -119,19 +135,37 @@ func dev_page_path(method: str, path: str, accept: str): bool:
     if not str.Equals(method, "GET") and not str.Equals(method, "HEAD"):
         ret false
     end
-    if str.Contains(accept, "text/html"):
+    if str.Equals(path, "/index.html") or str.Contains(accept, "text/html"):
         ret true
     end
     slash := str.LastIndex(path, "/")
     ret str.IndexFrom(path, ".", slash + 1) < 0
 end
 
+func dev_inside_root(real: str): bool:
+    n := str.Len(g_dev_root)
+    if n == 0 or str.Len(real) <= n or not str.StartsWith(real, g_dev_root):
+        ret false
+    end
+    if str.EndsWith(g_dev_root, "/") or str.EndsWith(g_dev_root, "\\"):
+        ret true
+    end
+    c := str.Substr(real, n, 1)
+    ret str.Equals(c, "/") or str.Equals(c, "\\")
+end
+
 func dev_handle(ctx: i64):
     path := http.Own(ctx, http.UrlDecode(http.Path(ctx)))
-    if not str.Contains(path, "..") and not str.Contains(path, "/.") and not str.Equals(path, "/"):
+    if not str.Contains(path, "..") and not str.Contains(path, "/.") and not str.Equals(path, "/") and not str.Equals(path, "/index.html"):
         f := http.Own(ctx, join_path2(g_dev_root, str.Substr(path, 1, path.Len() - 1)))
         if os.Exists(f) and not os.IsDir(f):
-            _ok := http.File(ctx, f, mime.MimeType(f))
+            real := http.Own(ctx, os.RealPath(f))
+            if dev_inside_root(real):
+                _ok := http.File(ctx, real, mime.MimeType(f))
+            else:
+                http.SetStatus(ctx, 404)
+                http.Text(ctx, "404 Not Found")
+            end
             ret
         end
     end
@@ -156,7 +190,7 @@ func dev_entry_of(arg: str): str:
         ret ""
     end
     mainf := join_path2(dir, "main.salam")
-    if os.Exists(mainf):
+    if os.Exists(mainf) and not os.IsDir(mainf):
         ret mainf
     end
     ret ""
@@ -171,15 +205,40 @@ func dev_serve(entry: str, host: str, port: int): int:
     if str.Len(g_dev_root) == 0:
         g_dev_root = "."
     end
+    rootreal := os.RealPath(g_dev_root)
+    if str.Len(rootreal) > 0:
+        g_dev_root = rootreal
+    else:
+        g_dev_root = ""
+    end
     mut exe := ""
     if not sm.ExePath(exe):
         exe = "salam"
     end
     g_dev_exe = exe
-    g_dev_out = join_path2(os.TempDir(), "salam-serve-" + co.I64Toa(os.Pid() as i64))
-    _mk := os.MkdirAll(g_dev_out)
+    g_dev_out = ""
+    repeat 20 in attempt:
+        cand := join_path2(os.TempDir(), "salam-serve-" + co.I64Toa(os.Pid() as i64) + "-" + co.I64Toa(time.NowNanos()) + "-" + co.I64Toa(attempt as i64))
+        if os.Mkdir(cand) == 0:
+            g_dev_out = cand
+            break
+        end
+    end
+    if str.Len(g_dev_out) == 0 or fs.Chmod(g_dev_out, 448) != 0:
+        io.EPrintln("salam: cannot create a private build directory in " + os.TempDir())
+        if str.Len(g_dev_out) > 0:
+            _rm0 := os.RemoveAll(g_dev_out)
+        end
+        ret 2
+    end
     g_dev_sig = dev_signature()
-    if not dev_build():
+    st := dev_build()
+    if st == 2:
+        io.EPrintln("salam: cannot write the built page in " + g_dev_out)
+        _rm1 := os.RemoveAll(g_dev_out)
+        ret 2
+    end
+    if st == 1:
         io.EPrintln("salam: build failed, the page shows the errors")
     end
     mut r := router.NewRouter()
@@ -192,6 +251,7 @@ func dev_serve(entry: str, host: str, port: int): int:
     addr := host + ":" + co.I64Toa(port as i64)
     if not http.RunBackground(s):
         io.EPrintln("salam: cannot listen on " + addr)
+        _rm2 := os.RemoveAll(g_dev_out)
         ret 2
     end
     _t := spawn(dev_watch)

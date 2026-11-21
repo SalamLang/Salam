@@ -7,6 +7,7 @@ T=$(mktemp -d)
 PID=""
 fail=0
 
+# shellcheck disable=SC2329
 cleanup() {
     [ -n "$PID" ] && kill "$PID" 2>/dev/null
     rm -rf "$T"
@@ -82,10 +83,10 @@ PID=""
 "$SALAM" serve "$T/site/app.salam" --port="$PORT" >"$T/b1.log" 2>&1 &
 PID=$!
 sleep 3
-before=$(ls -d "${TMPDIR:-/tmp}"/salam-serve-* 2>/dev/null | wc -l)
+before=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 "$SALAM" serve "$T/site/app.salam" --port="$PORT" >"$T/b2.log" 2>&1
 check "busy port fails" "$?" "2"
-after=$(ls -d "${TMPDIR:-/tmp}"/salam-serve-* 2>/dev/null | wc -l)
+after=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 check "busy port leaves no build directory" "$after" "$before"
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null

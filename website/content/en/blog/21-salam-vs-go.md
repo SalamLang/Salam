@@ -19,7 +19,7 @@ On the project's own HTTP router benchmark Salam's server answered more requests
 | Concurrency     | Goroutines (M:N scheduling by the runtime), channels, `select`             | OS threads (`spawn`), a bounded task pool (`go f(x)`), channels, `chan.Select`, futures |
 | Blocking I/O    | Parks the goroutine; the runtime multiplexes sockets                       | Blocks the thread; the HTTP server uses an event loop with a worker pool on Linux       |
 | Memory          | Garbage collected                                                          | Manual: `.Free()` and `defer`, with compile-time ownership checks                       |
-| Errors          | `error` values, `if err != nil`                                            | `throw`, `try`, `catch`, or result enums                                               |
+| Errors          | `error` values, `if err != nil`                                            | `throw`, `try`, `catch`, or result enums                                                |
 | Generics        | Since Go 1.18                                                              | Yes, with interface bounds                                                              |
 | Sum types       | No (interfaces and type switches)                                          | Enums with data and exhaustive `match`                                                  |
 | HTTP            | `net/http` in the standard library, frameworks such as Gin, Echo and Fiber | `net/http` and `net/router` in the standard library                                     |
@@ -76,24 +76,24 @@ mut results := chan.Chan {} as chan.Chan<i64>
 func worker():
     mut ok := true
     until true:
-        n := jobs.recv(ok)
+        n := jobs.Recv(ok)
         if not ok:
             break
         end
-        results.send(n * n)
+        results.Send(n * n)
     end
 end
 
 func main:
-    jobs.init(4)
-    results.init(16)
+    jobs.Init(4)
+    results.Init(16)
     mut workers := Vector {} as Vector<i64>
     defer workers.Free()
     repeat 3:
         workers.Push(spawn(worker))
     end
     repeat 1 to 10 in i:
-        jobs.send(i as i64)
+        jobs.Send(i as i64)
     end
     jobs.Close()
     each t in workers:
@@ -103,7 +103,7 @@ func main:
     mut sum := 0 as i64
     mut ok := true
     until true:
-        v := results.recv(ok)
+        v := results.Recv(ok)
         if not ok:
             break
         end

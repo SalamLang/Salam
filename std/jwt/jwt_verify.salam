@@ -85,7 +85,48 @@ func _once(text: str, key: str, dup &: str): str:
     ret value
 end
 
-func _read_claims(payload: str, c &: Claims, dup &: str):
+func _digit_run(bp: i8*, n: int, from: int): int:
+    mut i := from
+    until i < n and _ub(bp, i) >= 48 and _ub(bp, i) <= 57:
+        i++
+    end
+    ret i
+end
+
+func _numeric_raw(raw: str): bool:
+    n := raw.Len()
+    if n == 0: ret false end
+    bp := _bp(raw)
+    mut i := 0
+    if _ub(bp, 0) == 45: i = 1 end
+    if i >= n: ret false end
+    first := _ub(bp, i)
+    if first == 48:
+        i++
+    else first >= 49 and first <= 57:
+        i = _digit_run(bp, n, i)
+    else:
+        ret false
+    end
+    if i < n and _ub(bp, i) == 46:
+        i++
+        frac := i
+        i = _digit_run(bp, n, i)
+        if i == frac: ret false end
+    end
+    ret i == n
+end
+
+func _time_claim(payload: str, key: str, dup &: str): i64 throw:
+    raw := _once(payload, key, dup)
+    if raw.Len() == 0: ret 0 as i64 end
+    if not _numeric_raw(raw):
+        throw _bad_claim("claim is not a number", key)
+    end
+    ret _raw_to_i64(raw)
+end
+
+func _read_claims(payload: str, c &: Claims, dup &: str) throw:
     c.iss = _raw_to_str(_once(payload, "iss", dup))
     c.sub = _raw_to_str(_once(payload, "sub", dup))
     c.jti = _raw_to_str(_once(payload, "jti", dup))
@@ -94,9 +135,9 @@ func _read_claims(payload: str, c &: Claims, dup &: str):
         c.aud_raw = aud
         c.aud = _raw_to_str(aud)
     end
-    c.exp = _raw_to_i64(_once(payload, "exp", dup))
-    c.nbf = _raw_to_i64(_once(payload, "nbf", dup))
-    c.iat = _raw_to_i64(_once(payload, "iat", dup))
+    c.exp = try _time_claim(payload, "exp", dup)
+    c.nbf = try _time_claim(payload, "nbf", dup)
+    c.iat = try _time_claim(payload, "iat", dup)
 end
 
 func _segment(text: str, start: int, part: str): str throw:
@@ -135,7 +176,7 @@ func _parse(token: str): Token throw:
     t.signing_input = h.Concat(".").Concat(p)
     t.signature = s
     mut c := Claims {}
-    _read_claims(payload, c, dup)
+    try _read_claims(payload, c, dup)
     t.claims = c
     if dup.Len() > 0:
         throw _bad_json(dup)

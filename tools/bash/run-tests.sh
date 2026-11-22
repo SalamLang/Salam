@@ -166,7 +166,7 @@ $cerrs"
     }
 
     wk_script() {
-        got=$(tmo "${SALAM_TEST_TIMEOUT:-900}" sh "$fabs" "$SALAM_ABS" 2>&1 | tr -d '\r')
+        got=$(SALAM_TEST_LANG="$lang" tmo "${SALAM_TEST_TIMEOUT:-900}" sh "$fabs" "$SALAM_ABS" 2>&1 | tr -d '\r')
         wk_check "$expabs" "$got"
     }
 
@@ -984,6 +984,12 @@ if want crash && [ "$(uname -s 2>/dev/null)" = Linux ] && command -v python3 >/d
     case "$(uname -m 2>/dev/null)" in
     x86_64 | aarch64) add_job script "crash/en/flow" "tools/bash/test-crash-flush.sh" "en" "tests/en/crash/flow.out" ;;
     esac
+fi
+
+if want ssr && command -v curl >/dev/null 2>&1; then
+    for lang in $LANGS; do
+        add_job script "ssr/$lang/flow" "tools/bash/test-ssr.sh" "$lang" "tests/$lang/ssr/flow.out"
+    done
 fi
 
 if want protect; then

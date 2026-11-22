@@ -1,0 +1,296 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+import os
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include pth "../sal_path.salam"
+
+const SRV_MAX_DEPTH := 6
+
+func srv_wire_ok(s &: Sema, t: int, depth: int): bool:
+    if t < 0 or depth > SRV_MAX_DEPTH:
+        ret true
+    end
+    v := ty_at(s, t)
+    if v.distinct != 0:
+        ret srv_wire_ok(s, v.base, depth + 1)
+    end
+    k := v.kind
+    if k == TY_ERROR or k == TY_BOOL or k == TY_CHAR or k == TY_STR or k == TY_UCHAR or k == TY_ENUM:
+        ret true
+    end
+    if k >= TY_I8 and k <= TY_U128:
+        ret true
+    end
+    if k == TY_VEC:
+        ret srv_wire_ok(s, v.elem, depth + 1)
+    end
+    if k != TY_STRUCT or v.decl == 0:
+        ret false
+    end
+    inner := opt_inner(s, t)
+    if inner != TYPE_NONE:
+        ret srv_wire_ok(s, inner, depth + 1)
+    end
+    sv := sym_at(s, v.decl)
+    if sv.generic_args.Len() > 0:
+        repeat sv.generic_args.Len() in i:
+            if not srv_wire_ok(s, sv.generic_args.Get(i), depth + 1):
+                ret false
+            end
+        end
+        if str.Equals(sv.generic_base, "Vector"):
+            ret true
+        end
+    end
+    if sv.members == 0:
+        ret true
+    end
+    syms := scope_at(s, sv.members).symbols
+    repeat syms.Len() in j:
+        f := sym_at(s, syms.Get(j))
+        if f.kind == SYM_FIELD and not srv_wire_ok(s, f.ty, depth + 1):
+            ret false
+        end
+    end
+    ret true
+end
+
+func srv_names_clash(a &: at.Ast, x: int, y: int): bool:
+    nx := at.Get(a, x)
+    ny := at.Get(a, y)
+    if su_ident_eq(nx.name, ny.name):
+        ret true
+    end
+    ax := at.Aliases(a, nx.ext)
+    ay := at.Aliases(a, ny.ext)
+    mut i := 1
+    until i < ax.Len():
+        if su_ident_eq(ax.Get(i), ny.name):
+            ret true
+        end
+        mut j := 1
+        until j < ay.Len():
+            if str.Equals(ax.Get(i - 1), ay.Get(j - 1)) and su_ident_eq(ax.Get(i), ay.Get(j)):
+                ret true
+            end
+            j += 2
+        end
+        i += 2
+    end
+    i = 1
+    until i < ay.Len():
+        if su_ident_eq(ay.Get(i), nx.name):
+            ret true
+        end
+        i += 2
+    end
+    ret false
+end
+
+func srv_find_sig(s &: Sema, fid: int, name: str): int:
+    fsym := scope_lookup_local(s, s.global, name)
+    if fsym == 0:
+        ret 0
+    end
+    ov := sym_at(s, fsym).overloads
+    repeat ov.Len() in i:
+        if sig_at(s, ov.Get(i)).decl == fid:
+            ret ov.Get(i)
+        end
+    end
+    ret 0
+end
+
+func srv_check_signature(s &: Sema, a &: at.Ast, fid: int):
+    fn := at.Get(a, fid)
+    sigid := srv_find_sig(s, fid, fn.name)
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    repeat fn.list.Len() in i:
+        pid := fn.list.Get(i)
+        param := at.Get(a, pid)
+        if i >= sg.params.Len():
+            break
+        end
+        pt := sg.params.Get(i)
+        if param.is_ref or not srv_wire_ok(s, pt, 0):
+            serr(
+                s, 285, span_of(a, pid), co.Format3(
+                    i18.Tr("server func '%s' parameter '%s' has type '%s', which cannot cross the network"), co.ArgStr(fn.name), co.ArgStr(param.name), co.ArgStr(type_to_string(s, pt))
+                )
+            )
+        end
+    end
+    if fn.ty != 0 and not srv_wire_ok(s, sg.ret_type, 0):
+        serr(
+            s, 285, span_of(a, fn.ty), co.Format2(
+                i18.Tr("server func '%s' result has type '%s', which cannot cross the network"), co.ArgStr(fn.name), co.ArgStr(type_to_string(s, sg.ret_type))
+            )
+        )
+    end
+end
+
+func srv_members_not_top_level(s &: Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    repeat d.list.Len() in i:
+        mid := d.list.Get(i)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FUNC_DEF and m.is_server:
+            serr(
+                s, 287, span_of(a, mid), co.Format1(
+                    i18.Tr("server func '%s' must be declared at the top level"), co.ArgStr(m.name)
+                )
+            )
+        end
+    end
+end
+
+func server_funcs_check(s &: Sema, a &: at.Ast, program: int):
+    save_file := s.file
+    mut seen := Vector {} as Vector<int>
+    defer seen.Free()
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.synthetic:
+            continue
+        end
+        if d.kind == at.AST_STRUCT_DEF or d.kind == at.AST_IMPL_DEF or d.kind == at.AST_INTERFACE_DEF:
+            _sf := sema_use_decl_file(s, a, did)
+            srv_members_not_top_level(s, a, did)
+            s.file = save_file
+            continue
+        end
+        if d.kind != at.AST_FUNC_DEF or not d.is_server:
+            continue
+        end
+        _sf2 := sema_use_decl_file(s, a, did)
+        mut dup := false
+        repeat seen.Len() in j:
+            if srv_names_clash(a, seen.Get(j), did):
+                dup = true
+            end
+        end
+        if dup:
+            serr(
+                s, 288, span_of(a, did), co.Format1(
+                    i18.Tr("two server funcs are named '%s'"), co.ArgStr(d.name)
+                )
+            )
+        else:
+            seen.Push(did)
+        end
+        srv_check_signature(s, a, did)
+        s.file = save_file
+    end
+    s.file = save_file
+end
+
+func srv_cfg_allows(path: str): bool:
+    if not file_exists(path) or os.IsDir(path):
+        ret false
+    end
+    text := os.ReadFile(path)
+    n := str.Len(text)
+    mut ls := 0
+    until ls < n:
+        mut le := ls
+        until le < n and byte_at(text, le) != 10:
+            le++
+        end
+        line := str.Trim(str.Substr(text, ls, le - ls))
+        if str.StartsWith(line, "allow_backend"):
+            rest := str.Trim(str.Substr(line, 13, str.Len(line) - 13))
+            if str.StartsWith(rest, "="):
+                val := str.Trim(str.Substr(rest, 1, str.Len(rest) - 1))
+                ret str.Equals(val, "true")
+            end
+        end
+        ls = le + 1
+    end
+    ret false
+end
+
+func srv_allow_backend(s &: Sema): bool:
+    if s.srv_allow != 0:
+        ret s.srv_allow == 1
+    end
+    mut dir := dir_of(s.file)
+    mut found := false
+    mut up := 0
+    until up < 4 and not found:
+        if str.Len(dir) > 0 and srv_cfg_allows(pth.PathJoin(dir, "salam.cfg")):
+            found = true
+        end
+        parent := dir_of(dir)
+        if str.Equals(parent, dir):
+            break
+        end
+        dir = parent
+        up++
+    end
+    s.srv_allow = found ? 1 : 2
+    ret found
+end
+
+func srv_backend_package(pkg: str, member: str): bool:
+    if str.Equals(pkg, "db") or str.Equals(pkg, "fs") or str.Equals(pkg, "os") or str.Equals(pkg, "exec") or str.Equals(pkg, "process"):
+        ret true
+    end
+    if str.Equals(pkg, "sqlite") or str.Equals(pkg, "postgres") or str.Equals(pkg, "mysql") or str.Equals(pkg, "redis") or str.Equals(pkg, "router"):
+        ret true
+    end
+    if str.Equals(pkg, "http"):
+        ret str.Equals(member, "NewServer") or str.Equals(member, "Use")
+    end
+    ret false
+end
+
+func server_backend_use(s &: Sema, a &: at.Ast, pk: int, member: str, sp: co.SrcSpan):
+    if s.cur_func == 0:
+        ret
+    end
+    sg := sig_at(s, s.cur_func)
+    if sg.decl == 0 or not at.Get(a, sg.decl).is_server:
+        ret
+    end
+    pv := sym_at(s, pk)
+    pname := str.Len(pv.pkgname) > 0 ? pv.pkgname : pv.name
+    if not srv_backend_package(pname, member):
+        ret
+    end
+    key := s.cur_func + ":" + pname
+    repeat s.srv_warned.Len() in i:
+        if str.Equals(s.srv_warned.Get(i), key):
+            ret
+        end
+    end
+    s.srv_warned.Push(key)
+    if srv_allow_backend(s):
+        ret
+    end
+    swarn(
+        s, 280, sp, co.Format2(
+            i18.Tr("server func '%s' looks like backend code ('%s'); call your API from here instead"), co.ArgStr(at.Get(a, sg.decl).name), co.ArgStr(pname)
+        )
+    )
+end

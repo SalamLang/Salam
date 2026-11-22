@@ -30,7 +30,8 @@ shop/
 ## `server func`
 
 A normal function with a marker (`server` is a contextual word before `func`,
-like `pure`, so it stays a legal name elsewhere). It runs only on the front server. The page,
+like `go`, so it stays a legal name elsewhere; the Persian spelling is `سرور تابع`, and it
+sits last among the modifiers: `pub server func`). It runs only on the front server. The page,
 the browser bundle and the native app never contain its body.
 
 ```salam
@@ -55,7 +56,9 @@ end
 
 - Top level only. Parameters and result are wire types: `int`, `float`, `bool`,
   `str`, structs and `Vector`s of wire types, optional (`T?`). No pointers,
-  references or closures (E285).
+  references or closures (E285). Enums are allowed. `HashMap` and arrays are
+  not wire types yet. E287 is reported for a method; a nested function cannot
+  be written at all. E288 counts overloads: the wire name is the function name.
 - Callable from a component body or `load(...)`, a handler, and another
   `server func`. On the server a call is a direct call. In the browser and on
   native it is the generated stub (below). The call site looks the same.
@@ -75,7 +78,10 @@ The body is free, as decided, so the guard is a warning, not a ban. W280 is
 raised when a `server func` imports or calls `db`, `fs`, `os`, `exec`, or the
 `net.http` server types (`NewServer`, `Use`, routers), with the message "this
 looks like backend code; call your API from here instead". Projects that really
-want it set `allow_backend = true` in `salam.cfg`.
+want it set `allow_backend = true` in `salam.cfg`, found by walking up from the
+source file (its directory and three parents). The check also covers the db
+drivers (`sqlite`, `postgres`, `mysql`, `redis`), `process` and `router`, and
+warns once per package per function.
 
 Outbound calls use `std/net/http`. Defaults for a call made from a server func:
 10 second timeout, response cap of 8 MB, redirects followed up to 5. All three

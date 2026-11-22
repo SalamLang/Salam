@@ -55,89 +55,104 @@ function check(name, ok, detail) {
       mode,
     );
   const text = (sel) => page.$eval(sel, (e) => e.textContent).catch(() => null);
-  const settle = () => page.waitForTimeout(60);
+  const until = async (read, ok) => {
+    const stop = Date.now() + 3000;
+    for (;;) {
+      const v = await read();
+      if (ok(v) || Date.now() > stop) return v;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+  const h1Is = (want) =>
+    until(
+      () => text("h1"),
+      (v) => v === want,
+    );
+  const pIs = (want) =>
+    until(
+      () => text("p"),
+      (v) => v === want,
+    );
+  const whereIs = (want) => until(where, (v) => v === want);
 
   await page.goto(url("/users/2"));
-  await settle();
+  let h = await h1Is("User 2");
   check("no script errors on load", errors.length === 0, errors.join(" | "));
-  check(
-    "a deep link opens its route",
-    (await text("h1")) === "User 2",
-    await text("h1"),
-  );
+  check("a deep link opens its route", h === "User 2", h);
 
   await page.click("#next");
-  await settle();
-  check(
-    "go() shows the next route",
-    (await text("h1")) === "User 3",
-    await text("h1"),
-  );
-  check(
-    "go() writes the address",
-    (await where()) === "/users/3",
-    await where(),
-  );
+  h = await h1Is("User 3");
+  check("go() shows the next route", h === "User 3", h);
+  let w = await whereIs("/users/3");
+  check("go() writes the address", w === "/users/3", w);
 
   await page.goBack();
-  await settle();
-  check(
-    "back returns to the previous route",
-    (await text("h1")) === "User 2",
-    await text("h1"),
-  );
+  h = await h1Is("User 2");
+  check("back returns to the previous route", h === "User 2", h);
 
+  await page.evaluate(() => {
+    window.__salamRouterMark = 1;
+  });
   await page.click("nav a >> nth=0");
-  await settle();
+  h = await h1Is("Home");
+  check("a link opens its route", h === "Home", h);
   check(
-    "a link opens its route without a reload",
-    (await text("h1")) === "Home",
-    await text("h1"),
+    "a link keeps the document (no reload)",
+    await page.evaluate(() => window.__salamRouterMark === 1),
   );
-  check(
-    "a route title sets the document title",
-    (await page.title()) === "Home",
-    await page.title(),
+  const title = await until(
+    () => page.title(),
+    (v) => v === "Home",
   );
-  check(
-    "the link to the current route is marked",
-    (await page.$eval("nav a >> nth=0", (e) =>
-      e.getAttribute("aria-current"),
-    )) === "page",
+  check("a route title sets the document title", title === "Home", title);
+  const cur = await until(
+    () => page.$eval("nav a >> nth=0", (e) => e.getAttribute("aria-current")),
+    (v) => v === "page",
   );
+  check("the link to the current route is marked", cur === "page", cur);
 
   await page.click("nav a >> nth=2");
-  await settle();
-  check("a guard redirects", (await where()) === "/login", await where());
+  w = await whereIs("/login");
+  check("a guard redirects", w === "/login", w);
   check("the redirect target shows", !!(await page.$("#login")));
 
   await page.click("#login");
-  await settle();
+  const admin = await pIs("Admin area");
   check(
     "replace() after sign in opens the guarded route",
-    (await text("p")) === "Admin area",
-    await text("p"),
+    admin === "Admin area",
+    admin,
   );
-  check(
-    "replace() writes the address",
-    (await where()) === "/admin",
-    await where(),
-  );
+  w = await whereIs("/admin");
+  check("replace() writes the address", w === "/admin", w);
+
+  await page.click("#signout");
+  w = await whereIs("/login");
+  check("signing out leaves the guarded route", w === "/login", w);
+  check("the sign in screen shows again", !!(await page.$("#login")));
 
   await page.goto(url("/users/abc"));
-  await settle();
+  let p = await pIs("Nothing at /users/abc");
   check(
     "a parameter that is not an int falls to *",
-    (await text("p")) === "Nothing at /users/abc",
-    await text("p"),
+    p === "Nothing at /users/abc",
+    p,
+  );
+
+  await page.goto(url("/users/99999999999"));
+  p = await pIs("Nothing at /users/99999999999");
+  check(
+    "a parameter too big for an int falls to *",
+    p === "Nothing at /users/99999999999",
+    p,
   );
 
   await page.goto(url("/no/such/page"));
-  await settle();
+  p = await pIs("Nothing at /no/such/page");
   check(
     "an unknown path shows the * route",
-    (await text("p")) === "Nothing at /no/such/page",
-    await text("p"),
+    p === "Nothing at /no/such/page",
+    p,
   );
 
   check(

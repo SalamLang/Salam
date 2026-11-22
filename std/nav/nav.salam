@@ -149,7 +149,7 @@ func _join_rest(segs: Vector<str>, from: int): str:
     ret out
 end
 
-func _cap(ps: Vector<str>, xs: Vector<str>, i: int, j: int, name: str, value &: str): bool:
+func _cap_step(ps: Vector<str>, xs: Vector<str>, i: int, j: int, name: str, value &: str, dead &: Vector<int>): bool:
     if i >= ps.Len():
         ret j >= xs.Len()
     end
@@ -163,12 +163,12 @@ func _cap(ps: Vector<str>, xs: Vector<str>, i: int, j: int, name: str, value &: 
     if _is_optional(p):
         if j < xs.Len():
             mut v := value
-            if _cap(ps, xs, i + 1, j + 1, name, v):
+            if _cap(ps, xs, i + 1, j + 1, name, v, dead):
                 value = str.Equals(_param_name(p), name) ? xs.Get(j) : v
                 ret true
             end
         end
-        ret _cap(ps, xs, i + 1, j, name, value)
+        ret _cap(ps, xs, i + 1, j, name, value, dead)
     end
     if j >= xs.Len():
         ret false
@@ -176,7 +176,7 @@ func _cap(ps: Vector<str>, xs: Vector<str>, i: int, j: int, name: str, value &: 
     x := xs.Get(j)
     if _is_param(p):
         mut v := value
-        if not _cap(ps, xs, i + 1, j + 1, name, v):
+        if not _cap(ps, xs, i + 1, j + 1, name, v, dead):
             ret false
         end
         value = str.Equals(_param_name(p), name) ? x : v
@@ -185,11 +185,41 @@ func _cap(ps: Vector<str>, xs: Vector<str>, i: int, j: int, name: str, value &: 
     if not str.Equals(p, x):
         ret false
     end
-    ret _cap(ps, xs, i + 1, j + 1, name, value)
+    ret _cap(ps, xs, i + 1, j + 1, name, value, dead)
+end
+
+func _cap(ps: Vector<str>, xs: Vector<str>, i: int, j: int, name: str, value &: str, dead &: Vector<int>): bool:
+    if dead.Len() == 0:
+        ret _cap_step(ps, xs, i, j, name, value, dead)
+    end
+    k := i * (xs.Len() + 1) + j
+    if dead.Get(k) != 0:
+        ret false
+    end
+    if _cap_step(ps, xs, i, j, name, value, dead):
+        ret true
+    end
+    dead.Set(k, 1)
+    ret false
 end
 
 func _capture(pattern: str, path: str, name: str, value &: str): bool:
-    ret _cap(_segments(pattern), _segments(path), 0, 0, name, value)
+    ps := _segments(pattern)
+    xs := _segments(path)
+    mut dead := Vector {} as Vector<int>
+    defer dead.Free()
+    mut branches := false
+    each seg in ps:
+        if _is_optional(seg):
+            branches = true
+        end
+    end
+    if branches:
+        repeat (ps.Len() + 1) * (xs.Len() + 1):
+            dead.Push(0)
+        end
+    end
+    ret _cap(ps, xs, 0, 0, name, value, dead)
 end
 
 @en "Unescape"
@@ -310,10 +340,11 @@ pub func ParamInt(pattern: str, path: str, name: str): int:
     mut i := neg ? 1 : 0
     mut n := 0
     until i < v.Len():
-        n = n * 10 + str.IndexFrom("0123456789", _ch(v, i), 0)
+        d := str.IndexFrom("0123456789", _ch(v, i), 0)
+        n = n * 10 + (neg ? 0 - d : d)
         i++
     end
-    ret neg ? 0 - n : n
+    ret n
 end
 
 @en "Query"
@@ -344,16 +375,16 @@ end
 @fa "رتبه"
 pub func Rank(pattern: str): int:
     segs := _segments(pattern)
-    mut r := segs.Len() * 4
+    mut r := 0
     each s in segs:
         if _is_splat(s):
-            r -= 5
+            r -= 1000000
         else _is_optional(s):
-            r++
+            r--
         else _is_param(s):
-            r += 2
+            r += 60
         else:
-            r += 3
+            r += 70
         end
     end
     ret r
@@ -363,17 +394,29 @@ end
 @fa "عدد صحیح است"
 pub func IsInt(s: str): bool:
     n := s.Len()
-    mut i := str.StartsWith(s, "-") ? 1 : 0
+    neg := str.StartsWith(s, "-")
+    mut i := neg ? 1 : 0
     if i >= n:
         ret false
     end
+    mut first := 0 - 1
     until i < n:
-        if str.IndexFrom("0123456789", _ch(s, i), 0) < 0:
+        c := _ch(s, i)
+        if str.IndexFrom("0123456789", c, 0) < 0:
             ret false
+        end
+        if first < 0 and not str.Equals(c, "0"):
+            first = i
         end
         i++
     end
-    ret true
+    if first < 0 or n - first < 10:
+        ret true
+    end
+    if n - first > 10:
+        ret false
+    end
+    ret str.Compare(str.Substr(s, first, 10), neg ? "2147483648" : "2147483647") <= 0
 end
 
 @en "Href"

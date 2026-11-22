@@ -171,7 +171,7 @@ Persian-only traps: enum patterns in `همخوان` are bare member names; `تر
 labels each end with `پایان`; `و` is reserved; `اعشار` is f32; the decimal
 point is `.` not `٫`; std functions must use their Persian `@fa` names (an
 English name is an error in a Persian file). The built-ins are Persian too:
-`len` is `طول`, `sizeof` is `اندازه‌گونه`, `spawn` is `نخ‌ساز`, `join` is
+`len` is `طول`, `size` is `اندازه`, `spawn` is `نخ‌ساز`, `join` is
 `نخ‌پیوند`, and the `SALAM_*` constants have Persian names (`SALAM_OS_LINUX` is
 `سلام سیستم لینوکس`); `dyn` may be written `dyn` or `پویا`.
 

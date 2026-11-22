@@ -722,7 +722,7 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
   wraparound and casts are computed exactly, but a result (or an intermediate
   value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
-  `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
+  `18446744073709552000`. `size` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
   `i128`/`u128` are BigInts and stay exact, but a value that passes through
   `i64` or `u64` on the way in or out is still limited to 2^53 there.

@@ -139,7 +139,7 @@ A `const` name must be a single word (a spaced name such as `MAX VALUE` is a par
 error); `mut` globals, locals and functions may still have multi-word names in
 Persian files.
 A top-level `const` must be known at compile time: literals, other constants,
-operators and `sizeof`. A function call there (`const R := math.Sqrt(2.0)`)
+operators and `size`. A function call there (`const R := math.Sqrt(2.0)`)
 is E167; drop `const` (`R := math.Sqrt(2.0)`) to compute it at start-up.
 
 ### Printing
@@ -456,7 +456,8 @@ refuses them, and an `extern` function can use them only on 64-bit targets
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
-`sizeof(T)` returns `usize`.
+`size(T)` returns `usize`. The old name `sizeof(T)` still compiles and warns (W295); a
+function of your own named `size` or `sizeof` wins over the builtin.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
@@ -3242,7 +3243,7 @@ them** - the English spelling is an error (`E001`):
 | English          | Persian           |
 | ---------------- | ----------------- |
 | `len`            | `طول`             |
-| `sizeof`         | `اندازه‌گونه`     |
+| `size`           | `اندازه`          |
 | `lang`           | `زبان`            |
 | `hash`           | `درهم`            |
 | `char_code`      | `کدنویسه`         |

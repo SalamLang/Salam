@@ -51,7 +51,7 @@ func add_squares(r: Range*):
 end
 
 func new_range(first: i64, last: i64): Range*:
-    r := mem.Allocate(sizeof(Range)) as Range*
+    r := mem.Allocate(size(Range)) as Range*
     r[0] = Range { first = first, last = last }
     ret r
 end

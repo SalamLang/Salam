@@ -1,0 +1,142 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/ssrweb"
+@fa "وب‌رندرسرور"
+package ssrweb
+
+import encoding.json
+import str
+
+extern:
+    func salam_js_global(name: str): i64
+    func salam_js_document(): i64
+    func salam_js_new(ctor: i64, ...): i64
+    func salam_js_call(obj: i64, method: str, ...): i64
+    func salam_js_get_str(obj: i64, name: str): str
+    func salam_js_get_num(obj: i64, name: str): f64
+    func salam_js_is_nullish(x: i64): bool
+    func salam_js_to_str(x: i64): str
+end
+
+mut _token := ""
+
+mut _failed := false
+
+mut _error := ""
+
+func _fail(message: str): str:
+    _failed = true
+    _error = message
+    ret ""
+end
+
+func _meta(name: str): str:
+    doc := salam_js_document()
+    m := salam_js_call(doc, "querySelector", "meta[name=\"" + name + "\"]")
+    if salam_js_is_nullish(m):
+        ret ""
+    end
+    ret salam_js_to_str(salam_js_call(m, "getAttribute", "content"))
+end
+
+func _send(method: str, url: str, body: str, has_body: bool, token: str): i64:
+    x := salam_js_new(salam_js_global("XMLHttpRequest"))
+    _o := salam_js_call(x, "open", method, url, false)
+    if has_body:
+        _h := salam_js_call(x, "setRequestHeader", "Content-Type", "application/json")
+    end
+    if token.Len() > 0:
+        _t := salam_js_call(x, "setRequestHeader", "X-Salam-Token", token)
+    end
+    if has_body:
+        _s := salam_js_call(x, "send", body)
+    else:
+        _s := salam_js_call(x, "send")
+    end
+    ret x
+end
+
+func _base(): str:
+    mut b := _meta("salam-server")
+    if str.EndsWith(b, "/"):
+        b = b.Substr(0, b.Len() - 1)
+    end
+    ret b
+end
+
+func _session(base: str): bool:
+    x := _send("GET", base + "/_salam/session", "", false, "")
+    if salam_js_get_num(x, "status") != 200.0:
+        ret false
+    end
+    _token = json.Get(salam_js_get_str(x, "responseText"), "token")
+    ret _token.Len() > 0
+end
+
+func _page_token(): str:
+    doc := salam_js_document()
+    el := salam_js_call(doc, "getElementById", "__salam")
+    if not salam_js_is_nullish(el):
+        t := json.Get(salam_js_get_str(el, "textContent"), "token")
+        if t.Len() > 0:
+            ret t
+        end
+    end
+    ret _meta("salam-token")
+end
+
+@en "Call"
+@fa "فراخوانی"
+pub func Call(name: str, args: str): str:
+    _failed = false
+    _error = ""
+    base := _base()
+    if _token.Len() == 0:
+        _token = _page_token()
+    end
+    if _token.Len() == 0 and not _session(base):
+        ret _fail("cannot reach the server")
+    end
+    mut x := _send("POST", base + "/_salam/fn/" + name, "{\"args\":" + args + "}", true, _token)
+    if salam_js_get_num(x, "status") == 403.0:
+        if not _session(base):
+            ret _fail("cannot reach the server")
+        end
+        x = _send("POST", base + "/_salam/fn/" + name, "{\"args\":" + args + "}", true, _token)
+    end
+    text := salam_js_get_str(x, "responseText")
+    if text.Len() == 0 or not json.Valid(text):
+        ret _fail("the server did not answer")
+    end
+    if json.Get(text, "ok") != "true":
+        mut message := json.Get(text, "error")
+        if message.Len() == 0:
+            message = "the server refused the call"
+        end
+        ret _fail(message)
+    end
+    ret json.GetRaw(text, "value")
+end
+
+@en "Failed"
+@fa "ناموفق"
+pub func Failed(): bool:
+    ret _failed
+end
+
+@en "ErrorText"
+@fa "متن خطا"
+pub func ErrorText(): str:
+    ret _error
+end

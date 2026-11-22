@@ -177,6 +177,67 @@ There is no rendering on native. A `server func` call becomes an HTTP call to th
 front server named in the app settings, using the wire protocol above, so the
 app and the site share one set of functions, and no secret is in the binary.
 
+## Server function lowering
+
+The compiler lowers a `server func F(args): T` three ways, chosen by the
+output being built. The choice is made in `compiler/semantic/sema_server_gen.salam`
+before function bodies are checked.
+
+| output | what `F` becomes |
+| --- | --- |
+| server program (default, `--ssr` server) | `F` unchanged, plus a generated wrapper per function and `__salam_register_server_funcs()` |
+| web (`salam page build`, `salam web`, `salam js`) | `F` keeps its signature; its body is replaced by a stub that posts to the server |
+| native page (`ui_target` native) | same stub, using `net/ssrclient` (HTTP client) |
+
+Server side. For every server func the compiler adds, as ordinary checked
+Salam code, `__salam_srv_<n>(c: i64)`: it reads the JSON `args` object with
+`ssr.Args(c)`, decodes each parameter by name with `json.Unmarshal` (a missing
+required key, a wrong type or an unknown enum member answers 400 through
+`ssr.Reject`; a `T?` parameter may be absent), calls `F`, and answers
+`ssr.Ok(c, json.Marshal(result))`. A function declared `throw` runs inside a
+`try:`: an error becomes `ssr.Fail(c, "server function failed")` and the real
+message is printed on the server only. A call to `F` from server code is an
+ordinary in-process call.
+
+The hook `func __salam_register_server_funcs()` registers every wrapper by wire
+name with `ssr.Register`. The wire name is the English alias when `F` has one,
+else its name. The function exists whenever the program has a server func and
+is built as a server program. If a definition with that name is already
+present (the `--ssr` generator adds an empty one), its body is replaced, so
+there is one definition either way. The imports `net/ssr` and `encoding/json`
+are added when the program does not import them. Wire types are the JSON
+mapping of `std/encoding/json`: `int` and `float` are numbers, enums are their
+member name, structs are objects, `Vector<T>` is an array.
+
+Client side. The stub body builds `{"name": value, ...}` with `json.Marshal`,
+calls `ssrweb.Call(name, args)` (web) or `ssrclient.Call(name, args)`
+(native), and decodes the value. On failure a function declared `throw`
+throws the server's error text; any other function returns the zero value.
+The result of a `server func` call is therefore available at once: the web
+stub uses a synchronous request, so a handler or a component body that calls
+one blocks until the answer arrives. The `load(...)` form of R9 is not part of
+the language yet; when it is, it wraps the same stub.
+
+- Token (web): `ssrweb` reads `<script type="application/json" id="__salam">{"token": "..."}</script>`
+  (the SSR build embeds it), then `<meta name="salam-token" content="...">`,
+  then asks `GET /_salam/session`, and sends it as `X-Salam-Token`. A 403
+  fetches a new token once and retries.
+- Server address: the page setting `server = "https://front.example.com"`
+  (Persian `سرور`) in the `page:` block. Web: written as
+  `<meta name="salam-server">`; the stub posts to it, same origin when absent.
+  Native: the page calls `ssrclient.SetServer(url)` at start; without the
+  setting `SALAM_SERVER` from the environment is used.
+- Not in the client output: the body, and any top level function or global that
+  only server funcs use, are dropped from the web program after the checks
+  (name based reachability from every non server definition). Native programs
+  lose them through unreachable function removal, because the stub no longer
+  mentions them.
+- E286: a definition that stays in the web program and uses a member of `env`
+  or `ssr` (`env.Get`, `ssr.Request`) is an error naming that member.
+- E289: a static web build (`salam page build` without a `server` setting)
+  whose page, handlers or helpers mention a server func is an error. The
+  `--ssr` build leaves the check off.
+
 ## Diagnostics
 
 | code | kind | message |

@@ -63,8 +63,16 @@ function check(name, ok, detail) {
       await new Promise((r) => setTimeout(r, 20));
     }
   };
-  const h1Is = (want) => until(() => text("h1"), (v) => v === want);
-  const pIs = (want) => until(() => text("p"), (v) => v === want);
+  const h1Is = (want) =>
+    until(
+      () => text("h1"),
+      (v) => v === want,
+    );
+  const pIs = (want) =>
+    until(
+      () => text("p"),
+      (v) => v === want,
+    );
   const whereIs = (want) => until(where, (v) => v === want);
 
   await page.goto(url("/users/2"));
@@ -98,8 +106,7 @@ function check(name, ok, detail) {
   );
   check("a route title sets the document title", title === "Home", title);
   const cur = await until(
-    () =>
-      page.$eval("nav a >> nth=0", (e) => e.getAttribute("aria-current")),
+    () => page.$eval("nav a >> nth=0", (e) => e.getAttribute("aria-current")),
     (v) => v === "page",
   );
   check("the link to the current route is marked", cur === "page", cur);

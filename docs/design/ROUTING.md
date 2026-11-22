@@ -115,6 +115,17 @@ applies (parameter types, optional defaults, unknown setting); E265 (`Outlet`
 or `page.GoTo` without routes) now says "without a pages folder". They were
 E256 to E259 until those numbers were found to belong to the ownership checks.
 
+## Project components
+
+In a project (entry named `main.salam`) every `pub component` in every `.salam`
+file under the entry's folder is imported without `include`. Route files under
+`pages/` take part in the duplicate check only. Hidden folders, `node_modules`,
+`build`, `dist`, `out`, `target`, `vendor`, `tests`, `test`, folders with their
+own `main.salam` and `*_test.salam` files are not scanned. Private components
+stay private (E232). A single file build, the playground and runtime layouts
+behave as before. The duplicate check is `E291`:
+`two pub components are named 'Card': 'shop/card.salam' line 13 and 'ui/card.salam' line 13`.
+
 ## Migration
 
 1. Release N: `pages/` works, `routes:` still works and warns (W281).

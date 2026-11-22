@@ -170,7 +170,7 @@ end
   routes (`"/settings/*" : Settings`).
 - `Link: to = "/path"` is the only navigation element. `page.GoTo("/user/3")`,
   `page.Back()`, `page.Forward()`, `page.Redirect("/login")` are functions, and
-  the state `page.route.path`, `page.route.query` and `page.Param("id")` can be
+  the state `page.route.path`, `page.route.query` and `page.route.Param("id")` can be
   read like any state (R5), so a highlighted menu item is
   `when page.route.path == "/"`.
 - A route may carry a guard: `"/admin" : Admin guard = logged_in redirect =

@@ -116,7 +116,7 @@ func create(ctx: i64):
         http.Json(ctx, `{"error":"name is required"}`)
         ret
     end
-    item := Item { id = items.len() + 1, name = str.Clone(name) }
+    item := Item { id = items.Len() + 1, name = str.Clone(name) }
     items.Push(item)
     http.SetStatus(ctx, 201)
     http.Json(ctx, json.Marshal(item))

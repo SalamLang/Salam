@@ -155,7 +155,7 @@ end
 func main:
     counts := pool.Map(10, pool.CPUCount(), (b: i64): ret count_primes(b) end)
     mut total := 0 as i64
-    repeat counts.len() in i:
+    repeat counts.Len() in i:
         total += counts.Get(i)
     end
     println "primes below 1000000:", total
@@ -260,7 +260,7 @@ func main:
     each v in all:
         sum += v
     end
-    println "results:", all.len(), "sum:", sum
+    println "results:", all.Len(), "sum:", sum
     all.Free()
     jobs.Free()
     results.Free()

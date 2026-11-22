@@ -119,7 +119,7 @@ func main:
         j++
     end
 
-    mut cur := Vector {} as Vector<i64> cur.zeros(LEN2 + 1)
+    mut cur := Vector {} as Vector<i64> cur.Zeros(LEN2 + 1)
 
     i = 1
     until i <= LEN1:

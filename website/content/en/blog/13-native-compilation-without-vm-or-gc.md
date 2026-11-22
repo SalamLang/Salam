@@ -71,7 +71,7 @@ func mean(values: Vector<f64>): f64:
     each v in values:
         sum += v
     end
-    ret sum / values.len() as f64
+    ret sum / values.Len() as f64
 end
 
 func main:
@@ -80,7 +80,7 @@ func main:
     buf.Reserve(6)
     repeat 3 in hour:
         fill_readings(buf, hour)
-        println "hour", hour, "mean", mean(buf), "of", buf.len(), "readings"
+        println "hour", hour, "mean", mean(buf), "of", buf.Len(), "readings"
     end
 end
 ```

@@ -136,7 +136,7 @@ func load(text: str):
         json.Unmarshal(text, s)
         println "accepted:", s.email, s.age
     catch e:
-        println "rejected:", e.to_str()
+        println "rejected:", e.ToStr()
     end
 end
 
@@ -233,7 +233,7 @@ page Cart(user: str, products: Vector<str>):
     if products.IsEmpty():
         paragraph: content = "Your cart is empty" end
     else:
-        paragraph: content = "Items: " + products.len() end
+        paragraph: content = "Items: " + products.Len() end
         list:
             each name in products:
                 item: content = name end

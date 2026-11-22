@@ -90,7 +90,7 @@ func add(ctx: i64):
         http.Html(ctx, NotesPage(notes, problem))
         ret
     end
-    notes.Push(Note { id = notes.len() + 1, text = str.Clone(text) })
+    notes.Push(Note { id = notes.Len() + 1, text = str.Clone(text) })
     http.Redirect(ctx, "/")
 end
 

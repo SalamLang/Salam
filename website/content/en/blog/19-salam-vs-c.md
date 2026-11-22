@@ -79,7 +79,7 @@ func main:
         if i == 0 or n < lo: lo = n end
         if i == 0 or n > hi: hi = n end
     end
-    println "count:", parts.len(), "sum:", sum, "min:", lo, "max:", hi
+    println "count:", parts.Len(), "sum:", sum, "min:", lo, "max:", hi
 end
 ```
 
@@ -172,8 +172,8 @@ func main:
             hottest = r
         end
     end
-    println "readings:", readings.len()
-    println "average:", total / (readings.len() as f64)
+    println "readings:", readings.Len()
+    println "average:", total / (readings.Len() as f64)
     println "hottest:", hottest.city
 end
 ```

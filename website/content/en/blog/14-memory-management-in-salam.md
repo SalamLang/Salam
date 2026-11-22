@@ -44,7 +44,7 @@ func main:
     mut basket := cart.Copy()
     defer basket.Free()
     basket.Push("milk")
-    println cart.len(), basket.len()
+    println cart.Len(), basket.Len()
 end
 ```
 
@@ -75,7 +75,7 @@ func count_words(lines: str[]): int:
     each line in lines:
         words := line.Split(" ")
         defer free_words(words)
-        total += words.len()
+        total += words.Len()
     end
     ret total
 end
@@ -129,7 +129,7 @@ end
 
 func main:
     sq := squares(5)
-    println sq.len(), sq.Get(4)
+    println sq.Len(), sq.Get(4)
 end
 ```
 

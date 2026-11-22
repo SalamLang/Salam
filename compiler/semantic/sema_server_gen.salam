@@ -1,0 +1,555 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+import os
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+const SRV_MODE_SERVER := 0
+
+const SRV_MODE_WEB := 1
+
+const SRV_MODE_NATIVE := 2
+
+mut g_srv_mode := 0
+
+mut g_srv_ssr := "ssr"
+
+mut g_srv_json := "json"
+
+mut g_srv_cli := "ssrclient"
+
+mut g_srv_orig_fid := Vector {} as Vector<int>
+
+mut g_srv_orig_body := Vector {} as Vector<int>
+
+func srv_result_type(s &: Sema, t: int): int:
+    if not th_is_throws(s, t):
+        ret t
+    end
+    tv := ty_at(s, t)
+    if tv.params.Len() == 0:
+        ret TYPE_NONE
+    end
+    ok := ty_at(s, tv.params.Get(0))
+    if ok.kind != TY_STRUCT or ok.decl == 0 or sym_at(s, ok.decl).members == 0:
+        ret TYPE_NONE
+    end
+    syms := scope_at(s, sym_at(s, ok.decl).members).symbols
+    repeat syms.Len() in i:
+        f := sym_at(s, syms.Get(i))
+        if f.kind == SYM_FIELD:
+            ret f.ty
+        end
+    end
+    ret TYPE_NONE
+end
+
+func srv_is_void(s &: Sema, rt: int): bool:
+    ret rt < 0 or ty_at(s, rt).kind == TY_VOID
+end
+
+func srv_spell(s &: Sema, t: int): str:
+    inner := opt_inner(s, t)
+    if inner != TYPE_NONE:
+        sp := derive_type_spelling(s, inner)
+        ret str.Len(sp) == 0 ? "" : sp + "?"
+    end
+    ret derive_type_spelling(s, t)
+end
+
+func srv_zero(s &: Sema, t: int, spelled: str): str:
+    mut base := t
+    mut guard := 0
+    until ty_at(s, base).distinct != 0 and guard < 8:
+        base = ty_at(s, base).base
+        guard++
+    end
+    k := ty_at(s, base).kind
+    if k == TY_BOOL:
+        ret "false"
+    end
+    if k == TY_STR:
+        ret "\"\""
+    end
+    if k == TY_VEC:
+        ret "Vector {} as " + spelled
+    end
+    if opt_inner(s, t) != TYPE_NONE:
+        ret "null as " + spelled
+    end
+    if k == TY_STRUCT:
+        ret spelled + " {}"
+    end
+    ret "0 as " + spelled
+end
+
+func server_export_funcs(s &: Sema, a &: at.Ast, program: int):
+    if s.in_pkg or g_srv_mode != SRV_MODE_SERVER:
+        ret
+    end
+    funcs := srv_top_funcs(a, program)
+    repeat funcs.Len() in i:
+        mut d := at.Get(a, funcs.Get(i))
+        d.is_pub = true
+        at.Put(a, funcs.Get(i), d)
+    end
+end
+
+func srv_client_pkg(): str:
+    ret g_srv_mode == SRV_MODE_WEB ? "ssrweb" : "ssrclient"
+end
+
+func srv_wire_name(a &: at.Ast, did: int): str:
+    d := at.Get(a, did)
+    al := at.Aliases(a, d.ext)
+    mut i := 1
+    until i < al.Len():
+        if str.Equals(al.Get(i - 1), "en"):
+            ret al.Get(i)
+        end
+        i += 2
+    end
+    ret d.name
+end
+
+func srv_top_funcs(a &: at.Ast, program: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF and d.is_server and not d.synthetic and not d.is_extern:
+            out.Push(did)
+        end
+    end
+    ret out
+end
+
+func srv_has_import(a &: at.Ast, program: int, path: str, tail: str): bool:
+    repeat at.ChildCount(a, program) in i:
+        d := at.Get(a, at.Child(a, program, i))
+        if d.kind == at.AST_IMPORT and (su_ident_eq(d.name, path) or str.Equals(d.name, tail)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func srv_pkg_node_name(en: str, fa: bool): str:
+    if str.Equals(en, "net.ssr"):
+        ret fa ? "شبکه.رندر\u200cسرور" : en
+    end
+    if str.Equals(en, "net.internal.ssrweb"):
+        ret fa ? "شبکه.داخلی.وب\u200cرندرسرور" : en
+    end
+    if str.Equals(en, "net.internal.ssrclient"):
+        ret fa ? "شبکه.داخلی.کارخواه\u200cرندرسرور" : en
+    end
+    ret fa ? "کدگذاری.جیسون" : en
+end
+
+func srv_add_import(a &: at.Ast, program: int, en: str, fa: bool, pending &: Vector<int>):
+    mut dot := 0
+    repeat str.Len(en) in di:
+        if byte_at(en, di) == 46:
+            dot = di + 1
+        end
+    end
+    tail := str.Substr(en, dot, str.Len(en) - dot)
+    if srv_has_import(a, program, en, tail) or srv_has_import(a, program, srv_pkg_node_name(en, true), tail):
+        ret
+    end
+    id := at.NewNode(a, at.AST_IMPORT)
+    at.SetName(a, id, srv_pkg_node_name(en, fa))
+    pending.Push(id)
+end
+
+func server_inject_imports(s &: Sema, a &: at.Ast, program: int):
+    if s.in_pkg:
+        ret
+    end
+    funcs := srv_top_funcs(a, program)
+    if funcs.Len() == 0:
+        ret
+    end
+    fa := not str.Equals(s.lang, "en")
+    mut fresh := Vector {} as Vector<int>
+    if g_srv_mode == SRV_MODE_SERVER:
+        srv_add_import(a, program, "net.ssr", fa, fresh)
+    else:
+        srv_add_import(a, program, "net.internal." + srv_client_pkg(), fa, fresh)
+    end
+    srv_add_import(a, program, "encoding.json", fa, fresh)
+    if fresh.Len() == 0:
+        ret
+    end
+    mut pn := at.Get(a, program)
+    mut merged := Vector {} as Vector<int>
+    repeat fresh.Len() in k:
+        merged.Push(fresh.Get(k))
+    end
+    repeat pn.list.Len() in m:
+        merged.Push(pn.list.Get(m))
+    end
+    pn.list = merged
+    at.Put(a, program, pn)
+end
+
+func srv_alias_of(s &: Sema, pkgname: str): str:
+    syms := scope_at(s, s.global).symbols
+    repeat syms.Len() in i:
+        pk := syms.Get(i)
+        pv := sym_at(s, pk)
+        if pv.kind == SYM_PACKAGE and pv.members != 0 and str.Equals(pv.pkgname, pkgname):
+            mut pm := sym_at(s, pk)
+            pm.used = true
+            sym_put(s, pk, pm)
+            ret derive_hidden_pkg(s, pk)
+        end
+    end
+    ret pkgname
+end
+
+func srv_param_default_present(s &: Sema, t: int): bool:
+    ret opt_inner(s, t) != TYPE_NONE
+end
+
+func srv_wrapper_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
+    fn := at.Get(a, fid)
+    sigid := srv_find_sig(s, fid, fn.name)
+    if sigid == 0:
+        ret ""
+    end
+    sg := sig_at(s, sigid)
+    mut out := "func __salam_srv_" + idx + "(c: i64):\n"
+    out += "    __a := " + g_srv_ssr + ".Args(c)\n"
+    mut call := derive_ident(fn.name) + "("
+    repeat fn.list.Len() in i:
+        if i >= sg.params.Len():
+            break
+        end
+        pn := at.Get(a, fn.list.Get(i)).name
+        sp := srv_spell(s, sg.params.Get(i))
+        if str.Len(sp) == 0:
+            ret ""
+        end
+        key := jd_quote(pn)
+        out += "    mut __p" + i + " := " + srv_zero(s, sg.params.Get(i), sp) + "\n"
+        if srv_param_default_present(s, sg.params.Get(i)):
+            ipt := opt_inner(s, sg.params.Get(i))
+            isp := srv_spell(s, ipt)
+            out += "    if " + g_srv_json + ".Has(__a, " + key + ") and " + g_srv_json + ".GetRaw(__a, " + key + ") != \"null\":\n"
+            out += "        mut __q" + i + " := " + srv_zero(s, ipt, isp) + "\n"
+            out += "        try:\n"
+            out += "            " + g_srv_json + ".Unmarshal(" + g_srv_json + ".GetRaw(__a, " + key + "), __q" + i + ")\n"
+            out += "        catch __e:\n"
+            out += "            " + g_srv_ssr + ".Reject(c, 400, \"bad arguments\")\n"
+            out += "            ret\n"
+            out += "        end\n"
+            out += "        __p" + i + " = __q" + i + "\n"
+            out += "    end\n"
+        else:
+            out += "    if not " + g_srv_json + ".Has(__a, " + key + "):\n"
+            out += "        " + g_srv_ssr + ".Reject(c, 400, \"missing argument\")\n"
+            out += "        ret\n"
+            out += "    end\n"
+            out += "    try:\n"
+            out += "        " + g_srv_json + ".Unmarshal(" + g_srv_json + ".GetRaw(__a, " + key + "), __p" + i + ")\n"
+            out += "    catch __e:\n"
+            out += "        " + g_srv_ssr + ".Reject(c, 400, \"bad arguments\")\n"
+            out += "        ret\n"
+            out += "    end\n"
+        end
+        if i > 0:
+            call += ", "
+        end
+        call += "__p" + i
+    end
+    call += ")"
+    rtype := srv_result_type(s, sg.ret_type)
+    is_void := srv_is_void(s, rtype)
+    mut inner := ""
+    if is_void:
+        inner = call + "\n"
+        inner += "" + g_srv_ssr + ".Ok(c, \"null\")\n"
+    else:
+        inner = "__r := " + call + "\n"
+        rin := opt_inner(s, rtype)
+        if rin != TYPE_NONE:
+            inner += "if __r.IsSome():\n"
+            inner += "    " + g_srv_ssr + ".Ok(c, " + g_srv_json + ".Marshal(__r.UnwrapOr(" + srv_zero(s, rin, srv_spell(s, rin)) + ")))\n"
+            inner += "else:\n"
+            inner += "    " + g_srv_ssr + ".Ok(c, \"null\")\n"
+            inner += "end\n"
+        else:
+            inner += "" + g_srv_ssr + ".Ok(c, " + g_srv_json + ".Marshal(__r))\n"
+        end
+    end
+    if fn.is_throws:
+        out += "    try:\n"
+        out += srv_indent(inner, "        ")
+        out += "    catch __e:\n"
+        out += "        println \"server func " + str.Replace(fn.name, "\"", "") + " failed: \" + __e.message\n"
+        out += "        " + g_srv_ssr + ".Fail(c, \"server function failed\")\n"
+        out += "    end\n"
+    else:
+        out += srv_indent(inner, "    ")
+    end
+    out += "end\n"
+    ret out
+end
+
+func srv_indent(block: str, pad: str): str:
+    mut out := ""
+    parts := str.Split(block, "\n")
+    repeat parts.Len() in i:
+        line := parts.Get(i)
+        if str.Len(line) > 0:
+            out += pad + line + "\n"
+        end
+    end
+    ret out
+end
+
+func srv_stub_body_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
+    fn := at.Get(a, fid)
+    sigid := srv_find_sig(s, fid, fn.name)
+    if sigid == 0:
+        ret ""
+    end
+    sg := sig_at(s, sigid)
+    rtype := srv_result_type(s, sg.ret_type)
+    is_void := srv_is_void(s, rtype)
+    mut rs := ""
+    if not is_void:
+        rs = srv_spell(s, rtype)
+        if str.Len(rs) == 0:
+            ret ""
+        end
+    end
+    mut args := "\"{\""
+    repeat fn.list.Len() in i:
+        if i >= sg.params.Len():
+            break
+        end
+        pn := at.Get(a, fn.list.Get(i)).name
+        pin := opt_inner(s, sg.params.Get(i))
+        mut enc := g_srv_json + ".Marshal(" + derive_ident(pn) + ")"
+        if pin != TYPE_NONE:
+            enc = "(" + derive_ident(pn) + ".IsSome() ? " + g_srv_json + ".Marshal(" + derive_ident(pn) + ".UnwrapOr(" + srv_zero(s, pin, srv_spell(s, pin)) + ")) : \"null\")"
+        end
+        args += " + \"" + (i > 0 ? "," : "") + jd_inner_quote(pn) + ":\" + " + enc
+    end
+    args += " + \"}\""
+    mut head := "func __salam_stub_" + idx + "("
+    repeat fn.list.Len() in hi:
+        if hi >= sg.params.Len():
+            break
+        end
+        if hi > 0:
+            head += ", "
+        end
+        head += derive_ident(at.Get(a, fn.list.Get(hi)).name) + ": " + srv_spell(s, sg.params.Get(hi))
+    end
+    head += ")"
+    if not is_void:
+        head += ": " + rs
+    end
+    if fn.is_throws:
+        head += " throw"
+    end
+    mut out := head + ":\n"
+    if not is_void:
+        out += "    mut __r := " + srv_zero(s, rtype, rs) + "\n"
+    end
+    out += "    __v := " + g_srv_cli + ".Call(" + jd_quote(srv_wire_name(a, fid)) + ", " + args + ")\n"
+    out += "    if " + g_srv_cli + ".Failed():\n"
+    if fn.is_throws:
+        out += "        throw " + g_srv_cli + ".ErrorText()\n"
+    else:
+        out += is_void ? "        ret\n" : "        ret __r\n"
+    end
+    out += "    end\n"
+    if not is_void:
+        rin := opt_inner(s, rtype)
+        mut target := "__r"
+        if rin != TYPE_NONE:
+            out += "    if __v == \"null\":\n"
+            out += "        ret __r\n"
+            out += "    end\n"
+            out += "    mut __q := " + srv_zero(s, rin, srv_spell(s, rin)) + "\n"
+            target = "__q"
+        end
+        if fn.is_throws:
+            out += "    try " + g_srv_json + ".Unmarshal(__v, " + target + ")\n"
+        else:
+            out += "    try:\n"
+            out += "        " + g_srv_json + ".Unmarshal(__v, " + target + ")\n"
+            out += "    catch __e:\n"
+            out += "        ret __r\n"
+            out += "    end\n"
+        end
+        if rin != TYPE_NONE:
+            out += "    __r = __q\n"
+        end
+        out += "    ret __r\n"
+    end
+    out += "end\n"
+    ret out
+end
+
+func jd_inner_quote(name: str): str:
+    mut out := "\\\""
+    repeat str.Len(name) in i:
+        c := name.Substr(i, 1)
+        if str.Equals(c, "\"") or str.Equals(c, "\\"):
+            out += "\\\\"
+        end
+        out += c
+    end
+    ret out + "\\\""
+end
+
+func srv_install_native_stubs(s &: Sema, a &: at.Ast, funcs: Vector<int>):
+    repeat funcs.Len() in i:
+        fid := funcs.Get(i)
+        text := srv_stub_body_source(s, a, fid, i)
+        if str.Len(text) == 0:
+            continue
+        end
+        if str.Len(os.Env("SALAM_SERVER_DUMP")) > 0:
+            println text
+        end
+        prog := derive_parse(s, a, text, "<server>")
+        if prog == 0:
+            continue
+        end
+        _f := derive_install_all(s, a, prog, "__salam_stub_" + i, 0)
+        dce_mark_root(s.pkg, "__salam_stub_" + i)
+        fn := at.Get(a, fid)
+        mut call := "__salam_stub_" + i + "("
+        repeat fn.list.Len() in k:
+            if k > 0:
+                call += ", "
+            end
+            call += derive_ident(at.Get(a, fn.list.Get(k)).name)
+        end
+        call += ")"
+        sg := sig_at(s, srv_find_sig(s, fid, fn.name))
+        is_void := srv_is_void(s, srv_result_type(s, sg.ret_type))
+        mut bodytext := "func __salam_body():\n    "
+        pre := fn.is_throws ? "try " : ""
+        if is_void:
+            bodytext += pre + call + "\n"
+        else:
+            bodytext += "ret " + pre + call + "\n"
+        end
+        bodytext += "end\n"
+        bp := derive_parse(s, a, bodytext, "<server>")
+        if bp == 0 or at.ChildCount(a, bp) == 0:
+            continue
+        end
+        mut fv := at.Get(a, fid)
+        g_srv_orig_fid.Push(fid)
+        g_srv_orig_body.Push(fv.a)
+        fv.a = at.Get(a, at.Child(a, bp, 0)).a
+        at.Put(a, fid, fv)
+    end
+end
+
+func server_funcs_generate(s &: Sema, a &: at.Ast, program: int):
+    if s.in_pkg:
+        ret
+    end
+    funcs := srv_top_funcs(a, program)
+    if funcs.Len() == 0:
+        ret
+    end
+    g_srv_json = srv_alias_of(s, "json")
+    if g_srv_mode != SRV_MODE_SERVER:
+        g_srv_cli = srv_alias_of(s, srv_client_pkg())
+        srv_install_native_stubs(s, a, funcs)
+        ret
+    end
+    g_srv_ssr = srv_alias_of(s, "ssr")
+    mut text := ""
+    repeat funcs.Len() in i:
+        text += srv_wrapper_source(s, a, funcs.Get(i), i)
+    end
+    mut regname := "__salam_register_server_funcs"
+    placeholder := scope_lookup_local(s, s.global, regname) != 0
+    if placeholder:
+        regname = "__salam_register_gen"
+    end
+    text += "func " + regname + "():\n"
+    repeat funcs.Len() in k:
+        text += "    " + g_srv_ssr + ".Register(" + jd_quote(srv_wire_name(a, funcs.Get(k))) + ", __salam_srv_" + k + ")\n"
+    end
+    text += "end\n"
+    if str.Len(os.Env("SALAM_SERVER_DUMP")) > 0:
+        println text
+    end
+    prog := derive_parse(s, a, text, "<server>")
+    if prog == 0:
+        ret
+    end
+    _f := derive_install_all(s, a, prog, regname, 0)
+    if placeholder:
+        srv_patch_placeholder(s, a, program, "__salam_register_gen")
+    end
+    repeat funcs.Len() in m:
+        dce_mark_root(s.pkg, "__salam_srv_" + m)
+    end
+    dce_mark_root(s.pkg, regname)
+    dce_mark_root(s.pkg, "__salam_register_server_funcs")
+end
+
+func srv_patch_placeholder(s &: Sema, a &: at.Ast, program: int, target: str):
+    bp := derive_parse(s, a, "func __salam_stub():\n    " + target + "()\nend\n", "<server>")
+    if bp == 0 or at.ChildCount(a, bp) == 0:
+        ret
+    end
+    body := at.Get(a, at.Child(a, bp, 0)).a
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, "__salam_register_server_funcs"):
+            mut m := at.Get(a, did)
+            m.a = body
+            at.Put(a, did, m)
+            ret
+        end
+    end
+end
+
+func srv_orig_body(fid: int, now: int): int:
+    repeat g_srv_orig_fid.Len() in i:
+        if g_srv_orig_fid.Get(i) == fid:
+            ret g_srv_orig_body.Get(i)
+        end
+    end
+    ret now
+end
+
+pub func SetServerMode(mode: int):
+    g_srv_mode = mode
+end
+
+pub func ServerMode(): int:
+    ret g_srv_mode
+end

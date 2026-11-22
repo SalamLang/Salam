@@ -1,0 +1,240 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+mut g_srv_static := 0 - 1
+
+func srv_collect_names(a &: at.Ast, id: int, out &: Vector<str>, depth: int):
+    if id == 0 or depth > 400:
+        ret
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_IDENTIFIER and str.Len(n.name) > 0:
+        out.Push(n.name)
+    end
+    if n.a != 0:
+        srv_collect_names(a, n.a, out, depth + 1)
+    end
+    if n.b != 0:
+        srv_collect_names(a, n.b, out, depth + 1)
+    end
+    if n.c != 0:
+        srv_collect_names(a, n.c, out, depth + 1)
+    end
+    if n.d != 0:
+        srv_collect_names(a, n.d, out, depth + 1)
+    end
+    repeat n.list.Len() in i:
+        srv_collect_names(a, n.list.Get(i), out, depth + 1)
+    end
+end
+
+func srv_find_server_pkg_use(s &: Sema, a &: at.Ast, id: int, depth: int): int:
+    if id == 0 or depth > 400:
+        ret 0
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_MEMBER and n.a != 0:
+        o := at.Get(a, n.a)
+        if o.kind == at.AST_IDENTIFIER:
+            sy := scope_lookup_local(s, s.global, o.name)
+            if sy != 0 and sym_at(s, sy).kind == SYM_PACKAGE:
+                pn := sym_at(s, sy).pkgname
+                if str.Equals(pn, "env") or str.Equals(pn, "ssr"):
+                    ret id
+                end
+            end
+        end
+    end
+    mut hit := 0
+    if n.a != 0:
+        hit = srv_find_server_pkg_use(s, a, n.a, depth + 1)
+    end
+    if hit == 0 and n.b != 0:
+        hit = srv_find_server_pkg_use(s, a, n.b, depth + 1)
+    end
+    if hit == 0 and n.c != 0:
+        hit = srv_find_server_pkg_use(s, a, n.c, depth + 1)
+    end
+    if hit == 0 and n.d != 0:
+        hit = srv_find_server_pkg_use(s, a, n.d, depth + 1)
+    end
+    mut i := 0
+    until hit == 0 and i < n.list.Len():
+        hit = srv_find_server_pkg_use(s, a, n.list.Get(i), depth + 1)
+        i++
+    end
+    ret hit
+end
+
+func srv_decl_named(d: at.Node): bool:
+    ret (d.kind == at.AST_FUNC_DEF or d.kind == at.AST_VAR_DECL or d.kind == at.AST_CONST_DECL) and str.Len(d.name) > 0 and not d.is_extern
+end
+
+func srv_index_of(names: Vector<str>, name: str): int:
+    repeat names.Len() in i:
+        if str.Equals(names.Get(i), name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func srv_close(refs: Vector<Vector<int>>, seen &: Vector<bool>, work &: Vector<int>, stop: Vector<bool>):
+    mut w := 0
+    until w < work.Len():
+        cur := work.Get(w)
+        w++
+        rr := refs.Get(cur)
+        repeat rr.Len() in j:
+            t := rr.Get(j)
+            if not seen.Get(t) and not stop.Get(t):
+                seen.Set(t, true)
+                work.Push(t)
+            end
+        end
+    end
+end
+
+func server_reach_finish(s &: Sema, a &: at.Ast, program: int):
+    if s.in_pkg or g_srv_mode != SRV_MODE_WEB:
+        ret
+    end
+    funcs := srv_top_funcs(a, program)
+    if funcs.Len() == 0:
+        ret
+    end
+    pl := at.Get(a, program).list
+    n := pl.Len()
+    mut names := Vector {} as Vector<str>
+    mut isserver := Vector {} as Vector<bool>
+    mut refs := Vector {} as Vector<Vector<int>>
+    repeat n in i:
+        d := at.Get(a, pl.Get(i))
+        names.Push(srv_decl_named(d) ? d.name : "")
+        isserver.Push(d.kind == at.AST_FUNC_DEF and d.is_server)
+    end
+    repeat n in i2:
+        d2 := at.Get(a, pl.Get(i2))
+        mut used := Vector {} as Vector<str>
+        if d2.kind != at.AST_IMPORT and d2.kind != at.AST_STRUCT_DEF and d2.kind != at.AST_ENUM_DEF:
+            if d2.kind == at.AST_FUNC_DEF and d2.is_server:
+                srv_collect_names(a, srv_orig_body(pl.Get(i2), d2.a), used, 0)
+            else:
+                srv_collect_names(a, pl.Get(i2), used, 0)
+            end
+        end
+        mut ids := Vector {} as Vector<int>
+        repeat used.Len() in u:
+            t := srv_index_of(names, used.Get(u))
+            if t >= 0 and t != i2:
+                ids.Push(t)
+            end
+        end
+        refs.Push(ids)
+        used.Free()
+    end
+    mut nostop := Vector {} as Vector<bool>
+    mut stop := Vector {} as Vector<bool>
+    mut sset := Vector {} as Vector<bool>
+    mut cset := Vector {} as Vector<bool>
+    repeat n in i3:
+        nostop.Push(false)
+        stop.Push(isserver.Get(i3))
+        sset.Push(false)
+        cset.Push(false)
+    end
+    mut work := Vector {} as Vector<int>
+    repeat n in i4:
+        if isserver.Get(i4):
+            sset.Set(i4, true)
+            work.Push(i4)
+        end
+    end
+    srv_close(refs, sset, work, nostop)
+    work.Clear()
+    repeat n in i5:
+        d5 := at.Get(a, pl.Get(i5))
+        if isserver.Get(i5):
+            continue
+        end
+        if srv_decl_named(d5) and sset.Get(i5):
+            continue
+        end
+        cset.Set(i5, true)
+        work.Push(i5)
+    end
+    srv_close(refs, cset, work, stop)
+    save_file := s.file
+    mut kept := Vector {} as Vector<int>
+    repeat n in i6:
+        did := pl.Get(i6)
+        d6 := at.Get(a, did)
+        if isserver.Get(i6):
+            kept.Push(did)
+            continue
+        end
+        if srv_decl_named(d6) and sset.Get(i6) and not cset.Get(i6):
+            continue
+        end
+        kept.Push(did)
+        if d6.synthetic or d6.kind == at.AST_IMPORT:
+            continue
+        end
+        if d6.kind == at.AST_FUNC_DEF or d6.kind == at.AST_VAR_DECL or d6.kind == at.AST_CONST_DECL or d6.kind == at.AST_LAYOUT_BLOCK or d6.kind == at.AST_LAYOUT_COMPONENT:
+            _sf := sema_use_decl_file(s, a, did)
+            hit := srv_find_server_pkg_use(s, a, did, 0)
+            if hit != 0:
+                m := at.Get(a, hit)
+                o := at.Get(a, m.a)
+                owner := str.Len(d6.name) > 0 ? d6.name : "page"
+                serr(
+                    s, 286, span_of(a, hit), co.Format2(
+                        i18.Tr("'%s' runs in the browser but uses '%s', which only exists on the server"), co.ArgStr(owner), co.ArgStr(o.name + "." + m.name)
+                    )
+                )
+            end
+            if g_srv_static == 0:
+                mut ul := Vector {} as Vector<str>
+                srv_collect_names(a, did, ul, 0)
+                repeat funcs.Len() in f:
+                    fname := at.Get(a, funcs.Get(f)).name
+                    if srv_index_of(ul, fname) >= 0 and funcs.Get(f) != did:
+                        serr(
+                            s, 289, span_of(a, did), co.Format1(
+                                i18.Tr("server func '%s' is reachable from a static build; build with --ssr or set 'server'"), co.ArgStr(fname)
+                            )
+                        )
+                    end
+                end
+                ul.Free()
+            end
+        end
+    end
+    s.file = save_file
+    mut pw := at.Get(a, program)
+    pw.list = kept
+    at.Put(a, program, pw)
+    names.Free()
+end
+
+pub func SetServerStatic(state: int):
+    g_srv_static = state
+end

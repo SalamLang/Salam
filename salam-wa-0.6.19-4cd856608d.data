@@ -101375,6 +101375,41 @@ ret ""
 end
 ret ""
 end
+@en "GetRaw"
+@fa "دریافت خام"
+pub func GetRaw(text: str, key: str): str:
+if text.Len() == 0 or key.Len() == 0: ret "" end
+l := str.ByteLen(text)
+start := _jws_n(text, l, 0)
+bp := _bp(text)
+if start >= l or _ub(bp, start) != 123: ret "" end
+kl := str.ByteLen(key)
+kp := _bp(key)
+mut p := start + 1
+until p < l:
+p = _jws_n(text, l, p)
+if p >= l or _ub(bp, p) != 34: ret "" end
+ke := _jstr_n(text, l, p)
+if ke < 0: ret "" end
+this_kl := ke - p - 2
+is_key := this_kl == kl and _match_at(bp, p + 1, kp, kl)
+p = _jws_n(text, l, ke)
+if p >= l or _ub(bp, p) != 58: ret "" end
+vs := _jws_n(text, l, p + 1)
+ve := _jval_n(text, l, vs)
+if ve < 0: ret "" end
+if is_key:
+ret __jdslice(text, vs, vs + ve - vs)
+end
+p = _jws_n(text, l, ve)
+if p < l and _ub(bp, p) == 44:
+p++
+continue
+end
+ret ""
+end
+ret ""
+end
 @en "Escape"
 @fa "اسکیپ"
 pub func Escape(s: str): str:
@@ -210745,6 +210780,13 @@ destination = "meta"
 value_type = "string"
 elements = ["page"]
 }
+@en "server"
+@fa "سرور"
+pub const server := LayoutAttribute {
+destination = "meta"
+value_type = "absolute_url"
+elements = ["page"]
+}
 @en "theme_color" "theme color"
 @fa "رنگ تم"
 pub const theme_color := LayoutAttribute {
@@ -251167,6 +251209,100 @@ n := RecvFromBytes(sock, buf, m, out_host, out_port)
 if n < 0: ret "" end
 ret str.Clone(buf as str).Substr(0, n)
 end
+@en "net/internal/ssrclient"
+@fa "کارخواه‌رندرسرور"
+package ssrclient
+import net.http
+import encoding.json
+import env
+import str
+mut _server := ""
+mut _token := ""
+mut _failed := false
+mut _error := ""
+func _fail(message: str): str:
+_failed = true
+_error = str.Clone(message)
+ret ""
+end
+func _base(): str:
+mut b := Server()
+if str.EndsWith(b, "/"):
+b = b.Substr(0, b.Len() - 1)
+end
+ret b
+end
+func _session(base: str): bool:
+r := http.Get(base + "/_salam/session")
+if http.Status(r) != 200:
+ret false
+end
+_token = str.Clone(json.Get(http.Body(r), "token"))
+ret _token.Len() > 0
+end
+func _post(base: str, name: str, args: str): http.Response:
+mut h := http.NewHeaders()
+h.Insert("Content-Type", "application/json")
+h.Insert("X-Salam-Token", _token)
+ret http.PostWith(base + "/_salam/fn/" + name, "{\"args\":" + args + "}", h)
+end
+@en "Call"
+@fa "فراخوانی"
+pub func Call(name: str, args: str): str:
+_failed = false
+_error = ""
+base := _base()
+if base.Len() == 0:
+ret _fail("no server is set: use the server setting or SALAM_SERVER")
+end
+if _token.Len() == 0 and not _session(base):
+ret _fail("cannot reach the server")
+end
+mut r := _post(base, name, args)
+if http.Status(r) == 403:
+if not _session(base):
+ret _fail("cannot reach the server")
+end
+r = _post(base, name, args)
+end
+status := http.Status(r)
+text := http.Body(r)
+if status == 0 or not json.Valid(text):
+ret _fail("the server did not answer")
+end
+if json.Get(text, "ok") != "true":
+mut message := json.Get(text, "error")
+if message.Len() == 0:
+message = "the server refused the call"
+end
+ret _fail(message)
+end
+ret json.GetRaw(text, "value")
+end
+@en "SetServer"
+@fa "تنظیم سرور"
+pub func SetServer(url: str):
+_server = str.Clone(url)
+_token = ""
+end
+@en "Server"
+@fa "سرور"
+pub func Server(): str:
+if _server.Len() > 0:
+ret _server
+end
+ret env.Get("SALAM_SERVER")
+end
+@en "Failed"
+@fa "ناموفق"
+pub func Failed(): bool:
+ret _failed
+end
+@en "ErrorText"
+@fa "متن خطا"
+pub func ErrorText(): str:
+ret _error
+end
 @en "net/internal/ssrpage"
 @fa "برگه رندر"
 package ssrpage
@@ -251494,6 +251630,121 @@ io.Flush()
 until true:
 time.Sleep(60000)
 end
+end
+@en "net/internal/ssrweb"
+@fa "وب‌رندرسرور"
+package ssrweb
+import encoding.json
+import str
+extern:
+func salam_js_global(name: str): i64
+func salam_js_document(): i64
+func salam_js_new(ctor: i64, ...): i64
+func salam_js_call(obj: i64, method: str, ...): i64
+func salam_js_get_str(obj: i64, name: str): str
+func salam_js_get_num(obj: i64, name: str): f64
+func salam_js_is_nullish(x: i64): bool
+func salam_js_to_str(x: i64): str
+end
+mut _token := ""
+mut _failed := false
+mut _error := ""
+func _fail(message: str): str:
+_failed = true
+_error = message
+ret ""
+end
+func _meta(name: str): str:
+doc := salam_js_document()
+m := salam_js_call(doc, "querySelector", "meta[name=\"" + name + "\"]")
+if salam_js_is_nullish(m):
+ret ""
+end
+ret salam_js_to_str(salam_js_call(m, "getAttribute", "content"))
+end
+func _send(method: str, url: str, body: str, has_body: bool, token: str): i64:
+x := salam_js_new(salam_js_global("XMLHttpRequest"))
+_o := salam_js_call(x, "open", method, url, false)
+if has_body:
+_h := salam_js_call(x, "setRequestHeader", "Content-Type", "application/json")
+end
+if token.Len() > 0:
+_t := salam_js_call(x, "setRequestHeader", "X-Salam-Token", token)
+end
+if has_body:
+_s := salam_js_call(x, "send", body)
+else:
+_s := salam_js_call(x, "send")
+end
+ret x
+end
+func _base(): str:
+mut b := _meta("salam-server")
+if str.EndsWith(b, "/"):
+b = b.Substr(0, b.Len() - 1)
+end
+ret b
+end
+func _session(base: str): bool:
+x := _send("GET", base + "/_salam/session", "", false, "")
+if salam_js_get_num(x, "status") != 200.0:
+ret false
+end
+_token = json.Get(salam_js_get_str(x, "responseText"), "token")
+ret _token.Len() > 0
+end
+func _page_token(): str:
+doc := salam_js_document()
+el := salam_js_call(doc, "getElementById", "__salam")
+if not salam_js_is_nullish(el):
+t := json.Get(salam_js_get_str(el, "textContent"), "token")
+if t.Len() > 0:
+ret t
+end
+end
+ret _meta("salam-token")
+end
+@en "Call"
+@fa "فراخوانی"
+pub func Call(name: str, args: str): str:
+_failed = false
+_error = ""
+base := _base()
+if _token.Len() == 0:
+_token = _page_token()
+end
+if _token.Len() == 0 and not _session(base):
+ret _fail("cannot reach the server")
+end
+mut x := _send("POST", base + "/_salam/fn/" + name, "{\"args\":" + args + "}", true, _token)
+if salam_js_get_num(x, "status") == 403.0:
+if not _session(base):
+ret _fail("cannot reach the server")
+end
+x = _send("POST", base + "/_salam/fn/" + name, "{\"args\":" + args + "}", true, _token)
+end
+text := salam_js_get_str(x, "responseText")
+if text.Len() == 0 or not json.Valid(text):
+ret _fail("the server did not answer")
+end
+if json.Get(text, "ok") != "true":
+mut message := json.Get(text, "error")
+if message.Len() == 0:
+message = "the server refused the call"
+end
+ret _fail(message)
+end
+ret json.GetRaw(text, "value")
+end
+@en "Failed"
+@fa "ناموفق"
+pub func Failed(): bool:
+ret _failed
+end
+@en "ErrorText"
+@fa "متن خطا"
+pub func ErrorText(): str:
+ret _error
 end
 @en "net/mime"
 @fa "مایم"
@@ -264887,6 +265138,12 @@ end
 @fa "پاسخ خطا"
 pub func Fail(c: i64, message: str):
 _reply(c, 200, _error_body(message))
+_mark_done(c)
+end
+@en "Reject"
+@fa "رد درخواست"
+pub func Reject(c: i64, status: int, message: str):
+_reply(c, status, _error_body(message))
 _mark_done(c)
 end
 @en "Respond"

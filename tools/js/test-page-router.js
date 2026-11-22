@@ -111,6 +111,20 @@ function check(name, ok, detail) {
   );
   check("the link to the current route is marked", cur === "page", cur);
 
+  if (await page.$("#plain")) {
+    await page.evaluate(() => {
+      window.__salamRouterMark = 2;
+    });
+    await page.click("#plain");
+    h = await h1Is("User 7");
+    check(
+      "a url link loads the page from the server",
+      h === "User 7" &&
+        (await page.evaluate(() => window.__salamRouterMark !== 2)),
+      h,
+    );
+  }
+
   await page.click("nav a >> nth=2");
   w = await whereIs("/login");
   check("a guard redirects", w === "/login", w);

@@ -270,6 +270,20 @@ global.getComputedStyle = (el) => ({
 });
 global.Image = class {};
 
+const callSeen = {};
+const callCache = { "Add:" + (() => { let h = 2166136261; for (const b of Buffer.from('{"a":41,"b":2}')) { h ^= b; h = Math.imul(h, 16777619) >>> 0; } return ("00000000" + h.toString(16)).slice(-8); })() + ":0": 4242 };
+global.__salam_call_key = (name, args) => {
+  let h = 2166136261;
+  for (const b of Buffer.from(String(args))) {
+    h ^= b;
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  const base = name + ":" + ("00000000" + h.toString(16)).slice(-8);
+  const n = callSeen[base] || 0;
+  callSeen[base] = n + 1;
+  return base + ":" + n;
+};
+global.__salam_call_cache_get = (key) => (Object.prototype.hasOwnProperty.call(callCache, key) ? callCache[key] : undefined);
 global.XMLHttpRequest = class {
   open(method, url, isAsync) {
     this.method = method;

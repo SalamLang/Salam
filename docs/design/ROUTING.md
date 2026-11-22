@@ -119,8 +119,10 @@ E256 to E259 until those numbers were found to belong to the ownership checks.
 In a project (entry named `main.salam`) every `pub component` in every `.salam`
 file under the entry's folder is imported without `include`. Route files under
 `pages/` take part in the duplicate check only. Hidden folders, `node_modules`,
-`build`, `dist`, `out`, `target`, `vendor`, `tests`, `test`, folders with their
-own `main.salam` and `*_test.salam` files are not scanned. Private components
+`build`, `dist`, `out`, `target`, `vendor`, `tests`, `test`, `__tests__`,
+folders with their own `main.salam`, `*_test.salam` and `*.test.salam` files
+are not scanned. Every other `.salam` file is read, with or without components.
+Folders nested deeper than 12 levels are not followed, which ends symlink loops. Private components
 stay private (E232). A single file build, the playground and runtime layouts
 behave as before. The duplicate check is `E291`:
 `two pub components are named 'Card': 'shop/card.salam' line 13 and 'ui/card.salam' line 13`.

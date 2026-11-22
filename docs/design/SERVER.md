@@ -115,8 +115,8 @@ response  {"ok": true,  "value": {...}}
 
 1. Match the path with `nav.Match` against the route table (`ROUTING.md`).
    Unknown path: `_404` with status 404.
-2. Run the layout and route guards on the server. A failed guard answers
-   `302` to its `redirect`.
+2. Run the layout and route guards on the server. A route whose guard fails
+   is skipped like an unknown path.
 3. Render the layout chain and the page component to HTML with the same
    lowering the runtime layout (`page Name(params)`, `http.Html`) already uses.
    A `server func` call or a `load(...)` ready inside the render is awaited

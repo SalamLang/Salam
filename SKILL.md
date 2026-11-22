@@ -1127,8 +1127,11 @@ path (Persian `فراخوانی`): `include "util.salam"` (relative to this file
 or unreadable include stops the build. A file may declare `package <name>`
 (default `main`).
 Only `pub` symbols are importable. **Function and method names are
-`PascalCase`; the old `snake_case` method spellings still compile but warn
-(`W175`).**
+`PascalCase`, and that includes the names the compiler looks up itself
+(`Iter`, `HasNext`, `Value`, `Key`, `Next`, `ToStr`, `ToJson`, `FromJson`,
+`Free`, `Len`, `Get`, `DeepCopy`). A `snake_case` call of a std function or
+method is an unknown name; the error says which PascalCase name to write.
+Only the `operator_*` hooks stay lowercase.**
 
 **Everything below is real; signatures come from `std/`.** When unsure of
 an exact signature, grep the package file.

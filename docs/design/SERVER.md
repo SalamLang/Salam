@@ -29,12 +29,13 @@ shop/
 
 ## `server func`
 
-A normal function with a marker. It runs only on the front server. The page,
+A normal function with a marker (`server` is a contextual word before `func`,
+like `pure`, so it stays a legal name elsewhere). It runs only on the front server. The page,
 the browser bundle and the native app never contain its body.
 
 ```salam
 server func GetProduct(id: int): Product:
-    r := http.GetWith(env("SHOP_API") + "/products/" + id, auth_headers())
+    r := http.GetWith(env.Get("SHOP_API") + "/products/" + id, auth_headers())
     ret json.Decode(r.body) as Product
 end
 ```
@@ -54,10 +55,10 @@ end
 - Callable from a component body or `load(...)`, a handler, and another
   `server func`. On the server a call is a direct call. In the browser and on
   native it is the generated stub (below). The call site looks the same.
-- `env(name)` reads a server environment variable. It is allowed only inside a
-  `server func` (E286), so a secret cannot reach a bundle.
-- A function that is reachable from client code and uses a server only name
-  (`env`, a server func body, a server only import) is E287. Reachability is
+- `env.Get(name)` is the existing `std/env` function. It is ordinary on the
+  server and in native programs, but it does not exist in a browser bundle.
+- A function that is reachable from browser code and uses a browser-missing
+  name (`std/env`, a server func body, a server only import) is E286. Reachability is
   computed per output, so a helper shared by both sides is fine until it touches
   a server only name.
 - `request()` returns the current request (method, path, headers, cookies, the
@@ -143,7 +144,7 @@ Streaming and incremental regeneration are out of the first version.
 
 The generated server reads `PORT` and `HOST`, serves `dist/public` with
 `ETag` and caching headers, and listens behind any reverse proxy. Backend
-addresses and secrets come from the environment through `env`.
+addresses and secrets come from the environment through `std/env`.
 
 ## Native
 
@@ -156,10 +157,9 @@ app and the site share one set of functions, and no secret is in the binary.
 | code | kind | message |
 | --- | --- | --- |
 | E285 | error | `server func 'F' parameter 'x' has type 'T', which cannot cross the network` |
-| E286 | error | `'env' can only be used inside a server func` |
-| E287 | error | `'F' runs in the browser but uses 'G', which only exists on the server` |
-| E288 | error | `server func 'F' must be declared at the top level` |
-| E289 | error | `two server funcs are named 'F'` (after the Persian name is applied) |
+| E286 | error | `'F' runs in the browser but uses 'G', which only exists on the server` |
+| E287 | error | `server func 'F' must be declared at the top level` |
+| E288 | error | `two server funcs are named 'F'` (after the Persian name is applied) |
 | W280 | warning | `server func 'F' looks like backend code ('db'); call your API from here instead` |
 
 ## Decisions
@@ -169,16 +169,16 @@ app and the site share one set of functions, and no secret is in the binary.
 | SV1 | separate projects: the front has no data layer, only `server func` that call HTTP APIs |
 | SV2 | `server func` is a normal function with a marker; W280 warns on backend looking code |
 | SV3 | wire is JSON over POST `/_salam/fn/<Name>`, same origin plus a token |
-| SV4 | `env` and server bodies never reach a client output (E286, E287) |
+| SV4 | `env` and server bodies never reach a client output (E286) |
 | SV5 | SSR is opt in (`--ssr`); static stays the default |
 | SV6 | hydration by stable site ids and an embedded state and call cache; mismatch re-renders one scope |
 | SV7 | native calls the front server through the same protocol |
 
 ## First implementation steps
 
-1. `server func` parse and checks (E285, E288, E289), no output change yet.
+1. `server func` parse and checks (E285, E287, E288), no output change yet.
 2. Server side runtime package `net/ssr`: registry, endpoints, token, `request()`, `env`.
 3. `salam page build --ssr`: generated server, render per route, guards, 404.
-4. Stubs: JS stub and native stub; `load(...)` integration; E286, E287, W280.
+4. Stubs: JS stub and native stub; `load(...)` integration; E286, W280.
 5. Hydration: ids, embedded state, call cache, per scope fallback.
 6. `salam serve --render` with rebuild; docs and website pages (en and fa).

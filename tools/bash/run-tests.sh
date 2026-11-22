@@ -166,7 +166,7 @@ $cerrs"
     }
 
     wk_script() {
-        got=$(tmo "${SALAM_TEST_TIMEOUT:-900}" sh "$fabs" "$SALAM_ABS" 2>&1 | tr -d '\r')
+        got=$(SALAM_TEST_LANG="$lang" tmo "${SALAM_TEST_TIMEOUT:-900}" sh "$fabs" "$SALAM_ABS" 2>&1 | tr -d '\r')
         wk_check "$expabs" "$got"
     }
 
@@ -986,6 +986,12 @@ if want crash && [ "$(uname -s 2>/dev/null)" = Linux ] && command -v python3 >/d
     esac
 fi
 
+if want ssr && command -v curl >/dev/null 2>&1; then
+    for lang in $LANGS; do
+        add_job script "ssr/$lang/flow" "tools/bash/test-ssr.sh" "$lang" "tests/$lang/ssr/flow.out"
+    done
+fi
+
 if want protect; then
     add_job script "protect/en/flow" "tools/bash/test-protect.sh" "en" "tests/en/protect/flow.out"
 fi
@@ -1001,6 +1007,12 @@ if want ui; then
             name=$(basename "$f" .salam)
             [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
             add_job uinative "ui/$lang/$name" "$f" "$lang" "${f%.salam}.out"
+        done
+        for d in tests/"$lang"/ui/*/; do
+            [ -f "${d}main.salam" ] && [ -f "${d}main.out" ] && [ -f "${d}main.script" ] || continue
+            name=$(basename "$d")
+            case "$name" in _*) continue ;; esac
+            add_job uinative "ui/$lang/$name" "${d}main.salam" "$lang" "${d}main.out"
         done
     done
 fi

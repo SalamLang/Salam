@@ -6,7 +6,7 @@ const mode = process.argv[3] || "history";
 if (!start) {
   console.error("usage: node test-page-router.js URL [history|hash]");
   console.error(
-    "URL is the served tests/en/page/pages/routes_history.salam (salam serve, history mode)",
+    "URL is the served tests/en/page/pages/routes_history/main.salam (salam serve, history mode)",
   );
   console.error("or file:///.../routes_hash.html (hash mode)");
   process.exit(2);

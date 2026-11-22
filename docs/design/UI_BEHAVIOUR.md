@@ -137,6 +137,9 @@ tree on the web and a screen stack in a native window.
 
 ### Routes
 
+Superseded: the `routes:` block below is replaced by the `pages/` folder, see
+`ROUTING.md`. Server rendering and server functions are in `SERVER.md`.
+
 ```salam
 routes:
     "/" : Home

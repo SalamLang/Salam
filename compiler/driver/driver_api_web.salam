@@ -78,7 +78,10 @@ func write_route_pages(lgr &: lg.Logger, html_path: str):
         rel := str.Substr(pats.Get(i), 1, str.Len(pats.Get(i)) - 1)
         pdir := join_path2(root, rel)
         _mk := os.MkdirAll(pdir)
-        _w := write_file(lgr, join_path2(pdir, "index.html"), route_page_copy(html, lo.RoutesStaticTitle(i)))
+        _w := write_file(lgr, join_path2(pdir, "index.html"), prerender_fill(route_page_copy(html, lo.RoutesStaticTitle(i)), pats.Get(i)))
+    end
+    if prerender_any():
+        _wi := write_file(lgr, html_path, prerender_fill(html, "/"))
     end
 end
 
@@ -95,7 +98,7 @@ func write_spa_files(lgr &: lg.Logger, html_path: str): bool:
             ret true
         end
     end
-    ret write_file(lgr, target, spa_htaccess(lo.RoutesBase(), base_name(html_path)))
+    ret write_file(lgr, target, spa_htaccess(lo.RoutesBase(), prerender_any() ? "404.html" : base_name(html_path)))
 end
 
 func serve_index_wants_spa(dir: str): bool:
@@ -141,6 +144,7 @@ end
 
 pub func LayoutBuild(opt &: Dr): int:
     mut lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pre_reset()
     pack := lp.Load(opt.lang)
     if pack == lp.LP_NONE:
         lg.Log(
@@ -287,6 +291,9 @@ pub func LayoutBuild(opt &: Dr): int:
             end
             if str.Len(ev_js) > 0:
                 r.js = str.Len(r.js) > 0 ? r.js + (minify_ws ? " " : "\n") + ev_js : ev_js
+            end
+            if not multi and opt.inline_mode:
+                prerender_page(lgr, a, s, prog, r.html)
             end
         end
         ev_names.Free()
@@ -439,6 +446,7 @@ pub func Web(opt &: Dr): int:
         ret 2
     end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "web build " + path)
+    pre_reset()
 
     modpack := lx.Detect(sf, pack)
     mut toks := tok.StreamNew(path)
@@ -534,6 +542,9 @@ pub func Web(opt &: Dr): int:
         end
         if str.Len(ev_js) > 0:
             r.js = str.Len(r.js) > 0 ? r.js + (minify_ws ? " " : "\n") + ev_js : ev_js
+        end
+        if rc == 0 and not opt.split:
+            prerender_page(lgr, a, s, prog, r.html)
         end
     end
     ev_names.Free()
@@ -653,7 +664,8 @@ pub func Serve(opt &: Dr): int:
 
     mut spa := opt.serve_spa
     if str.Len(spa) == 0 and serve_index_wants_spa(dir):
-        spa = "index.html"
+        nf := join_path2(dir, "404.html")
+        spa = os.Exists(nf) and str.Contains(io.ReadFile(nf), co.ROUTER_HISTORY_META) ? "404.html" : "index.html"
     end
     mut r := router.NewRouter()
     router.EnableListing(r)

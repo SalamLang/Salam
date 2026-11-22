@@ -689,11 +689,74 @@ func native_dispatch(
     ret 0
 end
 
+func prerender_html(s: str): str:
+    mut t := str.Replace(s, "&", "&amp;")
+    t = str.Replace(t, "<", "&lt;")
+    t = str.Replace(t, ">", "&gt;")
+    t = str.Replace(t, "\"", "&quot;")
+    ret str.Replace(t, "'", "&#39;")
+end
+
+func prerender_url(s: str): str:
+    mut t := ""
+    repeat str.Len(s) in i:
+        c := co.ByteAt(s, i)
+        if c > 32:
+            t += str.Substr(s, i, 1)
+        end
+    end
+    t = str.Lower(t)
+    if str.StartsWith(t, "javascript:") or str.StartsWith(t, "vbscript:") or str.StartsWith(t, "data:"):
+        ret "#"
+    end
+    ret prerender_html(s)
+end
+
+func prerender_css(s: str): str:
+    mut t := str.Replace(s, ";", "")
+    t = str.Replace(t, "{", "")
+    t = str.Replace(t, "}", "")
+    t = str.Replace(t, "<", "")
+    t = str.Replace(t, ">", "")
+    t = str.Replace(t, "\r", "")
+    ret prerender_html(str.Replace(t, "\n", ""))
+end
+
+func web_extern(ip &: Interp, a &: at.Ast, call: int, name: str, args: Vector<Value>, done &: bool): Value:
+    done = true
+    arg0 := args.Len() > 0 ? to_str(ip, args.Get(0)) : ""
+    if str.Equals(name, "salamWsHtml"):
+        ret val_str(prerender_html(arg0))
+    end
+    if str.Equals(name, "salamWsUrl"):
+        ret val_str(prerender_url(arg0))
+    end
+    if str.Equals(name, "salamWsCss"):
+        ret val_str(prerender_css(arg0))
+    end
+    if str.Equals(name, "salamWsTouch") or str.Equals(name, "salamRouteWrite") or str.Equals(name, "salamRouteMove") or str.Equals(name, "salamRouteTitle"):
+        ret val_null()
+    end
+    if str.StartsWith(name, "salamWs") or str.StartsWith(name, "salam_js_"):
+        rt_error(ip, a, call, "'" + name + "' runs only in the browser")
+        ret val_null()
+    end
+    done = false
+    ret val_null()
+end
+
 func call_native_extern(
     ip &: Interp, a &: at.Ast, env: int, call: int, decl: int, args: Vector<Value>
 ): Value:
     out_flush(ip)
     dn := at.At(a, decl)
+    if g_web_externs:
+        mut done := false
+        wv := web_extern(ip, a, call, dn.name, args, done)
+        if done:
+            ret wv
+        end
+    end
     np := at.ChildCount(a, decl)
     if dn.is_variadic:
         ret ffi_call_variadic(ip, a, call, decl, args)

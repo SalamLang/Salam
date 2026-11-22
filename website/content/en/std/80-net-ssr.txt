@@ -1,0 +1,84 @@
+pkg.en = net/ssr
+pkg.name = net.ssr
+pkg.group = Network
+pkg.summary = Server functions, session tokens and page rendering for a front project.
+pkg.title = The net.ssr package in Salam | Server rendering
+pkg.description = The net.ssr package in Salam: registering server functions, the POST /_salam/fn endpoint with origin and token checks, the current request, a page renderer hook, static files with ETag, and defaults for outbound calls, with an example.
+pkg.import = net.ssr
+pkg.intro <<
+<p>This package is the server side of a front project: it answers the calls a page makes to its <code>server func</code> functions, hands out the session tokens those calls need, and sends finished HTML for a route. It sits on <a href="/std/net/http/">net.http</a> and <a href="/std/net/router/">net.router</a>; <code>Mount</code> adds its endpoints to a router and you run the router with <code>http.Use</code> as usual.</p>
+<p>A call is <code>POST /_salam/fn/Name</code> with <code>Content-Type: application/json</code> and a body like <code>{"args":{"id":3}}</code>. The answer is <code>{"ok":true,"value":...}</code> or <code>{"ok":false,"error":"..."}</code> with status 200 for both. The other statuses are 400 for a body that is not a JSON object, has the wrong content type or is over the size cap; 403 for a failed origin or token check; 404 for a name nobody registered; and 500 when the function answered with neither <code>Ok</code> nor <code>Fail</code>.</p>
+<p>Calls are protected twice. The request must be same-origin: when <code>Sec-Fetch-Site</code> is present it must be <code>same-origin</code>, and when <code>Origin</code> is present its host must equal the <code>Host</code> header. There is no CORS, so a page of another site cannot read an answer. And every call needs an <code>X-Salam-Token</code> header, a token signed with a secret, which the page embeds or a native app fetches from <code>GET /_salam/session</code>. Native apps send neither <code>Origin</code> nor <code>Sec-Fetch-Site</code>, so for them the token is the whole check.</p>
+<h2 id="guide-call">Calling a server function</h2>
+<p>The program registers one function, mounts the endpoints on a router and calls them like a browser would: it fetches a token from <code>/_salam/session</code>, then posts <code>{"args":...}</code> with the token in <code>X-Salam-Token</code>. The last three calls show an unknown name (404), a missing token (403) and a foreign <code>Origin</code> (403).</p>
+{{example.net-ssr-guide-call}}
+
+<h2 id="guide-pages">Pages and static files</h2>
+<p>Every GET or HEAD request that is not an endpoint goes through the same fallback. A file in the folder given to <code>SetStaticDir</code> is sent with an <code>ETag</code>, and a request with a matching <code>If-None-Match</code> gets 304. Otherwise the function given to <code>SetRender</code> is called: it reads the path with <code>PagePath</code> and answers with <code>Respond</code>, for example <code>Respond(c, 200, html, "")</code> for a page, <code>Respond(c, 404, html, "")</code> for an unknown route or <code>Respond(c, 302, "", "/login")</code> for a redirect. Without a renderer the answer is 404.</p>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>A function must answer.</strong> Call <code>Ok</code> or <code>Fail</code> before it returns, on the same thread; otherwise the caller gets a generic 500.</li>
+<li><strong><code>Request</code> is per thread.</strong> It is valid in the function that was called and in the functions it calls, not in a thread you start yourself.</li>
+<li><strong>The secret.</strong> Without <code>SetSecret</code> or <code>SALAM_SERVER_SECRET</code> a new secret is made at start, so tokens from before a restart or on another instance are refused. Set it when you run more than one server.</li>
+<li><strong>Behind a proxy keep the <code>Host</code> header.</strong> The origin check compares it with <code>Origin</code>.</li>
+<li><strong>Register everything before the server starts.</strong> And mount before <code>http.Use</code>, because the server keeps its own copy of the router.</li>
+</ul>
+>>
+
+doc.RequestInfo = The current request, as returned by <code>Request</code>.
+doc.RequestInfo.h = The handle of the request context.
+doc.RequestInfo.active = True when a request is being handled on this thread.
+doc.Request = The request being handled on this thread: inside a server function and while a page is rendered. Outside both, <code>active</code> is false and every accessor answers an empty string. The strings the accessors return belong to the request and are freed when it ends; copy one to keep it.
+doc.Valid = True when the request value belongs to a running request.
+doc.Method = The HTTP method of the current request.
+doc.Path = The path of the current request, without the query.
+doc.Header = One request header of the current request, by name.
+doc.Cookie = One cookie of the current request, by name; use it to forward a session to your backend.
+doc.ClientAddr = The address of the client of the current request, without the port.
+doc.Register = Registers a server function under a name. The handler is a function that takes the call handle; it reads the arguments with <code>Args</code> and answers with <code>Ok</code> or <code>Fail</code>. Registering a name again replaces the handler. Do this before the server starts.
+doc.IsRegistered = True when a function is registered under the name.
+doc.SetSecret = Sets the secret that signs the session tokens. Without it the secret comes from the <code>SALAM_SERVER_SECRET</code> environment variable (16 bytes or more), or is generated when the server starts, which makes tokens stop working after a restart.
+doc.SetMaxBody = Sets the largest request body, in bytes, a function call accepts. The default is 1 MiB. A bigger body is answered with 400.
+doc.SetTokenTtl = Sets how long a token stays valid, in seconds. The default is one day.
+doc.SetStaticDir = Sets the folder of built files, for example <code>dist/public</code>. A GET or HEAD request for a file in it is answered with an <code>ETag</code>, and <code>If-None-Match</code> gets 304. A directory answers with its <code>index.html</code>. Hidden files and paths that leave the folder are never served.
+doc.SetRender = Sets the page renderer. It is a function that takes the call handle, reads the path with <code>PagePath</code> and answers with <code>Respond</code>. Generated server code registers it; the catch-all route calls it for every GET or HEAD request that is not a file.
+doc.NewToken = Makes a signed session token. The server page embeds one, and <code>GET /_salam/session</code> hands one to native apps.
+doc.CheckToken = True when the token has a good signature and is not older than the lifetime.
+doc.Args = The arguments of a call: the <code>args</code> object of the request body, as JSON text. <code>{}</code> when the body had none.
+doc.Ok = Answers a call with a result. The value is JSON text; the response is <code>{"ok":true,"value":...}</code> with status 200.
+doc.Fail = Answers a call with an error text the function chose to return: <code>{"ok":false,"error":...}</code> with status 200. A function that answers with neither <code>Ok</code> nor <code>Fail</code> gets a generic 500.
+doc.Respond = Answers a page request. A non-empty redirect gives a redirect (302 unless the status is another 3xx); otherwise the status and the HTML are sent.
+doc.PagePath = The path the page renderer is asked for.
+doc.Mount = Adds the endpoints to a router: <code>POST /_salam/fn/:name</code> for function calls, <code>GET /_salam/session</code> for tokens, and the catch-all that serves the static folder, calls the page renderer and answers 404. Call it after the routes of your own and before <code>http.Use</code>.
+doc.OutboundOptions = The defaults for calls from a server function to a backend: 10 second timeout, 8 MB response cap and up to 5 redirects.
+doc.OutboundGet = A GET request made with <code>OutboundOptions</code>.
+doc.OutboundPost = A POST request made with <code>OutboundOptions</code>.
+
+ex.RequestInfo = net-ssr-Mount
+ex.RequestInfo.h = net-ssr-Mount
+ex.RequestInfo.active = net-ssr-Mount
+ex.Request = net-ssr-Mount
+ex.Valid = net-ssr-Mount
+ex.Method = net-ssr-Mount
+ex.Path = net-ssr-Mount
+ex.Header = net-ssr-Mount
+ex.Cookie = net-ssr-Mount
+ex.ClientAddr = net-ssr-Mount
+ex.Register = net-ssr-Mount
+ex.IsRegistered = net-ssr-Mount
+ex.SetSecret = net-ssr-Mount
+ex.SetMaxBody = net-ssr-Mount
+ex.SetTokenTtl = net-ssr-Mount
+ex.SetStaticDir = net-ssr-Mount
+ex.SetRender = net-ssr-Mount
+ex.NewToken = net-ssr-Mount
+ex.CheckToken = net-ssr-Mount
+ex.Args = net-ssr-Mount
+ex.Ok = net-ssr-Mount
+ex.Fail = net-ssr-Mount
+ex.Respond = net-ssr-Mount
+ex.PagePath = net-ssr-Mount
+ex.Mount = net-ssr-Mount
+ex.OutboundOptions = net-ssr-Mount
+ex.OutboundGet = net-ssr-Mount
+ex.OutboundPost = net-ssr-Mount

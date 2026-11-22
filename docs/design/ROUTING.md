@@ -22,7 +22,8 @@ pages/
   docs/
     index.salam               /docs
     [topic].salam             /docs/:topic
-    [[page]].salam            /docs/:page?
+    archive/
+      [[year]].salam          /docs/archive/:year?
   user/
     [id].salam                /user/:id
   admin/
@@ -38,7 +39,7 @@ pages/
 | `name.salam` | `name` |
 | `[id].salam` | `:id` |
 | `[[id]].salam` | `:id?` (optional, as `/docs/:topic?` today) |
-| `[...rest].salam` | trailing `*` |
+| `[...rest].salam` | trailing `*rest` (the component parameter `rest` receives the remaining path) |
 | `_404.salam` | `*` fallback |
 | `_layout.salam` | not a route; wraps the folder (see below) |
 
@@ -84,7 +85,7 @@ end
 ## What the compiler does
 
 1. Finds `pages/` next to the entry file (`main.salam`). No folder, no routes,
-   and `Outlet`, `Link`, `go` keep their current meaning only when a folder
+   and `Outlet`, `Link`, `page.GoTo` keep their current meaning only when a folder
    exists.
 2. Walks it in sorted order and builds the same `LoRoute` table that
    `compiler/sal_layout/layout_routes.salam` builds from the block today
@@ -93,6 +94,10 @@ end
    the native stack and prerender per static route, is unchanged.
 3. Project wide settings that were `mode` and `base` inside the block move to
    the entry page: `page: mode = hash base = "/app" ... end`.
+
+Two files that can match the same path with the same rank are E280. A route that
+is fully shadowed by a more specific one (same match set) is reported as E280 too,
+so every file in the tree is reachable.
 
 ## Diagnostics
 
@@ -105,9 +110,10 @@ end
 | E284 | error | `'pages/a b.salam' is not a valid route file name` |
 | W281 | warning | `the 'routes:' block is replaced by the pages folder; run 'salam fix'` |
 
-The earlier E256 to E259 and E263 keep their meaning where a check still
-applies (parameter types, optional defaults, unknown setting); E257 (`Outlet`
-without routes) now says "without a pages folder".
+The router codes E264 to E267 and E263 keep their meaning where a check still
+applies (parameter types, optional defaults, unknown setting); E265 (`Outlet`
+or `page.GoTo` without routes) now says "without a pages folder". They were
+E256 to E259 until those numbers were found to belong to the ownership checks.
 
 ## Migration
 
@@ -125,8 +131,9 @@ without routes) now says "without a pages folder".
 - **web**: unchanged from #3757: History API or hash mode, a page per static
   route, a fallback `index.html` for parameter routes. With SSR (`SERVER.md`)
   the server answers every route itself.
-- **native**: the folder is compiled into the in binary table; `go`, `go_back`
-  and `replace` use the screen stack. There is no folder at run time.
+- **native**: the folder is compiled into the in binary table; `page.GoTo`,
+  `page.Back` and `page.Redirect` use the screen stack. There is no folder at
+  run time.
 
 ## Decisions
 

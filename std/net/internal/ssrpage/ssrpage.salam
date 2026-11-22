@@ -1,0 +1,380 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/internal/ssrpage"
+@fa "برگه رندر"
+package ssrpage
+
+import net.ssr
+
+import net.http
+import encoding.json
+import sync
+import str
+import fs
+import filepath
+import os
+import io
+import env
+import time
+import conv
+import net.router
+
+const _SHELL_FILE := ".shell.html"
+
+const _STATE_OPEN := "<script type=\"application/json\" id=\"__salam\">"
+
+mut _pg_mu := sync.NewMutex()
+
+mut _pg_shell := ""
+
+mut _pg_base := ""
+
+mut _pg_title := ""
+
+mut _pg_write := ""
+
+mut _pg_skip := false
+
+mut _pg_num := 0
+
+mut _pg_nop := 0
+
+func _pg_clean_base(base: str): str:
+    mut b := base
+    if str.EndsWith(b, "/"): b = b.Substr(0, b.Len() - 1) end
+    ret b
+end
+
+func _pg_byte(s: str, i: int): int:
+    p := (s as void*) as u8*
+    ret p[i] as int
+end
+
+func _pg_hex(b: int): int:
+    if b >= 48 and b <= 57: ret b - 48 end
+    if b >= 65 and b <= 70: ret b - 55 end
+    if b >= 97 and b <= 102: ret b - 87 end
+    ret 0 - 1
+end
+
+func _pg_decode(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        b := _pg_byte(s, i)
+        if b == 37 and i + 2 < n + 0 and _pg_hex(_pg_byte(s, i + 1)) >= 0 and _pg_hex(_pg_byte(s, i + 2)) >= 0:
+            v := _pg_hex(_pg_byte(s, i + 1)) * 16 + _pg_hex(_pg_byte(s, i + 2))
+            if v == 47 or v == 37 or v == 38 or v == 61 or v == 35 or v == 63 or v == 43:
+                str.BufAppendChar(sb, 37)
+                str.BufAppendChar(sb, _pg_byte(s, i + 1) >= 97 ? _pg_byte(s, i + 1) - 32 : _pg_byte(s, i + 1))
+                str.BufAppendChar(sb, _pg_byte(s, i + 2) >= 97 ? _pg_byte(s, i + 2) - 32 : _pg_byte(s, i + 2))
+            else:
+                str.BufAppendChar(sb, v)
+            end
+            i += 3
+        else:
+            str.BufAppendChar(sb, b)
+            i++
+        end
+    end
+    ret str.Clone(str.BufStr(sb))
+end
+
+func _pg_encode(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    digits := "0123456789ABCDEF"
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        b := _pg_byte(s, i)
+        keep := (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 45 or b == 46 or b == 95 or b == 126 or b == 47 or b == 63 or b == 38 or b == 61 or b == 37 or b == 43 or b == 58 or b == 64 or b == 44 or b == 59 or b == 36 or b == 33 or b == 42
+        if keep:
+            str.BufAppendChar(sb, b)
+        else:
+            str.BufAppendChar(sb, 37)
+            str.BufAppendChar(sb, _pg_byte(digits, b / 16))
+            str.BufAppendChar(sb, _pg_byte(digits, b % 16))
+        end
+        i++
+    end
+    ret str.Clone(str.BufStr(sb))
+end
+
+func _pg_json_text(s: str): str:
+    mut t := json.Escape(s)
+    t = str.Replace(t, "<", "\\u003c")
+    t = str.Replace(t, " ", "\\u2028")
+    t = str.Replace(t, " ", "\\u2029")
+    ret t
+end
+
+func _pg_script_safe(json_text: str): str:
+    mut t := str.Replace(json_text, "<", "\\u003c")
+    t = str.Replace(t, " ", "\\u2028")
+    ret str.Replace(t, " ", "\\u2029")
+end
+
+func _pg_public_dir(): str:
+    given := env.Get("SALAM_PUBLIC")
+    if given.Len() > 0: ret given end
+    args := os.Args()
+    if args.Len() > 0:
+        exe := args.Get(0)
+        mut k := exe.Len() - 1
+        until k >= 0 and exe.Substr(k, 1) != "/":
+            k--
+        end
+        if k >= 0:
+            beside := exe.Substr(0, k) + "/public"
+            if os.Exists(beside + "/" + _SHELL_FILE): ret beside end
+        end
+    end
+    if os.Exists("public/" + _SHELL_FILE): ret "public" end
+    ret "dist/public"
+end
+
+@en "PageInit"
+@fa "آماده سازی صفحه"
+pub func PageInit(dir: str, base: str): bool:
+    shell := filepath.Join(dir, _SHELL_FILE)
+    if not os.Exists(shell): ret false end
+    _pg_shell = str.Clone(fs.ReadText(shell))
+    _pg_base = str.Clone(_pg_clean_base(base))
+    ssr.SetStaticDir(dir)
+    ret true
+end
+
+@en "PageShell"
+@fa "پوسته صفحه"
+pub func PageShell(): str:
+    ret _pg_shell
+end
+
+@en "PageNop"
+@fa "بی اثر"
+pub func PageNop(n: int):
+    _pg_nop = n
+end
+
+@en "PageBegin"
+@fa "آغاز صفحه"
+pub func PageBegin():
+    sync.Lock(_pg_mu)
+    _pg_title = ""
+    _pg_write = ""
+    _pg_skip = false
+    _pg_num = 0
+end
+
+@en "PageEnd"
+@fa "پایان صفحه"
+pub func PageEnd():
+    sync.Unlock(_pg_mu)
+end
+
+@en "PageUrl"
+@fa "نشانی صفحه"
+pub func PageUrl(c: i64): str:
+    mut p := http.Path(c)
+    if _pg_base.Len() > 0:
+        if p == _pg_base:
+            p = "/"
+        else str.StartsWith(p, _pg_base + "/"):
+            p = p.Substr(_pg_base.Len(), p.Len() - _pg_base.Len())
+        end
+    end
+    q := http.RawQuery(c)
+    if q.Len() > 0: ret _pg_decode(p + "?" + q) end
+    ret _pg_decode(p)
+end
+
+@en "PageTitle"
+@fa "عنوان صفحه"
+pub func PageTitle(t: str):
+    _pg_title = str.Clone(t)
+end
+
+@en "PageWrite"
+@fa "نوشتن نشانی"
+pub func PageWrite(u: str):
+    _pg_write = str.Clone(u)
+end
+
+@en "PageSkip"
+@fa "پرش از ناحیه"
+pub func PageSkip():
+    _pg_skip = true
+end
+
+@en "PageSkipped"
+@fa "ناحیه پریده شد"
+pub func PageSkipped(): bool:
+    r := _pg_skip
+    _pg_skip = false
+    ret r
+end
+
+@en "PageHtml"
+@fa "امن سازی اچ تی ام ال"
+pub func PageHtml(s: str): str:
+    mut t := str.Replace(s, "&", "&amp;")
+    t = str.Replace(t, "<", "&lt;")
+    t = str.Replace(t, ">", "&gt;")
+    t = str.Replace(t, "\"", "&quot;")
+    ret str.Replace(t, "'", "&#39;")
+end
+
+@en "PageUrlAttr"
+@fa "امن سازی نشانی"
+pub func PageUrlAttr(s: str): str:
+    mut t := ""
+    n := s.Len()
+    mut i := 0
+    until i < n:
+        if _pg_byte(s, i) > 32: t += s.Substr(i, 1) end
+        i++
+    end
+    t = str.Lower(t)
+    if str.StartsWith(t, "javascript:") or str.StartsWith(t, "vbscript:") or str.StartsWith(t, "data:"):
+        ret "#"
+    end
+    ret PageHtml(s)
+end
+
+@en "PageCss"
+@fa "امن سازی سی اس اس"
+pub func PageCss(s: str): str:
+    mut t := str.Replace(s, ";", "")
+    t = str.Replace(t, "{", "")
+    t = str.Replace(t, "}", "")
+    t = str.Replace(t, "<", "")
+    t = str.Replace(t, ">", "")
+    t = str.Replace(t, "\r", "")
+    ret PageHtml(str.Replace(t, "\n", ""))
+end
+
+@en "PageNext"
+@fa "ناحیه بعدی"
+pub func PageNext(html: str, from: int): int:
+    mut p := from
+    n := html.Len()
+    until p < n:
+        k := str.IndexFrom(html, "<!--salam:", p)
+        if k < 0: ret 0 - 1 end
+        mut j := k + 10
+        mut num := 0
+        mut digits := 0
+        until j < n and _pg_byte(html, j) >= 48 and _pg_byte(html, j) <= 57:
+            num = num * 10 + _pg_byte(html, j) - 48
+            digits++
+            j++
+        end
+        open_end := j + 3
+        if digits > 0 and open_end <= n and html.Substr(j, 3) == "-->":
+            close := "<!--/salam:" + str.FromInt(num as i64) + "-->"
+            if html.Substr(open_end, close.Len()) == close:
+                _pg_num = num
+                ret k
+            end
+        end
+        p = k + 1
+    end
+    ret 0 - 1
+end
+
+@en "PageNum"
+@fa "شماره ناحیه"
+pub func PageNum(): int:
+    ret _pg_num
+end
+
+@en "PageSplice"
+@fa "جایگذاری ناحیه"
+pub func PageSplice(html: str, at: int, num: int, inner: str): str:
+    open := "<!--salam:" + str.FromInt(num as i64) + "-->"
+    pos := at + open.Len()
+    ret html.Substr(0, pos) + inner + html.Substr(pos, html.Len() - pos)
+end
+
+@en "PageAfter"
+@fa "پس از ناحیه"
+pub func PageAfter(at: int, num: int, inner: str): int:
+    n := str.FromInt(num as i64)
+    ret at + ("<!--salam:" + n + "-->").Len() + inner.Len() + ("<!--/salam:" + n + "-->").Len()
+end
+
+@en "PageRespond"
+@fa "پاسخ صفحه کامل"
+pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
+    if _pg_write.Len() > 0:
+        ssr.Respond(c, 302, "", _pg_encode(_pg_base + _pg_write))
+        ret
+    end
+    mut status := 200
+    if pattern == "" or pattern == "*": status = 404 end
+    mut cj := calls
+    if cj.Len() == 0 or not json.Valid(cj): cj = "{}" end
+    state := "{\"path\":\"" + _pg_json_text(path) + "\",\"pattern\":\"" + _pg_json_text(pattern) + "\",\"status\":" + str.FromInt(status as i64) + ",\"calls\":" + _pg_script_safe(cj) + "}"
+    script := _STATE_OPEN + state + "</script>"
+    mut out := doc
+    if _pg_title.Len() > 0:
+        a := out.Find("<title>")
+        b := out.Find("</title>")
+        if a >= 0 and b > a:
+            out = out.Substr(0, a + 7) + PageHtml(_pg_title) + out.Substr(b, out.Len() - b)
+        end
+    end
+    mut at := out.Find("<script src=")
+    if at < 0: at = out.Find("</body>") end
+    if at < 0:
+        out += script
+    else:
+        out = out.Substr(0, at) + script + out.Substr(at, out.Len() - at)
+    end
+    ssr.Respond(c, status, out, "")
+end
+
+@en "PageServe"
+@fa "اجرای سرور صفحه"
+pub func PageServe(render: i64, base: str):
+    dir := _pg_public_dir()
+    if not PageInit(dir, base):
+        io.EPrintln("salam server: no page shell in '" + dir + "' (set SALAM_PUBLIC to the public folder)")
+        os.Exit(2)
+    end
+    ssr.SetRender(render)
+    mut r := router.NewRouter()
+    ssr.Mount(r)
+    mut host := env.Get("HOST")
+    if host.Len() == 0: host = "127.0.0.1" end
+    port_text := env.Get("PORT")
+    mut want := 8080
+    if port_text.Len() > 0: want = conv.ParseIntOr(port_text, 8080) as int end
+    mut s := http.NewServer(want)
+    http.SetHost(s, host)
+    http.Use(s, r)
+    port := http.RunBackgroundPort(s)
+    if port <= 0:
+        io.EPrintln("salam server: cannot listen on " + host + ":" + str.FromInt(want as i64))
+        os.Exit(2)
+    end
+    println "listening on http://" + host + ":" + str.FromInt(port as i64)
+    io.Flush()
+    until true:
+        time.Sleep(60000)
+    end
+end

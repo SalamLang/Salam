@@ -24,6 +24,8 @@ include i18 "../i18n.salam"
 include lp "../langpack.salam"
 include at "../ast.salam"
 include tok "../token.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
 
 mut g_lo_routes_on := false
 mut g_lo_routes_hash := false
@@ -31,13 +33,17 @@ mut g_lo_routes_base := ""
 mut g_lo_routes_web := false
 mut g_lo_routes_static := Vector {} as Vector<str>
 mut g_lo_routes_static_title := Vector {} as Vector<str>
+mut g_lo_rt_file := ""
+mut g_lo_pg_path := Vector {} as Vector<str>
+mut g_lo_pg_prog := Vector {} as Vector<int>
 
 struct LoRoute:
     pub pattern: str = ""
     pub comp: str = ""
     pub node: int = 0
-    pub guard: int = 0 - 1
-    pub redirect: int = 0 - 1
+    pub gs: Vector<int> = Vector {}
+    pub rs: Vector<int> = Vector {}
+    pub lay: str = ""
     pub title: int = 0 - 1
     pub rank: int = 0
 end
@@ -128,7 +134,11 @@ end
 
 func lo_rt_error(log: lg.Logger, a &: at.Ast, nid: int, help: str, msg: str):
     n := at.Get(a, nid)
-    lg.LogAtHelp(log, lg.PH_DRIVER, lg.LOG_ERROR, g_lo_root_file, n.begin_line as int, n.begin_col as int, help, msg)
+    mut file := g_lo_root_file
+    if g_lo_rt_file.Len() > 0:
+        file = g_lo_rt_file
+    end
+    lg.LogAtHelp(log, lg.PH_DRIVER, lg.LOG_ERROR, file, n.begin_line as int, n.begin_col as int, help, msg)
 end
 
 func lo_rt_attr(a &: at.Ast, el: int, name: str): int:
@@ -148,6 +158,15 @@ func lo_rt_find_comp(a &: at.Ast, prog: int, name: str): int:
         cn := at.Get(a, c)
         if cn.kind == at.AST_LAYOUT_COMPONENT and str.Equals(cn.name, name):
             ret c
+        end
+    end
+    each fp in g_lo_pg_prog:
+        repeat at.ChildCount(a, fp) in j:
+            c := at.Child(a, fp, j)
+            cn := at.Get(a, c)
+            if cn.kind == at.AST_LAYOUT_COMPONENT and cn.is_pub and str.Equals(cn.name, name):
+                ret c
+            end
         end
     end
     ret 0
@@ -323,8 +342,8 @@ func lo_rt_page_walk(log: lg.Logger, a &: at.Ast, nid: int, errs &: int):
         if base.kind == at.AST_IDENTIFIER and (str.Equals(base.name, "page") or str.Equals(base.name, "صفحه")) and str.Len(internal) > 0:
             if not g_lo_routes_on:
                 lo_rt_error(
-                    log, a, nid, i18.Tr("add a 'routes:' block that maps paths to components, for example \"/\" : Home"),
-                    co.Format1(i18.Tr("E265: 'page.%s' works with the router, but this program has no routes block"), co.ArgStr(n.name))
+                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam with one file per route, for example pages/index.salam"),
+                    co.Format1(i18.Tr("E265: 'page.%s' works with the router, but this program has no pages folder"), co.ArgStr(n.name))
                 )
                 errs++
                 ret
@@ -356,8 +375,8 @@ func lo_rt_walk(log: lg.Logger, a &: at.Ast, nid: int, outlets &: int, errs &: i
             outlets++
             if not g_lo_routes_on:
                 lo_rt_error(
-                    log, a, nid, i18.Tr("add a 'routes:' block that maps paths to components, for example \"/\" : Home"),
-                    i18.Tr("E265: 'Outlet' shows the component of the current route, but this program has no routes block")
+                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam with one file per route, for example pages/index.salam"),
+                    i18.Tr("E265: 'Outlet' shows the component of the current route, but this program has no pages folder")
                 )
                 errs++
             else errs == 0:
@@ -426,23 +445,34 @@ func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, p
             end
         end
         t += "    if " + cond + ":\n"
-        if r.guard >= 0:
-            if r.redirect >= 0:
-                t += "        if not (__salam_rx_" + co.I64Toa(r.guard as i64) + "):\n"
-                t += "            __salam_r = __salam_rx_" + co.I64Toa(r.redirect as i64) + "\n"
-                t += "            ret \"\"\n"
-                t += "        end\n"
-                t += "        ret " + q + "\n"
-            else:
-                t += "        if __salam_rx_" + co.I64Toa(r.guard as i64) + ":\n"
-                t += "            ret " + q + "\n"
-                t += "        end\n"
+        mut ind := "        "
+        mut opened := 0
+        mut stop := false
+        repeat r.gs.Len() in gk:
+            gi := r.gs.Get(gk)
+            ri := r.rs.Get(gk)
+            if gi >= 0 and ri >= 0:
+                t += ind + "if not (__salam_rx_" + co.I64Toa(gi as i64) + "):\n"
+                t += ind + "    __salam_r = __salam_rx_" + co.I64Toa(ri as i64) + "\n"
+                t += ind + "    ret \"\"\n"
+                t += ind + "end\n"
+            else gi >= 0:
+                t += ind + "if __salam_rx_" + co.I64Toa(gi as i64) + ":\n"
+                ind += "    "
+                opened++
+            else ri >= 0:
+                t += ind + "__salam_r = __salam_rx_" + co.I64Toa(ri as i64) + "\n"
+                t += ind + "ret \"\"\n"
+                stop = true
+                break
             end
-        else r.redirect >= 0:
-            t += "        __salam_r = __salam_rx_" + co.I64Toa(r.redirect as i64) + "\n"
-            t += "        ret \"\"\n"
-        else:
-            t += "        ret " + q + "\n"
+        end
+        if not stop:
+            t += ind + "ret " + q + "\n"
+        end
+        repeat opened:
+            ind = str.Substr(ind, 0, ind.Len() - 4)
+            t += ind + "end\n"
         end
         t += "    end\n"
     end
@@ -450,12 +480,44 @@ func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, p
     ret t
 end
 
-func lo_rt_title_source(nm: LoRouteNames, routes: Vector<LoRoute>): str:
+func lo_rt_uses(a &: at.Ast, nid: int, name: str): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER and str.Equals(n.name, name):
+        ret true
+    end
+    if lo_rt_uses(a, n.a, name) or lo_rt_uses(a, n.b, name) or lo_rt_uses(a, n.c, name) or lo_rt_uses(a, n.d, name):
+        ret true
+    end
+    each c in n.list:
+        if lo_rt_uses(a, c, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_rt_title_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, prog: int, exprs: Vector<int>): str:
     s := nm.t_str
-    mut t := "func __salam_route_title(__salam_p: " + s + "): " + s + ":\n"
+    mut t := "func __salam_route_title(__salam_p: " + s + nm.sep + "__salam_a: " + s + "): " + s + ":\n"
     each r in routes:
         if r.title >= 0:
-            t += "    if __salam_p == " + lo_rt_quote(r.pattern) + ":\n"
+            q := lo_rt_quote(r.pattern)
+            t += "    if __salam_p == " + q + ":\n"
+            cdef := lo_rt_find_comp(a, prog, r.comp)
+            if cdef != 0:
+                names := lo_rt_pattern_params(r.pattern)
+                repeat at.ChildCount(a, cdef) in pi:
+                    pn := at.Get(a, at.Child(a, cdef, pi))
+                    if pn.kind == at.AST_PARAM and lo_rt_has(names, pn.name) and lo_rt_uses(a, exprs.Get(r.title), pn.name):
+                        tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
+                        pf := lo_rt_is_int_type(tn) ? nm.param_int_f : nm.param_f
+                        t += "        " + pn.name + " := " + nm.pkg + "." + pf + "(" + q + nm.sep + "__salam_a" + nm.sep + lo_rt_quote(pn.name) + ")\n"
+                    end
+                end
+            end
             t += "        ret __salam_rx_" + co.I64Toa(r.title as i64) + "\n"
             t += "    end\n"
         end
@@ -470,8 +532,10 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
     each r in routes:
         q := lo_rt_quote(r.pattern)
         mut base_cond := nm.route + "." + nm.pattern + " == " + q
-        if r.guard >= 0:
-            base_cond += " and (__salam_rx_" + co.I64Toa(r.guard as i64) + ")"
+        each gi in r.gs:
+            if gi >= 0:
+                base_cond += " and (__salam_rx_" + co.I64Toa(gi as i64) + ")"
+            end
         end
         names := lo_rt_pattern_params(r.pattern)
         opts := lo_rt_optional_names(r.pattern)
@@ -500,7 +564,15 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
         end
         repeat combos in mask:
             mut cond := base_cond
-            mut call := "        " + r.comp + ":"
+            mut call := "        "
+            mut closers := ""
+            if r.lay.Len() > 0:
+                each ln in str.Split(r.lay, "\n"):
+                    call += ln + ": "
+                    closers += " end"
+                end
+            end
+            call += r.comp + ":"
             repeat pnames.Len() in k:
                 pname := pnames.Get(k)
                 pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + nm.route + "." + nm.path + nm.sep + lo_rt_quote(pname) + ")"
@@ -525,7 +597,7 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
             end
             t += (first ? "    if " : "    else ") + cond + ":\n"
             first = false
-            t += call + " end\n"
+            t += call + " end" + closers + "\n"
         end
     end
     if not first:
@@ -575,7 +647,7 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
         t += "    else __salam_url != __salam_u:\n"
         t += "        salamRouteWrite(__salam_url" + nm.sep + "1)\n"
         t += "    end\n"
-        t += "    salamRouteTitle(__salam_route_title(" + r + "." + nm.pattern + "))\n"
+        t += "    salamRouteTitle(__salam_route_title(" + r + "." + nm.pattern + nm.sep + r + "." + nm.path + "))\n"
     else:
         t += "    if __salam_how == 0:\n"
         t += "        " + nm.pkg + "." + nm.push_f + "(__salam_hist" + nm.sep + "__salam_url)\n"
@@ -592,7 +664,7 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     t += "    else __salam_pat != " + r + "." + nm.pattern + ":\n"
     t += "        " + r + " = " + rt + " { " + nm.path + " = " + r + "." + nm.path + nm.sep + nm.query + " = " + r + "." + nm.query + nm.sep + nm.pattern + " = __salam_pat }\n"
     if g_lo_routes_web:
-        t += "        salamRouteTitle(__salam_route_title(__salam_pat))\n"
+        t += "        salamRouteTitle(__salam_route_title(__salam_pat" + nm.sep + r + "." + nm.path + "))\n"
     end
     t += "    end\n"
     t += "end\n\n"
@@ -624,6 +696,11 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     t += "    __salam_pq := " + r + "." + nm.query + "\n"
     t += "    ret " + nm.pkg + "." + nm.query_f + "(__salam_pq" + nm.sep + "__salam_n)\n"
     t += "end\n\n"
+    if g_lo_ssr:
+        t += "func __salam_route_pattern(): " + s + ":\n"
+        t += "    ret " + r + "." + nm.pattern + "\n"
+        t += "end\n\n"
+    end
     t += "func __salam_route_keep():\n"
     t += "    " + nm.go + "(\"/\")\n"
     t += "    " + nm.replace + "(\"/\")\n"
@@ -643,11 +720,13 @@ func lo_rt_header_source(nm: LoRouteNames, need_import: bool, home: str): str:
         t += "import " + nm.pkg + "\n\n"
     end
     if g_lo_routes_web:
-        t += "extern:\n"
-        t += "    func salamRouteWrite(__salam_u: " + s + nm.sep + "__salam_how: " + i + ")\n"
-        t += "    func salamRouteMove(__salam_d: " + i + ")\n"
-        t += "    func salamRouteTitle(__salam_t: " + s + ")\n"
-        t += "end\n\n"
+        if not g_lo_ssr:
+            t += "extern:\n"
+            t += "    func salamRouteWrite(__salam_u: " + s + nm.sep + "__salam_how: " + i + ")\n"
+            t += "    func salamRouteMove(__salam_d: " + i + ")\n"
+            t += "    func salamRouteTitle(__salam_t: " + s + ")\n"
+            t += "end\n\n"
+        end
         t += "mut " + nm.route + " := " + nm.pkg + "." + nm.route_t + " { " + nm.path + " = \"/\"" + nm.sep + nm.pattern + " = " + lo_rt_quote(home) + " }\n"
     else:
         t += "mut " + nm.route + " := " + nm.pkg + "." + nm.route_t + " { " + nm.path + " = \"/\"" + nm.sep + nm.pattern + " = " + lo_rt_quote(home) + " }\n"
@@ -758,138 +837,98 @@ func lo_rt_imports_nav(a &: at.Ast, prog: int, nm: LoRouteNames): bool:
     ret false
 end
 
-func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &: Vector<LoRoute>, exprs &: Vector<int>): int:
-    mut errs := 0
-    body := at.Get(a, rnode).a
-    if body == 0:
+func lo_rt_setting(log: lg.Logger, a &: at.Ast, c: int): int:
+    cn := at.Get(a, c)
+    v := lo_rt_lit(a, cn.a)
+    if str.Equals(cn.name, "mode"):
+        if str.Equals(v, "hash") or str.Equals(v, "هش"):
+            g_lo_routes_hash = true
+        else str.Equals(v, "history") or str.Equals(v, "تاریخچه"):
+            g_lo_routes_hash = false
+        else:
+            lo_rt_error(log, a, c, i18.Tr("write mode = history (clean paths, needs a server fallback) or mode = hash (#/path, works on any static host)"), i18.Tr("E264: unknown routes setting value"))
+            ret 1
+        end
+    else str.Equals(cn.name, "base"):
+        if cn.a == 0 or at.Get(a, cn.a).kind != at.AST_LITERAL or at.Get(a, cn.a).value_kind != tok.TV_STRING:
+            lo_rt_error(log, a, c, i18.Tr("write base = \"/app\" with a text value"), i18.Tr("E264: unknown routes setting value"))
+            ret 1
+        end
+        g_lo_routes_base = nav.Normalize(v)
+        if str.Equals(g_lo_routes_base, "/"):
+            g_lo_routes_base = ""
+        end
+    else:
+        lo_rt_error(log, a, c, i18.Tr("the page block takes mode and base"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(cn.name)))
+        ret 1
+    end
+    ret 0
+end
+
+func lo_rt_pattern_ok(log: lg.Logger, a &: at.Ast, c: int, pattern: str): int:
+    if str.Equals(pattern, "*"):
         ret 0
     end
-    repeat at.ChildCount(a, body) in i:
-        c := at.Child(a, body, i)
-        cn := at.Get(a, c)
-        if cn.kind == at.AST_LAYOUT_ATTR:
-            v := lo_rt_lit(a, cn.a)
-            if str.Equals(cn.name, "mode"):
-                if str.Equals(v, "hash") or str.Equals(v, "هش"):
-                    g_lo_routes_hash = true
-                else str.Equals(v, "history") or str.Equals(v, "تاریخچه"):
-                    g_lo_routes_hash = false
-                else:
-                    lo_rt_error(log, a, c, i18.Tr("write mode = history (clean paths, needs a server fallback) or mode = hash (#/path, works on any static host)"), i18.Tr("E264: unknown routes setting value"))
-                    errs++
-                end
-            else str.Equals(cn.name, "base"):
-                if cn.a == 0 or at.Get(a, cn.a).kind != at.AST_LITERAL or at.Get(a, cn.a).value_kind != tok.TV_STRING:
-                    lo_rt_error(log, a, c, i18.Tr("write base = \"/app\" with a text value"), i18.Tr("E264: unknown routes setting value"))
-                    errs++
-                else:
-                    g_lo_routes_base = nav.Normalize(v)
-                    if str.Equals(g_lo_routes_base, "/"):
-                        g_lo_routes_base = ""
-                    end
-                end
-            else:
-                lo_rt_error(log, a, c, i18.Tr("a routes block takes mode and base, and lines such as \"/users/:id\" : User"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(cn.name)))
-                errs++
-            end
+    if not str.StartsWith(pattern, "/"):
+        lo_rt_error(log, a, c, i18.Tr("a route pattern starts with /, as in \"/users/:id\", or is \"*\" for every other path"), co.Format1(i18.Tr("E266: route pattern '%s' does not start with /"), co.ArgStr(pattern)))
+        ret 1
+    end
+    if lo_rt_unnamed_param(nav.Normalize(pattern)):
+        lo_rt_error(log, a, c, i18.Tr("name every parameter, as in /users/:id or /users/:id?"), co.Format1(i18.Tr("E266: route pattern '%s' has a parameter with no name"), co.ArgStr(nav.Normalize(pattern))))
+        ret 1
+    end
+    ret 0
+end
+
+func lo_rt_check_comp(log: lg.Logger, a &: at.Ast, c: int, r: LoRoute, cdef: int): int:
+    mut errs := 0
+    if cdef == 0:
+        ret 0
+    end
+    names := lo_rt_pattern_params(r.pattern)
+    opts := lo_rt_optional_names(r.pattern)
+    mut defaults := 0
+    repeat at.ChildCount(a, cdef) in pi:
+        pid := at.Child(a, cdef, pi)
+        pn := at.Get(a, pid)
+        if pn.kind != at.AST_PARAM:
             continue
         end
-        if cn.kind != at.AST_LAYOUT_ELEMENT:
-            continue
-        end
-        mut r := LoRoute { comp = cn.name, node = c }
-        pa := lo_rt_attr(a, c, "path")
-        r.pattern = pa != 0 ? lo_rt_lit(a, at.Get(a, pa).a) : ""
-        if not str.Equals(r.pattern, "*"):
-            if not str.StartsWith(r.pattern, "/"):
-                lo_rt_error(log, a, c, i18.Tr("a route pattern starts with /, as in \"/users/:id\", or is \"*\" for every other path"), co.Format1(i18.Tr("E266: route pattern '%s' does not start with /"), co.ArgStr(r.pattern)))
+        tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
+        if pn.a != 0 and lo_rt_has(opts, pn.name):
+            defaults++
+            if defaults == 4:
+                lo_rt_error(log, a, c, i18.Tr("give a default value to at most three of the optional parameters; the others get an empty text or 0 when their segment is missing"), co.Format1(i18.Tr("E263: route '%s' has more than three optional parameters with default values"), co.ArgStr(r.pattern)))
                 errs++
-                continue
             end
-            r.pattern = nav.Normalize(r.pattern)
-            if lo_rt_unnamed_param(r.pattern):
-                lo_rt_error(log, a, c, i18.Tr("name every parameter, as in /users/:id or /users/:id?"), co.Format1(i18.Tr("E266: route pattern '%s' has a parameter with no name"), co.ArgStr(r.pattern)))
+        end
+        if lo_rt_has(names, pn.name):
+            if tn.Len() > 0 and not lo_rt_is_int_type(tn) and not lo_rt_is_str_type(tn):
+                lo_rt_error(log, a, c, i18.Tr("route parameters fill str and int component parameters"), co.Format2(i18.Tr("E267: parameter '%s' of component '%s' must be str or int to come from the path"), co.ArgStr(pn.name), co.ArgStr(r.comp)))
                 errs++
-                continue
             end
-        end
-        mut dup := false
-        each prev in routes:
-            if str.Equals(prev.pattern, r.pattern):
-                dup = true
-            end
-        end
-        if dup:
-            lo_rt_error(log, a, c, i18.Tr("each pattern may appear once; remove the second line"), co.Format1(i18.Tr("E266: route pattern '%s' is listed twice"), co.ArgStr(r.pattern)))
+        else pn.a == 0:
+            lo_rt_error(log, a, c, co.Format1(i18.Tr("add :%s to the pattern, or give the parameter a default value"), co.ArgStr(pn.name)), co.Format3(i18.Tr("E267: component '%s' needs parameter '%s', but route '%s' does not provide it"), co.ArgStr(r.comp), co.ArgStr(pn.name), co.ArgStr(r.pattern)))
             errs++
-            continue
         end
-        repeat at.ChildCount(a, c) in k:
-            ac := at.Child(a, c, k)
-            an := at.Get(a, ac)
-            if an.kind != at.AST_LAYOUT_ATTR or str.Equals(an.name, "path"):
-                continue
-            end
-            if str.Equals(an.name, "guard"):
-                r.guard = exprs.Len()
-                exprs.Push(an.a)
-            else str.Equals(an.name, "redirect"):
-                r.redirect = exprs.Len()
-                exprs.Push(an.a)
-            else str.Equals(an.name, "title"):
-                r.title = exprs.Len()
-                exprs.Push(an.a)
-            else:
-                lo_rt_error(log, a, ac, i18.Tr("a route line takes guard, redirect and title"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(an.name)))
-                errs++
-            end
-        end
-        cdef := lo_rt_find_comp(a, prog, r.comp)
-        if cdef != 0:
-            names := lo_rt_pattern_params(r.pattern)
-            opts := lo_rt_optional_names(r.pattern)
-            mut defaults := 0
-            repeat at.ChildCount(a, cdef) in pi:
-                pid := at.Child(a, cdef, pi)
-                pn := at.Get(a, pid)
-                if pn.kind != at.AST_PARAM:
-                    continue
-                end
-                tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
-                if pn.a != 0 and lo_rt_has(opts, pn.name):
-                    defaults++
-                    if defaults == 4:
-                        lo_rt_error(log, a, c, i18.Tr("give a default value to at most three of the optional parameters; the others get an empty text or 0 when their segment is missing"), co.Format1(i18.Tr("E263: route '%s' has more than three optional parameters with default values"), co.ArgStr(r.pattern)))
-                        errs++
-                    end
-                end
-                if lo_rt_has(names, pn.name):
-                    if tn.Len() > 0 and not lo_rt_is_int_type(tn) and not lo_rt_is_str_type(tn):
-                        lo_rt_error(log, a, c, i18.Tr("route parameters fill str and int component parameters"), co.Format2(i18.Tr("E267: parameter '%s' of component '%s' must be str or int to come from the path"), co.ArgStr(pn.name), co.ArgStr(r.comp)))
-                        errs++
-                    end
-                else pn.a == 0:
-                    lo_rt_error(log, a, c, co.Format1(i18.Tr("add :%s to the pattern, or give the parameter a default value"), co.ArgStr(pn.name)), co.Format3(i18.Tr("E267: component '%s' needs parameter '%s', but route '%s' does not provide it"), co.ArgStr(r.comp), co.ArgStr(pn.name), co.ArgStr(r.pattern)))
-                    errs++
-                end
-            end
-        end
-        r.rank = nav.Rank(r.pattern)
-        mut placed := false
-        mut sorted := Vector {} as Vector<LoRoute>
-        each prev in routes:
-            if not placed and r.rank > prev.rank:
-                sorted.Push(r)
-                placed = true
-            end
-            sorted.Push(prev)
-        end
-        if not placed:
-            sorted.Push(r)
-        end
-        routes = sorted
     end
     ret errs
+end
+
+func lo_rt_insert(routes &: Vector<LoRoute>, r: LoRoute):
+    mut placed := false
+    mut sorted := Vector {} as Vector<LoRoute>
+    each prev in routes:
+        if not placed and r.rank > prev.rank:
+            sorted.Push(r)
+            placed = true
+        end
+        sorted.Push(prev)
+    end
+    if not placed:
+        sorted.Push(r)
+    end
+    routes = sorted
 end
 
 pub func RoutesActive(): bool:
@@ -915,44 +954,40 @@ pub func RoutesStaticTitle(i: int): str:
     ret g_lo_routes_static_title.Get(i)
 end
 
-pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, web: bool): int:
+pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, web: bool, base_dir: str): int:
     g_lo_routes_on = false
     g_lo_routes_hash = false
     g_lo_routes_base = ""
     g_lo_routes_web = web
     g_lo_routes_static.Clear()
     g_lo_routes_static_title.Clear()
-    mut rnode := 0
+    g_lo_rt_file = ""
+    g_lo_pg_path.Clear()
+    g_lo_pg_prog.Clear()
+    sm.LayoutSetKnownComponents(Vector {} as Vector<str>)
     mut errs := 0
-    repeat at.ChildCount(a, prog) in i:
-        c := at.Child(a, prog, i)
-        cn := at.Get(a, c)
-        if cn.kind == at.AST_LAYOUT_COMPONENT and str.Equals(cn.name, "__salam_routes"):
-            if rnode != 0:
-                lo_rt_error(log, a, c, i18.Tr("put every route in one routes block"), i18.Tr("E264: a program has at most one routes block"))
-                errs++
-            else:
-                rnode = c
-            end
-        end
-    end
+    lb := lo_pg_page(a, prog)
+    pdir := lb != 0 ? lo_pg_dir(base_dir) : ""
     nm := lo_rt_names(pack)
     mut routes := Vector {} as Vector<LoRoute>
     mut exprs := Vector {} as Vector<int>
-    if rnode != 0:
+    mut anchor := 0
+    if pdir.Len() > 0:
         g_lo_routes_on = true
-        errs += lo_rt_collect(log, a, prog, rnode, routes, exprs)
-        mut pn := at.Get(a, prog)
-        mut keep := Vector {} as Vector<int>
-        each id in pn.list:
-            kd := at.KindOf(a, id)
-            if kd == at.AST_LAYOUT_COMPONENT and str.Equals(at.Get(a, id).name, "__salam_routes"):
-                continue
+        anchor = lb
+        errs += lo_pg_collect(log, pack, ct, a, lb, base_dir, pdir, routes, exprs)
+        errs += lo_pg_page_settings(log, a, lb)
+        mut known := Vector {} as Vector<str>
+        defer known.Free()
+        each fp in g_lo_pg_prog:
+            repeat at.ChildCount(a, fp) in j:
+                kc := at.Get(a, at.Child(a, fp, j))
+                if kc.kind == at.AST_LAYOUT_COMPONENT and kc.is_pub:
+                    known.Push(kc.name)
+                end
             end
-            keep.Push(id)
         end
-        pn.list = keep
-        at.Put(a, prog, pn)
+        sm.LayoutSetKnownComponents(known)
     end
     mut outlets := 0
     repeat at.ChildCount(a, prog) in j:
@@ -962,24 +997,30 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, 
     each ex in exprs:
         lo_rt_page_walk(log, a, ex, errs)
     end
-    if rnode == 0 or errs > 0:
+    each fp in g_lo_pg_prog:
+        repeat at.ChildCount(a, fp) in j:
+            lo_rt_walk(log, a, at.Child(a, fp, j), outlets, errs)
+            lo_rt_page_walk(log, a, at.Child(a, fp, j), errs)
+        end
+    end
+    if not g_lo_routes_on or errs > 0:
         ret errs
     end
     each r in routes:
-        if r.guard < 0 and r.redirect < 0 and not str.Equals(r.pattern, "/") and str.IndexFrom(r.pattern, ":", 0) < 0 and str.IndexFrom(r.pattern, "*", 0) < 0:
+        if r.gs.Len() == 0 and not str.Equals(r.pattern, "/") and str.IndexFrom(r.pattern, ":", 0) < 0 and str.IndexFrom(r.pattern, "*", 0) < 0:
             g_lo_routes_static.Push(r.pattern)
             g_lo_routes_static_title.Push(r.title >= 0 ? lo_rt_lit(a, exprs.Get(r.title)) : "")
         end
     end
     mut home := ""
     each r in routes:
-        if home.Len() == 0 and r.guard < 0 and r.redirect < 0 and nav.Match(r.pattern, "/"):
+        if home.Len() == 0 and r.gs.Len() == 0 and nav.Match(r.pattern, "/"):
             home = r.pattern
         end
     end
     mut text := lo_rt_header_source(nm, not lo_rt_imports_nav(a, prog, nm), home)
     text += lo_rt_pick_source(nm, routes, a, prog)
-    text += lo_rt_title_source(nm, routes)
+    text += lo_rt_title_source(nm, routes, a, prog, exprs)
     text += lo_rt_glue_source(nm)
     text += lo_rt_outlet_source(nm, routes, a, prog)
     if nm.fa:
@@ -991,14 +1032,14 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, 
     base := at.Count(a)
     sp := ln_parse(log, a, text, "<salam-routes>", pack)
     if sp == 0:
-        lo_rt_error(log, a, rnode, i18.Tr("this is a compiler bug; please report it with the routes block"), i18.Tr("E264: the routes block could not be lowered"))
+        lo_rt_error(log, a, anchor, i18.Tr("this is a compiler bug; please report it with the pages folder"), i18.Tr("E264: the pages folder could not be lowered"))
         ret errs + 1
     end
     mut mine := Vector {} as Vector<int>
     defer mine.Free()
     repeat at.ChildCount(a, sp) in k:
         cid := at.Child(a, sp, k)
-        lo_span_tree(a, cid, rnode, base)
+        lo_span_tree(a, cid, anchor, base)
         _s := lo_rt_subst(a, cid, exprs)
         at.AddChild(a, prog, cid)
         mine.Push(cid)

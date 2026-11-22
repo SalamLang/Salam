@@ -1,0 +1,547 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+import nav
+import os
+
+include pth "../sal_path.salam"
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include at "../ast.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+
+mut g_lo_pg_lay_dir := Vector {} as Vector<str>
+mut g_lo_pg_lay_comp := Vector {} as Vector<str>
+mut g_lo_pg_lay_gi := Vector {} as Vector<int>
+mut g_lo_pg_lay_ri := Vector {} as Vector<int>
+mut g_lo_pg_seen_shape := Vector {} as Vector<str>
+mut g_lo_pg_seen_file := Vector {} as Vector<str>
+
+func lo_pg_page(a &: at.Ast, prog: int): int:
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) == 0 and not d.view_glue:
+            ret did
+        end
+    end
+    ret 0
+end
+
+func lo_pg_dir(base_dir: str): str:
+    if not str.Equals(pth.PathBase(g_lo_root_file), "main.salam"):
+        ret ""
+    end
+    mut b := base_dir
+    if b.Len() == 0:
+        b = "."
+    end
+    d := pth.PathJoin(b, "pages")
+    if os.IsDir(d):
+        ret d
+    end
+    ret ""
+end
+
+func lo_pg_list(dir: str, rel: str, out &: Vector<str>):
+    entries := os.ListDir(dir)
+    repeat entries.Len() in i:
+        name := entries.Get(i)
+        if name.Len() == 0 or str.StartsWith(name, "."):
+            continue
+        end
+        full := pth.PathJoin(dir, name)
+        if os.IsDir(full):
+            lo_pg_list(full, rel + name + "/", out)
+        else str.EndsWith(name, ".salam"):
+            out.Push(rel + name)
+        end
+    end
+end
+
+func lo_pg_sort(v &: Vector<str>):
+    mut i := 1
+    until i < v.Len():
+        mut j := i
+        until j > 0 and str.CompareFold(v.Get(j - 1), v.Get(j)) > 0:
+            t := v.Get(j - 1)
+            v.Set(j - 1, v.Get(j))
+            v.Set(j, t)
+            j--
+        end
+        i++
+    end
+end
+
+func lo_pg_name_ok(s: str): bool:
+    if s.Len() == 0:
+        ret false
+    end
+    repeat s.Len() in i:
+        c := byte_at(s, i)
+        ok := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95
+        if not ok:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lo_pg_seg(name: str, splat: bool): str:
+    n := name.Len()
+    if str.StartsWith(name, "[[") and str.EndsWith(name, "]]") and n > 4:
+        inner := str.Substr(name, 2, n - 4)
+        if lo_pg_name_ok(inner):
+            ret ":" + inner + "?"
+        end
+        ret ""
+    end
+    if str.StartsWith(name, "[...") and str.EndsWith(name, "]") and n > 5:
+        inner := str.Substr(name, 4, n - 5)
+        if splat and lo_pg_name_ok(inner):
+            ret "*" + inner
+        end
+        ret ""
+    end
+    if str.StartsWith(name, "[") and str.EndsWith(name, "]") and n > 2:
+        inner := str.Substr(name, 1, n - 2)
+        if lo_pg_name_ok(inner):
+            ret ":" + inner
+        end
+        ret ""
+    end
+    if lo_pg_name_ok(name):
+        ret name
+    end
+    ret ""
+end
+
+func lo_pg_derive(rel: str): str:
+    parts := str.Split(rel, "/")
+    mut pat := ""
+    mut fallback := false
+    repeat parts.Len() in i:
+        part := parts.Get(i)
+        if i < parts.Len() - 1:
+            seg := lo_pg_seg(part, false)
+            if seg.Len() == 0:
+                ret ""
+            end
+            pat += "/" + seg
+            continue
+        end
+        base := str.Substr(part, 0, part.Len() - 6)
+        if str.Equals(base, "index"):
+            continue
+        end
+        if str.Equals(base, "_404"):
+            fallback = true
+            continue
+        end
+        seg := lo_pg_seg(base, true)
+        if seg.Len() == 0:
+            ret ""
+        end
+        pat += "/" + seg
+    end
+    if fallback:
+        ret pat.Len() == 0 ? "*" : pat + "/*"
+    end
+    ret pat.Len() == 0 ? "/" : nav.Normalize(pat)
+end
+
+func lo_pg_shape(pattern: str): str:
+    parts := str.Split(pattern, "/")
+    mut out := ""
+    repeat parts.Len() in i:
+        seg := parts.Get(i)
+        if i > 0:
+            out += "/"
+        end
+        if str.StartsWith(seg, ":"):
+            out += str.EndsWith(seg, "?") ? ":?" : ":"
+        else str.StartsWith(seg, "*"):
+            out += "*"
+        else:
+            out += seg
+        end
+    end
+    ret out
+end
+
+func lo_pg_error(log: lg.Logger, file: str, help: str, msg: str):
+    lg.LogAtHelp(log, lg.PH_DRIVER, lg.LOG_ERROR, file, 1, 1, help, msg)
+end
+
+func lo_pg_load(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, abs: str): int:
+    mut sf := src.New()
+    if not src.Load(abs, sf):
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read included layout '%s'"), co.ArgStr(abs)))
+        ret 0
+    end
+    mut toks := tok.StreamNew(abs)
+    lok := lx.Run(log, pack, sf, toks)
+    mut prog := 0
+    pok := ps.Run(log, toks, a, prog)
+    tok.StreamFree(toks)
+    if prog == 0 or not lok or not pok:
+        ret 0
+    end
+    if not cc.PruneProgram(a, log, abs, ct, prog):
+        ret 0
+    end
+    ret prog
+end
+
+func lo_pg_word(n: str): str:
+    if str.Equals(n, "title") or str.Equals(n, "عنوان"):
+        ret "title"
+    end
+    if str.Equals(n, "guard") or str.Equals(n, "نگهبان"):
+        ret "guard"
+    end
+    if str.Equals(n, "redirect") or str.Equals(n, "هدایت"):
+        ret "redirect"
+    end
+    if str.Equals(n, "route") or str.Equals(n, "مسیر"):
+        ret "route"
+    end
+    ret ""
+end
+
+func lo_pg_pub(a &: at.Ast, fprog: int, count &: int): int:
+    mut found := 0
+    count = 0
+    repeat at.ChildCount(a, fprog) in i:
+        c := at.Child(a, fprog, i)
+        cn := at.Get(a, c)
+        if cn.kind == at.AST_LAYOUT_COMPONENT and cn.is_pub:
+            if found == 0:
+                found = c
+            end
+            count++
+        end
+    end
+    ret found
+end
+
+func lo_rt_str_lit(a &: at.Ast, nid: int): str:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
+        ret n.value_str
+    end
+    ret ""
+end
+
+func lo_pg_take(
+    log: lg.Logger, a &: at.Ast, cdef: int, layout: bool, r &: LoRoute, gi &: int, ri &: int, over &: str,
+    exprs &: Vector<int>
+): int:
+    mut errs := 0
+    body := at.Get(a, cdef).a
+    if body == 0:
+        ret 0
+    end
+    mut bn := at.Get(a, body)
+    mut keep := Vector {} as Vector<int>
+    each id in bn.list:
+        an := at.Get(a, id)
+        w := an.kind == at.AST_LAYOUT_ATTR ? lo_pg_word(an.name) : ""
+        if w.Len() == 0:
+            keep.Push(id)
+            continue
+        end
+        if str.Equals(w, "guard"):
+            gi = exprs.Len()
+            exprs.Push(an.a)
+        else str.Equals(w, "redirect"):
+            ri = exprs.Len()
+            exprs.Push(an.a)
+        else layout:
+            lo_rt_error(log, a, id, i18.Tr("a layout file takes guard and redirect"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(an.name)))
+            errs++
+        else str.Equals(w, "title"):
+            r.title = exprs.Len()
+            exprs.Push(an.a)
+        else:
+            ov := an.a != 0 ? lo_rt_str_lit(a, an.a) : ""
+            if ov.Len() == 0:
+                lo_rt_error(log, a, id, i18.Tr("write route = \"/users/:id\" with a text value"), i18.Tr("E264: unknown routes setting value"))
+                errs++
+            else:
+                over = ov
+            end
+        end
+    end
+    bn.list = keep
+    at.Put(a, body, bn)
+    ret errs
+end
+
+func lo_pg_outlets(a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    mut cnt := 0
+    if n.kind == at.AST_LAYOUT_ELEMENT and lo_rt_is_outlet(n.name):
+        at.SetName(a, nid, "content")
+        cnt++
+    end
+    if n.kind == at.AST_LAYOUT_ATTR:
+        ret cnt
+    end
+    cnt += lo_pg_outlets(a, n.a)
+    cnt += lo_pg_outlets(a, n.b)
+    cnt += lo_pg_outlets(a, n.c)
+    each c in n.list:
+        cnt += lo_pg_outlets(a, c)
+    end
+    ret cnt
+end
+
+func lo_pg_layout(
+    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, base_dir: str, rel: str, exprs &: Vector<int>
+): int:
+    shown := "pages/" + rel
+    abs := sm.ResolveImport(base_dir, shown)
+    g_lo_rt_file = abs
+    dirrel := str.Substr(rel, 0, rel.Len() - "_layout.salam".Len())
+    if dirrel.Len() > 0:
+        parts := str.Split(str.Substr(dirrel, 0, dirrel.Len() - 1), "/")
+        each part in parts:
+            if str.Len(lo_pg_seg(part, false)) == 0:
+                lo_pg_error(log, abs, i18.Tr("use letters, digits, '-' and '_', or [id], [[id]] and [...rest]; the route setting gives a Persian URL"), co.Format1(i18.Tr("E284: '%s' is not a valid route file name"), co.ArgStr(shown)))
+                ret 1
+            end
+        end
+    end
+    fprog := lo_pg_load(log, pack, ct, a, abs)
+    if fprog == 0:
+        ret 1
+    end
+    mut cnt := 0
+    cdef := lo_pg_pub(a, fprog, cnt)
+    if cnt != 1:
+        lo_pg_error(log, abs, i18.Tr("write one 'pub component' in the file; helper components stay private"), co.Format1(i18.Tr("E282: route file '%s' must declare exactly one pub component"), co.ArgStr(shown)))
+        ret 1
+    end
+    mut r := LoRoute {}
+    mut gi := 0 - 1
+    mut ri := 0 - 1
+    mut over := ""
+    mut errs := lo_pg_take(log, a, cdef, true, r, gi, ri, over, exprs)
+    if lo_pg_outlets(a, at.Get(a, cdef).a) == 0:
+        shown_dir := dirrel.Len() > 0 ? "pages/" + str.Substr(dirrel, 0, dirrel.Len() - 1) : "pages"
+        lo_pg_error(log, abs, i18.Tr("add 'Outlet:' where the page of the route should appear"), co.Format1(i18.Tr("E283: '_layout.salam' in '%s' has no Outlet"), co.ArgStr(shown_dir)))
+        errs++
+    end
+    g_lo_pg_path.Push(abs)
+    g_lo_pg_prog.Push(fprog)
+    g_lo_pg_lay_dir.Push(dirrel)
+    g_lo_pg_lay_comp.Push(at.Get(a, cdef).name)
+    g_lo_pg_lay_gi.Push(gi)
+    g_lo_pg_lay_ri.Push(ri)
+    ret errs
+end
+
+func lo_pg_chain(rel: str, r &: LoRoute):
+    parts := str.Split(rel, "/")
+    mut prefix := ""
+    mut k := 0
+    until k < parts.Len():
+        repeat g_lo_pg_lay_dir.Len() in li:
+            if str.Equals(g_lo_pg_lay_dir.Get(li), prefix):
+                if r.lay.Len() > 0:
+                    r.lay += "\n"
+                end
+                r.lay += g_lo_pg_lay_comp.Get(li)
+                gi := g_lo_pg_lay_gi.Get(li)
+                ri := g_lo_pg_lay_ri.Get(li)
+                if gi >= 0 or ri >= 0:
+                    r.gs.Push(gi)
+                    r.rs.Push(ri)
+                end
+            end
+        end
+        if k < parts.Len() - 1:
+            prefix += parts.Get(k) + "/"
+        end
+        k++
+    end
+end
+
+func lo_pg_file(
+    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, base_dir: str, rel: str,
+    routes &: Vector<LoRoute>, exprs &: Vector<int>
+): int:
+    shown := "pages/" + rel
+    abs := sm.ResolveImport(base_dir, shown)
+    g_lo_rt_file = abs
+    derived := lo_pg_derive(rel)
+    if derived.Len() == 0:
+        lo_pg_error(log, abs, i18.Tr("use letters, digits, '-' and '_', or [id], [[id]] and [...rest]; the route setting gives a Persian URL"), co.Format1(i18.Tr("E284: '%s' is not a valid route file name"), co.ArgStr(shown)))
+        ret 1
+    end
+    fprog := lo_pg_load(log, pack, ct, a, abs)
+    if fprog == 0:
+        ret 1
+    end
+    mut cnt := 0
+    cdef := lo_pg_pub(a, fprog, cnt)
+    if cnt != 1:
+        lo_pg_error(log, abs, i18.Tr("write one 'pub component' in the file; helper components stay private"), co.Format1(i18.Tr("E282: route file '%s' must declare exactly one pub component"), co.ArgStr(shown)))
+        ret 1
+    end
+    g_lo_pg_path.Push(abs)
+    g_lo_pg_prog.Push(fprog)
+    mut r := LoRoute { comp = at.Get(a, cdef).name, node = cdef, pattern = derived }
+    mut gi := 0 - 1
+    mut ri := 0 - 1
+    mut over := ""
+    mut errs := lo_pg_take(log, a, cdef, false, r, gi, ri, over, exprs)
+    if over.Len() > 0:
+        r.pattern = over
+        if lo_rt_pattern_ok(log, a, cdef, over) > 0:
+            ret errs + 1
+        end
+        if not str.Equals(over, "*"):
+            r.pattern = nav.Normalize(over)
+        end
+    else:
+        names := lo_rt_pattern_params(derived)
+        each nmv in names:
+            mut has := false
+            repeat at.ChildCount(a, cdef) in pi:
+                pn := at.Get(a, at.Child(a, cdef, pi))
+                if pn.kind == at.AST_PARAM and str.Equals(pn.name, nmv):
+                    has = true
+                end
+            end
+            if not has:
+                lo_pg_error(log, abs, co.Format1(i18.Tr("add the parameter '%s' to the component, or rename the file segment"), co.ArgStr(nmv)), co.Format2(i18.Tr("E281: file '%s' has no parameter '%s' in its component"), co.ArgStr(shown), co.ArgStr(nmv)))
+                errs++
+            end
+        end
+    end
+    shape := lo_pg_shape(r.pattern)
+    repeat g_lo_pg_seen_shape.Len() in si:
+        if str.Equals(g_lo_pg_seen_shape.Get(si), shape):
+            lo_pg_error(log, abs, i18.Tr("rename or remove one of the two files"), co.Format2(i18.Tr("E280: two files give the same route: '%s' and '%s'"), co.ArgStr(g_lo_pg_seen_file.Get(si)), co.ArgStr(shown)))
+            ret errs + 1
+        end
+    end
+    g_lo_pg_seen_shape.Push(shape)
+    g_lo_pg_seen_file.Push(shown)
+    lo_pg_chain(rel, r)
+    if gi >= 0 or ri >= 0:
+        r.gs.Push(gi)
+        r.rs.Push(ri)
+    end
+    errs += lo_rt_check_comp(log, a, cdef, r, cdef)
+    r.rank = nav.Rank(r.pattern)
+    lo_rt_insert(routes, r)
+    ret errs
+end
+
+func lo_pg_collect(
+    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, lb: int, base_dir: str, pdir: str,
+    routes &: Vector<LoRoute>, exprs &: Vector<int>
+): int:
+    g_lo_pg_lay_dir.Clear()
+    g_lo_pg_lay_comp.Clear()
+    g_lo_pg_lay_gi.Clear()
+    g_lo_pg_lay_ri.Clear()
+    g_lo_pg_seen_shape.Clear()
+    g_lo_pg_seen_file.Clear()
+    mut files := Vector {} as Vector<str>
+    defer files.Free()
+    lo_pg_list(pdir, "", files)
+    lo_pg_sort(files)
+    mut errs := 0
+    each rel in files:
+        if str.Equals(pth.PathBase(rel), "_layout.salam"):
+            errs += lo_pg_layout(log, pack, ct, a, base_dir, rel, exprs)
+        end
+    end
+    each rel in files:
+        if not str.Equals(pth.PathBase(rel), "_layout.salam"):
+            errs += lo_pg_file(log, pack, ct, a, base_dir, rel, routes, exprs)
+        end
+    end
+    g_lo_rt_file = ""
+    if errs > 0:
+        ret errs
+    end
+    each rel in files:
+        spec := "pages/" + rel
+        n := at.NewNode(a, at.AST_LAYOUT_ATTR)
+        at.SetName(a, n, "include")
+        mut m := at.Get(a, n)
+        m.a = mk_str(a, spec, lb)
+        at.Put(a, n, m)
+        copy_span(a, n, lb)
+        at.AddChild(a, lb, n)
+    end
+    ret 0
+end
+
+func lo_pg_page_settings(log: lg.Logger, a &: at.Ast, lb: int): int:
+    mut errs := 0
+    mut bn := at.Get(a, lb)
+    mut keep := Vector {} as Vector<int>
+    each id in bn.list:
+        an := at.Get(a, id)
+        mut take := false
+        if an.kind == at.AST_LAYOUT_ATTR:
+            if str.Equals(an.name, "mode") or str.Equals(an.name, "حالت"):
+                take = true
+                mut m := at.Get(a, id)
+                m.name = "mode"
+                at.Put(a, id, m)
+            else str.Equals(an.name, "base") or str.Equals(an.name, "پایه"):
+                take = true
+                mut m := at.Get(a, id)
+                m.name = "base"
+                at.Put(a, id, m)
+            end
+        end
+        if take:
+            errs += lo_rt_setting(log, a, id)
+        else:
+            keep.Push(id)
+        end
+    end
+    bn.list = keep
+    at.Put(a, lb, bn)
+    ret errs
+end
+
+pub func PagesProgFor(path: str): int:
+    repeat g_lo_pg_path.Len() in i:
+        if str.Equals(g_lo_pg_path.Get(i), path):
+            ret g_lo_pg_prog.Get(i)
+        end
+    end
+    ret 0
+end

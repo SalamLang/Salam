@@ -1,0 +1,639 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/ssr"
+@fa "رندر‌سرور"
+package ssr
+
+import net.http
+import net.router
+import net.mime
+import encoding.json
+import crypto
+import sync
+import time
+import conv
+import str
+import os
+import fs
+import filepath
+import mem
+import env
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetCurrentThreadId(): u32
+    end
+else:
+    if not SALAM_OS_WASM:
+        extern:
+            func pthread_self(): usize
+        end
+    end
+end
+
+const _DEFAULT_MAX_BODY := 1048576
+
+const _DEFAULT_TTL := 86400
+
+mut _mu := sync.NewMutex()
+
+mut _names := Vector {} as Vector<str>
+
+mut _fns := Vector {} as Vector<i64>
+
+mut _cur_tid := Vector {} as Vector<i64>
+
+mut _cur_h := Vector {} as Vector<i64>
+
+mut _cur_done := Vector {} as Vector<bool>
+
+mut _cur_args := Vector {} as Vector<str>
+
+mut _secret := ""
+
+mut _max_body := _DEFAULT_MAX_BODY
+
+mut _ttl := _DEFAULT_TTL
+
+mut _static_dir := ""
+
+mut _render_fn := 0 as i64
+
+@en "RequestInfo"
+@fa "اطلاعات‌درخواست"
+pub struct RequestInfo:
+    @en "h"
+    @fa "دسته"
+    pub h: i64 = 0
+    @en "active"
+    @fa "فعال"
+    pub active: bool = false
+end
+
+if SALAM_OS_WINDOWS:
+    func _tid(): i64:
+        ret GetCurrentThreadId() as i64
+    end
+else:
+    if SALAM_OS_WASM:
+        func _tid(): i64:
+            ret 1
+        end
+    else:
+        func _tid(): i64:
+            ret pthread_self() as i64
+        end
+    end
+end
+
+func _find_tid(tid: i64): int:
+    n := _cur_tid.Len()
+    mut i := 0
+    until i < n:
+        if _cur_tid.Get(i) == tid: ret i end
+        i++
+    end
+    ret 0 - 1
+end
+
+func _find_h(h: i64): int:
+    n := _cur_h.Len()
+    mut i := 0
+    until i < n:
+        if _cur_h.Get(i) == h: ret i end
+        i++
+    end
+    ret 0 - 1
+end
+
+func _enter(h: i64, args: str):
+    tid := _tid()
+    sync.Lock(_mu)
+    i := _find_tid(tid)
+    if i >= 0:
+        _cur_h.Set(i, h)
+        _cur_done.Set(i, false)
+        _cur_args.Set(i, args)
+    else:
+        _cur_tid.Push(tid)
+        _cur_h.Push(h)
+        _cur_done.Push(false)
+        _cur_args.Push(args)
+    end
+    sync.Unlock(_mu)
+end
+
+func _leave(): bool:
+    tid := _tid()
+    mut done := false
+    sync.Lock(_mu)
+    i := _find_tid(tid)
+    if i >= 0:
+        done = _cur_done.Get(i)
+        last := _cur_tid.Len() - 1
+        _cur_tid.Set(i, _cur_tid.Get(last))
+        _cur_h.Set(i, _cur_h.Get(last))
+        _cur_done.Set(i, _cur_done.Get(last))
+        _cur_args.Set(i, _cur_args.Get(last))
+        _cur_tid.Pop()
+        _cur_h.Pop()
+        _cur_done.Pop()
+        _cur_args.Pop()
+    end
+    sync.Unlock(_mu)
+    ret done
+end
+
+func _mark_done(h: i64):
+    sync.Lock(_mu)
+    i := _find_h(h)
+    if i >= 0: _cur_done.Set(i, true) end
+    sync.Unlock(_mu)
+end
+
+func _current(): i64:
+    tid := _tid()
+    mut h := 0 as i64
+    sync.Lock(_mu)
+    i := _find_tid(tid)
+    if i >= 0: h = _cur_h.Get(i) end
+    sync.Unlock(_mu)
+    ret h
+end
+
+func _lookup(name: str): i64:
+    mut found := 0 as i64
+    sync.Lock(_mu)
+    n := _names.Len()
+    mut i := 0
+    until i < n:
+        if _names.Get(i) == name: found = _fns.Get(i) end
+        i++
+    end
+    sync.Unlock(_mu)
+    ret found
+end
+
+func _secret_value(): str:
+    sync.Lock(_mu)
+    if _secret.Len() == 0:
+        from_env := env.Get("SALAM_SERVER_SECRET")
+        if from_env.Len() >= 16:
+            _secret = from_env
+        else:
+            _secret = crypto.RandomHex(32)
+        end
+    end
+    s := _secret
+    sync.Unlock(_mu)
+    ret s
+end
+
+func _mac(stamp: str, nonce: str): str:
+    ret crypto.HmacSha256Hex(_secret_value(), stamp + "." + nonce)
+end
+
+func _same(a: str, b: str): bool:
+    if a.Len() != b.Len(): ret false end
+    pa := (a as void*) as i8*
+    pb := (b as void*) as i8*
+    mut diff := 0
+    n := a.Len()
+    mut i := 0
+    until i < n:
+        diff |= ((pa[i] as int) ^ (pb[i] as int))
+        i++
+    end
+    ret diff == 0
+end
+
+func _authority(origin: str): str:
+    if str.StartsWith(origin, "https://"): ret origin.Substr(8, origin.Len() - 8) end
+    if str.StartsWith(origin, "http://"): ret origin.Substr(7, origin.Len() - 7) end
+    ret ""
+end
+
+func _same_origin(c: i64): bool:
+    site := http.Header(c, "Sec-Fetch-Site")
+    if site.Len() > 0 and site != "same-origin": ret false end
+    origin := http.Header(c, "Origin")
+    if origin.Len() > 0:
+        auth := _authority(origin)
+        host := http.Header(c, "Host")
+        if auth.Len() == 0 or host.Len() == 0: ret false end
+        if not str.EqualFold(auth, host): ret false end
+    end
+    ret true
+end
+
+func _reply(c: i64, status: int, body: str):
+    http.SetStatus(c, status)
+    http.SetHeader(c, "Cache-Control", "no-store")
+    http.SetHeader(c, "X-Content-Type-Options", "nosniff")
+    http.Json(c, body)
+end
+
+func _error_body(message: str): str:
+    ret "{\"ok\":false,\"error\":" + json.Str(message) + "}"
+end
+
+func _reject(c: i64, status: int, message: str):
+    _reply(c, status, _error_body(message))
+end
+
+func _json_content(c: i64): bool:
+    ct := mime.ParseContentType(http.Header(c, "Content-Type"))
+    ret str.EqualFold(ct.media_type, "application/json")
+end
+
+func _fn_endpoint(c: i64):
+    if not _same_origin(c):
+        _reject(c, 403, "forbidden")
+        ret
+    end
+    if not CheckToken(http.Header(c, "X-Salam-Token")):
+        _reject(c, 403, "forbidden")
+        ret
+    end
+    name := http.Param(c, "name")
+    fn := _lookup(name)
+    if fn == (0 as i64):
+        _reject(c, 404, "unknown function")
+        ret
+    end
+    if not _json_content(c):
+        _reject(c, 400, "content type must be application/json")
+        ret
+    end
+    if http.BodyLen(c) > _max_body:
+        _reject(c, 400, "body too large")
+        ret
+    end
+    text := http.Body(c)
+    if not json.Valid(text) or not str.StartsWith(str.Trim(text), "{"):
+        _reject(c, 400, "body is not a json object")
+        ret
+    end
+    mut args := "{}"
+    mut owned := false
+    if json.Has(text, "args"):
+        args = json.Get(text, "args")
+        owned = true
+        if not str.StartsWith(args, "{"):
+            mem.Free(args as void *)
+            _reject(c, 400, "args must be an object")
+            ret
+        end
+    end
+    _enter(c, args)
+    callhandler(fn, c)
+    done := _leave()
+    if owned: mem.Free(args as void *) end
+    if not done:
+        _reject(c, 500, "internal error")
+    end
+end
+
+func _session_endpoint(c: i64):
+    if not _same_origin(c):
+        _reject(c, 403, "forbidden")
+        ret
+    end
+    _reply(c, 200, "{\"token\":" + json.Str(NewToken()) + "}")
+end
+
+func _hidden_or_bad(rel: str): bool:
+    if rel.Len() == 0: ret true end
+    if rel.Find("\\") >= 0 or rel.Find("%") >= 0: ret true end
+    p := (rel as void*) as i8*
+    n := rel.Len()
+    mut i := 0
+    until i < n:
+        if p[i] == (0 as i8): ret true end
+        i++
+    end
+    segs := rel.Split("/")
+    mut k := 0
+    until k < segs.Len():
+        s := segs.Get(k)
+        if s == "..": ret true end
+        if s.Len() > 0 and str.StartsWith(s, "."): ret true end
+        k++
+    end
+    ret false
+end
+
+func _within(root: str, target: str): bool:
+    raw_root := os.RealPath(root)
+    raw_target := os.RealPath(target)
+    mut rroot := raw_root
+    mut rtarget := raw_target
+    mut ok := false
+    if SALAM_OS_WINDOWS:
+        rroot = str.Replace(raw_root, "\\", "/")
+        rtarget = str.Replace(raw_target, "\\", "/")
+    end
+    if rroot.Len() > 0 and rtarget.Len() > 0:
+        if rtarget == rroot:
+            ok = true
+        else:
+            mut base := rroot
+            if not str.EndsWith(base, "/"): base += "/" end
+            ok = str.StartsWith(rtarget, base)
+        end
+    end
+    if not SALAM_OS_WINDOWS:
+        mem.Free(raw_root as void *)
+        mem.Free(raw_target as void *)
+    end
+    ret ok
+end
+
+func _etag_of(path: str): str:
+    size := os.FileSize(path)
+    mtime := fs.ModTime(path)
+    ret "W/\"" + conv.FormatInt(size) + "-" + conv.FormatInt(mtime) + "\""
+end
+
+func _etag_matches(header: str, etag: str): bool:
+    if header.Len() == 0: ret false end
+    if header == "*": ret true end
+    parts := header.Split(",")
+    mut i := 0
+    until i < parts.Len():
+        if str.Trim(parts.Get(i)) == etag: ret true end
+        i++
+    end
+    ret false
+end
+
+func _serve_static(c: i64): bool:
+    if _static_dir.Len() == 0: ret false end
+    path := http.Path(c)
+    if not str.StartsWith(path, "/"): ret false end
+    mut rel := path.Substr(1, path.Len() - 1)
+    if rel.Len() == 0:
+        rel = "index.html"
+    else str.EndsWith(rel, "/"):
+        rel += "index.html"
+    end
+    if _hidden_or_bad(rel): ret false end
+    mut target := filepath.Join(_static_dir, rel)
+    if os.Exists(target) and os.IsDir(target):
+        target = filepath.Join(target, "index.html")
+    end
+    if not os.Exists(target) or os.IsDir(target): ret false end
+    if not _within(_static_dir, target): ret false end
+    etag := _etag_of(target)
+    http.SetHeader(c, "ETag", etag)
+    http.SetHeader(c, "Cache-Control", "public, max-age=0, must-revalidate")
+    if _etag_matches(http.Header(c, "If-None-Match"), etag):
+        http.SetStatus(c, 304)
+        http.Text(c, "")
+        ret true
+    end
+    ret http.File(c, target, mime.MimeType(target))
+end
+
+func _fallback(c: i64):
+    method := http.Method(c)
+    path := http.Path(c)
+    if str.StartsWith(path, "/_salam/"):
+        http.SetStatus(c, 404)
+        http.Text(c, "not found")
+        ret
+    end
+    if method == "GET" or method == "HEAD":
+        if _serve_static(c): ret end
+        if _render_fn != (0 as i64):
+            _enter(c, "{}")
+            callhandler(_render_fn, c)
+            done := _leave()
+            if not done:
+                http.SetStatus(c, 500)
+                http.Text(c, "internal error")
+            end
+            ret
+        end
+    end
+    http.SetStatus(c, 404)
+    http.Text(c, "not found")
+end
+
+@en "Request"
+@fa "درخواست جاری"
+pub func Request(): RequestInfo:
+    h := _current()
+    ret RequestInfo { h = h, active = h != (0 as i64) }
+end
+
+@en "Valid"
+@fa "معتبر"
+pub func Valid(r: RequestInfo): bool: ret r.active end
+
+@en "Method"
+@fa "روش"
+pub func Method(r: RequestInfo): str:
+    if not r.active: ret "" end
+    ret http.Method(r.h)
+end
+
+@en "Path"
+@fa "مسیر"
+pub func Path(r: RequestInfo): str:
+    if not r.active: ret "" end
+    ret http.Path(r.h)
+end
+
+@en "Header"
+@fa "سرآیند"
+pub func Header(r: RequestInfo, name: str): str:
+    if not r.active: ret "" end
+    ret http.Header(r.h, name)
+end
+
+@en "Cookie"
+@fa "کوکی"
+pub func Cookie(r: RequestInfo, name: str): str:
+    if not r.active: ret "" end
+    ret http.CookieValue(r.h, name)
+end
+
+@en "ClientAddr"
+@fa "نشانی کارخواه"
+pub func ClientAddr(r: RequestInfo): str:
+    if not r.active: ret "" end
+    ret http.ClientAddr(r.h)
+end
+
+@en "Register"
+@fa "ثبت کارکرد"
+pub func Register(name: str, fn: i64):
+    sync.Lock(_mu)
+    mut at := 0 - 1
+    n := _names.Len()
+    mut i := 0
+    until i < n:
+        if _names.Get(i) == name: at = i end
+        i++
+    end
+    if at >= 0:
+        _fns.Set(at, fn)
+    else:
+        _names.Push(str.Clone(name))
+        _fns.Push(fn)
+    end
+    sync.Unlock(_mu)
+end
+
+@en "IsRegistered"
+@fa "ثبت شده"
+pub func IsRegistered(name: str): bool:
+    ret _lookup(name) != (0 as i64)
+end
+
+@en "SetSecret"
+@fa "تنظیم راز"
+pub func SetSecret(secret: str):
+    sync.Lock(_mu)
+    _secret = str.Clone(secret)
+    sync.Unlock(_mu)
+end
+
+@en "SetMaxBody"
+@fa "تنظیم حداکثر بدنه"
+pub func SetMaxBody(n: int):
+    _max_body = n
+end
+
+@en "SetTokenTtl"
+@fa "تنظیم عمر توکن"
+pub func SetTokenTtl(seconds: int):
+    _ttl = seconds
+end
+
+@en "SetStaticDir"
+@fa "تنظیم پوشه ایستا"
+pub func SetStaticDir(dir: str):
+    _static_dir = str.Clone(dir)
+end
+
+@en "SetRender"
+@fa "تنظیم رندر"
+pub func SetRender(fn: i64):
+    _render_fn = fn
+end
+
+@en "NewToken"
+@fa "توکن جدید"
+pub func NewToken(): str:
+    stamp := conv.FormatInt(time.Now())
+    nonce := crypto.RandomHex(16)
+    ret stamp + "." + nonce + "." + _mac(stamp, nonce)
+end
+
+@en "CheckToken"
+@fa "بررسی توکن"
+pub func CheckToken(token: str): bool:
+    if token.Len() == 0 or token.Len() > 256: ret false end
+    parts := token.Split(".")
+    if parts.Len() != 3: ret false end
+    stamp := parts.Get(0)
+    nonce := parts.Get(1)
+    sent := parts.Get(2)
+    t := conv.ParseIntOr(stamp, 0 - 1)
+    if t < 0: ret false end
+    now := time.Now()
+    if t > now + 60: ret false end
+    if now - t > (_ttl as i64): ret false end
+    ret _same(_mac(stamp, nonce), sent)
+end
+
+@en "Args"
+@fa "پارامترها"
+pub func Args(c: i64): str:
+    mut out := "{}"
+    sync.Lock(_mu)
+    i := _find_h(c)
+    if i >= 0: out = _cur_args.Get(i) end
+    sync.Unlock(_mu)
+    ret out
+end
+
+@en "Ok"
+@fa "پاسخ موفق"
+pub func Ok(c: i64, value: str):
+    mut v := value
+    if v.Len() == 0: v = "null" end
+    if not json.Valid(v):
+        _reject(c, 500, "internal error")
+        _mark_done(c)
+        ret
+    end
+    _reply(c, 200, "{\"ok\":true,\"value\":" + v + "}")
+    _mark_done(c)
+end
+
+@en "Fail"
+@fa "پاسخ خطا"
+pub func Fail(c: i64, message: str):
+    _reply(c, 200, _error_body(message))
+    _mark_done(c)
+end
+
+@en "Respond"
+@fa "پاسخ صفحه"
+pub func Respond(c: i64, status: int, html: str, redirect: str):
+    if redirect.Len() > 0:
+        http.Redirect(c, redirect)
+        if status >= 300 and status < 400: http.SetStatus(c, status) end
+    else:
+        http.SetStatus(c, status)
+        http.SetHeader(c, "Cache-Control", "no-cache")
+        http.Html(c, html)
+    end
+    _mark_done(c)
+end
+
+@en "PagePath"
+@fa "مسیر صفحه"
+pub func PagePath(c: i64): str:
+    ret http.Path(c)
+end
+
+@en "Mount"
+@fa "نصب"
+pub func Mount(r &: router.Router):
+    router.Post(r, "/_salam/fn/:name", _fn_endpoint)
+    router.Get(r, "/_salam/session", _session_endpoint)
+    router.SetFallback(r, _fallback)
+end
+
+@en "OutboundOptions"
+@fa "گزینه های بیرونی"
+pub func OutboundOptions(): http.RequestOptions:
+    ret http.RequestOptions { timeout_ms = 10000, max_body = 8388608, max_redirects = 5 }
+end
+
+@en "OutboundGet"
+@fa "دریافت بیرونی"
+pub func OutboundGet(url: str, headers: HashMap<str, str>): http.Response:
+    ret http.Do("GET", url, headers, "", OutboundOptions())
+end
+
+@en "OutboundPost"
+@fa "ارسال بیرونی"
+pub func OutboundPost(url: str, body: str, headers: HashMap<str, str>): http.Response:
+    ret http.Do("POST", url, headers, body, OutboundOptions())
+end

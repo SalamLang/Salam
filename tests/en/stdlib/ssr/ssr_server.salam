@@ -1,0 +1,226 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import net.ssr
+import encoding.json
+import os
+import str
+import testing
+import fs
+
+mut seen_method := ""
+mut seen_path := ""
+mut seen_cookie := ""
+mut seen_type := ""
+mut seen_addr := ""
+mut seen_valid := false
+
+func add(c: i64):
+    args := ssr.Args(c)
+    a := json.GetInt(args, "a")
+    b := json.GetInt(args, "b")
+    req := ssr.Request()
+    seen_valid = ssr.Valid(req)
+    seen_method = str.Clone(ssr.Method(req))
+    seen_path = str.Clone(ssr.Path(req))
+    seen_cookie = str.Clone(ssr.Cookie(req, "sid"))
+    seen_type = str.Clone(ssr.Header(req, "Content-Type"))
+    seen_addr = str.Clone(ssr.ClientAddr(req))
+    ssr.Ok(c, "{\"sum\":" + (a + b) + "}")
+end
+
+func refuse(c: i64):
+    ssr.Fail(c, "no stock")
+end
+
+func silent(c: i64):
+    http.SetStatus(c, 200)
+end
+
+func page(c: i64):
+    path := ssr.PagePath(c)
+    if path == "/go":
+        ssr.Respond(c, 302, "", "/target")
+    else path == "/missing":
+        ssr.Respond(c, 404, "<p>nothing</p>", "")
+    else:
+        req := ssr.Request()
+        ssr.Respond(c, 200, "<p>page " + path + " " + ssr.Method(req) + "</p>", "")
+    end
+end
+
+func post(url: str, body: str, h: HashMap<str, str>): http.Response:
+    ret http.PostWith(url, body, h)
+end
+
+func json_headers(token: str): HashMap<str, str>:
+    mut h := http.NewHeaders()
+    h.Insert("Content-Type", "application/json")
+    if token.Len() > 0: h.Insert("X-Salam-Token", token) end
+    ret h
+end
+
+func main:
+    dir := "ssr_static_" + os.Pid()
+    os.Mkdir(dir)
+    fs.WriteText(dir + "/app.js", "console.log(1)")
+    fs.WriteText(dir + "/index.html", "<p>prerendered</p>")
+    fs.WriteText(dir + "/.secret", "hidden")
+
+    ssr.Register("Add", add)
+    ssr.Register("Refuse", refuse)
+    ssr.Register("Silent", silent)
+    ssr.SetRender(page)
+    ssr.SetStaticDir(dir)
+    ssr.SetSecret("test-secret-0123456789")
+    ssr.SetTokenTtl(3600)
+    ssr.SetMaxBody(200)
+    mut r := router.NewRouter()
+    ssr.Mount(r)
+    mut s := http.NewServer(0)
+    http.Use(s, r)
+    port := http.RunBackgroundPort(s)
+    testing.AssertTrue(port > 0)
+    base := "http://127.0.0.1:" + port
+
+    sess := http.Get(base + "/_salam/session")
+    testing.AssertEqInt(http.Status(sess), 200)
+    token := json.Get(http.Body(sess), "token")
+    testing.AssertTrue(ssr.CheckToken(token))
+    testing.AssertFalse(ssr.CheckToken(token + "0"))
+    testing.AssertFalse(ssr.CheckToken("1.2.3"))
+    testing.AssertFalse(ssr.CheckToken(""))
+
+    good := post(base + "/_salam/fn/Add", "{\"args\":{\"a\":2,\"b\":40}}", json_headers(token))
+    testing.AssertEqInt(http.Status(good), 200)
+    testing.AssertEqStr(http.Body(good), "{\"ok\":true,\"value\":{\"sum\":42}}")
+    testing.AssertTrue(seen_valid)
+    testing.AssertEqStr(seen_method, "POST")
+    testing.AssertEqStr(seen_path, "/_salam/fn/Add")
+    testing.AssertEqStr(seen_addr, "127.0.0.1")
+    testing.AssertFalse(ssr.Valid(ssr.Request()))
+
+    mut same := json_headers(token)
+    same.Insert("Origin", base)
+    same.Insert("Sec-Fetch-Site", "same-origin")
+    same.Insert("Cookie", "sid=abc")
+    ok2 := post(base + "/_salam/fn/Add", "{\"args\":{\"a\":1,\"b\":1}}", same)
+    testing.AssertEqInt(http.Status(ok2), 200)
+    testing.AssertEqStr(seen_cookie, "abc")
+    testing.AssertEqStr(seen_type, "application/json")
+
+    refused := post(base + "/_salam/fn/Refuse", "{\"args\":{}}", json_headers(token))
+    testing.AssertEqInt(http.Status(refused), 200)
+    testing.AssertEqStr(http.Body(refused), "{\"ok\":false,\"error\":\"no stock\"}")
+
+    quiet := post(base + "/_salam/fn/Silent", "{}", json_headers(token))
+    testing.AssertEqInt(http.Status(quiet), 500)
+    testing.AssertContains(http.Body(quiet), "\"ok\":false")
+
+    bad := post(base + "/_salam/fn/Add", "{not json", json_headers(token))
+    testing.AssertEqInt(http.Status(bad), 400)
+    arr := post(base + "/_salam/fn/Add", "[1,2]", json_headers(token))
+    testing.AssertEqInt(http.Status(arr), 400)
+    badargs := post(base + "/_salam/fn/Add", "{\"args\":[1]}", json_headers(token))
+    testing.AssertEqInt(http.Status(badargs), 400)
+
+    mut plain := http.NewHeaders()
+    plain.Insert("Content-Type", "text/plain")
+    plain.Insert("X-Salam-Token", token)
+    wrongtype := post(base + "/_salam/fn/Add", "{\"args\":{}}", plain)
+    testing.AssertEqInt(http.Status(wrongtype), 400)
+
+    unknown := post(base + "/_salam/fn/Nope", "{\"args\":{}}", json_headers(token))
+    testing.AssertEqInt(http.Status(unknown), 404)
+
+    notoken := post(base + "/_salam/fn/Add", "{\"args\":{}}", json_headers(""))
+    testing.AssertEqInt(http.Status(notoken), 403)
+    badtoken := post(base + "/_salam/fn/Add", "{\"args\":{}}", json_headers("1.2.3"))
+    testing.AssertEqInt(http.Status(badtoken), 403)
+    unknown_no_token := post(base + "/_salam/fn/Nope", "{}", json_headers(""))
+    testing.AssertEqInt(http.Status(unknown_no_token), 403)
+
+    mut cross := json_headers(token)
+    cross.Insert("Origin", "http://evil.example")
+    testing.AssertEqInt(http.Status(post(base + "/_salam/fn/Add", "{\"args\":{}}", cross)), 403)
+    mut site := json_headers(token)
+    site.Insert("Sec-Fetch-Site", "cross-site")
+    testing.AssertEqInt(http.Status(post(base + "/_salam/fn/Add", "{\"args\":{}}", site)), 403)
+    mut nul := json_headers(token)
+    nul.Insert("Origin", "null")
+    testing.AssertEqInt(http.Status(post(base + "/_salam/fn/Add", "{\"args\":{}}", nul)), 403)
+    mut cross_session := http.NewHeaders()
+    cross_session.Insert("Origin", "http://evil.example")
+    testing.AssertEqInt(http.Status(http.GetWith(base + "/_salam/session", cross_session)), 403)
+
+    mut big := "{\"args\":{\"a\":1,\"pad\":\""
+    mut i := 0
+    until i < 300:
+        big += "x"
+        i++
+    end
+    big += "\"}}"
+    testing.AssertEqInt(http.Status(post(base + "/_salam/fn/Add", big, json_headers(token))), 400)
+
+    testing.AssertEqInt(http.Status(http.Get(base + "/_salam/other")), 404)
+
+    home := http.Get(base + "/")
+    testing.AssertEqInt(http.Status(home), 200)
+    testing.AssertEqStr(http.Body(home), "<p>prerendered</p>")
+    js := http.Get(base + "/app.js")
+    testing.AssertEqInt(http.Status(js), 200)
+    testing.AssertEqStr(http.Body(js), "console.log(1)")
+    etag := http.GetHeader(js, "etag")
+    testing.AssertTrue(etag.Len() > 0)
+    mut cond := http.NewHeaders()
+    cond.Insert("If-None-Match", etag)
+    cached := http.GetWith(base + "/app.js", cond)
+    testing.AssertEqInt(http.Status(cached), 304)
+    testing.AssertEqStr(http.Body(cached), "")
+    testing.AssertEqInt(http.Status(http.Get(base + "/.secret")), 200)
+    testing.AssertNeStr(http.Body(http.Get(base + "/.secret")), "hidden")
+    testing.AssertNeStr(http.Body(http.Get(base + "/../etc/passwd")), "root")
+
+    ren := http.Get(base + "/about/us")
+    testing.AssertEqInt(http.Status(ren), 200)
+    testing.AssertEqStr(http.Body(ren), "<p>page /about/us GET</p>")
+    gone := http.Get(base + "/missing")
+    testing.AssertEqInt(http.Status(gone), 404)
+    testing.AssertEqStr(http.Body(gone), "<p>nothing</p>")
+    red := http.Get(base + "/go")
+    testing.AssertEqInt(http.Status(red), 302)
+    testing.AssertEqStr(http.GetHeader(red, "location"), "/target")
+
+    opts := ssr.OutboundOptions()
+    testing.AssertEqInt(opts.timeout_ms, 10000)
+    testing.AssertEqInt(opts.max_body, 8388608)
+    testing.AssertEqInt(opts.max_redirects, 5)
+    testing.AssertTrue(ssr.IsRegistered("Add"))
+    testing.AssertFalse(ssr.IsRegistered("Nope"))
+
+    fs.Delete(dir + "/app.js")
+    fs.Delete(dir + "/index.html")
+    fs.Delete(dir + "/.secret")
+    os.Rmdir(dir)
+    fresh := ssr.NewToken()
+    testing.AssertTrue(ssr.CheckToken(fresh))
+    got := ssr.OutboundGet(base + "/_salam/session", http.NewHeaders())
+    testing.AssertEqInt(http.Status(got), 200)
+    sent := ssr.OutboundPost(base + "/_salam/fn/Add", "{}", json_headers(""))
+    testing.AssertEqInt(http.Status(sent), 403)
+    ret testing.Summary()
+end

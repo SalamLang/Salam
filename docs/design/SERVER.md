@@ -35,10 +35,14 @@ the browser bundle and the native app never contain its body.
 
 ```salam
 server func GetProduct(id: int): Product:
-    r := http.GetWith(env.Get("SHOP_API") + "/products/" + id, auth_headers())
+    r := http.GetWith(env.Get("SHOP_API") + "/products/" + str.FromInt(id as i64), auth_headers())
     ret json.Decode(r.body) as Product
 end
 ```
+
+A failure (a transport error, a bad status, a body that does not decode) is a
+`throw`. The caller handles it with `try`/`catch`; an uncaught throw during
+server rendering gives a 500 page, and over the wire becomes `{"ok": false}`.
 
 ```salam
 pub component ProductPage(id: int):
@@ -110,11 +114,14 @@ response  {"ok": true,  "value": {...}}
 3. Render the layout chain and the page component to HTML with the same
    lowering the runtime layout (`page Name(params)`, `http.Html`) already uses.
    A `server func` call or a `load(...)` ready inside the render is awaited
-   before the response (default budget 3 seconds per request; on timeout the
-   loading branch is rendered and the client continues).
+   before the response (default budget 3 seconds per request; on timeout a
+   `load(...)` renders its loading branch and the client continues; a direct
+   `server func` call with no loading branch fails the render with a 504 page,
+   so write calls that may be slow through `load`).
 4. Write `<head>` (title, meta, CSS link), the body, the embedded state
    (`<script type="application/json" id="__salam">`: variable values and the
-   call cache) and the bundle script.
+   call cache; every `<` is written as `\u003c` and `\u2028`, `\u2029` are escaped,
+   so no value can close the tag) and the bundle script.
 
 Streaming and incremental regeneration are out of the first version.
 
@@ -125,7 +132,12 @@ Streaming and incremental regeneration are out of the first version.
   runtime uses for its scopes, so server and client agree without a walk.
 - The bundle reads `__salam`, restores the state, and attaches handlers and
   scope tracking to the existing nodes. It does not render again.
-- The call cache is keyed by function name and a hash of the arguments. A
+- The call cache is keyed by function name, a hash of the arguments, and the
+  occurrence number within the render, so two identical calls that returned
+  different values replay in order. Treat a `server func` as idempotent for the
+  same arguments inside one request; a difference is only a hydration mismatch
+  (re-render of that scope), never an error.
+- The call cache is keyed as above. A
   `server func` call during hydration that hits the cache returns at once and
   does not fetch.
 - If an id is missing or a node differs from what the scope expects, that scope
@@ -146,6 +158,13 @@ The generated server reads `PORT` and `HOST`, serves `dist/public` with
 `ETag` and caching headers, and listens behind any reverse proxy. Backend
 addresses and secrets come from the environment through `std/env`.
 
+## Static output
+
+The default build (no `--ssr`) has no server to answer `/_salam/fn/<Name>`. A
+page that can reach a `server func` is then E289 `'F' needs --ssr`, unless the
+entry page sets `server = "https://front.example.com"`, in which case the stub
+posts there (the same setting native uses).
+
 ## Native
 
 There is no rendering on native. A `server func` call becomes an HTTP call to the
@@ -160,6 +179,7 @@ app and the site share one set of functions, and no secret is in the binary.
 | E286 | error | `'F' runs in the browser but uses 'G', which only exists on the server` |
 | E287 | error | `server func 'F' must be declared at the top level` |
 | E288 | error | `two server funcs are named 'F'` (after the Persian name is applied) |
+| E289 | error | `server func 'F' is reachable from a static build; build with --ssr or set 'server'` |
 | W280 | warning | `server func 'F' looks like backend code ('db'); call your API from here instead` |
 
 ## Decisions

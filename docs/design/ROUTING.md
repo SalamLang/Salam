@@ -22,7 +22,8 @@ pages/
   docs/
     index.salam               /docs
     [topic].salam             /docs/:topic
-    [[page]].salam            /docs/:page?
+    archive/
+      [[year]].salam          /docs/archive/:year?
   user/
     [id].salam                /user/:id
   admin/
@@ -38,7 +39,7 @@ pages/
 | `name.salam` | `name` |
 | `[id].salam` | `:id` |
 | `[[id]].salam` | `:id?` (optional, as `/docs/:topic?` today) |
-| `[...rest].salam` | trailing `*` |
+| `[...rest].salam` | trailing `*rest` (the component parameter `rest` receives the remaining path) |
 | `_404.salam` | `*` fallback |
 | `_layout.salam` | not a route; wraps the folder (see below) |
 
@@ -93,6 +94,10 @@ end
    the native stack and prerender per static route, is unchanged.
 3. Project wide settings that were `mode` and `base` inside the block move to
    the entry page: `page: mode = hash base = "/app" ... end`.
+
+Two files that can match the same path with the same rank are E280. A route that
+is fully shadowed by a more specific one (same match set) is reported as E280 too,
+so every file in the tree is reachable.
 
 ## Diagnostics
 

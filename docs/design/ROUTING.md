@@ -119,7 +119,7 @@ E256 to E259 until those numbers were found to belong to the ownership checks.
 The `routes:` block is gone: it is no longer parsed, so a program that still
 writes it gets the ordinary syntax error. There is no warning release and no
 migration tool; each route line becomes a file by hand: the pattern is the
-file name, `title`, `guard` and `redirect` move into the component body, and
+filename, `title`, `guard` and `redirect` move into the component body, and
 `mode` and `base` move to the entry `page:` block. The tests, docs and learn
 pages that used the block were converted to folders.
 

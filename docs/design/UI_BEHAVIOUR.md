@@ -137,22 +137,28 @@ tree on the web and a screen stack in a native window.
 
 ### Routes
 
-Superseded: the `routes:` block below is replaced by the `pages/` folder, see
-`ROUTING.md`. Server rendering and server functions are in `SERVER.md`.
+The `routes:` block is gone; the `pages/` folder next to `main.salam` is the
+route table, see `ROUTING.md`. Server rendering and server functions are in
+`SERVER.md`.
+
+```
+main.salam
+pages/
+  index.salam          /
+  user/[id].salam      /user/:id
+  settings.salam       /settings
+  _404.salam           any other path
+```
 
 ```salam
-routes:
-    "/" : Home
-    "/user/:id" : User
-    "/settings" : Settings
-    "*" : NotFound
-end
-
-component User(id: int):
+pub component User(id: int):
+    title = "User " + id
     heading: content = "User " + id end
     Link: to = "/" content = "Back" end
 end
+```
 
+```salam
 page:
     title = "Shop"
     nav:
@@ -163,19 +169,18 @@ page:
 end
 ```
 
-- `routes:` maps a path pattern to a component. `:name` segments become the
+- One file per route holds one `pub component`. `[id]` segments become the
   component's parameters, converted to the parameter's type (`id: int`); a
-  value that does not convert goes to the `"*"` route. `Outlet` shows the
-  matched component; a route component may have its own `Outlet` for nested
-  routes (`"/settings/*" : Settings`).
+  value that does not convert goes to `_404.salam`. `Outlet` shows the matched
+  component; a `_layout.salam` with its own `Outlet` nests routes below a folder.
 - `Link: to = "/path"` is the only navigation element. `page.GoTo("/user/3")`,
   `page.Back()`, `page.Forward()`, `page.Redirect("/login")` are functions, and
   the state `page.route.path`, `page.route.query` and `page.route.Param("id")` can be
   read like any state (R5), so a highlighted menu item is
   `when page.route.path == "/"`.
-- A route may carry a guard: `"/admin" : Admin guard = logged_in redirect =
-  "/login"`. The guard is a bool expression, re-checked on every change of its
-  state.
+- A route may carry a guard: `guard = logged_in` and `redirect = "/login"` at
+  the top of the component body. The guard is a bool expression, re-checked on
+  every change of its state.
 - A route change is a state write: it re-runs the `Outlet` scope and nothing
   else (R1). A `page:` with `enter`/`exit` on the outlet's component animates
   the change (section 6). Scroll and focus are restored on back.
@@ -250,7 +255,7 @@ end
 | E206 | error | `route '/user/:id' parameter 'id' is not a parameter of component 'User'` |
 | E207 | error | `two routes match the same path: '/a' and '/a'` |
 | E208 | error | `route 'Home' is not a component` |
-| E209 | error | `'Outlet' used with no 'routes:' block` |
+| E209 | error | `'Outlet' used with no pages folder` |
 | W205 | warning | `'notify' has no effect on the web target` |
 | E210 | error | `no window named 'Inspectr'` |
 
@@ -258,7 +263,7 @@ end
 
 | # | decision |
 | --- | --- |
-| NV1 | one `routes:` table, path parameters typed by the component parameters |
+| NV1 | one route table (the `pages/` folder), path parameters typed by the component parameters |
 | NV2 | `Link`, `go`, `go_back`, `replace`, readable `route` state; no other navigation API |
 | NV3 | web is real URLs with static prerender; native is a stack saved with window state |
 | NV4 | `window Name(params):` for multi window on native; popup or overlay on web |
@@ -267,7 +272,7 @@ end
 
 ### First implementation steps
 
-1. `routes:`, `Outlet`, `Link`, `go` on the web (history, prerender); E206 to E209.
+1. the route table, `Outlet`, `Link`, `go` on the web (history, prerender); E206 to E209.
 2. Same table in `gui.ui` (route stack in the scope tree, Alt+Left).
 3. `window` declaration with `open_window` on native (needs `gui.window`
    multi window; Linux and Windows first), then `menubar` and `context menu`.

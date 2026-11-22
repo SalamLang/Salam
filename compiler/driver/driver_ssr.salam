@@ -1,0 +1,251 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package driver
+
+import os
+import os.process
+import str
+import io
+import time
+
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+
+func ssr_self(): str:
+    mut exe := ""
+    if not sm.ExePath(exe):
+        exe = "salam"
+    end
+    ret exe
+end
+
+func ssr_entry(lgr: lg.Logger, pack: lp.Langpack, given: str): str:
+    mut arg := given
+    if str.Len(arg) == 0:
+        arg = "."
+    end
+    if os.IsDir(arg):
+        resolved := resolve_dir_layout(lgr, pack, arg, true)
+        if resolved.Len() != 1:
+            ret ""
+        end
+        ret abs_of(resolved.Get(0))
+    end
+    ret abs_of(arg)
+end
+
+func ssr_lang_flag(opt: Dr): str:
+    if str.Equals(opt.lang, "en"):
+        ret ""
+    end
+    ret " --lang=" + dev_quote(opt.lang)
+end
+
+func ssr_inside(dir: str, root: str): bool:
+    if str.Equals(dir, root):
+        ret true
+    end
+    ret str.StartsWith(root, dir + "/")
+end
+
+func ssr_render_build(entry: str, out: str, lang: str): bool:
+    _rm := os.RemoveAll(out)
+    log_file := out + ".log"
+    cmd := dev_quote(ssr_self()) + " page build --ssr=" + dev_quote(out) + " " + dev_quote(entry) + " --no-color --log-level=error" + lang + " > " + dev_quote(log_file) + " 2>&1"
+    rc := os.Run(cmd)
+    if rc != 0:
+        io.EPrint(io.ReadFile(log_file))
+        ret false
+    end
+    ret true
+end
+
+func ssr_launch(out: str, host: str, port: int): process.Child:
+    mut cmd := process.NewCommand(join_path2(out, "server"))
+    cmd.Env("HOST", host)
+    cmd.Env("PORT", co.I64Toa(port as i64))
+    cmd.Env("SALAM_PUBLIC", join_path2(out, "public"))
+    cmd.Piped()
+    ret process.Launch(cmd)
+end
+
+func ssr_wait_listening(child &: process.Child): bool:
+    mut tries := 0
+    until tries < 100:
+        ck := child.ReadLine(100)
+        if str.Contains(ck.data, "listening on"):
+            ret true
+        end
+        if not child.Poll():
+            ret false
+        end
+        tries++
+    end
+    ret false
+end
+
+pub func SsrBuild(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    if not ui_web_only(lgr, opt):
+        ret 2
+    end
+    first := opt.inputs.Len() > 0 ? opt.inputs.Get(0) : "."
+    entry := ssr_entry(lgr, pack, first)
+    if str.Len(entry) == 0:
+        ret 2
+    end
+    root := dir_of(entry)
+    mut out := opt.ssr_out
+    if str.Len(out) == 0:
+        out = "dist"
+    end
+    out = abs_of(out)
+    if ssr_inside(out, root):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("the output folder '%s' contains the project; choose another one"), co.ArgStr(out))
+        )
+        ret 2
+    end
+    pub_dir := join_path2(out, "public")
+    _rm := os.RemoveAll(pub_dir)
+    if os.MkdirAll(pub_dir) != 0:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot create '%s'"), co.ArgStr(pub_dir))
+        )
+        ret 2
+    end
+    assets := join_path2(root, "public")
+    if os.IsDir(assets):
+        _cp := os.CopyTree(assets, pub_dir)
+    end
+    cwd0 := os.Cwd()
+    if os.Chdir(pub_dir) != 0:
+        ret 2
+    end
+    mut copt := opt
+    copt.inputs = Vector {} as Vector<str>
+    copt.inputs.Push(entry)
+    copt.input = entry
+    copt.ssr = true
+    copt.inline_mode = false
+    copt.split = false
+    copt.output = ""
+    rc := LayoutBuild(copt)
+    _back := os.Chdir(cwd0)
+    if rc != 0:
+        ret rc
+    end
+    exe_file := join_path2(out, SALAM_OS_WINDOWS ? "server.exe" : "server")
+    _old := os.Remove(exe_file)
+    scratch := join_path2(os.TempDir(), "salam-ssr-" + co.I64Toa(os.Pid() as i64) + "-" + co.I64Toa(time.NowNanos()))
+    if os.MkdirAll(scratch) != 0:
+        ret 2
+    end
+    log_file := join_path2(scratch, "build.log")
+    cmd := "cd " + dev_quote(scratch) + " && " + dev_quote(ssr_self()) + " build " + dev_quote(entry) + " --ssr-server --output=" + dev_quote(exe_file) + " --no-color --log-level=error" + ssr_lang_flag(opt) + " > " + dev_quote(log_file) + " 2>&1"
+    src := os.Run(cmd)
+    if src != 0 or not os.Exists(exe_file):
+        io.EPrint(io.ReadFile(log_file))
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("server build failed; no server written")
+        )
+        _rs := os.RemoveAll(scratch)
+        ret 1
+    end
+    _rs2 := os.RemoveAll(scratch)
+    println "salam: built " + exe_file + " and " + pub_dir
+    ret 0
+end
+
+pub func ServeRender(opt &: Dr): int:
+    if SALAM_OS_WINDOWS:
+        io.EPrintln("salam: serve --render is not available on Windows yet")
+        ret 2
+    end
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        ret 2
+    end
+    entry := ssr_entry(lgr, pack, opt.input)
+    if str.Len(entry) == 0:
+        ret 2
+    end
+    root := dir_of(entry)
+    mut host := opt.serve_host
+    if str.Len(host) == 0:
+        host = "127.0.0.1"
+    end
+    port := opt.serve_port > 0 ? opt.serve_port : 8000
+    work := join_path2(os.TempDir(), "salam-render-" + co.I64Toa(os.Pid() as i64) + "-" + co.I64Toa(time.NowNanos()))
+    if os.MkdirAll(work) != 0:
+        io.EPrintln("salam: cannot create a build directory in " + os.TempDir())
+        ret 2
+    end
+    lang := ssr_lang_flag(opt)
+    mut slot := 0
+    mut out := join_path2(work, "a")
+    mut sig := 0 as i64
+    dev_scan(root, sig, 0)
+    if not ssr_render_build(entry, out, lang):
+        io.EPrintln("salam: the first build failed")
+        _rm := os.RemoveAll(work)
+        ret 1
+    end
+    mut child := ssr_launch(out, host, port)
+    if not ssr_wait_listening(child):
+        io.EPrintln("salam: the server did not start on " + host + ":" + co.I64Toa(port as i64))
+        _k := child.Kill()
+        child.Close()
+        _rm2 := os.RemoveAll(work)
+        ret 2
+    end
+    println "salam: serving " + entry + " at http://" + host + ":" + co.I64Toa(port as i64) + "/ (rebuilds on save; Ctrl+C to stop)"
+    io.Flush()
+    until true:
+        time.Sleep(500)
+        mut now := 0 as i64
+        dev_scan(root, now, 0)
+        if now == sig:
+            continue
+        end
+        sig = now
+        next := join_path2(work, slot == 0 ? "b" : "a")
+        if not ssr_render_build(entry, next, lang):
+            io.EPrintln("salam: build failed, the old server keeps running")
+            continue
+        end
+        _k2 := child.Kill()
+        _w := child.Wait(2000)
+        child.Close()
+        out = next
+        slot = slot == 0 ? 1 : 0
+        child = ssr_launch(out, host, port)
+        if not ssr_wait_listening(child):
+            io.EPrintln("salam: the rebuilt server did not start")
+        else:
+            io.EPrintln("salam: rebuilt " + entry)
+        end
+    end
+end

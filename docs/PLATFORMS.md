@@ -47,7 +47,7 @@ pointer or `size_t` is 64 bits. That is exactly what the changes below address.
 ### 🔵 C backend (`--backend=c`) - portable by construction
 
 Salam types lower to standard C types: `i64`→`int64_t`, `f64`→`double`,
-`sizeof(T)`→C's `sizeof`, pointers→native C pointers. The **system C compiler**
+`size(T)`→C's `sizeof`, pointers→native C pointers. The **system C compiler**
 (gcc / tcc / clang) then resolves every width for the actual target. Build the
 generated C with a 32-bit compiler and you get correct 32-bit code for free -
 no special handling in Salam is required.

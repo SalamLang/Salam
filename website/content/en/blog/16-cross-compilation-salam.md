@@ -130,7 +130,7 @@ This program prints the same four lines whether it is built for x86-64 or for `i
 ```salam
 func main:
     big := 9000000000 as i64
-    println "i64 is", sizeof(i64), "bytes on every target"
+    println "i64 is", size(i64), "bytes on every target"
     println "9e9 * 3 =", big * 3
     println "9e9 / 7 =", big / 7
     wide := (big as u128) * (big as u128)

@@ -101,11 +101,12 @@ rather than renaming each to snake_case.
    checked. `@external` names likewise.
 2. Operators: `pub func +`, and the `operator_*` hooks (`operator_index`,
    `operator_eq`, and so on).
-3. Protocol/operator hooks the compiler/runtime may require by specific name
-   (e.g. `operator_*`, and language/protocol hooks where applicable): keep the
-   required canonical/compat spellings so compiler and runtime dispatch remain
-   correct. Prefer providing UpperCamelCase public forms alongside required
-   legacy/protocol names when possible.
+3. Protocol names the compiler looks up on a type (`Iter`, `HasNext`, `Next`,
+   `Key`, `Value`, `ToStr`, `ToJson`, `FromJson`, `Free`, `Len`, `Get`,
+   `DeepCopy`) are PascalCase like every other method. Only the `operator_*`
+   hooks of item 2 stay lowercase, because they name an operator and not a
+   function a person calls. A snake_case spelling of any of these is an
+   unknown name, with a hint that names the PascalCase one.
 4. `main`.
 5. Persian identifiers (see below).
 6. Mirror packages: a package whose job is to look like an external API

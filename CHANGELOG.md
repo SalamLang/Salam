@@ -15,6 +15,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 
 ### Behaviour changes
 
+- Calling a std function or method by its old `snake_case` spelling (`parse_header`, `v.push(1)`, `s.to_str()`) is no longer accepted: it is an unknown name, and the error says which PascalCase name to write (`ParseHeader`, `Push`, `ToStr`). The W175 warning and the `--spelling` option are gone. Run `salam check` on your code; every call it reports can be renamed from the hint. The names the compiler looks up on your own types (`Iter`, `HasNext`, `Next`, `Key`, `Value`, `ToStr`, `ToJson`, `FromJson`, `Free`) must be PascalCase too; only the `operator_*` hooks stay lowercase. Your own functions keep whatever name you gave them.
 - `fs.Permissions` returns the real mode bits (for example 420 for `rw-r--r--`), the same number `fs.Chmod` takes. `Stat`, `ModTime` and friends no longer start a shell (#3745).
 - `ssh.ServerConfig.host_seed` and `sshd.Config.host_seed` are removed; use `host_key_file` or `host_key_hex` (#3739).
 - Float to integer casts saturate at the target range and turn NaN into 0, on every backend and for every width (#3752).

@@ -35,8 +35,10 @@ if SALAM_OS_WINDOWS:
         func GetCurrentThreadId(): u32
     end
 else:
-    extern:
-        func pthread_self(): usize
+    if not SALAM_OS_WASM:
+        extern:
+            func pthread_self(): usize
+        end
     end
 end
 
@@ -84,8 +86,14 @@ if SALAM_OS_WINDOWS:
         ret GetCurrentThreadId() as i64
     end
 else:
-    func _tid(): i64:
-        ret pthread_self() as i64
+    if SALAM_OS_WASM:
+        func _tid(): i64:
+            ret 1
+        end
+    else:
+        func _tid(): i64:
+            ret pthread_self() as i64
+        end
     end
 end
 
@@ -278,9 +286,12 @@ func _fn_endpoint(c: i64):
         ret
     end
     mut args := "{}"
+    mut owned := false
     if json.Has(text, "args"):
         args = json.Get(text, "args")
+        owned = true
         if not str.StartsWith(args, "{"):
+            mem.Free(args as void *)
             _reject(c, 400, "args must be an object")
             ret
         end
@@ -288,6 +299,7 @@ func _fn_endpoint(c: i64):
     _enter(c, args)
     callhandler(fn, c)
     done := _leave()
+    if owned: mem.Free(args as void *) end
     if not done:
         _reject(c, 500, "internal error")
     end
@@ -323,9 +335,15 @@ func _hidden_or_bad(rel: str): bool:
 end
 
 func _within(root: str, target: str): bool:
-    rroot := os.RealPath(root)
-    rtarget := os.RealPath(target)
+    raw_root := os.RealPath(root)
+    raw_target := os.RealPath(target)
+    mut rroot := raw_root
+    mut rtarget := raw_target
     mut ok := false
+    if SALAM_OS_WINDOWS:
+        rroot = raw_root.Replace("\\", "/")
+        rtarget = raw_target.Replace("\\", "/")
+    end
     if rroot.Len() > 0 and rtarget.Len() > 0:
         if rtarget == rroot:
             ok = true
@@ -334,6 +352,10 @@ func _within(root: str, target: str): bool:
             if not str.EndsWith(base, "/"): base += "/" end
             ok = str.StartsWith(rtarget, base)
         end
+    end
+    if not SALAM_OS_WINDOWS:
+        mem.Free(raw_root as void *)
+        mem.Free(raw_target as void *)
     end
     ret ok
 end

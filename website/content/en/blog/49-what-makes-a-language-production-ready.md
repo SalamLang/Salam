@@ -118,7 +118,7 @@ func main:
         try:
             println "listening on", parse_port(text)
         catch e:
-            println "config error:", e.to_str()
+            println "config error:", e.ToStr()
         end
     end
 end

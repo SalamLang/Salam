@@ -40,7 +40,7 @@ import os
 
 func main:
     args := os.Args()
-    if args.len() < 2:
+    if args.Len() < 2:
         println "usage: inspect model.gguf"
         ret 1
     end
@@ -48,7 +48,7 @@ func main:
     try:
         g = gguf.LoadGguf(args.Get(1))
     catch e:
-        println "not a readable GGUF file:", e.to_str()
+        println "not a readable GGUF file:", e.ToStr()
         ret 1
     end
     arch := g.MetaStr("general.architecture")
@@ -56,12 +56,12 @@ func main:
     println "layers:", g.MetaInt(arch + ".block_count", 0)
     println "context:", g.MetaInt(arch + ".context_length", 0)
     mut unreadable := 0
-    repeat g.tensors.len() in i:
+    repeat g.tensors.Len() in i:
         if gguf.TensorBytes(g, i) < 0:
             unreadable++
         end
     end
-    println g.tensors.len(), "tensors,", unreadable, "in a weight type this package cannot expand"
+    println g.tensors.Len(), "tensors,", unreadable, "in a weight type this package cannot expand"
     g.Free()
 end
 ```
@@ -94,7 +94,7 @@ import conv
 
 func main:
     args := os.Args()
-    if args.len() < 6:
+    if args.Len() < 6:
         println "usage: classify model.onnx f1 f2 f3 f4"
         ret 1
     end
@@ -153,7 +153,7 @@ func main:
     mut flat := tensor.Reshape(scores, flat_shape)
     mut weights := tensor.Softmax(flat)
     repeat 4 in i:
-        println names[i], conv.FormatFloatPrec(flat.at(i), 2), conv.FormatFloatPrec(weights.at(i), 3)
+        println names[i], conv.FormatFloatPrec(flat.At(i), 2), conv.FormatFloatPrec(weights.At(i), 3)
     end
     println "closest:", names[tensor.ArgMaxAll(weights)]
     tensor.Free(docs)
@@ -208,19 +208,19 @@ func main:
     mut tape := autograd.NewTape(1)
     repeat 600 in step:
         tape.Reset()
-        store.zero_grad()
+        store.ZeroGrad()
         logits := net.Forward(tape, store, autograd.Input(tape, x))
         loss := autograd.BCEWithLogits(tape, logits, autograd.Constant(tape, y))
         autograd.Backward(tape, loss)
         adam.Step(store)
         if step % 200 == 0:
-            println "step", step, "loss below 0.1:", autograd.Value(tape, loss).at(0) < 0.1
+            println "step", step, "loss below 0.1:", autograd.Value(tape, loss).At(0) < 0.1
         end
     end
     tape.Reset()
     probs := tensor.Sigmoid(autograd.Value(tape, net.Forward(tape, store, autograd.Input(tape, x))))
     repeat 4 in i:
-        println x.at2(i, 0), "xor", x.at2(i, 1), "->", (probs.at(i) + 0.5) as int
+        println x.At2(i, 0), "xor", x.At2(i, 1), "->", (probs.At(i) + 0.5) as int
     end
     tape.Free()
     adam.Free()

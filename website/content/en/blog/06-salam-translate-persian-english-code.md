@@ -61,7 +61,7 @@ func main:
             println "near:", d
         end
     end
-    println "points:", points.len(), true
+    println "points:", points.Len(), true
 end
 ```
 

@@ -124,14 +124,14 @@ The most reliable way to get a Persian program today is to let the generator wor
 
 ```salam
 func average(scores: Vector<int>): f64:
-    if scores.len() == 0:
+    if scores.Len() == 0:
         ret 0.0
     end
     mut sum := 0
     each s in scores:
         sum += s
     end
-    ret (sum as f64) / (scores.len() as f64)
+    ret (sum as f64) / (scores.Len() as f64)
 end
 
 func main:

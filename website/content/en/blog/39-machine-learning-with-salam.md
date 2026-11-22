@@ -90,8 +90,8 @@ func main:
         loss := autograd.Sum(tape, autograd.Mul(tape, diff, diff))
         autograd.Backward(tape, loss)
         if step % 10 == 0:
-            value := autograd.Value(tape, loss).at(0) as f64
-            println "step", step, "w", conv.FormatFloatPrec(w.at(0) as f64, 4), "loss", conv.FormatFloatPrec(value, 6)
+            value := autograd.Value(tape, loss).At(0) as f64
+            println "step", step, "w", conv.FormatFloatPrec(w.At(0) as f64, 4), "loss", conv.FormatFloatPrec(value, 6)
         end
         mut g := autograd.Grad(tape, x)
         tensor.AddScaled(w, g, -0.1)
@@ -141,19 +141,19 @@ func main:
     mut tape := autograd.NewTape(1)
     repeat 600 in step:
         tape.Reset()
-        store.zero_grad()
+        store.ZeroGrad()
         logits := model.Forward(tape, store, autograd.Input(tape, x))
         loss := autograd.BCEWithLogits(tape, logits, autograd.Constant(tape, y))
         autograd.Backward(tape, loss)
         opt.Step(store)
         if step % 200 == 0:
-            println "step", step, "loss below 0.1:", autograd.Value(tape, loss).at(0) < 0.1
+            println "step", step, "loss below 0.1:", autograd.Value(tape, loss).At(0) < 0.1
         end
     end
     tape.Reset()
     probs := tensor.Sigmoid(autograd.Value(tape, model.Forward(tape, store, autograd.Input(tape, x))))
     repeat 4 in i:
-        println x.at2(i, 0), "xor", x.at2(i, 1), "->", (probs.at(i) + 0.5) as int
+        println x.At2(i, 0), "xor", x.At2(i, 1), "->", (probs.At(i) + 0.5) as int
     end
     tape.Free()
     opt.Free()
@@ -194,7 +194,7 @@ func main:
     mut passed := build(10, 1, "0 0 0 0 1 1 1 1 1 1")
     mut tree := ml.DecisionTree { max_depth = 2 }
     defer tree.Free()
-    println "trained:", tree.Fit(hours, passed), "nodes:", tree.node_count()
+    println "trained:", tree.Fit(hours, passed), "nodes:", tree.NodeCount()
     mut pred := tree.Predict(hours)
     println "training accuracy:", ml.Accuracy(passed, pred)
     mut students := build(3, 2, "1 9 5 5 10 4")

@@ -896,7 +896,7 @@ func main:
     try:                                 // calls inside need no 'try'
         println load_config("80"), port
     catch e:                             // e: Error (kind, message, code, path, line, column)
-        println e.to_str()
+        println e.ToStr()
     end
 end
 ```

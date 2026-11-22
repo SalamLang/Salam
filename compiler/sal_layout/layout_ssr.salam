@@ -1,0 +1,276 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import os
+import str
+
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include at "../ast.salam"
+include lp "../langpack.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include i18 "../i18n.salam"
+
+mut g_lo_ssr := false
+
+mut g_lo_ssr_file := ""
+
+func sv_name(fa: bool, en: str): str:
+    if not fa:
+        ret en
+    end
+    if str.Equals(en, "PageNop"):
+        ret "بی اثر"
+    end
+    if str.Equals(en, "PageHtml"):
+        ret "امن سازی اچ تی ام ال"
+    end
+    if str.Equals(en, "PageUrlAttr"):
+        ret "امن سازی نشانی"
+    end
+    if str.Equals(en, "PageCss"):
+        ret "امن سازی سی اس اس"
+    end
+    if str.Equals(en, "PageSkip"):
+        ret "پرش از ناحیه"
+    end
+    if str.Equals(en, "PageSkipped"):
+        ret "ناحیه پریده شد"
+    end
+    if str.Equals(en, "PageWrite"):
+        ret "نوشتن نشانی"
+    end
+    if str.Equals(en, "PageTitle"):
+        ret "عنوان صفحه"
+    end
+    if str.Equals(en, "PageNext"):
+        ret "ناحیه بعدی"
+    end
+    if str.Equals(en, "PageNum"):
+        ret "شماره ناحیه"
+    end
+    if str.Equals(en, "PageSplice"):
+        ret "جایگذاری ناحیه"
+    end
+    if str.Equals(en, "PageAfter"):
+        ret "پس از ناحیه"
+    end
+    if str.Equals(en, "PageBegin"):
+        ret "آغاز صفحه"
+    end
+    if str.Equals(en, "PageEnd"):
+        ret "پایان صفحه"
+    end
+    if str.Equals(en, "PageUrl"):
+        ret "نشانی صفحه"
+    end
+    if str.Equals(en, "PageShell"):
+        ret "پوسته صفحه"
+    end
+    if str.Equals(en, "PageRespond"):
+        ret "پاسخ صفحه کامل"
+    end
+    if str.Equals(en, "PageServe"):
+        ret "اجرای سرور صفحه"
+    end
+    ret en
+end
+
+func sv_call(fa: bool, en: str): str:
+    ret (fa ? "برگه رندر" : "ssrpage") + "." + sv_name(fa, en)
+end
+
+func sv_has_func(a &: at.Ast, prog: int, name: str): bool:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func sv_runtime_source(nm: LnNames, fa: bool): str:
+    s := nm.t_str
+    i := nm.t_int
+    b := nm.t_bool
+    mut t := "import " + (fa ? "شبکه.داخلی.برگه رندر" : "net.internal.ssrpage") + "\n\n"
+    t += "func salamWsHtml(__salam_s: " + s + "): " + s + ":\n    ret " + sv_call(fa, "PageHtml") + "(__salam_s)\nend\n\n"
+    t += "func salamWsUrl(__salam_s: " + s + "): " + s + ":\n    ret " + sv_call(fa, "PageUrlAttr") + "(__salam_s)\nend\n\n"
+    t += "func salamWsCss(__salam_s: " + s + "): " + s + ":\n    ret " + sv_call(fa, "PageCss") + "(__salam_s)\nend\n\n"
+    t += "func salamWsStyle(__salam_p: " + i + ", __salam_t: " + i + ", __salam_s: " + s + "): " + s + ":\n    " + sv_call(fa, "PageSkip") + "()\n    ret \"\"\nend\n\n"
+    t += "func salamWsTouch(__salam_i: " + i + "):\n    " + sv_call(fa, "PageNop") + "(0)\nend\n\n"
+    t += "func salamWsCur(__salam_i: " + i + "): " + i + ":\n    " + sv_call(fa, "PageSkip") + "()\n    ret 0\nend\n\n"
+    t += "func salamWsSlot(__salam_i: " + i + ", __salam_k: " + s + "):\n    " + sv_call(fa, "PageSkip") + "()\nend\n\n"
+    t += "func salamWsFresh(): " + b + ":\n    " + sv_call(fa, "PageSkip") + "()\n    ret true\nend\n\n"
+    t += "func salamRouteWrite(__salam_u: " + s + ", __salam_how: " + i + "):\n    " + sv_call(fa, "PageWrite") + "(__salam_u)\nend\n\n"
+    t += "func salamRouteMove(__salam_d: " + i + "):\n    " + sv_call(fa, "PageNop") + "(0)\nend\n\n"
+    t += "func salamRouteTitle(__salam_t: " + s + "):\n    " + sv_call(fa, "PageTitle") + "(__salam_t)\nend\n\n"
+    ret t
+end
+
+func sv_server_source(nm: LnNames, fa: bool, entry: str, count: int, routes: bool, base: str, a &: at.Ast, prog: int): str:
+    s := nm.t_str
+    i := nm.t_int
+    mut t := ""
+    if not sv_has_func(a, prog, "__salam_register_server_funcs"):
+        t += "func __salam_register_server_funcs():\n    " + sv_call(fa, "PageNop") + "(0)\nend\n\n"
+    end
+    if not sv_has_func(a, prog, "__salam_ssr_render_begin"):
+        t += "func __salam_ssr_render_begin():\n    " + sv_call(fa, "PageNop") + "(1)\nend\n\n"
+    end
+    if not sv_has_func(a, prog, "__salam_ssr_render_end"):
+        t += "func __salam_ssr_render_end(): " + s + ":\n    ret \"{}\"\nend\n\n"
+    end
+    t += "func __salam_ssr_view(__salam_n: " + i + "): " + s + ":\n"
+    repeat count in k:
+        ks := co.I64Toa(k as i64)
+        t += "    if __salam_n == " + ks + ":\n"
+        if ws_kind(k) == WS_SINGLE:
+            t += "        __salam_init_" + ks + "()\n"
+        end
+        t += "        __salam_h := __salam_view_" + ks + "()\n"
+        t += "        if " + sv_call(fa, "PageSkipped") + "():\n            ret \"\"\n        end\n"
+        t += "        ret __salam_ssr_fill(__salam_h)\n    end\n"
+    end
+    t += "    ret \"\"\nend\n\n"
+    t += "func __salam_ssr_fill(__salam_h: " + s + "): " + s + ":\n"
+    t += "    mut __salam_o := __salam_h\n    mut __salam_p := 0\n"
+    t += "    until __salam_p >= 0:\n"
+    t += "        __salam_at := " + sv_call(fa, "PageNext") + "(__salam_o, __salam_p)\n"
+    t += "        if __salam_at < 0:\n            __salam_p = 0 - 1\n        else:\n"
+    t += "            __salam_n := " + sv_call(fa, "PageNum") + "()\n"
+    t += "            __salam_in := __salam_ssr_view(__salam_n)\n"
+    t += "            __salam_o = " + sv_call(fa, "PageSplice") + "(__salam_o, __salam_at, __salam_n, __salam_in)\n"
+    t += "            __salam_p = " + sv_call(fa, "PageAfter") + "(__salam_at, __salam_n, __salam_in)\n"
+    t += "        end\n    end\n    ret __salam_o\nend\n\n"
+    t += "func __salam_ssr_page(__salam_c: " + nm.t_i64 + "):\n"
+    t += "    " + sv_call(fa, "PageBegin") + "()\n"
+    t += "    __salam_u := " + sv_call(fa, "PageUrl") + "(__salam_c)\n"
+    if routes:
+        t += "    __salam_route_set(__salam_u, 2)\n"
+    end
+    t += "    __salam_ssr_render_begin()\n"
+    t += "    __salam_d := __salam_ssr_fill(" + sv_call(fa, "PageShell") + "())\n"
+    t += "    __salam_k := __salam_ssr_render_end()\n"
+    t += "    " + sv_call(fa, "PageRespond") + "(__salam_c, __salam_u, " + (routes ? "__salam_route_pattern()" : "\"/\"") + ", __salam_d, __salam_k)\n"
+    t += "    " + sv_call(fa, "PageEnd") + "()\nend\n\n"
+    t += "func " + entry + ":\n    __salam_register_server_funcs()\n    " + sv_call(fa, "PageServe") + "(__salam_ssr_page, " + ln_quote(base) + ")\nend\n"
+    ret t
+end
+
+func sv_strip_layout(a &: at.Ast, prog: int):
+    mut pn := at.Get(a, prog)
+    mut kept := Vector {} as Vector<int>
+    each id in pn.list:
+        kd := at.KindOf(a, id)
+        if kd == at.AST_LAYOUT_COMPONENT:
+            continue
+        end
+        if kd == at.AST_LAYOUT_BLOCK and str.Len(at.Get(a, id).name) == 0:
+            mut bn := at.Get(a, id)
+            bn.view_glue = true
+            at.Put(a, id, bn)
+        end
+        kept.Push(id)
+    end
+    mut old := pn.list
+    pn.list = kept
+    at.Put(a, prog, pn)
+    old.Free()
+end
+
+pub func SsrActive(): bool:
+    ret g_lo_ssr
+end
+
+pub func SsrPrepared(file: str): bool:
+    ret str.Len(g_lo_ssr_file) > 0 and str.Equals(g_lo_ssr_file, file)
+end
+
+pub func PrepareServerPage(
+    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str
+): bool:
+    if prog == 0:
+        ret false
+    end
+    lb := find_layout_block(a, prog)
+    if lb == 0:
+        ret true
+    end
+    entry := lp.Entry(pack)
+    repeat at.ChildCount(a, prog) in mi:
+        d := at.Get(a, at.Child(a, prog, mi))
+        if d.kind == at.AST_FUNC_DEF and (str.Equals(d.name, "main") or lp.IdentEqual(d.name, entry)):
+            lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("page build --ssr writes the server entry function itself; remove the 'main' function from the page file"))
+            ret false
+        end
+    end
+    g_lo_ssr = true
+    before := g_lo_expand_errors
+    lo_base := lo_dir_of(file)
+    g_lo_root_file = file
+    eerr := ExpandPage(log, pack, ct, a, prog, lo_base)
+    if eerr > 0 or g_lo_expand_errors > before:
+        g_lo_ssr = false
+        ret false
+    end
+    _ev := HoistEventHandlers(a, prog)
+    _ws := PrepareWebState(log, pack, a, prog, file)
+    if RoutesActive() and RoutesHash():
+        g_lo_ssr = false
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("page build --ssr needs history routes: remove 'mode = hash' from the entry page"))
+        ret false
+    end
+    is_fa := str.Equals(lp.Code(pack), "fa")
+    nm := ln_names(pack)
+    count := WebStateCount()
+    routes := RoutesActive()
+    mut text := sv_runtime_source(nm, is_fa)
+    text += sv_server_source(nm, is_fa, entry, count, routes, RoutesBase(), a, prog)
+    text = str.Replace(text, "\nfunc ", "\npub func ")
+    if str.StartsWith(text, "func "):
+        text = "pub " + text
+    end
+    if is_fa:
+        text = ln_to_fa(text, pack)
+    end
+    if str.Len(os.Env("SALAM_SSR_DUMP")) > 0:
+        println text
+    end
+    base := at.Count(a)
+    sp := ln_parse(log, a, text, file, is_fa ? pack : lp.Load("en"))
+    g_lo_ssr = false
+    if sp == 0:
+        ret false
+    end
+    mut mine := Vector {} as Vector<int>
+    defer mine.Free()
+    repeat at.ChildCount(a, sp) in ci:
+        cid := at.Child(a, sp, ci)
+        if at.KindOf(a, cid) == at.AST_IMPORT and lo_has_import(a, prog, at.Get(a, cid).name):
+            continue
+        end
+        lo_span_tree(a, cid, lb, base)
+        at.AddChild(a, prog, cid)
+        mine.Push(cid)
+    end
+    lo_rt_order(a, prog, mine)
+    sv_strip_layout(a, prog)
+    g_lo_ssr_file = str.Clone(file)
+    lg.Log(log, lg.PH_DRIVER, lg.LOG_INFO, "page " + file + " compiled for the server")
+    ret true
+end

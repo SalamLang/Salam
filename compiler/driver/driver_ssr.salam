@@ -18,6 +18,8 @@ import os.process
 import str
 import io
 import time
+import net.tcp
+import net.http
 
 include lg "../logger.salam"
 include i18 "../i18n.salam"
@@ -55,17 +57,58 @@ func ssr_lang_flag(opt: Dr): str:
     ret " --lang=" + dev_quote(opt.lang)
 end
 
-func ssr_inside(dir: str, root: str): bool:
-    if str.Equals(dir, root):
-        ret true
+func ssr_trim(p: str): str:
+    mut t := p
+    until str.Len(t) > 1 and (str.EndsWith(t, "/") or str.EndsWith(t, "\\")):
+        t = str.Substr(t, 0, str.Len(t) - 1)
     end
-    ret str.StartsWith(root, dir + "/")
+    ret t
 end
 
-func ssr_render_build(entry: str, out: str, lang: str): bool:
+func ssr_inside(dir: str, root: str): bool:
+    d := ssr_trim(dir)
+    r := ssr_trim(root)
+    if str.Equals(d, r):
+        ret true
+    end
+    ret str.StartsWith(r, d + "/")
+end
+
+func ssr_forward(opt: Dr): str:
+    mut t := ""
+    each d in opt.defines:
+        t += " --define=" + dev_quote(d)
+    end
+    each c in opt.consts:
+        t += " --const=" + dev_quote(c)
+    end
+    ret t
+end
+
+func ssr_scan_assets(dir: str, sig &: i64, depth: int):
+    if depth > 8 or not os.IsDir(dir):
+        ret
+    end
+    entries := os.ListDir(dir)
+    defer entries.Free()
+    each name in entries:
+        full := join_path2(dir, name)
+        if os.IsDir(full):
+            ssr_scan_assets(full, sig, depth + 1)
+        else:
+            mut size := 0 as i64
+            mut mt := 0 as i64
+            if http.FileStat(full, size, mt):
+                sig = (sig * 31 + mt % 1000003 + size % 1000003 + str.Len(full) as i64) % 1000000007
+            end
+        end
+    end
+end
+
+func ssr_render_build(entry: str, out: str, lang: str, fwd: str): bool:
     _rm := os.RemoveAll(out)
     log_file := out + ".log"
-    cmd := dev_quote(ssr_self()) + " page build --ssr=" + dev_quote(out) + " " + dev_quote(entry) + " --no-color --log-level=error" + lang + " > " + dev_quote(log_file) + " 2>&1"
+    cmd := dev_quote(ssr_self()) + " page build --ssr=" + dev_quote(out) + " " + dev_quote(entry) + " --no-color --log-level=error" + lang + fwd + " > " + dev_quote(log_file) + " 2>&1"
     rc := os.Run(cmd)
     if rc != 0:
         io.EPrint(io.ReadFile(log_file))
@@ -79,23 +122,14 @@ func ssr_launch(out: str, host: str, port: int): process.Child:
     cmd.Env("HOST", host)
     cmd.Env("PORT", co.I64Toa(port as i64))
     cmd.Env("SALAM_PUBLIC", join_path2(out, "public"))
-    cmd.Piped()
     ret process.Launch(cmd)
 end
 
-func ssr_wait_listening(child &: process.Child): bool:
-    mut tries := 0
-    until tries < 100:
-        ck := child.ReadLine(100)
-        if str.Contains(ck.data, "listening on"):
-            ret true
-        end
-        if not child.Poll():
-            ret false
-        end
-        tries++
+func ssr_wait_listening(child &: process.Child, host: str, port: int): bool:
+    if not child.Poll():
+        ret false
     end
-    ret false
+    ret tcp.WaitListening(host, port, 10000) and child.Poll()
 end
 
 pub func SsrBuild(opt &: Dr): int:
@@ -105,6 +139,10 @@ pub func SsrBuild(opt &: Dr): int:
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
         )
+        ret 2
+    end
+    if SALAM_OS_WINDOWS:
+        io.EPrintln("salam: page build --ssr is not available on Windows yet")
         ret 2
     end
     if not ui_web_only(lgr, opt):
@@ -120,8 +158,9 @@ pub func SsrBuild(opt &: Dr): int:
     if str.Len(out) == 0:
         out = "dist"
     end
-    out = abs_of(out)
-    if ssr_inside(out, root):
+    out = ssr_trim(abs_of(out))
+    assets := join_path2(root, "public")
+    if ssr_inside(out, root) or ssr_inside(assets, out):
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("the output folder '%s' contains the project; choose another one"), co.ArgStr(out))
         )
@@ -135,7 +174,6 @@ pub func SsrBuild(opt &: Dr): int:
         )
         ret 2
     end
-    assets := join_path2(root, "public")
     if os.IsDir(assets):
         _cp := os.CopyTree(assets, pub_dir)
     end
@@ -156,6 +194,12 @@ pub func SsrBuild(opt &: Dr): int:
     if rc != 0:
         ret rc
     end
+    if not os.Exists(join_path2(pub_dir, k_ssr_shell)):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("page build --ssr needs a page: block in the entry file")
+        )
+        ret 1
+    end
     exe_file := join_path2(out, SALAM_OS_WINDOWS ? "server.exe" : "server")
     _old := os.Remove(exe_file)
     scratch := join_path2(os.TempDir(), "salam-ssr-" + co.I64Toa(os.Pid() as i64) + "-" + co.I64Toa(time.NowNanos()))
@@ -163,7 +207,7 @@ pub func SsrBuild(opt &: Dr): int:
         ret 2
     end
     log_file := join_path2(scratch, "build.log")
-    cmd := "cd " + dev_quote(scratch) + " && " + dev_quote(ssr_self()) + " build " + dev_quote(entry) + " --ssr-server --output=" + dev_quote(exe_file) + " --no-color --log-level=error" + ssr_lang_flag(opt) + " > " + dev_quote(log_file) + " 2>&1"
+    cmd := "cd " + dev_quote(scratch) + " && " + dev_quote(ssr_self()) + " build " + dev_quote(entry) + " --ssr-server --output=" + dev_quote(exe_file) + " --no-color --log-level=error" + ssr_lang_flag(opt) + ssr_forward(opt) + " > " + dev_quote(log_file) + " 2>&1"
     src := os.Run(cmd)
     if src != 0 or not os.Exists(exe_file):
         io.EPrint(io.ReadFile(log_file))
@@ -204,17 +248,19 @@ pub func ServeRender(opt &: Dr): int:
         ret 2
     end
     lang := ssr_lang_flag(opt)
+    fwd := ssr_forward(opt)
     mut slot := 0
     mut out := join_path2(work, "a")
     mut sig := 0 as i64
     dev_scan(root, sig, 0)
-    if not ssr_render_build(entry, out, lang):
+    ssr_scan_assets(join_path2(root, "public"), sig, 0)
+    if not ssr_render_build(entry, out, lang, fwd):
         io.EPrintln("salam: the first build failed")
         _rm := os.RemoveAll(work)
         ret 1
     end
     mut child := ssr_launch(out, host, port)
-    if not ssr_wait_listening(child):
+    if not ssr_wait_listening(child, host, port):
         io.EPrintln("salam: the server did not start on " + host + ":" + co.I64Toa(port as i64))
         _k := child.Kill()
         child.Close()
@@ -227,25 +273,34 @@ pub func ServeRender(opt &: Dr): int:
         time.Sleep(500)
         mut now := 0 as i64
         dev_scan(root, now, 0)
+        ssr_scan_assets(join_path2(root, "public"), now, 0)
         if now == sig:
             continue
         end
         sig = now
         next := join_path2(work, slot == 0 ? "b" : "a")
-        if not ssr_render_build(entry, next, lang):
+        if not ssr_render_build(entry, next, lang, fwd):
             io.EPrintln("salam: build failed, the old server keeps running")
             continue
         end
         _k2 := child.Kill()
         _w := child.Wait(2000)
         child.Close()
-        out = next
-        slot = slot == 0 ? 1 : 0
-        child = ssr_launch(out, host, port)
-        if not ssr_wait_listening(child):
-            io.EPrintln("salam: the rebuilt server did not start")
-        else:
+        mut fresh := ssr_launch(next, host, port)
+        if ssr_wait_listening(fresh, host, port):
+            child = fresh
+            out = next
+            slot = slot == 0 ? 1 : 0
             io.EPrintln("salam: rebuilt " + entry)
+        else:
+            _k3 := fresh.Kill()
+            fresh.Close()
+            io.EPrintln("salam: the rebuilt server did not start, restarting the previous one")
+            child = ssr_launch(out, host, port)
+            if not ssr_wait_listening(child, host, port):
+                io.EPrintln("salam: the previous server did not start either; save a file to try again")
+            end
+            sig = 0 - 1
         end
     end
 end

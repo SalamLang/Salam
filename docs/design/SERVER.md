@@ -164,24 +164,53 @@ Contract with the server func lowering (`feat/server-func-codegen`):
 
 ## Hydration
 
-- Every element that has an event, a condition or a bound value carries a stable
-  id attribute (`data-s`). Ids come from the same site numbering the web
-  runtime uses for its scopes, so server and client agree without a walk.
-- The bundle reads `__salam`, restores the state, and attaches handlers and
-  scope tracking to the existing nodes. It does not render again.
-- The call cache is keyed by function name, a hash of the arguments, and the
-  occurrence number within the render, so two identical calls that returned
-  different values replay in order. Treat a `server func` as idempotent for the
-  same arguments inside one request; a difference is only a hydration mismatch
-  (re-render of that scope), never an error.
-- The call cache is keyed as above. A
-  `server func` call during hydration that hits the cache returns at once and
-  does not fetch.
-- If an id is missing or a node differs from what the scope expects, that scope
-  re-renders from state and a line goes to the console (and to the trace with
-  `SALAM_UI_TRACE=1`). A mismatch is never fatal.
-- R1 to R12 (`UI_DSL.md`) apply unchanged. The R11 tests run in a third mode,
-  server render then hydrate, with the same expected output.
+What was built (the smallest design that works):
+
+- The scope is the region, not the element. Every reactive region is already
+  wrapped in `<!--salam:N-->` and `<!--/salam:N-->` markers, and the markers are
+  the same in the server HTML and in the client render, because both come from
+  the same lowering. There are no per element `data-s` ids: event handlers are
+  inline (`onclick="__sl_ev_3()"`) and survive in the server HTML, and the
+  client finds a region by its marker.
+- The bundle reads `<script type="application/json" id="__salam">` when it
+  starts (`window.__salam_state`, with `path`, `pattern`, `status`, `calls`) and
+  sets a hydrating flag until the first mount of every region is done.
+- Mounting a region renders its view from the state into a template and
+  patches the nodes that are already there (`__salam_kids`), so matching
+  server nodes are kept, not replaced. Test: no element is removed during
+  hydration.
+- Mismatch: while hydrating, a region whose server nodes differ from its fresh
+  render (nested regions are compared empty, each is checked on its own turn)
+  logs `salam: hydration mismatch in region N, it is rendered again from the
+  state` through `console.warn` and the patch makes it equal. Nothing throws. A
+  region the server left empty (`each` rows with per row state, std style
+  values: `salamWsCur`, `salamWsSlot`, `salamWsFresh`, `salamWsStyle`) is simply
+  filled on load without a warning; the first paint is the server HTML.
+- Variable values are not serialized: views compute them from the route and the
+  initial values again. A value that only a server func can give travels in
+  the call cache.
+
+Call cache for server funcs (the contract with the server func stubs):
+
+- Key: `Name:HASH:N` where `HASH` is the 8 digit lower case hex FNV-1a (32 bit)
+  of the UTF-8 bytes of the argument JSON text (`{"id":3}`, the same text the
+  wire protocol sends) and `N` counts earlier calls with the same `Name:HASH`
+  in this render, from 0. So two identical calls that returned different values
+  replay in order.
+- Server: `ssrpage.PageCallKey(name, argsJson)` gives the key (call it before
+  `PageCallPut` for the same call), `ssrpage.PageCallPut(key, valueJson)` stores
+  the result, and the default `__salam_ssr_render_end()` returns
+  `ssrpage.PageCalls()`, a JSON object that is embedded as `calls`.
+- Browser: `__salam_call_key(name, argsJson)` returns the next key (it counts
+  occurrences from page load), and `__salam_call_cache_get(key)` returns the
+  stored value or `undefined`. A stub that gets a value returns it at once and
+  does not fetch. Keys are not consumed, a later call with a new occurrence
+  number goes to the network.
+- A difference between the cached and a fresh value is not an error: the next
+  state change renders it.
+
+Not built: serializing page variables, per element ids, hydration of `each`
+rows with per row state on the server (they are filled by the bundle).
 
 ## Build and run
 
@@ -246,5 +275,5 @@ app and the site share one set of functions, and no secret is in the binary.
 2. Server side runtime package `net/ssr`: registry, endpoints, token, `request()`, `env`.
 3. `salam page build --ssr`: generated server, render per route, guards, 404 (done).
 4. Stubs: JS stub and native stub; `load(...)` integration; E286, W280.
-5. Hydration: ids, embedded state, call cache, per scope fallback.
+5. Hydration: embedded state, call cache keys, per scope warning (done).
 6. `salam serve --render` with rebuild (done, no browser reload); docs and website pages (en and fa).

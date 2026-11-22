@@ -1,6 +1,6 @@
 # Server rendering and server functions
 
-Status: proposed (2026-11-22). Builds on `ROUTING.md` and the page language
+Status: step 3 and the render part of step 6 are implemented (2026-11-22); the rest is proposed. Builds on `ROUTING.md` and the page language
 (`UI_DSL.md`, `UI_BEHAVIOUR.md`).
 
 ## Goals
@@ -131,6 +131,37 @@ response  {"ok": true,  "value": {...}}
 
 Streaming and incremental regeneration are out of the first version.
 
+## Generated server
+
+`salam page build --ssr` compiles the project twice. The first run is the web
+build (shell HTML with `<!--salam:N--><!--/salam:N-->` regions, CSS, bundle)
+into `dist/public`. The second run lowers the same page AST for a native
+program: `ExpandPage`, `PrepareWebState`, `PrepareViews`, then
+`PrepareServerPage` (`compiler/sal_layout/layout_ssr.salam`), then semantic
+analysis and the normal code generator. The driver flag is `opt.ssr_server`.
+
+Contract with the server func lowering (`feat/server-func-codegen`):
+
+- The hook is `func __salam_register_server_funcs()`: top level, package
+  main, no parameters, no result. The generated `main` calls it once before it
+  listens. It registers every server func with `net/ssr` (`ssr.Register`).
+- `PrepareServerPage` runs after `PrepareViews` and before `sm.Run`. It scans
+  the main program's top level and appends an empty definition only when no
+  function of that name exists. So the server func pass must add its function
+  to the AST before semantic analysis (it may run before or after
+  `PrepareServerPage`; if it adds one first, nothing is appended).
+- The in-render hooks have the same rule and a no-op default:
+  `func __salam_ssr_render_begin()` runs before the layout chain and route
+  component of a request are rendered, and `func __salam_ssr_render_end(): str`
+  runs after and returns the call cache as a JSON object text (`{}` by
+  default); the server puts it into the `__salam` state script as `"calls"`.
+  A `server func` call inside a component body runs in process between the two.
+- Render calls are serialized by one mutex (route and view state are globals),
+  so the hooks never run concurrently.
+- The generated `main` reads `PORT` (default 8080, `0` picks a free port) and
+  `HOST`, serves `dist/public` first (`ssr.SetStaticDir`), and renders every
+  other GET through `ssr.SetRender`. It prints `listening on http://HOST:PORT`.
+
 ## Hydration
 
 - Every element that has an event, a condition or a bound value carries a stable
@@ -157,10 +188,19 @@ Streaming and incremental regeneration are out of the first version.
 | command | result |
 | --- | --- |
 | `salam page build` | static site, as today |
-| `salam page build --ssr` | `dist/server` (a native executable made from a generated Salam program: router, guards, renderers, function endpoints) and `dist/public` (bundle, CSS, assets, prerendered pages for routes with no parameters) |
-| `salam serve --render` | builds into a scratch directory, runs the server, rebuilds on save, reloads the browser |
+| `salam page build --ssr[=DIR] [project]` | `DIR/server` (a native executable made from the page AST lowered for the server: router, guards, renderers) and `DIR/public` (bundle, CSS, assets, prerendered pages for routes with no parameters and no guard); `DIR` defaults to `dist` |
+| `salam serve --render [project] [--port=N] [--host=H]` | builds into a scratch directory, runs the server, rebuilds on save and swaps the server; the browser is not reloaded yet |
 
-The generated server reads `PORT` and `HOST`, serves `dist/public` with
+`public/` of the project is copied into `DIR/public` first. The shell page (the
+web build with empty `<!--salam:N--><!--/salam:N-->` regions) is written to the
+hidden file `DIR/public/.shell.html`; the server fills the regions per request
+and never serves that file. Prerendered `index.html` copies are in `DIR/public`
+for CDNs, but the server renders every page itself (`ssr.PageInit` turns the
+static index lookup off). A project with `mode = hash` or its own `main`
+function is refused. Regions that need browser only state (`salamWsStyle`,
+per row state of `each`) are left empty by the server and filled by the bundle.
+
+The generated server reads `PORT` (`0` picks a free port) and `HOST`, serves `dist/public` with
 `ETag` and caching headers, and listens behind any reverse proxy. Backend
 addresses and secrets come from the environment through `std/env`.
 
@@ -204,7 +244,7 @@ app and the site share one set of functions, and no secret is in the binary.
 
 1. `server func` parse and checks (E285, E287, E288), no output change yet.
 2. Server side runtime package `net/ssr`: registry, endpoints, token, `request()`, `env`.
-3. `salam page build --ssr`: generated server, render per route, guards, 404.
+3. `salam page build --ssr`: generated server, render per route, guards, 404 (done).
 4. Stubs: JS stub and native stub; `load(...)` integration; E286, W280.
 5. Hydration: ids, embedded state, call cache, per scope fallback.
-6. `salam serve --render` with rebuild; docs and website pages (en and fa).
+6. `salam serve --render` with rebuild (done, no browser reload); docs and website pages (en and fa).

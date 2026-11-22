@@ -131,6 +131,37 @@ response  {"ok": true,  "value": {...}}
 
 Streaming and incremental regeneration are out of the first version.
 
+## Generated server
+
+`salam page build --ssr` compiles the project twice. The first run is the web
+build (shell HTML with `<!--salam:N--><!--/salam:N-->` regions, CSS, bundle)
+into `dist/public`. The second run lowers the same page AST for a native
+program: `ExpandPage`, `PrepareWebState`, `PrepareViews`, then
+`PrepareServerPage` (`compiler/sal_layout/layout_ssr.salam`), then semantic
+analysis and the normal code generator. The driver flag is `opt.ssr_server`.
+
+Contract with the server func lowering (`feat/server-func-codegen`):
+
+- The hook is `func __salam_register_server_funcs()`: top level, package
+  main, no parameters, no result. The generated `main` calls it once before it
+  listens. It registers every server func with `net/ssr` (`ssr.Register`).
+- `PrepareServerPage` runs after `PrepareViews` and before `sm.Run`. It scans
+  the main program's top level and appends an empty definition only when no
+  function of that name exists. So the server func pass must add its function
+  to the AST before semantic analysis (it may run before or after
+  `PrepareServerPage`; if it adds one first, nothing is appended).
+- The in-render hooks have the same rule and a no-op default:
+  `func __salam_ssr_render_begin()` runs before the layout chain and route
+  component of a request are rendered, and `func __salam_ssr_render_end(): str`
+  runs after and returns the call cache as a JSON object text (`{}` by
+  default); the server puts it into the `__salam` state script as `"calls"`.
+  A `server func` call inside a component body runs in process between the two.
+- Render calls are serialized by one mutex (route and view state are globals),
+  so the hooks never run concurrently.
+- The generated `main` reads `PORT` (default 8080, `0` picks a free port) and
+  `HOST`, serves `dist/public` first (`ssr.SetStaticDir`), and renders every
+  other GET through `ssr.SetRender`. It prints `listening on http://HOST:PORT`.
+
 ## Hydration
 
 - Every element that has an event, a condition or a bound value carries a stable

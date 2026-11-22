@@ -2855,7 +2855,8 @@ Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
   `std/gui/raylib` for games, the layout DSL (`salam page build`), the
   `android/`, `ios/` and `mobile/` projects.
 - Servers: `net/http` + `net/router`, middleware, cookies, sessions, swagger,
-  validation, `salam serve --config` (virtual hosts, redirects, FastCGI PHP
+  validation, `net.ssr` (server functions at `POST /_salam/fn/<Name>` with
+  origin and token checks, `ssr.Request()`, a page renderer hook), `salam serve --config` (virtual hosts, redirects, FastCGI PHP
   backends), `net.http2`, `net.websocket`, `grpc`, `graphql`, `net.proxy`, and
   the `db.*` drivers.
 - Data and ML: `ml`, `tensor`, `nn`, `autograd`, `onnx`, `gguf`, `opencv`,

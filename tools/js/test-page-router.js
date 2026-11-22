@@ -126,32 +126,48 @@ function check(name, ok, detail) {
   }
 
   await page.click("nav a >> nth=2");
+  let skipped = await pIs("Nothing at /admin");
+  check(
+    "a guard that is false skips its route",
+    skipped === "Nothing at /admin",
+    skipped,
+  );
+  w = await whereIs("/admin");
+  check("the address stays on the guarded path", w === "/admin", w);
+
+  await page.click("#tologin");
   w = await whereIs("/login");
-  check("a guard redirects", w === "/login", w);
-  check("the redirect target shows", !!(await page.$("#login")));
+  check("a link opens the sign in route", w === "/login", w);
 
   await page.click("#login");
   const admin = await pIs("Admin area");
   check(
-    "replace() after sign in opens the guarded route",
+    "page.route.Redirect after sign in opens the guarded route",
     admin === "Admin area",
     admin,
   );
   w = await whereIs("/admin");
-  check("replace() writes the address", w === "/admin", w);
+  check("page.route.Redirect writes the address", w === "/admin", w);
 
   await page.click("#signout");
-  w = await whereIs("/login");
-  check("signing out leaves the guarded route", w === "/login", w);
-  check("the sign in screen shows again", !!(await page.$("#login")));
+  skipped = await pIs("Nothing at /admin");
+  check(
+    "signing out leaves the guarded route",
+    skipped === "Nothing at /admin",
+    skipped,
+  );
 
   if (mode === "history") {
     await page.goto(url("/search?q=salam"));
     h = await h1Is("Home");
     check("a guard that reads the query shows its route", h === "Home", h);
     await page.goto(url("/search?q=blocked"));
-    w = await whereIs("/login");
-    check("a guard that reads the query redirects", w === "/login", w);
+    skipped = await pIs("Nothing at /search");
+    check(
+      "a guard that reads the query skips its route",
+      skipped === "Nothing at /search",
+      skipped,
+    );
   }
 
   await page.goto(url("/users/abc"));

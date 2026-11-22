@@ -110,11 +110,11 @@ echo "status $(get /user/abc)"
 
 echo "== GET /admin"
 echo "status $(get /admin)"
-echo "  location: $(sed -n 's/^[Ll]ocation: \(.*\)\r$/\1/p' head.txt | head -1)"
+has "$(printf '%s' "$w_missing" | sed 's#/nope#/admin#')" missing-text
 
 echo "== GET /admin/users"
 echo "status $(get /admin/users)"
-echo "  location: $(sed -n 's/^[Ll]ocation: \(.*\)\r$/\1/p' head.txt | head -1)"
+has "$(printf '%s' "$w_missing" | sed 's#/nope#/admin/users#')" missing-text
 
 echo "== GET /nope"
 echo "status $(get /nope)"

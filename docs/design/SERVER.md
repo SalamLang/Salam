@@ -301,6 +301,17 @@ the language yet; when it is, it wraps the same stub.
   (name based reachability from every non server definition). Native programs
   lose them through unreachable function removal, because the stub no longer
   mentions them.
+- Limits of the pruning: methods in `impl` blocks and struct methods are never
+  dropped, even when only a server func uses them, and what they call stays
+  too. They are also scanned for E286, so a method that uses `env` is an error
+  whenever its type is declared in the page program. Move such code into a
+  package the page does not import.
+- Limit of the web stub: `ssrweb.Call` is a synchronous `XMLHttpRequest`. A
+  call blocks the page until the answer arrives (browsers warn about it), and
+  a slow backend freezes the UI. There is no async path yet, because `load(...)`
+  (R9) is not in the language; when it is, it will wrap the same stub with a
+  non blocking request. Keep server funcs fast, and avoid calling one per
+  keystroke or per frame.
 - E286: a definition that stays in the web program and uses a member of `env`
   or `ssr` (`env.Get`, `ssr.Request`) is an error naming that member.
 - E289: a static web build (`salam page build` without a `server` setting)

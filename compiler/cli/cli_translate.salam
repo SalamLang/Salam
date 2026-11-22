@@ -36,6 +36,11 @@ include cc "../condcomp.salam"
 const TR_BIND_PKG := 1
 const TR_BIND_BUILTIN := 2
 const TR_BIND_USER := 3
+const TR_STATE_WORDS := "hover|اشاره|focus within|تمرکز درون|focus|تمرکز|active|فشردن|disabled|غیرفعال|checked|تیک\xE2\x80\x8Cخورده|invalid|نامعتبر|placeholder|جای\xE2\x80\x8Cنوشته|selection|گزینش"
+const TR_PAGE_API := "GoTo|برو|Redirect|هدایت|Back|عقب|Forward|جلو|Param|پارامتر|Query|پرسمان|route|مسیر"
+const TR_ROUTE_FIELDS := "path|نشانی|query|پرسمان|pattern|الگو"
+const TR_ROUTE_ATTRS := "mode|حالت|base|پایه|guard|نگهبان|redirect|هدایت|title|عنوان"
+const TR_ROUTE_MODES := "hash|هش|history|تاریخچه"
 
 k_tr_type := [
     "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar", "صحیح۸",
@@ -55,6 +60,7 @@ k_tr_type_alt := [
 k_tr_ctx := [
     "پیوند", "link", "ایستا", "static", "پویا", "dynamic", "چارچوب", "framework", "شامل", "use"
 ]
+
 
 mut tr_pkg_ready := false
 mut tr_pkg_root := ""
@@ -396,6 +402,127 @@ func tr_rule_group_text(toks: tok.TokenStream, first: int, last: int): str:
         j++
     end
     ret words
+end
+
+func tr_pair_list(name: str, table: str, to_fa: bool): str:
+    words := str.Split(table, "|")
+    defer words.Free()
+    mut k := 0
+    until k + 1 < words.Len():
+        if to_fa and lp.IdentEqual(name, words.Get(k)):
+            ret str.Clone(words.Get(k + 1))
+        end
+        if not to_fa and lp.IdentEqual(name, words.Get(k + 1)):
+            ret str.Clone(words.Get(k))
+        end
+        k += 2
+    end
+    ret ""
+end
+
+func tr_has_routes(toks: tok.TokenStream, n: int): bool:
+    repeat n - 1 in i:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_IDENT and (str.Equals(t.lexeme, "routes") or lp.IdentEqual(t.lexeme, "مسیرها")) and tok.StreamAt(toks, i + 1).kind == tok.TK_COLON:
+            ret true
+        end
+    end
+    ret false
+end
+
+func tr_is_routes_head(name: str, prev_kind: int, next_kind: int): bool:
+    ret next_kind == tok.TK_COLON and (prev_kind == tok.TK_STMT_END or prev_kind < 0) and (str.Equals(name, "routes") or lp.IdentEqual(name, "مسیرها"))
+end
+
+func tr_route_word(targetpack: int, name: str, prev_kind: int, next_kind: int, in_routes: bool, rattr: str, dot_on: str): str:
+    to_fa := targetpack == lp.LP_FA
+    if prev_kind == tok.TK_DOT:
+        if str.Equals(dot_on, "page") or lp.IdentEqual(dot_on, "صفحه"):
+            ret tr_pair_list(name, TR_PAGE_API, to_fa)
+        end
+        if str.Equals(dot_on, "route") or lp.IdentEqual(dot_on, "مسیر"):
+            ret tr_pair_list(name, TR_ROUTE_FIELDS, to_fa)
+        end
+        ret ""
+    end
+    if next_kind == tok.TK_COLON and (prev_kind == tok.TK_STMT_END or prev_kind < 0):
+        ret to_fa ? (str.Equals(name, "routes") ? "مسیرها" : "") : (lp.IdentEqual(name, "مسیرها") ? "routes" : "")
+    end
+    if in_routes and next_kind == tok.TK_ASSIGN:
+        ret tr_pair_list(name, TR_ROUTE_ATTRS, to_fa)
+    end
+    if in_routes and prev_kind == tok.TK_ASSIGN and (str.Equals(rattr, "mode") or lp.IdentEqual(rattr, "حالت")):
+        ret tr_pair_list(name, TR_ROUTE_MODES, to_fa)
+    end
+    ret ""
+end
+
+func tr_route_pattern(targetpack: int, lexeme: str): str:
+    mut body := ""
+    if str.Len(lexeme) >= 2 and str.StartsWith(lexeme, "\"") and str.EndsWith(lexeme, "\""):
+        body = str.Substr(lexeme, 1, str.Len(lexeme) - 2)
+    else str.Len(lexeme) >= 4 and str.StartsWith(lexeme, "«") and str.EndsWith(lexeme, "»"):
+        body = str.Substr(lexeme, 2, str.Len(lexeme) - 4)
+        if targetpack == lp.LP_FA or str.Contains(body, "\""):
+            ret lexeme
+        end
+    else:
+        ret lexeme
+    end
+    if not str.Contains(body, ":") and not str.Contains(body, "*"):
+        ret str.StartsWith(lexeme, "\"") ? lexeme : "\"" + body + "\""
+    end
+    segs := str.Split(body, "/")
+    defer segs.Free()
+    mut out := Vector {} as Vector<str>
+    defer out.Free()
+    each seg in segs:
+        if str.Len(seg) > 1 and (str.StartsWith(seg, ":") or str.StartsWith(seg, "*")):
+            lead := str.Substr(seg, 0, 1)
+            mut name := str.Substr(seg, 1, str.Len(seg) - 1)
+            mut tail := ""
+            if str.EndsWith(name, "?"):
+                tail = "?"
+                name = str.Substr(name, 0, str.Len(name) - 1)
+            end
+            if str.Len(name) > 0:
+                out.Push(lead + tr_safe_name(targetpack, name) + tail)
+                continue
+            end
+        end
+        out.Push(str.Clone(seg))
+    end
+    ret "\"" + str.Join(out, "/") + "\""
+end
+
+func tr_route_key(targetpack: int, lexeme: str): str:
+    if str.Len(lexeme) < 3 or not str.StartsWith(lexeme, "\"") or not str.EndsWith(lexeme, "\""):
+        ret lexeme
+    end
+    body := str.Substr(lexeme, 1, str.Len(lexeme) - 2)
+    if str.Len(body) == 0 or str.Contains(body, "\\") or str.Contains(body, "/") or str.Contains(body, " "):
+        ret lexeme
+    end
+    ret "\"" + tr_safe_name(targetpack, body) + "\""
+end
+
+func tr_page_word(kind: int, name: str, to_fa: bool, routes: bool): str:
+    if kind == tok.TK_LAYOUT_ELEMENT:
+        if routes:
+            m := tr_pair_list(name, "Outlet|نمای مسیر", to_fa)
+            if str.Len(m) > 0:
+                ret m
+            end
+        end
+        ret tr_pair_list(name, TR_STATE_WORDS, to_fa)
+    end
+    if routes:
+        m := tr_pair_list(name, "to|مقصد", to_fa)
+        if str.Len(m) > 0:
+            ret m
+        end
+    end
+    ret tr_pair_list(name, "bind|پیوند", to_fa)
 end
 
 func tr_is_link_word(name: str): bool:
@@ -1234,9 +1361,21 @@ func tr_has(names: Vector<str>, w: str): bool:
     ret false
 end
 
-func tr_joins_name_word(toks: tok.TokenStream, i: int, prev_kind: int, prev_ident: str, in_import: bool, in_rule: bool, gap: str): bool:
+func tr_layout_call_run(toks: tok.TokenStream, i: int, n: int): bool:
+    line := tok.StreamAt(toks, i).begin_line
+    mut j := i
+    until j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, j + 1).begin_line == line:
+        j++
+    end
+    ret j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_LPAREN
+end
+
+func tr_joins_name_word(toks: tok.TokenStream, i: int, n: int, prev_kind: int, prev_ident: str, in_import: bool, in_rule: bool, in_lambda: bool, gap: str): bool:
     t := tok.StreamAt(toks, i)
-    if (t.kind != tok.TK_IDENT and t.kind != tok.TK_KW_INPUT) or prev_kind != tok.TK_IDENT or in_import or t.layout_mode or not tr_prev_same_line(toks, i):
+    if (t.kind != tok.TK_IDENT and t.kind != tok.TK_KW_INPUT) or prev_kind != tok.TK_IDENT or in_import or not tr_prev_same_line(toks, i):
+        ret false
+    end
+    if t.layout_mode and not in_lambda and not tr_layout_call_run(toks, i, n):
         ret false
     end
     if str.Len(str.Replace(gap, " ", "")) > 0:
@@ -1665,6 +1804,9 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
     mut css_list_paren := 0
     mut const_last := 0
     names := tr_declared_names(toks, n)
+    has_routes := tr_has_routes(toks, n)
+    mut in_routes := false
+    mut routes_attr := ""
     defer names.Free()
     tr_build_overrides(targetpack, names)
     method_names := tr_method_names(toks, n)
@@ -1731,7 +1873,7 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
         mut ei := t.end_index as int
         if bi > cursor:
             gap := str.Substr(text, cursor, bi - cursor)
-            if from_fa and targetpack != lp.LP_FA and tr_joins_name_word(toks, i, prev_kind, prev_ident, in_import, in_rule, gap):
+            if from_fa and targetpack != lp.LP_FA and not (in_routes and tr_next_kind(toks, i, n) == tok.TK_ASSIGN) and tr_joins_name_word(toks, i, n, prev_kind, prev_ident, in_import, in_rule, lam_depth > 0, gap):
                 co.SbPuts(sb, "_")
             else:
                 co.SbPuts(sb, gap)
@@ -1764,6 +1906,14 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             else:
                 skip_emit = true
             end
+        else t.kind == tok.TK_STRING and has_routes and prev_kind == tok.TK_LPAREN and i >= 2 and tok.StreamAt(toks, i - 2).kind == tok.TK_IDENT and (str.Equals(tok.StreamAt(toks, i - 2).lexeme, "Param") or lp.IdentEqual(tok.StreamAt(toks, i - 2).lexeme, "پارامتر")) and i >= 3 and tok.StreamAt(toks, i - 3).kind == tok.TK_DOT:
+            lexeme = tr_route_key(targetpack, t.lexeme)
+        else t.kind == tok.TK_STRING and in_routes and (prev_kind == tok.TK_STMT_END or prev_kind == tok.TK_COLON) and tr_next_kind(toks, i, n) == tok.TK_COLON:
+            lexeme = tr_route_pattern(targetpack, t.lexeme)
+        else t.kind == tok.TK_IDENT and prev_kind != tok.TK_DOT and not in_import and tr_next_kind(toks, i, n) == tok.TK_DOT and (str.Equals(t.lexeme, "page") or lp.IdentEqual(t.lexeme, "صفحه")):
+            lexeme = targetpack == lp.LP_FA ? "صفحه" : "page"
+        else t.kind == tok.TK_IDENT and has_routes and not in_import and (prev_kind == tok.TK_DOT or not tr_has(names, t.lexeme) or tr_is_routes_head(t.lexeme, prev_kind, tr_next_kind(toks, i, n))) and str.Len(tr_route_word(targetpack, t.lexeme, prev_kind, tr_next_kind(toks, i, n), in_routes, routes_attr, dot_var)) > 0:
+            lexeme = tr_route_word(targetpack, t.lexeme, prev_kind, tr_next_kind(toks, i, n), in_routes, routes_attr, dot_var)
         else i == rule_needs_at:
             lexeme = targetpack == lp.LP_FA ? "نیازمند" : "needs"
         else i == rule_group_at:
@@ -1788,7 +1938,7 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             lexeme = tr_style_words(toks, i, n, css_list_attr, targetpack == lp.LP_FA, kw_j)
             ei = tok.StreamAt(toks, kw_j).end_index as int
             i = kw_j
-        else t.kind == tok.TK_IDENT and t.layout_mode and tr_next_kind(toks, i, n) != tok.TK_DOT and not tr_user_attr(el_comp, comp_names, css_list_attr) and targetpack != lp.LP_FA and (prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET or (prev_kind == tok.TK_ASSIGN and tr_next_kind(toks, i, n) == tok.TK_COMMA)) and str.Len(css_list_attr) > 0 and css_list_paren == 0 and str.Len(sm.LayoutCssValueEn(css_list_attr, t.lexeme)) > 0 and not str.Equals(sm.LayoutCssValueEn(css_list_attr, t.lexeme), t.lexeme):
+        else t.kind == tok.TK_IDENT and t.layout_mode and tr_next_kind(toks, i, n) != tok.TK_DOT and not tr_user_attr(el_comp, comp_names, css_list_attr) and targetpack != lp.LP_FA and (prev_kind == tok.TK_COMMA or prev_kind == tok.TK_LBRACKET or prev_kind == tok.TK_ASSIGN) and not tr_has(names, t.lexeme) and str.Len(css_list_attr) > 0 and css_list_paren == 0 and str.Len(sm.LayoutCssValueEn(css_list_attr, t.lexeme)) > 0 and not str.Equals(sm.LayoutCssValueEn(css_list_attr, t.lexeme), t.lexeme):
             lexeme = sm.LayoutCssValueEn(css_list_attr, t.lexeme)
         else t.kind == tok.TK_STRING and targetpack == lp.LP_FA and prev_kind == tok.TK_ASSIGN and str.Len(css_attr) > 0 and not tr_user_attr(el_comp, comp_names, css_attr) and str.Len(tr_css_value_fa(css_attr, str.Substr(text, bi, ei - bi))) > 0:
             lexeme = "«" + tr_css_value_fa(css_attr, str.Substr(text, bi, ei - bi)) + "»"
@@ -1804,6 +1954,9 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             mut mapped := is_user ? tr_safe_name(targetpack, t.lexeme) : (t.kind == tok.TK_LAYOUT_ELEMENT ? sm.LayoutElemSpelling(t.lexeme, want_fa) : sm.LayoutAttrSpelling(t.lexeme, want_fa))
             if str.Len(mapped) == 0 and not is_user and t.kind == tok.TK_LAYOUT_ATTR_NAME:
                 mapped = sm.StyleAttrSpelling(t.lexeme, want_fa)
+            end
+            if str.Len(mapped) == 0 and not is_user:
+                mapped = tr_page_word(t.kind, t.lexeme, want_fa, has_routes)
             end
             if str.Len(mapped) == 0:
                 mapped = t.lexeme
@@ -1947,6 +2100,14 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
         if t.kind == tok.TK_IDENT:
             prev_ident = t.lexeme
             prev_ident_dotted = prev_kind == tok.TK_DOT
+        end
+        if t.kind == tok.TK_IDENT and (prev_kind == tok.TK_STMT_END or prev_kind < 0) and tr_next_kind(toks, i, n) == tok.TK_COLON and (str.Equals(t.lexeme, "routes") or lp.IdentEqual(t.lexeme, "مسیرها")):
+            in_routes = true
+        else t.kind == tok.TK_KW_END and in_routes and not t.layout_mode:
+            in_routes = false
+        end
+        if in_routes and t.kind == tok.TK_IDENT and tr_next_kind(toks, i, n) == tok.TK_ASSIGN:
+            routes_attr = t.lexeme
         end
         if t.kind == tok.TK_KW_IMPORT:
             in_import = true

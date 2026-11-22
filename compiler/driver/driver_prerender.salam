@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package driver
+
+import str
+
+include at "../ast.salam"
+include lg "../logger.salam"
+include sm "../semantic/semantic.salam"
+include co "../sal_core.salam"
+include i18 "../i18n.salam"
+include lo "../sal_layout/sal_layout.salam"
+include ip "../interp/interp.salam"
+
+mut g_dr_pre_route := Vector {} as Vector<str>
+mut g_dr_pre_region := Vector {} as Vector<int>
+mut g_dr_pre_html := Vector {} as Vector<str>
+
+func pre_reset():
+    g_dr_pre_route.Clear()
+    g_dr_pre_region.Clear()
+    g_dr_pre_html.Clear()
+end
+
+func pre_marker(i: int): str:
+    n := co.I64Toa(i as i64)
+    ret "<!--salam:" + n + "--><!--/salam:" + n + "-->"
+end
+
+func prerender_page(lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, html: str):
+    pre_reset()
+    if not lo.RoutesActive() or lo.RoutesHash():
+        ret
+    end
+    mut regions := Vector {} as Vector<int>
+    defer regions.Free()
+    repeat lo.WebStateCount() in i:
+        if str.Contains(html, pre_marker(i)):
+            regions.Push(i)
+        end
+    end
+    if regions.Len() == 0:
+        ret
+    end
+    mut paths := Vector {} as Vector<str>
+    defer paths.Free()
+    paths.Push("/")
+    fixed := lo.RoutesStatic()
+    each p in fixed:
+        if not str.Equals(p, "/"):
+            paths.Push(p)
+        end
+    end
+    mut opts := ip.NewOptions()
+    opts.timeout_ms = 3000
+    mut vm := ip.New(lgr, "__salam_no_entry", opts)
+    defer ip.Free(vm)
+    if not ip.PrepareWeb(vm, a, s, prog):
+        ip.EndWeb()
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, "pre-render: " + vm.errmsg)
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, i18.Tr("pre-render skipped: the page state could not be computed at build time"))
+        ret
+    end
+    mut filled := 0
+    each p in paths:
+        mut rargs := Vector {} as Vector<ip.Value>
+        rargs.Push(ip.ValStr(p))
+        rargs.Push(ip.ValInt(2 as i64))
+        mut why := ""
+        set_ok := ip.CallNamed(vm, a, "__salam_route_set", rargs, why)
+        rargs.Free()
+        if not set_ok:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, "pre-render " + p + ": " + why)
+            continue
+        end
+        each r in regions:
+            mut none := Vector {} as Vector<ip.Value>
+            mut out := ""
+            if ip.CallNamed(vm, a, "__salam_view_" + co.I64Toa(r as i64), none, out):
+                if str.Len(out) > 0:
+                    g_dr_pre_route.Push(p)
+                    g_dr_pre_region.Push(r)
+                    g_dr_pre_html.Push(out)
+                    filled++
+                end
+            else:
+                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, "pre-render " + p + " region " + co.I64Toa(r as i64) + ": " + out)
+            end
+            none.Free()
+        end
+    end
+    ip.EndWeb()
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1("pre-rendered %d region(s)", co.ArgInt(filled as i64)))
+end
+
+func prerender_fill(html: str, route: str): str:
+    mut out := html
+    repeat g_dr_pre_route.Len() in i:
+        if not str.Equals(g_dr_pre_route.Get(i), route):
+            continue
+        end
+        n := co.I64Toa(g_dr_pre_region.Get(i) as i64)
+        empty := "<!--salam:" + n + "--><!--/salam:" + n + "-->"
+        k := str.IndexOf(out, empty)
+        if k < 0:
+            continue
+        end
+        lead := str.Len("<!--salam:" + n + "-->")
+        out = str.Substr(out, 0, k + lead) + g_dr_pre_html.Get(i) + str.Substr(out, k + lead, str.Len(out) - k - lead)
+    end
+    ret out
+end
+
+func prerender_any(): bool:
+    ret g_dr_pre_route.Len() > 0
+end

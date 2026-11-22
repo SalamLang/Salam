@@ -1,7 +1,6 @@
 # File routes: the pages folder is the route table
 
-Status: phase 1 implemented (2026-11-22): the pages folder works and the
-`routes:` block still works. Replaces the `routes:` block of
+Status: proposed (2026-11-22). Replaces the `routes:` block of
 `UI_BEHAVIOUR.md` section 7 and of #3757, #3791 and #3801.
 
 ## Why
@@ -23,7 +22,8 @@ pages/
   docs/
     index.salam               /docs
     [topic].salam             /docs/:topic
-    [[section]].salam         /docs/:section?
+    archive/
+      [[year]].salam          /docs/archive/:year?
   user/
     [id].salam                /user/:id
   admin/
@@ -39,14 +39,12 @@ pages/
 | `name.salam` | `name` |
 | `[id].salam` | `:id` |
 | `[[id]].salam` | `:id?` (optional, as `/docs/:topic?` today) |
-| `[...rest].salam` | trailing `*` |
-| `_404.salam` | `*` fallback (in a subfolder, `/folder/*`) |
+| `[...rest].salam` | trailing `*rest` (the component parameter `rest` receives the remaining path) |
+| `_404.salam` | `*` fallback |
 | `_layout.salam` | not a route; wraps the folder (see below) |
 
 Segment names are ASCII letters, digits, `-` and `_`. A Persian URL uses the
-`route` setting (below), the file name stays ASCII. Folder names follow the
-same rules and may be `[id]` or `[[id]]`; only a file can be `[...rest]`.
-Files that do not end in `.salam` and names that start with `.` are ignored.
+`route` setting (below), the file name stays ASCII.
 
 ## A route file
 
@@ -67,13 +65,7 @@ end
 The settings sit at the top of the component body and are the same three the
 route line took: `title`, `guard` (a bool expression, re-checked when its state
 changes) and `redirect` (where a failed guard goes). One more is new: `route`,
-a text that replaces the whole path derived from the file name
-(`route = "/کاربر/:id"`). The settings are removed from the component before it
-is expanded. A `title` may use the path parameters (`"User " + id`); `guard` and
-`redirect` may use globals and functions of `main.salam`, not the parameters.
-
-Persian words: `عنوان` (title), `نگهبان` (guard), `هدایت` (redirect), `مسیر`
-(route), and on the entry page `حالت` (mode) and `پایه` (base).
+a text that replaces the path derived from the file name (`route = "/کاربر/:id"`).
 
 ## Layouts
 
@@ -92,26 +84,20 @@ end
 
 ## What the compiler does
 
-1. Finds `pages/` next to the entry file. Only an entry file named
-   `main.salam` with a `page:` block looks for the folder, so a lone page file
-   next to a folder called `pages` is not affected. No folder and no `routes:`
-   block, no routes, and `Outlet`, `Link`, `go` keep their current meaning only
-   when a folder (or a block) exists. If both exist the two tables are merged and
-   an equal pattern is E280.
+1. Finds `pages/` next to the entry file (`main.salam`). No folder, no routes,
+   and `Outlet`, `Link`, `page.GoTo` keep their current meaning only when a folder
+   exists.
 2. Walks it in sorted order and builds the same `LoRoute` table that
    `compiler/sal_layout/layout_routes.salam` builds from the block today
    (pattern, component, guard, redirect, title, rank). Everything after that,
    matching with `nav.Match`, ranking with `nav.Rank`, history and hash modes,
    the native stack and prerender per static route, is unchanged.
-   The route files are parsed once by the lowering and then reach the build
-   through the same `include` path as `include = "x.salam"` on the page, so each
-   file keeps its own private components. They are never separate packages and
-   never separate pages: `[id]` is only a file name, and `resolve_dir_layout`
-   (which does not recurse) and `salam page build` look at `main.salam` alone.
-   Two route files must not declare public components with the same name.
 3. Project wide settings that were `mode` and `base` inside the block move to
-   the entry page: `page: mode = hash base = "/app" ... end`. The compiler reads
-   them from the page and removes them before the page attributes are checked.
+   the entry page: `page: mode = hash base = "/app" ... end`.
+
+Two files that can match the same path with the same rank are E280. A route that
+is fully shadowed by a more specific one (same match set) is reported as E280 too,
+so every file in the tree is reachable.
 
 ## Diagnostics
 
@@ -122,13 +108,12 @@ end
 | E282 | error | `route file 'pages/x.salam' must declare exactly one pub component` |
 | E283 | error | `'_layout.salam' in 'pages/admin' has no Outlet` |
 | E284 | error | `'pages/a b.salam' is not a valid route file name` |
-| W281 | warning | `the 'routes:' block is replaced by the pages folder; run 'salam fix'` (not emitted yet: `salam fix` does not exist) |
+| W281 | warning | `the 'routes:' block is replaced by the pages folder; run 'salam fix'` |
 
-The earlier E256 to E259 and E263 keep their meaning where a check still
-applies (parameter types, optional defaults, unknown setting); E257 (`Outlet`
-without routes) now says "no routes block and no pages folder". A setting other
-than `guard` and `redirect` in a `_layout.salam` is E256. An error in a route file
-is reported against that file. E281 does not apply when `route` is given.
+The router codes E264 to E267 and E263 keep their meaning where a check still
+applies (parameter types, optional defaults, unknown setting); E265 (`Outlet`
+or `page.GoTo` without routes) now says "without a pages folder". They were
+E256 to E259 until those numbers were found to belong to the ownership checks.
 
 ## Migration
 
@@ -146,8 +131,9 @@ is reported against that file. E281 does not apply when `route` is given.
 - **web**: unchanged from #3757: History API or hash mode, a page per static
   route, a fallback `index.html` for parameter routes. With SSR (`SERVER.md`)
   the server answers every route itself.
-- **native**: the folder is compiled into the in binary table; `go`, `go_back`
-  and `replace` use the screen stack. There is no folder at run time.
+- **native**: the folder is compiled into the in binary table; `page.GoTo`,
+  `page.Back` and `page.Redirect` use the screen stack. There is no folder at
+  run time.
 
 ## Decisions
 
@@ -162,10 +148,7 @@ is reported against that file. E281 does not apply when `route` is given.
 
 ## First implementation steps
 
-1. Done: collect `pages/` into the route list (`layout_pages.salam`), E280 to E284.
-2. Done: `route`, `guard`, `redirect`, `title` as component settings, layouts nested
-   (a layout `Outlet` becomes the slot of the layout component, the table shows
-   `Layout: Inner: Page: ... end end end`; the guards of every layout above a route
-   are checked outside in, then the route's own).
+1. Collect `pages/` into the route list in `layout_routes.salam`, E280 to E284.
+2. `route`, `guard`, `redirect`, `title` as component settings, layouts nested.
 3. Convert the tests; `salam fix` migration; W281.
 4. Remove the block.

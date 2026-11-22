@@ -145,6 +145,15 @@ function check(name, ok, detail) {
   check("signing out leaves the guarded route", w === "/login", w);
   check("the sign in screen shows again", !!(await page.$("#login")));
 
+  if (mode === "history") {
+    await page.goto(url("/search?q=salam"));
+    h = await h1Is("Home");
+    check("a guard that reads the query shows its route", h === "Home", h);
+    await page.goto(url("/search?q=blocked"));
+    w = await whereIs("/login");
+    check("a guard that reads the query redirects", w === "/login", w);
+  }
+
   await page.goto(url("/users/abc"));
   let p = await pIs("Nothing at /users/abc");
   check(

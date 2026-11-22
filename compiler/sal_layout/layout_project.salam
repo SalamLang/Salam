@@ -1,0 +1,150 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+import os
+
+include pth "../sal_path.salam"
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+mut g_lo_project := false
+mut g_lo_proj_dir := ""
+
+func lo_proj_enter(base_dir: str):
+    g_lo_project = str.Equals(pth.PathBase(g_lo_root_file), "main.salam")
+    g_lo_proj_dir = base_dir
+end
+
+func lo_proj_leave():
+    g_lo_project = false
+    g_lo_proj_dir = ""
+end
+
+func lo_proj_skip_dir(name: str): bool:
+    if str.StartsWith(name, "."):
+        ret true
+    end
+    ret str.Equals(name, "node_modules") or str.Equals(name, "build") or str.Equals(name, "dist") or str.Equals(name, "out") or str.Equals(name, "target") or str.Equals(name, "vendor") or str.Equals(name, "tests") or str.Equals(name, "test") or str.Equals(name, "__tests__")
+end
+
+func lo_proj_skip_file(name: str): bool:
+    ret str.StartsWith(name, ".") or str.EndsWith(name, "_test.salam") or str.EndsWith(name, ".test.salam")
+end
+
+func lo_proj_list(dir: str, rel: str, out &: Vector<str>):
+    entries := os.ListDir(dir)
+    repeat entries.Len() in i:
+        name := entries.Get(i)
+        if name.Len() == 0:
+            continue
+        end
+        full := pth.PathJoin(dir, name)
+        if os.IsDir(full):
+            if lo_proj_skip_dir(name):
+                continue
+            end
+            if rel.Len() == 0 and str.Equals(name, "pages"):
+                continue
+            end
+            if os.Exists(pth.PathJoin(full, "main.salam")):
+                continue
+            end
+            lo_proj_list(full, rel + name + "/", out)
+        else str.EndsWith(name, ".salam"):
+            if lo_proj_skip_file(name):
+                continue
+            end
+            if rel.Len() == 0 and str.Equals(name, "main.salam"):
+                continue
+            end
+            out.Push(rel + name)
+        end
+    end
+end
+
+func lo_proj_rel(path: str): str:
+    mut d := g_lo_proj_dir
+    if d.Len() == 0:
+        d = "."
+    end
+    prefix := pth.PathNormalize(d) + "/"
+    p := pth.PathNormalize(path)
+    if str.StartsWith(p, prefix):
+        ret str.Substr(p, prefix.Len(), p.Len() - prefix.Len())
+    end
+    ret p
+end
+
+func lo_proj_duplicate(ex &: LoExpand, a &: at.Ast, prev: int, name: str, line: int, col: int, file: str):
+    pd := at.Get(a, ex.comp_def.Get(prev))
+    mut args := Vector {} as Vector<co.FmtArg>
+    defer args.Free()
+    args.Push(co.ArgStr(name))
+    args.Push(co.ArgStr(lo_proj_rel(ex.comp_file.Get(prev))))
+    args.Push(co.ArgInt(pd.begin_line as i64))
+    args.Push(co.ArgStr(lo_proj_rel(file)))
+    args.Push(co.ArgInt(line as i64))
+    lg.LogAtHelp(
+        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, file, line, col,
+        i18.Tr("rename one of them, or remove 'pub' from the one that only its own file uses"),
+        co.Format(i18.Tr("E291: two pub components are named '%s': '%s' line %d and '%s' line %d"), args)
+    )
+    ex.errors++
+end
+
+func lo_proj_pub_clash(ex &: LoExpand, name: str): int:
+    repeat ex.comp_name.Len() in i:
+        if ex.comp_pub.Get(i) and lo_comp_eq(ex.comp_name.Get(i), name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func lo_proj_import(ex &: LoExpand, a &: at.Ast, base_dir: str):
+    mut dir := base_dir
+    if dir.Len() == 0:
+        dir = "."
+    end
+    mut files := Vector {} as Vector<str>
+    defer files.Free()
+    lo_proj_list(dir, "", files)
+    lo_pg_sort(files)
+    mut known := Vector {} as Vector<str>
+    defer known.Free()
+    each rel in files:
+        path := sm.ResolveImport(base_dir, rel)
+        if find_loaded(ex, path) >= 0:
+            continue
+        end
+        l := load_include(ex, a, path)
+        if l < 0:
+            continue
+        end
+        prog := ex.loaded_prog.Get(l)
+        collect(ex, a, prog, ex.loaded_dir.Get(l), path, 1)
+        repeat at.ChildCount(a, prog) in j:
+            kc := at.Get(a, at.Child(a, prog, j))
+            if kc.kind == at.AST_LAYOUT_COMPONENT and kc.is_pub:
+                known.Push(kc.name)
+            end
+        end
+    end
+    sm.LayoutAddKnownComponents(known)
+end

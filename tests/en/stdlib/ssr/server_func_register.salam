@@ -1,0 +1,142 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import net.ssr
+import encoding.json
+import testing
+
+mut pings := 0
+
+struct Item:
+    pub id: int = 0
+    pub name: str = ""
+    pub tags: Vector<str> = Vector {}
+end
+
+enum Level:
+    Low
+    High
+end
+
+server func Add(a: int, b: int): int:
+    ret a + b
+end
+
+server func Find(id: int, label: str?): Item:
+    mut it := Item { id = id, name = "item" }
+    it.tags.Push("t" + id)
+    if label.IsSome():
+        it.name = label.UnwrapOr("")
+    end
+    ret it
+end
+
+server func Describe(level: Level, loud: bool, ratio: float): str:
+    ret (loud ? "LOUD " : "quiet ") + (level == Level.High ? "High" : "Low") + " " + ratio
+end
+
+server func Boom(): int throw:
+    throw "database password is hunter2"
+end
+
+server func Count(items: Vector<int>): int:
+    mut n := 0
+    each v in items:
+        n += v
+    end
+    ret n
+end
+
+server func Ping():
+    pings++
+end
+
+func deny(c: i64):
+    ssr.Reject(c, 418, "teapot")
+end
+
+func post(url: str, body: str, token: str): http.Response:
+    mut h := http.NewHeaders()
+    h.Insert("Content-Type", "application/json")
+    h.Insert("X-Salam-Token", token)
+    ret http.PostWith(url, body, h)
+end
+
+func main:
+    __salam_register_server_funcs()
+    testing.AssertTrue(ssr.IsRegistered("Add"))
+    testing.AssertTrue(ssr.IsRegistered("Boom"))
+    testing.AssertFalse(ssr.IsRegistered("Nope"))
+    testing.AssertEqInt(Add(2, 3), 5)
+    testing.AssertEqInt(Find(1, null).id, 1)
+    testing.AssertEqStr(Describe(Level.Low, false, 2.0 as float), "quiet Low 2")
+    mut nums := Vector {} as Vector<int>
+    nums.Push(1)
+    nums.Push(2)
+    testing.AssertEqInt(Count(nums), 3)
+
+    ssr.Register("Deny", deny)
+    ssr.SetSecret("test-secret-0123456789")
+    mut r := router.NewRouter()
+    ssr.Mount(r)
+    mut s := http.NewServer(0)
+    http.Use(s, r)
+    port := http.RunBackgroundPort(s)
+    testing.AssertTrue(port > 0)
+    base := "http://127.0.0.1:" + port
+    token := json.Get(http.Body(http.Get(base + "/_salam/session")), "token")
+
+    add := post(base + "/_salam/fn/Add", "{\"args\":{\"a\":40,\"b\":2}}", token)
+    testing.AssertEqInt(http.Status(add), 200)
+    testing.AssertEqStr(http.Body(add), "{\"ok\":true,\"value\":42}")
+
+    miss := post(base + "/_salam/fn/Add", "{\"args\":{\"a\":40}}", token)
+    testing.AssertEqInt(http.Status(miss), 400)
+    wrong := post(base + "/_salam/fn/Add", "{\"args\":{\"a\":\"x\",\"b\":2}}", token)
+    testing.AssertEqInt(http.Status(wrong), 400)
+
+    find := post(base + "/_salam/fn/Find", "{\"args\":{\"id\":7}}", token)
+    testing.AssertEqInt(http.Status(find), 200)
+    testing.AssertEqStr(json.Get(http.Body(find), "ok"), "true")
+    testing.AssertEqStr(json.GetPath(http.Body(find), "value.name"), "item")
+    labelled := post(base + "/_salam/fn/Find", "{\"args\":{\"id\":7,\"label\":\"shoe\"}}", token)
+    testing.AssertEqStr(json.GetPath(http.Body(labelled), "value.name"), "shoe")
+    testing.AssertContains(http.Body(labelled), "\"tags\":[\"t7\"]")
+
+    desc := post(base + "/_salam/fn/Describe", "{\"args\":{\"level\":\"High\",\"loud\":true,\"ratio\":1.5}}", token)
+    testing.AssertEqStr(json.Get(http.Body(desc), "ok"), "true")
+    testing.AssertContains(http.Body(desc), "LOUD")
+    testing.AssertContains(http.Body(desc), "1.5")
+
+    count := post(base + "/_salam/fn/Count", "{\"args\":{\"items\":[1,2,3,4]}}", token)
+    testing.AssertEqStr(http.Body(count), "{\"ok\":true,\"value\":10}")
+
+    boom := post(base + "/_salam/fn/Boom", "{\"args\":{}}", token)
+    testing.AssertEqInt(http.Status(boom), 200)
+    testing.AssertContains(http.Body(boom), "\"ok\":false")
+    testing.AssertFalse(http.Body(boom).Includes("hunter2"))
+
+    ping := post(base + "/_salam/fn/Ping", "{\"args\":{}}", token)
+    testing.AssertEqStr(http.Body(ping), "{\"ok\":true,\"value\":null}")
+    testing.AssertEqInt(pings, 1)
+
+    teapot := post(base + "/_salam/fn/Deny", "{\"args\":{}}", token)
+    testing.AssertEqInt(http.Status(teapot), 418)
+    testing.AssertEqStr(http.Body(teapot), "{\"ok\":false,\"error\":\"teapot\"}")
+
+    ret testing.Summary()
+end

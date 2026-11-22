@@ -270,6 +270,45 @@ global.getComputedStyle = (el) => ({
 });
 global.Image = class {};
 
+global.XMLHttpRequest = class {
+  open(method, url, isAsync) {
+    this.method = method;
+    this.url = url;
+    this.isAsync = isAsync;
+    this.headers = {};
+    this.status = 0;
+    this.responseText = "";
+  }
+  setRequestHeader(name, value) {
+    this.headers[name] = value;
+  }
+  reply(status, body) {
+    this.status = status;
+    this.responseText = JSON.stringify(body);
+  }
+  send(body) {
+    const path = this.url.replace(/^https?:\/\/[^/]+/, "");
+    if (path === "/_salam/session") {
+      this.reply(200, { token: "stub-token" });
+      return;
+    }
+    const m = path.match(/^\/_salam\/fn\/(.+)$/);
+    if (!m || this.method !== "POST") {
+      this.reply(404, { ok: false, error: "not found" });
+      return;
+    }
+    if (this.headers["X-Salam-Token"] !== "stub-token") {
+      this.reply(403, { ok: false, error: "forbidden" });
+      return;
+    }
+    const args = JSON.parse(body).args;
+    if (m[1] === "Add") this.reply(200, { ok: true, value: args.a + args.b });
+    else if (m[1] === "Greet") this.reply(200, { ok: true, value: "hello " + args.name });
+    else if (m[1] === "Fetch") this.reply(200, { ok: true, value: { id: args.id, name: "item" + args.id, tags: ["x", "y"] } });
+    else this.reply(200, { ok: false, error: "no stock" });
+  }
+};
+
 function fireAutoEvents() {
   for (const el of allElements) {
     const type = el.getAttribute("data-autofire");

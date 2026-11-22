@@ -1,6 +1,6 @@
 # File routes: the pages folder is the route table
 
-Status: proposed (2026-11-22). Replaces the `routes:` block of
+Status: implemented (2026-11-22). Replaced the `routes:` block of
 `UI_BEHAVIOUR.md` section 7 and of #3757, #3791 and #3801.
 
 ## Why
@@ -108,7 +108,6 @@ so every file in the tree is reachable.
 | E282 | error | `route file 'pages/x.salam' must declare exactly one pub component` |
 | E283 | error | `'_layout.salam' in 'pages/admin' has no Outlet` |
 | E284 | error | `'pages/a b.salam' is not a valid route file name` |
-| W281 | warning | `the 'routes:' block is replaced by the pages folder; run 'salam fix'` |
 
 The router codes E264 to E267 and E263 keep their meaning where a check still
 applies (parameter types, optional defaults, unknown setting); E265 (`Outlet`
@@ -128,14 +127,12 @@ behave as before. The duplicate check is `E291`:
 
 ## Migration
 
-1. Release N: `pages/` works, `routes:` still works and warns (W281).
-   `salam fix` rewrites a block into files (one `pub component` per line,
-   settings moved into the body, `mode` and `base` moved to the entry page).
-2. Release N+1: the `routes:` block is removed from the parser; the tests and
-   docs that use it (`tests/en/page/pages/routes_*.salam`, `tests/en/ui/routes.salam`,
-   `tests/en/page/projects/shop.salam`, `notes.salam`, `docs/design/UI_BEHAVIOUR.md`
-   section 7, `website/content/{en,fa}/learn/46-web-projects.txt`) are moved to
-   folders.
+The `routes:` block is gone: it is no longer parsed, so a program that still
+writes it gets the ordinary syntax error. There is no warning release and no
+migration tool; each route line becomes a file by hand: the pattern is the
+filename, `title`, `guard` and `redirect` move into the component body, and
+`mode` and `base` move to the entry `page:` block. The tests, docs and learn
+pages that used the block were converted to folders.
 
 ## Targets
 
@@ -155,11 +152,10 @@ behave as before. The duplicate check is `E291`:
 | FR3 | one `pub component` per route file; its parameters are the path parameters |
 | FR4 | `title`, `guard`, `redirect`, `route` are component settings; a layout's apply to its subtree |
 | FR5 | lowering reuses the existing route table, matcher and runtime |
-| FR6 | the `routes:` block warns for one release, then goes |
+| FR6 | the `routes:` block is removed outright |
 
-## First implementation steps
+## Implementation steps
 
-1. Collect `pages/` into the route list in `layout_routes.salam`, E280 to E284.
-2. `route`, `guard`, `redirect`, `title` as component settings, layouts nested.
-3. Convert the tests; `salam fix` migration; W281.
-4. Remove the block.
+1. Collect `pages/` into the route list in `layout_routes.salam`, E280 to E284 (done).
+2. `route`, `guard`, `redirect`, `title` as component settings, layouts nested (done).
+3. Convert the tests and docs, remove the block (done).

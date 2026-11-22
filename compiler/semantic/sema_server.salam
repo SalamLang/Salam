@@ -55,6 +55,9 @@ func srv_wire_ok(s &: Sema, t: int, depth: int): bool:
                 ret false
             end
         end
+        if str.Equals(sv.generic_base, "Vector"):
+            ret true
+        end
     end
     if sv.members == 0:
         ret true
@@ -101,15 +104,34 @@ func srv_names_clash(a &: at.Ast, x: int, y: int): bool:
     ret false
 end
 
+func srv_find_sig(s &: Sema, fid: int, name: str): int:
+    fsym := scope_lookup_local(s, s.global, name)
+    if fsym == 0:
+        ret 0
+    end
+    ov := sym_at(s, fsym).overloads
+    repeat ov.Len() in i:
+        if sig_at(s, ov.Get(i)).decl == fid:
+            ret ov.Get(i)
+        end
+    end
+    ret 0
+end
+
 func srv_check_signature(s &: Sema, a &: at.Ast, fid: int):
     fn := at.Get(a, fid)
+    sigid := srv_find_sig(s, fid, fn.name)
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
     repeat fn.list.Len() in i:
         pid := fn.list.Get(i)
         param := at.Get(a, pid)
-        if param.ty == 0:
-            continue
+        if i >= sg.params.Len():
+            break
         end
-        pt := sema_resolve_type(s, a, param.ty)
+        pt := sg.params.Get(i)
         if param.is_ref or not srv_wire_ok(s, pt, 0):
             serr(
                 s, 285, span_of(a, pid), co.Format3(
@@ -118,15 +140,12 @@ func srv_check_signature(s &: Sema, a &: at.Ast, fid: int):
             )
         end
     end
-    if fn.ty != 0:
-        rt := sema_resolve_type(s, a, fn.ty)
-        if not srv_wire_ok(s, rt, 0):
-            serr(
-                s, 285, span_of(a, fn.ty), co.Format2(
-                    i18.Tr("server func '%s' result has type '%s', which cannot cross the network"), co.ArgStr(fn.name), co.ArgStr(type_to_string(s, rt))
-                )
+    if fn.ty != 0 and not srv_wire_ok(s, sg.ret_type, 0):
+        serr(
+            s, 285, span_of(a, fn.ty), co.Format2(
+                i18.Tr("server func '%s' result has type '%s', which cannot cross the network"), co.ArgStr(fn.name), co.ArgStr(type_to_string(s, sg.ret_type))
             )
-        end
+        )
     end
 end
 

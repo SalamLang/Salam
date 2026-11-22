@@ -137,6 +137,9 @@ tree on the web and a screen stack in a native window.
 
 ### Routes
 
+Superseded: the `routes:` block below is replaced by the `pages/` folder, see
+`ROUTING.md`. Server rendering and server functions are in `SERVER.md`.
+
 ```salam
 routes:
     "/" : Home
@@ -165,10 +168,11 @@ end
   value that does not convert goes to the `"*"` route. `Outlet` shows the
   matched component; a route component may have its own `Outlet` for nested
   routes (`"/settings/*" : Settings`).
-- `Link: to = "/path"` is the only navigation element. `go("/user/3")`,
-  `go_back()`, `go_forward()`, `replace("/login")` are functions, and the
-  state `route.path`, `route.params`, `route.query` can be read like any
-  state (R5), so a highlighted menu item is `when route.path == "/"`.
+- `Link: to = "/path"` is the only navigation element. `page.GoTo("/user/3")`,
+  `page.Back()`, `page.Forward()`, `page.Redirect("/login")` are functions, and
+  the state `page.route.path`, `page.route.query` and `page.Param("id")` can be
+  read like any state (R5), so a highlighted menu item is
+  `when page.route.path == "/"`.
 - A route may carry a guard: `"/admin" : Admin guard = logged_in redirect =
   "/login"`. The guard is a bool expression, re-checked on every change of its
   state.
@@ -529,7 +533,7 @@ page:
         translate = offset, 0
         transition = if dragging: 0ms else 200ms end
         pan = (p: Pan): offset = p.dx; dragging = p.phase != end end
-        swipe = (s: Swipe): go_back() end
+        swipe = (s: Swipe): page.Back() end
     end
 end
 ```
@@ -556,7 +560,7 @@ The page is the same; what changes is conditions and a few attributes:
   scrolls the focused input into view. The tokens `theme.inset.top`,
   `bottom`, `start`, `end` hold the numbers (zero on desktop).
 - **Platform parts**: `page: status bar = light`, `orientation = portrait`,
-  `back` button maps to `go_back()` (section 7), pull to refresh is
+  `back` button maps to `page.Back()` (section 7), pull to refresh is
   `ScrollArea: refresh = (): ... end` (a `load` value, R9), `haptic("tap")`,
   `share(text)`, and `open_url(u)` are functions in `gui.device`; on desktop
   and web they do the nearest thing or nothing.

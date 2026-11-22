@@ -111,6 +111,20 @@ function check(name, ok, detail) {
   );
   check("the link to the current route is marked", cur === "page", cur);
 
+  if (await page.$("#plain")) {
+    await page.evaluate(() => {
+      window.__salamRouterMark = 2;
+    });
+    await page.click("#plain");
+    h = await h1Is("User 7");
+    check(
+      "a url link loads the page from the server",
+      h === "User 7" &&
+        (await page.evaluate(() => window.__salamRouterMark !== 2)),
+      h,
+    );
+  }
+
   await page.click("nav a >> nth=2");
   w = await whereIs("/login");
   check("a guard redirects", w === "/login", w);
@@ -130,6 +144,15 @@ function check(name, ok, detail) {
   w = await whereIs("/login");
   check("signing out leaves the guarded route", w === "/login", w);
   check("the sign in screen shows again", !!(await page.$("#login")));
+
+  if (mode === "history") {
+    await page.goto(url("/search?q=salam"));
+    h = await h1Is("Home");
+    check("a guard that reads the query shows its route", h === "Home", h);
+    await page.goto(url("/search?q=blocked"));
+    w = await whereIs("/login");
+    check("a guard that reads the query redirects", w === "/login", w);
+  }
 
   await page.goto(url("/users/abc"));
   let p = await pIs("Nothing at /users/abc");

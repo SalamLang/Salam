@@ -21,6 +21,8 @@ include sm "../semantic/semantic.salam"
 include co "../sal_core.salam"
 include lo "../sal_layout/sal_layout.salam"
 
+const k_ssr_shell := ".shell.html"
+
 func ui_web_only(lgr: lg.Logger, opt: Dr): bool:
     if opt.ui_target == 0:
         ret true
@@ -47,6 +49,20 @@ func spa_htaccess(base: str, html_name: str): str:
     t += "    RewriteRule . " + b + html_name + " [L]\n"
     t += "</IfModule>\n"
     ret t
+end
+
+func write_ssr_pages(lgr &: lg.Logger, shell_path: str):
+    html := io.ReadFile(shell_path)
+    pats := lo.RoutesStatic()
+    repeat pats.Len() in i:
+        rel := str.Substr(pats.Get(i), 1, str.Len(pats.Get(i)) - 1)
+        pdir := join_path2(".", rel)
+        _mk := os.MkdirAll(pdir)
+        _w := write_file(lgr, join_path2(pdir, "index.html"), prerender_fill(route_page_copy(html, lo.RoutesStaticTitle(i)), pats.Get(i)))
+    end
+    if prerender_any():
+        _wi := write_file(lgr, "index.html", prerender_fill(html, "/"))
+    end
 end
 
 func route_page_copy(html: str, title: str): str:
@@ -292,7 +308,7 @@ pub func LayoutBuild(opt &: Dr): int:
             if str.Len(ev_js) > 0:
                 r.js = str.Len(r.js) > 0 ? r.js + (minify_ws ? " " : "\n") + ev_js : ev_js
             end
-            if not multi and opt.inline_mode:
+            if not multi and (opt.inline_mode or opt.ssr):
                 prerender_page(lgr, a, s, prog, r.html)
             end
         end
@@ -348,7 +364,10 @@ pub func LayoutBuild(opt &: Dr): int:
         if not multi and str.Len(opt.output) > 0:
             html_path = opt.output
         end
-        if not multi and not write_spa_files(lgr, html_path):
+        if opt.ssr:
+            html_path = k_ssr_shell
+        end
+        if not multi and not opt.ssr and not write_spa_files(lgr, html_path):
             rc = 2
         end
         if opt.inline_mode:
@@ -378,14 +397,28 @@ pub func LayoutBuild(opt &: Dr): int:
             if str.Len(r.js) > 0:
                 js_href = mod + ".js"
             end
+            mut doc_css := css_href
+            mut doc_js := js_href
+            if opt.ssr:
+                href_root := str.EndsWith(lo.RoutesBase(), "/") ? lo.RoutesBase() : lo.RoutesBase() + "/"
+                if str.Len(css_href) > 0:
+                    doc_css = href_root + css_href
+                end
+                if str.Len(js_href) > 0:
+                    doc_js = href_root + js_href
+                end
+            end
             _w := write_file(
-                lgr, html_path, lo.Document(r, false, css_href, js_href, minify_ws)
+                lgr, html_path, lo.Document(r, false, doc_css, doc_js, minify_ws)
             )
             if str.Len(css_href) > 0:
                 _w1 := write_file(lgr, css_href, r.css)
             end
             if str.Len(js_href) > 0:
                 _w2 := write_file(lgr, js_href, r.js)
+            end
+            if opt.ssr and not multi:
+                write_ssr_pages(lgr, html_path)
             end
         end
     end
@@ -611,6 +644,9 @@ pub func Web(opt &: Dr): int:
 end
 
 pub func Serve(opt &: Dr): int:
+    if opt.serve_render:
+        ret ServeRender(opt)
+    end
     if str.Len(opt.serve_config) > 0:
         if opt.serve_test:
             ret httpd.Check(opt.serve_config)

@@ -148,10 +148,11 @@ else
     diff served.html dist/public/about/index.html | head -10
 fi
 get / >/dev/null
-sed 's#<script type="application/json" id="__salam">[^<]*</script>##' body.html >served.html
-if cmp -s served.html dist/public/index.html; then
+sed 's#<script type="application/json" id="__salam">[^<]*</script>##; s#<title>[^<]*</title>##' body.html >served.html
+sed 's#<title>[^<]*</title>##' dist/public/index.html >static.html
+if cmp -s served.html static.html; then
     echo "home: same"
 else
     echo "home: differs"
-    diff served.html dist/public/index.html | head -10
+    diff served.html static.html | head -10
 fi

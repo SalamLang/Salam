@@ -1284,7 +1284,7 @@ seed gives the same result on every machine at any thread count). The deep
 learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
 `std/matrix`. Shape errors return the empty tensor / `0x0` matrix.
 
-- **`ai.tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor {data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2 set_at2 reshape_ free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
+- **`ai.tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor {data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at SetAt at2 SetAt2 Reshape free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
   (equal, scalar, trailing `[N,D]+[D]`, `[N,1]`; `BroadcastShape Expand` for
   the general case), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar Clip` and `*InPlace`/`*Into` forms; shape `Reshape Permute SliceAxis0 Narrow Concat2 Stack2 Pad2D`; reduce `SumAll MeanAll MaxAll ArgMaxAll SumAxis MeanAxis ArgMaxAxis Softmax LogSoftmax`; products
   `MatMul MatMulInto BatchMatMul MatVec Dot Transpose2D`; conv
@@ -1296,7 +1296,7 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
   losses `MSELoss CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
   `tp.reset()` per step, `tp.Free()`. `GradCheck` does central differences.
 - **`ai.nn`**: `ParamStore` (owns values and grads; layers hold int handles)
-  with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
+  with `add at ZeroGrad free`, `Bind`; layers `Linear Conv2D MaxPool2D AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
   `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
   `CausalMask(seq)` is the additive mask it adds), recurrent helper
   `LastStep`, the `Layer` interface with `Sequential` and the
@@ -1307,13 +1307,13 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
 - **`ai.optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
   `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
 - **`ai.ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
-  `predict_proba`, `transform`, `score`, `free`, hyperparameters as fields
+  `PredictProba`, `transform`, `score`, `free`, hyperparameters as fields
   (`ml.KMeans { k = 3, seed = 7 }`). Preprocessing `StandardScaler MinMaxScaler LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`;
   models `LinearReg Ridge Lasso NewElasticNet LogisticRegression KNNClassifier KNNRegressor GaussianNB MultinomialNB DecisionTree RandomForest AdaBoost GradientBoosting HistGradientBoosting LinearSVM SVC LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA TruncatedSVD TSNE` (+ `KDTree`, `workers` on KNN/KMeans); metrics
   `Accuracy ConfusionMatrix Precision Recall F1 RocAuc RocCurve LogLoss MSE MAE RMSE R2Score SilhouetteScore ...`; selection `TrainTestSplit KFold StratifiedKFold CrossValScore GridSearch`. Labels are a one-column matrix of
   0, 1, 2...; `fit` returns false on bad shapes; fit scalers on the training
   rows only.
-- **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
+- **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds ToMatrix SplitXy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
   `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throw`.
 - **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`;
@@ -1332,7 +1332,7 @@ learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
 - Pitfalls across the family: a shape mismatch silently yields an empty
   tensor (check `is_empty()`); the `*InPlace`/`*Into` forms do not
   broadcast; `tp.reset()` frees every value and gradient the tape made, so
-  `tensor.Clone` what you keep; gradients accumulate (`zero_grad` every
+  `tensor.Clone` what you keep; gradients accumulate (`ZeroGrad` every
   step; `step` does not clear them); set `tape.training = false` to
   evaluate; a checkpoint saves the `ParamStore` only (no BatchNorm running
   stats, no optimiser state); `Adam` defaults to lr 0.001, `SGD` 0.01.
@@ -1462,7 +1462,7 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   the next line** (restores the terminal); loop `until screen.next_event(ev):
 screen.dispatch(ev) ... screen.present() end`, or `run()`. A widget is a
   struct with `pub use tui.BaseWidget` overriding `render(buf, bounds)` /
-  `handle_event(ev): bool` / `focusable()`; add with `screen.Add(parent, w)`
+  `HandleEvent(ev): bool` / `focusable()`; add with `screen.Add(parent, w)`
   (`RootId`), get back with `screen.widget(id)`. Widgets: `NewText NewInput
 NewButton NewCheckbox NewList NewProgress NewSeparator NewTable
 NewTableView NewModal`, `Panel {}`; layout `NewRow NewColumn NewGrid
@@ -1500,7 +1500,7 @@ end
   changes as the map grows; sort the keys when order shows. `get` returns a
   copy of a struct value: change it and `put` it back.
 - **`Set<T>`** (`add has remove size`), **`Stack<T>`** (`push pop peek size is_empty`), **`Queue<T>`** (`enqueue dequeue peek size`),
-  **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
+  **`Deque<T>`** (`PushFront PushBack PopFront PopBack FrontVal BackVal`),
   **`PriorityQueue<T>`** (`push pop peek`, a **min**-heap on `<`),
   **`LinkedList<T>`**, **`Counter<K>`** (`add add_n count distinct`),
   **`OrderedMap`** (str to str in insertion order: `set get GetOr has remove key_at val_at len`), **`Pair`**, **`CircularList`**.

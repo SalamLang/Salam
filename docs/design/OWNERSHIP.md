@@ -80,7 +80,7 @@ is seen through every other name.
   neither is reported; the same through a copy is E139 or E140.
 - `.Copy()` and `.DeepCopy()` build a new buffer, so `b := a.Copy()` neither
   shares nor moves `a`'s buffer.
-- `push`, `insert`, `reserve`, `resize_set`, `zeros`, `alloc` and `put` _may_
+- `push`, `insert`, `reserve`, `ResizeSet`, `zeros`, `alloc` and `put` _may_
   move the buffer, which invalidates copies, `.Ref()` pointers and iterators.
 - Passing a path to a `&:` parameter, or calling a method on it, may give it
   new contents, so its freed state is forgotten. This keeps phase 1 free of

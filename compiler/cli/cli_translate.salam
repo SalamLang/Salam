@@ -37,7 +37,7 @@ const TR_BIND_PKG := 1
 const TR_BIND_BUILTIN := 2
 const TR_BIND_USER := 3
 const TR_STATE_WORDS := "hover|اشاره|focus within|تمرکز درون|focus|تمرکز|active|فشردن|disabled|غیرفعال|checked|تیک\xE2\x80\x8Cخورده|invalid|نامعتبر|placeholder|جای\xE2\x80\x8Cنوشته|selection|گزینش"
-const TR_ROUTE_API := "route|مسیر\xE2\x80\x8Cکنونی|go|برو|replace|جایگزین\xE2\x80\x8Cکن|go_back|برگرد|go_forward|پیش\xE2\x80\x8Cبرو|route_param|پارامتر\xE2\x80\x8Cمسیر|route_query|پرسمان\xE2\x80\x8Cمسیر"
+const TR_PAGE_API := "GoTo|برو|Redirect|هدایت|Back|عقب|Forward|جلو|Param|پارامتر|Query|پرسمان|route|مسیر"
 const TR_ROUTE_FIELDS := "path|نشانی|query|پرسمان|pattern|الگو"
 const TR_ROUTE_ATTRS := "mode|حالت|base|پایه|guard|نگهبان|redirect|هدایت|title|عنوان"
 const TR_ROUTE_MODES := "hash|هش|history|تاریخچه"
@@ -437,7 +437,10 @@ end
 func tr_route_word(targetpack: int, name: str, prev_kind: int, next_kind: int, in_routes: bool, rattr: str, dot_on: str): str:
     to_fa := targetpack == lp.LP_FA
     if prev_kind == tok.TK_DOT:
-        if str.Len(tr_pair_list(dot_on, TR_ROUTE_API, to_fa)) > 0 and (str.Equals(dot_on, "route") or lp.IdentEqual(dot_on, "مسیر\xE2\x80\x8Cکنونی")):
+        if str.Equals(dot_on, "page") or lp.IdentEqual(dot_on, "صفحه"):
+            ret tr_pair_list(name, TR_PAGE_API, to_fa)
+        end
+        if str.Equals(dot_on, "route") or lp.IdentEqual(dot_on, "مسیر"):
             ret tr_pair_list(name, TR_ROUTE_FIELDS, to_fa)
         end
         ret ""
@@ -451,10 +454,7 @@ func tr_route_word(targetpack: int, name: str, prev_kind: int, next_kind: int, i
     if in_routes and prev_kind == tok.TK_ASSIGN and (str.Equals(rattr, "mode") or lp.IdentEqual(rattr, "حالت")):
         ret tr_pair_list(name, TR_ROUTE_MODES, to_fa)
     end
-    if in_routes:
-        ret ""
-    end
-    ret tr_pair_list(name, TR_ROUTE_API, to_fa)
+    ret ""
 end
 
 func tr_route_pattern(targetpack: int, lexeme: str): str:
@@ -493,6 +493,17 @@ func tr_route_pattern(targetpack: int, lexeme: str): str:
         out.Push(str.Clone(seg))
     end
     ret "\"" + str.Join(out, "/") + "\""
+end
+
+func tr_route_key(targetpack: int, lexeme: str): str:
+    if str.Len(lexeme) < 3 or not str.StartsWith(lexeme, "\"") or not str.EndsWith(lexeme, "\""):
+        ret lexeme
+    end
+    body := str.Substr(lexeme, 1, str.Len(lexeme) - 2)
+    if str.Len(body) == 0 or str.Contains(body, "\\") or str.Contains(body, "/") or str.Contains(body, " "):
+        ret lexeme
+    end
+    ret "\"" + tr_safe_name(targetpack, body) + "\""
 end
 
 func tr_page_word(kind: int, name: str, to_fa: bool, routes: bool): str:
@@ -1895,8 +1906,12 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
             else:
                 skip_emit = true
             end
+        else t.kind == tok.TK_STRING and has_routes and prev_kind == tok.TK_LPAREN and i >= 2 and tok.StreamAt(toks, i - 2).kind == tok.TK_IDENT and (str.Equals(tok.StreamAt(toks, i - 2).lexeme, "Param") or lp.IdentEqual(tok.StreamAt(toks, i - 2).lexeme, "پارامتر")) and i >= 3 and tok.StreamAt(toks, i - 3).kind == tok.TK_DOT:
+            lexeme = tr_route_key(targetpack, t.lexeme)
         else t.kind == tok.TK_STRING and in_routes and (prev_kind == tok.TK_STMT_END or prev_kind == tok.TK_COLON) and tr_next_kind(toks, i, n) == tok.TK_COLON:
             lexeme = tr_route_pattern(targetpack, t.lexeme)
+        else t.kind == tok.TK_IDENT and prev_kind != tok.TK_DOT and not in_import and tr_next_kind(toks, i, n) == tok.TK_DOT and (str.Equals(t.lexeme, "page") or lp.IdentEqual(t.lexeme, "صفحه")):
+            lexeme = targetpack == lp.LP_FA ? "صفحه" : "page"
         else t.kind == tok.TK_IDENT and has_routes and not in_import and (prev_kind == tok.TK_DOT or not tr_has(names, t.lexeme) or tr_is_routes_head(t.lexeme, prev_kind, tr_next_kind(toks, i, n))) and str.Len(tr_route_word(targetpack, t.lexeme, prev_kind, tr_next_kind(toks, i, n), in_routes, routes_attr, dot_var)) > 0:
             lexeme = tr_route_word(targetpack, t.lexeme, prev_kind, tr_next_kind(toks, i, n), in_routes, routes_attr, dot_var)
         else i == rule_needs_at:

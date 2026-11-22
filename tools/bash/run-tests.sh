@@ -1002,6 +1002,12 @@ if want ui; then
             [ -f "${f%.salam}.out" ] && [ -f "${f%.salam}.script" ] || continue
             add_job uinative "ui/$lang/$name" "$f" "$lang" "${f%.salam}.out"
         done
+        for d in tests/"$lang"/ui/*/; do
+            [ -f "${d}main.salam" ] && [ -f "${d}main.out" ] && [ -f "${d}main.script" ] || continue
+            name=$(basename "$d")
+            case "$name" in _*) continue ;; esac
+            add_job uinative "ui/$lang/$name" "${d}main.salam" "$lang" "${d}main.out"
+        done
     done
 fi
 

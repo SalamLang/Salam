@@ -342,8 +342,8 @@ func lo_rt_page_walk(log: lg.Logger, a &: at.Ast, nid: int, errs &: int):
         if base.kind == at.AST_IDENTIFIER and (str.Equals(base.name, "page") or str.Equals(base.name, "صفحه")) and str.Len(internal) > 0:
             if not g_lo_routes_on:
                 lo_rt_error(
-                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam, or a 'routes:' block that maps paths to components, for example \"/\" : Home"),
-                    co.Format1(i18.Tr("E265: 'page.%s' works with the router, but this program has no routes block"), co.ArgStr(n.name))
+                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam with one file per route, for example pages/index.salam"),
+                    co.Format1(i18.Tr("E265: 'page.%s' works with the router, but this program has no pages folder"), co.ArgStr(n.name))
                 )
                 errs++
                 ret
@@ -375,8 +375,8 @@ func lo_rt_walk(log: lg.Logger, a &: at.Ast, nid: int, outlets &: int, errs &: i
             outlets++
             if not g_lo_routes_on:
                 lo_rt_error(
-                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam, or a 'routes:' block that maps paths to components, for example \"/\" : Home"),
-                    i18.Tr("E265: 'Outlet' shows the component of the current route, but this program has no routes block and no pages folder")
+                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam with one file per route, for example pages/index.salam"),
+                    i18.Tr("E265: 'Outlet' shows the component of the current route, but this program has no pages folder")
                 )
                 errs++
             else errs == 0:
@@ -852,7 +852,7 @@ func lo_rt_setting(log: lg.Logger, a &: at.Ast, c: int): int:
             g_lo_routes_base = ""
         end
     else:
-        lo_rt_error(log, a, c, i18.Tr("a routes block takes mode and base, and lines such as \"/users/:id\" : User"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(cn.name)))
+        lo_rt_error(log, a, c, i18.Tr("the page block takes mode and base"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(cn.name)))
         ret 1
     end
     ret 0
@@ -924,76 +924,6 @@ func lo_rt_insert(routes &: Vector<LoRoute>, r: LoRoute):
     routes = sorted
 end
 
-func lo_rt_collect(log: lg.Logger, a &: at.Ast, prog: int, rnode: int, routes &: Vector<LoRoute>, exprs &: Vector<int>): int:
-    mut errs := 0
-    body := at.Get(a, rnode).a
-    if body == 0:
-        ret 0
-    end
-    repeat at.ChildCount(a, body) in i:
-        c := at.Child(a, body, i)
-        cn := at.Get(a, c)
-        if cn.kind == at.AST_LAYOUT_ATTR:
-            errs += lo_rt_setting(log, a, c)
-            continue
-        end
-        if cn.kind != at.AST_LAYOUT_ELEMENT:
-            continue
-        end
-        mut r := LoRoute { comp = cn.name, node = c }
-        pa := lo_rt_attr(a, c, "path")
-        r.pattern = pa != 0 ? lo_rt_lit(a, at.Get(a, pa).a) : ""
-        if lo_rt_pattern_ok(log, a, c, r.pattern) > 0:
-            errs++
-            continue
-        end
-        if not str.Equals(r.pattern, "*"):
-            r.pattern = nav.Normalize(r.pattern)
-        end
-        mut dup := false
-        each prev in routes:
-            if str.Equals(prev.pattern, r.pattern):
-                dup = true
-            end
-        end
-        if dup:
-            lo_rt_error(log, a, c, i18.Tr("each pattern may appear once; remove the second line"), co.Format1(i18.Tr("E266: route pattern '%s' is listed twice"), co.ArgStr(r.pattern)))
-            errs++
-            continue
-        end
-        mut gi := 0 - 1
-        mut ri := 0 - 1
-        repeat at.ChildCount(a, c) in k:
-            ac := at.Child(a, c, k)
-            an := at.Get(a, ac)
-            if an.kind != at.AST_LAYOUT_ATTR or str.Equals(an.name, "path"):
-                continue
-            end
-            if str.Equals(an.name, "guard"):
-                gi = exprs.Len()
-                exprs.Push(an.a)
-            else str.Equals(an.name, "redirect"):
-                ri = exprs.Len()
-                exprs.Push(an.a)
-            else str.Equals(an.name, "title"):
-                r.title = exprs.Len()
-                exprs.Push(an.a)
-            else:
-                lo_rt_error(log, a, ac, i18.Tr("a route line takes guard, redirect and title"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(an.name)))
-                errs++
-            end
-        end
-        if gi >= 0 or ri >= 0:
-            r.gs.Push(gi)
-            r.rs.Push(ri)
-        end
-        errs += lo_rt_check_comp(log, a, c, r, lo_rt_find_comp(a, prog, r.comp))
-        r.rank = nav.Rank(r.pattern)
-        lo_rt_insert(routes, r)
-    end
-    ret errs
-end
-
 pub func RoutesActive(): bool:
     ret g_lo_routes_on and g_lo_routes_web
 end
@@ -1028,35 +958,16 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.As
     g_lo_pg_path.Clear()
     g_lo_pg_prog.Clear()
     sm.LayoutSetKnownComponents(Vector {} as Vector<str>)
-    mut rnode := 0
     mut errs := 0
-    repeat at.ChildCount(a, prog) in i:
-        c := at.Child(a, prog, i)
-        cn := at.Get(a, c)
-        if cn.kind == at.AST_LAYOUT_COMPONENT and str.Equals(cn.name, "__salam_routes"):
-            if rnode != 0:
-                lo_rt_error(log, a, c, i18.Tr("put every route in one routes block"), i18.Tr("E264: a program has at most one routes block"))
-                errs++
-            else:
-                rnode = c
-            end
-        end
-    end
     lb := lo_pg_page(a, prog)
     pdir := lb != 0 ? lo_pg_dir(base_dir) : ""
     nm := lo_rt_names(pack)
     mut routes := Vector {} as Vector<LoRoute>
     mut exprs := Vector {} as Vector<int>
-    mut anchor := rnode
-    if rnode != 0:
-        g_lo_routes_on = true
-        errs += lo_rt_collect(log, a, prog, rnode, routes, exprs)
-    end
+    mut anchor := 0
     if pdir.Len() > 0:
         g_lo_routes_on = true
-        if anchor == 0:
-            anchor = lb
-        end
+        anchor = lb
         errs += lo_pg_collect(log, pack, ct, a, lb, base_dir, pdir, routes, exprs)
         errs += lo_pg_page_settings(log, a, lb)
         mut known := Vector {} as Vector<str>
@@ -1070,19 +981,6 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.As
             end
         end
         sm.LayoutSetKnownComponents(known)
-    end
-    if g_lo_routes_on:
-        mut pn := at.Get(a, prog)
-        mut keep := Vector {} as Vector<int>
-        each id in pn.list:
-            kd := at.KindOf(a, id)
-            if kd == at.AST_LAYOUT_COMPONENT and str.Equals(at.Get(a, id).name, "__salam_routes"):
-                continue
-            end
-            keep.Push(id)
-        end
-        pn.list = keep
-        at.Put(a, prog, pn)
     end
     mut outlets := 0
     repeat at.ChildCount(a, prog) in j:
@@ -1127,7 +1025,7 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.As
     base := at.Count(a)
     sp := ln_parse(log, a, text, "<salam-routes>", pack)
     if sp == 0:
-        lo_rt_error(log, a, anchor, i18.Tr("this is a compiler bug; please report it with the routes block"), i18.Tr("E264: the routes block could not be lowered"))
+        lo_rt_error(log, a, anchor, i18.Tr("this is a compiler bug; please report it with the pages folder"), i18.Tr("E264: the pages folder could not be lowered"))
         ret errs + 1
     end
     mut mine := Vector {} as Vector<int>

@@ -1,0 +1,121 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/internal/ssrclient"
+@fa "کارخواه‌رندرسرور"
+package ssrclient
+
+import net.http
+import encoding.json
+import env
+import str
+
+mut _server := ""
+
+mut _token := ""
+
+mut _failed := false
+
+mut _error := ""
+
+func _fail(message: str): str:
+    _failed = true
+    _error = str.Clone(message)
+    ret ""
+end
+
+func _base(): str:
+    mut b := Server()
+    if str.EndsWith(b, "/"):
+        b = b.Substr(0, b.Len() - 1)
+    end
+    ret b
+end
+
+func _session(base: str): bool:
+    r := http.Get(base + "/_salam/session")
+    if http.Status(r) != 200:
+        ret false
+    end
+    _token = str.Clone(json.Get(http.Body(r), "token"))
+    ret _token.Len() > 0
+end
+
+func _post(base: str, name: str, args: str): http.Response:
+    mut h := http.NewHeaders()
+    h.Insert("Content-Type", "application/json")
+    h.Insert("X-Salam-Token", _token)
+    ret http.PostWith(base + "/_salam/fn/" + name, "{\"args\":" + args + "}", h)
+end
+
+@en "Call"
+@fa "فراخوانی"
+pub func Call(name: str, args: str): str:
+    _failed = false
+    _error = ""
+    base := _base()
+    if base.Len() == 0:
+        ret _fail("no server is set: use the server setting or SALAM_SERVER")
+    end
+    if _token.Len() == 0 and not _session(base):
+        ret _fail("cannot reach the server")
+    end
+    mut r := _post(base, name, args)
+    if http.Status(r) == 403:
+        if not _session(base):
+            ret _fail("cannot reach the server")
+        end
+        r = _post(base, name, args)
+    end
+    status := http.Status(r)
+    text := http.Body(r)
+    if status == 0 or not json.Valid(text):
+        ret _fail("the server did not answer")
+    end
+    if json.Get(text, "ok") != "true":
+        mut message := json.Get(text, "error")
+        if message.Len() == 0:
+            message = "the server refused the call"
+        end
+        ret _fail(message)
+    end
+    ret json.GetRaw(text, "value")
+end
+
+@en "SetServer"
+@fa "تنظیم سرور"
+pub func SetServer(url: str):
+    _server = str.Clone(url)
+    _token = ""
+end
+
+@en "Server"
+@fa "سرور"
+pub func Server(): str:
+    if _server.Len() > 0:
+        ret _server
+    end
+    ret env.Get("SALAM_SERVER")
+end
+
+@en "Failed"
+@fa "ناموفق"
+pub func Failed(): bool:
+    ret _failed
+end
+
+@en "ErrorText"
+@fa "متن خطا"
+pub func ErrorText(): str:
+    ret _error
+end

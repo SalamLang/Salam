@@ -1569,6 +1569,14 @@ if want page; then
                 [ "$sub" = errors ] && runner=page_errors
                 add_job "$runner" "page/$lang/$sub/$name" "$f" "$lang" -
             done
+            for d in tests/"$lang"/page/"$sub"/*/; do
+                [ -f "${d}main.salam" ] || continue
+                name=$(basename "$d")
+                case "$name" in _*) continue ;; esac
+                runner=page
+                [ "$sub" = errors ] && runner=page_errors
+                add_job "$runner" "page/$lang/$sub/$name" "${d}main.salam" "$lang" -
+            done
         done
     done
 fi

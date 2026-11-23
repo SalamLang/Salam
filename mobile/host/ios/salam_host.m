@@ -21,6 +21,7 @@ static CGFloat g_kb;
 static pthread_t g_thread;
 static int g_started;
 static int g_tapped;
+static void (^g_first_frame)(void);
 static int g_ime;
 static CGContextRef g_ctx;
 static void *g_shadow;
@@ -145,6 +146,8 @@ static int touch_slot(UITouch *t, int create)
     }
     return -1;
 }
+
+static void run_script(id view, NSString *script, CGFloat scale);
 
 @interface SalamView : UIView <UITextInput>
 @property(copy, nonatomic) NSString *marked;
@@ -527,18 +530,21 @@ static int hid_to_key(UIKeyboardHIDUsage u)
             g_started = 1;
             pthread_create(&g_thread, NULL, run_app, NULL);
         }
-        NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
-        NSUInteger at = [args indexOfObject:@"-salam-tap"];
-        if (!g_tapped && at != NSNotFound && at + 1 < args.count) {
+        if (!g_tapped) {
             g_tapped = 1;
-            NSArray<NSString *> *xy = [args[at + 1] componentsSeparatedByString:@","];
-            if (xy.count == 2) {
-                double px = xy[0].doubleValue * s;
-                double py = xy[1].doubleValue * s;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    salam_host_post(SALAM_EV_POINTER, 0, 0, px, py, 0, NULL);
-                    salam_host_post(SALAM_EV_POINTER, 1, 0, px, py, 0, NULL);
-                });
+            NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
+            NSUInteger at = [args indexOfObject:@"-salam-script"];
+            NSUInteger tap = [args indexOfObject:@"-salam-tap"];
+            if (at != NSNotFound && at + 1 < args.count) {
+                NSString *script = args[at + 1];
+                g_first_frame = ^{
+                    run_script(self, script, s);
+                };
+            } else if (tap != NSNotFound && tap + 1 < args.count) {
+                NSString *script = [@"tap " stringByAppendingString:args[tap + 1]];
+                g_first_frame = ^{
+                    run_script(self, script, s);
+                };
             }
         }
     }
@@ -551,6 +557,89 @@ static int hid_to_key(UIKeyboardHIDUsage u)
 }
 
 @end
+
+static void script_at(double ms, void (^fn)(void))
+{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ms * NSEC_PER_MSEC)), dispatch_get_main_queue(), fn);
+}
+
+static void script_pointer(double ms, int action, int id, double x, double y, double s)
+{
+    script_at(ms, ^{
+        salam_host_post(SALAM_EV_POINTER, action, id, x * s, y * s, 0, NULL);
+    });
+}
+
+static void run_script(id view, NSString *script, CGFloat s)
+{
+    double t = 1500;
+    for (NSString *raw in [script componentsSeparatedByString:@";"]) {
+        NSString *step = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        NSRange sp = [step rangeOfString:@" "];
+        NSString *cmd = sp.location == NSNotFound ? step : [step substringToIndex:sp.location];
+        NSString *arg = sp.location == NSNotFound ? @"" : [step substringFromIndex:sp.location + 1];
+        NSArray<NSString *> *a = [arg componentsSeparatedByString:@","];
+        if ([cmd isEqualToString:@"tap"] && a.count >= 2) {
+            script_pointer(t, 0, 0, a[0].doubleValue, a[1].doubleValue, s);
+            script_pointer(t + 40, 1, 0, a[0].doubleValue, a[1].doubleValue, s);
+            t += 200;
+        } else if ([cmd isEqualToString:@"long"] && a.count >= 2) {
+            double hold = a.count >= 3 ? a[2].doubleValue : 900;
+            script_pointer(t, 0, 0, a[0].doubleValue, a[1].doubleValue, s);
+            script_pointer(t + hold, 1, 0, a[0].doubleValue, a[1].doubleValue, s);
+            t += hold + 200;
+        } else if ([cmd isEqualToString:@"swipe"] && a.count >= 4) {
+            double x1 = a[0].doubleValue, y1 = a[1].doubleValue, x2 = a[2].doubleValue, y2 = a[3].doubleValue;
+            double dur = a.count >= 5 ? a[4].doubleValue : 300;
+            int n = 20;
+            script_pointer(t, 0, 0, x1, y1, s);
+            for (int i = 1; i <= n; i++) {
+                double f = (double)i / n;
+                script_pointer(t + dur * f, 2, 0, x1 + (x2 - x1) * f, y1 + (y2 - y1) * f, s);
+            }
+            script_pointer(t + dur + 16, 1, 0, x2, y2, s);
+            t += dur + 200;
+        } else if ([cmd isEqualToString:@"pinch"] && a.count >= 3) {
+            double cx = a[0].doubleValue, cy = a[1].doubleValue, scale = a[2].doubleValue;
+            double d0 = 60;
+            double dur = a.count >= 4 ? a[3].doubleValue : 400;
+            int n = 20;
+            script_pointer(t, 0, 0, cx - d0, cy, s);
+            script_pointer(t + 8, 0, 1, cx + d0, cy, s);
+            for (int i = 1; i <= n; i++) {
+                double f = (double)i / n;
+                double d = d0 + (d0 * scale - d0) * f;
+                script_pointer(t + 16 + dur * f, 2, 0, cx - d, cy, s);
+                script_pointer(t + 16 + dur * f, 2, 1, cx + d, cy, s);
+            }
+            script_pointer(t + dur + 40, 1, 1, cx + d0 * scale, cy, s);
+            script_pointer(t + dur + 48, 1, 0, cx - d0 * scale, cy, s);
+            t += dur + 300;
+        } else if ([cmd isEqualToString:@"wait"]) {
+            t += arg.doubleValue;
+        } else if ([cmd isEqualToString:@"type"]) {
+            script_at(t, ^{
+                [view insertText:arg];
+            });
+            t += 200;
+        } else if ([cmd isEqualToString:@"mark"]) {
+            script_at(t, ^{
+                [view setMarkedText:arg selectedRange:NSMakeRange(arg.length, 0)];
+            });
+            t += 200;
+        } else if ([cmd isEqualToString:@"unmark"]) {
+            script_at(t, ^{
+                [view unmarkText];
+            });
+            t += 200;
+        } else if ([cmd isEqualToString:@"back"]) {
+            script_at(t, ^{
+                [view deleteBackward];
+            });
+            t += 200;
+        }
+    }
+}
 
 @interface SalamController : UIViewController
 @end
@@ -698,6 +787,11 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
     dispatch_async(dispatch_get_main_queue(), ^{
         g_view.layer.contents = (__bridge id)img;
         CGImageRelease(img);
+        if (g_first_frame != nil) {
+            void (^go)(void) = g_first_frame;
+            g_first_frame = nil;
+            go();
+        }
     });
     return 1;
 }

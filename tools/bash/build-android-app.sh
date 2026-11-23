@@ -3,7 +3,8 @@
 #
 # Usage:
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
-#       [--id APPLICATION_ID] [--name LABEL] [--release] [--no-apk]
+#       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
+#       [--no-apk] [--run]
 #
 # Salam emits C for each ABI, the NDK compiles it with the host shim in
 # mobile/host/android into libsalamapp.so, and a prebuilt Gradle project
@@ -20,6 +21,8 @@ ID=
 NAME=
 BUILD=assembleDebug
 APK=1
+ICON=
+RUN=0
 while [ $# -gt 0 ]; do
     case $1 in
     --out)
@@ -40,6 +43,14 @@ while [ $# -gt 0 ]; do
         ;;
     --release)
         BUILD=assembleRelease
+        shift
+        ;;
+    --icon)
+        ICON=$2
+        shift 2
+        ;;
+    --run)
+        RUN=1
         shift
         ;;
     --no-apk)
@@ -88,9 +99,41 @@ base=$(basename "$APP" .salam)
 [ -n "$ID" ] || ID=app.salam.$(printf %s "$base" | tr -c 'A-Za-z0-9\n' '_' | tr '[:upper:]' '[:lower:]')
 [ -n "$NAME" ] || NAME=$base
 
+SQLITE_VERSION=3500400
+SQLITE_SHA256=1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032
+
+fetch_sqlite() {
+    cache=${XDG_CACHE_HOME:-$HOME/.cache}/salam/sqlite-$SQLITE_VERSION
+    if [ ! -f "$cache/sqlite3.c" ]; then
+        mkdir -p "$cache"
+        zip=$cache/sqlite.zip
+        curl -fsSL -o "$zip" "https://www.sqlite.org/2025/sqlite-amalgamation-$SQLITE_VERSION.zip"
+        got=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+        [ "$got" = "$SQLITE_SHA256" ] || {
+            echo "build-android-app: sqlite download does not match its checksum" >&2
+            rm -f "$zip"
+            exit 1
+        }
+        unzip -q -o -j "$zip" "sqlite-amalgamation-$SQLITE_VERSION/sqlite3.c" "sqlite-amalgamation-$SQLITE_VERSION/sqlite3.h" -d "$cache"
+        rm -f "$zip"
+    fi
+    echo "$cache"
+}
+
 rm -rf "$OUT/project"
 mkdir -p "$OUT/project"
 cp -R "$ROOT/mobile/host/android/project/." "$OUT/project/"
+if [ -n "$ICON" ]; then
+    [ -f "$ICON" ] || {
+        echo "build-android-app: no such icon: $ICON" >&2
+        exit 2
+    }
+    mkdir -p "$OUT/project/app/src/main/res/mipmap-xxxhdpi"
+    cp "$ICON" "$OUT/project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
+    sed -i.bak 's|android:supportsRtl="true"|android:supportsRtl="true" android:icon="@mipmap/ic_launcher"|' \
+        "$OUT/project/app/src/main/AndroidManifest.xml"
+    rm -f "$OUT/project/app/src/main/AndroidManifest.xml.bak"
+fi
 mkdir -p "$OUT/project/gradle/wrapper"
 cp "$ROOT/android/gradle/wrapper/gradle-wrapper.jar" "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" "$OUT/project/gradle/wrapper/"
 cp "$ROOT/android/gradlew" "$OUT/project/gradlew"
@@ -123,6 +166,11 @@ for abi in $ABIS; do
         "$CC" -O2 -w -fPIC -fno-strict-aliasing -ffunction-sections -fdata-sections \
             -Dmain=salam_app_main -I"$work/.salam-build" -c "$f" -o "$work/obj/$(basename "$f").o"
     done
+    if grep -q 'sqlite3_open' "$work"/.salam-build/*.c 2>/dev/null; then
+        sqlite_dir=$(fetch_sqlite)
+        "$CC" -O2 -fPIC -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -c \
+            "$sqlite_dir/sqlite3.c" -o "$work/obj/sqlite3.o"
+    fi
     "$CC" -O2 -fPIC -c "$ROOT/mobile/host/android/salam_host.c" -o "$work/obj/salam_host.o"
     "$CC" -O2 -fPIC -c "$ROOT/mobile/host/common/salam_host_common.c" -o "$work/obj/salam_host_common.o"
     lib="$OUT/project/app/src/main/jniLibs/$abi"
@@ -147,3 +195,9 @@ apk=$(find "$OUT/project/app/build/outputs/apk" -name '*.apk' | head -n 1)
 }
 cp "$apk" "$OUT/app.apk"
 echo "apk: $OUT/app.apk"
+if [ "$RUN" = 1 ]; then
+    ADB=$SDK/platform-tools/adb
+    "$ADB" install -r "$OUT/app.apk"
+    "$ADB" shell am start -n "$ID/ir.salamlang.host.SalamActivity"
+    echo "logs: $ADB logcat -s salam"
+fi

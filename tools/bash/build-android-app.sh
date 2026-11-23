@@ -17,7 +17,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 : "${SALAM:=salam}"
 APP=
 OUT=
-ABIS=arm64-v8a
+ABIS=
 ID=
 NAME=
 BUILD=assembleDebug
@@ -102,6 +102,14 @@ done
     echo "build-android-app: no such file: $APP" >&2
     exit 2
 }
+
+if [ -z "$ABIS" ]; then
+    if [ "$BUILD" = assembleDebug ]; then
+        ABIS=arm64-v8a
+    else
+        ABIS=arm64-v8a,armeabi-v7a,x86_64
+    fi
+fi
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 [ -d "$SDK" ] || SDK=$HOME/Android/Sdk

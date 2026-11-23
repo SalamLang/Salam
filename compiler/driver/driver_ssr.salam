@@ -15,6 +15,7 @@ package driver
 
 import os
 import os.process
+import fs
 import str
 import io
 import time
@@ -132,40 +133,59 @@ func ssr_wait_listening(child &: process.Child, host: str, port: int): bool:
     ret tcp.WaitListening(host, port, 10000) and child.Poll()
 end
 
-pub func SsrBuild(opt &: Dr): int:
-    lgr := lg.New(opt.log_level, resolve_color(opt.color))
-    pack := lp.Load(opt.lang)
-    if pack == lp.LP_NONE:
-        lg.Log(
-            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
-        )
-        ret 2
+func ssr_pid_alive(pid: str): bool:
+    if not os.IsDir("/proc"):
+        ret true
     end
-    if SALAM_OS_WINDOWS:
-        io.EPrintln("salam: page build --ssr is not available on Windows yet")
-        ret 2
+    ret os.IsDir("/proc/" + pid)
+end
+
+func ssr_lock(lgr: lg.Logger, out: str): bool:
+    lock := out + ".lock"
+    _mk := os.MkdirAll(dir_of(out))
+    if os.Mkdir(lock) != 0:
+        pid_file := join_path2(lock, "pid")
+        pid := os.Exists(pid_file) ? str.Trim(io.ReadFile(pid_file)) : ""
+        if str.Len(pid) > 0 and not ssr_pid_alive(pid):
+            _rl := os.RemoveAll(lock)
+            if os.Mkdir(lock) != 0:
+                ret false
+            end
+        else:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(i18.Tr("another build is writing '%s' (process %s); wait for it, or remove the folder '%s.lock' if that process is gone"), co.ArgStr(out), co.ArgStr(str.Len(pid) > 0 ? pid : "?"), co.ArgStr(out))
+            )
+            ret false
+        end
     end
-    if not ui_web_only(lgr, opt):
-        ret 2
+    _wp := os.WriteFile(join_path2(lock, "pid"), co.I64Toa(os.Pid() as i64))
+    ret true
+end
+
+func ssr_unlock(out: str):
+    _ru := os.RemoveAll(out + ".lock")
+end
+
+func ssr_swap(out: str, stage: str): bool:
+    old := out + ".old"
+    _r0 := os.RemoveAll(old)
+    if os.Exists(out):
+        if fs.Rename(out, old) != 0:
+            ret false
+        end
     end
-    first := opt.inputs.Len() > 0 ? opt.inputs.Get(0) : "."
-    entry := ssr_entry(lgr, pack, first)
-    if str.Len(entry) == 0:
-        ret 2
+    if fs.Rename(stage, out) != 0:
+        if os.Exists(old):
+            _back := fs.Rename(old, out)
+        end
+        ret false
     end
-    root := dir_of(entry)
-    mut out := opt.ssr_out
-    if str.Len(out) == 0:
-        out = "dist"
-    end
-    out = ssr_trim(abs_of(out))
+    _r1 := os.RemoveAll(old)
+    ret true
+end
+
+func ssr_build_stage(opt &: Dr, lgr: lg.Logger, entry: str, root: str, out: str): int:
     assets := join_path2(root, "public")
-    if ssr_inside(out, root) or ssr_inside(assets, out):
-        lg.Log(
-            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("the output folder '%s' contains the project; choose another one"), co.ArgStr(out))
-        )
-        ret 2
-    end
     pub_dir := join_path2(out, "public")
     _rm := os.RemoveAll(pub_dir)
     if os.MkdirAll(pub_dir) != 0:
@@ -218,8 +238,62 @@ pub func SsrBuild(opt &: Dr): int:
         ret 1
     end
     _rs2 := os.RemoveAll(scratch)
-    println "salam: built " + exe_file + " and " + pub_dir
     ret 0
+end
+
+pub func SsrBuild(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    if SALAM_OS_WINDOWS:
+        io.EPrintln("salam: page build --ssr is not available on Windows yet")
+        ret 2
+    end
+    if not ui_web_only(lgr, opt):
+        ret 2
+    end
+    first := opt.inputs.Len() > 0 ? opt.inputs.Get(0) : "."
+    entry := ssr_entry(lgr, pack, first)
+    if str.Len(entry) == 0:
+        ret 2
+    end
+    root := dir_of(entry)
+    mut out := opt.ssr_out
+    if str.Len(out) == 0:
+        out = "dist"
+    end
+    out = ssr_trim(abs_of(out))
+    assets := join_path2(root, "public")
+    if ssr_inside(out, root) or ssr_inside(assets, out):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("the output folder '%s' contains the project; choose another one"), co.ArgStr(out))
+        )
+        ret 2
+    end
+    if not ssr_lock(lgr, out):
+        ret 2
+    end
+    stage := out + ".tmp"
+    _rs := os.RemoveAll(stage)
+    mut rc := ssr_build_stage(opt, lgr, entry, root, stage)
+    if rc == 0 and not ssr_swap(out, stage):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot move the new build into '%s'"), co.ArgStr(out))
+        )
+        rc = 2
+    end
+    if rc != 0:
+        _rs2 := os.RemoveAll(stage)
+    else:
+        println "salam: built " + join_path2(out, SALAM_OS_WINDOWS ? "server.exe" : "server") + " and " + join_path2(out, "public")
+    end
+    ssr_unlock(out)
+    ret rc
 end
 
 pub func ServeRender(opt &: Dr): int:

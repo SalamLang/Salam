@@ -29,6 +29,7 @@ import env
 import time
 import conv
 import net.router
+import mem
 
 if SALAM_OS_WINDOWS:
     extern:
@@ -52,13 +53,19 @@ mut _pg_active := false
 
 mut _pg_owner := 0 as i64
 
+mut _pg_start := 0 as i64
+
 mut _pg_shell := ""
 
 mut _pg_base := ""
 
 mut _pg_title := ""
 
+mut _pg_title_heap := false
+
 mut _pg_write := ""
+
+mut _pg_write_heap := false
 
 mut _pg_skip := false
 
@@ -90,6 +97,31 @@ else:
             ret pthread_self() as i64
         end
     end
+end
+
+func _pg_clear_text():
+    if _pg_title_heap: mem.Free(_pg_title as void*) end
+    if _pg_write_heap: mem.Free(_pg_write as void*) end
+    _pg_title = ""
+    _pg_write = ""
+    _pg_title_heap = false
+    _pg_write_heap = false
+end
+
+func _pg_budget_ms(): int:
+    text := env.Get("SALAM_RENDER_TIMEOUT_MS")
+    if text.Len() == 0:
+        ret 3000
+    end
+    ret conv.ParseIntOr(text, 3000) as int
+end
+
+func _pg_over_budget(): bool:
+    budget := _pg_budget_ms()
+    if budget <= 0 or _pg_call_keys.Len() == 0:
+        ret false
+    end
+    ret (time.NowNanos() - _pg_start) / (1000000 as i64) > (budget as i64)
 end
 
 func _pg_byte(s: str, i: int): int:
@@ -126,7 +158,7 @@ func _pg_decode(s: str): str:
             i++
         end
     end
-    ret str.Clone(str.BufStr(sb))
+    ret str.BufStr(sb)
 end
 
 func _pg_encode(s: str): str:
@@ -147,21 +179,38 @@ func _pg_encode(s: str): str:
         end
         i++
     end
-    ret str.Clone(str.BufStr(sb))
+    ret str.BufStr(sb)
+end
+
+func _pg_at(html: str, at: int, want: str): bool:
+    n := want.Len()
+    if at < 0 or at + n > html.Len(): ret false end
+    mut i := 0
+    until i < n:
+        if _pg_byte(html, at + i) != _pg_byte(want, i): ret false end
+        i++
+    end
+    ret true
+end
+
+func _pg_swap(s: str, find: str, with: str): str:
+    r := str.Replace(s, find, with)
+    mem.Free(s as void*)
+    ret r
 end
 
 func _pg_json_text(s: str): str:
     mut t := json.Escape(s)
-    t = str.Replace(t, "<", "\\u003c")
-    t = str.Replace(t, " ", "\\u2028")
-    t = str.Replace(t, " ", "\\u2029")
+    t = _pg_swap(t, "<", "\\u003c")
+    t = _pg_swap(t, " ", "\\u2028")
+    t = _pg_swap(t, " ", "\\u2029")
     ret t
 end
 
 func _pg_script_safe(json_text: str): str:
     mut t := str.Replace(json_text, "<", "\\u003c")
-    t = str.Replace(t, " ", "\\u2028")
-    ret str.Replace(t, " ", "\\u2029")
+    t = _pg_swap(t, " ", "\\u2028")
+    ret _pg_swap(t, " ", "\\u2029")
 end
 
 func _pg_public_dir(): str:
@@ -269,9 +318,9 @@ end
 pub func PageBegin():
     sync.Lock(_pg_mu)
     _pg_owner = _pg_tid()
+    _pg_start = time.NowNanos()
     _pg_active = true
-    _pg_title = ""
-    _pg_write = ""
+    _pg_clear_text()
     _pg_skip = false
     _pg_num = 0
     _pg_call_keys.Clear()
@@ -291,29 +340,51 @@ end
 @en "PageUrl"
 @fa "نشانی صفحه"
 pub func PageUrl(c: i64): str:
-    mut p := http.Path(c)
+    path := http.Path(c)
+    mut rel := path
+    mut cut := ""
+    mut cut_owned := false
     if _pg_base.Len() > 0:
-        if p == _pg_base:
-            p = "/"
-        else str.StartsWith(p, _pg_base + "/"):
-            p = p.Substr(_pg_base.Len(), p.Len() - _pg_base.Len())
+        if path == _pg_base:
+            rel = "/"
+        else _pg_at(path, 0, _pg_base) and path.Len() > _pg_base.Len() and _pg_byte(path, _pg_base.Len()) == 47:
+            cut = path.Substr(_pg_base.Len(), path.Len() - _pg_base.Len())
+            cut_owned = true
+            rel = cut
         end
     end
     q := http.RawQuery(c)
-    if q.Len() > 0: ret _pg_decode(p + "?" + q) end
-    ret _pg_decode(p)
+    mut out := ""
+    if q.Len() > 0:
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, rel)
+        str.BufAppend(sb, "?")
+        str.BufAppend(sb, q)
+        joined := str.BufStr(sb)
+        str.BufFree(sb)
+        out = _pg_decode(joined)
+        mem.Free(joined as void*)
+    else:
+        out = _pg_decode(rel)
+    end
+    if cut_owned: mem.Free(cut as void*) end
+    ret out
 end
 
 @en "PageTitle"
 @fa "عنوان صفحه"
 pub func PageTitle(t: str):
+    if _pg_title_heap: mem.Free(_pg_title as void*) end
     _pg_title = str.Clone(t)
+    _pg_title_heap = true
 end
 
 @en "PageWrite"
 @fa "نوشتن نشانی"
 pub func PageWrite(u: str):
+    if _pg_write_heap: mem.Free(_pg_write as void*) end
     _pg_write = str.Clone(u)
+    _pg_write_heap = true
 end
 
 @en "PageSkip"
@@ -334,25 +405,31 @@ end
 @fa "امن سازی اچ تی ام ال"
 pub func PageHtml(s: str): str:
     mut t := str.Replace(s, "&", "&amp;")
-    t = str.Replace(t, "<", "&lt;")
-    t = str.Replace(t, ">", "&gt;")
-    t = str.Replace(t, "\"", "&quot;")
-    ret str.Replace(t, "'", "&#39;")
+    t = _pg_swap(t, "<", "&lt;")
+    t = _pg_swap(t, ">", "&gt;")
+    t = _pg_swap(t, "\"", "&quot;")
+    ret _pg_swap(t, "'", "&#39;")
 end
 
 @en "PageUrlAttr"
 @fa "امن سازی نشانی"
 pub func PageUrlAttr(s: str): str:
-    mut t := ""
+    mut sb := str.NewBuilder()
     n := s.Len()
     mut i := 0
     until i < n:
-        if _pg_byte(s, i) > 32: t += s.Substr(i, 1) end
+        b := _pg_byte(s, i)
+        if b > 32: str.BufAppendChar(sb, b) end
         i++
     end
-    t = str.Lower(t)
-    if str.StartsWith(t, "javascript:") or str.StartsWith(t, "vbscript:") or str.StartsWith(t, "data:"):
-        ret "#"
+    joined := str.BufStr(sb)
+    str.BufFree(sb)
+    t := str.Lower(joined)
+    mem.Free(joined as void*)
+    bad := str.StartsWith(t, "javascript:") or str.StartsWith(t, "vbscript:") or str.StartsWith(t, "data:")
+    mem.Free(t as void*)
+    if bad:
+        ret str.Clone("#")
     end
     ret PageHtml(s)
 end
@@ -361,12 +438,15 @@ end
 @fa "امن سازی سی اس اس"
 pub func PageCss(s: str): str:
     mut t := str.Replace(s, ";", "")
-    t = str.Replace(t, "{", "")
-    t = str.Replace(t, "}", "")
-    t = str.Replace(t, "<", "")
-    t = str.Replace(t, ">", "")
-    t = str.Replace(t, "\r", "")
-    ret PageHtml(str.Replace(t, "\n", ""))
+    t = _pg_swap(t, "{", "")
+    t = _pg_swap(t, "}", "")
+    t = _pg_swap(t, "<", "")
+    t = _pg_swap(t, ">", "")
+    t = _pg_swap(t, "\r", "")
+    t = _pg_swap(t, "\n", "")
+    out := PageHtml(t)
+    mem.Free(t as void*)
+    ret out
 end
 
 @en "PageNext"
@@ -386,9 +466,13 @@ pub func PageNext(html: str, from: int): int:
             j++
         end
         open_end := j + 3
-        if digits > 0 and open_end <= n and html.Substr(j, 3) == "-->":
-            close := "<!--/salam:" + str.FromInt(num as i64) + "-->"
-            if html.Substr(open_end, close.Len()) == close:
+        if digits > 0 and open_end <= n and _pg_at(html, j, "-->"):
+            digits_text := str.FromInt(num as i64)
+            close := "<!--/salam:" + digits_text + "-->"
+            mem.Free(digits_text as void*)
+            found := _pg_at(html, open_end, close)
+            mem.Free(close as void*)
+            if found:
                 _pg_num = num
                 ret k
             end
@@ -407,47 +491,113 @@ end
 @en "PageSplice"
 @fa "جایگذاری ناحیه"
 pub func PageSplice(html: str, at: int, num: int, inner: str): str:
-    open := "<!--salam:" + str.FromInt(num as i64) + "-->"
+    nt := str.FromInt(num as i64)
+    open := "<!--salam:" + nt + "-->"
     pos := at + open.Len()
-    ret html.Substr(0, pos) + inner + html.Substr(pos, html.Len() - pos)
+    mem.Free(nt as void*)
+    mem.Free(open as void*)
+    head := html.Substr(0, pos)
+    tail := html.Substr(pos, html.Len() - pos)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, head)
+    str.BufAppend(sb, inner)
+    str.BufAppend(sb, tail)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(head as void*)
+    mem.Free(tail as void*)
+    ret out
 end
 
 @en "PageAfter"
 @fa "پس از ناحیه"
 pub func PageAfter(at: int, num: int, inner: str): int:
     n := str.FromInt(num as i64)
-    ret at + ("<!--salam:" + n + "-->").Len() + inner.Len() + ("<!--/salam:" + n + "-->").Len()
+    digits := n.Len()
+    mem.Free(n as void*)
+    ret at + 27 + digits * 2 + inner.Len()
 end
 
 @en "PageRespond"
 @fa "پاسخ صفحه کامل"
 pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
+    if _pg_over_budget():
+        ssr.Respond(c, 504, "<!doctype html><title>504</title><h1>504</h1><p>The page took too long to render.</p>", "")
+        ret
+    end
     if _pg_write.Len() > 0:
-        ssr.Respond(c, 302, "", _pg_encode(_pg_base + _pg_write))
+        target := _pg_encode(_pg_base + _pg_write)
+        ssr.Respond(c, 302, "", target)
+        mem.Free(target as void*)
         ret
     end
     mut status := 200
     if pattern == "" or pattern == "*": status = 404 end
     mut cj := calls
     if cj.Len() == 0 or not json.Valid(cj): cj = "{}" end
-    state := "{\"path\":\"" + _pg_json_text(path) + "\",\"pattern\":\"" + _pg_json_text(pattern) + "\",\"status\":" + str.FromInt(status as i64) + ",\"calls\":" + _pg_script_safe(cj) + "}"
-    script := _STATE_OPEN + state + "</script>"
-    mut out := doc
+    pj := _pg_json_text(path)
+    pp := _pg_json_text(pattern)
+    cs := _pg_script_safe(cj)
+    st := str.FromInt(status as i64)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, _STATE_OPEN)
+    str.BufAppend(sb, "{\"path\":\"")
+    str.BufAppend(sb, pj)
+    str.BufAppend(sb, "\",\"pattern\":\"")
+    str.BufAppend(sb, pp)
+    str.BufAppend(sb, "\",\"status\":")
+    str.BufAppend(sb, st)
+    str.BufAppend(sb, ",\"calls\":")
+    str.BufAppend(sb, cs)
+    str.BufAppend(sb, "}</script>")
+    script := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(pj as void*)
+    mem.Free(pp as void*)
+    mem.Free(cs as void*)
+    mem.Free(st as void*)
+    mut head := doc
+    mut head_owned := false
     if _pg_title.Len() > 0:
-        a := out.Find("<title>")
-        b := out.Find("</title>")
+        a := doc.Find("<title>")
+        b := doc.Find("</title>")
         if a >= 0 and b > a:
-            out = out.Substr(0, a + 7) + PageHtml(_pg_title) + out.Substr(b, out.Len() - b)
+            ht := PageHtml(_pg_title)
+            h1 := doc.Substr(0, a + 7)
+            h2 := doc.Substr(b, doc.Len() - b)
+            mut tb := str.NewBuilder()
+            str.BufAppend(tb, h1)
+            str.BufAppend(tb, ht)
+            str.BufAppend(tb, h2)
+            head = str.BufStr(tb)
+            head_owned = true
+            str.BufFree(tb)
+            mem.Free(ht as void*)
+            mem.Free(h1 as void*)
+            mem.Free(h2 as void*)
         end
     end
-    mut at := out.Find("<script src=")
-    if at < 0: at = out.Find("</body>") end
+    mut at := head.Find("<script src=")
+    if at < 0: at = head.Find("</body>") end
+    mut out := ""
     if at < 0:
-        out += script
+        out = head + script
     else:
-        out = out.Substr(0, at) + script + out.Substr(at, out.Len() - at)
+        p1 := head.Substr(0, at)
+        p2 := head.Substr(at, head.Len() - at)
+        mut ob := str.NewBuilder()
+        str.BufAppend(ob, p1)
+        str.BufAppend(ob, script)
+        str.BufAppend(ob, p2)
+        out = str.BufStr(ob)
+        str.BufFree(ob)
+        mem.Free(p1 as void*)
+        mem.Free(p2 as void*)
     end
     ssr.Respond(c, status, out, "")
+    mem.Free(out as void*)
+    mem.Free(script as void*)
+    if head_owned: mem.Free(head as void*) end
 end
 
 @en "PageServe"

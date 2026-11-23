@@ -22,7 +22,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 export SALAM_STD="$root/std"
 cd "$work" || exit 1
-cp -R "$root/tests/en/ssr/site" site
+cp -R "${SITE:-$root/tests/en/ssr/site}" site
 
 "$salam" page build --ssr="$work/dist" site --no-color --log-level=error >build.log 2>&1 || {
     echo "build failed"

@@ -268,7 +268,7 @@ fi
 $CC -o "$OUT/App.app/App" "$work"/obj/*.o -lm \
     -framework UIKit -framework Foundation -framework CoreGraphics -framework QuartzCore \
     -framework AVFoundation -framework AudioToolbox -framework CoreLocation -framework PhotosUI \
-    -framework UserNotifications -framework Security $SIM_ENT
+    -framework UserNotifications -framework Security -framework Network $SIM_ENT
 
 USAGE_KEYS=
 add_usage() {

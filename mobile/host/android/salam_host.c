@@ -158,6 +158,8 @@ static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID path_mid;
+static jmethodID info_mid;
+static jmethodID network_mid;
 static jmethodID secure_set_mid;
 static jmethodID secure_get_mid;
 static jmethodID secure_delete_mid;
@@ -650,6 +652,50 @@ const char *salam_host_secure_get(const char *key)
     return copy;
 }
 
+const char *salam_host_info(const char *key)
+{
+    static char copy[2048];
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    copy[0] = 0;
+    if (env == NULL || info_mid == NULL) {
+        return copy;
+    }
+    jstring jk = jstring_from_utf8(env, key);
+    if (jk != NULL) {
+        jstring js = (jstring)(*env)->CallStaticObjectMethod(env, host_cls, info_mid, jk);
+        if (js != NULL) {
+            char *u = utf8_from_jstring(env, js);
+            if (u != NULL) {
+                strncpy(copy, u, sizeof copy - 1);
+                copy[sizeof copy - 1] = 0;
+                free(u);
+            }
+            (*env)->DeleteLocalRef(env, js);
+        }
+        (*env)->DeleteLocalRef(env, jk);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return copy;
+}
+
+int salam_host_network(void)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || network_mid == NULL) {
+        return 0;
+    }
+    r = (int)(*env)->CallStaticIntMethod(env, host_cls, network_mid);
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     return call_bool_2s(share_mid, text, url);
@@ -810,6 +856,8 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     path_mid = (*env)->GetStaticMethodID(env, cls, "path", "(I)Ljava/lang/String;");
+    info_mid = (*env)->GetStaticMethodID(env, cls, "info", "(Ljava/lang/String;)Ljava/lang/String;");
+    network_mid = (*env)->GetStaticMethodID(env, cls, "network", "()I");
     secure_set_mid = (*env)->GetStaticMethodID(env, cls, "secureSet", "(Ljava/lang/String;Ljava/lang/String;)Z");
     secure_get_mid = (*env)->GetStaticMethodID(env, cls, "secureGet", "(Ljava/lang/String;)Ljava/lang/String;");
     secure_delete_mid = (*env)->GetStaticMethodID(env, cls, "secureDelete", "(Ljava/lang/String;)Z");

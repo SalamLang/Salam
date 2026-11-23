@@ -21,6 +21,18 @@ page -> native generator -> Salam -> emitted C -> NDK / Xcode clang -> library
 - Widgets are not mapped to Views, Compose or SwiftUI. Every property works
   the same as on desktop and the web target.
 
+## Building for Android
+
+```
+tools/bash/build-android-app.sh app.salam --out out --abi arm64-v8a
+adb install out/app.apk
+```
+
+Needs a `salam` compiler, the Android NDK, a JDK and the Android SDK. The page
+is the same file that runs on the web and on the desktop. The script emits C
+per ABI, builds `libsalamapp.so` with the NDK and packages it with the
+Gradle project in `mobile/host/android/project`.
+
 ## Threading
 
 `gui.window` is pump based (`_nat_pump`, `_nat_wake`); phones are callback
@@ -49,6 +61,14 @@ Each stage is one pull request and is checked on the desktop first.
    template, tested on the simulator.
 10. Host service channel (share, permissions, camera, notifications) as a
     `std/mobile` package.
+
+## Status
+
+Done: stages 1 to 7, the Android part of 8 (keyboard, back button, system
+fonts) and clipboard and link opening from stage 10. Checked on an arm64
+emulator with a counter page, a form with a text input and a Persian page.
+Missing: bundled fonts (needed on iOS), pinch and other multi touch
+gestures, stage 9 (iOS), share, permissions, camera and notifications.
 
 ## Target matrix
 

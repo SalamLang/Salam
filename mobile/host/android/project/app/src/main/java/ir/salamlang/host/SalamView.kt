@@ -56,7 +56,8 @@ private class SalamInput(view: SalamView) : BaseInputConnection(view, false) {
     }
 
     override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
-        Host.nativePreedit(text.toString(), text.length)
+        val s = text.toString()
+        Host.nativePreedit(s, if (newCursorPosition > 0) s.toByteArray(Charsets.UTF_8).size else 0)
         return true
     }
 

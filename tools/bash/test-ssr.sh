@@ -31,6 +31,17 @@ else
     sed 's/^/  /' build.log | head -30
     exit 1
 fi
+echo "== lock"
+mkdir dist.lock
+echo $$ >dist.lock/pid
+if "$salam" page build --ssr="$work/dist" site --no-color --log-level=error --lang="$lang" >lock.log 2>&1; then
+    echo "second build ran"
+else
+    grep -q "$work/dist" lock.log && echo "second build refused"
+fi
+[ -d dist.lock ] && echo "lock kept for its owner"
+rm -rf dist.lock
+[ -d dist.tmp ] && echo "staging left behind" || echo "no staging left"
 [ -x dist/server ] && echo "server written"
 [ -f dist/public/.shell.html ] && echo "shell written"
 ls dist/public | grep -c '\.js$' | sed 's/^/js files: /'

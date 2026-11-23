@@ -128,6 +128,13 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         return true
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 4243) {
+            Thread { Host.photoResult(resultCode, data) }.start()
+        }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         Host.permResult()

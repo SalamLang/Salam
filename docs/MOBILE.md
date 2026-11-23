@@ -9,8 +9,12 @@ phone only shows them and sends touch, keyboard and lifecycle events.
 You need a `salam` compiler, the Android SDK with an NDK, and a JDK 21.
 
 ```
-sh tools/bash/build-android-app.sh app.salam --out out --run
+salam app android app.salam --out out --run
 ```
+
+A release archive carries the build files next to `std/`; from a source
+checkout the compiler finds them too. Set `SALAM_MOBILE_ROOT` to point at
+another folder. `tools/bash/build-android-app.sh` takes the same options.
 
 This builds `out/app.apk` for arm64, installs it on the connected phone or
 emulator and starts it. Other options:
@@ -29,12 +33,12 @@ What the program prints goes to logcat: `adb logcat -s salam`.
 ## iOS
 
 ```
-tools/bash/build-ios-app.sh app.salam --out out
+salam app ios app.salam --out out
 xcrun simctl install booted out/App.app
 xcrun simctl launch booted app.salam.app
 ```
 
-The default target is the simulator; `--device` builds for a phone and the app
+`tools/bash/build-ios-app.sh` takes the same options. The default target is the simulator; `--device` builds for a phone and the app
 still has to be signed in Xcode. Needs a compiler built from the current tree.
 Checked on the simulator with the counter page: drawing, safe area and a
 tap (`-salam-tap X,Y` launch argument). The keyboard, Persian text, pause and
@@ -77,11 +81,14 @@ composition text, and no bundled fonts.
   `device.OnChange` to react when the dialog closes. `device.ShowNotification`,
   `device.ScheduleNotification` and `device.CancelNotification` post local
   notifications (the build declares `POST_NOTIFICATIONS` when you use them).
+  `device.RequestLocation`, `device.LocationStatus` and `device.LastLocation`
+  give a one shot position (the build declares the location permissions). `device.PickPhoto` and
+  `device.TakePhoto` open the system photo picker and the camera app, then
+  `device.LastPhoto` is the path of a JPEG copy in the cache directory.
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- Camera and location.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

@@ -69,12 +69,14 @@ composition text, and no bundled fonts.
   clipboard and opening links.
 - Device features through `gui.device` (same calls on every platform, false
   or empty where a system has no such feature): `device.Share(text, url)`
-  opens the share sheet.
+  opens the share sheet, `device.Haptic(kind)` and `device.Vibrate(ms)` give
+  feedback (the build adds the `VIBRATE` permission only when you call
+  `Vibrate`).
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- Camera, location, notifications, permissions and haptics.
+- Camera, location, notifications and permissions.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

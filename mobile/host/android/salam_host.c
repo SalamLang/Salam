@@ -148,6 +148,8 @@ static int bars_bottom = -1;
 static jmethodID clip_set_mid;
 static jmethodID clip_get_mid;
 static jmethodID share_mid;
+static jmethodID vibrate_mid;
+static jmethodID haptic_mid;
 static char clip_buf[8192];
 static int ime_state;
 
@@ -331,6 +333,31 @@ static int call_bool_2s(jmethodID mid, const char *a, const char *b)
     return r;
 }
 
+static int call_bool_int(jmethodID mid, int v)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || mid == NULL) {
+        return 0;
+    }
+    r = (*env)->CallStaticBooleanMethod(env, host_cls, mid, (jint)v) ? 1 : 0;
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_vibrate(int ms)
+{
+    return call_bool_int(vibrate_mid, ms);
+}
+
+int salam_host_haptic(int kind)
+{
+    return call_bool_int(haptic_mid, kind);
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     return call_bool_2s(share_mid, text, url);
@@ -444,6 +471,8 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");
     clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
     clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
+    vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
+    haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     share_mid = (*env)->GetStaticMethodID(env, cls, "share", "(Ljava/lang/String;Ljava/lang/String;)Z");
     started = 1;
     redirect_output();

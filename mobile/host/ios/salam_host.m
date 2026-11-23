@@ -450,6 +450,18 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_vibrate(int ms)
+{
+    (void)ms;
+    return 0;
+}
+
+int salam_host_haptic(int kind)
+{
+    (void)kind;
+    return 0;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     (void)text;

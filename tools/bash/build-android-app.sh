@@ -237,6 +237,20 @@ for abi in $ABIS; do
 done
 IFS=$old_ifs
 
+MANIFEST=$OUT/project/app/src/main/AndroidManifest.xml
+declare_permission() {
+    grep -q "permission.$1\"" "$MANIFEST" && return 0
+    awk -v line="    <uses-permission android:name=\"android.permission.$1\" />" \
+        '{ print } /android.permission.INTERNET/ { print line }' "$MANIFEST" >"$MANIFEST.new"
+    mv "$MANIFEST.new" "$MANIFEST"
+}
+uses_host_call() {
+    grep -qsw "$1" "$OUT"/work/*/.salam-build/*.c
+}
+if uses_host_call salam_host_vibrate; then
+    declare_permission VIBRATE
+fi
+
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK
 SIGN=

@@ -2,6 +2,8 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <signal.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -121,6 +123,13 @@ static jstring jstring_from_utf8(JNIEnv *env, const char *s)
 
 
 extern int salam_app_main(int argc, char **argv);
+
+#if __ANDROID_API__ < 28
+int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout)
+{
+    return (int)syscall(__NR_rt_sigtimedwait, set, info, timeout, 8);
+}
+#endif
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static ANativeWindow *win;

@@ -28,7 +28,7 @@ tools/bash/build-android-app.sh app.salam --out out --abi arm64-v8a
 adb install out/app.apk
 ```
 
-Options: `--abi arm64-v8a,x86_64`, `--id`, `--name`, `--icon icon.png`,
+Options: `--abi arm64-v8a,x86_64` (release builds default to arm64-v8a, armeabi-v7a and x86_64), `--id`, `--name`, `--icon icon.png`,
 `--release` and `--run` (install and start on the connected device). What a
 program prints goes to logcat: `adb logcat -s salam`.
 

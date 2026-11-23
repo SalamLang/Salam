@@ -21,11 +21,6 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         density = resources.displayMetrics.density
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         view = SalamView(this)
         view.holder.addCallback(this)
         view.setOnApplyWindowInsetsListener { _, insets ->
@@ -33,7 +28,21 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
             insets
         }
         setContentView(view)
+        applyBars(isDark(resources.configuration))
         Host.nativeScheme(if (isDark(resources.configuration)) 1 else 0)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyBars(dark: Boolean) {
+        var flags =
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        if (!dark) {
+            if (Build.VERSION.SDK_INT >= 23) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            if (Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
+        window.decorView.systemUiVisibility = flags
     }
 
     private fun isDark(c: Configuration): Boolean =
@@ -76,6 +85,7 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        applyBars(isDark(newConfig))
         Host.nativeScheme(if (isDark(newConfig)) 1 else 0)
     }
 

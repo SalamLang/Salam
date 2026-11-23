@@ -31,6 +31,8 @@ object Host {
 
     @JvmStatic external fun nativeScheme(dark: Int)
 
+    @JvmStatic external fun nativeDevice(kind: Int)
+
     @JvmStatic
     fun openUrl(url: String): Boolean {
         val a = activity ?: return false
@@ -95,6 +97,64 @@ object Host {
         a.runOnUiThread {
             a.window.decorView.performHapticFeedback(code)
         }
+        return true
+    }
+
+    private fun androidPermissions(name: String): List<String> =
+        when (name) {
+            "camera" -> listOf("android.permission.CAMERA")
+            "microphone" -> listOf("android.permission.RECORD_AUDIO")
+            "location" -> listOf("android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION")
+            "notifications" -> if (android.os.Build.VERSION.SDK_INT >= 33) listOf("android.permission.POST_NOTIFICATIONS") else emptyList()
+            else -> emptyList()
+        }
+
+    private fun asked(a: Activity): android.content.SharedPreferences = a.getSharedPreferences("salam_permissions", 0)
+
+    private fun granted(a: Activity, perms: List<String>): Boolean =
+        perms.any { a.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+
+    @Volatile
+    private var pending = ""
+
+    @JvmStatic
+    fun permResult() {
+        val a = activity
+        if (a != null && pending.isNotEmpty()) {
+            asked(a).edit().putBoolean(pending, true).apply()
+        }
+        pending = ""
+        nativeDevice(1)
+    }
+
+    @JvmStatic
+    fun permState(name: String): Int {
+        val a = activity ?: return 0
+        if (name == "notifications" && android.os.Build.VERSION.SDK_INT < 33) {
+            val nm = a.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            return if (nm.areNotificationsEnabled()) 1 else 2
+        }
+        val perms = androidPermissions(name)
+        if (perms.isEmpty()) return 2
+        if (android.os.Build.VERSION.SDK_INT < 23) return 1
+        if (granted(a, perms)) return 1
+        return if (asked(a).getBoolean(name, false)) 2 else 0
+    }
+
+    @JvmStatic
+    fun permRequest(name: String): Boolean {
+        val a = activity ?: return false
+        val perms = androidPermissions(name)
+        if (perms.isEmpty() || android.os.Build.VERSION.SDK_INT < 23) {
+            nativeDevice(1)
+            return perms.isNotEmpty()
+        }
+        if (granted(a, perms)) {
+            nativeDevice(1)
+            return true
+        }
+        pending = name
+        a.runOnUiThread { a.requestPermissions(perms.toTypedArray(), 4242) }
         return true
     }
 

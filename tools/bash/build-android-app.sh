@@ -5,10 +5,14 @@
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
-#       [--fonts DIR] [--no-apk] [--run]
+#       [--fonts DIR] [--permission NAME]... [--no-apk] [--run]
 #
 # --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
 # copied to the app files directory at start and found by the font collection.
+#
+# --permission NAME (camera, microphone, location, notifications) declares a
+# permission in the manifest so device.RequestPermission can ask for it. Calls
+# that need a permission themselves, such as device.Vibrate, add it alone.
 #
 # Salam emits C for each ABI, the NDK compiles it with the host shim in
 # mobile/host/android into libsalamapp.so, and a prebuilt Gradle project
@@ -28,6 +32,7 @@ APK=1
 ICON=
 FONTS=
 RUN=0
+PERMS=
 AAB=0
 KS=
 KSPASS=
@@ -82,6 +87,10 @@ while [ $# -gt 0 ]; do
         ;;
     --fonts)
         FONTS=$2
+        shift 2
+        ;;
+    --permission)
+        PERMS="$PERMS $2"
         shift 2
         ;;
     --run)
@@ -250,6 +259,21 @@ uses_host_call() {
 if uses_host_call salam_host_vibrate; then
     declare_permission VIBRATE
 fi
+for name in $PERMS; do
+    case $name in
+    camera) declare_permission CAMERA ;;
+    microphone) declare_permission RECORD_AUDIO ;;
+    location)
+        declare_permission ACCESS_FINE_LOCATION
+        declare_permission ACCESS_COARSE_LOCATION
+        ;;
+    notifications) declare_permission POST_NOTIFICATIONS ;;
+    *)
+        echo "build-android-app: unknown permission '$name' (camera, microphone, location, notifications)" >&2
+        exit 2
+        ;;
+    esac
+done
 
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK

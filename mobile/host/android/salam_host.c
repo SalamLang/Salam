@@ -153,6 +153,8 @@ static jmethodID clip_get_mid;
 static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
+static jmethodID perm_state_mid;
+static jmethodID perm_request_mid;
 static char clip_buf[8192];
 static int ime_state;
 
@@ -365,6 +367,30 @@ static int call_bool_int(jmethodID mid, int v)
     return r;
 }
 
+int salam_host_perm_state(const char *name)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || perm_state_mid == NULL) {
+        return 0;
+    }
+    jstring js = jstring_from_utf8(env, name);
+    if (js != NULL) {
+        r = (int)(*env)->CallStaticIntMethod(env, host_cls, perm_state_mid, js);
+        (*env)->DeleteLocalRef(env, js);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_perm_request(const char *name)
+{
+    return call_bool_string(perm_request_mid, name);
+}
+
 int salam_host_vibrate(int ms)
 {
     return call_bool_int(vibrate_mid, ms);
@@ -490,6 +516,8 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
     vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
+    perm_state_mid = (*env)->GetStaticMethodID(env, cls, "permState", "(Ljava/lang/String;)I");
+    perm_request_mid = (*env)->GetStaticMethodID(env, cls, "permRequest", "(Ljava/lang/String;)Z");
     share_mid = (*env)->GetStaticMethodID(env, cls, "share", "(Ljava/lang/String;Ljava/lang/String;)Z");
     started = 1;
     redirect_output();
@@ -581,6 +609,13 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeLifecycle(JNIEnv *env, 
     (void)env;
     (void)cls;
     salam_host_post(SALAM_EV_LIFECYCLE, kind, 0, 0, 0, 0, NULL);
+}
+
+JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeDevice(JNIEnv *env, jclass cls, jint kind)
+{
+    (void)env;
+    (void)cls;
+    salam_host_post(SALAM_EV_DEVICE, kind, 0, 0, 0, 0, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeScheme(JNIEnv *env, jclass cls, jint dark)

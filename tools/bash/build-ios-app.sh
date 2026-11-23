@@ -7,7 +7,7 @@
 #       [--version NAME] [--build NUMBER] [--min-ios VERSION]
 #       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE]
 #       [--ipa] [--team TEAM_ID] [--profile FILE.mobileprovision] [--sign-identity NAME]
-#       [--permission NAME]...
+#       [--permission NAME]... [--scheme NAME]...
 #
 # Salam emits C for arm64, clang builds it with the host shim in
 # mobile/host/ios, and DIR/App.app is the result. The default target is the
@@ -57,6 +57,11 @@
 # App Store, sign with a distribution profile and upload the .ipa with
 # Transporter or xcrun altool.
 #
+# --scheme NAME registers the URL scheme NAME, so links like NAME://path open the
+# app; read them with device.LaunchURL and device.OnOpenURL. --link-host is read
+# for a shared config and ignored: universal links need the Associated Domains
+# capability, which comes with signing in Xcode.
+#
 # --permission NAME (camera, microphone, location, notifications) adds the
 # usage description the system shows in its permission dialog, so
 # device.RequestPermission can ask for it. Calls that need a description
@@ -74,6 +79,7 @@ DEVICE=0
 ID=
 NAME=
 PERMS=
+SCHEMES=
 ICON=
 SPLASH_COLOR=
 SPLASH_ICON=
@@ -158,6 +164,13 @@ while [ $# -gt 0 ]; do
         CONFIG=$2
         shift 2
         ;;
+    --scheme)
+        SCHEMES="$SCHEMES $2"
+        shift 2
+        ;;
+    --link-host)
+        shift 2
+        ;;
     --permission)
         PERMS="$PERMS $2"
         shift 2
@@ -200,6 +213,7 @@ if [ -n "$CONFIG" ]; then
     [ -n "$ORIENT" ] || ORIENT=$(app_cfg_get orientation)
     [ -n "$CATEGORY" ] || CATEGORY=$(app_cfg_get category)
     [ -n "$PERMS" ] || PERMS=$(app_cfg_get permissions)
+    [ -n "$SCHEMES" ] || SCHEMES=$(app_cfg_get scheme)
 fi
 if [ -n "$BUILDNUM" ]; then
     app_check_int --build "$BUILDNUM" build-ios-app || exit 2
@@ -362,6 +376,18 @@ for name in $PERMS; do
     esac
 done
 
+URL_TYPES=
+if [ -n "$SCHEMES" ]; then
+    URL_TYPES='
+    <key>CFBundleURLTypes</key><array><dict>
+        <key>CFBundleURLName</key><string>'$ID'</string>
+        <key>CFBundleURLSchemes</key><array>'
+    for name in $SCHEMES; do
+        URL_TYPES="$URL_TYPES<string>$name</string>"
+    done
+    URL_TYPES="$URL_TYPES</array></dict></array>"
+fi
+
 case $ORIENT in
 portrait) ORIENT_KEYS='<string>UIInterfaceOrientationPortrait</string>' ;;
 landscape)
@@ -398,7 +424,7 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>${VERSION:-1.0}</string>
     <key>CFBundleVersion</key><string>${BUILDNUM:-1}</string>
     <key>MinimumOSVersion</key><string>$MINIOS</string>
-    <key>UILaunchScreen</key><dict>$LAUNCH</dict>$USAGE_KEYS
+    <key>UILaunchScreen</key><dict>$LAUNCH</dict>$USAGE_KEYS$URL_TYPES
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key><false/>

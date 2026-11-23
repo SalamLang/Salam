@@ -35,6 +35,8 @@ object Host {
 
     @JvmStatic external fun nativeDevice(kind: Int)
 
+    @JvmStatic external fun nativeUrl(kind: Int, url: String)
+
     @JvmStatic external fun nativePhoto(path: String)
 
     @JvmStatic external fun nativeLocation(ok: Int, lat: Double, lon: Double, acc: Double)
@@ -260,6 +262,20 @@ object Host {
             }
         } catch (e: Exception) {
             0
+        }
+    }
+
+    @JvmStatic
+    fun openSettings(): Boolean {
+        val a = activity ?: return false
+        return try {
+            val i = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            i.data = android.net.Uri.fromParts("package", a.packageName, null)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            a.startActivity(i)
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 

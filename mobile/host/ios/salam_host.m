@@ -819,6 +819,26 @@ static UIColor *salam_saved_background(UIUserInterfaceStyle style)
 
 @end
 
+static char g_launch_url[2048];
+static char g_pending_url[2048];
+static pthread_mutex_t g_url_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void url_store(NSURL *u, int launch)
+{
+    if (u == nil || u.absoluteString.length == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_url_mu);
+    char *dst = launch ? g_launch_url : g_pending_url;
+    size_t cap = launch ? sizeof g_launch_url : sizeof g_pending_url;
+    strncpy(dst, u.absoluteString.UTF8String, cap - 1);
+    dst[cap - 1] = 0;
+    pthread_mutex_unlock(&g_url_mu);
+    if (!launch) {
+        salam_host_post(SALAM_EV_DEVICE, 5, 0, 0, 0, 0, NULL);
+    }
+}
+
 @interface SalamSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(strong, nonatomic) UIWindow *window;
 @end
@@ -830,9 +850,31 @@ static UIColor *salam_saved_background(UIUserInterfaceStyle style)
     if (![scene isKindOfClass:UIWindowScene.class]) {
         return;
     }
+    for (UIOpenURLContext *c in options.URLContexts) {
+        url_store(c.URL, 1);
+    }
+    for (NSUserActivity *a in options.userActivities) {
+        if ([a.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+            url_store(a.webpageURL, 1);
+        }
+    }
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.rootViewController = [SalamController new];
     [self.window makeKeyAndVisible];
+}
+
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)contexts
+{
+    for (UIOpenURLContext *c in contexts) {
+        url_store(c.URL, 0);
+    }
+}
+
+- (void)scene:(UIScene *)scene continueUserActivity:(NSUserActivity *)activity
+{
+    if ([activity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+        url_store(activity.webpageURL, 0);
+    }
 }
 
 @end
@@ -1528,6 +1570,34 @@ int salam_host_network(void)
     int s = g_net_state;
     pthread_mutex_unlock(&g_dev_mu);
     return s;
+}
+
+const char *salam_host_launch_url(void)
+{
+    static char copy[2048];
+    pthread_mutex_lock(&g_url_mu);
+    memcpy(copy, g_launch_url, sizeof copy);
+    pthread_mutex_unlock(&g_url_mu);
+    return copy;
+}
+
+const char *salam_host_take_url(void)
+{
+    static char copy[2048];
+    pthread_mutex_lock(&g_url_mu);
+    memcpy(copy, g_pending_url, sizeof copy);
+    g_pending_url[0] = 0;
+    pthread_mutex_unlock(&g_url_mu);
+    return copy;
+}
+
+int salam_host_open_settings(void)
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSURL *u = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+        [UIApplication.sharedApplication openURL:u options:@{} completionHandler:nil];
+    });
+    return 1;
 }
 
 int salam_host_share(const char *text, const char *url)

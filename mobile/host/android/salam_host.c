@@ -158,6 +158,9 @@ static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID path_mid;
+static jmethodID settings_mid;
+static char launch_url[2048];
+static char pending_url[2048];
 static jmethodID info_mid;
 static jmethodID network_mid;
 static jmethodID secure_set_mid;
@@ -696,6 +699,40 @@ int salam_host_network(void)
     return r;
 }
 
+const char *salam_host_launch_url(void)
+{
+    static char copy[2048];
+    pthread_mutex_lock(&loc_mu);
+    memcpy(copy, launch_url, sizeof copy);
+    pthread_mutex_unlock(&loc_mu);
+    return copy;
+}
+
+const char *salam_host_take_url(void)
+{
+    static char copy[2048];
+    pthread_mutex_lock(&loc_mu);
+    memcpy(copy, pending_url, sizeof copy);
+    pending_url[0] = 0;
+    pthread_mutex_unlock(&loc_mu);
+    return copy;
+}
+
+int salam_host_open_settings(void)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || settings_mid == NULL) {
+        return 0;
+    }
+    r = (*env)->CallStaticBooleanMethod(env, host_cls, settings_mid) ? 1 : 0;
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     return call_bool_2s(share_mid, text, url);
@@ -856,6 +893,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     path_mid = (*env)->GetStaticMethodID(env, cls, "path", "(I)Ljava/lang/String;");
+    settings_mid = (*env)->GetStaticMethodID(env, cls, "openSettings", "()Z");
     info_mid = (*env)->GetStaticMethodID(env, cls, "info", "(Ljava/lang/String;)Ljava/lang/String;");
     network_mid = (*env)->GetStaticMethodID(env, cls, "network", "()I");
     secure_set_mid = (*env)->GetStaticMethodID(env, cls, "secureSet", "(Ljava/lang/String;Ljava/lang/String;)Z");
@@ -989,6 +1027,28 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativePhoto(JNIEnv *env, jcla
     pthread_mutex_unlock(&loc_mu);
     free(u);
     salam_host_post(SALAM_EV_DEVICE, 3, 0, 0, 0, 0, NULL);
+}
+
+JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeUrl(JNIEnv *env, jclass cls, jint kind, jstring url)
+{
+    (void)cls;
+    char *u = utf8_from_jstring(env, url);
+    if (u == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&loc_mu);
+    if (kind == 0) {
+        strncpy(launch_url, u, sizeof launch_url - 1);
+        launch_url[sizeof launch_url - 1] = 0;
+    } else {
+        strncpy(pending_url, u, sizeof pending_url - 1);
+        pending_url[sizeof pending_url - 1] = 0;
+    }
+    pthread_mutex_unlock(&loc_mu);
+    free(u);
+    if (kind != 0) {
+        salam_host_post(SALAM_EV_DEVICE, 5, 0, 0, 0, 0, NULL);
+    }
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeDevice(JNIEnv *env, jclass cls, jint kind)

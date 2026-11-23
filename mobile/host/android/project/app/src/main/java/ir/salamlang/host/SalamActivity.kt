@@ -2,6 +2,7 @@ package ir.salamlang.host
 
 import android.app.Activity
 import android.content.ComponentCallbacks2
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Build
@@ -118,7 +119,13 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         Fonts.install(this)
         Assets.install(this)
         intent?.getStringExtra("salam-script")?.let { Host.nativeScript(it) }
+        intent?.data?.let { Host.nativeUrl(0, it.toString()) }
         Host.nativeStart(filesDir.absolutePath, cacheDir.absolutePath)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.data?.let { Host.nativeUrl(1, it.toString()) }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {

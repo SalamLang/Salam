@@ -303,6 +303,10 @@ simulator.
   `device.Network` says offline, Wi-Fi, cellular, ethernet or other, and a
   change of connection runs `device.OnChange` (the Android build declares
   `ACCESS_NETWORK_STATE` when you call it).
+  Build with `--scheme NAME` (both platforms) or `--link-host HOST` (Android
+  app links) to let links open the app: `device.LaunchURL` is the link that
+  started it, `device.OnOpenURL` runs with links that arrive while it runs, and
+  `device.OpenSettings` opens the settings page of the app.
 
 ## Not available yet
 

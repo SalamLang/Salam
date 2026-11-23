@@ -138,14 +138,26 @@ fi
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 [ -d "$SDK" ] || SDK=$HOME/Android/Sdk
+[ -d "$SDK" ] || {
+    echo "build-android-app: no Android SDK; install it and set ANDROID_HOME to its folder" >&2
+    exit 1
+}
 NDK=${ANDROID_NDK_HOME:-}
 if [ -z "$NDK" ]; then
     NDK=$(find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)
 fi
 [ -d "$NDK" ] || {
-    echo "build-android-app: no Android NDK; set ANDROID_NDK_HOME" >&2
+    echo "build-android-app: no Android NDK in $SDK/ndk; install one (sdkmanager \"ndk;28.2.13676358\") or set ANDROID_NDK_HOME" >&2
     exit 1
 }
+if [ "$APK" = 1 ] && [ -z "${JAVA_HOME:-}" ] && ! java -version >/dev/null 2>&1; then
+    echo "build-android-app: no JDK; install JDK 21 and set JAVA_HOME to it" >&2
+    exit 1
+fi
+if [ "$APK" = 1 ] && [ -n "${JAVA_HOME:-}" ] && [ ! -x "$JAVA_HOME/bin/java" ]; then
+    echo "build-android-app: JAVA_HOME ($JAVA_HOME) has no bin/java; point it at a JDK 21" >&2
+    exit 1
+fi
 case $(uname -s) in
 Darwin) HOST=darwin-x86_64 ;;
 *) HOST=linux-x86_64 ;;

@@ -88,6 +88,25 @@ object Host {
     }
 
     @JvmStatic
+    fun path(kind: Int): String {
+        val a = activity ?: return ""
+        return try {
+            val dir: java.io.File? = when (kind) {
+                0 -> a.filesDir
+                1 -> a.cacheDir
+                2 -> a.getExternalFilesDir(null) ?: a.filesDir
+                3 -> java.io.File(a.cacheDir, "tmp")
+                else -> null
+            }
+            if (dir == null) return ""
+            dir.mkdirs()
+            dir.absolutePath
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
     fun haptic(kind: Int): Boolean {
         val a = activity ?: return false
         val api = android.os.Build.VERSION.SDK_INT

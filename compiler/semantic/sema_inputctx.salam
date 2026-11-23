@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include src "../source.salam"
+
+pub const INPUT_CTX_CODE := 296
+
+mut g_inp_ok := HashMap {} as HashMap<str, bool>
+mut g_inp_seen := HashMap {} as HashMap<str, bool>
+mut g_inp_upto := 0
+
+func inp_is_input(a &: at.Ast, id: int): bool:
+    if id <= 0 or id >= at.Count(a):
+        ret false
+    end
+    c := at.At(a, id)
+    if c.kind == at.AST_CALL:
+        if c.a <= 0:
+            ret false
+        end
+        f := at.At(a, c.a)
+        ret f.kind == at.AST_IDENTIFIER and str.Equals(f.name, "input")
+    end
+    if c.kind == at.AST_IDENTIFIER:
+        ret str.StartsWith(c.name, "input ") or str.StartsWith(c.name, "ورودی ")
+    end
+    ret false
+end
+
+func inp_scan(a &: at.Ast):
+    total := at.Count(a)
+    mut id := g_inp_upto
+    until id < total:
+        n := at.At(a, id)
+        mut child := 0
+        if n.kind == at.AST_VAR_DECL or n.kind == at.AST_CONST_DECL or n.kind == at.AST_EXPR_STMT:
+            child = n.a
+        else n.kind == at.AST_ASSIGN and n.op == tok.TK_ASSIGN:
+            child = n.b
+        end
+        if child > 0 and inp_is_input(a, child):
+            g_inp_ok.Put(str.FromInt(child), true)
+        end
+        id++
+    end
+    g_inp_upto = total
+end
+
+func inp_prompt_node(a &: at.Ast, nid: int): int:
+    c := at.Get(a, nid)
+    if c.list.Len() == 0:
+        ret 0
+    end
+    mut arg := c.list.Get(0)
+    until arg > 0 and at.KindOf(a, arg) == at.AST_BINARY:
+        arg = at.Get(a, arg).a
+    end
+    ret arg
+end
+
+func inp_prompt_text(s &: Sema, a &: at.Ast, arg: int): str:
+    if arg <= 0:
+        ret "\"\""
+    end
+    nd := at.Get(a, arg)
+    text := src.Peek(s.file)
+    b := nd.begin_index as int
+    e := nd.end_index as int
+    if e > b and e <= str.Len(text) and e - b <= 60:
+        piece := str.Substr(text, b, e - b)
+        if not str.Contains(piece, "\n"):
+            ret piece
+        end
+    end
+    ret "\"...\""
+end
+
+pub func SemaInputCtxReset():
+    g_inp_ok.Free()
+    g_inp_ok = HashMap {} as HashMap<str, bool>
+    g_inp_seen.Free()
+    g_inp_seen = HashMap {} as HashMap<str, bool>
+    g_inp_upto = 0
+end
+
+pub func SemaCheckInputCtx(s &: Sema, a &: at.Ast, nid: int):
+    if at.At(a, nid).synthetic:
+        ret
+    end
+    inp_scan(a)
+    key := str.FromInt(nid)
+    if g_inp_ok.Has(key) or g_inp_seen.Has(key):
+        ret
+    end
+    g_inp_seen.Put(key, true)
+    parg := inp_prompt_node(a, nid)
+    prompt := inp_prompt_text(s, a, parg)
+    mut sp := span_of(a, nid)
+    if parg > 0:
+        b := at.Get(a, nid).begin_index as int
+        e := at.Get(a, parg).end_index as int
+        if e > b and e - b <= 200:
+            sp.length = (e - b) as u32
+        end
+    end
+    serr_help(
+        s, INPUT_CTX_CODE, sp, i18.Tr("'input' cannot be used inside another expression"), co.Format1(
+            i18.Tr("store the answer in a variable first, then use it:\n        answer := input %s\n        println answer"), co.ArgStr(prompt)
+        )
+    )
+end

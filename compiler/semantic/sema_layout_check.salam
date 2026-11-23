@@ -22,6 +22,8 @@ mut g_lay_sp_path := ""
 
 mut g_lay_sp_reported := Vector {} as Vector<str>
 
+mut g_lay_locals := Vector {} as Vector<str>
+
 struct LayCheck:
     pub stack: Vector<int> = Vector {}
     pub ids: Vector<str> = Vector {}
@@ -1043,15 +1045,68 @@ func lay_bare_value_report(s &: Sema, a &: at.Ast, nid: int, word: str):
         f.safe = true
         queue_fix(f)
     end
-    swarn_help(
-        s,
-        LAYOUT_BARE_VALUE_CODE,
-        span_of(a, nid),
-        co.Format1(
-            i18.Tr("the word '%s' is a value, not a name; write it in quotes"), co.ArgStr(word)
-        ),
-        co.Format1(i18.Tr("write %s"), co.ArgStr(quoted))
+    msg := co.Format1(
+        i18.Tr("the word '%s' is a value, not a name; write it in quotes"), co.ArgStr(word)
     )
+    help := co.Format1(i18.Tr("write %s"), co.ArgStr(quoted))
+    if lay_strict_values(s):
+        serr_help(s, LAYOUT_BARE_VALUE_CODE, span_of(a, nid), msg, help)
+    else:
+        swarn_help(s, LAYOUT_BARE_VALUE_CODE, span_of(a, nid), msg, help)
+    end
+end
+
+func lay_strict_values(s &: Sema): bool:
+    if g_sm_strict_values:
+        ret true
+    end
+    dir := pth.PathDir(s.file)
+    repeat g_sm_strict_dirs.Len() in i:
+        if str.Equals(g_sm_strict_dirs.Get(i), dir):
+            ret g_sm_strict_ans.Get(i)
+        end
+    end
+    root := pm.FindProjectRoot(dir)
+    enabled := str.Len(root) > 0 and pm.ReadBoolSetting(root, "build", "strict-values")
+    g_sm_strict_dirs.Push(dir)
+    g_sm_strict_ans.Push(enabled)
+    ret enabled
+end
+
+func lay_collect_locals(a &: at.Ast, nid: int):
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_VAR_DECL:
+            g_lay_locals.Push(at.Get(a, cid).name)
+        else k == at.AST_LAYOUT_ELEMENT:
+            lay_collect_locals(a, cid)
+        else k == at.AST_EACH:
+            en := at.Get(a, cid)
+            if str.Len(en.name) > 0:
+                g_lay_locals.Push(en.name)
+            end
+            if en.c != 0:
+                g_lay_locals.Push(at.Get(a, en.c).name)
+            end
+            lay_collect_locals(a, en.b)
+        else k == at.AST_IF:
+            n := at.Get(a, cid)
+            lay_collect_locals(a, n.b)
+            if n.c != 0:
+                lay_collect_locals(a, n.c)
+            end
+        end
+    end
+end
+
+func lay_is_local(name: str): bool:
+    each l in g_lay_locals:
+        if str.Equals(l, name):
+            ret true
+        end
+    end
+    ret false
 end
 
 func lay_bare_value_walk(s &: Sema, a &: at.Ast, nid: int):
@@ -1060,7 +1115,7 @@ func lay_bare_value_walk(s &: Sema, a &: at.Ast, nid: int):
     end
     n := at.Get(a, nid)
     if n.kind == at.AST_IDENTIFIER:
-        if scope_lookup(s, s.cur, n.name) <= 0:
+        if scope_lookup(s, s.cur, n.name) <= 0 and not lay_is_local(n.name):
             lay_bare_value_report(s, a, nid, n.name)
         end
         ret
@@ -2337,6 +2392,8 @@ func sema_check_layout_component(s &: Sema, a &: at.Ast, nid: int):
     each kn in g_lay_known_comps:
         ck.comps.Push(kn)
     end
+    g_lay_locals.Clear()
+    lay_collect_locals(a, at.Get(a, nid).a)
     lay_check_spelling(s, a, at.Get(a, nid).a)
     ck.unexpanded = lay_tree_has_include(a, at.Get(a, nid).a)
     ck.stack.Push(lay_elem_by_key("page"))
@@ -2423,6 +2480,8 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
             )
         end
     end
+    g_lay_locals.Clear()
+    lay_collect_locals(a, nid)
     lay_check_spelling(s, a, nid)
     layout_resolve(a, nid)
     root := lay_elem_by_key("page")

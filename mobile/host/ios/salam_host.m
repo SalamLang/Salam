@@ -1,5 +1,10 @@
 #import <UIKit/UIKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <CoreLocation/CoreLocation.h>
+#import <PhotosUI/PhotosUI.h>
+#import <UserNotifications/UserNotifications.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +16,7 @@ extern int salam_app_main(int argc, char **argv);
 @class SalamView;
 
 static SalamView *g_view;
+static void salam_device_init(void);
 static CGFloat g_kb;
 static pthread_t g_thread;
 static int g_started;
@@ -373,6 +379,7 @@ static int hid_to_key(UIKeyboardHIDUsage u)
     setenv("TMPDIR", NSTemporaryDirectory().UTF8String, 1);
     NSString *fonts = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"fonts"];
     setenv("SALAM_FONT_DIR", fonts.UTF8String, 1);
+    salam_device_init();
     return YES;
 }
 
@@ -450,79 +457,408 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
-int salam_host_photo_request(int camera)
+static int g_photo_state;
+static char g_photo_path[1024];
+static int g_loc_state;
+static double g_loc_val[3];
+static pthread_mutex_t g_dev_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void run_main_sync(void (^fn)(void))
 {
-    (void)camera;
-    return 0;
+    if ([NSThread isMainThread]) {
+        fn();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), fn);
+    }
 }
 
-int salam_host_photo_state(void)
+static UIViewController *top_controller(void)
 {
-    return 0;
+    UIViewController *c = g_view.window.rootViewController;
+    while (c.presentedViewController != nil) {
+        c = c.presentedViewController;
+    }
+    return c;
 }
 
-const char *salam_host_photo_path(void)
+static void photo_finish(NSString *path)
 {
-    return "";
+    pthread_mutex_lock(&g_dev_mu);
+    g_photo_path[0] = 0;
+    if (path.length > 0) {
+        strncpy(g_photo_path, path.UTF8String, sizeof g_photo_path - 1);
+        g_photo_path[sizeof g_photo_path - 1] = 0;
+        g_photo_state = 2;
+    } else {
+        g_photo_state = 3;
+    }
+    pthread_mutex_unlock(&g_dev_mu);
+    salam_host_post(SALAM_EV_DEVICE, 3, 0, 0, 0, 0, NULL);
 }
 
-int salam_host_location_request(void)
+static NSString *save_jpeg(UIImage *img, NSString *prefix)
 {
-    return 0;
+    NSData *d = img != nil ? UIImageJPEGRepresentation(img, 0.92) : nil;
+    if (d.length == 0) {
+        return nil;
+    }
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"photos"];
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_%lld.jpg", prefix, (long long)(NSDate.date.timeIntervalSince1970 * 1000)]];
+    return [d writeToFile:path atomically:YES] ? path : nil;
 }
 
-int salam_host_location_get(double *out)
+@interface SalamDevice : NSObject <CLLocationManagerDelegate, UNUserNotificationCenterDelegate, PHPickerViewControllerDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
+@property(strong, nonatomic) CLLocationManager *lm;
+@end
+
+static SalamDevice *g_dev;
+
+@implementation SalamDevice
+
+- (CLLocationManager *)manager
 {
-    out[0] = 0;
-    out[1] = 0;
-    out[2] = 0;
-    return 0;
+    if (self.lm == nil) {
+        self.lm = [CLLocationManager new];
+        self.lm.delegate = self;
+        self.lm.desiredAccuracy = kCLLocationAccuracyBest;
+    }
+    return self.lm;
 }
 
-int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager
 {
-    (void)id;
-    (void)title;
-    (void)body;
-    (void)delay_ms;
-    return 0;
+    if (manager.authorizationStatus != kCLAuthorizationStatusNotDetermined) {
+        salam_host_post(SALAM_EV_DEVICE, 1, 0, 0, 0, 0, NULL);
+    }
 }
 
-int salam_host_notify_cancel(int id)
+- (void)locationManager:(CLLocationManager *)manager didUpdateLocations:(NSArray<CLLocation *> *)locations
 {
-    (void)id;
-    return 0;
+    CLLocation *l = locations.lastObject;
+    pthread_mutex_lock(&g_dev_mu);
+    g_loc_state = l != nil ? 2 : 3;
+    g_loc_val[0] = l != nil ? l.coordinate.latitude : 0;
+    g_loc_val[1] = l != nil ? l.coordinate.longitude : 0;
+    g_loc_val[2] = l != nil && l.horizontalAccuracy >= 0 ? l.horizontalAccuracy : 0;
+    pthread_mutex_unlock(&g_dev_mu);
+    salam_host_post(SALAM_EV_DEVICE, 2, 0, 0, 0, 0, NULL);
+}
+
+- (void)locationManager:(CLLocationManager *)manager didFailWithError:(NSError *)error
+{
+    pthread_mutex_lock(&g_dev_mu);
+    g_loc_state = 3;
+    pthread_mutex_unlock(&g_dev_mu);
+    salam_host_post(SALAM_EV_DEVICE, 2, 0, 0, 0, 0, NULL);
+}
+
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))handler
+{
+    handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList | UNNotificationPresentationOptionSound);
+}
+
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results
+{
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    PHPickerResult *r = results.firstObject;
+    if (r == nil || ![r.itemProvider canLoadObjectOfClass:UIImage.class]) {
+        photo_finish(nil);
+        return;
+    }
+    [r.itemProvider loadObjectOfClass:UIImage.class completionHandler:^(id<NSItemProviderReading> obj, NSError *err) {
+        photo_finish([obj isKindOfClass:UIImage.class] ? save_jpeg((UIImage *)obj, @"pick") : nil);
+    }];
+}
+
+- (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey, id> *)info
+{
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    UIImage *img = info[UIImagePickerControllerOriginalImage];
+    photo_finish(save_jpeg(img, @"cap"));
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker
+{
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    photo_finish(nil);
+}
+
+@end
+
+static void salam_device_init(void)
+{
+    g_dev = [SalamDevice new];
+    UNUserNotificationCenter.currentNotificationCenter.delegate = g_dev;
+}
+
+static int av_state(AVMediaType t)
+{
+    switch ([AVCaptureDevice authorizationStatusForMediaType:t]) {
+    case AVAuthorizationStatusNotDetermined:
+        return 0;
+    case AVAuthorizationStatusAuthorized:
+        return 1;
+    default:
+        return 2;
+    }
+}
+
+static int location_auth_state(void)
+{
+    __block int r = 0;
+    run_main_sync(^{
+        switch ([g_dev manager].authorizationStatus) {
+        case kCLAuthorizationStatusNotDetermined:
+            r = 0;
+            break;
+        case kCLAuthorizationStatusAuthorizedAlways:
+        case kCLAuthorizationStatusAuthorizedWhenInUse:
+            r = 1;
+            break;
+        default:
+            r = 2;
+            break;
+        }
+    });
+    return r;
+}
+
+static int notification_state(void)
+{
+    __block int r = 0;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [UNUserNotificationCenter.currentNotificationCenter getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *s) {
+        switch (s.authorizationStatus) {
+        case UNAuthorizationStatusNotDetermined:
+            r = 0;
+            break;
+        case UNAuthorizationStatusDenied:
+            r = 2;
+            break;
+        default:
+            r = 1;
+            break;
+        }
+        dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
+    return r;
 }
 
 int salam_host_perm_state(const char *name)
 {
-    (void)name;
-    return 0;
+    if (name == NULL) {
+        return 0;
+    }
+    if (strcmp(name, "camera") == 0) {
+        return av_state(AVMediaTypeVideo);
+    }
+    if (strcmp(name, "microphone") == 0) {
+        return av_state(AVMediaTypeAudio);
+    }
+    if (strcmp(name, "location") == 0) {
+        return location_auth_state();
+    }
+    if (strcmp(name, "notifications") == 0) {
+        return notification_state();
+    }
+    return 2;
 }
 
 int salam_host_perm_request(const char *name)
 {
-    (void)name;
-    return 0;
+    if (name == NULL) {
+        return 0;
+    }
+    int known = strcmp(name, "camera") == 0 || strcmp(name, "microphone") == 0 || strcmp(name, "location") == 0 || strcmp(name, "notifications") == 0;
+    if (!known) {
+        return 0;
+    }
+    if (salam_host_perm_state(name) != 0) {
+        salam_host_post(SALAM_EV_DEVICE, 1, 0, 0, 0, 0, NULL);
+        return 1;
+    }
+    if (strcmp(name, "camera") == 0 || strcmp(name, "microphone") == 0) {
+        AVMediaType t = strcmp(name, "camera") == 0 ? AVMediaTypeVideo : AVMediaTypeAudio;
+        [AVCaptureDevice requestAccessForMediaType:t completionHandler:^(BOOL granted) {
+            salam_host_post(SALAM_EV_DEVICE, 1, 0, 0, 0, 0, NULL);
+        }];
+    } else if (strcmp(name, "location") == 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[g_dev manager] requestWhenInUseAuthorization];
+        });
+    } else {
+        [UNUserNotificationCenter.currentNotificationCenter requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
+                                                                          completionHandler:^(BOOL granted, NSError *err) {
+                                                                              salam_host_post(SALAM_EV_DEVICE, 1, 0, 0, 0, 0, NULL);
+                                                                          }];
+    }
+    return 1;
+}
+
+int salam_host_photo_request(int camera)
+{
+    pthread_mutex_lock(&g_dev_mu);
+    g_photo_state = 1;
+    pthread_mutex_unlock(&g_dev_mu);
+    if (camera && (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypeCamera] || av_state(AVMediaTypeVideo) == 2)) {
+        pthread_mutex_lock(&g_dev_mu);
+        g_photo_state = 3;
+        pthread_mutex_unlock(&g_dev_mu);
+        return 0;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *top = top_controller();
+        if (top == nil) {
+            photo_finish(nil);
+            return;
+        }
+        if (camera) {
+            UIImagePickerController *p = [UIImagePickerController new];
+            p.sourceType = UIImagePickerControllerSourceTypeCamera;
+            p.delegate = g_dev;
+            [top presentViewController:p animated:YES completion:nil];
+        } else {
+            PHPickerConfiguration *cfg = [PHPickerConfiguration new];
+            cfg.filter = [PHPickerFilter imagesFilter];
+            cfg.selectionLimit = 1;
+            PHPickerViewController *p = [[PHPickerViewController alloc] initWithConfiguration:cfg];
+            p.delegate = g_dev;
+            [top presentViewController:p animated:YES completion:nil];
+        }
+    });
+    return 1;
+}
+
+int salam_host_photo_state(void)
+{
+    pthread_mutex_lock(&g_dev_mu);
+    int s = g_photo_state;
+    pthread_mutex_unlock(&g_dev_mu);
+    return s;
+}
+
+const char *salam_host_photo_path(void)
+{
+    static char copy[1024];
+    pthread_mutex_lock(&g_dev_mu);
+    memcpy(copy, g_photo_path, sizeof copy);
+    pthread_mutex_unlock(&g_dev_mu);
+    return copy;
+}
+
+int salam_host_location_request(void)
+{
+    if (location_auth_state() != 1) {
+        pthread_mutex_lock(&g_dev_mu);
+        g_loc_state = 3;
+        pthread_mutex_unlock(&g_dev_mu);
+        return 0;
+    }
+    pthread_mutex_lock(&g_dev_mu);
+    g_loc_state = 1;
+    pthread_mutex_unlock(&g_dev_mu);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[g_dev manager] requestLocation];
+    });
+    return 1;
+}
+
+int salam_host_location_get(double *out)
+{
+    pthread_mutex_lock(&g_dev_mu);
+    int s = g_loc_state;
+    out[0] = g_loc_val[0];
+    out[1] = g_loc_val[1];
+    out[2] = g_loc_val[2];
+    pthread_mutex_unlock(&g_dev_mu);
+    return s;
+}
+
+int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
+{
+    if (notification_state() != 1) {
+        return 0;
+    }
+    UNMutableNotificationContent *c = [UNMutableNotificationContent new];
+    c.title = title != NULL ? [NSString stringWithUTF8String:title] ?: @"" : @"";
+    c.body = body != NULL ? [NSString stringWithUTF8String:body] ?: @"" : @"";
+    c.sound = UNNotificationSound.defaultSound;
+    UNNotificationTrigger *trigger = nil;
+    if (delay_ms > 0) {
+        NSTimeInterval secs = delay_ms / 1000.0;
+        trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:secs < 1 ? 1 : secs repeats:NO];
+    }
+    NSString *ident = [NSString stringWithFormat:@"salam.%d", id];
+    UNNotificationRequest *r = [UNNotificationRequest requestWithIdentifier:ident content:c trigger:trigger];
+    [UNUserNotificationCenter.currentNotificationCenter addNotificationRequest:r withCompletionHandler:nil];
+    return 1;
+}
+
+int salam_host_notify_cancel(int id)
+{
+    NSString *ident = [NSString stringWithFormat:@"salam.%d", id];
+    UNUserNotificationCenter *n = UNUserNotificationCenter.currentNotificationCenter;
+    [n removePendingNotificationRequestsWithIdentifiers:@[ ident ]];
+    [n removeDeliveredNotificationsWithIdentifiers:@[ ident ]];
+    return 1;
 }
 
 int salam_host_vibrate(int ms)
 {
-    (void)ms;
-    return 0;
+    if (ms <= 0) {
+        return 0;
+    }
+    AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+    return 1;
 }
 
 int salam_host_haptic(int kind)
 {
-    (void)kind;
-    return 0;
+    if (kind < 0 || kind > 3) {
+        return 0;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (kind <= 1) {
+            UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:kind == 0 ? UIImpactFeedbackStyleLight : UIImpactFeedbackStyleHeavy];
+            [g prepare];
+            [g impactOccurred];
+        } else {
+            UINotificationFeedbackGenerator *g = [UINotificationFeedbackGenerator new];
+            [g prepare];
+            [g notificationOccurred:kind == 2 ? UINotificationFeedbackTypeSuccess : UINotificationFeedbackTypeError];
+        }
+    });
+    return 1;
 }
 
 int salam_host_share(const char *text, const char *url)
 {
-    (void)text;
-    (void)url;
-    return 0;
+    NSMutableArray *items = [NSMutableArray new];
+    NSString *t = text != NULL ? [NSString stringWithUTF8String:text] : nil;
+    NSString *u = url != NULL ? [NSString stringWithUTF8String:url] : nil;
+    if (t.length > 0) {
+        [items addObject:t];
+    }
+    NSURL *link = u.length > 0 ? [NSURL URLWithString:u] : nil;
+    if (link != nil) {
+        [items addObject:link];
+    }
+    if (items.count == 0) {
+        return 0;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *top = top_controller();
+        if (top == nil) {
+            return;
+        }
+        UIActivityViewController *a = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];
+        a.popoverPresentationController.sourceView = g_view;
+        a.popoverPresentationController.sourceRect = CGRectMake(g_view.bounds.size.width / 2, g_view.bounds.size.height / 2, 1, 1);
+        [top presentViewController:a animated:YES completion:nil];
+    });
+    return 1;
 }
 
 int salam_host_clip_set(const char *text)

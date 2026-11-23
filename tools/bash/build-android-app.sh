@@ -9,7 +9,8 @@
 #       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE]
 #       [--size] [--split] [--no-strip] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
-#       [--fonts DIR] [--assets DIR] [--permission NAME]... [--no-apk] [--run]
+#       [--fonts DIR] [--assets DIR] [--permission NAME]... [--scheme NAME]...
+#       [--link-host HOST]... [--no-apk] [--run]
 #
 # --icon ICON.png (one square PNG, 1024 pixels is best) becomes the adaptive
 # icon (foreground over the --icon-bg colour, default #FFFFFF, plus a
@@ -55,6 +56,11 @@
 # permission in the manifest so device.RequestPermission can ask for it. Calls
 # that need a permission themselves, such as device.Vibrate, add it alone.
 #
+# --scheme NAME makes the app open links like NAME://path, and --link-host HOST
+# makes it open https://HOST links (Android app links; the site still has to
+# serve /.well-known/assetlinks.json). Read the link with device.LaunchURL and
+# device.OnOpenURL.
+#
 # Salam emits C for each ABI, the NDK compiles it with the host shim in
 # mobile/host/android into libsalamapp.so, and a prebuilt Gradle project
 # packages the library with the Kotlin shell. DIR/app.apk is the result.
@@ -90,6 +96,8 @@ FONTS=
 ASSETS=
 RUN=0
 PERMS=
+SCHEMES=
+LINK_HOSTS=
 AAB=0
 KS=
 KSPASS=
@@ -202,6 +210,14 @@ while [ $# -gt 0 ]; do
         ASSETS=$2
         shift 2
         ;;
+    --scheme)
+        SCHEMES="$SCHEMES $2"
+        shift 2
+        ;;
+    --link-host)
+        LINK_HOSTS="$LINK_HOSTS $2"
+        shift 2
+        ;;
     --permission)
         PERMS="$PERMS $2"
         shift 2
@@ -266,6 +282,8 @@ if [ -n "$CONFIG" ]; then
     [ -n "$FONTS" ] || FONTS=$(app_cfg_path fonts)
     [ -n "$ASSETS" ] || ASSETS=$(app_cfg_path assets)
     [ -n "$PERMS" ] || PERMS=$(app_cfg_get permissions)
+    [ -n "$SCHEMES" ] || SCHEMES=$(app_cfg_get scheme)
+    [ -n "$LINK_HOSTS" ] || LINK_HOSTS=$(app_cfg_get link_host)
 fi
 if [ -n "$BUILDNUM" ]; then
     app_check_int --build "$BUILDNUM" build-android-app || exit 2
@@ -526,6 +544,21 @@ esac
 if [ -n "$APP_CATEGORY" ]; then
     sed -i.bak "s|android:label=\"@string/app_name\"|android:label=\"@string/app_name\" android:appCategory=\"$APP_CATEGORY\"|" "$MANIFEST"
     rm -f "$MANIFEST.bak"
+fi
+FILTERS=
+VIEW='<action android:name="android.intent.action.VIEW" />'
+VIEW="$VIEW"'<category android:name="android.intent.category.DEFAULT" />'
+VIEW="$VIEW"'<category android:name="android.intent.category.BROWSABLE" />'
+for name in $SCHEMES; do
+    FILTERS="$FILTERS<intent-filter>$VIEW<data android:scheme=\"$name\" /></intent-filter>"
+done
+for name in $LINK_HOSTS; do
+    FILTERS="$FILTERS<intent-filter android:autoVerify=\"true\">$VIEW"
+    FILTERS="$FILTERS<data android:scheme=\"https\" android:host=\"$name\" /></intent-filter>"
+done
+if [ -n "$FILTERS" ]; then
+    awk -v add="$FILTERS" '/<\/activity>/ { print add } { print }' "$MANIFEST" >"$MANIFEST.new"
+    mv "$MANIFEST.new" "$MANIFEST"
 fi
 declare_permission() {
     grep -q "permission.$1\"" "$MANIFEST" && return 0

@@ -154,6 +154,8 @@ static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID perm_state_mid;
+static jmethodID notify_mid;
+static jmethodID cancel_mid;
 static jmethodID perm_request_mid;
 static char clip_buf[8192];
 static int ime_state;
@@ -367,6 +369,36 @@ static int call_bool_int(jmethodID mid, int v)
     return r;
 }
 
+int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || notify_mid == NULL) {
+        return 0;
+    }
+    jstring jt = jstring_from_utf8(env, title);
+    jstring jb = jstring_from_utf8(env, body);
+    if (jt != NULL && jb != NULL) {
+        r = (*env)->CallStaticBooleanMethod(env, host_cls, notify_mid, (jint)id, jt, jb, (jint)delay_ms) ? 1 : 0;
+    }
+    if (jt != NULL) {
+        (*env)->DeleteLocalRef(env, jt);
+    }
+    if (jb != NULL) {
+        (*env)->DeleteLocalRef(env, jb);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_notify_cancel(int id)
+{
+    return call_bool_int(cancel_mid, id);
+}
+
 int salam_host_perm_state(const char *name)
 {
     int attached;
@@ -518,6 +550,8 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     perm_state_mid = (*env)->GetStaticMethodID(env, cls, "permState", "(Ljava/lang/String;)I");
     perm_request_mid = (*env)->GetStaticMethodID(env, cls, "permRequest", "(Ljava/lang/String;)Z");
+    notify_mid = (*env)->GetStaticMethodID(env, cls, "notify", "(ILjava/lang/String;Ljava/lang/String;I)Z");
+    cancel_mid = (*env)->GetStaticMethodID(env, cls, "cancelNotification", "(I)Z");
     share_mid = (*env)->GetStaticMethodID(env, cls, "share", "(Ljava/lang/String;Ljava/lang/String;)Z");
     started = 1;
     redirect_output();

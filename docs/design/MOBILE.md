@@ -104,7 +104,7 @@ saved state is written under `$HOME`, which is the app Documents directory, so
 `SALAM_OS_IOS` (0.6.19 and earlier) builds an app that cannot open a window,
 so build iOS apps with a compiler built from this tree.
 Missing: bundled fonts (iOS cannot read system fonts on a phone), rotate and
-three finger gestures, camera and notifications.
+three finger gestures, camera and location.
 
 ## Target matrix
 

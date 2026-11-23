@@ -259,6 +259,9 @@ uses_host_call() {
 if uses_host_call salam_host_vibrate; then
     declare_permission VIBRATE
 fi
+if uses_host_call salam_host_notify; then
+    declare_permission POST_NOTIFICATIONS
+fi
 for name in $PERMS; do
     case $name in
     camera) declare_permission CAMERA ;;

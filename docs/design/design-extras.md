@@ -44,3 +44,12 @@ Arrow keys move, Home/End jump, Enter activates.
 | `select separator` | | |
 
 Keyboard: arrows, Home/End, Enter/Space, Escape, typeahead.
+
+## calendar and date picker
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `calendar` | `calendar` gregorian, jalali; `mode` single, range; `value` ISO date or `from/to`; `min`; `max`; `week start` 0 to 6 (Sunday is 0; default 6 for jalali); `disabled days` weekday numbers like "0,6"; `disabled dates` ISO list | month grid, prev and next, today, keyboard (arrows, Home, End, PageUp, PageDown, Shift for year); `ds-change` with `detail.value/from/to` |
+| `date picker` | same as calendar plus `name`, `placeholder`, `disabled` | trigger plus popover calendar, hidden input holds the ISO value |
+
+Jalali mode uses Persian month names and digits and a right to left grid. Values are always ISO Gregorian dates.

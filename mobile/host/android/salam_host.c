@@ -148,6 +148,8 @@ static jmethodID exit_mid;
 static jmethodID ime_mid;
 static jmethodID open_mid;
 static jmethodID bars_mid;
+static jmethodID page_bg_mid;
+static uint32_t page_bg_last;
 static int bars_top = -1;
 static int bars_bottom = -1;
 static jmethodID clip_set_mid;
@@ -195,6 +197,11 @@ static void swizzle_row(const uint32_t *s, uint32_t *d, int n)
     }
 }
 
+static uint32_t swizzle_px(uint32_t p)
+{
+    return (p & 0x0000FF00u) | ((p >> 16) & 0xFFu) | ((p & 0xFFu) << 16) | 0xFF000000u;
+}
+
 static int pixel_is_light(uint32_t p)
 {
     unsigned lum = ((p & 0xFFu) + 2u * ((p >> 8) & 0xFFu) + ((p >> 16) & 0xFFu)) / 4u;
@@ -214,12 +221,26 @@ static void report_bars(int top, int bottom)
     }
 }
 
+static void report_page_bg(uint32_t argb)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    if (env == NULL || page_bg_mid == NULL) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, host_cls, page_bg_mid, (jint)argb);
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+}
+
 int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int h)
 {
     int ok = 0;
     int top = -1;
     int bottom = -1;
     int first_frame = 0;
+    uint32_t page = 0;
     pthread_mutex_lock(&mu);
     if (win != NULL && pixels != NULL) {
         ARect r;
@@ -246,6 +267,7 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
             ANativeWindow_unlockAndPost(win);
             ok = 1;
             first_frame = 1;
+            page = swizzle_px(((const uint32_t *)pixels)[0]);
             if (y0 == 0 && x1 > x0) {
                 top = pixel_is_light(((const uint32_t *)pixels)[bw / 2]);
             }
@@ -257,6 +279,10 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
     pthread_mutex_unlock(&mu);
     if (first_frame) {
         salam_host_script_frame();
+        if (page != page_bg_last) {
+            page_bg_last = page;
+            report_page_bg(page);
+        }
     }
     if ((top >= 0 && top != bars_top) || (bottom >= 0 && bottom != bars_bottom)) {
         if (top >= 0) {
@@ -709,6 +735,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     exit_mid = (*env)->GetStaticMethodID(env, cls, "onExit", "()V");
     ime_mid = (*env)->GetStaticMethodID(env, cls, "showIme", "(Z)V");
     bars_mid = (*env)->GetStaticMethodID(env, cls, "barsLight", "(II)V");
+    page_bg_mid = (*env)->GetStaticMethodID(env, cls, "pageBackground", "(I)V");
     open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");
     clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
     clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");

@@ -3,13 +3,20 @@
 #
 # Usage:
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
-#       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--icon-bg COLOR] [--release]
+#       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--icon-bg COLOR]
+#       [--splash-color COLOR] [--splash-icon ICON.png] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
 #       [--fonts DIR] [--assets DIR] [--permission NAME]... [--no-apk] [--run]
 #
 # --icon ICON.png (one square PNG, 1024 pixels is best) becomes the adaptive
 # icon (foreground over the --icon-bg colour, default #FFFFFF, plus a
 # monochrome layer for themed icons) and the legacy launcher mipmaps.
+#
+# --splash-color COLOR and --splash-icon ICON.png set the launch screen (the
+# Android 12 splash screen, and a window background on older versions). The
+# colour defaults to white, or black in the dark theme, and the icon to --icon.
+# The host remembers the page background it drew last and paints it behind the
+# next launch, so a dark page does not start with a white frame.
 #
 # --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
 # copied to the app files directory at start and found by the font collection.
@@ -40,6 +47,8 @@ BUILD=assembleDebug
 APK=1
 ICON=
 ICON_BG="#FFFFFF"
+SPLASH_COLOR=
+SPLASH_ICON=
 FONTS=
 ASSETS=
 RUN=0
@@ -77,6 +86,14 @@ while [ $# -gt 0 ]; do
         ;;
     --icon-bg)
         ICON_BG=$2
+        shift 2
+        ;;
+    --splash-color)
+        SPLASH_COLOR=$2
+        shift 2
+        ;;
+    --splash-icon)
+        SPLASH_ICON=$2
         shift 2
         ;;
     --aab)
@@ -247,6 +264,48 @@ XML
     sed -i.bak 's|android:supportsRtl="true"|android:supportsRtl="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"|' \
         "$OUT/project/app/src/main/AndroidManifest.xml"
     rm -f "$OUT/project/app/src/main/AndroidManifest.xml.bak"
+fi
+if [ -n "$SPLASH_COLOR" ]; then
+    printf %s "$SPLASH_COLOR" | grep -Eq '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$' || {
+        echo "build-android-app: --splash-color wants #RGB, #RRGGBB or #AARRGGBB, not '$SPLASH_COLOR'" >&2
+        exit 2
+    }
+    for dir in values values-night; do
+        mkdir -p "$OUT/project/app/src/main/res/$dir"
+        cat >"$OUT/project/app/src/main/res/$dir/splash.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="splash_background">$SPLASH_COLOR</color>
+</resources>
+XML
+    done
+fi
+[ -z "$SPLASH_ICON" ] && SPLASH_ICON=$ICON
+if [ -n "$SPLASH_ICON" ]; then
+    icon_check "$SPLASH_ICON" build-android-app || exit 2
+    RES=$OUT/project/app/src/main/res
+    mkdir -p "$RES/drawable-nodpi"
+    icon_resize "$SPLASH_ICON" 288 "$RES/drawable-nodpi/splash_art.png"
+    cat >"$RES/drawable/splash_icon.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/splash_art"
+    android:inset="25%" />
+XML
+    cat >"$RES/drawable/splash_window.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background" />
+    <item>
+        <bitmap android:src="@drawable/splash_art" android:gravity="center" />
+    </item>
+</layer-list>
+XML
+    for sf in values values-night; do
+        sed -i.bak 's|</style>|        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>\
+    </style>|' "$RES/$sf/styles.xml"
+        rm -f "$RES/$sf/styles.xml.bak"
+    done
 fi
 if [ -n "$FONTS" ]; then
     [ -d "$FONTS" ] || {

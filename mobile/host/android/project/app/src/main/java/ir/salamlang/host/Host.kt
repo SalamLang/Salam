@@ -399,6 +399,12 @@ object Host {
     }
 
     @JvmStatic
+    fun pageBackground(argb: Int) {
+        val a = activity as? SalamActivity ?: return
+        a.runOnUiThread { a.rememberPageBackground(argb) }
+    }
+
+    @JvmStatic
     fun onExit() {
         val a = activity ?: return
         a.runOnUiThread {

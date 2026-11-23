@@ -34,6 +34,7 @@ mut g_lo_routes_web := false
 mut g_lo_routes_home_static := false
 mut g_lo_routes_static := Vector {} as Vector<str>
 mut g_lo_routes_static_title := Vector {} as Vector<str>
+mut g_lo_routes_static_pattern := Vector {} as Vector<str>
 mut g_lo_rt_file := ""
 mut g_lo_pg_path := Vector {} as Vector<str>
 mut g_lo_pg_prog := Vector {} as Vector<int>
@@ -46,6 +47,9 @@ struct LoRoute:
     pub lay: str = ""
     pub title: int = 0 - 1
     pub rank: int = 0
+    pub pre: Vector<str> = Vector {}
+    pub pre_node: int = 0
+    pub file: str = ""
 end
 
 struct LoRouteNames:
@@ -1258,6 +1262,13 @@ pub func RoutesStatic(): Vector<str>:
     ret g_lo_routes_static
 end
 
+pub func RoutesStaticPattern(i: int): str:
+    if i < 0 or i >= g_lo_routes_static_pattern.Len():
+        ret ""
+    end
+    ret g_lo_routes_static_pattern.Get(i)
+end
+
 pub func RoutesStaticTitle(i: int): str:
     if i < 0 or i >= g_lo_routes_static_title.Len():
         ret ""
@@ -1281,6 +1292,7 @@ pub func LowerRoutes(
     g_lo_routes_home_static = false
     g_lo_routes_static.Clear()
     g_lo_routes_static_title.Clear()
+    g_lo_routes_static_pattern.Clear()
     g_lo_rt_file = ""
     g_lo_pg_path.Clear()
     g_lo_pg_prog.Clear()
@@ -1335,7 +1347,33 @@ pub func LowerRoutes(
         ) < 0 and str.IndexFrom(r.pattern, "*", 0) < 0:
             g_lo_routes_static.Push(r.pattern)
             g_lo_routes_static_title.Push(r.title >= 0 ? lo_rt_lit(a, exprs.Get(r.title)) : "")
+            g_lo_routes_static_pattern.Push(r.pattern)
         end
+        if r.pre.Len() > 0:
+            g_lo_rt_file = r.file
+        end
+        if r.pre.Len() > 0 and r.gs.Len() > 0:
+            lo_rt_error(log, a, r.pre_node, i18.Tr("remove prerender; the server or the browser draws a guarded page"), i18.Tr("E269: a page with page.Guard cannot be pre-rendered"))
+            errs++
+            continue
+        end
+        each pp in r.pre:
+            np := nav.Normalize(pp)
+            if not str.StartsWith(pp, "/") or not nav.Match(r.pattern, np):
+                lo_rt_error(log, a, r.pre_node, i18.Tr("list paths this page's route matches, such as /user/1"), co.Format2(i18.Tr("E269: '%s' does not match the route '%s'"), co.ArgStr(pp), co.ArgStr(r.pattern)))
+                errs++
+                continue
+            end
+            if np.Len() > 1 and not lo_rt_has(g_lo_routes_static, np):
+                g_lo_routes_static.Push(np)
+                g_lo_routes_static_title.Push("")
+                g_lo_routes_static_pattern.Push(r.pattern)
+            end
+        end
+    end
+    g_lo_rt_file = ""
+    if errs > 0:
+        ret errs
     end
     mut home := ""
     each r in routes:
@@ -1541,6 +1579,9 @@ if (typeof window !== "undefined") {
     __salam_rt_last = __salam_rt_here();
     SETFN(__salam_rt_last, 2);
     setTimeout(__salam_rt_mark, 0);
+    setTimeout(function () {
+        document.documentElement.classList.remove("salam-pending");
+    }, 0);
 }
 `
     ret str.Replace(str.Replace(t, "SETFN", set_fn), "CHECKFN", check_fn)

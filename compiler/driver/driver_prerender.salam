@@ -26,11 +26,15 @@ include ip "../interp/interp.salam"
 mut g_dr_pre_route := Vector {} as Vector<str>
 mut g_dr_pre_region := Vector {} as Vector<int>
 mut g_dr_pre_html := Vector {} as Vector<str>
+mut g_dr_pre_title_path := Vector {} as Vector<str>
+mut g_dr_pre_title := Vector {} as Vector<str>
 
 func pre_reset():
     g_dr_pre_route.Clear()
     g_dr_pre_region.Clear()
     g_dr_pre_html.Clear()
+    g_dr_pre_title_path.Clear()
+    g_dr_pre_title.Clear()
 end
 
 func pre_marker(i: int): str:
@@ -40,7 +44,7 @@ end
 
 func prerender_page(lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, html: str):
     pre_reset()
-    if not lo.RoutesActive() or lo.RoutesHash():
+    if not lo.RoutesActive():
         ret
     end
     mut regions := Vector {} as Vector<int>
@@ -55,11 +59,17 @@ func prerender_page(lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, html: 
     end
     mut paths := Vector {} as Vector<str>
     defer paths.Free()
+    mut pats := Vector {} as Vector<str>
+    defer pats.Free()
     paths.Push("/")
-    fixed := lo.RoutesStatic()
-    each p in fixed:
-        if not str.Equals(p, "/"):
-            paths.Push(p)
+    pats.Push("")
+    if not lo.RoutesHash():
+        fixed := lo.RoutesStatic()
+        repeat fixed.Len() in fi:
+            if not str.Equals(fixed.Get(fi), "/"):
+                paths.Push(fixed.Get(fi))
+                pats.Push(lo.RoutesStaticPattern(fi))
+            end
         end
     end
     mut opts := ip.NewOptions()
@@ -78,16 +88,23 @@ func prerender_page(lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, html: 
         ret
     end
     mut filled := 0
-    each p in paths:
+    repeat paths.Len() in pi:
+        p := paths.Get(pi)
         mut rargs := Vector {} as Vector<ip.Value>
         rargs.Push(ip.ValStr(p))
         rargs.Push(ip.ValInt(2 as i64))
         mut why := ""
+        _stale := ip.TakeWebTitle()
         set_ok := ip.CallNamed(vm, a, "__salam_route_set", rargs, why)
         rargs.Free()
         if not set_ok:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, "pre-render " + p + ": " + why)
             continue
+        end
+        tt := ip.TakeWebTitle()
+        if pats.Get(pi).Len() > 0 and str.Len(tt) > 0:
+            g_dr_pre_title_path.Push(p)
+            g_dr_pre_title.Push(tt)
         end
         each r in regions:
             mut none := Vector {} as Vector<ip.Value>
@@ -141,4 +158,22 @@ end
 
 func prerender_any(): bool:
     ret g_dr_pre_route.Len() > 0
+end
+
+func prerender_title(path: str, fallback: str): str:
+    repeat g_dr_pre_title_path.Len() in i:
+        if str.Equals(g_dr_pre_title_path.Get(i), path):
+            ret g_dr_pre_title.Get(i)
+        end
+    end
+    ret fallback
+end
+
+func prerender_hash_head(html: str): str:
+    hp := str.IndexOf(html, "<head>")
+    if hp < 0:
+        ret html
+    end
+    snippet := "<script>if(location.hash.indexOf(\"#/\")===0&&location.hash.length>2){document.documentElement.className+=\" salam-pending\";setTimeout(function(){document.documentElement.classList.remove(\"salam-pending\")},3000)}</script><style>html.salam-pending body{visibility:hidden}</style>"
+    ret str.Substr(html, 0, hp + 6) + snippet + str.Substr(html, hp + 6, str.Len(html) - hp - 6)
 end

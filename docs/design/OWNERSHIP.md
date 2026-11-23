@@ -121,7 +121,7 @@ positive count at zero on `std/` and `compiler/`:
 
 E176 covers user code only (not `std/`). `input`, `trim`, `upper`, `lower`,
 `repeat`, `substr` and `concat` count as returning a new string, so
-`s := x.Trim()`, `print input "p"` and `s := x.Trim().Upper()` are freed for
+`s := x.Trim()`, `s := input "p"` and `s := x.Trim().Upper()` are freed for
 you, including the intermediate strings of a chain. A bare statement such as
 `x.Trim()`, `x.Trim().Upper()` or `input "p"` is rejected, because nothing
 holds the result.
@@ -129,7 +129,7 @@ Keep the result in a variable that is used, or free it with `mem.Free`.
 `--ownership=off` skips the check.
 
 E250 follows a struct that owns a fresh heap string through function returns:
-`u := ask()` where `ask` returns `User { name = input "n" }` makes `u` the
+`u := ask()` where `ask` returns `User { name = answer }` (with `answer := input "n"`) makes `u` the
 owner of `u.name`. If every use of `u` only reads that field, the string is
 never freed and the compiler rejects the declaration. Only functions written in
 user code are followed; a struct returned by a `std/` function is never

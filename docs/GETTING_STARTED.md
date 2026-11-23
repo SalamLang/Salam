@@ -464,6 +464,68 @@ Top-level code is split into sections: `package`, imports, includes, each
 private apart). The formatter puts exactly one empty line between two
 sections. Inside a section your own empty lines are kept, at most one in a row.
 
+### Line width
+
+Lines are kept within 100 columns. A statement that does not fit is broken in
+this order, and a statement that fits is never touched:
+
+- `println a, b, c` breaks after each comma, the later items indented one
+  level.
+- A call, struct literal or array literal that does not fit is broken after
+  its opening bracket, its content is indented one level and the closing
+  bracket gets its own line. Items stay together on one line when they fit
+  there, and go one per line when they do not.
+- A struct literal with more than three fields always puts one field per
+  line. When it is the only argument of a call the call keeps the opening on
+  its own line, as in `window.Inject(window.Event {` ... `})`.
+- Array literals are packed: as many items per line as fit.
+- When no bracket helps, a long `+`, `and` or `or` chain breaks after the
+  operator (Salam continues a line only after an operator), with the rest
+  indented one level.
+- Strings are never split, comments stay where they are, and a one-line block
+  such as `if x: f() end` is left as written.
+
+### Page elements
+
+Inside `page`, `component` and `page Name(params):` blocks every element is
+laid out the same way: `name:` on one line, one `name = value` attribute per
+line, indented, then the nested children, then `end` on its own line.
+
+```salam
+pub component Counter:
+    title = "Counter"
+    n := 0
+    heading:
+        content = "Counter"
+    end
+    button:
+        id = "inc"
+        click = (): n++ end
+        content = "Add"
+    end
+    box: end
+end
+```
+
+The rules for the edge cases:
+
+- An element with no attributes and no children stays on one line as
+  `name: end`, also when it was written over two lines.
+- An element with at least one attribute or child is always expanded, even
+  with a single short attribute. The attributes are never wrapped.
+- Attributes stay in source order and children keep their place after them.
+- `if`, `else` and `each` blocks inside an element are expanded the same way:
+  the header line, one attribute or element per line, `else:` and `end` on
+  their own lines. This covers style conditions such as `if hover: color = red end`.
+- A comment inside an element stays on its own line in the same place, and a
+  comment after a value or after `end` stays on that line. An element that
+  holds a comment is not blank, so its `end` goes on its own line.
+- A function value keeps the line structure of the source. A lambda written on
+  one line, such as `click = (): n++ end`, stays on the attribute line. A lambda
+  whose body spans several lines keeps its body on separate lines, indented one
+  level deeper than the attribute, with `end` aligned to the attribute.
+- Persian files get the same layout with the Persian keywords.
+
 ## 🌐 Layout DSL - compile to HTML/CSS/JS
 
 Salam includes a built-in DSL for describing web layouts.

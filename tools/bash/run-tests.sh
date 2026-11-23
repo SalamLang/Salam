@@ -313,6 +313,18 @@ $cerrs"
             echo "FAIL $label (missing expected: $missing)"
         fi
     }
+    wk_ssrbuild() {
+        jobdir="$WORK/ssrjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        psrc="$(dirname "$fabs")"
+        if (cd "$jobdir" && "$SALAM_ABS" page build --ssr="$jobdir/dist" "$psrc" --no-color --log-level=error --lang="$lang") >"$jobdir/build.log" 2>&1 && [ -x "$jobdir/dist/server" ]; then
+            echo "PASS $label (ssr build)"
+        else
+            echo "FAIL $label (ssr build failed)"
+            sed 's/^/  /' "$jobdir/build.log" 2>/dev/null | head -20
+        fi
+        rm -rf "$jobdir"
+    }
     wk_buildonly() {
         jobdir="$WORK/bojob_${jobid}_$$"
         mkdir -p "$jobdir"
@@ -683,6 +695,7 @@ EOF_LAYOUT_NOT
         lint) wk_lint ;;
         lintfix) wk_lintfix ;;
         buildonly) wk_buildonly ;;
+        ssrbuild) wk_ssrbuild ;;
         jsbuildonly) wk_jsbuildonly ;;
         cross) wk_cross ;;
         uinative) wk_uinative ;;
@@ -989,6 +1002,10 @@ fi
 if want ssr && command -v curl >/dev/null 2>&1; then
     for lang in $LANGS; do
         add_job script "ssr/$lang/flow" "tools/bash/test-ssr.sh" "$lang" "tests/$lang/ssr/flow.out"
+        for d in tests/"$lang"/ssr/projects/*/; do
+            [ -f "${d}main.salam" ] || continue
+            add_job ssrbuild "ssr/$lang/projects/$(basename "$d")" "${d}main.salam" "$lang" -
+        done
     done
 fi
 

@@ -32,6 +32,37 @@ object Host {
     @JvmStatic external fun nativeScheme(dark: Int)
 
     @JvmStatic
+    fun openUrl(url: String): Boolean {
+        val a = activity ?: return false
+        return try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            a.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun clipboard(): android.content.ClipboardManager? =
+        activity?.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+
+    @JvmStatic
+    fun clipSet(text: String): Boolean {
+        val c = clipboard() ?: return false
+        c.setPrimaryClip(android.content.ClipData.newPlainText("salam", text))
+        return true
+    }
+
+    @JvmStatic
+    fun clipGet(): String {
+        val c = clipboard() ?: return ""
+        val clip = c.primaryClip ?: return ""
+        if (clip.itemCount == 0) return ""
+        return clip.getItemAt(0).coerceToText(activity).toString()
+    }
+
+    @JvmStatic
     fun showIme(show: Boolean) {
         val a = activity ?: return
         a.runOnUiThread {

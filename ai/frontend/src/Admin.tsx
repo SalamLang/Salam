@@ -849,6 +849,8 @@ function draftOf(p: Partial<AdminPlan>): PlanDraft {
   return d;
 }
 
+const PROTECTED_PLANS = ["free", "plus", "trial", "pro", "unlimited", "unlimited2", "unlimited3"];
+
 function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string, ok?: boolean) => void; move?: { up: (() => void) | null; down: (() => void) | null; busy: boolean } }) {
   const [d, setD] = useState<PlanDraft>(() => draftOf(plan ?? {}));
   const [saving, setSaving] = useState(false);
@@ -860,6 +862,30 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
     tiers[i] = { ...tiers[i], [k]: v };
     return { ...old, tiers };
   });
+
+  const remove = async (mode: "retire" | "cancel") => {
+    if (!plan) return;
+    const ok = await confirmDialog({
+      title: mode === "cancel" ? t("حذف پلن و لغو مشترک‌ها", "Remove plan and cancel subscribers") : t("حذف پلن از فروش", "Remove plan from sale"),
+      subject: plan.name,
+      message: mode === "cancel"
+        ? t("پلن حذف می‌شود و اشتراک همه‌ی کاربرانی که آن را دارند همین حالا لغو می‌شود.", "The plan is removed and every active subscription on it is canceled right now.")
+        : t("پلن حذف و از فروش برداشته می‌شود و کسی نمی‌تواند آن را بخرد یا تمدید کند، ولی مشترک‌های فعلی تا پایان مدت از آن استفاده می‌کنند.", "The plan is removed and no one can buy or extend it, but current subscribers keep using it until it expires."),
+      confirmLabel: t("حذف", "Remove"),
+      icon: "alert",
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      await api.adminPlanDelete(plan.id, mode);
+      notify(t("پلن حذف شد.", "Plan removed."), true);
+      onSaved();
+    } catch (e) {
+      notify(errText(e, t("حذف پلن ناموفق بود.", "Could not remove the plan.")));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -982,6 +1008,16 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
           {saving ? <span className="spinner" /> : null}
           {fresh ? t("ساخت پلن", "Create plan") : t("ذخیره", "Save")}
         </button>
+        {!fresh && !PROTECTED_PLANS.includes(plan.id) && (
+          <>
+            <button type="button" className="button" disabled={saving} onClick={() => void remove("retire")}>
+              {t("حذف از فروش (مشترک‌ها می‌مانند)", "Remove from sale (subscribers keep it)")}
+            </button>
+            <button type="button" className="button danger" disabled={saving} onClick={() => void remove("cancel")}>
+              {t("حذف و لغو همه‌ی مشترک‌ها", "Remove and cancel all subscribers")}
+            </button>
+          </>
+        )}
       </div>
     </form>
   );

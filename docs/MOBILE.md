@@ -31,6 +31,46 @@ emulator and starts it. Other options:
 | `--release --keystore my.jks --keystore-pass P --key-alias A` | signed release APK |
 | `--aab` | App Bundle for Google Play |
 
+## Version, identity and salam.toml
+
+| option | Android | iOS |
+| --- | --- | --- |
+| `--version 1.2.0` | `versionName` | `CFBundleShortVersionString` |
+| `--build 7` | `versionCode` | `CFBundleVersion` |
+| `--min-sdk 26` / `--min-ios 16.0` | `minSdk` (21 or more) | `MinimumOSVersion` and the compile target (15.0) |
+| `--target-sdk 35` | `targetSdk` | |
+| `--orientation portrait\|landscape\|auto` | `screenOrientation` | supported orientations |
+| `--category productivity` | `appCategory` (game, social, productivity, music, video, photo, news, maps) | `LSApplicationCategoryType` (also utilities, education, finance, health, lifestyle, travel, weather, business, entertainment, sports, books, food, reference) |
+
+Options do not have to be repeated: a `salam.toml` next to the page (or `--config FILE`)
+can hold them. `id`, `name`, `version` and `icon` come from the `[app]` table the desktop
+bundle uses; everything else goes in `[app.mobile]`, and `[app.android]` or `[app.ios]`
+overrides it for one platform. Keys are the option names with underscores.
+
+```toml
+[app]
+id = "ir.example.notes"
+name = "Notes"
+version = "1.2.0"
+icon = "icon.png"
+
+[app.mobile]
+build = 7
+orientation = "portrait"
+splash_color = "#101820"
+permissions = ["camera"]
+
+[app.android]
+min_sdk = 26
+abi = "arm64-v8a,x86_64"
+
+[app.ios]
+min_ios = "16.0"
+```
+
+An option on the command line wins over the file, and the file wins over the built-in default.
+Paths in the file (`icon`, `splash_icon`, `fonts`, `assets`) are relative to the file.
+
 Files such as images go in the APK with `--assets DIR` (`tools/bash/build-android-app.sh`).
 They are copied to `$HOME/assets` when the app starts, and a page names one with
 the `asset:` prefix: `image: url = "asset:logo.png"` for `DIR/logo.png` (folders

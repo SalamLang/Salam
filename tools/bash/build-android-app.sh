@@ -4,7 +4,9 @@
 # Usage:
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--icon-bg COLOR]
-#       [--splash-color COLOR] [--splash-icon ICON.png] [--release]
+#       [--splash-color COLOR] [--splash-icon ICON.png]
+#       [--version NAME] [--build NUMBER] [--min-sdk N] [--target-sdk N]
+#       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
 #       [--fonts DIR] [--assets DIR] [--permission NAME]... [--no-apk] [--run]
 #
@@ -17,6 +19,19 @@
 # colour defaults to white, or black in the dark theme, and the icon to --icon.
 # The host remembers the page background it drew last and paints it behind the
 # next launch, so a dark page does not start with a white frame.
+#
+# --version NAME and --build NUMBER set versionName and versionCode (1.0 and
+# 1 by default). --min-sdk (21 or more, the NDK floor) and --target-sdk (35 by
+# default) set the API levels. --orientation locks the screen to portrait or
+# landscape; auto, the default, follows the sensor. --category (game, social,
+# productivity, music, video, photo, news or maps; the other names are for iOS)
+# sets android:appCategory.
+#
+# --config FILE (default: salam.toml next to APP.salam) supplies any of these
+# from its [app], [app.mobile] and [app.android] tables with the option names
+# written with underscores: id, name, version, build, icon, icon_bg,
+# splash_color, splash_icon, min_sdk, target_sdk, orientation, category, abi,
+# fonts, assets and permissions. Options on the command line win.
 #
 # --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
 # copied to the app files directory at start and found by the font collection.
@@ -36,6 +51,7 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 . "$ROOT/mobile/host/common/icons.sh"
+. "$ROOT/mobile/host/common/app_config.sh"
 
 : "${SALAM:=salam}"
 APP=
@@ -46,9 +62,16 @@ NAME=
 BUILD=assembleDebug
 APK=1
 ICON=
-ICON_BG="#FFFFFF"
+ICON_BG=
 SPLASH_COLOR=
 SPLASH_ICON=
+VERSION=
+BUILDNUM=
+MINSDK=
+TARGETSDK=
+ORIENT=
+CATEGORY=
+CONFIG=
 FONTS=
 ASSETS=
 RUN=0
@@ -94,6 +117,34 @@ while [ $# -gt 0 ]; do
         ;;
     --splash-icon)
         SPLASH_ICON=$2
+        shift 2
+        ;;
+    --version)
+        VERSION=$2
+        shift 2
+        ;;
+    --build)
+        BUILDNUM=$2
+        shift 2
+        ;;
+    --min-sdk)
+        MINSDK=$2
+        shift 2
+        ;;
+    --target-sdk)
+        TARGETSDK=$2
+        shift 2
+        ;;
+    --orientation)
+        ORIENT=$2
+        shift 2
+        ;;
+    --category)
+        CATEGORY=$2
+        shift 2
+        ;;
+    --config)
+        CONFIG=$2
         shift 2
         ;;
     --aab)
@@ -164,6 +215,48 @@ if [ -n "$KS" ]; then
     KS=$(cd "$(dirname "$KS")" && pwd)/$(basename "$KS")
 fi
 
+if [ -z "$CONFIG" ] && [ -f "$(dirname "$APP")/salam.toml" ]; then
+    CONFIG=$(dirname "$APP")/salam.toml
+fi
+if [ -n "$CONFIG" ]; then
+    [ -f "$CONFIG" ] || {
+        echo "build-android-app: no such config file: $CONFIG" >&2
+        exit 2
+    }
+    app_cfg_load "$CONFIG" android
+    [ -n "$ID" ] || ID=$(app_cfg_get id)
+    [ -n "$NAME" ] || NAME=$(app_cfg_get name)
+    [ -n "$VERSION" ] || VERSION=$(app_cfg_get version)
+    [ -n "$BUILDNUM" ] || BUILDNUM=$(app_cfg_get build)
+    [ -n "$ICON" ] || ICON=$(app_cfg_path icon)
+    [ -n "$ICON_BG" ] || ICON_BG=$(app_cfg_get icon_bg)
+    [ -n "$SPLASH_COLOR" ] || SPLASH_COLOR=$(app_cfg_get splash_color)
+    [ -n "$SPLASH_ICON" ] || SPLASH_ICON=$(app_cfg_path splash_icon)
+    [ -n "$MINSDK" ] || MINSDK=$(app_cfg_get min_sdk)
+    [ -n "$TARGETSDK" ] || TARGETSDK=$(app_cfg_get target_sdk)
+    [ -n "$ORIENT" ] || ORIENT=$(app_cfg_get orientation)
+    [ -n "$CATEGORY" ] || CATEGORY=$(app_cfg_get category)
+    [ -n "$ABIS" ] || ABIS=$(app_cfg_get abi)
+    [ -n "$FONTS" ] || FONTS=$(app_cfg_path fonts)
+    [ -n "$ASSETS" ] || ASSETS=$(app_cfg_path assets)
+    [ -n "$PERMS" ] || PERMS=$(app_cfg_get permissions)
+fi
+if [ -n "$BUILDNUM" ]; then
+    app_check_int --build "$BUILDNUM" build-android-app || exit 2
+fi
+if [ -n "$MINSDK" ]; then
+    app_check_int --min-sdk "$MINSDK" build-android-app || exit 2
+    [ "$MINSDK" -ge 21 ] || {
+        echo "build-android-app: --min-sdk must be 21 or more" >&2
+        exit 2
+    }
+fi
+if [ -n "$TARGETSDK" ]; then
+    app_check_int --target-sdk "$TARGETSDK" build-android-app || exit 2
+fi
+app_check_orientation "$ORIENT" build-android-app || exit 2
+app_category_known "$CATEGORY" build-android-app || exit 2
+[ -n "$ICON_BG" ] || ICON_BG="#FFFFFF"
 if [ -z "$ABIS" ]; then
     if [ "$BUILD" = assembleDebug ]; then
         ABIS=arm64-v8a
@@ -376,6 +469,22 @@ done
 IFS=$old_ifs
 
 MANIFEST=$OUT/project/app/src/main/AndroidManifest.xml
+case $ORIENT in
+portrait | landscape)
+    sed -i.bak "s|android:launchMode=\"singleTask\"|android:launchMode=\"singleTask\" android:screenOrientation=\"$ORIENT\"|" "$MANIFEST"
+    rm -f "$MANIFEST.bak"
+    ;;
+esac
+case $CATEGORY in
+game | social | productivity | news | maps | video) APP_CATEGORY=$CATEGORY ;;
+music) APP_CATEGORY=audio ;;
+photo) APP_CATEGORY=image ;;
+*) APP_CATEGORY= ;;
+esac
+if [ -n "$APP_CATEGORY" ]; then
+    sed -i.bak "s|android:label=\"@string/app_name\"|android:label=\"@string/app_name\" android:appCategory=\"$APP_CATEGORY\"|" "$MANIFEST"
+    rm -f "$MANIFEST.bak"
+fi
 declare_permission() {
     grep -q "permission.$1\"" "$MANIFEST" && return 0
     awk -v line="    <uses-permission android:name=\"android.permission.$1\" />" \
@@ -414,6 +523,10 @@ done
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK
 set -- "$BUILD" "-PappId=$ID" "-PappName=$NAME"
+[ -z "$VERSION" ] || set -- "$@" "-PappVersion=$VERSION"
+[ -z "$BUILDNUM" ] || set -- "$@" "-PappVersionCode=$BUILDNUM"
+[ -z "$MINSDK" ] || set -- "$@" "-PminSdkVersion=$MINSDK"
+[ -z "$TARGETSDK" ] || set -- "$@" "-PtargetSdkVersion=$TARGETSDK"
 if [ -n "$KS" ]; then
     set -- "$@" "-PstoreFile=$KS" "-PstorePassword=$KSPASS" "-PkeyAlias=$KEYALIAS" "-PkeyPassword=${KEYPASS:-$KSPASS}"
 fi

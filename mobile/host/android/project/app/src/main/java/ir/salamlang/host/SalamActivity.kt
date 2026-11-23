@@ -39,6 +39,7 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
             insets
         }
         setContentView(view)
+        showLastCrash()
         applyBars(isDark(resources.configuration))
         Host.nativeScheme(if (isDark(resources.configuration)) 1 else 0)
     }
@@ -55,6 +56,19 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
     fun rememberPageBackground(argb: Int) {
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(argb))
         getSharedPreferences("salam_launch", MODE_PRIVATE).edit().putInt(launchKey(), argb).apply()
+    }
+
+    private fun showLastCrash() {
+        val f = java.io.File(filesDir, "crash.txt")
+        if (!f.exists()) return
+        val text = try { f.readText() } catch (e: Exception) { "" }
+        f.renameTo(java.io.File(filesDir, "crash.last.txt"))
+        if (text.isEmpty()) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("The app closed unexpectedly")
+            .setMessage(if (text.length > 600) text.substring(0, 600) else text)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     private var lightTop = true

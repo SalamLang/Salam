@@ -203,6 +203,15 @@ compiler from the checkout (a release compiler may predate the iOS target),
 builds `mobile/host/ios/smoke.salam` and taps it with `-salam-script` on a
 simulator.
 
+## Crashes
+
+A panic or a fatal signal (SIGSEGV, SIGABRT and the like) writes the panic
+message, the signal and a backtrace of the crashing thread to logcat (tag
+`salam`) or NSLog, and to `crash.txt` in the app files folder (`Documents` on
+iOS). The next launch shows the text in a dialog, logs it and moves the file to
+`crash.last.txt`. Frames show the nearest exported symbol, so a private
+function appears under a neighbour. On iOS SIGTERM flushes the output and exits.
+
 ## What works
 
 - Layout, text (Persian included, system fonts), colors, scrolling with fling,

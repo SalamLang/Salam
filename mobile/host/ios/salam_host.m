@@ -8,9 +8,13 @@
 #import <Security/Security.h>
 #import <Network/Network.h>
 #include <sys/utsname.h>
+#include <execinfo.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../common/salam_host_common.h"
 
@@ -38,6 +42,13 @@ static void *run_app(void *arg)
 {
     (void)arg;
     char *argv[2] = {"app", NULL};
+    stack_t st;
+    st.ss_sp = malloc(65536);
+    st.ss_size = 65536;
+    st.ss_flags = 0;
+    if (st.ss_sp != NULL) {
+        sigaltstack(&st, NULL);
+    }
     salam_app_main(1, argv);
     exit(0);
     return NULL;
@@ -879,6 +890,148 @@ static void url_store(NSURL *u, int launch)
 
 @end
 
+static char g_crash_path[1100];
+static int g_err_orig = 2;
+static int g_err_pipe[2];
+static char g_panic_msg[256];
+static volatile sig_atomic_t g_crashing;
+static char g_crash_stack[65536];
+static struct sigaction g_crash_old[6];
+static const int g_crash_sigs[] = {SIGABRT, SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP};
+
+static void *err_reader(void *arg)
+{
+    char buf[512];
+    char line[256];
+    size_t n = 0;
+    ssize_t got;
+    (void)arg;
+    while ((got = read(g_err_pipe[0], buf, sizeof buf)) > 0) {
+        ssize_t off = 0;
+        while (off < got) {
+            ssize_t w = write(g_err_orig, buf + off, (size_t)(got - off));
+            if (w <= 0) {
+                break;
+            }
+            off += w;
+        }
+        for (ssize_t i = 0; i < got; i++) {
+            if (buf[i] == '\n' || n == sizeof line - 1) {
+                line[n] = 0;
+                if (strncmp(line, "salam panic:", 12) == 0) {
+                    strncpy(g_panic_msg, line, sizeof g_panic_msg - 1);
+                    NSLog(@"%s", line);
+                }
+                n = 0;
+            } else {
+                line[n++] = buf[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+static void crash_handler(int sig)
+{
+    void *frames[48];
+    char head[200];
+    int fd;
+    int n;
+    if (g_crashing) {
+        _exit(128 + sig);
+    }
+    g_crashing = 1;
+    fd = g_crash_path[0] != 0 ? open(g_crash_path, O_WRONLY | O_CREAT | O_TRUNC, 0600) : -1;
+    n = snprintf(head, sizeof head, "fatal signal %d\n%s\nbacktrace:\n", sig, g_panic_msg);
+    NSLog(@"salam crash: signal %d %s", sig, g_panic_msg);
+    if (fd >= 0) {
+        if (write(fd, head, (size_t)n) < 0) {
+            n = 0;
+        }
+    }
+    n = backtrace(frames, 48);
+    if (fd >= 0) {
+        backtrace_symbols_fd(frames, n, fd);
+        close(fd);
+    }
+    backtrace_symbols_fd(frames, n, g_err_orig);
+    for (size_t i = 0; i < sizeof g_crash_sigs / sizeof g_crash_sigs[0]; i++) {
+        if (g_crash_sigs[i] == sig) {
+            sigaction(sig, &g_crash_old[i], NULL);
+        }
+    }
+    if (sig == SIGABRT) {
+        raise(sig);
+    }
+}
+
+static void term_handler(int sig)
+{
+    (void)sig;
+    fflush(NULL);
+    _exit(0);
+}
+
+static void crash_hook(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = crash_handler;
+    sa.sa_flags = SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < sizeof g_crash_sigs / sizeof g_crash_sigs[0]; i++) {
+        struct sigaction cur;
+        sigaction(g_crash_sigs[i], NULL, &cur);
+        if (cur.sa_handler != crash_handler) {
+            g_crash_old[i] = cur;
+            sigaction(g_crash_sigs[i], &sa, NULL);
+        }
+    }
+    signal(SIGTERM, term_handler);
+}
+
+static void crash_install(NSString *docs)
+{
+    stack_t st;
+    [NSFileManager.defaultManager createDirectoryAtPath:docs withIntermediateDirectories:YES attributes:nil error:nil];
+    snprintf(g_crash_path, sizeof g_crash_path, "%s/crash.txt", docs.UTF8String);
+    g_err_orig = dup(2);
+    if (g_err_orig >= 0 && pipe(g_err_pipe) == 0) {
+        pthread_t t;
+        dup2(g_err_pipe[1], 2);
+        pthread_create(&t, NULL, err_reader, NULL);
+        pthread_detach(t);
+    } else {
+        g_err_orig = 2;
+    }
+    st.ss_sp = g_crash_stack;
+    st.ss_size = sizeof g_crash_stack;
+    st.ss_flags = 0;
+    sigaltstack(&st, NULL);
+    crash_hook();
+}
+
+static void crash_show_last(NSString *docs)
+{
+    NSString *path = [docs stringByAppendingPathComponent:@"crash.txt"];
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (text == nil) {
+        return;
+    }
+    [NSFileManager.defaultManager moveItemAtPath:path toPath:[docs stringByAppendingPathComponent:@"crash.last.txt"] error:nil];
+    NSLog(@"salam previous crash:\n%@", text);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        UIViewController *root = g_view.window.rootViewController;
+        if (root == nil) {
+            return;
+        }
+        NSString *shown = text.length > 600 ? [text substringToIndex:600] : text;
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"The app closed unexpectedly" message:shown preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [root presentViewController:a animated:YES completion:nil];
+    });
+}
+
 @interface SalamDelegate : UIResponder <UIApplicationDelegate>
 @end
 
@@ -891,6 +1044,8 @@ static void url_store(NSURL *u, int launch)
     setenv("TMPDIR", NSTemporaryDirectory().UTF8String, 1);
     NSString *fonts = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"fonts"];
     setenv("SALAM_FONT_DIR", fonts.UTF8String, 1);
+    crash_install(docs);
+    crash_show_last(docs);
     salam_device_init();
     return YES;
 }
@@ -944,6 +1099,11 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
         if (old == nil || old.unsignedIntValue != page) {
             [NSUserDefaults.standardUserDefaults setObject:@(page) forKey:key];
             g_view.backgroundColor = salam_saved_background(g_view.traitCollection.userInterfaceStyle);
+        }
+        static int hooked;
+        if (!hooked) {
+            hooked = 1;
+            crash_hook();
         }
         if (g_first_frame != nil) {
             void (^go)(void) = g_first_frame;

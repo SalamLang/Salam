@@ -9,7 +9,9 @@ trap 'rm -f "$tmp"' EXIT
 
 scan() {
     awk -v file="$1" '
-        BEGIN { skipnames = "|content|title|alt|srcset|sizes|imagesizes|imagesrcset|اندازه‌ها|اندازه‌های تصویر|مجموعه منبع|مجموعه منبع تصویر|محتوا|عنوان|نام|مقدار|متن|نشانی|برچسب|شرح|توضیح|جایگزین|placeholder|value|label|name|url|href|src|media|description|keywords|text|pattern|action|style|viewport|timeout|" }
+        BEGIN { skipnames = "|content|title|alt|srcset|sizes|imagesizes|imagesrcset|"
+            skipnames = skipnames "اندازه‌ها|اندازه‌های تصویر|مجموعه منبع|مجموعه منبع تصویر|محتوا|عنوان|نام|مقدار|متن|نشانی|برچسب|شرح|توضیح|جایگزین|"
+            skipnames = skipnames "placeholder|splash_color|value|label|name|url|href|src|media|description|keywords|text|pattern|action|style|viewport|timeout|" }
         {
             line = $0
             gsub(/&quot;/, "\"", line)

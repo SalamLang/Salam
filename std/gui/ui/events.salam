@@ -611,16 +611,96 @@ func _popup_geometry(px &: f64, py &: f64, w &: f64, ih &: f64, n &: int):
     b := _e.boxes[node]
     mut opts := Vector {} as Vector<int>
     _option_nodes(node, opts)
-    n = opts.Len()
+    total := opts.Len()
     opts.Free()
-    ih = math.Max(20.0, _e.us[node].line + 6.0)
+    ih = math.Round(_e.us[node].font * 1.3)
+    ih = math.Max(20.0, ih)
     px = b.x
-    py = b.y + b.h
     w = b.w
+    below := _e.height - _e.inset_b - (b.y + b.h)
+    above := b.y - _e.inset_t
+    full := ih * (total as f64)
+    if full <= below:
+        py = b.y + b.h
+        n = total
+    else full <= above:
+        py = b.y - full
+        n = total
+    else above > below:
+        n = math.MaxI(1, (above / ih) as int)
+        py = b.y - ih * (n as f64)
+    else:
+        n = math.MaxI(1, (below / ih) as int)
+        py = b.y + b.h
+    end
+end
+
+func _popup_top(): int:
+    if _e.popup < 0:
+        ret 0
+    end
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    ret (_e.popup_off / ih) as int
+end
+
+func _popup_clamp(total: int):
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    mx := ih * ((total - n) as f64)
+    _e.popup_off = math.Max(0.0, math.Min(mx, _e.popup_off))
+end
+
+func _popup_show_row(i: int):
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    top := (_e.popup_off / ih) as int
+    if i < top:
+        _e.popup_off = ih * (i as f64)
+    else i >= top + n:
+        _e.popup_off = ih * ((i - n + 1) as f64)
+    end
+end
+
+func _popup_scroll(dy: f64): bool:
+    if _e.popup < 0:
+        ret false
+    end
+    mut opts := Vector {} as Vector<int>
+    _option_nodes(_e.popup, opts)
+    total := opts.Len()
+    opts.Free()
+    old := _e.popup_off
+    _e.popup_off += dy
+    _popup_clamp(total)
+    if _e.popup_off != old:
+        _damage_popup()
+    end
+    ret true
 end
 
 func _damage_popup():
     _e.full = true
+end
+
+func _option_count(node: int): int:
+    mut opts := Vector {} as Vector<int>
+    _option_nodes(node, opts)
+    n := opts.Len()
+    opts.Free()
+    ret n
 end
 
 func _open_popup(node: int):
@@ -628,6 +708,9 @@ func _open_popup(node: int):
     _e.popup = node
     mut c := _e.ctl.Ref(node)
     c.anchor = _select_index(node)
+    _e.popup_off = 0.0
+    _popup_show_row(c.anchor)
+    _popup_clamp(_option_count(node))
     _damage_popup()
 end
 
@@ -678,7 +761,7 @@ func _popup_hit(x: f64, y: f64): int:
     mut n := 0
     _popup_geometry(px, py, w, ih, n)
     if x >= px and x < px + w and y >= py and y < py + ih * (n as f64):
-        ret ((y - py) / ih) as int
+        ret ((y - py) / ih) as int + (_e.popup_off / ih) as int
     end
     ret -1
 end
@@ -953,6 +1036,9 @@ func _wheel(dx0: f64, dy0: f64, line: bool):
         dx *= 40.0
         dy *= 40.0
     end
+    if _e.popup >= 0 and _popup_scroll(dy):
+        ret
+    end
     t := _hit(_e.mx, _e.my)
     _fire_ev(t, _make_event("wheel", t), true)
     mut n := t
@@ -1060,11 +1146,13 @@ func _key_down(k: window.Key, mods: int, text: str):
         if k == window.Key.Down:
             mut cc := _e.ctl.Ref(p)
             cc.anchor = math.MinI(n - 1, c.anchor + 1)
+            _popup_show_row(cc.anchor)
             _damage_popup()
             ret
         else k == window.Key.Up:
             mut cc := _e.ctl.Ref(p)
             cc.anchor = math.MaxI(0, c.anchor - 1)
+            _popup_show_row(cc.anchor)
             _damage_popup()
             ret
         else k == window.Key.Enter or k == window.Key.Space:

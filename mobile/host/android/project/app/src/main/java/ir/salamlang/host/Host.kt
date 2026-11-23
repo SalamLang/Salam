@@ -178,6 +178,91 @@ object Host {
         }
     }
 
+    private var netWatching = false
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun info(key: String): String {
+        val a = activity ?: return ""
+        return try {
+            when (key) {
+                "model" -> {
+                    val m = android.os.Build.MODEL ?: ""
+                    val v = android.os.Build.MANUFACTURER ?: ""
+                    if (v.isEmpty() || m.startsWith(v, ignoreCase = true)) m else "$v $m"
+                }
+                "os" -> "Android"
+                "os_version" -> android.os.Build.VERSION.RELEASE ?: ""
+                "language" -> java.util.Locale.getDefault().toLanguageTag()
+                "languages" -> {
+                    val l = a.resources.configuration.locales
+                    (0 until l.size()).joinToString(",") { l.get(it).toLanguageTag() }
+                }
+                "timezone" -> java.util.TimeZone.getDefault().id
+                "density" -> a.resources.displayMetrics.density.toString()
+                "app_version" -> a.packageManager.getPackageInfo(a.packageName, 0).versionName ?: ""
+                "build" -> {
+                    val p = a.packageManager.getPackageInfo(a.packageName, 0)
+                    (if (android.os.Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()).toString()
+                }
+                "dark" -> {
+                    val m = a.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+                    if (m == android.content.res.Configuration.UI_MODE_NIGHT_YES) "1" else "0"
+                }
+                "battery", "charging" -> {
+                    val i = a.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                    if (i == null) {
+                        if (key == "battery") "-1" else "0"
+                    } else if (key == "battery") {
+                        val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+                        if (level < 0 || scale <= 0) "-1" else (level * 100 / scale).toString()
+                    } else {
+                        val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                        if (st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL) "1" else "0"
+                    }
+                }
+                else -> ""
+            }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
+    fun network(): Int {
+        val a = activity ?: return 0
+        return try {
+            val cm = a.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return 0
+            if (!netWatching) {
+                netWatching = true
+                cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        nativeDevice(4)
+                    }
+
+                    override fun onLost(network: android.net.Network) {
+                        nativeDevice(4)
+                    }
+
+                    override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
+                        nativeDevice(4)
+                    }
+                })
+            }
+            val n = cm.activeNetwork ?: return 0
+            val c = cm.getNetworkCapabilities(n) ?: return 0
+            when {
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> 1
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> 2
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
+                else -> 4
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
     @JvmStatic
     fun haptic(kind: Int): Boolean {
         val a = activity ?: return false

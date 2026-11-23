@@ -6,6 +6,8 @@
 #import <PhotosUI/PhotosUI.h>
 #import <UserNotifications/UserNotifications.h>
 #import <Security/Security.h>
+#import <Network/Network.h>
+#include <sys/utsname.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1418,6 +1420,114 @@ int salam_host_secure_delete(const char *key)
         return 0;
     }
     return SecItemDelete((__bridge CFDictionaryRef)secure_query(key)) == errSecSuccess ? 1 : 0;
+}
+
+static void on_main(void (^fn)(void))
+{
+    if ([NSThread isMainThread]) {
+        fn();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), fn);
+    }
+}
+
+const char *salam_host_info(const char *key)
+{
+    static char buf[2048];
+    __block NSString *r = @"";
+    if (key == NULL) {
+        buf[0] = 0;
+        return buf;
+    }
+    NSString *k = [NSString stringWithUTF8String:key];
+    on_main(^{
+        UIDevice *d = UIDevice.currentDevice;
+        if ([k isEqualToString:@"model"]) {
+            struct utsname u;
+            uname(&u);
+            const char *ident = getenv("SIMULATOR_MODEL_IDENTIFIER");
+            r = [NSString stringWithUTF8String:ident != NULL ? ident : u.machine];
+        } else if ([k isEqualToString:@"os"]) {
+            r = @"iOS";
+        } else if ([k isEqualToString:@"os_version"]) {
+            r = d.systemVersion;
+        } else if ([k isEqualToString:@"language"]) {
+            r = NSLocale.preferredLanguages.firstObject ?: @"";
+        } else if ([k isEqualToString:@"languages"]) {
+            r = [NSLocale.preferredLanguages componentsJoinedByString:@","];
+        } else if ([k isEqualToString:@"timezone"]) {
+            r = NSTimeZone.localTimeZone.name;
+        } else if ([k isEqualToString:@"density"]) {
+            r = [NSString stringWithFormat:@"%g", UIScreen.mainScreen.scale];
+        } else if ([k isEqualToString:@"app_version"]) {
+            r = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
+        } else if ([k isEqualToString:@"build"]) {
+            r = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"";
+        } else if ([k isEqualToString:@"dark"]) {
+            UITraitCollection *t = g_view != nil ? g_view.traitCollection : UIScreen.mainScreen.traitCollection;
+            r = t.userInterfaceStyle == UIUserInterfaceStyleDark ? @"1" : @"0";
+        } else if ([k isEqualToString:@"battery"] || [k isEqualToString:@"charging"]) {
+            d.batteryMonitoringEnabled = YES;
+            if ([k isEqualToString:@"battery"]) {
+                r = d.batteryLevel < 0 ? @"-1" : [NSString stringWithFormat:@"%d", (int)(d.batteryLevel * 100 + 0.5)];
+            } else {
+                r = d.batteryState == UIDeviceBatteryStateCharging || d.batteryState == UIDeviceBatteryStateFull ? @"1" : @"0";
+            }
+        }
+    });
+    buf[0] = 0;
+    strncpy(buf, r.UTF8String, sizeof buf - 1);
+    buf[sizeof buf - 1] = 0;
+    return buf;
+}
+
+static nw_path_monitor_t g_net_monitor;
+static int g_net_state;
+
+static int net_state_of(nw_path_t path)
+{
+    if (nw_path_get_status(path) != nw_path_status_satisfied) {
+        return 0;
+    }
+    if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) {
+        return 1;
+    }
+    if (nw_path_uses_interface_type(path, nw_interface_type_cellular)) {
+        return 2;
+    }
+    if (nw_path_uses_interface_type(path, nw_interface_type_wired)) {
+        return 3;
+    }
+    return 4;
+}
+
+int salam_host_network(void)
+{
+    static dispatch_once_t once;
+    static dispatch_semaphore_t first;
+    dispatch_once(&once, ^{
+        first = dispatch_semaphore_create(0);
+        g_net_monitor = nw_path_monitor_create();
+        nw_path_monitor_set_queue(g_net_monitor, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        __block int seen = 0;
+        nw_path_monitor_set_update_handler(g_net_monitor, ^(nw_path_t path) {
+            pthread_mutex_lock(&g_dev_mu);
+            g_net_state = net_state_of(path);
+            pthread_mutex_unlock(&g_dev_mu);
+            if (!seen) {
+                seen = 1;
+                dispatch_semaphore_signal(first);
+            } else {
+                salam_host_post(SALAM_EV_DEVICE, 4, 0, 0, 0, 0, NULL);
+            }
+        });
+        nw_path_monitor_start(g_net_monitor);
+        dispatch_semaphore_wait(first, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC));
+    });
+    pthread_mutex_lock(&g_dev_mu);
+    int s = g_net_state;
+    pthread_mutex_unlock(&g_dev_mu);
+    return s;
 }
 
 int salam_host_share(const char *text, const char *url)

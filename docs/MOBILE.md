@@ -242,6 +242,13 @@ simulator.
   `device.TempDir` give the app folders (empty on a desktop). `device.SecureSet`, `device.SecureGet` and
   `device.SecureDelete` keep small secrets in the Android Keystore or the iOS
   Keychain.
+  `device.Model`, `device.OSName`, `device.OSVersion`, `device.Language`,
+  `device.Languages`, `device.TimeZone`, `device.ScreenDensity`,
+  `device.AppVersion`, `device.BuildNumber`, `device.IsDarkMode`,
+  `device.BatteryLevel` and `device.IsCharging` describe the phone and the app.
+  `device.Network` says offline, Wi-Fi, cellular, ethernet or other, and a
+  change of connection runs `device.OnChange` (the Android build declares
+  `ACCESS_NETWORK_STATE` when you call it).
 
 ## Not available yet
 

@@ -6,7 +6,10 @@
 #include <android/native_window_jni.h>
 #include <jni.h>
 #include <signal.h>
+#include <dlfcn.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <unwind.h>
 #include <sys/syscall.h>
 #include <sys/system_properties.h>
 #include <unistd.h>
@@ -19,6 +22,8 @@
 #include "../common/salam_host_common.h"
 
 #define TCAP SALAM_HOST_TCAP
+
+static void crash_hook(void);
 
 static char *utf8_from_jstring(JNIEnv *env, jstring s)
 {
@@ -288,6 +293,11 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
     }
     pthread_mutex_unlock(&mu);
     if (first_frame) {
+        static int hooked;
+        if (!hooked) {
+            hooked = 1;
+            crash_hook();
+        }
         salam_host_script_frame();
         if (page != page_bg_last) {
             page_bg_last = page;
@@ -773,23 +783,165 @@ const char *salam_host_clip_get(void)
 }
 
 static int log_pipe[2];
+static char log_buf[1024];
+static size_t log_len;
+static char panic_msg[256];
 
 static void *log_reader(void *arg)
 {
-    char buf[1024];
-    size_t n = 0;
     char c;
     (void)arg;
     while (read(log_pipe[0], &c, 1) == 1) {
-        if (c == '\n' || n == sizeof buf - 1) {
-            buf[n] = 0;
-            __android_log_write(ANDROID_LOG_INFO, "salam", buf);
-            n = 0;
+        if (c == '\n' || log_len == sizeof log_buf - 1) {
+            log_buf[log_len] = 0;
+            log_len = 0;
+            if (strncmp(log_buf, "salam panic:", 12) == 0) {
+                strncpy(panic_msg, log_buf, sizeof panic_msg - 1);
+            }
+            __android_log_write(ANDROID_LOG_INFO, "salam", log_buf);
         } else {
-            buf[n++] = c;
+            log_buf[log_len++] = c;
         }
     }
     return NULL;
+}
+
+static char crash_path[1100];
+static int crash_fd = -1;
+static volatile sig_atomic_t crashing;
+static const int crash_sigs[] = {SIGABRT, SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP};
+static struct sigaction crash_old[6];
+static char crash_stack[65536];
+
+static void crash_put(const char *s)
+{
+    __android_log_write(ANDROID_LOG_FATAL, "salam", s);
+    if (crash_fd >= 0) {
+        if (write(crash_fd, s, strlen(s)) < 0) {
+            return;
+        }
+        if (write(crash_fd, "\n", 1) < 0) {
+            return;
+        }
+    }
+}
+
+static _Unwind_Reason_Code crash_frame(struct _Unwind_Context *ctx, void *arg)
+{
+    int *n = (int *)arg;
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    Dl_info di;
+    char line[400];
+    if (pc == 0 || *n >= 48) {
+        return _URC_END_OF_STACK;
+    }
+    if (dladdr((void *)pc, &di) != 0 && di.dli_fname != NULL) {
+        uintptr_t base = (uintptr_t)di.dli_fbase;
+        const char *slash = strrchr(di.dli_fname, '/');
+        const char *lib = slash != NULL ? slash + 1 : di.dli_fname;
+        if (di.dli_sname != NULL) {
+            snprintf(line, sizeof line, "  #%02d pc %08lx %s (%s+%lu)", *n, (unsigned long)(pc - base), lib,
+                     di.dli_sname, (unsigned long)(pc - (uintptr_t)di.dli_saddr));
+        } else {
+            snprintf(line, sizeof line, "  #%02d pc %08lx %s", *n, (unsigned long)(pc - base), lib);
+        }
+    } else {
+        snprintf(line, sizeof line, "  #%02d pc %p", *n, (void *)pc);
+    }
+    crash_put(line);
+    (*n)++;
+    return _URC_NO_REASON;
+}
+
+static const char *crash_name(int sig)
+{
+    switch (sig) {
+    case SIGABRT: return "SIGABRT";
+    case SIGSEGV: return "SIGSEGV";
+    case SIGBUS: return "SIGBUS";
+    case SIGFPE: return "SIGFPE";
+    case SIGILL: return "SIGILL";
+    case SIGTRAP: return "SIGTRAP";
+    }
+    return "signal";
+}
+
+static void crash_handler(int sig, siginfo_t *info, void *uc)
+{
+    char line[160];
+    char text[4096];
+    ssize_t got;
+    int n = 0;
+    (void)uc;
+    if (crashing) {
+        _exit(128 + sig);
+    }
+    crashing = 1;
+    if (crash_path[0] != 0) {
+        crash_fd = open(crash_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    }
+    snprintf(line, sizeof line, "fatal signal %d (%s), fault addr %p", sig, crash_name(sig), info != NULL ? info->si_addr : NULL);
+    crash_put(line);
+    if (panic_msg[0] != 0) {
+        crash_put(panic_msg);
+    }
+    fflush(NULL);
+    got = 0;
+    if (log_pipe[0] > 0) {
+        fcntl(log_pipe[0], F_SETFL, O_NONBLOCK);
+        got = read(log_pipe[0], text, sizeof text - 1);
+    }
+    if (log_len > 0) {
+        log_buf[log_len] = 0;
+        crash_put(log_buf);
+    }
+    if (got > 0) {
+        text[got] = 0;
+        crash_put(text);
+    }
+    crash_put("backtrace:");
+    _Unwind_Backtrace(crash_frame, &n);
+    if (crash_fd >= 0) {
+        close(crash_fd);
+    }
+    for (size_t i = 0; i < sizeof crash_sigs / sizeof crash_sigs[0]; i++) {
+        if (crash_sigs[i] == sig) {
+            sigaction(sig, &crash_old[i], NULL);
+        }
+    }
+    if (sig != SIGSEGV && sig != SIGBUS && sig != SIGFPE && sig != SIGILL) {
+        raise(sig);
+    }
+}
+
+static void crash_hook(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = crash_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < sizeof crash_sigs / sizeof crash_sigs[0]; i++) {
+        struct sigaction cur;
+        sigaction(crash_sigs[i], NULL, &cur);
+        if (cur.sa_sigaction != crash_handler) {
+            crash_old[i] = cur;
+            sigaction(crash_sigs[i], &sa, NULL);
+        }
+    }
+}
+
+static void crash_install(const char *files)
+{
+    stack_t st;
+    if (files != NULL) {
+        snprintf(crash_path, sizeof crash_path, "%s/crash.txt", files);
+    }
+    st.ss_sp = crash_stack;
+    st.ss_size = sizeof crash_stack;
+    st.ss_flags = 0;
+    sigaltstack(&st, NULL);
+    crash_hook();
 }
 
 static void flush_logs(void)
@@ -813,10 +965,22 @@ static void redirect_output(void)
     pthread_detach(t);
 }
 
+static void crash_alt_stack(void)
+{
+    stack_t st;
+    st.ss_sp = malloc(65536);
+    st.ss_size = 65536;
+    st.ss_flags = 0;
+    if (st.ss_sp != NULL) {
+        sigaltstack(&st, NULL);
+    }
+}
+
 static void *run(void *arg)
 {
     char *argv[2] = {"app", NULL};
     (void)arg;
+    crash_alt_stack();
     salam_app_main(1, argv);
     fflush(NULL);
     usleep(150000);
@@ -876,6 +1040,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
         setenv("HOME", f, 1);
     }
     script_fallback(f);
+    crash_install(f);
     if (c != NULL) {
         setenv("TMPDIR", c, 1);
     }

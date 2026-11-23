@@ -323861,7 +323861,7 @@ end
 package ssh
 import str
 const KEX_ALGORITHMS := "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1"
-const HOSTKEY_ALGORITHMS := "rsa-sha2-256,rsa-sha2-512,ssh-rsa"
+const HOSTKEY_ALGORITHMS := "rsa-sha2-256,rsa-sha2-512,ssh-rsa,ssh-ed25519"
 const CIPHER_ALGORITHMS := "aes128-ctr,aes256-ctr"
 const MAC_ALGORITHMS := "hmac-sha2-256,hmac-sha1"
 const COMPRESSION_ALGORITHMS := "none"
@@ -323909,23 +323909,19 @@ mut req := NewBuf(32)
 BufPutByte(req, SSH_MSG_SERVICE_REQUEST)
 BufPutStringStr(req, "ssh-userauth")
 if not _packet_send(t.ps, req):
-print "DBG service send failed\n"
 FreeBuf(req)
 ret false
 end
 FreeBuf(req)
 mut ok := false
 mut rounds := 0
-until rounds >= 8:
+until rounds < 8:
 mut reply := _packet_recv(t.ps)
 if reply.bad:
 ret false
 end
 mut r := ReaderFromBuf(reply)
 msgtype := RGetByte(r)
-print "DBG svc reply type="
-print msgtype
-print "\n"
 if not r.bad:
 if msgtype == SSH_MSG_SERVICE_ACCEPT:
 FreeBuf(reply)
@@ -323950,14 +323946,10 @@ mut attempts := 0
 until attempts < 5:
 mut reply := _packet_recv(t.ps)
 if reply.bad:
-print "DBG auth recv bad\n"
 ret false
 end
 mut r := ReaderFromBuf(reply)
 msgtype := RGetByte(r)
-print "DBG auth reply type="
-print msgtype
-print "\n"
 if msgtype == SSH_MSG_USERAUTH_SUCCESS:
 FreeBuf(reply)
 ret true
@@ -325630,13 +325622,17 @@ package ssh
 import str
 import crypto
 import encoding
+import tls
 struct HostKey:
 pub ok: bool = false
+pub ed: bool = false
+pub pk: Buf = Buf {}
 pub n: Buf = Buf {}
 pub e: Buf = Buf {}
 pub blob: Buf = Buf {}
 end
 func _hostkey_free(hk &: HostKey):
+FreeBuf(hk.pk)
 FreeBuf(hk.n)
 FreeBuf(hk.e)
 FreeBuf(hk.blob)
@@ -325663,6 +325659,20 @@ end
 func _hostkey_parse(raw: Buf): HostKey:
 mut r := ReaderFromBuf(raw)
 keytype := RGetStringAsStr(r)
+if not r.bad and str.Equals(keytype, HOSTKEY_ED25519):
+mut pk := RGetStringCopy(r)
+if r.bad or pk.len != 32:
+FreeBuf(pk)
+ret HostKey {}
+end
+mut ehk := HostKey {}
+ehk.ed = true
+ehk.pk = pk
+ehk.blob = NewBuf(raw.len)
+BufPutBuf(ehk.blob, raw)
+ehk.ok = true
+ret ehk
+end
 if r.bad or not str.Equals(keytype, "ssh-rsa"):
 ret HostKey {}
 end
@@ -325713,6 +325723,11 @@ end
 mut r := ReaderFromBuf(sig_blob)
 sig_format := RGetStringAsStr(r)
 mut sig := RGetStringCopy(r)
+if hk.ed:
+good := not r.bad and str.Equals(sig_format, HOSTKEY_ED25519) and sig.len == 64 and tls.Ed25519Verify(hk.pk.p, h.p, h.len, sig.p)
+FreeBuf(sig)
+ret good
+end
 if r.bad or not (str.Equals(sig_format, HOSTKEY_SSH_RSA) or str.Equals(
 sig_format, HOSTKEY_RSA_SHA256
 ) or str.Equals(sig_format, HOSTKEY_RSA_SHA512)):

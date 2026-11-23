@@ -117,7 +117,6 @@ Every element works on the web. For the native target (`salam check --ui=native`
 | `template`           | `template`                            | قالب             | `<template>`   | normal  |                                                       |               |
 | `term`               | `term`, `dt`                          | واژه             | `<dt>`         | normal  | `description list`                                    |               |
 | `term in box`        | `term`, `dt`                          | واژه             | `<dt>`         | normal  | `description list` > `box`                            |               |
-| `text area`          | `text area`, `textarea`               | متن بلند         | `<textarea>`   | normal  |                                                       |               |
 | `textarea input`     | `input`                               | ورودی            | `<textarea>`   | normal  |                                                       |               |
 | `time`               | `time`                                | زمان             | `<time>`       | normal  |                                                       |               |
 | `track`              | `track`                               | شیار             | `<track>`      | void    | `video`, `audio`                                      | `url`         |

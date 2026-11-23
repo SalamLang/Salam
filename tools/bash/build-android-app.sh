@@ -4,6 +4,7 @@
 # Usage:
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
+#       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
 #       [--no-apk] [--run]
 #
 # Salam emits C for each ABI, the NDK compiles it with the host shim in
@@ -16,13 +17,18 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 : "${SALAM:=salam}"
 APP=
 OUT=
-ABIS=arm64-v8a
+ABIS=
 ID=
 NAME=
 BUILD=assembleDebug
 APK=1
 ICON=
 RUN=0
+AAB=0
+KS=
+KSPASS=
+KEYALIAS=
+KEYPASS=
 while [ $# -gt 0 ]; do
     case $1 in
     --out)
@@ -47,6 +53,27 @@ while [ $# -gt 0 ]; do
         ;;
     --icon)
         ICON=$2
+        shift 2
+        ;;
+    --aab)
+        AAB=1
+        BUILD=bundleRelease
+        shift
+        ;;
+    --keystore)
+        KS=$2
+        shift 2
+        ;;
+    --keystore-pass)
+        KSPASS=$2
+        shift 2
+        ;;
+    --key-alias)
+        KEYALIAS=$2
+        shift 2
+        ;;
+    --key-pass)
+        KEYPASS=$2
         shift 2
         ;;
     --run)
@@ -75,6 +102,14 @@ done
     echo "build-android-app: no such file: $APP" >&2
     exit 2
 }
+
+if [ -z "$ABIS" ]; then
+    if [ "$BUILD" = assembleDebug ]; then
+        ABIS=arm64-v8a
+    else
+        ABIS=arm64-v8a,armeabi-v7a,x86_64
+    fi
+fi
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 [ -d "$SDK" ] || SDK=$HOME/Android/Sdk
@@ -184,10 +219,25 @@ IFS=$old_ifs
 
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK
+SIGN=
+if [ -n "$KS" ]; then
+    SIGN="-PstoreFile=$KS -PstorePassword=$KSPASS -PkeyAlias=$KEYALIAS -PkeyPassword=${KEYPASS:-$KSPASS}"
+fi
 (
     cd "$OUT/project"
-    ./gradlew --no-daemon -q "$BUILD" -PappId="$ID" -PappName="$NAME"
+    # shellcheck disable=SC2086
+    ./gradlew --no-daemon -q "$BUILD" -PappId="$ID" -PappName="$NAME" $SIGN
 )
+if [ "$AAB" = 1 ]; then
+    aab=$(find "$OUT/project/app/build/outputs/bundle" -name '*.aab' | head -n 1)
+    [ -n "$aab" ] || {
+        echo "build-android-app: Gradle produced no AAB" >&2
+        exit 1
+    }
+    cp "$aab" "$OUT/app.aab"
+    echo "aab: $OUT/app.aab"
+    exit 0
+fi
 apk=$(find "$OUT/project/app/build/outputs/apk" -name '*.apk' | head -n 1)
 [ -n "$apk" ] || {
     echo "build-android-app: Gradle produced no APK" >&2

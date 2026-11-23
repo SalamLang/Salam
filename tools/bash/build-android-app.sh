@@ -5,7 +5,10 @@
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
-#       [--no-apk] [--run]
+#       [--fonts DIR] [--no-apk] [--run]
+#
+# --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
+# copied to the app files directory at start and found by the font collection.
 #
 # Salam emits C for each ABI, the NDK compiles it with the host shim in
 # mobile/host/android into libsalamapp.so, and a prebuilt Gradle project
@@ -23,6 +26,7 @@ NAME=
 BUILD=assembleDebug
 APK=1
 ICON=
+FONTS=
 RUN=0
 AAB=0
 KS=
@@ -74,6 +78,10 @@ while [ $# -gt 0 ]; do
         ;;
     --key-pass)
         KEYPASS=$2
+        shift 2
+        ;;
+    --fonts)
+        FONTS=$2
         shift 2
         ;;
     --run)
@@ -168,6 +176,18 @@ if [ -n "$ICON" ]; then
     sed -i.bak 's|android:supportsRtl="true"|android:supportsRtl="true" android:icon="@mipmap/ic_launcher"|' \
         "$OUT/project/app/src/main/AndroidManifest.xml"
     rm -f "$OUT/project/app/src/main/AndroidManifest.xml.bak"
+fi
+if [ -n "$FONTS" ]; then
+    [ -d "$FONTS" ] || {
+        echo "build-android-app: no such fonts directory: $FONTS" >&2
+        exit 2
+    }
+    mkdir -p "$OUT/project/app/src/main/assets/fonts"
+    for f in "$FONTS"/*.ttf "$FONTS"/*.otf "$FONTS"/*.ttc; do
+        if [ -f "$f" ]; then
+            cp "$f" "$OUT/project/app/src/main/assets/fonts/"
+        fi
+    done
 fi
 mkdir -p "$OUT/project/gradle/wrapper"
 cp "$ROOT/android/gradle/wrapper/gradle-wrapper.jar" "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" "$OUT/project/gradle/wrapper/"

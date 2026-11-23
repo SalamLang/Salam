@@ -178,7 +178,7 @@ end
   the state `page.route.path`, `page.route.query` and `page.route.Param("id")` can be
   read like any state (R5), so a highlighted menu item is
   `when page.route.path == "/"`.
-- A route may carry a guard: `guard = logged_in` at the top of the component
+- A route may carry a guard: `page.Guard(logged_in)` as the first line of the component
   body. The guard is a bool expression, re-checked on every change of its
   state; while it is false the route is skipped and the next match shows.
   Sending the visitor elsewhere is code: `page.route.Redirect("/login")`.

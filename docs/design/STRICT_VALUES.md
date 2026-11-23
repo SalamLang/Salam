@@ -65,14 +65,23 @@ branches are checked.
 ## Function calls
 
 A call is not confusable with a variable: `rgb(51, 102, 170)`,
-`hsl(210, 50%, 40%)`, `linear(90, red, blue)`, `repeat(3, 1fr)`,
-`calc`, `var(...)`, `url(...)`, `image("a.png")`. Calls stay as they are.
-The arguments of a call are part of the call: `linear(90, red, blue)` keeps
-its bare colour names. A string is not accepted as a colour stop today
-(`linear(90, "red", ...)` is E018), and teaching function parameters to take
-strings is a separate change. A hex literal inside a call (`linear(90, red, #fff)`)
-is therefore also left alone. The warning applies to the value of an
-attribute, the items of a list or group, and the branches of a ternary.
+`hsl(210, 50%, 40%)`, `linear(90, red, blue)`, `repeat(3, 1fr)`, `calc`,
+`var(...)`, `url(...)`, `image("a.png")`. Calls stay as they are, and W299
+is not reported for their arguments. Their arguments take numbers and sizes
+bare, and colours and words either bare or quoted: `linear(135, "#7c3aed",
+"#ec4899")` and `linear(90, "red", "blue")` mean the same as the bare
+forms. A quoted word argument is passed on as the word; the functions that
+take real strings (`image`, `url`, `attr`, `format`, `local`, `counter`)
+keep their strings. The migration tool leaves call arguments alone, so a
+project may quote them or not.
+
+## Font families
+
+In `font` a quoted string is a family name, so `"Open Sans"` stays a name.
+The generic families (`sans`, `serif`, `mono`, `system`, and their Persian
+names) are keywords of the property: `font = "Open Sans", "serif"` means the
+generic `serif`, exactly as the bare word did, so quoting never changes the
+CSS. A family really called "serif" cannot be written; nobody has one.
 
 ## Colours
 
@@ -95,7 +104,8 @@ never bare.
 ## Persian files
 
 The quoted form keeps the spelling of the source: `رنگ = "قرمز"` and
-`تزئین متن = "هیچ"`. A Persian file accepts both Persian and English
+`تزئین متن = "هیچ"`. It is the Persian word in quotes, never the English
+one, because a Persian file reads Persian values first. A Persian file accepts both Persian and English
 keywords inside the string; an English file accepts only the English ones
 (the existing rule in `docs/LAYOUT_SCHEMA.md`). Nothing is translated by the
 fix: it only adds the quotes around what was written. Persian digits and

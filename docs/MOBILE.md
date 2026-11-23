@@ -316,6 +316,9 @@ function appears under a neighbour. On iOS SIGTERM flushes the output and exits.
   app links) to let links open the app: `device.LaunchURL` is the link that
   started it, `device.OnOpenURL` runs with links that arrive while it runs, and
   `device.OpenSettings` opens the settings page of the app.
+  `device.KeepAwake`, `device.LockOrientation`, `device.Immersive`,
+  `device.SetBarStyle` and `device.SetBrightness` control the screen at run
+  time (`--orientation` still sets the start).
 
 ## Not available yet
 

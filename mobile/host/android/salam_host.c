@@ -163,6 +163,8 @@ static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID path_mid;
+static jmethodID screen_mid;
+static jmethodID brightness_mid;
 static jmethodID settings_mid;
 static char launch_url[2048];
 static char pending_url[2048];
@@ -743,6 +745,21 @@ int salam_host_open_settings(void)
     return r;
 }
 
+int salam_host_screen(int what, int value)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || screen_mid == NULL) {
+        return 0;
+    }
+    r = (int)(*env)->CallStaticIntMethod(env, host_cls, screen_mid, (jint)what, (jint)value);
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     return call_bool_2s(share_mid, text, url);
@@ -1058,6 +1075,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     path_mid = (*env)->GetStaticMethodID(env, cls, "path", "(I)Ljava/lang/String;");
+    screen_mid = (*env)->GetStaticMethodID(env, cls, "screen", "(II)I");
     settings_mid = (*env)->GetStaticMethodID(env, cls, "openSettings", "()Z");
     info_mid = (*env)->GetStaticMethodID(env, cls, "info", "(Ljava/lang/String;)Ljava/lang/String;");
     network_mid = (*env)->GetStaticMethodID(env, cls, "network", "()I");

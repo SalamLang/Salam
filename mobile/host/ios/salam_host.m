@@ -761,6 +761,13 @@ static UIColor *salam_saved_background(UIUserInterfaceStyle style)
     return [UIColor colorWithRed:((p >> 16) & 0xFF) / 255.0 green:((p >> 8) & 0xFF) / 255.0 blue:(p & 0xFF) / 255.0 alpha:1];
 }
 
+static int g_orient = 0;
+static int g_immersive = 0;
+static int g_bar_style = 0;
+static float g_saved_brightness = -1;
+static int g_bright_asked = -1;
+static __weak UIViewController *g_controller;
+
 @interface SalamController : UIViewController
 @end
 
@@ -771,6 +778,7 @@ static UIColor *salam_saved_background(UIUserInterfaceStyle style)
     SalamView *v = [[SalamView alloc] initWithFrame:UIScreen.mainScreen.bounds];
     v.backgroundColor = salam_saved_background(UIScreen.mainScreen.traitCollection.userInterfaceStyle);
     g_view = v;
+    g_controller = self;
     self.view = v;
 }
 
@@ -788,7 +796,52 @@ static UIColor *salam_saved_background(UIUserInterfaceStyle style)
 
 - (BOOL)prefersStatusBarHidden
 {
-    return NO;
+    return g_immersive != 0;
+}
+
+- (BOOL)prefersHomeIndicatorAutoHidden
+{
+    return g_immersive != 0;
+}
+
+- (UIStatusBarStyle)preferredStatusBarStyle
+{
+    if (g_bar_style == 1) {
+        return UIStatusBarStyleLightContent;
+    }
+    if (g_bar_style == 2) {
+        return UIStatusBarStyleDarkContent;
+    }
+    return UIStatusBarStyleDefault;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
+{
+    UIInterfaceOrientationMask all = UIInterfaceOrientationMaskAll;
+    NSArray *plist = [NSBundle.mainBundle objectForInfoDictionaryKey:@"UISupportedInterfaceOrientations"];
+    if (plist.count > 0) {
+        all = 0;
+        for (NSString *o in plist) {
+            if ([o isEqualToString:@"UIInterfaceOrientationPortrait"]) {
+                all |= UIInterfaceOrientationMaskPortrait;
+            } else if ([o isEqualToString:@"UIInterfaceOrientationLandscapeLeft"]) {
+                all |= UIInterfaceOrientationMaskLandscapeLeft;
+            } else if ([o isEqualToString:@"UIInterfaceOrientationLandscapeRight"]) {
+                all |= UIInterfaceOrientationMaskLandscapeRight;
+            } else if ([o isEqualToString:@"UIInterfaceOrientationPortraitUpsideDown"]) {
+                all |= UIInterfaceOrientationMaskPortraitUpsideDown;
+            }
+        }
+    }
+    if (g_orient == 1) {
+        UIInterfaceOrientationMask m = all & UIInterfaceOrientationMaskPortrait;
+        return m != 0 ? m : all;
+    }
+    if (g_orient == 2) {
+        UIInterfaceOrientationMask m = all & UIInterfaceOrientationMaskLandscape;
+        return m != 0 ? m : all;
+    }
+    return all;
 }
 
 - (void)keyboardChanged:(NSNotification *)n
@@ -1756,6 +1809,63 @@ int salam_host_open_settings(void)
     dispatch_async(dispatch_get_main_queue(), ^{
         NSURL *u = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
         [UIApplication.sharedApplication openURL:u options:@{} completionHandler:nil];
+    });
+    return 1;
+}
+
+int salam_host_screen(int what, int value)
+{
+    if (what == 5) {
+        g_bright_asked = value;
+    }
+    if (what == 4) {
+        if (g_bright_asked >= 0) {
+            return g_bright_asked;
+        }
+        __block int pct = -1;
+        on_main(^{
+            pct = (int)(UIScreen.mainScreen.brightness * 100 + 0.5);
+        });
+        return pct;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *c = g_controller;
+        if (what == 0) {
+            UIApplication.sharedApplication.idleTimerDisabled = value != 0;
+        } else if (what == 1) {
+            g_orient = value;
+            if (@available(iOS 16.0, *)) {
+                [c setNeedsUpdateOfSupportedInterfaceOrientations];
+                UIWindowScene *ws = c.view.window.windowScene;
+                if (ws != nil) {
+                    UIInterfaceOrientationMask m = value == 1 ? UIInterfaceOrientationMaskPortrait : value == 2 ? UIInterfaceOrientationMaskLandscape : [c supportedInterfaceOrientations];
+                    [ws requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:m] errorHandler:^(NSError *e) {
+                        (void)e;
+                    }];
+                }
+            } else {
+                [UIViewController attemptRotationToDeviceOrientation];
+            }
+        } else if (what == 2) {
+            g_immersive = value;
+            [c setNeedsStatusBarAppearanceUpdate];
+            [c setNeedsUpdateOfHomeIndicatorAutoHidden];
+        } else if (what == 3) {
+            g_bar_style = value;
+            [c setNeedsStatusBarAppearanceUpdate];
+        } else if (what == 5) {
+            if (value < 0) {
+                if (g_saved_brightness >= 0) {
+                    UIScreen.mainScreen.brightness = g_saved_brightness;
+                    g_saved_brightness = -1;
+                }
+            } else {
+                if (g_saved_brightness < 0) {
+                    g_saved_brightness = UIScreen.mainScreen.brightness;
+                }
+                UIScreen.mainScreen.brightness = value / 100.0;
+            }
+        }
     });
     return 1;
 }

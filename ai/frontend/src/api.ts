@@ -431,7 +431,7 @@ export type Plan = {
   tiers?: PlanTier[];
 };
 export type AdminPlan = Plan & { subscribers: number };
-export type Gateway = "zarinpal" | "zibal";
+export type Gateway = "citydesign" | "zarinpal" | "zibal";
 export type Subscription = {
   plan: Plan;
   status: string;

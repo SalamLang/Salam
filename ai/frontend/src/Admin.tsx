@@ -804,7 +804,7 @@ const PAY_WORDS: Record<Payment["status"], string> = {
   reversed: t("برگشت‌خورده", "Reversed"),
 };
 
-const GATEWAY_WORDS: Record<string, string> = { zarinpal: t("زرین‌پال", "Zarinpal"), zibal: t("زیبال", "Zibal") };
+const GATEWAY_WORDS: Record<string, string> = { citydesign: t("سیتی‌دیزاین‌پی", "CityDesign Pay"), zarinpal: t("زرین‌پال", "Zarinpal"), zibal: t("زیبال", "Zibal") };
 
 function toman(n: number): string {
   return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);

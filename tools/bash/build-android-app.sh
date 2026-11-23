@@ -120,6 +120,14 @@ done
     exit 2
 }
 
+if [ -n "$KS" ]; then
+    [ -f "$KS" ] || {
+        echo "build-android-app: no such keystore: $KS" >&2
+        exit 2
+    }
+    KS=$(cd "$(dirname "$KS")" && pwd)/$(basename "$KS")
+fi
+
 if [ -z "$ABIS" ]; then
     if [ "$BUILD" = assembleDebug ]; then
         ABIS=arm64-v8a
@@ -175,6 +183,7 @@ fetch_sqlite() {
 rm -rf "$OUT/project"
 mkdir -p "$OUT/project"
 cp -R "$ROOT/mobile/host/android/project/." "$OUT/project/"
+chmod -R u+w "$OUT/project"
 if [ -n "$ICON" ]; then
     [ -f "$ICON" ] || {
         echo "build-android-app: no such icon: $ICON" >&2
@@ -284,14 +293,13 @@ done
 
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK
-SIGN=
+set -- "$BUILD" "-PappId=$ID" "-PappName=$NAME"
 if [ -n "$KS" ]; then
-    SIGN="-PstoreFile=$KS -PstorePassword=$KSPASS -PkeyAlias=$KEYALIAS -PkeyPassword=${KEYPASS:-$KSPASS}"
+    set -- "$@" "-PstoreFile=$KS" "-PstorePassword=$KSPASS" "-PkeyAlias=$KEYALIAS" "-PkeyPassword=${KEYPASS:-$KSPASS}"
 fi
 (
     cd "$OUT/project"
-    # shellcheck disable=SC2086
-    ./gradlew --no-daemon -q "$BUILD" -PappId="$ID" -PappName="$NAME" $SIGN
+    ./gradlew --no-daemon -q "$@"
 )
 if [ "$AAB" = 1 ]; then
     aab=$(find "$OUT/project/app/build/outputs/bundle" -name '*.aab' | head -n 1)

@@ -20,10 +20,27 @@ android {
         resValue("string", "app_name", appName)
     }
 
+    val storeFilePath = project.findProperty("storeFile")?.toString()
+    if (!storeFilePath.isNullOrBlank()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(storeFilePath)
+                storePassword = project.findProperty("storePassword")?.toString()
+                keyAlias = project.findProperty("keyAlias")?.toString()
+                keyPassword = project.findProperty("keyPassword")?.toString()
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig =
+                if (storeFilePath.isNullOrBlank()) {
+                    signingConfigs.getByName("debug")
+                } else {
+                    signingConfigs.getByName("release")
+                }
         }
     }
     compileOptions {

@@ -337,17 +337,38 @@ func lay_resolve_walk(a &: at.Ast, nid: int, stack &: Vector<int>):
         if ck != at.AST_LAYOUT_ELEMENT:
             continue
         end
+        mut own_ids := Vector {} as Vector<int>
+        mut own_names := Vector {} as Vector<str>
         repeat at.ChildCount(a, cid) in m:
             gid := at.Child(a, cid, m)
             if at.KindOf(a, gid) == at.AST_LAYOUT_ATTR:
+                own_ids.Push(gid)
+                own_names.Push(at.Get(a, gid).name)
                 lay_localize_attr(a, gid)
             end
         end
         ei := lay_resolve_elem(a, cid, stack)
         if ei >= 0:
+            repeat own_ids.Len() in oi:
+                ogid := own_ids.Get(oi)
+                cur := at.Get(a, ogid).name
+                orig := own_names.Get(oi)
+                if str.Equals(cur, orig):
+                    continue
+                end
+                at.SetName(a, ogid, orig)
+                osa := ResolveStyleAttr(orig)
+                if osa.ok and StyleAttrIsOwnEnum(a, ogid, ei, osa):
+                    at.SetName(a, ogid, lay_attr_key_for(ei, orig))
+                else:
+                    at.SetName(a, ogid, cur)
+                end
+            end
             at.SetName(a, cid, g_lay_elems.Get(ei).key)
             at.SetOp(a, cid, ei + 1)
         end
+        own_ids.Free()
+        own_names.Free()
         stack.Push(ei)
         lay_resolve_walk(a, cid, stack)
         _p := stack.Pop()
@@ -1070,7 +1091,7 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             end
             continue
         end
-        mut key := lay_attr_key(name)
+        mut key := lay_attr_key_for(ei, name)
         if str.Len(key) == 0:
             key = name
         end
@@ -1163,6 +1184,15 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             continue
         end
         if not lay_fold_attr(s, a, aid, ai, ck.runtime):
+            continue
+        end
+        if str.Equals(e.key, "heading") and str.Equals(key, "size") and at.KindOf(a, at.Get(a, aid).a) != at.AST_LITERAL:
+            serr(
+                s, 132, span_of(a, aid), co.Format2(
+                    i18.Tr("'%s' on '%s' must be known at compile time; choose between fixed values with 'if' instead"),
+                    co.ArgStr(lay_attr_display(key)), co.ArgStr(lay_elem_display(ei))
+                )
+            )
             continue
         end
         mut v := ""

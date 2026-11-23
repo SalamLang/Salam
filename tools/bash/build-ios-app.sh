@@ -342,7 +342,7 @@ fi
 $CC -o "$OUT/App.app/App" "$work"/obj/*.o -lm \
     -framework UIKit -framework Foundation -framework CoreGraphics -framework QuartzCore \
     -framework AVFoundation -framework AudioToolbox -framework CoreLocation -framework PhotosUI \
-    -framework UserNotifications -framework Security -framework Network $SIM_ENT
+    -framework UserNotifications -framework Security -framework Network -framework LocalAuthentication $SIM_ENT
 
 USAGE_KEYS=
 add_usage() {
@@ -363,6 +363,9 @@ add_category() {
     USAGE_KEYS="$USAGE_KEYS
     <key>LSApplicationCategoryType</key><string>public.app-category.$1</string>"
 }
+if uses_host_call salam_host_auth_request; then
+    add_usage NSFaceIDUsageDescription "$NAME uses Face ID to confirm it is you."
+fi
 for name in $PERMS; do
     case $name in
     camera) add_usage NSCameraUsageDescription "$NAME uses the camera." ;;

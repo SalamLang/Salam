@@ -163,6 +163,9 @@ static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID path_mid;
+static jmethodID auth_available_mid;
+static jmethodID auth_request_mid;
+static int auth_state;
 static jmethodID screen_mid;
 static jmethodID brightness_mid;
 static jmethodID settings_mid;
@@ -760,6 +763,45 @@ int salam_host_screen(int what, int value)
     return r;
 }
 
+int salam_host_auth_available(void)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || auth_available_mid == NULL) {
+        return 0;
+    }
+    r = (*env)->CallStaticBooleanMethod(env, host_cls, auth_available_mid) ? 1 : 0;
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_auth_request(const char *reason)
+{
+    int r;
+    pthread_mutex_lock(&loc_mu);
+    auth_state = 1;
+    pthread_mutex_unlock(&loc_mu);
+    r = call_bool_string(auth_request_mid, reason);
+    if (!r) {
+        pthread_mutex_lock(&loc_mu);
+        auth_state = 3;
+        pthread_mutex_unlock(&loc_mu);
+    }
+    return r;
+}
+
+int salam_host_auth_state(void)
+{
+    int s;
+    pthread_mutex_lock(&loc_mu);
+    s = auth_state;
+    pthread_mutex_unlock(&loc_mu);
+    return s;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     return call_bool_2s(share_mid, text, url);
@@ -1075,6 +1117,8 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     path_mid = (*env)->GetStaticMethodID(env, cls, "path", "(I)Ljava/lang/String;");
+    auth_available_mid = (*env)->GetStaticMethodID(env, cls, "authAvailable", "()Z");
+    auth_request_mid = (*env)->GetStaticMethodID(env, cls, "authRequest", "(Ljava/lang/String;)Z");
     screen_mid = (*env)->GetStaticMethodID(env, cls, "screen", "(II)I");
     settings_mid = (*env)->GetStaticMethodID(env, cls, "openSettings", "()Z");
     info_mid = (*env)->GetStaticMethodID(env, cls, "info", "(Ljava/lang/String;)Ljava/lang/String;");
@@ -1232,6 +1276,16 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeUrl(JNIEnv *env, jclass
     if (kind != 0) {
         salam_host_post(SALAM_EV_DEVICE, 5, 0, 0, 0, 0, NULL);
     }
+}
+
+JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeAuth(JNIEnv *env, jclass cls, jint ok)
+{
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&loc_mu);
+    auth_state = ok ? 2 : 3;
+    pthread_mutex_unlock(&loc_mu);
+    salam_host_post(SALAM_EV_DEVICE, 6, 0, 0, 0, 0, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeDevice(JNIEnv *env, jclass cls, jint kind)

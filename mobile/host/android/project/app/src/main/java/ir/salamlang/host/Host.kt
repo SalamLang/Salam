@@ -35,6 +35,8 @@ object Host {
 
     @JvmStatic external fun nativeDevice(kind: Int)
 
+    @JvmStatic external fun nativeAuth(ok: Int)
+
     @JvmStatic external fun nativeUrl(kind: Int, url: String)
 
     @JvmStatic external fun nativePhoto(path: String)
@@ -286,6 +288,58 @@ object Host {
         if (what == 5) a.askBrightness(value)
         a.runOnUiThread { a.setScreen(what, value) }
         return 1
+    }
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun authAvailable(): Boolean {
+        val a = activity ?: return false
+        if (android.os.Build.VERSION.SDK_INT < 29) return false
+        return try {
+            val m = a.getSystemService(android.hardware.biometrics.BiometricManager::class.java) ?: return false
+            val r = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                m.canAuthenticate(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            } else {
+                m.canAuthenticate()
+            }
+            r == android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun authRequest(reason: String): Boolean {
+        val a = activity ?: return false
+        if (!authAvailable()) return false
+        return try {
+            a.runOnUiThread {
+                try {
+                    val exec = a.mainExecutor
+                    val builder = android.hardware.biometrics.BiometricPrompt.Builder(a)
+                        .setTitle(if (reason.isEmpty()) "Confirm it is you" else reason)
+                        .setNegativeButton("Cancel", exec) { _, _ -> nativeAuth(0) }
+                    builder.build().authenticate(
+                        android.os.CancellationSignal(),
+                        exec,
+                        object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                                nativeAuth(1)
+                            }
+
+                            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                                nativeAuth(0)
+                            }
+                        },
+                    )
+                } catch (e: Exception) {
+                    nativeAuth(0)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     @JvmStatic

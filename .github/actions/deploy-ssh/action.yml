@@ -107,14 +107,18 @@ runs:
         if [ -n "$KNOWN" ]; then
           printf '%s\n' "$KNOWN" > "$dir/known_hosts"
         else
-          ssh-keyscan -p "$PORT" -T 15 "$HOST" > "$dir/known_hosts" 2>/dev/null
+          ssh-keyscan -t ed25519 -p "$PORT" -T 15 "$HOST" > "$dir/known_hosts" 2>/dev/null || true
+          if [ ! -s "$dir/known_hosts" ]; then
+            sleep 30
+            ssh-keyscan -p "$PORT" -T 15 "$HOST" > "$dir/known_hosts" 2>/dev/null || true
+          fi
         fi
         [ -s "$dir/known_hosts" ] || { echo "::error::could not get the server's host key"; exit 1; }
         if [ -z "$KNOWN" ]; then
           echo "::warning::the server's host key is not pinned; add an SSH_KNOWN_HOSTS secret to stop trusting whatever key the network returns"
           ssh-keygen -lf "$dir/known_hosts" || true
         fi
-        ssh_opts=(-p "$PORT" -o "UserKnownHostsFile=$dir/known_hosts" -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=20 -o ConnectionAttempts=3)
+        ssh_opts=(-p "$PORT" -o "UserKnownHostsFile=$dir/known_hosts" -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=30 -o ConnectionAttempts=1 -o ControlMaster=auto -o "ControlPath=$dir/cm-%C" -o ControlPersist=180)
         prefix=()
         if [ -n "$KEY" ]; then
           printf '%s\n' "$KEY" > "$dir/id"
@@ -139,12 +143,13 @@ runs:
             if [ "$rc" -eq 0 ]; then return 0; fi
             if [ "$rc" -ne 255 ] && [ "$rc" -ne 30 ] && [ "$rc" -ne 35 ] && [ "$rc" -ne 12 ]; then return "$rc"; fi
             if [ "$n" -ge 5 ]; then return "$rc"; fi
-            echo "::warning::connection to the server failed (exit $rc), retrying in $((n * 20))s (attempt $n of 4)"
-            sleep $((n * 20))
+            echo "::warning::connection to the server failed (exit $rc), retrying in $((n * 30 + 15))s (attempt $n of 4)" >&2
+            sleep $((n * 30 + 15))
             n=$((n + 1))
           done
         }
-        retry run_ssh "mkdir -p '$dest'"
+        sleep 5
+        probe="$(retry run_ssh "mkdir -p '$dest' && { command -v rsync || true; }")"
         excludes=(--exclude='.well-known/' --exclude='.htaccess' --exclude='.user.ini' --exclude='cgi-bin/')
         tar_excludes=()
         read -r -a extra <<< "$EXCLUDE"
@@ -153,7 +158,7 @@ runs:
           tar_excludes+=("--exclude=$pat")
         done
         have_rsync=0
-        if retry run_ssh "command -v rsync" >/dev/null 2>&1; then have_rsync=1; fi
+        if [ -n "$probe" ]; then have_rsync=1; fi
         if [ "$have_rsync" -eq 1 ]; then
           retry "${prefix[@]}" rsync -rlz --delete --delay-updates \
             --chmod=D755,F644 "${excludes[@]}" \
@@ -164,6 +169,7 @@ runs:
           tar_up() { tar -C "$SRC" "${tar_excludes[@]}" -czf - . | run_ssh "tar -xzf - -C '$dest'"; }
           retry tar_up
         fi
+        "${prefix[@]}" ssh "${ssh_opts[@]}" -O exit "$remote" >/dev/null 2>&1 || true
         echo "deployed to $HOST:$dest"
 
     - name: Remove SSH credentials

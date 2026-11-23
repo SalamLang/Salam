@@ -35,16 +35,31 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         Host.nativeScheme(if (isDark(resources.configuration)) 1 else 0)
     }
 
+    private var lightTop = true
+    private var lightBottom = true
+
     @Suppress("DEPRECATION")
     private fun applyBars(dark: Boolean) {
+        lightTop = !dark
+        lightBottom = !dark
+        pushBars()
+    }
+
+    fun setBarContrast(top: Boolean, bottom: Boolean) {
+        if (top == lightTop && bottom == lightBottom) return
+        lightTop = top
+        lightBottom = bottom
+        pushBars()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun pushBars() {
         var flags =
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        if (!dark) {
-            if (Build.VERSION.SDK_INT >= 23) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-            if (Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        }
+        if (lightTop && Build.VERSION.SDK_INT >= 23) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        if (lightBottom && Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         window.decorView.systemUiVisibility = flags
     }
 

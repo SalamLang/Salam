@@ -131,6 +131,8 @@ int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *ti
 }
 #endif
 
+static JNIEnv *host_env(int *attached);
+
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static ANativeWindow *win;
 static pthread_t th;
@@ -140,6 +142,9 @@ static jclass host_cls;
 static jmethodID exit_mid;
 static jmethodID ime_mid;
 static jmethodID open_mid;
+static jmethodID bars_mid;
+static int bars_top = -1;
+static int bars_bottom = -1;
 static jmethodID clip_set_mid;
 static jmethodID clip_get_mid;
 static jmethodID share_mid;
@@ -153,9 +158,30 @@ jint JNI_OnLoad(JavaVM *jvm, void *reserved)
     return JNI_VERSION_1_6;
 }
 
+static int pixel_is_light(uint32_t p)
+{
+    unsigned lum = ((p & 0xFFu) + 2u * ((p >> 8) & 0xFFu) + ((p >> 16) & 0xFFu)) / 4u;
+    return lum > 140u;
+}
+
+static void report_bars(int top, int bottom)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    if (env == NULL || bars_mid == NULL) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, host_cls, bars_mid, top, bottom);
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+}
+
 int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int h)
 {
     int ok = 0;
+    int top = -1;
+    int bottom = -1;
     pthread_mutex_lock(&mu);
     if (win != NULL && pixels != NULL) {
         ARect r;
@@ -185,9 +211,24 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
             }
             ANativeWindow_unlockAndPost(win);
             ok = 1;
+            if (y0 == 0 && x1 > x0) {
+                top = pixel_is_light(((const uint32_t *)pixels)[bw / 2]);
+            }
+            if (y1 == bh && x1 > x0) {
+                bottom = pixel_is_light(((const uint32_t *)pixels)[(size_t)(bh - 1) * bw + bw / 2]);
+            }
         }
     }
     pthread_mutex_unlock(&mu);
+    if ((top >= 0 && top != bars_top) || (bottom >= 0 && bottom != bars_bottom)) {
+        if (top >= 0) {
+            bars_top = top;
+        }
+        if (bottom >= 0) {
+            bars_bottom = bottom;
+        }
+        report_bars(bars_top < 0 ? 0 : bars_top, bars_bottom < 0 ? 0 : bars_bottom);
+    }
     return ok;
 }
 
@@ -399,6 +440,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     host_cls = (jclass)(*env)->NewGlobalRef(env, cls);
     exit_mid = (*env)->GetStaticMethodID(env, cls, "onExit", "()V");
     ime_mid = (*env)->GetStaticMethodID(env, cls, "showIme", "(Z)V");
+    bars_mid = (*env)->GetStaticMethodID(env, cls, "barsLight", "(II)V");
     open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");
     clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
     clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
@@ -499,5 +541,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeScheme(JNIEnv *env, jcl
 {
     (void)env;
     (void)cls;
+    bars_top = -1;
+    bars_bottom = -1;
     salam_host_post(SALAM_EV_SCHEME, dark, 0, 0, 0, 0, NULL);
 }

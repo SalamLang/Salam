@@ -406,6 +406,25 @@ func lo_rt_page_walk(log: lg.Logger, a &: at.Ast, nid: int, errs &: int):
     end
 end
 
+func lo_rt_guard_walk(log: lg.Logger, a &: at.Ast, nid: int, errs &: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ATTR and (str.Equals(n.name, "page.Guard") or str.Equals(n.name, "صفحه.نگهبان")):
+        lo_rt_error(log, a, nid, i18.Tr("move page.Guard(...) above every setting, style and element of the component"), i18.Tr("E268: 'page.Guard' belongs on the first line of a route file's component, not inside 'if', 'each' or an element"))
+        errs++
+        ret
+    end
+    lo_rt_guard_walk(log, a, n.a, errs)
+    lo_rt_guard_walk(log, a, n.b, errs)
+    lo_rt_guard_walk(log, a, n.c, errs)
+    lo_rt_guard_walk(log, a, n.d, errs)
+    repeat at.ChildCount(a, nid) in k:
+        lo_rt_guard_walk(log, a, at.Child(a, nid, k), errs)
+    end
+end
+
 func lo_rt_walk(log: lg.Logger, a &: at.Ast, nid: int, outlets &: int, errs &: int):
     if nid == 0:
         ret
@@ -941,6 +960,85 @@ func lo_rt_insert(routes &: Vector<LoRoute>, r: LoRoute):
     routes = sorted
 end
 
+func lo_rt_const_in(a &: at.Ast, prog: int, name: str): int:
+    if prog == 0:
+        ret 0
+    end
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_CONST_DECL and str.Equals(d.name, name):
+            ret d.a
+        end
+    end
+    ret 0
+end
+
+func lo_rt_const_bool(a &: at.Ast, prog: int, nid: int, v &: bool, depth: int): bool:
+    if nid == 0 or depth > 8:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_BOOL:
+        v = n.value_bool
+        ret true
+    end
+    if n.kind == at.AST_UNARY and n.op == tok.TK_NOT:
+        mut inner := false
+        if lo_rt_const_bool(a, prog, n.a, inner, depth + 1):
+            v = not inner
+            ret true
+        end
+        ret false
+    end
+    if n.kind == at.AST_BINARY and (n.op == tok.TK_AND or n.op == tok.TK_OR):
+        mut l := false
+        mut r := false
+        if lo_rt_const_bool(a, prog, n.a, l, depth + 1) and lo_rt_const_bool(a, prog, n.b, r, depth + 1):
+            v = n.op == tok.TK_AND ? (l and r) : (l or r)
+            ret true
+        end
+        ret false
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        mut init := lo_rt_const_in(a, prog, n.name)
+        if init == 0:
+            each fp in g_lo_pg_prog:
+                if init == 0:
+                    init = lo_rt_const_in(a, fp, n.name)
+                end
+            end
+        end
+        ret lo_rt_const_bool(a, prog, init, v, depth + 1)
+    end
+    ret false
+end
+
+func lo_rt_fold_guards(a &: at.Ast, prog: int, routes &: Vector<LoRoute>, exprs: Vector<int>):
+    mut kept := Vector {} as Vector<LoRoute>
+    each r in routes:
+        mut gs := Vector {} as Vector<int>
+        mut off := false
+        each gi in r.gs:
+            mut v := false
+            if lo_rt_const_bool(a, prog, exprs.Get(gi), v, 0):
+                if not v:
+                    off = true
+                end
+            else:
+                gs.Push(gi)
+            end
+        end
+        if off:
+            gs.Free()
+            continue
+        end
+        mut nr := r
+        nr.gs = gs
+        kept.Push(nr)
+    end
+    routes = kept
+end
+
 pub func RoutesActive(): bool:
     ret g_lo_routes_on and g_lo_routes_web
 end
@@ -1008,6 +1106,7 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.As
     repeat at.ChildCount(a, prog) in j:
         lo_rt_walk(log, a, at.Child(a, prog, j), outlets, errs)
         lo_rt_page_walk(log, a, at.Child(a, prog, j), errs)
+        lo_rt_guard_walk(log, a, at.Child(a, prog, j), errs)
     end
     each ex in exprs:
         lo_rt_page_walk(log, a, ex, errs)
@@ -1016,11 +1115,13 @@ pub func LowerRoutes(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.As
         repeat at.ChildCount(a, fp) in j:
             lo_rt_walk(log, a, at.Child(a, fp, j), outlets, errs)
             lo_rt_page_walk(log, a, at.Child(a, fp, j), errs)
+            lo_rt_guard_walk(log, a, at.Child(a, fp, j), errs)
         end
     end
     if not g_lo_routes_on or errs > 0:
         ret errs
     end
+    lo_rt_fold_guards(a, prog, routes, exprs)
     each r in routes:
         if r.gs.Len() == 0 and not str.Equals(r.pattern, "/") and str.IndexFrom(r.pattern, ":", 0) < 0 and str.IndexFrom(r.pattern, "*", 0) < 0:
             g_lo_routes_static.Push(r.pattern)

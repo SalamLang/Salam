@@ -522,6 +522,10 @@ func tr_page_word(kind: int, name: str, to_fa: bool, routes: bool): str:
             ret m
         end
     end
+    g := tr_pair_list(name, "page.Guard|صفحه.نگهبان", to_fa)
+    if str.Len(g) > 0:
+        ret g
+    end
     ret tr_pair_list(name, "bind|پیوند", to_fa)
 end
 
@@ -1370,12 +1374,65 @@ func tr_layout_call_run(toks: tok.TokenStream, i: int, n: int): bool:
     ret j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_LPAREN
 end
 
-func tr_joins_name_word(toks: tok.TokenStream, i: int, n: int, prev_kind: int, prev_ident: str, in_import: bool, in_rule: bool, in_lambda: bool, gap: str): bool:
+func tr_multi_names(toks: tok.TokenStream, n: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks, i)
+        if t.kind != tok.TK_IDENT:
+            i++
+            continue
+        end
+        mut j := i
+        mut words := t.lexeme
+        until j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, j + 1).begin_line == t.begin_line:
+            j++
+            words = words + " " + tok.StreamAt(toks, j).lexeme
+        end
+        if j > i and j + 1 < n:
+            nk := tok.StreamAt(toks, j + 1).kind
+            if nk == tok.TK_COLON or nk == tok.TK_COLON_ASSIGN:
+                out.Push(words)
+            end
+        end
+        i = j + 1
+    end
+    ret out
+end
+
+func tr_layout_run_named(toks: tok.TokenStream, i: int, n: int, multi: Vector<str>): bool:
+    if multi.Len() == 0:
+        ret false
+    end
+    line := tok.StreamAt(toks, i).begin_line
+    mut s := i
+    until s > 0 and tok.StreamAt(toks, s - 1).kind == tok.TK_IDENT and tok.StreamAt(toks, s - 1).begin_line == line:
+        s--
+    end
+    mut e := i
+    until e + 1 < n and tok.StreamAt(toks, e + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, e + 1).begin_line == line:
+        e++
+    end
+    mut words := tok.StreamAt(toks, s).lexeme
+    mut k := s + 1
+    until k <= e:
+        words = words + " " + tok.StreamAt(toks, k).lexeme
+        k++
+    end
+    each m in multi:
+        if lp.IdentEqual(m, words):
+            ret true
+        end
+    end
+    ret false
+end
+
+func tr_joins_name_word(toks: tok.TokenStream, i: int, n: int, prev_kind: int, prev_ident: str, in_import: bool, in_rule: bool, in_lambda: bool, multi: Vector<str>, gap: str): bool:
     t := tok.StreamAt(toks, i)
     if (t.kind != tok.TK_IDENT and t.kind != tok.TK_KW_INPUT) or prev_kind != tok.TK_IDENT or in_import or not tr_prev_same_line(toks, i):
         ret false
     end
-    if t.layout_mode and not in_lambda and not tr_layout_call_run(toks, i, n):
+    if t.layout_mode and not in_lambda and not tr_layout_call_run(toks, i, n) and not tr_layout_run_named(toks, i, n, multi):
         ret false
     end
     if str.Len(str.Replace(gap, " ", "")) > 0:
@@ -1804,6 +1861,8 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
     mut css_list_paren := 0
     mut const_last := 0
     names := tr_declared_names(toks, n)
+    multi_names := tr_multi_names(toks, n)
+    defer multi_names.Free()
     has_routes := tr_has_routes(toks, n)
     mut in_routes := false
     mut routes_attr := ""
@@ -1873,7 +1932,7 @@ pub func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_roo
         mut ei := t.end_index as int
         if bi > cursor:
             gap := str.Substr(text, cursor, bi - cursor)
-            if from_fa and targetpack != lp.LP_FA and not (in_routes and tr_next_kind(toks, i, n) == tok.TK_ASSIGN) and tr_joins_name_word(toks, i, n, prev_kind, prev_ident, in_import, in_rule, lam_depth > 0, gap):
+            if from_fa and targetpack != lp.LP_FA and not (in_routes and tr_next_kind(toks, i, n) == tok.TK_ASSIGN) and tr_joins_name_word(toks, i, n, prev_kind, prev_ident, in_import, in_rule, lam_depth > 0, multi_names, gap):
                 co.SbPuts(sb, "_")
             else:
                 co.SbPuts(sb, gap)

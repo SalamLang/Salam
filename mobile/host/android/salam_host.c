@@ -1,4 +1,7 @@
 #include <android/log.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -160,6 +163,24 @@ jint JNI_OnLoad(JavaVM *jvm, void *reserved)
     return JNI_VERSION_1_6;
 }
 
+static void swizzle_row(const uint32_t *s, uint32_t *d, int n)
+{
+    int i = 0;
+#if defined(__aarch64__)
+    static const uint8_t idx[16] = {2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15};
+    const uint8x16_t tbl = vld1q_u8(idx);
+    const uint32x4_t alpha = vdupq_n_u32(0xFF000000u);
+    for (; i + 4 <= n; i += 4) {
+        uint8x16_t v = vqtbl1q_u8(vld1q_u8((const uint8_t *)(s + i)), tbl);
+        vst1q_u32(d + i, vorrq_u32(vreinterpretq_u32_u8(v), alpha));
+    }
+#endif
+    for (; i < n; i++) {
+        uint32_t p = s[i];
+        d[i] = (p & 0x0000FF00u) | ((p >> 16) & 0xFFu) | ((p & 0xFFu) << 16) | 0xFF000000u;
+    }
+}
+
 static int pixel_is_light(uint32_t p)
 {
     unsigned lum = ((p & 0xFFu) + 2u * ((p >> 8) & 0xFFu) + ((p >> 16) & 0xFFu)) / 4u;
@@ -204,12 +225,8 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
                 y1 = b.height;
             }
             for (int row = y0; row < y1; row++) {
-                const uint32_t *s = (const uint32_t *)pixels + (size_t)row * bw + x0;
-                uint32_t *d = (uint32_t *)b.bits + (size_t)row * b.stride + x0;
-                for (int col = x0; col < x1; col++) {
-                    uint32_t p = *s++;
-                    *d++ = (p & 0x0000FF00u) | ((p >> 16) & 0xFFu) | ((p & 0xFFu) << 16) | 0xFF000000u;
-                }
+                swizzle_row((const uint32_t *)pixels + (size_t)row * bw + x0,
+                            (uint32_t *)b.bits + (size_t)row * b.stride + x0, x1 - x0);
             }
             ANativeWindow_unlockAndPost(win);
             ok = 1;

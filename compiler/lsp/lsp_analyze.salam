@@ -211,6 +211,41 @@ func read_req(path: str, r &: Req): bool:
     ret str.Len(r.path) > 0
 end
 
+func route_project_of(file: str): str:
+    mut dir := pth.PathDir(file)
+    mut hops := 0
+    until hops > 6 or str.Len(dir) == 0:
+        if os.IsDir(pth.PathJoin(dir, "pages")) and os.Exists(pth.PathJoin(dir, "main.salam")):
+            ret dir
+        end
+        parent := pth.PathDir(dir)
+        if str.Equals(parent, dir):
+            break
+        end
+        dir = parent
+        hops++
+    end
+    ret ""
+end
+
+func lower_routes_for(lgr: lg.Logger, modpack: lp.Langpack, table: cc.Table, a &: at.Ast, prog: int, target: str): bool:
+    proj := route_project_of(target)
+    if str.Equals(pth.PathBase(target), "main.salam"):
+        lo.SetRootFile(target)
+        _e := lo.LowerRoutes(lgr, modpack, table, a, prog, false, pth.PathDir(target))
+        ret false
+    end
+    if str.Len(proj) > 0:
+        lg.SetRecord(false)
+        _m := lo.LowerRoutesIn(lgr, a, prog)
+        lg.SetRecord(true)
+        ret true
+    end
+    lo.SetRootFile(target)
+    _e2 := lo.LowerRoutes(lgr, modpack, table, a, prog, false, pth.PathDir(target))
+    ret false
+end
+
 func package_root_of(path: str): str:
     dir := pth.PathDir(path)
     if str.Len(dir) == 0:
@@ -1940,15 +1975,34 @@ func analyze(r: Req): str:
     mut table := cc.TableBuild("", r.defines)
     cc.TableSetPack(table, modpack)
     _cc := cc.PruneProgram(a, lgr, entry, table, prog)
+    mut member := false
+    if not base.is_virtual:
+        member = lower_routes_for(lgr, modpack, table, a, prog, target)
+    end
     _vw := lo.PrepareViews(lgr, modpack, table, a, prog, entry)
     mut s := sm.New(lgr, entry, lp.Code(modpack))
     sm.SetCc(s, table)
     _sok := sm.Run(s, a, prog)
+    mut rec_map := Vector {} as Vector<int>
+    defer rec_map.Free()
     repeat lg.RecordCount() in ri:
-        base.records.Push(lg.RecordAt(ri))
+        rr := lg.RecordAt(ri)
+        if member and str.IndexFrom(rr.msg, "'__salam", 0) >= 0:
+            rec_map.Push(0 - 1)
+        else:
+            rec_map.Push(base.records.Len())
+            base.records.Push(rr)
+        end
     end
     repeat lg.FixCount() in fi:
-        base.fixes.Push(lg.FixAt(fi))
+        mut fx := lg.FixAt(fi)
+        if fx.rec >= 0 and fx.rec < rec_map.Len():
+            if rec_map.Get(fx.rec) < 0:
+                continue
+            end
+            fx.rec = rec_map.Get(fx.rec)
+        end
+        base.fixes.Push(fx)
     end
     mut refn := Vector {} as Vector<int>
     mut refs := Vector {} as Vector<int>

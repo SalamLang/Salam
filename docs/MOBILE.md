@@ -80,6 +80,16 @@ xcrun simctl launch booted app.salam.app -salam-script "tap 100,200;swipe 100,50
 
 `-salam-tap X,Y` still works for one tap.
 
+The script starts 1.5 s after the first frame, so on a slow or busy machine put
+a `wait` first (`wait 3000;tap 100,200`). It sends touches to the app view
+only: system dialogs (the notification permission prompt, the photo picker) can
+not be tapped with it, and `xcrun simctl privacy` can grant location and photos
+but not notifications. Read a page's `println` output with `xcrun simctl launch
+--console-pty`; a plain `--console` pipe buffers it. The CI job builds the
+compiler from the checkout (a release compiler may predate the iOS target),
+builds `mobile/host/ios/smoke.salam` and taps it with `-salam-script` on a
+simulator.
+
 ## What works
 
 - Layout, text (Persian included, system fonts), colors, scrolling with fling,

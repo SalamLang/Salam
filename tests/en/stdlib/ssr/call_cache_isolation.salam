@@ -1,0 +1,83 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import net.ssr
+import net.internal.ssrpage
+import encoding.json
+import time
+import pool
+import testing
+
+mut render_started := false
+mut other_done := false
+mut render_body := ""
+
+server func Secret(tag: str): str:
+    ret tag + "-value"
+end
+
+func render(c: i64):
+    ssrpage.PageBegin()
+    mine := Secret("mine")
+    render_started = mine.Len() > 0
+    mut waited := 0
+    until not other_done and waited < 250:
+        time.Sleep(20)
+        waited++
+    end
+    calls := ssrpage.PageCalls()
+    ssrpage.PageEnd()
+    ssr.Respond(c, 200, calls, "")
+end
+
+func fetch_render(url: str):
+    render_body = http.Body(http.Get(url))
+end
+
+func main:
+    __salam_register_server_funcs()
+    ssr.SetRender(render)
+    ssr.SetSecret("test-secret-0123456789")
+    mut r := router.NewRouter()
+    ssr.Mount(r)
+    mut s := http.NewServer(0)
+    http.Use(s, r)
+    port := http.RunBackgroundPort(s)
+    base := "http://127.0.0.1:" + port
+    token := json.Get(http.Body(http.Get(base + "/_salam/session")), "token")
+
+    go fetch_render(base + "/page")
+    mut spins := 0
+    until not render_started and spins < 250:
+        time.Sleep(20)
+        spins++
+    end
+    testing.AssertTrue(render_started)
+
+    mut h := http.NewHeaders()
+    h.Insert("Content-Type", "application/json")
+    h.Insert("X-Salam-Token", token)
+    other := http.PostWith(base + "/_salam/fn/Secret", "{\"args\":{\"tag\":\"other\"}}", h)
+    testing.AssertContains(http.Body(other), "other-value")
+    other_done = true
+    pool.GoWait()
+
+    testing.AssertContains(render_body, "mine-value")
+    testing.AssertFalse(render_body.Includes("other-value"))
+    testing.AssertFalse(ssrpage.PageActive())
+    ret testing.Summary()
+end

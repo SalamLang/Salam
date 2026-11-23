@@ -9,8 +9,12 @@ phone only shows them and sends touch, keyboard and lifecycle events.
 You need a `salam` compiler, the Android SDK with an NDK, and a JDK 21.
 
 ```
-sh tools/bash/build-android-app.sh app.salam --out out --run
+salam app android app.salam --out out --run
 ```
+
+A release archive carries the build files next to `std/`; from a source
+checkout the compiler finds them too. Set `SALAM_MOBILE_ROOT` to point at
+another folder. `tools/bash/build-android-app.sh` takes the same options.
 
 This builds `out/app.apk` for arm64, installs it on the connected phone or
 emulator and starts it. Other options:

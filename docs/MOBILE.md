@@ -77,11 +77,13 @@ composition text, and no bundled fonts.
   `device.OnChange` to react when the dialog closes. `device.ShowNotification`,
   `device.ScheduleNotification` and `device.CancelNotification` post local
   notifications (the build declares `POST_NOTIFICATIONS` when you use them).
+  `device.RequestLocation`, `device.LocationStatus` and `device.LastLocation`
+  give a one shot position (the build declares the location permissions).
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- Camera and location.
+- The camera.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

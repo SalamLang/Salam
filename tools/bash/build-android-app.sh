@@ -259,6 +259,10 @@ uses_host_call() {
 if uses_host_call salam_host_vibrate; then
     declare_permission VIBRATE
 fi
+if uses_host_call salam_host_location_request; then
+    declare_permission ACCESS_FINE_LOCATION
+    declare_permission ACCESS_COARSE_LOCATION
+fi
 if uses_host_call salam_host_notify; then
     declare_permission POST_NOTIFICATIONS
 fi

@@ -23,6 +23,7 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
             java.io.File(filesDir, ".salam_state").delete()
         }
         density = resources.displayMetrics.density
+        applySavedBackground()
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         if (Build.VERSION.SDK_INT >= 28) {
@@ -39,6 +40,20 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         setContentView(view)
         applyBars(isDark(resources.configuration))
         Host.nativeScheme(if (isDark(resources.configuration)) 1 else 0)
+    }
+
+    private fun launchKey(): String = if (isDark(resources.configuration)) "bg_dark" else "bg_light"
+
+    private fun applySavedBackground() {
+        val prefs = getSharedPreferences("salam_launch", MODE_PRIVATE)
+        if (prefs.contains(launchKey())) {
+            window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(prefs.getInt(launchKey(), Color.BLACK)))
+        }
+    }
+
+    fun rememberPageBackground(argb: Int) {
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(argb))
+        getSharedPreferences("salam_launch", MODE_PRIVATE).edit().putInt(launchKey(), argb).apply()
     }
 
     private var lightTop = true

@@ -641,6 +641,21 @@ static void run_script(id view, NSString *script, CGFloat s)
     }
 }
 
+static NSString *salam_background_key(UIUserInterfaceStyle style)
+{
+    return style == UIUserInterfaceStyleDark ? @"salam.page.bg.dark" : @"salam.page.bg.light";
+}
+
+static UIColor *salam_saved_background(UIUserInterfaceStyle style)
+{
+    NSNumber *n = [NSUserDefaults.standardUserDefaults objectForKey:salam_background_key(style)];
+    if (n == nil) {
+        return UIColor.systemBackgroundColor;
+    }
+    uint32_t p = n.unsignedIntValue;
+    return [UIColor colorWithRed:((p >> 16) & 0xFF) / 255.0 green:((p >> 8) & 0xFF) / 255.0 blue:(p & 0xFF) / 255.0 alpha:1];
+}
+
 @interface SalamController : UIViewController
 @end
 
@@ -649,7 +664,7 @@ static void run_script(id view, NSString *script, CGFloat s)
 - (void)loadView
 {
     SalamView *v = [[SalamView alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    v.backgroundColor = UIColor.whiteColor;
+    v.backgroundColor = salam_saved_background(UIScreen.mainScreen.traitCollection.userInterfaceStyle);
     g_view = v;
     self.view = v;
 }
@@ -783,10 +798,17 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
         memcpy((char *)g_shadow + ((size_t)row * bw + x0) * 4, (const char *)pixels + ((size_t)row * bw + x0) * 4, (size_t)(x1 - x0) * 4);
     }
     CGImageRef img = CGBitmapContextCreateImage(g_ctx);
+    uint32_t page = ((const uint32_t *)g_shadow)[0];
     pthread_mutex_unlock(&g_mu);
     dispatch_async(dispatch_get_main_queue(), ^{
         g_view.layer.contents = (__bridge id)img;
         CGImageRelease(img);
+        NSString *key = salam_background_key(g_view.traitCollection.userInterfaceStyle);
+        NSNumber *old = [NSUserDefaults.standardUserDefaults objectForKey:key];
+        if (old == nil || old.unsignedIntValue != page) {
+            [NSUserDefaults.standardUserDefaults setObject:@(page) forKey:key];
+            g_view.backgroundColor = salam_saved_background(g_view.traitCollection.userInterfaceStyle);
+        }
         if (g_first_frame != nil) {
             void (^go)(void) = g_first_frame;
             g_first_frame = nil;

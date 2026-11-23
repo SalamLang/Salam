@@ -26,6 +26,8 @@ emulator and starts it. Other options:
 | `--name "My App"` | label under the icon |
 | `--icon icon.png` | one square PNG (1024 px is best): adaptive icon with a themed (monochrome) layer plus legacy mipmaps |
 | `--icon-bg "#2A6DF4"` | background colour of the adaptive icon (default white) |
+| `--splash-color "#101820"` | launch screen colour (default white, black in the dark theme) |
+| `--splash-icon logo.png` | launch screen icon (default: `--icon`) |
 | `--release --keystore my.jks --keystore-pass P --key-alias A` | signed release APK |
 | `--aab` | App Bundle for Google Play |
 
@@ -37,6 +39,9 @@ keep their names, `asset:icons/menu.png`). `--fonts DIR` does the same for `.ttf
 PNG, JPEG, GIF, BMP or WebP; SVG is not supported on the native UI, so convert it
 to PNG (the run prints `ui: image NAME: SVG is not supported...` and the image
 stays empty). An image that cannot be read draws a grey box when it has a size.
+
+On both platforms the host remembers the page background it drew last and paints it behind
+the next launch, so a dark page does not start with a white frame.
 
 What the program prints goes to logcat: `adb logcat -s salam`.
 
@@ -73,6 +78,8 @@ it calls `device.PickPhoto` or `device.TakePhoto`. The default target is the
 simulator; `--device` builds for a phone and the app still has to be signed in
 Xcode. `--icon icon.png` (one square PNG, 1024 px is best) is compiled into an
 AppIcon asset catalog with actool, or written as loose PNG files when actool is missing.
+`--splash-color` and `--splash-icon` fill the `UILaunchScreen` dictionary through the same
+catalog; without them the launch screen is the system background.
 Needs a compiler built from the current tree.
 
 The device calls (`gui.device`) work the same as on Android: share sheet,

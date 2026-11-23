@@ -3,7 +3,7 @@
 #
 # Usage:
 #   tools/bash/build-ios-app.sh APP.salam --out DIR [--device] [--id BUNDLE_ID] [--name LABEL]
-#       [--icon ICON.png]
+#       [--icon ICON.png] [--splash-color COLOR] [--splash-icon ICON.png]
 #       [--permission NAME]...
 #
 # Salam emits C for arm64, clang builds it with the host shim in
@@ -13,6 +13,12 @@
 # --icon ICON.png (one square PNG, 1024 pixels is best) becomes the app icon.
 # It goes through an asset catalog compiled with actool; without actool the
 # icon sizes are written as loose PNG files that Info.plist names.
+#
+# --splash-color COLOR (#RGB, #RRGGBB or #AARRGGBB) and --splash-icon ICON.png
+# fill the UILaunchScreen dictionary through the same asset catalog. Without
+# them the launch screen is the system background, white or black to match the
+# appearance. The host remembers the page background it drew last and uses it
+# behind the next launch, so a dark page does not start with a white frame.
 #
 # --permission NAME (camera, microphone, location, notifications) adds the
 # usage description the system shows in its permission dialog, so
@@ -31,6 +37,8 @@ ID=
 NAME=
 PERMS=
 ICON=
+SPLASH_COLOR=
+SPLASH_ICON=
 while [ $# -gt 0 ]; do
     case $1 in
     --out)
@@ -51,6 +59,14 @@ while [ $# -gt 0 ]; do
         ;;
     --icon)
         ICON=$2
+        shift 2
+        ;;
+    --splash-color)
+        SPLASH_COLOR=$2
+        shift 2
+        ;;
+    --splash-icon)
+        SPLASH_ICON=$2
         shift 2
         ;;
     --permission)
@@ -78,6 +94,40 @@ done
 if [ -n "$ICON" ]; then
     icon_check "$ICON" build-ios-app || exit 2
     ICON=$(cd "$(dirname "$ICON")" && pwd)/$(basename "$ICON")
+fi
+if [ -n "$SPLASH_ICON" ]; then
+    icon_check "$SPLASH_ICON" build-ios-app || exit 2
+    SPLASH_ICON=$(cd "$(dirname "$SPLASH_ICON")" && pwd)/$(basename "$SPLASH_ICON")
+fi
+LAUNCH=
+if [ -n "$SPLASH_COLOR" ]; then
+    hex=${SPLASH_COLOR#"#"}
+    case $hex in
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) hex=$(printf %s "$hex" | sed 's/./&&/g') ;;
+    esac
+    case $hex in
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) hex=FF$hex ;;
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+    *)
+        echo "build-ios-app: --splash-color wants #RGB, #RRGGBB or #AARRGGBB, not '$SPLASH_COLOR'" >&2
+        exit 2
+        ;;
+    esac
+    SPLASH_COMPONENTS=$(printf %s "$hex" | awk '{
+        h[1] = substr($0, 1, 2); h[2] = substr($0, 3, 2); h[3] = substr($0, 5, 2); h[4] = substr($0, 7, 2)
+        for (i = 1; i <= 4; i++) {
+            v = 0
+            for (j = 1; j <= 2; j++) {
+                v = v * 16 + index("0123456789ABCDEF", toupper(substr(h[i], j, 1))) - 1
+            }
+            out[i] = v / 255
+        }
+        printf "\"red\":\"%.4f\",\"green\":\"%.4f\",\"blue\":\"%.4f\",\"alpha\":\"%.4f\"", out[2], out[3], out[4], out[1]
+    }')
+    LAUNCH="<key>UIColorName</key><string>SplashColor</string>"
+fi
+if [ -n "$SPLASH_ICON" ]; then
+    LAUNCH="$LAUNCH<key>UIImageName</key><string>SplashIcon</string>"
 fi
 
 APP=$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")
@@ -167,7 +217,7 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>MinimumOSVersion</key><string>15.0</string>
-    <key>UILaunchScreen</key><dict/>$USAGE_KEYS
+    <key>UILaunchScreen</key><dict>$LAUNCH</dict>$USAGE_KEYS
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key><false/>
@@ -192,19 +242,37 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-if [ -n "$ICON" ]; then
+if [ -n "$ICON" ] || [ -n "$SPLASH_COLOR" ] || [ -n "$SPLASH_ICON" ]; then
     cat_dir=$work/icon/Assets.xcassets
-    mkdir -p "$cat_dir/AppIcon.appiconset"
-    cp "$ICON" "$cat_dir/AppIcon.appiconset/icon.png"
+    mkdir -p "$cat_dir"
     printf '%s\n' '{"info":{"author":"xcode","version":1}}' >"$cat_dir/Contents.json"
-    printf '%s\n' '{"images":[{"filename":"icon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}' \
-        >"$cat_dir/AppIcon.appiconset/Contents.json"
+    ACTOOL_ICON=
+    if [ -n "$ICON" ]; then
+        ACTOOL_ICON="--app-icon AppIcon"
+        mkdir -p "$cat_dir/AppIcon.appiconset"
+        cp "$ICON" "$cat_dir/AppIcon.appiconset/icon.png"
+        printf '%s\n' '{"images":[{"filename":"icon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}' \
+            >"$cat_dir/AppIcon.appiconset/Contents.json"
+    fi
+    if [ -n "$SPLASH_COLOR" ]; then
+        mkdir -p "$cat_dir/SplashColor.colorset"
+        printf '%s\n' "{\"colors\":[{\"color\":{\"color-space\":\"srgb\",\"components\":{$SPLASH_COMPONENTS}},\"idiom\":\"universal\"}],\"info\":{\"author\":\"xcode\",\"version\":1}}" \
+            >"$cat_dir/SplashColor.colorset/Contents.json"
+    fi
+    if [ -n "$SPLASH_ICON" ]; then
+        mkdir -p "$cat_dir/SplashIcon.imageset"
+        icon_resize "$SPLASH_ICON" 360 "$cat_dir/SplashIcon.imageset/splash.png"
+        printf '%s\n' '{"images":[{"filename":"splash.png","idiom":"universal","scale":"3x"}],"info":{"author":"xcode","version":1}}' \
+            >"$cat_dir/SplashIcon.imageset/Contents.json"
+    fi
     if xcrun actool --compile "$OUT/App.app" --platform "$SDK" --minimum-deployment-target 15.0 \
-        --app-icon AppIcon --target-device iphone --target-device ipad \
+        $ACTOOL_ICON --target-device iphone --target-device ipad \
         --output-partial-info-plist "$work/icon/partial.plist" "$cat_dir" >"$work/icon/actool.log" 2>&1 &&
         [ -f "$work/icon/partial.plist" ]; then
-        /usr/libexec/PlistBuddy -c "Merge $work/icon/partial.plist" "$OUT/App.app/Info.plist"
-    else
+        if [ -n "$ICON" ]; then
+            /usr/libexec/PlistBuddy -c "Merge $work/icon/partial.plist" "$OUT/App.app/Info.plist"
+        fi
+    elif [ -n "$ICON" ]; then
         echo "build-ios-app: actool failed, writing loose icon files" >&2
         icon_resize "$ICON" 120 "$OUT/App.app/AppIcon60x60@2x.png"
         icon_resize "$ICON" 180 "$OUT/App.app/AppIcon60x60@3x.png"
@@ -218,6 +286,9 @@ if [ -n "$ICON" ]; then
             -c "Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:1 string AppIcon76x76" \
             -c "Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:2 string AppIcon83.5x83.5" \
             "$OUT/App.app/Info.plist"
+    else
+        echo "build-ios-app: actool failed, the launch screen has no colour or image" >&2
+        /usr/libexec/PlistBuddy -c "Delete :UILaunchScreen" -c "Add :UILaunchScreen dict" "$OUT/App.app/Info.plist"
     fi
 fi
 if [ -d "$ROOT/mobile/host/fonts" ]; then

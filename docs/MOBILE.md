@@ -28,6 +28,15 @@ emulator and starts it. Other options:
 | `--release --keystore my.jks --keystore-pass P --key-alias A` | signed release APK |
 | `--aab` | App Bundle for Google Play |
 
+Files such as images go in the APK with `--assets DIR` (`tools/bash/build-android-app.sh`).
+They are copied to `$HOME/assets` when the app starts, and a page names one with
+the `asset:` prefix: `image: url = "asset:logo.png"` for `DIR/logo.png` (folders
+keep their names, `asset:icons/menu.png`). `--fonts DIR` does the same for `.ttf`,
+`.otf` and `.ttc` files. A path to any other readable file works too. Images are
+PNG, JPEG, GIF, BMP or WebP; SVG is not supported on the native UI, so convert it
+to PNG (the run prints `ui: image NAME: SVG is not supported...` and the image
+stays empty). An image that cannot be read draws a grey box when it has a size.
+
 What the program prints goes to logcat: `adb logcat -s salam`.
 
 ## iOS

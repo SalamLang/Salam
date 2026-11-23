@@ -148,27 +148,17 @@ static char script_marked[SALAM_HOST_TCAP];
 
 static void script_at(double ms)
 {
-    struct timespec t = script_t0;
-    long long ns = (long long)(ms * 1000000.0);
-    t.tv_sec += (time_t)(ns / 1000000000LL);
-    t.tv_nsec += (long)(ns % 1000000000LL);
-    if (t.tv_nsec >= 1000000000L) {
-        t.tv_sec++;
-        t.tv_nsec -= 1000000000L;
-    }
-#ifdef __APPLE__
     struct timespec now;
+    long long ns;
+    struct timespec rel;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    long long wait = ((long long)t.tv_sec - now.tv_sec) * 1000000000LL + (t.tv_nsec - now.tv_nsec);
-    if (wait > 0) {
-        struct timespec d;
-        d.tv_sec = (time_t)(wait / 1000000000LL);
-        d.tv_nsec = (long)(wait % 1000000000LL);
-        nanosleep(&d, NULL);
+    ns = (long long)(ms * 1000000.0) - ((long long)(now.tv_sec - script_t0.tv_sec) * 1000000000LL + (now.tv_nsec - script_t0.tv_nsec));
+    if (ns <= 0) {
+        return;
     }
-#else
-    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
-#endif
+    rel.tv_sec = (time_t)(ns / 1000000000LL);
+    rel.tv_nsec = (long)(ns % 1000000000LL);
+    nanosleep(&rel, NULL);
 }
 
 static void script_pointer(double ms, int action, int id, double x, double y)

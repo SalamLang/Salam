@@ -108,6 +108,76 @@ object Host {
         }
     }
 
+    private fun secureKey(): javax.crypto.SecretKey {
+        val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        val existing = ks.getKey("salam_secure", null)
+        if (existing is javax.crypto.SecretKey) return existing
+        val gen = javax.crypto.KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        gen.init(
+            android.security.keystore.KeyGenParameterSpec.Builder(
+                "salam_secure",
+                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build(),
+        )
+        return gen.generateKey()
+    }
+
+    private fun secureFile(a: Activity, name: String): java.io.File {
+        val hex = name.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
+        val dir = java.io.File(a.filesDir, "secure")
+        dir.mkdirs()
+        return java.io.File(dir, hex)
+    }
+
+    @JvmStatic
+    fun secureSet(name: String, value: String): Boolean {
+        val a = activity ?: return false
+        if (name.isEmpty()) return false
+        return try {
+            val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.ENCRYPT_MODE, secureKey())
+            val body = c.doFinal(value.toByteArray(Charsets.UTF_8))
+            val f = secureFile(a, name)
+            val tmp = java.io.File(f.path + ".tmp")
+            tmp.writeBytes(c.iv + body)
+            tmp.renameTo(f)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun secureGet(name: String): String {
+        val a = activity ?: return ""
+        return try {
+            val f = secureFile(a, name)
+            if (!f.exists()) return ""
+            val raw = f.readBytes()
+            if (raw.size < 29) return ""
+            val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.DECRYPT_MODE, secureKey(), javax.crypto.spec.GCMParameterSpec(128, raw, 0, 12))
+            String(c.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
+    fun secureDelete(name: String): Boolean {
+        val a = activity ?: return false
+        return try {
+            val f = secureFile(a, name)
+            f.exists() && f.delete()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     @JvmStatic
     fun haptic(kind: Int): Boolean {
         val a = activity ?: return false

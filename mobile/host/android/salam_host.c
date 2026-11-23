@@ -158,6 +158,9 @@ static jmethodID share_mid;
 static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID path_mid;
+static jmethodID secure_set_mid;
+static jmethodID secure_get_mid;
+static jmethodID secure_delete_mid;
 static jmethodID perm_state_mid;
 static jmethodID notify_mid;
 static jmethodID loc_mid;
@@ -608,6 +611,45 @@ const char *salam_host_path(int kind)
     return copy;
 }
 
+int salam_host_secure_set(const char *key, const char *value)
+{
+    return call_bool_2s(secure_set_mid, key, value);
+}
+
+int salam_host_secure_delete(const char *key)
+{
+    return call_bool_string(secure_delete_mid, key);
+}
+
+const char *salam_host_secure_get(const char *key)
+{
+    static char copy[16384];
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    copy[0] = 0;
+    if (env == NULL || secure_get_mid == NULL) {
+        return copy;
+    }
+    jstring jk = jstring_from_utf8(env, key);
+    if (jk != NULL) {
+        jstring js = (jstring)(*env)->CallStaticObjectMethod(env, host_cls, secure_get_mid, jk);
+        if (js != NULL) {
+            char *u = utf8_from_jstring(env, js);
+            if (u != NULL) {
+                strncpy(copy, u, sizeof copy - 1);
+                copy[sizeof copy - 1] = 0;
+                free(u);
+            }
+            (*env)->DeleteLocalRef(env, js);
+        }
+        (*env)->DeleteLocalRef(env, jk);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return copy;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     return call_bool_2s(share_mid, text, url);
@@ -768,6 +810,9 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     vibrate_mid = (*env)->GetStaticMethodID(env, cls, "vibrate", "(I)Z");
     haptic_mid = (*env)->GetStaticMethodID(env, cls, "haptic", "(I)Z");
     path_mid = (*env)->GetStaticMethodID(env, cls, "path", "(I)Ljava/lang/String;");
+    secure_set_mid = (*env)->GetStaticMethodID(env, cls, "secureSet", "(Ljava/lang/String;Ljava/lang/String;)Z");
+    secure_get_mid = (*env)->GetStaticMethodID(env, cls, "secureGet", "(Ljava/lang/String;)Ljava/lang/String;");
+    secure_delete_mid = (*env)->GetStaticMethodID(env, cls, "secureDelete", "(Ljava/lang/String;)Z");
     perm_state_mid = (*env)->GetStaticMethodID(env, cls, "permState", "(Ljava/lang/String;)I");
     perm_request_mid = (*env)->GetStaticMethodID(env, cls, "permRequest", "(Ljava/lang/String;)Z");
     notify_mid = (*env)->GetStaticMethodID(env, cls, "notify", "(ILjava/lang/String;Ljava/lang/String;I)Z");

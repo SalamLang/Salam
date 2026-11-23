@@ -5,6 +5,7 @@
 #import <CoreLocation/CoreLocation.h>
 #import <PhotosUI/PhotosUI.h>
 #import <UserNotifications/UserNotifications.h>
+#import <Security/Security.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1368,6 +1369,55 @@ const char *salam_host_path(int kind)
         buf[sizeof buf - 1] = 0;
     }
     return buf;
+}
+
+static NSMutableDictionary *secure_query(const char *key)
+{
+    NSMutableDictionary *q = [NSMutableDictionary new];
+    q[(__bridge id)kSecClass] = (__bridge id)kSecClassGenericPassword;
+    q[(__bridge id)kSecAttrService] = @"salam.secure";
+    q[(__bridge id)kSecAttrAccount] = [NSString stringWithUTF8String:key] ?: @"";
+    return q;
+}
+
+int salam_host_secure_set(const char *key, const char *value)
+{
+    if (key == NULL || key[0] == 0 || value == NULL) {
+        return 0;
+    }
+    NSMutableDictionary *q = secure_query(key);
+    SecItemDelete((__bridge CFDictionaryRef)q);
+    q[(__bridge id)kSecValueData] = [NSData dataWithBytes:value length:strlen(value)];
+    q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+    return SecItemAdd((__bridge CFDictionaryRef)q, NULL) == errSecSuccess ? 1 : 0;
+}
+
+const char *salam_host_secure_get(const char *key)
+{
+    static char copy[16384];
+    copy[0] = 0;
+    if (key == NULL) {
+        return copy;
+    }
+    NSMutableDictionary *q = secure_query(key);
+    q[(__bridge id)kSecReturnData] = @YES;
+    q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+    CFTypeRef out = NULL;
+    if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &out) == errSecSuccess && out != NULL) {
+        NSData *d = (__bridge_transfer NSData *)out;
+        size_t n = d.length < sizeof copy - 1 ? d.length : sizeof copy - 1;
+        memcpy(copy, d.bytes, n);
+        copy[n] = 0;
+    }
+    return copy;
+}
+
+int salam_host_secure_delete(const char *key)
+{
+    if (key == NULL) {
+        return 0;
+    }
+    return SecItemDelete((__bridge CFDictionaryRef)secure_query(key)) == errSecSuccess ? 1 : 0;
 }
 
 int salam_host_share(const char *text, const char *url)

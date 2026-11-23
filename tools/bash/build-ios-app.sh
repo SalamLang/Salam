@@ -250,14 +250,26 @@ for f in "$work"/.salam-build/*.c; do
 done
 $CC -O2 -fobjc-arc -c "$ROOT/mobile/host/ios/salam_host.m" -o "$work/obj/salam_host_ios.o"
 $CC -O2 -c "$ROOT/mobile/host/common/salam_host_common.c" -o "$work/obj/salam_host_common.o"
-$CC -o "$OUT/App.app/App" "$work"/obj/*.o -lm \
-    -framework UIKit -framework Foundation -framework CoreGraphics -framework QuartzCore \
-    -framework AVFoundation -framework AudioToolbox -framework CoreLocation -framework PhotosUI \
-    -framework UserNotifications
-
 uses_host_call() {
     grep -qsw "$1" "$work"/.salam-build/*.c
 }
+SIM_ENT=
+if [ "$DEVICE" = 0 ] && uses_host_call salam_host_secure_set; then
+    cat >"$work/entitlements.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>application-identifier</key><string>$ID</string>
+<key>keychain-access-groups</key><array><string>$ID</string></array>
+</dict></plist>
+PLIST
+    SIM_ENT="-Wl,-sectcreate,__TEXT,__entitlements,$work/entitlements.plist"
+fi
+$CC -o "$OUT/App.app/App" "$work"/obj/*.o -lm \
+    -framework UIKit -framework Foundation -framework CoreGraphics -framework QuartzCore \
+    -framework AVFoundation -framework AudioToolbox -framework CoreLocation -framework PhotosUI \
+    -framework UserNotifications -framework Security $SIM_ENT
+
 USAGE_KEYS=
 add_usage() {
     case $USAGE_KEYS in

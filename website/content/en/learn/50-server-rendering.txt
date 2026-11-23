@@ -1,9 +1,9 @@
 lesson.part = Server and deployment
-lesson.title = Server rendering: finished HTML from a page project
-lesson.summary = Build a page project into a native server that answers every route with finished HTML, run it with PORT and HOST, develop it with salam serve --render, and see how the browser takes over without redrawing
-lesson.seo_title = Server rendering in Salam: salam page build --ssr, salam serve --render and hydration | Lesson
-lesson.description = Server rendering in the Salam programming language: build a page project with salam page build --ssr into dist/server and dist/public, run it with PORT and HOST, develop it with salam serve --render, and learn how hydration keeps the server HTML and takes over in the browser.
-lesson.lead = A page project is a static site by default: the browser downloads a script that draws the page. With server rendering the server sends the finished HTML for the route that was asked for, the visitor sees it at once, search engines read it, and the script then takes over. This lesson shows the two commands, what they write and how the browser takes the page over.
+lesson.title = Server rendering and server functions
+lesson.summary = Build a page project into a native server that answers every route with finished HTML, develop it with salam serve --render, see how hydration works, and call a backend safely with server func
+lesson.seo_title = Server rendering and server func in Salam: --ssr, hydration and calling a backend | Lesson
+lesson.description = Server rendering in the Salam programming language: salam page build --ssr, salam serve --render and hydration, plus server func: wire types, secrets with env, the backend warning W280, errors E285 to E289 and how the browser and native stubs call the server.
+lesson.lead = A page project is a static site by default: the browser downloads a script that draws the page. With server rendering the server sends the finished HTML for the route that was asked for, the visitor sees it at once, and the script then takes over. This lesson shows the commands, how the browser takes the page over, and how a page calls a backend through a server func without a secret ever reaching the browser.
 lesson.body <<
 <h2 id="why">Static or rendered</h2>
 <p>The default build, <code dir="ltr">salam page build</code>, writes files that any web host can serve. Use it when the pages do not depend on the visitor. Server rendering is opt in and needs a program that runs: it answers each request with HTML built from the route, the guards and the state, so a page with a path like <code dir="ltr">/users/7</code> has real content the moment it arrives. The project is the same one the <a href="/learn/web-projects/#routes">web projects lesson</a> describes: a <code dir="ltr">main.salam</code> and a <code dir="ltr">pages/</code> folder. Nothing in the source changes.</p>
@@ -36,6 +36,76 @@ salam serve --render shop --port=3000 --host=0.0.0.0</code></pre>
 <li>Variable values are not sent. The browser computes them again from the route and the initial values, so an initial value that depends on the time or on randomness would make the two renders differ.</li>
 <li>If a part of the browser render differs from the server HTML, the console prints <code dir="ltr">salam: hydration mismatch in region N, it is rendered again from the state</code> and that part is replaced; nothing else throws. A part the server could not draw, such as the rows of an <code dir="ltr">each</code> that keep their own state, is simply filled when the script loads, without a warning.</li>
 </ul>
+
+<h2 id="server-func">Server functions</h2>
+<p>A front project holds pages and no business logic: no database, no file store, no rules. The data lives in a backend, written in Salam or in anything else, that the front reaches over HTTP. A <code dir="ltr">server func</code> is the place where the front calls it. It is an ordinary function with a marker, and it runs only on the front server.</p>
+<pre class="code" dir="ltr"><code>import env
+import net.http
+import encoding.json
+
+struct Product:
+    pub id: int = 0
+    pub name: str = ""
+    pub price: int = 0
+end
+
+server func GetProduct(id: int): Product:
+    mut headers := http.NewHeaders()
+    headers.Insert("Authorization", "Bearer " + env.Get("SHOP_TOKEN"))
+    r := http.GetWith(env.Get("SHOP_API") + "/products/" + str.FromInt(id as i64), headers)
+    mut p := Product {}
+    try:
+        json.Unmarshal(r.body, p)
+    catch e:
+        println "bad product body:", e.message
+    end
+    ret p
+end
+
+pub component ProductPage(id: int):
+    p := GetProduct(id)
+    heading: content = p.name end
+    paragraph: content = "Price: " + p.price end
+end</code></pre>
+<ul>
+<li><code dir="ltr">server</code> is a contextual word before <code dir="ltr">func</code>, so it stays a legal name elsewhere. It sits last among the modifiers: <code dir="ltr">pub server func</code>. The Persian spelling is <code>سرور تابع</code>.</li>
+<li>The function body never reaches the browser script or a native app. Only the signature does.</li>
+<li>Call it from a component body, a handler or another server function. The call looks the same everywhere. On the server it is a direct call; in the browser and in a native app it is a generated stub that asks the server (see below).</li>
+<li>A failure, such as a network error, a bad status or a body that does not decode, is a <code dir="ltr">throw</code>: declare the function <code dir="ltr">throw</code> and handle it with <code dir="ltr">try</code> and <code dir="ltr">catch</code> at the caller. A throw nobody catches while a page is rendered gives a 500 page. Over the wire the browser receives only a generic message; the real text is printed on the server.</li>
+</ul>
+
+<h2 id="wire">Which types can cross</h2>
+<p>Parameters and the result travel as JSON, so they must be wire types: <code dir="ltr">int</code>, <code dir="ltr">float</code>, <code dir="ltr">bool</code>, <code dir="ltr">str</code>, enums (as their member name), structs and <code dir="ltr">Vector</code>s of wire types, and an optional <code dir="ltr">T?</code>. Pointers, references and closures cannot cross: E285 names the parameter. <code dir="ltr">HashMap</code> and arrays are not wire types yet. The rest of the rules are checked at compile time:</p>
+<div class="table-wrap"><table>
+<tr><th>code</th><th>meaning</th></tr>
+<tr><td>E285</td><td>a parameter or result type cannot cross the network</td></tr>
+<tr><td>E286</td><td>code that runs in the browser uses something that only exists on the server, such as <code dir="ltr">env</code></td></tr>
+<tr><td>E287</td><td>a <code dir="ltr">server func</code> that is a method or is not at the top level</td></tr>
+<tr><td>E288</td><td>two server functions have the same name (the wire name is the function name, so overloads are not allowed)</td></tr>
+<tr><td>E289</td><td>a static build can reach a server function, see below</td></tr>
+<tr><td>W280</td><td>the body looks like backend code</td></tr>
+</table></div>
+
+<h2 id="secrets">Secrets stay on the server</h2>
+<p>Read addresses, tokens and keys with <code dir="ltr">env.Get("NAME")</code> inside a server function and set them in the environment of <code dir="ltr">dist/server</code>. <code dir="ltr">env</code> does not exist in the browser bundle: a function that is reachable from browser code and uses it is error E286, and it names the member. A helper that both sides share is fine until it touches a server only name. Methods of your own structs are not trimmed away, so a method that uses <code dir="ltr">env</code> is an error whenever its type is declared in the page program; put such code in a package the page does not import.</p>
+
+<h2 id="backend">Keeping it a thin layer</h2>
+<p>A server function is a window, not a backend. If its body imports or calls <code dir="ltr">db</code>, <code dir="ltr">fs</code>, <code dir="ltr">os</code>, <code dir="ltr">exec</code>, <code dir="ltr">process</code>, the database drivers (<code dir="ltr">sqlite</code>, <code dir="ltr">postgres</code>, <code dir="ltr">mysql</code>, <code dir="ltr">redis</code>), a router or the server types of <code dir="ltr">net.http</code>, the compiler warns with W280, once per package per function: <em>this looks like backend code; call your API from here instead</em>. A project that really wants it writes this in a <code dir="ltr">salam.cfg</code> next to the entry file or in one of its three parent folders:</p>
+<pre class="code" dir="ltr"><code>allow_backend = true</code></pre>
+<p>To call a backend from Salam use <a href="/std/net/http/">net.http</a>. <code dir="ltr">ssr.OutboundGet</code> and <code dir="ltr">ssr.OutboundPost</code> from <a href="/std/net/ssr/">net.ssr</a> do the same with safe defaults: a 10 second timeout, a response cap of 8 MB and at most 5 redirects. Inside a server function and while a page renders, <code dir="ltr">ssr.Request()</code> gives the current request, with its method, path, headers, cookies and client address. Forward a session cookie or a token to the backend with it.</p>
+
+<h2 id="stubs">In the browser and in a native app</h2>
+<p>The same source gives three outputs, and the call site never changes:</p>
+<ul>
+<li><strong>Server</strong> (<code dir="ltr">--ssr</code>): the function is unchanged, and the server registers it. The browser calls it with <code dir="ltr">POST /_salam/fn/Name</code> and a JSON body <code dir="ltr">{"args":{"id":3}}</code>; the answer is <code dir="ltr">{"ok":true,"value":...}</code> or <code dir="ltr">{"ok":false,"error":"..."}</code>. Only functions marked <code dir="ltr">server func</code> are registered. The request must be same origin and carry a session token that the rendered page embeds.</li>
+<li><strong>Web</strong>: the function keeps its signature and its body becomes a stub that posts to the server. A function declared <code dir="ltr">throw</code> throws the server's error text; any other returns the zero value. The stub waits for the answer, so a handler that calls one blocks until it arrives: keep server functions fast and do not call one per keystroke. A page rendered by the server already has its answers in the state block, so those calls do not go to the network again.</li>
+<li><strong>Native</strong>: there is no rendering and no server inside the app. The stub sends the same request to the front server, which the page names with the <code dir="ltr">server</code> setting, or the <code dir="ltr">SALAM_SERVER</code> environment variable when there is none. No secret is in the binary.</li>
+</ul>
+<pre class="code" dir="ltr"><code>page:
+    server = "https://front.example.com"
+    ProductPage: id = 3 end
+end</code></pre>
+<p>A plain static build (<code dir="ltr">salam page build</code> without <code dir="ltr">--ssr</code>) has no server to answer the calls, so a page that can reach a server function is error E289, unless the page sets <code dir="ltr">server</code> to a front server that does. The package that answers, with its tokens and the checks it makes, is <a href="/std/net/ssr/">net.ssr</a>.</p>
 
 <h2 id="limits">What is not there yet</h2>
 <ul>

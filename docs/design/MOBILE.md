@@ -89,8 +89,20 @@ clipboard, opening links, back button, rotation and long press selection.
 Done: stages 1 to 7, the Android part of 8 (keyboard, back button, system
 fonts) and clipboard, link opening and the share sheet from stage 10. Checked on an arm64
 emulator with a counter page, a form with a text input and a Persian page.
-Stage 9: the iOS host draws the counter page on the iPhone simulator. Touch,
-the keyboard and Persian text were not tried on iOS yet.
+Stage 9: the iOS host draws the counter page on the iPhone simulator and
+keeps away from the notch and home indicator (safe area insets). A tap works:
+`-salam-tap X,Y` as a launch argument injects one tap (in points) two seconds
+after start, and the counter went from 0 to 1 on an iPhone 18 Pro simulator.
+Every `salam_host_*` function that `std/gui` declares exists on iOS. Pointer
+IDs, hardware key presses, keyboard height (kept across layout passes),
+lifecycle events (a short background task lets the save state event run),
+color scheme, clipboard and opening links are in the host; they are checked by
+code review only, except touch and safe area. No preedit text on iOS: the view
+is a `UIKeyInput`, so keyboards commit text and `ImePreedit` never fires. The
+saved state is written under `$HOME`, which is the app Documents directory, so
+`SavedState` persists on iOS too. A compiler older than the one that defines
+`SALAM_OS_IOS` (0.6.19 and earlier) builds an app that cannot open a window,
+so build iOS apps with a compiler built from this tree.
 Missing: bundled fonts (iOS cannot read system fonts on a phone), rotate and
 three finger gestures, haptics, permissions, camera and notifications.
 

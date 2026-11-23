@@ -29,6 +29,113 @@ typedef struct {
     char text[TCAP];
 } Ev;
 
+static char *utf8_from_jstring(JNIEnv *env, jstring s)
+{
+    if (s == NULL) {
+        char *empty = malloc(1);
+        if (empty) {
+            empty[0] = 0;
+        }
+        return empty;
+    }
+    jsize n = (*env)->GetStringLength(env, s);
+    const jchar *u = (*env)->GetStringChars(env, s, NULL);
+    char *out = malloc((size_t)n * 3 + 1);
+    size_t o = 0;
+    if (out == NULL) {
+        (*env)->ReleaseStringChars(env, s, u);
+        return NULL;
+    }
+    for (jsize i = 0; i < n; i++) {
+        uint32_t c = u[i];
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 &&
+            u[i + 1] <= 0xDFFF) {
+            c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+            i++;
+        } else if (c >= 0xD800 && c <= 0xDFFF) {
+            c = 0xFFFD;
+        }
+        if (c < 0x80) {
+            out[o++] = (char)c;
+        } else if (c < 0x800) {
+            out[o++] = (char)(0xC0 | (c >> 6));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            out[o++] = (char)(0xE0 | (c >> 12));
+            out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+        } else {
+            out[o++] = (char)(0xF0 | (c >> 18));
+            out[o++] = (char)(0x80 | ((c >> 12) & 0x3F));
+            out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+        }
+    }
+    out[o] = 0;
+    (*env)->ReleaseStringChars(env, s, u);
+    return out;
+}
+
+static jstring jstring_from_utf8(JNIEnv *env, const char *s)
+{
+    if (s == NULL) {
+        return (*env)->NewString(env, NULL, 0);
+    }
+    size_t n = strlen(s);
+    jchar *u = malloc((n + 1) * sizeof(jchar));
+    size_t o = 0;
+    if (u == NULL) {
+        return NULL;
+    }
+    const unsigned char *p = (const unsigned char *)s;
+    size_t i = 0;
+    while (i < n) {
+        uint32_t c = p[i];
+        size_t need = 0;
+        if (c < 0x80) {
+            need = 0;
+        } else if ((c & 0xE0) == 0xC0) {
+            c &= 0x1F;
+            need = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            c &= 0x0F;
+            need = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            c &= 0x07;
+            need = 3;
+        } else {
+            u[o++] = 0xFFFD;
+            i++;
+            continue;
+        }
+        int bad = 0;
+        for (size_t k = 1; k <= need; k++) {
+            if (i + k >= n || (p[i + k] & 0xC0) != 0x80) {
+                bad = 1;
+                break;
+            }
+            c = (c << 6) | (p[i + k] & 0x3F);
+        }
+        if (bad) {
+            u[o++] = 0xFFFD;
+            i++;
+            continue;
+        }
+        i += need + 1;
+        if (c >= 0x10000) {
+            c -= 0x10000;
+            u[o++] = (jchar)(0xD800 + (c >> 10));
+            u[o++] = (jchar)(0xDC00 + (c & 0x3FF));
+        } else {
+            u[o++] = (jchar)c;
+        }
+    }
+    jstring r = (*env)->NewString(env, u, (jsize)o);
+    free(u);
+    return r;
+}
+
+
 extern int salam_app_main(int argc, char **argv);
 
 static Ev q[QCAP];
@@ -48,6 +155,10 @@ static JavaVM *vm;
 static jclass host_cls;
 static jmethodID exit_mid;
 static jmethodID ime_mid;
+static jmethodID open_mid;
+static jmethodID clip_set_mid;
+static jmethodID clip_get_mid;
+static char clip_buf[8192];
 static int ime_state;
 
 jint JNI_OnLoad(JavaVM *jvm, void *reserved)
@@ -242,6 +353,75 @@ void salam_host_ime(int on)
     }
 }
 
+static JNIEnv *host_env(int *attached)
+{
+    JNIEnv *env = NULL;
+    *attached = 0;
+    if (vm == NULL || host_cls == NULL) {
+        return NULL;
+    }
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+        *attached = 1;
+    }
+    return env;
+}
+
+static int call_bool_string(jmethodID mid, const char *s)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || mid == NULL) {
+        return 0;
+    }
+    jstring js = jstring_from_utf8(env, s);
+    if (js != NULL) {
+        r = (*env)->CallStaticBooleanMethod(env, host_cls, mid, js) ? 1 : 0;
+        (*env)->DeleteLocalRef(env, js);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_open_url(const char *url)
+{
+    return call_bool_string(open_mid, url);
+}
+
+int salam_host_clip_set(const char *text)
+{
+    return call_bool_string(clip_set_mid, text);
+}
+
+const char *salam_host_clip_get(void)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    clip_buf[0] = 0;
+    if (env == NULL || clip_get_mid == NULL) {
+        return clip_buf;
+    }
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, host_cls, clip_get_mid);
+    if (js != NULL) {
+        char *u = utf8_from_jstring(env, js);
+        if (u != NULL) {
+            strncpy(clip_buf, u, sizeof clip_buf - 1);
+            clip_buf[sizeof clip_buf - 1] = 0;
+            free(u);
+        }
+        (*env)->DeleteLocalRef(env, js);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return clip_buf;
+}
+
 static void *run(void *arg)
 {
     char *argv[2] = {"app", NULL};
@@ -269,6 +449,9 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     host_cls = (jclass)(*env)->NewGlobalRef(env, cls);
     exit_mid = (*env)->GetStaticMethodID(env, cls, "onExit", "()V");
     ime_mid = (*env)->GetStaticMethodID(env, cls, "showIme", "(Z)V");
+    open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");
+    clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
+    clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
     started = 1;
     pthread_create(&th, NULL, run, NULL);
 }
@@ -316,12 +499,17 @@ static void text_event(JNIEnv *env, jstring s, double kind, double cursor)
     memset(&e, 0, sizeof e);
     e.v[0] = kind;
     e.v[1] = cursor;
-    if (s != NULL) {
-        const char *u = (*env)->GetStringUTFChars(env, s, NULL);
-        if (u != NULL) {
-            strncpy(e.text, u, TCAP - 1);
-            (*env)->ReleaseStringUTFChars(env, s, u);
+    char *u = utf8_from_jstring(env, s);
+    if (u != NULL) {
+        size_t n = strlen(u);
+        if (n >= TCAP) {
+            n = TCAP - 1;
+            while (n > 0 && (((unsigned char)u[n]) & 0xC0) == 0x80) {
+                n--;
+            }
         }
+        memcpy(e.text, u, n);
+        free(u);
     }
     push(&e);
 }

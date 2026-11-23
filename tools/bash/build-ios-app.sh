@@ -79,7 +79,14 @@ else
     SDK=iphonesimulator
     TRIPLE=arm64-apple-ios15.0-simulator
 fi
-SYSROOT=$(xcrun --sdk "$SDK" --show-sdk-path)
+command -v xcrun >/dev/null 2>&1 || {
+    echo "build-ios-app: xcrun not found; iOS apps need Xcode on macOS (install Xcode, then run: xcode-select -s /Applications/Xcode.app)" >&2
+    exit 1
+}
+SYSROOT=$(xcrun --sdk "$SDK" --show-sdk-path 2>/dev/null) || {
+    echo "build-ios-app: no $SDK SDK; install Xcode and select it with: xcode-select -s /Applications/Xcode.app" >&2
+    exit 1
+}
 CC="xcrun --sdk $SDK clang -target $TRIPLE -isysroot $SYSROOT"
 
 work="$OUT/work"

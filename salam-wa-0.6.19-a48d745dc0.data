@@ -186807,6 +186807,7 @@ end
 if _e.dom.nodes.Len() > 0 and _e.boxes.Len() > 0:
 _paint_node(cv, 0)
 _paint_popup(cv)
+_paint_selui(cv)
 end
 cv.ClearRegion()
 end
@@ -189419,6 +189420,9 @@ _word_bounds(ft, off, wa, wb)
 mut c2 := _e.ctl.Ref(ft)
 c2.anchor = wa
 c2.caret = wb
+if _sh_touch:
+_sh_show(ft, true)
+end
 else clicks >= 3:
 mut la := 0
 mut lb := 0
@@ -189576,6 +189580,7 @@ _fire(0, "scroll", false)
 end
 end
 func _key_down(k: window.Key, mods: int, text: str):
+_sh_hide()
 target := _e.focus >= 0 ? _e.focus : 0
 name := _key_name(k, text)
 mut ev := _make_event("keydown", target)
@@ -189697,6 +189702,7 @@ ev.modifiers = mods
 _fire_ev(target, ev, true)
 end
 func _text_input(text: str):
+_sh_hide()
 f := _e.focus
 if f < 0 or not _is_text_input(f) or _has_attr(_e.dom, f, "readonly") or _is_disabled(f):
 ret
@@ -192378,6 +192384,7 @@ _xf_update()
 _anim_tick()
 _anims_running()
 _update_ime()
+_sh_check()
 _diff_records()
 end
 func _ensure_canvas(): bool:
@@ -194108,6 +194115,81 @@ _step(0)
 println "imeconfig", _e.win.ImeConfig()
 break
 end
+"selui":
+_step(0)
+println _sh_report()
+break
+end
+"seltap":
+_step(0)
+mut items := Vector {} as Vector<int>
+defer items.Free()
+mut btx := 0.0
+mut bty := 0.0
+mut btw := 0.0
+if _sh_valid() and _sh_tb and _sh_bar(btx, bty, btw, items):
+mut cx := btx
+each id in items:
+w := _sh_width(id)
+if _sh_name(id) == arg:
+_inject(window.Event {
+kind = window.EventKind.PointerDown,
+pointer = 0,
+pointer_kind = window.PointerKind.Touch,
+x = cx + w / 2.0,
+y = bty + 19.0,
+button = window.MouseButton.Left
+})
+_inject(window.Event {
+kind = window.EventKind.PointerUp,
+pointer = 0,
+pointer_kind = window.PointerKind.Touch,
+x = cx + w / 2.0,
+y = bty + 19.0,
+button = window.MouseButton.Left
+})
+end
+cx += w
+end
+else:
+println "ui script: no toolbar"
+end
+break
+end
+"selhandle":
+_step(0)
+parts := str.Fields(arg)
+mut hx := 0.0
+mut hy := 0.0
+if parts.Len() >= 3 and _sh_valid() and _sh_handle(parts[0] == "start" ? 1 : 2, hx, hy):
+_inject(window.Event {
+kind = window.EventKind.PointerDown,
+pointer = 0,
+pointer_kind = window.PointerKind.Touch,
+x = hx,
+y = hy,
+button = window.MouseButton.Left
+})
+_inject(window.Event {
+kind = window.EventKind.PointerMove,
+pointer = 0,
+pointer_kind = window.PointerKind.Touch,
+x = parts[1].ToFloat(),
+y = parts[2].ToFloat() + _SH_LIFT
+})
+_inject(window.Event {
+kind = window.EventKind.PointerUp,
+pointer = 0,
+pointer_kind = window.PointerKind.Touch,
+x = parts[1].ToFloat(),
+y = parts[2].ToFloat() + _SH_LIFT,
+button = window.MouseButton.Left
+})
+else:
+println "ui script: no handle"
+end
+break
+end
 "hash":
 _step(0)
 println "hash", _e.canvas.Hash()
@@ -194199,6 +194281,375 @@ _run_steps(steps)
 end
 package ui
 import math
+import str
+import gui.paint
+import gui.typeset
+const _SH_R := 9.0
+const _SH_HIT := 24.0
+const _SH_LIFT := 14.0
+const _SH_BAR := 38.0
+const _SH_PAD := 14.0
+mut _sh_node := -1
+mut _sh_tb := false
+mut _sh_drag := 0
+mut _sh_fixed := 0
+mut _sh_btn := -1
+mut _sh_tap := false
+mut _sh_touch := false
+mut _sh_back := false
+func _sh_hide():
+if _sh_node >= 0:
+_sh_node = -1
+_sh_tb = false
+_sh_drag = 0
+_sh_btn = -1
+_e.full = true
+end
+end
+func _sh_show(node: int, toolbar: bool):
+_sh_node = node
+_sh_tb = toolbar
+_e.full = true
+end
+func _sh_valid(): bool:
+ret _sh_node >= 0 and _sh_node == _e.focus and _is_text_input(_sh_node)
+end
+func _sh_range(a &: int, b &: int):
+c := _e.ctl[_sh_node]
+a = math.MinI(c.anchor, c.caret)
+b = math.MaxI(c.anchor, c.caret)
+end
+func _sh_has(): bool:
+if not _sh_valid():
+ret false
+end
+mut a := 0
+mut b := 0
+_sh_range(a, b)
+ret b > a
+end
+func _sh_check():
+if _sh_node >= 0 and not _sh_valid():
+_sh_hide()
+end
+end
+func _sh_point(node: int, off: int, x &: f64, y &: f64, h &: f64): bool:
+ri := _ctl_run(node)
+if ri < 0 or not _e.runs[ri].has_lay:
+ret false
+end
+f := _e.runs[ri]
+c := _e.ctl[node]
+r := typeset.CaretRect(f.para, f.lay, typeset.TextPosition { offset = _display_offset(node, off) })
+x = f.x + r.x - c.text_scroll
+y = f.y + r.y - c.text_scroll_y
+h = r.height
+cb := _content_box(node)
+ret x >= cb.x - 1.0 and x <= cb.x + cb.w + 1.0 and y >= cb.y - 1.0 and y + h <= cb.y + cb.h + 1.0
+end
+func _sh_handle(which: int, x &: f64, y &: f64): bool:
+mut a := 0
+mut b := 0
+_sh_range(a, b)
+mut h := 0.0
+mut px := 0.0
+mut py := 0.0
+if not _sh_point(_sh_node, which == 1 ? a : b, px, py, h):
+ret false
+end
+x = px
+y = py + h + _SH_R
+ret true
+end
+func _sh_handle_hit(px: f64, py: f64): int:
+if not _sh_has():
+ret 0
+end
+mut best := 0
+mut bd := _SH_HIT * _SH_HIT
+repeat 2 in i:
+mut hx := 0.0
+mut hy := 0.0
+if _sh_handle(i + 1, hx, hy):
+dx := px - hx
+dy := py - hy
+d := dx * dx + dy * dy
+if d <= bd:
+bd = d
+best = i + 1
+end
+end
+end
+ret best
+end
+func _sh_fa(): bool:
+ret _sh_node >= 0 and _is_rtl(_e.cs[_sh_node])
+end
+func _sh_label(id: int): str:
+fa := _sh_fa()
+ret match id:
+0: fa ? "برش" : "Cut" end
+1: fa ? "رونوشت" : "Copy" end
+2: fa ? "چسباندن" : "Paste" end
+else: fa ? "انتخاب همه" : "Select all" end
+end
+end
+func _sh_name(id: int): str:
+ret match id:
+0: "cut" end
+1: "copy" end
+2: "paste" end
+else: "all" end
+end
+end
+func _sh_items(out &: Vector<int>):
+n := _sh_node
+plain := _input_type(n) != "password"
+ro := _has_attr(_e.dom, n, "readonly") or _is_disabled(n)
+has := _sh_has()
+if has and plain and not ro:
+out.Push(0)
+end
+if has and plain:
+out.Push(1)
+end
+if not ro:
+out.Push(2)
+end
+if _control_value(n).Len() > 0:
+out.Push(3)
+end
+end
+func _sh_width(id: int): f64:
+t := _sh_label(id)
+mut spans := Vector {} as Vector<typeset.TextSpan>
+spans.Push(_span_for(_sh_node, t))
+mut p := typeset.NewParagraph(_fc, spans, typeset.ParagraphStyle {})
+mut l := typeset.LayoutParagraph(p, _fc, 0.0)
+w := l.width + 2.0 * _SH_PAD
+typeset.FreeLayout(l)
+typeset.FreeParagraph(p)
+spans.Free()
+ret w
+end
+func _sh_bar(x &: f64, y &: f64, w &: f64, items &: Vector<int>): bool:
+_sh_items(items)
+if items.Len() == 0:
+ret false
+end
+mut tw := 0.0
+each id in items:
+tw += _sh_width(id)
+end
+mut a := 0
+mut b := 0
+_sh_range(a, b)
+mut sx := 0.0
+mut sy := 0.0
+mut sh := 0.0
+mut ex := 0.0
+mut ey := 0.0
+mut eh := 0.0
+mut ok := _sh_point(_sh_node, a, sx, sy, sh)
+ok = _sh_point(_sh_node, b, ex, ey, eh) or ok
+if not ok:
+cb := _content_box(_sh_node)
+sx = cb.x
+ex = cb.x
+sy = cb.y
+ey = cb.y
+eh = cb.h
+end
+mid := (sx + ex) / 2.0
+w = tw
+x = math.Max(4.0, math.Min(_e.width - tw - 4.0, mid - tw / 2.0))
+y = sy - _SH_BAR - 10.0
+if y < _e.inset_t + 4.0:
+y = ey + eh + 2.0 * _SH_R + 12.0
+end
+ret true
+end
+func _sh_bar_hit(px: f64, py: f64): int:
+if not _sh_valid() or not _sh_tb:
+ret -1
+end
+mut items := Vector {} as Vector<int>
+defer items.Free()
+mut btx := 0.0
+mut bty := 0.0
+mut btw := 0.0
+if not _sh_bar(btx, bty, btw, items):
+ret -1
+end
+if px < btx or px > btx + btw or py < bty or py > bty + _SH_BAR:
+ret -1
+end
+mut cx := btx
+each id in items:
+w := _sh_width(id)
+if px >= cx and px < cx + w:
+ret id
+end
+cx += w
+end
+ret -1
+end
+func _sh_do(id: int):
+f := _sh_node
+if id == 3:
+mut cc := _e.ctl.Ref(f)
+cc.anchor = 0
+cc.caret = _control_value(f).Len()
+_sh_tb = false
+_scroll_caret(f)
+_damage_node(f)
+_e.full = true
+ret
+end
+if id == 2:
+t := _get_clipboard()
+_sh_tb = false
+_text_input(t)
+_e.full = true
+ret
+end
+sel := _selected_text(f)
+if sel.Len() > 0:
+_set_clipboard(sel)
+if id == 0:
+_push_undo(f)
+_replace_selection(f, "")
+_refresh_control(f)
+_e.states_dirty = true
+mut ev := _make_event("input", f)
+ev.text = ""
+_fire_ev(f, ev, true)
+end
+end
+_sh_tb = false
+_damage_node(f)
+_e.full = true
+end
+func _sh_toggle_tap():
+if _sh_valid():
+_sh_tb = not _sh_tb
+_e.full = true
+end
+end
+func _sh_in_selection(px: f64, py: f64): bool:
+if not _sh_has():
+ret false
+end
+if _hit(px, py) != _sh_node:
+ret false
+end
+off := _caret_from_point(_sh_node, px, py)
+mut a := 0
+mut b := 0
+_sh_range(a, b)
+ret off >= a and off <= b
+end
+func _sh_drag_to(px: f64, py: f64):
+off := _caret_from_point(_sh_node, px, py - _SH_LIFT)
+mut c := _e.ctl.Ref(_sh_node)
+c.anchor = _sh_fixed
+c.caret = off
+_scroll_caret(_sh_node)
+_damage_node(_sh_node)
+_e.full = true
+end
+func _sh_drag_start(which: int):
+mut a := 0
+mut b := 0
+_sh_range(a, b)
+_sh_drag = which
+_sh_fixed = which == 1 ? b : a
+_sh_back = _sh_tb
+_sh_tb = false
+_e.full = true
+end
+func _paint_selui(cv &: paint.Canvas):
+if not _sh_valid():
+ret
+end
+blue := paint.Color {
+r = 30,
+g = 144,
+b = 255,
+a = 255
+}
+if _sh_has():
+repeat 2 in i:
+mut hx := 0.0
+mut hy := 0.0
+if _sh_handle(i + 1, hx, hy):
+_fill_round(cv, hx - 1.0, hy - _SH_R, 2.0, _SH_R, 0.0, blue)
+_fill_round(cv, hx - _SH_R, hy - 1.0, 2.0 * _SH_R, 2.0 * _SH_R, _SH_R, blue)
+end
+end
+end
+if not _sh_tb:
+ret
+end
+mut items := Vector {} as Vector<int>
+defer items.Free()
+mut btx := 0.0
+mut bty := 0.0
+mut btw := 0.0
+if not _sh_bar(btx, bty, btw, items):
+ret
+end
+sc := _e.scale
+cv.DrawShadow(
+_rect(btx, bty, btw, _SH_BAR),
+paint.Uniform(8.0 * sc),
+paint.Shadow { offset_y = 2.0 * sc, blur = 8.0 * sc, color = paint.Color { a = 90 } }
+)
+_fill_round(cv, btx, bty, btw, _SH_BAR, 8.0, _grey(40))
+mut cx := btx
+each id in items:
+w := _sh_width(id)
+t := _sh_label(id)
+mut spans := Vector {} as Vector<typeset.TextSpan>
+spans.Push(_span_for(_sh_node, t))
+mut p := typeset.NewParagraph(_fc, spans, typeset.ParagraphStyle {})
+mut l := typeset.LayoutParagraph(p, _fc, 0.0)
+_draw_layout(cv, l, cx + _SH_PAD, bty + (_SH_BAR - l.height) / 2.0, _grey(255))
+typeset.FreeLayout(l)
+typeset.FreeParagraph(p)
+spans.Free()
+if id != items[items.Len() - 1]:
+cv.FillRect(_rect(cx + w - 0.5, bty + 8.0, 1.0, _SH_BAR - 16.0), _grey(100))
+end
+cx += w
+end
+end
+func _sh_report(): str:
+if not _sh_valid():
+ret "selui none"
+end
+mut a := 0
+mut b := 0
+_sh_range(a, b)
+mut s := "selui " + _e.dom.nodes[_sh_node].kind + "#" + _attr(_e.dom, _sh_node, "id") + " " + str.FromInt(a as i64) + " " + str.FromInt(b as i64)
+s += (_sh_has() ? " handles" : " caret")
+if _sh_tb:
+mut items := Vector {} as Vector<int>
+defer items.Free()
+mut btx := 0.0
+mut bty := 0.0
+mut btw := 0.0
+if _sh_bar(btx, bty, btw, items):
+s += " bar"
+each id in items:
+s += " " + _sh_name(id)
+end
+end
+end
+ret s
+end
+package ui
+import math
 import gui.window
 const _T_SLOP := 10.0
 const _T_LONG_MS := 500
@@ -194235,6 +194686,9 @@ _tid2 = -1
 _tpinch = false
 _pscale = 1.0
 _pnode = -1
+_sh_tap = false
+_sh_btn = -1
+_sh_drag = 0
 end
 func _pinch_dist(): f64:
 dx := _t2x - _tx
@@ -194331,8 +194785,32 @@ _tx = ev.x
 _ty = ev.y
 _tt0 = now
 _ttm = now
+if _sh_valid():
+hh := _sh_handle_hit(ev.x, ev.y)
+bb := _sh_bar_hit(ev.x, ev.y)
+if hh > 0:
+_sh_drag_start(hh)
+_tlong = true
+_e.capture = -2
+break
+end
+if bb >= 0:
+_sh_btn = bb
+_tlong = true
+_e.capture = -2
+break
+end
+if _sh_in_selection(ev.x, ev.y):
+_sh_tap = true
+_e.capture = -2
+break
+end
+end
+_sh_hide()
 _pointer_move(ev.x, ev.y)
+_sh_touch = true
 _pointer_down(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
+_sh_touch = false
 break
 end
 window.EventKind.PointerMove:
@@ -194343,6 +194821,13 @@ end
 break
 end
 if ev.pointer != _tid:
+break
+end
+if _sh_drag > 0:
+_sh_drag_to(ev.x, ev.y)
+break
+end
+if _sh_btn >= 0:
 break
 end
 dx := ev.x - _tx
@@ -194380,6 +194865,23 @@ end
 if ev.pointer != _tid:
 break
 end
+if _sh_drag > 0:
+_sh_drag = 0
+_sh_tb = _sh_back
+_e.full = true
+_touch_reset()
+break
+end
+if _sh_btn >= 0:
+id := _sh_bar_hit(ev.x, ev.y)
+pressed := _sh_btn
+_sh_btn = -1
+if id == pressed:
+_sh_do(id)
+end
+_touch_reset()
+break
+end
 wasdrag := _tdrag
 if wasdrag:
 _pointer_up(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
@@ -194395,8 +194897,12 @@ _touch_release_hover()
 break
 end
 else:
+if _sh_tap and not _tlong:
+_sh_toggle_tap()
+end
 _pointer_up(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
 end
+_sh_tap = false
 _touch_release_hover()
 _touch_reset()
 break
@@ -194423,6 +194929,7 @@ mut c := _e.ctl.Ref(ft)
 c.anchor = wa
 c.caret = wb
 _e.drag_sel = false
+_sh_show(ft, true)
 _damage_node(ft)
 end
 end

@@ -769,7 +769,9 @@ files`; give every source file a name unique across the whole project.
 
 - **`input` and `print` always take a value and never parentheses.** Write
   `input ""` or `input "prompt"`, and `println ""` for an empty line. A bare
-  `input`/`println` and `input()`/`print()` are errors.
+  `input`/`println` and `input()`/`print()` are errors. `input` must be stored
+  first (`name := input "Name: "`, then use `name`); `println input "p"` or
+  `if input "p" == "y":` is error E296.
 
 - **`input` cannot report EOF.** It returns `""` both for an empty line and at
   end-of-stream. Drive `getchar()` yourself if you need to tell them apart.

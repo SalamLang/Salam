@@ -21,6 +21,7 @@ static CGFloat g_kb;
 static pthread_t g_thread;
 static int g_started;
 static int g_tapped;
+static void (^g_first_frame)(void);
 static int g_ime;
 static CGContextRef g_ctx;
 static void *g_shadow;
@@ -535,9 +536,15 @@ static int hid_to_key(UIKeyboardHIDUsage u)
             NSUInteger at = [args indexOfObject:@"-salam-script"];
             NSUInteger tap = [args indexOfObject:@"-salam-tap"];
             if (at != NSNotFound && at + 1 < args.count) {
-                run_script(self, args[at + 1], s);
+                NSString *script = args[at + 1];
+                g_first_frame = ^{
+                    run_script(self, script, s);
+                };
             } else if (tap != NSNotFound && tap + 1 < args.count) {
-                run_script(self, [@"tap " stringByAppendingString:args[tap + 1]], s);
+                NSString *script = [@"tap " stringByAppendingString:args[tap + 1]];
+                g_first_frame = ^{
+                    run_script(self, script, s);
+                };
             }
         }
     }
@@ -565,7 +572,7 @@ static void script_pointer(double ms, int action, int id, double x, double y, do
 
 static void run_script(id view, NSString *script, CGFloat s)
 {
-    double t = 2000;
+    double t = 1500;
     for (NSString *raw in [script componentsSeparatedByString:@";"]) {
         NSString *step = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         NSRange sp = [step rangeOfString:@" "];
@@ -780,6 +787,11 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
     dispatch_async(dispatch_get_main_queue(), ^{
         g_view.layer.contents = (__bridge id)img;
         CGImageRelease(img);
+        if (g_first_frame != nil) {
+            void (^go)(void) = g_first_frame;
+            g_first_frame = nil;
+            go();
+        }
     });
     return 1;
 }

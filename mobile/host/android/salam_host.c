@@ -281,6 +281,14 @@ void salam_host_exit(void)
     }
 }
 
+void salam_host_ime_rect(int x, int y, int w, int h)
+{
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+}
+
 void salam_host_ime(int on)
 {
     JNIEnv *env = NULL;

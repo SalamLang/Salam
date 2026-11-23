@@ -39,6 +39,94 @@ static void *run_app(void *arg)
     return NULL;
 }
 
+static int g_ime_rect[4];
+
+static void post_text(NSString *text, int commit)
+{
+    const char *u = text.UTF8String;
+    size_t n = u != NULL ? strlen(u) : 0;
+    size_t i = 0;
+    while (i < n) {
+        size_t len = n - i;
+        if (len >= SALAM_HOST_TCAP) {
+            len = SALAM_HOST_TCAP - 1;
+            while (len > 0 && (((unsigned char)u[i + len]) & 0xC0) == 0x80) {
+                len--;
+            }
+            if (len == 0) {
+                break;
+            }
+        }
+        char buf[SALAM_HOST_TCAP];
+        memcpy(buf, u + i, len);
+        buf[len] = 0;
+        salam_host_post(SALAM_EV_TEXT, commit, 0, 0, 0, 0, buf);
+        i += len;
+    }
+}
+
+static void post_preedit(NSString *text, NSUInteger caret)
+{
+    NSString *head = caret <= text.length ? [text substringToIndex:caret] : text;
+    const char *u = text.UTF8String;
+    char buf[SALAM_HOST_TCAP];
+    size_t n = u != NULL ? strlen(u) : 0;
+    if (n >= SALAM_HOST_TCAP) {
+        n = SALAM_HOST_TCAP - 1;
+        while (n > 0 && (((unsigned char)u[n]) & 0xC0) == 0x80) {
+            n--;
+        }
+    }
+    if (n > 0) {
+        memcpy(buf, u, n);
+    }
+    buf[n] = 0;
+    size_t hb = strlen(head.UTF8String);
+    salam_host_post(SALAM_EV_PREEDIT, hb > n ? n : hb, 0, 0, 0, 0, buf);
+}
+
+@interface SalamPos : UITextPosition
+@property(nonatomic) NSInteger off;
+@end
+
+@implementation SalamPos
+@end
+
+@interface SalamRange : UITextRange
+@property(strong, nonatomic) SalamPos *from;
+@property(strong, nonatomic) SalamPos *to;
+@end
+
+@implementation SalamRange
+- (UITextPosition *)start
+{
+    return self.from;
+}
+- (UITextPosition *)end
+{
+    return self.to;
+}
+- (BOOL)isEmpty
+{
+    return self.from.off == self.to.off;
+}
+@end
+
+static SalamPos *make_pos(NSInteger off)
+{
+    SalamPos *p = [SalamPos new];
+    p.off = off < 0 ? 0 : off;
+    return p;
+}
+
+static SalamRange *make_range(NSInteger a, NSInteger b)
+{
+    SalamRange *r = [SalamRange new];
+    r.from = make_pos(a < b ? a : b);
+    r.to = make_pos(a < b ? b : a);
+    return r;
+}
+
 static int touch_slot(UITouch *t, int create)
 {
     for (int i = 0; i < 16; i++) {
@@ -58,10 +146,15 @@ static int touch_slot(UITouch *t, int create)
     return -1;
 }
 
-@interface SalamView : UIView <UIKeyInput>
+@interface SalamView : UIView <UITextInput>
+@property(copy, nonatomic) NSString *marked;
+@property(nonatomic) NSRange sel;
 @end
 
 @implementation SalamView
+@synthesize inputDelegate;
+@synthesize tokenizer;
+@synthesize markedTextStyle;
 
 - (instancetype)initWithFrame:(CGRect)frame
 {
@@ -86,31 +179,204 @@ static int touch_slot(UITouch *t, int create)
 
 - (void)insertText:(NSString *)text
 {
+    BOOL composing = self.marked.length > 0;
+    if (composing) {
+        [self.inputDelegate textWillChange:self];
+        self.marked = nil;
+        self.sel = NSMakeRange(0, 0);
+        [self.inputDelegate textDidChange:self];
+        if ([text isEqualToString:@"\n"]) {
+            return;
+        }
+    }
     if ([text isEqualToString:@"\n"]) {
         salam_host_post(SALAM_EV_KEY, 1, 66, 0, 0, 0, NULL);
         salam_host_post(SALAM_EV_KEY, 0, 66, 0, 0, 0, NULL);
         return;
     }
-    const char *u = text.UTF8String;
-    size_t n = u != NULL ? strlen(u) : 0;
-    size_t i = 0;
-    while (i < n) {
-        size_t len = n - i;
-        if (len >= SALAM_HOST_TCAP) {
-            len = SALAM_HOST_TCAP - 1;
-            while (len > 0 && (((unsigned char)u[i + len]) & 0xC0) == 0x80) {
-                len--;
-            }
-            if (len == 0) {
-                break;
-            }
-        }
-        char buf[SALAM_HOST_TCAP];
-        memcpy(buf, u + i, len);
-        buf[len] = 0;
-        salam_host_post(SALAM_EV_TEXT, 0, 0, 0, 0, 0, buf);
-        i += len;
+    post_text(text, composing ? 1 : 0);
+}
+
+- (NSInteger)docLength
+{
+    return (NSInteger)self.marked.length;
+}
+
+- (UITextRange *)selectedTextRange
+{
+    return make_range((NSInteger)self.sel.location, (NSInteger)(self.sel.location + self.sel.length));
+}
+
+- (void)setSelectedTextRange:(UITextRange *)r
+{
+    SalamRange *sr = (SalamRange *)r;
+    if (![sr isKindOfClass:SalamRange.class]) {
+        return;
     }
+    NSInteger len = [self docLength];
+    NSInteger a = MIN(sr.from.off, len);
+    NSInteger b = MIN(sr.to.off, len);
+    self.sel = NSMakeRange((NSUInteger)a, (NSUInteger)(b - a));
+}
+
+- (UITextRange *)markedTextRange
+{
+    return self.marked.length > 0 ? make_range(0, [self docLength]) : nil;
+}
+
+- (id<UITextInputTokenizer>)tokenizer
+{
+    if (tokenizer == nil) {
+        tokenizer = [[UITextInputStringTokenizer alloc] initWithTextInput:self];
+    }
+    return tokenizer;
+}
+
+- (UITextPosition *)beginningOfDocument
+{
+    return make_pos(0);
+}
+
+- (UITextPosition *)endOfDocument
+{
+    return make_pos([self docLength]);
+}
+
+- (NSString *)textInRange:(UITextRange *)r
+{
+    SalamRange *sr = (SalamRange *)r;
+    NSString *doc = self.marked ?: @"";
+    if (![sr isKindOfClass:SalamRange.class]) {
+        return @"";
+    }
+    NSInteger a = MIN(sr.from.off, (NSInteger)doc.length);
+    NSInteger b = MIN(sr.to.off, (NSInteger)doc.length);
+    return [doc substringWithRange:NSMakeRange((NSUInteger)a, (NSUInteger)(b - a))];
+}
+
+- (void)replaceRange:(UITextRange *)r withText:(NSString *)text
+{
+    [self insertText:text];
+}
+
+- (void)setMarkedText:(NSString *)text selectedRange:(NSRange)range
+{
+    [self.inputDelegate textWillChange:self];
+    if (text.length == 0) {
+        self.marked = nil;
+        self.sel = NSMakeRange(0, 0);
+        post_preedit(@"", 0);
+    } else {
+        self.marked = text;
+        NSUInteger at = MIN(range.location, text.length);
+        self.sel = NSMakeRange(at, 0);
+        post_preedit(text, at);
+    }
+    [self.inputDelegate textDidChange:self];
+}
+
+- (void)unmarkText
+{
+    if (self.marked.length == 0) {
+        return;
+    }
+    NSString *t = self.marked;
+    [self.inputDelegate textWillChange:self];
+    self.marked = nil;
+    self.sel = NSMakeRange(0, 0);
+    [self.inputDelegate textDidChange:self];
+    post_text(t, 1);
+}
+
+- (UITextRange *)textRangeFromPosition:(UITextPosition *)a toPosition:(UITextPosition *)b
+{
+    return make_range(((SalamPos *)a).off, ((SalamPos *)b).off);
+}
+
+- (UITextPosition *)positionFromPosition:(UITextPosition *)p offset:(NSInteger)offset
+{
+    NSInteger v = ((SalamPos *)p).off + offset;
+    if (v < 0 || v > [self docLength]) {
+        return nil;
+    }
+    return make_pos(v);
+}
+
+- (UITextPosition *)positionFromPosition:(UITextPosition *)p inDirection:(UITextLayoutDirection)dir offset:(NSInteger)offset
+{
+    NSInteger d = (dir == UITextLayoutDirectionLeft || dir == UITextLayoutDirectionUp) ? -offset : offset;
+    return [self positionFromPosition:p offset:d];
+}
+
+- (NSComparisonResult)comparePosition:(UITextPosition *)a toPosition:(UITextPosition *)b
+{
+    NSInteger x = ((SalamPos *)a).off;
+    NSInteger y = ((SalamPos *)b).off;
+    return x < y ? NSOrderedAscending : (x > y ? NSOrderedDescending : NSOrderedSame);
+}
+
+- (NSInteger)offsetFromPosition:(UITextPosition *)a toPosition:(UITextPosition *)b
+{
+    return ((SalamPos *)b).off - ((SalamPos *)a).off;
+}
+
+- (UITextPosition *)positionWithinRange:(UITextRange *)r farthestInDirection:(UITextLayoutDirection)dir
+{
+    SalamRange *sr = (SalamRange *)r;
+    return (dir == UITextLayoutDirectionLeft || dir == UITextLayoutDirectionUp) ? sr.from : sr.to;
+}
+
+- (UITextRange *)characterRangeByExtendingPosition:(UITextPosition *)p inDirection:(UITextLayoutDirection)dir
+{
+    NSInteger o = ((SalamPos *)p).off;
+    return (dir == UITextLayoutDirectionLeft || dir == UITextLayoutDirectionUp) ? make_range(0, o) : make_range(o, [self docLength]);
+}
+
+- (NSWritingDirection)baseWritingDirectionForPosition:(UITextPosition *)p inDirection:(UITextStorageDirection)dir
+{
+    return NSWritingDirectionNatural;
+}
+
+- (void)setBaseWritingDirection:(NSWritingDirection)d forRange:(UITextRange *)r
+{
+}
+
+- (CGRect)imeRect
+{
+    pthread_mutex_lock(&g_mu);
+    CGRect r = CGRectMake(g_ime_rect[0], g_ime_rect[1], g_ime_rect[2] > 0 ? g_ime_rect[2] : 1, g_ime_rect[3] > 0 ? g_ime_rect[3] : 20);
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+- (CGRect)firstRectForRange:(UITextRange *)r
+{
+    return [self imeRect];
+}
+
+- (CGRect)caretRectForPosition:(UITextPosition *)p
+{
+    return [self imeRect];
+}
+
+- (NSArray<UITextSelectionRect *> *)selectionRectsForRange:(UITextRange *)r
+{
+    return @[];
+}
+
+- (UITextPosition *)closestPositionToPoint:(CGPoint)pt
+{
+    return make_pos([self docLength]);
+}
+
+- (UITextPosition *)closestPositionToPoint:(CGPoint)pt withinRange:(UITextRange *)r
+{
+    return ((SalamRange *)r).to;
+}
+
+- (UITextRange *)characterRangeAtPoint:(CGPoint)pt
+{
+    return nil;
 }
 
 static int hid_to_key(UIKeyboardHIDUsage u)
@@ -177,6 +443,12 @@ static int hid_to_key(UIKeyboardHIDUsage u)
 
 - (void)deleteBackward
 {
+    if (self.marked.length > 0) {
+        NSRange last = [self.marked rangeOfComposedCharacterSequenceAtIndex:self.marked.length - 1];
+        NSString *rest = [self.marked substringToIndex:last.location];
+        [self setMarkedText:rest selectedRange:NSMakeRange(rest.length, 0)];
+        return;
+    }
     salam_host_post(SALAM_EV_KEY, 1, 67, 0, 0, 0, NULL);
     salam_host_post(SALAM_EV_KEY, 0, 67, 0, 0, 0, NULL);
 }
@@ -439,6 +711,16 @@ void salam_host_ime(int flag)
             [g_view resignFirstResponder];
         }
     });
+}
+
+void salam_host_ime_rect(int x, int y, int w, int h)
+{
+    pthread_mutex_lock(&g_mu);
+    g_ime_rect[0] = x;
+    g_ime_rect[1] = y;
+    g_ime_rect[2] = w;
+    g_ime_rect[3] = h;
+    pthread_mutex_unlock(&g_mu);
 }
 
 int salam_host_open_url(const char *url)

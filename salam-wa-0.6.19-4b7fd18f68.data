@@ -149216,6 +149216,19 @@ Granted, @en "Denied"
 @fa "رد شده"
 Denied
 end
+@en "PhotoState"
+@fa "وضعیت عکس"
+pub enum PhotoState:
+@en "Idle"
+@fa "بیکار"
+Idle, @en "Pending"
+@fa "در انتظار"
+Pending, @en "Ready"
+@fa "آماده"
+Ready, @en "Failed"
+@fa "ناموفق"
+Failed
+end
 @en "LocationState"
 @fa "وضعیت مکان"
 pub enum LocationState:
@@ -149379,14 +149392,43 @@ end
 pub func LastLocation(): Location:
 ret _os_location()
 end
+@en "PickPhoto"
+@fa "برگزیدن عکس"
+pub func PickPhoto(): bool:
+ret _os_photo_request(false)
+end
+@en "TakePhoto"
+@fa "گرفتن عکس"
+pub func TakePhoto(): bool:
+ret _os_photo_request(true)
+end
+@en "PhotoStatus"
+@fa "وضعیت عکس گیری"
+pub func PhotoStatus(): PhotoState:
+ret match _os_photo_state():
+1: PhotoState.Pending end
+2: PhotoState.Ready end
+3: PhotoState.Failed end
+else: PhotoState.Idle end
+end
+end
+@en "LastPhoto"
+@fa "آخرین عکس"
+pub func LastPhoto(): str:
+ret _os_photo_path()
+end
 package device
 import mem
+import str
 if SALAM_OS_ANDROID or defined(SALAM_OS_IOS):
 extern:
 func salam_host_share(text: str, url: str): int
 func salam_host_vibrate(ms: int): int
 func salam_host_notify(id: int, title: str, body: str, delay_ms: int): int
 func salam_host_notify_cancel(id: int): int
+func salam_host_photo_request(camera: int): int
+func salam_host_photo_state(): int
+func salam_host_photo_path(): str
 func salam_host_location_request(): int
 func salam_host_location_get(out: f64*): int
 func salam_host_perm_state(name: str): int
@@ -149443,6 +149485,15 @@ func _os_location(): Location:
 _s := _os_location_state()
 ret Location { latitude = _loc_buf[0], longitude = _loc_buf[1], accuracy = _loc_buf[2] }
 end
+func _os_photo_request(camera: bool): bool:
+ret salam_host_photo_request(camera ? 1 : 0) != 0
+end
+func _os_photo_state(): int:
+ret salam_host_photo_state()
+end
+func _os_photo_path(): str:
+ret str.Clone(salam_host_photo_path())
+end
 end
 package device
 if not SALAM_OS_ANDROID and not defined(SALAM_OS_IOS):
@@ -149484,6 +149535,15 @@ ret 0
 end
 func _os_location(): Location:
 ret Location {}
+end
+func _os_photo_request(_camera: bool): bool:
+ret false
+end
+func _os_photo_state(): int:
+ret 0
+end
+func _os_photo_path(): str:
+ret ""
 end
 end
 @en "drag"
@@ -247485,6 +247545,7 @@ end
 @fa "ناوبری"
 package nav
 import str
+import mem
 @en "Route"
 @fa "مسیر"
 pub struct Route:
@@ -247518,6 +247579,23 @@ pub entries: Vector<str> = Vector {}
 @fa "جایگاه"
 pub index: int = 0
 end
+if SALAM_JS:
+func _drop(s: str):
+_n := s.Len()
+end
+else:
+func _drop(s: str):
+if s.Len() > 0:
+mem.Free(s as void*)
+end
+end
+end
+func _drop_all(v: Vector<str>):
+repeat v.Len() in i:
+_drop(v.Get(i))
+end
+v.Free()
+end
 func _route_param(pattern: str, path: str, name: str): str:
 ret Param(pattern, path, name)
 end
@@ -247530,7 +247608,7 @@ end
 func _skip_slashes(s: str, from: int): int:
 mut i := from
 n := s.Len()
-until i < n and str.Equals(_ch(s, i), "/"):
+until i < n and str.IndexFrom(s, "/", i) == i:
 i++
 end
 ret i
@@ -247558,6 +247636,12 @@ i++
 end
 ret out
 end
+func _named(seg: str, name: str): bool:
+pn := _param_name(seg)
+hit := str.Equals(pn, name)
+_drop(pn)
+ret hit
+end
 func _is_splat(seg: str): bool:
 ret str.StartsWith(seg, "*")
 end
@@ -247569,7 +247653,7 @@ ret _is_param(seg) and str.EndsWith(seg, "?")
 end
 func _param_name(seg: str): str:
 if _is_splat(seg):
-ret seg.Len() > 1 ? str.Substr(seg, 1, seg.Len() - 1) : "*"
+ret seg.Len() > 1 ? str.Substr(seg, 1, seg.Len() - 1) : str.Clone("*")
 end
 mut n := seg.Len() - 1
 if _is_optional(seg):
@@ -247628,7 +247712,7 @@ ret j >= xs.Len()
 end
 p := ps.Get(i)
 if _is_splat(p):
-if str.Equals(_param_name(p), name):
+if _named(p, name):
 value = _join_rest(xs, j)
 end
 ret true
@@ -247637,7 +247721,7 @@ if _is_optional(p):
 if j < xs.Len():
 mut v := value
 if _cap(ps, xs, i + 1, j + 1, name, v, dead):
-value = str.Equals(_param_name(p), name) ? xs.Get(j) : v
+value = _named(p, name) ? xs.Get(j) : v
 ret true
 end
 end
@@ -247652,7 +247736,7 @@ mut v := value
 if not _cap(ps, xs, i + 1, j + 1, name, v, dead):
 ret false
 end
-value = str.Equals(_param_name(p), name) ? x : v
+value = _named(p, name) ? x : v
 ret true
 end
 if not str.Equals(p, x):
@@ -247692,7 +247776,15 @@ repeat (ps.Len() + 1) * (xs.Len() + 1):
 dead.Push(0)
 end
 end
-ret _cap(ps, xs, 0, 0, name, value, dead)
+ok := _cap(ps, xs, 0, 0, name, value, dead)
+if value.Len() > 0:
+value = str.Clone(value)
+else:
+value = ""
+end
+_drop_all(ps)
+_drop_all(xs)
+ret ok
 end
 @en "Unescape"
 @fa "بازگشایی"
@@ -247731,25 +247823,37 @@ segs := _segments(path)
 mut keep := Vector {} as Vector<str>
 each s in segs:
 if str.Equals(s, ".."):
-keep = _take(keep, keep.Len() - 1)
+if keep.Len() > 0:
+_gone := keep.Pop()
+end
 else not str.Equals(s, "."):
 keep.Push(s)
 end
 end
-ret "/" + _join_rest(keep, 0)
+joined := _join_rest(keep, 0)
+out := "/" + joined
+_drop(joined)
+keep.Free()
+_drop_all(segs)
+ret out
 end
 @en "SplitUrl"
 @fa "جداسازی نشانی"
 pub func SplitUrl(url: str, path &: str, query &: str):
 mut u := url
 h := str.IndexFrom(u, "#", 0)
+mut cut := false
 if h >= 0:
 u = str.Substr(u, 0, h)
+cut = true
 end
 q := str.IndexFrom(u, "?", 0)
 if q >= 0:
 query = str.Substr(u, q + 1, u.Len() - q - 1)
 path = str.Substr(u, 0, q)
+if cut:
+_drop(u)
+end
 else:
 query = ""
 path = u
@@ -247784,22 +247888,31 @@ end
 @fa "تطبیق"
 pub func Match(pattern: str, path: str): bool:
 mut v := ""
-ret _capture(pattern, path, "", v)
+ok := _capture(pattern, path, "", v)
+_drop(v)
+ret ok
 end
 @en "Param"
 @fa "پارامتر"
 pub func Param(pattern: str, path: str, name: str): str:
 mut v := ""
 if not _capture(pattern, path, name, v):
+_drop(v)
 ret ""
 end
-ret Unescape(v)
+if str.IndexFrom(v, "%", 0) < 0:
+ret v
+end
+out := Unescape(v)
+_drop(v)
+ret out
 end
 @en "ParamInt"
 @fa "پارامتر عددی"
 pub func ParamInt(pattern: str, path: str, name: str): int:
 v := Param(pattern, path, name)
 if not IsInt(v):
+_drop(v)
 ret 0
 end
 neg := str.StartsWith(v, "-")
@@ -247810,6 +247923,7 @@ d := str.IndexFrom("0123456789", _ch(v, i), 0)
 n = n * 10 + (neg ? 0 - d : d)
 i++
 end
+_drop(v)
 ret n
 end
 @en "Query"
@@ -268089,6 +268203,7 @@ mut _pg_num := 0
 mut _pg_nop := 0
 mut _pg_call_keys := Vector {} as Vector<str>
 mut _pg_call_vals := Vector {} as Vector<str>
+mut _pg_temps := Vector {} as Vector<str>
 func _pg_clean_base(
 base: str
 ): str:
@@ -268118,6 +268233,23 @@ _pg_title = ""
 _pg_write = ""
 _pg_title_heap = false
 _pg_write_heap = false
+end
+func _pg_free_temps():
+each t in _pg_temps:
+mem.Free(t as void*)
+end
+_pg_temps.Clear()
+end
+func _pg_free_calls():
+each k in _pg_call_keys:
+mem.Free(k as void*)
+end
+each v in _pg_call_vals:
+mem.Free(v as void*)
+end
+_pg_call_keys.Clear()
+_pg_call_vals.Clear()
+_pg_free_temps()
 end
 func _pg_budget_ms(): int:
 text := env.Get("SALAM_RENDER_TIMEOUT_MS")
@@ -268322,16 +268454,14 @@ _pg_active = true
 _pg_clear_text()
 _pg_skip = false
 _pg_num = 0
-_pg_call_keys.Clear()
-_pg_call_vals.Clear()
+_pg_free_calls()
 end
 @en "PageEnd"
 @fa "پایان صفحه"
 pub func PageEnd():
 _pg_active = false
 _pg_owner = 0 as i64
-_pg_call_keys.Clear()
-_pg_call_vals.Clear()
+_pg_free_calls()
 sync.Unlock(_pg_mu)
 end
 @en "PageUrl"
@@ -268474,6 +268604,29 @@ p = k + 1
 end
 ret 0 - 1
 end
+@en "PageDrop"
+@fa "رها سازی متن"
+pub func PageDrop(s: str):
+if s.Len() > 0:
+mem.Free(s as void*)
+end
+end
+@en "PageKeep"
+@fa "ثبت متن موقت"
+pub func PageKeep(s: str): str:
+if s.Len() > 0 and _pg_active and _pg_owner == _pg_tid():
+_pg_temps.Push(s)
+end
+ret s
+end
+@en "PageCopy"
+@fa "رونویس متن"
+pub func PageCopy(s: str): str:
+if s.Len() == 0:
+ret ""
+end
+ret str.Clone(s)
+end
 @en "PageNum"
 @fa "شماره ناحیه"
 pub func PageNum(): int:
@@ -268551,7 +268704,7 @@ mem.Free(pp as void*)
 mem.Free(cs as void*)
 mem.Free(st as void*)
 mut head := doc
-mut head_owned := false
+mut head_own := ""
 if _pg_title.Len() > 0:
 a := doc.Find("<title>")
 b := doc.Find("</title>")
@@ -268563,8 +268716,8 @@ mut tb := str.NewBuilder()
 str.BufAppend(tb, h1)
 str.BufAppend(tb, ht)
 str.BufAppend(tb, h2)
-head = str.BufStr(tb)
-head_owned = true
+head_own = str.BufStr(tb)
+head = head_own
 str.BufFree(tb)
 mem.Free(ht as void*)
 mem.Free(h1 as void*)
@@ -268591,7 +268744,7 @@ end
 ssr.Respond(c, status, out, "")
 mem.Free(out as void*)
 mem.Free(script as void*)
-if head_owned: mem.Free(head as void*) end
+if head_own.Len() > 0: mem.Free(head_own as void*) end
 end
 @en "PageServe"
 @fa "اجرای سرور صفحه"

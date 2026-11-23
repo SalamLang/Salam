@@ -339,6 +339,13 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_share(const char *text, const char *url)
+{
+    (void)text;
+    (void)url;
+    return 0;
+}
+
 int salam_host_clip_set(const char *text)
 {
     NSString *s = [NSString stringWithUTF8String:text];

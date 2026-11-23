@@ -3,9 +3,13 @@
 #
 # Usage:
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
-#       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
+#       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--icon-bg COLOR] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
 #       [--fonts DIR] [--assets DIR] [--permission NAME]... [--no-apk] [--run]
+#
+# --icon ICON.png (one square PNG, 1024 pixels is best) becomes the adaptive
+# icon (foreground over the --icon-bg colour, default #FFFFFF, plus a
+# monochrome layer for themed icons) and the legacy launcher mipmaps.
 #
 # --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
 # copied to the app files directory at start and found by the font collection.
@@ -24,6 +28,7 @@
 
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+. "$ROOT/mobile/host/common/icons.sh"
 
 : "${SALAM:=salam}"
 APP=
@@ -34,6 +39,7 @@ NAME=
 BUILD=assembleDebug
 APK=1
 ICON=
+ICON_BG="#FFFFFF"
 FONTS=
 ASSETS=
 RUN=0
@@ -67,6 +73,10 @@ while [ $# -gt 0 ]; do
         ;;
     --icon)
         ICON=$2
+        shift 2
+        ;;
+    --icon-bg)
+        ICON_BG=$2
         shift 2
         ;;
     --aab)
@@ -206,13 +216,35 @@ mkdir -p "$OUT/project"
 cp -R "$ROOT/mobile/host/android/project/." "$OUT/project/"
 chmod -R u+w "$OUT/project"
 if [ -n "$ICON" ]; then
-    [ -f "$ICON" ] || {
-        echo "build-android-app: no such icon: $ICON" >&2
-        exit 2
-    }
-    mkdir -p "$OUT/project/app/src/main/res/mipmap-xxxhdpi"
-    cp "$ICON" "$OUT/project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
-    sed -i.bak 's|android:supportsRtl="true"|android:supportsRtl="true" android:icon="@mipmap/ic_launcher"|' \
+    icon_check "$ICON" build-android-app || exit 2
+    RES=$OUT/project/app/src/main/res
+    mkdir -p "$RES/drawable" "$RES/drawable-nodpi" "$RES/mipmap-anydpi-v26" "$RES/values"
+    icon_resize "$ICON" 432 "$RES/drawable-nodpi/ic_launcher_art.png"
+    for pair in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+        mkdir -p "$RES/mipmap-${pair%%:*}"
+        icon_resize "$ICON" "${pair##*:}" "$RES/mipmap-${pair%%:*}/ic_launcher.png"
+    done
+    cat >"$RES/drawable/ic_launcher_foreground.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_art"
+    android:inset="16.667%" />
+XML
+    cat >"$RES/values/ic_launcher_background.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">$ICON_BG</color>
+</resources>
+XML
+    cat >"$RES/mipmap-anydpi-v26/ic_launcher.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+XML
+    sed -i.bak 's|android:supportsRtl="true"|android:supportsRtl="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"|' \
         "$OUT/project/app/src/main/AndroidManifest.xml"
     rm -f "$OUT/project/app/src/main/AndroidManifest.xml.bak"
 fi

@@ -24,7 +24,8 @@ emulator and starts it. Other options:
 | `--abi arm64-v8a,x86_64` | ABIs to build (release builds default to arm64-v8a, armeabi-v7a and x86_64) |
 | `--id ir.example.app` | application id |
 | `--name "My App"` | label under the icon |
-| `--icon icon.png` | launcher icon |
+| `--icon icon.png` | one square PNG (1024 px is best): adaptive icon with a themed (monochrome) layer plus legacy mipmaps |
+| `--icon-bg "#2A6DF4"` | background colour of the adaptive icon (default white) |
 | `--release --keystore my.jks --keystore-pass P --key-alias A` | signed release APK |
 | `--aab` | App Bundle for Google Play |
 
@@ -70,7 +71,9 @@ the system shows in its permission dialog. The build adds
 `device.RequestLocation`, and the camera and photo library descriptions when
 it calls `device.PickPhoto` or `device.TakePhoto`. The default target is the
 simulator; `--device` builds for a phone and the app still has to be signed in
-Xcode. Needs a compiler built from the current tree.
+Xcode. `--icon icon.png` (one square PNG, 1024 px is best) is compiled into an
+AppIcon asset catalog with actool, or written as loose PNG files when actool is missing.
+Needs a compiler built from the current tree.
 
 The device calls (`gui.device`) work the same as on Android: share sheet,
 haptics, permissions, local notifications, one shot location, photo picker and

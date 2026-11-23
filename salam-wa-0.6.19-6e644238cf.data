@@ -187661,19 +187661,7 @@ _fill_round(cv, x0 + tx + 1.0, y + 1.0, math.Max(0.0, tl - 2.0), th - 2.0, r - 1
 end
 end
 func _pp_geo(x &: f64, y &: f64, w &: f64, ih &: f64, n &: int):
-node := _e.popup
-b := _e.boxes[node]
-mut opts := Vector {} as Vector<int>
-_option_nodes(node, opts)
-n = opts.Len()
-opts.Free()
-ih = math.Round(_e.us[node].font * 1.3)
-x = b.x
-y = b.y + b.h
-w = b.w
-if y + ih * (n as f64) > _e.height and b.y - ih * (n as f64) >= 0.0:
-y = b.y - ih * (n as f64)
-end
+_popup_geometry(x, y, w, ih, n)
 end
 func _draw_layout(cv &: paint.Canvas, l: typeset.TextLayout, x: f64, y: f64, col: paint.Color):
 each gr in l.runs:
@@ -187708,8 +187696,10 @@ sel := _select_index(node)
 c := _e.ctl[node]
 u := _e.us[node]
 rtl := _is_rtl(_e.cs[node])
-repeat opts.Len() in i:
-oy := y + ih * (i as f64)
+top := _popup_top()
+repeat math.MinI(n, opts.Len() - top) in r:
+i := top + r
+oy := y + ih * (r as f64)
 hl := c.anchor == i
 lit := hl or (c.anchor < 0 and i == sel)
 if lit:
@@ -189063,21 +189053,99 @@ node := _e.popup
 b := _e.boxes[node]
 mut opts := Vector {} as Vector<int>
 _option_nodes(node, opts)
-n = opts.Len()
+total := opts.Len()
 opts.Free()
-ih = math.Max(20.0, _e.us[node].line + 6.0)
+ih = math.Round(_e.us[node].font * 1.3)
+ih = math.Max(20.0, ih)
 px = b.x
-py = b.y + b.h
 w = b.w
+below := _e.height - _e.inset_b - (b.y + b.h)
+above := b.y - _e.inset_t
+full := ih * (total as f64)
+if full <= below:
+py = b.y + b.h
+n = total
+else full <= above:
+py = b.y - full
+n = total
+else above > below:
+n = math.MaxI(1, (above / ih) as int)
+py = b.y - ih * (n as f64)
+else:
+n = math.MaxI(1, (below / ih) as int)
+py = b.y + b.h
+end
+end
+func _popup_top(): int:
+if _e.popup < 0:
+ret 0
+end
+mut px := 0.0
+mut py := 0.0
+mut w := 0.0
+mut ih := 0.0
+mut n := 0
+_popup_geometry(px, py, w, ih, n)
+ret (_e.popup_off / ih) as int
+end
+func _popup_clamp(total: int):
+mut px := 0.0
+mut py := 0.0
+mut w := 0.0
+mut ih := 0.0
+mut n := 0
+_popup_geometry(px, py, w, ih, n)
+mx := ih * ((total - n) as f64)
+_e.popup_off = math.Max(0.0, math.Min(mx, _e.popup_off))
+end
+func _popup_show_row(i: int):
+mut px := 0.0
+mut py := 0.0
+mut w := 0.0
+mut ih := 0.0
+mut n := 0
+_popup_geometry(px, py, w, ih, n)
+top := (_e.popup_off / ih) as int
+if i < top:
+_e.popup_off = ih * (i as f64)
+else i >= top + n:
+_e.popup_off = ih * ((i - n + 1) as f64)
+end
+end
+func _popup_scroll(dy: f64): bool:
+if _e.popup < 0:
+ret false
+end
+mut opts := Vector {} as Vector<int>
+_option_nodes(_e.popup, opts)
+total := opts.Len()
+opts.Free()
+old := _e.popup_off
+_e.popup_off += dy
+_popup_clamp(total)
+if _e.popup_off != old:
+_damage_popup()
+end
+ret true
 end
 func _damage_popup():
 _e.full = true
+end
+func _option_count(node: int): int:
+mut opts := Vector {} as Vector<int>
+_option_nodes(node, opts)
+n := opts.Len()
+opts.Free()
+ret n
 end
 func _open_popup(node: int):
 _close_popup()
 _e.popup = node
 mut c := _e.ctl.Ref(node)
 c.anchor = _select_index(node)
+_e.popup_off = 0.0
+_popup_show_row(c.anchor)
+_popup_clamp(_option_count(node))
 _damage_popup()
 end
 func _top_dialog(): int:
@@ -189123,7 +189191,7 @@ mut ih := 0.0
 mut n := 0
 _popup_geometry(px, py, w, ih, n)
 if x >= px and x < px + w and y >= py and y < py + ih * (n as f64):
-ret ((y - py) / ih) as int
+ret ((y - py) / ih) as int + (_e.popup_off / ih) as int
 end
 ret -1
 end
@@ -189387,6 +189455,9 @@ if line:
 dx *= 40.0
 dy *= 40.0
 end
+if _e.popup >= 0 and _popup_scroll(dy):
+ret
+end
 t := _hit(_e.mx, _e.my)
 _fire_ev(t, _make_event("wheel", t), true)
 mut n := t
@@ -189490,11 +189561,13 @@ c := _e.ctl[p]
 if k == window.Key.Down:
 mut cc := _e.ctl.Ref(p)
 cc.anchor = math.MinI(n - 1, c.anchor + 1)
+_popup_show_row(cc.anchor)
 _damage_popup()
 ret
 else k == window.Key.Up:
 mut cc := _e.ctl.Ref(p)
 cc.anchor = math.MaxI(0, c.anchor - 1)
+_popup_show_row(cc.anchor)
 _damage_popup()
 ret
 else k == window.Key.Enter or k == window.Key.Space:
@@ -189734,7 +189807,16 @@ end
 else:
 _maybe_change(f)
 _remember_committed(f)
+hint := _attr(_e.dom, f, "enterkeyhint")
+if hint == "next":
+_tab(false)
+else hint == "previous":
+_tab(true)
+else hint == "done":
+_set_focus(-1, false)
+else:
 _submit(_ancestor_k(f, _K_FORM))
+end
 end
 break
 end
@@ -189802,11 +189884,73 @@ c.preedit = str.Clone(text)
 _sfree(old)
 _refresh_control(f)
 end
+func _ime_config(f: int): int:
+t := _input_type(f)
+multi := _e.dom.nodes[f].k == _K_TEXTAREA
+type_kb := match t:
+"email": 1 end
+"url": 2 end
+"tel": 3 end
+"number": 5 end
+"password": 6 end
+"search": 7 end
+else: 0 end
+end
+kb := match _attr(_e.dom, f, "inputmode"):
+"text": 0 end
+"email": 1 end
+"url": 2 end
+"tel": 3 end
+"numeric": 4 end
+"decimal": 5 end
+"search": 7 end
+"none": 8 end
+else: type_kb end
+end
+enter := match _attr(_e.dom, f, "enterkeyhint"):
+"enter": 1 end
+"done": 2 end
+"go": 3 end
+"next": 4 end
+"previous": 5 end
+"search": 6 end
+"send": 7 end
+else: t == "search" ? 6 : 0 end
+end
+quiet := kb >= 1 and kb <= 6
+caps := match _attr(_e.dom, f, "autocapitalize"):
+"off", "none": 1 end
+"on", "sentences": 0 end
+"words": 2 end
+"characters": 3 end
+else: quiet ? 1 : 0 end
+end
+ac := _attr(_e.dom, f, "autocorrect")
+sc := _attr(_e.dom, f, "spellcheck")
+fix := (ac == "off" or sc == "false") ? 1 : ((ac == "on" or sc == "true") ? 2 : (quiet ? 1 : 0))
+content := match _attr(_e.dom, f, "autocomplete"):
+"username": 1 end
+"password", "current-password": 2 end
+"new-password": 3 end
+"one-time-code": 4 end
+"email": 5 end
+"tel": 6 end
+"name": 7 end
+else: t == "password" ? 2 : 0 end
+end
+ret kb | (enter << 4) | (caps << 8) | (fix << 10) | (content << 12) | (multi ? 65536 : 0)
+end
 func _update_ime():
 if not _e.has_win:
 ret
 end
-if _e.focus < 0 or _e.focus >= _e.ctl.Len() or not _is_text_input(_e.focus):
+mut cfg := 0
+mut want := _e.focus >= 0 and _e.focus < _e.ctl.Len() and _is_text_input(_e.focus)
+if want:
+cfg = _ime_config(_e.focus)
+want = (cfg & 15) != 8
+end
+if not want:
 if _e.ime_on:
 _e.ime_on = false
 _e.win.SetImeRect(0.0, 0.0, 0.0, 0.0)
@@ -189814,6 +189958,7 @@ end
 ret
 end
 _e.ime_on = true
+_e.win.SetImeConfig(cfg)
 ri := _ctl_run(_e.focus)
 if ri < 0 or not _e.runs[ri].has_lay:
 ret
@@ -193900,6 +194045,11 @@ _step(0)
 _ok := paint.SavePNG(_e.canvas, arg)
 break
 end
+"imeconfig":
+_step(0)
+println "imeconfig", _e.win.ImeConfig()
+break
+end
 "hash":
 _step(0)
 println "hash", _e.canvas.Hash()
@@ -194080,6 +194230,9 @@ _set_active(-1)
 _touch_reset()
 end
 func _touch_scroll(dx: f64, dy: f64): bool:
+if _e.popup >= 0 and _popup_hit(_tx0, _ty0) >= 0:
+ret _popup_scroll(dy)
+end
 mut n := _hit(_tx0, _ty0)
 until n >= 0:
 if _is_textarea(n) and _scroll_text(n, dx, dy):
@@ -194572,6 +194725,7 @@ pub focus: int = -1
 pub active: int = -1
 pub capture: int = -1
 pub popup: int = -1
+pub popup_off: f64 = 0.0
 pub last_click: int = -1
 pub anims: Vector<_Anim> = Vector {}
 pub view_set: bool = false
@@ -205188,6 +205342,9 @@ if _wins[id].inside:
 _ns_apply_cursor(id)
 end
 end
+func _nat_ime_config(_id: int, _config: int):
+_set_error("")
+end
 func _nat_ime(id: int, _x: int, _y: int, _w: int, _h: int):
 context := _ns0(_ns_wins[id].view, "inputContext")
 if context != null:
@@ -205376,6 +205533,7 @@ func salam_host_wait(ms: int)
 func salam_host_wake()
 func salam_host_ime(flag: int)
 func salam_host_ime_rect(x: int, y: int, w: int, h: int)
+func salam_host_ime_config(config: int)
 func salam_host_clip_get(): str
 func salam_host_clip_set(text: str): int
 func salam_host_ready(): int
@@ -205573,6 +205731,9 @@ func _nat_ime(_id: int, x: int, y: int, w: int, h: int):
 salam_host_ime_rect(x, y, w, h)
 salam_host_ime((w > 0 or h > 0) ? 1 : 0)
 end
+func _nat_ime_config(_id: int, config: int):
+salam_host_ime_config(config)
+end
 func _nat_icon(_id: int, _pixels: void*, _w: int, _h: int, _stride: int): bool:
 ret false
 end
@@ -205643,6 +205804,9 @@ func _nat_cursor(_id: int, _cursor: Cursor):
 _set_error("")
 end
 func _nat_ime(_id: int, _x: int, _y: int, _w: int, _h: int):
+_set_error("")
+end
+func _nat_ime_config(_id: int, _config: int):
 _set_error("")
 end
 func _nat_icon(_id: int, _pixels: void*, _w: int, _h: int, _stride: int): bool:
@@ -205723,6 +205887,9 @@ func _nat_cursor(_id: int, _cursor: Cursor):
 _set_error("")
 end
 func _nat_ime(_id: int, _x: int, _y: int, _w: int, _h: int):
+_set_error("")
+end
+func _nat_ime_config(_id: int, _config: int):
 _set_error("")
 end
 func _nat_icon(_id: int, _pixels: void*, _w: int, _h: int, _stride: int): bool:
@@ -206486,6 +206653,9 @@ if _wins[id].inside:
 _w32_apply_cursor(id)
 end
 end
+func _nat_ime_config(_id: int, _config: int):
+_set_error("")
+end
 func _nat_ime(id: int, x: int, y: int, w: int, h: int):
 hwnd := _ws[id].hwnd
 imc := ImmGetContext(hwnd)
@@ -207160,6 +207330,7 @@ pub ime_x: f64 = 0.0
 pub ime_y: f64 = 0.0
 pub ime_w: f64 = 0.0
 pub ime_h: f64 = 0.0
+pub ime_config: int = 0
 pub last_down: i64 = -100000
 pub last_x: f64 = 0.0
 pub last_y: f64 = 0.0
@@ -207805,6 +207976,11 @@ end
 pub func SetImeRect(x: f64, y: f64, width: f64, height: f64):
 _w_ime(this.id, x, y, width, height)
 end
+@en "SetImeConfig"
+@fa "تنظیم پیکربندی نویسه ساز"
+pub func SetImeConfig(config: int):
+_w_ime_config(this.id, config)
+end
 @en "SetMinSize"
 @fa "تنظیم کمترین اندازه"
 pub func SetMinSize(width: f64, height: f64):
@@ -207931,6 +208107,14 @@ y = w.ime_y as int,
 width = w.ime_w as int,
 height = w.ime_h as int
 }
+end
+@en "ImeConfig"
+@fa "پیکربندی نویسه ساز"
+pub func ImeConfig(): int:
+if not _alive(this.id):
+ret 0
+end
+ret _wins[this.id].ime_config
 end
 @en "Handle"
 @fa "دستگیره"
@@ -208472,6 +208656,17 @@ _wins[id] = w
 if not w.headless:
 s := w.scale
 _nat_ime(id, (x * s) as int, (y * s) as int, _phys(width, s), _phys(height, s))
+end
+end
+func _w_ime_config(id: int, config: int):
+if not _alive(id):
+ret
+end
+mut w := _wins[id]
+w.ime_config = config
+_wins[id] = w
+if not w.headless:
+_nat_ime_config(id, config)
 end
 end
 func _w_icon(id: int, pixels: void*, width: int, height: int, stride: int): bool:
@@ -209844,6 +210039,9 @@ end
 end
 XDefineCursor(_xd, _x_wins[id].win, _x_cursors[slot])
 XFlush(_xd)
+end
+func _nat_ime_config(_id: int, _config: int):
+_set_error("")
 end
 func _nat_ime(id: int, x: int, y: int, _w: int, h: int):
 ic := _x_wins[id].ic
@@ -222965,7 +223163,6 @@ generated_name = "autocomplete"
 elements = [
 "select", "text area", "form", "input", "textarea input"
 ]
-native = "skip"
 }
 @en "selected"
 @fa "انتخاب‌شده"
@@ -223608,7 +223805,6 @@ pub const spellcheck_attr := LayoutAttribute {
 generated_name = "spellcheck"
 value_type = "enum"
 allowed = "true_false"
-native = "skip"
 }
 @en "translatable"
 @fa "ترجمه‌پذیر"
@@ -223624,7 +223820,6 @@ pub const autocapitalize_attr := LayoutAttribute {
 generated_name = "autocapitalize"
 value_type = "enum"
 allowed = "autocapitalize"
-native = "skip"
 }
 @en "nonce"
 @fa "نانس"
@@ -223645,7 +223840,6 @@ pub const autocorrect_attr := LayoutAttribute {
 generated_name = "autocorrect"
 value_type = "enum"
 allowed = "on_off"
-native = "skip"
 }
 @en "writingsuggestions" "writing suggestions"
 @fa "پیشنهاد نوشتن"

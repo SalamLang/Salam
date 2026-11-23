@@ -76,6 +76,7 @@ en)
     w_about="We sell things."
     w_user="User 7"
     w_missing="Nothing at /nope"
+    w_total="Total 21"
     ;;
 fa)
     t_home="خانه"
@@ -84,6 +85,7 @@ fa)
     w_about="ما چیز می‌فروشیم."
     w_user="کاربر 7"
     w_missing="چیزی در /nope نیست"
+    w_total="مجموع 21"
     ;;
 esac
 
@@ -107,6 +109,12 @@ has '"pattern":"/user/:id"' pattern-in-state
 
 echo "== GET /user/abc"
 echo "status $(get /user/abc)"
+
+echo "== GET /total/7"
+echo "status $(get /total/7)"
+has "$w_total" body
+has '"calls":{"Price:' call-in-state
+has ':0":21' call-value
 
 echo "== GET /admin"
 echo "status $(get /admin)"

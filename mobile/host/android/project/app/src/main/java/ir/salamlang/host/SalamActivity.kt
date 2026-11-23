@@ -128,6 +128,11 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         return true
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        Host.permResult()
+    }
+
     override fun onPause() {
         super.onPause()
         Host.nativeLifecycle(0)

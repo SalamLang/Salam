@@ -71,12 +71,15 @@ composition text, and no bundled fonts.
   or empty where a system has no such feature): `device.Share(text, url)`
   opens the share sheet, `device.Haptic(kind)` and `device.Vibrate(ms)` give
   feedback (the build adds the `VIBRATE` permission only when you call
-  `Vibrate`).
+  `Vibrate`). `device.CheckPermission` and `device.RequestPermission` handle
+  runtime permissions; declare them with `--permission camera` (also
+  `microphone`, `location`, `notifications`) when you build, and call
+  `device.OnChange` to react when the dialog closes.
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- Camera, location, notifications and permissions.
+- Camera, location and notifications.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

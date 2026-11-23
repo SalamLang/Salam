@@ -450,6 +450,18 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_perm_state(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+int salam_host_perm_request(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
 int salam_host_vibrate(int ms)
 {
     (void)ms;

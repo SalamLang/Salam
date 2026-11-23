@@ -692,6 +692,44 @@ enum Color:
 end
 ```
 
+## 13. Page projects: routes, rendering and server funcs
+
+With a `main.salam` entry, the `pages/` folder next to it is the route table.
+One file per route with exactly one `pub component` (E282): `index.salam` is the
+folder, `[id].salam` a parameter, `[[id]].salam` an optional one,
+`[...rest].salam` the remaining path, `_404.salam` the fallback, `_layout.salam`
+a component with an `Outlet` wrapping its folder (E283 without one). Settings
+at the top of the body: `title`, `guard`, `route`. There is no `routes:` block
+and no `redirect` setting; use `page.route.GoTo/Redirect/Back/Forward` in code.
+Other file errors: E280 (same route twice), E281, E284. Project convention:
+`components/` holds the `pub` components of the project (every `.salam` file in
+it, recursively, imports its `pub` components without `include`), `pages/`
+holds the routes, and everything else is included explicitly with
+`include = "x.salam"`. With no `components/` folder nothing is imported by
+name, and using a component that lives elsewhere is E111 with a hint to move
+it. A duplicate `pub` name across `components/`, `main.salam` and `pages/` is
+E291 and an English name must be PascalCase (E290).
+
+```
+main.salam
+pages/index.salam
+pages/product/[id].salam
+components/card.salam
+components/shop/badge.salam
+lib/format.salam        used only with include = "lib/format.salam"
+```
+
+`salam page build --ssr[=DIR]` writes a native `DIR/server` and `DIR/public`;
+`PORT` and `HOST` configure it, and `salam serve --render` rebuilds on save.
+
+`server func F(x: T): R:` runs only on the front server and calls the backend
+over HTTP. The browser and native app get a stub, never the body. Types must
+cross as JSON (E285), top level only (E287), one per name (E288); secrets come
+from `env.Get` and `env` in browser code is E286; backend imports (`db`, `fs`,
+`os`, process, router) warn W280 unless `salam.cfg` sets `allow_backend =
+true`; a static build that reaches one is E289 unless the page sets `server =
+"https://..."`. Lesson: `/learn/server-rendering/`.
+
 ## Changing the standard library
 
 If the task adds to `std/`, the change is not done until every public symbol
@@ -707,6 +745,8 @@ CONTRIBUTING.md has the full list.
 These are real defects and sharp edges in the current toolchain, not style
 advice. Each one silently produces wrong behaviour rather than a diagnostic.
 
+- **`size(T)` is the size of a type; `sizeof(T)` is the old name.** It still
+  compiles and warns W295. A function of your own named `size` wins.
 - **Do not rule something out because you have not seen it.** The repository
   ships working apps under `tests/en/apps/` and `tests/fa/apps/` (Cloudflare
   Workers, HTTP servers, desktop, games, and more), all built by CI, and the
@@ -769,7 +809,9 @@ files`; give every source file a name unique across the whole project.
 
 - **`input` and `print` always take a value and never parentheses.** Write
   `input ""` or `input "prompt"`, and `println ""` for an empty line. A bare
-  `input`/`println` and `input()`/`print()` are errors.
+  `input`/`println` and `input()`/`print()` are errors. `input` must be stored
+  first (`name := input "Name: "`, then use `name`); `println input "p"` or
+  `if input "p" == "y":` is error E296.
 
 - **`input` cannot report EOF.** It returns `""` both for an empty line and at
   end-of-stream. Drive `getchar()` yourself if you need to tell them apart.

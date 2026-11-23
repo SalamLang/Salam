@@ -156,8 +156,11 @@ rules: it always takes a prompt and never parentheses. Write `input ""` or
 variable works as the prompt (`input label`). The whole expression after
 `input` is the prompt, so `input label + "x"` prints `label` and then `x`, and
 the line read is not changed; a computed prompt is written the same way
-(`input "> " + label`). To use the answer in an expression, assign it first:
-`line := input "> "`, then `line + "x"`.
+(`input "> " + label`). `input` may only appear as `name := input "p"`,
+`mut name := input "p"` or `name = input "p"`; anywhere else (`println input "p"`,
+`if input "p" == "y":`, an argument, `ret input "p"`) is error E296. Store the
+answer in a variable first, then use it: `line := input "> "`, then
+`line + "x"`.
 
 ```salam
 println ""
@@ -2573,6 +2576,56 @@ variable there, so declare `label := name` in the row's component and read
 that.
 
 A `pub component` with an English name must be PascalCase (`MyCard`: capital first letter, no `_`), else E290; Persian names are exempt.
+
+**Page projects: routes, rendering, server funcs.** When the entry file is
+`main.salam`, the `pages/` folder next to it is the route table, one file per
+route and exactly one `pub component` in each (E282). `index.salam` is the
+folder, `name.salam` a segment, `[id].salam` the parameter `id`, `[[id]].salam`
+an optional one, `[...rest].salam` the rest of the path, `_404.salam` the
+fallback and `_layout.salam` a component with an `Outlet` that wraps its
+folder and below (E283 without one). Settings at the top of the component
+body: `title`, `guard` (a false guard skips the route, a layout's guard covers
+its folder) and `route = "/..."` to replace the path from the file name
+(Persian `عنوان`, `نگهبان`, `مسیر`). There is no `routes:` block and no
+`redirect` setting. Navigate with `Link: to = "/p"` and in code with
+`page.route.GoTo(path)`, `Redirect`, `Back`, `Forward`; read `page.route.path`,
+`page.route.Param("id")`, `page.route.Query("q")` (Persian `صفحه.مسیر.برو`,
+`هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`). File errors:
+E280 same route twice, E281 `[id]` without that parameter, E284 bad file name.
+Page project layout: `components/` holds the `pub` components (every `.salam`
+file in it, recursively, imports its `pub components` by name, no `include`),
+`pages/` holds the routes, and everything else is included explicitly with
+`include = "path.salam"`. Without a `components/` folder nothing is imported by
+name. A `pub component` name used outside that rule is the unknown element
+error E111 with a hint to move it to `components/`. Two `pub` components with
+one name across `components/`, `main.salam` and `pages/` are E291.
+
+```
+main.salam
+pages/index.salam         pub component Home
+pages/product/[id].salam  pub component Product(id: int)
+components/card.salam     pub component Card(title)
+components/shop/badge.salam
+lib/format.salam          include = "lib/format.salam" to use it
+```
+
+`salam page build --ssr[=DIR]` writes `DIR/server` (a native program) and
+`DIR/public`; run it with `PORT` and `HOST` (default 8080 and 127.0.0.1).
+`salam serve --render` builds, runs and rebuilds on save. The server answers
+every route with finished HTML and your `_404`, embeds `<script
+type="application/json" id="__salam">` and the browser hydrates the regions
+in place. `mode = hash` and a user `main` are refused with `--ssr`.
+
+`server func Name(args): T:` (Persian `سرور تابع`, after `pub`) is a function
+that runs only on the front server and calls the backend over HTTP; its body
+never reaches the browser or a native app, which get a stub that posts to
+`/_salam/fn/Name`. Parameters and result must be JSON types (E285: no
+pointers, references or closures), top level only (E287), one per name (E288).
+Read secrets with `env.Get` inside it; using `env` from browser code is E286.
+A body that imports `db`, `fs`, `os`, process or router warns W280 unless
+`salam.cfg` has `allow_backend = true`. A static build that can reach one is
+E289 unless the page sets `server = "https://front.example.com"` (Persian
+`سرور`). `ssr.Request()` gives the current request; keep the function thin.
 
 **Components talking to each other.** A parent passes a function as a
 parameter and the child calls it from a handler:

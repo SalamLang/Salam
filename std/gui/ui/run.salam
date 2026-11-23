@@ -47,7 +47,12 @@ end
 
 func _open_window(o: Options): bool:
     wo := window.Options {
-        title = o.title, width = o.width, height = o.height, resizable = o.resizable, headless = o.headless, scale = o.scale
+        title = o.title,
+        width = o.width,
+        height = o.height,
+        resizable = o.resizable,
+        headless = o.headless,
+        scale = o.scale
     }
     _e.win = window.Open(wo)
     _e.has_win = _e.win.IsOpen()
@@ -152,6 +157,7 @@ end
 
 func _frame_update():
     reactive.SetTime(_e.has_win ? window.Clock() : _now())
+    _touch_tick()
     if _e.states_dirty:
         _apply_states()
     end
@@ -229,9 +235,16 @@ func _paint_frame(): bool:
             mut dmg := Vector {} as Vector<window.Rect>
             repeat _e.damage.Count() in i:
                 r := _e.damage.At(i)
-                dmg.Push(window.Rect { x = r.x, y = r.y, width = r.width, height = r.height })
+                dmg.Push(window.Rect {
+                    x = r.x,
+                    y = r.y,
+                    width = r.width,
+                    height = r.height
+                })
             end
-            _e.win.Present(_e.canvas.pixels, _e.canvas.width, _e.canvas.height, _e.canvas.stride, dmg)
+            _e.win.Present(
+                _e.canvas.pixels, _e.canvas.width, _e.canvas.height, _e.canvas.stride, dmg
+            )
             dmg.Free()
         end
     end
@@ -252,7 +265,63 @@ func _button_of(b: window.MouseButton): int:
     ret 0
 end
 
+func _insets_changed(ev: window.Event):
+    kb := math.Max(0.0, ev.keyboard)
+    _e.inset_t = ev.inset_top
+    _e.inset_r = ev.inset_right
+    _e.inset_l = ev.inset_left
+    _e.inset_b = math.Max(ev.inset_bottom, kb)
+    _e.dirty_dom = true
+    _e.full = true
+end
+
 func _handle(ev: window.Event):
+    if ev.pointer_kind == window.PointerKind.Touch and not _e.touch:
+        _e.touch = true
+        _env_push()
+    end
+    switch ev.kind:
+        window.EventKind.Pause:
+            _pause_hook()
+            ret
+        end
+        window.EventKind.Resume:
+            _resume_hook()
+            _e.full = true
+            ret
+        end
+        window.EventKind.LowMemory:
+            _memory_hook()
+            ret
+        end
+        window.EventKind.BackRequested:
+            if _e.popup >= 0:
+                _close_popup()
+            else not _history(0 - 1):
+                if not _close_set or _close_hook():
+                    _e.quit = true
+                end
+            end
+            ret
+        end
+        window.EventKind.SaveState:
+            window.SetSavedState(_save_hook())
+            ret
+        end
+        else:
+            break
+        end
+    end
+    if ev.kind == window.EventKind.InsetsChanged:
+        _insets_changed(ev)
+        ret
+    end
+    if ev.pointer_kind == window.PointerKind.Touch and
+        (ev.kind == window.EventKind.PointerDown or ev.kind == window.EventKind.PointerMove or
+            ev.kind == window.EventKind.PointerUp):
+        _touch_event(ev)
+        ret
+    end
     switch ev.kind:
         window.EventKind.CloseRequested:
             if not _close_set or _close_hook():

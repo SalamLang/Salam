@@ -20,6 +20,7 @@ include pth "../sal_path.salam"
 include co "../sal_core.salam"
 include lg "../logger.salam"
 include i18 "../i18n.salam"
+include src "../source.salam"
 include at "../ast.salam"
 include sm "../semantic/semantic.salam"
 
@@ -30,6 +31,7 @@ mut g_lo_proj_seen := Vector {} as Vector<str>
 func lo_proj_enter(base_dir: str):
     g_lo_project = str.Equals(pth.PathBase(g_lo_root_file), "main.salam")
     g_lo_proj_dir = base_dir
+    sm.LayoutSetOutsideComponents(Vector {} as Vector<str>)
 end
 
 func lo_proj_leave():
@@ -41,11 +43,23 @@ func lo_proj_skip_dir(name: str): bool:
     if str.StartsWith(name, "."):
         ret true
     end
-    ret str.Equals(name, "node_modules") or str.Equals(name, "build") or str.Equals(name, "dist") or str.Equals(name, "out") or str.Equals(name, "target") or str.Equals(name, "vendor") or str.Equals(name, "tests") or str.Equals(name, "test") or str.Equals(name, "__tests__")
+    ret str.Equals(
+        name, "node_modules"
+    ) or str.Equals(
+        name, "build"
+    ) or str.Equals(name, "dist") or str.Equals(name, "out") or str.Equals(
+        name, "target"
+    ) or str.Equals(
+        name, "vendor"
+    ) or str.Equals(name, "tests") or str.Equals(name, "test") or str.Equals(
+        name, "__tests__"
+    )
 end
 
 func lo_proj_skip_file(name: str): bool:
-    ret str.StartsWith(name, ".") or str.EndsWith(name, "_test.salam") or str.EndsWith(name, ".test.salam")
+    ret str.StartsWith(name, ".") or str.EndsWith(
+        name, "_test.salam"
+    ) or str.EndsWith(name, ".test.salam")
 end
 
 func lo_proj_seen(path: str): bool:
@@ -77,7 +91,7 @@ func lo_proj_list(dir: str, rel: str, depth: int, out &: Vector<str>):
             if lo_proj_skip_dir(name):
                 continue
             end
-            if rel.Len() == 0 and str.Equals(name, "pages"):
+            if rel.Len() == 0 and (str.Equals(name, "pages") or str.Equals(name, "components")):
                 continue
             end
             if os.Exists(pth.PathJoin(full, "main.salam")):
@@ -115,7 +129,9 @@ func lo_proj_rel(path: str): str:
     ret p
 end
 
-func lo_proj_duplicate(ex &: LoExpand, a &: at.Ast, prev: int, name: str, line: int, col: int, file: str):
+func lo_proj_duplicate(
+    ex &: LoExpand, a &: at.Ast, prev: int, name: str, line: int, col: int, file: str
+):
     pd := at.Get(a, ex.comp_def.Get(prev))
     mut args := Vector {} as Vector<co.FmtArg>
     defer args.Free()
@@ -125,9 +141,16 @@ func lo_proj_duplicate(ex &: LoExpand, a &: at.Ast, prev: int, name: str, line: 
     args.Push(co.ArgStr(lo_proj_rel(file)))
     args.Push(co.ArgInt(line as i64))
     lg.LogAtHelp(
-        ex.log, lg.PH_DRIVER, lg.LOG_ERROR, file, line, col,
+        ex.log,
+        lg.PH_DRIVER,
+        lg.LOG_ERROR,
+        file,
+        line,
+        col,
         i18.Tr("rename one of them, or remove 'pub' from the one that only its own file uses"),
-        co.Format(i18.Tr("E291: two pub components are named '%s': '%s' line %d and '%s' line %d"), args)
+        co.Format(
+            i18.Tr("E291: two pub components are named '%s': '%s' line %d and '%s' line %d"), args
+        )
     )
     ex.errors++
 end
@@ -141,38 +164,104 @@ func lo_proj_pub_clash(ex &: LoExpand, name: str): int:
     ret 0 - 1
 end
 
+func lo_proj_has_component(a &: at.Ast, prog: int): bool:
+    repeat at.ChildCount(a, prog) in j:
+        if at.KindOf(a, at.Child(a, prog, j)) == at.AST_LAYOUT_COMPONENT:
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_proj_pub_name(line: str): str:
+    mut i := 0
+    until i < line.Len() and (byte_at(line, i) == 32 or byte_at(line, i) == 9):
+        i++
+    end
+    rest := str.Substr(line, i, line.Len() - i)
+    mut head := ""
+    if str.StartsWith(rest, "pub component "):
+        head = "pub component "
+    else str.StartsWith(rest, "همگانی بخش "):
+        head = "همگانی بخش "
+    end
+    if head.Len() == 0:
+        ret ""
+    end
+    mut j := head.Len()
+    until j < rest.Len():
+        c := byte_at(rest, j)
+        if c == 40 or c == 58 or c == 32 or c == 9 or c == 13:
+            break
+        end
+        j++
+    end
+    ret str.Substr(rest, head.Len(), j - head.Len())
+end
+
+func lo_proj_scan_names(path: str, out &: Vector<str>):
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        ret
+    end
+    lines := str.Split(sf.text, "\n")
+    each ln in lines:
+        nm := lo_proj_pub_name(ln)
+        if nm.Len() > 0:
+            out.Push(nm)
+        end
+    end
+    src.Free(sf)
+end
+
 func lo_proj_import(ex &: LoExpand, a &: at.Ast, base_dir: str):
     mut dir := base_dir
     if dir.Len() == 0:
         dir = "."
     end
-    mut files := Vector {} as Vector<str>
-    defer files.Free()
     g_lo_proj_seen.Clear()
     _root := lo_proj_seen(dir)
     _entry := lo_proj_seen(pth.PathJoin(dir, "main.salam"))
     _pages := lo_proj_seen(pth.PathJoin(dir, "pages"))
-    lo_proj_list(dir, "", 0, files)
-    lo_pg_sort(files)
+    cdir := pth.PathJoin(dir, "components")
+    _comps := lo_proj_seen(cdir)
     mut known := Vector {} as Vector<str>
     defer known.Free()
-    each rel in files:
-        path := sm.ResolveImport(base_dir, rel)
-        if find_loaded(ex, path) >= 0:
-            continue
-        end
-        l := load_include(ex, a, path)
-        if l < 0:
-            continue
-        end
-        prog := ex.loaded_prog.Get(l)
-        collect(ex, a, prog, ex.loaded_dir.Get(l), path, 1)
-        repeat at.ChildCount(a, prog) in j:
-            kc := at.Get(a, at.Child(a, prog, j))
-            if kc.kind == at.AST_LAYOUT_COMPONENT and kc.is_pub:
-                known.Push(kc.name)
+    if os.IsDir(cdir):
+        mut files := Vector {} as Vector<str>
+        defer files.Free()
+        lo_proj_list(cdir, "components/", 0, files)
+        lo_pg_sort(files)
+        each rel in files:
+            path := sm.ResolveImport(base_dir, rel)
+            if find_loaded(ex, path) >= 0:
+                continue
+            end
+            l := load_include(ex, a, path)
+            if l < 0:
+                continue
+            end
+            prog := ex.loaded_prog.Get(l)
+            if not lo_proj_has_component(a, prog):
+                continue
+            end
+            collect(ex, a, prog, ex.loaded_dir.Get(l), path, 1)
+            repeat at.ChildCount(a, prog) in j:
+                kc := at.Get(a, at.Child(a, prog, j))
+                if kc.kind == at.AST_LAYOUT_COMPONENT and kc.is_pub:
+                    known.Push(kc.name)
+                end
             end
         end
     end
     sm.LayoutAddKnownComponents(known)
+    mut outside := Vector {} as Vector<str>
+    defer outside.Free()
+    mut ofiles := Vector {} as Vector<str>
+    defer ofiles.Free()
+    lo_proj_list(dir, "", 0, ofiles)
+    each rel in ofiles:
+        lo_proj_scan_names(sm.ResolveImport(base_dir, rel), outside)
+    end
+    sm.LayoutSetOutsideComponents(outside)
 end

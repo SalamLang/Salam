@@ -23,6 +23,8 @@ shop/
     pages/
       index.salam
       product/[id].salam
+    components/           pub components shared by the pages
+      card.salam
     api.salam             server funcs: calls to the backend
   api/                    any language, own repository if you like
 ```
@@ -115,8 +117,8 @@ response  {"ok": true,  "value": {...}}
 
 1. Match the path with `nav.Match` against the route table (`ROUTING.md`).
    Unknown path: `_404` with status 404.
-2. Run the layout and route guards on the server. A failed guard answers
-   `302` to its `redirect`.
+2. Run the layout and route guards on the server. A route whose guard fails
+   is skipped like an unknown path.
 3. Render the layout chain and the page component to HTML with the same
    lowering the runtime layout (`page Name(params)`, `http.Html`) already uses.
    A `server func` call or a `load(...)` ready inside the render is awaited
@@ -128,6 +130,18 @@ response  {"ok": true,  "value": {...}}
    (`<script type="application/json" id="__salam">`: variable values and the
    call cache; every `<` is written as `\u003c` and `\u2028`, `\u2029` are escaped,
    so no value can close the tag) and the bundle script.
+
+Render budget: after a render that called server funcs, the page answers 504
+if the whole render took longer than `SALAM_RENDER_TIMEOUT_MS` milliseconds
+(default 3000, `0` turns it off). The check runs when the render ends: a call
+in progress is not interrupted, so a hung backend still holds its thread until
+its own outbound timeout (10 seconds in `ssr.OutboundOptions`).
+
+Memory: the std side of a request (`net/ssr`, `net/internal/ssrpage`, the token
+and hex helpers in `crypto`) frees what it allocates. The generated view code
+still keeps some strings per rendered region, about 2.5 KB for the test site's
+pages; `tools/bash/test-ssr-rss.sh` measures the growth over 2000 requests and is
+not part of the default runner.
 
 Streaming and incremental regeneration are out of the first version.
 
@@ -220,6 +234,16 @@ rows with per row state on the server (they are filled by the bundle).
 | `salam page build --ssr[=DIR] [project]` | `DIR/server` (a native executable made from the page AST lowered for the server: router, guards, renderers) and `DIR/public` (bundle, CSS, assets, prerendered pages for routes with no parameters and no guard); `DIR` defaults to `dist` |
 | `salam serve --render [project] [--port=N] [--host=H]` | builds into a scratch directory, runs the server, rebuilds on save and swaps the server; the browser is not reloaded yet |
 
+Writing the output folder. `--ssr=DIR` builds into `DIR.tmp` and swaps it in
+whole with two renames, so a running server never reads half written files
+(there is a short moment when `DIR` does not exist). A lock folder `DIR.lock`
+holds the pid of the build; a second build on the same `DIR` stops at once with
+a message naming that process, and a lock whose process is gone is taken over.
+
+Modifier order: `server` is always the last modifier, `pub server func`. Other
+orders, such as `server pub func`, are rejected with a message that says so, as
+for every other modifier; they are not accepted silently.
+
 `public/` of the project is copied into `DIR/public` first. The shell page (the
 web build with empty `<!--salam:N--><!--/salam:N-->` regions) is written to the
 hidden file `DIR/public/.shell.html`; the server fills the regions per request
@@ -301,6 +325,17 @@ the language yet; when it is, it wraps the same stub.
   (name based reachability from every non server definition). Native programs
   lose them through unreachable function removal, because the stub no longer
   mentions them.
+- Limits of the pruning: methods in `impl` blocks and struct methods are never
+  dropped, even when only a server func uses them, and what they call stays
+  too. They are also scanned for E286, so a method that uses `env` is an error
+  whenever its type is declared in the page program. Move such code into a
+  package the page does not import.
+- Limit of the web stub: `ssrweb.Call` is a synchronous `XMLHttpRequest`. A
+  call blocks the page until the answer arrives (browsers warn about it), and
+  a slow backend freezes the UI. There is no async path yet, because `load(...)`
+  (R9) is not in the language; when it is, it will wrap the same stub with a
+  non blocking request. Keep server funcs fast, and avoid calling one per
+  keystroke or per frame.
 - E286: a definition that stays in the web program and uses a member of `env`
   or `ssr` (`env.Get`, `ssr.Request`) is an error naming that member.
 - E289: a static web build (`salam page build` without a `server` setting)

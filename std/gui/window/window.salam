@@ -47,6 +47,14 @@ mut _wake_cell := null as i64*
 mut _last_text := ""
 mut _last_owned := false
 mut _scheme_dark := false
+mut _inset_top := 0.0
+mut _inset_right := 0.0
+mut _inset_bottom := 0.0
+mut _inset_left := 0.0
+mut _kbd_height := 0.0
+mut _touch_seen := false
+mut _saved_state := ""
+mut _saved_owned := false
 mut _clip := ""
 mut _clip_owned := false
 mut _native_ready := false
@@ -105,6 +113,23 @@ struct _Timer:
     pub every: i64 = 0
     pub again: bool = false
     pub live: bool = false
+end
+
+@en "Insets"
+@fa "حاشیه‌ها"
+pub struct Insets:
+    @en "top"
+    @fa "بالا"
+    pub top: f64 = 0.0
+    @en "right"
+    @fa "راست"
+    pub right: f64 = 0.0
+    @en "bottom"
+    @fa "پایین"
+    pub bottom: f64 = 0.0
+    @en "left"
+    @fa "چپ"
+    pub left: f64 = 0.0
 end
 
 @en "Rect"
@@ -186,7 +211,31 @@ pub enum EventKind:
     @fa "زنگ زمان سنج"
     Timer, @en "Wake"
     @fa "بیدارباش"
-    Wake
+    Wake, @en "InsetsChanged"
+    @fa "تغییر حاشیه امن"
+    InsetsChanged, @en "Pause"
+    @fa "توقف برنامه"
+    Pause, @en "Resume"
+    @fa "ادامه برنامه"
+    Resume, @en "SaveState"
+    @fa "ذخیره وضعیت"
+    SaveState, @en "LowMemory"
+    @fa "کمبود حافظه"
+    LowMemory, @en "BackRequested"
+    @fa "درخواست بازگشت"
+    BackRequested
+end
+
+@en "PointerKind"
+@fa "نوع‌اشاره‌گر"
+pub enum PointerKind:
+    @en "Mouse"
+    @fa "موش"
+    Mouse, @en "Touch"
+    @fa "لمس"
+    Touch, @en "Pen"
+    @fa "قلم"
+    Pen
 end
 
 @en "MouseButton"
@@ -557,6 +606,27 @@ pub struct Event:
     @en "scale"
     @fa "مقیاس"
     pub scale: f64 = 0.0
+    @en "pointer"
+    @fa "شناسه اشاره گر"
+    pub pointer: int = 0
+    @en "pointer_kind"
+    @fa "نوع اشاره گر"
+    pub pointer_kind: PointerKind = PointerKind.Mouse
+    @en "inset_top"
+    @fa "حاشیه امن بالا"
+    pub inset_top: f64 = 0.0
+    @en "inset_right"
+    @fa "حاشیه امن راست"
+    pub inset_right: f64 = 0.0
+    @en "inset_bottom"
+    @fa "حاشیه امن پایین"
+    pub inset_bottom: f64 = 0.0
+    @en "inset_left"
+    @fa "حاشیه امن چپ"
+    pub inset_left: f64 = 0.0
+    @en "keyboard"
+    @fa "بلندی صفحه کلید"
+    pub keyboard: f64 = 0.0
     @en "button"
     @fa "دکمه"
     pub button: MouseButton = MouseButton.None
@@ -798,7 +868,12 @@ pub struct Window:
             ret Rect {}
         end
         w := _wins[this.id]
-        ret Rect { x = w.dmg_x, y = w.dmg_y, width = w.dmg_w, height = w.dmg_h }
+        ret Rect {
+            x = w.dmg_x,
+            y = w.dmg_y,
+            width = w.dmg_w,
+            height = w.dmg_h
+        }
     end
 
     @en "LastDamageCount"
@@ -826,7 +901,12 @@ pub struct Window:
             ret Rect {}
         end
         w := _wins[this.id]
-        ret Rect { x = w.ime_x as int, y = w.ime_y as int, width = w.ime_w as int, height = w.ime_h as int }
+        ret Rect {
+            x = w.ime_x as int,
+            y = w.ime_y as int,
+            width = w.ime_w as int,
+            height = w.ime_h as int
+        }
     end
 
     @en "Handle"
@@ -857,7 +937,12 @@ func _setup():
     if _forced == 0:
         mode := os.Env("SALAM_WINDOW_BACKEND")
         low := str.Lower(mode)
-        if str.Equals(low, "headless") or str.Equals(low, "none") or str.Equals(low, "off") or str.Equals(low, "0") or str.Equals(low, "false"):
+        if str.Equals(
+            low, "headless"
+        ) or str.Equals(low, "none") or str.Equals(low, "off") or str.Equals(low, "0") or
+            str.Equals(
+                low, "false"
+            ):
             _forced = 2
             _requested_backend = "headless"
         else str.Equals(low, "native") or str.Equals(low, "auto") or str.Len(low) == 0:
@@ -992,7 +1077,8 @@ func _click_count(id: int, e &: Event):
             now := _now()
             dx := e.x - w.last_x
             dy := e.y - w.last_y
-            near := dx <= _CLICK_SLOP and dx >= 0.0 - _CLICK_SLOP and dy <= _CLICK_SLOP and dy >= 0.0 - _CLICK_SLOP
+            near := dx <= _CLICK_SLOP and dx >= 0.0 - _CLICK_SLOP and dy <= _CLICK_SLOP and
+                dy >= 0.0 - _CLICK_SLOP
             if e.button == w.last_button and now - w.last_down <= (_CLICK_MS as i64) and near:
                 e.clicks = w.clicks + 1
             else:
@@ -1015,6 +1101,17 @@ func _apply(e &: Event):
     if e.kind == EventKind.ColorSchemeChanged:
         _scheme_dark = e.scheme == ColorScheme.Dark
         ret
+    end
+    if e.kind == EventKind.InsetsChanged:
+        _inset_top = e.inset_top
+        _inset_right = e.inset_right
+        _inset_bottom = e.inset_bottom
+        _inset_left = e.inset_left
+        _kbd_height = e.keyboard
+        ret
+    end
+    if e.pointer_kind == PointerKind.Touch:
+        _touch_seen = true
     end
     if id < 0 or id >= _wins.Len():
         ret
@@ -1237,7 +1334,12 @@ func _w_size(id: int, width: f64, height: f64):
     ph := _phys(lh, w.scale)
     if w.headless:
         if pw != w.pw or ph != w.ph:
-            _push(Event { kind = EventKind.Resized, window = id, physical_width = pw, physical_height = ph })
+            _push(Event {
+                kind = EventKind.Resized,
+                window = id,
+                physical_width = pw,
+                physical_height = ph
+            })
         end
         ret
     end
@@ -1249,7 +1351,12 @@ func _w_get_size(id: int): WindowSize:
         ret WindowSize {}
     end
     w := _wins[id]
-    ret WindowSize { width = w.lw, height = w.lh, physical_width = w.pw, physical_height = w.ph }
+    ret WindowSize {
+        width = w.lw,
+        height = w.lh,
+        physical_width = w.pw,
+        physical_height = w.ph
+    }
 end
 
 func _w_limits(id: int, width: f64, height: f64, minimum: bool):
@@ -1400,7 +1507,12 @@ func _clip_rect(r: Rect, width: int, height: int): Rect:
     if x1 <= x0 or y1 <= y0:
         ret Rect {}
     end
-    ret Rect { x = x0, y = y0, width = x1 - x0, height = y1 - y0 }
+    ret Rect {
+        x = x0,
+        y = y0,
+        width = x1 - x0,
+        height = y1 - y0
+    }
 end
 
 func _w_present(id: int, pixels: void*, width: int, height: int, stride: int, damage: Vector<Rect>): bool:
@@ -1433,7 +1545,12 @@ func _w_present(id: int, pixels: void*, width: int, height: int, stride: int, da
     mut rects := Vector {} as Vector<Rect>
     defer rects.Free()
     if full or damage.Len() == 0:
-        rects.Push(Rect { x = 0, y = 0, width = width, height = height })
+        rects.Push(Rect {
+            x = 0,
+            y = 0,
+            width = width,
+            height = height
+        })
     else:
         each d in damage:
             c := _clip_rect(d, width, height)
@@ -1535,9 +1652,17 @@ pub func Open(options: Options): Window:
         scale = 1.0
     end
     mut w := _Win {
-        open = true, headless = headless, scale = scale, min_w = options.min_width, min_h = options.min_height,
-        max_w = options.max_width, max_h = options.max_height, resizable = options.resizable,
-        redraw = true, title = str.Clone(options.title), hidden = not options.visible
+        open = true,
+        headless = headless,
+        scale = scale,
+        min_w = options.min_width,
+        min_h = options.min_height,
+        max_w = options.max_width,
+        max_h = options.max_height,
+        resizable = options.resizable,
+        redraw = true,
+        title = str.Clone(options.title),
+        hidden = not options.visible
     }
     w.lw = options.width
     w.lh = options.height
@@ -1658,8 +1783,13 @@ pub func Wait(timeout_ms: int): Event:
         if r >= 0:
             w := _wins[r]
             ret Event {
-                kind = EventKind.RedrawRequested, window = r, width = w.lw, height = w.lh,
-                physical_width = w.pw, physical_height = w.ph, scale = w.scale
+                kind = EventKind.RedrawRequested,
+                window = r,
+                width = w.lw,
+                height = w.lh,
+                physical_width = w.pw,
+                physical_height = w.ph,
+                scale = w.scale
             }
         end
         now := _now()
@@ -1711,7 +1841,13 @@ pub func SetTimer(ms: int, repeating: bool): int:
     every := ms < 1 ? 1 as i64 : ms as i64
     id := _timer_next
     _timer_next++
-    _timers.Push(_Timer { id = id, due = _now() + every, every = every, again = repeating, live = true })
+    _timers.Push(_Timer {
+        id = id,
+        due = _now() + every,
+        every = every,
+        again = repeating,
+        live = true
+    })
     ret id
 end
 
@@ -1737,6 +1873,45 @@ pub func Wake():
     if _native_ready:
         _nat_wake()
     end
+end
+
+@en "SafeArea"
+@fa "حاشیه امن"
+pub func SafeArea(): Insets:
+    ret Insets {
+        top = _inset_top,
+        right = _inset_right,
+        bottom = _inset_bottom,
+        left = _inset_left
+    }
+end
+
+@en "KeyboardHeight"
+@fa "بلندی صفحه کلید"
+pub func KeyboardHeight(): f64:
+    ret _kbd_height
+end
+
+@en "TouchSeen"
+@fa "لمس دیده شد"
+pub func TouchSeen(): bool:
+    ret _touch_seen
+end
+
+@en "SavedState"
+@fa "وضعیت ذخیره شده"
+pub func SavedState(): str:
+    ret str.Clone(_saved_state)
+end
+
+@en "SetSavedState"
+@fa "تنظیم وضعیت ذخیره شده"
+pub func SetSavedState(text: str):
+    if _saved_owned:
+        mem.Free(_saved_state as void*)
+    end
+    _saved_state = str.Clone(text)
+    _saved_owned = true
 end
 
 @en "SetManualClock"

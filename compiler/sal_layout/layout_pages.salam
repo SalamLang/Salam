@@ -33,11 +33,12 @@ include sm "../semantic/semantic.salam"
 mut g_lo_pg_lay_dir := Vector {} as Vector<str>
 mut g_lo_pg_lay_comp := Vector {} as Vector<str>
 mut g_lo_pg_lay_gi := Vector {} as Vector<int>
-mut g_lo_pg_lay_ri := Vector {} as Vector<int>
 mut g_lo_pg_seen_shape := Vector {} as Vector<str>
 mut g_lo_pg_seen_file := Vector {} as Vector<str>
 
-func lo_pg_page(a &: at.Ast, prog: int): int:
+func lo_pg_page(
+    a &: at.Ast, prog: int
+): int:
     repeat at.ChildCount(a, prog) in i:
         did := at.Child(a, prog, i)
         d := at.Get(a, did)
@@ -99,7 +100,8 @@ func lo_pg_name_ok(s: str): bool:
     end
     repeat s.Len() in i:
         c := byte_at(s, i)
-        ok := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95
+        ok := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or
+            c == 95
         if not ok:
             ret false
         end
@@ -196,7 +198,12 @@ end
 func lo_pg_load(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, abs: str): int:
     mut sf := src.New()
     if not src.Load(abs, sf):
-        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read included layout '%s'"), co.ArgStr(abs)))
+        lg.Log(
+            log,
+            lg.PH_DRIVER,
+            lg.LOG_ERROR,
+            co.Format1(i18.Tr("cannot read included layout '%s'"), co.ArgStr(abs))
+        )
         ret 0
     end
     mut toks := tok.StreamNew(abs)
@@ -217,8 +224,11 @@ func lo_pg_word(n: str): str:
     if str.Equals(n, "title") or str.Equals(n, "عنوان"):
         ret "title"
     end
-    if str.Equals(n, "guard") or str.Equals(n, "نگهبان"):
+    if str.Equals(n, "page.Guard") or str.Equals(n, "صفحه.نگهبان"):
         ret "guard"
+    end
+    if str.Equals(n, "guard") or str.Equals(n, "نگهبان"):
+        ret "oldguard"
     end
     if str.Equals(n, "redirect") or str.Equals(n, "هدایت"):
         ret "redirect"
@@ -254,7 +264,13 @@ func lo_rt_str_lit(a &: at.Ast, nid: int): str:
 end
 
 func lo_pg_take(
-    log: lg.Logger, a &: at.Ast, cdef: int, layout: bool, r &: LoRoute, gi &: int, ri &: int, over &: str,
+    log: lg.Logger,
+    a &: at.Ast,
+    cdef: int,
+    layout: bool,
+    r &: LoRoute,
+    gi &: int,
+    over &: str,
     exprs &: Vector<int>
 ): int:
     mut errs := 0
@@ -264,21 +280,58 @@ func lo_pg_take(
     end
     mut bn := at.Get(a, body)
     mut keep := Vector {} as Vector<int>
-    each id in bn.list:
+    repeat bn.list.Len() in pos:
+        id := bn.list.Get(pos)
         an := at.Get(a, id)
         w := an.kind == at.AST_LAYOUT_ATTR ? lo_pg_word(an.name) : ""
         if w.Len() == 0:
             keep.Push(id)
             continue
         end
-        if str.Equals(w, "guard"):
+        if str.Equals(w, "guard") and pos > 0:
+            lo_rt_error(
+                log,
+                a,
+                id,
+                i18.Tr(
+                    "move page.Guard(...) above every setting, style and element of the component"
+                ),
+                i18.Tr("E268: 'page.Guard' must be the first line of the component")
+            )
+            errs++
+        else str.Equals(w, "guard"):
             gi = exprs.Len()
             exprs.Push(an.a)
+        else str.Equals(w, "oldguard"):
+            lo_rt_error(
+                log,
+                a,
+                id,
+                i18.Tr("replace 'guard = x' with 'page.Guard(x)' and put it first"),
+                i18.Tr(
+                    "E268: a guard is written page.Guard(condition) on the first line of the component"
+                )
+            )
+            errs++
         else str.Equals(w, "redirect"):
-            ri = exprs.Len()
-            exprs.Push(an.a)
+            lo_rt_error(
+                log,
+                a,
+                id,
+                i18.Tr(
+                    "a route whose guard is false is skipped; to send the visitor elsewhere, call page.route.Redirect(path) in code"
+                ),
+                i18.Tr("E264: routes have no redirect setting")
+            )
+            errs++
         else layout:
-            lo_rt_error(log, a, id, i18.Tr("a layout file takes guard and redirect"), co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(an.name)))
+            lo_rt_error(
+                log,
+                a,
+                id,
+                i18.Tr("a layout file takes page.Guard"),
+                co.Format1(i18.Tr("E264: unknown routes setting '%s'"), co.ArgStr(an.name))
+            )
             errs++
         else str.Equals(w, "title"):
             r.title = exprs.Len()
@@ -286,7 +339,13 @@ func lo_pg_take(
         else:
             ov := an.a != 0 ? lo_rt_str_lit(a, an.a) : ""
             if ov.Len() == 0:
-                lo_rt_error(log, a, id, i18.Tr("write route = \"/users/:id\" with a text value"), i18.Tr("E264: unknown routes setting value"))
+                lo_rt_error(
+                    log,
+                    a,
+                    id,
+                    i18.Tr("write route = \"/users/:id\" with a text value"),
+                    i18.Tr("E264: unknown routes setting value")
+                )
                 errs++
             else:
                 over = ov
@@ -321,7 +380,13 @@ func lo_pg_outlets(a &: at.Ast, nid: int): int:
 end
 
 func lo_pg_layout(
-    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, base_dir: str, rel: str, exprs &: Vector<int>
+    log: lg.Logger,
+    pack: lp.Langpack,
+    ct: cc.Table,
+    a &: at.Ast,
+    base_dir: str,
+    rel: str,
+    exprs &: Vector<int>
 ): int:
     shown := "pages/" + rel
     abs := sm.ResolveImport(base_dir, shown)
@@ -331,7 +396,14 @@ func lo_pg_layout(
         parts := str.Split(str.Substr(dirrel, 0, dirrel.Len() - 1), "/")
         each part in parts:
             if str.Len(lo_pg_seg(part, false)) == 0:
-                lo_pg_error(log, abs, i18.Tr("use letters, digits, '-' and '_', or [id], [[id]] and [...rest]; the route setting gives a Persian URL"), co.Format1(i18.Tr("E284: '%s' is not a valid route file name"), co.ArgStr(shown)))
+                lo_pg_error(
+                    log,
+                    abs,
+                    i18.Tr(
+                        "use letters, digits, '-' and '_', or [id], [[id]] and [...rest]; the route setting gives a Persian URL"
+                    ),
+                    co.Format1(i18.Tr("E284: '%s' is not a valid route file name"), co.ArgStr(shown))
+                )
                 ret 1
             end
         end
@@ -343,17 +415,29 @@ func lo_pg_layout(
     mut cnt := 0
     cdef := lo_pg_pub(a, fprog, cnt)
     if cnt != 1:
-        lo_pg_error(log, abs, i18.Tr("write one 'pub component' in the file; helper components stay private"), co.Format1(i18.Tr("E282: route file '%s' must declare exactly one pub component"), co.ArgStr(shown)))
+        lo_pg_error(
+            log,
+            abs,
+            i18.Tr("write one 'pub component' in the file; helper components stay private"),
+            co.Format1(
+                i18.Tr("E282: route file '%s' must declare exactly one pub component"),
+                co.ArgStr(shown)
+            )
+        )
         ret 1
     end
     mut r := LoRoute {}
     mut gi := 0 - 1
-    mut ri := 0 - 1
     mut over := ""
-    mut errs := lo_pg_take(log, a, cdef, true, r, gi, ri, over, exprs)
+    mut errs := lo_pg_take(log, a, cdef, true, r, gi, over, exprs)
     if lo_pg_outlets(a, at.Get(a, cdef).a) == 0:
         shown_dir := dirrel.Len() > 0 ? "pages/" + str.Substr(dirrel, 0, dirrel.Len() - 1) : "pages"
-        lo_pg_error(log, abs, i18.Tr("add 'Outlet:' where the page of the route should appear"), co.Format1(i18.Tr("E283: '_layout.salam' in '%s' has no Outlet"), co.ArgStr(shown_dir)))
+        lo_pg_error(
+            log,
+            abs,
+            i18.Tr("add 'Outlet:' where the page of the route should appear"),
+            co.Format1(i18.Tr("E283: '_layout.salam' in '%s' has no Outlet"), co.ArgStr(shown_dir))
+        )
         errs++
     end
     g_lo_pg_path.Push(abs)
@@ -361,7 +445,6 @@ func lo_pg_layout(
     g_lo_pg_lay_dir.Push(dirrel)
     g_lo_pg_lay_comp.Push(at.Get(a, cdef).name)
     g_lo_pg_lay_gi.Push(gi)
-    g_lo_pg_lay_ri.Push(ri)
     ret errs
 end
 
@@ -377,10 +460,8 @@ func lo_pg_chain(rel: str, r &: LoRoute):
                 end
                 r.lay += g_lo_pg_lay_comp.Get(li)
                 gi := g_lo_pg_lay_gi.Get(li)
-                ri := g_lo_pg_lay_ri.Get(li)
-                if gi >= 0 or ri >= 0:
+                if gi >= 0:
                     r.gs.Push(gi)
-                    r.rs.Push(ri)
                 end
             end
         end
@@ -392,15 +473,28 @@ func lo_pg_chain(rel: str, r &: LoRoute):
 end
 
 func lo_pg_file(
-    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, base_dir: str, rel: str,
-    routes &: Vector<LoRoute>, exprs &: Vector<int>
+    log: lg.Logger,
+    pack: lp.Langpack,
+    ct: cc.Table,
+    a &: at.Ast,
+    base_dir: str,
+    rel: str,
+    routes &: Vector<LoRoute>,
+    exprs &: Vector<int>
 ): int:
     shown := "pages/" + rel
     abs := sm.ResolveImport(base_dir, shown)
     g_lo_rt_file = abs
     derived := lo_pg_derive(rel)
     if derived.Len() == 0:
-        lo_pg_error(log, abs, i18.Tr("use letters, digits, '-' and '_', or [id], [[id]] and [...rest]; the route setting gives a Persian URL"), co.Format1(i18.Tr("E284: '%s' is not a valid route file name"), co.ArgStr(shown)))
+        lo_pg_error(
+            log,
+            abs,
+            i18.Tr(
+                "use letters, digits, '-' and '_', or [id], [[id]] and [...rest]; the route setting gives a Persian URL"
+            ),
+            co.Format1(i18.Tr("E284: '%s' is not a valid route file name"), co.ArgStr(shown))
+        )
         ret 1
     end
     fprog := lo_pg_load(log, pack, ct, a, abs)
@@ -410,16 +504,23 @@ func lo_pg_file(
     mut cnt := 0
     cdef := lo_pg_pub(a, fprog, cnt)
     if cnt != 1:
-        lo_pg_error(log, abs, i18.Tr("write one 'pub component' in the file; helper components stay private"), co.Format1(i18.Tr("E282: route file '%s' must declare exactly one pub component"), co.ArgStr(shown)))
+        lo_pg_error(
+            log,
+            abs,
+            i18.Tr("write one 'pub component' in the file; helper components stay private"),
+            co.Format1(
+                i18.Tr("E282: route file '%s' must declare exactly one pub component"),
+                co.ArgStr(shown)
+            )
+        )
         ret 1
     end
     g_lo_pg_path.Push(abs)
     g_lo_pg_prog.Push(fprog)
     mut r := LoRoute { comp = at.Get(a, cdef).name, node = cdef, pattern = derived }
     mut gi := 0 - 1
-    mut ri := 0 - 1
     mut over := ""
-    mut errs := lo_pg_take(log, a, cdef, false, r, gi, ri, over, exprs)
+    mut errs := lo_pg_take(log, a, cdef, false, r, gi, over, exprs)
     if over.Len() > 0:
         r.pattern = over
         if lo_rt_pattern_ok(log, a, cdef, over) > 0:
@@ -439,7 +540,21 @@ func lo_pg_file(
                 end
             end
             if not has:
-                lo_pg_error(log, abs, co.Format1(i18.Tr("add the parameter '%s' to the component, or rename the file segment"), co.ArgStr(nmv)), co.Format2(i18.Tr("E281: file '%s' has no parameter '%s' in its component"), co.ArgStr(shown), co.ArgStr(nmv)))
+                lo_pg_error(
+                    log,
+                    abs,
+                    co.Format1(
+                        i18.Tr(
+                            "add the parameter '%s' to the component, or rename the file segment"
+                        ),
+                        co.ArgStr(nmv)
+                    ),
+                    co.Format2(
+                        i18.Tr("E281: file '%s' has no parameter '%s' in its component"),
+                        co.ArgStr(shown),
+                        co.ArgStr(nmv)
+                    )
+                )
                 errs++
             end
         end
@@ -447,16 +562,24 @@ func lo_pg_file(
     shape := lo_pg_shape(r.pattern)
     repeat g_lo_pg_seen_shape.Len() in si:
         if str.Equals(g_lo_pg_seen_shape.Get(si), shape):
-            lo_pg_error(log, abs, i18.Tr("rename or remove one of the two files"), co.Format2(i18.Tr("E280: two files give the same route: '%s' and '%s'"), co.ArgStr(g_lo_pg_seen_file.Get(si)), co.ArgStr(shown)))
+            lo_pg_error(
+                log,
+                abs,
+                i18.Tr("rename or remove one of the two files"),
+                co.Format2(
+                    i18.Tr("E280: two files give the same route: '%s' and '%s'"),
+                    co.ArgStr(g_lo_pg_seen_file.Get(si)),
+                    co.ArgStr(shown)
+                )
+            )
             ret errs + 1
         end
     end
     g_lo_pg_seen_shape.Push(shape)
     g_lo_pg_seen_file.Push(shown)
     lo_pg_chain(rel, r)
-    if gi >= 0 or ri >= 0:
+    if gi >= 0:
         r.gs.Push(gi)
-        r.rs.Push(ri)
     end
     errs += lo_rt_check_comp(log, a, cdef, r, cdef)
     r.rank = nav.Rank(r.pattern)
@@ -465,13 +588,19 @@ func lo_pg_file(
 end
 
 func lo_pg_collect(
-    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, lb: int, base_dir: str, pdir: str,
-    routes &: Vector<LoRoute>, exprs &: Vector<int>
+    log: lg.Logger,
+    pack: lp.Langpack,
+    ct: cc.Table,
+    a &: at.Ast,
+    lb: int,
+    base_dir: str,
+    pdir: str,
+    routes &: Vector<LoRoute>,
+    exprs &: Vector<int>
 ): int:
     g_lo_pg_lay_dir.Clear()
     g_lo_pg_lay_comp.Clear()
     g_lo_pg_lay_gi.Clear()
-    g_lo_pg_lay_ri.Clear()
     g_lo_pg_seen_shape.Clear()
     g_lo_pg_seen_file.Clear()
     mut files := Vector {} as Vector<str>

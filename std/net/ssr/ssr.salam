@@ -202,8 +202,34 @@ func _secret_value(): str:
     ret s
 end
 
+func _cat3(a: str, b: str, c: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, b)
+    str.BufAppend(sb, c)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _free(s: str):
+    mem.Free(s as void *)
+end
+
+func _free_all(v &: Vector<str>):
+    mut i := 0
+    until i < v.Len():
+        mem.Free(v.Get(i) as void *)
+        i++
+    end
+    v.Free()
+end
+
 func _mac(stamp: str, nonce: str): str:
-    ret crypto.HmacSha256Hex(_secret_value(), stamp + "." + nonce)
+    msg := _cat3(stamp, ".", nonce)
+    out := crypto.HmacSha256Hex(_secret_value(), msg)
+    _free(msg)
+    ret out
 end
 
 func _same(a: str, b: str): bool:
@@ -223,7 +249,7 @@ end
 func _authority(origin: str): str:
     if str.StartsWith(origin, "https://"): ret origin.Substr(8, origin.Len() - 8) end
     if str.StartsWith(origin, "http://"): ret origin.Substr(7, origin.Len() - 7) end
-    ret ""
+    ret str.Clone("")
 end
 
 func _same_origin(c: i64): bool:
@@ -233,8 +259,9 @@ func _same_origin(c: i64): bool:
     if origin.Len() > 0:
         auth := _authority(origin)
         host := http.Header(c, "Host")
-        if auth.Len() == 0 or host.Len() == 0: ret false end
-        if not str.EqualFold(auth, host): ret false end
+        same := auth.Len() > 0 and host.Len() > 0 and str.EqualFold(auth, host)
+        _free(auth)
+        if not same: ret false end
     end
     ret true
 end
@@ -243,11 +270,14 @@ func _reply(c: i64, status: int, body: str):
     http.SetStatus(c, status)
     http.SetHeader(c, "Cache-Control", "no-store")
     http.SetHeader(c, "X-Content-Type-Options", "nosniff")
-    http.Json(c, body)
+    http.Json(c, http.Own(c, body))
 end
 
 func _error_body(message: str): str:
-    ret "{\"ok\":false,\"error\":" + json.Str(message) + "}"
+    q := json.Str(message)
+    out := _cat3("{\"ok\":false,\"error\":", q, "}")
+    _free(q)
+    ret out
 end
 
 func _reject(c: i64, status: int, message: str):
@@ -255,8 +285,16 @@ func _reject(c: i64, status: int, message: str):
 end
 
 func _json_content(c: i64): bool:
-    ct := mime.ParseContentType(http.Header(c, "Content-Type"))
-    ret str.EqualFold(ct.media_type, "application/json")
+    header := http.Header(c, "Content-Type")
+    semi := header.Find(";")
+    mut n := header.Len()
+    if semi >= 0: n = semi end
+    part := header.Substr(0, n)
+    kind := str.Trim(part)
+    ok := str.EqualFold(kind, "application/json")
+    _free(part)
+    _free(kind)
+    ret ok
 end
 
 func _fn_endpoint(c: i64):
@@ -283,7 +321,10 @@ func _fn_endpoint(c: i64):
         ret
     end
     text := http.Body(c)
-    if not json.Valid(text) or not str.StartsWith(str.Trim(text), "{"):
+    trimmed := str.Trim(text)
+    is_object := str.StartsWith(trimmed, "{")
+    _free(trimmed)
+    if not json.Valid(text) or not is_object:
         _reject(c, 400, "body is not a json object")
         ret
     end
@@ -312,7 +353,12 @@ func _session_endpoint(c: i64):
         _reject(c, 403, "forbidden")
         ret
     end
-    _reply(c, 200, "{\"token\":" + json.Str(NewToken()) + "}")
+    tok := NewToken()
+    q := json.Str(tok)
+    body := _cat3("{\"token\":", q, "}")
+    _free(tok)
+    _free(q)
+    _reply(c, 200, body)
 end
 
 func _hidden_or_bad(rel: str): bool:
@@ -325,15 +371,17 @@ func _hidden_or_bad(rel: str): bool:
         if p[i] == (0 as i8): ret true end
         i++
     end
-    segs := rel.Split("/")
+    mut segs := rel.Split("/")
+    mut bad := false
     mut k := 0
     until k < segs.Len():
         s := segs.Get(k)
-        if s == "..": ret true end
-        if s.Len() > 0 and str.StartsWith(s, "."): ret true end
+        if s == "..": bad = true end
+        if s.Len() > 0 and str.StartsWith(s, "."): bad = true end
         k++
     end
-    ret false
+    _free_all(segs)
+    ret bad
 end
 
 func _within(root: str, target: str): bool:
@@ -365,19 +413,35 @@ end
 func _etag_of(path: str): str:
     size := os.FileSize(path)
     mtime := fs.ModTime(path)
-    ret "W/\"" + conv.FormatInt(size) + "-" + conv.FormatInt(mtime) + "\""
+    a := conv.FormatInt(size)
+    b := conv.FormatInt(mtime)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "W/\"")
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, "-")
+    str.BufAppend(sb, b)
+    str.BufAppend(sb, "\"")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    _free(a)
+    _free(b)
+    ret out
 end
 
 func _etag_matches(header: str, etag: str): bool:
     if header.Len() == 0: ret false end
     if header == "*": ret true end
-    parts := header.Split(",")
+    mut parts := header.Split(",")
+    mut found := false
     mut i := 0
     until i < parts.Len():
-        if str.Trim(parts.Get(i)) == etag: ret true end
+        piece := str.Trim(parts.Get(i))
+        if piece == etag: found = true end
+        _free(piece)
         i++
     end
-    ret false
+    _free_all(parts)
+    ret found
 end
 
 func _serve_static(c: i64): bool:
@@ -386,29 +450,52 @@ func _serve_static(c: i64): bool:
     if not str.StartsWith(path, "/"): ret false end
     mut rel := path.Substr(1, path.Len() - 1)
     if rel.Len() == 0:
-        if not _static_index: ret false end
-        rel = "index.html"
+        if not _static_index:
+            _free(rel)
+            ret false
+        end
+        _free(rel)
+        rel = str.Clone("index.html")
     else str.EndsWith(rel, "/"):
-        if not _static_index: ret false end
-        rel += "index.html"
+        if not _static_index:
+            _free(rel)
+            ret false
+        end
+        more := rel + "index.html"
+        _free(rel)
+        rel = more
     end
-    if _hidden_or_bad(rel): ret false end
+    if _hidden_or_bad(rel):
+        _free(rel)
+        ret false
+    end
     mut target := filepath.Join(_static_dir, rel)
+    _free(rel)
     if os.Exists(target) and os.IsDir(target):
-        if not _static_index: ret false end
-        target = filepath.Join(target, "index.html")
+        if not _static_index:
+            _free(target)
+            ret false
+        end
+        index := filepath.Join(target, "index.html")
+        _free(target)
+        target = index
     end
-    if not os.Exists(target) or os.IsDir(target): ret false end
-    if not _within(_static_dir, target): ret false end
+    if not os.Exists(target) or os.IsDir(target) or not _within(_static_dir, target):
+        _free(target)
+        ret false
+    end
     etag := _etag_of(target)
-    http.SetHeader(c, "ETag", etag)
+    http.SetHeader(c, "ETag", http.Own(c, etag))
     http.SetHeader(c, "Cache-Control", "public, max-age=0, must-revalidate")
     if _etag_matches(http.Header(c, "If-None-Match"), etag):
         http.SetStatus(c, 304)
         http.Text(c, "")
+        _free(target)
         ret true
     end
-    ret http.File(c, target, mime.MimeType(target))
+    sent := http.File(c, target, mime.MimeType(target))
+    _free(target)
+    ret sent
 end
 
 func _fallback(c: i64):
@@ -546,24 +633,43 @@ end
 pub func NewToken(): str:
     stamp := conv.FormatInt(time.Now())
     nonce := crypto.RandomHex(16)
-    ret stamp + "." + nonce + "." + _mac(stamp, nonce)
+    mac := _mac(stamp, nonce)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, stamp)
+    str.BufAppend(sb, ".")
+    str.BufAppend(sb, nonce)
+    str.BufAppend(sb, ".")
+    str.BufAppend(sb, mac)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    _free(stamp)
+    _free(nonce)
+    _free(mac)
+    ret out
 end
 
 @en "CheckToken"
 @fa "بررسی توکن"
 pub func CheckToken(token: str): bool:
     if token.Len() == 0 or token.Len() > 256: ret false end
-    parts := token.Split(".")
-    if parts.Len() != 3: ret false end
+    mut parts := token.Split(".")
+    if parts.Len() != 3:
+        _free_all(parts)
+        ret false
+    end
     stamp := parts.Get(0)
     nonce := parts.Get(1)
     sent := parts.Get(2)
     t := conv.ParseIntOr(stamp, 0 - 1)
-    if t < 0: ret false end
     now := time.Now()
-    if t > now + 60: ret false end
-    if now - t > (_ttl as i64): ret false end
-    ret _same(_mac(stamp, nonce), sent)
+    mut ok := false
+    if t >= 0 and t <= now + 60 and now - t <= (_ttl as i64):
+        want := _mac(stamp, nonce)
+        ok = _same(want, sent)
+        _free(want)
+    end
+    _free_all(parts)
+    ret ok
 end
 
 @en "Args"
@@ -587,7 +693,7 @@ pub func Ok(c: i64, value: str):
         _mark_done(c)
         ret
     end
-    _reply(c, 200, "{\"ok\":true,\"value\":" + v + "}")
+    _reply(c, 200, _cat3("{\"ok\":true,\"value\":", v, "}"))
     _mark_done(c)
 end
 
@@ -614,7 +720,7 @@ pub func Respond(c: i64, status: int, html: str, redirect: str):
     else:
         http.SetStatus(c, status)
         http.SetHeader(c, "Cache-Control", "no-cache")
-        http.Html(c, html)
+        http.Html(c, http.Own(c, str.Clone(html)))
     end
     _mark_done(c)
 end

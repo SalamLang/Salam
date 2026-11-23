@@ -32,13 +32,17 @@ mut g_srv_ssr := "ssr"
 
 mut g_srv_json := "json"
 
+mut g_srv_pg := "ssrpage"
+
 mut g_srv_cli := "ssrclient"
 
 mut g_srv_orig_fid := Vector {} as Vector<int>
 
 mut g_srv_orig_body := Vector {} as Vector<int>
 
-func srv_result_type(s &: Sema, t: int): int:
+func srv_result_type(
+    s &: Sema, t: int
+): int:
     if not th_is_throws(s, t):
         ret t
     end
@@ -154,6 +158,9 @@ func srv_pkg_node_name(en: str, fa: bool): str:
     if str.Equals(en, "net.ssr"):
         ret fa ? "شبکه.رندر\u200cسرور" : en
     end
+    if str.Equals(en, "net.internal.ssrpage"):
+        ret fa ? "شبکه.داخلی.برگه رندر" : en
+    end
     if str.Equals(en, "net.internal.ssrweb"):
         ret fa ? "شبکه.داخلی.وب\u200cرندرسرور" : en
     end
@@ -171,7 +178,9 @@ func srv_add_import(a &: at.Ast, program: int, en: str, fa: bool, pending &: Vec
         end
     end
     tail := str.Substr(en, dot, str.Len(en) - dot)
-    if srv_has_import(a, program, en, tail) or srv_has_import(a, program, srv_pkg_node_name(en, true), tail):
+    if srv_has_import(a, program, en, tail) or srv_has_import(
+        a, program, srv_pkg_node_name(en, true), tail
+    ):
         ret
     end
     id := at.NewNode(a, at.AST_IMPORT)
@@ -191,6 +200,7 @@ func server_inject_imports(s &: Sema, a &: at.Ast, program: int):
     mut fresh := Vector {} as Vector<int>
     if g_srv_mode == SRV_MODE_SERVER:
         srv_add_import(a, program, "net.ssr", fa, fresh)
+        srv_add_import(a, program, "net.internal.ssrpage", fa, fresh)
     else:
         srv_add_import(a, program, "net.internal." + srv_client_pkg(), fa, fresh)
     end
@@ -253,10 +263,12 @@ func srv_wrapper_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
         if srv_param_default_present(s, sg.params.Get(i)):
             ipt := opt_inner(s, sg.params.Get(i))
             isp := srv_spell(s, ipt)
-            out += "    if " + g_srv_json + ".Has(__a, " + key + ") and " + g_srv_json + ".GetRaw(__a, " + key + ") != \"null\":\n"
+            out += "    if " + g_srv_json + ".Has(__a, " + key + ") and " + g_srv_json +
+                ".GetRaw(__a, " + key + ") != \"null\":\n"
             out += "        mut __q" + i + " := " + srv_zero(s, ipt, isp) + "\n"
             out += "        try:\n"
-            out += "            " + g_srv_json + ".Unmarshal(" + g_srv_json + ".GetRaw(__a, " + key + "), __q" + i + ")\n"
+            out += "            " + g_srv_json + ".Unmarshal(" + g_srv_json + ".GetRaw(__a, " +
+                key + "), __q" + i + ")\n"
             out += "        catch __e:\n"
             out += "            " + g_srv_ssr + ".Reject(c, 400, \"bad arguments\")\n"
             out += "            ret\n"
@@ -269,7 +281,8 @@ func srv_wrapper_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
             out += "        ret\n"
             out += "    end\n"
             out += "    try:\n"
-            out += "        " + g_srv_json + ".Unmarshal(" + g_srv_json + ".GetRaw(__a, " + key + "), __p" + i + ")\n"
+            out += "        " + g_srv_json + ".Unmarshal(" + g_srv_json + ".GetRaw(__a, " + key +
+                "), __p" + i + ")\n"
             out += "    catch __e:\n"
             out += "        " + g_srv_ssr + ".Reject(c, 400, \"bad arguments\")\n"
             out += "        ret\n"
@@ -292,7 +305,10 @@ func srv_wrapper_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
         rin := opt_inner(s, rtype)
         if rin != TYPE_NONE:
             inner += "if __r.IsSome():\n"
-            inner += "    " + g_srv_ssr + ".Ok(c, " + g_srv_json + ".Marshal(__r.UnwrapOr(" + srv_zero(s, rin, srv_spell(s, rin)) + ")))\n"
+            inner += "    " + g_srv_ssr + ".Ok(c, " + g_srv_json + ".Marshal(__r.UnwrapOr(" +
+                srv_zero(
+                    s, rin, srv_spell(s, rin)
+                ) + ")))\n"
             inner += "else:\n"
             inner += "    " + g_srv_ssr + ".Ok(c, \"null\")\n"
             inner += "end\n"
@@ -304,7 +320,9 @@ func srv_wrapper_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
         out += "    try:\n"
         out += srv_indent(inner, "        ")
         out += "    catch __e:\n"
-        out += "        println \"server func " + str.Replace(fn.name, "\"", "") + " failed: \" + __e.message\n"
+        out += "        println \"server func " + str.Replace(
+            fn.name, "\"", ""
+        ) + " failed: \" + __e.message\n"
         out += "        " + g_srv_ssr + ".Fail(c, \"server function failed\")\n"
         out += "    end\n"
     else:
@@ -326,6 +344,124 @@ func srv_indent(block: str, pad: str): str:
     ret out
 end
 
+func srv_args_expr(s &: Sema, a &: at.Ast, fid: int, sg: Sig): str:
+    fn := at.Get(a, fid)
+    mut args := "\"{\""
+    repeat fn.list.Len() in i:
+        if i >= sg.params.Len():
+            break
+        end
+        pn := at.Get(a, fn.list.Get(i)).name
+        pin := opt_inner(s, sg.params.Get(i))
+        mut enc := g_srv_json + ".Marshal(" + derive_ident(pn) + ")"
+        if pin != TYPE_NONE:
+            enc = "(" + derive_ident(pn) + ".IsSome() ? " + g_srv_json + ".Marshal(" +
+                derive_ident(pn) + ".UnwrapOr(" + srv_zero(
+                    s, pin, srv_spell(s, pin)
+                ) + ")) : \"null\")"
+        end
+        args += " + \"" + (i > 0 ? "," : "") + jd_inner_quote(pn) + ":\" + " + enc
+    end
+    args += " + \"}\""
+    ret args
+end
+
+func srv_note_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
+    fn := at.Get(a, fid)
+    sigid := srv_find_sig(s, fid, fn.name)
+    if sigid == 0:
+        ret ""
+    end
+    sg := sig_at(s, sigid)
+    rtype := srv_result_type(s, sg.ret_type)
+    if srv_is_void(s, rtype):
+        ret ""
+    end
+    rs := srv_spell(s, rtype)
+    if str.Len(rs) == 0:
+        ret ""
+    end
+    mut head := "func __salam_note_" + idx + "(__v: " + rs
+    repeat fn.list.Len() in i:
+        if i >= sg.params.Len():
+            break
+        end
+        head += ", " + derive_ident(
+            at.Get(a, fn.list.Get(i)).name
+        ) + ": " + srv_spell(s, sg.params.Get(i))
+    end
+    head += "): " + rs + ":\n"
+    mut out := head
+    out += "    if " + g_srv_pg + ".PageActive():\n"
+    out += "        __k := " + g_srv_pg + ".PageCallKey(" + jd_quote(
+        srv_wire_name(a, fid)
+    ) + ", " + srv_args_expr(s, a, fid, sg) + ")\n"
+    rin := opt_inner(s, rtype)
+    if rin != TYPE_NONE:
+        out += "        if __v.IsSome():\n"
+        out += "            " + g_srv_pg + ".PageCallPut(__k, " + g_srv_json +
+            ".Marshal(__v.UnwrapOr(" + srv_zero(
+                s, rin, srv_spell(s, rin)
+            ) + ")))\n"
+        out += "        else:\n"
+        out += "            " + g_srv_pg + ".PageCallPut(__k, \"null\")\n"
+        out += "        end\n"
+    else:
+        out += "        " + g_srv_pg + ".PageCallPut(__k, " + g_srv_json + ".Marshal(__v))\n"
+    end
+    out += "    end\n"
+    out += "    ret __v\n"
+    ret out + "end\n"
+end
+
+func srv_wrap_returns(s &: Sema, a &: at.Ast, fid: int, node: int, idx: int, depth: int):
+    if node == 0 or depth > 400:
+        ret
+    end
+    n := at.Get(a, node)
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_RETURN and n.a != 0:
+        fn := at.Get(a, fid)
+        mut call := "__salam_note_" + idx + "(__E"
+        repeat fn.list.Len() in i:
+            call += ", " + derive_ident(at.Get(a, fn.list.Get(i)).name)
+        end
+        call += ")"
+        bp := derive_parse(s, a, "func __salam_w():\n    ret " + call + "\nend\n", "<server>")
+        if bp != 0 and at.ChildCount(a, bp) > 0:
+            blk := at.Get(a, at.Child(a, bp, 0)).a
+            rets := at.Get(a, at.Child(a, blk, 0))
+            cid := rets.a
+            mut cn := at.Get(a, cid)
+            if cn.list.Len() > 0:
+                cn.list.Set(0, n.a)
+                at.Put(a, cid, cn)
+                mut rn := at.Get(a, node)
+                rn.a = cid
+                at.Put(a, node, rn)
+            end
+        end
+        ret
+    end
+    if n.a != 0:
+        srv_wrap_returns(s, a, fid, n.a, idx, depth + 1)
+    end
+    if n.b != 0:
+        srv_wrap_returns(s, a, fid, n.b, idx, depth + 1)
+    end
+    if n.c != 0:
+        srv_wrap_returns(s, a, fid, n.c, idx, depth + 1)
+    end
+    if n.d != 0:
+        srv_wrap_returns(s, a, fid, n.d, idx, depth + 1)
+    end
+    repeat n.list.Len() in k:
+        srv_wrap_returns(s, a, fid, n.list.Get(k), idx, depth + 1)
+    end
+end
+
 func srv_stub_body_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
     fn := at.Get(a, fid)
     sigid := srv_find_sig(s, fid, fn.name)
@@ -342,20 +478,7 @@ func srv_stub_body_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
             ret ""
         end
     end
-    mut args := "\"{\""
-    repeat fn.list.Len() in i:
-        if i >= sg.params.Len():
-            break
-        end
-        pn := at.Get(a, fn.list.Get(i)).name
-        pin := opt_inner(s, sg.params.Get(i))
-        mut enc := g_srv_json + ".Marshal(" + derive_ident(pn) + ")"
-        if pin != TYPE_NONE:
-            enc = "(" + derive_ident(pn) + ".IsSome() ? " + g_srv_json + ".Marshal(" + derive_ident(pn) + ".UnwrapOr(" + srv_zero(s, pin, srv_spell(s, pin)) + ")) : \"null\")"
-        end
-        args += " + \"" + (i > 0 ? "," : "") + jd_inner_quote(pn) + ":\" + " + enc
-    end
-    args += " + \"}\""
+    args := srv_args_expr(s, a, fid, sg)
     mut head := "func __salam_stub_" + idx + "("
     repeat fn.list.Len() in hi:
         if hi >= sg.params.Len():
@@ -364,7 +487,9 @@ func srv_stub_body_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
         if hi > 0:
             head += ", "
         end
-        head += derive_ident(at.Get(a, fn.list.Get(hi)).name) + ": " + srv_spell(s, sg.params.Get(hi))
+        head += derive_ident(
+            at.Get(a, fn.list.Get(hi)).name
+        ) + ": " + srv_spell(s, sg.params.Get(hi))
     end
     head += ")"
     if not is_void:
@@ -377,7 +502,9 @@ func srv_stub_body_source(s &: Sema, a &: at.Ast, fid: int, idx: int): str:
     if not is_void:
         out += "    mut __r := " + srv_zero(s, rtype, rs) + "\n"
     end
-    out += "    __v := " + g_srv_cli + ".Call(" + jd_quote(srv_wire_name(a, fid)) + ", " + args + ")\n"
+    out += "    __v := " + g_srv_cli + ".Call(" + jd_quote(
+        srv_wire_name(a, fid)
+    ) + ", " + args + ")\n"
     out += "    if " + g_srv_cli + ".Failed():\n"
     if fn.is_throws:
         out += "        throw " + g_srv_cli + ".ErrorText()\n"
@@ -488,8 +615,10 @@ func server_funcs_generate(s &: Sema, a &: at.Ast, program: int):
     end
     g_srv_ssr = srv_alias_of(s, "ssr")
     mut text := ""
+    g_srv_pg = srv_alias_of(s, "ssrpage")
     repeat funcs.Len() in i:
         text += srv_wrapper_source(s, a, funcs.Get(i), i)
+        text += srv_note_source(s, a, funcs.Get(i), i)
     end
     mut regname := "__salam_register_server_funcs"
     placeholder := scope_lookup_local(s, s.global, regname) != 0
@@ -498,7 +627,9 @@ func server_funcs_generate(s &: Sema, a &: at.Ast, program: int):
     end
     text += "func " + regname + "():\n"
     repeat funcs.Len() in k:
-        text += "    " + g_srv_ssr + ".Register(" + jd_quote(srv_wire_name(a, funcs.Get(k))) + ", __salam_srv_" + k + ")\n"
+        text += "    " + g_srv_ssr + ".Register(" + jd_quote(
+            srv_wire_name(a, funcs.Get(k))
+        ) + ", __salam_srv_" + k + ")\n"
     end
     text += "end\n"
     if str.Len(os.Env("SALAM_SERVER_DUMP")) > 0:
@@ -514,6 +645,10 @@ func server_funcs_generate(s &: Sema, a &: at.Ast, program: int):
     end
     repeat funcs.Len() in m:
         dce_mark_root(s.pkg, "__salam_srv_" + m)
+        if str.Len(srv_note_source(s, a, funcs.Get(m), m)) > 0:
+            dce_mark_root(s.pkg, "__salam_note_" + m)
+            srv_wrap_returns(s, a, funcs.Get(m), at.Get(a, funcs.Get(m)).a, m, 0)
+        end
     end
     dce_mark_root(s.pkg, regname)
     dce_mark_root(s.pkg, "__salam_register_server_funcs")

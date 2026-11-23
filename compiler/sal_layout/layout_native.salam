@@ -62,6 +62,9 @@ struct LnNames:
     pub attr: str = "Attr"
     pub bool_attr: str = "BoolAttr"
     pub text: str = "Text"
+    pub has: str = "PageHas"
+    pub val: str = "PageVal"
+    pub req: str = "PageRequired"
     pub on: str = "On"
     pub title: str = "Title"
     pub lang: str = "Lang"
@@ -101,6 +104,8 @@ struct LnGen:
     pub in_comp: int = 0
     pub row_keys: Vector<int> = Vector {}
     pub ev_attrs: Vector<int> = Vector {}
+    pub req: bool = false
+    pub seq: int = 0
 end
 
 func ln_names(pack: lp.Langpack): LnNames:
@@ -124,6 +129,9 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.attr = "ویژگی عنصر"
     n.bool_attr = "ویژگی دودویی عنصر"
     n.text = "متن فرزند"
+    n.has = "دارای مقدار صفحه"
+    n.val = "مقدار اختیاری صفحه"
+    n.req = "مقدار الزامی صفحه"
     n.on = "رسیدگی رخداد"
     n.title = "عنوان صفحه"
     n.lang = "زبان صفحه"
@@ -311,7 +319,36 @@ func ln_line(g &: LnGen, text: str):
 end
 
 func ln_call(g &: LnGen, method: str, args: str):
-    ln_line(g, "__salam_b." + method + "(" + args + ")")
+    isreq := g.req
+    g.req = false
+    pat := "(\"\" + __salam_dyn_"
+    p := str.IndexOf(args, pat)
+    if p < 0:
+        ln_line(g, "__salam_b." + method + "(" + args + ")")
+        ret
+    end
+    ds := p + 6
+    mut e := p + str.Len(pat)
+    until e < str.Len(args) and byte_at(args, e) >= 48 and byte_at(args, e) <= 57:
+        e++
+    end
+    dname := str.Substr(args, ds, e - ds)
+    head := str.Substr(args, 0, p)
+    tailp := str.Substr(args, e + 1, str.Len(args) - e - 1)
+    if isreq:
+        inner := head + "(\"\" + " + g.nm.ui + "." + g.nm.req + "(" + dname + "))" + tailp
+        ln_line(g, "__salam_b." + method + "(" + inner + ")")
+        ret
+    end
+    g.seq++
+    tmp := "__salam_o" + str.FromInt(g.seq as i64)
+    ln_line(g, tmp + " := " + dname)
+    ln_line(g, "if " + g.nm.ui + "." + g.nm.has + "(" + tmp + "):")
+    g.depth++
+    inner := head + "(\"\" + " + g.nm.ui + "." + g.nm.val + "(" + tmp + "))" + tailp
+    ln_line(g, "__salam_b." + method + "(" + inner + ")")
+    g.depth--
+    ln_line(g, g.nm.kw_end)
 end
 
 func ln_dyn_num(v: str): int:
@@ -377,6 +414,10 @@ func ln_style_attrs(g &: LnGen, a &: at.Ast, el: int):
         prop := sa.prop
         state := sa.state
         v := val_str(a, an.a)
+        if str.Len(v) == 0 and sm.LayoutHasEmptyFallback(a, an.a):
+            continue
+        end
+        g.req = false
         state_expr := g.nm.ui + "." + ln_state_const(state)
         ln_call(
             g,
@@ -512,6 +553,10 @@ func ln_attrs(g &: LnGen, a &: at.Ast, el: int, ei: int, tag: str):
         dest := sm.LayoutAttrDest(ai)
         vt := sm.LayoutAttrVtype(ai)
         v := val_str(a, an.a)
+        if str.Len(v) == 0 and sm.LayoutHasEmptyFallback(a, an.a):
+            continue
+        end
+        g.req = ei >= 0 and sm.LayoutCsvHas(sm.LayoutElemRequired(ei), key)
         if vt == sm.VT_CODE:
             num := ln_dyn_num(v)
             if num < 0 or num >= g.lw.slots.Len():

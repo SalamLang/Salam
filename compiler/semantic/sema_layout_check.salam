@@ -1029,6 +1029,62 @@ func lay_warn_not_standard(s &: Sema, a &: at.Ast, aid: int, key: str):
     end
 end
 
+func lay_bare_value_report(s &: Sema, a &: at.Ast, nid: int, word: str):
+    n := at.Get(a, nid)
+    path := n.src_file
+    quoted := `"` + word + `"`
+    if str.Len(path) > 0 and lay_source_is(a, nid, path, word):
+        mut f := fix_at(span_of(a, nid))
+        f.file = path
+        f.length = str.Len(word)
+        f.title = i18.Tr("Write the value in quotes")
+        f.text = quoted
+        f.preferred = true
+        f.safe = true
+        queue_fix(f)
+    end
+    swarn_help(
+        s,
+        LAYOUT_BARE_VALUE_CODE,
+        span_of(a, nid),
+        co.Format1(
+            i18.Tr("the word '%s' is a value, not a name; write it in quotes"), co.ArgStr(word)
+        ),
+        co.Format1(i18.Tr("write %s"), co.ArgStr(quoted))
+    )
+end
+
+func lay_bare_value_walk(s &: Sema, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        if scope_lookup(s, s.cur, n.name) <= 0:
+            lay_bare_value_report(s, a, nid, n.name)
+        end
+        ret
+    end
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_STRING and not n.synthetic and str.StartsWith(
+            n.value_str, "#"
+        ) and str.Len(n.src_file) > 0 and lay_source_is(a, nid, n.src_file, n.value_str):
+            lay_bare_value_report(s, a, nid, n.value_str)
+        end
+        ret
+    end
+    if n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in i:
+            lay_bare_value_walk(s, a, at.Child(a, nid, i))
+        end
+        ret
+    end
+    if n.kind == at.AST_TERNARY:
+        lay_bare_value_walk(s, a, n.b)
+        lay_bare_value_walk(s, a, n.c)
+    end
+end
+
 func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
     e := g_lay_elems.Get(ei)
     mut seen := Vector {} as Vector<str>
@@ -1072,6 +1128,9 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             continue
         end
         seen.Push(dkey)
+        if not lay_is_handler(name) and not StyleAttrIsEvent(a, aid):
+            lay_bare_value_walk(s, a, at.Get(a, aid).a)
+        end
         if lay_is_handler(name) and str.Len(
             str.Trim(
                 str.Substr(

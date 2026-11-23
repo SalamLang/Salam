@@ -33,12 +33,12 @@ What the program prints goes to logcat: `adb logcat -s salam`.
 ## iOS
 
 ```
-tools/bash/build-ios-app.sh app.salam --out out
+salam app ios app.salam --out out
 xcrun simctl install booted out/App.app
 xcrun simctl launch booted app.salam.app
 ```
 
-The default target is the simulator; `--device` builds for a phone and the app
+`tools/bash/build-ios-app.sh` takes the same options. The default target is the simulator; `--device` builds for a phone and the app
 still has to be signed in Xcode. Needs a compiler built from the current tree.
 Checked on the simulator with the counter page: drawing, safe area and a
 tap (`-salam-tap X,Y` launch argument). The keyboard, Persian text, pause and

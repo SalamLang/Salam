@@ -9,6 +9,6 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 DIST=$1
 mkdir -p "$DIST/tools/bash" "$DIST/mobile/host" "$DIST/android"
-cp "$ROOT/tools/bash/build-android-app.sh" "$DIST/tools/bash/"
-cp -R "$ROOT/mobile/host/android" "$ROOT/mobile/host/common" "$DIST/mobile/host/"
+cp "$ROOT/tools/bash/build-android-app.sh" "$ROOT/tools/bash/build-ios-app.sh" "$DIST/tools/bash/"
+cp -R "$ROOT/mobile/host/android" "$ROOT/mobile/host/common" "$ROOT/mobile/host/ios" "$DIST/mobile/host/"
 cp -R "$ROOT/android/gradle" "$ROOT/android/gradlew" "$DIST/android/"

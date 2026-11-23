@@ -47,7 +47,7 @@ xcrun simctl install booted out/App.app
 xcrun simctl launch booted app.salam.app
 ```
 
-`tools/bash/build-ios-app.sh` takes the same options, plus `--permission NAME`
+`tools/bash/build-ios-app.sh` takes `--out`, `--device`, `--id`, `--name` and `--permission NAME`
 (`camera`, `microphone`, `location`, `notifications`) for the usage description
 the system shows in its permission dialog. The build adds
 `NSLocationWhenInUseUsageDescription` when the program calls

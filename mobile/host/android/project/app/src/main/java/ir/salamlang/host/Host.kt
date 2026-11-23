@@ -79,6 +79,12 @@ object Host {
     }
 
     @JvmStatic
+    fun barsLight(top: Int, bottom: Int) {
+        val a = activity as? SalamActivity ?: return
+        a.runOnUiThread { a.setBarContrast(top != 0, bottom != 0) }
+    }
+
+    @JvmStatic
     fun onExit() {
         val a = activity ?: return
         a.runOnUiThread {

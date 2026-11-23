@@ -24,7 +24,7 @@ missing entry. Nothing here needs new syntax in `compiler/` or `std/`.
    string `"null"` is just a string.
 3. Required attribute (the `required` list of the element schema in
    `std/layout/elements`, for example `url` on `link` and `image`): a literal
-   `null` or an expression of type `T?` is error E299 with a fix hint. Make
+   `null` or an expression of type `T?` is error E300 with a fix hint. Make
    it a plain `T` with `.UnwrapOr(default)`, `.Unwrap()`, or `.value` inside
    `if x.IsSome():`.
 4. Values of non-optional type are unchanged.
@@ -37,7 +37,7 @@ missing entry. Nothing here needs new syntax in `compiler/` or `std/`.
 
 - `sema_layout_check`: literal `null` on an optional attribute is replaced by
   the synthetic empty value that already means "skip"; on a required one it
-  reports E299.
+  reports E300.
 - `layout_lower`: a runtime slot of an attribute kind is written through
   `web.PageAttr*` helpers that take `T` or `T?` (generic overloads), and the
   whole attribute is dropped when empty. Required slots go through

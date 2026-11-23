@@ -214,7 +214,7 @@ end
 func route_project_of(file: str): str:
     mut dir := pth.PathDir(file)
     mut hops := 0
-    until hops > 6 or str.Len(dir) == 0:
+    until hops <= 6 and str.Len(dir) > 0:
         if os.IsDir(pth.PathJoin(dir, "pages")) and os.Exists(pth.PathJoin(dir, "main.salam")):
             ret dir
         end
@@ -228,17 +228,41 @@ func route_project_of(file: str): str:
     ret ""
 end
 
+func drop_page_includes(a &: at.Ast, prog: int):
+    lb := lo.FindLayout(a, prog)
+    if lb == 0:
+        ret
+    end
+    mut bn := at.Get(a, lb)
+    mut keep := Vector {} as Vector<int>
+    each id in bn.list:
+        an := at.Get(a, id)
+        mut drop := false
+        if an.kind == at.AST_LAYOUT_ATTR and str.Equals(an.name, "include") and an.a != 0:
+            lit := at.Get(a, an.a)
+            drop = lit.kind == at.AST_LITERAL and str.StartsWith(lit.value_str, "pages/")
+        end
+        if not drop:
+            keep.Push(id)
+        end
+    end
+    bn.list = keep
+    at.Put(a, lb, bn)
+end
+
 func lower_routes_for(lgr: lg.Logger, modpack: lp.Langpack, table: cc.Table, a &: at.Ast, prog: int, target: str): bool:
     proj := route_project_of(target)
     if str.Equals(pth.PathBase(target), "main.salam"):
         lo.SetRootFile(target)
         _e := lo.LowerRoutes(lgr, modpack, table, a, prog, false, pth.PathDir(target))
+        drop_page_includes(a, prog)
+        lo.ProjectComponentNames(pth.PathDir(target))
         ret false
     end
     if str.Len(proj) > 0:
-        lg.SetRecord(false)
+        was := lg.PauseRecord()
         _m := lo.LowerRoutesIn(lgr, a, prog)
-        lg.SetRecord(true)
+        lg.ResumeRecord(was)
         ret true
     end
     lo.SetRootFile(target)

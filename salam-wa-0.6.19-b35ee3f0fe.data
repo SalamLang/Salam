@@ -188540,6 +188540,12 @@ pub func OnCloseRequest(handler: func () bool):
 _close_hook = handler
 _close_set = true
 end
+@en "KeyboardDismiss"
+@fa "بستن صفحه کلید"
+pub func KeyboardDismiss(on_tap: bool, on_drag: bool):
+_kb_tap = on_tap
+_kb_drag = on_drag
+end
 @en "OnPause"
 @fa "هنگام توقف"
 pub func OnPause(handler: func ()):
@@ -188899,6 +188905,9 @@ end
 ret
 end
 _e.focus = node
+if node >= 0 and _is_text_input(node):
+_rv_pending = true
+end
 if old >= 0 and old < _e.ctl.Len():
 mut c := _e.ctl.Ref(old)
 c.focused = false
@@ -188985,11 +188994,18 @@ func _reveal(node: int):
 if node < 0 or node >= _e.boxes.Len() or not _e.boxes[node].shown:
 ret
 end
+_reveal_box(node, _e.boxes[node])
+end
+func _reveal_box(node: int, b0: _Box):
+mut b := b0
 mut a := _e.dom.nodes[node].parent
 until a >= 0:
 if _is_scroller(a):
-b := _e.boxes[node]
-pb := _padding_box(a)
+mut pb := _padding_box(a)
+if a == 0:
+pb.y += _e.inset_t
+pb.h -= _e.inset_t + _e.inset_b
+end
 c := _e.ctl[a]
 mut nx := c.scroll_x
 mut ny := c.scroll_y
@@ -189004,6 +189020,8 @@ else b.x + b.w > pb.x + pb.w:
 nx = c.scroll_x + math.Min(b.x - pb.x, b.x + b.w - pb.x - pb.w)
 end
 if _set_scroll(a, nx, ny):
+b.x -= _e.ctl[a].scroll_x - c.scroll_x
+b.y -= _e.ctl[a].scroll_y - c.scroll_y
 _place_all()
 _fire(a, "scroll", false)
 end
@@ -189511,7 +189529,10 @@ if button != 0:
 ret
 end
 ft := _focus_target(t)
+keep := ft < 0 and _sh_touch and not _kb_tap and _e.focus >= 0 and _is_text_input(_e.focus)
+if not keep:
 _set_focus(ft, false)
+end
 if ft >= 0 and _is_text_input(ft):
 off := _caret_from_point(ft, x, y)
 mut c := _e.ctl.Ref(ft)
@@ -189843,6 +189864,7 @@ _sfree(old_pre)
 _replace_selection(f, clean)
 _refresh_control(f)
 _e.states_dirty = true
+_rv_pending = true
 mut ev := _make_event("input", f)
 ev.text = clean
 _fire_ev(f, ev, true)
@@ -189980,6 +190002,9 @@ end
 else:
 break
 end
+end
+if moved or changed:
+_rv_pending = true
 end
 if moved:
 mut cc := _e.ctl.Ref(f)
@@ -190429,6 +190454,66 @@ end
 ret _ftracks_same(a.columns, b.columns) and _ftracks_same(a.rows, b.rows) and _ftrack_same(
 a.auto_columns, b.auto_columns
 ) and _ftrack_same(a.auto_rows, b.auto_rows)
+end
+package ui
+import math
+import gui.typeset
+mut _kb_tap := true
+mut _kb_drag := true
+mut _kb_h := 0.0
+mut _rv_pending := false
+func _kb_editing(): bool:
+ret _e.focus >= 0 and _e.focus < _e.ctl.Len() and _is_text_input(_e.focus)
+end
+func _reveal_caret(f: int):
+if f < 0 or f >= _e.boxes.Len() or not _e.boxes[f].shown:
+ret
+end
+mut b := _e.boxes[f]
+ri := _ctl_run(f)
+if _is_textarea(f) and ri >= 0 and _e.runs[ri].has_lay and not _control_shows_placeholder(f):
+r := _e.runs[ri]
+c := _e.ctl[f]
+cr := typeset.CaretRect(
+r.para, r.lay, typeset.TextPosition { offset = _display_offset(f, c.caret) }
+)
+b.x = r.x + cr.x - c.text_scroll
+b.y = r.y + cr.y - c.text_scroll_y - 6.0
+b.w = 1.0
+b.h = cr.height + 12.0
+end
+_reveal_box(f, b)
+end
+func _kb_frame():
+if not _rv_pending:
+ret
+end
+_rv_pending = false
+if _kb_editing():
+_reveal_caret(_e.focus)
+end
+end
+func _kb_changed(kb: f64):
+prev := _kb_h
+_kb_h = kb
+if kb > 0.0 and kb != prev:
+_rv_pending = true
+end
+if kb <= 0.0 and prev > 0.0 and _e.ime_on and _kb_editing():
+_set_focus(-1, false)
+end
+end
+func _kb_back(): bool:
+if _kb_h > 0.0 and _kb_editing():
+_set_focus(-1, false)
+ret true
+end
+ret false
+end
+func _kb_drag_start():
+if _kb_drag and _kb_editing() and _hit(_tx0, _ty0) != _e.focus:
+_set_focus(-1, false)
+end
 end
 package ui
 import str
@@ -192491,6 +192576,7 @@ _anim_tick()
 _anims_running()
 _update_ime()
 _sh_check()
+_kb_frame()
 _diff_records()
 end
 func _ensure_canvas(): bool:
@@ -192555,6 +192641,7 @@ _e.inset_t = ev.inset_top
 _e.inset_r = ev.inset_right
 _e.inset_l = ev.inset_left
 _e.inset_b = math.Max(ev.inset_bottom, kb)
+_kb_changed(kb)
 _e.dirty_dom = true
 _e.full = true
 end
@@ -192578,6 +192665,9 @@ _memory_hook()
 ret
 end
 window.EventKind.BackRequested:
+if _kb_back():
+ret
+end
 if _e.popup >= 0:
 _close_popup()
 else _close_top_dialog():
@@ -194221,6 +194311,17 @@ _step(0)
 println "imeconfig", _e.win.ImeConfig()
 break
 end
+"rect":
+_step(0)
+n := _selector_node(arg)
+if n < 0 or n >= _e.boxes.Len():
+println "ui script: no element matches", arg
+break
+end
+b := _e.boxes[n]
+println "rect", arg, b.x, b.y, b.w, b.h
+break
+end
 "selui":
 _step(0)
 println _sh_report()
@@ -194949,6 +195050,7 @@ if mx * mx + my * my > _T_SLOP * _T_SLOP:
 _tdrag = true
 _e.capture = -2
 _set_active(-1)
+_kb_drag_start()
 end
 end
 if _tdrag:

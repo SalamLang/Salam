@@ -124,6 +124,7 @@ for abi in $ABIS; do
             -Dmain=salam_app_main -I"$work/.salam-build" -c "$f" -o "$work/obj/$(basename "$f").o"
     done
     "$CC" -O2 -fPIC -c "$ROOT/mobile/host/android/salam_host.c" -o "$work/obj/salam_host.o"
+    "$CC" -O2 -fPIC -c "$ROOT/mobile/host/common/salam_host_common.c" -o "$work/obj/salam_host_common.o"
     lib="$OUT/project/app/src/main/jniLibs/$abi"
     mkdir -p "$lib"
     "$CC" -shared -o "$lib/libsalamapp.so" "$work"/obj/*.o -landroid -llog -lm -ldl \

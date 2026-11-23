@@ -10,6 +10,7 @@ import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowInsets
+import android.view.WindowManager
 
 class SalamActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var view: SalamView
@@ -24,7 +25,12 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         density = resources.displayMetrics.density
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
-        view = SalamView(this)
+        if (Build.VERSION.SDK_INT >= 28) {
+            val lp = window.attributes
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = lp
+        }
+        view =SalamView(this)
         view.holder.addCallback(this)
         view.setOnApplyWindowInsetsListener { _, insets ->
             sendInsets(insets)

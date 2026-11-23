@@ -102,6 +102,7 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         Host.nativeSurface(holder.surface, width, height, density)
         Fonts.install(this)
         Assets.install(this)
+        intent?.getStringExtra("salam-script")?.let { Host.nativeScript(it) }
         Host.nativeStart(filesDir.absolutePath, cacheDir.absolutePath)
     }
 

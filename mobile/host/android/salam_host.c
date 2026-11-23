@@ -6,7 +6,9 @@
 #include <android/native_window_jni.h>
 #include <jni.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/syscall.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -216,6 +218,7 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
     int ok = 0;
     int top = -1;
     int bottom = -1;
+    int first_frame = 0;
     pthread_mutex_lock(&mu);
     if (win != NULL && pixels != NULL) {
         ARect r;
@@ -241,6 +244,7 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
             }
             ANativeWindow_unlockAndPost(win);
             ok = 1;
+            first_frame = 1;
             if (y0 == 0 && x1 > x0) {
                 top = pixel_is_light(((const uint32_t *)pixels)[bw / 2]);
             }
@@ -250,6 +254,9 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
         }
     }
     pthread_mutex_unlock(&mu);
+    if (first_frame) {
+        salam_host_script_frame();
+    }
     if ((top >= 0 && top != bars_top) || (bottom >= 0 && bottom != bars_bottom)) {
         if (top >= 0) {
             bars_top = top;
@@ -615,6 +622,47 @@ static void *run(void *arg)
     return NULL;
 }
 
+static int script_given;
+
+static void script_fallback(const char *files)
+{
+    char buf[PROP_VALUE_MAX];
+    char path[1024];
+    char text[4096];
+    if (script_given) {
+        return;
+    }
+    if (__system_property_get("debug.salam.script", buf) > 0) {
+        salam_host_script_set(buf);
+        return;
+    }
+    if (files == NULL) {
+        return;
+    }
+    snprintf(path, sizeof path, "%s/salam-script", files);
+    FILE *f = fopen(path, "r");
+    if (f != NULL) {
+        size_t n = fread(text, 1, sizeof text - 1, f);
+        fclose(f);
+        while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r')) {
+            n--;
+        }
+        text[n] = 0;
+        salam_host_script_set(text);
+    }
+}
+
+JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeScript(JNIEnv *env, jclass cls, jstring s)
+{
+    (void)cls;
+    char *u = utf8_from_jstring(env, s);
+    if (u != NULL && u[0] != 0) {
+        salam_host_script_set(u);
+        script_given = 1;
+    }
+    free(u);
+}
+
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jclass cls, jstring files, jstring cache)
 {
     if (started) {
@@ -625,6 +673,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     if (f != NULL) {
         setenv("HOME", f, 1);
     }
+    script_fallback(f);
     if (c != NULL) {
         setenv("TMPDIR", c, 1);
     }

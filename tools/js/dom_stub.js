@@ -271,7 +271,15 @@ global.getComputedStyle = (el) => ({
 global.Image = class {};
 
 const callSeen = {};
-const callCache = { "Add:" + (() => { let h = 2166136261; for (const b of Buffer.from('{"a":41,"b":2}')) { h ^= b; h = Math.imul(h, 16777619) >>> 0; } return ("00000000" + h.toString(16)).slice(-8); })() + ":0": 4242 };
+const callCache = {};
+{
+  let h = 2166136261;
+  for (const b of Buffer.from('{"a":41,"b":2}')) {
+    h ^= b;
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  callCache["Add:" + ("00000000" + h.toString(16)).slice(-8) + ":0"] = 4242;
+}
 global.__salam_call_key = (name, args) => {
   let h = 2166136261;
   for (const b of Buffer.from(String(args))) {

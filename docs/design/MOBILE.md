@@ -28,6 +28,10 @@ tools/bash/build-android-app.sh app.salam --out out --abi arm64-v8a
 adb install out/app.apk
 ```
 
+Options: `--abi arm64-v8a,x86_64`, `--id`, `--name`, `--icon icon.png`,
+`--release` and `--run` (install and start on the connected device). What a
+program prints goes to logcat: `adb logcat -s salam`.
+
 Needs a `salam` compiler, the Android NDK, a JDK and the Android SDK. The page
 is the same file that runs on the web and on the desktop. The script emits C
 per ABI, builds `libsalamapp.so` with the NDK and packages it with the
@@ -77,6 +81,9 @@ Each stage is one pull request and is checked on the desktop first.
 
 ## Status
 
+Android also has https (system CA directory), DNS, sqlite (the amalgamation
+is fetched and built into the app when a program uses `db.sqlite`), threads,
+clipboard, opening links, back button, rotation and long press selection.
 Done: stages 1 to 7, the Android part of 8 (keyboard, back button, system
 fonts) and clipboard and link opening from stage 10. Checked on an arm64
 emulator with a counter page, a form with a text input and a Persian page.

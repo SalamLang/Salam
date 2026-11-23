@@ -156,7 +156,19 @@ static void script_at(double ms)
         t.tv_sec++;
         t.tv_nsec -= 1000000000L;
     }
+#ifdef __APPLE__
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long long wait = ((long long)t.tv_sec - now.tv_sec) * 1000000000LL + (t.tv_nsec - now.tv_nsec);
+    if (wait > 0) {
+        struct timespec d;
+        d.tv_sec = (time_t)(wait / 1000000000LL);
+        d.tv_nsec = (long)(wait % 1000000000LL);
+        nanosleep(&d, NULL);
+    }
+#else
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+#endif
 }
 
 static void script_pointer(double ms, int action, int id, double x, double y)

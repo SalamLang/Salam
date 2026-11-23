@@ -142,6 +142,7 @@ static jmethodID ime_mid;
 static jmethodID open_mid;
 static jmethodID clip_set_mid;
 static jmethodID clip_get_mid;
+static jmethodID share_mid;
 static char clip_buf[8192];
 static int ime_state;
 
@@ -264,6 +265,36 @@ static int call_bool_string(jmethodID mid, const char *s)
     return r;
 }
 
+static int call_bool_2s(jmethodID mid, const char *a, const char *b)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || mid == NULL) {
+        return 0;
+    }
+    jstring ja = jstring_from_utf8(env, a);
+    jstring jb = jstring_from_utf8(env, b);
+    if (ja != NULL && jb != NULL) {
+        r = (*env)->CallStaticBooleanMethod(env, host_cls, mid, ja, jb) ? 1 : 0;
+    }
+    if (ja != NULL) {
+        (*env)->DeleteLocalRef(env, ja);
+    }
+    if (jb != NULL) {
+        (*env)->DeleteLocalRef(env, jb);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_share(const char *text, const char *url)
+{
+    return call_bool_2s(share_mid, text, url);
+}
+
 int salam_host_open_url(const char *url)
 {
     return call_bool_string(open_mid, url);
@@ -371,6 +402,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");
     clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
     clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
+    share_mid = (*env)->GetStaticMethodID(env, cls, "share", "(Ljava/lang/String;Ljava/lang/String;)Z");
     started = 1;
     redirect_output();
     pthread_create(&th, NULL, run, NULL);

@@ -76,8 +76,10 @@ Each stage is one pull request and is checked on the desktop first.
    page router.
 9. iOS backend (`UIView`, `CADisplayLink`, `UITextInput`) and an Xcode
    template, tested on the simulator.
-10. Host service channel (share, permissions, camera, notifications) as a
-    `std/mobile` package.
+10. Host service channel (share, haptics, permissions, notifications,
+    location, photos) as the `gui.device` package. Flat C calls in
+    `salam_host.c`; anything asynchronous is a request call plus a state
+    call, and the host wakes the event loop when the answer lands.
 
 ## Status
 
@@ -85,12 +87,12 @@ Android also has https (system CA directory), DNS, sqlite (the amalgamation
 is fetched and built into the app when a program uses `db.sqlite`), threads,
 clipboard, opening links, back button, rotation and long press selection.
 Done: stages 1 to 7, the Android part of 8 (keyboard, back button, system
-fonts) and clipboard and link opening from stage 10. Checked on an arm64
+fonts) and clipboard, link opening and the share sheet from stage 10. Checked on an arm64
 emulator with a counter page, a form with a text input and a Persian page.
 Stage 9: the iOS host draws the counter page on the iPhone simulator. Touch,
 the keyboard and Persian text were not tried on iOS yet.
 Missing: bundled fonts (iOS cannot read system fonts on a phone), rotate and
-three finger gestures, share, permissions, camera and notifications.
+three finger gestures, haptics, permissions, camera and notifications.
 
 ## Target matrix
 

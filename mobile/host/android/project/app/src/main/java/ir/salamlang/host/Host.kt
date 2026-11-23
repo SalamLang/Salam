@@ -44,6 +44,24 @@ object Host {
         }
     }
 
+    @JvmStatic
+    fun share(text: String, url: String): Boolean {
+        val a = activity ?: return false
+        val body = if (text.isEmpty()) url else if (url.isEmpty()) text else text + "\n" + url
+        if (body.isEmpty()) return false
+        return try {
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+            send.type = "text/plain"
+            send.putExtra(android.content.Intent.EXTRA_TEXT, body)
+            val chooser = android.content.Intent.createChooser(send, null)
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            a.startActivity(chooser)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun clipboard(): android.content.ClipboardManager? =
         activity?.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
 

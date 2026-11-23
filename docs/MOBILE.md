@@ -52,11 +52,14 @@ What the program prints goes to logcat: `adb logcat -s salam`.
   mode.
 - Standard library: files, threads, timers, sqlite, DNS, http and https,
   clipboard and opening links.
+- Device features through `gui.device` (same calls on every platform, false
+  or empty where a system has no such feature): `device.Share(text, url)`
+  opens the share sheet.
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- Camera, location, share sheet, notifications and permissions.
+- Camera, location, notifications, permissions and haptics.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

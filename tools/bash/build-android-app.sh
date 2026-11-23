@@ -88,6 +88,27 @@ base=$(basename "$APP" .salam)
 [ -n "$ID" ] || ID=app.salam.$(printf %s "$base" | tr -c 'A-Za-z0-9\n' '_' | tr '[:upper:]' '[:lower:]')
 [ -n "$NAME" ] || NAME=$base
 
+SQLITE_VERSION=3500400
+SQLITE_SHA256=1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032
+
+fetch_sqlite() {
+    cache=${XDG_CACHE_HOME:-$HOME/.cache}/salam/sqlite-$SQLITE_VERSION
+    if [ ! -f "$cache/sqlite3.c" ]; then
+        mkdir -p "$cache"
+        zip=$cache/sqlite.zip
+        curl -fsSL -o "$zip" "https://www.sqlite.org/2025/sqlite-amalgamation-$SQLITE_VERSION.zip"
+        got=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+        [ "$got" = "$SQLITE_SHA256" ] || {
+            echo "build-android-app: sqlite download does not match its checksum" >&2
+            rm -f "$zip"
+            exit 1
+        }
+        unzip -q -o -j "$zip" "sqlite-amalgamation-$SQLITE_VERSION/sqlite3.c" "sqlite-amalgamation-$SQLITE_VERSION/sqlite3.h" -d "$cache"
+        rm -f "$zip"
+    fi
+    echo "$cache"
+}
+
 rm -rf "$OUT/project"
 mkdir -p "$OUT/project"
 cp -R "$ROOT/mobile/host/android/project/." "$OUT/project/"
@@ -123,6 +144,11 @@ for abi in $ABIS; do
         "$CC" -O2 -w -fPIC -fno-strict-aliasing -ffunction-sections -fdata-sections \
             -Dmain=salam_app_main -I"$work/.salam-build" -c "$f" -o "$work/obj/$(basename "$f").o"
     done
+    if grep -q 'sqlite3_open' "$work"/.salam-build/*.c 2>/dev/null; then
+        sqlite_dir=$(fetch_sqlite)
+        "$CC" -O2 -fPIC -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -c \
+            "$sqlite_dir/sqlite3.c" -o "$work/obj/sqlite3.o"
+    fi
     "$CC" -O2 -fPIC -c "$ROOT/mobile/host/android/salam_host.c" -o "$work/obj/salam_host.o"
     "$CC" -O2 -fPIC -c "$ROOT/mobile/host/common/salam_host_common.c" -o "$work/obj/salam_host_common.o"
     lib="$OUT/project/app/src/main/jniLibs/$abi"

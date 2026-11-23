@@ -53,3 +53,20 @@ Keyboard: arrows, Home/End, Enter/Space, Escape, typeahead.
 | `date picker` | same as calendar plus `name`, `placeholder`, `disabled` | trigger plus popover calendar, hidden input holds the ISO value |
 
 Jalali mode uses Persian month names and digits and a right to left grid. Values are always ISO Gregorian dates.
+
+## carousel
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `carousel` | `orientation` horizontal, vertical; `loop`; `autoplay` ms (pauses on hover and focus); `dots` | scroll snap slides, arrow, Home and End keys, mouse drag, `salamDsCarousel.go(el, index)` |
+| `carousel content` | | the scroller, holds the items |
+| `carousel item` | | one slide |
+| `carousel previous`, `carousel next` | | round buttons placed outside the slides, disabled at the ends unless `loop` |
+
+## resizable
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `resizable` | `orientation` horizontal, vertical | panel group, fires `ds-resize` with `detail.sizes` |
+| `resizable panel` | `size` percent (unset panels share the rest), `min size`, `max size` | |
+| `resizable handle` | `grip` | between two panels, drag or Arrow keys (5 percent), Home and End |

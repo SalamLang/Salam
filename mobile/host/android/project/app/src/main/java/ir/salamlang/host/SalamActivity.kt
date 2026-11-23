@@ -1,0 +1,118 @@
+package ir.salamlang.host
+
+import android.app.Activity
+import android.content.ComponentCallbacks2
+import android.content.res.Configuration
+import android.graphics.Color
+import android.os.Build
+import android.os.Bundle
+import android.view.KeyEvent
+import android.view.SurfaceHolder
+import android.view.View
+import android.view.WindowInsets
+
+class SalamActivity : Activity(), SurfaceHolder.Callback {
+    private lateinit var view: SalamView
+    private var density = 1f
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Host.activity = this
+        density = resources.displayMetrics.density
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        view = SalamView(this)
+        view.holder.addCallback(this)
+        view.setOnApplyWindowInsetsListener { _, insets ->
+            sendInsets(insets)
+            insets
+        }
+        setContentView(view)
+        Host.nativeScheme(if (isDark(resources.configuration)) 1 else 0)
+    }
+
+    private fun isDark(c: Configuration): Boolean =
+        (c.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    @Suppress("DEPRECATION")
+    private fun sendInsets(insets: WindowInsets) {
+        var top: Int
+        var right: Int
+        var bottom: Int
+        var left: Int
+        var keyboard = 0
+        if (Build.VERSION.SDK_INT >= 30) {
+            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            top = bars.top
+            right = bars.right
+            bottom = bars.bottom
+            left = bars.left
+            keyboard = insets.getInsets(WindowInsets.Type.ime()).bottom
+        } else {
+            top = insets.systemWindowInsetTop
+            right = insets.systemWindowInsetRight
+            left = insets.systemWindowInsetLeft
+            bottom = insets.stableInsetBottom
+            keyboard = maxOf(0, insets.systemWindowInsetBottom - insets.stableInsetBottom)
+        }
+        Host.nativeInsets(top.toFloat(), right.toFloat(), bottom.toFloat(), left.toFloat(), keyboard.toFloat())
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {}
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        Host.nativeSurface(holder.surface, width, height, density)
+        Host.nativeStart(filesDir.absolutePath, cacheDir.absolutePath)
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        Host.nativeSurface(null, 0, 0, density)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        Host.nativeScheme(if (isDark(newConfig)) 1 else 0)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        Host.nativeKey(1, keyCode, event.metaState)
+        val ch = event.unicodeChar
+        if (ch > 0 && !event.isCtrlPressed) {
+            Host.nativeText(String(Character.toChars(ch)))
+        }
+        return true
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        Host.nativeKey(0, keyCode, event.metaState)
+        return true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Host.nativeLifecycle(0)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Host.nativeLifecycle(1)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        Host.nativeLifecycle(2)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            Host.nativeLifecycle(3)
+        }
+    }
+}

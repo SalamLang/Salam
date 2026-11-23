@@ -115,8 +115,8 @@ response  {"ok": true,  "value": {...}}
 
 1. Match the path with `nav.Match` against the route table (`ROUTING.md`).
    Unknown path: `_404` with status 404.
-2. Run the layout and route guards on the server. A failed guard answers
-   `302` to its `redirect`.
+2. Run the layout and route guards on the server. A route whose guard fails
+   is skipped like an unknown path.
 3. Render the layout chain and the page component to HTML with the same
    lowering the runtime layout (`page Name(params)`, `http.Html`) already uses.
    A `server func` call or a `load(...)` ready inside the render is awaited
@@ -301,6 +301,17 @@ the language yet; when it is, it wraps the same stub.
   (name based reachability from every non server definition). Native programs
   lose them through unreachable function removal, because the stub no longer
   mentions them.
+- Limits of the pruning: methods in `impl` blocks and struct methods are never
+  dropped, even when only a server func uses them, and what they call stays
+  too. They are also scanned for E286, so a method that uses `env` is an error
+  whenever its type is declared in the page program. Move such code into a
+  package the page does not import.
+- Limit of the web stub: `ssrweb.Call` is a synchronous `XMLHttpRequest`. A
+  call blocks the page until the answer arrives (browsers warn about it), and
+  a slow backend freezes the UI. There is no async path yet, because `load(...)`
+  (R9) is not in the language; when it is, it will wrap the same stub with a
+  non blocking request. Keep server funcs fast, and avoid calling one per
+  keystroke or per frame.
 - E286: a definition that stays in the web program and uses a member of `env`
   or `ssr` (`env.Get`, `ssr.Request`) is an error naming that member.
 - E289: a static web build (`salam page build` without a `server` setting)

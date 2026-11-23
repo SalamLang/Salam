@@ -2577,6 +2577,42 @@ that.
 
 A `pub component` with an English name must be PascalCase (`MyCard`: capital first letter, no `_`), else E290; Persian names are exempt.
 
+**Page projects: routes, rendering, server funcs.** When the entry file is
+`main.salam`, the `pages/` folder next to it is the route table, one file per
+route and exactly one `pub component` in each (E282). `index.salam` is the
+folder, `name.salam` a segment, `[id].salam` the parameter `id`, `[[id]].salam`
+an optional one, `[...rest].salam` the rest of the path, `_404.salam` the
+fallback and `_layout.salam` a component with an `Outlet` that wraps its
+folder and below (E283 without one). Settings at the top of the component
+body: `title`, `guard` (a false guard skips the route, a layout's guard covers
+its folder) and `route = "/..."` to replace the path from the file name
+(Persian `عنوان`, `نگهبان`, `مسیر`). There is no `routes:` block and no
+`redirect` setting. Navigate with `Link: to = "/p"` and in code with
+`page.route.GoTo(path)`, `Redirect`, `Back`, `Forward`; read `page.route.path`,
+`page.route.Param("id")`, `page.route.Query("q")` (Persian `صفحه.مسیر.برو`,
+`هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`). File errors:
+E280 same route twice, E281 `[id]` without that parameter, E284 bad file name.
+Every `pub component` in the project folder imports itself, no `include`; two
+with one name are E291.
+
+`salam page build --ssr[=DIR]` writes `DIR/server` (a native program) and
+`DIR/public`; run it with `PORT` and `HOST` (default 8080 and 127.0.0.1).
+`salam serve --render` builds, runs and rebuilds on save. The server answers
+every route with finished HTML and your `_404`, embeds `<script
+type="application/json" id="__salam">` and the browser hydrates the regions
+in place. `mode = hash` and a user `main` are refused with `--ssr`.
+
+`server func Name(args): T:` (Persian `سرور تابع`, after `pub`) is a function
+that runs only on the front server and calls the backend over HTTP; its body
+never reaches the browser or a native app, which get a stub that posts to
+`/_salam/fn/Name`. Parameters and result must be JSON types (E285: no
+pointers, references or closures), top level only (E287), one per name (E288).
+Read secrets with `env.Get` inside it; using `env` from browser code is E286.
+A body that imports `db`, `fs`, `os`, process or router warns W280 unless
+`salam.cfg` has `allow_backend = true`. A static build that can reach one is
+E289 unless the page sets `server = "https://front.example.com"` (Persian
+`سرور`). `ssr.Request()` gives the current request; keep the function thin.
+
 **Components talking to each other.** A parent passes a function as a
 parameter and the child calls it from a handler:
 `component Counter(change): ... click = (): count++ change(count) end ...`,

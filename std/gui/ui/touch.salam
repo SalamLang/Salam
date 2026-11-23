@@ -1,0 +1,163 @@
+package ui
+
+import math
+import gui.window
+
+const _T_SLOP := 10.0
+const _T_LONG_MS := 500
+const _T_TAU := 325.0
+const _T_STOP := 0.02
+
+mut _tid := -1
+mut _tx0 := 0.0
+mut _ty0 := 0.0
+mut _tx := 0.0
+mut _ty := 0.0
+mut _tt0 := 0 as i64
+mut _ttm := 0 as i64
+mut _tdrag := false
+mut _tlong := false
+mut _tvx := 0.0
+mut _tvy := 0.0
+mut _tfling := false
+mut _tft := 0 as i64
+
+func _touch_reset():
+    _tid = -1
+    _tdrag = false
+    _tlong = false
+    _tvx = 0.0
+    _tvy = 0.0
+    _tfling = false
+end
+
+
+func _touch_scroll(dx: f64, dy: f64): bool:
+    mut n := _hit(_tx0, _ty0)
+    until n >= 0:
+        if _is_textarea(n) and _scroll_text(n, dx, dy):
+            ret true
+        end
+        if _is_scroller(n):
+            c := _e.ctl[n]
+            if _set_scroll(n, c.scroll_x + dx, c.scroll_y + dy):
+                _fire(n, "scroll", false)
+                ret true
+            end
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret false
+end
+
+func _touch_release_hover():
+    if _e.hover >= 0:
+        _fire(_e.hover, "mouseleave", false)
+        _set_hover(-1)
+    end
+end
+
+func _touch_event(ev: window.Event):
+    now := window.Clock()
+    switch ev.kind:
+        window.EventKind.PointerDown:
+            if _tid >= 0:
+                break
+            end
+            _touch_reset()
+            _tid = ev.pointer
+            _tx0 = ev.x
+            _ty0 = ev.y
+            _tx = ev.x
+            _ty = ev.y
+            _tt0 = now
+            _ttm = now
+            _pointer_move(ev.x, ev.y)
+            _pointer_down(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
+            break
+        end
+        window.EventKind.PointerMove:
+            if ev.pointer != _tid:
+                break
+            end
+            dx := ev.x - _tx
+            dy := ev.y - _ty
+            mut dt := (now - _ttm) as f64
+            if dt < 1.0:
+                dt = 1.0
+            end
+            if not _tdrag and not _tlong:
+                mx := ev.x - _tx0
+                my := ev.y - _ty0
+                if mx * mx + my * my > _T_SLOP * _T_SLOP:
+                    _tdrag = true
+                    _e.capture = -2
+                    _set_active(-1)
+                end
+            end
+            if _tdrag:
+                _touch_scroll(0.0 - dx, 0.0 - dy)
+                _tvx = 0.6 * (0.0 - dx / dt) + 0.4 * _tvx
+                _tvy = 0.6 * (0.0 - dy / dt) + 0.4 * _tvy
+            end
+            _tx = ev.x
+            _ty = ev.y
+            _ttm = now
+            break
+        end
+        window.EventKind.PointerUp:
+            if ev.pointer != _tid:
+                break
+            end
+            wasdrag := _tdrag
+            if wasdrag:
+                _pointer_up(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
+                if now - _ttm > 100:
+                    _tvx = 0.0
+                    _tvy = 0.0
+                end
+                if math.Abs(_tvx) > 0.1 or math.Abs(_tvy) > 0.1:
+                    _tid = -1
+                    _tfling = true
+                    _tft = now
+                    _touch_release_hover()
+                    break
+                end
+            else:
+                _pointer_up(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
+            end
+            _touch_release_hover()
+            _touch_reset()
+            break
+        end
+        else:
+            break
+        end
+    end
+end
+
+func _touch_tick():
+    if _tid >= 0 and not _tdrag and not _tlong and window.Clock() - _tt0 >= (_T_LONG_MS as i64):
+        t := _hit(_tx, _ty)
+        _tlong = true
+        _e.capture = -2
+        _set_active(-1)
+        _fire_ev(t, _make_event("contextmenu", t), true)
+    end
+    if _tfling:
+        now := window.Clock()
+        dt := (now - _tft) as f64
+        if dt <= 0.0:
+            ret
+        end
+        k := math.Exp(0.0 - dt / _T_TAU)
+        f := _T_TAU * (1.0 - k)
+        moved := _touch_scroll(_tvx * f, _tvy * f)
+        _tvx *= k
+        _tvy *= k
+        _tft = now
+        if not moved or (math.Abs(_tvx) < _T_STOP and math.Abs(_tvy) < _T_STOP):
+            _touch_reset()
+        end
+    end
+end

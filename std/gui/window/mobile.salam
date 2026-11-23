@@ -1,0 +1,238 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package window
+if SALAM_OS_ANDROID or defined(SALAM_OS_IOS):
+    extern:
+        func salam_host_poll(out: f64*): int
+        func salam_host_text(): str
+        func salam_host_wait(ms: int)
+        func salam_host_wake()
+        func salam_host_ime(flag: int)
+        func salam_host_clip_get(): str
+        func salam_host_clip_set(text: str): int
+        func salam_host_ready(): int
+        func salam_host_width(): int
+        func salam_host_height(): int
+        func salam_host_density(): f64
+        func salam_host_blit(pixels: void*, bw: int, bh: int, x: int, y: int, w: int, h: int): int
+    end
+
+    mut _a_buf := null as void*
+    mut _a_bw := 0
+    mut _a_bh := 0
+    mut _a_scale := 1.0
+    mut _a_dark := false
+    mut _a_ev := null as f64*
+
+    func _a_key(code: int): Key:
+        ret match code:
+            66: Key.Enter end
+            67: Key.Backspace end
+            112: Key.Delete end
+            61: Key.Tab end
+            62: Key.Space end
+            111: Key.Escape end
+            19: Key.Up end
+            20: Key.Down end
+            21: Key.Left end
+            22: Key.Right end
+            122: Key.Home end
+            123: Key.End end
+            92: Key.PageUp end
+            93: Key.PageDown end
+            else: Key.Unknown end
+        end
+    end
+
+    func _a_handle(kind: int):
+        v := _a_ev
+        switch kind:
+            1:
+                if v[2] > 0.0 and (v[2] - _a_scale > 0.001 or _a_scale - v[2] > 0.001):
+                    _a_scale = v[2]
+                    _push(Event { kind = EventKind.ScaleChanged, window = 0, scale = _a_scale })
+                end
+                _push(Event { kind = EventKind.Resized, window = 0, physical_width = v[0] as int, physical_height = v[1] as int, scale = _a_scale })
+                break
+            end
+            2:
+                action := v[0] as int
+                k := action == 0 ? EventKind.PointerDown : (action == 2 ? EventKind.PointerMove : EventKind.PointerUp)
+                _push(
+                    Event {
+                        kind = k, window = 0, pointer = v[1] as int, pointer_kind = PointerKind.Touch,
+                        x = _logical(v[2] as int, _a_scale), y = _logical(v[3] as int, _a_scale),
+                        button = action == 2 ? MouseButton.None : MouseButton.Left
+                    }
+                )
+                break
+            end
+            3:
+                code := v[1] as int
+                down := (v[0] as int) == 1
+                if code == 4:
+                    if down:
+                        _push(Event { kind = EventKind.BackRequested, window = 0 })
+                    end
+                else:
+                    _push(Event { kind = down ? EventKind.KeyDown : EventKind.KeyUp, window = 0, key = _a_key(code), code = code, modifiers = v[2] as int })
+                end
+                break
+            end
+            4:
+                _push(Event { kind = (v[0] as int) == 1 ? EventKind.ImeCommit : EventKind.TextInput, window = 0, text = salam_host_text() })
+                break
+            end
+            9:
+                _push(Event { kind = EventKind.ImePreedit, window = 0, text = salam_host_text(), cursor = v[0] as int })
+                break
+            end
+            5:
+                s := _a_scale
+                _push(
+                    Event {
+                        kind = EventKind.InsetsChanged, window = 0, inset_top = v[0] / s, inset_right = v[1] / s,
+                        inset_bottom = v[2] / s, inset_left = v[3] / s, keyboard = v[4] / s
+                    }
+                )
+                break
+            end
+            6:
+                n := v[0] as int
+                k := match n:
+                    0: EventKind.Pause end
+                    1: EventKind.Resume end
+                    2: EventKind.SaveState end
+                    else: EventKind.LowMemory end
+                end
+                _push(Event { kind = k, window = 0 })
+                break
+            end
+            8:
+                _a_dark = (v[0] as int) == 1
+                _push(Event { kind = EventKind.ColorSchemeChanged, window = 0, scheme = _a_dark ? ColorScheme.Dark : ColorScheme.Light })
+                break
+            end
+            else:
+                break
+            end
+        end
+    end
+
+    func _a_drain():
+        mut k := salam_host_poll(_a_ev)
+        until k > 0:
+            _a_handle(k)
+            k = salam_host_poll(_a_ev)
+        end
+    end
+
+    func _nat_init(): bool:
+        _a_ev = mem.AllocateZeroed(128 as u64) as f64*
+        ret true
+    end
+
+    func _nat_open(id: int, _o: Options): bool:
+        mut waited := 0
+        until salam_host_ready() == 0 and waited < 100:
+            salam_host_wait(100)
+            waited++
+        end
+        if salam_host_ready() == 0:
+            _set_error("the Android surface is not ready")
+            ret false
+        end
+        _a_scale = salam_host_density()
+        _set_geometry(id, salam_host_width(), salam_host_height(), _a_scale)
+        _push(Event { kind = EventKind.FocusIn, window = id })
+        ret true
+    end
+
+    func _nat_close(_id: int):
+        _set_error("")
+    end
+
+    func _nat_title(_id: int, _title: str):
+        _set_error("")
+    end
+
+    func _nat_resize(_id: int, _pw: int, _ph: int):
+        _set_error("")
+    end
+
+    func _nat_limits(_id: int):
+        _set_error("")
+    end
+
+    func _nat_state(_id: int, _what: int):
+        _set_error("")
+    end
+
+    func _nat_cursor(_id: int, _cursor: Cursor):
+        _set_error("")
+    end
+
+    func _nat_ime(_id: int, _x: int, _y: int, w: int, h: int):
+        salam_host_ime((w > 0 or h > 0) ? 1 : 0)
+    end
+
+    func _nat_icon(_id: int, _pixels: void*, _w: int, _h: int, _stride: int): bool:
+        ret false
+    end
+
+    func _nat_alloc(_id: int, w: int, h: int): void*:
+        if _a_buf != null:
+            mem.Free(_a_buf)
+        end
+        _a_buf = mem.AllocateZeroed(((w as u64) * (h as u64)) * (4 as u64))
+        _a_bw = w
+        _a_bh = h
+        ret _a_buf
+    end
+
+    func _nat_blit(_id: int, rects: Vector<Rect>):
+        each r in rects:
+            _d := salam_host_blit(_a_buf, _a_bw, _a_bh, r.x, r.y, r.width, r.height)
+        end
+    end
+
+    func _nat_pump(timeout: int):
+        salam_host_wait(timeout)
+        _a_drain()
+    end
+
+    func _nat_wake():
+        salam_host_wake()
+    end
+
+    func _nat_clip_get(): str:
+        ret str.Clone(salam_host_clip_get())
+    end
+
+    func _nat_clip_set(text: str): bool:
+        ret salam_host_clip_set(text) != 0
+    end
+
+    func _nat_scheme(): ColorScheme:
+        ret _a_dark ? ColorScheme.Dark : ColorScheme.Light
+    end
+
+    func _nat_shown(_id: int, _x: int, _y: int): u32:
+        ret 0
+    end
+
+    func _nat_handle(_id: int): void*:
+        ret null
+    end
+end

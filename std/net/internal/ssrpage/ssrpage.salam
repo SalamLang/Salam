@@ -30,11 +30,27 @@ import time
 import conv
 import net.router
 
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetCurrentThreadId(): u32
+    end
+else:
+    if not SALAM_OS_WASM:
+        extern:
+            func pthread_self(): usize
+        end
+    end
+end
+
 const _SHELL_FILE := ".shell.html"
 
 const _STATE_OPEN := "<script type=\"application/json\" id=\"__salam\">"
 
 mut _pg_mu := sync.NewMutex()
+
+mut _pg_active := false
+
+mut _pg_owner := 0 as i64
 
 mut _pg_shell := ""
 
@@ -58,6 +74,22 @@ func _pg_clean_base(base: str): str:
     mut b := base
     if str.EndsWith(b, "/"): b = b.Substr(0, b.Len() - 1) end
     ret b
+end
+
+if SALAM_OS_WINDOWS:
+    func _pg_tid(): i64:
+        ret GetCurrentThreadId() as i64
+    end
+else:
+    if SALAM_OS_WASM:
+        func _pg_tid(): i64:
+            ret 1
+        end
+    else:
+        func _pg_tid(): i64:
+            ret pthread_self() as i64
+        end
+    end
 end
 
 func _pg_byte(s: str, i: int): int:
@@ -175,10 +207,10 @@ pub func PageNop(n: int):
 end
 
 @en "PageCallKey"
-@fa "کلید فراخوانی"
+@fa "کلید صدازدن"
 pub func PageCallKey(name: str, args: str): str:
     mut h := 2166136261 as u64
-    n := args.Len()
+    n := str.ByteLen(args)
     mut i := 0
     until i < n:
         h ^= (_pg_byte(args, i) as u64)
@@ -203,8 +235,11 @@ pub func PageCallKey(name: str, args: str): str:
 end
 
 @en "PageCallPut"
-@fa "ثبت فراخوانی"
+@fa "ثبت صدازدن"
 pub func PageCallPut(key: str, value: str):
+    if not PageActive():
+        ret
+    end
     _pg_call_keys.Push(str.Clone(key))
     _pg_call_vals.Push(str.Clone(value))
 end
@@ -217,16 +252,24 @@ pub func PageCalls(): str:
     until i < _pg_call_keys.Len():
         if i > 0: out += "," end
         v := _pg_call_vals.Get(i)
-        out += "\"" + _pg_call_keys.Get(i) + "\":" + (json.Valid(v) ? v : "null")
+        out += json.Str(_pg_call_keys.Get(i)) + ":" + (json.Valid(v) ? v : "null")
         i++
     end
     ret out + "}"
+end
+
+@en "PageActive"
+@fa "صفحه فعال"
+pub func PageActive(): bool:
+    ret _pg_active and _pg_owner == _pg_tid()
 end
 
 @en "PageBegin"
 @fa "آغاز صفحه"
 pub func PageBegin():
     sync.Lock(_pg_mu)
+    _pg_owner = _pg_tid()
+    _pg_active = true
     _pg_title = ""
     _pg_write = ""
     _pg_skip = false
@@ -238,6 +281,10 @@ end
 @en "PageEnd"
 @fa "پایان صفحه"
 pub func PageEnd():
+    _pg_active = false
+    _pg_owner = 0 as i64
+    _pg_call_keys.Clear()
+    _pg_call_vals.Clear()
     sync.Unlock(_pg_mu)
 end
 

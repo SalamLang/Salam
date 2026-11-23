@@ -88,14 +88,66 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
         pushBars()
     }
 
+    @Volatile
+    private var brightnessAsked = -1
+    private var immersive = false
+    private var barStyle = 0
+
+    fun setScreen(what: Int, value: Int) {
+        when (what) {
+            0 -> {
+                if (value != 0) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            1 -> {
+                requestedOrientation = when (value) {
+                    1 -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    2 -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+            2 -> {
+                immersive = value != 0
+                pushBars()
+            }
+            3 -> {
+                barStyle = value
+                pushBars()
+            }
+            5 -> {
+                val lp = window.attributes
+                lp.screenBrightness = if (value < 0) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else value / 100f
+                window.attributes = lp
+            }
+        }
+    }
+
+    fun askBrightness(value: Int) {
+        brightnessAsked = value
+    }
+
+    fun brightnessPercent(): Int {
+        if (brightnessAsked >= 0) return brightnessAsked
+        return try {
+            val v = android.provider.Settings.System.getInt(contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+            (v * 100 / 255)
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun pushBars() {
         var flags =
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        if (lightTop && Build.VERSION.SDK_INT >= 23) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-        if (lightBottom && Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        val top = if (barStyle == 1) false else if (barStyle == 2) true else lightTop
+        val bottom = if (barStyle == 1) false else if (barStyle == 2) true else lightBottom
+        if (top && Build.VERSION.SDK_INT >= 23) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        if (bottom && Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        if (immersive) {
+            flags = flags or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        }
         window.decorView.systemUiVisibility = flags
     }
 

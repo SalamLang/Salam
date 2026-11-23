@@ -280,6 +280,15 @@ object Host {
     }
 
     @JvmStatic
+    fun screen(what: Int, value: Int): Int {
+        val a = activity as? SalamActivity ?: return -1
+        if (what == 4) return a.brightnessPercent()
+        if (what == 5) a.askBrightness(value)
+        a.runOnUiThread { a.setScreen(what, value) }
+        return 1
+    }
+
+    @JvmStatic
     fun haptic(kind: Int): Boolean {
         val a = activity ?: return false
         val api = android.os.Build.VERSION.SDK_INT

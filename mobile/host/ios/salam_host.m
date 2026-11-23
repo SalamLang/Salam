@@ -7,6 +7,7 @@
 #import <UserNotifications/UserNotifications.h>
 #import <Security/Security.h>
 #import <Network/Network.h>
+#import <LocalAuthentication/LocalAuthentication.h>
 #include <sys/utsname.h>
 #include <execinfo.h>
 #include <fcntl.h>
@@ -1868,6 +1869,49 @@ int salam_host_screen(int what, int value)
         }
     });
     return 1;
+}
+
+static int g_auth_state;
+
+int salam_host_auth_available(void)
+{
+    LAContext *c = [LAContext new];
+    NSError *e = nil;
+    return [c canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&e] ? 1 : 0;
+}
+
+int salam_host_auth_request(const char *reason)
+{
+    LAContext *c = [LAContext new];
+    NSError *e = nil;
+    if (![c canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&e]) {
+        pthread_mutex_lock(&g_dev_mu);
+        g_auth_state = 3;
+        pthread_mutex_unlock(&g_dev_mu);
+        return 0;
+    }
+    NSString *why = reason != NULL ? [NSString stringWithUTF8String:reason] : nil;
+    if (why.length == 0) {
+        why = @"Confirm it is you";
+    }
+    pthread_mutex_lock(&g_dev_mu);
+    g_auth_state = 1;
+    pthread_mutex_unlock(&g_dev_mu);
+    [c evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics localizedReason:why reply:^(BOOL ok, NSError *err) {
+        pthread_mutex_lock(&g_dev_mu);
+        g_auth_state = ok ? 2 : 3;
+        pthread_mutex_unlock(&g_dev_mu);
+        salam_host_post(SALAM_EV_DEVICE, 6, 0, 0, 0, 0, NULL);
+    }];
+    return 1;
+}
+
+int salam_host_auth_state(void)
+{
+    pthread_mutex_lock(&g_dev_mu);
+    int s = g_auth_state;
+    pthread_mutex_unlock(&g_dev_mu);
+    return s;
 }
 
 int salam_host_share(const char *text, const char *url)

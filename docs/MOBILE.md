@@ -319,6 +319,9 @@ function appears under a neighbour. On iOS SIGTERM flushes the output and exits.
   `device.KeepAwake`, `device.LockOrientation`, `device.Immersive`,
   `device.SetBarStyle` and `device.SetBrightness` control the screen at run
   time (`--orientation` still sets the start).
+  `device.CanAuthenticate`, `device.Authenticate` and `device.AuthStatus` show
+  the fingerprint or face prompt (Android 10 and newer, and iOS); the build
+  declares `USE_BIOMETRIC` and the Face ID description when you call it.
 
 ## Not available yet
 

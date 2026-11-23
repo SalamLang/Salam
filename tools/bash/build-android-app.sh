@@ -576,6 +576,9 @@ if uses_host_call salam_host_location_request; then
     declare_permission ACCESS_FINE_LOCATION
     declare_permission ACCESS_COARSE_LOCATION
 fi
+if uses_host_call salam_host_auth_request; then
+    declare_permission USE_BIOMETRIC
+fi
 if uses_host_call salam_host_network; then
     declare_permission ACCESS_NETWORK_STATE
 fi

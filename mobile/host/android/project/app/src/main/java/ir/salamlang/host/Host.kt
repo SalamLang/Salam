@@ -62,6 +62,42 @@ object Host {
         }
     }
 
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun vibrate(ms: Int): Boolean {
+        val a = activity ?: return false
+        if (ms <= 0) return false
+        return try {
+            val v = a.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator ?: return false
+            if (!v.hasVibrator()) return false
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                v.vibrate(android.os.VibrationEffect.createOneShot(ms.toLong(), android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                v.vibrate(ms.toLong())
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun haptic(kind: Int): Boolean {
+        val a = activity ?: return false
+        val api = android.os.Build.VERSION.SDK_INT
+        val code = when (kind) {
+            0 -> android.view.HapticFeedbackConstants.VIRTUAL_KEY
+            1 -> android.view.HapticFeedbackConstants.LONG_PRESS
+            2 -> if (api >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY
+            3 -> if (api >= 30) android.view.HapticFeedbackConstants.REJECT else android.view.HapticFeedbackConstants.LONG_PRESS
+            else -> return false
+        }
+        a.runOnUiThread {
+            a.window.decorView.performHapticFeedback(code)
+        }
+        return true
+    }
+
     private fun clipboard(): android.content.ClipboardManager? =
         activity?.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
 

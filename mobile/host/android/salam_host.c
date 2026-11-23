@@ -1,7 +1,6 @@
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
-#include <errno.h>
 #include <jni.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -9,45 +8,131 @@
 #include <string.h>
 #include <time.h>
 
-#define QCAP 512
-#define TCAP 512
-#define NV 8
+#include "../common/salam_host_common.h"
 
-enum {
-    EV_RESIZE = 1,
-    EV_POINTER = 2,
-    EV_KEY = 3,
-    EV_TEXT = 4,
-    EV_INSETS = 5,
-    EV_LIFECYCLE = 6,
-    EV_SCHEME = 8,
-    EV_PREEDIT = 9
-};
+#define TCAP SALAM_HOST_TCAP
 
-typedef struct {
-    double v[NV];
-    char text[TCAP];
-} Ev;
+static char *utf8_from_jstring(JNIEnv *env, jstring s)
+{
+    if (s == NULL) {
+        char *empty = malloc(1);
+        if (empty) {
+            empty[0] = 0;
+        }
+        return empty;
+    }
+    jsize n = (*env)->GetStringLength(env, s);
+    const jchar *u = (*env)->GetStringChars(env, s, NULL);
+    char *out = malloc((size_t)n * 3 + 1);
+    size_t o = 0;
+    if (out == NULL) {
+        (*env)->ReleaseStringChars(env, s, u);
+        return NULL;
+    }
+    for (jsize i = 0; i < n; i++) {
+        uint32_t c = u[i];
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 &&
+            u[i + 1] <= 0xDFFF) {
+            c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+            i++;
+        } else if (c >= 0xD800 && c <= 0xDFFF) {
+            c = 0xFFFD;
+        }
+        if (c < 0x80) {
+            out[o++] = (char)c;
+        } else if (c < 0x800) {
+            out[o++] = (char)(0xC0 | (c >> 6));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            out[o++] = (char)(0xE0 | (c >> 12));
+            out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+        } else {
+            out[o++] = (char)(0xF0 | (c >> 18));
+            out[o++] = (char)(0x80 | ((c >> 12) & 0x3F));
+            out[o++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+        }
+    }
+    out[o] = 0;
+    (*env)->ReleaseStringChars(env, s, u);
+    return out;
+}
+
+static jstring jstring_from_utf8(JNIEnv *env, const char *s)
+{
+    if (s == NULL) {
+        return (*env)->NewString(env, NULL, 0);
+    }
+    size_t n = strlen(s);
+    jchar *u = malloc((n + 1) * sizeof(jchar));
+    size_t o = 0;
+    if (u == NULL) {
+        return NULL;
+    }
+    const unsigned char *p = (const unsigned char *)s;
+    size_t i = 0;
+    while (i < n) {
+        uint32_t c = p[i];
+        size_t need = 0;
+        if (c < 0x80) {
+            need = 0;
+        } else if ((c & 0xE0) == 0xC0) {
+            c &= 0x1F;
+            need = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            c &= 0x0F;
+            need = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            c &= 0x07;
+            need = 3;
+        } else {
+            u[o++] = 0xFFFD;
+            i++;
+            continue;
+        }
+        int bad = 0;
+        for (size_t k = 1; k <= need; k++) {
+            if (i + k >= n || (p[i + k] & 0xC0) != 0x80) {
+                bad = 1;
+                break;
+            }
+            c = (c << 6) | (p[i + k] & 0x3F);
+        }
+        if (bad) {
+            u[o++] = 0xFFFD;
+            i++;
+            continue;
+        }
+        i += need + 1;
+        if (c >= 0x10000) {
+            c -= 0x10000;
+            u[o++] = (jchar)(0xD800 + (c >> 10));
+            u[o++] = (jchar)(0xDC00 + (c & 0x3FF));
+        } else {
+            u[o++] = (jchar)c;
+        }
+    }
+    jstring r = (*env)->NewString(env, u, (jsize)o);
+    free(u);
+    return r;
+}
+
 
 extern int salam_app_main(int argc, char **argv);
 
-static Ev q[QCAP];
-static int qh;
-static int qt;
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static int woken;
 static ANativeWindow *win;
-static int surf_w;
-static int surf_h;
-static double density = 1.0;
-static char cur_text[TCAP];
 static pthread_t th;
 static int started;
 static JavaVM *vm;
 static jclass host_cls;
 static jmethodID exit_mid;
 static jmethodID ime_mid;
+static jmethodID open_mid;
+static jmethodID clip_set_mid;
+static jmethodID clip_get_mid;
+static char clip_buf[8192];
 static int ime_state;
 
 jint JNI_OnLoad(JavaVM *jvm, void *reserved)
@@ -55,114 +140,6 @@ jint JNI_OnLoad(JavaVM *jvm, void *reserved)
     (void)reserved;
     vm = jvm;
     return JNI_VERSION_1_6;
-}
-
-static void push(const Ev *e)
-{
-    pthread_mutex_lock(&mu);
-    int n = (qt + 1) % QCAP;
-    if (n == qh) {
-        pthread_mutex_unlock(&mu);
-        return;
-    }
-    if (e->v[0] == EV_POINTER && e->v[1] == 2 && qh != qt) {
-        Ev *last = &q[(qt + QCAP - 1) % QCAP];
-        if (last->v[0] == EV_POINTER && last->v[1] == 2 && last->v[2] == e->v[2]) {
-            *last = *e;
-            pthread_cond_signal(&cv);
-            pthread_mutex_unlock(&mu);
-            return;
-        }
-    }
-    q[qt] = *e;
-    qt = n;
-    pthread_cond_signal(&cv);
-    pthread_mutex_unlock(&mu);
-}
-
-static void simple(double kind, double a, double b, double c, double d, double f)
-{
-    Ev e;
-    memset(&e, 0, sizeof e);
-    e.v[0] = kind;
-    e.v[1] = a;
-    e.v[2] = b;
-    e.v[3] = c;
-    e.v[4] = d;
-    e.v[5] = f;
-    push(&e);
-}
-
-int salam_host_poll(double *out)
-{
-    int kind = 0;
-    pthread_mutex_lock(&mu);
-    if (qh != qt) {
-        memcpy(out, &q[qh].v[1], sizeof(double) * (NV - 1));
-        memcpy(cur_text, q[qh].text, TCAP);
-        kind = (int)q[qh].v[0];
-        qh = (qh + 1) % QCAP;
-    }
-    pthread_mutex_unlock(&mu);
-    return kind;
-}
-
-const char *salam_host_text(void)
-{
-    return cur_text;
-}
-
-void salam_host_wait(int ms)
-{
-    pthread_mutex_lock(&mu);
-    if (qh == qt && !woken && ms != 0) {
-        if (ms < 0) {
-            pthread_cond_wait(&cv, &mu);
-        } else {
-            struct timespec t;
-            clock_gettime(CLOCK_REALTIME, &t);
-            t.tv_sec += ms / 1000;
-            t.tv_nsec += (long)(ms % 1000) * 1000000L;
-            if (t.tv_nsec >= 1000000000L) {
-                t.tv_sec++;
-                t.tv_nsec -= 1000000000L;
-            }
-            pthread_cond_timedwait(&cv, &mu, &t);
-        }
-    }
-    woken = 0;
-    pthread_mutex_unlock(&mu);
-}
-
-void salam_host_wake(void)
-{
-    pthread_mutex_lock(&mu);
-    woken = 1;
-    pthread_cond_signal(&cv);
-    pthread_mutex_unlock(&mu);
-}
-
-int salam_host_ready(void)
-{
-    pthread_mutex_lock(&mu);
-    int r = win != NULL && surf_w > 0 && surf_h > 0;
-    pthread_mutex_unlock(&mu);
-    return r;
-}
-
-int salam_host_width(void)
-{
-    return surf_w;
-}
-
-int salam_host_height(void)
-{
-    return surf_h;
-}
-
-double salam_host_density(void)
-{
-    return density;
 }
 
 int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int h)
@@ -242,6 +219,75 @@ void salam_host_ime(int on)
     }
 }
 
+static JNIEnv *host_env(int *attached)
+{
+    JNIEnv *env = NULL;
+    *attached = 0;
+    if (vm == NULL || host_cls == NULL) {
+        return NULL;
+    }
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+        *attached = 1;
+    }
+    return env;
+}
+
+static int call_bool_string(jmethodID mid, const char *s)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || mid == NULL) {
+        return 0;
+    }
+    jstring js = jstring_from_utf8(env, s);
+    if (js != NULL) {
+        r = (*env)->CallStaticBooleanMethod(env, host_cls, mid, js) ? 1 : 0;
+        (*env)->DeleteLocalRef(env, js);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_open_url(const char *url)
+{
+    return call_bool_string(open_mid, url);
+}
+
+int salam_host_clip_set(const char *text)
+{
+    return call_bool_string(clip_set_mid, text);
+}
+
+const char *salam_host_clip_get(void)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    clip_buf[0] = 0;
+    if (env == NULL || clip_get_mid == NULL) {
+        return clip_buf;
+    }
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, host_cls, clip_get_mid);
+    if (js != NULL) {
+        char *u = utf8_from_jstring(env, js);
+        if (u != NULL) {
+            strncpy(clip_buf, u, sizeof clip_buf - 1);
+            clip_buf[sizeof clip_buf - 1] = 0;
+            free(u);
+        }
+        (*env)->DeleteLocalRef(env, js);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return clip_buf;
+}
+
 static void *run(void *arg)
 {
     char *argv[2] = {"app", NULL};
@@ -269,6 +315,9 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     host_cls = (jclass)(*env)->NewGlobalRef(env, cls);
     exit_mid = (*env)->GetStaticMethodID(env, cls, "onExit", "()V");
     ime_mid = (*env)->GetStaticMethodID(env, cls, "showIme", "(Z)V");
+    open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");
+    clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
+    clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
     started = 1;
     pthread_create(&th, NULL, run, NULL);
 }
@@ -287,12 +336,10 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeSurface(JNIEnv *env, jc
             ANativeWindow_setBuffersGeometry(win, w, h, 2);
         }
     }
-    surf_w = surface != NULL ? w : 0;
-    surf_h = surface != NULL ? h : 0;
-    density = dens > 0 ? dens : 1.0;
     pthread_mutex_unlock(&mu);
+    salam_host_set_surface(surface != NULL ? w : 0, surface != NULL ? h : 0, dens);
     if (surface != NULL) {
-        simple(EV_RESIZE, w, h, dens, 0, 0);
+        salam_host_post(SALAM_EV_RESIZE, w, h, dens, 0, 0, NULL);
     }
 }
 
@@ -300,75 +347,71 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativePointer(JNIEnv *env, jc
 {
     (void)env;
     (void)cls;
-    simple(EV_POINTER, action, id, x, y, 0);
+    salam_host_post(SALAM_EV_POINTER, action, id, x, y, 0, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeKey(JNIEnv *env, jclass cls, jint down, jint code, jint meta)
 {
     (void)env;
     (void)cls;
-    simple(EV_KEY, down, code, meta, 0, 0);
+    salam_host_post(SALAM_EV_KEY, down, code, meta, 0, 0, NULL);
 }
 
 static void text_event(JNIEnv *env, jstring s, double kind, double cursor)
 {
-    Ev e;
-    memset(&e, 0, sizeof e);
-    e.v[0] = kind;
-    e.v[1] = cursor;
-    if (s != NULL) {
-        const char *u = (*env)->GetStringUTFChars(env, s, NULL);
-        if (u != NULL) {
-            strncpy(e.text, u, TCAP - 1);
-            (*env)->ReleaseStringUTFChars(env, s, u);
+    char *u = utf8_from_jstring(env, s);
+    char buf[TCAP];
+    size_t n = 0;
+    memset(buf, 0, sizeof buf);
+    if (u != NULL) {
+        n = strlen(u);
+        if (n >= TCAP) {
+            n = TCAP - 1;
+            while (n > 0 && (((unsigned char)u[n]) & 0xC0) == 0x80) {
+                n--;
+            }
         }
+        memcpy(buf, u, n);
+        free(u);
     }
-    push(&e);
+    salam_host_post(kind, cursor, 0, 0, 0, 0, buf);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeText(JNIEnv *env, jclass cls, jstring s)
 {
     (void)cls;
-    text_event(env, s, EV_TEXT, 0);
+    text_event(env, s, SALAM_EV_TEXT, 0);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeCommit(JNIEnv *env, jclass cls, jstring s)
 {
     (void)cls;
-    text_event(env, s, EV_TEXT, 1);
+    text_event(env, s, SALAM_EV_TEXT, 1);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativePreedit(JNIEnv *env, jclass cls, jstring s, jint cursor)
 {
     (void)cls;
-    text_event(env, s, EV_PREEDIT, cursor);
+    text_event(env, s, SALAM_EV_PREEDIT, cursor);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeInsets(JNIEnv *env, jclass cls, jfloat t, jfloat r, jfloat b, jfloat l, jfloat kb)
 {
-    Ev e;
     (void)env;
     (void)cls;
-    memset(&e, 0, sizeof e);
-    e.v[0] = EV_INSETS;
-    e.v[1] = t;
-    e.v[2] = r;
-    e.v[3] = b;
-    e.v[4] = l;
-    e.v[5] = kb;
-    push(&e);
+    salam_host_post(SALAM_EV_INSETS, t, r, b, l, kb, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeLifecycle(JNIEnv *env, jclass cls, jint kind)
 {
     (void)env;
     (void)cls;
-    simple(EV_LIFECYCLE, kind, 0, 0, 0, 0);
+    salam_host_post(SALAM_EV_LIFECYCLE, kind, 0, 0, 0, 0, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeScheme(JNIEnv *env, jclass cls, jint dark)
 {
     (void)env;
     (void)cls;
-    simple(EV_SCHEME, dark, 0, 0, 0, 0);
+    salam_host_post(SALAM_EV_SCHEME, dark, 0, 0, 0, 0, NULL);
 }

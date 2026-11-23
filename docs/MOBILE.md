@@ -39,6 +39,22 @@ stays empty). An image that cannot be read draws a grey box when it has a size.
 
 What the program prints goes to logcat: `adb logcat -s salam`.
 
+To try touch on an emulator without a tap tool, start the activity with a
+`salam-script` extra. It takes the same steps as the iOS `-salam-script`
+(table below) and sends them through the same event queue as real touches,
+after the first drawn frame. Coordinates are dp, like iOS points:
+
+```
+adb shell "am start -n app.example.app/ir.salamlang.host.SalamActivity --es salam-script 'wait 1000;tap 100,200;swipe 100,500,100,100'"
+```
+
+Quote the whole script for the device shell, since `;` ends a command there.
+Without the extra the host reads the system property `debug.salam.script`
+(`adb shell setprop debug.salam.script 'tap 100,200'`, 91 characters at most)
+and then the file `files/salam-script` in the app directory
+(`adb shell run-as PKG sh -c 'cat > files/salam-script'`). The script runs once
+per process. The parser is in `mobile/host/common/salam_host_common.c`.
+
 ## iOS
 
 ```

@@ -13,6 +13,8 @@ object Host {
 
     @JvmStatic external fun nativeStart(files: String, cache: String)
 
+    @JvmStatic external fun nativeScript(script: String)
+
     @JvmStatic external fun nativeSurface(surface: Surface?, w: Int, h: Int, density: Float)
 
     @JvmStatic external fun nativePointer(action: Int, id: Int, x: Float, y: Float)

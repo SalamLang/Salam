@@ -43,7 +43,6 @@ struct LoRoute:
     pub comp: str = ""
     pub node: int = 0
     pub gs: Vector<int> = Vector {}
-    pub rs: Vector<int> = Vector {}
     pub lay: str = ""
     pub title: int = 0 - 1
     pub rank: int = 0
@@ -307,7 +306,7 @@ func lo_rt_href_expr(a &: at.Ast, val: int): int:
     ret val
 end
 
-func lo_rt_page_member(name: str): str:
+func lo_rt_nav_member(name: str): str:
     if str.Equals(name, "GoTo") or lp.IdentEqual(name, "برو"):
         ret "__salam_go"
     end
@@ -320,16 +319,34 @@ func lo_rt_page_member(name: str): str:
     if str.Equals(name, "Forward") or lp.IdentEqual(name, "جلو"):
         ret "__salam_forward"
     end
-    if str.Equals(name, "Param") or lp.IdentEqual(name, "پارامتر"):
-        ret "__salam_param"
-    end
-    if str.Equals(name, "Query") or lp.IdentEqual(name, "پرسمان"):
-        ret "__salam_query"
-    end
-    if str.Equals(name, "route") or lp.IdentEqual(name, "مسیر"):
-        ret "__salam_route"
-    end
     ret ""
+end
+
+func lo_rt_is_page(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    ret n.kind == at.AST_IDENTIFIER and (str.Equals(n.name, "page") or str.Equals(n.name, "صفحه"))
+end
+
+func lo_rt_is_route_word(name: str): bool:
+    ret str.Equals(name, "route") or lp.IdentEqual(name, "مسیر")
+end
+
+func lo_rt_to_ident(a &: at.Ast, nid: int, name: str):
+    mut m := at.Get(a, nid)
+    m.kind = at.AST_IDENTIFIER
+    m.name = name
+    m.a = 0
+    at.Put(a, nid, m)
+end
+
+func lo_rt_no_router(log: lg.Logger, a &: at.Ast, nid: int, what: str):
+    lo_rt_error(
+        log, a, nid, i18.Tr("add a 'pages' folder next to main.salam with one file per route, for example pages/index.salam"),
+        co.Format1(i18.Tr("E265: 'page.%s' works with the router, but this program has no pages folder"), co.ArgStr(what))
+    )
 end
 
 func lo_rt_page_walk(log: lg.Logger, a &: at.Ast, nid: int, errs &: int):
@@ -339,22 +356,31 @@ func lo_rt_page_walk(log: lg.Logger, a &: at.Ast, nid: int, errs &: int):
     n := at.Get(a, nid)
     if n.kind == at.AST_MEMBER and n.a != 0:
         base := at.Get(a, n.a)
-        internal := lo_rt_page_member(n.name)
-        if base.kind == at.AST_IDENTIFIER and (str.Equals(base.name, "page") or str.Equals(base.name, "صفحه")) and str.Len(internal) > 0:
+        nav_fn := lo_rt_nav_member(n.name)
+        if nav_fn.Len() > 0 and base.kind == at.AST_MEMBER and lo_rt_is_route_word(base.name) and lo_rt_is_page(a, base.a):
             if not g_lo_routes_on:
-                lo_rt_error(
-                    log, a, nid, i18.Tr("add a 'pages' folder next to main.salam with one file per route, for example pages/index.salam"),
-                    co.Format1(i18.Tr("E265: 'page.%s' works with the router, but this program has no pages folder"), co.ArgStr(n.name))
-                )
+                lo_rt_no_router(log, a, nid, base.name + "." + n.name)
                 errs++
                 ret
             end
-            mut m := at.Get(a, nid)
-            m.kind = at.AST_IDENTIFIER
-            m.name = internal
-            m.a = 0
-            at.Put(a, nid, m)
+            lo_rt_to_ident(a, nid, nav_fn)
             ret
+        end
+        if lo_rt_is_page(a, n.a):
+            if lo_rt_is_route_word(n.name):
+                if not g_lo_routes_on:
+                    lo_rt_no_router(log, a, nid, n.name)
+                    errs++
+                    ret
+                end
+                lo_rt_to_ident(a, nid, "__salam_route")
+                ret
+            end
+            if nav_fn.Len() > 0 or str.Equals(n.name, "Param") or str.Equals(n.name, "Query"):
+                lo_rt_error(log, a, nid, co.Format1(i18.Tr("write page.route.%s"), co.ArgStr(n.name)), co.Format2(i18.Tr("E265: 'page.%s' moved to 'page.route.%s'"), co.ArgStr(n.name), co.ArgStr(n.name)))
+                errs++
+                ret
+            end
         end
     end
     lo_rt_page_walk(log, a, n.a, errs)
@@ -425,7 +451,7 @@ end
 
 func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, prog: int): str:
     s := nm.t_str
-    mut t := "func __salam_route_pick(__salam_p: " + s + nm.sep + "__salam_r &: " + s + "): " + s + ":\n"
+    mut t := "func __salam_route_pick(__salam_p: " + s + "): " + s + ":\n"
     each r in routes:
         q := lo_rt_quote(r.pattern)
         mut cond := nm.pkg + "." + nm.match_f + "(" + q + nm.sep + "__salam_p)"
@@ -448,29 +474,12 @@ func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, p
         t += "    if " + cond + ":\n"
         mut ind := "        "
         mut opened := 0
-        mut stop := false
-        repeat r.gs.Len() in gk:
-            gi := r.gs.Get(gk)
-            ri := r.rs.Get(gk)
-            if gi >= 0 and ri >= 0:
-                t += ind + "if not (__salam_rx_" + co.I64Toa(gi as i64) + "):\n"
-                t += ind + "    __salam_r = __salam_rx_" + co.I64Toa(ri as i64) + "\n"
-                t += ind + "    ret \"\"\n"
-                t += ind + "end\n"
-            else gi >= 0:
-                t += ind + "if __salam_rx_" + co.I64Toa(gi as i64) + ":\n"
-                ind += "    "
-                opened++
-            else ri >= 0:
-                t += ind + "__salam_r = __salam_rx_" + co.I64Toa(ri as i64) + "\n"
-                t += ind + "ret \"\"\n"
-                stop = true
-                break
-            end
+        each gi in r.gs:
+            t += ind + "if __salam_rx_" + co.I64Toa(gi as i64) + ":\n"
+            ind += "    "
+            opened++
         end
-        if not stop:
-            t += ind + "ret " + q + "\n"
-        end
+        t += ind + "ret " + q + "\n"
         repeat opened:
             ind = str.Substr(ind, 0, ind.Len() - 4)
             t += ind + "end\n"
@@ -615,25 +624,14 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     rt := nm.pkg + "." + nm.route_t
     mut t := ""
     t += "func __salam_route_make(__salam_u: " + s + ", __salam_out &: " + s + "): " + rt + ":\n"
-    t += "    mut __salam_t := __salam_u\n"
-    t += "    mut __salam_n := 0\n"
-    t += "    until __salam_n <= 8:\n"
-    t += "        mut __salam_p := \"\"\n"
-    t += "        mut __salam_q := \"\"\n"
-    t += "        " + nm.pkg + "." + nm.split_f + "(__salam_t" + nm.sep + "__salam_p" + nm.sep + "__salam_q)\n"
-    t += "        __salam_p = " + nm.pkg + "." + nm.norm_f + "(__salam_p)\n"
-    t += "        " + r + " = " + rt + " { " + nm.path + " = __salam_p" + nm.sep + nm.query + " = __salam_q" + nm.sep + nm.pattern + " = " + r + "." + nm.pattern + " }\n"
-    t += "        mut __salam_red := \"\"\n"
-    t += "        __salam_pat := __salam_route_pick(__salam_p" + nm.sep + "__salam_red)\n"
-    t += "        if __salam_red." + nm.len + "() == 0:\n"
-    t += "            __salam_out = __salam_q." + nm.len + "() > 0 ? __salam_p + \"?\" + __salam_q : __salam_p\n"
-    t += "            ret " + rt + " { " + nm.path + " = __salam_p" + nm.sep + nm.query + " = __salam_q" + nm.sep + nm.pattern + " = __salam_pat }\n"
-    t += "        end\n"
-    t += "        __salam_t = " + nm.pkg + "." + nm.resolve_f + "(__salam_p" + nm.sep + "__salam_red)\n"
-    t += "        __salam_n++\n"
-    t += "    end\n"
-    t += "    __salam_out = __salam_t\n"
-    t += "    ret " + rt + " { " + nm.path + " = __salam_t }\n"
+    t += "    mut __salam_p := \"\"\n"
+    t += "    mut __salam_q := \"\"\n"
+    t += "    " + nm.pkg + "." + nm.split_f + "(__salam_u" + nm.sep + "__salam_p" + nm.sep + "__salam_q)\n"
+    t += "    __salam_p = " + nm.pkg + "." + nm.norm_f + "(__salam_p)\n"
+    t += "    " + r + " = " + rt + " { " + nm.path + " = __salam_p" + nm.sep + nm.query + " = __salam_q" + nm.sep + nm.pattern + " = " + r + "." + nm.pattern + " }\n"
+    t += "    __salam_pat := __salam_route_pick(__salam_p)\n"
+    t += "    __salam_out = __salam_q." + nm.len + "() > 0 ? __salam_p + \"?\" + __salam_q : __salam_p\n"
+    t += "    ret " + rt + " { " + nm.path + " = __salam_p" + nm.sep + nm.query + " = __salam_q" + nm.sep + nm.pattern + " = __salam_pat }\n"
     t += "end\n\n"
     t += "func __salam_route_url(): " + s + ":\n"
     t += "    ret " + r + "." + nm.query + "." + nm.len + "() > 0 ? " + r + "." + nm.path + " + \"?\" + " + r + "." + nm.query + " : " + r + "." + nm.path + "\n"
@@ -658,11 +656,8 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     end
     t += "end\n\n"
     t += "func __salam_route_check():\n"
-    t += "    mut __salam_r := \"\"\n"
-    t += "    __salam_pat := __salam_route_pick(" + r + "." + nm.path + nm.sep + "__salam_r)\n"
-    t += "    if __salam_r." + nm.len + "() > 0:\n"
-    t += "        __salam_route_set(" + nm.pkg + "." + nm.resolve_f + "(" + r + "." + nm.path + nm.sep + "__salam_r)" + nm.sep + "1)\n"
-    t += "    else __salam_pat != " + r + "." + nm.pattern + ":\n"
+    t += "    __salam_pat := __salam_route_pick(" + r + "." + nm.path + ")\n"
+    t += "    if __salam_pat != " + r + "." + nm.pattern + ":\n"
     t += "        " + r + " = " + rt + " { " + nm.path + " = " + r + "." + nm.path + nm.sep + nm.query + " = " + r + "." + nm.query + nm.sep + nm.pattern + " = __salam_pat }\n"
     if g_lo_routes_web:
         t += "        salamRouteTitle(__salam_route_title(__salam_pat" + nm.sep + r + "." + nm.path + "))\n"

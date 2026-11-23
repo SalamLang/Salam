@@ -2,6 +2,7 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -288,11 +289,54 @@ const char *salam_host_clip_get(void)
     return clip_buf;
 }
 
+static int log_pipe[2];
+
+static void *log_reader(void *arg)
+{
+    char buf[1024];
+    size_t n = 0;
+    char c;
+    (void)arg;
+    while (read(log_pipe[0], &c, 1) == 1) {
+        if (c == '\n' || n == sizeof buf - 1) {
+            buf[n] = 0;
+            __android_log_write(ANDROID_LOG_INFO, "salam", buf);
+            n = 0;
+        } else {
+            buf[n++] = c;
+        }
+    }
+    return NULL;
+}
+
+static void flush_logs(void)
+{
+    fflush(NULL);
+    usleep(200000);
+}
+
+static void redirect_output(void)
+{
+    atexit(flush_logs);
+    pthread_t t;
+    if (pipe(log_pipe) != 0) {
+        return;
+    }
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    dup2(log_pipe[1], 1);
+    dup2(log_pipe[1], 2);
+    pthread_create(&t, NULL, log_reader, NULL);
+    pthread_detach(t);
+}
+
 static void *run(void *arg)
 {
     char *argv[2] = {"app", NULL};
     (void)arg;
     salam_app_main(1, argv);
+    fflush(NULL);
+    usleep(150000);
     salam_host_exit();
     return NULL;
 }
@@ -319,6 +363,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     clip_set_mid = (*env)->GetStaticMethodID(env, cls, "clipSet", "(Ljava/lang/String;)Z");
     clip_get_mid = (*env)->GetStaticMethodID(env, cls, "clipGet", "()Ljava/lang/String;");
     started = 1;
+    redirect_output();
     pthread_create(&th, NULL, run, NULL);
 }
 

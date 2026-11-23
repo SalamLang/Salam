@@ -56,3 +56,62 @@ All elements restyle only when `design = shadcn` (the default). With `design = n
 | `avatar badge` | | status dot at the bottom end |
 | `avatar group` | | overlapped avatars with a ring |
 | `avatar group count` | | the "+3" bubble |
+
+## Table
+
+`table` is restyled and wrapped in `<div data-slot="table-container">` (horizontal scroll). The existing `header`, `main`, `footer`, `row`, `column` and `caption` elements are styled through the container, so nothing changes in how you write tables.
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `row` | `selected` | hover tint; `selected` gives the muted background |
+| `caption` | | below the table, muted |
+| `footer` | | muted background, medium weight |
+
+## Typography
+
+`typography` is an opt-in container (`<div data-slot="typography">`). Inside it `heading` levels 1 to 4, `paragraph`, `block quote`, `list`, `code` and `class = "lead" | "large" | "small" | "muted"` get the shadcn typography styles. Pages that do not use it keep the plain defaults.
+
+## Empty
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `empty` | | centred empty state |
+| `empty header`, `empty title`, `empty description`, `empty content` | | |
+| `empty media` | `variant = default \| icon` | `icon` is a 40px muted square |
+
+## Entry (shadcn Item)
+
+`item` is already the list item (`li`), so shadcn's Item is called `entry`.
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `entry` | `variant = default \| outline \| muted`, `size = default \| sm`, `url` | `url` makes it a link with a hover tint |
+| `entry group` | | `role="list"` |
+| `entry separator` | | |
+| `entry media` | `variant = default \| icon \| image` | |
+| `entry content`, `entry title`, `entry description`, `entry actions`, `entry header`, `entry footer` | | description clamps to two lines |
+
+## Breadcrumb
+
+| Element | Notes |
+| --- | --- |
+| `breadcrumb` | `<nav aria-label="breadcrumb"><ol>`; children are the items below |
+| `breadcrumb item` | put a `link` inside for a link |
+| `breadcrumb page` | current page, `aria-current="page"` |
+| `breadcrumb separator` | chevron by default (mirrored in rtl), or your own content |
+| `breadcrumb ellipsis` | three dots with a screen reader label ("More", or the `content`) |
+
+## Pagination
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `pagination` | | `<nav aria-label="pagination"><ul>` |
+| `pagination link` | `url`, `active` | `active` sets `aria-current="page"` and the outline look |
+| `pagination previous`, `pagination next` | `url`, `content` | default labels "Previous" and "Next"; chevrons mirror in rtl |
+| `pagination ellipsis` | `content` | |
+
+## Scroll area
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `scroll area` | `orientation = vertical \| horizontal \| both` | give it a `height`; thin rounded scrollbars; scrolls even with `design = none` |

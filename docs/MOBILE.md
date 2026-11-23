@@ -121,7 +121,20 @@ simulator.
   (`closedby = "none"` ignores the tap) and fire `close`, so bind the state:
   `dialog: open = shown close = (): shown = false end end`.
 - The soft keyboard follows the focused input; the page root keeps away from
-  the status bar, the navigation bar and the keyboard.
+  the status bar, the navigation bar and the keyboard. By default the system
+  insets are padding of the page, so they scroll away with the content and
+  content slides under the status bar. `safe_area` (`ناحیه امن`) on the page
+  changes that: `padding` is the default, `fixed` clips the scrolling content
+  at the insets so it stops at the status bar, the navigation bar and the
+  keyboard while the page background still fills them, and `none` ignores the
+  insets, like `viewport-fit=cover` on the web.
+
+  ```
+  page:
+      safe_area = "fixed"
+  end
+  ```
+
 - Back goes to the page router first and closes the app at the root.
 - Pause, resume and low memory hooks (`ui.OnPause` and friends), rotation, dark
   mode.

@@ -1582,12 +1582,12 @@ if want page; then
         for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \
             tests/"$lang"/web_errors/*.salam; do
             [ -e "$stray" ] || continue
-            subs="elements/, style/, components/, pages/, projects/ or errors/"
+            subs="elements/, style/, components/, pages/, projects/, design/ or errors/"
             note_result \
                 "FAIL page/$lang ($stray is in no page subdirectory, so nothing runs it; move it into $subs)" \
                 "page/$lang/stray/$(basename "$stray" .salam)"
         done
-        for sub in elements style components pages projects errors; do
+        for sub in elements style components pages projects design errors; do
             [ -d "tests/$lang/page/$sub" ] || continue
             want_sub "page/$sub" || continue
             for f in tests/"$lang"/page/"$sub"/*.salam; do

@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
 
+const word = process.env.SALAM_TEST_COUNT_WORD || "Count";
 const base = process.argv[2];
 const publicDir = process.argv[3];
 if (!base || !publicDir) {
@@ -67,7 +68,7 @@ async function open(browser, mode) {
 (async () => {
   const browser = await chromium.launch({ executablePath: browserPath() });
   const served = await (await fetch(base + "/counter")).text();
-  check("the served HTML already has the page", served.includes('id="count"') && served.includes("Count 0"));
+  check("the served HTML already has the page", served.includes('id="count"') && served.includes(word + " 0"));
   check("the served HTML carries the state", served.includes('id="__salam"'));
 
   const a = await open(browser, null);
@@ -76,7 +77,7 @@ async function open(browser, mode) {
   check("the state is read", (await a.page.evaluate(() => window.__salam_state && window.__salam_state.status)) === 200);
   await a.page.click("#inc");
   await a.page.click("#inc");
-  check("a click works after hydration", (await a.page.textContent("#count")) === "Count 2", await a.page.textContent("#count"));
+  check("a click works after hydration", (await a.page.textContent("#count")) === word + " 2", await a.page.textContent("#count"));
   const withCalls = await open(browser, (t) => t.replace('"calls":{}', '"calls":{"F:162c1995:0":7}'));
   const key = await withCalls.page.evaluate(() => {
     const k = window.__salam_call_key("F", '{"id":3}');
@@ -93,12 +94,12 @@ async function open(browser, mode) {
   check("server HTML plus bundle equals a client-only render", hydrated === rendered, hydrated.slice(0, 200) + " <> " + rendered.slice(0, 200));
   check("the client-only render prints no hydration warning", !only.logs.some((l) => l.includes("hydration")));
 
-  const bad = await open(browser, (t) => t.replace("Count 0", "Count 9"));
+  const bad = await open(browser, (t) => t.replace(word + " 0", word + " 9"));
   check("a differing scope warns", bad.logs.some((l) => l.includes("hydration mismatch")), bad.logs.join(" | "));
-  check("a differing scope is rendered again from state", (await bad.page.textContent("#count")) === "Count 0");
+  check("a differing scope is rendered again from state", (await bad.page.textContent("#count")) === word + " 0");
   check("a mismatch is not an error", !bad.logs.some((l) => l.startsWith("error")));
   await bad.page.click("#inc");
-  check("a click works after a mismatch", (await bad.page.textContent("#count")) === "Count 1");
+  check("a click works after a mismatch", (await bad.page.textContent("#count")) === word + " 1");
 
   await browser.close();
   console.log(failures + " check(s) failed");

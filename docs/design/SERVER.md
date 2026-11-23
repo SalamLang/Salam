@@ -131,6 +131,18 @@ response  {"ok": true,  "value": {...}}
    call cache; every `<` is written as `\u003c` and `\u2028`, `\u2029` are escaped,
    so no value can close the tag) and the bundle script.
 
+Render budget: after a render that called server funcs, the page answers 504
+if the whole render took longer than `SALAM_RENDER_TIMEOUT_MS` milliseconds
+(default 3000, `0` turns it off). The check runs when the render ends: a call
+in progress is not interrupted, so a hung backend still holds its thread until
+its own outbound timeout (10 seconds in `ssr.OutboundOptions`).
+
+Memory: the std side of a request (`net/ssr`, `net/internal/ssrpage`, the token
+and hex helpers in `crypto`) frees what it allocates. The generated view code
+still keeps some strings per rendered region, about 2.5 KB for the test site's
+pages; `tools/bash/test-ssr-rss.sh` measures the growth over 2000 requests and is
+not part of the default runner.
+
 Streaming and incremental regeneration are out of the first version.
 
 ## Generated server

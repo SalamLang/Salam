@@ -51,18 +51,32 @@ func spa_htaccess(base: str, html_name: str): str:
     ret t
 end
 
-func write_ssr_pages(lgr &: lg.Logger, shell_path: str):
+func ssr_asset_dir(base: str): str:
+    mut t := base
+    until str.StartsWith(t, "/"):
+        t = str.Substr(t, 1, str.Len(t) - 1)
+    end
+    until str.EndsWith(t, "/"):
+        t = str.Substr(t, 0, str.Len(t) - 1)
+    end
+    ret t
+end
+
+func write_ssr_pages(lgr &: lg.Logger, shell_path: str): bool:
     html := io.ReadFile(shell_path)
     pats := lo.RoutesStatic()
+    mut ok := true
     repeat pats.Len() in i:
         rel := str.Substr(pats.Get(i), 1, str.Len(pats.Get(i)) - 1)
         pdir := join_path2(".", rel)
-        _mk := os.MkdirAll(pdir)
-        _w := write_file(lgr, join_path2(pdir, "index.html"), prerender_fill(route_page_copy(html, lo.RoutesStaticTitle(i)), pats.Get(i)))
+        if os.MkdirAll(pdir) != 0 or not write_file(lgr, join_path2(pdir, "index.html"), prerender_fill(route_page_copy(html, lo.RoutesStaticTitle(i)), pats.Get(i))):
+            ok = false
+        end
     end
-    if prerender_any():
-        _wi := write_file(lgr, "index.html", prerender_fill(html, "/"))
+    if (lo.RoutesHomeStatic() or prerender_any()) and not write_file(lgr, "index.html", prerender_fill(html, "/")):
+        ok = false
     end
+    ret ok
 end
 
 func route_page_copy(html: str, title: str): str:
@@ -275,6 +289,8 @@ pub func LayoutBuild(opt &: Dr): int:
         each wid in lo.WebStateIds():
             s.layout_ids.Push(wid)
         end
+        sm.SetServerMode(1)
+        sm.SetServerStatic(opt.ssr ? 0 - 1 : (lo.PageServerSetting(a, prog) ? 1 : 0))
         sema_ok := sm.Run(s, a, prog)
         nerr += dg.ErrorCount(s.diag)
         nwarn += dg.WarningCount(s.diag)
@@ -408,17 +424,26 @@ pub func LayoutBuild(opt &: Dr): int:
                     doc_js = href_root + js_href
                 end
             end
-            _w := write_file(
+            mut asset_dir := ""
+            if opt.ssr and str.Len(lo.RoutesBase()) > 0:
+                asset_dir = ssr_asset_dir(lo.RoutesBase())
+                if str.Len(asset_dir) > 0 and os.MkdirAll(asset_dir) != 0:
+                    rc = 2
+                end
+            end
+            if not write_file(
                 lgr, html_path, lo.Document(r, false, doc_css, doc_js, minify_ws)
-            )
-            if str.Len(css_href) > 0:
-                _w1 := write_file(lgr, css_href, r.css)
+            ):
+                rc = 2
             end
-            if str.Len(js_href) > 0:
-                _w2 := write_file(lgr, js_href, r.js)
+            if str.Len(css_href) > 0 and not write_file(lgr, join_path2(str.Len(asset_dir) > 0 ? asset_dir : ".", css_href), r.css):
+                rc = 2
             end
-            if opt.ssr and not multi:
-                write_ssr_pages(lgr, html_path)
+            if str.Len(js_href) > 0 and not write_file(lgr, join_path2(str.Len(asset_dir) > 0 ? asset_dir : ".", js_href), r.js):
+                rc = 2
+            end
+            if opt.ssr and not multi and rc == 0 and not write_ssr_pages(lgr, html_path):
+                rc = 2
             end
         end
     end
@@ -526,6 +551,8 @@ pub func Web(opt &: Dr): int:
     each wid in lo.WebStateIds():
         s.layout_ids.Push(wid)
     end
+    sm.SetServerMode(1)
+    sm.SetServerStatic(opt.ssr ? 0 - 1 : (lo.PageServerSetting(a, prog) ? 1 : 0))
     if not sm.RunCached(s, a, prog):
         rc = 1
     end
@@ -645,6 +672,10 @@ end
 
 pub func Serve(opt &: Dr): int:
     if opt.serve_render:
+        if str.Len(opt.serve_config) > 0 or opt.serve_test:
+            io.EPrintln("salam: --render cannot be combined with --config or --test")
+            ret 2
+        end
         ret ServeRender(opt)
     end
     if str.Len(opt.serve_config) > 0:

@@ -181,14 +181,14 @@ end
 
 ## Pointers and raw memory {#pointers}
 
-For C libraries and low-level code, Salam has raw pointers: `mem.Allocate(bytes)` from the [mem package](/std/mem/) returns a block, `p[i]` reads and writes the i-th element, `mem.Free` gives it back, and `sizeof(T)` gives an element's size.
+For C libraries and low-level code, Salam has raw pointers: `mem.Allocate(bytes)` from the [mem package](/std/mem/) returns a block, `p[i]` reads and writes the i-th element, `mem.Free` gives it back, and `size(T)` gives an element's size.
 
 ```salam
 import mem
 
 func main:
     n := 5
-    p := mem.Allocate(sizeof(i64) * n as u64) as i64*
+    p := mem.Allocate(size(i64) * n as u64) as i64*
     defer mem.Free(p as void*)
     repeat n in i:
         p[i] = (i * i) as i64
@@ -210,7 +210,7 @@ error[E146]: index out of bounds: the index is 4, but 'p' has 4 elements
 warning[W158]: the memory 'p' gets from mem.Allocate on line 4 is never freed: nothing frees, returns, stores or passes it on before the function ends
  --> ptr2.salam:4:5
   |
-4 |     p := mem.Allocate(sizeof(i64) * 4) as i64*
+4 |     p := mem.Allocate(size(i64) * 4) as i64*
   |     ^
   |
   = help: free it with 'defer mem.Free(p as void*)' on the line after the allocation

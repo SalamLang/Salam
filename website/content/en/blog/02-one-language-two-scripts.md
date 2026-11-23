@@ -158,7 +158,7 @@ The table lists everything that changes with the language of the file, and what 
 | Primitive types            | `int`, `str`, `f64`, `bool`                                     | `صحیح`, `رشته`, `اعشار۶۴`, `منطقی`                             |
 | Collections                | `Vector<T>`, `HashMap<K, V>`                                    | `وکتور<T>`, `نگاشت<K, V>`                                      |
 | Built-in methods           | `push`, `len`, `free`, `split`                                  | `بیفزا`, `طول`, `آزادکن`, `بشکاف`                              |
-| Built-in functions         | `len`, `sizeof`, `spawn`                                        | `طول`, `اندازه‌گونه`, `نخ‌ساز`                                 |
+| Built-in functions         | `len`, `size`, `spawn`                                          | `طول`, `اندازه`, `نخ‌ساز`                                 |
 | Logic and comparison words | `and`, `or`, `not`, `gt`, `eq`                                  | `و`, `یا`, `وارونه`, `بزرگتر`, `برابر`                         |
 | Standard library           | `str.Split`, `math.Sqrt`                                        | `رشته.تفکیک کردن`, `ریاضی.جذر`                                 |
 | Compile-time constants     | `SALAM_OS_LINUX`                                                | `سلام سیستم لینوکس`                                            |

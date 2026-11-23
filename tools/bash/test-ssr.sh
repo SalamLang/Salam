@@ -125,8 +125,14 @@ echo "== hostile path"
 echo "status $(get '/%3C/script%3E%3Cscript%3Ealert(1)%3C/script%3E?q=%3Cb%3E')"
 hasnot '</script><script>alert' raw-script
 has '&lt;/script&gt;&lt;script&gt;alert(1)' escaped-body
-has '</script' escaped-state
+has '"path":"/\u003c/script' escaped-state
 hasnot "<b>" raw-query
+
+echo "== hostile quote in an attribute"
+echo "status $(get '/%22onmouseover=%22x')"
+has 'href="/&quot;onmouseover=&quot;x"' escaped-href
+hasnot 'href="/"onmouseover' raw-href
+has '"path":"/\"onmouseover=\"x"' json-escaped-quote
 
 echo "== hostile line break"
 echo "status $(get '/x%0d%0aSet-Cookie:%20a=b')"

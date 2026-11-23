@@ -38,12 +38,38 @@ xcrun simctl install booted out/App.app
 xcrun simctl launch booted app.salam.app
 ```
 
-`tools/bash/build-ios-app.sh` takes the same options. The default target is the simulator; `--device` builds for a phone and the app
-still has to be signed in Xcode. Needs a compiler built from the current tree.
-Checked on the simulator with the counter page: drawing, safe area and a
-tap (`-salam-tap X,Y` launch argument). The keyboard, Persian text, pause and
-resume and the clipboard are written but not tried yet. There is no
-composition text, and no bundled fonts.
+`tools/bash/build-ios-app.sh` takes the same options, plus `--permission NAME`
+(`camera`, `microphone`, `location`, `notifications`) for the usage description
+the system shows in its permission dialog. The build adds
+`NSLocationWhenInUseUsageDescription` when the program calls
+`device.RequestLocation`, and the camera and photo library descriptions when
+it calls `device.PickPhoto` or `device.TakePhoto`. The default target is the
+simulator; `--device` builds for a phone and the app still has to be signed in
+Xcode. Needs a compiler built from the current tree.
+
+The device calls (`gui.device`) work the same as on Android: share sheet,
+haptics, permissions, local notifications, one shot location, photo picker and
+camera. Composition text from keyboards such as Chinese or Japanese shows as
+preedit, and the caret position goes to the keyboard. There are no bundled
+fonts.
+
+To try touch on the simulator without a tap tool, launch with
+`-salam-script` (points, steps separated by `;`, run after the first frame):
+
+```
+xcrun simctl launch booted app.salam.app -salam-script "tap 100,200;swipe 100,500,100,100;pinch 200,400,2.0"
+```
+
+| step | meaning |
+| --- | --- |
+| `tap X,Y` | one tap |
+| `long X,Y[,MS]` | press and hold (900 ms by default) |
+| `swipe X1,Y1,X2,Y2[,MS]` | drag one finger (300 ms by default) |
+| `pinch X,Y,SCALE[,MS]` | two fingers around the point, spreading to SCALE times the start distance |
+| `type TEXT`, `mark TEXT`, `unmark`, `back` | text, composition text, commit it, delete backward |
+| `wait MS` | pause |
+
+`-salam-tap X,Y` still works for one tap.
 
 ## What works
 

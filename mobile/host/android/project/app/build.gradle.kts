@@ -6,6 +6,8 @@ val appId = project.findProperty("appId")?.toString() ?: "app.salam.demo"
 val appName = project.findProperty("appName")?.toString() ?: "Salam App"
 val appVersion = project.findProperty("appVersion")?.toString() ?: "1.0"
 val appVersionCode = project.findProperty("appVersionCode")?.toString()?.toIntOrNull() ?: 1
+val minSdkVersion = project.findProperty("minSdkVersion")?.toString()?.toIntOrNull() ?: 21
+val targetSdkVersion = project.findProperty("targetSdkVersion")?.toString()?.toIntOrNull() ?: 35
 
 android {
     namespace = "ir.salamlang.host"
@@ -13,8 +15,8 @@ android {
 
     defaultConfig {
         applicationId = appId
-        minSdk = 21
-        targetSdk = 35
+        minSdk = minSdkVersion
+        targetSdk = targetSdkVersion
         versionCode = appVersionCode
         versionName = appVersion
         resValue("string", "app_name", appName)

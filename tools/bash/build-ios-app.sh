@@ -4,6 +4,8 @@
 # Usage:
 #   tools/bash/build-ios-app.sh APP.salam --out DIR [--device] [--id BUNDLE_ID] [--name LABEL]
 #       [--icon ICON.png] [--splash-color COLOR] [--splash-icon ICON.png]
+#       [--version NAME] [--build NUMBER] [--min-ios VERSION]
+#       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE]
 #       [--permission NAME]...
 #
 # Salam emits C for arm64, clang builds it with the host shim in
@@ -20,6 +22,21 @@
 # appearance. The host remembers the page background it drew last and uses it
 # behind the next launch, so a dark page does not start with a white frame.
 #
+# --version NAME and --build NUMBER set CFBundleShortVersionString and
+# CFBundleVersion (1.0 and 1 by default). --min-ios VERSION (15.0 by default)
+# is both MinimumOSVersion and the deployment target of the compile.
+# --orientation portrait or landscape limits the supported orientations; auto,
+# the default, allows portrait and both landscapes. --category (game, social,
+# productivity, utilities, education, finance, health, lifestyle, music, news,
+# photo, travel, weather, business, entertainment, sports, books, food, maps,
+# video or reference) sets LSApplicationCategoryType.
+#
+# --config FILE (default: salam.toml next to APP.salam) supplies any of these
+# from its [app], [app.mobile] and [app.ios] tables with the option names
+# written with underscores: id, name, version, build, icon, splash_color,
+# splash_icon, min_ios, orientation, category and permissions. Options on the
+# command line win.
+#
 # --permission NAME (camera, microphone, location, notifications) adds the
 # usage description the system shows in its permission dialog, so
 # device.RequestPermission can ask for it. Calls that need a description
@@ -28,6 +45,7 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 . "$ROOT/mobile/host/common/icons.sh"
+. "$ROOT/mobile/host/common/app_config.sh"
 
 : "${SALAM:=salam}"
 APP=
@@ -39,6 +57,12 @@ PERMS=
 ICON=
 SPLASH_COLOR=
 SPLASH_ICON=
+VERSION=
+BUILDNUM=
+MINIOS=
+ORIENT=
+CATEGORY=
+CONFIG=
 while [ $# -gt 0 ]; do
     case $1 in
     --out)
@@ -69,6 +93,30 @@ while [ $# -gt 0 ]; do
         SPLASH_ICON=$2
         shift 2
         ;;
+    --version)
+        VERSION=$2
+        shift 2
+        ;;
+    --build)
+        BUILDNUM=$2
+        shift 2
+        ;;
+    --min-ios)
+        MINIOS=$2
+        shift 2
+        ;;
+    --orientation)
+        ORIENT=$2
+        shift 2
+        ;;
+    --category)
+        CATEGORY=$2
+        shift 2
+        ;;
+    --config)
+        CONFIG=$2
+        shift 2
+        ;;
     --permission)
         PERMS="$PERMS $2"
         shift 2
@@ -91,6 +139,40 @@ done
     echo "build-ios-app: no such file: $APP" >&2
     exit 2
 }
+if [ -z "$CONFIG" ] && [ -f "$(dirname "$APP")/salam.toml" ]; then
+    CONFIG=$(dirname "$APP")/salam.toml
+fi
+if [ -n "$CONFIG" ]; then
+    [ -f "$CONFIG" ] || {
+        echo "build-ios-app: no such config file: $CONFIG" >&2
+        exit 2
+    }
+    app_cfg_load "$CONFIG" ios
+    [ -n "$ID" ] || ID=$(app_cfg_get id)
+    [ -n "$NAME" ] || NAME=$(app_cfg_get name)
+    [ -n "$VERSION" ] || VERSION=$(app_cfg_get version)
+    [ -n "$BUILDNUM" ] || BUILDNUM=$(app_cfg_get build)
+    [ -n "$ICON" ] || ICON=$(app_cfg_path icon)
+    [ -n "$SPLASH_COLOR" ] || SPLASH_COLOR=$(app_cfg_get splash_color)
+    [ -n "$SPLASH_ICON" ] || SPLASH_ICON=$(app_cfg_path splash_icon)
+    [ -n "$MINIOS" ] || MINIOS=$(app_cfg_get min_ios)
+    [ -n "$ORIENT" ] || ORIENT=$(app_cfg_get orientation)
+    [ -n "$CATEGORY" ] || CATEGORY=$(app_cfg_get category)
+    [ -n "$PERMS" ] || PERMS=$(app_cfg_get permissions)
+fi
+if [ -n "$BUILDNUM" ]; then
+    app_check_int --build "$BUILDNUM" build-ios-app || exit 2
+fi
+case $MINIOS in
+"" | [0-9] | [0-9].[0-9] | [0-9][0-9] | [0-9][0-9].[0-9] | [0-9][0-9].[0-9][0-9] | [0-9].[0-9][0-9]) ;;
+*)
+    echo "build-ios-app: --min-ios wants a version such as 15.0, not '$MINIOS'" >&2
+    exit 2
+    ;;
+esac
+[ -n "$MINIOS" ] || MINIOS=15.0
+app_check_orientation "$ORIENT" build-ios-app || exit 2
+app_category_known "$CATEGORY" build-ios-app || exit 2
 if [ -n "$ICON" ]; then
     icon_check "$ICON" build-ios-app || exit 2
     ICON=$(cd "$(dirname "$ICON")" && pwd)/$(basename "$ICON")
@@ -139,10 +221,10 @@ base=$(basename "$APP" .salam)
 
 if [ "$DEVICE" = 1 ]; then
     SDK=iphoneos
-    TRIPLE=arm64-apple-ios15.0
+    TRIPLE=arm64-apple-ios$MINIOS
 else
     SDK=iphonesimulator
-    TRIPLE=arm64-apple-ios15.0-simulator
+    TRIPLE=arm64-apple-ios$MINIOS-simulator
 fi
 command -v xcrun >/dev/null 2>&1 || {
     echo "build-ios-app: xcrun not found; iOS apps need Xcode on macOS (install Xcode, then run: xcode-select -s /Applications/Xcode.app)" >&2
@@ -191,6 +273,10 @@ if uses_host_call salam_host_photo_request; then
     add_usage NSCameraUsageDescription "$NAME uses the camera to take photos."
     add_usage NSPhotoLibraryUsageDescription "$NAME reads photos you choose."
 fi
+add_category() {
+    USAGE_KEYS="$USAGE_KEYS
+    <key>LSApplicationCategoryType</key><string>public.app-category.$1</string>"
+}
 for name in $PERMS; do
     case $name in
     camera) add_usage NSCameraUsageDescription "$NAME uses the camera." ;;
@@ -204,6 +290,29 @@ for name in $PERMS; do
     esac
 done
 
+case $ORIENT in
+portrait) ORIENT_KEYS='<string>UIInterfaceOrientationPortrait</string>' ;;
+landscape)
+    ORIENT_KEYS='<string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>'
+    ;;
+*)
+    ORIENT_KEYS='<string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>'
+    ;;
+esac
+case $CATEGORY in
+"") ;;
+game) add_category games ;;
+social) add_category social-networking ;;
+health) add_category healthcare-fitness ;;
+photo) add_category photography ;;
+food) add_category food-drink ;;
+maps) add_category navigation ;;
+*) add_category "$CATEGORY" ;;
+esac
+
 cat >"$OUT/App.app/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -214,9 +323,9 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
     <key>CFBundleName</key><string>$NAME</string>
     <key>CFBundleDisplayName</key><string>$NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>MinimumOSVersion</key><string>15.0</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION:-1.0}</string>
+    <key>CFBundleVersion</key><string>${BUILDNUM:-1}</string>
+    <key>MinimumOSVersion</key><string>$MINIOS</string>
     <key>UILaunchScreen</key><dict>$LAUNCH</dict>$USAGE_KEYS
     <key>UIApplicationSceneManifest</key>
     <dict>
@@ -235,9 +344,7 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
     <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
+        $ORIENT_KEYS
     </array>
 </dict>
 </plist>
@@ -265,7 +372,7 @@ if [ -n "$ICON" ] || [ -n "$SPLASH_COLOR" ] || [ -n "$SPLASH_ICON" ]; then
         printf '%s\n' '{"images":[{"filename":"splash.png","idiom":"universal","scale":"3x"}],"info":{"author":"xcode","version":1}}' \
             >"$cat_dir/SplashIcon.imageset/Contents.json"
     fi
-    if xcrun actool --compile "$OUT/App.app" --platform "$SDK" --minimum-deployment-target 15.0 \
+    if xcrun actool --compile "$OUT/App.app" --platform "$SDK" --minimum-deployment-target "$MINIOS" \
         $ACTOOL_ICON --target-device iphone --target-device ipad \
         --output-partial-info-plist "$work/icon/partial.plist" "$cat_dir" >"$work/icon/actool.log" 2>&1 &&
         [ -f "$work/icon/partial.plist" ]; then

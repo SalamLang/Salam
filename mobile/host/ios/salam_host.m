@@ -11,9 +11,10 @@ extern int salam_app_main(int argc, char **argv);
 @class SalamView;
 
 static SalamView *g_view;
-static UIKeyboardType g_unused;
+static CGFloat g_kb;
 static pthread_t g_thread;
 static int g_started;
+static int g_tapped;
 static int g_ime;
 static CGContextRef g_ctx;
 static void *g_shadow;
@@ -84,7 +85,88 @@ static int touch_slot(UITouch *t, int create)
         salam_host_post(SALAM_EV_KEY, 0, 66, 0, 0, 0, NULL);
         return;
     }
-    salam_host_post(SALAM_EV_TEXT, 0, 0, 0, 0, 0, text.UTF8String);
+    const char *u = text.UTF8String;
+    size_t n = u != NULL ? strlen(u) : 0;
+    size_t i = 0;
+    while (i < n) {
+        size_t len = n - i;
+        if (len >= SALAM_HOST_TCAP) {
+            len = SALAM_HOST_TCAP - 1;
+            while (len > 0 && (((unsigned char)u[i + len]) & 0xC0) == 0x80) {
+                len--;
+            }
+            if (len == 0) {
+                break;
+            }
+        }
+        char buf[SALAM_HOST_TCAP];
+        memcpy(buf, u + i, len);
+        buf[len] = 0;
+        salam_host_post(SALAM_EV_TEXT, 0, 0, 0, 0, 0, buf);
+        i += len;
+    }
+}
+
+static int hid_to_key(UIKeyboardHIDUsage u)
+{
+    switch (u) {
+    case UIKeyboardHIDUsageKeyboardReturnOrEnter:
+        return 66;
+    case UIKeyboardHIDUsageKeyboardDeleteOrBackspace:
+        return 67;
+    case UIKeyboardHIDUsageKeyboardDeleteForward:
+        return 112;
+    case UIKeyboardHIDUsageKeyboardTab:
+        return 61;
+    case UIKeyboardHIDUsageKeyboardEscape:
+        return 111;
+    case UIKeyboardHIDUsageKeyboardUpArrow:
+        return 19;
+    case UIKeyboardHIDUsageKeyboardDownArrow:
+        return 20;
+    case UIKeyboardHIDUsageKeyboardLeftArrow:
+        return 21;
+    case UIKeyboardHIDUsageKeyboardRightArrow:
+        return 22;
+    case UIKeyboardHIDUsageKeyboardHome:
+        return 122;
+    case UIKeyboardHIDUsageKeyboardEnd:
+        return 123;
+    case UIKeyboardHIDUsageKeyboardPageUp:
+        return 92;
+    case UIKeyboardHIDUsageKeyboardPageDown:
+        return 93;
+    default:
+        return 0;
+    }
+}
+
+- (void)sendPresses:(NSSet<UIPress *> *)presses down:(int)down
+{
+    for (UIPress *p in presses) {
+        int code = p.key != nil ? hid_to_key(p.key.keyCode) : 0;
+        if (code != 0) {
+            salam_host_post(SALAM_EV_KEY, down, code, 0, 0, 0, NULL);
+        }
+    }
+}
+
+- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
+{
+    [self sendPresses:presses down:1];
+    [super pressesBegan:presses withEvent:event];
+}
+
+- (void)pressesEnded:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
+{
+    [self sendPresses:presses down:0];
+    [super pressesEnded:presses withEvent:event];
+}
+
+- (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
+{
+    [self sendPresses:presses down:0];
+    [super pressesCancelled:presses withEvent:event];
 }
 
 - (void)deleteBackward
@@ -139,17 +221,17 @@ static int touch_slot(UITouch *t, int create)
     [self sendTouches:touches action:1];
 }
 
-- (void)reportInsets:(CGFloat)keyboard
+- (void)reportInsets
 {
     UIEdgeInsets i = self.safeAreaInsets;
     CGFloat s = self.contentScaleFactor;
-    salam_host_post(SALAM_EV_INSETS, i.top * s, i.right * s, i.bottom * s, i.left * s, keyboard * s, NULL);
+    salam_host_post(SALAM_EV_INSETS, i.top * s, i.right * s, i.bottom * s, i.left * s, g_kb * s, NULL);
 }
 
 - (void)safeAreaInsetsDidChange
 {
     [super safeAreaInsetsDidChange];
-    [self reportInsets:0];
+    [self reportInsets];
 }
 
 - (void)layoutSubviews
@@ -162,10 +244,24 @@ static int touch_slot(UITouch *t, int create)
         salam_host_set_surface(w, h, s);
         salam_host_post(SALAM_EV_RESIZE, w, h, s, 0, 0, NULL);
         salam_host_post(SALAM_EV_SCHEME, self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? 1 : 0, 0, 0, 0, 0, NULL);
-        [self reportInsets:0];
+        [self reportInsets];
         if (!g_started) {
             g_started = 1;
             pthread_create(&g_thread, NULL, run_app, NULL);
+        }
+        NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
+        NSUInteger at = [args indexOfObject:@"-salam-tap"];
+        if (!g_tapped && at != NSNotFound && at + 1 < args.count) {
+            g_tapped = 1;
+            NSArray<NSString *> *xy = [args[at + 1] componentsSeparatedByString:@","];
+            if (xy.count == 2) {
+                double px = xy[0].doubleValue * s;
+                double py = xy[1].doubleValue * s;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    salam_host_post(SALAM_EV_POINTER, 0, 0, px, py, 0, NULL);
+                    salam_host_post(SALAM_EV_POINTER, 1, 0, px, py, 0, NULL);
+                });
+            }
         }
     }
 }
@@ -213,12 +309,14 @@ static int touch_slot(UITouch *t, int create)
     CGRect f = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
     CGRect local = [g_view convertRect:f fromView:nil];
     CGFloat kb = MAX(0, g_view.bounds.size.height - local.origin.y);
-    [g_view reportInsets:kb - g_view.safeAreaInsets.bottom > 0 ? kb : 0];
+    g_kb = kb - g_view.safeAreaInsets.bottom > 0 ? kb : 0;
+    [g_view reportInsets];
 }
 
 - (void)keyboardHidden:(NSNotification *)n
 {
-    [g_view reportInsets:0];
+    g_kb = 0;
+    [g_view reportInsets];
 }
 
 - (void)lifecycle:(NSNotification *)n
@@ -229,6 +327,15 @@ static int touch_slot(UITouch *t, int create)
         salam_host_post(SALAM_EV_LIFECYCLE, 1, 0, 0, 0, 0, NULL);
     } else if ([n.name isEqualToString:UIApplicationDidEnterBackgroundNotification]) {
         salam_host_post(SALAM_EV_LIFECYCLE, 2, 0, 0, 0, 0, NULL);
+        __block UIBackgroundTaskIdentifier task = UIBackgroundTaskInvalid;
+        void (^end)(void) = ^{
+            if (task != UIBackgroundTaskInvalid) {
+                [UIApplication.sharedApplication endBackgroundTask:task];
+                task = UIBackgroundTaskInvalid;
+            }
+        };
+        task = [UIApplication.sharedApplication beginBackgroundTaskWithExpirationHandler:end];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), end);
     } else {
         salam_host_post(SALAM_EV_LIFECYCLE, 3, 0, 0, 0, 0, NULL);
     }
@@ -329,7 +436,11 @@ void salam_host_ime(int flag)
 
 int salam_host_open_url(const char *url)
 {
-    NSURL *u = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+    if (url == NULL) {
+        return 0;
+    }
+    NSString *str = [NSString stringWithUTF8String:url];
+    NSURL *u = str != nil ? [NSURL URLWithString:str] : nil;
     if (u == nil) {
         return 0;
     }
@@ -339,8 +450,70 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_location_request(void)
+{
+    return 0;
+}
+
+int salam_host_location_get(double *out)
+{
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    return 0;
+}
+
+int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
+{
+    (void)id;
+    (void)title;
+    (void)body;
+    (void)delay_ms;
+    return 0;
+}
+
+int salam_host_notify_cancel(int id)
+{
+    (void)id;
+    return 0;
+}
+
+int salam_host_perm_state(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+int salam_host_perm_request(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+int salam_host_vibrate(int ms)
+{
+    (void)ms;
+    return 0;
+}
+
+int salam_host_haptic(int kind)
+{
+    (void)kind;
+    return 0;
+}
+
+int salam_host_share(const char *text, const char *url)
+{
+    (void)text;
+    (void)url;
+    return 0;
+}
+
 int salam_host_clip_set(const char *text)
 {
+    if (text == NULL) {
+        return 0;
+    }
     NSString *s = [NSString stringWithUTF8String:text];
     dispatch_sync(dispatch_get_main_queue(), ^{
         UIPasteboard.generalPasteboard.string = s;

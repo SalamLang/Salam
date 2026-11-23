@@ -26,12 +26,40 @@ emulator and starts it. Other options:
 
 What the program prints goes to logcat: `adb logcat -s salam`.
 
+## iOS
+
+```
+tools/bash/build-ios-app.sh app.salam --out out
+xcrun simctl install booted out/App.app
+xcrun simctl launch booted app.salam.app
+```
+
+The default target is the simulator; `--device` builds for a phone and the app
+still has to be signed in Xcode. Needs a compiler built from the current tree.
+Checked on the simulator with the counter page: drawing, safe area and a
+tap (`-salam-tap X,Y` launch argument). The keyboard, Persian text, pause and
+resume and the clipboard are written but not tried yet. There is no
+composition text, and no bundled fonts.
+
 ## What works
 
 - Layout, text (Persian included, system fonts), colors, scrolling with fling,
   media queries and `page.touch`.
 - Touch: tap, long press, drag scroll. Long press in a text input selects the
   word.
+- Pinch: a second finger starts a pinch and cancels the tap, long press and
+  drag of the first. Elements get `pinch` while the fingers move and
+  `pinchend` when one lifts; both bubble from the element under the middle of
+  the fingers. `ui.CurrentEvent().scale` is the finger distance divided by the
+  distance at the start (above 1 spreading, below 1 pinching in) and `x`, `y`
+  are the middle. In a headless script, `pinch #id 2` spreads two fingers.
+
+  ```
+  box:
+      pinch = (): zoom = ui.CurrentEvent().scale end
+  end
+  ```
+
 - The soft keyboard follows the focused input; the page root keeps away from
   the status bar, the navigation bar and the keyboard.
 - Back goes to the page router first and closes the app at the root.
@@ -39,11 +67,23 @@ What the program prints goes to logcat: `adb logcat -s salam`.
   mode.
 - Standard library: files, threads, timers, sqlite, DNS, http and https,
   clipboard and opening links.
+- Device features through `gui.device` (same calls on every platform, false
+  or empty where a system has no such feature): `device.Share(text, url)`
+  opens the share sheet, `device.Haptic(kind)` and `device.Vibrate(ms)` give
+  feedback (the build adds the `VIBRATE` permission only when you call
+  `Vibrate`). `device.CheckPermission` and `device.RequestPermission` handle
+  runtime permissions; declare them with `--permission camera` (also
+  `microphone`, `location`, `notifications`) when you build, and call
+  `device.OnChange` to react when the dialog closes. `device.ShowNotification`,
+  `device.ScheduleNotification` and `device.CancelNotification` post local
+  notifications (the build declares `POST_NOTIFICATIONS` when you use them).
+  `device.RequestLocation`, `device.LocationStatus` and `device.LastLocation`
+  give a one shot position (the build declares the location permissions).
 
 ## Not available yet
 
-- Pinch and other multi touch gestures.
-- Camera, location, share sheet, notifications and permissions.
+- Rotate and three finger gestures.
+- The camera.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

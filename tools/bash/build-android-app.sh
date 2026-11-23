@@ -5,7 +5,14 @@
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
-#       [--no-apk] [--run]
+#       [--fonts DIR] [--permission NAME]... [--no-apk] [--run]
+#
+# --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
+# copied to the app files directory at start and found by the font collection.
+#
+# --permission NAME (camera, microphone, location, notifications) declares a
+# permission in the manifest so device.RequestPermission can ask for it. Calls
+# that need a permission themselves, such as device.Vibrate, add it alone.
 #
 # Salam emits C for each ABI, the NDK compiles it with the host shim in
 # mobile/host/android into libsalamapp.so, and a prebuilt Gradle project
@@ -23,7 +30,9 @@ NAME=
 BUILD=assembleDebug
 APK=1
 ICON=
+FONTS=
 RUN=0
+PERMS=
 AAB=0
 KS=
 KSPASS=
@@ -74,6 +83,14 @@ while [ $# -gt 0 ]; do
         ;;
     --key-pass)
         KEYPASS=$2
+        shift 2
+        ;;
+    --fonts)
+        FONTS=$2
+        shift 2
+        ;;
+    --permission)
+        PERMS="$PERMS $2"
         shift 2
         ;;
     --run)
@@ -169,6 +186,18 @@ if [ -n "$ICON" ]; then
         "$OUT/project/app/src/main/AndroidManifest.xml"
     rm -f "$OUT/project/app/src/main/AndroidManifest.xml.bak"
 fi
+if [ -n "$FONTS" ]; then
+    [ -d "$FONTS" ] || {
+        echo "build-android-app: no such fonts directory: $FONTS" >&2
+        exit 2
+    }
+    mkdir -p "$OUT/project/app/src/main/assets/fonts"
+    for f in "$FONTS"/*.ttf "$FONTS"/*.otf "$FONTS"/*.ttc; do
+        if [ -f "$f" ]; then
+            cp "$f" "$OUT/project/app/src/main/assets/fonts/"
+        fi
+    done
+fi
 mkdir -p "$OUT/project/gradle/wrapper"
 cp "$ROOT/android/gradle/wrapper/gradle-wrapper.jar" "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" "$OUT/project/gradle/wrapper/"
 cp "$ROOT/android/gradlew" "$OUT/project/gradlew"
@@ -216,6 +245,42 @@ for abi in $ABIS; do
     IFS=,
 done
 IFS=$old_ifs
+
+MANIFEST=$OUT/project/app/src/main/AndroidManifest.xml
+declare_permission() {
+    grep -q "permission.$1\"" "$MANIFEST" && return 0
+    awk -v line="    <uses-permission android:name=\"android.permission.$1\" />" \
+        '{ print } /android.permission.INTERNET/ { print line }' "$MANIFEST" >"$MANIFEST.new"
+    mv "$MANIFEST.new" "$MANIFEST"
+}
+uses_host_call() {
+    grep -qsw "$1" "$OUT"/work/*/.salam-build/*.c
+}
+if uses_host_call salam_host_vibrate; then
+    declare_permission VIBRATE
+fi
+if uses_host_call salam_host_location_request; then
+    declare_permission ACCESS_FINE_LOCATION
+    declare_permission ACCESS_COARSE_LOCATION
+fi
+if uses_host_call salam_host_notify; then
+    declare_permission POST_NOTIFICATIONS
+fi
+for name in $PERMS; do
+    case $name in
+    camera) declare_permission CAMERA ;;
+    microphone) declare_permission RECORD_AUDIO ;;
+    location)
+        declare_permission ACCESS_FINE_LOCATION
+        declare_permission ACCESS_COARSE_LOCATION
+        ;;
+    notifications) declare_permission POST_NOTIFICATIONS ;;
+    *)
+        echo "build-android-app: unknown permission '$name' (camera, microphone, location, notifications)" >&2
+        exit 2
+        ;;
+    esac
+done
 
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK

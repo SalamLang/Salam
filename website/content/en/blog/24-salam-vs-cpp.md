@@ -22,7 +22,7 @@ This article puts the same small tasks side by side, compares how the two handle
 | Memory          | RAII, smart pointers, manual `new`/`delete`      | Stack values, heap collections freed with `.Free()` and `defer` |
 | Generics        | Templates, concepts                              | Generic functions and structs with interface bounds             |
 | Polymorphism    | Inheritance, virtual functions, `std::variant`   | Interfaces with `dyn`, enums with data, embedding with `use`    |
-| Errors          | Exceptions, `std::expected`                      | `throw`, `try`, `catch`, without stack unwinding               |
+| Errors          | Exceptions, `std::expected`                      | `throw`, `try`, `catch`, without stack unwinding                |
 | Build           | CMake, Meson, Bazel; vcpkg or Conan for packages | One command: `salam build`, `salam test`, `salam add`           |
 | Ecosystem       | Enormous, every domain                           | Large standard library, small community                         |
 

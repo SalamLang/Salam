@@ -1,11 +1,12 @@
-"use strict";
 const fs = require("fs");
 const path = require("path");
 
 const dir = path.resolve(process.argv[2] || "editor");
 const js = fs.readdirSync(dir).find((f) => /^salam-wa-.*\.js$/.test(f));
 if (!js) {
-  console.error("no salam-wa-*.js in " + dir + "; build it with tools/bash/build-wasm.sh");
+  console.error(
+    "no salam-wa-*.js in " + dir + "; build it with tools/bash/build-wasm.sh",
+  );
   process.exit(2);
 }
 
@@ -15,7 +16,11 @@ function check(name, ok, detail) {
     console.log("PASS " + name);
   } else {
     failures++;
-    console.log("FAIL " + name + (detail !== undefined ? " (" + String(detail).slice(0, 300) + ")" : ""));
+    console.log(
+      "FAIL " +
+        name +
+        (detail !== undefined ? " (" + String(detail).slice(0, 300) + ")" : ""),
+    );
   }
 }
 
@@ -58,10 +63,23 @@ const cases = [
   },
 ];
 
-for (const ex of ["01-hello.salam", "12-layout.salam", "26-bank_account.salam"]) {
-  const src = fs.readFileSync(path.join(__dirname, "../../tests/en/editor-selected", ex), "utf8");
+for (const ex of [
+  "01-hello.salam",
+  "12-layout.salam",
+  "26-bank_account.salam",
+]) {
+  const src = fs.readFileSync(
+    path.join(__dirname, "../../tests/en/editor-selected", ex),
+    "utf8",
+  );
   const layout = /^page:/m.test(src);
-  cases.push({ name: "example " + ex + " runs", kind: layout ? "layout" : "app", lang: "en", src, want: () => true });
+  cases.push({
+    name: "example " + ex + " runs",
+    kind: layout ? "layout" : "app",
+    lang: "en",
+    src,
+    want: () => true,
+  });
 }
 
 global.require = require;
@@ -78,8 +96,14 @@ global.Module = {
 };
 global.Module.onRuntimeInitialized = () => {
   setTimeout(() => {
-    const run = Module.cwrap("salam_web_run_app", "string", ["string", "string"]);
-    const lay = Module.cwrap("salam_web_build_layout", "string", ["string", "string"]);
+    const run = Module.cwrap("salam_web_run_app", "string", [
+      "string",
+      "string",
+    ]);
+    const lay = Module.cwrap("salam_web_build_layout", "string", [
+      "string",
+      "string",
+    ]);
     const times = [];
     for (const c of cases) {
       const t0 = Date.now();
@@ -87,11 +111,23 @@ global.Module.onRuntimeInitialized = () => {
       const ms = Date.now() - t0;
       times.push(ms);
       const failed = Module._salam_web_last_failed() === 1;
-      check(c.name + " in " + ms + " ms", failed === !!c.fail && c.want(out), out);
+      check(
+        c.name + " in " + ms + " ms",
+        failed === !!c.fail && c.want(out),
+        out,
+      );
     }
     times.sort((a, b) => a - b);
-    console.log("median call " + times[Math.floor(times.length / 2)] + " ms, slowest " + times[times.length - 1] + " ms");
-    console.log(failures === 0 ? "editor wasm ok" : failures + " check(s) failed");
+    console.log(
+      "median call " +
+        times[Math.floor(times.length / 2)] +
+        " ms, slowest " +
+        times[times.length - 1] +
+        " ms",
+    );
+    console.log(
+      failures === 0 ? "editor wasm ok" : failures + " check(s) failed",
+    );
     process.exit(failures === 0 ? 0 : 1);
   }, 0);
 };

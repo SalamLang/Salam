@@ -173,14 +173,15 @@ end
   component's parameters, converted to the parameter's type (`id: int`); a
   value that does not convert goes to `_404.salam`. `Outlet` shows the matched
   component; a `_layout.salam` with its own `Outlet` nests routes below a folder.
-- `Link: to = "/path"` is the only navigation element. `page.GoTo("/user/3")`,
-  `page.Back()`, `page.Forward()`, `page.Redirect("/login")` are functions, and
+- `Link: to = "/path"` is the only navigation element. `page.route.GoTo("/user/3")`,
+  `page.route.Back()`, `page.route.Forward()`, `page.route.Redirect("/login")` are functions, and
   the state `page.route.path`, `page.route.query` and `page.route.Param("id")` can be
   read like any state (R5), so a highlighted menu item is
   `when page.route.path == "/"`.
-- A route may carry a guard: `guard = logged_in` and `redirect = "/login"` at
-  the top of the component body. The guard is a bool expression, re-checked on
-  every change of its state.
+- A route may carry a guard: `guard = logged_in` at the top of the component
+  body. The guard is a bool expression, re-checked on every change of its
+  state; while it is false the route is skipped and the next match shows.
+  Sending the visitor elsewhere is code: `page.route.Redirect("/login")`.
 - A route change is a state write: it re-runs the `Outlet` scope and nothing
   else (R1). A `page:` with `enter`/`exit` on the outlet's component animates
   the change (section 6). Scroll and focus are restored on back.
@@ -538,7 +539,7 @@ page:
         translate = offset, 0
         transition = if dragging: 0ms else 200ms end
         pan = (p: Pan): offset = p.dx; dragging = p.phase != end end
-        swipe = (s: Swipe): page.Back() end
+        swipe = (s: Swipe): page.route.Back() end
     end
 end
 ```
@@ -565,7 +566,7 @@ The page is the same; what changes is conditions and a few attributes:
   scrolls the focused input into view. The tokens `theme.inset.top`,
   `bottom`, `start`, `end` hold the numbers (zero on desktop).
 - **Platform parts**: `page: status bar = light`, `orientation = portrait`,
-  `back` button maps to `page.Back()` (section 7), pull to refresh is
+  `back` button maps to `page.route.Back()` (section 7), pull to refresh is
   `ScrollArea: refresh = (): ... end` (a `load` value, R9), `haptic("tap")`,
   `share(text)`, and `open_url(u)` are functions in `gui.device`; on desktop
   and web they do the nearest thing or nothing.

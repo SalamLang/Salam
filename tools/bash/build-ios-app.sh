@@ -3,11 +3,16 @@
 #
 # Usage:
 #   tools/bash/build-ios-app.sh APP.salam --out DIR [--device] [--id BUNDLE_ID] [--name LABEL]
+#       [--icon ICON.png]
 #       [--permission NAME]...
 #
 # Salam emits C for arm64, clang builds it with the host shim in
 # mobile/host/ios, and DIR/App.app is the result. The default target is the
 # simulator; --device builds for a phone and still needs signing in Xcode.
+#
+# --icon ICON.png (one square PNG, 1024 pixels is best) becomes the app icon.
+# It goes through an asset catalog compiled with actool; without actool the
+# icon sizes are written as loose PNG files that Info.plist names.
 #
 # --permission NAME (camera, microphone, location, notifications) adds the
 # usage description the system shows in its permission dialog, so
@@ -16,6 +21,7 @@
 
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+. "$ROOT/mobile/host/common/icons.sh"
 
 : "${SALAM:=salam}"
 APP=
@@ -24,6 +30,7 @@ DEVICE=0
 ID=
 NAME=
 PERMS=
+ICON=
 while [ $# -gt 0 ]; do
     case $1 in
     --out)
@@ -42,6 +49,10 @@ while [ $# -gt 0 ]; do
         NAME=$2
         shift 2
         ;;
+    --icon)
+        ICON=$2
+        shift 2
+        ;;
     --permission)
         PERMS="$PERMS $2"
         shift 2
@@ -57,13 +68,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$APP" ] && [ -n "$OUT" ] || {
-    echo "usage: build-ios-app.sh APP.salam --out DIR [--device] [--id ID] [--name LABEL] [--permission NAME]..." >&2
+    echo "usage: build-ios-app.sh APP.salam --out DIR [--device] [--id ID] [--name LABEL] [--icon ICON.png] [--permission NAME]..." >&2
     exit 2
 }
 [ -f "$APP" ] || {
     echo "build-ios-app: no such file: $APP" >&2
     exit 2
 }
+if [ -n "$ICON" ]; then
+    icon_check "$ICON" build-ios-app || exit 2
+    ICON=$(cd "$(dirname "$ICON")" && pwd)/$(basename "$ICON")
+fi
 
 APP=$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")
 mkdir -p "$OUT"
@@ -177,6 +192,34 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+if [ -n "$ICON" ]; then
+    cat_dir=$work/icon/Assets.xcassets
+    mkdir -p "$cat_dir/AppIcon.appiconset"
+    cp "$ICON" "$cat_dir/AppIcon.appiconset/icon.png"
+    printf '%s\n' '{"info":{"author":"xcode","version":1}}' >"$cat_dir/Contents.json"
+    printf '%s\n' '{"images":[{"filename":"icon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}' \
+        >"$cat_dir/AppIcon.appiconset/Contents.json"
+    if xcrun actool --compile "$OUT/App.app" --platform "$SDK" --minimum-deployment-target 15.0 \
+        --app-icon AppIcon --target-device iphone --target-device ipad \
+        --output-partial-info-plist "$work/icon/partial.plist" "$cat_dir" >"$work/icon/actool.log" 2>&1 &&
+        [ -f "$work/icon/partial.plist" ]; then
+        /usr/libexec/PlistBuddy -c "Merge $work/icon/partial.plist" "$OUT/App.app/Info.plist"
+    else
+        echo "build-ios-app: actool failed, writing loose icon files" >&2
+        icon_resize "$ICON" 120 "$OUT/App.app/AppIcon60x60@2x.png"
+        icon_resize "$ICON" 180 "$OUT/App.app/AppIcon60x60@3x.png"
+        icon_resize "$ICON" 152 "$OUT/App.app/AppIcon76x76@2x~ipad.png"
+        icon_resize "$ICON" 167 "$OUT/App.app/AppIcon83.5x83.5@2x~ipad.png"
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array" \
+            -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60" \
+            -c "Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles array" \
+            -c "Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60" \
+            -c "Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:1 string AppIcon76x76" \
+            -c "Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:2 string AppIcon83.5x83.5" \
+            "$OUT/App.app/Info.plist"
+    fi
+fi
 if [ -d "$ROOT/mobile/host/fonts" ]; then
     mkdir -p "$OUT/App.app/fonts"
     cp "$ROOT"/mobile/host/fonts/* "$OUT/App.app/fonts/" 2>/dev/null || true

@@ -15,6 +15,44 @@ package vscode
 
 import node
 
+const SYMBOL_GUARD_JS := `
+const badPos = (p) => !p || typeof p.line !== "number" || typeof p.character !== "number" || p.line < 0 || p.character < 0;
+const le = (a, b) => a.line < b.line || (a.line === b.line && a.character <= b.character);
+const okRange = (r) => !!r && !badPos(r.start) && !badPos(r.end) && le(r.start, r.end);
+const mk = (s, e) => ({ start: { line: s.line, character: s.character }, end: { line: e.line, character: e.character } });
+const fix = (sym) => {
+  if (!sym || typeof sym.name !== "string" || !okRange(sym.range)) return null;
+  const kids = [];
+  let range = mk(sym.range.start, sym.range.end);
+  for (const k of Array.isArray(sym.children) ? sym.children : []) {
+    const f = fix(k);
+    if (!f) continue;
+    if (!le(range.start, f.range.start)) range.start = f.range.start;
+    if (!le(f.range.end, range.end)) range.end = f.range.end;
+    kids.push(f);
+  }
+  let sel = okRange(sym.selectionRange) ? mk(sym.selectionRange.start, sym.selectionRange.end) : mk(range.start, range.start);
+  if (!le(range.start, sel.start) || !le(sel.end, range.end)) sel = mk(range.start, range.start);
+  kids.sort((a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character);
+  return Object.assign({}, sym, { range, selectionRange: sel, children: kids });
+};
+const fixInfo = (sym) => sym && typeof sym.name === "string" && sym.location && okRange(sym.location.range) ? sym : null;
+return {
+  provideDocumentSymbols(document, token, next) {
+    return Promise.resolve().then(() => next(document, token)).catch((err) => {
+      const c = holder.client;
+      if (!c || !c.sendRequest || !c.protocol2CodeConverter) throw err;
+      const params = { textDocument: { uri: c.code2ProtocolConverter.asUri(document.uri) } };
+      return c.sendRequest("textDocument/documentSymbol", params, token).then((raw) => {
+        if (!Array.isArray(raw)) return null;
+        if (raw.length > 0 && raw[0] && raw[0].location) return c.protocol2CodeConverter.asSymbolInformations(raw.map(fixInfo).filter(Boolean));
+        return c.protocol2CodeConverter.asDocumentSymbols(raw.map(fix).filter(Boolean));
+      });
+    });
+  },
+};
+`
+
 vsc := node.Require("vscode")
 
 func vsc_ns(name: str): i64: ret node.GetProp(vsc, name) end
@@ -155,6 +193,11 @@ pub func StartLanguageClient(command: str, args: i64, options: i64): i64:
         node.CallS1(vsc_ns("workspace"), "createFileSystemWatcher", "**/*.salam")
     )
     node.SetProp(client, "synchronize", sync)
+    holder := node.NewObject()
+    factory := node.Invoke0(
+        node.New1(node.Global("Function"), JsStr("return function(holder) {" + SYMBOL_GUARD_JS + "}"))
+    )
+    node.SetProp(client, "middleware", node.Invoke1(factory, holder))
     instance := node.New4(
         node.GetProp(lc, "LanguageClient"),
         JsStr("salam"),
@@ -162,6 +205,7 @@ pub func StartLanguageClient(command: str, args: i64, options: i64): i64:
         server,
         client
     )
+    node.SetProp(holder, "client", instance)
     _started := node.Call0(instance, "start")
     ret instance
 end

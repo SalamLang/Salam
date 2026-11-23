@@ -226,6 +226,64 @@ async function runCommand(id, doc, expectLast) {
   assert.strictEqual(sentText[1], expectLast);
 }
 
+const P = (line, character) => ({ line, character });
+const R = (a, b, c, d) => ({ start: P(a, b), end: P(c, d) });
+
+async function checkSymbolGuard(c) {
+  const mw = c.client.middleware;
+  assert.ok(mw && typeof mw.provideDocumentSymbols === "function");
+  const doc = { uri: { fsPath: "x.salam" } };
+  const good = [{ name: "ok" }];
+  assert.strictEqual(
+    await mw.provideDocumentSymbols(doc, {}, () => good),
+    good,
+  );
+  const raw = [
+    {
+      name: "a",
+      range: R(9, 15, 13, 10),
+      selectionRange: R(13, 8, 13, 12),
+      children: [
+        {
+          name: "kid",
+          range: R(20, 0, 21, 0),
+          selectionRange: R(30, 0, 30, 3),
+        },
+        { name: "neg", range: R(-1, 0, 2, 0), selectionRange: R(0, 0, 0, 1) },
+        { name: "flip", range: R(5, 4, 5, 2), selectionRange: R(5, 2, 5, 3) },
+      ],
+    },
+    { name: "b", range: R(1, 0, 2, 0), selectionRange: R(1, 0, 1, 1) },
+    { range: R(1, 0, 2, 0) },
+  ];
+  c.sendRequest = async () => raw;
+  c.code2ProtocolConverter = { asUri: (u) => u.fsPath };
+  c.protocol2CodeConverter = { asDocumentSymbols: (x) => x };
+  const out = await mw.provideDocumentSymbols(doc, {}, () =>
+    Promise.reject(new Error("selectionRange must be contained in fullRange")),
+  );
+  const le = (a, b) =>
+    a.line < b.line || (a.line === b.line && a.character <= b.character);
+  const inside = (o, i) => le(o.start, i.start) && le(i.end, o.end);
+  const walk = (list, parent) => {
+    for (const s of list) {
+      assert.ok(le(s.range.start, s.range.end), s.name);
+      assert.ok(inside(s.range, s.selectionRange), s.name);
+      if (parent) assert.ok(inside(parent, s.range), s.name);
+      walk(s.children, s.range);
+    }
+  };
+  walk(out, null);
+  assert.deepStrictEqual(
+    out.map((s) => s.name),
+    ["a", "b"],
+  );
+  assert.deepStrictEqual(
+    out[0].children.map((s) => s.name),
+    ["kid"],
+  );
+}
+
 async function main() {
   const ext = require(extPath);
   const context = { subscriptions: [] };
@@ -252,6 +310,7 @@ async function main() {
     assert.strictEqual(c.server.command, fakeCompiler);
     assert.deepStrictEqual([...c.server.args], ["lsp"]);
     assert.ok(c.running);
+    await checkSymbolGuard(c);
     assert.strictEqual(debugFactory.kind, "salam");
     const exe = debugFactory.factory.createDebugAdapterDescriptor({});
     assert.strictEqual(exe.command, fakeCompiler);

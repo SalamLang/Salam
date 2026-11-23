@@ -1796,6 +1796,71 @@ func default_std(exe: str):
     _r := temp.RemoveDir(dir)
 end
 
+func pos_le(a: Pos, b: Pos): bool:
+    ret a.line < b.line or (a.line == b.line and a.ch <= b.ch)
+end
+
+func range_ok(r: value.Value): bool:
+    a := pos_of(jget(r, "start"))
+    b := pos_of(jget(r, "end"))
+    ret a.line >= 0 and a.ch >= 0 and pos_le(a, b)
+end
+
+func contains_range(outer: value.Value, inner: value.Value): bool:
+    ret pos_le(pos_of(jget(outer, "start")), pos_of(jget(inner, "start"))) and
+        pos_le(pos_of(jget(inner, "end")), pos_of(jget(outer, "end")))
+end
+
+func symbols_bad(list: value.Value, parent: value.Value, has_parent: bool): str:
+    mut i := 0
+    until i < jlen(list):
+        sym := jidx(list, i)
+        rg := jget(sym, "range")
+        sel := jget(sym, "selectionRange")
+        nm := jstr(jget(sym, "name"))
+        if not range_ok(rg) or not range_ok(sel) or not contains_range(rg, sel):
+            ret nm + " selectionRange outside range: " + dump(sym)
+        end
+        if has_parent and not contains_range(parent, rg):
+            ret nm + " outside its parent"
+        end
+        inner := symbols_bad(jget(sym, "children"), rg, true)
+        if inner != "":
+            ret inner
+        end
+        i++
+    end
+    ret ""
+end
+
+func outline_ranges(s: Server, label: str, uri: str, text: str):
+    did_open(s, uri, text)
+    _wait := s.diagnostics(uri)
+    sy := res(s.request("textDocument/documentSymbol", doc_id(uri)))
+    check(
+        "outline ranges: " + label,
+        symbols_bad(sy, value.ValueNull(), false) == "",
+        symbols_bad(sy, value.ValueNull(), false)
+    )
+end
+
+func outline_ranges_all(s: Server):
+    outline_ranges(s, "en", uri_of(g_en), fs.ReadText(g_en))
+    outline_ranges(s, "fa", uri_of(g_fa), fs.ReadText(g_fa))
+    outline_ranges(s, "interfaces", uri_of(g_iface), fs.ReadText(g_iface))
+    sr := g_root + "/tests/en/stdlib/ssr/server_func_register.salam"
+    outline_ranges(s, "server func throw", uri_of(sr), fs.ReadText(sr))
+    sf := g_root + "/tests/fa/stdlib/sevenzip_filters.salam"
+    outline_ranges(s, "fa throw", uri_of(sf), fs.ReadText(sf))
+    broken := g_root + "/tests/lsp/qf/broken_outline.salam"
+    outline_ranges(
+        s,
+        "malformed",
+        uri_of(broken),
+        "struct P:\n    x: int\nfunc a(: int:\n    ret\nfunc b(): int throw:\n    ret try a(\nend\nenum E:\n    A\n"
+    )
+end
+
 func main:
     g_root = find_root()
     g_std = g_root + "/std"
@@ -1827,6 +1892,7 @@ func main:
     end
     check("initialize advertises the features", all_caps, dump(caps))
     english(s)
+    outline_ranges_all(s)
     quick_fixes(s)
     interfaces(s)
     style_attrs(s)

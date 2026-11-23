@@ -33,6 +33,19 @@ is the same file that runs on the web and on the desktop. The script emits C
 per ABI, builds `libsalamapp.so` with the NDK and packages it with the
 Gradle project in `mobile/host/android/project`.
 
+## Building for iOS
+
+```
+tools/bash/build-ios-app.sh app.salam --out out
+xcrun simctl install booted out/App.app
+```
+
+Needs a Mac with Xcode. The default is the simulator; `--device` builds for a
+phone and the app still has to be signed in Xcode. iOS uses the same window
+backend as Android (`std/gui/window/mobile.salam`) over the same C calls; the
+UIKit side is `mobile/host/ios/salam_host.m`. `SALAM_OS_IOS` is defined by
+the compiler for iOS targets, and std tests it as `defined(SALAM_OS_IOS)`.
+
 ## Threading
 
 `gui.window` is pump based (`_nat_pump`, `_nat_wake`); phones are callback
@@ -67,8 +80,10 @@ Each stage is one pull request and is checked on the desktop first.
 Done: stages 1 to 7, the Android part of 8 (keyboard, back button, system
 fonts) and clipboard and link opening from stage 10. Checked on an arm64
 emulator with a counter page, a form with a text input and a Persian page.
-Missing: bundled fonts (needed on iOS), pinch and other multi touch
-gestures, stage 9 (iOS), share, permissions, camera and notifications.
+Stage 9: the iOS host draws the counter page on the iPhone simulator. Touch,
+the keyboard and Persian text were not tried on iOS yet.
+Missing: bundled fonts (iOS cannot read system fonts on a phone), pinch and
+other multi touch gestures, share, permissions, camera and notifications.
 
 ## Target matrix
 

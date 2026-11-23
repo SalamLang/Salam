@@ -6,7 +6,7 @@ Status: implemented (2026-11-22). Replaced the `routes:` block of
 ## Why
 
 The `routes:` block is a second small language inside the page language: a
-table of quoted patterns, with `guard` and `title` settings on each
+table of quoted patterns, with guard and title settings on each
 line. A folder already is a tree of paths, and every project has one. Making the
 folder the table adds no syntax, keeps one place to look, and gives guards and
 layouts a natural scope (a folder).
@@ -54,16 +54,19 @@ a parameter optional).
 
 ```salam
 pub component User(id: int):
+    page.Guard(signed_in())
     title = "User " + id
-    guard = signed_in()
     heading: content = "User " + id end
     Link: to = "/" content = "Back" end
 end
 ```
 
-The settings sit at the top of the component body and are the same three the
-route line took: `title`, `guard` (a bool expression, re-checked when its state
-changes). A route whose guard is false is skipped, so the next matching route
+A guard is a call, `page.Guard(condition)` (Persian `صفحه.نگهبان(...)`), and
+it must be the first line of the component body, above every setting, style and
+element, never inside `if` or `each` (E268; `guard = x` is E268 too). The
+condition is re-checked when its state changes, and a constant `true` or `false`
+is folded at build time. The settings `title` and `route` follow it. A route
+whose guard is false is skipped, so the next matching route
 shows (usually `_404`). There is no `redirect` setting: code that wants to send
 the visitor elsewhere calls `page.route.Redirect(path)`. One more is new: `route`,
 a text that replaces the path derived from the file name (`route = "/کاربر/:id"`).
@@ -71,12 +74,12 @@ a text that replaces the path derived from the file name (`route = "/کاربر/
 ## Layouts
 
 `_layout.salam` declares one `pub component` with an `Outlet`. It wraps every
-route file in its folder and below, nested from the outside in. Its `guard`
+route file in its folder and below, nested from the outside in. Its `page.Guard`
 applies to the whole subtree, so a section is protected once.
 
 ```salam
 pub component AdminLayout:
-    guard = signed_in()
+    page.Guard(signed_in())
     nav: Link: to = "/admin/users" content = "Users" end end
     Outlet: end
 end
@@ -132,7 +135,7 @@ behave as before. The duplicate check is `E291`:
 The `routes:` block is gone: it is no longer parsed, so a program that still
 writes it gets the ordinary syntax error. There is no warning release and no
 migration tool; each route line becomes a file by hand: the pattern is the
-filename, `title` and `guard` move into the component body (a `redirect`
+filename, `title` moves into the component body, a guard becomes its first line `page.Guard(...)` (a `redirect`
 becomes a `page.route.Redirect` call in code), and
 `mode` and `base` move to the entry `page:` block. The tests, docs and learn
 pages that used the block were converted to folders.
@@ -153,12 +156,12 @@ pages that used the block were converted to folders.
 | FR1 | the `pages/` folder is the table; no route syntax in source |
 | FR2 | `[id]`, `[[id]]`, `[...rest]`, `index`, `_layout`, `_404` |
 | FR3 | one `pub component` per route file; its parameters are the path parameters |
-| FR4 | `title`, `guard`, `route` are component settings; a layout's guard applies to its subtree; no `redirect` setting, code calls `page.route.Redirect` |
+| FR4 | `page.Guard(...)` is the first line, `title` and `route` are settings; a layout's guard applies to its subtree; no `redirect` setting, code calls `page.route.Redirect` |
 | FR5 | lowering reuses the existing route table, matcher and runtime |
 | FR6 | the `routes:` block is removed outright |
 
 ## Implementation steps
 
 1. Collect `pages/` into the route list in `layout_routes.salam`, E280 to E284 (done).
-2. `route`, `guard`, `title` as component settings, layouts nested (done).
+2. `route`, `title` as component settings, `page.Guard` as the first line, layouts nested (done).
 3. Convert the tests and docs, remove the block (done).

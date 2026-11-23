@@ -2592,8 +2592,22 @@ its folder) and `route = "/..."` to replace the path from the file name
 `page.route.Param("id")`, `page.route.Query("q")` (Persian `صفحه.مسیر.برو`,
 `هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`). File errors:
 E280 same route twice, E281 `[id]` without that parameter, E284 bad file name.
-Every `pub component` in the project folder imports itself, no `include`; two
-with one name are E291.
+Page project layout: `components/` holds the `pub` components (every `.salam`
+file in it, recursively, imports its `pub components` by name, no `include`),
+`pages/` holds the routes, and everything else is included explicitly with
+`include = "path.salam"`. Without a `components/` folder nothing is imported by
+name. A `pub component` name used outside that rule is the unknown element
+error E111 with a hint to move it to `components/`. Two `pub` components with
+one name across `components/`, `main.salam` and `pages/` are E291.
+
+```
+main.salam
+pages/index.salam         pub component Home
+pages/product/[id].salam  pub component Product(id: int)
+components/card.salam     pub component Card(title)
+components/shop/badge.salam
+lib/format.salam          include = "lib/format.salam" to use it
+```
 
 `salam page build --ssr[=DIR]` writes `DIR/server` (a native program) and
 `DIR/public`; run it with `PORT` and `HOST` (default 8080 and 127.0.0.1).

@@ -29,7 +29,7 @@ the layout language and are not names.
 
 Inside `page` and `component` blocks an English file writes the official
 attribute and element names with spaces: `font size`, `border radius`,
-`hover background`, `text area`. The underscore and hyphen spellings of an
+`hover background`, `word break`. The underscore and hyphen spellings of an
 official name (`font_size`, `border-radius`) are the compile error E235:
 
 ```

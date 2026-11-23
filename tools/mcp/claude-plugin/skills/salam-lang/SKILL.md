@@ -121,8 +121,10 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 - Page projects (entry `main.salam`): `pages/` is the route table, one `pub
 component` per file (`[id]`, `[[id]]`, `[...rest]`, `_layout` with an
   `Outlet`, `_404`; settings `title`, `guard`, `route`). No `routes:` block.
-  Every `pub component` in the project imports itself (duplicates E291) and an
-  English name must be PascalCase (E290). `salam page build --ssr` writes a
+  `components/` holds the `pub` components, which import themselves
+  (duplicates across `components/`, `main.salam` and `pages/` are E291);
+  everything else is included explicitly; an English name must be PascalCase
+  (E290). `salam page build --ssr` writes a
   native server (`PORT`, `HOST`) plus `public/`; `salam serve --render` runs
   it. `server func` runs only on the server and is a stub in the browser and
   native; its types must be JSON (E285), `env` is server only (E286), backend

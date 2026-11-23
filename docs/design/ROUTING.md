@@ -116,16 +116,45 @@ E256 to E259 until those numbers were found to belong to the ownership checks.
 
 ## Project components
 
-In a project (entry named `main.salam`) every `pub component` in every `.salam`
-file under the entry's folder is imported without `include`. Route files under
-`pages/` take part in the duplicate check only. Hidden folders, `node_modules`,
-`build`, `dist`, `out`, `target`, `vendor`, `tests`, `test`, `__tests__`,
-folders with their own `main.salam`, `*_test.salam` and `*.test.salam` files
-are not scanned. Every other `.salam` file is read, with or without components.
-Folders nested deeper than 12 levels are not followed, which ends symlink loops. Private components
-stay private (E232). A single file build, the playground and runtime layouts
-behave as before. The duplicate check is `E291`:
-`two pub components are named 'Card': 'shop/card.salam' line 13 and 'ui/card.salam' line 13`.
+Convention: `components/` holds the `pub` components of a page project,
+`pages/` holds the routes, and everything else is included explicitly.
+
+```
+shop/
+  main.salam
+  pages/
+    index.salam
+    product/[id].salam
+  components/
+    card.salam
+    shop/badge.salam
+  lib/
+    format.salam
+```
+
+In a project (entry named `main.salam`) the compiler looks for a folder named
+`components/` next to it. If it exists, every `.salam` file in it, in sorted
+order and recursively, is read. Files without a component are ignored. Every
+`pub component` of the others is imported without `include`; a component
+without `pub` stays private to its file (E232). Hidden folders,
+`node_modules`, `build`, `dist`, `out`, `target`, `vendor`, `tests`, `test`,
+`__tests__`, folders with their own `main.salam`, `*_test.salam` and
+`*.test.salam` files are not read. Folders nested deeper than 12 levels are
+not followed and a folder reached twice through links is read once, which ends
+symlink loops.
+
+Without a `components/` folder nothing is imported by name. A file anywhere
+else (`lib/`, `ui/`, next to `main.salam`) is used only through an explicit
+`include = "ui/card.salam"`. Using a component that lives there without
+including it is the usual unknown element error (E111), with the hint
+`a pub component 'Card' exists in the project outside components/; move it to
+components/ or include it`. `pages/` is route files only.
+
+The duplicate check is `E291`; it covers `components/`, `main.salam` and the
+route files together, so a `pub component` in `pages/about.salam` and another
+`About` in `components/` clash:
+`two pub components are named 'Card': 'components/shop/card.salam' line 13 and 'components/ui/card.salam' line 13`.
+A single file build, the playground and runtime layouts behave as before.
 
 ## Migration
 

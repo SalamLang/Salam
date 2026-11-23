@@ -701,9 +701,23 @@ folder, `[id].salam` a parameter, `[[id]].salam` an optional one,
 a component with an `Outlet` wrapping its folder (E283 without one). Settings
 at the top of the body: `title`, `guard`, `route`. There is no `routes:` block
 and no `redirect` setting; use `page.route.GoTo/Redirect/Back/Forward` in code.
-Other file errors: E280 (same route twice), E281, E284. Every `pub component`
-under the project folder imports itself without `include`; a duplicate name is
+Other file errors: E280 (same route twice), E281, E284. Project convention:
+`components/` holds the `pub` components of the project (every `.salam` file in
+it, recursively, imports its `pub` components without `include`), `pages/`
+holds the routes, and everything else is included explicitly with
+`include = "x.salam"`. With no `components/` folder nothing is imported by
+name, and using a component that lives elsewhere is E111 with a hint to move
+it. A duplicate `pub` name across `components/`, `main.salam` and `pages/` is
 E291 and an English name must be PascalCase (E290).
+
+```
+main.salam
+pages/index.salam
+pages/product/[id].salam
+components/card.salam
+components/shop/badge.salam
+lib/format.salam        used only with include = "lib/format.salam"
+```
 
 `salam page build --ssr[=DIR]` writes a native `DIR/server` and `DIR/public`;
 `PORT` and `HOST` configure it, and `salam serve --render` rebuilds on save.

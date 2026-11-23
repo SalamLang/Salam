@@ -23,6 +23,8 @@ shop/
     pages/
       index.salam
       product/[id].salam
+    components/           pub components shared by the pages
+      card.salam
     api.salam             server funcs: calls to the backend
   api/                    any language, own repository if you like
 ```

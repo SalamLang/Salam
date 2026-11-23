@@ -376,6 +376,25 @@ object Host {
         return clip.getItemAt(0).coerceToText(activity).toString()
     }
 
+    @Volatile
+    var imeCfg = 0
+
+    @JvmStatic
+    fun setImeConfig(config: Int) {
+        val a = activity ?: return
+        val changed = config != imeCfg
+        imeCfg = config
+        if (!changed) return
+        a.runOnUiThread {
+            val v = a.window.decorView.findViewById<android.view.View>(android.R.id.content) ?: return@runOnUiThread
+            val target = (v as? android.view.ViewGroup)?.getChildAt(0) ?: v
+            val imm = a.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            if (imm.isActive(target)) {
+                imm.restartInput(target)
+            }
+        }
+    }
+
     @JvmStatic
     fun showIme(show: Boolean) {
         val a = activity ?: return

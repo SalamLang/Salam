@@ -1309,7 +1309,16 @@ func _edit_key(f: int, k: window.Key, ctrl: bool, shift: bool):
             else:
                 _maybe_change(f)
                 _remember_committed(f)
-                _submit(_ancestor_k(f, _K_FORM))
+                hint := _attr(_e.dom, f, "enterkeyhint")
+                if hint == "next":
+                    _tab(false)
+                else hint == "previous":
+                    _tab(true)
+                else hint == "done":
+                    _set_focus(-1, false)
+                else:
+                    _submit(_ancestor_k(f, _K_FORM))
+                end
             end
             break
         end
@@ -1382,11 +1391,74 @@ func _ime(text: str, commit: bool):
     _refresh_control(f)
 end
 
+func _ime_config(f: int): int:
+    t := _input_type(f)
+    multi := _e.dom.nodes[f].k == _K_TEXTAREA
+    type_kb := match t:
+        "email": 1 end
+        "url": 2 end
+        "tel": 3 end
+        "number": 5 end
+        "password": 6 end
+        "search": 7 end
+        else: 0 end
+    end
+    kb := match _attr(_e.dom, f, "inputmode"):
+        "text": 0 end
+        "email": 1 end
+        "url": 2 end
+        "tel": 3 end
+        "numeric": 4 end
+        "decimal": 5 end
+        "search": 7 end
+        "none": 8 end
+        else: type_kb end
+    end
+    enter := match _attr(_e.dom, f, "enterkeyhint"):
+        "enter": 1 end
+        "done": 2 end
+        "go": 3 end
+        "next": 4 end
+        "previous": 5 end
+        "search": 6 end
+        "send": 7 end
+        else: t == "search" ? 6 : 0 end
+    end
+    quiet := kb >= 1 and kb <= 6
+    caps := match _attr(_e.dom, f, "autocapitalize"):
+        "off", "none": 1 end
+        "on", "sentences": 0 end
+        "words": 2 end
+        "characters": 3 end
+        else: quiet ? 1 : 0 end
+    end
+    ac := _attr(_e.dom, f, "autocorrect")
+    sc := _attr(_e.dom, f, "spellcheck")
+    fix := (ac == "off" or sc == "false") ? 1 : ((ac == "on" or sc == "true") ? 2 : (quiet ? 1 : 0))
+    content := match _attr(_e.dom, f, "autocomplete"):
+        "username": 1 end
+        "password", "current-password": 2 end
+        "new-password": 3 end
+        "one-time-code": 4 end
+        "email": 5 end
+        "tel": 6 end
+        "name": 7 end
+        else: t == "password" ? 2 : 0 end
+    end
+    ret kb | (enter << 4) | (caps << 8) | (fix << 10) | (content << 12) | (multi ? 65536 : 0)
+end
+
 func _update_ime():
     if not _e.has_win:
         ret
     end
-    if _e.focus < 0 or _e.focus >= _e.ctl.Len() or not _is_text_input(_e.focus):
+    mut cfg := 0
+    mut want := _e.focus >= 0 and _e.focus < _e.ctl.Len() and _is_text_input(_e.focus)
+    if want:
+        cfg = _ime_config(_e.focus)
+        want = (cfg & 15) != 8
+    end
+    if not want:
         if _e.ime_on:
             _e.ime_on = false
             _e.win.SetImeRect(0.0, 0.0, 0.0, 0.0)
@@ -1394,6 +1466,7 @@ func _update_ime():
         ret
     end
     _e.ime_on = true
+    _e.win.SetImeConfig(cfg)
     ri := _ctl_run(_e.focus)
     if ri < 0 or not _e.runs[ri].has_lay:
         ret

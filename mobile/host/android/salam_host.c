@@ -171,6 +171,8 @@ static jmethodID cancel_mid;
 static jmethodID perm_request_mid;
 static char clip_buf[8192];
 static int ime_state;
+static int ime_cfg;
+static jmethodID ime_cfg_mid;
 
 jint JNI_OnLoad(JavaVM *jvm, void *reserved)
 {
@@ -310,6 +312,29 @@ void salam_host_exit(void)
         attached = 1;
     }
     (*env)->CallStaticVoidMethod(env, host_cls, exit_mid);
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+}
+
+void salam_host_ime_config(int config)
+{
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if (config == ime_cfg) {
+        return;
+    }
+    ime_cfg = config;
+    if (vm == NULL || host_cls == NULL || ime_cfg_mid == NULL) {
+        return;
+    }
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) {
+            return;
+        }
+        attached = 1;
+    }
+    (*env)->CallStaticVoidMethod(env, host_cls, ime_cfg_mid, config);
     if (attached) {
         (*vm)->DetachCurrentThread(vm);
     }
@@ -734,6 +759,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     host_cls = (jclass)(*env)->NewGlobalRef(env, cls);
     exit_mid = (*env)->GetStaticMethodID(env, cls, "onExit", "()V");
     ime_mid = (*env)->GetStaticMethodID(env, cls, "showIme", "(Z)V");
+    ime_cfg_mid = (*env)->GetStaticMethodID(env, cls, "setImeConfig", "(I)V");
     bars_mid = (*env)->GetStaticMethodID(env, cls, "barsLight", "(II)V");
     page_bg_mid = (*env)->GetStaticMethodID(env, cls, "pageBackground", "(I)V");
     open_mid = (*env)->GetStaticMethodID(env, cls, "openUrl", "(Ljava/lang/String;)Z");

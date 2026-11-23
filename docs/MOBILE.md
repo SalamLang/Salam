@@ -146,6 +146,18 @@ simulator.
   the page behind it blocked. The back button, Escape and a tap outside close it
   (`closedby = "none"` ignores the tap) and fire `close`, so bind the state:
   `dialog: open = shown close = (): shown = false end end`.
+- The keyboard matches the input. `type` (`email`, `url`, `tel`, `number`,
+  `password`, `search`), `inputmode` (`text`, `numeric`, `decimal`, `tel`,
+  `email`, `url`, `search`, `none`), `enterkeyhint` (`enter`, `done`, `go`,
+  `next`, `previous`, `search`, `send`), `autocapitalize`, `autocorrect`,
+  `spellcheck` and `autocomplete` (`username`, `password`, `new-password`,
+  `one-time-code`, `email`, `tel`, `name`) pick the Android `inputType` and
+  `imeOptions` and the iOS keyboard type, return key, capitalization,
+  correction, secure entry and content type. `inputmode = none` shows no
+  keyboard. Enter in a single line input runs the hint: `next` and `previous`
+  move the focus, `done` closes the keyboard, anything else submits the form.
+  A textarea keeps Enter for a new line. `autocomplete` values only change the
+  iOS content type; on Android a `password` one uses the password keyboard.
 - The soft keyboard follows the focused input; the page root keeps away from
   the status bar, the navigation bar and the keyboard. By default the system
   insets are padding of the page, so they scroll away with the content and

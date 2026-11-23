@@ -86,3 +86,13 @@ Jalali mode uses Persian month names and digits and a right to left grid. Values
 | `sidebar menu button` | `active`, `variant` default, outline; `size` default, sm, lg; `url` | a link when `url` is set, put an icon as a child before the text |
 | `sidebar menu badge`, `sidebar separator` | | |
 | `sidebar inset` | | main area next to the panel |
+
+## chart
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `chart` | `type` bar, line, area, pie, donut; `chart height` px (250); `legend`; `grid` "false" hides the grid; `stacked` (bar, area); `center` label under the donut total; `label` accessible name | SVG drawn in the browser, redraws on resize, tooltip on hover |
+| `chart series` | `label`, `tint` (any CSS color, default `var(--chart-1)` to `var(--chart-5)` by order) | one data set; pie and donut use the first series |
+| `chart point` | `label` (category or slice), `value`, `tint` (slice color) | |
+
+Series are matched to categories by position, the first series names the categories.

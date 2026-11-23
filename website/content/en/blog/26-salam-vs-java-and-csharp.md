@@ -23,7 +23,7 @@ The JVM and the .NET runtime are among the most heavily engineered pieces of sof
 | Memory               | Garbage collected                                   | Garbage collected                                         | Stack values; heap collections freed with `.Free()` and `defer` |
 | Deployment           | A JVM plus your JARs, or a native image             | The .NET runtime plus your assemblies, or a native binary | One executable                                                  |
 | Generics             | Erased at runtime                                   | Reified, specialized for value types                      | Specialized per type at compile time                            |
-| Errors               | Exceptions, checked and unchecked                   | Exceptions                                                | `throw`, `try`, `catch`, no unwinding                          |
+| Errors               | Exceptions, checked and unchecked                   | Exceptions                                                | `throw`, `try`, `catch`, no unwinding                           |
 | Ecosystem            | Maven Central, Spring, Jakarta EE                   | NuGet, ASP.NET Core, Entity Framework                     | A large standard library, few third-party packages              |
 
 ## The same task in three languages {#same-task}

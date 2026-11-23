@@ -291,7 +291,8 @@ global.__salam_call_key = (name, args) => {
   callSeen[base] = n + 1;
   return base + ":" + n;
 };
-global.__salam_call_cache_get = (key) => (Object.prototype.hasOwnProperty.call(callCache, key) ? callCache[key] : undefined);
+global.__salam_call_cache_get = (key) =>
+  Object.hasOwn(callCache, key) ? callCache[key] : undefined;
 global.XMLHttpRequest = class {
   open(method, url, isAsync) {
     this.method = method;
@@ -325,8 +326,13 @@ global.XMLHttpRequest = class {
     }
     const args = JSON.parse(body).args;
     if (m[1] === "Add") this.reply(200, { ok: true, value: args.a + args.b });
-    else if (m[1] === "Greet") this.reply(200, { ok: true, value: "hello " + args.name });
-    else if (m[1] === "Fetch") this.reply(200, { ok: true, value: { id: args.id, name: "item" + args.id, tags: ["x", "y"] } });
+    else if (m[1] === "Greet")
+      this.reply(200, { ok: true, value: "hello " + args.name });
+    else if (m[1] === "Fetch")
+      this.reply(200, {
+        ok: true,
+        value: { id: args.id, name: "item" + args.id, tags: ["x", "y"] },
+      });
     else this.reply(200, { ok: false, error: "no stock" });
   }
 };

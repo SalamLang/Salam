@@ -450,6 +450,21 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
+{
+    (void)id;
+    (void)title;
+    (void)body;
+    (void)delay_ms;
+    return 0;
+}
+
+int salam_host_notify_cancel(int id)
+{
+    (void)id;
+    return 0;
+}
+
 int salam_host_perm_state(const char *name)
 {
     (void)name;

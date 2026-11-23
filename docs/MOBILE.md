@@ -74,12 +74,14 @@ composition text, and no bundled fonts.
   `Vibrate`). `device.CheckPermission` and `device.RequestPermission` handle
   runtime permissions; declare them with `--permission camera` (also
   `microphone`, `location`, `notifications`) when you build, and call
-  `device.OnChange` to react when the dialog closes.
+  `device.OnChange` to react when the dialog closes. `device.ShowNotification`,
+  `device.ScheduleNotification` and `device.CancelNotification` post local
+  notifications (the build declares `POST_NOTIFICATIONS` when you use them).
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- Camera, location and notifications.
+- Camera and location.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

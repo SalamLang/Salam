@@ -17,6 +17,7 @@ jobs:
         mobile/host/*
         std/gui/*
         tools/bash/build-android-app.sh
+        tools/bash/android-smoke.sh
         .github/workflows/_changes.yml
         .github/workflows/app-native-android-build.yml
   build:
@@ -59,3 +60,70 @@ jobs:
           sh tools/bash/build-android-app.sh tests/en/ui/counter.salam \
             --out "$RUNNER_TEMP/native-android" --abi arm64-v8a,x86_64
           test -s "$RUNNER_TEMP/native-android/app.apk"
+  smoke:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Run the smoke page on an emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Salam
+        id: salam
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Set up JDK 21 (Temurin) + Gradle cache
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            mobile/host/android/project/gradle/libs.versions.toml
+            mobile/host/android/project/**/*.gradle.kts
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
+            >/dev/null 2>&1 || true
+
+      - name: Build the smoke page for x86_64
+        env:
+          SALAM: ${{ steps.salam.outputs.salam }}
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          set -eu
+          sh tools/bash/build-android-app.sh mobile/host/ios/smoke.salam \
+            --out "$RUNNER_TEMP/smoke-android" --abi x86_64 --id app.salam.smoke
+          test -s "$RUNNER_TEMP/smoke-android/app.apk"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Tap the page on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          SMOKE_APK: ${{ runner.temp }}/smoke-android/app.apk
+          SMOKE_OUT: ${{ runner.temp }}/smoke-result
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: sh tools/bash/android-smoke.sh "$SMOKE_APK" app.salam.smoke "$SMOKE_OUT"
+
+      - name: Upload the screenshot
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-smoke
+          path: ${{ runner.temp }}/smoke-result
+          if-no-files-found: ignore

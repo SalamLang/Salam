@@ -76,6 +76,8 @@ mut _pg_call_keys := Vector {} as Vector<str>
 
 mut _pg_call_vals := Vector {} as Vector<str>
 
+mut _pg_temps := Vector {} as Vector<str>
+
 func _pg_clean_base(
     base: str
 ): str:
@@ -107,6 +109,25 @@ func _pg_clear_text():
     _pg_write = ""
     _pg_title_heap = false
     _pg_write_heap = false
+end
+
+func _pg_free_temps():
+    each t in _pg_temps:
+        mem.Free(t as void*)
+    end
+    _pg_temps.Clear()
+end
+
+func _pg_free_calls():
+    each k in _pg_call_keys:
+        mem.Free(k as void*)
+    end
+    each v in _pg_call_vals:
+        mem.Free(v as void*)
+    end
+    _pg_call_keys.Clear()
+    _pg_call_vals.Clear()
+    _pg_free_temps()
 end
 
 func _pg_budget_ms(): int:
@@ -333,8 +354,7 @@ pub func PageBegin():
     _pg_clear_text()
     _pg_skip = false
     _pg_num = 0
-    _pg_call_keys.Clear()
-    _pg_call_vals.Clear()
+    _pg_free_calls()
 end
 
 @en "PageEnd"
@@ -342,8 +362,7 @@ end
 pub func PageEnd():
     _pg_active = false
     _pg_owner = 0 as i64
-    _pg_call_keys.Clear()
-    _pg_call_vals.Clear()
+    _pg_free_calls()
     sync.Unlock(_pg_mu)
 end
 
@@ -496,6 +515,32 @@ pub func PageNext(html: str, from: int): int:
     ret 0 - 1
 end
 
+@en "PageDrop"
+@fa "رها سازی متن"
+pub func PageDrop(s: str):
+    if s.Len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+@en "PageKeep"
+@fa "ثبت متن موقت"
+pub func PageKeep(s: str): str:
+    if s.Len() > 0 and _pg_active and _pg_owner == _pg_tid():
+        _pg_temps.Push(s)
+    end
+    ret s
+end
+
+@en "PageCopy"
+@fa "رونویس متن"
+pub func PageCopy(s: str): str:
+    if s.Len() == 0:
+        ret ""
+    end
+    ret str.Clone(s)
+end
+
 @en "PageNum"
 @fa "شماره ناحیه"
 pub func PageNum(): int:
@@ -576,7 +621,7 @@ pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
     mem.Free(cs as void*)
     mem.Free(st as void*)
     mut head := doc
-    mut head_owned := false
+    mut head_own := ""
     if _pg_title.Len() > 0:
         a := doc.Find("<title>")
         b := doc.Find("</title>")
@@ -588,8 +633,8 @@ pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
             str.BufAppend(tb, h1)
             str.BufAppend(tb, ht)
             str.BufAppend(tb, h2)
-            head = str.BufStr(tb)
-            head_owned = true
+            head_own = str.BufStr(tb)
+            head = head_own
             str.BufFree(tb)
             mem.Free(ht as void*)
             mem.Free(h1 as void*)
@@ -616,7 +661,7 @@ pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
     ssr.Respond(c, status, out, "")
     mem.Free(out as void*)
     mem.Free(script as void*)
-    if head_owned: mem.Free(head as void*) end
+    if head_own.Len() > 0: mem.Free(head_own as void*) end
 end
 
 @en "PageServe"

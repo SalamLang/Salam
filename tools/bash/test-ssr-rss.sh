@@ -8,7 +8,7 @@ set -u
 
 salam=${1:-}
 requests=${2:-2000}
-limit=${3:-8192}
+limit=${3:-1024}
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 [ -n "$salam" ] || salam="$root/salam"
 case "$salam" in /* | [A-Za-z]:*) ;; *) salam="$root/$salam" ;; esac
@@ -48,10 +48,10 @@ burst() {
     i=0
     args=""
     while [ "$i" -lt "$n" ]; do
-        for p in / /about /user/7 /total/7 /nope; do
+        for p in / /about /user/7 /total/7 /nope /user/abc '/about?a=1&b=2' /admin /_salam/session; do
             args="$args -o /dev/null $base$p"
         done
-        i=$((i + 5))
+        i=$((i + 9))
     done
     # shellcheck disable=SC2086
     curl -s -m 120 $args

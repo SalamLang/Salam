@@ -16,6 +16,7 @@
 package nav
 
 import str
+import mem
 
 @en "Route"
 @fa "مسیر"
@@ -54,6 +55,25 @@ pub struct History:
     pub index: int = 0
 end
 
+if SALAM_JS:
+    func _drop(s: str):
+        _n := s.Len()
+    end
+else:
+    func _drop(s: str):
+        if s.Len() > 0:
+            mem.Free(s as void*)
+        end
+    end
+end
+
+func _drop_all(v: Vector<str>):
+    repeat v.Len() in i:
+        _drop(v.Get(i))
+    end
+    v.Free()
+end
+
 func _route_param(pattern: str, path: str, name: str): str:
     ret Param(pattern, path, name)
 end
@@ -69,7 +89,7 @@ end
 func _skip_slashes(s: str, from: int): int:
     mut i := from
     n := s.Len()
-    until i < n and str.Equals(_ch(s, i), "/"):
+    until i < n and str.IndexFrom(s, "/", i) == i:
         i++
     end
     ret i
@@ -100,6 +120,13 @@ func _take(v: Vector<str>, n: int): Vector<str>:
     ret out
 end
 
+func _named(seg: str, name: str): bool:
+    pn := _param_name(seg)
+    hit := str.Equals(pn, name)
+    _drop(pn)
+    ret hit
+end
+
 func _is_splat(seg: str): bool:
     ret str.StartsWith(seg, "*")
 end
@@ -114,7 +141,7 @@ end
 
 func _param_name(seg: str): str:
     if _is_splat(seg):
-        ret seg.Len() > 1 ? str.Substr(seg, 1, seg.Len() - 1) : "*"
+        ret seg.Len() > 1 ? str.Substr(seg, 1, seg.Len() - 1) : str.Clone("*")
     end
     mut n := seg.Len() - 1
     if _is_optional(seg):
@@ -177,7 +204,7 @@ func _cap_step(
     end
     p := ps.Get(i)
     if _is_splat(p):
-        if str.Equals(_param_name(p), name):
+        if _named(p, name):
             value = _join_rest(xs, j)
         end
         ret true
@@ -186,7 +213,7 @@ func _cap_step(
         if j < xs.Len():
             mut v := value
             if _cap(ps, xs, i + 1, j + 1, name, v, dead):
-                value = str.Equals(_param_name(p), name) ? xs.Get(j) : v
+                value = _named(p, name) ? xs.Get(j) : v
                 ret true
             end
         end
@@ -201,7 +228,7 @@ func _cap_step(
         if not _cap(ps, xs, i + 1, j + 1, name, v, dead):
             ret false
         end
-        value = str.Equals(_param_name(p), name) ? x : v
+        value = _named(p, name) ? x : v
         ret true
     end
     if not str.Equals(p, x):
@@ -243,7 +270,15 @@ func _capture(pattern: str, path: str, name: str, value &: str): bool:
             dead.Push(0)
         end
     end
-    ret _cap(ps, xs, 0, 0, name, value, dead)
+    ok := _cap(ps, xs, 0, 0, name, value, dead)
+    if value.Len() > 0:
+        value = str.Clone(value)
+    else:
+        value = ""
+    end
+    _drop_all(ps)
+    _drop_all(xs)
+    ret ok
 end
 
 @en "Unescape"
@@ -284,12 +319,19 @@ pub func Normalize(path: str): str:
     mut keep := Vector {} as Vector<str>
     each s in segs:
         if str.Equals(s, ".."):
-            keep = _take(keep, keep.Len() - 1)
+            if keep.Len() > 0:
+                _gone := keep.Pop()
+            end
         else not str.Equals(s, "."):
             keep.Push(s)
         end
     end
-    ret "/" + _join_rest(keep, 0)
+    joined := _join_rest(keep, 0)
+    out := "/" + joined
+    _drop(joined)
+    keep.Free()
+    _drop_all(segs)
+    ret out
 end
 
 @en "SplitUrl"
@@ -297,13 +339,18 @@ end
 pub func SplitUrl(url: str, path &: str, query &: str):
     mut u := url
     h := str.IndexFrom(u, "#", 0)
+    mut cut := false
     if h >= 0:
         u = str.Substr(u, 0, h)
+        cut = true
     end
     q := str.IndexFrom(u, "?", 0)
     if q >= 0:
         query = str.Substr(u, q + 1, u.Len() - q - 1)
         path = str.Substr(u, 0, q)
+        if cut:
+            _drop(u)
+        end
     else:
         query = ""
         path = u
@@ -340,7 +387,9 @@ end
 @fa "تطبیق"
 pub func Match(pattern: str, path: str): bool:
     mut v := ""
-    ret _capture(pattern, path, "", v)
+    ok := _capture(pattern, path, "", v)
+    _drop(v)
+    ret ok
 end
 
 @en "Param"
@@ -348,9 +397,15 @@ end
 pub func Param(pattern: str, path: str, name: str): str:
     mut v := ""
     if not _capture(pattern, path, name, v):
+        _drop(v)
         ret ""
     end
-    ret Unescape(v)
+    if str.IndexFrom(v, "%", 0) < 0:
+        ret v
+    end
+    out := Unescape(v)
+    _drop(v)
+    ret out
 end
 
 @en "ParamInt"
@@ -358,6 +413,7 @@ end
 pub func ParamInt(pattern: str, path: str, name: str): int:
     v := Param(pattern, path, name)
     if not IsInt(v):
+        _drop(v)
         ret 0
     end
     neg := str.StartsWith(v, "-")
@@ -368,6 +424,7 @@ pub func ParamInt(pattern: str, path: str, name: str): int:
         n = n * 10 + (neg ? 0 - d : d)
         i++
     end
+    _drop(v)
     ret n
 end
 

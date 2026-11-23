@@ -137,11 +137,24 @@ if the whole render took longer than `SALAM_RENDER_TIMEOUT_MS` milliseconds
 in progress is not interrupted, so a hung backend still holds its thread until
 its own outbound timeout (10 seconds in `ssr.OutboundOptions`).
 
-Memory: the std side of a request (`net/ssr`, `net/internal/ssrpage`, the token
-and hex helpers in `crypto`) frees what it allocates. The generated view code
-still keeps some strings per rendered region, about 2.5 KB for the test site's
-pages; `tools/bash/test-ssr-rss.sh` measures the growth over 2000 requests and is
-not part of the default runner.
+Memory: a request leaves nothing behind. The std side (`net/ssr`,
+`net/internal/ssrpage`, `nav`, the token and hex helpers in `crypto`) frees what
+it allocates. In the generated code the owner of a string frees it:
+`__salam_ssr_fill` drops every superseded document and region result,
+`__salam_ssr_view` drops the view text once it is spliced, and
+`__salam_ssr_page` drops the decoded URL, the document and the default call
+cache JSON after `PageRespond` (a user `__salam_ssr_render_end` keeps its own
+result). The route state of the request (`path`, `query`) is freed by
+`__salam_route_free` before the lock is released. Route parameters and query
+values handed out by the generated code (`route.Param`, `route.Query`, the
+arguments of the route component) go through `ssrpage.PageKeep`, which puts
+them on a request scoped free list that `PageEnd` empties: they are valid for
+the request only, so clone one that must outlive it. `ssrpage.PageDrop` frees
+a non empty string and ignores literals; it is the only way generated code
+frees. `tools/bash/test-ssr-rss.sh` sends 2000 requests (home, a static page, a
+parameter route, a server func page, a 404, a bad parameter, a query string, a
+guarded route and the session endpoint) and fails when the resident set grows
+by more than 1 MB; it is not part of the default runner.
 
 Streaming and incremental regeneration are out of the first version.
 
@@ -175,6 +188,11 @@ Contract with the server func lowering (`feat/server-func-codegen`):
 - The generated `main` reads `PORT` (default 8080, `0` picks a free port) and
   `HOST`, serves `dist/public` first (`ssr.SetStaticDir`), and renders every
   other GET through `ssr.SetRender`. It prints `listening on http://HOST:PORT`.
+- Ownership: the generated functions free the strings they create (see
+  Memory above). The mechanism is explicit `ssrpage.PageDrop` calls where one
+  function owns a result, plus a request scoped free list (`ssrpage.PageKeep`,
+  emptied by `PageEnd`) for values that flow into component arguments.
+  Hooks written by the user are never freed by the generated code.
 
 ## Hydration
 

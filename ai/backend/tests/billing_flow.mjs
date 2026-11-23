@@ -49,7 +49,7 @@ check("the prices are 0, 3, 6 and 30 million toman, and the free plan runs one r
 const unlimited = plans.json.plans.find((p) => p.id === "unlimited");
 const tierParallels = (unlimited?.tiers ?? []).map((t) => t.parallel).join(",");
 check("the unlimited plan has no daily limit and selectable concurrent sessions", unlimited.api_daily === 0 && unlimited.chat_daily === 0 && unlimited.parallel === 1 && unlimited.days === 30 && tierParallels === "1,2,3,5,10", { unlimited, tierParallels });
-check("both gateways are on", (plans.json.gateways ?? []).includes("zarinpal") && plans.json.gateways.includes("zibal"), plans.json.gateways);
+check("all gateways are on and CityDesign Pay comes first", (plans.json.gateways ?? []).includes("zarinpal") && plans.json.gateways.includes("zibal") && plans.json.gateways[0] === "citydesign", plans.json.gateways);
 
 console.log("a new account is free");
 const admin = await account(ADMIN, "Admin");
@@ -98,6 +98,29 @@ check("zibal checkout returns its start page", zi.res.status === 200 && zi.json.
 const ziBack = await back("zibal", `trackId=${tokenOf(zi.json.url)}&success=1&status=2`);
 const afterZi = await api("GET", "/billing/subscription", buyer);
 check("the zibal payment moves the account to the bigger plan", ziBack.status === 302 && afterZi.json.subscription.plan.id === "pro", afterZi.json.subscription);
+
+console.log("paying with CityDesign Pay");
+const GW = process.env.GATEWAY ?? "http://127.0.0.1:18098";
+const cd = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "citydesign" });
+check("checkout returns the CityDesign Pay page", cd.res.status === 200 && cd.json.url.includes("/pay/") && cd.json.amount === 1950000, cd.json);
+const cdToken = tokenOf(cd.json.url);
+const cdPending = (await api("GET", "/billing/payments", buyer)).json.payments.find((p) => p.id === cd.json.payment_id);
+check("the CityDesign payment is written down as pending", cdPending?.status === "pending" && cdPending.gateway === "citydesign", cdPending);
+const cdEarly = await back("citydesign/" + cd.json.payment_id, "cdp_status=paid");
+check("a browser claiming success without a paid status does not pay", cdEarly.status === 302 && (cdEarly.headers.get("location") ?? "").includes("payment=pending"), cdEarly.headers.get("location"));
+const cdStill = (await api("GET", "/billing/payments", buyer)).json.payments.find((p) => p.id === cd.json.payment_id);
+check("the payment waits for the gateway", cdStill?.status === "pending", cdStill);
+await fetch(`${GW}/mock/cdp/pay`, { method: "POST", body: JSON.stringify({ id: cdToken, status: "paid" }) });
+const cdBack = await back("citydesign/" + cd.json.payment_id, "cdp_status=paid");
+check("a paid inquiry settles the payment", cdBack.status === 302 && (cdBack.headers.get("location") ?? "").includes("payment=ok"), cdBack.headers.get("location"));
+const cdPaid = (await api("GET", "/billing/payments", buyer)).json.payments.find((p) => p.id === cd.json.payment_id);
+check("the bank reference and card are kept", cdPaid?.status === "paid" && cdPaid.ref === "778899" && cdPaid.card.endsWith("4321"), cdPaid);
+const cdBad = await back("citydesign/999999999", "");
+check("an unknown order fails safely", cdBad.status === 302 && (cdBad.headers.get("location") ?? "").includes("payment=failed"), cdBad.headers.get("location"));
+const cdFail = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "citydesign" });
+await fetch(`${GW}/mock/cdp/pay`, { method: "POST", body: JSON.stringify({ id: tokenOf(cdFail.json.url), status: "failed" }) });
+const cdFailBack = await back("citydesign/" + cdFail.json.payment_id, "");
+check("a failed inquiry marks the payment failed", (cdFailBack.headers.get("location") ?? "").includes("payment=failed") && (await api("GET", "/billing/payments", buyer)).json.payments.find((p) => p.id === cdFail.json.payment_id)?.status === "failed");
 
 console.log("the hop page");
 const hop = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "zibal" });

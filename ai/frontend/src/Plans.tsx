@@ -8,6 +8,7 @@ import { isFa, t } from "./i18n";
 import { Select } from "./Select";
 
 const GATEWAY_NAMES: Record<Gateway, string> = {
+  citydesign: t("درگاه سیتی‌دیزاین‌پی", "CityDesign Pay"),
   zarinpal: t("زرین‌پال", "Zarinpal"),
   zibal: t("زیبال", "Zibal"),
 };
@@ -130,7 +131,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
   const [gateways, setGateways] = useState<Gateway[]>([]);
   const [current, setCurrent] = useState<Subscription | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [gateway, setGateway] = useState<Gateway>("zibal");
+  const [gateway, setGateway] = useState<Gateway>("citydesign");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);

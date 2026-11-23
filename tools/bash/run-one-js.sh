@@ -40,7 +40,7 @@ if [ ! -s "$bundle" ]; then
 fi
 
 want=$(tr -d '\r' <"$exp")
-got=$(node "$RUNNER" "$bundle" 2>&1 | tr -d '\r')
+got=$(node "$RUNNER" "$bundle" 2>&1 | tr -d '\r' | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g')
 if [ "$got" = "$want" ]; then
     echo "PASS $label"
 else

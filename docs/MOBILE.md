@@ -106,6 +106,10 @@ xcrun simctl launch booted app.salam.app -salam-script "tap 100,200;swipe 100,50
   the `direction` property changes that element and its children; only
   `auto` looks at the text, taking the first strong letter. The same
   renderer draws this on Android and iOS as on desktop.
+- `dialog` with `open` is a modal: centered, over a dimmed backdrop, with
+  the page behind it blocked. The back button, Escape and a tap outside close it
+  (`closedby = "none"` ignores the tap) and fire `close`, so bind the state:
+  `dialog: open = shown close = (): shown = false end end`.
 - The soft keyboard follows the focused input; the page root keeps away from
   the status bar, the navigation bar and the keyboard.
 - Back goes to the page router first and closes the app at the root.

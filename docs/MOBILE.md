@@ -64,6 +64,13 @@ composition text, and no bundled fonts.
   end
   ```
 
+- Right to left: a page is right to left when its `lang` is Persian, Arabic,
+  Hebrew, Urdu and the like, when its source is written in Persian, or when
+  the page has `dir = "rtl"`. The default reaches headings, paragraphs and
+  input placeholders alike. `dir` on any element (`ltr`, `rtl`, `auto`) or
+  the `direction` property changes that element and its children; only
+  `auto` looks at the text, taking the first strong letter. The same
+  renderer draws this on Android and iOS as on desktop.
 - The soft keyboard follows the focused input; the page root keeps away from
   the status bar, the navigation bar and the keyboard.
 - Back goes to the page router first and closes the app at the root.

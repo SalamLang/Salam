@@ -450,6 +450,22 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_photo_request(int camera)
+{
+    (void)camera;
+    return 0;
+}
+
+int salam_host_photo_state(void)
+{
+    return 0;
+}
+
+const char *salam_host_photo_path(void)
+{
+    return "";
+}
+
 int salam_host_location_request(void)
 {
     return 0;

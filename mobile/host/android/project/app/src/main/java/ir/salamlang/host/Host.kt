@@ -33,6 +33,8 @@ object Host {
 
     @JvmStatic external fun nativeDevice(kind: Int)
 
+    @JvmStatic external fun nativePhoto(path: String)
+
     @JvmStatic external fun nativeLocation(ok: Int, lat: Double, lon: Double, acc: Double)
 
     @JvmStatic
@@ -127,6 +129,80 @@ object Host {
             return false
         }
         return true
+    }
+
+    private var photoFile: java.io.File? = null
+
+    @JvmStatic
+    fun photoRequest(camera: Int): Boolean {
+        val a = activity ?: return false
+        return try {
+            val intent: android.content.Intent
+            if (camera != 0) {
+                val dir = java.io.File(a.cacheDir, "photos")
+                dir.mkdirs()
+                val f = java.io.File(dir, "capture_" + System.currentTimeMillis() + ".jpg")
+                photoFile = f
+                intent = android.content.Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+                intent.putExtra(
+                    android.provider.MediaStore.EXTRA_OUTPUT,
+                    android.net.Uri.parse("content://" + a.packageName + ".salamfiles/photos/" + f.name)
+                )
+                intent.addFlags(android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } else {
+                photoFile = null
+                intent = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    android.content.Intent(android.provider.MediaStore.ACTION_PICK_IMAGES)
+                } else {
+                    val i = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT)
+                    i.type = "image/*"
+                    i.addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                    i
+                }
+            }
+            a.runOnUiThread {
+                try {
+                    a.startActivityForResult(intent, 4243)
+                } catch (e: Exception) {
+                    nativePhoto("")
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun photoResult(resultCode: Int, data: android.content.Intent?) {
+        val a = activity
+        val cap = photoFile
+        photoFile = null
+        if (a == null || resultCode != Activity.RESULT_OK) {
+            if (cap != null) cap.delete()
+            nativePhoto("")
+            return
+        }
+        try {
+            if (cap != null) {
+                nativePhoto(if (cap.length() > 0) cap.absolutePath else "")
+                return
+            }
+            val uri = data?.data
+            if (uri == null) {
+                nativePhoto("")
+                return
+            }
+            val dir = java.io.File(a.cacheDir, "photos")
+            dir.mkdirs()
+            val out = java.io.File(dir, "pick_" + System.currentTimeMillis() + ".jpg")
+            a.contentResolver.openInputStream(uri)?.use { input ->
+                out.outputStream().use { o -> input.copyTo(o) }
+            }
+            nativePhoto(if (out.length() > 0) out.absolutePath else "")
+        } catch (e: Exception) {
+            nativePhoto("")
+        }
     }
 
     private const val CHANNEL = "salam_default"

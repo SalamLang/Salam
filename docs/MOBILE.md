@@ -78,12 +78,13 @@ composition text, and no bundled fonts.
   `device.ScheduleNotification` and `device.CancelNotification` post local
   notifications (the build declares `POST_NOTIFICATIONS` when you use them).
   `device.RequestLocation`, `device.LocationStatus` and `device.LastLocation`
-  give a one shot position (the build declares the location permissions).
+  give a one shot position (the build declares the location permissions). `device.PickPhoto` and
+  `device.TakePhoto` open the system photo picker and the camera app, then
+  `device.LastPhoto` is the path of a JPEG copy in the cache directory.
 
 ## Not available yet
 
 - Rotate and three finger gestures.
-- The camera.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.
 

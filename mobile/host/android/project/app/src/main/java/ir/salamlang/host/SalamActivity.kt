@@ -7,14 +7,12 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.View
 import android.view.WindowInsets
 
 class SalamActivity : Activity(), SurfaceHolder.Callback {
-    private lateinit var view: SurfaceView
+    private lateinit var view: SalamView
     private var density = 1f
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,12 +26,7 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        view = object : SurfaceView(this) {
-            override fun onTouchEvent(event: MotionEvent): Boolean {
-                sendTouch(event)
-                return true
-            }
-        }
+        view = SalamView(this)
         view.holder.addCallback(this)
         view.setOnApplyWindowInsetsListener { _, insets ->
             sendInsets(insets)
@@ -68,30 +61,6 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
             keyboard = maxOf(0, insets.systemWindowInsetBottom - insets.stableInsetBottom)
         }
         Host.nativeInsets(top.toFloat(), right.toFloat(), bottom.toFloat(), left.toFloat(), keyboard.toFloat())
-    }
-
-    private fun sendTouch(e: MotionEvent) {
-        val a = e.actionMasked
-        when (a) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val i = e.actionIndex
-                Host.nativePointer(0, e.getPointerId(i), e.getX(i), e.getY(i))
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                val i = e.actionIndex
-                Host.nativePointer(1, e.getPointerId(i), e.getX(i), e.getY(i))
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                for (i in 0 until e.pointerCount) {
-                    Host.nativePointer(1, e.getPointerId(i), e.getX(i), e.getY(i))
-                }
-            }
-            MotionEvent.ACTION_MOVE -> {
-                for (i in 0 until e.pointerCount) {
-                    Host.nativePointer(2, e.getPointerId(i), e.getX(i), e.getY(i))
-                }
-            }
-        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {}

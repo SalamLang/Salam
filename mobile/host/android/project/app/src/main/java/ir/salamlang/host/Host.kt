@@ -32,6 +32,22 @@ object Host {
     @JvmStatic external fun nativeScheme(dark: Int)
 
     @JvmStatic
+    fun showIme(show: Boolean) {
+        val a = activity ?: return
+        a.runOnUiThread {
+            val v = a.window.decorView.findViewById<android.view.View>(android.R.id.content) ?: return@runOnUiThread
+            val target = (v as? android.view.ViewGroup)?.getChildAt(0) ?: v
+            val imm = a.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            if (show) {
+                target.requestFocus()
+                imm.showSoftInput(target, 0)
+            } else {
+                imm.hideSoftInputFromWindow(target.windowToken, 0)
+            }
+        }
+    }
+
+    @JvmStatic
     fun onExit() {
         val a = activity ?: return
         a.runOnUiThread { a.finishAndRemoveTask() }

@@ -47,6 +47,8 @@ static int started;
 static JavaVM *vm;
 static jclass host_cls;
 static jmethodID exit_mid;
+static jmethodID ime_mid;
+static int ime_state;
 
 jint JNI_OnLoad(JavaVM *jvm, void *reserved)
 {
@@ -220,6 +222,26 @@ void salam_host_exit(void)
     }
 }
 
+void salam_host_ime(int on)
+{
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if (on == ime_state || vm == NULL || host_cls == NULL || ime_mid == NULL) {
+        return;
+    }
+    ime_state = on;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) {
+            return;
+        }
+        attached = 1;
+    }
+    (*env)->CallStaticVoidMethod(env, host_cls, ime_mid, on);
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+}
+
 static void *run(void *arg)
 {
     char *argv[2] = {"app", NULL};
@@ -246,6 +268,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     (*env)->ReleaseStringUTFChars(env, cache, c);
     host_cls = (jclass)(*env)->NewGlobalRef(env, cls);
     exit_mid = (*env)->GetStaticMethodID(env, cls, "onExit", "()V");
+    ime_mid = (*env)->GetStaticMethodID(env, cls, "showIme", "(Z)V");
     started = 1;
     pthread_create(&th, NULL, run, NULL);
 }

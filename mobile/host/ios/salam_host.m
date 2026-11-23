@@ -1209,6 +1209,38 @@ int salam_host_haptic(int kind)
     return 1;
 }
 
+const char *salam_host_path(int kind)
+{
+    static char buf[1024];
+    NSString *dir = nil;
+    switch (kind) {
+    case 0:
+        dir = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+        break;
+    case 1:
+        dir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        break;
+    case 2:
+        dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        break;
+    case 3:
+        dir = NSTemporaryDirectory();
+        break;
+    default:
+        break;
+    }
+    buf[0] = 0;
+    if (dir != nil) {
+        [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        while (dir.length > 1 && [dir hasSuffix:@"/"]) {
+            dir = [dir substringToIndex:dir.length - 1];
+        }
+        strncpy(buf, dir.UTF8String, sizeof buf - 1);
+        buf[sizeof buf - 1] = 0;
+    }
+    return buf;
+}
+
 int salam_host_share(const char *text, const char *url)
 {
     NSMutableArray *items = [NSMutableArray new];

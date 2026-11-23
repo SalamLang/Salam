@@ -160,6 +160,8 @@ simulator.
   give a one shot position (the build declares the location permissions). `device.PickPhoto` and
   `device.TakePhoto` open the system photo picker and the camera app, then
   `device.LastPhoto` is the path of a JPEG copy in the cache directory.
+  `device.DataDir`, `device.CacheDir`, `device.DocumentsDir` and
+  `device.TempDir` give the app folders (empty on a desktop).
 
 ## Not available yet
 

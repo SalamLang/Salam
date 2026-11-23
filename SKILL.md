@@ -2657,7 +2657,7 @@ context variant): every current HTML element, with the full list, Persian
 names and placement rules in `docs/LAYOUT_ELEMENTS.md`. Common ones: `box`
 (div), `paragraph`, `heading` (`size = 1..6`), `span`, `link` (a), `image`
 (img), `list`/`ordered list`/`item`, `table`/`row`/`column`, `form`, `input`,
-`select`/`option`, `text area`, `button`, `label`, `video`/`audio`/`source`,
+`select`/`option`, `input` (`type = "textarea"` is the multi-line box), `button`, `label`, `video`/`audio`/`source`,
 `figure`, `details`/`summary`, `dialog`. Every element also accepts its HTML tag
 name (`div`, `a`, `img`, `li`, ...), except the table parts that come from
 context: write `header`/`main`/`footer` and `column` inside `table`, never

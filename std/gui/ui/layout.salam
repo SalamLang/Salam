@@ -39,7 +39,7 @@ func _ensure_gcache():
 end
 
 func _details_open(node: int): bool:
-    ret _e.ctl[node].open
+    ret _is_open(node)
 end
 
 func _shown_by_parent(node: int): bool:
@@ -50,7 +50,7 @@ func _shown_by_parent(node: int): bool:
     if nd.k == _K_INPUT and _input_type(node) == "hidden":
         ret false
     end
-    if nd.k == _K_DIALOG and not _e.ctl[node].open:
+    if nd.k == _K_DIALOG and not _is_open(node):
         ret false
     end
     p := nd.parent
@@ -102,6 +102,18 @@ func _transform_text(s: style.Style, t: str): str:
     ret str.Clone(t)
 end
 
+func _lang_of(el: int): str:
+    mut n := el
+    until n >= 0:
+        l := _attr(_e.dom, n, "lang")
+        if l.Len() > 0:
+            ret l
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret _e.dom.lang
+end
+
 func _span_for(el: int, text: str): typeset.TextSpan:
     s := _e.cs[el]
     u := _e.us[el]
@@ -114,7 +126,7 @@ func _span_for(el: int, text: str): typeset.TextSpan:
     sp.letter_spacing = s.letter_spacing.px
     sp.word_spacing = s.word_spacing.px
     sp.line_height = u.line
-    sp.lang = _e.dom.lang
+    sp.lang = _lang_of(el)
     sp.tag = el
     ret sp
 end
@@ -132,9 +144,6 @@ func _pstyle_of(owner: int): typeset.ParagraphStyle:
         else: ps.align = typeset.TextAlign.Start break end
     end
     ps.direction = rtl ? typeset.TextDirRTL : (s.direction == style.KW_LTR ? typeset.TextDirLTR : typeset.TextDirAuto)
-    if s.direction == style.KW_AUTO:
-        ps.direction = typeset.TextDirLTR
-    end
     keep := s.white_space == style.KW_KEEP
     if keep:
         ps.white_space = s.wrap_text ? typeset.WhiteSpace.PreWrap : typeset.WhiteSpace.Pre
@@ -150,7 +159,7 @@ func _pstyle_of(owner: int): typeset.ParagraphStyle:
         ps.ellipsis = true
         ps.white_space = keep ? typeset.WhiteSpace.Pre : typeset.WhiteSpace.NoWrap
     end
-    ps.lang = _e.dom.lang
+    ps.lang = _lang_of(owner)
     ret ps
 end
 
@@ -423,6 +432,9 @@ func _wrap_width(ri: int, cw: f64): f64:
     r := _e.runs[ri]
     ws := r.pstyle.white_space
     if ws == typeset.WhiteSpace.Pre or ws == typeset.WhiteSpace.NoWrap:
+        if r.pstyle.ellipsis and cw > 0.0:
+            ret cw + 0.01
+        end
         ret 0.0
     end
     if cw < 0.0:
@@ -743,9 +755,13 @@ func _place(node: int, px: f64, py: f64, clip: _Box):
         lx := rtl ? br : bl
         rx := rtl ? bl : br
         cx0 := s.clip ? x : x + lx
-        cy0 := s.clip ? y : y + bt
+        mut cy0 := s.clip ? y : y + bt
         cx1 := s.clip ? x + w : x + w - rx
-        cy1 := s.clip ? y + h : y + h - bb
+        mut cy1 := s.clip ? y + h : y + h - bb
+        if node == 0 and _attr(_e.dom, 0, "safe_area") == "fixed":
+            cy0 = math.Max(cy0, y + _e.inset_t)
+            cy1 = math.Min(cy1, y + h - _e.inset_b)
+        end
         kc.clip_x0 = math.Max(kc.clip_x0, cx0)
         kc.clip_y0 = math.Max(kc.clip_y0, cy0)
         kc.clip_x1 = math.Min(kc.clip_x1, cx1)
@@ -911,8 +927,25 @@ func _place_control_run(node: int, ri: int):
     else:
         r.y = c.y + (c.h - r.lay.height) / 2.0
     end
+    rtl := _e.cs[node].direction == style.KW_RTL
     if nd.k == _K_SELECT:
         r.w = math.Max(0.0, c.w - 16.0)
+        if rtl:
+            r.x = c.x + 16.0
+        end
+    else _is_text_input(node) and nd.k != _K_TEXTAREA and r.lay.width < c.w:
+        free := c.w - r.lay.width
+        al := r.pstyle.align
+        if al == typeset.TextAlign.Right or (al == typeset.TextAlign.Start and rtl) or
+            (al == typeset.TextAlign.End and not rtl):
+            r.x = c.x + free
+        else al == typeset.TextAlign.Center:
+            r.x = c.x + free / 2.0
+        end
+    else _is_text_input(node) and nd.k != _K_TEXTAREA and rtl and r.pstyle.align == typeset.TextAlign.Start and
+        not _e.ctl[node].focused:
+        mut cc := _e.ctl.Ref(node)
+        cc.text_scroll = r.lay.width - c.w + 1.0
     end
 end
 

@@ -34,6 +34,7 @@ mut g_lo_routes_web := false
 mut g_lo_routes_home_static := false
 mut g_lo_routes_static := Vector {} as Vector<str>
 mut g_lo_routes_static_title := Vector {} as Vector<str>
+mut g_lo_routes_static_pattern := Vector {} as Vector<str>
 mut g_lo_rt_file := ""
 mut g_lo_pg_path := Vector {} as Vector<str>
 mut g_lo_pg_prog := Vector {} as Vector<int>
@@ -46,6 +47,9 @@ struct LoRoute:
     pub lay: str = ""
     pub title: int = 0 - 1
     pub rank: int = 0
+    pub pre: Vector<str> = Vector {}
+    pub pre_node: int = 0
+    pub file: str = ""
 end
 
 struct LoRouteNames:
@@ -520,6 +524,13 @@ func lo_rt_walk(log: lg.Logger, a &: at.Ast, nid: int, outlets &: int, errs &: i
     end
 end
 
+func lo_rt_keep(expr: str): str:
+    if g_lo_ssr:
+        ret "salamWsKeep(" + expr + ")"
+    end
+    ret expr
+end
+
 func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, prog: int): str:
     s := nm.t_str
     mut t := "func __salam_route_pick(__salam_p: " + s + "): " + s + ":\n"
@@ -537,8 +548,10 @@ func lo_rt_pick_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast, p
                 ) and lo_rt_is_int_type(
                     at.Get(a, pn.ty).name
                 ):
-                    pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + "__salam_p" + nm.sep +
-                        lo_rt_quote(pn.name) + ")"
+                    pv := lo_rt_keep(
+                        nm.pkg + "." + nm.param_f + "(" + q + nm.sep + "__salam_p" + nm.sep +
+                            lo_rt_quote(pn.name) + ")"
+                    )
                     if lo_rt_has(lo_rt_optional_names(r.pattern), pn.name):
                         cond += " and (" + pv + " == \"\" or " + nm.pkg + "." + nm.is_int_f + "(" +
                             pv + "))"
@@ -608,8 +621,11 @@ func lo_rt_title_source(
                     ):
                         tn := pn.ty != 0 ? at.Get(a, pn.ty).name : ""
                         pf := lo_rt_is_int_type(tn) ? nm.param_int_f : nm.param_f
-                        t += "        " + pn.name + " := " + nm.pkg + "." + pf + "(" + q + nm.sep +
-                            "__salam_a" + nm.sep + lo_rt_quote(pn.name) + ")\n"
+                        pc := nm.pkg + "." + pf + "(" + q + nm.sep + "__salam_a" + nm.sep +
+                            lo_rt_quote(pn.name) + ")"
+                        t += "        " + pn.name + " := " + (
+                            str.Equals(pf, nm.param_f) ? lo_rt_keep(pc) : pc
+                        ) + "\n"
                     end
                 end
             end
@@ -672,8 +688,10 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
             call += r.comp + ":"
             repeat pnames.Len() in k:
                 pname := pnames.Get(k)
-                pv := nm.pkg + "." + nm.param_f + "(" + q + nm.sep + nm.route + "." + nm.path +
-                    nm.sep + lo_rt_quote(pname) + ")"
+                pv := lo_rt_keep(
+                    nm.pkg + "." + nm.param_f + "(" + q + nm.sep + nm.route + "." + nm.path +
+                        nm.sep + lo_rt_quote(pname) + ")"
+                )
                 mut vk := 0 - 1
                 repeat vary.Len() in vj:
                     if str.Equals(vary.Get(vj), pname):
@@ -691,8 +709,11 @@ func lo_rt_outlet_source(nm: LoRouteNames, routes: Vector<LoRoute>, a &: at.Ast,
                     end
                     cond += " and " + pv + " != \"\""
                 end
-                call += " " + pname + " = " + nm.pkg + "." + pfuncs.Get(k) + "(" + q + nm.sep +
-                    nm.route + "." + nm.path + nm.sep + lo_rt_quote(pname) + ")"
+                pa := nm.pkg + "." + pfuncs.Get(k) + "(" + q + nm.sep + nm.route + "." + nm.path +
+                    nm.sep + lo_rt_quote(pname) + ")"
+                call += " " + pname + " = " + (
+                    str.Equals(pfuncs.Get(k), nm.param_f) ? lo_rt_keep(pa) : pa
+                )
             end
             t += (first ? "    if " : "    else ") + cond + ":\n"
             first = false
@@ -713,11 +734,24 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     rt := nm.pkg + "." + nm.route_t
     mut t := ""
     t += "func __salam_route_make(__salam_u: " + s + ", __salam_out &: " + s + "): " + rt + ":\n"
+    if g_lo_ssr:
+        t += "    if __salam_route_own and __salam_u != " + r + "." + nm.path + ":\n"
+        t += "        salamWsDrop(" + r + "." + nm.path + ")\n"
+        t += "        salamWsDrop(" + r + "." + nm.query + ")\n"
+        t += "    end\n"
+        t += "    __salam_route_own = true\n"
+    end
     t += "    mut __salam_p := \"\"\n"
     t += "    mut __salam_q := \"\"\n"
     t += "    " + nm.pkg + "." + nm.split_f + "(__salam_u" + nm.sep + "__salam_p" + nm.sep +
         "__salam_q)\n"
-    t += "    __salam_p = " + nm.pkg + "." + nm.norm_f + "(__salam_p)\n"
+    if g_lo_ssr:
+        t += "    __salam_np := " + nm.pkg + "." + nm.norm_f + "(__salam_p)\n"
+        t += "    if __salam_p != __salam_u:\n        salamWsDrop(__salam_p)\n    end\n"
+        t += "    __salam_p = __salam_np\n"
+    else:
+        t += "    __salam_p = " + nm.pkg + "." + nm.norm_f + "(__salam_p)\n"
+    end
     t += "    " + r + " = " + rt + " { " + nm.path + " = __salam_p" + nm.sep + nm.query +
         " = __salam_q" + nm.sep + nm.pattern + " = " + r + "." + nm.pattern + " }\n"
     t += "    __salam_pat := __salam_route_pick(__salam_p)\n"
@@ -742,6 +776,10 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
         t += "    end\n"
         t += "    salamRouteTitle(__salam_route_title(" + r + "." + nm.pattern + nm.sep + r + "." +
             nm.path + "))\n"
+        if g_lo_ssr:
+            t += "    if __salam_next." + nm.query + "." + nm.len + "() > 0:\n"
+            t += "        salamWsDrop(__salam_url)\n    end\n"
+        end
     else:
         t += "    if __salam_how == 0:\n"
         t += "        " + nm.pkg + "." + nm.push_f + "(__salam_hist" + nm.sep + "__salam_url)\n"
@@ -787,16 +825,26 @@ func lo_rt_glue_source(nm: LoRouteNames): str:
     t += "func " + nm.route_param + "(__salam_n: " + s + "): " + s + ":\n"
     t += "    __salam_pt := " + r + "." + nm.pattern + "\n"
     t += "    __salam_pp := " + r + "." + nm.path + "\n"
-    t += "    ret " + nm.pkg + "." + nm.param_f + "(__salam_pt" + nm.sep + "__salam_pp" + nm.sep +
-        "__salam_n)\n"
+    t += "    ret " + lo_rt_keep(
+        nm.pkg + "." + nm.param_f + "(__salam_pt" + nm.sep + "__salam_pp" + nm.sep + "__salam_n)"
+    ) + "\n"
     t += "end\n\n"
     t += "func " + nm.route_query + "(__salam_n: " + s + "): " + s + ":\n"
     t += "    __salam_pq := " + r + "." + nm.query + "\n"
-    t += "    ret " + nm.pkg + "." + nm.query_f + "(__salam_pq" + nm.sep + "__salam_n)\n"
+    t += "    ret " + lo_rt_keep(
+        nm.pkg + "." + nm.query_f + "(__salam_pq" + nm.sep + "__salam_n)"
+    ) + "\n"
     t += "end\n\n"
     if g_lo_ssr:
         t += "func __salam_route_pattern(): " + s + ":\n"
         t += "    ret " + r + "." + nm.pattern + "\n"
+        t += "end\n\n"
+        t += "func __salam_route_free():\n"
+        t += "    salamWsDrop(" + r + "." + nm.path + ")\n"
+        t += "    salamWsDrop(" + r + "." + nm.query + ")\n"
+        t += "    " + r + " = " + rt + " { " + nm.path + " = \"/\"" + nm.sep + nm.query +
+            " = \"\"" + nm.sep + nm.pattern + " = " + r + "." + nm.pattern + " }\n"
+        t += "    __salam_route_own = false\n"
         t += "end\n\n"
     end
     t += "func __salam_route_keep():\n"
@@ -827,6 +875,9 @@ func lo_rt_header_source(nm: LoRouteNames, need_import: bool, home: str): str:
         end
         t += "mut " + nm.route + " := " + nm.pkg + "." + nm.route_t + " { " + nm.path + " = \"/\"" +
             nm.sep + nm.pattern + " = " + lo_rt_quote(home) + " }\n"
+        if g_lo_ssr:
+            t += "mut __salam_route_own := false\n"
+        end
     else:
         t += "mut " + nm.route + " := " + nm.pkg + "." + nm.route_t + " { " + nm.path + " = \"/\"" +
             nm.sep + nm.pattern + " = " + lo_rt_quote(home) + " }\n"
@@ -1191,6 +1242,27 @@ func lo_rt_fold_guards(a &: at.Ast, prog: int, routes &: Vector<LoRoute>, exprs:
     routes = kept
 end
 
+func lo_rt_pre_ints_ok(a &: at.Ast, prog: int, r: LoRoute, path: str): bool:
+    cdef := lo_rt_find_comp(a, prog, r.comp)
+    if cdef == 0:
+        ret true
+    end
+    names := lo_rt_pattern_params(r.pattern)
+    opt := lo_rt_optional_names(r.pattern)
+    repeat at.ChildCount(a, cdef) in pi:
+        pn := at.Get(a, at.Child(a, cdef, pi))
+        if pn.kind == at.AST_PARAM and pn.ty != 0 and lo_rt_has(names, pn.name) and lo_rt_is_int_type(
+            at.Get(a, pn.ty).name
+        ):
+            v := nav.Param(r.pattern, path, pn.name)
+            if not nav.IsInt(v) and not (v.Len() == 0 and lo_rt_has(opt, pn.name)):
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
 pub func RoutesActive(): bool:
     ret g_lo_routes_on and g_lo_routes_web
 end
@@ -1209,6 +1281,13 @@ end
 
 pub func RoutesStatic(): Vector<str>:
     ret g_lo_routes_static
+end
+
+pub func RoutesStaticPattern(i: int): str:
+    if i < 0 or i >= g_lo_routes_static_pattern.Len():
+        ret ""
+    end
+    ret g_lo_routes_static_pattern.Get(i)
 end
 
 pub func RoutesStaticTitle(i: int): str:
@@ -1234,6 +1313,7 @@ pub func LowerRoutes(
     g_lo_routes_home_static = false
     g_lo_routes_static.Clear()
     g_lo_routes_static_title.Clear()
+    g_lo_routes_static_pattern.Clear()
     g_lo_rt_file = ""
     g_lo_pg_path.Clear()
     g_lo_pg_prog.Clear()
@@ -1288,7 +1368,35 @@ pub func LowerRoutes(
         ) < 0 and str.IndexFrom(r.pattern, "*", 0) < 0:
             g_lo_routes_static.Push(r.pattern)
             g_lo_routes_static_title.Push(r.title >= 0 ? lo_rt_lit(a, exprs.Get(r.title)) : "")
+            g_lo_routes_static_pattern.Push(r.pattern)
         end
+        if r.pre.Len() > 0:
+            g_lo_rt_file = r.file
+        end
+        if r.pre.Len() > 0 and r.gs.Len() > 0:
+            lo_rt_error(log, a, r.pre_node, i18.Tr("remove prerender; the server or the browser draws a guarded page"), i18.Tr("E269: a page with page.Guard cannot be pre-rendered"))
+            errs++
+            continue
+        end
+        each pp in r.pre:
+            np := nav.Normalize(pp)
+            if not str.StartsWith(pp, "/") or not nav.Match(r.pattern, np) or not lo_rt_pre_ints_ok(
+                a, prog, r, np
+            ):
+                lo_rt_error(log, a, r.pre_node, i18.Tr("list paths this page's route matches, such as /user/1"), co.Format2(i18.Tr("E269: '%s' does not match the route '%s'"), co.ArgStr(pp), co.ArgStr(r.pattern)))
+                errs++
+                continue
+            end
+            if np.Len() > 1 and not lo_rt_has(g_lo_routes_static, np):
+                g_lo_routes_static.Push(np)
+                g_lo_routes_static_title.Push("")
+                g_lo_routes_static_pattern.Push(r.pattern)
+            end
+        end
+    end
+    g_lo_rt_file = ""
+    if errs > 0:
+        ret errs
     end
     mut home := ""
     each r in routes:
@@ -1494,6 +1602,9 @@ if (typeof window !== "undefined") {
     __salam_rt_last = __salam_rt_here();
     SETFN(__salam_rt_last, 2);
     setTimeout(__salam_rt_mark, 0);
+    setTimeout(function () {
+        document.documentElement.classList.remove("salam-pending");
+    }, 0);
 }
 `
     ret str.Replace(str.Replace(t, "SETFN", set_fn), "CHECKFN", check_fn)

@@ -76,8 +76,10 @@ Each stage is one pull request and is checked on the desktop first.
    page router.
 9. iOS backend (`UIView`, `CADisplayLink`, `UITextInput`) and an Xcode
    template, tested on the simulator.
-10. Host service channel (share, permissions, camera, notifications) as a
-    `std/mobile` package.
+10. Host service channel (share, haptics, permissions, notifications,
+    location, photos) as the `gui.device` package. Flat C calls in
+    `salam_host.c`; anything asynchronous is a request call plus a state
+    call, and the host wakes the event loop when the answer lands.
 
 ## Status
 
@@ -85,12 +87,37 @@ Android also has https (system CA directory), DNS, sqlite (the amalgamation
 is fetched and built into the app when a program uses `db.sqlite`), threads,
 clipboard, opening links, back button, rotation and long press selection.
 Done: stages 1 to 7, the Android part of 8 (keyboard, back button, system
-fonts) and clipboard and link opening from stage 10. Checked on an arm64
+fonts) and clipboard, link opening and the share sheet from stage 10. Checked on an arm64
 emulator with a counter page, a form with a text input and a Persian page.
-Stage 9: the iOS host draws the counter page on the iPhone simulator. Touch,
-the keyboard and Persian text were not tried on iOS yet.
-Missing: bundled fonts (iOS cannot read system fonts on a phone), pinch and
-other multi touch gestures, share, permissions, camera and notifications.
+Stage 9: the iOS host draws the counter page on the iPhone simulator and
+keeps away from the notch and home indicator (safe area insets). A tap works:
+`-salam-tap X,Y` as a launch argument injects one tap (in points) two seconds
+after start, and the counter went from 0 to 1 on an iPhone 18 Pro simulator.
+Every `salam_host_*` function that `std/gui` declares exists on iOS. Pointer
+IDs (one slot per `UITouch`, multi touch on), hardware key presses, keyboard
+height (kept across layout passes), lifecycle events (a short background task
+lets the save state event run), color scheme, clipboard and opening links are in
+the host. The view adopts `UITextInput` with a document that holds only the
+marked text, so composition shows as `ImePreedit` and a commit as `ImeCommit`;
+the keyboard traits come from `SetImeConfig`, one int (bits 0-3 keyboard, 4-7 return key,
+8-9 capitalize, 10-11 correction, 12-15 content type, bit 16 multi line) that goes
+through `salam_host_ime_config`; the caret rect that `gui.ui` sends to `SetImeRect` goes to the host through
+`salam_host_ime_rect` and is what the keyboard gets for `caretRectForPosition`.
+The device channel is done: `UIActivityViewController` for share, impact and
+notification feedback generators for `Haptic`, `AVCaptureDevice`,
+`CLLocationManager` and `UNUserNotificationCenter` for permissions and
+notifications, `CLLocationManager` `requestLocation` for position,
+`PHPickerViewController` and `UIImagePickerController` for photos. Results are
+posted as `SALAM_EV_DEVICE` with the same state calls as Android;
+`build-ios-app.sh` writes the usage description keys only for the features the
+program uses. `-salam-script` injects tap, long press, swipe, pinch and text
+steps so touch can be checked on the simulator. The saved state is written
+under `$HOME`, which is the app Documents directory, so `SavedState` persists on
+iOS too. A compiler older than the one that defines `SALAM_OS_IOS` (0.6.19 and
+earlier) builds an app that cannot open a window, so build iOS apps with a
+compiler built from this tree.
+Missing: bundled fonts (iOS cannot read system fonts on a phone), rotate and
+three finger gestures.
 
 ## Target matrix
 

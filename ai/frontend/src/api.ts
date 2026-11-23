@@ -431,7 +431,7 @@ export type Plan = {
   tiers?: PlanTier[];
 };
 export type AdminPlan = Plan & { subscribers: number };
-export type Gateway = "zarinpal" | "zibal";
+export type Gateway = "citydesign" | "zarinpal" | "zibal";
 export type Subscription = {
   plan: Plan;
   status: string;
@@ -1710,6 +1710,8 @@ export const api = {
   adminPlans: () => call<{ plans: AdminPlan[] }>("GET", "/admin/plans"),
   adminPlanSave: (id: string, body: Partial<Plan>) =>
     call<{ plan: Plan }>("PUT", `/admin/plans/${encodeURIComponent(id)}`, body),
+  adminPlanDelete: (id: string, mode: "retire" | "cancel") =>
+    call<{ ok: boolean }>("DELETE", `/admin/plans/${encodeURIComponent(id)}?mode=${mode}`),
   adminPlanCreate: (body: Partial<Plan>) =>
     call<{ plan: Plan }>("POST", "/admin/plans", body),
   adminGrant: (body: {

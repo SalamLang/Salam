@@ -21,6 +21,13 @@ mut _tvx := 0.0
 mut _tvy := 0.0
 mut _tfling := false
 mut _tft := 0 as i64
+mut _tid2 := -1
+mut _t2x := 0.0
+mut _t2y := 0.0
+mut _tpinch := false
+mut _pd0 := 0.0
+mut _pscale := 1.0
+mut _pnode := -1
 
 func _touch_reset():
     _tid = -1
@@ -29,9 +36,75 @@ func _touch_reset():
     _tvx = 0.0
     _tvy = 0.0
     _tfling = false
+    _tid2 = -1
+    _tpinch = false
+    _pscale = 1.0
+    _pnode = -1
+    _sh_tap = false
+    _sh_btn = -1
+    _sh_drag = 0
+end
+
+func _pinch_dist(): f64:
+    dx := _t2x - _tx
+    dy := _t2y - _ty
+    ret math.Sqrt(dx * dx + dy * dy)
+end
+
+func _pinch_fire(kind: str):
+    mut ev := _make_event(kind, _pnode)
+    ev.x = (_tx + _t2x) / 2.0
+    ev.y = (_ty + _t2y) / 2.0
+    ev.scale = _pscale
+    _fire_ev(_pnode, ev, true)
+end
+
+func _pinch_start(ev: window.Event):
+    _tid2 = ev.pointer
+    _t2x = ev.x
+    _t2y = ev.y
+    _tpinch = true
+    _tdrag = false
+    _tlong = true
+    _tvx = 0.0
+    _tvy = 0.0
+    _pd0 = _pinch_dist()
+    _pscale = 1.0
+    _e.capture = -2
+    _set_active(-1)
+    _touch_release_hover()
+    _pnode = _hit((_tx + _t2x) / 2.0, (_ty + _t2y) / 2.0)
+end
+
+func _pinch_move(ev: window.Event):
+    if ev.pointer == _tid:
+        _tx = ev.x
+        _ty = ev.y
+    else:
+        _t2x = ev.x
+        _t2y = ev.y
+    end
+    if _pd0 < 1.0:
+        ret
+    end
+    s := _pinch_dist() / _pd0
+    if s != _pscale:
+        _pscale = s
+        _pinch_fire("pinch")
+    end
+end
+
+func _pinch_end():
+    _pinch_fire("pinchend")
+    _e.capture = -1
+    _set_active(-1)
+    _touch_reset()
 end
 
 func _touch_scroll(dx: f64, dy: f64): bool:
+    if _e.popup >= 0 and _popup_hit(_tx0, _ty0) >= 0:
+        ret _popup_scroll(dy)
+    end
     mut n := _hit(_tx0, _ty0)
     until n >= 0:
         if _is_textarea(n) and _scroll_text(n, dx, dy):
@@ -61,6 +134,9 @@ func _touch_event(ev: window.Event):
     switch ev.kind:
         window.EventKind.PointerDown:
             if _tid >= 0:
+                if not _tpinch and ev.pointer != _tid:
+                    _pinch_start(ev)
+                end
                 break
             end
             _touch_reset()
@@ -71,12 +147,49 @@ func _touch_event(ev: window.Event):
             _ty = ev.y
             _tt0 = now
             _ttm = now
+            if _sh_valid():
+                hh := _sh_handle_hit(ev.x, ev.y)
+                bb := _sh_bar_hit(ev.x, ev.y)
+                if hh > 0:
+                    _sh_drag_start(hh)
+                    _tlong = true
+                    _e.capture = -2
+                    break
+                end
+                if bb >= 0:
+                    _sh_btn = bb
+                    _tlong = true
+                    _e.capture = -2
+                    break
+                end
+                if _sh_in_selection(ev.x, ev.y):
+                    _sh_tap = true
+                    _e.capture = -2
+                    break
+                end
+            end
+            _sh_hide()
             _pointer_move(ev.x, ev.y)
+            _sh_touch = true
             _pointer_down(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
+            _sh_touch = false
             break
         end
         window.EventKind.PointerMove:
+            if _tpinch:
+                if ev.pointer == _tid or ev.pointer == _tid2:
+                    _pinch_move(ev)
+                end
+                break
+            end
             if ev.pointer != _tid:
+                break
+            end
+            if _sh_drag > 0:
+                _sh_drag_to(ev.x, ev.y)
+                break
+            end
+            if _sh_btn >= 0:
                 break
             end
             dx := ev.x - _tx
@@ -92,6 +205,7 @@ func _touch_event(ev: window.Event):
                     _tdrag = true
                     _e.capture = -2
                     _set_active(-1)
+                    _kb_drag_start()
                 end
             end
             if _tdrag:
@@ -105,7 +219,30 @@ func _touch_event(ev: window.Event):
             break
         end
         window.EventKind.PointerUp:
+            if _tpinch:
+                if ev.pointer == _tid or ev.pointer == _tid2:
+                    _pinch_end()
+                end
+                break
+            end
             if ev.pointer != _tid:
+                break
+            end
+            if _sh_drag > 0:
+                _sh_drag = 0
+                _sh_tb = _sh_back
+                _e.full = true
+                _touch_reset()
+                break
+            end
+            if _sh_btn >= 0:
+                id := _sh_bar_hit(ev.x, ev.y)
+                pressed := _sh_btn
+                _sh_btn = -1
+                if id == pressed:
+                    _sh_do(id)
+                end
+                _touch_reset()
                 break
             end
             wasdrag := _tdrag
@@ -123,8 +260,12 @@ func _touch_event(ev: window.Event):
                     break
                 end
             else:
+                if _sh_tap and not _tlong:
+                    _sh_toggle_tap()
+                end
                 _pointer_up(ev.x, ev.y, 0, ev.clicks, ev.modifiers)
             end
+            _sh_tap = false
             _touch_release_hover()
             _touch_reset()
             break
@@ -152,6 +293,7 @@ func _touch_tick():
             c.anchor = wa
             c.caret = wb
             _e.drag_sel = false
+            _sh_show(ft, true)
             _damage_node(ft)
         end
     end

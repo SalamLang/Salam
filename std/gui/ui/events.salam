@@ -289,6 +289,9 @@ func _set_focus(node: int, visible: bool):
         ret
     end
     _e.focus = node
+    if node >= 0 and _is_text_input(node):
+        _rv_pending = true
+    end
     if old >= 0 and old < _e.ctl.Len():
         mut c := _e.ctl.Ref(old)
         c.focused = false
@@ -378,11 +381,19 @@ func _reveal(node: int):
     if node < 0 or node >= _e.boxes.Len() or not _e.boxes[node].shown:
         ret
     end
+    _reveal_box(node, _e.boxes[node])
+end
+
+func _reveal_box(node: int, b0: _Box):
+    mut b := b0
     mut a := _e.dom.nodes[node].parent
     until a >= 0:
         if _is_scroller(a):
-            b := _e.boxes[node]
-            pb := _padding_box(a)
+            mut pb := _padding_box(a)
+            if a == 0:
+                pb.y += _e.inset_t
+                pb.h -= _e.inset_t + _e.inset_b
+            end
             c := _e.ctl[a]
             mut nx := c.scroll_x
             mut ny := c.scroll_y
@@ -397,6 +408,8 @@ func _reveal(node: int):
                 nx = c.scroll_x + math.Min(b.x - pb.x, b.x + b.w - pb.x - pb.w)
             end
             if _set_scroll(a, nx, ny):
+                b.x -= _e.ctl[a].scroll_x - c.scroll_x
+                b.y -= _e.ctl[a].scroll_y - c.scroll_y
                 _place_all()
                 _fire(a, "scroll", false)
             end
@@ -589,7 +602,8 @@ func _activate(node: int):
         det := _e.dom.nodes[sum].parent
         if det >= 0 and _e.dom.nodes[det].k == _K_DETAILS:
             mut c := _e.ctl.Ref(det)
-            c.open = not c.open
+            c.open = not _is_open(det)
+            c.has_open = true
             _e.states_dirty = true
             _e.dirty_dom = true
             _fire(det, "toggle", false)
@@ -610,16 +624,96 @@ func _popup_geometry(px &: f64, py &: f64, w &: f64, ih &: f64, n &: int):
     b := _e.boxes[node]
     mut opts := Vector {} as Vector<int>
     _option_nodes(node, opts)
-    n = opts.Len()
+    total := opts.Len()
     opts.Free()
-    ih = math.Max(20.0, _e.us[node].line + 6.0)
+    ih = math.Round(_e.us[node].font * 1.3)
+    ih = math.Max(20.0, ih)
     px = b.x
-    py = b.y + b.h
     w = b.w
+    below := _e.height - _e.inset_b - (b.y + b.h)
+    above := b.y - _e.inset_t
+    full := ih * (total as f64)
+    if full <= below:
+        py = b.y + b.h
+        n = total
+    else full <= above:
+        py = b.y - full
+        n = total
+    else above > below:
+        n = math.MaxI(1, (above / ih) as int)
+        py = b.y - ih * (n as f64)
+    else:
+        n = math.MaxI(1, (below / ih) as int)
+        py = b.y + b.h
+    end
+end
+
+func _popup_top(): int:
+    if _e.popup < 0:
+        ret 0
+    end
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    ret (_e.popup_off / ih) as int
+end
+
+func _popup_clamp(total: int):
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    mx := ih * ((total - n) as f64)
+    _e.popup_off = math.Max(0.0, math.Min(mx, _e.popup_off))
+end
+
+func _popup_show_row(i: int):
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    top := (_e.popup_off / ih) as int
+    if i < top:
+        _e.popup_off = ih * (i as f64)
+    else i >= top + n:
+        _e.popup_off = ih * ((i - n + 1) as f64)
+    end
+end
+
+func _popup_scroll(dy: f64): bool:
+    if _e.popup < 0:
+        ret false
+    end
+    mut opts := Vector {} as Vector<int>
+    _option_nodes(_e.popup, opts)
+    total := opts.Len()
+    opts.Free()
+    old := _e.popup_off
+    _e.popup_off += dy
+    _popup_clamp(total)
+    if _e.popup_off != old:
+        _damage_popup()
+    end
+    ret true
 end
 
 func _damage_popup():
     _e.full = true
+end
+
+func _option_count(node: int): int:
+    mut opts := Vector {} as Vector<int>
+    _option_nodes(node, opts)
+    n := opts.Len()
+    opts.Free()
+    ret n
 end
 
 func _open_popup(node: int):
@@ -627,7 +721,39 @@ func _open_popup(node: int):
     _e.popup = node
     mut c := _e.ctl.Ref(node)
     c.anchor = _select_index(node)
+    _e.popup_off = 0.0
+    _popup_show_row(c.anchor)
+    _popup_clamp(_option_count(node))
     _damage_popup()
+end
+
+func _top_dialog(): int:
+    mut top := -1
+    repeat _e.dom.nodes.Len() in n:
+        if n < _e.boxes.Len() and _e.dom.nodes[n].k == _K_DIALOG and _is_open(n) and _e.boxes[n].shown:
+            top = n
+        end
+    end
+    ret top
+end
+
+func _close_dialog(top: int):
+    mut c := _e.ctl.Ref(top)
+    c.open = false
+    c.has_open = true
+    _e.states_dirty = true
+    _e.dirty_dom = true
+    _e.full = true
+    _fire(top, "close", false)
+end
+
+func _close_top_dialog(): bool:
+    top := _top_dialog()
+    if top < 0:
+        ret false
+    end
+    _close_dialog(top)
+    ret true
 end
 
 func _close_popup():
@@ -648,7 +774,7 @@ func _popup_hit(x: f64, y: f64): int:
     mut n := 0
     _popup_geometry(px, py, w, ih, n)
     if x >= px and x < px + w and y >= py and y < py + ih * (n as f64):
-        ret ((y - py) / ih) as int
+        ret ((y - py) / ih) as int + (_e.popup_off / ih) as int
     end
     ret -1
 end
@@ -802,6 +928,14 @@ func _pointer_down(x: f64, y: f64, button: int, clicks: int, mods: int):
         end
     end
     t := _hit(x, y)
+    top := _top_dialog()
+    if top >= 0 and _ancestor_k(t, _K_DIALOG) != top:
+        if _attr(_e.dom, top, "closedby") != "none":
+            _close_dialog(top)
+        end
+        _e.capture = -2
+        ret
+    end
     _e.capture = t
     _e.last_click = t
     _set_active(t)
@@ -815,7 +949,10 @@ func _pointer_down(x: f64, y: f64, button: int, clicks: int, mods: int):
         ret
     end
     ft := _focus_target(t)
-    _set_focus(ft, false)
+    keep := ft < 0 and _sh_touch and not _kb_tap and _e.focus >= 0 and _is_text_input(_e.focus)
+    if not keep:
+        _set_focus(ft, false)
+    end
     if ft >= 0 and _is_text_input(ft):
         off := _caret_from_point(ft, x, y)
         mut c := _e.ctl.Ref(ft)
@@ -830,6 +967,9 @@ func _pointer_down(x: f64, y: f64, button: int, clicks: int, mods: int):
             mut c2 := _e.ctl.Ref(ft)
             c2.anchor = wa
             c2.caret = wb
+            if _sh_touch:
+                _sh_show(ft, true)
+            end
         else clicks >= 3:
             mut la := 0
             mut lb := 0
@@ -915,6 +1055,9 @@ func _wheel(dx0: f64, dy0: f64, line: bool):
         dx *= 40.0
         dy *= 40.0
     end
+    if _e.popup >= 0 and _popup_scroll(dy):
+        ret
+    end
     t := _hit(_e.mx, _e.my)
     _fire_ev(t, _make_event("wheel", t), true)
     mut n := t
@@ -992,6 +1135,7 @@ func _wheel_at_root(dy: f64):
 end
 
 func _key_down(k: window.Key, mods: int, text: str):
+    _sh_hide()
     target := _e.focus >= 0 ? _e.focus : 0
     name := _key_name(k, text)
     mut ev := _make_event("keydown", target)
@@ -1022,11 +1166,13 @@ func _key_down(k: window.Key, mods: int, text: str):
         if k == window.Key.Down:
             mut cc := _e.ctl.Ref(p)
             cc.anchor = math.MinI(n - 1, c.anchor + 1)
+            _popup_show_row(cc.anchor)
             _damage_popup()
             ret
         else k == window.Key.Up:
             mut cc := _e.ctl.Ref(p)
             cc.anchor = math.MaxI(0, c.anchor - 1)
+            _popup_show_row(cc.anchor)
             _damage_popup()
             ret
         else k == window.Key.Enter or k == window.Key.Space:
@@ -1037,6 +1183,9 @@ func _key_down(k: window.Key, mods: int, text: str):
             _close_popup()
             ret
         end
+    end
+    if k == window.Key.Escape and _close_top_dialog():
+        ret
     end
     if k == window.Key.Tab:
         _tab(shift)
@@ -1112,6 +1261,7 @@ func _key_up(k: window.Key, mods: int):
 end
 
 func _text_input(text: str):
+    _sh_hide()
     f := _e.focus
     if f < 0 or not _is_text_input(f) or _has_attr(_e.dom, f, "readonly") or _is_disabled(f):
         ret
@@ -1146,6 +1296,7 @@ func _text_input(text: str):
     _replace_selection(f, clean)
     _refresh_control(f)
     _e.states_dirty = true
+    _rv_pending = true
     mut ev := _make_event("input", f)
     ev.text = clean
     _fire_ev(f, ev, true)
@@ -1268,13 +1419,25 @@ func _edit_key(f: int, k: window.Key, ctrl: bool, shift: bool):
             else:
                 _maybe_change(f)
                 _remember_committed(f)
-                _submit(_ancestor_k(f, _K_FORM))
+                hint := _attr(_e.dom, f, "enterkeyhint")
+                if hint == "next":
+                    _tab(false)
+                else hint == "previous":
+                    _tab(true)
+                else hint == "done":
+                    _set_focus(-1, false)
+                else:
+                    _submit(_ancestor_k(f, _K_FORM))
+                end
             end
             break
         end
         else:
             break
         end
+    end
+    if moved or changed:
+        _rv_pending = true
     end
     if moved:
         mut cc := _e.ctl.Ref(f)
@@ -1341,11 +1504,74 @@ func _ime(text: str, commit: bool):
     _refresh_control(f)
 end
 
+func _ime_config(f: int): int:
+    t := _input_type(f)
+    multi := _e.dom.nodes[f].k == _K_TEXTAREA
+    type_kb := match t:
+        "email": 1 end
+        "url": 2 end
+        "tel": 3 end
+        "number": 5 end
+        "password": 6 end
+        "search": 7 end
+        else: 0 end
+    end
+    kb := match _attr(_e.dom, f, "inputmode"):
+        "text": 0 end
+        "email": 1 end
+        "url": 2 end
+        "tel": 3 end
+        "numeric": 4 end
+        "decimal": 5 end
+        "search": 7 end
+        "none": 8 end
+        else: type_kb end
+    end
+    enter := match _attr(_e.dom, f, "enterkeyhint"):
+        "enter": 1 end
+        "done": 2 end
+        "go": 3 end
+        "next": 4 end
+        "previous": 5 end
+        "search": 6 end
+        "send": 7 end
+        else: t == "search" ? 6 : 0 end
+    end
+    quiet := kb >= 1 and kb <= 6
+    caps := match _attr(_e.dom, f, "autocapitalize"):
+        "off", "none": 1 end
+        "on", "sentences": 0 end
+        "words": 2 end
+        "characters": 3 end
+        else: quiet ? 1 : 0 end
+    end
+    ac := _attr(_e.dom, f, "autocorrect")
+    sc := _attr(_e.dom, f, "spellcheck")
+    fix := (ac == "off" or sc == "false") ? 1 : ((ac == "on" or sc == "true") ? 2 : (quiet ? 1 : 0))
+    content := match _attr(_e.dom, f, "autocomplete"):
+        "username": 1 end
+        "password", "current-password": 2 end
+        "new-password": 3 end
+        "one-time-code": 4 end
+        "email": 5 end
+        "tel": 6 end
+        "name": 7 end
+        else: t == "password" ? 2 : 0 end
+    end
+    ret kb | (enter << 4) | (caps << 8) | (fix << 10) | (content << 12) | (multi ? 65536 : 0)
+end
+
 func _update_ime():
     if not _e.has_win:
         ret
     end
-    if _e.focus < 0 or _e.focus >= _e.ctl.Len() or not _is_text_input(_e.focus):
+    mut cfg := 0
+    mut want := _e.focus >= 0 and _e.focus < _e.ctl.Len() and _is_text_input(_e.focus)
+    if want:
+        cfg = _ime_config(_e.focus)
+        want = (cfg & 15) != 8
+    end
+    if not want:
         if _e.ime_on:
             _e.ime_on = false
             _e.win.SetImeRect(0.0, 0.0, 0.0, 0.0)
@@ -1353,6 +1579,7 @@ func _update_ime():
         ret
     end
     _e.ime_on = true
+    _e.win.SetImeConfig(cfg)
     ri := _ctl_run(_e.focus)
     if ri < 0 or not _e.runs[ri].has_lay:
         ret

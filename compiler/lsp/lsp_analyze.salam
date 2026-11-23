@@ -1024,6 +1024,25 @@ func fold_kind(k: int): bool:
         k == at.AST_STRUCT_LIT or k == at.AST_ARRAY_LIT
 end
 
+func generated_name(nm: str): bool:
+    if str.Len(nm) < 5 or not str.StartsWith(nm, "__t"):
+        ret false
+    end
+    c := byte_at(nm, 3)
+    if c != 116 and c != 101 and c != 118:
+        ret false
+    end
+    mut i := 4
+    until i < str.Len(nm):
+        d := byte_at(nm, i)
+        if d < 48 or d > 57:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
 func target_nodes(an &: An, pick: int, out &: Vector<OutNode>):
     mut seen := HashMap {} as HashMap<str, bool>
     defer seen.Free()
@@ -1036,6 +1055,9 @@ func target_nodes(an &: An, pick: int, out &: Vector<OutNode>):
             want = outline_kind(n.kind)
         else:
             want = fold_kind(n.kind)
+        end
+        if want and pick == 0 and generated_name(n.name):
+            want = false
         end
         if want and not n.synthetic and (n.end_index as int) > (n.begin_index as int) and
             in_target(an, n):
@@ -1071,7 +1093,8 @@ func emit_symbol(
     nodes: Vector<OutNode>,
     idx: int,
     kids: Vector<Vector<int>>,
-    in_struct: bool
+    in_struct: bool,
+    parent_end: int
 ):
     nd := nodes.Get(idx)
     n := at.Get(an.a, nd.node)
@@ -1103,6 +1126,16 @@ func emit_symbol(
     ) == 10 or byte_at(an.text, ee - 1) == 13 or byte_at(an.text, ee - 1) == 32):
         ee--
     end
+    if ee > parent_end:
+        ee = parent_end
+    end
+    if ee < nd.b:
+        ee = nd.b
+    end
+    if sb < nd.b or se > ee or se < sb:
+        sb = nd.b
+        se = nd.b
+    end
     jw_range(j, "range", an.li, nd.b, ee)
     jw_range(j, "selectionRange", an.li, sb, se)
     ch := kids.Get(idx)
@@ -1116,7 +1149,8 @@ func emit_symbol(
                 c,
                 kids,
                 n.kind == at.AST_STRUCT_DEF or n.kind == at.AST_IMPL_DEF or
-                    n.kind == at.AST_INTERFACE_DEF
+                    n.kind == at.AST_INTERFACE_DEF,
+                ee
             )
         end
         jw_end_arr(j)
@@ -1171,7 +1205,7 @@ func emit_outline(an &: An, j &: Json):
     end
     jw_karr(j, "outline")
     each r in roots:
-        emit_symbol(an, j, nodes, r, kids, false)
+        emit_symbol(an, j, nodes, r, kids, false, an.li.n)
     end
     jw_end_arr(j)
     each kv in kids:

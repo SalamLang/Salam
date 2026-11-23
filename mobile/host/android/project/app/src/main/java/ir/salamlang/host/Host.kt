@@ -13,6 +13,8 @@ object Host {
 
     @JvmStatic external fun nativeStart(files: String, cache: String)
 
+    @JvmStatic external fun nativeScript(script: String)
+
     @JvmStatic external fun nativeSurface(surface: Surface?, w: Int, h: Int, density: Float)
 
     @JvmStatic external fun nativePointer(action: Int, id: Int, x: Float, y: Float)
@@ -31,6 +33,16 @@ object Host {
 
     @JvmStatic external fun nativeScheme(dark: Int)
 
+    @JvmStatic external fun nativeDevice(kind: Int)
+
+    @JvmStatic external fun nativeAuth(ok: Int)
+
+    @JvmStatic external fun nativeUrl(kind: Int, url: String)
+
+    @JvmStatic external fun nativePhoto(path: String)
+
+    @JvmStatic external fun nativeLocation(ok: Int, lat: Double, lon: Double, acc: Double)
+
     @JvmStatic
     fun openUrl(url: String): Boolean {
         val a = activity ?: return false
@@ -42,6 +54,542 @@ object Host {
         } catch (e: Exception) {
             false
         }
+    }
+
+    @JvmStatic
+    fun share(text: String, url: String): Boolean {
+        val a = activity ?: return false
+        val body = if (text.isEmpty()) url else if (url.isEmpty()) text else text + "\n" + url
+        if (body.isEmpty()) return false
+        return try {
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+            send.type = "text/plain"
+            send.putExtra(android.content.Intent.EXTRA_TEXT, body)
+            val chooser = android.content.Intent.createChooser(send, null)
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            a.startActivity(chooser)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun vibrate(ms: Int): Boolean {
+        val a = activity ?: return false
+        if (ms <= 0) return false
+        return try {
+            val v = a.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator ?: return false
+            if (!v.hasVibrator()) return false
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                v.vibrate(android.os.VibrationEffect.createOneShot(ms.toLong(), android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                v.vibrate(ms.toLong())
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun path(kind: Int): String {
+        val a = activity ?: return ""
+        return try {
+            val dir: java.io.File? = when (kind) {
+                0 -> a.filesDir
+                1 -> a.cacheDir
+                2 -> a.getExternalFilesDir(null) ?: a.filesDir
+                3 -> java.io.File(a.cacheDir, "tmp")
+                else -> null
+            }
+            if (dir == null) return ""
+            dir.mkdirs()
+            dir.absolutePath
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    private fun secureKey(): javax.crypto.SecretKey {
+        val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        val existing = ks.getKey("salam_secure", null)
+        if (existing is javax.crypto.SecretKey) return existing
+        val gen = javax.crypto.KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        gen.init(
+            android.security.keystore.KeyGenParameterSpec.Builder(
+                "salam_secure",
+                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build(),
+        )
+        return gen.generateKey()
+    }
+
+    private fun secureFile(a: Activity, name: String): java.io.File {
+        val hex = name.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
+        val dir = java.io.File(a.filesDir, "secure")
+        dir.mkdirs()
+        return java.io.File(dir, hex)
+    }
+
+    @JvmStatic
+    fun secureSet(name: String, value: String): Boolean {
+        val a = activity ?: return false
+        if (name.isEmpty()) return false
+        return try {
+            val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.ENCRYPT_MODE, secureKey())
+            val body = c.doFinal(value.toByteArray(Charsets.UTF_8))
+            val f = secureFile(a, name)
+            val tmp = java.io.File(f.path + ".tmp")
+            tmp.writeBytes(c.iv + body)
+            tmp.renameTo(f)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun secureGet(name: String): String {
+        val a = activity ?: return ""
+        return try {
+            val f = secureFile(a, name)
+            if (!f.exists()) return ""
+            val raw = f.readBytes()
+            if (raw.size < 29) return ""
+            val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.DECRYPT_MODE, secureKey(), javax.crypto.spec.GCMParameterSpec(128, raw, 0, 12))
+            String(c.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
+    fun secureDelete(name: String): Boolean {
+        val a = activity ?: return false
+        return try {
+            val f = secureFile(a, name)
+            f.exists() && f.delete()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private var netWatching = false
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun info(key: String): String {
+        val a = activity ?: return ""
+        return try {
+            when (key) {
+                "model" -> {
+                    val m = android.os.Build.MODEL ?: ""
+                    val v = android.os.Build.MANUFACTURER ?: ""
+                    if (v.isEmpty() || m.startsWith(v, ignoreCase = true)) m else "$v $m"
+                }
+                "os" -> "Android"
+                "os_version" -> android.os.Build.VERSION.RELEASE ?: ""
+                "language" -> java.util.Locale.getDefault().toLanguageTag()
+                "languages" -> {
+                    val l = a.resources.configuration.locales
+                    (0 until l.size()).joinToString(",") { l.get(it).toLanguageTag() }
+                }
+                "timezone" -> java.util.TimeZone.getDefault().id
+                "density" -> a.resources.displayMetrics.density.toString()
+                "app_version" -> a.packageManager.getPackageInfo(a.packageName, 0).versionName ?: ""
+                "build" -> {
+                    val p = a.packageManager.getPackageInfo(a.packageName, 0)
+                    (if (android.os.Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()).toString()
+                }
+                "dark" -> {
+                    val m = a.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+                    if (m == android.content.res.Configuration.UI_MODE_NIGHT_YES) "1" else "0"
+                }
+                "battery", "charging" -> {
+                    val i = a.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                    if (i == null) {
+                        if (key == "battery") "-1" else "0"
+                    } else if (key == "battery") {
+                        val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+                        if (level < 0 || scale <= 0) "-1" else (level * 100 / scale).toString()
+                    } else {
+                        val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                        if (st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL) "1" else "0"
+                    }
+                }
+                else -> ""
+            }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
+    fun network(): Int {
+        val a = activity ?: return 0
+        return try {
+            val cm = a.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return 0
+            if (!netWatching) {
+                netWatching = true
+                cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        nativeDevice(4)
+                    }
+
+                    override fun onLost(network: android.net.Network) {
+                        nativeDevice(4)
+                    }
+
+                    override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
+                        nativeDevice(4)
+                    }
+                })
+            }
+            val n = cm.activeNetwork ?: return 0
+            val c = cm.getNetworkCapabilities(n) ?: return 0
+            when {
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> 1
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> 2
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
+                else -> 4
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    @JvmStatic
+    fun openSettings(): Boolean {
+        val a = activity ?: return false
+        return try {
+            val i = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            i.data = android.net.Uri.fromParts("package", a.packageName, null)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            a.startActivity(i)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun screen(what: Int, value: Int): Int {
+        val a = activity as? SalamActivity ?: return -1
+        if (what == 4) return a.brightnessPercent()
+        if (what == 5) a.askBrightness(value)
+        a.runOnUiThread { a.setScreen(what, value) }
+        return 1
+    }
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun authAvailable(): Boolean {
+        val a = activity ?: return false
+        if (android.os.Build.VERSION.SDK_INT < 29) return false
+        return try {
+            val m = a.getSystemService(android.hardware.biometrics.BiometricManager::class.java) ?: return false
+            val r = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                m.canAuthenticate(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            } else {
+                m.canAuthenticate()
+            }
+            r == android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun authRequest(reason: String): Boolean {
+        val a = activity ?: return false
+        if (!authAvailable()) return false
+        return try {
+            a.runOnUiThread {
+                try {
+                    val exec = a.mainExecutor
+                    val builder = android.hardware.biometrics.BiometricPrompt.Builder(a)
+                        .setTitle(if (reason.isEmpty()) "Confirm it is you" else reason)
+                        .setNegativeButton("Cancel", exec) { _, _ -> nativeAuth(0) }
+                    builder.build().authenticate(
+                        android.os.CancellationSignal(),
+                        exec,
+                        object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                                nativeAuth(1)
+                            }
+
+                            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                                nativeAuth(0)
+                            }
+                        },
+                    )
+                } catch (e: Exception) {
+                    nativeAuth(0)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun haptic(kind: Int): Boolean {
+        val a = activity ?: return false
+        val api = android.os.Build.VERSION.SDK_INT
+        val code = when (kind) {
+            0 -> android.view.HapticFeedbackConstants.VIRTUAL_KEY
+            1 -> android.view.HapticFeedbackConstants.LONG_PRESS
+            2 -> if (api >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY
+            3 -> if (api >= 30) android.view.HapticFeedbackConstants.REJECT else android.view.HapticFeedbackConstants.LONG_PRESS
+            else -> return false
+        }
+        a.runOnUiThread {
+            a.window.decorView.performHapticFeedback(code)
+        }
+        return true
+    }
+
+    @JvmStatic
+    @Suppress("DEPRECATION", "MissingPermission")
+    fun locationRequest(): Boolean {
+        val a = activity ?: return false
+        if (android.os.Build.VERSION.SDK_INT >= 23 && !granted(a, androidPermissions("location"))) return false
+        val lm = a.getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager ?: return false
+        val provider = when {
+            lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) -> android.location.LocationManager.GPS_PROVIDER
+            lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) -> android.location.LocationManager.NETWORK_PROVIDER
+            else -> return false
+        }
+        val done = { l: android.location.Location? ->
+            if (l == null) nativeLocation(0, 0.0, 0.0, 0.0)
+            else nativeLocation(1, l.latitude, l.longitude, if (l.hasAccuracy()) l.accuracy.toDouble() else 0.0)
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(provider, null, a.mainExecutor) { l -> done(l) }
+            } else {
+                lm.requestSingleUpdate(provider, { l -> done(l) }, android.os.Looper.getMainLooper())
+            }
+        } catch (e: Exception) {
+            return false
+        }
+        return true
+    }
+
+    private var photoFile: java.io.File? = null
+
+    @JvmStatic
+    fun photoRequest(camera: Int): Boolean {
+        val a = activity ?: return false
+        return try {
+            val intent: android.content.Intent
+            if (camera != 0) {
+                val dir = java.io.File(a.cacheDir, "photos")
+                dir.mkdirs()
+                val f = java.io.File(dir, "capture_" + System.currentTimeMillis() + ".jpg")
+                photoFile = f
+                intent = android.content.Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+                intent.putExtra(
+                    android.provider.MediaStore.EXTRA_OUTPUT,
+                    android.net.Uri.parse("content://" + a.packageName + ".salamfiles/photos/" + f.name)
+                )
+                intent.addFlags(android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } else {
+                photoFile = null
+                intent = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    android.content.Intent(android.provider.MediaStore.ACTION_PICK_IMAGES)
+                } else {
+                    val i = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT)
+                    i.type = "image/*"
+                    i.addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                    i
+                }
+            }
+            a.runOnUiThread {
+                try {
+                    a.startActivityForResult(intent, 4243)
+                } catch (e: Exception) {
+                    nativePhoto("")
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun photoResult(resultCode: Int, data: android.content.Intent?) {
+        val a = activity
+        val cap = photoFile
+        photoFile = null
+        if (a == null || resultCode != Activity.RESULT_OK) {
+            if (cap != null) cap.delete()
+            nativePhoto("")
+            return
+        }
+        try {
+            if (cap != null) {
+                nativePhoto(if (cap.length() > 0) cap.absolutePath else "")
+                return
+            }
+            val uri = data?.data
+            if (uri == null) {
+                nativePhoto("")
+                return
+            }
+            val dir = java.io.File(a.cacheDir, "photos")
+            dir.mkdirs()
+            val out = java.io.File(dir, "pick_" + System.currentTimeMillis() + ".jpg")
+            a.contentResolver.openInputStream(uri)?.use { input ->
+                out.outputStream().use { o -> input.copyTo(o) }
+            }
+            nativePhoto(if (out.length() > 0) out.absolutePath else "")
+        } catch (e: Exception) {
+            nativePhoto("")
+        }
+    }
+
+    private const val CHANNEL = "salam_default"
+
+    private fun notificationAllowed(c: android.content.Context): Boolean {
+        val nm = c.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (!nm.areNotificationsEnabled()) return false
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            return c.checkSelfPermission("android.permission.POST_NOTIFICATIONS") == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        return true
+    }
+
+    @JvmStatic
+    fun postNotification(c: android.content.Context, id: Int, title: String, body: String): Boolean {
+        if (!notificationAllowed(c)) return false
+        val nm = c.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            val label = c.applicationInfo.loadLabel(c.packageManager).toString()
+            nm.createNotificationChannel(
+                android.app.NotificationChannel(CHANNEL, label, android.app.NotificationManager.IMPORTANCE_DEFAULT)
+            )
+        }
+        val launch = android.content.Intent(c, SalamActivity::class.java)
+        launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        var flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        if (android.os.Build.VERSION.SDK_INT >= 23) flags = flags or android.app.PendingIntent.FLAG_IMMUTABLE
+        val tap = android.app.PendingIntent.getActivity(c, id, launch, flags)
+        val icon = if (c.applicationInfo.icon != 0) c.applicationInfo.icon else android.R.drawable.ic_dialog_info
+        @Suppress("DEPRECATION")
+        val b = if (android.os.Build.VERSION.SDK_INT >= 26) {
+            android.app.Notification.Builder(c, CHANNEL)
+        } else {
+            android.app.Notification.Builder(c)
+        }
+        b.setSmallIcon(icon).setContentTitle(title).setContentText(body).setContentIntent(tap).setAutoCancel(true)
+        nm.notify(id, b.build())
+        return true
+    }
+
+    private fun alarmIntent(c: android.content.Context, id: Int, title: String, body: String): android.app.PendingIntent {
+        val i = android.content.Intent(c, NotifyReceiver::class.java)
+        i.putExtra("id", id)
+        i.putExtra("title", title)
+        i.putExtra("body", body)
+        var flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        if (android.os.Build.VERSION.SDK_INT >= 23) flags = flags or android.app.PendingIntent.FLAG_IMMUTABLE
+        return android.app.PendingIntent.getBroadcast(c, id, i, flags)
+    }
+
+    @JvmStatic
+    fun notify(id: Int, title: String, body: String, delayMs: Int): Boolean {
+        val a = activity ?: return false
+        if (delayMs <= 0) return postNotification(a, id, title, body)
+        if (!notificationAllowed(a)) return false
+        val am = a.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+        val at = System.currentTimeMillis() + delayMs
+        val pi = alarmIntent(a, id, title, body)
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            am.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, at, pi)
+        } else {
+            am.set(android.app.AlarmManager.RTC_WAKEUP, at, pi)
+        }
+        return true
+    }
+
+    @JvmStatic
+    fun cancelNotification(id: Int): Boolean {
+        val a = activity ?: return false
+        val nm = a.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        nm.cancel(id)
+        val am = a.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+        am.cancel(alarmIntent(a, id, "", ""))
+        return true
+    }
+
+    private fun androidPermissions(name: String): List<String> =
+        when (name) {
+            "camera" -> listOf("android.permission.CAMERA")
+            "microphone" -> listOf("android.permission.RECORD_AUDIO")
+            "location" -> listOf("android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION")
+            "notifications" -> if (android.os.Build.VERSION.SDK_INT >= 33) listOf("android.permission.POST_NOTIFICATIONS") else emptyList()
+            else -> emptyList()
+        }
+
+    private fun asked(a: Activity): android.content.SharedPreferences = a.getSharedPreferences("salam_permissions", 0)
+
+    private fun granted(a: Activity, perms: List<String>): Boolean =
+        perms.any { a.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+
+    @Volatile
+    private var pending = ""
+
+    @JvmStatic
+    fun permResult() {
+        val a = activity
+        if (a != null && pending.isNotEmpty()) {
+            asked(a).edit().putBoolean(pending, true).apply()
+        }
+        pending = ""
+        nativeDevice(1)
+    }
+
+    @JvmStatic
+    fun permState(name: String): Int {
+        val a = activity ?: return 0
+        if (name == "notifications" && android.os.Build.VERSION.SDK_INT < 33) {
+            val nm = a.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            return if (nm.areNotificationsEnabled()) 1 else 2
+        }
+        val perms = androidPermissions(name)
+        if (perms.isEmpty()) return 2
+        if (android.os.Build.VERSION.SDK_INT < 23) return 1
+        if (granted(a, perms)) return 1
+        return if (asked(a).getBoolean(name, false)) 2 else 0
+    }
+
+    @JvmStatic
+    fun permRequest(name: String): Boolean {
+        val a = activity ?: return false
+        val perms = androidPermissions(name)
+        if (perms.isEmpty() || android.os.Build.VERSION.SDK_INT < 23) {
+            nativeDevice(1)
+            return perms.isNotEmpty()
+        }
+        if (granted(a, perms)) {
+            nativeDevice(1)
+            return true
+        }
+        pending = name
+        a.runOnUiThread { a.requestPermissions(perms.toTypedArray(), 4242) }
+        return true
     }
 
     private fun clipboard(): android.content.ClipboardManager? =
@@ -62,6 +610,25 @@ object Host {
         return clip.getItemAt(0).coerceToText(activity).toString()
     }
 
+    @Volatile
+    var imeCfg = 0
+
+    @JvmStatic
+    fun setImeConfig(config: Int) {
+        val a = activity ?: return
+        val changed = config != imeCfg
+        imeCfg = config
+        if (!changed) return
+        a.runOnUiThread {
+            val v = a.window.decorView.findViewById<android.view.View>(android.R.id.content) ?: return@runOnUiThread
+            val target = (v as? android.view.ViewGroup)?.getChildAt(0) ?: v
+            val imm = a.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            if (imm.isActive(target)) {
+                imm.restartInput(target)
+            }
+        }
+    }
+
     @JvmStatic
     fun showIme(show: Boolean) {
         val a = activity ?: return
@@ -76,6 +643,18 @@ object Host {
                 imm.hideSoftInputFromWindow(target.windowToken, 0)
             }
         }
+    }
+
+    @JvmStatic
+    fun barsLight(top: Int, bottom: Int) {
+        val a = activity as? SalamActivity ?: return
+        a.runOnUiThread { a.setBarContrast(top != 0, bottom != 0) }
+    }
+
+    @JvmStatic
+    fun pageBackground(argb: Int) {
+        val a = activity as? SalamActivity ?: return
+        a.runOnUiThread { a.rememberPageBackground(argb) }
     }
 
     @JvmStatic

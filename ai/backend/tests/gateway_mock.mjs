@@ -1,8 +1,14 @@
 import http from "node:http";
+import crypto from "node:crypto";
 
 const zarinpal = new Map();
 const zibal = new Map();
 let track = 1000;
+
+const cdp = new Map();
+const CDP_KEY = "cdp_test_key";
+const CDP_SECRET = "cdp_test_secret";
+const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 
 const read = (req) =>
   new Promise((resolve) => {
@@ -24,6 +30,33 @@ http
       res.writeHead(code, { "Content-Type": "application/json" });
       res.end(JSON.stringify(obj));
     };
+    if (url.pathname.startsWith("/api/v1/payments")) {
+      const raw = await new Promise((resolve) => {
+        let t = "";
+        req.on("data", (d) => (t += d));
+        req.on("end", () => resolve(t));
+      });
+      const h = req.headers;
+      const canonical = [req.method, url.pathname, h["x-cdp-timestamp"], h["x-cdp-nonce"], sha(raw)].join("\n");
+      const want = crypto.createHmac("sha256", CDP_SECRET).update(canonical).digest("hex");
+      if (h["x-cdp-key"] !== CDP_KEY || h["x-cdp-signature"] !== want) return send(401, { error: "bad signature" });
+      if (req.method === "POST") {
+        const b = JSON.parse(raw || "{}");
+        if (b.currency !== "IRR" || !b.amount || !String(b.return_url).startsWith("http") || !h["idempotency-key"]) return send(422, { error: "bad request" });
+        const id = crypto.randomBytes(16).toString("hex");
+        cdp.set(id, { amount: b.amount, status: "pending", back: b.return_url });
+        return send(201, { id, checkout_url: `http://127.0.0.1:${process.env.PORT ?? 18098}/pay/${id}`, status: "pending" });
+      }
+      const found = cdp.get(url.pathname.split("/").pop());
+      if (!found) return send(404, { error: "not found" });
+      return send(200, { id: url.pathname.split("/").pop(), status: found.status, amount: found.amount, currency: "IRR", order_id: "CDP-1", bank_reference: "778899", card_pan: "603799******4321" });
+    }
+    if (req.method === "POST" && url.pathname === "/mock/cdp/pay") {
+      const b = await read(req);
+      const found = cdp.get(b.id);
+      if (found) found.status = b.status ?? "paid";
+      return send(200, { ok: Boolean(found) });
+    }
     if (req.method === "POST" && url.pathname === "/pg/v4/payment/request.json") {
       const b = await read(req);
       if (!b.merchant_id || !b.amount || !b.callback_url) return send(200, { data: [], errors: { code: -9, message: "اطلاعات ارسالی ناقص است" } });

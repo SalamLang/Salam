@@ -12,7 +12,8 @@ enum {
     SALAM_EV_INSETS = 5,
     SALAM_EV_LIFECYCLE = 6,
     SALAM_EV_SCHEME = 8,
-    SALAM_EV_PREEDIT = 9
+    SALAM_EV_PREEDIT = 9,
+    SALAM_EV_DEVICE = 10
 };
 
 void salam_host_post(double kind, double a, double b, double c, double d, double e, const char *text);
@@ -23,6 +24,8 @@ const char *salam_host_text(void);
 void salam_host_wait(int ms);
 void salam_host_wake(void);
 int salam_host_ready(void);
+void salam_host_script_set(const char *script);
+void salam_host_script_frame(void);
 int salam_host_width(void);
 int salam_host_height(void);
 double salam_host_density(void);

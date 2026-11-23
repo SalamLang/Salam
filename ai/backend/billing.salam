@@ -22,6 +22,7 @@ import encoding.value
 import str
 import sync
 import conv
+import crypto
 
 include aistore "store.salam"
 include aiweb "web.salam"
@@ -40,6 +41,10 @@ mut ZARINPAL_BASE := "https://payment.zarinpal.com"
 mut ZARINPAL_START := "https://payment.zarinpal.com/pg/StartPay/"
 mut ZIBAL_BASE := "https://gateway.zibal.ir"
 mut ZIBAL_START := "https://gateway.zibal.ir/start/"
+mut CDP_KEY := ""
+mut CDP_SECRET := ""
+mut CDP_BASE := "https://pay.citydesign.ir"
+mut LEGACY_GATEWAYS := false
 mut CALLBACK_BASE := "https://ai-api.salamlang.ir"
 mut APP_URL := "https://ai.salamlang.ir"
 mut PAY_URL := ""
@@ -432,6 +437,9 @@ func plan_json(p: Plan): str:
 end
 
 func gateway_ok(name: str): bool:
+    if name == "citydesign":
+        ret CDP_KEY.Len() > 0 and CDP_SECRET.Len() > 0
+    end
     if name == "zarinpal":
         ret ZARINPAL_MERCHANT.Len() > 0
     end
@@ -439,6 +447,13 @@ func gateway_ok(name: str): bool:
         ret ZIBAL_MERCHANT.Len() > 0
     end
     ret false
+end
+
+func gateway_open(name: str): bool:
+    if name == "citydesign":
+        ret gateway_ok(name)
+    end
+    ret LEGACY_GATEWAYS and gateway_ok(name)
 end
 
 func parse_base(base: str, host &: str, port &: int, secure &: bool, prefix &: str):
@@ -769,6 +784,173 @@ func zibal_verify(amount: i64, token: str, ref &: str, card &: str, fail &: str)
     end
     ref = text_of(root, "refNumber")
     card = text_of(root, "cardNumber")
+    value.ValueFree(root)
+    ret true
+end
+
+func cdp_call(method: str, path: str, body: str, idem: str, fail &: str): str:
+    mut host := ""
+    mut port := 443
+    mut secure := true
+    mut prefix := ""
+    parse_base(CDP_BASE, host, port, secure, prefix)
+    if host.Len() == 0:
+        fail = "نشانی درگاه درست نیست."
+        ret ""
+    end
+    full := prefix + path
+    stamp := n(aistore.Now())
+    nonce := crypto.RandomHex(16)
+    canonical := method + "\n" + full + "\n" + stamp + "\n" + nonce + "\n" + crypto.Sha256Hex(body)
+    sign := crypto.HmacSha256Hex(CDP_SECRET, canonical)
+    mut req := method + " " + full + " HTTP/1.1\r\nHost: " + host +
+        "\r\nUser-Agent: salam-ai\r\nAccept: application/json\r\nX-CDP-Key: " + CDP_KEY +
+        "\r\nX-CDP-Timestamp: " + stamp + "\r\nX-CDP-Nonce: " + nonce + "\r\nX-CDP-Signature: " + sign
+    if idem.Len() > 0:
+        req = req + "\r\nIdempotency-Key: " + idem
+    end
+    if method == "POST":
+        req = req + "\r\nContent-Type: application/json\r\nContent-Length: " + body.Len()
+    end
+    req = req + "\r\nConnection: close\r\n\r\n" + body
+    mut raw := ""
+    if secure:
+        raw = fetch_tls(host, port, req, fail)
+    else:
+        raw = fetch_tcp(host, port, req, fail)
+    end
+    if raw.Len() == 0:
+        if fail.Len() == 0:
+            fail = "درگاه پاسخی نداد."
+        end
+        ret ""
+    end
+    he := raw.Find("\r\n\r\n")
+    if he < 0:
+        fail = "پاسخ درگاه خوانده نشد."
+        ret ""
+    end
+    head := str.Lower(raw.Substr(0, he))
+    mut rest := raw.Substr(he + 4, raw.Len() - he - 4)
+    if head.Find("transfer-encoding: chunked") >= 0:
+        rest = dechunk(rest)
+    end
+    if not str.StartsWith(head, "http/1.1 2") and not str.StartsWith(head, "http/1.0 2"):
+        fail = "درگاه درخواست را نپذیرفت."
+    end
+    ret rest
+end
+
+func cdp_host_ok(url: str): bool:
+    mut host := ""
+    mut port := 443
+    mut secure := true
+    mut prefix := ""
+    parse_base(CDP_BASE, host, port, secure, prefix)
+    mut want := ""
+    mut p2 := 443
+    mut s2 := true
+    mut x2 := ""
+    parse_base(url, want, p2, s2, x2)
+    ret want.Len() > 0 and want == host and s2 == secure and p2 == port
+end
+
+func cdp_data(root: value.Value): value.Value:
+    inner := field(root, "data")
+    if value.IsObject(inner) and value.ObjectHas(inner, "id"):
+        ret inner
+    end
+    ret root
+end
+
+func cdp_first(v: value.Value, keys: str[]): str:
+    each k in keys:
+        got := text_of(v, k)
+        if got.Len() > 0:
+            ret got
+        end
+    end
+    ret ""
+end
+
+func cdp_request(amount: i64, back: str, about: str, order: str, token &: str, link &: str, fail &: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.Push(json.MemberInt("amount", amount))
+    m.Push(json.Member("currency", "IRR"))
+    m.Push(json.Member("description", about))
+    m.Push(json.Member("return_url", back))
+    body := cdp_call("POST", "/api/v1/payments", json.Object(m), "salam-ai-payment-" + order, fail)
+    if body.Len() == 0 or fail.Len() > 0:
+        if fail.Len() == 0:
+            fail = "درگاه پاسخی نداد."
+        end
+        ret false
+    end
+    mut root := value.ValueNull()
+    try:
+        root = json.Decode(body)
+    catch:
+        value.ValueFree(root)
+        fail = "پاسخ درگاه خوانده نشد."
+        ret false
+    end
+    data := cdp_data(root)
+    got := text_of(data, "id")
+    url := text_of(data, "checkout_url")
+    if got.Len() == 0 or got.Len() > 64 or url.Len() == 0 or not cdp_host_ok(url):
+        value.ValueFree(root)
+        fail = "پاسخ درگاه درست نبود."
+        ret false
+    end
+    token = got
+    link = url
+    value.ValueFree(root)
+    ret true
+end
+
+func cdp_verify(amount: i64, token: str, ref &: str, card &: str, wait &: bool, fail &: str): bool:
+    wait = false
+    body := cdp_call("GET", "/api/v1/payments/" + token, "", "", fail)
+    if body.Len() == 0 or fail.Len() > 0:
+        wait = true
+        if fail.Len() == 0:
+            fail = "درگاه پاسخی نداد."
+        end
+        ret false
+    end
+    mut root := value.ValueNull()
+    try:
+        root = json.Decode(body)
+    catch:
+        value.ValueFree(root)
+        fail = "پاسخ درگاه خوانده نشد."
+        ret false
+    end
+    data := cdp_data(root)
+    state := str.Lower(text_of(data, "status"))
+    if text_of(data, "id") != token:
+        fail = "شناسه پرداخت با پاسخ درگاه یکی نیست."
+        value.ValueFree(root)
+        ret false
+    end
+    if state == "pending" or state == "processing" or state == "created":
+        wait = true
+        fail = "پرداخت هنوز تمام نشده است."
+        value.ValueFree(root)
+        ret false
+    end
+    if state != "paid":
+        fail = "پرداخت انجام نشد."
+        value.ValueFree(root)
+        ret false
+    end
+    if int_of(data, "amount") != amount or str.Upper(text_of(data, "currency")) != "IRR":
+        fail = "مبلغ پرداخت با مبلغ پلن یکی نیست."
+        value.ValueFree(root)
+        ret false
+    end
+    ref = cdp_first(data, ["bank_reference", "bank_reference_id", "bank_ref", "reference", "rrn", "order_id", "order_code"])
+    card = cdp_first(data, ["card_pan", "card_number", "card"])
     value.ValueFree(root)
     ret true
 end
@@ -1160,8 +1342,8 @@ func list_plans(ctx: i64):
         end
     end
     mut ways := Vector {} as Vector<str>
-    each name in ["zarinpal", "zibal"]:
-        if gateway_ok(name):
+    each name in ["citydesign", "zarinpal", "zibal"]:
+        if gateway_open(name):
             ways.Push(json.Str(name))
         end
     end
@@ -1264,7 +1446,7 @@ func checkout(ctx: i64):
         aiweb.Fail(ctx, 400, "plan", "این پلن برای خرید نیست.")
         ret
     end
-    if not gateway_ok(gateway):
+    if not gateway_open(gateway):
         aiweb.Fail(ctx, 400, "gateway", "این درگاه پرداخت الان فعال نیست.")
         ret
     end
@@ -1335,7 +1517,13 @@ func checkout(ctx: i64):
     mut token := ""
     mut fail := ""
     mut started := false
-    if gateway == "zarinpal":
+    mut link := ""
+    if gateway == "citydesign":
+        started = cdp_request(
+            amount, APP_URL + "/billing/callback/citydesign/" + pid,
+            "Salam AI " + p.id + " #" + pid, pid, token, link, fail
+        )
+    else gateway == "zarinpal":
         started = zarinpal_request(amount, back, about, token, fail)
     else:
         started = zibal_request(amount, back, about, pid, token, fail)
@@ -1348,8 +1536,8 @@ func checkout(ctx: i64):
     aistore.Lock()
     _u := aistore.Run("UPDATE payments SET token = ?1 WHERE id = ?2", two(token, pid))
     aistore.Unlock()
-    mut url := start_url(gateway, token)
-    if PAY_URL.Len() > 0:
+    mut url := link.Len() > 0 ? link : start_url(gateway, token)
+    if PAY_URL.Len() > 0 and gateway != "citydesign":
         url = PAY_URL + "/billing/pay/" + gateway + "/" + token
     end
     mut m := Vector {} as Vector<str>
@@ -1457,7 +1645,7 @@ end
 func pay_hop(ctx: i64):
     gateway := str.Lower(http.Param(ctx, "gateway"))
     token := str.Trim(http.Param(ctx, "token"))
-    if not gateway_ok(gateway) or token.Len() == 0 or token.Len() > 64:
+    if not gateway_ok(gateway) or gateway == "citydesign" or token.Len() == 0 or token.Len() > 64:
         redirect(ctx, done_url("failed", ""))
         ret
     end
@@ -1482,18 +1670,30 @@ func gateway_return(ctx: i64):
     gateway := str.Lower(http.Param(ctx, "gateway"))
     mut token := str.Trim(http.Query(ctx, "Authority"))
     mut canceled := str.Lower(str.Trim(http.Query(ctx, "Status"))) != "ok"
+    mut order_id := str.Trim(http.Query(ctx, "orderId"))
     if gateway == "zibal":
         token = str.Trim(http.Query(ctx, "trackId"))
         canceled = str.Trim(http.Query(ctx, "success")) != "1"
     end
-    if not gateway_ok(gateway) or token.Len() == 0:
+    if gateway == "citydesign":
+        token = ""
+        canceled = false
+        order_id = str.Trim(http.Param(ctx, "order"))
+        if order_id.Len() > 12 or conv.ParseIntOr(order_id, 0) <= 0:
+            order_id = ""
+        end
+        if order_id.Len() == 0:
+            redirect(ctx, done_url("failed", ""))
+            ret
+        end
+    end
+    if not gateway_ok(gateway) or (token.Len() == 0 and order_id.Len() == 0):
         redirect(ctx, done_url("failed", ""))
         ret
     end
-    order_id := str.Trim(http.Query(ctx, "orderId"))
     aistore.Lock()
     mut rows := aistore.Stmt(
-        "SELECT id, user_id, plan, amount, status, discount_code_id FROM payments WHERE gateway = ?1 AND token = ?2 ORDER BY id DESC LIMIT 1",
+        "SELECT id, user_id, plan, amount, status, discount_code_id FROM payments WHERE gateway = ?1 AND token = ?2 AND ?2 <> '' ORDER BY id DESC LIMIT 1",
         two(gateway, token)
     )
     mut pid := ""
@@ -1513,7 +1713,7 @@ func gateway_return(ctx: i64):
     aistore.Finish(rows)
     if pid.Len() == 0 and order_id.Len() > 0:
         mut by_order := aistore.Stmt(
-            "SELECT id, user_id, plan, amount, status, discount_code_id FROM payments WHERE id = ?1 AND gateway = ?2",
+            "SELECT id, user_id, plan, amount, status, discount_code_id, token FROM payments WHERE id = ?1 AND gateway = ?2",
             two(order_id, gateway)
         )
         if aistore.Next(by_order):
@@ -1523,6 +1723,7 @@ func gateway_return(ctx: i64):
             amount = aistore.Int64(by_order, 3)
             status = aistore.Text(by_order, 4)
             discount_id = aistore.Text(by_order, 5)
+            token = aistore.Text(by_order, 6)
         end
         aistore.Finish(by_order)
     end
@@ -1553,10 +1754,20 @@ func gateway_return(ctx: i64):
     mut card := ""
     mut fail := ""
     mut paid := false
-    if gateway == "zarinpal":
+    mut wait := false
+    if gateway == "citydesign":
+        paid = token.Len() > 0 and cdp_verify(amount * 10, token, ref, card, wait, fail)
+    else gateway == "zarinpal":
         paid = zarinpal_verify(amount * 10, token, ref, card, fail)
     else:
         paid = zibal_verify(amount * 10, token, ref, card, fail)
+    end
+    if not paid and wait:
+        aistore.Lock()
+        _w := aistore.Run("UPDATE payments SET status = 'pending' WHERE id = ?1 AND status = 'verifying'", one(pid))
+        aistore.Unlock()
+        redirect(ctx, done_url("pending", plan))
+        ret
     end
     if not paid:
         finish_payment(pid, "failed", "", "", fail)
@@ -1688,7 +1899,26 @@ func admin_plans(ctx: i64):
         ret
     end
     mut items := Vector {} as Vector<str>
+    mut gone := Vector {} as Vector<str>
+    aistore.Lock()
+    mut gone_rows := aistore.Stmt(
+        "SELECT id FROM plans WHERE retired = 1", Vector {} as Vector<str>
+    )
+    until aistore.Next(gone_rows):
+        gone.Push(aistore.Text(gone_rows, 0))
+    end
+    aistore.Finish(gone_rows)
+    aistore.Unlock()
     each p in plans():
+        mut hidden := false
+        each g in gone:
+            if g == p.id:
+                hidden = true
+            end
+        end
+        if hidden:
+            continue
+        end
         aistore.Lock()
         subs := aistore.OneText(
             "SELECT COUNT(*) FROM subscriptions WHERE plan = ?1 AND status = 'active' AND (expires = 0 OR expires > ?2)",
@@ -1700,6 +1930,39 @@ func admin_plans(ctx: i64):
         items.Push(raw)
     end
     aiweb.Reply(ctx, 200, `{"plans": ` + json.Array(items) + "}")
+end
+
+func admin_plan_delete(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mode := str.Lower(str.Trim(http.Query(ctx, "mode")))
+    if not known(id):
+        aiweb.Fail(ctx, 404, "not_found", "این پلن پیدا نشد.")
+        ret
+    end
+    each keep in ["free", "plus", "trial", "pro", "unlimited", "unlimited2", "unlimited3"]:
+        if keep == id:
+            aiweb.Fail(ctx, 400, "plan", "پلن‌های اصلی حذف نمی‌شوند. می‌توانید غیرفعالشان کنید.")
+            ret
+        end
+    end
+    if mode != "retire" and mode != "cancel":
+        aiweb.Fail(ctx, 400, "mode", "روش حذف درست نیست.")
+        ret
+    end
+    aistore.Lock()
+    _r := aistore.Run("UPDATE plans SET enabled = 0, retired = 1 WHERE id = ?1", one(id))
+    if mode == "cancel":
+        _c := aistore.Run(
+            "UPDATE subscriptions SET status = 'canceled' WHERE plan = ?1 AND status = 'active'",
+            one(id)
+        )
+    end
+    aistore.Unlock()
+    reload_plans()
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
 end
 
 func plan_from(body: str, base: Plan): Plan:
@@ -2232,10 +2495,19 @@ func settle_one(pid: str):
     mut card := ""
     mut fail := ""
     mut paid := false
-    if gateway == "zarinpal":
+    mut wait := false
+    if gateway == "citydesign":
+        paid = cdp_verify(amount * 10, token, ref, card, wait, fail)
+    else gateway == "zarinpal":
         paid = zarinpal_verify(amount * 10, token, ref, card, fail)
     else:
         paid = zibal_verify(amount * 10, token, ref, card, fail)
+    end
+    if not paid and wait:
+        aistore.Lock()
+        _w := aistore.Run("UPDATE payments SET status = 'pending' WHERE id = ?1 AND status = 'verifying'", one(pid))
+        aistore.Unlock()
+        ret
     end
     if not paid:
         finish_payment(pid, "failed", "", "", fail)
@@ -2285,8 +2557,18 @@ pub func Configure(
     pay_url: str,
     free_api: int,
     free_chat: int,
-    sweep_seconds: int
+    sweep_seconds: int,
+    cdp_key: str,
+    cdp_secret: str,
+    cdp_base: str,
+    legacy: bool
 ):
+    CDP_KEY = str.TrimRight(str.TrimLeft(cdp_key))
+    CDP_SECRET = str.TrimRight(str.TrimLeft(cdp_secret))
+    if cdp_base.Len() > 0:
+        CDP_BASE = str.TrimSuffix(cdp_base, "/")
+    end
+    LEGACY_GATEWAYS = legacy
     ZARINPAL_MERCHANT = str.TrimRight(str.TrimLeft(zarinpal))
     ZIBAL_MERCHANT = str.TrimRight(str.TrimLeft(zibal))
     if zarinpal_base.Len() > 0:
@@ -2317,7 +2599,7 @@ pub func Configure(
         FREE_CHAT_DAILY = free_chat
     end
     reload_plans()
-    if ZARINPAL_MERCHANT.Len() > 0 or ZIBAL_MERCHANT.Len() > 0:
+    if ZARINPAL_MERCHANT.Len() > 0 or ZIBAL_MERCHANT.Len() > 0 or gateway_ok("citydesign"):
         _t := spawn(sweeper)
     end
 end
@@ -2431,6 +2713,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/billing/payments", my_payments)
     router.Post(r, "/billing/checkout", checkout)
     router.Get(r, "/billing/callback/:gateway", gateway_return)
+    router.Get(r, "/billing/callback/:gateway/:order", gateway_return)
     router.Get(r, "/billing/pay/:gateway/:token", pay_hop)
     router.Get(r, "/admin/subscriptions", admin_subscriptions)
     router.Post(r, "/admin/subscriptions", admin_grant)
@@ -2439,6 +2722,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/plans", admin_plans)
     router.Post(r, "/admin/plans", admin_plan_create)
     router.Put(r, "/admin/plans/:id", admin_plan_update)
+    router.Delete(r, "/admin/plans/:id", admin_plan_delete)
     router.Post(r, "/billing/discount/preview", discount_preview)
     router.Get(r, "/admin/discounts", admin_discounts)
     router.Post(r, "/admin/discounts", admin_discount_create)

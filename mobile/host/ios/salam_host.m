@@ -41,6 +41,7 @@ static void *run_app(void *arg)
 }
 
 static int g_ime_rect[4];
+static int g_ime_cfg;
 
 static void post_text(NSString *text, int commit)
 {
@@ -456,14 +457,104 @@ static int hid_to_key(UIKeyboardHIDUsage u)
     salam_host_post(SALAM_EV_KEY, 0, 67, 0, 0, 0, NULL);
 }
 
+- (int)imeCfg
+{
+    pthread_mutex_lock(&g_mu);
+    int c = g_ime_cfg;
+    pthread_mutex_unlock(&g_mu);
+    return c;
+}
+
 - (UIKeyboardType)keyboardType
 {
-    return UIKeyboardTypeDefault;
+    int cfg = [self imeCfg];
+    switch (cfg & 15) {
+    case 1:
+        return UIKeyboardTypeEmailAddress;
+    case 2:
+        return UIKeyboardTypeURL;
+    case 3:
+        return UIKeyboardTypePhonePad;
+    case 4:
+        return UIKeyboardTypeNumberPad;
+    case 5:
+        return UIKeyboardTypeDecimalPad;
+    case 7:
+        return UIKeyboardTypeWebSearch;
+    default:
+        return UIKeyboardTypeDefault;
+    }
+}
+
+- (UIReturnKeyType)returnKeyType
+{
+    switch (([self imeCfg] >> 4) & 15) {
+    case 2:
+        return UIReturnKeyDone;
+    case 3:
+        return UIReturnKeyGo;
+    case 4:
+        return UIReturnKeyNext;
+    case 6:
+        return UIReturnKeySearch;
+    case 7:
+        return UIReturnKeySend;
+    default:
+        return UIReturnKeyDefault;
+    }
+}
+
+- (UITextAutocapitalizationType)autocapitalizationType
+{
+    switch (([self imeCfg] >> 8) & 3) {
+    case 1:
+        return UITextAutocapitalizationTypeNone;
+    case 2:
+        return UITextAutocapitalizationTypeWords;
+    case 3:
+        return UITextAutocapitalizationTypeAllCharacters;
+    default:
+        return UITextAutocapitalizationTypeSentences;
+    }
 }
 
 - (UITextAutocorrectionType)autocorrectionType
 {
-    return UITextAutocorrectionTypeNo;
+    int fix = ([self imeCfg] >> 10) & 3;
+    return fix == 2 ? UITextAutocorrectionTypeYes : (fix == 1 ? UITextAutocorrectionTypeNo : UITextAutocorrectionTypeDefault);
+}
+
+- (UITextSpellCheckingType)spellCheckingType
+{
+    int fix = ([self imeCfg] >> 10) & 3;
+    return fix == 1 ? UITextSpellCheckingTypeNo : UITextSpellCheckingTypeDefault;
+}
+
+- (BOOL)isSecureTextEntry
+{
+    return ([self imeCfg] & 15) == 6;
+}
+
+- (UITextContentType)textContentType
+{
+    switch (([self imeCfg] >> 12) & 15) {
+    case 1:
+        return UITextContentTypeUsername;
+    case 2:
+        return UITextContentTypePassword;
+    case 3:
+        return UITextContentTypeNewPassword;
+    case 4:
+        return UITextContentTypeOneTimeCode;
+    case 5:
+        return UITextContentTypeEmailAddress;
+    case 6:
+        return UITextContentTypeTelephoneNumber;
+    case 7:
+        return UITextContentTypeName;
+    default:
+        return nil;
+    }
 }
 
 - (void)sendTouches:(NSSet<UITouch *> *)touches action:(int)action
@@ -825,6 +916,22 @@ void salam_host_ime(int flag)
             [g_view becomeFirstResponder];
         } else {
             [g_view resignFirstResponder];
+        }
+    });
+}
+
+void salam_host_ime_config(int config)
+{
+    pthread_mutex_lock(&g_mu);
+    int changed = config != g_ime_cfg;
+    g_ime_cfg = config;
+    pthread_mutex_unlock(&g_mu);
+    if (!changed) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_view.isFirstResponder) {
+            [g_view reloadInputViews];
         }
     });
 }

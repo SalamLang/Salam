@@ -18,6 +18,9 @@ class SalamActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Host.activity = this
+        if (savedInstanceState == null) {
+            java.io.File(filesDir, ".salam_state").delete()
+        }
         density = resources.displayMetrics.density
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT

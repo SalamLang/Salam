@@ -156,8 +156,11 @@ rules: it always takes a prompt and never parentheses. Write `input ""` or
 variable works as the prompt (`input label`). The whole expression after
 `input` is the prompt, so `input label + "x"` prints `label` and then `x`, and
 the line read is not changed; a computed prompt is written the same way
-(`input "> " + label`). To use the answer in an expression, assign it first:
-`line := input "> "`, then `line + "x"`.
+(`input "> " + label`). `input` may only appear as `name := input "p"`,
+`mut name := input "p"` or `name = input "p"`; anywhere else (`println input "p"`,
+`if input "p" == "y":`, an argument, `ret input "p"`) is error E296. Store the
+answer in a variable first, then use it: `line := input "> "`, then
+`line + "x"`.
 
 ```salam
 println ""

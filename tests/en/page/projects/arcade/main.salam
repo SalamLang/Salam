@@ -1,0 +1,493 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+// EXPECT: <meta name="salam-router" content="history">
+// EXPECT: "/memory"
+// EXPECT: "/tictactoe"
+// EXPECT: "/mines"
+import dom
+
+const CELLS9 := [0, 1, 2, 3, 4, 5, 6, 7, 8]
+const CELLS12 := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+const CELLS36 := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
+const LINES := [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 3, 6, 1, 4, 7, 2, 5, 8, 0, 4, 8, 2, 4, 6]
+const SIDE := 6
+const MINES := 6
+
+mut seed_no := 7
+mut deck := shuffled_deck(7)
+mut faces := blank_cells(12)
+mut first_card := -1
+mut busy := false
+mut flips := 0
+mut best_flips := 0
+
+mut board := blank_cells(9)
+mut mover := 1
+mut versus_cpu := true
+mut wins_x := 0
+mut wins_o := 0
+mut draws := 0
+mut cpu_wait := 0 as i64
+
+mut opened := blank_cells(36)
+mut flagged := blank_cells(36)
+mut mined := mine_layout(11)
+mut flag_mode := false
+mut boom := false
+
+func blank_cells(total: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat total:
+        out.Push(0)
+    end
+    ret out
+end
+
+pure func next_random(seed: int): int:
+    ret (seed * 75 + 74) % 65537
+end
+
+func shuffled_deck(seed: int): Vector<int>:
+    mut cards := Vector {} as Vector<int>
+    repeat 12 in idx:
+        cards.Push(idx / 2)
+    end
+    mut roll := seed
+    mut at := 11
+    until at >= 1:
+        roll = next_random(roll)
+        pick := roll % (at + 1)
+        spare := cards[at]
+        cards[at] = cards[pick]
+        cards[pick] = spare
+        at--
+    end
+    ret cards
+end
+
+func mine_layout(seed: int): Vector<int>:
+    mut order := Vector {} as Vector<int>
+    repeat 36 in idx:
+        order.Push(idx)
+    end
+    mut roll := seed
+    mut at := 35
+    until at >= 1:
+        roll = next_random(roll)
+        pick := roll % (at + 1)
+        spare := order[at]
+        order[at] = order[pick]
+        order[pick] = spare
+        at--
+    end
+    mut out := blank_cells(36)
+    repeat MINES in nth:
+        out[order[nth]] = 1
+    end
+    ret out
+end
+
+pure func symbol_of(species: int): str:
+    if species == 0:
+        ret "🍎"
+    else species == 1:
+        ret "🚀"
+    else species == 2:
+        ret "🎸"
+    else species == 3:
+        ret "🌵"
+    else species == 4:
+        ret "🐙"
+    end
+    ret "🍄"
+end
+
+pure func matched_total(): int:
+    mut total := 0
+    each state in faces:
+        if state == 2:
+            total++
+        end
+    end
+    ret total
+end
+
+pure func memory_won(): bool:
+    ret matched_total() == 12
+end
+
+func flip_back(ca: int, cb: int):
+    faces[ca] = 0
+    faces[cb] = 0
+    first_card = -1
+    busy = false
+end
+
+func flip_card(card: int):
+    if busy or faces[card] != 0:
+        ret
+    end
+    faces[card] = 1
+    if first_card < 0:
+        first_card = card
+        ret
+    end
+    flips++
+    other := first_card
+    if deck[card] == deck[other]:
+        faces[card] = 2
+        faces[other] = 2
+        first_card = -1
+        if memory_won() and (best_flips == 0 or flips < best_flips):
+            best_flips = flips
+        end
+    else:
+        busy = true
+        dom.SetTimeout((): flip_back(card, other) end, 700)
+    end
+end
+
+func new_memory():
+    seed_no = next_random(seed_no)
+    deck = shuffled_deck(seed_no)
+    faces = blank_cells(12)
+    first_card = -1
+    busy = false
+    flips = 0
+end
+
+pure func line_winner(ca: int, cb: int, cc: int): int:
+    if board[ca] != 0 and board[ca] == board[cb] and board[cb] == board[cc]:
+        ret board[ca]
+    end
+    ret 0
+end
+
+pure func ttt_winner(): int:
+    repeat 8 in li:
+        who := line_winner(LINES[li * 3], LINES[li * 3 + 1], LINES[li * 3 + 2])
+        if who != 0:
+            ret who
+        end
+    end
+    ret 0
+end
+
+pure func board_full(): bool:
+    each mark in board:
+        if mark == 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+pure func ttt_over(): bool:
+    ret ttt_winner() != 0 or board_full()
+end
+
+pure func ttt_status(): str:
+    champ := ttt_winner()
+    if champ == 1:
+        ret "X wins"
+    else champ == 2:
+        ret "O wins"
+    else board_full():
+        ret "Draw"
+    end
+    ret mover == 1 ? "X to move" : "O to move"
+end
+
+pure func mark_text(mark: int): str:
+    if mark == 1:
+        ret "X"
+    else mark == 2:
+        ret "O"
+    end
+    ret ""
+end
+
+func cpu_pick(): int:
+    each want in [2, 1]:
+        repeat 8 in li:
+            mut own := 0
+            mut hole := -1
+            repeat 3 in part:
+                sq := LINES[li * 3 + part]
+                if board[sq] == want:
+                    own++
+                else board[sq] == 0:
+                    hole = sq
+                end
+            end
+            if own == 2 and hole >= 0:
+                ret hole
+            end
+        end
+    end
+    if board[4] == 0:
+        ret 4
+    end
+    each sq in CELLS9:
+        if board[sq] == 0:
+            ret sq
+        end
+    end
+    ret -1
+end
+
+func settle():
+    champ := ttt_winner()
+    if champ == 1:
+        wins_x++
+    else champ == 2:
+        wins_o++
+    else board_full():
+        draws++
+    end
+end
+
+func cpu_move():
+    if ttt_over() or mover != 2:
+        ret
+    end
+    pick := cpu_pick()
+    if pick >= 0:
+        board[pick] = 2
+        mover = 1
+        settle()
+    end
+end
+
+func ttt_play(sq: int):
+    if ttt_over() or board[sq] != 0:
+        ret
+    end
+    board[sq] = mover
+    mover = 3 - mover
+    settle()
+    if versus_cpu and not ttt_over() and mover == 2:
+        cpu_wait = dom.SetTimeout((): cpu_move() end, 400)
+    end
+end
+
+func new_round():
+    board = blank_cells(9)
+    mover = 1
+end
+
+pure func neighbours_mined(sq: int): int:
+    ry := sq / SIDE
+    cx := sq % SIDE
+    mut total := 0
+    each offy in [-1, 0, 1]:
+        each offx in [-1, 0, 1]:
+            newy := ry + offy
+            newx := cx + offx
+            if (offy != 0 or offx != 0) and newy >= 0 and newy < SIDE and newx >= 0 and newx < SIDE:
+                total += mined[newy * SIDE + newx]
+            end
+        end
+    end
+    ret total
+end
+
+func reveal(sq: int):
+    if opened[sq] == 1 or flagged[sq] == 1:
+        ret
+    end
+    opened[sq] = 1
+    if mined[sq] == 1:
+        boom = true
+        ret
+    end
+    if neighbours_mined(sq) == 0:
+        ry := sq / SIDE
+        cx := sq % SIDE
+        each offy in [-1, 0, 1]:
+            each offx in [-1, 0, 1]:
+                newy := ry + offy
+                newx := cx + offx
+                if (offy != 0 or offx != 0) and newy >= 0 and newy < SIDE and newx >= 0 and newx < SIDE:
+                    reveal(newy * SIDE + newx)
+                end
+            end
+        end
+    end
+end
+
+pure func safe_opened(): int:
+    mut total := 0
+    repeat SIDE * SIDE in at:
+        if opened[at] == 1 and mined[at] == 0:
+            total++
+        end
+    end
+    ret total
+end
+
+pure func mines_won(): bool:
+    ret not boom and safe_opened() == SIDE * SIDE - MINES
+end
+
+pure func flags_left(): int:
+    mut total := 0
+    each state in flagged:
+        total += state
+    end
+    ret MINES - total
+end
+
+func mine_press(sq: int):
+    if boom or mines_won():
+        ret
+    end
+    if flag_mode:
+        if opened[sq] == 0:
+            flagged[sq] = 1 - flagged[sq]
+        end
+    else:
+        reveal(sq)
+    end
+end
+
+func new_mines():
+    seed_no = next_random(seed_no)
+    opened = blank_cells(36)
+    flagged = blank_cells(36)
+    mined = mine_layout(seed_no)
+    boom = false
+end
+
+pure func mine_glyph(sq: int): str:
+    if flagged[sq] == 1 and opened[sq] == 0:
+        ret "F"
+    end
+    if opened[sq] == 0 and not (boom and mined[sq] == 1):
+        ret ""
+    end
+    if mined[sq] == 1:
+        ret "*"
+    end
+    near := neighbours_mined(sq)
+    if near == 0:
+        ret ""
+    end
+    ret "" + near
+end
+
+pure func mine_tone(sq: int): int:
+    if boom and mined[sq] == 1:
+        ret 3
+    end
+    if flagged[sq] == 1 and opened[sq] == 0:
+        ret 4
+    end
+    if opened[sq] == 1:
+        ret 1
+    end
+    ret 0
+end
+
+func press(game: int, sq: int):
+    if game == 0:
+        flip_card(sq)
+    else game == 1:
+        ttt_play(sq)
+    else:
+        mine_press(sq)
+    end
+end
+
+func arcade_key(ev: i64):
+    key := dom.EventKey(ev)
+    here := page.route.path
+    if here == "/tictactoe" and key >= "1" and key <= "9":
+        ttt_play(key.ToInt() - 1)
+    else here == "/mines" and key == "f":
+        flag_mode = not flag_mode
+    else key == "r":
+        if here == "/memory":
+            new_memory()
+        else here == "/tictactoe":
+            new_round()
+        else here == "/mines":
+            new_mines()
+        end
+    end
+end
+
+page:
+    title = "Arcade"
+    lang = "en"
+    font family = "system-ui, sans-serif"
+    box:
+        key down = arcade_key
+        tab index = 0
+        min height = 100vh
+        background = #14161f
+        color = #e8ebf4
+        header:
+            layout = row
+            align = center
+            justify = between
+            wrap = true
+            gap = 10
+            padding = 14, 28
+            background = #1c2030
+            link:
+                to = "/"
+                font size = 22
+                font weight = 800
+                color = #ffd166
+                text decoration = none
+                content = "arcade"
+            end
+            nav:
+                layout = row
+                gap = 6
+                link:
+                    to = "/memory"
+                    padding = 8, 14
+                    radius = 999
+                    color = #e8ebf4
+                    text decoration = none
+                    content = "Memory"
+                end
+                link:
+                    to = "/tictactoe"
+                    padding = 8, 14
+                    radius = 999
+                    color = #e8ebf4
+                    text decoration = none
+                    content = "Tic tac toe"
+                end
+                link:
+                    to = "/mines"
+                    padding = 8, 14
+                    radius = 999
+                    color = #e8ebf4
+                    text decoration = none
+                    content = "Mines"
+                end
+            end
+        end
+        main:
+            max width = 560
+            width = 100%
+            margin = 0, auto
+            padding = 24, 16
+            Outlet: end
+        end
+    end
+end

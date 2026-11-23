@@ -1899,7 +1899,26 @@ func admin_plans(ctx: i64):
         ret
     end
     mut items := Vector {} as Vector<str>
+    mut gone := Vector {} as Vector<str>
+    aistore.Lock()
+    mut gone_rows := aistore.Stmt(
+        "SELECT id FROM plans WHERE retired = 1", Vector {} as Vector<str>
+    )
+    until aistore.Next(gone_rows):
+        gone.Push(aistore.Text(gone_rows, 0))
+    end
+    aistore.Finish(gone_rows)
+    aistore.Unlock()
     each p in plans():
+        mut hidden := false
+        each g in gone:
+            if g == p.id:
+                hidden = true
+            end
+        end
+        if hidden:
+            continue
+        end
         aistore.Lock()
         subs := aistore.OneText(
             "SELECT COUNT(*) FROM subscriptions WHERE plan = ?1 AND status = 'active' AND (expires = 0 OR expires > ?2)",
@@ -1911,6 +1930,39 @@ func admin_plans(ctx: i64):
         items.Push(raw)
     end
     aiweb.Reply(ctx, 200, `{"plans": ` + json.Array(items) + "}")
+end
+
+func admin_plan_delete(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mode := str.Lower(str.Trim(http.Query(ctx, "mode")))
+    if not known(id):
+        aiweb.Fail(ctx, 404, "not_found", "این پلن پیدا نشد.")
+        ret
+    end
+    each keep in ["free", "plus", "trial", "pro", "unlimited", "unlimited2", "unlimited3"]:
+        if keep == id:
+            aiweb.Fail(ctx, 400, "plan", "پلن‌های اصلی حذف نمی‌شوند. می‌توانید غیرفعالشان کنید.")
+            ret
+        end
+    end
+    if mode != "retire" and mode != "cancel":
+        aiweb.Fail(ctx, 400, "mode", "روش حذف درست نیست.")
+        ret
+    end
+    aistore.Lock()
+    _r := aistore.Run("UPDATE plans SET enabled = 0, retired = 1 WHERE id = ?1", one(id))
+    if mode == "cancel":
+        _c := aistore.Run(
+            "UPDATE subscriptions SET status = 'canceled' WHERE plan = ?1 AND status = 'active'",
+            one(id)
+        )
+    end
+    aistore.Unlock()
+    reload_plans()
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
 end
 
 func plan_from(body: str, base: Plan): Plan:
@@ -2670,6 +2722,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/plans", admin_plans)
     router.Post(r, "/admin/plans", admin_plan_create)
     router.Put(r, "/admin/plans/:id", admin_plan_update)
+    router.Delete(r, "/admin/plans/:id", admin_plan_delete)
     router.Post(r, "/billing/discount/preview", discount_preview)
     router.Get(r, "/admin/discounts", admin_discounts)
     router.Post(r, "/admin/discounts", admin_discount_create)

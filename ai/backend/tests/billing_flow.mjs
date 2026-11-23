@@ -202,6 +202,18 @@ check("a plan id cannot repeat", (await api("POST", "/admin/plans", admin, { id:
 await api("PUT", "/admin/plans/team", admin, { enabled: false });
 const hidden = await api("GET", "/plans", null);
 check("a disabled plan leaves the public list", !hidden.json.plans.some((p) => p.id === "team"));
+const gift = await api("POST", "/admin/plans", admin, { id: "gone", name: "حذف", price: 1000, days: 30, chat_daily: 5, enabled: true });
+await api("POST", "/admin/subscriptions", admin, { email: HEAVY, plan: "gone" });
+check("a main plan cannot be removed", (await api("DELETE", "/admin/plans/plus?mode=retire", admin)).res.status === 400);
+check("a plan needs a removal mode", (await api("DELETE", "/admin/plans/gone", admin)).res.status === 400);
+check("a normal user cannot remove a plan", (await api("DELETE", "/admin/plans/gone?mode=retire", heavy)).res.status === 403);
+const retired = await api("DELETE", "/admin/plans/gone?mode=retire", admin);
+check("a plan can be removed from sale", retired.res.status === 200, retired.json);
+check("a removed plan leaves the public and admin lists", !(await api("GET", "/plans", null)).json.plans.some((p) => p.id === "gone") && !(await api("GET", "/admin/plans", admin)).json.plans.some((p) => p.id === "gone"));
+check("a removed plan cannot be bought", (await api("POST", "/billing/checkout", buyer, { plan: "gone", gateway: "citydesign" })).res.status === 400);
+check("its subscribers keep it until it expires", (await api("GET", "/billing/subscription", heavy)).json.subscription.plan.id === "gone");
+await api("DELETE", "/admin/plans/gone?mode=cancel", admin);
+check("removing with cancel ends its subscriptions", (await api("GET", "/billing/subscription", heavy)).json.subscription.plan.id === "free");
 const freeEdit = await api("PUT", "/admin/plans/free", admin, { price: 5, enabled: false });
 check("the free plan stays free and on", freeEdit.json.plan.price === 0 && freeEdit.json.plan.enabled === true, freeEdit.json);
 console.log(`\n${passed} passed, ${failures.length} failed`);

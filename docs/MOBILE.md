@@ -224,6 +224,13 @@ simulator.
   move the focus, `done` closes the keyboard, anything else submits the form.
   A textarea keeps Enter for a new line. `autocomplete` values only change the
   iOS content type; on Android a `password` one uses the password keyboard.
+- The focused input scrolls into view above the keyboard, also when it sits
+  near the bottom, in a textarea (the caret line follows while you type new
+  lines) or inside nested scrollers. A tap on something that is not an input
+  closes the keyboard, and so does a scroll drag that starts outside the
+  input; `ui.KeyboardDismiss(on_tap, on_drag)` turns either off. Back closes the
+  keyboard before it goes to the router, and a keyboard hidden by the system
+  drops the focus.
 - The soft keyboard follows the focused input; the page root keeps away from
   the status bar, the navigation bar and the keyboard. By default the system
   insets are padding of the page, so they scroll away with the content and

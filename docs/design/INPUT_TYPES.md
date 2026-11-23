@@ -38,6 +38,17 @@ unknown type behaves as `text`). Natively an unknown type is a text field and
 the word stays in the `type` attribute, so `ui.ById("x").Attr("type")` and
 handlers can read it.
 
+A word that is not a known type but is within edit distance 1 (2 for words of
+six letters or more) of one gives warning W298 with the likely spelling:
+
+```
+warning[W298]: 'chekbox' is not a known input type
+  help: did you mean type = "checkbox"?
+```
+
+The word is still written as it is. Only a constant type is checked, so a type
+that is only known at runtime never warns.
+
 ## Attributes of the textarea type
 
 `rows`, `cols`, `wrap`, `maxlength`, `minlength`, `placeholder`, `readonly`,

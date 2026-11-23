@@ -160,8 +160,14 @@ simulator.
 
 - Layout, text (Persian included, system fonts), colors, scrolling with fling,
   media queries and `page.touch`.
-- Touch: tap, long press, drag scroll. Long press in a text input selects the
-  word.
+- Touch: tap, long press, drag scroll. Long press or a double tap in a text
+  input selects the word and shows two drag handles and a floating bar with
+  Cut, Copy, Paste and Select all (drawn by the page, in Persian on a right to
+  left input). Dragging a handle extends the selection, a tap on the selected
+  text shows or hides the bar, and Paste uses the system clipboard. A password
+  input has no Cut or Copy. In a headless script `selui` prints the selection
+  state, `seltap copy|cut|paste|all` presses a bar button and `selhandle
+  start|end X Y` drags a handle.
 - Pinch: a second finger starts a pinch and cancels the tap, long press and
   drag of the first. Elements get `pinch` while the fingers move and
   `pinchend` when one lifts; both bubble from the element under the middle of

@@ -32,6 +32,19 @@ What the program prints goes to logcat: `adb logcat -s salam`.
   media queries and `page.touch`.
 - Touch: tap, long press, drag scroll. Long press in a text input selects the
   word.
+- Pinch: a second finger starts a pinch and cancels the tap, long press and
+  drag of the first. Elements get `pinch` while the fingers move and
+  `pinchend` when one lifts; both bubble from the element under the middle of
+  the fingers. `ui.CurrentEvent().scale` is the finger distance divided by the
+  distance at the start (above 1 spreading, below 1 pinching in) and `x`, `y`
+  are the middle. In a headless script, `pinch #id 2` spreads two fingers.
+
+  ```
+  box:
+      pinch = (): zoom = ui.CurrentEvent().scale end
+  end
+  ```
+
 - The soft keyboard follows the focused input; the page root keeps away from
   the status bar, the navigation bar and the keyboard.
 - Back goes to the page router first and closes the app at the root.
@@ -42,7 +55,7 @@ What the program prints goes to logcat: `adb logcat -s salam`.
 
 ## Not available yet
 
-- Pinch and other multi touch gestures.
+- Rotate and three finger gestures.
 - Camera, location, share sheet, notifications and permissions.
 - Bundled fonts (the phone's system fonts are used).
 - `salam run` on the phone itself; build with the script above.

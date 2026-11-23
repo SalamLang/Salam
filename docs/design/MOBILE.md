@@ -89,8 +89,8 @@ fonts) and clipboard and link opening from stage 10. Checked on an arm64
 emulator with a counter page, a form with a text input and a Persian page.
 Stage 9: the iOS host draws the counter page on the iPhone simulator. Touch,
 the keyboard and Persian text were not tried on iOS yet.
-Missing: bundled fonts (iOS cannot read system fonts on a phone), pinch and
-other multi touch gestures, share, permissions, camera and notifications.
+Missing: bundled fonts (iOS cannot read system fonts on a phone), rotate and
+three finger gestures, share, permissions, camera and notifications.
 
 ## Target matrix
 

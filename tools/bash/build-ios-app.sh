@@ -6,6 +6,7 @@
 #       [--icon ICON.png] [--splash-color COLOR] [--splash-icon ICON.png]
 #       [--version NAME] [--build NUMBER] [--min-ios VERSION]
 #       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE]
+#       [--ipa] [--team TEAM_ID] [--profile FILE.mobileprovision] [--sign-identity NAME]
 #       [--permission NAME]...
 #
 # Salam emits C for arm64, clang builds it with the host shim in
@@ -37,6 +38,25 @@
 # splash_icon, min_ios, orientation, category and permissions. Options on the
 # command line win.
 #
+# --device builds the arm64 slice for a phone against the iphoneos SDK (no
+# bitcode, which Xcode no longer accepts). A phone only runs a signed app, so
+# the bundle also needs a certificate and a provisioning profile you own:
+#
+#   --team TEAM_ID         the 10 character team; the app gets development
+#                          entitlements (application-identifier TEAM_ID.ID)
+#   --profile FILE        a .mobileprovision for this bundle id and phone; it is
+#                          embedded and its entitlements are used as they are
+#   --sign-identity NAME  the codesign identity (default "Apple Development");
+#                          "-" signs ad hoc, which a phone refuses
+#
+# Without --team or --profile the device build is signed ad hoc and the script
+# says so. --ipa builds for a device and also writes DIR/App.ipa, a Payload
+# folder holding App.app in a zip. To install it, sign with a development
+# profile and use Xcode (Window, Devices and Simulators) or
+# xcrun devicectl device install app --device DEVICE_ID DIR/App.app. For the
+# App Store, sign with a distribution profile and upload the .ipa with
+# Transporter or xcrun altool.
+#
 # --permission NAME (camera, microphone, location, notifications) adds the
 # usage description the system shows in its permission dialog, so
 # device.RequestPermission can ask for it. Calls that need a description
@@ -63,6 +83,10 @@ MINIOS=
 ORIENT=
 CATEGORY=
 CONFIG=
+TEAM=
+PROFILE=
+IDENTITY=
+IPA=0
 while [ $# -gt 0 ]; do
     case $1 in
     --out)
@@ -72,6 +96,23 @@ while [ $# -gt 0 ]; do
     --device)
         DEVICE=1
         shift
+        ;;
+    --ipa)
+        IPA=1
+        DEVICE=1
+        shift
+        ;;
+    --team)
+        TEAM=$2
+        shift 2
+        ;;
+    --profile)
+        PROFILE=$2
+        shift 2
+        ;;
+    --sign-identity)
+        IDENTITY=$2
+        shift 2
         ;;
     --id)
         ID=$2
@@ -219,11 +260,30 @@ base=$(basename "$APP" .salam)
 [ -n "$ID" ] || ID=app.salam.$(printf %s "$base" | tr -c 'A-Za-z0-9\n' '_' | tr '[:upper:]' '[:lower:]')
 [ -n "$NAME" ] || NAME=$base
 
+if [ -n "$PROFILE" ]; then
+    [ -f "$PROFILE" ] || {
+        echo "build-ios-app: no such provisioning profile: $PROFILE" >&2
+        exit 2
+    }
+    PROFILE=$(cd "$(dirname "$PROFILE")" && pwd)/$(basename "$PROFILE")
+fi
+if [ -n "$TEAM" ]; then
+    printf %s "$TEAM" | grep -Eq '^[A-Z0-9]{10}$' || {
+        echo "build-ios-app: --team wants the 10 character team id, not '$TEAM'" >&2
+        exit 2
+    }
+fi
+if [ "$DEVICE" = 0 ] && { [ -n "$TEAM" ] || [ -n "$PROFILE" ] || [ -n "$IDENTITY" ]; }; then
+    echo "build-ios-app: --team, --profile and --sign-identity only apply to a --device build" >&2
+    exit 2
+fi
 if [ "$DEVICE" = 1 ]; then
     SDK=iphoneos
+    PLATFORM=iPhoneOS
     TRIPLE=arm64-apple-ios$MINIOS
 else
     SDK=iphonesimulator
+    PLATFORM=iPhoneSimulator
     TRIPLE=arm64-apple-ios$MINIOS-simulator
 fi
 command -v xcrun >/dev/null 2>&1 || {
@@ -353,6 +413,8 @@ cat >"$OUT/App.app/Info.plist" <<PLIST
             </array>
         </dict>
     </dict>
+    <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+    <key>CFBundleSupportedPlatforms</key><array><string>$PLATFORM</string></array>
     <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
@@ -414,5 +476,44 @@ if [ -d "$ROOT/mobile/host/fonts" ]; then
     mkdir -p "$OUT/App.app/fonts"
     cp "$ROOT"/mobile/host/fonts/* "$OUT/App.app/fonts/" 2>/dev/null || true
 fi
-codesign --force --sign - "$OUT/App.app" >/dev/null 2>&1 || true
+if [ "$DEVICE" = 0 ]; then
+    codesign --force --sign - "$OUT/App.app" >/dev/null 2>&1 || true
+elif [ -z "$TEAM" ] && [ -z "$PROFILE" ]; then
+    codesign --force --sign - "$OUT/App.app" >/dev/null 2>&1 || true
+    echo "build-ios-app: the device build is signed ad hoc and a phone will not run it; pass --team and --profile, or sign it in Xcode" >&2
+else
+    ENT=$work/device-entitlements.plist
+    if [ -n "$PROFILE" ]; then
+        cp "$PROFILE" "$OUT/App.app/embedded.mobileprovision"
+        security cms -D -i "$PROFILE" >"$work/profile.plist" || {
+            echo "build-ios-app: cannot read the provisioning profile $PROFILE" >&2
+            exit 1
+        }
+        /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$work/profile.plist" >"$ENT"
+    else
+        cat >"$ENT" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>application-identifier</key><string>$TEAM.$ID</string>
+<key>com.apple.developer.team-identifier</key><string>$TEAM</string>
+<key>get-task-allow</key><true/>
+</dict></plist>
+PLIST
+    fi
+    codesign --force --sign "${IDENTITY:-Apple Development}" --entitlements "$ENT" "$OUT/App.app" || {
+        echo "build-ios-app: codesign failed; check that the identity is in your keychain (security find-identity -v -p codesigning)" >&2
+        exit 1
+    }
+fi
+if [ "$IPA" = 1 ]; then
+    rm -rf "$work/ipa" "$OUT/App.ipa"
+    mkdir -p "$work/ipa/Payload"
+    cp -R "$OUT/App.app" "$work/ipa/Payload/"
+    (
+        cd "$work/ipa"
+        zip -qry "$OUT/App.ipa" Payload
+    )
+    echo "ipa: $OUT/App.ipa"
+fi
 echo "app: $OUT/App.app ($ID)"

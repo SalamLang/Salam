@@ -135,12 +135,39 @@ the system shows in its permission dialog. The build adds
 `NSLocationWhenInUseUsageDescription` when the program calls
 `device.RequestLocation`, and the camera and photo library descriptions when
 it calls `device.PickPhoto` or `device.TakePhoto`. The default target is the
-simulator; `--device` builds for a phone and the app still has to be signed in
-Xcode. `--icon icon.png` (one square PNG, 1024 px is best) is compiled into an
+simulator; `--device` builds for a phone (see below). `--icon icon.png` (one square PNG, 1024 px is best) is compiled into an
 AppIcon asset catalog with actool, or written as loose PNG files when actool is missing.
 `--splash-color` and `--splash-icon` fill the `UILaunchScreen` dictionary through the same
 catalog; without them the launch screen is the system background.
 Needs a compiler built from the current tree.
+
+### Running on a phone
+
+`--device` builds the arm64 slice against the iphoneos SDK, with no bitcode (Xcode no longer
+accepts it). `vtool -show-build App.app/App` reports `platform IOS`. A phone only runs an app that
+is signed with a certificate and a provisioning profile of yours, which the build cannot create:
+
+1. Join the Apple Developer Program (or use a free personal team for your own phone) and
+   register the phone. In Xcode, Settings, Accounts, add your Apple ID and create an
+   Apple Development certificate. `security find-identity -v -p codesigning` lists it.
+2. Create an App ID that equals your bundle id (`--id`) and a development provisioning profile
+   for it and the phone, in the developer portal or by building any app with that id once in
+   Xcode. Download the `.mobileprovision`.
+3. Build and sign:
+
+```
+salam app ios app.salam --out out --device --id ir.example.notes \
+    --team ABCDE12345 --profile notes.mobileprovision --sign-identity "Apple Development: Name (XXXXXXXXXX)"
+xcrun devicectl device install app --device DEVICE_ID out/App.app
+```
+
+`--team` is the 10 character team id, `--profile` is embedded and its entitlements are used as
+they are, and `--sign-identity` defaults to `Apple Development`. Without `--team` and `--profile`
+a device build is signed ad hoc, which a phone refuses, and the script says so.
+
+`--ipa` builds for a device and also writes `out/App.ipa` (the `Payload` folder in a ZIP). For
+TestFlight and the App Store sign with a distribution certificate and an App Store profile, then
+upload the `.ipa` with Transporter or `xcrun altool`.
 
 The device calls (`gui.device`) work the same as on Android: share sheet,
 haptics, permissions, local notifications, one shot location, photo picker and

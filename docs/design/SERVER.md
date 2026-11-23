@@ -222,6 +222,16 @@ rows with per row state on the server (they are filled by the bundle).
 | `salam page build --ssr[=DIR] [project]` | `DIR/server` (a native executable made from the page AST lowered for the server: router, guards, renderers) and `DIR/public` (bundle, CSS, assets, prerendered pages for routes with no parameters and no guard); `DIR` defaults to `dist` |
 | `salam serve --render [project] [--port=N] [--host=H]` | builds into a scratch directory, runs the server, rebuilds on save and swaps the server; the browser is not reloaded yet |
 
+Writing the output folder. `--ssr=DIR` builds into `DIR.tmp` and swaps it in
+whole with two renames, so a running server never reads half written files
+(there is a short moment when `DIR` does not exist). A lock folder `DIR.lock`
+holds the pid of the build; a second build on the same `DIR` stops at once with
+a message naming that process, and a lock whose process is gone is taken over.
+
+Modifier order: `server` is always the last modifier, `pub server func`. Other
+orders, such as `server pub func`, are rejected with a message that says so, as
+for every other modifier; they are not accepted silently.
+
 `public/` of the project is copied into `DIR/public` first. The shell page (the
 web build with empty `<!--salam:N--><!--/salam:N-->` regions) is written to the
 hidden file `DIR/public/.shell.html`; the server fills the regions per request

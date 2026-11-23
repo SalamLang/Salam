@@ -156,6 +156,9 @@ static jmethodID haptic_mid;
 static jmethodID perm_state_mid;
 static jmethodID notify_mid;
 static jmethodID loc_mid;
+static jmethodID photo_mid;
+static int photo_state;
+static char photo_path[1024];
 static pthread_mutex_t loc_mu = PTHREAD_MUTEX_INITIALIZER;
 static int loc_state;
 static double loc_val[3];
@@ -371,6 +374,47 @@ static int call_bool_int(jmethodID mid, int v)
         (*vm)->DetachCurrentThread(vm);
     }
     return r;
+}
+
+int salam_host_photo_request(int camera)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || photo_mid == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&loc_mu);
+    photo_state = 1;
+    pthread_mutex_unlock(&loc_mu);
+    r = (*env)->CallStaticBooleanMethod(env, host_cls, photo_mid, (jint)camera) ? 1 : 0;
+    if (r == 0) {
+        pthread_mutex_lock(&loc_mu);
+        photo_state = 3;
+        pthread_mutex_unlock(&loc_mu);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_photo_state(void)
+{
+    int s;
+    pthread_mutex_lock(&loc_mu);
+    s = photo_state;
+    pthread_mutex_unlock(&loc_mu);
+    return s;
+}
+
+const char *salam_host_photo_path(void)
+{
+    static char copy[1024];
+    pthread_mutex_lock(&loc_mu);
+    memcpy(copy, photo_path, sizeof copy);
+    pthread_mutex_unlock(&loc_mu);
+    return copy;
 }
 
 int salam_host_location_request(void)
@@ -592,6 +636,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     notify_mid = (*env)->GetStaticMethodID(env, cls, "notify", "(ILjava/lang/String;Ljava/lang/String;I)Z");
     cancel_mid = (*env)->GetStaticMethodID(env, cls, "cancelNotification", "(I)Z");
     loc_mid = (*env)->GetStaticMethodID(env, cls, "locationRequest", "()Z");
+    photo_mid = (*env)->GetStaticMethodID(env, cls, "photoRequest", "(I)Z");
     share_mid = (*env)->GetStaticMethodID(env, cls, "share", "(Ljava/lang/String;Ljava/lang/String;)Z");
     started = 1;
     redirect_output();
@@ -696,6 +741,24 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeLocation(JNIEnv *env, j
     loc_val[2] = acc;
     pthread_mutex_unlock(&loc_mu);
     salam_host_post(SALAM_EV_DEVICE, 2, 0, 0, 0, 0, NULL);
+}
+
+JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativePhoto(JNIEnv *env, jclass cls, jstring path)
+{
+    (void)cls;
+    char *u = utf8_from_jstring(env, path);
+    pthread_mutex_lock(&loc_mu);
+    photo_path[0] = 0;
+    if (u != NULL && u[0] != 0) {
+        strncpy(photo_path, u, sizeof photo_path - 1);
+        photo_path[sizeof photo_path - 1] = 0;
+        photo_state = 2;
+    } else {
+        photo_state = 3;
+    }
+    pthread_mutex_unlock(&loc_mu);
+    free(u);
+    salam_host_post(SALAM_EV_DEVICE, 3, 0, 0, 0, 0, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeDevice(JNIEnv *env, jclass cls, jint kind)

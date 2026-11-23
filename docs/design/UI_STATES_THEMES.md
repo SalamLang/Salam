@@ -110,7 +110,7 @@ The same values are also members of the reserved name `page` (`صفحه`):
 work in style `if` blocks and in element `if` blocks, because they cannot
 collide with a declared name: inside a page or a component `page` cannot be
 declared as a variable, parameter or loop name (E253), and an unknown member
-is E254. The router members (`page.GoTo`, `page.route` and the rest, see the router
+is E254. The router members (`page.route.GoTo`, `page.route` and the rest, see the router
 design) are not window values and are never E254. Outside pages and
 components `page` is an ordinary name.
 

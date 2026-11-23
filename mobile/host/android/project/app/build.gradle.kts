@@ -52,6 +52,17 @@ android {
     buildFeatures {
         resValues = true
     }
+    val splitAbis = project.findProperty("splitAbis")?.toString()
+    if (!splitAbis.isNullOrBlank()) {
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include(*splitAbis.split(",").toTypedArray())
+                isUniversalApk = false
+            }
+        }
+    }
     packaging {
         jniLibs {
             useLegacyPackaging = true

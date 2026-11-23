@@ -6,7 +6,8 @@
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--icon-bg COLOR]
 #       [--splash-color COLOR] [--splash-icon ICON.png]
 #       [--version NAME] [--build NUMBER] [--min-sdk N] [--target-sdk N]
-#       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE] [--release]
+#       [--orientation portrait|landscape|auto] [--category NAME] [--config FILE]
+#       [--size] [--split] [--no-strip] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
 #       [--fonts DIR] [--assets DIR] [--permission NAME]... [--no-apk] [--run]
 #
@@ -32,6 +33,16 @@
 # written with underscores: id, name, version, build, icon, icon_bg,
 # splash_color, splash_icon, min_sdk, target_sdk, orientation, category, abi,
 # fonts, assets and permissions. Options on the command line win.
+#
+# --abi takes a comma separated list of arm64-v8a, armeabi-v7a, x86_64 and
+# x86, or "all" for the first three (a release build with no --abi builds
+# those three; a debug build only arm64-v8a). One APK holds every ABI listed;
+# --split writes one APK per ABI instead, DIR/app-ABI.apk, which is what a
+# store that serves by device wants.
+#
+# --size builds for size: -Oz, --gc-sections, identical code folding, and the
+# symbols stripped. Release and --size builds strip the library by default;
+# --no-strip keeps the symbols. The sizes of every library and APK are printed.
 #
 # --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
 # copied to the app files directory at start and found by the font collection.
@@ -72,6 +83,9 @@ TARGETSDK=
 ORIENT=
 CATEGORY=
 CONFIG=
+SIZE=0
+SPLIT=0
+STRIP=
 FONTS=
 ASSETS=
 RUN=0
@@ -146,6 +160,18 @@ while [ $# -gt 0 ]; do
     --config)
         CONFIG=$2
         shift 2
+        ;;
+    --size)
+        SIZE=1
+        shift
+        ;;
+    --split)
+        SPLIT=1
+        shift
+        ;;
+    --no-strip)
+        STRIP=0
+        shift
         ;;
     --aab)
         AAB=1
@@ -257,6 +283,22 @@ fi
 app_check_orientation "$ORIENT" build-android-app || exit 2
 app_category_known "$CATEGORY" build-android-app || exit 2
 [ -n "$ICON_BG" ] || ICON_BG="#FFFFFF"
+[ "$ABIS" != all ] || ABIS=arm64-v8a,armeabi-v7a,x86_64
+if [ -z "$STRIP" ]; then
+    STRIP=0
+    if [ "$BUILD" != assembleDebug ] || [ "$SIZE" = 1 ]; then
+        STRIP=1
+    fi
+fi
+OPT=-O2
+LDOPT=
+if [ "$SIZE" = 1 ]; then
+    OPT=-Oz
+    LDOPT="-Wl,--icf=all"
+fi
+if [ "$STRIP" = 1 ]; then
+    LDOPT="$LDOPT -Wl,--strip-all"
+fi
 if [ -z "$ABIS" ]; then
     if [ "$BUILD" = assembleDebug ]; then
         ABIS=arm64-v8a
@@ -449,21 +491,21 @@ for abi in $ABIS; do
     )
     CC=$BIN/$clang-clang
     for f in "$work"/.salam-build/*.c; do
-        "$CC" -O2 -w -fPIC -fno-strict-aliasing -ffunction-sections -fdata-sections \
+        "$CC" $OPT -w -fPIC -fno-strict-aliasing -ffunction-sections -fdata-sections \
             -Dmain=salam_app_main -I"$work/.salam-build" -c "$f" -o "$work/obj/$(basename "$f").o"
     done
     if grep -q 'sqlite3_open' "$work"/.salam-build/*.c 2>/dev/null; then
         sqlite_dir=$(fetch_sqlite)
-        "$CC" -O2 -fPIC -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -c \
+        "$CC" $OPT -fPIC -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -c \
             "$sqlite_dir/sqlite3.c" -o "$work/obj/sqlite3.o"
     fi
-    "$CC" -O2 -fPIC -c "$ROOT/mobile/host/android/salam_host.c" -o "$work/obj/salam_host.o"
-    "$CC" -O2 -fPIC -c "$ROOT/mobile/host/common/salam_host_common.c" -o "$work/obj/salam_host_common.o"
+    "$CC" $OPT -fPIC -c "$ROOT/mobile/host/android/salam_host.c" -o "$work/obj/salam_host.o"
+    "$CC" $OPT -fPIC -c "$ROOT/mobile/host/common/salam_host_common.c" -o "$work/obj/salam_host_common.o"
     lib="$OUT/project/app/src/main/jniLibs/$abi"
     mkdir -p "$lib"
     "$CC" -shared -o "$lib/libsalamapp.so" "$work"/obj/*.o -landroid -llog -lm -ldl \
-        -Wl,--gc-sections -Wl,-z,max-page-size=16384
-    echo "built $lib/libsalamapp.so"
+        -Wl,--gc-sections -Wl,-z,max-page-size=16384 $LDOPT
+    echo "built $lib/libsalamapp.so ($(wc -c <"$lib/libsalamapp.so" | tr -d ' ') bytes)"
     IFS=,
 done
 IFS=$old_ifs
@@ -526,6 +568,7 @@ done
 [ "$APK" = 1 ] || exit 0
 export ANDROID_HOME=$SDK
 set -- "$BUILD" "-PappId=$ID" "-PappName=$NAME"
+[ "$SPLIT" = 0 ] || set -- "$@" "-PsplitAbis=$ABIS"
 [ -z "$VERSION" ] || set -- "$@" "-PappVersion=$VERSION"
 [ -z "$BUILDNUM" ] || set -- "$@" "-PappVersionCode=$BUILDNUM"
 [ -z "$MINSDK" ] || set -- "$@" "-PminSdkVersion=$MINSDK"
@@ -547,13 +590,26 @@ if [ "$AAB" = 1 ]; then
     echo "aab: $OUT/app.aab"
     exit 0
 fi
+if [ "$SPLIT" = 1 ]; then
+    rm -f "$OUT"/app-*.apk
+    for f in "$OUT"/project/app/build/outputs/apk/*/*.apk; do
+        n=$(basename "$f" .apk)
+        n=${n#app-}
+        n=${n%-unsigned}
+        n=${n%-debug}
+        n=${n%-release}
+        cp "$f" "$OUT/app-$n.apk"
+        echo "apk: $OUT/app-$n.apk ($(wc -c <"$OUT/app-$n.apk" | tr -d ' ') bytes)"
+    done
+    exit 0
+fi
 apk=$(find "$OUT/project/app/build/outputs/apk" -name '*.apk' | head -n 1)
 [ -n "$apk" ] || {
     echo "build-android-app: Gradle produced no APK" >&2
     exit 1
 }
 cp "$apk" "$OUT/app.apk"
-echo "apk: $OUT/app.apk"
+echo "apk: $OUT/app.apk ($(wc -c <"$OUT/app.apk" | tr -d ' ') bytes)"
 if [ "$RUN" = 1 ]; then
     ADB=$SDK/platform-tools/adb
     "$ADB" install -r "$OUT/app.apk"

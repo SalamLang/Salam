@@ -64,6 +64,7 @@ struct FmtCtx:
     pub ml_top: int = 0
     pub block_line: Vector<int> = Vector {}
     pub blk_kind: Vector<int> = Vector {}
+    pub blk_br: Vector<int> = Vector {}
     pub layout_break: bool = false
     pub plan: Vector<int> = Vector {}
     pub pl_stack: Vector<int> = Vector {}
@@ -631,6 +632,18 @@ func ml_per_line(c &: FmtCtx, ts: tok.TokenStream, open_idx: int, close_idx: int
     ret flat_width(ts, open_idx + 1, close_idx) + (c.indent + anc + 1) * iwidth(c) > FMT_WRAP_WIDTH
 end
 
+func bracket_has_end(ts: tok.TokenStream, i: int): bool:
+    cl := match_close(ts, i)
+    mut j := i + 1
+    until j < cl:
+        if tok.StreamAt(ts, j).kind == tok.TK_KW_END:
+            ret true
+        end
+        j++
+    end
+    ret false
+end
+
 func bracket_ml_now(c &: FmtCtx, ts: tok.TokenStream, i: int): bool:
     if (pl_get(c, i) & PL_ML) != 0:
         ret true
@@ -995,6 +1008,10 @@ func step_break_before(
         c.line_has_content = false
     end
     c.open_colon_line = 0
+    if c.bracket > 0 and c.ml_top > 0 and c.ml_top <= FMT_MAX_BRACKET and c.blk_br[c.ml_top - 1] != 0 and c.line_has_content and c.has_prev and (t.begin_line as int) > c.prev_end_line and not is_close(k):
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+    end
     if c.layout_break:
         c.layout_break = false
         if c.line_has_content and k != tok.TK_COMMENT_LINE and k != tok.TK_COMMENT_BLOCK:
@@ -1364,6 +1381,7 @@ func step_state_after(
             c.pl_stack[c.ml_top] = (ml and ml_per_line(
                 c, ts, i, match_close(ts, i), c.bracket_indent
             )) ? 1 : 0
+            c.blk_br[c.ml_top] = bracket_has_end(ts, i) ? 1 : 0
         end
         c.ml_top++
         c.bracket++
@@ -1784,6 +1802,7 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
     defer c.paren_is_lambda.Free()
     defer c.block_line.Free()
     defer c.blk_kind.Free()
+    defer c.blk_br.Free()
     defer c.plan.Free()
     defer c.pl_stack.Free()
     defer c.in_match_arms.Free()
@@ -1794,6 +1813,7 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
         c.paren_is_lambda.Push(0)
         c.block_line.Push(0)
         c.blk_kind.Push(0)
+        c.blk_br.Push(0)
         c.pl_stack.Push(0)
         c.in_match_arms.Push(0)
         c.q_open.Push(0)

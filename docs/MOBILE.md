@@ -21,7 +21,10 @@ emulator and starts it. Other options:
 
 | option | meaning |
 | --- | --- |
-| `--abi arm64-v8a,x86_64` | ABIs to build (release builds default to arm64-v8a, armeabi-v7a and x86_64) |
+| `--abi arm64-v8a,x86_64` | ABIs to build, or `all` for arm64-v8a, armeabi-v7a and x86_64 (release builds default to all three, debug builds to arm64-v8a) |
+| `--split` | one APK per ABI, `out/app-arm64-v8a.apk` and so on, instead of one APK with every ABI |
+| `--size` | build for size: `-Oz`, identical code folding, symbols stripped |
+| `--no-strip` | keep the symbols in the library |
 | `--id ir.example.app` | application id |
 | `--name "My App"` | label under the icon |
 | `--icon icon.png` | one square PNG (1024 px is best): adaptive icon with a themed (monochrome) layer plus legacy mipmaps |
@@ -30,6 +33,23 @@ emulator and starts it. Other options:
 | `--splash-icon logo.png` | launch screen icon (default: `--icon`) |
 | `--release --keystore my.jks --keystore-pass P --key-alias A` | signed release APK |
 | `--aab` | App Bundle for Google Play |
+
+## Size
+
+The build prints the size of each library and of the APK. For the counter example (arm64-v8a,
+release build), measured with the Android 28.2 NDK:
+
+| build | libsalamapp.so | APK |
+| --- | --- | --- |
+| `-O2`, symbols kept (`--no-strip`) | 2,299,560 | 1,510,491 |
+| `-O2`, stripped (release default) | 1,929,040 | 1,510,491 |
+| `--size` (`-Oz`, `--icf=all`, stripped) | 1,545,224 | 1,320,175 |
+
+Gradle strips the library when it packs the APK, so stripping in the build only changes the
+`.so` on disk. `--size` is what shrinks the APK, by about 13 percent. With `--abi all` and
+`--size` one APK holds all three libraries and is 2,657,036 bytes; with `--split` the APKs are
+1,320,175 (arm64-v8a), 1,341,526 (armeabi-v7a) and 1,331,695 (x86_64) bytes. Check what a
+library was built for with `file out/project/app/src/main/jniLibs/x86_64/libsalamapp.so`.
 
 ## Version, identity and salam.toml
 

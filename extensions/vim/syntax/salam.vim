@@ -24,13 +24,13 @@ syn keyword salamThis         this این
 syn keyword salamType         void bool char str uchar i8 i16 i32 int i64 u8 u16 u32 uint u64 usize size f32 float f64 i128 u128 تهی منطقی نویسه رشته یونیکد صحیح۸ صحیح۱۶ صحیح۳۲ صحیح صحیح۶۴ صحیح8 صحیح16 صحیح32 صحیح64 طبیعی۸ طبیعی۱۶ طبیعی۳۲ طبیعی طبیعی۶۴ طبیعی8 طبیعی16 طبیعی32 طبیعی64 اندازه اعشار۳۲ اعشار اعشار۶۴ اعشار32 اعشار64 صحیح۱۲۸ صحیح128 طبیعی۱۲۸ طبیعی128
 syn keyword salamType         auto خودکار تلقائي
 syn keyword salamBuiltinType  وکتور Vector نگاشت HashMap پیمایشگرنگاشت MapIter پرونده File گوناگون Variant
-syn keyword salamBuiltin      print println printerr printerrln input چاپ سرچاپ ورودی
+syn keyword salamBuiltin      print println printerr printerrln input چاپ سرچاپ ورودی sizeof size اندازه
 syn keyword salamOperatorWord and or not و یا برابر نابرابر وارونه کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر
-syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn go برو
+syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn go برو server سرور
 syn match salamStatement "\<\%(گرفتن خطا\|پرتاب خطا\)\>"
 syn match salamStorageClass "\<\%(درون‌داد\|برون‌داد\|بی‌کاره\)\>"
 syn match salamType "\<\%(اندازه مثبت\)\>"
-syn match salamBuiltin "\<\%(نادرست‌سرچاپ\|نادرست‌چاپ\)\>"
+syn match salamBuiltin "\<\%(نادرست‌سرچاپ\|اندازه‌گونه\|نادرست‌چاپ\)\>"
 
 syn keyword salamFuncDecl  func تابع nextgroup=salamFunctionName skipwhite
 syn keyword salamStructure type struct enum interface component گونه ساختار جداشمار میانجی بخش nextgroup=salamTypeName skipwhite
@@ -52,7 +52,7 @@ syn match salamDimension "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06
 syn match salamPercent "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\%(\.[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\)\=[%\u066a]\ze\%(\s\|[,)\]}\u060c]\|$\)"
 
 syn match salamAnnotation "@[A-Za-z_]\k*"
-syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|کوچکتربرابر\|بزرگتربرابر\|deprecated\|printerrln\|نادرست‌چاپ\|گرفتن خطا\|پرتاب خطا\|interface\|component\|continue\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|extern\|inline\|export\|ناپایا\|ساختار\|میانجی\|همگانی\|نادرخط\|کاربست\|نادرست\|وارونه\|کوچکتر\|بزرگتر\|until\|break\|defer\|match\|catch\|throw\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|بشکن\|تلاش\|func\|type\|enum\|page\|pure\|impl\|پایا\|گونه\|صفحه\|بسته\|درخط\|تابع\|true\|null\|درست\|this\|ret\|end\|try\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|and\|not\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|or\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
+syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|اندازه‌گونه\|کوچکتربرابر\|بزرگتربرابر\|deprecated\|printerrln\|نادرست‌چاپ\|گرفتن خطا\|پرتاب خطا\|interface\|component\|continue\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|extern\|inline\|export\|ناپایا\|ساختار\|میانجی\|همگانی\|نادرخط\|کاربست\|نادرست\|sizeof\|اندازه\|وارونه\|کوچکتر\|بزرگتر\|until\|break\|defer\|match\|catch\|throw\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|بشکن\|تلاش\|func\|type\|enum\|page\|pure\|impl\|پایا\|گونه\|صفحه\|بسته\|درخط\|تابع\|true\|null\|درست\|this\|size\|ret\|end\|try\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|and\|not\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|or\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
 
 syn match salamOperator "\.\.\.\|:=\|==\|!=\|<=\|>=\|\*\*=\|[-+*/%]=\|[-+*/%<>=&?]"
 syn match salamDelimiter "[(){}\[\],;]"

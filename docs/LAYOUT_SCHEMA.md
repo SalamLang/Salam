@@ -27,7 +27,7 @@ An English file has one official spelling for each attribute and element
 name, the one with spaces: `font size`, not `font_size` or `font-size`.
 The loose comparison above still finds the name, and the compiler then
 reports E235 with `help: write 'font size'`, for attributes, state prefixed
-attributes (`hover background`) and elements (`text area`). Only names the
+attributes (`hover background`) and elements (`word break`). Only names the
 schema knows are checked, so a component parameter such as `change_value`
 keeps its underscore. Persian files are not checked.
 

@@ -33,6 +33,8 @@ object Host {
 
     @JvmStatic external fun nativeDevice(kind: Int)
 
+    @JvmStatic external fun nativeLocation(ok: Int, lat: Double, lon: Double, acc: Double)
+
     @JvmStatic
     fun openUrl(url: String): Boolean {
         val a = activity ?: return false
@@ -96,6 +98,33 @@ object Host {
         }
         a.runOnUiThread {
             a.window.decorView.performHapticFeedback(code)
+        }
+        return true
+    }
+
+    @JvmStatic
+    @Suppress("DEPRECATION", "MissingPermission")
+    fun locationRequest(): Boolean {
+        val a = activity ?: return false
+        if (android.os.Build.VERSION.SDK_INT >= 23 && !granted(a, androidPermissions("location"))) return false
+        val lm = a.getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager ?: return false
+        val provider = when {
+            lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) -> android.location.LocationManager.GPS_PROVIDER
+            lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) -> android.location.LocationManager.NETWORK_PROVIDER
+            else -> return false
+        }
+        val done = { l: android.location.Location? ->
+            if (l == null) nativeLocation(0, 0.0, 0.0, 0.0)
+            else nativeLocation(1, l.latitude, l.longitude, if (l.hasAccuracy()) l.accuracy.toDouble() else 0.0)
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(provider, null, a.mainExecutor) { l -> done(l) }
+            } else {
+                lm.requestSingleUpdate(provider, { l -> done(l) }, android.os.Looper.getMainLooper())
+            }
+        } catch (e: Exception) {
+            return false
         }
         return true
     }

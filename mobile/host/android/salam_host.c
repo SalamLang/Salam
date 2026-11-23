@@ -155,6 +155,10 @@ static jmethodID vibrate_mid;
 static jmethodID haptic_mid;
 static jmethodID perm_state_mid;
 static jmethodID notify_mid;
+static jmethodID loc_mid;
+static pthread_mutex_t loc_mu = PTHREAD_MUTEX_INITIALIZER;
+static int loc_state;
+static double loc_val[3];
 static jmethodID cancel_mid;
 static jmethodID perm_request_mid;
 static char clip_buf[8192];
@@ -369,6 +373,41 @@ static int call_bool_int(jmethodID mid, int v)
     return r;
 }
 
+int salam_host_location_request(void)
+{
+    int attached;
+    JNIEnv *env = host_env(&attached);
+    int r = 0;
+    if (env == NULL || loc_mid == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&loc_mu);
+    loc_state = 1;
+    pthread_mutex_unlock(&loc_mu);
+    r = (*env)->CallStaticBooleanMethod(env, host_cls, loc_mid) ? 1 : 0;
+    if (r == 0) {
+        pthread_mutex_lock(&loc_mu);
+        loc_state = 3;
+        pthread_mutex_unlock(&loc_mu);
+    }
+    if (attached) {
+        (*vm)->DetachCurrentThread(vm);
+    }
+    return r;
+}
+
+int salam_host_location_get(double *out)
+{
+    int s;
+    pthread_mutex_lock(&loc_mu);
+    s = loc_state;
+    out[0] = loc_val[0];
+    out[1] = loc_val[1];
+    out[2] = loc_val[2];
+    pthread_mutex_unlock(&loc_mu);
+    return s;
+}
+
 int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
 {
     int attached;
@@ -552,6 +591,7 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeStart(JNIEnv *env, jcla
     perm_request_mid = (*env)->GetStaticMethodID(env, cls, "permRequest", "(Ljava/lang/String;)Z");
     notify_mid = (*env)->GetStaticMethodID(env, cls, "notify", "(ILjava/lang/String;Ljava/lang/String;I)Z");
     cancel_mid = (*env)->GetStaticMethodID(env, cls, "cancelNotification", "(I)Z");
+    loc_mid = (*env)->GetStaticMethodID(env, cls, "locationRequest", "()Z");
     share_mid = (*env)->GetStaticMethodID(env, cls, "share", "(Ljava/lang/String;Ljava/lang/String;)Z");
     started = 1;
     redirect_output();
@@ -643,6 +683,19 @@ JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeLifecycle(JNIEnv *env, 
     (void)env;
     (void)cls;
     salam_host_post(SALAM_EV_LIFECYCLE, kind, 0, 0, 0, 0, NULL);
+}
+
+JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeLocation(JNIEnv *env, jclass cls, jint ok, jdouble lat, jdouble lon, jdouble acc)
+{
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&loc_mu);
+    loc_state = ok ? 2 : 3;
+    loc_val[0] = lat;
+    loc_val[1] = lon;
+    loc_val[2] = acc;
+    pthread_mutex_unlock(&loc_mu);
+    salam_host_post(SALAM_EV_DEVICE, 2, 0, 0, 0, 0, NULL);
 }
 
 JNIEXPORT void JNICALL Java_ir_salamlang_host_Host_nativeDevice(JNIEnv *env, jclass cls, jint kind)

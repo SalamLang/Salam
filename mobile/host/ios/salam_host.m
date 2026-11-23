@@ -450,6 +450,19 @@ int salam_host_open_url(const char *url)
     return 1;
 }
 
+int salam_host_location_request(void)
+{
+    return 0;
+}
+
+int salam_host_location_get(double *out)
+{
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    return 0;
+}
+
 int salam_host_notify(int id, const char *title, const char *body, int delay_ms)
 {
     (void)id;

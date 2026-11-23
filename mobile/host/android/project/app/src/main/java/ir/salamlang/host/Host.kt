@@ -81,6 +81,11 @@ object Host {
     @JvmStatic
     fun onExit() {
         val a = activity ?: return
-        a.runOnUiThread { a.finishAndRemoveTask() }
+        a.runOnUiThread {
+            a.finishAndRemoveTask()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }, 200)
+        }
     }
 }

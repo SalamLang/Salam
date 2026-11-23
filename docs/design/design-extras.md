@@ -70,3 +70,19 @@ Jalali mode uses Persian month names and digits and a right to left grid. Values
 | `resizable` | `orientation` horizontal, vertical | panel group, fires `ds-resize` with `detail.sizes` |
 | `resizable panel` | `size` percent (unset panels share the rest), `min size`, `max size` | |
 | `resizable handle` | `grip` | between two panels, drag or Arrow keys (5 percent), Home and End |
+
+## sidebar
+
+`sidebar` is already an alias of `aside`, so the shadcn sidebar root is `sidebar panel`.
+
+| Element | Attributes | Notes |
+| --- | --- | --- |
+| `sidebar provider` | `collapsed`, `hotkey` ("false" turns off Ctrl/Cmd+B) | wrapper, state in `data-state` expanded or collapsed, `ds-change` event |
+| `sidebar panel` | `side` left, right; `variant` sidebar, floating, inset; `collapsible` offcanvas, icon, none | below 768px it becomes a sheet with a backdrop |
+| `sidebar trigger` | | toggle button |
+| `sidebar header`, `sidebar content`, `sidebar footer` | | |
+| `sidebar group`, `sidebar group label`, `sidebar group content` | | |
+| `sidebar menu`, `sidebar menu item` | | list |
+| `sidebar menu button` | `active`, `variant` default, outline; `size` default, sm, lg; `url` | a link when `url` is set, put an icon as a child before the text |
+| `sidebar menu badge`, `sidebar separator` | | |
+| `sidebar inset` | | main area next to the panel |

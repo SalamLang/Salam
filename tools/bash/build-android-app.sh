@@ -5,10 +5,14 @@
 #   tools/bash/build-android-app.sh APP.salam --out DIR [--abi LIST]
 #       [--id APPLICATION_ID] [--name LABEL] [--icon ICON.png] [--release]
 #       [--aab] [--keystore FILE --keystore-pass P --key-alias A --key-pass P]
-#       [--fonts DIR] [--permission NAME]... [--no-apk] [--run]
+#       [--fonts DIR] [--assets DIR] [--permission NAME]... [--no-apk] [--run]
 #
 # --fonts DIR ships the .ttf, .otf and .ttc files of DIR in the APK. They are
 # copied to the app files directory at start and found by the font collection.
+#
+# --assets DIR ships every file under DIR in the APK. They are copied to
+# $HOME/assets at start, so DIR/logo.png is written as "asset:logo.png" in
+# an image url. SVG is not supported by the native UI.
 #
 # --permission NAME (camera, microphone, location, notifications) declares a
 # permission in the manifest so device.RequestPermission can ask for it. Calls
@@ -31,6 +35,7 @@ BUILD=assembleDebug
 APK=1
 ICON=
 FONTS=
+ASSETS=
 RUN=0
 PERMS=
 AAB=0
@@ -87,6 +92,10 @@ while [ $# -gt 0 ]; do
         ;;
     --fonts)
         FONTS=$2
+        shift 2
+        ;;
+    --assets)
+        ASSETS=$2
         shift 2
         ;;
     --permission)
@@ -218,6 +227,14 @@ if [ -n "$FONTS" ]; then
             cp "$f" "$OUT/project/app/src/main/assets/fonts/"
         fi
     done
+fi
+if [ -n "$ASSETS" ]; then
+    [ -d "$ASSETS" ] || {
+        echo "build-android-app: no such assets directory: $ASSETS" >&2
+        exit 2
+    }
+    mkdir -p "$OUT/project/app/src/main/assets/assets"
+    cp -R "$ASSETS"/. "$OUT/project/app/src/main/assets/assets/"
 fi
 mkdir -p "$OUT/project/gradle/wrapper"
 cp "$ROOT/android/gradle/wrapper/gradle-wrapper.jar" "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" "$OUT/project/gradle/wrapper/"

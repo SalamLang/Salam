@@ -460,7 +460,7 @@ refuses them, and an `extern` function can use them only on 64-bit targets
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
 `size(T)` returns `usize`. The old name `sizeof(T)` still compiles and warns (W295); a
-function of your own named `size` or `sizeof` wins over the builtin.
+function of your own named `size` or `sizeof` wins over the built-in.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
@@ -2592,13 +2592,13 @@ an optional one, `[...rest].salam` the rest of the path, `_404.salam` the
 fallback and `_layout.salam` a component with an `Outlet` that wraps its
 folder and below (E283 without one). Settings at the top of the component
 body: `title`, `guard` (a false guard skips the route, a layout's guard covers
-its folder) and `route = "/..."` to replace the path from the file name
+its folder) and `route = "/..."` to replace the path from the filename
 (Persian `عنوان`, `نگهبان`, `مسیر`). There is no `routes:` block and no
 `redirect` setting. Navigate with `Link: to = "/p"` and in code with
 `page.route.GoTo(path)`, `Redirect`, `Back`, `Forward`; read `page.route.path`,
 `page.route.Param("id")`, `page.route.Query("q")` (Persian `صفحه.مسیر.برو`,
 `هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`). File errors:
-E280 same route twice, E281 `[id]` without that parameter, E284 bad file name.
+E280 same route twice, E281 `[id]` without that parameter, E284 bad filename.
 Page project layout: `components/` holds the `pub` components (every `.salam`
 file in it, recursively, imports its `pub components` by name, no `include`),
 `pages/` holds the routes, and everything else is included explicitly with
@@ -2825,12 +2825,12 @@ HTML with merged `style.css`/`script.js`. Run natively:
 
 **Commands per target** (all verified against `salam --help`):
 
-| target  | command                                                                 |
-| ------- | ----------------------------------------------------------------------- |
-| web     | `salam page build page.salam [--inline]`, `salam serve page.salam` (live reload), `salam web page.salam` (page plus compiled `script: src=` programs) |
+| target  | command                                                                                                                                                   |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| web     | `salam page build page.salam [--inline]`, `salam serve page.salam` (live reload), `salam web page.salam` (page plus compiled `script: src=` programs)     |
 | desktop | `salam run page.salam --ui=native`, `salam build page.salam --ui=native`, `salam check page.salam --ui=native` (E165/W166 list what a window cannot show) |
 | Android | `salam app android app.salam --out DIR [--id ID] [--name LABEL] [--icon PNG] [--abi LIST] [--run]` (needs the Android SDK, NDK and JDK; `docs/MOBILE.md`) |
-| iOS     | `salam app ios app.salam --out DIR [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`) |
+| iOS     | `salam app ios app.salam --out DIR [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`)                                 |
 
 A mobile app is the desktop native page packed with a prebuilt host shell, so
 a page that passes `salam check page.salam --ui=native` is the one to ship to a
@@ -2847,7 +2847,7 @@ components keep their behaviour (open and close, keyboard, ARIA, events) and
 a minimal look. Native and mobile builds accept the same page; the shadcn CSS
 is a web output today. Reference: `docs/design/DESIGN_SYSTEMS.md` plus
 `design-forms.md`, `design-display.md`, `design-overlay.md`,
-`design-extras.md`; website lessons 52 to 56 at `/learn/design-systems/`.
+`design-extras.md`; site lessons 52 to 56 at `/learn/design-systems/`.
 
 ```salam
 page:
@@ -2886,9 +2886,10 @@ Components by group, each with the parts it nests (the exact names, English and
 Persian, are in `docs/LAYOUT_ELEMENTS.md`):
 
 - Forms: `input`, `text area`, `label`, `select`, `select box`, `combobox`,
-  `switch`, `toggle`, `toggle group`, `radio group`, `field` (`field label`,
-  `field description`, `field error`), `field set`, `input group`, `button
-  group`, `input otp`, `keyboard`. `switch: name = "wifi" checked = true end`.
+  `switch`, `toggle`, `toggle group`, `radio group`, `field`, `field label`,
+  `field description`, `field error`, `field set`, `input group`,
+  `button group`, `input otp`, `keyboard`.
+  `switch: name = "wifi" checked = true end`.
 - Display: `card`, `badge`, `alert`, `separator`, `progress`, `meter`,
   `skeleton`, `spinner`, `avatar`, `aspect ratio`, `table`, `typography`,
   `empty`, `entry`, `breadcrumb`, `pagination`, `scroll area`.

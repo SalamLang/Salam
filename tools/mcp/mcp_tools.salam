@@ -19,6 +19,7 @@ import str
 import os
 import os.temp
 import fs.path
+import fs.dir
 import fs
 import encoding.json
 import encoding.value
@@ -456,7 +457,7 @@ func _base(cmd: str, full: str): Vector<str>:
     ret a
 end
 
-func _push_backend(a: Vector<str>, backend: str, release: bool, target: str):
+func _push_backend(a &: Vector<str>, backend: str, release: bool, target: str):
     if backend.Len() > 0: a.Push("--backend=".Concat(backend)) end
     if release: a.Push("--release") end
     if target.Len() > 0: a.Push("--target=".Concat(target)) end
@@ -480,6 +481,64 @@ func _format_dir(t: Target): mcpout.ToolResult:
         mcptxt.HeadLines(_scrub(t, r.out.Concat(r.err)), 60)
     )
     ret mcpout.Rich(body, _text_data("status", "needs formatting"), false)
+end
+
+func _page_files(work: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    names := mcptxt.Sorted(dir.ListFiles(work))
+    mut i := 0
+    until i < names.Len():
+        n := names.Get(i)
+        if str.EndsWith(n, ".html") or str.EndsWith(n, ".css") or str.EndsWith(n, ".js"): out.Push(n) end
+        i++
+    end
+    ret out
+end
+
+func _page_report(t: Target, ui: str, show: str, web: mcpexec.Outcome, native: mcpexec.Outcome): mcpout.ToolResult:
+    mut body := str.NewBuilder()
+    defer str.BufFree(body)
+    mut failed := false
+    mut data := value.NewValueObject()
+    if ui != "native":
+        wr := _finish(t, "page build", web, false)
+        str.BufAppend(body, wr.text)
+        failed = failed or wr.is_error
+        value.ObjectSet(data, "web", wr.structured)
+        if not wr.is_error:
+            files := _page_files(t.work)
+            mut names := value.NewValueArray()
+            str.BufAppend(body, "\n\n## Output files\n")
+            mut i := 0
+            until i < files.Len():
+                f := files.Get(i)
+                text := fs.ReadText(path.Join(t.work, f))
+                str.BufAppend(body, "- ")
+                str.BufAppend(body, f)
+                str.BufAppend(body, " (")
+                str.BufAppend(body, str.FromInt(text.Len()))
+                str.BufAppend(body, " bytes)\n")
+                value.ArrayPush(names, value.ValueString(f))
+                if show == f or (show.Len() > 0 and str.EndsWith(f, ".".Concat(show))):
+                    str.BufAppend(body, "\n```")
+                    str.BufAppend(body, show)
+                    str.BufAppend(body, "\n")
+                    str.BufAppend(body, mcptxt.Truncate(text, 40000))
+                    str.BufAppend(body, "\n```\n")
+                end
+                i++
+            end
+            value.ObjectSet(data, "files", names)
+        end
+    end
+    if ui != "web":
+        nr := _finish(t, "check --ui=native", native, false)
+        if ui == "all": str.BufAppend(body, "\n\n") end
+        str.BufAppend(body, nr.text)
+        failed = failed or nr.is_error
+        value.ObjectSet(data, "native", nr.structured)
+    end
+    ret mcpout.Rich(str.BufStr(body), data, failed)
 end
 
 @en "FromPath"
@@ -601,7 +660,7 @@ pub func Build(t: Target, backend: str, release: bool, target: str): mcpout.Tool
         ret mcpout.Failure("unknown backend '".Concat(backend).Concat("': use c or llvm."))
     end
     out := temp.File()
-    a := _base("build", t.full)
+    mut a := _base("build", t.full)
     a.Push("--output=".Concat(out))
     _push_backend(a, backend, release, target)
     r := _exec(t, a)
@@ -618,6 +677,55 @@ pub func Check(t: Target): mcpout.ToolResult:
     mut r := _exec(t, a)
     r.out = ""
     ret _finish(t, "check", r, false)
+end
+
+@en "PageBuild"
+@fa "ساخت صفحه"
+pub func PageBuild(t0: Target, ui: str, show: str): mcpout.ToolResult:
+    if not t0.ok: ret mcpout.Failure(t0.problem) end
+    if ui.Len() > 0 and ui != "web" and ui != "native" and ui != "all":
+        ret mcpout.Failure("unknown ui '".Concat(ui).Concat("': use web, native or all."))
+    end
+    if show.Len() > 0 and show != "html" and show != "css" and show != "js":
+        ret mcpout.Failure("unknown show '".Concat(show).Concat("': use html, css or js."))
+    end
+    mut t := t0
+    mut staged := false
+    if t.work.Len() == 0:
+        if os.IsDir(t.full):
+            ret mcpout.Failure(
+                "A page build writes its files next to the source, so pass the page text as `source` (and any included files in `files`) instead of a directory."
+            )
+        end
+        names := Vector {} as Vector<str>
+        texts := Vector {} as Vector<str>
+        t = FromFiles(
+            fs.ReadText(t.full), names, texts, ""
+        )
+        if not t.ok: ret mcpout.Failure(t.problem) end
+        staged = true
+    end
+    mut web := mcpexec.Outcome {}
+    mut native := mcpexec.Outcome {}
+    if ui != "native":
+        a := Vector {} as Vector<str>
+        a.Push("page")
+        a.Push("build")
+        a.Push(t.full)
+        a.Push("--log-level=error")
+        web = _exec(t, a)
+    end
+    if ui == "native" or ui == "all":
+        b := Vector {} as Vector<str>
+        b.Push("check")
+        b.Push(t.full)
+        b.Push("--ui=native")
+        b.Push("--log-level=error")
+        native = _exec(t, b)
+    end
+    r := _page_report(t, ui, show, web, native)
+    if staged: Release(t) end
+    ret r
 end
 
 @en "Run"

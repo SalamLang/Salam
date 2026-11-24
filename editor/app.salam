@@ -24,6 +24,7 @@ extern:
     func salam_js_call(obj: i64, method: str, a: str, b: str, c: str[2]): func (str, str) str
     func salam_js_call(obj: i64, method: str, a: str, b: str, c: str[3]): func (str, str, str) str
     func salam_js_call(obj: i64, method: str, a: i64): bool
+    func salam_js_call(obj: i64, method: str, a: func ()): i64
     func salam_js_set_prop(obj: i64, name: str, value: func ())
     func salam_js_global(name: str): func () i64
     func salam_js_get_prop(obj: i64, name: str): bool
@@ -91,6 +92,23 @@ mut ac_sel := 0 - 1
 mut ac_on := false
 mut ac_start := 0
 mut g_pending_translate := ""
+mut g_cache_base := ""
+mut g_cache_run := ""
+mut g_cache_html := ""
+mut g_cache_css := ""
+mut g_cache_js := ""
+mut g_cache_run_failed := false
+mut g_cache_html_failed := false
+mut g_cache_css_failed := false
+mut g_cache_js_failed := false
+mut g_cache_has_run := false
+mut g_cache_has_html := false
+mut g_cache_has_css := false
+mut g_cache_has_js := false
+mut g_shown_key := ""
+mut g_preview_doc := ""
+mut g_run_pending := false
+mut g_run_force := false
 
 func T(key: str): str:
     switch key:
@@ -1006,14 +1024,13 @@ func on_wasm_ready():
     if g_autorun: run() end
 end
 
-func show_phase(src: str):
+func show_phase(view: str, txt: str, failed: bool):
     anim.Hide()
-    txt := fn_emit(src, g_lang, g_view)
-    is_xml_view := g_view == "tokens" or g_view == "ast" or g_view == "symbols" or g_view == "html"
+    is_xml_view := view == "tokens" or view == "ast" or view == "symbols" or view == "html"
     is_xml_out := is_xml_view and txt.Find("<") == 0
-    is_err := is_xml_out == false and last_failed()
-    is_ir := is_err == false and is_xml_out == false and g_view == "llvm"
-    is_c := is_err == false and is_xml_out == false and g_view == "c"
+    is_err := is_xml_out == false and failed
+    is_ir := is_err == false and is_xml_out == false and view == "llvm"
+    is_c := is_err == false and is_xml_out == false and view == "c"
     mut cls := "output"
     if is_err:
         dom.SetText(el_output, txt)
@@ -1033,7 +1050,6 @@ func show_phase(src: str):
     end
     dom.SetAttr(el_output, "class", cls)
     set_output_dir(is_err)
-    set_status(is_err ? "error" : "done", is_err ? "err" : "ok")
 end
 
 func last_failed(): bool:
@@ -1041,48 +1057,154 @@ func last_failed(): bool:
 end
 
 func load_preview(doc: str):
+    if g_preview_doc == doc and str.Len(doc) > 0: ret end
+    g_preview_doc = doc
     fresh := dom.Call1(el_preview, "cloneNode", 0.0)
     dom.SetStr(fresh, "srcdoc", doc)
     _r := salam_js_call(el_preview, "replaceWith", fresh)
     el_preview = fresh
 end
 
-func run():
-    if g_wasm_ready == false: ret end
-    src := dom.GetValue(el_code)
-    set_status("running", "busy")
-    if g_view != "run":
-        show_phase(src)
-        ret
+func cache_base(src: str): str:
+    ret g_mode + "|" + g_lang + "|" + src
+end
+
+func cache_reset(base: str):
+    g_cache_base = base
+    g_cache_has_run = false
+    g_cache_has_html = false
+    g_cache_has_css = false
+    g_cache_has_js = false
+end
+
+func cache_has(base: str, view: str): bool:
+    if base != g_cache_base: ret false end
+    switch view:
+        "run": ret g_cache_has_run end
+        "html": ret g_cache_has_html end
+        "css": ret g_cache_has_css end
+        "js": ret g_cache_has_js end
     end
-    if g_mode == "layout":
+    ret false
+end
+
+func cache_out(view: str): str:
+    switch view:
+        "html": ret g_cache_html end
+        "css": ret g_cache_css end
+        "js": ret g_cache_js end
+    end
+    ret g_cache_run
+end
+
+func cache_failed(view: str): bool:
+    switch view:
+        "html": ret g_cache_html_failed end
+        "css": ret g_cache_css_failed end
+        "js": ret g_cache_js_failed end
+    end
+    ret g_cache_run_failed
+end
+
+func cache_put(base: str, view: str, out: str, failed: bool):
+    if base != g_cache_base: cache_reset(base) end
+    if view == "run":
+        g_cache_run = out
+        g_cache_run_failed = failed
+        g_cache_has_run = true
+    else view == "html":
+        g_cache_html = out
+        g_cache_html_failed = failed
+        g_cache_has_html = true
+    else view == "css":
+        g_cache_css = out
+        g_cache_css_failed = failed
+        g_cache_has_css = true
+    else view == "js":
+        g_cache_js = out
+        g_cache_js_failed = failed
+        g_cache_has_js = true
+    end
+end
+
+func compute(view: str, src: str, force: bool):
+    base := cache_base(src)
+    if force == false and cache_has(base, view): ret end
+    mut out := ""
+    if view != "run":
+        out = fn_emit(src, g_lang, view)
+    else g_mode == "layout":
+        out = fn_build_layout(src, g_lang)
+    else:
+        out = fn_run_app(src, g_lang)
+    end
+    cache_put(base, view, out, last_failed())
+end
+
+func show_result(view: str, src: str, force: bool):
+    key := view + "|" + cache_base(src)
+    out := cache_out(view)
+    failed := cache_failed(view)
+    if view == "run" and g_mode == "layout":
         anim.Hide()
-        res := fn_build_layout(src, g_lang)
-        if last_failed() == false:
-            load_preview(res)
-            set_status("done", "ok")
-        else:
+        if failed:
             load_preview(
                 "<pre dir=\"auto\" style=\"white-space:pre-wrap;padding:16px;color:#c0392b;text-align:start\">" +
-                    esc_html(res) + "</pre>"
+                    esc_html(out) + "</pre>"
             )
-            set_status("error", "err")
+        else:
+            load_preview(out)
         end
-    else:
-        out := fn_run_app(src, g_lang)
-        is_err := last_failed()
-        if is_err:
+    else force or key != g_shown_key:
+        g_shown_key = key
+        if view != "run":
+            show_phase(view, out, failed)
+        else failed:
             anim.Hide()
             dom.SetText(el_output, out)
             dom.SetAttr(el_output, "class", "output error")
+            set_output_dir(true)
         else:
             dom.SetAttr(el_output, "class", "output")
             anim.Show(out)
+            set_output_dir(false)
         end
-        set_output_dir(is_err)
-        set_status(is_err ? "error" : "done", is_err ? "err" : "ok")
     end
+    set_status(failed ? "error" : "done", failed ? "err" : "ok")
 end
+
+func run_now():
+    g_run_pending = false
+    if g_wasm_ready == false: ret end
+    force := g_run_force
+    g_run_force = false
+    if force: g_preview_doc = "" end
+    src := dom.GetValue(el_code)
+    compute(g_view, src, force)
+    show_result(g_view, src, force)
+end
+
+func run_after_paint():
+    _t := dom.SetTimeout((): ret run_now() end, 0)
+end
+
+func request_run(force: bool):
+    if g_wasm_ready == false: ret end
+    if force: g_run_force = true end
+    src := dom.GetValue(el_code)
+    if g_run_force == false and cache_has(cache_base(src), g_view):
+        run_now()
+        ret
+    end
+    set_status("running", "busy")
+    if g_run_pending: ret end
+    g_run_pending = true
+    _f := salam_js_call(dom.Window(), "requestAnimationFrame", (): ret run_after_paint() end)
+end
+
+func run(): request_run(false) end
+
+func run_force(): request_run(true) end
 
 func do_scheduled_run():
     if g_autorun and g_wasm_ready: run() end
@@ -1178,7 +1300,10 @@ func apply_view():
         i++
     end
     show_preview := g_view == "run" and g_mode == "layout"
-    if show_preview: anim.Hide() end
+    if show_preview:
+        anim.Hide()
+        g_shown_key = ""
+    end
     dom.SetBool(el_preview, "hidden", show_preview == false)
     dom.SetBool(el_output, "hidden", show_preview)
 end
@@ -1732,7 +1857,7 @@ func on_run_click():
         g_view = "run"
         apply_view()
     end
-    run()
+    run_force()
 end
 
 func on_copy_code_click():
@@ -2014,7 +2139,7 @@ func on_code_keydown(ev: i64):
         block_indent(true)
     else key == "Enter" and ctrl:
         dom.PreventDefault(ev)
-        run()
+        run_force()
     else key == "Enter" and shift == false:
         dom.PreventDefault(ev)
         auto_indent_enter()

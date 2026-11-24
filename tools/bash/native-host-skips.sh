@@ -11,7 +11,11 @@
 # and sizes; a Windows account cannot create symlinks without a privilege and
 # has no Unix permission bits, so the link results differ from the .out file. The same holds for
 # stdlib/archive_safety, stdlib/archive_tar_stream and general/net_http_static_jail,
-# which build symbolic links inside archives and web roots.
+# which build symbolic links inside archives and web roots, as do
+# stdlib/rar_file_more, rar_file_old, sevenzip_create, sevenzip_extract,
+# sevenzip_file_demo, tar_file_demo and tar_push_demo, which also check Unix
+# modes and owners. stdlib/sshd_basic runs its commands through /bin/sh, which
+# Windows lacks (exit 127), and stdlib/gui_window_x11 needs an X11 display.
 #
 # Usage: tools/bash/native-host-skips.sh <macos-arm64|macos-x64|windows-x64|windows-arm64|linux-arm64>
 
@@ -20,7 +24,9 @@ macos-*) echo "" ;;
 windows-*)
     echo "stdlib/os_process_fork stdlib/log_fatal stdlib/os_api stdlib/os_shell_demo stdlib/archive_tar"
     echo "stdlib/archive_zip_upgrade stdlib/rar_links_demo stdlib/archive_safety stdlib/archive_tar_stream"
-    echo "general/net_http_static_jail"
+    echo "general/net_http_static_jail stdlib/rar_file_more stdlib/rar_file_old stdlib/sevenzip_create"
+    echo "stdlib/sevenzip_extract stdlib/sevenzip_file_demo stdlib/tar_file_demo stdlib/tar_push_demo"
+    echo "stdlib/sshd_basic stdlib/gui_window_x11"
     ;;
 *) echo "" ;;
 esac

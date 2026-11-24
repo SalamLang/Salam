@@ -100,7 +100,13 @@ fi
 cache="$root/website/.cache"
 mkdir -p "$cache/api"
 compiler_stamp=$($sha "$SALAM" | cut -d ' ' -f 1)
-SITE_PREVIEW_CACHE="$cache/preview"
+preview_stamp=$({
+    printf '%s\n' "$compiler_stamp"
+    find std -type f -exec $sha {} + | LC_ALL=C sort
+} | $sha | cut -d ' ' -f 1)
+mkdir -p "$cache/preview"
+find "$cache/preview" -maxdepth 1 -type f -delete
+SITE_PREVIEW_CACHE="$cache/preview/$preview_stamp"
 export SITE_PREVIEW_CACHE
 
 work=$(mktemp -d)

@@ -13,6 +13,7 @@
 # Usage: tools/bash/native-stage-tests.sh <dir>
 
 set -u
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g'
 DIR=$(cd "$1" && pwd)
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 LIMIT=${NATIVE_CROSS_TIMEOUT:-180}
@@ -77,11 +78,11 @@ for exe in "$DIR"/*/*; do
     # shellcheck disable=SC2086
     (cd "$ROOT" && limited $RUNNER "$exe" </dev/null >"$got" 2>&1)
     rc=$?
-    if [ "$(tr -d '\r' <"$got")" = "$(tr -d '\r' <"$exp")" ]; then
+    if [ "$(tr -d '\r' <"$got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
         ok=$((ok + 1))
     else
         echo "DIFF $id (exit $rc)"
-        tr -d '\r' <"$got" | diff "$exp" - | head -6
+        tr -d '\r' <"$got" | sed -E "$GEN_SED" | diff "$exp" - | head -6
         bad=$((bad + 1))
     fi
 done

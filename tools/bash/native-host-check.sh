@@ -10,6 +10,7 @@
 # Usage: tools/bash/native-host-check.sh <salam> <file.salam>...
 
 set -u
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g'
 SALAM=$1
 shift
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
@@ -38,7 +39,7 @@ for f in "$@"; do
     fi
     (cd "$work" && limited "./$b.exe" </dev/null >"$b.got" 2>"$b.err")
     rc=$?
-    if [ "$rc" -ne 124 ] && [ "$rc" -ne 142 ] && [ "$(tr -d '\r' <"$work/$b.got")" = "$(tr -d '\r' <"$exp")" ]; then
+    if [ "$rc" -ne 124 ] && [ "$rc" -ne 142 ] && [ "$(tr -d '\r' <"$work/$b.got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
         pass=$((pass + 1))
     else
         echo "FAIL $b (exit $rc)"

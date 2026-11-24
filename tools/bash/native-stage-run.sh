@@ -7,6 +7,7 @@
 # Usage: tools/bash/native-stage-run.sh <dir> [runner]
 
 set -u
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g'
 DIR=$1
 RUNNER=${2:-}
 pass=0
@@ -19,7 +20,7 @@ for exe in "$DIR"/*.exe; do
     # shellcheck disable=SC2086
     (cd "$DIR" && timeout 120 $RUNNER "./$b.exe" </dev/null >"$b.got" 2>"$b.err")
     rc=$?
-    if [ "$(tr -d '\r' <"$DIR/$b.got")" = "$(tr -d '\r' <"$exp")" ]; then
+    if [ "$(tr -d '\r' <"$DIR/$b.got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
         pass=$((pass + 1))
     else
         echo "FAIL $b (exit $rc)"

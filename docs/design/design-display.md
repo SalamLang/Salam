@@ -101,13 +101,17 @@ All elements restyle only when `design = shadcn` (the default). With `design = n
 | `breadcrumb separator` | chevron by default (mirrored in rtl), or your own content |
 | `breadcrumb ellipsis` | three dots with a screen reader label ("More", or the `content`) |
 
+## Default texts
+
+Every built-in label (pagination Previous/Next, close buttons, calendar and carousel aria labels, "Toggle theme", combobox "Select..." and "Search...", spinner "Loading", and so on) is English on an English page and Persian on a `صفحه:` page. The Persian words live in one table, `std/layoutgen/design_text.salam` (`DsT` for generated HTML, `@@key@@` markers for shared scripts). To use other words, write `content`, `placeholder`, `empty` or an `aria-label`: what you write always wins over the default.
+
 ## Pagination
 
 | Element | Attributes | Notes |
 | --- | --- | --- |
 | `pagination` | | `<nav aria-label="pagination"><ul>` |
 | `pagination link` | `url`, `active` | `active` sets `aria-current="page"` and the outline look |
-| `pagination previous`, `pagination next` | `url`, `content` | default labels "Previous" and "Next"; chevrons mirror in rtl |
+| `pagination previous`, `pagination next` | `url`, `content` | default labels "Previous" and "Next" (Persian pages: "قبلی" and "بعدی"); chevrons mirror in rtl |
 | `pagination ellipsis` | `content` | |
 
 ## Scroll area

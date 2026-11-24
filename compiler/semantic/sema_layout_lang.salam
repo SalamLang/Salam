@@ -1,0 +1,467 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+import gui.style
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+const LAYOUT_LANG_ELEMENT_CODE := 301
+const LAYOUT_LANG_ATTR_CODE := 302
+const LAYOUT_LANG_VALUE_CODE := 303
+
+mut g_lay_lang_seen := Vector {} as Vector<str>
+
+func lay_lang_first(a &: at.Ast, nid: int, path: str, code: int): bool:
+    n := at.Get(a, nid)
+    key := str.FromInt(code as i64) + ":" + path + ":" + n.begin_line + ":" + n.begin_col
+    repeat g_lay_lang_seen.Len() in i:
+        if str.Equals(g_lay_lang_seen.Get(i), key):
+            ret false
+        end
+    end
+    g_lay_lang_seen.Push(key)
+    ret true
+end
+
+func lay_lang_mask_elem(name: str, ei: int): int:
+    l := lay_loose(name)
+    mut m := 0
+    repeat g_lay_ealias_loose.Len() in i:
+        if g_lay_ealias_idx.Get(i) == ei and str.Equals(g_lay_ealias_loose.Get(i), l):
+            m |= g_lay_ealias_lang.Get(i)
+        end
+    end
+    ret m
+end
+
+func lay_lang_mask_attr(name: str, key: str): int:
+    l := lay_loose(name)
+    mut m := 0
+    repeat g_lay_aalias_loose.Len() in i:
+        if str.Equals(g_lay_aalias_loose.Get(i), l) and str.Equals(g_lay_aalias_key.Get(i), key):
+            m |= g_lay_aalias_lang.Get(i)
+        end
+    end
+    ret m
+end
+
+func lay_lang_attr_name(key: str, fa: bool): str:
+    if not fa:
+        ret key
+    end
+    repeat g_lay_attrs.Len() in i:
+        av := g_lay_attrs.Get(i)
+        if str.Equals(av.key, key) and str.Len(av.fa_name) > 0:
+            ret av.fa_name
+        end
+    end
+    ret ""
+end
+
+func lay_lang_schema_repl(name: str, fa: bool): str:
+    key := lay_attr_key_exact(name)
+    if str.Len(key) == 0:
+        ret ""
+    end
+    mask := lay_lang_mask_attr(name, key)
+    want := fa ? 2 : 1
+    if mask == 0 or (mask & want) != 0:
+        ret ""
+    end
+    ret lay_lang_attr_name(key, fa)
+end
+
+func lay_lang_style_repl(name: str, sa: StyleAttr, fa: bool): str:
+    mut rest := ""
+    st := style_state_prefix(name, rest)
+    prefix_fa := g_style_prefix_fa
+    info := style.Info(sa.prop)
+    lr := style_loose(rest)
+    en_ok := str.Equals(lr, style_loose(info.name))
+    fa_ok := str.Equals(lr, style_loose(info.fa))
+    mut wrong := false
+    if fa and en_ok and not fa_ok:
+        wrong = true
+    end
+    if not fa and fa_ok and not en_ok:
+        wrong = true
+    end
+    if wrong and str.Len(lay_lang_schema_own(name, fa)) > 0:
+        wrong = false
+    end
+    if st != STYLE_STATE_BASE and prefix_fa != fa:
+        wrong = true
+    end
+    if not wrong:
+        ret ""
+    end
+    if fa and str.Len(info.fa) == 0:
+        ret ""
+    end
+    ret StyleAttrSpelling(name, fa)
+end
+
+func lay_lang_schema_own(name: str, fa: bool): str:
+    key := lay_attr_key_exact(name)
+    if str.Len(key) == 0:
+        ret ""
+    end
+    mask := lay_lang_mask_attr(name, key)
+    want := fa ? 2 : 1
+    if (mask & want) != 0:
+        ret key
+    end
+    ret ""
+end
+
+func lay_lang_wildcard(name: str): bool:
+    mut first := true
+    mut tk := ""
+    n := str.Len(name)
+    mut i := 0
+    until i <= n:
+        c := i < n ? byte_at(name, i) : 32
+        if c == 32 or c == 95 or c == 45:
+            if str.Len(tk) > 0:
+                l := lay_loose(tk)
+                if str.Equals(l, "aria") or str.Equals(l, lay_loose("دسترسی\xE2\x80\x8Cپذیری")):
+                    ret true
+                end
+                if first and (str.Equals(l, "data") or str.Equals(l, "داده")):
+                    ret true
+                end
+                first = false
+                tk = ""
+            end
+        else:
+            tk += str.Substr(name, i, 1)
+        end
+        i++
+    end
+    ret false
+end
+
+func lay_lang_attr_repl(name: str, fa: bool): str:
+    if lay_lang_wildcard(name):
+        ret ""
+    end
+    hp := lay_handler_prefix_len(name)
+    if hp > 0:
+        prefix_fa := not str.StartsWith(name, "on ")
+        ev := str.Substr(name, hp, str.Len(name) - hp)
+        erepl := lay_lang_schema_repl(ev, fa)
+        if prefix_fa == fa and str.Len(erepl) == 0:
+            ret ""
+        end
+        base := str.Len(erepl) > 0 ? erepl : ev
+        ret (fa ? "هنگام " : "on ") + base
+    end
+    sa := ResolveStyleAttr(name)
+    if sa.ok:
+        ret lay_lang_style_repl(name, sa, fa)
+    end
+    ret lay_lang_schema_repl(name, fa)
+end
+
+func lay_lang_report(
+    s &: Sema,
+    a &: at.Ast,
+    nid: int,
+    code: int,
+    written: str,
+    repl: str,
+    fa: bool,
+    ftext: str,
+    flen: int
+):
+    path := lay_spelling_path(a, nid)
+    if not lay_lang_first(a, nid, path, code):
+        ret
+    end
+    mut msg := ""
+    if code == LAYOUT_LANG_ELEMENT_CODE:
+        if fa:
+            msg = co.Format2(
+                i18.Tr("element '%s' is English; write '%s' in a Persian page"),
+                co.ArgStr(written),
+                co.ArgStr(repl)
+            )
+        else:
+            msg = co.Format2(
+                i18.Tr("element '%s' is Persian; write '%s' in an English page"),
+                co.ArgStr(written),
+                co.ArgStr(repl)
+            )
+        end
+    else code == LAYOUT_LANG_ATTR_CODE:
+        if fa:
+            msg = co.Format2(
+                i18.Tr("attribute '%s' is English; write '%s' in a Persian page"),
+                co.ArgStr(written),
+                co.ArgStr(repl)
+            )
+        else:
+            msg = co.Format2(
+                i18.Tr("attribute '%s' is Persian; write '%s' in an English page"),
+                co.ArgStr(written),
+                co.ArgStr(repl)
+            )
+        end
+    else:
+        if fa:
+            msg = co.Format2(
+                i18.Tr("value '%s' is English; write '%s' in a Persian page"),
+                co.ArgStr(written),
+                co.ArgStr(repl)
+            )
+        else:
+            msg = co.Format2(
+                i18.Tr("value '%s' is Persian; write '%s' in an English page"),
+                co.ArgStr(written),
+                co.ArgStr(repl)
+            )
+        end
+    end
+    if str.Len(ftext) > 0:
+        mut f := fix_at(span_of(a, nid))
+        f.file = path
+        f.length = flen
+        f.title = co.Format1(i18.Tr("Change to '%s'"), co.ArgStr(repl))
+        f.text = ftext
+        f.preferred = true
+        f.safe = true
+        queue_fix(f)
+    end
+    serr_help(
+        s, code, span_of(a, nid), msg, co.Format1(i18.Tr("write '%s'"), co.ArgStr(repl))
+    )
+end
+
+func lay_lang_kw_allowed(prop: int, kw: int): bool:
+    mine := style.PropKeywords(prop)
+    defer mine.Free()
+    each k in mine:
+        if k == kw:
+            ret true
+        end
+    end
+    ret kw >= style.KW_LINEAR and kw <= style.KW_EASE_IN_OUT and
+        (style.Info(prop).items & (1 << style.ITEM_EASE)) != 0
+end
+
+func lay_lang_kw(
+    s &: Sema, a &: at.Ast, nid: int, text: str, kw: int, prop: int, fa: bool, whole: bool
+):
+    kname := style.KeywordName(kw)
+    if str.Equals(kname, "true") or str.Equals(kname, "false"):
+        ret
+    end
+    if not lay_lang_kw_allowed(prop, kw):
+        ret
+    end
+    lang := style.KeywordLang(text)
+    want := fa ? 2 : 1
+    if lang == 0 or (lang & want) != 0:
+        ret
+    end
+    repl := fa ? style.KeywordFaName(kw) : kname
+    if str.Len(repl) == 0:
+        ret
+    end
+    mut ftext := ""
+    mut flen := 0
+    if whole:
+        path := lay_spelling_path(a, nid)
+        slice := lay_source_slice(a, nid, path)
+        mut shown := repl
+        if str.IndexOf(repl, " ") >= 0:
+            shown = "\"" + repl + "\""
+        end
+        flen = str.Len(slice)
+        if str.Len(slice) > 0 and str.Equals(slice, text):
+            ftext = shown
+        else str.Len(slice) > 0 and str.Equals(slice, "\"" + text + "\""):
+            ftext = "\"" + repl + "\""
+        end
+    end
+    lay_lang_report(s, a, nid, LAYOUT_LANG_VALUE_CODE, text, repl, fa, ftext, flen)
+end
+
+func lay_lang_word(
+    s &: Sema, a &: at.Ast, nid: int, text: str, prop: int, fa: bool, quoted: bool
+):
+    kw := style.KeywordByName(text)
+    if kw > 0:
+        lay_lang_kw(s, a, nid, text, kw, prop, fa, true)
+        ret
+    end
+    if not quoted:
+        ret
+    end
+    mut tok_ := ""
+    n := str.Len(text)
+    mut i := 0
+    until i <= n:
+        c := i < n ? byte_at(text, i) : 32
+        if c == 32 or c == 44 or c == 9:
+            if str.Len(tok_) > 0:
+                k2 := style.KeywordByName(tok_)
+                if k2 > 0:
+                    lay_lang_kw(s, a, nid, tok_, k2, prop, fa, false)
+                end
+                tok_ = ""
+            end
+        else:
+            tok_ += str.Substr(text, i, 1)
+        end
+        i++
+    end
+end
+
+func lay_lang_value_walk(s &: Sema, a &: at.Ast, nid: int, prop: int, fa: bool):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        if scope_lookup(s, s.cur, n.name) <= 0 and not lay_is_local(n.name):
+            lay_lang_word(s, a, nid, n.name, prop, fa, false)
+        end
+        ret
+    end
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_STRING and not n.synthetic and str.Len(n.src_file) > 0:
+            mut text := n.value_str
+            if str.Len(text) >= 2 and str.StartsWith(text, "\"") and str.EndsWith(text, "\""):
+                text = str.Substr(text, 1, str.Len(text) - 2)
+            end
+            lay_lang_word(s, a, nid, text, prop, fa, true)
+        end
+        ret
+    end
+    if n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in i:
+            lay_lang_value_walk(s, a, at.Child(a, nid, i), prop, fa)
+        end
+        ret
+    end
+    if n.kind == at.AST_BINARY:
+        lay_lang_value_walk(s, a, n.a, prop, fa)
+        lay_lang_value_walk(s, a, n.b, prop, fa)
+        ret
+    end
+    if n.kind == at.AST_TERNARY:
+        lay_lang_value_walk(s, a, n.b, prop, fa)
+        lay_lang_value_walk(s, a, n.c, prop, fa)
+    end
+end
+
+func lay_lang_attr(s &: Sema, a &: at.Ast, aid: int, ei: int):
+    n := at.Get(a, aid)
+    name := n.name
+    path := lay_spelling_path(a, aid)
+    if str.Len(name) == 0 or str.Len(path) == 0 or not lay_source_is(a, aid, path, name):
+        ret
+    end
+    fa := FilePack(s, path) == 2
+    repl := lay_lang_attr_repl(name, fa)
+    if str.Len(repl) > 0:
+        lay_lang_report(s, a, aid, LAYOUT_LANG_ATTR_CODE, name, repl, fa, repl, str.Len(name))
+    end
+    sa := ResolveStyleAttr(name)
+    if sa.ok and not lay_is_handler(name) and not StyleAttrIsEvent(a, aid) and
+        not StyleAttrIsOwnEnum(a, aid, ei, sa):
+        lay_lang_value_walk(s, a, n.a, sa.prop, fa)
+    end
+    repeat at.ChildCount(a, aid) in q:
+        folded := at.Child(a, aid, q)
+        if at.KindOf(a, folded) == at.AST_LAYOUT_ATTR:
+            lay_lang_attr(s, a, folded, ei)
+        end
+    end
+end
+
+func lay_lang_element(s &: Sema, a &: at.Ast, cid: int, stack &: Vector<int>):
+    n := at.Get(a, cid)
+    nm := n.name
+    mut ei := 0 - 1
+    if n.op == 0 and not lay_is_comp(nm) and not lay_is_slot_placeholder(nm) and
+        lay_elem_lookup(nm) >= 0:
+        ei = lay_resolve_elem(a, cid, stack)
+        path := lay_spelling_path(a, cid)
+        if ei >= 0 and str.Len(path) > 0 and lay_source_is(a, cid, path, nm):
+            fa := FilePack(s, path) == 2
+            mask := lay_lang_mask_elem(nm, ei)
+            want := fa ? 2 : 1
+            if mask != 0 and (mask & want) == 0:
+                e := g_lay_elems.Get(ei)
+                repl := fa ? e.fa_name : e.key
+                if str.Len(repl) > 0:
+                    lay_lang_report(
+                        s, a, cid, LAYOUT_LANG_ELEMENT_CODE, nm, repl, fa, repl, str.Len(nm)
+                    )
+                end
+            end
+        else:
+            ei = 0 - 1
+        end
+    end
+    stack.Push(ei)
+    lay_lang_walk(s, a, cid, ei, stack)
+    _p := stack.Pop()
+end
+
+func lay_lang_control(s &: Sema, a &: at.Ast, nid: int, owner: int, stack &: Vector<int>):
+    n := at.Get(a, nid)
+    lay_lang_walk(s, a, n.b, owner, stack)
+    if n.kind == at.AST_IF and n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lay_lang_control(s, a, n.c, owner, stack)
+        else:
+            lay_lang_walk(s, a, n.c, owner, stack)
+        end
+    end
+end
+
+func lay_lang_walk(s &: Sema, a &: at.Ast, nid: int, owner: int, stack &: Vector<int>):
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            if owner >= 0:
+                lay_lang_attr(s, a, cid, owner)
+            end
+        else k == at.AST_IF or k == at.AST_EACH:
+            lay_lang_control(s, a, cid, owner, stack)
+        else k == at.AST_LAYOUT_ELEMENT:
+            lay_lang_element(s, a, cid, stack)
+        end
+    end
+end
+
+func lay_check_language(s &: Sema, a &: at.Ast, body: int):
+    if body == 0:
+        ret
+    end
+    mut stack := Vector {} as Vector<int>
+    defer stack.Free()
+    root := lay_elem_by_key("page")
+    stack.Push(root)
+    lay_lang_walk(s, a, body, root, stack)
+end

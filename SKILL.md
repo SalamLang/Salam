@@ -2458,7 +2458,13 @@ an English and a Persian name (names may contain spaces: `design tokens`,
 `card header`, `طراحی`); the full lists are `docs/LAYOUT_ELEMENTS.md` and
 `std/layout/{elements,attributes,values}`, and `salam_layout` in the MCP server
 looks a name up. Enum values (`variant = "outline"`) are written in quotes, and
-Persian values must be quoted too.
+Persian values must be quoted too. **One language per page:** a Persian page
+uses only Persian names, an English page only English names, for elements,
+attributes, style properties and style keywords (`layout = "ردیف"`, not
+`"row"`); the other language is error E301 (element), E302 (attribute or
+property) or E303 (style keyword) with `write 'X'` giving the replacement, and
+`salam check --fix` applies it. Colours, numbers, units, ids, content, urls and
+`data x` / `aria x` are never checked.
 
 **Style standard, not CSS.** Salam has its own style vocabulary in the spirit of
 QML, defined in `docs/design/UI_DSL.md` and listed with values, defaults and

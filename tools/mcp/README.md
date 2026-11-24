@@ -223,14 +223,15 @@ The hosted server takes only `source` and `files`.
 
 ### 🔧 Compiler
 
-| Tool              | Use it for                                                                      |
-| ----------------- | ------------------------------------------------------------------------------- |
-| `salam_check`     | Type-check without codegen; the fast loop, run after every edit                 |
-| `salam_build`     | Full compile including linking; supports `backend`, `release`, `target`         |
-| `salam_run`       | Build and execute with optional `stdin`, capturing stdout, stderr and exit code |
-| `salam_exec`      | Run on the interpreter without a C toolchain, with optional `stdin`             |
-| `salam_format`    | Return the canonical formatting of a file as text; never rewrites files         |
-| `salam_translate` | Return a program rewritten between English and Persian Salam                    |
+| Tool               | Use it for                                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `salam_check`      | Type-check without codegen; the fast loop, run after every edit                                                                                |
+| `salam_build`      | Full compile including linking; supports `backend`, `release`, `target`                                                                        |
+| `salam_run`        | Build and execute with optional `stdin`, capturing stdout, stderr and exit code                                                                |
+| `salam_exec`       | Run on the interpreter without a C toolchain, with optional `stdin`                                                                            |
+| `salam_format`     | Return the canonical formatting of a file as text; never rewrites files                                                                        |
+| `salam_translate`  | Return a program rewritten between English and Persian Salam                                                                                   |
+| `salam_page_build` | Compile a `page:` UI (web HTML/CSS/JS, or `ui=native` for desktop and phone apps) and return diagnostics and the generated files; nothing runs |
 
 ### 🔬 Inspection
 
@@ -243,15 +244,16 @@ The hosted server takes only `source` and `files`.
 
 ### 📚 Language, standard library and examples
 
-| Tool                    | Use it for                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| `salam_docs`            | The reference section for a topic ("lambda", "loops") or an error code ("E085") |
-| `salam_stdlib_search`   | Find std functions, methods and types by what they do, across every package     |
-| `salam_stdlib_packages` | Every importable `std` package in this checkout                                 |
-| `salam_stdlib_symbols`  | One package's types, fields, methods, functions and constants with signatures   |
-| `salam_find_examples`   | Search the test corpus (then std) for working usages, with context lines        |
-| `salam_read_source`     | Read a line-numbered slice of any checkout file                                 |
-| `salam_keywords`        | English/Persian keyword table                                                   |
+| Tool                    | Use it for                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `salam_docs`            | The reference section for a topic ("lambda", "loops") or an error code ("E085")                                                           |
+| `salam_stdlib_search`   | Find std functions, methods and types by what they do, across every package                                                               |
+| `salam_stdlib_packages` | Every importable `std` package in this checkout                                                                                           |
+| `salam_stdlib_symbols`  | One package's types, fields, methods, functions and constants with signatures                                                             |
+| `salam_find_examples`   | Search the test corpus (then std) for working usages, with context lines                                                                  |
+| `salam_read_source`     | Read a line-numbered slice of any checkout file                                                                                           |
+| `salam_keywords`        | English/Persian keyword table                                                                                                             |
+| `salam_layout`          | Names of the `page:` UI language (elements, attributes, enum values, style properties) in English and Persian, with where each is allowed |
 
 ### 🌐 Web
 
@@ -291,11 +293,12 @@ usually knock-on effects. The same data is in `structuredContent.diagnostics`.
 
 ## 💬 Prompts
 
-| Prompt        | Arguments         | What it sets up                                      |
-| ------------- | ----------------- | ---------------------------------------------------- |
-| `salam-write` | `task`, `lang`    | Write a new program with the check-and-fix workflow  |
-| `salam-port`  | `code`, `from`    | Port code from another language into idiomatic Salam |
-| `salam-fix`   | `code`, `problem` | Diagnose and fix a program that fails or misbehaves  |
+| Prompt        | Arguments         | What it sets up                                                                     |
+| ------------- | ----------------- | ----------------------------------------------------------------------------------- |
+| `salam-write` | `task`, `lang`    | Write a new program with the check-and-fix workflow                                 |
+| `salam-port`  | `code`, `from`    | Port code from another language into idiomatic Salam                                |
+| `salam-fix`   | `code`, `problem` | Diagnose and fix a program that fails or misbehaves                                 |
+| `salam-ui`    | `idea`, `target`  | Build a web, desktop, Android or iOS UI with the `page:` language and shadcn design |
 
 Each one carries the workflow and the short list of rules that differ from
 other languages. The same list is in the server's `instructions`, so a client

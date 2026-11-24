@@ -80,7 +80,7 @@ looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
   UI and `salam bundle` makes tar/deb/rpm/AppImage/zip/NSIS/.app/dmg
   installers (`docs/DESKTOP.md`, `salam new name --desktop`);
   `std/gui/raylib` is for games; `android/`, `ios/` and `mobile/` hold the
-  mobile projects; one `page:` language builds a website, a desktop window,
+  mobile projects; one `page:` language builds a web page, a desktop window,
   an Android app and an iOS app (section 14).
 - **Servers and data**: `net/http` + `net/router` (middleware, cookies,
   sessions, swagger, validation), `salam serve --config` for virtual hosts,

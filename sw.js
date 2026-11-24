@@ -8,7 +8,7 @@
 // Everything except those three files is left to the network, so the page and
 // its assets always reflect the deployed release.
 
-const SW_VERSION = "0.7.0-56a0e80548";
+const SW_VERSION = "0.7.0-4cbeb82f16";
 const CACHE_PREFIX = "salam-editor-";
 const CACHE = `${CACHE_PREFIX}${SW_VERSION}`;
 

@@ -180,6 +180,11 @@ emit extralibs_arm_linux_musleabihf "$XL_ARM_MUSL"
 emit extralibs_x86_64_w64_windows_gnu "$XL_X86_64_MINGW"
 emit wasi "$WASI"
 
+case "$($CC -dumpmachine 2>/dev/null)" in
+*mingw* | *windows* | *apple* | *darwin*) ;;
+*linux* | *musl*) printf '.section .note.GNU-stack,"",@progbits\n' >>"$S" ;;
+esac
+
 $CC -c "$S" -o "$WORK/embed.o"
 rm -f "$OUT/libsalam_embed.a"
 $AR rcs "$OUT/libsalam_embed.a" "$WORK/embed.o"

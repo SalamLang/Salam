@@ -692,11 +692,33 @@ func check_const_init(s &: Sema, a &: at.Ast, did: int):
     )
 end
 
+func body_check_deferred(s &: Sema, did: int, owner: int, sigid: int): bool:
+    if not s.skip_bodies or s.in_generic_inst or sigid == 0:
+        ret false
+    end
+    sg := sig_at(s, sigid)
+    if sg.infer_ret or sg.checked:
+        ret false
+    end
+    if not s.lazy_idx.Has(did):
+        s.lazy_idx.Put(did, s.lazy_decl.Len())
+        s.lazy_decl.Push(did)
+        s.lazy_owner.Push(owner)
+        s.lazy_sig.Push(sigid)
+        s.lazy_ctx.Push(s.lazy_cur)
+    end
+    ret true
+end
+
 func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
     d := at.Get(a, did)
     if d.kind == at.AST_FUNC_DEF:
         fsym := scope_lookup_local(s, s.global, d.name)
-        check_function(s, a, did, 0, find_sig(s, fsym, did))
+        fsig := find_sig(s, fsym, did)
+        if body_check_deferred(s, did, 0, fsig):
+            ret
+        end
+        check_function(s, a, did, 0, fsig)
     else d.kind == at.AST_STRUCT_DEF:
         struct_rules_validate(s, a, did)
         ssym := scope_lookup_local(s, s.global, d.name)
@@ -711,7 +733,11 @@ func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
                 if msym != 0 and sym_at(s, msym).kind == SYM_FIELD:
                     continue
                 end
-                check_function(s, a, mid, ssym, find_sig(s, msym, mid))
+                msig := find_sig(s, msym, mid)
+                if body_check_deferred(s, mid, ssym, msig):
+                    continue
+                end
+                check_function(s, a, mid, ssym, msig)
             else m.kind == at.AST_FIELD and m.a != 0:
                 f := scope_lookup_local(s, sym_at(s, ssym).members, m.name)
                 mut ftv := TYPE_NONE
@@ -793,7 +819,11 @@ func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
             end
             m2 := at.Get(a, mid2)
             msym2 := scope_lookup_local(s, sym_at(s, owner).members, m2.name)
-            check_function(s, a, mid2, owner, find_sig(s, msym2, mid2))
+            msig2 := find_sig(s, msym2, mid2)
+            if body_check_deferred(s, mid2, owner, msig2):
+                continue
+            end
+            check_function(s, a, mid2, owner, msig2)
         end
     else d.kind == at.AST_VAR_DECL or d.kind == at.AST_CONST_DECL:
         g := scope_lookup_local(s, s.global, d.name)
@@ -856,6 +886,9 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         if d.synthetic:
             continue
         end
+        if s.skip_bodies:
+            continue
+        end
         _sfl := sema_use_decl_file(s, a, did)
         lint_lang_types(s, a, did)
     end
@@ -885,6 +918,10 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         end
         check_toplevel(s, a, did2)
     end
+    sema_check_pending(s, a)
+end
+
+func sema_check_pending(s &: Sema, a &: at.Ast):
     mut pi := 0
     save_gi := s.in_generic_inst
     s.in_generic_inst = true

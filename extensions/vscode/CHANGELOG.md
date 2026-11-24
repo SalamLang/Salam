@@ -4,6 +4,7 @@
 
 ## 0.7.0
 
+- The language changes in this version are listed with the compiler release.
 - Persian page attributes that take several words, such as `مسدودکننده`, accept the Persian value names without an error.
 - The outline no longer lists the compiler's generated try names, and symbol ranges stay nested.
 - Fixed "selectionRange must be contained in fullRange" in the outline: bad symbol ranges from an older language server are repaired in the editor before they are shown.

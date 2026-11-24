@@ -516,7 +516,7 @@ The rules for the edge cases:
 - Attributes stay in source order and children keep their place after them.
 - `if`, `else` and `each` blocks inside an element are expanded the same way:
   the header line, one attribute or element per line, `else:` and `end` on
-  their own lines. This covers style conditions such as `if hover: color = red end`.
+  their own lines. This covers style conditions such as `if hover: color = "red" end`.
 - A comment inside an element stays on its own line in the same place, and a
   comment after a value or after `end` stays on that line. An element that
   holds a comment is not blank, so its `end` goes on its own line.

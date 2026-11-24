@@ -269,7 +269,7 @@ server.listen(0, "127.0.0.1", async () => {
     );
     await setCode(
       page,
-      'page:\n    title = "Test"\n    box:\n        background = blue\n        color = white\n        paragraph: content = "Hello page" end\n    end\nend\n',
+      'page:\n    title = "Test"\n    box:\n        background = "blue"\n        color = "white"\n        paragraph: content = "Hello page" end\n    end\nend\n',
     );
     await page.click("#run");
     await page.waitForFunction(

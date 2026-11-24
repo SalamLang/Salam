@@ -53,6 +53,8 @@ got=""
 _timedout=0
 _try=1
 _runout="$jobdir/run.out"
+# shellcheck disable=SC3045
+ulimit -c 0 2>/dev/null
 while [ "$_try" -le 4 ]; do
     exec 3>&2 2>/dev/null
     if [ -f "${f%.salam}.x11" ] && [ -z "${DISPLAY:-}" ]; then
@@ -62,7 +64,7 @@ while [ "$_try" -le 4 ]; do
     fi
     _rc=$?
     exec 2>&3 3>&-
-    got=$(tr -d '\r' <"$_runout" 2>/dev/null)
+    got=$(tr -d '\r' <"$_runout" 2>/dev/null | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g')
     _timedout=0
     [ "$_rc" -eq 124 ] && _timedout=1
     if [ "$got" = "$want" ]; then break; fi

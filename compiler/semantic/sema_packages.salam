@@ -277,6 +277,11 @@ func lazy_demand(s &: Sema, decl: int):
 end
 
 func lazy_drain(s &: Sema, a &: at.Ast):
+    n0 := s.own_fns.Len()
+    mut kpos := Vector {} as Vector<int>
+    mut ke := Vector {} as Vector<int>
+    defer kpos.Free()
+    defer ke.Free()
     mut qi := 0
     until qi < s.lazy_queue.Len():
         decl := s.lazy_queue.Get(qi)
@@ -288,7 +293,81 @@ func lazy_drain(s &: Sema, a &: at.Ast):
         if sig_at(s, s.lazy_sig.Get(e)).checked:
             continue
         end
+        before := s.own_fns.Len()
         lazy_check_entry(s, a, e)
+        mut pos := s.lazy_ownpos.Get(e)
+        if pos < s.own_done:
+            pos = s.own_done
+        end
+        repeat s.own_fns.Len() - before:
+            kpos.Push(pos)
+            ke.Push(e)
+        end
+    end
+    if s.own_fns.Len() > n0:
+        lazy_reorder_own(s, n0, kpos, ke)
+    end
+end
+
+func lazy_key_less(kpos: Vector<int>, ke: Vector<int>, x: int, y: int): bool:
+    if kpos.Get(x) != kpos.Get(y):
+        ret kpos.Get(x) < kpos.Get(y)
+    end
+    if ke.Get(x) != ke.Get(y):
+        ret ke.Get(x) < ke.Get(y)
+    end
+    ret x < y
+end
+
+func lazy_reorder_own(s &: Sema, n0: int, kpos: Vector<int>, ke: Vector<int>):
+    m := s.own_fns.Len() - n0
+    mut order := Vector {} as Vector<int>
+    defer order.Free()
+    repeat m in i:
+        order.Push(i)
+    end
+    mut i := 1
+    until i < m:
+        cur := order.Get(i)
+        mut j := i - 1
+        until j >= 0 and lazy_key_less(kpos, ke, cur, order.Get(j)):
+            order.Set(j + 1, order.Get(j))
+            j--
+        end
+        order.Set(j + 1, cur)
+        i++
+    end
+    mut nf := Vector {} as Vector<int>
+    mut ng := Vector {} as Vector<int>
+    mut nfile := Vector {} as Vector<str>
+    mut nder := Vector {} as Vector<bool>
+    mut t := 0
+    repeat n0 + 1 in p:
+        until t < m and kpos.Get(order.Get(t)) <= p:
+            src_i := n0 + order.Get(t)
+            nf.Push(s.own_fns.Get(src_i))
+            ng.Push(s.own_glob.Get(src_i))
+            nfile.Push(s.own_file.Get(src_i))
+            nder.Push(s.own_derive.Get(src_i))
+            t++
+        end
+        if p < n0:
+            nf.Push(s.own_fns.Get(p))
+            ng.Push(s.own_glob.Get(p))
+            nfile.Push(s.own_file.Get(p))
+            nder.Push(s.own_derive.Get(p))
+        end
+    end
+    s.own_fns.Free()
+    s.own_glob.Free()
+    s.own_file.Free()
+    s.own_derive.Free()
+    s.own_fns = nf
+    s.own_glob = ng
+    s.own_file = nfile
+    s.own_derive = nder
+    repeat s.own_fns.Len() in k:
+        s.own_idx.Put(s.own_fns.Get(k), k)
     end
 end
 

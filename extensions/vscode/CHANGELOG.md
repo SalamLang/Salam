@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0
+
 - Fixed "s2.Slice is not a function" from the Run button and the other commands. The 0.6.16 package was built by a compiler that emitted `Slice`, `Trim` and `Len` as JavaScript method names; a build from current sources runs. `bun run test` now loads the built `out/extension.js` under a stub `vscode` module and drives every command.
 
 ## 0.6.19

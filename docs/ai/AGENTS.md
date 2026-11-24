@@ -68,7 +68,7 @@ looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
   `obj`, `llvm`, `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`,
   `add`, `remove`, `update`, `deps`, `install`, `uninstall`, `search`,
   `format`, `doc`, `translate`, `sql check`, `sql generate`, `page build`,
-  `debug`, `memcheck`, `inspect`, `cli` (REPL), `upgrade`, `version`.
+  `debug`, `memcheck`, `inspect`, `cli` (REPL), `upgrade`, `upgrade-std` (std/ only), `version`.
 - **Backends and targets**: the C backend is the default for `build`, `run`
   and `obj` and cross-compiles with `--target=<triple>`; `salam llvm` emits
   LLVM IR (`--backend=llvm` builds with it, 32-bit aware, `docs/PLATFORMS.md`);

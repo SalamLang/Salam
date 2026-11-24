@@ -2845,6 +2845,7 @@ salam build --lib[=static]              # .so/.dylib/.dll (or .a) + NAME.h from 
 salam memcheck app.salam                # run under Valgrind if installed, else build with AddressSanitizer
 salam version                           # print the compiler version (--version and -v work too)
 salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)
+salam upgrade-std [REF] [--check]       # update only std/ from GitHub (main, or a branch/tag/commit); the compiler stays
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 
@@ -2856,7 +2857,8 @@ written). Linux and macOS: `{ curl -fsSL https://raw.githubusercontent.com/Salam
 (add `-s -- --version X.Y.Z` after the final `sh` to pick a release). Windows
 PowerShell: `irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
 Then `salam version`, and `salam upgrade` later. The standard library ships
-with the compiler.
+with the compiler; `salam upgrade-std` refreshes just `std/` from GitHub, tries
+it with your compiler first, and keeps the old folder as `std.prev`.
 
 ### Download links for people
 

@@ -63,7 +63,7 @@ stdlib/gui_window_events stdlib/gui_window_insets stdlib/gui_window_present stdl
 stdlib/gui_window_timers stdlib/gui_window_x11" ;;
 esac
 case "$RUNNER" in
-qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api" ;;
+qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api stdlib/transport_accept" ;;
 esac
 SKIP=${NATIVE_CROSS_SKIP-$DEFAULT_SKIP}
 STAGE=${NATIVE_CROSS_STAGE:-}

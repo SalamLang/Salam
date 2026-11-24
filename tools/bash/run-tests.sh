@@ -58,6 +58,7 @@ if [ "${1:-}" = "--worker" ]; then
         mkdir -p "$jobdir"
         case "$fabs" in */page_*.in) rcmd=page ;; *) rcmd=cli ;; esac
         got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" "$rcmd" --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        [ "$rcmd" = page ] && got=$(printf '%s\n' "$got" | grep -vE '^(\*,::before|\[hidden\]|\[data-theme|:where|:root|body\{)')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }

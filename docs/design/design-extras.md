@@ -82,8 +82,11 @@ Jalali mode uses Persian month names and digits and a right to left grid. Values
 | `sidebar trigger` | | toggle button |
 | `sidebar header`, `sidebar content`, `sidebar footer` | | |
 | `sidebar group`, `sidebar group label`, `sidebar group content` | | |
-| `sidebar menu`, `sidebar menu item` | | list |
-| `sidebar menu button` | `active`, `variant` default, outline; `size` default, sm, lg; `url` | a link when `url` is set, put an icon as a child before the text |
+| `sidebar menu`, `sidebar menu item` | `open` (item with a sub menu) | list |
+| `sidebar menu button` | `active`, `variant` default, outline; `size` default, sm, lg; `url`; `tooltip` | a link when `url` is set, put an icon as a child before the text; in an `icon` panel that is collapsed, hover or focus shows a tooltip (`tooltip`, else the button text) beside the icon |
+| `sidebar menu sub`, `sidebar menu sub item` | | nested list inside a `sidebar menu item`; the item's `sidebar menu button` gets a chevron and toggles it, `open` starts it expanded, `ds-change` fires on the item; hidden in an `icon` panel |
+| `sidebar menu sub button` | `active`, `size` sm, md; `url` | a link when `url` is set |
+| `sidebar rail` | | thin strip on the panel edge that toggles the panel; must be a direct child of `sidebar panel`; hidden below 768px |
 | `sidebar menu badge`, `sidebar separator` | | |
 | `sidebar inset` | | main area next to the panel |
 

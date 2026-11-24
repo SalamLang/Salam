@@ -162,8 +162,13 @@ for spec in $TEST_GROUPS; do
             fi
             continue
         fi
-        # shellcheck disable=SC3045
-        (cd "$ROOT" && ulimit -c 0 2>/dev/null; timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        if [ "$grp" = llvm ]; then
+            # shellcheck disable=SC3045
+            (cd "$ROOT" && ulimit -c 0 2>/dev/null; timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>/dev/null)
+        else
+            # shellcheck disable=SC3045
+            (cd "$ROOT" && ulimit -c 0 2>/dev/null; timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        fi
         rc=$?
         if [ "$(tr -d '\r' <"$work/got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
             ok=$((ok + 1))

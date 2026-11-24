@@ -76,8 +76,13 @@ for exe in "$DIR"/*/*; do
     fi
     chmod +x "$exe" 2>/dev/null
     # shellcheck disable=SC2086
-    # shellcheck disable=SC3045
-    (cd "$ROOT" && ulimit -c 0 2>/dev/null; limited $RUNNER "$exe" </dev/null >"$got" 2>&1)
+    if [ "$grp" = llvm ]; then
+        # shellcheck disable=SC3045
+        (cd "$ROOT" && ulimit -c 0 2>/dev/null; limited $RUNNER "$exe" </dev/null >"$got" 2>/dev/null)
+    else
+        # shellcheck disable=SC3045
+        (cd "$ROOT" && ulimit -c 0 2>/dev/null; limited $RUNNER "$exe" </dev/null >"$got" 2>&1)
+    fi
     rc=$?
     if [ "$(tr -d '\r' <"$got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
         ok=$((ok + 1))

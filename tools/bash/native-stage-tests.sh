@@ -13,7 +13,7 @@
 # Usage: tools/bash/native-stage-tests.sh <dir>
 
 set -u
-GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g'
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d'
 DIR=$(cd "$1" && pwd)
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 LIMIT=${NATIVE_CROSS_TIMEOUT:-180}

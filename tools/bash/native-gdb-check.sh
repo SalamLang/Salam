@@ -53,7 +53,7 @@ noinline func walk(n: int, name: str): int:
 end
 
 noinline func boom(v: Vector<int>, at: int): int:
-    ret v.get(at)
+    ret v.Get(at)
 end
 
 func main:
@@ -124,7 +124,7 @@ for lk in $linkers; do
     check "$out" "h = 5" "$lk register local"
     check "$out" "s = 60" "$lk folded loop"
     check "$out" "k = 8" "$lk folded loop"
-    check "$out" "in get (" "$lk inlined frame"
+    check "$out" "in Get (" "$lk inlined frame"
     check "$out" "boom (" "$lk caller of inlined frame"
     check "$ent" "p = {x = 3, y = 4}" "$lk struct argument at entry"
     check "$ent" "scale = 1.5" "$lk float argument at entry"

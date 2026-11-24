@@ -122,6 +122,22 @@ The fa texts are in `compiler/i18n.salam` (checked by `check-i18n.sh`; the
 Persian names in `check-fa-names.sh` are unaffected). With strict values on,
 the same condition is E299 with the same text.
 
+## Status
+
+- W299 and its quote fix ship in the compiler. `salam check --fix-values`
+  applies only these fixes (`--fix` applies every safe fix).
+- `--strict-values`, or `strict-values = true` under `[build]` in
+  `salam.toml`, turns W299 into E299. The default is still a warning.
+- The repository is migrated: tests, examples, website examples, lessons,
+  blog, editor page, page projects and the Sublime completions write quoted
+  values. A few files keep bare values on purpose: the migration tool
+  fixtures (`tests/*/tools`, `tests/*/translate`, `tests/*/fmt`,
+  `extensions/tools/fixtures`), the W299 tests, and two games whose font
+  lists name families bare (`Arial`).
+- Run the fix on the entry file of a project, never on a file that is only
+  included: a lone fragment cannot see the constants of the page that
+  includes it and would quote them.
+
 ## Autofix
 
 The warning carries a safe quick fix (the whole bare word replaced by the

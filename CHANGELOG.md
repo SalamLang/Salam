@@ -15,6 +15,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 
 ### Behaviour changes
 
+- A page writes names in one language. A Persian page with an English element, attribute, style property or style keyword (`button`, `title`, `layout = "row"`) is error E301, E302 or E303, and an English page with a Persian one is the same error; each carries `help: write 'X'` and a fix for `salam check --fix`. Colours, numbers, units, ids, content and `data x` / `aria x` attributes are not checked.
 - Pages get the shadcn design by default: theme tokens (light, dark, auto; five palettes), restyled `button`, `input`, `select`, `table`, `dialog` and more, plus new elements (card, badge, alert, tabs, accordion, sheet, popover, tooltip, dropdown menu, switch, toast, command, calendar, carousel, sidebar, chart and others) with their events. Set `design = "none"` on the page to keep only the structure and behaviour; `theme`, `palette` and `design tokens` customize it. See `docs/design/DESIGN_SYSTEMS.md` (#4066, #4068, #4081).
 - `fs.Permissions` returns the real mode bits (for example 420 for `rw-r--r--`), the same number `fs.Chmod` takes. `Stat`, `ModTime` and friends no longer start a shell (#3745).
 - `ssh.ServerConfig.host_seed` and `sshd.Config.host_seed` are removed; use `host_key_file` or `host_key_hex` (#3739).

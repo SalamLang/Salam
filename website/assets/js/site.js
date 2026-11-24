@@ -49,7 +49,8 @@
     }
     var frame = document.getElementById(`pv-${d.n}`);
     if (frame && e.source === frame.contentWindow) {
-      frame.style.height = `${Math.min(Math.max(d.h, 56), 576)}px`;
+      var floor = Number(frame.dataset.minHeight) || 56;
+      frame.style.height = `${Math.min(Math.max(d.h, floor), 576)}px`;
     }
   });
 

@@ -41,10 +41,11 @@ Open one with `opens = "<dialog id>"` on a `button` or on `dialog trigger`. Clos
 
 | element | attributes |
 | --- | --- |
+| `dialog`, `alert dialog`, `sheet`, `drawer` | `close outside` = true (default), false: a click outside closes it |
 | `dialog` | `show close` = true, false; `width` for size; existing `open` |
 | `dialog header`, `dialog title`, `dialog description`, `dialog footer` | `content` |
 | `dialog close` | `variant`, `size` (button values, default outline) |
-| `alert dialog` | `size` = default, sm; no outside click close |
+| `alert dialog` | `size` = default, sm; closes on an outside click unless `close outside = false` |
 | `alert dialog header`, `title`, `description`, `footer`, `media` | `content` |
 | `alert dialog action`, `alert dialog cancel` | `variant`, `size` (cancel defaults to outline) |
 | `sheet` | `side` = top, right, bottom, left, start, end (default right); `show close`; start and end follow the reading direction, so they swap in a right to left page |

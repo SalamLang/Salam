@@ -38,8 +38,8 @@ step test exits lib/strings_test.salam
 mkdir crash
 {
     printf 'func test_ok():\n    testing.AssertEqInt(1, 1)\nend\n'
-    printf 'func test_oob():\n    mut v := Vector {} as Vector<int>\n    defer v.Free()\n    v.push(1)\n'
-    printf '    testing.AssertEqInt(v[0] + v.pop() + v.pop(), 2)\nend\n'
+    printf 'func test_oob():\n    mut v := Vector {} as Vector<int>\n    defer v.Free()\n    v.Push(1)\n'
+    printf '    testing.AssertEqInt(v[0] + v.Pop() + v.Pop(), 2)\nend\n'
     printf 'func test_after():\n    testing.AssertEqInt(1, 2)\nend\n'
     printf 'func test_last():\n    testing.AssertEqInt(3, 3)\nend\n'
 } >crash/panic_test.salam
@@ -51,8 +51,8 @@ cat "$work/crash.tsv"
 mkdir crashexit
 {
     printf '// EXPECT-EXIT: 0\n'
-    printf 'func test_oob():\n    mut v := Vector {} as Vector<int>\n    defer v.Free()\n    v.push(1)\n'
-    printf '    testing.AssertEqInt(v[0] + v.pop() + v.pop(), 2)\nend\n'
+    printf 'func test_oob():\n    mut v := Vector {} as Vector<int>\n    defer v.Free()\n    v.Push(1)\n'
+    printf '    testing.AssertEqInt(v[0] + v.Pop() + v.Pop(), 2)\nend\n'
 } >crashexit/panic_test.salam
 "$salam" test crashexit --report="$work/crashexit.tsv" >/dev/null 2>&1
 printf 'crash with expected exit report: '

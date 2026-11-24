@@ -49,8 +49,10 @@ Keyboard: arrows, Home/End, Enter/Space, Escape, typeahead.
 
 | Element | Attributes | Notes |
 | --- | --- | --- |
-| `calendar` | `calendar` gregorian, jalali; `mode` single, range; `value` ISO date or `from/to`; `min`; `max`; `week start` 0 to 6 (Sunday is 0; default 6 for jalali); `disabled days` weekday numbers like "0,6"; `disabled dates` ISO list | month grid, prev and next, today, keyboard (arrows, Home, End, PageUp, PageDown, Shift for year); `ds-change` with `detail.value/from/to` |
-| `date picker` | same as calendar plus `name`, `placeholder`, `disabled` | trigger plus popover calendar, hidden input holds the ISO value |
+| `calendar` | `calendar` gregorian, jalali; `mode` single, range, multiple; `value` ISO date, `from/to` for a range, comma list for multiple; `min`; `max`; `week start` 0 to 6 (Sunday is 0; default 6 for jalali); `disabled days` weekday numbers like "0,6"; `disabled dates` ISO list | month grid, prev and next, today, keyboard (arrows, Home, End, PageUp, PageDown, Shift for year); `ds-change` with `detail.value/from/to/dates` |
+| `date picker` | same as calendar plus `name`, `placeholder`, `disabled` | trigger plus popover calendar, hidden input holds the ISO value; in `multiple` mode the popover stays open and the trigger shows the count |
+
+The Jalali grid does not use the browser's Intl calendar data. The page script has the same breaks-table algorithm as `std/calendar` (checked against Intl for every day from 1950 to 2100: 2026-03-21 is 1405-01-01), a built-in month table (Farvardin ... on an English page, the Persian names on a Persian page) and Persian digits when the page language is fa. Intl is still used for Gregorian month and weekday names.
 
 Jalali mode uses Persian month names and digits and a right to left grid. Values are always ISO Gregorian dates.
 
@@ -82,8 +84,11 @@ Jalali mode uses Persian month names and digits and a right to left grid. Values
 | `sidebar trigger` | | toggle button |
 | `sidebar header`, `sidebar content`, `sidebar footer` | | |
 | `sidebar group`, `sidebar group label`, `sidebar group content` | | |
-| `sidebar menu`, `sidebar menu item` | | list |
-| `sidebar menu button` | `active`, `variant` default, outline; `size` default, sm, lg; `url` | a link when `url` is set, put an icon as a child before the text |
+| `sidebar menu`, `sidebar menu item` | `open` (item with a sub menu) | list |
+| `sidebar menu button` | `active`, `variant` default, outline; `size` default, sm, lg; `url`; `tooltip` | a link when `url` is set, put an icon as a child before the text; in an `icon` panel that is collapsed, hover or focus shows a tooltip (`tooltip`, else the button text) beside the icon |
+| `sidebar menu sub`, `sidebar menu sub item` | | nested list inside a `sidebar menu item`; the item's `sidebar menu button` gets a chevron and toggles it, `open` starts it expanded, `ds-change` fires on the item; hidden in an `icon` panel |
+| `sidebar menu sub button` | `active`, `size` sm, md; `url` | a link when `url` is set |
+| `sidebar rail` | | thin strip on the panel edge that toggles the panel; must be a direct child of `sidebar panel`; hidden below 768px |
 | `sidebar menu badge`, `sidebar separator` | | |
 | `sidebar inset` | | main area next to the panel |
 

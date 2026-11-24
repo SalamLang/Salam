@@ -121,3 +121,41 @@ Other groups, with their elements, attributes and events:
   drawer, popover, tooltip, hover card, dropdown menu, context menu, menubar,
   navigation menu
 - `design-forms.md`, `design-extras.md`: forms and the rest, when merged
+
+## Adding another design
+
+`design` takes the names registered in the schema value group `design_name`
+(`std/layout/values/design-values.salam`): today `shadcn` and `none`. A new
+design is one more name there, with `@en` and `@fa`, plus its generators.
+
+The generator contract:
+
+- A design provides its CSS in files named `std/layoutgen/ds_<design>_*.salam`
+  (for example `ds_material_button.salam`), next to the shadcn `ds_*.salam`
+  files. Each constant holds the zero specificity CSS of one component.
+- The element, its HTML, ARIA and events never change between designs. Only
+  the CSS differs, so a generator keeps building the same markup and asks for
+  the CSS by design name.
+- Tokens are the shared CSS variables. A design supplies its own palette text
+  in `std/layoutgen/design_palettes.salam` style and reads the same token
+  names, so `design tokens` keeps working.
+- Fallback rule: a component that the active design does not style uses the
+  shadcn CSS. `DsPick(design, shadcn_css, design_css)` returns `design_css`
+  when `DsName()` equals `design` and `design_css` is not empty, and
+  `shadcn_css` in every other case. A design can therefore ship only some
+  components and a page never loses a component.
+- `design = "none"` is not a design but the switch that turns styling off:
+  `DsOn()` is false and generators add no CSS.
+
+Page code in use:
+
+```salam
+if DsOn():
+    o.shared_css = DsPick("material", DS_CARD_CSS, DS_MATERIAL_CARD_CSS)
+end
+```
+
+The checklist for a real design is in `ADDING_A_DESIGN.md`. The behaviour is
+tested by `tests/en/stdlib/layoutgen_design_fallback.salam` (and the fa twin),
+which registers a made up design name through the page's `data-design`
+attribute.

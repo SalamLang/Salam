@@ -200,7 +200,7 @@ for section in $SECTIONS; do
                 rm -f "$WORK/sweep.exe"
                 ;;
             esac
-            got=$(printf '%s' "$got" | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g')
+            got=$(printf '%s' "$got" | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^Aborted( \(core dumped\))?$/d')
             if [ "$ok" -eq 0 ]; then
                 echo "SKIP-FAIL $f"
                 skipped=$((skipped + 1))

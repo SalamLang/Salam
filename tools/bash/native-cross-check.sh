@@ -37,7 +37,7 @@
 #   Use `env` as the runner for a target the host runs directly (i686).
 
 set -u
-GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^qemu: uncaught target signal/d'
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^Aborted( \(core dumped\))?$/d;/^qemu: uncaught target signal/d'
 SALAM=$1
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=$2

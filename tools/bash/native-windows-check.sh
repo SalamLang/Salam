@@ -15,7 +15,7 @@
 # Usage: tools/bash/native-windows-check.sh <salam> <file.salam>...
 
 set -u
-GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d'
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^Aborted( \(core dumped\))?$/d'
 SALAM=$1
 shift
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac

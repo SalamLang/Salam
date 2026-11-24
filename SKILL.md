@@ -2986,9 +2986,12 @@ cannot check, give the releases page and name the asset.
   macOS has `-macos-universal.dmg`, `-macos-arm64.dmg`, `-macos-x86_64.dmg`
   and `.zip`; Linux `x86_64` and `aarch64` have `.AppImage`, `.deb` and `.rpm`;
   Linux `i686` has `.deb` and `.rpm`.
-- Android: `salam-<version>-android-universal.apk`, only in releases that
-  published it; check first and point to the releases page when it is absent
-  (v0.6.2 has no APK).
+- Android: `salam-<version>-android-universal.apk`. Newer versions publish it
+  in their own release, tag `android-v<version>`, so the download path is
+  `releases/download/android-v<version>/salam-<version>-android-universal.apk`;
+  older ones carry it in the `v<version>` release or not at all (v0.6.2 has
+  no APK): check the assets first and point to the releases page when it is
+  absent.
 
 Every published file has a `.sha256` beside it, and the agent release also has
 `salam-agent-<version>-SHA256SUMS` and `-SHA512SUMS`.

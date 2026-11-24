@@ -27,6 +27,9 @@ const UPD_RELEASES := "https://github.com/SalamLang/Salam/releases"
 const UPD_API := "https://api.github.com/repos/SalamLang/Salam/releases?per_page=30"
 const UPD_RAW := "https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/"
 const UPD_AGENT := "SalamUpdate/1.0"
+const STD_TARBALL := "https://codeload.github.com/SalamLang/Salam/tar.gz/"
+const STD_COMMITS := "https://api.github.com/repos/SalamLang/Salam/commits/"
+const STD_RECEIPT := ".salam-std"
 
 if SALAM_OS_WINDOWS:
     func upd_real(p: str): str:
@@ -647,6 +650,249 @@ func update_cmd(opt &: dr.Dr): int:
         ret 1
     end
     println co.Format2(i18.Tr("salam is now %s (was %s)"), co.ArgStr(target), co.ArgStr(current))
+    ret 0
+end
+
+func std_ref_ok(ref: str): bool:
+    n := str.Len(ref)
+    if n == 0 or n > 100 or str.Contains(ref, "..") or str.Contains(ref, "//"):
+        ret false
+    end
+    if str.StartsWith(ref, "-") or str.StartsWith(ref, "/") or str.EndsWith(ref, "/"):
+        ret false
+    end
+    repeat n in i:
+        c := co.ByteAt(ref, i)
+        digit := str.IsAsciiDigit(c)
+        alpha := (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if not digit and not alpha and c != 45 and c != 46 and c != 95 and c != 47:
+            ret false
+        end
+    end
+    ret true
+end
+
+func std_is_sha(s: str): bool:
+    if str.Len(s) != 40:
+        ret false
+    end
+    repeat 40 in i:
+        c := co.ByteAt(s, i)
+        if not str.IsAsciiDigit(c) and not (c >= 97 and c <= 102):
+            ret false
+        end
+    end
+    ret true
+end
+
+func std_top_dir(listing: str): str:
+    mut first := listing
+    nl := str.Find(listing, "\n")
+    if nl >= 0:
+        first = str.Substr(listing, 0, nl)
+    end
+    first = str.Trim(first)
+    slash := str.Find(first, "/")
+    top := slash >= 0 ? str.Substr(first, 0, slash) : first
+    if str.Len(top) == 0 or str.Contains(top, "..") or str.Contains(top, "\\"):
+        ret ""
+    end
+    ret top
+end
+
+func std_remote_commit(ref: str, why &: str): str:
+    h := upd_headers()
+    h.Put("Accept", "application/vnd.github.sha")
+    tok := upd_token()
+    if str.Len(tok) > 0:
+        h.Put("Authorization", "Bearer " + tok)
+    end
+    r := http.GetWith(STD_COMMITS + ref, h)
+    if r.status == 200:
+        sha := str.Trim(r.body)
+        if std_is_sha(sha):
+            ret sha
+        end
+        why = i18.Tr("GitHub's answer was not a commit id")
+    else r.status == 404 or r.status == 422:
+        why = co.Format1(i18.Tr("there is no branch, tag or commit '%s'"), co.ArgStr(ref))
+    else r.status == 403 or r.status == 429:
+        why = i18.Tr("GitHub's API rate limit was reached (setting GITHUB_TOKEN raises it)")
+    else r.status > 0:
+        why = co.Format1(i18.Tr("GitHub answered HTTP %s"), co.ArgStr(str.FromInt(r.status as i64)))
+    else:
+        why = r.err
+    end
+    ret ""
+end
+
+func std_download(url: str, dest: str): bool:
+    mut tool := ""
+    mut cmd := ""
+    if sm.FindPathTool("curl", tool):
+        cmd = shell_arg(tool) + " -fsSL --connect-timeout 20 --max-time 900 -A " +
+            shell_arg(UPD_AGENT) + " -o " + shell_arg(dest) + " " + shell_arg(url)
+    else sm.FindPathTool("wget", tool):
+        cmd = shell_arg(tool) + " -q -T 120 -U " + shell_arg(UPD_AGENT) + " -O " + shell_arg(dest) +
+            " " + shell_arg(url)
+    else:
+        ret false
+    end
+    ret os.Run(upd_shell(cmd)) == 0 and os.Exists(dest)
+end
+
+func std_smoke(exe: str, root: str, tmp: str): bool:
+    src := pth.PathJoin(tmp, "smoke.salam")
+    text := "import str\nimport os\nimport net.http\n\nfunc main():\n    h := http.NewHeaders()\n    h.Put(\"a\", os.Cwd())\n    println str.Len(\"ok\")\nend\n"
+    if io.WriteFile(src, text) != str.Len(text):
+        ret false
+    end
+    cmd := shell_arg(exe) + " check " + shell_arg(src) + " " + shell_arg("--stdlib-path=" + root)
+    res := os.RunCapture(upd_shell(cmd + " 2>&1"))
+    ret res.code == 0
+end
+
+func std_receipt_text(ref: str, commit: str): str:
+    ret "ref=" + ref + "\ncommit=" + commit + "\ncompiler=" + co.VERSION + "\n"
+end
+
+func std_short(sha: str): str:
+    ret str.Len(sha) > 12 ? str.Substr(sha, 0, 12) : sha
+end
+
+func std_update_cmd(opt &: dr.Dr): int:
+    mut exe := ""
+    if not upd_exe_path(exe):
+        upd_err(i18.Tr("cannot tell where this salam is installed"))
+        ret 1
+    end
+    root := sm.GetStdlibRoot()
+    if str.Len(root) == 0 or not os.Exists(pth.PathJoin(root, "std/core/core.salam")):
+        upd_err(i18.Tr("cannot find the standard library of this salam"))
+        ret 1
+    end
+    stddir := pth.PathJoin(root, "std")
+    explicit := str.Len(opt.update_version) > 0
+    ref := explicit ? opt.update_version : "main"
+    if not std_ref_ok(ref):
+        upd_err(co.Format1(i18.Tr("'%s' is not a branch, tag or commit name"), co.ArgStr(ref)))
+        ret 2
+    end
+    receipt_path := pth.PathJoin(root, STD_RECEIPT)
+    receipt := os.Exists(receipt_path) ? os.ReadFile(receipt_path) : ""
+    have := receipt_field(receipt, "commit")
+    upd_info(i18.Tr("installed"), str.Len(have) > 0 ? receipt_field(
+        receipt, "ref"
+    ) + " " + std_short(have) : co.VERSION + " " + i18.Tr("(as shipped with the compiler)"))
+    upd_info(i18.Tr("location"), stddir)
+
+    if upd_source_checkout(root):
+        upd_err(i18.Tr("this standard library is part of a source checkout, so it would be overwritten"))
+        io.EPrintln(i18.Tr("  update it with 'git pull'"))
+        ret 1
+    end
+    installer := receipt_field(
+        os.Exists(pth.PathJoin(root, ".salam-release")) ? os.ReadFile(
+            pth.PathJoin(root, ".salam-release")
+        ) : "",
+        "installer"
+    )
+    manager := upd_managed_by(root, installer)
+    if str.Len(manager) > 0 and not opt.force:
+        upd_err(i18.Tr("this standard library belongs to a package manager, which would lose track of it"))
+        io.EPrintln(co.Format1(i18.Tr("  update it with: %s"), co.ArgStr(manager)))
+        io.EPrintln(i18.Tr("  or pass --force to replace it anyway"))
+        ret 1
+    end
+
+    mut why := ""
+    commit := std_remote_commit(ref, why)
+    if str.Len(commit) == 0:
+        upd_err(co.Format1(i18.Tr("could not look up '%s' on GitHub"), co.ArgStr(ref)))
+        if str.Len(why) > 0:
+            io.EPrintln("  " + why)
+        end
+        ret 1
+    end
+    upd_info(i18.Tr("latest"), ref + " " + std_short(commit))
+    current := str.Equals(have, commit)
+    if opt.update_check:
+        if current:
+            println i18.Tr("the standard library is up to date")
+        else:
+            println co.Format1(
+                i18.Tr("a newer standard library is available; run 'salam upgrade-std%s' to install it"),
+                co.ArgStr(explicit ? " " + ref : "")
+            )
+        end
+        ret 0
+    end
+    if current and not opt.force:
+        println i18.Tr("the standard library is up to date (--force reinstalls it)")
+        ret 0
+    end
+
+    tmp := pth.PathJoin(root, ".std-update-" + str.FromInt(os.Pid() as i64))
+    _rm0 := os.RemoveAll(tmp)
+    if os.MkdirAll(tmp) != 0:
+        upd_err(co.Format1(i18.Tr("cannot write to %s"), co.ArgStr(root)))
+        io.EPrintln(i18.Tr("  run it as a user who owns that folder, or with sudo"))
+        ret 1
+    end
+    rc := std_install(opt, exe, root, tmp, ref, commit)
+    _rm1 := os.RemoveAll(tmp)
+    ret rc
+end
+
+func std_install(opt &: dr.Dr, exe: str, root: str, tmp: str, ref: str, commit: str): int:
+    stddir := pth.PathJoin(root, "std")
+    archive := pth.PathJoin(tmp, "std.tar.gz")
+    println co.Format1(i18.Tr("downloading the standard library at %s"), co.ArgStr(std_short(commit)))
+    if not std_download(STD_TARBALL + commit, archive):
+        upd_err(i18.Tr("could not download the standard library"))
+        io.EPrintln(i18.Tr("  it needs curl or wget, and a connection to codeload.github.com"))
+        ret 1
+    end
+    listing := os.RunCapture(upd_shell("tar -tzf " + shell_arg(archive)))
+    top := listing.code == 0 ? std_top_dir(listing.out) : ""
+    if str.Len(top) == 0:
+        upd_err(i18.Tr("the download is not a readable archive (is tar installed?)"))
+        ret 1
+    end
+    xcmd := "tar -xzf " + shell_arg(archive) + " -C " + shell_arg(tmp) + " --strip-components=1 " +
+        shell_arg(top + "/std")
+    if os.Run(upd_shell(xcmd)) != 0 or not os.Exists(pth.PathJoin(tmp, "std/core/core.salam")):
+        upd_err(i18.Tr("could not unpack the standard library"))
+        ret 1
+    end
+    if not opt.force and not std_smoke(exe, tmp, tmp):
+        upd_err(
+            co.Format1(
+                i18.Tr("the new standard library does not work with this compiler (%s)"),
+                co.ArgStr(co.VERSION)
+            )
+        )
+        io.EPrintln(i18.Tr("  it may need a newer compiler: salam upgrade"))
+        io.EPrintln(i18.Tr("  or pass --force to install it anyway; the old one stays in std.prev"))
+        ret 1
+    end
+    prev := pth.PathJoin(root, "std.prev")
+    _rm_prev := os.RemoveAll(prev)
+    if os.Move(stddir, prev) != 0:
+        upd_err(co.Format1(i18.Tr("cannot replace %s"), co.ArgStr(stddir)))
+        ret 1
+    end
+    if os.Move(pth.PathJoin(tmp, "std"), stddir) != 0:
+        _back := os.Move(prev, stddir)
+        upd_err(i18.Tr("could not put the new standard library in place; the old one is back"))
+        ret 1
+    end
+    _w := io.WriteFile(pth.PathJoin(root, STD_RECEIPT), std_receipt_text(ref, commit))
+    println co.Format2(
+        i18.Tr("standard library is now %s (the previous one is kept in %s)"),
+        co.ArgStr(ref + " " + std_short(commit)),
+        co.ArgStr(prev)
+    )
     ret 0
 end
 

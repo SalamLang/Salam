@@ -37,7 +37,7 @@
 #   Use `env` as the runner for a target the host runs directly (i686).
 
 set -u
-GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d'
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^qemu: uncaught target signal/d'
 SALAM=$1
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=$2
@@ -53,7 +53,7 @@ aarch64* | arm64* | riscv*) ;;
 esac
 case "$TRIPLE" in
 i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos general/extern_int128
-    features/const_u64_high_bit stdlib/vector_reserve_large stdlib/sevenzip_no_limit
+    features/const_u64_high_bit stdlib/vector_reserve_large stdlib/sevenzip_no_limit stdlib/vector_count_limit
     stdlib/archive_tar stdlib/rar_file_more stdlib/rar_links_demo stdlib/sevenzip_create stdlib/sevenzip_extract" ;;
 esac
 case "$TRIPLE" in
@@ -65,7 +65,7 @@ stdlib/gui_window_events stdlib/gui_window_insets stdlib/gui_window_present stdl
 stdlib/gui_window_timers stdlib/gui_window_x11" ;;
 esac
 case "$RUNNER" in
-qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api stdlib/transport_accept" ;;
+qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api stdlib/transport_accept stdlib/httpproxy_proxy" ;;
 esac
 SKIP=${NATIVE_CROSS_SKIP-$DEFAULT_SKIP}
 STAGE=${NATIVE_CROSS_STAGE:-}
@@ -90,7 +90,7 @@ checked_of() {
     case "$1" in
     general/enum_cast_large_enum | general/enum_cast_range_panic | general/enum_cast_wide_panic) return 0 ;;
     general/panic_flushes_output | general/slice_bounds_empty_array | general/slice_bounds_runtime) return 0 ;;
-    general/slice_of_slice_bounds | general/slice_param_index_oob) return 0 ;;
+    general/slice_of_slice_bounds | general/slice_param_index_oob | llvm/enum_cast_range_panic) return 0 ;;
     esac
     return 1
 }

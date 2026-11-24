@@ -17,14 +17,39 @@
       : "light";
   }
 
+  var fontBuffer = null;
+
+  function previewFrame(source) {
+    var frames = document.querySelectorAll(".preview-frame");
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i].contentWindow === source) {
+        return frames[i];
+      }
+    }
+    return null;
+  }
+
   window.addEventListener("message", (e) => {
     var d = e.data;
+    if (d && d.salamFontReq === 1 && previewFrame(e.source)) {
+      if (!fontBuffer) {
+        fontBuffer = fetch("/assets/fonts/Vazirmatn.woff2").then((r) =>
+          r.arrayBuffer(),
+        );
+      }
+      fontBuffer
+        .then((buf) => {
+          e.source.postMessage({ salamFont: 1, buf: buf.slice(0) }, "*");
+        })
+        .catch(() => {});
+      return;
+    }
     if (!d || d.salamPreview !== 1 || typeof d.n !== "string") {
       return;
     }
-    var frame = document.getElementById("pv-" + d.n);
+    var frame = document.getElementById(`pv-${d.n}`);
     if (frame && e.source === frame.contentWindow) {
-      frame.style.height = Math.min(Math.max(d.h, 56), 576) + "px";
+      frame.style.height = `${Math.min(Math.max(d.h, 56), 576)}px`;
     }
   });
 

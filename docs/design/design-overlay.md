@@ -47,9 +47,9 @@ Open one with `opens = "<dialog id>"` on a `button` or on `dialog trigger`. Clos
 | `alert dialog` | `size` = default, sm; no outside click close |
 | `alert dialog header`, `title`, `description`, `footer`, `media` | `content` |
 | `alert dialog action`, `alert dialog cancel` | `variant`, `size` (cancel defaults to outline) |
-| `sheet` | `side` = top, right, bottom, left (default right); `show close` |
+| `sheet` | `side` = top, right, bottom, left, start, end (default right); `show close`; start and end follow the reading direction, so they swap in a right to left page |
 | `sheet header`, `title`, `description`, `footer` | `content` |
-| `drawer` | `side` (default bottom, handle on bottom); drag to dismiss |
+| `drawer` | `side` (same values, default bottom, handle on bottom); drag to dismiss (toward the edge, also for start and end) |
 | `drawer header`, `title`, `description`, `footer` | `content` |
 
 ## Popover, tooltip, hover card

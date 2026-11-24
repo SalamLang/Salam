@@ -134,7 +134,7 @@ echo "output : $OUT"
 
 if [ -n "$EMBED_DIR" ] && [ "$SEED_IS_BUILDER" = 0 ]; then
     echo "stage 1: a plain compiler, to build the embedded one with"
-    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1" $OWN
+    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1" --spelling=off $OWN
     BUILDER=$OUT.stage1
 else
     if [ "$SEED_IS_BUILDER" = 1 ]; then
@@ -146,7 +146,7 @@ fi
 if [ -n "$EMBED_DIR" ] && [ "$(getconf LONG_BIT 2>/dev/null)" != 32 ]; then
     OWN=
 fi
-"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@" $OWN
+"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@" --spelling=off $OWN
 rm -f "$OUT.stage1"
 
 [ -x "$OUT" ] || {

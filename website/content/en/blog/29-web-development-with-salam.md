@@ -22,7 +22,7 @@ const BRAND := "#0f766e"
 component Feature(name, text):
     box:
         padding = 16px
-        border = 1px, solid, #e2e8f0
+        border = 1px, "solid", "#e2e8f0"
         radius = 12px
         heading: size = 3 content = name color = BRAND end
         paragraph: content = text end
@@ -33,17 +33,17 @@ page:
     title = "Acme Notes"
     header:
         background = BRAND
-        color = white
+        color = "white"
         padding = 24px
         heading: size = 1 content = "Acme Notes" end
         nav:
-            link: url = "/" content = "Home" color = white end
-            link: url = "/pricing" content = "Pricing" color = white margin = 0, 12px end
+            link: url = "/" content = "Home" color = "white" end
+            link: url = "/pricing" content = "Pricing" color = "white" margin = 0, 12px end
         end
     end
     main:
         padding = 24px
-        layout = grid
+        layout = "grid"
         columns = 1fr, 1fr, 1fr
         gap = 16px
         Feature: name = "Fast" text = "Opens in a blink." end
@@ -171,7 +171,7 @@ Every name also has a Persian spelling, and a page written in Persian is right t
 بخش ویژگی(نام، شرح):
     جعبه:
         فاصله = 16px
-        کادر = 1px، توپر، #e2e8f0
+        کادر = 1px، "توپر"، "#e2e8f0"
         گردی = 12px
         سرتیتر: اندازه = ۳ محتوا = نام پایان
         پاراگراف: محتوا = شرح پایان

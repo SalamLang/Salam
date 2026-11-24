@@ -2464,7 +2464,7 @@ CSS strings. The web target turns the standard into CSS for you.
 page:
     title = "Cards"
     box:
-        layout = grid
+        layout = "grid"
         columns = repeat(fill, minmax(160, 1fr))
         gap = 12
         padding = 16
@@ -2475,7 +2475,7 @@ page:
             radius = 8
             border = 1, solid, #3366aa
             background = linear(90, #eef4ff, white)
-            hover background = #ffeecc
+            hover background = "#ffeecc"
             transition = 200ms, ease out
             paragraph: color = #1e3a8a content = "A card" end
         end
@@ -2523,8 +2523,8 @@ page:
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
     header:
-        background = blue
-        color = white
+        background = "blue"
+        color = "white"
         padding = 24px
         heading: size = 1 content = "Welcome to Salam" font size = 32 end
     end
@@ -2742,6 +2742,11 @@ Rules, all checked at compile time:
   value must be a `web.Color`, a `web.Length` or a number (E135). Build them
   with `web.ParseUrl(s, ok)`, `web.ParseColor`, `web.ParseLength`, `web.Px(n)`,
   `web.Rgb(r, g, b)`. Their fields are private, so they cannot be forged (E017).
+- A literal `null` or an empty optional value (`T?`) on an attribute or style
+  leaves it unset: no HTML attribute, no style, no text, on web and native, and
+  it updates when the value changes. On a required attribute (`url` of `link` and
+  `image`) a literal `null` or an optional value is E300; use `.UnwrapOr(d)`,
+  `.Unwrap()` or `.value` inside `if x.IsSome():`.
 - Enum-like attributes, `heading size` and state styles
   must be known at compile time (E132); pick between fixed variants with
   `if`. `if`/`each` need a runtime layout (E133). A fixed `id` inside `each`
@@ -2761,8 +2766,8 @@ E127. The compiler never fetches over the network. Optional: `weight`
 
 ```salam
 page:
-    font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
-    box: content = "hi" font = "Estedad", sans end
+    font: name = "Estedad" url = "fonts/Estedad.woff2" display = "swap" end
+    box: content = "hi" font = "Estedad", "sans" end
 end
 ```
 
@@ -2792,6 +2797,7 @@ standard, so they cannot carry raw CSS or markup.
 | E132 / E133 | value must be static here / `if`/`each` in a static layout                    |
 | E134 / E135 | fixed id inside `each` / runtime value of an unsafe type for this attribute   |
 | E136        | one `class` given different styles on two elements                            |
+| E300        | null or an optional value on a required attribute                             |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `page build` exits non-zero

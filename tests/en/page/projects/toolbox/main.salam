@@ -1,0 +1,480 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+// EXPECT: <meta name="salam-router" content="history">
+// EXPECT: "/weather/:city"
+// EXPECT: "/calc"
+// EXPECT: "/convert"
+// EXPECT: "/palette"
+import dom
+
+const FIVE := [0, 1, 2, 3, 4]
+const CITIES := [0, 1, 2, 3]
+const PERCENTS := [0, 10, 15, 18, 20]
+
+mut calc_show := "0"
+mut calc_acc := 0.0
+mut calc_op := ""
+mut calc_fresh := true
+mut calc_log := Vector {} as Vector<str>
+
+mut conv_cat := 0
+mut conv_from := 0
+mut conv_to := 1
+mut conv_text := "1"
+
+mut bill_text := "48.50"
+mut tip_pct := 15
+mut party := 2
+
+mut md_src := "# Release notes\n\nThe page DSL now has **routes** and *components*.\n\n## Highlights\n- File based router\n- Timers and **bind**\n- Persian keywords"
+
+mut hue := 210
+mut scheme := 0
+mut frozen := Vector {} as Vector<str>
+mut locked := seed_locks()
+
+mut use_fahrenheit := false
+
+func seed_locks(): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat 5:
+        out.Push(0)
+        frozen.Push("")
+    end
+    ret out
+end
+
+pure func two_digits(num: int): str:
+    if num < 10:
+        ret "0" + num
+    end
+    ret "" + num
+end
+
+pure func trimmed_num(amt: f64): str:
+    neg := amt < 0.0
+    mag := neg ? 0.0 - amt : amt
+    scaled := (mag * 1000000.0 + 0.5) as i64
+    whole := scaled / 1000000
+    frac := scaled % 1000000
+    mut out := "" + whole
+    if frac > 0:
+        mut digits := "" + frac
+        until digits.Len() < 6:
+            digits = "0" + digits
+        end
+        until digits.Len() > 1 and digits.EndsWith("0"):
+            digits = digits.Substr(0, digits.Len() - 1)
+        end
+        out = out + "." + digits
+    end
+    if neg and scaled > 0:
+        out = "-" + out
+    end
+    ret out
+end
+
+func calc_digit(dgt: str):
+    if calc_fresh:
+        calc_show = dgt == "." ? "0." : dgt
+        calc_fresh = false
+        ret
+    end
+    if dgt == "." and calc_show.Includes("."):
+        ret
+    end
+    if calc_show == "0" and dgt != ".":
+        calc_show = dgt
+    else:
+        calc_show += dgt
+    end
+end
+
+func calc_combine(lhs: f64, op: str, rhs: f64): f64:
+    if op == "+":
+        ret lhs + rhs
+    else op == "-":
+        ret lhs - rhs
+    else op == "*":
+        ret lhs * rhs
+    end
+    ret rhs == 0.0 ? 0.0 : lhs / rhs
+end
+
+func calc_operator(op: str):
+    if calc_op != "" and not calc_fresh:
+        calc_equals()
+    end
+    calc_acc = calc_show.ToFloat()
+    calc_op = op
+    calc_fresh = true
+end
+
+func calc_equals():
+    if calc_op == "":
+        ret
+    end
+    rhs := calc_show.ToFloat()
+    if calc_op == "/" and rhs == 0.0:
+        calc_show = "Error"
+        calc_op = ""
+        calc_fresh = true
+        ret
+    end
+    answer := calc_combine(calc_acc, calc_op, rhs)
+    calc_log.Push(trimmed_num(calc_acc) + " " + calc_op + " " + trimmed_num(rhs) + " = " + trimmed_num(answer))
+    calc_show = trimmed_num(answer)
+    calc_acc = answer
+    calc_op = ""
+    calc_fresh = true
+end
+
+func calc_clear():
+    calc_show = "0"
+    calc_acc = 0.0
+    calc_op = ""
+    calc_fresh = true
+end
+
+func calc_back():
+    if calc_fresh or calc_show.Len() <= 1:
+        calc_show = "0"
+        calc_fresh = true
+    else:
+        calc_show = calc_show.Substr(0, calc_show.Len() - 1)
+    end
+end
+
+func calc_negate():
+    if calc_show != "0" and calc_show != "Error":
+        calc_show = calc_show.StartsWith("-") ? calc_show.Substr(1, calc_show.Len() - 1) : "-" + calc_show
+    end
+end
+
+func calc_key(ev: i64):
+    key := dom.EventKey(ev)
+    if key.Len() == 1 and "0123456789.".Includes(key):
+        calc_digit(key)
+    else key == "+" or key == "-" or key == "*" or key == "/":
+        calc_operator(key)
+    else key == "Enter" or key == "=":
+        calc_equals()
+    else key == "Backspace":
+        calc_back()
+    else key == "Escape" or key == "c":
+        calc_clear()
+    end
+end
+
+func chip_pick(group: int, code: int):
+    if group == 0:
+        set_category(code)
+    else group == 1:
+        conv_from = code
+    else group == 2:
+        conv_to = code
+    else group == 3:
+        tip_pct = code
+    else:
+        scheme = code
+    end
+end
+
+pure func unit_total(catg: int): int:
+    ret catg == 2 ? 3 : 4
+end
+
+pure func unit_name(catg: int, at: int): str:
+    if catg == 0:
+        ret at == 0 ? "m" : (at == 1 ? "km" : (at == 2 ? "mi" : "ft"))
+    else catg == 1:
+        ret at == 0 ? "kg" : (at == 1 ? "g" : (at == 2 ? "lb" : "oz"))
+    end
+    ret at == 0 ? "C" : (at == 1 ? "F" : "K")
+end
+
+pure func cat_name(catg: int): str:
+    ret catg == 0 ? "Length" : (catg == 1 ? "Mass" : "Temperature")
+end
+
+pure func unit_factor(catg: int, at: int): f64:
+    if catg == 0:
+        ret at == 0 ? 1.0 : (at == 1 ? 1000.0 : (at == 2 ? 1609.344 : 0.3048))
+    end
+    ret at == 0 ? 1.0 : (at == 1 ? 0.001 : (at == 2 ? 0.45359237 : 0.028349523125))
+end
+
+pure func to_base(catg: int, at: int, amt: f64): f64:
+    if catg == 2:
+        ret at == 0 ? amt : (at == 1 ? (amt - 32.0) * 5.0 / 9.0 : amt - 273.15)
+    end
+    ret amt * unit_factor(catg, at)
+end
+
+pure func from_base(catg: int, at: int, amt: f64): f64:
+    if catg == 2:
+        ret at == 0 ? amt : (at == 1 ? amt * 9.0 / 5.0 + 32.0 : amt + 273.15)
+    end
+    ret amt / unit_factor(catg, at)
+end
+
+pure func conv_result(): str:
+    amt := conv_text.ToFloat()
+    ret trimmed_num(from_base(conv_cat, conv_to, to_base(conv_cat, conv_from, amt)))
+end
+
+func set_category(catg: int):
+    conv_cat = catg
+    conv_from = 0
+    conv_to = 1
+end
+
+func swap_units():
+    keep := conv_from
+    conv_from = conv_to
+    conv_to = keep
+end
+
+pure func bill_cents(): int:
+    ret (bill_text.ToFloat() * 100.0 + 0.5) as int
+end
+
+pure func bill_ok(): bool:
+    ret bill_text.ToFloat() > 0.0
+end
+
+pure func tip_cents(): int:
+    ret bill_cents() * tip_pct / 100
+end
+
+pure func total_cents(): int:
+    ret bill_cents() + tip_cents()
+end
+
+pure func each_cents(): int:
+    ret (total_cents() + party - 1) / party
+end
+
+pure func money(cents: int): str:
+    ret "$" + (cents / 100) + "." + two_digits(cents % 100)
+end
+
+func more_people(delta: int):
+    party += delta
+    if party < 1:
+        party = 1
+    end
+    if party > 20:
+        party = 20
+    end
+end
+
+pure func line_kind(src_line: str): int:
+    if src_line.Len() == 0:
+        ret 0
+    else src_line.StartsWith("## "):
+        ret 2
+    else src_line.StartsWith("# "):
+        ret 1
+    else src_line.StartsWith("- "):
+        ret 3
+    end
+    ret 4
+end
+
+pure func line_body(src_line: str): str:
+    kk := line_kind(src_line)
+    if kk == 1 or kk == 3:
+        ret src_line.Substr(2, src_line.Len() - 2)
+    else kk == 2:
+        ret src_line.Substr(3, src_line.Len() - 3)
+    end
+    ret src_line
+end
+
+pure func md_words(): int:
+    mut total := 0
+    each piece in md_src.Split(" "):
+        if piece.Trim().Len() > 0:
+            total++
+        end
+    end
+    ret total
+end
+
+pure func scheme_name(which: int): str:
+    ret which == 0 ? "Analogous" : (which == 1 ? "Complement" : (which == 2 ? "Triad" : "Mono"))
+end
+
+pure func swatch_shift(at: int): int:
+    if scheme == 0:
+        ret (at - 2) * 20
+    else scheme == 1:
+        ret at < 2 ? at * 15 : (at == 2 ? 180 : 180 + (at - 2) * 15)
+    else scheme == 2:
+        ret (at % 3) * 120
+    end
+    ret 0
+end
+
+pure func swatch_css(at: int): str:
+    if locked[at] == 1:
+        ret frozen[at]
+    end
+    lum := 28 + at * 14
+    hrs := (hue + swatch_shift(at) + 360) % 360
+    ret "hsl(" + hrs + ", 65%, " + lum + "%)"
+end
+
+func toggle_lock(at: int):
+    if locked[at] == 0:
+        frozen[at] = swatch_css(at)
+    end
+    locked[at] = 1 - locked[at]
+end
+
+func shuffle_hue():
+    hue = (dom.Random() * 360.0) as int
+end
+
+func palette_key(ev: i64):
+    if dom.EventKey(ev) == " ":
+        dom.PreventDefault(ev)
+        shuffle_hue()
+    end
+end
+
+pure func city_name(c: int): str:
+    ret c == 0 ? "Tehran" : (c == 1 ? "Oslo" : (c == 2 ? "Lima" : "Osaka"))
+end
+
+pure func city_slug(c: int): str:
+    ret c == 0 ? "tehran" : (c == 1 ? "oslo" : (c == 2 ? "lima" : "osaka"))
+end
+
+pure func city_index(slug: str): int:
+    each c in CITIES:
+        if city_slug(c) == slug:
+            ret c
+        end
+    end
+    ret -1
+end
+
+pure func city_temp(c: int): int:
+    ret c == 0 ? 28 : (c == 1 ? 6 : (c == 2 ? 19 : 22))
+end
+
+pure func city_sky(c: int): str:
+    ret c == 0 ? "Clear and dry" : (c == 1 ? "Light snow" : (c == 2 ? "Morning fog" : "Passing showers"))
+end
+
+pure func city_humidity(c: int): int:
+    ret c == 0 ? 18 : (c == 1 ? 81 : (c == 2 ? 88 : 69))
+end
+
+pure func city_wind(c: int): int:
+    ret c == 0 ? 9 : (c == 1 ? 21 : (c == 2 ? 12 : 15))
+end
+
+pure func hour_temp(c: int, hrs: int): int:
+    ret city_temp(c) + (hrs == 0 ? -2 : (hrs == 1 ? 0 : (hrs == 2 ? 3 : (hrs == 3 ? 2 : (hrs == 4 ? -1 : -3)))))
+end
+
+pure func temp_text(celsius: int): str:
+    if use_fahrenheit:
+        ret ((celsius * 9 / 5) + 32) + " F"
+    end
+    ret celsius + " C"
+end
+
+page:
+    title = "Toolbox"
+    lang = "en"
+    font family = "system-ui, sans-serif"
+    box:
+        min height = 100vh
+        background = "#f3f6f6"
+        color = "#14211f"
+        header:
+            layout = "row"
+            align = "center"
+            wrap = true
+            gap = 12
+            padding = 14, 24
+            background = "#0d9488"
+            link:
+                to = "/"
+                font size = 22
+                font weight = 800
+                color = "#ffffff"
+                text decoration = "none"
+                content = "toolbox"
+            end
+            nav:
+                layout = "row"
+                wrap = true
+                gap = 4
+                link:
+                    to = "/calc"
+                    padding = 6, 12
+                    color = "#ffffff"
+                    text decoration = "none"
+                    content = "Calculator"
+                end
+                link:
+                    to = "/convert"
+                    padding = 6, 12
+                    color = "#ffffff"
+                    text decoration = "none"
+                    content = "Converter"
+                end
+                link:
+                    to = "/tip"
+                    padding = 6, 12
+                    color = "#ffffff"
+                    text decoration = "none"
+                    content = "Tip"
+                end
+                link:
+                    to = "/markdown"
+                    padding = 6, 12
+                    color = "#ffffff"
+                    text decoration = "none"
+                    content = "Markdown"
+                end
+                link:
+                    to = "/palette"
+                    padding = 6, 12
+                    color = "#ffffff"
+                    text decoration = "none"
+                    content = "Palette"
+                end
+                link:
+                    to = "/weather"
+                    padding = 6, 12
+                    color = "#ffffff"
+                    text decoration = "none"
+                    content = "Weather"
+                end
+            end
+        end
+        main:
+            max width = 720
+            width = 100%
+            margin = 0, "auto"
+            padding = 24, 16
+            Outlet: end
+        end
+    end
+end

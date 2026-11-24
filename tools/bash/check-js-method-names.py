@@ -19,6 +19,8 @@ LIT = re.compile(r'"(?:[^"\\\n]|\\.)*"|`[^`]*`')
 BLOCK = re.compile(r"`[^`]*`")
 BAD = re.compile(r"\.([A-Z][A-Za-z0-9_]*)\(")
 
+JS_BUILTINS = {"UTC", "DateTimeFormat", "NumberFormat"}
+
 bad = 0
 
 
@@ -39,6 +41,8 @@ for path in FILES:
     for lineno, line in enumerate(text.split("\n"), 1):
         for lit in LIT.findall(line):
             for m in BAD.finditer(lit):
+                if m.group(1) in JS_BUILTINS:
+                    continue
                 print("%s:%d: capitalised method '%s' in emitted JavaScript: %s" % (path, lineno, m.group(1), m.group(0)))
                 bad += 1
 
@@ -48,6 +52,8 @@ for path in SCRIPTS:
         continue
     for block in BLOCK.finditer(text):
         for m in BAD.finditer(block.group(0)):
+            if m.group(1) in JS_BUILTINS:
+                continue
             lineno = text.count("\n", 0, block.start() + m.start()) + 1
             print("%s:%d: capitalised method '%s' in an embedded script: %s" % (path, lineno, m.group(1), m.group(0)))
             bad += 1

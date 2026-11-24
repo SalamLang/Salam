@@ -44,6 +44,7 @@ struct LoSlot:
     pub loop: int = 0
     pub prop: int = 0
     pub state: int = 0
+    pub req: bool = false
 end
 
 struct LoLower:
@@ -550,6 +551,13 @@ func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
         end
     end
     mut sl := LoSlot { kind = k, expr = vid }
+    if ei >= 0:
+        mut rkey := sm.LayoutAttrKeyFor(ei, an.name)
+        if str.Len(rkey) == 0:
+            rkey = an.name
+        end
+        sl.req = sm.LayoutCsvHas(sm.LayoutElemRequired(ei), rkey)
+    end
     if k == SL_BOOL:
         sl.out = lo_bool_out(ei, an.name)
     end
@@ -681,6 +689,65 @@ func lo_marker_at(doc: str, p: int, tag &: str, num &: int): int:
     ret close + 1
 end
 
+func lo_has_name(lw &: LoLower): str:
+    ret str.Equals(lw.web, "web") ? "PageHas" : "دارای مقدار صفحه"
+end
+
+func lo_name_byte(b: int): bool:
+    ret (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 45 or
+        b == 95 or b == 58
+end
+
+func lo_opt_cut(
+    doc: str, kind: int, q: int, after: int, start: int, cut &: int, head &: str, tail &: str
+): bool:
+    n := str.Len(doc)
+    if kind == SL_ATTR or kind == SL_URL:
+        if q - start < 4 or after >= n or byte_at(doc, q - 1) != 34 or byte_at(doc, q - 2) != 61 or
+            byte_at(doc, after) != 34:
+            ret false
+        end
+        mut p := q - 3
+        until p >= start and lo_name_byte(byte_at(doc, p)):
+            p--
+        end
+        if p < start or p == q - 3 or byte_at(doc, p) != 32:
+            ret false
+        end
+        cut = p
+        head = str.Substr(doc, p, q - p)
+        tail = "\""
+        ret true
+    end
+    if kind == SL_CSS or kind == SL_CSSURL:
+        mut e := q - 1
+        until e >= start and byte_at(doc, e) == 32:
+            e--
+        end
+        if e < start or byte_at(doc, e) != 58:
+            ret false
+        end
+        mut p := e - 1
+        until p >= start and lo_name_byte(byte_at(doc, p)):
+            p--
+        end
+        if p < start or p == e - 1:
+            ret false
+        end
+        bb := byte_at(doc, p)
+        if bb != 34 and bb != 59 and bb != 123 and bb != 32:
+            ret false
+        end
+        cut = p + 1
+        head = str.Substr(doc, p + 1, q - p - 1)
+        if after < n and byte_at(doc, after) == 59:
+            tail = ";"
+        end
+        ret true
+    end
+    ret false
+end
+
 func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
     mut body := "mut _salam_b := " + lw.web + ".PageBegin()\n"
     repeat lw.slots.Len() in bi:
@@ -707,9 +774,19 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
             p = q + 1
             continue
         end
-        if q > start:
+        mut cutp := q
+        mut head := ""
+        mut tail := ""
+        mut did_cut := false
+        if str.Equals(tag, "dyn") and num >= 0 and num < lw.slots.Len():
+            cs := lw.slots.Get(num)
+            if not cs.req and lo_opt_cut(doc, cs.kind, q, after, start, cutp, head, tail):
+                did_cut = true
+            end
+        end
+        if cutp > start:
             body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64))
-            chunks.Push(str.Substr(doc, start, q - start))
+            chunks.Push(str.Substr(doc, start, cutp - start))
         end
         if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.Len():
             sl := lw.slots.Get(num)
@@ -750,7 +827,29 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
                 seq++
                 lvname := vname + "_" + co.U64Toa(seq as u64)
                 body += lvname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
-                body += lo_web_call(lw, lo_slot_writer(sl.kind), lvname)
+                if sl.req:
+                    body += lo_web_call(
+                        lw, lo_slot_writer(sl.kind), lw.web + ".PageRequired(" + lvname + ")"
+                    )
+                else:
+                    body += "if " + lw.web + "." + lo_has_name(lw) + "(" + lvname + "):\n"
+                    if did_cut:
+                        body += lo_web_call(
+                            lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64)
+                        )
+                        chunks.Push(head)
+                    end
+                    body += lo_web_call(
+                        lw, lo_slot_writer(sl.kind), lw.web + ".PageVal(" + lvname + ")"
+                    )
+                    if str.Len(tail) > 0:
+                        body += lo_web_call(
+                            lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64)
+                        )
+                        chunks.Push(tail)
+                    end
+                    body += "end\n"
+                end
             end
         else str.Equals(tag, "else"):
             body += "else:\n"
@@ -759,6 +858,10 @@ func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
         end
         p = after
         start = after
+        if did_cut:
+            start += str.Len(tail)
+            p = start
+        end
     end
     if start < n:
         body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.Len() as u64))
@@ -1038,6 +1141,16 @@ func lo_all_typed(a &: at.Ast, cid: int): bool:
         end
     end
     ret n > 0
+end
+
+func lo_has_func_param(a &: at.Ast, cid: int): bool:
+    repeat at.ChildCount(a, cid) in i:
+        p := at.Get(a, at.Child(a, cid, i))
+        if p.kind == at.AST_PARAM and p.ty != 0 and str.Equals(at.Get(a, p.ty).name, "func"):
+            ret true
+        end
+    end
+    ret false
 end
 
 func lo_fragment_block(a &: at.Ast, cid: int): int:
@@ -1577,7 +1690,8 @@ func lo_prepare_views(
         cid := at.Child(a, prog, ci)
         c := at.Get(a, cid)
         if c.kind == at.AST_LAYOUT_COMPONENT and not c.view_glue and lo_all_typed(a, cid) and
-            not lo_has_decls(a, c.a) and not lo_has_lambda(a, c.a):
+            not lo_has_decls(a, c.a) and not lo_has_lambda(a, c.a) and
+            not lo_has_func_param(a, cid):
             frags.Push(cid)
         end
     end

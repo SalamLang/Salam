@@ -58,8 +58,6 @@ func gen_std(
     has_klass: bool,
     tag: str
 ):
-    idx := cx.gen_count
-    cx.gen_count++
     cx.uid_next++
     uid := "elm_" + co.U64Toa(cx.uid_next as u64)
     save_html := cx.html
@@ -70,6 +68,8 @@ func gen_std(
     inner := cx.html
     cx.html = save_html
     cx.indent = save_indent
+    idx := cx.gen_count
+    cx.gen_count++
     v := "n" + co.U64Toa(idx as u64)
     mut b := "    mut " + v + " := layoutgen.Node {}\n"
     b += "    " + v + ".name = " + gen_std_quote(at.Get(a, el).name) + "\n"
@@ -169,11 +169,19 @@ func gen_std_append_unique(cx &: LoCtx, piece: str, css: bool):
     end
 end
 
+func gen_std_page_node(cx: LoCtx): str:
+    mut b := "    mut np := layoutgen.Node {}\n"
+    b += "    np.name = \"page\"\n"
+    b += "    np.attrs = " + gen_std_quote(cx.body_attr) + "\n"
+    b += "    np.compact = " + (cx.compact ? "true" : "false") + "\n"
+    b += "    layoutgen.Set(np, \"lang\", " + gen_std_quote(cx.lang) + ")\n"
+    b += "    layoutgen.Set(np, \"dir\", " + gen_std_quote(cx.dir) + ")\n"
+    b += "    layoutgen.Emit(layoutgen.design_page(np))\n"
+    ret b
+end
+
 func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
-    if cx.gen_count == 0:
-        ret
-    end
-    program := "import layoutgen\n\nfunc main:\n" + cx.gen_src + "end\n"
+    program := "import layoutgen\n\nfunc main:\n" + gen_std_page_node(cx) + cx.gen_src + "end\n"
     quiet := lg.New(lg.LOG_OFF, false)
     mut out := ""
     mut err := ""
@@ -183,10 +191,10 @@ func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
             dg.SEV_ERROR,
             123,
             cx.file,
-            span_of(a, cx.gen_nodes.Get(0)),
+            span_of(a, cx.gen_count > 0 ? cx.gen_nodes.Get(0) : 0),
             co.Format2(
                 i18.Tr("layout generator '%s' failed: %s"),
-                co.ArgStr(cx.gen_names.Get(0)),
+                co.ArgStr(cx.gen_count > 0 ? cx.gen_names.Get(0) : "design_page"),
                 co.ArgStr(err)
             )
         )
@@ -197,8 +205,23 @@ func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
     end
     mut recs := str.Split(out, char_from_code(30))
     defer recs.Free()
-    repeat cx.gen_count in i:
-        if i >= recs.Len():
+    if recs.Len() > 0:
+        mut pf := str.Split(recs.Get(0), char_from_code(31))
+        until pf.Len() < K_LO_GEN_FIELDS:
+            pf.Push("")
+        end
+        gen_std_append_unique(cx, pf.Get(4), true)
+        gen_std_append_unique(cx, pf.Get(1), true)
+        gen_std_append_unique(cx, pf.Get(5), false)
+        gen_std_append_unique(cx, pf.Get(2), false)
+        if str.Len(pf.Get(3)) > 0:
+            cx.head += pf.Get(3)
+        end
+        pf.Free()
+    end
+    repeat cx.gen_count in step:
+        i := cx.gen_count - 1 - step
+        if i + 1 >= recs.Len():
             dg.Report(
                 diag,
                 dg.SEV_ERROR,
@@ -214,7 +237,7 @@ func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
             cx.html = str.Replace(cx.html, gen_std_marker(i), "")
             continue
         end
-        mut rec := recs.Get(i)
+        mut rec := recs.Get(i + 1)
         if str.StartsWith(rec, "\n"):
             rec = str.Substr(rec, 1, str.Len(rec) - 1)
         end

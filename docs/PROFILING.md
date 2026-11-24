@@ -600,7 +600,7 @@ noise)" and never trips `--fail-under`.
 ```json
 {
   "schema": "salam.bench.v1",
-  "salam_version": "0.7.0",
+  "salam_version": "0.7.1",
   "backend": "llvm",
   "flags": "-O2",
   "host": { "os": "windows", "arch": "x86_64", "cpu": "...", "cores": 16 },

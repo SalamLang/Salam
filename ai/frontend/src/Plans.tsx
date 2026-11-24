@@ -254,10 +254,6 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
       <header className="page-head plans-hero">
         <h2>{t("پلنی که با کار شما هماهنگ است", "A plan that fits your work")}</h2>
         <p className="muted">{t("ساده انتخاب کنید و با خیال راحت شروع کنید. جزئیات فنی در پس‌زمینه مدیریت می‌شود.", "Pick simply and start with confidence. The technical details are handled for you.")}</p>
-        <div className="plans-campaign" aria-label={t("تخفیف ویژه", "Special offer")}>
-          <span className="plans-campaign-badge">{t("٪۳۵ تخفیف ویژه", "35% special offer")}</span>
-          <span className="muted">{t("برای مدت محدود روی همه‌ی پلن‌ها", "Limited-time on all plans")}</span>
-        </div>
       </header>
 
       {result && (
@@ -345,7 +341,8 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
             const mine = active?.id === p.id;
             const featured = p.id === "unlimited" || p.id === "pro";
             const base = tier ? tier.price : p.price;
-            const campaignOff = base > 0 ? Math.floor(base * 35 / 100) : 0;
+            const campaignOff = tier && base > 0 ? Math.max(0, Math.min(base, tier.off ?? 0)) : 0;
+            const campaignPct = campaignOff > 0 ? Math.round((campaignOff * 100) / base) : 0;
             const campaignSale = Math.max(0, base - campaignOff);
             const discountKey = tier ? `${p.id}:${tier.parallel}` : p.id;
             const discount = discounts[discountKey];
@@ -353,13 +350,13 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
             const finalCharge = applied ? applied.charge : campaignSale;
             const showUsd = !isFa && base > 0;
             const display = base === 0 ? t("رایگان", "Free") : showUsd ? `$${fmtNum(ep.usd ?? 0)}` : toman(finalCharge);
-            const originalDisplay = base === 0 ? "" : showUsd ? `$${fmtNum(Math.round((ep.usd ?? 0) / 0.65))}` : toman(base);
+            const originalDisplay = base === 0 ? "" : showUsd ? `$${fmtNum(Math.round((ep.usd ?? 0) / (1 - campaignPct / 100)))}` : toman(base);
             const period = p.price === 0 ? t("همیشه در دسترس", "Always available") : p.hours > 0 ? t("دسترسی کوتاه‌مدت", "Short-term access") : p.days === 0 ? t("بدون تاریخ انقضا", "No expiry") : t("دسترسی ماهانه", "Monthly access");
             const busyKey = tier ? `${p.id}:${tier.parallel}` : p.id;
             const detailsOpen = !!openDetails[p.id];
             return (
               <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
-                {(featured || base > 0) && <span className="plan-ribbon">{base > 0 ? t("٪۳۵ تخفیف", "35% off") : t("پیشنهادی", "Popular")}</span>}
+                {(featured || campaignPct > 0) && <span className="plan-ribbon">{campaignPct > 0 ? t(`٪${fmtNum(campaignPct)} تخفیف`, `${campaignPct}% off`) : t("پیشنهادی", "Popular")}</span>}
                 <header className="plan-head">
                   <span className="plan-icon" aria-hidden="true">
                     <IconSpark width={20} height={20} />
@@ -382,15 +379,18 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
                 )}
 
                 <div className="plan-priceblock plan-priceblock-attractive">
-                  {base > 0 ? (
+                  {campaignPct > 0 ? (
                     <>
-                      <span className="plan-discount-pill">{t("٪۳۵ تخفیف", "35% off")}</span>
+                      <span className="plan-discount-pill">{t(`٪${fmtNum(campaignPct)} تخفیف`, `${campaignPct}% off`)}</span>
                       <s className="plan-price-old">{originalDisplay}</s>
                       <span className="plan-price plan-price-sale">{display}</span>
                       {applied && applied.discount > 0 && <span className="plan-off">{t("کد تخفیف هم اعمال شد", "Extra code applied")}</span>}
                     </>
                   ) : (
-                    <span className="plan-price">{display}</span>
+                    <>
+                      <span className="plan-price">{display}</span>
+                      {applied && applied.discount > 0 && <span className="plan-off">{t("کد تخفیف اعمال شد", "Code applied")}</span>}
+                    </>
                   )}
                 </div>
                 <p className="plan-period">{period}</p>

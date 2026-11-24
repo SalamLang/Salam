@@ -745,8 +745,11 @@ with `salam_layout` (elements, attributes, allowed values), see
 `docs/LAYOUT_ELEMENTS.md`, and run `salam_check`. Style with the standard
 properties (`padding`, `gap`, `radius`, `hover background`), not CSS.
 
-Every page uses the shadcn design system by default (`design = "shadcn"`; set
-`design = "none"` to turn the look off): `theme = "auto|light|dark"`,
+No design system is applied unless you ask: put `design = "shadcn"` as the
+first line of the `page:` block (Persian code: `طراحی = "شد سی ان"`), or set
+a project default in `design.toml` or the `[design]` table of `salam.toml`;
+the page wins over the file, and without either there is no design (same as
+`design = "none"`). With a design on: `theme = "auto|light|dark"`,
 `palette = "neutral|zinc|stone|slate|gray"`, `design tokens = "primary: #2563eb;
 radius: 0.5rem"`. Components: `button` (`variant`, `size`), `card` with `card
 header/title/content/footer`, `badge`, `alert`, `input`, `switch`, `select`,

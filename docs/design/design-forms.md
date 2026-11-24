@@ -1,6 +1,6 @@
 # Forms (shadcn)
 
-Styled only when the page design is on (`design = shadcn`, the default). Markup and behaviour do not change with `design = none`.
+Styled only when the page design is on (`design = "shadcn"` on the page, or a project default; there is no design unless you ask). Markup and behaviour do not change with `design = none`.
 
 ## Text inputs
 

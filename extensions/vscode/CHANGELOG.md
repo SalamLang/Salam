@@ -4,6 +4,7 @@
 
 ## 0.7.0
 
+- This version is built and published without changes to the extension.
 - Nothing in the extension changed since the previous entry; the compiler release carries the fixes.
 - The extension needs no changes for the compiler fixes in this version.
 - The language changes in this version are listed with the compiler release.

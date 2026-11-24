@@ -20,15 +20,72 @@ end
 | --------------- | --------------------------------------- | -------- |
 | `design`        | `shadcn`, `none`                        | `shadcn` |
 | `theme`         | `auto`, `light`, `dark`                 | `auto`   |
-| `palette`       | `neutral`, `zinc`, `stone`, `slate`, `gray` | `neutral` |
+| `palette`       | `neutral`, `zinc`, `stone`, `slate`, `gray`, `mauve`, `olive`, `mist`, `taupe`, or a palette defined in the project file | `neutral` |
 | `design tokens` | `name: value; dark name: value; ...`    | none     |
 
-`auto` follows the system setting. A `data-theme` on any element (or the
-class `dark`) themes that subtree. In `design tokens`, a bare name sets the
+`auto` follows the system setting. `theme` works on any element (box, card,
+...): `theme = "dark"` themes that subtree, as does the class `dark`. A page
+with a `theme toggle` and `theme = "auto"` also gets a small head script that
+applies the saved choice (localStorage key `salam-theme`) before first paint. In `design tokens`, a bare name sets the
 token for light and dark, `light name` and `dark name` set one side only.
 Tokens are the shadcn variables: `background foreground card popover primary
 secondary muted accent destructive border input ring radius chart-1 ... chart-5
 sidebar ...` plus `font-sans` and `font-mono`.
+
+## Fonts
+
+Tokens `font-sans` and `font-mono` set the families. `font-url` is a space
+separated list of stylesheet URLs (Google Fonts style) and becomes `<link>`
+tags, with a preconnect for fonts.googleapis.com. `font-face` lists own files
+as `Family url [weight] [italic]`, comma separated (`+` in the family stands
+for a space) and becomes `@font-face` rules. They apply even with
+`design = none`. In the `design tokens` attribute `;` ends a token and `&` is
+unusable, so a URL there needs `%3B` and `%26`; the project file has no such
+limit.
+
+## Project file
+
+Defaults for every page come from `design.toml`, or from the `[design]` tables
+of `salam.toml`. The generator looks in the current directory (where you run
+the build) and then in every parent, and uses the nearest folder that has a
+`design.toml` or a `salam.toml` with a design section. `SALAM_DESIGN=<file>`
+names a file explicitly. Page settings win over the file; page tokens win over
+file tokens, which win over the palette.
+
+```toml
+[design]
+design = "shadcn"
+theme = "auto"
+palette = "brand"
+font-sans = "Inter, sans-serif"
+font-url = "https://fonts.googleapis.com/css2?family=Inter:wght@400;700"
+font-face = "Brand+Sans /fonts/brand.woff2 400 700"
+tokens = "radius: 0.5rem"
+
+[design.tokens]
+dark-ring = "oklch(0.7 0.15 260)"
+
+[design.palette.brand]
+base = "zinc"
+primary = "oklch(0.6 0.2 260)"
+dark-primary = "oklch(0.7 0.15 260)"
+```
+
+In `design.toml` the prefix is dropped: `[tokens]`, `[palette.brand]`, root keys.
+A palette table starts from the built in palette named by `base` (default
+`neutral`); every other key is a token, `dark-` or `light-` in front for one
+side. A page then says `palette = "brand"`. A config `theme` of `light` or
+`dark` sets the page color scheme when the page has no `theme`.
+
+Known limit: a page token of one side (`primary`) does not override a file
+token of a specific side (`dark-primary`) for that side.
+
+## Mistakes
+
+An unknown token name or an undefined palette is reported: a
+`<meta name="salam-design-warning" content="...">` in the head and a
+`console.error`. A token that starts with `--` is a custom property and is
+passed through, `ds-` names are reserved.
 
 ## How it works
 

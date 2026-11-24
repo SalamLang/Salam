@@ -4,6 +4,7 @@
 
 ## 0.7.0
 
+- The extension needs no changes for the compiler fixes in this version.
 - The language changes in this version are listed with the compiler release.
 - Persian page attributes that take several words, such as `مسدودکننده`, accept the Persian value names without an error.
 - The outline no longer lists the compiler's generated try names, and symbol ranges stay nested.

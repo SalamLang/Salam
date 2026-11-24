@@ -56,7 +56,7 @@ page NotesPage(items: Vector<Note>, problem: str):
         paragraph: class = "error" content = problem end
     end
     list:
-        each n in items:
+        each _, n in items:
             item: content = n.text end
         end
     end

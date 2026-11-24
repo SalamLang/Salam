@@ -324,8 +324,8 @@ font Vazirmatn:
 end
 
 page:
-    font = "Vazirmatn", system
-    image: source = "hero.png" alt = "The editor" width = fill image fit = cover end
+    font = "Vazirmatn", "system"
+    image: source = "hero.png" alt = "The editor" width = "fill" image fit = "cover" end
     icon: source = "play.svg" color = theme.color.accent end
 end
 ```

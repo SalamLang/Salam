@@ -2464,7 +2464,7 @@ CSS strings. The web target turns the standard into CSS for you.
 page:
     title = "Cards"
     box:
-        layout = grid
+        layout = "grid"
         columns = repeat(fill, minmax(160, 1fr))
         gap = 12
         padding = 16
@@ -2475,7 +2475,7 @@ page:
             radius = 8
             border = 1, solid, #3366aa
             background = linear(90, #eef4ff, white)
-            hover background = #ffeecc
+            hover background = "#ffeecc"
             transition = 200ms, ease out
             paragraph: color = #1e3a8a content = "A card" end
         end
@@ -2523,8 +2523,8 @@ page:
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
     header:
-        background = blue
-        color = white
+        background = "blue"
+        color = "white"
         padding = 24px
         heading: size = 1 content = "Welcome to Salam" font size = 32 end
     end
@@ -2766,8 +2766,8 @@ E127. The compiler never fetches over the network. Optional: `weight`
 
 ```salam
 page:
-    font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
-    box: content = "hi" font = "Estedad", sans end
+    font: name = "Estedad" url = "fonts/Estedad.woff2" display = "swap" end
+    box: content = "hi" font = "Estedad", "sans" end
 end
 ```
 

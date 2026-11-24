@@ -14,7 +14,7 @@
 # Some tests cannot pass on a cross target and are skipped: they need -D flags
 # from their test harness, a database library, or a trapping integer division
 # (release builds on ARM return 0), and on 32-bit targets a few assume a
-# 64-bit usize or declare C's int-returning abs() as i64. stdlib/os_platform_demo
+# 64-bit usize or declare C's int-returning abs() as i64, set file times through a 64-bit timeval, or allocate over a gigabyte. stdlib/os_platform_demo
 # runs a different number of assertions per architecture, so its .out only
 # matches on x86-64. NATIVE_CROSS_SKIP replaces the list.
 #
@@ -52,7 +52,9 @@ aarch64* | arm64* | riscv*) ;;
 *) DEFAULT_SKIP="$DEFAULT_SKIP general/div_zero_compound general/div_zero_runtime general/mod_zero_runtime_i64" ;;
 esac
 case "$TRIPLE" in
-i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos general/extern_int128" ;;
+i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos general/extern_int128
+    features/const_u64_high_bit stdlib/vector_reserve_large stdlib/sevenzip_no_limit
+    stdlib/archive_tar stdlib/rar_file_more stdlib/rar_links_demo stdlib/sevenzip_create stdlib/sevenzip_extract" ;;
 esac
 case "$TRIPLE" in
 *windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos general/extern_int128" ;;

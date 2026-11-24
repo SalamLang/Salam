@@ -6,8 +6,8 @@ Python, PHP, and Salam. Salam is measured four ways: the LLVM backend at
 by `gcc -O3`, and the default `tcc` toolchain (no optimizer) as the
 out-of-the-box reference. C and C++ run at `-O3` too.
 
-- Date: 2026-11-24T11:59:32Z (took 31 min)
-- Commit: `4271aed9`
+- Date: 2026-11-24T13:01:51Z (took 29 min)
+- Commit: `9fee9afc`
 
 ## Methodology
 
@@ -51,36 +51,36 @@ optimizer, the out-of-the-box default).
 
 | Rank | Language | Geomean | vs C | vs Salam | Programs | Fastest / tied-fastest on |
 |---|---|---|---|---|---|---|
-| 1 | **Salam-l** | 11.38 ms | 0.91x | 1.00x | 42 / 46 | 25 / 46 |
-| 2 | **Salam-t** | 11.58 ms | 0.93x | 1.02x | 42 / 46 | 25 / 46 |
-| 3 | **Salam-n** | 12.03 ms | 0.97x | 1.06x | 42 / 46 | 18 / 46 |
-| 4 | **Salam-g** | 12.30 ms | 0.99x | 1.08x | 42 / 46 | 17 / 46 |
-| 5 | C | 12.45 ms | 1.00x | 1.09x | 42 / 46 | 24 / 46 |
-| 6 | Rust | 12.57 ms | 1.01x | 1.10x | 42 / 46 | 21 / 46 |
-| 7 | C++ | 13.77 ms | 1.11x | 1.21x | 42 / 46 | 3 / 46 |
-| 8 | Go | 16.71 ms | 1.34x | 1.47x | 42 / 46 | 2 / 46 |
-| 9 | PHP | 125.99 ms | 10.12x | 11.07x | 42 / 46 | 0 / 46 |
-| 10 | Python | 584.30 ms | 46.92x | 51.33x | 42 / 46 | 0 / 46 |
+| 1 | **Salam-l** | 11.08 ms | 0.91x | 1.00x | 42 / 46 | 27 / 46 |
+| 2 | **Salam-t** | 11.29 ms | 0.93x | 1.02x | 42 / 46 | 25 / 46 |
+| 3 | **Salam-n** | 11.76 ms | 0.97x | 1.06x | 42 / 46 | 19 / 46 |
+| 4 | **Salam-g** | 11.97 ms | 0.99x | 1.08x | 42 / 46 | 20 / 46 |
+| 5 | C | 12.14 ms | 1.00x | 1.10x | 42 / 46 | 24 / 46 |
+| 6 | Rust | 12.24 ms | 1.01x | 1.11x | 42 / 46 | 20 / 46 |
+| 7 | C++ | 13.37 ms | 1.10x | 1.21x | 42 / 46 | 10 / 46 |
+| 8 | Go | 16.18 ms | 1.33x | 1.46x | 42 / 46 | 6 / 46 |
+| 9 | PHP | 121.95 ms | 10.04x | 11.01x | 42 / 46 | 0 / 46 |
+| 10 | Python | 568.72 ms | 46.83x | 51.35x | 42 / 46 | 0 / 46 |
 
 ```
-Salam-l      ███████████████████████████████                 11.38 ms  0.91x C
-Salam-t      ███████████████████████████████                 11.58 ms  0.93x C
-Salam-n      ████████████████████████████████                12.03 ms  0.97x C
-Salam-g      █████████████████████████████████               12.30 ms  0.99x C
-C            ██████████████████████████████████              12.45 ms  1.00x C  <- baseline
-Rust         ██████████████████████████████████              12.57 ms  1.01x C
-C++          █████████████████████████████████████           13.77 ms  1.11x C
-Go           █████████████████████████████████████████████   16.71 ms  1.34x C
-PHP          (off scale)                                    125.99 ms  10.12x C
-Python       (off scale)                                    584.30 ms  46.92x C
+Salam-l      ███████████████████████████████                 11.08 ms  0.91x C
+Salam-t      ███████████████████████████████                 11.29 ms  0.93x C
+Salam-n      █████████████████████████████████               11.76 ms  0.97x C
+Salam-g      █████████████████████████████████               11.97 ms  0.99x C
+C            ██████████████████████████████████              12.14 ms  1.00x C  <- baseline
+Rust         ██████████████████████████████████              12.24 ms  1.01x C
+C++          █████████████████████████████████████           13.37 ms  1.10x C
+Go           █████████████████████████████████████████████   16.18 ms  1.33x C
+PHP          (off scale)                                    121.95 ms  10.04x C
+Python       (off scale)                                    568.72 ms  46.83x C
 ```
 
 Takeaways:
 
-- **Fastest Salam backend:** Salam-l, geomean 11.38 ms
-  (0.91x C's geomean, 0.91x Rust's).
+- **Fastest Salam backend:** Salam-l, geomean 11.08 ms
+  (0.91x C's geomean, 0.90x Rust's).
 - **Salam-l is fastest or tied-fastest on the most programs** (
-  25/46); see the per-program table below.
+  27/46); see the per-program table below.
 - **`salam build` with no flags** (Salam-t, tcc, no optimizer) is 1.02x slower than the
   fastest Salam backend, so it is the out-of-the-box baseline, not the number
   to compare against other optimized languages -- pass `-O3` / use the LLVM
@@ -136,48 +136,48 @@ is in `results.json`.
 
 | Program | C | C++ | Rust | Go | Salam-l | Salam-n | Salam-g | Salam-t | PHP | Python | Fastest |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 01_fib_recursive | 2 | 3 | 3 | 5 | 3 | 3 | 2 | 3 | 41 | 71 | **C / Salam-g (2)** |
-| 02_fib_iterative | 17 | 18 | 18 | 18 | 18 | 18 | 17 | 18 | 51 | 498 | **C / Salam-g (17)** |
-| 03_primes_count | 5 | 6 | 4 | 6 | 4 | 4 | 5 | 4 | 15 | 125 | **Rust / Salam (4)** |
-| 04_collatz | 5 | 6 | 4 | 7 | 4 | 4 | 5 | 4 | 50 | 273 | **Rust / Salam (4)** |
-| 05_sum_mod | 11 | 12 | 11 | 11 | 11 | 11 | 11 | 11 | 27 | 306 | **C / Rust / Go / Salam (11)** |
-| 06_gcd_sum | 20 | 21 | 16 | 21 | 17 | 17 | 20 | 16 | 42 | 115 | **Rust / Salam-t (16)** |
-| 07_pow_mod | 2 | 3 | 2 | 3 | 2 | 2 | 2 | 2 | 15 | 51 | **C / Rust / Salam (2)** |
-| 08_digit_sum | 3 | 4 | 3 | 4 | 3 | 3 | 3 | 3 | 45 | 273 | **C / Rust / Salam (3)** |
-| 09_perfect_numbers | 11 | 12 | 7 | 12 | 8 | 8 | 11 | 8 | 29 | 307 | Rust (7) |
-| 10_pi_leibniz | 4 | 5 | 4 | 5 | 4 | 4 | 4 | 4 | 41 | 382 | **C / Rust / Salam (4)** |
-| 11_loop_count | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 12 | 87 | **C / C++ / Rust / Go / Salam (5)** |
-| 12_hello_print | 13 | 16 | 2 | 5 | 2 | 2 | 3 | 3 | 163 | 67 | **Rust / Salam (2)** |
-| 13_array_rw | 21 | 23 | 22 | 23 | 23 | 23 | 20 | 23 | 66 | 717 | **Salam-g (20)** |
-| 14_lcg_random | 17 | 18 | 18 | 22 | 18 | 18 | 17 | 18 | 72 | 1073 | **C / Salam-g (17)** |
-| 15_matrix_mult | 4 | 5 | 4 | 9 | 4 | 7 | 5 | 4 | 156 | 851 | **C / Rust / Salam (4)** |
-| 16_quicksort | 25 | 26 | 24 | 25 | 24 | 24 | 26 | 24 | 139 | 427 | **Rust / Salam (24)** |
-| 17_n_queens | 39 | 40 | 42 | 43 | 47 | 48 | 46 | 44 | 393 | 520 | C (39) |
-| 18_sieve_eratosthenes | 8 | 9 | 9 | 9 | 8 | 8 | 8 | 8 | 129 | 750 | **C / Salam (8)** |
-| 19_mandelbrot | 9 | 10 | 9 | 10 | 9 | 10 | 9 | 9 | 98 | 903 | **C / Rust / Salam (9)** |
-| 20_monte_carlo_pi | 27 | 28 | 15 | 32 | 15 | 26 | 27 | 12 | 280 | 2793 | **Salam-t (12)** |
-| 21_coin_change_dp | 2 | 3 | 2 | 3 | 2 | 2 | 2 | 2 | 13 | 86 | **C / Rust / Salam (2)** |
-| 22_knapsack_01 | 3 | 4 | 4 | 5 | 5 | 4 | 5 | 5 | 88 | 1005 | C (3) |
-| 23_caesar_cipher | 12 | 12 | 11 | 15 | 11 | 12 | 12 | 11 | 77 | 913 | **Rust / Salam (11)** |
-| 24_merge_sort | 28 | 28 | 30 | 34 | 28 | 30 | 32 | 32 | 234 | 641 | **C / C++ / Salam-l (28)** |
-| 25_palindrome_count | 11 | 12 | 11 | 13 | 11 | 12 | 11 | 11 | 194 | 1324 | **C / Rust / Salam (11)** |
+| 01_fib_recursive | 2 | 3 | 3 | 5 | 3 | 2 | 2 | 3 | 40 | 69 | **C / Salam (2)** |
+| 02_fib_iterative | 17 | 17 | 18 | 17 | 17 | 18 | 17 | 18 | 49 | 490 | **C / C++ / Go / Salam (17)** |
+| 03_primes_count | 5 | 6 | 4 | 6 | 4 | 3 | 5 | 4 | 15 | 122 | **Salam-n (3)** |
+| 04_collatz | 5 | 6 | 4 | 7 | 4 | 4 | 5 | 4 | 48 | 268 | **Rust / Salam (4)** |
+| 05_sum_mod | 10 | 11 | 11 | 11 | 11 | 11 | 11 | 11 | 26 | 299 | C (10) |
+| 06_gcd_sum | 20 | 20 | 15 | 20 | 17 | 17 | 20 | 15 | 40 | 112 | **Rust / Salam-t (15)** |
+| 07_pow_mod | 2 | 3 | 2 | 3 | 2 | 2 | 2 | 2 | 14 | 49 | **C / Rust / Salam (2)** |
+| 08_digit_sum | 3 | 4 | 3 | 4 | 3 | 3 | 3 | 3 | 43 | 269 | **C / Rust / Salam (3)** |
+| 09_perfect_numbers | 11 | 12 | 7 | 12 | 8 | 7 | 11 | 8 | 28 | 302 | **Rust / Salam-n (7)** |
+| 10_pi_leibniz | 4 | 5 | 4 | 5 | 4 | 4 | 4 | 4 | 39 | 375 | **C / Rust / Salam (4)** |
+| 11_loop_count | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 11 | 84 | **C / C++ / Rust / Go / Salam (5)** |
+| 12_hello_print | 13 | 15 | 2 | 5 | 2 | 2 | 3 | 3 | 161 | 64 | **Rust / Salam (2)** |
+| 13_array_rw | 21 | 22 | 22 | 22 | 22 | 22 | 19 | 22 | 62 | 701 | **Salam-g (19)** |
+| 14_lcg_random | 17 | 17 | 18 | 21 | 18 | 18 | 17 | 18 | 70 | 1068 | **C / C++ / Salam-g (17)** |
+| 15_matrix_mult | 4 | 5 | 4 | 9 | 4 | 6 | 4 | 4 | 153 | 838 | **C / Rust / Salam (4)** |
+| 16_quicksort | 25 | 25 | 24 | 24 | 24 | 24 | 25 | 24 | 136 | 412 | **Rust / Go / Salam (24)** |
+| 17_n_queens | 39 | 39 | 41 | 42 | 46 | 48 | 45 | 43 | 391 | 515 | C / C++ (39) |
+| 18_sieve_eratosthenes | 8 | 9 | 8 | 9 | 8 | 8 | 8 | 8 | 103 | 708 | **C / Rust / Salam (8)** |
+| 19_mandelbrot | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 95 | 878 | **C / C++ / Rust / Go / Salam (9)** |
+| 20_monte_carlo_pi | 27 | 27 | 15 | 31 | 15 | 25 | 27 | 12 | 275 | 2766 | **Salam-t (12)** |
+| 21_coin_change_dp | 2 | 3 | 2 | 3 | 2 | 2 | 2 | 2 | 13 | 83 | **C / Rust / Salam (2)** |
+| 22_knapsack_01 | 3 | 4 | 4 | 5 | 5 | 4 | 5 | 5 | 86 | 990 | C (3) |
+| 23_caesar_cipher | 11 | 12 | 11 | 14 | 11 | 11 | 11 | 11 | 73 | 899 | **C / Rust / Salam (11)** |
+| 24_merge_sort | 28 | 28 | 29 | 32 | 28 | 29 | 31 | 31 | 228 | 608 | **C / C++ / Salam-l (28)** |
+| 25_palindrome_count | 11 | 11 | 10 | 13 | 10 | 12 | 11 | 10 | 190 | 1308 | **Rust / Salam (10)** |
 | 26_ackermann | 1 | 2 | 1 | 2 | 1 | 1 | 1 | 1 | 8 | 17 | **C / Rust / Salam (1)** |
-| 27_edit_distance | 6 | 7 | 6 | 13 | 5 | 11 | 5 | 5 | 187 | 1896 | **Salam (5)** |
-| 28_prime_factorization | 1330 | 1322 | 818 | 1312 | 818 | 801 | 1323 | 827 | 3439 | 41932 | **Salam-n (801)** |
-| 29_dot_product | 34 | 34 | 35 | 34 | 34 | 36 | 33 | 34 | 188 | 2120 | **Salam-g (33)** |
-| 30_heap_sort | 33 | 33 | 37 | 41 | 35 | 34 | 34 | 35 | 404 | 856 | C / C++ (33) |
-| 31_binary_search_stress | 1053 | 1097 | 863 | 1046 | 1130 | 1067 | 1094 | 1069 | 3474 | 21123 | Rust (863) |
-| 32_longest_increasing_subsequence | 9 | 10 | 22 | 10 | 9 | 10 | 10 | 9 | 213 | 1877 | **C / Salam (9)** |
-| 33_subset_sum_reachability | 9 | 10 | 19 | 16 | 18 | 16 | 16 | 18 | 263 | 1864 | C (9) |
-| 34_counting_sort | 32 | 33 | 24 | 36 | 24 | 34 | 32 | 24 | 189 | 1889 | **Rust / Salam (24)** |
-| 35_run_length_stats | 7 | 8 | 6 | 8 | 6 | 6 | 7 | 6 | 88 | 647 | **Rust / Salam (6)** |
-| 36_array_rotation_reversal | 26 | 29 | 29 | 28 | 27 | 26 | 28 | 27 | 193 | 727 | **C / Salam-n (26)** |
-| 37_sqrt_decomposition | 12 | 13 | 12 | 20 | 12 | 12 | 14 | 12 | 260 | 886 | **C / Rust / Salam (12)** |
-| 38_game_of_life | 8 | 9 | 27 | 39 | 6 | 9 | 7 | 6 | 866 | 6635 | **Salam (6)** |
-| 39_trapezoidal_integration | 12 | 13 | 13 | 13 | 13 | 12 | 12 | 12 | 295 | 1965 | **C / Salam (12)** |
-| 40_matrix_stdlib_matmul | 34 | 32 | 54 | 86 | 11 | 11 | 12 | 11 | 1312 | 103 | **Salam (11)** |
-| 41_matrix_stdlib_smallops | 4 | 5 | 5 | 19 | 38 | 41 | 46 | 49 | 411 | 1080 | C (4) |
-| 42_tensor_stdlib_matmul | 35 | 32 | 54 | 86 | 5 | 6 | 6 | 6 | 1327 | 103 | **Salam-l (5)** |
+| 27_edit_distance | 6 | 7 | 6 | 12 | 5 | 11 | 5 | 5 | 183 | 1886 | **Salam (5)** |
+| 28_prime_factorization | 1322 | 1319 | 816 | 1310 | 816 | 799 | 1321 | 826 | 3381 | 41717 | **Salam-n (799)** |
+| 29_dot_product | 33 | 33 | 34 | 33 | 33 | 35 | 33 | 33 | 185 | 2120 | **C / C++ / Go / Salam (33)** |
+| 30_heap_sort | 32 | 32 | 36 | 39 | 33 | 33 | 33 | 34 | 394 | 827 | C / C++ (32) |
+| 31_binary_search_stress | 1041 | 1043 | 724 | 1037 | 1079 | 1057 | 1044 | 1065 | 3386 | 17938 | Rust (724) |
+| 32_longest_increasing_subsequence | 9 | 10 | 22 | 10 | 9 | 10 | 9 | 9 | 210 | 1849 | **C / Salam (9)** |
+| 33_subset_sum_reachability | 9 | 10 | 19 | 15 | 18 | 15 | 16 | 18 | 259 | 1835 | C (9) |
+| 34_counting_sort | 31 | 32 | 24 | 35 | 24 | 33 | 31 | 24 | 183 | 1903 | **Rust / Salam (24)** |
+| 35_run_length_stats | 7 | 8 | 6 | 8 | 5 | 6 | 7 | 5 | 85 | 640 | **Salam (5)** |
+| 36_array_rotation_reversal | 24 | 28 | 26 | 26 | 24 | 25 | 24 | 24 | 178 | 706 | **C / Salam (24)** |
+| 37_sqrt_decomposition | 12 | 12 | 11 | 18 | 11 | 11 | 13 | 11 | 241 | 872 | **Rust / Salam (11)** |
+| 38_game_of_life | 8 | 9 | 27 | 38 | 6 | 9 | 7 | 6 | 860 | 6653 | **Salam (6)** |
+| 39_trapezoidal_integration | 12 | 12 | 12 | 12 | 12 | 12 | 12 | 12 | 292 | 1949 | **C / C++ / Rust / Go / Salam (12)** |
+| 40_matrix_stdlib_matmul | 34 | 29 | 54 | 84 | 10 | 11 | 11 | 11 | 1321 | 94 | **Salam-l (10)** |
+| 41_matrix_stdlib_smallops | 4 | 4 | 5 | 18 | 37 | 40 | 45 | 48 | 405 | 1068 | C / C++ (4) |
+| 42_tensor_stdlib_matmul | 33 | 29 | 54 | 84 | 5 | 5 | 5 | 5 | 1360 | 93 | **Salam (5)** |
 | 43_vector_collections | - | - | - | - | - | - | - | - | - | - |  (-1) |
 | 44_hashmap_collections | - | - | - | - | - | - | - | - | - | - |  (-1) |
 | 45_hashmap_string_keys | - | - | - | - | - | - | - | - | - | - |  (-1) |
@@ -195,16 +195,16 @@ they mostly track how big each program's workload is.
 
 | Rank | Program | Salam-l (ms) | Best other language | vs best other |
 |---|---|---|---|---|
-| 1 | 42_tensor_stdlib_matmul | 5 | C++ (32) | 0.16x |
-| 2 | 40_matrix_stdlib_matmul | 11 | C++ (32) | 0.34x |
+| 1 | 42_tensor_stdlib_matmul | 5 | C++ (29) | 0.17x |
+| 2 | 40_matrix_stdlib_matmul | 10 | C++ (29) | 0.34x |
 | 3 | 38_game_of_life | 6 | C (8) | 0.75x |
 | 4 | 27_edit_distance | 5 | C (6) | 0.83x |
-| 5 | 26_ackermann | 1 | C (1) | 1.00x |
-| 6 | 07_pow_mod | 2 | C (2) | 1.00x |
-| 7 | 12_hello_print | 2 | Rust (2) | 1.00x |
-| 8 | 21_coin_change_dp | 2 | C (2) | 1.00x |
-| 9 | 08_digit_sum | 3 | C (3) | 1.00x |
-| 10 | 10_pi_leibniz | 4 | C (4) | 1.00x |
+| 5 | 35_run_length_stats | 5 | Rust (6) | 0.83x |
+| 6 | 26_ackermann | 1 | C (1) | 1.00x |
+| 7 | 07_pow_mod | 2 | C (2) | 1.00x |
+| 8 | 12_hello_print | 2 | Rust (2) | 1.00x |
+| 9 | 21_coin_change_dp | 2 | C (2) | 1.00x |
+| 10 | 08_digit_sum | 3 | C (3) | 1.00x |
 
 ### Top 20 slowest programs in Salam-l
 
@@ -215,25 +215,25 @@ non-Salam timing.
 
 | Rank | Program | Salam-l (ms) | Best other language | vs best other |
 |---|---|---|---|---|
-| 1 | 41_matrix_stdlib_smallops | 38 | C (4) | 9.50x |
+| 1 | 41_matrix_stdlib_smallops | 37 | C (4) | 9.25x |
 | 2 | 33_subset_sum_reachability | 18 | C (9) | 2.00x |
 | 3 | 22_knapsack_01 | 5 | C (3) | 1.67x |
 | 4 | 01_fib_recursive | 3 | C (2) | 1.50x |
-| 5 | 31_binary_search_stress | 1130 | Rust (863) | 1.31x |
-| 6 | 17_n_queens | 47 | C (39) | 1.21x |
+| 5 | 31_binary_search_stress | 1079 | Rust (724) | 1.49x |
+| 6 | 17_n_queens | 46 | C (39) | 1.18x |
 | 7 | 09_perfect_numbers | 8 | Rust (7) | 1.14x |
-| 8 | 13_array_rw | 23 | C (21) | 1.10x |
-| 9 | 39_trapezoidal_integration | 13 | C (12) | 1.08x |
-| 10 | 06_gcd_sum | 17 | Rust (16) | 1.06x |
-| 11 | 30_heap_sort | 35 | C (33) | 1.06x |
-| 12 | 02_fib_iterative | 18 | C (17) | 1.06x |
-| 13 | 14_lcg_random | 18 | C (17) | 1.06x |
-| 14 | 36_array_rotation_reversal | 27 | C (26) | 1.04x |
-| 15 | 28_prime_factorization | 818 | Rust (818) | 1.00x |
-| 16 | 29_dot_product | 34 | C (34) | 1.00x |
-| 17 | 24_merge_sort | 28 | C (28) | 1.00x |
-| 18 | 34_counting_sort | 24 | Rust (24) | 1.00x |
-| 19 | 16_quicksort | 24 | Rust (24) | 1.00x |
+| 8 | 06_gcd_sum | 17 | Rust (15) | 1.13x |
+| 9 | 05_sum_mod | 11 | C (10) | 1.10x |
+| 10 | 14_lcg_random | 18 | C (17) | 1.06x |
+| 11 | 13_array_rw | 22 | C (21) | 1.05x |
+| 12 | 30_heap_sort | 33 | C (32) | 1.03x |
+| 13 | 28_prime_factorization | 816 | Rust (816) | 1.00x |
+| 14 | 29_dot_product | 33 | C (33) | 1.00x |
+| 15 | 24_merge_sort | 28 | C (28) | 1.00x |
+| 16 | 36_array_rotation_reversal | 24 | C (24) | 1.00x |
+| 17 | 34_counting_sort | 24 | Rust (24) | 1.00x |
+| 18 | 16_quicksort | 24 | Rust (24) | 1.00x |
+| 19 | 02_fib_iterative | 17 | C (17) | 1.00x |
 | 20 | 20_monte_carlo_pi | 15 | Rust (15) | 1.00x |
 
 ## Summary
@@ -241,9 +241,9 @@ non-Salam timing.
 Taking the **best Salam backend per program** against the best of the other
 compiled languages (C / C++ / Rust / Go):
 
-- **Fastest outright (8):** 13_array_rw, 20_monte_carlo_pi, 27_edit_distance, 28_prime_factorization, 29_dot_product, 38_game_of_life, 40_matrix_stdlib_matmul, 42_tensor_stdlib_matmul.
-- **Tied for fastest (27):** 01_fib_recursive, 02_fib_iterative, 03_primes_count, 04_collatz, 05_sum_mod, 06_gcd_sum, 07_pow_mod, 08_digit_sum, 10_pi_leibniz, 11_loop_count, 12_hello_print, 14_lcg_random, 15_matrix_mult, 16_quicksort, 18_sieve_eratosthenes, 19_mandelbrot, 21_coin_change_dp, 23_caesar_cipher, 24_merge_sort, 25_palindrome_count, 26_ackermann, 32_longest_increasing_subsequence, 34_counting_sort, 35_run_length_stats, 36_array_rotation_reversal, 37_sqrt_decomposition, 39_trapezoidal_integration.
-- **Trailing the fastest (7):** 09_perfect_numbers (+1 vs Rust); 17_n_queens (+5 vs C); 22_knapsack_01 (+1 vs C); 30_heap_sort (+1 vs C/C++); 31_binary_search_stress (+204 vs Rust); 33_subset_sum_reachability (+7 vs C); 41_matrix_stdlib_smallops (+34 vs C).
+- **Fastest outright (9):** 03_primes_count, 13_array_rw, 20_monte_carlo_pi, 27_edit_distance, 28_prime_factorization, 35_run_length_stats, 38_game_of_life, 40_matrix_stdlib_matmul, 42_tensor_stdlib_matmul.
+- **Tied for fastest (26):** 01_fib_recursive, 02_fib_iterative, 04_collatz, 06_gcd_sum, 07_pow_mod, 08_digit_sum, 09_perfect_numbers, 10_pi_leibniz, 11_loop_count, 12_hello_print, 14_lcg_random, 15_matrix_mult, 16_quicksort, 18_sieve_eratosthenes, 19_mandelbrot, 21_coin_change_dp, 23_caesar_cipher, 24_merge_sort, 25_palindrome_count, 26_ackermann, 29_dot_product, 32_longest_increasing_subsequence, 34_counting_sort, 36_array_rotation_reversal, 37_sqrt_decomposition, 39_trapezoidal_integration.
+- **Trailing the fastest (7):** 05_sum_mod (+1 vs C); 17_n_queens (+4 vs C/C++); 22_knapsack_01 (+1 vs C); 30_heap_sort (+1 vs C/C++); 31_binary_search_stress (+320 vs Rust); 33_subset_sum_reachability (+6 vs C); 41_matrix_stdlib_smallops (+33 vs C/C++).
 
 Salam matches or beats the fastest other compiled language on 35 of 46 programs.
 

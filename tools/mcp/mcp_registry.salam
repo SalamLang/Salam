@@ -25,6 +25,7 @@ include mcpdoc "mcp_docs.salam"
 include mcpout "mcp_result.salam"
 include mcpexec "mcp_exec.salam"
 include mcpweb "mcp_web.salam"
+include mcplayout "mcp_layout.salam"
 
 mut g_tools := value.Value {}
 mut g_tools_ready := false
@@ -92,9 +93,20 @@ func _register_compiler(list &: value.Value):
         "The fast correctness loop: lexes, parses and type-checks a Salam program without codegen or linking. ".Concat(
             _input_desc()
         ).Concat(
-            "Each diagnostic comes back with its code, line and column, the offending source line, the compiler's help, a hint when the code uses syntax from another language, and a pointer to a minimal failing example. Run it after every edit and fix the FIRST error first. It skips codegen and linking, so confirm with salam_build or salam_run before you finish."
+            "Each diagnostic comes back with its code, line and column, the offending source line, the compiler's help, a hint when the code uses syntax from another language, and a pointer to a minimal failing example. Run it after every edit and fix the FIRST error first (for a `page:` UI file use salam_page_build). It skips codegen and linking, so confirm with salam_build or salam_run before you finish."
         ),
         _path_schema("")
+    )
+    _tool(
+        list,
+        "salam_page_build",
+        "Build or check a UI page",
+        "Compiles a `page:` source, the one UI language for web, desktop (--ui=native), Android and iOS apps, in a private scratch directory and returns the diagnostics plus the generated HTML, CSS and JS file names and sizes. Nothing is run. No design system is applied unless the page sets `design = \"shadcn\"` (Persian code: `طراحی = \"شد سی ان\"`) or design.toml does. ".Concat(
+            _input_desc()
+        ).Concat(
+            "ui = web (default) builds HTML/CSS/JS like `salam page build`; native checks the page for a desktop window or a phone app like `salam check --ui=native` (E165 and W166 name what a window cannot show); all does both. show = html, css or js also returns that generated file. Use it after writing any page, and look names up with salam_layout instead of guessing."
+        ),
+        _path_schema(",\"ui\":{\"type\":\"string\",\"enum\":[\"web\",\"native\",\"all\"],\"description\":\"Target to build or check. Defaults to web.\"},\"show\":{\"type\":\"string\",\"enum\":[\"html\",\"css\",\"js\"],\"description\":\"Also return the text of this generated file.\"}")
     )
     if not mcpexec.Hosted():
         _tool(
@@ -173,8 +185,15 @@ func _register_knowledge(list &: value.Value):
         list,
         "salam_docs",
         "Look up the Salam language reference",
-        "Answers 'how do I write X in Salam' from the authoritative language reference (syntax, types, loops, lambdas, structs, generics, interfaces, error handling, concurrency, FFI, the layout DSL, the package manager (salam add, salam.toml, publishing by git tag), desktop apps, Persian Salam, porting from other languages). Pass a topic or question such as 'lambda', 'loops', 'struct methods', 'error handling', 'http server', or an error code such as 'E085' to get the rules, a minimal failing program and the fix. With no query it lists every topic. Salam differs from other languages in ways you cannot guess (until is while, no for loop, ret, end-closed blocks, strict declaration order, unused names are errors), so read the relevant section BEFORE writing unfamiliar code.",
+        "Answers 'how do I write X in Salam' from the authoritative language reference (syntax, types, loops, lambdas, structs, generics, interfaces, error handling, concurrency, FFI, the `page:` UI language for web, desktop, Android and iOS apps and its shadcn design system, the package manager (salam add, salam.toml, publishing by git tag), desktop apps, Persian Salam, porting from other languages). Pass a topic or question such as 'lambda', 'loops', 'struct methods', 'error handling', 'http server', or an error code such as 'E085' to get the rules, a minimal failing program and the fix. With no query it lists every topic. Salam differs from other languages in ways you cannot guess (until is while, no for loop, ret, end-closed blocks, strict declaration order, unused names are errors), so read the relevant section BEFORE writing unfamiliar code.",
         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Topic, question, section title or error code. Empty lists the topics.\"},\"max_chars\":{\"type\":\"integer\",\"description\":\"Longest answer to return (default 16000).\"}},\"additionalProperties\":false}"
+    )
+    _tool(
+        list,
+        "salam_layout",
+        "Look up UI page elements, attributes and values",
+        "Looks up the names of the `page:` UI language (one source for web, desktop, Android and iOS apps, with the optional shadcn design system: set design = shadcn as the first line of the page, none is applied otherwise) straight from std/layout: elements such as button, card, card header, dialog, tabs, input; attributes such as variant, size, theme, design tokens; enum values such as outline, destructive, dark; and the standard style properties such as padding, gap, radius. Each hit has its English and Persian spelling, where it is allowed, its html tag and, for an enum, every legal value. Query in English or Persian ('card', 'variant', 'dark', 'دکمه'); with no query it gives an overview. Call it before writing a page so you never guess a name, then verify with salam_page_build.",
+        "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Element, attribute or value name or words, English or Persian. Empty gives an overview.\"},\"kind\":{\"type\":\"string\",\"enum\":[\"any\",\"element\",\"attribute\",\"value\",\"style\"],\"description\":\"Restrict to one kind; style means the standard style properties. Defaults to any.\"},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum hits (default 25, at most 80).\"}},\"additionalProperties\":false}"
     )
     _tool(
         list,
@@ -336,13 +355,16 @@ func _on_target(name: str, t: mcptool.Target, p: value.Value): mcpout.ToolResult
         "salam_llvm_ir":
             ret mcptool.LlvmIr(t, mcprpc.ParamStr(p, "target", ""))
         end
+        "salam_page_build":
+            ret mcptool.PageBuild(t, mcprpc.ParamStr(p, "ui", ""), mcprpc.ParamStr(p, "show", ""))
+        end
     end
     ret mcptool.Js(t)
 end
 
 func _takes_target(name: str): bool:
     switch name:
-        "salam_check", "salam_build", "salam_run", "salam_exec", "salam_format", "salam_translate", "salam_inspect", "salam_llvm_ir", "salam_js":
+        "salam_check", "salam_build", "salam_run", "salam_exec", "salam_format", "salam_translate", "salam_inspect", "salam_llvm_ir", "salam_js", "salam_page_build":
             ret true
         end
     end
@@ -398,6 +420,13 @@ func _call_knowledge(name: str, p: value.Value, handled &: bool): mcpout.ToolRes
         end
         "salam_keywords":
             ret mcpdoc.Keywords()
+        end
+        "salam_layout":
+            ret mcplayout.Search(
+                mcprpc.ParamStr(p, "query", ""),
+                mcprpc.ParamStr(p, "kind", ""),
+                mcprpc.ParamInt(p, "limit", 25)
+            )
         end
         "salam_web_search":
             ret mcpweb.Search(mcprpc.ParamStr(p, "query", ""), mcprpc.ParamInt(p, "limit", 8))

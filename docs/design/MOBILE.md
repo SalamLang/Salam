@@ -99,7 +99,9 @@ height (kept across layout passes), lifecycle events (a short background task
 lets the save state event run), color scheme, clipboard and opening links are in
 the host. The view adopts `UITextInput` with a document that holds only the
 marked text, so composition shows as `ImePreedit` and a commit as `ImeCommit`;
-the caret rect that `gui.ui` sends to `SetImeRect` goes to the host through
+the keyboard traits come from `SetImeConfig`, one int (bits 0-3 keyboard, 4-7 return key,
+8-9 capitalize, 10-11 correction, 12-15 content type, bit 16 multi line) that goes
+through `salam_host_ime_config`; the caret rect that `gui.ui` sends to `SetImeRect` goes to the host through
 `salam_host_ime_rect` and is what the keyboard gets for `caretRectForPosition`.
 The device channel is done: `UIActivityViewController` for share, impact and
 notification feedback generators for `Haptic`, `AVCaptureDevice`,

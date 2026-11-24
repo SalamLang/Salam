@@ -5,9 +5,17 @@
 #import <CoreLocation/CoreLocation.h>
 #import <PhotosUI/PhotosUI.h>
 #import <UserNotifications/UserNotifications.h>
+#import <Security/Security.h>
+#import <Network/Network.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#include <sys/utsname.h>
+#include <execinfo.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../common/salam_host_common.h"
 
@@ -35,12 +43,20 @@ static void *run_app(void *arg)
 {
     (void)arg;
     char *argv[2] = {"app", NULL};
+    stack_t st;
+    st.ss_sp = malloc(65536);
+    st.ss_size = 65536;
+    st.ss_flags = 0;
+    if (st.ss_sp != NULL) {
+        sigaltstack(&st, NULL);
+    }
     salam_app_main(1, argv);
     exit(0);
     return NULL;
 }
 
 static int g_ime_rect[4];
+static int g_ime_cfg;
 
 static void post_text(NSString *text, int commit)
 {
@@ -456,14 +472,104 @@ static int hid_to_key(UIKeyboardHIDUsage u)
     salam_host_post(SALAM_EV_KEY, 0, 67, 0, 0, 0, NULL);
 }
 
+- (int)imeCfg
+{
+    pthread_mutex_lock(&g_mu);
+    int c = g_ime_cfg;
+    pthread_mutex_unlock(&g_mu);
+    return c;
+}
+
 - (UIKeyboardType)keyboardType
 {
-    return UIKeyboardTypeDefault;
+    int cfg = [self imeCfg];
+    switch (cfg & 15) {
+    case 1:
+        return UIKeyboardTypeEmailAddress;
+    case 2:
+        return UIKeyboardTypeURL;
+    case 3:
+        return UIKeyboardTypePhonePad;
+    case 4:
+        return UIKeyboardTypeNumberPad;
+    case 5:
+        return UIKeyboardTypeDecimalPad;
+    case 7:
+        return UIKeyboardTypeWebSearch;
+    default:
+        return UIKeyboardTypeDefault;
+    }
+}
+
+- (UIReturnKeyType)returnKeyType
+{
+    switch (([self imeCfg] >> 4) & 15) {
+    case 2:
+        return UIReturnKeyDone;
+    case 3:
+        return UIReturnKeyGo;
+    case 4:
+        return UIReturnKeyNext;
+    case 6:
+        return UIReturnKeySearch;
+    case 7:
+        return UIReturnKeySend;
+    default:
+        return UIReturnKeyDefault;
+    }
+}
+
+- (UITextAutocapitalizationType)autocapitalizationType
+{
+    switch (([self imeCfg] >> 8) & 3) {
+    case 1:
+        return UITextAutocapitalizationTypeNone;
+    case 2:
+        return UITextAutocapitalizationTypeWords;
+    case 3:
+        return UITextAutocapitalizationTypeAllCharacters;
+    default:
+        return UITextAutocapitalizationTypeSentences;
+    }
 }
 
 - (UITextAutocorrectionType)autocorrectionType
 {
-    return UITextAutocorrectionTypeNo;
+    int fix = ([self imeCfg] >> 10) & 3;
+    return fix == 2 ? UITextAutocorrectionTypeYes : (fix == 1 ? UITextAutocorrectionTypeNo : UITextAutocorrectionTypeDefault);
+}
+
+- (UITextSpellCheckingType)spellCheckingType
+{
+    int fix = ([self imeCfg] >> 10) & 3;
+    return fix == 1 ? UITextSpellCheckingTypeNo : UITextSpellCheckingTypeDefault;
+}
+
+- (BOOL)isSecureTextEntry
+{
+    return ([self imeCfg] & 15) == 6;
+}
+
+- (UITextContentType)textContentType
+{
+    switch (([self imeCfg] >> 12) & 15) {
+    case 1:
+        return UITextContentTypeUsername;
+    case 2:
+        return UITextContentTypePassword;
+    case 3:
+        return UITextContentTypeNewPassword;
+    case 4:
+        return UITextContentTypeOneTimeCode;
+    case 5:
+        return UITextContentTypeEmailAddress;
+    case 6:
+        return UITextContentTypeTelephoneNumber;
+    case 7:
+        return UITextContentTypeName;
+    default:
+        return nil;
+    }
 }
 
 - (void)sendTouches:(NSSet<UITouch *> *)touches action:(int)action
@@ -641,6 +747,28 @@ static void run_script(id view, NSString *script, CGFloat s)
     }
 }
 
+static NSString *salam_background_key(UIUserInterfaceStyle style)
+{
+    return style == UIUserInterfaceStyleDark ? @"salam.page.bg.dark" : @"salam.page.bg.light";
+}
+
+static UIColor *salam_saved_background(UIUserInterfaceStyle style)
+{
+    NSNumber *n = [NSUserDefaults.standardUserDefaults objectForKey:salam_background_key(style)];
+    if (n == nil) {
+        return UIColor.systemBackgroundColor;
+    }
+    uint32_t p = n.unsignedIntValue;
+    return [UIColor colorWithRed:((p >> 16) & 0xFF) / 255.0 green:((p >> 8) & 0xFF) / 255.0 blue:(p & 0xFF) / 255.0 alpha:1];
+}
+
+static int g_orient = 0;
+static int g_immersive = 0;
+static int g_bar_style = 0;
+static float g_saved_brightness = -1;
+static int g_bright_asked = -1;
+static __weak UIViewController *g_controller;
+
 @interface SalamController : UIViewController
 @end
 
@@ -649,8 +777,9 @@ static void run_script(id view, NSString *script, CGFloat s)
 - (void)loadView
 {
     SalamView *v = [[SalamView alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    v.backgroundColor = UIColor.whiteColor;
+    v.backgroundColor = salam_saved_background(UIScreen.mainScreen.traitCollection.userInterfaceStyle);
     g_view = v;
+    g_controller = self;
     self.view = v;
 }
 
@@ -668,7 +797,52 @@ static void run_script(id view, NSString *script, CGFloat s)
 
 - (BOOL)prefersStatusBarHidden
 {
-    return NO;
+    return g_immersive != 0;
+}
+
+- (BOOL)prefersHomeIndicatorAutoHidden
+{
+    return g_immersive != 0;
+}
+
+- (UIStatusBarStyle)preferredStatusBarStyle
+{
+    if (g_bar_style == 1) {
+        return UIStatusBarStyleLightContent;
+    }
+    if (g_bar_style == 2) {
+        return UIStatusBarStyleDarkContent;
+    }
+    return UIStatusBarStyleDefault;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
+{
+    UIInterfaceOrientationMask all = UIInterfaceOrientationMaskAll;
+    NSArray *plist = [NSBundle.mainBundle objectForInfoDictionaryKey:@"UISupportedInterfaceOrientations"];
+    if (plist.count > 0) {
+        all = 0;
+        for (NSString *o in plist) {
+            if ([o isEqualToString:@"UIInterfaceOrientationPortrait"]) {
+                all |= UIInterfaceOrientationMaskPortrait;
+            } else if ([o isEqualToString:@"UIInterfaceOrientationLandscapeLeft"]) {
+                all |= UIInterfaceOrientationMaskLandscapeLeft;
+            } else if ([o isEqualToString:@"UIInterfaceOrientationLandscapeRight"]) {
+                all |= UIInterfaceOrientationMaskLandscapeRight;
+            } else if ([o isEqualToString:@"UIInterfaceOrientationPortraitUpsideDown"]) {
+                all |= UIInterfaceOrientationMaskPortraitUpsideDown;
+            }
+        }
+    }
+    if (g_orient == 1) {
+        UIInterfaceOrientationMask m = all & UIInterfaceOrientationMaskPortrait;
+        return m != 0 ? m : all;
+    }
+    if (g_orient == 2) {
+        UIInterfaceOrientationMask m = all & UIInterfaceOrientationMaskLandscape;
+        return m != 0 ? m : all;
+    }
+    return all;
 }
 
 - (void)keyboardChanged:(NSNotification *)n
@@ -710,6 +884,26 @@ static void run_script(id view, NSString *script, CGFloat s)
 
 @end
 
+static char g_launch_url[2048];
+static char g_pending_url[2048];
+static pthread_mutex_t g_url_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void url_store(NSURL *u, int launch)
+{
+    if (u == nil || u.absoluteString.length == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_url_mu);
+    char *dst = launch ? g_launch_url : g_pending_url;
+    size_t cap = launch ? sizeof g_launch_url : sizeof g_pending_url;
+    strncpy(dst, u.absoluteString.UTF8String, cap - 1);
+    dst[cap - 1] = 0;
+    pthread_mutex_unlock(&g_url_mu);
+    if (!launch) {
+        salam_host_post(SALAM_EV_DEVICE, 5, 0, 0, 0, 0, NULL);
+    }
+}
+
 @interface SalamSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(strong, nonatomic) UIWindow *window;
 @end
@@ -721,12 +915,176 @@ static void run_script(id view, NSString *script, CGFloat s)
     if (![scene isKindOfClass:UIWindowScene.class]) {
         return;
     }
+    for (UIOpenURLContext *c in options.URLContexts) {
+        url_store(c.URL, 1);
+    }
+    for (NSUserActivity *a in options.userActivities) {
+        if ([a.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+            url_store(a.webpageURL, 1);
+        }
+    }
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.rootViewController = [SalamController new];
     [self.window makeKeyAndVisible];
 }
 
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)contexts
+{
+    for (UIOpenURLContext *c in contexts) {
+        url_store(c.URL, 0);
+    }
+}
+
+- (void)scene:(UIScene *)scene continueUserActivity:(NSUserActivity *)activity
+{
+    if ([activity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+        url_store(activity.webpageURL, 0);
+    }
+}
+
 @end
+
+static char g_crash_path[1100];
+static int g_err_orig = 2;
+static int g_err_pipe[2];
+static char g_panic_msg[256];
+static volatile sig_atomic_t g_crashing;
+static char g_crash_stack[65536];
+static struct sigaction g_crash_old[6];
+static const int g_crash_sigs[] = {SIGABRT, SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP};
+
+static void *err_reader(void *arg)
+{
+    char buf[512];
+    char line[256];
+    size_t n = 0;
+    ssize_t got;
+    (void)arg;
+    while ((got = read(g_err_pipe[0], buf, sizeof buf)) > 0) {
+        ssize_t off = 0;
+        while (off < got) {
+            ssize_t w = write(g_err_orig, buf + off, (size_t)(got - off));
+            if (w <= 0) {
+                break;
+            }
+            off += w;
+        }
+        for (ssize_t i = 0; i < got; i++) {
+            if (buf[i] == '\n' || n == sizeof line - 1) {
+                line[n] = 0;
+                if (strncmp(line, "salam panic:", 12) == 0) {
+                    strncpy(g_panic_msg, line, sizeof g_panic_msg - 1);
+                    NSLog(@"%s", line);
+                }
+                n = 0;
+            } else {
+                line[n++] = buf[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+static void crash_handler(int sig)
+{
+    void *frames[48];
+    char head[200];
+    int fd;
+    int n;
+    if (g_crashing) {
+        _exit(128 + sig);
+    }
+    g_crashing = 1;
+    fd = g_crash_path[0] != 0 ? open(g_crash_path, O_WRONLY | O_CREAT | O_TRUNC, 0600) : -1;
+    n = snprintf(head, sizeof head, "fatal signal %d\n%s\nbacktrace:\n", sig, g_panic_msg);
+    NSLog(@"salam crash: signal %d %s", sig, g_panic_msg);
+    if (fd >= 0) {
+        if (write(fd, head, (size_t)n) < 0) {
+            n = 0;
+        }
+    }
+    n = backtrace(frames, 48);
+    if (fd >= 0) {
+        backtrace_symbols_fd(frames, n, fd);
+        close(fd);
+    }
+    backtrace_symbols_fd(frames, n, g_err_orig);
+    for (size_t i = 0; i < sizeof g_crash_sigs / sizeof g_crash_sigs[0]; i++) {
+        if (g_crash_sigs[i] == sig) {
+            sigaction(sig, &g_crash_old[i], NULL);
+        }
+    }
+    if (sig == SIGABRT) {
+        raise(sig);
+    }
+}
+
+static void term_handler(int sig)
+{
+    (void)sig;
+    fflush(NULL);
+    _exit(0);
+}
+
+static void crash_hook(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = crash_handler;
+    sa.sa_flags = SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < sizeof g_crash_sigs / sizeof g_crash_sigs[0]; i++) {
+        struct sigaction cur;
+        sigaction(g_crash_sigs[i], NULL, &cur);
+        if (cur.sa_handler != crash_handler) {
+            g_crash_old[i] = cur;
+            sigaction(g_crash_sigs[i], &sa, NULL);
+        }
+    }
+    signal(SIGTERM, term_handler);
+}
+
+static void crash_install(NSString *docs)
+{
+    stack_t st;
+    [NSFileManager.defaultManager createDirectoryAtPath:docs withIntermediateDirectories:YES attributes:nil error:nil];
+    snprintf(g_crash_path, sizeof g_crash_path, "%s/crash.txt", docs.UTF8String);
+    g_err_orig = dup(2);
+    if (g_err_orig >= 0 && pipe(g_err_pipe) == 0) {
+        pthread_t t;
+        dup2(g_err_pipe[1], 2);
+        pthread_create(&t, NULL, err_reader, NULL);
+        pthread_detach(t);
+    } else {
+        g_err_orig = 2;
+    }
+    st.ss_sp = g_crash_stack;
+    st.ss_size = sizeof g_crash_stack;
+    st.ss_flags = 0;
+    sigaltstack(&st, NULL);
+    crash_hook();
+}
+
+static void crash_show_last(NSString *docs)
+{
+    NSString *path = [docs stringByAppendingPathComponent:@"crash.txt"];
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (text == nil) {
+        return;
+    }
+    [NSFileManager.defaultManager moveItemAtPath:path toPath:[docs stringByAppendingPathComponent:@"crash.last.txt"] error:nil];
+    NSLog(@"salam previous crash:\n%@", text);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        UIViewController *root = g_view.window.rootViewController;
+        if (root == nil) {
+            return;
+        }
+        NSString *shown = text.length > 600 ? [text substringToIndex:600] : text;
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"The app closed unexpectedly" message:shown preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [root presentViewController:a animated:YES completion:nil];
+    });
+}
 
 @interface SalamDelegate : UIResponder <UIApplicationDelegate>
 @end
@@ -740,6 +1098,8 @@ static void run_script(id view, NSString *script, CGFloat s)
     setenv("TMPDIR", NSTemporaryDirectory().UTF8String, 1);
     NSString *fonts = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"fonts"];
     setenv("SALAM_FONT_DIR", fonts.UTF8String, 1);
+    crash_install(docs);
+    crash_show_last(docs);
     salam_device_init();
     return YES;
 }
@@ -783,10 +1143,22 @@ int salam_host_blit(const void *pixels, int bw, int bh, int x, int y, int w, int
         memcpy((char *)g_shadow + ((size_t)row * bw + x0) * 4, (const char *)pixels + ((size_t)row * bw + x0) * 4, (size_t)(x1 - x0) * 4);
     }
     CGImageRef img = CGBitmapContextCreateImage(g_ctx);
+    uint32_t page = ((const uint32_t *)g_shadow)[0];
     pthread_mutex_unlock(&g_mu);
     dispatch_async(dispatch_get_main_queue(), ^{
         g_view.layer.contents = (__bridge id)img;
         CGImageRelease(img);
+        NSString *key = salam_background_key(g_view.traitCollection.userInterfaceStyle);
+        NSNumber *old = [NSUserDefaults.standardUserDefaults objectForKey:key];
+        if (old == nil || old.unsignedIntValue != page) {
+            [NSUserDefaults.standardUserDefaults setObject:@(page) forKey:key];
+            g_view.backgroundColor = salam_saved_background(g_view.traitCollection.userInterfaceStyle);
+        }
+        static int hooked;
+        if (!hooked) {
+            hooked = 1;
+            crash_hook();
+        }
         if (g_first_frame != nil) {
             void (^go)(void) = g_first_frame;
             g_first_frame = nil;
@@ -803,6 +1175,22 @@ void salam_host_ime(int flag)
             [g_view becomeFirstResponder];
         } else {
             [g_view resignFirstResponder];
+        }
+    });
+}
+
+void salam_host_ime_config(int config)
+{
+    pthread_mutex_lock(&g_mu);
+    int changed = config != g_ime_cfg;
+    g_ime_cfg = config;
+    pthread_mutex_unlock(&g_mu);
+    if (!changed) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_view.isFirstResponder) {
+            [g_view reloadInputViews];
         }
     });
 }
@@ -1207,6 +1595,323 @@ int salam_host_haptic(int kind)
         }
     });
     return 1;
+}
+
+const char *salam_host_path(int kind)
+{
+    static char buf[1024];
+    NSString *dir = nil;
+    switch (kind) {
+    case 0:
+        dir = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+        break;
+    case 1:
+        dir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        break;
+    case 2:
+        dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        break;
+    case 3:
+        dir = NSTemporaryDirectory();
+        break;
+    default:
+        break;
+    }
+    buf[0] = 0;
+    if (dir != nil) {
+        [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        while (dir.length > 1 && [dir hasSuffix:@"/"]) {
+            dir = [dir substringToIndex:dir.length - 1];
+        }
+        strncpy(buf, dir.UTF8String, sizeof buf - 1);
+        buf[sizeof buf - 1] = 0;
+    }
+    return buf;
+}
+
+static NSMutableDictionary *secure_query(const char *key)
+{
+    NSMutableDictionary *q = [NSMutableDictionary new];
+    q[(__bridge id)kSecClass] = (__bridge id)kSecClassGenericPassword;
+    q[(__bridge id)kSecAttrService] = @"salam.secure";
+    q[(__bridge id)kSecAttrAccount] = [NSString stringWithUTF8String:key] ?: @"";
+    return q;
+}
+
+int salam_host_secure_set(const char *key, const char *value)
+{
+    if (key == NULL || key[0] == 0 || value == NULL) {
+        return 0;
+    }
+    NSMutableDictionary *q = secure_query(key);
+    SecItemDelete((__bridge CFDictionaryRef)q);
+    q[(__bridge id)kSecValueData] = [NSData dataWithBytes:value length:strlen(value)];
+    q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+    return SecItemAdd((__bridge CFDictionaryRef)q, NULL) == errSecSuccess ? 1 : 0;
+}
+
+const char *salam_host_secure_get(const char *key)
+{
+    static char copy[16384];
+    copy[0] = 0;
+    if (key == NULL) {
+        return copy;
+    }
+    NSMutableDictionary *q = secure_query(key);
+    q[(__bridge id)kSecReturnData] = @YES;
+    q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+    CFTypeRef out = NULL;
+    if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &out) == errSecSuccess && out != NULL) {
+        NSData *d = (__bridge_transfer NSData *)out;
+        size_t n = d.length < sizeof copy - 1 ? d.length : sizeof copy - 1;
+        memcpy(copy, d.bytes, n);
+        copy[n] = 0;
+    }
+    return copy;
+}
+
+int salam_host_secure_delete(const char *key)
+{
+    if (key == NULL) {
+        return 0;
+    }
+    return SecItemDelete((__bridge CFDictionaryRef)secure_query(key)) == errSecSuccess ? 1 : 0;
+}
+
+static void on_main(void (^fn)(void))
+{
+    if ([NSThread isMainThread]) {
+        fn();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), fn);
+    }
+}
+
+const char *salam_host_info(const char *key)
+{
+    static char buf[2048];
+    __block NSString *r = @"";
+    if (key == NULL) {
+        buf[0] = 0;
+        return buf;
+    }
+    NSString *k = [NSString stringWithUTF8String:key];
+    on_main(^{
+        UIDevice *d = UIDevice.currentDevice;
+        if ([k isEqualToString:@"model"]) {
+            struct utsname u;
+            uname(&u);
+            const char *ident = getenv("SIMULATOR_MODEL_IDENTIFIER");
+            r = [NSString stringWithUTF8String:ident != NULL ? ident : u.machine];
+        } else if ([k isEqualToString:@"os"]) {
+            r = @"iOS";
+        } else if ([k isEqualToString:@"os_version"]) {
+            r = d.systemVersion;
+        } else if ([k isEqualToString:@"language"]) {
+            r = NSLocale.preferredLanguages.firstObject ?: @"";
+        } else if ([k isEqualToString:@"languages"]) {
+            r = [NSLocale.preferredLanguages componentsJoinedByString:@","];
+        } else if ([k isEqualToString:@"timezone"]) {
+            r = NSTimeZone.localTimeZone.name;
+        } else if ([k isEqualToString:@"density"]) {
+            r = [NSString stringWithFormat:@"%g", UIScreen.mainScreen.scale];
+        } else if ([k isEqualToString:@"app_version"]) {
+            r = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
+        } else if ([k isEqualToString:@"build"]) {
+            r = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"";
+        } else if ([k isEqualToString:@"dark"]) {
+            UITraitCollection *t = g_view != nil ? g_view.traitCollection : UIScreen.mainScreen.traitCollection;
+            r = t.userInterfaceStyle == UIUserInterfaceStyleDark ? @"1" : @"0";
+        } else if ([k isEqualToString:@"battery"] || [k isEqualToString:@"charging"]) {
+            d.batteryMonitoringEnabled = YES;
+            if ([k isEqualToString:@"battery"]) {
+                r = d.batteryLevel < 0 ? @"-1" : [NSString stringWithFormat:@"%d", (int)(d.batteryLevel * 100 + 0.5)];
+            } else {
+                r = d.batteryState == UIDeviceBatteryStateCharging || d.batteryState == UIDeviceBatteryStateFull ? @"1" : @"0";
+            }
+        }
+    });
+    buf[0] = 0;
+    strncpy(buf, r.UTF8String, sizeof buf - 1);
+    buf[sizeof buf - 1] = 0;
+    return buf;
+}
+
+static nw_path_monitor_t g_net_monitor;
+static int g_net_state;
+
+static int net_state_of(nw_path_t path)
+{
+    if (nw_path_get_status(path) != nw_path_status_satisfied) {
+        return 0;
+    }
+    if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) {
+        return 1;
+    }
+    if (nw_path_uses_interface_type(path, nw_interface_type_cellular)) {
+        return 2;
+    }
+    if (nw_path_uses_interface_type(path, nw_interface_type_wired)) {
+        return 3;
+    }
+    return 4;
+}
+
+int salam_host_network(void)
+{
+    static dispatch_once_t once;
+    static dispatch_semaphore_t first;
+    dispatch_once(&once, ^{
+        first = dispatch_semaphore_create(0);
+        g_net_monitor = nw_path_monitor_create();
+        nw_path_monitor_set_queue(g_net_monitor, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        __block int seen = 0;
+        nw_path_monitor_set_update_handler(g_net_monitor, ^(nw_path_t path) {
+            pthread_mutex_lock(&g_dev_mu);
+            g_net_state = net_state_of(path);
+            pthread_mutex_unlock(&g_dev_mu);
+            if (!seen) {
+                seen = 1;
+                dispatch_semaphore_signal(first);
+            } else {
+                salam_host_post(SALAM_EV_DEVICE, 4, 0, 0, 0, 0, NULL);
+            }
+        });
+        nw_path_monitor_start(g_net_monitor);
+        dispatch_semaphore_wait(first, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC));
+    });
+    pthread_mutex_lock(&g_dev_mu);
+    int s = g_net_state;
+    pthread_mutex_unlock(&g_dev_mu);
+    return s;
+}
+
+const char *salam_host_launch_url(void)
+{
+    static char copy[2048];
+    pthread_mutex_lock(&g_url_mu);
+    memcpy(copy, g_launch_url, sizeof copy);
+    pthread_mutex_unlock(&g_url_mu);
+    return copy;
+}
+
+const char *salam_host_take_url(void)
+{
+    static char copy[2048];
+    pthread_mutex_lock(&g_url_mu);
+    memcpy(copy, g_pending_url, sizeof copy);
+    g_pending_url[0] = 0;
+    pthread_mutex_unlock(&g_url_mu);
+    return copy;
+}
+
+int salam_host_open_settings(void)
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSURL *u = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+        [UIApplication.sharedApplication openURL:u options:@{} completionHandler:nil];
+    });
+    return 1;
+}
+
+int salam_host_screen(int what, int value)
+{
+    if (what == 5) {
+        g_bright_asked = value;
+    }
+    if (what == 4) {
+        if (g_bright_asked >= 0) {
+            return g_bright_asked;
+        }
+        __block int pct = -1;
+        on_main(^{
+            pct = (int)(UIScreen.mainScreen.brightness * 100 + 0.5);
+        });
+        return pct;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *c = g_controller;
+        if (what == 0) {
+            UIApplication.sharedApplication.idleTimerDisabled = value != 0;
+        } else if (what == 1) {
+            g_orient = value;
+            if (@available(iOS 16.0, *)) {
+                [c setNeedsUpdateOfSupportedInterfaceOrientations];
+                UIWindowScene *ws = c.view.window.windowScene;
+                if (ws != nil) {
+                    UIInterfaceOrientationMask m = value == 1 ? UIInterfaceOrientationMaskPortrait : value == 2 ? UIInterfaceOrientationMaskLandscape : [c supportedInterfaceOrientations];
+                    [ws requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:m] errorHandler:^(NSError *e) {
+                        (void)e;
+                    }];
+                }
+            } else {
+                [UIViewController attemptRotationToDeviceOrientation];
+            }
+        } else if (what == 2) {
+            g_immersive = value;
+            [c setNeedsStatusBarAppearanceUpdate];
+            [c setNeedsUpdateOfHomeIndicatorAutoHidden];
+        } else if (what == 3) {
+            g_bar_style = value;
+            [c setNeedsStatusBarAppearanceUpdate];
+        } else if (what == 5) {
+            if (value < 0) {
+                if (g_saved_brightness >= 0) {
+                    UIScreen.mainScreen.brightness = g_saved_brightness;
+                    g_saved_brightness = -1;
+                }
+            } else {
+                if (g_saved_brightness < 0) {
+                    g_saved_brightness = UIScreen.mainScreen.brightness;
+                }
+                UIScreen.mainScreen.brightness = value / 100.0;
+            }
+        }
+    });
+    return 1;
+}
+
+static int g_auth_state;
+
+int salam_host_auth_available(void)
+{
+    LAContext *c = [LAContext new];
+    NSError *e = nil;
+    return [c canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&e] ? 1 : 0;
+}
+
+int salam_host_auth_request(const char *reason)
+{
+    LAContext *c = [LAContext new];
+    NSError *e = nil;
+    if (![c canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&e]) {
+        pthread_mutex_lock(&g_dev_mu);
+        g_auth_state = 3;
+        pthread_mutex_unlock(&g_dev_mu);
+        return 0;
+    }
+    NSString *why = reason != NULL ? [NSString stringWithUTF8String:reason] : nil;
+    if (why.length == 0) {
+        why = @"Confirm it is you";
+    }
+    pthread_mutex_lock(&g_dev_mu);
+    g_auth_state = 1;
+    pthread_mutex_unlock(&g_dev_mu);
+    [c evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics localizedReason:why reply:^(BOOL ok, NSError *err) {
+        pthread_mutex_lock(&g_dev_mu);
+        g_auth_state = ok ? 2 : 3;
+        pthread_mutex_unlock(&g_dev_mu);
+        salam_host_post(SALAM_EV_DEVICE, 6, 0, 0, 0, 0, NULL);
+    }];
+    return 1;
+}
+
+int salam_host_auth_state(void)
+{
+    pthread_mutex_lock(&g_dev_mu);
+    int s = g_auth_state;
+    pthread_mutex_unlock(&g_dev_mu);
+    return s;
 }
 
 int salam_host_share(const char *text, const char *url)

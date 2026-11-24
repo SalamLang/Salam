@@ -211,6 +211,65 @@ func read_req(path: str, r &: Req): bool:
     ret str.Len(r.path) > 0
 end
 
+func route_project_of(file: str): str:
+    mut dir := pth.PathDir(file)
+    mut hops := 0
+    until hops <= 6 and str.Len(dir) > 0:
+        if os.IsDir(pth.PathJoin(dir, "pages")) and os.Exists(pth.PathJoin(dir, "main.salam")):
+            ret dir
+        end
+        parent := pth.PathDir(dir)
+        if str.Equals(parent, dir):
+            break
+        end
+        dir = parent
+        hops++
+    end
+    ret ""
+end
+
+func drop_page_includes(a &: at.Ast, prog: int):
+    lb := lo.FindLayout(a, prog)
+    if lb == 0:
+        ret
+    end
+    mut bn := at.Get(a, lb)
+    mut keep := Vector {} as Vector<int>
+    each id in bn.list:
+        an := at.Get(a, id)
+        mut drop := false
+        if an.kind == at.AST_LAYOUT_ATTR and str.Equals(an.name, "include") and an.a != 0:
+            lit := at.Get(a, an.a)
+            drop = lit.kind == at.AST_LITERAL and str.StartsWith(lit.value_str, "pages/")
+        end
+        if not drop:
+            keep.Push(id)
+        end
+    end
+    bn.list = keep
+    at.Put(a, lb, bn)
+end
+
+func lower_routes_for(lgr: lg.Logger, modpack: lp.Langpack, table: cc.Table, a &: at.Ast, prog: int, target: str): bool:
+    proj := route_project_of(target)
+    if str.Equals(pth.PathBase(target), "main.salam"):
+        lo.SetRootFile(target)
+        _e := lo.LowerRoutes(lgr, modpack, table, a, prog, false, pth.PathDir(target))
+        drop_page_includes(a, prog)
+        lo.ProjectComponentNames(pth.PathDir(target))
+        ret false
+    end
+    if str.Len(proj) > 0:
+        was := lg.PauseRecord()
+        _m := lo.LowerRoutesIn(lgr, a, prog)
+        lg.ResumeRecord(was)
+        ret true
+    end
+    lo.SetRootFile(target)
+    _e2 := lo.LowerRoutes(lgr, modpack, table, a, prog, false, pth.PathDir(target))
+    ret false
+end
+
 func package_root_of(path: str): str:
     dir := pth.PathDir(path)
     if str.Len(dir) == 0:
@@ -1024,6 +1083,25 @@ func fold_kind(k: int): bool:
         k == at.AST_STRUCT_LIT or k == at.AST_ARRAY_LIT
 end
 
+func generated_name(nm: str): bool:
+    if str.Len(nm) < 5 or not str.StartsWith(nm, "__t"):
+        ret false
+    end
+    c := byte_at(nm, 3)
+    if c != 116 and c != 101 and c != 118:
+        ret false
+    end
+    mut i := 4
+    until i < str.Len(nm):
+        d := byte_at(nm, i)
+        if d < 48 or d > 57:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
 func target_nodes(an &: An, pick: int, out &: Vector<OutNode>):
     mut seen := HashMap {} as HashMap<str, bool>
     defer seen.Free()
@@ -1036,6 +1114,9 @@ func target_nodes(an &: An, pick: int, out &: Vector<OutNode>):
             want = outline_kind(n.kind)
         else:
             want = fold_kind(n.kind)
+        end
+        if want and pick == 0 and generated_name(n.name):
+            want = false
         end
         if want and not n.synthetic and (n.end_index as int) > (n.begin_index as int) and
             in_target(an, n):
@@ -1071,7 +1152,8 @@ func emit_symbol(
     nodes: Vector<OutNode>,
     idx: int,
     kids: Vector<Vector<int>>,
-    in_struct: bool
+    in_struct: bool,
+    parent_end: int
 ):
     nd := nodes.Get(idx)
     n := at.Get(an.a, nd.node)
@@ -1103,6 +1185,16 @@ func emit_symbol(
     ) == 10 or byte_at(an.text, ee - 1) == 13 or byte_at(an.text, ee - 1) == 32):
         ee--
     end
+    if ee > parent_end:
+        ee = parent_end
+    end
+    if ee < nd.b:
+        ee = nd.b
+    end
+    if sb < nd.b or se > ee or se < sb:
+        sb = nd.b
+        se = nd.b
+    end
     jw_range(j, "range", an.li, nd.b, ee)
     jw_range(j, "selectionRange", an.li, sb, se)
     ch := kids.Get(idx)
@@ -1116,7 +1208,8 @@ func emit_symbol(
                 c,
                 kids,
                 n.kind == at.AST_STRUCT_DEF or n.kind == at.AST_IMPL_DEF or
-                    n.kind == at.AST_INTERFACE_DEF
+                    n.kind == at.AST_INTERFACE_DEF,
+                ee
             )
         end
         jw_end_arr(j)
@@ -1171,7 +1264,7 @@ func emit_outline(an &: An, j &: Json):
     end
     jw_karr(j, "outline")
     each r in roots:
-        emit_symbol(an, j, nodes, r, kids, false)
+        emit_symbol(an, j, nodes, r, kids, false, an.li.n)
     end
     jw_end_arr(j)
     each kv in kids:
@@ -1906,15 +1999,34 @@ func analyze(r: Req): str:
     mut table := cc.TableBuild("", r.defines)
     cc.TableSetPack(table, modpack)
     _cc := cc.PruneProgram(a, lgr, entry, table, prog)
+    mut member := false
+    if not base.is_virtual:
+        member = lower_routes_for(lgr, modpack, table, a, prog, target)
+    end
     _vw := lo.PrepareViews(lgr, modpack, table, a, prog, entry)
     mut s := sm.New(lgr, entry, lp.Code(modpack))
     sm.SetCc(s, table)
     _sok := sm.Run(s, a, prog)
+    mut rec_map := Vector {} as Vector<int>
+    defer rec_map.Free()
     repeat lg.RecordCount() in ri:
-        base.records.Push(lg.RecordAt(ri))
+        rr := lg.RecordAt(ri)
+        if member and str.IndexFrom(rr.msg, "'__salam", 0) >= 0:
+            rec_map.Push(0 - 1)
+        else:
+            rec_map.Push(base.records.Len())
+            base.records.Push(rr)
+        end
     end
     repeat lg.FixCount() in fi:
-        base.fixes.Push(lg.FixAt(fi))
+        mut fx := lg.FixAt(fi)
+        if fx.rec >= 0 and fx.rec < rec_map.Len():
+            if rec_map.Get(fx.rec) < 0:
+                continue
+            end
+            fx.rec = rec_map.Get(fx.rec)
+        end
+        base.fixes.Push(fx)
     end
     mut refn := Vector {} as Vector<int>
     mut refs := Vector {} as Vector<int>

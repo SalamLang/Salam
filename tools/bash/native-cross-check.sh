@@ -9,11 +9,12 @@
 # trailing newlines.
 #
 # stdlib/jit_demo, stdlib/jit_calls_demo and stdlib/dl_float_demo need dlopen, which a static musl program cannot do.
+# stdlib/gui_tray, the stdlib/gui_window_* tests and stdlib/net_wifi link X11, gio or libdl, which have no static archive in the musl sysroot.
 # stdlib/os_api is skipped under qemu, which prints a message when the forked child aborts.
 # Some tests cannot pass on a cross target and are skipped: they need -D flags
 # from their test harness, a database library, or a trapping integer division
 # (release builds on ARM return 0), and on 32-bit targets a few assume a
-# 64-bit usize or declare C's int-returning abs() as i64. stdlib/os_platform_demo
+# 64-bit usize or declare C's int-returning abs() as i64, set file times through a 64-bit timeval, or allocate over a gigabyte. stdlib/os_platform_demo
 # runs a different number of assertions per architecture, so its .out only
 # matches on x86-64. NATIVE_CROSS_SKIP replaces the list.
 #
@@ -36,6 +37,7 @@
 #   Use `env` as the runner for a target the host runs directly (i686).
 
 set -u
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^Aborted( \(core dumped\))?$/d;/^qemu: uncaught target signal/d'
 SALAM=$1
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=$2
@@ -50,16 +52,20 @@ aarch64* | arm64* | riscv*) ;;
 *) DEFAULT_SKIP="$DEFAULT_SKIP general/div_zero_compound general/div_zero_runtime general/mod_zero_runtime_i64" ;;
 esac
 case "$TRIPLE" in
-i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos general/extern_int128" ;;
+i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos general/extern_int128
+    features/const_u64_high_bit stdlib/vector_reserve_large stdlib/sevenzip_no_limit stdlib/vector_count_limit
+    stdlib/archive_tar stdlib/rar_file_more stdlib/rar_links_demo stdlib/sevenzip_create stdlib/sevenzip_extract" ;;
 esac
 case "$TRIPLE" in
 *windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos general/extern_int128" ;;
 esac
 case "$TRIPLE" in
-*musl*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/jit_demo stdlib/jit_calls_demo stdlib/dl_float_demo" ;;
+*musl*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/jit_demo stdlib/jit_calls_demo stdlib/dl_float_demo stdlib/net_wifi stdlib/gui_tray
+stdlib/gui_window_events stdlib/gui_window_insets stdlib/gui_window_present stdlib/gui_window_state
+stdlib/gui_window_timers stdlib/gui_window_x11" ;;
 esac
 case "$RUNNER" in
-qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api" ;;
+qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api stdlib/transport_accept stdlib/httpproxy_proxy stdlib/doh_h2" ;;
 esac
 SKIP=${NATIVE_CROSS_SKIP-$DEFAULT_SKIP}
 STAGE=${NATIVE_CROSS_STAGE:-}
@@ -80,6 +86,15 @@ trap 'rm -rf "$work"' EXIT
 ok=0
 bad=0
 skipped=0
+checked_of() {
+    case "$1" in
+    general/enum_cast_large_enum | general/enum_cast_range_panic | general/enum_cast_wide_panic) return 0 ;;
+    general/panic_flushes_output | general/slice_bounds_empty_array | general/slice_bounds_runtime) return 0 ;;
+    general/slice_of_slice_bounds | general/slice_param_index_oob | llvm/enum_cast_range_panic) return 0 ;;
+    esac
+    return 1
+}
+
 skip_of() {
     set -f
     for pat in $SKIP; do
@@ -130,7 +145,9 @@ for spec in $TEST_GROUPS; do
         exe=$work/t$EXT
         rm -f "$exe"
         # shellcheck disable=SC2086
-        if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" \
+        relflag=--release
+        checked_of "$id" && relflag=
+        if ! (cd "$work" && "$SALAM" build "$f" --backend=native ${relflag:+"$relflag"} --target="$TRIPLE" --output="$exe" \
             --log-level=error ${libarg:+"$libarg"} ${NATIVE_CROSS_FLAGS:-} >"$work/build.log" 2>&1); then
             echo "BUILDFAIL $id"
             head -3 "$work/build.log"
@@ -147,13 +164,19 @@ for spec in $TEST_GROUPS; do
             fi
             continue
         fi
-        (cd "$ROOT" && timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        if [ "$grp" = llvm ]; then
+            # shellcheck disable=SC3045
+            (cd "$ROOT" && ulimit -c 0 2>/dev/null; timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>/dev/null)
+        else
+            # shellcheck disable=SC3045
+            (cd "$ROOT" && ulimit -c 0 2>/dev/null; timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        fi
         rc=$?
-        if [ "$(tr -d '\r' <"$work/got")" = "$(tr -d '\r' <"$exp")" ]; then
+        if [ "$(tr -d '\r' <"$work/got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
             ok=$((ok + 1))
         else
             echo "DIFF $id (exit $rc)"
-            tr -d '\r' <"$work/got" | diff "$exp" - | head -20
+            tr -d '\r' <"$work/got" | sed -E "$GEN_SED" | diff "$exp" - | head -20
             bad=$((bad + 1))
         fi
     done

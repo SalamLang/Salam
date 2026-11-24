@@ -1,0 +1,515 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcplayout"
+@fa "چیدمان‌ام‌سی‌پی"
+package mcplayout
+
+import str
+import fs.dir
+import fs
+import fs.path
+
+include mcptxt "mcp_text.salam"
+include mcpexec "mcp_exec.salam"
+include mcpout "mcp_result.salam"
+
+mut g_ready := false
+mut g_entries := Vector {} as Vector<Entry>
+mut g_groups := HashMap {} as HashMap<str, Vector<int>>
+mut g_style_notes := HashMap {} as HashMap<str, str>
+
+@en "Entry"
+pub struct Entry:
+    pub kind: str = ""
+    pub en: Vector<str> = Vector {} as Vector<str>
+    pub fa: Vector<str> = Vector {} as Vector<str>
+    pub cname: str = ""
+    pub body: str = ""
+    pub legacy: bool = false
+end
+
+func _quoted(s: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    mut i := 0
+    until i < s.Len():
+        if s[i] == '"':
+            mut j := i + 1
+            until j < s.Len() and s[j] != '"':
+                if s[j] == '\\': j++ end
+                j++
+            end
+            if j > s.Len(): j = s.Len() end
+            out.Push(s.Substr(i + 1, j - i - 1))
+            i = j + 1
+        else:
+            i++
+        end
+    end
+    ret out
+end
+
+func _word_char(c: char): bool:
+    ret (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_'
+end
+
+func _field(body: str, key: str): str:
+    needle := key.Concat(" =")
+    mut from := 0
+    until from < body.Len():
+        rest := body.Substr(from, body.Len() - from)
+        at := rest.Find(needle)
+        if at < 0: ret "" end
+        pos := from + at
+        if pos > 0 and _word_char(body[pos - 1]):
+            from = pos + needle.Len()
+            continue
+        end
+        mut i := pos + needle.Len()
+        until i < body.Len() and body[i] == ' ':
+            i++
+        end
+        if i >= body.Len(): ret "" end
+        mut j := i
+        if body[i] == '[':
+            until j < body.Len() and body[j] != ']':
+                j++
+            end
+            ret body.Substr(i, j - i + 1)
+        end
+        if body[i] == '"':
+            j = i + 1
+            until j < body.Len() and body[j] != '"':
+                if body[j] == '\\': j++ end
+                j++
+            end
+            if j >= body.Len(): j = body.Len() - 1 end
+            ret body.Substr(i, j - i + 1)
+        end
+        until j < body.Len() and body[j] != ' ' and body[j] != '\n':
+            j++
+        end
+        ret body.Substr(i, j - i)
+    end
+    ret ""
+end
+
+func _list(body: str, key: str): Vector<str>:
+    ret _quoted(_field(body, key))
+end
+
+func _one(body: str, key: str): str:
+    q := _quoted(_field(body, key))
+    if q.Len() == 0: ret "" end
+    ret q.Get(0)
+end
+
+func _join(v: Vector<str>, sep: str): str:
+    ret mcptxt.Join(v, sep)
+end
+
+func _const_kind(line: str): str:
+    if line.Find(":= LayoutElement") >= 0: ret "element" end
+    if line.Find(":= LayoutAttribute") >= 0: ret "attribute" end
+    if line.Find(":= LayoutValue") >= 0: ret "value" end
+    ret ""
+end
+
+func _const_name(line: str): str:
+    start := line.Find("pub const ")
+    if start < 0: ret "" end
+    rest := line.Substr(start + 10, line.Len() - start - 10)
+    stop := rest.Find(" ")
+    if stop < 0: ret rest end
+    ret rest.Substr(0, stop)
+end
+
+func _parse_file(full: str):
+    lines := mcptxt.Lines(fs.ReadText(full))
+    mut i := 0
+    until i < lines.Len():
+        ln := lines.Get(i)
+        if not str.StartsWith(ln, "@en "):
+            i++
+            continue
+        end
+        en := _quoted(ln)
+        mut fa := Vector {} as Vector<str>
+        mut j := i + 1
+        if j < lines.Len() and str.StartsWith(lines.Get(j), "@fa "):
+            fa = _quoted(lines.Get(j))
+            j++
+        end
+        if j >= lines.Len(): break end
+        head := lines.Get(j)
+        kind := _const_kind(head)
+        if kind.Len() == 0:
+            i = j
+            continue
+        end
+        mut body := ""
+        open := head.Find("{")
+        close := head.Find("}")
+        if close > open and open >= 0:
+            body = head.Substr(open + 1, close - open - 1)
+        else:
+            mut parts := Vector {} as Vector<str>
+            if open >= 0 and open + 1 < head.Len(): parts.Push(head.Substr(open + 1, head.Len() - open - 1)) end
+            mut k := j + 1
+            until k < lines.Len() and lines.Get(k).Trim() != "}":
+                parts.Push(lines.Get(k).Trim())
+                k++
+            end
+            body = _join(parts, " ")
+            j = k
+        end
+        mut e := Entry {
+            kind = kind,
+            en = en,
+            fa = fa,
+            cname = _const_name(head),
+            body = body
+        }
+        dest := _one(body, "destination")
+        vtype := _one(body, "value_type")
+        if kind == "attribute" and (dest == "css" or vtype == "css"): e.legacy = true end
+        g_entries.Push(e)
+        if kind == "value":
+            group := _one(body, "group")
+            if group.Len() > 0:
+                mut idx := Vector {} as Vector<int>
+                if g_groups.Has(group): idx = g_groups.Get(group) end
+                idx.Push(g_entries.Len() - 1)
+                g_groups.Put(group, idx)
+            end
+        end
+        i = j + 1
+    end
+end
+
+func _parse_dir(dir_path: str):
+    if not dir.Exists(dir_path): ret end
+    names := mcptxt.Sorted(dir.ListFiles(dir_path))
+    mut i := 0
+    until i < names.Len():
+        if str.EndsWith(names.Get(i), ".salam"): _parse_file(path.Join(dir_path, names.Get(i))) end
+        i++
+    end
+end
+
+func _load_style_notes():
+    full := path.Join(mcpexec.Root(), "tools/salam/style-properties.tsv")
+    if not fs.Exists(full): ret end
+    lines := mcptxt.Lines(fs.ReadText(full))
+    mut i := 1
+    until i < lines.Len():
+        cols := mcptxt.Split(lines.Get(i), "\t")
+        if cols.Len() >= 16:
+            mut note := "type: ".Concat(cols.Get(3))
+            if cols.Get(9) != "-": note = note.Concat(" | words: ").Concat(cols.Get(9)) end
+            note = note.Concat(
+                " | default: "
+            ).Concat(cols.Get(10)).Concat(" | example: ").Concat(cols.Get(15))
+            g_style_notes.Put(cols.Get(1), note)
+        end
+        i++
+    end
+end
+
+func _ensure():
+    if g_ready: ret end
+    g_ready = true
+    root := path.Join(mcpexec.StdRoot(), "layout")
+    _parse_dir(path.Join(root, "elements"))
+    _parse_dir(path.Join(root, "attributes"))
+    _parse_dir(path.Join(root, "standard"))
+    _parse_dir(path.Join(root, "values"))
+    _parse_dir(path.Join(root, "style"))
+    _load_style_notes()
+end
+
+func _names(e: Entry): str:
+    ret _join(e.en, ", ")
+end
+
+func _fa_names(e: Entry): str:
+    if e.fa.Len() == 0: ret "none" end
+    ret _join(e.fa, ", ")
+end
+
+func _value_list(group: str, max: int): str:
+    if not g_groups.Has(group): ret "" end
+    idx := g_groups.Get(group)
+    mut parts := Vector {} as Vector<str>
+    mut i := 0
+    until i < idx.Len() and i < max:
+        v := g_entries.Get(idx.Get(i))
+        mut s := v.en.Get(0)
+        if v.fa.Len() > 0: s = s.Concat(" (").Concat(v.fa.Get(0)).Concat(")") end
+        parts.Push(s)
+        i++
+    end
+    mut out := _join(parts, ", ")
+    if idx.Len() > max: out = out.Concat(", ... ").Concat(str.FromInt(idx.Len() - max)).Concat(" more") end
+    ret out
+end
+
+func _attributes_on(name: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < g_entries.Len():
+        e := g_entries.Get(i)
+        if e.kind == "attribute" and not e.legacy:
+            scoped := _list(e.body, "elements")
+            if scoped.Len() > 0 and _has(scoped, name): out.Push(e.en.Get(0)) end
+        end
+        i++
+    end
+    ret out
+end
+
+func _rest(v: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 1
+    until i < v.Len():
+        out.Push(v.Get(i))
+        i++
+    end
+    ret out
+end
+
+func _has(v: Vector<str>, s: str): bool:
+    mut i := 0
+    until i < v.Len():
+        if v.Get(i) == s: ret true end
+        i++
+    end
+    ret false
+end
+
+func _describe_element(e: Entry): str:
+    mut parts := Vector {} as Vector<str>
+    parts.Push("element `".Concat(e.en.Get(0)).Concat("`"))
+    if e.en.Len() > 1: parts.Push("also: ".Concat(_join(_rest(e.en), ", "))) end
+    parts.Push("fa: ".Concat(_fa_names(e)))
+    tag := _one(e.body, "generated_name")
+    if tag.Len() > 0: parts.Push("html: <".Concat(tag).Concat(">")) end
+    gen := _one(e.body, "generator")
+    if gen.Len() > 0: parts.Push("design component") end
+    inside := _list(e.body, "parents")
+    if inside.Len() > 0: parts.Push("inside: ".Concat(_join(inside, ", "))) end
+    outer := _list(e.body, "ancestors")
+    if outer.Len() > 0: parts.Push("inside (anywhere): ".Concat(_join(outer, ", "))) end
+    kids := _list(e.body, "children")
+    if kids.Len() > 0 and kids.Len() <= 12 and not str.StartsWith(kids.Get(0), "#"):
+        parts.Push("children: ".Concat(_join(kids, ", ")))
+    end
+    req := _list(e.body, "required")
+    if req.Len() > 0: parts.Push("required: ".Concat(_join(req, ", "))) end
+    ret _join(parts, " | ")
+end
+
+func _describe_attribute(e: Entry): str:
+    mut parts := Vector {} as Vector<str>
+    mut label := "attribute"
+    if e.legacy: label = "legacy css attribute (prefer the standard property)" end
+    parts.Push(label.Concat(" `").Concat(e.en.Get(0)).Concat("`"))
+    if e.en.Len() > 1: parts.Push("also: ".Concat(_join(_rest(e.en), ", "))) end
+    parts.Push("fa: ".Concat(_fa_names(e)))
+    dest := _one(e.body, "destination")
+    if dest == "standard":
+        parts.Push("style property, works on every element and every target")
+        if g_style_notes.Has(e.en.Get(0)): parts.Push(g_style_notes.Get(e.en.Get(0))) end
+        ret _join(parts, " | ")
+    end
+    scoped := _list(e.body, "elements")
+    if scoped.Len() > 0:
+        parts.Push("on: ".Concat(_join(scoped, ", ")))
+    else:
+        parts.Push("on: every element")
+    end
+    vtype := _one(e.body, "value_type")
+    if vtype.Len() > 0 and not e.legacy: parts.Push("type: ".Concat(vtype)) end
+    allowed := _one(e.body, "allowed")
+    if vtype == "enum" and allowed.Len() > 0:
+        vals := _value_list(allowed, 40)
+        if vals.Len() > 0:
+            parts.Push("values (write them in quotes): ".Concat(vals))
+        else:
+            parts.Push("values: ".Concat(allowed))
+        end
+    end
+    ret _join(parts, " | ")
+end
+
+func _describe_value(e: Entry): str:
+    mut parts := Vector {} as Vector<str>
+    parts.Push("value `".Concat(e.en.Get(0)).Concat("`"))
+    parts.Push("fa: ".Concat(_fa_names(e)))
+    group := _one(e.body, "group")
+    parts.Push("group: ".Concat(group))
+    mut users := Vector {} as Vector<str>
+    mut i := 0
+    until i < g_entries.Len() and users.Len() < 6:
+        a := g_entries.Get(i)
+        if a.kind == "attribute" and _one(a.body, "allowed") == group and group.Len() > 0:
+            users.Push(a.en.Get(0))
+        end
+        i++
+    end
+    if users.Len() > 0: parts.Push("used by: ".Concat(_join(users, ", "))) end
+    ret _join(parts, " | ")
+end
+
+func _describe(e: Entry): str:
+    if e.kind == "element": ret _describe_element(e) end
+    if e.kind == "value": ret _describe_value(e) end
+    ret _describe_attribute(e)
+end
+
+func _haystack(e: Entry): str:
+    mut s := _names(e).Concat(" ").Concat(_join(e.fa, " ")).Concat(" ").Concat(e.cname)
+    if e.kind == "value": s = s.Concat(" ").Concat(_one(e.body, "group")) end
+    ret s.Lower()
+end
+
+func _name_rank(e: Entry, q: str): int:
+    mut best := 0
+    each n in e.en:
+        l := n.Lower()
+        if l == q and best < 1000: best = 1000 end
+        if str.StartsWith(l, q) and best < 600: best = 600 end
+        if l.Find(q) >= 0 and best < 400: best = 400 end
+    end
+    each n in e.fa:
+        if n == q and best < 1000: best = 1000 end
+        if str.StartsWith(n, q) and best < 600: best = 600 end
+        if n.Find(q) >= 0 and best < 400: best = 400 end
+    end
+    ret best
+end
+
+func _score(e: Entry, q: str, terms: Vector<str>): int:
+    mut score := _name_rank(e, q)
+    if score == 0:
+        hay := _haystack(e)
+        mut all := terms.Len() > 0
+        each t in terms:
+            if hay.Find(t) < 0: all = false end
+        end
+        if not all: ret 0 end
+        score = 100
+    end
+    if e.kind == "element": score += 30 end
+    if e.kind == "attribute" and not e.legacy: score += 20 end
+    if e.legacy: score -= 60 end
+    if score < 1: score = 1 end
+    ret score
+end
+
+func _kind_ok(e: Entry, kind: str): bool:
+    if kind.Len() == 0 or kind == "any": ret true end
+    if kind == "style": ret e.kind == "attribute" and _one(e.body, "destination") == "standard" end
+    ret e.kind == kind
+end
+
+func _overview(): str:
+    mut n_el := 0
+    mut n_at := 0
+    mut n_va := 0
+    each e in g_entries:
+        if e.kind == "element": n_el++ end
+        if e.kind == "attribute": n_at++ end
+        if e.kind == "value": n_va++ end
+    end
+    ret "The page language (`page:`, one source for web, desktop `--ui=native`, Android and iOS) has ".Concat(
+        str.FromInt(n_el)
+    ).Concat(" element names, ").Concat(str.FromInt(n_at)).Concat(" attribute names and ").Concat(
+        str.FromInt(n_va)
+    ).Concat(
+        " enum values, each with an English and a Persian spelling. Pass an element, attribute or value in English or Persian ('card', 'variant', 'dark', 'سربرگ کارت'), optionally with kind = element, attribute, value or style (the standard style properties such as padding, gap, radius), to get exact names, where each is allowed and every legal enum value. Page settings: design (shadcn, none), theme, palette, design tokens. Enum values go in quotes."
+    )
+end
+
+@en "Search"
+@fa "جستجو"
+pub func Search(query: str, kind: str, limit: int): mcpout.ToolResult:
+    _ensure()
+    if g_entries.Len() == 0:
+        ret mcpout.Failure(
+            "std/layout is not readable; set SALAM_STD or SALAM_MCP_ROOT to the Salam checkout."
+        )
+    end
+    if kind.Len() > 0 and kind != "any" and kind != "element" and kind != "attribute" and
+        kind != "value" and kind != "style":
+        ret mcpout.Failure(
+            "unknown kind '".Concat(kind).Concat("': use element, attribute, value or style.")
+        )
+    end
+    q := query.Trim().Lower()
+    if q.Len() == 0: ret mcpout.Text(_overview()) end
+    mut want := limit
+    if want < 1: want = 25 end
+    if want > 80: want = 80 end
+    terms := mcptxt.Split(q, " ")
+    mut scores := Vector {} as Vector<int>
+    each e in g_entries:
+        if _kind_ok(e, kind): scores.Push(_score(e, q, terms)) else:
+            scores.Push(0)
+        end
+    end
+    mut picked := Vector {} as Vector<int>
+    until picked.Len() < want:
+        mut best := -1
+        mut best_score := 0
+        mut i := 0
+        until i < scores.Len():
+            if scores.Get(i) > best_score:
+                best = i
+                best_score = scores.Get(i)
+            end
+            i++
+        end
+        if best < 0: break end
+        picked.Push(best)
+        scores.Set(best, 0)
+    end
+    if picked.Len() == 0:
+        ret mcpout.Text(
+            "No element, attribute or value matches '".Concat(query).Concat(
+                "'. Try one word, the Persian name, or a kind filter. Elements are listed in docs/LAYOUT_ELEMENTS.md; salam_layout with no query gives an overview."
+            )
+        )
+    end
+    mut lines := Vector {} as Vector<str>
+    each idx in picked:
+        lines.Push("- ".Concat(_describe(g_entries.Get(idx))))
+    end
+    top := g_entries.Get(picked.Get(0))
+    mut tail := ""
+    if top.kind == "element" and _name_rank(top, q) >= 1000:
+        attrs := _attributes_on(top.en.Get(0))
+        if attrs.Len() > 0:
+            tail = "\n\nAttributes scoped to `".Concat(top.en.Get(0)).Concat("`: ").Concat(
+                _join(attrs, ", ")
+            ).Concat(
+                ". Global attributes (id, class, title, content, aria *, data *, on<event>) and the standard style properties work on every element."
+            )
+        end
+    end
+    ret mcpout.Text(
+        "Matches for '".Concat(query).Concat(
+            "' (best first):\n"
+        ).Concat(_join(lines, "\n")).Concat(tail)
+    )
+end

@@ -1,0 +1,204 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layoutgen
+
+import os
+import str
+
+func dc_unquote(v: str): str:
+    mut t := str.Trim(v)
+    if t.Len() >= 2 and str.StartsWith(t, "\""):
+        rest := t.Substr(1, t.Len() - 1)
+        j := rest.Find("\"")
+        if j >= 0:
+            ret rest.Substr(0, j)
+        end
+        ret rest
+    end
+    i := t.Find(" #")
+    if i >= 0:
+        t = str.Trim(t.Substr(0, i))
+    end
+    ret t
+end
+
+func dc_parse(text: str, bare: bool): str:
+    mut out := ""
+    mut keep := bare
+    if bare:
+        out = "[design]\n"
+    end
+    mut more := text
+    until more != "":
+        raw := DsBefore(more, "\n")
+        more = DsAfter(more, "\n")
+        line := str.Trim(raw)
+        if line == "" or str.StartsWith(line, "#"):
+            continue
+        end
+        if str.StartsWith(line, "["):
+            mut name := str.Trim(DsBefore(line.Substr(1, line.Len() - 1), "]"))
+            if bare:
+                name = name == "" ? "design" : "design." + name
+            end
+            keep = name == "design" or str.StartsWith(name, "design.")
+            if keep:
+                out += "[" + name + "]\n"
+            end
+            continue
+        end
+        if keep and line.Find("=") > 0:
+            out += dc_unquote(DsBefore(line, "=")) + "=" + dc_unquote(DsAfter(line, "=")) + "\n"
+        end
+    end
+    ret out
+end
+
+func dc_parent(d: str): str:
+    mut i := d.Len() - 1
+    until i > 0:
+        c := d.Substr(i, 1)
+        if c == "/" or c == "\\":
+            ret d.Substr(0, i)
+        end
+        i--
+    end
+    ret ""
+end
+
+func dc_read(path: str): str:
+    if not os.Exists(path):
+        ret ""
+    end
+    ret os.ReadFile(path)
+end
+
+func dc_start(file: str): str:
+    cwd := os.Cwd()
+    if file == "":
+        ret cwd
+    end
+    parent := dc_parent(file)
+    if parent == file or parent == "":
+        ret cwd
+    end
+    if str.StartsWith(parent, "/") or parent.Substr(1, 1) == ":":
+        ret parent
+    end
+    ret cwd + "/" + parent
+end
+
+func dc_load(file: str): str:
+    forced := os.Env("SALAM_DESIGN")
+    if forced != "":
+        ret dc_parse(dc_read(forced), str.EndsWith(forced, "design.toml"))
+    end
+    mut dir := dc_start(file)
+    mut depth := 0
+    until depth < 24 and dir != "":
+        own := dc_read(dir + "/design.toml")
+        if own != "":
+            ret dc_parse(own, true)
+        end
+        proj := dc_parse(dc_read(dir + "/salam.toml"), false)
+        if proj != "":
+            ret proj
+        end
+        dir = dc_parent(dir)
+        depth++
+    end
+    ret ""
+end
+
+func dc_block(cfg: str, section: str): str:
+    head := "\n[" + section + "]\n"
+    padded := "\n" + cfg
+    i := padded.Find(head)
+    if i < 0:
+        ret ""
+    end
+    start := i + head.Len()
+    ret DsBefore(padded.Substr(start, padded.Len() - start), "\n[")
+end
+
+func dc_val(block: str, key: str): str:
+    padded := "\n" + block
+    mark := "\n" + key + "="
+    i := padded.Find(mark)
+    if i < 0:
+        ret ""
+    end
+    start := i + mark.Len()
+    ret DsBefore(padded.Substr(start, padded.Len() - start), "\n")
+end
+
+func dc_side(key: str): str:
+    if str.StartsWith(key, "dark-"):
+        ret "dark " + key.Substr(5, key.Len() - 5)
+    end
+    if str.StartsWith(key, "light-"):
+        ret "light " + key.Substr(6, key.Len() - 6)
+    end
+    ret key
+end
+
+func dc_tokens(block: str): str:
+    mut out := ""
+    mut more := block
+    until more != "":
+        line := DsBefore(more, "\n")
+        more = DsAfter(more, "\n")
+        key := DsBefore(line, "=")
+        if key != "" and key != "base" and line.Find("=") > 0:
+            out += ";" + dc_side(key) + ":" + DsAfter(line, "=")
+        end
+    end
+    ret out
+end
+
+@en "DsConfigParse"
+@fa "خواندن پیکربندی طراحی"
+pub func DsConfigParse(text: str, bare: bool): str:
+    ret dc_parse(text, bare)
+end
+
+@en "DsConfig"
+@fa "پیکربندی طراحی"
+pub func DsConfig(): str:
+    ret dc_load("")
+end
+
+@en "DsConfigFor"
+@fa "پیکربندی طراحی برای"
+pub func DsConfigFor(file: str): str:
+    ret dc_load(file)
+end
+
+@en "DsConfigBlock"
+@fa "بخش پیکربندی طراحی"
+pub func DsConfigBlock(cfg: str, section: str): str:
+    ret dc_block(cfg, section)
+end
+
+@en "DsConfigValue"
+@fa "مقدار پیکربندی طراحی"
+pub func DsConfigValue(block: str, key: str): str:
+    ret dc_val(block, key)
+end
+
+@en "DsConfigTokens"
+@fa "توکن های پیکربندی طراحی"
+pub func DsConfigTokens(block: str): str:
+    ret dc_tokens(block)
+end

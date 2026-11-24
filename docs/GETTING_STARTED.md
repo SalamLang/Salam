@@ -101,6 +101,20 @@ Linux distribution package installed is left to that package manager, and
 A compiler built from a source checkout is updated with `git pull` and a
 rebuild.
 
+To take only the standard library from GitHub and keep the compiler as it is:
+
+```sh
+salam upgrade-std            # std/ from the main branch
+salam upgrade-std --check    # only say whether it changed
+salam upgrade-std v0.6.19    # a tag, a branch or a commit
+```
+
+The new `std/` is unpacked next to the old one and tried against this
+compiler first; if it does not pass, nothing is replaced (`--force` installs it
+anyway). The previous folder stays as `std.prev`, so going back is a rename.
+A library from `main` can be newer than the compiler and use things the
+compiler does not know yet, in which case `salam upgrade` is the way forward.
+
 ## 🔨 Build the Compiler from Source
 
 The compiler is written in Salam. Its source lives in
@@ -516,7 +530,7 @@ The rules for the edge cases:
 - Attributes stay in source order and children keep their place after them.
 - `if`, `else` and `each` blocks inside an element are expanded the same way:
   the header line, one attribute or element per line, `else:` and `end` on
-  their own lines. This covers style conditions such as `if hover: color = red end`.
+  their own lines. This covers style conditions such as `if hover: color = "red" end`.
 - A comment inside an element stays on its own line in the same place, and a
   comment after a value or after `end` stays on that line. An element that
   holds a comment is not blank, so its `end` goes on its own line.

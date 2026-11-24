@@ -57,7 +57,7 @@ example compiled and run), and a reference page for every std package under
 6. Compiler rules & top pitfalls ← **read this before writing**
 7. Translating from PHP / TS-JS / Python / C-Go-Rust
 8. FFI, concurrency, conditional compilation
-9. Layout DSL (one page language, web and native)
+9. Layout DSL (one page language: web, desktop, Android, iOS; shadcn design system)
 10. Tooling & verification (downloads, what Salam can do, Cloudflare Workers)
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
@@ -460,7 +460,7 @@ refuses them, and an `extern` function can use them only on 64-bit targets
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
 `size(T)` returns `usize`. The old name `sizeof(T)` still compiles and warns (W295); a
-function of your own named `size` or `sizeof` wins over the builtin.
+function of your own named `size` or `sizeof` wins over the built-in.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
@@ -2444,14 +2444,27 @@ UEFI object format. See `docs/FREESTANDING.md`.
 
 ---
 
-## 9. Layout DSL (one page language, web and native)
+## 9. Layout DSL (one page language: web, desktop, Android, iOS; shadcn design system)
 
 A `page:` block (either its own `.salam` file built with `salam page build`,
-or embedded after a general program) declares a UI tree. The same source has two
-targets: **web** (HTML, CSS and JS, `salam page build`) and **native** (a window
-drawn by Salam, `--ui=native`). Elements open with `:` … `end`; **attributes and
-style properties are `name = value` pairs** (no commas needed) written inside
-the element.
+or embedded after a general program) declares a UI tree. One page language, four
+targets, the same file: **web** (HTML, CSS and JS, `salam page build`),
+**desktop** (a native window drawn by Salam, `--ui=native`), **Android**
+(`salam app android`) and **iOS** (`salam app ios`). Never write HTML, CSS,
+Compose, XML layouts or SwiftUI for these: write a `page:`. Elements open with
+`:` … `end`; **attributes and style properties are `name = value` pairs** (no
+commas needed) written inside the element. Every element, attribute and value has
+an English and a Persian name (names may contain spaces: `design tokens`,
+`card header`, `طراحی`); the full lists are `docs/LAYOUT_ELEMENTS.md` and
+`std/layout/{elements,attributes,values}`, and `salam_layout` in the MCP server
+looks a name up. Enum values (`variant = "outline"`) are written in quotes, and
+Persian values must be quoted too. **One language per page:** a Persian page
+uses only Persian names, an English page only English names, for elements,
+attributes, style properties and style keywords (`layout = "ردیف"`, not
+`"row"`); the other language is error E301 (element), E302 (attribute or
+property) or E303 (style keyword) with `write 'X'` giving the replacement, and
+`salam check --fix` applies it. Colours, numbers, units, ids, content, urls and
+`data x` / `aria x` are never checked.
 
 **Style standard, not CSS.** Salam has its own style vocabulary in the spirit of
 QML, defined in `docs/design/UI_DSL.md` and listed with values, defaults and
@@ -2464,20 +2477,20 @@ CSS strings. The web target turns the standard into CSS for you.
 page:
     title = "Cards"
     box:
-        layout = grid
+        layout = "grid"
         columns = repeat(fill, minmax(160, 1fr))
         gap = 12
         padding = 16
         max width = 720
-        margin = 0, auto
+        margin = 0, "auto"
         box:
             padding = 8, 16
             radius = 8
-            border = 1, solid, #3366aa
+            border = 1, "solid", "#3366aa"
             background = linear(90, #eef4ff, white)
-            hover background = #ffeecc
-            transition = 200ms, ease out
-            paragraph: color = #1e3a8a content = "A card" end
+            hover background = "#ffeecc"
+            transition = 200ms, "ease out"
+            paragraph: color = "#1e3a8a" content = "A card" end
         end
     end
 end
@@ -2523,8 +2536,8 @@ page:
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
     header:
-        background = blue
-        color = white
+        background = "blue"
+        color = "white"
         padding = 24px
         heading: size = 1 content = "Welcome to Salam" font size = 32 end
     end
@@ -2585,13 +2598,13 @@ an optional one, `[...rest].salam` the rest of the path, `_404.salam` the
 fallback and `_layout.salam` a component with an `Outlet` that wraps its
 folder and below (E283 without one). Settings at the top of the component
 body: `title`, `guard` (a false guard skips the route, a layout's guard covers
-its folder) and `route = "/..."` to replace the path from the file name
+its folder) and `route = "/..."` to replace the path from the filename
 (Persian `عنوان`, `نگهبان`, `مسیر`). There is no `routes:` block and no
 `redirect` setting. Navigate with `Link: to = "/p"` and in code with
 `page.route.GoTo(path)`, `Redirect`, `Back`, `Forward`; read `page.route.path`,
 `page.route.Param("id")`, `page.route.Query("q")` (Persian `صفحه.مسیر.برو`,
 `هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`). File errors:
-E280 same route twice, E281 `[id]` without that parameter, E284 bad file name.
+E280 same route twice, E281 `[id]` without that parameter, E284 bad filename.
 Page project layout: `components/` holds the `pub` components (every `.salam`
 file in it, recursively, imports its `pub components` by name, no `include`),
 `pages/` holds the routes, and everything else is included explicitly with
@@ -2742,6 +2755,11 @@ Rules, all checked at compile time:
   value must be a `web.Color`, a `web.Length` or a number (E135). Build them
   with `web.ParseUrl(s, ok)`, `web.ParseColor`, `web.ParseLength`, `web.Px(n)`,
   `web.Rgb(r, g, b)`. Their fields are private, so they cannot be forged (E017).
+- A literal `null` or an empty optional value (`T?`) on an attribute or style
+  leaves it unset: no HTML attribute, no style, no text, on web and native, and
+  it updates when the value changes. On a required attribute (`url` of `link` and
+  `image`) a literal `null` or an optional value is E300; use `.UnwrapOr(d)`,
+  `.Unwrap()` or `.value` inside `if x.IsSome():`.
 - Enum-like attributes, `heading size` and state styles
   must be known at compile time (E132); pick between fixed variants with
   `if`. `if`/`each` need a runtime layout (E133). A fixed `id` inside `each`
@@ -2761,8 +2779,8 @@ E127. The compiler never fetches over the network. Optional: `weight`
 
 ```salam
 page:
-    font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
-    box: content = "hi" font = "Estedad", sans end
+    font: name = "Estedad" url = "fonts/Estedad.woff2" display = "swap" end
+    box: content = "hi" font = "Estedad", "sans" end
 end
 ```
 
@@ -2792,6 +2810,7 @@ standard, so they cannot carry raw CSS or markup.
 | E132 / E133 | value must be static here / `if`/`each` in a static layout                    |
 | E134 / E135 | fixed id inside `each` / runtime value of an unsafe type for this attribute   |
 | E136        | one `class` given different styles on two elements                            |
+| E300        | null or an optional value on a required attribute                             |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `page build` exits non-zero
@@ -2809,6 +2828,93 @@ Build for the web: `salam page build page.salam` → `page.html` + `page.css` +
 `page.js`; `--inline` → one self-contained HTML file; multiple files → per-page
 HTML with merged `style.css`/`script.js`. Run natively:
 `salam run page.salam --ui=native`.
+
+**Commands per target** (all verified against `salam --help`):
+
+| target  | command                                                                                                                                                   |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| web     | `salam page build page.salam [--inline]`, `salam serve page.salam` (live reload), `salam web page.salam` (page plus compiled `script: src=` programs)     |
+| desktop | `salam run page.salam --ui=native`, `salam build page.salam --ui=native`, `salam check page.salam --ui=native` (E165/W166 list what a window cannot show) |
+| Android | `salam app android app.salam --out DIR [--id ID] [--name LABEL] [--icon PNG] [--abi LIST] [--run]` (needs the Android SDK, NDK and JDK; `docs/MOBILE.md`) |
+| iOS     | `salam app ios app.salam --out DIR [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`)                                 |
+
+A mobile app is the desktop native page packed with a prebuilt host shell, so
+a page that passes `salam check page.salam --ui=native` is the one to ship to a
+phone. `salam run` on a phone still uses the interpreter.
+
+### Design system (shadcn, opt in)
+
+No design system is applied unless you ask. The active design is, in order:
+the page's `design = "shadcn"` (Persian code: `طراحی = "شد سی ان"`), then the
+project default in `design.toml` or the `[design]` table of `salam.toml`, else
+none (same as `design = "none"`). The shadcn/ui look (new-york style) is generated by the std package `layoutgen` as CSS (and a
+little JS for behaviour) when the page is built for the **web**; only the
+elements a page uses add CSS, and every rule has zero specificity (`:where()`),
+so a style written on the element always wins. With `design = "none"` the
+components keep their behaviour (open and close, keyboard, ARIA, events) and
+a minimal look. Native and mobile builds accept the same page; the shadcn CSS
+is a web output today. Reference: `docs/design/DESIGN_SYSTEMS.md` plus
+`design-forms.md`, `design-display.md`, `design-overlay.md`,
+`design-extras.md`; site lessons 52 to 56 at `/learn/design-systems/`.
+
+```salam
+page:
+    design = "shadcn"                      // or "none"; no design if left out
+    title = "Pricing"
+    theme = "auto"                         // auto, light, dark; also on any element
+    palette = "zinc"                       // neutral, zinc, stone, slate, gray
+    design tokens = "primary: #2563eb; dark primary: #60a5fa; radius: 0.5rem"
+    card:
+        card header:
+            card title: content = "Pro" end
+            card description: content = "Per month" end
+        end
+        card content:
+            paragraph: content = "Ten users" end
+        end
+        card footer:
+            button: variant = "outline" size = "sm" content = "Choose" end
+            theme toggle: end
+        end
+    end
+end
+```
+
+Settings on `page`: `design` (`shadcn`, `none`; Persian `طراحی`), `theme`
+(`پوسته`), `palette` (`پالت`), `design tokens` (`توکن های طراحی`). Tokens are the
+shadcn variables (`background foreground card popover primary secondary muted
+accent destructive border input ring radius chart-1..chart-5 sidebar-*`,
+`font-sans`, `font-mono`): a bare name sets light and dark, `dark name` or
+`light name` one side. Variants are one-word attributes written in quotes:
+`variant = "destructive"`, `size = "lg"`. `button`: `variant` default,
+destructive, outline, secondary, ghost, link; `size` default, xs, sm, lg, icon,
+icon xs, icon sm, icon lg.
+
+Components by group, each with the parts it nests (the exact names, English and
+Persian, are in `docs/LAYOUT_ELEMENTS.md`):
+
+- Forms: `input`, `text area`, `label`, `select`, `select box`, `combobox`,
+  `switch`, `toggle`, `toggle group`, `radio group`, `field`, `field label`,
+  `field description`, `field error`, `field set`, `input group`,
+  `button group`, `input otp`, `keyboard`.
+  `switch: name = "wifi" checked = true end`.
+- Display: `card`, `badge`, `alert`, `separator`, `progress`, `meter`,
+  `skeleton`, `spinner`, `avatar`, `aspect ratio`, `table`, `typography`,
+  `empty`, `entry`, `breadcrumb`, `pagination`, `scroll area`.
+  `badge: variant = "secondary" content = "New" end`.
+- Overlay: `tabs` (`tab list`, `tab trigger`, `tab content`), `accordion`,
+  `collapsible`, `dialog`, `alert dialog`, `sheet`, `drawer`, `popover`,
+  `tooltip`, `hover card`, `dropdown menu`, `context menu`, `menubar`,
+  `navigation menu`. Open a dialog with `button: opens = "dlg" end` and close it
+  with `closes = true`.
+- Extras: `toaster` (`button: toast = "Saved"`), `command`, `calendar`,
+  `date picker`, `carousel`, `resizable`, `sidebar provider` and the sidebar
+  parts, `chart`, `theme toggle`.
+
+Persian: `صفحه:` with `طراحی = "شد سی ان"` (`هیچ` for none; Persian values are
+their own words, ask `salam_layout`), `کارت:`, `سربرگ کارت:`, `عنوان کارت:`,
+`محتوای کارت:`, `دکمه:` with `گونه = "ثانویه"` and `اندازه = "کوچک"` (values are
+quoted Persian words).
 
 ---
 
@@ -2839,6 +2945,7 @@ salam build --lib[=static]              # .so/.dylib/.dll (or .a) + NAME.h from 
 salam memcheck app.salam                # run under Valgrind if installed, else build with AddressSanitizer
 salam version                           # print the compiler version (--version and -v work too)
 salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)
+salam upgrade-std [REF] [--check]       # update only std/ from GitHub (main, or a branch/tag/commit); the compiler stays
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 
@@ -2850,7 +2957,8 @@ written). Linux and macOS: `{ curl -fsSL https://raw.githubusercontent.com/Salam
 (add `-s -- --version X.Y.Z` after the final `sh` to pick a release). Windows
 PowerShell: `irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
 Then `salam version`, and `salam upgrade` later. The standard library ships
-with the compiler.
+with the compiler; `salam upgrade-std` refreshes just `std/` from GitHub, tries
+it with your compiler first, and keeps the old folder as `std.prev`.
 
 ### Download links for people
 
@@ -3643,6 +3751,30 @@ More forms, each checked with the current compiler:
     خارج، باقی := تقسیم(۱۷، ۵)
     ت := تقسیم(۹، ۴)
     سرچاپ خارج، باقی، ت.۰، ت.۱
+پایان
+```
+
+**صفحه (the layout DSL in Persian).** The same one page language as §9, with
+Persian names: `صفحه:` ... `پایان`, elements `جعبه`, `پاراگراف`, `دکمه`, `کارت`,
+attributes `محتوا`, `گونه`, `اندازه`, `چیدمان`, `شکاف`, `فضا`. Build and run with
+the same commands (`salam page build`, `--ui=native`, `salam app android`,
+`salam app ios`). Values that are words (`"ردیف"`, `"ثانویه"`, `"شد سی ان"`) are
+written in quotes. Never guess a name: `salam_layout` (MCP) or
+`std/layout/{elements,attributes,values}` give the Persian spelling of each.
+
+```salam
+صفحه:
+    طراحی = "شد سی ان"
+    عنوان = "قیمت"
+    پوسته = "تاریک"
+    کارت:
+        سربرگ کارت:
+            عنوان کارت: محتوا = "طرح تیمی" پایان
+        پایان
+        پاورقی کارت:
+            دکمه: گونه = "ثانویه" اندازه = "کوچک" محتوا = "انتخاب" پایان
+        پایان
+    پایان
 پایان
 ```
 

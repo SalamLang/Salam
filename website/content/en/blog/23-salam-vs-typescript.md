@@ -224,7 +224,7 @@ Salam's approach is different. It has a [page language](/learn/layout/) built in
 
 ```salam
 component Tag(text: str):
-    span: content = text background = #fde68a end
+    span: content = text background = "#fde68a" end
 end
 
 page Cart(user: str, products: Vector<str>):
@@ -235,7 +235,7 @@ page Cart(user: str, products: Vector<str>):
     else:
         paragraph: content = "Items: " + products.Len() end
         list:
-            each name in products:
+            each _, name in products:
                 item: content = name end
             end
         end

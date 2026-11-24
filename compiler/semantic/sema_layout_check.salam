@@ -23,6 +23,10 @@ mut g_lay_sp_path := ""
 
 mut g_lay_sp_reported := Vector {} as Vector<str>
 
+mut g_lay_locals := Vector {} as Vector<str>
+
+mut g_lay_bare_seen := HashMap {} as HashMap<str, bool>
+
 struct LayCheck:
     pub stack: Vector<int> = Vector {}
     pub ids: Vector<str> = Vector {}
@@ -387,9 +391,6 @@ func layout_resolve(a &: at.Ast, lb: int):
     defer stack.Free()
     stack.Push(lay_elem_by_key("page"))
     lay_resolve_walk(a, lb, stack)
-    // TODO(language): enforce Persian-only element/attribute keywords in Persian files and English-only in English files.
-    // layout_resolve currently canonicalizes via aliases without file-language context and does not preserve original spellings,
-    // so keyword-language rejection needs schema alias language metadata and/or original-name tracking.
 end
 
 func lay_has_sep(name: str): bool:
@@ -1030,6 +1031,178 @@ func lay_warn_not_standard(s &: Sema, a &: at.Ast, aid: int, key: str):
     end
 end
 
+func lay_source_slice(a &: at.Ast, nid: int, path: str): str:
+    n := at.Get(a, nid)
+    if str.Len(path) == 0 or n.end_index <= n.begin_index:
+        ret ""
+    end
+    if not lay_source_is(a, nid, path, ""):
+        ret ""
+    end
+    b := n.begin_index as int
+    e := n.end_index as int
+    if b < 0 or e > str.Len(g_style_src_text):
+        ret ""
+    end
+    ret str.Substr(g_style_src_text, b, e - b)
+end
+
+func lay_bare_value_report(s &: Sema, a &: at.Ast, nid: int, word: str):
+    n := at.Get(a, nid)
+    path := n.src_file
+    seen_key := path + ":" + str.FromInt(n.begin_index as i64)
+    if g_lay_bare_seen.Has(seen_key):
+        ret
+    end
+    g_lay_bare_seen.Put(seen_key, true)
+    slice := lay_source_slice(a, nid, path)
+    mut quoted := `"` + word + `"`
+    if str.Len(slice) > 0 and str.IndexOf(slice, "\"") < 0 and str.IndexOf(slice, "\n") < 0 and
+        str.IndexOf(slice, ",") < 0:
+        quoted = `"` + slice + `"`
+        mut f := fix_at(span_of(a, nid))
+        f.file = path
+        f.length = str.Len(slice)
+        f.title = i18.Tr("Write the value in quotes")
+        f.text = quoted
+        f.preferred = true
+        f.safe = true
+        queue_fix(f)
+    end
+    msg := co.Format1(
+        i18.Tr("the word '%s' is a value, not a name; write it in quotes"), co.ArgStr(word)
+    )
+    help := co.Format1(i18.Tr("write %s"), co.ArgStr(quoted))
+    if lay_strict_values(s):
+        serr_help(s, LAYOUT_BARE_VALUE_CODE, span_of(a, nid), msg, help)
+    else:
+        swarn_help(s, LAYOUT_BARE_VALUE_CODE, span_of(a, nid), msg, help)
+    end
+end
+
+func lay_strict_values(s &: Sema): bool:
+    if g_sm_strict_values:
+        ret true
+    end
+    dir := pth.PathDir(s.file)
+    repeat g_sm_strict_dirs.Len() in i:
+        if str.Equals(g_sm_strict_dirs.Get(i), dir):
+            ret g_sm_strict_ans.Get(i)
+        end
+    end
+    root := pm.FindProjectRoot(dir)
+    enabled := str.Len(root) > 0 and pm.ReadBoolSetting(root, "build", "strict-values")
+    g_sm_strict_dirs.Push(dir)
+    g_sm_strict_ans.Push(enabled)
+    ret enabled
+end
+
+func lay_collect_locals(a &: at.Ast, nid: int):
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_VAR_DECL or k == at.AST_PARAM:
+            g_lay_locals.Push(at.Get(a, cid).name)
+        else k == at.AST_LAYOUT_ELEMENT:
+            lay_collect_locals(a, cid)
+        else k == at.AST_EACH:
+            en := at.Get(a, cid)
+            if str.Len(en.name) > 0:
+                g_lay_locals.Push(en.name)
+            end
+            if en.c != 0:
+                g_lay_locals.Push(at.Get(a, en.c).name)
+            end
+            lay_collect_locals(a, en.b)
+        else k == at.AST_IF:
+            n := at.Get(a, cid)
+            lay_collect_locals(a, n.b)
+            if n.c != 0:
+                lay_collect_locals(a, n.c)
+            end
+        end
+    end
+end
+
+func lay_is_local(name: str): bool:
+    each l in g_lay_locals:
+        if str.Equals(l, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lay_bare_value_walk(s &: Sema, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        if scope_lookup(s, s.cur, n.name) <= 0 and not lay_is_local(n.name):
+            lay_bare_value_report(s, a, nid, n.name)
+        end
+        ret
+    end
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_STRING and not n.synthetic and str.StartsWith(
+            n.value_str, "#"
+        ) and str.Len(n.src_file) > 0 and lay_source_is(a, nid, n.src_file, n.value_str):
+            lay_bare_value_report(s, a, nid, n.value_str)
+        end
+        ret
+    end
+    if n.kind == at.AST_TUPLE or n.kind == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in i:
+            lay_bare_value_walk(s, a, at.Child(a, nid, i))
+        end
+        ret
+    end
+    if n.kind == at.AST_TERNARY:
+        lay_bare_value_walk(s, a, n.b)
+        lay_bare_value_walk(s, a, n.c)
+    end
+end
+
+func lay_null_attr(s &: Sema, a &: at.Ast, aid: int, ei: int, name: str): bool:
+    vid := at.Get(a, aid).a
+    if vid == 0 or at.KindOf(a, vid) != at.AST_LITERAL or at.Get(a, vid).op != tok.TK_KW_NULL:
+        ret false
+    end
+    mut key := lay_attr_key_for(ei, name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    if ei >= 0 and lay_csv_has(g_lay_elems.Get(ei).required, key):
+        serr_help(
+            s,
+            300,
+            span_of(a, vid),
+            co.Format2(
+                i18.Tr("'%s' on '%s' is required and cannot be null"),
+                co.ArgStr(lay_attr_display(key)),
+                co.ArgStr(lay_elem_display(ei))
+            ),
+            i18.Tr(
+                "give it a value: '.UnwrapOr(default)', '.Unwrap()', or use '.value' inside 'if x.IsSome():'"
+            )
+        )
+        ret true
+    end
+    if not ResolveStyleAttr(name).ok and lay_attr_for(ei, key) < 0 and
+        lay_pseudo_prefix_len(name) == 0:
+        ret false
+    end
+    lit := lay_mk_literal(a, vid, LayVal { kind = LV_STR, s = "" })
+    mut ln := at.Get(a, lit)
+    ln.synthetic = true
+    at.Put(a, lit, ln)
+    mut an := at.Get(a, aid)
+    an.a = lit
+    at.Put(a, aid, an)
+    ret true
+end
+
 func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
     e := g_lay_elems.Get(ei)
     mut seen := Vector {} as Vector<str>
@@ -1073,6 +1246,12 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             continue
         end
         seen.Push(dkey)
+        if lay_null_attr(s, a, aid, ei, name):
+            continue
+        end
+        if not lay_is_handler(name) and not StyleAttrIsEvent(a, aid):
+            lay_bare_value_walk(s, a, at.Get(a, aid).a)
+        end
         if lay_is_handler(name) and str.Len(
             str.Trim(
                 str.Substr(
@@ -1211,7 +1390,8 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             continue
         end
         if str.IndexOf(v, char_from_code(2)) >= 0:
-            if str.IndexOf(v, "salam-bad-") >= 0:
+            if str.IndexOf(v, "salam-bad-") >= 0 or
+                (str.Equals(e.key, "heading") and str.Equals(key, "size")):
                 serr(
                     s,
                     132,
@@ -1318,17 +1498,19 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
         value_ok := lay_attr_value_ok(ai, v)
         g_lay_css_en_only = false
         g_lay_val_fa_only = false
-        // TODO(language): reject layout attribute/element keywords (names) written in the wrong language for the file.
-        // Value-language checks above cover dynamic/registered values; full keyword enforcement needs original spellings
-        // and alias-language metadata through resolve/check paths. Also ensure style-resolved/gui.style parsing paths
-        // honor file-language restrictions where applicable.
         if not value_ok:
             mut vhint := ""
             if av.vtype == VT_ENUM or av.vtype == VT_BOOL_ENUM or av.vtype == VT_DIR or
                 av.vtype == VT_LANG:
                 vcands := lay_value_candidates(av.vtype, av.allowed)
                 vhint = lay_suggest_from(v, vcands)
+                if vcands.Len() > 0 and vcands.Len() <= 16:
+                    vhint += co.Format1(
+                        i18.Tr(" (allowed values: %s)"), co.ArgStr(lay_join_values(vcands))
+                    )
+                end
                 vcands.Free()
+                vhint += lay_value_belongs_to(ei, ai, v)
             end
             serr(
                 s,
@@ -1494,7 +1676,7 @@ func lay_check_class_styles(
             ret
         end
         other := ck.cls_nodes.Get(i)
-        serr(
+        serr_help(
             s,
             136,
             span_of(a, klass_node),
@@ -1506,6 +1688,9 @@ func lay_check_class_styles(
                 co.ArgStr(lay_elem_display(ei)),
                 co.ArgStr(lay_elem_display(at.Get(a, other).op - 1)),
                 co.ArgInt(span_of(a, other).begin.line as i64)
+            ),
+            i18.Tr(
+                "in a component used more than once, remove 'class' so each element gets its own generated class"
             )
         )
         ret
@@ -1909,6 +2094,10 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         end
         if k == at.AST_LAYOUT_ATTR:
             name := at.Get(a, cid).name
+            if not lay_is_handler(name) and not StyleAttrIsEvent(a, cid) and
+                str.Len(name) > 0:
+                lay_bare_value_walk(s, a, at.Get(a, cid).a)
+            end
             if lay_is_handler(name):
                 if str.Len(
                     str.Trim(
@@ -2239,7 +2428,11 @@ func sema_check_layout_component(s &: Sema, a &: at.Ast, nid: int):
     each kn in g_lay_known_comps:
         ck.comps.Push(kn)
     end
+    g_lay_locals.Clear()
+    lay_collect_locals(a, nid)
+    lay_collect_locals(a, at.Get(a, nid).a)
     lay_check_spelling(s, a, at.Get(a, nid).a)
+    lay_check_language(s, a, at.Get(a, nid).a)
     ck.unexpanded = lay_tree_has_include(a, at.Get(a, nid).a)
     ck.stack.Push(lay_elem_by_key("page"))
     lay_comp_check_items(s, a, at.Get(a, nid).a, ck)
@@ -2325,7 +2518,10 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
             )
         end
     end
+    g_lay_locals.Clear()
+    lay_collect_locals(a, nid)
     lay_check_spelling(s, a, nid)
+    lay_check_language(s, a, nid)
     layout_resolve(a, nid)
     root := lay_elem_by_key("page")
     if lay_elem_attr(a, nid, "repeat") != 0 and lay_subtree_has_id(a, nid):
@@ -2393,6 +2589,25 @@ func lay_url_runs_code(v: str): bool:
     ret str.Equals(scheme, "data") and not lay_is_abs_url(str.Trim(v))
 end
 
+func lay_take_ids(ck &: LayCheck, base: int, seen &: Vector<str>):
+    mut added := Vector {} as Vector<str>
+    defer added.Free()
+    until ck.ids.Len() > base:
+        added.Push(ck.ids.Pop())
+    end
+    each id in added:
+        mut have := false
+        each old in seen:
+            if str.Equals(old, id):
+                have = true
+            end
+        end
+        if not have:
+            seen.Push(id)
+        end
+    end
+end
+
 func lay_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     n := at.Get(a, nid)
     if n.kind == at.AST_IF and n.synthetic and str.Equals(n.name, "__salam_component"):
@@ -2448,15 +2663,23 @@ func lay_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     if n.a == 0:
         serr(s, 18, span_of(a, nid), i18.Tr("'if' is missing its condition"))
     end
+    base := ck.ids.Len()
+    mut seen := Vector {} as Vector<str>
+    defer seen.Free()
     if n.b != 0:
         lay_check_children(s, a, n.b, ck)
     end
+    lay_take_ids(ck, base, seen)
     if n.c != 0:
         if at.KindOf(a, n.c) == at.AST_IF:
             lay_check_control(s, a, n.c, ck)
         else:
             lay_check_children(s, a, n.c, ck)
         end
+    end
+    lay_take_ids(ck, base, seen)
+    each id in seen:
+        ck.ids.Push(id)
     end
 end
 

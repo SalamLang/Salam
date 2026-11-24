@@ -744,6 +744,12 @@ async function testAgentTools() {
       { jsonrpc: "2.0", id: 24, method: "resources/read", params: { _meta: meta, uri: "salam://docs/error%20handling" } },
       { jsonrpc: "2.0", id: 25, method: "resources/read", params: { _meta: meta, uri: "salam://guide/skill.md" } },
       { jsonrpc: "2.0", id: 26, method: "server/discover", params: { _meta: meta } },
+      call(27, "salam_page_build", { source: 'page:\n    design = "shadcn"\n    card:\n        card header:\n            card title: content = "Plan" end\n        end\n        button: variant = "outline" size = "sm" content = "Buy" end\n    end\nend\n', ui: "all", show: "html" }),
+      call(28, "salam_page_build", { source: 'page:\n    button: variant = "outlin" content = "x" end\nend\n' }),
+      call(29, "salam_layout", { query: "variant", kind: "attribute" }),
+      call(30, "salam_layout", { query: "سربرگ کارت" }),
+      { jsonrpc: "2.0", id: 31, method: "prompts/get", params: { _meta: meta, name: "salam-ui", arguments: { idea: "a pricing card" } } },
+      { jsonrpc: "2.0", id: 32, method: "resources/read", params: { _meta: meta, uri: "salam://layout/dialog" } },
     ],
     { SALAM_MCP_RUN_TIMEOUT: "3" },
   );
@@ -825,7 +831,7 @@ async function testAgentTools() {
   check("a missing path says so and suggests source", r[18].result.isError === true && textOf(r[18]).includes("No such file"));
 
   const prompts = r[19].result.prompts.map((p) => p.name).sort().join();
-  check("prompts are offered", prompts === "salam-fix,salam-port,salam-write", prompts);
+  check("prompts are offered", prompts === "salam-fix,salam-port,salam-ui,salam-write", prompts);
   const msg = r[20].result.messages?.[0]?.content?.text ?? "";
   check("a prompt carries the task and the rules", msg.includes("first ten squares") && msg.includes("`until cond:` is WHILE"));
   check("a prompt without its required argument is invalid params", r[21].error?.code === -32602);
@@ -833,8 +839,22 @@ async function testAgentTools() {
   check("a stdlib template resource is served", r[23].result.contents?.[0]?.text?.includes("import encoding.json"));
   check("a docs template resource decodes its topic", (r[24].result.contents?.[0]?.text ?? "").startsWith("From "));
   check("the full reference is served", (r[25].result.contents?.[0]?.text ?? "").includes("# Writing Salam"));
+  const pageOk = textOf(r[27]);
+  if (pageOk.includes("unknown attribute 'design'")) {
+    check("the page build checks wait for a compiler that has the design system", true);
+  } else {
+    check("a design page builds for the web and checks for native", r[27].result.isError !== true && pageOk.includes("OK") && pageOk.includes("index.html") && pageOk.includes("check --ui=native"), pageOk);
+    check("show returns the generated html", pageOk.includes("```html"));
+    check("a wrong enum value is reported with a suggestion", r[28].result.isError === true && textOf(r[28]).includes("outline"), textOf(r[28]));
+  }
+  const layoutText = textOf(r[29]);
+  check("salam_layout lists the legal values of variant", layoutText.includes("destructive") && layoutText.includes("گونه"), layoutText);
+  check("salam_layout finds a Persian name", textOf(r[30]).includes("`card header`"));
+  check("the ui prompt names the tools", (r[31].result.messages?.[0]?.content?.text ?? "").includes("salam_layout") && (r[31].result.messages?.[0]?.content?.text ?? "").includes("a pricing card"));
+  check("a layout resource is served", (r[32].result.contents?.[0]?.text ?? "").includes("dialog"));
+  check("the tool list has the page tools", names.includes("salam_page_build") && names.includes("salam_layout"));
   const instructions = r[26].result.instructions ?? "";
-  check("instructions carry the language crib", instructions.includes("There is no `for` and no `while`") && instructions.includes("salam_docs"));
+  check("instructions carry the language crib", instructions.includes("There is no `for` and no `while`") && instructions.includes("salam_docs") && instructions.includes("salam_layout"));
   check(
     "every structuredContent is an object",
     parseLines(raw).every((m) => m.result?.structuredContent === undefined || (typeof m.result.structuredContent === "object" && !Array.isArray(m.result.structuredContent))),

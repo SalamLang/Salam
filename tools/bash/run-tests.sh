@@ -58,6 +58,7 @@ if [ "${1:-}" = "--worker" ]; then
         mkdir -p "$jobdir"
         case "$fabs" in */page_*.in) rcmd=page ;; *) rcmd=cli ;; esac
         got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" "$rcmd" --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        [ "$rcmd" = page ] && got=$(printf '%s\n' "$got" | grep -vE '^(\*,::before|\[hidden\]|\[data-theme|:where|:root|body\{)')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }
@@ -313,6 +314,18 @@ $cerrs"
             echo "FAIL $label (missing expected: $missing)"
         fi
     }
+    wk_ssrbuild() {
+        jobdir="$WORK/ssrjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        psrc="$(dirname "$fabs")"
+        if (cd "$jobdir" && "$SALAM_ABS" page build --ssr="$jobdir/dist" "$psrc" --no-color --log-level=error --lang="$lang") >"$jobdir/build.log" 2>&1 && [ -x "$jobdir/dist/server" ]; then
+            echo "PASS $label (ssr build)"
+        else
+            echo "FAIL $label (ssr build failed)"
+            sed 's/^/  /' "$jobdir/build.log" 2>/dev/null | head -20
+        fi
+        rm -rf "$jobdir"
+    }
     wk_buildonly() {
         jobdir="$WORK/bojob_${jobid}_$$"
         mkdir -p "$jobdir"
@@ -526,7 +539,7 @@ EOF_LNOTS
         mkdir -p "$ujob"
         (cd "$ujob" && "$SALAM_ABS" build "$fabs" --ui=native --output="$ujob/app" --no-color --log-level=error --lang="$lang") >"$ujob/build.log" 2>&1
         if [ -x "$ujob/app" ]; then
-            (cd "$ujob" && SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 ./app >"$ujob/run.out" 2>&1)
+            SALAM_WINDOW_BACKEND=headless SALAM_UI_SCRIPT="${fabs%.salam}.script" tmo 60 "$ujob/app" >"$ujob/run.out" 2>&1
             urc=$?
             got=$(tr -d '\r' <"$ujob/run.out")
             [ "$urc" = 124 ] && got="<timed out after 60 seconds> $got"
@@ -683,6 +696,7 @@ EOF_LAYOUT_NOT
         lint) wk_lint ;;
         lintfix) wk_lintfix ;;
         buildonly) wk_buildonly ;;
+        ssrbuild) wk_ssrbuild ;;
         jsbuildonly) wk_jsbuildonly ;;
         cross) wk_cross ;;
         uinative) wk_uinative ;;
@@ -989,6 +1003,10 @@ fi
 if want ssr && command -v curl >/dev/null 2>&1; then
     for lang in $LANGS; do
         add_job script "ssr/$lang/flow" "tools/bash/test-ssr.sh" "$lang" "tests/$lang/ssr/flow.out"
+        for d in tests/"$lang"/ssr/projects/*/; do
+            [ -f "${d}main.salam" ] || continue
+            add_job ssrbuild "ssr/$lang/projects/$(basename "$d")" "${d}main.salam" "$lang" -
+        done
     done
 fi
 
@@ -1565,12 +1583,12 @@ if want page; then
         for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \
             tests/"$lang"/web_errors/*.salam; do
             [ -e "$stray" ] || continue
-            subs="elements/, style/, components/, pages/, projects/ or errors/"
+            subs="elements/, style/, components/, pages/, projects/, design/ or errors/"
             note_result \
                 "FAIL page/$lang ($stray is in no page subdirectory, so nothing runs it; move it into $subs)" \
                 "page/$lang/stray/$(basename "$stray" .salam)"
         done
-        for sub in elements style components pages projects errors; do
+        for sub in elements style components pages projects design errors; do
             [ -d "tests/$lang/page/$sub" ] || continue
             want_sub "page/$sub" || continue
             for f in tests/"$lang"/page/"$sub"/*.salam; do

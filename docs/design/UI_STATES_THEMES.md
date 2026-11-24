@@ -37,18 +37,18 @@ name and no selector.
 component Seg(items: Vector<str>, value: str, pick: func (str)):
     row:
         radius = 8
-        border = 1, solid, theme.color.border
-        each it in items:
+        border = 1, "solid", theme.color.border
+        each _, it in items:
             button: key = it content = it click = (): pick(it) end
                 padding = 7, 14
-                background = transparent
+                background = "transparent"
                 color = theme.color.muted
                 hover color = theme.color.fg
                 transition = 150ms
                 if it == value:
                     background = theme.color.accent
                     color = theme.color.on accent
-                    font weight = semibold
+                    font weight = "semibold"
                 end
             end
         end
@@ -180,7 +180,7 @@ Status:
                visible = false
                if compact: visible = true end
            end
-           nav: id = "controls" position = fixed, end = 0, top = 0
+           nav: id = "controls" position = "fixed", end = 0, top = 0
                width = 330
                translate = 0
                if compact and not menu: translate = 110%, 0 end
@@ -223,9 +223,9 @@ A state can also be written as a block. It is an alias of the prefixed form:
 
 ```salam
 button:
-    background = blue
+    background = "blue"
     hover:
-        background = navy
+        background = "navy"
         padding = 12
     end
     focus within:
@@ -317,13 +317,13 @@ every value is checked at compile time by `gui.style` like any attribute.
 theme Light:
     scheme = light
     color:
-        bg = #f4f6fa
-        panel = #ffffff
-        fg = #1b2030
-        muted = #5f6878
-        accent = #ff7a18
-        on accent = #2a1402
-        border = #d8dde7
+        bg = "#f4f6fa"
+        panel = "#ffffff"
+        fg = "#1b2030"
+        muted = "#5f6878"
+        accent = "#ff7a18"
+        on accent = "#2a1402"
+        border = "#d8dde7"
     end
     space: sm = 4, md = 8, lg = 16 end
     radius: sm = 4, md = 8 end
@@ -336,7 +336,7 @@ end
 
 theme Dark extends Light:
     scheme = dark
-    color: bg = #0f1115, panel = #161922, fg = #e6e9ef, muted = #9aa4b8 end
+    color: bg = "#0f1115", panel = "#161922", fg = "#e6e9ef", muted = "#9aa4b8" end
 end
 ```
 
@@ -354,9 +354,9 @@ end
 
 ```salam
 page:
-    theme = auto
-    box: theme = Contrast
-        button: theme color accent = #e11d48 content = "Delete" end
+    theme = "auto"
+    box: theme = "Contrast"
+        button: theme color accent = "#e11d48" content = "Delete" end
     end
 end
 ```

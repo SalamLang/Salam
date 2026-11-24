@@ -9,11 +9,13 @@ trap 'rm -f "$tmp"' EXIT
 
 scan() {
     awk -v file="$1" '
-        BEGIN { skipnames = "|content|title|alt|srcset|sizes|imagesizes|imagesrcset|اندازه‌ها|اندازه‌های تصویر|مجموعه منبع|مجموعه منبع تصویر|محتوا|عنوان|نام|مقدار|متن|نشانی|برچسب|شرح|توضیح|جایگزین|placeholder|value|label|name|url|href|src|media|description|keywords|text|pattern|action|style|viewport|timeout|" }
+        BEGIN { skipnames = "|content|title|alt|srcset|sizes|imagesizes|imagesrcset|"
+            skipnames = skipnames "اندازه‌ها|اندازه‌های تصویر|مجموعه منبع|مجموعه منبع تصویر|محتوا|عنوان|نام|مقدار|متن|نشانی|برچسب|شرح|توضیح|جایگزین|"
+            skipnames = skipnames "placeholder|splash_color|value|label|name|url|href|src|media|description|keywords|text|pattern|action|style|viewport|timeout|" }
         {
             line = $0
             gsub(/&quot;/, "\"", line)
-            while (match(line, /[^[:space:][:digit:]=:",[#.-][^=:",[]* *= *("-?[0-9.]+ ?(px|em|rem|%|vh|vw|vmin|vmax|ms|s|deg|pt|fr|ex|ch|cm|mm|in)"|"#[0-9a-fA-F]+")/)) {
+            while (match(line, /[^[:space:][:digit:]=:",[#.-][^=:",[]* *= *("-?[0-9.]+ ?(px|em|rem|%|vh|vw|vmin|vmax|ms|s|deg|pt|fr|ex|ch|cm|mm|in)"")/)) {
                 hit = substr(line, RSTART, RLENGTH)
                 name = hit
                 sub(/ *=.*$/, "", name)
@@ -23,7 +25,7 @@ scan() {
                 sub(/^ +/, "", full)
                 sub(/ +$/, "", full)
                 if (index(skipnames, "|" key "|") == 0 && index(skipnames, "|" full "|") == 0) {
-                    print file ":" NR ": quoted size or colour: " hit
+                    print file ":" NR ": quoted size: " hit
                 }
                 line = substr(line, RSTART + RLENGTH)
             }
@@ -53,7 +55,7 @@ done >>"$tmp"
 
 if [ -s "$tmp" ]; then
     cat "$tmp"
-    echo "website: quoted sizes or colours in page code; write 24px, 100%, 8, 16 and #3366aa without quotes"
+    echo "website: quoted sizes in page code; write 24px, 100%, 8, 16 without quotes (colours and words are quoted)"
     exit 1
 fi
-echo "website: no quoted sizes or colours in page code"
+echo "website: no quoted sizes in page code"

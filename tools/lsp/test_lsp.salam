@@ -1796,6 +1796,121 @@ func default_std(exe: str):
     _r := temp.RemoveDir(dir)
 end
 
+func pos_le(a: Pos, b: Pos): bool:
+    ret a.line < b.line or (a.line == b.line and a.ch <= b.ch)
+end
+
+func range_ok(r: value.Value): bool:
+    a := pos_of(jget(r, "start"))
+    b := pos_of(jget(r, "end"))
+    ret a.line >= 0 and a.ch >= 0 and pos_le(a, b)
+end
+
+func contains_range(outer: value.Value, inner: value.Value): bool:
+    ret pos_le(pos_of(jget(outer, "start")), pos_of(jget(inner, "start"))) and
+        pos_le(pos_of(jget(inner, "end")), pos_of(jget(outer, "end")))
+end
+
+func symbols_bad(list: value.Value, parent: value.Value, has_parent: bool): str:
+    mut i := 0
+    until i < jlen(list):
+        sym := jidx(list, i)
+        rg := jget(sym, "range")
+        sel := jget(sym, "selectionRange")
+        nm := jstr(jget(sym, "name"))
+        if not range_ok(rg) or not range_ok(sel) or not contains_range(rg, sel):
+            ret nm + " selectionRange outside range: " + dump(sym)
+        end
+        if has_parent and not contains_range(parent, rg):
+            ret nm + " outside its parent"
+        end
+        inner := symbols_bad(jget(sym, "children"), rg, true)
+        if inner != "":
+            ret inner
+        end
+        i++
+    end
+    ret ""
+end
+
+func outline_ranges(s: Server, label: str, uri: str, text: str):
+    did_open(s, uri, text)
+    _wait := s.diagnostics(uri)
+    sy := res(s.request("textDocument/documentSymbol", doc_id(uri)))
+    check(
+        "outline ranges: " + label,
+        symbols_bad(sy, value.ValueNull(), false) == "",
+        symbols_bad(sy, value.ValueNull(), false)
+    )
+end
+
+func outline_ranges_all(s: Server):
+    outline_ranges(s, "en", uri_of(g_en), fs.ReadText(g_en))
+    outline_ranges(s, "fa", uri_of(g_fa), fs.ReadText(g_fa))
+    outline_ranges(s, "interfaces", uri_of(g_iface), fs.ReadText(g_iface))
+    sr := g_root + "/tests/en/stdlib/ssr/server_func_register.salam"
+    outline_ranges(s, "server func throw", uri_of(sr), fs.ReadText(sr))
+    sf := g_root + "/tests/fa/stdlib/sevenzip_filters.salam"
+    outline_ranges(s, "fa throw", uri_of(sf), fs.ReadText(sf))
+    broken := g_root + "/tests/lsp/qf/broken_outline.salam"
+    outline_ranges(
+        s,
+        "malformed",
+        uri_of(broken),
+        "struct P:\n    x: int\nfunc a(: int:\n    ret\nfunc b(): int throw:\n    ret try a(\nend\nenum E:\n    A\n"
+    )
+end
+
+func diag_has(d: value.Value, sub: str): bool:
+    ret count_includes(d, sub) > 0
+end
+
+func router_files(s: Server):
+    mut names := Vector {} as Vector<str>
+    names.Push("tests/en/page/projects/nav_link/main.salam")
+    names.Push("tests/en/page/projects/nav_link/components/nav.salam")
+    names.Push("tests/en/page/projects/shop/pages/checkout.salam")
+    names.Push("tests/en/page/projects/notes/pages/_404.salam")
+    names.Push("tests/fa/page/projects/nav_link/main.salam")
+    names.Push("tests/fa/page/projects/nav_link/components/nav.salam")
+    each rel in names:
+        path := g_root + "/" + rel
+        uri := uri_of(path)
+        did_open(s, uri, fs.ReadText(path))
+        d := jget(s.diagnostics(uri), "diagnostics")
+        check(
+            "router: no false link or route errors in " + rel,
+            not diag_has(d, "'to'") and not diag_has(d, "missing required attribute 'url'") and
+                not diag_has(d, "Outlet") and not diag_has(d, "'page'") and
+                not diag_has(d, "'مقصد'") and not diag_has(d, "'نشانی'") and
+                not diag_has(d, "'__salam") and not diag_has(d, "works with the router") and
+                not diag_has(d, "duplicate attribute 'include'") and
+                not diag_has(d, "unrecognized layout element"),
+            dump(d)
+        )
+        s.notify("textDocument/didClose", doc_id(uri))
+    end
+    one := g_root + "/tests/lsp/qf/router_one.salam"
+    ouri := uri_of(one)
+    did_open(s, ouri, "page:\n    link:\n        to = \"/admin\"\n        content = \"Admin\"\n    end\nend\n")
+    od := jget(s.diagnostics(ouri), "diagnostics")
+    check(
+        "router: link to in a single file has no missing url or unknown to",
+        not diag_has(od, "'to'") and not diag_has(od, "missing required attribute 'url'"),
+        dump(od)
+    )
+    s.notify("textDocument/didClose", doc_id(ouri))
+    xuri := uri_of(g_root + "/tests/lsp/qf/router_two.salam")
+    did_open(s, xuri, "page:\n    Outlet: end\nend\n")
+    xd := jget(s.diagnostics(xuri), "diagnostics")
+    check(
+        "router: Outlet without a pages folder says E265 like the compiler",
+        diag_has(xd, "has no pages folder"),
+        dump(xd)
+    )
+    s.notify("textDocument/didClose", doc_id(xuri))
+end
+
 func main:
     g_root = find_root()
     g_std = g_root + "/std"
@@ -1827,12 +1942,14 @@ func main:
     end
     check("initialize advertises the features", all_caps, dump(caps))
     english(s)
+    outline_ranges_all(s)
     quick_fixes(s)
     interfaces(s)
     style_attrs(s)
     component_attrs(s)
     package_check(s)
     language_detection(s)
+    router_files(s)
     code := s.stop()
     check("shutdown then exit ends with status 0", code == 0, "")
 

@@ -17,6 +17,7 @@ jobs:
         mobile/host/*
         std/gui/*
         tools/bash/build-ios-app.sh
+        tools/bash/build-selfhost.sh
         .github/workflows/_changes.yml
         .github/workflows/app-native-ios-build.yml
   build:
@@ -24,7 +25,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build a page as an iOS app
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,9 +36,21 @@ jobs:
         id: salam
         uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
 
+      - name: Build the compiler from this checkout
+        id: tree
+        env:
+          SEED: ${{ steps.salam.outputs.salam }}
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/tree"
+          sh tools/bash/build-selfhost.sh --seed "$SEED" --output "$RUNNER_TEMP/tree/salam"
+          "$RUNNER_TEMP/tree/salam" --version
+          echo "salam=$RUNNER_TEMP/tree/salam" >> "$GITHUB_OUTPUT"
+
       - name: Build the counter page
         env:
-          SALAM: ${{ steps.salam.outputs.salam }}
+          SALAM: ${{ steps.tree.outputs.salam }}
           SALAM_STD: ${{ github.workspace }}/std
         run: |
           set -eu
@@ -46,3 +59,32 @@ jobs:
           test -s "$RUNNER_TEMP/native-ios/App.app/App"
           test -s "$RUNNER_TEMP/native-ios/App.app/Info.plist"
           lipo -info "$RUNNER_TEMP/native-ios/App.app/App"
+
+      - name: Run the smoke page on the simulator
+        env:
+          SALAM: ${{ steps.tree.outputs.salam }}
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          set -eu
+          sh tools/bash/build-ios-app.sh mobile/host/ios/smoke.salam \
+            --out "$RUNNER_TEMP/smoke-ios" --id app.salam.smoke
+          dev=$(xcrun simctl list devices available | grep -m1 'iPhone' | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          test -n "$dev"
+          xcrun simctl boot "$dev"
+          xcrun simctl bootstatus "$dev" -b
+          xcrun simctl install "$dev" "$RUNNER_TEMP/smoke-ios/App.app"
+          data=$(xcrun simctl get_app_container "$dev" app.salam.smoke data)
+          xcrun simctl launch "$dev" app.salam.smoke \
+            -salam-script "wait 4000;tap 200,300;wait 4000;tap 200,300;wait 4000;tap 200,300;wait 4000;tap 200,300;wait 4000;tap 200,300"
+          i=0
+          while [ $i -lt 90 ]; do
+            test -f "$data/Documents/tapped.txt" && break
+            sleep 2
+            i=$((i + 1))
+          done
+          xcrun simctl io "$dev" screenshot "$RUNNER_TEMP/smoke.png" || true
+          find "$data" -maxdepth 2 | head -30
+          xcrun simctl spawn "$dev" launchctl list | grep smoke || true
+          xcrun simctl spawn "$dev" log show --last 3m --style compact --predicate 'process == "App"' | tail -40 || true
+          xcrun simctl shutdown "$dev" || true
+          test -f "$data/Documents/tapped.txt"

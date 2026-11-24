@@ -43,7 +43,7 @@ const cases = [
     name: "a page with colour names builds",
     kind: "layout",
     lang: "en",
-    src: 'page:\n    title = "Colours"\n    box:\n        background = "blue"\n        color = white\n        paragraph: content = "hi" end\n    end\nend\n',
+    src: 'page:\n    title = "Colours"\n    box:\n        background = "blue"\n        color = "white"\n        paragraph: content = "hi" end\n    end\nend\n',
     want: (out) => /#0000ff/i.test(out) && /#ffffff/i.test(out),
   },
   {

@@ -1,0 +1,321 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+// EXPECT: <meta name="salam-router" content="history">
+// EXPECT: function __salam_route_pick(
+// EXPECT: Todos
+// EXPECT-NOT: var __salam_rt_hash = true
+import dom
+
+mut texts := load_texts()
+mut dones := load_dones()
+mut draft := ""
+mut problem := ""
+mut editing := -1
+mut edit_text := ""
+
+func save():
+    mut out := ""
+    repeat texts.Len() in i:
+        out += (dones.Get(i) ? "1" : "0") + texts.Get(i) + "\n"
+    end
+    dom.StoreSetStr("todo.items", out)
+end
+
+func lines_in_store(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    raw := dom.StoreGetStr("todo.items")
+    if raw.Len() == 0:
+        out.Push("0Read the router guide")
+        out.Push("1Write a kanban board")
+        out.Push("0Ship the todo app")
+        ret out
+    end
+    parts := raw.Split("\n")
+    repeat parts.Len() in i:
+        if parts.Get(i).Len() > 1:
+            out.Push(parts.Get(i))
+        end
+    end
+    ret out
+end
+
+func load_texts(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    lines := lines_in_store()
+    repeat lines.Len() in i:
+        out.Push(lines.Get(i).Substr(1, lines.Get(i).Len()))
+    end
+    ret out
+end
+
+func load_dones(): Vector<bool>:
+    mut out := Vector {} as Vector<bool>
+    lines := lines_in_store()
+    repeat lines.Len() in i:
+        out.Push(lines.Get(i).Substr(0, 1) == "1")
+    end
+    ret out
+end
+
+func add_todo():
+    clean := draft.Trim()
+    if clean.Len() == 0:
+        problem = "Write something first"
+        ret
+    end
+    if clean.Len() > 60:
+        problem = "Keep it under 60 characters"
+        ret
+    end
+    texts.Push(clean)
+    dones.Push(false)
+    draft = ""
+    problem = ""
+    save()
+end
+
+func is_done(i: int): bool:
+    ret dones.Get(i)
+end
+
+func toggle(i: int):
+    dones.Set(i, not dones.Get(i))
+    save()
+end
+
+func remove(i: int):
+    texts.RemoveAt(i)
+    dones.RemoveAt(i)
+    if editing == i:
+        editing = -1
+    end
+    save()
+end
+
+func clear_done():
+    mut i := texts.Len() - 1
+    until i >= 0:
+        if dones.Get(i):
+            texts.RemoveAt(i)
+            dones.RemoveAt(i)
+        end
+        i--
+    end
+    editing = -1
+    save()
+end
+
+func start_edit(i: int):
+    editing = i
+    edit_text = texts.Get(i)
+end
+
+func commit_edit():
+    if editing < 0:
+        ret
+    end
+    clean := edit_text.Trim()
+    if clean.Len() == 0:
+        remove(editing)
+    else:
+        texts.Set(editing, clean)
+    end
+    editing = -1
+    save()
+end
+
+func edit_key(e: i64):
+    if dom.EventKey(e) == "Enter":
+        commit_edit()
+    else dom.EventKey(e) == "Escape":
+        cancel_edit()
+    end
+end
+
+func cancel_edit():
+    editing = -1
+end
+
+func left_count(): int:
+    mut n := 0
+    repeat dones.Len() in i:
+        if not dones.Get(i):
+            n++
+        end
+    end
+    ret n
+end
+
+func done_count(): int:
+    ret dones.Len() - left_count()
+end
+
+func shows(filter: str, i: int): bool:
+    if filter == "active":
+        ret not dones.Get(i)
+    end
+    if filter == "done":
+        ret dones.Get(i)
+    end
+    ret true
+end
+
+func shown_count(filter: str): int:
+    mut n := 0
+    repeat texts.Len() in i:
+        if shows(filter, i):
+            n++
+        end
+    end
+    ret n
+end
+
+func plural(n: int): str:
+    ret n == 1 ? "item" : "items"
+end
+
+pub component TodoRow(at: int):
+    item:
+        layout = "row"
+        align = "center"
+        gap = 10
+        padding = 10, 12
+        radius = 12
+        background = "#ffffff"
+        shadow = 0, 1, 3, "#1b1e2b14"
+        input:
+            type = "checkbox"
+            checked = is_done(at)
+            aria label = "Done"
+            change = (): toggle(at) end
+        end
+        if editing == at:
+            input:
+                class = "editor"
+                grow = 1
+                padding = 6, 8
+                radius = 8
+                border = 2, "solid", "#4c5bd4"
+                font size = 16
+                autofocus = true
+                bind = edit_text
+                blur = commit_edit
+                key down = (e: i64): edit_key(e) end
+            end
+        else:
+            span:
+                class = "label"
+                grow = 1
+                cursor = "text"
+                color = is_done(at) ? "#8a8fa8" : "#1b1e2b"
+                double click = (): start_edit(at) end
+                content = texts.Get(at)
+            end
+            link:
+                to = "/item/" + at
+                font size = 13
+                color = "#6a70a0"
+                content = "Details"
+            end
+        end
+        button:
+            class = "remove"
+            border = 0
+            background = "transparent"
+            color = "#8a8fa8"
+            cursor = "pointer"
+            aria label = "Remove"
+            hover:
+                color = "#b42318"
+            end
+            click = (): remove(at) end
+            content = "x"
+        end
+    end
+end
+
+pub component FilterBar:
+    nav:
+        layout = "row"
+        gap = 8
+        aria label = "Filter"
+        FilterLink:
+            dest = ""
+            label = "All"
+            count = texts.Len()
+        end
+        FilterLink:
+            dest = "active"
+            label = "Active"
+            count = left_count()
+        end
+        FilterLink:
+            dest = "done"
+            label = "Done"
+            count = done_count()
+        end
+    end
+end
+
+component FilterLink(dest: str, label: str, count: int):
+    link:
+        to = "/" + dest
+        padding = 6, 14
+        radius = 20
+        decoration = "none"
+        font size = 14
+        background = "#e4e7f5"
+        color = "#3a3f66"
+        if page.route.path == "/" + dest:
+            background = "#4c5bd4"
+            color = "#ffffff"
+        end
+        content = label + " " + count
+    end
+end
+
+page:
+    title = "Todos"
+    lang = "en"
+    font = "system-ui, sans-serif"
+    box:
+        min height = 100vh
+        background = "#f4f5fa"
+        color = "#1b1e2b"
+        padding = 24, 16
+        main:
+            max width = 560
+            margin = 0, "auto"
+            gap = 16
+            header:
+                gap = 4
+                heading:
+                    size = 1
+                    margin = 0
+                    font size = 32
+                    content = "Todos"
+                end
+                paragraph:
+                    margin = 0
+                    opacity = 0.65
+                    id = "summary"
+                    content = left_count() + " " + plural(left_count()) + " left"
+                end
+            end
+            AddForm: end
+            FilterBar: end
+            Outlet: end
+            ClearBar: end
+        end
+    end
+end

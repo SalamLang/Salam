@@ -12,6 +12,7 @@ include i18 "../i18n.salam"
 pub const UI_STANDARD_WARN_CODE := 171
 pub const LAYOUT_TEXTAREA_CODE := 297
 pub const LAYOUT_TYPE_TYPO_CODE := 298
+pub const LAYOUT_BARE_VALUE_CODE := 299
 
 pub const UI_STANDARD_ERROR_CODE := 170
 
@@ -46,6 +47,8 @@ mut g_style_attr_state := Vector {} as Vector<int>
 mut g_style_attr_css := Vector {} as Vector<str>
 
 mut g_style_quote_strs := false
+mut g_style_prefix_fa := false
+mut g_style_quote_prop := 0 - 1
 
 mut g_style_src_path := ""
 
@@ -141,6 +144,7 @@ func style_state_prefix(name: str, rest &: str): int:
         "اشاره", "تمرکز درون", "تمرکز", "فشردن", "غیرفعال", "تیک\xE2\x80\x8Cخورده", "نامعتبر",
         "جای\xE2\x80\x8Cنوشته", "گزینش"
     ]
+    g_style_prefix_fa = false
     repeat len(prefixes) in i:
         mut skip := style_state_word(name, prefixes[i])
         if skip == 0:
@@ -149,13 +153,17 @@ func style_state_prefix(name: str, rest &: str): int:
         if skip == 0:
             skip = style_state_word(name, str.Replace(prefixes[i], " ", "-"))
         end
+        mut fa_hit := false
         if skip == 0:
             skip = style_state_word(name, fa_prefixes[i])
+            fa_hit = skip > 0
         end
         if skip == 0:
             skip = style_state_word(name, str.Replace(fa_prefixes[i], " ", "_"))
+            fa_hit = skip > 0
         end
         if skip > 0:
+            g_style_prefix_fa = fa_hit
             rest = str.Substr(name, skip, str.Len(name) - skip)
             ret states[i]
         end
@@ -175,6 +183,51 @@ func style_attr_group_text(a &: at.Ast, nid: int): str:
     ret text
 end
 
+func style_is_prop_word(prop: int, text: str): bool:
+    if prop < 0 or style.Info(prop).kind != style.KIND_FONTS:
+        ret false
+    end
+    ids := style.PropKeywords(prop)
+    each k in ids:
+        if str.Equals(style.KeywordName(k), text) or str.Equals(style.KeywordFaName(k), text):
+            ret true
+        end
+    end
+    ret false
+end
+
+func style_word_byte(c: int): bool:
+    if c >= 128 or c == 45 or c == 95 or c == 32:
+        ret true
+    end
+    if c >= 97 and c <= 122:
+        ret true
+    end
+    if c >= 65 and c <= 90:
+        ret true
+    end
+    ret c >= 48 and c <= 57
+end
+
+func style_word_arg(fname: str, text: str): bool:
+    if str.Len(text) == 0:
+        ret false
+    end
+    lower := str.Lower(fname)
+    skip := ["image", "url", "attr", "format", "local", "counter", "counters"]
+    each f in skip:
+        if str.Equals(lower, f):
+            ret false
+        end
+    end
+    each b in text.Bytes():
+        if not style_word_byte(b as int):
+            ret false
+        end
+    end
+    ret true
+end
+
 func style_attr_item_text(a &: at.Ast, nid: int): str:
     if nid == 0:
         ret ""
@@ -185,9 +238,19 @@ func style_attr_item_text(a &: at.Ast, nid: int): str:
     end
     if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
         if g_style_quote_strs and not str.StartsWith(n.value_str, "\""):
+            if style_is_prop_word(g_style_quote_prop, n.value_str):
+                ret n.value_str
+            end
             ret "\"" + n.value_str + "\""
         end
-        ret n.value_str
+        vs := n.value_str
+        if g_style_quote_strs and str.Len(vs) > 2 and str.StartsWith(vs, "\"") and
+            str.EndsWith(vs, "\"") and style_is_prop_word(
+            g_style_quote_prop, str.Substr(vs, 1, str.Len(vs) - 2)
+        ):
+            ret str.Substr(vs, 1, str.Len(vs) - 2)
+        end
+        ret vs
     end
     if n.kind == at.AST_BINARY and (n.op == tok.TK_PLUS or n.op == tok.TK_MINUS):
         ret style_attr_item_text(a, n.a) + (n.op == tok.TK_PLUS ? " + " : " - ") +
@@ -222,7 +285,7 @@ func style_attr_item_text(a &: at.Ast, nid: int): str:
             if arg.kind == at.AST_LITERAL and arg.value_kind == tok.TV_STRING and
                 not str.StartsWith(
                     arg.value_str, "#"
-                ):
+                ) and not style_word_arg(at.Get(a, n.a).name, arg.value_str):
                 call += `"` + arg.value_str + `"`
             else:
                 call += style_attr_item_text(a, argid)
@@ -356,8 +419,10 @@ end
 
 pub func StyleAttrTextFor(a &: at.Ast, vid: int, prop: int): str:
     g_style_quote_strs = (style.Info(prop).items & 512) != 0
+    g_style_quote_prop = prop
     t := StyleAttrText(a, vid)
     g_style_quote_strs = false
+    g_style_quote_prop = 0 - 1
     ret t
 end
 

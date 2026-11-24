@@ -1,0 +1,202 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+// EXPECT: var __salam_rt_hash = true
+// EXPECT: Pomodoro
+// EXPECT-NOT: <meta name="salam-router"
+import dom
+
+mut focus_min := stored("pomo.focus", 25)
+mut break_min := stored("pomo.break", 5)
+mut focus_text := "" + focus_min
+mut break_text := "" + break_min
+mut settings_note := ""
+mut resting := false
+mut running := false
+mut left := focus_min * 60
+mut timer_id := 0 as i64
+mut log_kind := load_kinds()
+mut log_mins := load_mins()
+
+func stored(key: str, fallback: int): int:
+    n := dom.StoreGetStr(key).ToInt()
+    ret n > 0 ? n : fallback
+end
+
+func records(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    raw := dom.StoreGetStr("pomo.log")
+    parts := raw.Split("\n")
+    repeat parts.Len() in i:
+        if parts.Get(i).Len() > 2:
+            out.Push(parts.Get(i))
+        end
+    end
+    ret out
+end
+
+func load_kinds(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    rows := records()
+    repeat rows.Len() in i:
+        out.Push(rows.Get(i).Split("\t").Get(0))
+    end
+    ret out
+end
+
+func load_mins(): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    rows := records()
+    repeat rows.Len() in i:
+        out.Push(rows.Get(i).Split("\t").Get(1).ToInt())
+    end
+    ret out
+end
+
+func save_log():
+    mut out := ""
+    repeat log_kind.Len() in i:
+        out += log_kind.Get(i) + "\t" + log_mins.Get(i) + "\n"
+    end
+    dom.StoreSetStr("pomo.log", out)
+end
+
+func pad2(n: int): str:
+    ret n < 10 ? "0" + n : "" + n
+end
+
+func clock_text(sec: int): str:
+    ret pad2(sec / 60) + ":" + pad2(sec % 60)
+end
+
+func phase_len(): int:
+    ret (resting ? break_min : focus_min) * 60
+end
+
+func finish_phase():
+    log_kind.Push(resting ? "Break" : "Focus")
+    log_mins.Push(resting ? break_min : focus_min)
+    save_log()
+    resting = not resting
+    left = phase_len()
+end
+
+func tick():
+    if not running:
+        ret
+    end
+    left--
+    if left <= 0:
+        finish_phase()
+    end
+end
+
+func start_timer():
+    if running:
+        ret
+    end
+    running = true
+    timer_id = dom.SetInterval((): tick() end, 1000)
+end
+
+func pause_timer():
+    if not running:
+        ret
+    end
+    running = false
+    dom.ClearInterval(timer_id)
+end
+
+func reset_timer():
+    pause_timer()
+    resting = false
+    left = phase_len()
+end
+
+func skip_phase():
+    resting = not resting
+    left = phase_len()
+end
+
+func save_settings():
+    f := focus_text.Trim().ToInt()
+    b := break_text.Trim().ToInt()
+    if f < 1 or f > 90 or b < 1 or b > 30:
+        settings_note = "Focus takes 1 to 90 minutes and break 1 to 30"
+        ret
+    end
+    focus_min = f
+    break_min = b
+    dom.StoreSetStr("pomo.focus", "" + f)
+    dom.StoreSetStr("pomo.break", "" + b)
+    if not running:
+        left = phase_len()
+    end
+    settings_note = "Saved"
+end
+
+func clear_log():
+    log_kind.Clear()
+    log_mins.Clear()
+    save_log()
+end
+
+func focus_total(): int:
+    mut n := 0
+    repeat log_kind.Len() in i:
+        if log_kind.Get(i) == "Focus":
+            n += log_mins.Get(i)
+        end
+    end
+    ret n
+end
+
+func focus_sessions(): int:
+    mut n := 0
+    repeat log_kind.Len() in i:
+        if log_kind.Get(i) == "Focus":
+            n++
+        end
+    end
+    ret n
+end
+
+pub component SessionRow(at: int):
+    item:
+        layout = "row"
+        justify = "between"
+        padding = 10, 14
+        radius = 10
+        background = "#ffffff"
+        link:
+            to = "/session/" + at
+            color = "#2a2320"
+            content = "#" + (at + 1) + " " + log_kind.Get(at)
+        end
+        span:
+            content = log_mins.Get(at) + " min"
+        end
+    end
+end
+
+page:
+    mode = "hash"
+    title = "Pomodoro"
+    lang = "en"
+    font = "system-ui, sans-serif"
+    box:
+        min height = 100vh
+        background = resting ? "#e8f3ee" : "#fbece8"
+        color = "#2a2320"
+        Outlet: end
+    end
+end

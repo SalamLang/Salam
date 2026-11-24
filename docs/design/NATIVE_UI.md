@@ -139,8 +139,8 @@ engine something:
 - form submission to a server (`action`, `method`, `enctype`, `novalidate`,
   `accept charset`, `form action`, `form method`, `form enctype`,
   `form novalidate`, `form target`); a native form still fires `submit`
-- browser text-entry hints (`autocomplete`, `autocapitalize`, `autocorrect`,
-  `spellcheck`, `writingsuggestions`, `dirname`)
+- `writingsuggestions` and `dirname` (the other text-entry hints reach the phone
+  keyboard, see `MOBILE.md`)
 
 **Refused on native (E165)**, because they embed another document or a
 script, or rely on browser-only machinery:

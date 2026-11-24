@@ -15,6 +15,7 @@
 # Usage: tools/bash/native-windows-check.sh <salam> <file.salam>...
 
 set -u
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d;/^Aborted( \(core dumped\))?$/d'
 SALAM=$1
 shift
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
@@ -55,7 +56,7 @@ for f in "$@"; do
         continue
     fi
     (cd "$d" && timeout 120 wine "$d/t.exe" </dev/null >"$d/run.out" 2>/dev/null)
-    if [ "$(tr -d '\r' <"$d/run.out")" = "$(tr -d '\r' <"$exp")" ]; then
+    if [ "$(tr -d '\r' <"$d/run.out" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
         pass=$((pass + 1))
     else
         echo "FAIL $b"

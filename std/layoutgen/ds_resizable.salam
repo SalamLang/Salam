@@ -1,0 +1,155 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layoutgen
+
+pub const DS_RESIZABLE_MIN_CSS := `
+:where([data-slot="resizable"]){display:flex;flex-direction:row;width:100%;height:100%}
+:where([data-slot="resizable"][data-orientation="vertical"]){flex-direction:column}
+:where([data-slot="resizable-panel"]){min-width:0;min-height:0}
+:where([data-slot="resizable-handle"]){position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:center;touch-action:none;cursor:col-resize;width:1px;background:currentColor;opacity:.3;outline:none}
+:where([data-slot="resizable"][data-orientation="vertical"]>[data-slot="resizable-handle"]){width:auto;height:1px;cursor:row-resize}
+:where([data-slot="resizable-handle"])::after{content:"";position:absolute;inset-block:0;inset-inline:-4px}
+:where([data-slot="resizable"][data-orientation="vertical"]>[data-slot="resizable-handle"])::after{inset-block:-4px;inset-inline:0}
+`
+
+pub const DS_RESIZABLE_CSS := `
+:where([data-slot="resizable-handle"]){background:var(--border);opacity:1}
+:where([data-slot="resizable-handle"]:focus-visible){box-shadow:0 0 0 1px var(--ring)}
+:where([data-slot="resizable-handle"][data-dragging]){background:var(--ring)}
+:where([data-slot="resizable-grip"]){z-index:10;display:flex;align-items:center;justify-content:center;width:12px;height:16px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--border)}
+:where([data-slot="resizable"][data-orientation="vertical"]>[data-slot="resizable-handle"] [data-slot="resizable-grip"]){transform:rotate(90deg)}
+:where([data-slot="resizable-grip"]) svg{width:10px;height:10px}
+`
+
+pub const DS_RESIZABLE_JS := `
+function each(l,f){for(var i=0;i<l.length;i++)f(l[i],i)}
+function kids(g,slot){return Array.prototype.filter.call(g.children,function(e){return e.getAttribute('data-slot')===slot})}
+function panels(g){return kids(g,'resizable-panel')}
+function vert(g){return g.getAttribute('data-orientation')==='vertical'}
+function apply(g){each(panels(g),function(p){var s=parseFloat(p.getAttribute('data-size'))||0;p.style.flex=s+' 1 0px';p.style.overflow='hidden'})}
+function init(g){
+if(g.__ready)return;
+g.__ready=true;
+if(!g.hasAttribute('data-orientation'))g.setAttribute('data-orientation','horizontal');
+var ps=panels(g),sum=0,n=0;
+each(ps,function(p){var s=parseFloat(p.getAttribute('data-size'));if(s>0)sum+=s;else n++});
+each(ps,function(p){if(!(parseFloat(p.getAttribute('data-size'))>0))p.setAttribute('data-size',String(Math.max(0,(100-sum)/n)))});
+each(kids(g,'resizable-handle'),function(h){
+h.setAttribute('role','separator');
+h.setAttribute('tabindex','0');
+h.setAttribute('aria-orientation',vert(g)?'horizontal':'vertical');
+sync(g,h)
+});
+apply(g)
+}
+function pair(g,h){
+var prev=h.previousElementSibling,next=h.nextElementSibling;
+while(prev&&prev.getAttribute('data-slot')!=='resizable-panel')prev=prev.previousElementSibling;
+while(next&&next.getAttribute('data-slot')!=='resizable-panel')next=next.nextElementSibling;
+return prev&&next?[prev,next]:null
+}
+function sync(g,h){var p=pair(g,h);if(p)h.setAttribute('aria-valuenow',String(Math.round(parseFloat(p[0].getAttribute('data-size')))))}
+function lim(p,k,d){var v=parseFloat(p.getAttribute(k));return isNaN(v)?d:v}
+function resize(g,h,d){
+var p=pair(g,h);
+if(!p)return;
+var a=parseFloat(p[0].getAttribute('data-size')),b=parseFloat(p[1].getAttribute('data-size')),tot=a+b;
+var lo=Math.max(lim(p[0],'data-min-size',0),tot-lim(p[1],'data-max-size',100)),hi=Math.min(lim(p[0],'data-max-size',100),tot-lim(p[1],'data-min-size',0));
+var na=Math.max(lo,Math.min(hi,a+d));
+p[0].setAttribute('data-size',String(na));
+p[1].setAttribute('data-size',String(tot-na));
+apply(g);
+sync(g,h);
+h.dispatchEvent(new CustomEvent('ds-resize',{bubbles:true,detail:{sizes:panels(g).map(function(x){return parseFloat(x.getAttribute('data-size'))})}}))
+}
+function initAll(){each(document.querySelectorAll('[data-slot="resizable"]'),init)}
+window.salamDsResizable=initAll;
+var drag=null;
+document.addEventListener('pointerdown',function(e){
+var h=e.target.closest&&e.target.closest('[data-slot="resizable-handle"]');
+if(!h||e.button!==0)return;
+var g=h.parentNode;init(g);
+var p=pair(g,h);if(!p)return;
+var r=g.getBoundingClientRect();
+drag={g:g,h:h,x:e.clientX,y:e.clientY,size:vert(g)?r.height:r.width,last:0};
+h.setAttribute('data-dragging','');
+try{h.setPointerCapture(e.pointerId)}catch(x){}
+e.preventDefault()
+});
+document.addEventListener('pointermove',function(e){
+if(!drag)return;
+var rtl=getComputedStyle(drag.g).direction==='rtl',px=vert(drag.g)?e.clientY-drag.y:(rtl?drag.x-e.clientX:e.clientX-drag.x);
+var pc=px/drag.size*100;
+resize(drag.g,drag.h,pc-drag.last);
+drag.last=pc
+});
+function end(){if(drag){drag.h.removeAttribute('data-dragging');drag=null}}
+document.addEventListener('pointerup',end);
+document.addEventListener('pointercancel',end);
+document.addEventListener('keydown',function(e){
+var h=e.target.closest&&e.target.closest('[data-slot="resizable-handle"]');
+if(!h)return;
+var g=h.parentNode;init(g);
+var v=vert(g),rtl=getComputedStyle(g).direction==='rtl',k=e.key,d=0;
+if(v){if(k==='ArrowUp')d=-5;else if(k==='ArrowDown')d=5}
+else if(k==='ArrowLeft')d=rtl?5:-5;
+else if(k==='ArrowRight')d=rtl?-5:5;
+if(k==='Home')d=-100;else if(k==='End')d=100;
+if(d){e.preventDefault();resize(g,h,d)}
+});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initAll);else initAll()
+`
+
+pub const DS_RES_GRIP := `<div data-slot="resizable-grip"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/></svg></div>`
+
+func ds_resizable_css(): str:
+    if DsOn():
+        ret DS_RESIZABLE_MIN_CSS + DS_RESIZABLE_CSS
+    end
+    ret DS_RESIZABLE_MIN_CSS
+end
+
+func ds_resizable_out(n: Node, tag: str, slot: str, extra: str, inner: str): Output:
+    mut o := Output {}
+    o.html = DsOpen(n, tag, slot, extra) + inner + "</" + tag + ">"
+    o.shared_js = "(function(){if(window.salamDsResizable)return;" + DS_RESIZABLE_JS + "})();"
+    o.shared_css = ds_resizable_css()
+    ret o
+end
+
+@en "gen_resizable"
+@fa "ساخت پنل قابل تغییر"
+pub func gen_resizable(n: Node): Output:
+    mut extra := ""
+    if DsAttr(n.attrs, "data-orientation") == "":
+        extra = " data-orientation=\"horizontal\""
+    end
+    ret ds_resizable_out(n, "div", "resizable", extra, Escape(n.content) + n.inner)
+end
+
+@en "gen_resizable_panel"
+@fa "ساخت بخش قابل تغییر"
+pub func gen_resizable_panel(n: Node): Output:
+    ret ds_resizable_out(n, "div", "resizable-panel", "", Escape(n.content) + n.inner)
+end
+
+@en "gen_resizable_handle"
+@fa "ساخت دستگیره"
+pub func gen_resizable_handle(n: Node): Output:
+    mut grip := ""
+    if DsHas(n.attrs, "data-grip"):
+        grip = DS_RES_GRIP
+    end
+    ret ds_resizable_out(n, "div", "resizable-handle", "", grip)
+end

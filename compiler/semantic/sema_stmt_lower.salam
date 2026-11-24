@@ -817,12 +817,13 @@ end
 
 func check_stmt(s &: Sema, a &: at.Ast, nid: int):
     if nid != 0 and at.Get(a, nid).view_glue:
+        save_skip := s.skip_lang
+        s.skip_lang = true
         if view_glue_type_error(s, a, nid):
+            s.skip_lang = save_skip
             ret
         end
         s.pure_off++
-        save_skip := s.skip_lang
-        s.skip_lang = true
         check_stmt_body(s, a, nid)
         s.skip_lang = save_skip
         s.pure_off--
@@ -1930,10 +1931,59 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     ret t
 end
 
+func view_glue_required(s &: Sema, a &: at.Ast, nid: int, ex: int): bool:
+    if ex == 0:
+        ret false
+    end
+    c := at.Get(a, ex)
+    if c.kind == at.AST_LAMBDA:
+        ret false
+    end
+    if c.kind == at.AST_CALL and c.a != 0 and at.KindOf(a, c.a) == at.AST_MEMBER and
+        c.list.Len() == 1:
+        nm := at.Get(a, c.a).name
+        if str.Equals(nm, "PageRequired") or str.Equals(nm, "مقدار الزامی صفحه"):
+            t0 := sema_check_expr(s, a, c.list.Get(0))
+            if type_is_error(s, t0):
+                ret true
+            end
+            if opt_inner(s, t0) != TYPE_NONE:
+                serr_help(
+                    s,
+                    300,
+                    span_of(a, nid),
+                    co.Format1(
+                        i18.Tr("this value is a %s and may be null, but the attribute is required"),
+                        co.ArgStr(type_disp(s, t0))
+                    ),
+                    i18.Tr(
+                        "give it a value: '.UnwrapOr(default)', '.Unwrap()', or use '.value' inside 'if x.IsSome():'"
+                    )
+                )
+                ret true
+            end
+            ret false
+        end
+    end
+    if view_glue_required(s, a, nid, c.a) or view_glue_required(s, a, nid, c.b) or
+        view_glue_required(s, a, nid, c.c) or view_glue_required(s, a, nid, c.d):
+        ret true
+    end
+    repeat c.list.Len() in i:
+        if view_glue_required(s, a, nid, c.list.Get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
 func view_glue_type_error(s &: Sema, a &: at.Ast, nid: int): bool:
     n := at.Get(a, nid)
     if n.kind != at.AST_EXPR_STMT or n.a == 0 or at.KindOf(a, n.a) != at.AST_CALL:
         ret false
+    end
+    if view_glue_required(s, a, nid, n.a):
+        ret true
     end
     call := at.Get(a, n.a)
     if call.a == 0 or at.KindOf(a, call.a) != at.AST_MEMBER or call.list.Len() != 2:

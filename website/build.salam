@@ -24,7 +24,10 @@ import calendar
 
 const ROOT := "website"
 const KEYWORD_TABLE := "extensions/tree-sitter-salam/keywords.json"
-const PREVIEW_SCRIPT := `<script>(function(){function s(){parent.postMessage({salamPreview:1,n:window.name,h:document.documentElement.scrollHeight},"*")}addEventListener("load",s);addEventListener("resize",s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&a.getAttribute("href").charAt(0)!=="#"){e.preventDefault()}});document.addEventListener("submit",function(e){e.preventDefault()},true)})();</script>`
+const PREVIEW_STYLE := `<style>html,body{min-height:0!important;height:auto!important}:where(body){font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}:where(button,input,select,textarea){font:inherit}</style>`
+const PREVIEW_STYLE_FA := `<style>html,body{min-height:0!important;height:auto!important}html body{font-family:Vazirmatn,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}:where(button,input,select,textarea){font:inherit}</style>`
+const PREVIEW_FONT_SCRIPT := `<script>(function(){addEventListener("message",function(e){var d=e.data;if(d&&d.salamFont&&d.buf){var f=new FontFace("Vazirmatn",d.buf,{weight:"100 900"});f.load().then(function(){document.fonts.add(f)}).catch(function(){})}});parent.postMessage({salamFontReq:1},"*")})();</script>`
+const PREVIEW_SCRIPT := `<script>(function(){function s(){var d=document.documentElement,b=document.body,c=getComputedStyle(b),h=Math.ceil(b.getBoundingClientRect().height+(parseFloat(c.marginTop)||0)+(parseFloat(c.marginBottom)||0));if(d.scrollHeight>innerHeight)h=Math.max(h,d.scrollHeight);parent.postMessage({salamPreview:1,n:window.name,h:h},"*")}addEventListener("load",s);addEventListener("resize",s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&a.getAttribute("href").charAt(0)!=="#"){e.preventDefault()}});document.addEventListener("submit",function(e){e.preventDefault()},true)})();</script>`
 
 struct Lesson:
     pub path: str = ""
@@ -622,12 +625,34 @@ func preview_collect(work: str, stem: str, _errs &: Vector<str>): str:
     ret io.ReadFile(html_path)
 end
 
-func preview_finish(html: str): str:
+func preview_finish(html: str, rtl: bool): str:
     at := str.LastIndex(html, "</body>")
     if at >= 0:
-        ret html.Substr(0, at) + PREVIEW_SCRIPT + html.Substr(at, html.Len() - at)
+        if rtl:
+            ret html.Substr(0, at) + PREVIEW_STYLE_FA + PREVIEW_FONT_SCRIPT + PREVIEW_SCRIPT +
+                html.Substr(at, html.Len() - at)
+        end
+        ret html.Substr(0, at) + PREVIEW_STYLE + PREVIEW_SCRIPT + html.Substr(at, html.Len() - at)
     end
     ret html
+end
+
+func preview_min_attrs(page_html: str): str:
+    h := preview_min_height(page_html)
+    if h == 0:
+        ret ""
+    end
+    ret ` data-min-height="` + str.FromInt(h as i64) + `" style="height:` + str.FromInt(h as i64) + `px"`
+end
+
+func preview_min_height(page_html: str): int:
+    if str.Contains(page_html, "<dialog"):
+        ret 440
+    end
+    if str.Contains(page_html, "role=\"dialog\"") or str.Contains(page_html, "role=\"menu\"") or str.Contains(page_html, "role=\"listbox\"") or str.Contains(page_html, "popover="):
+        ret 300
+    end
+    ret 0
 end
 
 func example_block(
@@ -667,8 +692,8 @@ func example_block(
             b,
             `<div class="code-preview" data-label="` + escape_text(
                 label(ctx, "code.preview", errs)
-            ) + `"><iframe id="pv-` + name + `" name="` + name +
-                `" class="preview-frame" sandbox="allow-scripts allow-modals allow-forms" loading="lazy" title="` +
+            ) + `"><iframe id="pv-` + name + `" name="` + name + `"` + preview_min_attrs(page_html) +
+                ` class="preview-frame" sandbox="allow-scripts allow-modals allow-forms" loading="lazy" title="` +
                 escape_text(
                     label(ctx, "code.preview", errs)
             ) + `" srcdoc="` + attr_escape(page_html) + `"></iframe></div>`
@@ -786,7 +811,7 @@ func load_examples(lang_dir: str, ctx &: HashMap<str, str>, errs &: Vector<str>)
         ) and is_page_source(src):
             cache_path := preview_cache_path(ex_dir + "/" + name)
             if cache_path.Len() > 0 and fs.Exists(cache_path):
-                previews.Put(stem, preview_finish(io.ReadFile(cache_path)))
+                previews.Put(stem, preview_finish(io.ReadFile(cache_path), has_rtl_script(src)))
             else:
                 _mkd := os.MkdirAll(work + "/" + stem)
                 _wr := os.WriteFile(work + "/" + stem + "/" + stem + ".salam", src + "\n")
@@ -807,7 +832,13 @@ func load_examples(lang_dir: str, ctx &: HashMap<str, str>, errs &: Vector<str>)
                     _cm := os.MkdirAll(os.Env("SITE_PREVIEW_CACHE"))
                     _cw := fs.WriteText(cache_path, html)
                 end
-                previews.Put(stem, preview_finish(html))
+                previews.Put(
+                    stem,
+                    preview_finish(
+                        html,
+                        has_rtl_script(io.ReadFile(work + "/" + stem + "/" + stem + ".salam"))
+                    )
+                )
             end
         end
     end
@@ -4077,6 +4108,11 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         load_strings(p.path, pc, errs)
         api := load_api(p, errs)
         examples := load_std_examples(lang_dir, p, pc, errs)
+        each stem, html in examples:
+            if not pc.Has("example." + stem):
+                pc.Put("example." + stem, html)
+            end
+        end
         intro := render(p.path, pc.Get("pkg.intro"), pc, errs)
         body := intro + "\n" + std_api_html(pc, p, api, gwords, examples, errs)
         pc.Put("active.std", "true")

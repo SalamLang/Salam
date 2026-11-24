@@ -13,6 +13,8 @@ object Host {
 
     @JvmStatic external fun nativeStart(files: String, cache: String)
 
+    @JvmStatic external fun nativeScript(script: String)
+
     @JvmStatic external fun nativeSurface(surface: Surface?, w: Int, h: Int, density: Float)
 
     @JvmStatic external fun nativePointer(action: Int, id: Int, x: Float, y: Float)
@@ -32,6 +34,10 @@ object Host {
     @JvmStatic external fun nativeScheme(dark: Int)
 
     @JvmStatic external fun nativeDevice(kind: Int)
+
+    @JvmStatic external fun nativeAuth(ok: Int)
+
+    @JvmStatic external fun nativeUrl(kind: Int, url: String)
 
     @JvmStatic external fun nativePhoto(path: String)
 
@@ -80,6 +86,255 @@ object Host {
                 v.vibrate(android.os.VibrationEffect.createOneShot(ms.toLong(), android.os.VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
                 v.vibrate(ms.toLong())
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun path(kind: Int): String {
+        val a = activity ?: return ""
+        return try {
+            val dir: java.io.File? = when (kind) {
+                0 -> a.filesDir
+                1 -> a.cacheDir
+                2 -> a.getExternalFilesDir(null) ?: a.filesDir
+                3 -> java.io.File(a.cacheDir, "tmp")
+                else -> null
+            }
+            if (dir == null) return ""
+            dir.mkdirs()
+            dir.absolutePath
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    private fun secureKey(): javax.crypto.SecretKey {
+        val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        val existing = ks.getKey("salam_secure", null)
+        if (existing is javax.crypto.SecretKey) return existing
+        val gen = javax.crypto.KeyGenerator.getInstance(android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        gen.init(
+            android.security.keystore.KeyGenParameterSpec.Builder(
+                "salam_secure",
+                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build(),
+        )
+        return gen.generateKey()
+    }
+
+    private fun secureFile(a: Activity, name: String): java.io.File {
+        val hex = name.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
+        val dir = java.io.File(a.filesDir, "secure")
+        dir.mkdirs()
+        return java.io.File(dir, hex)
+    }
+
+    @JvmStatic
+    fun secureSet(name: String, value: String): Boolean {
+        val a = activity ?: return false
+        if (name.isEmpty()) return false
+        return try {
+            val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.ENCRYPT_MODE, secureKey())
+            val body = c.doFinal(value.toByteArray(Charsets.UTF_8))
+            val f = secureFile(a, name)
+            val tmp = java.io.File(f.path + ".tmp")
+            tmp.writeBytes(c.iv + body)
+            tmp.renameTo(f)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun secureGet(name: String): String {
+        val a = activity ?: return ""
+        return try {
+            val f = secureFile(a, name)
+            if (!f.exists()) return ""
+            val raw = f.readBytes()
+            if (raw.size < 29) return ""
+            val c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(javax.crypto.Cipher.DECRYPT_MODE, secureKey(), javax.crypto.spec.GCMParameterSpec(128, raw, 0, 12))
+            String(c.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
+    fun secureDelete(name: String): Boolean {
+        val a = activity ?: return false
+        return try {
+            val f = secureFile(a, name)
+            f.exists() && f.delete()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private var netWatching = false
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun info(key: String): String {
+        val a = activity ?: return ""
+        return try {
+            when (key) {
+                "model" -> {
+                    val m = android.os.Build.MODEL ?: ""
+                    val v = android.os.Build.MANUFACTURER ?: ""
+                    if (v.isEmpty() || m.startsWith(v, ignoreCase = true)) m else "$v $m"
+                }
+                "os" -> "Android"
+                "os_version" -> android.os.Build.VERSION.RELEASE ?: ""
+                "language" -> java.util.Locale.getDefault().toLanguageTag()
+                "languages" -> {
+                    val l = a.resources.configuration.locales
+                    (0 until l.size()).joinToString(",") { l.get(it).toLanguageTag() }
+                }
+                "timezone" -> java.util.TimeZone.getDefault().id
+                "density" -> a.resources.displayMetrics.density.toString()
+                "app_version" -> a.packageManager.getPackageInfo(a.packageName, 0).versionName ?: ""
+                "build" -> {
+                    val p = a.packageManager.getPackageInfo(a.packageName, 0)
+                    (if (android.os.Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()).toString()
+                }
+                "dark" -> {
+                    val m = a.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+                    if (m == android.content.res.Configuration.UI_MODE_NIGHT_YES) "1" else "0"
+                }
+                "battery", "charging" -> {
+                    val i = a.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                    if (i == null) {
+                        if (key == "battery") "-1" else "0"
+                    } else if (key == "battery") {
+                        val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+                        if (level < 0 || scale <= 0) "-1" else (level * 100 / scale).toString()
+                    } else {
+                        val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                        if (st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL) "1" else "0"
+                    }
+                }
+                else -> ""
+            }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @JvmStatic
+    fun network(): Int {
+        val a = activity ?: return 0
+        return try {
+            val cm = a.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return 0
+            if (!netWatching) {
+                netWatching = true
+                cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        nativeDevice(4)
+                    }
+
+                    override fun onLost(network: android.net.Network) {
+                        nativeDevice(4)
+                    }
+
+                    override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
+                        nativeDevice(4)
+                    }
+                })
+            }
+            val n = cm.activeNetwork ?: return 0
+            val c = cm.getNetworkCapabilities(n) ?: return 0
+            when {
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> 1
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> 2
+                c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
+                else -> 4
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    @JvmStatic
+    fun openSettings(): Boolean {
+        val a = activity ?: return false
+        return try {
+            val i = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            i.data = android.net.Uri.fromParts("package", a.packageName, null)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            a.startActivity(i)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun screen(what: Int, value: Int): Int {
+        val a = activity as? SalamActivity ?: return -1
+        if (what == 4) return a.brightnessPercent()
+        if (what == 5) a.askBrightness(value)
+        a.runOnUiThread { a.setScreen(what, value) }
+        return 1
+    }
+
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun authAvailable(): Boolean {
+        val a = activity ?: return false
+        if (android.os.Build.VERSION.SDK_INT < 29) return false
+        return try {
+            val m = a.getSystemService(android.hardware.biometrics.BiometricManager::class.java) ?: return false
+            val r = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                m.canAuthenticate(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            } else {
+                m.canAuthenticate()
+            }
+            r == android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun authRequest(reason: String): Boolean {
+        val a = activity ?: return false
+        if (!authAvailable()) return false
+        return try {
+            a.runOnUiThread {
+                try {
+                    val exec = a.mainExecutor
+                    val builder = android.hardware.biometrics.BiometricPrompt.Builder(a)
+                        .setTitle(if (reason.isEmpty()) "Confirm it is you" else reason)
+                        .setNegativeButton("Cancel", exec) { _, _ -> nativeAuth(0) }
+                    builder.build().authenticate(
+                        android.os.CancellationSignal(),
+                        exec,
+                        object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                                nativeAuth(1)
+                            }
+
+                            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                                nativeAuth(0)
+                            }
+                        },
+                    )
+                } catch (e: Exception) {
+                    nativeAuth(0)
+                }
             }
             true
         } catch (e: Exception) {
@@ -355,6 +610,25 @@ object Host {
         return clip.getItemAt(0).coerceToText(activity).toString()
     }
 
+    @Volatile
+    var imeCfg = 0
+
+    @JvmStatic
+    fun setImeConfig(config: Int) {
+        val a = activity ?: return
+        val changed = config != imeCfg
+        imeCfg = config
+        if (!changed) return
+        a.runOnUiThread {
+            val v = a.window.decorView.findViewById<android.view.View>(android.R.id.content) ?: return@runOnUiThread
+            val target = (v as? android.view.ViewGroup)?.getChildAt(0) ?: v
+            val imm = a.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            if (imm.isActive(target)) {
+                imm.restartInput(target)
+            }
+        }
+    }
+
     @JvmStatic
     fun showIme(show: Boolean) {
         val a = activity ?: return
@@ -375,6 +649,12 @@ object Host {
     fun barsLight(top: Int, bottom: Int) {
         val a = activity as? SalamActivity ?: return
         a.runOnUiThread { a.setBarContrast(top != 0, bottom != 0) }
+    }
+
+    @JvmStatic
+    fun pageBackground(argb: Int) {
+        val a = activity as? SalamActivity ?: return
+        a.runOnUiThread { a.rememberPageBackground(argb) }
     }
 
     @JvmStatic

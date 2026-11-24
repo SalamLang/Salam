@@ -24,6 +24,8 @@ const char *salam_host_text(void);
 void salam_host_wait(int ms);
 void salam_host_wake(void);
 int salam_host_ready(void);
+void salam_host_script_set(const char *script);
+void salam_host_script_frame(void);
 int salam_host_width(void);
 int salam_host_height(void);
 double salam_host_density(void);

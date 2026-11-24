@@ -9,6 +9,7 @@
 # trailing newlines.
 #
 # stdlib/jit_demo, stdlib/jit_calls_demo and stdlib/dl_float_demo need dlopen, which a static musl program cannot do.
+# stdlib/gui_tray, the stdlib/gui_window_* tests and stdlib/net_wifi link X11, gio or libdl, which have no static archive in the musl sysroot.
 # stdlib/os_api is skipped under qemu, which prints a message when the forked child aborts.
 # Some tests cannot pass on a cross target and are skipped: they need -D flags
 # from their test harness, a database library, or a trapping integer division
@@ -56,7 +57,9 @@ case "$TRIPLE" in
 *windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos general/extern_int128" ;;
 esac
 case "$TRIPLE" in
-*musl*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/jit_demo stdlib/jit_calls_demo stdlib/dl_float_demo" ;;
+*musl*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/jit_demo stdlib/jit_calls_demo stdlib/dl_float_demo stdlib/net_wifi stdlib/gui_tray
+stdlib/gui_window_events stdlib/gui_window_insets stdlib/gui_window_present stdlib/gui_window_state
+stdlib/gui_window_timers stdlib/gui_window_x11" ;;
 esac
 case "$RUNNER" in
 qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api" ;;

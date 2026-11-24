@@ -31,7 +31,7 @@ end
 
 page:
     box: id = "dot"
-        play = none
+        play = "none"
         when busy: play = Pulse end
     end
 end
@@ -313,13 +313,13 @@ form := Signup()
 
 page:
     form: id = "signup" submit = (): save(form) end
-        input: name = "email" bind = form.email rules = required, email end
-        input: name = "age" type = number bind = form.age rules = range(13, 120) end
-        input: name = "pass" type = password bind = form.pass rules = min length(8) end
-        input: name = "pass2" type = password bind = form.pass2
+        input: name = "email" bind = form.email rules = "required", "email" end
+        input: name = "age" type = "number" bind = form.age rules = range(13, 120) end
+        input: name = "pass" type = "password" bind = form.pass rules = min length(8) end
+        input: name = "pass2" type = "password" bind = form.pass2
             rules = same as(form.pass) message = "Passwords differ"
         end
-        button: type = submit content = "Create" disabled = !signup.valid end
+        button: type = "submit" content = "Create" disabled = !signup.valid end
         paragraph: content = signup.email.error visible = signup.email.touched end
     end
 end
@@ -535,7 +535,7 @@ same gesture on one element) is W219.
 offset := 0
 
 page:
-    box: id = "sheet" touch action = pan x
+    box: id = "sheet" touch action = "pan x"
         translate = offset, 0
         transition = if dragging: 0ms else 200ms end
         pan = (p: Pan): offset = p.dx; dragging = p.phase != end end

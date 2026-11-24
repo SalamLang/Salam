@@ -235,7 +235,7 @@ page Cart(user: str, products: Vector<str>):
     else:
         paragraph: content = "Items: " + products.Len() end
         list:
-            each name in products:
+            each _, name in products:
                 item: content = name end
             end
         end

@@ -2476,15 +2476,15 @@ page:
         gap = 12
         padding = 16
         max width = 720
-        margin = 0, auto
+        margin = 0, "auto"
         box:
             padding = 8, 16
             radius = 8
-            border = 1, solid, #3366aa
+            border = 1, "solid", "#3366aa"
             background = linear(90, #eef4ff, white)
             hover background = "#ffeecc"
-            transition = 200ms, ease out
-            paragraph: color = #1e3a8a content = "A card" end
+            transition = 200ms, "ease out"
+            paragraph: color = "#1e3a8a" content = "A card" end
         end
     end
 end

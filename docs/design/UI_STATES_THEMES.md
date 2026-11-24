@@ -38,7 +38,7 @@ component Seg(items: Vector<str>, value: str, pick: func (str)):
     row:
         radius = 8
         border = 1, "solid", theme.color.border
-        each it in items:
+        each _, it in items:
             button: key = it content = it click = (): pick(it) end
                 padding = 7, 14
                 background = "transparent"

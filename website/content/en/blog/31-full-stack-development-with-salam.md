@@ -64,7 +64,7 @@ page NotesPage(items: Vector<Note>, problem: str):
         method = "post"
         action = "/notes"
         input: name = "text" end
-        button: type = submit content = "Add" end
+        button: type = "submit" content = "Add" end
     end
 end
 

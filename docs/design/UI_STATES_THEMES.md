@@ -41,7 +41,7 @@ component Seg(items: Vector<str>, value: str, pick: func (str)):
         each it in items:
             button: key = it content = it click = (): pick(it) end
                 padding = 7, 14
-                background = transparent
+                background = "transparent"
                 color = theme.color.muted
                 hover color = theme.color.fg
                 transition = 150ms
@@ -223,9 +223,9 @@ A state can also be written as a block. It is an alias of the prefixed form:
 
 ```salam
 button:
-    background = blue
+    background = "blue"
     hover:
-        background = navy
+        background = "navy"
         padding = 12
     end
     focus within:
@@ -323,7 +323,7 @@ theme Light:
         muted = #5f6878
         accent = #ff7a18
         on accent = #2a1402
-        border = #d8dde7
+        border = "#d8dde7"
     end
     space: sm = 4, md = 8, lg = 16 end
     radius: sm = 4, md = 8 end

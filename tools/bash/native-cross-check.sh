@@ -84,6 +84,15 @@ trap 'rm -rf "$work"' EXIT
 ok=0
 bad=0
 skipped=0
+checked_of() {
+    case "$1" in
+    general/enum_cast_large_enum | general/enum_cast_range_panic | general/enum_cast_wide_panic) return 0 ;;
+    general/panic_flushes_output | general/slice_bounds_empty_array | general/slice_bounds_runtime) return 0 ;;
+    general/slice_of_slice_bounds | general/slice_param_index_oob) return 0 ;;
+    esac
+    return 1
+}
+
 skip_of() {
     set -f
     for pat in $SKIP; do
@@ -134,7 +143,9 @@ for spec in $TEST_GROUPS; do
         exe=$work/t$EXT
         rm -f "$exe"
         # shellcheck disable=SC2086
-        if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" \
+        relflag=--release
+        checked_of "$id" && relflag=
+        if ! (cd "$work" && "$SALAM" build "$f" --backend=native ${relflag:+"$relflag"} --target="$TRIPLE" --output="$exe" \
             --log-level=error ${libarg:+"$libarg"} ${NATIVE_CROSS_FLAGS:-} >"$work/build.log" 2>&1); then
             echo "BUILDFAIL $id"
             head -3 "$work/build.log"
@@ -151,7 +162,8 @@ for spec in $TEST_GROUPS; do
             fi
             continue
         fi
-        (cd "$ROOT" && timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        # shellcheck disable=SC3045
+        (cd "$ROOT" && ulimit -c 0 2>/dev/null; timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
         rc=$?
         if [ "$(tr -d '\r' <"$work/got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
             ok=$((ok + 1))

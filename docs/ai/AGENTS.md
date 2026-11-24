@@ -80,7 +80,8 @@ looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
   UI and `salam bundle` makes tar/deb/rpm/AppImage/zip/NSIS/.app/dmg
   installers (`docs/DESKTOP.md`, `salam new name --desktop`);
   `std/gui/raylib` is for games; `android/`, `ios/` and `mobile/` hold the
-  mobile projects; the layout DSL builds HTML/CSS/JS with `salam page build`.
+  mobile projects; one `page:` language builds a website, a desktop window,
+  an Android app and an iOS app (section 14).
 - **Servers and data**: `net/http` + `net/router` (middleware, cookies,
   sessions, swagger, validation), `salam serve --config` for virtual hosts,
   redirects and FastCGI PHP backends, `net.http2`, `net.websocket`, `grpc`,
@@ -729,6 +730,31 @@ from `env.Get` and `env` in browser code is E286; backend imports (`db`, `fs`,
 `os`, process, router) warn W280 unless `salam.cfg` sets `allow_backend =
 true`; a static build that reaches one is E289 unless the page sets `server =
 "https://..."`. Lesson: `/learn/server-rendering/`.
+
+## 14. UI: one `page:` language for web, desktop, Android and iOS
+
+For any UI (page, button, form, card, dashboard, app) write a `page:` block,
+never HTML, CSS or platform code. The same file: `salam page build p.salam`
+(web), `salam run p.salam --ui=native` (desktop window), `salam app android
+p.salam --out out` (APK), `salam app ios p.salam --out out`; check what a
+window cannot show with `salam check p.salam --ui=native`. Attributes are
+`name = value` lines, element and attribute names may contain spaces and have
+English and Persian spellings (`design tokens`, `card header`, `طراحی`), and
+enum values are quoted (`variant = "outline"`). Do not guess a name: look it up
+with `salam_layout` (elements, attributes, allowed values), see
+`docs/LAYOUT_ELEMENTS.md`, and run `salam_check`. Style with the standard
+properties (`padding`, `gap`, `radius`, `hover background`), not CSS.
+
+Every page uses the shadcn design system by default (`design = "shadcn"`; set
+`design = "none"` to turn the look off): `theme = "auto|light|dark"`,
+`palette = "neutral|zinc|stone|slate|gray"`, `design tokens = "primary: #2563eb;
+radius: 0.5rem"`. Components: `button` (`variant`, `size`), `card` with `card
+header/title/content/footer`, `badge`, `alert`, `input`, `switch`, `select`,
+`tabs`, `accordion`, `dialog` (`button: opens = "id"`), `sheet`, `popover`,
+`tooltip`, `table`, `toaster`, `command`, `calendar`, `carousel`, `chart`,
+`sidebar provider`, `theme toggle`. The shadcn CSS is a web output today.
+Docs: `docs/design/DESIGN_SYSTEMS.md`, `NATIVE_UI.md`, `MOBILE.md`, SKILL.md
+section 9.
 
 ## Changing the standard library
 

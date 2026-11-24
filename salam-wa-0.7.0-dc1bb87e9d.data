@@ -193626,26 +193626,60 @@ nd.dst.Free()
 nd.dprop.Free()
 nd.dval.Free()
 end
+func _sc_top_marks(tops: Vector<int>): Vector<bool>:
+mut marks := Vector {} as Vector<bool>
+mut mx := -1
+each t0 in tops:
+if t0 > mx:
+mx = t0
+end
+end
+repeat mx + 1:
+marks.Push(false)
+end
+each t in tops:
+if t >= 0 and t < marks.Len():
+marks[t] = true
+end
+end
+ret marks
+end
+func _sc_in_marked(node: int, d: int, marks: Vector<bool>): bool:
+mut n := node
+mut guard := 0
+until n >= 0 and guard < 100000:
+guard++
+p := _e.dom.nodes[n].parent
+if p == d:
+ret n < marks.Len() and marks[n]
+end
+n = p
+end
+ret false
+end
 func _sc_drop_events(before: int, d: int, tops: Vector<int>):
-mut nn := Vector {} as Vector<int>
-mut nk := Vector {} as Vector<str>
-mut nf := Vector {} as Vector<func ()>
-repeat _e.dom.ev_node.Len() in i:
+mut marks := _sc_top_marks(tops)
+defer marks.Free()
+mut w := 0
+n := _e.dom.ev_node.Len()
+repeat n in i:
 node := _e.dom.ev_node[i]
-if i < before and _sc_in_subtree(node, d, tops):
+if i < before and _sc_in_marked(node, d, marks):
 _sfree(_e.dom.ev_kind[i])
 continue
 end
-nn.Push(node)
-nk.Push(_e.dom.ev_kind[i])
-nf.Push(_e.dom.ev_fn[i])
+if w != i:
+_e.dom.ev_node[w] = node
+_e.dom.ev_kind[w] = _e.dom.ev_kind[i]
+_e.dom.ev_fn[w] = _e.dom.ev_fn[i]
 end
-_e.dom.ev_node.Free()
-_e.dom.ev_kind.Free()
-_e.dom.ev_fn.Free()
-_e.dom.ev_node = nn
-_e.dom.ev_kind = nk
-_e.dom.ev_fn = nf
+w++
+end
+repeat n - w:
+_a := _e.dom.ev_node.Pop()
+_b := _e.dom.ev_kind.Pop()
+_c := _e.dom.ev_fn.Pop()
+end
 end
 func _sc_subtree_size(n: int): int:
 mut c := 1
@@ -193669,35 +193703,71 @@ end
 func _sc_match_tops(olds: Vector<int>, news: Vector<int>):
 mut used := Vector {} as Vector<bool>
 defer used.Free()
-repeat olds.Len():
+mut by_key := HashMap {} as HashMap<str, int>
+defer by_key.Free()
+mut seen_kind := HashMap {} as HashMap<str, int>
+defer seen_kind.Free()
+repeat olds.Len() in j:
 used.Push(false)
+o := olds[j]
+t := _e.dom.nodes[o].kind
+oid := _attr(_e.dom, o, "id")
+okey := _attr(_e.dom, o, "key")
+if oid.Len() > 0 or okey.Len() > 0:
+if oid.Len() > 0 and not by_key.Has(t + "|i" + oid):
+by_key.Put(t + "|i" + oid, j)
 end
-mut kinds := Vector {} as Vector<str>
-defer kinds.Free()
-mut counts := Vector {} as Vector<int>
+if okey.Len() > 0 and not by_key.Has(t + "|k" + okey):
+by_key.Put(t + "|k" + okey, j)
+end
+else:
+nth := seen_kind.Has(t) ? seen_kind.Get(t) : 0
+seen_kind.Put(t, nth + 1)
+by_key.Put(t + "|n" + nth, j)
+end
+end
+mut counts := HashMap {} as HashMap<str, int>
 defer counts.Free()
 each k in news:
 t := _e.dom.nodes[k].kind
 if t == "#text":
 continue
 end
-mut nth := 0
-mut slot := -1
-repeat kinds.Len() in q:
-if kinds[q] == t:
-slot = q
+id := _attr(_e.dom, k, "id")
+key := _attr(_e.dom, k, "key")
+mut j := -1
+if id.Len() > 0 or key.Len() > 0:
+mut ji := -1
+mut jk := -1
+if id.Len() > 0 and by_key.Has(t + "|i" + id):
+ji = by_key.Get(t + "|i" + id)
 end
+if key.Len() > 0 and by_key.Has(t + "|k" + key):
+jk = by_key.Get(t + "|k" + key)
 end
-if _attr(_e.dom, k, "id").Len() == 0 and _attr(_e.dom, k, "key").Len() == 0:
-if slot < 0:
-kinds.Push(t)
-counts.Push(1)
+if ji >= 0 and used[ji]:
+ji = -2
+end
+if jk >= 0 and used[jk]:
+jk = -2
+end
+if ji == -2 or jk == -2:
+j = _match_kid(_e.dom, olds, used, _e.dom, k, 0)
+else ji >= 0 and (jk < 0 or ji < jk):
+j = ji
 else:
-nth = counts[slot]
-counts[slot] = nth + 1
+j = jk
+end
+else:
+nth := counts.Has(t) ? counts.Get(t) : 0
+counts.Put(t, nth + 1)
+if by_key.Has(t + "|n" + nth):
+j = by_key.Get(t + "|n" + nth)
+if used[j]:
+j = -1
 end
 end
-j := _match_kid(_e.dom, olds, used, _e.dom, k, nth)
+end
 if j >= 0:
 used[j] = true
 mut nc := _e.ctl
@@ -193791,12 +193861,18 @@ mut dn2 := _e.dom.nodes.Ref(d)
 repeat newcount:
 _x2 := dn2.kids.Pop()
 end
-repeat olds.Len():
-dn2.kids.RemoveAt(pos)
+mut nk := Vector {} as Vector<int>
+repeat pos in i:
+nk.Push(dn2.kids[i])
 end
-repeat newcount in i:
-dn2.kids.Insert(pos + i, news[i])
+each nw in news:
+nk.Push(nw)
 end
+repeat dn2.kids.Len() - pos - olds.Len() in i:
+nk.Push(dn2.kids[pos + olds.Len() + i])
+end
+dn2.kids.Free()
+dn2.kids = nk
 delta := newcount - oldcount
 mut sc := _sc.Ref(id)
 sc.count = newcount

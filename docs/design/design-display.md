@@ -1,6 +1,6 @@
 # Display components
 
-All elements restyle only when `design = shadcn` (the default). With `design = none` they still emit the same structure and ARIA. Every selector is wrapped in `:where()`, so your own styles always win.
+All elements restyle only when `design = "shadcn"` is set (nothing is applied by default). With `design = none` they still emit the same structure and ARIA. Every selector is wrapped in `:where()`, so your own styles always win.
 
 ## Card
 

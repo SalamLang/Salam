@@ -1,8 +1,11 @@
 # Design systems for the page DSL
 
-Every page gets a design system by default. Today that is shadcn/ui (the
-new-york style). `design = none` turns the look off: components still work
-(events, ARIA, open and close) with a minimal look.
+No design system is applied unless you ask for one. Today the only one is
+shadcn/ui (the new-york style). The active design is, in this order: the
+page's `design` setting, then the project default from `design.toml` or the
+`[design]` table of `salam.toml`, otherwise none. With none, components still
+work (events, ARIA, open and close) with a minimal look, the same as
+`design = "none"`.
 
 ## Page settings
 
@@ -18,7 +21,7 @@ end
 
 | setting         | values                                  | default  |
 | --------------- | --------------------------------------- | -------- |
-| `design`        | `shadcn`, `none`                        | `shadcn` |
+| `design`        | `shadcn`, `none`                        | `none`   |
 | `theme`         | `auto`, `light`, `dark`                 | `auto`   |
 | `palette`       | `neutral`, `zinc`, `stone`, `slate`, `gray`, `mauve`, `olive`, `mist`, `taupe`, or a palette defined in the project file | `neutral` |
 | `design tokens` | `name: value; dark name: value; ...`    | none     |
@@ -45,12 +48,13 @@ limit.
 
 ## Project file
 
-Defaults for every page come from `design.toml`, or from the `[design]` tables
+Project defaults for every page (including which `design` to use) come from `design.toml`, or from the `[design]` tables
 of `salam.toml`. The generator looks in the current directory (where you run
 the build) and then in every parent, and uses the nearest folder that has a
 `design.toml` or a `salam.toml` with a design section. `SALAM_DESIGN=<file>`
 names a file explicitly. Page settings win over the file; page tokens win over
-file tokens, which win over the palette.
+file tokens, which win over the palette. Without a `design` in the page or the
+file, no design is applied.
 
 ```toml
 [design]

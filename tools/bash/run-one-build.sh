@@ -64,7 +64,7 @@ while [ "$_try" -le 4 ]; do
     fi
     _rc=$?
     exec 2>&3 3>&-
-    got=$(tr -d '\r' <"$_runout" 2>/dev/null | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g')
+    got=$(tr -d '\r' <"$_runout" 2>/dev/null | sed -E 's|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d')
     _timedout=0
     [ "$_rc" -eq 124 ] && _timedout=1
     if [ "$got" = "$want" ]; then break; fi

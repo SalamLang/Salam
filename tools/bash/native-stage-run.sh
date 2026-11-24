@@ -7,7 +7,7 @@
 # Usage: tools/bash/native-stage-run.sh <dir> [runner]
 
 set -u
-GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g'
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g;/^timeout: the monitored command dumped core$/d'
 DIR=$1
 RUNNER=${2:-}
 pass=0

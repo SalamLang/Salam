@@ -37,6 +37,7 @@
 #   Use `env` as the runner for a target the host runs directly (i686).
 
 set -u
+GEN_SED='s|(<meta name="generator" content="Salam/)[^"]*"|\1VERSION"|g'
 SALAM=$1
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=$2
@@ -152,11 +153,11 @@ for spec in $TEST_GROUPS; do
         fi
         (cd "$ROOT" && timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
         rc=$?
-        if [ "$(tr -d '\r' <"$work/got")" = "$(tr -d '\r' <"$exp")" ]; then
+        if [ "$(tr -d '\r' <"$work/got" | sed -E "$GEN_SED")" = "$(tr -d '\r' <"$exp")" ]; then
             ok=$((ok + 1))
         else
             echo "DIFF $id (exit $rc)"
-            tr -d '\r' <"$work/got" | diff "$exp" - | head -20
+            tr -d '\r' <"$work/got" | sed -E "$GEN_SED" | diff "$exp" - | head -20
             bad=$((bad + 1))
         fi
     done

@@ -294,24 +294,53 @@ async function listening(port) {
       await page.evaluate(() => {
         window.__marker = "alive";
       });
-      check("server rendered text is shown", (await page.textContent("body")).indexOf("We sell things.") >= 0);
-      fs.writeFileSync(about, fs.readFileSync(about, "utf8").replace("We sell things.", "We sell more things."));
-      const fresh = await until(async () => (await page.textContent("body")).indexOf("We sell more things.") >= 0, 240000);
+      check(
+        "server rendered text is shown",
+        (await page.textContent("body")).indexOf("We sell things.") >= 0,
+      );
+      fs.writeFileSync(
+        about,
+        fs
+          .readFileSync(about, "utf8")
+          .replace("We sell things.", "We sell more things."),
+      );
+      const fresh = await until(
+        async () =>
+          (await page.textContent("body")).indexOf("We sell more things.") >= 0,
+        240000,
+      );
       check("a rebuilt server reloads the page", !!fresh);
-      check("the page really reloaded", (await page.evaluate(() => window.__marker)) === undefined);
+      check(
+        "the page really reloaded",
+        (await page.evaluate(() => window.__marker)) === undefined,
+      );
       const good = fs.readFileSync(about, "utf8");
       fs.writeFileSync(about, good.replace("heading:", "heading!!:"));
       const shown = await until(async () => {
         const t = await page.evaluate(() => {
-          const d = [...document.documentElement.children].find((e) => e.tagName === "DIV");
+          const d = [...document.documentElement.children].find(
+            (e) => e.tagName === "DIV",
+          );
           return d ? d.textContent : "";
         });
         return t.indexOf("Build failed") >= 0 ? t : null;
       }, 240000);
       check("a server build error shows over the page", !!shown);
-      check("the old pages stay up", (await page.textContent("body")).indexOf("We sell more things.") >= 0);
-      fs.writeFileSync(about, good.replace("We sell more things.", "We sell the best things."));
-      const back = await until(async () => (await page.textContent("body")).indexOf("We sell the best things.") >= 0, 240000);
+      check(
+        "the old pages stay up",
+        (await page.textContent("body")).indexOf("We sell more things.") >= 0,
+      );
+      fs.writeFileSync(
+        about,
+        good.replace("We sell more things.", "We sell the best things."),
+      );
+      const back = await until(
+        async () =>
+          (await page.textContent("body")).indexOf(
+            "We sell the best things.",
+          ) >= 0,
+        240000,
+      );
       check("the next good save recovers", !!back);
     } finally {
       server3.stop();

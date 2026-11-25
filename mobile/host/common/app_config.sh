@@ -5,7 +5,10 @@
 # [app] holds the keys every platform shares (id, name, version, build, icon,
 # description, author, orientation, category, permissions, ...). [app.mobile],
 # then [app.android] or [app.ios], then the plain [android] or [ios] table
-# override it, and a later table wins over an earlier one. docs/PROJECT_FILE.md
+# override it, and a later table wins over an earlier one. A desktop menu
+# category in [app] (Utility) is not a store category, so [app] category is
+# used only when it is one of APP_CATEGORIES; put category in [android] or
+# [ios] to be explicit. docs/PROJECT_FILE.md
 # lists every key. Passwords are never read from the file.
 
 APP_CFG=
@@ -14,7 +17,7 @@ APP_CFG_DIR=
 app_cfg_load() {
     APP_CFG_DIR=$(dirname "$1")
     app_cfg_check "$1" "$2"
-    APP_CFG=$(awk -v platform="$2" '
+    APP_CFG=$(awk -v platform="$2" -v cats=" $APP_CATEGORIES " '
         function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
         /^[ \t]*\[/ {
             name = trim($0)
@@ -47,6 +50,8 @@ app_cfg_load() {
                 sub(/[ \t]*#.*$/, "", raw)
                 val = raw
             }
+            if (prio == 1 && key == "category" && index(cats, " " val " ") == 0) next
+            if (prio == 1 && (key == "assets" || key == "main" || key == "engine" || key == "runtime")) next
             if (!(key in have) || prio >= have[key]) {
                 have[key] = prio
                 out[key] = val

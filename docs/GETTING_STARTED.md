@@ -279,7 +279,10 @@ salam exec                  # interpret the project here
   each folder, and records the answers in `salam.toml` under `[project]`.
   The flags `--name=`, `--description=`, `--type=`, `--platforms=a,b|all`,
   `--design=` and `--web=` answer the questions up front and `-y` accepts the
-  defaults, so scripts and pipes never wait for input.
+  defaults, so scripts and pipes never wait for input. For `dsl` projects it
+  also writes an `[app]` table (`id` made from the name, `name`, `version`) that
+  the installers and the phone apps use; see [PROJECT_FILE.md](PROJECT_FILE.md)
+  for every key of `salam.toml`.
 
   A project made this way builds and runs through the two usual commands:
   `salam run` serves a web project with live reload (or starts the first

@@ -19,6 +19,8 @@ include pm "../pkgmgr/pkgmgr.salam"
 include pf "../prof_self.salam"
 include lv "../llvmgen/llvmgen.salam"
 
+mut g_project_warned := false
+
 func cc_is_bare_name(name: str): bool:
     if str.Len(name) == 0:
         ret false
@@ -57,36 +59,131 @@ func target_is_freestanding(triple: str): bool:
     ) or str.Contains(triple, "-none")
 end
 
+func win_has_key(vs: Vector<str>, key: str): bool:
+    each kv in vs:
+        if str.StartsWith(kv, key + "="):
+            ret true
+        end
+    end
+    ret false
+end
+
 func win_from_project(opt &: Dr, pinfo: pm.PkgInfo, rdir: str):
     if str.Len(opt.win_subsystem) == 0:
         opt.win_subsystem = pinfo.win_subsystem
     end
-    if str.Len(opt.win_icon) == 0 and str.Len(pinfo.win_icon) > 0:
-        opt.win_icon = pth.PathIsAbs(pinfo.win_icon) ? pinfo.win_icon : pth.PathJoin(
-            rdir, pinfo.win_icon
-        )
+    mut icon := pinfo.win_icon
+    if str.Len(icon) == 0 and str.EndsWith(str.Lower(pinfo.app_icon), ".ico"):
+        icon = pinfo.app_icon
+    end
+    if str.Len(opt.win_icon) == 0 and str.Len(icon) > 0:
+        opt.win_icon = pth.PathIsAbs(icon) ? icon : pth.PathJoin(rdir, icon)
     end
     if str.Len(opt.win_manifest) == 0 and str.Len(pinfo.win_manifest) > 0:
         opt.win_manifest = pth.PathIsAbs(pinfo.win_manifest) ? pinfo.win_manifest : pth.PathJoin(
             rdir, pinfo.win_manifest
         )
     end
-    if pinfo.win_version.Len() == 0:
+    if pinfo.win_version.Len() == 0 and not pinfo.has_app:
         ret
     end
     mut vs := Vector {} as Vector<str>
-    mut has_ver := false
     each kv in pinfo.win_version:
         vs.Push(kv)
-        has_ver = has_ver or str.StartsWith(kv, "version=")
     end
-    if not has_ver and str.Len(pinfo.version) > 0:
+    if pinfo.has_app:
+        mut ver := pinfo.app_version
+        if str.Len(ver) == 0:
+            ver = pinfo.version
+        end
+        if not win_has_key(vs, "version") and str.Len(ver) > 0:
+            vs.Push("version=" + ver)
+        end
+        if not win_has_key(vs, "product") and str.Len(pinfo.app_name) > 0:
+            vs.Push("product=" + pinfo.app_name)
+        end
+        if not win_has_key(vs, "description") and str.Len(pinfo.app_description) > 0:
+            vs.Push("description=" + pinfo.app_description)
+        end
+        if not win_has_key(vs, "company") and str.Len(pinfo.app_author) > 0:
+            vs.Push("company=" + pinfo.app_author)
+        end
+        if not win_has_key(vs, "copyright") and str.Len(pinfo.app_copyright) > 0:
+            vs.Push("copyright=" + pinfo.app_copyright)
+        end
+    end
+    if not win_has_key(vs, "version") and str.Len(pinfo.version) > 0:
         vs.Push("version=" + pinfo.version)
     end
     each kv2 in opt.win_version:
         vs.Push(kv2)
     end
     opt.win_version = vs
+end
+
+func warn_project(opt: Dr, dir: str):
+    if g_project_warned:
+        ret
+    end
+    g_project_warned = true
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    mut issues := Vector {} as Vector<str>
+    defer issues.Free()
+    pm.ProjectIssues(dir, issues)
+    each item in issues:
+        f := str.Split(item, "\t")
+        defer f.Free()
+        if f.Len() < 4:
+            continue
+        end
+        if str.Equals(f.Get(0), "unknown"):
+            lg.Log(
+                lgr,
+                lg.PH_DRIVER,
+                lg.LOG_WARN,
+                co.Format2(
+                    i18.Tr("salam.toml: unknown key '%s' in [%s]"),
+                    co.ArgStr(f.Get(2)),
+                    co.ArgStr(f.Get(1))
+                )
+            )
+        else str.Equals(f.Get(0), "secret"):
+            lg.Log(
+                lgr,
+                lg.PH_DRIVER,
+                lg.LOG_WARN,
+                co.Format2(
+                    i18.Tr(
+                        "salam.toml: the key '%s' in [%s] is ignored; secrets do not belong in the project file"
+                    ),
+                    co.ArgStr(f.Get(2)),
+                    co.ArgStr(f.Get(1))
+                )
+            )
+        else:
+            mut want := i18.Tr("a list of text in quotes")
+            if str.Equals(f.Get(3), "s"):
+                want = i18.Tr("text in quotes")
+            else str.Equals(f.Get(3), "v"):
+                want = i18.Tr("text in quotes or a number")
+            else str.Equals(f.Get(3), "i"):
+                want = i18.Tr("a whole number")
+            else str.Equals(f.Get(3), "b"):
+                want = i18.Tr("true or false")
+            end
+            lg.Log(
+                lgr,
+                lg.PH_DRIVER,
+                lg.LOG_WARN,
+                co.Format3(
+                    i18.Tr("salam.toml: '%s' in [%s] must be %s"),
+                    co.ArgStr(f.Get(2)),
+                    co.ArgStr(f.Get(1)),
+                    co.ArgStr(want)
+                )
+            )
+        end
+    end
 end
 
 func protect_binary(lgr: lg.Logger, opt &: Dr, output: str):
@@ -151,6 +248,7 @@ func build_impl(opt &: Dr): int:
         end
         mut pinfo := pm.PkgInfo {}
         _pi := pm.ReadPackageInfo(rdir, pinfo)
+        warn_project(opt, rdir)
         if str.Equals(
             pinfo.kind, "lib"
         ) and str.Len(opt.lib_kind) == 0 and opt.command == CMD_BUILD:

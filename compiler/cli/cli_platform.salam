@@ -1,0 +1,164 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cli
+
+import os
+import io
+import str
+
+include dr "../driver/driver.salam"
+include pth "../sal_path.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+
+func plat_is_desktop(p: str): bool:
+    ret str.Equals(p, "linux") or str.Equals(p, "macos") or str.Equals(p, "windows")
+end
+
+func plat_project_dir(opt &: dr.Dr): str:
+    if opt.inputs.Len() == 0:
+        ret "."
+    end
+    if opt.inputs.Len() == 1 and os.IsDir(opt.inputs.Get(0)):
+        ret opt.inputs.Get(0)
+    end
+    ret ""
+end
+
+func plat_entry(dir: str): str:
+    ret project_path(dir, "main.salam")
+end
+
+func plat_app(opt &: dr.Dr, platform: str, entry: str, run: bool): int:
+    mut args := Vector {} as Vector<str>
+    args.Push(platform)
+    args.Push(entry)
+    args.Push("--out")
+    if str.Len(opt.output) > 0:
+        args.Push(opt.output)
+    else:
+        args.Push("build/" + platform)
+    end
+    if run:
+        args.Push("--run")
+    end
+    repeat opt.run_args.Len() in i:
+        args.Push(opt.run_args.Get(i))
+    end
+    opt.run_args = args
+    opt.command = dr.CMD_APP
+    ret app_cmd(opt)
+end
+
+func plat_native(opt &: dr.Dr):
+    opt.ui_target = 1
+    opt.defines.Push("SALAM_UI_NATIVE")
+end
+
+func plat_one(opt &: dr.Dr, platform: str, dir: str, info: pm.PkgInfo, run: bool): int:
+    entry := plat_entry(dir)
+    opt.ui_target = 0
+    if str.Equals(platform, "web"):
+        if run:
+            opt.command = dr.CMD_SERVE
+            opt.input = dir
+            ret dr.Serve(opt)
+        end
+        opt.command = dr.CMD_LAYOUT_BUILD
+        opt.inputs.Clear()
+        opt.inputs.Push(dir)
+        if str.Equals(info.project_web, "ssr"):
+            opt.ssr = true
+            ret dr.SsrBuild(opt)
+        end
+        ret dr.LayoutBuild(opt)
+    end
+    if str.Equals(platform, "js"):
+        if run:
+            io.EPrintln("salam: --platform=js makes a script; use 'salam build --platform=js'")
+            ret 2
+        end
+        opt.command = dr.CMD_JS
+        opt.inputs.Clear()
+        opt.inputs.Push(entry)
+        ret dr.Js(opt)
+    end
+    if str.Equals(platform, "android") or str.Equals(platform, "ios"):
+        ret plat_app(opt, platform, entry, run)
+    end
+    if plat_is_desktop(platform) and str.Equals(info.project_type, "dsl"):
+        plat_native(opt)
+        opt.inputs.Clear()
+        opt.inputs.Push(entry)
+        opt.input = entry
+        if run:
+            opt.command = dr.CMD_RUN
+            ret dr.Run(opt)
+        end
+        opt.command = dr.CMD_BUILD
+        ret dr.Build(opt)
+    end
+    if plat_is_desktop(platform) or str.Equals(platform, "native"):
+        ret 0 - 1
+    end
+    io.EPrintln(
+        "salam: unknown platform '" + platform +
+            "' (choose web, js, android, ios, linux, macos, windows or all)"
+    )
+    ret 2
+end
+
+func route_platform(opt &: dr.Dr): int:
+    if opt.interp:
+        ret 0 - 1
+    end
+    run := opt.command == dr.CMD_RUN
+    mut dir := plat_project_dir(opt)
+    mut info := pm.PkgInfo {}
+    if str.Len(dir) > 0:
+        _ok := pm.ReadPackageInfo(dir, info)
+    end
+    mut platform := opt.platform
+    if str.Len(platform) == 0:
+        if str.Len(dir) == 0 or not str.Equals(info.project_type, "dsl") or info.project_platforms.Len() == 0:
+            ret 0 - 1
+        end
+        platform = info.project_platforms.Get(0)
+        if run and has_item(info.project_platforms, "web"):
+            platform = "web"
+        end
+    end
+    if str.Len(dir) == 0:
+        dir = pth.PathDir(opt.inputs.Get(0))
+        if str.Len(dir) == 0:
+            dir = "."
+        end
+    end
+    if str.Equals(platform, "all"):
+        if run or info.project_platforms.Len() == 0:
+            io.EPrintln("salam: --platform=all needs 'salam build' and a [project] platforms list in salam.toml")
+            ret 2
+        end
+        mut worst := 0
+        repeat info.project_platforms.Len() in i:
+            p := info.project_platforms.Get(i)
+            println "== " + p
+            rc := plat_one(opt, p, dir, info, false)
+            if rc > worst:
+                worst = rc
+            end
+        end
+        ret worst
+    end
+    ret plat_one(opt, platform, dir, info, run)
+end

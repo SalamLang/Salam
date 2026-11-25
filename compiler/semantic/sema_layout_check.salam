@@ -9,6 +9,7 @@ include tok "../token.salam"
 include at "../ast.salam"
 include lg "../logger.salam"
 include i18 "../i18n.salam"
+include lp "../langpack.salam"
 
 mut g_lay_sp_comps := Vector {} as Vector<str>
 mut g_lay_known_comps := Vector {} as Vector<str>
@@ -390,9 +391,6 @@ func layout_resolve(a &: at.Ast, lb: int):
     defer stack.Free()
     stack.Push(lay_elem_by_key("page"))
     lay_resolve_walk(a, lb, stack)
-    // TODO(language): enforce Persian-only element/attribute keywords in Persian files and English-only in English files.
-    // layout_resolve currently canonicalizes via aliases without file-language context and does not preserve original spellings,
-    // so keyword-language rejection needs schema alias language metadata and/or original-name tracking.
 end
 
 func lay_has_sep(name: str): bool:
@@ -1500,17 +1498,19 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
         value_ok := lay_attr_value_ok(ai, v)
         g_lay_css_en_only = false
         g_lay_val_fa_only = false
-        // TODO(language): reject layout attribute/element keywords (names) written in the wrong language for the file.
-        // Value-language checks above cover dynamic/registered values; full keyword enforcement needs original spellings
-        // and alias-language metadata through resolve/check paths. Also ensure style-resolved/gui.style parsing paths
-        // honor file-language restrictions where applicable.
         if not value_ok:
             mut vhint := ""
             if av.vtype == VT_ENUM or av.vtype == VT_BOOL_ENUM or av.vtype == VT_DIR or
                 av.vtype == VT_LANG:
                 vcands := lay_value_candidates(av.vtype, av.allowed)
                 vhint = lay_suggest_from(v, vcands)
+                if vcands.Len() > 0 and vcands.Len() <= 16:
+                    vhint += co.Format1(
+                        i18.Tr(" (allowed values: %s)"), co.ArgStr(lay_join_values(vcands))
+                    )
+                end
                 vcands.Free()
+                vhint += lay_value_belongs_to(ei, ai, v)
             end
             serr(
                 s,
@@ -1840,7 +1840,7 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         end
         ei := cn.op - 1
         if ei < 0:
-            if ck.unexpanded:
+            if ck.unexpanded and not lay_is_removed_textarea(cn.name):
                 swarn(
                     s,
                     2,
@@ -1858,17 +1858,6 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
             continue
         end
         e := g_lay_elems.Get(ei)
-        if str.Equals(e.key, "text area"):
-            swarn_help(
-                s,
-                LAYOUT_TEXTAREA_CODE,
-                span_of(a, cid),
-                co.Format1(
-                    i18.Tr("the '%s' element is deprecated and will be removed"), co.ArgStr(cn.name)
-                ),
-                i18.Tr("write an 'input' with type = \"textarea\" instead")
-            )
-        end
         lay_check_native_elem(s, a, cid, ei)
         lay_check_placement(s, a, cid, ei, ck)
         lay_check_attrs(s, a, cid, ei, ck)
@@ -1944,8 +1933,22 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     end
 end
 
+func lay_is_removed_textarea(name: str): bool:
+    ret str.Equals(name, "text area") or str.Equals(name, "textarea") or lp.IdentEqual(name, "متن بلند")
+end
+
 func lay_report_unknown(s &: Sema, a &: at.Ast, cid: int, name: str):
     sp := span_of(a, cid)
+    if lay_is_removed_textarea(name):
+        serr_help(
+            s,
+            LAYOUT_TEXTAREA_CODE,
+            sp,
+            co.Format1(i18.Tr("the '%s' element was removed"), co.ArgStr(name)),
+            i18.Tr("write an 'input' with type = \"textarea\" instead")
+        )
+        ret
+    end
     repeat dg.Count(s.diag) in i:
         d := dg.ItemAt(s.diag, i)
         if d.code == 111 and d.sev == dg.SEV_ERROR and str.Equals(
@@ -2347,7 +2350,7 @@ func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         if not lay_is_component(ck, cn.name) and not lay_state_name(cn.name) and lay_resolve_elem(
             a, cid, ck.stack
         ) < 0:
-            if ck.unexpanded:
+            if ck.unexpanded and not lay_is_removed_textarea(cn.name):
                 swarn(
                     s,
                     2,
@@ -2429,6 +2432,7 @@ func sema_check_layout_component(s &: Sema, a &: at.Ast, nid: int):
     lay_collect_locals(a, nid)
     lay_collect_locals(a, at.Get(a, nid).a)
     lay_check_spelling(s, a, at.Get(a, nid).a)
+    lay_check_language(s, a, at.Get(a, nid).a)
     ck.unexpanded = lay_tree_has_include(a, at.Get(a, nid).a)
     ck.stack.Push(lay_elem_by_key("page"))
     lay_comp_check_items(s, a, at.Get(a, nid).a, ck)
@@ -2517,6 +2521,7 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
     g_lay_locals.Clear()
     lay_collect_locals(a, nid)
     lay_check_spelling(s, a, nid)
+    lay_check_language(s, a, nid)
     layout_resolve(a, nid)
     root := lay_elem_by_key("page")
     if lay_elem_attr(a, nid, "repeat") != 0 and lay_subtree_has_id(a, nid):

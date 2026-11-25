@@ -48,7 +48,7 @@ check, give the releases page and name the asset to download.
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Compiler      | Linux `x86_64` and `aarch64`: `.tar.gz`, `.zip`, `.deb`, `.rpm`; Linux `i686`: `.tar.gz`, `.zip`, `.deb` (no rpm); Linux `x86_64-musl` (Alpine): `.tar.gz`, `.zip` (no deb/rpm); `macos-arm64`, `windows-x86_64`, `windows-arm64`, `windows-i686`: `.tar.gz` and `.zip`                                                         |
 | Desktop agent | Windows `x86_64` and `i686`: `-setup.exe`, `.msi`, portable `.exe`; Windows `aarch64`: `-setup.exe` and portable `.exe` (no msi); macOS: `-macos-universal.dmg`, `-macos-arm64.dmg`, `-macos-x86_64.dmg`, plus `.zip`; Linux `x86_64` and `aarch64`: `.AppImage`, `.deb`, `.rpm`; Linux `i686`: `.deb` and `.rpm` (no AppImage) |
-| Android       | `salam-<version>-android-universal.apk`, only when that release published it; some releases skip the APK, so check the assets first and point to the releases page when it is absent (v0.6.2 has no APK)                                                                                                                        |
+| Android       | `salam-<version>-android-universal.apk`, in the release tagged `android-v<version>` for newer versions (older ones carry it in `v<version>` or skip it); check the assets first and point to the releases page when it is absent (v0.6.2 has no APK)                                                                                                                        |
 
 Every published file has a `.sha256` beside it; the agent release also carries
 `salam-agent-<version>-SHA256SUMS` and `-SHA512SUMS`. A format or architecture
@@ -745,8 +745,11 @@ with `salam_layout` (elements, attributes, allowed values), see
 `docs/LAYOUT_ELEMENTS.md`, and run `salam_check`. Style with the standard
 properties (`padding`, `gap`, `radius`, `hover background`), not CSS.
 
-Every page uses the shadcn design system by default (`design = "shadcn"`; set
-`design = "none"` to turn the look off): `theme = "auto|light|dark"`,
+No design system is applied unless you ask: put `design = "shadcn"` as the
+first line of the `page:` block (Persian code: `طراحی = "شد سی ان"`), or set
+a project default in `design.toml` or the `[design]` table of `salam.toml`;
+the page wins over the file, and without either there is no design (same as
+`design = "none"`). With a design on: `theme = "auto|light|dark"`,
 `palette = "neutral|zinc|stone|slate|gray"`, `design tokens = "primary: #2563eb;
 radius: 0.5rem"`. Components: `button` (`variant`, `size`), `card` with `card
 header/title/content/footer`, `badge`, `alert`, `input`, `switch`, `select`,

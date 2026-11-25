@@ -19,9 +19,9 @@ std/layoutgen/      Salam generator functions (Node in, Output out)
 Any schema file may hold any mix of `LayoutCategory`, `LayoutElement`,
 `LayoutAttribute` and `LayoutValue` consts. Names come from the `@en` and
 `@fa` lines. The first `@en` spelling is the canonical name unless `name` is
-set. Every spelling in either language is accepted in both English and
-Persian files, and spaces, `_`, `-` and ZWNJ are ignored when names are
-compared.
+set. Spaces, `_`, `-` and ZWNJ are ignored when names are compared. A page
+accepts only the names of its own language, see "One language per page"
+below.
 
 An English file has one official spelling for each attribute and element
 name, the one with spaces: `font size`, not `font_size` or `font-size`.
@@ -34,6 +34,25 @@ keeps its underscore. Persian files are not checked.
 CSS values are the exception. An English file accepts only the `@en`
 spellings of keywords and units, ASCII digits, `,` and `%`. A Persian file
 accepts both, plus Persian digits, `،` and `٪`.
+
+## One language per page
+
+A Persian page (`صفحه:`, a Persian file) writes only Persian names, an
+English page (`page:`) only English names. Three errors report the other
+language, each with `help: write 'X'` (the exact replacement) and a safe fix
+that `salam check --fix` applies:
+
+| code | what                                                                                 |
+| ---- | ------------------------------------------------------------------------------------ |
+| E301 | an element name of the other language (`button` in a Persian page, `دکمه` in English) |
+| E302 | an attribute or style property name of the other language, with its state prefix     |
+| E303 | a style keyword value of the other language (`layout = "row"` in a Persian page)     |
+
+A name spelled the same in both languages passes, and so does a name with no
+spelling in the page language. Free text is never checked: ids, content, urls,
+class names, user component names, `data x` and `aria x` attributes, colours,
+numbers and units. The full rule and its exceptions are in
+`docs/design/ONE_LANGUAGE.md`.
 
 ## Elements
 

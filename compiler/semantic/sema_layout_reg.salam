@@ -19,8 +19,10 @@ mut g_lay_apat_key := Vector {} as Vector<str>
 mut g_lay_ealias_loose := Vector {} as Vector<str>
 mut g_lay_ealias_idx := Vector {} as Vector<int>
 mut g_lay_ealias_spell := Vector {} as Vector<str>
+mut g_lay_ealias_lang := Vector {} as Vector<int>
 mut g_lay_aalias_loose := Vector {} as Vector<str>
 mut g_lay_aalias_key := Vector {} as Vector<str>
+mut g_lay_aalias_lang := Vector {} as Vector<int>
 mut g_sm_lay_val_group := Vector {} as Vector<str>
 mut g_sm_lay_val_spell := Vector {} as Vector<str>
 mut g_sm_lay_val_canon := Vector {} as Vector<str>
@@ -126,19 +128,21 @@ func lay_cat_bit(name: str): u64:
     ret bit
 end
 
-func lay_elem_add_alias(spelling: str, ei: int):
+func lay_elem_add_alias(spelling: str, ei: int, lang: int):
     l := lay_loose(spelling)
     if str.Len(l) == 0:
         ret
     end
     repeat g_lay_ealias_loose.Len() in i:
         if g_lay_ealias_idx.Get(i) == ei and str.Equals(g_lay_ealias_loose.Get(i), l):
+            g_lay_ealias_lang.Set(i, g_lay_ealias_lang.Get(i) | lang)
             ret
         end
     end
     g_lay_ealias_loose.Push(l)
     g_lay_ealias_idx.Push(ei)
     g_lay_ealias_spell.Push(str.Clone(spelling))
+    g_lay_ealias_lang.Push(lang)
 end
 
 func lay_elem_spelling(name: str): str:
@@ -182,13 +186,16 @@ func lay_attr_add_pattern(spelling: str, key: str):
     g_lay_apat_key.Push(key)
 end
 
-func lay_attr_add_alias(spelling: str, key: str):
+func lay_attr_add_alias(spelling: str, key: str, lang: int):
     l := lay_loose(spelling)
     if str.Len(l) == 0:
         ret
     end
     repeat g_lay_aalias_loose.Len() in i:
         if str.Equals(g_lay_aalias_loose.Get(i), l):
+            if str.Equals(g_lay_aalias_key.Get(i), key):
+                g_lay_aalias_lang.Set(i, g_lay_aalias_lang.Get(i) | lang)
+            end
             if not str.Equals(g_lay_aalias_key.Get(i), key):
                 lay_schema_error(
                     "attribute alias '" + spelling + "' is used by both '" +
@@ -200,6 +207,7 @@ func lay_attr_add_alias(spelling: str, key: str):
     end
     g_lay_aalias_loose.Push(l)
     g_lay_aalias_key.Push(key)
+    g_lay_aalias_lang.Push(lang)
 end
 
 func lay_elem_candidates(name: str): Vector<int>:
@@ -1335,4 +1343,54 @@ func lay_attr_names_for(ei: int): Vector<str>:
         out.Push(fa and str.Len(av.fa_name) > 0 ? av.fa_name : av.key)
     end
     ret out
+end
+
+func lay_join_values(vals: Vector<str>): str:
+    mut out := ""
+    sep := str.Equals(i18.Lang(), "fa") ? "، " : ", "
+    repeat vals.Len() in i:
+        if i > 0:
+            out += sep
+        end
+        out += vals.Get(i)
+    end
+    ret out
+end
+
+func lay_value_belongs_to(ei: int, skip: int, v: str): str:
+    fa := str.Equals(i18.Lang(), "fa")
+    ekey := ei >= 0 ? g_lay_elems.Get(ei).key : ""
+    mut found := 0
+    mut names := ""
+    repeat g_lay_attrs.Len() in i:
+        if i == skip:
+            continue
+        end
+        av := g_lay_attrs.Get(i)
+        if av.vtype != VT_ENUM and av.vtype != VT_BOOL_ENUM:
+            continue
+        end
+        if str.Len(av.scope) > 0 and not lay_csv_has(av.scope, ekey):
+            continue
+        end
+        if not lay_attr_value_ok(i, v):
+            continue
+        end
+        nm := fa and str.Len(av.fa_name) > 0 ? av.fa_name : av.key
+        if str.IndexOf(names, "'" + nm + "'") >= 0:
+            continue
+        end
+        if found > 0:
+            names += ", "
+        end
+        names += "'" + nm + "'"
+        found++
+        if found >= 3:
+            break
+        end
+    end
+    if found == 0:
+        ret ""
+    end
+    ret co.Format2(i18.Tr(" ('%s' is a value of %s)"), co.ArgStr(v), co.ArgStr(names))
 end

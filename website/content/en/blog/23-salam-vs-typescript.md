@@ -252,9 +252,11 @@ func main:
 end
 ```
 
-```output
-<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cart of Sara</title></head><body><h1>Sara&#39;s cart</h1><p>Items: 2</p><ul><li>Pen</li><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
-<style>.tag-a{background:#fde68a}</style><span class="tag-a">sale</span>
+The page starts with a reset stylesheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
+
+```text
+<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cart of Sara</title>...</head><body><h1>Sara&#39;s cart</h1><p>Items: 2</p><ul><li>Pen</li><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
+<style>...</style><span class="tag-a">sale</span>
 ```
 
 The script tag in the data comes out as text. The layout function is `pure`, so it cannot read files or the network while rendering; the handler fetches the data and passes it in. The article [Web development with Salam](/blog/web-development-with-salam/) walks through the page language from static pages to interactive components.

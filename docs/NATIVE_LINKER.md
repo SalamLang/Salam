@@ -276,6 +276,16 @@ the in-memory object hand-off:
 | `nl_icf.salam` | identical code folding |
 | `nl_api.salam` | `Link(inputs, options) -> result` with diagnostics |
 
+A large file is split into a main file, which keeps its constants, types and
+entry point, plus part files named after it:
+
+| Main file         | Parts (`<main>_<part>.salam`)                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `nl_dynout.salam` | `_needs` what a symbol needs, `_tables` table helpers, `_scan` relocation scan, `_place` section placement, `_apply` relocations and PLT, `_write` table writers                                                         |
+| `nl_pe.salam`     | `_items` section items, `_layout` classification and placement, `_reloc` relocations, `_write` image writer                                                                                                              |
+| `nl_pdb.salam`    | `_util` streams and strings, `_module` module streams, `_msf` symbol index and MSF container, `_types` type streams, `_dbi` info, publics and DBI                                                                        |
+| `nl_macho.salam`  | `_input` object reader, `_scan` section classes and relocation scan, `_dylib` dylibs and `.tbd`, `_reloc` stubs, GOT and relocations, `_dyld` rebase and bind opcodes, `_cmds` load commands, `_write` executable writer |
+
 ## Testing
 
 - **Differential**: build every test of the suite with `--backend=native`

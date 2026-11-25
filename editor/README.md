@@ -13,13 +13,13 @@ true [right-to-left](https://en.wikipedia.org/wiki/Right-to-left_script); Englis
 - `page.salam` - the page itself: colour constants, the page block and the few
   rules the standard vocabulary cannot express yet (state classes set by the
   script, injected highlighter markup, mask icons, the mobile menu media rule),
-  compiled by the **layout DSL** (`salam web`).
+  compiled by the **layout DSL** (`salam build --platform=web`).
 - `ui.salam` - the components of the page (`Toolbar`, `Segmented`, `SegButton`,
   `Toggle`, `IconButton`, `Pane`, ...), written with standard attributes and
   `light dark(a, b)` colours.
 - `app.salam` - all interactivity (state, i18n, the live syntax highlighter,
   line numbers, Wasm boot, run/compile dispatch, keyboard shortcuts, resizable
-  split, mobile menu), compiled by the **JS backend** (`salam js`).
+  split, mobile menu), compiled by the **JS backend** (`salam build --platform=js`).
 - `anim.salam` + `anim_frames.salam` - the output pane's animation player and
   its frame detector (see [🎬 Animated output](#-animated-output) below), also
   compiled by the JS backend.

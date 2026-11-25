@@ -116,10 +116,10 @@ example. The generator builds the `/learn/` overview, the sidebar and the
 previous/next links from the lesson files, grouped by `lesson.part`.
 
 An example without a `.out` file is not run: a `page:` program is built with
-`salam page build`, anything else is type-checked with `salam inspect`.
+`salam build --platform=web`, anything else is type-checked with `salam inspect`.
 
 A `page:` example (one whose source has a line that is exactly `page:` or
-`صفحه:`) also gets a live preview: the generator builds it with `$SALAM page build
+`صفحه:`) also gets a live preview: the generator builds it with `$SALAM build --platform=web
 --inline` and puts the result in a sandboxed `<iframe srcdoc>` under the code,
 sized to its content. Scripts run in the preview, but links and form submits
 are blocked, so a click can never load the site into the frame. The compiler

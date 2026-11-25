@@ -2232,6 +2232,210 @@ jobs:
           name: salam-linux-aarch64
           path: salam
 
+  package-deb:
+    if: |
+      !cancelled() && !failure() &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    name: Build .deb packages
+    runs-on: ubuntu-24.04
+    needs: [build-linux, build-linux-i686, build-linux-aarch64, build-linux-armhf]
+    outputs:
+      built: ${{ steps.build_deb.outputs.built }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read version from VERSION file
+        run: |
+          VERSION=$(sed 's/^[ \t]*//;s/[ \t]*$//' VERSION)
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Salam version: ${VERSION}"
+      - name: Download Linux versioned archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-zip
+          path: ./release
+      - name: Download Linux i686 archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-i686-zip
+          path: ./release
+      - name: Download Linux aarch64 archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-aarch64-zip
+          path: ./release
+      - name: Download Linux armhf archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-armhf-zip
+          path: ./release
+      - name: Build .deb packages
+        id: build_deb
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev
+          if sh packaging/debian/build-deb.sh --version "$VERSION" --input ./release --output ./debs; then
+            echo "built=$(find ./debs -name '*.deb' | wc -l)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::deb packaging failed - the release will ship without .deb files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload .deb packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-deb
+          path: debs/*.deb
+          if-no-files-found: ignore
+          overwrite: true
+
+  package-rpm:
+    if: |
+      !cancelled() && !failure() &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    name: Build .rpm packages
+    runs-on: ubuntu-24.04
+    needs: [build-linux, build-linux-aarch64]
+    outputs:
+      built: ${{ steps.build_rpm.outputs.built }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read version from VERSION file
+        run: |
+          VERSION=$(sed 's/^[ \t]*//;s/[ \t]*$//' VERSION)
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Salam version: ${VERSION}"
+      - name: Download Linux versioned archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-zip
+          path: ./release
+      - name: Download Linux aarch64 archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-aarch64-zip
+          path: ./release
+      - name: Build .rpm packages
+        id: build_rpm
+        run: |
+          set -eu
+          mkdir -p ./rpms
+          RPM_DATE=$(LC_ALL=C date -u +"%a %b %d %Y")
+          sed \
+            -e "s|@VERSION@|$VERSION|g" \
+            -e "s|@RPM_DATE@|$RPM_DATE|g" \
+            packaging/rpm/salam.spec > /tmp/salam.spec
+          if docker run --rm -v "$PWD:/repo:ro" -v /tmp/salam.spec:/tmp/salam.spec:ro \
+              -v "$PWD/rpms:/rpms" -e VERSION="$VERSION" fedora:41 bash -c '
+            set -eu
+            dnf install -y -q rpm-build rpmdevtools >/dev/null
+            rpmdev-setuptree
+            for f in /repo/release/salam-"$VERSION"-linux-x86_64.tar.gz /repo/release/salam-"$VERSION"-linux-aarch64.tar.gz; do
+              [ -f "$f" ] && cp "$f" ~/rpmbuild/SOURCES/
+            done
+            rpmbuild -bb /tmp/salam.spec
+            if [ -f ~/rpmbuild/SOURCES/salam-"$VERSION"-linux-aarch64.tar.gz ]; then
+              rpmbuild -bb --target aarch64 --nocheck /tmp/salam.spec
+            fi
+            for f in ~/rpmbuild/RPMS/*/salam-*.rpm; do
+              arch=$(basename "$(dirname "$f")")
+              cp "$f" "/rpms/salam-$VERSION-linux-$arch.rpm"
+            done
+          '; then
+            n=$(find ./rpms -name '*.rpm' | wc -l)
+            if [ "$n" -eq 0 ]; then
+              echo "::error::rpm packaging produced no .rpm files"
+            fi
+            echo "built=$n" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::rpm packaging failed - the release will ship without .rpm files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload .rpm packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-rpm
+          path: rpms/*.rpm
+          if-no-files-found: ignore
+          overwrite: true
+
+  package-pacman:
+    if: |
+      !cancelled() && !failure() &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    name: Build Arch (pacman) packages
+    runs-on: ubuntu-24.04
+    needs: [build-linux, build-linux-aarch64, build-linux-armhf]
+    outputs:
+      built: ${{ steps.build_pacman.outputs.built }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read version from VERSION file
+        run: |
+          VERSION=$(sed 's/^[ \t]*//;s/[ \t]*$//' VERSION)
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Salam version: ${VERSION}"
+      - name: Download Linux versioned archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-zip
+          path: ./release
+      - name: Download Linux aarch64 archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-aarch64-zip
+          path: ./release
+      - name: Download Linux armhf archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-armhf-zip
+          path: ./release
+      - name: Build Arch (pacman) packages
+        id: build_pacman
+        run: |
+          set -eu
+          mkdir -p ./pacman
+          if bash packaging/arch/build-pacman.sh --version "$VERSION" --input ./release --output ./pacman; then
+            n=$(find ./pacman -name '*.pkg.tar.zst' | wc -l)
+            if [ "$n" -eq 0 ]; then
+              echo "::error::pacman packaging produced no files"
+            fi
+            echo "built=$n" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::pacman packaging failed - the release will ship without .pkg.tar.zst files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload Arch (pacman) packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-pacman
+          path: pacman/*.pkg.tar.zst
+          if-no-files-found: ignore
+          overwrite: true
+
   create-release:
     if: |
       !cancelled() && !failure() &&
@@ -2253,6 +2457,9 @@ jobs:
         build-linux-armhf,
         build-linux-aarch64,
         build-linux-musl,
+        package-deb,
+        package-rpm,
+        package-pacman,
       ]
     permissions:
       contents: write
@@ -2553,80 +2760,30 @@ jobs:
             [ -f "$z" ] || { echo "::error::$(basename "$t") ships without a .zip counterpart"; fail=1; }
           done
           [ "$fail" -eq 0 ] || exit 1
-      - name: Build .deb packages
-        id: build_deb
-        run: |
-          set -eu
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq dpkg-dev
-          if sh packaging/debian/build-deb.sh --version "$VERSION" --input ./release --output ./debs; then
-            cp ./debs/*.deb ./release/
-            echo "built=$(find ./debs -name '*.deb' | wc -l)" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::deb packaging failed - the release will ship without .deb files"
-            echo "built=0" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build .rpm packages
-        id: build_rpm
-        run: |
-          set -eu
-          mkdir -p ./rpms
-          RPM_DATE=$(LC_ALL=C date -u +"%a %b %d %Y")
-          sed \
-            -e "s|@VERSION@|$VERSION|g" \
-            -e "s|@RPM_DATE@|$RPM_DATE|g" \
-            packaging/rpm/salam.spec > /tmp/salam.spec
-          if docker run --rm -v "$PWD:/repo:ro" -v /tmp/salam.spec:/tmp/salam.spec:ro \
-              -v "$PWD/rpms:/rpms" -e VERSION="$VERSION" fedora:41 bash -c '
-            set -eu
-            dnf install -y -q rpm-build rpmdevtools >/dev/null
-            rpmdev-setuptree
-            for f in /repo/release/salam-"$VERSION"-linux-x86_64.tar.gz /repo/release/salam-"$VERSION"-linux-aarch64.tar.gz; do
-              [ -f "$f" ] && cp "$f" ~/rpmbuild/SOURCES/
-            done
-            rpmbuild -bb /tmp/salam.spec
-            if [ -f ~/rpmbuild/SOURCES/salam-"$VERSION"-linux-aarch64.tar.gz ]; then
-              rpmbuild -bb --target aarch64 --nocheck /tmp/salam.spec
-            fi
-            for f in ~/rpmbuild/RPMS/*/salam-*.rpm; do
-              arch=$(basename "$(dirname "$f")")
-              cp "$f" "/rpms/salam-$VERSION-linux-$arch.rpm"
-            done
-          '; then
-            n=$(find ./rpms -name '*.rpm' | wc -l)
-            if [ "$n" -gt 0 ]; then
-              cp ./rpms/*.rpm ./release/
-            else
-              echo "::error::rpm packaging produced no .rpm files"
-            fi
-            echo "built=$n" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::rpm packaging failed - the release will ship without .rpm files"
-            echo "built=0" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build Arch (pacman) packages
-        id: build_pacman
-        run: |
-          set -eu
-          mkdir -p ./pacman
-          if bash packaging/arch/build-pacman.sh --version "$VERSION" --input ./release --output ./pacman; then
-            n=$(find ./pacman -name '*.pkg.tar.zst' | wc -l)
-            if [ "$n" -gt 0 ]; then
-              cp ./pacman/*.pkg.tar.zst ./release/
-            else
-              echo "::error::pacman packaging produced no files"
-            fi
-            echo "built=$n" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::pacman packaging failed - the release will ship without .pkg.tar.zst files"
-            echo "built=0" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Download .deb packages
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-deb
+          path: ./release
+      - name: Download .rpm packages
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-rpm
+          path: ./release
+      - name: Download Arch (pacman) packages
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-pacman
+          path: ./release
       - name: Summarize .deb/.rpm/.pkg.tar.zst packaging
         if: always()
         env:
-          DEB_COUNT: ${{ steps.build_deb.outputs.built || 0 }}
-          RPM_COUNT: ${{ steps.build_rpm.outputs.built || 0 }}
-          PACMAN_COUNT: ${{ steps.build_pacman.outputs.built || 0 }}
+          DEB_COUNT: ${{ needs.package-deb.outputs.built || 0 }}
+          RPM_COUNT: ${{ needs.package-rpm.outputs.built || 0 }}
+          PACMAN_COUNT: ${{ needs.package-pacman.outputs.built || 0 }}
         run: |
           {
             echo "### Distro packages"

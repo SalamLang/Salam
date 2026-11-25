@@ -1,0 +1,75 @@
+package nativegen
+
+func has_side_effect(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if op == OP_CALL or op == OP_STORE or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+        ret true
+    end
+    if is_term(op):
+        ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret true
+    end
+    if op == OP_SDIV or op == OP_UDIV or op == OP_SREM or op == OP_UREM:
+        ret not is_cint(g, g.i_b[i]) or g.v_i[g.i_b[i]] == (0 as i64)
+    end
+    ret false
+end
+
+func mark_live(g &: Ng, live &: Vector<bool>, v: int):
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret
+    end
+    d := g.v_def[v]
+    if d >= 0 and not live[d]:
+        live[d] = true
+        g.work.Push(d)
+    end
+end
+
+func dce(g &: Ng):
+    mut live := Vector {} as Vector<bool>
+    repeat g.i_op.Len():
+        live.Push(false)
+    end
+    g.work.Clear()
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if has_side_effect(g, i):
+                live[i] = true
+                g.work.Push(i)
+            end
+            i = g.i_next[i]
+        end
+    end
+    until g.work.Len() > 0:
+        j := g.work.Pop()
+        op := g.i_op[j]
+        m := val_mask(op)
+        if (m & 1) != 0: mark_live(g, live, g.i_a[j]) end
+        if (m & 2) != 0: mark_live(g, live, g.i_b[j]) end
+        if (m & 4) != 0: mark_live(g, live, g.i_c[j]) end
+        if op == OP_CALL:
+            repeat g.i_pcount[j] in k:
+                mark_live(g, live, g.pool[g.i_ps[j] + 3 * k])
+            end
+        else op == OP_PHI:
+            repeat g.i_pcount[j] in k2:
+                mark_live(g, live, g.pool[g.i_ps[j] + 2 * k2])
+            end
+        end
+    end
+    each b2 in g.b_rpo:
+        mut i2 := g.b_first[b2]
+        until i2 >= 0:
+            nx := g.i_next[i2]
+            if not live[i2] and g.i_op[i2] != OP_NOP:
+                ins_unlink(g, i2)
+            end
+            i2 = nx
+        end
+    end
+    live.Free()
+end

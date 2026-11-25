@@ -611,6 +611,32 @@ func ws_refs_state(lw &: LoLower, a &: at.Ast, nid: int): bool:
     ret false
 end
 
+func ws_key_param(lw &: LoLower, a &: at.Ast, ex: int): int:
+    if ex == 0:
+        ret 0
+    end
+    mut id := ex
+    if at.KindOf(a, id) == at.AST_INDEX:
+        id = at.Get(a, id).a
+    end
+    if id == 0 or at.KindOf(a, id) != at.AST_IDENTIFIER:
+        ret 0
+    end
+    nm := at.Get(a, id).name
+    if not str.StartsWith(nm, "__salam_ws_"):
+        ret 0
+    end
+    n := str.Substr(nm, 11, str.Len(nm) - 11).ToInt()
+    if n < 0 or n >= g_lo_ws_decl.Len() or not ws_is_render(n):
+        ret 0
+    end
+    init := at.Get(a, g_lo_ws_decl.Get(n)).a
+    if init == 0 or ws_refs_state(lw, a, init):
+        ret 0
+    end
+    ret init
+end
+
 func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
     _ei := sm.LayoutElemOf(a, el)
     repeat at.ChildCount(a, el) in i:
@@ -641,7 +667,7 @@ func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
             // TODO(runtime/toolchain): support stable derived/dynamic keys with explicit mount/update/unmount/cleanup hook semantics and uniqueness validation,
             //   and align behavior with native keyed scopes for cross-target parity.
             if ws_refs_state(lw, a, ex):
-                ret 0
+                ret ws_key_param(lw, a, ex)
             end
             ret ex
         end
@@ -721,8 +747,13 @@ func ws_keys(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nid: int):
             mut key := ws_row_key(lw, a, n.b)
             if key == 0:
                 mut sl := lw.slots.Get(num)
+                if sl.key != 0 and at.KindOf(a, sl.key) == at.AST_IDENTIFIER and
+                    str.Equals(at.Get(a, sl.key).name, "_"):
+                    sl.key = 0
+                end
                 if sl.key == 0:
-                    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+                    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER and
+                        not str.Equals(at.Get(a, n.c).name, "_"):
                         sl.key = n.c
                     else:
                         sl.key = lo_ident(a, "__salam_ix_" + co.U64Toa(num as u64), nid)
@@ -1452,7 +1483,15 @@ function salamWsCur(i) {
 }
 function salamWsSlot(i, key) {
     var k = key === undefined || key === null ? "" : String(key);
-    var fk = (__salam_rendering || "root") + "/" + i + "/" + k, e = __salam_slots[fk];
+    var fk = (__salam_rendering || "root") + "/" + i + "/" + k;
+    if (__salam_seen[fk]) {
+        var dup = 2;
+        while (__salam_seen[fk + "#" + dup]) {
+            dup++;
+        }
+        fk = fk + "#" + dup;
+    }
+    var e = __salam_slots[fk];
     __salam_seen[fk] = 1;
     __salam_wasfresh = !e;
     if (!e) {

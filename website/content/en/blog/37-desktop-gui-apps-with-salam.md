@@ -144,7 +144,7 @@ end
 The same file builds both ways:
 
 ```bash
-salam page build counter.salam            # counter.html and counter.js for the web
+salam build counter.salam --platform=web            # counter.html and counter.js for the web
 salam run counter.salam --ui=native       # the same page in a native window
 salam build counter.salam --ui=native     # a native executable
 ```

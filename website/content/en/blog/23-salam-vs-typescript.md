@@ -23,7 +23,7 @@ If you are building a typical web product today, with a team that knows JavaScri
 | Type system       | Structural, gradual (`any`, casts), very expressive     | Static, no `any`; interfaces are structural, structs are nominal |
 | Sum types         | Discriminated unions by convention                      | Enums with data, checked `match`                                 |
 | Server            | Node.js and frameworks such as Express, Fastify, NestJS | `net/http` and `net/router` in the standard library              |
-| Pages             | JSX/TSX with React, Vue, Svelte and others              | The built-in page language, `salam page build`                   |
+| Pages             | JSX/TSX with React, Vue, Svelte and others              | The built-in page language, `salam build --platform=web`         |
 | Package ecosystem | npm, the largest package registry there is              | Large standard library, very small third-party ecosystem         |
 | Maturity          | Released in 2012, used across the industry              | Pre-1.0, few production deployments                              |
 
@@ -220,7 +220,7 @@ What Node has that Salam does not is the async model and its libraries. Salam ha
 
 On the frontend TypeScript is the default language of most frameworks. You write components in TSX, a bundler such as Vite turns them into JavaScript, and React, Vue, Svelte or Angular takes care of rendering and state. The ecosystem around them, from component libraries to testing tools, is enormous.
 
-Salam's approach is different. It has a [page language](/learn/layout/) built into the compiler: you describe the page as a tree of elements, and `salam page build` turns it into HTML, CSS and, when there are event handlers, JavaScript. Every element, attribute and CSS value is checked at compile time. A layout with parameters becomes an ordinary function that returns HTML, with every value escaped, so the same page can be rendered by a Salam server for each request:
+Salam's approach is different. It has a [page language](/learn/layout/) built into the compiler: you describe the page as a tree of elements, and `salam build --platform=web` turns it into HTML, CSS and, when there are event handlers, JavaScript. Every element, attribute and CSS value is checked at compile time. A layout with parameters becomes an ordinary function that returns HTML, with every value escaped, so the same page can be rendered by a Salam server for each request:
 
 ```salam
 component Tag(text: str):
@@ -259,7 +259,7 @@ end
 
 The script tag in the data comes out as text. The layout function is `pure`, so it cannot read files or the network while rendering; the handler fetches the data and passes it in. The article [Web development with Salam](/blog/web-development-with-salam/) walks through the page language from static pages to interactive components.
 
-For code that has to run in the browser, `salam js` compiles Salam to JavaScript, and `salam web` builds a page together with the Salam scripts it uses. Event handlers written in the page language go through the same JavaScript backend. One limit is worth knowing: JavaScript numbers are doubles, so on this backend an `i64` keeps only 53 bits of precision. `9007199254740993` printed from a native build prints `9007199254740992` from `salam js`, which is also what a TypeScript `number` would do. For whole programs without a JavaScript layer at all, Salam can target WebAssembly; the article [From native to WebAssembly](/blog/salam-webassembly-and-javascript/) covers those targets.
+For code that has to run in the browser, `salam build --platform=js` compiles Salam to JavaScript, and `salam build --platform=web` builds a page together with the Salam scripts it uses. Event handlers written in the page language go through the same JavaScript backend. One limit is worth knowing: JavaScript numbers are doubles, so on this backend an `i64` keeps only 53 bits of precision. `9007199254740993` printed from a native build prints `9007199254740992` from `salam build --platform=js`, which is also what a TypeScript `number` would do. For whole programs without a JavaScript layer at all, Salam can target WebAssembly; the article [From native to WebAssembly](/blog/salam-webassembly-and-javascript/) covers those targets.
 
 What Salam does not have is a component framework ecosystem. There is no Salam equivalent of the React library world, and the page language's interactive model (state in variables, handlers that change it, re-rendering only what changed) is young. For a large, highly interactive single-page application, TypeScript with a mature framework is the realistic choice today.
 
@@ -267,7 +267,7 @@ What Salam does not have is a component framework ecosystem. There is no Salam e
 
 A TypeScript project usually involves several tools: the `tsc` type checker, a runtime, a package manager (npm, pnpm, Yarn or Bun), a bundler, a linter, a formatter and a test runner. Each is excellent and each is a separate piece of configuration. Microsoft announced in 2025 that it is porting the TypeScript compiler to Go to make type checking much faster on large code bases, which says something about how much time big projects spend in that step.
 
-Salam puts the toolchain in one executable: `salam build`, `salam check`, `salam test`, `salam format`, `salam page build`, a language server for editors and a package manager that adds packages from GitHub. The standard library covers what a web backend usually pulls from npm: HTTP, routing, middleware, sessions, JSON, JWT, WebSocket, database drivers and more.
+Salam puts the toolchain in one executable: `salam build`, `salam check`, `salam test`, `salam format`, a language server for editors and a package manager that adds packages from GitHub. The standard library covers what a web backend usually pulls from npm: HTTP, routing, middleware, sessions, JSON, JWT, WebSocket, database drivers and more.
 
 The other side of that coin is the ecosystem. npm has packages for almost every task and every third-party API. Salam's own package registry is new and nearly empty, so anything outside the standard library you either write yourself or reach through Salam's C interop. Hiring is also different: almost every web developer can read TypeScript, while Salam developers are few.
 
@@ -301,7 +301,7 @@ In the project's router benchmark Salam answered about 4.2 times as many request
 
 ### Does Salam compile to JavaScript like TypeScript does?
 
-Yes, `salam js` compiles a Salam program to JavaScript for the browser, and page event handlers use the same backend. Unlike TypeScript, which is JavaScript plus types, Salam is a separate language, so some details differ, such as `i64` values being limited to 53 bits of precision there.
+Yes, `salam build --platform=js` compiles a Salam program to JavaScript for the browser, and page event handlers use the same backend. Unlike TypeScript, which is JavaScript plus types, Salam is a separate language, so some details differ, such as `i64` values being limited to 53 bits of precision there.
 
 ### Can I use npm packages from Salam?
 

@@ -144,7 +144,7 @@ salam bundle --target=arm64-apple-macos --format=app,tar
 همین پرونده به هر دو شکل ساخته می‌شود:
 
 ```bash
-salam page build counter.salam            # counter.html و counter.js برای وب
+salam build counter.salam --platform=web            # counter.html و counter.js برای وب
 salam run counter.salam --ui=native       # همان صفحه در یک پنجره‌ی بومی
 salam build counter.salam --ui=native     # یک پرونده‌ی اجرایی بومی
 ```

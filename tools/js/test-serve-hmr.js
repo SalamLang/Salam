@@ -81,8 +81,8 @@ function appSource(version, name, initial, extra) {
     "        paragraph:",
     '            id = "ver"',
     '            content = "' + version + '"',
-    "        end",
     extra || "",
+    "        end",
     rows.join("\n"),
     "    end",
     "end",
@@ -97,12 +97,14 @@ function start(args, cwd, port, log) {
     detached: true,
     stdio: ["ignore", out, out],
   });
-  child.stop = () => {
+  const exited = new Promise((resolve) => child.on("exit", resolve));
+  child.stop = async () => {
     try {
       process.kill(-child.pid);
     } catch (e) {
       child.kill();
     }
+    await Promise.race([exited, sleep(10000)]);
   };
   return child;
 }
@@ -123,7 +125,13 @@ async function listening(port) {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const log = path.join(dir, "serve.log");
   let server = start(["serve", src], dir, port, log);
-  const browser = await chromium.launch(browserOptions());
+  let browser = null;
+  try {
+    browser = await chromium.launch(browserOptions());
+  } catch (e) {
+    await server.stop();
+    throw e;
+  }
   const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -159,6 +167,25 @@ async function listening(port) {
     await page.click("#inc");
     check(
       "the new code handles clicks",
+      (await page.textContent("#label")) === "Count 3",
+    );
+
+    await page.evaluate(() => {
+      window.__before = document.getElementById("inc");
+    });
+    fs.writeFileSync(
+      src,
+      appSource("v2", "count", "0", '            color = "rgb(200, 0, 0)"'),
+    );
+    const styled = await until(
+      async () =>
+        (await page.$eval("#ver", (e) => getComputedStyle(e).color)) ===
+        "rgb(200, 0, 0)",
+      60000,
+    );
+    check("a style edit applies", !!styled);
+    check(
+      "a style edit keeps the state",
       (await page.textContent("#label")) === "Count 3",
     );
 
@@ -210,8 +237,7 @@ async function listening(port) {
 
     await page.evaluate(() => window.scrollTo(0, 600));
     const before = await page.evaluate(() => window.scrollY);
-    server.stop();
-    await sleep(500);
+    await server.stop();
     server = start(["serve", src], dir, port, log);
     await listening(port);
     const reloaded = await until(
@@ -229,7 +255,7 @@ async function listening(port) {
     );
     check("no script errors", errors.length === 0, errors.join(" | "));
   } finally {
-    server.stop();
+    await server.stop();
   }
 
   const dist = path.join(dir, "dist");
@@ -274,7 +300,7 @@ async function listening(port) {
     const y = await page.evaluate(() => window.scrollY);
     check("the reload keeps the scroll position", Math.abs(y - 800) < 5, y);
   } finally {
-    server2.stop();
+    await server2.stop();
   }
 
   const ssrSrc = path.resolve(__dirname, "../../tests/en/ssr/site");
@@ -343,7 +369,7 @@ async function listening(port) {
       );
       check("the next good save recovers", !!back);
     } finally {
-      server3.stop();
+      await server3.stop();
     }
   }
   await browser.close();

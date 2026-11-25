@@ -80,8 +80,8 @@ wait_event() {
 wait_event "$last"
 echo >>"$T/site/app.salam"
 wait "$EV"
-case "$(cat "$T/ev.txt")" in *'"kind":"swap"'*) r=swap ;; *) r=other ;; esac
-check "a source change sends swap" "$r" "swap"
+case "$(cat "$T/ev.txt")" in *'"kind":"style"'*) r=style ;; *) r=other ;; esac
+check "a change that leaves the markup alone sends style" "$r" "style"
 last=$(sed -n 's/^id: //p' "$T/ev.txt")
 
 wait_event "$last"
@@ -140,9 +140,12 @@ done
 left=$(find "$T/site" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')
 check "nothing is written next to the sources" "$left" "app.salam extra.css index.html leak.txt logo.txt "
 
+running=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null
 PID=""
+stopped=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
+check "stopping the server removes its build directory" "$stopped" "$((running - 1))"
 "$SALAM" serve "$T/site/app.salam" --port="$PORT" >"$T/b1.log" 2>&1 &
 PID=$!
 sleep 3
@@ -151,6 +154,23 @@ before=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 check "busy port fails" "$?" "2"
 after=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 check "busy port leaves no build directory" "$after" "$before"
+kill "$PID" 2>/dev/null
+wait "$PID" 2>/dev/null
+PID=""
+
+mkdir "$T/multi"
+printf 'page:\n    title = "A"\n    content = "page a"\nend\n' >"$T/multi/a.salam"
+printf 'page:\n    title = "B"\n    content = "page b"\nend\n' >"$T/multi/b.salam"
+"$SALAM" serve "$T/multi/a.salam" "$T/multi/b.salam" --port="$PORT" >"$T/multi.log" 2>&1 &
+PID=$!
+i=0
+while [ $i -lt 100 ]; do
+    curl -s -o /dev/null "http://127.0.0.1:$PORT/__salam_hmr" 2>/dev/null && break
+    sleep 0.3
+    i=$((i + 1))
+done
+check "multi page: second page is served" "$(curl -s "http://127.0.0.1:$PORT/b" | grep -c 'page b')" "1"
+check "multi page: unknown page is a 404" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/nothing")" "404"
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null
 PID=""

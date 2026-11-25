@@ -42,14 +42,14 @@ a `.salam` file and choose **Run**, or click the green arrow beside `func main`.
 The **Tools | Salam** menu works on the project around the current file, found
 by walking up to its `salam.toml`:
 
-| Action                        | Runs                                                              |
-| ----------------------------- | ----------------------------------------------------------------- |
-| Run Project                   | `salam run DIR --platform=<first platform in [project]>`          |
-| Run Project for Platform...   | the same, with the platform picked from the list                  |
-| Build Project                 | `salam build DIR --platform=<first platform in [project]>`        |
-| Build Project for Platform... | the same, with the platform picked from the list                  |
-| Check Project                 | `salam check DIR`                                                 |
-| New Project...                | asks for a folder, then `salam init` in a terminal tab            |
+| Action                        | Runs                                                       |
+| ----------------------------- | ---------------------------------------------------------- |
+| Run Project                   | `salam run DIR --platform=<first platform in [project]>`   |
+| Run Project for Platform...   | the same, with the platform picked from the list           |
+| Build Project                 | `salam build DIR --platform=<first platform in [project]>` |
+| Build Project for Platform... | the same, with the platform picked from the list           |
+| Check Project                 | `salam check DIR`                                          |
+| New Project...                | asks for a folder, then `salam init` in a terminal tab     |
 
 Each of these creates (and reuses) a run configuration, so results appear in the
 Run window and can be rerun from the toolbar. Outside a project with a

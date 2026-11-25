@@ -44,15 +44,15 @@ See [`docs/LSP.md`](../../docs/LSP.md) for what the server does.
 
 `external-tools.json` defines Kate External Tools that call the compiler:
 
-| Tool                  | Command                                              | Output           |
-| --------------------- | ---------------------------------------------------- | ---------------- |
-| Salam: Run            | `salam run FILE`                                     | tool output pane |
-| Salam: Build          | `salam build FILE`                                   | tool output pane |
-| Salam: Check          | `salam check FILE`                                   | tool output pane |
-| Salam: Format         | `salam format FILE`, then the file is reloaded       | none             |
-| Salam: Build for web  | `salam build FILE --platform=web`                    | tool output pane |
-| Salam: Run project    | `salam run . --platform=web` in the project folder   | tool output pane |
-| Salam: New project    | `konsole -e salam init` in the file's folder         | a terminal       |
+| Tool                 | Command                                            | Output           |
+| -------------------- | -------------------------------------------------- | ---------------- |
+| Salam: Run           | `salam run FILE`                                   | tool output pane |
+| Salam: Build         | `salam build FILE`                                 | tool output pane |
+| Salam: Check         | `salam check FILE`                                 | tool output pane |
+| Salam: Format        | `salam format FILE`, then the file is reloaded     | none             |
+| Salam: Build for web | `salam build FILE --platform=web`                  | tool output pane |
+| Salam: Run project   | `salam run . --platform=web` in the project folder | tool output pane |
+| Salam: New project   | `konsole -e salam init` in the file's folder       | a terminal       |
 
 Every tool saves the current document first and runs in the file's folder; the
 project tool runs in the root of the open Kate project. Platforms other than
@@ -91,8 +91,8 @@ Markdown files, the second adds build targets for `salam build`, `salam check`,
 shows in its target list.
 
 KDevelop has no Salam project template. Open the folder from `salam init` with
-**Project | Open / Import Project**, choose the **Custom Build System**, and in
-**Project | Open Configuration | Custom Build System** set the build action to
+**Project | Open / Import Project**, choose the custom build tool, and in
+**Project | Open Configuration**, under the custom build tool, set the build action to
 `salam build` and the install action to `salam install`, with the folder as
 the build directory. Add a launch configuration of type **Compiled Binary** or
 **Custom Script** running `salam run` in the project folder. The same

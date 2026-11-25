@@ -160,15 +160,15 @@ page:
             next++
         end
     end
-    if tasks.len() == 0:
+    if tasks.Len() == 0:
         paragraph: content = "Nothing to do yet" end
     end
     list:
-        each t in tasks:
+        each _, t in tasks:
             Task: name = t end
         end
     end
-    paragraph: content = "" + tasks.len() + " tasks" end
+    paragraph: content = "" + tasks.Len() + " tasks" end
 end
 ```
 

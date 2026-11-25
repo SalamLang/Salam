@@ -127,7 +127,7 @@ for f in "$PAGES"/*.salam; do
     mkdir -p "$work"
     total=$((total + 1))
 
-    if ! (cd "$work" && "$SALAM" page build "$f" --inline --no-minify --output="$work/web.html" --no-color --log-level=error) >"$work/web-build.log" 2>&1; then
+    if ! (cd "$work" && "$SALAM" build "$f" --platform=web --inline --no-minify --output="$work/web.html" --no-color --log-level=error) >"$work/web-build.log" 2>&1; then
         say "ERROR $name (web build failed: $(head -1 "$work/web-build.log"))"
         over=$((over + 1))
         continue

@@ -21,7 +21,7 @@ bundle="$jobdir/bundle.js"
 
 buildlog="$jobdir/build.log"
 build_once() {
-    (cd "$jobdir" && "$SALAM_BIN" js "$f" --output="$bundle" \
+    (cd "$jobdir" && "$SALAM_BIN" build "$f" --platform=js --output="$bundle" \
         --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
 }
 

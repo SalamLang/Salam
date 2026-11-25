@@ -24,7 +24,7 @@ export SALAM_STD="$root/std"
 cd "$work" || exit 1
 cp -R "${SITE:-$root/tests/en/ssr/site}" site
 
-"$salam" page build --ssr="$work/dist" site --no-color --log-level=error >build.log 2>&1 || {
+"$salam" build site --platform=web --ssr="$work/dist" --no-color --log-level=error >build.log 2>&1 || {
     echo "build failed"
     sed 's/^/  /' build.log | head -20
     exit 1

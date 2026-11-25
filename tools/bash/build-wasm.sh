@@ -126,5 +126,5 @@ BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
     -s EXPORTED_FUNCTIONS="['_main','_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_translate','_salam_web_last_failed','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $BUNDLE.js (+ .wasm, .data)"
-"$SALAM" web "$OUT_DIR/page.salam" --output="$OUT_DIR/index.html"
+"$SALAM" build "$OUT_DIR/page.salam" --platform=web --output="$OUT_DIR/index.html"
 echo "built $OUT_DIR/index.html"

@@ -26,7 +26,7 @@ func _filter_extent(s: style.Style, font: f64): f64:
     ret 0.0
 end
 
-func _anc_ext(node: int): f64:
+func _up_ext(node: int): f64:
     mut e := 0.0
     mut p := _e.dom.nodes[node].parent
     until p >= 0:
@@ -46,7 +46,7 @@ func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
     mut t := r[1]
     mut rr := r[2]
     mut bt := r[3]
-    ae := _anc_ext(node)
+    ae := _up_ext(node)
     l -= ae
     t -= ae
     rr += ae
@@ -71,14 +71,14 @@ func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
     ret x1 > x0 and y1 > y0
 end
 
-func _node_key(node: int, anc: i64): i64:
+func _node_key(node: int, ups: i64): i64:
     mut h := 1469598103934665603 as i64
     b := _e.boxes[node]
     h = _hf(_hf(_hf(_hf(h, b.x), b.y), b.w), b.h)
     h = _hf(_hf(_hf(_hf(h, b.clip_x0), b.clip_y0), b.clip_x1), b.clip_y1)
     h = _hmix(h, _e.us[node].ihash)
     h = _hmix(h, _e.us[node].phash)
-    h = _hmix(h, anc)
+    h = _hmix(h, ups)
     c := _e.ctl[node]
     h = _hmix(
         h,
@@ -153,17 +153,24 @@ func _diff_records():
         seen.Push(false)
     end
     mut nrecs := Vector {} as Vector<_Rec>
+    _e.sink.Clear()
+    repeat _e.dom.nodes.Len():
+        _e.sink.Push(1 << 30)
+        _e.sink.Push(1 << 30)
+        _e.sink.Push(0 - (1 << 30))
+        _e.sink.Push(0 - (1 << 30))
+    end
     cw := math.Ceil(_e.width * _e.scale) as int
     ch := math.Ceil(_e.height * _e.scale) as int
-    mut anc := Vector {} as Vector<i64>
-    defer anc.Free()
+    mut ups := Vector {} as Vector<i64>
+    defer ups.Free()
     repeat _e.dom.nodes.Len() in node:
         pa := _e.dom.nodes[node].parent
         mut ah := 0 as i64
         if pa >= 0:
-            ah = _hmix(_hmix(anc[pa], _e.us[pa].fhash), _xf_hash(pa, 0 as i64))
+            ah = _hmix(_hmix(ups[pa], _e.us[pa].fhash), _xf_hash(pa, 0 as i64))
         end
-        anc.Push(ah)
+        ups.Push(ah)
         mut x0 := 0
         mut y0 := 0
         mut x1 := 0
@@ -171,6 +178,10 @@ func _diff_records():
         if not _ink(node, x0, y0, x1, y1):
             continue
         end
+        _e.sink[node * 4] = x0
+        _e.sink[node * 4 + 1] = y0
+        _e.sink[node * 4 + 2] = x1
+        _e.sink[node * 4 + 3] = y1
         uid := _e.ctl[node].uid
         if x1 <= 0 or y1 <= 0 or x0 >= cw or y0 >= ch:
             mut was_off := true
@@ -223,7 +234,52 @@ func _diff_records():
     end
     _e.recs.Free()
     _e.recs = nrecs
+    if _e.dom.nodes.Len() > 0:
+        _sink_up(0)
+    end
+    _e.sink_ok = true
     _damage_backdrops()
+end
+
+func _sink_up(node: int):
+    nd := _e.dom.nodes[node]
+    if nd.k == _K_DIALOG or node == _e.popup:
+        _e.sink[node * 4] = 0 - (1 << 30)
+        _e.sink[node * 4 + 1] = 0 - (1 << 30)
+        _e.sink[node * 4 + 2] = 1 << 30
+        _e.sink[node * 4 + 3] = 1 << 30
+    end
+    b := node * 4
+    each k in nd.kids:
+        _sink_up(k)
+        c := k * 4
+        if _e.sink[c] < _e.sink[c + 2]:
+            _e.sink[b] = math.MinI(_e.sink[b], _e.sink[c])
+            _e.sink[b + 1] = math.MinI(_e.sink[b + 1], _e.sink[c + 1])
+            _e.sink[b + 2] = math.MaxI(_e.sink[b + 2], _e.sink[c + 2])
+            _e.sink[b + 3] = math.MaxI(_e.sink[b + 3], _e.sink[c + 3])
+        end
+    end
+end
+
+func _sink_skip(node: int): bool:
+    if not _e.sink_ok or node * 4 + 3 >= _e.sink.Len():
+        ret false
+    end
+    b := node * 4
+    x0 := _e.sink[b] - 2
+    y0 := _e.sink[b + 1] - 2
+    x1 := _e.sink[b + 2] + 2
+    y1 := _e.sink[b + 3] + 2
+    if x1 <= x0 or y1 <= y0:
+        ret true
+    end
+    if _e.full:
+        cw := math.Ceil(_e.width * _e.scale) as int
+        ch := math.Ceil(_e.height * _e.scale) as int
+        ret x1 <= 0 or y1 <= 0 or x0 >= cw or y0 >= ch
+    end
+    ret not _damage_hits(x0, y0, x1, y1)
 end
 
 func _damage_area(): i64:

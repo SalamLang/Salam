@@ -32,10 +32,37 @@ the server command `salam dap` and launch parameters such as
 `{"program": "$FILE_PATH$"}`; breakpoints in `.salam` files then work through
 gdb or lldb. [`docs/LSP.md`](../../docs/LSP.md) describes `salam dap`.
 
-A Salam run configuration runs a file with `salam run` (compiled) or
-`salam exec` (the interpreter), with program arguments and a working
-directory. Right-click a `.salam` file and choose **Run**, or click the green
-arrow beside `func main`.
+A Salam run configuration runs a file or a project directory with one of
+`salam run`, `build`, `check`, `exec` or `test`, with program arguments and a
+working directory. For **run** and **build** it also takes a **Platform**
+(`web`, `js`, `android`, `ios`, `linux`, `macos`, `windows` or `all`), which
+becomes `--platform=...`; leave it empty for the compiler's default. Right-click
+a `.salam` file and choose **Run**, or click the green arrow beside `func main`.
+
+The **Tools | Salam** menu works on the project around the current file, found
+by walking up to its `salam.toml`:
+
+| Action                        | Runs                                                              |
+| ----------------------------- | ----------------------------------------------------------------- |
+| Run Project                   | `salam run DIR --platform=<first platform in [project]>`          |
+| Run Project for Platform...   | the same, with the platform picked from the list                  |
+| Build Project                 | `salam build DIR --platform=<first platform in [project]>`        |
+| Build Project for Platform... | the same, with the platform picked from the list                  |
+| Check Project                 | `salam check DIR`                                                 |
+| New Project...                | asks for a folder, then `salam init` in a terminal tab            |
+
+Each of these creates (and reuses) a run configuration, so results appear in the
+Run window and can be rerun from the toolbar. Outside a project with a
+`[project]` table they run without `--platform`. New Project needs the bundled
+Terminal plugin; the wizard asks its questions in that terminal. If the terminal
+cannot be opened the plugin shows the command to run by hand.
+
+The status bar shows the blocks around the caret in a Salam file, such as
+`page > box > button` or `func main > if`. The chain is read from the text (a
+line ending in a colon opens a block, `end` closes one), so it works while the
+file has errors. It is a status bar item, not breadcrumbs, because TextMate
+files have no syntax tree for the breadcrumbs bar to use. Right-click the status
+bar to hide it.
 
 Tests run the same way. In a `_test.salam` file there is a green arrow beside
 every `test_` function, and right-clicking the file or a directory runs all of
@@ -45,7 +72,8 @@ show the assertion that failed, and clicking a test jumps to its line. The
 optional test name filter.
 
 `build.sh --smoke path/to/salam` also starts that compiler through the
-plugin's own classes and checks the reply, without an IDE. `build.sh --verify`
+plugin's own classes and checks the reply, and checks the block chain and
+`salam.toml` readers, without an IDE. `build.sh --verify`
 runs JetBrains' Plugin Verifier against the IDE build.
 
 The options below need no plugin of ours.

@@ -22,27 +22,20 @@ import fs.watcher
 import net.http
 import net.router
 import net.mime
+import net.devreload
 
 include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
 
-const k_dev_client_a := `<script>(function(){if(window.__salamHmr){return;}window.__salamHmr=1;var K="salam-hmr-scroll";`
-const k_dev_client_b := `try{var y=sessionStorage.getItem(K);if(y!==null){sessionStorage.removeItem(K);addEventListener("load",function(){scrollTo(0,+y);});}}catch(e){}var box=null;`
-const k_dev_client_c := `function clear(){if(box){box.remove();box=null;}}function show(t){clear();box=document.createElement("div");box.setAttribute("style","position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(20,20,24,.95);color:#f5f5f5;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow:auto;padding:24px;box-sizing:border-box");`
-const k_dev_client_d := `var h=document.createElement("div");h.setAttribute("style","color:#ff6b6b;font-size:16px;margin-bottom:12px");h.textContent="Build failed. Fix the error and save, this page updates by itself.";var p=document.createElement("pre");p.setAttribute("style","margin:0;white-space:pre-wrap");p.textContent=t;box.appendChild(h);box.appendChild(p);box.onclick=function(e){if(e.target===box){clear();}};document.documentElement.appendChild(box);}`
-const k_dev_client_e := `function reload(){try{sessionStorage.setItem(K,String(window.scrollY));}catch(e){}location.reload();}function css(){var l=document.querySelectorAll('link[rel="stylesheet"]');for(var i=0;i<l.length;i++){var u=new URL(l[i].href);u.searchParams.set("_hmr",String(Date.now()));l[i].href=u.toString();}}`
-const k_dev_client_f := `var es=new EventSource("/__salam_hmr");es.onmessage=function(m){var d;try{d=JSON.parse(m.data);}catch(e){return;}if(d.kind==="error"){show(d.error);}else if(d.kind==="reload"){reload();}else if(d.kind==="css"){clear();css();}else if(d.kind==="hello"){clear();}};})();</script>`
-
 mut g_dev_root := ""
 mut g_dev_out := ""
 mut g_dev_entry := ""
+mut g_dev_args := ""
+mut g_dev_home := "index.html"
+mut g_dev_multi := false
 mut g_dev_exe := ""
-mut g_dev_epoch := ""
 mut g_dev_static := false
-mut g_dev_seq := 0
 mut g_dev_slot := 0 - 1
-mut g_dev_kind := 0
-mut g_dev_failed := 0
 
 func dev_quote(s: str): str:
     if SALAM_OS_WINDOWS:
@@ -58,45 +51,6 @@ func dev_cd(dir: str): str:
     else:
         ret "cd " + dev_quote(dir)
     end
-end
-
-func dev_client(): str:
-    ret k_dev_client_a + k_dev_client_b + k_dev_client_c + k_dev_client_d + k_dev_client_e +
-        k_dev_client_f
-end
-
-func dev_inject(html: str): str:
-    script := dev_client()
-    cut := str.LastIndex(html, "</body>")
-    if cut >= 0:
-        ret str.Substr(html, 0, cut) + script + str.Substr(html, cut, html.Len() - cut)
-    end
-    ret html + script
-end
-
-func dev_json_escape(s: str): str:
-    mut out := ""
-    mut n := s.Len()
-    if n > 20000:
-        n = 20000
-    end
-    repeat n in i:
-        c := str.Substr(s, i, 1)
-        if str.Equals(c, "\\"):
-            out += "\\\\"
-        else str.Equals(c, "\""):
-            out += "\\\""
-        else str.Equals(c, "\n"):
-            out += "\\n"
-        else str.Equals(c, "\r"):
-            out += ""
-        else str.Equals(c, "\t"):
-            out += "\\t"
-        else:
-            out += c
-        end
-    end
-    ret out
 end
 
 func dev_scan(dir: str, sig &: i64, depth: int):
@@ -132,10 +86,18 @@ func dev_log_path(): str:
     ret join_path2(g_dev_out, "build.log")
 end
 
+func dev_env_prefix(): str:
+    if SALAM_OS_WINDOWS:
+        ret "set SALAM_DEV_HMR=1&& "
+    else:
+        ret "SALAM_DEV_HMR=1 "
+    end
+end
+
 func dev_build(css_only: bool): int:
     mut prev := ""
     if g_dev_slot >= 0:
-        prev = io.ReadFile(join_path2(dev_site_dir(g_dev_slot), "index.html"))
+        prev = io.ReadFile(join_path2(dev_site_dir(g_dev_slot), g_dev_home))
     end
     slot := g_dev_slot == 0 ? 1 : 0
     dir := dev_site_dir(slot)
@@ -144,21 +106,23 @@ func dev_build(css_only: bool): int:
         ret 2
     end
     log := dev_log_path()
-    cmd := dev_cd(dir) + " && " + dev_quote(g_dev_exe) + " web " + dev_quote(g_dev_entry) +
-        " --inline --output=index.html --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
+    mode := g_dev_multi ? "" : " --inline --output=index.html"
+    cmd := dev_cd(dir) + " && " + dev_env_prefix() + dev_quote(g_dev_exe) +
+        (g_dev_multi ? " page build " : " web ") + g_dev_args + mode +
+        " --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
     rc := os.Run(cmd)
-    ok := rc == 0 and os.Exists(join_path2(dir, "index.html"))
+    ok := rc == 0 and os.Exists(join_path2(dir, g_dev_home))
     if ok:
-        g_dev_kind = 0
-        if css_only and str.Equals(prev, io.ReadFile(join_path2(dir, "index.html"))):
-            g_dev_kind = 1
-        end
+        _w := io.WriteFile(log, "")
         g_dev_slot = slot
-        g_dev_failed = 0
+        same := str.Equals(prev, io.ReadFile(join_path2(dir, g_dev_home)))
+        devreload.Bump(css_only and same ? 1 : (g_dev_multi ? 0 : 2))
     else:
-        g_dev_failed = 1
+        if str.Len(io.ReadFile(log)) == 0:
+            _w2 := io.WriteFile(log, "build failed with exit code " + co.I64Toa(rc as i64) + "\n")
+        end
+        devreload.Bump(0)
     end
-    g_dev_seq++
     ret ok ? 0 : 1
 end
 
@@ -178,7 +142,7 @@ func dev_watch():
     watcher.IgnoreHidden(w)
     watcher.Snapshot(w)
     until true:
-        time.Sleep(250)
+        _woke := watcher.Wait(w, watcher.IsNative(w) ? 1000 : 250)
         mut events := watcher.PollSettled(w, 60)
         mut first := ""
         mut count := 0
@@ -201,9 +165,7 @@ func dev_watch():
             continue
         end
         if g_dev_static:
-            g_dev_kind = css_only ? 1 : 0
-            g_dev_failed = 0
-            g_dev_seq++
+            devreload.Bump(css_only ? 1 : 0)
             io.EPrintln("salam: " + first + " changed, reloading")
             continue
         end
@@ -213,61 +175,12 @@ func dev_watch():
             time.Sleep(1600)
         else:
             io.EPrintln(
-                st == 0 ? "salam: rebuilt after " + first + " changed" : "salam: build failed after " +
-                    first + " changed, the browser shows the errors"
+                st == 0 ? "salam: rebuilt after " + first +
+                    " changed" : "salam: build failed after " + first +
+                    " changed, the browser shows the errors"
             )
         end
     end
-end
-
-func dev_state_event(kind: str, text: str): str:
-    id := g_dev_epoch + ":" + co.I64Toa(g_dev_seq as i64)
-    ret "retry: 500\nid: " + id + "\ndata: {\"kind\":\"" + kind + "\",\"error\":\"" +
-        dev_json_escape(text) + "\"}\n\n"
-end
-
-func dev_current_kind(): str:
-    if g_dev_failed == 1:
-        ret "error"
-    end
-    ret g_dev_kind == 1 ? "css" : "reload"
-end
-
-func dev_events(ctx: i64):
-    http.SetHeader(ctx, "Content-Type", "text/event-stream")
-    http.SetHeader(ctx, "Cache-Control", "no-store")
-    http.SetHeader(ctx, "X-Accel-Buffering", "no")
-    hdr := http.Header(ctx, "Last-Event-ID")
-    last := str.Len(hdr) > 0 ? hdr : http.Query(ctx, "v")
-    mut kind := "hello"
-    if str.Len(last) == 0:
-        if g_dev_failed == 1:
-            kind = "error"
-        end
-    else:
-        cut := str.IndexOf(last, ":")
-        epoch := cut > 0 ? str.Substr(last, 0, cut) : ""
-        seq := cut > 0 ? str.Substr(last, cut + 1, str.Len(last) - cut - 1) : ""
-        if not str.Equals(epoch, g_dev_epoch):
-            kind = "reload"
-        else:
-            mut waited := 0
-            until str.Equals(seq, co.I64Toa(g_dev_seq as i64)) and waited < 25000:
-                time.Sleep(100)
-                waited += 100
-            end
-            if str.Equals(seq, co.I64Toa(g_dev_seq as i64)):
-                kind = "ping"
-            else:
-                kind = dev_current_kind()
-            end
-        end
-    end
-    mut text := ""
-    if str.Equals(kind, "error"):
-        text = io.ReadFile(dev_log_path())
-    end
-    http.Text(ctx, http.Own(ctx, dev_state_event(kind, text)))
 end
 
 func dev_page_path(method: str, path: str, accept: str): bool:
@@ -301,6 +214,9 @@ func dev_resolve(base: str, path: str): str:
     if os.IsDir(f):
         f = join_path2(f, "index.html")
     end
+    if not os.Exists(f) and g_dev_multi and not str.Contains(path, "."):
+        f += ".html"
+    end
     if not os.Exists(f) or os.IsDir(f):
         ret ""
     end
@@ -310,7 +226,7 @@ end
 
 func dev_send(ctx: i64, real: str):
     if str.EndsWith(real, ".html") or str.EndsWith(real, ".htm"):
-        http.Html(ctx, http.Own(ctx, dev_inject(io.ReadFile(real))))
+        http.Html(ctx, http.Own(ctx, devreload.Inject(io.ReadFile(real))))
         ret
     end
     _ok := http.File(ctx, http.Own(ctx, str.Clone(real)), mime.MimeType(real))
@@ -339,7 +255,7 @@ func dev_handle(ctx: i64):
             ret
         end
         if dev_page_path(http.Method(ctx), path, http.Header(ctx, "Accept")):
-            idx := dev_resolve(site, "/index.html")
+            idx := dev_resolve(site, "/" + g_dev_home)
             if str.Len(idx) > 0:
                 dev_send(ctx, idx)
                 ret
@@ -352,7 +268,7 @@ func dev_handle(ctx: i64):
                 http.Own(
                     ctx,
                     "<!doctype html><html><head><meta charset=\"utf-8\"><title>Build failed</title></head><body style=\"background:#1e1e1e\">" +
-                        dev_client() + "</body></html>"
+                        devreload.Script() + "</body></html>"
                 )
             )
             ret
@@ -382,7 +298,7 @@ end
 
 func dev_listen(host: str, port: int): int:
     mut r := router.NewRouter()
-    router.Get(r, "/__salam_hmr", dev_events)
+    router.Get(r, "/__salam_hmr", devreload.Handler)
     router.SetFallback(r, dev_handle)
     mut s := http.NewServer(port)
     http.SetHost(s, host)
@@ -395,7 +311,35 @@ func dev_listen(host: str, port: int): int:
     ret 0
 end
 
+func dev_purge_stale():
+    tmp := os.TempDir()
+    entries := os.ListDir(tmp)
+    defer entries.Free()
+    each name in entries:
+        if not str.StartsWith(name, "salam-serve-"):
+            continue
+        end
+        rest := str.Substr(name, 12, str.Len(name) - 12)
+        dash := str.IndexOf(rest, "-")
+        if dash <= 0:
+            continue
+        end
+        pid := str.Substr(rest, 0, dash)
+        full := join_path2(tmp, name)
+        mut dead := false
+        if os.IsDir("/proc"):
+            dead = not os.IsDir("/proc/" + pid)
+        else:
+            dead = time.Now() - fs.ModTime(full) > 86400
+        end
+        if dead and os.IsDir(full):
+            _rm := os.RemoveAll(full)
+        end
+    end
+end
+
 func dev_make_out(): bool:
+    dev_purge_stale()
     repeat 20 in attempt:
         cand := join_path2(
             os.TempDir(),
@@ -428,8 +372,11 @@ func dev_set_root(dir: str): bool:
         ret false
     end
     g_dev_root = rootreal
-    g_dev_epoch = co.I64Toa(os.Pid() as i64) + "x" + co.I64Toa(time.NowNanos())
     ret true
+end
+
+func dev_epoch(): str:
+    ret co.I64Toa(os.Pid() as i64) + "x" + co.I64Toa(time.NowNanos())
 end
 
 func dev_idle():
@@ -438,7 +385,7 @@ func dev_idle():
     end
 end
 
-func dev_serve(entry: str, host: str, port: int): int:
+func dev_serve(entry: str, more: str, host: str, port: int): int:
     g_dev_entry = os.RealPath(entry)
     if str.Len(g_dev_entry) == 0:
         g_dev_entry = entry
@@ -446,6 +393,23 @@ func dev_serve(entry: str, host: str, port: int): int:
     if not dev_set_root(dir_of(g_dev_entry)):
         io.EPrintln("salam: cannot read " + entry)
         ret 2
+    end
+    g_dev_args = dev_quote(g_dev_entry)
+    if str.Len(more) > 0:
+        g_dev_multi = true
+        g_dev_home = page_stem_of(g_dev_entry) + ".html"
+        extra := str.Split(more, "\n")
+        each e in extra:
+            real := os.RealPath(e)
+            if str.Len(real) == 0 or not str.Equals(dir_of(real), dir_of(g_dev_entry)):
+                io.EPrintln(
+                    "salam: every page must be in the same folder as " + entry + " ('" + e +
+                        "' is not)"
+                )
+                ret 2
+            end
+            g_dev_args += " " + dev_quote(real)
+        end
     end
     mut exe := ""
     if not sm.ExePath(exe):
@@ -456,6 +420,7 @@ func dev_serve(entry: str, host: str, port: int): int:
     if not dev_make_out():
         ret 2
     end
+    devreload.InitLocal(dev_epoch(), dev_log_path())
     st := dev_build(false)
     if st == 2:
         io.EPrintln("salam: cannot write the built page in " + g_dev_out)
@@ -485,6 +450,7 @@ func dev_serve_dir(dir: str, host: str, port: int): int:
     if not dev_make_out():
         ret 2
     end
+    devreload.Init(dev_epoch(), "")
     if dev_listen(host, port) != 0:
         _rm3 := os.RemoveAll(g_dev_out)
         ret 2

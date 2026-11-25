@@ -20,6 +20,7 @@ import str
 import io
 import time
 import net.tcp
+import fs.watcher
 import net.http
 
 include lg "../logger.salam"
@@ -119,11 +120,21 @@ func ssr_render_build(entry: str, out: str, lang: str, fwd: str): bool:
     ret true
 end
 
-func ssr_launch(out: str, host: str, port: int): process.Child:
+func ssr_error_text(out: str): str:
+    text := os.Exists(out + ".log") ? io.ReadFile(out + ".log") : ""
+    if str.Len(text) == 0:
+        ret "the server build failed\n"
+    end
+    ret text
+end
+
+func ssr_launch(out: str, host: str, port: int, errfile: str): process.Child:
     mut cmd := process.NewCommand(join_path2(out, "server"))
     cmd.Env("HOST", host)
     cmd.Env("PORT", co.I64Toa(port as i64))
     cmd.Env("SALAM_PUBLIC", join_path2(out, "public"))
+    cmd.Env("SALAM_DEV_HMR", "1")
+    cmd.Env("SALAM_DEV_HMR_ERR", errfile)
     ret process.Launch(cmd)
 end
 
@@ -372,7 +383,9 @@ pub func ServeRender(opt &: Dr): int:
         _rm := os.RemoveAll(work)
         ret 1
     end
-    mut child := ssr_launch(out, host, port)
+    hmr_err := join_path2(work, "hmr_error.txt")
+    _w0 := io.WriteFile(hmr_err, "")
+    mut child := ssr_launch(out, host, port, hmr_err)
     if not ssr_wait_listening(child, host, port):
         io.EPrintln("salam: the server did not start on " + host + ":" + co.I64Toa(port as i64))
         _k := child.Kill()
@@ -383,8 +396,13 @@ pub func ServeRender(opt &: Dr): int:
     println "salam: serving " + entry + " at http://" + host + ":" + co.I64Toa(port as i64) +
         "/ (rebuilds on save; Ctrl+C to stop)"
     io.Flush()
+    mut ww := watcher.New(root)
+    watcher.Ignore(ww, ".git")
+    watcher.Ignore(ww, "node_modules")
+    watcher.IgnoreHidden(ww)
+    watcher.Snapshot(ww)
     until true:
-        time.Sleep(500)
+        _woke := watcher.Wait(ww, watcher.IsNative(ww) ? 1000 : 500)
         mut now := 0 as i64
         dev_scan(root, now, 0)
         ssr_scan_assets(join_path2(root, "public"), now, 0)
@@ -394,13 +412,15 @@ pub func ServeRender(opt &: Dr): int:
         sig = now
         next := join_path2(work, slot == 0 ? "b" : "a")
         if not ssr_render_build(entry, next, lang, fwd):
+            _w1 := io.WriteFile(hmr_err, ssr_error_text(next))
             io.EPrintln("salam: build failed, the old server keeps running")
             continue
         end
         _k2 := child.Kill()
         _w := child.Wait(2000)
         child.Close()
-        mut fresh := ssr_launch(next, host, port)
+        _w2 := io.WriteFile(hmr_err, "")
+        mut fresh := ssr_launch(next, host, port, hmr_err)
         if ssr_wait_listening(fresh, host, port):
             child = fresh
             out = next
@@ -410,7 +430,7 @@ pub func ServeRender(opt &: Dr): int:
             _k3 := fresh.Kill()
             fresh.Close()
             io.EPrintln("salam: the rebuilt server did not start, restarting the previous one")
-            child = ssr_launch(out, host, port)
+            child = ssr_launch(out, host, port, hmr_err)
             if not ssr_wait_listening(child, host, port):
                 io.EPrintln(
                     "salam: the previous server did not start either; save a file to try again"

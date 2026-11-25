@@ -1,0 +1,336 @@
+package nativegen
+
+import str
+
+func call_lib(g &: Ng, sym: int, args: Vector<int>, ret_cls: int): int:
+    mut cls := Vector {} as Vector<int>
+    each r in args:
+        cls.Push(g.mc.vcls[r])
+    end
+    mask := place_args(g, args, cls, false, 0 - 1)
+    i := mi_new(g, M_CALL, 8)
+    g.mc.msym[i] = sym
+    g.mc.imm[i] = mask
+    g.mc.has_call = true
+    g.sy_used[sym] = true
+    cls.Free()
+    if ret_cls < 0:
+        ret 0 - 1
+    end
+    if ret_cls == 1 and g.arch == NG_ARCH_X86:
+        ret x87_to_xmm(g, 8)
+    end
+    r2 := vnew(g, ret_cls)
+    if ret_cls == 1:
+        _c := e_copy(g, r2, XMM0)
+    else:
+        _c2 := e_copy(g, r2, RAX)
+    end
+    ret r2
+end
+
+func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
+    if g.arch == NG_ARCH_ARM:
+        ret place_args_arm(g, args, cls, vararg, nfixed)
+    end
+    mut mask := 0 as i64
+    n := args.Len()
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        mut stk := 32
+        repeat n in p:
+            if p >= 4:
+                r := args[p]
+                if cls[p] == 1:
+                    _s := e_mr(g, M_FST, 8, mem_bi(RSP, stk as i64), r)
+                else:
+                    _s2 := e_mr(g, M_ST, 8, mem_bi(RSP, stk as i64), r)
+                end
+                stk += 8
+            end
+        end
+        if stk > g.mc.out_args:
+            g.mc.out_args = stk
+        end
+        repeat n in p2:
+            if p2 < 4:
+                r2 := args[p2]
+                if cls[p2] == 1:
+                    _c := e_copy(g, XMM0 + p2, r2)
+                    mask |= ((1 as i64) << ((XMM0 + p2) as i64))
+                    if vararg:
+                        gr := k_win_gp[p2]
+                        _q := e_rr(g, M_MOVQ_GX, 8, gr, r2)
+                        mask |= ((1 as i64) << (gr as i64))
+                    end
+                else:
+                    gr2 := k_win_gp[p2]
+                    _c2 := e_copy(g, gr2, r2)
+                    mask |= ((1 as i64) << (gr2 as i64))
+                end
+            end
+        end
+        ret mask
+    end
+    if g.arch == NG_ARCH_X86:
+        mut so := 0
+        repeat n in px:
+            r := args[px]
+            if cls[px] == 1 or cls[px] == 3:
+                fs := cls[px] == 3 ? 4 : 8
+                _sf := e_mr(g, M_FST, fs, mem_bi(RSP, so as i64), r)
+                so += fs
+            else:
+                _sg := e_mr(g, M_ST, 4, mem_bi(RSP, so as i64), r)
+                so += 4
+            end
+        end
+        g.last_argsz = so
+        so = align_up(so, 16)
+        if so > g.mc.out_args:
+            g.mc.out_args = so
+        end
+        ret mask
+    end
+    mut gi := 0
+    mut fi := 0
+    mut stk2 := 0
+    a64 := g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64
+    apple_va := g.arch == NG_ARCH_A64 and vararg and g.os == NG_OS_MACOS and nfixed >= 0
+    win_va := g.arch == NG_ARCH_A64 and vararg and g.os == NG_OS_WINDOWS
+    ngp_args := a64 ? 8 : 6
+    mut ord := 0
+    mut where := Vector {} as Vector<int>
+    repeat n in p3:
+        if cls[p3] != 2:
+            ord++
+        end
+        if apple_va and cls[p3] != 2 and ord > nfixed:
+            where.Push(0 - 1 - stk2)
+            stk2 += 8
+        else cls[p3] >= CA_STK and cls[p3] <= CA_STK_FP:
+            if cls[p3] == CA_STK_GP:
+                gi = ngp_args
+            else cls[p3] == CA_STK_FP:
+                fi = 8
+            end
+            where.Push(0 - 1 - stk2)
+            stk2 += 8
+        else cls[p3] == 1 and not win_va:
+            if fi < 8:
+                where.Push(XMM0 + fi)
+                fi++
+            else g.arch == NG_ARCH_RV64 and gi < ngp_args:
+                where.Push(k_a64_gp[gi])
+                gi++
+            else:
+                where.Push(0 - 1 - stk2)
+                stk2 += 8
+            end
+        else cls[p3] == 2 and g.arch == NG_ARCH_A64:
+            where.Push(A64_SRET)
+        else:
+            if gi < ngp_args:
+                where.Push(a64 ? k_a64_gp[gi] : k_sysv_gp[gi])
+                gi++
+            else:
+                where.Push(0 - 1 - stk2)
+                stk2 += 8
+            end
+        end
+    end
+    repeat n in p4:
+        w := where[p4]
+        if w < 0:
+            off := 0 - 1 - w
+            if cls[p4] == 1:
+                _s3 := e_mr(g, M_FST, 8, mem_bi(RSP, off as i64), args[p4])
+            else:
+                _s4 := e_mr(g, M_ST, 8, mem_bi(RSP, off as i64), args[p4])
+            end
+        end
+    end
+    if stk2 > g.mc.out_args:
+        g.mc.out_args = stk2
+    end
+    repeat n in p5:
+        w2 := where[p5]
+        if w2 >= 0 and w2 < XMM0 and cls[p5] == 1:
+            _q2 := e_rr(g, M_MOVQ_GX, 8, w2, args[p5])
+            mask |= ((1 as i64) << (w2 as i64))
+        else w2 >= 0:
+            _c3 := e_copy(g, w2, args[p5])
+            mask |= ((1 as i64) << (w2 as i64))
+        end
+    end
+    if vararg and g.arch == NG_ARCH_X64:
+        _m := e_movi(g, RAX, fi as i64)
+        mask |= (1 as i64)
+    end
+    where.Free()
+    ret mask
+end
+
+func ext_arg(g &: Ng, r: int, t: int, sign: bool): int:
+    bits := int_bits(g, t)
+    if bits >= 32:
+        ret r
+    end
+    r2 := gpr(g)
+    mut op := M_MOVZX_RR
+    if sign and bits > 1:
+        op = M_MOVSX_RR
+    end
+    i := e_rr(g, op, 4, r2, r)
+    g.mc.sz2[i] = bits <= 8 ? 1 : 2
+    ret r2
+end
+
+func entry_args_x86(g &: Ng):
+    mut stk := 8
+    if is_agg(g, g.f_ret) and not g.f_cabi:
+        g.retp = gpr(g)
+        _lr := e_rm(g, M_LD, 4, g.retp, Mem { k = MK_ARG, d = stk as i64 })
+        stk += 4
+    end
+    repeat g.f_args.Len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        agg := is_agg(g, t)
+        if g.f_cabi and (g.f_argf[k] & IF_BYVAL) != 0:
+            ca_arg_mem(g, v, Mem { k = MK_ARG, d = stk as i64 })
+            stk += align_up(ca_byval_size(g, v), 4)
+        else is_flt(g, t) and not agg:
+            r := vnew(g, 1)
+            fs := fsz(t)
+            _lf := e_rm(g, M_FLD, fs, r, Mem { k = MK_ARG, d = stk as i64 })
+            dv_entry_arg(g, v, 2, stk - 8)
+            stk += fs == 4 ? 4 : 8
+            g.vv[v] = r
+        else:
+            r2 := vnew(g, 0)
+            _lg := e_rm(g, M_LD, 4, r2, Mem { k = MK_ARG, d = stk as i64 })
+            dv_entry_arg(g, v, 2, stk - 8)
+            stk += 4
+            if agg:
+                g.vak[v] = AK_PTR
+                g.var_[v] = r2
+                g.vao[v] = 0
+            end
+            g.vv[v] = r2
+        end
+    end
+    ca_entry_sret(g)
+end
+
+func entry_args(g &: Ng):
+    if g.arch == NG_ARCH_ARM:
+        entry_args_arm(g)
+        ret
+    end
+    if g.arch == NG_ARCH_X86:
+        entry_args_x86(g)
+        win_main_init(g)
+        ret
+    end
+    mut gi := 0
+    mut fi := 0
+    mut pos := 0
+    w64 := g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64
+    if is_agg(g, g.f_ret) and not g.f_cabi:
+        g.retp = gpr(g)
+        if w64:
+            _c := e_copy(g, g.retp, RCX)
+            pos = 1
+        else g.arch == NG_ARCH_A64:
+            _c2a := e_copy(g, g.retp, A64_SRET)
+        else g.arch == NG_ARCH_RV64:
+            _c2r := e_copy(g, g.retp, k_a64_gp[0])
+            gi = 1
+        else:
+            _c2 := e_copy(g, g.retp, RDI)
+            gi = 1
+        end
+    end
+    mut stk := 16
+    if w64:
+        stk = 16 + 8 * pos
+    end
+    repeat g.f_args.Len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        if g.f_cabi and ca_entry_regs(g, v, g.f_argf[k], gi, fi, stk):
+            continue
+        end
+        mut cls := vcls_ty(g, t)
+        agg := is_agg(g, t)
+        if agg:
+            cls = 0
+        end
+        r := vnew(g, cls)
+        if w64:
+            if pos < 4:
+                if cls == 1:
+                    _c3 := e_copy(g, r, XMM0 + pos)
+                    dv_entry_arg(g, v, 1, XMM0 + pos)
+                else:
+                    _c4 := e_copy(g, r, k_win_gp[pos])
+                    dv_entry_arg(g, v, 1, k_win_gp[pos])
+                end
+            else:
+                if cls == 1:
+                    _l := e_rm(g, M_FLD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                else:
+                    _l2 := e_rm(g, M_LD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                end
+            end
+            stk += 8
+            pos++
+        else:
+            if cls == 1 and fi < 8:
+                _c5 := e_copy(g, r, XMM0 + fi)
+                dv_entry_arg(g, v, 1, XMM0 + fi)
+                fi++
+            else cls == 1 and g.arch == NG_ARCH_RV64 and gi < 8:
+                _mx := e_rr(g, M_MOVQ_XG, fsz(t), r, k_a64_gp[gi])
+                dv_entry_arg(g, v, 1, k_a64_gp[gi])
+                gi++
+            else cls == 0 and gi < (g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 ? 8 : 6):
+                gr := g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 ? k_a64_gp[gi] : k_sysv_gp[gi]
+                _c6 := e_copy(g, r, gr)
+                dv_entry_arg(g, v, 1, gr)
+                gi++
+            else:
+                if cls == 1:
+                    _l3 := e_rm(g, M_FLD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                else:
+                    _l4 := e_rm(g, M_LD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                end
+                if g.arch == NG_ARCH_X64 and g.os != NG_OS_WINDOWS:
+                    dv_entry_arg(g, v, 2, stk - 16)
+                end
+                stk += 8
+            end
+        end
+        if agg:
+            g.vak[v] = AK_PTR
+            g.var_[v] = r
+            g.vao[v] = 0
+        end
+        g.vv[v] = r
+    end
+    ca_entry_sret(g)
+    win_main_init(g)
+end
+
+func win_main_init(g &: Ng):
+    if g.os == NG_OS_WINDOWS and str.Equals(tab_str(g.syms, g.f_sym), "main"):
+        ci := mi_new(g, M_CALL, 8)
+        g.mc.msym[ci] = g.sym_main_init
+        g.mc.imm[ci] = 0 as i64
+        g.mc.has_call = true
+        g.sy_used[g.sym_main_init] = true
+        if g.mc.out_args < 32:
+            g.mc.out_args = 32
+        end
+    end
+end

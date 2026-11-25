@@ -1,0 +1,59 @@
+package nativegen
+
+func isel_rmw(g &: Ng, i: int):
+    t := g.i_ty[i]
+    sz := msz(g, t)
+    m := mem_of(g, g.i_a[i], 0 as i64)
+    rv := use_reg(g, g.i_b[i])
+    op := g.i_x[i]
+    r := gpr(g)
+    if op == RMW_XCHG:
+        _c := e_copy(g, r, rv)
+        _x := e_rm(g, M_XCHG, sz, r, m)
+    else op == RMW_ADD or op == RMW_SUB:
+        _c2 := e_copy(g, r, rv)
+        if op == RMW_SUB:
+            n := e_rr(g, M_UNARY, sz < 4 ? 4 : sz, r, 0 - 1)
+            g.mc.cc[n] = UN_NEG
+        end
+        _a := e_rm(g, M_LXADD, sz, r, m)
+    else:
+        loop := new_label(g)
+        _l := e_rm(g, M_LD, sz < 4 ? 4 : sz, RAX, m)
+        _lb := e_label(g, loop)
+        tt := gpr(g)
+        _c3 := e_copy(g, tt, RAX)
+        mut sub := ALU_AND
+        if op == RMW_OR: sub = ALU_OR end
+        if op == RMW_XOR: sub = ALU_XOR end
+        _o := e_alu(g, sub, 8, tt, rv)
+        _cx := e_mr(g, M_LCMPXCHG, sz, m, tt)
+        _j := e_jcc(g, X_NE, loop)
+        _c4 := e_copy(g, r, RAX)
+    end
+    set_res(g, i, r)
+end
+
+func isel_cmpxchg(g &: Ng, i: int):
+    t := g.i_ty[i]
+    vt := field_ty(g, t, 0)
+    sz := msz(g, vt)
+    m := mem_of(g, g.i_a[i], 0 as i64)
+    rc := use_reg(g, g.i_b[i])
+    rn := use_reg(g, g.i_c[i])
+    _c := e_copy(g, RAX, rc)
+    _x := e_mr(g, M_LCMPXCHG, sz, m, rn)
+    ok := gpr(g)
+    _s := e_setcc(g, X_E, ok)
+    slot := new_slot(g, tsize(g, t), talign(g, t))
+    old := gpr(g)
+    _c2 := e_copy(g, old, RAX)
+    _st := e_mr(g, M_ST, sz, frame_mem(slot, 0 as i64), old)
+    _st2 := e_mr(g, M_ST, 1, frame_mem(slot, field_off(g, t, 1) as i64), ok)
+    v := g.i_res[i]
+    if v >= 0:
+        g.vak[v] = AK_FRAME
+        g.var_[v] = slot
+        g.vao[v] = 0
+    end
+end

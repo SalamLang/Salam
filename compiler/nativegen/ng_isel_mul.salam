@@ -1,0 +1,114 @@
+package nativegen
+
+func lea_mul_k(g &: Ng, i: int): int:
+    op := g.i_op[i]
+    b := g.i_b[i]
+    if not is_cint(g, b):
+        ret 0 - 1
+    end
+    if op == OP_SHL:
+        sh := g.v_i[b]
+        if sh >= (1 as i64) and sh <= (3 as i64):
+            ret 1 << (sh as int)
+        end
+        ret 0 - 1
+    end
+    if op != OP_MUL:
+        ret 0 - 1
+    end
+    k := g.v_i[b]
+    each c in [2, 3, 4, 5, 6, 8, 9, 10, 12, 18, 20, 24, 36, 40, 72]:
+        if k == (c as i64):
+            ret c
+        end
+    end
+    ret 0 - 1
+end
+
+func lea_split(k: int, c &: int, sc &: int):
+    each s0 in [8, 4, 2, 1]:
+        if k % s0 == 0:
+            q := k / s0
+            if q == 1 or q == 3 or q == 5 or q == 9:
+                c = q
+                sc = s0
+                ret
+            end
+        end
+    end
+    c = 0
+    sc = 0
+end
+
+func mul_add_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    k := lea_mul_k(g, i)
+    if r < 0 or g.v_uses[r] != 1 or k < 0:
+        ret false
+    end
+    mut j := g.i_next[i]
+    mut seen := Vector {} as Vector<int>
+    repeat 8:
+        if j < 0:
+            seen.Free()
+            ret false
+        end
+        if g.i_op[j] == OP_ADD and g.i_ty[j] == g.i_ty[i] and (g.i_a[j] == r or g.i_b[j] == r) and
+            g.i_a[j] != g.i_b[j]:
+            o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+            if is_cint(g, o):
+                seen.Free()
+                ret is_imm32(g.v_i[o]) and (k == 2 or k == 3 or k == 5 or k == 9)
+            end
+            mut later := false
+            each sj in seen:
+                if g.i_res[sj] == o and lea_mul_k(g, sj) > 0 and g.v_uses[o] == 1:
+                    later = true
+                end
+            end
+            seen.Free()
+            ret not later
+        end
+        seen.Push(j)
+        j = g.i_next[j]
+    end
+    seen.Free()
+    ret false
+end
+
+func mul_small(g &: Ng, r: int, a: int, k: i64): bool:
+    mut base := 0
+    mut post := 0
+    if k == (3 as i64) or k == (5 as i64) or k == (9 as i64):
+        base = (k as int) - 1
+    else k == (6 as i64) or k == (10 as i64) or k == (18 as i64):
+        base = (k as int) / 2 - 1
+        post = 1
+    else k == (12 as i64) or k == (20 as i64) or k == (36 as i64):
+        base = (k as int) / 4 - 1
+        post = 2
+    else (k == (4 as i64) or k == (8 as i64)) and not g.off_mulp2 and
+        (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86):
+        _lk := e_rm(g, M_LEA, 8, r, Mem {
+            k = MK_BI,
+            b = 0 - 1,
+            i = a,
+            s = k as int,
+            d = 0 as i64
+        })
+        ret true
+    else:
+        ret false
+    end
+    _l := e_rm(g, M_LEA, 8, r, Mem {
+        k = MK_BI,
+        b = a,
+        i = a,
+        s = base,
+        d = 0 as i64
+    })
+    if post > 0:
+        e_shift(g, SH_SHL, 8, r, post)
+    end
+    ret true
+end

@@ -18,6 +18,7 @@ import str
 import io
 import fs
 import time
+import fs.watcher
 import net.http
 import net.router
 import net.mime
@@ -25,15 +26,23 @@ import net.mime
 include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
 
-const k_dev_reload_head := `<script>(function(){var v="`
-const k_dev_reload_tail := `";function poll(){fetch("/__salam_build",{cache:"no-store"}).then(function(r){return r.text();}).then(function(t){if(t!==v){location.reload();}}).catch(function(){});}setInterval(poll,700);poll();})();</script>`
+const k_dev_client_a := `<script>(function(){if(window.__salamHmr){return;}window.__salamHmr=1;var K="salam-hmr-scroll";`
+const k_dev_client_b := `try{var y=sessionStorage.getItem(K);if(y!==null){sessionStorage.removeItem(K);addEventListener("load",function(){scrollTo(0,+y);});}}catch(e){}var box=null;`
+const k_dev_client_c := `function clear(){if(box){box.remove();box=null;}}function show(t){clear();box=document.createElement("div");box.setAttribute("style","position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(20,20,24,.95);color:#f5f5f5;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow:auto;padding:24px;box-sizing:border-box");`
+const k_dev_client_d := `var h=document.createElement("div");h.setAttribute("style","color:#ff6b6b;font-size:16px;margin-bottom:12px");h.textContent="Build failed. Fix the error and save, this page updates by itself.";var p=document.createElement("pre");p.setAttribute("style","margin:0;white-space:pre-wrap");p.textContent=t;box.appendChild(h);box.appendChild(p);box.onclick=function(e){if(e.target===box){clear();}};document.documentElement.appendChild(box);}`
+const k_dev_client_e := `function reload(){try{sessionStorage.setItem(K,String(window.scrollY));}catch(e){}location.reload();}function css(){var l=document.querySelectorAll('link[rel="stylesheet"]');for(var i=0;i<l.length;i++){var u=new URL(l[i].href);u.searchParams.set("_hmr",String(Date.now()));l[i].href=u.toString();}}`
+const k_dev_client_f := `var es=new EventSource("/__salam_hmr");es.onmessage=function(m){var d;try{d=JSON.parse(m.data);}catch(e){return;}if(d.kind==="error"){show(d.error);}else if(d.kind==="reload"){reload();}else if(d.kind==="css"){clear();css();}else if(d.kind==="hello"){clear();}};})();</script>`
 
 mut g_dev_root := ""
 mut g_dev_out := ""
 mut g_dev_entry := ""
 mut g_dev_exe := ""
-mut g_dev_build := 0
-mut g_dev_sig := 0 as i64
+mut g_dev_epoch := ""
+mut g_dev_static := false
+mut g_dev_seq := 0
+mut g_dev_slot := 0 - 1
+mut g_dev_kind := 0
+mut g_dev_failed := 0
 
 func dev_quote(s: str): str:
     if SALAM_OS_WINDOWS:
@@ -43,12 +52,51 @@ func dev_quote(s: str): str:
     end
 end
 
-func dev_escape(s: str): str:
-    ret str.Replace(str.Replace(str.Replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+func dev_cd(dir: str): str:
+    if SALAM_OS_WINDOWS:
+        ret "cd /d " + dev_quote(dir)
+    else:
+        ret "cd " + dev_quote(dir)
+    end
 end
 
-func dev_reload_script(id: int): str:
-    ret k_dev_reload_head + co.I64Toa(id as i64) + k_dev_reload_tail
+func dev_client(): str:
+    ret k_dev_client_a + k_dev_client_b + k_dev_client_c + k_dev_client_d + k_dev_client_e +
+        k_dev_client_f
+end
+
+func dev_inject(html: str): str:
+    script := dev_client()
+    cut := str.LastIndex(html, "</body>")
+    if cut >= 0:
+        ret str.Substr(html, 0, cut) + script + str.Substr(html, cut, html.Len() - cut)
+    end
+    ret html + script
+end
+
+func dev_json_escape(s: str): str:
+    mut out := ""
+    mut n := s.Len()
+    if n > 20000:
+        n = 20000
+    end
+    repeat n in i:
+        c := str.Substr(s, i, 1)
+        if str.Equals(c, "\\"):
+            out += "\\\\"
+        else str.Equals(c, "\""):
+            out += "\\\""
+        else str.Equals(c, "\n"):
+            out += "\\n"
+        else str.Equals(c, "\r"):
+            out += ""
+        else str.Equals(c, "\t"):
+            out += "\\t"
+        else:
+            out += c
+        end
+    end
+    ret out
 end
 
 func dev_scan(dir: str, sig &: i64, depth: int):
@@ -73,68 +121,153 @@ func dev_scan(dir: str, sig &: i64, depth: int):
     end
 end
 
-func dev_signature(): i64:
-    mut sig := 0 as i64
-    dev_scan(g_dev_root, sig, 0)
-    ret sig
+func dev_site_dir(slot: int): str:
+    if g_dev_static:
+        ret str.Clone(g_dev_root)
+    end
+    ret join_path2(g_dev_out, "site" + co.I64Toa(slot as i64))
 end
 
-func dev_build(): int:
-    html := join_path2(g_dev_out, "index.html")
-    log := join_path2(g_dev_out, "build.log")
-    _rm := os.Remove(html)
-    cmd := dev_quote(g_dev_exe) + " web " + dev_quote(g_dev_entry) + " --output=" +
-        dev_quote(html) + " --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
-    rc := os.Run(cmd)
-    ok := rc == 0 and os.Exists(html)
-    reload := dev_reload_script(g_dev_build + 1)
-    mut page := ""
-    if ok:
-        page = io.ReadFile(html)
-        cut := str.LastIndex(page, "</body>")
-        if cut >= 0:
-            page = str.Substr(page, 0, cut) + reload + str.Substr(page, cut, page.Len() - cut)
-        else:
-            page += reload
-        end
-    else:
-        page = `<!doctype html><html><head><meta charset="utf-8"><title>Build failed</title></head>`
-        page += `<body style="margin:0;background:#1e1e1e;color:#eee;font:14px/1.5 monospace">`
-        page += `<pre style="margin:0;padding:24px;white-space:pre-wrap">` + dev_escape(
-            io.ReadFile(log)
-        ) + "</pre>"
-        page += reload + "</body></html>"
+func dev_log_path(): str:
+    ret join_path2(g_dev_out, "build.log")
+end
+
+func dev_build(css_only: bool): int:
+    mut prev := ""
+    if g_dev_slot >= 0:
+        prev = io.ReadFile(join_path2(dev_site_dir(g_dev_slot), "index.html"))
     end
-    if io.WriteFile(html, page) != page.Len():
+    slot := g_dev_slot == 0 ? 1 : 0
+    dir := dev_site_dir(slot)
+    _rm := os.RemoveAll(dir)
+    if os.Mkdir(dir) != 0:
         ret 2
     end
-    g_dev_build++
+    log := dev_log_path()
+    cmd := dev_cd(dir) + " && " + dev_quote(g_dev_exe) + " web " + dev_quote(g_dev_entry) +
+        " --inline --output=index.html --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
+    rc := os.Run(cmd)
+    ok := rc == 0 and os.Exists(join_path2(dir, "index.html"))
+    if ok:
+        g_dev_kind = 0
+        if css_only and str.Equals(prev, io.ReadFile(join_path2(dir, "index.html"))):
+            g_dev_kind = 1
+        end
+        g_dev_slot = slot
+        g_dev_failed = 0
+    else:
+        g_dev_failed = 1
+    end
+    g_dev_seq++
     ret ok ? 0 : 1
 end
 
+func dev_relative(path: str): str:
+    n := str.Len(g_dev_root)
+    if n > 0 and str.StartsWith(path, g_dev_root) and str.Len(path) > n + 1:
+        ret str.Substr(path, n + 1, str.Len(path) - n - 1)
+    end
+    ret str.Clone(path)
+end
+
 func dev_watch():
+    mut w := watcher.New(g_dev_root)
+    watcher.Ignore(w, ".git")
+    watcher.Ignore(w, "node_modules")
+    watcher.Ignore(w, ".salam-build")
+    watcher.IgnoreHidden(w)
+    watcher.Snapshot(w)
     until true:
-        time.Sleep(400)
-        sig := dev_signature()
-        if sig != g_dev_sig:
-            st := dev_build()
-            if st == 2:
-                io.EPrintln("salam: cannot write the built page, retrying")
-                time.Sleep(1600)
-            else:
-                g_dev_sig = sig
-                io.EPrintln(
-                    st == 0 ? "salam: rebuilt " +
-                        g_dev_entry : "salam: build failed, the page shows the errors"
-                )
+        time.Sleep(250)
+        mut events := watcher.PollSettled(w, 60)
+        mut first := ""
+        mut count := 0
+        mut css_only := true
+        repeat events.Len() in i:
+            e := events.Get(i)
+            if e.kind != watcher.EventKind.Deleted and os.IsDir(e.path):
+                continue
             end
+            if count == 0:
+                first = dev_relative(e.path)
+            end
+            count++
+            if not str.EndsWith(e.path, ".css"):
+                css_only = false
+            end
+        end
+        watcher.FreeEvents(events)
+        if count == 0:
+            continue
+        end
+        if g_dev_static:
+            g_dev_kind = css_only ? 1 : 0
+            g_dev_failed = 0
+            g_dev_seq++
+            io.EPrintln("salam: " + first + " changed, reloading")
+            continue
+        end
+        st := dev_build(css_only)
+        if st == 2:
+            io.EPrintln("salam: cannot write the built page, retrying")
+            time.Sleep(1600)
+        else:
+            io.EPrintln(
+                st == 0 ? "salam: rebuilt after " + first + " changed" : "salam: build failed after " +
+                    first + " changed, the browser shows the errors"
+            )
         end
     end
 end
 
-func dev_build_id(ctx: i64):
+func dev_state_event(kind: str, text: str): str:
+    id := g_dev_epoch + ":" + co.I64Toa(g_dev_seq as i64)
+    ret "retry: 500\nid: " + id + "\ndata: {\"kind\":\"" + kind + "\",\"error\":\"" +
+        dev_json_escape(text) + "\"}\n\n"
+end
+
+func dev_current_kind(): str:
+    if g_dev_failed == 1:
+        ret "error"
+    end
+    ret g_dev_kind == 1 ? "css" : "reload"
+end
+
+func dev_events(ctx: i64):
+    http.SetHeader(ctx, "Content-Type", "text/event-stream")
     http.SetHeader(ctx, "Cache-Control", "no-store")
-    http.Text(ctx, http.Own(ctx, co.I64Toa(g_dev_build as i64)))
+    http.SetHeader(ctx, "X-Accel-Buffering", "no")
+    hdr := http.Header(ctx, "Last-Event-ID")
+    last := str.Len(hdr) > 0 ? hdr : http.Query(ctx, "v")
+    mut kind := "hello"
+    if str.Len(last) == 0:
+        if g_dev_failed == 1:
+            kind = "error"
+        end
+    else:
+        cut := str.IndexOf(last, ":")
+        epoch := cut > 0 ? str.Substr(last, 0, cut) : ""
+        seq := cut > 0 ? str.Substr(last, cut + 1, str.Len(last) - cut - 1) : ""
+        if not str.Equals(epoch, g_dev_epoch):
+            kind = "reload"
+        else:
+            mut waited := 0
+            until str.Equals(seq, co.I64Toa(g_dev_seq as i64)) and waited < 25000:
+                time.Sleep(100)
+                waited += 100
+            end
+            if str.Equals(seq, co.I64Toa(g_dev_seq as i64)):
+                kind = "ping"
+            else:
+                kind = dev_current_kind()
+            end
+        end
+    end
+    mut text := ""
+    if str.Equals(kind, "error"):
+        text = io.ReadFile(dev_log_path())
+    end
+    http.Text(ctx, http.Own(ctx, dev_state_event(kind, text)))
 end
 
 func dev_page_path(method: str, path: str, accept: str): bool:
@@ -148,42 +281,82 @@ func dev_page_path(method: str, path: str, accept: str): bool:
     ret str.IndexFrom(path, ".", slash + 1) < 0
 end
 
-func dev_inside_root(real: str): bool:
-    n := str.Len(g_dev_root)
-    if n == 0 or str.Len(real) <= n or not str.StartsWith(real, g_dev_root):
+func dev_inside(base: str, real: str): bool:
+    n := str.Len(base)
+    if n == 0 or str.Len(real) <= n or not str.StartsWith(real, base):
         ret false
     end
-    if str.EndsWith(g_dev_root, "/") or str.EndsWith(g_dev_root, "\\"):
+    if str.EndsWith(base, "/") or str.EndsWith(base, "\\"):
         ret true
     end
     c := str.Substr(real, n, 1)
     ret str.Equals(c, "/") or str.Equals(c, "\\")
 end
 
+func dev_resolve(base: str, path: str): str:
+    if str.Len(base) == 0:
+        ret ""
+    end
+    mut f := join_path2(base, str.Substr(path, 1, path.Len() - 1))
+    if os.IsDir(f):
+        f = join_path2(f, "index.html")
+    end
+    if not os.Exists(f) or os.IsDir(f):
+        ret ""
+    end
+    real := os.RealPath(f)
+    ret dev_inside(os.RealPath(base), real) ? real : ""
+end
+
+func dev_send(ctx: i64, real: str):
+    if str.EndsWith(real, ".html") or str.EndsWith(real, ".htm"):
+        http.Html(ctx, http.Own(ctx, dev_inject(io.ReadFile(real))))
+        ret
+    end
+    _ok := http.File(ctx, http.Own(ctx, str.Clone(real)), mime.MimeType(real))
+end
+
 func dev_handle(ctx: i64):
     path := http.Own(ctx, http.UrlDecode(http.Path(ctx)))
-    if not str.Contains(path, "..") and not str.Contains(path, "/.") and
-        not str.Equals(path, "/") and not str.Equals(
-            path, "/index.html"
-        ):
-        f := http.Own(ctx, join_path2(g_dev_root, str.Substr(path, 1, path.Len() - 1)))
-        if os.Exists(f) and not os.IsDir(f):
-            real := http.Own(ctx, os.RealPath(f))
-            if dev_inside_root(real):
-                _ok := http.File(ctx, real, mime.MimeType(f))
-            else:
-                http.SetStatus(ctx, 404)
-                http.Text(ctx, "404 Not Found")
-            end
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    if str.Contains(path, "..") or str.Contains(path, "/.") or str.Contains(path, "\\"):
+        http.SetStatus(ctx, 404)
+        http.Text(ctx, "404 Not Found")
+        ret
+    end
+    if not g_dev_static and not str.Equals(path, "/") and not str.Equals(path, "/index.html"):
+        hit := dev_resolve(g_dev_root, path)
+        if str.Len(hit) > 0 and not str.EndsWith(hit, ".salam"):
+            dev_send(ctx, hit)
             ret
         end
     end
-    if dev_page_path(http.Method(ctx), path, http.Header(ctx, "Accept")):
-        http.SetHeader(ctx, "Cache-Control", "no-store")
-        _ok2 := http.File(
-            ctx, http.Own(ctx, join_path2(g_dev_out, "index.html")), "text/html; charset=utf-8"
-        )
-        ret
+    if g_dev_slot >= 0 or g_dev_static:
+        site := dev_site_dir(g_dev_slot)
+        hit2 := dev_resolve(site, path)
+        if str.Len(hit2) > 0:
+            dev_send(ctx, hit2)
+            ret
+        end
+        if dev_page_path(http.Method(ctx), path, http.Header(ctx, "Accept")):
+            idx := dev_resolve(site, "/index.html")
+            if str.Len(idx) > 0:
+                dev_send(ctx, idx)
+                ret
+            end
+        end
+    else:
+        if dev_page_path(http.Method(ctx), path, http.Header(ctx, "Accept")):
+            http.Html(
+                ctx,
+                http.Own(
+                    ctx,
+                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>Build failed</title></head><body style=\"background:#1e1e1e\">" +
+                        dev_client() + "</body></html>"
+                )
+            )
+            ret
+        end
     end
     http.SetStatus(ctx, 404)
     http.Text(ctx, "404 Not Found")
@@ -207,27 +380,22 @@ func dev_entry_of(arg: str): str:
     ret ""
 end
 
-func dev_serve(entry: str, host: str, port: int): int:
-    g_dev_entry = os.RealPath(entry)
-    if str.Len(g_dev_entry) == 0:
-        g_dev_entry = entry
+func dev_listen(host: str, port: int): int:
+    mut r := router.NewRouter()
+    router.Get(r, "/__salam_hmr", dev_events)
+    router.SetFallback(r, dev_handle)
+    mut s := http.NewServer(port)
+    http.SetHost(s, host)
+    http.EnableAccessLog(s)
+    http.Use(s, r)
+    if not http.RunBackground(s):
+        io.EPrintln("salam: cannot listen on " + host + ":" + co.I64Toa(port as i64))
+        ret 2
     end
-    g_dev_root = dir_of(g_dev_entry)
-    if str.Len(g_dev_root) == 0:
-        g_dev_root = "."
-    end
-    rootreal := os.RealPath(g_dev_root)
-    if str.Len(rootreal) > 0:
-        g_dev_root = rootreal
-    else:
-        g_dev_root = ""
-    end
-    mut exe := ""
-    if not sm.ExePath(exe):
-        exe = "salam"
-    end
-    g_dev_exe = exe
-    g_dev_out = ""
+    ret 0
+end
+
+func dev_make_out(): bool:
     repeat 20 in attempt:
         cand := join_path2(
             os.TempDir(),
@@ -245,35 +413,84 @@ func dev_serve(entry: str, host: str, port: int): int:
         if str.Len(g_dev_out) > 0:
             _rm0 := os.RemoveAll(g_dev_out)
         end
+        ret false
+    end
+    ret true
+end
+
+func dev_set_root(dir: str): bool:
+    mut start := dir
+    if str.Len(start) == 0:
+        start = "."
+    end
+    rootreal := os.RealPath(start)
+    if str.Len(rootreal) == 0:
+        ret false
+    end
+    g_dev_root = rootreal
+    g_dev_epoch = co.I64Toa(os.Pid() as i64) + "x" + co.I64Toa(time.NowNanos())
+    ret true
+end
+
+func dev_idle():
+    until true:
+        time.Sleep(60000)
+    end
+end
+
+func dev_serve(entry: str, host: str, port: int): int:
+    g_dev_entry = os.RealPath(entry)
+    if str.Len(g_dev_entry) == 0:
+        g_dev_entry = entry
+    end
+    if not dev_set_root(dir_of(g_dev_entry)):
+        io.EPrintln("salam: cannot read " + entry)
         ret 2
     end
-    g_dev_sig = dev_signature()
-    st := dev_build()
+    mut exe := ""
+    if not sm.ExePath(exe):
+        exe = "salam"
+    end
+    g_dev_exe = exe
+    if not dev_make_out():
+        ret 2
+    end
+    st := dev_build(false)
     if st == 2:
         io.EPrintln("salam: cannot write the built page in " + g_dev_out)
         _rm1 := os.RemoveAll(g_dev_out)
         ret 2
     end
     if st == 1:
-        io.EPrintln("salam: build failed, the page shows the errors")
+        io.EPrintln("salam: build failed, the browser shows the errors")
     end
-    mut r := router.NewRouter()
-    router.Get(r, "/__salam_build", dev_build_id)
-    router.SetFallback(r, dev_handle)
-    mut s := http.NewServer(port)
-    http.SetHost(s, host)
-    http.EnableAccessLog(s)
-    http.Use(s, r)
-    addr := host + ":" + co.I64Toa(port as i64)
-    if not http.RunBackground(s):
-        io.EPrintln("salam: cannot listen on " + addr)
+    if dev_listen(host, port) != 0:
         _rm2 := os.RemoveAll(g_dev_out)
         ret 2
     end
     _t := spawn(dev_watch)
-    println "salam: serving " + entry + " at http://" + addr +
+    println "salam: serving " + entry + " at http://" + host + ":" + co.I64Toa(port as i64) +
         "/ (rebuilds on save, the page reloads itself; Ctrl+C to stop)"
-    until true:
-        time.Sleep(60000)
+    dev_idle()
+    ret 0
+end
+
+func dev_serve_dir(dir: str, host: str, port: int): int:
+    g_dev_static = true
+    if not dev_set_root(dir):
+        io.EPrintln("salam: serve directory '" + dir + "' does not exist")
+        ret 2
     end
+    if not dev_make_out():
+        ret 2
+    end
+    if dev_listen(host, port) != 0:
+        _rm3 := os.RemoveAll(g_dev_out)
+        ret 2
+    end
+    _t := spawn(dev_watch)
+    println "salam: serving " + dir + " at http://" + host + ":" + co.I64Toa(port as i64) +
+        "/ (the page reloads when a file changes; Ctrl+C to stop)"
+    dev_idle()
+    ret 0
 end

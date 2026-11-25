@@ -1,0 +1,130 @@
+package nativelink
+
+func be32(v &: Vector<u8>, x: i64):
+    v.Push(((x >> (24 as i64)) & (255 as i64)) as u8)
+    v.Push(((x >> (16 as i64)) & (255 as i64)) as u8)
+    v.Push(((x >> (8 as i64)) & (255 as i64)) as u8)
+    v.Push((x & (255 as i64)) as u8)
+end
+
+func be64(v &: Vector<u8>, x: i64):
+    be32(v, (x >> (32 as i64)) & (0xFFFFFFFF as i64))
+    be32(v, x & (0xFFFFFFFF as i64))
+end
+
+func uleb(v &: Vector<u8>, x0: i64):
+    mut x := x0
+    until true:
+        mut b := (x & (127 as i64)) as int
+        x >>= (7 as i64)
+        if x != (0 as i64):
+            b |= 128
+        end
+        v.Push(b as u8)
+        if x == (0 as i64):
+            break
+        end
+    end
+end
+
+func sleb(v &: Vector<u8>, x0: i64):
+    mut x := x0
+    until true:
+        b := (x & (127 as i64)) as int
+        x >>= (7 as i64)
+        done := (x == (0 as i64) and (b & 64) == 0) or (x == (0 - 1 as i64) and (b & 64) != 0)
+        v.Push((done ? b : (b | 128)) as u8)
+        if done:
+            break
+        end
+    end
+end
+
+func mo_seg_of(t &: Mo, addr: i64, segi &: int, off &: i64):
+    a := addr - t.base
+    if a < t.text_end:
+        segi = t.seg0
+        off = a
+    else a < t.dc_end:
+        segi = t.seg0 + 1
+        off = a - t.dc_start
+    else:
+        segi = t.seg0 + 2
+        off = a - t.d_start
+    end
+end
+
+func mo_sort(v &: Vector<i64>):
+    n := v.Len()
+    mut i := 1
+    until i < n:
+        x := v[i]
+        mut j := i - 1
+        until j >= 0 and v[j] > x:
+            v[j + 1] = v[j]
+            j--
+        end
+        v[j + 1] = x
+        i++
+    end
+end
+
+func mo_rebase_ops(t &: Mo): Vector<u8>:
+    mut o := Vector {} as Vector<u8>
+    mo_sort(t.rebase)
+    o.Push(0x11 as u8)
+    each a in t.rebase:
+        mut sg := 0
+        mut off := 0 as i64
+        mo_seg_of(t, a, sg, off)
+        o.Push((0x20 | sg) as u8)
+        uleb(o, off)
+        o.Push(0x51 as u8)
+    end
+    o.Push(0 as u8)
+    until (o.Len() % 8) != 0:
+        o.Push(0 as u8)
+    end
+    ret o
+end
+
+func mo_bind_ops(l &: Nl, t &: Mo): Vector<u8>:
+    dl := mo_dylib_list(l)
+    mut o := Vector {} as Vector<u8>
+    mut cur_add := 0 as i64
+    repeat t.bind_at.Len() in i:
+        mut sg := 0
+        mut off := 0 as i64
+        mo_seg_of(t, t.bind_at[i], sg, off)
+        ordn := mo_ordinal(l, t.bind_g[i], dl)
+        if ordn < 0:
+            o.Push((0x30 | (ordn & 15)) as u8)
+        else ordn < 16:
+            o.Push((0x10 | ordn) as u8)
+        else:
+            o.Push(0x20 as u8)
+            uleb(o, ordn as i64)
+        end
+        o.Push((l.g_strongref[t.bind_g[i]] ? 0x40 : 0x41) as u8)
+        nm := name_of(l, l.g_name[t.bind_g[i]])
+        np := (nm as void*) as u8*
+        repeat str.Len(nm) in c:
+            o.Push(np[c])
+        end
+        o.Push(0 as u8)
+        o.Push(0x51 as u8)
+        if t.bind_add[i] != cur_add:
+            o.Push(0x60 as u8)
+            sleb(o, t.bind_add[i])
+            cur_add = t.bind_add[i]
+        end
+        o.Push((0x70 | sg) as u8)
+        uleb(o, off)
+        o.Push(0x90 as u8)
+    end
+    o.Push(0 as u8)
+    until (o.Len() % 8) != 0:
+        o.Push(0 as u8)
+    end
+    ret o
+end

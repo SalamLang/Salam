@@ -1,0 +1,112 @@
+package nativelink
+
+func mo_class(l &: Nl, s: int): int:
+    nm := name_of(l, l.s_name[s])
+    if str.Len(nm) == 0:
+        ret MO_DROP
+    end
+    fl := l.s_flags[s]
+    ty := (fl & (255 as i64)) as int
+    if str.StartsWith(nm, "__LD,") or str.StartsWith(nm, "__DWARF,"):
+        ret MO_DROP
+    end
+    if ty == 0x11:
+        ret MO_TDATA
+    end
+    if ty == 0x12:
+        ret MO_TBSS
+    end
+    if ty == 0x13:
+        ret MO_TVARS
+    end
+    if ty == 1 or ty == 12:
+        ret MO_BSS
+    end
+    if ty == 9:
+        ret MO_INIT
+    end
+    if str.Equals(nm, "__TEXT,__eh_frame"):
+        ret MO_EH
+    end
+    if str.StartsWith(nm, "__TEXT,"):
+        if (fl & (0x80000000 as i64)) != (0 as i64) or (fl & (0x400 as i64)) != (0 as i64):
+            ret MO_TEXT
+        end
+        if ty == 2:
+            ret MO_CSTR
+        end
+        ret MO_TCONST
+    end
+    if str.StartsWith(nm, "__DATA_CONST,"):
+        ret MO_CONST
+    end
+    ret MO_DATA
+end
+
+func mo_rtype(t: int): int:
+    ret (t - MR_BASE) / 4
+end
+
+func mo_rlen(t: int): int:
+    ret (t - MR_BASE) % 4
+end
+
+func mo_imported(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0 and l.g_state[g] == SY_UNDEF and l.g_common[g] == (0 as i64):
+        ret g
+    end
+    ret 0 - 1
+end
+
+func mo_is_got_reloc(l &: Nl, rt: int): bool:
+    if l.mach == EM_X86_64:
+        ret rt == 3 or rt == 4
+    end
+    ret rt == 5 or rt == 6 or rt == 7
+end
+
+func mo_is_branch(rt: int): bool:
+    ret rt == 2
+end
+
+func mo_got_key(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0:
+        ret g
+    end
+    ret 0 - 1 - os
+end
+
+func mo_scan(l &: Nl, t &: Mo):
+    repeat l.s_obj.Len() in s:
+        if t.out_k[s] == MO_DROP:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            rt := mo_rtype(l.r_type[r])
+            os := l.r_sym[r]
+            if mo_is_got_reloc(l, rt):
+                key := mo_got_key(l, os)
+                if not t.got_of.Has(key):
+                    t.got_of.Put(key, t.got_k.Len())
+                    t.got_k.Push(key)
+                end
+            else mo_is_branch(rt):
+                g := mo_imported(l, os)
+                if g >= 0 and not t.stub_of.Has(g):
+                    t.stub_of.Put(g, t.stub_g.Len())
+                    t.stub_g.Push(g)
+                end
+            end
+        end
+    end
+    each g2 in t.stub_g:
+        if not t.got_of.Has(g2):
+            t.got_of.Put(g2, t.got_k.Len())
+            t.got_k.Push(g2)
+        end
+    end
+end

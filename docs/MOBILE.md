@@ -12,6 +12,11 @@ You need a `salam` compiler, the Android SDK with an NDK, and a JDK 21.
 salam app android app.salam --out out --run
 ```
 
+In a project folder, `salam build --platform=android` builds the
+same app into `build/android` and `salam run --platform=android` also installs
+and starts it, with the default options. `salam app android` is the form that
+takes the options below.
+
 A release archive carries the build files next to `std/`; from a source
 checkout the compiler finds them too. Set `SALAM_MOBILE_ROOT` to point at
 another folder. `tools/bash/build-android-app.sh` takes the same options.

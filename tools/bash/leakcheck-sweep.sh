@@ -100,8 +100,8 @@ try export-bad-spec "$SALAM_BIN" build hello.salam --output=t11 $CCPICK --export
 try exec-timeout "$SALAM_BIN" exec hello.salam --timeout=3000
 try exec-timeout-bad "$SALAM_BIN" exec hello.salam --timeout=nope
 
-try js "$SALAM_BIN" js hello.salam --output=a.js
-try js-html "$SALAM_BIN" js hello.salam --output=a.html
+try js "$SALAM_BIN" build hello.salam --platform=js --output=a.js
+try js-html "$SALAM_BIN" build hello.salam --platform=js --output=a.html
 try format-recursive "$SALAM_BIN" format "$ROOT/tests/en/basics" --check -r
 
 try err-missing-file "$SALAM_BIN" build "$W/does-not-exist.salam"

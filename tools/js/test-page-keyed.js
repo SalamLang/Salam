@@ -6,7 +6,7 @@ const file = process.argv[2];
 if (!file) {
   console.error("usage: node test-page-keyed.js page.html");
   console.error(
-    "page.html is tests/en/page/components/keyed_moves.salam built with salam web",
+    "page.html is tests/en/page/components/keyed_moves.salam built with salam build --platform=web",
   );
   console.error(
     "the browser is $CHROME, or Google Chrome or Chromium from the usual places",

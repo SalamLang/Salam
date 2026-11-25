@@ -270,7 +270,16 @@ salam exec                  # interpret the project here
   (`myproject`, or `myproject.exe` on Windows), not `main`.
 - `salam new <name>` creates `<name>/` with `main.salam`, `salam.toml` and a
   `.gitignore`. `salam init [dir]` does the same in an existing directory
-  and never overwrites a file that is already there.
+  and never overwrites a file that is already there. In a terminal `init` asks
+  what you are making: the project name, an optional description, the type
+  (`cli`, `http` or `dsl`, the Salam page language), the platforms (`web`,
+  `android`, `ios`, `linux`, `macos`, `windows`, or all), the design system
+  (`shadcn` or `none`, for `dsl`) and the web mode (`page`, `spa` or `ssr`).
+  It writes a small starter project for that choice with a README that explains
+  each folder, and records the answers in `salam.toml` under `[project]`.
+  The flags `--name=`, `--description=`, `--type=`, `--platforms=a,b|all`,
+  `--design=` and `--web=` answer the questions up front and `-y` accepts the
+  defaults, so scripts and pipes never wait for input.
 
 Frontend (layout DSL) projects have no `main` function; there `main.salam`
 is the project page:

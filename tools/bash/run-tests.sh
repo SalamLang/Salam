@@ -171,6 +171,69 @@ $cerrs"
         wk_check "$expabs" "$got"
     }
 
+    wk_init() {
+        name=$(basename "$f" .out)
+        jobdir="$WORK/initjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        buildlog="$jobdir/build.log"
+        case "$name" in
+        cli) flags="--type=cli --platforms=all" ;;
+        http) flags="--type=http --platforms=linux,macos,windows" ;;
+        page) flags="--type=dsl --platforms=web,linux --web=page --design=shadcn" ;;
+        spa) flags="--type=dsl --platforms=web,android --web=spa --design=shadcn" ;;
+        ssr) flags="--type=dsl --platforms=web --web=ssr --design=none" ;;
+        *) flags="" ;;
+        esac
+        (cd "$jobdir" && "$SALAM_ABS" init proj $flags --name=demo --description="a demo" --lang="$lang" --no-color) >"$buildlog" 2>&1 </dev/null
+        proj="$jobdir/proj"
+        for need in salam.toml README.md .gitignore main.salam; do
+            if [ ! -f "$proj/$need" ]; then
+                echo "FAIL $label (init wrote no $need)"
+                sed 's/^/  /' "$buildlog" | head -20
+                rm -rf "$jobdir"
+                return
+            fi
+        done
+        if ! grep -q 'description = "a demo"' "$proj/salam.toml"; then
+            echo "FAIL $label (salam.toml has no description)"
+            rm -rf "$jobdir"
+            return
+        fi
+        case "$name" in
+        cli)
+            (cd "$proj" && "$SALAM_ABS" build --output="$jobdir/a.exe" --no-color --log-level=error) >>"$buildlog" 2>&1
+            [ -x "$jobdir/a.exe" ] && (cd "$proj" && "$SALAM_ABS" test --no-color) >>"$buildlog" 2>&1
+            ok=$?
+            ;;
+        http)
+            (cd "$proj" && "$SALAM_ABS" check main.salam --no-color) >>"$buildlog" 2>&1
+            ok=$?
+            ;;
+        ssr)
+            if [ "$HOST_OS" = linux ]; then
+                (cd "$proj" && "$SALAM_ABS" page build --ssr --no-color --log-level=error) >>"$buildlog" 2>&1
+                ok=$?
+                [ "$ok" = 0 ] && [ -x "$proj/dist/server" ] || ok=1
+            else
+                (cd "$proj" && "$SALAM_ABS" check main.salam --no-color) >>"$buildlog" 2>&1
+                ok=$?
+            fi
+            ;;
+        *)
+            (cd "$proj" && "$SALAM_ABS" page build --no-color --log-level=error) >>"$buildlog" 2>&1
+            ok=$?
+            [ "$ok" = 0 ] && [ -f "$proj/index.html" ] || ok=1
+            ;;
+        esac
+        if [ "$ok" != 0 ]; then
+            echo "FAIL $label (generated project does not build)"
+            sed 's/^/  /' "$buildlog" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
+        rm -rf "$jobdir"
+        wk_check "$expabs" "ok"
+    }
     wk_new() {
         name=$(basename "$f" .out)
         jobdir="$WORK/newjob_${jobid}_$$"
@@ -687,6 +750,7 @@ EOF_LAYOUT_NOT
         fmt) wk_fmt ;;
         repl) wk_repl ;;
         new) wk_new ;;
+        init) wk_init ;;
         project) wk_project ;;
         checkcmd) wk_checkcmd ;;
         checkfix) wk_checkfix ;;
@@ -1062,6 +1126,16 @@ if want new; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .out)
             add_job new "new/$lang/$name" "$f" "$lang" "$f"
+        done
+    done
+fi
+
+if want init; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/init/*.out; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .out)
+            add_job init "init/$lang/$name" "$f" "$lang" "$f"
         done
     done
 fi

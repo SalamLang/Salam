@@ -36,9 +36,9 @@ The sections below give the evidence for each row.
 
 This is the item that matters most and the one Salam fails most clearly today. The current release line is 0.6, and the language still changes between releases in ways that break code. Typed local declarations (`x: int = 5`) were removed in 2026 in favor of `x := 5`. The `pattern => expr` form of match arms was removed in 0.5.0, along with the `=>` token. In 0.6.3, self-assignments such as `x = x + 1` became compile error E162 (write `x++` to add one and `x += n` for other amounts). Each change has a reason and a clear error message, but a team with 100,000 lines of Salam would have to touch code on upgrade.
 
-There is no written compatibility policy, no long-term-support branch and no announced 1.0 date. What exists are good building blocks for one. A function can be marked `deprecated`, and every caller gets warning W013 while the old name keeps working:
+There is no written compatibility policy, no long-term-support branch and no announced 1.0 date. What exists are good building blocks for one. A function can be marked `deprecated`, and every caller gets warning W013 while the old name stays defined:
 
-```salam
+```salam fragment
 pub func Total(prices: int[]): int:
     mut sum := 0
     each p in prices:
@@ -57,12 +57,7 @@ func main:
 end
 ```
 
-```output
-245
-30
-```
-
-The compiler prints the warning while the program still builds and runs:
+The compiler reports every call to it with warning W013. Warnings are errors, so a build stops until the caller moves to the new name:
 
 ```text
 warning[W013]: call to deprecated function 'SumPrices'

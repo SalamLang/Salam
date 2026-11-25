@@ -1,0 +1,587 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cli
+
+import os
+import io
+import str
+import os.platform
+
+include dr "../driver/driver.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include pth "../sal_path.salam"
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _isatty(fd: int): int
+    end
+else:
+    extern:
+        func isatty(fd: int): int
+    end
+end
+
+struct InitCfg:
+    pub name: str = ""
+    pub desc: str = ""
+    pub kind: str = "cli"
+    pub platforms: Vector<str> = Vector {}
+    pub design: str = "none"
+    pub web: str = "page"
+    pub fa: bool = false
+end
+
+func stdin_is_tty(): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(0) != 0
+    else:
+        ret isatty(0) != 0
+    end
+end
+
+func strs2(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.Push(a)
+    v.Push(b)
+    ret v
+end
+
+func strs3(a: str, b: str, c: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.Push(a)
+    v.Push(b)
+    v.Push(c)
+    ret v
+end
+
+func tx(fa: bool, en: str, fa_text: str): str:
+    ret fa ? fa_text : en
+end
+
+func has_item(v: Vector<str>, item: str): bool:
+    repeat v.Len() in i:
+        if str.Equals(v.Get(i), item):
+            ret true
+        end
+    end
+    ret false
+end
+
+func wizard_flags_given(opt &: dr.Dr): bool:
+    ret str.Len(opt.init_name) > 0 or str.Len(opt.init_desc) > 0 or str.Len(opt.init_type) > 0 or
+        str.Len(opt.init_platforms) > 0 or str.Len(opt.init_design) > 0 or
+        str.Len(opt.init_web) > 0 or opt.init_yes
+end
+
+func norm_platform(p: str): str:
+    t := str.Lower(str.Trim(p))
+    if str.Equals(t, "mac") or str.Equals(t, "osx") or str.Equals(t, "darwin"):
+        ret "macos"
+    end
+    if str.Equals(t, "win"):
+        ret "windows"
+    end
+    ret t
+end
+
+func norm_kind(k: str): str:
+    t := str.Lower(str.Trim(k))
+    if str.Equals(t, "page") or str.Equals(t, "ui") or str.Equals(t, "salam dsl"):
+        ret "dsl"
+    end
+    if str.Equals(t, "server"):
+        ret "http"
+    end
+    ret t
+end
+
+func platform_choices(kind: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if str.Equals(kind, "dsl"):
+        out.Push("web")
+        out.Push("android")
+        out.Push("ios")
+    end
+    out.Push("linux")
+    out.Push("macos")
+    out.Push("windows")
+    ret out
+end
+
+func ask_line(label: str): str:
+    print label
+    ret str.Trim(io.Input())
+end
+
+func ask_text(label: str, fallback: str): str:
+    mut shown := label
+    if str.Len(fallback) > 0:
+        shown = label + " [" + fallback + "]"
+    end
+    got := ask_line(shown + ": ")
+    if str.Len(got) == 0:
+        ret fallback
+    end
+    ret got
+end
+
+func pick_index(got: str, names: Vector<str>): int:
+    t := str.Lower(got)
+    repeat names.Len() in i:
+        if str.Equals(t, str.FromInt((i + 1) as i64)) or str.Equals(t, names.Get(i)):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func ask_one(label: str, names: Vector<str>, notes: Vector<str>, first: int, fa: bool): str:
+    println ""
+    println label
+    repeat names.Len() in i:
+        println "  " + str.FromInt((i + 1) as i64) + ") " + names.Get(i) + "  " + notes.Get(i)
+    end
+    mut tries := 0
+    until tries < 5:
+        got := ask_line("> [" + names.Get(first) + "]: ")
+        if str.Len(got) == 0:
+            ret names.Get(first)
+        end
+        at := pick_index(got, names)
+        if at >= 0:
+            ret names.Get(at)
+        end
+        println tx(fa, "  pick a number or a name from the list", "  یک عدد یا نام از فهرست بنویسید")
+        tries++
+    end
+    ret names.Get(first)
+end
+
+func ask_many(label: str, names: Vector<str>, notes: Vector<str>, fa: bool): Vector<str>:
+    println ""
+    println label
+    repeat names.Len() in i:
+        println "  " + str.FromInt((i + 1) as i64) + ") " + names.Get(i) + "  " + notes.Get(i)
+    end
+    mut tries := 0
+    until tries < 5:
+        got := ask_line(
+            tx(fa, "> numbers or names separated by commas, or all [all]: ", "> عددها یا نام ها با ویرگول، یا all [all]: ")
+        )
+        mut picked := Vector {} as Vector<str>
+        if str.Len(got) == 0 or str.Equals(str.Lower(got), "all"):
+            ret names
+        end
+        parts := str.Split(str.Replace(str.Replace(got, "،", ","), " ", ","), ",")
+        mut bad := false
+        repeat parts.Len() in i:
+            word := str.Trim(parts.Get(i))
+            if str.Len(word) == 0:
+                continue
+            end
+            at := pick_index(norm_platform(word), names)
+            if at < 0:
+                bad = true
+            else not has_item(picked, names.Get(at)):
+                picked.Push(names.Get(at))
+            end
+        end
+        parts.Free()
+        if not bad and picked.Len() > 0:
+            ret picked
+        end
+        println tx(fa, "  pick numbers or names from the list", "  عددها یا نام ها را از فهرست بنویسید")
+        tries++
+    end
+    ret names
+end
+
+func parse_platforms(raw: str, kind: str, out &: Vector<str>): bool:
+    allowed := platform_choices(kind)
+    if str.Equals(str.Lower(str.Trim(raw)), "all"):
+        repeat allowed.Len() in i:
+            out.Push(allowed.Get(i))
+        end
+        ret true
+    end
+    parts := str.Split(raw, ",")
+    mut ok := true
+    repeat parts.Len() in i:
+        word := norm_platform(parts.Get(i))
+        if str.Len(word) == 0:
+            continue
+        end
+        if not has_item(allowed, word):
+            io.EPrintln(
+                "salam: platform '" + word + "' is not available for type '" + kind +
+                    "' (choose from " + str.Join(allowed, ", ") + ")"
+            )
+            ok = false
+        else not has_item(out, word):
+            out.Push(word)
+        end
+    end
+    parts.Free()
+    ret ok and out.Len() > 0
+end
+
+func choose_kind(opt &: dr.Dr, fa: bool, interactive: bool): str:
+    if str.Len(opt.init_type) > 0:
+        ret norm_kind(opt.init_type)
+    end
+    if not interactive:
+        ret "cli"
+    end
+    names := strs3("cli", "http", "dsl")
+    notes := strs3(
+        tx(fa, "a program that runs in the terminal", "برنامه ای که در ترمینال اجرا می شود"),
+        tx(fa, "a web server with routes", "یک سرور وب با مسیرها"),
+        tx(fa, "an app written in the Salam page language (UI)", "برنامه ای با زبان صفحه سلام (رابط کاربری)")
+    )
+    ret ask_one(tx(fa, "What kind of project is it?", "پروژه از چه نوعی است؟"), names, notes, 0, fa)
+end
+
+func choose_platforms(opt &: dr.Dr, kind: str, fa: bool, interactive: bool, out &: Vector<str>): bool:
+    if str.Len(opt.init_platforms) > 0:
+        ret parse_platforms(opt.init_platforms, kind, out)
+    end
+    names := platform_choices(kind)
+    if not interactive:
+        repeat names.Len() in i:
+            out.Push(names.Get(i))
+        end
+        ret true
+    end
+    mut notes := Vector {} as Vector<str>
+    repeat names.Len() in i:
+        n := names.Get(i)
+        if str.Equals(n, "web"):
+            notes.Push(tx(fa, "a website", "وب سایت"))
+        else str.Equals(n, "android"):
+            notes.Push(tx(fa, "an Android app", "برنامه اندروید"))
+        else str.Equals(n, "ios"):
+            notes.Push(tx(fa, "an iOS app", "برنامه آی او اس"))
+        else str.Equals(n, "linux"):
+            notes.Push(tx(fa, "Linux", "لینوکس"))
+        else str.Equals(n, "macos"):
+            notes.Push(tx(fa, "macOS", "مک او اس"))
+        else:
+            notes.Push(tx(fa, "Windows", "ویندوز"))
+        end
+    end
+    picked := ask_many(
+        tx(fa, "Which platforms is it for?", "برای کدام سکوها ساخته می شود؟"), names, notes, fa
+    )
+    repeat picked.Len() in i:
+        out.Push(picked.Get(i))
+    end
+    ret true
+end
+
+func choose_design(opt &: dr.Dr, fa: bool, interactive: bool): str:
+    if str.Len(opt.init_design) > 0:
+        ret str.Lower(opt.init_design)
+    end
+    if not interactive:
+        ret "none"
+    end
+    names := strs2("shadcn", "none")
+    notes := strs2(
+        tx(fa, "the shadcn/ui look for buttons, cards, inputs and more", "ظاهر shadcn/ui برای دکمه، کارت، ورودی و بیشتر"),
+        tx(fa, "plain elements, you style them yourself", "عنصرهای ساده، ظاهر را خودتان می دهید")
+    )
+    ret ask_one(tx(fa, "Which design system?", "کدام سیستم طراحی؟"), names, notes, 0, fa)
+end
+
+func choose_web(opt &: dr.Dr, fa: bool, interactive: bool): str:
+    if str.Len(opt.init_web) > 0:
+        ret str.Lower(opt.init_web)
+    end
+    if not interactive:
+        ret "page"
+    end
+    names := strs3("page", "spa", "ssr")
+    notes := strs3(
+        tx(fa, "one simple page", "یک صفحه ساده"),
+        tx(fa, "a single page app: pages/ is the route table, navigation never reloads", "برنامه تک صفحه ای: پوشه pages مسیرها هستند و ناوبری صفحه را دوباره بارگذاری نمی کند"),
+        tx(fa, "server rendered pages with server funcs; builds a small server", "صفحه های ساخته شده روی سرور با تابع های سرور؛ یک سرور کوچک می سازد")
+    )
+    ret ask_one(tx(fa, "How should the website work?", "وب سایت چگونه کار کند؟"), names, notes, 0, fa)
+end
+
+func valid_name(name: str): bool:
+    if str.Len(name) == 0:
+        ret false
+    end
+    ret not str.Contains(name, "/") and not str.Contains(name, "\\") and not str.Contains(name, "\"")
+end
+
+func toml_array(v: Vector<str>): str:
+    mut out := "["
+    repeat v.Len() in i:
+        if i > 0:
+            out += ", "
+        end
+        out += toml_quote(v.Get(i))
+    end
+    ret out + "]"
+end
+
+func init_manifest(cfg: InitCfg): str:
+    mut t := "[package]\nname = " + toml_quote(cfg.name) + "\nversion = \"0.1.0\"\n"
+    if str.Len(cfg.desc) > 0:
+        t += "description = " + toml_quote(cfg.desc) + "\n"
+    end
+    t += "salam = \">=" + str.TrimPrefix(co.VERSION, "v") + "\"\n\n"
+    t += "[project]\ntype = " + toml_quote(cfg.kind) + "\nplatforms = " + toml_array(cfg.platforms) + "\n"
+    if str.Equals(cfg.kind, "dsl") and has_item(cfg.platforms, "web"):
+        t += "web = " + toml_quote(cfg.web) + "\n"
+    end
+    if str.Equals(cfg.kind, "dsl") and not str.Equals(cfg.design, "none"):
+        t += "\n[design]\ndesign = " + toml_quote(cfg.design) + "\n"
+    end
+    t += "\n[dependencies]\n"
+    ret t
+end
+
+func init_ignore(cfg: InitCfg): str:
+    mut t := ".salam-build/\n/" + cfg.name + "\n/" + cfg.name + ".exe\n"
+    if str.Equals(cfg.kind, "dsl"):
+        t += "/dist/\n/build/\n/index.html\n/index.css\n/index.js\n"
+    end
+    ret t
+end
+
+func emit(dir: str, rel: str, content: str, made &: Vector<str>): bool:
+    path := project_path(dir, rel)
+    folder := pth.PathDir(path)
+    if str.Len(folder) > 0 and not os.Exists(folder):
+        if os.MkdirAll(folder) != 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(folder)))
+            ret false
+        end
+    end
+    ret write_if_missing(path, content, made)
+end
+
+func readme_structure(cfg: InitCfg): str:
+    fa := cfg.fa
+    mut t := ""
+    if str.Equals(cfg.kind, "cli"):
+        t += "    main.salam              " + tx(fa, "the program starts here", "برنامه از اینجا شروع می شود") + "\n"
+        t += "    src/greet.salam         " + tx(fa, "a small package that main.salam includes", "یک بسته کوچک که main.salam آن را می آورد") + "\n"
+        t += "    tests/greet_test.salam  " + tx(fa, "tests, run with salam test", "آزمون ها، با salam test اجرا می شوند") + "\n"
+    else str.Equals(cfg.kind, "http"):
+        t += "    main.salam              " + tx(fa, "the server: handlers, routes and the port", "سرور: کنترل کننده ها، مسیرها و درگاه") + "\n"
+    else str.Equals(cfg.web, "spa") and has_item(cfg.platforms, "web"):
+        t += "    main.salam              " + tx(fa, "the page frame: header and the Outlet where a route shows", "قاب صفحه: سربرگ و Outlet که مسیر در آن نمایش داده می شود") + "\n"
+        t += "    pages/index.salam       " + tx(fa, "the route /", "مسیر /") + "\n"
+        t += "    pages/about.salam       " + tx(fa, "the route /about", "مسیر /about") + "\n"
+        t += "    pages/_404.salam        " + tx(fa, "shown when no route matches", "وقتی هیچ مسیری نمی خواند نمایش داده می شود") + "\n"
+        t += "    components/             " + tx(fa, "pieces you reuse across pages", "تکه هایی که در چند صفحه دوباره استفاده می شوند") + "\n"
+    else str.Equals(cfg.web, "ssr") and has_item(cfg.platforms, "web"):
+        t += "    main.salam              " + tx(fa, "the page frame and the server func", "قاب صفحه و تابع سرور") + "\n"
+        t += "    pages/index.salam       " + tx(fa, "the route /, drawn on the server", "مسیر /، ساخته شده روی سرور") + "\n"
+        t += "    pages/about.salam       " + tx(fa, "the route /about", "مسیر /about") + "\n"
+        t += "    pages/_404.salam        " + tx(fa, "shown when no route matches", "وقتی هیچ مسیری نمی خواند نمایش داده می شود") + "\n"
+    else:
+        t += "    main.salam              " + tx(fa, "the whole page: a component and the page block", "کل صفحه: یک کامپوننت و بلوک page") + "\n"
+    end
+    t += "    salam.toml              " + tx(fa, "name, version, platforms and design of the project", "نام، نسخه، سکوها و طراحی پروژه") + "\n"
+    ret t
+end
+
+func readme_commands(cfg: InitCfg): str:
+    fa := cfg.fa
+    mut t := ""
+    if str.Equals(cfg.kind, "cli"):
+        t += "    salam run               " + tx(fa, "build and run", "ساخت و اجرا") + "\n"
+        t += "    salam test              " + tx(fa, "run the tests", "اجرای آزمون ها") + "\n"
+        t += "    salam build             " + tx(fa, "make an executable", "ساخت فایل اجرایی") + "\n"
+        ret t
+    end
+    if str.Equals(cfg.kind, "http"):
+        t += "    salam run               " + tx(fa, "start the server on http://localhost:8080", "راه اندازی سرور روی http://localhost:8080") + "\n"
+        t += "    salam build             " + tx(fa, "make an executable", "ساخت فایل اجرایی") + "\n"
+        ret t
+    end
+    if has_item(cfg.platforms, "web"):
+        t += "    salam serve             " + tx(fa, "develop in the browser, reloads on every save", "توسعه در مرورگر، با هر ذخیره دوباره بارگذاری می شود") + "\n"
+        if str.Equals(cfg.web, "ssr"):
+            t += "    salam page build --ssr  " + tx(fa, "build dist/server and its assets", "ساخت dist/server و فایل های آن") + "\n"
+        else:
+            t += "    salam page build        " + tx(fa, "write index.html, index.css and index.js", "نوشتن index.html و index.css و index.js") + "\n"
+        end
+    end
+    if has_item(cfg.platforms, "linux") or has_item(cfg.platforms, "macos") or has_item(cfg.platforms, "windows"):
+        t += "    salam run --ui=native   " + tx(fa, "open it in a desktop window", "باز کردن در یک پنجره دسکتاپ") + "\n"
+    end
+    if has_item(cfg.platforms, "android"):
+        t += "    salam app android main.salam --out build/android\n"
+    end
+    if has_item(cfg.platforms, "ios"):
+        t += "    salam app ios main.salam --out build/ios\n"
+    end
+    ret t
+end
+
+func init_readme(cfg: InitCfg): str:
+    fa := cfg.fa
+    mut t := "# " + cfg.name + "\n\n"
+    if str.Len(cfg.desc) > 0:
+        t += cfg.desc + "\n\n"
+    end
+    t += "## " + tx(fa, "Structure", "ساختار") + "\n\n" + readme_structure(cfg) + "\n"
+    t += "## " + tx(fa, "Commands", "فرمان ها") + "\n\n" + readme_commands(cfg) + "\n"
+    t += "## " + tx(fa, "Platforms", "سکوها") + "\n\n    " + str.Join(cfg.platforms, ", ") + "\n\n"
+    t += tx(
+        fa,
+        "These are listed in salam.toml under [project]. Keep each source file next to the one that uses it, and put reusable parts in their own files.\n",
+        "این ها در salam.toml زیر [project] نوشته شده اند. هر فایل را کنار فایلی که از آن استفاده می کند نگه دارید و بخش های دوباره کاربردی را در فایل جدا بگذارید.\n"
+    )
+    ret t
+end
+
+func write_project(dir: str, cfg: InitCfg, with_main: bool, made &: Vector<str>): bool:
+    fa := cfg.fa
+    if str.Equals(cfg.kind, "cli"):
+        if with_main and not emit(dir, "main.salam", tpl_cli_main(fa), made):
+            ret false
+        end
+        if not emit(dir, "src/greet.salam", tpl_cli_greet(fa), made):
+            ret false
+        end
+        if not emit(dir, "tests/greet_test.salam", tpl_cli_test(fa), made):
+            ret false
+        end
+    else str.Equals(cfg.kind, "http"):
+        if with_main and not emit(dir, "main.salam", tpl_http_main(fa), made):
+            ret false
+        end
+    else:
+        web := has_item(cfg.platforms, "web")
+        if web and str.Equals(cfg.web, "spa"):
+            if with_main and not emit(dir, "main.salam", tpl_spa_main(fa), made):
+                ret false
+            end
+            if not emit(dir, "components/site_header.salam", tpl_spa_header(fa), made) or
+                not emit(dir, "pages/index.salam", tpl_spa_index(fa), made) or
+                not emit(dir, "pages/about.salam", tpl_spa_about(fa), made) or
+                not emit(dir, "pages/_404.salam", tpl_spa_404(fa), made):
+                ret false
+            end
+        else web and str.Equals(cfg.web, "ssr"):
+            if with_main and not emit(dir, "main.salam", tpl_ssr_main(fa), made):
+                ret false
+            end
+            if not emit(dir, "pages/index.salam", tpl_ssr_index(fa), made) or
+                not emit(dir, "pages/about.salam", tpl_ssr_about(fa), made) or
+                not emit(dir, "pages/_404.salam", tpl_ssr_404(fa), made):
+                ret false
+            end
+        else:
+            if with_main and not emit(dir, "main.salam", tpl_page_main(fa), made):
+                ret false
+            end
+        end
+    end
+    if not emit(dir, "salam.toml", init_manifest(cfg), made):
+        ret false
+    end
+    if not emit(dir, ".gitignore", init_ignore(cfg), made):
+        ret false
+    end
+    ret emit(dir, "README.md", init_readme(cfg), made)
+end
+
+func next_command(cfg: InitCfg): str:
+    if str.Equals(cfg.kind, "dsl"):
+        if has_item(cfg.platforms, "web"):
+            ret "salam serve"
+        end
+        ret "salam run main.salam --ui=native"
+    end
+    ret "salam run"
+end
+
+func init_warnings(cfg: InitCfg, fa: bool):
+    if platform.OS() != "windows":
+        ret
+    end
+    if has_item(cfg.platforms, "android") or has_item(cfg.platforms, "ios"):
+        println tx(fa, "note: building Android and iOS apps is not supported on Windows; use Linux or macOS for that", "توجه: ساخت برنامه اندروید و آی او اس روی ویندوز پشتیبانی نمی شود؛ برای آن از لینوکس یا مک استفاده کنید")
+    end
+    if str.Equals(cfg.web, "ssr") and has_item(cfg.platforms, "web"):
+        println tx(fa, "note: the ssr build is not available on Windows yet", "توجه: ساخت ssr هنوز روی ویندوز در دسترس نیست")
+    end
+end
+
+func init_wizard(opt &: dr.Dr, dir: str, default_name: str, has_main: bool, with_main: bool): int:
+    fa := str.Equals(opt.lang, "fa")
+    interactive := not opt.init_yes and stdin_is_tty()
+    mut cfg := InitCfg {}
+    cfg.fa = fa
+    cfg.name = opt.init_name
+    if str.Len(cfg.name) == 0:
+        cfg.name = interactive ? ask_text(tx(fa, "Project name", "نام پروژه"), default_name) : default_name
+    end
+    if not valid_name(cfg.name):
+        io.EPrintln(co.Format1(i18.Tr("salam: project name must not contain path separators ('%s')"), co.ArgStr(cfg.name)))
+        ret 2
+    end
+    cfg.desc = opt.init_desc
+    if str.Len(cfg.desc) == 0 and interactive:
+        cfg.desc = ask_text(tx(fa, "Description (optional)", "توضیح (اختیاری)"), "")
+    end
+    cfg.kind = choose_kind(opt, fa, interactive)
+    if not str.Equals(cfg.kind, "cli") and not str.Equals(cfg.kind, "http") and not str.Equals(cfg.kind, "dsl"):
+        io.EPrintln("salam: unknown project type '" + cfg.kind + "' (choose cli, http or dsl)")
+        ret 2
+    end
+    mut plats := Vector {} as Vector<str>
+    if not choose_platforms(opt, cfg.kind, fa, interactive, plats):
+        ret 2
+    end
+    cfg.platforms = plats
+    if str.Equals(cfg.kind, "dsl"):
+        cfg.design = choose_design(opt, fa, interactive)
+        if not str.Equals(cfg.design, "shadcn") and not str.Equals(cfg.design, "none"):
+            io.EPrintln("salam: unknown design system '" + cfg.design + "' (choose shadcn or none)")
+            ret 2
+        end
+        if has_item(cfg.platforms, "web"):
+            cfg.web = choose_web(opt, fa, interactive)
+            if not str.Equals(cfg.web, "page") and not str.Equals(cfg.web, "spa") and not str.Equals(cfg.web, "ssr"):
+                io.EPrintln("salam: unknown web mode '" + cfg.web + "' (choose page, spa or ssr)")
+                ret 2
+            end
+        end
+    end
+    mut made := Vector {} as Vector<str>
+    defer made.Free()
+    if not write_project(dir, cfg, with_main, made):
+        ret 2
+    end
+    mut cd := ""
+    if not str.Equals(dir, "."):
+        cd = dir
+    end
+    if interactive:
+        println ""
+    end
+    print_created(cfg.name, made, cd, has_main or with_main, next_command(cfg))
+    init_warnings(cfg, fa)
+    ret 0
+end

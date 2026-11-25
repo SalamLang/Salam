@@ -19,6 +19,28 @@ The keyword spellings in both languages come from the compiler's own tables.
 
 Edit the generator, not those files.
 
+## Queries
+
+`queries/` holds the hand-written files next to the generated highlights:
+
+| File             | What it does                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------- |
+| `highlights.scm` | colours; page elements are `@tag`, their attributes `@tag.attribute` (generated)               |
+| `folds.scm`      | every block that ends in `end`: functions, types, `page`, `component`, page elements, branches |
+| `indents.scm`    | `@indent.begin` for the same blocks, `@indent.end` and `@indent.branch` for `end` and `else`, in both languages |
+| `locals.scm`     | scopes (functions, lambdas, blocks, `page`, `component`, page elements), definitions (parameters, variables, loop variables, page variables, functions, types) and references |
+| `textobjects.scm`| `nvim-treesitter-textobjects` names: `function`, `class` (struct, interface, enum, impl, component), `block` (`page` and every element), `attribute`, `conditional`, `loop`, `parameter`, `call`, `return`, `assignment`, `statement`, `comment`, `number` |
+| `injections.scm` | line and block comments are parsed as the `comment` language, which marks TODO and FIXME |
+
+A Salam block has no body node, so `function.inner`, `class.inner` and
+`block.inner` are the runs of statements, members or elements between the
+colon and `end`. Strings holding SQL or regular expressions are not injected.
+`tree-sitter.json` lists highlights, injections and locals; folds, indents
+and text objects are found by editors by file name. `build.sh` checks that
+every file in `queries/` compiles against the grammar by running it on
+`test/queries/sample.salam`, which has a component, a page, a struct and a
+function.
+
 ## The external scanner
 
 Salam reads words that stand next to each other on one line as one name
@@ -36,7 +58,7 @@ test the compiler makes.
 ## Building
 
 ```sh
-extensions/tree-sitter-salam/build.sh          # generate, then run test/corpus
+extensions/tree-sitter-salam/build.sh          # generate, run test/corpus, compile queries/
 extensions/tree-sitter-salam/build.sh --sweep  # also parse every Salam file here
 ```
 

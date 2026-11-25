@@ -1,0 +1,357 @@
+package nativegen
+
+func rv_alu_f(op: int): int:
+    switch op:
+        ALU_ADD: ret 0 end
+        ALU_SUB: ret 0 end
+        ALU_AND: ret 7 end
+        ALU_OR: ret 6 end
+        ALU_XOR: ret 4 end
+    end
+    ret 0
+end
+
+func rv_alu3(a &: Rv, op: int, rd: int, rs1: int, rs2: int, sz: int):
+    w := sz < 8 and (op == ALU_ADD or op == ALU_SUB)
+    rv_op(a, op == ALU_SUB ? 0x20 : 0, rv_alu_f(op), rd, rs1, rs2, w)
+    if sz < 8:
+        rv_zx32(a, rd)
+    end
+end
+
+func rv_flags_cmp(a &: Rv, sz: int, x: int, y: int):
+    rv_norm(a, sz, RV_T5, x)
+    rv_norm(a, sz, RV_T6, y)
+end
+
+func rv_flags_res(a &: Rv, sz: int, r: int):
+    rv_norm(a, sz, RV_T5, r)
+    rv_mv(a, RV_T6, RV_ZERO)
+end
+
+func rv_alu(g &: Ng, a &: Rv, i: int, op: int, rd: int, rm0: int, sz: int):
+    fl := flags_needed(g, i)
+    mut rm := rm0
+    if fl and op == ALU_ADD and rm == RV_T4:
+        rv_mv(a, RV_T6, RV_T4)
+        rm = RV_T6
+    end
+    if op == ALU_CMP:
+        if rv_fusable(g, a, i) >= 0:
+            ret
+        end
+        rv_flags_cmp(a, sz, rd, rm)
+        ret
+    end
+    if fl and op == ALU_SUB:
+        rv_flags_cmp(a, sz, rd, rm)
+        rv_alu3(a, op, rd, rd, rm, sz)
+        ret
+    end
+    if fl and op == ALU_ADD:
+        rv_norm(a, sz, RV_T4, rd)
+        rv_alu3(a, op, rd, rd, rm, sz)
+        rv_flags_res(a, sz, rd)
+        ret
+    end
+    rv_alu3(a, op, rd, rd, rm, sz)
+    if fl:
+        rv_flags_res(a, sz, rd)
+    end
+end
+
+func rv_alu_imm(g &: Ng, a &: Rv, i: int, op: int, rd: int, imm0: i64, sz: int):
+    mut imm := imm0
+    if sz == 4:
+        imm = norm32(imm)
+    end
+    if op == ALU_CMP:
+        if rv_fusable(g, a, i) >= 0:
+            ret
+        end
+        rv_norm(a, sz, RV_T5, rd)
+        rv_li(a, RV_T6, imm)
+        if sz < 8:
+            rv_slli(a, RV_T6, RV_T6, 64 - 8 * sz)
+        end
+        ret
+    end
+    fl := flags_needed(g, i)
+    small := imm >= (0 - 2048 as i64) and imm < (2048 as i64)
+    if not fl and small and op != ALU_SUB:
+        f3 := rv_alu_f(op)
+        if sz < 8 and op == ALU_ADD:
+            rv_i(a, imm, rd, 0, rd, 0x1B)
+        else:
+            rv_i(a, imm, rd, f3, rd, 0x13)
+        end
+        if sz < 8:
+            rv_zx32(a, rd)
+        end
+        ret
+    end
+    if not fl and op == ALU_SUB and imm > (0 - 2048 as i64) and imm <= (2048 as i64):
+        rv_i(a, 0 - imm, rd, 0, rd, sz < 8 ? 0x1B : 0x13)
+        if sz < 8:
+            rv_zx32(a, rd)
+        end
+        ret
+    end
+    rv_li(a, RV_T3, imm)
+    rv_alu(g, a, i, op, rd, RV_T3, sz)
+end
+
+func rv_shift(g &: Ng, a &: Rv, i: int, rd: int, sub: int, sz: int, imm: i64, byreg: bool):
+    w := sz < 8
+    if sz < 4 and (sub == SH_SHR or sub == SH_SAR):
+        if sub == SH_SAR:
+            rv_slli(a, rd, rd, 64 - 8 * sz)
+            rv_srai(a, rd, rd, 64 - 8 * sz)
+        else:
+            rv_slli(a, rd, rd, 64 - 8 * sz)
+            rv_srli(a, rd, rd, 64 - 8 * sz)
+        end
+    end
+    bits := w ? 32 : 64
+    if byreg:
+        cnt := rv_x(RCX)
+        if sub == SH_SHL:
+            rv_op(a, 0, 1, rd, rd, cnt, w)
+        else sub == SH_SHR:
+            rv_op(a, 0, 5, rd, rd, cnt, w)
+        else sub == SH_SAR:
+            rv_op(a, 0x20, 5, rd, rd, cnt, w)
+        else:
+            rv_op(a, 0x20, 0, RV_T4, RV_ZERO, cnt, false)
+            if sub == SH_ROR:
+                rv_op(a, 0, 5, RV_T3, rd, cnt, w)
+                rv_op(a, 0, 1, rd, rd, RV_T4, w)
+            else:
+                rv_op(a, 0, 1, RV_T3, rd, cnt, w)
+                rv_op(a, 0, 5, rd, rd, RV_T4, w)
+            end
+            rv_op(a, 0, 6, rd, rd, RV_T3, false)
+        end
+    else:
+        s := ((imm as int) % bits + bits) % bits
+        sop := w ? 0x1B : 0x13
+        if s != 0:
+            if sub == SH_SHL:
+                rv_i(a, s as i64, rd, 1, rd, sop)
+            else sub == SH_SHR:
+                rv_i(a, s as i64, rd, 5, rd, sop)
+            else sub == SH_SAR:
+                rv_i(a, (s as i64) | (0x400 as i64), rd, 5, rd, sop)
+            else:
+                rs := sub == SH_ROR ? s : bits - s
+                rv_i(a, rs as i64, rd, 5, RV_T3, sop)
+                rv_i(a, (bits - rs) as i64, rd, 1, rd, sop)
+                rv_op(a, 0, 6, rd, rd, RV_T3, false)
+            end
+        end
+    end
+    if w:
+        rv_zx32(a, rd)
+    end
+    if flags_needed(g, i):
+        rv_flags_res(a, sz, rd)
+    end
+end
+
+func rv_prod(g &: Ng, i: int): int:
+    mut j := i - 1
+    until j >= 0:
+        op := g.mc.op[j]
+        if op == M_CALL or op == M_CALLR or op == M_RET:
+            ret 0 - 1
+        end
+        if flag_kind(g, j) >= 0:
+            ret j
+        end
+        j--
+    end
+    ret 0 - 1
+end
+
+func rv_feq(a &: Rv, rd: int, x: int, y: int, f3: int, dbl: bool):
+    rv_r(a, dbl ? 0x51 : 0x50, y, x, f3, rd, 0x53)
+end
+
+func rv_xori1(a &: Rv, rd: int):
+    rv_i(a, 1 as i64, rd, 4, rd, 0x13)
+end
+
+func rv_uno(a &: Rv, dbl: bool):
+    rv_feq(a, RV_T3, RV_FA, RV_FA, 2, dbl)
+    rv_feq(a, RV_T4, RV_FB, RV_FB, 2, dbl)
+    rv_op(a, 0, 7, RV_T3, RV_T3, RV_T4, false)
+    rv_xori1(a, RV_T3)
+end
+
+func rv_jinv(cc: int, f3 &: int, swap &: bool): bool:
+    swap = cc == X_G or cc == X_LE or cc == X_A or cc == X_BE
+    switch cc:
+        X_E: f3 = 1 ret true end
+        X_NE: f3 = 0 ret true end
+        X_L, X_G: f3 = 5 ret true end
+        X_GE, X_LE: f3 = 4 ret true end
+        X_B, X_A: f3 = 7 ret true end
+        X_AE, X_BE: f3 = 6 ret true end
+    end
+    ret false
+end
+
+func rv_next_real(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.Len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j++
+    end
+    ret j
+end
+
+func rv_flags_dead(g &: Ng, a &: Rv, j0: int, depth: int): bool:
+    n := g.mc.op.Len()
+    mut j := j0
+    repeat 64:
+        if j < 0 or j >= n:
+            ret true
+        end
+        op := g.mc.op[j]
+        if is_flag_use(op):
+            ret false
+        end
+        if flag_kind(g, j) >= 0 or op == M_CALL or op == M_CALLR or op == M_RET:
+            ret true
+        end
+        if op == M_JMP:
+            t := g.mc.tgt[j]
+            if depth >= 2 or t < 0 or t >= a.lbl_mi.Len() or a.lbl_mi[t] < 0:
+                ret false
+            end
+            ret rv_flags_dead(g, a, a.lbl_mi[t] + 1, depth + 1)
+        end
+        j++
+    end
+    ret false
+end
+
+func rv_fusable(g &: Ng, a &: Rv, p: int): int:
+    op := g.mc.op[p]
+    c := g.mc.cc[p]
+    sz := g.mc.sz[p]
+    if sz != 4 and sz != 8:
+        ret 0 - 1
+    end
+    if not ((op == M_ALU_RR or op == M_ALU_RI) and c == ALU_CMP) and
+        not (op == M_TEST_RR and g.mc.r0[p] == g.mc.r1[p]):
+        ret 0 - 1
+    end
+    j := rv_next_real(g, p)
+    if j >= g.mc.op.Len():
+        ret 0 - 1
+    end
+    jo := g.mc.op[j]
+    if jo != M_JCC and jo != M_SETCC and jo != M_CMOV:
+        ret 0 - 1
+    end
+    mut f3 := 0
+    mut sw := false
+    if not rv_jinv(g.mc.cc[j], f3, sw) or not rv_flags_dead(g, a, j + 1, 0):
+        ret 0 - 1
+    end
+    if jo == M_JCC:
+        t := g.mc.tgt[j]
+        if t < 0 or t >= a.lbl_mi.Len() or a.lbl_mi[t] < 0 or not rv_flags_dead(
+            g, a, a.lbl_mi[t] + 1, 1
+        ):
+            ret 0 - 1
+        end
+    end
+    ret j
+end
+
+func rv_fuse_ops(g &: Ng, a &: Rv, p: int, x &: int, y &: int):
+    op := g.mc.op[p]
+    sz := g.mc.sz[p]
+    x = rv_x(g.mc.r0[p])
+    y = RV_ZERO
+    if op == M_ALU_RR:
+        y = rv_x(g.mc.r1[p])
+    else op == M_ALU_RI:
+        mut imm := g.mc.imm[p]
+        if sz == 4:
+            imm = norm32(imm)
+        end
+        if imm != (0 as i64):
+            rv_li(a, RV_T6, imm)
+            y = RV_T6
+        end
+    end
+    if sz == 4:
+        rv_i(a, 0 as i64, x, 0, RV_T5, 0x1B)
+        x = RV_T5
+        if op == M_ALU_RR:
+            rv_i(a, 0 as i64, y, 0, RV_T6, 0x1B)
+            y = RV_T6
+        end
+    end
+end
+
+func rv_fused_branch(a &: Rv, cc: int, x: int, y: int, off: i64):
+    mut f3 := 0
+    mut sw := false
+    _ok := rv_jinv(cc, f3, sw)
+    rv_w(a, rv_benc(off, sw ? x : y, sw ? y : x, f3))
+end
+
+func rv_fused(g &: Ng, a &: Rv, p: int, i: int):
+    mut x := 0
+    mut y := 0
+    rv_fuse_ops(g, a, p, x, y)
+    cc := g.mc.cc[i]
+    op := g.mc.op[i]
+    if op == M_JCC:
+        rv_fused_branch(a, cc, x, y, 8 as i64)
+        rv_jal_to(a, g.mc.tgt[i])
+        ret
+    end
+    rd := rv_x(g.mc.r0[i])
+    if op == M_CMOV:
+        rv_fused_branch(a, cc, x, y, 8 as i64)
+        rv_mv(a, rd, rv_x(g.mc.r1[i]))
+        if g.mc.sz[i] == 4:
+            rv_zx32(a, rd)
+        end
+        ret
+    end
+    switch cc:
+        X_E, X_NE:
+            rv_op(a, 0, 4, RV_T3, x, y, false)
+            if cc == X_E:
+                rv_i(a, 1 as i64, RV_T3, 3, rd, 0x13)
+            else:
+                rv_op(a, 0, 3, rd, RV_ZERO, RV_T3, false)
+            end
+            ret
+        end
+        X_L, X_GE:
+            rv_op(a, 0, 2, rd, x, y, false)
+            break
+        end
+        X_G, X_LE:
+            rv_op(a, 0, 2, rd, y, x, false)
+            break
+        end
+        X_B, X_AE:
+            rv_op(a, 0, 3, rd, x, y, false)
+            break
+        end
+        X_A, X_BE:
+            rv_op(a, 0, 3, rd, y, x, false)
+            break
+        end
+    end
+    if cc == X_GE or cc == X_LE or cc == X_AE or cc == X_BE:
+        rv_xori1(a, rd)
+    end
+end

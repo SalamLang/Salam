@@ -2241,7 +2241,8 @@ jobs:
        (github.event_name == 'workflow_dispatch' && inputs.nightly))
     name: Build .deb packages
     runs-on: ubuntu-24.04
-    needs: [build-linux, build-linux-i686, build-linux-aarch64, build-linux-armhf]
+    needs:
+      [build-linux, build-linux-i686, build-linux-aarch64, build-linux-armhf]
     outputs:
       built: ${{ steps.build_deb.outputs.built }}
     steps:
@@ -2436,14 +2437,14 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  create-release:
+  release-assets:
     if: |
       !cancelled() && !failure() &&
       github.ref == 'refs/heads/main' &&
       github.repository == 'SalamLang/Salam' &&
       ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
        (github.event_name == 'workflow_dispatch' && inputs.nightly))
-    name: Create Release
+    name: Stage release files
     runs-on: ubuntu-24.04
     needs:
       [
@@ -2461,13 +2462,14 @@ jobs:
         package-rpm,
         package-pacman,
       ]
-    permissions:
-      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.TAG }}
+      title: ${{ steps.tag.outputs.RELEASE_TITLE }}
+      prerelease_flag: ${{ steps.tag.outputs.PRERELEASE_FLAG }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: false
       - name: Read version from VERSION file
         id: get_version
@@ -2476,6 +2478,7 @@ jobs:
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "Salam version: ${VERSION}"
       - name: Compute release tag/title (nightly vs versioned)
+        id: tag
         env:
           NIGHTLY: ${{ inputs.nightly }}
           NIGHTLY_DATE_INPUT: ${{ inputs.nightly_date }}
@@ -2487,13 +2490,13 @@ jobs:
               echo "TAG=v${VERSION}-nightly-${NIGHTLY_DATE}"
               echo "RELEASE_TITLE=Salam Nightly Release v${VERSION}-nightly-${NIGHTLY_DATE}"
               echo "PRERELEASE_FLAG=--prerelease"
-            } >> "$GITHUB_ENV"
+            } | tee -a "$GITHUB_OUTPUT" >> "$GITHUB_ENV"
           else
             {
               echo "TAG=v${VERSION}"
               echo "RELEASE_TITLE=Salam Release v${VERSION}"
               echo "PRERELEASE_FLAG="
-            } >> "$GITHUB_ENV"
+            } | tee -a "$GITHUB_OUTPUT" >> "$GITHUB_ENV"
           fi
       - name: Download Linux artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -2792,83 +2795,9 @@ jobs:
             echo "- .rpm: $RPM_COUNT file(s)"
             echo "- .pkg.tar.zst (Arch): $PACMAN_COUNT file(s)"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Delete existing release and tag if found
+      - name: Checksum and check the release files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          pre=$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || true)
-          if [ "$pre" = "false" ]; then
-            echo "::error::$TAG is already published as a stable release; refusing to delete it. Bump VERSION and push a new release: commit."
-            exit 1
-          fi
-          if gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null; then
-            echo "Deleted existing release $TAG (and its tag)."
-          else
-            echo "No existing release $TAG."
-          fi
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" >/dev/null 2>&1 || true
-          git tag -d "$TAG" 2>/dev/null || true
-      - name: Create a signed, annotated tag
-        id: signtag
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GPG_SIGNING_KEY_ID: ${{ secrets.GPG_SIGNING_KEY_ID }}
-          GIT_TAGGER_NAME: ${{ secrets.GIT_TAGGER_NAME }}
-          GIT_TAGGER_EMAIL: ${{ secrets.GIT_TAGGER_EMAIL }}
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "no GPG_PRIVATE_KEY secret; the release will carry an unsigned lightweight tag"
-            exit 0
-          fi
-
-          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
-          KEY_ID="${GPG_SIGNING_KEY_ID:-}"
-          if [ -z "$KEY_ID" ]; then
-            KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
-          fi
-          [ -n "$KEY_ID" ] || { echo "::error::imported a GPG key but could not read its id"; exit 1; }
-          echo "signing with $KEY_ID"
-
-          mkdir -p "$HOME/.gnupg"
-          chmod 700 "$HOME/.gnupg"
-          echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
-          gpgconf --reload gpg-agent || true
-
-          KEY_UID=$(gpg --list-keys --with-colons "$KEY_ID" | awk -F: '/^uid:/ {print $10; exit}')
-          KEY_EMAIL=$(printf '%s' "$KEY_UID" | sed -n 's/.*<\(.*\)>.*/\1/p')
-          KEY_NAME=$(printf '%s' "$KEY_UID" | sed 's/ *<.*//')
-          git config user.name "${GIT_TAGGER_NAME:-${KEY_NAME:-$GITHUB_ACTOR}}"
-          git config user.email "${GIT_TAGGER_EMAIL:-${KEY_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}}"
-          echo "tagging as $(git config user.name) <$(git config user.email)>"
-          git config user.signingkey "$KEY_ID"
-          cat > .gpg-batch <<'GPGWRAP'
-          #!/bin/sh
-          if [ -n "${GPG_PASSPHRASE:-}" ]; then
-              exec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
-          fi
-          exec gpg --batch --pinentry-mode loopback "$@"
-          GPGWRAP
-          sed -i 's/^          //' .gpg-batch
-          chmod +x .gpg-batch
-          git config gpg.program "$PWD/.gpg-batch"
-          export GPG_PASSPHRASE
-
-          git tag -s "$TAG" -m "$RELEASE_TITLE" "$GITHUB_SHA"
-          git tag -v "$TAG" || { echo "::error::the tag did not verify locally"; exit 1; }
-
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
-          rm -f .gpg-batch
-          echo "signed=true" >> "$GITHUB_OUTPUT"
-          echo "pushed a signed annotated tag $TAG"
-
-      - name: Create GitHub Release with auto-generated notes
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          TAG_WAS_SIGNED: ${{ steps.signtag.outputs.signed }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -eu
@@ -2995,16 +2924,191 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          TARGET_ARG="--target $GITHUB_SHA"
-          [ "$TAG_WAS_SIGNED" = "true" ] && TARGET_ARG=""
-          # shellcheck disable=SC2086
-          gh release create "$TAG" \
-            $TARGET_ARG \
-            --title "$RELEASE_TITLE" \
-            --notes-file release-notes-preamble.md \
-            --generate-notes \
-            ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
-            "${assets[@]}" "${sums[@]}"
+          mkdir -p out/assets
+          cp "${assets[@]}" "${sums[@]}" out/assets/
+          cp release-notes-preamble.md out/
+      - name: Upload the staged release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: out
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
+
+  release-tag:
+    if: |
+      !cancelled() && !failure() &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    name: Create release tag
+    runs-on: ubuntu-24.04
+    needs: [release-assets]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check whether the tag already exists
+        id: existing
+        env:
+          TAG: ${{ needs.release-assets.outputs.tag }}
+        run: |
+          set -eu
+          refs=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+          if [ -z "$refs" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG does not exist yet"
+            exit 0
+          fi
+          commit=$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG^{}" '$2 == r { print $1 }')
+          if [ -z "$commit" ]; then
+            commit=$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG" '$2 == r { print $1 }')
+          fi
+          if [ "$commit" = "$GITHUB_SHA" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$TAG already points at $GITHUB_SHA, keeping it"
+            exit 0
+          fi
+          echo "::error::$TAG already exists at ${commit:-an unknown commit}, but this run is for $GITHUB_SHA."
+          echo "::error::Release tags are immutable here, so this job never moves or deletes one. Bump VERSION in a new release: commit, or pick another nightly_date."
+          exit 1
+      - name: Create a signed, annotated tag
+        id: signtag
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          TAG: ${{ needs.release-assets.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.release-assets.outputs.title }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_SIGNING_KEY_ID: ${{ secrets.GPG_SIGNING_KEY_ID }}
+          GIT_TAGGER_NAME: ${{ secrets.GIT_TAGGER_NAME }}
+          GIT_TAGGER_EMAIL: ${{ secrets.GIT_TAGGER_EMAIL }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${GITHUB_SHA}:refs/tags/$TAG"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "no GPG_PRIVATE_KEY secret; pushed an unsigned lightweight tag $TAG"
+            exit 0
+          fi
+
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          KEY_ID="${GPG_SIGNING_KEY_ID:-}"
+          if [ -z "$KEY_ID" ]; then
+            KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          fi
+          [ -n "$KEY_ID" ] || { echo "::error::imported a GPG key but could not read its id"; exit 1; }
+          echo "signing with $KEY_ID"
+
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
+          gpgconf --reload gpg-agent || true
+
+          KEY_UID=$(gpg --list-keys --with-colons "$KEY_ID" | awk -F: '/^uid:/ {print $10; exit}')
+          KEY_EMAIL=$(printf '%s' "$KEY_UID" | sed -n 's/.*<\(.*\)>.*/\1/p')
+          KEY_NAME=$(printf '%s' "$KEY_UID" | sed 's/ *<.*//')
+          git config user.name "${GIT_TAGGER_NAME:-${KEY_NAME:-$GITHUB_ACTOR}}"
+          git config user.email "${GIT_TAGGER_EMAIL:-${KEY_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}}"
+          echo "tagging as $(git config user.name) <$(git config user.email)>"
+          git config user.signingkey "$KEY_ID"
+          cat > .gpg-batch <<'GPGWRAP'
+          #!/bin/sh
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+              exec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
+          fi
+          exec gpg --batch --pinentry-mode loopback "$@"
+          GPGWRAP
+          sed -i 's/^          //' .gpg-batch
+          chmod +x .gpg-batch
+          git config gpg.program "$PWD/.gpg-batch"
+          export GPG_PASSPHRASE
+
+          git tag -s "$TAG" -m "$RELEASE_TITLE" "$GITHUB_SHA"
+          git tag -v "$TAG" || { echo "::error::the tag did not verify locally"; exit 1; }
+
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          rm -f .gpg-batch
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "pushed a signed annotated tag $TAG"
+
+  create-release:
+    if: |
+      !cancelled() && !failure() &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    name: Create Release
+    runs-on: ubuntu-24.04
+    needs: [release-assets, release-tag]
+    permissions:
+      contents: write
+    steps:
+      - name: Download the staged release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: ./out
+      - name: Create the GitHub Release, or finish the one an earlier attempt started
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-assets.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.release-assets.outputs.title }}
+          PRERELEASE_FLAG: ${{ needs.release-assets.outputs.prerelease_flag }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          files=(out/assets/*)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no staged release files were downloaded"; exit 1; }
+
+          state=$(gh release list --limit 1000 --json tagName,isDraft \
+            --jq "[.[] | select(.tagName == \"$TAG\")] | if length == 0 then \"none\" elif any(.isDraft | not) then \"published\" else \"draft\" end")
+          echo "release $TAG: $state"
+
+          case "$state" in
+          none)
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "$RELEASE_TITLE" \
+              --notes-file out/release-notes-preamble.md \
+              --generate-notes \
+              ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
+              "${files[@]}"
+            ;;
+          draft)
+            echo "an earlier attempt left $TAG as a draft; uploading into it and publishing it"
+            gh release upload "$TAG" --clobber "${files[@]}"
+            gh release edit "$TAG" --draft=false
+            ;;
+          published)
+            have=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+            missing=()
+            for f in "${files[@]}"; do
+              printf '%s\n' "$have" | grep -qxF "$(basename "$f")" || missing+=("$f")
+            done
+            if [ "${#missing[@]}" -eq 0 ]; then
+              echo "$TAG is already published with all ${#files[@]} files"
+              exit 0
+            fi
+            echo "$TAG is published but lacks ${#missing[@]} file(s), uploading them"
+            gh release upload "$TAG" --clobber "${missing[@]}" || {
+              echo "::error::could not add files to the published release $TAG. Published releases are immutable here, so the missing files need a new VERSION."
+              exit 1
+            }
+            ;;
+          *)
+            echo "::error::could not tell whether $TAG has a release (got: $state)"
+            exit 1
+            ;;
+          esac
 
   package-distros:
     name: Publish distro packages
@@ -3045,6 +3149,11 @@ jobs:
         build-linux-i686,
         build-linux-armhf,
         build-linux-aarch64,
+        package-deb,
+        package-rpm,
+        package-pacman,
+        release-assets,
+        release-tag,
         create-release,
       ]
     runs-on: ubuntu-24.04

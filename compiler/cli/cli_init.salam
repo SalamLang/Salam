@@ -17,6 +17,7 @@ import os
 import io
 import str
 import os.platform
+import term
 
 include dr "../driver/driver.salam"
 include i18 "../i18n.salam"
@@ -126,11 +127,8 @@ func ask_line(label: str): str:
 end
 
 func ask_text(label: str, fallback: str): str:
-    mut shown := label
-    if str.Len(fallback) > 0:
-        shown = label + " [" + fallback + "]"
-    end
-    got := ask_line(shown + ": ")
+    got := ask_line(paint("36;1", glyph("\xE2\x97\x86", "?")) + " " + paint("1", label) +
+        (str.Len(fallback) > 0 ? " " + paint("2", "(" + fallback + ")") : "") + ": ")
     if str.Len(got) == 0:
         ret fallback
     end
@@ -147,7 +145,7 @@ func pick_index(got: str, names: Vector<str>): int:
     ret 0 - 1
 end
 
-func ask_one(label: str, names: Vector<str>, notes: Vector<str>, first: int, fa: bool): str:
+func ask_one_text(label: str, names: Vector<str>, notes: Vector<str>, first: int, fa: bool): str:
     println ""
     println label
     repeat names.Len() in i:
@@ -169,7 +167,7 @@ func ask_one(label: str, names: Vector<str>, notes: Vector<str>, first: int, fa:
     ret names.Get(first)
 end
 
-func ask_many(label: str, names: Vector<str>, notes: Vector<str>, fa: bool): Vector<str>:
+func ask_many_text(label: str, names: Vector<str>, notes: Vector<str>, fa: bool): Vector<str>:
     println ""
     println label
     repeat names.Len() in i:
@@ -235,6 +233,192 @@ func parse_platforms(raw: str, kind: str, out &: Vector<str>): bool:
     end
     parts.Free()
     ret ok and out.Len() > 0
+end
+
+func paint(code: str, text: str): str:
+    if not term.SupportsColor():
+        ret text
+    end
+    ret term.Esc + "[" + code + "m" + text + term.Esc + "[0m"
+end
+
+func glyph(unicode_form: str, plain: str): str:
+    if SALAM_OS_WINDOWS:
+        ret plain
+    end
+    ret unicode_form
+end
+
+func clip_note(head: str, note: str): str:
+    cols := term.Cols()
+    if cols > 0 and str.Len(head) + str.Len(note) + 4 > cols:
+        ret ""
+    end
+    ret "  " + paint("2", note)
+end
+
+func tui_item(i: int, cur: int, names: Vector<str>, notes: Vector<str>, marks: Vector<int>, multi: bool): str:
+    mut head := names.Get(i)
+    if multi:
+        head = (marks.Get(i) == 1 ? "[x] " : "[ ] ") + head
+    end
+    if i == cur:
+        ret paint("36;1", glyph("\xE2\x9D\xAF ", "> ") + head) + clip_note(head, notes.Get(i))
+    end
+    ret "  " + head + clip_note(head, notes.Get(i))
+end
+
+func tui_draw(cur: int, names: Vector<str>, notes: Vector<str>, marks: Vector<int>, multi: bool, again: bool):
+    mut out := ""
+    if again:
+        out += term.Esc + "[" + str.FromInt(names.Len() as i64) + "A"
+    end
+    repeat names.Len() in i:
+        out += term.Esc + "[2K" + tui_item(i, cur, names, notes, marks, multi) + "\n"
+    end
+    term.Emit(out)
+end
+
+func tui_done(label: str, answer: str, rows: int):
+    term.Emit(term.Esc + "[" + str.FromInt(rows as i64) + "A" + term.Esc + "[J" + term.Esc + "[?25h")
+    println paint("32", glyph("\xE2\x9C\x94", "+")) + " " + label + "  " + paint("36", answer)
+end
+
+func tui_abort(st &: term.TermState):
+    _r := term.Restore(st)
+    term.Emit(term.Esc + "[?25h\n")
+    os.Exit(130)
+end
+
+func tui_pick(label: str, names: Vector<str>, notes: Vector<str>, first: int, multi: bool, picked &: Vector<int>): bool:
+    mut st := term.MakeCbreak(term.StdinFd)
+    if not st.ok:
+        ret false
+    end
+    mut marks := Vector {} as Vector<int>
+    repeat names.Len():
+        marks.Push(multi ? 1 : 0)
+    end
+    mut cur := first
+    println paint("36;1", glyph("\xE2\x97\x86", "?")) + " " + paint("1", label) + "  " +
+        paint("2", multi ? "(arrows, space to toggle, a for all, enter)" : "(arrows or number, enter)")
+    term.Emit(term.Esc + "[?25l")
+    tui_draw(cur, names, notes, marks, multi, false)
+    mut done := false
+    until not done:
+        k := term.ReadKey()
+        if k.code == term.KeyEOF:
+            done = true
+        else k.ctrl and k.ch == "c":
+            tui_abort(st)
+        else k.code == term.KeyEnter:
+            mut any := not multi
+            repeat marks.Len() in i:
+                if marks.Get(i) == 1:
+                    any = true
+                end
+            end
+            if any:
+                done = true
+            end
+        else k.code == term.KeyUp or k.ch == "k":
+            cur = (cur + names.Len() - 1) % names.Len()
+        else k.code == term.KeyDown or k.ch == "j":
+            cur = (cur + 1) % names.Len()
+        else multi and (k.code == term.KeySpace or k.ch == " "):
+            marks.Set(cur, 1 - marks.Get(cur))
+        else multi and k.ch == "a":
+            mut all := 0
+            repeat marks.Len() in i:
+                if marks.Get(i) == 0:
+                    all = 1
+                end
+            end
+            repeat marks.Len() in i:
+                marks.Set(i, all)
+            end
+        else str.Len(k.ch) == 1 and co.ByteAt(k.ch, 0) >= 49 and co.ByteAt(k.ch, 0) <= 57:
+            idx := co.ByteAt(k.ch, 0) - 49
+            if idx < names.Len():
+                cur = idx
+            end
+        end
+        if not done:
+            tui_draw(cur, names, notes, marks, multi, true)
+        end
+    end
+    _r := term.Restore(st)
+    mut shown := ""
+    if multi:
+        repeat marks.Len() in i:
+            if marks.Get(i) == 1:
+                picked.Push(i)
+                shown += (str.Len(shown) > 0 ? ", " : "") + names.Get(i)
+            end
+        end
+    else:
+        picked.Push(cur)
+        shown = names.Get(cur)
+    end
+    tui_done(label, shown, names.Len() + 1)
+    ret true
+end
+
+func ask_one(label: str, names: Vector<str>, notes: Vector<str>, first: int, fa: bool): str:
+    mut picked := Vector {} as Vector<int>
+    if tui_pick(label, names, notes, first, false, picked) and picked.Len() == 1:
+        ret names.Get(picked.Get(0))
+    end
+    ret ask_one_text(label, names, notes, first, fa)
+end
+
+func ask_many(label: str, names: Vector<str>, notes: Vector<str>, fa: bool): Vector<str>:
+    mut picked := Vector {} as Vector<int>
+    if tui_pick(label, names, notes, 0, true, picked) and picked.Len() > 0:
+        mut out := Vector {} as Vector<str>
+        repeat picked.Len() in i:
+            out.Push(names.Get(picked.Get(i)))
+        end
+        ret out
+    end
+    ret ask_many_text(label, names, notes, fa)
+end
+
+func banner(dir: str, fa: bool):
+    mut where := dir
+    if str.Equals(dir, "."):
+        where = os.Cwd()
+    end
+    println ""
+    println "  " + paint("36;1", "salam init") + "  " + paint("2", where)
+    println "  " + paint("2", tx(fa, "answer a few questions, press enter to take the default", "به چند پرسش پاسخ دهید، با اینتر مقدار پیش فرض را بپذیرید"))
+    println ""
+end
+
+func summary_line(key: str, val: str):
+    println "  " + paint("2", key) + str.Repeat(" ", 14 - str.Len(key)) + val
+end
+
+func confirm_create(cfg: InitCfg, dir: str, fa: bool): bool:
+    println ""
+    println "  " + paint("1", tx(fa, "Summary", "خلاصه"))
+    summary_line("name", cfg.name)
+    if str.Len(cfg.desc) > 0:
+        summary_line("description", cfg.desc)
+    end
+    summary_line("type", cfg.kind)
+    summary_line("platforms", str.Join(cfg.platforms, ", "))
+    if str.Equals(cfg.kind, "dsl"):
+        summary_line("design", cfg.design)
+        if has_item(cfg.platforms, "web"):
+            summary_line("web", cfg.web)
+        end
+    end
+    summary_line("folder", str.Equals(dir, ".") ? os.Cwd() : dir)
+    println ""
+    names := strs2("create", "cancel")
+    notes := strs2(tx(fa, "write the files", "نوشتن فایل ها"), tx(fa, "stop here, nothing is written", "توقف، چیزی نوشته نمی شود"))
+    ret str.Equals(ask_one(tx(fa, "Create the project?", "پروژه ساخته شود؟"), names, notes, 0, fa), "create")
 end
 
 func choose_kind(opt &: dr.Dr, fa: bool, interactive: bool): str:
@@ -527,6 +711,9 @@ func init_wizard(opt &: dr.Dr, dir: str, default_name: str, has_main: bool, with
     interactive := not opt.init_yes and stdin_is_tty()
     mut cfg := InitCfg {}
     cfg.fa = fa
+    if interactive:
+        banner(dir, fa)
+    end
     cfg.name = opt.init_name
     if str.Len(cfg.name) == 0:
         cfg.name = interactive ? ask_text(tx(fa, "Project name", "نام پروژه"), default_name) : default_name
@@ -562,6 +749,10 @@ func init_wizard(opt &: dr.Dr, dir: str, default_name: str, has_main: bool, with
                 ret 2
             end
         end
+    end
+    if interactive and not confirm_create(cfg, dir, fa):
+        println tx(fa, "cancelled, nothing was written", "لغو شد، چیزی نوشته نشد")
+        ret 1
     end
     mut made := Vector {} as Vector<str>
     defer made.Free()

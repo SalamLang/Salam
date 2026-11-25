@@ -13,6 +13,158 @@
 
 package typeset
 
+mut _dg_map := HashMap {} as HashMap<i64, int>
+mut _dg_font := Vector {} as Vector<i64>
+mut _dg_table := Vector {} as Vector<int>
+mut _dg_lidx := Vector {} as Vector<int>
+mut _dg_start := Vector {} as Vector<int>
+mut _dg_words := Vector {} as Vector<int>
+mut _dg_pool := Vector {} as Vector<int>
+
+func _dg_cov(
+    f: Font, cov: int, bits &: Vector<int>
+): bool:
+    fmt := _r16(f, cov)
+    n := _r16(f, cov + 2)
+    if fmt == 1:
+        repeat n in k:
+            _dg_set(bits, _r16(f, cov + 4 + k * 2))
+        end
+        ret true
+    end
+    if fmt == 2:
+        repeat n in k:
+            rec := cov + 4 + k * 6
+            a := _r16(f, rec)
+            z := _r16(f, rec + 2)
+            if z - a > 70000:
+                ret false
+            end
+            mut g := a
+            until g <= z:
+                _dg_set(bits, g)
+                g++
+            end
+        end
+        ret true
+    end
+    ret false
+end
+
+func _dg_set(bits &: Vector<int>, g: int):
+    w := g / 30
+    until bits.Len() <= w:
+        bits.Push(0)
+    end
+    bits[w] |= 1 << (g % 30)
+end
+
+func _dg_first_cov(f: Font, gsub: bool, t: int, s: int): int:
+    if gsub:
+        if t == 1 or t == 2 or t == 3 or t == 4 or t == 8:
+            ret s + _r16(f, s + 2)
+        end
+    else:
+        if t == 1 or t == 2 or t == 4 or t == 5 or t == 6:
+            ret s + _r16(f, s + 2)
+        end
+    end
+    ctx := gsub ? (t == 5 or t == 6) : (t == 7 or t == 8)
+    if not ctx:
+        ret -1
+    end
+    fmt := _r16(f, s)
+    if fmt == 1 or fmt == 2:
+        ret s + _r16(f, s + 2)
+    end
+    if fmt != 3:
+        ret -1
+    end
+    chain := gsub ? (t == 6) : (t == 8)
+    if not chain:
+        if _r16(f, s + 2) == 0:
+            ret 0
+        end
+        ret s + _r16(f, s + 6)
+    end
+    bc := _r16(f, s + 2)
+    ic_at := s + 4 + bc * 2
+    if _r16(f, ic_at) == 0:
+        ret 0
+    end
+    ret s + _r16(f, ic_at + 2)
+end
+
+func _dg_build(f: Font, table: int, gsub: bool, lidx: int): int:
+    lk := _lookup_off(f, table, lidx)
+    if lk == 0:
+        ret -1
+    end
+    ltype := _r16(f, lk)
+    n := _r16(f, lk + 4)
+    mut bits := Vector {} as Vector<int>
+    defer bits.Free()
+    repeat n in k:
+        mut s := lk + _r16(f, lk + 6 + k * 2)
+        mut t := ltype
+        if (gsub and t == 7) or (not gsub and t == 9):
+            t = _r16(f, s + 2)
+            s = s + _r32(f, s + 4)
+        end
+        cov := _dg_first_cov(f, gsub, t, s)
+        if cov < 0:
+            ret -1
+        end
+        if cov > 0 and not _dg_cov(f, cov, bits):
+            ret -1
+        end
+    end
+    at := _dg_pool.Len()
+    each w in bits:
+        _dg_pool.Push(w)
+    end
+    _dg_words.Push(bits.Len())
+    ret at
+end
+
+func _dg_of(f: Font, table: int, gsub: bool, lidx: int): int:
+    fid := ((f.data as i64) * 31 + f.size as i64) * 131 + f.units_per_em as i64
+    h := ((fid * 1000003 + table as i64) * 8191 + lidx as i64) * 2 + (gsub ? 1 : 0)
+    if _dg_map.Has(h):
+        at := _dg_map.Get(h)
+        if _dg_font[at] == fid and _dg_table[at] == table and _dg_lidx[at] == lidx:
+            ret at
+        end
+        ret -1
+    end
+    at := _dg_font.Len()
+    _dg_font.Push(fid)
+    _dg_table.Push(table)
+    _dg_lidx.Push(lidx)
+    st := _dg_build(f, table, gsub, lidx)
+    if st < 0:
+        _dg_words.Push(0)
+    end
+    _dg_start.Push(st)
+    _dg_map.Put(h, at)
+    ret at
+end
+
+func _dg_may(d: int, g: int): bool:
+    if d < 0:
+        ret true
+    end
+    st := _dg_start[d]
+    if st < 0:
+        ret true
+    end
+    w := g / 30
+    if w >= _dg_words[d]:
+        ret false
+    end
+    ret ((_dg_pool[st + w] >> (g % 30)) & 1) != 0
+end
+
 func _match_one(f: Font, g: int, v: int, kind: int, cd: int, base: int): bool:
     if kind == 0: ret g == v end
     if kind == 1: ret _classdef(f, cd, g) == v end
@@ -665,10 +817,11 @@ func _apply_lookup_pass(f: Font, table: int, gsub: bool, lidx: int, mask: int, b
         s := lk + _r16(f, lk + 6)
         ltype = _r16(f, s + 2)
     end
+    dg := _dg_of(f, table, gsub, lidx)
     if gsub and ltype == 8:
         mut i := b.g.Len() - 1
         until i >= 0:
-            if (b.mask.Get(i) & mask) != 0:
+            if (b.mask.Get(i) & mask) != 0 and _dg_may(dg, b.g.Get(i)):
                 _apply_lookup_at(f, table, gsub, lidx, b, i, 0)
             end
             i--
@@ -679,7 +832,7 @@ func _apply_lookup_pass(f: Font, table: int, gsub: bool, lidx: int, mask: int, b
     mut guard := 0
     until i < b.g.Len() and guard < 100000:
         guard++
-        if (b.mask.Get(i) & mask) != 0:
+        if (b.mask.Get(i) & mask) != 0 and _dg_may(dg, b.g.Get(i)):
             r := _apply_lookup_at(f, table, gsub, lidx, b, i, 0)
             if r > i:
                 i = r

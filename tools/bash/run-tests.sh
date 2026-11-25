@@ -211,7 +211,7 @@ $cerrs"
             ;;
         ssr)
             if [ "$HOST_OS" = linux ]; then
-                (cd "$proj" && "$SALAM_ABS" page build --ssr --no-color --log-level=error) >>"$buildlog" 2>&1
+                (cd "$proj" && "$SALAM_ABS" build --no-color --log-level=error) >>"$buildlog" 2>&1
                 ok=$?
                 [ "$ok" = 0 ] && [ -x "$proj/dist/server" ] || ok=1
             else
@@ -220,7 +220,7 @@ $cerrs"
             fi
             ;;
         *)
-            (cd "$proj" && "$SALAM_ABS" page build --no-color --log-level=error) >>"$buildlog" 2>&1
+            (cd "$proj" && "$SALAM_ABS" build --platform=web --no-color --log-level=error) >>"$buildlog" 2>&1
             ok=$?
             [ "$ok" = 0 ] && [ -f "$proj/index.html" ] || ok=1
             ;;

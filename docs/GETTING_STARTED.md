@@ -281,6 +281,12 @@ salam exec                  # interpret the project here
   `--design=` and `--web=` answer the questions up front and `-y` accepts the
   defaults, so scripts and pipes never wait for input.
 
+  A project made this way builds and runs through the two usual commands:
+  `salam run` serves a web project with live reload (or starts the first
+  platform), `salam build` builds it, and `--platform=web|js|android|ios|linux|macos|windows|all`
+  picks another target. `salam js`, `salam web`, `salam page build` and
+  `salam app` still work and are what these commands call.
+
 Frontend (layout DSL) projects have no `main` function; there `main.salam`
 is the project page:
 

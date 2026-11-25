@@ -128,10 +128,12 @@ while [ $n -lt 12 ]; do
 done
 sleep 1
 t=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
-case "$t" in "200 0."[0-4]*) r=fast ;; *) r="slow $t" ;; esac
+rc=$?
+case "$rc $t" in "0 200 0."[0-4]*) r=fast ;; *) r="slow $rc $t" ;; esac
 check "pages answer while 12 tabs wait for events" "$r" "fast"
 a=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' "http://127.0.0.1:$PORT/logo.txt")
-case "$a" in "200 0."[0-4]*) r=fast ;; *) r="slow $a" ;; esac
+rc=$?
+case "$rc $a" in "0 200 0."[0-4]*) r=fast ;; *) r="slow $rc $a" ;; esac
 check "assets answer while 12 tabs wait for events" "$r" "fast"
 for h in $holds; do
     wait "$h"
@@ -140,12 +142,12 @@ done
 left=$(find "$T/site" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')
 check "nothing is written next to the sources" "$left" "app.salam extra.css index.html leak.txt logo.txt "
 
-running=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
+mine=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-$PID-*")
+check "the server has a build directory of its own" "$([ -n "$mine" ] && [ -d "$mine" ] && echo yes)" "yes"
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null
 PID=""
-stopped=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
-check "stopping the server removes its build directory" "$stopped" "$((running - 1))"
+check "stopping the server removes its build directory" "$([ -e "$mine" ] || echo gone)" "gone"
 "$SALAM" serve "$T/site/app.salam" --port="$PORT" >"$T/b1.log" 2>&1 &
 PID=$!
 sleep 3

@@ -301,8 +301,17 @@ if SALAM_OS_LINUX:
             end
         end
         repeat stale.Len() in i:
-            inotify_rm_watch(w.nfd as int, conv.AtoiOr(w.watched.Get(stale.Get(i)), 0 - 1))
+            gone := w.watched.Get(stale.Get(i))
             w.watched.Remove(stale.Get(i))
+            mut shared := false
+            repeat w.watched.Len() in j:
+                if str.Equals(w.watched.ValAt(j), gone):
+                    shared = true
+                end
+            end
+            if not shared:
+                inotify_rm_watch(w.nfd as int, conv.AtoiOr(gone, 0 - 1))
+            end
         end
         stale.Free()
         dirs := Vector {} as Vector<str>
@@ -408,7 +417,8 @@ else SALAM_OS_MAC:
         w.watched = collections.OrderedMap {}
     end
 
-    func _kq_add(w &: Watcher, path: str):
+    func _kq_add(w &: Watcher, path: str): bool:
+        mut ok := false
         fd := open(path, _kq_oflags())
         if fd >= 0:
             kev := mem.Allocate(_KEV_SIZE as u64)
@@ -423,10 +433,12 @@ else SALAM_OS_MAC:
             mem.Free(kev)
             if r == 0:
                 w.watched.Set(path, str.FromInt(fd))
+                ok = true
             else:
                 close(fd)
             end
         end
+        ret ok
     end
 
     func _nat_init(w &: Watcher):
@@ -451,9 +463,14 @@ else SALAM_OS_MAC:
         if now.Len() + 1 > _KQ_MAX_FDS:
             _nat_stop(w)
         else:
-            _kq_add(w, w.root)
+            mut all := _kq_add(w, w.root)
             repeat now.Len() in i:
-                _kq_add(w, now.KeyAt(i))
+                if not _kq_add(w, now.KeyAt(i)):
+                    all = false
+                end
+            end
+            if not all:
+                _nat_stop(w)
             end
         end
         ret false
@@ -487,7 +504,8 @@ else SALAM_OS_BSD:
         w.watched = collections.OrderedMap {}
     end
 
-    func _kq_add(w &: Watcher, path: str):
+    func _kq_add(w &: Watcher, path: str): bool:
+        mut ok := false
         fd := open(path, _kq_oflags())
         if fd >= 0:
             kev := mem.Allocate(_KEV_SIZE as u64)
@@ -502,10 +520,12 @@ else SALAM_OS_BSD:
             mem.Free(kev)
             if r == 0:
                 w.watched.Set(path, str.FromInt(fd))
+                ok = true
             else:
                 close(fd)
             end
         end
+        ret ok
     end
 
     func _nat_init(w &: Watcher):
@@ -530,9 +550,14 @@ else SALAM_OS_BSD:
         if now.Len() + 1 > _KQ_MAX_FDS:
             _nat_stop(w)
         else:
-            _kq_add(w, w.root)
+            mut all := _kq_add(w, w.root)
             repeat now.Len() in i:
-                _kq_add(w, now.KeyAt(i))
+                if not _kq_add(w, now.KeyAt(i)):
+                    all = false
+                end
+            end
+            if not all:
+                _nat_stop(w)
             end
         end
         ret false

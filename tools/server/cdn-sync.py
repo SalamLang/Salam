@@ -12,6 +12,7 @@ Layout (relative to --root), a copy of GitHub's own paths:
   std/<sha>.tar.gz (+ .sha256)          the std/ folder of one commit
   std/main.commit, std/<tag>.commit     commit id a ref points at
   install.sh, install.ps1               the installers on main
+  index.html, releases/index.html       a plain page listing every mirrored release
 
 Rules: public data only; every file is downloaded to <root>/.tmp, its size and
 sha256 are checked (GitHub's digest and the published .sha256 beside it), and
@@ -26,6 +27,7 @@ Set GITHUB_TOKEN (or put it in /etc/salam-cdn-sync.env) to lift the API rate lim
 import argparse
 import fcntl
 import hashlib
+import html
 import io
 import json
 import os
@@ -320,6 +322,46 @@ def sync_installers(root, dry):
             log("installer %s updated" % name)
 
 
+def human(n):
+    n = float(n)
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return ("%d %s" % (n, u)) if u == "B" else ("%.1f %s" % (n, u))
+        n /= 1024
+
+
+def render_page(ordered):
+    """One static page for people who open the mirror in a browser. Direct
+    links, sizes and the sha256 of every file; no scripts, no external assets."""
+    e = html.escape
+    out = ['<!doctype html><html lang="en"><head><meta charset="utf-8">',
+           '<meta name="viewport" content="width=device-width,initial-scale=1">',
+           '<title>Salam releases</title>',
+           '<style>body{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem}'
+           'table{border-collapse:collapse;width:100%;margin:.5rem 0 1.5rem}'
+           'td,th{padding:.25rem .5rem;border-bottom:1px solid #8884;text-align:left}'
+           'td.n,th.n{text-align:right;white-space:nowrap}code{font-size:12px;word-break:break-all}'
+           '.fa{direction:rtl}</style></head><body>',
+           '<h1>Salam releases</h1>',
+           '<p>These files are copies of <a href="https://github.com/SalamLang/Salam/releases">'
+           'the GitHub releases</a>, served by the Salam project. Check the sha256 of what you download.</p>',
+           '<p class="fa" lang="fa">این فایل\u200cها نسخه\u200cی کپی انتشارهای گیت\u200cهاب هستند. '
+           'پیش از اجرا، مقدار sha256 را بررسی کنید.</p>',
+           '<p>Install: <code>curl -fsSL https://cdn.salamlang.ir/install.sh | sh</code></p>']
+    for rel in ordered:
+        tag = rel["tag"]
+        out.append("<h2>%s <small>%s</small></h2><table><tr><th>File</th><th class=n>Size</th><th>sha256</th></tr>"
+                   % (e(tag), e(rel["published_at"][:10])))
+        for a in sorted(rel["assets"], key=lambda x: x["name"]):
+            if a["name"].endswith(".sha256"):
+                continue
+            out.append('<tr><td><a href="/releases/%s/%s">%s</a></td><td class=n>%s</td><td><code>%s</code></td></tr>'
+                       % (e(tag), e(a["name"]), e(a["name"]), human(a["size"]), e(a.get("sha256", ""))))
+        out.append("</table>")
+    out.append("</body></html>\n")
+    return "\n".join(out)
+
+
 def main():
     global QUIET
     ap = argparse.ArgumentParser()
@@ -395,6 +437,9 @@ def main():
             if write_if_changed(os.path.join(root, "releases", "latest"), latest + "\n"):
                 log("latest is now %s" % latest)
             write_if_changed(os.path.join(root, "releases", "tags.txt"), "\n".join(compilers) + "\n")
+        page = render_page(ordered)
+        write_if_changed(os.path.join(root, "releases", "index.html"), page)
+        write_if_changed(os.path.join(root, "index.html"), page)
 
     if not args.no_std:
         compilers = [r["tag_name"] for r in releases if FAMILIES[0][1].match(r["tag_name"])]

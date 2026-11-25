@@ -197660,8 +197660,15 @@ salam.toml:
   assets = "www"
   icon = "icon.png"
   description = "Take notes"
-  publisher = "Example"
+  author = "Example"
   category = "Utility"
+
+  [windows]
+  company = "Example Ltd"
+  copyright = "2026 Example Ltd"
+
+Keys of [windows], [macos] and [linux] override the same keys of [app] for that
+system. The full list is in docs/PROJECT_FILE.md.
 `
 const WINDOWS_MANIFEST := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -197726,6 +197733,21 @@ pub engine: str = "system"
 @en "runtime"
 @fa "پوشه موتور"
 pub runtime: str = ""
+@en "copyright"
+@fa "حق نشر"
+pub copyright: str = ""
+@en "product"
+@fa "فرآورده"
+pub product: str = ""
+@en "subsystem"
+@fa "زیرسامانه"
+pub subsystem: str = "windows"
+@en "manifest"
+@fa "مانیفست"
+pub manifest: str = ""
+@en "overrides"
+@fa "جایگزین ها"
+pub overrides: Vector<str> = Vector {}
 end
 func _say(text: str):
 println "bundle: " + text
@@ -198321,13 +198343,18 @@ if backend.Len() > 0:
 args.Push("--backend=" + backend)
 end
 if b.os_name == "windows":
-args.Push("--subsystem=windows")
+args.Push("--subsystem=" + m.subsystem)
 manifest_path := filepath.Join(b.work, "app.manifest")
-if _write(manifest_path, WINDOWS_MANIFEST):
+if m.manifest.Len() > 0:
+args.Push("--manifest=" + m.manifest)
+else _write(manifest_path, WINDOWS_MANIFEST):
 args.Push("--manifest=" + manifest_path)
 end
 args.Push("--version-info=version=" + m.version)
-args.Push("--version-info=product=" + m.name)
+args.Push("--version-info=product=" + (m.product.Len() > 0 ? m.product : m.name))
+if m.copyright.Len() > 0:
+args.Push("--version-info=copyright=" + m.copyright)
+end
 if m.publisher.Len() > 0:
 args.Push("--version-info=company=" + m.publisher)
 end
@@ -198353,30 +198380,7 @@ ret false
 end
 ret os.Exists(b.exe)
 end
-@en "ReadManifest"
-@fa "خواندن شناسنامه"
-pub func ReadManifest(path: str, out &: Manifest): bool:
-if not os.Exists(path):
-ret false
-end
-text := io.ReadFile(path)
-lines := str.Split(text, "\n")
-defer lines.Free()
-mut inside := false
-mut seen := false
-each raw in lines:
-line := str.Trim(raw)
-if str.StartsWith(line, "["):
-inside = line == "[app]"
-seen = seen or inside
-continue
-end
-sign := str.IndexOf(line, "=")
-if not inside or sign <= 0 or str.StartsWith(line, "#"):
-continue
-end
-key := str.Trim(str.Substr(line, 0, sign))
-value := _unquote(str.Substr(line, sign + 1, str.Len(line) - sign - 1))
+func _set_key(out &: Manifest, key: str, value: str): bool:
 if key == "id":
 out.id = value
 else key == "name":
@@ -198391,7 +198395,7 @@ else key == "icon":
 out.icon = value
 else key == "description":
 out.description = value
-else key == "publisher":
+else key == "publisher" or key == "author" or key == "company":
 out.publisher = value
 else key == "category":
 out.category = value
@@ -198399,6 +198403,75 @@ else key == "engine":
 out.engine = value
 else key == "runtime":
 out.runtime = value
+else key == "copyright":
+out.copyright = value
+else key == "product":
+out.product = value
+else key == "subsystem":
+out.subsystem = value
+else key == "manifest":
+out.manifest = value
+else:
+ret false
+end
+ret true
+end
+func _shared_key(key: str): bool:
+ret key == "build" or key == "icon_bg" or key == "splash_color" or key == "splash_icon" or key == "orientation" or key == "permissions" or key == "permission" or key == "fonts" or key == "scheme" or key == "link_host"
+end
+func _secret_key(key: str): bool:
+ret key == "password" or key == "keystore_pass" or key == "keystore_password" or key == "key_pass" or key == "key_password" or key == "storepass"
+end
+@en "ApplyOverrides"
+@fa "اعمال جایگزین ها"
+pub func ApplyOverrides(out &: Manifest, os_name: str):
+each item in out.overrides:
+parts := str.Split(item, "\t")
+defer parts.Free()
+if parts.Len() == 3 and parts.Get(0) == os_name:
+_unused := _set_key(out, parts.Get(1), parts.Get(2))
+end
+end
+end
+@en "ReadManifest"
+@fa "خواندن شناسنامه"
+pub func ReadManifest(path: str, out &: Manifest): bool:
+if not os.Exists(path):
+ret false
+end
+text := io.ReadFile(path)
+lines := str.Split(text, "\n")
+defer lines.Free()
+mut table := ""
+mut seen := false
+each raw in lines:
+line := str.Trim(raw)
+if str.StartsWith(line, "["):
+close := str.IndexOf(line, "]")
+table = str.Trim(str.Substr(line, 1, close > 0 ? close - 1 : str.Len(line) - 1))
+seen = seen or table == "app"
+continue
+end
+sign := str.IndexOf(line, "=")
+if sign <= 0 or str.StartsWith(line, "#"):
+continue
+end
+key := str.Trim(str.Substr(line, 0, sign))
+value := _unquote(str.Substr(line, sign + 1, str.Len(line) - sign - 1))
+if table == "app":
+if not _set_key(out, key, value) and not _shared_key(key):
+printerrln "bundle: warning: unknown key " + key + " in [app]"
+end
+else table == "windows" or table == "macos" or table == "linux":
+mut probe := Manifest {}
+if _secret_key(key):
+printerrln "bundle: warning: " + key + " is ignored, secrets do not belong in salam.toml"
+else:
+if not _set_key(probe, key, "") and not _shared_key(key):
+printerrln "bundle: warning: unknown key " + key + " in [" + table + "]"
+end
+out.overrides.Push(table + "\t" + key + "\t" + value)
+end
 end
 end
 if out.name.Len() == 0:
@@ -198501,6 +198574,15 @@ backend = backend,
 runtime = m.engine == "chromium" ? m.runtime : "",
 salam = self_path.Len() > 0 ? self_path : "salam"
 }
+ApplyOverrides(m, b.os_name)
+if m.icon.Len() > 0 and not filepath.IsAbs(m.icon):
+m.icon = filepath.Join(root, m.icon)
+end
+if m.manifest.Len() > 0 and not filepath.IsAbs(m.manifest):
+m.manifest = filepath.Join(root, m.manifest)
+end
+m.slug = _slug(m.name)
+b.manifest = m
 b.base = m.slug + "-" + m.version + "-" + b.os_name + "-" + b.arch
 b.work = filepath.Join(os.TempDir(), "salam-bundle-" + m.slug + "-" + b.os_name + "-" + b.arch)
 _clean := os.RemoveAll(b.work)
@@ -224055,7 +224137,6 @@ pub const design_attr := LayoutAttribute {
 generated_name = "data-design"
 value_type = "enum"
 allowed = "design_name"
-elements = ["page"]
 }
 @en "theme"
 @fa "پوسته"
@@ -242111,7 +242192,14 @@ pub const DS_BASE_CSS := `:root{color-scheme:light dark}
 body{background:var(--background);color:var(--foreground);font-family:var(--ds-font-sans);-webkit-font-smoothing:antialiased}
 :where(code,kbd,samp,pre){font-family:var(--ds-font-mono)}
 `
+pub const DS_BASE_SCOPED_CSS := `[data-theme="light"]{color-scheme:light}
+[data-theme="dark"],.dark{color-scheme:dark}
+:where(:not(html,body)[data-theme="light"],:not(html,body)[data-theme="dark"],:not(html,body).dark){background:var(--background);color:var(--foreground)}
+:where([data-ds-on]:not(html,body)){border-color:var(--border);outline-color:color-mix(in oklab,var(--ring) 50%,transparent);font-family:var(--ds-font-sans)}
+`
 mut g_ds_name := "none"
+mut g_ds_scope := ""
+mut g_ds_paged := false
 mut g_ds_warn := ""
 func ds_extra_common(): str:
 ret `--ds-ring-soft:color-mix(in oklab,var(--ring) 50%,transparent);--ds-shadow-xs:0 1px 2px 0 rgb(0 0 0/.05);--ds-shadow-sm:0 1px 3px 0 rgb(0 0 0/.1),0 1px 2px -1px rgb(0 0 0/.1);--ds-shadow-md:0 4px 6px -1px rgb(0 0 0/.1),0 2px 4px -2px rgb(0 0 0/.1);--ds-shadow-lg:0 10px 15px -3px rgb(0 0 0/.1),0 4px 6px -4px rgb(0 0 0/.1);--ds-font-sans:` + DS_FONT_SANS + `;--ds-font-mono:` + DS_FONT_MONO + `;--radius-sm:calc(var(--radius) - 4px);--radius-md:calc(var(--radius) - 2px);--radius-lg:var(--radius);--radius-xl:calc(var(--radius) + 4px)`
@@ -242153,6 +242241,75 @@ str.Replace(str.Replace(s, "\\", "\\\\"), "\"", "\\\""), "<", "\\u003c"
 end
 func ds_palette_known(name: str): bool:
 ret ds_palette_text(name) != DS_PALETTE_NEUTRAL or name == "neutral" or name == "خنثی"
+end
+func ds_gate(): str:
+if g_ds_scope == "on":
+ret ":where([data-ds-on])"
+end
+ret ":where(:not([data-ds-off]))"
+end
+func ds_scope_css(css: str): str:
+first := not g_ds_paged
+g_ds_paged = true
+if g_ds_scope == "" or css == "" or first:
+ret css
+end
+mut keep := ""
+mut rest := css
+each piece in [
+DS_CALENDAR_MIN_CSS, DS_TOAST_MIN_CSS, DS_CAROUSEL_MIN_CSS, DS_DISCLOSURE_MIN_CSS, DS_FLOAT_MIN_CSS,
+DS_CHART_MIN_CSS, DS_DIALOG_MIN_CSS, DS_PICK_MIN_CSS, DS_RESIZABLE_MIN_CSS, DS_SWITCH_MIN_CSS,
+DS_SIDEBAR_MIN_CSS, DS_SCROLL_MIN_CSS
+]:
+if rest.Find(piece) >= 0:
+keep += piece
+rest = str.Replace(rest, piece, "")
+end
+end
+gate := ds_gate()
+mut out := ""
+lines := str.Split(rest, "\n")
+each line in lines:
+i := line.Find(":where(")
+if i < 0:
+out += line + "\n"
+else:
+out += line.Substr(0, i) + gate + line.Substr(i, line.Len() - i) + "\n"
+end
+end
+ret keep + out
+end
+func ds_mark_tags(html: str, marker: str): str:
+mut out := ""
+mut rest := html
+until rest != "":
+i := rest.Find("<")
+if i < 0:
+out += rest
+break
+end
+out += rest.Substr(0, i)
+rest = rest.Substr(i, rest.Len() - i)
+j := rest.Find(">")
+if j < 0:
+out += rest
+break
+end
+mut tag := rest.Substr(0, j)
+rest = rest.Substr(j, rest.Len() - j)
+if (tag.Find(
+" data-slot="
+) >= 0 or str.StartsWith(tag, "<svg")) and tag.Find(" data-ds-") < 0:
+k := tag.Find(" ")
+if k < 0:
+tag += marker
+else:
+tag = tag.Substr(0, k) + marker + tag.Substr(k, tag.Len() - k)
+end
+end
+out += tag
+end
+ret out
 end
 func ds_trim(s: str): str:
 ret str.Trim(s)
@@ -242288,6 +242445,20 @@ ret b
 end
 ret fallback
 end
+@en "DsMarkInner"
+@fa "نشانه گذاری اجزای درونی"
+pub func DsMarkInner(n: Node, html: str): str:
+if g_ds_scope == "":
+ret html
+end
+if n.attrs.Find(" data-ds-off") >= 0:
+ret ds_mark_tags(html, " data-ds-off")
+end
+if n.attrs.Find(" data-ds-on") >= 0:
+ret ds_mark_tags(html, " data-ds-on")
+end
+ret html
+end
 @en "DsName"
 @fa "نام طراحی"
 pub func DsName(): str:
@@ -242385,7 +242556,16 @@ pub func design_page(n: Node): Output:
 mut o := Output {}
 cfg := DsConfigFor(Get(n, "file"))
 main := DsConfigBlock(cfg, "design")
-name := ds_first(DsAttr(n.attrs, "data-design"), DsConfigValue(main, "design"), "none")
+mut name := ds_first(DsAttr(n.attrs, "data-design"), DsConfigValue(main, "design"), "none")
+g_ds_scope = ""
+if Get(n, "ds-scoped") == "1":
+if name == "none" and Get(n, "ds-first") != "":
+name = Get(n, "ds-first")
+g_ds_scope = "on"
+else name != "none":
+g_ds_scope = "off"
+end
+end
 g_ds_name = name
 DsSetLang(Get(n, "lang"))
 page_tokens := DsAttr(n.attrs, "data-tokens")
@@ -242416,10 +242596,26 @@ ds_warn(
 "unknown palette '" + palette + "'. Built in: neutral zinc stone slate gray mauve olive mist taupe. Define your own in design.toml or salam.toml under [design.palette." + palette + "]."
 )
 end
-o.shared_css += DsTokensCss(palette, tokens) + DS_BASE_CSS
+if g_ds_scope == "on":
+o.shared_css += str.Replace(
+DsTokensCss(palette, tokens), ":root{color-scheme:light dark;", ":root{;"
+) + DS_BASE_SCOPED_CSS
+else:
+mut base := DS_BASE_CSS
+if g_ds_scope == "off":
+base = str.Replace(
+base,
+":where(*,::before,::after){",
+":where(:not([data-ds-off])),:where(:not([data-ds-off]))::before,:where(:not([data-ds-off]))::after{"
+)
+end
+o.shared_css += DsTokensCss(palette, tokens) + base
+end
 o.head += g_ds_warn
 mode := DsConfigValue(main, "theme")
-if DsAttr(n.attrs, "data-theme") == "" and (mode == "light" or mode == "dark"):
+if g_ds_scope != "on" and DsAttr(
+n.attrs, "data-theme"
+) == "" and (mode == "light" or mode == "dark"):
 o.shared_css += ":root:not([data-theme]){color-scheme:" + mode + "}\n"
 end
 ret o
@@ -248145,6 +248341,13 @@ ret ""
 end
 ret " class=\"" + cls + "\""
 end
+@en "EmitFor"
+@fa "بنویس برای"
+pub func EmitFor(n: Node, o: Output):
+mut r := o
+r.html = DsMarkInner(n, o.html)
+Emit(r)
+end
 @en "Emit"
 @fa "بنویس"
 pub func Emit(o: Output):
@@ -248152,7 +248355,9 @@ mut sj := o.shared_js
 if sj.Len() > 0:
 sj = ";\n" + sj
 end
-print o.html + "\x1f" + o.css + "\x1f" + o.js + "\x1f" + o.head + "\x1f" + o.shared_css + "\x1f" + sj + "\x1e"
+print o.html + "\x1f" + o.css + "\x1f" + o.js + "\x1f" + o.head + "\x1f" + ds_scope_css(
+o.shared_css
+) + "\x1f" + sj + "\x1e"
 end
 package llvm
 extern:

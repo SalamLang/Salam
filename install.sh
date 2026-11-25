@@ -23,6 +23,33 @@ fi
 
 API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
+CDN_BASE="https://cdn.salamlang.ir"
+if [ -n "${SALAM_CDN+x}" ]; then
+    CDN_BASE="$SALAM_CDN"
+fi
+case "${SALAM_NO_CDN:-}" in
+'' | 0) ;;
+*) CDN_BASE="" ;;
+esac
+while :; do
+    case "$CDN_BASE" in
+    */) CDN_BASE="${CDN_BASE%/}" ;;
+    *) break ;;
+    esac
+done
+case "$CDN_BASE" in
+http://* | https://*) ;;
+*) CDN_BASE="" ;;
+esac
+CDN_T="${SALAM_CDN_TIMEOUT:-8}"
+case "$CDN_T" in
+'' | *[!0-9]* | 0) CDN_T=8 ;;
+esac
+MIRROR_MODE=0
+ARCHIVE_FROM="github"
+MIRROR_URL=""
+MIRROR_WHY=""
+
 MODIFY_PATH=1
 if [ -n "${SALAM_NO_MODIFY_PATH:-}" ]; then
     MODIFY_PATH=0
@@ -189,6 +216,9 @@ Options:
 Environment:
     SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_OS, SALAM_ARCH, SALAM_PLATFORM,
     SALAM_NO_MODIFY_PATH, NO_COLOR, GITHUB_TOKEN
+    SALAM_CDN            mirror tried before GitHub (default
+        https://cdn.salamlang.ir; empty turns the mirror off)
+    SALAM_NO_CDN=1       never use the mirror
 
 USAGE
 }
@@ -454,12 +484,54 @@ elif command -v ftp >/dev/null 2>&1; then
 fi
 
 WGET_FLAGS="--tries=3 --timeout=20"
+WGET_MIRROR_FLAGS="--tries=1 --timeout=$CDN_T"
 
 if [ "$DL_TOOL" = "wget" ]; then
     case "$(wget --help 2>&1 | head -n 5 || true)" in
-    *BusyBox* | *busybox*) WGET_FLAGS="-T 20" ;;
+    *BusyBox* | *busybox*)
+        WGET_FLAGS="-T 20"
+        WGET_MIRROR_FLAGS="-T $CDN_T"
+        ;;
     esac
 fi
+
+curl_net() {
+    if [ "$MIRROR_MODE" = 1 ]; then
+        printf '%s' "--retry 0 --connect-timeout $CDN_T -y $((CDN_T * 2)) -Y 1024"
+    else
+        printf '%s' "--retry 3 --retry-delay 2 --connect-timeout 20"
+    fi
+}
+
+wget_net() {
+    if [ "$MIRROR_MODE" = 1 ]; then
+        printf '%s' "$WGET_MIRROR_FLAGS"
+    else
+        printf '%s' "$WGET_FLAGS"
+    fi
+}
+
+mirror_usable() {
+    if [ -z "$CDN_BASE" ]; then
+        return 1
+    fi
+
+    case "$DL_TOOL" in
+    curl | wget) return 0 ;;
+    esac
+
+    return 1
+}
+
+mirror_url() {
+    case "$1" in
+    "$RELEASES_URL"/download/*)
+        if mirror_usable; then
+            printf '%s/releases/download/%s' "$CDN_BASE" "${1#"$RELEASES_URL"/download/}"
+        fi
+        ;;
+    esac
+}
 
 fetch_to_stdout() {
     _auth=""
@@ -475,19 +547,19 @@ fetch_to_stdout() {
     case "$DL_TOOL" in
     curl)
         if [ -n "$_auth" ]; then
-            curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 \
+            curl -fsSL $(curl_net) \
                 -A "$USER_AGENT" -H "$_auth" "$1"
         else
-            curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 \
+            curl -fsSL $(curl_net) \
                 -A "$USER_AGENT" "$1"
         fi
         ;;
     wget)
         if [ -n "$_auth" ]; then
-            wget $WGET_FLAGS -qO- -U "$USER_AGENT" \
+            wget $(wget_net) -qO- -U "$USER_AGENT" \
                 --header="$_auth" "$1"
         else
-            wget $WGET_FLAGS -qO- -U "$USER_AGENT" "$1"
+            wget $(wget_net) -qO- -U "$USER_AGENT" "$1"
         fi
         ;;
     fetch)
@@ -502,11 +574,11 @@ fetch_to_stdout() {
 fetch_to_file() {
     case "$DL_TOOL" in
     curl)
-        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 \
+        curl -fsSL $(curl_net) \
             -A "$USER_AGENT" -o "$2" "$1"
         ;;
     wget)
-        wget $WGET_FLAGS -q -U "$USER_AGENT" -O "$2" "$1"
+        wget $(wget_net) -q -U "$USER_AGENT" -O "$2" "$1"
         ;;
     fetch)
         fetch -q -o "$2" "$1"
@@ -526,11 +598,16 @@ probe_url() {
     case "$DL_TOOL" in
     curl)
         net_err_reset
-        _headers=$(curl -sSL -I --connect-timeout 20 --max-time 60 \
-            -A "$USER_AGENT" "$1" 2>"${NET_ERR:-/dev/null}" || true)
+        if [ "$MIRROR_MODE" = 1 ]; then
+            _headers=$(curl -sSL -I --connect-timeout "$CDN_T" --max-time $((CDN_T * 3)) \
+                -A "$USER_AGENT" "$1" 2>"${NET_ERR:-/dev/null}" || true)
+        else
+            _headers=$(curl -sSL -I --connect-timeout 20 --max-time 60 \
+                -A "$USER_AGENT" "$1" 2>"${NET_ERR:-/dev/null}" || true)
+        fi
         ;;
     wget)
-        _headers=$(wget $WGET_FLAGS --spider -S -U "$USER_AGENT" "$1" 2>&1 || true)
+        _headers=$(wget $(wget_net) --spider -S -U "$USER_AGENT" "$1" 2>&1 || true)
         ;;
     fetch)
         _len=$(fetch -s "$1" 2>/dev/null || true)
@@ -725,7 +802,31 @@ tags_via_api() {
         sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' || true
 }
 
+mirror_tags() {
+    MIRROR_MODE=1
+
+    _mt=$(fetch_to_stdout "$CDN_BASE/releases/tags.txt" 2>/dev/null |
+        tr -d '\015' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n "$MAX_TAGS" || true)
+
+    if [ -z "$_mt" ]; then
+        _mt=$(fetch_to_stdout "$CDN_BASE/releases/latest" 2>/dev/null |
+            tr -d '\015' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+    fi
+
+    MIRROR_MODE=0
+    printf '%s\n' "$_mt"
+}
+
 candidate_tags() {
+    if mirror_usable; then
+        _tags=$(mirror_tags)
+
+        if [ -n "$(printf '%s' "$_tags" | tr -d ' \011\012')" ]; then
+            printf '%s\n' "$_tags"
+            return 0
+        fi
+    fi
+
     _tags=$({
         latest_tag_via_redirect
         tags_via_atom
@@ -761,7 +862,61 @@ sha256_of() {
     fi
 }
 
+mirror_archive_ok() {
+    _msize=$(file_size "$ARCHIVE")
+
+    if [ "$_msize" -lt 1024 ]; then
+        MIRROR_WHY="the mirror sent only $(fmt_size "$_msize")"
+        return 1
+    fi
+
+    if [ "$(dd if="$ARCHIVE" bs=1 count=2 2>/dev/null || true)" != "PK" ]; then
+        MIRROR_WHY="the mirror did not send a zip archive"
+        return 1
+    fi
+
+    if [ -n "${SALAM_SKIP_CHECKSUM:-}" ]; then
+        return 0
+    fi
+
+    MIRROR_MODE=1
+    _mwant=$(fetch_to_stdout "$1.sha256" 2>/dev/null | awk 'NF {print $1; exit}' || true)
+    MIRROR_MODE=0
+
+    case "$_mwant" in
+    *[!0-9a-fA-F]* | "")
+        MIRROR_WHY="the mirror publishes no checksum for this file"
+        return 1
+        ;;
+    esac
+
+    if [ "${#_mwant}" != 64 ]; then
+        MIRROR_WHY="the mirror's checksum is malformed"
+        return 1
+    fi
+
+    if ! _mgot=$(sha256_of "$ARCHIVE") || [ -z "$_mgot" ]; then
+        warn "no sha256 tool found (sha256sum, shasum, openssl); the mirror copy was not verified"
+        return 0
+    fi
+
+    _mwant=$(printf '%s' "$_mwant" | tr 'A-F' 'a-f')
+    _mgot=$(printf '%s' "$_mgot" | tr 'A-F' 'a-f')
+
+    if [ "$_mwant" != "$_mgot" ]; then
+        MIRROR_WHY="the mirror copy does not match its checksum"
+        return 1
+    fi
+
+    info "sha256 verified: $_mgot (mirror)"
+    return 0
+}
+
 verify_archive() {
+    if [ "$ARCHIVE_FROM" = "mirror" ]; then
+        return 0
+    fi
+
     if [ -n "${SALAM_SKIP_CHECKSUM:-}" ]; then
         warn "SALAM_SKIP_CHECKSUM is set; the archive was not verified"
         return 0
@@ -1151,6 +1306,22 @@ PROBE_BLOCKED=0
 try_platforms() {
     for _plat in $PLATFORMS; do
         _try=$(asset_url "$1" "$_plat")
+        _mtry=$(mirror_url "$_try")
+
+        if [ -n "$_mtry" ]; then
+            MIRROR_MODE=1
+
+            if probe_url "$_mtry"; then
+                MIRROR_MODE=0
+                PLATFORM="$_plat"
+                ASSET="salam-$1-$_plat.zip"
+                URL="$_try"
+                TOTAL=$PROBE_SIZE
+                return 0
+            fi
+
+            MIRROR_MODE=0
+        fi
 
         if probe_url "$_try"; then
             PLATFORM="$_plat"
@@ -1284,13 +1455,46 @@ fi
 
 step "Downloading $ASSET"
 
-info "$URL"
+MIRROR_URL=$(mirror_url "$URL")
+MIRROR_TRIED=0
 
-if [ "$TOTAL" -gt 0 ]; then
-    info "size: $(fmt_size "$TOTAL")"
+if [ -n "$MIRROR_URL" ]; then
+    MIRROR_TRIED=1
+    info "mirror: $MIRROR_URL"
+
+    if [ "$TOTAL" -gt 0 ]; then
+        info "size: $(fmt_size "$TOTAL")"
+    fi
+
+    MIRROR_MODE=1
+
+    if download_file "$MIRROR_URL" "$ARCHIVE" "$TOTAL"; then
+        MIRROR_MODE=0
+
+        if mirror_archive_ok "$MIRROR_URL"; then
+            ARCHIVE_FROM="mirror"
+        else
+            warn "$MIRROR_WHY; trying GitHub instead"
+            rm -f "$ARCHIVE"
+        fi
+    else
+        MIRROR_MODE=0
+        MIRROR_WHY=$(net_error | tail -n 1 || true)
+        warn "the mirror at $CDN_BASE did not answer${MIRROR_WHY:+ ($MIRROR_WHY)}; trying GitHub instead"
+    fi
+
+    MIRROR_MODE=0
 fi
 
-if ! download_file "$URL" "$ARCHIVE" "$TOTAL"; then
+if [ "$ARCHIVE_FROM" != "mirror" ]; then
+    info "$URL"
+
+    if [ "$TOTAL" -gt 0 ]; then
+        info "size: $(fmt_size "$TOTAL")"
+    fi
+fi
+
+if [ "$ARCHIVE_FROM" != "mirror" ] && ! download_file "$URL" "$ARCHIVE" "$TOTAL"; then
     NET_WHY=$(net_error || true)
 
     if [ -n "$NET_WHY" ]; then
@@ -1303,24 +1507,31 @@ if ! download_file "$URL" "$ARCHIVE" "$TOTAL"; then
         warn "$DL_TOOL exited with status $DL_STATUS"
     fi
 
+    TRIED="$URL"
+
+    if [ "$MIRROR_TRIED" = 1 ]; then
+        TRIED="$MIRROR_URL (mirror) and $URL (GitHub)"
+    fi
+
     case "$NET_WHY" in
     *404*)
         die "could not download $ASSET" \
-            "$URL" \
+            "tried $TRIED" \
             "that release publishes no $PLATFORM asset" \
             "browse what is available at $RELEASES_URL"
         ;;
     esac
 
     die "could not download $ASSET" \
-        "$URL" \
+        "tried $TRIED" \
         "" \
         "release downloads redirect to release-assets.githubusercontent.com," \
         "a different host from github.com - networks that block or proxy it" \
         "fail exactly like this while the rest of the script works" \
         "" \
         "otherwise that release may publish no $PLATFORM asset;" \
-        "browse what is available at $RELEASES_URL"
+        "download it by hand from $RELEASES_URL or ${CDN_BASE:-the mirror}/releases/," \
+        "then run this installer again, or unzip it into the install folder"
 fi
 
 SIZE=$(file_size "$ARCHIVE")

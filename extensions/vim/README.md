@@ -52,13 +52,56 @@ its full path.
 
 | Command                                        | What it does                                          |
 | ---------------------------------------------- | ----------------------------------------------------- |
-| `:SalamRun`                                    | Write and run the buffer (`salam exec`)               |
-| `:SalamBuild`                                  | Compile to an executable, errors in the quickfix list |
+| `:SalamRun`                                    | Run the buffer (`salam exec`), or the project (`salam run`) |
+| `:SalamBuild`                                  | `salam build`, errors in the quickfix list            |
+| `:SalamNew [dir]`                              | Run the `salam init` wizard in a terminal             |
+| `:SalamPlatform [name]`                        | Choose the platform for `:SalamRun` and `:SalamBuild` |
+| `:SalamGotoBlock`                              | Jump to the enclosing block (a count goes further up) |
+| `:SalamBlocks`                                 | Pick one of the enclosing blocks to jump to           |
+| `:SalamBlockChain`                             | Echo the chain of enclosing blocks                    |
 | `:SalamCheck`                                  | Type-check without running, into the quickfix list    |
 | `:SalamFmt`                                    | Reformat the buffer, keeping undo and the cursor      |
 | `:SalamFmtCheck`                               | Report whether the file is already formatted          |
 | `:SalamTokens` / `:SalamAst` / `:SalamSymbols` | Open the compiler's XML dumps                         |
 | `:SalamVersion`                                | Echo the compiler version                             |
+
+## Projects and platforms
+
+In a project made by `salam init` (a `salam.toml` above the file), `:SalamRun`
+runs `salam run` in a terminal split from the project root, and `:SalamBuild`
+runs `salam build`. A web project serves the page with live reload.
+
+`:SalamPlatform` lists the `platforms` of `[project]` in `salam.toml` (every
+platform outside a project), plus `auto` and `all`. The choice is remembered
+per project and added as `--platform=NAME`:
+
+```vim
+:SalamPlatform linux
+:SalamPlatform auto      " follow salam.toml again
+```
+
+Outside a project `:SalamRun` keeps using `salam exec` until a platform is
+chosen, then it runs `salam run FILE --platform=NAME`. `all` and `js` only
+apply to builds.
+
+## Block chain
+
+`salam#BlockChain()` returns the headers that enclose the cursor, found by
+indentation, for example `page > box > button`. Put it in the statusline:
+
+```vim
+autocmd FileType salam setlocal statusline=%f\ %{salam#BlockChain()}\ %=%l:%c
+```
+
+Neovim can show it in the winbar instead: `let g:salam_winbar = 1`.
+`:SalamGotoBlock` jumps to the enclosing header, `3:SalamGotoBlock` three
+levels up; `:SalamBlocks` offers the whole chain.
+
+## Mappings
+
+Buffer-local, on `<LocalLeader>`: `r` run, `b` build, `c` check, `f` format,
+`n` new project, `p` platform, `u` enclosing block (with a count), `j` pick a
+block. `let g:salam_no_mappings = 1` turns them off.
 
 ## Options
 
@@ -70,6 +113,8 @@ let g:salam_format_indent  = '4'       " tab, or 1-16
 let g:salam_format_on_save = 0
 let g:salam_check_on_save  = 0
 let g:salam_stdlib_path    = ''
+let g:salam_winbar         = 0     " Neovim: show the block chain
+let g:salam_no_mappings    = 0
 ```
 
 ## Neovim

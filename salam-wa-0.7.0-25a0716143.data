@@ -155436,6 +155436,14 @@ ret FlowStyle {}
 end
 ret _own_style(this.e.nodes.Ref(id).st)
 end
+@en "Visible"
+@fa "پیداست"
+pub func Visible(id: int): bool:
+if not this.Valid(id):
+ret true
+end
+ret this.e.nodes.Ref(id).st.visible
+end
 @en "SetStyle"
 @fa "تنظیم سبک"
 pub func SetStyle(id: int, style: FlowStyle):
@@ -181279,6 +181287,151 @@ x = _rs16(f, a + 2)
 y = _rs16(f, a + 4)
 end
 package typeset
+mut _dg_map := HashMap {} as HashMap<i64, int>
+mut _dg_font := Vector {} as Vector<i64>
+mut _dg_table := Vector {} as Vector<int>
+mut _dg_lidx := Vector {} as Vector<int>
+mut _dg_start := Vector {} as Vector<int>
+mut _dg_words := Vector {} as Vector<int>
+mut _dg_pool := Vector {} as Vector<int>
+func _dg_cov(
+f: Font, cov: int, bits &: Vector<int>
+): bool:
+fmt := _r16(f, cov)
+n := _r16(f, cov + 2)
+if fmt == 1:
+repeat n in k:
+_dg_set(bits, _r16(f, cov + 4 + k * 2))
+end
+ret true
+end
+if fmt == 2:
+repeat n in k:
+rec := cov + 4 + k * 6
+a := _r16(f, rec)
+z := _r16(f, rec + 2)
+if z - a > 70000:
+ret false
+end
+mut g := a
+until g <= z:
+_dg_set(bits, g)
+g++
+end
+end
+ret true
+end
+ret false
+end
+func _dg_set(bits &: Vector<int>, g: int):
+w := g / 30
+until bits.Len() <= w:
+bits.Push(0)
+end
+bits[w] |= 1 << (g % 30)
+end
+func _dg_first_cov(f: Font, gsub: bool, t: int, s: int): int:
+if gsub:
+if t == 1 or t == 2 or t == 3 or t == 4 or t == 8:
+ret s + _r16(f, s + 2)
+end
+else:
+if t == 1 or t == 2 or t == 4 or t == 5 or t == 6:
+ret s + _r16(f, s + 2)
+end
+end
+ctx := gsub ? (t == 5 or t == 6) : (t == 7 or t == 8)
+if not ctx:
+ret -1
+end
+fmt := _r16(f, s)
+if fmt == 1 or fmt == 2:
+ret s + _r16(f, s + 2)
+end
+if fmt != 3:
+ret -1
+end
+chain := gsub ? (t == 6) : (t == 8)
+if not chain:
+if _r16(f, s + 2) == 0:
+ret 0
+end
+ret s + _r16(f, s + 6)
+end
+bc := _r16(f, s + 2)
+ic_at := s + 4 + bc * 2
+if _r16(f, ic_at) == 0:
+ret 0
+end
+ret s + _r16(f, ic_at + 2)
+end
+func _dg_build(f: Font, table: int, gsub: bool, lidx: int): int:
+lk := _lookup_off(f, table, lidx)
+if lk == 0:
+ret -1
+end
+ltype := _r16(f, lk)
+n := _r16(f, lk + 4)
+mut bits := Vector {} as Vector<int>
+defer bits.Free()
+repeat n in k:
+mut s := lk + _r16(f, lk + 6 + k * 2)
+mut t := ltype
+if (gsub and t == 7) or (not gsub and t == 9):
+t = _r16(f, s + 2)
+s = s + _r32(f, s + 4)
+end
+cov := _dg_first_cov(f, gsub, t, s)
+if cov < 0:
+ret -1
+end
+if cov > 0 and not _dg_cov(f, cov, bits):
+ret -1
+end
+end
+at := _dg_pool.Len()
+each w in bits:
+_dg_pool.Push(w)
+end
+_dg_words.Push(bits.Len())
+ret at
+end
+func _dg_of(f: Font, table: int, gsub: bool, lidx: int): int:
+fid := ((f.data as i64) * 31 + f.size as i64) * 131 + f.units_per_em as i64
+h := ((fid * 1000003 + table as i64) * 8191 + lidx as i64) * 2 + (gsub ? 1 : 0)
+if _dg_map.Has(h):
+at := _dg_map.Get(h)
+if _dg_font[at] == fid and _dg_table[at] == table and _dg_lidx[at] == lidx:
+ret at
+end
+ret -1
+end
+at := _dg_font.Len()
+_dg_font.Push(fid)
+_dg_table.Push(table)
+_dg_lidx.Push(lidx)
+st := _dg_build(f, table, gsub, lidx)
+if st < 0:
+_dg_words.Push(0)
+end
+_dg_start.Push(st)
+_dg_map.Put(h, at)
+ret at
+end
+func _dg_may(d: int, g: int): bool:
+if d < 0:
+ret true
+end
+st := _dg_start[d]
+if st < 0:
+ret true
+end
+w := g / 30
+if w >= _dg_words[d]:
+ret false
+end
+ret ((_dg_pool[st + w] >> (g % 30)) & 1) != 0
+end
 func _match_one(f: Font, g: int, v: int, kind: int, cd: int, base: int): bool:
 if kind == 0: ret g == v end
 if kind == 1: ret _classdef(f, cd, g) == v end
@@ -181909,10 +182062,11 @@ if gsub and ltype == 7 and _r16(f, lk + 4) > 0:
 s := lk + _r16(f, lk + 6)
 ltype = _r16(f, s + 2)
 end
+dg := _dg_of(f, table, gsub, lidx)
 if gsub and ltype == 8:
 mut i := b.g.Len() - 1
 until i >= 0:
-if (b.mask.Get(i) & mask) != 0:
+if (b.mask.Get(i) & mask) != 0 and _dg_may(dg, b.g.Get(i)):
 _apply_lookup_at(f, table, gsub, lidx, b, i, 0)
 end
 i--
@@ -181923,7 +182077,7 @@ mut i := 0
 mut guard := 0
 until i < b.g.Len() and guard < 100000:
 guard++
-if (b.mask.Get(i) & mask) != 0:
+if (b.mask.Get(i) & mask) != 0 and _dg_may(dg, b.g.Get(i)):
 r := _apply_lookup_at(f, table, gsub, lidx, b, i, 0)
 if r > i:
 i = r
@@ -182348,6 +182502,43 @@ end
 func _ws_wraps(ws: WhiteSpace): bool:
 ret ws == WhiteSpace.Normal or ws == WhiteSpace.PreWrap
 end
+func _all_ltr(cps &: Vector<int>, s: int, e: int): bool:
+mut i := s
+until i < e:
+if cps[i] >= 0x0590:
+ret false
+end
+i++
+end
+ret true
+end
+func _base_level(cps &: Vector<int>, dir: int): int:
+if dir == bidi.DirRTL:
+ret 1
+end
+if dir == bidi.DirLTR:
+ret 0
+end
+mut depth := 0
+each cp in cps:
+t := unicode.BidiClass(cp)
+if t == unicode.BcLRI or t == unicode.BcRLI or t == unicode.BcFSI:
+depth++
+else t == unicode.BcPDI:
+if depth > 0:
+depth--
+end
+else depth == 0:
+if t == unicode.BcL:
+ret 0
+end
+if t == unicode.BcR or t == unicode.BcAL:
+ret 1
+end
+end
+end
+ret 0
+end
 func _para_levels(p &: Paragraph, shape_cps &: Vector<int>):
 n := p.chars.Len()
 mut s := 0
@@ -182356,6 +182547,18 @@ mut e := s
 until e < n and not _cf(p, e, _CF_HARD):
 e++
 end
+if p.style.direction != bidi.DirRTL and _all_ltr(shape_cps, s, e):
+mut z := s
+until z <= e and z < n:
+mut c := p.chars.Get(z)
+c.level = 0
+c.base = 0
+p.chars.Set(z, c)
+z++
+end
+s = e + 1
+continue
+end
 mut sub := Vector {} as Vector<int>
 mut k := s
 until k < e:
@@ -182363,7 +182566,7 @@ sub.Push(shape_cps.Get(k))
 k++
 end
 txt := _utf8_encode_all(sub)
-base := bidi.ParagraphLevel(txt, p.style.direction)
+base := _base_level(sub, p.style.direction)
 levels := bidi.Levels(txt, p.style.direction)
 mut lastlv := base
 k = s
@@ -183485,6 +183688,8 @@ const _FB_BLWM := 15
 const _FB_DIST := 16
 const _FB_RTLA := 17
 const _FB_COUNT := 18
+mut _shc_map := HashMap {} as HashMap<i64, int>
+mut _shc_hits := Vector {} as Vector<_ShapeHit>
 @en "ShapedGlyph"
 @fa "گلیف شکل‌یافته"
 pub struct ShapedGlyph:
@@ -183503,6 +183708,17 @@ pub x_offset: int = 0
 @en "y_offset"
 @fa "جابجایی عمودی"
 pub y_offset: int = 0
+end
+struct _ShapeHit:
+pub font: i64 = 0
+pub par: i64 = 0
+pub key: Vector<int> = Vector {}
+pub g: Vector<int> = Vector {}
+pub cl: Vector<int> = Vector {}
+pub xa: Vector<int> = Vector {}
+pub xo: Vector<int> = Vector {}
+pub yo: Vector<int> = Vector {}
+pub att: Vector<int> = Vector {}
 end
 func _feat_tag(bit: int): int:
 switch bit:
@@ -183836,7 +184052,96 @@ end
 i++
 end
 end
+func _shc_clear():
+each h in _shc_hits:
+mut x := h
+x.key.Free()
+x.g.Free()
+x.cl.Free()
+x.xa.Free()
+x.xo.Free()
+x.yo.Free()
+x.att.Free()
+end
+_shc_hits.Clear()
+_shc_map.Free()
+_shc_map = HashMap {} as HashMap<i64, int>
+end
+func _shc_same(h: _ShapeHit, fid: i64, par: i64, key &: Vector<int>): bool:
+if h.font != fid or h.par != par or h.key.Len() != key.Len():
+ret false
+end
+repeat key.Len() in i:
+if h.key[i] != key[i]:
+ret false
+end
+end
+ret true
+end
 func _shape_buf(
+f: Font,
+cps &: Vector<int>,
+forms &: Vector<int>,
+skip &: Vector<bool>,
+s: int,
+e: int,
+rtl: bool,
+script_tag: int,
+lang_tag: int,
+off_mask: int,
+b &: _Buf
+):
+if e - s <= 0 or e - s > 256:
+_shape_buf_raw(f, cps, forms, skip, s, e, rtl, script_tag, lang_tag, off_mask, b)
+ret
+end
+fid := ((f.data as i64) * 31 + f.size as i64) * 131 + f.units_per_em as i64
+par := ((script_tag as i64) * 1000003 + lang_tag as i64) * 8191 + (off_mask as i64) * 2 + (rtl ? 1 : 0)
+mut key := Vector {} as Vector<int>
+defer key.Free()
+mut h := fid * 1099511628211 + par
+mut i := s
+until i < e:
+v := cps[i] * 16 + forms[i] * 2 + (skip[i] ? 1 : 0)
+key.Push(v)
+h = (h ^ (v as i64)) * 1099511628211
+i++
+end
+if _shc_map.Has(h):
+at := _shc_map.Get(h)
+hit := _shc_hits[at]
+if _shc_same(hit, fid, par, key):
+repeat hit.g.Len() in q:
+b.g.Push(hit.g[q])
+b.cl.Push(hit.cl[q] + s)
+b.xa.Push(hit.xa[q])
+b.xo.Push(hit.xo[q])
+b.yo.Push(hit.yo[q])
+b.att.Push(hit.att[q])
+end
+ret
+end
+end
+_shape_buf_raw(f, cps, forms, skip, s, e, rtl, script_tag, lang_tag, off_mask, b)
+if _shc_hits.Len() >= 4096:
+_shc_clear()
+end
+mut nh := _ShapeHit { font = fid, par = par }
+each kv in key:
+nh.key.Push(kv)
+end
+repeat b.g.Len() in q:
+nh.g.Push(b.g[q])
+nh.cl.Push(b.cl[q] - s)
+nh.xa.Push(b.xa[q])
+nh.xo.Push(b.xo[q])
+nh.yo.Push(b.yo[q])
+nh.att.Push(b.att[q])
+end
+_shc_map.Put(h, _shc_hits.Len())
+_shc_hits.Push(nh)
+end
+func _shape_buf_raw(
 f: Font,
 cps &: Vector<int>,
 forms &: Vector<int>,
@@ -186493,7 +186798,7 @@ switch f:
 end
 ret f
 end
-func _families(s: style.Style): str:
+func _families(s &: style.Style): str:
 if s.font.Len() == 0:
 ret "sans-serif"
 end
@@ -186556,7 +186861,7 @@ r = _hmix(r, sh.inset ? 1 : 0)
 end
 ret r
 end
-func _ihash(s: style.Style): i64:
+func _ihash(s &: style.Style): i64:
 mut h := 1469598103934665603 as i64
 h = _hmix(h, s.cursor as i64)
 h = _hmix(h, s.interactive ? 1 : 0)
@@ -186594,67 +186899,70 @@ func _zero_len(l: style.Len): bool:
 zero := style.Len {}
 ret _same_len(l, zero)
 end
-func _inherit_fast(p: style.Style, c &: style.Style):
-base := _default_style("")
-if c.cursor == base.cursor:
+func _inherit_fast(p &: style.Style, c &: style.Style):
+if not _base_ok:
+_base_st = _default_style("")
+_base_ok = true
+end
+if c.cursor == _base_st.cursor:
 c.cursor = p.cursor
 end
-if c.interactive == base.interactive:
+if c.interactive == _base_st.interactive:
 c.interactive = p.interactive
 end
-if c.selectable == base.selectable:
+if c.selectable == _base_st.selectable:
 c.selectable = p.selectable
 end
-if color.Equal(c.accent, base.accent):
+if color.Equal(c.accent, _base_st.accent):
 c.accent = p.accent
 end
-if color.Equal(c.caret, base.caret):
+if color.Equal(c.caret, _base_st.caret):
 c.caret = p.caret
 end
 if color.Equal(
-c.scrollbar_thumb, base.scrollbar_thumb
-) and color.Equal(c.scrollbar_track, base.scrollbar_track):
+c.scrollbar_thumb, _base_st.scrollbar_thumb
+) and color.Equal(c.scrollbar_track, _base_st.scrollbar_track):
 c.scrollbar_thumb = p.scrollbar_thumb
 c.scrollbar_track = p.scrollbar_track
 end
-if color.Equal(c.color, base.color):
+if color.Equal(c.color, _base_st.color):
 c.color = p.color
 end
 if c.font.Len() == 0:
 c.font = p.font
 end
-if _same_len(c.font_size, base.font_size):
+if _same_len(c.font_size, _base_st.font_size):
 c.font_size = p.font_size
 end
-if c.font_weight == base.font_weight:
+if c.font_weight == _base_st.font_weight:
 c.font_weight = p.font_weight
 end
-if c.italic == base.italic:
+if c.italic == _base_st.italic:
 c.italic = p.italic
 end
-if c.line_height == base.line_height and _same_len(c.line_height_len, base.line_height_len):
+if c.line_height == _base_st.line_height and _same_len(c.line_height_len, _base_st.line_height_len):
 c.line_height = p.line_height
 c.line_height_len = p.line_height_len
 end
-if _same_len(c.letter_spacing, base.letter_spacing):
+if _same_len(c.letter_spacing, _base_st.letter_spacing):
 c.letter_spacing = p.letter_spacing
 end
-if _same_len(c.word_spacing, base.word_spacing):
+if _same_len(c.word_spacing, _base_st.word_spacing):
 c.word_spacing = p.word_spacing
 end
-if c.text_align == base.text_align:
+if c.text_align == _base_st.text_align:
 c.text_align = p.text_align
 end
-if c.transform_text == base.transform_text:
+if c.transform_text == _base_st.transform_text:
 c.transform_text = p.transform_text
 end
-if c.wrap_text == base.wrap_text:
+if c.wrap_text == _base_st.wrap_text:
 c.wrap_text = p.wrap_text
 end
-if c.direction == base.direction:
+if c.direction == _base_st.direction:
 c.direction = p.direction
 end
-if c.white_space == base.white_space:
+if c.white_space == _base_st.white_space:
 c.white_space = p.white_space
 end
 if c.text_shadow.Len() == 0:
@@ -186835,8 +187143,7 @@ mut s := _default_style(_style_key(node))
 p := nd.parent
 mut pfont := _e.root_font
 if p >= 0:
-ps := _e.cs[p]
-_inherit_fast(ps, s)
+_inherit_fast(_e.cs.Ref(p), s)
 pfont = _e.us[p].font
 else:
 pfont = 16.0
@@ -186898,7 +187205,7 @@ u.line = s.line_height * font
 end
 ret s
 end
-func _finish_used(node: int, s: style.Style, u &: _Used):
+func _finish_used(node: int, s &: style.Style, u &: _Used):
 p := _e.dom.nodes[node].parent
 pc := p >= 0 ? _e.us[p].color : paint.Color { a = 255 }
 u.color = _ucol(s.color, pc)
@@ -186909,8 +187216,7 @@ u.phash = _hmix(_paint_hash(s), _e.dark ? 7 : 3)
 end
 func _compute(node: int):
 mut u := _Used {}
-s := _target_style(node, u)
-mut d := s
+mut d := _target_style(node, u)
 _anim_apply(node, d)
 if node == 0 and _attr(_e.dom, 0, "safe_area") != "none":
 d.padding_top.px += _e.inset_t
@@ -186920,8 +187226,7 @@ d.padding_start.px += _e.inset_l
 end
 _finish_used(node, d, u)
 _e.cs[node] = d
-old := _e.us[node]
-u.ver = old.ver + 1
+u.ver = _e.us.Ref(node).ver + 1
 _e.us[node] = u
 end
 func _style_all():
@@ -186995,20 +187300,47 @@ import math
 import str
 import gui.paint
 import gui.style
-func _filter_extent(s: style.Style, font: f64): f64:
+func _filter_extent(s &: style.Style, font: f64): f64:
 b := _vp_len(s.blur, font)
 if b > 0.0:
 ret b * 3.0
 end
 ret 0.0
 end
-func _anc_ext(node: int): f64:
+func _up_ext(node: int): f64:
+if _e.ext_ok and node < _e.ext.Len():
+ret _e.ext[node]
+end
 mut e := 0.0
 mut p := _e.dom.nodes[node].parent
 until p >= 0:
 e += _filter_extent(_e.cs[p], _e.us[p].font)
 p = _e.dom.nodes[p].parent
 end
+ret e
+end
+func _ext_fill():
+n := _e.dom.nodes.Len()
+_e.ext.Clear()
+_e.ext_ok = false
+repeat n:
+_e.ext.Push(-1.0)
+end
+repeat n in i:
+_ext_at(i)
+end
+_e.ext_ok = true
+end
+func _ext_at(node: int): f64:
+if _e.ext[node] >= 0.0:
+ret _e.ext[node]
+end
+p := _e.dom.nodes[node].parent
+mut e := 0.0
+if p >= 0:
+e = _ext_at(p) + _filter_extent(_e.cs[p], _e.us[p].font)
+end
+_e.ext[node] = e
 ret e
 end
 func _ink(node: int, x0 &: int, y0 &: int, x1 &: int, y1 &: int): bool:
@@ -187021,7 +187353,7 @@ mut l := r[0]
 mut t := r[1]
 mut rr := r[2]
 mut bt := r[3]
-ae := _anc_ext(node)
+ae := _up_ext(node)
 l -= ae
 t -= ae
 rr += ae
@@ -187045,14 +187377,14 @@ x1 = math.Ceil(rr * s) as int
 y1 = math.Ceil(bt * s) as int
 ret x1 > x0 and y1 > y0
 end
-func _node_key(node: int, anc: i64): i64:
+func _node_key(node: int, ups: i64): i64:
 mut h := 1469598103934665603 as i64
 b := _e.boxes[node]
 h = _hf(_hf(_hf(_hf(h, b.x), b.y), b.w), b.h)
 h = _hf(_hf(_hf(_hf(h, b.clip_x0), b.clip_y0), b.clip_x1), b.clip_y1)
 h = _hmix(h, _e.us[node].ihash)
 h = _hmix(h, _e.us[node].phash)
-h = _hmix(h, anc)
+h = _hmix(h, ups)
 c := _e.ctl[node]
 h = _hmix(
 h,
@@ -187123,17 +187455,25 @@ repeat _e.recs.Len():
 seen.Push(false)
 end
 mut nrecs := Vector {} as Vector<_Rec>
+_ext_fill()
+_e.sink.Clear()
+repeat _e.dom.nodes.Len():
+_e.sink.Push(1 << 30)
+_e.sink.Push(1 << 30)
+_e.sink.Push(0 - (1 << 30))
+_e.sink.Push(0 - (1 << 30))
+end
 cw := math.Ceil(_e.width * _e.scale) as int
 ch := math.Ceil(_e.height * _e.scale) as int
-mut anc := Vector {} as Vector<i64>
-defer anc.Free()
+mut ups := Vector {} as Vector<i64>
+defer ups.Free()
 repeat _e.dom.nodes.Len() in node:
 pa := _e.dom.nodes[node].parent
 mut ah := 0 as i64
 if pa >= 0:
-ah = _hmix(_hmix(anc[pa], _e.us[pa].fhash), _xf_hash(pa, 0 as i64))
+ah = _hmix(_hmix(ups[pa], _e.us[pa].fhash), _xf_hash(pa, 0 as i64))
 end
-anc.Push(ah)
+ups.Push(ah)
 mut x0 := 0
 mut y0 := 0
 mut x1 := 0
@@ -187141,6 +187481,10 @@ mut y1 := 0
 if not _ink(node, x0, y0, x1, y1):
 continue
 end
+_e.sink[node * 4] = x0
+_e.sink[node * 4 + 1] = y0
+_e.sink[node * 4 + 2] = x1
+_e.sink[node * 4 + 3] = y1
 uid := _e.ctl[node].uid
 if x1 <= 0 or y1 <= 0 or x0 >= cw or y0 >= ch:
 mut was_off := true
@@ -187193,7 +187537,51 @@ end
 end
 _e.recs.Free()
 _e.recs = nrecs
+if _e.dom.nodes.Len() > 0:
+_sink_up(0)
+end
+_e.sink_ok = true
 _damage_backdrops()
+_e.ext_ok = false
+end
+func _sink_up(node: int):
+nd := _e.dom.nodes[node]
+if nd.k == _K_DIALOG or node == _e.popup:
+_e.sink[node * 4] = 0 - (1 << 30)
+_e.sink[node * 4 + 1] = 0 - (1 << 30)
+_e.sink[node * 4 + 2] = 1 << 30
+_e.sink[node * 4 + 3] = 1 << 30
+end
+b := node * 4
+each k in nd.kids:
+_sink_up(k)
+c := k * 4
+if _e.sink[c] < _e.sink[c + 2]:
+_e.sink[b] = math.MinI(_e.sink[b], _e.sink[c])
+_e.sink[b + 1] = math.MinI(_e.sink[b + 1], _e.sink[c + 1])
+_e.sink[b + 2] = math.MaxI(_e.sink[b + 2], _e.sink[c + 2])
+_e.sink[b + 3] = math.MaxI(_e.sink[b + 3], _e.sink[c + 3])
+end
+end
+end
+func _sink_skip(node: int): bool:
+if not _e.sink_ok or node * 4 + 3 >= _e.sink.Len():
+ret false
+end
+b := node * 4
+x0 := _e.sink[b] - 2
+y0 := _e.sink[b + 1] - 2
+x1 := _e.sink[b + 2] + 2
+y1 := _e.sink[b + 3] + 2
+if x1 <= x0 or y1 <= y0:
+ret true
+end
+if _e.full:
+cw := math.Ceil(_e.width * _e.scale) as int
+ch := math.Ceil(_e.height * _e.scale) as int
+ret x1 <= 0 or y1 <= 0 or x0 >= cw or y0 >= ch
+end
+ret not _damage_hits(x0, y0, x1, y1)
 end
 func _damage_area(): i64:
 mut a := 0 as i64
@@ -187274,9 +187662,9 @@ b := _e.boxes[node]
 if not b.shown:
 ret false
 end
-s := _e.cs[node]
+s := _e.cs.Ref(node)
 u := _e.us[node]
-nd := _e.dom.nodes[node]
+nd := _e.dom.nodes.Ref(node)
 fo := u.font
 r[0] = b.x
 r[1] = b.y
@@ -187603,6 +187991,9 @@ rads.Free()
 _paint_scrollbars(cv, node, b, g, s, u)
 end
 func _paint_node(cv &: paint.Canvas, node: int):
+if _sink_skip(node):
+ret
+end
 b := _e.boxes[node]
 if not b.shown:
 ret
@@ -187644,7 +188035,7 @@ if backdrop and _in_damage(node, b.x, b.y, b.x + b.w, b.y + b.h):
 cv.BackdropFilter(_rect(b.x, b.y, b.w, b.h), radii, bchain, op)
 end
 if layered:
-fe := _filter_extent(s, u.font) + 1.0
+fe := _filter_extent(_e.cs[node], u.font) + 1.0
 lrect := _rect(lr[0] - fe, lr[1] - fe, lr[2] - lr[0] + 2.0 * fe, lr[3] - lr[1] + 2.0 * fe)
 if filtered:
 cv.BeginFilterLayer(lrect, chain)
@@ -191979,11 +192370,10 @@ _place(0, 0.0, 0.0, _Box {})
 end
 func _place(node: int, px: f64, py: f64, clip: _Box):
 id := _e.fid[node]
-s := _e.cs[node]
-st := _e.tree.Style(id)
-if not st.visible:
+if not _e.tree.Visible(id):
 ret
 end
+s := _e.cs.Ref(node)
 x := px + _e.tree.X(id)
 y := py + _e.tree.Y(id)
 w := _e.tree.W(id)
@@ -192230,6 +192620,10 @@ package ui
 import str
 import mem
 import gui.style
+mut _kind_memo := HashMap {} as HashMap<str, int>
+mut _kind_mkey := Vector {} as Vector<str>
+mut _kind_mk := Vector {} as Vector<int>
+mut _kind_minl := Vector {} as Vector<bool>
 func _sfree(s: str):
 if s.Len() > 0:
 mem.Free(s as void*)
@@ -192501,6 +192895,11 @@ mut nd := _Node { parent = parent }
 if kind == "#text":
 nd.kind = "#text"
 nd.k = _K_TEXT
+else _kind_memo.Has(kind):
+m := _kind_memo.Get(kind)
+nd.kind = _kind_mkey[m]
+nd.k = _kind_mk[m]
+nd.inl = _kind_minl[m]
 else:
 c := _canon(kind)
 key := _kind_key(c)
@@ -192514,6 +192913,10 @@ nd.kind = key
 mut il := false
 nd.k = _kind_class(key, il)
 nd.inl = il
+_kind_memo.Put(str.Clone(kind), _kind_mkey.Len())
+_kind_mkey.Push(key)
+_kind_mk.Push(nd.k)
+_kind_minl.Push(il)
 end
 end
 nd.kids = Vector {} as Vector<int>
@@ -192943,7 +193346,7 @@ end
 func _hside(h: i64, w: style.Len, st: int, c: color.Color): i64:
 ret _hcol(_hmix(_hlen(h, w), st as i64), c)
 end
-func _group_hash(s: style.Style): i64:
+func _group_hash(s &: style.Style): i64:
 mut h := 1469598103934665603 as i64
 h = _hf(h, s.opacity)
 h = _hlen(h, s.blur)
@@ -192973,7 +193376,7 @@ h = _hlen(h, s.radius_bottom_start)
 h = _hmix(h, s.visible ? 1 : 0)
 ret h
 end
-func _paint_hash(s: style.Style): i64:
+func _paint_hash(s &: style.Style): i64:
 mut h := _group_hash(s)
 h = _hpaints(h, s.background)
 h = _hdim(h, s.background_size_x)
@@ -193202,6 +193605,9 @@ _e.cs.Free()
 _e.us.Free()
 _e.boxes.Free()
 _e.recs.Free()
+_e.sink.Free()
+_e.ext.Free()
+_e.sink_ok = false
 _e.anims.Free()
 _e.xf.Free()
 _e.xf_on.Free()
@@ -196418,6 +196824,8 @@ mut _clip_text := ""
 mut _clip_owned := false
 mut _def_keys := HashMap {} as HashMap<str, int>
 mut _def_styles := Vector {} as Vector<style.Style>
+mut _base_st := style.Style {}
+mut _base_ok := false
 mut _bad_kinds := Vector {} as Vector<str>
 @en "Options"
 @fa "گزینه‌ها"
@@ -196650,6 +197058,10 @@ pub touch: bool = false
 pub ime_on: bool = false
 pub root_font: f64 = 16.0
 pub recs: Vector<_Rec> = Vector {}
+pub sink: Vector<int> = Vector {}
+pub sink_ok: bool = false
+pub ext: Vector<f64> = Vector {}
+pub ext_ok: bool = false
 pub damage: paint.Region = paint.Region {}
 pub full: bool = true
 pub hover: int = -1
@@ -196774,7 +197186,7 @@ x1 = bx
 y1 = byy
 end
 func _own_transform(node: int, b: _Box): bool:
-s := _e.cs[node]
+s := _e.cs.Ref(node)
 if s.rotate == 0.0 and s.scale_x == 1.0 and s.scale_y == 1.0 and s.skew_x == 0.0 and s.skew_y == 0.0 and _zero_len(
 s.translate_x
 ) and _zero_len(s.translate_y):
@@ -196817,6 +197229,17 @@ ret true
 end
 func _xf_resize():
 n := _e.dom.nodes.Len()
+if _e.xf.Len() == n and _e.xf_on.Len() == n:
+if _e.xf_any:
+repeat n in i:
+if _e.xf_on[i]:
+_e.xf[i] = paint.Identity()
+_e.xf_on[i] = false
+end
+end
+end
+ret
+end
 _e.xf.Clear()
 _e.xf_on.Clear()
 repeat n:

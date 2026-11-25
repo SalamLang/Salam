@@ -209,6 +209,18 @@ raw attribute via `Get`/`Has`. `Output` has `html`, `css`, `js`, `head`, plus
 elements use them. All generator calls on a page run in one batch in the
 compiler's interpreter. If one fails, the build reports E123.
 
+`design` and `theme` are schema attributes with no `elements` list, so they are
+valid on every element; `palette` and `design tokens` list `["page"]`. When an
+element sets `design`, the compiler adds the marker attribute `data-ds-off` (the
+element and everything under it, until a nested `design` says otherwise) or
+`data-ds-on` to each element of that scope, and tells `design_page` through the
+node keys `ds-scoped` and `ds-first`. `layoutgen.Emit` then limits the design
+rules of a generator to elements without `data-ds-off` (or, when the page has no
+design, to elements with `data-ds-on`) and `EmitFor` copies the marker onto the
+parts a generator builds itself (the `data-slot` elements and icons). The
+`*_MIN_CSS` constants hold the rules a component needs with no design, and they
+are never limited. See `docs/design/DESIGN_SYSTEMS.md`.
+
 ## Tests
 
 Every layout test lives under `tests/{en,fa}/layout/`, split by subject:

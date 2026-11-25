@@ -280,7 +280,9 @@ commands `salam js`, `salam web`, `salam page build` and `salam app android|ios`
 still work as aliases, and `salam app` takes the extra options the new spelling
 does not, such as `--abi`. See [docs/MOBILE.md](docs/MOBILE.md),
 [docs/DESKTOP.md](docs/DESKTOP.md) and
-[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). The defaults for the design,
+the installers, the Windows executable and the phone apps live in `salam.toml`;
+every key is listed in [docs/PROJECT_FILE.md](docs/PROJECT_FILE.md).
 
 ### Packages
 

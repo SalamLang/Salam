@@ -7,6 +7,9 @@ page's `design` setting, then the project default from `design.toml` or the
 work (events, ARIA, open and close) with a minimal look, the same as
 `design = "none"`.
 
+The order, from the strongest: a `design` on the element, a `design` on an
+ancestor element, the `design` of the `page:`, the project file, none.
+
 ## Page settings
 
 ```salam
@@ -34,6 +37,68 @@ token for light and dark, `light name` and `dark name` set one side only.
 Tokens are the shadcn variables: `background foreground card popover primary
 secondary muted accent destructive border input ring radius chart-1 ... chart-5
 sidebar ...` plus `font-sans` and `font-mono`.
+
+## Scoping a design to part of a page
+
+`design` and `theme` work on the `page:` element (the default for the whole
+page) and on any single element. The nearest setting wins: an element, then its
+ancestors, then the page, then the project file, then none.
+
+```salam
+page:
+    design = "shadcn"
+    card:
+        title = "Styled"
+    end
+    box:
+        design = "none"
+        button:
+            content = "Bare button"
+        end
+        card:
+            design = "shadcn"
+            title = "Styled again"
+        end
+    end
+end
+```
+
+`design = "none"` on an element removes the design system's default look from
+that element and everything under it, until a descendant sets its own `design`.
+The element then looks like the bare element: only what the page itself sets
+(`padding`, `color`, ...) applies. Behaviour (open and close, ARIA, events) is
+kept, as it is for a whole page with `design = "none"`. `design = "shadcn"` on
+an element inside such a subtree turns the design back on for it and its
+descendants. Persian: `طراحی = "هیچ"` and `طراحی = "شد سی ان"`.
+
+The other way round works too. With `design = "none"` on the page (or no design
+at all), one element with `design = "shadcn"` is styled and the rest of the
+page stays bare.
+
+`theme = "light"`, `"dark"` or `"auto"` themes one element and its subtree, and
+on the page it is the default for the whole page. An element with its own
+`theme` inside a themed subtree overrides it.
+
+How it is built: an element that sets `design` gets the attribute
+`data-design`, and every element in a scope that was set by an element gets the
+marker `data-ds-off` (inside `none`) or `data-ds-on` (inside a design). The
+design rules keep zero specificity and are generated as
+`:where(:not([data-ds-off])):where(button...)`, or `:where([data-ds-on])` when
+the page default is none, so a style written on the element still wins and
+nothing is overridden with `!important` or `all: revert`. Pages that never set
+`design` on an element get no markers and unchanged CSS. The functional rules a
+component needs even with no design (a closed dialog stays hidden, a switch
+keeps its input) are not scoped.
+
+`palette` and `design tokens` stay page and project settings: the CSS variables
+are written once for the page, so they cannot differ per element. To change one
+subtree, set a custom property on the element with the `style` attribute
+(`style = "--primary: #c00"`).
+
+Limits: the button group joins (`div[data-slot="button-group"]` rules) are not
+scoped, and a selector with two `:where()` parts is gated on its first part
+only. The native UI (`--ui=native`, Android, iOS) has no design system, so
+`design` and `theme` are accepted there and change nothing.
 
 ## Fonts
 

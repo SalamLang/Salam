@@ -1551,6 +1551,7 @@ var __salam_rowdep = 0;
 var __salam_mm = {};
 var __salam_gen = 0;
 var __salam_got = "";
+var __salam_rkc = new Map();
 var __salam_scnt = {};
 var __salam_seen_n = 0;
 (function () {
@@ -1995,9 +1996,16 @@ function __salam_rows_make(i, html, rows) {
         if (r.indexOf("<!--salam:") >= 0) {
             return null;
         }
-        k = __salam_row_key(r);
-        if (k === null) {
-            return null;
+        k = __salam_rkc.get(r);
+        if (k === undefined) {
+            k = __salam_row_key(r);
+            if (k === null) {
+                return null;
+            }
+            if (__salam_rkc.size > 50000) {
+                __salam_rkc.clear();
+            }
+            __salam_rkc.set(r, k);
         }
         keys[j] = k;
     }
@@ -2208,13 +2216,17 @@ function __salam_rows_fast(i, nw, s, e, fresh) {
     if (!els) {
         return false;
     }
-    var buf = "";
+    var buf = "", spotted = [];
     for (j = 0; j < nw.rows.length; j++) {
         if (nw.rows[j] === pr.rows[j]) {
             continue;
         }
         if (!els[j].isConnected) {
             return false;
+        }
+        if (__salam_spot(els[j], pr.rows[j], nw.rows[j])) {
+            spotted.push(j);
+            continue;
         }
         ch.push(j);
         buf += nw.rows[j];
@@ -2240,6 +2252,12 @@ function __salam_rows_fast(i, nw, s, e, fresh) {
     nw.els = els;
     var rc = __salam_rows[i];
     if (rc) {
+        for (j = 0; j < spotted.length; j++) {
+            r = nw.keys[spotted[j]];
+            if (rc[r] !== undefined) {
+                rc[r] = nw.rows[spotted[j]];
+            }
+        }
         for (j = 0; j < ch.length; j++) {
             r = nw.rows[ch[j]];
             if (!__salam_forms(r) && __salam_one_root(r.replace(/[\u0001\u0004]/g, ""))) {
@@ -2295,8 +2313,22 @@ function __salam_rows_build(i, nw) {
     __salam_rows[i] = next;
     return out;
 }
+function __salam_kmap(x) {
+    if (x.kmap === undefined) {
+        var m = new Map(), j;
+        for (j = 0; j < x.keys.length; j++) {
+            if (m.has(x.keys[j])) {
+                x.kmap = null;
+                return null;
+            }
+            m.set(x.keys[j], j);
+        }
+        x.kmap = m;
+    }
+    return x.kmap;
+}
 function __salam_rows_moved(i, pr, nw, s, e, fresh) {
-    var n0 = pr.keys.length, n1 = nw.keys.length, j, k, oi, el, t, f, buf = "", need = [], src, keep, before;
+    var n0 = pr.keys.length, n1 = nw.keys.length, j, k, oi, el, t, f, buf = "", need = [], keep, before;
     if (n0 === 0 || n1 === 0 || pr.segs[0] !== nw.segs[0] || pr.segs[n0] !== nw.segs[n1]) {
         return false;
     }
@@ -2310,39 +2342,58 @@ function __salam_rows_moved(i, pr, nw, s, e, fresh) {
             return false;
         }
     }
-    var els = pr.els || __salam_row_els(s, e, pr.keys);
+    var els = pr.els, p;
     if (!els) {
+        els = __salam_row_els(s, e, pr.keys);
+        if (!els) {
+            return false;
+        }
+        p = els[0].parentNode;
+        for (j = 0; j < n0; j++) {
+            if (els[j].parentNode !== p || (j > 0 && els[j - 1].nextSibling !== els[j])) {
+                return false;
+            }
+        }
+    }
+    p = els[0].parentNode;
+    if (!p || !__salam_kmap(pr)) {
         return false;
     }
-    var p = els[0].parentNode;
-    for (j = 0; j < n0; j++) {
-        if (els[j].parentNode !== p || (j > 0 && els[j - 1].nextSibling !== els[j])) {
+    var lim = n0 < n1 ? n0 : n1, a = 0, b = 0;
+    while (a < lim && pr.keys[a] === nw.keys[a]) {
+        a++;
+    }
+    while (b < lim - a && pr.keys[n0 - 1 - b] === nw.keys[n1 - 1 - b]) {
+        b++;
+    }
+    var src = new Int32Array(n1), used = new Uint8Array(n0), spot = new Uint8Array(n1), om = pr.kmap;
+    for (j = 0; j < a; j++) {
+        src[j] = j;
+        used[j] = 1;
+    }
+    for (j = n1 - b; j < n1; j++) {
+        src[j] = j + n0 - n1;
+        used[j + n0 - n1] = 1;
+    }
+    for (j = a; j < n1 - b; j++) {
+        oi = om.get(nw.keys[j]);
+        if (oi === undefined) {
+            src[j] = -1;
+            continue;
+        }
+        if (oi < a || oi >= n0 - b || used[oi]) {
             return false;
         }
+        src[j] = oi;
+        used[oi] = 1;
     }
-    var old = new Map();
-    for (j = 0; j < n0; j++) {
-        if (old.has(pr.keys[j])) {
-            return false;
-        }
-        old.set(pr.keys[j], j);
-    }
-    src = new Int32Array(n1);
-    var used = new Uint8Array(n0), seen = new Set();
     for (j = 0; j < n1; j++) {
-        k = nw.keys[j];
-        if (seen.has(k)) {
-            return false;
-        }
-        seen.add(k);
-        oi = old.get(k);
-        src[j] = oi === undefined ? -1 : oi;
-        if (oi !== undefined) {
-            used[oi] = 1;
-        }
-        if (oi === undefined || pr.rows[oi] !== nw.rows[j]) {
+        oi = src[j];
+        if (oi < 0 || (pr.rows[oi] !== nw.rows[j] && !__salam_spot(els[oi], pr.rows[oi], nw.rows[j]))) {
             need.push(j);
             buf += nw.rows[j];
+        } else if (pr.rows[oi] !== nw.rows[j]) {
+            spot[j] = 1;
         }
     }
     var made = new Array(n1);
@@ -2363,7 +2414,7 @@ function __salam_rows_moved(i, pr, nw, s, e, fresh) {
         }
     }
     var anchor = els[n0 - 1].nextSibling, out = new Array(n1);
-    for (j = 0; j < n0; j++) {
+    for (j = a; j < n0 - b; j++) {
         if (!used[j]) {
             __salam_cleanup(els[j]);
             p.removeChild(els[j]);
@@ -2380,14 +2431,16 @@ function __salam_rows_moved(i, pr, nw, s, e, fresh) {
             out[j] = made[j];
         }
     }
-    keep = __salam_lis(src);
-    before = anchor;
-    for (j = n1 - 1; j >= 0; j--) {
-        el = out[j];
-        if (src[j] < 0 || !keep[j]) {
-            p.insertBefore(el, before);
+    if (n1 - b > a) {
+        keep = __salam_lis(src.subarray(a, n1 - b));
+        before = b > 0 ? els[n0 - b] : anchor;
+        for (j = n1 - b - 1; j >= a; j--) {
+            el = out[j];
+            if (src[j] < 0 || !keep[j - a]) {
+                p.insertBefore(el, before);
+            }
+            before = el;
         }
-        before = el;
     }
     nw.els = out;
     var prev = __salam_rows[i] || {}, next = {}, r;
@@ -2396,13 +2449,107 @@ function __salam_rows_moved(i, pr, nw, s, e, fresh) {
         r = nw.rows[j];
         if (src[j] >= 0 && !made[j]) {
             if (prev[k] !== undefined) {
-                next[k] = prev[k];
+                next[k] = spot[j] ? r : prev[k];
             }
         } else if (!__salam_forms(r) && __salam_one_root(r.replace(/[\u0001\u0004]/g, ""))) {
             next[k] = r;
         }
     }
     __salam_rows[i] = next;
+    return true;
+}
+function __salam_tag_at(root, k) {
+    var c = 0, voids = /^(AREA|BASE|BR|COL|EMBED|HR|IMG|INPUT|LINK|META|SOURCE|TRACK|WBR)$/;
+    var walk = function (el) {
+        var x, r;
+        c++;
+        if (c === k) {
+            return { el: el, open: true };
+        }
+        if (voids.test(el.nodeName)) {
+            return null;
+        }
+        for (x = el.firstChild; x; x = x.nextSibling) {
+            if (x.nodeType === 1) {
+                r = walk(x);
+                if (r) {
+                    return r;
+                }
+            } else if (x.nodeType !== 3) {
+                c = -1e9;
+                return null;
+            }
+        }
+        c++;
+        if (c === k) {
+            return { el: el, open: false };
+        }
+        return null;
+    };
+    return walk(root);
+}
+function __salam_spot(el, o, n) {
+    var lo = o.length, ln = n.length, p = 0, s = 0, a, b, k, t, nm, hit, x, j, was, now, q;
+    while (p < lo && p < ln && o.charCodeAt(p) === n.charCodeAt(p)) {
+        p++;
+    }
+    while (s < lo - p && s < ln - p && o.charCodeAt(lo - 1 - s) === n.charCodeAt(ln - 1 - s)) {
+        s++;
+    }
+    a = o.lastIndexOf(">", p - 1);
+    q = o.lastIndexOf("<", p - 1);
+    if (a > q) {
+        b = o.indexOf("<", lo - s);
+        if (b < 0 || o.lastIndexOf(">", b - 1) !== a) {
+            return false;
+        }
+        was = o.slice(a + 1, b);
+        now = n.slice(a + 1, b + ln - lo);
+        if (was.indexOf("&") >= 0 || now.indexOf("&") >= 0 || now.indexOf("<") >= 0 || was === "" || now === "") {
+            return false;
+        }
+        k = 0;
+        for (j = o.indexOf("<"); j >= 0 && j <= a; j = o.indexOf("<", j + 1)) {
+            k++;
+        }
+        hit = __salam_tag_at(el, k);
+        if (!hit) {
+            return false;
+        }
+        x = hit.open ? hit.el.firstChild : hit.el.nextSibling;
+        if (!x || x.nodeType !== 3 || x.data !== was || (x.nextSibling && x.nextSibling.nodeType === 3)) {
+            return false;
+        }
+        x.data = now;
+        return true;
+    }
+    if (q < 0) {
+        return false;
+    }
+    a = o.lastIndexOf("\"", p - 1);
+    b = o.indexOf("\"", lo - s);
+    if (a <= q || b < 0 || o.lastIndexOf("\"", b - 1) !== a || o.indexOf(">", q) < b) {
+        return false;
+    }
+    t = o.slice(q, a);
+    nm = /\s([^\s"'=<>\/]+)=$/.exec(t);
+    if (!nm || /^on/i.test(nm[1]) || nm[1] === "value" || nm[1] === "checked" || nm[1] === "selected") {
+        return false;
+    }
+    was = o.slice(a + 1, b);
+    now = n.slice(a + 1, b + ln - lo);
+    if (was.indexOf("&") >= 0 || now.indexOf("&") >= 0 || now.indexOf("\"") >= 0 || now.indexOf("<") >= 0) {
+        return false;
+    }
+    k = 0;
+    for (j = o.indexOf("<"); j >= 0 && j <= q; j = o.indexOf("<", j + 1)) {
+        k++;
+    }
+    hit = __salam_tag_at(el, k);
+    if (!hit || !hit.open || hit.el.getAttribute(nm[1]) !== was) {
+        return false;
+    }
+    hit.el.setAttribute(nm[1], now);
     return true;
 }
 function __salam_lis(a) {

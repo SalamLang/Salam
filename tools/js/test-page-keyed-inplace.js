@@ -127,6 +127,22 @@ function check(name, ok, detail) {
   );
   check("rename keeps every row element", (await kept()) === 5, await kept());
 
+  await page.click("#amp");
+  check(
+    "a label with markup characters stays text",
+    (await page.$eval("#label-c", (e) => e.textContent)) === "c & <co>",
+    await page.$eval("#label-c", (e) => e.textContent),
+  );
+  await page.click("#rename-c");
+  check(
+    "a label changes back",
+    (await page.$eval("#label-c", (e) => e.textContent)) === "c two words",
+  );
+  check(
+    "markup labels keep every row element",
+    (await kept()) === 5,
+    await kept(),
+  );
   await page.fill("#in-d", "typed d");
   await page.click("#rename-d");
   check(

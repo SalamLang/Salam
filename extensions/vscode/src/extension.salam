@@ -6,6 +6,7 @@ import node
 import str
 
 include "vscode.salam"
+include "editor.salam"
 
 extern:
     func salam_js_call(obj: i64, method: str, ...): i64
@@ -18,6 +19,7 @@ mut g_output := 0 as i64
 mut g_terminal := 0 as i64
 mut g_client := 0 as i64
 mut g_context := 0 as i64
+mut g_enh := 0 as i64
 
 struct LangItem:
     pub label: str
@@ -155,7 +157,25 @@ func append_all(dst: i64, src: i64):
     end
 end
 
+func try_project(kind: str): bool:
+    if g_enh == 0:
+        ret false
+    end
+    pa := node.CallS1(g_enh, "projectArgs", kind)
+    if node.IsNullish(pa):
+        ret false
+    end
+    _saved := vscode.ExecuteCommand0("workbench.action.files.saveAll")
+    args := node.GetProp(pa, "args")
+    append_all(args, common_args())
+    run_in_terminal(args, node.GetStr(pa, "cwd"))
+    ret true
+end
+
 func cmd_build():
+    if try_project("build"):
+        ret
+    end
     with_salam_doc(
         (doc: i64): file := vscode.DocumentUriFsPath(doc) target := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "build.target", "") wantsExe := node.IsWindows() or contains_substr(target, "windows") or contains_substr(target, "mingw") or contains_substr(target, "win32") mut out := file if ends_with_ci(file, ".salam"): out = file.Substr(0, file.Len() - 6) end if wantsExe: out += ".exe" end args := node.NewArray() node.PushStr(args, "build") node.PushStr(args, file) node.PushStr(args, "--output=" + out) if target != "": node.PushStr(args, "--target=" + target) end append_all(args, common_args()) run_in_terminal(args, dirname_of(file)) end
     )
@@ -307,7 +327,7 @@ func cmd_new_project():
             LangItem { label = "English (en)", value = "en" }, LangItem { label = "فارسی (fa)", value = "fa" }
         ] picks := node.NewArray() mut k := 0 until k < 2: salam_js_call(picks, "push", items[k]) k++ end vscode.Then1(
             vscode.ShowQuickPick(picks, "Keyword language pack for the new project"),
-            (pick: i64): if node.IsNullish(pick): ret end value := node.GetStr(pick, "value") args := node.NewArray() node.PushStr(args, "new") node.PushStr(args, name) node.PushStr(args, "--lang=" + value) run_in_terminal(args, "") end
+            (pick: i64): if node.IsNullish(pick): ret end value := node.GetStr(pick, "value") args := node.NewArray() node.PushStr(args, "init") node.PushStr(args, name) node.PushStr(args, "--lang=" + value) run_in_terminal(args, "") end
         ) end
     )
 end
@@ -379,7 +399,7 @@ func activate(context: i64):
         context,
         vscode.RegisterCommand(
             "salam.run",
-            (): runCmd := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "run.command", "exec") cmd_run_with(runCmd) end
+            (): if try_project("run"): ret end runCmd := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "run.command", "exec") cmd_run_with(runCmd) end
         )
     )
     vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.exec", (): cmd_run_with("exec") end))
@@ -390,6 +410,7 @@ func activate(context: i64):
     vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.emitAst", (): cmd_emit_xml("--emit-ast", "ast") end))
     vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.newProject", (): cmd_new_project() end))
     g_context = context
+    g_enh = editor.Start(node.Require("vscode"), context)
     if vscode.ConfigGetBool(vscode.GetConfiguration("salam"), "lsp.enable", true):
         probe_server()
     else:

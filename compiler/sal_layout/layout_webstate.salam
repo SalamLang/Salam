@@ -1989,12 +1989,15 @@ function __salam_row_els(s, e, keys) {
 function __salam_rows_fast(i, html, s, e, fresh) {
     var pr = __salam_rf[i], nw = __salam_rows_scan(html), j, t, f, r;
     __salam_rf[i] = nw;
-    if (!pr || !nw || pr.keys.length !== nw.keys.length) {
+    if (!pr || !nw) {
         return false;
+    }
+    if (pr.keys.length !== nw.keys.length) {
+        return __salam_rows_moved(i, pr, nw, s, e, fresh);
     }
     for (j = 0; j < nw.keys.length; j++) {
         if (pr.keys[j] !== nw.keys[j] || pr.segs[j] !== nw.segs[j]) {
-            return false;
+            return __salam_rows_moved(i, pr, nw, s, e, fresh);
         }
     }
     if (pr.segs[j] !== nw.segs[j]) {
@@ -2090,6 +2093,116 @@ function __salam_rows_build(i, nw) {
     }
     __salam_rows[i] = next;
     return out;
+}
+function __salam_rows_moved(i, pr, nw, s, e, fresh) {
+    var n0 = pr.keys.length, n1 = nw.keys.length, j, k, oi, el, t, f, buf = "", need = [], src, keep, before;
+    if (n0 === 0 || n1 === 0 || pr.segs[0] !== nw.segs[0] || pr.segs[n0] !== nw.segs[n1]) {
+        return false;
+    }
+    for (j = 1; j < n0; j++) {
+        if (pr.segs[j] !== "") {
+            return false;
+        }
+    }
+    for (j = 1; j < n1; j++) {
+        if (nw.segs[j] !== "") {
+            return false;
+        }
+    }
+    var els = pr.els || __salam_row_els(s, e, pr.keys);
+    if (!els) {
+        return false;
+    }
+    var p = els[0].parentNode;
+    for (j = 0; j < n0; j++) {
+        if (els[j].parentNode !== p || (j > 0 && els[j - 1].nextSibling !== els[j])) {
+            return false;
+        }
+    }
+    var old = new Map();
+    for (j = 0; j < n0; j++) {
+        if (old.has(pr.keys[j])) {
+            return false;
+        }
+        old.set(pr.keys[j], j);
+    }
+    src = new Int32Array(n1);
+    var used = new Uint8Array(n0), seen = new Set();
+    for (j = 0; j < n1; j++) {
+        k = nw.keys[j];
+        if (seen.has(k)) {
+            return false;
+        }
+        seen.add(k);
+        oi = old.get(k);
+        src[j] = oi === undefined ? -1 : oi;
+        if (oi !== undefined) {
+            used[oi] = 1;
+        }
+        if (oi === undefined || pr.rows[oi] !== nw.rows[j]) {
+            need.push(j);
+            buf += nw.rows[j];
+        }
+    }
+    var made = new Array(n1);
+    if (need.length > 0) {
+        t = document.createElement("template");
+        t.innerHTML = buf.replace(/[\u0001\u0004]/g, "");
+        f = t.content.firstChild;
+        for (j = 0; j < need.length; j++) {
+            oi = src[need[j]];
+            if (!f || f.nodeType !== 1 || (oi >= 0 && f.nodeName !== els[oi].nodeName)) {
+                return false;
+            }
+            made[need[j]] = f;
+            f = f.nextSibling;
+        }
+        if (f) {
+            return false;
+        }
+    }
+    var anchor = els[n0 - 1].nextSibling, out = new Array(n1);
+    for (j = 0; j < n0; j++) {
+        if (!used[j]) {
+            __salam_cleanup(els[j]);
+            p.removeChild(els[j]);
+        }
+    }
+    for (j = 0; j < n1; j++) {
+        oi = src[j];
+        if (oi >= 0) {
+            out[j] = els[oi];
+            if (made[j]) {
+                __salam_patch(els[oi], made[j], fresh);
+            }
+        } else {
+            out[j] = made[j];
+        }
+    }
+    keep = __salam_lis(src);
+    before = anchor;
+    for (j = n1 - 1; j >= 0; j--) {
+        el = out[j];
+        if (src[j] < 0 || !keep[j]) {
+            p.insertBefore(el, before);
+        }
+        before = el;
+    }
+    nw.els = out;
+    var prev = __salam_rows[i] || {}, next = {}, r;
+    for (j = 0; j < n1; j++) {
+        k = nw.keys[j];
+        r = nw.rows[j];
+        if (src[j] >= 0 && !made[j]) {
+            if (prev[k] !== undefined) {
+                next[k] = prev[k];
+            }
+        } else if (!__salam_forms(r) && __salam_one_root(r.replace(/[\u0001\u0004]/g, ""))) {
+            next[k] = r;
+        }
+    }
+    __salam_rows[i] = next;
+    return true;
 }
 function __salam_lis(a) {
     var n = a.length, p = new Int32Array(n), m = [], i, lo, hi, mid, out;

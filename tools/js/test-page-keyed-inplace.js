@@ -154,6 +154,42 @@ function check(name, ok, detail) {
     (await page.$eval("#picked", (e) => e.textContent)) === "picked e",
   );
 
+  const before = await page.evaluate(() => window.__salam_inplace);
+  await page.fill("#in-c", "typed c");
+  await page.click("#rev");
+  check("reverse flips the rows", (await order()) === "e,d,c,a", await order());
+  check("reverse keeps every row element", (await kept()) === 4, await kept());
+  check(
+    "a typed value moves with its row",
+    (await page.$eval("#in-c", (e) => e.value)) === "typed c",
+  );
+  await page.click("#ins");
+  check("insert adds a row", (await order()) === "e,x,d,c,a", await order());
+  check("insert keeps the other rows", (await kept()) === 4, await kept());
+  check(
+    "the new row has its label",
+    (await page.$eval("#label-x", (e) => e.textContent)) === "x one",
+  );
+  await page.click("#pick-x");
+  check(
+    "a new row handler works",
+    (await page.$eval("#picked", (e) => e.textContent)) === "picked x",
+  );
+  check(
+    "the new row is marked",
+    (await cls()) === "off,on,off,off,off",
+    await cls(),
+  );
+  await page.click("#drop");
+  check("drop after insert", (await order()) === "e,d,c,a", await order());
+  check("drop after insert keeps the rows", (await kept()) === 4, await kept());
+  const moved = await page.evaluate(() => window.__salam_inplace);
+  check(
+    "moves and inserts skip the full render",
+    moved - before >= 4,
+    moved - before,
+  );
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await browser.close();
   process.exit(failures ? 1 : 0);

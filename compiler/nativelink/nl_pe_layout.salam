@@ -1,0 +1,294 @@
+package nativelink
+
+func pe_classify(l &: Nl, t &: Pe, s: int):
+    fl := l.s_flags[s]
+    if l.s_drop[s] or (fl & (0x800 as i64)) != (0 as i64) or
+        (fl & (0x02000000 as i64)) != (0 as i64):
+        ret
+    end
+    nm := name_of(l, l.s_name[s])
+    if str.Len(nm) == 0 or str.StartsWith(nm, ".debug") or str.StartsWith(
+        nm, ".drectve"
+    ) or str.StartsWith(nm, ".note") or str.StartsWith(nm, ".gnu") or str.StartsWith(nm, ".stab") or
+        str.StartsWith(
+            nm, ".comment"
+        ) or str.StartsWith(
+            nm, ".eh_frame"
+        ):
+        ret
+    end
+    mut ps := 0 - 1
+    mut key := ""
+    if str.Equals(nm, ".text"):
+        ps = PS_TEXT
+        key = "1"
+    else str.StartsWith(nm, ".text$"):
+        ps = PS_TEXT
+        key = "2" + nm
+    else str.StartsWith(nm, ".text."):
+        ps = PS_TEXT
+        key = "3"
+    else str.Equals(nm, ".data") or str.Equals(nm, ".data2"):
+        ps = PS_DATA
+        key = "1"
+    else str.StartsWith(nm, ".data$"):
+        ps = PS_DATA
+        key = "2" + nm
+    else str.StartsWith(nm, ".data.") or str.Equals(nm, ".jcr"):
+        ps = PS_DATA
+        key = "3"
+    else str.Equals(nm, ".rdata"):
+        ps = PS_RDATA
+        key = "10"
+    else str.StartsWith(nm, ".rdata$"):
+        ps = PS_RDATA
+        key = "11" + nm
+    else str.StartsWith(nm, ".rodata"):
+        ps = PS_RDATA
+        key = "12"
+    else str.Equals(nm, ".rdata_runtime_pseudo_reloc"):
+        ps = PS_RDATA
+        key = "21"
+    else str.Equals(nm, ".ctors") or str.Equals(nm, ".ctor"):
+        ps = PS_RDATA
+        key = "31"
+    else str.StartsWith(nm, ".ctors."):
+        ps = PS_RDATA
+        key = "32" + nm
+    else str.Equals(nm, ".dtors") or str.Equals(nm, ".dtor"):
+        ps = PS_RDATA
+        key = "41"
+    else str.StartsWith(nm, ".dtors."):
+        ps = PS_RDATA
+        key = "42" + nm
+    else str.StartsWith(nm, ".CRT$X"):
+        ps = PS_RDATA
+        g2 := str.Substr(nm, 6, 1)
+        mut base := "50"
+        if str.Equals(g2, "C"): base = "51" end
+        if str.Equals(g2, "I"): base = "53" end
+        if str.Equals(g2, "L"): base = "55" end
+        if str.Equals(g2, "P"): base = "57" end
+        if str.Equals(g2, "T"): base = "59" end
+        if str.Equals(g2, "D"): base = "61" end
+        key = base + nm
+    else str.StartsWith(nm, ".pdata"):
+        ps = PS_PDATA
+        key = "1"
+    else str.StartsWith(nm, ".xdata"):
+        ps = PS_XDATA
+        key = "1"
+    else str.StartsWith(nm, ".bss") or (fl & (0x80 as i64)) != (0 as i64) and
+        not str.StartsWith(nm, ".tls"):
+        ps = PS_BSS
+        key = "1"
+    else str.StartsWith(nm, ".idata$"):
+        ps = PS_IDATA
+        n := str.Substr(nm, 7, 1)
+        lab := l.o_label[l.s_obj[s]]
+        if str.Equals(n, "2"): key = "12" + lab end
+        if str.Equals(n, "3"): key = "13" + lab end
+        if str.Equals(n, "4"): key = "34" + lab end
+        if str.Equals(n, "5"): key = "51" + lab end
+        if str.Equals(n, "6"): key = "56" + lab end
+        if str.Equals(n, "7"): key = "57" + lab end
+    else str.StartsWith(nm, ".rsrc"):
+        ps = PS_RSRC
+        key = "1" + nm
+        l.pe_nrsrc++
+    else str.StartsWith(nm, ".tls"):
+        ps = PS_TLS
+        if str.Equals(nm, ".tls$AAA"):
+            key = "1"
+        else str.Equals(nm, ".tls$ZZZ"):
+            key = "9"
+        else str.Equals(nm, ".tls"):
+            key = "2"
+        else str.Equals(nm, ".tls$"):
+            key = "25"
+        else:
+            key = "3" + nm
+        end
+    else (fl & (0x20000000 as i64)) != (0 as i64):
+        ps = PS_TEXT
+        key = "3"
+    else (fl & (0x80000000 as i64)) != (0 as i64):
+        ps = PS_DATA
+        key = "3"
+    else:
+        ps = PS_RDATA
+        key = "12"
+    end
+    l.s_live[s] = true
+    l.s_oc[s] = ps
+    pe_item(t, ps, IT_SEC, key, s, 0 as i64)
+end
+
+func pe_frame(l &: Nl, t &: Pe):
+    pe_mark(l, t, PS_DATA, "0", "__data_start__")
+    pe_mark(l, t, PS_DATA, "4", "__data_end__")
+    pe_mark(l, t, PS_RDATA, "200", "__rt_psrelocs_start")
+    pe_mark(l, t, PS_RDATA, "200", "__RUNTIME_PSEUDO_RELOC_LIST__")
+    pe_mark(l, t, PS_RDATA, "200", "___RUNTIME_PSEUDO_RELOC_LIST__")
+    pe_mark(l, t, PS_RDATA, "22", "__rt_psrelocs_end")
+    pe_mark(l, t, PS_RDATA, "22", "__RUNTIME_PSEUDO_RELOC_LIST_END__")
+    pe_mark(l, t, PS_RDATA, "22", "___RUNTIME_PSEUDO_RELOC_LIST_END__")
+    pe_item(t, PS_RDATA, IT_ALIGN, "29", 0, 8 as i64)
+    pe_mark(l, t, PS_RDATA, "300", "___CTOR_LIST__")
+    pe_mark(l, t, PS_RDATA, "300", "__CTOR_LIST__")
+    pe_bytes(t, PS_RDATA, "301", pe_psz(l), 255)
+    pe_bytes(t, PS_RDATA, "39", pe_psz(l), 0)
+    pe_mark(l, t, PS_RDATA, "400", "___DTOR_LIST__")
+    pe_mark(l, t, PS_RDATA, "400", "__DTOR_LIST__")
+    pe_bytes(t, PS_RDATA, "401", pe_psz(l), 255)
+    pe_bytes(t, PS_RDATA, "49", pe_psz(l), 0)
+    each pr in ["C51", "I53", "L55", "P57", "T59", "D61"]:
+        c := str.Substr(pr, 0, 1)
+        k := str.Substr(pr, 1, 2)
+        pe_mark(l, t, PS_RDATA, k + "0", "___crt_x" + str.Lower(c) + "_start__")
+        if not str.Equals(c, "L"):
+            pe_mark(l, t, PS_RDATA, k + "~", "___crt_x" + str.Lower(c) + "_end__")
+        end
+    end
+    pe_mark(l, t, PS_RDATA, "70", "__DELAY_IMPORT_DIRECTORY_start__")
+    pe_mark(l, t, PS_RDATA, "70", "__DELAY_IMPORT_DIRECTORY_end__")
+    pe_mark(l, t, PS_BSS, "0", "__bss_start__")
+    pe_mark(l, t, PS_BSS, "9", "__bss_end__")
+    pe_bytes(t, PS_IDATA, "19", 20, 0)
+    pe_item(t, PS_IDATA, IT_ALIGN, "20", 0, 8 as i64)
+    pe_mark(l, t, PS_IDATA, "50", "__IAT_start__")
+    pe_mark(l, t, PS_IDATA, "55", "__IAT_end__")
+    pe_mark(l, t, PS_TLS, "0", "___tls_start__")
+    pe_mark(l, t, PS_TLS, "9~", "___tls_end__")
+    pe_mark(l, t, PS_BSS, "99", "__end__")
+    pe_mark(l, t, PS_BSS, "99", "_end")
+    pe_mark(l, t, PS_BSS, "99", "end")
+    pe_mark(l, t, PS_TEXT, "9", "etext")
+end
+
+func pe_sort(t &: Pe):
+    n := t.it_ps.Len()
+    mut i := 1
+    until i < n:
+        mut j := i
+        until j > 0 and pe_less(t, j, j - 1):
+            pe_swap(t, j, j - 1)
+            j--
+        end
+        i++
+    end
+end
+
+func pe_less(t &: Pe, a: int, b: int): bool:
+    if t.it_ps[a] != t.it_ps[b]:
+        ret t.it_ps[a] < t.it_ps[b]
+    end
+    c := str.Compare(t.it_key[a], t.it_key[b])
+    ret c < 0
+end
+
+func pe_swap(t &: Pe, a: int, b: int):
+    p := t.it_ps[a]
+    t.it_ps[a] = t.it_ps[b]
+    t.it_ps[b] = p
+    k := t.it_kind[a]
+    t.it_kind[a] = t.it_kind[b]
+    t.it_kind[b] = k
+    ky := t.it_key[a]
+    t.it_key[a] = t.it_key[b]
+    t.it_key[b] = ky
+    o := t.it_ord[a]
+    t.it_ord[a] = t.it_ord[b]
+    t.it_ord[b] = o
+    v := t.it_val[a]
+    t.it_val[a] = t.it_val[b]
+    t.it_val[b] = v
+end
+
+func pe_commons(l &: Nl, t &: Pe):
+    repeat l.g_name.Len() in g:
+        if l.g_state[g] == SY_UNDEF and l.g_common[g] > (0 as i64):
+            l.g_state[g] = SY_ABS
+            l.g_sec[g] = SYN_PEMARK
+            pe_item(t, PS_BSS, IT_ALIGN, "5", 0, 16 as i64)
+            pe_item(t, PS_BSS, IT_MARK, "5", 0, g as i64)
+            pe_bytes(t, PS_BSS, "5", l.g_common[g] as int, 0)
+        end
+    end
+end
+
+func pe_aliases(l &: Nl):
+    repeat l.g_name.Len() in g:
+        if l.g_state[g] == SY_UNDEF and l.g_alias[g] >= 0:
+            l.g_state[g] = SY_ABS
+            l.g_sec[g] = SYN_ALIAS
+            l.g_val[g] = l.g_alias[g] as i64
+        end
+    end
+end
+
+func pe_place(l &: Nl, t &: Pe):
+    nps := PS_COUNT
+    repeat nps:
+        t.ps_va.Push(0 as i64)
+        t.ps_vsize.Push(0 as i64)
+        t.ps_raw.Push(0 as i64)
+        t.ps_rawsize.Push(0 as i64)
+    end
+    mut va := 0x1000 as i64
+    repeat nps in k:
+        if k == PS_RELOC:
+            continue
+        end
+        t.ps_va[k] = va
+        mut pos := va
+        repeat t.it_ps.Len() in i:
+            if t.it_ps[i] != k:
+                continue
+            end
+            kind := t.it_kind[i]
+            if kind == IT_SEC:
+                s := t.it_ord[i]
+                pos = align_to(pos, l.s_align[s])
+                l.s_addr[s] = l.pe_base + pos
+                t.it_addr[i] = pos
+                pos = pos + l.s_size[s] + th_pad(l, s)
+            else kind == IT_BYTES:
+                t.it_addr[i] = pos
+                pos += (t.it_val[i] & (0xFFFFFFFF as i64))
+            else kind == IT_ALIGN:
+                pos = align_to(pos, t.it_val[i])
+                t.it_addr[i] = pos
+            else:
+                t.it_addr[i] = pos
+                l.g_val[t.it_val[i] as int] = l.pe_base + pos
+            end
+        end
+        t.ps_vsize[k] = pos - va
+        if pos > va:
+            va = align_to(pos, 0x1000 as i64)
+        end
+    end
+    t.ps_va[PS_RELOC] = va
+    t.image_size = va
+    mut used := 1
+    repeat nps in k0:
+        if k0 != PS_RELOC and t.ps_vsize[k0] > (0 as i64):
+            used++
+        end
+    end
+    t.nsec = used + l.dg_name.Len()
+    t.hdr_size = align_to(
+        (0x80 + 4 + 20 + (l.mach == EM_386 ? 224 : 240) + 40 * t.nsec) as i64, 0x200 as i64
+    )
+end
+
+func pe_secidx(t &: Pe, k: int): int:
+    mut n := 0
+    repeat k + 1 in i:
+        if t.ps_vsize[i] > (0 as i64):
+            n++
+        end
+    end
+    ret n
+end

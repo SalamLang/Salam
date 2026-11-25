@@ -1,0 +1,313 @@
+package nativegen
+
+import str
+
+func dv_type_bytes(g &: Ng, md: int): int:
+    if md < 0 or md >= g.md_kind.Len():
+        ret 0
+    end
+    ret g.md_sz[md] / 8
+end
+
+func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, lsym: int):
+    md := g.gv_md[grp[0]]
+    param := g.md_a[md] > 0
+    mut fr := Vector {} as Vector<int>
+    each q in grp:
+        if g.gv_foff[q] >= 0:
+            mut at := fr.Len()
+            repeat fr.Len() in z:
+                if at == fr.Len() and g.gv_foff[fr[z]] > g.gv_foff[q]:
+                    at = z
+                end
+            end
+            fr.Push(q)
+            mut w := fr.Len() - 1
+            until w > at:
+                fr[w] = fr[w - 1]
+                w--
+            end
+            fr[at] = q
+        end
+    end
+    mut bnd := Vector {} as Vector<int>
+    each q3 in grp:
+        if g.gv_foff[q3] < 0 and g.gv_mem[q3]:
+            continue
+        end
+        mut e := t.le_head[q3]
+        until e >= 0:
+            bnd.Push(g.le_s[e])
+            bnd.Push(g.le_e[e])
+            e = t.le_next[e]
+        end
+    end
+    repeat bnd.Len() in a:
+        repeat bnd.Len() - a - 1 in b0:
+            b := a + b0 + 1
+            if bnd[b] < bnd[a]:
+                tmp := bnd[a]
+                bnd[a] = bnd[b]
+                bnd[b] = tmp
+            end
+        end
+    end
+    total := dv_type_bytes(g, g.md_t[md])
+    mut body := Vector {} as Vector<u8>
+    mut uq := Vector {} as Vector<int>
+    each bv in bnd:
+        if uq.Len() == 0 or uq[uq.Len() - 1] != bv:
+            uq.Push(bv)
+        end
+    end
+    repeat uq.Len() in ix:
+        if ix + 1 >= uq.Len():
+            continue
+        end
+        lo := uq[ix]
+        hi := uq[ix + 1]
+        mut ex := Vector {} as Vector<u8>
+        mut any := false
+        mut fcur := 0
+        each q4 in fr:
+            off := g.gv_foff[q4]
+            sz := g.gv_fsz[q4]
+            if off < fcur:
+                continue
+            end
+            if off > fcur:
+                ex.Push(0x93 as u8)
+                vb_uleb(ex, (off - fcur) as i64)
+            end
+            mut e2 := t.le_head[q4]
+            mut hit := 0 - 1
+            until e2 >= 0:
+                if g.le_s[e2] <= lo and g.le_e[e2] >= hi:
+                    hit = e2
+                end
+                e2 = t.le_next[e2]
+            end
+            if hit >= 0:
+                mut y := dv_expr(g, g.le_k[hit], g.le_p[hit], g.le_x[hit])
+                each yb in y:
+                    ex.Push(yb)
+                end
+                y.Free()
+                any = true
+            end
+            ex.Push(0x93 as u8)
+            vb_uleb(ex, sz as i64)
+            fcur = off + sz
+        end
+        if total > fcur:
+            ex.Push(0x93 as u8)
+            vb_uleb(ex, (total - fcur) as i64)
+        end
+        if any:
+            dbg_loc_ent(g, body, lo, hi, ex)
+        else:
+            dv_frag_whole(g, t, grp, body, lo, hi)
+        end
+        ex.Free()
+    end
+    ab := body.Len() > 0 ? 13 : 15
+    vb_uleb(di, (param ? ab + 3 : ab) as i64)
+    vb_str(di, g.md_s1[md])
+    fm := g.md_file[md]
+    vb_uleb(
+        di,
+        (fm >= 0 and fm < g.md_kind.Len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64
+    )
+    vb_uleb(di, g.md_line[md] as i64)
+    dv_ref(g, t, di, g.md_t[md])
+    if body.Len() > 0:
+        add_reloc(g, SEC_DBGINFO, di.Len(), lsym, R_ABS32, g.s_dloc.Len() as i64)
+        vb_le(di, 0 as i64, 4)
+        each bb in body:
+            g.s_dloc.Push(bb)
+        end
+        dbg_list_end(g, g.s_dloc)
+    end
+    body.Free()
+    fr.Free()
+    bnd.Free()
+    uq.Free()
+end
+
+func dv_frag_whole(g &: Ng, t &: DvTypes, grp: Vector<int>, body &: Vector<u8>, lo: int, hi: int):
+    each q in grp:
+        if g.gv_foff[q] >= 0 or g.gv_mem[q]:
+            continue
+        end
+        mut e := t.le_head[q]
+        until e >= 0:
+            if g.le_s[e] <= lo and g.le_e[e] >= hi:
+                mut y := dv_expr(g, g.le_k[e], g.le_p[e], g.le_x[e])
+                dbg_loc_ent(g, body, lo, hi, y)
+                y.Free()
+                ret
+            end
+            e = t.le_next[e]
+        end
+    end
+end
+
+func dv_cache_ok(g &: Ng, v: int, imap &: Vector<int>): bool:
+    if v < 0 or v >= g.v_kind.Len():
+        ret false
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_ARG:
+        ret true
+    end
+    if k != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    ret d >= 0 and d < imap.Len() and imap[d] >= 0 and g.i_blk[d] >= 0
+end
+
+func dv_cache_one(g &: Ng, anchor_at: int, e: int, imap &: Vector<int>, v0: int):
+    f := g.ev_fv[e]
+    if g.fv_bad[f]:
+        ret
+    end
+    g.ic.ev_anchor.Push(anchor_at)
+    g.ic.ev_var.Push(g.fv_var[f])
+    g.ic.ev_foff.Push(g.fv_foff[f])
+    g.ic.ev_fsz.Push(g.fv_fsz[f])
+    g.ic.ev_ind.Push(g.fv_ind[f])
+    g.ic.ev_ctx.Push(g.fv_ctx[f])
+    v := g.ev_val[e]
+    g.ic.ev_val.Push(dv_cache_ok(g, v, imap) ? cache_val(g, v, v0) : 0 - 1)
+end
+
+func dv_cache_events(g &: Ng, imap &: Vector<int>, v0: int):
+    if g.v_repl.Len() > 0:
+        dv_resolve_all(g)
+    end
+    repeat g.b_rpo.Len() in ri:
+        b := g.b_rpo[ri]
+        if g.ev_head.Has(0 - 1 - b):
+            mut e := g.ev_head.Get(0 - 1 - b)
+            until e >= 0:
+                dv_cache_one(g, 0 - 1 - ri, e, imap, v0)
+                e = g.ev_next[e]
+            end
+        end
+        mut j := g.b_first[b]
+        until j >= 0:
+            if g.ev_head.Has(j):
+                mut e2 := g.ev_head.Get(j)
+                until e2 >= 0:
+                    dv_cache_one(g, imap[j], e2, imap, v0)
+                    e2 = g.ev_next[e2]
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+end
+
+func dv_inline_events(g &: Ng, e: int, newi &: Vector<int>, v0: int, c: int, cl: int):
+    q0 := g.ic.e_ev0[e]
+    mut kv := Vector {} as Vector<int>
+    mut ko := Vector {} as Vector<int>
+    mut kc := Vector {} as Vector<int>
+    mut kf := Vector {} as Vector<int>
+    repeat g.ic.e_evcount[e] in k:
+        q := q0 + k
+        cx := g.ic.ev_ctx[q] >= 0 ? dbg_rebase(g, g.ic.ev_ctx[q], cl) : cl
+        var := g.ic.ev_var[q]
+        fo := g.ic.ev_foff[q]
+        mut f := 0 - 1
+        repeat kv.Len() in z:
+            if f < 0 and kv[z] == var and ko[z] == fo and kc[z] == cx:
+                f = kf[z]
+            end
+        end
+        if f < 0:
+            f = g.fv_val.Len()
+            g.fv_val.Push(0 - 1)
+            g.fv_var.Push(var)
+            g.fv_ind.Push(g.ic.ev_ind[q])
+            g.fv_bad.Push(false)
+            g.fv_foff.Push(fo)
+            g.fv_ctx.Push(cx)
+            g.fv_fsz.Push(g.ic.ev_fsz[q])
+            g.fv_ent.Push(0 - 1)
+            g.fv_par.Push(0 - 1)
+            kv.Push(var)
+            ko.Push(fo)
+            kc.Push(cx)
+            kf.Push(f)
+        end
+        a := g.ic.ev_anchor[q]
+        mut anchor := 0 - 1
+        if a >= 0:
+            if a >= newi.Len():
+                continue
+            end
+            anchor = newi[a]
+        else:
+            rb := 0 - 1 - a
+            if rb >= g.ic.bmap.Len():
+                continue
+            end
+            anchor = 0 - 1 - g.ic.bmap[rb]
+        end
+        cv := g.ic.ev_val[q]
+        dv_ev_add(g, anchor, f, cv >= 0 ? map_cval(g, cv, v0, c) : 0 - 1)
+    end
+    kv.Free()
+    ko.Free()
+    kc.Free()
+    kf.Free()
+end
+
+func dv_global_line(g &: Ng, p: int, e: int, ge: int):
+    mut q := p + 1
+    until q < e and g.src[q] != (32 as u8):
+        q++
+    end
+    mut b := str.NewBuilder()
+    mut k := p + 1
+    until k < q:
+        str.BufAppendChar(b, g.src[k] as int)
+        k++
+    end
+    g.dg_gname.Push(str.BufStr(b))
+    str.BufFree(b)
+    g.dg_gmd.Push(ge)
+end
+
+func dv_write_globals(g &: Ng, t &: DvTypes, di &: Vector<u8>):
+    repeat g.dg_gname.Len() in i:
+        ge := g.dg_gmd[i]
+        if ge < 0 or ge >= g.md_kind.Len() or g.md_kind[ge] != 10:
+            continue
+        end
+        var := g.md_t[ge]
+        if var < 0 or var >= g.md_kind.Len() or g.md_kind[var] != 11:
+            continue
+        end
+        nm := g.dg_gname.Get(i)
+        s := tab_get(g.syms, sp(nm), 0, str.Len(nm))
+        if s < 0 or not g.sy_def[s] or g.sy_sec[s] < 0:
+            continue
+        end
+        vb_uleb(di, 22 as i64)
+        vb_str(di, g.md_s1[var])
+        fm := g.md_file[var]
+        vb_uleb(
+            di,
+            (fm >= 0 and fm < g.md_kind.Len() and
+                g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64
+        )
+        vb_uleb(di, g.md_line[var] as i64)
+        dv_ref(g, t, di, g.md_t[var])
+        vb_uleb(di, (dbg_aw(g) + 1) as i64)
+        di.Push(0x03 as u8)
+        dbg_addr(g, SEC_DBGINFO, di, s, 0 as i64)
+    end
+end

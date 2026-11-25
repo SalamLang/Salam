@@ -28,8 +28,9 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Runs a Salam file with {@code salam run} or {@code salam exec}, or its tests with {@code salam
- * test}, whose results fill the IDE's test tree.
+ * Runs a Salam file or project with {@code salam run}, {@code build}, {@code check} or {@code
+ * exec}, or its tests with {@code salam test}, whose results fill the IDE's test tree. A platform
+ * adds {@code --platform=} to run and build.
  */
 public final class SalamRunConfiguration
     extends RunConfigurationBase<SalamRunConfigurationOptions> {
@@ -84,8 +85,23 @@ public final class SalamRunConfiguration
     getOptions().setTestName(value);
   }
 
+  String getPlatform() {
+    return getOptions().getPlatform();
+  }
+
+  void setPlatform(String value) {
+    getOptions().setPlatform(value);
+  }
+
+  static final String[] COMMANDS = {"run", "build", "check", "exec", "test"};
+
   static String normalCommand(String command) {
-    return "exec".equals(command) || "test".equals(command) ? command : "run";
+    for (String known : COMMANDS) {
+      if (known.equals(command)) {
+        return command;
+      }
+    }
+    return "run";
   }
 
   boolean isTest() {
@@ -117,6 +133,10 @@ public final class SalamRunConfiguration
       if (test != null && !test.isBlank()) {
         line.addParameter("--run=" + test.trim());
       }
+    }
+    String platform = getPlatform();
+    if (platform != null && !platform.isBlank() && ("run".equals(command) || "build".equals(command))) {
+      line.addParameter("--platform=" + platform.trim());
     }
     String args = getArguments();
     if (args != null && !args.isBlank() && !"test".equals(command)) {

@@ -109,6 +109,32 @@ function start(args, cwd, port, log) {
   return child;
 }
 
+async function overlayInfo(page) {
+  return page.evaluate(() => {
+    const d = [...document.documentElement.children].find(
+      (e) => e.tagName === "DIV" && e.getAttribute("dir"),
+    );
+    if (!d || d.style.overflow !== "auto") return null;
+    const kids = [...d.querySelectorAll("div[dir]")].map((e) =>
+      e.getAttribute("dir"),
+    );
+    return {
+      dir: d.getAttribute("dir"),
+      lang: d.getAttribute("lang"),
+      text: d.textContent,
+      ltrLines: kids.filter((k) => k === "ltr").length,
+      autoLines: kids.filter((k) => k === "auto").length,
+    };
+  });
+}
+
+async function overlayWith(page, needle, ms) {
+  return until(async () => {
+    const o = await overlayInfo(page);
+    return o && o.text.indexOf(needle) >= 0 ? o : null;
+  }, ms);
+}
+
 async function listening(port) {
   return until(async () => {
     const r = await fetch("http://127.0.0.1:" + port + "/__salam_hmr");
@@ -212,6 +238,12 @@ async function listening(port) {
       return t.indexOf("Build failed") >= 0 ? t : null;
     }, 60000);
     check("a build error shows over the page", !!overlay);
+    const eno = await overlayInfo(page);
+    check(
+      "an English overlay is ltr and English",
+      !!eno && eno.dir === "ltr" && eno.lang === "en",
+      JSON.stringify(eno && { dir: eno.dir, lang: eno.lang }),
+    );
     check(
       "the page underneath is kept",
       (await page.textContent("#ver")) === "v3",
@@ -303,71 +335,126 @@ async function listening(port) {
     await server2.stop();
   }
 
-  const ssrSrc = path.resolve(__dirname, "../../tests/en/ssr/site");
-  if (fs.existsSync(ssrSrc) && process.platform !== "win32") {
-    const ssr = path.join(dir, "ssr");
+  const faDir = path.join(dir, "fa");
+  fs.mkdirSync(faDir);
+  const faSrc = path.join(faDir, "app.salam");
+  const faGood =
+    "صفحه:\n    عنوان = «سلام»\n    جعبه:\n        محتوا = «سلام دنیا»\n    پایان\nپایان\n";
+  fs.writeFileSync(faSrc, faGood);
+  const port4 = port + 3;
+  const server4 = start(["serve", faSrc], dir, port4, log);
+  try {
+    await listening(port4);
+    await page.goto("http://127.0.0.1:" + port4 + "/");
+    fs.writeFileSync(faSrc, "صفحه:\n    عنوان = \n");
+    const fao = await overlayWith(page, "ساخت ناموفق بود", 60000);
+    check("a Persian overlay has Persian text", !!fao);
+    check(
+      "a Persian overlay is rtl and fa",
+      !!fao && fao.dir === "rtl" && fao.lang === "fa",
+      JSON.stringify(fao && { dir: fao.dir, lang: fao.lang }),
+    );
+    check(
+      "a Persian overlay keeps file lines ltr and message lines automatic",
+      !!fao && fao.ltrLines > 0 && fao.autoLines > 0,
+      JSON.stringify(fao && { l: fao.ltrLines, a: fao.autoLines }),
+    );
+    check(
+      "the diagnostics inside it are Persian",
+      !!fao && fao.text.indexOf("خطا") >= 0,
+    );
+    fs.writeFileSync(faSrc, faGood);
+    const faok = await until(
+      async () => (await overlayInfo(page)) === null,
+      60000,
+    );
+    check("a Persian overlay goes away after a good save", !!faok);
+  } finally {
+    await server4.stop();
+  }
+
+  const ssrCases = [
+    {
+      lang: "en",
+      title: "Build failed",
+      dir: "ltr",
+      page: "/about",
+      ok: "We sell things.",
+      more: "We sell more things.",
+      best: "We sell the best things.",
+      brk: ["heading:", "heading!!:"],
+    },
+    {
+      lang: "fa",
+      title: "ساخت ناموفق بود",
+      dir: "rtl",
+      page: "/about",
+      ok: "ما چیز می‌فروشیم.",
+      more: "ما چیز بیشتر می‌فروشیم.",
+      best: "ما بهترین چیزها را می‌فروشیم.",
+      brk: ["سرتیتر:", "سرتیتر!!:"],
+    },
+  ];
+  for (const C of ssrCases) {
+    const ssrSrc = path.resolve(
+      __dirname,
+      "../../tests/" + C.lang + "/ssr/site",
+    );
+    if (!fs.existsSync(ssrSrc) || process.platform === "win32") continue;
+    const ssr = path.join(dir, "ssr-" + C.lang);
     fs.cpSync(ssrSrc, ssr, { recursive: true });
     const about = path.join(ssr, "pages", "about.salam");
-    const port3 = port + 2;
+    const port3 = port + 10 + (C.lang === "fa" ? 1 : 0);
     const server3 = start(["serve", ssr, "--render"], dir, port3, log);
     try {
       const up = await until(async () => {
-        const r = await fetch("http://127.0.0.1:" + port3 + "/about");
+        const r = await fetch("http://127.0.0.1:" + port3 + C.page);
         return r.status === 200;
       }, 240000);
-      check("the server rendered project starts", !!up);
-      await page.goto("http://127.0.0.1:" + port3 + "/about");
+      check("the " + C.lang + " server rendered project starts", !!up);
+      await page.goto("http://127.0.0.1:" + port3 + C.page);
       await page.evaluate(() => {
         window.__marker = "alive";
       });
       check(
-        "server rendered text is shown",
-        (await page.textContent("body")).indexOf("We sell things.") >= 0,
+        "server rendered text is shown (" + C.lang + ")",
+        (await page.textContent("body")).indexOf(C.ok) >= 0,
       );
       fs.writeFileSync(
         about,
-        fs
-          .readFileSync(about, "utf8")
-          .replace("We sell things.", "We sell more things."),
+        fs.readFileSync(about, "utf8").replace(C.ok, C.more),
       );
       const fresh = await until(
-        async () =>
-          (await page.textContent("body")).indexOf("We sell more things.") >= 0,
+        async () => (await page.textContent("body")).indexOf(C.more) >= 0,
         240000,
       );
-      check("a rebuilt server reloads the page", !!fresh);
+      check("a rebuilt server reloads the page (" + C.lang + ")", !!fresh);
       check(
-        "the page really reloaded",
+        "the page really reloaded (" + C.lang + ")",
         (await page.evaluate(() => window.__marker)) === undefined,
       );
       const good = fs.readFileSync(about, "utf8");
-      fs.writeFileSync(about, good.replace("heading:", "heading!!:"));
-      const shown = await until(async () => {
-        const t = await page.evaluate(() => {
-          const d = [...document.documentElement.children].find(
-            (e) => e.tagName === "DIV",
-          );
-          return d ? d.textContent : "";
-        });
-        return t.indexOf("Build failed") >= 0 ? t : null;
-      }, 240000);
-      check("a server build error shows over the page", !!shown);
+      fs.writeFileSync(about, good.replace(C.brk[0], C.brk[1]));
+      const shown = await overlayWith(page, C.title, 240000);
       check(
-        "the old pages stay up",
-        (await page.textContent("body")).indexOf("We sell more things.") >= 0,
+        "a server build error shows over the page (" + C.lang + ")",
+        !!shown,
       );
-      fs.writeFileSync(
-        about,
-        good.replace("We sell more things.", "We sell the best things."),
+      check(
+        "the SSR overlay is " + C.dir + " and " + C.lang,
+        !!shown && shown.dir === C.dir && shown.lang === C.lang,
+        JSON.stringify(shown && { dir: shown.dir, lang: shown.lang }),
       );
+      check(
+        "the old pages stay up (" + C.lang + ")",
+        (await page.textContent("body")).indexOf(C.more) >= 0,
+      );
+      fs.writeFileSync(about, good.replace(C.more, C.best));
       const back = await until(
-        async () =>
-          (await page.textContent("body")).indexOf(
-            "We sell the best things.",
-          ) >= 0,
+        async () => (await page.textContent("body")).indexOf(C.best) >= 0,
         240000,
       );
-      check("the next good save recovers", !!back);
+      check("the next good save recovers (" + C.lang + ")", !!back);
     } finally {
       await server3.stop();
     }

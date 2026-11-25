@@ -80,8 +80,8 @@ wait_event() {
 wait_event "$last"
 echo >>"$T/site/app.salam"
 wait "$EV"
-case "$(cat "$T/ev.txt")" in *'"kind":"reload"'*) r=reload ;; *) r=other ;; esac
-check "a source change sends reload" "$r" "reload"
+case "$(cat "$T/ev.txt")" in *'"kind":"swap"'*) r=swap ;; *) r=other ;; esac
+check "a source change sends swap" "$r" "swap"
 last=$(sed -n 's/^id: //p' "$T/ev.txt")
 
 wait_event "$last"
@@ -102,8 +102,8 @@ page:
 end
 SAL
 wait "$EV"
-case "$(cat "$T/ev.txt")" in *'"kind":"reload"'*) r=reload ;; *) r=other ;; esac
-check "a fixed source recovers with reload" "$r" "reload"
+case "$(cat "$T/ev.txt")" in *'"kind":"swap"'*) r=swap ;; *) r=other ;; esac
+check "a fixed source recovers with swap" "$r" "swap"
 last=$(sed -n 's/^id: //p' "$T/ev.txt")
 
 wait_event "$last"
@@ -116,6 +116,26 @@ wait_event "bogus:1"
 wait "$EV"
 case "$(cat "$T/ev.txt")" in *'"kind":"reload"'*) r=reload ;; *) r=other ;; esac
 check "an unknown server instance reloads" "$r" "reload"
+
+hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
+last=$(printf '%s\n' "$hello" | sed -n 's/^id: //p')
+n=0
+holds=""
+while [ $n -lt 12 ]; do
+    curl -s --max-time 6 -H "Last-Event-ID: $last" "http://127.0.0.1:$PORT/__salam_hmr" >/dev/null 2>&1 &
+    holds="$holds $!"
+    n=$((n + 1))
+done
+sleep 1
+t=$(curl -s -o /dev/null -w '%{time_total}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
+case "$t" in 0.[0-4]*) r=fast ;; *) r="slow $t" ;; esac
+check "pages answer while 12 tabs wait for events" "$r" "fast"
+a=$(curl -s -o /dev/null -w '%{time_total}' "http://127.0.0.1:$PORT/logo.txt")
+case "$a" in 0.[0-4]*) r=fast ;; *) r="slow $a" ;; esac
+check "assets answer while 12 tabs wait for events" "$r" "fast"
+for h in $holds; do
+    wait "$h"
+done
 
 left=$(find "$T/site" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')
 check "nothing is written next to the sources" "$left" "app.salam extra.css index.html leak.txt logo.txt "

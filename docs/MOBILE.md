@@ -12,6 +12,11 @@ You need a `salam` compiler, the Android SDK with an NDK, and a JDK 21.
 salam app android app.salam --out out --run
 ```
 
+In a project folder, `salam build --platform=android` builds the
+same app into `build/android` and `salam run --platform=android` also installs
+and starts it, with the default options. `salam app android` is the form that
+takes the options below.
+
 A release archive carries the build files next to `std/`; from a source
 checkout the compiler finds them too. Set `SALAM_MOBILE_ROOT` to point at
 another folder. `tools/bash/build-android-app.sh` takes the same options.
@@ -63,9 +68,13 @@ library was built for with `file out/project/app/src/main/jniLibs/x86_64/libsala
 | `--category productivity` | `appCategory` (game, social, productivity, music, video, photo, news, maps) | `LSApplicationCategoryType` (also utilities, education, finance, health, lifestyle, travel, weather, business, entertainment, sports, books, food, reference) |
 
 Options do not have to be repeated: a `salam.toml` next to the page (or `--config FILE`)
-can hold them. `id`, `name`, `version` and `icon` come from the `[app]` table the desktop
-bundle uses; everything else goes in `[app.mobile]`, and `[app.android]` or `[app.ios]`
-overrides it for one platform. Keys are the option names with underscores.
+can hold them, and `salam init` writes the `[app]` table for a dsl project. The `[app]` table
+holds every key the platforms share (`id`, `name`, `version`, `build`, `icon`, `orientation`,
+`category`, `permissions`, ...) and is the same table the desktop bundle reads. The plain
+`[android]` and `[ios]` tables hold the platform keys (`min_sdk`, `target_sdk`, `abi`,
+`keystore`, `key_alias`, `min_ios`, `team`, `profile`, `sign_identity`) and override `[app]`.
+`[app.mobile]`, `[app.android]` and `[app.ios]` from earlier releases still work. Keys are the
+option names with underscores. The whole table of keys is in [PROJECT_FILE.md](PROJECT_FILE.md).
 
 ```toml
 [app]
@@ -89,6 +98,11 @@ min_ios = "16.0"
 ```
 
 An option on the command line wins over the file, and the file wins over the built-in default.
+`salam build --platform=android` passes extra script options after `--`, and they win too.
+Passwords never go in the file: use `--keystore-pass` and `--key-pass`, or the environment
+variables `SALAM_KEYSTORE_PASS` and `SALAM_KEY_PASS`. A key the scripts do not know, or a
+password key, gives a warning. `--dry-run` prints the settings the build would use and exits
+before it needs the SDK.
 Paths in the file (`icon`, `splash_icon`, `fonts`, `assets`) are relative to the file.
 
 Files such as images go in the APK with `--assets DIR` (`tools/bash/build-android-app.sh`).

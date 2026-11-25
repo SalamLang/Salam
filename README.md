@@ -75,8 +75,31 @@ inclusive environment for building high-performance software.
 The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
 
 Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.6.19`.
-The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
-`--no-modify-path` and `--help`; run it with `--help` for the full list.
+The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--os NAME`,
+`--arch NAME`, `--platform NAME`, `--no-modify-path`, `--no-color` and `--help`;
+run it with `--help` for the full list.
+
+**Downloads from Iran and other restricted networks.** Where github.com or
+release-assets.githubusercontent.com time out, nothing needs to be configured:
+the installers, `salam upgrade` and `salam upgrade-std` try the mirror at
+`https://cdn.salamlang.ir/releases/` first (about 8 seconds to connect, no long
+stall) and fall back to the same file on GitHub on any failure: a timeout, DNS,
+TLS, a missing file, or a wrong size or checksum. The mirror copies GitHub's
+names, so `https://github.com/SalamLang/Salam/releases/download/<tag>/<asset>`
+is `https://cdn.salamlang.ir/releases/<tag>/<asset>`, the newest
+release is the one line in `https://cdn.salamlang.ir/releases/latest`, and
+`releases/index.json` lists tags, assets, sizes and sha256 values. The mirror is
+served by the Salam project, not by GitHub; the trust model is HTTPS plus the
+published `.sha256` file beside every asset (the installers reject a mirror
+copy that does not match it and fetch from GitHub instead). New releases
+reach the mirror within about 15 minutes. `SALAM_NO_CDN=1` turns the mirror off
+and `SALAM_CDN=https://other.example` points at another one (only https is accepted, never plain http; an empty `SALAM_CDN`
+also turns it off; on Windows use `SALAM_CDN=off`). Not mirrored: Linux
+distribution and package-manager channels, `salam add` / `salam install`
+packages from other repositories (those come from their own hosts), and the
+installer script itself on the first line above, which is fetched from
+raw.githubusercontent.com. Where that is blocked too, fetch
+`https://cdn.salamlang.ir/install.sh` (or `install.ps1`) instead.
 
 **Windows** (PowerShell):
 
@@ -151,9 +174,9 @@ directly. Embedded **`page:`** blocks compile to HTML/CSS/JS.
 | Generator   | Flag or command                       | How it works                                                                                                                                 |
 | ----------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | LLVM        | `--backend=llvm`, `salam llvm --jit`  | LLVM IR, optimized and linked in-process when the compiler has LLVM linked in. `--jit` runs that IR at once through `lli`, with no artifact   |
-| C           | `--backend=c`                         | C source handed to a C compiler (`tcc` by default, or any `--cc=PATH`)                                                                       |
+| C           | `--backend=c`                         | C source handed to a C compiler (the first of `clang`, `gcc`, `tcc` or `cc` it finds, a bundled one before the system one, or any `--cc=PATH`) |
 | Native      | `--backend=native`                    | the compiler's own code generator writes the machine code and the object file, and its own linker links them (see below)                    |
-| JavaScript  | `salam js`                            | browser-ready JavaScript, or one self-contained `.html` page when the output name ends in `.html`                                            |
+| JavaScript  | `salam build --platform=js`           | browser-ready JavaScript, or one self-contained `.html` page when the output name ends in `.html`                                            |
 | Interpreter | `salam exec`, `salam run --interp`    | a bytecode VM with a garbage collector, no C toolchain needed; `SALAM_VM=0` uses the older tree walker                                       |
 
 With no `--backend`, the compiler uses the native backend on a Windows on Arm
@@ -191,17 +214,16 @@ sysroots included.
 salam build app.salam                          # -> app (app.exe on Windows)
 salam build app.salam --output=myapp           # then ./myapp
 salam run app.salam                            # build and run, keep nothing
+salam run app.salam -- one two                 # arguments after -- go to the program
 salam exec app.salam                           # run with the interpreter, no C toolchain
 salam build app.salam --backend=c --emit-c     # write the generated C and stop
 salam obj app.salam                            # compile to an object file only
 
-# page DSL -> website
-salam page build page.salam                    # page.html (+ .css/.js when needed)
-salam page build page.salam --inline           # one self-contained page.html
-salam page build a.salam b.salam               # per-page html + shared style/script
-
 # type-check without building (exit 1 on errors; --error-format=json for tools)
 salam check app.salam
+
+# run the tests (*_test.salam files, test_ functions)
+salam test
 
 # inspect any stage (general or page)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol
@@ -231,6 +253,84 @@ func main:
     println "Hello, World!"
 end
 ```
+
+### New projects
+
+`salam new NAME` makes a folder with `main.salam`, `salam.toml` and a
+`.gitignore`; `salam new NAME --desktop` makes a desktop app with a web
+interface (see [docs/DESKTOP.md](docs/DESKTOP.md)). `salam init [DIR]` turns an
+existing folder (the current one by default) into a project and keeps the files
+that are already there. In a terminal `init` asks for the name, a description,
+the type (`cli`, `http` or `dsl`, the page language), the platforms, the design
+system (`shadcn` or `none`) and the web mode (`page`, `spa` or `ssr`), shows a
+summary and writes a starter project with a README; the answers go into
+`[project]` and `[design]` in `salam.toml`. The flags `--name=`,
+`--description=`, `--type=`, `--platforms=a,b|all`, `--design=` and `--web=`
+answer questions up front, and `-y` accepts the defaults, so scripts never
+wait for input. `--lang=fa` writes a Persian project.
+
+```sh
+salam new hello                                # hello/main.salam, hello/salam.toml
+cd hello && salam run
+salam init -y --type=dsl --platforms=web,linux # a page project in the current folder
+```
+
+### Building for web, mobile and desktop
+
+One `page:` program targets every platform. `salam build` and `salam run` take
+`--platform=web|js|android|ios|linux|macos|windows`, and `salam build` also
+`--platform=all` for every platform a project lists in `salam.toml`.
+`--arch=x86_64|aarch64|i686|arm|riscv64` picks the CPU for linux, macos and
+windows; `--target=TRIPLE` spells the whole target out and wins over both.
+
+```sh
+salam build page.salam --platform=web          # page.html (+ page.css/.js when needed)
+salam build page.salam --platform=web --inline # one self-contained page.html
+salam build . --platform=web                   # every page in the folder, one shared style.css
+salam run --platform=web                       # serve the project, reload the browser on every save
+salam build app.salam --platform=js            # app.js (app.html with -o app.html)
+salam build --platform=android                 # build/android (needs the Android SDK, NDK and a JDK)
+salam build --platform=ios                     # build/ios (needs a Mac with Xcode)
+salam build --platform=linux --arch=aarch64    # static Linux executable for another CPU
+salam run --platform=macos                     # on a Mac: open a page project in a native window
+salam build --platform=all                     # every platform listed in salam.toml
+```
+
+With no `--platform`, a project made by `salam init --type=dsl` builds the first
+platform it lists, and `salam run` serves `web` when it is listed. The older
+commands `salam js`, `salam web`, `salam page build` and `salam app android|ios`
+still work as aliases, and `salam app` takes the extra options the new spelling
+does not, such as `--abi`. See [docs/MOBILE.md](docs/MOBILE.md),
+[docs/DESKTOP.md](docs/DESKTOP.md) and
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). The defaults for the design,
+the installers, the Windows executable and the phone apps live in `salam.toml`;
+every key is listed in [docs/PROJECT_FILE.md](docs/PROJECT_FILE.md).
+
+### Packages
+
+The standard library ships with the compiler (`import net.http`,
+`import encoding.json`) and needs no install. Other packages are GitHub
+repositories recorded in `salam.toml` and `salam.lock`:
+
+```sh
+salam search json                              # standard library and registry
+salam add github.com/owner/repo                # newest release; or ...@v1.2.0
+salam update                                   # newest releases with the same major version
+salam deps                                     # download and verify what salam.lock lists
+salam remove github.com/owner/repo
+salam install github.com/owner/repo            # build a program into ~/.salam/bin
+```
+
+See [docs/PACKAGES.md](docs/PACKAGES.md). `salam upgrade` updates the compiler,
+the standard library and the bundled tools to the newest release.
+
+### Editor support
+
+`salam lsp` is a language server on stdin and stdout (diagnostics, hover,
+completion, go to definition, rename, formatting and quick fixes); the editor
+plugins under [`extensions/`](extensions/) start it, and
+[docs/LSP.md](docs/LSP.md) lists what it covers. `salam dap` is the debug
+adapter behind F5 in VS Code.
 
 ### Cross-compilation
 
@@ -361,7 +461,7 @@ reachable:
 
 ```sh
 docker compose -f docker/docker-compose.yml run --rm salam build tests/en/basics/hello.salam --output=hello
-docker compose -f docker/docker-compose.yml run --rm salam page build page.salam --inline
+docker compose -f docker/docker-compose.yml run --rm salam build page.salam --platform=web --inline
 ```
 
 The image runs a released compiler, not the one in your checkout. To rebuild
@@ -675,7 +775,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. One of the C compilers the C backend can use (`--cc=gcc`). |
 | **[Gitleaks](https://github.com/gitleaks/gitleaks)** | Secret-detection tool run as a prek audit hook to prevent accidental commits of API keys or credentials. |
 | **[GitHub Actions](https://docs.github.com/en/actions)** | Salam's CI/CD platform. Workflows are defined in `.github/workflows/`. |
-| **Layout DSL** | Salam's built-in sublanguage for describing UIs. `page:` blocks, built with `salam page build`, compile to HTML, CSS, and JavaScript, or run in a native window with `--ui=native`. |
+| **Layout DSL** | Salam's built-in sublanguage for describing UIs. `page:` blocks, built with `salam build --platform=web`, compile to HTML, CSS, and JavaScript, or run in a native window with `--ui=native`. |
 | **[Lexer](https://en.wikipedia.org/wiki/Lexical_analysis)** | First stage of the compiler pipeline: reads source text and produces a stream of tokens. |
 | **[LLVM](https://llvm.org/)** | Low Level Virtual Machine, a compiler infrastructure project. Salam's default backend when the compiler has LLVM 22 linked in, as the Linux, macOS and Windows x86-64 releases do. |
 | **[Markdownlint](https://github.com/igorshubovych/markdownlint-cli)** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs. |

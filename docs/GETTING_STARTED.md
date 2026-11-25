@@ -37,6 +37,28 @@ processor by itself; `--os` (`linux`, `mac`, `freebsd`, `openbsd`, `netbsd`, `dr
 pick another build, and `--platform` names the exact release file. Run it with `--help` for
 the full list.
 
+**Downloads from Iran and other restricted networks.** Where github.com or
+release-assets.githubusercontent.com time out, nothing needs to be configured:
+the installers, `salam upgrade` and `salam upgrade-std` try the mirror at
+`https://cdn.salamlang.ir/releases/` first (about 8 seconds to connect, no long
+stall) and fall back to the same file on GitHub on any failure: a timeout, DNS,
+TLS, a missing file, or a wrong size or checksum. The mirror copies GitHub's
+names, so `https://github.com/SalamLang/Salam/releases/download/<tag>/<asset>`
+is `https://cdn.salamlang.ir/releases/<tag>/<asset>`, the newest
+release is the one line in `https://cdn.salamlang.ir/releases/latest`, and
+`releases/index.json` lists tags, assets, sizes and sha256 values. The mirror is
+served by the Salam project, not by GitHub; the trust model is HTTPS plus the
+published `.sha256` file beside every asset (the installers reject a mirror
+copy that does not match it and fetch from GitHub instead). New releases
+reach the mirror within about 15 minutes. `SALAM_NO_CDN=1` turns the mirror off
+and `SALAM_CDN=https://other.example` points at another one (only https is accepted, never plain http; an empty `SALAM_CDN`
+also turns it off; on Windows use `SALAM_CDN=off`). Not mirrored: Linux
+distribution and package-manager channels, `salam add` / `salam install`
+packages from other repositories (those come from their own hosts), and the
+installer script itself on the first line above, which is fetched from
+raw.githubusercontent.com. Where that is blocked too, fetch
+`https://cdn.salamlang.ir/install.sh` (or `install.ps1`) instead.
+
 **Windows** (PowerShell):
 
 ```powershell
@@ -92,7 +114,7 @@ salam upgrade --check   # only say whether a newer release is out
 salam upgrade 0.5.4     # install that exact release, older ones included
 ```
 
-`salam upgrade` asks GitHub for the latest release and runs the same
+`salam upgrade` asks the mirror (and then GitHub) for the latest release and runs the same
 installer as above against the directory `salam` runs from, so the whole
 bundle is replaced at once and an old `std/` never lingers. It leaves PATH
 alone. A copy that Homebrew, Scoop, Chocolatey, winget, npm, Nix, snap or a
@@ -101,7 +123,7 @@ Linux distribution package installed is left to that package manager, and
 A compiler built from a source checkout is updated with `git pull` and a
 rebuild.
 
-To take only the standard library from GitHub and keep the compiler as it is:
+To take only the standard library from the mirror or GitHub and keep the compiler as it is:
 
 ```sh
 salam upgrade-std            # std/ from the main branch
@@ -279,12 +301,17 @@ salam exec                  # interpret the project here
   each folder, and records the answers in `salam.toml` under `[project]`.
   The flags `--name=`, `--description=`, `--type=`, `--platforms=a,b|all`,
   `--design=` and `--web=` answer the questions up front and `-y` accepts the
-  defaults, so scripts and pipes never wait for input.
+  defaults, so scripts and pipes never wait for input. For `dsl` projects it
+  also writes an `[app]` table (`id` made from the name, `name`, `version`) that
+  the installers and the phone apps use; see [PROJECT_FILE.md](PROJECT_FILE.md)
+  for every key of `salam.toml`.
 
   A project made this way builds and runs through the two usual commands:
   `salam run` serves a web project with live reload (or starts the first
   platform), `salam build` builds it, and `--platform=web|js|android|ios|linux|macos|windows|all`
-  picks another target. `salam js`, `salam web`, `salam page build` and
+  picks another target. `--platform=linux|macos|windows` and `--arch=x86_64|aarch64|i686|arm|riscv64`
+  build for another OS or CPU without spelling the whole `--target=` triple (either one alone
+  keeps the other from this machine). `salam js`, `salam web`, `salam page build` and
   `salam app` still work and are what these commands call.
 
 Frontend (layout DSL) projects have no `main` function; there `main.salam`
@@ -561,14 +588,17 @@ Salam includes a built-in DSL for describing web layouts.
 
 ```sh
 # compile a layout file to page.html + page.css + page.js
-salam page build page.salam
+salam build page.salam --platform=web
 
 # produce a single self-contained HTML file
-salam page build page.salam --inline
+salam build page.salam --platform=web --inline
 
-# compile multiple pages (merged style.css / script.js)
-salam page build a.salam b.salam
+# compile every page in a folder (merged style.css)
+salam build . --platform=web
 ```
+
+`salam page build` is the older spelling of the same build. It also takes
+several files (`salam page build a.salam b.salam`) and the `--ssr` option.
 
 A page is a tree of elements with `name = value` attributes:
 

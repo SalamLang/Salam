@@ -243,7 +243,14 @@ func positional(arg: str, out &: dr.Dr): bool:
         end
         out.update_version = arg
     else out.command == dr.CMD_SERVE:
-        if str.Len(out.input) > 0:
+        if str.Len(out.input) > 0 and str.EndsWith(arg, ".salam") and str.EndsWith(
+            out.input, ".salam"
+        ):
+            if out.inputs.Len() == 0:
+                out.inputs.Push(out.input)
+            end
+            out.inputs.Push(arg)
+        else str.Len(out.input) > 0:
             io.EPrintln(
                 co.Format2(
                     i18.Tr("salam: 'serve' takes a single directory argument ('%s' after '%s')"),
@@ -252,8 +259,9 @@ func positional(arg: str, out &: dr.Dr): bool:
                 )
             )
             ret false
+        else:
+            out.input = arg
         end
-        out.input = arg
     else out.command == dr.CMD_RUN:
         if str.Len(out.input) == 0:
             out.inputs.Push(arg)
@@ -455,6 +463,193 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
     ret start
 end
 
+func parse_option_tail(arg: str, out &: dr.Dr): bool:
+    mut val := ""
+    if opt_value(arg, "--backend", val):
+        out.backend = val
+    else opt_value(arg, "--linker", val):
+        out.linker = val
+    else str.Equals(arg, "--icf"):
+        out.icf = true
+    else opt_value(arg, "--subsystem", val):
+        if not str.Equals(val, "console") and not str.Equals(val, "windows"):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: --subsystem takes 'console' or 'windows' (got '%s')"),
+                    co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.win_subsystem = val
+    else opt_value(arg, "--icon", val):
+        out.win_icon = val
+    else opt_value(arg, "--manifest", val):
+        out.win_manifest = val
+    else opt_value(arg, "--version-info", val):
+        out.win_version.Push(val)
+    else str.Equals(arg, "--desktop") and out.command == dr.CMD_NEW:
+        out.new_desktop = true
+    else opt_value(arg, "--arch", val) and (out.command == dr.CMD_BUILD or out.command == dr.CMD_RUN):
+        out.arch = val
+    else opt_value(arg, "--platform", val) and (out.command == dr.CMD_BUILD or out.command == dr.CMD_RUN):
+        out.platform = val
+    else opt_value(arg, "--name", val) and out.command == dr.CMD_INIT:
+        out.init_name = val
+    else opt_value(arg, "--description", val) and out.command == dr.CMD_INIT:
+        out.init_desc = val
+    else opt_value(arg, "--type", val) and out.command == dr.CMD_INIT:
+        out.init_type = val
+    else opt_value(arg, "--platforms", val) and out.command == dr.CMD_INIT:
+        out.init_platforms = val
+    else opt_value(arg, "--design", val) and out.command == dr.CMD_INIT:
+        out.init_design = val
+    else opt_value(arg, "--web", val) and out.command == dr.CMD_INIT:
+        out.init_web = val
+    else (str.Equals(arg, "-y") or str.Equals(arg, "--yes")) and out.command == dr.CMD_INIT:
+        out.init_yes = true
+    else str.Equals(arg, "--lib"):
+        out.lib_kind = "shared"
+    else opt_value(arg, "--lib", val):
+        if not str.Equals(val, "shared") and not str.Equals(val, "static"):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: --lib takes 'shared' or 'static' (got '%s')"), co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.lib_kind = val
+    else opt_value(arg, "--libpath", val):
+        out.lib_paths.Push(val)
+    else opt_value(arg, "--cc", val):
+        out.cc = val
+        out.cc_explicit = true
+        if str.Equals(out.backend, "auto"):
+            out.backend = "c"
+        end
+    else opt_value(arg, "--stdlib-path", val):
+        out.stdlib_path = val
+    else opt_value(arg, "--define", val):
+        out.defines.Push(val)
+    else str.StartsWith(arg, "-D") and str.Len(arg) > 2:
+        out.defines.Push(str.Substr(arg, 2, str.Len(arg) - 2))
+    else opt_value(arg, "--const", val):
+        if not add_const(val, out):
+            ret false
+        end
+    else str.StartsWith(arg, "-d") and str.Len(arg) > 2:
+        if not add_const(str.Substr(arg, 2, str.Len(arg) - 2), out):
+            ret false
+        end
+    else opt_value(arg, "--export", val):
+        out.exports.Push(val)
+    else str.Equals(arg, "--emit-tokens"):
+        out.emit_tokens_xml = true
+    else str.Equals(arg, "--emit-ast"):
+        out.emit_ast_xml = true
+    else str.Equals(arg, "--emit-symbol") or str.Equals(arg, "--emit-symbols"):
+        out.emit_symbol_xml = true
+    else str.Equals(arg, "--color"):
+        out.color = 1
+    else str.Equals(arg, "--no-color"):
+        out.color = 0
+    else opt_value(arg, "--error-style", val):
+        mut st := 0
+        if not dg.StyleFromString(val, st):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: invalid error style '%s' (rust|gcc|clang)"), co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.diag_style = st
+    else opt_value(arg, "--dialect", val):
+        out.sql_dialect = val
+    else opt_value(arg, "--schema", val):
+        out.sql_schema = val
+    else opt_value(arg, "--package", val):
+        out.sql_package = val
+    else opt_value(arg, "--error-format", val):
+        mut efmt := 0
+        if not dg.FormatFromString(val, efmt):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: invalid error format '%s' (human|json|xml)"), co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.diag_format = efmt
+    else opt_value(arg, "--log-level", val):
+        mut lvl := 0
+        if not lg.LevelFromString(val, lvl):
+            io.EPrintln(co.Format1(i18.Tr("salam: invalid log level '%s'"), co.ArgStr(val)))
+            ret false
+        end
+        out.log_level = lvl
+    else opt_value(arg, "--lang", val):
+        out.lang = val
+        out.lang_set = true
+    else opt_value(arg, "--error-lang", val):
+        if not str.Equals(val, "en") and not str.Equals(val, "fa"):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: --error-lang takes 'en' or 'fa' (got '%s')"), co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.msg_lang = val
+    else opt_value(arg, "--xml-out", val):
+        out.xml_out = val
+    else opt_value(arg, "--host", val):
+        out.serve_host = val
+    else opt_value(arg, "--config", val):
+        out.serve_config = val
+    else str.Equals(arg, "--test"):
+        out.serve_test = true
+    else str.Equals(arg, "--watch") and out.command == dr.CMD_SERVE:
+        out.serve_watch = true
+    else str.Equals(arg, "--spa"):
+        out.serve_spa = "index.html"
+    else opt_value(arg, "--spa", val):
+        out.serve_spa = val
+    else opt_value(arg, "--port", val):
+        mut prt := 0
+        if not parse_port(val, prt):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: invalid --port value '%s' (use 1-65535)"), co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.serve_port = prt
+    else opt_value(arg, "--timeout", val):
+        mut ms := 0
+        if not parse_timeout_ms(val, ms):
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: invalid --timeout value '%s' (milliseconds, > 0)"),
+                    co.ArgStr(val)
+                )
+            )
+            ret false
+        end
+        out.timeout_ms = ms
+    else str.StartsWith(arg, "-") and str.Len(arg) > 1:
+        io.EPrintln(co.Format1(i18.Tr("salam: unknown option '%s'"), co.ArgStr(arg)))
+        ret false
+    else:
+        if not positional(arg, out):
+            ret false
+        end
+    end
+    ret true
+end
+
 func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
     n := args.Len()
     mut i := start
@@ -466,7 +661,8 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             i++
             continue
         end
-        if str.Equals(arg, "--") and (out.command == dr.CMD_RUN or out.command == dr.CMD_LLVM):
+        if str.Equals(arg, "--") and
+            (out.command == dr.CMD_RUN or out.command == dr.CMD_LLVM or out.command == dr.CMD_BUILD):
             i++
             until i < n:
                 out.run_args.Push(args.Get(i))
@@ -671,7 +867,9 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
                 ret false
             end
             out.switch_lint_min = smin
-        else str.Equals(arg, "--check") and (out.command == dr.CMD_UPDATE or out.command == dr.CMD_UPDATE_STD):
+        else str.Equals(
+            arg, "--check"
+        ) and (out.command == dr.CMD_UPDATE or out.command == dr.CMD_UPDATE_STD):
             out.update_check = true
         else opt_value(arg, "--version", val) and out.command == dr.CMD_UPDATE:
             out.update_version = val
@@ -681,6 +879,8 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.fmt_check = true
         else str.Equals(arg, "--strict-values"):
             out.strict_values = true
+        else str.Equals(arg, "--check-std"):
+            out.check_std = true
         else str.Equals(arg, "--fix-values"):
             out.check_fix = true
             out.fix_values_only = true
@@ -787,183 +987,8 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             end
             i++
             out.output = args.Get(i)
-        else opt_value(arg, "--backend", val):
-            out.backend = val
-        else opt_value(arg, "--linker", val):
-            out.linker = val
-        else str.Equals(arg, "--icf"):
-            out.icf = true
-        else opt_value(arg, "--subsystem", val):
-            if not str.Equals(val, "console") and not str.Equals(val, "windows"):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: --subsystem takes 'console' or 'windows' (got '%s')"),
-                        co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.win_subsystem = val
-        else opt_value(arg, "--icon", val):
-            out.win_icon = val
-        else opt_value(arg, "--manifest", val):
-            out.win_manifest = val
-        else opt_value(arg, "--version-info", val):
-            out.win_version.Push(val)
-        else str.Equals(arg, "--desktop") and out.command == dr.CMD_NEW:
-            out.new_desktop = true
-        else opt_value(arg, "--arch", val) and (out.command == dr.CMD_BUILD or out.command == dr.CMD_RUN):
-            out.arch = val
-        else opt_value(arg, "--platform", val) and (out.command == dr.CMD_BUILD or out.command == dr.CMD_RUN):
-            out.platform = val
-        else opt_value(arg, "--name", val) and out.command == dr.CMD_INIT:
-            out.init_name = val
-        else opt_value(arg, "--description", val) and out.command == dr.CMD_INIT:
-            out.init_desc = val
-        else opt_value(arg, "--type", val) and out.command == dr.CMD_INIT:
-            out.init_type = val
-        else opt_value(arg, "--platforms", val) and out.command == dr.CMD_INIT:
-            out.init_platforms = val
-        else opt_value(arg, "--design", val) and out.command == dr.CMD_INIT:
-            out.init_design = val
-        else opt_value(arg, "--web", val) and out.command == dr.CMD_INIT:
-            out.init_web = val
-        else (str.Equals(arg, "-y") or str.Equals(arg, "--yes")) and out.command == dr.CMD_INIT:
-            out.init_yes = true
-        else str.Equals(arg, "--lib"):
-            out.lib_kind = "shared"
-        else opt_value(arg, "--lib", val):
-            if not str.Equals(val, "shared") and not str.Equals(val, "static"):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: --lib takes 'shared' or 'static' (got '%s')"), co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.lib_kind = val
-        else opt_value(arg, "--libpath", val):
-            out.lib_paths.Push(val)
-        else opt_value(arg, "--cc", val):
-            out.cc = val
-            out.cc_explicit = true
-            if str.Equals(out.backend, "auto"):
-                out.backend = "c"
-            end
-        else opt_value(arg, "--stdlib-path", val):
-            out.stdlib_path = val
-        else opt_value(arg, "--define", val):
-            out.defines.Push(val)
-        else str.StartsWith(arg, "-D") and str.Len(arg) > 2:
-            out.defines.Push(str.Substr(arg, 2, str.Len(arg) - 2))
-        else opt_value(arg, "--const", val):
-            if not add_const(val, out):
-                ret false
-            end
-        else str.StartsWith(arg, "-d") and str.Len(arg) > 2:
-            if not add_const(str.Substr(arg, 2, str.Len(arg) - 2), out):
-                ret false
-            end
-        else opt_value(arg, "--export", val):
-            out.exports.Push(val)
-        else str.Equals(arg, "--emit-tokens"):
-            out.emit_tokens_xml = true
-        else str.Equals(arg, "--emit-ast"):
-            out.emit_ast_xml = true
-        else str.Equals(arg, "--emit-symbol") or str.Equals(arg, "--emit-symbols"):
-            out.emit_symbol_xml = true
-        else str.Equals(arg, "--color"):
-            out.color = 1
-        else str.Equals(arg, "--no-color"):
-            out.color = 0
-        else opt_value(arg, "--error-style", val):
-            mut st := 0
-            if not dg.StyleFromString(val, st):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: invalid error style '%s' (rust|gcc|clang)"), co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.diag_style = st
-        else opt_value(arg, "--dialect", val):
-            out.sql_dialect = val
-        else opt_value(arg, "--schema", val):
-            out.sql_schema = val
-        else opt_value(arg, "--package", val):
-            out.sql_package = val
-        else opt_value(arg, "--error-format", val):
-            mut efmt := 0
-            if not dg.FormatFromString(val, efmt):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: invalid error format '%s' (human|json|xml)"), co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.diag_format = efmt
-        else opt_value(arg, "--log-level", val):
-            mut lvl := 0
-            if not lg.LevelFromString(val, lvl):
-                io.EPrintln(co.Format1(i18.Tr("salam: invalid log level '%s'"), co.ArgStr(val)))
-                ret false
-            end
-            out.log_level = lvl
-        else opt_value(arg, "--lang", val):
-            out.lang = val
-            out.lang_set = true
-        else opt_value(arg, "--error-lang", val):
-            if not str.Equals(val, "en") and not str.Equals(val, "fa"):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: --error-lang takes 'en' or 'fa' (got '%s')"), co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.msg_lang = val
-        else opt_value(arg, "--xml-out", val):
-            out.xml_out = val
-        else opt_value(arg, "--host", val):
-            out.serve_host = val
-        else opt_value(arg, "--config", val):
-            out.serve_config = val
-        else str.Equals(arg, "--test"):
-            out.serve_test = true
-        else str.Equals(arg, "--spa"):
-            out.serve_spa = "index.html"
-        else opt_value(arg, "--spa", val):
-            out.serve_spa = val
-        else opt_value(arg, "--port", val):
-            mut prt := 0
-            if not parse_port(val, prt):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: invalid --port value '%s' (use 1-65535)"), co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.serve_port = prt
-        else opt_value(arg, "--timeout", val):
-            mut ms := 0
-            if not parse_timeout_ms(val, ms):
-                io.EPrintln(
-                    co.Format1(
-                        i18.Tr("salam: invalid --timeout value '%s' (milliseconds, > 0)"),
-                        co.ArgStr(val)
-                    )
-                )
-                ret false
-            end
-            out.timeout_ms = ms
-        else str.StartsWith(arg, "-") and str.Len(arg) > 1:
-            io.EPrintln(co.Format1(i18.Tr("salam: unknown option '%s'"), co.ArgStr(arg)))
-            ret false
         else:
-            if not positional(arg, out):
+            if not parse_option_tail(arg, out):
                 ret false
             end
         end

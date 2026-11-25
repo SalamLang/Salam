@@ -24,7 +24,8 @@ include pm "../pkgmgr/pkgmgr.salam"
 
 func norm_arch(a: str): str:
     t := str.Lower(str.Trim(a))
-    if str.Equals(t, "x64") or str.Equals(t, "amd64") or str.Equals(t, "x86_64") or str.Equals(t, "x86-64"):
+    if str.Equals(t, "x64") or str.Equals(t, "amd64") or str.Equals(t, "x86_64") or
+        str.Equals(t, "x86-64"):
         ret "x86_64"
     end
     if str.Equals(t, "arm64") or str.Equals(t, "aarch64"):
@@ -87,8 +88,9 @@ func plat_apply_target(opt &: dr.Dr, os_arg: str): int:
         ret 0
     end
     mut triple := ""
-    if str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64") or str.Equals(arch, "i686") or
-        str.Equals(arch, "arm") or str.Equals(arch, "riscv64"):
+    if str.Equals(arch, "x86_64") or str.Equals(
+        arch, "aarch64"
+    ) or str.Equals(arch, "i686") or str.Equals(arch, "arm") or str.Equals(arch, "riscv64"):
         triple = target_for(os_name, arch)
     end
     if str.Len(triple) == 0:
@@ -146,18 +148,30 @@ func plat_native(opt &: dr.Dr):
     opt.defines.Push("SALAM_UI_NATIVE")
 end
 
-func plat_one(opt &: dr.Dr, platform: str, dir: str, info: pm.PkgInfo, run: bool): int:
-    entry := plat_entry(dir)
+if SALAM_OS_WINDOWS:
+    func plat_ssr_host(): bool:
+        ret false
+    end
+else:
+    func plat_ssr_host(): bool:
+        ret true
+    end
+end
+
+func plat_one(opt &: dr.Dr, platform: str, dir: str, entry: str, info: pm.PkgInfo, run: bool): int:
     opt.ui_target = 0
     if str.Equals(platform, "web"):
         if run:
             opt.command = dr.CMD_SERVE
             opt.input = dir
+            if str.Equals(info.project_web, "ssr") and plat_ssr_host():
+                opt.serve_render = true
+            end
             ret dr.Serve(opt)
         end
         opt.command = dr.CMD_LAYOUT_BUILD
         opt.inputs.Clear()
-        opt.inputs.Push(dir)
+        opt.inputs.Push(str.Equals(entry, plat_entry(dir)) ? dir : entry)
         if str.Equals(info.project_web, "ssr"):
             opt.ssr = true
             ret dr.SsrBuild(opt)
@@ -184,6 +198,7 @@ func plat_one(opt &: dr.Dr, platform: str, dir: str, info: pm.PkgInfo, run: bool
         end
     end
     if plat_is_desktop(platform) and str.Equals(info.project_type, "dsl"):
+        dr.WinFromProject(opt, info, dir)
         plat_native(opt)
         opt.inputs.Clear()
         opt.inputs.Push(entry)
@@ -214,6 +229,7 @@ func route_platform(opt &: dr.Dr): int:
     mut info := pm.PkgInfo {}
     if str.Len(dir) > 0:
         _ok := pm.ReadPackageInfo(dir, info)
+        dr.WarnProject(opt, dir)
     end
     mut platform := opt.platform
     if str.Len(platform) == 0 and str.Len(opt.arch) > 0:
@@ -223,7 +239,9 @@ func route_platform(opt &: dr.Dr): int:
         end
     end
     if str.Len(platform) == 0:
-        if str.Len(dir) == 0 or not str.Equals(info.project_type, "dsl") or info.project_platforms.Len() == 0:
+        if str.Len(dir) == 0 or not str.Equals(
+            info.project_type, "dsl"
+        ) or info.project_platforms.Len() == 0:
             ret 0 - 1
         end
         platform = info.project_platforms.Get(0)
@@ -231,7 +249,9 @@ func route_platform(opt &: dr.Dr): int:
             platform = "web"
         end
     end
+    mut entry := plat_entry(dir)
     if str.Len(dir) == 0:
+        entry = opt.inputs.Get(0)
         dir = pth.PathDir(opt.inputs.Get(0))
         if str.Len(dir) == 0:
             dir = "."
@@ -239,7 +259,9 @@ func route_platform(opt &: dr.Dr): int:
     end
     if str.Equals(platform, "all"):
         if run or info.project_platforms.Len() == 0:
-            io.EPrintln("salam: --platform=all needs 'salam build' and a [project] platforms list in salam.toml")
+            io.EPrintln(
+                "salam: --platform=all needs 'salam build' and a [project] platforms list in salam.toml"
+            )
             ret 2
         end
         mut worst := 0
@@ -248,12 +270,12 @@ func route_platform(opt &: dr.Dr): int:
             p := info.project_platforms.Get(i)
             println "== " + p
             opt.llvm_target = base_target
-            rc := plat_one(opt, p, dir, info, false)
+            rc := plat_one(opt, p, dir, entry, info, false)
             if rc > worst:
                 worst = rc
             end
         end
         ret worst
     end
-    ret plat_one(opt, platform, dir, info, run)
+    ret plat_one(opt, platform, dir, entry, info, run)
 end

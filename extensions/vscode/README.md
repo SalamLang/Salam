@@ -11,6 +11,8 @@ Language support for [Salam](https://github.com/SalamLang/Salam), in English and
   - go to definition (into `std/` as well), go to type definition, find references, highlight, rename
   - outline, workspace symbols, folding, semantic highlighting that understands multi-word Persian names
   - signature help, quick fixes (did-you-mean, remove `mut`), and formatting through the compiler's formatter
+- **Where am I**: the status bar shows the blocks around the cursor (for example `page › box › button`, or `func main › if true`), the lines that open and close the innermost block are highlighted, and `Salam: Show Blocks Around the Cursor` lists them to jump to one
+- **Projects made by `salam init`**: a rocket in the status bar shows the platform that Run and Build use (web, android, ios, linux, macos, windows). Click it to switch. In such a project Run is `salam run --platform=...` and Build is `salam build --platform=...` from the project folder; other folders keep running the current file. `Salam: New Project` runs the `salam init` questions in the terminal
 - **Debugging** with `salam dap`: press F5 in a Salam file to build it with debug information and debug it with gdb or lldb, with breakpoints, stepping and locals in the Salam source
 - **Rich syntax highlighting** for `.salam` (English & Persian): keywords, types, built-ins, annotations, strings (including guillemets/text blocks), layout elements, operators, and TODO/FIXME markers
 - **Comprehensive snippets** for declarations, control flow, loops, imports/exports, collections, I/O and docs with English and Persian triggers
@@ -40,6 +42,7 @@ Getting `Could not create SSL/TLS secure channel` from the PowerShell command (c
 | `salam.compilerPath` | `salam` | Path to the `salam` executable                                                   |
 | `salam.languagePack` | `auto`  | Keyword pack passed as `--lang` (`en`, `fa`); `auto` lets the compiler detect it |
 | `salam.run.command`  | `run`   | Subcommand used by the run command                                               |
+| `salam.blocks.highlight` | `true` | Highlight the opening and closing line of the block at the cursor |
 | `salam.lsp.enable`   | `true`  | Run the language server                                                          |
 | `salam.lsp.messages` | `auto`  | Language of server messages: `auto`, `en`, `fa`                                  |
 | `salam.trace.server` | `off`   | Log the protocol traffic to the output panel                                     |

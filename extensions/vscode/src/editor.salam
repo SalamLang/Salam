@@ -1,0 +1,224 @@
+/*
+ * Salam Programming Language - VS Code editor aids: the block the cursor is
+ * in (status bar, highlight, jump list) and the project platform picker.
+ *
+ * The logic is plain JavaScript run through the same Function bridge the
+ * language client middleware uses, because it is made of vscode objects
+ * that change on every cursor move.
+ */
+
+package editor
+
+import node
+
+const EDITOR_JS := `
+return function (api) {
+  const vscode = api.vscode;
+  const context = api.context;
+  const fs = api.fs;
+  const path = api.path;
+  const cfg = () => vscode.workspace.getConfiguration("salam");
+  const safe = (fn) => { try { return fn(); } catch (e) { return undefined; } };
+
+  const ENDS = ["end", "\u067e\u0627\u06cc\u0627\u0646"];
+  const isComment = (t) => t.startsWith("//") || t.startsWith("/*") || t.startsWith("*");
+  const indentOf = (s) => {
+    let n = 0;
+    for (const c of s) { if (c === " ") n++; else if (c === "\t") n += 4; else break; }
+    return n;
+  };
+  const isHeader = (s) => {
+    const t = s.trim();
+    return t.length > 1 && !isComment(t) && /:\s*(\/\/.*)?$/.test(t) && !/^["']/.test(t);
+  };
+  const labelOf = (s) => {
+    let t = s.trim().replace(/\s*\/\/.*$/, "").replace(/:\s*$/, "").trim();
+    const p = t.indexOf("(");
+    if (p > 0) t = t.slice(0, p);
+    const e = t.indexOf(" = ");
+    if (e > 0) t = t.slice(0, e);
+    if (t.length > 26) t = t.slice(0, 25) + "\u2026";
+    return t;
+  };
+
+  const chainAt = (lines, lineNo) => {
+    const out = [];
+    let at = Math.min(lineNo, lines.length - 1);
+    while (at > 0 && lines[at].trim() === "") at--;
+    let cur = indentOf(lines[at]);
+    if (isHeader(lines[at])) out.push({ line: at, label: labelOf(lines[at]), indent: cur });
+    for (let i = at - 1; i >= 0 && cur > 0; i--) {
+      const t = lines[i].trim();
+      if (t === "" || isComment(t)) continue;
+      const ind = indentOf(lines[i]);
+      if (ind < cur) {
+        cur = ind;
+        if (isHeader(lines[i])) out.push({ line: i, label: labelOf(lines[i]), indent: ind });
+      }
+    }
+    return out.reverse();
+  };
+
+  const endLineOf = (lines, header) => {
+    for (let i = header.line + 1; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (t === "") continue;
+      if (indentOf(lines[i]) <= header.indent) return ENDS.includes(t.split(/\s/)[0]) ? i : -1;
+    }
+    return -1;
+  };
+
+  const readToml = (dir) => {
+    const file = path.join(dir, "salam.toml");
+    if (!fs.existsSync(file)) return null;
+    const text = fs.readFileSync(file, "utf8");
+    const m = /^\[project\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(text);
+    if (!m) return null;
+    const get = (k) => { const r = new RegExp("^" + k + "\\s*=\\s*\"([^\"]*)\"", "m").exec(m[1]); return r ? r[1] : ""; };
+    const pl = /^platforms\s*=\s*\[([^\]]*)\]/m.exec(m[1]);
+    const platforms = pl ? pl[1].split(",").map((x) => x.replace(/["'\s]/g, "")).filter(Boolean) : [];
+    return { root: dir, type: get("type"), web: get("web"), platforms };
+  };
+  const projectFor = (file) => {
+    let dir = path.dirname(file);
+    for (let i = 0; i < 12; i++) {
+      const p = safe(() => readToml(dir));
+      if (p) return p;
+      const up = path.dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+    return null;
+  };
+  const folderProject = () => {
+    const f = safe(() => vscode.workspace.workspaceFolders[0].uri.fsPath);
+    return f ? safe(() => readToml(f)) : null;
+  };
+  const chosen = () => context.workspaceState ? context.workspaceState.get("salam.platform") : undefined;
+
+  const mkItem = (align, prio) => safe(() => vscode.window.createStatusBarItem(align, prio));
+  const blockItem = mkItem(1, 99);
+  const projItem = mkItem(1, 100);
+  const deco = safe(() => vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: new vscode.ThemeColor("editor.wordHighlightBackground"),
+  }));
+  const state = { chain: [], editor: null };
+
+  const refreshProject = () => {
+    if (!projItem) return;
+    const ed = vscode.window.activeTextEditor;
+    const p = (ed && ed.document.languageId === "salam" ? projectFor(ed.document.uri.fsPath) : null) || folderProject();
+    if (!p || p.platforms.length === 0) { projItem.hide(); return; }
+    let pick = chosen();
+    if (pick !== "all" && !p.platforms.includes(pick)) pick = undefined;
+    projItem.text = "$(rocket) " + (pick || p.platforms[0]) + (p.type ? "" : "");
+    projItem.tooltip = "Salam " + p.type + " project. Platforms: " + p.platforms.join(", ") +
+      (p.web ? " (web: " + p.web + ")" : "") + ". Run and Build use the one shown. Click to change it.";
+    projItem.command = "salam.selectPlatform";
+    projItem.show();
+  };
+
+  const refreshBlock = () => {
+    const ed = vscode.window.activeTextEditor;
+    state.chain = [];
+    if (!ed || ed.document.languageId !== "salam") {
+      if (blockItem) blockItem.hide();
+      if (ed && deco) safe(() => ed.setDecorations(deco, []));
+      return;
+    }
+    const lines = ed.document.getText().split("\n");
+    const line = ed.selection.active.line;
+    const chain = chainAt(lines, line);
+    state.chain = chain;
+    state.editor = ed;
+    if (blockItem) {
+      if (chain.length === 0) {
+        blockItem.text = "$(symbol-file) top level";
+        blockItem.tooltip = "The cursor is outside every block";
+      } else {
+        const shown = chain.length > 4 ? ["\u2026"].concat(chain.slice(-3).map((c) => c.label)) : chain.map((c) => c.label);
+        blockItem.text = "$(symbol-structure) " + shown.join(" \u203a ");
+        blockItem.tooltip = "The cursor is inside:\n" + chain.map((c, i) => "  ".repeat(i) + c.label + "  (line " + (c.line + 1) + ")").join("\n") +
+          "\nClick to jump to one of these blocks.";
+      }
+      blockItem.command = "salam.showBlocks";
+      blockItem.show();
+    }
+    if (deco) {
+      const ranges = [];
+      if (chain.length > 0 && cfg().get("blocks.highlight", true)) {
+        const inner = chain[chain.length - 1];
+        ranges.push(new vscode.Range(inner.line, 0, inner.line, 0));
+        const e = endLineOf(lines, inner);
+        if (e >= 0) ranges.push(new vscode.Range(e, 0, e, 0));
+      }
+      safe(() => ed.setDecorations(deco, ranges));
+    }
+  };
+
+  const showBlocks = () => {
+    refreshBlock();
+    const chain = state.chain;
+    if (chain.length === 0) { vscode.window.showInformationMessage("Salam: the cursor is not inside a block."); return; }
+    const items = chain.map((c, i) => ({ label: "  ".repeat(i) + c.label, description: "line " + (c.line + 1), line: c.line }));
+    return vscode.window.showQuickPick(items, { placeHolder: "Blocks around the cursor, outermost first" }).then((pick) => {
+      if (!pick || !state.editor) return;
+      const pos = new vscode.Position(pick.line, 0);
+      state.editor.selection = new vscode.Selection(pos, pos);
+      state.editor.revealRange(new vscode.Range(pos, pos), 1);
+    });
+  };
+
+  const selectPlatform = () => {
+    const ed = vscode.window.activeTextEditor;
+    const p = (ed ? projectFor(ed.document.uri.fsPath) : null) || folderProject();
+    if (!p || p.platforms.length === 0) { vscode.window.showInformationMessage("Salam: this folder has no [project] platforms in salam.toml. Run Salam: New Project."); return; }
+    const names = p.platforms.concat(["all"]);
+    return vscode.window.showQuickPick(names, { placeHolder: "Platform for Run and Build" }).then((pick) => {
+      if (!pick) return;
+      return context.workspaceState.update("salam.platform", pick).then(refreshProject);
+    });
+  };
+
+  const projectArgs = (kind) => {
+    const ed = vscode.window.activeTextEditor;
+    const p = (ed ? projectFor(ed.document.uri.fsPath) : null) || folderProject();
+    if (!p || p.platforms.length === 0) return null;
+    let pick = chosen();
+    if (pick !== "all" && !p.platforms.includes(pick)) pick = p.platforms[0];
+    if (kind === "run" && pick === "all") pick = p.platforms.includes("web") ? "web" : p.platforms[0];
+    return { cwd: p.root, args: [kind === "run" ? "run" : "build", "--platform=" + pick] };
+  };
+
+  const sub = (d) => { if (d) context.subscriptions.push(d); };
+  const w = vscode.window;
+  sub(safe(() => w.onDidChangeTextEditorSelection(refreshBlock)));
+  sub(safe(() => w.onDidChangeActiveTextEditor(() => { refreshBlock(); refreshProject(); })));
+  sub(safe(() => vscode.workspace.onDidChangeTextDocument(refreshBlock)));
+  sub(blockItem);
+  sub(projItem);
+  sub(deco);
+  sub(vscode.commands.registerCommand("salam.showBlocks", showBlocks));
+  sub(vscode.commands.registerCommand("salam.selectPlatform", selectPlatform));
+  refreshBlock();
+  refreshProject();
+  return { projectArgs, chainAt, refreshBlock };
+};
+`
+
+func jsstr(s: str): i64:
+    holder := node.NewObject()
+    node.SetStr(holder, "v", s)
+    ret node.GetProp(holder, "v")
+end
+
+pub func Start(vsc: i64, context: i64): i64:
+    api := node.NewObject()
+    node.SetProp(api, "vscode", vsc)
+    node.SetProp(api, "context", context)
+    node.SetProp(api, "fs", node.Require("fs"))
+    node.SetProp(api, "path", node.Require("path"))
+    factory := node.Invoke0(node.New1(node.Global("Function"), jsstr(EDITOR_JS)))
+    ret node.Invoke1(factory, api)
+end

@@ -257,9 +257,11 @@ app.listen(8080);
 پایان
 ```
 
-```output
-<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>سبد خرید سارا</title></head><body><h1>سبد خرید سارا</h1><p>تعداد کالا: 2</p><ul><li>خودکار</li><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
-<style>.برچسب-a{background:#fde68a}</style><span class="برچسب-a">حراج</span>
+آغاز صفحه یک شیوه‌نامه‌ی بازنشانی و یک برچسب متای `generator` دارد که بلند است و میان نسخه‌ها تغییر می‌کند؛ بنابراین در فهرست زیر به‌جای آن‌ها `...` آمده است:
+
+```text
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>سبد خرید سارا</title>...</head><body><h1>سبد خرید سارا</h1><p>تعداد کالا: 2</p><ul><li>خودکار</li><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
+<style>...</style><span class="برچسب-a">حراج</span>
 ```
 
 تگ script درون داده به شکل متن بیرون می‌آید. صفحه‌ای که به فارسی نوشته شده، خودبه‌خود `lang="fa"` و `dir="rtl"` می‌گیرد. تابع صفحه `ناب` (`pure`) است، پس هنگام رندر نمی‌تواند فایل یا شبکه را بخواند؛ گرداننده داده را می‌آورد و به آن می‌دهد. نوشته‌ی [توسعه‌ی وب با سلام](/blog/web-development-with-salam/) زبان صفحه را از صفحه‌های ایستا تا مؤلفه‌های تعاملی مرور می‌کند.

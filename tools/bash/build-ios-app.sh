@@ -89,6 +89,7 @@ MINIOS=
 ORIENT=
 CATEGORY=
 CONFIG=
+DRY=0
 TEAM=
 PROFILE=
 IDENTITY=
@@ -98,6 +99,10 @@ while [ $# -gt 0 ]; do
     --out)
         OUT=$2
         shift 2
+        ;;
+    --dry-run)
+        DRY=1
+        shift
         ;;
     --device)
         DEVICE=1
@@ -214,6 +219,11 @@ if [ -n "$CONFIG" ]; then
     [ -n "$CATEGORY" ] || CATEGORY=$(app_cfg_get category)
     [ -n "$PERMS" ] || PERMS=$(app_cfg_get permissions)
     [ -n "$SCHEMES" ] || SCHEMES=$(app_cfg_get scheme)
+    if [ "$DEVICE" = 1 ]; then
+        [ -n "$TEAM" ] || TEAM=$(app_cfg_get team)
+        [ -n "$PROFILE" ] || PROFILE=$(app_cfg_path profile)
+        [ -n "$IDENTITY" ] || IDENTITY=$(app_cfg_get sign_identity)
+    fi
 fi
 if [ -n "$BUILDNUM" ]; then
     app_check_int --build "$BUILDNUM" build-ios-app || exit 2
@@ -299,6 +309,15 @@ else
     SDK=iphonesimulator
     PLATFORM=iPhoneSimulator
     TRIPLE=arm64-apple-ios$MINIOS-simulator
+fi
+if [ "$DRY" = 1 ]; then
+    for kv in "id=$ID" "name=$NAME" "version=$VERSION" "build=$BUILDNUM" "icon=$ICON" \
+        "splash_color=$SPLASH_COLOR" "splash_icon=$SPLASH_ICON" "min_ios=$MINIOS" \
+        "orientation=$ORIENT" "category=$CATEGORY" "permissions=$PERMS" "team=$TEAM" \
+        "profile=$PROFILE" "sign_identity=$IDENTITY"; do
+        printf '%s\n' "$kv"
+    done
+    exit 0
 fi
 command -v xcrun >/dev/null 2>&1 || {
     echo "build-ios-app: xcrun not found; iOS apps need Xcode on macOS (install Xcode, then run: xcode-select -s /Applications/Xcode.app)" >&2

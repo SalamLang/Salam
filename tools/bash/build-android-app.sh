@@ -33,13 +33,19 @@
 # from its [app], [app.mobile] and [app.android] tables with the option names
 # written with underscores: id, name, version, build, icon, icon_bg,
 # splash_color, splash_icon, min_sdk, target_sdk, orientation, category, abi,
-# fonts, assets and permissions. Options on the command line win.
+# fonts, assets, permissions, keystore (a path) and key_alias; the plain
+# [android] table is read last. Options on the command line win. Passwords
+# come only from --keystore-pass and --key-pass, or from SALAM_KEYSTORE_PASS
+# and SALAM_KEY_PASS.
 #
 # --abi takes a comma separated list of arm64-v8a, armeabi-v7a, x86_64 and
 # x86, or "all" for the first three (a release build with no --abi builds
 # those three; a debug build only arm64-v8a). One APK holds every ABI listed;
 # --split writes one APK per ABI instead, DIR/app-ABI.apk, which is what a
 # store that serves by device wants.
+#
+# --dry-run prints the settings the build would use (the command line over
+# salam.toml over the defaults) and stops before it needs the Android SDK.
 #
 # --size builds for size: -Oz, --gc-sections, identical code folding, and the
 # symbols stripped. Release and --size builds strip the library by default;
@@ -99,6 +105,7 @@ PERMS=
 SCHEMES=
 LINK_HOSTS=
 AAB=0
+DRY=0
 KS=
 KSPASS=
 KEYALIAS=
@@ -168,6 +175,10 @@ while [ $# -gt 0 ]; do
     --config)
         CONFIG=$2
         shift 2
+        ;;
+    --dry-run)
+        DRY=1
+        shift
         ;;
     --size)
         SIZE=1
@@ -284,6 +295,14 @@ if [ -n "$CONFIG" ]; then
     [ -n "$PERMS" ] || PERMS=$(app_cfg_get permissions)
     [ -n "$SCHEMES" ] || SCHEMES=$(app_cfg_get scheme)
     [ -n "$LINK_HOSTS" ] || LINK_HOSTS=$(app_cfg_get link_host)
+    [ -n "$KS" ] || KS=$(app_cfg_path keystore)
+    [ -n "$KEYALIAS" ] || KEYALIAS=$(app_cfg_get key_alias)
+fi
+[ -n "$KSPASS" ] || KSPASS=${SALAM_KEYSTORE_PASS:-}
+[ -n "$KEYPASS" ] || KEYPASS=${SALAM_KEY_PASS:-}
+if [ -n "$KS" ] && [ ! -f "$KS" ]; then
+    echo "build-android-app: no such keystore: $KS" >&2
+    exit 2
 fi
 if [ -n "$BUILDNUM" ]; then
     app_check_int --build "$BUILDNUM" build-android-app || exit 2
@@ -323,6 +342,17 @@ if [ -z "$ABIS" ]; then
     else
         ABIS=arm64-v8a,armeabi-v7a,x86_64
     fi
+fi
+
+if [ "$DRY" = 1 ]; then
+    for kv in "id=$ID" "name=$NAME" "version=$VERSION" "build=$BUILDNUM" "icon=$ICON" "icon_bg=$ICON_BG" \
+        "splash_color=$SPLASH_COLOR" "splash_icon=$SPLASH_ICON" "min_sdk=$MINSDK" "target_sdk=$TARGETSDK" \
+        "orientation=$ORIENT" "category=$CATEGORY" "abi=$ABIS" "fonts=$FONTS" "assets=$ASSETS" \
+        "permissions=$PERMS" "keystore=$KS" "key_alias=$KEYALIAS" "keystore_pass=${KSPASS:+set}" \
+        "key_pass=${KEYPASS:+set}"; do
+        printf '%s\n' "$kv"
+    done
+    exit 0
 fi
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}

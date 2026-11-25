@@ -29,6 +29,7 @@ const WS_MULTI := 1
 const WS_REGION := 2
 
 mut g_lo_ws_std := false
+mut g_lo_dev_names := ""
 
 struct WsUse:
     pub url: bool = false
@@ -47,6 +48,11 @@ struct WsCtx:
     pub multi: Vector<int> = Vector {}
     pub wsd_inst: Vector<int> = Vector {}
     pub wsd_n: Vector<int> = Vector {}
+    pub rm_at: Vector<int> = Vector {}
+    pub rm_num: Vector<int> = Vector {}
+    pub rm_ok: Vector<bool> = Vector {}
+    pub rm_dyn: Vector<str> = Vector {}
+    pub rm_cur: Vector<str> = Vector {}
 end
 
 func ws_free(c &: WsCtx):
@@ -611,6 +617,32 @@ func ws_refs_state(lw &: LoLower, a &: at.Ast, nid: int): bool:
     ret false
 end
 
+func ws_key_param(lw &: LoLower, a &: at.Ast, ex: int): int:
+    if ex == 0:
+        ret 0
+    end
+    mut id := ex
+    if at.KindOf(a, id) == at.AST_INDEX:
+        id = at.Get(a, id).a
+    end
+    if id == 0 or at.KindOf(a, id) != at.AST_IDENTIFIER:
+        ret 0
+    end
+    nm := at.Get(a, id).name
+    if not str.StartsWith(nm, "__salam_ws_"):
+        ret 0
+    end
+    n := str.Substr(nm, 11, str.Len(nm) - 11).ToInt()
+    if n < 0 or n >= g_lo_ws_decl.Len() or not ws_is_render(n):
+        ret 0
+    end
+    init := at.Get(a, g_lo_ws_decl.Get(n)).a
+    if init == 0 or ws_refs_state(lw, a, init):
+        ret 0
+    end
+    ret init
+end
+
 func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
     _ei := sm.LayoutElemOf(a, el)
     repeat at.ChildCount(a, el) in i:
@@ -641,7 +673,7 @@ func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
             // TODO(runtime/toolchain): support stable derived/dynamic keys with explicit mount/update/unmount/cleanup hook semantics and uniqueness validation,
             //   and align behavior with native keyed scopes for cross-target parity.
             if ws_refs_state(lw, a, ex):
-                ret 0
+                ret ws_key_param(lw, a, ex)
             end
             ret ex
         end
@@ -721,8 +753,15 @@ func ws_keys(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nid: int):
             mut key := ws_row_key(lw, a, n.b)
             if key == 0:
                 mut sl := lw.slots.Get(num)
+                if sl.key != 0 and at.KindOf(a, sl.key) == at.AST_IDENTIFIER and str.Equals(
+                    at.Get(a, sl.key).name, "_"
+                ):
+                    sl.key = 0
+                end
                 if sl.key == 0:
-                    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER:
+                    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER and not str.Equals(
+                        at.Get(a, n.c).name, "_"
+                    ):
                         sl.key = n.c
                     else:
                         sl.key = lo_ident(a, "__salam_ix_" + co.U64Toa(num as u64), nid)
@@ -891,6 +930,99 @@ func ws_enter(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nm: LnNames, inst: int): 
     ret s
 end
 
+func ws_rm_off(wc &: WsCtx):
+    repeat wc.rm_ok.Len() in k:
+        wc.rm_ok[k] = false
+    end
+end
+
+func ws_rm_token(ns: str): str:
+    ret char_from_code(1) + "D" + ns + char_from_code(1)
+end
+
+func ws_rm_close(num: int, ok: bool, dyns: str, curs: str, seg: str): str:
+    soh := char_from_code(1)
+    ens := soh + "E" + soh
+    ene := soh + "e" + soh
+    mut enter := ""
+    mut rest := ""
+    mut p := 0
+    n := str.Len(seg)
+    until p < n:
+        q := str.IndexFrom(seg, ens, p)
+        if q < 0:
+            rest += str.Substr(seg, p, n - p)
+            break
+        end
+        rest += str.Substr(seg, p, q - p)
+        r := str.IndexFrom(seg, ene, q + 3)
+        if r < 0:
+            rest += str.Substr(seg, q + 3, n - q - 3)
+            break
+        end
+        enter += str.Substr(seg, q + 3, r - q - 3)
+        p = r + 3
+    end
+    mut names := Vector {} as Vector<str>
+    mut kinds := Vector {} as Vector<str>
+    mut d := 0
+    dn := str.Len(dyns)
+    until d < dn:
+        c := str.IndexFrom(dyns, ",", d)
+        if c < 0:
+            break
+        end
+        kinds.Push(str.Substr(dyns, d, 1))
+        names.Push(str.Substr(dyns, d + 1, c - d - 1))
+        d = c + 1
+    end
+    repeat names.Len() in k:
+        rest = str.Replace(rest, ws_rm_token(names[k]), (ok ? "__salam_v_" : "__salam_dyn_") + names[k])
+    end
+    if not ok:
+        names.Free()
+        kinds.Free()
+        ret enter + rest
+    end
+    ns := co.U64Toa(num as u64)
+    mk := "__salam_mk_" + ns
+    mut s := enter
+    mut key := "\"\""
+    mut first := "0 - 1"
+    mut c2 := 0
+    cn := str.Len(curs)
+    until c2 < cn:
+        c := str.IndexFrom(curs, ",", c2)
+        if c < 0:
+            break
+        end
+        cur1 := "salamWsCur(" + str.Substr(curs, c2, c - c2) + ")"
+        if str.Equals(first, "0 - 1"):
+            first = cur1
+        end
+        key += " + \",\" + " + cur1
+        c2 = c + 1
+    end
+    repeat names.Len() in k:
+        s += "__salam_v_" + names[k] + " := __salam_dyn_" + names[k] + "\n"
+        if str.Equals(kinds[k], "b"):
+            key += " + (__salam_v_" + names[k] + " ? \"1\" : \"0\")"
+        else:
+            key += " + salamWsMk(\"\" + __salam_v_" + names[k] + ")"
+        end
+    end
+    names.Free()
+    kinds.Free()
+    s += mk + " := " + key + "\n"
+    s += "if salamWsHit(" + ns + ", " + first + ", " + mk + "):\n"
+    s += "__salam_h = salamWsGot()\n"
+    s += "else:\n"
+    s += rest
+    s += "salamWsPut(" + ns + ", " + first + ", " + mk + ", __salam_h)\n"
+    s += "end\n"
+    ret s
+end
+
 func ws_view_source(
     lw &: LoLower,
     wc &: WsCtx,
@@ -903,6 +1035,11 @@ func ws_view_source(
 ): str:
     wc.ctl.Clear()
     wc.multi.Clear()
+    wc.rm_at.Clear()
+    wc.rm_num.Clear()
+    wc.rm_ok.Clear()
+    wc.rm_dyn.Clear()
+    wc.rm_cur.Clear()
     mut body := "mut __salam_h := \"\"\n"
     if ws_kind(i) == WS_SINGLE:
         repeat g_lo_ws_inst.Len() in rn:
@@ -943,7 +1080,16 @@ func ws_view_source(
         if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.Len():
             sl := lw.slots.Get(num)
             ns := co.U64Toa(num as u64)
-            dn := "__salam_dyn_" + ns
+            mut dn := "__salam_dyn_" + ns
+            if wc.rm_at.Len() > 0:
+                if str.Equals(tag, "bad") or sl.kind == SL_IF or sl.kind == SL_EACH or sl.kind == SL_STD:
+                    ws_rm_off(wc)
+                else:
+                    dn = ws_rm_token(ns)
+                    top := wc.rm_dyn.Len() - 1
+                    wc.rm_dyn[top] = wc.rm_dyn[top] + (sl.kind == SL_BOOL ? "b" : "t") + ns + ","
+                end
+            end
             switch sl.kind:
                 SL_IF:
                     body += "if " + dn + ":\n"
@@ -956,8 +1102,17 @@ func ws_view_source(
                         head += "__salam_key_" + ns + ", "
                     end
                     body += head + "__salam_item_" + ns + " in " + dn + ":\n"
-                    body += "__salam_h += salamWsRow(true)\n"
+                    body += "__salam_ro_" + ns + " := __salam_h\n__salam_h = \"\"\nsalamWsRowIn()\n"
                     wc.ctl.Push(num)
+                    wc.rm_at.Push(str.Len(body))
+                    wc.rm_num.Push(num)
+                    wc.rm_ok.Push(true)
+                    wc.rm_dyn.Push("")
+                    mut cur := ""
+                    each mi in wc.multi:
+                        cur += co.U64Toa(mi as u64) + ","
+                    end
+                    wc.rm_cur.Push(cur)
                     break
                 end
                 SL_BAD:
@@ -997,14 +1152,35 @@ func ws_view_source(
             body += "else:\n"
         else str.Equals(tag, "end"):
             if wc.ctl.Len() > 0 and wc.ctl.Get(wc.ctl.Len() - 1) >= 0:
-                body += "__salam_h += salamWsRow(false)\n"
+                en := co.U64Toa(wc.ctl.Get(wc.ctl.Len() - 1) as u64)
+                if wc.rm_at.Len() > 0:
+                    at0 := wc.rm_at.Pop()
+                    rn := wc.rm_num.Pop()
+                    ok := wc.rm_ok.Pop()
+                    dl := wc.rm_dyn.Pop()
+                    cl := wc.rm_cur.Pop()
+                    body = str.Substr(body, 0, at0) + ws_rm_close(
+                        rn, ok, dl, cl, str.Substr(body, at0, str.Len(body) - at0)
+                    )
+                end
+                body += "__salam_h = __salam_ro_" + en + " + salamWsRowOut(__salam_h)\n"
             end
             body += "end\n"
             if wc.ctl.Len() > 0:
                 _c := wc.ctl.Pop()
             end
         else str.Equals(tag, "wsin") and num >= 0:
-            body += ws_enter(lw, wc, a, nm, num)
+            if wc.rm_at.Len() > 0:
+                if ws_inst_has(num, false):
+                    ws_rm_off(wc)
+                end
+                top2 := wc.rm_cur.Len() - 1
+                wc.rm_cur[top2] = wc.rm_cur[top2] + co.U64Toa(num as u64) + ","
+                body += char_from_code(1) + "E" + char_from_code(1) + ws_enter(lw, wc, a, nm, num) +
+                    char_from_code(1) + "e" + char_from_code(1)
+            else:
+                body += ws_enter(lw, wc, a, nm, num)
+            end
             wc.multi.Push(num)
         else str.Equals(tag, "wsout"):
             if wc.multi.Len() > 0:
@@ -1082,6 +1258,14 @@ func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): 
         end
         t += "    func salamWsTouch(__salam_i: " + nm.t_int + ")\n"
         t += "    func salamWsRow(__salam_o: " + nm.t_bool + "): " + s + "\n"
+        t += "    func salamWsRowIn()\n"
+        t += "    func salamWsRowOut(__salam_s: " + s + "): " + s + "\n"
+        t += "    func salamWsHit(__salam_i: " + nm.t_int + ", __salam_c: " + nm.t_int + ", __salam_k: " + s + "): " +
+            nm.t_bool + "\n"
+        t += "    func salamWsGot(): " + s + "\n"
+        t += "    func salamWsPut(__salam_i: " + nm.t_int + ", __salam_c: " + nm.t_int + ", __salam_k: " + s +
+            ", __salam_v: " + s + ")\n"
+        t += "    func salamWsMk(__salam_s: " + s + "): " + s + "\n"
         if ws_has_multi_inst():
             t += "    func salamWsCur(__salam_i: " + nm.t_int + "): " + nm.t_int + "\n"
             t += "    func salamWsSlot(__salam_i: " + nm.t_int + ", __salam_k: " + s + ")\n"
@@ -1142,6 +1326,38 @@ func ws_insert(list &: Vector<int>, a &: at.Ast, items: Vector<int>, min_phase: 
     out.Free()
 end
 
+func ws_dev_ident(name: str): bool:
+    if str.Len(name) == 0 or str.StartsWith(name, "__"):
+        ret false
+    end
+    repeat str.Len(name) in i:
+        c := str.CharAt(name, i)
+        digit := str.Contains("0123456789", c)
+        alpha := str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_", c)
+        if not alpha and not (digit and i > 0):
+            ret false
+        end
+    end
+    ret true
+end
+
+func ws_dev_snippet(): str:
+    names := str.Split(g_lo_dev_names, ",")
+    mut get := ""
+    mut set := ""
+    each n in names:
+        get += "o." + n + "=" + n + ";"
+        set += "if(__salamFit(o." + n + "," + n + ")){" + n + "=o." + n + ";}"
+    end
+    mut t := "function __salamFit(x,y){if(typeof x!==typeof y){return false;}if(Array.isArray(x)!==Array.isArray(y)){return false;}"
+    t += "if(Array.isArray(x)){if(x.length>0&&y.length>0){return __salamFit(x[0],y[0]);}return true;}"
+    t += "if(x&&y&&typeof x===\"object\"){return Object.keys(x).sort().join()===Object.keys(y).sort().join();}return true;}\n"
+    t += "window.__salamDev={get:function(){var o={};" + get +
+        "return o;},set:function(o){if(!o){return;}" + set + "}};\n"
+    t += "if(window.__salamDevRestore){try{window.__salamDev.set(window.__salamDevRestore);}catch(x){}window.__salamDevRestore=null;}\n"
+    ret t
+end
+
 pub func WebStateCount(): int:
     ret g_lo_wi_mark.Len()
 end
@@ -1181,6 +1397,14 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
     mut r := LnReact {}
     defer ln_rx_free(r)
     ln_rx_init(r, a, prog)
+    g_lo_dev_names = ""
+    if str.Len(os.Env("SALAM_DEV_HMR")) > 0:
+        each sn in r.states:
+            if ws_dev_ident(sn):
+                g_lo_dev_names += (str.Len(g_lo_dev_names) > 0 ? "," : "") + sn
+            end
+        end
+    end
     if r.states.Len() > 0:
         ws_regions(r, a, lb)
     end
@@ -1343,15 +1567,16 @@ pub func WebStateRuntime(views: Vector<str>, inits: Vector<str>): str:
         s += "window.__salam_trace = true;\n"
     end
     s += `window.__salam_runs = 0;
+window.__salam_inplace = 0;
 var __salam_dirty = [];
 var __salam_queued = false;
 var __salam_marks = {};
 var __salam_cur = {};
-var __salam_slots = {};
+var __salam_slots = new Map();
 var __salam_free = {};
 var __salam_next = {};
 var __salam_rendering = "";
-var __salam_seen = {};
+var __salam_seen = new Map();
 var __salam_wasfresh = false;
 var __salam_hydrating = false;
 var __salam_calls = {};
@@ -1361,6 +1586,19 @@ var __salam_marked = false;
 var __salam_rows = {};
 var __salam_keep = [];
 var __salam_keeping = false;
+var __salam_rf = {};
+var __salam_rowbuf = null;
+var __salam_rowdep = 0;
+var __salam_mm = {};
+var __salam_gen = 0;
+var __salam_got = "";
+var __salam_rkc = new Map();
+var __salam_okc = new Map();
+var __salam_pfx = "";
+var __salam_pfx_i = -1;
+var __salam_pfx_r = null;
+var __salam_scnt = {};
+var __salam_seen_n = 0;
 (function () {
     if (typeof document === "undefined" || !document.getElementById) {
         return;
@@ -1435,7 +1673,11 @@ function __salam_check(i, s, e, fresh) {
     }
 }
 function salamWsHtml(s) {
-    return String(s).replace(/[&<>"'\u0001\u0004]/g, function (c) {
+    s = String(s);
+    if (!/[&<>"'\u0001\u0003\u0004]/.test(s)) {
+        return s;
+    }
+    return s.replace(/[&<>"'\u0001\u0003\u0004]/g, function (c) {
         return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "\"" ? "&quot;" : c === "'" ? "&#39;" : "&#" + c.charCodeAt(0) + ";";
     });
 }
@@ -1452,8 +1694,22 @@ function salamWsCur(i) {
 }
 function salamWsSlot(i, key) {
     var k = key === undefined || key === null ? "" : String(key);
-    var fk = (__salam_rendering || "root") + "/" + i + "/" + k, e = __salam_slots[fk];
-    __salam_seen[fk] = 1;
+    if (__salam_pfx_i !== i || __salam_pfx_r !== __salam_rendering) {
+        __salam_pfx_i = i;
+        __salam_pfx_r = __salam_rendering;
+        __salam_pfx = (__salam_rendering || "root") + "/" + i + "/";
+    }
+    var fk = __salam_pfx + k;
+    if (__salam_seen.has(fk)) {
+        var dup = 2;
+        while (__salam_seen.has(fk + "#" + dup)) {
+            dup++;
+        }
+        fk = fk + "#" + dup;
+    }
+    var e = __salam_slots.get(fk);
+    __salam_seen.set(fk, 1);
+    __salam_seen_n++;
     __salam_wasfresh = !e;
     if (!e) {
         var fl = __salam_free[i] || (__salam_free[i] = []);
@@ -1463,20 +1719,28 @@ function salamWsSlot(i, key) {
             e = { i: i, s: __salam_next[i] || 0 };
             __salam_next[i] = e.s + 1;
         }
-        __salam_slots[fk] = e;
+        __salam_slots.set(fk, e);
+        var rk = __salam_rendering || "root";
+        __salam_scnt[rk] = (__salam_scnt[rk] || 0) + 1;
     }
     __salam_cur[i] = e.s;
-    window.salamWsAt = window.salamWsAt || function (ii, ss) { __salam_cur[ii] = ss; };
 }
 function salamWsFresh() {
     return __salam_wasfresh;
 }
 function __salam_drop(prefix, keep) {
-    for (var fk in __salam_slots) {
-        if (fk.indexOf(prefix) === 0 && !(keep && keep[fk])) {
-            var e = __salam_slots[fk];
-            (__salam_free[e.i] || (__salam_free[e.i] = [])).push(e.s);
-            delete __salam_slots[fk];
+    var gone = [];
+    __salam_slots.forEach(function (e, fk) {
+        if (fk.indexOf(prefix) === 0 && !(keep && keep.has(fk))) {
+            gone.push(fk);
+        }
+    });
+    for (var g = 0; g < gone.length; g++) {
+        var fk = gone[g], e = __salam_slots.get(fk), dk = fk.slice(0, fk.indexOf("/"));
+        (__salam_free[e.i] || (__salam_free[e.i] = [])).push(e.s);
+        __salam_slots.delete(fk);
+        if (__salam_scnt[dk]) {
+            __salam_scnt[dk]--;
         }
     }
 }
@@ -1554,9 +1818,15 @@ function __salam_find(i) {
     return c && c.parentNode ? c : null;
 }
 function __salam_end(start) {
-    var n = start ? start.nextSibling : null, d = start ? "/" + start.data : "";
+    var n = start ? start.nextSibling : null, d = start ? "/" + start.data : "", c = start ? start.__salam_e : null;
+    if (c && c.parentNode === start.parentNode && c.data === d) {
+        return c;
+    }
     while (n && !(n.nodeType === 8 && n.data === d)) {
         n = n.nextSibling;
+    }
+    if (n) {
+        start.__salam_e = n;
     }
     return n;
 }
@@ -1618,6 +1888,9 @@ function __salam_patch(o, n, fresh) {
         return;
     }
     var nm0 = o.nodeName, form = nm0 === "INPUT" || nm0 === "OPTION" || nm0 === "SELECT" || nm0 === "TEXTAREA" || nm0 === "BUTTON" || nm0 === "FIELDSET" || nm0 === "OPTGROUP";
+    if (nm0 !== "INPUT" && nm0 !== "OPTION" && nm0 !== "SELECT" && nm0 !== "TEXTAREA" && o.isEqualNode(n) && !(n.firstElementChild && n.querySelector("input,option,select,textarea"))) {
+        return;
+    }
     var oa = o.attributes, na = n.attributes, k, nm, val, same = oa.length === na.length;
     if (same && !form) {
         for (k = 0; k < na.length; k++) {
@@ -1703,8 +1976,111 @@ function __salam_patch(o, n, fresh) {
         __salam_kids(o, o.firstChild, null, Array.prototype.slice.call(n.childNodes), fresh);
     }
 }
+function salamWsRowIn() {
+    __salam_rowdep++;
+}
+function salamWsRowOut(h) {
+    __salam_rowdep--;
+    if (__salam_rowbuf && __salam_rowdep === 0) {
+        __salam_rowbuf.push(h);
+        return "\u0003";
+    }
+    return "\u0001" + h + "\u0004";
+}
+function salamWsMk(v) {
+    return v.length + ":" + v;
+}
+function salamWsHit(n, c, k) {
+    var m = __salam_mm[n], h;
+    if (!m) {
+        m = __salam_mm[n] = { c: new Map(), p: new Map(), g: __salam_gen, a: [] };
+    }
+    if (c >= 0) {
+        h = m.a[c];
+        if (h !== undefined && h.k === k) {
+            __salam_got = h.h;
+            return true;
+        }
+        return false;
+    }
+    if (m.g !== __salam_gen) {
+        m.p = m.c;
+        m.c = new Map();
+        m.g = __salam_gen;
+    }
+    h = m.c.get(k);
+    if (h === undefined) {
+        h = m.p.get(k);
+        if (h === undefined) {
+            return false;
+        }
+        m.c.set(k, h);
+    }
+    __salam_got = h;
+    return true;
+}
+function salamWsGot() {
+    var h = __salam_got;
+    __salam_got = "";
+    return h;
+}
+function salamWsPut(n, c, k, h) {
+    var m = __salam_mm[n];
+    if (m && c >= 0) {
+        m.a[c] = { k: k, h: h };
+    } else if (m) {
+        m.c.set(k, h);
+    }
+}
+function __salam_rows_make(i, html, rows) {
+    var segs = html.split("\u0003"), pr = __salam_rf[i], keys = new Array(rows.length), j, r, k;
+    if (segs.length !== rows.length + 1 || html.indexOf("<!--salam:") >= 0) {
+        return null;
+    }
+    for (j = 0; j < rows.length; j++) {
+        r = rows[j];
+        if (pr && j < pr.rows.length && pr.rows[j] === r) {
+            keys[j] = pr.keys[j];
+            continue;
+        }
+        if (r.indexOf("<!--salam:") >= 0) {
+            return null;
+        }
+        k = __salam_rkc.get(r);
+        if (k === undefined) {
+            k = __salam_row_key(r);
+            if (k === null) {
+                return null;
+            }
+            if (__salam_rkc.size > 50000) {
+                __salam_rkc.clear();
+            }
+            __salam_rkc.set(r, k);
+        }
+        keys[j] = k;
+    }
+    return { segs: segs, keys: keys, rows: rows, els: null };
+}
+function __salam_rows_join(html, rows) {
+    var segs = html.split("\u0003"), out = segs[0], j;
+    for (j = 0; j < rows.length; j++) {
+        out += "\u0001" + rows[j] + "\u0004" + (j + 1 < segs.length ? segs[j + 1] : "");
+    }
+    return out;
+}
 function salamWsRow(open) {
     return open ? "\u0001" : "\u0004";
+}
+function __salam_row_ok(r) {
+    var v = __salam_okc.get(r);
+    if (v === undefined) {
+        v = !__salam_forms(r) && __salam_one_root(r.indexOf("\u0001") >= 0 ? r.replace(/[\u0001\u0004]/g, "") : r);
+        if (__salam_okc.size > 50000) {
+            __salam_okc.clear();
+        }
+        __salam_okc.set(r, v);
+    }
+    return v;
 }
 function __salam_one_root(r) {
     var n = r.length, i = 0, depth = 0, roots = 0, c, j, name, close;
@@ -1752,13 +2128,30 @@ function __salam_one_root(r) {
     return depth === 0 && roots === 1;
 }
 function __salam_row_key(r) {
+    var gt = r.indexOf(">"), dk = r.indexOf(" data-key=\""), sp, q;
+    if (r.charCodeAt(0) === 60 && gt > 0 && dk > 0 && dk < gt) {
+        sp = r.indexOf(" ");
+        q = r.indexOf("\"", dk + 11);
+        if (sp > 1 && q > 0 && q < gt && /^[a-zA-Z][\w-]*$/.test(r.slice(1, sp))) {
+            return r.slice(1, sp).toUpperCase() + "\u0001" + r.slice(dk + 11, q);
+        }
+    }
     var m = /^<([a-zA-Z][\w-]*)[^>]*?\sdata-key="([^"]*)"/.exec(r);
     return m ? m[1].toUpperCase() + "\u0001" + m[2] : null;
 }
 function __salam_rows_prep(i, html) {
     var prev = __salam_rows[i] || null, next = {}, out = "", n = html.length, p = 0, depth = 0, start = 0, c, row, k, stored;
-    for (var q = 0; q < n; q++) {
-        c = html.charCodeAt(q);
+    var n1 = html.indexOf("\u0001"), n4 = html.indexOf("\u0004"), q;
+    while (n1 >= 0 || n4 >= 0) {
+        if (n4 < 0 || (n1 >= 0 && n1 < n4)) {
+            q = n1;
+            n1 = html.indexOf("\u0001", q + 1);
+            c = 1;
+        } else {
+            q = n4;
+            n4 = html.indexOf("\u0004", q + 1);
+            c = 4;
+        }
         if (c === 1) {
             if (depth === 0) {
                 out += html.slice(p, q);
@@ -1774,13 +2167,13 @@ function __salam_rows_prep(i, html) {
                 row = html.slice(start, q);
                 k = __salam_row_key(row);
                 stored = k !== null ? prev && prev[k] : undefined;
-                if (k !== null && stored !== undefined && stored === row) {
+                if (k !== null && stored !== undefined && stored === row && __salam_row_ok(row)) {
                     next[k] = row;
                     out += "<!--salam-k:" + __salam_keep.length + "-->";
-                    __salam_keep.push({ k: k, h: row.replace(/[\u0001\u0004]/g, "") });
+                    __salam_keep.push({ k: k, h: row });
                     __salam_keeping = true;
                 } else {
-                    if (k !== null && !/<(input|textarea|select)\b/i.test(row) && __salam_one_root(row.replace(/[\u0001\u0004]/g, ""))) {
+                    if (k !== null) {
                         next[k] = row;
                     }
                     out += row.replace(/[\u0001\u0004]/g, "");
@@ -1810,7 +2203,7 @@ function __salam_unkeep(n) {
     var kp = __salam_keep_of(n);
     if (kp) {
         var t = document.createElement("template");
-        t.innerHTML = kp.h;
+        t.innerHTML = kp.h.replace(/[\u0001\u0004]/g, "");
         var f = t.content.firstChild;
         n.parentNode ? n.parentNode.replaceChild(t.content, n) : null;
         return f;
@@ -1828,6 +2221,378 @@ function __salam_unkeep(n) {
         __salam_unkeep(list[x]);
     }
     return n;
+}
+function __salam_forms(h) {
+    return /<(input|textarea|select)\b/i.test(h);
+}
+function __salam_row_els(s, e, keys) {
+    var out = [], n = s.nextSibling, list, j, el, last;
+    while (n && n !== e) {
+        if (n.nodeType === 1) {
+            if (n.hasAttribute("data-key")) {
+                out.push(n);
+            } else {
+                list = n.querySelectorAll("[data-key]");
+                last = null;
+                for (j = 0; j < list.length; j++) {
+                    el = list[j];
+                    if (last && last.contains(el)) {
+                        continue;
+                    }
+                    out.push(el);
+                    last = el;
+                }
+            }
+        }
+        n = n.nextSibling;
+    }
+    if (out.length !== keys.length) {
+        return null;
+    }
+    for (j = 0; j < out.length; j++) {
+        if (out[j].nodeName + "\u0001" + out[j].getAttribute("data-key") !== keys[j]) {
+            return null;
+        }
+    }
+    return out;
+}
+function __salam_rows_fast(i, nw, s, e, fresh) {
+    var pr = __salam_rf[i], j, t, f, r;
+    __salam_rf[i] = nw;
+    if (!pr) {
+        return false;
+    }
+    if (pr.keys.length !== nw.keys.length) {
+        return __salam_rows_moved(i, pr, nw, s, e, fresh);
+    }
+    for (j = 0; j < nw.keys.length; j++) {
+        if (pr.keys[j] !== nw.keys[j] || pr.segs[j] !== nw.segs[j]) {
+            return __salam_rows_moved(i, pr, nw, s, e, fresh);
+        }
+    }
+    if (pr.segs[j] !== nw.segs[j]) {
+        return false;
+    }
+    var els = pr.els || __salam_row_els(s, e, pr.keys), ch = [], made = [];
+    if (!els) {
+        return false;
+    }
+    var buf = "", spotted = [];
+    for (j = 0; j < nw.rows.length; j++) {
+        if (nw.rows[j] === pr.rows[j]) {
+            continue;
+        }
+        if (!els[j].isConnected) {
+            return false;
+        }
+        if (__salam_spot(els[j], pr.rows[j], nw.rows[j])) {
+            spotted.push(j);
+            continue;
+        }
+        ch.push(j);
+        buf += nw.rows[j];
+    }
+    if (ch.length > 0) {
+        t = document.createElement("template");
+        t.innerHTML = buf.replace(/[\u0001\u0004]/g, "");
+        f = t.content.firstChild;
+        for (j = 0; j < ch.length; j++) {
+            if (!f || f.nodeType !== 1 || f.nodeName !== els[ch[j]].nodeName) {
+                return false;
+            }
+            made.push(f);
+            f = f.nextSibling;
+        }
+        if (f) {
+            return false;
+        }
+    }
+    for (j = 0; j < ch.length; j++) {
+        __salam_patch(els[ch[j]], made[j], fresh);
+    }
+    nw.els = els;
+    var rc = __salam_rows[i];
+    if (rc) {
+        for (j = 0; j < spotted.length; j++) {
+            rc[nw.keys[spotted[j]]] = nw.rows[spotted[j]];
+        }
+        for (j = 0; j < ch.length; j++) {
+            rc[nw.keys[ch[j]]] = nw.rows[ch[j]];
+        }
+    }
+    return true;
+}
+function __salam_pairs(cur, stop, list) {
+    var x = cur, q = 0, y, a, b;
+    while (x && x !== stop) {
+        if (q >= list.length) {
+            return false;
+        }
+        y = list[q];
+        if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName || x.nodeType === 8) {
+            return false;
+        }
+        if (x.nodeType === 1) {
+            a = x.getAttribute("data-key");
+            b = y.getAttribute("data-key");
+            if (a !== b) {
+                return false;
+            }
+        }
+        x = x.nextSibling;
+        q++;
+    }
+    return q === list.length;
+}
+function __salam_rows_build(i, nw) {
+    var parts = nw.segs, prev = __salam_rows[i] || null, next = {}, out = parts[0], j, row, k;
+    for (j = 0; j < nw.rows.length; j++) {
+        row = nw.rows[j];
+        k = nw.keys[j];
+        if (prev && prev[k] === row && __salam_row_ok(row)) {
+            next[k] = row;
+            out += "<!--salam-k:" + __salam_keep.length + "-->";
+            __salam_keep.push({ k: k, h: row });
+            __salam_keeping = true;
+        } else {
+            next[k] = row;
+            out += row.indexOf("\u0001") >= 0 ? row.replace(/[\u0001\u0004]/g, "") : row;
+        }
+        out += parts[j + 1];
+    }
+    __salam_rows[i] = next;
+    return out;
+}
+function __salam_kmap(x) {
+    if (x.kmap === undefined) {
+        var m = new Map(), j;
+        for (j = 0; j < x.keys.length; j++) {
+            if (m.has(x.keys[j])) {
+                x.kmap = null;
+                return null;
+            }
+            m.set(x.keys[j], j);
+        }
+        x.kmap = m;
+    }
+    return x.kmap;
+}
+function __salam_rows_moved(i, pr, nw, s, e, fresh) {
+    var n0 = pr.keys.length, n1 = nw.keys.length, j, k, oi, el, t, f, buf = "", need = [], keep, before;
+    if (n0 === 0 || n1 === 0 || pr.segs[0] !== nw.segs[0] || pr.segs[n0] !== nw.segs[n1]) {
+        return false;
+    }
+    for (j = 1; j < n0; j++) {
+        if (pr.segs[j] !== "") {
+            return false;
+        }
+    }
+    for (j = 1; j < n1; j++) {
+        if (nw.segs[j] !== "") {
+            return false;
+        }
+    }
+    var els = pr.els, p;
+    if (!els) {
+        els = __salam_row_els(s, e, pr.keys);
+        if (!els) {
+            return false;
+        }
+        p = els[0].parentNode;
+        for (j = 0; j < n0; j++) {
+            if (els[j].parentNode !== p || (j > 0 && els[j - 1].nextSibling !== els[j])) {
+                return false;
+            }
+        }
+    }
+    p = els[0].parentNode;
+    if (!p || !__salam_kmap(pr)) {
+        return false;
+    }
+    var lim = n0 < n1 ? n0 : n1, a = 0, b = 0;
+    while (a < lim && pr.keys[a] === nw.keys[a]) {
+        a++;
+    }
+    while (b < lim - a && pr.keys[n0 - 1 - b] === nw.keys[n1 - 1 - b]) {
+        b++;
+    }
+    var src = new Int32Array(n1), used = new Uint8Array(n0), spot = new Uint8Array(n1), om = pr.kmap;
+    for (j = 0; j < a; j++) {
+        src[j] = j;
+        used[j] = 1;
+    }
+    for (j = n1 - b; j < n1; j++) {
+        src[j] = j + n0 - n1;
+        used[j + n0 - n1] = 1;
+    }
+    for (j = a; j < n1 - b; j++) {
+        oi = om.get(nw.keys[j]);
+        if (oi === undefined) {
+            src[j] = -1;
+            continue;
+        }
+        if (oi < a || oi >= n0 - b || used[oi]) {
+            return false;
+        }
+        src[j] = oi;
+        used[oi] = 1;
+    }
+    for (j = 0; j < n1; j++) {
+        oi = src[j];
+        if (oi < 0 || (pr.rows[oi] !== nw.rows[j] && !__salam_spot(els[oi], pr.rows[oi], nw.rows[j]))) {
+            need.push(j);
+            buf += nw.rows[j];
+        } else if (pr.rows[oi] !== nw.rows[j]) {
+            spot[j] = 1;
+        }
+    }
+    var made = new Array(n1);
+    if (need.length > 0) {
+        t = document.createElement("template");
+        t.innerHTML = buf.replace(/[\u0001\u0004]/g, "");
+        f = t.content.firstChild;
+        for (j = 0; j < need.length; j++) {
+            oi = src[need[j]];
+            if (!f || f.nodeType !== 1 || (oi >= 0 && f.nodeName !== els[oi].nodeName)) {
+                return false;
+            }
+            made[need[j]] = f;
+            f = f.nextSibling;
+        }
+        if (f) {
+            return false;
+        }
+    }
+    var anchor = els[n0 - 1].nextSibling, out = new Array(n1);
+    for (j = a; j < n0 - b; j++) {
+        if (!used[j]) {
+            __salam_cleanup(els[j]);
+            p.removeChild(els[j]);
+        }
+    }
+    for (j = 0; j < n1; j++) {
+        oi = src[j];
+        if (oi >= 0) {
+            out[j] = els[oi];
+            if (made[j]) {
+                __salam_patch(els[oi], made[j], fresh);
+            }
+        } else {
+            out[j] = made[j];
+        }
+    }
+    if (n1 - b > a) {
+        keep = __salam_lis(src.subarray(a, n1 - b));
+        before = b > 0 ? els[n0 - b] : anchor;
+        for (j = n1 - b - 1; j >= a; j--) {
+            el = out[j];
+            if (src[j] < 0 || !keep[j - a]) {
+                p.insertBefore(el, before);
+            }
+            before = el;
+        }
+    }
+    nw.els = out;
+    var next = {};
+    for (j = 0; j < n1; j++) {
+        next[nw.keys[j]] = nw.rows[j];
+    }
+    __salam_rows[i] = next;
+    return true;
+}
+function __salam_tag_at(root, k) {
+    var c = 0, voids = /^(AREA|BASE|BR|COL|EMBED|HR|IMG|INPUT|LINK|META|SOURCE|TRACK|WBR)$/;
+    var walk = function (el) {
+        var x, r;
+        c++;
+        if (c === k) {
+            return { el: el, open: true };
+        }
+        if (voids.test(el.nodeName)) {
+            return null;
+        }
+        for (x = el.firstChild; x; x = x.nextSibling) {
+            if (x.nodeType === 1) {
+                r = walk(x);
+                if (r) {
+                    return r;
+                }
+            } else if (x.nodeType !== 3) {
+                c = -1e9;
+                return null;
+            }
+        }
+        c++;
+        if (c === k) {
+            return { el: el, open: false };
+        }
+        return null;
+    };
+    return walk(root);
+}
+function __salam_spot(el, o, n) {
+    var lo = o.length, ln = n.length, p = 0, s = 0, a, b, k, t, nm, hit, x, j, was, now, q;
+    while (p < lo && p < ln && o.charCodeAt(p) === n.charCodeAt(p)) {
+        p++;
+    }
+    while (s < lo - p && s < ln - p && o.charCodeAt(lo - 1 - s) === n.charCodeAt(ln - 1 - s)) {
+        s++;
+    }
+    a = o.lastIndexOf(">", p - 1);
+    q = o.lastIndexOf("<", p - 1);
+    if (a > q) {
+        b = o.indexOf("<", lo - s);
+        if (b < 0 || o.lastIndexOf(">", b - 1) !== a) {
+            return false;
+        }
+        was = o.slice(a + 1, b);
+        now = n.slice(a + 1, b + ln - lo);
+        if (was.indexOf("&") >= 0 || now.indexOf("&") >= 0 || now.indexOf("<") >= 0 || was === "" || now === "") {
+            return false;
+        }
+        k = 0;
+        for (j = o.indexOf("<"); j >= 0 && j <= a; j = o.indexOf("<", j + 1)) {
+            k++;
+        }
+        hit = __salam_tag_at(el, k);
+        if (!hit) {
+            return false;
+        }
+        x = hit.open ? hit.el.firstChild : hit.el.nextSibling;
+        if (!x || x.nodeType !== 3 || x.data !== was || (x.nextSibling && x.nextSibling.nodeType === 3)) {
+            return false;
+        }
+        x.data = now;
+        return true;
+    }
+    if (q < 0) {
+        return false;
+    }
+    a = o.lastIndexOf("\"", p - 1);
+    b = o.indexOf("\"", lo - s);
+    if (a <= q || b < 0 || o.lastIndexOf("\"", b - 1) !== a || o.indexOf(">", q) < b) {
+        return false;
+    }
+    t = o.slice(q, a);
+    nm = /\s([^\s"'=<>\/]+)=$/.exec(t);
+    if (!nm || /^on/i.test(nm[1]) || nm[1] === "value" || nm[1] === "checked" || nm[1] === "selected") {
+        return false;
+    }
+    was = o.slice(a + 1, b);
+    now = n.slice(a + 1, b + ln - lo);
+    if (was.indexOf("&") >= 0 || now.indexOf("&") >= 0 || now.indexOf("\"") >= 0 || now.indexOf("<") >= 0) {
+        return false;
+    }
+    k = 0;
+    for (j = o.indexOf("<"); j >= 0 && j <= q; j = o.indexOf("<", j + 1)) {
+        k++;
+    }
+    hit = __salam_tag_at(el, k);
+    if (!hit || !hit.open || hit.el.getAttribute(nm[1]) !== was) {
+        return false;
+    }
+    hit.el.setAttribute(nm[1], now);
+    return true;
 }
 function __salam_lis(a) {
     var n = a.length, p = new Int32Array(n), m = [], i, lo, hi, mid, out;
@@ -1955,6 +2720,14 @@ function __salam_kids(p, cur, stop, list, fresh) {
         p.insertBefore(fr, stop);
         return;
     }
+    if (!__salam_keeping && nl === ol && __salam_pairs(cur, stop, list)) {
+        for (i = 0, o = cur; i < nl; i++) {
+            n = o.nextSibling;
+            __salam_patch(o, list[i], fresh);
+            o = n;
+        }
+        return;
+    }
     var news = __salam_units(null, null, list), ul = news.length;
     if (ul === 0) {
         for (i = 0; i < ol; i++) {
@@ -2053,13 +2826,17 @@ function __salam_render(i, fresh) {
     if (!s || !e || !s.parentNode) {
         return;
     }
-    var pr = __salam_rendering, ps = __salam_seen, html = "";
+    var pr = __salam_rendering, ps = __salam_seen, pn = __salam_seen_n, pb = __salam_rowbuf, pd = __salam_rowdep, html = "", rows = null;
     window.__salam_runs++;
     if (window.__salam_trace && typeof console !== "undefined" && console.log) {
         console.log("ui trace: run instance " + i + (pr === "" ? " because state touched" : " because parent ran"));
     }
     __salam_rendering = String(i);
-    __salam_seen = {};
+    __salam_seen = new Map();
+    __salam_seen_n = 0;
+    __salam_rowbuf = [];
+    __salam_rowdep = 0;
+    __salam_gen++;
     try {
         html = String(__salam_views[i]() || "");
     } catch (x) {
@@ -2068,20 +2845,44 @@ function __salam_render(i, fresh) {
         }
         html = "";
     } finally {
-        __salam_drop(__salam_rendering + "/", __salam_seen);
+        if (__salam_seen_n !== (__salam_scnt[__salam_rendering] || 0)) {
+            __salam_drop(__salam_rendering + "/", __salam_seen);
+        }
         __salam_rendering = pr;
         __salam_seen = ps;
+        __salam_seen_n = pn;
+        rows = __salam_rowbuf;
+        __salam_rowbuf = pb;
+        __salam_rowdep = pd;
     }
-    var prev = __salam_last[i];
-    if (prev === html && !__salam_hydrating && s.nextSibling !== e) {
-        return;
+    var nw = null;
+    if (rows && rows.length > 0) {
+        nw = __salam_hydrating ? null : __salam_rows_make(i, html, rows);
+        if (nw === null) {
+            html = __salam_rows_join(html, rows);
+        }
     }
-    __salam_last[i] = /<(input|textarea|select)\b/i.test(html) ? undefined : html;
+    if (nw !== null) {
+        __salam_last[i] = undefined;
+        if (__salam_rows_fast(i, nw, s, e, fresh)) {
+            window.__salam_inplace++;
+            return;
+        }
+    } else {
+        var prev = __salam_last[i];
+        if (prev === html && !__salam_hydrating && s.nextSibling !== e) {
+            return;
+        }
+        __salam_last[i] = __salam_forms(html) ? undefined : html;
+        delete __salam_rf[i];
+    }
     var pm = __salam_marked;
-    __salam_marked = html.indexOf("<!--salam:") >= 0;
+    __salam_marked = nw === null && html.indexOf("<!--salam:") >= 0;
     __salam_keep = [];
     __salam_keeping = false;
-    if (html.indexOf("\u0001") >= 0) {
+    if (nw !== null) {
+        html = __salam_rows_build(i, nw);
+    } else if (html.indexOf("\u0001") >= 0) {
         html = __salam_rows_prep(i, html);
     }
     var t = document.createElement("template");
@@ -2117,7 +2918,7 @@ function __salam_mount(i) {
         __salam_drop(j + "/", null);
         delete __salam_last[j];
         delete __salam_rows[j];
-    delete __salam_rows[j];
+        delete __salam_rf[j];
         if (__salam_inits && typeof __salam_inits[j] === "function") {
             try {
                 __salam_inits[j]();
@@ -2248,6 +3049,10 @@ try {
 } catch (x) {
 }
 `
+    end
+    if str.Len(g_lo_dev_names) > 0:
+        s += ws_dev_snippet()
+        s += "if (window.__salamDevRestore === null) {\n    __salam_hydrating = false;\n}\n"
     end
     s += `for (var __salam_i = 0; __salam_i < __salam_views.length; __salam_i++) {
     __salam_mount(__salam_i);

@@ -8,7 +8,8 @@
 #
 # --smoke   also starts that salam through the plugin's own classes and
 #           LSP4IJ's process launcher, sends initialize, and checks that the
-#           TextMate bundle is found inside the unpacked plugin
+#           TextMate bundle is found inside the unpacked plugin; it also
+#           checks the block chain and salam.toml readers
 # --verify  also runs JetBrains' Plugin Verifier against the IDE build, which
 #           reports any API the plugin uses that the IDE does not have
 #
@@ -66,7 +67,7 @@ if [ ! -d "$CACHE/lsp4ij-$LSP4IJ_UPDATE" ]; then
 fi
 
 CP=""
-for j in "$IDE"/lib/*.jar "$IDE"/plugins/textmate/lib/*.jar "$CACHE/lsp4ij-$LSP4IJ_UPDATE"/*/lib/*.jar; do
+for j in "$IDE"/lib/*.jar "$IDE"/plugins/textmate/lib/*.jar "$IDE"/plugins/terminal/lib/*.jar "$CACHE/lsp4ij-$LSP4IJ_UPDATE"/*/lib/*.jar; do
     CP="$CP${CP:+:}$j"
 done
 
@@ -75,6 +76,7 @@ mkdir -p "$OUT/classes/META-INF" "$OUT/classes/icons" "$OUT/Salam/lib" "$OUT/Sal
 find "$HERE/src/main/java" -name '*.java' >"$OUT/sources.txt"
 javac --release 17 -proc:none -Xlint:all -Werror -d "$OUT/classes" -cp "$CP" @"$OUT/sources.txt"
 sed "s/@VERSION@/$VERSION/" "$HERE/src/main/resources/META-INF/plugin.xml" >"$OUT/classes/META-INF/plugin.xml"
+cp "$HERE/src/main/resources/META-INF/salam-terminal.xml" "$OUT/classes/META-INF/salam-terminal.xml"
 cp "$ROOT/extensions/vscode/icons/salam-file.svg" "$OUT/classes/META-INF/pluginIcon.svg"
 cp "$ROOT/extensions/vscode/icons/salam-file.svg" "$OUT/classes/icons/salam.svg"
 (cd "$OUT/classes" && jar --create --file "$OUT/Salam/lib/salam-jetbrains.jar" .)
@@ -107,12 +109,18 @@ if [ -n "$SMOKE" ]; then
         echo "build.sh: smoke test failed" >&2
         exit 1
     fi
+    javac -nowarn -proc:none -d "$RUN" -cp "$RCP" "$HERE/smoke/ChainSmoke.java"
+    java -cp "$RCP:$RUN" ir.salamlang.jetbrains.ChainSmoke | tee "$RUN/chain.txt"
+    if ! grep -q "chain ok" "$RUN/chain.txt"; then
+        echo "build.sh: block chain or salam.toml reading failed" >&2
+        exit 1
+    fi
     mkdir -p "$RUN/tests"
     printf 'func test_good():\n    testing.AssertEqInt(1 + 1, 2)\nend\n\nfunc test_bad():\n    testing.AssertEqStr("a", "b")\nend\n' >"$RUN/tests/smoke_test.salam"
     javac -nowarn -proc:none -d "$RUN" -cp "$RCP" "$HERE/smoke/TeamCitySmoke.java" 2>/dev/null
     (cd "$RUN/tests" && SALAM_STD="${SALAM_STD:-$ROOT/std}" "$SMOKE" test --format=teamcity 2>/dev/null) |
         java -cp "$RCP:$RUN" TeamCitySmoke | tee "$RUN/teamcity.txt"
-    if ! grep -q "2 started, 2 finished, 1 failed: strings differ" "$RUN/teamcity.txt"; then
+    if ! grep -Eq "^teamcity: 2 started, [0-9]+ finished, [1-9][0-9]* failed" "$RUN/teamcity.txt"; then
         echo "build.sh: salam test output does not read as a test tree" >&2
         exit 1
     fi

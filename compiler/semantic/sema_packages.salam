@@ -148,6 +148,8 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     save_prog := s.program
     save_pending := s.pending
     save_in_pkg := s.in_pkg
+    save_skip_bodies := s.skip_bodies
+    save_lazy_cur := s.lazy_cur
     save_gen_pkg := s.gen_pkg
     save_self_type := s.self_type
     save_cur_func := s.cur_func
@@ -187,6 +189,17 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     s.lam = Vector {} as Vector<LambdaCtx>
     s.match_yield_collect = Vector {} as Vector<MatchYield>
     s.in_pkg = true
+    s.skip_bodies = s.skip_std and pkg_in_stdlib(path)
+    if s.skip_bodies:
+        lg.Log(s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "deferring body checks of std package " + path)
+        s.lazy_cur = s.lazy_global.Len()
+        s.lazy_global.Push(pkgscope)
+        s.lazy_prog.Push(prog)
+        s.lazy_dir.Push(dir_of(path))
+        s.lazy_pkg.Push(str.Len(prog_name) > 0 ? prog_name : "main")
+        s.lazy_lang.Push(lp.Code(pack))
+        s.lazy_file.Push(path)
+    end
     s.global = pkgscope
     s.cur = pkgscope
     s.dir = dir_of(path)
@@ -209,6 +222,8 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     end
     _lp0 := s.loading.Pop()
     s.in_pkg = save_in_pkg
+    s.skip_bodies = save_skip_bodies
+    s.lazy_cur = save_lazy_cur
     s.global = save_global
     s.cur = save_cur
     s.dir = save_dir
@@ -251,6 +266,212 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     s.pkg_cache_paths.Push(path)
     s.pkg_cache_syms.Push(pk)
     ret pk
+end
+
+func lazy_demand(s &: Sema, decl: int):
+    if not s.skip_std or decl == 0 or s.lazy_wanted.Has(decl):
+        ret
+    end
+    s.lazy_wanted.Put(decl, true)
+    s.lazy_queue.Push(decl)
+end
+
+func lazy_drain(s &: Sema, a &: at.Ast):
+    n0 := s.own_fns.Len()
+    mut kpos := Vector {} as Vector<int>
+    mut ke := Vector {} as Vector<int>
+    defer kpos.Free()
+    defer ke.Free()
+    mut qi := 0
+    until qi < s.lazy_queue.Len():
+        decl := s.lazy_queue.Get(qi)
+        qi++
+        if not s.lazy_idx.Has(decl):
+            continue
+        end
+        e := s.lazy_idx.Get(decl)
+        if sig_at(s, s.lazy_sig.Get(e)).checked:
+            continue
+        end
+        before := s.own_fns.Len()
+        lazy_check_entry(s, a, e)
+        mut pos := s.lazy_ownpos.Get(e)
+        if pos < s.own_done:
+            pos = s.own_done
+        end
+        repeat s.own_fns.Len() - before:
+            kpos.Push(pos)
+            ke.Push(e)
+        end
+    end
+    if s.own_fns.Len() > n0:
+        lazy_reorder_own(s, n0, kpos, ke)
+    end
+end
+
+func lazy_key_less(kpos: Vector<int>, ke: Vector<int>, x: int, y: int): bool:
+    if kpos.Get(x) != kpos.Get(y):
+        ret kpos.Get(x) < kpos.Get(y)
+    end
+    if ke.Get(x) != ke.Get(y):
+        ret ke.Get(x) < ke.Get(y)
+    end
+    ret x < y
+end
+
+func lazy_reorder_own(s &: Sema, n0: int, kpos: Vector<int>, ke: Vector<int>):
+    m := s.own_fns.Len() - n0
+    mut order := Vector {} as Vector<int>
+    defer order.Free()
+    repeat m in i:
+        order.Push(i)
+    end
+    mut i := 1
+    until i < m:
+        cur := order.Get(i)
+        mut j := i - 1
+        until j >= 0 and lazy_key_less(kpos, ke, cur, order.Get(j)):
+            order.Set(j + 1, order.Get(j))
+            j--
+        end
+        order.Set(j + 1, cur)
+        i++
+    end
+    mut nf := Vector {} as Vector<int>
+    mut ng := Vector {} as Vector<int>
+    mut nfile := Vector {} as Vector<str>
+    mut nder := Vector {} as Vector<bool>
+    mut t := 0
+    repeat n0 + 1 in p:
+        until t < m and kpos.Get(order.Get(t)) <= p:
+            src_i := n0 + order.Get(t)
+            nf.Push(s.own_fns.Get(src_i))
+            ng.Push(s.own_glob.Get(src_i))
+            nfile.Push(s.own_file.Get(src_i))
+            nder.Push(s.own_derive.Get(src_i))
+            t++
+        end
+        if p < n0:
+            nf.Push(s.own_fns.Get(p))
+            ng.Push(s.own_glob.Get(p))
+            nfile.Push(s.own_file.Get(p))
+            nder.Push(s.own_derive.Get(p))
+        end
+    end
+    s.own_fns.Free()
+    s.own_glob.Free()
+    s.own_file.Free()
+    s.own_derive.Free()
+    s.own_fns = nf
+    s.own_glob = ng
+    s.own_file = nfile
+    s.own_derive = nder
+    repeat s.own_fns.Len() in k:
+        s.own_idx.Put(s.own_fns.Get(k), k)
+    end
+end
+
+func lazy_check_entry(s &: Sema, a &: at.Ast, e: int):
+    ctx := s.lazy_ctx.Get(e)
+    decl := s.lazy_decl.Get(e)
+    save_global := s.global
+    save_cur := s.cur
+    save_dir := s.dir
+    save_pkg := s.pkg
+    save_lang := s.lang
+    save_file := s.file
+    save_prog := s.program
+    save_pending := s.pending
+    save_in_pkg := s.in_pkg
+    save_skip_bodies := s.skip_bodies
+    save_gen_pkg := s.gen_pkg
+    save_self_type := s.self_type
+    save_static_owner := s.static_owner
+    save_cur_func := s.cur_func
+    save_expected := s.expected
+    save_loop_depth := s.loop_depth
+    save_switch_depth := s.switch_depth
+    save_each_n := s.each_n
+    save_arm_depth := s.match_arm_depth
+    save_yield_exp := s.match_yield_expected
+    save_yield_act := s.match_yield_active
+    save_gen_inst := s.in_generic_inst
+    save_in_derive := s.in_derive
+    save_requal := s.requal
+    save_lam := s.lam
+    save_yield := s.match_yield_collect
+    save_pre := s.pre_stmts
+    save_pre_ok := s.pre_ok
+    save_try_marks := s.try_marks
+    save_try_ctx := s.try_ctx
+    s.pre_stmts = Vector {} as Vector<int>
+    s.pre_ok = false
+    s.try_marks = 0
+    s.try_ctx = Vector {} as Vector<TryCtx>
+    s.gen_pkg = 0
+    s.self_type = TYPE_NONE
+    s.static_owner = 0
+    s.cur_func = 0
+    s.expected = TYPE_NONE
+    s.loop_depth = 0
+    s.switch_depth = 0
+    s.each_n = 0
+    s.match_arm_depth = 0
+    s.match_yield_expected = TYPE_NONE
+    s.match_yield_active = false
+    s.in_generic_inst = false
+    s.in_derive = false
+    s.requal = false
+    s.lam = Vector {} as Vector<LambdaCtx>
+    s.match_yield_collect = Vector {} as Vector<MatchYield>
+    s.in_pkg = true
+    s.skip_bodies = false
+    s.global = s.lazy_global.Get(ctx)
+    s.cur = s.global
+    s.dir = s.lazy_dir.Get(ctx)
+    s.pkg = s.lazy_pkg.Get(ctx)
+    s.lang = s.lazy_lang.Get(ctx)
+    s.file = s.lazy_file.Get(ctx)
+    s.program = s.lazy_prog.Get(ctx)
+    s.pending = Vector {} as Vector<int>
+    _sf := sema_use_decl_file(s, a, decl)
+    check_function(s, a, decl, s.lazy_owner.Get(e), s.lazy_sig.Get(e))
+    sema_check_pending(s, a)
+    s.in_pkg = save_in_pkg
+    s.skip_bodies = save_skip_bodies
+    s.global = save_global
+    s.cur = save_cur
+    s.dir = save_dir
+    s.pkg = save_pkg
+    s.lang = save_lang
+    s.file = save_file
+    s.program = save_prog
+    s.pending.Free()
+    s.pending = save_pending
+    s.lam.Free()
+    s.lam = save_lam
+    s.match_yield_collect.Free()
+    s.match_yield_collect = save_yield
+    s.pre_stmts.Free()
+    s.pre_stmts = save_pre
+    s.pre_ok = save_pre_ok
+    s.try_marks = save_try_marks
+    s.try_ctx.Free()
+    s.try_ctx = save_try_ctx
+    s.gen_pkg = save_gen_pkg
+    s.self_type = save_self_type
+    s.static_owner = save_static_owner
+    s.cur_func = save_cur_func
+    s.expected = save_expected
+    s.loop_depth = save_loop_depth
+    s.switch_depth = save_switch_depth
+    s.each_n = save_each_n
+    s.match_arm_depth = save_arm_depth
+    s.match_yield_expected = save_yield_exp
+    s.match_yield_active = save_yield_act
+    s.in_generic_inst = save_gen_inst
+    s.in_derive = save_in_derive
+    s.requal = save_requal
 end
 
 func check_package_name_clash(s &: Sema, a &: at.Ast, path: str, name: str, imp: int):

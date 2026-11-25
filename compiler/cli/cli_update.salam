@@ -2,9 +2,13 @@ package cli
 
 import io
 import os
+import env
 import str
 import filepath
 import mem
+import crypto
+import compress
+import archive
 import net.http
 
 include pth "../sal_path.salam"
@@ -30,6 +34,8 @@ const UPD_AGENT := "SalamUpdate/1.0"
 const STD_TARBALL := "https://codeload.github.com/SalamLang/Salam/tar.gz/"
 const STD_COMMITS := "https://api.github.com/repos/SalamLang/Salam/commits/"
 const STD_RECEIPT := ".salam-std"
+const UPD_CDN := "https://cdn.salamlang.ir"
+const UPD_CDN_MS := 8000
 
 if SALAM_OS_WINDOWS:
     func upd_real(p: str): str:
@@ -135,7 +141,51 @@ func upd_valid_version(v: str): bool:
     ret dots == 2
 end
 
+func upd_cdn(): str:
+    off := os.Env("SALAM_NO_CDN")
+    if str.Len(off) > 0 and not str.Equals(off, "0"):
+        ret ""
+    end
+    mut base := UPD_CDN
+    if env.Has("SALAM_CDN"):
+        base = str.Trim(os.Env("SALAM_CDN"))
+    end
+    until str.EndsWith(base, "/"):
+        base = str.Substr(base, 0, str.Len(base) - 1)
+    end
+    local := str.StartsWith(base, "http://127.0.0.1") or str.StartsWith(base, "http://localhost")
+    if not str.StartsWith(base, "https://") and not local:
+        ret ""
+    end
+    ret base
+end
+
+func upd_cdn_get(url: str, why &: str): str:
+    mut opts := http.RequestOptions {}
+    opts.timeout_ms = UPD_CDN_MS
+    opts.idle_ms = UPD_CDN_MS
+    opts.max_body = 1048576
+    r := http.Do("GET", url, upd_headers(), "", opts)
+    if r.status == 200:
+        ret r.body
+    end
+    if str.Len(r.err) > 0:
+        why = r.err
+    else:
+        why = co.Format1(i18.Tr("it answered HTTP %s"), co.ArgStr(str.FromInt(r.status as i64)))
+    end
+    ret ""
+end
+
 func upd_release_missing(version: str): bool:
+    base := upd_cdn()
+    if str.Len(base) > 0:
+        mut why := ""
+        sums := upd_cdn_get(base + "/releases/v" + version + "/SHA256SUMS", why)
+        if str.Len(sums) > 0:
+            ret false
+        end
+    end
     r := http.GetWith(UPD_RELEASES + "/tag/v" + version, upd_headers())
     ret r.status == 404
 end
@@ -299,7 +349,24 @@ func upd_latest_curl(): str:
     ret upd_tag_after(res.out, "/releases/tag/")
 end
 
+func upd_latest_cdn(): str:
+    base := upd_cdn()
+    if str.Len(base) == 0:
+        ret ""
+    end
+    mut why := ""
+    tag := str.Trim(upd_cdn_get(base + "/releases/latest", why))
+    if upd_is_compiler_tag(tag):
+        ret tag
+    end
+    ret ""
+end
+
 func upd_latest_tag(why &: str): str:
+    mirrored := upd_latest_cdn()
+    if str.Len(mirrored) > 0:
+        ret mirrored
+    end
     tag := upd_latest_native(why)
     if str.Len(tag) > 0:
         ret tag
@@ -451,7 +518,16 @@ func upd_get_installer(tmp: str, why &: str): str:
     dest := pth.PathJoin(tmp, upd_script_name())
     upd_info(i18.Tr("installer"), url)
     if not upd_fetch(url, dest, why):
-        ret ""
+        mirror := upd_cdn()
+        if str.Len(local) > 0 or str.Len(mirror) == 0:
+            ret ""
+        end
+        murl := mirror + "/" + upd_script_name()
+        upd_info(i18.Tr("mirror"), murl)
+        mut mwhy := ""
+        if not upd_fetch(murl, dest, mwhy):
+            ret ""
+        end
     end
     ret dest
 end
@@ -547,7 +623,7 @@ func update_cmd(opt &: dr.Dr): int:
         mut why := ""
         tag := upd_latest_tag(why)
         if str.Len(tag) == 0:
-            upd_err(i18.Tr("could not ask GitHub for the latest release"))
+            upd_err(i18.Tr("could not ask the mirror or GitHub for the latest release"))
             if str.Len(why) > 0:
                 io.EPrintln("  " + why)
             end
@@ -685,6 +761,36 @@ func std_is_sha(s: str): bool:
     ret true
 end
 
+func std_is_sha256(s: str): bool:
+    if str.Len(s) != 64:
+        ret false
+    end
+    repeat 64 in i:
+        c := co.ByteAt(s, i)
+        if not str.IsAsciiDigit(c) and not (c >= 97 and c <= 102):
+            ret false
+        end
+    end
+    ret true
+end
+
+func std_file_sha256(path: str): str:
+    mut ok := false
+    mut buf := archive.ReadBinaryFile(path, ok)
+    digest := mem.Allocate(32 as u64)
+    defer mem.Free(digest)
+    crypto.Sha256Bytes(buf.data, buf.len, digest)
+    compress.BufFree(buf)
+    digits := "0123456789abcdef"
+    mut out := ""
+    bp := digest as u8*
+    repeat 32 in i:
+        b := bp[i] as int
+        out += str.Substr(digits, b / 16, 1) + str.Substr(digits, b % 16, 1)
+    end
+    ret out
+end
+
 func std_top_dir(listing: str): str:
     mut first := listing
     nl := str.Find(listing, "\n")
@@ -726,19 +832,62 @@ func std_remote_commit(ref: str, why &: str): str:
     ret ""
 end
 
-func std_download(url: str, dest: str): bool:
+func std_download_with(url: str, dest: str, connect: int, total: int): bool:
     mut tool := ""
     mut cmd := ""
     if sm.FindPathTool("curl", tool):
-        cmd = shell_arg(tool) + " -fsSL --connect-timeout 20 --max-time 900 -A " +
-            shell_arg(UPD_AGENT) + " -o " + shell_arg(dest) + " " + shell_arg(url)
+        cmd = shell_arg(tool) + " -fsSL --connect-timeout " + str.FromInt(connect as i64) +
+            " --max-time " + str.FromInt(total as i64) + " -A " + shell_arg(UPD_AGENT) + " -o " +
+            shell_arg(dest) + " " + shell_arg(url)
     else sm.FindPathTool("wget", tool):
-        cmd = shell_arg(tool) + " -q -T 120 -U " + shell_arg(UPD_AGENT) + " -O " + shell_arg(dest) +
-            " " + shell_arg(url)
+        cmd = shell_arg(tool) + " -q -T " + str.FromInt((connect * 6) as i64) + " -U " +
+            shell_arg(UPD_AGENT) + " -O " + shell_arg(dest) + " " + shell_arg(url)
     else:
         ret false
     end
     ret os.Run(upd_shell(cmd)) == 0 and os.Exists(dest)
+end
+
+func std_download(url: str, dest: str): bool:
+    ret std_download_with(url, dest, 20, 900)
+end
+
+func std_download_mirror(base: str, commit: str, dest: str, why &: str): bool:
+    url := base + "/std/" + commit + ".tar.gz"
+    mut sumwhy := ""
+    sumtext := str.Trim(upd_cdn_get(url + ".sha256", sumwhy))
+    if str.Len(sumtext) == 0:
+        why = sumwhy
+        ret false
+    end
+    sp := str.Find(sumtext, " ")
+    want := str.Lower(sp >= 0 ? str.Substr(sumtext, 0, sp) : sumtext)
+    if not std_is_sha256(want):
+        why = i18.Tr("it published no checksum")
+        ret false
+    end
+    if not std_download_with(url, dest, 8, 120):
+        why = i18.Tr("the download failed")
+        ret false
+    end
+    if not str.Equals(std_file_sha256(dest), want):
+        why = i18.Tr("the copy failed its sha256 check")
+        ret false
+    end
+    ret true
+end
+
+func std_cdn_commit(ref: str): str:
+    base := upd_cdn()
+    if str.Len(base) == 0:
+        ret ""
+    end
+    mut why := ""
+    sha := str.Trim(upd_cdn_get(base + "/std/" + ref + ".commit", why))
+    if std_is_sha(sha):
+        ret sha
+    end
+    ret ""
 end
 
 func std_smoke(exe: str, root: str, tmp: str): bool:
@@ -806,9 +955,12 @@ func std_update_cmd(opt &: dr.Dr): int:
     end
 
     mut why := ""
-    commit := std_remote_commit(ref, why)
+    mut commit := std_cdn_commit(ref)
     if str.Len(commit) == 0:
-        upd_err(co.Format1(i18.Tr("could not look up '%s' on GitHub"), co.ArgStr(ref)))
+        commit = std_remote_commit(ref, why)
+    end
+    if str.Len(commit) == 0:
+        upd_err(co.Format1(i18.Tr("could not look up '%s' on the mirror or GitHub"), co.ArgStr(ref)))
         if str.Len(why) > 0:
             io.EPrintln("  " + why)
         end
@@ -848,9 +1000,25 @@ func std_install(opt &: dr.Dr, exe: str, root: str, tmp: str, ref: str, commit: 
     stddir := pth.PathJoin(root, "std")
     archive := pth.PathJoin(tmp, "std.tar.gz")
     println co.Format1(i18.Tr("downloading the standard library at %s"), co.ArgStr(std_short(commit)))
-    if not std_download(STD_TARBALL + commit, archive):
+    mut got := false
+    base := upd_cdn()
+    if str.Len(base) > 0:
+        upd_info(i18.Tr("mirror"), base)
+        mut mwhy := ""
+        if std_download_mirror(base, commit, archive, mwhy):
+            got = true
+        else:
+            println co.Format2(
+                i18.Tr("the mirror %s did not work (%s); trying GitHub instead"),
+                co.ArgStr(base),
+                co.ArgStr(mwhy)
+            )
+            _rm_mirror := os.Remove(archive)
+        end
+    end
+    if not got and not std_download(STD_TARBALL + commit, archive):
         upd_err(i18.Tr("could not download the standard library"))
-        io.EPrintln(i18.Tr("  it needs curl or wget, and a connection to codeload.github.com"))
+        io.EPrintln(i18.Tr("  it needs curl or wget, and a connection to cdn.salamlang.ir or codeload.github.com"))
         ret 1
     end
     listing := os.RunCapture(upd_shell("tar -tzf " + shell_arg(archive)))

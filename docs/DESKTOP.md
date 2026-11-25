@@ -110,7 +110,8 @@ starts without them.
 
 ## Packaging
 
-Add an `[app]` table to `salam.toml`:
+Add an `[app]` table to `salam.toml` (`salam init` writes one for a dsl project; every key
+of the project file is in [PROJECT_FILE.md](PROJECT_FILE.md)):
 
 ```toml
 [app]
@@ -121,9 +122,20 @@ main = "main.salam"
 assets = "www"
 icon = "icon.png"
 description = "Take notes"
-publisher = "Example"
+author = "Example"
 category = "Utility"
+
+[windows]
+company = "Example Ltd"
+copyright = "2026 Example Ltd"
 ```
+
+`author` (or the older `publisher`) is the maintainer of the `.deb` and the company in the
+Windows version info. `[windows]`, `[macos]` and `[linux]` repeat any `[app]` key for that
+system only, and `[windows]` also takes `subsystem`, `icon`, `manifest`, `product` and
+`copyright`. A native Windows build with no bundle (`salam build --platform=windows`) reads
+the same `[windows]` table and falls back to `[app]` for the version, product name,
+description, company and copyright.
 
 ```sh
 salam bundle

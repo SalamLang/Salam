@@ -39,6 +39,20 @@
 #  define SALAM_RT_ARM64 0
 #endif
 
+#if defined(__riscv) && __riscv_xlen == 64
+#  define SALAM_RT_RISCV64 1
+#else
+#  define SALAM_RT_RISCV64 0
+#endif
+
+#ifndef SALAM_RT_UART_BASE
+#  define SALAM_RT_UART_BASE 0x10000000u
+#endif
+
+#ifndef SALAM_RT_TEST_BASE
+#  define SALAM_RT_TEST_BASE 0x100000u
+#endif
+
 static inline void rt_outb(uint16_t port, uint8_t value)
 {
 #if SALAM_RT_X86
@@ -66,7 +80,7 @@ static void rt_halt_forever(void)
     for (;;) {
 #if SALAM_RT_X86
         __asm__ volatile("cli; hlt");
-#elif SALAM_RT_ARM64
+#elif SALAM_RT_ARM64 || SALAM_RT_RISCV64
         __asm__ volatile("wfi");
 #endif
     }
@@ -105,6 +119,16 @@ static void arm64_serial_putc(char c)
 }
 #endif
 
+#if SALAM_RT_RISCV64
+static void riscv_serial_putc(char c)
+{
+    volatile uint8_t *uart = (volatile uint8_t *)(uintptr_t)SALAM_RT_UART_BASE;
+    while ((uart[5] & 0x20) == 0) {
+    }
+    uart[0] = (uint8_t)c;
+}
+#endif
+
 static int serial_ready = 0;
 
 static void serial_init(void)
@@ -132,6 +156,8 @@ static void serial_putc(char c)
     rt_outb(SALAM_RT_SERIAL_PORT, (uint8_t)c);
 #elif SALAM_RT_ARM64
     arm64_serial_putc(c);
+#elif SALAM_RT_RISCV64
+    riscv_serial_putc(c);
 #else
     (void)c;
 #endif
@@ -182,6 +208,10 @@ static void vga_scroll(void)
 
 static void vga_putc(char c)
 {
+    if (!SALAM_RT_X86) {
+        (void)c;
+        return;
+    }
     vga_init();
     if (c == '\n') {
         vga_col = 0;
@@ -228,6 +258,13 @@ SALAM_WEAK void salam_rt_write(int32_t fd, void *buf, uint64_t n)
 SALAM_WEAK void salam_rt_write_at(int32_t row, int32_t col, const char *text,
                                   uint8_t color)
 {
+    if (!SALAM_RT_X86) {
+        (void)row;
+        (void)col;
+        (void)text;
+        (void)color;
+        return;
+    }
     vga_init();
     if (row < 0 || row >= VGA_ROWS || col < 0 || col >= VGA_COLS || !text) {
         return;
@@ -242,6 +279,9 @@ SALAM_WEAK void salam_rt_write_at(int32_t row, int32_t col, const char *text,
 
 SALAM_WEAK void salam_rt_clear(void)
 {
+    if (!SALAM_RT_X86) {
+        return;
+    }
     vga_ready = 0;
     vga_row = 0;
     vga_col = 0;
@@ -262,7 +302,12 @@ SALAM_WEAK void salam_rt_serial_write(const char *text)
 
 SALAM_WEAK void salam_rt_exit_qemu(int code)
 {
+#if SALAM_RT_RISCV64
+    volatile uint32_t *test = (volatile uint32_t *)(uintptr_t)SALAM_RT_TEST_BASE;
+    *test = code == 0 ? 0x5555u : (((uint32_t)code << 16) | 0x3333u);
+#else
     rt_outb(0xF4, (uint8_t)code);
+#endif
     rt_halt_forever();
 }
 

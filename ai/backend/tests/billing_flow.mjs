@@ -66,10 +66,10 @@ check("checkout needs a signed in account", (await api("POST", "/billing/checkou
 
 console.log("paying with zarinpal");
 const start = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "zarinpal" });
-check("checkout returns the gateway page and the amount", start.res.status === 200 && start.json.url.includes("/pg/StartPay/") && start.json.amount === 1950000, start.json);
+check("checkout returns the gateway page and the amount", start.res.status === 200 && start.json.url.includes("/pg/StartPay/") && start.json.amount === 3000000, start.json);
 const authority = tokenOf(start.json.url);
 const pendingList = await api("GET", "/billing/payments", buyer);
-check("the payment is written down as pending", pendingList.json.payments[0]?.status === "pending" && pendingList.json.payments[0].gateway === "zarinpal" && pendingList.json.payments[0].amount === 1950000, pendingList.json.payments[0]);
+check("the payment is written down as pending", pendingList.json.payments[0]?.status === "pending" && pendingList.json.payments[0].gateway === "zarinpal" && pendingList.json.payments[0].amount === 3000000, pendingList.json.payments[0]);
 const done = await back("zarinpal", `Authority=${authority}&Status=OK`);
 check("the gateway return sends the browser back to the app", done.status === 302 && (done.headers.get("location") ?? "").includes("payment=ok"), done.headers.get("location"));
 const afterPay = await api("GET", "/billing/subscription", buyer);
@@ -102,7 +102,7 @@ check("the zibal payment moves the account to the bigger plan", ziBack.status ==
 console.log("paying with CityDesign Pay");
 const GW = process.env.GATEWAY ?? "http://127.0.0.1:18098";
 const cd = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "citydesign" });
-check("checkout returns the CityDesign Pay page", cd.res.status === 200 && cd.json.url.includes("/pay/") && cd.json.amount === 1950000, cd.json);
+check("checkout returns the CityDesign Pay page", cd.res.status === 200 && cd.json.url.includes("/pay/") && cd.json.amount === 3000000, cd.json);
 const cdToken = tokenOf(cd.json.url);
 const cdPending = (await api("GET", "/billing/payments", buyer)).json.payments.find((p) => p.id === cd.json.payment_id);
 check("the CityDesign payment is written down as pending", cdPending?.status === "pending" && cdPending.gateway === "citydesign", cdPending);

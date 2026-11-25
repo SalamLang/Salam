@@ -22,17 +22,91 @@ import str
 import filepath
 import time
 import collections
+import io
+import conv
 
-// NOTE: this is a polling watcher (no native fs event backend). Use Poll/PollSleepMs periodically.
+if SALAM_OS_WINDOWS:
+    extern:
+        func MultiByteToWideChar(
+            codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32
+        ): i32
+        func FindFirstChangeNotificationW(path: void*, subtree: int, filter: u32): void*
+        func FindNextChangeNotification(handle: void*): int
+        func FindCloseChangeNotification(handle: void*): int
+        func WaitForSingleObject(handle: void*, ms: int): int
+    end
+else SALAM_OS_LINUX:
+    extern:
+        func inotify_init1(flags: int): int
+        func inotify_add_watch(fd: int, path: str, mask: u32): int
+        func inotify_rm_watch(fd: int, wd: int): int
+        func close(fd: int): int
+        func poll(fds: void*, nfds: usize, timeout: int): int
+    end
+    if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
+        extern:
+            func read(fd: int, buf: void*, n: u32): int
+        end
+    else:
+        extern:
+            func read(fd: int, buf: void*, n: u64): i64
+        end
+    end
+else SALAM_OS_MAC:
+    extern:
+        func kqueue(): int
+        func kevent(
+            kq: int,
+            changelist: void*,
+            nchanges: int,
+            eventlist: void*,
+            nevents: int,
+            timeout: void*
+        ): int
+        func close(fd: int): int
+        func open(path: str, flags: int, ...): int
+        func memset(ptr: void*, val: int, n: u64): void*
+    end
+else SALAM_OS_BSD:
+    extern:
+        func kqueue(): int
+        func kevent(
+            kq: int,
+            changelist: void*,
+            nchanges: int,
+            eventlist: void*,
+            nevents: int,
+            timeout: void*
+        ): int
+        func close(fd: int): int
+        func open(path: str, flags: int, ...): int
+        func memset(ptr: void*, val: int, n: u64): void*
+    end
+end
 
-// Polling-based directory watcher abstraction (best-effort, cross-platform).
-// Not an OS-native event watcher; call Poll() periodically to detect changes.
+if SALAM_OS_FREEBSD:
+    const _KEV_SIZE := 64
+else:
+    const _KEV_SIZE := 32
+end
+
+if SALAM_OS_MAC:
+    const _KQ_MAX_FDS := 150
+else:
+    const _KQ_MAX_FDS := 2000
+end
+const _FP_RECENT_SECONDS := 2
+const _FP_HASH_MAX := 1048576
 
 @en "EventKind"
 @fa "نوع رویداد"
 pub enum EventKind:
-    Created
-    Modified
+    @en "Created"
+    @fa "ساخته شد"
+    Created, @en "Modified"
+    @fa "تغییر کرد"
+    Modified, @en "Deleted"
+    @fa "حذف شد"
     Deleted
 end
 
@@ -62,10 +136,40 @@ pub struct Watcher:
     @en "initialized"
     @fa "آماده"
     pub initialized: bool = false
+    @en "skipped names"
+    @fa "نام های نادیده"
+    pub skipped: str = "\n"
+    @en "skip hidden"
+    @fa "نادیده بودن پنهان ها"
+    pub skip_hidden: bool = false
+    @en "backend mode"
+    @fa "حالت پشتیبان"
+    pub nmode: int = 0
+    @en "native handle"
+    @fa "دستگیره بومی"
+    pub nfd: i64 = 0 - 1
+    @en "native tried"
+    @fa "بومی آزموده شد"
+    pub ntried: bool = false
+    @en "watched paths"
+    @fa "مسیرهای زیر نظر"
+    pub watched: collections.OrderedMap = collections.OrderedMap {}
 end
 
-func _fingerprint(path: str): str:
-    // Best-effort: size + mod time; falls back to size when mod time unavailable.
+func _content_hash(path: str): str:
+    text := io.ReadFile(path)
+    p := text as u8*
+    mut h := 7 as i64
+    repeat text.Len() in i:
+        h = (h * 31 + p[i] as i64) % 1000000007
+    end
+    if text.Len() > 0:
+        mem.Free(text as void*)
+    end
+    ret str.FromInt(h as int)
+end
+
+func _fingerprint(path: str, hashed: bool): str:
     sz := os.FileSize(path)
     mt := fs.ModTime(path)
     mut sb := str.NewBuilder()
@@ -74,6 +178,13 @@ func _fingerprint(path: str): str:
     str.BufAppend(sb, s1)
     str.BufAppendChar(sb, 58)
     str.BufAppend(sb, s2)
+    if sz > 0 and sz <= _FP_HASH_MAX and not os.IsDir(path) and
+        (hashed or time.Now() - mt <= _FP_RECENT_SECONDS):
+        s3 := _content_hash(path)
+        str.BufAppendChar(sb, 58)
+        str.BufAppend(sb, s3)
+        mem.Free(s3 as void*)
+    end
     out := str.BufStr(sb)
     str.BufFree(sb)
     mem.Free(s1 as void*)
@@ -81,11 +192,58 @@ func _fingerprint(path: str): str:
     ret out
 end
 
-func _scan_dir(root: str, recursive: bool, out &: collections.OrderedMap):
+func _fp_changed(old: str, cur: str): bool:
+    if str.Equals(old, cur):
+        ret false
+    end
+    a := str.IndexOf(old, ":")
+    b := str.IndexOf(cur, ":")
+    if a < 0 or b < 0:
+        ret true
+    end
+    ia := str.IndexFrom(old, ":", a + 1)
+    ib := str.IndexFrom(cur, ":", b + 1)
+    if ia < 0 or ib < 0:
+        if ia < 0 and ib < 0:
+            ret true
+        end
+        basea := ia >= 0 ? str.Substr(old, 0, ia) : str.Clone(old)
+        baseb := ib >= 0 ? str.Substr(cur, 0, ib) : str.Clone(cur)
+        ret not str.Equals(basea, baseb)
+    end
+    ret true
+end
+
+func _has_hash(fp: str): bool:
+    a := str.IndexOf(fp, ":")
+    ret a >= 0 and str.IndexFrom(fp, ":", a + 1) >= 0
+end
+
+func _is_skipped(name: str, skipped: str, skip_hidden: bool): bool:
+    if skip_hidden and str.StartsWith(name, "."):
+        ret true
+    end
+    if skip_hidden and (str.EndsWith(name, "~") or str.EndsWith(
+        name, ".swp"
+    ) or str.EndsWith(name, ".tmp")):
+        ret true
+    end
+    probe := "\n" + name + "\n"
+    ret str.Contains(skipped, probe)
+end
+
+func _scan_dir(
+    root: str,
+    recursive: bool,
+    skipped: str,
+    skip_hidden: bool,
+    prev &: collections.OrderedMap,
+    out &: collections.OrderedMap
+):
     if root.Len() == 0 or not os.Exists(root): ret end
     // If root is a file, track it directly.
     if not os.IsDir(root):
-        fp := _fingerprint(root)
+        fp := _fingerprint(root, prev.Has(root) and _has_hash(prev.Get(root)))
         key := str.Clone(root)
         out.Set(key, fp)
         ret
@@ -94,15 +252,375 @@ func _scan_dir(root: str, recursive: bool, out &: collections.OrderedMap):
     defer entries.Free()
     repeat entries.Len() in i:
         name := entries.Get(i)
-        if name != "." and name != "..":
+        if name != "." and name != ".." and not _is_skipped(name, skipped, skip_hidden):
             p := filepath.Join(root, name)
-            fp := _fingerprint(p)
+            fp := _fingerprint(p, prev.Has(p) and _has_hash(prev.Get(p)))
             key := str.Clone(p)
             out.Set(key, fp)
             if os.IsDir(p) and recursive:
-                _scan_dir(p, recursive, out)
+                _scan_dir(p, recursive, skipped, skip_hidden, prev, out)
             end
             mem.Free(p as void*)
+        end
+    end
+end
+
+if SALAM_OS_LINUX:
+    if SALAM_ARCH_X86 or SALAM_ARCH_ARM:
+        func _nat_read(fd: int, buf: void*): i64:
+            ret read(fd, buf, 4096 as u32)
+        end
+    else:
+        func _nat_read(fd: int, buf: void*): i64:
+            ret read(fd, buf, 4096 as u64)
+        end
+    end
+
+    func _nat_init(w &: Watcher):
+        fd := inotify_init1(526336)
+        if fd >= 0:
+            w.nfd = fd as i64
+            w.nmode = 1
+        end
+    end
+
+    func _nat_stop(w &: Watcher):
+        if w.nmode != 0:
+            close(w.nfd as int)
+        end
+        w.nmode = 0
+        w.nfd = 0 - 1
+    end
+
+    func _nat_sync(w &: Watcher, now &: collections.OrderedMap): bool:
+        mut added := false
+        stale := Vector {} as Vector<str>
+        repeat w.watched.Len() in i:
+            if not now.Has(w.watched.KeyAt(i)) and not str.Equals(w.watched.KeyAt(i), w.root):
+                stale.Push(str.Clone(w.watched.KeyAt(i)))
+            end
+        end
+        repeat stale.Len() in i:
+            gone := w.watched.Get(stale.Get(i))
+            w.watched.Remove(stale.Get(i))
+            mut shared := false
+            repeat w.watched.Len() in j:
+                if str.Equals(w.watched.ValAt(j), gone):
+                    shared = true
+                end
+            end
+            if not shared:
+                inotify_rm_watch(w.nfd as int, conv.AtoiOr(gone, 0 - 1))
+            end
+        end
+        stale.Free()
+        dirs := Vector {} as Vector<str>
+        if not w.watched.Has(w.root):
+            dirs.Push(str.Clone(w.root))
+        end
+        repeat now.Len() in i:
+            k := now.KeyAt(i)
+            if not w.watched.Has(k) and os.IsDir(k):
+                dirs.Push(str.Clone(k))
+            end
+        end
+        repeat dirs.Len() in i:
+            wd := inotify_add_watch(w.nfd as int, dirs.Get(i), 16781262 as u32)
+            if wd >= 0:
+                w.watched.Set(dirs.Get(i), str.FromInt(wd))
+                added = true
+            end
+        end
+        dirs.Free()
+        ret added
+    end
+
+    func _nat_wait(w &: Watcher, ms: int): bool:
+        mut woke := false
+        pfd := mem.AllocateZeroed(8 as u64)
+        pi := pfd as int*
+        pi[0] = w.nfd as int
+        pe := (pfd as i64 + 4) as int*
+        pe[0] = 1
+        r := poll(pfd, 1 as usize, ms)
+        mem.Free(pfd)
+        if r > 0:
+            woke = true
+            buf := mem.Allocate(4096 as u64)
+            mut got := _nat_read(w.nfd as int, buf)
+            until got > 0:
+                got = _nat_read(w.nfd as int, buf)
+            end
+            mem.Free(buf)
+        end
+        ret woke
+    end
+else SALAM_OS_WINDOWS:
+    func _nat_wide(path: str): void*:
+        n := MultiByteToWideChar(65001 as u32, 0 as u32, path, 0 - 1, null, 0)
+        if n <= 0:
+            ret mem.MustAllocateZeroed(2 as u64)
+        end
+        wide := mem.MustAllocateZeroed((n * 2) as u64)
+        MultiByteToWideChar(65001 as u32, 0 as u32, path, 0 - 1, wide, n)
+        ret wide
+    end
+
+    func _nat_init(w &: Watcher):
+        wide := _nat_wide(w.root)
+        h := FindFirstChangeNotificationW(wide, 1, 31 as u32)
+        mem.Free(wide)
+        hv := h as i64
+        if hv != 0 and hv != (0 - 1):
+            w.nfd = hv
+            w.nmode = 4
+        end
+    end
+
+    func _nat_stop(w &: Watcher):
+        if w.nmode != 0:
+            FindCloseChangeNotification(w.nfd as void*)
+        end
+        w.nmode = 0
+        w.nfd = 0 - 1
+    end
+
+    func _nat_sync(w &: Watcher, now &: collections.OrderedMap): bool:
+        ret false
+    end
+
+    func _nat_wait(w &: Watcher, ms: int): bool:
+        mut woke := false
+        r := WaitForSingleObject(w.nfd as void*, ms)
+        if r == 0:
+            woke = true
+            if FindNextChangeNotification(w.nfd as void*) == 0:
+                _nat_stop(w)
+            end
+        end
+        ret woke
+    end
+else SALAM_OS_MAC:
+    func _kq_oflags(): int:
+        if SALAM_OS_MAC:
+            ret 32772
+        else:
+            ret 4
+        end
+    end
+
+    func _kq_close_all(w &: Watcher):
+        repeat w.watched.Len() in i:
+            close(conv.AtoiOr(w.watched.ValAt(i), 0 - 1))
+        end
+        w.watched.Free()
+        w.watched = collections.OrderedMap {}
+    end
+
+    func _kq_add(w &: Watcher, path: str): bool:
+        mut ok := false
+        fd := open(path, _kq_oflags())
+        if fd >= 0:
+            kev := mem.Allocate(_KEV_SIZE as u64)
+            memset(kev, 0, _KEV_SIZE as u64)
+            kp64 := kev as i64*
+            kp64[0] = fd as i64
+            f32 := (kev as i64 + 8) as int*
+            f32[0] = (33 * 65536) + 65532
+            fl := (kev as i64 + 12) as int*
+            fl[0] = 63
+            r := kevent(w.nfd as int, kev, 1, null, 0, null)
+            mem.Free(kev)
+            if r == 0:
+                w.watched.Set(path, str.FromInt(fd))
+                ok = true
+            else:
+                close(fd)
+            end
+        end
+        ret ok
+    end
+
+    func _nat_init(w &: Watcher):
+        kfd := kqueue()
+        if kfd >= 0:
+            w.nfd = kfd as i64
+            w.nmode = 2
+        end
+    end
+
+    func _nat_stop(w &: Watcher):
+        if w.nmode != 0:
+            _kq_close_all(w)
+            close(w.nfd as int)
+        end
+        w.nmode = 0
+        w.nfd = 0 - 1
+    end
+
+    func _nat_sync(w &: Watcher, now &: collections.OrderedMap): bool:
+        _kq_close_all(w)
+        if now.Len() + 1 > _KQ_MAX_FDS:
+            _nat_stop(w)
+        else:
+            mut all := _kq_add(w, w.root)
+            repeat now.Len() in i:
+                if not _kq_add(w, now.KeyAt(i)):
+                    all = false
+                end
+            end
+            if not all:
+                _nat_stop(w)
+            end
+        end
+        ret false
+    end
+
+    func _nat_wait(w &: Watcher, ms: int): bool:
+        buf := mem.Allocate((_KEV_SIZE * 16) as u64)
+        ts := mem.Allocate(16 as u64)
+        ts64 := ts as i64*
+        ts64[0] = (ms / 1000) as i64
+        ts64[1] = ((ms % 1000) * 1000000) as i64
+        n := kevent(w.nfd as int, null, 0, buf, 16, ts)
+        mem.Free(buf)
+        mem.Free(ts)
+        ret n > 0
+    end
+else SALAM_OS_BSD:
+    func _kq_oflags(): int:
+        if SALAM_OS_MAC:
+            ret 32772
+        else:
+            ret 4
+        end
+    end
+
+    func _kq_close_all(w &: Watcher):
+        repeat w.watched.Len() in i:
+            close(conv.AtoiOr(w.watched.ValAt(i), 0 - 1))
+        end
+        w.watched.Free()
+        w.watched = collections.OrderedMap {}
+    end
+
+    func _kq_add(w &: Watcher, path: str): bool:
+        mut ok := false
+        fd := open(path, _kq_oflags())
+        if fd >= 0:
+            kev := mem.Allocate(_KEV_SIZE as u64)
+            memset(kev, 0, _KEV_SIZE as u64)
+            kp64 := kev as i64*
+            kp64[0] = fd as i64
+            f32 := (kev as i64 + 8) as int*
+            f32[0] = (33 * 65536) + 65532
+            fl := (kev as i64 + 12) as int*
+            fl[0] = 63
+            r := kevent(w.nfd as int, kev, 1, null, 0, null)
+            mem.Free(kev)
+            if r == 0:
+                w.watched.Set(path, str.FromInt(fd))
+                ok = true
+            else:
+                close(fd)
+            end
+        end
+        ret ok
+    end
+
+    func _nat_init(w &: Watcher):
+        kfd := kqueue()
+        if kfd >= 0:
+            w.nfd = kfd as i64
+            w.nmode = 2
+        end
+    end
+
+    func _nat_stop(w &: Watcher):
+        if w.nmode != 0:
+            _kq_close_all(w)
+            close(w.nfd as int)
+        end
+        w.nmode = 0
+        w.nfd = 0 - 1
+    end
+
+    func _nat_sync(w &: Watcher, now &: collections.OrderedMap): bool:
+        _kq_close_all(w)
+        if now.Len() + 1 > _KQ_MAX_FDS:
+            _nat_stop(w)
+        else:
+            mut all := _kq_add(w, w.root)
+            repeat now.Len() in i:
+                if not _kq_add(w, now.KeyAt(i)):
+                    all = false
+                end
+            end
+            if not all:
+                _nat_stop(w)
+            end
+        end
+        ret false
+    end
+
+    func _nat_wait(w &: Watcher, ms: int): bool:
+        buf := mem.Allocate((_KEV_SIZE * 16) as u64)
+        ts := mem.Allocate(16 as u64)
+        ts64 := ts as i64*
+        ts64[0] = (ms / 1000) as i64
+        ts64[1] = ((ms % 1000) * 1000000) as i64
+        n := kevent(w.nfd as int, null, 0, buf, 16, ts)
+        mem.Free(buf)
+        mem.Free(ts)
+        ret n > 0
+    end
+else:
+    func _nat_init(w &: Watcher):
+        w.nmode = 0
+    end
+
+    func _nat_stop(w &: Watcher):
+        w.nmode = 0
+    end
+
+    func _nat_sync(w &: Watcher, now &: collections.OrderedMap): bool:
+        ret false
+    end
+
+    func _nat_wait(w &: Watcher, ms: int): bool:
+        ret false
+    end
+end
+
+func _force_poll(): bool:
+    v := os.Env("SALAM_WATCH_POLL")
+    ret str.Len(v) > 0 and not str.Equals(v, "0")
+end
+
+func _nat_open(w &: Watcher):
+    w.ntried = true
+    w.nmode = 0
+    if not _force_poll() and os.IsDir(w.root):
+        _nat_init(w)
+    end
+end
+
+func _diff(old &: collections.OrderedMap, cur &: collections.OrderedMap, out &: Vector<Event>):
+    repeat cur.Len() in i:
+        p := cur.KeyAt(i)
+        v := cur.ValAt(i)
+        if not old.Has(p):
+            out.Push(Event { kind = EventKind.Created, path = str.Clone(p) })
+        else:
+            if _fp_changed(old.Get(p), v):
+                out.Push(Event { kind = EventKind.Modified, path = str.Clone(p) })
+            end
+        end
+    end
+    repeat old.Len() in i:
+        p := old.KeyAt(i)
+        if not cur.Has(p):
+            out.Push(Event { kind = EventKind.Deleted, path = str.Clone(p) })
         end
     end
 end
@@ -123,8 +641,28 @@ end
 pub func Snapshot(w &: Watcher):
     w.fingerprints.Free()
     w.fingerprints = collections.OrderedMap {}
-    _scan_dir(w.root, w.recursive, w.fingerprints)
+    mut none := collections.OrderedMap {}
+    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, none, w.fingerprints)
+    none.Free()
     w.initialized = true
+    if not w.ntried:
+        _nat_open(w)
+    end
+    if w.nmode != 0:
+        _nat_sync(w, w.fingerprints)
+    end
+end
+
+@en "Ignore"
+@fa "نادیده گرفتن"
+pub func Ignore(w &: Watcher, name: str):
+    w.skipped += name + "\n"
+end
+
+@en "IgnoreHidden"
+@fa "نادیده گرفتن پنهان ها"
+pub func IgnoreHidden(w &: Watcher):
+    w.skip_hidden = true
 end
 
 @en "Poll"
@@ -137,31 +675,74 @@ pub func Poll(w &: Watcher): Vector<Event>:
     end
 
     mut now := collections.OrderedMap {}
-    _scan_dir(w.root, w.recursive, now)
-
-    repeat now.Len() in i:
-        p := now.KeyAt(i)
-        v := now.ValAt(i)
-        if not w.fingerprints.Has(p):
-            out.Push(Event { kind = EventKind.Created, path = str.Clone(p) })
-        else:
-            old := w.fingerprints.Get(p)
-            if not str.Equals(old, v):
-                out.Push(Event { kind = EventKind.Modified, path = str.Clone(p) })
-            end
-        end
+    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, w.fingerprints, now)
+    _diff(w.fingerprints, now, out)
+    if w.nmode != 0 and _nat_sync(w, now):
+        mut again := collections.OrderedMap {}
+        _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, now, again)
+        _diff(now, again, out)
+        now.Free()
+        now = again
     end
-
-    repeat w.fingerprints.Len() in i:
-        p := w.fingerprints.KeyAt(i)
-        if not now.Has(p):
-            out.Push(Event { kind = EventKind.Deleted, path = str.Clone(p) })
-        end
-    end
-
     w.fingerprints.Free()
     w.fingerprints = now
     ret out
+end
+
+@en "PollSettled"
+@fa "بررسی آرام"
+pub func PollSettled(w &: Watcher, settle_ms: int): Vector<Event>:
+    mut out := Poll(w)
+    if out.Len() == 0:
+        ret out
+    end
+    mut rounds := 0
+    until rounds < 12:
+        rounds++
+        time.Sleep(settle_ms)
+        more := Poll(w)
+        if more.Len() == 0:
+            more.Free()
+            break
+        end
+        repeat more.Len() in i:
+            out.Push(more.Get(i))
+        end
+        more.Free()
+    end
+    ret out
+end
+
+@en "Wait"
+@fa "انتظار"
+pub func Wait(w &: Watcher, timeout_ms: int): bool:
+    if not w.initialized:
+        Snapshot(w)
+    end
+    if w.nmode == 0:
+        time.Sleep(timeout_ms)
+        ret true
+    end
+    ret _nat_wait(w, timeout_ms)
+end
+
+@en "IsNative"
+@fa "بومی است"
+pub func IsNative(w &: Watcher): bool:
+    ret w.nmode != 0
+end
+
+@en "Backend"
+@fa "پشتیبان"
+pub func Backend(w &: Watcher): str:
+    if w.nmode == 1:
+        ret "inotify"
+    else w.nmode == 2:
+        ret "kqueue"
+    else w.nmode == 4:
+        ret "windows"
+    end
+    ret "polling"
 end
 
 @en "PollSleepMs"
@@ -205,6 +786,8 @@ end
 @en "Free"
 @fa "آزادسازی"
 pub func Free(w &: Watcher):
+    _nat_stop(w)
+    w.watched.Free()
     w.fingerprints.Free()
     if w.root.Len() > 0:
         mem.Free(w.root as void*)

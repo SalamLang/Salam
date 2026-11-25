@@ -54,3 +54,21 @@ ELF, so use a 64-bit bootloader (GRUB, Limine, a custom loader) or keep the
 salam build main.salam --target=x86_64-unknown-none \
     --entry=_start --linker-script=linker64.ld --link-object=boot64.o
 ```
+
+## RISC-V
+
+`riscv64/` boots the same `main.salam` on the QEMU `virt` board. QEMU starts
+it at `0x80000000` in machine mode; `riscv64/boot.s` clears `.bss`, sets up a
+stack and calls `main`, and the runtime prints through the NS16550 UART at
+`0x10000000`.
+
+```sh
+SALAM=/path/to/salam sh riscv64/build.sh
+qemu-system-riscv64 -machine virt -bios none -kernel riscv64/kernel.elf \
+    -display none -serial stdio
+```
+
+`baremetal.ExitQemu(code)` writes to the SiFive test device at `0x100000`, so
+QEMU exits with the kernel's code (0 for 0). The VGA calls do nothing on
+RISC-V. Build your own objects with `-march=rv64gc -mabi=lp64d
+-mcmodel=medany`, the flags the compiler uses for the program and the runtime.

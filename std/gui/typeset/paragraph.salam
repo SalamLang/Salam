@@ -454,6 +454,45 @@ func _ws_wraps(ws: WhiteSpace): bool:
     ret ws == WhiteSpace.Normal or ws == WhiteSpace.PreWrap
 end
 
+func _all_ltr(cps &: Vector<int>, s: int, e: int): bool:
+    mut i := s
+    until i < e:
+        if cps[i] >= 0x0590:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func _base_level(cps &: Vector<int>, dir: int): int:
+    if dir == bidi.DirRTL:
+        ret 1
+    end
+    if dir == bidi.DirLTR:
+        ret 0
+    end
+    mut depth := 0
+    each cp in cps:
+        t := unicode.BidiClass(cp)
+        if t == unicode.BcLRI or t == unicode.BcRLI or t == unicode.BcFSI:
+            depth++
+        else t == unicode.BcPDI:
+            if depth > 0:
+                depth--
+            end
+        else depth == 0:
+            if t == unicode.BcL:
+                ret 0
+            end
+            if t == unicode.BcR or t == unicode.BcAL:
+                ret 1
+            end
+        end
+    end
+    ret 0
+end
+
 func _para_levels(p &: Paragraph, shape_cps &: Vector<int>):
     n := p.chars.Len()
     mut s := 0
@@ -462,6 +501,18 @@ func _para_levels(p &: Paragraph, shape_cps &: Vector<int>):
         until e < n and not _cf(p, e, _CF_HARD):
             e++
         end
+        if p.style.direction != bidi.DirRTL and _all_ltr(shape_cps, s, e):
+            mut z := s
+            until z <= e and z < n:
+                mut c := p.chars.Get(z)
+                c.level = 0
+                c.base = 0
+                p.chars.Set(z, c)
+                z++
+            end
+            s = e + 1
+            continue
+        end
         mut sub := Vector {} as Vector<int>
         mut k := s
         until k < e:
@@ -469,7 +520,7 @@ func _para_levels(p &: Paragraph, shape_cps &: Vector<int>):
             k++
         end
         txt := _utf8_encode_all(sub)
-        base := bidi.ParagraphLevel(txt, p.style.direction)
+        base := _base_level(sub, p.style.direction)
         levels := bidi.Levels(txt, p.style.direction)
         mut lastlv := base
         k = s

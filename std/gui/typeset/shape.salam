@@ -48,6 +48,9 @@ const _FB_DIST := 16
 const _FB_RTLA := 17
 const _FB_COUNT := 18
 
+mut _shc_map := HashMap {} as HashMap<i64, int>
+mut _shc_hits := Vector {} as Vector<_ShapeHit>
+
 @en "ShapedGlyph"
 @fa "گلیف شکل‌یافته"
 pub struct ShapedGlyph:
@@ -66,6 +69,18 @@ pub struct ShapedGlyph:
     @en "y_offset"
     @fa "جابجایی عمودی"
     pub y_offset: int = 0
+end
+
+struct _ShapeHit:
+    pub font: i64 = 0
+    pub par: i64 = 0
+    pub key: Vector<int> = Vector {}
+    pub g: Vector<int> = Vector {}
+    pub cl: Vector<int> = Vector {}
+    pub xa: Vector<int> = Vector {}
+    pub xo: Vector<int> = Vector {}
+    pub yo: Vector<int> = Vector {}
+    pub att: Vector<int> = Vector {}
 end
 
 func _feat_tag(bit: int): int:
@@ -416,7 +431,100 @@ func _legacy_kern(f: Font, b &: _Buf):
     end
 end
 
+func _shc_clear():
+    each h in _shc_hits:
+        mut x := h
+        x.key.Free()
+        x.g.Free()
+        x.cl.Free()
+        x.xa.Free()
+        x.xo.Free()
+        x.yo.Free()
+        x.att.Free()
+    end
+    _shc_hits.Clear()
+    _shc_map.Free()
+    _shc_map = HashMap {} as HashMap<i64, int>
+end
+
+func _shc_same(h: _ShapeHit, fid: i64, par: i64, key &: Vector<int>): bool:
+    if h.font != fid or h.par != par or h.key.Len() != key.Len():
+        ret false
+    end
+    repeat key.Len() in i:
+        if h.key[i] != key[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
 func _shape_buf(
+    f: Font,
+    cps &: Vector<int>,
+    forms &: Vector<int>,
+    skip &: Vector<bool>,
+    s: int,
+    e: int,
+    rtl: bool,
+    script_tag: int,
+    lang_tag: int,
+    off_mask: int,
+    b &: _Buf
+):
+    if e - s <= 0 or e - s > 256:
+        _shape_buf_raw(f, cps, forms, skip, s, e, rtl, script_tag, lang_tag, off_mask, b)
+        ret
+    end
+    fid := ((f.data as i64) * 31 + f.size as i64) * 131 + f.units_per_em as i64
+    par := ((script_tag as i64) * 1000003 + lang_tag as i64) * 8191 + (off_mask as i64) * 2 +
+        (rtl ? 1 : 0)
+    mut key := Vector {} as Vector<int>
+    defer key.Free()
+    mut h := fid * 1099511628211 + par
+    mut i := s
+    until i < e:
+        v := cps[i] * 16 + forms[i] * 2 + (skip[i] ? 1 : 0)
+        key.Push(v)
+        h = (h ^ (v as i64)) * 1099511628211
+        i++
+    end
+    if _shc_map.Has(h):
+        at := _shc_map.Get(h)
+        hit := _shc_hits[at]
+        if _shc_same(hit, fid, par, key):
+            repeat hit.g.Len() in q:
+                b.g.Push(hit.g[q])
+                b.cl.Push(hit.cl[q] + s)
+                b.xa.Push(hit.xa[q])
+                b.xo.Push(hit.xo[q])
+                b.yo.Push(hit.yo[q])
+                b.att.Push(hit.att[q])
+            end
+            ret
+        end
+    end
+    _shape_buf_raw(f, cps, forms, skip, s, e, rtl, script_tag, lang_tag, off_mask, b)
+    if _shc_hits.Len() >= 4096:
+        _shc_clear()
+    end
+    mut nh := _ShapeHit { font = fid, par = par }
+    each kv in key:
+        nh.key.Push(kv)
+    end
+    repeat b.g.Len() in q:
+        nh.g.Push(b.g[q])
+        nh.cl.Push(b.cl[q] - s)
+        nh.xa.Push(b.xa[q])
+        nh.xo.Push(b.xo[q])
+        nh.yo.Push(b.yo[q])
+        nh.att.Push(b.att[q])
+    end
+    _shc_map.Put(h, _shc_hits.Len())
+    _shc_hits.Push(nh)
+end
+
+func _shape_buf_raw(
     f: Font,
     cps &: Vector<int>,
     forms &: Vector<int>,

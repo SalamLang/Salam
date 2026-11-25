@@ -87,6 +87,20 @@ func q(s: str): str:
     ret r
 end
 
+func define_line(ll: str, needle: str): str:
+    mut from := 0
+    until from >= str.Len(ll):
+        nl := str.IndexFrom(ll, "\n", from)
+        end_at := nl < 0 ? str.Len(ll) : nl
+        line := str.Substr(ll, from, end_at - from)
+        if str.StartsWith(line, "define ") and str.Contains(line, needle):
+            ret line
+        end
+        from = end_at + 1
+    end
+    ret ""
+end
+
 func main:
     quiet := lg.New(lg.LOG_OFF, false)
     mut a := at.NewAst()
@@ -666,6 +680,31 @@ func main:
     oarm7 := run_fixture_for(quiet, "b_armv7", srct, "armv7-linux-musleabihf")
     testing.AssertMsg(oarm7.ok, "b_armv7.ok false: " + oarm7.error)
     testing.AssertContains(oarm7.ll_src, "atomicrmw xchg ptr @salam_ob_lk, i32 1 acquire, align 4")
+
+
+    srcp := "package main\n\npure func shout(s: str): str: ret s.upper() end\n\n" +
+        "pure func sq(x: int): int: ret x * x end\n\n" +
+        "pure func pair(x: int): Vector<int>: ret [x, x] end\n\n" +
+        "func main:\n    println shout(\"a\").len() + shout(\"a\").len()\n" +
+        "    println sq(3) + pair(1).Len()\nend\n"
+    op := run_fixture(quiet, "b_pure_heap", srcp)
+    testing.AssertMsg(op.ok, "b_pure_heap.ok false: " + op.error)
+    shout_def := define_line(op.ll_src, "shout")
+    testing.AssertMsg(str.Len(shout_def) > 0, "b_pure_heap: no define line for shout")
+    testing.AssertMsg(
+        not str.Contains(shout_def, "memory(read)"),
+        "pure func returning str must not be memory(read): " + shout_def
+    )
+    pair_def := define_line(op.ll_src, "pair")
+    testing.AssertMsg(str.Len(pair_def) > 0, "b_pure_heap: no define line for pair")
+    testing.AssertMsg(
+        not str.Contains(pair_def, "memory(read)"),
+        "pure func returning Vector must not be memory(read): " + pair_def
+    )
+    sq_def := define_line(op.ll_src, "sq")
+    testing.AssertMsg(
+        str.Contains(sq_def, "memory(read)"), "pure func returning int keeps memory(read): " + sq_def
+    )
 
     ret testing.Summary()
 end

@@ -2,8 +2,8 @@
 
 A freestanding build produces a program that does not call an operating system:
 no libc, no C runtime start files, no syscalls. Salam can emit one for x86-64,
-i686 and aarch64 through its LLVM backend, and the compiler ships a small
-runtime that supplies the names the code generator expects.
+i686, aarch64 and riscv64 through its LLVM backend, and the compiler ships a
+small runtime that supplies the names the code generator expects.
 
 This is the target to use for an operating-system kernel, a bootloader payload,
 a unikernel, a hypervisor component or any project that owns the machine.
@@ -33,8 +33,11 @@ salam build kernel.salam \
   a kernel that provides all the symbols itself.
 
 The compiler compiles the LLVM IR to an object and links it with `ld.lld`
-(`-m elf_i386`, `-m elf_x86_64`, `-m aarch64elf`, ...). It does not link libc,
-crt files or `-lm`.
+(`-m elf_i386`, `-m elf_x86_64`, `-m aarch64elf`, `-m elf64lriscv`). It does
+not link libc, crt files or `-lm`. For riscv64 the program and the runtime are
+built with `-march=rv64gc -mabi=lp64d -mcmodel=medany`, so code can live at
+`0x80000000` and floating point uses the hardware registers; build your own
+assembly and C objects with the same flags.
 
 ## What the built-in runtime provides
 
@@ -47,8 +50,10 @@ program. It supplies:
   `strstr`, `strtol`, `strtod`, `snprintf`, `printf`, `dprintf`;
 - `write`, `isatty`, `fflush`, `atexit`, `signal`, `raise`, `sched_yield`,
   `abort`, `exit`;
-- console output: COM1 serial, the VGA text buffer at `0xB8000` and the QEMU
-  debug console at port `0xE9`; the VGA buffer prints bytes (ASCII), so use
+- console output: on x86, COM1 serial, the VGA text buffer at `0xB8000` and
+  the QEMU debug console at port `0xE9`; on aarch64, the PL011 UART at
+  `0x09000000`; on riscv64, the NS16550 UART at `0x10000000` (both are the
+  QEMU `virt` board addresses). The VGA buffer prints bytes (ASCII), so use
   serial for UTF-8 text such as Persian;
 - the `salam_rt_*` hooks used by `std/baremetal`.
 
@@ -59,7 +64,8 @@ Every hook is weak, so a kernel can replace `salam_rt_write`, `salam_rt_exit`,
 
 The default heap is a static 16 MiB array. Set `SALAM_RT_HEAP_SIZE` when
 compiling the runtime yourself, or call `malloc` from your own allocator by
-replacing the ones in the runtime.
+replacing the ones in the runtime. On riscv64, `SALAM_RT_UART_BASE` and
+`SALAM_RT_TEST_BASE` move the UART and the QEMU test device for other boards.
 
 ## Compile-time names
 
@@ -97,14 +103,14 @@ end
 
 | Function | Purpose |
 | --- | --- |
-| `Halt()` | Stop the CPU (`cli; hlt` on x86, `wfi` on aarch64) |
+| `Halt()` | Stop the CPU (`cli; hlt` on x86, `wfi` on aarch64 and riscv64) |
 | `Exit(code)` | Leave through `salam_rt_exit`; the kernel decides what that means |
 | `Out8(port, value)`, `In8(port)` | x86 port I/O |
-| `Clear()` | Clear the VGA text screen |
-| `WriteAt(row, col, text, color)` | Write one text row directly to VGA memory |
+| `Clear()` | Clear the VGA text screen (x86 only; does nothing elsewhere) |
+| `WriteAt(row, col, text, color)` | Write one text row directly to VGA memory (x86 only) |
 | `SerialWrite(text)` | Write to the serial console without buffering |
 | `Panic(message)` | Print a kernel panic line and halt |
-| `ExitQemu(code)` | Exit through QEMU's `isa-debug-exit` device (port `0xF4`) |
+| `ExitQemu(code)` | Exit QEMU: `isa-debug-exit` (port `0xF4`) on x86, the SiFive test device at `0x100000` on riscv64 |
 | `HeapUsed()`, `HeapSize()` | Bump allocator counters in bytes |
 
 Persian programs call the same functions with their `@fa` names, for example
@@ -126,6 +132,18 @@ calls the Salam `main`. QEMU's `-kernel` loader only accepts a 32-bit ELF, so th
 demo uses `i686`. The `x86_64-unknown-none` target produces a normal x86-64 ELF
 that a 64-bit bootloader (GRUB, Limbo, Limine or your own) can load.
 
+The same `main.salam` also boots on RISC-V. `tests/kernel/riscv64/` has a boot
+stub for the QEMU `virt` board, which starts at `0x80000000` in machine mode:
+
+```sh
+SALAM=/path/to/salam sh tests/kernel/riscv64/build.sh
+qemu-system-riscv64 -machine virt -bios none \
+    -kernel tests/kernel/riscv64/kernel.elf -display none -serial stdio
+```
+
+The output goes to the UART and `ExitQemu(0)` ends QEMU with exit status 0
+(any other code `n` exits with status `n`).
+
 ## What is not there
 
 Freestanding means the program owns the machine, so the parts of `std` that
@@ -146,6 +164,7 @@ correct, libc-free object and a predictable calling convention.
 | `x86_64-unknown-none` | ELF64 | QEMU `-kernel` needs a 32-bit loader; use GRUB/Limine |
 | `i686-unknown-none` | ELF32 | Multiboot example, QEMU `-kernel`, 32-bit PCs |
 | `aarch64-unknown-none` | ELF64 | PL011 serial at `0x09000000`, `wfi` halt |
+| `riscv64-unknown-none` | ELF64 | NS16550 UART at `0x10000000`, `wfi` halt, QEMU `virt` |
 | `x86_64-unknown-salamos` | ELF64 | Salam OS userspace-style target |
 | `x86_64-unknown-salamos-kernel` | ELF64 | `SALAM_KERNEL` is set |
 

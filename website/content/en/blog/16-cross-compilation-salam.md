@@ -48,7 +48,7 @@ salam build app.salam --target=x86_64-w64-windows-gnu
 salam build app.salam --target=aarch64-linux-musl --output=app-arm64
 ```
 
-When the target is Windows, the default output name gets `.exe` added. Triples for bare-metal targets (`x86_64-unknown-none`, `i686-unknown-none`, `aarch64-unknown-none`) build freestanding programs with no operating system; those have their own article, [freestanding Salam](/blog/freestanding-salam-bare-metal/).
+When the target is Windows, the default output name gets `.exe` added. Triples for bare-metal targets (`x86_64-unknown-none`, `i686-unknown-none`, `aarch64-unknown-none`, `riscv64-unknown-none`) build freestanding programs with no operating system; those have their own article, [freestanding Salam](/blog/freestanding-salam-bare-metal/).
 
 ## Which code generator does the work {#backends}
 

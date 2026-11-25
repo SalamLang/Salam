@@ -2,13 +2,13 @@
 title: From command-line tools to operating system kernels: freestanding and bare-metal programming in Salam
 seo_title: Bare Metal Programming in Salam: Freestanding Builds and Kernels
 description: Salam can build freestanding programs with no libc and no operating system. How the bare-metal target works, a kernel that boots in QEMU, and the limits.
-keywords: bare metal programming, freestanding programming language, OS kernel development, write a kernel, no libc, Multiboot kernel, QEMU kernel, x86-64 freestanding, aarch64 bare metal, Salam baremetal
+keywords: bare metal programming, freestanding programming language, OS kernel development, write a kernel, no libc, Multiboot kernel, QEMU kernel, x86-64 freestanding, aarch64 bare metal, RISC-V bare metal, riscv64 kernel, Salam baremetal
 category: build
 summary: The same compiler that builds Salam web servers can emit a program that owns the machine: no libc, no syscalls, a tiny runtime and a kernel that boots in QEMU. Here is how it works and what you still have to write yourself.
 date: 2026-11-11
 ---
 
-Bare-metal programming means writing code that runs directly on the hardware, with no operating system underneath to provide files, processes or memory. **A freestanding build of Salam produces exactly that kind of program: an executable that calls no operating system, links no libc and no C start-up files, and makes no system calls.** The compiler emits one for x86-64, i686 and AArch64 through its LLVM backend and links a small runtime that supplies the few functions the generated code needs. The repository includes a complete Multiboot kernel written in Salam that boots in QEMU.
+Bare-metal programming means writing code that runs directly on the hardware, with no operating system underneath to provide files, processes or memory. **A freestanding build of Salam produces exactly that kind of program: an executable that calls no operating system, links no libc and no C start-up files, and makes no system calls.** The compiler emits one for x86-64, i686, AArch64 and RISC-V (riscv64) through its LLVM backend and links a small runtime that supplies the few functions the generated code needs. The repository includes a complete kernel written in Salam that boots in QEMU, both as a Multiboot kernel on a PC and on the RISC-V `virt` board.
 
 This article shows how the freestanding target works, builds and boots a kernel, explains what the runtime provides, and lists clearly what a kernel author still has to write.
 
@@ -21,6 +21,7 @@ The C standard has long separated a _hosted_ implementation, where the whole sta
 | `x86_64-unknown-none`           | ELF64  | For a 64-bit bootloader such as GRUB or Limine |
 | `i686-unknown-none`             | ELF32  | Multiboot, QEMU `-kernel`, 32-bit PCs          |
 | `aarch64-unknown-none`          | ELF64  | PL011 serial at `0x09000000`, `wfi` to halt    |
+| `riscv64-unknown-none`          | ELF64  | NS16550 UART at `0x10000000`, `wfi` to halt    |
 | `x86_64-unknown-salamos`        | ELF64  | A Salam OS userspace-style target              |
 | `x86_64-unknown-salamos-kernel` | ELF64  | Defines `SALAM_KERNEL`                         |
 
@@ -105,6 +106,20 @@ QEMU then exits through its `isa-debug-exit` device. The process exit code is `(
 
 QEMU's `-kernel` loader only accepts a 32-bit ELF, which is why the demo targets i686. The `x86_64-unknown-none` target produces a normal 64-bit ELF that GRUB, Limine or your own loader can start.
 
+## The same kernel on RISC-V {#risc-v}
+
+The kernel above is not tied to the PC. `tests/kernel/riscv64/` holds a boot stub and a linker script for QEMU's RISC-V `virt` board, and builds the very same `main.salam` for `riscv64-unknown-none`:
+
+```bash
+SALAM=/path/to/salam sh tests/kernel/riscv64/build.sh
+qemu-system-riscv64 -machine virt -bios none \
+    -kernel tests/kernel/riscv64/kernel.elf -display none -serial stdio
+```
+
+With `-bios none`, QEMU starts the program at `0x80000000` in machine mode. The boot stub parks every CPU core except the first, clears `.bss`, sets up a 64 KB stack and calls `main`. The runtime prints through the board's NS16550 UART at `0x10000000`, so the output is the same ten lines as on the PC, and `baremetal.ExitQemu(0)` writes to the SiFive test device at `0x100000`, which ends QEMU with exit status 0 (a code `n` other than 0 exits with status `n`). The VGA calls do nothing on RISC-V. On our test machine the RISC-V kernel was a 76,896-byte ELF64 executable, and the Fletcher-16 program in the next section printed the same three lines there.
+
+The compiler builds riscv64 code, and the runtime, with `-march=rv64gc -mabi=lp64d -mcmodel=medany`: the standard 64-bit instruction set with hardware floating point, and a code model that can address a program linked at `0x80000000`. Assemble your own boot code and support objects with the same flags so the linker accepts the mix.
+
 ## One program, hosted and bare metal {#hosted-and-bare-metal}
 
 A useful property of a freestanding target is that most of your code does not care. The compiler defines `SALAM_FREESTANDING` (no host operating system), `SALAM_KERNEL` (a kernel target) and `SALAM_OS_NONE` or `SALAM_OS_SALAMOS`, and a top-level `if` keeps host-only or kernel-only code apart. The [compile-time lesson](/learn/compile-time/) covers the mechanism. This program computes Fletcher-16 checksums; it imports `baremetal` only when there is no operating system:
@@ -142,7 +157,7 @@ Salam 39919
 
 That output is from an ordinary `salam run` on Linux. Built with the kernel's boot stub and linker script for `i686-unknown-none`, the same file became a 22,896-byte kernel, and QEMU printed the same three lines over the serial port. The first two values are the well-known Fletcher-16 test vectors (`0xC8F0` and `0x2057`). Being able to test a parser, an allocator or a checksum with `salam test` on your workstation and then link the identical code into a kernel is one of the more practical reasons to write kernel code in a higher-level language.
 
-The same source also compiles to objects for `x86_64-unknown-none` and `aarch64-unknown-none`. The x86-64 object for this program left exactly six symbols for the runtime to supply: `abort`, `malloc`, `memcpy`, `strlen`, `write` and `salam_rt_exit_qemu`.
+The same source also compiles to objects for `x86_64-unknown-none`, `aarch64-unknown-none` and `riscv64-unknown-none`, and the RISC-V build boots on QEMU's `virt` board as shown above. The x86-64 object for this program left exactly six symbols for the runtime to supply: `abort`, `malloc`, `memcpy`, `strlen`, `write` and `salam_rt_exit_qemu`.
 
 ## What the built-in runtime provides {#runtime}
 
@@ -151,7 +166,7 @@ The same source also compiles to objects for `x86_64-unknown-none` and `aarch64-
 - `malloc`, `calloc`, `realloc` and `free` over a 16 MiB bump allocator, with a small header so `realloc` can copy the old contents;
 - `memcpy`, `memmove`, `memset`, `memcmp`, `strlen`, `strcmp`, `strncmp`, `strstr`, `strtol`, `strtod`, `snprintf`, `printf` and `dprintf`;
 - `write`, `isatty`, `fflush`, `atexit`, `signal`, `raise`, `sched_yield`, `abort` and `exit`;
-- console output to COM1 serial, the VGA text buffer at `0xB8000` and the QEMU debug console at port `0xE9`.
+- console output: on x86, COM1 serial, the VGA text buffer at `0xB8000` and the QEMU debug console at port `0xE9`; on AArch64, the PL011 UART at `0x09000000`; on RISC-V, the NS16550 UART at `0x10000000`. These are the addresses of QEMU's `virt` board, and a kernel for other hardware replaces the output hook or, on RISC-V, rebuilds the runtime with `SALAM_RT_UART_BASE`.
 
 The VGA buffer shows bytes as ASCII, so Persian or other UTF-8 text should go to the serial console. Every hook is a weak symbol, so a kernel can replace `salam_rt_write`, `salam_rt_exit`, `salam_rt_outb` and the rest with its own versions. A bump allocator never reuses freed memory, which is fine for a demo and for kernels that allocate once at boot, and is the first thing a real kernel replaces: either swap in your own `malloc` or build the runtime with a different `SALAM_RT_HEAP_SIZE`.
 
@@ -161,13 +176,13 @@ The VGA buffer shows bytes as ASCII, so Persian or other UTF-8 text should go to
 
 | Function                                    | Purpose                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------- |
-| `Halt()`                                    | Stop the CPU (`cli; hlt` on x86, `wfi` on AArch64)                |
+| `Halt()`                                    | Stop the CPU (`cli; hlt` on x86, `wfi` on AArch64 and RISC-V)     |
 | `Exit(code)`                                | Leave through `salam_rt_exit`; the kernel decides what that means |
 | `Out8(port, value)`, `In8(port)`            | x86 port I/O                                                      |
-| `Clear()`, `WriteAt(row, col, text, color)` | VGA text screen                                                   |
+| `Clear()`, `WriteAt(row, col, text, color)` | VGA text screen (x86 only)                                        |
 | `SerialWrite(text)`                         | Unbuffered serial output                                          |
 | `Panic(message)`                            | Print a panic line and halt                                       |
-| `ExitQemu(code)`                            | Leave QEMU through `isa-debug-exit`                               |
+| `ExitQemu(code)`                            | Leave QEMU (`isa-debug-exit` on x86, SiFive test on RISC-V)       |
 | `HeapUsed()`, `HeapSize()`                  | Bump allocator counters in bytes                                  |
 
 Like every standard library package, it has Persian names: in Persian source the package is `کرنل`, and `کرنل.توقف()` halts the CPU. A kernel can be written entirely in Persian. This one, built with the same boot stub and linker script, printed its greeting over the serial port and shut QEMU down:
@@ -187,7 +202,7 @@ The compiler's job here is narrow: a correct, libc-free object with a predictabl
 
 - **No interrupts, paging or device drivers.** There is no interrupt descriptor table setup, no page-table code and no device layer in the compiler or runtime. You write them in Salam, or in a small assembly or C support package linked with `--link-object`. For port I/O and memory-mapped registers, Salam's pointers and [C interop](/blog/salam-c-interop-ffi/) are the tools.
 - **Most of the standard library is unavailable.** Files, sockets, processes, threads and wall-clock time need an operating system, so most of `os`, `fs`, `net`, `db` and `gui` are out. `str`, `mem`, `conv`, `encoding` and the collection types work, and `SALAM_KERNEL` removes the parts of `std` that cannot build in a kernel.
-- **Three architectures have a runtime.** Other machines need `--no-freestanding-runtime` and your own `malloc`, `memcpy`, `write` and `salam_rt_*` hooks.
+- **Four architectures have a runtime.** x86-64, i686, AArch64 and riscv64 do. Other machines, such as 32-bit ARM or 32-bit RISC-V, need `--no-freestanding-runtime` and your own `malloc`, `memcpy`, `write` and `salam_rt_*` hooks.
 - **Memory is your responsibility, as everywhere in Salam.** There is no garbage collector to disable, which is good news for a kernel, but there is also no borrow checker. Salam has bounds checks in development builds and compile-time ownership warnings; read [memory management in Salam](/blog/memory-management-in-salam/) before relying on them.
 - **The demo kernel is a demo.** It proves the toolchain end-to-end; it has no scheduler, file system or driver model.
 
@@ -207,7 +222,11 @@ Yes. A build for a `*-none` target, such as `i686-unknown-none` or `x86_64-unkno
 
 ### Which architectures does freestanding Salam support?
 
-x86-64, i686 and AArch64 have a built-in runtime. Other machines can still be targeted through LLVM if you pass `--no-freestanding-runtime` and supply the memory, string and output functions yourself.
+x86-64, i686, AArch64 and RISC-V (riscv64) have a built-in runtime, and the repository's demo kernel boots in QEMU on both i686 and riscv64. Other machines can still be targeted through LLVM if you pass `--no-freestanding-runtime` and supply the memory, string and output functions yourself.
+
+### Does Salam support RISC-V?
+
+Yes. `--target=riscv64-unknown-none` builds a bare-metal RISC-V program with the built-in runtime, and `tests/kernel/riscv64/` boots on QEMU's `virt` board. For RISC-V machines that run Linux, `--arch=riscv64` (the `riscv64-linux-musl` triple) cross-compiles an ordinary program; the [cross-compilation article](/blog/cross-compilation-salam/) covers that case.
 
 ### Does freestanding Salam have a garbage collector to turn off?
 

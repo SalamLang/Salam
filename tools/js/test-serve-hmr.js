@@ -142,6 +142,14 @@ async function listening(port) {
   }, 60000);
 }
 
+async function mustListen(port, name, log) {
+  if (await listening(port)) return;
+  const text = fs.existsSync(log)
+    ? fs.readFileSync(log, "utf8").slice(-3000)
+    : "";
+  throw new Error(name + " did not start on port " + port + "\n" + text);
+}
+
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "salam-hmr-"));
   const site = path.join(dir, "site");
@@ -271,7 +279,7 @@ async function listening(port) {
     const before = await page.evaluate(() => window.scrollY);
     await server.stop();
     server = start(["serve", src], dir, port, log);
-    await listening(port);
+    await mustListen(port, "the restarted dev server", log);
     const reloaded = await until(
       async () => (await page.evaluate(() => window.__marker)) === undefined,
       60000,
@@ -300,7 +308,7 @@ async function listening(port) {
   const port2 = port + 1;
   const server2 = start(["serve", dist, "--watch"], dir, port2, log);
   try {
-    await listening(port2);
+    await mustListen(port2, "the built folder server", log);
     await page.goto("http://127.0.0.1:" + port2 + "/");
     await page.evaluate(() => {
       window.__marker = "alive";
@@ -344,7 +352,7 @@ async function listening(port) {
   const port4 = port + 3;
   const server4 = start(["serve", faSrc], dir, port4, log);
   try {
-    await listening(port4);
+    await mustListen(port4, "the Persian dev server", log);
     await page.goto("http://127.0.0.1:" + port4 + "/");
     fs.writeFileSync(faSrc, "صفحه:\n    عنوان = \n");
     const fao = await overlayWith(page, "ساخت ناموفق بود", 60000);

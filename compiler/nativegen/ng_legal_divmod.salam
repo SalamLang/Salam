@@ -1,0 +1,144 @@
+package nativegen
+
+func lg_libcall2(g &: Ng, l &: Lg, at: int, name: str, a: int, b: int, lo &: int, hi &: int):
+    mut al := 0
+    mut ah := 0
+    mut bl := 0
+    mut bh := 0
+    lg_pair(g, l, a, al, ah)
+    lg_pair(g, l, b, bl, bh)
+    mut args := Vector {} as Vector<int>
+    args.Push(al)
+    args.Push(ah)
+    args.Push(bl)
+    args.Push(bh)
+    mut h := 0
+    lo = lg_call(g, at, name, args, T_I64, h)
+    hi = h
+    args.Free()
+end
+
+func lg_divmod_arm(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int):
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    blk := g.i_blk[at]
+    mut k := 0 - 1
+    repeat l.dm_a.Len() in q:
+        if l.dm_a[q] == a and l.dm_b[q] == b and l.dm_sg[q] == sg and dominates(
+            g, l.dm_blk[q], blk
+        ):
+            k = q
+            break
+        end
+    end
+    if k < 0:
+        mut al := 0
+        mut ah := 0
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, al, ah)
+        lg_pair(g, l, b, bl, bh)
+        mut args := Vector {} as Vector<int>
+        args.Push(al)
+        args.Push(ah)
+        args.Push(bl)
+        args.Push(bh)
+        mut h := 0
+        ql := lg_call(g, at, sg ? "__aeabi_ldivmod" : "__aeabi_uldivmod", args, T_I64, h)
+        args.Free()
+        rl := lg_ins(g, at, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+        g.i_x[g.v_def[rl]] = 1
+        rh := lg_ins(g, at, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+        g.i_x[g.v_def[rh]] = 2
+        l.dm_a.Push(a)
+        l.dm_b.Push(b)
+        l.dm_sg.Push(sg)
+        l.dm_blk.Push(blk)
+        l.dm_ql.Push(ql)
+        l.dm_qh.Push(h)
+        l.dm_rl.Push(rl)
+        l.dm_rh.Push(rh)
+        k = l.dm_a.Len() - 1
+    end
+    lo = rem ? l.dm_rl[k] : l.dm_ql[k]
+    hi = rem ? l.dm_rh[k] : l.dm_qh[k]
+end
+
+func lg_div_twin(g &: Ng, at: int, op: int, a: int, b: int): bool:
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    each bb in g.b_rpo:
+        mut j := g.b_first[bb]
+        until j >= 0:
+            o := g.i_op[j]
+            if j != at and o >= OP_SDIV and o <= OP_UREM and
+                (o == OP_SDIV or o == OP_SREM) == sg and (o == OP_SREM or o == OP_UREM) != rem and
+                resolve(g, g.i_a[j]) == a and resolve(g, g.i_b[j]) == b:
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func lg_divmod(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int):
+    if g.arch == NG_ARCH_ARM:
+        lg_divmod_arm(g, l, at, op, a, b, lo, hi)
+        ret
+    end
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    blk := g.i_blk[at]
+    mut k := 0 - 1
+    repeat l.dm_a.Len() in q:
+        if l.dm_a[q] == a and l.dm_b[q] == b and l.dm_sg[q] == sg and dominates(
+            g, l.dm_blk[q], blk
+        ) and (l.dm_ql[q] >= 0 or rem):
+            k = q
+            break
+        end
+    end
+    if k < 0:
+        mut cl := 0
+        mut ch := 0
+        mod_only := rem and not lg_div_twin(g, at, op, a, b)
+        mut nm := sg ? "__divdi3" : "__udivdi3"
+        if mod_only:
+            nm = sg ? "__moddi3" : "__umoddi3"
+        end
+        lg_libcall2(g, l, at, nm, a, b, cl, ch)
+        l.dm_a.Push(a)
+        l.dm_b.Push(b)
+        l.dm_sg.Push(sg)
+        l.dm_blk.Push(blk)
+        l.dm_ql.Push(mod_only ? 0 - 1 : cl)
+        l.dm_qh.Push(mod_only ? 0 - 1 : ch)
+        l.dm_rl.Push(mod_only ? cl : 0 - 1)
+        l.dm_rh.Push(mod_only ? ch : 0 - 1)
+        k = l.dm_a.Len() - 1
+    end
+    if rem and l.dm_rl[k] < 0:
+        mut al := 0
+        mut ah := 0
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, al, ah)
+        lg_pair(g, l, b, bl, bh)
+        mut ml := 0
+        mut mh := 0
+        lg_mul64(g, at, l.dm_ql[k], l.dm_qh[k], bl, bh, ml, mh)
+        mut rl := 0
+        mut rh := 0
+        lg_add64(g, at, al, ah, ml, mh, true, rl, rh)
+        if dominates(g, l.dm_blk[k], blk) and l.dm_blk[k] == blk:
+            l.dm_rl[k] = rl
+            l.dm_rh[k] = rh
+        end
+        lo = rl
+        hi = rh
+        ret
+    end
+    lo = rem ? l.dm_rl[k] : l.dm_ql[k]
+    hi = rem ? l.dm_rh[k] : l.dm_qh[k]
+end

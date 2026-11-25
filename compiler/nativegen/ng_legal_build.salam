@@ -1,0 +1,117 @@
+package nativegen
+
+func lg_grow(g &: Ng, l &: Lg):
+    until l.lo.Len() < g.v_kind.Len():
+        l.lo.Push(0 - 1)
+        l.hi.Push(0 - 1)
+    end
+end
+
+func is_w64(t: int): bool:
+    ret t == T_I64
+end
+
+func lg_set(g &: Ng, l &: Lg, v: int, lo: int, hi: int):
+    lg_grow(g, l)
+    l.lo[v] = lo
+    l.hi[v] = hi
+end
+
+func lg_c32(g &: Ng, v: i64): int:
+    ret const_int(g, T_I32, (v << (32 as i64)) >> (32 as i64))
+end
+
+func lg_pair(g &: Ng, l &: Lg, v: int, lo &: int, hi &: int):
+    lg_grow(g, l)
+    if v < 0:
+        lo = lg_c32(g, 0 as i64)
+        hi = lo
+        ret
+    end
+    if l.lo[v] >= 0:
+        lo = l.lo[v]
+        hi = l.hi[v]
+        ret
+    end
+    k := g.v_kind[v]
+    if k == VK_INT:
+        lo = lg_c32(g, g.v_i[v])
+        hi = lg_c32(g, g.v_i[v] >> (32 as i64))
+        lg_set(g, l, v, lo, hi)
+        ret
+    end
+    lo = lg_c32(g, 0 as i64)
+    hi = lo
+    if k == VK_UNDEF:
+        lo = new_val(g, VK_UNDEF, T_I32, 0 as i64)
+        hi = lo
+    else k != VK_ZERO:
+        fail(
+            g,
+            "native backend: 64-bit value without halves in " + tab_str(
+                g.syms, g.f_sym
+            ) + " k" + str_of_int(k) + " op" + str_of_int(
+                k == VK_INS ? g.i_op[g.v_def[v]] : 0 - 1
+            )
+        )
+    end
+    lg_set(g, l, v, lo, hi)
+end
+
+func lg_ins(g &: Ng, at: int, op: int, ty: int, a: int, b: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = b
+    g.i_dbg[i] = g.i_dbg[at]
+    ins_before(g, at, i)
+    ret new_res(g, i)
+end
+
+func lg_cast(g &: Ng, at: int, op: int, ty: int, a: int, from: int): int:
+    r := lg_ins(g, at, op, ty, a, 0 - 1)
+    g.i_x[g.v_def[r]] = from
+    ret r
+end
+
+func lg_icmp(g &: Ng, at: int, pred: int, a: int, b: int): int:
+    r := lg_ins(g, at, OP_ICMP, T_I1, a, b)
+    g.i_x[g.v_def[r]] = pred
+    ret r
+end
+
+func lg_sel(g &: Ng, at: int, c: int, x: int, y: int): int:
+    r := lg_ins(g, at, OP_SELECT, g.v_ty[x], c, x)
+    g.i_c[g.v_def[r]] = y
+    ret r
+end
+
+func lg_call(g &: Ng, at: int, name: str, args: Vector<int>, rty: int, hi &: int): int:
+    s := sym_named(g, name)
+    if g.sy_kind[s] == SY_UNKNOWN:
+        g.sy_kind[s] = SY_FUNC
+    end
+    g.sy_used[s] = true
+    fv := new_val(g, VK_GLB, T_PTR, 0 as i64)
+    g.v_def[fv] = s
+    c := ins_new(g, OP_CALL, rty == T_I64 ? T_I32 : rty)
+    g.i_a[c] = fv
+    g.i_x[c] = 0 - 1
+    g.i_ps[c] = g.pool.Len()
+    g.i_pcount[c] = args.Len()
+    g.i_dbg[c] = g.i_dbg[at]
+    each av in args:
+        g.pool.Push(av)
+        g.pool.Push(0)
+        g.pool.Push(0 - 1)
+    end
+    ins_before(g, at, c)
+    mut r := 0 - 1
+    if rty != T_VOID:
+        r = new_res(g, c)
+    end
+    hi = 0 - 1
+    if rty == T_I64:
+        hi = lg_ins(g, at, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+    end
+    ret r
+end

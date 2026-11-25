@@ -1,0 +1,333 @@
+package nativegen
+
+func lg_one(g &: Ng, l &: Lg, i: int):
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    w := is_w64(ty)
+    if lg_atomic(g, l, i):
+        ret
+    end
+    if lg_divcall(g, i):
+        ret
+    end
+    if op == OP_CALL:
+        if lg_is_intrinsic(g, i):
+            lg_intrinsic_len(g, l, i)
+        else:
+            lg_fix_call(g, l, i)
+        end
+        ret
+    end
+    if op == OP_RET:
+        if a >= 0 and is_w64(g.v_ty[a]):
+            mut rl := 0
+            mut rh := 0
+            lg_pair(g, l, a, rl, rh)
+            g.i_a[i] = rl
+            g.i_b[i] = rh
+        end
+        ret
+    end
+    if op == OP_STORE:
+        if a >= 0 and is_w64(g.v_ty[a]):
+            mut sl := 0
+            mut sh := 0
+            lg_pair(g, l, a, sl, sh)
+            lg_store(g, i, sl, b, i)
+            lg_store(g, i, sh, lg_addr4(g, i, b), i)
+            ins_unlink(g, i)
+        end
+        ret
+    end
+    if op == OP_ADDR:
+        if b >= 0 and is_w64(g.v_ty[b]):
+            mut il := 0
+            mut ih := 0
+            lg_pair(g, l, b, il, ih)
+            g.i_b[i] = il
+        end
+        ret
+    end
+    if op == OP_ICMP:
+        if a >= 0 and is_w64(g.v_ty[a]):
+            c := lg_cmp64(g, l, i, g.i_x[i], a, b)
+            replace_res(g, i, c)
+        end
+        ret
+    end
+    if op == OP_INSV:
+        if b >= 0 and is_w64(g.v_ty[b]):
+            mut vl := 0
+            mut vh := 0
+            lg_pair(g, l, b, vl, vh)
+            i1 := lg_ins(g, i, OP_INSV, ty, a, vl)
+            g.i_x[g.v_def[i1]] = T_I32
+            g.i_d[g.v_def[i1]] = g.i_d[i]
+            i2 := lg_ins(g, i, OP_INSV, ty, i1, vh)
+            g.i_x[g.v_def[i2]] = T_I32
+            g.i_d[g.v_def[i2]] = g.i_d[i] + (4 as i64)
+            replace_res(g, i, i2)
+        end
+        ret
+    end
+    if op == OP_TRUNC and a >= 0 and is_w64(g.v_ty[a]):
+        mut tl := 0
+        mut th := 0
+        lg_pair(g, l, a, tl, th)
+        if ty == T_I32:
+            replace_res(g, i, tl)
+        else:
+            replace_res(g, i, lg_cast(g, i, OP_TRUNC, ty, tl, T_I32))
+        end
+        ret
+    end
+    if op == OP_INTTOPTR and a >= 0 and is_w64(g.v_ty[a]):
+        mut pl := 0
+        mut ph := 0
+        lg_pair(g, l, a, pl, ph)
+        replace_res(g, i, lg_cast(g, i, OP_INTTOPTR, T_PTR, pl, T_I32))
+        ret
+    end
+    if (op == OP_SITOFP or op == OP_UITOFP) and a >= 0 and is_w64(g.v_ty[a]):
+        mut fl := 0
+        mut fh := 0
+        lg_pair(g, l, a, fl, fh)
+        mut args := Vector {} as Vector<int>
+        args.Push(fl)
+        args.Push(fh)
+        dbl := ty == T_F64
+        mut nm := op == OP_SITOFP ? "__floatdisf" : "__floatundisf"
+        if dbl:
+            nm = op == OP_SITOFP ? "__floatdidf" : "__floatundidf"
+        end
+        mut hz := 0
+        if g.arch == NG_ARCH_X86 and op == OP_SITOFP:
+            args.Free()
+            replace_res(g, i, lg_ins(g, i, OP_I64TOF, ty, fl, fh))
+            ret
+        end
+        if g.arch == NG_ARCH_ARM:
+            rlo := lg_call(g, i, nm, args, dbl ? T_I64 : T_I32, hz)
+            args.Free()
+            replace_res(g, i, lg_soft_ret(g, l, i, ty, rlo, hz))
+            ret
+        end
+        res := lg_call(g, i, nm, args, ty, hz)
+        args.Free()
+        replace_res(g, i, res)
+        ret
+    end
+    if op == OP_BITCAST and a >= 0 and is_w64(g.v_ty[a]):
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, bl, bh)
+        if w:
+            lg_set(g, l, r, bl, bh)
+            ins_unlink(g, i)
+            ret
+        end
+        sl := lg_entry_slot(g, l)
+        lg_store(g, i, bl, sl, i)
+        lg_store(g, i, bh, lg_addr4(g, i, sl), i)
+        replace_res(g, i, lg_load(g, i, sl, ty, i))
+        ret
+    end
+    if not w or r < 0:
+        ret
+    end
+    mut lo := 0 - 1
+    mut hi := 0 - 1
+    switch op:
+        OP_ADD, OP_SUB:
+            mut al := 0
+            mut ah := 0
+            mut bl2 := 0
+            mut bh2 := 0
+            lg_pair(g, l, a, al, ah)
+            lg_pair(g, l, b, bl2, bh2)
+            lo = lg_ins(g, i, op, T_I32, al, bl2)
+            h0 := lg_ins(g, i, op, T_I32, ah, bh2)
+            mut cy := 0
+            if op == OP_ADD:
+                cy = lg_icmp(g, i, CC_ULT, lo, al)
+            else:
+                cy = lg_icmp(g, i, CC_ULT, al, bl2)
+            end
+            cz := lg_cast(g, i, OP_ZEXT, T_I32, cy, T_I1)
+            hi = lg_ins(g, i, op, T_I32, h0, cz)
+            break
+        end
+        OP_AND, OP_OR, OP_XOR:
+            mut al3 := 0
+            mut ah3 := 0
+            mut bl3 := 0
+            mut bh3 := 0
+            lg_pair(g, l, a, al3, ah3)
+            lg_pair(g, l, b, bl3, bh3)
+            lo = lg_ins(g, i, op, T_I32, al3, bl3)
+            hi = lg_ins(g, i, op, T_I32, ah3, bh3)
+            break
+        end
+        OP_SHL, OP_LSHR, OP_ASHR:
+            mut al4 := 0
+            mut ah4 := 0
+            lg_pair(g, l, a, al4, ah4)
+            if b >= 0 and g.v_kind[b] == VK_INT:
+                lg_shift_const(g, i, op, al4, ah4, g.v_i[b] as int, lo, hi)
+            else:
+                mut bl4 := 0
+                mut bh4 := 0
+                lg_pair(g, l, b, bl4, bh4)
+                mut args2 := Vector {} as Vector<int>
+                args2.Push(al4)
+                args2.Push(ah4)
+                args2.Push(bl4)
+                nm2 := op == OP_SHL ? "__ashldi3" : (op == OP_LSHR ? "__lshrdi3" : "__ashrdi3")
+                mut h2 := 0
+                lo = lg_call(g, i, nm2, args2, T_I64, h2)
+                hi = h2
+                args2.Free()
+            end
+            break
+        end
+        OP_MUL:
+            mut ml := 0
+            mut mh := 0
+            mut nl := 0
+            mut nh := 0
+            lg_pair(g, l, a, ml, mh)
+            lg_pair(g, l, b, nl, nh)
+            if lg_sext_pair(g, ml, mh) and lg_sext_pair(g, nl, nh) and
+                not (is_cint(g, mh) and is_cint(g, nh)):
+                lo = lg_ins(g, i, OP_MUL, T_I32, ml, nl)
+                hi = lg_ins(g, i, OP_MULHU, T_I32, ml, nl)
+                g.i_x[g.v_def[hi]] = 1
+                break
+            end
+            lg_mul64(g, i, ml, mh, nl, nh, lo, hi)
+            break
+        end
+        OP_SDIV, OP_UDIV, OP_SREM, OP_UREM:
+            if lg_divconst(g, l, i, op, a, b, lo, hi):
+                break
+            end
+            lg_divmod(g, l, i, op, a, b, lo, hi)
+            break
+        end
+        OP_SEXT, OP_ZEXT:
+            if a >= 0 and g.v_ty[a] == T_I1:
+                lo = lg_cast(g, i, OP_ZEXT, T_I32, a, T_I1)
+                if op == OP_SEXT:
+                    lo = lg_ins(g, i, OP_SUB, T_I32, lg_c32(g, 0 as i64), lo)
+                    hi = lo
+                else:
+                    hi = lg_c32(g, 0 as i64)
+                end
+                break
+            end
+            lo = lg_ext_to32(g, i, a, op == OP_SEXT)
+            if op == OP_SEXT:
+                hi = lg_ins(g, i, OP_ASHR, T_I32, lo, lg_c32(g, 31 as i64))
+            else:
+                hi = lg_c32(g, 0 as i64)
+            end
+            break
+        end
+        OP_PTRTOINT:
+            lo = lg_cast(g, i, OP_PTRTOINT, T_I32, a, T_PTR)
+            hi = lg_c32(g, 0 as i64)
+            break
+        end
+        OP_LOAD:
+            lo = lg_load(g, i, a, T_I32, i)
+            hi = lg_load(g, i, lg_addr4(g, i, a), T_I32, i)
+            break
+        end
+        OP_SELECT:
+            mut xl := 0
+            mut xh := 0
+            mut yl := 0
+            mut yh := 0
+            lg_pair(g, l, b, xl, xh)
+            lg_pair(g, l, g.i_c[i], yl, yh)
+            lo = lg_sel(g, i, a, xl, yl)
+            hi = lg_sel(g, i, a, xh, yh)
+            break
+        end
+        OP_COPY:
+            lg_pair(g, l, a, lo, hi)
+            break
+        end
+        OP_EXTV:
+            lo = lg_ins(g, i, OP_EXTV, T_I32, a, 0 - 1)
+            g.i_d[g.v_def[lo]] = g.i_d[i]
+            hi = lg_ins(g, i, OP_EXTV, T_I32, a, 0 - 1)
+            g.i_d[g.v_def[hi]] = g.i_d[i] + (4 as i64)
+            break
+        end
+        OP_FPTOSI, OP_FPTOUI:
+            mut args3 := Vector {} as Vector<int>
+            src := g.v_ty[a]
+            if g.arch == NG_ARCH_ARM:
+                lg_soft_arg(g, l, i, a, args3)
+            else:
+                args3.Push(a)
+            end
+            mut nm3 := op == OP_FPTOSI ? "__fixsfdi" : "__fixunssfdi"
+            if src == T_F64:
+                nm3 = op == OP_FPTOSI ? "__fixdfdi" : "__fixunsdfdi"
+            end
+            mut h3 := 0
+            lo = lg_call(g, i, nm3, args3, T_I64, h3)
+            hi = h3
+            args3.Free()
+            break
+        end
+        OP_BITCAST:
+            sl2 := lg_entry_slot(g, l)
+            st := ins_new(g, OP_STORE, T_VOID)
+            g.i_a[st] = a
+            g.i_b[st] = sl2
+            g.i_x[st] = g.v_ty[a]
+            ins_before(g, i, st)
+            lo = lg_load(g, i, sl2, T_I32, i)
+            hi = lg_load(g, i, lg_addr4(g, i, sl2), T_I32, i)
+            break
+        end
+        OP_PHI:
+            np1 := ins_new(g, OP_PHI, T_I32)
+            np2 := ins_new(g, OP_PHI, T_I32)
+            g.i_pcount[np1] = g.i_pcount[i]
+            g.i_pcount[np2] = g.i_pcount[i]
+            ins_before(g, i, np1)
+            ins_before(g, i, np2)
+            lo = new_res(g, np1)
+            hi = new_res(g, np2)
+            l.ph_old.Push(i)
+            l.ph_lo.Push(np1)
+            l.ph_hi.Push(np2)
+            lg_set(g, l, r, lo, hi)
+            ret
+        end
+        OP_VREDADD:
+            lo = lg_ins(g, i, OP_VREDH, T_I32, a, 0 - 1)
+            hi = lg_ins(g, i, OP_VREDH, T_I32, a, 0 - 1)
+            g.i_x[g.v_def[hi]] = 1
+            break
+        end
+        else:
+            fail(
+                g,
+                "native backend: cannot split 64-bit " + tab_str(
+                    g.syms, g.f_sym
+                ) + " op " + str_of_int(op)
+            )
+            ret
+        end
+    end
+    lg_set(g, l, r, lo, hi)
+    ins_unlink(g, i)
+end

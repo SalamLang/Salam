@@ -41,6 +41,7 @@ struct LoAttrs:
     pub gen_skip: str = ""
     pub inline_style: str = ""
     pub dynstyle: str = ""
+    pub ds_set: bool = false
 end
 
 func repeat_count(a &: at.Ast, el: int): i64:
@@ -335,6 +336,20 @@ func lo_drop_bg_none(la &: LoAttrs):
     la.selection = str.Replace(la.selection, bg_none, "")
 end
 
+func lo_design_scope(cx &: LoCtx, la &: LoAttrs, mapped: str):
+    la.ds_set = true
+    cx.ds_any = true
+    if str.Equals(mapped, "none"):
+        cx.ds_scope = "off"
+    else:
+        cx.ds_scope = "on"
+        if str.Len(cx.ds_first) == 0:
+            cx.ds_first = mapped
+        end
+    end
+    lo_emit_attr(la, "data-ds-" + cx.ds_scope, "", false, true)
+end
+
 func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &: LoAttrs):
     required := ei >= 0 ? sm.LayoutElemRequired(ei) : ""
     la.media = lo_em_rules(a, el, cx.compact)
@@ -409,6 +424,9 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
         end
         dest := sm.LayoutAttrDest(ai)
         mapped := attr_value_map(ai, v)
+        if str.Equals(key, "design") and not str.Equals(tag, "body") and not is_dyn(v):
+            lo_design_scope(cx, la, mapped)
+        end
         if sm.LayoutAttrVtype(ai) == sm.VT_ENUM:
             g := sm.LayoutValueGenerator(sm.LayoutAttrAllowed(ai), mapped)
             if str.Len(g) > 0:
@@ -537,6 +555,9 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
         lo_emit_attr(la, "style", st + la.dynstyle, false, false)
     end
     lo_drop_bg_none(la)
+    if not la.ds_set and not str.Equals(tag, "body") and str.Len(cx.ds_scope) > 0:
+        lo_emit_attr(la, "data-ds-" + cx.ds_scope, "", false, true)
+    end
     if ei < 0:
         ret
     end
@@ -783,6 +804,14 @@ func is_native_generator(g: str): bool:
 end
 
 func gen_element(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, parent_class: str, parent_has_class: bool
+):
+    saved_scope := cx.ds_scope
+    gen_element_scoped(cx, diag, a, el, parent_class, parent_has_class)
+    cx.ds_scope = saved_scope
+end
+
+func gen_element_scoped(
     cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, parent_class: str, parent_has_class: bool
 ):
     name := at.Get(a, el).name

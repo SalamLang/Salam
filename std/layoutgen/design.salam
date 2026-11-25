@@ -38,7 +38,17 @@ body{background:var(--background);color:var(--foreground);font-family:var(--ds-f
 :where(code,kbd,samp,pre){font-family:var(--ds-font-mono)}
 `
 
+pub const DS_BASE_SCOPED_CSS := `[data-theme="light"]{color-scheme:light}
+[data-theme="dark"],.dark{color-scheme:dark}
+:where(:not(html,body)[data-theme="light"],:not(html,body)[data-theme="dark"],:not(html,body).dark){background:var(--background);color:var(--foreground)}
+:where([data-ds-on]:not(html,body)){border-color:var(--border);outline-color:color-mix(in oklab,var(--ring) 50%,transparent);font-family:var(--ds-font-sans)}
+`
+
 mut g_ds_name := "none"
+
+mut g_ds_scope := ""
+
+mut g_ds_paged := false
 
 mut g_ds_warn := ""
 
@@ -88,6 +98,76 @@ end
 
 func ds_palette_known(name: str): bool:
     ret ds_palette_text(name) != DS_PALETTE_NEUTRAL or name == "neutral" or name == "خنثی"
+end
+
+func ds_gate(): str:
+    if g_ds_scope == "on":
+        ret ":where([data-ds-on])"
+    end
+    ret ":where(:not([data-ds-off]))"
+end
+
+func ds_scope_css(css: str): str:
+    first := not g_ds_paged
+    g_ds_paged = true
+    if g_ds_scope == "" or css == "" or first:
+        ret css
+    end
+    mut keep := ""
+    mut rest := css
+    each piece in [
+        DS_CALENDAR_MIN_CSS, DS_TOAST_MIN_CSS, DS_CAROUSEL_MIN_CSS, DS_DISCLOSURE_MIN_CSS,
+        DS_FLOAT_MIN_CSS, DS_CHART_MIN_CSS, DS_DIALOG_MIN_CSS, DS_PICK_MIN_CSS,
+        DS_RESIZABLE_MIN_CSS, DS_SWITCH_MIN_CSS, DS_SIDEBAR_MIN_CSS, DS_SCROLL_MIN_CSS
+    ]:
+        if rest.Find(piece) >= 0:
+            keep += piece
+            rest = str.Replace(rest, piece, "")
+        end
+    end
+    gate := ds_gate()
+    mut out := ""
+    lines := str.Split(rest, "\n")
+    each line in lines:
+        i := line.Find(":where(")
+        if i < 0:
+            out += line + "\n"
+        else:
+            out += line.Substr(0, i) + gate + line.Substr(i, line.Len() - i) + "\n"
+        end
+    end
+    ret keep + out
+end
+
+func ds_mark_tags(html: str, marker: str): str:
+    mut out := ""
+    mut rest := html
+    until rest != "":
+        i := rest.Find("<")
+        if i < 0:
+            out += rest
+            break
+        end
+        out += rest.Substr(0, i)
+        rest = rest.Substr(i, rest.Len() - i)
+        j := rest.Find(">")
+        if j < 0:
+            out += rest
+            break
+        end
+        mut tag := rest.Substr(0, j)
+        rest = rest.Substr(j, rest.Len() - j)
+        if (tag.Find(" data-slot=") >= 0 or str.StartsWith(tag, "<svg")) and tag.Find(" data-ds-") < 0:
+            k := tag.Find(" ")
+            if k < 0:
+                tag += marker
+            else:
+                tag = tag.Substr(0, k) + marker + tag.Substr(k, tag.Len() - k)
+            end
+        end
+        out += tag
+    end
+    ret out
 end
 
 func ds_trim(s: str): str:
@@ -237,6 +317,21 @@ func ds_first(a: str, b: str, fallback: str): str:
     ret fallback
 end
 
+@en "DsMarkInner"
+@fa "نشانه گذاری اجزای درونی"
+pub func DsMarkInner(n: Node, html: str): str:
+    if g_ds_scope == "":
+        ret html
+    end
+    if n.attrs.Find(" data-ds-off") >= 0:
+        ret ds_mark_tags(html, " data-ds-off")
+    end
+    if n.attrs.Find(" data-ds-on") >= 0:
+        ret ds_mark_tags(html, " data-ds-on")
+    end
+    ret html
+end
+
 @en "DsName"
 @fa "نام طراحی"
 pub func DsName(): str:
@@ -341,7 +436,16 @@ pub func design_page(n: Node): Output:
     mut o := Output {}
     cfg := DsConfigFor(Get(n, "file"))
     main := DsConfigBlock(cfg, "design")
-    name := ds_first(DsAttr(n.attrs, "data-design"), DsConfigValue(main, "design"), "none")
+    mut name := ds_first(DsAttr(n.attrs, "data-design"), DsConfigValue(main, "design"), "none")
+    g_ds_scope = ""
+    if Get(n, "ds-scoped") == "1":
+        if name == "none" and Get(n, "ds-first") != "":
+            name = Get(n, "ds-first")
+            g_ds_scope = "on"
+        else name != "none":
+            g_ds_scope = "off"
+        end
+    end
     g_ds_name = name
     DsSetLang(Get(n, "lang"))
     page_tokens := DsAttr(n.attrs, "data-tokens")
@@ -374,10 +478,16 @@ pub func design_page(n: Node): Output:
                 palette + "]."
         )
     end
-    o.shared_css += DsTokensCss(palette, tokens) + DS_BASE_CSS
+    if g_ds_scope == "on":
+        o.shared_css += str.Replace(
+            DsTokensCss(palette, tokens), ":root{color-scheme:light dark;", ":root{;"
+        ) + DS_BASE_SCOPED_CSS
+    else:
+        o.shared_css += DsTokensCss(palette, tokens) + DS_BASE_CSS
+    end
     o.head += g_ds_warn
     mode := DsConfigValue(main, "theme")
-    if DsAttr(n.attrs, "data-theme") == "" and (mode == "light" or mode == "dark"):
+    if g_ds_scope != "on" and DsAttr(n.attrs, "data-theme") == "" and (mode == "light" or mode == "dark"):
         o.shared_css += ":root:not([data-theme]){color-scheme:" + mode + "}\n"
     end
     ret o

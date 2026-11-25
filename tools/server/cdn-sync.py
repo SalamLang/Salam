@@ -4,7 +4,8 @@ https://cdn.salamlang.ir/ so users who cannot reach github.com can download.
 
 Layout (relative to --root), a copy of GitHub's own paths:
 
-  releases/download/<tag>/<asset>       same bytes as GitHub serves
+  releases/<tag>/<asset>                same bytes as GitHub serves at
+                                        releases/download/<tag>/<asset>
   releases/latest                       newest stable compiler tag, one line
   releases/tags.txt                     every complete stable compiler tag, newest first
   releases/index.json                   tags, assets with size and sha256, published date
@@ -38,6 +39,7 @@ import urllib.request
 REPO = "SalamLang/Salam"
 API = "https://api.github.com/repos/" + REPO
 UA = "salam-cdn-sync/1.0"
+MIRROR = "https://cdn.salamlang.ir"
 FAMILIES = [
     ("compiler", re.compile(r"^v\d+\.\d+\.\d+$")),
     ("agent", re.compile(r"^agent-v\d+\.\d+\.\d+$")),
@@ -175,7 +177,7 @@ def first_token(text):
 
 def sync_release(rel, root, tmpdir, dry):
     tag = rel["tag_name"]
-    ddir = os.path.join(root, "releases", "download", tag)
+    ddir = os.path.join(root, "releases", tag)
     assets = rel["assets"]
     names = {a["name"] for a in assets}
     ordered = sorted(assets, key=lambda a: (not (a["name"].endswith(".sha256") or a["name"] == "SHA256SUMS"), a["size"]))
@@ -205,7 +207,8 @@ def sync_release(rel, root, tmpdir, dry):
                     for block in iter(lambda: f.read(1 << 20), b""):
                         h.update(block)
                 sha = h.hexdigest()
-            entries.append({"name": name, "size": a["size"], "sha256": sha})
+            entries.append({"name": name, "size": a["size"], "sha256": sha,
+                            "url": "%s/releases/%s/%s" % (MIRROR, tag, name)})
             continue
         if dry:
             log("would download %s/%s (%d bytes)" % (tag, name, a["size"]))
@@ -218,7 +221,8 @@ def sync_release(rel, root, tmpdir, dry):
         if sidecar and sidecar != digest:
             os.remove(dest)
             raise RuntimeError("%s/%s does not match its published .sha256" % (tag, name))
-        entries.append({"name": name, "size": a["size"], "sha256": digest})
+        entries.append({"name": name, "size": a["size"], "sha256": digest,
+                        "url": "%s/releases/%s/%s" % (MIRROR, tag, name)})
     entries.sort(key=lambda e: e["name"])
     return complete, entries
 
@@ -333,7 +337,7 @@ def main():
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
     root = os.path.abspath(args.root)
     os.makedirs(os.path.join(root, ".tmp"), exist_ok=True)
-    os.makedirs(os.path.join(root, "releases", "download"), exist_ok=True)
+    os.makedirs(os.path.join(root, "releases"), exist_ok=True)
     os.chmod(root, 0o755)
     lock = open(os.path.join(root, ".sync.lock"), "w")
     try:
@@ -359,6 +363,9 @@ def main():
         index = {e["tag"]: e for e in json.loads(read_text(index_path) or "{}").get("releases", [])}
     except (ValueError, AttributeError, KeyError):
         index = {}
+    for e in index.values():
+        for x in e.get("assets", []):
+            x.setdefault("url", "%s/releases/%s/%s" % (MIRROR, e["tag"], x["name"]))
 
     failed = 0
     for rel in wanted:
@@ -375,7 +382,7 @@ def main():
 
     if not args.dry_run:
         ordered = sorted(index.values(), key=lambda e: e["published_at"], reverse=True)
-        doc = {"repo": REPO, "mirror": "https://cdn.salamlang.ir/releases/",
+        doc = {"repo": REPO, "mirror": MIRROR + "/releases/",
                "releases": ordered}
         compilers = [e["tag"] for e in ordered if FAMILIES[0][1].match(e["tag"])]
         latest = compilers[0] if compilers else None

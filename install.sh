@@ -38,7 +38,7 @@ while :; do
     esac
 done
 case "$CDN_BASE" in
-http://* | https://*) ;;
+https://* | http://127.0.0.1 | http://127.0.0.1:* | http://localhost | http://localhost:*) ;;
 *) CDN_BASE="" ;;
 esac
 CDN_T="${SALAM_CDN_TIMEOUT:-8}"
@@ -497,7 +497,7 @@ fi
 
 curl_net() {
     if [ "$MIRROR_MODE" = 1 ]; then
-        printf '%s' "--retry 0 --connect-timeout $CDN_T -y $((CDN_T * 2)) -Y 1024"
+        printf '%s' "--retry 0 --proto-redir =https --connect-timeout $CDN_T -y $((CDN_T * 2)) -Y 1024"
     else
         printf '%s' "--retry 3 --retry-delay 2 --connect-timeout 20"
     fi
@@ -527,7 +527,7 @@ mirror_url() {
     case "$1" in
     "$RELEASES_URL"/download/*)
         if mirror_usable; then
-            printf '%s/releases/download/%s' "$CDN_BASE" "${1#"$RELEASES_URL"/download/}"
+            printf '%s/releases/%s' "$CDN_BASE" "${1#"$RELEASES_URL"/download/}"
         fi
         ;;
     esac
@@ -1479,7 +1479,7 @@ if [ -n "$MIRROR_URL" ]; then
         fi
     else
         MIRROR_MODE=0
-        MIRROR_WHY=$(net_error | tail -n 1 || true)
+        MIRROR_WHY=$(net_error | head -n 1 || true)
         warn "the mirror at $CDN_BASE did not answer${MIRROR_WHY:+ ($MIRROR_WHY)}; trying GitHub instead"
     fi
 

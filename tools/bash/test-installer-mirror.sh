@@ -65,10 +65,11 @@ asset="salam-$version-linux.zip"
 mkrelease() {
     dir=$1
     mark=$2
-    mkdir -p "$dir/releases/download/v$version"
-    python3 -I mkzip.py "$dir/releases/download/v$version/$asset" "$mark"
-    sum=$(sha256sum "$dir/releases/download/v$version/$asset" | cut -d' ' -f1)
-    printf '%s  %s\n' "$sum" "$asset" >"$dir/releases/download/v$version/$asset.sha256"
+    sub=${3:-releases}
+    mkdir -p "$dir/$sub/v$version"
+    python3 -I mkzip.py "$dir/$sub/v$version/$asset" "$mark"
+    sum=$(sha256sum "$dir/$sub/v$version/$asset" | cut -d' ' -f1)
+    printf '%s  %s\n' "$sum" "$asset" >"$dir/$sub/v$version/$asset.sha256"
 }
 
 start() {
@@ -90,7 +91,7 @@ deadport() {
     python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
 
-mkrelease gh gh-copy
+mkrelease gh gh-copy releases/download
 start gh "$work/gh" files
 GH=$(cat gh.port)
 
@@ -106,7 +107,7 @@ EMPTY=$(cat empty.port)
 
 mkrelease bad bad-copy
 printf 'v%s\n' "$version" >bad/releases/latest
-python3 -I mkzip.py "bad/releases/download/v$version/$asset" tampered
+python3 -I mkzip.py "bad/releases/v$version/$asset" tampered
 start bad "$work/bad" files
 BAD=$(cat bad.port)
 
@@ -193,5 +194,5 @@ echo "mirror requests: $(grep -c . cdn.log)"
 echo "== both fail"
 run "$DEAD" "$DEAD"
 if [ "$rc" != 0 ]; then echo "failed as expected"; fi
-grep -q "tried http://127.0.0.1:$DEAD/releases/download/v$version/$asset (mirror) and" out.txt && echo "message names both sources"
+grep -q "tried http://127.0.0.1:$DEAD/releases/v$version/$asset (mirror) and" out.txt && echo "message names both sources"
 grep -q "download it by hand" out.txt && echo "manual hint printed"

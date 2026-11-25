@@ -77,7 +77,7 @@ if ($null -ne $env:SALAM_NO_CDN -and "$env:SALAM_NO_CDN" -ne "" -and "$env:SALAM
 
 $CdnBase = "$CdnBase".Trim().TrimEnd("/")
 
-if ($CdnBase -notmatch "^https?://") {
+if ($CdnBase -notmatch "^(https://|http://(127\.0\.0\.1|localhost)([:/]|$))") {
     $CdnBase = ""
 }
 
@@ -828,7 +828,7 @@ function Get-MirrorUrl {
     $prefix = "https://github.com/$Repo/releases/download/"
 
     if ($Url.StartsWith($prefix)) {
-        return "$CdnBase/releases/download/" + $Url.Substring($prefix.Length)
+        return "$CdnBase/releases/" + $Url.Substring($prefix.Length)
     }
 
     return ""

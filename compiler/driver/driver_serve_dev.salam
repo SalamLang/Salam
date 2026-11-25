@@ -26,6 +26,9 @@ import net.devreload
 import os.signal
 
 include co "../sal_core.salam"
+include src "../source.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
 include sm "../semantic/semantic.salam"
 
 mut g_dev_root := ""
@@ -38,6 +41,8 @@ mut g_dev_exe := ""
 mut g_dev_static := false
 mut g_dev_slot := 0 - 1
 mut g_dev_stop := 0
+mut g_dev_lang := "en"
+mut g_dev_fwd := ""
 mut g_dev_spa := false
 mut g_dev_w := watcher.Watcher {}
 
@@ -131,7 +136,8 @@ func dev_build(css_only: bool): int:
     mode := g_dev_multi ? "" : " --inline --output=index.html"
     cmd := dev_cd(dir) + " && " + dev_env_prefix() + dev_quote(g_dev_exe) +
         (g_dev_multi ? " page build " : " web ") + g_dev_args + mode +
-        " --no-color --log-level=error > " + dev_quote(log) + " 2>&1"
+        " --no-color --log-level=error --error-lang=" + g_dev_lang + g_dev_fwd + " > " +
+        dev_quote(log) + " 2>&1"
     rc := os.Run(cmd)
     ok := rc == 0 and os.Exists(join_path2(dir, g_dev_home))
     if ok:
@@ -163,6 +169,62 @@ func dev_relative(path: str): str:
         ret str.Substr(path, n + 1, str.Len(path) - n - 1)
     end
     ret str.Clone(path)
+end
+
+func dev_detect_lang(path: str): str:
+    mut sf := src.New()
+    mut out := ""
+    if src.Load(path, sf):
+        out = str.Equals(lp.Code(lx.Detect(sf, lp.Load("en"))), "fa") ? "fa" : "en"
+        src.Free(sf)
+    end
+    ret out
+end
+
+func dev_html_lang(path: str): str:
+    if str.Len(path) == 0 or not os.Exists(path) or os.IsDir(path):
+        ret ""
+    end
+    head := str.Lower(str.Substr(io.ReadFile(path), 0, 2000))
+    a := str.IndexOf(head, "<html")
+    if a < 0:
+        ret ""
+    end
+    tagend := str.IndexFrom(head, ">", a)
+    tag := tagend > a ? str.Substr(head, a, tagend - a) : str.Substr(head, a, 200)
+    k := str.IndexOf(tag, "lang=")
+    if k < 0:
+        ret ""
+    end
+    mut rest := str.Substr(tag, k + 5, str.Len(tag) - k - 5)
+    if str.StartsWith(rest, "\"") or str.StartsWith(rest, "'"):
+        rest = str.Substr(rest, 1, str.Len(rest) - 1)
+    end
+    ret str.StartsWith(rest, "fa") ? "fa" : "en"
+end
+
+func dev_pick_lang(opt: Dr, entry: str, built: str): str:
+    if str.Len(opt.msg_lang) > 0:
+        ret str.Equals(opt.msg_lang, "fa") ? "fa" : "en"
+    end
+    if opt.lang_set:
+        ret str.Equals(opt.lang, "fa") ? "fa" : "en"
+    end
+    if str.Len(entry) > 0:
+        found := dev_detect_lang(entry)
+        if str.Len(found) > 0:
+            ret found
+        end
+    end
+    page := dev_html_lang(built)
+    ret str.Len(page) > 0 ? page : "en"
+end
+
+func dev_forward(opt: Dr): str:
+    if opt.lang_set:
+        ret " --lang=" + dev_quote(opt.lang)
+    end
+    ret ""
 end
 
 func dev_make_watcher():
@@ -338,7 +400,10 @@ func dev_handle(ctx: i64):
                 ctx,
                 http.Own(
                     ctx,
-                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>Build failed</title></head><body style=\"background:#1e1e1e\">" +
+                    "<!doctype html><html lang=\"" + g_dev_lang + "\" dir=\"" + (str.Equals(
+                        g_dev_lang, "fa"
+                    ) ? "rtl" : "ltr") +
+                        "\"><head><meta charset=\"utf-8\"><title>" + (str.Equals(g_dev_lang, "fa") ? "ساخت ناموفق بود" : "Build failed") + "</title></head><body style=\"background:#1e1e1e\">" +
                         devreload.Script() + "</body></html>"
                 )
             )
@@ -474,7 +539,11 @@ func dev_idle():
     end
 end
 
-func dev_serve(entry: str, more: str, host: str, port: int): int:
+func dev_serve(
+    entry: str, more: str, lang: str, fwd: str, host: str, port: int
+): int:
+    g_dev_lang = lang
+    g_dev_fwd = fwd
     g_dev_entry = os.RealPath(entry)
     if str.Len(g_dev_entry) == 0:
         g_dev_entry = entry
@@ -510,6 +579,7 @@ func dev_serve(entry: str, more: str, host: str, port: int): int:
         ret 2
     end
     devreload.InitLocal(dev_epoch(), dev_log_path())
+    devreload.SetLang(lang)
     dev_make_watcher()
     st := dev_build(false)
     if st == 2:
@@ -532,7 +602,8 @@ func dev_serve(entry: str, more: str, host: str, port: int): int:
     ret 0
 end
 
-func dev_serve_dir(dir: str, spa: str, host: str, port: int): int:
+func dev_serve_dir(dir: str, spa: str, lang: str, host: str, port: int): int:
+    g_dev_lang = lang
     g_dev_static = true
     if str.Len(spa) > 0:
         g_dev_spa = true
@@ -546,6 +617,7 @@ func dev_serve_dir(dir: str, spa: str, host: str, port: int): int:
         ret 2
     end
     devreload.Init(dev_epoch(), "")
+    devreload.SetLang(lang)
     dev_make_watcher()
     if dev_listen(host, port) != 0:
         _rm3 := os.RemoveAll(g_dev_out)

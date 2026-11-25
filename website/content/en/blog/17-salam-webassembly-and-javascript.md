@@ -2,13 +2,13 @@
 title: From native to WebAssembly and JavaScript: everywhere a Salam program can run
 seo_title: Salam to WebAssembly and JavaScript: Every Place It Runs
 description: Compile Salam to WebAssembly with WASI, to browser JavaScript and to Cloudflare Workers: the commands, what each target supports and the limits to know first.
-keywords: Salam WebAssembly, compile to WebAssembly, compile to JavaScript, wasm32-wasi, WASI, Cloudflare Workers WebAssembly, salam js, browser programming language, WebAssembly runtime, online compiler in the browser
+keywords: Salam WebAssembly, compile to WebAssembly, compile to JavaScript, wasm32-wasi, WASI, Cloudflare Workers WebAssembly, salam build --platform=js, browser programming language, WebAssembly runtime, online compiler in the browser
 category: compiler
 summary: One source file, several destinations: native executables, WASI modules, browser JavaScript, web pages, edge workers, an in-browser editor, phone apps and bare metal, with the trade-offs of each.
 date: 2026-11-11
 ---
 
-Salam programs can run as native executables, as WebAssembly modules, as JavaScript in a web browser, as request handlers on Cloudflare Workers, inside an online editor and on bare metal. To compile Salam to WebAssembly you build with `--target=wasm32-wasi`; to compile Salam to JavaScript you use `salam js`. The language and the standard library stay the same, but each destination has its own rules about threads, files, sockets and numbers, and those rules decide which target fits a job.
+Salam programs can run as native executables, as WebAssembly modules, as JavaScript in a web browser, as request handlers on Cloudflare Workers, inside an online editor and on bare metal. To compile Salam to WebAssembly you build with `--target=wasm32-wasi`; to compile Salam to JavaScript you use `salam build --platform=js`. The language and the standard library stay the same, but each destination has its own rules about threads, files, sockets and numbers, and those rules decide which target fits a job.
 
 This article walks through every target that exists today, shows the commands, and lists what each one cannot do yet.
 
@@ -19,8 +19,8 @@ This article walks through every target that exists today, shows the commands, a
 | Native executable  | `salam build app.salam`                      | Linux, macOS, Windows (x86-64, ARM, 32-bit) | Tools, servers, desktop apps                |
 | WebAssembly (WASI) | `salam build app.salam --target=wasm32-wasi` | Any WASI preview 1 runtime                  | Sandboxed modules, plug-ins, edge functions |
 | Cloudflare Workers | WASI build plus a small `worker.js`          | Cloudflare's edge                           | HTTP handlers close to users                |
-| JavaScript         | `salam js app.salam`                         | Browsers and Node                           | Interactive pages, browser logic            |
-| Web project        | `salam web`                                  | Browsers                                    | A page plus its Salam scripts in one build  |
+| JavaScript         | `salam build app.salam --platform=js`        | Browsers and Node                           | Interactive pages, browser logic            |
+| Web project        | `salam build --platform=web`                 | Browsers                                    | A page plus its Salam scripts in one build  |
 | Online editor      | `editor.salamlang.ir`                        | Any modern browser                          | Learning, sharing, quick experiments        |
 | Phone IDE          | Android and iOS apps                         | Phones and tablets                          | Writing and running code offline            |
 | Freestanding       | `--target=x86_64-unknown-none`               | No operating system                         | Kernels and boot payloads                   |
@@ -67,7 +67,7 @@ count: 15
 running as native code
 ```
 
-Compiled with `salam js` and run with Node, the last line reads `running as JavaScript`; built with `--target=wasm32-wasi` and run under Node's WASI support, it reads `running as WebAssembly`. The first two lines are identical everywhere.
+Compiled with `salam build --platform=js` and run with Node, the last line reads `running as JavaScript`; built with `--target=wasm32-wasi` and run under Node's WASI support, it reads `running as WebAssembly`. The first two lines are identical everywhere.
 
 ## Compiling Salam to WebAssembly with WASI {#wasi}
 
@@ -132,13 +132,13 @@ The limits follow from the model. Each request gets a fresh instance, so global 
 
 The repository holds four complete Workers apps under `tests/en/apps/`: `cloudflare-worker-hello`, `-router`, `-telegram-bot`, and `-pure`, a CGI-style program that reads the request from environment variables and needs no `net/http` at all. The CGI-style app links with the embedded WASI sysroot; the `net/http` ones need wasi-sdk, as described above.
 
-## Compiling Salam to JavaScript with salam js {#javascript}
+## Compiling Salam to JavaScript with salam build --platform=js {#javascript}
 
 For code that has to run in a browser tab and touch the page, Salam has a JavaScript backend. It turns a program into one JavaScript file, minified by default, or into a self-contained HTML page when the output name ends in `.html`:
 
 ```bash
-salam js counter.salam --output=counter.js
-salam js counter.salam --output=counter.html
+salam build counter.salam --platform=js --output=counter.js
+salam build counter.salam --platform=js --output=counter.html
 ```
 
 The [dom](/std/dom/) package gives Salam code access to the page: creating elements, setting text and attributes, styles, classes, events, timers and animation frames.
@@ -163,7 +163,7 @@ func main:
 end
 ```
 
-Compiled to `counter.html`, the whole page with its script is under 1 KB. The generated code is plain JavaScript: no WebAssembly, no runtime library to download, and calls such as `dom.SetText` become direct DOM operations. The `tests/en/js` directory holds about a hundred programs that are compiled with `salam js`, run, and compared with their expected output.
+Compiled to `counter.html`, the whole page with its script is under 1 KB. The generated code is plain JavaScript: no WebAssembly, no runtime library to download, and calls such as `dom.SetText` become direct DOM operations. The `tests/en/js` directory holds about a hundred programs that are compiled with `salam build --platform=js`, run, and compared with their expected output.
 
 The JavaScript backend has limits that come from JavaScript itself:
 
@@ -171,16 +171,16 @@ The JavaScript backend has limits that come from JavaScript itself:
 - **Threads.** `spawn` is not supported on this backend, and the atomic intrinsics become plain reads and writes, since the generated code runs on the page's single thread.
 - **System access.** Files, sockets and processes belong to native and WASI targets. In the browser the `dom` package gives you the page, events, timers, localStorage, the canvas, and generic property and method access to any JavaScript object.
 
-## Web projects: salam web and the page language {#web}
+## Web projects: salam build --platform=web and the page language {#web}
 
-Salam also has a page language: a `page:` block describes HTML elements, CSS styles and events in Salam syntax, and `salam page build` turns it into HTML, CSS and JavaScript. `salam web` builds a whole web project, a page plus the Salam programs it loads with `script: src="app.salam"`, into one `.html` file, or into separate `.html`, `.css` and `.js` files with `--split`. The article [web development with Salam](/blog/web-development-with-salam/) and the course lessons from [page text](/learn/page/text/) onward cover the page language.
+Salam also has a page language: a `page:` block describes HTML elements, CSS styles and events in Salam syntax, and `salam build --platform=web` turns it into HTML, CSS and JavaScript. When the page loads Salam programs, the same command builds a whole web project, a page plus the Salam programs it loads with `script: src="app.salam"`, into one `.html` file, or into separate `.html`, `.css` and `.js` files with `--split`. The article [web development with Salam](/blog/web-development-with-salam/) and the course lessons from [page text](/learn/page/text/) onward cover the page language.
 
 ## The online editor: the compiler in a browser tab {#editor}
 
 The [online editor](https://editor.salamlang.ir) runs Salam with no server and no installation, and it is a good example of these targets working together:
 
 - The Salam compiler (lexer, parser, semantic analysis, the interpreter and the layout engine) is emitted as C with `--backend=c --emit-c --target=wasm32-unknown-emscripten` and compiled to WebAssembly with Emscripten, together with a minified copy of the standard library.
-- The editor's own interface is written in Salam: `page.salam` holds the structure and styles and is built with `salam web`, and `app.salam`, which handles state, syntax highlighting, keyboard shortcuts and the WebAssembly boot, is compiled with `salam js`.
+- The editor's own interface is written in Salam: `page.salam` holds the structure and styles and is built with `salam build --platform=web`, and `app.salam`, which handles state, syntax highlighting, keyboard shortcuts and the WebAssembly boot, is compiled with `salam build --platform=js`.
 - Programs typed into the editor run in the interpreter inside the WebAssembly module, because a browser cannot run a C compiler or load a freshly built native binary.
 
 Because programs run in the interpreter, the editor is ideal for learning and for checking logic, while code that needs threads, FFI or full native speed should be built with the compiler on your machine. The article [salam run vs salam build](/blog/salam-run-vs-salam-build/) explains the interpreter.
@@ -195,17 +195,17 @@ For desktop applications with a web interface, Salam uses a system WebView rathe
 
 ## Choosing a target {#choosing}
 
-| You need                                                      | Choose                                                   |
-| ------------------------------------------------------------- | -------------------------------------------------------- |
-| Maximum speed, threads, files, sockets, C libraries           | Native build                                             |
-| A sandboxed module a host can embed and limit                 | `wasm32-wasi`                                            |
-| An HTTP handler at the edge with no server to run             | `wasm32-wasi` on Cloudflare Workers                      |
-| Logic that runs in the visitor's browser and changes the page | `salam js`                                               |
-| A static or interactive site written in Salam                 | The page language with `salam page build` or `salam web` |
-| Learning or sharing a snippet                                 | The online editor                                        |
-| An operating system or bare-metal program                     | A freestanding `*-none` target                           |
+| You need                                                      | Choose                                              |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| Maximum speed, threads, files, sockets, C libraries           | Native build                                        |
+| A sandboxed module a host can embed and limit                 | `wasm32-wasi`                                       |
+| An HTTP handler at the edge with no server to run             | `wasm32-wasi` on Cloudflare Workers                 |
+| Logic that runs in the visitor's browser and changes the page | `salam build --platform=js`                         |
+| A static or interactive site written in Salam                 | The page language with `salam build --platform=web` |
+| Learning or sharing a snippet                                 | The online editor                                   |
+| An operating system or bare-metal program                     | A freestanding `*-none` target                      |
 
-A sensible pattern for a web product is to keep shared logic (validation, formatting, pure calculations) in plain Salam packages with no system calls, compile it natively for the server and with `salam js` for the browser, and keep platform code at the edges behind `if defined(SALAM_JS):` or `if SALAM_ARCH_WASM:`.
+A sensible pattern for a web product is to keep shared logic (validation, formatting, pure calculations) in plain Salam packages with no system calls, compile it natively for the server and with `salam build --platform=js` for the browser, and keep platform code at the edges behind `if defined(SALAM_JS):` or `if SALAM_ARCH_WASM:`.
 
 ## Frequently asked questions {#faq}
 
@@ -215,7 +215,7 @@ Yes. `salam build app.salam --target=wasm32-wasi` produces a WASI preview 1 modu
 
 ### Does Salam compile to JavaScript?
 
-Yes. `salam js app.salam` writes a minified JavaScript file, or a complete HTML page when the output ends in `.html`. The `dom` package gives access to elements, events and timers. Integers in `i64` lose precision above `2^53` on this backend.
+Yes. `salam build app.salam --platform=js` writes a minified JavaScript file, or a complete HTML page when the output ends in `.html`. The `dom` package gives access to elements, events and timers. Integers in `i64` lose precision above `2^53` on this backend.
 
 ### Can I run Salam in the browser without installing anything?
 

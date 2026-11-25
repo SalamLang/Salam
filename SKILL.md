@@ -454,7 +454,7 @@ u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
 Shift counts mask to 0-127. A float cast saturates like the other widths. They cannot
 index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
 refuses them, and an `extern` function can use them only on 64-bit targets
-(E160). On `salam js` they are exact BigInts, but a value that passes through
+(E160). On `salam build --platform=js` they are exact BigInts, but a value that passes through
 `i64`/`u64` there is still limited to 2^53.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
@@ -2413,7 +2413,7 @@ are never translated, in either language.
 backend rather than defaulting to false, so test it with `defined` in either
 language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
 English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
-On the JS backend (`salam js` and page scripts) `SALAM_OS` and `SALAM_ARCH`
+On the JS backend (`salam build --platform=js` and page scripts) `SALAM_OS` and `SALAM_ARCH`
 are both `"js"` and every `SALAM_OS_*` / `SALAM_ARCH_*` flag is false, so an
 OS chain falls through to its `else:` there.
 
@@ -2446,11 +2446,11 @@ UEFI object format. See `docs/FREESTANDING.md`.
 
 ## 9. Layout DSL (one page language: web, desktop, Android, iOS; shadcn design system)
 
-A `page:` block (either its own `.salam` file built with `salam page build`,
+A `page:` block (either its own `.salam` file built with `salam build --platform=web`,
 or embedded after a general program) declares a UI tree. One page language, four
-targets, the same file: **web** (HTML, CSS and JS, `salam page build`),
+targets, the same file: **web** (HTML, CSS and JS, `salam build --platform=web`),
 **desktop** (a native window drawn by Salam, `--ui=native`), **Android**
-(`salam app android`) and **iOS** (`salam app ios`). Never write HTML, CSS,
+(`salam build --platform=android`) and **iOS** (`salam build --platform=ios`). Never write HTML, CSS,
 Compose, XML layouts or SwiftUI for these: write a `page:`. Elements open with
 `:` … `end`; **attributes and style properties are `name = value` pairs** (no
 commas needed) written inside the element. Every element, attribute and value has
@@ -2579,7 +2579,7 @@ package, through a pointer or a second name for a Vector) need
 `ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A written
 variable needs a visible type: a literal, a typed parameter or
 `value as Type` (`items := Vector {} as Vector<str>`). It works on the web
-too, in the page block built by `salam page build`: each instance renders
+too, in the page block built by `salam build --platform=web`: each instance renders
 itself in the page script, after a handler re-renders only the instances
 whose state it wrote, and patches their DOM in place (focus, typed input
 values and keyed rows survive). On the web a component with variables may
@@ -2622,7 +2622,7 @@ components/shop/badge.salam
 lib/format.salam          include = "lib/format.salam" to use it
 ```
 
-`salam page build --ssr[=DIR]` writes `DIR/server` (a native program) and
+`salam build --platform=web --ssr[=DIR]` writes `DIR/server` (a native program) and
 `DIR/public`; run it with `PORT` and `HOST` (default 8080 and 127.0.0.1).
 `salam serve --render` builds, runs and rebuilds on save. The server answers
 every route with finished HTML and your `_404`, embeds `<script
@@ -2813,7 +2813,7 @@ standard, so they cannot carry raw CSS or markup.
 | E300        | null or an optional value on a required attribute                             |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
-Void elements print `<img ...>` (never `/>`). `page build` exits non-zero
+Void elements print `<img ...>` (never `/>`). `salam build --platform=web` exits non-zero
 and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A
@@ -2824,7 +2824,7 @@ a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
 the JS that validates and normalises Jalali dates. The schema format is
 documented in `docs/LAYOUT_SCHEMA.md`.
 
-Build for the web: `salam page build page.salam` → `page.html` + `page.css` +
+Build for the web: `salam build page.salam --platform=web` → `page.html` + `page.css` +
 `page.js`; `--inline` → one self-contained HTML file; multiple files → per-page
 HTML with merged `style.css`/`script.js`. Run natively:
 `salam run page.salam --ui=native`.
@@ -2833,10 +2833,10 @@ HTML with merged `style.css`/`script.js`. Run natively:
 
 | target  | command                                                                                                                                                   |
 | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| web     | `salam page build page.salam [--inline]`, `salam serve page.salam` (live reload), `salam web page.salam` (page plus compiled `script: src=` programs)     |
+| web     | `salam build page.salam --platform=web [--inline]`, `salam serve page.salam` (live reload); `script: src=` programs are compiled into the build     |
 | desktop | `salam run page.salam --ui=native`, `salam build page.salam --ui=native`, `salam check page.salam --ui=native` (E165/W166 list what a window cannot show) |
-| Android | `salam app android app.salam --out DIR [--id ID] [--name LABEL] [--icon PNG] [--abi LIST] [--run]` (needs the Android SDK, NDK and JDK; `docs/MOBILE.md`) |
-| iOS     | `salam app ios app.salam --out DIR [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`)                                 |
+| Android | `salam build --platform=android app.salam -o DIR -- [--id ID] [--name LABEL] [--icon PNG] [--abi LIST]`, and `salam run` instead of `build` to install and start it (needs the Android SDK, NDK and JDK; `docs/MOBILE.md`) |
+| iOS     | `salam build --platform=ios app.salam -o DIR -- [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`)                                 |
 
 A mobile app is the desktop native page packed with a prebuilt host shell, so
 a page that passes `salam check page.salam --ui=native` is the one to ship to a
@@ -2928,7 +2928,7 @@ salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
-salam page build page.salam [--inline]# layout DSL → web page (run/build a window with --ui=native)
+salam build page.salam --platform=web [--inline]# layout DSL → web page (run/build a window with --ui=native)
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
@@ -3015,12 +3015,12 @@ Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
   `docs/PLATFORMS.md`); `--backend=native` writes machine code itself for
   x86-64, i686, AArch64, 32-bit ARM and RISC-V 64 Linux, x86-64, i686 and
   AArch64 Windows, and x86-64 and arm64 macOS (`docs/NATIVE_BACKEND.md`); `--target=wasm32-wasi`
-  builds WebAssembly; `salam js` and `salam web` target browsers;
+  builds WebAssembly; `salam build --platform=js` and `salam build --platform=web` target browsers;
   `--target=<arch>-unknown-none` with `--entry`, `--linker-script` and
   `--link-object` builds freestanding kernels (`docs/FREESTANDING.md`).
 - Beyond the terminal: `gui.webview` for desktop apps (`docs/DESKTOP.md`,
   `salam new name --desktop`, installers with `salam bundle`),
-  `std/gui/raylib` for games, the layout DSL (`salam page build`), the
+  `std/gui/raylib` for games, the layout DSL (`salam build --platform=web`), the
   `android/`, `ios/` and `mobile/` projects.
 - Servers: `net/http` + `net/router`, middleware, cookies, sessions, swagger,
   validation, `net.ssr` (server functions at `POST /_salam/fn/<Name>` with
@@ -3121,7 +3121,7 @@ so the host `worker.js` must exchange that data with the Salam module. There is
 no filesystem (`router.Static` has nothing to serve, use Workers static
 assets), and no outbound sockets, so `http.Get` cannot call another server from
 the module. A program that must call out uses a few lines of `fetch` in
-`worker.js` or a native host. `salam js` is for browsers, not a Worker module.
+`worker.js` or a native host. `salam build --platform=js` is for browsers, not a Worker module.
 
 Complete examples (in the repository, not built by CI for Wasm): `tests/en/apps/cloudflare-worker-router`,
 `-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook
@@ -3760,8 +3760,8 @@ More forms, each checked with the current compiler:
 **صفحه (the layout DSL in Persian).** The same one page language as §9, with
 Persian names: `صفحه:` ... `پایان`, elements `جعبه`, `پاراگراف`, `دکمه`, `کارت`,
 attributes `محتوا`, `گونه`, `اندازه`, `چیدمان`, `شکاف`, `فضا`. Build and run with
-the same commands (`salam page build`, `--ui=native`, `salam app android`,
-`salam app ios`). Values that are words (`"ردیف"`, `"ثانویه"`, `"شد سی ان"`) are
+the same commands (`salam build --platform=web`, `--ui=native`, `salam build --platform=android`,
+`salam build --platform=ios`). Values that are words (`"ردیف"`, `"ثانویه"`, `"شد سی ان"`) are
 written in quotes. Never guess a name: `salam_layout` (MCP) or
 `std/layout/{elements,attributes,values}` give the Persian spelling of each.
 

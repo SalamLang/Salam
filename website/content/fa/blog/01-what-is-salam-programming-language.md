@@ -147,7 +147,7 @@ salam check src/             # بررسی گونه‌ها بدون تولید ک
 salam test                   # اجرای همه‌ی تابع‌های test_ در فایل‌های *_test.salam
 salam format .               # قالب‌بندی کد در همان فایل‌ها
 salam translate fa app.salam # بازنویسی کد انگلیسی به فارسی
-salam page build site.salam  # تبدیل برنامه‌ی صفحه به HTML، CSS و JS
+salam build site.salam --platform=web  # تبدیل برنامه‌ی صفحه به HTML، CSS و JS
 ```
 
 یک مفسر (`salam exec`) هم هست که به ابزار C نیازی ندارد، به‌علاوه‌ی REPL، مستندساز، راه‌انداز خطایاب، بررسی‌کننده‌ی حافظه، سرور زبان (LSP) برای ویرایشگرها و افزونه برای Visual Studio Code و ده ویرایشگر دیگر. اگر نمی‌خواهید چیزی نصب کنید، [ویرایشگر آنلاین](https://editor.salamlang.ir) سلام را در خود مرورگر کامپایل و اجرا می‌کند.

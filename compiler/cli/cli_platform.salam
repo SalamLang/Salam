@@ -148,6 +148,34 @@ func plat_native(opt &: dr.Dr):
     opt.defines.Push("SALAM_UI_NATIVE")
 end
 
+func plat_script_line(line: str): bool:
+    quote := str.IndexOf(line, "\"")
+    if quote < 0 or not str.Contains(line, ".salam\""):
+        ret false
+    end
+    head := str.TrimRight(str.Substr(line, 0, quote))
+    if not str.EndsWith(head, "=") and not str.EndsWith(head, ":"):
+        ret false
+    end
+    ret str.Contains(head, "src") or str.Contains(head, "url") or str.Contains(
+        head, "source"
+    ) or str.Contains(head, "href") or str.Contains(head, "منبع") or str.Contains(head, "نشانی")
+end
+
+func plat_single_html(opt &: dr.Dr, entry: str): bool:
+    if not os.Exists(entry) or os.IsDir(entry):
+        ret false
+    end
+    lines := str.Split(os.ReadFile(entry), "\n")
+    defer lines.Free()
+    repeat lines.Len() in i:
+        if plat_script_line(lines.Get(i)):
+            ret true
+        end
+    end
+    ret not opt.inline_mode and str.EndsWith(str.Lower(opt.output), ".html")
+end
+
 if SALAM_OS_WINDOWS:
     func plat_ssr_host(): bool:
         ret false
@@ -169,13 +197,23 @@ func plat_one(opt &: dr.Dr, platform: str, dir: str, entry: str, info: pm.PkgInf
             end
             ret dr.Serve(opt)
         end
-        opt.command = dr.CMD_LAYOUT_BUILD
-        opt.inputs.Clear()
-        opt.inputs.Push(str.Equals(entry, plat_entry(dir)) ? dir : entry)
-        if str.Equals(info.project_web, "ssr"):
+        several := opt.inputs.Len() > 1
+        if not several:
+            opt.inputs.Clear()
+            opt.inputs.Push(str.Equals(entry, plat_entry(dir)) ? dir : entry)
+        end
+        if opt.ssr or str.Equals(info.project_web, "ssr"):
             opt.ssr = true
+            opt.command = dr.CMD_LAYOUT_BUILD
             ret dr.SsrBuild(opt)
         end
+        if not several and plat_single_html(opt, entry):
+            opt.command = dr.CMD_WEB
+            opt.inputs.Clear()
+            opt.inputs.Push(entry)
+            ret dr.Web(opt)
+        end
+        opt.command = dr.CMD_LAYOUT_BUILD
         ret dr.LayoutBuild(opt)
     end
     if str.Equals(platform, "js"):
@@ -184,8 +222,10 @@ func plat_one(opt &: dr.Dr, platform: str, dir: str, entry: str, info: pm.PkgInf
             ret 2
         end
         opt.command = dr.CMD_JS
-        opt.inputs.Clear()
-        opt.inputs.Push(entry)
+        if opt.inputs.Len() <= 1:
+            opt.inputs.Clear()
+            opt.inputs.Push(entry)
+        end
         ret dr.Js(opt)
     end
     if str.Equals(platform, "android") or str.Equals(platform, "ios"):

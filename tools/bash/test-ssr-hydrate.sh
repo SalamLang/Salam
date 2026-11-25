@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds tests/$SALAM_TEST_LANG/ssr/site (en by default) with 'salam page build --ssr', starts the server and
+# Builds tests/$SALAM_TEST_LANG/ssr/site (en by default) with 'salam build --platform=web --ssr', starts the server and
 # runs tools/js/test-ssr-hydrate.js against it in a browser (CHROME, and
 # playwright-core on NODE_PATH).
 
@@ -22,7 +22,7 @@ export SALAM_STD="$root/std"
 cd "$work" || exit 1
 
 cp -R "$root/tests/$lang/ssr/site" site
-"$salam" page build --ssr="$work/dist" site --no-color --log-level=error --lang="$lang" >build.log 2>&1 || {
+"$salam" build site --platform=web --ssr="$work/dist" --no-color --log-level=error --lang="$lang" >build.log 2>&1 || {
     cat build.log
     exit 1
 }

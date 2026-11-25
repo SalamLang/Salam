@@ -145,7 +145,7 @@ salam check src/             # type-check without generating code
 salam test                   # run every test_ function in *_test.salam files
 salam format .               # format the source in place
 salam translate fa app.salam # rewrite English source as Persian
-salam page build site.salam  # turn a page program into HTML, CSS and JS
+salam build site.salam --platform=web  # turn a page program into HTML, CSS and JS
 ```
 
 There is also an interpreter (`salam exec`) that needs no C toolchain, a REPL, a documentation generator, a debugger launcher, a memory checker, a language server for editors and plugins for Visual Studio Code and ten other editors. If you would rather not install anything, the [online editor](https://editor.salamlang.ir) compiles and runs Salam in the browser.

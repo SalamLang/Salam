@@ -9,13 +9,14 @@ phone only shows them and sends touch, keyboard and lifecycle events.
 You need a `salam` compiler, the Android SDK with an NDK, and a JDK 21.
 
 ```
-salam app android app.salam --out out --run
+salam run --platform=android app.salam -o out
 ```
 
 In a project folder, `salam build --platform=android` builds the
 same app into `build/android` and `salam run --platform=android` also installs
-and starts it, with the default options. `salam app android` is the form that
-takes the options below.
+and starts it, with the default options. Given a source file and `-o`, they
+take the options below after `--`, for example
+`salam build --platform=android app.salam -o out -- --abi x86_64`.
 
 A release archive carries the build files next to `std/`; from a source
 checkout the compiler finds them too. Set `SALAM_MOBILE_ROOT` to point at
@@ -138,7 +139,7 @@ per process. The parser is in `mobile/host/common/salam_host_common.c`.
 ## iOS
 
 ```
-salam app ios app.salam --out out
+salam build --platform=ios app.salam -o out
 xcrun simctl install booted out/App.app
 xcrun simctl launch booted app.salam.app
 ```
@@ -170,7 +171,7 @@ is signed with a certificate and a provisioning profile of yours, which the buil
 3. Build and sign:
 
 ```
-salam app ios app.salam --out out --device --id ir.example.notes \
+salam build --platform=ios app.salam -o out -- --device --id ir.example.notes \
     --team ABCDE12345 --profile notes.mobileprovision --sign-identity "Apple Development: Name (XXXXXXXXXX)"
 xcrun devicectl device install app --device DEVICE_ID out/App.app
 ```

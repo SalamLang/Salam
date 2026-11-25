@@ -6,7 +6,7 @@ const file = process.argv[2];
 if (!file) {
   console.error("usage: node test-page-state.js page.html");
   console.error(
-    "page.html is tests/en/page/components/component_state_list.salam built with salam web",
+    "page.html is tests/en/page/components/component_state_list.salam built with salam build --platform=web",
   );
   console.error(
     "the browser is $CHROME, or Google Chrome or Chromium from the usual places",

@@ -6,7 +6,7 @@
 //
 // With --lsp the fake compiler answers `lsp --version`, so the language client
 // and the debug adapter start too. That pass stubs vscode-languageclient and
-// so needs the unbundled `salam js` output, not the packaged one.
+// so needs the unbundled `salam build --platform=js` output, not the packaged one.
 
 const assert = require("node:assert");
 const fs = require("node:fs");

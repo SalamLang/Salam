@@ -25,7 +25,7 @@ end
 ```
 
 ```
-salam page build app.salam            web page, as before
+salam build app.salam --platform=web            web page, as before
 salam run app.salam --ui=native       the same page in a native window
 salam build app.salam --ui=native     a native executable
 ```
@@ -69,7 +69,7 @@ and raw markup islands such as inline SVG.
 One page source, two targets:
 
 ```
-salam page build app.salam              -> app.html (web, unchanged)
+salam build app.salam --platform=web              -> app.html (web, unchanged)
 salam run app.salam --ui=native         -> a native window, drawn by Salam
 salam build app.salam --ui=native       -> a native executable
 ```
@@ -501,7 +501,7 @@ needed before they exist.
 
 ### On the web
 
-`salam page build` gives the same variables to the page block. Every
+`salam build --platform=web` gives the same variables to the page block. Every
 component instance that keeps a written variable gets one global per such
 declaration
 (`__salam_ws_N`), a render function `__salam_view_I()` built from the
@@ -676,7 +676,7 @@ block and in components; a function of the program that calls it is an error
 - Variables are declared only at the top of a component body or of the page
   block, not inside an element, `if` or `each`.
 - On the web, component variables work in the page block built by
-  `salam page build`,
+  `salam build --platform=web`,
   not in runtime pages with parameters. Instances and page parts that read
   mutable globals are drawn by the page script, so they show nothing without
   JavaScript. A component inside `each` takes its parameters from the row

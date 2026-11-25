@@ -10,7 +10,7 @@ date: 2026-11-11
 
 Salam's page language handles UI components, state management and event handling without a separate frontend framework. You declare the page as a tree of elements, write event handlers as ordinary Salam functions, and the compiler turns the whole thing into HTML, CSS and JavaScript. **A component in Salam is a named piece of page with parameters; when it declares a variable that a handler changes and the view shows, that variable becomes state, and the page redraws only what depends on it.** The same page can also run in a native window drawn by Salam itself.
 
-This article walks through the model step by step, from a single click handler to components that keep their own state and talk to each other, and ends with the checks the compiler runs and the limits you should know about. Every program below is a complete page that builds with `salam page build`.
+This article walks through the model step by step, from a single click handler to components that keep their own state and talk to each other, and ends with the checks the compiler runs and the limits you should know about. Every program below is a complete page that builds with `salam build --platform=web`.
 
 ## How interactivity works in a Salam page {#model}
 
@@ -235,7 +235,7 @@ A UI that is wrong in the browser is usually wrong silently: a misspelled id ret
 Here is what the first two look like on a page that calls its handler by mistake and looks up an id that does not exist:
 
 ```bash
-$ salam page build counter.salam
+$ salam build counter.salam --platform=web
 E137: event attribute 'click' must be a function name, an inline function, or a JS string, not an expression (counter.salam:9:21)
 E138: no element with id 'counter' in this file's layout (counter.salam:4:26)
 page build failed with 2 errors; no output written
@@ -248,7 +248,7 @@ The id check has a limit worth knowing: it only sees IDs written as plain text. 
 The reactive model has a second payoff. A page whose handlers only change state does not depend on the browser, so Salam can run it in a native window:
 
 ```bash
-salam page build tasks.salam              # tasks.html, tasks.css, tasks.js
+salam build tasks.salam --platform=web              # tasks.html, tasks.css, tasks.js
 salam run tasks.salam --ui=native         # the same page in a native window
 salam build tasks.salam --ui=native       # a native executable
 salam check tasks.salam --ui=native       # report what a window cannot show

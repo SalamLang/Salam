@@ -189,7 +189,7 @@ end
 ### Targets
 
 - **web**: the History API for `go`, `Link` is `<a href>` (middle click,
-  open in new tab and crawlers work). `salam page build` writes one HTML file
+  open in new tab and crawlers work). `salam build --platform=web` writes one HTML file
   per route that has no parameters (static prerender, with the matching title
   and meta) and a fallback `index.html` for the rest; route changes after the
   first load do not reload.

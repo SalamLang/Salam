@@ -10,7 +10,7 @@ if (!base || !publicDir) {
     "usage: node test-ssr-hydrate.js http://127.0.0.1:PORT path/to/dist/public",
   );
   console.error(
-    "the server is the one built by 'salam page build --ssr' from tests/en/ssr/site",
+    "the server is the one built by 'salam build --platform=web --ssr' from tests/en/ssr/site",
   );
   process.exit(2);
 }

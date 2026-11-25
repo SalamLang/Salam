@@ -48,7 +48,7 @@ salam build app.salam --target=x86_64-w64-windows-gnu
 salam build app.salam --target=aarch64-linux-musl --output=app-arm64
 ```
 
-وقتی هدف ویندوز باشد، نام پیش‌فرض خروجی پسوند `.exe` می‌گیرد. سه‌تایی‌های بدون سیستم‌عامل (`x86_64-unknown-none`، `i686-unknown-none`، `aarch64-unknown-none`) برنامه‌های مستقل (Freestanding) بدون سیستم‌عامل می‌سازند و نوشته‌ی جداگانه‌ای دارند: [سلام مستقل و برنامه‌نویسی روی سخت‌افزار خام](/blog/freestanding-salam-bare-metal/).
+وقتی هدف ویندوز باشد، نام پیش‌فرض خروجی پسوند `.exe` می‌گیرد. سه‌تایی‌های بدون سیستم‌عامل (`x86_64-unknown-none`، `i686-unknown-none`، `aarch64-unknown-none`، `riscv64-unknown-none`) برنامه‌های مستقل (Freestanding) بدون سیستم‌عامل می‌سازند و نوشته‌ی جداگانه‌ای دارند: [سلام مستقل و برنامه‌نویسی روی سخت‌افزار خام](/blog/freestanding-salam-bare-metal/).
 
 ## کدام تولیدکننده‌ی کد کار را انجام می‌دهد؟ {#backends}
 

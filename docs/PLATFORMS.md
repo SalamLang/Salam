@@ -118,8 +118,10 @@ salam build kernel.salam --target=i686-unknown-none \
     --link-object=boot.o --output=kernel.elf
 ```
 
+The built-in runtime covers `x86_64`, `i686`, `aarch64` and `riscv64`.
 See [FREESTANDING.md](FREESTANDING.md) for the runtime, the `std/baremetal`
-API and a bootable Multiboot example in `tests/kernel/`.
+API, a bootable Multiboot example in `tests/kernel/` and the same kernel for
+the RISC-V `virt` board in `tests/kernel/riscv64/`.
 
 ## 📦 Release Matrix
 

@@ -16,13 +16,13 @@ The question matters for small teams and for learners. Every language boundary i
 
 A typical web application has five layers. This is what Salam uses for each, all of it shipped with the compiler:
 
-| Layer                            | In Salam                                                      | Where to read more                                                                 |
-| -------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| HTTP server, routing, middleware | `net.http`, `net.router`, `net.http.middleware`               | [net.http](/std/net/http/), [fast web servers](/blog/fast-web-servers-with-salam/) |
-| Data and SQL                     | `db` with SQLite, MySQL, PostgreSQL drivers, `db.sql` checks  | [typed SQL](/blog/typed-sql-database-apps/)                                        |
-| HTML and CSS                     | the page language, `page:` and `page Name(params):`           | [the layout lesson](/learn/layout/)                                                |
-| Browser behavior                 | event handlers in Salam, compiled to JavaScript               | [UI components and state](/blog/interactive-ui-components-state-events/)           |
-| Build and deploy                 | `salam build`, `salam page build`, `salam web`, `salam serve` | [salam serve](/learn/serve/)                                                       |
+| Layer                            | In Salam                                                     | Where to read more                                                                 |
+| -------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| HTTP server, routing, middleware | `net.http`, `net.router`, `net.http.middleware`              | [net.http](/std/net/http/), [fast web servers](/blog/fast-web-servers-with-salam/) |
+| Data and SQL                     | `db` with SQLite, MySQL, PostgreSQL drivers, `db.sql` checks | [typed SQL](/blog/typed-sql-database-apps/)                                        |
+| HTML and CSS                     | the page language, `page:` and `page Name(params):`          | [the layout lesson](/learn/layout/)                                                |
+| Browser behavior                 | event handlers in Salam, compiled to JavaScript              | [UI components and state](/blog/interactive-ui-components-state-events/)           |
+| Build and deploy                 | `salam build`, `salam build --platform=web`, `salam serve`   | [salam serve](/learn/serve/)                                                       |
 
 There is no web framework to choose, because the pieces above are the framework, and there is no separate frontend build: no bundler, no transpiler configuration, no `node_modules`. The compiler is one executable.
 
@@ -175,13 +175,13 @@ page:
 end
 ```
 
-`salam page build notes.salam` compiles `check` and `title_problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events/dom/) ends with the same warning.
+`salam build notes.salam --platform=web` compiles `check` and `title_problem` with Salam's JavaScript backend into the page's script. The check in the browser is a convenience for the visitor; the server still validates, because anything that runs in the browser can be changed by the person using it. The lesson on [state, the DOM and timers](/learn/events/dom/) ends with the same warning.
 
 Beyond single handlers there are three tools for the client-side:
 
 - **Components with state**, where handlers only change variables and the page redraws itself. The article [Interactive user interfaces in Salam](/blog/interactive-ui-components-state-events/) covers them.
-- **`salam js app.salam`** compiles a whole Salam program to JavaScript, or to a self-contained HTML page when the output ends in `.html`.
-- **`salam web`** builds a page plus any `script: src = "app.salam"` programs it references into one HTML file, or into separate `.html`, `.css` and `.js` files with `--split`.
+- **`salam build app.salam --platform=js`** compiles a whole Salam program to JavaScript, or to a self-contained HTML page when the output ends in `.html`.
+- **`salam build --platform=web`** builds a page plus any `script: src = "app.salam"` programs it references into one HTML file, or into separate `.html`, `.css` and `.js` files with `--split`.
 
 ## Sharing code between the server and the browser {#sharing}
 
@@ -215,10 +215,10 @@ The server includes it with `include rules "rules/rules.salam"` and calls `rules
 
 ```bash
 salam build main.salam --output=notes-server
-salam web index.salam --output=public/index.html
+salam build index.salam --platform=web --output=public/index.html
 ```
 
-When we tried this layout, both builds compiled the same function: the server binary natively, the browser copy into the page's script. One caveat from that test: a helper pulled into a plain `page:` file with `include` was not carried into its generated script, so put browser code that uses shared packages in a separate `script: src` program built by `salam web`, as above.
+When we tried this layout, both builds compiled the same function: the server binary natively, the browser copy into the page's script. One caveat from that test: a helper pulled into a plain `page:` file with `include` was not carried into its generated script, so put browser code that uses shared packages in a separate `script: src` program built by `salam build --platform=web`, as above.
 
 Sharing also has a subtle benefit in Salam. Both the native build and the JavaScript build count a string's length in UTF-8 bytes, so a length rule gives the same answer on both sides. That is not true of every "isomorphic" setup; JavaScript itself counts UTF-16 code units.
 

@@ -2,15 +2,15 @@
 title: Web development with Salam: a built-in language that generates HTML, CSS and JavaScript
 seo_title: Web Development with Salam: A Checked HTML and CSS Language
 description: Web development with Salam: a built-in page language that compiles to checked HTML, CSS and JavaScript, with components, events and server-side rendering.
-keywords: web development with Salam, HTML CSS DSL, Salam page language, salam page build, generate HTML from code, compile-time checked HTML, server-side rendering, web components, right-to-left web pages, Persian web development
+keywords: web development with Salam, HTML CSS DSL, Salam page language, salam build --platform=web, generate HTML from code, compile-time checked HTML, server-side rendering, web components, right-to-left web pages, Persian web development
 category: build
 summary: Salam has a page language inside its compiler. You describe a page as a tree of elements, the compiler checks every element, attribute and CSS value, and you get HTML, CSS and JavaScript back. This article walks from a static page to components, events and pages rendered by a Salam server.
 date: 2026-11-11
 ---
 
-Web development with Salam starts with a feature most languages leave to templates and frameworks. **Salam's page language is a declarative language built into the compiler: you describe a web page as a tree of elements with attributes and styles, the compiler checks every element, attribute and CSS value against the HTML and CSS rules, and `salam page build` turns it into HTML, CSS and, when the page has event handlers, JavaScript.** The same language describes pages that a Salam web server renders for each request, and it works in English and in Persian.
+Web development with Salam starts with a feature most languages leave to templates and frameworks. **Salam's page language is a declarative language built into the compiler: you describe a web page as a tree of elements with attributes and styles, the compiler checks every element, attribute and CSS value against the HTML and CSS rules, and `salam build --platform=web` turns it into HTML, CSS and, when the page has event handlers, JavaScript.** The same language describes pages that a Salam web server renders for each request, and it works in English and in Persian.
 
-This article covers the whole path: a static page, what the compiler checks, components, interactivity, server-side rendering, building and deploying, and the limits you should know before you choose it. Every program shown here is compiled when this site is built: the static pages with `salam page build`, the others with the normal compiler.
+This article covers the whole path: a static page, what the compiler checks, components, interactivity, server-side rendering, building and deploying, and the limits you should know before you choose it. Every program shown here is compiled when this site is built: the static pages with `salam build --platform=web`, the others with the normal compiler.
 
 ## A first page {#first-page}
 
@@ -57,7 +57,7 @@ page:
 end
 ```
 
-`salam page build site.salam` writes `site.html` and `site.css`. The HTML it produced for this page is:
+`salam build site.salam --platform=web` writes `site.html` and `site.css`. The HTML it produced for this page is:
 
 ```html
 <!doctype html>
@@ -148,7 +148,7 @@ page:
 end
 ```
 
-`salam page build` refuses it and writes no files:
+`salam build --platform=web` refuses it and writes no files:
 
 ```text
 E005: element 'image' is missing required attribute 'url' (bad.salam:3:5)
@@ -286,10 +286,10 @@ The server runs until it is stopped, so this one is type-checked rather than run
 The commands are few:
 
 ```bash
-salam page build site.salam            # site.html + site.css (+ site.js with handlers)
-salam page build site.salam --inline   # one self-contained HTML file
-salam page build home.salam about.salam  # one HTML file per page, one shared style.css
-salam web app.salam                    # a page plus the Salam scripts it uses
+salam build site.salam --platform=web            # site.html + site.css (+ site.js with handlers)
+salam build site.salam --platform=web --inline   # one self-contained HTML file
+salam build pages --platform=web                 # a folder of pages: one HTML file per page, one shared style.css
+salam build app.salam --platform=web                    # a page plus the Salam scripts it uses
 salam serve                            # serve the current folder over HTTP
 ```
 

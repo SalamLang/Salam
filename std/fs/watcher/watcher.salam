@@ -39,6 +39,7 @@ else SALAM_OS_LINUX:
     extern:
         func inotify_init1(flags: int): int
         func inotify_add_watch(fd: int, path: str, mask: u32): int
+        func inotify_rm_watch(fd: int, wd: int): int
         func close(fd: int): int
         func poll(fds: void*, nfds: usize, timeout: int): int
     end
@@ -133,7 +134,7 @@ pub struct Watcher:
     pub initialized: bool = false
     @en "skipped names"
     @fa "نام های نادیده"
-    pub skipped: str = ","
+    pub skipped: str = "\n"
     @en "skip hidden"
     @fa "نادیده بودن پنهان ها"
     pub skip_hidden: bool = false
@@ -158,10 +159,13 @@ func _content_hash(path: str): str:
     repeat text.Len() in i:
         h = (h * 31 + p[i] as i64) % 1000000007
     end
+    if text.Len() > 0:
+        mem.Free(text as void*)
+    end
     ret str.FromInt(h as int)
 end
 
-func _fingerprint(path: str): str:
+func _fingerprint(path: str, hashed: bool): str:
     sz := os.FileSize(path)
     mt := fs.ModTime(path)
     mut sb := str.NewBuilder()
@@ -171,7 +175,7 @@ func _fingerprint(path: str): str:
     str.BufAppendChar(sb, 58)
     str.BufAppend(sb, s2)
     if sz > 0 and sz <= _FP_HASH_MAX and not os.IsDir(path) and
-        time.Now() - mt <= _FP_RECENT_SECONDS:
+        (hashed or time.Now() - mt <= _FP_RECENT_SECONDS):
         s3 := _content_hash(path)
         str.BufAppendChar(sb, 58)
         str.BufAppend(sb, s3)
@@ -206,6 +210,11 @@ func _fp_changed(old: str, cur: str): bool:
     ret true
 end
 
+func _has_hash(fp: str): bool:
+    a := str.IndexOf(fp, ":")
+    ret a >= 0 and str.IndexFrom(fp, ":", a + 1) >= 0
+end
+
 func _is_skipped(name: str, skipped: str, skip_hidden: bool): bool:
     if skip_hidden and str.StartsWith(name, "."):
         ret true
@@ -215,17 +224,22 @@ func _is_skipped(name: str, skipped: str, skip_hidden: bool): bool:
     ) or str.EndsWith(name, ".tmp")):
         ret true
     end
-    probe := "," + name + ","
+    probe := "\n" + name + "\n"
     ret str.Contains(skipped, probe)
 end
 
 func _scan_dir(
-    root: str, recursive: bool, skipped: str, skip_hidden: bool, out &: collections.OrderedMap
+    root: str,
+    recursive: bool,
+    skipped: str,
+    skip_hidden: bool,
+    prev &: collections.OrderedMap,
+    out &: collections.OrderedMap
 ):
     if root.Len() == 0 or not os.Exists(root): ret end
     // If root is a file, track it directly.
     if not os.IsDir(root):
-        fp := _fingerprint(root)
+        fp := _fingerprint(root, prev.Has(root) and _has_hash(prev.Get(root)))
         key := str.Clone(root)
         out.Set(key, fp)
         ret
@@ -236,11 +250,11 @@ func _scan_dir(
         name := entries.Get(i)
         if name != "." and name != ".." and not _is_skipped(name, skipped, skip_hidden):
             p := filepath.Join(root, name)
-            fp := _fingerprint(p)
+            fp := _fingerprint(p, prev.Has(p) and _has_hash(prev.Get(p)))
             key := str.Clone(p)
             out.Set(key, fp)
             if os.IsDir(p) and recursive:
-                _scan_dir(p, recursive, skipped, skip_hidden, out)
+                _scan_dir(p, recursive, skipped, skip_hidden, prev, out)
             end
             mem.Free(p as void*)
         end
@@ -283,6 +297,7 @@ if SALAM_OS_LINUX:
             end
         end
         repeat stale.Len() in i:
+            inotify_rm_watch(w.nfd as int, conv.AtoiOr(w.watched.Get(stale.Get(i)), 0 - 1))
             w.watched.Remove(stale.Get(i))
         end
         stale.Free()
@@ -366,16 +381,18 @@ else SALAM_OS_WINDOWS:
         r := WaitForSingleObject(w.nfd as void*, ms as u32)
         if r == 0:
             woke = true
-            FindNextChangeNotification(w.nfd as void*)
+            if FindNextChangeNotification(w.nfd as void*) == 0:
+                _nat_stop(w)
+            end
         end
         ret woke
     end
 else SALAM_OS_MAC:
     func _kq_oflags(): int:
         if SALAM_OS_MAC:
-            ret 32768
+            ret 32772
         else:
-            ret 0
+            ret 4
         end
     end
 
@@ -452,9 +469,9 @@ else SALAM_OS_MAC:
 else SALAM_OS_BSD:
     func _kq_oflags(): int:
         if SALAM_OS_MAC:
-            ret 32768
+            ret 32772
         else:
-            ret 0
+            ret 4
         end
     end
 
@@ -595,18 +612,22 @@ end
 pub func Snapshot(w &: Watcher):
     w.fingerprints.Free()
     w.fingerprints = collections.OrderedMap {}
-    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, w.fingerprints)
+    mut none := collections.OrderedMap {}
+    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, none, w.fingerprints)
+    none.Free()
     w.initialized = true
     if not w.ntried:
         _nat_open(w)
     end
-    _nat_sync(w, w.fingerprints)
+    if w.nmode != 0:
+        _nat_sync(w, w.fingerprints)
+    end
 end
 
 @en "Ignore"
 @fa "نادیده گرفتن"
 pub func Ignore(w &: Watcher, name: str):
-    w.skipped += name + ","
+    w.skipped += name + "\n"
 end
 
 @en "IgnoreHidden"
@@ -625,11 +646,11 @@ pub func Poll(w &: Watcher): Vector<Event>:
     end
 
     mut now := collections.OrderedMap {}
-    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, now)
+    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, w.fingerprints, now)
     _diff(w.fingerprints, now, out)
-    if _nat_sync(w, now):
+    if w.nmode != 0 and _nat_sync(w, now):
         mut again := collections.OrderedMap {}
-        _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, again)
+        _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, now, again)
         _diff(now, again, out)
         now.Free()
         now = again
@@ -646,7 +667,9 @@ pub func PollSettled(w &: Watcher, settle_ms: int): Vector<Event>:
     if out.Len() == 0:
         ret out
     end
-    until true:
+    mut rounds := 0
+    until rounds < 12:
+        rounds++
         time.Sleep(settle_ms)
         more := Poll(w)
         if more.Len() == 0:

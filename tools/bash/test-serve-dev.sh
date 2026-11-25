@@ -238,7 +238,7 @@ wait "$PID" 2>/dev/null
 PID=""
 
 mkdir "$T/built"
-printf '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"></head><body>x</body></html>' >"$T/built/index.html"
+printf '<!doctype html><html data-lang="en" dir="rtl" lang = "fa-IR"><head><meta charset="utf-8"></head><body>x</body></html>' >"$T/built/index.html"
 "$SALAM" serve "$T/built" --watch --port="$PORT" >"$T/built.log" 2>&1 &
 PID=$!
 wait_up

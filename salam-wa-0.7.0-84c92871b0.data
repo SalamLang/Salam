@@ -193731,6 +193731,12 @@ mut _sc_dead := 0
 mut _sc_touched := Vector {} as Vector<i64>
 mut _sc_text_nodes := Vector {} as Vector<int>
 mut _sc_el_changed := Vector {} as Vector<int>
+mut _sc_ev_head := Vector {} as Vector<int>
+mut _sc_ev_next := Vector {} as Vector<int>
+mut _sc_ev_built := false
+mut _sc_ev_dead := 0
+mut _sc_made := Vector {} as Vector<int>
+mut _sc_tracking := false
 struct _Scope:
 pub site: int = -1
 pub key: str = ""
@@ -193762,11 +193768,17 @@ s.slot = -1
 s.count = 0
 s.pre = 0
 s.key = ""
+if _sc_tracking:
+_sc_made.Push(id)
+end
 ret id
 end
 mut s := _Scope { alive = true }
 s.kids = Vector {} as Vector<int>
 _sc.Push(s)
+if _sc_tracking:
+_sc_made.Push(_sc.Len() - 1)
+end
 ret _sc.Len() - 1
 end
 func _sc_slot_alloc(comp: int): int:
@@ -194208,14 +194220,56 @@ n = p
 end
 ret false
 end
-func _sc_drop_events(before: int, d: int, tops: Vector<int>):
-mut marks := _sc_top_marks(tops)
-defer marks.Free()
+func _sc_ev_link(k: int):
+node := _e.dom.ev_node[k]
+if node < 0:
+ret
+end
+until _sc_ev_head.Len() <= node:
+_sc_ev_head.Push(-1)
+end
+until _sc_ev_next.Len() <= k:
+_sc_ev_next.Push(-1)
+end
+_sc_ev_next[k] = _sc_ev_head[node]
+_sc_ev_head[node] = k
+end
+func _sc_ev_build():
+_sc_ev_head.Clear()
+_sc_ev_next.Clear()
+repeat _e.dom.nodes.Len():
+_sc_ev_head.Push(-1)
+end
+repeat _e.dom.ev_node.Len():
+_sc_ev_next.Push(-1)
+end
+repeat _e.dom.ev_node.Len() in k:
+_sc_ev_link(k)
+end
+_sc_ev_built = true
+end
+func _sc_ev_kill_tree(n: int, before: int):
+if n >= 0 and n < _sc_ev_head.Len():
+mut k := _sc_ev_head[n]
+until k >= 0:
+if k < before and _e.dom.ev_node[k] == n:
+_e.dom.ev_node[k] = -2
+_sc_ev_dead++
+end
+k = _sc_ev_next[k]
+end
+end
+each c in _e.dom.nodes[n].kids:
+_sc_ev_kill_tree(c, before)
+end
+end
+func _sc_ev_compact():
+if _sc_ev_dead > 0:
 mut w := 0
 n := _e.dom.ev_node.Len()
 repeat n in i:
 node := _e.dom.ev_node[i]
-if i < before and _sc_in_marked(node, d, marks):
+if node == -2:
 _sfree(_e.dom.ev_kind[i])
 continue
 end
@@ -194230,6 +194284,25 @@ repeat n - w:
 _a := _e.dom.ev_node.Pop()
 _b := _e.dom.ev_kind.Pop()
 _c := _e.dom.ev_fn.Pop()
+end
+_sc_ev_dead = 0
+end
+_sc_ev_built = false
+end
+func _sc_drop_events(before: int, _d: int, tops: Vector<int>):
+if not _sc_ev_built:
+_sc_ev_build()
+end
+each t in tops:
+_sc_ev_kill_tree(t, before)
+end
+end
+func _sc_ev_index_new(from: int):
+if not _sc_ev_built:
+ret
+end
+repeat _e.dom.ev_node.Len() - from in i:
+_sc_ev_link(from + i)
 end
 end
 func _sc_subtree_size(n: int): int:
@@ -194327,6 +194400,217 @@ _e.ctl = nc
 end
 end
 end
+func _sc_top_key(n: int): str:
+k := _attr(_e.dom, n, "key")
+if k.Len() > 0:
+ret _e.dom.nodes[n].kind + "|k" + k
+end
+i := _attr(_e.dom, n, "id")
+if i.Len() > 0:
+ret _e.dom.nodes[n].kind + "|i" + i
+end
+ret ""
+end
+func _sc_style_new(n: int):
+_compute(n)
+each k in _e.dom.nodes[n].kids:
+_sc_style_new(k)
+end
+end
+func _sc_try_keyed(
+id: int, d: int, pos: int, olds: Vector<int>, news: Vector<int>, nbefore: int, evbefore: int
+): bool:
+if not _e.has_tree or d >= _e.fid.Len() or news.Len() == 0:
+ret false
+end
+if _sc_dead > 2 * (_e.dom.nodes.Len() - _sc_dead) + 512:
+ret false
+end
+dfid := _e.fid[d]
+if dfid < 0:
+ret false
+end
+dk := _e.dom.nodes[d].kids
+repeat dk.Len() - news.Len() in pk:
+kn := dk[pk]
+if kn >= _e.fid.Len() or _e.fid[kn] < 0 or _e.tree.Parent(_e.fid[kn]) != dfid:
+ret false
+end
+end
+mut keys := HashMap {} as HashMap<str, int>
+defer keys.Free()
+repeat olds.Len() in j:
+o := olds[j]
+if o >= _e.fid.Len() or _e.fid[o] < 0 or _e.tree.Parent(_e.fid[o]) != dfid:
+ret false
+end
+k := _sc_top_key(o)
+if k.Len() == 0 or keys.Has(k):
+ret false
+end
+keys.Put(k, j)
+end
+mut pair := Vector {} as Vector<int>
+defer pair.Free()
+mut used := Vector {} as Vector<bool>
+defer used.Free()
+repeat olds.Len():
+used.Push(false)
+end
+mut seen := HashMap {} as HashMap<str, int>
+defer seen.Free()
+mut kinds := HashMap {} as HashMap<str, int>
+defer kinds.Free()
+each ko in olds:
+kinds.Put(_e.dom.nodes[ko].kind, 1)
+end
+mut fresh := 0
+each nw in news:
+if _e.dom.nodes[nw].k == _K_TEXT or _e.dom.nodes[nw].k == _K_BR:
+ret false
+end
+k := _sc_top_key(nw)
+if k.Len() == 0 or seen.Has(k):
+ret false
+end
+seen.Put(k, 1)
+mut j := -1
+if keys.Has(k):
+j = keys.Get(k)
+if used[j] or not _sc_same_shape(olds[j], nw):
+ret false
+end
+end
+if j >= 0:
+used[j] = true
+else:
+if not kinds.Has(_e.dom.nodes[nw].kind):
+ret false
+end
+fresh++
+end
+pair.Push(j)
+end
+newcount := news.Len()
+oldcount := olds.Len()
+mut map := Vector {} as Vector<int>
+defer map.Free()
+repeat _e.dom.nodes.Len() - nbefore:
+map.Push(-1)
+end
+repeat newcount in i:
+if pair[i] >= 0:
+_sc_patch(olds[pair[i]], news[i], map, nbefore)
+end
+end
+_sc_drop_events(evbefore, d, olds)
+repeat _e.dom.ev_node.Len() - evbefore in k2:
+en := _e.dom.ev_node[evbefore + k2]
+if en >= nbefore and map[en - nbefore] >= 0:
+_e.dom.ev_node[evbefore + k2] = map[en - nbefore]
+end
+end
+_sc_ev_index_new(evbefore)
+each q in _sc_made:
+if _sc[q].alive and _sc[q].dnode >= nbefore and map[_sc[q].dnode - nbefore] >= 0:
+mut sq := _sc.Ref(q)
+sq.dnode = map[sq.dnode - nbefore]
+end
+end
+mut gone := Vector {} as Vector<int>
+defer gone.Free()
+repeat oldcount in j2:
+if not used[j2]:
+gone.Push(olds[j2])
+end
+end
+if gone.Len() > 0:
+mut gm := _sc_top_marks(gone)
+defer gm.Free()
+_e.focus = _sc_in_marked(_e.focus, d, gm) ? -1 : _e.focus
+_e.hover = _sc_in_marked(_e.hover, d, gm) ? -1 : _e.hover
+_e.popup = _sc_in_marked(_e.popup, d, gm) ? -1 : _e.popup
+_e.capture = _sc_in_marked(_e.capture, d, gm) ? -1 : _e.capture
+_e.active = _sc_in_marked(_e.active, d, gm) ? -1 : _e.active
+_e.last_click = _sc_in_marked(_e.last_click, d, gm) ? -1 : _e.last_click
+end
+mut order := Vector {} as Vector<int>
+defer order.Free()
+repeat newcount in i5:
+order.Push(pair[i5] >= 0 ? olds[pair[i5]] : news[i5])
+end
+mut dn := _e.dom.nodes.Ref(d)
+repeat newcount:
+_x := dn.kids.Pop()
+end
+mut nk := Vector {} as Vector<int>
+repeat pos in i2:
+nk.Push(dn.kids[i2])
+end
+each ordn in order:
+nk.Push(ordn)
+end
+repeat dn.kids.Len() - pos - oldcount in i3:
+nk.Push(dn.kids[pos + oldcount + i3])
+end
+dn.kids.Free()
+dn.kids = nk
+if fresh == 0:
+repeat _e.dom.nodes.Len() - nbefore in r:
+_sc_free_node(nbefore + r)
+end
+until _e.dom.nodes.Len() > nbefore:
+_y := _e.dom.nodes.Pop()
+end
+else:
+repeat _e.dom.nodes.Len() - nbefore in r2:
+if map[r2] >= 0:
+_sc_dead++
+end
+end
+repeat _e.dom.nodes.Len() - _e.ctl.Len():
+_e.ctl.Push(_new_ctl())
+end
+repeat _e.dom.nodes.Len() - _e.cs.Len():
+_e.cs.Push(style.Style {})
+_e.us.Push(_Used {})
+end
+repeat _e.dom.nodes.Len() - _e.fid.Len():
+_e.fid.Push(-1)
+_e.node_run.Push(-1)
+_e.in_run.Push(-1)
+end
+repeat newcount in i6:
+if pair[i6] < 0:
+_sc_style_new(news[i6])
+_build_node(news[i6], dfid)
+end
+end
+end
+each g in gone:
+_sc_dead += _sc_subtree_size(g)
+_e.tree.Remove(_e.fid[g])
+_e.fid[g] = -1
+end
+repeat newcount in i4:
+want := _e.fid[order[i4]]
+if _e.tree.Child(dfid, pos + i4) != want:
+_e.tree.Move(want, dfid, pos + i4)
+end
+end
+delta := newcount - oldcount
+mut sc := _sc.Ref(id)
+sc.count = newcount
+mut a := _sc[id].parent
+until a >= 0 and _sc[a].dnode == d:
+mut sa := _sc.Ref(a)
+sa.count += delta
+a = sa.parent
+end
+_e.dirty_layout = true
+_e.full = true
+ret true
+end
 func _sc_rerun(id: int):
 d := _sc[id].dnode
 pos := _sc_pos(id)
@@ -194354,7 +194638,10 @@ s1.bstart = start
 _sc_match = oldkids
 _sc_cur = id
 fn := _sc[id].fn
+_sc_made.Clear()
+_sc_tracking = true
 fn(Builder {})
+_sc_tracking = false
 _sc_cur = -1
 _sc_built += _bd.nodes.Len() - nbefore
 _sc_match = Vector {} as Vector<int>
@@ -194385,13 +194672,14 @@ repeat newcount in i:
 _sc_patch(olds[i], news[i], map, nbefore)
 end
 _sc_drop_events(evbefore, d, olds)
-repeat _e.dom.ev_node.Len() in k:
-en := _e.dom.ev_node[k]
+repeat _e.dom.ev_node.Len() - evbefore in k:
+en := _e.dom.ev_node[evbefore + k]
 if en >= nbefore and map[en - nbefore] >= 0:
-_e.dom.ev_node[k] = map[en - nbefore]
+_e.dom.ev_node[evbefore + k] = map[en - nbefore]
 end
 end
-repeat _sc.Len() in q:
+_sc_ev_index_new(evbefore)
+each q in _sc_made:
 if _sc[q].alive and _sc[q].dnode >= nbefore:
 mut sq := _sc.Ref(q)
 sq.dnode = map[sq.dnode - nbefore]
@@ -194407,7 +194695,7 @@ end
 until _e.dom.nodes.Len() > nbefore:
 _y := _e.dom.nodes.Pop()
 end
-else:
+else not _sc_try_keyed(id, d, pos, olds, news, nbefore, evbefore):
 mut dn2 := _e.dom.nodes.Ref(d)
 repeat newcount:
 _x2 := dn2.kids.Pop()
@@ -194449,6 +194737,7 @@ _e.capture = _sc_remap_uid(_e.capture, d, olds, nbefore)
 _e.active = _sc_remap_uid(_e.active, d, olds, nbefore)
 _e.last_click = _sc_remap_uid(_e.last_click, d, olds, nbefore)
 _sc_drop_events(evbefore, d, olds)
+_sc_ev_index_new(evbefore)
 each o in olds:
 _sc_dead += _sc_subtree_size(o)
 end
@@ -194495,6 +194784,7 @@ end
 ret _sc_trace_state == 2
 end
 func _sc_full():
+_sc_ev_compact()
 if _sc_trace():
 printerrln "ui trace: full re-run"
 end
@@ -194607,6 +194897,7 @@ _sc_rerun(dirty[j])
 end
 end
 end
+_sc_ev_compact()
 if _e.dirty_dom:
 if _sc_dead > 2 * (_e.dom.nodes.Len() - _sc_dead) + 512:
 _e.dirty_dom = false

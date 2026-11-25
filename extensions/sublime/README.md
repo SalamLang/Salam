@@ -53,8 +53,8 @@ chooses a variant:
 | Format                        | `salam format`                               |
 | Check Formatting              | `salam format --check`                       |
 | Show Tokens / Show AST        | `salam inspect --emit-tokens` / `--emit-ast` |
-| Build Web Page                | `salam web`                                  |
-| Compile to JavaScript         | `salam js`                                   |
+| Build Web Page                | `salam build --platform=web`                 |
+| Compile to JavaScript         | `salam build --platform=js`                  |
 
 Errors are reported in the gcc one-line style, so `F4` walks them.
 

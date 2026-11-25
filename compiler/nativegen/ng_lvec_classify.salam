@@ -1,0 +1,405 @@
+package nativegen
+
+func lv_classify(g &: Ng, r &: Lv, i: int): bool:
+    if r.nw > 0:
+        nk := lv_ncls(g, r, i)
+        if nk != 0:
+            ret nk == 1
+        end
+    end
+    op := g.i_op[i]
+    res := g.i_res[i]
+    t := g.i_ty[i]
+    if i == r.ivn:
+        r.cls[res] = LV_IDX
+        ret true
+    end
+    if i == r.divn:
+        r.cls[res] = LV_RIDX
+        ret true
+    end
+    if (op == OP_SEXT or op == OP_TRUNC) and lv_ridx_val(g, r, g.i_a[i]):
+        r.cls[res] = LV_RIDX
+        ret true
+    end
+    if op == OP_ADDR and g.i_b[i] >= 0 and lv_ridx_val(g, r, g.i_b[i]):
+        if not lv_inv(g, r, g.i_a[i]):
+            ret false
+        end
+        r.cls[res] = LV_RADDR
+        ret true
+    end
+    if op == OP_LOAD and lv_cls(r, g.i_a[i]) == LV_RADDR:
+        ad0 := g.v_def[g.i_a[i]]
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (tsize(g, t) != 4 and tsize(g, t) != 8) or
+            (g.i_x[ad0] as i64) != (tsize(g, t) as i64) or not lv_set_lane(
+                r, lv_lane_of(t)
+            ):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        r.loads.Push(i)
+        ret true
+    end
+    if op == OP_STORE and lv_cls(r, g.i_b[i]) == LV_RADDR:
+        sv0 := g.i_a[i]
+        st0 := g.v_ty[sv0]
+        ad1 := g.v_def[g.i_b[i]]
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, sv0) != LV_VEC or
+            (tsize(g, st0) != 4 and tsize(g, st0) != 8) or
+            (g.i_x[ad1] as i64) != (tsize(g, st0) as i64) or not lv_set_lane(
+                r, lv_lane_of(st0)
+            ):
+            ret false
+        end
+        r.stores.Push(i)
+        ret true
+    end
+    if op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC:
+        if lv_idx_val(g, r, g.i_a[i]):
+            r.cls[res] = LV_IDX
+            ret true
+        end
+        if op == OP_ZEXT and t == T_I32 and lv_cls(r, g.i_a[i]) == LV_VEC and
+            g.v_ty[g.i_a[i]] == T_I1:
+            ret false
+        end
+        if op == OP_TRUNC and t == T_I8 and lv_cls(r, g.i_a[i]) == LV_VEC and
+            g.v_ty[g.i_a[i]] == T_I32:
+            r.cls[res] = LV_NARROW
+            ret lv_set_lane(r, 4)
+        end
+        if (op == OP_ZEXT or op == OP_SEXT) and t == T_I32 and lv_narrow_load(g, r, g.i_a[i]):
+            r.cls[res] = LV_VEC
+            ret lv_set_lane(r, 4)
+        end
+        ret false
+    end
+    if (op == OP_ADD or op == OP_SUB) and
+        (g.i_a[i] == g.i_res[r.ivp] or lv_cls(r, g.i_a[i]) == LV_IDX) and is_cint(g, g.i_b[i]):
+        r.cls[res] = LV_IDX
+        ret true
+    end
+    if op == OP_ADDR:
+        if not lv_inv(g, r, g.i_a[i]) or g.i_b[i] < 0 or not lv_idx_val(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_ADDR
+        ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and
+        (r.fi or lv_safe_ptr(g, g.i_a[i])) and lv_inv(
+            g, r, g.i_a[i]
+        ) and not is_agg(g, t) and not is_vec(g, t) and res >= 0:
+        r.cls[res] = LV_HOIST
+        r.hoist.Push(i)
+        ret r.hoist.Len() <= (r.fi ? 8 : 4)
+    end
+    if op == OP_LOAD:
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, g.i_a[i]) != LV_ADDR:
+            ret false
+        end
+        ad := g.v_def[g.i_a[i]]
+        if t == T_I8 or t == T_I16:
+            if (g.i_x[ad] as i64) != (tsize(g, t) as i64):
+                ret false
+            end
+            r.cls[res] = LV_SKIP
+            r.loads.Push(i)
+            ret true
+        end
+        if (g.i_x[ad] as i64) != (tsize(g, t) as i64) or not lv_set_lane(r, lv_lane_of(t)):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        r.loads.Push(i)
+        ret true
+    end
+    if op == OP_STORE:
+        if lv_narrow_load(g, r, g.i_a[i]):
+            r.cls[g.i_a[i]] = LV_VEC
+            if not lv_set_lane(r, lv_lane_of(g.v_ty[g.i_a[i]])):
+                ret false
+            end
+        end
+        mut sc := lv_cls(r, g.i_a[i])
+        if lv_idx_data(g, r, g.i_a[i]):
+            sc = LV_VEC
+        end
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, g.i_b[i]) != LV_ADDR or
+            (sc != LV_VEC and sc != LV_NARROW):
+            ret false
+        end
+        st := g.v_ty[g.i_a[i]]
+        ad2 := g.v_def[g.i_b[i]]
+        if sc == LV_NARROW:
+            if g.i_x[ad2] != 1:
+                ret false
+            end
+            r.stores.Push(i)
+            ret lv_set_lane(r, r.nw > 0 ? r.nw / 8 : 4)
+        end
+        if (g.i_x[ad2] as i64) != (tsize(g, st) as i64) or not lv_set_lane(r, lv_lane_of(st)):
+            ret false
+        end
+        r.stores.Push(i)
+        ret true
+    end
+    if res < 0:
+        ret false
+    end
+    if (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR) and t == T_I8:
+        if not lv_byte_ok(g, r, g.i_a[i]) or not lv_byte_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
+    if op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR:
+        if t == T_I1:
+            if op == OP_ADD or op == OP_SUB or lv_cls(r, g.i_a[i]) != LV_VEC:
+                ret false
+            end
+            if not (lv_cls(r, g.i_b[i]) == LV_VEC or (is_cint(g, g.i_b[i]) and op == OP_XOR)):
+                ret false
+            end
+            r.cls[res] = LV_VEC
+            ret true
+        end
+        if (t != T_I32 and t != T_I64 and t != T_I16) or not lv_data_ok(
+            g, r, g.i_a[i]
+        ) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_MUL:
+        if (t != T_I32 and t != T_I16) or not lv_data_ok(
+            g, r, g.i_a[i]
+        ) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_SHL or op == OP_LSHR or op == OP_ASHR:
+        if (t != T_I32 and t != T_I64 and t != T_I16) or not lv_data_ok(g, r, g.i_a[i]):
+            ret false
+        end
+        cb := g.i_b[i]
+        if is_cint(g, cb):
+            k := g.v_i[cb]
+            if k < (0 as i64) or k >= (int_bits(g, t) as i64):
+                ret false
+            end
+        else not lv_inv(g, r, cb) or is_vec(g, g.v_ty[cb]) or g.off_vshv:
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_FADD or op == OP_FSUB or op == OP_FMUL or op == OP_FDIV:
+        if (t != T_F32 and t != T_F64) or not lv_data_ok(
+            g, r, g.i_a[i]
+        ) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_ICMP and g.v_ty[g.i_a[i]] == T_I8:
+        if g.i_x[i] > CC_UGE or not lv_byte_ok(g, r, g.i_a[i]) or not lv_byte_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        if lv_inv(g, r, g.i_a[i]) and lv_inv(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
+    if op == OP_ICMP:
+        opty := g.v_ty[g.i_a[i]]
+        p := g.i_x[i]
+        if (opty != T_I32 and opty != T_I64 and opty != T_I16) or p > CC_UGE or not lv_data_ok(
+            g, r, g.i_a[i]
+        ) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        if lv_inv(g, r, g.i_a[i]) and lv_inv(g, r, g.i_b[i]):
+            ret false
+        end
+        if opty == T_I64 and p > CC_NE and g.arch != NG_ARCH_A64:
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(opty))
+    end
+    if op == OP_SELECT and t == T_I8:
+        if g.v_ty[g.i_a[i]] != T_I1 or (lv_cls(r, g.i_a[i]) != LV_VEC and not lv_inv(
+            g, r, g.i_a[i]
+        )):
+            ret false
+        end
+        if not lv_byte_ok(g, r, g.i_b[i]) or not lv_byte_ok(g, r, g.i_c[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
+    if op == OP_SELECT:
+        if g.v_ty[g.i_a[i]] != T_I1 or (lv_cls(r, g.i_a[i]) != LV_VEC and not lv_inv(
+            g, r, g.i_a[i]
+        )):
+            ret false
+        end
+        if (t != T_I32 and t != T_I64 and t != T_I16) or not lv_data_ok(
+            g, r, g.i_b[i]
+        ) or not lv_data_ok(g, r, g.i_c[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    ret false
+end
+
+func lv_add_red(g &: Ng, r &: Lv, p: int, w: int): bool:
+    pv := g.i_res[p]
+    t := g.i_ty[p]
+    flt := t == T_F32 or t == T_F64
+    if t != T_I32 and t != T_I64 and not (flt and g.fast_math):
+        ret false
+    end
+    nx := phi_val_for(g, p, w)
+    if nx < 0 or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    d := g.v_def[nx]
+    if g.i_op[d] == OP_SELECT and not flt:
+        if lv_add_cnt(g, r, p, d):
+            ret true
+        end
+        ret lv_add_mm(g, r, p, d)
+    end
+    if g.i_op[d] != (flt ? OP_FADD : OP_ADD) or (g.i_blk[d] != r.w and g.i_blk[d] != r.h):
+        ret false
+    end
+    if g.i_a[d] != pv and g.i_b[d] != pv:
+        ret false
+    end
+    if g.i_a[d] == pv and g.i_b[d] == pv:
+        ret false
+    end
+    if r.shape == 0 and g.v_uses[pv] != 1:
+        ret false
+    end
+    r.reds.Push(p)
+    r.rnext.Push(d)
+    r.rkind.Push(0)
+    r.rcmp.Push(0 - 1)
+    ret true
+end
+
+func lv_swap_cc(p: int): int:
+    switch p:
+        CC_SGT: ret CC_SLT end
+        CC_SLT: ret CC_SGT end
+        CC_SGE: ret CC_SLE end
+        CC_SLE: ret CC_SGE end
+        CC_UGT: ret CC_ULT end
+        CC_ULT: ret CC_UGT end
+        CC_UGE: ret CC_ULE end
+        CC_ULE: ret CC_UGE end
+    end
+    ret p
+end
+
+func lv_add_cnt(g &: Ng, r &: Lv, p: int, d: int): bool:
+    pv := g.i_res[p]
+    t := g.i_ty[p]
+    if g.off_vcount or (t != T_I32 and t != T_I64) or (g.i_blk[d] != r.w and g.i_blk[d] != r.h):
+        ret false
+    end
+    mut inc := 0 - 1
+    mut kind := 0
+    if g.i_c[d] == pv:
+        inc = g.i_b[d]
+        kind = 5
+    else g.i_b[d] == pv:
+        inc = g.i_c[d]
+        kind = 6
+    end
+    if inc < 0 or g.v_kind[inc] != VK_INS or g.v_uses[inc] != 1:
+        ret false
+    end
+    ai := g.v_def[inc]
+    if g.i_op[ai] != OP_ADD or g.i_blk[ai] != g.i_blk[d]:
+        ret false
+    end
+    if not ((g.i_a[ai] == pv and is_cint(
+        g, g.i_b[ai]
+    ) and g.v_i[g.i_b[ai]] == (1 as i64)) or (g.i_b[ai] == pv and is_cint(
+        g, g.i_a[ai]
+    ) and g.v_i[g.i_a[ai]] == (1 as i64))):
+        ret false
+    end
+    c := g.i_a[d]
+    if c < 0 or g.v_kind[c] != VK_INS or g.i_op[g.v_def[c]] != OP_ICMP or
+        g.v_ty[g.i_a[g.v_def[c]]] != T_I8:
+        ret false
+    end
+    if r.shape == 0 and g.v_uses[pv] != 2:
+        ret false
+    end
+    r.reds.Push(p)
+    r.rnext.Push(d)
+    r.rkind.Push(kind)
+    r.rcmp.Push(ai)
+    ret true
+end
+
+func lv_add_mm(g &: Ng, r &: Lv, p: int, d: int): bool:
+    pv := g.i_res[p]
+    t := g.i_ty[p]
+    if t != T_I32 and not (t == T_I64 and g.arch == NG_ARCH_A64):
+        ret false
+    end
+    if g.i_blk[d] != r.w and g.i_blk[d] != r.h:
+        ret false
+    end
+    mut x := 0 - 1
+    if g.i_b[d] == pv and g.i_c[d] != pv:
+        x = g.i_c[d]
+    else g.i_c[d] == pv and g.i_b[d] != pv:
+        x = g.i_b[d]
+    end
+    c := g.i_a[d]
+    if x < 0 or c < 0 or g.v_kind[c] != VK_INS or g.v_uses[c] != 1:
+        ret false
+    end
+    ci := g.v_def[c]
+    if g.i_op[ci] != OP_ICMP or g.i_blk[ci] != g.i_blk[d]:
+        ret false
+    end
+    mut pr := g.i_x[ci]
+    if g.i_a[ci] == pv and g.i_b[ci] == x:
+        pr = lv_swap_cc(pr)
+    else not (g.i_a[ci] == x and g.i_b[ci] == pv):
+        ret false
+    end
+    if pr == CC_EQ or pr == CC_NE or pr > CC_UGE:
+        ret false
+    end
+    if r.shape == 0 and g.v_uses[pv] != 2:
+        ret false
+    end
+    isgt := pr == CC_SGT or pr == CC_SGE or pr == CC_UGT or pr == CC_UGE
+    uns := pr >= CC_ULT
+    mx := isgt == (g.i_b[d] == x)
+    r.reds.Push(p)
+    r.rnext.Push(d)
+    r.rkind.Push((uns ? 3 : 1) + (mx ? 0 : 1))
+    r.rcmp.Push(ci)
+    ret true
+end

@@ -22,7 +22,7 @@ fi
 if [ ! -f "$want" ]; then
     if grep -q "^صفحه:\|^page:" "$root/$src"; then
         cp "$root/$src" .
-        if "$SALAM" page build "$(basename "$src")" --inline --no-color --log-level=error >/dev/null 2>&1; then
+        if "$SALAM" build "$(basename "$src")" --platform=web --inline --no-color --log-level=error >/dev/null 2>&1; then
             echo "ok   $src (page build)"
             exit 0
         fi

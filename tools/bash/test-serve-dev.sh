@@ -60,6 +60,8 @@ done
 hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
 case "$hello" in *'"kind":"hello"'*) r=yes ;; *) r=no ;; esac
 check "events start with hello" "$r" "yes"
+case "$hello" in *'"lang":"en"'*'"dir":"ltr"'*) r=yes ;; *) r=no ;; esac
+check "an English project says en and ltr" "$r" "yes"
 last=$(printf '%s\n' "$hello" | sed -n 's/^id: //p')
 page=$(curl -s -H 'Accept: text/html' "http://127.0.0.1:$PORT/users/3")
 case "$page" in *'__salamHmr'*) r=yes ;; *) r=no ;; esac
@@ -173,6 +175,76 @@ while [ $i -lt 100 ]; do
 done
 check "multi page: second page is served" "$(curl -s "http://127.0.0.1:$PORT/b" | grep -c 'page b')" "1"
 check "multi page: unknown page is a 404" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/nothing")" "404"
+kill "$PID" 2>/dev/null
+wait "$PID" 2>/dev/null
+PID=""
+
+wait_up() {
+    i=0
+    while [ $i -lt 100 ]; do
+        curl -s -o /dev/null "http://127.0.0.1:$PORT/__salam_hmr" 2>/dev/null && return 0
+        sleep 0.3
+        i=$((i + 1))
+    done
+    return 1
+}
+
+mkdir "$T/fa"
+cat >"$T/fa/app.salam" <<'SAL'
+صفحه:
+    عنوان = «سلام»
+    جعبه:
+        محتوا = «سلام دنیا»
+    پایان
+پایان
+SAL
+"$SALAM" serve "$T/fa/app.salam" --port="$PORT" >"$T/fa.log" 2>&1 &
+PID=$!
+wait_up
+hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
+case "$hello" in *'"lang":"fa"'*'"dir":"rtl"'*) r=yes ;; *) r=no ;; esac
+check "a Persian project says fa and rtl" "$r" "yes"
+last=$(printf '%s\n' "$hello" | sed -n 's/^id: //p')
+wait_event "$last"
+printf 'صفحه:\n    عنوان = \n' >"$T/fa/app.salam"
+wait "$EV"
+case "$(cat "$T/ev.txt")" in *'"kind":"error"'*'"lang":"fa"'*) r=yes ;; *) r=no ;; esac
+check "a Persian build error carries fa" "$r" "yes"
+case "$(cat "$T/ev.txt")" in *'انتظار'*) r=yes ;; *) r=no ;; esac
+check "the diagnostics are Persian" "$r" "yes"
+page=$(curl -s -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
+case "$page" in *'<html lang="fa" dir="rtl"'*|*'سلام دنیا'*) r=yes ;; *) r=no ;; esac
+check "the page keeps its language" "$r" "yes"
+kill "$PID" 2>/dev/null
+wait "$PID" 2>/dev/null
+PID=""
+
+cat >"$T/fa/app.salam" <<'SAL'
+صفحه:
+    عنوان = «سلام»
+    جعبه:
+        محتوا = «سلام دنیا»
+    پایان
+پایان
+SAL
+"$SALAM" serve "$T/fa/app.salam" --error-lang=en --port="$PORT" >"$T/fa2.log" 2>&1 &
+PID=$!
+wait_up
+hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
+case "$hello" in *'"lang":"en"'*'"dir":"ltr"'*) r=yes ;; *) r=no ;; esac
+check "--error-lang=en overrides a Persian source" "$r" "yes"
+kill "$PID" 2>/dev/null
+wait "$PID" 2>/dev/null
+PID=""
+
+mkdir "$T/built"
+printf '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"></head><body>x</body></html>' >"$T/built/index.html"
+"$SALAM" serve "$T/built" --watch --port="$PORT" >"$T/built.log" 2>&1 &
+PID=$!
+wait_up
+hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
+case "$hello" in *'"lang":"fa"'*) r=yes ;; *) r=no ;; esac
+check "a built folder takes the language of its page" "$r" "yes"
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null
 PID=""

@@ -747,13 +747,15 @@ func ws_keys(lw &: LoLower, wc &: WsCtx, a &: at.Ast, nid: int):
             mut key := ws_row_key(lw, a, n.b)
             if key == 0:
                 mut sl := lw.slots.Get(num)
-                if sl.key != 0 and at.KindOf(a, sl.key) == at.AST_IDENTIFIER and
-                    str.Equals(at.Get(a, sl.key).name, "_"):
+                if sl.key != 0 and at.KindOf(a, sl.key) == at.AST_IDENTIFIER and str.Equals(
+                    at.Get(a, sl.key).name, "_"
+                ):
                     sl.key = 0
                 end
                 if sl.key == 0:
-                    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER and
-                        not str.Equals(at.Get(a, n.c).name, "_"):
+                    if n.c != 0 and at.KindOf(a, n.c) == at.AST_IDENTIFIER and not str.Equals(
+                        at.Get(a, n.c).name, "_"
+                    ):
                         sl.key = n.c
                     else:
                         sl.key = lo_ident(a, "__salam_ix_" + co.U64Toa(num as u64), nid)
@@ -1374,6 +1376,7 @@ pub func WebStateRuntime(views: Vector<str>, inits: Vector<str>): str:
         s += "window.__salam_trace = true;\n"
     end
     s += `window.__salam_runs = 0;
+window.__salam_inplace = 0;
 var __salam_dirty = [];
 var __salam_queued = false;
 var __salam_marks = {};
@@ -1392,6 +1395,9 @@ var __salam_marked = false;
 var __salam_rows = {};
 var __salam_keep = [];
 var __salam_keeping = false;
+var __salam_rf = {};
+var __salam_scnt = {};
+var __salam_seen_n = 0;
 (function () {
     if (typeof document === "undefined" || !document.getElementById) {
         return;
@@ -1497,6 +1503,7 @@ function salamWsSlot(i, key) {
     }
     var e = __salam_slots[fk];
     __salam_seen[fk] = 1;
+    __salam_seen_n++;
     __salam_wasfresh = !e;
     if (!e) {
         var fl = __salam_free[i] || (__salam_free[i] = []);
@@ -1507,6 +1514,8 @@ function salamWsSlot(i, key) {
             __salam_next[i] = e.s + 1;
         }
         __salam_slots[fk] = e;
+        var rk = __salam_rendering || "root";
+        __salam_scnt[rk] = (__salam_scnt[rk] || 0) + 1;
     }
     __salam_cur[i] = e.s;
     window.salamWsAt = window.salamWsAt || function (ii, ss) { __salam_cur[ii] = ss; };
@@ -1520,6 +1529,10 @@ function __salam_drop(prefix, keep) {
             var e = __salam_slots[fk];
             (__salam_free[e.i] || (__salam_free[e.i] = [])).push(e.s);
             delete __salam_slots[fk];
+            var dk = fk.slice(0, fk.indexOf("/"));
+            if (__salam_scnt[dk]) {
+                __salam_scnt[dk]--;
+            }
         }
     }
 }
@@ -1597,9 +1610,15 @@ function __salam_find(i) {
     return c && c.parentNode ? c : null;
 }
 function __salam_end(start) {
-    var n = start ? start.nextSibling : null, d = start ? "/" + start.data : "";
+    var n = start ? start.nextSibling : null, d = start ? "/" + start.data : "", c = start ? start.__salam_e : null;
+    if (c && c.parentNode === start.parentNode && c.data === d) {
+        return c;
+    }
     while (n && !(n.nodeType === 8 && n.data === d)) {
         n = n.nextSibling;
+    }
+    if (n) {
+        start.__salam_e = n;
     }
     return n;
 }
@@ -1661,6 +1680,9 @@ function __salam_patch(o, n, fresh) {
         return;
     }
     var nm0 = o.nodeName, form = nm0 === "INPUT" || nm0 === "OPTION" || nm0 === "SELECT" || nm0 === "TEXTAREA" || nm0 === "BUTTON" || nm0 === "FIELDSET" || nm0 === "OPTGROUP";
+    if (nm0 !== "INPUT" && nm0 !== "OPTION" && nm0 !== "SELECT" && nm0 !== "TEXTAREA" && o.isEqualNode(n) && !(n.firstElementChild && n.querySelector("input,option,select,textarea"))) {
+        return;
+    }
     var oa = o.attributes, na = n.attributes, k, nm, val, same = oa.length === na.length;
     if (same && !form) {
         for (k = 0; k < na.length; k++) {
@@ -1795,6 +1817,14 @@ function __salam_one_root(r) {
     return depth === 0 && roots === 1;
 }
 function __salam_row_key(r) {
+    var gt = r.indexOf(">"), dk = r.indexOf(" data-key=\""), sp, q;
+    if (r.charCodeAt(0) === 60 && gt > 0 && dk > 0 && dk < gt) {
+        sp = r.indexOf(" ");
+        q = r.indexOf("\"", dk + 11);
+        if (sp > 1 && q > 0 && q < gt && /^[a-zA-Z][\w-]*$/.test(r.slice(1, sp))) {
+            return r.slice(1, sp).toUpperCase() + "\u0001" + r.slice(dk + 11, q);
+        }
+    }
     var m = /^<([a-zA-Z][\w-]*)[^>]*?\sdata-key="([^"]*)"/.exec(r);
     return m ? m[1].toUpperCase() + "\u0001" + m[2] : null;
 }
@@ -1880,6 +1910,183 @@ function __salam_unkeep(n) {
         __salam_unkeep(list[x]);
     }
     return n;
+}
+function __salam_rows_scan(html) {
+    var rows = [], keys = [], skel = "", p = 0, depth = 0, start = 0, q, c, row, k;
+    var n1 = html.indexOf("\u0001"), n4 = html.indexOf("\u0004");
+    while (n1 >= 0 || n4 >= 0) {
+        if (n4 < 0 || (n1 >= 0 && n1 < n4)) {
+            q = n1;
+            n1 = html.indexOf("\u0001", q + 1);
+            c = 1;
+        } else {
+            q = n4;
+            n4 = html.indexOf("\u0004", q + 1);
+            c = 4;
+        }
+        if (c === 1) {
+            if (depth === 0) {
+                skel += html.slice(p, q) + "\u0002";
+                start = q + 1;
+            }
+            depth++;
+            continue;
+        }
+        depth--;
+        if (depth < 0) {
+            return null;
+        }
+        if (depth === 0) {
+            row = html.slice(start, q);
+            k = __salam_row_key(row);
+            if (k === null) {
+                return null;
+            }
+            rows.push(row);
+            keys.push(k);
+            p = q + 1;
+        }
+    }
+    if (depth !== 0) {
+        return null;
+    }
+    return { skel: skel + html.slice(p), keys: keys, rows: rows, els: null };
+}
+function __salam_row_els(s, e, keys) {
+    var out = [], n = s.nextSibling, list, j, el, last;
+    while (n && n !== e) {
+        if (n.nodeType === 1) {
+            if (n.hasAttribute("data-key")) {
+                out.push(n);
+            } else {
+                list = n.querySelectorAll("[data-key]");
+                last = null;
+                for (j = 0; j < list.length; j++) {
+                    el = list[j];
+                    if (last && last.contains(el)) {
+                        continue;
+                    }
+                    out.push(el);
+                    last = el;
+                }
+            }
+        }
+        n = n.nextSibling;
+    }
+    if (out.length !== keys.length) {
+        return null;
+    }
+    for (j = 0; j < out.length; j++) {
+        if (out[j].nodeName + "\u0001" + out[j].getAttribute("data-key") !== keys[j]) {
+            return null;
+        }
+    }
+    return out;
+}
+function __salam_rows_fast(i, html, s, e, fresh) {
+    var pr = __salam_rf[i], nw = __salam_rows_scan(html), j, t, f, r;
+    __salam_rf[i] = nw;
+    if (!pr || !nw || pr.skel !== nw.skel || pr.keys.length !== nw.keys.length) {
+        return false;
+    }
+    for (j = 0; j < nw.keys.length; j++) {
+        if (pr.keys[j] !== nw.keys[j]) {
+            return false;
+        }
+    }
+    var els = pr.els || __salam_row_els(s, e, pr.keys), ch = [], made = [];
+    if (!els) {
+        return false;
+    }
+    var buf = "";
+    for (j = 0; j < nw.rows.length; j++) {
+        if (nw.rows[j] === pr.rows[j]) {
+            continue;
+        }
+        if (!els[j].isConnected) {
+            return false;
+        }
+        ch.push(j);
+        buf += nw.rows[j];
+    }
+    if (ch.length > 0) {
+        t = document.createElement("template");
+        t.innerHTML = buf.replace(/[\u0001\u0004]/g, "");
+        f = t.content.firstChild;
+        for (j = 0; j < ch.length; j++) {
+            if (!f || f.nodeType !== 1 || f.nodeName !== els[ch[j]].nodeName) {
+                return false;
+            }
+            made.push(f);
+            f = f.nextSibling;
+        }
+        if (f) {
+            return false;
+        }
+    }
+    for (j = 0; j < ch.length; j++) {
+        __salam_patch(els[ch[j]], made[j], fresh);
+    }
+    nw.els = els;
+    var rc = __salam_rows[i];
+    if (rc) {
+        for (j = 0; j < ch.length; j++) {
+            r = nw.rows[ch[j]];
+            if (!/<(input|textarea|select)\b/i.test(r) && __salam_one_root(r.replace(/[\u0001\u0004]/g, ""))) {
+                rc[nw.keys[ch[j]]] = r;
+            } else {
+                delete rc[nw.keys[ch[j]]];
+            }
+        }
+    }
+    return true;
+}
+function __salam_pairs(cur, stop, list) {
+    var x = cur, q = 0, y, a, b;
+    while (x && x !== stop) {
+        if (q >= list.length) {
+            return false;
+        }
+        y = list[q];
+        if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName || x.nodeType === 8) {
+            return false;
+        }
+        if (x.nodeType === 1) {
+            a = x.getAttribute("data-key");
+            b = y.getAttribute("data-key");
+            if (a !== b) {
+                return false;
+            }
+        }
+        x = x.nextSibling;
+        q++;
+    }
+    return q === list.length;
+}
+function __salam_rows_build(i, nw) {
+    var parts = nw.skel.split("\u0002"), prev = __salam_rows[i] || null, next = {}, out = parts[0], j, row, k, clean;
+    if (parts.length !== nw.rows.length + 1) {
+        return null;
+    }
+    for (j = 0; j < nw.rows.length; j++) {
+        row = nw.rows[j];
+        k = nw.keys[j];
+        if (prev && prev[k] === row) {
+            next[k] = row;
+            out += "<!--salam-k:" + __salam_keep.length + "-->";
+            __salam_keep.push({ k: k, h: row });
+            __salam_keeping = true;
+        } else {
+            clean = row.replace(/[\u0001\u0004]/g, "");
+            if (!/<(input|textarea|select)\b/i.test(row) && __salam_one_root(clean)) {
+                next[k] = row;
+            }
+            out += clean;
+        }
+        out += parts[j + 1];
+    }
+    __salam_rows[i] = next;
+    return out;
 }
 function __salam_lis(a) {
     var n = a.length, p = new Int32Array(n), m = [], i, lo, hi, mid, out;
@@ -2007,6 +2214,14 @@ function __salam_kids(p, cur, stop, list, fresh) {
         p.insertBefore(fr, stop);
         return;
     }
+    if (!__salam_keeping && nl === ol && __salam_pairs(cur, stop, list)) {
+        for (i = 0, o = cur; i < nl; i++) {
+            n = o.nextSibling;
+            __salam_patch(o, list[i], fresh);
+            o = n;
+        }
+        return;
+    }
     var news = __salam_units(null, null, list), ul = news.length;
     if (ul === 0) {
         for (i = 0; i < ol; i++) {
@@ -2105,13 +2320,14 @@ function __salam_render(i, fresh) {
     if (!s || !e || !s.parentNode) {
         return;
     }
-    var pr = __salam_rendering, ps = __salam_seen, html = "";
+    var pr = __salam_rendering, ps = __salam_seen, pn = __salam_seen_n, html = "";
     window.__salam_runs++;
     if (window.__salam_trace && typeof console !== "undefined" && console.log) {
         console.log("ui trace: run instance " + i + (pr === "" ? " because state touched" : " because parent ran"));
     }
     __salam_rendering = String(i);
     __salam_seen = {};
+    __salam_seen_n = 0;
     try {
         html = String(__salam_views[i]() || "");
     } catch (x) {
@@ -2120,21 +2336,31 @@ function __salam_render(i, fresh) {
         }
         html = "";
     } finally {
-        __salam_drop(__salam_rendering + "/", __salam_seen);
+        if (__salam_seen_n !== (__salam_scnt[__salam_rendering] || 0)) {
+            __salam_drop(__salam_rendering + "/", __salam_seen);
+        }
         __salam_rendering = pr;
         __salam_seen = ps;
+        __salam_seen_n = pn;
     }
     var prev = __salam_last[i];
     if (prev === html && !__salam_hydrating && s.nextSibling !== e) {
         return;
     }
     __salam_last[i] = /<(input|textarea|select)\b/i.test(html) ? undefined : html;
+    if (__salam_hydrating || html.indexOf("\u0001") < 0 || html.indexOf("<!--salam:") >= 0) {
+        delete __salam_rf[i];
+    } else if (__salam_rows_fast(i, html, s, e, fresh)) {
+        window.__salam_inplace++;
+        return;
+    }
     var pm = __salam_marked;
     __salam_marked = html.indexOf("<!--salam:") >= 0;
     __salam_keep = [];
     __salam_keeping = false;
     if (html.indexOf("\u0001") >= 0) {
-        html = __salam_rows_prep(i, html);
+        var built = __salam_rf[i] ? __salam_rows_build(i, __salam_rf[i]) : null;
+        html = built !== null ? built : __salam_rows_prep(i, html);
     }
     var t = document.createElement("template");
     t.innerHTML = html;
@@ -2169,7 +2395,7 @@ function __salam_mount(i) {
         __salam_drop(j + "/", null);
         delete __salam_last[j];
         delete __salam_rows[j];
-    delete __salam_rows[j];
+        delete __salam_rf[j];
         if (__salam_inits && typeof __salam_inits[j] === "function") {
             try {
                 __salam_inits[j]();

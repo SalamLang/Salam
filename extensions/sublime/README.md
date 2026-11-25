@@ -46,21 +46,21 @@ picked for a file whose first line is a `//!` directive header.
 Pick one with `Tools > Build System > Salam`, then `Ctrl+B`. `Ctrl+Shift+B`
 chooses a variant:
 
-| Variant                         | Command                                     |
-| ------------------------------- | ------------------------------------------- |
-| _(default)_ Run                 | `salam run` in a project, else `salam exec` |
-| Run (interpreter)               | `salam exec`                                |
-| Build and Run                   | `salam run FILE`                            |
-| Build (chosen platform)         | `salam build [FILE] --platform=NAME`        |
-| Build Executable                | `salam build FILE`                          |
-| Build Project                   | `salam build` in the project folder         |
-| Build Project for All Platforms | `salam build --platform=all`                |
-| Build Web Page                  | `salam build FILE --platform=web`           |
-| Compile to JavaScript           | `salam build FILE --platform=js`            |
-| Check (no run)                  | `salam inspect --emit-symbol`               |
-| Format                          | `salam format`                              |
-| Check Formatting                | `salam format --check`                      |
-| Show Tokens / Show AST          | `salam inspect --emit-tokens` / `--emit-ast`|
+| Variant                         | Command                                      |
+| ------------------------------- | -------------------------------------------- |
+| _(default)_ Run                 | `salam run` in a project, else `salam exec`  |
+| Run (interpreter)               | `salam exec`                                 |
+| Build and Run                   | `salam run FILE`                             |
+| Build (chosen platform)         | `salam build [FILE] --platform=NAME`         |
+| Build Executable                | `salam build FILE`                           |
+| Build Project                   | `salam build` in the project folder          |
+| Build Project for All Platforms | `salam build --platform=all`                 |
+| Build Web Page                  | `salam build FILE --platform=web`            |
+| Compile to JavaScript           | `salam build FILE --platform=js`             |
+| Check (no run)                  | `salam inspect --emit-symbol`                |
+| Format                          | `salam format`                               |
+| Check Formatting                | `salam format --check`                       |
+| Show Tokens / Show AST          | `salam inspect --emit-tokens` / `--emit-ast` |
 
 Errors are reported in the gcc one-line style, so `F4` walks them.
 
@@ -80,7 +80,7 @@ Command palette:
   `dsl` project the design system and web mode, runs `salam init` with those
   answers and adds the folder to the window.
 - `Salam: Run` and `Salam: Build` do what the default build and
-  `Build (chosen platform)` do, without choosing a build system.
+  `Build (chosen platform)` do without a menu choice.
 
 `all` and `js` apply to builds only; a run with either falls back to the
 default run.
@@ -123,17 +123,17 @@ See [`docs/LSP.md`](../../docs/LSP.md) for the server's options.
 `Preferences > Package Settings > Salam > Settings`, or
 `Preferences: Salam Settings` in the command palette.
 
-| Setting           | Default   | Meaning                                                                                                    |
-| ----------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `compiler_path`   | `"salam"` | Compiler executable; an absolute path when it is not on `PATH`.                                            |
-| `run_command`     | `"exec"`  | What a single file outside a project runs with: `exec` or `run`.                                           |
-| `status_block_chain` | `true` | Show the block chain in the status bar.                                                                  |
-| `status_platform` | `true`    | Show the chosen platform in the status bar.                                                                |
-| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` passes nothing and the compiler detects the language of each file. |
-| `format_indent`   | `"4"`     | `--indent` for the formatter: `tab`, or 1-16 spaces.                                                       |
-| `format_on_save`  | `false`   | Reformat on every save.                                                                                    |
-| `stdlib_path`     | `""`      | `--stdlib-path` for `std/...` imports.                                                                     |
-| `timeout_seconds` | `60`      | Seconds a compiler run may take before it is killed.                                                       |
+| Setting              | Default   | Meaning                                                                                                    |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `compiler_path`      | `"salam"` | Compiler executable; an absolute path when it is not on `PATH`.                                            |
+| `run_command`        | `"exec"`  | What a single file outside a project runs with: `exec` or `run`.                                           |
+| `status_block_chain` | `true`    | Show the block chain in the status bar.                                                                    |
+| `status_platform`    | `true`    | Show the chosen platform in the status bar.                                                                |
+| `language_pack`      | `"auto"`  | `--lang` passed to the compiler. `auto` passes nothing and the compiler detects the language of each file. |
+| `format_indent`      | `"4"`     | `--indent` for the formatter: `tab`, or 1-16 spaces.                                                       |
+| `format_on_save`     | `false`   | Reformat on every save.                                                                                    |
+| `stdlib_path`        | `""`      | `--stdlib-path` for `std/...` imports.                                                                     |
+| `timeout_seconds`    | `60`      | Seconds a compiler run may take before it is killed.                                                       |
 
 `Salam: Run`, `Salam: Build` and the default build read `compiler_path`. The
 other variants call `salam` directly; if the compiler is not on your `PATH`,

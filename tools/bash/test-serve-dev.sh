@@ -52,36 +52,102 @@ check "dir named main.salam is static" "$code" "200"
 PID=$!
 i=0
 while [ $i -lt 100 ]; do
-    curl -s -o /dev/null "http://127.0.0.1:$PORT/__salam_build" 2>/dev/null && break
+    curl -s -o /dev/null "http://127.0.0.1:$PORT/__salam_hmr" 2>/dev/null && break
     sleep 0.3
     i=$((i + 1))
 done
 
-id=$(curl -s "http://127.0.0.1:$PORT/__salam_build")
-check "build id" "$id" "1"
+hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
+case "$hello" in *'"kind":"hello"'*) r=yes ;; *) r=no ;; esac
+check "events start with hello" "$r" "yes"
+last=$(printf '%s\n' "$hello" | sed -n 's/^id: //p')
 page=$(curl -s -H 'Accept: text/html' "http://127.0.0.1:$PORT/users/3")
-case "$page" in *'var v="1"'*) r=yes ;; *) r=no ;; esac
-check "page carries its build id" "$r" "yes"
+case "$page" in *'__salamHmr'*) r=yes ;; *) r=no ;; esac
+check "page carries the client" "$r" "yes"
 idx=$(curl -s "http://127.0.0.1:$PORT/index.html")
-case "$idx" in *stale*) r=stale ;; *'var v="'*) r=current ;; *) r=other ;; esac
+case "$idx" in *stale*) r=stale ;; *'__salamHmr'*) r=current ;; *) r=other ;; esac
 check "index.html is the current build" "$r" "current"
 check "asset served" "$(curl -s "http://127.0.0.1:$PORT/logo.txt")" "asset"
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/leak.txt")
 check "symlink out of the root refused" "$code" "404"
 
-echo >>"$T/site/app.salam"
-i=0
-id=1
-while [ $i -lt 100 ] && [ "$id" = "1" ]; do
-    sleep 0.5
-    id=$(curl -s "http://127.0.0.1:$PORT/__salam_build")
-    i=$((i + 1))
-done
-check "rebuild bumps the id" "$id" "2"
+wait_event() {
+    curl -s --max-time 30 -H "Last-Event-ID: $1" "http://127.0.0.1:$PORT/__salam_hmr" >"$T/ev.txt" &
+    EV=$!
+    sleep 1
+}
 
+wait_event "$last"
+echo >>"$T/site/app.salam"
+wait "$EV"
+case "$(cat "$T/ev.txt")" in *'"kind":"style"'*) r=style ;; *) r=other ;; esac
+check "a change that leaves the markup alone sends style" "$r" "style"
+last=$(sed -n 's/^id: //p' "$T/ev.txt")
+
+wait_event "$last"
+printf 'page:\n    title = \n' >"$T/site/app.salam"
+wait "$EV"
+case "$(cat "$T/ev.txt")" in *'"kind":"error"'*) r=error ;; *) r=other ;; esac
+check "a broken source sends error" "$r" "error"
+last=$(sed -n 's/^id: //p' "$T/ev.txt")
+page=$(curl -s -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
+case "$page" in *'<title>Dev</title>'*) r=kept ;; *) r=lost ;; esac
+check "the last good page is still served" "$r" "kept"
+
+wait_event "$last"
+cat >"$T/site/app.salam" <<'SAL'
+page:
+    title = "Dev"
+    content = "hello again"
+end
+SAL
+wait "$EV"
+case "$(cat "$T/ev.txt")" in *'"kind":"swap"'*) r=swap ;; *) r=other ;; esac
+check "a fixed source recovers with swap" "$r" "swap"
+last=$(sed -n 's/^id: //p' "$T/ev.txt")
+
+wait_event "$last"
+echo "body{color:red}" >"$T/site/extra.css"
+wait "$EV"
+case "$(cat "$T/ev.txt")" in *'"kind":"css"'*) r=css ;; *) r=other ;; esac
+check "a stylesheet change sends css" "$r" "css"
+
+wait_event "bogus:1"
+wait "$EV"
+case "$(cat "$T/ev.txt")" in *'"kind":"reload"'*) r=reload ;; *) r=other ;; esac
+check "an unknown server instance reloads" "$r" "reload"
+
+hello=$(curl -s "http://127.0.0.1:$PORT/__salam_hmr")
+last=$(printf '%s\n' "$hello" | sed -n 's/^id: //p')
+n=0
+holds=""
+while [ $n -lt 12 ]; do
+    curl -s --max-time 6 -H "Last-Event-ID: $last" "http://127.0.0.1:$PORT/__salam_hmr" >/dev/null 2>&1 &
+    holds="$holds $!"
+    n=$((n + 1))
+done
+sleep 1
+t=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
+rc=$?
+case "$rc $t" in "0 200 0."[0-4]*) r=fast ;; *) r="slow $rc $t" ;; esac
+check "pages answer while 12 tabs wait for events" "$r" "fast"
+a=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' "http://127.0.0.1:$PORT/logo.txt")
+rc=$?
+case "$rc $a" in "0 200 0."[0-4]*) r=fast ;; *) r="slow $rc $a" ;; esac
+check "assets answer while 12 tabs wait for events" "$r" "fast"
+for h in $holds; do
+    wait "$h"
+done
+
+left=$(find "$T/site" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')
+check "nothing is written next to the sources" "$left" "app.salam extra.css index.html leak.txt logo.txt "
+
+mine=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-$PID-*")
+check "the server has a build directory of its own" "$([ -n "$mine" ] && [ -d "$mine" ] && echo yes)" "yes"
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null
 PID=""
+check "stopping the server removes its build directory" "$([ -e "$mine" ] || echo gone)" "gone"
 "$SALAM" serve "$T/site/app.salam" --port="$PORT" >"$T/b1.log" 2>&1 &
 PID=$!
 sleep 3
@@ -90,6 +156,23 @@ before=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 check "busy port fails" "$?" "2"
 after=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "salam-serve-*" | wc -l)
 check "busy port leaves no build directory" "$after" "$before"
+kill "$PID" 2>/dev/null
+wait "$PID" 2>/dev/null
+PID=""
+
+mkdir "$T/multi"
+printf 'page:\n    title = "A"\n    content = "page a"\nend\n' >"$T/multi/a.salam"
+printf 'page:\n    title = "B"\n    content = "page b"\nend\n' >"$T/multi/b.salam"
+"$SALAM" serve "$T/multi/a.salam" "$T/multi/b.salam" --port="$PORT" >"$T/multi.log" 2>&1 &
+PID=$!
+i=0
+while [ $i -lt 100 ]; do
+    curl -s -o /dev/null "http://127.0.0.1:$PORT/__salam_hmr" 2>/dev/null && break
+    sleep 0.3
+    i=$((i + 1))
+done
+check "multi page: second page is served" "$(curl -s "http://127.0.0.1:$PORT/b" | grep -c 'page b')" "1"
+check "multi page: unknown page is a 404" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/nothing")" "404"
 kill "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null
 PID=""

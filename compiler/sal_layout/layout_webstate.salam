@@ -29,6 +29,7 @@ const WS_MULTI := 1
 const WS_REGION := 2
 
 mut g_lo_ws_std := false
+mut g_lo_dev_names := ""
 
 struct WsUse:
     pub url: bool = false
@@ -1142,6 +1143,38 @@ func ws_insert(list &: Vector<int>, a &: at.Ast, items: Vector<int>, min_phase: 
     out.Free()
 end
 
+func ws_dev_ident(name: str): bool:
+    if str.Len(name) == 0 or str.StartsWith(name, "__"):
+        ret false
+    end
+    repeat str.Len(name) in i:
+        c := str.CharAt(name, i)
+        digit := str.Contains("0123456789", c)
+        alpha := str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_", c)
+        if not alpha and not (digit and i > 0):
+            ret false
+        end
+    end
+    ret true
+end
+
+func ws_dev_snippet(): str:
+    names := str.Split(g_lo_dev_names, ",")
+    mut get := ""
+    mut set := ""
+    each n in names:
+        get += "o." + n + "=" + n + ";"
+        set += "if(__salamFit(o." + n + "," + n + ")){" + n + "=o." + n + ";}"
+    end
+    mut t := "function __salamFit(x,y){if(typeof x!==typeof y){return false;}if(Array.isArray(x)!==Array.isArray(y)){return false;}"
+    t += "if(Array.isArray(x)){if(x.length>0&&y.length>0){return __salamFit(x[0],y[0]);}return true;}"
+    t += "if(x&&y&&typeof x===\"object\"){return Object.keys(x).sort().join()===Object.keys(y).sort().join();}return true;}\n"
+    t += "window.__salamDev={get:function(){var o={};" + get +
+        "return o;},set:function(o){if(!o){return;}" + set + "}};\n"
+    t += "if(window.__salamDevRestore){try{window.__salamDev.set(window.__salamDevRestore);}catch(x){}window.__salamDevRestore=null;}\n"
+    ret t
+end
+
 pub func WebStateCount(): int:
     ret g_lo_wi_mark.Len()
 end
@@ -1181,6 +1214,14 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
     mut r := LnReact {}
     defer ln_rx_free(r)
     ln_rx_init(r, a, prog)
+    g_lo_dev_names = ""
+    if str.Len(os.Env("SALAM_DEV_HMR")) > 0:
+        each sn in r.states:
+            if ws_dev_ident(sn):
+                g_lo_dev_names += (str.Len(g_lo_dev_names) > 0 ? "," : "") + sn
+            end
+        end
+    end
     if r.states.Len() > 0:
         ws_regions(r, a, lb)
     end
@@ -2248,6 +2289,10 @@ try {
 } catch (x) {
 }
 `
+    end
+    if str.Len(g_lo_dev_names) > 0:
+        s += ws_dev_snippet()
+        s += "if (window.__salamDevRestore === null) {\n    __salam_hydrating = false;\n}\n"
     end
     s += `for (var __salam_i = 0; __salam_i < __salam_views.length; __salam_i++) {
     __salam_mount(__salam_i);

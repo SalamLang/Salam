@@ -127,11 +127,11 @@ while [ $n -lt 12 ]; do
     n=$((n + 1))
 done
 sleep 1
-t=$(curl -s -o /dev/null -w '%{time_total}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
-case "$t" in 0.[0-4]*) r=fast ;; *) r="slow $t" ;; esac
+t=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' -H 'Accept: text/html' "http://127.0.0.1:$PORT/")
+case "$t" in "200 0."[0-4]*) r=fast ;; *) r="slow $t" ;; esac
 check "pages answer while 12 tabs wait for events" "$r" "fast"
-a=$(curl -s -o /dev/null -w '%{time_total}' "http://127.0.0.1:$PORT/logo.txt")
-case "$a" in 0.[0-4]*) r=fast ;; *) r="slow $a" ;; esac
+a=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' "http://127.0.0.1:$PORT/logo.txt")
+case "$a" in "200 0."[0-4]*) r=fast ;; *) r="slow $a" ;; esac
 check "assets answer while 12 tabs wait for events" "$r" "fast"
 for h in $holds; do
     wait "$h"

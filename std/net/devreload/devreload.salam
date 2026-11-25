@@ -22,6 +22,7 @@ import time
 import net.http
 import fs
 import conv
+import mem
 
 const k_pre := `<script data-salam-hmr>(function(){if(window.__salamRec){return;}var L=[],T=[];var aw=window.addEventListener,ad=document.addEventListener,si=window.setInterval,st=window.setTimeout;window.addEventListener=function(t,f,o){if(L.length<5000){L.push([window,t,f,o]);}return aw.call(window,t,f,o);};document.addEventListener=function(t,f,o){if(L.length<5000){L.push([document,t,f,o]);}return ad.call(document,t,f,o);};window.setInterval=function(){var id=si.apply(window,arguments);T.push([0,id]);return id;};window.setTimeout=function(){var id=st.apply(window,arguments);if(T.length<5000){T.push([1,id]);}return id;};window.__salamRec={teardown:function(){for(var i=0;i<L.length;i++){try{L[i][0].removeEventListener(L[i][1],L[i][2],L[i][3]);}catch(e){}}L.length=0;for(var j=0;j<T.length;j++){if(T[j][0]===0){clearInterval(T[j][1]);}else{clearTimeout(T[j][1]);}}T.length=0;}};})();</script>`
 const k_client_a := `<script data-salam-hmr>(function(){if(window.__salamHmr){return;}window.__salamHmr=1;var K="salam-hmr-scroll";`
@@ -82,26 +83,34 @@ func _seq_of(id: str): int:
     ret conv.AtoiOr(b > 0 ? str.Substr(rest, 0, b) : rest, 0)
 end
 
+func _hex2(b: int): str:
+    digits := "0123456789abcdef"
+    ret str.Substr(digits, b / 16, 1) + str.Substr(digits, b % 16, 1)
+end
+
 func _escape(s: str): str:
     mut out := ""
     mut n := s.Len()
     if n > 20000:
         n = 20000
     end
+    p := s as u8*
     repeat n in i:
-        c := str.Substr(s, i, 1)
-        if str.Equals(c, "\\"):
+        b := p[i] as int
+        if b == 92:
             out += "\\\\"
-        else str.Equals(c, "\""):
+        else b == 34:
             out += "\\\""
-        else str.Equals(c, "\n"):
+        else b == 10:
             out += "\\n"
-        else str.Equals(c, "\t"):
+        else b == 13:
+            out += "\\r"
+        else b == 9:
             out += "\\t"
-        else str.Equals(c, "\r"):
-            out += ""
+        else b < 32:
+            out += "\\u00" + _hex2(b)
         else:
-            out += c
+            out += str.Substr(s, i, 1)
         end
     end
     ret out
@@ -130,8 +139,15 @@ func _state_id(): str:
     ret g_epoch + ":" + str.FromInt(g_seq as i64) + ":" + str.FromInt(n as i64)
 end
 
-func _event(kind: str, text: str): str:
-    ret "retry: 500\nid: " + _state_id() + "\ndata: {\"kind\":\"" + kind + "\",\"error\":\"" +
+func _same(last: str): bool:
+    cur := _state_id()
+    same := str.Equals(last, cur)
+    mem.Free(cur as void*)
+    ret same
+end
+
+func _event(id: str, kind: str, text: str): str:
+    ret "retry: 500\nid: " + id + "\ndata: {\"kind\":\"" + kind + "\",\"error\":\"" +
         _escape(text) + "\"}\n\n"
 end
 
@@ -210,6 +226,7 @@ pub func Handler(ctx: i64):
     hdr := http.Header(ctx, "Last-Event-ID")
     last := str.Len(hdr) > 0 ? hdr : http.Query(ctx, "v")
     mut kind := "hello"
+    mut id := _state_id()
     if str.Len(last) == 0:
         if _err_len() > 0:
             kind = "error"
@@ -221,23 +238,26 @@ pub func Handler(ctx: i64):
             kind = "reload"
         else:
             mut waited := 0
-            until str.Equals(last, _state_id()) and waited < k_hold_ms:
+            until _same(last) and waited < k_hold_ms:
                 time.Sleep(5)
                 waited += 5
             end
-            if str.Equals(last, _state_id()):
+            id = _state_id()
+            gk := g_kind
+            gs := g_seq
+            if str.Equals(last, id):
                 kind = "ping"
             else:
                 kind = "reload"
                 if _err_len() > 0:
                     kind = "error"
-                else g_seq - _seq_of(last) > 1:
+                else gs - _seq_of(last) > 1:
                     kind = "reload"
-                else g_kind == 1:
+                else gk == 1:
                     kind = "css"
-                else g_kind == 2:
+                else gk == 2:
                     kind = "swap"
-                else g_kind == 3:
+                else gk == 3:
                     kind = "style"
                 end
             end
@@ -247,5 +267,5 @@ pub func Handler(ctx: i64):
     if str.Equals(kind, "error") and str.Len(g_err_file) > 0:
         text = io.ReadFile(g_err_file)
     end
-    http.Text(ctx, http.Own(ctx, _event(kind, text)))
+    http.Text(ctx, http.Own(ctx, _event(id, kind, text)))
 end

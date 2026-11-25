@@ -275,10 +275,11 @@ salam build --platform=all                     # every platform listed in salam.
 ```
 
 With no `--platform`, a project made by `salam init --type=dsl` builds the first
-platform it lists, and `salam run` serves `web` when it is listed. The older
-commands `salam js`, `salam web`, `salam page build` and `salam app android|ios`
-still work as aliases, and `salam app` takes the extra options the new spelling
-does not, such as `--abi`. See [docs/MOBILE.md](docs/MOBILE.md),
+platform it lists, and `salam run` serves `web` when it is listed. The old
+commands `salam js`, `salam web`, `salam page build` and `salam app` are gone.
+Options for the Android and iOS app builder go after `--`, for example
+`salam build --platform=android app.salam -o out -- --abi x86_64`. See
+[docs/MOBILE.md](docs/MOBILE.md),
 [docs/DESKTOP.md](docs/DESKTOP.md) and
 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 

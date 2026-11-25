@@ -69,7 +69,7 @@ Measured by running `salam llvm` over all 802 files in `tests/en`:
 The 2 remaining are `tests/en/games/pacman/src/{ui,game}.salam`, which are
 _library modules_ of a web app - `ui.salam` has no `main` at all. Compiling
 them standalone fails identically on the C backend ("no entry point"), and
-the real entry point (`index.salam`) builds fine via `salam web`. So they are
+the real entry point (`index.salam`) builds fine via `salam build --platform=web`. So they are
 not a backend gap: **the LLVM backend now compiles everything the C backend
 compiles.**
 
@@ -149,7 +149,7 @@ built-in work:
   second prefix. Fixed 4 files.
 - **Layout declarations are skipped, not an error.** `AST_LAYOUT_BLOCK` /
   `AST_LAYOUT_COMPONENT` are the HTML/UI DSL, lowered by the layout code
-  (then `c/src/layout/`, now `compiler/sal_layout/`) for `page build`/`web`
+  (then `c/src/layout/`, now `compiler/sal_layout/`) for the web build
   and never by a code generator - the C backend emits
   "layout block omitted in general (C) mode" and drops them. Reporting them
   as unsupported made 50 files look like backend gaps that the C backend

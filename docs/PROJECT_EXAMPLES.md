@@ -4,8 +4,8 @@ Small apps written only with the Salam page language: a `main.salam`, a `pages/`
 
 ## How they are checked
 
-- `tests/<lang>/page/projects/NAME/main.salam` is built by the `page` section of `tools/bash/run-tests.sh` (`salam page build main.salam --inline`). The `// EXPECT:` lines at the top of `main.salam` (`// انتظار:` in Persian) must appear in the generated page, so they pin routes, texts and generated code. Run it with `sh tools/bash/run-tests.sh page/projects`.
-- `tests/<lang>/ssr/projects/NAME/main.salam` are server rendered projects (`server func`, `salam page build --ssr`). A server func needs a backend, so the runner only builds them (`ssr` section, job `ssrbuild`): the build must produce `dist/server`.
+- `tests/<lang>/page/projects/NAME/main.salam` is built by the `page` section of `tools/bash/run-tests.sh` (`salam build main.salam --platform=web --inline`). The `// EXPECT:` lines at the top of `main.salam` (`// انتظار:` in Persian) must appear in the generated page, so they pin routes, texts and generated code. Run it with `sh tools/bash/run-tests.sh page/projects`.
+- `tests/<lang>/ssr/projects/NAME/main.salam` are server rendered projects (`server func`, `salam build --platform=web --ssr`). A server func needs a backend, so the runner only builds them (`ssr` section, job `ssrbuild`): the build must produce `dist/server`.
 - A project that needs a browser to check behaviour is not covered by the runner; see the notes in its row.
 
 ## Router and platform showcases

@@ -26,6 +26,6 @@ Read `DESIGN_SYSTEMS.md` first.
    components) and the group documents.
 7. Lesson. In lesson 52 (en and fa) add the design to the settings table and a
    short example under "Other designs"; every example builds with
-   `salam page build --inline`.
+   `salam build --platform=web --inline`.
 8. Run only the touched test sections (`page/design`, `stdlib/layoutgen`) and
    `sh website/check-quoted-sizes.sh`.

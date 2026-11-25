@@ -512,7 +512,7 @@ state at call time.
 ### R11. Same semantics, same tests, both targets
 
 Every rule above has one test written once in the page DSL, with the same
-expected output on the web (`salam page build` run in a headless browser or
+expected output on the web (`salam build --platform=web` run in a headless browser or
 the JS test host) and natively (`ui.RenderPage`, `ui.DumpPage`, then the
 event driver). A test counts scope re-runs (`ui.ScopeRuns()` natively, the
 same counter in the page script on the web) and checks the counts in the rule's

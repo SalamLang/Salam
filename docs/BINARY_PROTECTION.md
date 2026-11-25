@@ -54,7 +54,7 @@ determined reverse engineer.
 - **The program logic is still there.** Control flow, data structures and
   algorithms remain in machine code. Obfuscation raises the cost of reading
   them; it does not hide them.
-- **Other targets are readable by nature.** `salam js` and `salam web` produce
+- **Other targets are readable by nature.** `salam build --platform=js` and `--platform=web` produce
   JavaScript, and `salam build --target=wasm32-*` produces WebAssembly; their
   payload can always be inspected. Protect those with a server-side API, not
   with `--protect`.

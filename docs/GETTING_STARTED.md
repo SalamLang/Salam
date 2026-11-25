@@ -563,14 +563,17 @@ Salam includes a built-in DSL for describing web layouts.
 
 ```sh
 # compile a layout file to page.html + page.css + page.js
-salam page build page.salam
+salam build page.salam --platform=web
 
 # produce a single self-contained HTML file
-salam page build page.salam --inline
+salam build page.salam --platform=web --inline
 
-# compile multiple pages (merged style.css / script.js)
-salam page build a.salam b.salam
+# compile every page in a folder (merged style.css)
+salam build . --platform=web
 ```
+
+`salam page build` is the older spelling of the same build. It also takes
+several files (`salam page build a.salam b.salam`) and the `--ssr` option.
 
 A page is a tree of elements with `name = value` attributes:
 

@@ -1,0 +1,207 @@
+package nativelink
+
+func rela_add(l &: Nl, off: i64, ty: int, sym: int, add: i64):
+    l.rd_off.Push(off)
+    l.rd_type.Push(ty)
+    l.rd_sym.Push(sym)
+    l.rd_add.Push(add)
+end
+
+func target_addr(l &: Nl, os: int): i64:
+    ret sym_addr(l, os)
+end
+
+func dyn_word(l &: Nl, buf: u8*, at: i64, v: i64):
+    if l.elf32:
+        wr32(buf, at, v)
+    else:
+        wr64(buf, at, v)
+    end
+end
+
+func dyn_apply_one(
+    l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int
+): bool:
+    if l.mach == EM_386:
+        ret reloc_i386(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    if l.mach == EM_AARCH64:
+        ret reloc_a64(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    if l.mach == EM_ARM:
+        ret reloc_arm(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    if l.mach == EM_RISCV:
+        ret reloc_riscv(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    ret reloc_x64(l, buf, s2, r, ty, place, pc, a, sv, os)
+end
+
+func plt_stub(l &: Nl, buf: u8*, at: i64, pa: i64, slot: i64):
+    if l.mach == EM_AARCH64:
+        a64_plt(buf, at, pa, slot)
+        ret
+    end
+    if l.pie and (l.mach == EM_386 or l.mach == EM_ARM):
+        so_plt_stub(l, buf, at, pa, slot)
+        ret
+    end
+    if l.mach == EM_386:
+        buf[at] = 0xff as u8
+        buf[at + (1 as i64)] = 0x25 as u8
+        wr32(buf, at + (2 as i64), slot)
+        repeat 10 in z:
+            buf[at + ((6 + z) as i64)] = 0x90 as u8
+        end
+        ret
+    end
+    if l.mach == EM_ARM:
+        wr32(buf, at, 0x46C04778 as i64)
+        wr32(buf, at + (4 as i64), 0xE59FC000 as i64)
+        wr32(buf, at + (8 as i64), 0xE59CF000 as i64)
+        wr32(buf, at + (12 as i64), slot)
+        ret
+    end
+    if l.mach == EM_RISCV:
+        d := slot - pa
+        hi := (d + (0x800 as i64)) >> (12 as i64)
+        lo := d - (hi << (12 as i64))
+        wr32(buf, at, (0x00000E17 as i64) | ((hi & (0xFFFFF as i64)) << (12 as i64)))
+        wr32(buf, at + (4 as i64), (0x000E3E03 as i64) | ((lo & (0xFFF as i64)) << (20 as i64)))
+        wr32(buf, at + (8 as i64), 0x000E0367 as i64)
+        wr32(buf, at + (12 as i64), 0x00000013 as i64)
+        ret
+    end
+    buf[at] = 0xff as u8
+    buf[at + (1 as i64)] = 0x25 as u8
+    wr32(buf, at + (2 as i64), slot - (pa + (6 as i64)))
+    repeat 10 in z2:
+        buf[at + ((6 + z2) as i64)] = 0xcc as u8
+    end
+end
+
+func apply_dyn(l &: Nl):
+    buf := malloc(l.file_size as u64) as u8*
+    l.out_ptr = buf as i64
+    repeat l.file_size in z:
+        buf[z] = 0 as u8
+    end
+    if l.mach == EM_X86_64:
+        repeat l.seg_fsz[1] in zz:
+            buf[l.seg_fpos[1] + zz] = 0x90 as u8
+        end
+    end
+    repeat l.s_obj.Len() in s:
+        if not l.s_live[s] or l.s_fpos[s] < (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        src := l.s_off[s]
+        dst := l.s_fpos[s]
+        repeat l.s_size[s] in k:
+            buf[dst + k] = p[src + k]
+        end
+    end
+    repeat l.s_obj.Len() in s2:
+        if not l.s_live[s2] or l.s_fpos[s2] < (0 as i64):
+            continue
+        end
+        r0 := l.s_rel0[s2]
+        repeat l.s_nrel[s2] in k2:
+            r := r0 + k2
+            ty := l.r_type[r]
+            os := l.r_sym[r]
+            place := l.s_fpos[s2] + l.r_off[r]
+            pc := l.s_addr[s2] + l.r_off[r]
+            a := l.r_add[r]
+            g := shared_g(l, os)
+            mut sv := sym_addr(l, os)
+            if ty == 0:
+                continue
+            end
+            if l.mach == EM_ARM and g >= 0 and (ty == 10 or ty == 30) and not l.cp_of.Has(g):
+                sv = (sv - (4 as i64)) | (1 as i64)
+            end
+            tk := reloc_tls(l, buf, s2, r, ty, place, pc, a, sv, os)
+            if tk < 0:
+                ret
+            end
+            if tk > 0:
+                continue
+            end
+            if dyn_kind(l, ty) == DK_ABSW:
+                if g >= 0 and not dyn_hashed(l, g):
+                    rela_add(l, pc, dr_abs(l), l.g_dyn[g], a)
+                    dyn_word(l, buf, place, l.dyn_rel ? a : (0 as i64))
+                    continue
+                end
+                if l.pie and is_addr_sym(l, os):
+                    rela_add(l, pc, dr_relative(l), 0, sv + a)
+                    dyn_word(l, buf, place, sv + a)
+                    continue
+                end
+            end
+            if not dyn_apply_one(l, buf, s2, r, ty, place, pc, a, sv, os):
+                ret
+            end
+        end
+    end
+    ws := dy_ws(l)
+    repeat l.got_sym.Len() in q:
+        gs := l.got_sym[q]
+        slot := l.ds_addr[DS_GOT] + ((ws * q) as i64)
+        sf := l.ds_off[DS_GOT] + ((ws * q) as i64)
+        shared := gs >= 0 and l.g_state[gs] == SY_SHARED
+        if l.got_tlsk.Has(q):
+            kk := l.got_tlsk.Get(q)
+            if shared and kk != TG_ZERO:
+                rela_add(l, slot, dr_tls(l, kk), l.g_dyn[gs], 0 as i64)
+                dyn_word(l, buf, sf, 0 as i64)
+            else:
+                v0 := gs >= 0 ? sym_addr_g(l, gs) : sym_addr(l, 0 - 1 - gs)
+                dyn_word(l, buf, sf, tls_got_value(l, q, v0))
+            end
+            continue
+        end
+        if shared:
+            plt_slot := gs < l.g_plt.Len() and l.g_plt[gs] >= 0
+            rela_add(
+                l,
+                slot,
+                plt_slot and (l.canon.Has(gs) or not l.pie) ? dr_jslot(l) : dr_globdat(l),
+                l.g_dyn[gs],
+                0 as i64
+            )
+            dyn_word(l, buf, sf, 0 as i64)
+            continue
+        end
+        v3 := gs >= 0 ? sym_addr_g(l, gs) : sym_addr(l, 0 - 1 - gs)
+        if l.pie and (gs >= 0 ? is_addr_g(l, gs) : is_addr_sym(l, 0 - 1 - gs)):
+            rela_add(l, slot, dr_relative(l), 0, v3)
+        end
+        dyn_word(l, buf, sf, v3)
+    end
+    repeat l.cp_g.Len() in c:
+        rela_add(l, l.cp_addr[c], dr_copy(l), l.g_dyn[l.cp_g[c]], 0 as i64)
+    end
+    repeat l.plt_sym.Len() in q2:
+        g4 := l.plt_sym[q2]
+        at := l.ds_off[DS_PLT] + ((16 * q2) as i64)
+        pa := l.ds_addr[DS_PLT] + ((16 * q2) as i64)
+        slot2 := l.ds_addr[DS_GOT] + ((ws * l.g_got[g4]) as i64)
+        plt_stub(l, buf, at, pa, slot2)
+    end
+    if l.rd_off.Len() != l.stat_dynrel:
+        nl_fail(
+            l,
+            "internal error: " + str.FromInt(
+                l.rd_off.Len() as i64
+            ) + " dynamic relocations written, " + str.FromInt(l.stat_dynrel as i64) + " reserved"
+        )
+        ret
+    end
+    if l.oc_size[OC_EXIDX] > (0 as i64):
+        sort_exidx(l, buf)
+    end
+    write_dyn_tables(l, buf)
+end

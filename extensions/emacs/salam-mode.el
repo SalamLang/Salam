@@ -341,17 +341,11 @@ command line containing nil."
     (save-buffer))
   (buffer-file-name))
 
-(defun salam-run ()
-  "Run the current buffer's file."
-  (interactive)
-  (salam--compile (append (list salam-run-command (salam--current-file) "--error-style=gcc")
-                          (salam--common-args))))
-
-(defun salam-build ()
-  "Compile the current buffer's file to an executable."
-  (interactive)
-  (salam--compile (append (list "build" (salam--current-file) "--error-style=gcc")
-                          (salam--common-args))))
+(declare-function salam-run "salam-project")
+(declare-function salam-build "salam-project")
+(declare-function salam-select-platform "salam-project")
+(declare-function salam-new-project "salam-project")
+(declare-function salam-goto-enclosing-block "salam-project")
 
 (defun salam-check ()
   "Type-check the current buffer's file without running it."
@@ -487,5 +481,7 @@ command line containing nil."
       (add-to-list 'yas-snippet-dirs directory t))))
 
 (provide 'salam-mode)
+
+(require 'salam-project)
 
 ;;; salam-mode.el ends here

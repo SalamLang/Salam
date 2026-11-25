@@ -44,7 +44,12 @@ endif
 
 command! -nargs=* -complete=file SalamRun     call salam#Run(<q-args>)
 command! -nargs=* -complete=file SalamBuild   call salam#Build(<q-args>)
-command! -nargs=0                SalamCheck   call salam#Check()
+command! -nargs=? -complete=customlist,salam#CompletePlatform SalamPlatform call salam#PickPlatform(<q-args>)
+command! -nargs=? -complete=dir  SalamNew     call salam#New(<q-args>)
+command! -count=1 -nargs=0       SalamGotoBlock call salam#GotoBlock(<count>)
+command! -nargs=0                SalamBlocks  call salam#PickBlock()
+command! -nargs=0                SalamBlockChain echo salam#BlockChain()
+command! -nargs=0                SalamCheck  call salam#Check()
 command! -nargs=0 -bar           SalamFmt     call salam#Format()
 command! -nargs=0 -bar           SalamFmtCheck call salam#FormatCheck()
 command! -nargs=0                SalamTokens  call salam#Inspect('--emit-tokens')
@@ -52,8 +57,13 @@ command! -nargs=0                SalamAst     call salam#Inspect('--emit-ast')
 command! -nargs=0                SalamSymbols call salam#Inspect('--emit-symbol')
 command! -nargs=0 -bar           SalamVersion call salam#Version()
 
+if !exists('g:salam_winbar')
+  let g:salam_winbar = 0
+endif
+
 augroup salam_plugin
   autocmd!
+  autocmd FileType salam call salam#Setup()
   autocmd BufWritePre *.salam if g:salam_format_on_save | call salam#Format() | endif
   autocmd BufWritePost *.salam if g:salam_check_on_save | call salam#Check() | endif
 augroup END

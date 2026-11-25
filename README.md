@@ -281,7 +281,9 @@ Options for the Android and iOS app builder go after `--`, for example
 `salam build --platform=android app.salam -o out -- --abi x86_64`. See
 [docs/MOBILE.md](docs/MOBILE.md),
 [docs/DESKTOP.md](docs/DESKTOP.md) and
-[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). The defaults for the design,
+the installers, the Windows executable and the phone apps live in `salam.toml`;
+every key is listed in [docs/PROJECT_FILE.md](docs/PROJECT_FILE.md).
 
 ### Packages
 

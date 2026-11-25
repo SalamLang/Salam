@@ -124,14 +124,14 @@ false
 
 ```salam
 func میانگین(scores: Vector<int>): f64:
-    if scores.len() == 0:
+    if scores.Len() == 0:
         ret 0.0
     end
     mut sum := 0
     each s in scores:
         sum += s
     end
-    ret (sum as f64) / (scores.len() as f64)
+    ret (sum as f64) / (scores.Len() as f64)
 end
 
 func main:
@@ -145,7 +145,7 @@ end
 ```
 
 ```output
-میانگین: 17.666666666666668
+average: 17.666666666666668
 ```
 
 `salam translate fa avg.salam` فایل `avg.fa.salam` را نوشت که دقیقاً همان خط را چاپ می‌کند:
@@ -174,7 +174,7 @@ end
 ```
 
 ```output
-میانگین: 17.666666666666668
+average: 17.666666666666668
 ```
 
 ساختار حالا فارسی است، با `برابر` به‌جای `==` و سرآیند زبان `// زبان: فارسی`، اما نام‌های `average`، `scores` و `sum` هنوز انگلیسی‌اند. تغییر نام آن‌ها کاری است که به یک انسان یا یک مدل نیاز دارد، و این کار بسیار کوچک‌تر و کم‌خطرتر از نوشتن کل برنامه به فارسی است. ترجمه در جهت عکس هم کار می‌کند: `salam translate en` روی مثال سبد خرید بالا، واژه‌های کلیدی انگلیسی را دور همان نام‌های فارسی گذاشت و نتیجه همان دو خط را چاپ کرد. نوشته‌ی [ابزار salam translate](/blog/salam-translate-persian-english-code/) گزینه‌ها و محدودیت‌ها را شرح می‌دهد.

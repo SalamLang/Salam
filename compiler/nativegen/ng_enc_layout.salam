@@ -1,0 +1,362 @@
+package nativegen
+
+func mi_dup(g &: Ng, src: int): int:
+    i := mi_new(g, g.mc.op[src], g.mc.sz[src])
+    g.mc.sz2[i] = g.mc.sz2[src]
+    g.mc.r0[i] = g.mc.r0[src]
+    g.mc.r1[i] = g.mc.r1[src]
+    g.mc.r2[i] = g.mc.r2[src]
+    g.mc.imm[i] = g.mc.imm[src]
+    g.mc.mk[i] = g.mc.mk[src]
+    g.mc.mb[i] = g.mc.mb[src]
+    g.mc.mi[i] = g.mc.mi[src]
+    g.mc.ms[i] = g.mc.ms[src]
+    g.mc.md[i] = g.mc.md[src]
+    g.mc.msym[i] = g.mc.msym[src]
+    g.mc.cc[i] = g.mc.cc[src]
+    g.mc.tgt[i] = g.mc.tgt[src]
+    g.mc.loc[i] = g.mc.loc[src]
+    g.mc.dv[i] = g.mc.dv[src]
+    g.mc.ymm[i] = g.mc.ymm[src]
+    ret i
+end
+
+func perm_int(v &: Vector<int>, ord: Vector<int>):
+    mut t := Vector {} as Vector<int>
+    each k in ord:
+        t.Push(v[k])
+    end
+    v.Clear()
+    each x in t:
+        v.Push(x)
+    end
+    t.Free()
+end
+
+func perm_bool(v &: Vector<bool>, ord: Vector<int>):
+    mut t := Vector {} as Vector<bool>
+    each k in ord:
+        t.Push(v[k])
+    end
+    v.Clear()
+    each x in t:
+        v.Push(x)
+    end
+    t.Free()
+end
+
+func perm_i64(v &: Vector<i64>, ord: Vector<int>):
+    mut t := Vector {} as Vector<i64>
+    each k in ord:
+        t.Push(v[k])
+    end
+    v.Clear()
+    each x in t:
+        v.Push(x)
+    end
+    t.Free()
+end
+
+func dup_ok(op: int): bool:
+    ret op != M_LABEL and op != M_JMP and op != M_JCC and op != M_CALL and op != M_CALLR and
+        op != M_RET and op != M_UD2 and op != M_DIV and op != M_LCMPXCHG and op != M_XCHG and
+        op != M_LXADD
+end
+
+func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): bool:
+    n := g.mc.op.Len()
+    body.Clear()
+    mut j := li + 1
+    mut mid := 0
+    until j < n:
+        op := g.mc.op[j]
+        if op == M_NOP or op == M_COPY:
+            j++
+            continue
+        end
+        if op == M_JCC:
+            if g.off_mexit or mid > 0:
+                break
+            end
+            mut k2 := j + 1
+            until k2 < n and (g.mc.op[k2] == M_NOP or g.mc.op[k2] == M_COPY):
+                k2++
+            end
+            if k2 >= n or g.mc.op[k2] == M_LABEL or g.mc.op[k2] == M_JMP or g.mc.op[k2] == M_JCC:
+                break
+            end
+            mid++
+            body.Push(j)
+            j++
+            continue
+        end
+        if not dup_ok(op) or body.Len() >= (g.off_mexit ? 4 : 10):
+            ret false
+        end
+        body.Push(j)
+        j++
+    end
+    if j >= n or g.mc.op[j] != M_JCC:
+        ret false
+    end
+    jc = j
+    k := next_real(g, j)
+    if k < n and g.mc.op[k] == M_JMP:
+        fy = g.mc.tgt[k]
+        ret true
+    end
+    mut q := j + 1
+    until q < n and (g.mc.op[q] == M_NOP or g.mc.op[q] == M_COPY):
+        q++
+    end
+    if q < n and g.mc.op[q] == M_LABEL:
+        fy = g.mc.tgt[q]
+        ret true
+    end
+    ret false
+end
+
+func fwd_head(g &: Ng, li: int, body &: Vector<int>, jc &: int): bool:
+    n := g.mc.op.Len()
+    body.Clear()
+    mut j := li + 1
+    until j < n:
+        op := g.mc.op[j]
+        if op == M_NOP or op == M_COPY:
+            j++
+            continue
+        end
+        if op == M_JCC:
+            break
+        end
+        if not dup_ok(op) or body.Len() >= (g.off_tdup ? 4 : 12):
+            ret false
+        end
+        body.Push(j)
+        j++
+    end
+    if j >= n or g.mc.op[j] != M_JCC:
+        ret false
+    end
+    jc = j
+    ret true
+end
+
+func in_loop_of(g &: Ng, t: int, h: int): bool:
+    if t < 0 or t >= g.b_lp.Len():
+        ret false
+    end
+    mut lp := g.b_lp[t]
+    until lp >= 0:
+        if g.lp_head[lp] == h:
+            ret true
+        end
+        lp = g.lp_par[lp]
+    end
+    ret false
+end
+
+func rotate_loops(g &: Ng):
+    n := g.mc.op.Len()
+    mut lpos := Vector {} as Vector<int>
+    repeat g.mc.nlabels:
+        lpos.Push(0 - 1)
+    end
+    repeat n in i:
+        if g.mc.op[i] == M_LABEL and g.mc.tgt[i] < lpos.Len():
+            lpos[g.mc.tgt[i]] = i
+        end
+    end
+    mut ord := Vector {} as Vector<int>
+    mut body := Vector {} as Vector<int>
+    mut pend_at := Vector {} as Vector<int>
+    mut pend_ins := Vector {} as Vector<int>
+    mut any := false
+    repeat n in i2:
+        repeat pend_at.Len() in pq:
+            if pend_at[pq] == i2:
+                ord.Push(pend_ins[pq])
+                pend_at[pq] = 0 - 1
+            end
+        end
+        op := g.mc.op[i2]
+        if op == M_JMP and g.mc.tgt[i2] < lpos.Len():
+            li := lpos[g.mc.tgt[i2]]
+            mut jc := 0 - 1
+            mut fy := 0 - 1
+            if li > i2 and fwd_head(
+                g, li, body, jc
+            ) and
+                (body.Len() <= 3 or
+                    (not g.off_tdup and body.Len() <= 11 and g.mc.tgt[jc] < lpos.Len() and
+                    lpos[g.mc.tgt[jc]] >= 0 and lpos[g.mc.tgt[jc]] < i2)) and
+                    g.mc.tgt[jc] != g.mc.tgt[i2]:
+                k := next_real(g, jc)
+                mut fl := 0 - 1
+                mut q := jc + 1
+                until q < k:
+                    if g.mc.op[q] == M_LABEL:
+                        fl = g.mc.tgt[q]
+                    end
+                    q++
+                end
+                if fl < 0 and k < n:
+                    fl = new_label(g)
+                    pend_at.Push(k)
+                    pend_ins.Push(e_label(g, fl))
+                end
+                if fl >= 0 and fl != g.mc.tgt[i2]:
+                    each bf in body:
+                        ord.Push(bf)
+                    end
+                    ord.Push(jc)
+                    ord.Push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.Len() - 1]] = fl
+                    any = true
+                    continue
+                end
+            end
+            if li >= 0 and li < i2 and rotate_head(
+                g, li, body, jc, fy
+            ) and g.mc.tgt[jc] != g.mc.tgt[i2] and fy != g.mc.tgt[i2]:
+                each b in body:
+                    ord.Push(b)
+                end
+                jt := g.mc.tgt[jc]
+                hl := g.mc.tgt[i2]
+                jin := in_loop_of(g, jt, hl)
+                fin := in_loop_of(g, fy, hl)
+                if fin and not jin:
+                    nj := mi_dup(g, jc)
+                    g.mc.cc[nj] = inv_cc(g.mc.cc[jc])
+                    g.mc.tgt[nj] = fy
+                    ord.Push(nj)
+                    ord.Push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.Len() - 1]] = jt
+                else:
+                    ord.Push(jc)
+                    ord.Push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.Len() - 1]] = fy
+                end
+                any = true
+                continue
+            end
+        end
+        ord.Push(i2)
+    end
+    if any:
+        perm_int(g.mc.op, ord)
+        perm_int(g.mc.sz, ord)
+        perm_int(g.mc.sz2, ord)
+        perm_int(g.mc.r0, ord)
+        perm_int(g.mc.r1, ord)
+        perm_int(g.mc.r2, ord)
+        perm_i64(g.mc.imm, ord)
+        perm_int(g.mc.mk, ord)
+        perm_int(g.mc.mb, ord)
+        perm_int(g.mc.mi, ord)
+        perm_int(g.mc.ms, ord)
+        perm_i64(g.mc.md, ord)
+        perm_int(g.mc.msym, ord)
+        perm_int(g.mc.cc, ord)
+        perm_int(g.mc.tgt, ord)
+        perm_int(g.mc.loc, ord)
+        perm_int(g.mc.dv, ord)
+        perm_bool(g.mc.ymm, ord)
+    end
+    lpos.Free()
+    ord.Free()
+    body.Free()
+    pend_at.Free()
+    pend_ins.Free()
+end
+
+func emit_nops(g &: Ng, n: int):
+    if n > 15 and n < 128 and not g.off_padjmp:
+        g.s_text.Push(0xEB as u8)
+        g.s_text.Push((n - 2) as u8)
+        repeat n - 2:
+            g.s_text.Push(0xCC as u8)
+        end
+        ret
+    end
+    mut left := n
+    until left > 0:
+        mut k := left
+        if k > 15:
+            k = 15
+        end
+        if k >= 10:
+            repeat k - 10:
+                g.s_text.Push(0x66 as u8)
+            end
+            g.s_text.Push(0x2E as u8)
+            each bl in [0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]: g.s_text.Push(bl as u8) end
+            left -= k
+            continue
+        end
+        switch k:
+            1: g.s_text.Push(0x90 as u8) break end
+            2:
+                g.s_text.Push(0x66 as u8)
+                g.s_text.Push(0x90 as u8)
+                break
+            end
+            3:
+                each b3 in [0x0F, 0x1F, 0x00]: g.s_text.Push(b3 as u8) end
+                break
+            end
+            4:
+                each b4 in [0x0F, 0x1F, 0x40, 0x00]: g.s_text.Push(b4 as u8) end
+                break
+            end
+            5:
+                each b5 in [0x0F, 0x1F, 0x44, 0x00, 0x00]: g.s_text.Push(b5 as u8) end
+                break
+            end
+            6:
+                each b6 in [0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00]: g.s_text.Push(b6 as u8) end
+                break
+            end
+            7:
+                each b7 in [0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00]: g.s_text.Push(b7 as u8) end
+                break
+            end
+            8:
+                each b8 in [0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]: g.s_text.Push(b8 as u8) end
+                break
+            end
+            else:
+                each b9 in [0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]: g.s_text.Push(b9 as u8) end
+                break
+            end
+        end
+        left -= k
+    end
+end
+
+func vex_prepare(g &: Ng):
+    g.mc.vex = false
+    if g.arch != NG_ARCH_X64:
+        ret
+    end
+    n := g.mc.op.Len()
+    repeat n in i:
+        if g.mc.ymm[i] or (g.avx2 and (g.mc.op[i] == M_VUN or g.mc.op[i] == M_VBLEND)):
+            g.mc.vex = true
+        end
+    end
+    if not g.mc.vex:
+        ret
+    end
+    mut o := mc_take(g)
+    repeat n in k:
+        op := o.op[k]
+        if op == M_CALL or op == M_CALLR or op == M_RET:
+            g.mc_loc = o.loc[k]
+            _z := mi_new(g, M_VZU, 0)
+        end
+        _c := mi_clone(g, o, k)
+    end
+    mc_free_arrays(o)
+end

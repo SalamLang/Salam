@@ -1,0 +1,204 @@
+package nativegen
+
+func vex_pp(pfx: int): int:
+    if pfx == 0x66: ret 1 end
+    if pfx == 0xF3: ret 2 end
+    if pfx == 0xF2: ret 3 end
+    ret 0
+end
+
+func enc_vex(
+    g &: Ng,
+    e &: Enc,
+    pp: int,
+    mp: int,
+    w: bool,
+    l: bool,
+    opc: int,
+    regf: int,
+    vv: int,
+    rm: RM,
+    immsz: int
+):
+    rf := hw(regf)
+    mut xb := false
+    mut bb := false
+    if rm.mem:
+        if rm.k == MK_BI:
+            xb = rm.i >= 0 and hw(rm.i) >= 8
+            bb = rm.b >= 0 and hw(rm.b) >= 8
+        end
+    else:
+        bb = hw(rm.reg) >= 8
+    end
+    nv := vv < 0 ? 15 : 15 - hw(vv)
+    p2 := (w ? 128 : 0) | (nv << 3) | (l ? 4 : 0) | pp
+    nr := rf >= 8 ? 0 : 128
+    if mp == 1 and not xb and not bb and not w:
+        eb(e, 0xC5)
+        eb(e, nr | (p2 & 127))
+    else:
+        eb(e, 0xC4)
+        eb(e, nr | (xb ? 0 : 64) | (bb ? 0 : 32) | mp)
+        eb(e, p2)
+    end
+    eb(e, opc & 255)
+    enc_modrm(g, e, rf, rm, immsz)
+end
+
+func vex_src(g &: Ng, i: int, r0: int): int:
+    if i < g.mc.vsrc.Len() and g.mc.vsrc[i] >= 0:
+        ret g.mc.vsrc[i]
+    end
+    ret r0
+end
+
+func vex_three_op(g &: Ng):
+    g.mc.vsrc.Clear()
+    n := g.mc.op.Len()
+    repeat n:
+        g.mc.vsrc.Push(0 - 1)
+    end
+    if not g.mc.vex or g.off_vex3:
+        ret
+    end
+    repeat n - 1 in i:
+        j := i + 1
+        oj := g.mc.op[j]
+        if g.mc.op[i] != M_FMOV_RR or
+            (oj != M_VOP_RR and oj != M_VSHI and oj != M_ANDPS and oj != M_VBLEND):
+            continue
+        end
+        a := g.mc.r0[i]
+        b := g.mc.r1[i]
+        if a == b or g.mc.r0[j] != a or (g.mc.ymm[j] and not g.mc.ymm[i]):
+            continue
+        end
+        if oj != M_VSHI and g.mc.r1[j] == a:
+            g.mc.r1[j] = b
+        end
+        if oj == M_VBLEND and g.mc.r2[j] == a:
+            g.mc.r2[j] = b
+        end
+        g.mc.vsrc[j] = b
+        g.mc.op[i] = M_NOP
+    end
+end
+
+func vex_imm(e &: Enc, imm: i64):
+    eb(e, (imm & (255 as i64)) as int)
+end
+
+func enc_vex_ins(g &: Ng, e &: Enc, i: int): bool:
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    imm := g.mc.imm[i]
+    y := g.mc.ymm[i]
+    switch op:
+        M_FMOV_RR: enc_vex(g, e, 0, 1, false, y, 0x28, r0, 0 - 1, rm_reg(r1), 0) ret true end
+        M_FLD: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, false, false, 0x10, r0, 0 - 1, rm_of(g, i), 0) ret true end
+        M_FST: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, false, false, 0x11, r1, 0 - 1, rm_of(g, i), 0) ret true end
+        M_FOP_RR: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, false, false, g.mc.cc[i], r0, r0, rm_reg(r1), 0) ret true end
+        M_SQRT: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, false, false, 0x51, r0, r0, rm_reg(r1), 0) ret true end
+        M_FOP_RM: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, false, false, g.mc.cc[i], r0, r0, rm_of(g, i), 0) ret true end
+        M_UCOMI: enc_vex(g, e, sz == 8 ? 1 : 0, 1, false, false, 0x2E, r0, 0 - 1, rm_reg(r1), 0) ret true end
+        M_CVTSI2F: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, g.mc.sz2[i] == 8, false, 0x2A, r0, r0, rm_reg(r1), 0) ret true end
+        M_CVTF2SI: enc_vex(g, e, vex_pp(sse_pfx(sz)), 1, g.mc.sz2[i] == 8, false, 0x2C, r0, 0 - 1, rm_reg(r1), 0) ret true end
+        M_CVTF2F: enc_vex(g, e, sz == 8 ? 2 : 3, 1, false, false, 0x5A, r0, r0, rm_reg(r1), 0) ret true end
+        M_MOVQ_XG: enc_vex(g, e, 1, 1, sz == 8, false, 0x6E, r0, 0 - 1, rm_reg(r1), 0) ret true end
+        M_MOVQ_GX: enc_vex(g, e, 1, 1, sz == 8, false, 0x7E, r1, 0 - 1, rm_reg(r0), 0) ret true end
+        M_XORPS: enc_vex(g, e, 0, 1, false, y and r0 != r1, 0x57, r0, r0, rm_reg(r1), 0) ret true end
+        M_ANDPS: enc_vex(g, e, 0, 1, false, y, 0x54, r0, vex_src(g, i, r0), rm_reg(r1), 0) ret true end
+        M_VLD: enc_vex(g, e, 0, 1, false, y, 0x10, r0, 0 - 1, rm_of(g, i), 0) ret true end
+        M_VST: enc_vex(g, e, 0, 1, false, y, 0x11, r1, 0 - 1, rm_of(g, i), 0) ret true end
+        M_VOP_RR:
+            c := g.mc.cc[i]
+            enc_vex(
+                g,
+                e,
+                sz == 8 ? 1 : 0,
+                c > 255 ? 2 : 1,
+                false,
+                y,
+                c & 255,
+                r0,
+                vex_src(g, i, r0),
+                g.mc.mk[i] != MK_NONE ? rm_of(g, i) : rm_reg(r1),
+                0
+            )
+            ret true
+        end
+        M_SHUFPS:
+            enc_vex(g, e, 0, 1, false, y, 0xC6, r0, r0, rm_reg(r1), 1)
+            vex_imm(e, imm)
+            ret true
+        end
+        M_UNPCKLPD: enc_vex(g, e, 1, 1, false, y, 0x14, r0, r0, rm_reg(r1), 0) ret true end
+        M_PSHUFD:
+            enc_vex(g, e, 1, 1, false, y, 0x70, r0, 0 - 1, rm_reg(r1), 1)
+            vex_imm(e, imm)
+            ret true
+        end
+        M_VSHI:
+            enc_vex(g, e, 1, 1, false, y, g.mc.cc[i], g.mc.sz2[i], r0, rm_reg(vex_src(g, i, r0)), 1)
+            vex_imm(e, imm)
+            ret true
+        end
+        M_VLD32: enc_vex(g, e, 1, 1, false, false, 0x6E, r0, 0 - 1, rm_of(g, i), 0) ret true end
+        M_VST32: enc_vex(g, e, 1, 1, false, false, 0x7E, r1, 0 - 1, rm_of(g, i), 0) ret true end
+        M_VUN:
+            if g.mc.cc[i] == VUN_EXT:
+                enc_vex(g, e, 1, 3, false, true, 0x39, r1, 0 - 1, rm_reg(r0), 1)
+                vex_imm(e, imm)
+                ret true
+            end
+            enc_vex(
+                g,
+                e,
+                1,
+                2,
+                false,
+                y,
+                g.mc.cc[i],
+                r0,
+                0 - 1,
+                g.mc.mk[i] != MK_NONE ? rm_of(g, i) : rm_reg(r1),
+                0
+            )
+            ret true
+        end
+        M_VBLEND:
+            enc_vex(
+                g,
+                e,
+                1,
+                3,
+                false,
+                y,
+                0x4C,
+                r0,
+                vex_src(g, i, r0),
+                g.mc.mk[i] != MK_NONE ? rm_of(g, i) : rm_reg(r1),
+                1
+            )
+            eb(e, (hw(g.mc.r2[i]) & 15) << 4)
+            ret true
+        end
+        M_VZU:
+            eb(e, 0xC5)
+            eb(e, 0xF8)
+            eb(e, 0x77)
+            ret true
+        end
+    end
+    ret false
+end
+
+func sse_pfx(sz: int): int:
+    if sz == 4:
+        ret 0xF3
+    end
+    ret 0xF2
+end

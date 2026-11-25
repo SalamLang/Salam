@@ -284,7 +284,9 @@ salam exec                  # interpret the project here
   A project made this way builds and runs through the two usual commands:
   `salam run` serves a web project with live reload (or starts the first
   platform), `salam build` builds it, and `--platform=web|js|android|ios|linux|macos|windows|all`
-  picks another target. `salam js`, `salam web`, `salam page build` and
+  picks another target. `--platform=linux|macos|windows` and `--arch=x86_64|aarch64|i686|arm|riscv64`
+  build for another OS or CPU without spelling the whole `--target=` triple (either one alone
+  keeps the other from this machine). `salam js`, `salam web`, `salam page build` and
   `salam app` still work and are what these commands call.
 
 Frontend (layout DSL) projects have no `main` function; there `main.salam`

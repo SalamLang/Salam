@@ -31,8 +31,12 @@ import collections
 @en "EventKind"
 @fa "نوع رویداد"
 pub enum EventKind:
-    Created
-    Modified
+    @en "Created"
+    @fa "ساخته شد"
+    Created, @en "Modified"
+    @fa "تغییر کرد"
+    Modified, @en "Deleted"
+    @fa "حذف شد"
     Deleted
 end
 
@@ -62,6 +66,12 @@ pub struct Watcher:
     @en "initialized"
     @fa "آماده"
     pub initialized: bool = false
+    @en "skipped names"
+    @fa "نام های نادیده"
+    pub skipped: str = ","
+    @en "skip hidden"
+    @fa "نادیده بودن پنهان ها"
+    pub skip_hidden: bool = false
 end
 
 func _fingerprint(path: str): str:
@@ -81,7 +91,20 @@ func _fingerprint(path: str): str:
     ret out
 end
 
-func _scan_dir(root: str, recursive: bool, out &: collections.OrderedMap):
+func _is_skipped(name: str, skipped: str, skip_hidden: bool): bool:
+    if skip_hidden and str.StartsWith(name, "."):
+        ret true
+    end
+    if skip_hidden and (str.EndsWith(name, "~") or str.EndsWith(name, ".swp") or str.EndsWith(name, ".tmp")):
+        ret true
+    end
+    probe := "," + name + ","
+    ret str.Contains(skipped, probe)
+end
+
+func _scan_dir(
+    root: str, recursive: bool, skipped: str, skip_hidden: bool, out &: collections.OrderedMap
+):
     if root.Len() == 0 or not os.Exists(root): ret end
     // If root is a file, track it directly.
     if not os.IsDir(root):
@@ -94,13 +117,13 @@ func _scan_dir(root: str, recursive: bool, out &: collections.OrderedMap):
     defer entries.Free()
     repeat entries.Len() in i:
         name := entries.Get(i)
-        if name != "." and name != "..":
+        if name != "." and name != ".." and not _is_skipped(name, skipped, skip_hidden):
             p := filepath.Join(root, name)
             fp := _fingerprint(p)
             key := str.Clone(p)
             out.Set(key, fp)
             if os.IsDir(p) and recursive:
-                _scan_dir(p, recursive, out)
+                _scan_dir(p, recursive, skipped, skip_hidden, out)
             end
             mem.Free(p as void*)
         end
@@ -123,8 +146,20 @@ end
 pub func Snapshot(w &: Watcher):
     w.fingerprints.Free()
     w.fingerprints = collections.OrderedMap {}
-    _scan_dir(w.root, w.recursive, w.fingerprints)
+    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, w.fingerprints)
     w.initialized = true
+end
+
+@en "Ignore"
+@fa "نادیده گرفتن"
+pub func Ignore(w &: Watcher, name: str):
+    w.skipped += name + ","
+end
+
+@en "IgnoreHidden"
+@fa "نادیده گرفتن پنهان ها"
+pub func IgnoreHidden(w &: Watcher):
+    w.skip_hidden = true
 end
 
 @en "Poll"
@@ -137,7 +172,7 @@ pub func Poll(w &: Watcher): Vector<Event>:
     end
 
     mut now := collections.OrderedMap {}
-    _scan_dir(w.root, w.recursive, now)
+    _scan_dir(w.root, w.recursive, w.skipped, w.skip_hidden, now)
 
     repeat now.Len() in i:
         p := now.KeyAt(i)
@@ -161,6 +196,28 @@ pub func Poll(w &: Watcher): Vector<Event>:
 
     w.fingerprints.Free()
     w.fingerprints = now
+    ret out
+end
+
+@en "PollSettled"
+@fa "بررسی آرام"
+pub func PollSettled(w &: Watcher, settle_ms: int): Vector<Event>:
+    mut out := Poll(w)
+    if out.Len() == 0:
+        ret out
+    end
+    until true:
+        time.Sleep(settle_ms)
+        more := Poll(w)
+        if more.Len() == 0:
+            more.Free()
+            break
+        end
+        repeat more.Len() in i:
+            out.Push(more.Get(i))
+        end
+        more.Free()
+    end
     ret out
 end
 

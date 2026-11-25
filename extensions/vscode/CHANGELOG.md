@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The status bar shows which blocks the cursor is in, the opening and closing line of the innermost block are highlighted, and `Salam: Show Blocks Around the Cursor` jumps to any of them.
+- In a project with `[project] platforms` in `salam.toml` (made by `salam init`), Run and Build use `--platform=` with the platform shown in the status bar; `Salam: Choose Platform for Run and Build` changes it.
+- `Salam: New Project` runs `salam init`, so the wizard asks for the type, platforms and design in the terminal.
+
 ## 0.7.0
 
 - The extension itself is unchanged in this version.

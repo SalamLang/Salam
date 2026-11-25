@@ -87,8 +87,18 @@ class Range {
   }
 }
 
+const statusItems = [];
+const selectionListeners = [];
+
 const vscodeStub = {
   Range,
+  Position: class {
+    constructor(line, character) {
+      Object.assign(this, { line, character });
+    }
+  },
+  Selection: class {},
+  ThemeColor: class {},
   TextEdit: { replace: (range, newText) => ({ range, newText }) },
   DebugAdapterExecutable: class {
     constructor(command, args) {
@@ -97,6 +107,27 @@ const vscodeStub = {
     }
   },
   window: {
+    createStatusBarItem: () => {
+      const it = {
+        text: "",
+        visible: false,
+        show() {
+          this.visible = true;
+        },
+        hide() {
+          this.visible = false;
+        },
+        dispose() {},
+      };
+      statusItems.push(it);
+      return it;
+    },
+    createTextEditorDecorationType: () => disposable(),
+    onDidChangeTextEditorSelection: (cb) => {
+      selectionListeners.push(cb);
+      return disposable();
+    },
+    onDidChangeActiveTextEditor: () => disposable(),
     createOutputChannel: () => ({
       appendLine: (t) => outputLines.push(t),
       show() {},
@@ -137,6 +168,8 @@ const vscodeStub = {
       return Promise.resolve({ content: opts.content });
     },
     createFileSystemWatcher: () => disposable(),
+    onDidChangeTextDocument: () => disposable(),
+    workspaceFolders: undefined,
   },
   commands: {
     registerCommand: (id, cb) => {
@@ -286,7 +319,17 @@ async function checkSymbolGuard(c) {
 
 async function main() {
   const ext = require(extPath);
-  const context = { subscriptions: [] };
+  const memento = new Map();
+  const context = {
+    subscriptions: [],
+    workspaceState: {
+      get: (k) => memento.get(k),
+      update: (k, v) => {
+        memento.set(k, v);
+        return Promise.resolve();
+      },
+    },
+  };
   ext.activate(context);
 
   for (const id of [
@@ -299,6 +342,8 @@ async function main() {
     "salam.emitAst",
     "salam.newProject",
     "salam.restartServer",
+    "salam.showBlocks",
+    "salam.selectPlatform",
   ]) {
     assert.ok(commands.has(id), `command ${id} is registered`);
   }
@@ -413,11 +458,78 @@ async function main() {
 
   activeEditor = undefined;
   sentText.length = 0;
+  {
+    const text = [
+      "func main:",
+      "    if true:",
+      "        println 1",
+      "    end",
+      "end",
+      "",
+      "page:",
+      "    box:",
+      "        button:",
+      "            content = \"x\"",
+      "        end",
+      "    end",
+      "end",
+    ].join("\n");
+    const ed = makeDoc("blocks.salam", text);
+    const block = statusItems[0];
+    const at = (line) => {
+      activeEditor = {
+        document: ed,
+        selection: { active: { line } },
+        setDecorations() {},
+      };
+      for (const cb of selectionListeners) cb();
+    };
+    at(2);
+    assert.ok(block.text.includes("func main \u203a if true"), block.text);
+    at(9);
+    assert.ok(block.text.includes("page \u203a box \u203a button"), block.text);
+    at(5);
+    assert.ok(block.text.includes("top level"), block.text);
+  }
+  {
+    const proj = path.join(work, "proj");
+    fs.mkdirSync(proj);
+    fs.writeFileSync(
+      path.join(proj, "salam.toml"),
+      '[package]\nname = "p"\n\n[project]\ntype = "dsl"\nplatforms = ["web", "android"]\nweb = "spa"\n',
+    );
+    const main = path.join(proj, "main.salam");
+    fs.writeFileSync(main, "page:\nend\n");
+    activeEditor = {
+      document: {
+        languageId: "salam",
+        isDirty: false,
+        uri: { fsPath: main },
+        getText: () => "page:\nend\n",
+        lineCount: 2,
+      },
+      selection: { active: { line: 0 } },
+      setDecorations() {},
+    };
+    sentText.length = 0;
+    commands.get("salam.run")();
+    await waitFor(() => sentText.length >= 2, "project run sends to the terminal");
+    assert.strictEqual(sentText[0], `cd ${q(proj)}`);
+    assert.strictEqual(sentText[1], `${fc} run ${q("--platform=web")}`);
+    await commands.get("salam.selectPlatform")();
+    sentText.length = 0;
+    commands.get("salam.build")();
+    await waitFor(() => sentText.length >= 2, "project build sends to the terminal");
+    assert.strictEqual(sentText[1], `${fc} build ${q("--platform=web")}`);
+  }
+
+  sentText.length = 0;
   commands.get("salam.newProject")();
   await waitFor(() => sentText.length >= 1, "salam.newProject runs");
-  assert.strictEqual(sentText[0], `${fc} new demo-app ${q("--lang=en")}`);
+  assert.strictEqual(sentText[0], `${fc} init demo-app ${q("--lang=en")}`);
 
   messages.length = 0;
+  activeEditor = undefined;
   commands.get("salam.run")();
   assert.deepStrictEqual(messages, ["warn: Salam: open a .salam file first."]);
 

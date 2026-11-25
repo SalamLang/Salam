@@ -79,6 +79,28 @@ The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--os NAME`,
 `--arch NAME`, `--platform NAME`, `--no-modify-path`, `--no-color` and `--help`;
 run it with `--help` for the full list.
 
+**Downloads from Iran and other restricted networks.** Where github.com or
+release-assets.githubusercontent.com time out, nothing needs to be configured:
+the installers, `salam upgrade` and `salam upgrade-std` try the mirror at
+`https://cdn.salamlang.ir/releases/` first (about 8 seconds to connect, no long
+stall) and fall back to the same file on GitHub on any failure: a timeout, DNS,
+TLS, a missing file, or a wrong size or checksum. The mirror copies GitHub's
+names, so `https://github.com/SalamLang/Salam/releases/download/<tag>/<asset>`
+is `https://cdn.salamlang.ir/releases/<tag>/<asset>`, the newest
+release is the one line in `https://cdn.salamlang.ir/releases/latest`, and
+`releases/index.json` lists tags, assets, sizes and sha256 values. The mirror is
+served by the Salam project, not by GitHub; the trust model is HTTPS plus the
+published `.sha256` file beside every asset (the installers reject a mirror
+copy that does not match it and fetch from GitHub instead). New releases
+reach the mirror within about 15 minutes. `SALAM_NO_CDN=1` turns the mirror off
+and `SALAM_CDN=https://other.example` points at another one (only https is accepted, never plain http; an empty `SALAM_CDN`
+also turns it off; on Windows use `SALAM_CDN=off`). Not mirrored: Linux
+distribution and package-manager channels, `salam add` / `salam install`
+packages from other repositories (those come from their own hosts), and the
+installer script itself on the first line above, which is fetched from
+raw.githubusercontent.com. Where that is blocked too, fetch
+`https://cdn.salamlang.ir/install.sh` (or `install.ps1`) instead.
+
 **Windows** (PowerShell):
 
 ```powershell
@@ -280,7 +302,9 @@ commands `salam js`, `salam web`, `salam page build` and `salam app android|ios`
 still work as aliases, and `salam app` takes the extra options the new spelling
 does not, such as `--abi`. See [docs/MOBILE.md](docs/MOBILE.md),
 [docs/DESKTOP.md](docs/DESKTOP.md) and
-[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). The defaults for the design,
+the installers, the Windows executable and the phone apps live in `salam.toml`;
+every key is listed in [docs/PROJECT_FILE.md](docs/PROJECT_FILE.md).
 
 ### Packages
 

@@ -138,8 +138,35 @@ else
     head -5 "$work/proj/proj.exe.log"
 fi
 
+mkdir -p "$work/proj2"
+cp "$work/app/main.salam" "$work/app/app.ico" "$work/app/app.manifest" "$work/proj2/"
+cat >"$work/proj2/salam.toml" <<'EOF'
+[package]
+name = "guiproj2"
+version = "9.9.9"
+
+[app]
+id = "app.guiproj2"
+name = "Salam GUI"
+version = "1.2.3.4"
+description = "GUI check"
+author = "Salam"
+copyright = "(c) Salam"
+icon = "app.ico"
+
+[windows]
+subsystem = "windows"
+manifest = "app.manifest"
+EOF
+if build "$work/proj2" "$work/proj2/proj2.exe" .; then
+    ok "project build with [app] values and a short [windows] table"
+else
+    bad "project build with [app]"
+    head -5 "$work/proj2/proj2.exe.log"
+fi
+
 if command -v llvm-readobj >/dev/null 2>&1; then
-    for exe in "$work/app/gui.exe" "$work/proj/proj.exe"; do
+    for exe in "$work/app/gui.exe" "$work/proj/proj.exe" "$work/proj2/proj2.exe"; do
         llvm-readobj --file-headers --coff-resources "$exe" >"$exe.txt" 2>&1
         if grep -q "IMAGE_SUBSYSTEM_WINDOWS_GUI" "$exe.txt" && grep -q "Type: ICON (ID 3)" "$exe.txt" &&
             grep -q "Type: GROUP_ICON (ID 14)" "$exe.txt" && grep -q "Type: VERSIONINFO (ID 16)" "$exe.txt" &&
@@ -255,7 +282,7 @@ int main(int argc, char **argv)
 EOF
     mlen=$(wc -c <"$work/app/app.manifest" | tr -d ' ')
     if "$CC" "$work/res.c" -o "$work/res.exe" -lversion >"$work/res.log" 2>&1; then
-        for exe in "$work/app/gui.exe" "$work/proj/proj.exe"; do
+        for exe in "$work/app/gui.exe" "$work/proj/proj.exe" "$work/proj2/proj2.exe"; do
             cp "$exe" "$work/t.exe"
             if (cd "$work" && timeout 60 wine ./res.exe t.exe "$mlen" </dev/null >"$work/res.out" 2>/dev/null) &&
                 [ "$(tr -d '\r' <"$work/res.out")" = "resources ok" ]; then

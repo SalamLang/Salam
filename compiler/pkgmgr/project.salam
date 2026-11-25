@@ -13,6 +13,16 @@ const INSTALLED_FILE := "installed.txt"
 
 const SUMS_FILE := "sums.txt"
 
+const PF_APP := "id:s name:s version:v build:i description:s author:s publisher:s copyright:s icon:s icon_bg:s splash_color:s splash_icon:s orientation:s category:s permissions:l permission:l fonts:s assets:s scheme:l link_host:l main:s engine:s runtime:s "
+
+const PF_ANDROID := "min_sdk:i target_sdk:i abi:s keystore:s key_alias:s "
+
+const PF_IOS := "min_ios:v team:s profile:s sign_identity:s ipa:b "
+
+const PF_WINDOWS := "subsystem:s icon:s manifest:s version:v company:s description:s product:s copyright:s "
+
+const PF_SECRETS := " keystore_pass keystore_password key_pass key_password password storepass "
+
 mut g_pm_pin_mods := Vector {} as Vector<str>
 mut g_pm_pin_vers := Vector {} as Vector<str>
 
@@ -29,6 +39,85 @@ pub struct PkgInfo:
     pub project_type: str = ""
     pub project_web: str = ""
     pub project_platforms: Vector<str> = Vector {}
+    pub has_app: bool = false
+    pub app_name: str = ""
+    pub app_version: str = ""
+    pub app_description: str = ""
+    pub app_author: str = ""
+    pub app_copyright: str = ""
+    pub app_icon: str = ""
+end
+
+func pf_spec(table: str): str:
+    if table == "app":
+        ret PF_APP
+    end
+    if table == "app.mobile":
+        ret PF_APP + PF_ANDROID + PF_IOS
+    end
+    if table == "android" or table == "app.android":
+        ret PF_APP + PF_ANDROID
+    end
+    if table == "ios" or table == "app.ios":
+        ret PF_APP + PF_IOS
+    end
+    if table == "windows":
+        ret PF_APP + PF_WINDOWS
+    end
+    if table == "macos" or table == "linux":
+        ret PF_APP
+    end
+    ret ""
+end
+
+func pf_type_of(spec: str, key: str): str:
+    i := spec.Find(" " + key + ":")
+    if i < 0 and not str.StartsWith(spec, key + ":"):
+        ret ""
+    end
+    start := i < 0 ? key.Len() + 1 : i + key.Len() + 2
+    ret spec.Substr(start, 1)
+end
+
+func pf_type_ok(v: value.Value, t: str): bool:
+    if t == "s":
+        ret value.IsString(v)
+    end
+    if t == "v":
+        ret value.IsString(v) or value.IsNumber(v)
+    end
+    if t == "i":
+        ret value.IsInt(v)
+    end
+    if t == "b":
+        ret value.IsBool(v)
+    end
+    ret value.IsArray(v) or value.IsString(v)
+end
+
+func pf_check_table(name: str, tbl: value.Value, out &: Vector<str>):
+    spec := pf_spec(name)
+    if spec == "":
+        ret
+    end
+    keys := value.ObjectKeys(tbl)
+    defer keys.Free()
+    each key in keys:
+        item := value.ObjectGet(tbl, key)
+        if value.IsObject(item) and (name == "app" or str.StartsWith(name, "app.")):
+            continue
+        end
+        if PF_SECRETS.Find(" " + key + " ") >= 0:
+            out.Push("secret\t" + name + "\t" + key + "\t")
+            continue
+        end
+        t := pf_type_of(spec, key)
+        if t == "":
+            out.Push("unknown\t" + name + "\t" + key + "\t")
+        else not pf_type_ok(item, t):
+            out.Push("type\t" + name + "\t" + key + "\t" + t)
+        end
+    end
 end
 
 func version_major(v: str): int:
@@ -68,6 +157,36 @@ func sums_path(): str:
     ret pth.PathJoin(PkgRoot(), SUMS_FILE)
 end
 
+@en "ProjectIssues"
+@fa "مشکلات پروژه"
+pub func ProjectIssues(dir: str, out &: Vector<str>):
+    path := pth.PathJoin(dir, MANIFEST_FILE)
+    if not os.Exists(path):
+        ret
+    end
+    mut doc := value.NewValueObject()
+    try:
+        doc = toml.Decode(os.ReadFile(path))
+    catch:
+        ret
+    end
+    mut ok := false
+    each name in ["app", "windows", "macos", "linux", "android", "ios"]:
+        tbl := value.ObjectGetOk(doc, name, ok)
+        if ok and value.IsObject(tbl):
+            pf_check_table(name, tbl, out)
+            if name == "app":
+                each sub in ["mobile", "android", "ios"]:
+                    st := value.ObjectGetOk(tbl, sub, ok)
+                    if ok and value.IsObject(st):
+                        pf_check_table("app." + sub, st, out)
+                    end
+                end
+            end
+        end
+    end
+end
+
 pub func ReadPackageInfo(dir: str, out &: PkgInfo): bool:
     path := pth.PathJoin(dir, MANIFEST_FILE)
     if not os.Exists(path):
@@ -101,6 +220,19 @@ pub func ReadPackageInfo(dir: str, out &: PkgInfo): bool:
         out.project_type = toml_str(prj, "type")
         out.project_web = toml_str(prj, "web")
         toml_strs(prj, "platforms", out.project_platforms)
+    end
+    app := value.ObjectGetOk(doc, "app", ok)
+    if ok and value.IsObject(app):
+        out.has_app = true
+        out.app_name = toml_str(app, "name")
+        out.app_version = toml_str(app, "version")
+        out.app_description = toml_str(app, "description")
+        out.app_author = toml_str(app, "author")
+        if str.Len(out.app_author) == 0:
+            out.app_author = toml_str(app, "publisher")
+        end
+        out.app_copyright = toml_str(app, "copyright")
+        out.app_icon = toml_str(app, "icon")
     end
     win := value.ObjectGetOk(doc, "windows", ok)
     if ok and value.IsObject(win):

@@ -24,6 +24,10 @@
 #   SALAM_ARCH             same as --arch
 #   SALAM_PLATFORM         same as --platform
 #   SALAM_NO_MODIFY_PATH   set to 1 to never touch the user PATH
+#   SALAM_CDN              mirror tried before GitHub (default
+#                          https://cdn.salamlang.ir; a value that is not an
+#                          http(s) URL, such as "off", turns the mirror off)
+#   SALAM_NO_CDN           set to 1 to never use the mirror
 #
 # Default installation directory:
 #   %USERPROFILE%\.salam\bin
@@ -56,6 +60,36 @@ $ModifyPath = $true
 if ($null -ne $env:SALAM_NO_MODIFY_PATH -and $env:SALAM_NO_MODIFY_PATH -ne "") {
     $ModifyPath = $false
 }
+
+# The mirror is tried before GitHub for release downloads and for the newest
+# release number. Any failure (timeout, DNS, TLS, 404, wrong size or checksum)
+# falls back to GitHub. Windows cannot hold an empty environment variable, so
+# SALAM_CDN=off (or SALAM_NO_CDN=1) is how the mirror is turned off here.
+$CdnBase = "https://cdn.salamlang.ir"
+
+if ($null -ne $env:SALAM_CDN -and "$env:SALAM_CDN" -ne "") {
+    $CdnBase = "$env:SALAM_CDN"
+}
+
+if ($null -ne $env:SALAM_NO_CDN -and "$env:SALAM_NO_CDN" -ne "" -and "$env:SALAM_NO_CDN" -ne "0") {
+    $CdnBase = ""
+}
+
+$CdnBase = "$CdnBase".Trim().TrimEnd("/")
+
+if ($CdnBase -notmatch "^(https://|http://(127\.0\.0\.1|localhost)([:/]|$))") {
+    $CdnBase = ""
+}
+
+$CdnTimeout = 8
+
+if ($null -ne $env:SALAM_CDN_TIMEOUT -and "$env:SALAM_CDN_TIMEOUT" -match "^[1-9][0-9]*$") {
+    $CdnTimeout = [int]"$env:SALAM_CDN_TIMEOUT"
+}
+
+$script:MirrorMode = $false
+$script:MirrorWhy = ""
+$script:ArchiveFrom = "github"
 
 # Download methods, best first. A method that fails on transport (rather
 # than on a missing file) gets dropped for the rest of the run, so the
@@ -166,7 +200,8 @@ function Show-Usage {
     Write-Host ""
     Write-Host "Environment:"
     Write-Host "  SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_OS, SALAM_ARCH, SALAM_PLATFORM,"
-    Write-Host "  SALAM_NO_MODIFY_PATH"
+    Write-Host "  SALAM_NO_MODIFY_PATH, SALAM_CDN (mirror tried before GitHub; default"
+    Write-Host "  https://cdn.salamlang.ir, 'off' disables it), SALAM_NO_CDN=1"
     Write-Host ""
 }
 
@@ -461,8 +496,16 @@ function Invoke-NetDownload {
         $request.UserAgent = $UserAgent
         $request.Timeout = 60000
 
+        if ($script:MirrorMode) {
+            $request.Timeout = $CdnTimeout * 1000
+        }
+
         try {
             $request.ReadWriteTimeout = 120000
+
+            if ($script:MirrorMode) {
+                $request.ReadWriteTimeout = $CdnTimeout * 2000
+            }
         }
         catch {
         }
@@ -775,6 +818,156 @@ function Save-Url {
     return $false
 }
 
+function Get-MirrorUrl {
+    param([string]$Url)
+
+    if ($CdnBase -eq "") {
+        return ""
+    }
+
+    $prefix = "https://github.com/$Repo/releases/download/"
+
+    if ($Url.StartsWith($prefix)) {
+        return "$CdnBase/releases/" + $Url.Substring($prefix.Length)
+    }
+
+    return ""
+}
+
+function Save-MirrorUrl {
+    param(
+        [string]$Url,
+        [string]$Destination,
+        [bool]$ShowProgress
+    )
+
+    # Mirror failures never touch the download method list used for GitHub:
+    # a certificate problem on the mirror must not switch off HTTPS there.
+    $script:MirrorMode = $true
+
+    try {
+        $result = Invoke-NetDownload -Url $Url -Destination $Destination -ShowProgress $ShowProgress
+    }
+    finally {
+        $script:MirrorMode = $false
+    }
+
+    if ($result -ne "ok") {
+        if (Test-Path $Destination) {
+            Remove-Item $Destination -Force -ErrorAction SilentlyContinue
+        }
+
+        $detail = "$result"
+
+        if ($detail.StartsWith("error: ")) {
+            $detail = $detail.Substring(7)
+        }
+
+        if ($detail -eq "notfound") {
+            $detail = "the mirror does not have this file"
+        }
+
+        $script:MirrorWhy = $detail
+
+        return $false
+    }
+
+    return $true
+}
+
+function Get-MirrorText {
+    param([string]$Url)
+
+    $temp = Join-Path $script:WorkDir ("mirror-" + [Guid]::NewGuid().ToString() + ".txt")
+
+    if (!(Save-MirrorUrl -Url $Url -Destination $temp -ShowProgress $false)) {
+        return ""
+    }
+
+    try {
+        $text = [IO.File]::ReadAllText($temp)
+    }
+    catch {
+        $text = ""
+    }
+
+    Remove-Item $temp -Force -ErrorAction SilentlyContinue
+
+    return $text
+}
+
+function Confirm-MirrorArchive {
+    param([string]$Path, [string]$MirrorUrl)
+
+    $size = (Get-Item $Path).Length
+
+    if ($size -lt 1024 -or !(Test-ZipFile $Path)) {
+        $script:MirrorWhy = "the mirror did not send a zip archive"
+        return $false
+    }
+
+    if ($env:SALAM_SKIP_CHECKSUM) {
+        return $true
+    }
+
+    $text = Get-MirrorText -Url ($MirrorUrl + ".sha256")
+    $want = ""
+
+    if ($text) {
+        $parts = $text.Trim() -split "\s+"
+        $want = $parts[0].ToLower()
+    }
+
+    if ($want -notmatch "^[0-9a-f]{64}$") {
+        $script:MirrorWhy = "the mirror publishes no usable checksum for this file"
+        return $false
+    }
+
+    $got = Get-Sha256Hex -Path $Path
+
+    if ($got -ne $want) {
+        $script:MirrorWhy = "the mirror copy does not match its checksum"
+        return $false
+    }
+
+    Write-Info "sha256 verified: $got (mirror)"
+
+    return $true
+}
+
+function Save-Release {
+    param(
+        [string]$Url,
+        [string]$Destination
+    )
+
+    $script:ArchiveFrom = "github"
+
+    $mirror = Get-MirrorUrl $Url
+
+    if ($mirror -ne "") {
+        Write-Info "mirror: $mirror"
+
+        if (Save-MirrorUrl -Url $mirror -Destination $Destination -ShowProgress $true) {
+            if (Confirm-MirrorArchive -Path $Destination -MirrorUrl $mirror) {
+                $script:ArchiveFrom = "mirror"
+
+                return $true
+            }
+        }
+
+        Write-Warn ($script:MirrorWhy + "; trying GitHub instead")
+
+        if (Test-Path $Destination) {
+            Remove-Item $Destination -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Info $Url
+
+    return (Save-Url -Url $Url -Destination $Destination -ShowProgress $true -Quiet $false)
+}
+
 function Get-UrlText {
     param([string]$Url)
 
@@ -882,8 +1075,42 @@ function Get-TagsFromApi {
     return $tags
 }
 
+function Get-MirrorTagList {
+    if ($CdnBase -eq "") {
+        return @()
+    }
+
+    $found = @()
+
+    foreach ($file in @("tags.txt", "latest")) {
+        $text = Get-MirrorText -Url "$CdnBase/releases/$file"
+
+        if ($text) {
+            foreach ($line in ($text -split "[\r\n]+")) {
+                $clean = $line.Trim()
+
+                if ($clean -match "^v[0-9]+\.[0-9]+\.[0-9]+$") {
+                    $found += $clean
+                }
+            }
+        }
+
+        if ($found.Length -gt 0) {
+            break
+        }
+    }
+
+    return $found
+}
+
 function Get-CandidateTagList {
     $tags = @()
+
+    $fromMirror = @(Get-MirrorTagList)
+
+    if ($fromMirror.Length -gt 0) {
+        return $fromMirror
+    }
 
     $latest = Get-RedirectedLatestTag
 
@@ -984,6 +1211,10 @@ function Get-Sha256Hex {
 
 function Confirm-ArchiveChecksum {
     param([string]$Path, [string]$Url, [string]$Name)
+
+    if ($script:ArchiveFrom -eq "mirror") {
+        return
+    }
 
     if ($env:SALAM_SKIP_CHECKSUM) {
         Write-Warn "SALAM_SKIP_CHECKSUM is set; the archive was not verified"
@@ -1556,6 +1787,13 @@ try {
     $downloaded = $false
     $asset = ""
     $url = ""
+    $sources = "GitHub"
+    $manual = "https://github.com/$Repo/releases"
+
+    if ($CdnBase -ne "") {
+        $sources = "the mirror at $CdnBase and GitHub"
+        $manual = "$manual or $CdnBase/releases/"
+    }
 
     if ($null -ne $Version -and "$Version".Trim() -ne "") {
         $Version = "$Version".Trim()
@@ -1572,9 +1810,7 @@ try {
             $asset = "salam-$Version-$name.zip"
             $url = "https://github.com/$Repo/releases/download/v$Version/$asset"
 
-            Write-Info $url
-
-            if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
+            if (Save-Release -Url $url -Destination $archive) {
                 $downloaded = $true
                 $releaseTag = "v$Version"
                 break
@@ -1582,17 +1818,18 @@ try {
         }
 
         if (!$downloaded) {
-            Fail ("release v$Version publishes no $platform asset. " +
-                "See https://github.com/$Repo/releases")
+            Fail ("could not download a $platform asset of release v$Version (tried $sources). " +
+                "Download it by hand from $manual " +
+                "and unzip it into the install folder.")
         }
     }
     else {
-        Write-Info "asking GitHub for the newest release with a $platform asset"
+        Write-Info "asking for the newest release with a $platform asset"
 
         $tags = @(Get-CandidateTagList)
 
         if ($tags.Length -eq 0) {
-            Fail ("could not reach GitHub to list releases. Check your " +
+            Fail ("could not reach $sources to list releases. Check your " +
                 "internet connection or pass --version X.Y.Z to skip the lookup.")
         }
 
@@ -1624,9 +1861,7 @@ try {
                 $asset = "salam-$candidate-$name.zip"
                 $url = "https://github.com/$Repo/releases/download/$tag/$asset"
 
-                Write-Info $url
-
-                if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
+                if (Save-Release -Url $url -Destination $archive) {
                     $Version = $candidate
                     $releaseTag = $tag
                     $downloaded = $true
@@ -1642,8 +1877,9 @@ try {
         }
 
         if (!$downloaded) {
-            Fail ("no recent release publishes a $platform asset. " +
-                "See https://github.com/$Repo/releases")
+            Fail ("could not download a $platform asset of any recent release (tried $sources). " +
+                "Download it by hand from $manual " +
+                "and unzip it into the install folder.")
         }
     }
 

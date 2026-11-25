@@ -1059,6 +1059,9 @@ if want tools; then
     add_job script "tools/en/project-file" "tools/bash/test-project-file.sh" "en" "tests/en/tools/project_file.out"
     if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
         add_job script "tools/en/installer-mirror" "tools/bash/test-installer-mirror.sh" "en" "tests/en/tools/installer_mirror.out"
+        if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+            add_job script "tools/en/upgrade-mirror" "tools/bash/test-upgrade-mirror.sh" "en" "tests/en/tools/upgrade_mirror.out"
+        fi
     fi
 fi
 

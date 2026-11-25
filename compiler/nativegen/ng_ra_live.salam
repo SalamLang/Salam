@@ -1,0 +1,383 @@
+package nativegen
+
+func fr_add(ra &: Ra, r: int, s: int, e: int):
+    id := ra.fr_s.Len()
+    ra.fr_s.Push(s)
+    ra.fr_e.Push(e)
+    ra.fr_next.Push(0 - 1)
+    if ra.fr_tail[r] >= 0:
+        ra.fr_next[ra.fr_tail[r]] = id
+    else:
+        ra.fr_head[r] = id
+    end
+    ra.fr_tail[r] = id
+end
+
+func fr_use(ra &: Ra, r: int, pos: int):
+    t := ra.fr_tail[r]
+    if t < 0:
+        fr_add(ra, r, 0, pos)
+        ret
+    end
+    if ra.fr_e[t] < pos:
+        ra.fr_e[t] = pos
+    end
+end
+
+func occ(ra &: Ra, v: int, b: int, pos: int, is_def: bool):
+    c := ra.oc_cur[v]
+    if c >= 0 and ra.oc_blk[c] == b:
+        ra.oc_last[c] = pos
+        if is_def:
+            ra.oc_def[c] = true
+            if ra.oc_fdef[c] < 0:
+                ra.oc_fdef[c] = pos
+            end
+        else ra.oc_fdef[c] < 0:
+            ra.oc_lu[c] = pos
+        end
+        ret
+    end
+    id := ra.oc_blk.Len()
+    ra.oc_blk.Push(b)
+    ra.oc_first.Push(pos)
+    ra.oc_last.Push(pos)
+    ra.oc_upex.Push(not is_def)
+    ra.oc_def.Push(is_def)
+    ra.oc_fdef.Push(is_def ? pos : 0 - 1)
+    ra.oc_lu.Push(is_def ? 0 - 1 : pos)
+    ra.oc_next.Push(ra.oc_head[v])
+    ra.oc_head[v] = id
+    ra.oc_cur[v] = id
+end
+
+func liveness(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.Len()
+    ra.oc_head.Clear()
+    ra.oc_cur.Clear()
+    ra.li_head.Clear()
+    ra.nuse.Clear()
+    repeat nv:
+        ra.oc_head.Push(0 - 1)
+        ra.oc_cur.Push(0 - 1)
+        ra.li_head.Push(0 - 1)
+        ra.nuse.Push(0)
+    end
+    repeat 32:
+        ra.fr_head.Push(0 - 1)
+        ra.fr_tail.Push(0 - 1)
+        ra.fr_cur.Push(0 - 1)
+    end
+    each b in g.mc.lorder:
+        mut i := g.mc.bstart[b]
+        until i < g.mc.bend[b]:
+            mi_regs(g, i, ra.uses, ra.defs)
+            each u in ra.uses:
+                if u >= VBASE:
+                    occ(ra, u, b, 2 * i, false)
+                    ra.nuse[u] += g.b_wt[b]
+                    if ra.rs_on:
+                        ra.ov.Push(u)
+                        ra.opos.Push(2 * i)
+                        ra.ow.Push(rs_use_free(g, i, u) ? 0 : g.b_wt[b])
+                    end
+                else u != RSP and (u != RBP or g.arch != NG_ARCH_X64):
+                    fr_use(ra, u, 2 * i)
+                end
+            end
+            op := g.mc.op[i]
+            if op == M_CALL or op == M_CALLR:
+                repeat 32 in r:
+                    if is_caller_saved(g, r):
+                        fr_add(ra, r, 2 * i + 1, 2 * i + 1)
+                    end
+                end
+            end
+            each d in ra.defs:
+                if d >= VBASE:
+                    occ(ra, d, b, 2 * i + 1, true)
+                    ra.nuse[d] += g.b_wt[b]
+                    if ra.rs_on:
+                        ra.ov.Push(d)
+                        ra.opos.Push(2 * i + 1)
+                        ra.ow.Push(g.b_wt[b])
+                    end
+                else d != RSP and (d != RBP or g.arch != NG_ARCH_X64):
+                    fr_add(ra, d, 2 * i + 1, 2 * i + 1)
+                end
+            end
+            i++
+        end
+    end
+    propagate_live(g, ra)
+    build_ranges(g, ra)
+end
+
+func propagate_live(g &: Ng, ra &: Ra):
+    nb := g.b_first.Len()
+    ra.mark.Clear()
+    repeat nb:
+        ra.mark.Push(0 - 1)
+    end
+    nv := g.mc.vcls.Len()
+    mut v := VBASE
+    until v < nv:
+        mut h := ra.oc_head[v]
+        until h >= 0:
+            if ra.oc_upex[h]:
+                b0 := ra.oc_blk[h]
+                if ra.mark[b0] != v:
+                    ra.mark[b0] = v
+                    ra.wl.Push(b0)
+                end
+            end
+            h = ra.oc_next[h]
+        end
+        until ra.wl.Len() > 0:
+            b := ra.wl.Pop()
+            ra.li_blk.Push(b)
+            ra.li_next.Push(ra.li_head[v])
+            ra.li_head[v] = ra.li_blk.Len() - 1
+            repeat g.b_npred[b] in q:
+                p := g.b_pred[g.b_ps[b] + q]
+                if ra.mark[p] != v:
+                    ra.mark[p] = v
+                    if not defined_in(ra, v, p):
+                        ra.wl.Push(p)
+                    else:
+                        ra.mark[p] = 0 - 2 - v
+                    end
+                end
+            end
+        end
+        v++
+    end
+end
+
+func defined_in(ra &: Ra, v: int, b: int): bool:
+    mut h := ra.oc_head[v]
+    until h >= 0:
+        if ra.oc_blk[h] == b:
+            ret ra.oc_def[h]
+        end
+        h = ra.oc_next[h]
+    end
+    ret false
+end
+
+func occ_of(ra &: Ra, v: int, b: int): int:
+    mut h := ra.oc_head[v]
+    until h >= 0:
+        if ra.oc_blk[h] == b:
+            ret h
+        end
+        h = ra.oc_next[h]
+    end
+    ret 0 - 1
+end
+
+func live_out(g &: Ng, ra &: Ra, v: int, b: int): bool:
+    repeat g.b_sn[b] in k:
+        s := g.b_succ[g.b_ss[b] + k]
+        if ra.mark[s] == v:
+            ret true
+        end
+    end
+    ret false
+end
+
+func bend_pos(g &: Ng, b: int): int:
+    ret 2 * g.mc.bend[b] - 1
+end
+
+func build_ranges(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.Len()
+    nb := g.b_first.Len()
+    ra.v_r0.Clear()
+    ra.v_rn.Clear()
+    repeat nv:
+        ra.v_r0.Push(0)
+        ra.v_rn.Push(0)
+    end
+    repeat nb in b0:
+        ra.mark[b0] = 0 - 1
+    end
+    mut v := VBASE
+    until v < nv:
+        if ra.oc_head[v] < 0:
+            v++
+            continue
+        end
+        mut h := ra.li_head[v]
+        until h >= 0:
+            ra.mark[ra.li_blk[h]] = v
+            h = ra.li_next[h]
+        end
+        ra.ts.Clear()
+        ra.te.Clear()
+        mut h2 := ra.li_head[v]
+        until h2 >= 0:
+            b := ra.li_blk[h2]
+            ra.ts.Push(2 * g.mc.bstart[b])
+            oc0 := occ_of(ra, v, b)
+            if oc0 >= 0 and ra.oc_upex[oc0] and ra.oc_fdef[oc0] >= 0:
+                ra.te.Push(ra.oc_lu[oc0])
+                ra.ts.Push(ra.oc_fdef[oc0])
+                if live_out(g, ra, v, b):
+                    ra.te.Push(bend_pos(g, b))
+                else:
+                    ra.te.Push(ra.oc_last[oc0])
+                end
+            else live_out(g, ra, v, b):
+                ra.te.Push(bend_pos(g, b))
+            else:
+                oc := occ_of(ra, v, b)
+                if oc >= 0:
+                    ra.te.Push(ra.oc_last[oc])
+                else:
+                    ra.te.Push(2 * g.mc.bstart[b])
+                end
+            end
+            h2 = ra.li_next[h2]
+        end
+        mut h3 := ra.oc_head[v]
+        until h3 >= 0:
+            b2 := ra.oc_blk[h3]
+            if ra.mark[b2] != v:
+                ra.ts.Push(ra.oc_first[h3])
+                if live_out(g, ra, v, b2):
+                    ra.te.Push(bend_pos(g, b2))
+                else:
+                    ra.te.Push(ra.oc_last[h3])
+                end
+            end
+            h3 = ra.oc_next[h3]
+        end
+        n := ra.ts.Len()
+        mut a := 1
+        until a < n:
+            ks := ra.ts[a]
+            ke := ra.te[a]
+            mut j := a - 1
+            until j >= 0 and ra.ts[j] > ks:
+                ra.ts[j + 1] = ra.ts[j]
+                ra.te[j + 1] = ra.te[j]
+                j--
+            end
+            ra.ts[j + 1] = ks
+            ra.te[j + 1] = ke
+            a++
+        end
+        ra.v_r0[v] = ra.rg_s.Len()
+        repeat n in q:
+            last := ra.rg_s.Len() - 1
+            if last >= ra.v_r0[v] and ra.ts[q] <= ra.rg_e[last] + 1:
+                if ra.te[q] > ra.rg_e[last]:
+                    ra.rg_e[last] = ra.te[q]
+                end
+            else:
+                ra.rg_s.Push(ra.ts[q])
+                ra.rg_e.Push(ra.te[q])
+            end
+        end
+        ra.v_rn[v] = ra.rg_s.Len() - ra.v_r0[v]
+        g.mc.vstart[v] = ra.rg_s[ra.v_r0[v]]
+        g.mc.vend[v] = ra.rg_e[ra.rg_s.Len() - 1]
+        v++
+    end
+end
+
+func covers(ra &: Ra, v: int, pos: int): bool:
+    mut k := ra.v_rc[v]
+    lim := ra.v_r0[v] + ra.v_rn[v]
+    until k < lim and ra.rg_e[k] < pos:
+        k++
+    end
+    ra.v_rc[v] = k
+    ret k < lim and ra.rg_s[k] <= pos
+end
+
+func next_inter(ra &: Ra, a: int, b: int, from: int): int:
+    mut i := ra.v_rc[a]
+    mut j := ra.v_r0[b]
+    li := ra.v_r0[a] + ra.v_rn[a]
+    lj := ra.v_r0[b] + ra.v_rn[b]
+    until i < li and j < lj:
+        if ra.rg_e[i] < from:
+            i++
+            continue
+        end
+        if ra.rg_e[j] < from:
+            j++
+            continue
+        end
+        s := ra.rg_s[i] > ra.rg_s[j] ? ra.rg_s[i] : ra.rg_s[j]
+        e := ra.rg_e[i] < ra.rg_e[j] ? ra.rg_e[i] : ra.rg_e[j]
+        if s <= e:
+            ret s < from ? from : s
+        end
+        if ra.rg_e[i] < ra.rg_e[j]:
+            i++
+        else:
+            j++
+        end
+    end
+    ret 0 - 1
+end
+
+func fixed_inter(ra &: Ra, r: int, v: int, from: int): int:
+    mut k := ra.fr_cur[r]
+    until k >= 0 and ra.fr_e[k] < from:
+        k = ra.fr_next[k]
+    end
+    ra.fr_cur[r] = k
+    mut j := ra.v_r0[v]
+    lj := ra.v_r0[v] + ra.v_rn[v]
+    until k >= 0 and j < lj:
+        s := ra.fr_s[k] > ra.rg_s[j] ? ra.fr_s[k] : ra.rg_s[j]
+        e := ra.fr_e[k] < ra.rg_e[j] ? ra.fr_e[k] : ra.rg_e[j]
+        if s <= e:
+            ret s
+        end
+        if ra.fr_e[k] < ra.rg_e[j]:
+            k = ra.fr_next[k]
+        else:
+            j++
+        end
+    end
+    ret 0 - 1
+end
+
+func sort_by_start(g &: Ng, ra &: Ra):
+    n := ra.order.Len()
+    ra.tmp.Clear()
+    repeat n:
+        ra.tmp.Push(0)
+    end
+    mut w := 1
+    until w < n:
+        mut lo := 0
+        until lo < n:
+            mid := lo + w < n ? lo + w : n
+            hi := lo + 2 * w < n ? lo + 2 * w : n
+            mut a := lo
+            mut b := mid
+            mut k := lo
+            until k < hi:
+                if a < mid and (b >= hi or g.mc.vstart[ra.order[a]] <= g.mc.vstart[ra.order[b]]):
+                    ra.tmp[k] = ra.order[a]
+                    a++
+                else:
+                    ra.tmp[k] = ra.order[b]
+                    b++
+                end
+                k++
+            end
+            lo += 2 * w
+        end
+        repeat n in j:
+            ra.order[j] = ra.tmp[j]
+        end
+        w *= 2
+    end
+end

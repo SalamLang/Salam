@@ -1,0 +1,249 @@
+package nativegen
+
+func isel_select(g &: Ng, i: int):
+    t := g.i_ty[i]
+    c := g.i_a[i]
+    fd := fused_cond(g, i)
+    if fd >= 0:
+        isel_select_fused(g, i, fd)
+        ret
+    end
+    if is_agg(g, t):
+        pa := lea_reg(g, agg_mem(g, g.i_b[i]))
+        pb := lea_reg(g, agg_mem(g, g.i_c[i]))
+        rc := use_reg(g, c)
+        r := gpr(g)
+        _c := e_copy(g, r, pb)
+        _t := e_rr(g, M_TEST_RR, 1, rc, rc)
+        cm := e_rr(g, M_CMOV, 8, r, pa)
+        g.mc.cc[cm] = X_NE
+        v := g.i_res[i]
+        if v >= 0:
+            g.vak[v] = AK_PTR
+            g.var_[v] = r
+            g.vao[v] = 0
+        end
+        ret
+    end
+    rt := use_reg(g, g.i_b[i])
+    rf := use_reg(g, g.i_c[i])
+    rc2 := use_reg(g, c)
+    if is_flt(g, t):
+        r2 := xmm(g)
+        _c2 := e_copy(g, r2, rf)
+        l := new_label(g)
+        _t2 := e_rr(g, M_TEST_RR, 1, rc2, rc2)
+        _j := e_jcc(g, X_E, l)
+        _c3 := e_copy(g, r2, rt)
+        _l := e_label(g, l)
+        set_res(g, i, r2)
+        ret
+    end
+    r3 := gpr(g)
+    tie := tie_true_arm(g, i)
+    _t3 := e_rr(g, M_TEST_RR, 1, rc2, rc2)
+    _c4 := e_copy(g, r3, tie ? rt : rf)
+    cm2 := e_rr(g, M_CMOV, asz(g, t), r3, tie ? rf : rt)
+    g.mc.cc[cm2] = tie ? X_E : X_NE
+    set_res(g, i, r3)
+end
+
+func phi_dead_after(g &: Ng, v: int, b: int): bool:
+    dblk := g.i_blk[g.v_def[v]]
+    mut seen := HashMap {} as HashMap<int, int>
+    mut work := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    work.Push(
+        b
+    )
+    mut ok := true
+    mut steps := 0
+    until ok and work.Len() > 0:
+        x := work.Pop()
+        blk_succs(g, x, succ)
+        each y in succ:
+            if y == dblk or seen.Has(y):
+                continue
+            end
+            seen.Put(y, 1)
+            steps++
+            if steps > 64:
+                ok = false
+                break
+            end
+            mut j := g.b_first[y]
+            until j >= 0:
+                if uses_val(g, j, v):
+                    ok = false
+                    break
+                end
+                j = g.i_next[j]
+            end
+            work.Push(y)
+        end
+    end
+    seen.Free()
+    work.Free()
+    succ.Free()
+    ret ok
+end
+
+func last_use_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or (g.v_kind[v] != VK_INS and g.v_kind[v] != VK_ARG):
+        ret false
+    end
+    b := g.i_blk[i]
+    mut n := 0
+    mut after := false
+    mut j := g.b_first[b]
+    until j >= 0:
+        if j == i:
+            after = true
+            n++
+        else uses_val(g, j, v):
+            if after:
+                ret false
+            end
+            n++
+        end
+        j = g.i_next[j]
+    end
+    if n == g.v_uses[v]:
+        ret true
+    end
+    ret g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_PHI and g.i_blk[g.v_def[v]] != b and
+        phi_dead_after(g, v, b)
+end
+
+func feeds_own_phi(g &: Ng, v: int, i: int): bool:
+    if g.off_seltie or v < 0 or g.v_kind[v] != VK_INS or g.i_op[g.v_def[v]] != OP_PHI or
+        g.i_res[i] < 0:
+        ret false
+    end
+    p := g.v_def[v]
+    mut hit := false
+    repeat g.i_pcount[p] in k:
+        if g.pool[g.i_ps[p] + 2 * k] == g.i_res[i]:
+            hit = true
+        end
+    end
+    ret hit and last_use_here(g, v, i)
+end
+
+func tie_true_arm(g &: Ng, i: int): bool:
+    b := g.i_b[i]
+    c := g.i_c[i]
+    pb := feeds_own_phi(g, b, i)
+    pc := feeds_own_phi(g, c, i)
+    if pb != pc:
+        ret pb
+    end
+    ret dies_here(g, b, i) and not dies_here(g, c, i)
+end
+
+func dies_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret false
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] != OP_PHI and g.i_blk[d] == g.i_blk[i]
+end
+
+func sel_inc_add(g &: Ng, i: int): int:
+    t := g.i_ty[i]
+    if t != T_I32 and t != T_I64:
+        ret 0 - 1
+    end
+    repeat 2 in k:
+        v1 := k == 0 ? g.i_b[i] : g.i_c[i]
+        v0 := k == 0 ? g.i_c[i] : g.i_b[i]
+        if v1 >= 0 and g.v_kind[v1] == VK_INS and g.v_uses[v1] == 1:
+            ad := g.v_def[v1]
+            if g.i_op[ad] == OP_ADD and g.i_a[ad] == v0 and is_cint(
+                g, g.i_b[ad]
+            ) and g.v_i[g.i_b[ad]] == (1 as i64) and g.i_blk[ad] == g.i_blk[i]:
+                ret ad
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func sel_inc_plan(g &: Ng, i: int):
+    d := fused_cond(g, i)
+    if d < 0:
+        ret
+    end
+    p := g.i_x[d]
+    ok := (g.i_op[d] == OP_FCMP and (p == FC_OGE or p == FC_OLE)) or
+        (g.i_op[d] == OP_ICMP and (p == CC_ULT or p == CC_ULE or p == CC_UGT or p == CC_UGE))
+    if not ok:
+        ret
+    end
+    ad := sel_inc_add(g, i)
+    if ad >= 0:
+        g.skipi[ad] = true
+    end
+end
+
+func isel_select_fused(g &: Ng, i: int, d: int):
+    t := g.i_ty[i]
+    ad := sel_inc_add(g, i)
+    if ad >= 0 and g.skipi[ad]:
+        inc_true := g.i_b[i] == g.i_res[ad]
+        mut cc0 := 0
+        if g.i_op[d] == OP_FCMP:
+            cc0 = fcmp_cc(fcmp_setup(g, d))
+        else:
+            cc0 = emit_icmp(g, d)
+        end
+        xr := use_reg(g, g.i_a[ad])
+        if cc0 == X_AE or cc0 == X_B:
+            ri := gpr(g)
+            _ci := e_copy(g, ri, xr)
+            add_cf := (cc0 == X_B) == inc_true
+            ai := e_ri(g, M_ALU_RI, asz(g, t), ri, add_cf ? (0 as i64) : (0 - 1 as i64))
+            g.mc.cc[ai] = add_cf ? ALU_ADC : ALU_SBB
+            set_res(g, i, ri)
+            ret
+        end
+        rl := gpr(g)
+        _li := e_rm(g, M_LEA, 8, rl, Mem {
+            k = MK_BI,
+            b = xr,
+            i = 0 - 1,
+            s = 0,
+            d = 1 as i64
+        })
+        set_res(g, ad, rl)
+        rs := gpr(g)
+        _cs := e_copy(g, rs, use_reg(g, g.i_c[i]))
+        cms := e_rr(g, M_CMOV, asz(g, t), rs, use_reg(g, g.i_b[i]))
+        g.mc.cc[cms] = cc0
+        set_res(g, i, rs)
+        ret
+    end
+    mut bv := g.i_b[i]
+    mut cv := g.i_c[i]
+    swap := g.i_op[d] != OP_FCMP and tie_true_arm(g, i)
+    if swap:
+        bv = g.i_c[i]
+        cv = g.i_b[i]
+    end
+    rt := use_reg(g, bv)
+    rf := use_reg(g, cv)
+    r := gpr(g)
+    mut cc := 0
+    if g.i_op[d] == OP_FCMP:
+        cc = fcmp_cc(fcmp_setup(g, d))
+    else:
+        cc = emit_icmp(g, d)
+        if swap:
+            cc = inv_cc(cc)
+        end
+    end
+    _c := e_copy(g, r, rf)
+    cm := e_rr(g, M_CMOV, asz(g, t), r, rt)
+    g.mc.cc[cm] = cc
+    set_res(g, i, r)
+end

@@ -1,0 +1,305 @@
+package nativelink
+
+func pe_exp_fill(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
+    repeat t.it_ps.Len() in i:
+        if t.it_kind[i] == IT_BYTES and str.Equals(t.it_key[i], "zexp"):
+            rva := t.it_addr[i]
+            pe_exp_write(l, buf, fpos_of[PS_RDATA] + (rva - t.ps_va[PS_RDATA]), rva)
+            t.exp_rva = rva
+            t.exp_size = t.it_val[i] & (0xFFFFFFFF as i64)
+        end
+    end
+end
+
+func pdb_path_of(out: str): str:
+    n := str.Len(out)
+    if n > 4 and
+        (str.EndsWith(out, ".exe") or str.EndsWith(out, ".EXE") or str.EndsWith(out, ".dll") or
+            str.EndsWith(out, ".DLL")):
+        ret str.Substr(out, 0, n - 4) + ".pdb"
+    end
+    ret out + ".pdb"
+end
+
+func pe_rsds(t &: Pe, buf: u8*, fpos_of &: Vector<i64>, g0: i64, g1: i64, pdb: str):
+    repeat t.it_ps.Len() in i:
+        if t.it_kind[i] != IT_BYTES or not str.Equals(t.it_key[i], "zpdb"):
+            continue
+        end
+        rva := t.it_addr[i]
+        at := fpos_of[PS_RDATA] + (rva - t.ps_va[PS_RDATA])
+        mut v := Vector {} as Vector<u8>
+        tb_le(v, 0 as i64, 12)
+        tb_le(v, 2 as i64, 4)
+        tb_le(v, (25 + str.Len(pdb)) as i64, 4)
+        tb_le(v, rva + (PDB_RSDS as i64), 4)
+        tb_le(v, at + (PDB_RSDS as i64), 4)
+        tb_le(v, 0x53445352 as i64, 4)
+        tb_le(v, g0, 8)
+        tb_le(v, g1, 8)
+        tb_le(v, 1 as i64, 4)
+        pp := (pdb as void*) as u8*
+        repeat str.Len(pdb) in c:
+            v.Push(pp[c])
+        end
+        v.Push(0 as u8)
+        repeat v.Len() in b:
+            buf[at + (b as i64)] = v[b]
+        end
+        v.Free()
+        t.dbg_rva = rva
+        ret
+    end
+end
+
+func pe_sechdrs(l &: Nl, t &: Pe): Vector<u8>:
+    mut h := Vector {} as Vector<u8>
+    repeat PS_COUNT in k2:
+        if t.ps_vsize[k2] <= (0 as i64):
+            continue
+        end
+        nm := ps_name(k2)
+        np := (nm as void*) as u8*
+        repeat 8 in c:
+            h.Push(c < str.Len(nm) ? np[c] : (0 as u8))
+        end
+        w32(h, t.ps_vsize[k2])
+        w32(h, t.ps_va[k2])
+        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_rawsize[k2])
+        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_raw[k2])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, ps_flags(k2))
+    end
+    repeat l.dg_name.Len() in dk:
+        mut dn := name_of(l, l.dg_name[dk])
+        if l.pe_stroff[dk] >= 0:
+            dn = "/" + str.FromInt(l.pe_stroff[dk] as i64)
+        end
+        dp := (dn as void*) as u8*
+        repeat 8 in c2:
+            h.Push(c2 < str.Len(dn) ? dp[c2] : (0 as u8))
+        end
+        w32(h, l.dg_size[dk])
+        w32(h, l.dg_va[dk])
+        w32(h, align_to(l.dg_size[dk], 0x200 as i64))
+        w32(h, l.dg_raw[dk])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, 0x42100040 as i64)
+    end
+    ret h
+end
+
+func w16(o &: Vector<u8>, v: i64):
+    tb_le(o, v, 2)
+end
+
+func w32(o &: Vector<u8>, v: i64):
+    tb_le(o, v, 4)
+end
+
+func w64(o &: Vector<u8>, v: i64):
+    tb_le(o, v, 8)
+end
+
+func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: str):
+    mut h := Vector {} as Vector<u8>
+    w16(h, 0x5A4D as i64)
+    repeat 0x3a:
+        h.Push(0 as u8)
+    end
+    w32(h, 0x80 as i64)
+    until h.Len() < 0x80:
+        h.Push(0 as u8)
+    end
+    p32 := l.mach == EM_386
+    w32(h, 0x4550 as i64)
+    w16(h, (p32 ? 0x14c : (l.mach == EM_AARCH64 ? 0xAA64 : 0x8664)) as i64)
+    w16(h, t.nsec as i64)
+    w32(h, 0 as i64)
+    w32(h, l.dg_name.Len() > 0 ? l.pe_strpos : (0 as i64))
+    w32(h, 0 as i64)
+    w16(h, (p32 ? 224 : 240) as i64)
+    w16(h, ((p32 ? 0x0122 : 0x22) | (l.pe_dll ? 0x2000 : 0)) as i64)
+    w16(h, (p32 ? 0x10b : 0x20b) as i64)
+    h.Push(2 as u8)
+    h.Push(41 as u8)
+    w32(h, t.ps_rawsize[PS_TEXT])
+    mut idata := 0 as i64
+    repeat PS_COUNT in k:
+        if k != PS_TEXT and k != PS_BSS:
+            idata += t.ps_rawsize[k]
+        end
+    end
+    w32(h, idata)
+    w32(h, align_to(t.ps_vsize[PS_BSS], 0x200 as i64))
+    w32(h, t.entry)
+    w32(h, t.ps_va[PS_TEXT])
+    if p32:
+        w32(h, t.ps_va[PS_DATA] > (0 as i64) ? t.ps_va[PS_DATA] : t.ps_va[PS_RDATA])
+        w32(h, l.pe_base)
+    else:
+        w64(h, l.pe_base)
+    end
+    a64 := l.mach == EM_AARCH64
+    w32(h, 0x1000 as i64)
+    w32(h, 0x200 as i64)
+    w16(h, (a64 ? 6 : 4) as i64)
+    w16(h, 0 as i64)
+    w16(h, 0 as i64)
+    w16(h, 0 as i64)
+    w16(h, (a64 ? 6 : 5) as i64)
+    w16(h, (a64 ? 0 : 2) as i64)
+    w32(h, 0 as i64)
+    w32(h, t.image_size)
+    w32(h, t.hdr_size)
+    w32(h, 0 as i64)
+    w16(h, (l.pe_gui ? 2 : 3) as i64)
+    w16(h, (p32 ? 0x140 : (a64 ? 0x8160 : 0x160)) as i64)
+    if p32:
+        w32(h, 0x200000 as i64)
+        w32(h, 0x1000 as i64)
+        w32(h, 0x100000 as i64)
+        w32(h, 0x1000 as i64)
+    else:
+        w64(h, 0x200000 as i64)
+        w64(h, 0x1000 as i64)
+        w64(h, 0x100000 as i64)
+        w64(h, 0x1000 as i64)
+    end
+    w32(h, 0 as i64)
+    w32(h, 16 as i64)
+    mut iat0 := 0 as i64
+    mut iat1 := 0 as i64
+    mut imp0 := 0 as i64
+    mut imp1 := 0 as i64
+    mut tls := 0 as i64
+    repeat t.it_ps.Len() in i:
+        if t.it_ps[i] != PS_IDATA or t.it_kind[i] != IT_SEC:
+            continue
+        end
+        if str.StartsWith(t.it_key[i], "12"):
+            if imp0 == (0 as i64):
+                imp0 = t.it_addr[i]
+            end
+            imp1 = t.it_addr[i] + l.s_size[t.it_ord[i]]
+        end
+        if str.StartsWith(t.it_key[i], "51") and l.s_size[t.it_ord[i]] > (0 as i64):
+            if iat0 == (0 as i64):
+                iat0 = t.it_addr[i]
+            end
+            iat1 = t.it_addr[i] + l.s_size[t.it_ord[i]]
+        end
+    end
+    tg := glob_find(l, l.mach == EM_386 ? "__tls_used" : "_tls_used")
+    if tg >= 0 and l.g_state[tg] == SY_DEF:
+        tls = l.s_addr[l.g_sec[tg]] + l.g_val[tg] - l.pe_base
+    end
+    repeat 16 in d:
+        if d == 0 and t.exp_rva > (0 as i64):
+            w32(h, t.exp_rva)
+            w32(h, t.exp_size)
+        else d == 1 and imp0 > (0 as i64):
+            w32(h, imp0)
+            w32(h, imp1 - imp0 + (20 as i64))
+        else d == 2 and t.ps_vsize[PS_RSRC] > (0 as i64):
+            w32(h, t.ps_va[PS_RSRC])
+            w32(h, t.ps_vsize[PS_RSRC])
+        else d == 3 and t.ps_vsize[PS_PDATA] > (0 as i64):
+            w32(h, t.ps_va[PS_PDATA])
+            w32(h, t.ps_vsize[PS_PDATA])
+        else d == 5 and rel.Len() > 0:
+            w32(h, t.ps_va[PS_RELOC])
+            w32(h, rel.Len() as i64)
+        else d == 6 and t.dbg_rva > (0 as i64):
+            w32(h, t.dbg_rva)
+            w32(h, PDB_RSDS as i64)
+        else d == 9 and tls > (0 as i64):
+            w32(h, tls)
+            w32(h, (p32 ? 24 : 40) as i64)
+        else d == 12 and iat1 > iat0:
+            w32(h, iat0)
+            w32(h, iat1 - iat0)
+        else:
+            w32(h, 0 as i64)
+            w32(h, 0 as i64)
+        end
+    end
+    mut shd := pe_sechdrs(l, t)
+    each sb0 in shd:
+        h.Push(sb0)
+    end
+    shd.Free()
+    repeat h.Len() in b:
+        buf[b] = h[b]
+    end
+    h.Free()
+    f := fopen(out, "wb")
+    if f == null:
+        nl_fail(l, "cannot write " + out)
+        ret
+    end
+    w := fwrite(buf as void*, 1 as u64, total as u64, f)
+    mut w2 := 0 as u64
+    if rel.Len() > 0:
+        pad := t.ps_rawsize[PS_RELOC] - (rel.Len() as i64)
+        repeat pad:
+            rel.Push(0 as u8)
+        end
+        w2 = fwrite(rel.data as void*, 1 as u64, rel.Len() as u64, f)
+    end
+    if l.dg_name.Len() > 0:
+        mut tail := Vector {} as Vector<u8>
+        repeat l.dg_name.Len() in dk2:
+            repeat l.dg_size[dk2] in q:
+                tail.Push(l.dg_bytes[(l.dg_base[dk2] + q) as int])
+            end
+            until (tail.Len() % 0x200) != 0:
+                tail.Push(0 as u8)
+            end
+        end
+        tb_le(tail, (l.pe_str.Len() + 4) as i64, 4)
+        each sb in l.pe_str:
+            tail.Push(sb)
+        end
+        w3 := fwrite(tail.data as void*, 1 as u64, tail.Len() as u64, f)
+        w2 += w3
+        tail.Free()
+    end
+    _c := fclose(f)
+    l.file_size = total + (w2 as i64)
+    if (w as i64) != total:
+        nl_fail(l, "cannot write " + out)
+    end
+end
+
+func pe_rtype(l &: Nl, ty: int): int:
+    if l.mach == EM_AARCH64:
+        switch ty:
+            0: ret 0 end
+            0xE: ret 1 end
+            1: ret 2 end
+            2: ret 3 end
+            0x11: ret 4 end
+            8: ret 11 end
+            0xD: ret 10 end
+            3, 4, 5, 6, 7, 9, 0xA, 0xB, 0xF, 0x10: ret 200 + ty end
+        end
+        ret 1000 + ty
+    end
+    if l.mach != EM_386:
+        ret ty
+    end
+    if ty == 6: ret 102 end
+    if ty == 7: ret 3 end
+    if ty == 0x14: ret 4 end
+    if ty == 0xB: ret 11 end
+    if ty == 0xA: ret 10 end
+    if ty == 0: ret 0 end
+    ret 1000 + ty
+end

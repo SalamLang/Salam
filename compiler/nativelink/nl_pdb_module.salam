@@ -1,0 +1,247 @@
+package nativelink
+
+import os
+import str
+
+func pdb_opens(k: int): bool:
+    ret k == 0x1110 or k == 0x110F or k == 0x1147 or k == 0x1146 or k == 0x1103 or k == 0x1102 or
+        k == 0x114D or k == 0x1132 or k == 0x1155 or k == 0x1156
+end
+
+func pdb_closes(k: int): bool:
+    ret k == 0x0006 or k == 0x114F or k == 0x114E
+end
+
+func pdb_syms(
+    l &: Nl,
+    m &: Pdb,
+    cv &: Vector<u8>,
+    at0: int,
+    n: int,
+    ms &: Vector<u8>,
+    stack &: Vector<int>,
+    modix: int
+):
+    mut at := at0
+    stop := at0 + n
+    until at + 4 <= stop:
+        rl := (cv[at] as int) | ((cv[at + 1] as int) << 8)
+        k := (cv[at + 2] as int) | ((cv[at + 3] as int) << 8)
+        if rl < 2 or at + 2 + rl > stop:
+            ret
+        end
+        rec := ms.Len()
+        tb_le(ms, 0 as i64, 2)
+        repeat rl in b:
+            ms.Push(cv[at + 2 + b])
+        end
+        pdb_pad4(ms)
+        pdb_put16(ms, rec, ms.Len() - rec - 2)
+        if m.tbase > 0:
+            if (k == 0x113E or k == 0x1107 or k == 0x110C or k == 0x110D) and rl >= 6:
+                pdb_remap_at(m, ms, rec + 4)
+            else (k == 0x1110 or k == 0x110F) and rl >= 30:
+                pdb_remap_at(m, ms, rec + 28)
+            else k == 0x114D and rl >= 14:
+                pdb_remap_at(m, ms, rec + 12)
+            end
+        end
+        off := rec + 4
+        if pdb_opens(k) and rl >= 10:
+            pdb_put32(ms, rec + 4, (stack.Len() > 0 ? stack[stack.Len() - 1] : 0) as i64)
+            stack.Push(off)
+            if (k == 0x1110 or k == 0x110F or k == 0x1147 or k == 0x1146) and rl > 37:
+                np := rec + 4 + 35
+                mut e := np
+                until e < ms.Len() and ms[e] != (0 as u8):
+                    e++
+                end
+                m.ref_name.Push(nt_find(l.names, ms.data, np as i64, e - np, true))
+                m.ref_mod.Push(modix)
+                m.ref_off.Push(off)
+                m.ref_kind.Push(k == 0x1110 or k == 0x1147 ? 0x1125 : 0x1127)
+            end
+        else pdb_closes(k) and stack.Len() > 0:
+            op := stack.Pop()
+            pdb_put32(ms, op - 4 + 8, off as i64)
+        end
+        at = at + 2 + rl
+    end
+end
+
+func pdb_abs_name(l &: Nl, id: int): int:
+    n := l.names.len[id]
+    o := l.names.off[id]
+    b := l.names.bytes
+    if n == 0 or b[o] == (47 as u8) or b[o] == (92 as u8) or (n > 1 and b[o + 1] == (58 as u8)):
+        ret id
+    end
+    mut nm := name_of(l, id)
+    if str.StartsWith(nm, "./") or str.StartsWith(nm, ".\\"):
+        nm = str.Substr(nm, 2, n - 2)
+    end
+    cwd := os.Cwd()
+    if str.Len(cwd) == 0:
+        ret id
+    end
+    sep := str.Contains(cwd, "\\") ? "\\" : "/"
+    ret name_id(l, str.EndsWith(cwd, sep) ? cwd + nm : cwd + sep + nm)
+end
+
+func pdb_checksums(
+    l &: Nl, m &: Pdb, cv &: Vector<u8>, at0: int, n: int, strs: int, out &: Vector<u8>
+):
+    mut at := at0
+    stop := at0 + n
+    until at + 6 <= stop:
+        so := pdb_get32(cv, at) as int
+        cs := cv[at + 4] as int
+        ent := out.Len()
+        repeat 6 + cs in b:
+            out.Push(cv[at + b])
+        end
+        pdb_pad4(out)
+        if strs >= 0:
+            np := strs + so
+            mut e := np
+            until e < cv.Len() and cv[e] != (0 as u8):
+                e++
+            end
+            id := pdb_abs_name(l, nt_find(l.names, cv.data, np as i64, e - np, true))
+            pdb_put32(out, ent, pdb_name_off(l, m, id) as i64)
+            m.files.Push(id)
+        end
+        at += ((6 + cs + 3) / 4) * 4
+    end
+end
+
+func pdb_framedata(l &: Nl, m &: Pdb, cv &: Vector<u8>, at0: int, n: int, strs: int):
+    if n < 4:
+        ret
+    end
+    base := pdb_get32(cv, at0)
+    mut at := at0 + 4
+    until at + 32 <= at0 + n:
+        rec := m.fpo.Len()
+        repeat 32 in b:
+            m.fpo.Push(cv[at + b])
+        end
+        pdb_put32(m.fpo, rec, pdb_get32(m.fpo, rec) + base)
+        if strs >= 0:
+            np := strs + (pdb_get32(cv, at + 20) as int)
+            mut e := np
+            until e < cv.Len() and cv[e] != (0 as u8):
+                e++
+            end
+            id := nt_find(l.names, cv.data, np as i64, e - np, true)
+            pdb_put32(m.fpo, rec + 20, pdb_name_off(l, m, id) as i64)
+        end
+        at += 32
+    end
+end
+
+func pdb_fpo_stream(m &: Pdb): Vector<u8>:
+    mut keys := Vector {} as Vector<i64>
+    n := m.fpo.Len() / 32
+    repeat n in i:
+        keys.Push(pdb_get32(m.fpo, 32 * i))
+    end
+    ord := pdb_sort(keys)
+    mut v := Vector {} as Vector<u8>
+    each q in ord:
+        repeat 32 in b:
+            v.Push(m.fpo[32 * q + b])
+        end
+    end
+    keys.Free()
+    ret v
+end
+
+func pdb_module(l &: Nl, m &: Pdb, t &: Pe, obj: int, secs: Vector<int>):
+    modix := m.mod_name.Len()
+    mut ms := Vector {} as Vector<u8>
+    mut c13 := Vector {} as Vector<u8>
+    mut stack := Vector {} as Vector<int>
+    file0 := m.files.Len()
+    each s in secs:
+        mut cv := pdb_cv_bytes(l, t, s)
+        if cv.Len() < 4 or pdb_get32(cv, 0) != (4 as i64):
+            cv.Free()
+            continue
+        end
+        mut strs := 0 - 1
+        mut at := 4
+        until at + 8 <= cv.Len():
+            k := pdb_get32(cv, at) as int
+            n := pdb_get32(cv, at + 4) as int
+            if k == 0xF3:
+                strs = at + 8
+            end
+            at = at + 8 + ((n + 3) / 4) * 4
+        end
+        at = 4
+        until at + 8 <= cv.Len():
+            k2 := pdb_get32(cv, at) as int
+            n2 := pdb_get32(cv, at + 4) as int
+            if at + 8 + n2 > cv.Len():
+                break
+            end
+            if k2 == 0xF1:
+                pdb_syms(l, m, cv, at + 8, n2, ms, stack, modix)
+            else k2 == 0xF4:
+                tb_le(c13, k2 as i64, 4)
+                hl := c13.Len()
+                tb_le(c13, 0 as i64, 4)
+                pdb_checksums(l, m, cv, at + 8, n2, strs, c13)
+                pdb_put32(c13, hl, (c13.Len() - hl - 4) as i64)
+            else k2 == 0xF5:
+                pdb_framedata(l, m, cv, at + 8, n2, strs)
+            else k2 == 0xF2 or k2 == 0xF6:
+                st0 := c13.Len()
+                repeat 8 + n2 in b:
+                    c13.Push(cv[at + b])
+                end
+                pdb_pad4(c13)
+                if k2 == 0xF6 and n2 >= 4 and m.tbase > 0 and pdb_get32(c13, st0 + 8) == (0 as i64):
+                    mut e6 := st0 + 12
+                    until e6 + 12 <= st0 + 8 + n2:
+                        pdb_remap_at(m, c13, e6)
+                        e6 += 12
+                    end
+                end
+            end
+            at = at + 8 + ((n2 + 3) / 4) * 4
+        end
+        cv.Free()
+    end
+    mut st := Vector {} as Vector<u8>
+    tb_le(st, 4 as i64, 4)
+    each b1 in ms:
+        st.Push(b1)
+    end
+    each b2 in c13:
+        st.Push(b2)
+    end
+    tb_le(st, 0 as i64, 4)
+    m.mod_stream.Push(pdb_stream(m, st))
+    m.mod_symsz.Push(ms.Len() + 4)
+    m.mod_c13sz.Push(c13.Len())
+    m.mod_file0.Push(file0)
+    m.mod_nfile.Push(m.files.Len() - file0)
+    m.mod_name.Push(l.o_label[obj])
+    m.mod_obj.Push(obj)
+    repeat t.it_ps.Len() in i:
+        if t.it_kind[i] == IT_SEC and l.s_obj[t.it_ord[i]] == obj and t.it_ps[i] != PS_BSS:
+            k3 := t.it_ps[i]
+            m.sc_sec.Push(pe_secidx(t, k3))
+            m.sc_off.Push(t.it_addr[i] - t.ps_va[k3])
+            m.sc_size.Push(l.s_size[t.it_ord[i]])
+            m.sc_flags.Push(l.s_flags[t.it_ord[i]])
+            m.sc_mod.Push(modix)
+        end
+    end
+    st.Free()
+    ms.Free()
+    c13.Free()
+    stack.Free()
+end

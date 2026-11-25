@@ -1,0 +1,321 @@
+package nativegen
+
+func fc_icmp(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ICMP or g.v_ty[g.i_a[d]] != T_I32 or g.v_ty[g.i_b[d]] != T_I32:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func fuse_cmp64(g &: Ng):
+    count_uses(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_SELECT and g.i_ty[i] == T_I1:
+                e := fc_icmp(g, g.i_a[i])
+                l := fc_icmp(g, g.i_b[i])
+                h := fc_icmp(g, g.i_c[i])
+                if e >= 0 and l >= 0 and h >= 0 and g.i_x[e] == CC_EQ:
+                    mut hx := g.i_a[h]
+                    mut hy := g.i_b[h]
+                    mut ph := g.i_x[h]
+                    if ph == CC_SGT or ph == CC_UGT:
+                        hx = g.i_b[h]
+                        hy = g.i_a[h]
+                        ph = ph == CC_SGT ? CC_SLT : CC_ULT
+                    end
+                    mut lx := g.i_a[l]
+                    mut ly := g.i_b[l]
+                    mut q := g.i_x[l]
+                    if q == CC_UGT or q == CC_UGE:
+                        lx = g.i_b[l]
+                        ly = g.i_a[l]
+                        q = q == CC_UGT ? CC_ULT : CC_ULE
+                    end
+                    e_a := g.i_a[e]
+                    e_b := g.i_b[e]
+                    same := (e_a == hx and e_b == hy) or (e_a == hy and e_b == hx)
+                    if same and (ph == CC_SLT or ph == CC_ULT) and (q == CC_ULT or q == CC_ULE):
+                        g.i_op[i] = OP_CMP64
+                        if q == CC_ULT:
+                            g.i_a[i] = lx
+                            g.i_b[i] = ly
+                            g.i_c[i] = hx
+                            g.i_d[i] = hy as i64
+                            g.i_x[i] = ph
+                        else:
+                            g.i_a[i] = ly
+                            g.i_b[i] = lx
+                            g.i_c[i] = hy
+                            g.i_d[i] = hx as i64
+                            g.i_x[i] = ph == CC_SLT ? CC_SGE : CC_UGE
+                        end
+                        ins_unlink(g, e)
+                        ins_unlink(g, l)
+                        ins_unlink(g, h)
+                    end
+                end
+            end
+            i = nx
+        end
+    end
+end
+
+func fc_def(g &: Ng, v: int, op: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] == op ? d : 0 - 1
+end
+
+func fc_carry(g &: Ng, z: int, sb: bool, ca &: int, cb &: int): int:
+    zd := fc_def(g, z, OP_ZEXT)
+    if zd < 0 or g.i_ty[zd] != T_I32:
+        ret 0 - 1
+    end
+    c := fc_def(g, g.i_a[zd], OP_ICMP)
+    if c < 0 or g.v_ty[g.i_a[c]] != T_I32:
+        ret 0 - 1
+    end
+    mut x := g.i_a[c]
+    mut y := g.i_b[c]
+    p := g.i_x[c]
+    if p == CC_UGT:
+        x = g.i_b[c]
+        y = g.i_a[c]
+    else p != CC_ULT:
+        ret 0 - 1
+    end
+    if sb:
+        ca = x
+        cb = y
+        ret zd
+    end
+    if x < 0 or g.v_kind[x] != VK_INS:
+        ret 0 - 1
+    end
+    l := g.v_def[x]
+    if g.i_op[l] != OP_ADD or g.i_ty[l] != T_I32:
+        ret 0 - 1
+    end
+    if g.i_a[l] == y:
+        ca = y
+        cb = g.i_b[l]
+        ret zd
+    end
+    if g.i_b[l] == y:
+        ca = y
+        cb = g.i_a[l]
+        ret zd
+    end
+    ret 0 - 1
+end
+
+func fuse_adc64(g &: Ng):
+    count_uses(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if (op == OP_ADD or op == OP_SUB) and g.i_ty[i] == T_I32 and g.i_res[i] >= 0:
+                sb := op == OP_SUB
+                mut ca := 0 - 1
+                mut cb := 0 - 1
+                mut p := g.i_a[i]
+                mut zd := fc_carry(g, g.i_b[i], sb, ca, cb)
+                if zd < 0 and not sb:
+                    p = g.i_b[i]
+                    zd = fc_carry(g, g.i_a[i], sb, ca, cb)
+                end
+                if zd >= 0:
+                    cd := g.v_def[g.i_a[zd]]
+                    mut x := p
+                    mut y := const_int(g, T_I32, 0 as i64)
+                    pd := fc_def(g, p, op)
+                    if pd >= 0:
+                        x = g.i_a[pd]
+                        y = g.i_b[pd]
+                    end
+                    g.i_op[i] = OP_ADC64
+                    g.i_a[i] = x
+                    g.i_b[i] = y
+                    g.i_c[i] = ca
+                    g.i_d[i] = cb as i64
+                    g.i_x[i] = sb ? 1 : 0
+                    ins_unlink(g, zd)
+                    ins_unlink(g, cd)
+                    if pd >= 0:
+                        ins_unlink(g, pd)
+                    end
+                end
+            end
+            i = nx
+        end
+    end
+end
+
+func niv_src(g &: Ng, v: int): int:
+    if v < 0:
+        ret 0 - 1
+    end
+    if is_cint(g, v):
+        c := norm_int(g, T_I64, g.v_i[v])
+        if c >= (0 - 2147483648 as i64) and c <= (2147483647 as i64):
+            ret const_int(g, T_I32, c)
+        end
+        ret 0 - 1
+    end
+    if g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] == OP_SEXT and g.i_x[d] == T_I32:
+        ret g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func niv_fold(g &: Ng):
+    repl_grow(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if op == OP_ICMP and g.v_ty[g.i_a[i]] == T_I64 and
+                not (is_cint(g, g.i_a[i]) and is_cint(g, g.i_b[i])):
+                xa := niv_src(g, g.i_a[i])
+                xb := niv_src(g, g.i_b[i])
+                if xa >= 0 and xb >= 0:
+                    g.i_a[i] = xa
+                    g.i_b[i] = xb
+                end
+            else op == OP_TRUNC and g.i_ty[i] == T_I32 and g.i_res[i] >= 0 and
+                not is_cint(g, g.i_a[i]):
+                s := niv_src(g, g.i_a[i])
+                if s >= 0:
+                    g.v_repl[g.i_res[i]] = s
+                    ins_unlink(g, i)
+                end
+            end
+            i = nx
+        end
+    end
+    remap_all(g)
+end
+
+func niv_one(g &: Ng, h: int, ph: int): bool:
+    pv := g.i_res[ph]
+    mut init := 0 - 1
+    mut pre := 0 - 1
+    mut nx := 0 - 1
+    mut latch := 0 - 1
+    repeat 2 in k:
+        iv := g.pool[g.i_ps[ph] + 2 * k]
+        pb := g.pool[g.i_ps[ph] + 2 * k + 1]
+        if dominates(g, h, pb):
+            nx = iv
+            latch = pb
+        else:
+            init = iv
+            pre = pb
+        end
+    end
+    if init < 0 or nx < 0 or not is_cint(g, init) or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    nd := g.v_def[nx]
+    if g.i_op[nd] != OP_ADD or g.i_ty[nd] != T_I64:
+        ret false
+    end
+    mut sv := g.i_b[nd]
+    if g.i_a[nd] != pv:
+        if g.i_b[nd] != pv:
+            ret false
+        end
+        sv = g.i_a[nd]
+    end
+    if not is_cint(g, sv):
+        ret false
+    end
+    st := norm_int(g, T_I64, g.v_i[sv])
+    if st <= (0 as i64) or st >= (1048576 as i64):
+        ret false
+    end
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not iv_bounds(g, pv, g.i_b[t], 3, lo, hi):
+        ret false
+    end
+    if lo < (0 - 2147483648 as i64) or hi + st > (2147483647 as i64):
+        ret false
+    end
+    p32 := ins_new(g, OP_PHI, T_I32)
+    g.i_ps[p32] = g.pool.Len()
+    g.i_pcount[p32] = 2
+    p32v := new_res(g, p32)
+    ins_before(g, g.b_first[h], p32)
+    n32 := ins_new(g, OP_ADD, T_I32)
+    g.i_a[n32] = p32v
+    g.i_b[n32] = const_int(g, T_I32, st)
+    g.i_f[n32] = IF_NSW
+    n32v := new_res(g, n32)
+    ins_before(g, nd, n32)
+    g.pool.Push(const_int(g, T_I32, norm_int(g, T_I64, g.v_i[init])))
+    g.pool.Push(pre)
+    g.pool.Push(n32v)
+    g.pool.Push(latch)
+    mut fp := g.b_first[h]
+    until fp >= 0 and g.i_op[fp] == OP_PHI:
+        fp = g.i_next[fp]
+    end
+    sx := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[sx] = p32v
+    g.i_x[sx] = T_I32
+    spv := new_res(g, sx)
+    ins_before(g, fp, sx)
+    sn := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[sn] = n32v
+    g.i_x[sn] = T_I32
+    snv := new_res(g, sn)
+    ins_before(g, nd, sn)
+    repl_grow(g)
+    g.v_repl[pv] = spv
+    g.v_repl[nx] = snv
+    ins_unlink(g, ph)
+    ins_unlink(g, nd)
+    ret true
+end
+
+func narrow_iv64(g &: Ng): bool:
+    count_uses(g)
+    build_dom(g)
+    mut changed := false
+    each h in g.b_rpo:
+        mut p := g.b_first[h]
+        until p >= 0 and g.i_op[p] == OP_PHI:
+            np := g.i_next[p]
+            if g.i_ty[p] == T_I64 and g.i_pcount[p] == 2 and g.i_res[p] >= 0 and niv_one(g, h, p):
+                changed = true
+            end
+            p = np
+        end
+    end
+    if changed:
+        remap_all(g)
+        niv_fold(g)
+    end
+    ret changed
+end

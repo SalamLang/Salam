@@ -1,0 +1,207 @@
+package nativegen
+
+func arm_r(r: int): int:
+    if r >= 0 and r < 16:
+        ret k_arm_rmap[r]
+    end
+    ret r
+end
+
+func arm_d(r: int): int:
+    if r >= 16 and r < 24:
+        ret r - 16
+    end
+    if r == 29:
+        ret 13
+    end
+    if r == 30:
+        ret 14
+    end
+    if r == 31:
+        ret 15
+    end
+    ret r - 16
+end
+
+func arm_w(a &: Arm, v: i64):
+    a.w.Push((v & (0xFFFFFFFF as i64)) as int)
+end
+
+func arm_rel(a &: Arm, sym: int, rt: int, add: i64):
+    a.rl_at.Push(a.w.Len())
+    a.rl_sym.Push(sym)
+    a.rl_type.Push(rt)
+    a.rl_add.Push(add)
+end
+
+func arm_imm(v0: i64): int:
+    v := v0 & (0xFFFFFFFF as i64)
+    repeat 16 in rot:
+        s := (2 * rot) as i64
+        x := ((v << s) | (v >> ((32 as i64) - s))) & (0xFFFFFFFF as i64)
+        if rot == 0:
+            if v <= (255 as i64):
+                ret v as int
+            end
+        else x <= (255 as i64):
+            ret (rot << 8) | (x as int)
+        end
+    end
+    ret 0 - 1
+end
+
+func arm_dp(a &: Arm, cond: int, op: int, s: bool, rn: int, rd: int, op2: i64, imm: bool):
+    mut v := ((cond as i64) << (28 as i64)) | ((op as i64) << (21 as i64)) | ((rn as i64) << (16 as i64)) | ((rd as i64) << (12 as i64)) | op2
+    if imm:
+        v |= (0x02000000 as i64)
+    end
+    if s:
+        v |= (0x00100000 as i64)
+    end
+    arm_w(a, v)
+end
+
+func arm_dpr(a &: Arm, op: int, s: bool, rd: int, rn: int, rm: int):
+    arm_dp(a, ARM_AL, op, s, rn, rd, rm as i64, false)
+end
+
+func arm_dps(a &: Arm, op: int, s: bool, rd: int, rn: int, rm: int, ty: int, sh: int):
+    arm_dp(
+        a,
+        ARM_AL,
+        op,
+        s,
+        rn,
+        rd,
+        (rm as i64) | ((ty as i64) << (5 as i64)) | ((sh as i64) << (7 as i64)),
+        false
+    )
+end
+
+func x_movw(a &: Arm, rd: int, v: i64):
+    arm_w(
+        a,
+        (0xE3000000 as i64) | (((v >> (12 as i64)) & (15 as i64)) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (v & (0xFFF as i64))
+    )
+end
+
+func x_movt(a &: Arm, rd: int, v: i64):
+    arm_w(
+        a,
+        (0xE3400000 as i64) | (((v >> (12 as i64)) & (15 as i64)) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (v & (0xFFF as i64))
+    )
+end
+
+func arm_pcaddr(a &: Arm, rd: int, sym: int, add: i64):
+    arm_rel(a, sym, R_ARM_MOVW_PREL, add - (16 as i64))
+    x_movw(a, rd, 0 as i64)
+    arm_rel(a, sym, R_ARM_MOVT_PREL, add - (12 as i64))
+    x_movt(a, rd, 0 as i64)
+    arm_dps(a, 4, false, rd, 15, rd, 0, 0)
+end
+
+func arm_gotload(a &: Arm, rd: int, sym: int):
+    arm_w(a, (0xE59F0000 as i64) | ((rd as i64) << (12 as i64)))
+    arm_w(a, 0xEA000000 as i64)
+    arm_rel(a, sym, R_ARM_GOT_PREL, 0 - 12 as i64)
+    arm_w(a, 0 as i64)
+    arm_w(a, (0xE79F0000 as i64) | ((rd as i64) << (12 as i64)) | (rd as i64))
+end
+
+func x_mov_imm(a &: Arm, rd: int, v0: i64):
+    v := v0 & (0xFFFFFFFF as i64)
+    e := arm_imm(v)
+    if e >= 0:
+        arm_dp(a, ARM_AL, 13, false, 0, rd, e as i64, true)
+        ret
+    end
+    e2 := arm_imm(~v)
+    if e2 >= 0:
+        arm_dp(a, ARM_AL, 15, false, 0, rd, e2 as i64, true)
+        ret
+    end
+    x_movw(a, rd, v & (0xFFFF as i64))
+    if (v >> (16 as i64)) != (0 as i64):
+        x_movt(a, rd, v >> (16 as i64))
+    end
+end
+
+func x_mov(a &: Arm, rd: int, rm: int):
+    if rd != rm:
+        arm_dpr(a, 13, false, rd, 0, rm)
+    end
+end
+
+func x_add_imm(a &: Arm, rd: int, rn: int, v: i64, scratch: int):
+    if v == (0 as i64):
+        x_mov(a, rd, rn)
+        ret
+    end
+    e := arm_imm(v)
+    if e >= 0:
+        arm_dp(a, ARM_AL, 4, false, rn, rd, e as i64, true)
+        ret
+    end
+    e2 := arm_imm(0 - v)
+    if e2 >= 0:
+        arm_dp(a, ARM_AL, 2, false, rn, rd, e2 as i64, true)
+        ret
+    end
+    x_mov_imm(a, scratch, v)
+    arm_dpr(a, 4, false, rd, rn, scratch)
+end
+
+func x_cmp0(a &: Arm, r: int):
+    arm_dp(a, ARM_AL, 10, true, r, 0, 0 as i64, true)
+end
+
+func x_ext(a &: Arm, rd: int, rm: int, from: int, signed: bool):
+    if from >= 4:
+        x_mov(a, rd, rm)
+        ret
+    end
+    mut b := 0xE6EF0070 as i64
+    if from == 2:
+        b = signed ? (0xE6BF0070 as i64) : (0xE6FF0070 as i64)
+    else signed:
+        b = 0xE6AF0070 as i64
+    end
+    arm_w(a, b | ((rd as i64) << (12 as i64)) | (rm as i64))
+end
+
+func x_bfi(a &: Arm, rd: int, rn: int, width: int):
+    arm_w(
+        a,
+        (0xE7C00010 as i64) | (((width - 1) as i64) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (rn as i64)
+    )
+end
+
+func x_push(a &: Arm, mask: int):
+    arm_w(a, (0xE92D0000 as i64) | (mask as i64))
+end
+
+func x_pop(a &: Arm, mask: int):
+    arm_w(a, (0xE8BD0000 as i64) | (mask as i64))
+end
+
+func x_dmb(a &: Arm):
+    arm_w(a, 0xF57FF05B as i64)
+end
+
+func arm_tmp(avoid1: int, avoid2: int, avoid3: int): int:
+    each t in [11, 10, 9, 8, 7]:
+        if t != avoid1 and t != avoid2 and t != avoid3:
+            ret t
+        end
+    end
+    ret 6
+end
+
+func arm_tmp2(t1: int, avoid1: int, avoid2: int, avoid3: int): int:
+    each t in [11, 10, 9, 8, 7, 6]:
+        if t != t1 and t != avoid1 and t != avoid2 and t != avoid3:
+            ret t
+        end
+    end
+    ret 5
+end

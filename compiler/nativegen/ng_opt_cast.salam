@@ -1,0 +1,394 @@
+package nativegen
+
+func fold_cast(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    a := g.i_a[i]
+    dt := g.i_ty[i]
+    st := g.i_x[i]
+    if not is_cint(g, a):
+        ret false
+    end
+    if is_flt(g, dt):
+        ret false
+    end
+    v := g.v_i[a]
+    switch op:
+        OP_SEXT:
+            mut sv := norm_int(g, st, v)
+            if st == T_I1:
+                sv = 0 - (v & (1 as i64))
+            end
+            replace_res(g, i, cval(g, dt, sv))
+            ret true
+        end
+        OP_ZEXT:
+            replace_res(g, i, cval(g, dt, uval(g, st, v) as i64))
+            ret true
+        end
+        OP_TRUNC, OP_PTRTOINT, OP_INTTOPTR, OP_BITCAST:
+            replace_res(g, i, cval(g, dt, v))
+            ret true
+        end
+    end
+    ret false
+end
+
+func select_bool(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    b := g.i_b[i]
+    c := g.i_c[i]
+    if g.t_kind[t] != TK_INT or int_bits(g, t) < 8 or not is_cint(g, b) or not is_cint(g, c):
+        ret false
+    end
+    vb := g.v_i[b]
+    vc := g.v_i[c]
+    if vb == (1 as i64) and vc == (0 as i64):
+        g.i_op[i] = OP_ZEXT
+        g.i_x[i] = T_I1
+        g.i_b[i] = 0 - 1
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    if vb == (0 as i64) and vc == (1 as i64):
+        cv := g.i_a[i]
+        cd := cv >= 0 and g.v_kind[cv] == VK_INS ? g.v_def[cv] : 0 - 1
+        mut nx := 0 - 1
+        if cd >= 0 and g.i_op[cd] == OP_ICMP:
+            nx = ins_new(g, OP_ICMP, T_I1)
+            g.i_a[nx] = g.i_a[cd]
+            g.i_b[nx] = g.i_b[cd]
+            g.i_x[nx] = neg_cc(g.i_x[cd])
+        else:
+            nx = ins_new(g, OP_XOR, T_I1)
+            g.i_a[nx] = cv
+            g.i_b[nx] = const_int(g, T_I1, 1 as i64)
+        end
+        nv := new_res(g, nx)
+        ins_before(g, i, nx)
+        g.i_op[i] = OP_ZEXT
+        g.i_x[i] = T_I1
+        g.i_a[i] = nv
+        g.i_b[i] = 0 - 1
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    ret false
+end
+
+func select_add_hoist(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    bv := g.i_b[i]
+    cv := g.i_c[i]
+    if is_vec(g, t) or is_flt(g, t) or is_agg(g, t) or bv < 0 or cv < 0 or g.v_kind[bv] != VK_INS or
+        g.v_kind[cv] != VK_INS:
+        ret false
+    end
+    if not one_use(g, bv) or not one_use(g, cv):
+        ret false
+    end
+    bd := g.v_def[bv]
+    cd := g.v_def[cv]
+    if g.i_op[bd] != OP_ADD or g.i_op[cd] != OP_ADD or g.i_ty[bd] != t or g.i_ty[cd] != t:
+        ret false
+    end
+    mut p := 0 - 1
+    mut x := 0 - 1
+    mut y := 0 - 1
+    if g.i_a[bd] == g.i_a[cd]:
+        p = g.i_a[bd]
+        x = g.i_b[bd]
+        y = g.i_b[cd]
+    else g.i_a[bd] == g.i_b[cd]:
+        p = g.i_a[bd]
+        x = g.i_b[bd]
+        y = g.i_a[cd]
+    else g.i_b[bd] == g.i_a[cd]:
+        p = g.i_b[bd]
+        x = g.i_a[bd]
+        y = g.i_b[cd]
+    else g.i_b[bd] == g.i_b[cd]:
+        p = g.i_b[bd]
+        x = g.i_a[bd]
+        y = g.i_a[cd]
+    end
+    if p < 0 or x < 0 or y < 0:
+        ret false
+    end
+    s := ins_new(g, OP_SELECT, t)
+    g.i_a[s] = g.i_a[i]
+    g.i_b[s] = x
+    g.i_c[s] = y
+    sv := new_res(g, s)
+    ins_before(g, i, s)
+    n := ins_new(g, OP_ADD, t)
+    g.i_a[n] = p
+    g.i_b[n] = sv
+    nv := new_res(g, n)
+    ins_before(g, i, n)
+    replace_res(g, i, nv)
+    ret true
+end
+
+func fold_select(g &: Ng, i: int): bool:
+    c := g.i_a[i]
+    if is_cint(g, c):
+        if (g.v_i[c] & (1 as i64)) != (0 as i64):
+            replace_res(g, i, g.i_b[i])
+        else:
+            replace_res(g, i, g.i_c[i])
+        end
+        ret true
+    end
+    if g.i_b[i] == g.i_c[i]:
+        replace_res(g, i, g.i_b[i])
+        ret true
+    end
+    if not g.off_andbr and g.i_ty[i] == T_I1 and is_cint(g, g.i_b[i]) and is_cint(g, g.i_c[i]) and
+        (g.v_i[g.i_b[i]] & (1 as i64)) == (1 as i64) and
+        (g.v_i[g.i_c[i]] & (1 as i64)) == (0 as i64):
+        replace_res(g, i, c)
+        ret true
+    end
+    ret false
+end
+
+func fold_addr(g &: Ng, i: int): bool:
+    idx := g.i_b[i]
+    mut changed := false
+    if idx >= 0 and is_cint(g, idx):
+        g.i_d[i] = g.i_d[i] + norm_int(g, g.v_ty[idx], g.v_i[idx]) * (g.i_x[i] as i64)
+        g.i_b[i] = 0 - 1
+        g.i_x[i] = 1
+        changed = true
+    end
+    ix := g.i_b[i]
+    if ix >= 0 and g.v_kind[ix] == VK_INS and g.v_ty[ix] == T_I64:
+        xd := g.v_def[ix]
+        xo := g.i_op[xd]
+        if (xo == OP_ADD or xo == OP_SUB) and is_cint(g, g.i_b[xd]) and g.i_a[xd] >= 0:
+            kc := g.v_i[g.i_b[xd]]
+            g.i_b[i] = g.i_a[xd]
+            g.i_d[i] += (xo == OP_ADD ? kc : 0 - kc) * (g.i_x[i] as i64)
+            changed = true
+        else xo == OP_ADD and is_cint(g, g.i_a[xd]) and g.i_b[xd] >= 0:
+            g.i_b[i] = g.i_b[xd]
+            g.i_d[i] += g.v_i[g.i_a[xd]] * (g.i_x[i] as i64)
+            changed = true
+        end
+    end
+    base := g.i_a[i]
+    if base >= 0 and g.i_b[i] < 0 and is_cint(g, base):
+        replace_res(g, i, new_val(g, VK_INT, T_PTR, g.v_i[base] + g.i_d[i]))
+        ret true
+    end
+    if base >= 0 and g.v_kind[base] == VK_INS:
+        d := g.v_def[base]
+        if d >= 0 and g.i_op[d] == OP_ADDR and g.i_b[d] < 0:
+            g.i_a[i] = g.i_a[d]
+            g.i_d[i] += g.i_d[d]
+            changed = true
+        else d >= 0 and g.i_op[d] == OP_ADDR and g.i_b[i] < 0 and g.i_d[i] != (0 as i64) and
+            is_imm32(
+                g.i_d[i] + g.i_d[d]
+            ):
+            g.i_a[i] = g.i_a[d]
+            g.i_b[i] = g.i_b[d]
+            g.i_x[i] = g.i_x[d]
+            g.i_d[i] += g.i_d[d]
+            changed = true
+        else d >= 0 and g.i_op[d] == OP_ADDR and g.i_b[i] < 0 and g.i_d[i] == (0 as i64):
+            replace_res(g, i, base)
+            ret true
+        end
+    end
+    if g.i_b[i] < 0 and g.i_d[i] == (0 as i64):
+        replace_res(g, i, g.i_a[i])
+        ret true
+    end
+    ret changed
+end
+
+func fold_extv(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if is_agg(g, t):
+        ret false
+    end
+    mut off := g.i_d[i]
+    sz := tsize(g, t) as i64
+    mut a := g.i_a[i]
+    repeat 64:
+        if a < 0:
+            ret false
+        end
+        if a != g.i_a[i] and is_agg(
+            g, g.v_ty[a]
+        ) and (g.v_kind[a] != VK_INS or g.i_op[g.v_def[a]] != OP_INSV) and
+            g.v_kind[a] != VK_ZERO and g.v_kind[a] != VK_UNDEF:
+            g.i_a[i] = a
+            g.i_d[i] = off
+            ret true
+        end
+        k := g.v_kind[a]
+        if k == VK_ZERO:
+            if is_flt(g, t):
+                replace_res(g, i, new_val(g, VK_FLT, t, 0 as i64))
+            else:
+                replace_res(g, i, new_val(g, VK_INT, t, 0 as i64))
+            end
+            ret true
+        end
+        if k == VK_UNDEF:
+            replace_res(g, i, new_val(g, VK_UNDEF, t, 0 as i64))
+            ret true
+        end
+        if k != VK_INS:
+            ret false
+        end
+        d := g.v_def[a]
+        if d < 0 or g.i_op[d] != OP_INSV:
+            ret false
+        end
+        doff := g.i_d[d]
+        dt := g.i_x[d]
+        dsz := tsize(g, dt) as i64
+        if doff == off and dt == t:
+            replace_res(g, i, g.i_b[d])
+            ret true
+        end
+        if doff + dsz <= off or off + sz <= doff:
+            a = g.i_a[d]
+        else doff <= off and off + sz <= doff + dsz and is_agg(g, dt):
+            a = g.i_b[d]
+            off -= doff
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func agg_leaves(g &: Ng, t: int, base: i64, offs &: Vector<i64>, tys &: Vector<int>): bool:
+    if g.t_kind[t] == TK_STRUCT:
+        repeat g.t_nf[t] in k:
+            ft := g.t_pool[g.t_fs[t] + k]
+            if not agg_leaves(g, ft, base + (g.t_offs[g.t_fs[t] + k] as i64), offs, tys):
+                ret false
+            end
+        end
+        ret true
+    end
+    if is_agg(g, t) or offs.Len() > 256:
+        ret false
+    end
+    offs.Push(base)
+    tys.Push(t)
+    ret true
+end
+
+func fold_insv_zero(g &: Ng, i: int): bool:
+    if g.off_zins or g.i_op[i] != OP_INSV or g.i_res[i] < 0:
+        ret false
+    end
+    v := g.i_b[i]
+    if v < 0 or
+        not (g.v_kind[v] == VK_ZERO or (g.v_kind[v] == VK_INT and g.v_i[v] == (0 as i64))) or
+        is_flt(g, g.i_x[i]):
+        ret false
+    end
+    lo := g.i_d[i]
+    hi := lo + (tsize(g, g.i_x[i]) as i64)
+    mut x := g.i_a[i]
+    repeat 512:
+        if x < 0:
+            ret false
+        end
+        if g.v_kind[x] == VK_ZERO:
+            if g.inl_trace:
+                printerrln "zins " + tab_str(g.syms, g.f_sym)
+            end
+            replace_res(g, i, g.i_a[i])
+            ret true
+        end
+        if g.v_kind[x] != VK_INS or g.i_op[g.v_def[x]] != OP_INSV:
+            ret false
+        end
+        d := g.v_def[x]
+        l2 := g.i_d[d]
+        h2 := l2 + (tsize(g, g.i_x[d]) as i64)
+        if l2 < hi and lo < h2:
+            ret false
+        end
+        x = g.i_a[d]
+    end
+    ret false
+end
+
+func fold_insv_rebuild(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if g.t_kind[t] != TK_STRUCT:
+        ret false
+    end
+    mut src := 0 - 1
+    mut a := i
+    mut po := Vector {} as Vector<i64>
+    mut pt := Vector {} as Vector<int>
+    mut ok := true
+    repeat 512:
+        if g.i_op[a] != OP_INSV:
+            break
+        end
+        b := g.i_b[a]
+        if b < 0 or g.v_kind[b] != VK_INS or g.i_op[g.v_def[b]] != OP_EXTV:
+            ok = false
+            break
+        end
+        e := g.v_def[b]
+        if g.i_d[e] != g.i_d[a] or (src >= 0 and g.i_a[e] != src):
+            ok = false
+            break
+        end
+        src = g.i_a[e]
+        if not agg_leaves(g, g.v_ty[b], g.i_d[a], po, pt):
+            ok = false
+            break
+        end
+        nx := g.i_a[a]
+        if nx < 0 or g.v_kind[nx] != VK_INS:
+            a = 0 - 1
+            if nx >= 0 and g.v_kind[nx] != VK_UNDEF:
+                ok = false
+            end
+            break
+        end
+        a = g.v_def[nx]
+    end
+    mut loffs := Vector {} as Vector<i64>
+    mut ltys := Vector {} as Vector<int>
+    if ok and a < 0 and
+        src >= 0 and g.v_ty[src] == t and agg_leaves(
+            g, t, 0 as i64, loffs, ltys
+        ) and loffs.Len() == po.Len():
+        repeat loffs.Len() in k:
+            mut found := false
+            repeat po.Len() in q:
+                if po[q] == loffs[k] and pt[q] == ltys[k]:
+                    found = true
+                end
+            end
+            if not found:
+                ok = false
+            end
+        end
+    else:
+        ok = false
+    end
+    po.Free()
+    pt.Free()
+    loffs.Free()
+    ltys.Free()
+    if not ok:
+        ret false
+    end
+    replace_res(g, i, src)
+    ret true
+end

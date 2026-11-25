@@ -1,0 +1,261 @@
+package nativegen
+
+func hi_reg(g &: Ng): int:
+    ret (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86) ? RDX : RCX
+end
+
+func arm_vfp_slot(used &: Vector<bool>, dbl: bool): int:
+    if dbl:
+        repeat 8 in k:
+            if not used[2 * k] and not used[2 * k + 1]:
+                used[2 * k] = true
+                used[2 * k + 1] = true
+                ret 2 * k
+            end
+        end
+        ret 0 - 1
+    end
+    repeat 16 in s:
+        if not used[s]:
+            used[s] = true
+            ret s
+        end
+    end
+    ret 0 - 1
+end
+
+func arm_vfp_run(used &: Vector<bool>, cnt: int, dbl: bool): int:
+    step := dbl ? 2 : 1
+    units := cnt * step
+    mut b := 0
+    until b + units <= 16:
+        mut avail := true
+        repeat units in u:
+            if used[b + u]:
+                avail = false
+            end
+        end
+        if avail:
+            repeat units in u2:
+                used[b + u2] = true
+            end
+            ret b
+        end
+        b += step
+    end
+    ret 0 - 1
+end
+
+func arm_gp_arg(g &: Ng, r: int, ncrn &: int, nsaa &: int, mask &: i64):
+    if ncrn < 4:
+        _c := e_copy(g, ncrn, r)
+        mask |= ((1 as i64) << (ncrn as i64))
+        ncrn++
+        ret
+    end
+    _s := e_mr(g, M_ST, 4, mem_bi(RSP, nsaa as i64), r)
+    nsaa += 4
+end
+
+func arm_pair_align(ncrn &: int, nsaa &: int):
+    if (ncrn & 1) == 1:
+        ncrn++
+    end
+    if ncrn > 2:
+        ncrn = 4
+        nsaa = align_up(nsaa, 8)
+    end
+end
+
+func place_args_arm(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
+    mut mask := 0 as i64
+    n := args.Len()
+    mut used := Vector {} as Vector<bool>
+    defer used.Free()
+    repeat 16:
+        used.Push(false)
+    end
+    mut odd_r := Vector {} as Vector<int>
+    defer odd_r.Free()
+    mut odd_k := Vector {} as Vector<int>
+    defer odd_k.Free()
+    mut vstk := false
+    mut ncrn := 0
+    mut nsaa := 0
+    mut p := 0
+    until p < n:
+        r := args[p]
+        c := cls[p]
+        va := vararg and nfixed >= 0
+        if c == 3 and va:
+            fw := gpr(g)
+            fm := e_rr(g, M_MOVQ_GX, 4, fw, r)
+            g.mc.sz2[fm] = 0
+            arm_gp_arg(g, fw, ncrn, nsaa, mask)
+        else c == 1 and va:
+            lo := gpr(g)
+            m0 := e_rr(g, M_MOVQ_GX, 4, lo, r)
+            g.mc.sz2[m0] = 0
+            hi := gpr(g)
+            m1 := e_rr(g, M_MOVQ_GX, 4, hi, r)
+            g.mc.sz2[m1] = 1
+            arm_pair_align(ncrn, nsaa)
+            arm_gp_arg(g, lo, ncrn, nsaa, mask)
+            arm_gp_arg(g, hi, ncrn, nsaa, mask)
+        else c == 1 or c == 3:
+            mut sl := 0 - 1
+            if not vstk:
+                sl = arm_vfp_slot(used, c == 1)
+            end
+            if sl < 0:
+                vstk = true
+                if c == 1:
+                    nsaa = align_up(nsaa, 8)
+                end
+                _sf := e_mr(g, M_FST, c == 1 ? 8 : 4, mem_bi(RSP, nsaa as i64), r)
+                nsaa += c == 1 ? 8 : 4
+            else (sl & 1) == 1:
+                odd_r.Push(r)
+                odd_k.Push(sl >> 1)
+            else:
+                _cf := e_copy(g, XMM0 + (sl >> 1), r)
+                mask |= ((1 as i64) << ((XMM0 + (sl >> 1)) as i64))
+            end
+        else c == 4 and p + 1 < n:
+            arm_pair_align(ncrn, nsaa)
+            arm_gp_arg(g, r, ncrn, nsaa, mask)
+            arm_gp_arg(g, args[p + 1], ncrn, nsaa, mask)
+            p++
+        else c >= CA_ARM_HS:
+            dbl := c >= CA_ARM_HD
+            cnt := c - (dbl ? CA_ARM_HD : CA_ARM_HS)
+            mut base := 0 - 1
+            if not vstk:
+                base = arm_vfp_run(used, cnt, dbl)
+            end
+            if base < 0:
+                vstk = true
+                repeat 16 in u:
+                    used[u] = true
+                end
+                if dbl:
+                    nsaa = align_up(nsaa, 8)
+                end
+                repeat cnt in h:
+                    _sh := e_mr(g, M_FST, dbl ? 8 : 4, mem_bi(RSP, nsaa as i64), args[p + h])
+                    nsaa += dbl ? 8 : 4
+                end
+            else:
+                repeat cnt in h2:
+                    sl2 := base + (dbl ? 2 * h2 : h2)
+                    if (sl2 & 1) == 1:
+                        odd_r.Push(args[p + h2])
+                        odd_k.Push(sl2 >> 1)
+                    else:
+                        _ch := e_copy(g, XMM0 + (sl2 >> 1), args[p + h2])
+                        mask |= ((1 as i64) << ((XMM0 + (sl2 >> 1)) as i64))
+                    end
+                end
+            end
+            p += cnt - 1
+        else c >= CA_ARM_C4:
+            al8 := c >= CA_ARM_C8
+            nw := c - (al8 ? CA_ARM_C8 : CA_ARM_C4)
+            if al8 and (ncrn & 1) == 1:
+                ncrn++
+            end
+            if ncrn + nw > 4 and nsaa > 0:
+                ncrn = 4
+            end
+            if al8 and ncrn >= 4:
+                nsaa = align_up(nsaa, 8)
+            end
+            repeat nw in w:
+                arm_gp_arg(g, args[p + w], ncrn, nsaa, mask)
+            end
+            p += nw - 1
+        else:
+            arm_gp_arg(g, r, ncrn, nsaa, mask)
+        end
+        p++
+    end
+    repeat odd_r.Len() in q:
+        so := e_rr(g, M_ARM_SODD, 4, XMM0 + odd_k[q], odd_r[q])
+        g.mc.cc[so] = 0
+        mask |= ((1 as i64) << ((XMM0 + odd_k[q]) as i64))
+    end
+    g.last_argsz = nsaa
+    al := align_up(nsaa, 16)
+    if al > g.mc.out_args:
+        g.mc.out_args = al
+    end
+    ret mask
+end
+
+func entry_args_arm(g &: Ng):
+    mut used := Vector {} as Vector<bool>
+    defer used.Free()
+    repeat 16:
+        used.Push(false)
+    end
+    mut vstk := false
+    mut ncrn := 0
+    mut nsaa := 0
+    if is_agg(g, g.f_ret) and not g.f_cabi:
+        g.retp = gpr(g)
+        _c := e_copy(g, g.retp, RAX)
+        ncrn = 1
+    end
+    repeat g.f_args.Len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        fl := k < g.f_argf.Len() ? g.f_argf[k] : 0
+        agg := is_agg(g, t)
+        if g.f_cabi and ca_entry_arm(g, v, fl, used, vstk, ncrn, nsaa):
+            continue
+        end
+        if is_flt(g, t) and not agg:
+            dbl := fsz(t) == 8
+            r := vnew(g, 1)
+            mut sl := 0 - 1
+            if not vstk:
+                sl = arm_vfp_slot(used, dbl)
+            end
+            if sl < 0:
+                vstk = true
+                if dbl:
+                    nsaa = align_up(nsaa, 8)
+                end
+                _lf := e_rm(g, M_FLD, fsz(t), r, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += dbl ? 8 : 4
+            else (sl & 1) == 1:
+                so := e_rr(g, M_ARM_SODD, 4, r, XMM0 + (sl >> 1))
+                g.mc.cc[so] = 1
+            else:
+                _cf := e_copy(g, r, XMM0 + (sl >> 1))
+                dv_entry_arg(g, v, 1, XMM0 + (sl >> 1))
+            end
+            g.vv[v] = r
+        else:
+            if (fl & IF_PAIR) != 0:
+                arm_pair_align(ncrn, nsaa)
+            end
+            r2 := vnew(g, 0)
+            if ncrn < 4:
+                _cg := e_copy(g, r2, ncrn)
+                dv_entry_arg(g, v, 1, ncrn)
+                ncrn++
+            else:
+                _lg := e_rm(g, M_LD, 4, r2, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += 4
+            end
+            if agg:
+                g.vak[v] = AK_PTR
+                g.var_[v] = r2
+                g.vao[v] = 0
+            end
+            g.vv[v] = r2
+        end
+    end
+    ca_entry_sret(g)
+end

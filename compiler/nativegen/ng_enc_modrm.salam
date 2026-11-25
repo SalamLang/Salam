@@ -1,0 +1,192 @@
+package nativegen
+
+func fpo_base(g &: Ng): i64:
+    ws := g.arch == NG_ARCH_X86 ? 4 : 8
+    ret ws * ngp_count(g) + g.mc.fpo_pad - ws
+end
+
+func rm_of(g &: Ng, i: int): RM:
+    k := g.mc.mk[i]
+    if k == MK_FRAME:
+        if g.mc.fpo:
+            ret RM {
+                mem = true,
+                k = MK_BI,
+                b = RSP,
+                i = g.mc.mi[i],
+                s = g.mc.ms[i],
+                d = g.mc.md[i] - (g.mc.fs_off[g.mc.mb[i]] as i64) + fpo_base(g)
+            }
+        end
+        ret RM {
+            mem = true,
+            k = MK_BI,
+            b = RBP,
+            i = g.mc.mi[i],
+            s = g.mc.ms[i],
+            d = g.mc.md[i] - (g.mc.fs_off[g.mc.mb[i]] as i64) + win_adj(g)
+        }
+    end
+    if k == MK_ARG:
+        if g.mc.fpo:
+            ret RM {
+                mem = true,
+                k = MK_BI,
+                b = RSP,
+                d = g.mc.md[i] + fpo_base(g)
+            }
+        end
+        ret RM {
+            mem = true,
+            k = MK_BI,
+            b = RBP,
+            d = g.mc.md[i] + win_adj(g)
+        }
+    end
+    if k == MK_RIP or k == MK_GOT:
+        ret RM {
+            mem = true,
+            k = k,
+            sym = g.mc.msym[i],
+            d = g.mc.md[i]
+        }
+    end
+    ret RM {
+        mem = true,
+        k = MK_BI,
+        b = g.mc.mb[i],
+        i = g.mc.mi[i],
+        s = g.mc.ms[i],
+        d = g.mc.md[i]
+    }
+end
+
+func scale_bits(s: int): int:
+    if s == 2: ret 1 end
+    if s == 4: ret 2 end
+    if s == 8: ret 3 end
+    ret 0
+end
+
+func enc(
+    g &: Ng,
+    e &: Enc,
+    pfx: int,
+    w: bool,
+    opc: int,
+    nopc: int,
+    regf: int,
+    rm: RM,
+    byteop: int,
+    immsz: int
+):
+    if pfx == 0x66 or pfx == 0xF2 or pfx == 0xF3 or pfx == 0xF0:
+        eb(e, pfx)
+    else pfx == 0x66F0:
+        eb(e, 0xF0)
+        eb(e, 0x66)
+    end
+    rf := hw(regf)
+    x32 := g.arch == NG_ARCH_X86
+    mut rex := 0
+    if w and not x32:
+        rex |= 8
+    end
+    if rf >= 8:
+        rex |= 4
+    end
+    if rm.mem:
+        if rm.k == MK_BI:
+            if rm.i >= 0 and hw(rm.i) >= 8:
+                rex |= 2
+            end
+            if rm.b >= 0 and hw(rm.b) >= 8:
+                rex |= 1
+            end
+        end
+    else:
+        if hw(rm.reg) >= 8:
+            rex |= 1
+        end
+        if (byteop & 1) != 0 and rm.reg >= 4 and rm.reg <= 7:
+            rex |= 64
+        end
+    end
+    if (byteop & 2) != 0 and regf >= 4 and regf <= 7:
+        rex |= 64
+    end
+    if rex != 0 and not x32:
+        eb(e, 0x40 | (rex & 15))
+    end
+    if nopc >= 3:
+        eb(e, (opc >> 16) & 255)
+    end
+    if nopc >= 2:
+        eb(e, (opc >> 8) & 255)
+    end
+    eb(e, opc & 255)
+    enc_modrm(g, e, rf, rm, immsz)
+end
+
+func enc_modrm(g &: Ng, e &: Enc, rf: int, rm: RM, immsz: int):
+    x32 := g.arch == NG_ARCH_X86
+    r3 := rf & 7
+    if not rm.mem:
+        eb(e, 0xC0 | (r3 << 3) | (hw(rm.reg) & 7))
+        ret
+    end
+    if (rm.k == MK_RIP or rm.k == MK_GOT) and x32:
+        eb(e, (r3 << 3) | 5)
+        erel(e, rm.sym, R_ABS32, rm.d)
+        e32(e, 0 as i64)
+        ret
+    end
+    if rm.k == MK_RIP or rm.k == MK_GOT:
+        eb(e, (r3 << 3) | 5)
+        if rm.k == MK_GOT:
+            if g.os == NG_OS_WINDOWS:
+                erel(e, rm.sym, R_PC32, rm.d - ((4 + immsz) as i64))
+            else:
+                erel(e, rm.sym, R_GOTPCRELX, rm.d - ((4 + immsz) as i64))
+            end
+        else:
+            erel(e, rm.sym, R_PC32, rm.d - ((4 + immsz) as i64))
+        end
+        e32(e, 0 as i64)
+        ret
+    end
+    b := rm.b
+    d := rm.d
+    if b < 0:
+        mut ix := 4
+        if rm.i >= 0:
+            ix = hw(rm.i) & 7
+        end
+        eb(e, (r3 << 3) | 4)
+        eb(e, (scale_bits(rm.s) << 6) | (ix << 3) | 5)
+        e32(e, d)
+        ret
+    end
+    hb := hw(b) & 7
+    mut mode := 2
+    if d == (0 as i64) and hb != 5:
+        mode = 0
+    else fits8(d):
+        mode = 1
+    end
+    if rm.i >= 0 or hb == 4:
+        mut ix2 := 4
+        if rm.i >= 0:
+            ix2 = hw(rm.i) & 7
+        end
+        eb(e, (mode << 6) | (r3 << 3) | 4)
+        eb(e, (scale_bits(rm.s) << 6) | (ix2 << 3) | hb)
+    else:
+        eb(e, (mode << 6) | (r3 << 3) | hb)
+    end
+    if mode == 1:
+        eb(e, (d & (255 as i64)) as int)
+    else mode == 2:
+        e32(e, d)
+    end
+end

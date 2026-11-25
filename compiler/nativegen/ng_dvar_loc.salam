@@ -1,0 +1,249 @@
+package nativegen
+
+func dv_dwreg(g &: Ng, r: int): int:
+    if g.arch == NG_ARCH_X86:
+        ret r >= 16 ? 21 + (r - 16) : r
+    end
+    if g.arch == NG_ARCH_A64:
+        if r >= 16:
+            ret 64 + avr(r)
+        end
+        x := axr(r)
+        ret x == 32 ? 31 : x
+    end
+    if g.arch == NG_ARCH_RV64:
+        ret r >= 16 ? 32 + rv_f(r) : rv_x(r)
+    end
+    if g.arch == NG_ARCH_ARM:
+        ret r >= 16 ? 256 + arm_d(r) : arm_r(r)
+    end
+    if r >= 16:
+        ret 17 + (r - 16)
+    end
+    k_map := [0, 2, 1, 3, 7, 6, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15]
+    ret k_map[r]
+end
+
+func dv_spreg(g &: Ng): int:
+    switch g.arch:
+        NG_ARCH_X86: ret 4 end
+        NG_ARCH_A64: ret 31 end
+        NG_ARCH_RV64: ret 2 end
+        NG_ARCH_ARM: ret 13 end
+    end
+    ret 7
+end
+
+func dv_sp_frame(g &: Ng): bool:
+    ret g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 or g.arch == NG_ARCH_ARM
+end
+
+func dv_breg(e &: Vector<u8>, r: int, off: i64):
+    if r < 32:
+        e.Push((0x70 + r) as u8)
+    else:
+        e.Push(0x92 as u8)
+        vb_uleb(e, r as i64)
+    end
+    vb_sleb(e, off)
+end
+
+func dv_words(g &: Ng, base: int, pos: Vector<int>, endpc: int, scale: int):
+    ndf := g.df_sym.Len()
+    vt := g.dbg_on and g.fv_val.Len() > 0
+    if vt:
+        dv_enc_begin(g)
+        repeat pos.Len() in i:
+            if g.mc.dv[i] >= 0:
+                dv_enc_at(g, i == 0 ? base : base + scale * pos[i], g.mc.dv[i])
+            end
+        end
+    end
+    dbg_func(g, base, endpc - base)
+    if vt:
+        dv_enc_end(g, endpc, g.df_sym.Len() > ndf)
+    end
+end
+
+func dv_slot_off(g &: Ng, s: int): i64:
+    if dv_sp_frame(g):
+        ret g.mc.dv_spb - (g.mc.fs_off[s] as i64)
+    end
+    if g.mc.fpo:
+        ret fpo_base(g) - (g.mc.fs_off[s] as i64)
+    end
+    ret win_adj(g) - (g.mc.fs_off[s] as i64)
+end
+
+func dv_slot_kind(g &: Ng, deref: bool): int:
+    if g.mc.fpo or dv_sp_frame(g):
+        ret deref ? 7 : 3
+    end
+    ret deref ? 9 : 8
+end
+
+func dv_frame_ok(g &: Ng): bool:
+    ret g.mc.fpo or g.os == NG_OS_WINDOWS or dv_sp_frame(g)
+end
+
+func dv_slot_shared(g &: Ng, s: int): bool:
+    if s < 0 or s >= g.mc.fs_alias.Len():
+        ret true
+    end
+    if g.mc.fs_alias[s] >= 0:
+        ret true
+    end
+    repeat g.mc.fs_alias.Len() in q:
+        if g.mc.fs_alias[q] == s:
+            ret true
+        end
+    end
+    ret false
+end
+
+func dv_concrete(g &: Ng, k0: int, p: int, x: int, ind: bool, ok &: int, op &: i64, ox &: int):
+    ok = 0
+    op = 0 as i64
+    ox = 0
+    mut k := k0
+    mut xx := x
+    if k >= 10:
+        if ind and (k == 10 or k == 12):
+            k++
+            xx = 0
+        end
+        if k == 10 or k == 11:
+            ok = k == 10 ? 1 : 6
+            op = dv_dwreg(g, p) as i64
+        else:
+            ok = k == 12 ? 10 : 11
+            op = p as i64
+        end
+        ox = (k == 11 or k == 13) ? xx : 0
+        ret
+    end
+    if ind:
+        if k == 1:
+            k = 4
+            xx = 0
+        else k == 2:
+            ret
+        end
+    end
+    if k == 2:
+        ok = 2
+        op = p as i64
+        ret
+    end
+    if k == 5:
+        if dv_slot_shared(g, p) or not dv_frame_ok(g):
+            ret
+        end
+        ok = dv_slot_kind(g, false)
+        op = dv_slot_off(g, p) + (xx as i64)
+        ret
+    end
+    if (k != 1 and k != 4) or p >= g.mc.vloc.Len():
+        ret
+    end
+    ph := g.mc.vloc[p]
+    if ph >= 0 and ph < 32:
+        ok = k == 1 ? 1 : 6
+        op = dv_dwreg(g, ph) as i64
+        ox = xx
+        ret
+    end
+    if p < g.mc.vslot.Len() and g.mc.vslot[p] >= 0 and dv_frame_ok(g):
+        sl := slot_loc(g, g.mc.vslot[p])
+        ok = dv_slot_kind(g, k != 1)
+        op = dv_slot_off(g, sl)
+        ox = xx
+    end
+end
+
+func dv_enc_begin(g &: Ng):
+    g.es_open.Clear()
+    g.es_x.Clear()
+    g.es_k.Clear()
+    g.es_p.Clear()
+    g.es_s.Clear()
+    g.es_gv.Clear()
+    repeat g.fv_val.Len() in f:
+        g.es_k.Push(0)
+        g.es_p.Push(0 as i64)
+        g.es_x.Push(0)
+        g.es_s.Push(0)
+        gv := g.gv_md.Len()
+        g.es_gv.Push(gv)
+        g.gv_md.Push(g.fv_var[f])
+        g.gv_df.Push(0 - 2)
+        g.gv_ind.Push(g.fv_ind[f])
+        v := g.fv_val[f]
+        mut mem := false
+        mut moff := 0 as i64
+        if not g.fv_ind[f] and v >= 0 and v < g.vak.Len() and g.vak[v] == AK_ALLOCA and
+            g.var_[v] >= 0 and dv_frame_ok(g) and not dv_slot_shared(
+                g, g.var_[v]
+            ):
+            mem = true
+            moff = dv_slot_off(g, slot_loc(g, g.var_[v]))
+        end
+        g.gv_mk.Push(dv_slot_kind(g, false))
+        g.gv_mem.Push(mem)
+        g.gv_foff.Push(g.fv_foff[f])
+        g.gv_ctx.Push(g.fv_ctx[f])
+        g.gv_fsz.Push(g.fv_fsz[f])
+        g.gv_moff.Push(moff)
+        g.gv_l0.Push(g.le_s.Len())
+    end
+end
+
+func dv_close(g &: Ng, f: int, pc: int):
+    if g.es_k[f] != 0 and pc > g.es_s[f]:
+        g.le_gv.Push(g.es_gv[f])
+        g.le_s.Push(g.es_s[f])
+        g.le_e.Push(pc)
+        g.le_k.Push(g.es_k[f])
+        g.le_p.Push(g.es_p[f])
+        g.le_x.Push(g.es_x[f])
+    end
+    g.es_k[f] = 0
+end
+
+func dv_enc_at(g &: Ng, pc: int, head: int):
+    mut m := head
+    until m >= 0:
+        f := g.mk_fv[m]
+        if f < 0:
+            each fo in g.es_open:
+                dv_close(g, fo, pc)
+            end
+            g.es_open.Clear()
+            m = g.mk_next[m]
+            continue
+        end
+
+        mut nk := 0
+        mut np := 0 as i64
+        mut nx := 0
+        dv_concrete(g, g.mk_k[m], g.mk_p[m], g.mk_x[m], g.fv_ind[f], nk, np, nx)
+        if nk != g.es_k[f] or np != g.es_p[f] or nx != g.es_x[f]:
+            dv_close(g, f, pc)
+            if nk != 0:
+                g.es_k[f] = nk
+                g.es_p[f] = np
+                g.es_x[f] = nx
+                g.es_s[f] = pc
+                g.es_open.Push(f)
+            end
+        end
+        m = g.mk_next[m]
+    end
+end
+
+func dv_enc_end(g &: Ng, endpc: int, has_func: bool):
+    repeat g.fv_val.Len() in f:
+        dv_close(g, f, endpc)
+        g.gv_df[g.es_gv[f]] = has_func ? g.df_sym.Len() - 1 : 0 - 1
+    end
+end

@@ -1,0 +1,558 @@
+package nativegen
+
+func spec_ok(op: int): bool:
+    if op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR:
+        ret true
+    end
+    if op == OP_SHL or op == OP_LSHR or op == OP_ASHR or op == OP_ICMP or op == OP_ADDR or
+        op == OP_SELECT:
+        ret true
+    end
+    ret op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or op == OP_PTRTOINT or op == OP_INTTOPTR
+end
+
+func div_twin(g &: Ng, b: int, i: int): bool:
+    op := g.i_op[i]
+    signed := op == OP_SDIV or op == OP_SREM
+    mut x := b
+    repeat 16:
+        if x < 0:
+            ret false
+        end
+        mut k := g.b_first[x]
+        until k >= 0:
+            ko := g.i_op[k]
+            if k != i and ko >= OP_SDIV and ko <= OP_UREM and g.i_a[k] == g.i_a[i] and
+                g.i_b[k] == g.i_b[i]:
+                if not signed or ko == OP_SDIV or ko == OP_SREM:
+                    ret true
+                end
+            end
+            k = g.i_next[k]
+        end
+        if x == 0 or not g.dom_ok:
+            ret false
+        end
+        x = g.b_idom[x]
+    end
+    ret false
+end
+
+func side_ok(g &: Ng, t: int, b: int, j: int): bool:
+    if g.b_npred[t] != 1 or g.b_pred[g.b_ps[t]] != b:
+        ret false
+    end
+    mut n := 0
+    mut i := g.b_first[t]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_BR:
+            ret g.i_b[i] == j and g.i_next[i] < 0
+        end
+        if op >= OP_SDIV and op <= OP_UREM and div_twin(g, b, i):
+            i = g.i_next[i]
+            continue
+        end
+        if not spec_ok(op) or n >= 4:
+            ret false
+        end
+        n++
+        i = g.i_next[i]
+    end
+    ret false
+end
+
+func hoist_block(g &: Ng, t: int, before: int):
+    mut i := g.b_first[t]
+    until i >= 0:
+        nx := g.i_next[i]
+        if g.i_op[i] == OP_BR:
+            ins_unlink(g, i)
+        else:
+            op := g.i_op[i]
+            ins_unlink(g, i)
+            g.i_op[i] = op
+            ins_before(g, before, i)
+        end
+        i = nx
+    end
+end
+
+func taint(g &: Ng, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.addr_taint[v]:
+        ret false
+    end
+    g.addr_taint[v] = true
+    ret true
+end
+
+func addr_flow_op(op: int): bool:
+    if op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_SDIV or op == OP_UDIV or
+        op == OP_SHL or op == OP_LSHR or op == OP_ASHR or op == OP_AND or op == OP_OR:
+        ret true
+    end
+    ret op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or op == OP_SELECT or op == OP_PHI
+end
+
+func compute_addr_taint(g &: Ng):
+    g.addr_taint.Clear()
+    repeat g.v_kind.Len():
+        g.addr_taint.Push(false)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_ADDR:
+                _t1 := taint(g, g.i_a[i])
+                _t2 := taint(g, g.i_b[i])
+            else op == OP_LOAD:
+                _t3 := taint(g, g.i_a[i])
+            else op == OP_STORE:
+                _t4 := taint(g, g.i_b[i])
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut changed := true
+    mut rounds := 0
+    until changed and rounds < 8:
+        changed = false
+        rounds++
+        each b2 in g.b_rpo:
+            mut j := g.b_last[b2]
+            until j >= 0:
+                op2 := g.i_op[j]
+                r := g.i_res[j]
+                if r >= 0 and g.addr_taint[r] and addr_flow_op(op2):
+                    if op2 == OP_PHI:
+                        ps := g.i_ps[j]
+                        repeat g.i_pcount[j] in k:
+                            if taint(g, g.pool[ps + 2 * k]):
+                                changed = true
+                            end
+                        end
+                    else:
+                        if op2 != OP_SELECT and taint(g, g.i_a[j]):
+                            changed = true
+                        end
+                        if taint(g, g.i_b[j]):
+                            changed = true
+                        end
+                        if op2 == OP_SELECT and taint(g, g.i_c[j]):
+                            changed = true
+                        end
+                    end
+                end
+                j = g.i_prev[j]
+            end
+        end
+    end
+end
+
+func feeds_address(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.addr_taint.Len() and g.addr_taint[v]
+end
+
+func phis_selectable(g &: Ng, j: int): bool:
+    mut i := g.b_first[j]
+    mut any := false
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        t := g.i_ty[i]
+        if is_agg(g, t) or is_flt(g, t) or feeds_address(g, g.i_res[i]):
+            ret false
+        end
+        any = true
+        i = g.i_next[i]
+    end
+    ret any
+end
+
+func if_convert_block(g &: Ng, b: int): bool:
+    term := g.b_last[b]
+    if term < 0 or g.i_op[term] != OP_CBR:
+        ret false
+    end
+    c := g.i_a[term]
+    tb := g.i_b[term]
+    fb := g.i_c[term]
+    mut tside := 0 - 1
+    mut fside := 0 - 1
+    mut j := 0 - 1
+    if side_ok(g, tb, b, fb):
+        tside = tb
+        j = fb
+    else side_ok(g, fb, b, tb):
+        fside = fb
+        j = tb
+    else:
+        tl := g.b_last[tb]
+        if tl >= 0 and g.i_op[tl] == OP_BR:
+            jj := g.i_b[tl]
+            if side_ok(g, tb, b, jj) and side_ok(g, fb, b, jj):
+                tside = tb
+                fside = fb
+                j = jj
+            end
+        end
+    end
+    if j < 0 or j == b or not phis_selectable(g, j):
+        ret false
+    end
+    if tside >= 0:
+        hoist_block(g, tside, term)
+    end
+    if fside >= 0:
+        hoist_block(g, fside, term)
+    end
+    tsrc := tside >= 0 ? tside : b
+    fsrc := fside >= 0 ? fside : b
+    mut i := g.b_first[j]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        tv := phi_val_for(g, i, tsrc)
+        fv := phi_val_for(g, i, fsrc)
+        sel := ins_new(g, OP_SELECT, g.i_ty[i])
+        g.i_a[sel] = c
+        g.i_b[sel] = tv
+        g.i_c[sel] = fv
+        sv := new_res(g, sel)
+        ins_before(g, term, sel)
+        ps := g.i_ps[i]
+        mut w := 0
+        mut added := false
+        repeat g.i_pcount[i] in k:
+            pb := g.pool[ps + 2 * k + 1]
+            if pb == tsrc or pb == fsrc:
+                if not added:
+                    g.pool[ps + 2 * w] = sv
+                    g.pool[ps + 2 * w + 1] = b
+                    w++
+                    added = true
+                end
+            else:
+                g.pool[ps + 2 * w] = g.pool[ps + 2 * k]
+                g.pool[ps + 2 * w + 1] = pb
+                w++
+            end
+        end
+        g.i_pcount[i] = w
+        i = g.i_next[i]
+    end
+    g.i_op[term] = OP_BR
+    g.i_a[term] = 0 - 1
+    g.i_b[term] = j
+    g.i_c[term] = 0 - 1
+    ret true
+end
+
+func pure_small(g &: Ng, t: int, lim: int): bool:
+    mut n := 0
+    mut i := g.b_first[t]
+    until i >= 0 and i != g.b_last[t]:
+        if not spec_ok(g.i_op[i]) or n >= lim:
+            ret false
+        end
+        n++
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func arm_to(g &: Ng, x: int, j: int): bool:
+    l := g.b_last[x]
+    if l < 0 or g.i_op[l] != OP_BR or g.i_b[l] != j:
+        ret false
+    end
+    ret pure_small(g, x, 4)
+end
+
+func phis_same(g &: Ng, f: int, p1: int, p2: int): bool:
+    mut i := g.b_first[f]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if phi_val_for(g, i, p1) != phi_val_for(g, i, p2):
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func phi_repred(g &: Ng, f: int, from: int, into: int, drop: bool):
+    mut i := g.b_first[f]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        ps := g.i_ps[i]
+        mut w := 0
+        repeat g.i_pcount[i] in k:
+            pb := g.pool[ps + 2 * k + 1]
+            if pb == from and drop:
+                continue
+            end
+            g.pool[ps + 2 * w] = g.pool[ps + 2 * k]
+            g.pool[ps + 2 * w + 1] = pb == from ? into : pb
+            w++
+        end
+        g.i_pcount[i] = w
+        i = g.i_next[i]
+    end
+end
+
+func chain_fold(g &: Ng, b: int): bool:
+    term := g.b_last[b]
+    if g.off_chain or term < 0 or g.i_op[term] != OP_CBR or g.i_b[term] == g.i_c[term]:
+        ret false
+    end
+    repeat 2 in side:
+        t := side == 0 ? g.i_b[term] : g.i_c[term]
+        f := side == 0 ? g.i_c[term] : g.i_b[term]
+        tl := g.b_last[t]
+        if t == b or f == b or g.b_npred[t] != 1 or tl < 0 or g.i_op[tl] != OP_CBR or
+            not pure_small(g, t, 3):
+            continue
+        end
+        mut neg := false
+        mut x := 0 - 1
+        if g.i_c[tl] == f and g.i_b[tl] != f:
+            x = g.i_b[tl]
+        else g.i_b[tl] == f and g.i_c[tl] != f:
+            x = g.i_c[tl]
+            neg = true
+        end
+        if side == 1:
+            neg = not neg
+        end
+        if x < 0 or x == b or x == t or g.b_npred[f] != 2 or not phis_same(g, f, b, t):
+            continue
+        end
+        fl := g.b_last[f]
+        if fl < 0 or g.i_op[fl] != OP_BR:
+            continue
+        end
+        j := g.i_b[fl]
+        mut ok := false
+        if x == j:
+            ok = pure_small(g, f, 4)
+        else g.b_npred[x] == 1 and arm_to(g, x, j):
+            ok = pure_small(g, f, 4)
+        end
+        if not ok or j == b or not phis_selectable(g, j):
+            continue
+        end
+        mut i := g.b_first[t]
+        until i >= 0 and i != tl:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            ins_unlink(g, i)
+            g.i_op[i] = op
+            ins_before(g, term, i)
+            i = nx
+        end
+        mut c2 := g.i_a[tl]
+        if neg:
+            nt := ins_new(g, OP_XOR, T_I1)
+            g.i_a[nt] = c2
+            g.i_b[nt] = const_int(g, T_I1, 1 as i64)
+            c2 = new_res(g, nt)
+            ins_before(g, term, nt)
+        end
+        ci := ins_new(g, side == 0 ? OP_AND : OP_OR, T_I1)
+        g.i_a[ci] = g.i_a[term]
+        g.i_b[ci] = c2
+        cv := new_res(g, ci)
+        ins_before(g, term, ci)
+        g.i_a[term] = cv
+        if side == 0:
+            g.i_b[term] = x
+            g.i_c[term] = f
+        else:
+            g.i_b[term] = f
+            g.i_c[term] = x
+        end
+        phi_repred(g, x, t, b, false)
+        phi_repred(g, f, t, b, true)
+        g.i_op[tl] = OP_BR
+        g.i_a[tl] = 0 - 1
+        g.i_b[tl] = x
+        g.i_c[tl] = 0 - 1
+        ret true
+    end
+    ret false
+end
+
+func if_convert(g &: Ng): bool:
+    compute_addr_taint(g)
+    mut changed := false
+    each b in g.b_rpo:
+        if g.b_first[b] >= 0 and chain_fold(g, b):
+            changed = true
+        else g.b_first[b] >= 0 and if_convert_block(g, b):
+            changed = true
+        end
+    end
+    ret changed
+end
+
+func neg_cc(p: int): int:
+    switch p:
+        CC_EQ: ret CC_NE end
+        CC_NE: ret CC_EQ end
+        CC_SLT: ret CC_SGE end
+        CC_SGE: ret CC_SLT end
+        CC_SLE: ret CC_SGT end
+        CC_SGT: ret CC_SLE end
+        CC_ULT: ret CC_UGE end
+        CC_UGE: ret CC_ULT end
+        CC_ULE: ret CC_UGT end
+        CC_UGT: ret CC_ULE end
+    end
+    ret p
+end
+
+func cond_form(g &: Ng, c: int, on_true: bool, x &: int, kind &: int, lim &: int): bool:
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    mut a := g.i_a[d]
+    mut b := g.i_b[d]
+    mut p := g.i_x[d]
+    if is_cint(g, a) and not is_cint(g, b):
+        tmp := a
+        a = b
+        b = tmp
+        p = swap_pred(p)
+    end
+    if not on_true:
+        p = neg_cc(p)
+    end
+    if is_cint(g, b):
+        k := norm_int(g, g.v_ty[b], g.v_i[b])
+        if (p == CC_SGE and k == (0 as i64)) or (p == CC_SGT and k == (0 - 1 as i64)):
+            x = a
+            kind = 1
+            ret true
+        end
+    end
+    if p == CC_SLT:
+        x = a
+        kind = 2
+        lim = b
+        ret true
+    end
+    ret false
+end
+
+func phis_same_for(g &: Ng, blk: int, p1: int, p2: int): bool:
+    mut i := g.b_first[blk]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if phi_val_for(g, i, p1) != phi_val_for(g, i, p2):
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func range_fold_block(g &: Ng, a: int): bool:
+    ta := g.b_last[a]
+    if ta < 0 or g.i_op[ta] != OP_CBR or g.i_b[ta] == g.i_c[ta]:
+        ret false
+    end
+    repeat 2 in side:
+        bb := side == 0 ? g.i_b[ta] : g.i_c[ta]
+        fa := side == 0 ? g.i_c[ta] : g.i_b[ta]
+        if bb == a or g.b_npred[bb] != 1:
+            continue
+        end
+        tb := g.b_last[bb]
+        f0 := g.b_first[bb]
+        if tb < 0 or g.i_op[tb] != OP_CBR or f0 < 0:
+            continue
+        end
+        if not (f0 == tb or
+            (g.i_next[f0] == tb and g.i_op[f0] == OP_ICMP and g.i_res[f0] == g.i_a[tb] and one_use(
+                g, g.i_res[f0]
+        ))):
+            continue
+        end
+        mut bt := 0 - 1
+        mut bon := true
+        if g.i_b[tb] == fa:
+            bt = g.i_c[tb]
+            bon = false
+        else g.i_c[tb] == fa:
+            bt = g.i_b[tb]
+            bon = true
+        else:
+            continue
+        end
+        if bt == fa or bt == bb or blk_has_phi(g, bb):
+            continue
+        end
+        mut xa := 0 - 1
+        mut ka := 0
+        mut la := 0 - 1
+        mut xb := 0 - 1
+        mut kb := 0
+        mut lb := 0 - 1
+        if not cond_form(
+            g, g.i_a[ta], side == 0, xa, ka, la
+        ) or not cond_form(g, g.i_a[tb], bon, xb, kb, lb):
+            continue
+        end
+        if xa != xb or ka == kb:
+            continue
+        end
+        lim := ka == 2 ? la : lb
+        if not known_nonneg(g, lim, a):
+            continue
+        end
+        if not phis_same_for(g, fa, a, bb):
+            continue
+        end
+        nc := ins_new(g, OP_ICMP, T_I1)
+        g.i_a[nc] = xa
+        g.i_b[nc] = lim
+        g.i_x[nc] = CC_ULT
+        ncv := new_res(g, nc)
+        ins_before(g, ta, nc)
+        g.i_a[ta] = ncv
+        g.i_b[ta] = bt
+        g.i_c[ta] = fa
+        mut pi := g.b_first[bt]
+        until pi >= 0 and g.i_op[pi] == OP_PHI:
+            ps := g.i_ps[pi]
+            repeat g.i_pcount[pi] in q:
+                if g.pool[ps + 2 * q + 1] == bb:
+                    g.pool[ps + 2 * q + 1] = a
+                end
+            end
+            pi = g.i_next[pi]
+        end
+        ret true
+    end
+    ret false
+end
+
+func range_fold(g &: Ng): bool:
+    count_uses(g)
+    build_dom(g)
+    mut changed := false
+    mut order := Vector {} as Vector<int>
+    each b0 in g.b_rpo:
+        order.Push(b0)
+    end
+    each b in order:
+        if g.b_first[b] >= 0 and g.b_order[b] >= 0 and
+            (range_fold_block(g, b) or crange_block(g, b)):
+            changed = true
+            build_cfg(g)
+            count_uses(g)
+            build_dom(g)
+        end
+    end
+    order.Free()
+    ret changed
+end

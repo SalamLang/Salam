@@ -1,0 +1,286 @@
+package nativegen
+
+func log2_exact(v: u64): int:
+    if v == (0 as u64) or (v & (v - (1 as u64))) != (0 as u64):
+        ret 0 - 1
+    end
+    mut k := 0
+    until ((1 as u64) << (k as u64)) < v:
+        k++
+    end
+    ret k
+end
+
+func umagic(d: u64, mm &: u64, ll &: int):
+    mut l := 0
+    until l < 64 and ((1 as u64) << (l as u64)) < d:
+        l++
+    end
+    mut hi := (0 as u64) - d
+    if l < 64:
+        hi = ((1 as u64) << (l as u64)) - d
+    end
+    mut rem := hi
+    mut q := 0 as u64
+    mut bit := 63
+    until bit >= 0:
+        carry := rem >> (63 as u64)
+        rem <<= (1 as u64)
+        q <<= (1 as u64)
+        if carry != (0 as u64) or rem >= d:
+            rem -= d
+            q |= (1 as u64)
+        end
+        bit--
+    end
+    mm = q + (1 as u64)
+    ll = l
+end
+
+func bitlen64(x: u64): int:
+    mut n := 0
+    mut y := x
+    until y != (0 as u64):
+        n++
+        y >>= (1 as u64)
+    end
+    ret n
+end
+
+func known_lz(g &: Ng, v: int, depth: int): int:
+    t := g.v_ty[v]
+    bits := int_bits(g, t)
+    if is_cint(g, v):
+        ret bits - bitlen64(uval(g, t, g.v_i[v]))
+    end
+    if v < 0 or g.v_kind[v] != VK_INS or depth > 4:
+        ret 0
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    b := g.i_b[d]
+    mut r := 0
+    if op == OP_ZEXT:
+        r = bits - int_bits(g, g.i_x[d])
+    else op == OP_UDIV and is_cint(g, b):
+        r = known_lz(g, g.i_a[d], depth + 1) + bitlen64(uval(g, t, g.v_i[b])) - 1
+    else op == OP_LSHR and is_cint(g, b):
+        r = known_lz(g, g.i_a[d], depth + 1) + (g.v_i[b] as int)
+    else op == OP_UREM and is_cint(g, b) and uval(g, t, g.v_i[b]) > (0 as u64):
+        r = bits - bitlen64(uval(g, t, g.v_i[b]) - (1 as u64))
+    else op == OP_AND:
+        la := known_lz(g, g.i_a[d], depth + 1)
+        lb := known_lz(g, b, depth + 1)
+        r = la > lb ? la : lb
+    end
+    if r < bits and g.cur_b >= 0 and not g.off_range:
+        mut lo := 0 as i64
+        mut hi := 0 as i64
+        if val_range(g, v, g.cur_b, 0, lo, hi) and lo >= (0 as i64):
+            rr := bits - bitlen64(hi as u64)
+            if rr > r:
+                r = rr
+            end
+        end
+    end
+    if r > bits:
+        ret bits
+    end
+    if r < 0:
+        ret 0
+    end
+    ret r
+end
+
+func umagic_find(d: u64, nb: int, use_imul: bool, mm &: u64, pp &: int): bool:
+    mut p := nb
+    if not use_imul and p < 64:
+        p = 64
+    end
+    mut lim := nb + 64
+    if use_imul and lim > 63:
+        lim = 63
+    end
+    if lim > 127:
+        lim = 127
+    end
+    until p <= lim:
+        mut rem := 0 as u64
+        mut q := 0 as u64
+        mut big := false
+        repeat p + 1 in bi:
+            carry := rem >> (63 as u64)
+            rem <<= (1 as u64)
+            if bi == 0:
+                rem |= (1 as u64)
+            end
+            if (q >> (63 as u64)) != (0 as u64):
+                big = true
+            end
+            q <<= (1 as u64)
+            if carry != (0 as u64) or rem >= d:
+                rem -= d
+                q |= (1 as u64)
+            end
+        end
+        if not big and q != (0 - 1 as u64) and rem != (0 as u64):
+            m := q + (1 as u64)
+            e := d - rem
+            mut exact := p - nb >= 64
+            if not exact:
+                exact = e <= ((1 as u64) << ((p - nb) as u64))
+            end
+            if exact and (not use_imul or bitlen64(m) + nb <= 64):
+                mm = m
+                pp = p
+                ret true
+            end
+        end
+        p++
+    end
+    ret false
+end
+
+func emit_umagic(g &: Ng, n: int, m: u64, p: int, use_imul: bool): int:
+    if use_imul:
+        q := gpr(g)
+        if is_imm32(m as i64) and (m as i64) >= (0 as i64):
+            mi := e_rr(g, M_IMUL_RRI, 8, q, n)
+            g.mc.imm[mi] = m as i64
+        else:
+            _mr := e_movi(g, q, m as i64)
+            _mx := e_rr(g, M_IMUL_RR, 8, q, n)
+        end
+        e_shift(g, SH_SHR, 8, q, p)
+        ret q
+    end
+    q2 := mulhi(g, n, m as i64, false)
+    e_shift(g, SH_SHR, 8, q2, p - 64)
+    ret q2
+end
+
+func smagic(d: i64, mm &: i64, ss &: int):
+    two63 := (1 as u64) << (63 as u64)
+    mut ad := d as u64
+    if d < (0 as i64):
+        ad = (0 as u64) - (d as u64)
+    end
+    t := two63 + ((d as u64) >> (63 as u64))
+    nc_abs := t - (1 as u64) - t % ad
+    mut p := 63
+    mut q1 := two63 / nc_abs
+    mut r1 := two63 - q1 * nc_abs
+    mut q2 := two63 / ad
+    mut r2 := two63 - q2 * ad
+    mut delta := 0 as u64
+    until true:
+        p++
+        q1 *= (2 as u64)
+        r1 *= (2 as u64)
+        if r1 >= nc_abs:
+            q1++
+            r1 -= nc_abs
+        end
+        q2 *= (2 as u64)
+        r2 *= (2 as u64)
+        if r2 >= ad:
+            q2++
+            r2 -= ad
+        end
+        delta = ad - r2
+        if not (q1 < delta or (q1 == delta and r1 == (0 as u64))):
+            break
+        end
+    end
+    mut m := (q2 + (1 as u64)) as i64
+    if d < (0 as i64):
+        m = 0 - m
+    end
+    mm = m
+    ss = p - 64
+end
+
+func smagic32(d: i64, mm &: i64, ss &: int):
+    two31 := (1 as u64) << (31 as u64)
+    mut ad := d as u64
+    if d < (0 as i64):
+        ad = (0 as u64) - (d as u64)
+    end
+    mut dsign := 0 as u64
+    if d < (0 as i64):
+        dsign = 1 as u64
+    end
+    t := two31 + dsign
+    nc_abs := t - (1 as u64) - t % ad
+    mut p := 31
+    mut q1 := two31 / nc_abs
+    mut r1 := two31 - q1 * nc_abs
+    mut q2 := two31 / ad
+    mut r2 := two31 - q2 * ad
+    mut delta := 0 as u64
+    until true:
+        p++
+        q1 *= (2 as u64)
+        r1 *= (2 as u64)
+        if r1 >= nc_abs:
+            q1++
+            r1 -= nc_abs
+        end
+        q2 *= (2 as u64)
+        r2 *= (2 as u64)
+        if r2 >= ad:
+            q2++
+            r2 -= ad
+        end
+        delta = ad - r2
+        if not (q1 < delta or (q1 == delta and r1 == (0 as u64))):
+            break
+        end
+    end
+    mut m := ((q2 + (1 as u64)) & (0xFFFFFFFF as u64)) as i64
+    if m >= ((1 as i64) << (31 as i64)):
+        m -= ((1 as i64) << (32 as i64))
+    end
+    if d < (0 as i64):
+        m = 0 - m
+    end
+    mm = m
+    ss = p - 32
+end
+
+func ext64(g &: Ng, v: int, t: int, sign: bool): int:
+    r := use_reg(g, v)
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret r
+    end
+    r2 := gpr(g)
+    if bits == 32 and not sign:
+        _m := e_rr(g, M_MOV_RR, 4, r2, r)
+        ret r2
+    end
+    mut op := M_MOVZX_RR
+    mut sz2 := bits <= 8 ? 1 : 2
+    if sign:
+        op = M_MOVSX_RR
+        if bits == 32:
+            sz2 = 4
+        end
+    end
+    if bits == 1:
+        sz2 = 1
+        op = M_MOVZX_RR
+    end
+    mi := e_rr(g, op, op == M_MOVSX_RR ? 8 : 4, r2, r)
+    g.mc.sz2[mi] = sz2
+    ret r2
+end
+
+func mulhi(g &: Ng, n: int, m: i64, signed: bool): int:
+    _l := e_ri(g, M_MOV_RI, 8, RAX, m)
+    mh := e_rr(g, M_MULHI, 8, 0 - 1, n)
+    g.mc.cc[mh] = signed ? 1 : 0
+    t := gpr(g)
+    _c := e_copy(g, t, RDX)
+    ret t
+end

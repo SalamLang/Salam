@@ -1,0 +1,327 @@
+package nativegen
+
+func rv_cond_bool(g &: Ng, a &: Rv, i: int, cc: int):
+    p := rv_prod(g, i)
+    kind := p >= 0 ? flag_kind(g, p) : FK_SUB
+    if kind == FK_FLOAT:
+        dbl := g.mc.sz[p] == 8
+        switch cc:
+            X_E, X_NE:
+                rv_uno(a, dbl)
+                rv_feq(a, RV_T4, RV_FA, RV_FB, 2, dbl)
+                rv_op(a, 0, 6, RV_T3, RV_T3, RV_T4, false)
+                if cc == X_NE:
+                    rv_xori1(a, RV_T3)
+                end
+                ret
+            end
+            X_B:
+                rv_uno(a, dbl)
+                rv_feq(a, RV_T4, RV_FA, RV_FB, 1, dbl)
+                rv_op(a, 0, 6, RV_T3, RV_T3, RV_T4, false)
+                ret
+            end
+            X_AE:
+                rv_feq(a, RV_T3, RV_FB, RV_FA, 0, dbl)
+                ret
+            end
+            X_A:
+                rv_feq(a, RV_T3, RV_FB, RV_FA, 1, dbl)
+                ret
+            end
+            X_BE:
+                rv_feq(a, RV_T3, RV_FB, RV_FA, 1, dbl)
+                rv_xori1(a, RV_T3)
+                ret
+            end
+            X_P, X_NP:
+                rv_uno(a, dbl)
+                if cc == X_NP:
+                    rv_xori1(a, RV_T3)
+                end
+                ret
+            end
+        end
+        rv_mv(a, RV_T3, RV_ZERO)
+        ret
+    end
+    if kind == FK_ADD and (cc == X_B or cc == X_AE or cc == X_BE or cc == X_A):
+        rv_op(a, 0, 3, RV_T3, RV_T5, RV_T4, false)
+        if cc == X_BE or cc == X_A:
+            rv_i(a, 1 as i64, RV_T5, 3, RV_T4, 0x13)
+            rv_op(a, 0, 6, RV_T3, RV_T3, RV_T4, false)
+        end
+        if cc == X_AE or cc == X_A:
+            rv_xori1(a, RV_T3)
+        end
+        ret
+    end
+    switch cc:
+        X_E, X_NE:
+            rv_op(a, 0, 4, RV_T3, RV_T5, RV_T6, false)
+            if cc == X_E:
+                rv_i(a, 1 as i64, RV_T3, 3, RV_T3, 0x13)
+            else:
+                rv_op(a, 0, 3, RV_T3, RV_ZERO, RV_T3, false)
+            end
+            ret
+        end
+        X_L, X_GE:
+            rv_op(a, 0, 2, RV_T3, RV_T5, RV_T6, false)
+            if cc == X_GE: rv_xori1(a, RV_T3) end
+            ret
+        end
+        X_G, X_LE:
+            rv_op(a, 0, 2, RV_T3, RV_T6, RV_T5, false)
+            if cc == X_LE: rv_xori1(a, RV_T3) end
+            ret
+        end
+        X_B, X_AE:
+            rv_op(a, 0, 3, RV_T3, RV_T5, RV_T6, false)
+            if cc == X_AE: rv_xori1(a, RV_T3) end
+            ret
+        end
+        X_A, X_BE:
+            rv_op(a, 0, 3, RV_T3, RV_T6, RV_T5, false)
+            if cc == X_BE: rv_xori1(a, RV_T3) end
+            ret
+        end
+        X_S, X_NS:
+            rv_op(a, 0x20, 0, RV_T3, RV_T5, RV_T6, false)
+            rv_op(a, 0, 2, RV_T3, RV_T3, RV_ZERO, false)
+            if cc == X_NS: rv_xori1(a, RV_T3) end
+            ret
+        end
+        X_O, X_NO:
+            rv_op(a, 0x20, 0, RV_T3, RV_T5, RV_T6, false)
+            rv_op(a, 0, 4, RV_T3, RV_T3, RV_T5, false)
+            rv_op(a, 0, 4, RV_T4, RV_T5, RV_T6, false)
+            rv_op(a, 0, 7, RV_T3, RV_T3, RV_T4, false)
+            rv_op(a, 0, 2, RV_T3, RV_T3, RV_ZERO, false)
+            if cc == X_NO: rv_xori1(a, RV_T3) end
+            ret
+        end
+    end
+    rv_mv(a, RV_T3, RV_ZERO)
+end
+
+func rv_jal_to(a &: Rv, lbl: int):
+    a.fx_at.Push(a.w.Len())
+    a.fx_lbl.Push(lbl)
+    rv_w(a, 0 as i64)
+end
+
+func rv_lowmask(a &: Rv, rd: int, rs: int, sz: int):
+    if sz == 1:
+        rv_i(a, 255 as i64, rs, 7, rd, 0x13)
+    else:
+        rv_slli(a, rd, rs, 48)
+        rv_srli(a, rd, rd, 48)
+    end
+end
+
+func rv_merge(a &: Rv, bits: int):
+    rv_op(a, 0, 4, RV_T6, RV_T4, bits, false)
+    rv_op(a, 0, 7, RV_T6, RV_T6, 23, false)
+    rv_op(a, 0, 4, RV_T6, RV_T4, RV_T6, false)
+end
+
+func rv_atomic_sub(g &: Ng, a &: Rv, i: int, op: int, sz: int):
+    rv_addr_reg(g, a, i, RV_T3)
+    rv_addi(a, RV_SP, RV_SP, 0 - 32 as i64)
+    repeat 4 in k:
+        rv_s(a, (8 * k) as i64, 21 + k, RV_SP, 3, 0x23)
+    end
+    rv_i(a, 3 as i64, RV_T3, 7, 22, 0x13)
+    rv_slli(a, 22, 22, 3)
+    rv_i(a, 0 - 4 as i64, RV_T3, 7, 21, 0x13)
+    rv_li(a, 23, (sz == 1 ? 0xFF : 0xFFFF) as i64)
+    rv_op(a, 0, 1, 23, 23, 22, false)
+    rax := rv_x(RAX)
+    mut dst := 0
+    if op == M_LCMPXCHG:
+        dst = rax
+        rv_op(a, 0, 1, RV_T5, rax, 22, false)
+        rv_op(a, 0, 7, RV_T5, RV_T5, 23, false)
+        rv_op(a, 0, 1, 24, rv_x(g.mc.r1[i]), 22, false)
+    else:
+        dst = rv_x(g.mc.r0[i])
+        rv_op(a, 0, 1, RV_T5, dst, 22, false)
+        if op == M_XCHG:
+            rv_op(a, 0, 7, RV_T5, RV_T5, 23, false)
+        end
+        rv_mv(a, 24, dst)
+    end
+    top := a.w.Len()
+    rv_r(a, 0x0B, 0, 21, 2, RV_T4, 0x2F)
+    mut fail_at := 0 - 1
+    if op == M_LCMPXCHG:
+        rv_op(a, 0, 7, RV_T6, RV_T4, 23, false)
+        fail_at = a.w.Len()
+        rv_w(a, 0 as i64)
+        rv_merge(a, 24)
+    else op == M_LXADD:
+        rv_add(a, RV_T6, RV_T4, RV_T5)
+        rv_merge(a, RV_T6)
+    else:
+        rv_merge(a, RV_T5)
+    end
+    rv_r(a, 0x0D, RV_T6, 21, 2, RV_T6, 0x2F)
+    rv_w(a, rv_benc(((top - a.w.Len()) * 4) as i64, RV_ZERO, RV_T6, 1))
+    if fail_at >= 0:
+        a.w[fail_at] = (rv_benc(
+            ((a.w.Len() - fail_at) * 4) as i64, RV_T5, RV_T6, 1
+        ) & (0xFFFFFFFF as i64)) as int
+    end
+    rv_op(a, 0, 5, RV_T4, RV_T4, 22, false)
+    rv_lowmask(a, RV_T4, RV_T4, sz)
+    if op == M_LCMPXCHG:
+        rv_norm(a, sz, RV_T5, RV_T4)
+        rv_norm(a, sz, RV_T6, rax)
+    else op == M_LXADD and flags_needed(g, i):
+        rv_add(a, RV_T5, RV_T4, 24)
+        rv_norm(a, sz, RV_T5, RV_T5)
+        rv_norm(a, sz, RV_T6, RV_ZERO)
+    end
+    if op == M_LXADD and flags_needed(g, i):
+        rv_norm(a, sz, 24, RV_T4)
+    end
+    rv_mv(a, dst, RV_T4)
+    if op == M_LXADD and flags_needed(g, i):
+        rv_mv(a, RV_T4, 24)
+    end
+    repeat 4 in k2:
+        rv_i(a, (8 * k2) as i64, RV_SP, 3, 21 + k2, 0x03)
+    end
+    rv_addi(a, RV_SP, RV_SP, 32 as i64)
+end
+
+func rv_atomic(g &: Ng, a &: Rv, i: int, op: int, sz: int):
+    if sz < 4:
+        rv_atomic_sub(g, a, i, op, sz)
+        ret
+    end
+    rv_addr_reg(g, a, i, RV_T3)
+    f3 := sz == 8 ? 3 : 2
+    if op == M_XCHG:
+        r0 := rv_x(g.mc.r0[i])
+        rv_r(a, 0x07, r0, RV_T3, f3, r0, 0x2F)
+        if sz < 8:
+            rv_zx32(a, r0)
+        end
+        ret
+    end
+    if op == M_LXADD:
+        r0b := rv_x(g.mc.r0[i])
+        rv_mv(a, RV_T6, r0b)
+        rv_r(a, 0x03, RV_T6, RV_T3, f3, r0b, 0x2F)
+        if sz < 8:
+            rv_zx32(a, r0b)
+        end
+        if flags_needed(g, i):
+            rv_add(a, RV_T5, r0b, RV_T6)
+            rv_norm(a, sz, RV_T5, RV_T5)
+            rv_norm(a, sz, RV_T4, r0b)
+            rv_mv(a, RV_T6, RV_ZERO)
+        end
+        ret
+    end
+    r1 := rv_x(g.mc.r1[i])
+    rax := rv_x(RAX)
+    if sz < 8:
+        rv_sx32(a, RV_T6, rax)
+    else:
+        rv_mv(a, RV_T6, rax)
+    end
+    top := a.w.Len()
+    rv_r(a, 0x0B, 0, RV_T3, f3, RV_T4, 0x2F)
+    rv_w(a, rv_benc(12 as i64, RV_T6, RV_T4, 1))
+    rv_r(a, 0x0D, r1, RV_T3, f3, RV_T5, 0x2F)
+    rv_w(a, rv_benc(((top - a.w.Len()) * 4) as i64, RV_ZERO, RV_T5, 1))
+    rv_norm(a, sz, RV_T5, RV_T4)
+    rv_norm(a, sz, RV_T6, rax)
+    rv_mv(a, rax, RV_T4)
+    if sz < 8:
+        rv_zx32(a, rax)
+    end
+end
+
+func rv_fop(g &: Ng, a &: Rv, cc: int, sz: int, d: int, m: int):
+    dbl := sz == 8
+    fmt := dbl ? 1 : 0
+    if cc == 0x5D or cc == 0x5F:
+        if cc == 0x5D:
+            rv_feq(a, RV_T3, d, m, 1, dbl)
+        else:
+            rv_feq(a, RV_T3, m, d, 1, dbl)
+        end
+        rv_w(a, rv_benc(8 as i64, RV_ZERO, RV_T3, 1))
+        rv_r(a, 0x11, m, m, 0, d, 0x53)
+        ret
+    end
+    mut f7 := 0
+    switch cc:
+        FO_ADD: f7 = 0x00 break end
+        FO_SUB: f7 = 0x04 break end
+        FO_MUL: f7 = 0x08 break end
+        FO_DIV: f7 = 0x0C break end
+        else:
+            fail(g, "native backend: riscv64 cannot encode float op " + str_of_int(cc))
+            ret
+        end
+    end
+    rv_r(a, f7 | fmt, m, d, 7, d, 0x53)
+end
+
+func rv_fbits(a &: Rv, d: int, m: int, sz: int, and_op: bool, zero: bool):
+    dbl := sz == 8
+    if zero:
+        rv_r(a, dbl ? 0x79 : 0x78, 0, RV_ZERO, 0, d, 0x53)
+        ret
+    end
+    rv_r(a, dbl ? 0x71 : 0x70, 0, d, 0, RV_T3, 0x53)
+    rv_r(a, dbl ? 0x71 : 0x70, 0, m, 0, RV_T4, 0x53)
+    rv_op(a, 0, and_op ? 7 : 4, RV_T3, RV_T3, RV_T4, false)
+    rv_r(a, dbl ? 0x79 : 0x78, 0, RV_T3, 0, d, 0x53)
+end
+
+func rv_prologue(g &: Ng, a &: Rv):
+    cf_begin(g)
+    rv_addi(a, RV_SP, RV_SP, 0 - 16 as i64)
+    cf_ev(g, a.w.Len(), CF_OFF, 16, 0)
+    rv_s(a, 8 as i64, RV_RA, RV_SP, 3, 0x23)
+    cf_ev(g, a.w.Len(), CF_REG, 1, 8)
+    rv_s(a, 0 as i64, RV_S0, RV_SP, 3, 0x23)
+    cf_ev(g, a.w.Len(), CF_REG, 8, 16)
+    rv_mv(a, RV_S0, RV_SP)
+    cf_ev(g, a.w.Len(), CF_DEF, 8, 16)
+    if a.total > 0:
+        if a.total < 2048:
+            rv_addi(a, RV_SP, RV_SP, (0 - a.total) as i64)
+        else:
+            rv_li(a, RV_T3, a.total as i64)
+            rv_op(a, 0x20, 0, RV_SP, RV_SP, RV_T3, false)
+        end
+    end
+    repeat a.ngp in k:
+        rv_s(a, (0 - 8 * (k + 1)) as i64, rv_x(g.mc.callee_used[k]), RV_S0, 3, 0x23)
+        cf_ev(g, a.w.Len(), CF_REG, rv_x(g.mc.callee_used[k]), 16 + 8 * (k + 1))
+    end
+end
+
+func rv_epilogue(g &: Ng, a &: Rv):
+    cf_ev(g, a.w.Len(), CF_REMEMBER, 0, 0)
+    repeat a.ngp in k:
+        rv_i(a, (0 - 8 * (k + 1)) as i64, RV_S0, 3, rv_x(g.mc.callee_used[k]), 0x03)
+    end
+    rv_mv(a, RV_SP, RV_S0)
+    rv_i(a, 8 as i64, RV_SP, 3, RV_RA, 0x03)
+    cf_ev(g, a.w.Len(), CF_SAME, 1, 0)
+    rv_i(a, 0 as i64, RV_SP, 3, RV_S0, 0x03)
+    cf_ev(g, a.w.Len(), CF_DEF, 2, 16)
+    cf_ev(g, a.w.Len(), CF_SAME, 8, 0)
+    rv_addi(a, RV_SP, RV_SP, 16 as i64)
+    cf_ev(g, a.w.Len(), CF_OFF, 0, 0)
+    rv_i(a, 0 as i64, RV_RA, 0, RV_ZERO, 0x67)
+    cf_ev(g, a.w.Len(), CF_RESTORE_STATE, 0, 0)
+end

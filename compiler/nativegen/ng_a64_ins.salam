@@ -1,0 +1,474 @@
+package nativegen
+
+func a64_ins(g &: Ng, a &: A64, i: int):
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    x := sz == 8
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    imm := g.mc.imm[i]
+    switch op:
+        M_NOP, M_COPY: ret end
+        M_LABEL:
+            ret
+        end
+        M_MOV_RR:
+            if sz < 4:
+                aw(
+                    a,
+                    (0x33000000 as i64) | (((8 * sz - 1) as i64) << (10 as i64)) | rd_rn_rm(
+                        axr(r0), axr(r1), 0
+                    )
+                )
+            else:
+                a_movr(a, axr(r0), axr(r1), x)
+            end
+            ret
+        end
+        M_MOV_RI:
+            if sz < 4:
+                a_mov_imm(a, AX17, imm, false)
+                aw(
+                    a,
+                    (0x33000000 as i64) | (((8 * sz - 1) as i64) << (10 as i64)) | rd_rn_rm(
+                        axr(r0), AX17, 0
+                    )
+                )
+            else:
+                a_mov_imm(a, axr(r0), imm, x)
+            end
+            ret
+        end
+        M_LD:
+            a_load(g, a, i, axr(r0), ld_op(sz, false), sz)
+            ret
+        end
+        M_LDGOT:
+            if g.os == NG_OS_WINDOWS:
+                a_sym_addr(a, g.mc.msym[i], axr(r0))
+                ret
+            end
+            arel(a, g.mc.msym[i], R_A64_GOTPAGE, 0 as i64)
+            aw(a, (0x90000000 as i64) | (axr(r0) as i64))
+            arel(a, g.mc.msym[i], R_A64_GOTLO, 0 as i64)
+            aw(a, (0xF9400000 as i64) | ((axr(r0) as i64) << (5 as i64)) | (axr(r0) as i64))
+            ret
+        end
+        M_LDZX:
+            s2 := g.mc.sz2[i]
+            a_load(g, a, i, axr(r0), ld_op(s2, false), s2)
+            ret
+        end
+        M_LDSX:
+            s3 := g.mc.sz2[i]
+            a_load(g, a, i, axr(r0), a_ldsx_op(s3, x), s3)
+            ret
+        end
+        M_ST:
+            a_load(g, a, i, axr(r1), st_op(sz, false), sz)
+            ret
+        end
+        M_STI:
+            mut src := AZR
+            if imm != (0 as i64):
+                a_mov_imm(a, AX15, imm, sz == 8)
+                src = AX15
+            end
+            a_load(g, a, i, src, st_op(sz, false), sz)
+            ret
+        end
+        M_LEA:
+            a_addr_reg(g, a, i, axr(r0))
+            ret
+        end
+        M_ALU_RR:
+            if g.mc.cc[i] == ALU_XOR and r0 == r1:
+                aw(a, (0x2A000000 as i64) | rd_rn_rm(axr(r0), AZR, AZR))
+                if flags_needed(g, i):
+                    a_tst(a, axr(r0), false)
+                end
+                ret
+            end
+            a_alu(g, a, i, g.mc.cc[i], axr(r0), axr(r0), axr(r1), sz)
+            ret
+        end
+        M_ALU_RI:
+            a_alu_imm(g, a, i, g.mc.cc[i], axr(r0), axr(r0), imm, sz)
+            ret
+        end
+        M_ALU_RM:
+            a_load(g, a, i, AX17, ld_op(sz, false), sz)
+            a_alu(g, a, i, g.mc.cc[i], axr(r0), axr(r0), AX17, sz)
+            ret
+        end
+        M_ALU_MR:
+            a_addr_reg(g, a, i, AX16)
+            a_ldst(a, ld_op(sz, false), AX15, AX16, 0 as i64, sz)
+            a_alu(g, a, i, g.mc.cc[i], AX15, AX15, axr(r1), sz)
+            if g.mc.cc[i] != ALU_CMP:
+                a_ldst(a, st_op(sz, false), AX15, AX16, 0 as i64, sz)
+            end
+            ret
+        end
+        M_ALU_MI:
+            a_addr_reg(g, a, i, AX16)
+            a_ldst(a, ld_op(sz, false), AX15, AX16, 0 as i64, sz)
+            a_mov_imm(a, AX14, imm, sz == 8)
+            a_alu(g, a, i, g.mc.cc[i], AX15, AX15, AX14, sz)
+            if g.mc.cc[i] != ALU_CMP:
+                a_ldst(a, st_op(sz, false), AX15, AX16, 0 as i64, sz)
+            end
+            ret
+        end
+        M_TEST_RR:
+            if sz < 4:
+                a_narrow_cmp(a, sz, axr(r0), axr(r1), 0 as i64, false, true)
+            else:
+                aw(
+                    a,
+                    (x ? (0xEA000000 as i64) : (0x6A000000 as i64)) | rd_rn_rm(AZR, axr(r0), axr(r1))
+                )
+            end
+            ret
+        end
+        M_TEST_RI:
+            if sz < 4:
+                a_narrow_cmp(a, sz, axr(r0), AZR, imm, true, true)
+            else:
+                a_mov_imm(a, AX17, imm, x)
+                aw(a, (x ? (0xEA000000 as i64) : (0x6A000000 as i64)) | rd_rn_rm(AZR, axr(r0), AX17))
+            end
+            ret
+        end
+        M_IMUL_RR:
+            aw(
+                a,
+                (x ? (0x9B007C00 as i64) : (0x1B007C00 as i64)) | rd_rn_rm(axr(r0), axr(r0), axr(r1))
+            )
+            ret
+        end
+        M_IMUL_RRI:
+            a_mov_imm(a, AX17, imm, x)
+            aw(a, (x ? (0x9B007C00 as i64) : (0x1B007C00 as i64)) | rd_rn_rm(axr(r0), axr(r1), AX17))
+            ret
+        end
+        M_SHIFT_RI:
+            a_shift(g, a, i, axr(r0), g.mc.cc[i], sz, imm, false)
+            ret
+        end
+        M_SHIFT_RC:
+            a_shift(g, a, i, axr(r0), g.mc.cc[i], sz, 0 as i64, true)
+            ret
+        end
+        M_UNARY:
+            if g.mc.cc[i] == UN_NOT:
+                aw(
+                    a,
+                    (x ? (0xAA200000 as i64) : (0x2A200000 as i64)) | rd_rn_rm(axr(r0), AZR, axr(r0))
+                )
+            else:
+                fl := flags_needed(g, i)
+                a_addsub_rr(a, axr(r0), AZR, axr(r0), true, fl and sz >= 4, x)
+            end
+            ret
+        end
+        M_CQO:
+            ret
+        end
+        M_DIV:
+            rv := axr(r1)
+            dc := g.mc.cc[i]
+            base := (dc & 1) == 1 ? (0x1AC00C00 as i64) : (0x1AC00800 as i64)
+            aw(a, (x ? (base | (0x80000000 as i64)) : base) | rd_rn_rm(AX16, axr(RAX), rv))
+            if (dc & 4) == 0:
+                aw(
+                    a,
+                    (x ? (0x9B008000 as i64) : (0x1B008000 as i64)) | rd_rn_rm(
+                        axr(RDX), AX16, rv
+                    ) | ((axr(RAX) as i64) << (10 as i64))
+                )
+            end
+            if (dc & 2) == 0:
+                a_movr(a, axr(RAX), AX16, x)
+            end
+            ret
+        end
+        M_MULHI:
+            rv2 := axr(r1)
+            hb := g.mc.cc[i] == 1 ? (0x9B407C00 as i64) : (0x9BC07C00 as i64)
+            aw(a, hb | rd_rn_rm(axr(RDX), axr(RAX), rv2))
+            ret
+        end
+        M_SETCC:
+            c := a_cond(g.mc.cc[i], producer_kind(g, i))
+            if c >= 14:
+                a_movz(a, axr(r0), (c == 14 ? 1 : 0) as i64, 0, false)
+            else:
+                aw(a, (0x1A9F07E0 as i64) | (((c ^ 1) as i64) << (12 as i64)) | (axr(r0) as i64))
+            end
+            ret
+        end
+        M_MOVZX_RR:
+            a_ext(a, axr(r0), axr(r1), g.mc.sz2[i], false, x)
+            ret
+        end
+        M_MOVSX_RR:
+            a_ext(a, axr(r0), axr(r1), g.mc.sz2[i], true, x)
+            ret
+        end
+        M_CMOV:
+            c2 := a_cond(g.mc.cc[i], producer_kind(g, i))
+            if c2 == 14:
+                a_movr(a, axr(r0), axr(r1), x)
+            else c2 < 14:
+                aw(
+                    a,
+                    (x ? (0x9A800000 as i64) : (0x1A800000 as i64)) | ((c2 as i64) << (12 as i64)) | rd_rn_rm(
+                        axr(r0), axr(r1), axr(r0)
+                    )
+                )
+            end
+            ret
+        end
+        M_JMP:
+            a_branch_to(a, g.mc.tgt[i], 0 - 1)
+            ret
+        end
+        M_JCC:
+            c3 := a_cond(g.mc.cc[i], producer_kind(g, i))
+            if c3 == 14:
+                a_branch_to(a, g.mc.tgt[i], 0 - 1)
+            else c3 < 14:
+                a_branch_to(a, g.mc.tgt[i], c3)
+            end
+            ret
+        end
+        M_CALL:
+            arel(a, g.mc.msym[i], R_A64_CALL26, 0 as i64)
+            aw(a, 0x94000000 as i64)
+            ret
+        end
+        M_CALLR:
+            aw(a, (0xD63F0000 as i64) | ((axr(r1) as i64) << (5 as i64)))
+            ret
+        end
+        M_RET:
+            a_epilogue(g, a)
+            ret
+        end
+        M_UD2:
+            aw(a, 0xD4200000 as i64)
+            ret
+        end
+        M_XCHG, M_LXADD, M_LCMPXCHG:
+            a_atomic(g, a, i, op, sz)
+            ret
+        end
+        M_MFENCE:
+            aw(a, 0xD5033BBF as i64)
+            ret
+        end
+        M_FMOV_RR:
+            aw(a, (0x4EA01C00 as i64) | rd_rn_rm(avr(r0), avr(r1), avr(r1)))
+            ret
+        end
+        M_FLD:
+            a_load(g, a, i, avr(r0), ld_op(sz, true), sz)
+            ret
+        end
+        M_FST:
+            a_load(g, a, i, avr(r1), st_op(sz, true), sz)
+            ret
+        end
+        M_FOP_RR:
+            aw(a, a_fop(g.mc.cc[i], sz) | rd_rn_rm(avr(r0), avr(r0), avr(r1)))
+            ret
+        end
+        M_FOP_RM:
+            a_load(g, a, i, AV24, ld_op(sz, true), sz)
+            aw(a, a_fop(g.mc.cc[i], sz) | rd_rn_rm(avr(r0), avr(r0), AV24))
+            ret
+        end
+        M_SQRT:
+            aw(
+                a,
+                (sz == 8 ? (0x1E61C000 as i64) : (0x1E21C000 as i64)) | rd_rn_rm(avr(r0), avr(r1), 0)
+            )
+            ret
+        end
+        M_UCOMI:
+            aw(
+                a,
+                (sz == 8 ? (0x1E602000 as i64) : (0x1E202000 as i64)) | rd_rn_rm(0, avr(r0), avr(r1))
+            )
+            ret
+        end
+        M_CVTSI2F:
+            mut cb := sz == 8 ? (0x1E620000 as i64) : (0x1E220000 as i64)
+            if g.mc.sz2[i] == 8:
+                cb |= (0x80000000 as i64)
+            end
+            aw(a, cb | rd_rn_rm(avr(r0), axr(r1), 0))
+            ret
+        end
+        M_CVTF2SI:
+            mut cv := sz == 8 ? (0x1E780000 as i64) : (0x1E380000 as i64)
+            if g.mc.sz2[i] == 8:
+                cv |= (0x80000000 as i64)
+            end
+            aw(a, cv | rd_rn_rm(axr(r0), avr(r1), 0))
+            ret
+        end
+        M_CVTF2F:
+            aw(
+                a,
+                (sz == 8 ? (0x1E22C000 as i64) : (0x1E624000 as i64)) | rd_rn_rm(avr(r0), avr(r1), 0)
+            )
+            ret
+        end
+        M_MOVQ_XG:
+            aw(
+                a,
+                (sz == 8 ? (0x9E670000 as i64) : (0x1E270000 as i64)) | rd_rn_rm(avr(r0), axr(r1), 0)
+            )
+            ret
+        end
+        M_MOVQ_GX:
+            aw(
+                a,
+                (sz == 8 ? (0x9E660000 as i64) : (0x1E260000 as i64)) | rd_rn_rm(axr(r0), avr(r1), 0)
+            )
+            ret
+        end
+        M_XORPS:
+            if r0 == r1:
+                aw(a, (0x6F00E400 as i64) | (avr(r0) as i64))
+            else:
+                aw(a, (0x6E201C00 as i64) | rd_rn_rm(avr(r0), avr(r0), avr(r1)))
+            end
+            ret
+        end
+        M_ANDPS:
+            aw(a, (0x4E201C00 as i64) | rd_rn_rm(avr(r0), avr(r0), avr(r1)))
+            ret
+        end
+        M_VOP_RR:
+            vo := g.mc.cc[i]
+            d0 := avr(r0)
+            d1 := avr(r1)
+            if vo == 0xF6:
+                aw(a, (0x6E303800 as i64) | rd_rn_rm(d0, d0, 0))
+                ret
+            end
+            if vo == 0xF1 or vo == 0xF2 or vo == 0xF3 or vo == 0xD1 or vo == 0xD2 or vo == 0xD3 or
+                vo == 0xE1 or vo == 0xE2:
+                vz := vo & 15
+                aw(
+                    a,
+                    (vz == 1 ? (0x4E020400 as i64) : (vz == 2 ? (0x4E040400 as i64) : (0x4E080400 as i64))) | rd_rn_rm(
+                        AV25, d1, 0
+                    )
+                )
+                if vo < 0xF0:
+                    aw(
+                        a,
+                        (0x6E20B800 as i64) | ((vz as i64) << (22 as i64)) | rd_rn_rm(AV25, AV25, 0)
+                    )
+                end
+                aw(
+                    a,
+                    ((vo & 0xF0) == 0xE0 ? (0x4E204400 as i64) : (0x6E204400 as i64)) | ((vz as i64) << (22 as i64)) | rd_rn_rm(
+                        d0, d0, AV25
+                    )
+                )
+                ret
+            end
+            if vo == 0xDF:
+                aw(a, (0x4E601C00 as i64) | rd_rn_rm(d0, d1, d0))
+                ret
+            end
+            if vo == 0x6B or vo == 0x67:
+                lo := vo == 0x6B ? (0x0E614800 as i64) : (0x2E212800 as i64)
+                aw(a, lo | rd_rn_rm(AV25, d0, 0))
+                aw(a, (lo | (0x40000000 as i64)) | rd_rn_rm(AV25, d1, 0))
+                a_vmov(a, d0, AV25)
+                ret
+            end
+            vb := a_vop3(vo, sz)
+            if vb < (0 as i64):
+                fail(g, "native backend: aarch64 has no form for vector op " + str_of_int(vo))
+                ret
+            end
+            aw(a, vb | rd_rn_rm(d0, d0, d1))
+            ret
+        end
+        M_UNPCKLPD:
+            aw(a, (0x4EC03800 as i64) | rd_rn_rm(avr(r0), avr(r0), avr(r1)))
+            ret
+        end
+        M_SHUFPS:
+            a_shuf(a, avr(r0), avr(r0), avr(r1), (imm & (255 as i64)) as int)
+            ret
+        end
+        M_PSHUFD:
+            a_shuf(a, avr(r0), avr(r1), avr(r1), (imm & (255 as i64)) as int)
+            ret
+        end
+        M_VSHI:
+            vs := avr(r0)
+            es := g.mc.cc[i] == 0x73 ? 64 : (g.mc.cc[i] == 0x71 ? 16 : 32)
+            k := g.mc.sz2[i]
+            mut cnt := (imm & (255 as i64)) as int
+            if k != 6 and k != 2 and k != 4:
+                fail(g, "native backend: aarch64 has no form for vector shift /" + str_of_int(k))
+                ret
+            end
+            if cnt == 0:
+                ret
+            end
+            if cnt >= es:
+                if k != 4:
+                    aw(a, (0x6F00E400 as i64) | (vs as i64))
+                    ret
+                end
+                cnt = es - 1
+            end
+            if k == 6:
+                aw(
+                    a,
+                    (0x4F005400 as i64) | (((es + cnt) as i64) << (16 as i64)) | rd_rn_rm(vs, vs, 0)
+                )
+            else:
+                aw(
+                    a,
+                    (k == 2 ? (0x6F000400 as i64) : (0x4F000400 as i64)) | (((2 * es - cnt) as i64) << (16 as i64)) | rd_rn_rm(
+                        vs, vs, 0
+                    )
+                )
+            end
+            ret
+        end
+        M_VLD:
+            a_load(g, a, i, avr(r0), ld_op(16, true), 16)
+            ret
+        end
+        M_VST:
+            a_load(g, a, i, avr(r1), st_op(16, true), 16)
+            ret
+        end
+        M_VLD32:
+            a_load(g, a, i, avr(r0), ld_op(4, true), 4)
+            ret
+        end
+        M_VST32:
+            a_load(g, a, i, avr(r1), st_op(4, true), 4)
+            ret
+        end
+    end
+    fail(
+        g,
+        "native backend: aarch64 cannot encode machine op " + str_of_int(op) + " in " + tab_str(
+            g.syms, g.f_sym
+        )
+    )
+end

@@ -1,0 +1,304 @@
+package nativegen
+
+func str_of_int(v: int): str:
+    ret "" + v
+end
+
+func ngp_count(g &: Ng): int:
+    mut n := 0
+    each r in g.mc.callee_used:
+        if r < 16:
+            n++
+        else:
+            ret n
+        end
+    end
+    ret n
+end
+
+func enc_ret(g &: Ng, e &: Enc):
+    if g.f_popn > 0:
+        eb(e, 0xC2)
+        eb(e, g.f_popn & 255)
+        eb(e, g.f_popn >> 8)
+        ret
+    end
+    eb(e, 0xC3)
+end
+
+func push_reg(e &: Enc, r: int):
+    if r >= 8:
+        eb(e, 0x41)
+    end
+    eb(e, 0x50 + (r & 7))
+end
+
+func pop_reg(e &: Enc, r: int):
+    if r >= 8:
+        eb(e, 0x41)
+    end
+    eb(e, 0x58 + (r & 7))
+end
+
+func fpo_param_bytes(g &: Ng): int:
+    mut n := 0
+    each av in g.f_args:
+        n += align_up(tsize(g, g.v_ty[av]), 4)
+    end
+    ret n
+end
+
+func enc_alloc(g &: Ng, e &: Enc, fsize: int):
+    if g.os == NG_OS_WINDOWS and fsize >= 4096:
+        eb(e, 0xB8)
+        e32(e, fsize as i64)
+        eb(e, 0xE8)
+        erel(e, g.sym_chkstk, R_PLT32, 0 - 4 as i64)
+        g.sy_used[g.sym_chkstk] = true
+        e32(e, 0 as i64)
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
+        eb(e, 0x29)
+        eb(e, 0xC4)
+    else fits8(fsize as i64):
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
+        eb(e, 0x83)
+        eb(e, 0xEC)
+        eb(e, fsize)
+    else:
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
+        eb(e, 0x81)
+        eb(e, 0xEC)
+        e32(e, fsize as i64)
+    end
+end
+
+func enc_prologue(g &: Ng, e &: Enc):
+    ngp := ngp_count(g)
+    fsize := g.mc.frame_size
+    g.mc.pro_push.Clear()
+    g.mc.pro_xmm.Clear()
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        mut fp := fsize - (fsize % 16)
+        if fp > 240:
+            fp = 240
+        end
+        g.mc.win_fp = fp
+        eb(e, 0x55)
+        g.mc.pro_push.Push(e.code.Len())
+        repeat ngp in k0:
+            push_reg(e, g.mc.callee_used[k0])
+            g.mc.pro_push.Push(e.code.Len())
+        end
+        if fsize > 0:
+            enc_alloc(g, e, fsize)
+        end
+        g.mc.pro_alloc = e.code.Len()
+        enc(g, e, 0, true, 0x8D, 1, RBP, RM {
+            mem = true,
+            k = MK_BI,
+            b = RSP,
+            d = fp as i64
+        }, 0, 0)
+        g.mc.pro_fp = e.code.Len()
+        mut k3 := ngp
+        until k3 + 1 < g.mc.callee_used.Len():
+            xr := g.mc.callee_used[k3]
+            off := g.mc.callee_used[k3 + 1]
+            enc(g, e, 0, false, 0x0F29, 2, xr, RM {
+                mem = true,
+                k = MK_BI,
+                b = RBP,
+                d = (0 - off as i64) + win_adj(g)
+            }, 0, 0)
+            g.mc.pro_xmm.Push(e.code.Len())
+            k3 += 2
+        end
+        g.mc.pro_len = e.code.Len()
+        ret
+    end
+    if g.mc.fpo:
+        repeat ngp in kf:
+            push_reg(e, g.mc.callee_used[kf])
+        end
+        if g.mc.fpo_pad > 0:
+            enc_alloc(g, e, g.mc.fpo_pad)
+        end
+        ret
+    end
+    eb(e, 0x55)
+    if g.arch != NG_ARCH_X86:
+        eb(e, 0x48)
+    end
+    eb(e, 0x89)
+    eb(e, 0xE5)
+    repeat ngp in k:
+        push_reg(e, g.mc.callee_used[k])
+    end
+    if fsize > 0:
+        enc_alloc(g, e, fsize)
+    end
+    mut k2 := ngp
+    until k2 + 1 < g.mc.callee_used.Len():
+        xr2 := g.mc.callee_used[k2]
+        off2 := g.mc.callee_used[k2 + 1]
+        enc(g, e, 0, false, 0x0F29, 2, xr2, RM {
+            mem = true,
+            k = MK_BI,
+            b = RBP,
+            d = 0 - off2 as i64
+        }, 0, 0)
+        k2 += 2
+    end
+end
+
+func enc_epilogue(g &: Ng, e &: Enc):
+    ngp := ngp_count(g)
+    if g.mc.fpo:
+        if g.mc.fpo_pad > 0:
+            if g.arch != NG_ARCH_X86:
+                eb(e, 0x48)
+            end
+            if fits8(g.mc.fpo_pad as i64):
+                eb(e, 0x83)
+                eb(e, 0xC4)
+                eb(e, g.mc.fpo_pad)
+            else:
+                eb(e, 0x81)
+                eb(e, 0xC4)
+                e32(e, g.mc.fpo_pad as i64)
+            end
+        end
+        mut kf := ngp - 1
+        until kf >= 0:
+            pop_reg(e, g.mc.callee_used[kf])
+            kf--
+        end
+        enc_ret(g, e)
+        ret
+    end
+    mut k2 := ngp
+    until k2 + 1 < g.mc.callee_used.Len():
+        xr := g.mc.callee_used[k2]
+        off := g.mc.callee_used[k2 + 1]
+        enc(g, e, 0, false, 0x0F28, 2, xr, RM {
+            mem = true,
+            k = MK_BI,
+            b = RBP,
+            d = (0 - off as i64) + win_adj(g)
+        }, 0, 0)
+        k2 += 2
+    end
+    if g.os == NG_OS_WINDOWS:
+        enc(g, e, 0, true, 0x8D, 1, RSP, RM {
+            mem = true,
+            k = MK_BI,
+            b = RBP,
+            d = (g.mc.frame_size - g.mc.win_fp) as i64
+        }, 0, 0)
+        mut kw := ngp - 1
+        until kw >= 0:
+            pop_reg(e, g.mc.callee_used[kw])
+            kw--
+        end
+        eb(e, 0x5D)
+        enc_ret(g, e)
+        ret
+    end
+    if ngp > 0:
+        enc(g, e, 0, true, 0x8D, 1, RSP, RM {
+            mem = true,
+            k = MK_BI,
+            b = RBP,
+            d = 0 - (8 * ngp) as i64
+        }, 0, 0)
+        mut k := ngp - 1
+        until k >= 0:
+            pop_reg(e, g.mc.callee_used[k])
+            k--
+        end
+        eb(e, 0x5D)
+    else:
+        eb(e, 0xC9)
+    end
+    enc_ret(g, e)
+end
+
+func xd16(g &: Ng, v: int):
+    sec_put(g, SEC_XDATA, v & 255)
+    sec_put(g, SEC_XDATA, (v >> 8) & 255)
+end
+
+func emit_unwind(g &: Ng, fsym: int, fsize_bytes: int):
+    ngp := ngp_count(g)
+    mut nxmm := 0
+    mut k := ngp
+    until k + 1 < g.mc.callee_used.Len():
+        nxmm++
+        k += 2
+    end
+    n := g.mc.frame_size
+    mut alloc_slots := 0
+    if n > 0:
+        if n <= 128:
+            alloc_slots = 1
+        else n <= 524280:
+            alloc_slots = 2
+        else:
+            alloc_slots = 3
+        end
+    end
+    nslots := 2 * nxmm + 1 + alloc_slots + ngp + 1
+    sec_align_to(g, SEC_XDATA, 4)
+    xoff := g.s_xdata.Len()
+    sec_put(g, SEC_XDATA, 1)
+    sec_put(g, SEC_XDATA, g.mc.pro_len)
+    sec_put(g, SEC_XDATA, nslots)
+    sec_put(g, SEC_XDATA, 5 | ((g.mc.win_fp / 16) << 4))
+    mut xi := nxmm - 1
+    until xi >= 0:
+        xr := g.mc.callee_used[ngp + 2 * xi] - 16
+        xoffs := 8 * ngp + n - g.mc.callee_used[ngp + 2 * xi + 1]
+        sec_put(g, SEC_XDATA, g.mc.pro_xmm[xi])
+        sec_put(g, SEC_XDATA, 8 | (xr << 4))
+        xd16(g, xoffs / 16)
+        xi--
+    end
+    sec_put(g, SEC_XDATA, g.mc.pro_fp)
+    sec_put(g, SEC_XDATA, 3)
+    if n > 0:
+        sec_put(g, SEC_XDATA, g.mc.pro_alloc)
+        if n <= 128:
+            sec_put(g, SEC_XDATA, 2 | (((n - 8) / 8) << 4))
+        else n <= 524280:
+            sec_put(g, SEC_XDATA, 1)
+            xd16(g, n / 8)
+        else:
+            sec_put(g, SEC_XDATA, 1 | (1 << 4))
+            xd16(g, n & 65535)
+            xd16(g, (n >> 16) & 65535)
+        end
+    end
+    mut pi := ngp - 1
+    until pi >= 0:
+        sec_put(g, SEC_XDATA, g.mc.pro_push[pi + 1])
+        sec_put(g, SEC_XDATA, (g.mc.callee_used[pi]) << 4)
+        pi--
+    end
+    sec_put(g, SEC_XDATA, g.mc.pro_push[0])
+    sec_put(g, SEC_XDATA, 5 << 4)
+    if (nslots % 2) != 0:
+        xd16(g, 0)
+    end
+    sec_align_to(g, SEC_PDATA, 4)
+    po := g.s_pdata.Len()
+    add_reloc(g, SEC_PDATA, po, fsym, R_ADDR32NB, 0 as i64)
+    add_reloc(g, SEC_PDATA, po + 4, fsym, R_ADDR32NB, fsize_bytes as i64)
+    add_reloc(g, SEC_PDATA, po + 8, g.sym_xdata, R_ADDR32NB, xoff as i64)
+    sec_pad(g, SEC_PDATA, 12)
+end

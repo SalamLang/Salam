@@ -23,6 +23,7 @@ import net.http
 import net.router
 import net.mime
 import net.devreload
+import os.signal
 
 include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
@@ -36,6 +37,9 @@ mut g_dev_multi := false
 mut g_dev_exe := ""
 mut g_dev_static := false
 mut g_dev_slot := 0 - 1
+mut g_dev_stop := 0
+mut g_dev_spa := false
+mut g_dev_w := watcher.Watcher {}
 
 func dev_quote(s: str): str:
     if SALAM_OS_WINDOWS:
@@ -86,6 +90,24 @@ func dev_log_path(): str:
     ret join_path2(g_dev_out, "build.log")
 end
 
+func dev_strip_styles(html: str): str:
+    mut out := ""
+    mut rest := str.Clone(html)
+    until true:
+        a := str.IndexOf(rest, "<style")
+        if a < 0:
+            break
+        end
+        b := str.IndexOf(rest, "</style>")
+        if b < a:
+            break
+        end
+        out += str.Substr(rest, 0, a)
+        rest = str.Substr(rest, b + 8, str.Len(rest) - b - 8)
+    end
+    ret out + rest
+end
+
 func dev_env_prefix(): str:
     if SALAM_OS_WINDOWS:
         ret "set SALAM_DEV_HMR=1&& "
@@ -99,7 +121,7 @@ func dev_build(css_only: bool): int:
     if g_dev_slot >= 0:
         prev = io.ReadFile(join_path2(dev_site_dir(g_dev_slot), g_dev_home))
     end
-    slot := g_dev_slot == 0 ? 1 : 0
+    slot := (g_dev_slot + 1) % 3
     dir := dev_site_dir(slot)
     _rm := os.RemoveAll(dir)
     if os.Mkdir(dir) != 0:
@@ -115,8 +137,17 @@ func dev_build(css_only: bool): int:
     if ok:
         _w := io.WriteFile(log, "")
         g_dev_slot = slot
-        same := str.Equals(prev, io.ReadFile(join_path2(dir, g_dev_home)))
-        devreload.Bump(css_only and same ? 1 : (g_dev_multi ? 0 : 2))
+        fresh := io.ReadFile(join_path2(dir, g_dev_home))
+        same := str.Equals(prev, fresh)
+        mut kind := g_dev_multi ? 0 : 2
+        if css_only and same:
+            kind = 1
+        else str.Len(prev) > 0 and not g_dev_multi and str.Equals(
+            dev_strip_styles(prev), dev_strip_styles(fresh)
+        ):
+            kind = 3
+        end
+        devreload.Bump(kind)
     else:
         if str.Len(io.ReadFile(log)) == 0:
             _w2 := io.WriteFile(log, "build failed with exit code " + co.I64Toa(rc as i64) + "\n")
@@ -134,19 +165,24 @@ func dev_relative(path: str): str:
     ret str.Clone(path)
 end
 
+func dev_make_watcher():
+    g_dev_w = watcher.New(g_dev_root)
+    watcher.Ignore(g_dev_w, ".git")
+    watcher.Ignore(g_dev_w, "node_modules")
+    watcher.Ignore(g_dev_w, ".salam-build")
+    watcher.IgnoreHidden(g_dev_w)
+    watcher.Snapshot(g_dev_w)
+end
+
 func dev_watch():
-    mut w := watcher.New(g_dev_root)
-    watcher.Ignore(w, ".git")
-    watcher.Ignore(w, "node_modules")
-    watcher.Ignore(w, ".salam-build")
-    watcher.IgnoreHidden(w)
-    watcher.Snapshot(w)
+    mut w := g_dev_w
     until true:
         _woke := watcher.Wait(w, watcher.IsNative(w) ? 1000 : 250)
-        mut events := watcher.PollSettled(w, 60)
+        mut events := watcher.PollSettled(w, watcher.IsNative(w) ? 15 : 60)
         mut first := ""
         mut count := 0
         mut css_only := true
+        mut rebuild := false
         repeat events.Len() in i:
             e := events.Get(i)
             if e.kind != watcher.EventKind.Deleted and os.IsDir(e.path):
@@ -159,25 +195,38 @@ func dev_watch():
             if not str.EndsWith(e.path, ".css"):
                 css_only = false
             end
+            if str.EndsWith(e.path, ".salam") or str.EndsWith(e.path, ".toml"):
+                rebuild = true
+            end
         end
         watcher.FreeEvents(events)
         if count == 0:
             continue
         end
-        if g_dev_static:
+        if g_dev_static or (not rebuild and g_dev_slot >= 0):
             devreload.Bump(css_only ? 1 : 0)
-            io.EPrintln("salam: " + first + " changed, reloading")
+            io.EPrintln(
+                "salam: " + first + " changed, " + (css_only ? "styles applied" : "reloading")
+            )
             continue
         end
-        st := dev_build(css_only)
-        if st == 2:
+        t0 := time.NowNanos()
+        mut st := dev_build(css_only)
+        mut tries := 0
+        until st == 2 and tries < 3:
+            tries++
             io.EPrintln("salam: cannot write the built page, retrying")
-            time.Sleep(1600)
+            time.Sleep(800)
+            st = dev_build(css_only)
+        end
+        ms := (time.NowNanos() - t0) / 1000000
+        if st == 2:
+            io.EPrintln("salam: cannot write the built page, will retry on the next change")
         else:
             io.EPrintln(
-                st == 0 ? "salam: rebuilt after " + first +
-                    " changed" : "salam: build failed after " + first +
-                    " changed, the browser shows the errors"
+                st == 0 ? "salam: rebuilt in " + co.I64Toa(ms) + " ms (" + first +
+                    ")" : "salam: build failed in " + co.I64Toa(ms) + " ms (" + first +
+                    "), the browser shows the errors"
             )
         end
     end
@@ -242,19 +291,35 @@ func dev_handle(ctx: i64):
     end
     if not g_dev_static and not str.Equals(path, "/") and not str.Equals(path, "/index.html"):
         hit := dev_resolve(g_dev_root, path)
-        if str.Len(hit) > 0 and not str.EndsWith(hit, ".salam"):
+        built := g_dev_slot >= 0 and str.Len(dev_resolve(dev_site_dir(g_dev_slot), path)) > 0
+        if str.Len(hit) > 0 and not str.EndsWith(hit, ".salam") and not (
+            built and (str.EndsWith(hit, ".html") or str.EndsWith(hit, ".htm"))
+        ):
             dev_send(ctx, hit)
             ret
         end
     end
-    if g_dev_slot >= 0 or g_dev_static:
-        site := dev_site_dir(g_dev_slot)
+    cur := g_dev_slot
+    if cur >= 0 or g_dev_static:
+        site := dev_site_dir(cur)
         hit2 := dev_resolve(site, path)
         if str.Len(hit2) > 0:
             dev_send(ctx, hit2)
             ret
         end
-        if dev_page_path(http.Method(ctx), path, http.Header(ctx, "Accept")):
+        if g_dev_multi and not str.Equals(path, "/"):
+            http.SetStatus(ctx, 404)
+            missing := dev_resolve(site, "/404.html")
+            if str.Len(missing) > 0:
+                dev_send(ctx, missing)
+            else:
+                http.Text(ctx, "404 Not Found")
+            end
+            ret
+        end
+        if (not g_dev_static or g_dev_spa) and dev_page_path(
+            http.Method(ctx), path, http.Header(ctx, "Accept")
+        ):
             idx := dev_resolve(site, "/" + g_dev_home)
             if str.Len(idx) > 0:
                 dev_send(ctx, idx)
@@ -329,8 +394,6 @@ func dev_purge_stale():
         mut dead := false
         if os.IsDir("/proc"):
             dead = not os.IsDir("/proc/" + pid)
-        else:
-            dead = time.Now() - fs.ModTime(full) > 86400
         end
         if dead and os.IsDir(full):
             _rm := os.RemoveAll(full)
@@ -379,9 +442,29 @@ func dev_epoch(): str:
     ret co.I64Toa(os.Pid() as i64) + "x" + co.I64Toa(time.NowNanos())
 end
 
+func dev_on_signal(_sig: int):
+    g_dev_stop = 1
+end
+
+func dev_signals():
+    _a := signal.Install(signal.SigInt, &dev_on_signal)
+    _b := signal.Install(signal.SigTerm, &dev_on_signal)
+    set := signal.NewSet()
+    _c := signal.AddSignal(set, signal.SigInt)
+    _d := signal.AddSignal(set, signal.SigTerm)
+    _e := signal.Unblock(set)
+end
+
+func dev_stopped(): bool:
+    ret g_dev_stop == 1
+end
+
 func dev_idle():
-    until true:
-        time.Sleep(60000)
+    until g_dev_stop == 0:
+        time.Sleep(100)
+    end
+    if str.Len(g_dev_out) > 0:
+        _rm := os.RemoveAll(g_dev_out)
     end
 end
 
@@ -421,6 +504,7 @@ func dev_serve(entry: str, more: str, host: str, port: int): int:
         ret 2
     end
     devreload.InitLocal(dev_epoch(), dev_log_path())
+    dev_make_watcher()
     st := dev_build(false)
     if st == 2:
         io.EPrintln("salam: cannot write the built page in " + g_dev_out)
@@ -434,6 +518,7 @@ func dev_serve(entry: str, more: str, host: str, port: int): int:
         _rm2 := os.RemoveAll(g_dev_out)
         ret 2
     end
+    dev_signals()
     _t := spawn(dev_watch)
     println "salam: serving " + entry + " at http://" + host + ":" + co.I64Toa(port as i64) +
         "/ (rebuilds on save, the page reloads itself; Ctrl+C to stop)"
@@ -441,8 +526,12 @@ func dev_serve(entry: str, more: str, host: str, port: int): int:
     ret 0
 end
 
-func dev_serve_dir(dir: str, host: str, port: int): int:
+func dev_serve_dir(dir: str, spa: str, host: str, port: int): int:
     g_dev_static = true
+    if str.Len(spa) > 0:
+        g_dev_spa = true
+        g_dev_home = spa
+    end
     if not dev_set_root(dir):
         io.EPrintln("salam: serve directory '" + dir + "' does not exist")
         ret 2
@@ -451,10 +540,12 @@ func dev_serve_dir(dir: str, host: str, port: int): int:
         ret 2
     end
     devreload.Init(dev_epoch(), "")
+    dev_make_watcher()
     if dev_listen(host, port) != 0:
         _rm3 := os.RemoveAll(g_dev_out)
         ret 2
     end
+    dev_signals()
     _t := spawn(dev_watch)
     println "salam: serving " + dir + " at http://" + host + ":" + co.I64Toa(port as i64) +
         "/ (the page reloads when a file changes; Ctrl+C to stop)"

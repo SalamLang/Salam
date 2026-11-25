@@ -1,0 +1,253 @@
+package nativegen
+
+func zx32_def(g &: Ng, a: int): bool:
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    b := g.i_b[d]
+    if op == OP_LSHR and is_cint(g, b):
+        k := g.v_i[b]
+        ret k >= (1 as i64) and k < (32 as i64)
+    end
+    if op == OP_AND and is_cint(g, b):
+        ret g.v_i[b] >= (0 as i64) and g.v_i[b] < (2147483648 as i64)
+    end
+    if op == OP_ZEXT:
+        ret int_bits(g, g.i_x[d]) <= 16
+    end
+    ret false
+end
+
+func isel_cast(g &: Ng, i: int):
+    op := g.i_op[i]
+    st := g.i_x[i]
+    dt := g.i_ty[i]
+    a := g.i_a[i]
+    if op == OP_BITCAST and (g.i_f[i] & IF_SPLITC) != 0:
+        ra := use_reg(g, a)
+        rs := vcls_ty(g, dt) == 1 ? xmm(g) : gpr(g)
+        _cs := e_copy(g, rs, ra)
+        set_res(g, i, rs)
+        ret
+    end
+    if op == OP_PTRTOINT or op == OP_INTTOPTR or
+        (op == OP_BITCAST and vcls_ty(g, st) == vcls_ty(g, dt)):
+        set_res(g, i, use_reg(g, a))
+        ret
+    end
+    if op == OP_BITCAST:
+        ra := use_reg(g, a)
+        if vcls_ty(g, dt) == 1:
+            r := xmm(g)
+            _q := e_rr(g, M_MOVQ_XG, fsz(dt), r, ra)
+            set_res(g, i, r)
+        else:
+            r2 := gpr(g)
+            _q2 := e_rr(g, M_MOVQ_GX, fsz(st), r2, ra)
+            set_res(g, i, r2)
+        end
+        ret
+    end
+    if op == OP_TRUNC:
+        ra2 := use_reg(g, a)
+        if dt == T_I1:
+            r3 := gpr(g)
+            _c := e_copy(g, r3, ra2)
+            _x := e_alui(g, ALU_AND, 4, r3, 1 as i64)
+            set_res(g, i, r3)
+        else:
+            set_res(g, i, ra2)
+        end
+        ret
+    end
+    if (op == OP_ZEXT or op == OP_SEXT) and int_bits(g, st) == 32 and int_bits(g, dt) == 64 and
+        zx32_def(g, a):
+        set_res(g, i, use_reg(g, a))
+        ret
+    end
+    if op == OP_ZEXT or op == OP_SEXT:
+        sb := int_bits(g, st)
+        db := int_bits(g, dt)
+        ra3 := use_reg(g, a)
+        r4 := gpr(g)
+        if op == OP_ZEXT:
+            if sb >= 32:
+                _m := e_rr(g, M_MOV_RR, 4, r4, ra3)
+            else:
+                z := e_rr(g, M_MOVZX_RR, 4, r4, ra3)
+                g.mc.sz2[z] = sb <= 8 ? 1 : 2
+            end
+        else:
+            dsz := db > 32 ? 8 : 4
+            if sb == 1:
+                z2 := e_rr(g, M_MOVZX_RR, 4, r4, ra3)
+                g.mc.sz2[z2] = 1
+                n := e_rr(g, M_UNARY, dsz, r4, 0 - 1)
+                g.mc.cc[n] = UN_NEG
+            else:
+                s := e_rr(g, M_MOVSX_RR, dsz, r4, ra3)
+                g.mc.sz2[s] = sb / 8
+            end
+        end
+        set_res(g, i, r4)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM and (op == OP_SITOFP or op == OP_UITOFP):
+        ra8 := ext_to32(g, a, st, op == OP_SITOFP)
+        r8 := xmm(g)
+        cv8 := e_rr(g, M_CVTSI2F, fsz(dt), r8, ra8)
+        g.mc.sz2[cv8] = 4
+        g.mc.cc[cv8] = op == OP_UITOFP ? 1 : 0
+        set_res(g, i, r8)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM and (op == OP_FPTOSI or op == OP_FPTOUI):
+        r9 := gpr(g)
+        cv9 := e_rr(g, M_CVTF2SI, fsz(st), r9, use_reg(g, a))
+        g.mc.sz2[cv9] = 4
+        g.mc.cc[cv9] = op == OP_FPTOUI ? 1 : 0
+        set_res(g, i, r9)
+        ret
+    end
+    if op == OP_UITOFP and g.arch == NG_ARCH_X86:
+        mut ua := Vector {} as Vector<int>
+        ua.Push(ext_to32(g, a, st, false))
+        uz := gpr(g)
+        _uz := e_movi(g, uz, 0 as i64)
+        ua.Push(uz)
+        us := sym_named(g, "__floatundidf")
+        g.sy_kind[us] = SY_FUNC
+        mut ru := call_lib(g, us, ua, 1)
+        ua.Free()
+        if fsz(dt) == 4:
+            rn := xmm(g)
+            _nc := e_rr(g, M_CVTF2F, 4, rn, ru)
+            ru = rn
+        end
+        set_res(g, i, ru)
+        ret
+    end
+    if op == OP_FPTOUI and g.arch == NG_ARCH_X86:
+        mut fa := Vector {} as Vector<int>
+        mut fsrc := use_reg(g, a)
+        if fsz(st) == 4:
+            fw := xmm(g)
+            _fc := e_rr(g, M_CVTF2F, 8, fw, fsrc)
+            fsrc = fw
+        end
+        fa.Push(fsrc)
+        fu := sym_named(g, "__fixunsdfsi")
+        g.sy_kind[fu] = SY_FUNC
+        rf := call_lib(g, fu, fa, 0)
+        fa.Free()
+        set_res(g, i, rf)
+        ret
+    end
+    if op == OP_SITOFP or op == OP_UITOFP:
+        sb2 := int_bits(g, st)
+        mut ri := 0 - 1
+        mut isz := 4
+        if op == OP_SITOFP:
+            ri = ext_to32(g, a, st, true)
+            if sb2 > 32:
+                isz = 8
+            end
+        else:
+            if sb2 < 32 and not g.off_uifz:
+                ri = ext_to32(g, a, st, false)
+            else sb2 < 64:
+                rz := ext_to32(g, a, st, false)
+                ri = gpr(g)
+                _m2 := e_rr(g, M_MOV_RR, 4, ri, rz)
+                isz = 8
+            else:
+                set_res(g, i, u64_to_f(g, use_reg(g, a), dt))
+                ret
+            end
+        end
+        r5 := xmm(g)
+        _xz := e_rr(g, M_XORPS, 8, r5, r5)
+        cv := e_rr(g, M_CVTSI2F, fsz(dt), r5, ri)
+        g.mc.sz2[cv] = isz
+        set_res(g, i, r5)
+        ret
+    end
+    if op == OP_FPTOSI or op == OP_FPTOUI:
+        db2 := int_bits(g, dt)
+        ra4 := use_reg(g, a)
+        if op == OP_FPTOUI and db2 >= 64:
+            set_res(g, i, f_to_u64(g, ra4, st))
+            ret
+        end
+        r6 := gpr(g)
+        cv2 := e_rr(g, M_CVTF2SI, fsz(st), r6, ra4)
+        g.mc.sz2[cv2] = (db2 > 32 or op == OP_FPTOUI) ? 8 : 4
+        set_res(g, i, r6)
+        ret
+    end
+    if op == OP_FPEXT or op == OP_FPTRUNC:
+        ra5 := use_reg(g, a)
+        r7 := xmm(g)
+        _cv := e_rr(g, M_CVTF2F, fsz(dt), r7, ra5)
+        set_res(g, i, r7)
+        ret
+    end
+    fail(g, "native backend: unsupported cast")
+end
+
+func u64_to_f(g &: Ng, ra: int, dt: int): int:
+    r := xmm(g)
+    big := new_label(g)
+    done := new_label(g)
+    _t := e_rr(g, M_TEST_RR, 8, ra, ra)
+    _j := e_jcc(g, X_S, big)
+    c := e_rr(g, M_CVTSI2F, fsz(dt), r, ra)
+    g.mc.sz2[c] = 8
+    _j2 := e_jmp(g, done)
+    _l := e_label(g, big)
+    h := gpr(g)
+    _c1 := e_copy(g, h, ra)
+    s := e_ri(g, M_SHIFT_RI, 8, h, 1 as i64)
+    g.mc.cc[s] = SH_SHR
+    lo := gpr(g)
+    _c2 := e_copy(g, lo, ra)
+    _a := e_alui(g, ALU_AND, 8, lo, 1 as i64)
+    _o := e_alu(g, ALU_OR, 8, h, lo)
+    c2 := e_rr(g, M_CVTSI2F, fsz(dt), r, h)
+    g.mc.sz2[c2] = 8
+    f := e_rr(g, M_FOP_RR, fsz(dt), r, r)
+    g.mc.cc[f] = FO_ADD
+    _l2 := e_label(g, done)
+    ret r
+end
+
+func f_to_u64(g &: Ng, ra: int, st: int): int:
+    sz := fsz(st)
+    r := gpr(g)
+    lim := xmm(g)
+    mut bits := 0x43E0000000000000 as i64
+    _l := e_rm(g, M_FLD, sz, lim, fp_const(g, bits, sz))
+    big := new_label(g)
+    done := new_label(g)
+    _u := e_rr(g, M_UCOMI, sz, ra, lim)
+    _j := e_jcc(g, X_AE, big)
+    c := e_rr(g, M_CVTF2SI, sz, r, ra)
+    g.mc.sz2[c] = 8
+    _j2 := e_jmp(g, done)
+    _lb := e_label(g, big)
+    y := xmm(g)
+    _cy := e_copy(g, y, ra)
+    f := e_rr(g, M_FOP_RR, sz, y, lim)
+    g.mc.cc[f] = FO_SUB
+    c2 := e_rr(g, M_CVTF2SI, sz, r, y)
+    g.mc.sz2[c2] = 8
+    m := gpr(g)
+    bits = 0 - 9223372036854775807 as i64
+    bits--
+    _mm := e_ri(g, M_MOV_RI, 8, m, bits)
+    _x := e_alu(g, ALU_XOR, 8, r, m)
+    _ld := e_label(g, done)
+    ret r
+end

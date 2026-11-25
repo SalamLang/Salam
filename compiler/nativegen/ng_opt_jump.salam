@@ -1,0 +1,294 @@
+package nativegen
+
+func merge_blocks(g &: Ng): bool:
+    mut changed := false
+    repl_grow(g)
+    each b in g.b_rpo:
+        if g.b_first[b] < 0:
+            continue
+        end
+        until true:
+            t := g.b_last[b]
+            if t < 0 or g.i_op[t] != OP_BR:
+                break
+            end
+            sb := g.i_b[t]
+            if sb == b or sb == 0 or g.b_npred[sb] != 1 or g.b_first[sb] < 0:
+                break
+            end
+            mut i := g.b_first[sb]
+            until i >= 0 and g.i_op[i] == OP_PHI:
+                nx := g.i_next[i]
+                r := g.i_res[i]
+                if r >= 0 and g.i_pcount[i] > 0:
+                    g.v_repl[r] = resolve(g, g.pool[g.i_ps[i]])
+                end
+                ins_unlink(g, i)
+                i = nx
+            end
+            ins_unlink(g, t)
+            if g.ev_fv.Len() > 0:
+                lb0 := g.b_last[b]
+                dv_move(g, 0 - 1 - sb, lb0 >= 0 ? lb0 : 0 - 1 - b)
+            end
+            sf := g.b_first[sb]
+            if sf >= 0:
+                mut j := sf
+                until j >= 0:
+                    g.i_blk[j] = b
+                    j = g.i_next[j]
+                end
+                lb := g.b_last[b]
+                if lb >= 0:
+                    g.i_next[lb] = sf
+                    g.i_prev[sf] = lb
+                else:
+                    g.b_first[b] = sf
+                end
+                g.b_last[b] = g.b_last[sb]
+            end
+            g.b_first[sb] = 0 - 1
+            g.b_last[sb] = 0 - 1
+            nt := g.b_last[b]
+            if nt >= 0:
+                nop := g.i_op[nt]
+                if nop == OP_BR:
+                    retarget_phis(g, g.i_b[nt], sb, b)
+                else nop == OP_CBR:
+                    retarget_phis(g, g.i_b[nt], sb, b)
+                    if g.i_c[nt] != g.i_b[nt]:
+                        retarget_phis(g, g.i_c[nt], sb, b)
+                    end
+                end
+            end
+            changed = true
+        end
+    end
+    ret changed
+end
+
+func phi_val_for(g &: Ng, phi: int, pred: int): int:
+    ps := g.i_ps[phi]
+    repeat g.i_pcount[phi] in k:
+        if g.pool[ps + 2 * k + 1] == pred:
+            ret g.pool[ps + 2 * k]
+        end
+    end
+    ret 0 - 2
+end
+
+func phi_add(g &: Ng, phi: int, val: int, pred: int):
+    ps := g.i_ps[phi]
+    n := g.i_pcount[phi]
+    nps := g.pool.Len()
+    repeat n in k:
+        g.pool.Push(g.pool[ps + 2 * k])
+        g.pool.Push(g.pool[ps + 2 * k + 1])
+    end
+    g.pool.Push(val)
+    g.pool.Push(pred)
+    g.i_ps[phi] = nps
+    g.i_pcount[phi] = n + 1
+end
+
+func can_add_edge(g &: Ng, t: int, from_b: int, p: int, cphi: int, cval_: int): bool:
+    mut i := g.b_first[t]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        v := phi_val_for(g, i, from_b)
+        mut nv := v
+        if v == cphi:
+            nv = cval_
+        end
+        old := phi_val_for(g, i, p)
+        if old != (0 - 2) and old != nv:
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func add_edge_phis(g &: Ng, t: int, from_b: int, p: int, cphi: int, cval_: int):
+    mut i := g.b_first[t]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if phi_val_for(g, i, p) == (0 - 2):
+            v := phi_val_for(g, i, from_b)
+            mut nv := v
+            if v == cphi:
+                nv = cval_
+            end
+            phi_add(g, i, nv, p)
+        end
+        i = g.i_next[i]
+    end
+end
+
+func replace_succ(g &: Ng, term: int, old: int, nw: int):
+    if g.i_op[term] == OP_BR:
+        if g.i_b[term] == old:
+            g.i_b[term] = nw
+        end
+    else g.i_op[term] == OP_CBR:
+        if g.i_b[term] == old:
+            g.i_b[term] = nw
+        end
+        if g.i_c[term] == old:
+            g.i_c[term] = nw
+        end
+    end
+end
+
+func phi_uses_under(g &: Ng, b: int, pv: int, cm: int, s: int): bool:
+    if g.b_npred[s] != 1:
+        ret false
+    end
+    each x in g.b_rpo:
+        mut i := g.b_first[x]
+        until i >= 0:
+            if i != cm and uses_val(g, i, pv) and (x == b or not dominates(g, s, x)):
+                ret false
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret true
+end
+
+func thread_cmp(g &: Ng, b: int, ph: int, cm: int, term: int): bool:
+    pv := g.i_res[ph]
+    cv := g.i_res[cm]
+    k := g.i_b[cm]
+    if pv < 0 or cv < 0 or g.i_a[cm] != pv or g.i_a[term] != cv or not one_use(g, cv) or
+        not is_cint(g, k):
+        ret false
+    end
+    tb := g.i_b[term]
+    fb := g.i_c[term]
+    if tb == b or fb == b or tb == fb:
+        ret false
+    end
+    mut only := 0 - 1
+    if not one_use(g, pv):
+        tside := phi_uses_under(g, b, pv, cm, tb)
+        fside := phi_uses_under(g, b, pv, cm, fb)
+        if tside:
+            only = fb
+        else fside:
+            only = tb
+        else:
+            ret false
+        end
+    end
+    t := g.v_ty[pv]
+    mut changed := false
+    ps := g.i_ps[ph]
+    repeat g.i_pcount[ph] in q:
+        v := resolve(g, g.pool[ps + 2 * q])
+        p2 := g.pool[ps + 2 * q + 1]
+        if p2 >= 0 and p2 != b and is_cint(g, v):
+            pt2 := g.b_last[p2]
+            if pt2 >= 0:
+                tgt := eval_icmp(g, t, g.i_x[cm], g.v_i[v], g.v_i[k]) ? tb : fb
+                if (only < 0 or tgt == only) and can_add_edge(g, tgt, b, p2, pv, v):
+                    add_edge_phis(g, tgt, b, p2, pv, v)
+                    replace_succ(g, pt2, b, tgt)
+                    g.pool[ps + 2 * q + 1] = 0 - 1
+                    changed = true
+                end
+            end
+        end
+    end
+    ret changed
+end
+
+func thread_block(g &: Ng, b: int): bool:
+    first := g.b_first[b]
+    if first < 0 or b == 0:
+        ret false
+    end
+    mut changed := false
+    if g.i_op[first] == OP_BR and g.b_last[b] == first:
+        t := g.i_b[first]
+        if t == b:
+            ret false
+        end
+        mut preds := Vector {} as Vector<int>
+        repeat g.b_npred[b] in k:
+            preds.Push(g.b_pred[g.b_ps[b] + k])
+        end
+        each p in preds:
+            pt := g.b_last[p]
+            if p != b and pt >= 0 and can_add_edge(g, t, b, p, 0 - 3, 0 - 3):
+                add_edge_phis(g, t, b, p, 0 - 3, 0 - 3)
+                replace_succ(g, pt, b, t)
+                changed = true
+            end
+        end
+        preds.Free()
+        ret changed
+    end
+    if g.i_op[first] != OP_PHI:
+        ret false
+    end
+    term := g.b_last[b]
+    mid := g.i_next[first]
+    if mid >= 0 and mid != term and g.i_op[mid] == OP_ICMP and g.i_next[mid] == term and
+        g.i_op[term] == OP_CBR:
+        ret thread_cmp(g, b, first, mid, term)
+    end
+    if g.i_next[first] != term or g.i_op[term] != OP_CBR:
+        ret false
+    end
+    c := g.i_res[first]
+    if c < 0 or g.i_a[term] != c or not one_use(g, c):
+        ret false
+    end
+    tb := g.i_b[term]
+    fb := g.i_c[term]
+    if tb == b or fb == b or tb == fb:
+        ret false
+    end
+    ps := g.i_ps[first]
+    repeat g.i_pcount[first] in k2:
+        v := resolve(g, g.pool[ps + 2 * k2])
+        p2 := g.pool[ps + 2 * k2 + 1]
+        pt2 := g.b_last[p2]
+        if pt2 < 0 or p2 == b:
+            continue
+        end
+        if is_cint(g, v):
+            tgt := ((g.v_i[v] & (1 as i64)) != (0 as i64)) ? tb : fb
+            if can_add_edge(g, tgt, b, p2, c, v):
+                add_edge_phis(g, tgt, b, p2, c, v)
+                replace_succ(g, pt2, b, tgt)
+                g.pool[ps + 2 * k2 + 1] = 0 - 1
+                changed = true
+            end
+        else g.i_op[pt2] == OP_BR:
+            if can_add_edge(g, tb, b, p2, c, v) and can_add_edge(g, fb, b, p2, c, v):
+                add_edge_phis(g, tb, b, p2, c, v)
+                add_edge_phis(g, fb, b, p2, c, v)
+                g.i_op[pt2] = OP_CBR
+                g.i_a[pt2] = v
+                g.i_b[pt2] = tb
+                g.i_c[pt2] = fb
+                g.pool[ps + 2 * k2 + 1] = 0 - 1
+                changed = true
+            end
+        end
+    end
+    ret changed
+end
+
+func thread_jumps(g &: Ng): bool:
+    count_uses(g)
+    build_dom(g)
+    repl_grow(g)
+    mut changed := false
+    each b in g.b_rpo:
+        if thread_block(g, b):
+            changed = true
+        end
+    end
+    ret changed
+end

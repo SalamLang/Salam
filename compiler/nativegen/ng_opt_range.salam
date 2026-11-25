@@ -1,0 +1,506 @@
+package nativegen
+
+func cond_rel(g &: Ng, c1: int, c2: int): int:
+    if c1 == c2:
+        ret 1
+    end
+    if c1 < 0 or c2 < 0 or g.v_kind[c1] != VK_INS or g.v_kind[c2] != VK_INS:
+        ret 0
+    end
+    d1 := g.v_def[c1]
+    d2 := g.v_def[c2]
+    if g.i_op[d1] != OP_ICMP or g.i_op[d2] != OP_ICMP:
+        ret 0
+    end
+    a1 := g.i_a[d1]
+    b1 := g.i_b[d1]
+    a2 := g.i_a[d2]
+    b2 := g.i_b[d2]
+    mut p2 := g.i_x[d2]
+    if not (veq(g, a1, a2) and veq(g, b1, b2)):
+        if veq(g, a1, b2) and veq(g, b1, a2):
+            p2 = swap_pred(p2)
+        else:
+            ret 0
+        end
+    end
+    if g.i_x[d1] == p2:
+        ret 1
+    end
+    if g.i_x[d1] == neg_cc(p2):
+        ret 0 - 1
+    end
+    ret 0
+end
+
+func iv_bounds(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    ph := g.v_def[v]
+    if g.i_op[ph] != OP_PHI or g.i_pcount[ph] != 2:
+        ret false
+    end
+    h := g.i_blk[ph]
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret false
+    end
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    cd := g.v_def[c]
+    if g.i_op[cd] != OP_ICMP or g.i_a[cd] != v:
+        ret false
+    end
+    bv := g.i_b[cd]
+    mut blo := 0 as i64
+    mut bhi := 0 as i64
+    if is_cint(g, bv):
+        bhi = norm_int(g, g.v_ty[v], g.v_i[bv])
+    else not val_range(g, bv, blk, depth + 1 > 4 ? depth + 1 : 4, blo, bhi):
+        ret false
+    end
+    p := g.i_x[cd]
+    if p != CC_SLT and p != CC_SLE:
+        ret false
+    end
+    body := g.i_b[t]
+    if body == h or g.b_npred[body] != 1 or not dominates(g, body, blk):
+        ret false
+    end
+    mut init := 0 - 1
+    mut step_ok := false
+    repeat 2 in k:
+        iv := g.pool[g.i_ps[ph] + 2 * k]
+        pb := g.pool[g.i_ps[ph] + 2 * k + 1]
+        if is_cint(g, iv) and not dominates(g, h, pb):
+            init = iv
+        else iv >= 0 and g.v_kind[iv] == VK_INS:
+            d := g.v_def[iv]
+            if g.i_op[d] == OP_ADD and g.i_a[d] == v and is_cint(g, g.i_b[d]) and
+                g.v_i[g.i_b[d]] > (0 as i64) and g.v_i[g.i_b[d]] < (1048576 as i64) and
+                dominates(g, h, pb) and ((g.i_f[d] & IF_NSW) != 0 or dominates(
+                    g, body, g.i_blk[d]
+                )):
+                step_ok = true
+            end
+        end
+    end
+    if init < 0 or not step_ok:
+        ret false
+    end
+    lo = norm_int(g, g.v_ty[v], g.v_i[init])
+    hi = p == CC_SLT ? bhi - (1 as i64) : bhi
+    ret lo <= hi
+end
+
+func phi_range(g &: Ng, v: int, depth: int, lo &: i64, hi &: i64): bool:
+    if g.vr_phi >= 0 or depth > 3:
+        ret false
+    end
+    ph := g.v_def[v]
+    n := g.i_pcount[ph]
+    if n < 2 or n > 4:
+        ret false
+    end
+    ps := g.i_ps[ph]
+    mut have := false
+    mut rlo := 0 as i64
+    mut rhi := 0 as i64
+    repeat n in q:
+        x := g.pool[ps + 2 * q]
+        if x == v:
+            continue
+        end
+        mut a := 0 as i64
+        mut b := 0 as i64
+        if val_range(g, x, g.pool[ps + 2 * q + 1], depth + 1, a, b):
+            if not have or a < rlo: rlo = a end
+            if not have or b > rhi: rhi = b end
+            have = true
+        end
+    end
+    if not have:
+        ret false
+    end
+    mut ok := false
+    repeat 3:
+        if ok:
+            break
+        end
+        g.vr_phi = v
+        g.vr_lo = rlo
+        g.vr_hi = rhi
+        ok = true
+        repeat n in q2:
+            x2 := g.pool[ps + 2 * q2]
+            pb := g.pool[ps + 2 * q2 + 1]
+            mut a2 := 0 as i64
+            mut b2 := 0 as i64
+            if x2 == v:
+                continue
+            end
+            if not val_range(g, x2, pb, depth + 1, a2, b2):
+                ok = false
+                rlo = 0 as i64
+                rhi = 0 - 1 as i64
+                break
+            end
+            if a2 < rlo:
+                rlo = a2
+                ok = false
+            end
+            if b2 > rhi:
+                rhi = b2
+                ok = false
+            end
+        end
+        g.vr_phi = 0 - 1
+        if rhi < rlo:
+            ret false
+        end
+    end
+    if not ok:
+        ret false
+    end
+    lo = rlo
+    hi = rhi
+    ret true
+end
+
+func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): bool:
+    if v >= 0 and v == g.vr_phi:
+        lo = g.vr_lo
+        hi = g.vr_hi
+        ret true
+    end
+    big := (1 as i64) << (40 as i64)
+    if v < 0:
+        ret false
+    end
+    if is_cint(g, v):
+        lo = norm_int(g, g.v_ty[v], g.v_i[v])
+        hi = lo
+        ret lo > (0 as i64) - big and lo < big
+    end
+    if g.v_kind[v] != VK_INS or depth > 6:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if op == OP_PHI:
+        if iv_bounds(g, v, blk, depth, lo, hi):
+            ret true
+        end
+        ret phi_range(g, v, depth, lo, hi)
+    end
+    if op == OP_SEXT:
+        if val_range(g, g.i_a[d], blk, depth + 1, lo, hi):
+            ret true
+        end
+        sb := int_bits(g, g.i_x[d])
+        if sb < 8 or sb > 32:
+            ret false
+        end
+        lo = (0 as i64) - ((1 as i64) << ((sb - 1) as i64))
+        hi = ((1 as i64) << ((sb - 1) as i64)) - (1 as i64)
+        ret true
+    end
+    if op == OP_ZEXT:
+        ret val_range(g, g.i_a[d], blk, depth + 1, lo, hi) and lo >= (0 as i64)
+    end
+    if op == OP_TRUNC:
+        tb := int_bits(g, g.i_ty[d])
+        if tb < 8 or tb > 32 or not val_range(g, g.i_a[d], blk, depth + 1, lo, hi):
+            ret false
+        end
+        lim := (1 as i64) << ((tb - 1) as i64)
+        ret lo >= (0 as i64) - lim and hi < lim
+    end
+    mut lo_a := 0 as i64
+    mut hi_a := 0 as i64
+    mut lo_b := 0 as i64
+    mut hi_b := 0 as i64
+    if (op == OP_ADD or op == OP_SUB or op == OP_MUL) and (g.i_f[d] & IF_NSW) != 0:
+        if not val_range(
+            g, g.i_a[d], blk, depth + 1, lo_a, hi_a
+        ) or not val_range(g, g.i_b[d], blk, depth + 1, lo_b, hi_b):
+            ret false
+        end
+        if op == OP_ADD:
+            lo = lo_a + lo_b
+            hi = hi_a + hi_b
+        else op == OP_SUB:
+            lo = lo_a - hi_b
+            hi = hi_a - lo_b
+        else:
+            if lo_a < (0 as i64) or lo_b < (0 as i64) or hi_a >= (1 as i64) << (31 as i64) or
+                hi_b >= (1 as i64) << (31 as i64):
+                ret false
+            end
+            lo = lo_a * lo_b
+            hi = hi_a * hi_b
+        end
+        ret lo > (0 as i64) - big and hi < big
+    end
+    if (op == OP_SDIV or op == OP_UDIV or op == OP_LSHR or op == OP_ASHR) and is_cint(g, g.i_b[d]):
+        k2 := norm_int(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])
+        if k2 <= (0 as i64) or not val_range(
+            g, g.i_a[d], blk, depth + 1, lo_a, hi_a
+        ) or lo_a < (0 as i64):
+            ret false
+        end
+        if op == OP_SDIV or op == OP_UDIV:
+            lo = lo_a / k2
+            hi = hi_a / k2
+        else:
+            if k2 > (62 as i64):
+                ret false
+            end
+            lo = lo_a >> k2
+            hi = hi_a >> k2
+        end
+        ret true
+    end
+    if (op == OP_UREM or op == OP_SREM or op == OP_AND) and is_cint(g, g.i_b[d]):
+        k := norm_int(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])
+        if k <= (0 as i64) or k >= big:
+            ret false
+        end
+        if op == OP_SREM:
+            if not val_range(g, g.i_a[d], blk, depth + 1, lo_a, hi_a) or lo_a < (0 as i64):
+                ret false
+            end
+        end
+        lo = 0 as i64
+        hi = op == OP_AND ? k : k - (1 as i64)
+        ret true
+    end
+    ret false
+end
+
+func ext_trunc_range(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    t := g.v_def[a]
+    if g.i_op[t] != OP_TRUNC:
+        ret false
+    end
+    x := g.i_a[t]
+    sb := int_bits(g, g.i_x[i])
+    if x < 0 or g.v_ty[x] != g.i_ty[i] or sb < 8 or sb > 32:
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not val_range(g, x, g.i_blk[i], 0, lo, hi):
+        ret false
+    end
+    top := (1 as i64) << ((sb - 1) as i64)
+    if g.i_op[i] == OP_SEXT:
+        if lo < (0 as i64) - top or hi >= top:
+            ret false
+        end
+    else lo < (0 as i64) or hi >= top:
+        ret false
+    end
+    replace_res(g, i, x)
+    ret true
+end
+
+func sext_add(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    if g.i_op[d] != OP_ADD or (g.i_f[d] & IF_NSW) == 0 or not is_cint(g, g.i_b[d]) or g.i_a[d] < 0:
+        ret false
+    end
+    x := g.i_a[d]
+    if g.v_kind[x] != VK_INS:
+        ret false
+    end
+    k := norm_int(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])
+    s := ins_new(g, OP_SEXT, g.i_ty[i])
+    g.i_a[s] = x
+    g.i_x[s] = g.v_ty[x]
+    sv := new_res(g, s)
+    ins_before(g, i, s)
+    n := ins_new(g, OP_ADD, g.i_ty[i])
+    g.i_a[n] = sv
+    g.i_b[n] = const_int(g, g.i_ty[i], k)
+    g.i_f[n] = IF_NSW
+    nv := new_res(g, n)
+    ins_before(g, i, n)
+    replace_res(g, i, nv)
+    ret true
+end
+
+func fold_rem_range(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    b := g.i_b[i]
+    if not is_cint(g, b) or g.i_ty[i] != g.v_ty[g.i_a[i]]:
+        ret false
+    end
+    k := norm_int(g, g.v_ty[b], g.v_i[b])
+    if k <= (0 as i64):
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not val_range(g, g.i_a[i], g.i_blk[i], 0, lo, hi) or lo < (0 as i64) or hi >= k:
+        ret false
+    end
+    if op == OP_SREM or op == OP_UREM:
+        replace_res(g, i, g.i_a[i])
+    else:
+        replace_res(g, i, const_int(g, g.i_ty[i], 0 as i64))
+    end
+    ret true
+end
+
+func icmp_add_one(g &: Ng, i: int): bool:
+    p := g.i_x[i]
+    if p != CC_SLT and p != CC_SLE and p != CC_SGT and p != CC_SGE:
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS or is_cint(g, g.i_b[i]):
+        ret false
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    if (op != OP_ADD and op != OP_SUB) or (g.i_f[d] & IF_NSW) == 0 or not is_cint(g, g.i_b[d]):
+        ret false
+    end
+    mut k := g.v_i[g.i_b[d]]
+    if op == OP_SUB:
+        k = 0 - k
+    end
+    mut np := 0 - 1
+    if k == (1 as i64):
+        if p == CC_SGT: np = CC_SGE end
+        if p == CC_SLE: np = CC_SLT end
+    else k == (0 - 1 as i64):
+        if p == CC_SLT: np = CC_SLE end
+        if p == CC_SGE: np = CC_SGT end
+    end
+    if np < 0:
+        ret false
+    end
+    g.i_a[i] = g.i_a[d]
+    g.i_x[i] = np
+    ret true
+end
+
+func fold_icmp_range(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    b := g.i_b[i]
+    if not is_cint(g, b):
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not val_range(g, a, g.i_blk[i], 0, lo, hi):
+        ret false
+    end
+    k := norm_int(g, g.v_ty[b], g.v_i[b])
+    p := g.i_x[i]
+    mut res := 0 - 1
+    if p == CC_SLT:
+        if hi < k: res = 1 end
+        if lo >= k: res = 0 end
+    else p == CC_SLE:
+        if hi <= k: res = 1 end
+        if lo > k: res = 0 end
+    else p == CC_SGT:
+        if lo > k: res = 1 end
+        if hi <= k: res = 0 end
+    else p == CC_SGE:
+        if lo >= k: res = 1 end
+        if hi < k: res = 0 end
+    else p == CC_ULT and lo >= (0 as i64) and k >= (0 as i64):
+        if hi < k: res = 1 end
+        if lo >= k: res = 0 end
+    else p == CC_UGE and lo >= (0 as i64) and k >= (0 as i64):
+        if lo >= k: res = 1 end
+        if hi < k: res = 0 end
+    else p == CC_EQ and not g.off_eqrng and (k < lo or k > hi):
+        res = 0
+    else p == CC_NE and not g.off_eqrng and (k < lo or k > hi):
+        res = 1
+    end
+    if res < 0:
+        ret false
+    end
+    replace_res(g, i, const_int(g, T_I1, res as i64))
+    ret true
+end
+
+func dom_cond_known(g &: Ng, c: int, blk: int, val &: bool): bool:
+    mut x := blk
+    repeat 32:
+        if x <= 0:
+            ret false
+        end
+        pr := g.b_idom[x]
+        if pr < 0:
+            ret false
+        end
+        t := g.b_last[pr]
+        if t >= 0 and g.i_op[t] == OP_CBR and g.i_b[t] != g.i_c[t] and g.b_npred[x] == 1 and
+            g.b_pred[g.b_ps[x]] == pr:
+            rel := cond_rel(g, c, g.i_a[t])
+            if rel != 0:
+                if g.i_b[t] == x:
+                    val = rel == 1
+                    ret true
+                end
+                if g.i_c[t] == x:
+                    val = rel != 1
+                    ret true
+                end
+            end
+        end
+        x = pr
+    end
+    ret false
+end
+
+func fold_cbr(g &: Ng, i: int): bool:
+    c := g.i_a[i]
+    if g.i_b[i] == g.i_c[i]:
+        g.i_op[i] = OP_BR
+        g.i_a[i] = 0 - 1
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    if c >= 0 and g.v_kind[c] == VK_INS and g.v_ty[c] == T_I1:
+        d := g.v_def[c]
+        if d >= 0 and g.i_op[d] == OP_XOR and is_cint(g, g.i_b[d]) and
+            (g.v_i[g.i_b[d]] & (1 as i64)) != (0 as i64):
+            tb := g.i_b[i]
+            g.i_b[i] = g.i_c[i]
+            g.i_c[i] = tb
+            g.i_a[i] = g.i_a[d]
+            ret true
+        end
+    end
+    if is_cint(g, c):
+        mut tgt := g.i_c[i]
+        if (g.v_i[c] & (1 as i64)) != (0 as i64):
+            tgt = g.i_b[i]
+        end
+        g.i_op[i] = OP_BR
+        g.i_a[i] = 0 - 1
+        g.i_b[i] = tgt
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    ret false
+end

@@ -1,0 +1,215 @@
+package nativelink
+
+func mo_stub_size(l &: Nl): i64:
+    ret l.mach == EM_X86_64 ? (6 as i64) : (12 as i64)
+end
+
+func mo_place_class(l &: Nl, t &: Mo, k: int, pos &: i64):
+    mut start := 0 - 1 as i64
+    each s in t.ord:
+        if t.out_k[s] != k:
+            continue
+        end
+        pos = align_to(pos, l.s_align[s])
+        if start < (0 as i64):
+            start = pos
+            t.align[k] = l.s_align[s]
+        end
+        l.s_addr[s] = t.base + pos
+        l.s_live[s] = true
+        pos = pos + l.s_size[s] + th_pad(l, s)
+    end
+    if start < (0 as i64):
+        start = pos
+    end
+    t.addr[k] = t.base + start
+    t.fpos[k] = start
+    t.size[k] = pos - start
+end
+
+func mo_ncmds_size(l &: Nl, t &: Mo, nsect: int): i64:
+    _t := t.base
+    mut dl := 0
+    each dn in l.dy_name:
+        dl += 24 + ((str.Len(dn) + 8) / 8) * 8
+    end
+    dw := l.dg_name.Len() > 0 ? 72 + 80 * l.dg_name.Len() : 0
+    if l.shared:
+        ret 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 24 + 32 + 24 +
+            ((str.Len(l.soname) + 8) / 8) * 8 + 56 + 16 + 16 + dl + dw
+    end
+    ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16 + dl +
+        dw
+end
+
+func mo_dylib_list(l &: Nl): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.Push("/usr/lib/libSystem.B.dylib")
+    each dn in l.dy_name:
+        mut seen := false
+        each e in v:
+            if str.Equals(e, dn):
+                seen = true
+            end
+        end
+        if not seen:
+            v.Push(dn)
+        end
+    end
+    ret v
+end
+
+func mo_ordinal(l &: Nl, g: int, dl: Vector<str>): int:
+    if not l.dy_sym.Has(l.g_name[g]):
+        ret l.dy_flat ? 0 - 2 : 1
+    end
+    nm := l.dy_name.Get(l.dy_sym.Get(l.g_name[g]))
+    repeat dl.Len() in i:
+        if str.Equals(dl.Get(i), nm):
+            ret i + 1
+        end
+    end
+    ret 1
+end
+
+func is_tbd(p: u8*, n: i64): bool:
+    ret n >= (12 as i64) and p[0] == (45 as u8) and p[1] == (45 as u8) and p[2] == (45 as u8) and
+        p[4] == (33 as u8) and p[5] == (116 as u8)
+end
+
+func tbd_word(p: u8*, at &: i64, n: i64): str:
+    until at < n and
+        (p[at] == (32 as u8) or p[at] == (39 as u8) or p[at] == (34 as u8) or p[at] == (44 as u8) or
+            p[at] == (10 as u8) or p[at] == (13 as u8)):
+        at++
+    end
+    mut b := str.NewBuilder()
+    until at < n and p[at] != (39 as u8) and p[at] != (34 as u8) and p[at] != (44 as u8) and
+        p[at] != (93 as u8) and p[at] != (10 as u8) and p[at] != (32 as u8):
+        str.BufAppendChar(b, p[at] as int)
+        at++
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func tbd_starts(p: u8*, at: i64, n: i64, w: str): bool:
+    wp := (w as void*) as u8*
+    k := str.Len(w)
+    if at + (k as i64) > n:
+        ret false
+    end
+    repeat k in i:
+        if p[at + (i as i64)] != wp[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func add_tbd(l &: Nl, f: int):
+    p := fptr(l, f)
+    n := l.f_size[f]
+    l.macho = true
+    mut idx := 0 - 1
+    mut in_exp := false
+    mut at := 0 as i64
+    until at < n:
+        mut ls := at
+        until ls < n and (p[ls] == (32 as u8)):
+            ls++
+        end
+        if tbd_starts(p, ls, n, "install-name:") and idx < 0:
+            mut q := ls + (13 as i64)
+            nm := tbd_word(p, q, n)
+            idx = l.dy_name.Len()
+            l.dy_name.Push(nm)
+        else tbd_starts(p, ls, n, "exports:") or tbd_starts(p, ls, n, "reexports:"):
+            in_exp = true
+        else tbd_starts(p, ls, n, "undefineds:"):
+            in_exp = false
+        else in_exp and idx >= 0 and (tbd_starts(p, ls, n, "symbols:") or tbd_starts(
+            p, ls, n, "weak-symbols:"
+        ) or tbd_starts(p, ls, n, "- symbols:")):
+            mut q2 := ls
+            until q2 < n and p[q2] != (91 as u8):
+                q2++
+            end
+            q2++
+            until q2 < n and p[q2] != (93 as u8):
+                w := tbd_word(p, q2, n)
+                if str.Len(w) > 0:
+                    l.dy_sym.Put(name_id(l, w), idx)
+                end
+                until q2 < n and
+                    (p[q2] == (44 as u8) or p[q2] == (32 as u8) or p[q2] == (10 as u8) or
+                        p[q2] == (13 as u8) or p[q2] == (39 as u8)):
+                    q2++
+                end
+            end
+            at = q2
+        end
+        until at < n and p[at] != (10 as u8):
+            at++
+        end
+        at++
+    end
+end
+
+func trie_walk(l &: Nl, p: u8*, start: i64, node: i64, prefix: str, idx: int, depth: int):
+    if depth > 128:
+        ret
+    end
+    mut at := start + node
+    tsz := ehh_uleb(p, at)
+    if tsz > (0 as i64):
+        l.dy_sym.Put(name_id(l, prefix), idx)
+    end
+    at += tsz
+    nkids := p[at] as int
+    at++
+    repeat nkids:
+        mut b := str.NewBuilder()
+        str.BufAppend(b, prefix)
+        until p[at] != (0 as u8):
+            str.BufAppendChar(b, p[at] as int)
+            at++
+        end
+        at++
+        child := ehh_uleb(p, at)
+        edge := str.BufStr(b)
+        str.BufFree(b)
+        trie_walk(l, p, start, child, edge, idx, depth + 1)
+    end
+end
+
+func add_dylib(l &: Nl, f: int, base: i64):
+    p := fptr(l, f)
+    l.macho = true
+    ncmds := rd32(p, base + (16 as i64)) as int
+    mut lc := base + (32 as i64)
+    mut idx := 0 - 1
+    mut eoff := 0 as i64
+    mut esz := 0 as i64
+    repeat ncmds:
+        cmd := rd32(p, lc)
+        csz := rd32(p, lc + (4 as i64))
+        if cmd == (0xD as i64):
+            idx = l.dy_name.Len()
+            l.dy_name.Push(
+                mstr(p, lc + rd32(p, lc + (8 as i64)), (csz - rd32(p, lc + (8 as i64))) as int)
+            )
+        else cmd == (0x80000022 as i64) or cmd == (0x22 as i64):
+            eoff = rd32(p, lc + (40 as i64))
+            esz = rd32(p, lc + (44 as i64))
+        else cmd == (0x80000033 as i64):
+            eoff = rd32(p, lc + (8 as i64))
+            esz = rd32(p, lc + (12 as i64))
+        end
+        lc += csz
+    end
+    if idx >= 0 and esz > (0 as i64):
+        trie_walk(l, p, base + eoff, 0 as i64, "", idx, 0)
+    end
+end

@@ -1,0 +1,240 @@
+package nativelink
+
+func pe_sym(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0:
+        st := l.g_state[g]
+        if st == SY_ABS and l.g_sec[g] == SYN_ALIAS:
+            ret pe_sym(l, l.g_val[g] as int)
+        end
+        if st == SY_ABS and l.g_sec[g] == SYN_PEMARK:
+            ret l.g_val[g]
+        end
+        if st == SY_ABS and l.g_sec[g] == SYN_EHDR:
+            ret l.pe_base
+        end
+        if st == SY_ABS and l.g_sec[g] == SYN_ZERO:
+            ret 0
+        end
+        if st == SY_DEF:
+            ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+        end
+        ret l.g_val[g]
+    end
+    s := l.os_sec[os]
+    if s >= 0:
+        ret l.s_addr[s] + l.os_val[os]
+    end
+    ret l.os_val[os]
+end
+
+func rd32s(p: u8*, o: i64): i64:
+    v := rd32(p, o)
+    if v >= (0x80000000 as i64):
+        ret v - (0x100000000 as i64)
+    end
+    ret v
+end
+
+func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
+    repeat t.it_ps.Len() in i:
+        if t.it_kind[i] != IT_SEC:
+            continue
+        end
+        s := t.it_ord[i]
+        if l.s_type[s] == 8:
+            continue
+        end
+        k := t.it_ps[i]
+        place0 := fpos_of[k] + (t.it_addr[i] - t.ps_va[k])
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in q:
+            r := r0 + q
+            ty := pe_rtype(l, l.r_type[r] - CR_BASE)
+            os := l.r_sym[r]
+            place := place0 + l.r_off[r]
+            pva := l.pe_base + t.it_addr[i] + l.r_off[r]
+            mut sv := pe_sym(l, os)
+            if l.th_sec.Len() > 0 and l.th_of_rel.Has(r):
+                sv = th_addr(l, l.th_of_rel.Get(r))
+                wr32(buf, place, rd32(buf, place) & (0xFC000000 as i64))
+            end
+            if ty == 1:
+                wr64(buf, place, sv + rd64(buf, place))
+                t.breloc.Push(pva - l.pe_base)
+            else ty == 3:
+                wr32(buf, place, sv + rd32s(buf, place) - l.pe_base)
+            else ty >= 4 and ty <= 9:
+                v := sv + rd32s(buf, place) - (pva + ((4 + ty - 4) as i64))
+                if not fits32s(v):
+                    nl_fail(l, "relocation out of range at " + reloc_where(l, s, r))
+                    ret
+                end
+                wr32(buf, place, v)
+            else ty == 102:
+                wr32(buf, place, sv + rd32s(buf, place))
+                t.breloc.Push(pva - l.pe_base)
+            else ty == 2:
+                v2 := sv + rd32s(buf, place)
+                if not fits32u(v2):
+                    nl_fail(l, "32-bit absolute address does not fit at " + reloc_where(l, s, r))
+                    ret
+                end
+                wr32(buf, place, v2)
+            else ty == 11:
+                ts := sym_sec_of(l, os)
+                mut base := 0 as i64
+                if ts >= 0:
+                    base = l.pe_base + t.ps_va[l.s_oc[ts]]
+                end
+                wr32(buf, place, sv + rd32s(buf, place) - base)
+            else ty == 10:
+                ts2 := sym_sec_of(l, os)
+                ix := ts2 >= 0 ? pe_secidx(t, l.s_oc[ts2]) : 0
+                buf[place] = (ix & 255) as u8
+                buf[place + (1 as i64)] = ((ix >> 8) & 255) as u8
+            else ty == 0:
+                _z := 0
+            else ty >= 203 and ty <= 216:
+                mut sva := sv
+                if ty == 209 or ty == 210 or ty == 211:
+                    ts3 := sym_sec_of(l, os)
+                    if ts3 >= 0:
+                        sva = sv - (l.pe_base + t.ps_va[l.s_oc[ts3]])
+                    end
+                end
+                if not pe_a64_reloc(buf, place, ty == 211 ? 207 : ty, sva, pva):
+                    nl_fail(l, "ARM64 relocation out of range at " + reloc_where(l, s, r))
+                    ret
+                end
+            else:
+                nl_fail(
+                    l,
+                    "unsupported COFF relocation type " + str.FromInt(ty as i64) + " at " +
+                        reloc_where(l, s, r)
+                )
+                ret
+            end
+        end
+    end
+end
+
+func a64_adr_imm(w: i64): i64:
+    ret sext(
+        ((w >> (29 as i64)) & (3 as i64)) | (((w >> (5 as i64)) & (0x7FFFF as i64)) << (2 as i64)),
+        21
+    )
+end
+
+func a64_put_adr(w: i64, imm: i64): i64:
+    ret (w & (0x9F00001F as i64)) | ((imm & (3 as i64)) << (29 as i64)) | (((imm >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+end
+
+func pe_a64_reloc(buf: u8*, place: i64, ty: int, sv: i64, pva: i64): bool:
+    w := rd32(buf, place)
+    mut nw := w
+    if ty == 203:
+        v := sv + (sext(w & (0x3FFFFFF as i64), 26) << (2 as i64)) - pva
+        if v < (0 - 0x8000000 as i64) or v >= (0x8000000 as i64):
+            ret false
+        end
+        nw = (w & (0xFC000000 as i64)) | ((v >> (2 as i64)) & (0x3FFFFFF as i64))
+    else ty == 204:
+        tgt := sv + a64_adr_imm(w)
+        d := (tgt >> (12 as i64)) - (pva >> (12 as i64))
+        if d < (0 - 0x100000 as i64) or d >= (0x100000 as i64):
+            ret false
+        end
+        nw = a64_put_adr(w, d)
+    else ty == 205:
+        d2 := sv + a64_adr_imm(w) - pva
+        if d2 < (0 - 0x100000 as i64) or d2 >= (0x100000 as i64):
+            ret false
+        end
+        nw = a64_put_adr(w, d2)
+    else ty == 206:
+        v6 := (sv + ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)
+        nw = (w & (0xFFC003FF as i64)) | (v6 << (10 as i64))
+    else ty == 207:
+        mut size := (w >> (30 as i64)) & (3 as i64)
+        if (w & (0x04800000 as i64)) == (0x04800000 as i64):
+            size += (4 as i64)
+        end
+        v7 := (sv + (((w >> (10 as i64)) & (0xFFF as i64)) << size)) & (0xFFF as i64)
+        if (v7 & (((1 as i64) << size) - (1 as i64))) != (0 as i64):
+            ret false
+        end
+        nw = (w & (0xFFC003FF as i64)) | ((v7 >> size) << (10 as i64))
+    else ty == 209:
+        nw = (w & (0xFFC003FF as i64)) | (((sv +
+            ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)) << (10 as i64))
+    else ty == 210:
+        nw = (w & (0xFFC003FF as i64)) | ((((sv >> (12 as i64)) +
+            ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)) << (10 as i64))
+    else ty == 215:
+        v9 := sv + (sext((w >> (5 as i64)) & (0x7FFFF as i64), 19) << (2 as i64)) - pva
+        if v9 < (0 - 0x100000 as i64) or v9 >= (0x100000 as i64):
+            ret false
+        end
+        nw = (w & (0xFF00001F as i64)) | (((v9 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+    else ty == 216:
+        v4 := sv + (sext((w >> (5 as i64)) & (0x3FFF as i64), 14) << (2 as i64)) - pva
+        if v4 < (0 - 0x8000 as i64) or v4 >= (0x8000 as i64):
+            ret false
+        end
+        nw = (w & (0xFFF8001F as i64)) | (((v4 >> (2 as i64)) & (0x3FFF as i64)) << (5 as i64))
+    end
+    wr32(buf, place, nw)
+    ret true
+end
+
+func sym_sec_of(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_state[g] == SY_DEF:
+            ret l.g_sec[g]
+        end
+        if l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_ALIAS:
+            ret sym_sec_of(l, l.g_val[g] as int)
+        end
+        ret 0 - 1
+    end
+    ret l.os_sec[os]
+end
+
+func pe_breloc_build(t &: Pe, out &: Vector<u8>):
+    n := t.breloc.Len()
+    mut i := 1
+    until i < n:
+        mut j := i
+        until j > 0 and t.breloc[j] < t.breloc[j - 1]:
+            tmp := t.breloc[j]
+            t.breloc[j] = t.breloc[j - 1]
+            t.breloc[j - 1] = tmp
+            j--
+        end
+        i++
+    end
+    mut k := 0
+    until k < n:
+        page := t.breloc[k] & (0 - 4096 as i64)
+        mut e := k
+        until e < n and (t.breloc[e] & (0 - 4096 as i64)) == page:
+            e++
+        end
+        cnt := e - k
+        mut bsz := 8 + 2 * cnt
+        if (bsz % 4) != 0:
+            bsz += 2
+        end
+        tb_le(out, page, 4)
+        tb_le(out, bsz as i64, 4)
+        repeat cnt in q:
+            tb_le(out, ((t.btype << 12) as i64) | (t.breloc[k + q] & (4095 as i64)), 2)
+        end
+        if (cnt % 2) == 1:
+            tb_le(out, 0 as i64, 2)
+        end
+        k = e
+    end
+end

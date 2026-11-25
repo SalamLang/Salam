@@ -1,0 +1,340 @@
+package nativegen
+
+func lg_soft_ret(g &: Ng, l &: Lg, at: int, ty: int, lo: int, hi: int): int:
+    if ty == T_F32:
+        ret lg_cast(g, at, OP_BITCAST, T_F32, lo, T_I32)
+    end
+    sl := lg_entry_slot(g, l)
+    lg_store(g, at, lo, sl, at)
+    lg_store(g, at, hi, lg_addr4(g, at, sl), at)
+    ret lg_load(g, at, sl, T_F64, at)
+end
+
+func lg_soft_arg(g &: Ng, l &: Lg, at: int, v: int, args &: Vector<int>):
+    if g.v_ty[v] == T_F32:
+        args.Push(lg_cast(g, at, OP_BITCAST, T_I32, v, T_F32))
+        ret
+    end
+    sl := lg_entry_slot(g, l)
+    st := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[st] = v
+    g.i_b[st] = sl
+    g.i_x[st] = T_F64
+    g.i_dbg[st] = g.i_dbg[at]
+    ins_before(g, at, st)
+    args.Push(lg_load(g, at, sl, T_I32, at))
+    args.Push(lg_load(g, at, lg_addr4(g, at, sl), T_I32, at))
+end
+
+func lg_zero(g &: Ng, v: int): bool:
+    ret v >= 0 and ((g.v_kind[v] == VK_INT and g.v_i[v] == (0 as i64)) or g.v_kind[v] == VK_ZERO)
+end
+
+func lg_sext_pair(g &: Ng, lo: int, hi: int): bool:
+    if lo < 0 or hi < 0:
+        ret false
+    end
+    if is_cint(g, lo) and is_cint(g, hi):
+        lv := norm_int(g, T_I32, g.v_i[lo])
+        hv := norm_int(g, T_I32, g.v_i[hi])
+        ret hv == (lv < (0 as i64) ? (0 - 1 as i64) : (0 as i64))
+    end
+    if g.v_kind[hi] != VK_INS:
+        ret false
+    end
+    d := g.v_def[hi]
+    ret g.i_op[d] == OP_ASHR and g.i_a[d] == lo and is_cint(g, g.i_b[d]) and
+        g.v_i[g.i_b[d]] == (31 as i64)
+end
+
+func lg_add64(
+    g &: Ng, at: int, al: int, ah: int, bl: int, bh: int, sub: bool, lo &: int, hi &: int
+):
+    op := sub ? OP_SUB : OP_ADD
+    lo = lg_ins(g, at, op, T_I32, al, bl)
+    mut cy := 0
+    if sub:
+        cy = lg_icmp(g, at, CC_ULT, al, bl)
+    else:
+        cy = lg_icmp(g, at, CC_ULT, lo, al)
+    end
+    cz := lg_cast(g, at, OP_ZEXT, T_I32, cy, T_I1)
+    h0 := lg_ins(g, at, op, T_I32, ah, bh)
+    hi = lg_ins(g, at, op, T_I32, h0, cz)
+end
+
+func lg_mul64(g &: Ng, at: int, al: int, ah: int, bl: int, bh: int, lo &: int, hi &: int):
+    lo = lg_ins(g, at, OP_MUL, T_I32, al, bl)
+    mut h := lg_ins(g, at, OP_MULHU, T_I32, al, bl)
+    if not lg_zero(g, bh) and not lg_zero(g, al):
+        h = lg_ins(g, at, OP_ADD, T_I32, h, lg_ins(g, at, OP_MUL, T_I32, al, bh))
+    end
+    if not lg_zero(g, ah) and not lg_zero(g, bl):
+        h = lg_ins(g, at, OP_ADD, T_I32, h, lg_ins(g, at, OP_MUL, T_I32, ah, bl))
+    end
+    hi = h
+end
+
+func lg_mulhu64(g &: Ng, at: int, xl: int, xh: int, ml: int, mh: int, lo &: int, hi &: int):
+    z := lg_c32(g, 0 as i64)
+    p0h := lg_ins(g, at, OP_MULHU, T_I32, xl, ml)
+    p1l := lg_ins(g, at, OP_MUL, T_I32, xl, mh)
+    p1h := lg_ins(g, at, OP_MULHU, T_I32, xl, mh)
+    p2l := lg_ins(g, at, OP_MUL, T_I32, xh, ml)
+    p2h := lg_ins(g, at, OP_MULHU, T_I32, xh, ml)
+    p3l := lg_ins(g, at, OP_MUL, T_I32, xh, mh)
+    p3h := lg_ins(g, at, OP_MULHU, T_I32, xh, mh)
+    mut s1 := 0
+    mut c1 := 0
+    lg_add64(g, at, p0h, z, p1l, z, false, s1, c1)
+    mut s2 := 0
+    mut c2 := 0
+    lg_add64(g, at, s1, c1, p2l, z, false, s2, c2)
+    mut rl := 0
+    mut rh := 0
+    lg_add64(g, at, p3l, p3h, p1h, z, false, rl, rh)
+    mut ql := 0
+    mut qh := 0
+    lg_add64(g, at, rl, rh, p2h, z, false, ql, qh)
+    lg_add64(g, at, ql, qh, c2, z, false, lo, hi)
+end
+
+func lg_k64(g &: Ng, v: i64, lo &: int, hi &: int):
+    lo = lg_c32(g, v)
+    hi = lg_c32(g, v >> (32 as i64))
+end
+
+func lg_d6432(g &: Ng, at: int, xl: int, xh: int, k: int, part: int): int:
+    r := lg_ins(g, at, OP_DIV6432, T_I32, xl, xh)
+    g.i_c[g.v_def[r]] = k
+    g.i_x[g.v_def[r]] = part
+    ret r
+end
+
+func lg_udiv32k(g &: Ng, at: int, xl: int, xh: int, d: i64, rem: bool, lo &: int, hi &: int):
+    k := lg_c32(g, d)
+    if rem:
+        lo = lg_d6432(g, at, xl, xh, k, 1)
+        hi = lg_c32(g, 0 as i64)
+        ret
+    end
+    lo = lg_d6432(g, at, xl, xh, k, 0)
+    hi = lg_d6432(g, at, xl, xh, k, 2)
+end
+
+func lg_divconst(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int): bool:
+    if b < 0 or g.v_kind[b] != VK_INT:
+        ret false
+    end
+    d := g.v_i[b]
+    signed := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    if d == (0 as i64) or d == (1 as i64) or d == (0 - 1 as i64):
+        ret false
+    end
+    mut xl := 0
+    mut xh := 0
+    lg_pair(g, l, a, xl, xh)
+    mut ql := 0
+    mut qh := 0
+    if not signed:
+        du := d as u64
+        k := log2_exact(du)
+        if k >= 0:
+            if rem:
+                mut ml := 0
+                mut mh := 0
+                lg_k64(g, d - (1 as i64), ml, mh)
+                lo = lg_ins(g, at, OP_AND, T_I32, xl, ml)
+                hi = lg_ins(g, at, OP_AND, T_I32, xh, mh)
+                ret true
+            end
+            lg_shift_const(g, at, OP_LSHR, xl, xh, k, lo, hi)
+            ret true
+        end
+        if g.arch == NG_ARCH_X86 and du < (1 as u64) << (32 as u64):
+            lg_udiv32k(g, at, xl, xh, d, rem, lo, hi)
+            ret true
+        end
+        mut pm := 0 as u64
+        mut pp := 0
+        if umagic_find(du, 64, false, pm, pp):
+            mut fml := 0
+            mut fmh := 0
+            lg_k64(g, pm as i64, fml, fmh)
+            mut ftl := 0
+            mut fth := 0
+            lg_mulhu64(g, at, xl, xh, fml, fmh, ftl, fth)
+            lg_shift_const(g, at, OP_LSHR, ftl, fth, pp - 64, ql, qh)
+        else:
+            mut mm := 0 as u64
+            mut ll := 0
+            umagic(du, mm, ll)
+            mut mml := 0
+            mut mmh := 0
+            lg_k64(g, mm as i64, mml, mmh)
+            mut tl := 0
+            mut th := 0
+            lg_mulhu64(g, at, xl, xh, mml, mmh, tl, th)
+            mut dl := 0
+            mut dh := 0
+            lg_add64(g, at, xl, xh, tl, th, true, dl, dh)
+            mut sl := 0
+            mut sh := 0
+            lg_shift_const(g, at, OP_LSHR, dl, dh, 1, sl, sh)
+            mut ul := 0
+            mut uh := 0
+            lg_add64(g, at, sl, sh, tl, th, false, ul, uh)
+            lg_shift_const(g, at, OP_LSHR, ul, uh, ll - 1, ql, qh)
+        end
+    else:
+        mut ad := d
+        if ad < (0 as i64):
+            ad = 0 - ad
+        end
+        k2 := log2_exact(ad as u64)
+        if k2 >= 0:
+            s := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mut bl := 0
+            mut bh := 0
+            lg_shift_const(g, at, OP_LSHR, s, s, 64 - k2, bl, bh)
+            mut nl := 0
+            mut nh := 0
+            lg_add64(g, at, xl, xh, bl, bh, false, nl, nh)
+            lg_shift_const(g, at, OP_ASHR, nl, nh, k2, ql, qh)
+            if d < (0 as i64):
+                z := lg_c32(g, 0 as i64)
+                mut gl := 0
+                mut gh := 0
+                lg_add64(g, at, z, z, ql, qh, true, gl, gh)
+                ql = gl
+                qh = gh
+            end
+        else g.arch == NG_ARCH_X86 and ad < (1 as i64) << (32 as i64):
+            sx0 := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mut ul := 0
+            mut uh := 0
+            lg_add64(
+                g,
+                at,
+                lg_ins(g, at, OP_XOR, T_I32, xl, sx0),
+                lg_ins(g, at, OP_XOR, T_I32, xh, sx0),
+                sx0,
+                sx0,
+                true,
+                ul,
+                uh
+            )
+            mut rl0 := 0
+            mut rh0 := 0
+            lg_udiv32k(g, at, ul, uh, ad, rem, rl0, rh0)
+            mut sq := sx0
+            if not rem and d < (0 as i64):
+                sq = lg_ins(g, at, OP_XOR, T_I32, sx0, lg_c32(g, 0 - 1 as i64))
+            end
+            lg_add64(
+                g,
+                at,
+                lg_ins(g, at, OP_XOR, T_I32, rl0, sq),
+                lg_ins(g, at, OP_XOR, T_I32, rh0, sq),
+                sq,
+                sq,
+                true,
+                lo,
+                hi
+            )
+            ret true
+        else:
+            mut m := 0 as i64
+            mut sh2 := 0
+            smagic(d, m, sh2)
+            mut mml2 := 0
+            mut mmh2 := 0
+            lg_k64(g, m, mml2, mmh2)
+            mut tl2 := 0
+            mut th2 := 0
+            lg_mulhu64(g, at, xl, xh, mml2, mmh2, tl2, th2)
+            if m < (0 as i64):
+                mut al := 0
+                mut ah := 0
+                lg_add64(g, at, tl2, th2, xl, xh, true, al, ah)
+                tl2 = al
+                th2 = ah
+            end
+            sx := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mkl := lg_ins(g, at, OP_AND, T_I32, mml2, sx)
+            mkh := lg_ins(g, at, OP_AND, T_I32, mmh2, sx)
+            mut cl := 0
+            mut ch := 0
+            lg_add64(g, at, tl2, th2, mkl, mkh, true, cl, ch)
+            if d > (0 as i64) and m < (0 as i64):
+                mut el := 0
+                mut eh := 0
+                lg_add64(g, at, cl, ch, xl, xh, false, el, eh)
+                cl = el
+                ch = eh
+            else d < (0 as i64) and m > (0 as i64):
+                mut fl := 0
+                mut fh := 0
+                lg_add64(g, at, cl, ch, xl, xh, true, fl, fh)
+                cl = fl
+                ch = fh
+            end
+            mut vl := 0
+            mut vh := 0
+            lg_shift_const(g, at, OP_ASHR, cl, ch, sh2, vl, vh)
+            sg := lg_ins(g, at, OP_LSHR, T_I32, vh, lg_c32(g, 31 as i64))
+            lg_add64(g, at, vl, vh, sg, lg_c32(g, 0 as i64), false, ql, qh)
+        end
+    end
+    if not rem:
+        lo = ql
+        hi = qh
+        ret true
+    end
+    mut dl2 := 0
+    mut dh2 := 0
+    lg_k64(g, d, dl2, dh2)
+    mut pl := 0
+    mut ph := 0
+    lg_mul64(g, at, ql, qh, dl2, dh2, pl, ph)
+    lg_add64(g, at, xl, xh, pl, ph, true, lo, hi)
+    ret true
+end
+
+func lg_divcall(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    if g.arch != NG_ARCH_ARM or r < 0 or is_w64(ty):
+        ret false
+    end
+    if not (op == OP_SDIV or op == OP_UDIV or op == OP_SREM or op == OP_UREM):
+        ret false
+    end
+    b := g.i_b[i]
+    if b >= 0 and g.v_kind[b] == VK_INT:
+        d := g.v_i[b]
+        if d >= (2 as i64) or d <= (0 - 2 as i64):
+            ret false
+        end
+    end
+    signed := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    mut args := Vector {} as Vector<int>
+    args.Push(lg_ext_to32(g, i, g.i_a[i], signed))
+    args.Push(lg_ext_to32(g, i, b, signed))
+    mut nm := signed ? "__aeabi_idiv" : "__aeabi_uidiv"
+    if rem:
+        nm += "mod"
+    end
+    mut h := 0
+    q := lg_call(g, i, nm, args, rem ? T_I64 : T_I32, h)
+    args.Free()
+    mut v := rem ? h : q
+    if ty != T_I32:
+        v = lg_cast(g, i, OP_TRUNC, ty, v, T_I32)
+    end
+    replace_res(g, i, v)
+    ret true
+end

@@ -1,0 +1,451 @@
+package nativegen
+
+func reg_ok_for(g &: Ng, r: int, cls: int): bool:
+    if r < 0 or r == RSP or r == R10 or r == R11 or (r == XMM14 and not g.ra_x14) or r >= XMM15:
+        ret false
+    end
+    if r == RBP and g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        ret false
+    end
+    if g.arch == NG_ARCH_X86 and ((r > RBP and r < 16 and (r != RSI or g.off_x86si)) or r > 21):
+        ret false
+    end
+    if g.arch == NG_ARCH_ARM and (r == R10 or r == R11 or (r > 12 and r < 16) or r > 23):
+        ret false
+    end
+    ret g.mc.vcls[r] == cls
+end
+
+func choose_reg(g &: Ng, ra &: Ra, v: int): int:
+    cls := g.mc.vcls[v]
+    e := g.mc.vend[v]
+    h := g.mc.vhint[v]
+    if h >= 0:
+        mut hr := h
+        if h >= VBASE:
+            hr = g.mc.vloc[h]
+        end
+        if reg_ok_for(g, hr, cls) and ra.free_until[hr] > e:
+            ret hr
+        end
+    end
+    ph := g.mc.vphint[v]
+    if ph >= 0 and reg_ok_for(g, ph, cls) and ra.free_until[ph] > e:
+        ret ph
+    end
+    if v < ra.cp_head.Len():
+        mut ce := ra.cp_head[v]
+        mut nc := 0
+        until ce >= 0 and nc < 16:
+            u := ra.cp_to[ce]
+            ur := g.mc.vloc[u]
+            if ur >= 0 and ur < 32 and reg_ok_for(g, ur, cls) and ra.free_until[ur] > e:
+                ret ur
+            end
+            ce = ra.cp_next[ce]
+            nc++
+        end
+        mut ce2 := ra.cp_head[v]
+        mut n2 := 0
+        until ce2 >= 0 and n2 < 16:
+            u2 := ra.cp_to[ce2]
+            if g.mc.vloc[u2] < 0 and u2 < ra.cp_head.Len():
+                mut cf := ra.cp_head[u2]
+                mut nf := 0
+                until cf >= 0 and nf < 16:
+                    w := ra.cp_to[cf]
+                    wr := g.mc.vloc[w]
+                    if w != v and wr >= 0 and wr < 32 and reg_ok_for(g, wr, cls) and
+                        ra.free_until[wr] > e:
+                        ret wr
+                    end
+                    cf = ra.cp_next[cf]
+                    nf++
+                end
+            end
+            ce2 = ra.cp_next[ce2]
+            n2++
+        end
+    end
+    if cls == 1 and g.arch == NG_ARCH_ARM:
+        each xa in k_ra_xmm_arm:
+            if ra.free_until[xa] > e:
+                ret xa
+            end
+        end
+        ret 0 - 1
+    end
+    if g.arch == NG_ARCH_ARM and cls != 1:
+        each ra32 in k_ra_gpr_arm:
+            if ra.free_until[ra32] > e:
+                ret ra32
+            end
+        end
+        ret 0 - 1
+    end
+    if cls == 1 and g.arch == NG_ARCH_X86:
+        each x8 in k_ra_xmm_x86:
+            if ra.free_until[x8] > e:
+                ret x8
+            end
+        end
+        ret 0 - 1
+    end
+    if cls == 1 and g.ra_x14:
+        each x14 in k_ra_xmm_x14:
+            if ra.free_until[x14] > e and not (g.ra_x0l and x14 == XMM0):
+                ret x14
+            end
+        end
+        ret g.ra_x0l and ra.free_until[XMM0] > e ? XMM0 : 0 - 1
+    end
+    if cls == 1:
+        each x in k_ra_xmm:
+            if ra.free_until[x] > e and not (g.ra_x0l and x == XMM0):
+                ret x
+            end
+        end
+        ret g.ra_x0l and ra.free_until[XMM0] > e ? XMM0 : 0 - 1
+    end
+    if g.arch == NG_ARCH_X86:
+        each r86 in k_ra_gpr_x86:
+            if ra.free_until[r86] > e and (r86 != RSI or not g.off_x86si):
+                ret r86
+            end
+        end
+        ret 0 - 1
+    end
+    if g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64:
+        each ra64 in k_ra_gpr_a64:
+            if ra.free_until[ra64] > e:
+                ret ra64
+            end
+        end
+        ret 0 - 1
+    end
+    if g.os == NG_OS_WINDOWS:
+        each r in k_ra_gpr_win:
+            if ra.free_until[r] > e:
+                ret r
+            end
+        end
+        ret 0 - 1
+    end
+    each r2 in k_ra_gpr_sysv:
+        if ra.free_until[r2] > e:
+            ret r2
+        end
+    end
+    ret 0 - 1
+end
+
+func spill_weight(g &: Ng, ra &: Ra, v: int): int:
+    len := g.mc.vend[v] - g.mc.vstart[v] + 1
+    w := ((ra.nuse[v] + 1) as i64) * (100000 as i64) / (len as i64)
+    if w > (2000000000 as i64):
+        ret 2000000000
+    end
+    ret w as int
+end
+
+func cp_edge(ra &: Ra, a: int, b: int):
+    ra.cp_to.Push(b)
+    ra.cp_next.Push(ra.cp_head[a])
+    ra.cp_head[a] = ra.cp_to.Len() - 1
+end
+
+func cp_build(g &: Ng, ra &: Ra):
+    ra.cp_head.Clear()
+    ra.cp_to.Clear()
+    ra.cp_next.Clear()
+    repeat g.mc.vcls.Len():
+        ra.cp_head.Push(0 - 1)
+    end
+    if g.off_cpref:
+        ret
+    end
+    repeat g.mc.op.Len() in i:
+        if g.mc.op[i] == M_COPY:
+            a := g.mc.r0[i]
+            b := g.mc.r1[i]
+            if a >= VBASE and b >= VBASE and a != b and a < ra.cp_head.Len() and
+                b < ra.cp_head.Len():
+                cp_edge(ra, a, b)
+                cp_edge(ra, b, a)
+            end
+        end
+    end
+end
+
+func linear_scan(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.Len()
+    cp_build(g, ra)
+    ra.order.Clear()
+    ra.v_rc.Clear()
+    repeat nv in q0:
+        ra.v_rc.Push(ra.v_r0[q0])
+    end
+    mut k := VBASE
+    until k < nv:
+        if ra.v_rn[k] > 0:
+            ra.order.Push(k)
+        end
+        k++
+    end
+    sort_by_start(g, ra)
+    repeat 32 in fr:
+        ra.fr_cur[fr] = ra.fr_head[fr]
+    end
+    ra.free_until.Clear()
+    repeat 32:
+        ra.free_until.Push(0)
+    end
+    ra.active.Clear()
+    ra.inactive.Clear()
+    ra.heap.Clear()
+    mut oi := 0
+    no := ra.order.Len()
+    until oi < no or ra.heap.Len() > 0:
+        if ra.heap.Len() > 0 and (oi >= no or g.mc.vstart[ra.heap[0]] < g.mc.vstart[ra.order[oi]]):
+            ls_one(g, ra, rs_pop(g, ra))
+        else:
+            ls_one(g, ra, ra.order[oi])
+            oi++
+        end
+    end
+end
+
+func ls_one(g &: Ng, ra &: Ra, v: int):
+    pos := g.mc.vstart[v]
+    cls := g.mc.vcls[v]
+    mut j := 0
+    until j < ra.active.Len():
+        a := ra.active[j]
+        if g.mc.vend[a] < pos or g.mc.vloc[a] < 0:
+            ra.active[j] = ra.active[ra.active.Len() - 1]
+            _p := ra.active.Pop()
+        else not covers(ra, a, pos):
+            ra.inactive.Push(a)
+            ra.active[j] = ra.active[ra.active.Len() - 1]
+            _p2 := ra.active.Pop()
+        else:
+            j++
+        end
+    end
+    mut j2 := 0
+    until j2 < ra.inactive.Len():
+        a2 := ra.inactive[j2]
+        if g.mc.vend[a2] < pos or g.mc.vloc[a2] < 0:
+            ra.inactive[j2] = ra.inactive[ra.inactive.Len() - 1]
+            _p3 := ra.inactive.Pop()
+        else covers(ra, a2, pos):
+            ra.active.Push(a2)
+            ra.inactive[j2] = ra.inactive[ra.inactive.Len() - 1]
+            _p4 := ra.inactive.Pop()
+        else:
+            j2++
+        end
+    end
+    repeat 32 in r:
+        if reg_ok_for(g, r, cls):
+            ra.free_until[r] = RA_INF
+        else:
+            ra.free_until[r] = 0 - 1
+        end
+    end
+    each a3 in ra.active:
+        if g.mc.vloc[a3] >= 0:
+            ra.free_until[g.mc.vloc[a3]] = 0 - 1
+        end
+    end
+    ywin := g.os == NG_OS_WINDOWS and g.mc.vymm[v]
+    if ywin:
+        repeat 10 in yw:
+            ra.free_until[22 + yw] = 0 - 1
+        end
+    end
+    each a4 in ra.inactive:
+        r4 := g.mc.vloc[a4]
+        if r4 >= 0 and ra.free_until[r4] > 0:
+            ni := next_inter(ra, a4, v, pos)
+            if ni >= 0 and ni < ra.free_until[r4]:
+                ra.free_until[r4] = ni
+            end
+        end
+    end
+    repeat 32 in r5:
+        if ra.free_until[r5] > 0:
+            fi := fixed_inter(ra, r5, v, pos)
+            if fi >= 0 and fi < ra.free_until[r5]:
+                ra.free_until[r5] = fi
+            end
+        end
+    end
+    if ra.rs_on and ra.par[v] != v and not rs_nuses(
+        ra, ra.par[v], pos, g.mc.vend[v], rs_need(g, ra, v), true
+    ):
+        rs_spill_rest(g, ra, v, pos)
+        ret
+    end
+    reg := choose_reg(g, ra, v)
+    if reg >= 0:
+        g.mc.vloc[v] = reg
+        ra.active.Push(v)
+        ret
+    end
+    if rm_cheap(g, ra, v):
+        if ra.rs_on:
+            rs_spill_piece(g, ra, v)
+        else:
+            spill_vreg(g, v)
+        end
+        ret
+    end
+    mut victim := 0 - 1
+    mut vi := 0 - 1
+    mut vw := spill_weight(g, ra, v)
+    repeat ra.active.Len() in qr:
+        ar := ra.active[qr]
+        if victim < 0 and g.mc.vcls[ar] == cls and rm_cheap(g, ra, ar) and
+            not (ywin and g.mc.vloc[ar] >= 22):
+            rr0 := g.mc.vloc[ar]
+            if fixed_inter(ra, rr0, v, pos) < 0 and not inactive_blocks(g, ra, rr0, v, pos):
+                victim = ar
+                vi = qr
+            end
+        end
+    end
+    if victim >= 0:
+        vw = 0
+    else g.opt and cls == 1 and not g.off_belady:
+        mut far := ra.rs_on ? rs_next_use(g, ra, v, pos + 1) : next_ref(g, ra, v, pos + 1)
+        repeat ra.active.Len() in qb:
+            ab := ra.active[qb]
+            if g.mc.vcls[ab] == cls and not (ywin and g.mc.vloc[ab] >= 22):
+                rb := g.mc.vloc[ab]
+                nu := ra.rs_on ? rs_next_use(g, ra, ab, pos) : next_ref(g, ra, ab, pos)
+                if nu > far and fixed_inter(ra, rb, v, pos) < 0 and not inactive_blocks(
+                    g, ra, rb, v, pos
+                ):
+                    victim = ab
+                    vi = qb
+                    far = nu
+                end
+            end
+        end
+    else:
+        repeat ra.active.Len() in q:
+            a5 := ra.active[q]
+            if g.mc.vcls[a5] == cls and not (ywin and g.mc.vloc[a5] >= 22):
+                rr := g.mc.vloc[a5]
+                w := spill_weight(g, ra, a5)
+                if w < vw and fixed_inter(ra, rr, v, pos) < 0 and not inactive_blocks(
+                    g, ra, rr, v, pos
+                ):
+                    victim = a5
+                    vi = q
+                    vw = w
+                end
+            end
+        end
+    end
+    if victim >= 0 and ra.rs_on and ra.par[v] != v:
+        victim = 0 - 1
+    end
+    if victim >= 0:
+        rr2 := g.mc.vloc[victim]
+        if rs_ok(g, ra, victim):
+            rs_cut(g, ra, victim, pos)
+        else ra.rs_on:
+            rs_spill_piece(g, ra, victim)
+        else:
+            spill_vreg(g, victim)
+        end
+        ra.active[vi] = v
+        g.mc.vloc[v] = rr2
+    else rs_ok(g, ra, v) and rs_partial(g, ra, v, pos):
+        ret
+    else rs_ok(g, ra, v):
+        rs_spill_rest(g, ra, v, pos)
+    else ra.rs_on:
+        rs_spill_piece(g, ra, v)
+    else:
+        spill_vreg(g, v)
+    end
+end
+
+func next_ref(g &: Ng, ra &: Ra, v: int, pos: int): int:
+    n := g.mc.op.Len()
+    mut i := pos / 2
+    if i < 0:
+        i = 0
+    end
+    lim := g.mc.vend[v]
+    mut steps := 0
+    until i < n and 2 * i <= lim and steps < 4000:
+        if 2 * i + 1 >= pos:
+            mi_regs(g, i, ra.uses, ra.defs)
+            each u in ra.uses:
+                if u == v:
+                    ret 2 * i
+                end
+            end
+        end
+        i++
+        steps++
+    end
+    ret RA_INF
+end
+
+func inactive_blocks(g &: Ng, ra &: Ra, r: int, v: int, pos: int): bool:
+    each a in ra.inactive:
+        if g.mc.vloc[a] == r and next_inter(ra, a, v, pos) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func mc_take(g &: Ng): Mc:
+    old := g.mc
+    g.mc.op = Vector {} as Vector<int>
+    g.mc.sz = Vector {} as Vector<int>
+    g.mc.sz2 = Vector {} as Vector<int>
+    g.mc.r0 = Vector {} as Vector<int>
+    g.mc.r1 = Vector {} as Vector<int>
+    g.mc.r2 = Vector {} as Vector<int>
+    g.mc.imm = Vector {} as Vector<i64>
+    g.mc.mk = Vector {} as Vector<int>
+    g.mc.mb = Vector {} as Vector<int>
+    g.mc.mi = Vector {} as Vector<int>
+    g.mc.ms = Vector {} as Vector<int>
+    g.mc.md = Vector {} as Vector<i64>
+    g.mc.msym = Vector {} as Vector<int>
+    g.mc.cc = Vector {} as Vector<int>
+    g.mc.tgt = Vector {} as Vector<int>
+    g.mc.loc = Vector {} as Vector<int>
+    g.mc.dv = Vector {} as Vector<int>
+    g.mc.ymm = Vector {} as Vector<bool>
+    ret old
+end
+
+func mc_free_arrays(m &: Mc):
+    m.op.Free()
+    m.sz.Free()
+    m.sz2.Free()
+    m.r0.Free()
+    m.r1.Free()
+    m.r2.Free()
+    m.imm.Free()
+    m.mk.Free()
+    m.mb.Free()
+    m.mi.Free()
+    m.ms.Free()
+    m.md.Free()
+    m.msym.Free()
+    m.cc.Free()
+    m.tgt.Free()
+    m.loc.Free()
+    m.dv.Free()
+    m.ymm.Free()
+end

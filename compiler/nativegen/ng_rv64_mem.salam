@@ -1,0 +1,158 @@
+package nativegen
+
+func rv_frame_off(g &: Ng, a &: Rv, i: int): i64:
+    ret (a.total as i64) - (g.mc.fs_off[g.mc.mb[i]] as i64) + g.mc.md[i]
+end
+
+func rv_addr(g &: Ng, a &: Rv, i: int, base &: int, off &: i64):
+    k := g.mc.mk[i]
+    sh := a_lsz(g.mc.ms[i])
+    if k == MK_FRAME:
+        base = RV_SP
+        off = rv_frame_off(g, a, i)
+        if g.mc.mi[i] >= 0:
+            rv_slli(a, RV_T3, rv_x(g.mc.mi[i]), sh)
+            rv_add(a, RV_T3, RV_SP, RV_T3)
+            base = RV_T3
+        end
+        ret
+    end
+    if k == MK_ARG:
+        base = RV_S0
+        off = g.mc.md[i]
+        ret
+    end
+    if (k == MK_RIP or k == MK_GOT) and g.pic:
+        rv_pcaddr(a, RV_T3, g.mc.msym[i], g.mc.md[i])
+        base = RV_T3
+        off = 0 as i64
+        ret
+    end
+    if k == MK_RIP or k == MK_GOT:
+        rv_rel(a, g.mc.msym[i], R_RV_HI20, g.mc.md[i])
+        rv_w(a, ((RV_T3 as i64) << (7 as i64)) | (0x37 as i64))
+        rv_rel(a, g.mc.msym[i], R_RV_LO12, g.mc.md[i])
+        rv_addi(a, RV_T3, RV_T3, 0 as i64)
+        base = RV_T3
+        off = 0 as i64
+        ret
+    end
+    b := g.mc.mb[i]
+    off = g.mc.md[i]
+    if g.mc.mi[i] >= 0:
+        if sh == 0:
+            if b < 0:
+                base = rv_x(g.mc.mi[i])
+                ret
+            end
+            rv_add(a, RV_T3, rv_x(b), rv_x(g.mc.mi[i]))
+        else:
+            rv_slli(a, RV_T3, rv_x(g.mc.mi[i]), sh)
+            if b >= 0:
+                rv_add(a, RV_T3, rv_x(b), RV_T3)
+            end
+        end
+        base = RV_T3
+        ret
+    end
+    if b < 0:
+        base = RV_ZERO
+        ret
+    end
+    base = rv_x(b)
+end
+
+func rv_fit(a &: Rv, base &: int, off &: i64):
+    if off >= (0 - 2048 as i64) and off < (2048 as i64):
+        ret
+    end
+    rv_li(a, RV_T4, off)
+    rv_add(a, RV_T3, base, RV_T4)
+    base = RV_T3
+    off = 0 as i64
+end
+
+func rv_addr_fit(g &: Ng, a &: Rv, i: int, base &: int, off &: i64):
+    rv_addr(g, a, i, base, off)
+    rv_fit(a, base, off)
+end
+
+func rv_addr_reg(g &: Ng, a &: Rv, i: int, rd: int):
+    k := g.mc.mk[i]
+    b := g.mc.mb[i]
+    x := g.mc.mi[i]
+    if k != MK_FRAME and k != MK_ARG and k != MK_RIP and k != MK_GOT and b >= 0 and x >= 0 and
+        g.mc.md[i] >= (0 - 2048 as i64) and g.mc.md[i] < (2048 as i64):
+        sh := a_lsz(g.mc.ms[i])
+        if sh == 0:
+            rv_add(a, rd, rv_x(b), rv_x(x))
+        else rd != rv_x(b):
+            rv_slli(a, rd, rv_x(x), sh)
+            rv_add(a, rd, rv_x(b), rd)
+        else:
+            rv_slli(a, RV_T3, rv_x(x), sh)
+            rv_add(a, rd, rv_x(b), RV_T3)
+        end
+        if g.mc.md[i] != (0 as i64):
+            rv_addi(a, rd, rd, g.mc.md[i])
+        end
+        ret
+    end
+    mut base := 0
+    mut off := 0 as i64
+    rv_addr(g, a, i, base, off)
+    if off >= (0 - 2048 as i64) and off < (2048 as i64):
+        if off == (0 as i64):
+            rv_mv(a, rd, base)
+        else:
+            rv_addi(a, rd, base, off)
+        end
+        ret
+    end
+    rv_li(a, RV_T4, off)
+    rv_add(a, rd, base, RV_T4)
+end
+
+func rv_ldf3(sz: int, signed: bool): int:
+    if sz >= 8: ret 3 end
+    if sz == 4: ret signed ? 2 : 6 end
+    if sz == 2: ret signed ? 1 : 5 end
+    ret signed ? 0 : 4
+end
+
+func rv_stf3(sz: int): int:
+    if sz >= 8: ret 3 end
+    if sz == 4: ret 2 end
+    if sz == 2: ret 1 end
+    ret 0
+end
+
+func rv_load(g &: Ng, a &: Rv, i: int, rd: int, sz: int, signed: bool):
+    mut base := 0
+    mut off := 0 as i64
+    rv_addr_fit(g, a, i, base, off)
+    rv_i(a, off, base, rv_ldf3(sz, signed), rd, 0x03)
+end
+
+func rv_store_at(a &: Rv, rs: int, sz: int, base: int, off: i64):
+    rv_s(a, off, rs, base, rv_stf3(sz), 0x23)
+end
+
+func rv_store(g &: Ng, a &: Rv, i: int, rs: int, sz: int):
+    mut base := 0
+    mut off := 0 as i64
+    rv_addr_fit(g, a, i, base, off)
+    rv_store_at(a, rs, sz, base, off)
+end
+
+func rv_fmem(g &: Ng, a &: Rv, i: int, load: bool, sz: int, fr: int):
+    mut base := 0
+    mut off := 0 as i64
+    rv_addr_fit(g, a, i, base, off)
+    f3 := sz == 8 ? 3 : 2
+    if load:
+        rv_i(a, off, base, f3, fr, 0x07)
+    else:
+        rv_s(a, off, fr, base, f3, 0x27)
+    end
+end

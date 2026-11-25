@@ -1,0 +1,285 @@
+package nativegen
+
+func idx_reg(g &: Ng, v: int, t: int): int:
+    if g.v_kind[v] == VK_INT:
+        r := gpr(g)
+        _m := e_ri(g, M_MOV_RI, 8, r, g.v_i[v])
+        ret r
+    end
+    r2 := use_reg(g, v)
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret r2
+    end
+    r3 := gpr(g)
+    if bits == 1:
+        i := e_rr(g, M_MOVZX_RR, 4, r3, r2)
+        g.mc.sz2[i] = 1
+        ret r3
+    end
+    i2 := e_rr(g, M_MOVSX_RR, 8, r3, r2)
+    g.mc.sz2[i2] = bits / 8
+    ret r3
+end
+
+func mem_fit(g &: Ng, m0: Mem): Mem:
+    if is_imm32(m0.d):
+        ret m0
+    end
+    big := gpr(g)
+    _i := e_movi(g, big, m0.d)
+    mut m := m0
+    m.d = 0 as i64
+    if (m.k == MK_BI or m.k == MK_FRAME) and m.i < 0:
+        m.i = big
+        m.s = 1
+        ret m
+    end
+    base := gpr(g)
+    _l := e_rm(g, M_LEA, 8, base, m)
+    ret Mem {
+        k = MK_BI,
+        b = base,
+        i = big,
+        s = 1,
+        d = 0 as i64
+    }
+end
+
+func mem_of(g &: Ng, v: int, extra: i64): Mem:
+    k := g.v_kind[v]
+    if (k == VK_INS or k == VK_ARG) and g.vak[v] == AK_ALLOCA:
+        ret mem_fit(g, frame_mem(g.var_[v], extra))
+    end
+    if k == VK_GLB:
+        s := g.v_def[v]
+        if g.sy_def[s]:
+            ret mem_fit(g, Mem { k = MK_RIP, sym = s, d = g.v_i[v] + extra })
+        end
+        ret mem_fit(g, mem_bi(use_reg(g, v), extra))
+    end
+    if addr_only(g, v):
+        d := g.v_def[v]
+        mut m := mem_of(g, g.i_a[d], extra + g.i_d[d])
+        if g.i_b[d] >= 0:
+            ir := g.vv[v]
+            sc := g.vsc[v]
+            if (m.k == MK_BI or m.k == MK_FRAME) and m.i < 0:
+                m.i = ir
+                m.s = sc
+            else:
+                base := gpr(g)
+                _l := e_rm(g, M_LEA, 8, base, m)
+                m = Mem {
+                    k = MK_BI,
+                    b = base,
+                    i = ir,
+                    s = sc,
+                    d = 0 as i64
+                }
+            end
+        end
+        ret mem_fit(g, m)
+    end
+    ret mem_fit(g, mem_bi(use_reg(g, v), extra))
+end
+
+func agg_mem(g &: Ng, v: int): Mem:
+    ak := g.vak[v]
+    if ak == AK_FRAME:
+        ret frame_mem(g.var_[v], g.vao[v] as i64)
+    end
+    if ak == AK_PTR:
+        ret mem_bi(g.var_[v], g.vao[v] as i64)
+    end
+    t := g.v_ty[v]
+    slot := new_slot(g, tsize(g, t), talign(g, t))
+    m := frame_mem(slot, 0 as i64)
+    if g.v_kind[v] == VK_ZERO:
+        zero_fill(g, m, tsize(g, t))
+    end
+    ret m
+end
+
+func mem_add(m: Mem, k: int): Mem:
+    mut r := m
+    r.d += (k as i64)
+    ret r
+end
+
+func lea_reg(g &: Ng, m: Mem): int:
+    r := gpr(g)
+    _l := e_rm(g, M_LEA, 8, r, m)
+    ret r
+end
+
+func ro_copy(g &: Ng, dst: int, src: int, n: int): bool:
+    mut off := 0 as i64
+    sy := ro_global(g, src, off)
+    if sy < 0 or sy >= g.sy_ro.Len() or not g.sy_ro[sy] or g.sy_sec[sy] == SEC_BSS or
+        not ro_clean(g, sy):
+        ret false
+    end
+    if off < (0 as i64) or off + (n as i64) > (g.sy_size[sy] as i64):
+        ret false
+    end
+    base := g.sy_off[sy] + (off as int)
+    dm := mem_of(g, dst, 0 as i64)
+    mut p := 0
+    until p < n:
+        rem := n - p
+        ch := rem >= 4 ? 4 : (rem >= 2 ? 2 : 1)
+        mut v := 0 as i64
+        mut k := ch - 1
+        until k >= 0:
+            v = (v << (8 as i64)) | (sec_byte(g, g.sy_sec[sy], base + p + k) as i64)
+            k--
+        end
+        if ch == 4 and v >= (2147483648 as i64):
+            v -= (4294967296 as i64)
+        end
+        si := mi_new(g, M_STI, ch)
+        set_mem(g, si, mem_add(dm, p))
+        g.mc.imm[si] = v
+        p += ch
+    end
+    ret true
+end
+
+func emit_copy(g &: Ng, dst: Mem, src: Mem, size: int):
+    if size > NG_COPY_MAX:
+        mut args := Vector {} as Vector<int>
+        args.Push(lea_reg(g, dst))
+        args.Push(lea_reg(g, src))
+        cr := gpr(g)
+        _m := e_movi(g, cr, size as i64)
+        args.Push(cr)
+        _r := call_lib(g, g.sym_memcpy, args, 0 - 1)
+        args.Free()
+        ret
+    end
+    mut off := 0
+    if size >= 32 and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64):
+        until size - off >= 16:
+            x := wide_reg(g)
+            _vl := e_rm(g, M_VLD, 16, x, mem_add(src, off))
+            _vs := e_mr(g, M_VST, 16, mem_add(dst, off), x)
+            off += 16
+        end
+    end
+    until off < size:
+        rem := size - off
+        mut ch := g.wsz
+        if rem < g.wsz:
+            if rem >= 4:
+                ch = 4
+            else rem >= 2:
+                ch = 2
+            else:
+                ch = 1
+            end
+        end
+        t := gpr(g)
+        if ch >= 4:
+            _l := e_rm(g, M_LD, ch, t, mem_add(src, off))
+        else:
+            li := e_rm(g, M_LDZX, 4, t, mem_add(src, off))
+            g.mc.sz2[li] = ch
+        end
+        _s := e_mr(g, M_ST, ch, mem_add(dst, off), t)
+        off += ch
+    end
+end
+
+func zero_fill(g &: Ng, dst: Mem, size: int):
+    if size > NG_COPY_MAX:
+        mut args := Vector {} as Vector<int>
+        args.Push(lea_reg(g, dst))
+        zr := gpr(g)
+        _z := e_movi(g, zr, 0 as i64)
+        args.Push(zr)
+        cr := gpr(g)
+        _m := e_movi(g, cr, size as i64)
+        args.Push(cr)
+        _r := call_lib(g, g.sym_memset, args, 0 - 1)
+        args.Free()
+        ret
+    end
+    mut off := 0
+    if size >= 48 and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64):
+        z := wide_reg(g)
+        _zx := e_rr(g, M_XORPS, 16, z, z)
+        until size - off >= 16:
+            _zs := e_mr(g, M_VST, 16, mem_add(dst, off), z)
+            off += 16
+        end
+    end
+    until off < size:
+        rem := size - off
+        mut ch := g.wsz
+        if rem < g.wsz:
+            if rem >= 4:
+                ch = 4
+            else rem >= 2:
+                ch = 2
+            else:
+                ch = 1
+            end
+        end
+        i := mi_new(g, M_STI, ch)
+        set_mem(g, i, mem_add(dst, off))
+        off += ch
+    end
+end
+
+func fill_bytes(g &: Ng, dst: Mem, size: int, byte: int):
+    mut pat := 0 as i64
+    repeat 8:
+        pat = (pat << (8 as i64)) | ((byte & 255) as i64)
+    end
+    mut off := 0
+    mut pr := 0 - 1
+    until off < size:
+        rem := size - off
+        mut ch := g.wsz
+        if rem < g.wsz:
+            if rem >= 4:
+                ch = 4
+            else rem >= 2:
+                ch = 2
+            else:
+                ch = 1
+            end
+        end
+        if ch == 8:
+            if pr < 0:
+                pr = gpr(g)
+                _m := e_ri(g, M_MOV_RI, 8, pr, pat)
+            end
+            _s := e_mr(g, M_ST, 8, mem_add(dst, off), pr)
+        else:
+            i := mi_new(g, M_STI, ch)
+            set_mem(g, i, mem_add(dst, off))
+            g.mc.imm[i] = pat & ((1 as i64 << ((ch * 8) as i64)) - (1 as i64))
+        end
+        off += ch
+    end
+end
+
+func x87_to_xmm(g &: Ng, sz: int): int:
+    slot := new_slot(g, 8, 8)
+    st := mi_new(g, M_X87, sz)
+    set_mem(g, st, frame_mem(slot, 0 as i64))
+    g.mc.cc[st] = 1
+    r := xmm(g)
+    _l := e_rm(g, M_FLD, sz, r, frame_mem(slot, 0 as i64))
+    ret r
+end
+
+func xmm_to_x87(g &: Ng, r: int, sz: int):
+    slot := new_slot(g, 8, 8)
+    _s := e_mr(g, M_FST, sz, frame_mem(slot, 0 as i64), r)
+    ld := mi_new(g, M_X87, sz)
+    set_mem(g, ld, frame_mem(slot, 0 as i64))
+    g.mc.cc[ld] = 0
+end

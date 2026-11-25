@@ -1,0 +1,229 @@
+package nativegen
+
+func axr(r: int): int:
+    if r >= 0 and r < 16:
+        ret k_a64_xmap[r]
+    end
+    ret r
+end
+
+func avr(r: int): int:
+    if r >= 16 and r < 32:
+        ret k_a64_vmap[r - 16]
+    end
+    ret r
+end
+
+func aw(a &: A64, v: i64):
+    a.w.Push((v & (0xFFFFFFFF as i64)) as int)
+end
+
+func arel(a &: A64, sym: int, rt: int, add: i64):
+    a.rl_at.Push(a.w.Len())
+    a.rl_sym.Push(sym)
+    a.rl_type.Push(rt)
+    a.rl_add.Push(add)
+end
+
+func sfb(sz: int): i64:
+    ret sz == 8 ? (0x80000000 as i64) : (0 as i64)
+end
+
+func enc_r(r: int): int:
+    ret r >= 31 ? 31 : r
+end
+
+func rd_rn_rm(rd: int, rn: int, rm: int): i64:
+    ret (enc_r(
+        rd
+    ) as i64) | ((enc_r(rn) as i64) << (5 as i64)) | ((enc_r(rm) as i64) << (16 as i64))
+end
+
+func a_movz(a &: A64, rd: int, imm16: i64, hwi: int, x: bool):
+    aw(
+        a,
+        (x ? (0xD2800000 as i64) : (0x52800000 as i64)) | (((hwi as i64) & (3 as i64)) << (21 as i64)) | ((imm16 & (0xFFFF as i64)) << (5 as i64)) | (rd as i64)
+    )
+end
+
+func a_movk(a &: A64, rd: int, imm16: i64, hwi: int, x: bool):
+    aw(
+        a,
+        (x ? (0xF2800000 as i64) : (0x72800000 as i64)) | (((hwi as i64) & (3 as i64)) << (21 as i64)) | ((imm16 & (0xFFFF as i64)) << (5 as i64)) | (rd as i64)
+    )
+end
+
+func a_movn(a &: A64, rd: int, imm16: i64, hwi: int, x: bool):
+    aw(
+        a,
+        (x ? (0x92800000 as i64) : (0x12800000 as i64)) | (((hwi as i64) & (3 as i64)) << (21 as i64)) | ((imm16 & (0xFFFF as i64)) << (5 as i64)) | (rd as i64)
+    )
+end
+
+func a_mov_imm(a &: A64, rd: int, v0: i64, x: bool):
+    mut v := v0
+    if not x:
+        v &= (0xFFFFFFFF as i64)
+    end
+    nh := x ? 4 : 2
+    mut nz := 0
+    mut nf := 0
+    repeat nh in k:
+        h := (v >> ((16 * k) as i64)) & (0xFFFF as i64)
+        if h != (0 as i64):
+            nz++
+        end
+        if h != (0xFFFF as i64):
+            nf++
+        end
+    end
+    if nf < nz and nf <= 1:
+        mut first := true
+        repeat nh in k2:
+            h2 := (v >> ((16 * k2) as i64)) & (0xFFFF as i64)
+            if h2 != (0xFFFF as i64) or (first and k2 == nh - 1):
+                if first:
+                    a_movn(a, rd, (0 - 1 - h2) & (0xFFFF as i64), k2, x)
+                    first = false
+                else:
+                    a_movk(a, rd, h2, k2, x)
+                end
+            end
+        end
+        if first:
+            a_movn(a, rd, 0 as i64, 0, x)
+        end
+        ret
+    end
+    mut started := false
+    repeat nh in k3:
+        h3 := (v >> ((16 * k3) as i64)) & (0xFFFF as i64)
+        if h3 != (0 as i64):
+            if not started:
+                a_movz(a, rd, h3, k3, x)
+                started = true
+            else:
+                a_movk(a, rd, h3, k3, x)
+            end
+        end
+    end
+    if not started:
+        a_movz(a, rd, 0 as i64, 0, x)
+    end
+end
+
+func a_movr(a &: A64, rd: int, rn: int, x: bool):
+    if rd == rn and (x or rd == ASP):
+        ret
+    end
+    if rd == ASP or rn == ASP:
+        aw(a, (x ? (0x91000000 as i64) : (0x11000000 as i64)) | rd_rn_rm(rd, rn, 0))
+        ret
+    end
+    aw(a, (x ? (0xAA000000 as i64) : (0x2A000000 as i64)) | rd_rn_rm(rd, AZR, rn))
+end
+
+func a_addsub_imm(a &: A64, rd: int, rn: int, imm: i64, sub: bool, setf: bool, x: bool):
+    mut base := x ? (0x91000000 as i64) : (0x11000000 as i64)
+    if sub:
+        base |= (0x40000000 as i64)
+    end
+    if setf:
+        base |= (0x20000000 as i64)
+    end
+    if imm >= (0 as i64) and imm < (4096 as i64):
+        aw(a, base | (imm << (10 as i64)) | rd_rn_rm(rd, rn, 0))
+        ret
+    end
+    if (imm & (0xFFF as i64)) == (0 as i64) and imm >= (0 as i64) and imm < (0x1000000 as i64):
+        aw(a, base | (1 << 22) | ((imm >> (12 as i64)) << (10 as i64)) | rd_rn_rm(rd, rn, 0))
+        ret
+    end
+    a_mov_imm(a, AX17, imm, x)
+    a_addsub_rr(a, rd, rn, AX17, sub, setf, x)
+end
+
+func a_addsub_rr(a &: A64, rd: int, rn: int, rm: int, sub: bool, setf: bool, x: bool):
+    if rd == ASP or rn == ASP:
+        mut ebase := x ? (0x8B206000 as i64) : (0x0B204000 as i64)
+        if sub:
+            ebase |= (0x40000000 as i64)
+        end
+        if setf:
+            ebase |= (0x20000000 as i64)
+        end
+        aw(a, ebase | rd_rn_rm(rd, rn, rm))
+        ret
+    end
+    mut b := x ? (0x8B000000 as i64) : (0x0B000000 as i64)
+    if sub:
+        b |= (0x40000000 as i64)
+    end
+    if setf:
+        b |= (0x20000000 as i64)
+    end
+    aw(a, b | rd_rn_rm(rd, rn, rm))
+end
+
+func a_add_shift(a &: A64, rd: int, rn: int, rm: int, sh: int):
+    if rn == ASP:
+        aw(a, (0x8B206000 as i64) | ((sh as i64) << (10 as i64)) | rd_rn_rm(rd, rn, rm))
+        ret
+    end
+    aw(a, (0x8B000000 as i64) | ((sh as i64) << (10 as i64)) | rd_rn_rm(rd, rn, rm))
+end
+
+func a_logic_rr(a &: A64, op: int, rd: int, rn: int, rm: int, setf: bool, x: bool):
+    mut b := 0 as i64
+    if op == ALU_AND:
+        b = setf ? (0x6A000000 as i64) : (0x0A000000 as i64)
+    else op == ALU_OR:
+        b = 0x2A000000 as i64
+    else:
+        b = 0x4A000000 as i64
+    end
+    if x:
+        b |= (0x80000000 as i64)
+    end
+    aw(a, b | rd_rn_rm(rd, rn, rm))
+end
+
+func a_tst(a &: A64, rn: int, x: bool):
+    aw(a, (x ? (0xEA000000 as i64) : (0x6A000000 as i64)) | rd_rn_rm(AZR, rn, rn))
+end
+
+func a_ubfm(a &: A64, rd: int, rn: int, immr: int, imms: int, x: bool):
+    aw(
+        a,
+        (x ? (0xD3400000 as i64) : (0x53000000 as i64)) | ((immr as i64) << (16 as i64)) | ((imms as i64) << (10 as i64)) | rd_rn_rm(
+            rd, rn, 0
+        )
+    )
+end
+
+func a_sbfm(a &: A64, rd: int, rn: int, immr: int, imms: int, x: bool):
+    aw(
+        a,
+        (x ? (0x93400000 as i64) : (0x13000000 as i64)) | ((immr as i64) << (16 as i64)) | ((imms as i64) << (10 as i64)) | rd_rn_rm(
+            rd, rn, 0
+        )
+    )
+end
+
+func a_lsl_imm(a &: A64, rd: int, rn: int, sh: int, x: bool):
+    bits := x ? 64 : 32
+    s := sh % bits
+    a_ubfm(a, rd, rn, (bits - s) % bits, bits - 1 - s, x)
+end
+
+func a_ext(a &: A64, rd: int, rn: int, from: int, signed: bool, x: bool):
+    if from >= 8 or (from == 4 and not signed):
+        a_movr(a, rd, rn, from == 8 and x)
+        ret
+    end
+    if signed:
+        a_sbfm(a, rd, rn, 0, from * 8 - 1, x)
+    else:
+        a_ubfm(a, rd, rn, 0, from * 8 - 1, false)
+    end
+end

@@ -1,0 +1,364 @@
+package nativegen
+
+func isel_call(g &: Ng, i: int):
+    callee := g.i_a[i]
+    mut sym := 0 - 1
+    if g.v_kind[callee] == VK_GLB and g.v_i[callee] == (0 as i64):
+        sym = g.v_def[callee]
+    end
+    ps := g.i_ps[i]
+    na := g.i_pcount[i]
+    rt := g.i_ty[i]
+    if sym >= 0 and isel_intrinsic(g, i, sym):
+        ret
+    end
+    ccall := (g.i_f[i] & (IF_CCC | IF_STDCALL)) != 0
+    mut cabi := ccall
+    if not cabi and sym >= 0 and not g.sy_def[sym]:
+        cabi = is_agg(g, rt)
+        repeat na in k0:
+            if (g.pool[ps + 3 * k0 + 1] & IF_BYVAL) != 0 or is_agg(g, g.v_ty[g.pool[ps + 3 * k0]]):
+                cabi = true
+            end
+        end
+    end
+    mut regs := Vector {} as Vector<int>
+    mut cls := Vector {} as Vector<int>
+    mut rslot := 0 - 1
+    mut fwd := 0 - 1
+    mut rparts := CaParts {}
+    defer ca_free(rparts)
+    mut rmode := 0
+    mut rdst := frame_mem(0, 0 as i64)
+    if cabi and is_agg(g, rt):
+        rmode = ca_ret(g, rt, (g.i_f[i] & IF_VARARG) != 0, rparts)
+        if rmode < 0:
+            fail(
+                g,
+                "native backend: '" + (sym >= 0 ? tab_str(g.syms, sym) : "a function pointer") +
+                    "' returns a struct the native backend cannot return from C code; use --backend=llvm"
+            )
+            ret
+        end
+    end
+    if rmode == 1:
+        fwd = sret_forward(g, i)
+        if fwd >= 0:
+            rdst = mem_of(g, g.i_b[fwd], 0 as i64)
+            g.skipi[fwd] = true
+        else ret_passthru(g, i):
+            rdst = mem_bi(g.retp, 0 as i64)
+            g.skipi[g.i_next[i]] = true
+        else:
+            rslot = new_slot(g, align_up(tsize(g, rt), 8), talign(g, rt) < 8 ? 8 : talign(g, rt))
+            rdst = frame_mem(rslot, 0 as i64)
+        end
+    else is_agg(g, rt):
+        fwd = sret_forward(g, i)
+        if fwd >= 0:
+            regs.Push(lea_reg(g, mem_of(g, g.i_b[fwd], 0 as i64)))
+            g.skipi[fwd] = true
+        else ret_passthru(g, i):
+            regs.Push(g.retp)
+            g.skipi[g.i_next[i]] = true
+        else:
+            rslot = new_slot(g, tsize(g, rt), talign(g, rt))
+            regs.Push(lea_reg(g, frame_mem(rslot, 0 as i64)))
+        end
+        cls.Push(g.arch == NG_ARCH_A64 ? 2 : 0)
+    end
+    mut nfx := g.i_x[i]
+    repeat na in k:
+        v := g.pool[ps + 3 * k]
+        fl := g.pool[ps + 3 * k + 1]
+        aux := g.pool[ps + 3 * k + 2]
+        t := g.v_ty[v]
+        if cabi and k == g.i_x[i]:
+            nfx = 0
+            each c0 in cls:
+                if c0 != 2:
+                    nfx++
+                end
+            end
+        end
+        if cabi and (((fl & IF_BYVAL) != 0 and aux >= 0) or is_agg(g, t)):
+            byv := (fl & IF_BYVAL) != 0 and aux >= 0
+            va := (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and
+                (k >= g.i_x[i] or g.arch == NG_ARCH_ARM)
+            if not ca_arg(
+                g, byv ? mem_of(g, v, 0 as i64) : agg_mem(g, v), byv ? aux : t, byv, va, regs, cls
+            ):
+                fail(
+                    g,
+                    "native backend: '" + (sym >= 0 ? tab_str(g.syms, sym) : "a function pointer") +
+                        "' takes a struct the native backend cannot pass to C code; use --backend=llvm"
+                )
+                ret
+            end
+        else (fl & IF_BYVAL) != 0 and aux >= 0:
+            bs := new_slot(g, tsize(g, aux), talign(g, aux))
+            emit_copy(g, frame_mem(bs, 0 as i64), mem_of(g, v, 0 as i64), tsize(g, aux))
+            regs.Push(lea_reg(g, frame_mem(bs, 0 as i64)))
+            cls.Push(0)
+        else is_agg(g, t):
+            regs.Push(lea_reg(g, agg_mem(g, v)))
+            cls.Push(0)
+        else (fl & IF_SRET) != 0 and g.arch == NG_ARCH_A64 and
+            (ccall or (sym >= 0 and not g.sy_def[sym])):
+            regs.Push(use_reg(g, v))
+            cls.Push(2)
+        else is_flt(g, t) and g.arch == NG_ARCH_RV64 and (g.i_f[i] & IF_VARARG) != 0 and
+            g.i_x[i] >= 0 and k >= g.i_x[i]:
+            gf := gpr(g)
+            _mq := e_rr(g, M_MOVQ_GX, 8, gf, use_reg(g, v))
+            regs.Push(gf)
+            cls.Push(0)
+        else is_flt(g, t):
+            regs.Push(use_reg(g, v))
+            cls.Push(g.wsz == 4 and fsz(t) == 4 ? 3 : 1)
+        else:
+            r := use_reg(g, v)
+            mut ra := r
+            if int_bits(g, t) < 32:
+                ra = ext_arg(g, r, t, (fl & IF_SEXT) != 0)
+            end
+            if g.arch == NG_ARCH_RV64 and int_bits(g, t) <= 32:
+                rs := gpr(g)
+                sx := e_rr(g, M_MOVSX_RR, 8, rs, ra)
+                g.mc.sz2[sx] = 4
+                ra = rs
+            end
+            regs.Push(ra)
+            cls.Push(g.arch == NG_ARCH_ARM and (fl & IF_PAIR) != 0 ? 4 : 0)
+        end
+    end
+    mut cr := 0 - 1
+    if sym < 0:
+        cr = use_reg(g, callee)
+    end
+    vararg := (g.i_f[i] & IF_VARARG) != 0
+    if cabi and g.i_x[i] >= na:
+        nfx = 0
+        each c1 in cls:
+            if c1 != 2:
+                nfx++
+            end
+        end
+    end
+    mask := place_args(g, regs, cls, vararg, nfx)
+    mut ci := 0 - 1
+    if sym >= 0:
+        ci = mi_new(g, M_CALL, 8)
+        g.mc.msym[ci] = sym
+        g.sy_used[sym] = true
+        if g.arch == NG_ARCH_X86 and stdcall_bytes(g, sym) >= 0:
+            set_stdcall(g, sym, g.last_argsz)
+            g.mc.sz2[ci] = g.last_argsz
+        else g.arch == NG_ARCH_X86 and cabi and is_agg(g, rt) and rmode == 0 and
+            g.os != NG_OS_WINDOWS:
+            g.mc.sz2[ci] = 4
+        else g.arch == NG_ARCH_X86 and g.os != NG_OS_WINDOWS and (ccall or not g.sy_def[sym]) and
+            na > 0 and (g.pool[ps + 1] & IF_SRET) != 0:
+            g.mc.sz2[ci] = 4
+        end
+        if g.sy_kind[sym] == SY_UNKNOWN:
+            g.sy_kind[sym] = SY_FUNC
+        end
+    else:
+        ci = e_rr(g, M_CALLR, 8, 0 - 1, cr)
+        if g.arch == NG_ARCH_X86 and (g.i_f[i] & IF_STDCALL) != 0:
+            g.mc.sz2[ci] = g.last_argsz
+        else g.arch == NG_ARCH_X86 and g.os != NG_OS_WINDOWS and ccall and na > 0 and
+            (g.pool[ps + 1] & IF_SRET) != 0:
+            g.mc.sz2[ci] = 4
+        end
+    end
+    g.mc.imm[ci] = mask
+    g.mc.has_call = true
+    regs.Free()
+    cls.Free()
+    v2 := g.i_res[i]
+    if rmode == 1:
+        if rslot < 0 and ca_odd(rparts):
+            st := new_slot(g, align_up(tsize(g, rt), 8), 8)
+            ca_ret_store(g, rparts, frame_mem(st, 0 as i64))
+            emit_copy(g, rdst, frame_mem(st, 0 as i64), tsize(g, rt))
+        else:
+            ca_ret_store(g, rparts, rdst)
+        end
+    end
+    if rslot >= 0:
+        if v2 >= 0:
+            g.vak[v2] = AK_FRAME
+            g.var_[v2] = rslot
+            g.vao[v2] = 0
+            g.vown[v2] = true
+        end
+        ret
+    end
+    if fwd >= 0:
+        ret
+    end
+    if g.arch == NG_ARCH_X86 and is_flt(g, rt):
+        rx := x87_to_xmm(g, fsz(rt))
+        if v2 >= 0:
+            g.vv[v2] = rx
+        end
+        ret
+    end
+    if rt == T_VOID or v2 < 0:
+        ret
+    end
+    if is_flt(g, rt) and vararg and g.arch == NG_ARCH_ARM:
+        fs := fsz(rt)
+        lo := gpr(g)
+        _cl := e_copy(g, lo, RAX)
+        fsl := new_slot(g, 8, 8)
+        _sl := e_mr(g, M_ST, 4, frame_mem(fsl, 0 as i64), lo)
+        if fs == 8:
+            hi := gpr(g)
+            _ch := e_copy(g, hi, RCX)
+            _sh := e_mr(g, M_ST, 4, frame_mem(fsl, 4 as i64), hi)
+        end
+        rf := xmm(g)
+        _lf := e_rm(g, M_FLD, fs, rf, frame_mem(fsl, 0 as i64))
+        g.vv[v2] = rf
+        ret
+    end
+    if is_flt(g, rt):
+        r2 := xmm(g)
+        _c := e_copy(g, r2, XMM0)
+        g.vv[v2] = r2
+    else:
+        r3 := gpr(g)
+        _c2 := e_copy(g, r3, RAX)
+        g.vv[v2] = r3
+    end
+end
+
+func ret_passthru(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or g.retp < 0:
+        ret false
+    end
+    j := g.i_next[i]
+    ret j >= 0 and g.i_op[j] == OP_RET and g.i_a[j] == r
+end
+
+func call_arg(g &: Ng, i: int, k: int): int:
+    ret g.pool[g.i_ps[i] + 3 * k]
+end
+
+func isel_intrinsic(g &: Ng, i: int, sym: int): bool:
+    if sym == g.sym_i_trap:
+        _u := mi_new(g, M_UD2, 0)
+        ret true
+    end
+    if sym == g.sym_i_memcpy or sym == g.sym_i_memmove or sym == g.sym_i_memset:
+        dst := call_arg(g, i, 0)
+        src := call_arg(g, i, 1)
+        ln := call_arg(g, i, 2)
+        if g.v_kind[ln] == VK_INT and g.v_i[ln] <= (256 as i64):
+            n := g.v_i[ln] as int
+            if sym == g.sym_i_memset:
+                if g.v_kind[src] == VK_INT:
+                    fill_bytes(g, mem_of(g, dst, 0 as i64), n, g.v_i[src] as int)
+                    ret true
+                end
+            else sym == g.sym_i_memcpy:
+                if n <= 64 and ro_copy(g, dst, src, n):
+                    ret true
+                end
+                emit_copy(g, mem_of(g, dst, 0 as i64), mem_of(g, src, 0 as i64), n)
+                ret true
+            end
+        end
+        mut args := Vector {} as Vector<int>
+        args.Push(use_reg(g, dst))
+        if sym == g.sym_i_memset:
+            args.Push(ext_arg(g, use_reg(g, src), T_I8, false))
+        else:
+            args.Push(use_reg(g, src))
+        end
+        args.Push(use_reg(g, ln))
+        mut target := g.sym_memcpy
+        if sym == g.sym_i_memmove:
+            target = g.sym_memmove
+        else sym == g.sym_i_memset:
+            target = g.sym_memset
+        end
+        _r := call_lib(g, target, args, 0 - 1)
+        args.Free()
+        ret true
+    end
+    if sym == g.sym_i_pow:
+        mut args2 := Vector {} as Vector<int>
+        args2.Push(use_reg(g, call_arg(g, i, 0)))
+        args2.Push(use_reg(g, call_arg(g, i, 1)))
+        r := call_lib(g, g.sym_pow, args2, 1)
+        args2.Free()
+        set_res(g, i, r)
+        ret true
+    end
+    if g.sy_def[sym] or g.syms.len[sym] < 5:
+        ret false
+    end
+    o := g.syms.off[sym]
+    if g.syms.bytes[o] == (108 as u8) and g.syms.bytes[o + 1] == (108 as u8) and
+        g.syms.bytes[o + 2] == (118 as u8) and g.syms.bytes[o + 3] == (109 as u8) and
+        g.syms.bytes[o + 4] == (46 as u8):
+        fail(g, "native backend: unsupported intrinsic @" + tab_str(g.syms, sym))
+        ret true
+    end
+    ret false
+end
+
+func isel_ret(g &: Ng, i: int):
+    a := g.i_a[i]
+    mut mask := 0 as i64
+    if a < 0 and g.f_cabi and g.f_sret and g.retp >= 0:
+        _cs := e_copy(g, RAX, g.retp)
+        mask = 1 as i64
+    end
+    if a >= 0:
+        t := g.v_ty[a]
+        if is_agg(g, t) and g.f_cabi:
+            mask = ca_ret_load(g, t, a)
+        else is_agg(g, t):
+            in_place := g.v_kind[a] == VK_INS and g.vak[a] == AK_PTR and g.var_[a] == g.retp and
+                g.vao[a] == 0
+            if g.v_kind[a] == VK_ZERO:
+                zero_fill(g, mem_bi(g.retp, 0 as i64), tsize(g, t))
+            else g.v_kind[a] != VK_UNDEF and not in_place:
+                emit_copy(g, mem_bi(g.retp, 0 as i64), agg_mem(g, a), tsize(g, t))
+            end
+            _c := e_copy(g, RAX, g.retp)
+            mask = 1 as i64
+        else is_flt(g, t) and g.arch == NG_ARCH_X86:
+            xmm_to_x87(g, use_reg(g, a), fsz(t))
+        else is_flt(g, t):
+            r := use_reg(g, a)
+            _c2 := e_copy(g, XMM0, r)
+            mask = (1 as i64) << (XMM0 as i64)
+        else:
+            if g.i_b[i] >= 0 and g.wsz == 4:
+                move_into(g, hi_reg(g), g.i_b[i])
+                mask |= ((1 as i64) << (hi_reg(g) as i64))
+            end
+            if t == T_I1:
+                r2 := use_reg(g, a)
+                z := e_rr(g, M_MOVZX_RR, 4, RAX, r2)
+                g.mc.sz2[z] = 1
+            else:
+                move_into(g, RAX, a)
+            end
+            if g.arch == NG_ARCH_RV64 and int_bits(g, t) <= 32:
+                rsx := e_rr(g, M_MOVSX_RR, 8, RAX, RAX)
+                g.mc.sz2[rsx] = 4
+            end
+            mask |= (1 as i64)
+        end
+    end
+    ri := mi_new(g, M_RET, 0)
+    g.mc.imm[ri] = mask
+end

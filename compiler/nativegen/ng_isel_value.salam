@@ -1,0 +1,209 @@
+package nativegen
+
+import str
+
+func sel_scalar(g &: Ng, t: int): bool:
+    ret not is_agg(g, t) and not is_flt(g, t) and not is_vec(g, t)
+end
+
+func cond_only(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.v_cu.Len() and g.v_kind[v] == VK_INS and g.v_cu[v] == g.v_uses[v] and
+        (g.i_op[g.v_def[v]] == OP_ICMP or g.i_op[g.v_def[v]] == OP_CMP64)
+end
+
+func def_op(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if d < 0:
+        ret 0 - 1
+    end
+    ret g.i_op[d]
+end
+
+func addr_only(g &: Ng, v: int): bool:
+    ret def_op(g, v) == OP_ADDR and g.v_mem[v] == g.v_uses[v]
+end
+
+func fp_const(g &: Ng, bits: i64, sz: int): Mem:
+    mut off := 0
+    if sz == 4:
+        fb := f32_bits_of(bits_f64(bits))
+        if g.fpc4.Has(fb):
+            off = g.fpc4.Get(fb)
+        else:
+            sec_align_to(g, SEC_CONST, 4)
+            off = g.s_cst.Len()
+            sec_le(g, SEC_CONST, fb, 4)
+            g.fpc4.Put(fb, off)
+        end
+    else:
+        if g.fpc.Has(bits):
+            off = g.fpc.Get(bits)
+        else:
+            sec_align_to(g, SEC_CONST, 8)
+            off = g.s_cst.Len()
+            sec_le(g, SEC_CONST, bits, 8)
+            g.fpc.Put(bits, off)
+        end
+    end
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func raw_const(g &: Ng, bits: i64, sz: int): Mem:
+    mut off := 0
+    if g.fpcr.Has(bits):
+        off = g.fpcr.Get(bits)
+    else:
+        sec_align_to(g, SEC_CONST, 16)
+        off = g.s_cst.Len()
+        sec_le(g, SEC_CONST, bits, sz)
+        sec_pad(g, SEC_CONST, 16 - sz)
+        g.fpcr.Put(bits, off)
+    end
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func vec_const(g &: Ng, lo: i64, hi: i64): Mem:
+    key := "v" + str.FromInt(lo) + ":" + str.FromInt(hi)
+    if g.vconst.Has(key):
+        ret Mem { k = MK_RIP, sym = g.sym_ro, d = g.vconst.Get(key) as i64 }
+    end
+    sec_align_to(g, SEC_CONST, 16)
+    off := g.s_cst.Len()
+    sec_le(g, SEC_CONST, lo, 8)
+    sec_le(g, SEC_CONST, hi, 8)
+    g.vconst.Put(key, off)
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func vec_const32(g &: Ng, w0: i64, w1: i64, w2: i64, w3: i64): Mem:
+    key := "y" + str.FromInt(w0) + ":" + str.FromInt(w1) + ":" + str.FromInt(w2) + ":" +
+        str.FromInt(w3)
+    if g.vconst.Has(key):
+        ret Mem { k = MK_RIP, sym = g.sym_ro, d = g.vconst.Get(key) as i64 }
+    end
+    sec_align_to(g, SEC_CONST, 32)
+    off := g.s_cst.Len()
+    sec_le(g, SEC_CONST, w0, 8)
+    sec_le(g, SEC_CONST, w1, 8)
+    sec_le(g, SEC_CONST, w2, 8)
+    sec_le(g, SEC_CONST, w3, 8)
+    g.vconst.Put(key, off)
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func frame_mem(slot: int, d: i64): Mem:
+    ret Mem { k = MK_FRAME, b = slot, d = d }
+end
+
+func use_reg(g &: Ng, v: int): int:
+    k := g.v_kind[v]
+    if k == VK_INS or k == VK_ARG:
+        ak := g.vak[v]
+        if ak == AK_ALLOCA:
+            r := gpr(g)
+            _l := e_rm(g, M_LEA, 8, r, frame_mem(g.var_[v], 0 as i64))
+            ret r
+        end
+        if ak == AK_FRAME or ak == AK_PTR:
+            r2 := gpr(g)
+            _l2 := e_rm(g, M_LEA, 8, r2, agg_mem(g, v))
+            ret r2
+        end
+        if addr_only(g, v):
+            r3 := gpr(g)
+            _l3 := e_rm(g, M_LEA, 8, r3, mem_of(g, v, 0 as i64))
+            ret r3
+        end
+        lfx := lf_mem(g, v)
+        if lfx >= 0:
+            g.lfold[v] = 0 - 1
+            rlx := gpr(g)
+            lsz := msz(g, g.v_ty[v])
+            if lsz >= 4:
+                _ll := e_rm(g, M_LD, lsz, rlx, mem_of(g, g.i_a[lfx], 0 as i64))
+            else:
+                llz := e_rm(g, M_LDZX, 4, rlx, mem_of(g, g.i_a[lfx], 0 as i64))
+                g.mc.sz2[llz] = lsz
+            end
+            g.vv[v] = rlx
+            ret rlx
+        end
+        r4 := g.vv[v]
+        if r4 >= 0:
+            sr := split_lookup(g, v)
+            if sr >= 0:
+                ret sr
+            end
+        end
+        if r4 < 0:
+            fail(
+                g, "native backend: value used before its definition in " + tab_str(g.syms, g.f_sym)
+            )
+            ret gpr(g)
+        end
+        ret r4
+    end
+    if k == VK_INT:
+        if is_flt(g, g.v_ty[v]):
+            ret float_reg(g, g.v_i[v], g.v_ty[v])
+        end
+        r5 := gpr(g)
+        _m := e_movi(g, r5, g.v_i[v])
+        ret r5
+    end
+    if k == VK_FLT:
+        ret float_reg(g, g.v_i[v], g.v_ty[v])
+    end
+    if k == VK_GLB:
+        r6 := gpr(g)
+        s := g.v_def[v]
+        if g.sy_def[s]:
+            _l4 := e_rm(g, M_LEA, 8, r6, Mem { k = MK_RIP, sym = s, d = g.v_i[v] })
+        else:
+            _l5 := e_rm(g, M_LDGOT, 8, r6, Mem { k = MK_GOT, sym = s })
+            if g.v_i[v] != (0 as i64):
+                _a := e_alui(g, ALU_ADD, 8, r6, g.v_i[v])
+            end
+        end
+        ret r6
+    end
+    if vcls_ty(g, g.v_ty[v]) == 1:
+        r7 := new_reg_ty(g, g.v_ty[v])
+        _x := e_rr(g, M_XORPS, zero_sz(g, g.v_ty[v]), r7, r7)
+        ret r7
+    end
+    r8 := gpr(g)
+    _z := e_movi(g, r8, 0 as i64)
+    ret r8
+end
+
+func zero_sz(g &: Ng, t: int): int:
+    if g.arch == NG_ARCH_RV64 and is_flt(g, t):
+        ret fsz(t)
+    end
+    ret 8
+end
+
+func float_reg(g &: Ng, bits: i64, t: int): int:
+    r := xmm(g)
+    if bits == (0 as i64):
+        _x := e_rr(g, M_XORPS, zero_sz(g, t), r, r)
+        ret r
+    end
+    sz := fsz(t)
+    _l := e_rm(g, M_FLD, sz, r, fp_const(g, bits, sz))
+    ret r
+end
+
+func move_into(g &: Ng, dst: int, v: int):
+    k := g.v_kind[v]
+    if k == VK_INT and not is_flt(g, g.v_ty[v]) and g.mc.vcls[dst] == 0:
+        _m := e_movi(g, dst, g.v_i[v])
+        ret
+    end
+    r := use_reg(g, v)
+    _c := e_copy(g, dst, r)
+end

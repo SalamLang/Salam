@@ -1,0 +1,180 @@
+package nativegen
+
+func lg_fix_call(g &: Ng, l &: Lg, i: int):
+    ps := g.i_ps[i]
+    n := g.i_pcount[i]
+    mut any := false
+    repeat n in k:
+        v := g.pool[ps + 3 * k]
+        if v >= 0 and is_w64(g.v_ty[v]):
+            any = true
+        end
+    end
+    if any:
+        mut vals := Vector {} as Vector<int>
+        mut fls := Vector {} as Vector<int>
+        mut aux := Vector {} as Vector<int>
+        repeat n in k2:
+            v2 := g.pool[ps + 3 * k2]
+            if v2 >= 0 and is_w64(g.v_ty[v2]):
+                mut lo := 0
+                mut hi := 0
+                lg_pair(g, l, v2, lo, hi)
+                vals.Push(lo)
+                vals.Push(hi)
+                fls.Push(IF_PAIR)
+                fls.Push(0)
+                aux.Push(0 - 1)
+                aux.Push(0 - 1)
+            else:
+                vals.Push(v2)
+                fls.Push(g.pool[ps + 3 * k2 + 1])
+                aux.Push(g.pool[ps + 3 * k2 + 2])
+            end
+        end
+        g.i_ps[i] = g.pool.Len()
+        g.i_pcount[i] = vals.Len()
+        repeat vals.Len() in k3:
+            g.pool.Push(vals[k3])
+            g.pool.Push(fls[k3])
+            g.pool.Push(aux[k3])
+        end
+        if g.i_x[i] >= 0:
+            mut nfx := 0
+            repeat n in k4:
+                if k4 < g.i_x[i]:
+                    v4 := g.pool[ps + 3 * k4]
+                    nfx += v4 >= 0 and is_w64(g.v_ty[v4]) ? 2 : 1
+                end
+            end
+            g.i_x[i] = nfx
+        end
+        vals.Free()
+        fls.Free()
+        aux.Free()
+    end
+    r := g.i_res[i]
+    if r >= 0 and is_w64(g.i_ty[i]):
+        g.i_ty[i] = T_I32
+        nx := g.i_next[i]
+        hi2 := lg_ins(g, nx, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+        nr := new_val(g, VK_INS, T_I32, 0 as i64)
+        g.v_def[nr] = i
+        g.i_res[i] = nr
+        lg_set(g, l, r, nr, hi2)
+    end
+end
+
+func lg_intrinsic_len(g &: Ng, l &: Lg, i: int):
+    ps := g.i_ps[i]
+    repeat g.i_pcount[i] in k:
+        v := g.pool[ps + 3 * k]
+        if v >= 0 and is_w64(g.v_ty[v]):
+            mut lo := 0
+            mut hi := 0
+            lg_pair(g, l, v, lo, hi)
+            g.pool[ps + 3 * k] = lo
+        end
+    end
+end
+
+func lg_is_intrinsic(g &: Ng, i: int): bool:
+    fv := g.i_a[i]
+    if fv < 0 or g.v_kind[fv] != VK_GLB:
+        ret false
+    end
+    s := g.v_def[fv]
+    ret s == g.sym_i_memcpy or s == g.sym_i_memmove or s == g.sym_i_memset
+end
+
+func lg_atomic_call(g &: Ng, at: int, name: str, ptr: int, vals: Vector<int>, lo &: int, hi &: int):
+    mut args := Vector {} as Vector<int>
+    args.Push(ptr)
+    each v in vals:
+        args.Push(v)
+    end
+    mut h := 0
+    lo = lg_call(g, at, name, args, T_I64, h)
+    hi = h
+    args.Free()
+end
+
+func lg_atomic(g &: Ng, l &: Lg, i: int): bool:
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    mut vals := Vector {} as Vector<int>
+    defer vals.Free()
+    mut lo := 0
+    mut hi := 0
+    if op == OP_RMW and is_w64(ty):
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, b, bl, bh)
+        vals.Push(bl)
+        vals.Push(bh)
+        lg_atomic_call(g, i, "__salam_rmw8_" + k_x86_rmw8_nm[g.i_x[i]], a, vals, lo, hi)
+        if r >= 0:
+            lg_set(g, l, r, lo, hi)
+        end
+        ins_unlink(g, i)
+        ret true
+    end
+    if op == OP_CMPXCHG and is_w64(field_ty(g, ty, 0)):
+        mut el := 0
+        mut eh := 0
+        mut nl := 0
+        mut nh := 0
+        lg_pair(g, l, b, el, eh)
+        lg_pair(g, l, g.i_c[i], nl, nh)
+        vals.Push(el)
+        vals.Push(eh)
+        vals.Push(nl)
+        vals.Push(nh)
+        lg_atomic_call(g, i, "__salam_cas8", a, vals, lo, hi)
+        x1 := lg_ins(g, i, OP_XOR, T_I32, lo, el)
+        x2 := lg_ins(g, i, OP_XOR, T_I32, hi, eh)
+        o := lg_ins(g, i, OP_OR, T_I32, x1, x2)
+        ok := lg_icmp(g, i, CC_EQ, o, lg_c32(g, 0 as i64))
+        u := new_val(g, VK_UNDEF, ty, 0 as i64)
+        v1 := lg_ins(g, i, OP_INSV, ty, u, lo)
+        g.i_x[g.v_def[v1]] = T_I32
+        g.i_d[g.v_def[v1]] = 0 as i64
+        v2 := lg_ins(g, i, OP_INSV, ty, v1, hi)
+        g.i_x[g.v_def[v2]] = T_I32
+        g.i_d[g.v_def[v2]] = 4 as i64
+        v3 := lg_ins(g, i, OP_INSV, ty, v2, ok)
+        g.i_x[g.v_def[v3]] = T_I1
+        g.i_d[g.v_def[v3]] = field_off(g, ty, 1) as i64
+        replace_res(g, i, v3)
+        ret true
+    end
+    if (g.i_f[i] & IF_ATOMIC) == 0:
+        ret false
+    end
+    if op == OP_LOAD and is_w64(ty):
+        z := lg_c32(g, 0 as i64)
+        repeat 4:
+            vals.Push(z)
+        end
+        lg_atomic_call(g, i, "__salam_cas8", a, vals, lo, hi)
+        if r >= 0:
+            lg_set(g, l, r, lo, hi)
+        end
+        ins_unlink(g, i)
+        ret true
+    end
+    if op == OP_STORE and a >= 0 and is_w64(g.v_ty[a]):
+        mut sl := 0
+        mut sh := 0
+        lg_pair(g, l, a, sl, sh)
+        vals.Push(sl)
+        vals.Push(sh)
+        lg_atomic_call(g, i, "__salam_rmw8_xchg", b, vals, lo, hi)
+        ins_unlink(g, i)
+        ret true
+    end
+    ret false
+end

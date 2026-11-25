@@ -1,0 +1,316 @@
+package nativegen
+
+func insv_covers_all(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if g.t_kind[t] != TK_STRUCT:
+        ret false
+    end
+    nf := g.t_nf[t]
+    if nf <= 0 or nf > 64:
+        ret false
+    end
+    mut seen := Vector {} as Vector<i64>
+    mut ssz := Vector {} as Vector<i64>
+    mut j := i
+    repeat 4 * nf + 2:
+        if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
+            break
+        end
+        seen.Push(g.i_d[j])
+        ssz.Push(tsize(g, g.i_x[j]) as i64)
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            break
+        end
+        mut nj := 0 - 1
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r:
+                nj = k
+                break
+            end
+            k = g.i_next[k]
+        end
+        j = nj
+    end
+    mut all := true
+    repeat nf in f:
+        fo := g.t_offs[g.t_fs[t] + f] as i64
+        fe := fo + (tsize(g, g.t_pool[g.t_fs[t] + f]) as i64)
+        mut pos := fo
+        mut hit := true
+        until hit and pos < fe:
+            hit = false
+            repeat seen.Len() in q:
+                if seen[q] == pos and ssz[q] > (0 as i64):
+                    pos += ssz[q]
+                    hit = true
+                    break
+                end
+            end
+        end
+        if pos < fe:
+            all = false
+        end
+    end
+    seen.Free()
+    ssz.Free()
+    ret all
+end
+
+func insv_to_ret(g &: Ng, i: int): bool:
+    if g.retp < 0:
+        ret false
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret false
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_RET and g.i_a[k] == r:
+                ret true
+            end
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if g.i_op[k] == OP_CALL or g.i_op[k] == OP_STORE or g.i_op[k] == OP_LOAD:
+                ret false
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret false
+        end
+        j = k
+    end
+    ret false
+end
+
+func insv_to_store(g &: Ng, i: int): int:
+    if g.off_istore:
+        ret 0 - 1
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret 0 - 1
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            op := g.i_op[k]
+            if op == OP_STORE and g.i_a[k] == r:
+                p := g.i_b[k]
+                if (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0 or p == r:
+                    ret 0 - 1
+                end
+                pk := g.v_kind[p]
+                if (pk == VK_INS and g.vak[p] == AK_ALLOCA) or pk == VK_ARG:
+                    ret k
+                end
+                ret 0 - 1
+            end
+            if op == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if op == OP_CALL or op == OP_STORE or op == OP_LOAD or uses_val(g, k, r):
+                ret 0 - 1
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret 0 - 1
+        end
+        j = k
+    end
+    ret 0 - 1
+end
+
+func zero_const(g &: Ng, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    k := g.v_kind[v]
+    ret k == VK_ZERO or (k == VK_INT and g.v_i[v] == (0 as i64))
+end
+
+func insv_zero_chain(g &: Ng, head: int, need: bool): bool:
+    t := g.i_ty[head]
+    mut zs := Vector {} as Vector<int>
+    mut j := head
+    repeat 256:
+        if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
+            break
+        end
+        if zero_const(g, g.i_b[j]) and not is_flt(g, g.i_x[j]):
+            zs.Push(j)
+        end
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            break
+        end
+        mut nj := 0 - 1
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r:
+                nj = k
+                break
+            end
+            if uses_val(g, k, r):
+                break
+            end
+            k = g.i_next[k]
+        end
+        j = nj
+    end
+    ok := not need or zs.Len() >= 4
+    if ok:
+        each z in zs:
+            g.izero[z] = true
+        end
+    end
+    zs.Free()
+    ret ok
+end
+
+func isel_insv(g &: Ng, i: int):
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    r := g.i_res[i]
+    sz := tsize(g, t)
+    k := g.v_kind[a]
+    mut m := frame_mem(0, 0 as i64)
+    mut ak := AK_FRAME
+    mut base := 0 - 1
+    if k == VK_INS and (g.vak[a] == AK_FRAME or g.vak[a] == AK_PTR) and g.vao[a] == 0 and
+        g.v_uses[a] == 1 and g.vown[a]:
+        ak = g.vak[a]
+        base = g.var_[a]
+        m = agg_mem(g, a)
+    else:
+        sd := insv_to_ret(g, i) ? 0 - 1 : insv_to_store(g, i)
+        if insv_to_ret(g, i):
+            ak = AK_PTR
+            base = g.retp
+            m = mem_bi(base, 0 as i64)
+        else sd >= 0 and g.v_kind[g.i_b[sd]] == VK_ARG:
+            ak = AK_PTR
+            base = use_reg(g, g.i_b[sd])
+            m = mem_bi(base, 0 as i64)
+            g.skipi[sd] = true
+        else sd >= 0:
+            ak = AK_FRAME
+            base = g.var_[g.i_b[sd]]
+            m = frame_mem(base, 0 as i64)
+            g.skipi[sd] = true
+        else:
+            base = new_slot(g, sz, talign(g, t))
+            m = frame_mem(base, 0 as i64)
+        end
+        if k == VK_ZERO:
+            if not insv_covers_all(g, i):
+                zero_fill(g, m, sz)
+                if not g.off_izero:
+                    _zc := insv_zero_chain(g, i, false)
+                end
+            end
+        else k != VK_UNDEF:
+            emit_copy(g, m, agg_mem(g, a), sz)
+        else not g.off_izero and insv_zero_chain(g, i, true):
+            zero_fill(g, m, sz)
+        end
+    end
+    if not g.izero[i]:
+        store_field(g, mem_add(m, g.i_d[i] as int), g.i_b[i], g.i_x[i])
+    end
+    if r >= 0:
+        g.vak[r] = ak
+        g.var_[r] = base
+        g.vao[r] = 0
+        g.vown[r] = true
+    end
+end
+
+func store_field(g &: Ng, m: Mem, v: int, ft: int):
+    if is_agg(g, ft):
+        kv := g.v_kind[v]
+        if kv == VK_ZERO:
+            zero_fill(g, m, tsize(g, ft))
+        else kv != VK_UNDEF:
+            emit_copy(g, m, agg_mem(g, v), tsize(g, ft))
+        end
+        ret
+    end
+    if g.v_kind[v] == VK_UNDEF:
+        ret
+    end
+    if g.v_kind[v] == VK_INT and not is_flt(g, ft) and is_imm32(g.v_i[v]):
+        si := mi_new(g, M_STI, msz(g, ft))
+        set_mem(g, si, m)
+        g.mc.imm[si] = g.v_i[v]
+        ret
+    end
+    rv := use_reg(g, v)
+    if is_flt(g, ft):
+        _s := e_mr(g, M_FST, fsz(ft), m, rv)
+    else:
+        _s2 := e_mr(g, M_ST, msz(g, ft), m, rv)
+    end
+end
+
+func isel_extv(g &: Ng, i: int):
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    r := g.i_res[i]
+    off := g.i_d[i] as int
+    if r < 0 or g.v_uses[r] == 0:
+        ret
+    end
+    if is_agg(g, t):
+        am := agg_mem(g, a)
+        if am.k == MK_FRAME:
+            g.vak[r] = AK_FRAME
+            g.var_[r] = am.b
+            g.vao[r] = (am.d as int) + off
+        else:
+            g.vak[r] = AK_PTR
+            g.var_[r] = am.b
+            g.vao[r] = (am.d as int) + off
+        end
+        ret
+    end
+    k := g.v_kind[a]
+    if k == VK_ZERO or k == VK_UNDEF:
+        if is_flt(g, t):
+            r1 := xmm(g)
+            _x := e_rr(g, M_XORPS, zero_sz(g, t), r1, r1)
+            set_res(g, i, r1)
+        else:
+            r2 := gpr(g)
+            _m := e_movi(g, r2, 0 as i64)
+            set_res(g, i, r2)
+        end
+        ret
+    end
+    m := mem_add(agg_mem(g, a), off)
+    if is_flt(g, t):
+        r3 := xmm(g)
+        _l := e_rm(g, M_FLD, fsz(t), r3, m)
+        set_res(g, i, r3)
+        ret
+    end
+    r4 := gpr(g)
+    sz := msz(g, t)
+    if sz >= 4:
+        _l2 := e_rm(g, M_LD, sz, r4, m)
+    else:
+        l := e_rm(g, M_LDZX, 4, r4, m)
+        g.mc.sz2[l] = sz
+    end
+    set_res(g, i, r4)
+end

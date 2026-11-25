@@ -1,0 +1,162 @@
+package nativelink
+
+func place_ds(l &: Nl, k: int, size: i64, al: i64, fpos &: i64):
+    fpos = align_to(fpos, al)
+    l.ds_off[k] = fpos
+    l.ds_addr[k] = l.base + fpos
+    l.ds_size[k] = size
+    fpos += size
+end
+
+func dyn_tables(l &: Nl, d &: Dyn):
+    d.str.Push(0 as u8)
+    if l.shared:
+        d.soname_str = ds_put_str(d, l.soname)
+    end
+    repeat l.sl_file.Len() in lb:
+        d.lib_str.Push(l.sl_used[lb] ? ds_put_str(d, l.sl_soname[lb]) : (0 as i64))
+    end
+    each g in l.dyn_sym:
+        d.sym_str.Push(ds_put_name(d, l, l.g_name[g]))
+        _v := ver_index(d, l.g_lib[g], l.g_ver[g])
+    end
+    repeat d.vn_lib.Len() in k:
+        d.vn_str[k] = ds_put_name(d, l, d.vn_name[k])
+    end
+    mut nd := 0
+    repeat l.sl_file.Len() in lb2:
+        if l.sl_used[lb2]:
+            nd++
+        end
+    end
+    d.ndynent = nd + 24
+end
+
+func dyn_interp(l &: Nl):
+    if l.shared or not str.Equals(l.interp, "/lib64/ld-linux-x86-64.so.2"):
+        ret
+    end
+    switch l.mach:
+        EM_AARCH64: l.interp = "/lib/ld-linux-aarch64.so.1" break end
+        EM_386: l.interp = "/lib/ld-linux.so.2" break end
+        EM_ARM: l.interp = "/lib/ld-linux-armhf.so.3" break end
+        EM_RISCV: l.interp = "/lib/ld-linux-riscv64-lp64d.so.1" break end
+    end
+end
+
+func place_dyn(l &: Nl):
+    l.base = 0 as i64
+    if not l.pie:
+        l.base = l.mach == EM_386 ? (0x08048000 as i64) : (0x10000 as i64)
+    end
+    l.nphdr = l.shared ? 6 : 8
+    if has_tls(l):
+        l.nphdr++
+    end
+    if has_exidx(l):
+        l.nphdr++
+    end
+    ehh_reserve(l)
+    mut d := Dyn {}
+    dyn_tables(l, d)
+    l.dstr_keep = d
+    repeat OC_COUNT:
+        l.oc_addr.Push(0 as i64)
+        l.oc_size.Push(0 as i64)
+        l.oc_fpos.Push(0 as i64)
+        l.oc_align.Push(1 as i64)
+    end
+    repeat DS_COUNT:
+        l.ds_off.Push(0 as i64)
+        l.ds_size.Push(0 as i64)
+        l.ds_addr.Push(0 as i64)
+    end
+    repeat 3:
+        l.seg_vaddr.Push(0 as i64)
+        l.seg_fpos.Push(0 as i64)
+        l.seg_fsz.Push(0 as i64)
+        l.seg_msz.Push(0 as i64)
+    end
+    nsym := l.dyn_sym.Len() + 1
+    nhash := nsym - l.dyn_hash0
+    mut nvl := 0
+    repeat l.sl_file.Len() in lb:
+        mut has := false
+        each lv in d.vn_lib:
+            if lv == lb:
+                has = true
+            end
+        end
+        if has:
+            nvl++
+        end
+    end
+    ws := dy_ws(l) as i64
+    mut fpos := ehdr_size(l)
+    place_ds(l, DS_INTERP, l.shared ? (0 as i64) : ((str.Len(l.interp) + 1) as i64), 1 as i64, fpos)
+    place_ds(l, DS_GHASH, (16 as i64) + ws + ((4 * (l.gh_nb + nhash)) as i64), ws, fpos)
+    place_ds(l, DS_DYNSYM, (dy_symsz(l) * nsym) as i64, ws, fpos)
+    place_ds(l, DS_DYNSTR, d.str.Len() as i64, 1 as i64, fpos)
+    place_ds(l, DS_VERSYM, (2 * nsym) as i64, 2 as i64, fpos)
+    place_ds(l, DS_VERNEED, (16 * nvl + 16 * d.vn_lib.Len()) as i64, ws, fpos)
+    place_ds(l, DS_RELA, (dy_relsz(l) * l.stat_dynrel) as i64, ws, fpos)
+    place_class(l, OC_RODATA, fpos, false)
+    place_class(l, OC_EHFRAME, fpos, false)
+    ehh_place(l, fpos)
+    place_class(l, OC_EXIDX, fpos, false)
+    l.seg_vaddr[0] = l.base
+    l.seg_fsz[0] = fpos
+    l.seg_msz[0] = fpos
+    fpos = align_to(fpos, nl_page(l) as i64)
+    rx := fpos
+    place_class(l, OC_INIT, fpos, false)
+    place_ds(l, DS_PLT, (16 * l.plt_sym.Len()) as i64, 16 as i64, fpos)
+    place_class(l, OC_TEXT, fpos, false)
+    place_class(l, OC_FINI, fpos, false)
+    l.seg_vaddr[1] = l.base + rx
+    l.seg_fpos[1] = rx
+    l.seg_fsz[1] = fpos - rx
+    l.seg_msz[1] = fpos - rx
+    fpos = align_to(fpos, nl_page(l) as i64)
+    rw := fpos
+    l.relro_lo = l.base + fpos
+    place_class(l, OC_PREINITARR, fpos, false)
+    place_class(l, OC_INITARR, fpos, false)
+    place_class(l, OC_FINIARR, fpos, false)
+    place_class(l, OC_DATAREL, fpos, false)
+    place_ds(l, DS_DYNAMIC, (dy_dynsz(l) * d.ndynent) as i64, ws, fpos)
+    place_ds(l, DS_GOT, ws * (l.got_sym.Len() as i64), ws, fpos)
+    l.oc_addr[OC_GOT] = l.ds_addr[DS_GOT]
+    l.oc_fpos[OC_GOT] = l.ds_off[DS_GOT]
+    l.oc_size[OC_GOT] = l.ds_size[DS_GOT]
+    l.relro_hi = l.base + fpos
+    place_class(l, OC_DATA, fpos, false)
+    tls_place(l, fpos)
+    file_end := fpos
+    mut mem := fpos
+    place_class(l, OC_BSS, mem, true)
+    l.cp_addr.Clear()
+    each cg in l.cp_g:
+        sz := sd_size_of(l, cg)
+        mem = align_to(mem, sz >= (16 as i64) ? (16 as i64) : (8 as i64))
+        l.cp_addr.Push(l.base + mem)
+        mem += (sz > (0 as i64) ? sz : (8 as i64))
+    end
+    if l.cp_g.Len() > 0:
+        if l.oc_size[OC_BSS] == (0 as i64):
+            l.oc_addr[OC_BSS] = l.cp_addr[0]
+            l.oc_fpos[OC_BSS] = l.cp_addr[0] - l.base
+        end
+        l.oc_size[OC_BSS] = l.base + mem - l.oc_addr[OC_BSS]
+    end
+    l.seg_vaddr[2] = l.base + rw
+    l.seg_fpos[2] = rw
+    l.seg_fsz[2] = file_end - rw
+    l.seg_msz[2] = mem - rw
+    l.file_size = file_end
+    l.image_end = l.base + mem
+    st := glob_find(l, "_start")
+    if st >= 0 and not l.shared:
+        l.entry = sym_addr_g(l, st)
+    end
+end

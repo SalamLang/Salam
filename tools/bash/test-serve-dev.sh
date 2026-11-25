@@ -117,7 +117,7 @@ wait "$EV"
 case "$(cat "$T/ev.txt")" in *'"kind":"reload"'*) r=reload ;; *) r=other ;; esac
 check "an unknown server instance reloads" "$r" "reload"
 
-left=$(ls -A "$T/site" | sort | tr '\n' ' ')
+left=$(find "$T/site" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')
 check "nothing is written next to the sources" "$left" "app.salam extra.css index.html leak.txt logo.txt "
 
 kill "$PID" 2>/dev/null

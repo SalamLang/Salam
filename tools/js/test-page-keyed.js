@@ -137,6 +137,51 @@ function check(name, ok, detail) {
     await page.$eval("#in-d", (e) => e.value),
   );
 
+  await page.click("#fill");
+  await page.click("#hit-c");
+  await page.click("#hit-c");
+  await page.click("#hit-e");
+  check(
+    "a row counter counts",
+    (await page.textContent("#hit-c")) === "c 2",
+    await page.textContent("#hit-c"),
+  );
+  check(
+    "a click reads its row",
+    (await page.textContent("#last")) === "last e",
+    await page.textContent("#last"),
+  );
+  await page.click("#rev");
+  await page.click("#drop");
+  check(
+    "a row counter moves with its row",
+    (await page.textContent("#hit-c")) === "c 2" &&
+      (await page.textContent("#hit-e")) === "e 1" &&
+      (await page.textContent("#hit-a")) === "a 0",
+    [
+      await page.textContent("#hit-c"),
+      await page.textContent("#hit-e"),
+      await page.textContent("#hit-a"),
+    ].join(","),
+  );
+  await page.click("#hit-a");
+  check(
+    "a click after a move reads the moved row",
+    (await page.textContent("#last")) === "last a",
+    await page.textContent("#last"),
+  );
+
+  await page.click("#tag-b");
+  check(
+    "an unkeyed stateful list renders and counts",
+    (await page.$$eval("#plain li", (l) => l.length)) === 4 &&
+      (await page.textContent("#tag-b")) === "b 1" &&
+      (await page.textContent("#last")) === "last b",
+    await page.$$eval("#plain li", (l) =>
+      l.map((e) => e.textContent).join(","),
+    ),
+  );
+
   check("no script errors", errors.length === 0, errors.join(" | "));
   await browser.close();
   console.log(

@@ -20,14 +20,14 @@ needs micro 2.0 or later and the `linter` plugin that ships with it.
 
 Press `Ctrl-e` and type a command.
 
-| Command                    | What it does                                                  |
-| -------------------------- | ------------------------------------------------------------- |
-| `salamrun`                 | Save and run: `salam run FILE`, or `salam run` in the project |
-| `salambuild`               | Save and build: `salam build FILE`, or the project            |
-| `salamcheck`               | Save, run `salam check`, jump to the first error              |
-| `salamformat`              | Save, run `salam format`, reload the buffer                   |
-| `salamnew [dir]`           | Start the `salam init` wizard for a new project               |
-| `salamplatform [P [ARCH]]` | Pick `--platform` (web, js, android, ios, linux, macos, windows, all) and `--arch` for run and build; `default` clears it |
+| Command                    | What it does                                                                                                                              |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `salamrun`                 | Save and run: `salam run FILE`, or `salam run` in the project                                                                             |
+| `salambuild`               | Save and build: `salam build FILE`, or the project                                                                                        |
+| `salamcheck`               | Save, run `salam check`, jump to the first error                                                                                          |
+| `salamformat`              | Save, run `salam format`, reload the buffer                                                                                               |
+| `salamnew [dir]`           | Start the `salam init` wizard for a new project                                                                                           |
+| `salamplatform [P [ARCH]]` | Pick `--platform` (`web`, `js`, `android`, `ios`, `linux`, `macos`, `windows`, `all`) and `--arch` for run and build; `default` clears it |
 
 A file counts as part of a project when a `salam.toml` sits in its folder or
 above. Then run and build use `salam run` and `salam build` from the project
@@ -42,10 +42,10 @@ Suggested keys, in `~/.config/micro/bindings.json`:
 
 ```json
 {
-    "F5": "command:salamrun",
-    "F6": "command:salambuild",
-    "F7": "command:salamcheck",
-    "F8": "command:salamformat"
+  "F5": "command:salamrun",
+  "F6": "command:salambuild",
+  "F7": "command:salamcheck",
+  "F8": "command:salamformat"
 }
 ```
 

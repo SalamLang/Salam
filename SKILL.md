@@ -2463,7 +2463,7 @@ uses only Persian names, an English page only English names, for elements,
 attributes, style properties and style keywords (`layout = "ردیف"`, not
 `"row"`); the other language is error E301 (element), E302 (attribute or
 property) or E303 (style keyword) with `write 'X'` giving the replacement, and
-`salam check --fix` applies it. Colours, numbers, units, ids, content, urls and
+`salam check --fix` applies it. Colours, numbers, units, IDs, content, URLs and
 `data x` / `aria x` are never checked.
 
 **Style standard, not CSS.** Salam has its own style vocabulary in the spirit of
@@ -2831,12 +2831,12 @@ HTML with merged `style.css`/`script.js`. Run natively:
 
 **Commands per target** (all verified against `salam --help`):
 
-| target  | command                                                                                                                                                   |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| web     | `salam build page.salam --platform=web [--inline]`, `salam serve page.salam` (live reload); `script: src=` programs are compiled into the build     |
-| desktop | `salam run page.salam --ui=native`, `salam build page.salam --ui=native`, `salam check page.salam --ui=native` (E165/W166 list what a window cannot show) |
+| target  | command                                                                                                                                                                                                                    |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| web     | `salam build page.salam --platform=web [--inline]`, `salam serve page.salam` (live reload); `script: src=` programs are compiled into the build                                                                            |
+| desktop | `salam run page.salam --ui=native`, `salam build page.salam --ui=native`, `salam check page.salam --ui=native` (E165/W166 list what a window cannot show)                                                                  |
 | Android | `salam build --platform=android app.salam -o DIR -- [--id ID] [--name LABEL] [--icon PNG] [--abi LIST]`, and `salam run` instead of `build` to install and start it (needs the Android SDK, NDK and JDK; `docs/MOBILE.md`) |
-| iOS     | `salam build --platform=ios app.salam -o DIR -- [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`)                                 |
+| iOS     | `salam build --platform=ios app.salam -o DIR -- [--device] [--id ID] [--name LABEL]` (needs a Mac with Xcode; `docs/design/MOBILE.md`)                                                                                     |
 
 A mobile app is the desktop native page packed with a prebuilt host shell, so
 a page that passes `salam check page.salam --ui=native` is the one to ship to a

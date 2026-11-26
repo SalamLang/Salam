@@ -40,10 +40,10 @@ colon, so press Tab once.
 
 With a `.salam` buffer open:
 
-| Action        | Keys                          | Runs                          |
-| ------------- | ----------------------------- | ----------------------------- |
-| Linter        | `^T` then `^Y`                | `salam check --error-style=gcc` |
-| Formatter     | `^T` then `^O`                | `salam format`                |
+| Action    | Keys           | Runs                            |
+| --------- | -------------- | ------------------------------- |
+| Linter    | `^T` then `^Y` | `salam check --error-style=gcc` |
+| Formatter | `^T` then `^O` | `salam format`                  |
 
 The linter lists each error with its line; `^Y` and `^V` step between them.
 The formatter rewrites the buffer in place; save with `^O` afterwards.
@@ -73,13 +73,13 @@ made by `salam init`, plain `salam run` and `salam build` use `salam.toml`.
 cat salam-keys.nanorc >> ~/.nanorc
 ```
 
-| Key  | Action                                       |
-| ---- | -------------------------------------------- |
-| `F5` | `salam run` in the current directory         |
-| `F6` | `salam build`                                |
-| `F7` | `salam build --platform=web`                 |
-| `F8` | linter                                       |
-| `F9` | formatter                                    |
+| Key  | Action                               |
+| ---- | ------------------------------------ |
+| `F5` | `salam run` in the current directory |
+| `F6` | `salam build`                        |
+| `F7` | `salam build --platform=web`         |
+| `F8` | linter                               |
+| `F9` | formatter                            |
 
 nano runs these in the directory it was started in, so start it from the
 project folder. Output opens in a new buffer; close it with `^X`.

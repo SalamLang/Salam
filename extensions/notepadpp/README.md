@@ -3,15 +3,15 @@
 Syntax highlighting (a User Defined Language), autocompletion, the Function
 List panel, and Run menu commands for `salam`.
 
-| File                          | What it is                                        |
-| ----------------------------- | ------------------------------------------------- |
-| `salam.xml`                   | Highlighting for the default (light) theme        |
-| `salam-dark.xml`              | The same language named "Salam Dark", dark colours |
-| `autoCompletion/Salam.xml`    | Autocompletion list (generated from the keywords) |
-| `functionList/salam.xml`      | Function List rules for func, struct, enum, interface, component and page |
-| `shortcuts-fragment.xml`      | Run menu commands with shortcuts                  |
-| `nppexec/salam.nppexec`       | The same commands as NppExec scripts              |
-| `install.ps1`                 | Copies the files into place                 |
+| File                       | What it is                                                                |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `salam.xml`                | Highlighting for the default (light) theme                                |
+| `salam-dark.xml`           | The same language named "Salam Dark", dark colours                        |
+| `autoCompletion/Salam.xml` | Autocompletion list (generated from the keywords)                         |
+| `functionList/salam.xml`   | Function List rules for func, struct, enum, interface, component and page |
+| `shortcuts-fragment.xml`   | Run menu commands with shortcuts                                          |
+| `nppexec/salam.nppexec`    | The same commands as NppExec scripts                                      |
+| `install.ps1`              | Copies the files into place                                               |
 
 ## Install
 
@@ -60,16 +60,16 @@ into the `<UserDefinedCommands>` element of `%APPDATA%\Notepad++\shortcuts.xml`
 (create it next to the other `<Commands>` sections if it is missing). They then
 appear in the Run menu:
 
-| Command                    | Shortcut     | Runs                                   |
-| -------------------------- | ------------ | -------------------------------------- |
-| Salam: Run                 | Ctrl+F5      | `salam run FILE`                       |
-| Salam: Build               | Ctrl+F6      | `salam build FILE`                     |
-| Salam: Check               | Ctrl+F7      | `salam check FILE`                     |
-| Salam: Format              | Ctrl+F8      | `salam format FILE`                    |
-| Salam: Build for web       | Ctrl+F9      | `salam build FILE --platform=web`      |
-| Salam: Serve (live reload) | Ctrl+Shift+F5 | `salam run FILE --platform=web`       |
-| Salam: Run project         |              | `salam run` in the file's folder       |
-| Salam: New project         |              | `salam init` in the file's folder      |
+| Command                    | Shortcut      | Runs                              |
+| -------------------------- | ------------- | --------------------------------- |
+| Salam: Run                 | Ctrl+F5       | `salam run FILE`                  |
+| Salam: Build               | Ctrl+F6       | `salam build FILE`                |
+| Salam: Check               | Ctrl+F7       | `salam check FILE`                |
+| Salam: Format              | Ctrl+F8       | `salam format FILE`               |
+| Salam: Build for web       | Ctrl+F9       | `salam build FILE --platform=web` |
+| Salam: Serve (live reload) | Ctrl+Shift+F5 | `salam run FILE --platform=web`   |
+| Salam: Run project         |               | `salam run` in the file's folder  |
+| Salam: New project         |               | `salam init` in the file's folder |
 
 Save the file first; the commands run on the file on disk. Format rewrites the
 file and Notepad++ offers to reload it. `salam` must be on the `PATH`. If a
@@ -85,7 +85,7 @@ If you have the NppExec plugin, `nppexec/salam.nppexec` holds the same commands
 as scripts that save the file first and print into the NppExec console. Paste
 each script into `Plugins > NppExec > Execute NppExec Script` and save it under
 the name in its heading. In `Plugins > NppExec > Console Output Filters`, set the
-highlight mask to `%FILE%:%LINE%:*` and a double click on an error line
+highlight mask to `%FILE%:%LINE%:*` and a double-click on an error line
 jumps to the source.
 
 ## Colours and the dark theme

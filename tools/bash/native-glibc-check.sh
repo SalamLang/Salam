@@ -39,6 +39,15 @@ else
 fi
 fail=0
 SALAM_LINKER=builtin sh "$ROOT/tools/bash/native-cross-check.sh" "$SALAM" "$TRIPLE" "$RUN" "$@" || fail=1
+empty=$(mktemp -d)
+printf '!<arch>\n' >"$empty/libsalamempty.a"
+printf 'link static "salamempty"\n\nfunc main:\n    println "linked"\nend\n' >"$empty/empty.salam"
+if ! SALAM_LINKER=builtin "$SALAM" build "$empty/empty.salam" --backend=native --target="$TRIPLE" \
+    --libpath="$empty" --output="$empty/empty" --log-level=error >"$empty/build.log" 2>&1; then
+    echo "FAIL linking an empty static library: $(head -c 300 "$empty/build.log")"
+    fail=1
+fi
+rm -r "${empty:?}"
 if ! command -v ld.lld >/dev/null 2>&1; then
     echo "native glibc check: no ld.lld, the shared library cases were skipped"
     exit "$fail"

@@ -21,6 +21,8 @@ import gui.window
 mut _sc := Vector {} as Vector<_Scope>
 mut _sc_free := Vector {} as Vector<int>
 mut _sc_cur := -1
+mut _lv := _Level {}
+mut _pos_gen := 1
 mut _sc_root := -1
 mut _sc_on := false
 mut _sc_words := 0
@@ -70,6 +72,78 @@ struct _Scope:
     pub taken: bool = false
     pub alive: bool = false
     pub dirty: bool = false
+    pub pos_gen: int = 0
+    pub pos: int = 0
+end
+
+struct _Level:
+    pub d: int = -1
+    pub acc: int = 0
+    pub nk: int = 0
+    pub built: bool = false
+    pub counts: HashMap<i64, int> = HashMap {}
+    pub match_at: HashMap<i64, int> = HashMap {}
+end
+
+func _lv_key(site: int, key: str): i64:
+    ret _hmix(_hstr(1469598103934665603 as i64, key), site as i64)
+end
+
+func _lv_fresh(): _Level:
+    mut v := _Level {}
+    v.counts = HashMap {} as HashMap<i64, int>
+    v.match_at = HashMap {} as HashMap<i64, int>
+    ret v
+end
+
+func _lv_free():
+    _lv.counts.Free()
+    _lv.match_at.Free()
+end
+
+func _lv_sync(parent: int, d: int):
+    if _lv.d != d:
+        _lv.d = d
+        _lv.acc = 0
+        repeat _lv.nk in i:
+            k := _sc[parent].kids[i]
+            if _sc[k].dnode == d:
+                _lv.acc += _sc[k].count
+            end
+        end
+    end
+    until _lv.nk < _sc[parent].kids.Len():
+        k := _sc[parent].kids[_lv.nk]
+        h := _lv_key(_sc[k].site, _sc[k].key)
+        _lv.counts.Put(h, _lv.counts.Has(h) ? _lv.counts.Get(h) + 1 : 1)
+        if _sc[k].dnode == d:
+            _lv.acc += _sc[k].count
+        end
+        _lv.nk++
+    end
+end
+
+func _lv_match_old(site: int, key: str, nth: int): int:
+    if not _lv.built:
+        _lv.built = true
+        mut seen := HashMap {} as HashMap<i64, int>
+        each m in _sc_match:
+            h := _lv_key(_sc[m].site, _sc[m].key)
+            n := seen.Has(h) ? seen.Get(h) : 0
+            _lv.match_at.Put(_hmix(h, n as i64), m)
+            seen.Put(h, n + 1)
+        end
+        seen.Free()
+    end
+    at := _hmix(_lv_key(site, key), nth as i64)
+    if not _lv.match_at.Has(at):
+        ret -1
+    end
+    m := _lv.match_at.Get(at)
+    if _sc[m].site != site or _sc[m].key != key or _sc[m].taken:
+        ret -1
+    end
+    ret m
 end
 
 func _sc_new(): int:
@@ -85,6 +159,7 @@ func _sc_new(): int:
         s.slot = -1
         s.count = 0
         s.pre = 0
+        s.pos_gen = 0
         s.key = ""
         if _sc_tracking:
             _sc_made.Push(id)
@@ -183,25 +258,34 @@ func _sc_reset():
 end
 
 func _sc_pos(id: int): int:
-    s := _sc[id]
-    p := s.parent
+    if _sc[id].pos_gen == _pos_gen:
+        ret _sc[id].pos
+    end
+    p := _sc[id].parent
     if p < 0:
-        ret s.pre
+        ret _sc[id].pre
     end
-    mut base := 0
-    if _sc[p].dnode == s.dnode:
-        base = _sc_pos(p)
-    end
-    base += s.pre
+    pd := _sc[p].dnode
+    pbase := _sc_pos(p)
+    mut last := -1
+    mut sum := 0
+    mut seen := HashMap {} as HashMap<int, int>
     each k in _sc[p].kids:
-        if k == id:
-            break
+        kd := _sc[k].dnode
+        if kd != last:
+            if last >= 0:
+                seen.Put(last, sum)
+            end
+            sum = seen.Has(kd) ? seen.Get(kd) : 0
+            last = kd
         end
-        if _sc[k].dnode == s.dnode:
-            base += _sc[k].count
-        end
+        mut kk := _sc.Ref(k)
+        kk.pos = (kd == pd ? pbase : 0) + kk.pre + sum
+        kk.pos_gen = _pos_gen
+        sum += kk.count
     end
-    ret base
+    seen.Free()
+    ret _sc[id].pos
 end
 
 func _sc_open(site: int, key: str, fn: func (Builder)):
@@ -212,31 +296,17 @@ func _sc_open(site: int, key: str, fn: func (Builder)):
     mut base := 0
     mut nth := 0
     if parent >= 0:
+        _lv_sync(parent, d)
         if _sc[parent].dnode == d:
             base = _sc[parent].bstart
         end
-        each k in _sc[parent].kids:
-            if _sc[k].dnode == d:
-                base += _sc[k].count
-            end
-            if _sc[k].site == site and _sc[k].key == key:
-                nth++
-            end
+        base += _lv.acc
+        h := _lv_key(site, key)
+        if _lv.counts.Has(h):
+            nth = _lv.counts.Get(h)
         end
     end
-    mut old := -1
-    mut seen := 0
-    each m in _sc_match:
-        if _sc[m].site == site and _sc[m].key == key:
-            if seen == nth:
-                if not _sc[m].taken:
-                    old = m
-                end
-                break
-            end
-            seen++
-        end
-    end
+    old := _lv_match_old(site, key, nth)
     mut sc := _sc.Ref(id)
     sc.site = site
     if key.Len() > 0:
@@ -267,7 +337,11 @@ func _sc_open(site: int, key: str, fn: func (Builder)):
         _sc_match = Vector {} as Vector<int>
     end
     _sc_cur = id
+    saved_lv := _lv
+    _lv = _lv_fresh()
     fn(Builder {})
+    _lv_free()
+    _lv = saved_lv
     _sc_cur = parent
     if old < 0:
         _sc_match.Free()
@@ -333,6 +407,8 @@ func _sc_build_root(view: func (Builder)):
     end
     _sc_root = -1
     _sc_cur = -1
+    _lv_free()
+    _lv = _lv_fresh()
     _sc_open(0, "", view)
     if _sc_on:
         repeat _sc_words in w:
@@ -430,7 +506,9 @@ end
 
 func _sc_drop_typed_value(o: int, n: int):
     k := _e.dom.nodes[o].k
-    if (k == _K_DETAILS or k == _K_DIALOG) and _has_attr(_e.dom, o, "open") != _has_attr(_e.dom, n, "open"):
+    if (k == _K_DETAILS or k == _K_DIALOG) and _has_attr(
+        _e.dom, o, "open"
+    ) != _has_attr(_e.dom, n, "open"):
         mut dc := _e.ctl.Ref(o)
         dc.has_open = false
         _e.dirty_dom = true
@@ -951,6 +1029,9 @@ func _sc_try_keyed(
         end
     end
     delta := newcount - oldcount
+    if delta != 0 or _sc_made.Len() > 0:
+        _pos_gen++
+    end
     mut sc := _sc.Ref(id)
     sc.count = newcount
     mut a := _sc[id].parent
@@ -993,7 +1074,11 @@ func _sc_rerun(id: int):
     fn := _sc[id].fn
     _sc_made.Clear()
     _sc_tracking = true
+    saved_lv := _lv
+    _lv = _lv_fresh()
     fn(Builder {})
+    _lv_free()
+    _lv = saved_lv
     _sc_tracking = false
     _sc_cur = -1
     _sc_built += _bd.nodes.Len() - nbefore
@@ -1066,6 +1151,9 @@ func _sc_rerun(id: int):
         dn2.kids.Free()
         dn2.kids = nk
         delta := newcount - oldcount
+        if delta != 0 or _sc_made.Len() > 0:
+            _pos_gen++
+        end
         mut sc := _sc.Ref(id)
         sc.count = newcount
         mut a := _sc[id].parent
@@ -1152,6 +1240,7 @@ func _sc_full():
 end
 
 func _sc_update():
+    _pos_gen++
     mut any := false
     _sc_touched.Clear()
     repeat _sc_words in w:

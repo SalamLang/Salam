@@ -1,0 +1,300 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package host
+
+import mem
+import str
+import os
+import os.shell
+import os.user
+import fs
+import net.tun
+
+const STUB_DNS := "nameserver 127.0.0.53"
+
+func words(a: str, b: str, c: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    out.Push(a)
+    if b.Len() > 0:
+        out.Push(b)
+    end
+    if c.Len() > 0:
+        out.Push(c)
+    end
+    ret out
+end
+
+func tool(program: str, args: Vector<str>): shell.CmdResult:
+    ret shell.Run(program, args)
+end
+
+func network_services(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    r := tool(
+        "/usr/sbin/networksetup", words("-listallnetworkservices", "", "")
+    )
+    mut first := true
+    each line in str.Split(r.out, "\n"):
+        if not first and line.Len() > 0 and not line.StartsWith("*"):
+            out.Push(line)
+        end
+        first = false
+    end
+    ret out
+end
+
+func dns_of(service: str): str:
+    r := tool("/usr/sbin/networksetup", words("-getdnsservers", service, ""))
+    if r.code != 0:
+        ret ""
+    end
+    text := r.out.Trim()
+    if text.Len() == 0 or text.Includes(" "):
+        ret "Empty"
+    end
+    ret str.Replace(text, "\n", " ")
+end
+
+func set_dns(service: str, servers: str): bool:
+    mut args := words("-setdnsservers", service, "")
+    each s in str.Split(servers, " "):
+        if s.Len() > 0:
+            args.Push(s)
+        end
+    end
+    r := tool("/usr/sbin/networksetup", args)
+    ret r.code == 0
+end
+
+func flush_mac_dns():
+    _a := tool("/usr/bin/dscacheutil", words("-flushcache", "", ""))
+    _b := tool("/usr/bin/killall", words("-HUP", "mDNSResponder", ""))
+end
+
+func keep_backup(text: str): bool:
+    if os.Exists(DnsFile()):
+        ret true
+    end
+    if text.Len() == 0 or os.WriteFile(DnsFile(), text) < 0:
+        ret false
+    end
+    _c := fs.Chmod(DnsFile(), 420)
+    ret true
+end
+
+func take_over_mac(server: str): bool:
+    services := network_services()
+    if not os.Exists(DnsFile()):
+        mut backup := ""
+        each service in services:
+            old := dns_of(service)
+            if old.Len() > 0:
+                backup = backup + service + "\t" + old + "\n"
+            end
+        end
+        if not keep_backup(backup):
+            ret false
+        end
+    end
+    mut changed := 0
+    each service in services:
+        if set_dns(service, server):
+            changed++
+        end
+    end
+    flush_mac_dns()
+    ret changed > 0
+end
+
+func restore_mac():
+    each line in str.Split(os.ReadFile(DnsFile()), "\n"):
+        parts := str.Split(line, "\t")
+        if parts.Len() == 2:
+            _ok := set_dns(parts[0], parts[1])
+        end
+    end
+    _r := os.Remove(DnsFile())
+    flush_mac_dns()
+end
+
+func take_over_resolv_conf(server: str): bool:
+    current := os.ReadFile("/etc/resolv.conf")
+    if current.Includes(STUB_DNS):
+        ret true
+    end
+    if not keep_backup(current):
+        ret false
+    end
+    ret os.WriteFile("/etc/resolv.conf", "nameserver " + server + "\n") >= 0
+end
+
+func restore_resolv_conf():
+    if os.WriteFile("/etc/resolv.conf", os.ReadFile(DnsFile())) >= 0:
+        _r := os.Remove(DnsFile())
+    end
+end
+
+func mac_gateway(): str:
+    r := tool("/usr/sbin/netstat", words("-rn", "-f", "inet"))
+    each line in str.Split(r.out, "\n"):
+        f := str.Fields(line)
+        if f.Len() >= 4 and f[0] == "default" and not f[3].StartsWith("utun") and
+            f[1].Includes("."):
+            ret f[1]
+        end
+    end
+    ret ""
+end
+
+func host_route(verb: str, ip: str, gateway: str):
+    mut args := words("-q", "-n", verb)
+    args.Push("-host")
+    args.Push(ip)
+    if gateway.Len() > 0:
+        args.Push(gateway)
+    end
+    _r := tool("/sbin/route", args)
+end
+
+func keep_mac_route(ip: str):
+    gw := mac_gateway()
+    if gw.Len() == 0:
+        ret
+    end
+    current := tool("/sbin/route", words("-n", "get", ip))
+    if current.code == 0 and current.out.Includes("gateway: " + gw + "\n"):
+        ret
+    end
+    host_route("delete", ip, "")
+    host_route("add", ip, gw)
+end
+
+func keep_linux_route(ip: str):
+    gw := tun.ParseLinuxRoutes(os.ReadFile("/proc/net/route"))
+    if not gw.ok or gw.ip.Len() == 0:
+        ret
+    end
+    mut args := words("route", "replace", ip + "/32")
+    args.Push("via")
+    args.Push(gw.ip)
+    args.Push("dev")
+    args.Push(gw.iface)
+    args.Push("onlink")
+    _r := tool("ip", args)
+end
+
+pub func StateDir(): str:
+    if SALAM_OS_WINDOWS:
+        ret os.Env("ProgramData") + "/salam-tunnel"
+    else SALAM_OS_MAC:
+        ret "/var/db/salam-tunnel"
+    else:
+        ret "/var/lib/salam-tunnel"
+    end
+end
+
+pub func StatusFile(): str:
+    ret StateDir() + "/status"
+end
+
+pub func DnsFile(): str:
+    ret StateDir() + "/dns.backup"
+end
+
+pub func HomeFolder(): str:
+    ret user.HomeDir()
+end
+
+pub func NullFile(): str:
+    if SALAM_OS_WINDOWS:
+        ret "NUL"
+    else:
+        ret "/dev/null"
+    end
+end
+
+pub func SshPath(): str:
+    if SALAM_OS_WINDOWS:
+        ret os.Env("SystemRoot") + "/System32/OpenSSH/ssh.exe"
+    else:
+        ret "/usr/bin/ssh"
+    end
+end
+
+pub func CurlPath(): str:
+    if SALAM_OS_WINDOWS:
+        ret os.Env("SystemRoot") + "/System32/curl.exe"
+    else:
+        ret "/usr/bin/curl"
+    end
+end
+
+pub func CanRemember(): bool:
+    if SALAM_OS_MAC:
+        ret true
+    else:
+        ret false
+    end
+end
+
+pub func PrepareRoute(ip: str):
+    DropRoute(ip)
+end
+
+pub func DropRoute(ip: str):
+    if SALAM_OS_MAC:
+        host_route("delete", ip, "")
+    else:
+        _kept := ip.Len()
+    end
+end
+
+pub func KeepServerRoute(ip: str):
+    if SALAM_OS_MAC:
+        keep_mac_route(ip)
+    else SALAM_OS_LINUX:
+        keep_linux_route(ip)
+    else:
+        _kept := ip.Len()
+    end
+end
+
+pub func TakeOverDns(server: str): bool:
+    if SALAM_OS_MAC:
+        ret take_over_mac(server)
+    else SALAM_OS_LINUX:
+        ret take_over_resolv_conf(server)
+    else:
+        ret server.Len() > 0
+    end
+end
+
+pub func RestoreDns():
+    if not os.Exists(DnsFile()):
+        ret
+    end
+    if SALAM_OS_MAC:
+        restore_mac()
+    else SALAM_OS_LINUX:
+        restore_resolv_conf()
+    end
+end
+
+pub func StopOrphans(pattern: str):
+    if SALAM_OS_WINDOWS:
+        _kept := pattern.Len()
+    else:
+        _r := tool("/usr/bin/pkill", words("-f", pattern, ""))
+    end
+end

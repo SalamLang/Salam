@@ -18,9 +18,10 @@ import env
 import str
 import sync
 import gui.ui
-import os.shell
 import os.process
 import os.desktop
+import fs
+import crypto
 import net.dns
 import net.tcp
 import net.tunnel
@@ -29,6 +30,8 @@ include "profile.salam"
 include "helper.salam"
 include "resolver.salam"
 include "remote.salam"
+include "host.salam"
+include "sshcmd.salam"
 
 pub const PHASE_IDLE := 0
 pub const PHASE_SSH := 1
@@ -42,6 +45,9 @@ mut _shared := Snapshot {}
 mut _want_stop := false
 mut _job := profile.Profile {}
 mut _upstream := ""
+mut _relay := ""
+mut _relay_port := 0
+mut _token := ""
 
 pub struct Snapshot:
     pub phase: int = 0
@@ -93,49 +99,32 @@ func resolve_server(host: str): str:
     ret found[0]
 end
 
-func ssh_command(pr: profile.Profile, ip: str, socks_port: int): process.Command:
-    mut cmd := process.NewCommand("/usr/bin/ssh")
-    cmd.Arg("-F")
-    cmd.Arg("/dev/null")
-    cmd.Arg("-N")
+func ssh_command(
+    pr: profile.Profile, ip: str, socks_port: int, relay: str
+): process.Command:
+    mut cmd := sshcmd.Base(pr)
     cmd.Arg("-D")
     cmd.Arg("127.0.0.1:" + str.FromInt(socks_port as i64))
-    cmd.Arg("-p")
-    cmd.Arg(pr.port)
-    cmd.Arg("-l")
-    cmd.Arg(pr.user)
     mut options := Vector {} as Vector<str>
-    options.Push("HostKeyAlias=" + pr.host)
-    options.Push("UserKnownHostsFile=\"" + profile.KnownHostsPath() + "\"")
-    options.Push("StrictHostKeyChecking=accept-new")
     options.Push("ExitOnForwardFailure=yes")
     options.Push("ServerAliveInterval=10")
     options.Push("ServerAliveCountMax=3")
-    options.Push("ConnectTimeout=20")
-    options.Push("NumberOfPasswordPrompts=1")
-    options.Push("ControlMaster=yes")
-    options.Push("ControlPath=\"" + profile.ControlPath() + "\"")
-    if pr.password.Len() > 0:
-        options.Push("PreferredAuthentications=password,keyboard-interactive")
-    end
     each o in options:
         cmd.Arg("-o")
         cmd.Arg(o)
     end
-    cmd.Arg("--")
-    cmd.Arg(ip)
-    if pr.password.Len() > 0:
-        cmd.Env("SSH_ASKPASS", desktop.ExecutablePath())
-        cmd.Env("SSH_ASKPASS_REQUIRE", "force")
-        cmd.Env("SALAM_TUNNEL_ASKPASS", "1")
-        cmd.Env("SALAM_TUNNEL_PASSWORD", pr.password)
-    else:
-        cmd.Env("SSH_ASKPASS_REQUIRE", "never")
+    if relay.Len() == 0:
+        cmd.Arg("-N")
     end
-    cmd.stdin_mode = 2
-    cmd.stdout_mode = 2
-    cmd.stderr_mode = 1
-    ret cmd
+    mut out := sshcmd.Target(
+        cmd,
+        ip,
+        relay.Len() == 0 ? "" : "exec " + relay + " --listen " + str.FromInt(_relay_port as i64)
+    )
+    out.stdin_mode = relay.Len() == 0 ? 2 : 1
+    out.stdout_mode = 2
+    out.stderr_mode = 1
+    ret out
 end
 
 func last_line(text: str, fallback: str): str:
@@ -150,11 +139,13 @@ func last_line(text: str, fallback: str): str:
 end
 
 func open_ssh(pr: profile.Profile, ip: str, port: int, why &: str): process.Child:
-    _old := os.Remove(profile.ControlPath())
-    mut child := process.Launch(ssh_command(pr, ip, port))
+    mut child := process.Launch(ssh_command(pr, ip, port, _relay))
     if not child.ok:
-        why = "cannot start /usr/bin/ssh"
+        why = "cannot start " + host.SshPath() + ": is the OpenSSH client installed?"
         ret child
+    end
+    if _relay.Len() > 0:
+        _sent := child.Write(_token + "\n")
     end
     mut errors := ""
     deadline := sync.NowMs() + (60000 as i64)
@@ -194,40 +185,15 @@ func close_ssh(child &: process.Child):
     end
 end
 
-func shell_quote(text: str): str:
-    ret "'" + str.Replace(text, "'", "'\\''") + "'"
-end
-
 func run_as_admin(args: Vector<str>, prompt: str): str:
-    mut line := shell_quote(desktop.ExecutablePath())
-    each a in args:
-        line = line + " " + shell_quote(a)
-    end
-    line += " > /dev/null 2>&1 &"
-    escaped := str.Replace(str.Replace(line, "\\", "\\\\"), "\"", "\\\"")
-    script := "do shell script \"" + escaped + "\" with prompt \"" + prompt +
-        "\" with administrator privileges"
-    mut cmd := process.NewCommand("/usr/bin/osascript")
-    cmd.Arg("-e")
-    cmd.Arg(script)
-    r := process.RunCommand(cmd, "", 180000)
-    if not r.started:
-        ret "cannot run osascript"
-    end
-    if r.timed_out:
-        ret "the administrator prompt timed out"
-    end
-    if not r.status.Success():
-        ret "administrator permission was not given"
-    end
-    ret ""
+    ret process.RunElevated(desktop.ExecutablePath(), args, prompt, 180000)
 end
 
 func read_status(): str:
-    if not os.Exists(helper.STATUS_FILE):
+    if not os.Exists(host.StatusFile()):
         ret ""
     end
-    ret os.ReadFile(helper.STATUS_FILE)
+    ret os.ReadFile(host.StatusFile())
 end
 
 func number_of(text: str, key: str): i64:
@@ -246,7 +212,7 @@ end
 
 func helper_running(): bool:
     text := read_status()
-    ret profile.ValueOf(text, "state") == "up" and helper.ProcessAlive(profile.ValueOf(text, "pid"))
+    ret profile.ValueOf(text, "state") == "up" and process.Alive(number_of(text, "pid") as int)
 end
 
 func wait_helper(old_beat: str): str:
@@ -276,7 +242,7 @@ func stop_helper():
 end
 
 func public_ip(): str:
-    mut cmd := process.NewCommand("/usr/bin/curl")
+    mut cmd := process.NewCommand(host.CurlPath())
     cmd.Arg("-fsS")
     cmd.Arg("--max-time")
     cmd.Arg("15")
@@ -306,6 +272,7 @@ end
 
 func engine_run():
     pr := _job
+    _relay = ""
     set_phase(PHASE_SSH, "Signing in to " + pr.host)
     ip := resolve_server(pr.host)
     if ip.Len() == 0:
@@ -313,6 +280,24 @@ func engine_run():
         ret
     end
     port := free_port()
+    mut relay_note := ""
+    if pr.udp:
+        set_phase(PHASE_SSH, "Preparing the UDP relay")
+        _relay = remote.Install(pr, ip, relay_note)
+        if _relay.Len() > 0:
+            _token = crypto.RandomHex(24)
+            seed := crypto.RandomHex(4)
+            mut pick := 0
+            p := seed as u8*
+            repeat seed.Len() in i:
+                pick = (pick * 31 + (p[i] as int)) % 40000
+            end
+            _relay_port = 20000 + pick
+            _w := os.WriteFile(profile.TokenPath(), _token + "\n")
+            _c := fs.Chmod(profile.TokenPath(), 384)
+        end
+    end
+    set_phase(PHASE_SSH, "Signing in to " + pr.host)
     mut why := ""
     mut ssh := open_ssh(pr, ip, port, why)
     if why.Len() > 0 and why != "cancelled" and not why.Includes("denied") and not stop_wanted():
@@ -325,15 +310,6 @@ func engine_run():
         finish(why == "cancelled" ? "" : why)
         ret
     end
-    mut relay := "-"
-    mut relay_note := ""
-    if pr.udp:
-        set_phase(PHASE_SSH, "Preparing the UDP relay")
-        installed := remote.Install(relay_note)
-        if installed.Len() > 0:
-            relay = installed
-        end
-    end
     set_phase(PHASE_ADMIN, "Waiting for your administrator password")
     _r := os.Remove(profile.StopPath())
     old_beat := profile.ValueOf(read_status(), "beat")
@@ -344,8 +320,8 @@ func engine_run():
     args.Push(str.FromInt(os.Pid() as i64))
     args.Push(profile.StopPath())
     args.Push(_upstream)
-    args.Push(relay)
-    args.Push(profile.ControlPath())
+    args.Push(str.FromInt((_relay.Len() > 0 ? _relay_port : 0) as i64))
+    args.Push(profile.TokenPath())
     mut failed := run_as_admin(
         args, "Salam Tunnel needs permission to route this Mac through your server."
     )
@@ -375,8 +351,8 @@ func engine_run():
         end
         if profile.ValueOf(text, "state") != "up":
             ended = "The tunnel stopped " + profile.ValueOf(text, "message")
-        else sync.NowMs() - beat_at > (10000 as i64) and not helper_running():
-            ended = "The tunnel helper stopped unexpectedly"
+        else sync.NowMs() - beat_at > (20000 as i64):
+            ended = "The tunnel helper stopped responding"
         end
         mut s := CurrentSnapshot()
         s.up = number_of(text, "up")
@@ -424,7 +400,7 @@ func engine_repair_run():
     args.Push("--repair")
     failed := run_as_admin(args, "Salam Tunnel needs permission to restore your DNS settings.")
     deadline := sync.NowMs() + (8000 as i64)
-    until sync.NowMs() < deadline and failed.Len() == 0 and os.Exists(helper.DNS_FILE):
+    until sync.NowMs() < deadline and failed.Len() == 0 and os.Exists(host.DnsFile()):
         sync.SleepMs(200)
     end
     finish(failed.Len() > 0 ? failed : "Network settings restored")
@@ -451,14 +427,11 @@ pub func RequestStop():
 end
 
 pub func NeedsRepair(): bool:
-    ret os.Exists(helper.DNS_FILE) and not helper_running()
+    ret os.Exists(host.DnsFile()) and not helper_running()
 end
 
 pub func StopOrphans():
-    mut args := Vector {} as Vector<str>
-    args.Push("-f")
-    args.Push("ssh .*UserKnownHostsFile=\"" + profile.KnownHostsPath())
-    _r := shell.Run("/usr/bin/pkill", args)
+    host.StopOrphans("ssh .*UserKnownHostsFile=\"" + profile.KnownHostsPath())
 end
 
 pub func StartTunnel(pr: profile.Profile):

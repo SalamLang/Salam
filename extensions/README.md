@@ -5,20 +5,20 @@ single file may use either of them. Every integration here highlights both,
 treats Arabic-script letters as identifier characters, and accepts
 numbers written with ASCII, Persian or Arabic-Indic digits.
 
-| Editor             | Directory                                 | What you get                                                                                                                                                  |
-| ------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Visual Studio Code | [`vscode/`](vscode)                       | Highlighting, snippets, language server, debugger, run and build with a per-project platform, block chain in the status bar, `salam init` for new projects   |
-| Vim / Neovim       | [`vim/`](vim)                             | Highlighting, indent, snippets, formatting, diagnostics, run, build, check and `salam init`, per-project platform, block chain for the statusline or winbar   |
-| Emacs              | [`emacs/`](emacs)                         | Highlighting, indent, imenu, snippets, formatting, flycheck, language server, run, build and `salam init`, per-project platform, block chain in the mode line |
-| Sublime Text       | [`sublime/`](sublime)                     | Highlighting, indent, snippets, completions, formatting, build systems with `build --platform=...`, palette commands, block chain and platform in the status bar |
-| JetBrains IDEs     | [`jetbrains/`](jetbrains)                 | Plugin: run configurations per platform, run, build and check actions, New Project, block chain in the status bar, language server, test tree                 |
-| Kate / KDevelop    | [`kate/`](kate)                           | Highlighting, External Tools (run, build, check, format, web build, new project), project examples, LSP client setup                                          |
-| gedit / GNOME      | [`gtksourceview/`](gtksourceview)         | Highlighting with comment and string classes, gedit and Pluma external tools, GNOME Builder build config                                                      |
-| Geany              | [`geany/`](geany)                         | Highlighting, Build menu (compile, build, check, format, web build, run, serve), error jumping, symbol list                                                   |
-| Notepad++          | [`notepadpp/`](notepadpp)                 | Highlighting (light and dark), autocompletion, Function List, Run menu commands and NppExec scripts                                                           |
-| GNU nano           | [`nano/`](nano)                           | Highlighting, `salam check` linter, formatter, tab settings, optional run and build keys                                                                      |
-| micro              | [`micro/`](micro)                         | Highlighting and a plugin: run, build, check, format, new project, platform, linter and block chain in the status line                                       |
-| tree-sitter        | [`tree-sitter-salam/`](tree-sitter-salam) | Grammar with highlights, folds, indents, locals, text objects and injections queries, page DSL included                                                       |
+| Editor             | Directory                                 | What you get                                                                                                                                                   |
+| ------------------ | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Visual Studio Code | [`vscode/`](vscode)                       | Highlighting, snippets, language server, debugger, run and build with a per-project platform, block chain in the status bar, `salam init` for new projects     |
+| Vim / Neovim       | [`vim/`](vim)                             | Highlighting, indent, snippets, formatting, diagnostics, run, build, check and `salam init`, per-project platform, block chain for the statusline or winbar    |
+| Emacs              | [`emacs/`](emacs)                         | Highlighting, indent, imenu, snippets, formatting, flycheck, language server, run, build and `salam init`, per-project platform, block chain in the mode line  |
+| Sublime Text       | [`sublime/`](sublime)                     | Highlighting, indent, snippets, completions, formatting, build tools with `build --platform=...`, palette commands, block chain and platform in the status bar |
+| JetBrains IDEs     | [`jetbrains/`](jetbrains)                 | Plugin: run configurations per platform, run, build and check actions, New Project, block chain in the status bar, language server, test tree                  |
+| Kate / KDevelop    | [`kate/`](kate)                           | Highlighting, External Tools (run, build, check, format, web build, new project), project examples, LSP client setup                                           |
+| gedit / GNOME      | [`gtksourceview/`](gtksourceview)         | Highlighting with comment and string classes, gedit and Pluma external tools, GNOME Builder build config                                                       |
+| Geany              | [`geany/`](geany)                         | Highlighting, Build menu (compile, build, check, format, web build, run, serve), error jumping, symbol list                                                    |
+| Notepad++          | [`notepadpp/`](notepadpp)                 | Highlighting (light and dark), autocompletion, Function List, Run menu commands and NppExec scripts                                                            |
+| GNU nano           | [`nano/`](nano)                           | Highlighting, `salam check` linter, formatter, tab settings, optional run and build keys                                                                       |
+| micro              | [`micro/`](micro)                         | Highlighting and a plugin: run, build, check, format, new project, platform, linter and block chain in the status line                                         |
+| tree-sitter        | [`tree-sitter-salam/`](tree-sitter-salam) | Grammar with highlights, folds, indents, locals, text objects and injections queries, page DSL included                                                        |
 
 Each directory has its own readme with installation instructions. The
 language server column is `salam lsp`, built into the compiler; it brings

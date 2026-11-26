@@ -23,16 +23,16 @@ to `tag_parser=C` in the copied `.conf`.
 
 `salam` must be on the `PATH` Geany sees.
 
-| Entry          | Command                                   | Shortcut |
-| -------------- | ----------------------------------------- | -------- |
-| Compile        | `salam build FILE`                        | F8       |
-| Build          | `salam build` in the project folder       | F9       |
-| Check          | `salam check FILE`                        |          |
-| Format         | `salam format FILE`                       |          |
-| Build for web  | `salam build FILE --platform=web`         |          |
-| Run            | `salam run FILE`                          | F5       |
-| Serve          | `salam run FILE --platform=web`           |          |
-| Interpret      | `salam exec FILE`                         |          |
+| Entry         | Command                             | Shortcut |
+| ------------- | ----------------------------------- | -------- |
+| Compile       | `salam build FILE`                  | F8       |
+| Build         | `salam build` in the project folder | F9       |
+| Check         | `salam check FILE`                  |          |
+| Format        | `salam format FILE`                 |          |
+| Build for web | `salam build FILE --platform=web`   |          |
+| Run           | `salam run FILE`                    | F5       |
+| Serve         | `salam run FILE --platform=web`     |          |
+| Interpret     | `salam exec FILE`                   |          |
 
 The shortcuts are Geany's own for Compile, Build and Run. Format rewrites the
 file on disk and Geany offers to reload it.

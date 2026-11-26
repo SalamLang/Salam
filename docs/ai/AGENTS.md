@@ -774,8 +774,8 @@ CONTRIBUTING.md has the full list.
 These are real defects and sharp edges in the current toolchain, not style
 advice. Each one silently produces wrong behaviour rather than a diagnostic.
 
-- **`size(T)` is the size of a type; `sizeof(T)` is the old name.** It still
-  compiles and warns W295. A function of your own named `size` wins.
+- **`size(T)` is the size of a type in bytes.** A function of your own named
+  `size` wins, except for built-in type names such as `size(i32)`.
 - **Do not rule something out because you have not seen it.** The repository
   ships working apps under `tests/en/apps/` and `tests/fa/apps/` (Cloudflare
   Workers, HTTP servers, desktop, games, and more), all built by CI, and the

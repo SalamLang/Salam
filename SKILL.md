@@ -459,8 +459,8 @@ refuses them, and an `extern` function can use them only on 64-bit targets
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
-`size(T)` returns `usize`. The old name `sizeof(T)` still compiles and warns (W295); a
-function of your own named `size` or `sizeof` wins over the built-in.
+`size(T)` is the size of a type in bytes and returns `usize`. In a file that declares
+its own `size` function, only built-in type names (`size(i32)`) still reach the built-in.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.

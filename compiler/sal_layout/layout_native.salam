@@ -71,6 +71,7 @@ struct LnNames:
     pub dir: str = "Dir"
     pub scope: str = "Scope"
     pub keyed: str = "KeyedScope"
+    pub memo: str = "Memo"
     pub key: str = "Key"
     pub reactive: str = "Reactive"
     pub instance: str = "Instance"
@@ -138,6 +139,7 @@ func ln_names(pack: lp.Langpack): LnNames:
     n.dir = "جهت صفحه"
     n.scope = "دامنه واکنشی"
     n.keyed = "دامنه کلیددار"
+    n.memo = "یادداشت دامنه"
     n.key = "کلید عنصر"
     n.reactive = "راه اندازی واکنش"
     n.instance = "نمونه بخش"
@@ -1277,6 +1279,7 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
             scoped = true
         end
     end
+    body_at := str.Len(g.out)
     ln_call(g, g.nm.open, ln_quote(ekey))
     g.depth++
     if level > 1:
@@ -1294,8 +1297,136 @@ func ln_element(g &: LnGen, a &: at.Ast, el: int):
     g.depth--
     ln_call(g, g.nm.close, "")
     if scoped:
+        ln_memo_scope(g, a, body_at)
         ln_scope_close(g)
     end
+end
+
+func ln_indent(line: str): int:
+    mut i := 0
+    until i < str.Len(line) and byte_at(line, i) == 32:
+        i++
+    end
+    ret i
+end
+
+func ln_memo_handler_ok(g &: LnGen, a &: at.Ast, t: str): bool:
+    mark := "__salam_dyn_"
+    mut rest := t
+    mut p := str.IndexOf(rest, mark)
+    until p >= 0:
+        mut e := p + str.Len(mark)
+        mut num := 0
+        until e < str.Len(rest) and byte_at(rest, e) >= 48 and byte_at(rest, e) <= 57:
+            num = num * 10 + (byte_at(rest, e) - 48)
+            e++
+        end
+        before := p > 0 ? byte_at(rest, p - 1) : 0
+        if num >= g.lw.slots.Len():
+            ret false
+        end
+        k := at.KindOf(a, g.lw.slots.Get(num).expr)
+        if before != 32 or (k != at.AST_LAMBDA and k != at.AST_IDENTIFIER):
+            in_body := str.Contains(str.Substr(rest, 0, p), "(): ")
+            if not in_body:
+                ret false
+            end
+        end
+        rest = str.Substr(rest, e, str.Len(rest) - e)
+        p = str.IndexOf(rest, mark)
+    end
+    ret true
+end
+
+func ln_memo_scope(g &: LnGen, a &: at.Ast, start: int):
+    tail := str.Substr(g.out, start, str.Len(g.out) - start)
+    mut lines := str.Split(tail, "\n")
+    defer lines.Free()
+    if lines.Len() == 0:
+        ret
+    end
+    base := ln_indent(lines.Get(0))
+    pad := str.Substr(lines.Get(0), 0, base)
+    scope_a := "__salam_b." + g.nm.scope + "("
+    keyed_a := "__salam_b." + g.nm.keyed + "("
+    on_a := "__salam_b." + g.nm.on + "("
+    has_a := "if " + g.nm.ui + "." + g.nm.has + "("
+    mut hoist := Vector {} as Vector<bool>
+    defer hoist.Free()
+    mut names := Vector {} as Vector<str>
+    defer names.Free()
+    mut skip := 0 - 1
+    repeat lines.Len() in i:
+        ln := lines.Get(i)
+        hoist.Push(false)
+        if str.Len(ln) == 0:
+            continue
+        end
+        ind := ln_indent(ln)
+        if skip >= 0:
+            if ind == skip:
+                skip = 0 - 1
+            end
+            continue
+        end
+        t := str.Substr(ln, ind, str.Len(ln) - ind)
+        if str.StartsWith(t, scope_a) or str.StartsWith(t, keyed_a):
+            skip = ind
+            continue
+        end
+        if str.StartsWith(t, "__salam_o") and str.Contains(t, " := __salam_dyn_"):
+            hoist.Set(i, true)
+            names.Push(str.Substr(t, 0, str.IndexOf(t, " := ")))
+            continue
+        end
+        if str.Contains(t, "__salam_st_") or str.Contains(t, "__salam_k_"):
+            ret
+        end
+        if str.StartsWith(t, "if ") or str.StartsWith(t, g.nm.kw_if + " "):
+            if not str.StartsWith(t, has_a):
+                ret
+            end
+            continue
+        end
+        if str.StartsWith(t, g.nm.kw_each + " ") or str.StartsWith(t, g.nm.kw_else):
+            ret
+        end
+        if str.Contains(t, "__salam_dyn_"):
+            if not str.StartsWith(t, on_a) or not ln_memo_handler_ok(g, a, t):
+                ret
+            end
+        end
+    end
+    if names.Len() == 0 or skip >= 0:
+        ret
+    end
+    mut key := ""
+    repeat names.Len() in j:
+        nmj := names.Get(j)
+        if j > 0:
+            key += " + \"\\x1f\" + "
+        end
+        key += "(" + g.nm.ui + "." + g.nm.has + "(" + nmj + ") ? \"\" + " + g.nm.ui + "." +
+            g.nm.val + "(" + nmj + ") : \"\\x01\")"
+    end
+    mut b := str.NewBuilder()
+    repeat lines.Len() in h:
+        if hoist.Get(h):
+            hl := lines.Get(h)
+            hi := ln_indent(hl)
+            str.BufAppend(b, pad + str.Substr(hl, hi, str.Len(hl) - hi) + "\n")
+        end
+    end
+    str.BufAppend(b, pad + g.nm.kw_if + " __salam_b." + g.nm.memo + "(" + key + "):\n")
+    str.BufAppend(b, pad + "    " + g.nm.kw_ret + "\n")
+    str.BufAppend(b, pad + g.nm.kw_end + "\n")
+    repeat lines.Len() in r:
+        if not hoist.Get(r) and str.Len(lines.Get(r)) > 0:
+            str.BufAppend(b, lines.Get(r) + "\n")
+        end
+    end
+    g.out = str.Substr(g.out, 0, start) + str.BufStr(b)
+    str.BufFree(b)
 end
 
 func ln_has_server_func(a &: at.Ast, prog: int): bool:

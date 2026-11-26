@@ -55,6 +55,9 @@ mut _sc_ev_built := false
 mut _sc_ev_dead := 0
 mut _sc_made := Vector {} as Vector<int>
 mut _sc_tracking := false
+mut _sc_rerun_id := -1
+mut _sc_skipped := false
+mut _sc_skips := 0
 
 struct _Scope:
     pub site: int = -1
@@ -74,6 +77,8 @@ struct _Scope:
     pub dirty: bool = false
     pub pos_gen: int = 0
     pub pos: int = 0
+    pub memo: str = ""
+    pub memo_set: bool = false
 end
 
 struct _Level:
@@ -211,6 +216,11 @@ func _sc_release(id: int):
         _sfree(s.key)
         s.key = ""
     end
+    if s.memo_set:
+        _sfree(s.memo)
+        s.memo = ""
+        s.memo_set = false
+    end
     s.kids.Free()
     s.kids = Vector {} as Vector<int>
     _sc_free.Push(id)
@@ -224,6 +234,11 @@ func _sc_release_all():
             if s.key.Len() > 0:
                 _sfree(s.key)
                 s.key = ""
+            end
+            if s.memo_set:
+                _sfree(s.memo)
+                s.memo = ""
+                s.memo_set = false
             end
             s.kids.Free()
             s.kids = Vector {} as Vector<int>
@@ -349,6 +364,24 @@ func _sc_open(site: int, key: str, fn: func (Builder)):
     _sc_match = saved
     mut sc2 := _sc.Ref(id)
     sc2.count = _bd.nodes[d].kids.Len() - start
+end
+
+func _sc_memo(key: str): bool:
+    if _sc_cur < 0:
+        ret false
+    end
+    mut s := _sc.Ref(_sc_cur)
+    if s.memo_set and _sc_cur == _sc_rerun_id and str.Equals(s.memo, key):
+        _sc_skipped = true
+        _sc_skips++
+        ret true
+    end
+    if s.memo_set:
+        _sfree(s.memo)
+    end
+    s.memo = str.Clone(key)
+    s.memo_set = true
+    ret false
 end
 
 func _sc_instance(comp: int): int:
@@ -1058,6 +1091,7 @@ func _sc_rerun(id: int):
         end
     end
     oldkids := _sc[id].kids
+    oldbstart := _sc[id].bstart
     mut s0 := _sc.Ref(id)
     s0.kids = Vector {} as Vector<int>
     s0.dirty = false
@@ -1076,7 +1110,10 @@ func _sc_rerun(id: int):
     _sc_tracking = true
     saved_lv := _lv
     _lv = _lv_fresh()
+    _sc_rerun_id = id
+    _sc_skipped = false
     fn(Builder {})
+    _sc_rerun_id = -1
     _lv_free()
     _lv = saved_lv
     _sc_tracking = false
@@ -1086,6 +1123,15 @@ func _sc_rerun(id: int):
     _e.dom = _bd
     _bd = _Dom {}
     _bstack.Clear()
+    if _sc_skipped and _e.dom.nodes.Len() == nbefore and _e.dom.nodes[d].kids.Len() == start:
+        _sc_skipped = false
+        mut sk := _sc.Ref(id)
+        sk.kids.Free()
+        sk.kids = oldkids
+        sk.bstart = oldbstart
+        ret
+    end
+    _sc_skipped = false
     newcount := _e.dom.nodes[d].kids.Len() - start
     mut news := Vector {} as Vector<int>
     defer news.Free()
@@ -1444,4 +1490,10 @@ end
 @fa "شمار اجرای دامنه"
 pub func ScopeRuns(): int:
     ret _sc_runs
+end
+
+@en "ScopeSkips"
+@fa "دامنه های ردشده"
+pub func ScopeSkips(): int:
+    ret _sc_skips
 end

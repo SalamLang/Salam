@@ -1083,6 +1083,8 @@ SALAM_WEAK const char *salam_tostr_char(int c)
 SALAM_WEAK const char *salam_tostr_f32(float x)
 {
     char buf[64];
+    if (x != x)
+        return rt_static_str("nan");
     snprintf(buf, sizeof(buf), "%g", (double)x);
     return rt_static_str(buf);
 }
@@ -1090,6 +1092,8 @@ SALAM_WEAK const char *salam_tostr_f32(float x)
 SALAM_WEAK const char *salam_tostr_f64(double x)
 {
     char buf[64];
+    if (x != x)
+        return rt_static_str("nan");
     snprintf(buf, sizeof(buf), "%g", x);
     return rt_static_str(buf);
 }
@@ -1097,6 +1101,8 @@ SALAM_WEAK const char *salam_tostr_f64(double x)
 SALAM_WEAK const char *salam_fmt_f32(float x)
 {
     char buf[64];
+    if (x != x)
+        return rt_static_str("nan");
     snprintf(buf, sizeof(buf), "%g", (double)x);
     return rt_static_str(buf);
 }
@@ -1104,6 +1110,8 @@ SALAM_WEAK const char *salam_fmt_f32(float x)
 SALAM_WEAK const char *salam_fmt_f64(double x)
 {
     char buf[64];
+    if (x != x)
+        return rt_static_str("nan");
     snprintf(buf, sizeof(buf), "%g", x);
     return rt_static_str(buf);
 }

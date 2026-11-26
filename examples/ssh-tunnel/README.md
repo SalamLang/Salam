@@ -7,11 +7,11 @@ or dark appearance.
 
 ## Platforms
 
-| System  | State                                                                                                |
-| ------- | ---------------------------------------------------------------------------------------------------- |
-| Linux   | The whole tunnel is tested on arm64 containers; the window is tested on X11                          |
-| macOS   | Builds and signs in; the privileged tunnel part has not been run on a real Mac                       |
-| Windows | Builds from macOS; never run. Needs the OpenSSH client 8.4 or newer and `wintun.dll` next to the app |
+| System  | State                                                                                |
+| ------- | ------------------------------------------------------------------------------------ |
+| Linux   | The whole tunnel is tested on arm64 containers; the window is tested on X11          |
+| macOS   | Builds and signs in; the privileged tunnel part has not been run on a real Mac       |
+| Windows | Builds from macOS; never run. Password sign in needs the OpenSSH client 8.4 or newer |
 
 ## Requirements
 
@@ -19,8 +19,13 @@ or dark appearance.
 - An SSH account on a server that allows TCP forwarding
   (`AllowTcpForwarding yes`, the OpenSSH default)
 - Administrator rights, asked on each connect
-- Linux: `libx11-dev` to build, `iproute2`, `curl`, and polkit (`pkexec`)
-  unless you start the app as root
+- Linux: a C compiler and `libx11-dev` to build; `iproute2`, `curl`, and polkit
+  (`pkexec`) unless you start the app as root. Saving the password needs
+  libsecret and a keyring such as GNOME Keyring or KWallet
+- Windows: Windows 10 ships an OpenSSH client older than 8.4. For password sign
+  in install a newer one from the
+  [Win32-OpenSSH releases](https://github.com/PowerShell/Win32-OpenSSH/releases),
+  or use an SSH key
 
 ## Build and run
 
@@ -33,7 +38,9 @@ or dark appearance.
 On macOS the app is written to `~/Applications/Salam Tunnel.app`.
 `SALAM=/path/to/salam` picks another compiler. The script uses the standard
 library of this repository (`SALAM_STD` overrides it) and also builds the two
-Linux relay programs with the musl sysroots of the compiler.
+Linux relay programs with the musl sysroots of the compiler. A Windows build
+downloads `wintun.dll` from [wintun.net](https://www.wintun.net), checks its
+SHA-256 and puts it next to the app with its license.
 
 Enter the server, port, username and password, then press **Connect**. Leave
 the password empty to use a key from `~/.ssh`. A key with a passphrase must be
@@ -105,7 +112,9 @@ Turn off other VPN apps before connecting. The tunnel uses the addresses
 
 - `.salam-tunnel/` in your home folder holds the profile and the server's host key. The host key
   is trusted on first use, and a changed key stops the connection.
-- The password is stored only on macOS, and only if you tick the Keychain box.
-  It reaches `ssh` through `SSH_ASKPASS` and never appears on a command line.
+- The password is stored only if you tick the box: in the macOS Keychain, the
+  Linux keyring or the Windows Credential Manager. The box is hidden when there is
+  no such store. The password reaches `ssh` through `SSH_ASKPASS` and never
+  appears on a command line.
 - The helper runs the app binary as root, so keep the app somewhere only you can
   write to.

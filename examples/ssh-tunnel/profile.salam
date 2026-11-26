@@ -16,12 +16,11 @@ package profile
 import os
 import str
 import fs
-import os.shell
-import os.process
+import os.secret
 
 include "host.salam"
 
-const KEYCHAIN_SERVICE := "ir.salamlang.sshtunnel"
+const SECRET_SERVICE := "ir.salamlang.sshtunnel"
 
 pub struct Profile:
     pub host: str = ""
@@ -36,48 +35,8 @@ func profile_path(): str:
     ret AppDir() + "/profile.conf"
 end
 
-func keychain_account(pr: Profile): str:
+func account(pr: Profile): str:
     ret pr.user + "@" + pr.host + ":" + pr.port
-end
-
-func keychain_read(pr: Profile): str:
-    mut args := Vector {} as Vector<str>
-    args.Push("find-generic-password")
-    args.Push("-s")
-    args.Push(KEYCHAIN_SERVICE)
-    args.Push("-a")
-    args.Push(keychain_account(pr))
-    args.Push("-w")
-    r := shell.Run("/usr/bin/security", args)
-    if r.code != 0:
-        ret ""
-    end
-    ret str.TrimSuffix(r.out, "\n")
-end
-
-func keychain_quote(text: str): str:
-    ret "\"" + str.Replace(str.Replace(text, "\\", "\\\\"), "\"", "\\\"") + "\""
-end
-
-func keychain_write(pr: Profile):
-    mut args := Vector {} as Vector<str>
-    args.Push("-i")
-    line := "add-generic-password -U -s " + KEYCHAIN_SERVICE + " -a " + keychain_quote(
-        keychain_account(pr)
-    ) + " -w " + keychain_quote(pr.password) + "\n"
-    mut cmd := process.NewCommand("/usr/bin/security")
-    cmd.args = args
-    _r := process.RunCommand(cmd, line, 10000)
-end
-
-func keychain_forget(pr: Profile):
-    mut args := Vector {} as Vector<str>
-    args.Push("delete-generic-password")
-    args.Push("-s")
-    args.Push(KEYCHAIN_SERVICE)
-    args.Push("-a")
-    args.Push(keychain_account(pr))
-    _r := shell.Run("/usr/bin/security", args)
 end
 
 pub func AppDir(): str:
@@ -89,8 +48,8 @@ pub func AppDir(): str:
     ret dir
 end
 
-pub func TokenPath(): str:
-    ret AppDir() + "/relay.token"
+pub func RelayPath(): str:
+    ret AppDir() + "/relay.conf"
 end
 
 pub func KnownHostsPath(): str:
@@ -175,8 +134,8 @@ pub func LoadProfile(): Profile:
     if pr.port.Len() == 0:
         pr.port = "22"
     end
-    if pr.remember and host.CanRemember():
-        pr.password = keychain_read(pr)
+    if pr.remember and secret.Available():
+        pr.password = secret.Get(SECRET_SERVICE, account(pr))
     end
     ret pr
 end
@@ -185,12 +144,12 @@ pub func SaveProfile(pr: Profile):
     text := "host=" + pr.host + "\nport=" + pr.port + "\nuser=" + pr.user + "\nremember=" +
         (pr.remember ? "yes" : "no") + "\nudp=" + (pr.udp ? "yes" : "no") + "\n"
     _w := os.WriteFile(profile_path(), text)
-    if not host.CanRemember():
+    if not secret.Available():
         ret
     end
     if pr.remember and pr.password.Len() > 0:
-        keychain_write(pr)
+        _stored := secret.Set(SECRET_SERVICE, account(pr), pr.password)
     else:
-        keychain_forget(pr)
+        _gone := secret.Delete(SECRET_SERVICE, account(pr))
     end
 end

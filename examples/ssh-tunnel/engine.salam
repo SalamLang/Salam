@@ -46,8 +46,8 @@ mut _want_stop := false
 mut _job := profile.Profile {}
 mut _upstream := ""
 mut _relay := ""
-mut _relay_port := 0
 mut _token := ""
+mut _udp_note := ""
 
 pub struct Snapshot:
     pub phase: int = 0
@@ -117,12 +117,10 @@ func ssh_command(
         cmd.Arg("-N")
     end
     mut out := sshcmd.Target(
-        cmd,
-        ip,
-        relay.Len() == 0 ? "" : "exec " + relay + " --listen " + str.FromInt(_relay_port as i64)
+        cmd, ip, relay.Len() == 0 ? "" : relay + " --listen 0; exec cat > /dev/null"
     )
     out.stdin_mode = relay.Len() == 0 ? 2 : 1
-    out.stdout_mode = 2
+    out.stdout_mode = relay.Len() == 0 ? 2 : 1
     out.stderr_mode = 1
     ret out
 end
@@ -136,6 +134,40 @@ func last_line(text: str, fallback: str): str:
         end
     end
     ret out
+end
+
+func parse_port(text: str): int:
+    at := text.Find("RELAY-PORT ")
+    if at < 0:
+        ret 0
+    end
+    ret profile.PortNumber(text.Substr(at + 11, text.Len() - at - 11).Trim())
+end
+
+func save_relay(port: int):
+    temporary := profile.RelayPath() + ".new"
+    _w := os.WriteFile(temporary, _token + "\n" + str.FromInt(port as i64) + "\n")
+    _c := fs.Chmod(temporary, 384)
+    if SALAM_OS_WINDOWS:
+        _r := os.Remove(profile.RelayPath())
+    end
+    _m := os.Move(temporary, profile.RelayPath())
+end
+
+func read_relay_port(child &: process.Child): bool:
+    deadline := sync.NowMs() + (15000 as i64)
+    until sync.NowMs() < deadline and not stop_wanted():
+        chunk := child.ReadLine(300)
+        port := parse_port(chunk.data)
+        if port > 0:
+            save_relay(port)
+            ret true
+        end
+        if chunk.eof:
+            break
+        end
+    end
+    ret false
 end
 
 func open_ssh(pr: profile.Profile, ip: str, port: int, why &: str): process.Child:
@@ -161,6 +193,10 @@ func open_ssh(pr: profile.Profile, ip: str, port: int, why &: str): process.Chil
             found := resolver.Pick(port)
             if found.Len() > 0:
                 _upstream = found
+                _udp_note = ""
+                if _relay.Len() > 0 and not read_relay_port(child):
+                    _udp_note = "the relay did not start on the server"
+                end
                 why = ""
                 ret child
             end
@@ -286,16 +322,13 @@ func engine_run():
         _relay = remote.Install(pr, ip, relay_note)
         if _relay.Len() > 0:
             _token = crypto.RandomHex(24)
-            seed := crypto.RandomHex(4)
-            mut pick := 0
-            p := seed as u8*
-            repeat seed.Len() in i:
-                pick = (pick * 31 + (p[i] as int)) % 40000
-            end
-            _relay_port = 20000 + pick
-            _w := os.WriteFile(profile.TokenPath(), _token + "\n")
-            _c := fs.Chmod(profile.TokenPath(), 384)
         end
+    end
+    if pr.password.Len() > 0 and host.SshTooOldForPasswords():
+        finish(
+            "Password sign in needs OpenSSH 8.4 or newer. Install it from github.com/PowerShell/Win32-OpenSSH/releases or use an SSH key."
+        )
+        ret
     end
     set_phase(PHASE_SSH, "Signing in to " + pr.host)
     mut why := ""
@@ -320,8 +353,8 @@ func engine_run():
     args.Push(str.FromInt(os.Pid() as i64))
     args.Push(profile.StopPath())
     args.Push(_upstream)
-    args.Push(str.FromInt((_relay.Len() > 0 ? _relay_port : 0) as i64))
-    args.Push(profile.TokenPath())
+    args.Push(_relay.Len() > 0 and _udp_note.Len() == 0 ? "1" : "0")
+    args.Push(profile.RelayPath())
     mut failed := run_as_admin(
         args, "Salam Tunnel needs permission to route this Mac through your server."
     )
@@ -334,7 +367,13 @@ func engine_run():
         finish(failed)
         ret
     end
-    Publish(Snapshot { phase = PHASE_UP, since = sync.NowMs(), udp_note = relay_note })
+    Publish(
+        Snapshot {
+            phase = PHASE_UP,
+            since = sync.NowMs(),
+            udp_note = relay_note.Len() > 0 ? relay_note : _udp_note
+        }
+    )
     _c := spawn(check_exit_ip)
     mut ended := ""
     mut beat := ""

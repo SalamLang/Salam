@@ -1025,10 +1025,24 @@ SALAM_WEAK const char *salam_tostr_char(int c)
     return salam_char_from_code(c);
 }
 
+SALAM_WEAK const char *salam_tostr_f32(float x)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", (double)x);
+    return rt_static_str(buf);
+}
+
 SALAM_WEAK const char *salam_tostr_f64(double x)
 {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", x);
+    return rt_static_str(buf);
+}
+
+SALAM_WEAK const char *salam_fmt_f32(float x)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", (double)x);
     return rt_static_str(buf);
 }
 

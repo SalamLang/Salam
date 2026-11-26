@@ -302861,6 +302861,12 @@ if opts.set_system_dns:
 pl.up.Push(
 "-netsh interface ipv4 set dnsservers name=" + dev + " source=static address=" + next + " register=none validate=no"
 )
+pl.up.Push(
+"-powershell -NoProfile -NonInteractive -Command \"Add-DnsClientNrptRule -Namespace '.' -NameServers '" + next + "' -Comment 'salam-tun-" + dev + "'\""
+)
+pl.down.Push(
+"-powershell -NoProfile -NonInteractive -Command \"Get-DnsClientNrptRule | Where-Object Comment -eq 'salam-tun-" + dev + "' | Remove-DnsClientNrptRule -Force\""
+)
 end
 each r in resolvers:
 if _private4(r) and not _has(hosts, r) and r != gw.ip:
@@ -309650,11 +309656,13 @@ import mem
 import sync
 import atomic
 import net.udp
+import net.internal.rawsock
 import os.process
 import os.internal.fdio
 if not SALAM_OS_WINDOWS:
 extern:
 func poll(fds: void*, nfds: usize, timeout: int): int
+func signal(sig: int, handler: void*): void*
 end
 end
 @en "header_size"
@@ -309738,6 +309746,9 @@ struct _Core:
 pub cmd: process.Command = process.Command {}
 pub child: process.Child = process.Child {}
 pub spawns: bool = false
+pub dials: bool = false
+pub connect: func () i64 = (): ret -1 as i64 end
+pub token: str = ""
 pub rfd: i64 = -1
 pub wfd: i64 = -1
 pub mu: sync.Mutex = sync.Mutex {}
@@ -309825,7 +309836,9 @@ _hang_up(c)
 ret 0
 end
 end
-filled := _fill(c[0].inbox, c[0].rfd, timeout_ms)
+filled := c[0].dials ? _fill_socket(
+c[0].inbox, c[0].rfd, timeout_ms
+) : _fill(c[0].inbox, c[0].rfd, timeout_ms)
 if filled < 0:
 _hang_up(c)
 sync.SleepMs(timeout_ms)
@@ -309911,6 +309924,34 @@ end
 func _write_all(fd: i64, p: void*, n: int): bool:
 ret fdio.WriteAll(fd, p, n)
 end
+func _send_socket(fd: i64, p: void*, n: int): bool:
+sock := rawsock.FromFd(fd)
+mut put := 0
+until put < n:
+k := rawsock.SendBytes(sock, ((p as i64) + (put as i64)) as void*, n - put)
+if k <= 0:
+ret false
+end
+put += k
+end
+ret true
+end
+func _fill_socket(inbox &: _Frames, fd: i64, timeout_ms: int): int:
+cap := max_frame * 2
+if inbox.data == null:
+inbox.data = mem.Allocate(cap as u64) as u8*
+end
+sock := rawsock.FromFd(fd)
+if not rawsock.WaitReadable(sock, timeout_ms):
+ret 0
+end
+k := rawsock.RecvBytes(sock, _at(inbox.data, inbox.len) as void*, cap - inbox.len)
+if k <= 0:
+ret -1
+end
+inbox.len += k
+ret 1
+end
 func _fill(inbox &: _Frames, fd: i64, timeout_ms: int): int:
 cap := max_frame * 2
 if inbox.data == null:
@@ -309983,8 +310024,13 @@ c[0].queue.RemoveAt(0)
 c[0].sizes.RemoveAt(0)
 sync.Unlock(c[0].mu)
 sync.Lock(c[0].io)
-if atomic.Get(c[0].up) and not _write_all(c[0].wfd, frame, size):
+if atomic.Get(c[0].up):
+sent := c[0].dials ? _send_socket(
+c[0].wfd, frame, size
+) : _write_all(c[0].wfd, frame, size)
+if not sent:
 atomic.Set(c[0].up, false)
+end
 end
 sync.Unlock(c[0].io)
 mem.Free(frame)
@@ -309996,6 +310042,16 @@ atomic.Set(c[0].up, false)
 c[0].greeted = false
 c[0].inbox.len = 0
 c[0].retry_at = sync.NowMs() + (_RETRY_MS as i64)
+if c[0].dials:
+sync.Lock(c[0].io)
+if c[0].rfd >= (0 as i64):
+rawsock.Close(rawsock.FromFd(c[0].rfd))
+end
+c[0].rfd = -1
+c[0].wfd = -1
+sync.Unlock(c[0].io)
+ret
+end
 if not c[0].spawns or not c[0].child.ok:
 ret
 end
@@ -310010,8 +310066,31 @@ c[0].rfd = -1
 c[0].wfd = -1
 sync.Unlock(c[0].io)
 end
+func _dial(c: _Core*):
+fd := c[0].connect()
+c[0].retry_at = sync.NowMs() + (_RETRY_MS as i64)
+if fd < (0 as i64):
+ret
+end
+line := c[0].token + "\n"
+if not _send_socket(fd, line as void*, line.Len()):
+rawsock.Close(rawsock.FromFd(fd))
+ret
+end
+sync.Lock(c[0].io)
+c[0].rfd = fd
+c[0].wfd = fd
+sync.Unlock(c[0].io)
+end
 func _launch(c: _Core*):
-if not c[0].spawns or sync.NowMs() < c[0].retry_at:
+if sync.NowMs() < c[0].retry_at:
+ret
+end
+if c[0].dials:
+_dial(c)
+ret
+end
+if not c[0].spawns:
 ret
 end
 child := process.Launch(c[0].cmd)
@@ -310073,6 +310152,31 @@ table[slot].sock = sock
 table[slot].last = now
 ret slot
 end
+func _authorized(peer: rawsock.Socket, token: str): bool:
+want := token.Len() + 1
+buf := mem.AllocateZeroed(want as u64) as u8*
+deadline := sync.NowMs() + (5000 as i64)
+mut got := 0
+until got < want and sync.NowMs() < deadline:
+if rawsock.WaitReadable(peer, 200):
+k := rawsock.RecvBytes(peer, _at(buf, got) as void*, want - got)
+if k <= 0:
+break
+end
+got += k
+end
+end
+mut wrong := got == want ? 0 : 1
+if wrong == 0:
+p := token as u8*
+repeat token.Len() in i:
+wrong |= (buf[i] as int) ^ (p[i] as int)
+end
+wrong |= (buf[want - 1] as int) ^ 10
+end
+mem.Free(buf as void*)
+ret wrong == 0
+end
 func _forbidden(ip: i64, opts: ServerOptions): bool:
 first := (ip >> (24 as i64)) as int
 if first == 0 or first >= 224:
@@ -310080,7 +310184,9 @@ ret true
 end
 ret first == 127 and not opts.allow_loopback
 end
-func _server_outgoing(table: _Flow*, opts: ServerOptions, frame: u8*, info &: Datagram, now: i64):
+func _server_outgoing(
+table: _Flow*, opts: ServerOptions, frame: u8*, info &: Datagram, now: i64
+):
 if _forbidden(info.ip, opts) or info.port == 0:
 ret
 end
@@ -310099,7 +310205,9 @@ end
 func _server_incoming(slot: _Flow*, out_fd: i64, scratch: u8*, now: i64): bool:
 mut host := ""
 mut port := 0
-n := udp.ReceiveBytes(slot[0].sock, _at(scratch, header_size) as void*, max_payload, host, port)
+n := udp.ReceiveBytes(
+slot[0].sock, _at(scratch, header_size) as void*, max_payload, host, port
+)
 ip := ParseIPv4(host)
 if host.Len() > 0:
 mem.Free(host as void*)
@@ -310199,6 +310307,63 @@ c[0].rfd = read_fd
 c[0].wfd = write_fd
 _t := spawn(_writer, c)
 ret Client { core = c as void* }
+end
+@en "NewSocketClient"
+@fa "کارخواه سوکتی"
+pub func NewSocketClient(connect: func () i64, token: str): Client:
+c := _new_core()
+c[0].dials = true
+c[0].connect = connect
+c[0].token = token
+_t := spawn(_writer, c)
+ret Client { core = c as void* }
+end
+@en "Listen"
+@fa "گوش دادن"
+pub func Listen(port: int, token: str, control_fd: i64, opts: ServerOptions): bool:
+if SALAM_OS_WINDOWS:
+ret false
+else:
+if token.Len() < 16 or port <= 0 or port > 65535:
+ret false
+end
+_old := signal(13, (1 as i64) as void*)
+server := rawsock.ListenOn("127.0.0.1", port, rawsock.SOCK_STREAM)
+if not rawsock.Ok(server):
+ret false
+end
+pfds := mem.AllocateZeroed(16 as u64) as u8*
+drop := mem.Allocate(256 as u64)
+until true:
+((pfds as i64) as i32*)[0] = server.fd as i32
+((pfds as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+((pfds as i64 + (6 as i64)) as i16*)[0] = 0 as i16
+((pfds as i64 + (8 as i64)) as i32*)[0] = control_fd as i32
+((pfds as i64 + (12 as i64)) as i16*)[0] = 1 as i16
+((pfds as i64 + (14 as i64)) as i16*)[0] = 0 as i16
+if poll(pfds as void*, 2 as usize, 1000) <= 0:
+continue
+end
+if ((pfds as i64 + (14 as i64)) as i16*)[0] != (0 as i16):
+if fdio.ReadRaw(control_fd, drop, 256) <= 0:
+break
+end
+end
+if ((pfds as i64 + (6 as i64)) as i16*)[0] != (0 as i16):
+peer := rawsock.Accept(server)
+if rawsock.Ok(peer):
+if _authorized(peer, token):
+_served := Serve(peer.fd, peer.fd, opts)
+end
+rawsock.Close(peer)
+end
+end
+end
+mem.Free(pfds as void*)
+mem.Free(drop)
+rawsock.Close(server)
+ret true
+end
 end
 @en "Serve"
 @fa "خدمت دادن"
@@ -327918,6 +328083,159 @@ end
 pub func RunTimeout(program: str, args: Vector<str>, text: str, timeout_ms: int): RunResult:
 cmd := Command { program = program, args = args }
 ret RunCommand(cmd, text, timeout_ms)
+end
+package process
+import mem
+import str
+import os
+if SALAM_OS_WINDOWS:
+link dynamic "shell32"
+extern:
+func OpenProcess(access: u32, inherit: int, pid: u32): void*
+func ShellExecuteW(
+window: void*, verb: void*, file: void*, params: void*, folder: void*, show: int
+): void*
+func IsUserAnAdmin(): int
+end
+else:
+extern:
+func geteuid(): u32
+func getpgid(pid: int): int
+end
+end
+func _sh_quote(text: str): str:
+ret "'" + str.Replace(text, "'", "'\\''") + "'"
+end
+func _script_quote(text: str): str:
+ret "\"" + str.Replace(str.Replace(text, "\\", "\\\\"), "\"", "\\\"") + "\""
+end
+func _win_quote(text: str): str:
+p := text as u8*
+mut out := str.NewBuilder()
+str.BufAppendChar(out, 34)
+mut slashes := 0
+repeat text.Len() in i:
+c := p[i] as int
+if c == 92:
+slashes++
+else c == 34:
+repeat slashes + 1:
+str.BufAppendChar(out, 92)
+end
+slashes = 0
+else:
+slashes = 0
+end
+str.BufAppendChar(out, c)
+end
+repeat slashes:
+str.BufAppendChar(out, 92)
+end
+str.BufAppendChar(out, 34)
+quoted := str.BufStr(out)
+str.BufFree(out)
+ret quoted
+end
+func _admin_result(c: Command, timeout_ms: int, refused: str): str:
+r := RunCommand(c, "", timeout_ms)
+if not r.started:
+ret "cannot start " + c.program
+end
+if r.timed_out:
+ret "the administrator prompt timed out"
+end
+if not r.status.Success():
+ret refused
+end
+ret ""
+end
+func _detached(program: str, args: Vector<str>): Command:
+mut c := NewCommand("/bin/sh")
+c.Arg("-c")
+c.Arg("\"$0\" \"$@\" > /dev/null 2>&1 < /dev/null &")
+c.Arg(program)
+each a in args:
+c.Arg(a)
+end
+ret c
+end
+@en "IsElevated"
+@fa "دسترسی مدیر دارد"
+pub func IsElevated(): bool:
+if SALAM_OS_WINDOWS:
+ret IsUserAnAdmin() != 0
+else:
+ret geteuid() == (0 as u32)
+end
+end
+@en "Alive"
+@fa "زنده است"
+pub func Alive(pid: int): bool:
+if pid <= 0:
+ret false
+end
+if SALAM_OS_WINDOWS:
+h := OpenProcess(4096 as u32, 0, pid as u32)
+if h == null:
+ret GetLastError() == 5
+end
+code := mem.AllocateZeroed(8 as u64)
+ok := GetExitCodeProcess(h, code)
+value := (code as u32*)[0]
+mem.Free(code)
+_closed := CloseHandle(h)
+ret ok != 0 and value == (259 as u32)
+else:
+ret getpgid(pid) >= 0
+end
+end
+@en "RunElevated"
+@fa "اجرا با دسترسی مدیر"
+pub func RunElevated(program: str, args: Vector<str>, prompt: str, timeout_ms: int): str:
+if SALAM_OS_WINDOWS:
+mut line := ""
+each a in args:
+line += _win_quote(a) + " "
+end
+verb := _spawn_wide("runas")
+file := _spawn_wide(program)
+params := _spawn_wide(line)
+done := ShellExecuteW(null, verb, file, params, null, 0)
+mem.Free(verb)
+mem.Free(file)
+mem.Free(params)
+if (done as i64) <= (32 as i64):
+ret "administrator permission was not given"
+end
+ret ""
+else:
+if IsElevated():
+ret _admin_result(_detached(program, args), timeout_ms, "cannot start " + program)
+end
+if SALAM_OS_MAC:
+mut line := _sh_quote(program)
+each a in args:
+line += " " + _sh_quote(a)
+end
+line += " > /dev/null 2>&1 &"
+script := "do shell script " + _script_quote(line) + " with prompt " + _script_quote(prompt) + " with administrator privileges"
+mut c := NewCommand("/usr/bin/osascript")
+c.Arg("-e")
+c.Arg(script)
+ret _admin_result(c, timeout_ms, "administrator permission was not given")
+else:
+if not os.Exists("/usr/bin/pkexec"):
+ret "pkexec is not installed: install polkit, or run the program with sudo"
+end
+inner := _detached(program, args)
+mut c := NewCommand("/usr/bin/pkexec")
+c.Arg(inner.program)
+each a in inner.args:
+c.Arg(a)
+end
+ret _admin_result(c, timeout_ms, "administrator permission was not given")
+end
+end
 end
 @en "process"
 @fa "فرآیند"

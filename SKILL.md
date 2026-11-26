@@ -1207,7 +1207,7 @@ not the libraries.
   `FormatFloatPrec IsNaNF`. The parsers `ParseInt` (i64), `Atoi` (int),
   `ParseFloat`, `ParseBool` and `ParseHex` all `throw` (context `conv`):
   `Syntax` for an empty string, a sign with no digits or any stray character
-  (`12abc`, `1_000`, `1,5`, `12.5` in `ParseInt`, `"True"`), with
+  (`12abc`, `1,5`, `1_000` and `12.5` in `ParseInt`, `"True"`; `ParseFloat` takes `_` between digits like a float literal, so `1_000.5` is fine but `1__0`, `_1`, `1_` throw), with
   offset/line/column of that character; `OutOfRange` (`conv.overflow`) past
   64 bits, or 32 for `Atoi`. Codes: `conv.empty`, `conv.no_digits`,
   `conv.invalid_char`, `conv.not_bool`, `conv.overflow`. Spaces around, one

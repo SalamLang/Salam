@@ -1,0 +1,264 @@
+package nativegen
+
+import str
+
+func dv_reset(g &: Ng):
+    g.fv_val.Clear()
+    g.fv_var.Clear()
+    g.fv_ind.Clear()
+    g.fv_bad.Clear()
+    g.fv_foff.Clear()
+    g.fv_ctx.Clear()
+    g.fv_fsz.Clear()
+    g.fv_ent.Clear()
+    g.fv_par.Clear()
+    g.ea_val.Clear()
+    g.ea_k.Clear()
+    g.ea_p.Clear()
+    g.fv_of = HashMap {} as HashMap<int, int>
+    g.av_fv.Clear()
+    g.ev_fv.Clear()
+    g.ev_val.Clear()
+    g.ev_next.Clear()
+    g.ev_head = HashMap {} as HashMap<int, int>
+    g.ev_tail = HashMap {} as HashMap<int, int>
+    g.me_idx.Clear()
+    g.me_fv.Clear()
+    g.me_val.Clear()
+    g.me_blk.Clear()
+    g.mk_fv.Clear()
+    g.mk_k.Clear()
+    g.mk_p.Clear()
+    g.mk_x.Clear()
+    g.mk_next.Clear()
+    g.mc_dv = 0 - 1
+end
+
+func dv_bind(g &: Ng, fstart: int, fend: int):
+    if not g.dbg_on or g.dv_pos.Len() == 0:
+        ret
+    end
+    mut lo := 0
+    mut hi := g.dv_pos.Len()
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if g.dv_pos[mid] < fstart:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    mut k := lo
+    until k < g.dv_pos.Len() and g.dv_pos[k] < fend:
+        nm := g.dv_name.Get(k)
+        id := tab_get(g.ltab, sp(nm), 0, str.Len(nm))
+        var := g.dv_var[k]
+        if id >= 0 and id < g.lval.Len() and var >= 0 and var < g.md_kind.Len() and
+            g.md_kind[var] == 4:
+            v := g.lval[id]
+            if v >= 0 and not g.fv_of.Has(v):
+                f := g.fv_val.Len()
+                g.fv_val.Push(v)
+                g.fv_var.Push(var)
+                g.fv_ind.Push(g.v_kind[v] == VK_ARG)
+                g.fv_bad.Push(false)
+                g.fv_foff.Push(0 - 1)
+                g.fv_ctx.Push(0 - 1)
+                g.fv_fsz.Push(0)
+                g.fv_ent.Push(0 - 1)
+                g.fv_par.Push(0 - 1)
+                g.fv_of.Put(v, f)
+            end
+        end
+        k++
+    end
+end
+
+func dv_ev_add(g &: Ng, anchor: int, f: int, val: int):
+    if f < 0:
+        ret
+    end
+    e := g.ev_fv.Len()
+    g.ev_fv.Push(f)
+    g.ev_val.Push(val)
+    g.ev_next.Push(0 - 1)
+    if g.ev_tail.Has(anchor):
+        g.ev_next[g.ev_tail.Get(anchor)] = e
+    else:
+        g.ev_head.Put(anchor, e)
+    end
+    g.ev_tail.Put(anchor, e)
+end
+
+func dv_move(g &: Ng, from: int, upto: int):
+    if from == upto or not g.ev_head.Has(from):
+        ret
+    end
+    h := g.ev_head.Get(from)
+    t := g.ev_tail.Get(from)
+    _r1 := g.ev_head.Remove(from)
+    _r2 := g.ev_tail.Remove(from)
+    if g.ev_tail.Has(upto):
+        g.ev_next[g.ev_tail.Get(upto)] = h
+    else:
+        g.ev_head.Put(upto, h)
+    end
+    g.ev_tail.Put(upto, t)
+end
+
+func dv_unlink(g &: Ng, i: int):
+    if g.ev_fv.Len() == 0 or not g.ev_head.Has(i):
+        ret
+    end
+    pv := g.i_prev[i]
+    b := g.i_blk[i]
+    if pv >= 0:
+        dv_move(g, i, pv)
+    else b >= 0:
+        dv_move(g, i, 0 - 1 - b)
+    end
+end
+
+func dv_events_of(g &: Ng, i: int): Vector<int>:
+    mut r := Vector {} as Vector<int>
+    if g.ev_fv.Len() == 0 or not g.ev_head.Has(i):
+        ret r
+    end
+    mut e := g.ev_head.Get(i)
+    until e >= 0:
+        r.Push(e)
+        e = g.ev_next[e]
+    end
+    ret r
+end
+
+func dv_taint(g &: Ng, i: int):
+    mut evs := dv_events_of(g, i)
+    each e in evs:
+        g.fv_bad[g.ev_fv[e]] = true
+    end
+    evs.Free()
+end
+
+func dv_resolve_all(g &: Ng):
+    n := g.v_repl.Len()
+    repeat g.ev_val.Len() in e:
+        v := g.ev_val[e]
+        if v >= 0 and v < n:
+            g.ev_val[e] = resolve(g, v)
+        end
+    end
+end
+
+func dv_apply(g &: Ng, st &: Vector<int>, anchor: int):
+    if not g.ev_head.Has(anchor):
+        ret
+    end
+    mut e := g.ev_head.Get(anchor)
+    until e >= 0:
+        st[g.ev_fv[e]] = g.ev_val[e]
+        e = g.ev_next[e]
+    end
+end
+
+func dv_isel_begin(g &: Ng):
+    g.rs_out.Clear()
+    nf := g.fv_val.Len()
+    if nf == 0:
+        ret
+    end
+    nb := g.b_first.Len()
+    repeat nb * nf:
+        g.rs_out.Push(0 - 3)
+    end
+    mut st := Vector {} as Vector<int>
+    repeat nf:
+        st.Push(0 - 1)
+    end
+    mut changed := true
+    mut rounds := 0
+    until changed and rounds < 64:
+        changed = false
+        rounds++
+        each b in g.b_rpo:
+            dv_block_in(g, b, st)
+            dv_apply(g, st, 0 - 1 - b)
+            mut i := g.b_first[b]
+            until i >= 0:
+                dv_apply(g, st, i)
+                i = g.i_next[i]
+            end
+            repeat nf in f:
+                if g.rs_out[b * nf + f] != st[f]:
+                    g.rs_out[b * nf + f] = st[f]
+                    changed = true
+                end
+            end
+        end
+    end
+    st.Free()
+end
+
+func dv_block_in(g &: Ng, b: int, st &: Vector<int>):
+    nf := g.fv_val.Len()
+    repeat nf in f:
+        mut v := 0 - 3
+        if b == 0:
+            v = 0 - 1
+        end
+        repeat g.b_npred[b] in k:
+            p := g.b_pred[g.b_ps[b] + k]
+            o := g.rs_out[p * nf + f]
+            if o == 0 - 3:
+                continue
+            end
+            if v == 0 - 3:
+                v = o
+            else v != o:
+                v = 0 - 1
+            end
+        end
+        st[f] = v == 0 - 3 ? 0 - 1 : v
+    end
+end
+
+func dv_me(g &: Ng, f: int, val: int):
+    if f >= 0 and g.fv_bad[f]:
+        ret
+    end
+    g.me_idx.Push(g.mc.op.Len())
+    g.me_fv.Push(f)
+    g.me_val.Push(val)
+    g.me_blk.Push(g.cur_b)
+end
+
+func dv_isel_block(g &: Ng, b: int):
+    nf := g.fv_val.Len()
+    if nf == 0 or g.rs_out.Len() == 0:
+        ret
+    end
+    mut st := Vector {} as Vector<int>
+    repeat nf:
+        st.Push(0 - 1)
+    end
+    dv_block_in(g, b, st)
+    dv_apply(g, st, 0 - 1 - b)
+    dv_me(g, 0 - 1, 0 - 1)
+    repeat nf in f:
+        if st[f] >= 0:
+            dv_me(g, f, st[f])
+        end
+    end
+    st.Free()
+end
+
+func dv_isel_after(g &: Ng, i: int):
+    if g.fv_val.Len() == 0 or not g.ev_head.Has(i):
+        ret
+    end
+    mut e := g.ev_head.Get(i)
+    until e >= 0:
+        dv_me(g, g.ev_fv[e], g.ev_val[e])
+        e = g.ev_next[e]
+    end
+end

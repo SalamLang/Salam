@@ -1,0 +1,203 @@
+package nativegen
+
+func clobbers_mem(op: int): bool:
+    ret op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE
+end
+
+func uses_val(g &: Ng, i: int, v: int): bool:
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and g.i_a[i] == v: ret true end
+    if (m & 2) != 0 and g.i_b[i] == v: ret true end
+    if (m & 4) != 0 and g.i_c[i] == v: ret true end
+    op := g.i_op[i]
+    if (op == OP_CMP64 or op == OP_ADC64) and g.i_d[i] == v as i64:
+        ret true
+    end
+    if op == OP_CALL:
+        repeat g.i_pcount[i] in k:
+            if g.pool[g.i_ps[i] + 3 * k] == v:
+                ret true
+            end
+        end
+    else op == OP_PHI:
+        repeat g.i_pcount[i] in k2:
+            if g.pool[g.i_ps[i] + 2 * k2] == v:
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func agg_load_defer(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0:
+        ret true
+    end
+    need := g.v_uses[r]
+    if need == 0:
+        ret true
+    end
+    if (g.i_f[i] & IF_VOLATILE) != 0:
+        ret false
+    end
+    mut seen := 0
+    mut j := g.i_next[i]
+    until j >= 0:
+        op := g.i_op[j]
+        if uses_val(g, j, r):
+            okuse := (op == OP_STORE and g.i_a[j] == r and g.i_b[j] != r) or op == OP_EXTV or
+                op == OP_RET or (op == OP_INSV and g.i_a[j] == r and g.i_b[j] != r)
+            if not okuse:
+                ret false
+            end
+            seen++
+            if seen == need:
+                ret true
+            end
+        end
+        if clobbers_mem(op):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func set_loc(g &: Ng, r: int, m: Mem):
+    if m.k == MK_FRAME and m.i < 0:
+        g.vak[r] = AK_FRAME
+        g.var_[r] = m.b
+        g.vao[r] = m.d as int
+        ret
+    end
+    if m.k == MK_BI and m.i < 0 and m.b >= 0:
+        g.vak[r] = AK_PTR
+        g.var_[r] = m.b
+        g.vao[r] = m.d as int
+        ret
+    end
+    g.vak[r] = AK_PTR
+    g.var_[r] = lea_reg(g, m)
+    g.vao[r] = 0
+end
+
+func mark_esc(g &: Ng, v: int):
+    if v >= 0:
+        g.v_esc[v] = true
+    end
+end
+
+func call_is_mem_intrinsic(g &: Ng, i: int): bool:
+    cv := g.i_a[i]
+    if cv < 0 or g.v_kind[cv] != VK_GLB:
+        ret false
+    end
+    s := g.v_def[cv]
+    ret s == g.sym_i_memcpy or s == g.sym_i_memmove or s == g.sym_i_memset
+end
+
+func compute_escape(g &: Ng):
+    g.v_esc.Clear()
+    repeat g.v_kind.Len():
+        g.v_esc.Push(false)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_LOAD:
+                _x := 0
+            else op == OP_STORE:
+                mark_esc(g, g.i_a[i])
+            else op == OP_ADDR:
+                mark_esc(g, g.i_b[i])
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0: mark_esc(g, g.i_a[i]) end
+                if (m & 2) != 0: mark_esc(g, g.i_b[i]) end
+                if (m & 4) != 0: mark_esc(g, g.i_c[i]) end
+                if op == OP_CALL:
+                    nocap := call_is_mem_intrinsic(g, i)
+                    repeat g.i_pcount[i] in k:
+                        fl := g.pool[g.i_ps[i] + 3 * k + 1]
+                        if not nocap and (fl & (IF_BYVAL | IF_SRET)) == 0:
+                            mark_esc(g, g.pool[g.i_ps[i] + 3 * k])
+                        end
+                    end
+                else op == OP_PHI:
+                    repeat g.i_pcount[i] in k2:
+                        mark_esc(g, g.pool[g.i_ps[i] + 2 * k2])
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut changed := true
+    until changed:
+        changed = false
+        each b2 in g.b_rpo:
+            mut j := g.b_first[b2]
+            until j >= 0:
+                if g.i_op[j] == OP_ADDR:
+                    r := g.i_res[j]
+                    base := g.i_a[j]
+                    if r >= 0 and g.v_esc[r] and base >= 0 and not g.v_esc[base]:
+                        g.v_esc[base] = true
+                        changed = true
+                    end
+                end
+                j = g.i_next[j]
+            end
+        end
+    end
+end
+
+func local_root(g &: Ng, v: int): int:
+    mut x := v
+    repeat 16:
+        if x < 0 or g.v_kind[x] != VK_INS:
+            ret 0 - 1
+        end
+        d := g.v_def[x]
+        if g.i_op[d] == OP_ALLOCA:
+            if g.v_esc[x]:
+                ret 0 - 1
+            end
+            ret x
+        end
+        if g.i_op[d] != OP_ADDR:
+            ret 0 - 1
+        end
+        x = g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func sret_forward(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1:
+        ret 0 - 1
+    end
+    j := g.i_next[i]
+    if j < 0 or g.i_op[j] != OP_STORE or g.i_a[j] != r:
+        ret 0 - 1
+    end
+    q := g.i_b[j]
+    root := local_root(g, q)
+    if root < 0:
+        ret 0 - 1
+    end
+    repeat g.i_pcount[i] in k:
+        av := g.pool[g.i_ps[i] + 3 * k]
+        if av == q or av == root or local_root(g, av) == root:
+            ret 0 - 1
+        end
+    end
+    ret j
+end
+
+func writes_mem(op: int): bool:
+    ret op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE
+end

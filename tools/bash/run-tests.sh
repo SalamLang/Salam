@@ -194,6 +194,26 @@ $cerrs"
                 return
             fi
         done
+        mkdir -p "$jobdir/kept/.git"
+        : >"$jobdir/kept/readme.txt"
+        : >"$jobdir/kept/LICENSE"
+        : >"$jobdir/kept/.gitignore"
+        : >"$jobdir/kept/.DS_Store"
+        (cd "$jobdir/kept" && "$SALAM_ABS" init $flags --name=demo --lang="$lang" --no-color) >>"$buildlog" 2>&1 </dev/null
+        if [ ! -f "$jobdir/kept/salam.toml" ] || [ -e "$jobdir/kept/demo" ]; then
+            echo "FAIL $label (init did not use a folder holding only ignored files)"
+            sed 's/^/  /' "$buildlog" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
+        mkdir -p "$jobdir/used/.config"
+        (cd "$jobdir/used" && "$SALAM_ABS" init $flags --name=demo --lang="$lang" --no-color) >>"$buildlog" 2>&1 </dev/null
+        if [ ! -f "$jobdir/used/demo/salam.toml" ] || [ -e "$jobdir/used/salam.toml" ]; then
+            echo "FAIL $label (init did not use a subfolder of a non-empty folder)"
+            sed 's/^/  /' "$buildlog" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
         if ! grep -q 'description = "a demo"' "$proj/salam.toml"; then
             echo "FAIL $label (salam.toml has no description)"
             rm -rf "$jobdir"
@@ -337,7 +357,7 @@ $cerrs"
             wtry=1
             while [ ! -f "$html" ] && [ "$wtry" -le 3 ]; do
                 [ "$wtry" -gt 1 ] && sleep "$wtry"
-                (cd "$jobdir" && "$SALAM_ABS" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
+                (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --platform=web --output="$html" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
                 wtry=$((wtry + 1))
             done
             if [ -f "$html" ]; then
@@ -381,7 +401,7 @@ $cerrs"
         jobdir="$WORK/ssrjob_${jobid}_$$"
         mkdir -p "$jobdir"
         psrc="$(dirname "$fabs")"
-        if (cd "$jobdir" && "$SALAM_ABS" page build --ssr="$jobdir/dist" "$psrc" --no-color --log-level=error --lang="$lang") >"$jobdir/build.log" 2>&1 && [ -x "$jobdir/dist/server" ]; then
+        if (cd "$jobdir" && "$SALAM_ABS" build "$psrc" --platform=web --ssr="$jobdir/dist" --no-color --log-level=error --lang="$lang") >"$jobdir/build.log" 2>&1 && [ -x "$jobdir/dist/server" ]; then
             echo "PASS $label (ssr build)"
         else
             echo "FAIL $label (ssr build failed)"
@@ -413,7 +433,7 @@ $cerrs"
         mkdir -p "$jobdir"
         out="$jobdir/a.js"
         buildlog="$jobdir/build.log"
-        (cd "$jobdir" && "$SALAM_ABS" js "$fabs" --output="$out" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
+        (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --platform=js --output="$out" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
         if [ -s "$out" ]; then
             echo "PASS $label (js build)"
         else
@@ -622,7 +642,7 @@ EOF_LNOTS
             html="$WORK/page_err_${jobid}_$$.html"
             rm -f "$html"
             # shellcheck disable=SC2086
-            if extra_out=$("$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" $ptflags 2>&1); then
+            if extra_out=$("$SALAM_ABS" build "$f" --platform=web --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" $ptflags 2>&1); then
                 lfail="page build exited 0 despite $lcode"
             elif [ -e "$html" ]; then
                 lfail="page build wrote output despite $lcode"
@@ -671,7 +691,7 @@ EOF_LNOTS
         page)
             html="$WORK/page_${jobid}_$$.html"
             buildlog="$WORK/page_${jobid}_$$.log"
-            "$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
+            "$SALAM_ABS" build "$f" --platform=web --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
             lmiss=""
             lbad=""
             lfirst=""
@@ -1115,7 +1135,7 @@ if want uiexamples; then
         else
             printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
         fi
-        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" \
+        "$SALAM_ABS" build "$WORK/page_empty_$lang.salam" --platform=web --inline --no-minify --output="$WORK/page_empty_$lang.html" \
             --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
         for f in "$dirx"/*.salam; do
             [ -e "$f" ] || continue
@@ -1657,7 +1677,7 @@ if want page; then
     printf 'page:\nend\n' >"$WORK/page_empty_en.salam"
     printf 'صفحه:\nپایان\n' >"$WORK/page_empty_fa.salam"
     for lang in $LANGS; do
-        "$SALAM_ABS" page build "$WORK/page_empty_$lang.salam" --inline --no-minify --output="$WORK/page_empty_$lang.html" \
+        "$SALAM_ABS" build "$WORK/page_empty_$lang.salam" --platform=web --inline --no-minify --output="$WORK/page_empty_$lang.html" \
             --no-color --log-level=error --lang="$lang" >/dev/null 2>&1 || rm -f "$WORK/page_empty_$lang.html"
     done
     for lang in $LANGS; do

@@ -1,0 +1,146 @@
+package nativegen
+
+func setup_phis(g &: Ng):
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            r := g.i_res[i]
+            t := g.i_ty[i]
+            if is_agg(g, t):
+                g.phit[i] = new_slot(g, tsize(g, t), talign(g, t))
+                if r >= 0:
+                    g.vak[r] = AK_FRAME
+                    g.var_[r] = new_slot(g, tsize(g, t), talign(g, t))
+                    g.vao[r] = 0
+                end
+            else r >= 0:
+                g.vv[r] = new_reg_ty(g, t)
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func split_copies(g &: Ng, b: int):
+    repeat g.lp_pre.Len() in lp:
+        if g.lp_pre[lp] != b:
+            continue
+        end
+        repeat g.lpv_val.Len() in k:
+            if g.lpv_loop[k] != lp:
+                continue
+            end
+            v := g.lpv_val[k]
+            if g.vak[v] != AK_NONE or addr_only(g, v) or g.vv[v] < 0:
+                continue
+            end
+            src := use_reg(g, v)
+            nr := vnew(g, g.mc.vcls[src])
+            g.mc.vwide[nr] = g.mc.vwide[src]
+            g.mc.vymm[nr] = g.mc.vymm[src]
+            _c := e_copy(g, nr, src)
+            g.sp_loop.Push(lp)
+            g.sp_val.Push(v)
+            g.sp_reg.Push(nr)
+        end
+    end
+end
+
+func par_copy(g &: Ng, dsts: Vector<int>, srcs: Vector<int>):
+    mut rd := Vector {} as Vector<int>
+    mut rs := Vector {} as Vector<int>
+    mut cd := Vector {} as Vector<int>
+    mut cv := Vector {} as Vector<int>
+    repeat dsts.Len() in k:
+        v := srcs[k]
+        kv := g.v_kind[v]
+        if kv == VK_UNDEF:
+            continue
+        end
+        if kv == VK_INT or kv == VK_FLT or kv == VK_GLB or kv == VK_ZERO:
+            cd.Push(dsts[k])
+            cv.Push(v)
+            continue
+        end
+        r := use_reg(g, v)
+        if r != dsts[k]:
+            rd.Push(dsts[k])
+            rs.Push(r)
+        end
+    end
+    until rd.Len() > 0:
+        mut pick := 0 - 1
+        repeat rd.Len() in k2:
+            if pick < 0:
+                mut busy := false
+                repeat rs.Len() in j:
+                    if j != k2 and rs[j] == rd[k2]:
+                        busy = true
+                    end
+                end
+                if not busy:
+                    pick = k2
+                end
+            end
+        end
+        if pick >= 0:
+            _c := e_copy(g, rd[pick], rs[pick])
+            last := rd.Len() - 1
+            rd[pick] = rd[last]
+            rs[pick] = rs[last]
+            _p := rd.Pop()
+            _q := rs.Pop()
+        else:
+            d0 := rd[0]
+            tmp := vnew(g, g.mc.vcls[d0])
+            g.mc.vwide[tmp] = g.mc.vwide[d0]
+            g.mc.vymm[tmp] = g.mc.vymm[d0]
+            _c2 := e_copy(g, tmp, d0)
+            repeat rs.Len() in j2:
+                if rs[j2] == d0:
+                    rs[j2] = tmp
+                end
+            end
+        end
+    end
+    repeat cd.Len() in k3:
+        move_into(g, cd[k3], cv[k3])
+    end
+    rd.Free()
+    rs.Free()
+    cd.Free()
+    cv.Free()
+end
+
+func phi_copies(g &: Ng, b: int):
+    repeat g.b_sn[b] in k:
+        s := g.b_succ[g.b_ss[b] + k]
+        mut dsts := Vector {} as Vector<int>
+        mut srcs := Vector {} as Vector<int>
+        mut i := g.b_first[s]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            ps := g.i_ps[i]
+            repeat g.i_pcount[i] in q:
+                if g.pool[ps + 2 * q + 1] == b:
+                    v := g.pool[ps + 2 * q]
+                    t := g.i_ty[i]
+                    if is_agg(g, t):
+                        if g.v_kind[v] != VK_UNDEF:
+                            emit_copy(g, frame_mem(g.phit[i], 0 as i64), agg_mem(g, v), tsize(g, t))
+                        end
+                    else g.i_res[i] >= 0:
+                        dsts.Push(g.vv[g.i_res[i]])
+                        srcs.Push(v)
+                    end
+                    break
+                end
+            end
+            i = g.i_next[i]
+        end
+        if dsts.Len() > 0:
+            par_copy(g, dsts, srcs)
+        end
+        dsts.Free()
+        srcs.Free()
+    end
+end

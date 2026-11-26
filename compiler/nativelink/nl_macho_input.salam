@@ -1,0 +1,269 @@
+package nativelink
+
+func mstr(p: u8*, at: i64, n: int): str:
+    mut b := str.NewBuilder()
+    mut k := 0
+    until k < n and p[at + (k as i64)] != (0 as u8):
+        str.BufAppendChar(b, p[at + (k as i64)] as int)
+        k++
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func add_macho(l &: Nl, f: int, base: i64, size: i64, label: str):
+    p := fptr(l, f)
+    if size < (32 as i64):
+        nl_fail(l, label + ": truncated Mach-O object")
+        ret
+    end
+    cpu := rd32(p, base + (4 as i64))
+    mut m := 0
+    if cpu == (0x01000007 as i64):
+        m = EM_X86_64
+    else cpu == (0x0100000C as i64):
+        m = EM_AARCH64
+    else:
+        nl_fail(l, label + ": Mach-O object for an unsupported CPU")
+        ret
+    end
+    if rd32(p, base + (12 as i64)) != (1 as i64):
+        nl_fail(l, label + ": not a Mach-O relocatable object")
+        ret
+    end
+    if l.mach == 0:
+        l.mach = m
+    else l.mach != m:
+        nl_fail(
+            l, label + ": is for " + mach_name(m) + ", but the link is for " + mach_name(l.mach)
+        )
+        ret
+    end
+    l.macho = true
+    ncmds := rd32(p, base + (16 as i64)) as int
+    o := l.o_file.Len()
+    l.o_file.Push(f)
+    l.o_base.Push(base)
+    l.o_label.Push(label)
+    l.o_coff.Push(false)
+    sec0 := l.s_obj.Len()
+    l.o_sec0.Push(sec0)
+    mut nsect := 0
+    mut symoff := 0 as i64
+    mut nsyms := 0
+    mut stroff := 0 as i64
+    mut lc := base + (32 as i64)
+    push_msec(l, o, name_id(l, ""), 0, 0 as i64, 0 as i64, 0 as i64, 1 as i64, 0 as i64)
+    mut rel_off := Vector {} as Vector<i64>
+    mut rel_n := Vector {} as Vector<int>
+    rel_off.Push(
+        0 as i64
+    )
+    rel_n.Push(0)
+    repeat ncmds:
+        cmd := rd32(p, lc)
+        csz := rd32(p, lc + (4 as i64))
+        if cmd == (0x19 as i64):
+            ns := rd32(p, lc + (64 as i64)) as int
+            repeat ns in k:
+                sh := lc + (72 as i64) + ((80 * k) as i64)
+                sect := mstr(p, sh, 16)
+                seg := mstr(p, sh + (16 as i64), 16)
+                addr := rd64(p, sh + (32 as i64))
+                sz := rd64(p, sh + (40 as i64))
+                off := rd32(p, sh + (48 as i64))
+                al := (1 as i64) << rd32(p, sh + (52 as i64))
+                flg := rd32(p, sh + (64 as i64))
+                push_msec(
+                    l, o, name_id(l, seg + "," + sect), flg as int, base + off, sz, addr, al, flg
+                )
+                rel_off.Push(base + rd32(p, sh + (56 as i64)))
+                rel_n.Push(rd32(p, sh + (60 as i64)) as int)
+                nsect++
+            end
+        else cmd == (0x29 as i64):
+            doff := base + rd32(p, lc + (8 as i64))
+            dsz := rd32(p, lc + (12 as i64))
+            repeat (dsz / (8 as i64)) as int in di:
+                de := doff + ((8 * di) as i64)
+                l.dic_obj.Push(o)
+                l.dic_addr.Push(rd32(p, de))
+                l.dic_len.Push(rd16(p, de + (4 as i64)))
+                l.dic_kind.Push(rd16(p, de + (6 as i64)))
+            end
+        else cmd == (2 as i64):
+            symoff = base + rd32(p, lc + (8 as i64))
+            nsyms = rd32(p, lc + (12 as i64)) as int
+            stroff = base + rd32(p, lc + (16 as i64))
+        end
+        lc += csz
+    end
+    l.o_nsec.Push(nsect + 1)
+    sym0 := l.os_sec.Len()
+    l.o_sym0.Push(sym0)
+    l.o_nsym.Push(nsyms + nsect)
+    repeat nsyms in i:
+        e := symoff + ((16 * i) as i64)
+        strx := rd32(p, e)
+        ty := rd8(p, e + (4 as i64))
+        ns2 := rd8(p, e + (5 as i64))
+        desc := rd16(p, e + (6 as i64))
+        val := rd64(p, e + (8 as i64))
+        nmo := stroff + strx
+        nm := nt_find(l.names, p, nmo, cstr_len(p, nmo, l.f_size[f]), true)
+        mut sec := 0 - 1
+        mut v := val
+        if (ty & 0xe0) != 0:
+            sec = 0 - 1
+        else (ty & 0x0e) == 0x0e and ns2 > 0 and ns2 <= nsect:
+            sec = sec0 + ns2
+            v = val - l.s_maddr[sec]
+        else (ty & 0x0e) == 2:
+            sec = 0 - 2
+        end
+        l.os_sec.Push(sec)
+        l.os_val.Push(v)
+        l.os_name.Push((ty & 0xe0) == 0 and sec >= 0 ? nm : 0 - 1)
+        l.os_type.Push((ty & 1) != 0 ? 0x12 : 0x02)
+        l.os_size.Push(0 as i64)
+        mut gi := 0 - 1
+        if (ty & 0xe0) == 0 and (ty & 1) != 0:
+            gi = glob_of(l, nm)
+            if (ty & 0x0e) == 0:
+                if val > (0 as i64):
+                    if l.g_common[gi] < val:
+                        l.g_common[gi] = val
+                    end
+                    if l.g_firstref[gi] < 0:
+                        l.g_firstref[gi] = o
+                    end
+                else:
+                    sym_merge(l, gi, o, 0 - 1, 0 as i64, (desc & 0x40) != 0)
+                end
+            else:
+                sym_merge(l, gi, o, sec, v, (desc & 0x80) != 0)
+                if l.g_obj[gi] == o:
+                    l.g_hid[gi] = (ty & 0x10) != 0
+                end
+            end
+        end
+        l.os_glob.Push(gi)
+    end
+    secsym0 := l.os_sec.Len()
+    repeat nsect in q:
+        l.os_sec.Push(sec0 + 1 + q)
+        l.os_val.Push(0 as i64)
+        l.os_name.Push(0 - 1)
+        l.os_type.Push(3)
+        l.os_size.Push(0 as i64)
+        l.os_glob.Push(0 - 1)
+    end
+    repeat nsect + 1 in si:
+        s := sec0 + si
+        nr := rel_n[si]
+        l.s_rel0[s] = l.r_off.Len()
+        mut kept := 0
+        mut pend_add := 0 as i64
+        mut have_add := false
+        mut pend_sub := 0 - 1
+        repeat nr in r:
+            re := rel_off[si] + ((8 * r) as i64)
+            raddr := rd32(p, re)
+            info := rd32(p, re + (4 as i64))
+            symn := (info & (0xFFFFFF as i64)) as int
+            rlen := ((info >> (25 as i64)) & (3 as i64)) as int
+            ext := ((info >> (27 as i64)) & (1 as i64)) as int
+            rty := ((info >> (28 as i64)) & (15 as i64)) as int
+            if (raddr & (0x80000000 as i64)) != (0 as i64):
+                nl_fail(l, label + ": scattered relocations are not supported")
+                ret
+            end
+            mut os := 0
+            if ext == 1:
+                os = sym0 + symn
+            else:
+                os = secsym0 + symn - 1
+            end
+            if m == EM_AARCH64 and rty == 10:
+                pend_add = sext(symn as i64, 24)
+                have_add = true
+                continue
+            end
+            if (m == EM_X86_64 and rty == 5) or (m == EM_AARCH64 and rty == 1):
+                pend_sub = os
+                continue
+            end
+            placef := l.s_off[s] + raddr
+            mut add := 0 as i64
+            if m == EM_X86_64:
+                if rty == 0:
+                    add = rlen == 3 ? rd64(p, placef) : rd32s_at(p, placef)
+                    if ext == 0:
+                        add -= l.s_maddr[l.os_sec[os]]
+                    end
+                else:
+                    disp := rd32s_at(p, placef)
+                    bias := rty == 6 ? 1 : (rty == 7 ? 2 : (rty == 8 ? 4 : 0))
+                    if ext == 0:
+                        add = disp + l.s_maddr[s] + raddr +
+                            ((4 + bias) as i64) - l.s_maddr[l.os_sec[os]]
+                    else:
+                        add = disp + (bias as i64)
+                    end
+                end
+            else:
+                if rty == 0:
+                    add = rlen == 3 ? rd64(p, placef) : rd32s_at(p, placef)
+                    if ext == 0:
+                        add -= l.s_maddr[l.os_sec[os]]
+                    end
+                else have_add:
+                    add = pend_add
+                end
+            end
+            have_add = false
+            until l.r_sub.Len() < l.r_off.Len():
+                l.r_sub.Push(0 - 1)
+            end
+            l.r_off.Push(raddr)
+            l.r_type.Push(MR_BASE + rty * 4 + rlen)
+            l.r_sym.Push(os)
+            l.r_add.Push(add)
+            l.r_sub.Push(pend_sub)
+            pend_sub = 0 - 1
+            kept++
+        end
+        l.s_nrel[s] = kept
+    end
+    rel_off.Free()
+    rel_n.Free()
+end
+
+func push_msec(
+    l &: Nl, o: int, nm: int, mflags: int, off: i64, sz: i64, maddr: i64, al: i64, flg: i64
+):
+    until l.s_maddr.Len() < l.s_obj.Len():
+        l.s_maddr.Push(0 as i64)
+    end
+    l.s_obj.Push(o)
+    l.s_name.Push(nm)
+    ty := mflags & 0xff
+    l.s_type.Push(ty == 1 or ty == 12 ? 8 : 1)
+    l.s_flags.Push(flg)
+    l.s_off.Push(off)
+    l.s_size.Push(sz)
+    l.s_align.Push(al)
+    l.s_rel0.Push(l.r_off.Len())
+    l.s_nrel.Push(0)
+    l.s_oc.Push(OC_NONE)
+    l.s_live.Push(false)
+    l.s_addr.Push(0 as i64)
+    l.s_fpos.Push(0 as i64)
+    l.s_comdat.Push(false)
+    l.s_sel.Push(0)
+    l.s_assoc.Push(0 - 1)
+    l.s_drop.Push(false)
+    l.s_link.Push(0 - 1)
+    l.s_maddr.Push(maddr)
+end

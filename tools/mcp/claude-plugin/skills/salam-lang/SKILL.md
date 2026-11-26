@@ -107,7 +107,7 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 
 - Check the compiler version with `salam version` (`salam --version` and
   `salam -v` work too; `salam version --short` prints just the number).
-- `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
+- `salam build --platform=js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
   exact up to 2^53, but larger results or intermediates are rounded.
   `i128`/`u128` are exact BigInts there, except through `i64`/`u64` casts.
 - Source files are keyed by **filename**, not package: two files named
@@ -124,12 +124,12 @@ component` per file (`[id]`, `[[id]]`, `[...rest]`, `_layout` with an
   `components/` holds the `pub` components, which import themselves
   (duplicates across `components/`, `main.salam` and `pages/` are E291);
   everything else is included explicitly; an English name must be PascalCase
-  (E290). `salam page build --ssr` writes a
+  (E290). `salam build --platform=web --ssr` writes a
   native server (`PORT`, `HOST`) plus `public/`; `salam serve --render` runs
   it. `server func` runs only on the server and is a stub in the browser and
   native; its types must be JSON (E285), `env` is server only (E286), backend
   imports warn W280, a static build that reaches one is E289.
-- `size(T)` replaces `sizeof(T)` (the old name warns W295).
+- `size(T)` is the size of a type in bytes; there is no `sizeof`.
 
 ## Packages and documentation
 

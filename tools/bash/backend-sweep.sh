@@ -169,7 +169,7 @@ for section in $SECTIONS; do
                 ;;
             js)
                 # shellcheck disable=SC2086
-                if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" js "$ROOT/$f" $defs \
+                if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" build "$ROOT/$f" --platform=js $defs \
                     --output=sweep.js --no-color --log-level=error --lang="$lang") >/dev/null 2>&1; then
                     (cd "$ROOT" && timeout 90 node "$WORK/sweep.js" </dev/null) >"$WORK/run.out" 2>&1
                     rc=$?

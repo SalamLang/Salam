@@ -258,9 +258,11 @@ end
 
 `salam new NAME` makes a folder with `main.salam`, `salam.toml` and a
 `.gitignore`; `salam new NAME --desktop` makes a desktop app with a web
-interface (see [docs/DESKTOP.md](docs/DESKTOP.md)). `salam init [DIR]` turns an
-existing folder (the current one by default) into a project and keeps the files
-that are already there. In a terminal `init` asks for the name, a description,
+interface (see [docs/DESKTOP.md](docs/DESKTOP.md)). `salam init [DIR]` writes a
+project into DIR (the current folder by default) when it is empty; `.git`,
+`.gitignore`, `.DS_Store`, `README*` and `LICENSE*` (the last two in any letter
+case) do not count, and an existing file is kept. When it holds any other file or folder, the project goes into a new
+subfolder named after the project. In a terminal `init` asks for the name, a description,
 the type (`cli`, `http` or `dsl`, the page language), the platforms, the design
 system (`shadcn` or `none`) and the web mode (`page`, `spa` or `ssr`), shows a
 summary and writes a starter project with a README; the answers go into
@@ -297,10 +299,11 @@ salam build --platform=all                     # every platform listed in salam.
 ```
 
 With no `--platform`, a project made by `salam init --type=dsl` builds the first
-platform it lists, and `salam run` serves `web` when it is listed. The older
-commands `salam js`, `salam web`, `salam page build` and `salam app android|ios`
-still work as aliases, and `salam app` takes the extra options the new spelling
-does not, such as `--abi`. See [docs/MOBILE.md](docs/MOBILE.md),
+platform it lists, and `salam run` serves `web` when it is listed. The old
+commands `salam js`, `salam web`, `salam page build` and `salam app` are gone.
+Options for the Android and iOS app builder go after `--`, for example
+`salam build --platform=android app.salam -o out -- --abi x86_64`. See
+[docs/MOBILE.md](docs/MOBILE.md),
 [docs/DESKTOP.md](docs/DESKTOP.md) and
 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). The defaults for the design,
 the installers, the Windows executable and the phone apps live in `salam.toml`;

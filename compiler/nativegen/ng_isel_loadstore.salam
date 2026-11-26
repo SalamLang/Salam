@@ -1,0 +1,214 @@
+package nativegen
+
+func isel_load(g &: Ng, i: int):
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    if is_agg(g, t):
+        r := g.i_res[i]
+        if agg_load_defer(g, i):
+            if r >= 0 and g.v_uses[r] > 0:
+                set_loc(g, r, mem_of(g, a, 0 as i64))
+            end
+            ret
+        end
+        slot := new_slot(g, tsize(g, t), talign(g, t))
+        emit_copy(g, frame_mem(slot, 0 as i64), mem_of(g, a, 0 as i64), tsize(g, t))
+        if r >= 0:
+            g.vak[r] = AK_FRAME
+            g.var_[r] = slot
+            g.vao[r] = 0
+            g.vown[r] = true
+        end
+        ret
+    end
+    if not res_used(g, i) and (g.i_f[i] & IF_VOLATILE) == 0:
+        ret
+    end
+    mut rop := 0 - 1
+    mut rov := 0 - 1
+    rst := rmw_store(g, i, rop, rov)
+    if rst >= 0:
+        g.skipi[rop] = true
+        g.rmw_of[rst] = rop
+        g.rmw_v[rst] = rov
+        ret
+    end
+    if not is_vec(g, t) and not is_flt(g, t) and load_fold_user(g, i) >= 0:
+        g.lfold[g.i_res[i]] = i
+        ret
+    end
+    m := mem_of(g, a, 0 as i64)
+    if is_vec(g, t):
+        rv := wide_reg(g)
+        _lv := e_rm(g, M_VLD, 16, rv, m)
+        set_res(g, i, rv)
+        ret
+    end
+    if is_flt(g, t):
+        r2 := xmm(g)
+        _l := e_rm(g, M_FLD, fsz(t), r2, m)
+        set_res(g, i, r2)
+        ret
+    end
+    r3 := gpr(g)
+    sz := msz(g, t)
+    ext := load_ext_user(g, i)
+    if ext >= 0:
+        dsz := asz(g, g.i_ty[ext])
+        if g.i_op[ext] == OP_SEXT:
+            ls := e_rm(g, M_LDSX, dsz, r3, m)
+            g.mc.sz2[ls] = sz
+        else sz == 4:
+            _lz := e_rm(g, M_LD, 4, r3, m)
+        else:
+            lz := e_rm(g, M_LDZX, 4, r3, m)
+            g.mc.sz2[lz] = sz
+        end
+        g.skipi[ext] = true
+        set_res(g, ext, r3)
+        ret
+    end
+    sx := load_sext_shared(g, i)
+    if sx >= 0:
+        lx := e_rm(g, M_LDSX, 8, r3, m)
+        g.mc.sz2[lx] = 4
+        g.skipi[sx] = true
+        set_res(g, sx, r3)
+        set_res(g, i, r3)
+        ret
+    end
+    if sz >= 4:
+        _l2 := e_rm(g, M_LD, sz, r3, m)
+    else:
+        l := e_rm(g, M_LDZX, 4, r3, m)
+        g.mc.sz2[l] = sz
+    end
+    set_res(g, i, r3)
+end
+
+func isel_store(g &: Ng, i: int):
+    v := g.i_a[i]
+    p := g.i_b[i]
+    t := g.v_ty[v]
+    if is_agg(g, t):
+        k := g.v_kind[v]
+        if k == VK_UNDEF:
+            ret
+        end
+        m := mem_of(g, p, 0 as i64)
+        if k == VK_ZERO:
+            zero_fill(g, m, tsize(g, t))
+            ret
+        end
+        emit_copy(g, m, agg_mem(g, v), tsize(g, t))
+        ret
+    end
+    if g.rmw_of[i] >= 0:
+        j := g.rmw_of[i]
+        o := g.rmw_v[i]
+        mut cc := ALU_ADD
+        if g.i_op[j] == OP_SUB: cc = ALU_SUB end
+        if g.i_op[j] == OP_AND: cc = ALU_AND end
+        if g.i_op[j] == OP_OR: cc = ALU_OR end
+        if g.i_op[j] == OP_XOR: cc = ALU_XOR end
+        mm := mem_of(g, p, 0 as i64)
+        if g.v_kind[o] == VK_INT:
+            ai := mi_new(g, M_ALU_MI, msz(g, t))
+            set_mem(g, ai, mm)
+            g.mc.imm[ai] = g.v_i[o]
+            g.mc.cc[ai] = cc
+        else:
+            ro := use_reg(g, o)
+            ar := e_mr(g, M_ALU_MR, msz(g, t), mm, ro)
+            g.mc.cc[ar] = cc
+        end
+        ret
+    end
+    if is_vec(g, t) and (g.i_f[i] & IF_W8) != 0:
+        isel_vstore_w8(g, i)
+        ret
+    end
+    atomic := (g.i_f[i] & IF_ATOMIC) != 0
+    if g.v_kind[v] == VK_INT and not is_flt(g, t) and is_imm32(g.v_i[v]) and
+        (not atomic or (g.i_f[i] & IF_SEQ) == 0):
+        m2 := mem_of(g, p, 0 as i64)
+        si := mi_new(g, M_STI, msz(g, t))
+        set_mem(g, si, m2)
+        g.mc.imm[si] = g.v_i[v]
+        ret
+    end
+    r := use_reg(g, v)
+    m3 := mem_of(g, p, 0 as i64)
+    if is_vec(g, t):
+        _sv := e_mr(g, M_VST, 16, m3, r)
+        ret
+    end
+    if is_flt(g, t):
+        _s := e_mr(g, M_FST, fsz(t), m3, r)
+        ret
+    end
+    if atomic and (g.i_f[i] & IF_SEQ) != 0:
+        t2 := gpr(g)
+        _c := e_copy(g, t2, r)
+        _x := e_rm(g, M_XCHG, msz(g, t), t2, m3)
+        ret
+    end
+    _s2 := e_mr(g, M_ST, msz(g, t), m3, r)
+end
+
+func isel_addr(g &: Ng, i: int):
+    v := g.i_res[i]
+    if v < 0 or g.v_uses[v] == 0:
+        ret
+    end
+    idx := g.i_b[i]
+    if addr_only(g, v):
+        if idx >= 0:
+            ir := idx_reg(g, idx, g.v_ty[idx])
+            sc := g.i_x[i]
+            if sc == 1 or sc == 2 or sc == 4 or sc == 8:
+                g.vv[v] = ir
+                g.vsc[v] = sc
+            else:
+                r := gpr(g)
+                mi := e_rr(g, M_IMUL_RRI, 8, r, ir)
+                g.mc.imm[mi] = sc as i64
+                g.vv[v] = r
+                g.vsc[v] = 1
+            end
+        end
+        ret
+    end
+    mut m := mem_of(g, g.i_a[i], g.i_d[i])
+    if idx >= 0:
+        ir2 := idx_reg(g, idx, g.v_ty[idx])
+        mut sc2 := g.i_x[i]
+        mut irr := ir2
+        if not (sc2 == 1 or sc2 == 2 or sc2 == 4 or sc2 == 8):
+            irr = gpr(g)
+            mi2 := e_rr(g, M_IMUL_RRI, 8, irr, ir2)
+            g.mc.imm[mi2] = sc2 as i64
+            sc2 = 1
+        end
+        if (m.k == MK_BI or m.k == MK_FRAME) and m.i < 0:
+            m.i = irr
+            m.s = sc2
+        else:
+            base := lea_reg(g, m)
+            m = Mem {
+                k = MK_BI,
+                b = base,
+                i = irr,
+                s = sc2,
+                d = 0 as i64
+            }
+        end
+    end
+    r2 := gpr(g)
+    if m.k == MK_BI and m.i < 0 and m.d == (0 as i64):
+        _c := e_copy(g, r2, m.b)
+    else:
+        _l := e_rm(g, M_LEA, 8, r2, m)
+    end
+    g.vv[v] = r2
+end

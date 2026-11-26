@@ -1,0 +1,226 @@
+package nativegen
+
+func dv_expr(g &: Ng, k: int, p: i64, x: int): Vector<u8>:
+    mut e := Vector {} as Vector<u8>
+    r := p as int
+    if k == 1:
+        if r < 32:
+            e.Push((0x50 + r) as u8)
+        else:
+            e.Push(0x90 as u8)
+            vb_uleb(e, r as i64)
+        end
+    else k == 2:
+        e.Push(0x11 as u8)
+        vb_sleb(e, p)
+        e.Push(0x9f as u8)
+    else k == 3:
+        dv_breg(e, dv_spreg(g), p)
+    else k == 6:
+        if r < 32:
+            e.Push((0x70 + r) as u8)
+            vb_sleb(e, x as i64)
+        else:
+            e.Push(0x92 as u8)
+            vb_uleb(e, r as i64)
+            vb_sleb(e, x as i64)
+        end
+    else k == 7 or k == 9:
+        dv_breg(e, k == 7 ? dv_spreg(g) : 6, p)
+        e.Push(0x06 as u8)
+        if x != 0:
+            e.Push(0x23 as u8)
+            vb_uleb(e, x as i64)
+        end
+    else k == 8:
+        e.Push(0x76 as u8)
+        vb_sleb(e, p)
+    else k == 10 or k == 11:
+        e.Push(0x9c as u8)
+        if p != (0 as i64):
+            e.Push(0x23 as u8)
+            vb_uleb(e, p)
+        end
+        if k == 11:
+            e.Push(0x06 as u8)
+            if x != 0:
+                e.Push(0x23 as u8)
+                vb_uleb(e, x as i64)
+            end
+        end
+    end
+    ret e
+end
+
+func dv_index_entries(g &: Ng, t &: DvTypes):
+    repeat g.gv_md.Len():
+        t.le_head.Push(0 - 1)
+    end
+    mut tails := Vector {} as Vector<int>
+    repeat g.gv_md.Len():
+        tails.Push(0 - 1)
+    end
+    repeat g.le_s.Len() in i:
+        t.le_next.Push(0 - 1)
+        v := g.le_gv[i]
+        if tails[v] < 0:
+            t.le_head[v] = i
+        else:
+            t.le_next[tails[v]] = i
+        end
+        tails[v] = i
+    end
+    tails.Free()
+end
+
+func dv_write_var(g &: Ng, t &: DvTypes, di &: Vector<u8>, gv: int, lsym: int):
+    md := g.gv_md[gv]
+    param := g.md_a[md] > 0
+    mut ab := 15
+    h := t.le_head[gv]
+    if g.gv_mem[gv]:
+        ab = 14
+    else h >= 0:
+        ab = 13
+    end
+    vb_uleb(di, (param ? ab + 3 : ab) as i64)
+    vb_str(di, g.md_s1[md])
+    fm := g.md_file[md]
+    vb_uleb(
+        di,
+        (fm >= 0 and fm < g.md_kind.Len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64
+    )
+    vb_uleb(di, g.md_line[md] as i64)
+    dv_ref(g, t, di, g.md_t[md])
+    if ab == 14:
+        mut x := dv_expr(g, g.gv_mk[gv], g.gv_moff[gv], 0)
+        vb_uleb(di, x.Len() as i64)
+        each b in x:
+            di.Push(b)
+        end
+        x.Free()
+    else ab == 13:
+        add_reloc(g, SEC_DBGINFO, di.Len(), lsym, R_ABS32, g.s_dloc.Len() as i64)
+        vb_le(di, 0 as i64, 4)
+        mut e := h
+        until e >= 0:
+            mut y := dv_expr(g, g.le_k[e], g.le_p[e], g.le_x[e])
+            dbg_loc_ent(g, g.s_dloc, g.le_s[e], g.le_e[e], y)
+            y.Free()
+            e = t.le_next[e]
+        end
+        dbg_list_end(g, g.s_dloc)
+    end
+end
+
+func dv_queue(g &: Ng, i: int, ni: int):
+    mut evs := dv_events_of(g, i)
+    each ev in evs:
+        g.dq_ni.Push(ni)
+        g.dq_fv.Push(g.ev_fv[ev])
+        g.dq_v.Push(g.ev_val[ev])
+    end
+    evs.Free()
+end
+
+func dv_queue_clear(g &: Ng):
+    g.dq_ni.Clear()
+    g.dq_fv.Clear()
+    g.dq_v.Clear()
+end
+
+func dv_sroa_leaf(g &: Ng, old: int, leaf: int, off: int, size: int):
+    if g.fv_val.Len() == 0 or not g.fv_of.Has(old):
+        ret
+    end
+    f0 := g.fv_of.Get(old)
+    f := g.fv_val.Len()
+    g.fv_val.Push(leaf)
+    g.fv_var.Push(g.fv_var[f0])
+    g.fv_ind.Push(false)
+    g.fv_bad.Push(g.fv_bad[f0])
+    g.fv_foff.Push(g.fv_foff[f0] >= 0 ? g.fv_foff[f0] + off : off)
+    g.fv_ctx.Push(g.fv_ctx[f0])
+    g.fv_fsz.Push(size)
+    g.fv_ent.Push(0 - 1)
+    g.fv_par.Push(f0)
+    g.fv_of.Put(leaf, f)
+end
+
+func dv_entry_arg(g &: Ng, v: int, k: int, p: int):
+    if g.dbg_on and g.fv_val.Len() > 0:
+        g.ea_val.Push(v)
+        g.ea_k.Push(k)
+        g.ea_p.Push(p)
+    end
+end
+
+func dv_ea_of(g &: Ng, v: int): int:
+    if v >= 0:
+        repeat g.ea_val.Len() in k:
+            if g.ea_val[k] == v:
+                ret k
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func dv_sroa_entry(g &: Ng, a: int, t: int, i: int, off: int):
+    if g.fv_val.Len() == 0 or off != 0 or not g.fv_of.Has(a) or g.i_op[i] != OP_STORE or
+        g.i_blk[i] != 0:
+        ret
+    end
+    val := g.i_a[i]
+    if val < 0 or val >= g.v_kind.Len() or g.v_kind[val] != VK_ARG or g.v_ty[val] != t:
+        ret
+    end
+    f := g.fv_of.Get(a)
+    if g.fv_ent[f] < 0:
+        g.fv_ent[f] = val
+    end
+end
+
+func dv_write_fn_vars(g &: Ng, t &: DvTypes, di &: Vector<u8>, fgv: Vector<int>, lsym: int):
+    mut done := Vector {} as Vector<bool>
+    repeat fgv.Len():
+        done.Push(false)
+    end
+    repeat fgv.Len() in i:
+        if done[i]:
+            continue
+        end
+        gv := fgv[i]
+        md := g.gv_md[gv]
+        mut grp := Vector {} as Vector<int>
+        repeat fgv.Len() - i in j0:
+            j := i + j0
+            if not done[j] and g.gv_md[fgv[j]] == md:
+                done[j] = true
+                if g.gv_foff[fgv[j]] >= 0 or g.gv_mem[fgv[j]] or t.le_head[fgv[j]] >= 0 or
+                    grp.Len() == 0:
+                    grp.Push(fgv[j])
+                end
+            end
+        end
+        mut frag := false
+        each q in grp:
+            if g.gv_foff[q] >= 0:
+                frag = true
+            end
+        end
+        if not frag:
+            mut best := grp[0]
+            each q2 in grp:
+                if g.gv_mem[q2] or (t.le_head[q2] >= 0 and not g.gv_mem[best]):
+                    best = q2
+                end
+            end
+            dv_write_var(g, t, di, best, lsym)
+        else:
+            dv_write_frag(g, t, di, grp, lsym)
+        end
+        grp.Free()
+    end
+    done.Free()
+end

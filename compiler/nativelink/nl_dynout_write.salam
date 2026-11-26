@@ -1,0 +1,284 @@
+package nativelink
+
+func gnu_hash(l &: Nl, id: int): i64:
+    mut h := 5381 as i64
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        h = (h * (33 as i64) + (l.names.bytes[o + i] as i64)) & (0xffffffff as i64)
+    end
+    ret h
+end
+
+func bss_shndx(l &: Nl): int:
+    mut n := 1
+    repeat OC_COUNT in c:
+        if l.oc_size[c] <= (0 as i64):
+            continue
+        end
+        if c == OC_BSS:
+            ret n
+        end
+        n++
+    end
+    ret 0xfff1
+end
+
+func write_dyn_tables(l &: Nl, buf: u8*):
+    d := l.dstr_keep
+    ip := (l.interp as void*) as u8*
+    if not l.shared:
+        repeat str.Len(l.interp) in k:
+            buf[l.ds_off[DS_INTERP] + (k as i64)] = ip[k]
+        end
+    end
+    nsym := l.dyn_sym.Len() + 1
+    ws := dy_ws(l)
+    gh := l.ds_off[DS_GHASH]
+    nb := l.gh_nb
+    wr32(buf, gh, nb as i64)
+    wr32(buf, gh + (4 as i64), l.dyn_hash0 as i64)
+    wr32(buf, gh + (8 as i64), 1 as i64)
+    wr32(buf, gh + (12 as i64), 6 as i64)
+    nhash := nsym - l.dyn_hash0
+    if l.elf32:
+        wr32(buf, gh + (16 as i64), nhash > 0 ? (0xffffffff as i64) : (0 as i64))
+    else:
+        wr64(buf, gh + (16 as i64), nhash > 0 ? (0 - 1 as i64) : (0 as i64))
+    end
+    bk := gh + (16 as i64) + (ws as i64)
+    ch := bk + ((4 * nb) as i64)
+    repeat nhash in hq:
+        hg := l.dyn_sym[l.dyn_hash0 - 1 + hq]
+        hfull := gnu_hash(l, l.g_name[hg])
+        b := (hfull % (nb as i64)) as int
+        mut last := hq == nhash - 1
+        if not last:
+            nx := gnu_hash(l, l.g_name[l.dyn_sym[l.dyn_hash0 + hq]])
+            last = (nx % (nb as i64)) as int != b
+        end
+        mut first := hq == 0
+        if not first:
+            pv := gnu_hash(l, l.g_name[l.dyn_sym[l.dyn_hash0 - 2 + hq]])
+            first = (pv % (nb as i64)) as int != b
+        end
+        if first:
+            wr32(buf, bk + ((4 * b) as i64), (l.dyn_hash0 + hq) as i64)
+        end
+        mut hv := hfull & (0xfffffffe as i64)
+        if last:
+            hv |= (1 as i64)
+        end
+        wr32(buf, ch + ((4 * hq) as i64), hv)
+    end
+    ds := l.ds_off[DS_DYNSYM]
+    vs := l.ds_off[DS_VERSYM]
+    bx := bss_shndx(l)
+    repeat l.dyn_sym.Len() in k2:
+        g := l.dyn_sym[k2]
+        e := ds + ((dy_symsz(l) * (k2 + 1)) as i64)
+        mut ty := l.g_stype[g]
+        if ty == 0 or ty == 10:
+            ty = 2
+        end
+        mut bind := l.g_strongref[g] ? 1 : 2
+        mut val := 0 as i64
+        mut size := 0 as i64
+        mut shndx := 0
+        if l.cp_of.Has(g):
+            val = l.cp_addr[l.cp_of.Get(g)]
+            size = sd_size_of(l, g)
+            shndx = bx
+            ty = 1
+        else l.canon.Has(g):
+            val = dyn_shared_addr(l, g)
+            ty = 2
+        else l.expd.Has(g):
+            val = sym_addr_g(l, g)
+            size = l.exp_size.Has(g) ? l.exp_size.Get(g) : (0 as i64)
+            ty = l.exp_type.Has(g) ? l.exp_type.Get(g) : 2
+            shndx = oc_shndx(l, l.s_oc[l.g_sec[g]])
+            bind = l.g_weak[g] ? 2 : 1
+        end
+        info := ((bind << 4) | ty) as u8
+        if l.elf32:
+            wr32(buf, e, d.sym_str[k2])
+            wr32(buf, e + (4 as i64), val)
+            wr32(buf, e + (8 as i64), size)
+            buf[e + (12 as i64)] = info
+            buf[e + (14 as i64)] = (shndx & 255) as u8
+            buf[e + (15 as i64)] = ((shndx >> 8) & 255) as u8
+        else:
+            wr32(buf, e, d.sym_str[k2])
+            buf[e + (4 as i64)] = info
+            buf[e + (6 as i64)] = (shndx & 255) as u8
+            buf[e + (7 as i64)] = ((shndx >> 8) & 255) as u8
+            wr64(buf, e + (8 as i64), val)
+            wr64(buf, e + (16 as i64), size)
+        end
+        vi := l.g_ver[g] < 0 ? 1 : 0
+        mut ix := vi
+        if vi == 0:
+            repeat d.vn_lib.Len() in q:
+                if d.vn_lib[q] == l.g_lib[g] and d.vn_name[q] == l.g_ver[g]:
+                    ix = q + 2
+                end
+            end
+        end
+        buf[vs + ((2 * (k2 + 1)) as i64)] = (ix & 255) as u8
+        buf[vs + ((2 * (k2 + 1)) as i64) + (1 as i64)] = ((ix >> 8) & 255) as u8
+    end
+    dst := l.ds_off[DS_DYNSTR]
+    repeat d.str.Len() in k3:
+        buf[dst + (k3 as i64)] = d.str[k3]
+    end
+    mut vo := l.ds_off[DS_VERNEED]
+    mut libs := Vector {} as Vector<int>
+    repeat l.sl_file.Len() in lb:
+        mut cnt := 0
+        each lv in d.vn_lib:
+            if lv == lb:
+                cnt++
+            end
+        end
+        if cnt > 0:
+            libs.Push(lb)
+        end
+    end
+    repeat libs.Len() in li:
+        lb2 := libs[li]
+        mut cnt2 := 0
+        each lv2 in d.vn_lib:
+            if lv2 == lb2:
+                cnt2++
+            end
+        end
+        wr32(buf, vo, (1 | (cnt2 << 16)) as i64)
+        wr32(buf, vo + (4 as i64), d.lib_str[lb2])
+        wr32(buf, vo + (8 as i64), 16 as i64)
+        nxt := li + 1 < libs.Len() ? (16 + 16 * cnt2) : 0
+        wr32(buf, vo + (12 as i64), nxt as i64)
+        mut ao := vo + (16 as i64)
+        mut seen := 0
+        repeat d.vn_lib.Len() in q2:
+            if d.vn_lib[q2] != lb2:
+                continue
+            end
+            seen++
+            wr32(buf, ao, elf_hash(l, d.vn_name[q2]))
+            wr32(buf, ao + (4 as i64), ((q2 + 2) << 16) as i64)
+            wr32(buf, ao + (8 as i64), d.vn_str[q2])
+            wr32(buf, ao + (12 as i64), (seen < cnt2 ? 16 : 0) as i64)
+            ao += (16 as i64)
+        end
+        vo = ao
+    end
+    nvn := libs.Len()
+    l.vn_count = nvn
+    libs.Free()
+    ro := l.ds_off[DS_RELA]
+    rsz := dy_relsz(l)
+    mut ri := 0
+    repeat 2 in pass:
+        repeat l.rd_off.Len() in k4:
+            rel := l.rd_type[k4] == dr_relative(l)
+            if (pass == 0) != rel:
+                continue
+            end
+            e2 := ro + ((rsz * ri) as i64)
+            if l.elf32:
+                wr32(buf, e2, l.rd_off[k4])
+                wr32(
+                    buf,
+                    e2 + (4 as i64),
+                    ((l.rd_sym[k4] as i64) << (8 as i64)) | (l.rd_type[k4] as i64)
+                )
+                if not l.dyn_rel:
+                    wr32(buf, e2 + (8 as i64), l.rd_add[k4])
+                end
+            else:
+                wr64(buf, e2, l.rd_off[k4])
+                wr64(
+                    buf,
+                    e2 + (8 as i64),
+                    ((l.rd_sym[k4] as i64) << (32 as i64)) | (l.rd_type[k4] as i64)
+                )
+                wr64(buf, e2 + (16 as i64), l.rd_add[k4])
+            end
+            ri++
+        end
+    end
+    mut nrel := 0
+    repeat l.rd_type.Len() in k5:
+        if l.rd_type[k5] == dr_relative(l):
+            nrel++
+        end
+    end
+    mut dp := l.ds_off[DS_DYNAMIC]
+    repeat l.sl_file.Len() in lb3:
+        if l.sl_used[lb3]:
+            dyn_ent(l, buf, dp, 1, d.lib_str[lb3])
+        end
+    end
+    if l.shared:
+        dyn_ent(l, buf, dp, 14, d.soname_str)
+    end
+    dyn_ent(l, buf, dp, 0x6ffffef5, l.ds_addr[DS_GHASH])
+    dyn_ent(l, buf, dp, 5, l.ds_addr[DS_DYNSTR])
+    dyn_ent(l, buf, dp, 6, l.ds_addr[DS_DYNSYM])
+    dyn_ent(l, buf, dp, 10, l.ds_size[DS_DYNSTR])
+    dyn_ent(l, buf, dp, 11, dy_symsz(l) as i64)
+    if not l.shared:
+        dyn_ent(l, buf, dp, 21, 0 as i64)
+    end
+    if l.textrel:
+        dyn_ent(l, buf, dp, 22, 0 as i64)
+    end
+    dyn_ent(l, buf, dp, l.dyn_rel ? 17 : 7, l.ds_addr[DS_RELA])
+    dyn_ent(l, buf, dp, l.dyn_rel ? 18 : 8, l.ds_size[DS_RELA])
+    dyn_ent(l, buf, dp, l.dyn_rel ? 19 : 9, rsz as i64)
+    dyn_ent(l, buf, dp, l.dyn_rel ? 0x6ffffffa : 0x6ffffff9, nrel as i64)
+    if l.oc_size[OC_PREINITARR] > (0 as i64):
+        dyn_ent(l, buf, dp, 32, l.oc_addr[OC_PREINITARR])
+        dyn_ent(l, buf, dp, 33, l.oc_size[OC_PREINITARR])
+    end
+    dyn_ent(l, buf, dp, 25, l.oc_addr[OC_INITARR])
+    dyn_ent(l, buf, dp, 27, l.oc_size[OC_INITARR])
+    dyn_ent(l, buf, dp, 26, l.oc_addr[OC_FINIARR])
+    dyn_ent(l, buf, dp, 28, l.oc_size[OC_FINIARR])
+    dyn_ent(l, buf, dp, 0x6ffffff0, l.ds_addr[DS_VERSYM])
+    if nvn > 0:
+        dyn_ent(l, buf, dp, 0x6ffffffe, l.ds_addr[DS_VERNEED])
+        dyn_ent(l, buf, dp, 0x6fffffff, nvn as i64)
+    end
+    dyn_ent(l, buf, dp, 30, (l.textrel ? 12 : 8) as i64)
+    dyn_ent(l, buf, dp, 0x6ffffffb, (l.shared ? 9 : (l.pie ? (1 | 0x08000000) : 1)) as i64)
+    dyn_ent(l, buf, dp, 0, 0 as i64)
+end
+
+func dyn_ent(l &: Nl, buf: u8*, dp &: i64, tag: int, val: i64):
+    if l.elf32:
+        wr32(buf, dp, tag as i64)
+        wr32(buf, dp + (4 as i64), val)
+        dp += (8 as i64)
+        ret
+    end
+    wr64(buf, dp, tag as i64)
+    wr64(buf, dp + (8 as i64), val)
+    dp += (16 as i64)
+end
+
+func a64_plt(buf: u8*, at: i64, pa: i64, slot: i64):
+    pg := (page4k(slot) - page4k(pa)) >> (12 as i64)
+    wr32(
+        buf,
+        at,
+        (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+    )
+    wr32(
+        buf,
+        at + (4 as i64),
+        (0xF9400211 as i64) | (((slot & (0xFFF as i64)) >> (3 as i64)) << (10 as i64))
+    )
+    wr32(buf, at + (8 as i64), (0x91000210 as i64) | ((slot & (0xFFF as i64)) << (10 as i64)))
+    wr32(buf, at + (12 as i64), 0xD61F0220 as i64)
+end

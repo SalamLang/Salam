@@ -140,7 +140,7 @@ The [speed page](/speed/) also has an HTTP benchmark: Salam's `net.http` server 
 Two Salam tools are exceptions, by design:
 
 - **The interpreter.** `salam exec` runs programs without a C toolchain by compiling each function to bytecode for a small virtual machine inside the compiler. Its values live in the interpreter's own heap, which a mark-and-sweep collector cleans up. Code written for the compiled language, frees included, runs there unchanged. The article on [salam run, exec and build](/blog/salam-run-vs-salam-build/) covers it.
-- **JavaScript output.** `salam js` and the page language compile to JavaScript, which runs under the browser's garbage collector like any other script.
+- **JavaScript output.** `salam build --platform=js` and the page language compile to JavaScript, which runs under the browser's garbage collector like any other script.
 
 The compiled language, the one `salam build` produces, has neither.
 

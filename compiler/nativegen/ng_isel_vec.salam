@@ -1,0 +1,169 @@
+package nativegen
+
+func isel_vec_ins(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    vint := g.t_elem[t] == T_I32 or g.t_elem[t] == T_I64 or g.t_elem[t] == T_I16
+    if not res_used(g, i):
+        ret op != OP_LOAD and op != OP_PHI and op != OP_STORE
+    end
+    if g.t_elem[t] == T_I8:
+        if op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR:
+            isel_vbyte_bin(g, i)
+            ret true
+        end
+        if op == OP_VBCAST:
+            isel_vbcast_byte(g, i)
+            ret true
+        end
+    end
+    if g.t_elem[t] == T_I16:
+        if op == OP_MUL:
+            isel_vint_bin(g, i)
+            ret true
+        end
+        if op == OP_VBCAST:
+            isel_vbcast_byte(g, i)
+            ret true
+        end
+    end
+    if op == OP_ICMP and g.t_elem[g.v_ty[g.i_a[i]]] == T_I8:
+        isel_vbyte_cmp(g, i)
+        ret true
+    end
+    if vint and
+        (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR or
+            op == OP_SHL or op == OP_LSHR or op == OP_ASHR):
+        isel_vint_bin(g, i)
+        ret true
+    end
+    if op == OP_MUL and g.t_elem[t] == T_I32:
+        isel_vmul32(g, i)
+        ret true
+    end
+    if op == OP_ICMP:
+        isel_vcmp(g, i)
+        ret true
+    end
+    if op == OP_SELECT and is_vec(g, g.v_ty[g.i_a[i]]):
+        isel_vsel(g, i)
+        ret true
+    end
+    if op == OP_VBCAST and vint:
+        isel_vbcast_int(g, i)
+        ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & IF_W8) != 0:
+        isel_vload_w8(g, i, mem_of(g, g.i_a[i], 0 as i64))
+        ret true
+    end
+    ret false
+end
+
+func isel_vint_add(g &: Ng, i: int):
+    t := g.i_ty[i]
+    ra := use_reg(g, g.i_a[i])
+    rv := wide_reg(g)
+    _c := e_copy(g, rv, ra)
+    rb := use_reg(g, g.i_b[i])
+    m := e_rr(g, M_VOP_RR, 8, rv, rb)
+    g.mc.cc[m] = g.t_elem[t] == T_I64 ? 0xD4 : 0xFE
+    set_res(g, i, rv)
+end
+
+func ysum_halves(g &: Ng, v: int, sz: int, opc: int): int:
+    hi := yext_hi(g, v)
+    a := e_rr(g, M_VOP_RR, sz, hi, v)
+    g.mc.cc[a] = opc
+    ret hi
+end
+
+func isel_vredadd_flt(g &: Ng, i: int):
+    mut v := use_reg(g, g.i_a[i])
+    d := g.t_elem[g.v_ty[g.i_a[i]]] == T_F64
+    if is_ymm(g, g.v_ty[g.i_a[i]]):
+        v = ysum_halves(g, v, d ? 8 : 4, FO_ADD)
+    end
+    t1 := wide_reg(g)
+    s1 := e_rr(g, M_PSHUFD, 16, t1, v)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, d ? 8 : 4, t1, v)
+    g.mc.cc[a1] = FO_ADD
+    mut fin := t1
+    if not d:
+        t2 := wide_reg(g)
+        s2 := e_rr(g, M_PSHUFD, 16, t2, t1)
+        g.mc.imm[s2] = 0x55 as i64
+        a2 := e_rr(g, M_VOP_RR, 4, t2, t1)
+        g.mc.cc[a2] = FO_ADD
+        fin = t2
+    end
+    r := xmm(g)
+    _c := e_copy(g, r, fin)
+    set_res(g, i, r)
+end
+
+func isel_vredadd(g &: Ng, i: int):
+    if is_flt(g, g.i_ty[i]):
+        isel_vredadd_flt(g, i)
+        ret
+    end
+    mut v := use_reg(g, g.i_a[i])
+    vt := g.v_ty[g.i_a[i]]
+    q := g.t_elem[vt] == T_I64
+    addop := q ? 0xD4 : 0xFE
+    if is_ymm(g, vt):
+        v = ysum_halves(g, v, 8, addop)
+    end
+    t1 := wide_reg(g)
+    _c1 := e_copy(g, t1, v)
+    s1 := e_rr(g, M_SHUFPS, 4, t1, t1)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, 8, t1, v)
+    g.mc.cc[a1] = addop
+    mut fin := t1
+    if not q:
+        t2 := wide_reg(g)
+        _c2 := e_copy(g, t2, t1)
+        s2 := e_rr(g, M_SHUFPS, 4, t2, t2)
+        g.mc.imm[s2] = 0x55 as i64
+        a2 := e_rr(g, M_VOP_RR, 8, t2, t1)
+        g.mc.cc[a2] = addop
+        fin = t2
+    end
+    r := gpr(g)
+    _m := e_rr(g, M_MOVQ_GX, q ? 8 : 4, r, fin)
+    set_res(g, i, r)
+end
+
+func isel_vredh(g &: Ng, i: int):
+    v := use_reg(g, g.i_a[i])
+    mut tw := 0 - 1
+    mut j := g.i_next[i]
+    until j >= 0 and tw < 0:
+        if g.i_op[j] == OP_VREDH and g.i_a[j] == g.i_a[i] and g.i_x[j] != g.i_x[i] and
+            g.i_res[j] >= 0:
+            tw = j
+        end
+        j = g.i_next[j]
+    end
+    t1 := wide_reg(g)
+    _c1 := e_copy(g, t1, v)
+    s1 := e_rr(g, M_SHUFPS, 4, t1, t1)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, 8, t1, v)
+    g.mc.cc[a1] = 0xD4
+    rl := gpr(g)
+    _ml := e_rr(g, M_MOVQ_GX, 4, rl, t1)
+    t2 := wide_reg(g)
+    _c2 := e_copy(g, t2, t1)
+    s2 := e_rr(g, M_SHUFPS, 4, t2, t2)
+    g.mc.imm[s2] = 0x55 as i64
+    rh := gpr(g)
+    _mh := e_rr(g, M_MOVQ_GX, 4, rh, t2)
+    set_res(g, i, g.i_x[i] == 1 ? rh : rl)
+    if tw >= 0:
+        g.vv[g.i_res[tw]] = g.i_x[tw] == 1 ? rh : rl
+        g.skipi[tw] = true
+    end
+end

@@ -1,0 +1,204 @@
+package nativelink
+
+import str
+
+func pdb_sort(keys: Vector<i64>): Vector<int>:
+    mut ix := Vector {} as Vector<int>
+    repeat keys.Len() in i:
+        ix.Push(i)
+    end
+    mut tmp := Vector {} as Vector<int>
+    repeat keys.Len():
+        tmp.Push(0)
+    end
+    mut w := 1
+    n := keys.Len()
+    until w < n:
+        mut lo := 0
+        until lo < n:
+            mid := lo + w < n ? lo + w : n
+            hi := lo + 2 * w < n ? lo + 2 * w : n
+            mut a := lo
+            mut b := mid
+            mut k := lo
+            until k < hi:
+                if a < mid and (b >= hi or keys[ix[a]] <= keys[ix[b]]):
+                    tmp[k] = ix[a]
+                    a++
+                else:
+                    tmp[k] = ix[b]
+                    b++
+                end
+                k++
+            end
+            lo = hi
+        end
+        repeat n in c:
+            ix[c] = tmp[c]
+        end
+        w *= 2
+    end
+    tmp.Free()
+    ret ix
+end
+
+func pdb_gsi(l &: Nl, names: Vector<int>, offs: Vector<int>): Vector<u8>:
+    mut keys := Vector {} as Vector<i64>
+    repeat names.Len() in i:
+        keys.Push(((pdb_hash_name(l, names[i]) % (PDB_NBUCKET as i64)) << (32 as i64)) | (i as i64))
+    end
+    ord := pdb_sort(keys)
+    mut o := Vector {} as Vector<u8>
+    tb_le(o, 0xFFFFFFFF as i64, 4)
+    tb_le(o, (0xEFFE0000 + 19990810) as i64, 4)
+    tb_le(o, (names.Len() * 8) as i64, 4)
+    nwords := (PDB_NBUCKET + 32) / 32
+    mut bm := Vector {} as Vector<i64>
+    repeat nwords:
+        bm.Push(0 as i64)
+    end
+    mut starts := Vector {} as Vector<i64>
+    mut last := 0 - 1
+    repeat ord.Len() in j:
+        bkt := (keys[ord[j]] >> (32 as i64)) as int
+        if bkt != last:
+            bm[bkt / 32] |= ((1 as i64) << ((bkt % 32) as i64))
+            starts.Push((j * 12) as i64)
+            last = bkt
+        end
+    end
+    tb_le(o, (nwords * 4 + starts.Len() * 4) as i64, 4)
+    each q in ord:
+        tb_le(o, (offs[q] + 1) as i64, 4)
+        tb_le(o, 1 as i64, 4)
+    end
+    each wd in bm:
+        tb_le(o, wd, 4)
+    end
+    each st in starts:
+        tb_le(o, st, 4)
+    end
+    keys.Free()
+    bm.Free()
+    starts.Free()
+    ret o
+end
+
+func pdb_guid(buf: u8*, total: i64, k: int): i64:
+    mut h := (0xCBF29CE484222325 as u64) + (k as u64)
+    mut i := 0 as i64
+    until i < total:
+        h = (h ^ (buf[i] as u64)) * (0x100000001B3 as u64)
+        i++
+    end
+    ret h as i64
+end
+
+func pdb_secflags(fl: i64): int:
+    mut f := 0x108
+    if (fl & (0x40000000 as i64)) != (0 as i64): f |= 1 end
+    if (fl & (0x80000000 as i64)) != (0 as i64): f |= 2 end
+    if (fl & (0x20000000 as i64)) != (0 as i64): f |= 4 end
+    ret f
+end
+
+func pdb_msf(m &: Pdb, path: str): bool:
+    mut blk := Vector {} as Vector<int>
+    mut nblk := 3
+    nst := m.soff.Len()
+    mut sblk0 := Vector {} as Vector<int>
+    repeat nst in s:
+        sblk0.Push(blk.Len())
+        nb := (m.slen[s] + PDB_BS - 1) / PDB_BS
+        repeat nb:
+            until nblk % PDB_BS == 1 or nblk % PDB_BS == 2:
+                nblk++
+            end
+            blk.Push(nblk)
+            nblk++
+        end
+    end
+    sblk0.Push(blk.Len())
+    mut dir := Vector {} as Vector<u8>
+    tb_le(dir, nst as i64, 4)
+    repeat nst in s2:
+        tb_le(dir, m.slen[s2] as i64, 4)
+    end
+    each b in blk:
+        tb_le(dir, b as i64, 4)
+    end
+    mut dblk := Vector {} as Vector<int>
+    repeat (dir.Len() + PDB_BS - 1) / PDB_BS:
+        until nblk % PDB_BS == 1 or nblk % PDB_BS == 2:
+            nblk++
+        end
+        dblk.Push(nblk)
+        nblk++
+    end
+    until nblk % PDB_BS == 1 or nblk % PDB_BS == 2:
+        nblk++
+    end
+    mapblk := nblk
+    nblk++
+    total := (nblk as i64) * (PDB_BS as i64)
+    out := malloc(total as u64) as u8*
+    repeat total in z:
+        out[z] = 0 as u8
+    end
+    magic := "Microsoft C/C++ MSF 7.00\r\n"
+    mp := (magic as void*) as u8*
+    repeat str.Len(magic) in c:
+        out[c] = mp[c]
+    end
+    out[26] = 0x1A as u8
+    out[27] = 0x44 as u8
+    out[28] = 0x53 as u8
+    wr32(out, 32 as i64, PDB_BS as i64)
+    wr32(out, 36 as i64, 1 as i64)
+    wr32(out, 40 as i64, nblk as i64)
+    wr32(out, 44 as i64, dir.Len() as i64)
+    wr32(out, 52 as i64, mapblk as i64)
+    mut fb := 1
+    until fb < nblk:
+        repeat 2 in f:
+            base := ((fb + f) as i64) * (PDB_BS as i64)
+            repeat PDB_BS in q:
+                out[base + (q as i64)] = 0xFF as u8
+            end
+        end
+        fb += PDB_BS
+    end
+    repeat nblk in u:
+        fi := u / (PDB_BS * 8)
+        fpm := ((1 + fi * PDB_BS) as i64) * (PDB_BS as i64)
+        bit := u % (PDB_BS * 8)
+        p := fpm + ((bit / 8) as i64)
+        out[p] = ((out[p] as int) & (255 - (1 << (bit % 8)))) as u8
+    end
+    repeat nst in s3:
+        repeat m.slen[s3] in bb:
+            b3 := blk[sblk0[s3] + bb / PDB_BS]
+            out[(b3 as i64) * (PDB_BS as i64) + ((bb % PDB_BS) as i64)] = m.sdata[m.soff[s3] + bb]
+        end
+    end
+    repeat dir.Len() in d:
+        b4 := dblk[d / PDB_BS]
+        out[(b4 as i64) * (PDB_BS as i64) + ((d % PDB_BS) as i64)] = dir[d]
+    end
+    repeat dblk.Len() in e:
+        wr32(out, (mapblk as i64) * (PDB_BS as i64) + ((4 * e) as i64), dblk[e] as i64)
+    end
+    f2 := fopen(path, "wb")
+    if f2 == null:
+        free(out as void*)
+        ret false
+    end
+    w := fwrite(out as void*, 1 as u64, total as u64, f2)
+    _c := fclose(f2)
+    free(out as void*)
+    blk.Free()
+    sblk0.Free()
+    dir.Free()
+    dblk.Free()
+    ret (w as i64) == total
+end

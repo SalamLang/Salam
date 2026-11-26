@@ -1,0 +1,176 @@
+package nativegen
+
+func lv_in(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b == r.h or b == r.w or b == r.latch
+end
+
+func lv_safe_ptr(g &: Ng, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    k := g.v_kind[v]
+    if k == VK_ARG or k == VK_GLB:
+        ret true
+    end
+    ret k == VK_INS and g.i_op[g.v_def[v]] == OP_ALLOCA
+end
+
+func lv_hoisted(r &: Lv, v: int): bool:
+    ret v >= 0 and v < r.cls.Len() and r.cls[v] == LV_HOIST
+end
+
+func lv_hm(r &: Lv, v: int): int:
+    if v >= 0 and v < r.hmap.Len() and r.hmap[v] >= 0:
+        ret r.hmap[v]
+    end
+    ret v
+end
+
+func lv_inv(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    if lv_hoisted(r, v):
+        ret true
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_FLT or k == VK_ZERO or k == VK_ARG or k == VK_GLB:
+        ret true
+    end
+    ret k == VK_INS and not lv_in(g, r, v)
+end
+
+func lv_lane_of(t: int): int:
+    if t == T_I8:
+        ret 1
+    end
+    if t == T_I16:
+        ret 2
+    end
+    if t == T_I32 or t == T_F32:
+        ret 4
+    end
+    if t == T_I64 or t == T_F64:
+        ret 8
+    end
+    ret 0
+end
+
+func lv_vty(t: int, lane: int, wide: bool): int:
+    mut et := t
+    if t == T_I1:
+        et = lane == 1 ? T_I8 : (lane == 2 ? T_I16 : (lane == 4 ? T_I32 : T_I64))
+    end
+    if et != T_I32 and et != T_I64 and et != T_F32 and et != T_F64 and et != T_I8 and et != T_I16:
+        ret 0 - 1
+    end
+    ret vec_ty(et, wide)
+end
+
+func lv_wide_ok(g &: Ng, r &: Lv): bool:
+    if r.divp >= 0:
+        ret false
+    end
+    each rk in r.rkind:
+        if rk >= 5:
+            ret false
+        end
+    end
+    each i in r.body:
+        res := g.i_res[i]
+        c := res >= 0 ? r.cls[res] : LV_NONE
+        if c == LV_RADDR or c == LV_RIDX:
+            ret false
+        end
+        if c == LV_NARROW and g.off_yzext:
+            ret false
+        end
+        if (g.i_op[i] == OP_ZEXT or g.i_op[i] == OP_SEXT) and c == LV_VEC and lv_nbits(
+            g.v_ty[g.i_a[i]]
+        ) != r.nw:
+            if g.off_yzext or not lv_narrow_load(g, r, g.i_a[i]):
+                ret false
+            end
+        end
+        if g.i_op[i] == OP_STORE and lv_cls(r, g.i_a[i]) == LV_NARROW and g.off_yzext:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lv_set_lane(r &: Lv, l: int): bool:
+    if l == 0:
+        ret false
+    end
+    if r.lane == 0:
+        r.lane = l
+        ret true
+    end
+    ret r.lane == l
+end
+
+func lv_cls(r &: Lv, v: int): int:
+    if v < 0 or v >= r.cls.Len():
+        ret LV_NONE
+    end
+    ret r.cls[v]
+end
+
+func lv_narrow_load(g &: Ng, r &: Lv, v: int): bool:
+    ret lv_cls(r, v) == LV_SKIP and g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_LOAD and
+        (g.v_ty[v] == T_I8 or g.v_ty[v] == T_I16)
+end
+
+func lv_idx_data(g &: Ng, r &: Lv, v: int): bool:
+    if g.off_viv or v < 0:
+        ret false
+    end
+    t := g.v_ty[v]
+    ret (t == T_I64 or t == T_I32) and (lv_cls(r, v) == LV_IDX or v == g.i_res[r.ivp])
+end
+
+func lv_data_ok(g &: Ng, r &: Lv, v: int): bool:
+    if lv_inv(g, r, v):
+        ret not is_agg(g, g.v_ty[v]) and not is_vec(g, g.v_ty[v])
+    end
+    if lv_idx_data(g, r, v):
+        ret lv_set_lane(r, lv_lane_of(g.v_ty[v]))
+    end
+    if lv_narrow_load(g, r, v) and g.v_ty[v] == T_I16:
+        r.cls[v] = LV_VEC
+        ret lv_set_lane(r, 2)
+    end
+    ret lv_cls(r, v) == LV_VEC
+end
+
+func lv_byte_ok(g &: Ng, r &: Lv, v: int): bool:
+    if lv_inv(g, r, v):
+        ret g.v_ty[v] == T_I8
+    end
+    c := lv_cls(r, v)
+    if c == LV_SKIP and g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_LOAD and
+        g.v_ty[v] == T_I8:
+        r.cls[v] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
+    ret c == LV_VEC and g.v_ty[v] == T_I8
+end
+
+func lv_idx_val(g &: Ng, r &: Lv, v: int): bool:
+    if v == g.i_res[r.ivp]:
+        ret true
+    end
+    ret lv_cls(r, v) == LV_IDX
+end
+
+func lv_ridx_val(g &: Ng, r &: Lv, v: int): bool:
+    if r.divp >= 0 and v == g.i_res[r.divp]:
+        ret true
+    end
+    ret lv_cls(r, v) == LV_RIDX
+end

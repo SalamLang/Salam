@@ -494,7 +494,7 @@ The server is the product; each client is configuration plus a little UI.
 
 | Editor | Client | Work |
 | --- | --- | --- |
-| Visual Studio Code | `vscode-languageclient` from `extensions/vscode` (the extension is Salam compiled with `salam js`, so it needs bindings for the client library) | replaces the hand-written format provider; adds settings UI |
+| Visual Studio Code | `vscode-languageclient` from `extensions/vscode` (the extension is Salam compiled with `salam build --platform=js`, so it needs bindings for the client library) | replaces the hand-written format provider; adds settings UI |
 | JetBrains (IntelliJ IDEA, GoLand, CLion, PyCharm, WebStorm, Rider) | the platform's built-in LSP API, plus LSP4IJ for the free editions | a small plugin: file type, the existing `Salam.xml` highlighting as fallback, the server launcher, run configurations |
 | Neovim | built-in client, an `nvim-lspconfig` entry | replace the `inspect` polling in `lua/salam/init.lua` |
 | Emacs | `eglot` (built-in since 29) and `lsp-mode` | one entry in `salam-mode.el` |

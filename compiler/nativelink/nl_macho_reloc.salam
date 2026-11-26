@@ -1,0 +1,264 @@
+package nativelink
+
+func mo_tls_lo(t &: Mo): i64:
+    if t.size[MO_TDATA] > (0 as i64):
+        ret t.addr[MO_TDATA]
+    end
+    ret t.addr[MO_TBSS]
+end
+
+func mo_tls_target(l &: Nl, t &: Mo, os: int): bool:
+    g := l.os_glob[os]
+    mut s := l.os_sec[os]
+    if g >= 0:
+        s = l.g_state[g] == SY_DEF ? l.g_sec[g] : 0 - 1
+    end
+    ret s >= 0 and (t.out_k[s] == MO_TDATA or t.out_k[s] == MO_TBSS)
+end
+
+func mo_has(l &: Nl, t &: Mo, k: int): bool:
+    if k == MO_STUBS:
+        ret t.stub_g.Len() > 0
+    end
+    if k == MO_GOT:
+        ret t.got_k.Len() > 0
+    end
+    if k == MO_UNW:
+        ret t.unw_n > 0
+    end
+    repeat l.s_obj.Len() in s:
+        if t.out_k[s] == k:
+            ret true
+        end
+    end
+    ret false
+end
+
+func mo_sym(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_state[g] == SY_DEF:
+            ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+        end
+        if l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_EHDR:
+            ret 0x100000000
+        end
+        ret l.g_val[g]
+    end
+    s := l.os_sec[os]
+    if s >= 0:
+        ret l.s_addr[s] + l.os_val[os]
+    end
+    ret l.os_val[os]
+end
+
+func mo_got_addr(t &: Mo, key: int): i64:
+    ret t.addr[MO_GOT] + ((8 * t.got_of.Get(key)) as i64)
+end
+
+func mo_write_stubs(l &: Nl, t &: Mo, buf: u8*):
+    repeat t.stub_g.Len() in i:
+        at := t.addr[MO_STUBS] + mo_stub_size(l) * (i as i64)
+        f := at - t.base
+        ga := mo_got_addr(t, t.stub_g[i])
+        if l.mach == EM_X86_64:
+            buf[f] = 0xFF as u8
+            buf[f + (1 as i64)] = 0x25 as u8
+            wr32(buf, f + (2 as i64), ga - (at + (6 as i64)))
+        else:
+            pg := (page4k(ga) - page4k(at)) >> (12 as i64)
+            adrp := (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+            wr32(buf, f, adrp)
+            wr32(
+                buf,
+                f + (4 as i64),
+                (0xF9400210 as i64) | (((ga & (0xFFF as i64)) >> (3 as i64)) << (10 as i64))
+            )
+            wr32(buf, f + (8 as i64), 0xD61F0200 as i64)
+        end
+    end
+end
+
+func mo_got_fill(l &: Nl, t &: Mo, buf: u8*):
+    repeat t.got_k.Len() in i:
+        key := t.got_k[i]
+        at := t.addr[MO_GOT] + ((8 * i) as i64)
+        if key >= 0 and l.g_state[key] == SY_UNDEF and l.g_common[key] == (0 as i64):
+            t.bind_at.Push(at)
+            t.bind_g.Push(key)
+            t.bind_add.Push(0 as i64)
+            continue
+        end
+        mut v := 0 as i64
+        if key >= 0:
+            v = mo_sym_g(l, key)
+        else:
+            v = mo_sym(l, 0 - 1 - key)
+        end
+        wr64(buf, at - t.base, v)
+        t.rebase.Push(at)
+    end
+end
+
+func mo_sym_g(l &: Nl, g: int): i64:
+    if l.g_state[g] == SY_DEF:
+        ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+    end
+    if l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_EHDR:
+        ret 0x100000000
+    end
+    ret l.g_val[g]
+end
+
+func mo_ldst_scale(ins: i64): int:
+    if (ins & (0x3B000000 as i64)) == (0x39000000 as i64):
+        sz := ((ins >> (30 as i64)) & (3 as i64)) as int
+        if sz == 0 and (ins & (0x04800000 as i64)) == (0x04800000 as i64):
+            ret 4
+        end
+        ret sz
+    end
+    ret 0
+end
+
+func mo_relocs(l &: Nl, t &: Mo, buf: u8*):
+    repeat l.s_obj.Len() in s:
+        if not l.s_live[s] or l.s_type[s] == 8:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            rt := mo_rtype(l.r_type[r])
+            rlen := mo_rlen(l.r_type[r])
+            os := l.r_sym[r]
+            pc := l.s_addr[s] + l.r_off[r]
+            f := pc - t.base
+            a := l.r_add[r]
+            sub := l.r_sub[r]
+            gimp := mo_imported(l, os)
+            if rt == 0 and t.out_k[s] == MO_TVARS and mo_tls_target(l, t, os):
+                wr64(buf, f, mo_sym(l, os) + a - mo_tls_lo(t))
+                continue
+            end
+            if rt == 0:
+                if sub >= 0:
+                    v := mo_sym(l, os) - mo_sym(l, sub) + a
+                    if rlen == 3:
+                        wr64(buf, f, v)
+                    else:
+                        wr32(buf, f, v)
+                    end
+                    continue
+                end
+                if rlen != 3:
+                    wr32(buf, f, mo_sym(l, os) + a)
+                    continue
+                end
+                if gimp >= 0:
+                    t.bind_at.Push(pc)
+                    t.bind_g.Push(gimp)
+                    t.bind_add.Push(a)
+                    continue
+                end
+                wr64(buf, f, mo_sym(l, os) + a)
+                if pc >= t.base + t.dc_start:
+                    t.rebase.Push(pc)
+                end
+                continue
+            end
+            mut tgt := 0 as i64
+            mut a2 := a
+            if rt == 2 and l.th_of_rel.Has(r):
+                tgt = th_addr(l, l.th_of_rel.Get(r))
+                a2 = 0
+            else mo_is_got_reloc(l, rt):
+                tgt = mo_got_addr(t, mo_got_key(l, os))
+            else gimp >= 0:
+                if not t.stub_of.Has(gimp):
+                    nl_fail(
+                        l,
+                        "cannot reference imported symbol '" + name_of(
+                            l, l.g_name[gimp]
+                        ) + "' directly in " + l.o_label[l.s_obj[s]]
+                    )
+                    ret
+                end
+                tgt = t.addr[MO_STUBS] + mo_stub_size(l) * (t.stub_of.Get(gimp) as i64)
+            else:
+                tgt = mo_sym(l, os)
+            end
+            if (l.mach == EM_X86_64 and rt == 9) or (l.mach == EM_AARCH64 and (rt == 8 or rt == 9)):
+                if gimp >= 0:
+                    nl_fail(
+                        l,
+                        "thread-local variable '" + name_of(
+                            l, l.g_name[gimp]
+                        ) + "' from a dylib is not supported in " + l.o_label[l.s_obj[s]]
+                    )
+                    ret
+                end
+                if l.mach == EM_X86_64:
+                    if f >= (2 as i64) and buf[f - (2 as i64)] == (0x8b as u8):
+                        buf[f - (2 as i64)] = 0x8d as u8
+                    end
+                else rt == 9:
+                    ins0 := rd32(buf, f)
+                    wr32(
+                        buf,
+                        f,
+                        (0x91000000 as i64) | (((tgt +
+                            a) & (0xFFF as i64)) << (10 as i64)) | (ins0 & (0x3FF as i64))
+                    )
+                    continue
+                else:
+                    pg8 := (page4k(tgt + a) - page4k(pc)) >> (12 as i64)
+                    ins_set(
+                        buf,
+                        f,
+                        (0x60FFFFE0 as i64),
+                        ((pg8 & (3 as i64)) << (29 as i64)) | (((pg8 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+                    )
+                    continue
+                end
+            end
+            if l.mach == EM_X86_64:
+                bias := rt == 6 ? 1 : (rt == 7 ? 2 : (rt == 8 ? 4 : 0))
+                wr32(buf, f, tgt + a - (pc + ((4 + bias) as i64)))
+                continue
+            end
+            x := tgt + a2
+            if rt == 2:
+                d := x - pc
+                if not th_in_range(d, 28):
+                    nl_fail(l, "branch out of range in " + l.o_label[l.s_obj[s]])
+                    ret
+                end
+                ins_set(buf, f, (0x3FFFFFF as i64), d >> (2 as i64))
+            else rt == 3 or rt == 5:
+                pg := (page4k(x) - page4k(pc)) >> (12 as i64)
+                ins_set(
+                    buf,
+                    f,
+                    (0x60FFFFE0 as i64),
+                    ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+                )
+            else rt == 4 or rt == 6:
+                ins := rd32(buf, f)
+                sc := mo_ldst_scale(ins)
+                ins_set(
+                    buf, f, (0x3FFC00 as i64), ((x & (0xFFF as i64)) >> (sc as i64)) << (10 as i64)
+                )
+            else rt == 7:
+                wr32(buf, f, x - pc)
+            else:
+                nl_fail(
+                    l,
+                    "unsupported Mach-O relocation type " + str.FromInt(rt as i64) + " in " +
+                        l.o_label[l.s_obj[s]]
+                )
+                ret
+            end
+        end
+    end
+end

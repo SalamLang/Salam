@@ -1,0 +1,166 @@
+package nativegen
+
+func rv_x(r: int): int:
+    if r >= 0 and r < 16:
+        ret k_rv_xmap[r]
+    end
+    ret r
+end
+
+func rv_f(r: int): int:
+    if r >= 16 and r < 32:
+        ret k_rv_fmap[r - 16]
+    end
+    ret r
+end
+
+func rv_w(a &: Rv, v: i64):
+    a.w.Push((v & (0xFFFFFFFF as i64)) as int)
+end
+
+func rv_rel(a &: Rv, sym: int, rt: int, add: i64):
+    a.rl_at.Push(a.w.Len())
+    a.rl_sym.Push(sym)
+    a.rl_type.Push(rt)
+    a.rl_add.Push(add)
+end
+
+func rv_r(a &: Rv, f7: int, rs2: int, rs1: int, f3: int, rd: int, op: int):
+    rv_w(
+        a,
+        ((f7 as i64) << (25 as i64)) | ((rs2 as i64) << (20 as i64)) | ((rs1 as i64) << (15 as i64)) | ((f3 as i64) << (12 as i64)) | ((rd as i64) << (7 as i64)) | (op as i64)
+    )
+end
+
+func rv_i(a &: Rv, imm: i64, rs1: int, f3: int, rd: int, op: int):
+    rv_w(
+        a,
+        ((imm & (0xFFF as i64)) << (20 as i64)) | ((rs1 as i64) << (15 as i64)) | ((f3 as i64) << (12 as i64)) | ((rd as i64) << (7 as i64)) | (op as i64)
+    )
+end
+
+func rv_s(a &: Rv, imm: i64, rs2: int, rs1: int, f3: int, op: int):
+    rv_w(
+        a,
+        (((imm >> (5 as i64)) & (0x7F as i64)) << (25 as i64)) | ((rs2 as i64) << (20 as i64)) | ((rs1 as i64) << (15 as i64)) | ((f3 as i64) << (12 as i64)) | ((imm & (31 as i64)) << (7 as i64)) | (op as i64)
+    )
+end
+
+func rv_benc(imm: i64, rs2: int, rs1: int, f3: int): i64:
+    ret (((imm >> (12 as i64)) & (1 as i64)) << (31 as i64)) | (((imm >> (5 as i64)) & (0x3F as i64)) << (25 as i64)) | ((rs2 as i64) << (20 as i64)) | ((rs1 as i64) << (15 as i64)) | ((f3 as i64) << (12 as i64)) | (((imm >> (1 as i64)) & (15 as i64)) << (8 as i64)) | (((imm >> (11 as i64)) & (1 as i64)) << (7 as i64)) | (0x63 as i64)
+end
+
+func rv_jenc(imm: i64, rd: int): i64:
+    ret (((imm >> (20 as i64)) & (1 as i64)) << (31 as i64)) | (((imm >> (1 as i64)) & (0x3FF as i64)) << (21 as i64)) | (((imm >> (11 as i64)) & (1 as i64)) << (20 as i64)) | (((imm >> (12 as i64)) & (0xFF as i64)) << (12 as i64)) | ((rd as i64) << (7 as i64)) | (0x6F as i64)
+end
+
+func rv_addi(a &: Rv, rd: int, rs: int, imm: i64):
+    rv_i(a, imm, rs, 0, rd, 0x13)
+end
+
+func rv_pcaddr(a &: Rv, rd: int, sym: int, add: i64):
+    at := a.w.Len()
+    rv_rel(a, sym, R_RV_PCHI20, add)
+    rv_w(a, ((rd as i64) << (7 as i64)) | (0x17 as i64))
+    rv_rel(a, 0 - 1, R_RV_PCLO12, at as i64)
+    rv_addi(a, rd, rd, 0 as i64)
+end
+
+func rv_gotload(a &: Rv, rd: int, sym: int):
+    at := a.w.Len()
+    rv_rel(a, sym, R_RV_GOTHI20, 0 as i64)
+    rv_w(a, ((rd as i64) << (7 as i64)) | (0x17 as i64))
+    rv_rel(a, 0 - 1, R_RV_PCLO12, at as i64)
+    rv_i(a, 0 as i64, rd, 3, rd, 0x03)
+end
+
+func rv_pclabels(g &: Ng):
+    repeat g.r_sec.Len() in r:
+        if g.r_type[r] != R_RV_PCLO12 or g.r_sec[r] != SEC_TEXT:
+            continue
+        end
+        g.pc_lbl++
+        s := sym_named(g, ".Lsalam.pcrel" + g.pc_lbl)
+        g.sy_def[s] = true
+        g.sy_local[s] = true
+        g.sy_sec[s] = SEC_TEXT
+        g.sy_off[s] = g.sy_off[g.r_sym[r]] + (g.r_add[r] as int)
+        g.sy_used[s] = true
+        g.r_sym[r] = s
+        g.r_add[r] = 0 as i64
+    end
+end
+
+func rv_mv(a &: Rv, rd: int, rs: int):
+    if rd != rs:
+        rv_addi(a, rd, rs, 0 as i64)
+    end
+end
+
+func rv_slli(a &: Rv, rd: int, rs: int, sh: int):
+    rv_i(a, sh as i64, rs, 1, rd, 0x13)
+end
+
+func rv_srli(a &: Rv, rd: int, rs: int, sh: int):
+    rv_i(a, sh as i64, rs, 5, rd, 0x13)
+end
+
+func rv_srai(a &: Rv, rd: int, rs: int, sh: int):
+    rv_i(a, (sh as i64) | (0x400 as i64), rs, 5, rd, 0x13)
+end
+
+func rv_zx32(a &: Rv, rd: int):
+    rv_slli(a, rd, rd, 32)
+    rv_srli(a, rd, rd, 32)
+end
+
+func rv_sx32(a &: Rv, rd: int, rs: int):
+    rv_i(a, 0 as i64, rs, 0, rd, 0x1B)
+end
+
+func rv_li(a &: Rv, rd: int, v: i64):
+    if v >= (0 - 2048 as i64) and v < (2048 as i64):
+        rv_addi(a, rd, RV_ZERO, v)
+        ret
+    end
+    if v >= (0 - 0x80000000 as i64) and v <= (0x7FFFFFFF as i64):
+        hi := (v + (0x800 as i64)) >> (12 as i64)
+        lo := v - (hi << (12 as i64))
+        rv_w(
+            a,
+            ((hi & (0xFFFFF as i64)) << (12 as i64)) | ((rd as i64) << (7 as i64)) | (0x37 as i64)
+        )
+        if lo != (0 as i64):
+            rv_i(a, lo, rd, 0, rd, 0x1B)
+        end
+        ret
+    end
+    lo2 := ((v & (0xFFF as i64)) << (52 as i64)) >> (52 as i64)
+    mut hi2 := (v - lo2) >> (12 as i64)
+    mut sh := 12
+    until (hi2 & (1 as i64)) == (0 as i64) and sh < 52:
+        hi2 >>= (1 as i64)
+        sh++
+    end
+    rv_li(a, rd, hi2)
+    rv_slli(a, rd, rd, sh)
+    if lo2 != (0 as i64):
+        rv_addi(a, rd, rd, lo2)
+    end
+end
+
+func rv_op(a &: Rv, f7: int, f3: int, rd: int, rs1: int, rs2: int, w: bool):
+    rv_r(a, f7, rs2, rs1, f3, rd, w ? 0x3B : 0x33)
+end
+
+func rv_add(a &: Rv, rd: int, rs1: int, rs2: int):
+    rv_op(a, 0, 0, rd, rs1, rs2, false)
+end
+
+func rv_norm(a &: Rv, sz: int, rd: int, rs: int):
+    if sz >= 8:
+        rv_mv(a, rd, rs)
+    else:
+        rv_slli(a, rd, rs, 64 - 8 * sz)
+    end
+end

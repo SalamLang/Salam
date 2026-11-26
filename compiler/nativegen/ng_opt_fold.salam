@@ -1,0 +1,369 @@
+package nativegen
+
+func is_cint(g &: Ng, v: int): bool:
+    ret v >= 0 and g.v_kind[v] == VK_INT and not is_flt(g, g.v_ty[v])
+end
+
+func norm_int(g &: Ng, t: int, v: i64): i64:
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret v
+    end
+    if bits == 1:
+        ret v & (1 as i64)
+    end
+    sh := (64 - bits) as i64
+    ret (v << sh) >> sh
+end
+
+func sval(g &: Ng, t: int, v: i64): i64:
+    if int_bits(g, t) == 1:
+        ret 0 - (v & (1 as i64))
+    end
+    ret norm_int(g, t, v)
+end
+
+func uval(g &: Ng, t: int, v: i64): u64:
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret v as u64
+    end
+    ret (v as u64) & (((1 as u64) << (bits as u64)) - (1 as u64))
+end
+
+func cval(g &: Ng, t: int, v: i64): int:
+    ret new_val(g, VK_INT, t, norm_int(g, t, v))
+end
+
+func replace_res(g &: Ng, i: int, nv: int):
+    r := g.i_res[i]
+    if r >= 0:
+        repl_grow(g)
+        g.v_repl[r] = nv
+    end
+    ins_unlink(g, i)
+end
+
+func eval_bin(g &: Ng, op: int, t: int, x: i64, y: i64, ok &: bool): i64:
+    ok = false
+    bits := int_bits(g, t)
+    mut r := 0 as i64
+    switch op:
+        OP_ADD: r = x + y break end
+        OP_SUB: r = x - y break end
+        OP_MUL: r = x * y break end
+        OP_AND: r = x & y break end
+        OP_OR: r = x | y break end
+        OP_XOR: r = x ^ y break end
+        OP_SHL:
+            if uval(g, t, y) >= (bits as u64): ret 0 end
+            r = x << (uval(g, t, y) as i64)
+            break
+        end
+        OP_LSHR:
+            if uval(g, t, y) >= (bits as u64): ret 0 end
+            r = (uval(g, t, x) >> uval(g, t, y)) as i64
+            break
+        end
+        OP_ASHR:
+            if uval(g, t, y) >= (bits as u64): ret 0 end
+            r = sval(g, t, x) >> (uval(g, t, y) as i64)
+            break
+        end
+        OP_SDIV, OP_SREM:
+            sx := sval(g, t, x)
+            sy := sval(g, t, y)
+            if sy == (0 as i64) or sy == (0 - 1 as i64): ret 0 end
+            if op == OP_SDIV:
+                r = sx / sy
+            else:
+                r = sx % sy
+            end
+            break
+        end
+        OP_UDIV, OP_UREM:
+            ux := uval(g, t, x)
+            uy := uval(g, t, y)
+            if uy == (0 as u64): ret 0 end
+            if op == OP_UDIV:
+                r = (ux / uy) as i64
+            else:
+                r = (ux % uy) as i64
+            end
+            break
+        end
+        else:
+            ret 0
+        end
+    end
+    ok = true
+    ret r
+end
+
+func add_reassoc(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if (op != OP_ADD and op != OP_SUB) or not is_cint(g, g.i_b[i]):
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    dop := g.i_op[d]
+    if (dop != OP_ADD and dop != OP_SUB) or not is_cint(g, g.i_b[d]) or g.i_ty[d] != g.i_ty[i]:
+        ret false
+    end
+    t := g.i_ty[i]
+    ci := op == OP_ADD ? g.v_i[g.i_b[i]] : 0 - g.v_i[g.i_b[i]]
+    cd := dop == OP_ADD ? g.v_i[g.i_b[d]] : 0 - g.v_i[g.i_b[d]]
+    nf := g.i_f[i] & g.i_f[d] & IF_NSW
+    g.i_op[i] = OP_ADD
+    g.i_a[i] = g.i_a[d]
+    g.i_b[i] = cval(g, t, ci + cd)
+    g.i_f[i] = (g.i_f[i] & (0 - 1 - IF_NSW)) | nf
+    ret true
+end
+
+func chain_user(g &: Ng, r: int): bool:
+    if r < 0 or not one_use(g, r):
+        ret false
+    end
+    each b in g.b_rpo:
+        mut j := g.b_first[b]
+        until j >= 0:
+            if g.i_a[j] == r and (g.i_op[j] == OP_ADD or g.i_op[j] == OP_MUL) and
+                is_cint(g, g.i_b[j]):
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func mul_reassoc(g &: Ng, i: int): bool:
+    if g.off_mreas or g.i_op[i] != OP_MUL or not is_cint(g, g.i_b[i]) or is_vec(
+        g, g.i_ty[i]
+    ) or g.t_kind[g.i_ty[i]] != TK_INT:
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS or not one_use(g, a):
+        ret false
+    end
+    d := g.v_def[a]
+    t := g.i_ty[i]
+    if g.i_ty[d] != t or not is_cint(g, g.i_b[d]):
+        ret false
+    end
+    c2 := g.v_i[g.i_b[i]]
+    if g.i_op[d] == OP_MUL:
+        g.i_a[i] = g.i_a[d]
+        g.i_b[i] = cval(g, t, g.v_i[g.i_b[d]] * c2)
+        g.i_f[i] &= (0 - 1 - IF_NSW)
+        ret true
+    end
+    if g.i_op[d] != OP_ADD and g.i_op[d] != OP_SUB:
+        ret false
+    end
+    x := g.i_a[d]
+    inner_mul := x >= 0 and g.v_kind[x] == VK_INS and g.i_op[g.v_def[x]] == OP_MUL and is_cint(
+        g, g.i_b[g.v_def[x]]
+    )
+    if not inner_mul and not chain_user(g, g.i_res[i]):
+        ret false
+    end
+    c1 := g.i_op[d] == OP_ADD ? g.v_i[g.i_b[d]] : 0 - g.v_i[g.i_b[d]]
+    m := ins_new(g, OP_MUL, t)
+    g.i_a[m] = g.i_a[d]
+    g.i_b[m] = cval(g, t, c2)
+    mv := new_res(g, m)
+    ins_before(g, i, m)
+    g.i_op[i] = OP_ADD
+    g.i_a[i] = mv
+    g.i_b[i] = cval(g, t, c1 * c2)
+    g.i_f[i] &= (0 - 1 - IF_NSW)
+    ret true
+end
+
+func fold_bin(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    ca := is_cint(g, a)
+    cb := is_cint(g, b)
+    if ca and cb:
+        mut ok := false
+        r := eval_bin(g, op, t, g.v_i[a], g.v_i[b], ok)
+        if not ok:
+            ret false
+        end
+        replace_res(g, i, cval(g, t, r))
+        ret true
+    end
+    if cb:
+        y2 := g.v_i[b]
+        if y2 == (0 as i64) and
+            (op == OP_ADD or op == OP_SUB or op == OP_OR or op == OP_XOR or op == OP_SHL or
+                op == OP_LSHR or op == OP_ASHR):
+            replace_res(g, i, a)
+            ret true
+        end
+        if y2 == (1 as i64) and (op == OP_MUL or op == OP_SDIV or op == OP_UDIV):
+            replace_res(g, i, a)
+            ret true
+        end
+        if y2 == (0 as i64) and (op == OP_MUL or op == OP_AND):
+            replace_res(g, i, cval(g, t, 0 as i64))
+            ret true
+        end
+        if norm_int(g, t, y2) == norm_int(g, t, 0 - 1 as i64) and op == OP_AND:
+            replace_res(g, i, a)
+            ret true
+        end
+        if op == OP_AND and g.v_kind[a] == VK_INS and g.i_op[g.v_def[a]] == OP_ZEXT and
+            not is_vec(g, t):
+            zb := int_bits(g, g.i_x[g.v_def[a]])
+            if zb >= 1 and zb < 32:
+                low := ((1 as i64) << (zb as i64)) - (1 as i64)
+                if (y2 & low) == low:
+                    replace_res(g, i, a)
+                    ret true
+                end
+            end
+        end
+    end
+    if ca:
+        x2 := g.v_i[a]
+        if x2 == (0 as i64) and (op == OP_ADD or op == OP_OR or op == OP_XOR):
+            replace_res(g, i, b)
+            ret true
+        end
+        if x2 == (1 as i64) and op == OP_MUL:
+            replace_res(g, i, b)
+            ret true
+        end
+        if x2 == (0 as i64) and
+            (op == OP_MUL or op == OP_AND or op == OP_SHL or op == OP_LSHR or op == OP_ASHR):
+            replace_res(g, i, cval(g, t, 0 as i64))
+            ret true
+        end
+    end
+    if a == b and (op == OP_SUB or op == OP_XOR):
+        replace_res(g, i, cval(g, t, 0 as i64))
+        ret true
+    end
+    if a == b and (op == OP_AND or op == OP_OR):
+        replace_res(g, i, a)
+        ret true
+    end
+    ret false
+end
+
+func one_use(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.v_uses.Len() and g.v_uses[v] == 1
+end
+
+func rem_to_mask(g &: Ng, i: int):
+    a := g.i_a[i]
+    b := g.i_b[i]
+    p := g.i_x[i]
+    if (p != CC_EQ and p != CC_NE) or not is_cint(g, b) or g.v_i[b] != (0 as i64):
+        ret
+    end
+    if a < 0 or g.v_kind[a] != VK_INS or not one_use(g, a):
+        ret
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    if op != OP_SREM and op != OP_UREM:
+        ret
+    end
+    dv := g.i_b[d]
+    if not is_cint(g, dv):
+        ret
+    end
+    t := g.i_ty[d]
+    m := uval(g, t, g.v_i[dv])
+    if m < (2 as u64) or (m & (m - (1 as u64))) != (0 as u64):
+        ret
+    end
+    g.i_op[d] = OP_AND
+    g.i_b[d] = cval(g, t, (m - (1 as u64)) as i64)
+end
+
+func fold_icmp(g &: Ng, i: int): bool:
+    rem_to_mask(g, i)
+    a := g.i_a[i]
+    b := g.i_b[i]
+    p := g.i_x[i]
+    if a == b and g.v_kind[a] != VK_UNDEF:
+        r0 := p == CC_EQ or p == CC_SLE or p == CC_SGE or p == CC_ULE or p == CC_UGE
+        replace_res(g, i, new_val(g, VK_INT, T_I1, r0 ? (1 as i64) : (0 as i64)))
+        ret true
+    end
+    if not (is_cint(g, a) and is_cint(g, b)):
+        ret false
+    end
+    t := g.v_ty[a]
+    x := sval(g, t, g.v_i[a])
+    y := sval(g, t, g.v_i[b])
+    ux := uval(g, t, x)
+    uy := uval(g, t, y)
+    mut r := false
+    switch p:
+        CC_EQ: r = x == y break end
+        CC_NE: r = x != y break end
+        CC_SLT: r = x < y break end
+        CC_SLE: r = x <= y break end
+        CC_SGT: r = x > y break end
+        CC_SGE: r = x >= y break end
+        CC_ULT: r = ux < uy break end
+        CC_ULE: r = ux <= uy break end
+        CC_UGT: r = ux > uy break end
+        CC_UGE: r = ux >= uy break end
+    end
+    replace_res(g, i, new_val(g, VK_INT, T_I1, r ? (1 as i64) : (0 as i64)))
+    ret true
+end
+
+func zx_src(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or not one_use(g, v):
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ZEXT or (g.i_x[d] != T_I8 and g.i_x[d] != T_I16):
+        ret 0 - 1
+    end
+    ret d
+end
+
+func zx_loaded(g &: Ng, v: int): bool:
+    ret v >= 0 and g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_LOAD and one_use(g, v)
+end
+
+func icmp_zext_narrow(g &: Ng, i: int): bool:
+    if g.arch != NG_ARCH_X64:
+        ret false
+    end
+    da := zx_src(g, g.i_a[i])
+    db := zx_src(g, g.i_b[i])
+    if da < 0 or db < 0 or g.i_x[da] != g.i_x[db]:
+        ret false
+    end
+    xa := g.i_a[da]
+    xb := g.i_a[db]
+    if not zx_loaded(g, xa) and not zx_loaded(g, xb):
+        ret false
+    end
+    mut p := g.i_x[i]
+    if p >= CC_SLT and p <= CC_SGE:
+        p += 4
+    end
+    g.i_x[i] = p
+    g.i_a[i] = xa
+    g.i_b[i] = xb
+    ret true
+end

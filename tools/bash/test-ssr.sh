@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds a small pages project with 'salam page build --ssr', starts the
+# Builds a small pages project with 'salam build --platform=web --ssr', starts the
 # generated server on a free port and checks routes, status codes, redirects,
 # the rendered HTML and the escaping of hostile input.
 
@@ -24,7 +24,7 @@ cd "$work" || exit 1
 cp -R "$root/tests/$lang/ssr/site" site
 
 echo "== build"
-if "$salam" page build --ssr="$work/dist" site --no-color --log-level=error --lang="$lang" >build.log 2>&1; then
+if "$salam" build site --platform=web --ssr="$work/dist" --no-color --log-level=error --lang="$lang" >build.log 2>&1; then
     echo "build ok"
 else
     echo "build failed"
@@ -34,7 +34,7 @@ fi
 echo "== lock"
 mkdir dist.lock
 echo $$ >dist.lock/pid
-if "$salam" page build --ssr="$work/dist" site --no-color --log-level=error --lang="$lang" >lock.log 2>&1; then
+if "$salam" build site --platform=web --ssr="$work/dist" --no-color --log-level=error --lang="$lang" >lock.log 2>&1; then
     echo "second build ran"
 else
     grep -q "$work/dist" lock.log && echo "second build refused"

@@ -42,14 +42,14 @@ English page (`page:`) only English names. Three errors report the other
 language, each with `help: write 'X'` (the exact replacement) and a safe fix
 that `salam check --fix` applies:
 
-| code | what                                                                                 |
-| ---- | ------------------------------------------------------------------------------------ |
+| code | what                                                                                  |
+| ---- | ------------------------------------------------------------------------------------- |
 | E301 | an element name of the other language (`button` in a Persian page, `دکمه` in English) |
-| E302 | an attribute or style property name of the other language, with its state prefix     |
-| E303 | a style keyword value of the other language (`layout = "row"` in a Persian page)     |
+| E302 | an attribute or style property name of the other language, with its state prefix      |
+| E303 | a style keyword value of the other language (`layout = "row"` in a Persian page)      |
 
 A name spelled the same in both languages passes, and so does a name with no
-spelling in the page language. Free text is never checked: ids, content, urls,
+spelling in the page language. Free text is never checked: IDs, content, URLs,
 class names, user component names, `data x` and `aria x` attributes, colours,
 numbers and units. The full rule and its exceptions are in
 `docs/design/ONE_LANGUAGE.md`.
@@ -236,7 +236,7 @@ Every layout test lives under `tests/{en,fa}/layout/`, split by subject:
 A success test is a page build plus `// EXPECT:` substrings, with
 `// EXPECT-NOT:` for text that must not appear. A success `// EXPECT:` is
 matched only against the lines the page adds to the empty page's output, so
-the base stylesheet cannot satisfy it; `// EXPECT-BASE:` (Persian `انتظار پایه`)
+the base style sheet cannot satisfy it; `// EXPECT-BASE:` (Persian `انتظار پایه`)
 checks the whole output, for defaults such as `<html lang="en" dir="ltr">`. A failure test is
 `// EXPECT: E0xx` plus `// EXPECT-MSG:`. A `.salam` file left directly in
 `tests/{en,fa}/layout/` belongs to no subdirectory and so would never run;

@@ -50,20 +50,20 @@ its full path.
 
 ## Commands
 
-| Command                                        | What it does                                          |
-| ---------------------------------------------- | ----------------------------------------------------- |
+| Command                                        | What it does                                                |
+| ---------------------------------------------- | ----------------------------------------------------------- |
 | `:SalamRun`                                    | Run the buffer (`salam exec`), or the project (`salam run`) |
-| `:SalamBuild`                                  | `salam build`, errors in the quickfix list            |
-| `:SalamNew [dir]`                              | Run the `salam init` wizard in a terminal             |
-| `:SalamPlatform [name]`                        | Choose the platform for `:SalamRun` and `:SalamBuild` |
-| `:SalamGotoBlock`                              | Jump to the enclosing block (a count goes further up) |
-| `:SalamBlocks`                                 | Pick one of the enclosing blocks to jump to           |
-| `:SalamBlockChain`                             | Echo the chain of enclosing blocks                    |
-| `:SalamCheck`                                  | Type-check without running, into the quickfix list    |
-| `:SalamFmt`                                    | Reformat the buffer, keeping undo and the cursor      |
-| `:SalamFmtCheck`                               | Report whether the file is already formatted          |
-| `:SalamTokens` / `:SalamAst` / `:SalamSymbols` | Open the compiler's XML dumps                         |
-| `:SalamVersion`                                | Echo the compiler version                             |
+| `:SalamBuild`                                  | `salam build`, errors in the quickfix list                  |
+| `:SalamNew [dir]`                              | Run the `salam init` wizard in a terminal                   |
+| `:SalamPlatform [name]`                        | Choose the platform for `:SalamRun` and `:SalamBuild`       |
+| `:SalamGotoBlock`                              | Jump to the enclosing block (a count goes further up)       |
+| `:SalamBlocks`                                 | Pick one of the enclosing blocks to jump to                 |
+| `:SalamBlockChain`                             | Echo the chain of enclosing blocks                          |
+| `:SalamCheck`                                  | Type-check without running, into the quickfix list          |
+| `:SalamFmt`                                    | Reformat the buffer, keeping undo and the cursor            |
+| `:SalamFmtCheck`                               | Report whether the file is already formatted                |
+| `:SalamTokens` / `:SalamAst` / `:SalamSymbols` | Open the compiler's XML dumps                               |
+| `:SalamVersion`                                | Echo the compiler version                                   |
 
 ## Projects and platforms
 

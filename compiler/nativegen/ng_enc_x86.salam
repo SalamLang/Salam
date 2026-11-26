@@ -1,0 +1,136 @@
+package nativegen
+
+func x86_map(r: int): int:
+    if r == 10: ret 6 end
+    if r == 11: ret 7 end
+    if r == 30: ret 22 end
+    if r == 31: ret 23 end
+    ret r
+end
+
+func x86_prepass(g &: Ng):
+    n := g.mc.op.Len()
+    repeat n in i:
+        g.mc.r0[i] = x86_map(g.mc.r0[i])
+        g.mc.r1[i] = x86_map(g.mc.r1[i])
+        if g.mc.mk[i] == MK_BI:
+            g.mc.mb[i] = x86_map(g.mc.mb[i])
+        end
+        g.mc.mi[i] = x86_map(g.mc.mi[i])
+        op := g.mc.op[i]
+        gp := op <= M_CMOV or (op >= M_XCHG and op <= M_LCMPXCHG) or op == M_ALU_MI or
+            op == M_ALU_MR or op == M_LDGOT or op == M_MULHI or op == M_MOVQ_XG or op == M_MOVQ_GX
+        if g.mc.sz[i] == 8 and gp:
+            g.mc.sz[i] = 4
+        end
+        if (op == M_CVTSI2F or op == M_CVTF2SI) and g.mc.sz2[i] == 8:
+            g.mc.sz2[i] = 4
+        end
+        if op == M_MOVSX_RR and g.mc.sz2[i] == 4:
+            g.mc.op[i] = M_MOV_RR
+        else op == M_LDSX and g.mc.sz2[i] == 4:
+            g.mc.op[i] = M_LD
+        end
+    end
+    mut k := 0
+    until k < g.mc.callee_used.Len():
+        g.mc.callee_used[k] = x86_map(g.mc.callee_used[k])
+        k++
+    end
+end
+
+func x86_byte_regs(g &: Ng, i: int, bad &: Vector<int>):
+    bad.Clear()
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    mut rr := Vector {} as Vector<int>
+    defer rr.Free()
+    if op == M_SETCC:
+        rr.Push(r0)
+    else (op == M_MOVZX_RR or op == M_MOVSX_RR) and g.mc.sz2[i] == 1:
+        rr.Push(r1)
+    else sz == 1 and
+        (op == M_MOV_RR or op == M_ALU_RR or op == M_TEST_RR or op == M_XCHG or op == M_LXADD or
+            op == M_LCMPXCHG):
+        rr.Push(r0)
+        rr.Push(r1)
+    else sz == 1 and (op == M_ALU_RI or op == M_TEST_RI or op == M_ALU_RM or op == M_LD):
+        rr.Push(r0)
+    else sz == 1 and (op == M_ST or op == M_ALU_MR):
+        rr.Push(r1)
+    end
+    each r in rr:
+        if r >= 4 and r <= 7 and (bad.Len() == 0 or bad[0] != r):
+            bad.Push(r)
+        end
+    end
+end
+
+func x86_swap(r: int, a: int, b: int): int:
+    if r == a: ret b end
+    if r == b: ret a end
+    ret r
+end
+
+func x86_free_tmp(g &: Ng, i: int, bad: Vector<int>, taken: Vector<int>): int:
+    mut t := g.mc.op[i] == M_LCMPXCHG ? 1 : 0
+    until t < 4:
+        mut used := t == g.mc.r0[i] or t == g.mc.r1[i] or t == g.mc.mb[i] or t == g.mc.mi[i]
+        each b in bad:
+            if b == t:
+                used = true
+            end
+        end
+        each k in taken:
+            if k == t:
+                used = true
+            end
+        end
+        if not used:
+            ret t
+        end
+        t++
+    end
+    ret 0 - 1
+end
+
+func enc_ins_x86(g &: Ng, e &: Enc, i: int):
+    mut bad := Vector {} as Vector<int>
+    defer bad.Free()
+    x86_byte_regs(g, i, bad)
+    if bad.Len() == 0:
+        enc_ins(g, e, i)
+        ret
+    end
+    mut tmp := Vector {} as Vector<int>
+    defer tmp.Free()
+    repeat bad.Len():
+        tmp.Push(x86_free_tmp(g, i, bad, tmp))
+    end
+    o0 := g.mc.r0[i]
+    o1 := g.mc.r1[i]
+    ob := g.mc.mb[i]
+    oi := g.mc.mi[i]
+    bi := g.mc.mk[i] == MK_BI
+    repeat bad.Len() in k:
+        enc(g, e, 0, false, 0x87, 1, tmp[k], rm_reg(bad[k]), 0, 0)
+        g.mc.r0[i] = x86_swap(g.mc.r0[i], tmp[k], bad[k])
+        g.mc.r1[i] = x86_swap(g.mc.r1[i], tmp[k], bad[k])
+        if bi:
+            g.mc.mb[i] = x86_swap(g.mc.mb[i], tmp[k], bad[k])
+            g.mc.mi[i] = x86_swap(g.mc.mi[i], tmp[k], bad[k])
+        end
+    end
+    enc_ins(g, e, i)
+    g.mc.r0[i] = o0
+    g.mc.r1[i] = o1
+    g.mc.mb[i] = ob
+    g.mc.mi[i] = oi
+    mut k2 := bad.Len() - 1
+    until k2 >= 0:
+        enc(g, e, 0, false, 0x87, 1, tmp[k2], rm_reg(bad[k2]), 0, 0)
+        k2--
+    end
+end

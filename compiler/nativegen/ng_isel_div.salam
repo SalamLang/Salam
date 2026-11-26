@@ -1,0 +1,423 @@
+package nativegen
+
+func rem_from_quot(g &: Ng, n: int, q: int, d: i64, sz: int): int:
+    r := gpr(g)
+    if mul_small(g, r, q, d):
+        out0 := gpr(g)
+        _c0 := e_copy(g, out0, n)
+        _s0 := e_alu(g, ALU_SUB, sz, out0, r)
+        ret out0
+    end
+    if is_imm32(d):
+        mi := e_rr(g, M_IMUL_RRI, sz, r, q)
+        g.mc.imm[mi] = d
+    else:
+        _m := e_ri(g, M_MOV_RI, 8, r, d)
+        _x := e_rr(g, M_IMUL_RR, sz, r, q)
+    end
+    out := gpr(g)
+    _c := e_copy(g, out, n)
+    _s := e_alu(g, ALU_SUB, sz, out, r)
+    ret out
+end
+
+func div_partner(g &: Ng, i: int): int:
+    want := g.i_op[i] == OP_SREM ? OP_SDIV : OP_UDIV
+    b := g.i_b[i]
+    mut j := g.i_next[i]
+    until j >= 0:
+        if g.i_op[j] == want and g.i_a[j] == g.i_a[i] and not g.skipi[j]:
+            bj := g.i_b[j]
+            if bj == b or
+                (bj >= 0 and b >= 0 and g.v_kind[bj] == VK_INT and g.v_kind[b] == VK_INT and
+                    g.v_i[bj] == g.v_i[b] and g.v_ty[bj] == g.v_ty[b]):
+                ret j
+            end
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func share_quot(g &: Ng, i: int, q: int):
+    if g.i_op[i] != OP_SREM and g.i_op[i] != OP_UREM:
+        ret
+    end
+    pj := div_partner(g, i)
+    if pj >= 0 and g.i_res[pj] >= 0:
+        g.vv[g.i_res[pj]] = q
+        g.skipi[pj] = true
+    end
+end
+
+func div_const(g &: Ng, i: int, d: i64): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    bits := int_bits(g, t)
+    sz := asz(g, t)
+    sign := op == OP_SDIV or op == OP_SREM
+    isrem := op == OP_SREM or op == OP_UREM
+    wbits := sz * 8
+    if sign:
+        dn := norm_int(g, t, d)
+        if dn == (0 as i64) or dn == (1 as i64) or dn == (0 - 1 as i64):
+            ret false
+        end
+        if bits == 64 and dn == (0 - 9223372036854775807 as i64) - (1 as i64):
+            ret false
+        end
+        mut ad := dn
+        if ad < (0 as i64):
+            ad = 0 - ad
+        end
+        k := log2_exact(ad as u64)
+        if k > 0:
+            n := ext_to32(g, g.i_a[i], t, true)
+            bias := gpr(g)
+            _c := e_copy(g, bias, n)
+            e_shift(g, SH_SAR, sz, bias, wbits - 1)
+            e_shift(g, SH_SHR, sz, bias, wbits - k)
+            u := gpr(g)
+            _c2 := e_copy(g, u, n)
+            _a := e_alu(g, ALU_ADD, sz, u, bias)
+            if isrem:
+                mask := (0 as i64) - ((1 as i64) << (k as i64))
+                if is_imm32(mask):
+                    _m := e_alui(g, ALU_AND, sz, u, mask)
+                else:
+                    mr := gpr(g)
+                    _mm := e_ri(g, M_MOV_RI, 8, mr, mask)
+                    _am := e_alu(g, ALU_AND, sz, u, mr)
+                end
+                out := gpr(g)
+                _c3 := e_copy(g, out, n)
+                _s := e_alu(g, ALU_SUB, sz, out, u)
+                set_res(g, i, out)
+                ret true
+            end
+            e_shift(g, SH_SAR, sz, u, k)
+            if dn < (0 as i64):
+                ng := e_rr(g, M_UNARY, sz, u, 0 - 1)
+                g.mc.cc[ng] = UN_NEG
+            end
+            set_res(g, i, u)
+            ret true
+        end
+        if g.wsz == 4:
+            mut mx := 0 as i64
+            mut shx := 0
+            smagic32(dn, mx, shx)
+            nx := ext64(g, g.i_a[i], t, true)
+            qx := mulhi(g, nx, mx, true)
+            if dn > (0 as i64) and mx < (0 as i64):
+                _ax := e_alu(g, ALU_ADD, 4, qx, nx)
+            else dn < (0 as i64) and mx > (0 as i64):
+                _sx := e_alu(g, ALU_SUB, 4, qx, nx)
+            end
+            e_shift(g, SH_SAR, 4, qx, shx)
+            sgx := gpr(g)
+            _cx := e_copy(g, sgx, qx)
+            e_shift(g, SH_SHR, 4, sgx, 31)
+            _fx := e_alu(g, ALU_ADD, 4, qx, sgx)
+            share_quot(g, i, qx)
+            if isrem:
+                set_res(g, i, rem_from_quot(g, nx, qx, dn, 4))
+            else:
+                set_res(g, i, qx)
+            end
+            ret true
+        end
+        if bits <= 32:
+            mut m32 := 0 as i64
+            mut sh32 := 0
+            smagic32(dn, m32, sh32)
+            n32 := ext64(g, g.i_a[i], t, true)
+            q32 := gpr(g)
+            mi32 := e_rr(g, M_IMUL_RRI, 8, q32, n32)
+            g.mc.imm[mi32] = m32
+            if dn > (0 as i64) and m32 < (0 as i64):
+                e_shift(g, SH_SAR, 8, q32, 32)
+                _a32 := e_alu(g, ALU_ADD, 4, q32, n32)
+                e_shift(g, SH_SAR, 4, q32, sh32)
+            else dn < (0 as i64) and m32 > (0 as i64):
+                e_shift(g, SH_SAR, 8, q32, 32)
+                _s32 := e_alu(g, ALU_SUB, 4, q32, n32)
+                e_shift(g, SH_SAR, 4, q32, sh32)
+            else:
+                e_shift(g, SH_SAR, 8, q32, 32 + sh32)
+            end
+            sg32 := gpr(g)
+            _c32 := e_copy(g, sg32, q32)
+            e_shift(g, SH_SHR, 4, sg32, 31)
+            _f32 := e_alu(g, ALU_ADD, 4, q32, sg32)
+            share_quot(g, i, q32)
+            if isrem:
+                set_res(g, i, rem_from_quot(g, n32, q32, dn, 4))
+            else:
+                set_res(g, i, q32)
+            end
+            ret true
+        end
+        mut m := 0 as i64
+        mut sh := 0
+        smagic(dn, m, sh)
+        n2 := ext64(g, g.i_a[i], t, true)
+        q := mulhi(g, n2, m, true)
+        if dn > (0 as i64) and m < (0 as i64):
+            _a2 := e_alu(g, ALU_ADD, 8, q, n2)
+        else dn < (0 as i64) and m > (0 as i64):
+            _s2 := e_alu(g, ALU_SUB, 8, q, n2)
+        end
+        e_shift(g, SH_SAR, 8, q, sh)
+        sg := gpr(g)
+        _c4 := e_copy(g, sg, q)
+        e_shift(g, SH_SHR, 8, sg, 63)
+        _a3 := e_alu(g, ALU_ADD, 8, q, sg)
+        share_quot(g, i, q)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, n2, q, dn, 8))
+        else:
+            set_res(g, i, q)
+        end
+        ret true
+    end
+    du := uval(g, t, d)
+    if du <= (1 as u64):
+        ret false
+    end
+    k2 := log2_exact(du)
+    if k2 >= 0:
+        ra := ext_to32(g, g.i_a[i], t, false)
+        r := gpr(g)
+        _c5 := e_copy(g, r, ra)
+        if isrem:
+            mk := (du - (1 as u64)) as i64
+            if is_imm32(mk):
+                _a4 := e_alui(g, ALU_AND, sz, r, mk)
+            else:
+                m2 := gpr(g)
+                _mm2 := e_ri(g, M_MOV_RI, 8, m2, mk)
+                _aa := e_alu(g, ALU_AND, sz, r, m2)
+            end
+        else:
+            e_shift(g, SH_SHR, sz, r, k2)
+        end
+        set_res(g, i, r)
+        ret true
+    end
+    if g.wsz == 4:
+        mut nb4 := bits - known_lz(g, g.i_a[i], 0)
+        if nb4 > 32:
+            nb4 = 32
+        end
+        if nb4 < 1:
+            nb4 = 1
+        end
+        mut p4 := 32
+        until p4 <= 32 + nb4 and p4 < 64:
+            m4 := (((1 as u64) << (p4 as u64)) + du - (1 as u64)) / du
+            if m4 < ((1 as u64) << (32 as u64)) and
+                m4 * du - ((1 as u64) << (p4 as u64)) <= ((1 as u64) << ((p4 - nb4) as u64)):
+                nu4 := ext64(g, g.i_a[i], t, false)
+                q4 := mulhi(g, nu4, m4 as i64, false)
+                if p4 > 32:
+                    e_shift(g, SH_SHR, 4, q4, p4 - 32)
+                end
+                share_quot(g, i, q4)
+                if isrem:
+                    set_res(g, i, rem_from_quot(g, nu4, q4, du as i64, 4))
+                else:
+                    set_res(g, i, q4)
+                end
+                ret true
+            end
+            p4++
+        end
+        mut lx := 0
+        until ((1 as u64) << (lx as u64)) < du:
+            lx++
+        end
+        umx := ((((1 as u64) << (lx as u64)) - du) << (32 as u64)) / du + (1 as u64)
+        nux := ext64(g, g.i_a[i], t, false)
+        tx := mulhi(g, nux, (umx & (0xFFFFFFFF as u64)) as i64, false)
+        qux := gpr(g)
+        _cux := e_copy(g, qux, nux)
+        _sux := e_alu(g, ALU_SUB, 4, qux, tx)
+        e_shift(g, SH_SHR, 4, qux, 1)
+        _aux := e_alu(g, ALU_ADD, 4, qux, tx)
+        e_shift(g, SH_SHR, 4, qux, lx - 1)
+        share_quot(g, i, qux)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, nux, qux, du as i64, 4))
+        else:
+            set_res(g, i, qux)
+        end
+        ret true
+    end
+    mut nb := bits <= 32 ? 32 : 64
+    lz := known_lz(g, g.i_a[i], 0)
+    if bits - lz < nb:
+        nb = bits - lz
+    end
+    if nb < 1:
+        nb = 1
+    end
+    mut pm := 0 as u64
+    mut pp := 0
+    mut use_imul := umagic_find(du, nb, true, pm, pp)
+    mut found := use_imul
+    if not found:
+        found = umagic_find(du, nb, false, pm, pp)
+    end
+    mut tz := 0
+    if not found:
+        until ((du >> (tz as u64)) & (1 as u64)) == (0 as u64):
+            tz++
+        end
+        if tz > 0 and nb - tz >= 1:
+            use_imul = umagic_find(du >> (tz as u64), nb - tz, true, pm, pp)
+            found = use_imul
+            if not found:
+                found = umagic_find(du >> (tz as u64), nb - tz, false, pm, pp)
+            end
+        end
+        if not found:
+            tz = 0
+        end
+    end
+    if found:
+        np := ext64(g, g.i_a[i], t, false)
+        mut src := np
+        if tz > 0:
+            src = gpr(g)
+            _cs := e_copy(g, src, np)
+            e_shift(g, SH_SHR, 8, src, tz)
+        end
+        qp := emit_umagic(g, src, pm, pp, use_imul)
+        share_quot(g, i, qp)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, np, qp, du as i64, bits <= 32 ? 4 : 8))
+        else:
+            set_res(g, i, qp)
+        end
+        ret true
+    end
+    mut um := 0 as u64
+    mut l := 0
+    umagic(du, um, l)
+    n3 := ext64(g, g.i_a[i], t, false)
+    t1 := mulhi(g, n3, um as i64, false)
+    q2 := gpr(g)
+    _c6 := e_copy(g, q2, n3)
+    _s3 := e_alu(g, ALU_SUB, 8, q2, t1)
+    e_shift(g, SH_SHR, 8, q2, 1)
+    _a5 := e_alu(g, ALU_ADD, 8, q2, t1)
+    e_shift(g, SH_SHR, 8, q2, l - 1)
+    share_quot(g, i, q2)
+    if isrem:
+        set_res(g, i, rem_from_quot(g, n3, q2, du as i64, 8))
+    else:
+        set_res(g, i, q2)
+    end
+    ret true
+end
+
+func dq_find(g &: Ng, a: int, b: int, sign: bool, want_q: bool): int:
+    mut k := g.dq_a.Len() - 1
+    until k >= 0:
+        if g.dq_a[k] == a and g.dq_b[k] == b and g.dq_s[k] == sign and dominates(
+            g, g.dq_blk[k], g.cur_b
+        ):
+            ret want_q ? g.dq_q[k] : g.dq_r[k]
+        end
+        k--
+    end
+    ret 0 - 1
+end
+
+func div_has_twin(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    b := g.i_b[i]
+    signed := g.i_op[i] == OP_SDIV or g.i_op[i] == OP_SREM
+    each bb in g.b_rpo:
+        mut j := g.b_first[bb]
+        until j >= 0:
+            op := g.i_op[j]
+            if j != i and op >= OP_SDIV and op <= OP_UREM and g.i_a[j] == a and g.i_b[j] == b and
+                (op == OP_SDIV or op == OP_SREM) == signed:
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func isel_div(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    sz := asz(g, t)
+    sign := op == OP_SDIV or op == OP_SREM
+    b := g.i_b[i]
+    if g.v_kind[b] == VK_INT and div_const(g, i, g.v_i[b]):
+        ret
+    end
+    want_q := op == OP_SDIV or op == OP_UDIV
+    a := g.i_a[i]
+    if g.opt:
+        prev := dq_find(g, a, b, sign, want_q)
+        if prev >= 0:
+            set_res(g, i, prev)
+            ret
+        end
+    end
+    ra2 := ext_to32(g, a, t, sign)
+    rb := ext_to32(g, b, t, sign)
+    twin := g.opt and div_has_twin(g, i)
+    need_q := want_q or twin
+    need_r := not want_q or twin
+    rq := gpr(g)
+    rr := gpr(g)
+    mut done := 0 - 1
+    if g.opt and sz == 8 and g.arch == NG_ARCH_X64:
+        tor := gpr(g)
+        _co := e_copy(g, tor, ra2)
+        _or := e_alu(g, ALU_OR, 8, tor, rb)
+        e_shift(g, SH_SHR, 8, tor, 32)
+        slow := new_label(g)
+        done = new_label(g)
+        _jz := e_jcc(g, X_NE, slow)
+        _c0 := e_copy(g, RAX, ra2)
+        _z0 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+        d0 := e_rr(g, M_DIV, 4, 0 - 1, rb)
+        g.mc.cc[d0] = 0
+        _jd := e_jmp(g, done)
+        _ls := e_label(g, slow)
+    end
+    _c2 := e_copy(g, RAX, ra2)
+    if sign:
+        _q := mi_new(g, M_CQO, sz)
+    else:
+        _z := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+    end
+    d := e_rr(g, M_DIV, sz, 0 - 1, rb)
+    g.mc.cc[d] = (sign ? 1 : 0) | (need_q ? 0 : 2) | (need_r ? 0 : 4)
+    if done >= 0:
+        _ld := e_label(g, done)
+    end
+    if need_q:
+        _c3 := e_copy(g, rq, RAX)
+    end
+    if need_r:
+        _c4 := e_copy(g, rr, RDX)
+    end
+    if g.opt and twin:
+        g.dq_a.Push(a)
+        g.dq_b.Push(b)
+        g.dq_s.Push(sign)
+        g.dq_q.Push(rq)
+        g.dq_r.Push(rr)
+        g.dq_blk.Push(g.cur_b)
+    end
+    set_res(g, i, want_q ? rq : rr)
+end

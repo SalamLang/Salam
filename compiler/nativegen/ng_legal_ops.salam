@@ -1,0 +1,160 @@
+package nativegen
+
+func lg_shift_const(g &: Ng, at: int, op: int, al: int, ah: int, c: int, lo &: int, hi &: int):
+    n := c & 63
+    if n == 0:
+        lo = al
+        hi = ah
+        ret
+    end
+    if op == OP_SHL:
+        if n >= 32:
+            lo = lg_c32(g, 0 as i64)
+            hi = n == 32 ? al : lg_ins(g, at, OP_SHL, T_I32, al, lg_c32(g, (n - 32) as i64))
+            ret
+        end
+        lo = lg_ins(g, at, OP_SHL, T_I32, al, lg_c32(g, n as i64))
+        t1 := lg_ins(g, at, OP_SHL, T_I32, ah, lg_c32(g, n as i64))
+        t2 := lg_ins(g, at, OP_LSHR, T_I32, al, lg_c32(g, (32 - n) as i64))
+        hi = lg_ins(g, at, OP_OR, T_I32, t1, t2)
+        ret
+    end
+    if n >= 32:
+        if op == OP_LSHR:
+            hi = lg_c32(g, 0 as i64)
+        else:
+            hi = lg_ins(g, at, OP_ASHR, T_I32, ah, lg_c32(g, 31 as i64))
+        end
+        lo = n == 32 ? ah : lg_ins(g, at, op, T_I32, ah, lg_c32(g, (n - 32) as i64))
+        ret
+    end
+    hi = lg_ins(g, at, op, T_I32, ah, lg_c32(g, n as i64))
+    u1 := lg_ins(g, at, OP_LSHR, T_I32, al, lg_c32(g, n as i64))
+    u2 := lg_ins(g, at, OP_SHL, T_I32, ah, lg_c32(g, (32 - n) as i64))
+    lo = lg_ins(g, at, OP_OR, T_I32, u1, u2)
+end
+
+func lg_strict(p: int): int:
+    switch p:
+        CC_SLE: ret CC_SLT end
+        CC_SGE: ret CC_SGT end
+        CC_ULE: ret CC_ULT end
+        CC_UGE: ret CC_UGT end
+    end
+    ret p
+end
+
+func lg_unsigned(p: int): int:
+    switch p:
+        CC_SLT: ret CC_ULT end
+        CC_SLE: ret CC_ULE end
+        CC_SGT: ret CC_UGT end
+        CC_SGE: ret CC_UGE end
+    end
+    ret p
+end
+
+func lg_cmp64(g &: Ng, l &: Lg, at: int, pred: int, a: int, b: int): int:
+    mut al := 0
+    mut ah := 0
+    mut bl := 0
+    mut bh := 0
+    lg_pair(g, l, a, al, ah)
+    lg_pair(g, l, b, bl, bh)
+    if pred == CC_EQ or pred == CC_NE:
+        x1 := lg_ins(g, at, OP_XOR, T_I32, al, bl)
+        x2 := lg_ins(g, at, OP_XOR, T_I32, ah, bh)
+        o := lg_ins(g, at, OP_OR, T_I32, x1, x2)
+        ret lg_icmp(g, at, pred, o, lg_c32(g, 0 as i64))
+    end
+    eqh := lg_icmp(g, at, CC_EQ, ah, bh)
+    lc := lg_icmp(g, at, lg_unsigned(pred), al, bl)
+    hc := lg_icmp(g, at, lg_strict(pred), ah, bh)
+    ret lg_sel(g, at, eqh, lc, hc)
+end
+
+func lg_ext_to32(g &: Ng, at: int, v: int, signed: bool): int:
+    t := g.v_ty[v]
+    if t == T_I32:
+        ret v
+    end
+    ret lg_cast(g, at, signed ? OP_SEXT : OP_ZEXT, T_I32, v, t)
+end
+
+func lg_entry_slot(g &: Ng, l &: Lg): int:
+    if l.slot >= 0:
+        ret l.slot
+    end
+    b0 := g.b_rpo[0]
+    a := ins_new(g, OP_ALLOCA, T_PTR)
+    g.i_x[a] = T_F64
+    g.i_d[a] = 1 as i64
+    first := g.b_first[b0]
+    ins_before(g, first, a)
+    l.slot = new_res(g, a)
+    ret l.slot
+end
+
+func lg_addr4(g &: Ng, at: int, base: int): int:
+    r := lg_ins(g, at, OP_ADDR, T_PTR, base, 0 - 1)
+    d := g.v_def[r]
+    g.i_x[d] = 1
+    g.i_d[d] = 4 as i64
+    ret r
+end
+
+func lg_load(g &: Ng, at: int, addr: int, ty: int, model: int): int:
+    r := lg_ins(g, at, OP_LOAD, ty, addr, 0 - 1)
+    d := g.v_def[r]
+    g.i_c[d] = g.i_c[model]
+    g.i_f[d] = g.i_f[model]
+    ret r
+end
+
+func lg_store(g &: Ng, at: int, val: int, addr: int, model: int):
+    s := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[s] = val
+    g.i_b[s] = addr
+    g.i_c[s] = g.i_c[model]
+    g.i_f[s] = g.i_f[model]
+    g.i_x[s] = g.v_ty[val]
+    g.i_dbg[s] = g.i_dbg[at]
+    ins_before(g, at, s)
+end
+
+func lg_split_args(g &: Ng, l &: Lg):
+    mut na := Vector {} as Vector<int>
+    mut nf := Vector {} as Vector<int>
+    mut pos := 0
+    repeat g.f_args.Len() in k:
+        v := g.f_args[k]
+        fl := k < g.f_argf.Len() ? g.f_argf[k] : 0
+        if v >= 0 and is_w64(g.v_ty[v]):
+            lo := new_val(g, VK_ARG, T_I32, pos as i64)
+            hi := new_val(g, VK_ARG, T_I32, (pos + 1) as i64)
+            lg_set(g, l, v, lo, hi)
+            na.Push(lo)
+            na.Push(hi)
+            nf.Push(IF_PAIR)
+            nf.Push(0)
+            pos += 2
+        else:
+            if v >= 0:
+                g.v_i[v] = pos as i64
+            end
+            na.Push(v)
+            nf.Push(fl)
+            pos++
+        end
+    end
+    g.f_args.Clear()
+    g.f_argf.Clear()
+    each a in na:
+        g.f_args.Push(a)
+    end
+    each f in nf:
+        g.f_argf.Push(f)
+    end
+    na.Free()
+    nf.Free()
+end

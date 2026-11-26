@@ -1,0 +1,411 @@
+package nativegen
+
+func icmp_cc(p: int): int:
+    switch p:
+        CC_EQ: ret X_E end
+        CC_NE: ret X_NE end
+        CC_SLT: ret X_L end
+        CC_SLE: ret X_LE end
+        CC_SGT: ret X_G end
+        CC_SGE: ret X_GE end
+        CC_ULT: ret X_B end
+        CC_ULE: ret X_BE end
+        CC_UGT: ret X_A end
+        CC_UGE: ret X_AE end
+    end
+    ret X_E
+end
+
+func swap_pred(p: int): int:
+    switch p:
+        CC_SLT: ret CC_SGT end
+        CC_SLE: ret CC_SGE end
+        CC_SGT: ret CC_SLT end
+        CC_SGE: ret CC_SLE end
+        CC_ULT: ret CC_UGT end
+        CC_ULE: ret CC_UGE end
+        CC_UGT: ret CC_ULT end
+        CC_UGE: ret CC_ULE end
+    end
+    ret p
+end
+
+func and_test_ok(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or g.i_op[i] != OP_AND:
+        ret false
+    end
+    m := g.i_b[i]
+    if m < 0 or g.v_kind[m] != VK_INT or not is_imm32(g.v_i[m]):
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 8:
+        if j < 0:
+            ret false
+        end
+        if g.i_op[j] == OP_ICMP and g.i_a[j] == r:
+            p := g.i_x[j]
+            z := g.i_b[j]
+            ret (p == CC_EQ or p == CC_NE) and z >= 0 and g.v_kind[z] == VK_INT and
+                g.v_i[z] == (0 as i64)
+        end
+        if uses_val(g, j, r):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func emit_cmp64(g &: Ng, i: int): int:
+    rl := use_reg(g, g.i_a[i])
+    rl2 := use_reg(g, g.i_b[i])
+    rh2 := use_reg(g, g.i_d[i] as int)
+    if g.arch == NG_ARCH_ARM:
+        rh := use_reg(g, g.i_c[i])
+        _p2 := e_alu(g, ALU_CMP, 4, rl, rl2)
+        _s2 := e_alu(g, ALU_SBBCMP, 4, rh, rh2)
+        ret icmp_cc(g.i_x[i])
+    end
+    t := gpr(g)
+    _c := e_copy(g, t, use_reg(g, g.i_c[i]))
+    _p := e_alu(g, ALU_CMP, 4, rl, rl2)
+    _s := e_alu(g, ALU_SBB, 4, t, rh2)
+    ret icmp_cc(g.i_x[i])
+end
+
+func isel_div6432(g &: Ng, i: int):
+    ra := use_reg(g, g.i_a[i])
+    rb := use_reg(g, g.i_b[i])
+    rc := use_reg(g, g.i_c[i])
+    mut tw := Vector {} as Vector<int>
+    mut j := g.i_next[i]
+    until j >= 0:
+        if g.i_op[j] == OP_DIV6432 and g.i_a[j] == g.i_a[i] and g.i_b[j] == g.i_b[i] and
+            g.i_c[j] == g.i_c[i] and g.i_res[j] >= 0:
+            tw.Push(j)
+        end
+        j = g.i_next[j]
+    end
+    mut needh := g.i_x[i] == 2
+    mut needq := g.i_x[i] == 0
+    mut needr := g.i_x[i] == 1
+    each t in tw:
+        if g.i_x[t] == 2:
+            needh = true
+        else g.i_x[t] == 0:
+            needq = true
+        else:
+            needr = true
+        end
+    end
+    rq := gpr(g)
+    rr := gpr(g)
+    rh := gpr(g)
+    slow := new_label(g)
+    done := new_label(g)
+    _cm := e_alu(g, ALU_CMP, 4, rb, rc)
+    _js := e_jcc(g, X_AE, slow)
+    _f1 := e_copy(g, RAX, ra)
+    _f2 := e_copy(g, RDX, rb)
+    d0 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d0] = 0
+    if needq:
+        _f3 := e_copy(g, rq, RAX)
+    end
+    if needr:
+        _f4 := e_copy(g, rr, RDX)
+    end
+    if needh:
+        _f5 := e_movi(g, rh, 0 as i64)
+    end
+    _jd := e_jmp(g, done)
+    _ls := e_label(g, slow)
+    _s1 := e_copy(g, RAX, rb)
+    _s2 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+    d1 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d1] = 0
+    if needh:
+        _s3 := e_copy(g, rh, RAX)
+    end
+    _s4 := e_copy(g, RAX, ra)
+    d2 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d2] = 0
+    if needq:
+        _s5 := e_copy(g, rq, RAX)
+    end
+    if needr:
+        _s6 := e_copy(g, rr, RDX)
+    end
+    _ld := e_label(g, done)
+    x := g.i_x[i]
+    set_res(g, i, x == 1 ? rr : (x == 2 ? rh : rq))
+    each t2 in tw:
+        xt := g.i_x[t2]
+        g.vv[g.i_res[t2]] = xt == 1 ? rr : (xt == 2 ? rh : rq)
+        g.skipi[t2] = true
+    end
+    tw.Free()
+end
+
+func isel_adc64(g &: Ng, i: int):
+    y := g.i_b[i]
+    yimm := g.v_kind[y] == VK_INT and is_imm32(g.v_i[y])
+    rx := use_reg(g, g.i_a[i])
+    mut ry := 0 - 1
+    if not yimm:
+        ry = use_reg(g, y)
+    end
+    ra := use_reg(g, g.i_c[i])
+    dv := g.i_d[i] as int
+    dimm := g.v_kind[dv] == VK_INT and is_imm32(g.v_i[dv])
+    mut rb := 0 - 1
+    if not dimm:
+        rb = use_reg(g, dv)
+    end
+    r := gpr(g)
+    _c := e_copy(g, r, rx)
+    sb := g.i_x[i] != 0
+    mut cop := ALU_ADD
+    mut cr := ra
+    if sb:
+        cop = ALU_CMP
+    else g.arch == NG_ARCH_ARM:
+        cop = ALU_ADDCMP
+    else:
+        cr = gpr(g)
+        _c2 := e_copy(g, cr, ra)
+    end
+    if dimm:
+        _p := e_alui(g, cop, 4, cr, g.v_i[dv])
+    else:
+        _p2 := e_alu(g, cop, 4, cr, rb)
+    end
+    if yimm:
+        _s := e_alui(g, sb ? ALU_SBB : ALU_ADC, 4, r, g.v_i[y])
+    else:
+        _s2 := e_alu(g, sb ? ALU_SBB : ALU_ADC, 4, r, ry)
+    end
+    set_res(g, i, r)
+end
+
+func emit_icmp(g &: Ng, i: int): int:
+    if g.i_op[i] == OP_CMP64:
+        ret emit_cmp64(g, i)
+    end
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    mut p := g.i_x[i]
+    if (p == CC_EQ or p == CC_NE) and g.v_kind[b] == VK_INT and g.v_i[b] == (0 as i64) and
+        def_op(g, a) == OP_AND:
+        d := g.v_def[a]
+        if g.skipi[d]:
+            sz0 := msz(g, g.v_ty[a])
+            bits0 := int_bits(g, g.v_ty[a])
+            ra0 := use_reg(g, g.i_a[d])
+            mut mimm := g.v_i[g.i_b[d]]
+            if bits0 < 32:
+                mimm &= (((1 as i64) << (bits0 as i64)) - (1 as i64))
+            end
+            _t := e_ri(g, M_TEST_RI, sz0 < 4 ? 4 : sz0, ra0, mimm)
+            ret icmp_cc(p)
+        end
+    end
+    if g.v_kind[a] == VK_INT and g.v_kind[b] != VK_INT:
+        tmp := a
+        a = b
+        b = tmp
+        p = swap_pred(p)
+    end
+    lfa := lf_mem(g, a)
+    if lfa >= 0 and g.v_kind[b] == VK_INT and is_imm32(g.v_i[b]):
+        cmem := mem_of(g, g.i_a[lfa], 0 as i64)
+        cm := mi_new(g, M_ALU_MI, msz(g, g.v_ty[a]))
+        set_mem(g, cm, cmem)
+        g.mc.imm[cm] = g.v_i[b]
+        g.mc.cc[cm] = ALU_CMP
+        ret icmp_cc(p)
+    end
+    if lf_mem(g, a) >= 0 and lf_mem(g, b) < 0:
+        tmp2 := a
+        a = b
+        b = tmp2
+        p = swap_pred(p)
+    end
+    lfi := lf_mem(g, b)
+    if lfi >= 0:
+        rl := use_reg(g, a)
+        mc := e_rm(g, M_ALU_RM, msz(g, g.v_ty[a]), rl, mem_of(g, g.i_a[lfi], 0 as i64))
+        g.mc.cc[mc] = ALU_CMP
+        ret icmp_cc(p)
+    end
+    sz := msz(g, g.v_ty[a])
+    ra := use_reg(g, a)
+    if g.v_kind[b] == VK_INT and is_imm32(g.v_i[b]):
+        if g.v_i[b] == (0 as i64):
+            _t := e_rr(g, M_TEST_RR, sz, ra, ra)
+        else:
+            mut imm := g.v_i[b]
+            if sz == 1:
+                imm &= (255 as i64)
+            else sz == 2:
+                imm &= (65535 as i64)
+            end
+            _c := e_alui(g, ALU_CMP, sz, ra, imm)
+        end
+    else:
+        rb := use_reg(g, b)
+        _c2 := e_alu(g, ALU_CMP, sz, ra, rb)
+    end
+    ret icmp_cc(p)
+end
+
+func fcmp_setup(g &: Ng, i: int): int:
+    p := g.i_x[i]
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    mut np := p
+    if p == FC_OLT or p == FC_OLE or p == FC_UGT or p == FC_UGE:
+        tmp := a
+        a = b
+        b = tmp
+        if p == FC_OLT: np = FC_OGT end
+        if p == FC_OLE: np = FC_OGE end
+        if p == FC_UGT: np = FC_ULT end
+        if p == FC_UGE: np = FC_ULE end
+    end
+    ra := use_reg(g, a)
+    rb := use_reg(g, b)
+    _u := e_rr(g, M_UCOMI, fsz(g.v_ty[a]), ra, rb)
+    ret np
+end
+
+func fcmp_cc(np: int): int:
+    switch np:
+        FC_OGT: ret X_A end
+        FC_OGE: ret X_AE end
+        FC_ULT: ret X_B end
+        FC_ULE: ret X_BE end
+        FC_UEQ: ret X_E end
+        FC_ONE: ret X_NE end
+        FC_ORD: ret X_NP end
+        FC_UNO: ret X_P end
+    end
+    ret 0 - 1
+end
+
+func cond_user(g &: Ng, d: int): int:
+    v := g.i_res[d]
+    if v < 0 or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    mut j := g.i_next[d]
+    mut k := 0
+    until j >= 0 and k < 64:
+        op := g.i_op[j]
+        if g.i_a[j] == v and (op == OP_CBR or op == OP_SELECT):
+            ret j
+        end
+        if g.i_b[j] == v or g.i_c[j] == v:
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+        k++
+    end
+    ret 0 - 1
+end
+
+func fused_cond(g &: Ng, br: int): int:
+    c := g.i_a[br]
+    if cond_only(g, c) and (g.i_op[br] == OP_CBR or sel_scalar(g, g.i_ty[br])):
+        ret g.v_def[c]
+    end
+    if c < 0 or g.v_kind[c] != VK_INS or g.v_uses[c] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[c]
+    if cond_user(g, d) != br:
+        ret 0 - 1
+    end
+    op := g.i_op[d]
+    if g.i_op[br] == OP_SELECT:
+        t := g.i_ty[br]
+        if (op == OP_ICMP or op == OP_CMP64) and sel_scalar(g, t):
+            ret d
+        end
+        if op == OP_FCMP and sel_scalar(g, t):
+            fp := g.i_x[d]
+            if fp != FC_OEQ and fp != FC_UNE and fp != FC_FALSE and fp != FC_TRUE:
+                ret d
+            end
+        end
+        ret 0 - 1
+    end
+    if op == OP_ICMP or op == OP_CMP64:
+        ret d
+    end
+    if op == OP_FCMP:
+        p := g.i_x[d]
+        if p != FC_FALSE and p != FC_TRUE:
+            ret d
+        end
+    end
+    ret 0 - 1
+end
+
+func isel_cbr(g &: Ng, i: int, b: int):
+    tb := g.i_b[i]
+    fb := g.i_c[i]
+    phi_copies(g, b)
+    c := g.i_a[i]
+    if g.v_kind[c] == VK_INT:
+        if (g.v_i[c] & (1 as i64)) != (0 as i64):
+            _j := e_jmp(g, tb)
+        else:
+            _j2 := e_jmp(g, fb)
+        end
+        ret
+    end
+    d := fused_cond(g, i)
+    if d >= 0 and (g.i_op[d] == OP_ICMP or g.i_op[d] == OP_CMP64):
+        cc := emit_icmp(g, d)
+        _j3 := e_jcc(g, cc, tb)
+        _j4 := e_jmp(g, fb)
+        ret
+    end
+    if d >= 0:
+        np := fcmp_setup(g, d)
+        if np == FC_OEQ:
+            _j5 := e_jcc(g, X_P, fb)
+            _j6 := e_jcc(g, X_E, tb)
+            _j7 := e_jmp(g, fb)
+            ret
+        end
+        if np == FC_UNE:
+            _j8 := e_jcc(g, X_P, tb)
+            _j9 := e_jcc(g, X_NE, tb)
+            _ja := e_jmp(g, fb)
+            ret
+        end
+        _jb := e_jcc(g, fcmp_cc(np), tb)
+        _jc := e_jmp(g, fb)
+        ret
+    end
+    rc := use_reg(g, c)
+    _t := e_rr(g, M_TEST_RR, 1, rc, rc)
+    _jd := e_jcc(g, X_NE, tb)
+    _je := e_jmp(g, fb)
+end
+
+func set_res(g &: Ng, i: int, r: int):
+    v := g.i_res[i]
+    if v >= 0:
+        g.vv[v] = r
+    end
+end
+
+func res_used(g &: Ng, i: int): bool:
+    v := g.i_res[i]
+    ret v >= 0 and g.v_uses[v] > 0
+end

@@ -1,0 +1,380 @@
+package nativegen
+
+func lv_apart(g &: Ng, a: int, b: int): bool:
+    if g.off_lhloc:
+        ret false
+    end
+    ra := local_root(g, a)
+    rb := local_root(g, b)
+    if ra >= 0 and rb >= 0:
+        ret ra != rb
+    end
+    ret (ra >= 0 and lh_not_local(g, b)) or (rb >= 0 and lh_not_local(g, a))
+end
+
+func lv_mem_ok(g &: Ng, r &: Lv): bool:
+    r.checks.Clear()
+    r.hchecks.Clear()
+    if r.stores.Len() > 0 and not g.off_lhloc:
+        compute_escape(g)
+    end
+    each s0 in r.stores:
+        each hl in r.hoist:
+            if not lv_apart(g, g.i_a[g.v_def[g.i_b[s0]]], g.i_a[hl]):
+                r.hchecks.Push(g.v_def[g.i_b[s0]])
+                r.hchecks.Push(hl)
+            end
+        end
+    end
+    each s in r.stores:
+        sa := g.v_def[g.i_b[s]]
+        each ld in r.loads:
+            la := g.v_def[g.i_a[ld]]
+            if g.i_a[sa] == g.i_a[la]:
+                if (g.i_b[sa] != g.i_b[la] or g.i_d[sa] != g.i_d[la] or g.i_x[sa] != g.i_x[la]) and
+                    not lv_twoptr(
+                        g, r, sa, la
+                    ):
+                    ret false
+                end
+            else not lv_apart(g, g.i_a[sa], g.i_a[la]):
+                r.checks.Push(sa)
+                r.checks.Push(la)
+            end
+        end
+        each s2 in r.stores:
+            if s2 != s:
+                sb := g.v_def[g.i_b[s2]]
+                if g.i_a[sa] != g.i_a[sb]:
+                    if not lv_apart(g, g.i_a[sa], g.i_a[sb]):
+                        r.checks.Push(sa)
+                        r.checks.Push(sb)
+                    end
+                else (g.i_b[sa] != g.i_b[sb] or g.i_x[sa] != g.i_x[sb]) and not lv_twoptr(
+                    g, r, sa, sb
+                ):
+                    ret false
+                end
+            end
+        end
+    end
+    ret r.checks.Len() <= 16
+end
+
+func lv_pure_op(op: int): bool:
+    ret op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or op == OP_ADDR or op == OP_ADD or
+        op == OP_SUB or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR or
+        op == OP_SHL or op == OP_LSHR or op == OP_ASHR or op == OP_PTRTOINT or op == OP_INTTOPTR
+end
+
+func lv_hoist_pure(g &: Ng, r &: Lv):
+    if g.off_lvhoist or r.pre < 0 or g.b_last[r.pre] < 0:
+        ret
+    end
+    mut moved := true
+    mut rounds := 0
+    until moved and rounds < 8:
+        moved = false
+        rounds++
+        each b in [r.h, r.w, r.latch]:
+            if b < 0:
+                continue
+            end
+            mut i := g.b_first[b]
+            until i >= 0:
+                nx := g.i_next[i]
+                op := g.i_op[i]
+                if lv_pure_op(op) and g.i_res[i] >= 0 and not is_vec(
+                    g, g.i_ty[i]
+                ) and not is_agg(g, g.i_ty[i]):
+                    m := val_mask(op)
+                    mut ok := true
+                    if (m & 1) != 0 and not lv_inv(g, r, g.i_a[i]): ok = false end
+                    if (m & 2) != 0 and g.i_b[i] >= 0 and not lv_inv(g, r, g.i_b[i]): ok = false end
+                    if (m & 4) != 0 and g.i_c[i] >= 0 and not lv_inv(g, r, g.i_c[i]): ok = false end
+                    if ok:
+                        ins_unlink(g, i)
+                        g.i_op[i] = op
+                        ins_before(g, g.b_last[r.pre], i)
+                        moved = true
+                    end
+                end
+                i = nx
+            end
+        end
+    end
+end
+
+func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
+    if not lv_shape(g, l, mark, h, r) or (r.nw > 0 and not lv_nany(g, r)):
+        ret false
+    end
+    lv_hoist_pure(g, r)
+    r.divp = 0 - 1
+    r.divn = 0 - 1
+    if not lv_iv(g, r) and not lv_iv_rev(g, r):
+        ret false
+    end
+    if not g.off_lvfi:
+        fp := lp_outside_pred(g, l, h, mark)
+        r.fi = fp >= 0 and first_iter_reaches(g, l, mark, h, fp, r.w)
+    end
+    r.cls.Clear()
+    repeat g.v_kind.Len():
+        r.cls.Push(LV_NONE)
+    end
+    each rp in r.reds:
+        r.cls[g.i_res[rp]] = LV_RED
+    end
+    if r.divp >= 0:
+        r.cls[g.i_res[r.divp]] = LV_RIDX
+    end
+    r.body.Clear()
+    r.hoist.Clear()
+    if r.nw > 0:
+        if r.reds.Len() > 0 or r.divp >= 0:
+            ret false
+        end
+        r.lane = r.nw / 8
+    end
+    if r.shape == 1:
+        mut hi := g.b_first[r.h]
+        until hi >= 0:
+            ho := g.i_op[hi]
+            if ho != OP_PHI and hi != r.cmp and ho != OP_CBR:
+                if not lv_classify(g, r, hi) or (lv_cls(
+                    r, g.i_res[hi]
+                ) != LV_IDX and lv_cls(r, g.i_res[hi]) != LV_RIDX):
+                    ret false
+                end
+                r.body.Push(hi)
+            end
+            hi = g.i_next[hi]
+        end
+    end
+    mut i := g.b_first[r.w]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_PHI or i == r.cmp or op == OP_BR or op == OP_CBR:
+            i = g.i_next[i]
+            continue
+        end
+        mut isred := false
+        mut iscmp := false
+        each rn in r.rnext:
+            if rn == i:
+                isred = true
+            end
+        end
+        each rc0 in r.rcmp:
+            if rc0 == i:
+                iscmp = true
+            end
+        end
+        if iscmp:
+            r.cls[g.i_res[i]] = LV_RED
+            r.body.Push(i)
+            i = g.i_next[i]
+            continue
+        end
+        if isred:
+            mut rkx := 0
+            repeat r.rnext.Len() in kx:
+                if r.rnext[kx] == i:
+                    rkx = r.rkind[kx]
+                end
+            end
+            if rkx >= 5:
+                if lv_cls(r, g.i_a[i]) != LV_VEC or not lv_set_lane(r, 1):
+                    ret false
+                end
+                r.cls[g.i_res[i]] = LV_RED
+                r.body.Push(i)
+                i = g.i_next[i]
+                continue
+            end
+            mut xv := 0 - 1
+            each rp2 in r.reds:
+                if g.i_op[i] == OP_SELECT:
+                    if g.i_b[i] == g.i_res[rp2]:
+                        xv = g.i_c[i]
+                    else g.i_c[i] == g.i_res[rp2]:
+                        xv = g.i_b[i]
+                    end
+                else g.i_a[i] == g.i_res[rp2]:
+                    xv = g.i_b[i]
+                else g.i_b[i] == g.i_res[rp2]:
+                    xv = g.i_a[i]
+                end
+            end
+            if xv < 0 or not lv_data_ok(g, r, xv) or g.v_ty[xv] != g.i_ty[i] or not lv_set_lane(
+                r, lv_lane_of(g.i_ty[i])
+            ):
+                ret false
+            end
+            r.cls[g.i_res[i]] = LV_RED
+            r.body.Push(i)
+            i = g.i_next[i]
+            continue
+        end
+        if not lv_classify(g, r, i):
+            ret false
+        end
+        r.body.Push(i)
+        i = g.i_next[i]
+    end
+    if r.lane == 0:
+        ret false
+    end
+    r.wide = g.avx2 and not g.off_avx2 and g.arch == NG_ARCH_X64 and lv_wide_ok(g, r)
+    r.vf = (r.wide ? 32 : 16) / r.lane
+    if r.lane <= 2 and r.reds.Len() > 0:
+        each rk in r.rkind:
+            if rk < 5 or r.lane != 1:
+                ret false
+            end
+        end
+    end
+    each ld in r.loads:
+        if g.i_ty[ld] == T_I16 and r.cls[g.i_res[ld]] == LV_SKIP and r.lane != 4:
+            ret false
+        end
+        if g.i_ty[ld] == T_I8:
+            lr := g.i_res[ld]
+            if r.lane == 1:
+                if r.cls[lr] != LV_VEC:
+                    ret false
+                end
+            else (r.lane != 4 and r.nw != 16) or g.v_uses[lr] < 1:
+                ret false
+            end
+        end
+    end
+    each b0 in r.body:
+        res := g.i_res[b0]
+        if res >= 0 and r.cls[res] == LV_IDX and g.v_ty[res] == T_I1:
+            ret false
+        end
+    end
+    if not lv_uses_ok(g, r):
+        ret false
+    end
+    if r.nw > 0 and not lv_ncheck(g, r):
+        ret false
+    end
+    ret lv_outside_ok(g, r) and lv_mem_ok(g, r)
+end
+
+func lv_uses_ok(g &: Ng, r &: Lv): bool:
+    each i in r.body:
+        op := g.i_op[i]
+        m := val_mask(op)
+        mut k := 0
+        until k < 3:
+            mut v := 0 - 1
+            if k == 0 and (m & 1) != 0: v = g.i_a[i] end
+            if k == 1 and (m & 2) != 0: v = g.i_b[i] end
+            if k == 2 and (m & 4) != 0: v = g.i_c[i] end
+            if v >= 0 and lv_in(g, r, v):
+                c := lv_cls(r, v)
+                if c == LV_RIDX:
+                    rc := g.i_res[i] >= 0 ? lv_cls(r, g.i_res[i]) : LV_NONE
+                    if not ((op == OP_ADDR and k == 1 and rc == LV_RADDR) or rc == LV_RIDX):
+                        ret false
+                    end
+                else c == LV_RADDR:
+                    if not ((op == OP_LOAD and k == 0) or (op == OP_STORE and k == 1)):
+                        ret false
+                    end
+                else c == LV_SKIP:
+                    if op != OP_ZEXT and op != OP_SEXT:
+                        ret false
+                    end
+                else c == LV_IDX or v == g.i_res[r.ivp] or v == g.i_res[r.ivn]:
+                    idx_use := (op == OP_ADDR and k == 1) or op == OP_SEXT or op == OP_ZEXT or
+                        op == OP_TRUNC or ((op == OP_ADD or op == OP_SUB) and lv_cls(
+                            r, g.i_res[i]
+                        ) == LV_IDX)
+                    data_use := lv_idx_data(g, r, v) and
+                        ((op == OP_STORE and k == 0) or (g.i_res[i] >= 0 and lv_cls(
+                            r, g.i_res[i]
+                        ) == LV_VEC))
+                    if (not idx_use or lv_cls(r, g.i_res[i]) == LV_VEC) and not data_use:
+                        ret false
+                    end
+                else c == LV_NARROW:
+                    if not (op == OP_STORE and k == 0):
+                        ret false
+                    end
+                else c == LV_ADDR:
+                    if not ((op == OP_LOAD and k == 0) or (op == OP_STORE and k == 1)):
+                        ret false
+                    end
+                else c == LV_RED:
+                    mut own := false
+                    each rn in r.rnext:
+                        if rn == i:
+                            own = true
+                        end
+                    end
+                    each rc1 in r.rcmp:
+                        if rc1 == i:
+                            own = true
+                        end
+                    end
+                    if not own:
+                        ret false
+                    end
+                else c != LV_VEC and c != LV_HOIST:
+                    ret false
+                end
+            end
+            k++
+        end
+    end
+    ret true
+end
+
+func lv_sel_only(g &: Ng, r &: Lv, v: int): bool:
+    mut n := 0
+    each i in r.body:
+        m := val_mask(g.i_op[i])
+        if (m & 2) != 0 and g.i_b[i] == v: ret false end
+        if (m & 4) != 0 and g.i_c[i] == v: ret false end
+        if (m & 1) != 0 and g.i_a[i] == v:
+            if g.i_op[i] != OP_SELECT:
+                ret false
+            end
+            n++
+        end
+    end
+    ret n > 0
+end
+
+func lv_dm_cmp(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1 or not lv_in(g, r, v):
+        ret false
+    end
+    d := g.v_def[v]
+    p := g.i_x[d]
+    ret g.i_op[d] == OP_ICMP and (p == CC_NE or p == CC_SGE or p == CC_SLE)
+end
+
+func lv_dm(g &: Ng, r &: Lv, i: int): bool:
+    op := g.i_op[i]
+    if g.off_vdemor or (op != OP_AND and op != OP_OR) or g.i_ty[i] != T_I1 or g.i_res[i] < 0:
+        ret false
+    end
+    a := g.i_a[i]
+    b := g.i_b[i]
+    ret a != b and lv_dm_cmp(g, r, a) and lv_dm_cmp(g, r, b) and lv_sel_only(g, r, g.i_res[i])
+end
+
+func lv_dm_user(g &: Ng, r &: Lv, v: int): bool:
+    each i in r.body:
+        if (g.i_a[i] == v or g.i_b[i] == v) and (g.i_op[i] == OP_AND or g.i_op[i] == OP_OR):
+            ret lv_dm(g, r, i)
+        end
+    end
+    ret false
+end

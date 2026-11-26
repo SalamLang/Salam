@@ -1,0 +1,142 @@
+package nativegen
+
+func dv_copy_list(g &: Ng, from: int, head &: int, tail &: int):
+    mut m := from
+    until m >= 0:
+        dv_mark(g, head, tail, g.mk_fv[m], g.mk_k[m], g.mk_p[m], g.mk_x[m])
+        m = g.mk_next[m]
+    end
+end
+
+func dv_join(g &: Ng, a: int, b: int): int:
+    if a < 0:
+        ret b
+    end
+    if b < 0:
+        ret a
+    end
+    mut head := 0 - 1
+    mut tail := 0 - 1
+    dv_copy_list(g, a, head, tail)
+    dv_copy_list(g, b, head, tail)
+    ret head
+end
+
+func dv_is_type(g &: Ng, md: int): bool:
+    if md < 0 or md >= g.md_kind.Len():
+        ret false
+    end
+    k := g.md_kind[md]
+    ret k == 5 or k == 6 or k == 7
+end
+
+func dv_ref(g &: Ng, t &: DvTypes, di &: Vector<u8>, md: int):
+    key := dv_is_type(g, md) ? md : 0 - 2
+    t.fx_pos.Push(di.Len())
+    t.fx_md.Push(key)
+    vb_le(di, 0 as i64, 4)
+    if not t.tmap.Has(key):
+        t.wl.Push(key)
+    end
+end
+
+func dv_write_type(g &: Ng, t &: DvTypes, di &: Vector<u8>, md: int):
+    if t.tmap.Has(md):
+        ret
+    end
+    t.tmap.Put(md, di.Len())
+    if md < 0:
+        vb_uleb(di, 6 as i64)
+        vb_str(di, "void")
+        vb_uleb(di, 0 as i64)
+        di.Push(7 as u8)
+        ret
+    end
+    k := g.md_kind[md]
+    if k == 5:
+        vb_uleb(di, 6 as i64)
+        vb_str(di, g.md_s1[md])
+        bs := g.md_sz[md] / 8
+        vb_uleb(di, (bs > 0 ? bs : 1) as i64)
+        di.Push(g.md_a[md] as u8)
+        ret
+    end
+    if k == 6 and g.md_tag[md] == 0x0f:
+        if g.md_t[md] < 0:
+            vb_uleb(di, 8 as i64)
+            vb_uleb(di, 8 as i64)
+        else:
+            vb_uleb(di, 7 as i64)
+            vb_uleb(di, 8 as i64)
+            dv_ref(g, t, di, g.md_t[md])
+        end
+        ret
+    end
+    if k == 7 and g.md_tag[md] == 0x13:
+        vb_uleb(di, 9 as i64)
+        vb_str(di, g.md_s1[md])
+        vb_uleb(di, (g.md_sz[md] / 8) as i64)
+        el := g.md_el[md]
+        if el >= 0 and el < g.md_kind.Len() and g.md_kind[el] == 9:
+            repeat g.md_ln[el] in q:
+                m := g.md_pool[g.md_l0[el] + q]
+                if m >= 0 and m < g.md_kind.Len() and g.md_kind[m] == 6 and g.md_tag[m] == 0x0d:
+                    vb_uleb(di, 10 as i64)
+                    vb_str(di, g.md_s1[m])
+                    dv_ref(g, t, di, g.md_t[m])
+                    vb_uleb(di, (g.md_off[m] / 8) as i64)
+                end
+            end
+        end
+        di.Push(0 as u8)
+        ret
+    end
+    if k == 7 and g.md_tag[md] == 0x04:
+        vb_uleb(di, 23 as i64)
+        vb_str(di, g.md_s1[md])
+        vb_uleb(di, (g.md_sz[md] / 8) as i64)
+        el3 := g.md_el[md]
+        if el3 >= 0 and el3 < g.md_kind.Len() and g.md_kind[el3] == 9:
+            repeat g.md_ln[el3] in q3:
+                m3 := g.md_pool[g.md_l0[el3] + q3]
+                if m3 >= 0 and m3 < g.md_kind.Len() and g.md_kind[m3] == 12:
+                    vb_uleb(di, 24 as i64)
+                    vb_str(di, g.md_s1[m3])
+                    vb_sleb(di, g.md_a[m3] as i64)
+                end
+            end
+        end
+        di.Push(0 as u8)
+        ret
+    end
+    if k == 7 and g.md_tag[md] == 0x01:
+        vb_uleb(di, 11 as i64)
+        dv_ref(g, t, di, g.md_t[md])
+        el2 := g.md_el[md]
+        mut cnt := 0
+        if el2 >= 0 and el2 < g.md_kind.Len() and g.md_kind[el2] == 9 and g.md_ln[el2] > 0:
+            sr := g.md_pool[g.md_l0[el2]]
+            if sr >= 0 and sr < g.md_kind.Len() and g.md_kind[sr] == 8:
+                cnt = g.md_a[sr]
+            end
+        end
+        vb_uleb(di, 12 as i64)
+        vb_uleb(di, cnt as i64)
+        di.Push(0 as u8)
+        ret
+    end
+    vb_uleb(di, 6 as i64)
+    vb_str(di, g.md_s1[md])
+    vb_uleb(di, (g.md_sz[md] / 8) as i64)
+    di.Push(7 as u8)
+end
+
+func dv_types_flush(g &: Ng, t &: DvTypes, di &: Vector<u8>):
+    until t.wl.Len() > 0:
+        md := t.wl.Pop()
+        dv_write_type(g, t, di, md)
+    end
+    repeat t.fx_pos.Len() in i:
+        vb_put32(di, t.fx_pos[i], t.tmap.Get(t.fx_md[i]) as i64)
+    end
+end

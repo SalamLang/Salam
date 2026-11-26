@@ -1,0 +1,152 @@
+package nativelink
+
+func pdb_hash_bytes(p: Vector<u8>, s: int, n: int): i64:
+    mut r := 0 as i64
+    mut i := s
+    e := s + n
+    until i + 4 <= e:
+        r ^= ((p[i] as i64) | ((p[i + 1] as i64) << (8 as i64)) | ((p[i +
+            2] as i64) << (16 as i64)) | ((p[i + 3] as i64) << (24 as i64)))
+        i += 4
+    end
+    if e - i >= 2:
+        r ^= ((p[i] as i64) | ((p[i + 1] as i64) << (8 as i64)))
+        i += 2
+    end
+    if e - i == 1:
+        r ^= (p[i] as i64)
+    end
+    r |= (0x20202020 as i64)
+    r ^= (r >> (11 as i64))
+    ret (r ^ (r >> (16 as i64))) & (0xFFFFFFFF as i64)
+end
+
+func pdb_hash_name(l &: Nl, id: int): i64:
+    ret pdb_hash_bytes(l.names.bytes, l.names.off[id], l.names.len[id])
+end
+
+func pdb_put_name(l &: Nl, o &: Vector<u8>, id: int):
+    p := l.names.off[id]
+    repeat l.names.len[id] in i:
+        o.Push(l.names.bytes[p + i])
+    end
+    o.Push(0 as u8)
+end
+
+func pdb_pad4(o &: Vector<u8>):
+    until o.Len() % 4 != 0:
+        o.Push(0 as u8)
+    end
+end
+
+func pdb_put16(o &: Vector<u8>, at: int, v: int):
+    o[at] = (v & 255) as u8
+    o[at + 1] = ((v >> 8) & 255) as u8
+end
+
+func pdb_put32(o &: Vector<u8>, at: int, v: i64):
+    repeat 4 in k:
+        o[at + k] = ((v >> ((8 * k) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func pdb_get32(o &: Vector<u8>, at: int): i64:
+    ret (o[at] as i64) | ((o[at + 1] as i64) << (8 as i64)) | ((o[at +
+        2] as i64) << (16 as i64)) | ((o[at + 3] as i64) << (24 as i64))
+end
+
+func pdb_stream(m &: Pdb, v &: Vector<u8>): int:
+    m.soff.Push(m.sdata.Len())
+    m.slen.Push(v.Len())
+    each b in v:
+        m.sdata.Push(b)
+    end
+    ret m.soff.Len() - 1
+end
+
+func pdb_stream_set(m &: Pdb, ix: int, v &: Vector<u8>):
+    m.soff[ix] = m.sdata.Len()
+    m.slen[ix] = v.Len()
+    each b in v:
+        m.sdata.Push(b)
+    end
+end
+
+func pdb_name_off(l &: Nl, m &: Pdb, id: int): int:
+    if m.nm_off.Has(id):
+        ret m.nm_off.Get(id)
+    end
+    if m.nm_bytes.Len() == 0:
+        m.nm_bytes.Push(0 as u8)
+    end
+    at := m.nm_bytes.Len()
+    pdb_put_name(l, m.nm_bytes, id)
+    m.nm_off.Put(id, at)
+    m.nm_id.Push(id)
+    ret at
+end
+
+func pdb_strtab(l &: Nl, ids: Vector<int>, offs: HashMap<int, int>, data: Vector<u8>): Vector<u8>:
+    mut o := Vector {} as Vector<u8>
+    tb_le(o, 0xEFFEEFFE as i64, 4)
+    tb_le(o, 1 as i64, 4)
+    mut body := Vector {} as Vector<u8>
+    each b in data:
+        body.Push(b)
+    end
+    if body.Len() == 0:
+        body.Push(0 as u8)
+    end
+    pdb_pad4(body)
+    tb_le(o, body.Len() as i64, 4)
+    each b2 in body:
+        o.Push(b2)
+    end
+    nb := ids.Len() * 2 + 1
+    mut bk := Vector {} as Vector<int>
+    repeat nb:
+        bk.Push(0)
+    end
+    each id in ids:
+        mut j := (pdb_hash_name(l, id) % (nb as i64)) as int
+        until bk[j] != 0:
+            j = (j + 1) % nb
+        end
+        bk[j] = offs.Get(id)
+    end
+    tb_le(o, nb as i64, 4)
+    each x in bk:
+        tb_le(o, x as i64, 4)
+    end
+    tb_le(o, ids.Len() as i64, 4)
+    body.Free()
+    bk.Free()
+    ret o
+end
+
+func pdb_cv_bytes(l &: Nl, t &: Pe, s: int): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    p := fptr(l, l.o_file[l.s_obj[s]])
+    repeat l.s_size[s] in b:
+        v.Push(p[l.s_off[s] + b])
+    end
+    r0 := l.s_rel0[s]
+    repeat l.s_nrel[s] in q:
+        r := r0 + q
+        ty := pe_rtype(l, l.r_type[r] - CR_BASE)
+        os := l.r_sym[r]
+        at := l.r_off[r] as int
+        ts := sym_sec_of(l, os)
+        if ts < 0 or l.s_oc[ts] < 0 or l.s_oc[ts] >= PS_COUNT:
+            continue
+        end
+        if ty == 11:
+            pdb_put32(v, at, pe_sym(l, os) + pdb_get32(v, at) - (l.pe_base + t.ps_va[l.s_oc[ts]]))
+        else ty == 3:
+            pdb_put32(v, at, pe_sym(l, os) + pdb_get32(v, at) - l.pe_base)
+        else ty == 10:
+            pdb_put16(v, at, pe_secidx(t, l.s_oc[ts]))
+        end
+    end
+    ret v
+end

@@ -48,7 +48,7 @@ check, give the releases page and name the asset to download.
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Compiler      | Linux `x86_64` and `aarch64`: `.tar.gz`, `.zip`, `.deb`, `.rpm`; Linux `i686`: `.tar.gz`, `.zip`, `.deb` (no rpm); Linux `x86_64-musl` (Alpine): `.tar.gz`, `.zip` (no deb/rpm); `macos-arm64`, `windows-x86_64`, `windows-arm64`, `windows-i686`: `.tar.gz` and `.zip`                                                         |
 | Desktop agent | Windows `x86_64` and `i686`: `-setup.exe`, `.msi`, portable `.exe`; Windows `aarch64`: `-setup.exe` and portable `.exe` (no msi); macOS: `-macos-universal.dmg`, `-macos-arm64.dmg`, `-macos-x86_64.dmg`, plus `.zip`; Linux `x86_64` and `aarch64`: `.AppImage`, `.deb`, `.rpm`; Linux `i686`: `.deb` and `.rpm` (no AppImage) |
-| Android       | `salam-<version>-android-universal.apk`, in the release tagged `android-v<version>` for newer versions (older ones carry it in `v<version>` or skip it); check the assets first and point to the releases page when it is absent (v0.6.2 has no APK)                                                                                                                        |
+| Android       | `salam-<version>-android-universal.apk`, in the release tagged `android-v<version>` for newer versions (older ones carry it in `v<version>` or skip it); check the assets first and point to the releases page when it is absent (v0.6.2 has no APK)                                                                            |
 
 Every published file has a `.sha256` beside it; the agent release also carries
 `salam-agent-<version>-SHA256SUMS` and `-SHA512SUMS`. A format or architecture
@@ -65,15 +65,15 @@ Salam is much larger than "a compiler that writes executables". When a task
 looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
 
 - **Commands** (`salam help` prints every one): `build`, `check`, `test`,
-  `obj`, `llvm`, `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`,
+  `obj`, `llvm`, `serve`, `bundle`, `run`, `exec`, `new`, `init`,
   `add`, `remove`, `update`, `deps`, `install`, `uninstall`, `search`,
-  `format`, `doc`, `translate`, `sql check`, `sql generate`, `page build`,
+  `format`, `doc`, `translate`, `sql check`, `sql generate`, `page` (REPL),
   `debug`, `memcheck`, `inspect`, `cli` (REPL), `upgrade`, `upgrade-std` (std/ only), `version`.
 - **Backends and targets**: the C backend is the default for `build`, `run`
   and `obj` and cross-compiles with `--target=<triple>`; `salam llvm` emits
   LLVM IR (`--backend=llvm` builds with it, 32-bit aware, `docs/PLATFORMS.md`);
   `--target=wasm32-wasi` produces WebAssembly (Cloudflare Workers below);
-  `salam js` and `salam web` target browsers; `--target=<arch>-unknown-none`
+  `salam build --platform=js` and `--platform=web` target browsers; `--target=<arch>-unknown-none`
   with `--entry`, `--linker-script` and `--link-object` builds freestanding
   kernels (`docs/FREESTANDING.md`, `tests/kernel`).
 - **Apps beyond the terminal**: `gui.webview` opens a native window with a web
@@ -144,7 +144,7 @@ cannot call them itself: the host `worker.js` must exchange that data with the
 program. There is no filesystem, and no outbound sockets, so `http.Get` and
 friends cannot call another server from inside the module. A program that must
 call out does it with a few lines of `fetch` in `worker.js`, or runs on a
-native host. `salam js` targets browsers, not a Worker module.
+native host. `salam build --platform=js` targets browsers, not a Worker module.
 
 Working, CI-built examples: `tests/en/apps/cloudflare-worker-router` (router,
 middleware, cookies, JSON), `-hello` (smallest), `-pure` (a plain program run
@@ -720,7 +720,7 @@ components/shop/badge.salam
 lib/format.salam        used only with include = "lib/format.salam"
 ```
 
-`salam page build --ssr[=DIR]` writes a native `DIR/server` and `DIR/public`;
+`salam build --platform=web --ssr[=DIR]` writes a native `DIR/server` and `DIR/public`;
 `PORT` and `HOST` configure it, and `salam serve --render` rebuilds on save.
 
 `server func F(x: T): R:` runs only on the front server and calls the backend
@@ -734,9 +734,9 @@ true`; a static build that reaches one is E289 unless the page sets `server =
 ## 14. UI: one `page:` language for web, desktop, Android and iOS
 
 For any UI (page, button, form, card, dashboard, app) write a `page:` block,
-never HTML, CSS or platform code. The same file: `salam page build p.salam`
-(web), `salam run p.salam --ui=native` (desktop window), `salam app android
-p.salam --out out` (APK), `salam app ios p.salam --out out`; check what a
+never HTML, CSS or platform code. The same file: `salam build p.salam --platform=web`
+(web), `salam run p.salam --ui=native` (desktop window), `salam build
+--platform=android p.salam -o out` (APK), `salam build --platform=ios p.salam -o out`; check what a
 window cannot show with `salam check p.salam --ui=native`. Attributes are
 `name = value` lines, element and attribute names may contain spaces and have
 English and Persian spellings (`design tokens`, `card header`, `طراحی`), and
@@ -774,8 +774,8 @@ CONTRIBUTING.md has the full list.
 These are real defects and sharp edges in the current toolchain, not style
 advice. Each one silently produces wrong behaviour rather than a diagnostic.
 
-- **`size(T)` is the size of a type; `sizeof(T)` is the old name.** It still
-  compiles and warns W295. A function of your own named `size` wins.
+- **`size(T)` is the size of a type in bytes.** A function of your own named
+  `size` wins, except for built-in type names such as `size(i32)`.
 - **Do not rule something out because you have not seen it.** The repository
   ships working apps under `tests/en/apps/` and `tests/fa/apps/` (Cloudflare
   Workers, HTTP servers, desktop, games, and more), all built by CI, and the
@@ -787,7 +787,7 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
 - **The version command is `salam version`.** `salam --version` and `-v`
   print the same thing, and `salam version --short` prints just the number.
 
-- **JavaScript 64-bit integers are exact only up to 2^53.** `salam js` stores
+- **JavaScript 64-bit integers are exact only up to 2^53.** `salam build --platform=js` stores
   `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
   wraparound and casts are computed exactly, but a result (or an intermediate
   value) beyond 2^53 is rounded: `0 - 1` as `u64` prints

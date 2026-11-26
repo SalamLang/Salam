@@ -291,8 +291,12 @@ salam exec                  # interpret the project here
 - The default executable name for a project is its **directory name**
   (`myproject`, or `myproject.exe` on Windows), not `main`.
 - `salam new <name>` creates `<name>/` with `main.salam`, `salam.toml` and a
-  `.gitignore`. `salam init [dir]` does the same in an existing directory
-  and never overwrites a file that is already there. In a terminal `init` asks
+  `.gitignore`. `salam init [dir]` writes a project into `dir` (the current
+  folder by default) when it is empty; `.git`, `.gitignore`, `.DS_Store`,
+  `README*` and `LICENSE*` (the last two in any letter case) do not count, and an
+  existing file is kept. When it holds any
+  other file or folder, the project goes into a new subfolder named after the project, and
+  `init` stops if that subfolder is already in use. In a terminal `init` asks
   what you are making: the project name, an optional description, the type
   (`cli`, `http` or `dsl`, the Salam page language), the platforms (`web`,
   `android`, `ios`, `linux`, `macos`, `windows`, or all), the design system
@@ -311,17 +315,15 @@ salam exec                  # interpret the project here
   platform), `salam build` builds it, and `--platform=web|js|android|ios|linux|macos|windows|all`
   picks another target. `--platform=linux|macos|windows` and `--arch=x86_64|aarch64|i686|arm|riscv64`
   build for another OS or CPU without spelling the whole `--target=` triple (either one alone
-  keeps the other from this machine). `salam js`, `salam web`, `salam page build` and
-  `salam app` still work and are what these commands call.
+  keeps the other from this machine).
 
 Frontend (layout DSL) projects have no `main` function; there `main.salam`
 is the project page:
 
 ```sh
-salam web                   # build the page project here: main.salam if
-                            # present, else the single .salam page
-salam page build            # main.salam if present, else EVERY layout
-                            # page in the directory (multi-page site)
+salam build --platform=web   # build the page project here: main.salam if
+                             # present, else EVERY layout page in the
+                             # directory (multi-page site)
 ```
 
 A `main.salam` layout page compiles to `index.html` (the web server entry
@@ -597,8 +599,7 @@ salam build page.salam --platform=web --inline
 salam build . --platform=web
 ```
 
-`salam page build` is the older spelling of the same build. It also takes
-several files (`salam page build a.salam b.salam`) and the `--ssr` option.
+The build also takes the `--ssr` option for a server rendered site.
 
 A page is a tree of elements with `name = value` attributes:
 

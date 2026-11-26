@@ -37,16 +37,16 @@ full path.
 
 ## Commands
 
-| Key       | Command                      | What it does                                   |
-| --------- | ---------------------------- | ---------------------------------------------- |
-| `C-c C-r` | `salam-run`                  | Run the project (`salam run`) or the file      |
-| `C-c C-b` | `salam-build`                | `salam build` for the project or the file      |
-| `C-c C-c` | `salam-check`                | Type-check without running                     |
-| `C-c C-f` | `salam-format-buffer`        | Reformat, keeping point                        |
-| `C-c C-p` | `salam-select-platform`      | Choose the platform for run and build          |
-| `C-c C-n` | `salam-new-project`          | Run the `salam init` wizard in a terminal      |
-| `C-c C-u` | `salam-goto-enclosing-block` | Jump to the enclosing block (prefix: further)  |
-| `C-c C-j` | `salam-pick-block`           | Choose one of the enclosing blocks to jump to  |
+| Key       | Command                      | What it does                                  |
+| --------- | ---------------------------- | --------------------------------------------- |
+| `C-c C-r` | `salam-run`                  | Run the project (`salam run`) or the file     |
+| `C-c C-b` | `salam-build`                | `salam build` for the project or the file     |
+| `C-c C-c` | `salam-check`                | Type-check without running                    |
+| `C-c C-f` | `salam-format-buffer`        | Reformat, keeping point                       |
+| `C-c C-p` | `salam-select-platform`      | Choose the platform for run and build         |
+| `C-c C-n` | `salam-new-project`          | Run the `salam init` wizard in a terminal     |
+| `C-c C-u` | `salam-goto-enclosing-block` | Jump to the enclosing block (prefix: further) |
+| `C-c C-j` | `salam-pick-block`           | Choose one of the enclosing blocks to jump to |
 
 `salam-run`, `salam-build` and `salam-check` go through `compile`, so `C-x \``
 walks the errors.

@@ -160,7 +160,7 @@ Streaming and incremental regeneration are out of the first version.
 
 ## Generated server
 
-`salam page build --ssr` compiles the project twice. The first run is the web
+`salam build --platform=web --ssr` compiles the project twice. The first run is the web
 build (shell HTML with `<!--salam:N--><!--/salam:N-->` regions, CSS, bundle)
 into `dist/public`. The second run lowers the same page AST for a native
 program: `ExpandPage`, `PrepareWebState`, `PrepareViews`, then
@@ -248,8 +248,8 @@ rows with per row state on the server (they are filled by the bundle).
 
 | command | result |
 | --- | --- |
-| `salam page build` | static site, as today |
-| `salam page build --ssr[=DIR] [project]` | `DIR/server` (a native executable made from the page AST lowered for the server: router, guards, renderers) and `DIR/public` (bundle, CSS, assets, prerendered pages for routes with no parameters and no guard); `DIR` defaults to `dist` |
+| `salam build --platform=web` | static site, as today |
+| `salam build --platform=web --ssr[=DIR] [project]` | `DIR/server` (a native executable made from the page AST lowered for the server: router, guards, renderers) and `DIR/public` (bundle, CSS, assets, prerendered pages for routes with no parameters and no guard); `DIR` defaults to `dist` |
 | `salam serve --render [project] [--port=N] [--host=H]` | builds into a scratch directory, runs the server, rebuilds on save and swaps the server; the browser is not reloaded yet |
 
 Writing the output folder. `--ssr=DIR` builds into `DIR.tmp` and swaps it in
@@ -297,7 +297,7 @@ before function bodies are checked.
 | output | what `F` becomes |
 | --- | --- |
 | server program (default, `--ssr` server) | `F` unchanged, plus a generated wrapper per function and `__salam_register_server_funcs()` |
-| web (`salam page build`, `salam web`, `salam js`) | `F` keeps its signature; its body is replaced by a stub that posts to the server |
+| web (`salam build --platform=web` and `--platform=js`) | `F` keeps its signature; its body is replaced by a stub that posts to the server |
 | native page (`ui_target` native) | same stub, using `net/ssrclient` (HTTP client) |
 
 Server side. For every server func the compiler adds, as ordinary checked
@@ -356,7 +356,7 @@ the language yet; when it is, it wraps the same stub.
   keystroke or per frame.
 - E286: a definition that stays in the web program and uses a member of `env`
   or `ssr` (`env.Get`, `ssr.Request`) is an error naming that member.
-- E289: a static web build (`salam page build` without a `server` setting)
+- E289: a static web build (`salam build --platform=web` without a `server` setting)
   whose page, handlers or helpers mention a server func is an error. The
   `--ssr` build leaves the check off.
 
@@ -387,7 +387,7 @@ the language yet; when it is, it wraps the same stub.
 
 1. `server func` parse and checks (E285, E287, E288), no output change yet.
 2. Server side runtime package `net/ssr`: registry, endpoints, token, `request()`, `env`.
-3. `salam page build --ssr`: generated server, render per route, guards, 404 (done).
+3. `salam build --platform=web --ssr`: generated server, render per route, guards, 404 (done).
 4. Stubs: JS stub and native stub; `load(...)` integration; E286, W280.
 5. Hydration: embedded state, call cache keys, per scope warning (done).
 6. `salam serve --render` with rebuild (done, no browser reload); docs and website pages (en and fa).

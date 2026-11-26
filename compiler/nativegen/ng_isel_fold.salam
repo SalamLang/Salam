@@ -1,0 +1,226 @@
+package nativegen
+
+func lf_mem(g &: Ng, v: int): int:
+    if v < 0 or v >= g.lfold.Len():
+        ret 0 - 1
+    end
+    ret g.lfold[v]
+end
+
+func lf_other_ok(g &: Ng, v: int): bool:
+    ret v >= 0 and (g.v_kind[v] == VK_INS or g.v_kind[v] == VK_ARG)
+end
+
+func rmw_other_ok(g &: Ng, o: int): bool:
+    if o < 0:
+        ret false
+    end
+    if g.v_kind[o] == VK_INT:
+        ret is_imm32(g.v_i[o])
+    end
+    if not lf_other_ok(g, o) or lf_mem(g, o) >= 0:
+        ret false
+    end
+    if g.v_kind[o] == VK_INS:
+        d := g.v_def[o]
+        if g.skipi[d]:
+            ret false
+        end
+        if (g.i_op[d] == OP_MUL or g.i_op[d] == OP_SHL) and lea_mul_k(g, d) >= 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func rmw_store(g &: Ng, i: int, opi &: int, ov &: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if g.off_rmw or r < 0 or g.v_uses[r] != 1 or is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 4 and sz != 8:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    mut o := 0 - 1
+    repeat 16:
+        if j < 0:
+            ret 0 - 1
+        end
+        if g.i_a[j] == r or g.i_b[j] == r:
+            break
+        end
+        if writes_mem(g.i_op[j]):
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+    end
+    if j < 0 or g.i_a[j] == g.i_b[j]:
+        ret 0 - 1
+    end
+    op := g.i_op[j]
+    jr := g.i_res[j]
+    if g.i_ty[j] != t or jr < 0 or g.v_uses[jr] != 1:
+        ret 0 - 1
+    end
+    if op == OP_SUB:
+        if g.i_a[j] != r:
+            ret 0 - 1
+        end
+        o = g.i_b[j]
+    else op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR:
+        o = g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+    else:
+        ret 0 - 1
+    end
+    if not rmw_other_ok(g, o):
+        ret 0 - 1
+    end
+    mut k := g.i_next[j]
+    repeat 16:
+        if k < 0:
+            ret 0 - 1
+        end
+        if g.i_op[k] == OP_STORE and g.i_a[k] == jr:
+            if g.i_b[k] != g.i_a[i] or (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                ret 0 - 1
+            end
+            opi = j
+            ov = o
+            ret k
+        end
+        if writes_mem(g.i_op[k]):
+            ret 0 - 1
+        end
+        k = g.i_next[k]
+    end
+    ret 0 - 1
+end
+
+func load_fold_user(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if r < 0 or g.v_uses[r] != 1 or is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    small := sz == 1 and t != T_I1 and not g.off_bcmp
+    if sz != 4 and sz != 8 and not small:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 12:
+        if j < 0:
+            ret 0 - 1
+        end
+        op := g.i_op[j]
+        if g.i_a[j] == r or g.i_b[j] == r:
+            if g.skipi[j]:
+                ret 0 - 1
+            end
+            if small and
+                not (op == OP_ICMP and g.i_a[j] == r and g.i_b[j] >= 0 and
+                    g.v_kind[g.i_b[j]] == VK_INT):
+                zo := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if g.off_zxcmp or g.arch != NG_ARCH_X64 or op != OP_ICMP or g.i_a[j] == g.i_b[j] or
+                    not lf_other_ok(g, zo):
+                    ret 0 - 1
+                end
+            end
+            if g.i_ty[j] == t and (op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR):
+                o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if o != r and lf_other_ok(g, o) and g.i_res[j] >= 0:
+                    ret j
+                end
+                ret 0 - 1
+            end
+            if op == OP_SUB and g.i_b[j] == r and g.i_a[j] != r and lf_other_ok(g, g.i_a[j]):
+                ret j
+            end
+            if op == OP_ICMP and g.i_a[j] != g.i_b[j]:
+                o2 := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if not lf_other_ok(g, o2) and
+                    not (o2 >= 0 and g.v_kind[o2] == VK_INT and is_imm32(g.v_i[o2])):
+                    ret 0 - 1
+                end
+                cr := g.i_res[j]
+                if cr < 0 or g.v_uses[cr] != 1:
+                    ret 0 - 1
+                end
+                mut k := g.i_next[j]
+                repeat 12:
+                    if k < 0:
+                        ret 0 - 1
+                    end
+                    if g.i_a[k] == cr and (g.i_op[k] == OP_CBR or g.i_op[k] == OP_SELECT):
+                        ret j
+                    end
+                    if writes_mem(g.i_op[k]):
+                        ret 0 - 1
+                    end
+                    k = g.i_next[k]
+                end
+                ret 0 - 1
+            end
+            ret 0 - 1
+        end
+        if writes_mem(op):
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func load_ext_user(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if r < 0 or g.v_uses[r] != 1 or t == T_I1:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 1 and sz != 2 and sz != 4:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret 0 - 1
+        end
+        op := g.i_op[j]
+        if (op == OP_SEXT or op == OP_ZEXT) and g.i_a[j] == r:
+            if op == OP_SEXT and sz == 4 and asz(g, g.i_ty[j]) != 8:
+                ret 0 - 1
+            end
+            ret j
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func load_sext_shared(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] < 2 or msz(g, g.i_ty[i]) != 4 or g.i_ty[i] == T_I1:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 8:
+        if j < 0:
+            ret 0 - 1
+        end
+        if g.i_op[j] == OP_SEXT and g.i_a[j] == r and asz(g, g.i_ty[j]) == 8:
+            ret j
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end

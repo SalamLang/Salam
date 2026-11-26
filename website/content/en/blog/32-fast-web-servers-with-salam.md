@@ -96,7 +96,7 @@ end
 
 func show(ctx: i64):
     middleware.Secure(ctx)
-    id := conv.AtoiOr(http.Param(ctx, "id"), 0 - 1)
+    id := conv.AtoiOr(http.Param(ctx, "id"), -1)
     each it in items:
         if it.id == id:
             http.Json(ctx, json.Marshal(it))

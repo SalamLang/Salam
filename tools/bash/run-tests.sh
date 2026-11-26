@@ -197,9 +197,11 @@ $cerrs"
         mkdir -p "$jobdir/kept/.git"
         : >"$jobdir/kept/readme.txt"
         : >"$jobdir/kept/LICENSE"
+        : >"$jobdir/kept/.gitignore"
+        : >"$jobdir/kept/.DS_Store"
         (cd "$jobdir/kept" && "$SALAM_ABS" init $flags --name=demo --lang="$lang" --no-color) >>"$buildlog" 2>&1 </dev/null
         if [ ! -f "$jobdir/kept/salam.toml" ] || [ -e "$jobdir/kept/demo" ]; then
-            echo "FAIL $label (init did not use a folder holding only .git, readme and license)"
+            echo "FAIL $label (init did not use a folder holding only ignored files)"
             sed 's/^/  /' "$buildlog" | head -20
             rm -rf "$jobdir"
             return

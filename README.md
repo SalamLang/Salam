@@ -260,8 +260,8 @@ end
 `.gitignore`; `salam new NAME --desktop` makes a desktop app with a web
 interface (see [docs/DESKTOP.md](docs/DESKTOP.md)). `salam init [DIR]` writes a
 project into DIR (the current folder by default) when it is empty; `.git`,
-`README*` and `LICENSE*` (in any letter case) do not count, and an existing file
-is kept. When it holds any other file or folder, the project goes into a new
+`.gitignore`, `.DS_Store`, `README*` and `LICENSE*` (the last two in any letter
+case) do not count, and an existing file is kept. When it holds any other file or folder, the project goes into a new
 subfolder named after the project. In a terminal `init` asks for the name, a description,
 the type (`cli`, `http` or `dsl`, the page language), the platforms, the design
 system (`shadcn` or `none`) and the web mode (`page`, `spa` or `ssr`), shows a

@@ -2935,7 +2935,7 @@ salam sql generate q --schema=db/ --output=gen/store.salam   # typed query funct
 salam new name                          # scaffold a project: name/main.salam + salam.toml
 salam serve [dir] [--port=N]            # serve a folder over HTTP
 salam serve --config=web.salam [--test] # several sites from one config (std/net/httpd); --test only checks it
-salam init                              # here if empty (.git, README*, LICENSE* ignored), else ./<name>
+salam init                              # here if empty (git files, .DS_Store, README, LICENSE ignored), else ./<name>
 salam new name --desktop                # a desktop app with a web interface (gui.webview, docs/DESKTOP.md)
 salam bundle [dir] [--target=T] [--format=a,b]  # installers from the [app] table of salam.toml
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too

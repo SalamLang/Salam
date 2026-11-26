@@ -292,8 +292,9 @@ salam exec                  # interpret the project here
   (`myproject`, or `myproject.exe` on Windows), not `main`.
 - `salam new <name>` creates `<name>/` with `main.salam`, `salam.toml` and a
   `.gitignore`. `salam init [dir]` writes a project into `dir` (the current
-  folder by default) when it is empty; `.git`, `README*` and `LICENSE*` (in any
-  letter case) do not count, and an existing file is kept. When it holds any
+  folder by default) when it is empty; `.git`, `.gitignore`, `.DS_Store`,
+  `README*` and `LICENSE*` (the last two in any letter case) do not count, and an
+  existing file is kept. When it holds any
   other file or folder, the project goes into a new subfolder named after the project, and
   `init` stops if that subfolder is already in use. In a terminal `init` asks
   what you are making: the project name, an optional description, the type

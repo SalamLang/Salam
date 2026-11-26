@@ -1,5 +1,4 @@
 import mem
-import sync
 import net.udp
 import net.udprelay
 import net.tcp
@@ -13,6 +12,7 @@ end
 struct Listener:
     pub control: i64 = -1
     pub port: int = 0
+    pub announce: i64 = -1
 end
 
 struct Pipes:
@@ -41,8 +41,28 @@ func listen(l: Listener*):
         l[0].port,
         "0123456789abcdef0123456789abcdef",
         l[0].control,
-        udprelay.ServerOptions { allow_loopback = true }
+        udprelay.ServerOptions { allow_loopback = true, announce_fd = l[0].announce }
     )
+end
+
+func announced(fd: i64): int:
+    buf := mem.AllocateZeroed(64 as u64) as u8*
+    mut got := 0
+    until got < 63 and (got == 0 or buf[got - 1] != (10 as u8)):
+        if fdio.PollRead(fd, 3000) <= 0:
+            break
+        end
+        got += fdio.ReadRaw(fd, ((buf as i64) + (got as i64)) as void*, 1)
+    end
+    mut port := 0
+    repeat got in i:
+        c := buf[i] as int
+        if c >= 48 and c <= 57:
+            port = port * 10 + (c - 48)
+        end
+    end
+    mem.Free(buf as void*)
+    ret port
 end
 
 func over_socket(relay: int, target: int, token: str):
@@ -136,14 +156,13 @@ func main():
     idle := udprelay.NewClient(process.NewCommand("/nonexistent/salam-udprelay"))
     println "send before ready", idle.Send(1, 1 as i64, 1, buf, 1), idle.Dropped()
     idle.Close()
-    free := tcp.BindOn("127.0.0.1", 0)
-    relay := tcp.Port(free)
-    tcp.CloseServer(free)
     control := fdio.MakePipe()
+    report := fdio.MakePipe()
     l := mem.AllocateZeroed(size(Listener) as u64) as Listener*
-    l[0] = Listener { control = control.r, port = relay }
+    l[0] = Listener { control = control.r, port = 0, announce = report.w }
     _l := spawn(listen, l)
-    sync.SleepMs(300)
+    relay := announced(report.r)
+    println "port announced", relay > 0
     over_socket(relay, port, "wrong-token-wrong-token-wrong-to")
     over_socket(relay, port, "0123456789abcdef0123456789abcdef")
     fdio.Close(control.w)

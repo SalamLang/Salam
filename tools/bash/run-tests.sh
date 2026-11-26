@@ -1192,6 +1192,8 @@ collect_example_dir() {
                 skip="requires live network; set SALAM_TEST_NETWORK=1"
             elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
                 skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
+            elif [ -f "$base.posix" ] && [ "$HOST_OS" = windows ]; then
+                skip="needs a POSIX host"
             elif [ -f "$base.x11" ] && ! x11_available; then
                 skip="needs an X server: set DISPLAY or install xvfb-run"
             fi

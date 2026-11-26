@@ -141,7 +141,8 @@ qemu-system-riscv64 -machine virt -bios none \
     -kernel tests/kernel/riscv64/kernel.elf -display none -serial stdio
 ```
 
-The output goes to the UART and `ExitQemu(0)` ends QEMU with exit status 0
+The boot stub turns on the FPU (`mstatus.FS`) before `main`, because the code
+generator uses the floating-point registers. The output goes to the UART and `ExitQemu(0)` ends QEMU with exit status 0
 (any other code `n` exits with status `n`).
 
 ## What is not there
@@ -149,7 +150,7 @@ The output goes to the UART and `ExitQemu(0)` ends QEMU with exit status 0
 Freestanding means the program owns the machine, so the parts of `std` that
 need an operating system are not usable: files, sockets, processes, threads,
 wall-clock time and most of `os`, `fs`, `net`, `db` and `gui`. `str`, `mem`,
-`conv`, `encoding` and the collection types work. `SALAM_KERNEL` removes the
+`conv`, `encoding` and the collection types work. Floats print and parse the same way as on a hosted target (shortest round-trip text), and the runtime supplies the 64-bit division helpers that 32-bit targets need. `SALAM_KERNEL` removes the
 parts of `std` that cannot build in a kernel.
 
 There is no interrupt, paging or device-management layer in the compiler. A

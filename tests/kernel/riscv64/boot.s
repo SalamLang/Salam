@@ -1,6 +1,6 @@
 /* Entry point for the riscv64 Salam kernel on the QEMU virt board.
  * QEMU starts every core at 0x80000000 in machine mode (-bios none).
- * Core 0 clears .bss, sets up a stack and calls the Salam main;
+ * Core 0 clears .bss, turns on the FPU, sets up a stack and calls the Salam main;
  * the other cores wait forever.
  */
 
@@ -27,6 +27,9 @@ _start:
     j 1b
 
 3:
+    li t0, 0x2000
+    csrs mstatus, t0
+    csrw fcsr, zero
     call main
 
 2:

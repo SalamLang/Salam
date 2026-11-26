@@ -312,6 +312,93 @@ if not SALAM_KERNEL:
         if ea < 10: ret es.Concat("0").Concat(en) end
         ret es.Concat(en)
     end
+
+    func _fixed_digit(bp: i8*, n: int, j: int): int:
+        if j < 0 or j >= n: ret 0 end
+        ret _ub(bp, j) - 48
+    end
+
+    func _fixed_digits(v: f64, p: int): str:
+        text := numfmt.FormatFloat(v)
+        tp := _bp(text)
+        tn := text.Len()
+        mut ep := 0
+        until ep < tn and _ub(tp, ep) != 101:
+            ep++
+        end
+        mut exp := 0
+        if ep < tn:
+            mut q := ep + 1
+            mut eneg := false
+            if q < tn and (_ub(tp, q) == 43 or _ub(tp, q) == 45):
+                eneg = _ub(tp, q) == 45
+                q++
+            end
+            until q < tn:
+                exp = exp * 10 + (_ub(tp, q) - 48)
+                q++
+            end
+            if eneg: exp = -exp end
+        end
+        dbuf := mem.MustAllocate((ep + 1) as u64) as i8*
+        mut nd := 0
+        mut point := -1
+        repeat ep in i:
+            c := _ub(tp, i)
+            if c == 46:
+                point = nd
+            else:
+                dbuf[nd] = c as i8
+                nd++
+            end
+        end
+        if point < 0: point = nd end
+        point += exp
+        mut lo := 0
+        if point < 1: lo = point - 1 end
+        hi := point + p
+        width := hi - lo + 1
+        out := mem.MustAllocateZeroed((width + 2) as u64) as i8*
+        out[0] = 0 as i8
+        mut j := lo
+        until j < hi:
+            out[j - lo + 1] = _fixed_digit(dbuf, nd, j) as i8
+            j++
+        end
+        if _fixed_digit(dbuf, nd, hi) >= 5:
+            mut k := width - 1
+            mut carry := true
+            until carry and k >= 0:
+                d := (out[k] as int) + 1
+                if d == 10:
+                    out[k] = 0 as i8
+                else:
+                    out[k] = d as i8
+                    carry = false
+                end
+                k--
+            end
+        end
+        mem.Free(dbuf as void*)
+        mut start := 1
+        if (out[0] as int) != 0: start = 0 end
+        intend := point - lo + 1
+        res := mem.MustAllocateZeroed((width + 2) as u64) as i8*
+        mut w := 0
+        mut k := start
+        until k < width:
+            if k == intend:
+                res[w] = 46 as i8
+                w++
+            end
+            res[w] = (48 + (out[k] as int)) as i8
+            w++
+            k++
+        end
+        mem.Free(out as void*)
+        mem.Free(text as void*)
+        ret res as str
+    end
 end
 
 @en "FormatUint"
@@ -499,11 +586,11 @@ if not SALAM_KERNEL:
         mut p := prec
         if p < 0: p = 0 end
         if p > 15: p = 15 end
-        if v > 900000000000000.0: ret sign.Concat(FormatFloat(v)) end
         mut scale := 1 as i64
         repeat p:
             scale *= 10
         end
+        if v * (scale as f64) >= 9000000000000000.0: ret sign.Concat(_fixed_digits(v, p)) end
         total := (v * (scale as f64) + 0.5) as i64
         ip := total / scale
         if p == 0: ret sign.Concat(FormatUint(ip as u64)) end

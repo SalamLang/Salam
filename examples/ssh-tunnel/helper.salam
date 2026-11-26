@@ -31,12 +31,21 @@ include "host.salam"
 mut _udp_wanted := false
 mut _relay := udprelay.Client {}
 mut _socks_port := 0
-mut _relay_port := 0
+mut _relay_file := ""
+
+func relay_setting(line: int): str:
+    parts := str.Split(os.ReadFile(_relay_file), "\n")
+    ret parts.Len() > line ? parts[line].Trim() : ""
+end
 
 func dial_relay(): i64:
+    port := profile.PortNumber(relay_setting(1))
+    if port == 0:
+        ret -1
+    end
     mut client := socks.NewClient("127.0.0.1", _socks_port)
     client.timeout_ms = 20000
-    ret socks.DialConn(client, "127.0.0.1", _relay_port).fd
+    ret socks.DialConn(client, "127.0.0.1", port).fd
 end
 
 func pause(set: void*, arrived: void*): int:
@@ -118,8 +127,8 @@ pub func RunHelper(
     parent: str,
     stop_file: str,
     first_dns: str,
-    relay_port: int,
-    token_file: str
+    use_relay: bool,
+    relay_file: str
 ): int:
     prepare_state_dir()
     if socks_port == 0 or not profile.IsName(server_ip, ".") or not profile.IsName(first_dns, "."):
@@ -135,13 +144,11 @@ pub func RunHelper(
     end
     host.RestoreDns()
     host.DropRoute(server_ip)
-    if relay_port > 0:
+    if use_relay:
         _udp_wanted = true
         _socks_port = socks_port
-        _relay_port = relay_port
-        _relay = udprelay.NewSocketClient(
-            (): ret dial_relay() end, os.ReadFile(token_file).Trim()
-        )
+        _relay_file = relay_file
+        _relay = udprelay.NewSocketClient((): ret dial_relay() end, relay_setting(0))
     end
     resolver.Use(first_dns)
     session := tun.Start(helper_options(server_ip, socks_port))

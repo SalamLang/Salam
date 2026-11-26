@@ -609,6 +609,61 @@ double strtod(const char *s, char **endptr)
     return neg ? -value : value;
 }
 
+#if defined(__i386__) || defined(__arm__) || (defined(__riscv) && __riscv_xlen == 32)
+static uint64_t rt_udivmod64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    uint64_t q = 0;
+    uint64_t r = 0;
+    if (d == 0) {
+        if (rem) {
+            *rem = 0;
+        }
+        return 0;
+    }
+    for (int bit = 63; bit >= 0; bit--) {
+        r = (r << 1) | ((n >> bit) & 1u);
+        if (r >= d) {
+            r -= d;
+            q |= (uint64_t)1 << bit;
+        }
+    }
+    if (rem) {
+        *rem = r;
+    }
+    return q;
+}
+
+SALAM_WEAK uint64_t __udivdi3(uint64_t n, uint64_t d)
+{
+    return rt_udivmod64(n, d, 0);
+}
+
+SALAM_WEAK uint64_t __umoddi3(uint64_t n, uint64_t d)
+{
+    uint64_t r = 0;
+    (void)rt_udivmod64(n, d, &r);
+    return r;
+}
+
+SALAM_WEAK int64_t __divdi3(int64_t n, int64_t d)
+{
+    int neg = (n < 0) != (d < 0);
+    uint64_t un = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
+    uint64_t ud = d < 0 ? (uint64_t)0 - (uint64_t)d : (uint64_t)d;
+    uint64_t q = rt_udivmod64(un, ud, 0);
+    return neg ? (int64_t)((uint64_t)0 - q) : (int64_t)q;
+}
+
+SALAM_WEAK int64_t __moddi3(int64_t n, int64_t d)
+{
+    uint64_t un = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
+    uint64_t ud = d < 0 ? (uint64_t)0 - (uint64_t)d : (uint64_t)d;
+    uint64_t r = 0;
+    (void)rt_udivmod64(un, ud, &r);
+    return n < 0 ? (int64_t)((uint64_t)0 - r) : (int64_t)r;
+}
+#endif
+
 static uint64_t rt_udiv64(uint64_t value, uint32_t base, uint32_t *rem)
 {
     uint64_t quotient = 0;

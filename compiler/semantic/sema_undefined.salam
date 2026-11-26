@@ -1,0 +1,356 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include src "../source.salam"
+
+const UD_VAR := 0
+const UD_PARAM := 1
+const UD_LOOP := 2
+
+struct UdDecl:
+    pub node: int = 0
+    pub scope: int = 0
+    pub kind: int = 0
+end
+
+func ud_contains(a &: at.Ast, node: int, pos: int): bool:
+    n := at.Get(a, node)
+    ret pos >= (n.begin_index as int) and pos < (n.end_index as int)
+end
+
+func ud_next_byte(text: str, from: int, skip &: int): int:
+    mut i := from
+    until i < str.Len(text) and (byte_at(text, i) == 32 or byte_at(text, i) == 9):
+        i++
+    end
+    skip = i
+    ret i < str.Len(text) ? byte_at(text, i) : 0
+end
+
+func ud_followed_by_dot(a &: at.Ast, text: str, nid: int): bool:
+    mut p := 0
+    ret ud_next_byte(text, at.Get(a, nid).end_index as int, p) == 46
+end
+
+func ud_followed_by_assign(a &: at.Ast, text: str, nid: int): bool:
+    mut p := 0
+    if ud_next_byte(text, at.Get(a, nid).end_index as int, p) != 61:
+        ret false
+    end
+    ret p + 1 >= str.Len(text) or byte_at(text, p + 1) != 61
+end
+
+func ud_functions(s &: Sema, a &: at.Ast, out &: Vector<int>):
+    if s.program == 0:
+        ret
+    end
+    top := at.Get(a, s.program).list
+    repeat top.Len() in i:
+        id := top.Get(i)
+        n := at.Get(a, id)
+        if n.synthetic or (str.Len(n.src_file) > 0 and not str.Equals(n.src_file, s.file)):
+            continue
+        end
+        if n.kind == at.AST_FUNC_DEF:
+            out.Push(id)
+        else n.kind == at.AST_STRUCT_DEF:
+            repeat n.list.Len() in k:
+                m := n.list.Get(k)
+                if at.KindOf(a, m) == at.AST_FUNC_DEF and not at.Get(a, m).synthetic:
+                    out.Push(m)
+                end
+            end
+        end
+    end
+end
+
+func ud_collect(a &: at.Ast, nid: int, name: str, scope: int, out &: Vector<UdDecl>):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    mut inner := scope
+    if n.kind == at.AST_BLOCK or n.kind == at.AST_LAMBDA:
+        if n.end_index > n.begin_index:
+            inner = nid
+        end
+    else n.kind == at.AST_VAR_DECL or n.kind == at.AST_PARAM:
+        if str.Equals(n.name, name):
+            mut kind := n.kind == at.AST_PARAM ? UD_PARAM : UD_VAR
+            if at.Get(a, scope).synthetic:
+                kind = UD_LOOP
+            end
+            out.Push(UdDecl { node = nid, scope = scope, kind = kind })
+        end
+    else n.kind == at.AST_EACH or n.kind == at.AST_REPEAT:
+        key := n.kind == at.AST_EACH and n.c != 0 ? at.Get(a, n.c).name : ""
+        if str.Equals(n.name, name) or str.Equals(key, name):
+            out.Push(UdDecl { node = nid, scope = nid, kind = UD_LOOP })
+        end
+    end
+    ud_collect(a, n.a, name, inner, out)
+    ud_collect(a, n.b, name, inner, out)
+    ud_collect(a, n.c, name, inner, out)
+    ud_collect(a, n.d, name, inner, out)
+    repeat n.list.Len() in i:
+        ud_collect(a, n.list.Get(i), name, inner, out)
+    end
+end
+
+func ud_line(a &: at.Ast, node: int): str:
+    ret str.FromInt(at.Get(a, node).begin_line as i64)
+end
+
+func ud_local_help(a &: at.Ast, fn: int, name: str, pos: int): str:
+    mut found := Vector {} as Vector<UdDecl>
+    defer found.Free()
+    ud_collect(a, fn, name, fn, found)
+    repeat found.Len() in i:
+        d := found.Get(i)
+        if d.kind == UD_VAR and ud_contains(
+            a, d.scope, pos
+        ) and (at.Get(a, d.node).begin_index as int) > pos:
+            ret co.Format2(
+                i18.Tr("'%s' is declared later, on line %s; move the declaration above this line"),
+                co.ArgStr(name),
+                co.ArgStr(ud_line(a, d.node))
+            )
+        end
+    end
+    repeat found.Len() in i:
+        d := found.Get(i)
+        if ud_contains(a, d.scope, pos):
+            continue
+        end
+        if d.kind == UD_LOOP:
+            ret co.Format2(
+                i18.Tr(
+                    "'%s' is the variable of the loop on line %s and exists only inside that loop"
+                ),
+                co.ArgStr(name),
+                co.ArgStr(ud_line(a, d.node))
+            )
+        end
+        ret co.Format2(
+            i18.Tr(
+                "'%s' is declared on line %s inside a block and exists only until that block ends; declare it before the block"
+            ),
+            co.ArgStr(name),
+            co.ArgStr(ud_line(a, d.node))
+        )
+    end
+    ret ""
+end
+
+func ud_elsewhere_help(a &: at.Ast, funcs: Vector<int>, skip: int, name: str): str:
+    repeat funcs.Len() in i:
+        fn := funcs.Get(i)
+        if fn == skip:
+            continue
+        end
+        mut found := Vector {} as Vector<UdDecl>
+        ud_collect(a, fn, name, fn, found)
+        n := found.Len()
+        first := n > 0 ? found.Get(0) : UdDecl {}
+        found.Free()
+        if n == 0:
+            continue
+        end
+        mut shape := i18.Tr(
+            "'%s' is a local variable of '%s' (line %s) and is visible only there; pass it as a parameter, or declare it outside the functions"
+        )
+        if first.kind == UD_PARAM:
+            shape = i18.Tr(
+                "'%s' is a parameter of '%s' (line %s) and is visible only there; pass it as a parameter here too, or declare it outside the functions"
+            )
+        end
+        ret co.Format3(
+            shape, co.ArgStr(name), co.ArgStr(at.Get(a, fn).name), co.ArgStr(ud_line(a, first.node))
+        )
+    end
+    ret ""
+end
+
+func ud_package_member(s &: Sema, name: str, func_only: bool): str:
+    gsc := scope_at(s, s.global)
+    repeat gsc.symbols.Len() in i:
+        p := sym_at(s, gsc.symbols.Get(i))
+        if p.kind != SYM_PACKAGE or p.members == 0:
+            continue
+        end
+        m := scope_lookup_local(s, p.members, name)
+        if m == 0:
+            continue
+        end
+        mv := sym_at(s, m)
+        if mv.is_pub and (not func_only or mv.kind == SYM_FUNC):
+            ret p.name + "." + name
+        end
+    end
+    ret ""
+end
+
+func ud_queue_replace(a &: at.Ast, nid: int, text: str):
+    mut f := fix_at(span_of(a, nid))
+    f.title = co.Format1(i18.Tr("Change to '%s'"), co.ArgStr(text))
+    f.text = text
+    f.preferred = true
+    f.safe = false
+    queue_fix(f)
+end
+
+func ud_help(s &: Sema, a &: at.Ast, nid: int, name: str, text: str, suggested: bool): str:
+    pos := at.Get(a, nid).begin_index as int
+    mut funcs := Vector {} as Vector<int>
+    defer funcs.Free()
+    ud_functions(s, a, funcs)
+    mut cur := 0
+    repeat funcs.Len() in i:
+        if ud_contains(a, funcs.Get(i), pos):
+            cur = funcs.Get(i)
+        end
+    end
+    if cur != 0:
+        local := ud_local_help(a, cur, name, pos)
+        if str.Len(local) > 0:
+            ret local
+        end
+    end
+    elsewhere := ud_elsewhere_help(a, funcs, cur, name)
+    if str.Len(elsewhere) > 0:
+        ret elsewhere
+    end
+    qualified := ud_package_member(s, name, false)
+    if str.Len(qualified) > 0:
+        ud_queue_replace(a, nid, qualified)
+        ret co.Format1(
+            i18.Tr("it belongs to an imported package; write '%s'"), co.ArgStr(qualified)
+        )
+    end
+    if suggested:
+        ret ""
+    end
+    if ud_followed_by_assign(a, text, nid):
+        ret co.Format2(
+            i18.Tr("'%s' was never declared; to create a variable write '%s := value'"),
+            co.ArgStr(name),
+            co.ArgStr(name)
+        )
+    end
+    ret co.Format2(
+        i18.Tr(
+            "nothing named '%s' is declared here; check the spelling, or declare it before this line with '%s := value'"
+        ),
+        co.ArgStr(name),
+        co.ArgStr(name)
+    )
+end
+
+func ud_split_println(
+    a &: at.Ast, nid: int, name: str, text: str, sp: co.SrcSpan, msg: str, s &: Sema
+): bool:
+    if not str.StartsWith(name, "ln "):
+        ret false
+    end
+    mut b := at.Get(a, nid).begin_index as int
+    until b > 0 and (byte_at(text, b - 1) == 32 or byte_at(text, b - 1) == 9):
+        b--
+    end
+    if b < 5 or not str.Equals(str.Substr(text, b - 5, 5), "print"):
+        ret false
+    end
+    whole := "println " + str.Substr(name, 3, str.Len(name) - 3)
+    mut f := fix_at(sp)
+    f.index = b - 5
+    f.length = (at.Get(a, nid).end_index as int) - f.index
+    f.title = co.Format1(i18.Tr("Change to '%s'"), co.ArgStr(whole))
+    f.text = whole
+    f.preferred = true
+    f.safe = false
+    queue_fix(f)
+    serr_help(
+        s, 1, sp, msg, co.Format1(i18.Tr("'println' is one word: write '%s'"), co.ArgStr(whole))
+    )
+    ret true
+end
+
+func report_unknown_identifier(s &: Sema, a &: at.Ast, nid: int, name: str, sp: co.SrcSpan):
+    msg := co.Format1(i18.Tr("unknown identifier '%s'"), co.ArgStr(name))
+    text := src.Peek(s.file)
+    if ud_split_println(a, nid, name, text, sp, msg, s):
+        ret
+    end
+    if ud_followed_by_dot(a, text, nid):
+        path := std_package_path(name)
+        if str.Len(path) > 0:
+            queue_import_fix(s, a, name)
+            line := kw_spell(s, s.file, tok.TK_KW_IMPORT) + " " + path
+            serr_help(
+                s,
+                1,
+                sp,
+                msg,
+                co.Format2(
+                    i18.Tr("'%s' is a standard package that is not imported; add '%s'"),
+                    co.ArgStr(name),
+                    co.ArgStr(line)
+                )
+            )
+            ret
+        end
+    end
+    mut tail := sema_keyword_hint(s, name)
+    if str.Len(tail) == 0:
+        tail = sema_suggest_scope(s, a, s.cur, name)
+    end
+    split := str.Contains(name, " ") and FilePack(s, at.Get(a, nid).src_file) != 2
+    help := ud_help(s, a, nid, name, text, split or str.Len(tail) > 0)
+    if str.Len(help) > 0:
+        serr_help(s, 1, sp, msg + tail, help)
+    else:
+        serr(s, 1, sp, msg + tail)
+    end
+end
+
+func report_undefined_function(s &: Sema, a &: at.Ast, callee: int, name: str, sp: co.SrcSpan):
+    msg := co.Format1(i18.Tr("call to undefined function '%s'"), co.ArgStr(name))
+    mut help := undefined_function_help(name)
+    mut tail := ""
+    if str.Len(help) == 0:
+        qualified := ud_package_member(s, name, true)
+        if str.Len(qualified) > 0:
+            ud_queue_replace(a, callee, qualified)
+            help = co.Format1(
+                i18.Tr("it belongs to an imported package; write '%s'"), co.ArgStr(qualified)
+            )
+        else:
+            tail = sema_suggest_functions(s, a, s.cur, name)
+            if str.Len(tail) == 0 and sema_near_print(name):
+                help = i18.Tr("print with the statement 'println a, b' (no parentheses)")
+            end
+        end
+    end
+    if str.Len(help) > 0:
+        serr_help(s, 12, sp, msg + tail, help)
+    else:
+        serr(s, 12, sp, msg + tail)
+    end
+end

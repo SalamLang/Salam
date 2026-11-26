@@ -53031,6 +53031,8 @@ st := stp[idx]
 if st == (1 as i8):
 if kp[idx] == k: ret idx end
 else st == (0 as i8):
+n := this._nan_slot(k)
+if n >= 0: ret n end
 if firstdel >= 0: ret firstdel end
 ret idx
 else:
@@ -53051,9 +53053,22 @@ st := stp[idx]
 if st == (1 as i8):
 if kp[idx] == k: ret idx end
 else st == (0 as i8):
-ret -1
+ret this._nan_slot(k)
 end
 idx = (idx + 1) & mask
+end
+ret -1
+end
+pub func _nan_slot(k: K): int:
+same := k
+if k == same: ret -1 end
+kp := this.keys
+stp := this.state
+repeat this.cap in i:
+if stp[i] == (1 as i8):
+ki := kp[i]
+if ki != kp[i]: ret i end
+end
 end
 ret -1
 end
@@ -66749,6 +66764,91 @@ en := FormatInt(ea as i64)
 if ea < 10: ret es.Concat("0").Concat(en) end
 ret es.Concat(en)
 end
+func _fixed_digit(bp: i8*, n: int, j: int): int:
+if j < 0 or j >= n: ret 0 end
+ret _ub(bp, j) - 48
+end
+func _fixed_digits(v: f64, p: int): str:
+text := numfmt.FormatFloat(v)
+tp := _bp(text)
+tn := text.Len()
+mut ep := 0
+until ep < tn and _ub(tp, ep) != 101:
+ep++
+end
+mut exp := 0
+if ep < tn:
+mut q := ep + 1
+mut eneg := false
+if q < tn and (_ub(tp, q) == 43 or _ub(tp, q) == 45):
+eneg = _ub(tp, q) == 45
+q++
+end
+until q < tn:
+exp = exp * 10 + (_ub(tp, q) - 48)
+q++
+end
+if eneg: exp = -exp end
+end
+dbuf := mem.MustAllocate((ep + 1) as u64) as i8*
+mut nd := 0
+mut point := -1
+repeat ep in i:
+c := _ub(tp, i)
+if c == 46:
+point = nd
+else:
+dbuf[nd] = c as i8
+nd++
+end
+end
+if point < 0: point = nd end
+point += exp
+mut lo := 0
+if point < 1: lo = point - 1 end
+hi := point + p
+width := hi - lo + 1
+out := mem.MustAllocateZeroed((width + 2) as u64) as i8*
+out[0] = 0 as i8
+mut j := lo
+until j < hi:
+out[j - lo + 1] = _fixed_digit(dbuf, nd, j) as i8
+j++
+end
+if _fixed_digit(dbuf, nd, hi) >= 5:
+mut k := width - 1
+mut carry := true
+until carry and k >= 0:
+d := (out[k] as int) + 1
+if d == 10:
+out[k] = 0 as i8
+else:
+out[k] = d as i8
+carry = false
+end
+k--
+end
+end
+mem.Free(dbuf as void*)
+mut start := 1
+if (out[0] as int) != 0: start = 0 end
+intend := point - lo + 1
+res := mem.MustAllocateZeroed((width + 2) as u64) as i8*
+mut w := 0
+mut k := start
+until k < width:
+if k == intend:
+res[w] = 46 as i8
+w++
+end
+res[w] = (48 + (out[k] as int)) as i8
+w++
+k++
+end
+mem.Free(out as void*)
+mem.Free(text as void*)
+ret res as str
+end
 end
 @en "FormatUint"
 @fa "قالب عدد بی علامت"
@@ -66921,11 +67021,11 @@ if v / 2.0 == v and v > 0.0: ret sign.Concat("inf") end
 mut p := prec
 if p < 0: p = 0 end
 if p > 15: p = 15 end
-if v > 900000000000000.0: ret sign.Concat(FormatFloat(v)) end
 mut scale := 1 as i64
 repeat p:
 scale *= 10
 end
+if v * (scale as f64) >= 9000000000000000.0: ret sign.Concat(_fixed_digits(v, p)) end
 total := (v * (scale as f64) + 0.5) as i64
 ip := total / scale
 if p == 0: ret sign.Concat(FormatUint(ip as u64)) end
@@ -106212,6 +106312,7 @@ ret Unquote(cur)
 end
 package json
 import conv
+import conv.numfmt
 import mem
 import str
 func __jdnew(): str.StringBuilder:
@@ -106284,6 +106385,12 @@ if x != x: ret str.Clone("null") end
 if x > 1.7976931348623157e308: ret str.Clone("null") end
 if x < -1.7976931348623157e308: ret str.Clone("null") end
 ret conv.FormatFloat(x)
+end
+func __jdf32(x: f32): str:
+if x != x: ret str.Clone("null") end
+if x > (3.4028234663852886e38 as f32): ret str.Clone("null") end
+if x < (-3.4028234663852886e38 as f32): ret str.Clone("null") end
+ret numfmt.FormatFloat32(x)
 end
 end
 func __jdb(v: bool): str:
@@ -106578,10 +106685,24 @@ if e < 0 or e == i:
 endpos = -1
 ret 0.0
 end
-endpos = e
 raw := __jdslice(s, i, e)
 defer mem.Free(raw as void*)
-ret raw.ToFloat()
+v := raw.ToFloat()
+if v != 0.0 and v / 2.0 == v:
+endpos = -1
+ret 0.0
+end
+endpos = e
+ret v
+end
+func __jdovf(s: str, i: int): bool:
+p := __jdws(s, i)
+e := __jdnum(s, p)
+if e < 0 or e == p: ret false end
+raw := __jdslice(s, p, e)
+defer mem.Free(raw as void*)
+v := raw.ToFloat()
+ret v != 0.0 and v / 2.0 == v
 end
 end
 func __jdgbool(s: str, i: int, endpos &: int): bool:
@@ -106651,6 +106772,9 @@ end
 package json
 import str
 func _dec_kind(text: str, msg: str, pos: int): ErrorKind:
+if msg.StartsWith("number does not fit"):
+ret ErrorKind.OutOfRange
+end
 if msg.StartsWith("missing key"):
 ret ErrorKind.MissingKey
 end
@@ -106666,6 +106790,16 @@ if msg.StartsWith("value does not match"):
 ret ErrorKind.TypeMismatch
 end
 ret ErrorKind.Syntax
+end
+func _dec_msg(text: str, msg: str, pos: int): str:
+if SALAM_KERNEL:
+ret msg
+else:
+if msg.StartsWith("value does not match") and __jdovf(text, pos):
+ret "number does not fit in a 64-bit float"
+end
+end
+ret msg
 end
 @en "Marshal"
 @fa "سریال سازی"
@@ -106684,7 +106818,8 @@ mut msg := ""
 mut pos := 0
 p := jsondec(text, 0, out, msg, pos, true)
 if p < 0:
-throw Error.At(_dec_kind(text, msg, pos), msg, pos).Locate(text).Wrap("json")
+m := _dec_msg(text, msg, pos)
+throw Error.At(_dec_kind(text, m, pos), m, pos).Locate(text).Wrap("json")
 end
 q := _jws(text, p)
 if q < text.Len():
@@ -106700,7 +106835,8 @@ mut msg := ""
 mut pos := 0
 p := jsondec(text, 0, out, msg, pos, false)
 if p < 0:
-throw Error.At(_dec_kind(text, msg, pos), msg, pos).Locate(text).Wrap("json")
+m := _dec_msg(text, msg, pos)
+throw Error.At(_dec_kind(text, m, pos), m, pos).Locate(text).Wrap("json")
 end
 q := _jws(text, p)
 if q < text.Len():
@@ -107091,15 +107227,21 @@ ret value.ValueNull()
 end
 numtext := __jdslice(s, p0, ep)
 endpos = ep
-if str.Contains(numtext, ".") or str.Contains(numtext, "e") or str.Contains(numtext, "E"):
-ret value.ValueFloat(numtext.ToFloat())
-end
 mut fits := true
-v := _parse_i64(numtext, fits)
-if not fits:
-ret value.ValueFloat(numtext.ToFloat())
+mut v := 0 as i64
+if str.Contains(numtext, ".") or str.Contains(numtext, "e") or str.Contains(numtext, "E"):
+fits = false
+else:
+v = _parse_i64(numtext, fits)
 end
-ret value.ValueInt(v)
+if fits: ret value.ValueInt(v) end
+f := numtext.ToFloat()
+if f != 0.0 and f / 2.0 == f:
+err = Error.At(ErrorKind.OutOfRange, "number does not fit in a 64-bit float", p0)
+endpos = p0
+ret value.ValueNull()
+end
+ret value.ValueFloat(f)
 end
 func _parse_i64(text: str, fits &: bool): i64:
 fits = true

@@ -14,16 +14,21 @@
 package semantic
 
 import str
+import io
+import os
 
 include co "../sal_core.salam"
 include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include src "../source.salam"
+include pth "../sal_path.salam"
 
 const UD_VAR := 0
 const UD_PARAM := 1
 const UD_LOOP := 2
+
+const UD_MAX_SIBLINGS := 100
 
 struct UdDecl:
     pub node: int = 0
@@ -160,7 +165,18 @@ func ud_local_help(a &: at.Ast, fn: int, name: str, pos: int): str:
     ret ""
 end
 
-func ud_elsewhere_help(a &: at.Ast, funcs: Vector<int>, skip: int, name: str): str:
+func ud_say(shape: str, one: str): str:
+    ret co.Format1(i18.Tr(shape), co.ArgStr(one))
+end
+
+func ud_add(out: str, line: str): str:
+    if str.Len(line) == 0:
+        ret out
+    end
+    ret str.Len(out) == 0 ? line : out + "\n" + line
+end
+
+func ud_other_function(a &: at.Ast, funcs: Vector<int>, skip: int, name: str): str:
     repeat funcs.Len() in i:
         fn := funcs.Get(i)
         if fn == skip:
@@ -175,18 +191,137 @@ func ud_elsewhere_help(a &: at.Ast, funcs: Vector<int>, skip: int, name: str): s
             continue
         end
         mut shape := i18.Tr(
-            "'%s' is a local variable of '%s' (line %s) and is visible only there; pass it as a parameter, or declare it outside the functions"
+            "Function '%s' (line %s) declares a local variable with this name, but it is visible only inside that function."
         )
         if first.kind == UD_PARAM:
             shape = i18.Tr(
-                "'%s' is a parameter of '%s' (line %s) and is visible only there; pass it as a parameter here too, or declare it outside the functions"
+                "Function '%s' (line %s) has a parameter with this name, but it is visible only inside that function."
             )
         end
-        ret co.Format3(
-            shape, co.ArgStr(name), co.ArgStr(at.Get(a, fn).name), co.ArgStr(ud_line(a, first.node))
+        ret co.Format2(
+            shape, co.ArgStr(at.Get(a, fn).name), co.ArgStr(ud_line(a, first.node))
         )
     end
     ret ""
+end
+
+func ud_private_member(s &: Sema, name: str): str:
+    gsc := scope_at(s, s.global)
+    repeat gsc.symbols.Len() in i:
+        p := sym_at(s, gsc.symbols.Get(i))
+        if p.kind != SYM_PACKAGE or p.members == 0:
+            continue
+        end
+        m := scope_lookup_local(s, p.members, name)
+        if m != 0 and not sym_at(s, m).is_pub:
+            ret ud_say(
+                "Package '%s' declares it but does not export it; mark it 'pub' there.", p.name
+            )
+        end
+    end
+    ret ""
+end
+
+func ud_name_ends(line: str, at_end: int): bool:
+    if at_end >= str.Len(line):
+        ret true
+    end
+    c := byte_at(line, at_end)
+    ret c == 32 or c == 40 or c == 58 or c == 60 or c == 13
+end
+
+func ud_declares(line: str, name: str, func_only: bool): bool:
+    mut rest := line
+    mut is_func := false
+    mut keyed := false
+    words := ["pub ", "همگانی ", "const ", "ثابت ", "mut ", "ناپایا ", "func ", "تابع "]
+    each w in words:
+        if str.StartsWith(rest, w):
+            rest = str.Substr(rest, str.Len(w), str.Len(rest) - str.Len(w))
+            if str.Equals(w, "func ") or str.Equals(w, "تابع "):
+                is_func = true
+            end
+            if not str.Equals(w, "pub ") and not str.Equals(w, "همگانی "):
+                keyed = true
+            end
+        end
+    end
+    if not str.StartsWith(rest, name) or not ud_name_ends(rest, str.Len(name)):
+        ret false
+    end
+    if func_only or is_func:
+        ret is_func
+    end
+    after := str.Trim(str.Substr(rest, str.Len(name), str.Len(rest) - str.Len(name)))
+    ret keyed or str.StartsWith(after, ":")
+end
+
+func ud_loaded_files(s &: Sema, a &: at.Ast, out &: Vector<str>):
+    out.Push(pth.PathBase(s.file))
+    if s.program == 0:
+        ret
+    end
+    top := at.Get(a, s.program).list
+    repeat top.Len() in i:
+        file := at.Get(a, top.Get(i)).src_file
+        if str.Len(file) > 0:
+            out.Push(pth.PathBase(file))
+        end
+    end
+end
+
+func ud_sibling_file(s &: Sema, a &: at.Ast, name: str, func_only: bool): str:
+    mut folder := dir_of(s.file)
+    if str.Len(folder) == 0:
+        folder = "."
+    end
+    if not os.Exists(s.file):
+        ret ""
+    end
+    mut loaded := Vector {} as Vector<str>
+    defer loaded.Free()
+    ud_loaded_files(s, a, loaded)
+    mut entries := os.ListDir(folder)
+    defer entries.Free()
+    mut best := ""
+    mut seen := 0
+    each entry in entries:
+        if not str.EndsWith(entry, ".salam") or seen >= UD_MAX_SIBLINGS:
+            continue
+        end
+        mut skip := false
+        each done in loaded:
+            if str.Equals(done, entry):
+                skip = true
+            end
+        end
+        if skip or (str.Len(best) > 0 and str.Compare(entry, best) >= 0):
+            continue
+        end
+        seen++
+        lines := str.Split(io.ReadFile(pth.PathJoin(folder, entry)), "\n")
+        each line in lines:
+            if ud_declares(line, name, func_only):
+                best = entry
+                break
+            end
+        end
+        lines.Free()
+    end
+    ret best
+end
+
+func ud_not_included(s &: Sema, name: str, file: str): str:
+    alias := pth.PathStem(file)
+    line := kw_spell(s, s.file, tok.TK_KW_INCLUDE) + " " + alias + " \"" + file + "\""
+    ret co.Format3(
+        i18.Tr(
+            "'%s' declares it, but this file does not include that file; add '%s', make sure it is 'pub' there, and write '%s'."
+        ),
+        co.ArgStr(file),
+        co.ArgStr(line),
+        co.ArgStr(alias + "." + name)
+    )
 end
 
 func ud_package_member(s &: Sema, name: str, func_only: bool): str:
@@ -217,7 +352,9 @@ func ud_queue_replace(a &: at.Ast, nid: int, text: str):
     queue_fix(f)
 end
 
-func ud_help(s &: Sema, a &: at.Ast, nid: int, name: str, text: str, suggested: bool): str:
+func ud_help(
+    s &: Sema, a &: at.Ast, nid: int, name: str, text: str, split: bool, suggested: bool
+): str:
     pos := at.Get(a, nid).begin_index as int
     mut funcs := Vector {} as Vector<int>
     defer funcs.Free()
@@ -234,34 +371,52 @@ func ud_help(s &: Sema, a &: at.Ast, nid: int, name: str, text: str, suggested: 
             ret local
         end
     end
-    elsewhere := ud_elsewhere_help(a, funcs, cur, name)
-    if str.Len(elsewhere) > 0:
-        ret elsewhere
-    end
     qualified := ud_package_member(s, name, false)
     if str.Len(qualified) > 0:
         ud_queue_replace(a, nid, qualified)
-        ret co.Format1(
-            i18.Tr("it belongs to an imported package; write '%s'"), co.ArgStr(qualified)
-        )
+        ret ud_say("it belongs to an imported package; write '%s'", qualified)
     end
-    if suggested:
+    if split:
         ret ""
     end
-    if ud_followed_by_assign(a, text, nid):
-        ret co.Format2(
-            i18.Tr("'%s' was never declared; to create a variable write '%s := value'"),
-            co.ArgStr(name),
-            co.ArgStr(name)
+    mut out := cur != 0 ? co.Format2(
+        i18.Tr("'%s' is not defined in function '%s' and not defined globally."),
+        co.ArgStr(name),
+        co.ArgStr(at.Get(a, cur).name)
+    ) : ud_say("'%s' is not defined here and not defined globally.", name)
+    if suggested:
+        out = ud_add(i18.Tr("If this is not a spelling mistake:"), out)
+    end
+    mut found := ud_other_function(a, funcs, cur, name)
+    shared := str.Len(found) > 0
+    if not shared:
+        found = ud_private_member(s, name)
+    end
+    if str.Len(found) == 0:
+        file := ud_sibling_file(s, a, name, false)
+        if str.Len(file) > 0:
+            found = ud_not_included(s, name, file)
+        end
+    end
+    if str.Len(found) == 0:
+        found = i18.Tr("No import or include provides it either.")
+    end
+    out = ud_add(out, found)
+    value := FilePack(s, at.Get(a, nid).src_file) == 2 ? "مقدار" : "value"
+    define := name + " := " + value
+    if shared:
+        ret ud_add(
+            out,
+            ud_say(
+                "If you forgot to define it here, write '%s' before this line; to use the other one, pass it as a parameter or declare it outside the functions.",
+                define
+            )
         )
     end
-    ret co.Format2(
-        i18.Tr(
-            "nothing named '%s' is declared here; check the spelling, or declare it before this line with '%s := value'"
-        ),
-        co.ArgStr(name),
-        co.ArgStr(name)
-    )
+    if ud_followed_by_assign(a, text, nid):
+        ret ud_add(out, ud_say("To create it, write '%s'.", define))
+    end
+    ret ud_add(out, ud_say("If you forgot to define it, write '%s' before this line.", define))
 end
 
 func ud_split_println(
@@ -322,12 +477,65 @@ func report_unknown_identifier(s &: Sema, a &: at.Ast, nid: int, name: str, sp: 
         tail = sema_suggest_scope(s, a, s.cur, name)
     end
     split := str.Contains(name, " ") and FilePack(s, at.Get(a, nid).src_file) != 2
-    help := ud_help(s, a, nid, name, text, split or str.Len(tail) > 0)
+    help := ud_help(s, a, nid, name, text, split, str.Len(tail) > 0)
     if str.Len(help) > 0:
         serr_help(s, 1, sp, msg + tail, help)
     else:
         serr(s, 1, sp, msg + tail)
     end
+end
+
+func ud_method_owner(a &: at.Ast, s &: Sema, name: str): str:
+    if s.program == 0:
+        ret ""
+    end
+    top := at.Get(a, s.program).list
+    repeat top.Len() in i:
+        n := at.Get(a, top.Get(i))
+        if n.kind != at.AST_STRUCT_DEF or n.synthetic or
+            (str.Len(n.src_file) > 0 and not str.Equals(
+                n.src_file, s.file
+            )):
+            continue
+        end
+        repeat n.list.Len() in k:
+            m := at.Get(a, n.list.Get(k))
+            if m.kind == at.AST_FUNC_DEF and not m.synthetic and str.Equals(m.name, name):
+                ret n.name
+            end
+        end
+    end
+    ret ""
+end
+
+func ud_function_help(s &: Sema, a &: at.Ast, name: str): str:
+    mut out := ud_say("function '%s' is not defined here and not defined globally.", name)
+    owner := ud_method_owner(a, s, name)
+    if str.Len(owner) > 0:
+        ret ud_add(
+            out,
+            co.Format2(
+                i18.Tr(
+                    "Struct '%s' has a method with this name; call it on a value: 'value.%s(...)'."
+                ),
+                co.ArgStr(owner),
+                co.ArgStr(name)
+            )
+        )
+    end
+    mut found := ud_private_member(s, name)
+    if str.Len(found) == 0:
+        file := ud_sibling_file(s, a, name, true)
+        if str.Len(file) > 0:
+            found = ud_not_included(s, name, file)
+        end
+    end
+    if str.Len(found) > 0:
+        ret ud_add(out, found)
+    end
+    out = ud_add(out, i18.Tr("No import or include provides it either."))
+    define := kw_spell(s, s.file, tok.TK_KW_FUNC) + " " + name + ":"
+    ret ud_add(out, ud_say("If you forgot to define it, add '%s'.", define))
 end
 
 func report_undefined_function(s &: Sema, a &: at.Ast, callee: int, name: str, sp: co.SrcSpan):
@@ -345,6 +553,8 @@ func report_undefined_function(s &: Sema, a &: at.Ast, callee: int, name: str, s
             tail = sema_suggest_functions(s, a, s.cur, name)
             if str.Len(tail) == 0 and sema_near_print(name):
                 help = i18.Tr("print with the statement 'println a, b' (no parentheses)")
+            else str.Len(tail) == 0 and not str.Contains(name, " "):
+                help = ud_function_help(s, a, name)
             end
         end
     end

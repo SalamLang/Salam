@@ -1,0 +1,111 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package remote
+
+import os
+import str
+import os.shell
+import os.desktop
+import os.process
+
+include "profile.salam"
+
+const FOLDER := ".salam-tunnel"
+const BINARY := "salam-udprelay-linux-x86_64"
+
+func mux(command: str): process.Command:
+    mut cmd := process.NewCommand("/usr/bin/ssh")
+    cmd.Arg("-F")
+    cmd.Arg("/dev/null")
+    cmd.Arg("-S")
+    cmd.Arg(profile.ControlPath())
+    cmd.Arg("-T")
+    cmd.Arg("-o")
+    cmd.Arg("BatchMode=yes")
+    cmd.Arg("-o")
+    cmd.Arg("ProxyCommand=/usr/bin/false")
+    cmd.Arg("--")
+    cmd.Arg("salam-tunnel")
+    cmd.Arg(command)
+    ret cmd
+end
+
+func local_binary(): str:
+    folder := desktop.ExecutableDir()
+    inside := folder + "/../Resources/" + BINARY
+    if os.Exists(inside):
+        ret inside
+    end
+    beside := folder + "/" + BINARY
+    ret os.Exists(beside) ? beside : ""
+end
+
+func digest(path: str): str:
+    mut args := Vector {} as Vector<str>
+    args.Push("-a")
+    args.Push("256")
+    args.Push(path)
+    r := shell.Run("/usr/bin/shasum", args)
+    if r.code != 0 or r.out.Len() < 16:
+        ret ""
+    end
+    ret r.out.Substr(0, 16)
+end
+
+func upload(path: str, target: str): bool:
+    script := "exec /usr/bin/ssh -F /dev/null -S \"$1\" -T -o BatchMode=yes " +
+        "-o ProxyCommand=/usr/bin/false -- salam-tunnel \"$2\" < \"$3\""
+    mut args := Vector {} as Vector<str>
+    args.Push("-c")
+    args.Push(script)
+    args.Push("sh")
+    args.Push(profile.ControlPath())
+    args.Push(
+        "umask 077 && mkdir -p " + FOLDER + " && cat > " + target + ".new && chmod 700 " + target +
+            ".new && mv " + target + ".new " + target
+    )
+    args.Push(path)
+    mut cmd := process.NewCommand("/bin/sh")
+    cmd.args = args
+    r := process.RunCommand(cmd, "", 120000)
+    ret r.started and r.status.Success()
+end
+
+pub func Install(why &: str): str:
+    path := local_binary()
+    if path.Len() == 0:
+        why = "this build has no relay program"
+        ret ""
+    end
+    system := process.RunCommand(mux("uname -sm"), "", 30000)
+    if not system.started or system.stdout.Trim() != "Linux x86_64":
+        why = "UDP needs a Linux x86_64 server"
+        ret ""
+    end
+    hash := digest(path)
+    if hash.Len() == 0:
+        why = "cannot read the relay program"
+        ret ""
+    end
+    target := FOLDER + "/udprelay-" + hash
+    present := process.RunCommand(mux("test -x " + target), "", 30000)
+    if present.started and present.status.Success():
+        ret target
+    end
+    if not upload(path, target):
+        why = "could not copy the relay to the server"
+        ret ""
+    end
+    ret target
+end

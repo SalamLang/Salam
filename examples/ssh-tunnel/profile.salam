@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package profile
+
+import os
+import env
+import str
+import fs
+import os.shell
+import os.process
+
+const KEYCHAIN_SERVICE := "ir.salamlang.sshtunnel"
+
+pub struct Profile:
+    pub host: str = ""
+    pub port: str = "22"
+    pub user: str = ""
+    pub password: str = ""
+    pub remember: bool = false
+    pub udp: bool = false
+end
+
+func profile_path(): str:
+    ret AppDir() + "/profile.conf"
+end
+
+func keychain_account(pr: Profile): str:
+    ret pr.user + "@" + pr.host + ":" + pr.port
+end
+
+func keychain_read(pr: Profile): str:
+    mut args := Vector {} as Vector<str>
+    args.Push("find-generic-password")
+    args.Push("-s")
+    args.Push(KEYCHAIN_SERVICE)
+    args.Push("-a")
+    args.Push(keychain_account(pr))
+    args.Push("-w")
+    r := shell.Run("/usr/bin/security", args)
+    if r.code != 0:
+        ret ""
+    end
+    ret str.TrimSuffix(r.out, "\n")
+end
+
+func keychain_quote(text: str): str:
+    ret "\"" + str.Replace(str.Replace(text, "\\", "\\\\"), "\"", "\\\"") + "\""
+end
+
+func keychain_write(pr: Profile):
+    mut args := Vector {} as Vector<str>
+    args.Push("-i")
+    line := "add-generic-password -U -s " + KEYCHAIN_SERVICE + " -a " + keychain_quote(
+        keychain_account(pr)
+    ) + " -w " + keychain_quote(pr.password) + "\n"
+    mut cmd := process.NewCommand("/usr/bin/security")
+    cmd.args = args
+    _r := process.RunCommand(cmd, line, 10000)
+end
+
+func keychain_forget(pr: Profile):
+    mut args := Vector {} as Vector<str>
+    args.Push("delete-generic-password")
+    args.Push("-s")
+    args.Push(KEYCHAIN_SERVICE)
+    args.Push("-a")
+    args.Push(keychain_account(pr))
+    _r := shell.Run("/usr/bin/security", args)
+end
+
+pub func AppDir(): str:
+    dir := env.Get("HOME") + "/.salam-tunnel"
+    if not os.Exists(dir):
+        _m := os.Mkdir(dir)
+    end
+    _c := fs.Chmod(dir, 448)
+    ret dir
+end
+
+pub func ControlPath(): str:
+    ret AppDir() + "/ctl"
+end
+
+pub func KnownHostsPath(): str:
+    ret AppDir() + "/known_hosts"
+end
+
+pub func StopPath(): str:
+    ret AppDir() + "/stop"
+end
+
+pub func ValueOf(text: str, key: str): str:
+    each line in str.Split(text, "\n"):
+        if line.StartsWith(key + "="):
+            ret line.Substr(key.Len() + 1, line.Len() - key.Len() - 1).Trim()
+        end
+    end
+    ret ""
+end
+
+pub func IsName(text: str, extra: str): bool:
+    if text.Len() == 0 or text.Len() > 253 or text.StartsWith("-"):
+        ret false
+    end
+    p := text as u8*
+    allowed := extra as u8*
+    repeat text.Len() in i:
+        c := p[i] as int
+        mut ok := (c >= ('a' as int) and c <= ('z' as int)) or
+            (c >= ('A' as int) and c <= ('Z' as int)) or (c >= ('0' as int) and c <= ('9' as int))
+        repeat extra.Len() in k:
+            if c == (allowed[k] as int):
+                ok = true
+            end
+        end
+        if not ok:
+            ret false
+        end
+    end
+    ret true
+end
+
+pub func PortNumber(text: str): int:
+    if text.Len() == 0 or text.Len() > 5:
+        ret 0
+    end
+    p := text as u8*
+    mut n := 0
+    repeat text.Len() in i:
+        c := p[i] as int
+        if c < ('0' as int) or c > ('9' as int):
+            ret 0
+        end
+        n = n * 10 + (c - ('0' as int))
+    end
+    ret n <= 65535 ? n : 0
+end
+
+pub func ProfileError(pr: Profile): str:
+    if not IsName(pr.host, ".-"):
+        ret "Enter a server name or IPv4 address."
+    end
+    if PortNumber(pr.port) == 0:
+        ret "The port must be a number from 1 to 65535."
+    end
+    if not IsName(pr.user, ".-_@"):
+        ret "Enter the SSH user name."
+    end
+    ret ""
+end
+
+pub func LoadProfile(): Profile:
+    mut pr := Profile {}
+    if not os.Exists(profile_path()):
+        ret pr
+    end
+    text := os.ReadFile(profile_path())
+    pr.host = ValueOf(text, "host")
+    pr.port = ValueOf(text, "port")
+    pr.user = ValueOf(text, "user")
+    pr.remember = ValueOf(text, "remember") == "yes"
+    pr.udp = ValueOf(text, "udp") == "yes"
+    if pr.port.Len() == 0:
+        pr.port = "22"
+    end
+    if pr.remember:
+        pr.password = keychain_read(pr)
+    end
+    ret pr
+end
+
+pub func SaveProfile(pr: Profile):
+    text := "host=" + pr.host + "\nport=" + pr.port + "\nuser=" + pr.user + "\nremember=" +
+        (pr.remember ? "yes" : "no") + "\nudp=" + (pr.udp ? "yes" : "no") + "\n"
+    _w := os.WriteFile(profile_path(), text)
+    if pr.remember and pr.password.Len() > 0:
+        keychain_write(pr)
+    else:
+        keychain_forget(pr)
+    end
+end

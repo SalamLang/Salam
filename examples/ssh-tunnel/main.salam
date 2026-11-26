@@ -1,0 +1,570 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import env
+import str
+import sync
+import gui.ui
+import os.lockfile
+
+include "engine.salam"
+include "helper.salam"
+include "profile.salam"
+
+mut server := ""
+mut port := "22"
+mut user := ""
+mut password := ""
+mut remember := false
+mut udp := false
+
+mut phase := 0
+mut message := ""
+mut exit_ip := ""
+mut dns_server := ""
+mut footer := ""
+mut sent := ""
+mut received := ""
+mut uptime := ""
+mut open_now := ""
+mut broken := false
+
+func human_bytes(n: i64): str:
+    if n < (1024 as i64):
+        ret str.FromInt(n) + " B"
+    end
+    if n < (1048576 as i64):
+        ret str.FromInt(n / (1024 as i64)) + " KB"
+    end
+    tenths := n * (10 as i64) / (1048576 as i64)
+    ret str.FromInt(tenths / (10 as i64)) + "." + str.FromInt(tenths % (10 as i64)) + " MB"
+end
+
+func two_digits(n: i64): str:
+    ret (n < (10 as i64) ? "0" : "") + str.FromInt(n)
+end
+
+func elapsed(since: i64): str:
+    if since == (0 as i64):
+        ret ""
+    end
+    s := (sync.NowMs() - since) / (1000 as i64)
+    ret two_digits(s / (3600 as i64)) + ":" + two_digits(
+        (s / (60 as i64)) % (60 as i64)
+    ) + ":" + two_digits(s % (60 as i64))
+end
+
+func status_title(p: int): str:
+    if p == engine.PHASE_UP:
+        ret "Connected"
+    end
+    if p == engine.PHASE_SSH or p == engine.PHASE_ADMIN:
+        ret "Connecting"
+    end
+    if p == engine.PHASE_RECONNECT:
+        ret "Reconnecting"
+    end
+    if p == engine.PHASE_CLOSING:
+        ret "Disconnecting"
+    end
+    ret "Not connected"
+end
+
+func is_live(p: int): bool:
+    ret p == engine.PHASE_UP or p == engine.PHASE_RECONNECT
+end
+
+func status_hint(p: int, note: str): str:
+    if note.Len() > 0:
+        ret note
+    end
+    if p == engine.PHASE_UP:
+        ret "Your traffic goes through the server"
+    end
+    if p == engine.PHASE_IDLE:
+        ret "Your traffic goes out directly"
+    end
+    ret "One moment"
+end
+
+func action_label(p: int): str:
+    if p == engine.PHASE_IDLE:
+        ret "Connect"
+    end
+    if p == engine.PHASE_CLOSING:
+        ret "Please wait"
+    end
+    if p == engine.PHASE_UP:
+        ret "Disconnect"
+    end
+    ret "Cancel"
+end
+
+func refresh_view():
+    s := engine.CurrentSnapshot()
+    phase = s.phase
+    message = s.message
+    broken = s.broken
+    exit_ip = s.exit_ip.Len() > 0 ? s.exit_ip : "checking"
+    dns_server = "DNS " + (s.dns_server == "127.0.0.53" ? "of the server" : s.dns_server)
+    if s.udp_state == "on":
+        dns_server += ", UDP on"
+    else s.udp_state == "waiting":
+        dns_server += ", UDP starting"
+    end
+    footer = "IPv4 TCP and DNS use the tunnel. Other UDP and IPv6 are blocked."
+    if s.udp_state == "on" or s.udp_state == "waiting" or s.phase == engine.PHASE_IDLE and udp:
+        footer = "IPv4 TCP and UDP use the tunnel. IPv6 and QUIC are blocked."
+    else s.udp_note.Len() > 0:
+        footer = "UDP is off: " + s.udp_note + "."
+    end
+    sent = human_bytes(s.up)
+    received = human_bytes(s.down)
+    uptime = elapsed(s.since)
+    open_now = str.FromInt(s.active)
+end
+
+func toggle():
+    s := engine.CurrentSnapshot()
+    if s.phase == engine.PHASE_CLOSING:
+        ret
+    end
+    if s.phase != engine.PHASE_IDLE:
+        engine.RequestStop()
+        ret
+    end
+    pr := profile.Profile {
+        host = server.Trim(),
+        port = port.Trim(),
+        user = user.Trim(),
+        password = str.Clone(password),
+        remember = remember,
+        udp = udp
+    }
+    problem := profile.ProfileError(pr)
+    if problem.Len() > 0:
+        engine.Publish(engine.Snapshot { message = problem, broken = s.broken })
+        ret
+    end
+    profile.SaveProfile(pr)
+    engine.StartTunnel(pr)
+end
+
+func repair():
+    if engine.CurrentSnapshot().phase == engine.PHASE_IDLE:
+        engine.StartRepair()
+    end
+end
+
+func close_app(): bool:
+    if engine.CurrentSnapshot().phase != engine.PHASE_IDLE:
+        engine.RequestStop()
+        deadline := sync.NowMs() + (10000 as i64)
+        until sync.NowMs() < deadline and engine.CurrentSnapshot().phase != engine.PHASE_IDLE:
+            sync.SleepMs(100)
+        end
+    end
+    ret true
+end
+
+component Field(label: str):
+    box:
+        gap = 4
+        paragraph:
+            margin = 0
+            font size = 12
+            color = "light dark(#667085, #98a2b3)"
+            content = label
+        end
+        content: end
+    end
+end
+
+component Stat(label: str, value: str):
+    box:
+        grow = 1
+        width = 0
+        gap = 2
+        padding = 10, 12
+        radius = 10
+        background = "light dark(#f2f4f7, #20242c)"
+        paragraph:
+            margin = 0
+            font size = 11
+            color = "light dark(#667085, #98a2b3)"
+            content = label
+        end
+        paragraph:
+            margin = 0
+            font size = 15
+            font weight = "bold"
+            content = value
+        end
+    end
+end
+
+page:
+    title = "Salam Tunnel"
+    background = "light dark(#f4f5f7, #0e1014)"
+    color = "light dark(#101828, #f2f4f7)"
+    box:
+        padding = 16
+        gap = 12
+        box:
+            layout = "row"
+            align = "center"
+            gap = 12
+            padding = 14
+            radius = 14
+            background = "light dark(#ffffff, #181b21)"
+            border = 1, "solid", "light dark(#e4e7ec, #262b34)"
+            box:
+                width = 40
+                height = 40
+                radius = 20
+                layout = "row"
+                align = "center"
+                justify = "center"
+                background = "light dark(#eaecf0, #262b34)"
+                if phase != engine.PHASE_IDLE:
+                    background = "light dark(#fef0c7, #4a3410)"
+                end
+                if phase == engine.PHASE_UP:
+                    background = "light dark(#d1fadf, #0f3d28)"
+                end
+                box:
+                    width = 14
+                    height = 14
+                    radius = 7
+                    background = "light dark(#98a2b3, #667085)"
+                    if phase != engine.PHASE_IDLE:
+                        background = "light dark(#f79009, #fdb022)"
+                    end
+                    if phase == engine.PHASE_UP:
+                        background = "light dark(#12b76a, #32d583)"
+                    end
+                end
+            end
+            box:
+                grow = 1
+                width = 0
+                gap = 2
+                paragraph:
+                    id = "status"
+                    margin = 0
+                    font size = 18
+                    font weight = "bold"
+                    content = status_title(phase)
+                end
+                paragraph:
+                    id = "message"
+                    margin = 0
+                    font size = 12
+                    color = "light dark(#667085, #98a2b3)"
+                    content = status_hint(phase, message)
+                end
+            end
+        end
+        box:
+            gap = 10
+            padding = 14
+            radius = 14
+            background = "light dark(#ffffff, #181b21)"
+            border = 1, "solid", "light dark(#e4e7ec, #262b34)"
+            if is_live(phase):
+                box:
+                    gap = 2
+                    align = "center"
+                    padding = 10, 0
+                    paragraph:
+                        margin = 0
+                        font size = 12
+                        color = "light dark(#667085, #98a2b3)"
+                        content = "Public IP address"
+                    end
+                    paragraph:
+                        id = "ip"
+                        margin = 0
+                        font size = 26
+                        font weight = "bold"
+                        content = exit_ip
+                    end
+                    paragraph:
+                        id = "dns"
+                        margin = 0
+                        font size = 12
+                        color = "light dark(#667085, #98a2b3)"
+                        content = dns_server
+                    end
+                end
+                box:
+                    layout = "row"
+                    gap = 8
+                    Stat:
+                        label = "Sent"
+                        value = sent
+                    end
+                    Stat:
+                        label = "Received"
+                        value = received
+                    end
+                end
+                box:
+                    layout = "row"
+                    gap = 8
+                    Stat:
+                        label = "Connected for"
+                        value = uptime
+                    end
+                    Stat:
+                        label = "Open connections"
+                        value = open_now
+                    end
+                end
+            else:
+                box:
+                    layout = "row"
+                    gap = 8
+                    box:
+                        grow = 1
+                        Field:
+                            label = "Server"
+                            input:
+                                id = "server"
+                                bind = server
+                                padding = 7, 10
+                                radius = 8
+                                width = 100%
+                                font size = 14
+                                color = "light dark(#101828, #f2f4f7)"
+                                background = "light dark(#ffffff, #0f1217)"
+                                border = 1, "solid", "light dark(#d0d5dd, #333a45)"
+                                focus:
+                                    border = 1, "solid", "light dark(#2563eb, #60a5fa)"
+                                end
+                            end
+                        end
+                    end
+                    box:
+                        width = 84
+                        Field:
+                            label = "Port"
+                            input:
+                                id = "port"
+                                bind = port
+                                padding = 7, 10
+                                radius = 8
+                                width = 100%
+                                font size = 14
+                                color = "light dark(#101828, #f2f4f7)"
+                                background = "light dark(#ffffff, #0f1217)"
+                                border = 1, "solid", "light dark(#d0d5dd, #333a45)"
+                                focus:
+                                    border = 1, "solid", "light dark(#2563eb, #60a5fa)"
+                                end
+                            end
+                        end
+                    end
+                end
+                Field:
+                    label = "User name"
+                    input:
+                        id = "user"
+                        bind = user
+                        padding = 7, 10
+                        radius = 8
+                        width = 100%
+                        font size = 14
+                        color = "light dark(#101828, #f2f4f7)"
+                        background = "light dark(#ffffff, #0f1217)"
+                        border = 1, "solid", "light dark(#d0d5dd, #333a45)"
+                        focus:
+                            border = 1, "solid", "light dark(#2563eb, #60a5fa)"
+                        end
+                    end
+                end
+                Field:
+                    label = "Password (empty to use an SSH key)"
+                    input:
+                        id = "password"
+                        type = "password"
+                        bind = password
+                        padding = 7, 10
+                        radius = 8
+                        width = 100%
+                        font size = 14
+                        color = "light dark(#101828, #f2f4f7)"
+                        background = "light dark(#ffffff, #0f1217)"
+                        border = 1, "solid", "light dark(#d0d5dd, #333a45)"
+                        focus:
+                            border = 1, "solid", "light dark(#2563eb, #60a5fa)"
+                        end
+                    end
+                end
+                box:
+                    layout = "row"
+                    align = "center"
+                    gap = 8
+                    button:
+                        id = "remember"
+                        width = 20
+                        height = 20
+                        padding = 0
+                        radius = 6
+                        font size = 13
+                        font weight = "bold"
+                        color = "#ffffff"
+                        background = "light dark(#ffffff, #0f1217)"
+                        border = 1, "solid", "light dark(#d0d5dd, #475467)"
+                        if remember:
+                            background = "#2563eb"
+                            border = 1, "solid", "#2563eb"
+                        end
+                        click = (): remember = not remember end
+                        content = remember ? "✓" : ""
+                    end
+                    paragraph:
+                        margin = 0
+                        font size = 13
+                        content = "Remember password in Keychain"
+                    end
+                end
+                box:
+                    layout = "row"
+                    align = "center"
+                    gap = 8
+                    button:
+                        id = "udp"
+                        width = 20
+                        height = 20
+                        padding = 0
+                        radius = 6
+                        font size = 13
+                        font weight = "bold"
+                        color = "#ffffff"
+                        background = "light dark(#ffffff, #0f1217)"
+                        border = 1, "solid", "light dark(#d0d5dd, #475467)"
+                        if udp:
+                            background = "#2563eb"
+                            border = 1, "solid", "#2563eb"
+                        end
+                        click = (): udp = not udp end
+                        content = udp ? "✓" : ""
+                    end
+                    paragraph:
+                        margin = 0
+                        font size = 13
+                        content = "UDP too (copies a relay to the server)"
+                    end
+                end
+            end
+        end
+        button:
+            id = "action"
+            padding = 11
+            radius = 10
+            font size = 15
+            font weight = "bold"
+            color = "#ffffff"
+            border = "none"
+            background = "light dark(#2563eb, #3b82f6)"
+            hover background = "light dark(#1d4ed8, #2563eb)"
+            if phase != engine.PHASE_IDLE:
+                background = "light dark(#d92d20, #e5484d)"
+                hover background = "light dark(#b42318, #cd2b31)"
+            end
+            click = toggle
+            content = action_label(phase)
+        end
+        if broken:
+            button:
+                id = "repair"
+                padding = 9
+                radius = 10
+                font size = 13
+                color = "light dark(#101828, #f2f4f7)"
+                background = "light dark(#ffffff, #181b21)"
+                border = 1, "solid", "light dark(#d0d5dd, #333a45)"
+                click = repair
+                content = "Restore network settings"
+            end
+        end
+        paragraph:
+            margin = 0
+            font size = 11
+            text align = "center"
+            color = "light dark(#667085, #7d8797)"
+            content = footer
+        end
+    end
+end
+
+func run_window(): int:
+    lock := lockfile.Acquire(profile.AppDir() + "/app.lock")
+    if not lock.acquired:
+        println "Salam Tunnel is already open."
+        ret 1
+    end
+    engine.StopOrphans()
+    saved := profile.LoadProfile()
+    server = saved.host
+    port = saved.port
+    user = saved.user
+    password = saved.password
+    remember = saved.remember
+    udp = saved.udp
+    engine.Publish(engine.Snapshot { broken = engine.NeedsRepair() })
+    refresh_view()
+    ui.SetAfterUpdate(
+        ():
+        refresh_view()
+        ret true
+        end
+    )
+    ui.OnCloseRequest((): ret close_app() end)
+    window_options := ui.Options { width = 360.0, height = 550.0, title = "Salam Tunnel" }
+    ui.RunPageWith(
+        (): ret ui.NoPatches() end, (b: ui.Builder): __salam_page(b) end, window_options
+    )
+    mut held := lock
+    lockfile.Release(held)
+    ret 0
+end
+
+func dispatch(): int:
+    if env.Get("SALAM_TUNNEL_ASKPASS") == "1":
+        ret engine.AskPass()
+    end
+    args := os.Args()
+    if args.Len() == 9 and args.Get(1) == "--helper":
+        ret helper.RunHelper(
+            args.Get(2),
+            profile.PortNumber(args.Get(3)),
+            args.Get(4),
+            args.Get(5),
+            args.Get(6),
+            args.Get(7),
+            args.Get(8)
+        )
+    end
+    if args.Len() == 2 and args.Get(1) == "--repair":
+        ret helper.RunRepair()
+    end
+    ret run_window()
+end
+
+func main:
+    code := dispatch()
+    ret code
+end

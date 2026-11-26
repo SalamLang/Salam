@@ -459,11 +459,12 @@ u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
 Shift counts mask to 0-127. A float cast saturates like the other widths. They cannot
 index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
 refuses them, and an `extern` function can use them only on 64-bit targets
-(E160). On `salam build --platform=js` they are exact BigInts, but a value that passes through
-`i64`/`u64` there is still limited to 2^53.
+(E160). On `salam build --platform=js` they are exact BigInts, like `i64` and `u64`.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
-bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
+bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32). On
+`salam build --platform=js` they are JS numbers, exact up to 2^53, while `i64`
+and `u64` are exact BigInts there.
 `size(T)` is the size of a type in bytes and returns `usize`. In a file that declares
 its own `size` function, only built-in type names (`size(i32)`) still reach the built-in.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all

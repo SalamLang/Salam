@@ -246,7 +246,7 @@ func main:
 end
 ```
 
-The page starts with a reset stylesheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
+The page starts with a reset style sheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
 
 ```text
 <!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sara | Profile</title>...</head><body><h1>Sara</h1><p>Administrator</p><ul><li>1. Salam</li><li>2. SQL &amp; &lt;HTML&gt;</li></ul></body></html>
@@ -304,7 +304,7 @@ The page language is young, and it is not a replacement for every web stack:
 - **No framework ecosystem.** There are no third-party component libraries, design systems or routing libraries for it. For a large single-page application with complex client state, a TypeScript framework is the practical choice (see [Salam vs TypeScript](/blog/salam-vs-typescript/)).
 - **The structure of a server-rendered page is fixed at compile time.** `if` and `each` choose and repeat parts, but you cannot build arbitrary HTML from strings, by design.
 - **Client-side state needs JavaScript.** Components with state are drawn by the page script, so they appear only with JavaScript enabled; static content does not depend on it.
-- **The JavaScript backend has differences from native Salam.** For example, an `i64` keeps only 53 bits of precision in the browser, because JavaScript numbers are doubles.
+- **The JavaScript backend has differences from native Salam.** For example, `usize` keeps only 53 bits of precision in the browser, because JavaScript numbers are doubles; use `i64` or `u64`, which are exact BigInts there.
 - **Escape hatches exist but are unchecked.** A `style` or `script` element can hold raw CSS or JavaScript, and a handler can be a plain JavaScript string, but the compiler cannot check what is inside them.
 
 Where it fits well: documentation sites, landing pages, dashboards, forms, admin pages and server-rendered applications where correctness of the markup and safe escaping matter more than client-side richness.

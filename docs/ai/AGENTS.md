@@ -789,14 +789,13 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
 - **The version command is `salam version`.** `salam --version` and `-v`
   print the same thing, and `salam version --short` prints just the number.
 
-- **JavaScript 64-bit integers are exact only up to 2^53.** `salam build --platform=js` stores
-  `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
-  wraparound and casts are computed exactly, but a result (or an intermediate
-  value) beyond 2^53 is rounded: `-1` as `u64` prints
-  `18446744073709552000`. `size` throws. Check wide 64-bit math, such as
-  hashes, with `salam run`.
-  `i128`/`u128` are BigInts and stay exact, but a value that passes through
-  `i64` or `u64` on the way in or out is still limited to 2^53 there.
+- **JavaScript `i64`/`u64` are exact BigInts.** `salam build --platform=js` stores
+  `i64`, `u64`, `i128` and `u128` as BigInts that wrap like native, so
+  arithmetic, shifts, casts, printing, `hash()`, HashMap keys and JSON give the
+  native answers (`-1` as `u64` prints `18446744073709551615`). `int` and the
+  other widths up to 32 bits stay plain JS numbers. `usize` and `size` are
+  pointer-sized lengths and indices there and stay JS numbers too, exact only
+  up to 2^53: use `u64` or `i64` for 64-bit math that must be exact.
 
 - **`i128` and `u128` have a few limits of their own.** They cannot index an
   array, bound a slice, size a string repeat or count a `repeat` (`E159`: cast

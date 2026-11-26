@@ -127,7 +127,7 @@ func jsg_compound(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     if local_known(g, av.name) and not jsg_local_is_mut(g, av.name):
         ret ""
     end
-    if jsg_ts_wrappable(av.type_str) or jsg_ts_is_w64(av.type_str):
+    if jsg_ts_wrappable(av.type_str) or jsg_ts_is_w64(av.type_str) or jsg_wide_ts(av.type_str):
         ret ""
     end
     ats := av.type_str
@@ -149,6 +149,18 @@ func jsg_compound(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     ret lv + " " + cg_op(rv.op) + "= " + jsg_expr_p(g, s, a, rv.b, JSP_LAMBDA)
 end
 
+func jsg_pow_assign(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    lv := jsg_expr(g, s, a, n.a)
+    lts := at.Get(a, n.a).type_str
+    pw := "Math.pow(" + jsg_num(g, s, a, n.a, 0) + ", " + jsg_num(g, s, a, n.b, 0) + ")"
+    if jsg_wide_ts(lts):
+        u := jsg_wide_signed(lts) ? "0" : "1"
+        ret lv + " = __sal_wff(" + pw + ", " + u + (jsg_w128_ts(lts) ? "" : ", 64") + ")"
+    end
+    ret lv + " = " + pw
+end
+
 func jsg_simple_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     k := at.KindOf(a, id)
     if k == at.AST_VAR_DECL:
@@ -161,9 +173,7 @@ func jsg_simple_inline(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
         end
         n := at.Get(a, id)
         if n.op == tok.TK_POWER_EQ:
-            ret jsg_expr(
-                g, s, a, n.a
-            ) + " = Math.pow(" + jsg_expr(g, s, a, n.a) + ", " + jsg_expr(g, s, a, n.b) + ")"
+            ret jsg_pow_assign(g, s, a, id)
         end
         mut rhs := jsg_expr(g, s, a, n.b)
         lts := at.Get(a, n.a).type_str
@@ -290,12 +300,44 @@ func jsg_loop_var(g &: Jg, a &: at.Ast, id: int): str:
     ret lv2
 end
 
+func jsg_repeat_big_head(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, lv: str, ity: str):
+    n := at.Get(a, id)
+    if n.c == 0:
+        bound := jsg_big_operand(g, s, a, n.a, ity)
+        if jsg_bound_inline_ok(g, s, a, n.a):
+            cg_line(g, "for (let " + lv + " = 0n; " + lv + " < " + bound + "; " + lv + "++) {")
+        else:
+            cnt := jsg_fresh(g, "count")
+            cg_line(
+                g,
+                "for (let " + lv + " = 0n, " + cnt + " = " + bound + "; " + lv + " < " + cnt + "; " +
+                    lv + "++) {"
+            )
+        end
+        ret
+    end
+    endv := jsg_fresh(g, "end")
+    stepv := jsg_fresh(g, "step")
+    from_s := jsg_big_operand(g, s, a, n.a, ity)
+    to_s := jsg_big_operand(g, s, a, n.c, ity)
+    step_s := n.d != 0 ? jsg_big_operand(g, s, a, n.d, ity) : "1n"
+    cg_line(
+        g,
+        "for (let " + lv + " = " + from_s + ", " + endv + " = " + to_s + ", " + stepv + " = (" + lv +
+            " <= " + endv + " ? 1n : -1n) * " + step_s + "; " + stepv + " > 0n ? " + lv + " <= " +
+            endv + " : " + lv + " >= " + endv + "; " + lv + " += " + stepv + ") {"
+    )
+end
+
 func jsg_repeat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     n := at.Get(a, id)
     m := g.locals.Len()
     lv := jsg_loop_var(g, a, id)
     lp := jsg_loop_open(g, a, n.b)
-    if n.c == 0:
+    ity := n.type_str
+    if jsg_wide_ts(ity):
+        jsg_repeat_big_head(g, s, a, id, lv, ity)
+    else n.c == 0:
         is_int := n.a != 0 and cg_is_int_typestr(at.Get(a, n.a).type_str)
         mut bound := jsg_expr_p(g, s, a, n.a, 11)
         if not is_int:
@@ -501,8 +543,8 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
             if av.a != 0 and cg_is_vector_ts(s, at.Get(a, av.a).type_str):
                 cg_line(
                     g,
-                    jsg_expr_p(g, s, a, av.a, JSP_MEMBER) + "[" + jsg_expr(
-                        g, s, a, av.b
+                    jsg_expr_p(g, s, a, av.a, JSP_MEMBER) + "[" + jsg_num(
+                        g, s, a, av.b, 0
                     ) + "] = " + jsg_expr(g, s, a, n.b) + ";"
                 )
                 ret
@@ -570,15 +612,11 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
             end
         end
         if n.op == tok.TK_POWER_EQ:
-            cg_line(
-                g,
-                jsg_expr(
-                    g, s, a, n.a
-                ) + " = Math.pow(" + jsg_expr(g, s, a, n.a) + ", " + jsg_expr(g, s, a, n.b) + ");"
-            )
+            cg_line(g, jsg_pow_assign(g, s, a, id) + ";")
             ret
         end
-        if n.op == tok.TK_SLASH_EQ and n.a != 0 and cg_is_int_typestr(at.Get(a, n.a).type_str):
+        if n.op == tok.TK_SLASH_EQ and n.a != 0 and cg_is_int_typestr(at.Get(a, n.a).type_str) and
+            not jsg_wide_ts(at.Get(a, n.a).type_str):
             dts := at.Get(a, n.a).type_str
             mut qv := "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 13) + " / " + jsg_nz(
                 g, a, n.op, dts, n.b, jsg_expr_p(g, s, a, n.b, 14)
@@ -672,6 +710,13 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
                         iv.op == tok.TK_PLUS_PLUS ? 0 : 1, ulv, "1", ults
                     ) + ";"
                 )
+                ret
+            end
+            if iv.a != 0 and jsg_wide_ts(at.Get(a, iv.a).type_str):
+                bts := at.Get(a, iv.a).type_str
+                blv := jsg_expr_p(g, s, a, iv.a, JSP_MEMBER)
+                bop := iv.op == tok.TK_PLUS_PLUS ? " + 1n" : " - 1n"
+                cg_line(g, blv + " = " + jsg_wide_wrap(blv + bop, bts) + ";")
                 ret
             end
             if iv.a != 0 and jsg_ts_wrappable(at.Get(a, iv.a).type_str):

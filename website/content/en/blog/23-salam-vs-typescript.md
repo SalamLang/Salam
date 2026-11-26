@@ -252,7 +252,7 @@ func main:
 end
 ```
 
-The page starts with a reset stylesheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
+The page starts with a reset style sheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
 
 ```text
 <!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cart of Sara</title>...</head><body><h1>Sara&#39;s cart</h1><p>Items: 2</p><ul><li>Pen</li><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
@@ -261,7 +261,7 @@ The page starts with a reset stylesheet and a `generator` meta tag that are long
 
 The script tag in the data comes out as text. The layout function is `pure`, so it cannot read files or the network while rendering; the handler fetches the data and passes it in. The article [Web development with Salam](/blog/web-development-with-salam/) walks through the page language from static pages to interactive components.
 
-For code that has to run in the browser, `salam build --platform=js` compiles Salam to JavaScript, and `salam build --platform=web` builds a page together with the Salam scripts it uses. Event handlers written in the page language go through the same JavaScript backend. One limit is worth knowing: JavaScript numbers are doubles, so on this backend an `i64` keeps only 53 bits of precision. `9007199254740993` printed from a native build prints `9007199254740992` from `salam build --platform=js`, which is also what a TypeScript `number` would do. For whole programs without a JavaScript layer at all, Salam can target WebAssembly; the article [From native to WebAssembly](/blog/salam-webassembly-and-javascript/) covers those targets.
+For code that has to run in the browser, `salam build --platform=js` compiles Salam to JavaScript, and `salam build --platform=web` builds a page together with the Salam scripts it uses. Event handlers written in the page language go through the same JavaScript backend. JavaScript numbers are doubles, so a TypeScript `number` keeps only 53 bits of precision. Salam's `i64` and `u64` become BigInts on this backend instead, so `9007199254740993` prints the same from `salam build --platform=js` as from a native build, and overflow wraps the same way. For whole programs without a JavaScript layer at all, Salam can target WebAssembly; the article [From native to WebAssembly](/blog/salam-webassembly-and-javascript/) covers those targets.
 
 What Salam does not have is a component framework ecosystem. There is no Salam equivalent of the React library world, and the page language's interactive model (state in variables, handlers that change it, re-rendering only what changed) is young. For a large, highly interactive single-page application, TypeScript with a mature framework is the realistic choice today.
 
@@ -303,7 +303,7 @@ In the project's router benchmark Salam answered about 4.2 times as many request
 
 ### Does Salam compile to JavaScript like TypeScript does?
 
-Yes, `salam build --platform=js` compiles a Salam program to JavaScript for the browser, and page event handlers use the same backend. Unlike TypeScript, which is JavaScript plus types, Salam is a separate language, so some details differ, such as `i64` values being limited to 53 bits of precision there.
+Yes, `salam build --platform=js` compiles a Salam program to JavaScript for the browser, and page event handlers use the same backend. Unlike TypeScript, which is JavaScript plus types, Salam is a separate language, so some details differ, such as `usize` values being plain JavaScript numbers there, exact only up to 53 bits.
 
 ### Can I use npm packages from Salam?
 

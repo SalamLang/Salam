@@ -2935,7 +2935,7 @@ salam sql generate q --schema=db/ --output=gen/store.salam   # typed query funct
 salam new name                          # scaffold a project: name/main.salam + salam.toml
 salam serve [dir] [--port=N]            # serve a folder over HTTP
 salam serve --config=web.salam [--test] # several sites from one config (std/net/httpd); --test only checks it
-salam init                              # same, in the current directory
+salam init                              # here if empty (.git, README*, LICENSE* ignored), else ./<name>
 salam new name --desktop                # a desktop app with a web interface (gui.webview, docs/DESKTOP.md)
 salam bundle [dir] [--target=T] [--format=a,b]  # installers from the [app] table of salam.toml
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
@@ -3045,7 +3045,7 @@ manager is only for packages that other people keep in their own Git
 repositories. Full guide: `docs/PACKAGES.md`, `/packages/` on both sites.
 
 ```sh
-salam init                                  # main.salam + salam.toml in this folder
+salam init                                  # main.salam + salam.toml here if empty, else in a subfolder
 salam add github.com/owner/repo             # newest release; writes salam.toml and salam.lock
 salam add github.com/owner/repo@v1.2.0      # exact tag; ranges @^1.2 and @~1.2, and '@>=1.2' (quote it)
 salam update [pkg] / salam update pkg@latest   # newest release, same major / across majors

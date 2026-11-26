@@ -32,26 +32,48 @@ func write_if_missing(path: str, content: str, made &: Vector<str>): bool:
     ret true
 end
 
-func has_salam_files(dir: str): bool:
+func is_ignored_entry(name: str): bool:
+    if str.Equals(name, ".git"):
+        ret true
+    end
+    low := str.Lower(name)
+    ret str.Equals(low, "readme") or str.StartsWith(
+        low, "readme."
+    ) or str.Equals(low, "license") or str.StartsWith(
+        low, "license."
+    )
+end
+
+func is_empty_dir(dir: str): bool:
     entries := os.ListDir(dir)
     defer entries.Free()
     repeat entries.Len() in i:
-        if str.EndsWith(entries.Get(i), ".salam"):
-            ret true
-        end
-    end
-    ret false
-end
-
-func scaffold(dir: str, name: str, fa: bool, with_main: bool, made &: Vector<str>): bool:
-    if with_main:
-        mut content := "func main:\n    println \"Hello, World!\"\nend\n"
-        if fa:
-            content = "تابع ریشه:\n    سرچاپ \"سلام، دنیا!\"\nپایان\n"
-        end
-        if not write_if_missing(project_path(dir, "main.salam"), content, made):
+        if not is_ignored_entry(entries.Get(i)):
             ret false
         end
+    end
+    ret true
+end
+
+func init_target(dir: str, name: str): str:
+    if not os.Exists(dir) or is_empty_dir(dir):
+        ret dir
+    end
+    sub := project_path(dir, name)
+    if os.Exists(sub) and (not os.IsDir(sub) or not is_empty_dir(sub)):
+        io.EPrintln(co.Format1(i18.Tr("salam: '%s' already exists"), co.ArgStr(sub)))
+        ret ""
+    end
+    ret sub
+end
+
+func scaffold(dir: str, name: str, fa: bool, made &: Vector<str>): bool:
+    mut content := "func main:\n    println \"Hello, World!\"\nend\n"
+    if fa:
+        content = "تابع ریشه:\n    سرچاپ \"سلام، دنیا!\"\nپایان\n"
+    end
+    if not write_if_missing(project_path(dir, "main.salam"), content, made):
+        ret false
     end
     manifest := "[package]\nname = " + toml_quote(name) + "\nversion = \"0.1.0\"\nsalam = \">=" +
         str.TrimPrefix(
@@ -164,18 +186,12 @@ document.getElementById("ask").addEventListener("click", async () => {
     ret write_if_missing(project_path(folder, "style.css"), style, made)
 end
 
-func print_created(name: str, made: Vector<str>, cd: str, runnable: bool, run_cmd: str):
+func print_created(name: str, made: Vector<str>, cd: str, run_cmd: str):
     println co.Format1(i18.Tr("Created project '%s':"), co.ArgStr(name))
     repeat made.Len() in i:
         println "  " + made.Get(i)
     end
     println ""
-    if not runnable:
-        println i18.Tr(
-            "this directory already has .salam files: rename the one with the entry function to main.salam"
-        )
-        ret
-    end
     println i18.Tr("Next steps:")
     if str.Len(cd) > 0:
         println "  cd " + cd
@@ -222,10 +238,10 @@ func new_project(opt &: dr.Dr): int:
         if not scaffold_desktop(name, name, fa, made):
             ret 2
         end
-    else not scaffold(name, name, fa, true, made):
+    else not scaffold(name, name, fa, made):
         ret 2
     end
-    print_created(name, made, name, true, "salam run")
+    print_created(name, made, name, "salam run")
     if opt.new_desktop:
         println "  salam bundle"
     end
@@ -237,17 +253,11 @@ func init_project(opt &: dr.Dr): int:
     if str.Len(dir) == 0:
         dir = "."
     end
-    if not os.Exists(dir):
-        if os.MkdirAll(dir) != 0:
-            io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(dir)))
-            ret 2
-        end
-    else not os.IsDir(dir):
+    if os.Exists(dir) and not os.IsDir(dir):
         io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a directory"), co.ArgStr(dir)))
         ret 2
     end
-    has_main := os.Exists(project_path(dir, "main.salam"))
-    if has_main and os.Exists(project_path(dir, "salam.toml")):
+    if os.Exists(project_path(dir, "main.salam")) and os.Exists(project_path(dir, "salam.toml")):
         io.EPrintln(co.Format1(i18.Tr("salam: '%s' is already a Salam project"), co.ArgStr(dir)))
         ret 2
     end
@@ -259,19 +269,26 @@ func init_project(opt &: dr.Dr): int:
     if str.Len(name) == 0 or str.Equals(name, ".") or str.Equals(name, ".."):
         name = "app"
     end
-    with_main := not has_main and not has_salam_files(dir)
     if wizard_flags_given(opt) or stdin_is_tty():
-        ret init_wizard(opt, dir, name, has_main, with_main)
+        ret init_wizard(opt, dir, name)
+    end
+    target := init_target(dir, name)
+    if str.Len(target) == 0:
+        ret 2
+    end
+    if not os.Exists(target) and os.MkdirAll(target) != 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(target)))
+        ret 2
     end
     mut made := Vector {} as Vector<str>
     defer made.Free()
-    if not scaffold(dir, name, str.Equals(opt.lang, "fa"), with_main, made):
+    if not scaffold(target, name, str.Equals(opt.lang, "fa"), made):
         ret 2
     end
     mut cd := ""
-    if not str.Equals(dir, "."):
-        cd = dir
+    if not str.Equals(target, "."):
+        cd = target
     end
-    print_created(name, made, cd, has_main or with_main, "salam run")
+    print_created(name, made, cd, "salam run")
     ret 0
 end

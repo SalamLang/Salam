@@ -194,6 +194,26 @@ $cerrs"
                 return
             fi
         done
+        mkdir -p "$jobdir/kept/.git"
+        : >"$jobdir/kept/readme.txt"
+        : >"$jobdir/kept/LICENSE"
+        : >"$jobdir/kept/.gitignore"
+        : >"$jobdir/kept/.DS_Store"
+        (cd "$jobdir/kept" && "$SALAM_ABS" init $flags --name=demo --lang="$lang" --no-color) >>"$buildlog" 2>&1 </dev/null
+        if [ ! -f "$jobdir/kept/salam.toml" ] || [ -e "$jobdir/kept/demo" ]; then
+            echo "FAIL $label (init did not use a folder holding only ignored files)"
+            sed 's/^/  /' "$buildlog" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
+        mkdir -p "$jobdir/used/.config"
+        (cd "$jobdir/used" && "$SALAM_ABS" init $flags --name=demo --lang="$lang" --no-color) >>"$buildlog" 2>&1 </dev/null
+        if [ ! -f "$jobdir/used/demo/salam.toml" ] || [ -e "$jobdir/used/salam.toml" ]; then
+            echo "FAIL $label (init did not use a subfolder of a non-empty folder)"
+            sed 's/^/  /' "$buildlog" | head -20
+            rm -rf "$jobdir"
+            return
+        fi
         if ! grep -q 'description = "a demo"' "$proj/salam.toml"; then
             echo "FAIL $label (salam.toml has no description)"
             rm -rf "$jobdir"

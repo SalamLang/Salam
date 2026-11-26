@@ -1,0 +1,872 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "udprelay"
+@fa "رله یو دی پی"
+package udprelay
+
+import mem
+import sync
+import atomic
+import net.udp
+import net.internal.rawsock
+import os.process
+import os.internal.fdio
+
+if not SALAM_OS_WINDOWS:
+    extern:
+        func poll(fds: void*, nfds: usize, timeout: int): int
+        func signal(sig: int, handler: void*): void*
+    end
+end
+
+@en "header_size"
+@fa "اندازه سرآیند"
+pub const header_size := 10
+@en "max_payload"
+@fa "بیشینه داده"
+pub const max_payload := 65507
+@en "max_frame"
+@fa "بیشینه قاب"
+pub const max_frame := 65517
+
+const _QUEUE_LIMIT := 512
+const _RETRY_MS := 2000
+
+@en "Datagram"
+@fa "داده‌گرام"
+pub struct Datagram:
+    @en "flow"
+    @fa "جریان"
+    pub flow: int = 0
+    @en "ip"
+    @fa "نشانی"
+    pub ip: i64 = 0 as i64
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "length"
+    @fa "طول"
+    pub length: int = 0
+end
+
+@en "PacketRelay"
+@fa "رله بسته"
+pub interface PacketRelay:
+    @en "Send"
+    @fa "فرستادن"
+    func Send(flow: int, ip: i64, port: int, ptr: void*, n: int): bool
+    @en "Receive"
+    @fa "دریافت"
+    func Receive(buf: void*, max: int, info &: Datagram, timeout_ms: int): int
+    @en "Close"
+    @fa "بستن"
+    func Close()
+end
+
+@en "NoRelay"
+@fa "بدون رله"
+pub struct NoRelay:
+    @en "Send"
+    @fa "فرستادن"
+    pub func Send(_flow: int, _ip: i64, _port: int, _ptr: void*, _n: int): bool:
+        ret false
+    end
+
+    @en "Receive"
+    @fa "دریافت"
+    pub func Receive(_buf: void*, _max: int, _info &: Datagram, timeout_ms: int): int:
+        sync.SleepMs(timeout_ms)
+        ret 0
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        sync.SleepMs(0)
+    end
+end
+
+@en "ServerOptions"
+@fa "گزینه های کارساز"
+pub struct ServerOptions:
+    @en "max_flows"
+    @fa "بیشینه جریان ها"
+    pub max_flows: int = 256
+    @en "idle_ms"
+    @fa "مهلت بیکاری"
+    pub idle_ms: int = 120000
+    @en "allow_loopback"
+    @fa "اجازه لوپ بک"
+    pub allow_loopback: bool = false
+    @en "announce_fd"
+    @fa "توصیفگر اعلام"
+    pub announce_fd: i64 = -1
+end
+
+struct _Frames:
+    pub data: u8* = null
+    pub len: int = 0
+end
+
+struct _Core:
+    pub cmd: process.Command = process.Command {}
+    pub child: process.Child = process.Child {}
+    pub spawns: bool = false
+    pub dials: bool = false
+    pub connect: func () i64 = (): ret -1 as i64 end
+    pub token: str = ""
+    pub rfd: i64 = -1
+    pub wfd: i64 = -1
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub cv: sync.CondVar = sync.CondVar {}
+    pub io: sync.Mutex = sync.Mutex {}
+    pub queue: Vector<i64> = Vector {}
+    pub sizes: Vector<int> = Vector {}
+    pub inbox: _Frames = _Frames {}
+    pub closed: atomic.Flag = atomic.Flag {}
+    pub writer_done: atomic.Flag = atomic.Flag {}
+    pub up: atomic.Flag = atomic.Flag {}
+    pub greeted: bool = false
+    pub retry_at: i64 = 0 as i64
+    pub dropped: atomic.I64 = atomic.I64 {}
+end
+
+struct _Flow:
+    pub used: bool = false
+    pub flow: int = 0
+    pub sock: udp.Socket = udp.Socket {}
+    pub last: i64 = 0 as i64
+end
+
+@en "Client"
+@fa "کارخواه رله"
+pub struct Client:
+    @en "core"
+    @fa "هسته"
+    pub core: void* = null
+
+    @en "Send"
+    @fa "فرستادن"
+    pub func Send(flow: int, ip: i64, port: int, ptr: void*, n: int): bool:
+        if this.core == null or n < 0 or n > max_payload:
+            ret false
+        end
+        c := this.core as _Core*
+        if not atomic.Get(c[0].up):
+            atomic.Add(c[0].dropped, 1 as i64)
+            ret false
+        end
+        frame := mem.Allocate((header_size + n) as u64) as u8*
+        info := Datagram {
+            flow = flow,
+            ip = ip,
+            port = port,
+            length = n
+        }
+        EncodeHeader(frame as void*, info)
+        if n > 0:
+            mem.Copy(_at(frame, header_size) as void*, ptr, n as u64)
+        end
+        sync.Lock(c[0].mu)
+        full := c[0].queue.Len() >= _QUEUE_LIMIT
+        if not full:
+            c[0].queue.Push(frame as i64)
+            c[0].sizes.Push(header_size + n)
+            sync.Signal(c[0].cv)
+        end
+        sync.Unlock(c[0].mu)
+        if full:
+            mem.Free(frame as void*)
+            atomic.Add(c[0].dropped, 1 as i64)
+        end
+        ret not full
+    end
+
+    @en "Receive"
+    @fa "دریافت"
+    pub func Receive(buf: void*, max: int, info &: Datagram, timeout_ms: int): int:
+        if this.core == null:
+            ret 0
+        end
+        c := this.core as _Core*
+        if c[0].rfd < (0 as i64):
+            _launch(c)
+            if c[0].rfd < (0 as i64):
+                sync.SleepMs(timeout_ms)
+                ret 0
+            end
+        end
+        if c[0].greeted:
+            waiting := _take(c[0].inbox, buf, max, info)
+            if waiting > 0:
+                ret info.length
+            end
+            if waiting < 0:
+                _hang_up(c)
+                ret 0
+            end
+        end
+        filled := c[0].dials ? _fill_socket(
+            c[0].inbox, c[0].rfd, timeout_ms
+        ) : _fill(c[0].inbox, c[0].rfd, timeout_ms)
+        if filled < 0:
+            _hang_up(c)
+            sync.SleepMs(timeout_ms)
+            ret 0
+        end
+        if not c[0].greeted:
+            if c[0].inbox.len < 4:
+                ret 0
+            end
+            hello := c[0].inbox.data
+            if hello[0] != ('S' as u8) or hello[1] != ('U' as u8) or hello[2] != ('R' as u8) or
+                hello[3] != ('1' as u8):
+                _hang_up(c)
+                ret 0
+            end
+            _consume(c[0].inbox, 4)
+            c[0].greeted = true
+            atomic.Set(c[0].up, true)
+        end
+        got := _take(c[0].inbox, buf, max, info)
+        if got < 0:
+            _hang_up(c)
+            ret 0
+        end
+        ret got > 0 ? info.length : 0
+    end
+
+    @en "Ready"
+    @fa "آماده"
+    pub func Ready(): bool:
+        if this.core == null:
+            ret false
+        end
+        ret atomic.Get((this.core as _Core*)[0].up)
+    end
+
+    @en "Dropped"
+    @fa "دورریخته ها"
+    pub func Dropped(): i64:
+        if this.core == null:
+            ret 0
+        end
+        ret atomic.Load((this.core as _Core*)[0].dropped)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        if this.core == null:
+            ret
+        end
+        c := this.core as _Core*
+        if atomic.Get(c[0].closed):
+            ret
+        end
+        sync.Lock(c[0].mu)
+        atomic.Set(c[0].closed, true)
+        sync.Broadcast(c[0].cv)
+        sync.Unlock(c[0].mu)
+        _hang_up(c)
+        mut waited := 0
+        until not atomic.Get(c[0].writer_done) and waited < 2000:
+            sync.SleepMs(10)
+            waited += 10
+        end
+        sync.Lock(c[0].mu)
+        _drop_queue(c)
+        sync.Unlock(c[0].mu)
+    end
+end
+
+func _at(p: u8*, off: int): u8*:
+    ret ((p as i64) + (off as i64)) as u8*
+end
+
+func _get16(p: u8*, off: int): int:
+    ret ((p[off] as int) << 8) | (p[off + 1] as int)
+end
+
+func _set16(p: u8*, off: int, v: int):
+    p[off] = ((v >> 8) & 255) as u8
+    p[off + 1] = (v & 255) as u8
+end
+
+func _greeting(p: u8*):
+    p[0] = 'S' as u8
+    p[1] = 'U' as u8
+    p[2] = 'R' as u8
+    p[3] = '1' as u8
+end
+
+func _write_all(fd: i64, p: void*, n: int): bool:
+    ret fdio.WriteAll(fd, p, n)
+end
+
+func _send_socket(fd: i64, p: void*, n: int): bool:
+    sock := rawsock.FromFd(fd)
+    mut put := 0
+    until put < n:
+        k := rawsock.SendBytes(sock, ((p as i64) + (put as i64)) as void*, n - put)
+        if k <= 0:
+            ret false
+        end
+        put += k
+    end
+    ret true
+end
+
+func _fill_socket(inbox &: _Frames, fd: i64, timeout_ms: int): int:
+    cap := max_frame * 2
+    if inbox.data == null:
+        inbox.data = mem.Allocate(cap as u64) as u8*
+    end
+    sock := rawsock.FromFd(fd)
+    if not rawsock.WaitReadable(sock, timeout_ms):
+        ret 0
+    end
+    k := rawsock.RecvBytes(sock, _at(inbox.data, inbox.len) as void*, cap - inbox.len)
+    if k <= 0:
+        ret -1
+    end
+    inbox.len += k
+    ret 1
+end
+
+func _fill(inbox &: _Frames, fd: i64, timeout_ms: int): int:
+    cap := max_frame * 2
+    if inbox.data == null:
+        inbox.data = mem.Allocate(cap as u64) as u8*
+    end
+    ready := fdio.PollRead(fd, timeout_ms)
+    if ready <= 0:
+        ret ready
+    end
+    k := fdio.ReadRaw(fd, _at(inbox.data, inbox.len) as void*, cap - inbox.len)
+    if k <= 0:
+        ret -1
+    end
+    inbox.len += k
+    ret 1
+end
+
+func _consume(inbox &: _Frames, n: int):
+    rest := inbox.len - n
+    if rest > 0:
+        tmp := mem.Allocate(rest as u64)
+        mem.Copy(tmp, _at(inbox.data, n) as void*, rest as u64)
+        mem.Copy(inbox.data as void*, tmp, rest as u64)
+        mem.Free(tmp)
+    end
+    inbox.len = rest
+end
+
+func _take(inbox &: _Frames, buf: void*, max: int, info &: Datagram): int:
+    if inbox.len < header_size:
+        ret 0
+    end
+    n := _get16(inbox.data, 0)
+    if n > max_payload:
+        ret -1
+    end
+    if inbox.len < header_size + n:
+        ret 0
+    end
+    DecodeHeader(inbox.data as void*, info)
+    if n > max:
+        _consume(inbox, header_size + n)
+        info.length = 0
+        ret 0
+    end
+    if n > 0:
+        mem.Copy(buf, _at(inbox.data, header_size) as void*, n as u64)
+    end
+    _consume(inbox, header_size + n)
+    ret 1
+end
+
+func _drop_queue(c: _Core*):
+    repeat c[0].queue.Len() in i:
+        mem.Free(c[0].queue[i] as void*)
+    end
+    c[0].queue.Clear()
+    c[0].sizes.Clear()
+end
+
+func _writer(c: _Core*):
+    until not atomic.Get(c[0].closed):
+        sync.Lock(c[0].mu)
+        until c[0].queue.Len() == 0 and not atomic.Get(c[0].closed):
+            sync.WaitCond(c[0].cv, c[0].mu)
+        end
+        if c[0].queue.Len() == 0:
+            sync.Unlock(c[0].mu)
+            continue
+        end
+        frame := c[0].queue[0] as void*
+        size := c[0].sizes[0]
+        c[0].queue.RemoveAt(0)
+        c[0].sizes.RemoveAt(0)
+        sync.Unlock(c[0].mu)
+        sync.Lock(c[0].io)
+        if atomic.Get(c[0].up):
+            sent := c[0].dials ? _send_socket(
+                c[0].wfd, frame, size
+            ) : _write_all(c[0].wfd, frame, size)
+            if not sent:
+                atomic.Set(c[0].up, false)
+            end
+        end
+        sync.Unlock(c[0].io)
+        mem.Free(frame)
+    end
+    atomic.Set(c[0].writer_done, true)
+end
+
+func _hang_up(c: _Core*):
+    atomic.Set(c[0].up, false)
+    c[0].greeted = false
+    c[0].inbox.len = 0
+    c[0].retry_at = sync.NowMs() + (_RETRY_MS as i64)
+    if c[0].dials:
+        sync.Lock(c[0].io)
+        if c[0].rfd >= (0 as i64):
+            rawsock.Close(rawsock.FromFd(c[0].rfd))
+        end
+        c[0].rfd = -1
+        c[0].wfd = -1
+        sync.Unlock(c[0].io)
+        ret
+    end
+    if not c[0].spawns or not c[0].child.ok:
+        ret
+    end
+    if c[0].child.Poll():
+        _k := c[0].child.Kill()
+        _w := c[0].child.Wait(2000)
+    end
+    sync.Lock(c[0].io)
+    c[0].child.Close()
+    c[0].child.ok = false
+    c[0].rfd = -1
+    c[0].wfd = -1
+    sync.Unlock(c[0].io)
+end
+
+func _dial(c: _Core*):
+    fd := c[0].connect()
+    c[0].retry_at = sync.NowMs() + (_RETRY_MS as i64)
+    if fd < (0 as i64):
+        ret
+    end
+    line := c[0].token + "\n"
+    if not _send_socket(fd, line as void*, line.Len()):
+        rawsock.Close(rawsock.FromFd(fd))
+        ret
+    end
+    sync.Lock(c[0].io)
+    c[0].rfd = fd
+    c[0].wfd = fd
+    sync.Unlock(c[0].io)
+end
+
+func _launch(c: _Core*):
+    if sync.NowMs() < c[0].retry_at:
+        ret
+    end
+    if c[0].dials:
+        _dial(c)
+        ret
+    end
+    if not c[0].spawns:
+        ret
+    end
+    child := process.Launch(c[0].cmd)
+    if not child.ok:
+        c[0].retry_at = sync.NowMs() + (_RETRY_MS as i64)
+        ret
+    end
+    sync.Lock(c[0].io)
+    c[0].child = child
+    c[0].rfd = child.h_out
+    c[0].wfd = child.h_in
+    sync.Unlock(c[0].io)
+end
+
+func _new_core(): _Core*:
+    c := mem.AllocateZeroed(size(_Core) as u64) as _Core*
+    c[0] = _Core {
+        mu = sync.NewMutex(),
+        cv = sync.NewCondVar(),
+        io = sync.NewMutex(),
+        closed = atomic.NewFlag(false),
+        writer_done = atomic.NewFlag(false),
+        up = atomic.NewFlag(false),
+        dropped = atomic.NewI64(0 as i64)
+    }
+    ret c
+end
+
+func _flow_for(table: _Flow*, cap: int, flow: int): int:
+    repeat cap in i:
+        if table[i].used and table[i].flow == flow:
+            ret i
+        end
+    end
+    ret -1
+end
+
+func _flow_open(table: _Flow*, cap: int, flow: int, now: i64): int:
+    mut slot := -1
+    mut oldest := 0
+    repeat cap in i:
+        if not table[i].used:
+            slot = i
+            break
+        end
+        if table[i].last < table[oldest].last:
+            oldest = i
+        end
+    end
+    if slot < 0:
+        udp.Close(table[oldest].sock)
+        table[oldest].used = false
+        slot = oldest
+    end
+    sock := udp.Open()
+    if not udp.Ok(sock):
+        ret -1
+    end
+    table[slot].used = true
+    table[slot].flow = flow
+    table[slot].sock = sock
+    table[slot].last = now
+    ret slot
+end
+
+func _authorized(peer: rawsock.Socket, token: str): bool:
+    want := token.Len() + 1
+    buf := mem.AllocateZeroed(want as u64) as u8*
+    deadline := sync.NowMs() + (5000 as i64)
+    mut got := 0
+    until got < want and sync.NowMs() < deadline:
+        if rawsock.WaitReadable(peer, 200):
+            k := rawsock.RecvBytes(peer, _at(buf, got) as void*, want - got)
+            if k <= 0:
+                break
+            end
+            got += k
+        end
+    end
+    mut wrong := got == want ? 0 : 1
+    if wrong == 0:
+        p := token as u8*
+        repeat token.Len() in i:
+            wrong |= (buf[i] as int) ^ (p[i] as int)
+        end
+        wrong |= (buf[want - 1] as int) ^ 10
+    end
+    mem.Free(buf as void*)
+    ret wrong == 0
+end
+
+func _forbidden(ip: i64, opts: ServerOptions): bool:
+    first := (ip >> (24 as i64)) as int
+    if first == 0 or first >= 224:
+        ret true
+    end
+    ret first == 127 and not opts.allow_loopback
+end
+
+func _server_outgoing(
+    table: _Flow*, opts: ServerOptions, frame: u8*, info &: Datagram, now: i64
+):
+    if _forbidden(info.ip, opts) or info.port == 0:
+        ret
+    end
+    mut at := _flow_for(table, opts.max_flows, info.flow)
+    if at < 0:
+        at = _flow_open(table, opts.max_flows, info.flow, now)
+    end
+    if at < 0:
+        ret
+    end
+    table[at].last = now
+    host := FormatIPv4(info.ip)
+    _sent := udp.SendBytes(table[at].sock, host, info.port, frame as void*, info.length)
+    mem.Free(host as void*)
+end
+
+func _server_incoming(slot: _Flow*, out_fd: i64, scratch: u8*, now: i64): bool:
+    mut host := ""
+    mut port := 0
+    n := udp.ReceiveBytes(
+        slot[0].sock, _at(scratch, header_size) as void*, max_payload, host, port
+    )
+    ip := ParseIPv4(host)
+    if host.Len() > 0:
+        mem.Free(host as void*)
+    end
+    if n < 0 or ip < (0 as i64):
+        ret true
+    end
+    slot[0].last = now
+    info := Datagram {
+        flow = slot[0].flow,
+        ip = ip,
+        port = port,
+        length = n
+    }
+    EncodeHeader(scratch as void*, info)
+    ret _write_all(out_fd, scratch as void*, header_size + n)
+end
+
+@en "EncodeHeader"
+@fa "ساخت سرآیند"
+pub func EncodeHeader(dst: void*, info: Datagram):
+    p := dst as u8*
+    _set16(p, 0, info.length)
+    _set16(p, 2, info.flow)
+    _set16(p, 4, ((info.ip >> (16 as i64)) & (65535 as i64)) as int)
+    _set16(p, 6, (info.ip & (65535 as i64)) as int)
+    _set16(p, 8, info.port)
+end
+
+@en "DecodeHeader"
+@fa "خواندن سرآیند"
+pub func DecodeHeader(src: void*, info &: Datagram):
+    p := src as u8*
+    high := _get16(p, 4) as i64
+    info = Datagram {
+        length = _get16(p, 0),
+        flow = _get16(p, 2),
+        ip = (high << (16 as i64)) | (_get16(p, 6) as i64),
+        port = _get16(p, 8)
+    }
+end
+
+@en "ParseIPv4"
+@fa "خواندن نشانی"
+pub func ParseIPv4(text: str): i64:
+    p := text as u8*
+    mut value := 0 as i64
+    mut part := 0
+    mut digits := 0
+    mut dots := 0
+    repeat text.Len() in i:
+        c := p[i] as int
+        if c >= ('0' as int) and c <= ('9' as int):
+            part = part * 10 + (c - ('0' as int))
+            digits++
+            if part > 255 or digits > 3:
+                ret -1
+            end
+        else c == ('.' as int) and digits > 0 and dots < 3:
+            value = (value << (8 as i64)) | (part as i64)
+            part = 0
+            digits = 0
+            dots++
+        else:
+            ret -1
+        end
+    end
+    if dots != 3 or digits == 0:
+        ret -1
+    end
+    ret (value << (8 as i64)) | (part as i64)
+end
+
+@en "FormatIPv4"
+@fa "نوشتن نشانی"
+pub func FormatIPv4(ip: i64): str:
+    a := ((ip >> (24 as i64)) & (255 as i64)) as int
+    b := ((ip >> (16 as i64)) & (255 as i64)) as int
+    c := ((ip >> (8 as i64)) & (255 as i64)) as int
+    d := (ip & (255 as i64)) as int
+    ret "" + a + "." + b + "." + c + "." + d
+end
+
+@en "NewClient"
+@fa "کارخواه تازه"
+pub func NewClient(cmd: process.Command): Client:
+    c := _new_core()
+    mut own := cmd
+    own.stdin_mode = 1
+    own.stdout_mode = 1
+    own.stderr_mode = 2
+    c[0].cmd = own
+    c[0].spawns = true
+    _t := spawn(_writer, c)
+    ret Client { core = c as void* }
+end
+
+@en "NewPipeClient"
+@fa "کارخواه لوله ای"
+pub func NewPipeClient(read_fd: i64, write_fd: i64): Client:
+    c := _new_core()
+    c[0].rfd = read_fd
+    c[0].wfd = write_fd
+    _t := spawn(_writer, c)
+    ret Client { core = c as void* }
+end
+
+@en "NewSocketClient"
+@fa "کارخواه سوکتی"
+pub func NewSocketClient(connect: func () i64, token: str): Client:
+    c := _new_core()
+    c[0].dials = true
+    c[0].connect = connect
+    c[0].token = token
+    _t := spawn(_writer, c)
+    ret Client { core = c as void* }
+end
+
+@en "Listen"
+@fa "گوش دادن"
+pub func Listen(port: int, token: str, control_fd: i64, opts: ServerOptions): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        lowest := opts.announce_fd >= (0 as i64) ? 0 : 1
+        if token.Len() < 16 or port < lowest or port > 65535:
+            ret false
+        end
+        _old := signal(13, (1 as i64) as void*)
+        server := rawsock.ListenOn("127.0.0.1", port, rawsock.SOCK_STREAM)
+        if not rawsock.Ok(server):
+            ret false
+        end
+        if opts.announce_fd >= (0 as i64):
+            line := "RELAY-PORT " + rawsock.LocalPort(server) + "\n"
+            _told := _write_all(opts.announce_fd, line as void*, line.Len())
+        end
+        pfds := mem.AllocateZeroed(16 as u64) as u8*
+        drop := mem.Allocate(256 as u64)
+        until true:
+            ((pfds as i64) as i32*)[0] = server.fd as i32
+            ((pfds as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+            ((pfds as i64 + (6 as i64)) as i16*)[0] = 0 as i16
+            ((pfds as i64 + (8 as i64)) as i32*)[0] = control_fd as i32
+            ((pfds as i64 + (12 as i64)) as i16*)[0] = 1 as i16
+            ((pfds as i64 + (14 as i64)) as i16*)[0] = 0 as i16
+            if poll(pfds as void*, 2 as usize, 1000) <= 0:
+                continue
+            end
+            if ((pfds as i64 + (14 as i64)) as i16*)[0] != (0 as i16):
+                if fdio.ReadRaw(control_fd, drop, 256) <= 0:
+                    break
+                end
+            end
+            if ((pfds as i64 + (6 as i64)) as i16*)[0] != (0 as i16):
+                peer := rawsock.Accept(server)
+                if rawsock.Ok(peer):
+                    if _authorized(peer, token):
+                        _served := Serve(peer.fd, peer.fd, opts)
+                    end
+                    rawsock.Close(peer)
+                end
+            end
+        end
+        mem.Free(pfds as void*)
+        mem.Free(drop)
+        rawsock.Close(server)
+        ret true
+    end
+end
+
+@en "Serve"
+@fa "خدمت دادن"
+pub func Serve(in_fd: i64, out_fd: i64, opts: ServerOptions): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        if opts.max_flows < 1 or opts.max_flows > 4096:
+            ret false
+        end
+        cap := opts.max_flows
+        table := mem.AllocateZeroed((size(_Flow) as u64) * (cap as u64)) as _Flow*
+        pfds := mem.AllocateZeroed(((cap + 1) * 8) as u64) as u8*
+        slots := mem.AllocateZeroed(((cap + 1) * 4) as u64) as i32*
+        scratch := mem.Allocate(max_frame as u64) as u8*
+        payload := mem.Allocate(max_payload as u64) as u8*
+        mut inbox := _Frames {}
+        hello := mem.Allocate(4 as u64) as u8*
+        _greeting(hello)
+        mut alive := _write_all(out_fd, hello as void*, 4)
+        mem.Free(hello as void*)
+        until alive:
+            ((pfds as i64) as i32*)[0] = in_fd as i32
+            ((pfds as i64 + (4 as i64)) as i16*)[0] = 1 as i16
+            ((pfds as i64 + (6 as i64)) as i16*)[0] = 0 as i16
+            mut count := 1
+            now := sync.NowMs()
+            repeat cap in i:
+                if table[i].used and now - table[i].last > (opts.idle_ms as i64):
+                    udp.Close(table[i].sock)
+                    table[i].used = false
+                end
+                if table[i].used:
+                    base := pfds as i64 + ((count * 8) as i64)
+                    (base as i32*)[0] = table[i].sock.fd as i32
+                    ((base + (4 as i64)) as i16*)[0] = 1 as i16
+                    ((base + (6 as i64)) as i16*)[0] = 0 as i16
+                    slots[count] = i
+                    count++
+                end
+            end
+            if poll(pfds as void*, count as usize, 1000) <= 0:
+                continue
+            end
+            after := sync.NowMs()
+            mut k := 1
+            until k < count and alive:
+                if ((pfds as i64 + ((k * 8 + 6) as i64)) as i16*)[0] != (0 as i16):
+                    index := slots[k]
+                    slot := ((table as i64) + ((index as i64) * (size(_Flow) as i64))) as _Flow*
+                    alive = _server_incoming(slot, out_fd, scratch, after)
+                end
+                k++
+            end
+            if ((pfds as i64 + (6 as i64)) as i16*)[0] != (0 as i16):
+                if _fill(inbox, in_fd, 0) < 0:
+                    break
+                end
+                mut info := Datagram {}
+                mut more := _take(inbox, payload as void*, max_payload, info)
+                until more > 0:
+                    _server_outgoing(table, opts, payload, info, after)
+                    more = _take(inbox, payload as void*, max_payload, info)
+                end
+                if more < 0:
+                    break
+                end
+            end
+        end
+        repeat cap in i:
+            if table[i].used:
+                udp.Close(table[i].sock)
+            end
+        end
+        mem.Free(table as void*)
+        mem.Free(pfds as void*)
+        mem.Free(slots as void*)
+        mem.Free(scratch as void*)
+        mem.Free(payload as void*)
+        if inbox.data != null:
+            mem.Free(inbox.data as void*)
+        end
+        ret true
+    end
+end

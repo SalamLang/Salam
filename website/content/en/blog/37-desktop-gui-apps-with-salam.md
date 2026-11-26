@@ -209,7 +209,7 @@ func main:
         dt := raylib.GetFrameTime() as f64
         x += dx * dt
         if x < 20.0 or x > 780.0:
-            dx = 0.0 - dx
+            dx = -dx
         end
         raylib.BeginDrawing()
         raylib.ClearBackground(raylib.RayWhite())

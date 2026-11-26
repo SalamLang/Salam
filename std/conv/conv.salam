@@ -44,7 +44,7 @@ end
 
 pure func _native_digit(bp: i8*, i: int, n: int): int:
     if i + 1 >= n:
-        ret 0 - 1
+        ret -1
     end
     c := _ub(bp, i)
     d := _ub(bp, i + 1)
@@ -54,7 +54,7 @@ pure func _native_digit(bp: i8*, i: int, n: int): int:
     if c == 217 and d >= 160 and d <= 169:
         ret d - 160
     end
-    ret 0 - 1
+    ret -1
 end
 
 inline pure func _is_space(c: int): bool:
@@ -164,12 +164,12 @@ func _parse_int(s: str, max_pos: i64, bits: str): i64 throw:
         neg = c0 == 45
         i++
     end
-    lim := neg ? 0 - max_pos - 1 : 0 - max_pos
+    lim := neg ? -max_pos - 1 : -max_pos
     mut v := 0 as i64
     mut any := false
     until i < e:
         c := _ub(bp, i)
-        mut d := 0 - 1
+        mut d := -1
         mut w := 1
         if c >= 48 and c <= 57:
             d = c - 48
@@ -196,7 +196,7 @@ func _parse_int(s: str, max_pos: i64, bits: str): i64 throw:
         )
     end
     if neg: ret v end
-    ret 0 - v
+    ret -v
 end
 
 pure func _hex_digit(c: int): int:
@@ -204,7 +204,7 @@ pure func _hex_digit(c: int): int:
     else c >= 97 and c <= 102: ret c - 87
     else c >= 65 and c <= 70: ret c - 55
     else:
-        ret 0 - 1
+        ret -1
     end
 end
 
@@ -230,21 +230,28 @@ func _float_check(s: str): int throw:
     end
     w := e - i
     if _kw_ci(bp, i, w, "inf") or _kw_ci(bp, i, w, "infinity") or _kw_ci(bp, i, w, "nan"):
-        ret 0 - 1
+        ret -1
     end
     mut digits := false
     mut point := false
+    mut prev_dig := false
     until i < e:
         c := _ub(bp, i)
         dw := _float_digit(bp, i, n)
         if dw > 0:
             digits = true
+            prev_dig = true
             i += dw
+        else c == 95 and prev_dig and i + 1 < e and _float_digit(bp, i + 1, n) > 0:
+            prev_dig = false
+            i++
         else not point and c == 46:
             point = true
+            prev_dig = false
             i++
         else not point and c == 217 and i + 1 < n and _ub(bp, i + 1) == 171:
             point = true
+            prev_dig = false
             i += 2
         else:
             break
@@ -270,9 +277,14 @@ func _float_check(s: str): int throw:
         mut ed := false
         until i < e:
             dw := _float_digit(bp, i, n)
-            if dw == 0: break end
-            ed = true
-            i += dw
+            if dw > 0:
+                ed = true
+                i += dw
+            else ed and _ub(bp, i) == 95 and i + 1 < e and _float_digit(bp, i + 1, n) > 0:
+                i++
+            else:
+                break
+            end
         end
         if not ed:
             if i < e:
@@ -306,11 +318,98 @@ if not SALAM_KERNEL:
         mut ea := e
         if e < 0:
             es = "e-"
-            ea = 0 - e
+            ea = -e
         end
         en := FormatInt(ea as i64)
         if ea < 10: ret es.Concat("0").Concat(en) end
         ret es.Concat(en)
+    end
+
+    func _fixed_digit(bp: i8*, n: int, j: int): int:
+        if j < 0 or j >= n: ret 0 end
+        ret _ub(bp, j) - 48
+    end
+
+    func _fixed_digits(v: f64, p: int): str:
+        text := numfmt.FormatFloat(v)
+        tp := _bp(text)
+        tn := text.Len()
+        mut ep := 0
+        until ep < tn and _ub(tp, ep) != 101:
+            ep++
+        end
+        mut exp := 0
+        if ep < tn:
+            mut q := ep + 1
+            mut eneg := false
+            if q < tn and (_ub(tp, q) == 43 or _ub(tp, q) == 45):
+                eneg = _ub(tp, q) == 45
+                q++
+            end
+            until q < tn:
+                exp = exp * 10 + (_ub(tp, q) - 48)
+                q++
+            end
+            if eneg: exp = -exp end
+        end
+        dbuf := mem.MustAllocate((ep + 1) as u64) as i8*
+        mut nd := 0
+        mut point := -1
+        repeat ep in i:
+            c := _ub(tp, i)
+            if c == 46:
+                point = nd
+            else:
+                dbuf[nd] = c as i8
+                nd++
+            end
+        end
+        if point < 0: point = nd end
+        point += exp
+        mut lo := 0
+        if point < 1: lo = point - 1 end
+        hi := point + p
+        width := hi - lo + 1
+        out := mem.MustAllocateZeroed((width + 2) as u64) as i8*
+        out[0] = 0 as i8
+        mut j := lo
+        until j < hi:
+            out[j - lo + 1] = _fixed_digit(dbuf, nd, j) as i8
+            j++
+        end
+        if _fixed_digit(dbuf, nd, hi) >= 5:
+            mut k := width - 1
+            mut carry := true
+            until carry and k >= 0:
+                d := (out[k] as int) + 1
+                if d == 10:
+                    out[k] = 0 as i8
+                else:
+                    out[k] = d as i8
+                    carry = false
+                end
+                k--
+            end
+        end
+        mem.Free(dbuf as void*)
+        mut start := 1
+        if (out[0] as int) != 0: start = 0 end
+        intend := point - lo + 1
+        res := mem.MustAllocateZeroed((width + 2) as u64) as i8*
+        mut w := 0
+        mut k := start
+        until k < width:
+            if k == intend:
+                res[w] = 46 as i8
+                w++
+            end
+            res[w] = (48 + (out[k] as int)) as i8
+            w++
+            k++
+        end
+        mem.Free(out as void*)
+        mem.Free(text as void*)
+        ret res as str
     end
 end
 
@@ -437,7 +536,7 @@ if not SALAM_KERNEL:
         mut sign := ""
         if v < 0.0:
             sign = "-"
-            v = 0.0 - v
+            v = -v
         end
         if v == 0.0: ret sign.Concat("0") end
         if v / 2.0 == v: ret sign.Concat("inf") end
@@ -456,7 +555,7 @@ if not SALAM_KERNEL:
             e++
         end
         ds := _digits6(d)
-        if e < (0 - 4) or e >= 6:
+        if e < (-4) or e >= 6:
             mut m := ds.Substr(0, 1)
             if ds.Len() > 1:
                 m = m.Concat(".").Concat(ds.Substr(1, ds.Len() - 1))
@@ -476,7 +575,7 @@ if not SALAM_KERNEL:
             ret sign.Concat(ds.Substr(0, k)).Concat(".").Concat(ds.Substr(k, ds.Len() - k))
         else:
             mut zeros := ""
-            mut z := 0 - e - 1
+            mut z := -e - 1
             until z > 0:
                 zeros = zeros.Concat("0")
                 z--
@@ -493,17 +592,17 @@ if not SALAM_KERNEL:
         mut sign := ""
         if v < 0.0:
             sign = "-"
-            v = 0.0 - v
+            v = -v
         end
         if v / 2.0 == v and v > 0.0: ret sign.Concat("inf") end
         mut p := prec
         if p < 0: p = 0 end
         if p > 15: p = 15 end
-        if v > 900000000000000.0: ret sign.Concat(FormatFloat(v)) end
         mut scale := 1 as i64
         repeat p:
             scale *= 10
         end
+        if v * (scale as f64) >= 9000000000000000.0: ret sign.Concat(_fixed_digits(v, p)) end
         total := (v * (scale as f64) + 0.5) as i64
         ip := total / scale
         if p == 0: ret sign.Concat(FormatUint(ip as u64)) end

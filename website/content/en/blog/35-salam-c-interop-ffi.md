@@ -116,7 +116,7 @@ end
 func main:
     d := div(17, 5)
     println "17 / 5 =", d.quot, "remainder", d.rem
-    n := div(0 - 17, 5)
+    n := div(-17, 5)
     println "-17 / 5 =", n.quot, "remainder", n.rem
     big := lldiv(1000000000007 as i64, 1000 as i64)
     println "lldiv:", big.quot, big.rem

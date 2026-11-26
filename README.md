@@ -164,6 +164,13 @@ All of them highlight the English and Persian keyword packs, and the
 word lists are generated from the compiler's own tables so they cannot drift.
 The richer plugins also run, build, check and format through the compiler.
 
+## 🚇 Built with Salam
+
+[**Salam Tunnel**](https://github.com/BaseMax/salam-ssh-tunnel) is a desktop app
+written entirely in Salam. It routes a whole computer through an SSH server with
+one button, and draws its window with the page language. It is a larger example
+of native UI, background work, processes and the `std/net` packages.
+
 ## 🛠️ The Compiler (`salam`)
 
 Salam is statically typed and compiled. It has **five generators**, each one
@@ -265,7 +272,7 @@ case) do not count, and an existing file is kept. When it holds any other file o
 subfolder named after the project. In a terminal `init` asks for the name, a description,
 the type (`cli`, `http` or `dsl`, the page language), the platforms, the design
 system (`shadcn` or `none`) and the web mode (`page`, `spa` or `ssr`), shows a
-summary and writes a starter project with a README; the answers go into
+summary and writes a starter project with a readme; the answers go into
 `[project]` and `[design]` in `salam.toml`. The flags `--name=`,
 `--description=`, `--type=`, `--platforms=a,b|all`, `--design=` and `--web=`
 answer questions up front, and `-y` accepts the defaults, so scripts never
@@ -282,7 +289,7 @@ salam init -y --type=dsl --platforms=web,linux # a page project in the current f
 One `page:` program targets every platform. `salam build` and `salam run` take
 `--platform=web|js|android|ios|linux|macos|windows`, and `salam build` also
 `--platform=all` for every platform a project lists in `salam.toml`.
-`--arch=x86_64|aarch64|i686|arm|riscv64` picks the CPU for linux, macos and
+`--arch=x86_64|aarch64|i686|arm|riscv64` picks the CPU for Linux, macOS and
 windows; `--target=TRIPLE` spells the whole target out and wins over both.
 
 ```sh
@@ -333,7 +340,7 @@ the standard library and the bundled tools to the newest release.
 completion, go to definition, rename, formatting and quick fixes); the editor
 plugins under [`extensions/`](extensions/) start it, and
 [docs/LSP.md](docs/LSP.md) lists what it covers. `salam dap` is the debug
-adapter behind F5 in VS Code.
+adapter behind F5 in Visual Studio Code.
 
 ### Cross-compilation
 

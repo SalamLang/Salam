@@ -167,7 +167,7 @@ Compiled to `counter.html`, the whole page with its script is under 1 KB. The ge
 
 The JavaScript backend has limits that come from JavaScript itself:
 
-- **64-bit integers.** JavaScript numbers hold integers exactly only up to `2^53`. On this backend an `i64` beyond that loses precision: `9007199254740993 + 2` prints `9007199254740995` natively and `9007199254740994` in JavaScript. `i128` and `u128` are exact, because they become BigInts.
+- **64-bit integers.** JavaScript numbers hold integers exactly only up to `2^53`, so `i64`, `u64`, `i128` and `u128` become BigInts on this backend: `9007199254740993 + 2` prints `9007199254740995` in JavaScript, as it does natively. `usize` and `size` stay plain numbers, exact up to `2^53`.
 - **Threads.** `spawn` is not supported on this backend, and the atomic intrinsics become plain reads and writes, since the generated code runs on the page's single thread.
 - **System access.** Files, sockets and processes belong to native and WASI targets. In the browser the `dom` package gives you the page, events, timers, localStorage, the canvas, and generic property and method access to any JavaScript object.
 
@@ -215,7 +215,7 @@ Yes. `salam build app.salam --target=wasm32-wasi` produces a WASI preview 1 modu
 
 ### Does Salam compile to JavaScript?
 
-Yes. `salam build app.salam --platform=js` writes a minified JavaScript file, or a complete HTML page when the output ends in `.html`. The `dom` package gives access to elements, events and timers. Integers in `i64` lose precision above `2^53` on this backend.
+Yes. `salam build app.salam --platform=js` writes a minified JavaScript file, or a complete HTML page when the output ends in `.html`. The `dom` package gives access to elements, events and timers. Integers in `i64` and `u64` are exact BigInts on this backend, while `usize` stays a plain number.
 
 ### Can I run Salam in the browser without installing anything?
 

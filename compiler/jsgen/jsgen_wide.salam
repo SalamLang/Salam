@@ -9,14 +9,34 @@ include sm "../semantic/semantic.salam"
 include wd "../wide.salam"
 
 func jsg_wide_ts(ts: str): bool:
+    ret str.Equals(ts, "i128") or str.Equals(ts, "u128") or str.Equals(ts, "i64") or
+        str.Equals(ts, "u64")
+end
+
+func jsg_w128_ts(ts: str): bool:
     ret str.Equals(ts, "i128") or str.Equals(ts, "u128")
 end
 
+func jsg_wide_bits(ts: str): str:
+    ret jsg_w128_ts(ts) ? "128" : "64"
+end
+
+func jsg_wide_signed(ts: str): bool:
+    ret str.Equals(ts, "i128") or str.Equals(ts, "i64")
+end
+
 func jsg_wide_wrap(e: str, ts: str): str:
-    ret (str.Equals(ts, "i128") ? "BigInt.asIntN(128, " : "BigInt.asUintN(128, ") + e + ")"
+    ret (jsg_wide_signed(ts) ? "BigInt.asIntN(" : "BigInt.asUintN(") + jsg_wide_bits(ts) + ", " +
+        e + ")"
 end
 
 func jsg_wide_lit(ts: str, hi: u64, lo: u64): str:
+    if not jsg_w128_ts(ts):
+        if str.Equals(ts, "i64") and (lo as i64) < 0:
+            ret "(" + co.I64Toa(lo as i64) + "n)"
+        end
+        ret co.U64Toa(lo) + "n"
+    end
     v := wd.Make(hi, lo)
     if str.Equals(ts, "i128") and wd.IsNeg(v):
         ret "(" + wd.ToStringS(v) + "n)"
@@ -24,18 +44,62 @@ func jsg_wide_lit(ts: str, hi: u64, lo: u64): str:
     ret wd.ToStringU(v) + "n"
 end
 
+func jsg_big_lit_val(e: str, out &: u64): bool:
+    n := str.Len(e)
+    if n < 2 or byte_at(e, n - 1) != 110 or n > 21:
+        ret false
+    end
+    mut v := 0 as u64
+    mut i := 0
+    until i < n - 1:
+        c := byte_at(e, i)
+        if c < 48 or c > 57:
+            ret false
+        end
+        v = v * (10 as u64) + ((c - 48) as u64)
+        i++
+    end
+    out = v
+    ret true
+end
+
+func jsg_wide_shift_count(ts: str, y: str): str:
+    mut lv := 0 as u64
+    if not jsg_w128_ts(ts):
+        if jsg_big_lit_val(y, lv):
+            ret co.U64Toa(lv & (63 as u64)) + "n"
+        end
+        ret "__sal_wsh(" + y + ", 6)"
+    end
+    ret "__sal_wsh(" + y + ")"
+end
+
+func jsg_wide_divisor(y: str, m: str): str:
+    mut lv := 0 as u64
+    if jsg_big_lit_val(y, lv) and lv != (0 as u64):
+        ret y
+    end
+    ret "__sal_wnz(" + y + ", " + m + ")"
+end
+
 func jsg_wide_op(op: int, ts: str, x: str, y: str): str:
     if op == tok.TK_SLASH or op == tok.TK_SLASH_EQ:
-        ret jsg_wide_wrap(x + " / __sal_wnz(" + y + ", 0)", ts)
+        ret jsg_wide_wrap(x + " / " + jsg_wide_divisor(y, "0"), ts)
     end
     if op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ:
-        ret jsg_wide_wrap(x + " % __sal_wnz(" + y + ", 1)", ts)
+        if not jsg_w128_ts(ts):
+            ret x + " % " + jsg_wide_divisor(y, "1")
+        end
+        ret jsg_wide_wrap(x + " % " + jsg_wide_divisor(y, "1"), ts)
     end
     if op == tok.TK_SHL or op == tok.TK_SHL_EQ:
-        ret jsg_wide_wrap(x + " << __sal_wsh(" + y + ")", ts)
+        ret jsg_wide_wrap(x + " << " + jsg_wide_shift_count(ts, y), ts)
     end
     if op == tok.TK_SHR or op == tok.TK_SHR_EQ:
-        ret jsg_wide_wrap(x + " >> __sal_wsh(" + y + ")", ts)
+        if not jsg_w128_ts(ts):
+            ret "(" + x + " >> " + jsg_wide_shift_count(ts, y) + ")"
+        end
+        ret jsg_wide_wrap(x + " >> " + jsg_wide_shift_count(ts, y), ts)
     end
     mut sym := "+"
     if op == tok.TK_MINUS or op == tok.TK_MINUS_EQ:
@@ -48,6 +112,10 @@ func jsg_wide_op(op: int, ts: str, x: str, y: str): str:
         sym = "|"
     else op == tok.TK_CARET or op == tok.TK_CARET_EQ:
         sym = "^"
+    end
+    if not jsg_w128_ts(ts) and (op == tok.TK_AMP or op == tok.TK_AMP_EQ or op == tok.TK_PIPE or
+        op == tok.TK_PIPE_EQ or op == tok.TK_CARET or op == tok.TK_CARET_EQ):
+        ret "(" + x + " " + sym + " " + y + ")"
     end
     ret jsg_wide_wrap(x + " " + sym + " " + y, ts)
 end
@@ -79,17 +147,72 @@ func jsg_wide_incdec(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, ts: str): str:
     ret "((" + lv + " = " + next + "), " + jsg_wide_wrap(lv + (up ? " - 1n" : " + 1n"), ts) + ")"
 end
 
+func jsg_small_int_ts(ts: str): bool:
+    ret (cg_is_int_typestr(ts) and jsg_int_ts_bits(ts) <= 32) or str.Equals(ts, "char")
+end
+
 func jsg_wide_cast(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, sts: str, dts: str): str:
     n := at.Get(a, id)
-    x := jsg_expr_p(g, s, a, n.a, 0)
+    if jsg_wide_ts(dts) and n.a != 0:
+        lit := at.Get(a, n.a)
+        if lit.kind == at.AST_LITERAL and lit.op == tok.TK_INT and not jsg_wide_ts(sts) and
+            cg_is_int_typestr(sts):
+            mut lv := lit.value_int
+            if not cg_is_unsigned_typestr(sts):
+                lv = (lit.value_int as i64) as u64
+            end
+            if jsg_w128_ts(dts):
+                if not cg_is_unsigned_typestr(sts) and (lv as i64) < 0:
+                    ret jsg_wide_lit(dts, 18446744073709551615 as u64, lv)
+                end
+                ret jsg_wide_lit(dts, 0 as u64, lv)
+            end
+            ret jsg_wide_lit(dts, 0 as u64, lv)
+        end
+    end
+    ret jsg_wide_conv(jsg_expr_p(g, s, a, n.a, 0), sts, dts)
+end
+
+func jsg_big_operand(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, dts: str): str:
+    sts := at.Get(a, id).type_str
+    if str.Equals(sts, dts):
+        ret jsg_expr_p(g, s, a, id, 0)
+    end
+    nv := at.Get(a, id)
+    if nv.kind == at.AST_LITERAL and nv.op == tok.TK_INT and cg_is_int_typestr(sts):
+        ret jsg_wide_lit(dts, 0 as u64, nv.value_int)
+    end
+    ret jsg_wide_conv(jsg_expr_p(g, s, a, id, 0), sts, dts)
+end
+
+func jsg_wide_conv(x: str, sts: str, dts: str): str:
     if jsg_wide_ts(dts):
         if jsg_wide_ts(sts):
             ret jsg_wide_wrap(x, dts)
         end
         if str.Equals(sts, "f64") or str.Equals(sts, "f32"):
-            ret "__sal_wff(" + x + ", " + (str.Equals(dts, "u128") ? "1" : "0") + ")"
+            u := jsg_wide_signed(dts) ? "0" : "1"
+            if jsg_w128_ts(dts):
+                ret "__sal_wff(" + x + ", " + u + ")"
+            end
+            ret "__sal_wff(" + x + ", " + u + ", 64)"
         end
-        ret jsg_wide_wrap("__sal_wfrom(" + x + ")", dts)
+        if str.Equals(sts, "uchar"):
+            ret "BigInt(" + x + ".codePointAt(0) ?? 0)"
+        end
+        if str.Equals(sts, "bool"):
+            ret "(" + x + " ? 1n : 0n)"
+        end
+        if jsg_small_int_ts(sts):
+            if cg_is_unsigned_typestr(sts) or str.Equals(sts, "char") or jsg_wide_signed(dts):
+                ret "BigInt(" + x + ")"
+            end
+            ret jsg_wide_wrap("BigInt(" + x + ")", dts)
+        end
+        if cg_is_int_typestr(sts):
+            ret jsg_wide_wrap("__sal_wfrom(" + x + ")", dts)
+        end
+        ret "__sal_hb(" + x + ")"
     end
     if str.Equals(dts, "f64"):
         ret "Number(" + x + ")"
@@ -100,6 +223,12 @@ func jsg_wide_cast(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, sts: str, dts: s
     if str.Equals(dts, "bool"):
         ret "(" + x + " !== 0n)"
     end
+    if str.Equals(dts, "uchar"):
+        ret "__sal_ufc(Number(BigInt.asIntN(32, " + x + ")))"
+    end
+    if str.Equals(dts, "str"):
+        ret "String(" + x + ")"
+    end
     if cg_is_int_typestr(dts):
         bits := jsg_int_ts_bits(dts)
         ret "Number(" + (cg_is_unsigned_typestr(dts) ? "BigInt.asUintN(" : "BigInt.asIntN(") +
@@ -109,4 +238,11 @@ func jsg_wide_cast(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, sts: str, dts: s
         ret "Number(BigInt.asUintN(8, " + x + "))"
     end
     ret "Number(BigInt.asIntN(32, " + x + "))"
+end
+
+func jsg_num(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, prec: int): str:
+    if id != 0 and jsg_wide_ts(at.Get(a, id).type_str):
+        ret "Number(" + jsg_expr_p(g, s, a, id, 0) + ")"
+    end
+    ret jsg_expr_p(g, s, a, id, prec)
 end

@@ -219,6 +219,11 @@ error `E162`: `x = x + 1`, `x = 1 + x`, `x += 1`, `x -= 1` (write `x++` /
 becomes `s += t`; `s = t + s` is a prepend and stays), to plain variables,
 fields (`this.n`, `p.x`), arrays and pointers (`a[i]`, `p[0]`). `x = y - x`,
 `x = x * y + z` and `x = x + y + z` are not self-updates and stay legal.
+**Negate with `-x`, never by subtracting from zero.** `0 - x`, `0 - 1` and
+`0.0 - v` are compile error `E304`: write `-x`, `-1` and `-v`, and
+`-(a * b)` for a longer right side. `salam check --fix` rewrites them. A typed
+zero such as `(0 as u64) - x` is allowed.
+
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
@@ -454,11 +459,12 @@ u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
 Shift counts mask to 0-127. A float cast saturates like the other widths. They cannot
 index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
 refuses them, and an `extern` function can use them only on 64-bit targets
-(E160). On `salam build --platform=js` they are exact BigInts, but a value that passes through
-`i64`/`u64` there is still limited to 2^53.
+(E160). On `salam build --platform=js` they are exact BigInts, like `i64` and `u64`.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
-bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
+bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32). On
+`salam build --platform=js` they are JS numbers, exact up to 2^53, while `i64`
+and `u64` are exact BigInts there.
 `size(T)` is the size of a type in bytes and returns `usize`. In a file that declares
 its own `size` function, only built-in type names (`size(i32)`) still reach the built-in.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
@@ -789,7 +795,7 @@ type Meters: int
         ret ((this as int) * k) as Meters
     end
     func -: Meters:                     // unary minus, no parameters
-        ret (0 - (this as int)) as Meters
+        ret (-(this as int)) as Meters
     end
     func km: f64:                       // ordinary method: m.km()
         ret (this as f64) / 1000.0
@@ -1202,7 +1208,7 @@ not the libraries.
   `FormatFloatPrec IsNaNF`. The parsers `ParseInt` (i64), `Atoi` (int),
   `ParseFloat`, `ParseBool` and `ParseHex` all `throw` (context `conv`):
   `Syntax` for an empty string, a sign with no digits or any stray character
-  (`12abc`, `1_000`, `1,5`, `12.5` in `ParseInt`, `"True"`), with
+  (`12abc`, `1,5`, `1_000` and `12.5` in `ParseInt`, `"True"`; `ParseFloat` takes `_` between digits like a float literal, so `1_000.5` is fine but `1__0`, `_1`, `1_` throw), with
   offset/line/column of that character; `OutOfRange` (`conv.overflow`) past
   64 bits, or 32 for `Atoi`. Codes: `conv.empty`, `conv.no_digits`,
   `conv.invalid_char`, `conv.not_bool`, `conv.overflow`. Spaces around, one

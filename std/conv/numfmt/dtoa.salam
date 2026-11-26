@@ -54,20 +54,18 @@ func _digit_buf(): u8*:
     ret (_scratch + (OFF_DIGITS as u64)) as u8*
 end
 
-if not SALAM_KERNEL:
-    func _pun_bits(v: f64): u64:
-        fp := (_scratch + (OFF_PUN as u64)) as f64*
-        fp[0] = v
-        up := (_scratch + (OFF_PUN as u64)) as u64*
-        ret up[0]
-    end
+func _pun_bits(v: f64): u64:
+    fp := (_scratch + (OFF_PUN as u64)) as f64*
+    fp[0] = v
+    up := (_scratch + (OFF_PUN as u64)) as u64*
+    ret up[0]
+end
 
-    func _pun_f64(bits: u64): f64:
-        up := (_scratch + (OFF_PUN as u64)) as u64*
-        up[0] = bits
-        fp := (_scratch + (OFF_PUN as u64)) as f64*
-        ret fp[0]
-    end
+func _pun_f64(bits: u64): f64:
+    up := (_scratch + (OFF_PUN as u64)) as u64*
+    up[0] = bits
+    fp := (_scratch + (OFF_PUN as u64)) as f64*
+    ret fp[0]
 end
 
 func _bn_zero(b: u32*):
@@ -375,11 +373,11 @@ func _exact_digits(bits: u64, digits: u8*, out: i64*, work: u32*): int:
             ret -1
         end
     else:
-        j := 0 - exp2
+        j := -exp2
         if not _bn_mul_pow5(work, j):
             ret -1
         end
-        decexp = 0 - j
+        decexp = -j
     end
 
     mut pos := 0
@@ -474,7 +472,7 @@ func _emit_exponent(buf: u8*, cap: int, start: int, x: int): int:
     mut v := x
     if v < 0:
         pos = _put(buf, cap, pos, 45 as u8)
-        v = 0 - v
+        v = -v
     else:
         pos = _put(buf, cap, pos, 43 as u8)
     end
@@ -516,14 +514,14 @@ func _format(
     frac := bits & (0xFFFFFFFFFFFFF as u64)
 
     if be == 0x7FF:
-        if neg:
-            pos = _put(buf, cap, pos, 45 as u8)
-        end
         if frac != (0 as u64):
             pos = _put(buf, cap, pos, 110 as u8)
             pos = _put(buf, cap, pos, 97 as u8)
             pos = _put(buf, cap, pos, 110 as u8)
         else:
+            if neg:
+                pos = _put(buf, cap, pos, 45 as u8)
+            end
             pos = _put(buf, cap, pos, 105 as u8)
             pos = _put(buf, cap, pos, 110 as u8)
             pos = _put(buf, cap, pos, 102 as u8)
@@ -597,7 +595,7 @@ func _format(
         end
         digits[0] = carry ? (49 as u8) : (48 as u8)
         ndig = 1
-        x = carry ? (0 - p) : 0
+        x = carry ? (-p) : 0
         sig = 1
     end
 
@@ -728,7 +726,7 @@ func _decimal_to_bits(
             ret _encode(neg, 0 as u64, 0)
         end
     else:
-        if not _bn_mul_pow10(q0, 0 - dexp):
+        if not _bn_mul_pow10(q0, -dexp):
             ret _encode(neg, 0 as u64, 0)
         end
     end
@@ -743,7 +741,7 @@ func _decimal_to_bits(
             ret _encode(neg, 0 as u64, 0)
         end
     else:
-        if not _bn_shl(q, 0 - shift):
+        if not _bn_shl(q, -shift):
             ret _encode(neg, 0 as u64, 0)
         end
     end
@@ -751,7 +749,7 @@ func _decimal_to_bits(
     mut quo := _bn_div(p, q, t)
     mut sticky := trunc or not _bn_is_zero(p)
     bl := _u64_bitlen(quo)
-    e2 := 0 - shift
+    e2 := -shift
     excess := bl - 53
     mut m := _round_quotient(quo, excess, sticky)
     mut fe := e2 + excess
@@ -859,14 +857,22 @@ func _strtod_core(sp: i8*, out: i64*): u64:
     mut trunc := false
     mut ok := true
 
+    mut prev_dig := false
     c = _byte(sp, i)
-    until _is_digit(c) or (c == 46 and not seen_point):
+    until _is_digit(c) or (c == 46 and not seen_point) or (
+        c == 95 and prev_dig and _is_digit(_byte(sp, i + 1))
+    ):
         if c == 46:
             seen_point = true
+            prev_dig = false
+            i++
+            c = _byte(sp, i)
+        else c == 95:
             i++
             c = _byte(sp, i)
         else:
             any = true
+            prev_dig = true
             v := c - 48
             if nd == 0 and v == 0:
                 if seen_point:
@@ -916,8 +922,10 @@ func _strtod_core(sp: i8*, out: i64*): u64:
         end
         if _is_digit(_byte(sp, j)):
             mut ev := 0
-            until _is_digit(_byte(sp, j)):
-                if ev < 100000:
+            until _is_digit(_byte(sp, j)) or (
+                _byte(sp, j) == 95 and _is_digit(_byte(sp, j + 1))
+            ):
+                if _byte(sp, j) != 95 and ev < 100000:
                     ev = (ev * 10) + (_byte(sp, j) - 48)
                 end
                 j++
@@ -963,36 +971,54 @@ func _dtoa_ready(): bool:
     ret true
 end
 
-if not SALAM_KERNEL:
-    func _dtoa_shortest(v: f64, out: void*, cap: int): int:
-        if not _dtoa_ready():
-            ret -1
-        end
-        bits := _pun_bits(v)
-        mut prec := 15
-        until prec < 17:
-            n := _dtoa_into(bits, prec, 103, out as u8*, cap)
-            if n > 0 and n < cap:
-                if _pun_bits(_dtoa_parse(out as str, null)) == bits:
-                    ret n
-                end
+func _dtoa_shortest(v: f64, out: void*, cap: int): int:
+    if not _dtoa_ready():
+        ret -1
+    end
+    bits := _pun_bits(v)
+    mut prec := ((bits >> (52 as u64)) & (0x7FF as u64)) == (0 as u64) ? 1 : 15
+    until prec < 17:
+        n := _dtoa_into(bits, prec, 103, out as u8*, cap)
+        if n > 0 and n < cap:
+            if _pun_bits(_dtoa_parse(out as str, null)) == bits:
+                ret n
             end
-            prec++
         end
-        ret _dtoa_into(bits, 17, 103, out as u8*, cap)
+        prec++
     end
+    ret _dtoa_into(bits, 17, 103, out as u8*, cap)
+end
 
-    func _dtoa_parse(s: str, endp: void*): f64:
-        if not _dtoa_ready() or (s as void*) as u64 == (0 as u64):
-            ret 0.0
-        end
-        outv := (_scratch + (OFF_PUN as u64)) as i64*
-        outv[0] = 0 as i64
-        bits := _strtod_core(_bp(s), outv)
-        if (endp as u64) != (0 as u64):
-            e := (endp as u64) as u64*
-            e[0] = ((s as void*) as u64) + (outv[0] as u64)
-        end
-        ret _pun_f64(bits)
+func _dtoa_shortest32(v: f32, out: void*, cap: int): int:
+    if not _dtoa_ready():
+        ret -1
     end
+    wide := v as f64
+    bits := _pun_bits(wide)
+    mut prec := 1
+    until prec < 9:
+        n := _dtoa_into(bits, prec, 103, out as u8*, cap)
+        if n > 0 and n < cap:
+            back := _dtoa_parse(out as str, null) as f32
+            if back == v:
+                ret n
+            end
+        end
+        prec++
+    end
+    ret _dtoa_into(bits, 9, 103, out as u8*, cap)
+end
+
+func _dtoa_parse(s: str, endp: void*): f64:
+    if not _dtoa_ready() or (s as void*) as u64 == (0 as u64):
+        ret 0.0
+    end
+    outv := (_scratch + (OFF_PUN as u64)) as i64*
+    outv[0] = 0 as i64
+    bits := _strtod_core(_bp(s), outv)
+    if (endp as u64) != (0 as u64):
+        e := (endp as u64) as u64*
+        e[0] = ((s as void*) as u64) + (outv[0] as u64)
+    end
+    ret _pun_f64(bits)
 end

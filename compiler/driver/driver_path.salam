@@ -3,12 +3,14 @@ package driver
 import os
 import str
 import fs
+import mem
 
 include lg "../logger.salam"
 include i18 "../i18n.salam"
 include co "../sal_core.salam"
 include pth "../sal_path.salam"
 include sm "../semantic/semantic.salam"
+include src "../source.salam"
 
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
@@ -243,7 +245,9 @@ func build_signature(opt &: Dr): str:
         opt.range_checks as i64
     ) + "|W" + str.FromInt(opt.ownership as i64) + "|S" + str.FromInt(
         opt.spelling_checks as i64
-    ) + "|X" + str.FromInt(opt.switch_lint as i64) + "." + str.FromInt(opt.switch_lint_min as i64) + (opt.strict_values ? "|V" : "")
+    ) + "|X" + str.FromInt(opt.switch_lint as i64) + "." + str.FromInt(
+        opt.switch_lint_min as i64
+    ) + (opt.strict_values ? "|V" : "")
     repeat opt.link_objects.Len() in li:
         sig = sig + "|L" + opt.link_objects.Get(li)
     end
@@ -265,13 +269,98 @@ func build_signature(opt &: Dr): str:
     ret sig
 end
 
-func write_build_manifest(scratch: str, sig: str, sources: Vector<str>): bool:
+func digest_file(path: str): str:
+    fp := fopen(path, "rb")
+    if fp == null:
+        ret ""
+    end
+    cap := 65536
+    buf := mem.Allocate(cap as u64)
+    if buf == null:
+        _c0 := fclose(fp)
+        ret ""
+    end
+    mut h1 := 0 as u64
+    mut h2 := 0 as u64
+    src.DigestSeed(h1, h2)
+    mut total := 0 as i64
+    mut got := fread(buf, 1 as u64, cap as u64, fp)
+    until got > (0 as u64):
+        src.DigestFeed(buf, got as int, h1, h2)
+        total += got as i64
+        got = fread(buf, 1 as u64, cap as u64, fp)
+    end
+    mem.Free(buf)
+    _c := fclose(fp)
+    ret src.DigestFormat(total, h1, h2)
+end
+
+func tool_identity(path: str): str:
+    if str.Len(path) == 0 or not os.Exists(path):
+        ret path
+    end
+    ret path + ":" + str.FromInt(os.FileSize(path)) + ":" + str.FromInt(fs.ModTime(path))
+end
+
+func compiler_identity(): str:
+    mut exe := ""
+    if not sm.ExePath(exe):
+        ret ""
+    end
+    ret tool_identity(abs_of(exe))
+end
+
+func obj_key_path(cfile: str): str:
+    ret str.Substr(cfile, 0, str.Len(cfile) - 2) + ".key"
+end
+
+func obj_key_base(cfiles: Vector<str>, cmd: str): str:
+    mut sb := str.NewBuilder()
+    repeat cfiles.Len() in i:
+        cf := cfiles.Get(i)
+        hp := str.Substr(cf, 0, str.Len(cf) - 2) + ".h"
+        if os.Exists(hp):
+            str.BufAppend(sb, pth.PathBase(hp))
+            str.BufAppendChar(sb, 32)
+            str.BufAppend(sb, digest_file(hp))
+            str.BufAppendChar(sb, 10)
+        end
+    end
+    hdrs := str.BufStr(sb)
+    str.BufFree(sb)
+    hkey := src.DigestText(hdrs)
+    mem.Free(hdrs as void*)
+    ret cmd + "\n" + tool_identity(unquote_tool(cmd)) + "\nh " + hkey + "\n"
+end
+
+func unquote_tool(cmd: str): str:
+    if str.StartsWith(cmd, "\""):
+        end_q := str.IndexOf(str.Substr(cmd, 1, str.Len(cmd) - 1), "\"")
+        if end_q >= 0:
+            ret str.Substr(cmd, 1, end_q)
+        end
+        ret ""
+    end
+    sp := str.IndexOf(cmd, " ")
+    ret sp < 0 ? cmd : str.Substr(cmd, 0, sp)
+end
+
+func write_build_manifest(
+    scratch: str, sig: str, output: str, sources: Vector<str>, digests: Vector<str>
+): bool:
+    out_digest := digest_file(resolve_output_path(output))
+    if str.Len(out_digest) == 0:
+        _rm := os.Remove(manifest_path(scratch))
+        ret false
+    end
     mut sb := str.NewBuilder()
     str.BufAppend(sb, sig)
     str.BufAppendChar(sb, 10)
+    str.BufAppend(sb, out_digest)
+    str.BufAppendChar(sb, 10)
     mut seen := Vector {} as Vector<str>
     repeat sources.Len() in i:
-        p := sources.Get(i)
+        p := abs_of(sources.Get(i))
         mut dup := false
         repeat seen.Len() in j:
             if str.Equals(seen.Get(j), p):
@@ -283,6 +372,8 @@ func write_build_manifest(scratch: str, sig: str, sources: Vector<str>): bool:
             continue
         end
         seen.Push(p)
+        str.BufAppend(sb, i < digests.Len() ? digests.Get(i) : "-")
+        str.BufAppendChar(sb, 32)
         str.BufAppend(sb, p)
         str.BufAppendChar(sb, 10)
     end
@@ -312,30 +403,34 @@ func build_up_to_date(scratch: str, sig: str, output0: str): bool:
     end
     txt := os.ReadFile(mpath)
     lines := str.Split(txt, "\n")
-    if lines.Len() < 2:
+    if lines.Len() < 3:
         ret false
     end
     if not str.Equals(lines.Get(0), sig):
         ret false
     end
-    out_mtime := fs.ModTime(output)
-    mut exe := ""
-    if sm.ExePath(exe) and os.Exists(exe) and fs.ModTime(exe) >= out_mtime:
+    if not str.Equals(lines.Get(1), digest_file(output)):
         ret false
     end
     mut saw_source := false
     repeat lines.Len() in li:
-        if li == 0:
+        if li < 2:
             continue
         end
-        src_path := lines.Get(li)
-        if str.Len(src_path) == 0:
+        line := lines.Get(li)
+        if str.Len(line) == 0:
             continue
         end
+        sp := str.IndexOf(line, " ")
+        if sp <= 0:
+            ret false
+        end
+        want := str.Substr(line, 0, sp)
+        src_path := str.Substr(line, sp + 1, str.Len(line) - sp - 1)
         if not os.Exists(src_path):
             ret false
         end
-        if fs.ModTime(src_path) >= out_mtime:
+        if not str.Equals(want, digest_file(src_path)):
             ret false
         end
         saw_source = true

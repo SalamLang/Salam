@@ -276,7 +276,22 @@ func no_browser_equivalent(name: str): bool:
     ret false
 end
 
+func jsg_ext_big_ok(name: str): bool:
+    ret str.Equals(name, "salam_hash_int") or str.Equals(name, "salam_str_hash") or
+        str.Equals(name, "labs") or str.Equals(name, "llabs")
+end
+
 func jsg_emit_extern_call(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, extname: str, args: Vector<int>, rts: str
+): str:
+    r := jsg_emit_extern_raw(g, s, a, extname, args)
+    if jsg_wide_ts(rts) and not jsg_ext_big_ok(extname) and not str.StartsWith(r, "__salam_unsupported"):
+        ret "__sal_hb(" + r + ")"
+    end
+    ret r
+end
+
+func jsg_emit_extern_raw(
     g &: Jg, s &: sm.Sema, a &: at.Ast, extname: str, args: Vector<int>
 ): str:
     mut rendered := Vector {} as Vector<str>
@@ -290,6 +305,10 @@ func jsg_emit_extern_call(
             _lv := jsg_local(g, name, false)
             cg_line(g, "const " + name + " = " + jsg_lambda(g, s, a, aid) + ";")
             rendered.Push(name)
+        else jsg_ext_big_ok(extname):
+            rendered.Push(jsg_expr_p(g, s, a, aid, 0))
+        else jsg_wide_ts(at.Get(a, aid).type_str):
+            rendered.Push("__sal_hn(" + jsg_expr_p(g, s, a, aid, 0) + ")")
         else:
             rendered.Push(jsg_expr_p(g, s, a, aid, 0))
         end
@@ -493,7 +512,7 @@ func jsg_try_inline(
         slots.Push(outer.Get(map.Get(k2)))
         k2++
     end
-    result := jsg_emit_extern_call(g, s, a, calleev.name, slots)
+    result := jsg_emit_extern_call(g, s, a, calleev.name, slots, at.Get(a, inner).type_str)
     slots.Free()
     outer.Free()
     used.Free()
@@ -512,7 +531,7 @@ func jsg_call_extern_direct(
         args.Push(nv.list.Get(i))
         i++
     end
-    result := jsg_emit_extern_call(g, s, a, name, args)
+    result := jsg_emit_extern_call(g, s, a, name, args, nv.type_str)
     args.Free()
     ret result
 end
@@ -537,7 +556,11 @@ func jsg_print(
         end
         aid := nv.list.Get(i)
         ats := at.Get(a, aid).type_str
-        if str.Equals(ats, "f64") or str.Equals(ats, "f32"):
+        if str.Equals(ats, "f32"):
+            str.BufAppend(
+                b, "__sal_fmtf32(" + jsg_expr_p(g, s, a, aid, 0) + ")"
+            )
+        else str.Equals(ats, "f64"):
             str.BufAppend(
                 b, "__sal_fmtf(" + jsg_expr_p(g, s, a, aid, 0) + ")"
             )
@@ -654,8 +677,11 @@ func jsg_call_ident(
             if str.Equals(ats, "str"):
                 ret "salam_str_hash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
             end
-            if jsg_wide_ts(ats):
+            if jsg_w128_ts(ats):
                 ret "__sal_whash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
+            end
+            if str.Equals(ats, "f32") or str.Equals(ats, "f64"):
+                ret "__sal_fhash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
             end
             ret "salam_hash_int(" + jsg_expr_p(g, s, a, a0, 0) + ")"
         end
@@ -819,7 +845,7 @@ func jsg_std_replaced_name(pkg: str, name: str): bool:
         ret str.StartsWith(name, "Buf") or str.Equals(name, "NewBuilder")
     end
     if str.Equals(pkg, "conv") or str.Equals(pkg, "numfmt"):
-        ret str.Equals(name, "FormatFloat") or str.Equals(
+        ret str.Equals(name, "FormatFloat") or str.Equals(name, "FormatFloat32") or str.Equals(
             name, "FormatInt"
         ) or str.Equals(name, "FormatUint") or str.Equals(name, "ScanFloat")
     end
@@ -850,14 +876,17 @@ func jsg_call_conv(
     if str.Equals(name, "FormatFloat"):
         ret "__sal_fmtf(" + a0 + ")"
     end
+    if str.Equals(name, "FormatFloat32"):
+        ret "__sal_fmtf32(" + a0 + ")"
+    end
     if str.Equals(name, "FormatInt") or str.Equals(name, "FormatUint"):
+        if jsg_wide_ts(at.Get(a, nv.list.Get(0)).type_str):
+            ret "String(" + a0 + ")"
+        end
         ret "String(Math.trunc(" + a0 + "))"
     end
     if str.Equals(name, "ScanFloat"):
-        ret "((__s) => { const __t = " + js_ascii_digits("__s") +
-            ".trim(); if (/^[+-]?inf(inity)?$/i.test(__t)) return __t[0] === " + `"-"` +
-            " ? -Infinity : Infinity; if (/^[+-]?nan/i.test(__t)) return NaN; const __v = parseFloat(__t); return Number.isNaN(__v) ? 0 : __v; })(" +
-            a0 + ")"
+        ret "__sal_strtod(" + js_ascii_digits(a0) + ", false)"
     end
     ret ""
 end
@@ -932,8 +961,8 @@ func jsg_call_str(
     end
     nv := at.Get(a, n)
     recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
-    a0 := nv.list.Len() > 0 ? jsg_expr_p(g, s, a, nv.list.Get(0), 0) : "0"
-    a1 := nv.list.Len() > 1 ? jsg_expr_p(g, s, a, nv.list.Get(1), 0) : "0"
+    a0 := nv.list.Len() > 0 ? jsg_num(g, s, a, nv.list.Get(0), 0) : "0"
+    a1 := nv.list.Len() > 1 ? jsg_num(g, s, a, nv.list.Get(1), 0) : "0"
     if str.Equals(m, "len") or str.Equals(m, "Len"):
         ret "__sal_len(" + recv + ")"
     end
@@ -977,7 +1006,7 @@ func jsg_call_str(
             ", 10) || 0))"
     end
     if str.Equals(m, "to_float") or str.Equals(m, "ToFloat"):
-        ret "(parseFloat(" + js_ascii_digits(recv) + ") || 0)"
+        ret "__sal_strtod(" + js_ascii_digits(recv) + ", true)"
     end
     if str.Equals(m, "split"):
         if at.StrLitLen(a, nv.list.Get(0)) > (0 as i64):
@@ -1011,19 +1040,28 @@ func jsg_method_key(name: str): str:
     ret out
 end
 
+func jsg_vec_big_zero(ts: str): str:
+    if str.Equals(ts, "Vector_i64") or str.Equals(ts, "Vector_u64") or
+        str.Equals(ts, "Vector_i128") or str.Equals(ts, "Vector_u128"):
+        ret ", 0n"
+    end
+    ret ""
+end
+
 func jsg_call_vec(
     g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
 ): str:
     m := jsg_method_key(at.Get(a, callee).name)
     nv := at.Get(a, n)
     recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
-    a0 := nv.list.Len() > 0 ? jsg_expr_p(g, s, a, nv.list.Get(0), 0) : "0"
+    if (str.Equals(m, "push") or str.Equals(m, "Push")) and nv.list.Len() > 0:
+        ret recv + ".push(" + jsg_expr_p(g, s, a, nv.list.Get(0), 0) + ")"
+    end
+    a0 := nv.list.Len() > 0 ? jsg_num(g, s, a, nv.list.Get(0), 0) : "0"
     a1 := nv.list.Len() > 1 ? jsg_expr_p(g, s, a, nv.list.Get(1), 0) : "0"
+    vz := jsg_vec_big_zero(at.Get(a, obj).type_str)
     if str.Equals(m, "len") or str.Equals(m, "cap"):
         ret "__sal_len(" + recv + ")"
-    end
-    if str.Equals(m, "push") or str.Equals(m, "Push"):
-        ret recv + ".push(" + a0 + ")"
     end
     if str.Equals(m, "pop"):
         ret recv + ".pop()"
@@ -1035,7 +1073,7 @@ func jsg_call_vec(
         ret "(" + recv + "[" + a0 + "] = " + a1 + ")"
     end
     if str.Equals(m, "resize_set"):
-        ret "__sal_vset(" + recv + ", " + a0 + ", " + a1 + ")"
+        ret "__sal_vset(" + recv + ", " + a0 + ", " + a1 + vz + ")"
     end
     if str.Equals(m, "is_empty") or str.Equals(m, "IsEmpty"):
         ret "(" + recv + ".length === 0)"
@@ -1056,7 +1094,7 @@ func jsg_call_vec(
         ret "__sal_vremove(" + recv + ", " + a0 + ")"
     end
     if str.Equals(m, "zeros") or str.Equals(m, "alloc"):
-        ret "__sal_vzeros(" + recv + ", " + a0 + ")"
+        ret "__sal_vzeros(" + recv + ", " + a0 + vz + ")"
     end
     if str.Equals(m, "ref"):
         if jsg_ptr_struct(s, nv.type_str) != 0:

@@ -20,6 +20,7 @@ import str
 import filepath
 
 mut g_src_loaded := Vector {} as Vector<str>
+mut g_src_digest := Vector {} as Vector<str>
 mut g_src_overlay := HashMap {} as HashMap<str, str>
 mut g_src_error := ""
 
@@ -27,7 +28,7 @@ pub struct SourceFile:
     pub path: str = ""
     pub text: str = ""
     pub len: int = 0
-    pub nul_at: int = 0 - 1
+    pub nul_at: int = -1
 end
 
 func has_bom(text: str): bool:
@@ -38,6 +39,38 @@ func drop_bom(text: str):
     n := text.Len()
     p := text as void*
     _moved := mem.MemMove(p, ((p as i64) + (3 as i64)) as void*, (n - 2) as u64)
+end
+
+pub func DigestFeed(p: void*, n: int, h1 &: u64, h2 &: u64):
+    bp := p as u8*
+    mask := 4294967295 as u64
+    mut a := h1
+    mut b := h2
+    repeat n in i:
+        c := bp[i] as u64
+        a = ((a ^ c) * (16777619 as u64)) & mask
+        b = ((b * (33 as u64)) + c) & mask
+    end
+    h1 = a
+    h2 = b
+end
+
+pub func DigestSeed(h1 &: u64, h2 &: u64):
+    h1 = 2166136261 as u64
+    h2 = 5381 as u64
+end
+
+pub func DigestFormat(n: i64, h1: u64, h2: u64): str:
+    ret str.FromInt(n) + ":" + str.FromInt(h1 as i64) + "-" + str.FromInt(h2 as i64)
+end
+
+pub func DigestText(text: str): str:
+    mut h1 := 0 as u64
+    mut h2 := 0 as u64
+    DigestSeed(h1, h2)
+    n := text.Len()
+    DigestFeed(text as void*, n, h1, h2)
+    ret DigestFormat(n as i64, h1, h2)
 end
 
 pub func New(): SourceFile:
@@ -60,8 +93,9 @@ pub func Load(path: str, sf &: SourceFile): bool:
             sf.path = path
             sf.text = otext
             sf.len = otext.Len()
-            sf.nul_at = 0 - 1
+            sf.nul_at = -1
             g_src_loaded.Push(path)
+            g_src_digest.Push(DigestText(otext))
             ret true
         end
     end
@@ -82,6 +116,7 @@ pub func Load(path: str, sf &: SourceFile): bool:
     f.Close()
     size := os.FileSize(path)
     text := io.ReadFile(path)
+    g_src_digest.Push(size == (text.Len() as i64) ? DigestText(text) : "-")
     mut want := size
     if has_bom(text):
         want = size - (3 as i64)
@@ -90,7 +125,7 @@ pub func Load(path: str, sf &: SourceFile): bool:
     sf.path = path
     sf.text = text
     sf.len = text.Len()
-    sf.nul_at = 0 - 1
+    sf.nul_at = -1
     if size >= (0 as i64) and want > (sf.len as i64):
         sf.nul_at = sf.len
     end
@@ -121,6 +156,10 @@ end
 
 pub func LoadedPaths(): Vector<str>:
     ret g_src_loaded
+end
+
+pub func LoadedDigests(): Vector<str>:
+    ret g_src_digest
 end
 
 pub func Free(sf &: SourceFile):

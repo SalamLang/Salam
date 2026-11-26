@@ -5,6 +5,7 @@ import time
 import mem
 
 include co "../sal_core.salam"
+include tok "../token.salam"
 include at "../ast.salam"
 include lg "../logger.salam"
 include i18 "../i18n.salam"
@@ -283,7 +284,7 @@ func env_find_local(ip &: Interp, e: int, name: str): int:
             ret i
         end
     end
-    ret 0 - 1
+    ret -1
 end
 
 func env_find(ip &: Interp, e0: int, name: str, where &: int): int:
@@ -298,7 +299,7 @@ func env_find(ip &: Interp, e0: int, name: str, where &: int): int:
         e = en.parent
     end
     where = 0
-    ret 0 - 1
+    ret -1
 end
 
 func env_slot_val(ip &: Interp, e: int, slot: int): Value:
@@ -336,6 +337,36 @@ end
 
 func find_enum(ip &: Interp, name: str): int:
     ret itab_get(ip.tab_enums, name)
+end
+
+func enum_backing(a &: at.Ast, edef: int): int:
+    repeat at.ChildCount(a, edef) in i:
+        m := at.At(a, at.Child(a, edef, i))
+        if m.a != 0 and at.At(a, m.a).kind == at.AST_LITERAL:
+            vk := at.At(a, m.a).value_kind
+            if vk == tok.TV_STRING:
+                ret ENUM_BACK_STR
+            end
+            if vk == tok.TV_FLOAT:
+                ret ENUM_BACK_FLOAT
+            end
+            ret ENUM_BACK_INT
+        end
+    end
+    ret ENUM_BACK_INT
+end
+
+func register_enum_name(ip &: Interp, a &: at.Ast, name: str, d: int):
+    mut t := ip.tab_enums
+    itab_put(t, name, d)
+    ip.tab_enums = t
+    mut tb := ip.tab_enum_back
+    itab_put(tb, name, enum_backing(a, d))
+    ip.tab_enum_back = tb
+end
+
+func enum_back_of(ip &: Interp, name: str): int:
+    ret itab_get(ip.tab_enum_back, name)
 end
 
 func register_func(ip &: Interp, a &: at.Ast, f: int):
@@ -508,9 +539,7 @@ func collect_decls(ip &: Interp, a &: at.Ast, program: int):
         else dn.kind == at.AST_ENUM_DEF:
             ip.enums.Push(d)
             if str.Len(dn.name) != 0:
-                mut t2 := ip.tab_enums
-                itab_put(t2, dn.name, d)
-                ip.tab_enums = t2
+                register_enum_name(ip, a, dn.name, d)
             end
         else dn.kind == at.AST_IMPL_DEF:
             ip.impls.Push(d)
@@ -569,17 +598,13 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
             if str.Len(dn.name) != 0 and str.Len(md.name) != 0 and not str.Equals(md.name, "main"):
                 qual := md.name + "." + dn.name
                 if find_enum(ip, qual) == 0:
-                    mut teq := ip.tab_enums
-                    itab_put(teq, qual, d)
-                    ip.tab_enums = teq
+                    register_enum_name(ip, a, qual, d)
                 end
             end
             if find_enum(ip, dn.name) == 0:
                 ip.enums.Push(d)
                 if str.Len(dn.name) != 0:
-                    mut t2 := ip.tab_enums
-                    itab_put(t2, dn.name, d)
-                    ip.tab_enums = t2
+                    register_enum_name(ip, a, dn.name, d)
                 end
             end
         else dn.kind == at.AST_IMPL_DEF:

@@ -1,0 +1,169 @@
+import mem
+import net.udp
+import net.udprelay
+import net.tcp
+import os.process
+import os.internal.fdio
+
+struct Echo:
+    pub sock: udp.Socket = udp.Socket {}
+end
+
+struct Listener:
+    pub control: i64 = -1
+    pub port: int = 0
+    pub announce: i64 = -1
+end
+
+struct Pipes:
+    pub in_fd: i64 = -1
+    pub out_fd: i64 = -1
+end
+
+func echo(e: Echo*):
+    buf := mem.Allocate(4096 as u64)
+    until true:
+        mut host := ""
+        mut port := 0
+        n := udp.ReceiveBytes(e[0].sock, buf, 4096, host, port)
+        if n > 0:
+            _s := udp.SendBytes(e[0].sock, host, port, buf, n)
+        end
+    end
+end
+
+func serve(p: Pipes*):
+    _ok := udprelay.Serve(p[0].in_fd, p[0].out_fd, udprelay.ServerOptions { allow_loopback = true })
+end
+
+func listen(l: Listener*):
+    _ok := udprelay.Listen(
+        l[0].port,
+        "0123456789abcdef0123456789abcdef",
+        l[0].control,
+        udprelay.ServerOptions { allow_loopback = true, announce_fd = l[0].announce }
+    )
+end
+
+func announced(fd: i64): int:
+    buf := mem.AllocateZeroed(64 as u64) as u8*
+    mut got := 0
+    until got < 63 and (got == 0 or buf[got - 1] != (10 as u8)):
+        if fdio.PollRead(fd, 3000) <= 0:
+            break
+        end
+        got += fdio.ReadRaw(fd, ((buf as i64) + (got as i64)) as void*, 1)
+    end
+    mut port := 0
+    repeat got in i:
+        c := buf[i] as int
+        if c >= 48 and c <= 57:
+            port = port * 10 + (c - 48)
+        end
+    end
+    mem.Free(buf as void*)
+    ret port
+end
+
+func over_socket(relay: int, target: int, token: str):
+    c := udprelay.NewSocketClient((): ret tcp.DialTimeout("127.0.0.1", relay, 2000).fd end, token)
+    buf := mem.AllocateZeroed(4096 as u64)
+    mut info := udprelay.Datagram {}
+    repeat 40:
+        if not c.Ready():
+            _n := c.Receive(buf, 4000, info, 50)
+        end
+    end
+    println "socket ready", c.Ready()
+    if c.Ready():
+        ask(c, 41000, target, "over a socket")
+    end
+    c.Close()
+    mem.Free(buf)
+end
+
+func ask(c: udprelay.Client, flow: int, port: int, text: str):
+    ip := udprelay.ParseIPv4("127.0.0.1")
+    _s := c.Send(flow, ip, port, text as void*, text.Len())
+    buf := mem.AllocateZeroed(4096 as u64) as u8*
+    mut info := udprelay.Datagram {}
+    mut got := 0
+    repeat 100:
+        if got == 0:
+            got = c.Receive(buf as void*, 4000, info, 50)
+        end
+    end
+    println "flow",
+        info.flow,
+        "from",
+        udprelay.FormatIPv4(info.ip),
+        info.port == port,
+        "bytes",
+        got,
+        got == text.Len()
+    mem.Free(buf as void*)
+end
+
+func main():
+    head := mem.AllocateZeroed(16 as u64) as u8*
+    udprelay.EncodeHeader(
+        head as void*,
+        udprelay.Datagram {
+            flow = 51000,
+            ip = udprelay.ParseIPv4("203.0.113.9"),
+            port = 443,
+            length = 1200
+        }
+    )
+    mut wire := ""
+    repeat udprelay.header_size in i:
+        wire = wire + (head[i] as int) + " "
+    end
+    println "wire", wire
+    mut back := udprelay.Datagram {}
+    udprelay.DecodeHeader(head as void*, back)
+    println "back", back.flow, udprelay.FormatIPv4(back.ip), back.port, back.length
+    println "bad",
+        udprelay.ParseIPv4("1.2.3"),
+        udprelay.ParseIPv4("1.2.3.256"),
+        udprelay.ParseIPv4("a.b.c.d"),
+        udprelay.ParseIPv4("1..2.3")
+    println "high", udprelay.FormatIPv4(udprelay.ParseIPv4("255.255.255.255"))
+
+    e := mem.AllocateZeroed(size(Echo) as u64) as Echo*
+    e[0].sock = udp.BindOn("127.0.0.1", 0)
+    port := udp.Port(e[0].sock)
+    _e := spawn(echo, e)
+    to_server := fdio.MakePipe()
+    to_client := fdio.MakePipe()
+    p := mem.AllocateZeroed(size(Pipes) as u64) as Pipes*
+    p[0] = Pipes { in_fd = to_server.r, out_fd = to_client.w }
+    _t := spawn(serve, p)
+    c := udprelay.NewPipeClient(to_client.r, to_server.w)
+    buf := mem.AllocateZeroed(64 as u64)
+    mut info := udprelay.Datagram {}
+    repeat 100:
+        if not c.Ready():
+            _n := c.Receive(buf, 64, info, 50)
+        end
+    end
+    println "ready", c.Ready()
+    ask(c, 40000, port, "hello")
+    ask(c, 40001, port, "second flow")
+    ask(c, 40000, port, "hello again")
+    c.Close()
+    println "closed", not c.Ready()
+    idle := udprelay.NewClient(process.NewCommand("/nonexistent/salam-udprelay"))
+    println "send before ready", idle.Send(1, 1 as i64, 1, buf, 1), idle.Dropped()
+    idle.Close()
+    control := fdio.MakePipe()
+    report := fdio.MakePipe()
+    l := mem.AllocateZeroed(size(Listener) as u64) as Listener*
+    l[0] = Listener { control = control.r, port = 0, announce = report.w }
+    _l := spawn(listen, l)
+    relay := announced(report.r)
+    println "port announced", relay > 0
+    over_socket(relay, port, "wrong-token-wrong-token-wrong-to")
+    over_socket(relay, port, "0123456789abcdef0123456789abcdef")
+    fdio.Close(control.w)
+end

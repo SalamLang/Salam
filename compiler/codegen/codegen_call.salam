@@ -41,7 +41,7 @@ func cg_scalar_size(ts: str, fp &: bool): int:
     if str.Equals(ts, "str") or str.EndsWith(ts, "*"):
         ret 8
     end
-    ret 0 - 1
+    ret -1
 end
 
 func cg_sysv_flat(
@@ -63,7 +63,7 @@ func cg_sysv_flat(
     end
     ssym := cg_struct_sym(s, ts)
     if ssym == 0 or depth > 8 or sm.SymAt(s, ssym).members == 0:
-        ret 0 - 1
+        ret -1
     end
     syms := sm.ScopeAt(s, sm.SymAt(s, ssym).members).symbols
     mut off := 0
@@ -80,7 +80,7 @@ func cg_sysv_flat(
             if fs < 0:
                 fo.Free()
                 ff.Free()
-                ret 0 - 1
+                ret -1
             end
             off = (off + fa - 1) / fa * fa
             repeat fo.Len() in k:
@@ -540,7 +540,11 @@ func cg_lower_print_buf(
             co.SbPuts(pre, "int32_t " + tv + " = (int32_t)(" + e + "); ")
             co.SbPuts(body, "salam_out_byte(" + tv + "); ")
         else sg.kind == PF_F64:
-            co.SbPuts(pre, "const char* " + tv + " = salam_fmt_f64((double)(" + e + ")); ")
+            if str.Equals(at.Get(a, sg.expr).type_str, "f32"):
+                co.SbPuts(pre, "const char* " + tv + " = salam_fmt_f32((float)(" + e + ")); ")
+            else:
+                co.SbPuts(pre, "const char* " + tv + " = salam_fmt_f64((double)(" + e + ")); ")
+            end
             co.SbPuts(body, "salam_out_str(" + tv + "); ")
             co.SbPuts(post, "free((void*)" + tv + "); ")
         else sg.kind == PF_I128 or sg.kind == PF_U128:
@@ -778,7 +782,9 @@ func cg_lower_print(
             av = "((" + e + `) ? "true" : "false")`
         else sg2.kind == PF_F64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
-            av = "salam_fmt_f64((double)(" + e + "))"
+            av = str.Equals(
+                at.Get(a, sg2.expr).type_str, "f32"
+            ) ? "salam_fmt_f32((float)(" + e + "))" : "salam_fmt_f64((double)(" + e + "))"
         else sg2.kind == PF_U32:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(unsigned)(" + e + ")"
@@ -984,6 +990,21 @@ func call_ident(
             end
             if cg_wide_ts(ats):
                 ret "salam_w_hash(" + cg_expr(g, s, a, hid) + ")"
+            end
+            if str.Equals(ats, "f32") or str.Equals(ats, "f64"):
+                g.tmpn++
+                ht := "__hf" + g.tmpn
+                hb := "__hb" + g.tmpn
+                hx := cg_expr(g, s, a, hid)
+                mut hc := "({ double " + ht + " = (double)(" + hx + "); " + ht + " = " + ht +
+                    " == 0.0 ? 0.0 : "
+                hc = hc + ht + "; uint64_t " + hb + " = " + ht + " != " + ht +
+                    " ? (uint64_t)0x7FF8000000000000ULL : "
+                hc = hc + "((union { double d; uint64_t u; }){ .d = " + ht + " }).u; " + hb +
+                    " ^= " + hb + " >> 33; "
+                hc = hc + hb + " *= 0xFF51AFD7ED558CCDULL; " + hb + " ^= " + hb +
+                    " >> 33; salam_hash_int(" + hb + "); })"
+                ret hc
             end
             ret "salam_hash_int((uint64_t)(intptr_t)(" + cg_expr(g, s, a, hid) + "))"
         end
@@ -1521,23 +1542,23 @@ end
 func call_order_upto(a &: at.Ast, n: int): int:
     args := at.Get(a, n).list
     if args.Len() < 2:
-        ret 0 - 1
+        ret -1
     end
-    mut last_effect := 0 - 1
+    mut last_effect := -1
     repeat args.Len() in i:
         if arg_has_effect(a, args.Get(i), 0):
             last_effect = i
         end
     end
     if last_effect < 0:
-        ret 0 - 1
+        ret -1
     end
     repeat args.Len() in j:
         if j != last_effect and arg_reads_state(a, args.Get(j), 0):
             ret last_effect
         end
     end
-    ret 0 - 1
+    ret -1
 end
 
 func cg_call_ordered(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, upto: int): str:

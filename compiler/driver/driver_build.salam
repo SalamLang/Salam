@@ -372,7 +372,8 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
         )
         ret 2
     end
-    build_sig := build_signature(opt) + "|" + co.VERSION + "|" + co.GIT_COMMIT + co.GIT_DIRTY
+    build_sig := build_signature(opt) + "|" + co.VERSION + "|" + co.GIT_COMMIT + co.GIT_DIRTY +
+        "|" + compiler_identity() + "|" + os.Cwd()
     if opt.command == CMD_BUILD and not opt.force and str.Len(opt.lib_kind) == 0:
         predicted_name := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.Get(0))
         predicted_output := exe_name_for(predicted_name, opt.llvm_target)
@@ -473,10 +474,8 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
 
     mut cfiles := Vector {} as Vector<str>
     mut generated := Vector {} as Vector<str>
-    mut cdirty := Vector {} as Vector<int>
     defer cfiles.Free()
     defer generated.Free()
-    defer cdirty.Free()
     mut first_module := ""
     mut all_ok := true
     mut failed_files := Vector {} as Vector<str>
@@ -712,7 +711,6 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
     emit_modules(
         lgr, s, a, opt, scratch, w_global, w_prog, w_module, w_entry, w_pkg, w_path, cg_status
     )
-    mut header_changed := false
     repeat w_prog.Len() in bi:
         cpath := mod_c_path(scratch, w_module.Get(bi))
         hpath := mod_h_path(scratch, w_module.Get(bi))
@@ -722,20 +720,11 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
             failed_files.Push(w_path.Get(bi))
         else:
             cfiles.Push(cpath)
-            cdirty.Push(st)
-            if st == 2:
-                header_changed = true
-            end
             generated.Push(cpath)
             generated.Push(hpath)
         end
     end
     cg_status.Free()
-    if header_changed:
-        repeat cdirty.Len() in hd:
-            cdirty.Set(hd, 1)
-        end
-    end
     sm.Free(s)
     at.FreeAst(a)
 
@@ -809,7 +798,6 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
             ret 2
         end
         cfiles.Push(initc)
-        cdirty.Push(1)
     end
 
     mut crc := 0
@@ -818,7 +806,9 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
     rel_opt := opt.safe ? " -O2" : " -O3"
     opt_flag := (not opt.debug_info and not opt.asan and no_tcc_opt and no_o_flag) ? rel_opt : ""
     finite_flag := cc_assumes_finite_loops(opt.cc, no_tcc_opt) ? " -fno-finite-loops" : ""
-    alias_flag := no_tcc_opt ? " -fno-strict-aliasing -fwrapv" + finite_flag : ""
+    fp_fused := opt.llvm_fp_contract or opt.fast_math
+    contract_flag := fp_fused ? " -ffp-contract=fast" : " -ffp-contract=off"
+    alias_flag := no_tcc_opt ? " -fno-strict-aliasing -fwrapv" + finite_flag + contract_flag : ""
     quiet_flag := " -Wno-div-by-zero -Wno-deprecated-declarations"
     werror_flag := (str.Equals(os.Env("SALAM_C_STRICT"), "1") ? " -Werror" : "") + quiet_flag
     no_o0 := not str.Contains(opt.cc, "-O0")
@@ -830,6 +820,7 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
         until oi < cfiles.Len() and crc == 0:
             cf := cfiles.Get(oi)
             obj := str.Substr(cf, 0, str.Len(cf) - 2) + ".o"
+            _rmk := os.Remove(obj_key_path(cf))
             mut cmdb := str.NewBuilder()
             str.BufAppend(cmdb, opt.cc)
             if musl_tcc.active:
@@ -943,24 +934,26 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
             mut objs := Vector {} as Vector<str>
             mut jobs := Vector {} as Vector<str>
             mut job_sizes := Vector {} as Vector<i64>
-            sigpath := scratch +
-                "/salam_build.flags"
-            sigtext := opt.cc + " " + opt_flag + pic_flag + " " + alias_flag + " " + dbg_flag2 +
-                " " + asan_flag + " " + link_defines
-            mut sig_pending := false
-            if not file_unchanged(sigpath, sigtext):
-                repeat cfiles.Len() in cd0:
-                    cdirty.Set(cd0, 1)
-                end
-                sig_pending = true
-            end
+            mut key_paths := Vector {} as Vector<str>
+            mut key_texts := Vector {} as Vector<str>
+            key_base := obj_key_base(
+                cfiles,
+                opt.cc + " -c -I. -I" + shell_arg(
+                    scratch
+                ) + opt_flag + pic_flag + alias_flag + werror_flag + dbg_flag2 + asan_flag + link_defines
+            )
             repeat cfiles.Len() in ci2:
                 cf2 := cfiles.Get(ci2)
                 obj2 := str.Substr(cf2, 0, str.Len(cf2) - 2) + ".o"
                 objs.Push(obj2)
-                if cdirty.Get(ci2) == 0:
+                kpath := obj_key_path(cf2)
+                ktext := digest_file(cf2) + "\n" + key_base
+                if not opt.force and os.Exists(obj2) and file_unchanged(kpath, ktext):
                     continue
                 end
+                _rmk2 := os.Remove(kpath)
+                key_paths.Push(kpath)
+                key_texts.Push(ktext)
                 mut jb := str.NewBuilder()
                 str.BufAppend(jb, opt.cc)
                 str.BufAppend(jb, " -c -I. -I")
@@ -1011,8 +1004,8 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
                 )
                 rc = 3
             else:
-                if sig_pending:
-                    _wsig := write_file(lgr, sigpath, sigtext)
+                repeat key_paths.Len() in kw:
+                    _wk := os.WriteFile(key_paths.Get(kw), key_texts.Get(kw))
                 end
                 mut cmdtext2 := ""
                 if str.Equals(opt.lib_kind, "static"):
@@ -1119,11 +1112,15 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
                     end
                     protect_binary(lgr, opt, output)
                     if opt.command == CMD_BUILD:
-                        _wm := write_build_manifest(scratch, build_sig, src.LoadedPaths())
+                        _wm := write_build_manifest(
+                            scratch, build_sig, output, src.LoadedPaths(), src.LoadedDigests()
+                        )
                     end
                 end
             end
             objs.Free()
+            key_paths.Free()
+            key_texts.Free()
         else:
             mut lto_flag := ""
             if optimizing_build and not use_tcc:
@@ -1228,7 +1225,9 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
                 end
                 protect_binary(lgr, opt, output)
                 if opt.command == CMD_BUILD:
-                    _wm2 := write_build_manifest(scratch, build_sig, src.LoadedPaths())
+                    _wm2 := write_build_manifest(
+                        scratch, build_sig, output, src.LoadedPaths(), src.LoadedDigests()
+                    )
                 end
             end
         end

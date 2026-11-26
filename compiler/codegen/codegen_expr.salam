@@ -104,7 +104,7 @@ func cg_f2i_const(fv: f64, bits: int, uns: bool): str:
     if fv >= (half as f64):
         ret co.U64Toa(half - (1 as u64)) + "LL"
     end
-    if fv < 0.0 - (half as f64):
+    if fv < -(half as f64):
         ret "(-" + co.U64Toa(half - (1 as u64)) + "LL - 1)"
     end
     ret co.I64Toa(fv as i64) + "LL"
@@ -191,7 +191,7 @@ func cg_sdiv_bits(a &: at.Ast, op: int, ts: str, b: int): int:
     end
     if b != 0:
         bn := at.Get(a, b)
-        if bn.kind == at.AST_LITERAL and bn.op == tok.TK_INT and bn.value_int != (0 - 1) as u64:
+        if bn.kind == at.AST_LITERAL and bn.op == tok.TK_INT and bn.value_int != (-1) as u64:
             ret 0
         end
     end
@@ -220,6 +220,19 @@ func cg_sdiv_assign(g &: Cg, a &: at.Ast, n: int, ea: str, eb: str): str:
     ret "({ " + lct + " *" + p + " = &(" + ea + "); *" + p + " = (" + lct + ")" + cg_sdiv_call(
         nn.op, bits, "*" + p, eb
     ) + "; })"
+end
+
+func cg_fmod_fn(op: int, ts: str): str:
+    if op != tok.TK_PERCENT and op != tok.TK_PERCENT_EQ:
+        ret ""
+    end
+    if str.Equals(ts, "f32"):
+        ret "fmodf"
+    end
+    if str.Equals(ts, "f64"):
+        ret "fmod"
+    end
+    ret ""
 end
 
 func cg_op(k: int): str:
@@ -426,6 +439,9 @@ func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     if cg_is_str_ts(s, nn.type_str):
         ret cg_expr(g, s, a, n)
+    end
+    if str.Equals(nn.type_str, "f32"):
+        ret "salam_tostr_f32(" + cg_expr(g, s, a, n) + ")"
     end
     ret "salam_tostr_" + prim_suffix(print_tag(nn.type_str)) + "(" + cg_expr(g, s, a, n) + ")"
 end
@@ -1312,7 +1328,7 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 end
                 v := u as i64
                 mut nsuf := ""
-                if v < (0 - 2147483647):
+                if v < (-2147483647):
                     nsuf = "LL"
                 end
                 ret "(" + co.I64Toa(v) + nsuf + ")"
@@ -1519,6 +1535,13 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         ea3 := cg_expr(g, s, a, nn.a)
         eb3 := cg_expr(g, s, a, nn.b)
+        fm := cg_fmod_fn(nn.op, nn.type_str)
+        if str.Len(fm) > 0:
+            if an.kind == at.AST_LITERAL and bn.kind == at.AST_LITERAL:
+                ret "((" + cg_ctype(nn.type_str) + ")NAN)"
+            end
+            ret fm + "(" + ea3 + ", " + eb3 + ")"
+        end
         ret "(" + ea3 + " " + cg_op(nn.op) + " " + cg_div_guard(
             g, a, nn.op, an.type_str, nn.b, eb3
         ) + ")"

@@ -258,9 +258,11 @@ end
 
 `salam new NAME` makes a folder with `main.salam`, `salam.toml` and a
 `.gitignore`; `salam new NAME --desktop` makes a desktop app with a web
-interface (see [docs/DESKTOP.md](docs/DESKTOP.md)). `salam init [DIR]` turns an
-existing folder (the current one by default) into a project and keeps the files
-that are already there. In a terminal `init` asks for the name, a description,
+interface (see [docs/DESKTOP.md](docs/DESKTOP.md)). `salam init [DIR]` writes a
+project into DIR (the current folder by default) when it is empty; `.git`,
+`.gitignore`, `.DS_Store`, `README*` and `LICENSE*` (the last two in any letter
+case) do not count, and an existing file is kept. When it holds any other file or folder, the project goes into a new
+subfolder named after the project. In a terminal `init` asks for the name, a description,
 the type (`cli`, `http` or `dsl`, the page language), the platforms, the design
 system (`shadcn` or `none`) and the web mode (`page`, `spa` or `ssr`), shows a
 summary and writes a starter project with a README; the answers go into

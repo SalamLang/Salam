@@ -291,8 +291,12 @@ salam exec                  # interpret the project here
 - The default executable name for a project is its **directory name**
   (`myproject`, or `myproject.exe` on Windows), not `main`.
 - `salam new <name>` creates `<name>/` with `main.salam`, `salam.toml` and a
-  `.gitignore`. `salam init [dir]` does the same in an existing directory
-  and never overwrites a file that is already there. In a terminal `init` asks
+  `.gitignore`. `salam init [dir]` writes a project into `dir` (the current
+  folder by default) when it is empty; `.git`, `.gitignore`, `.DS_Store`,
+  `README*` and `LICENSE*` (the last two in any letter case) do not count, and an
+  existing file is kept. When it holds any
+  other file or folder, the project goes into a new subfolder named after the project, and
+  `init` stops if that subfolder is already in use. In a terminal `init` asks
   what you are making: the project name, an optional description, the type
   (`cli`, `http` or `dsl`, the Salam page language), the platforms (`web`,
   `android`, `ios`, `linux`, `macos`, `windows`, or all), the design system

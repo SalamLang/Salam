@@ -278,6 +278,8 @@ rename those by hand.
 `x = x + 1`, `x += 1`, `x = x + n` and `x = x` are compile error `E162`; the
 message names the form to write, and `salam check --fix` applies it. In a
 Persian file the same rule holds: `ک++`, `ک += ن`.
+To negate, write `-x`: subtracting from zero (`0 - x`, `0.0 - v`) is compile
+error `E304`.
 
 Example. "Convert `def hex_to_decimal(hex): return int(hex, 16)`" is one line,
 because std already does it, and it keeps Python's behaviour of failing on bad
@@ -790,7 +792,7 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
 - **JavaScript 64-bit integers are exact only up to 2^53.** `salam build --platform=js` stores
   `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
   wraparound and casts are computed exactly, but a result (or an intermediate
-  value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
+  value) beyond 2^53 is rounded: `-1` as `u64` prints
   `18446744073709552000`. `size` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
   `i128`/`u128` are BigInts and stay exact, but a value that passes through

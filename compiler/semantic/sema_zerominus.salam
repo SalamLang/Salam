@@ -1,0 +1,161 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include src "../source.salam"
+
+pub const ZEROMINUS_CODE := 304
+
+mut g_zm_seen := HashMap {} as HashMap<str, bool>
+
+func zm_zero_literal(a &: at.Ast, n: int, text: str): bool:
+    nd := at.Get(a, n)
+    if nd.kind != at.AST_LITERAL or nd.synthetic:
+        ret false
+    end
+    if not (nd.op == tok.TK_INT and nd.value_int == 0 as u64) and
+        not (nd.op == tok.TK_FLOAT and nd.value_float == 0.0):
+        ret false
+    end
+    b := nd.begin_index as int
+    if b >= str.Len(text):
+        ret false
+    end
+    mut i := b
+    until i < (nd.end_index as int) and i < str.Len(text):
+        if sa_is_blank(byte_at(text, i)):
+            ret false
+        end
+        i++
+    end
+    c := byte_at(text, b)
+    ret c == 48 or c == 219
+end
+
+func zm_atom(a &: at.Ast, n: int, text: str): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_LITERAL:
+        ret not str.Contains(text, " ")
+    end
+    ret k == at.AST_IDENTIFIER or k == at.AST_MEMBER or k == at.AST_INDEX or
+        k == at.AST_CALL or k == at.AST_THIS
+end
+
+func zm_wrapped(text: str): bool:
+    if not str.StartsWith(text, "("):
+        ret false
+    end
+    mut cut := 1
+    until cut < str.Len(text) and sa_depth(text, 0, cut) != 0:
+        cut++
+    end
+    ret cut == str.Len(text)
+end
+
+func zm_operand_start(text: str, from: int): int:
+    mut i := from
+    until i < str.Len(text) and sa_is_blank(byte_at(text, i)):
+        i++
+    end
+    if i >= str.Len(text) or byte_at(text, i) != 45:
+        ret -1
+    end
+    i++
+    until i < str.Len(text) and (sa_is_blank(byte_at(text, i)) or byte_at(text, i) == 10 or
+        byte_at(text, i) == 13):
+        i++
+    end
+    ret i
+end
+
+func zm_check(s &: Sema, a &: at.Ast, nid: int, rt: int, result: int):
+    if s.requal or s.in_derive:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.op != tok.TK_MINUS or n.synthetic or n.a == 0 or n.b == 0:
+        ret
+    end
+    rhs := at.Get(a, n.b)
+    if rhs.synthetic:
+        ret
+    end
+    int_lit := rhs.kind == at.AST_LITERAL and rhs.op == tok.TK_INT
+    same := type_equiv(s, rt, result) or (type_is_float(s, rt) and type_is_float(s, result))
+    if not same and not int_lit:
+        ret
+    end
+    text := src.Peek(s.file)
+    if str.Len(text) == 0 or not zm_zero_literal(a, n.a, text):
+        ret
+    end
+    key := s.file + ":" + n.begin_index
+    if g_zm_seen.Has(key):
+        ret
+    end
+    g_zm_seen.Put(key, true)
+    lit := at.Get(a, n.a)
+    b := lit.begin_index as int
+    mut e := rhs.end_index as int
+    mut sp := span_of(a, nid)
+    mut written := "0 - x"
+    mut repl := "-x"
+    if e <= str.Len(text) and b < e:
+        e = sa_close(text, b, e)
+    else:
+        e = -1
+    end
+    if e > b:
+        start := zm_operand_start(text, lit.end_index as int)
+        if start > b and start < e:
+            sp.length = (e - b) as u32
+            written = str.Substr(text, b, e - b)
+            mut operand := sa_trim(text, start, e)
+            if int_lit and not type_equiv(s, rt, result) and type_is_float(s, result):
+                operand += ".0"
+            end
+            if zm_wrapped(operand) or zm_atom(a, n.b, operand):
+                repl = "-" + operand
+            else:
+                repl = "-(" + operand + ")"
+            end
+            mut fx := fix_at(sp)
+            fx.title = co.Format1(i18.Tr("Write '%s'"), co.ArgStr(repl))
+            fx.text = repl
+            fx.preferred = true
+            fx.safe = true
+            queue_fix(fx)
+        end
+    end
+    serr_help(
+        s,
+        ZEROMINUS_CODE,
+        sp,
+        co.Format2(
+            i18.Tr("'%s' is not allowed: write '%s'"), co.ArgStr(written), co.ArgStr(repl)
+        ),
+        i18.Tr("subtracting from zero is negation: put '-' in front of the value")
+    )
+end
+
+pub func SemaZeroMinusReset():
+    g_zm_seen.Free()
+    g_zm_seen = HashMap {} as HashMap<str, bool>
+end

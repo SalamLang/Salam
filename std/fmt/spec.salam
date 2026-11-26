@@ -1,0 +1,475 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package fmt
+
+import str
+
+const _LIMB := 10000000
+
+struct _Spec:
+    pub ok: bool = true
+    pub minus: bool = false
+    pub plus: bool = false
+    pub space: bool = false
+    pub zero: bool = false
+    pub alt: bool = false
+    pub width: int = 0
+    pub prec: int = -1
+    pub conv: int = 0
+end
+
+inline pure func _is_length_cp(c: int): bool:
+    ret c == 104 or c == 108 or c == 76 or c == 106 or c == 122 or c == 116
+end
+
+func _num(cps &: Vector<int>, i &: int, n: int): int:
+    mut v := 0
+    until i < n and str.IsAnyDigit(cps.Get(i)):
+        if v < 1000000:
+            v = v * 10 + str.DigitValue(cps.Get(i))
+        end
+        i++
+    end
+    ret v
+end
+
+func _parse_spec(spec: str): _Spec:
+    mut s := _Spec {}
+    mut cps := str.CodePoints(spec)
+    defer cps.Free()
+    n := cps.Len()
+    mut i := 0
+    if n > 0 and cps.Get(0) == 37:
+        i = 1
+    end
+    mut flags := true
+    until flags and i < n:
+        c := cps.Get(i)
+        if c == 45:
+            s.minus = true
+        else c == 43:
+            s.plus = true
+        else c == 32:
+            s.space = true
+        else c == 48 or (c > 127 and str.DigitValue(c) == 0):
+            s.zero = true
+        else c == 35:
+            s.alt = true
+        else:
+            flags = false
+        end
+        if flags:
+            i++
+        end
+    end
+    s.width = _num(cps, i, n)
+    if i < n and cps.Get(i) == 46:
+        i++
+        s.prec = _num(cps, i, n)
+    end
+    until i < n and _is_length_cp(cps.Get(i)):
+        i++
+    end
+    if i < n:
+        s.conv = cps.Get(i)
+        i++
+    end
+    if i != n:
+        s.ok = false
+    end
+    ret s
+end
+
+func _bad(spec: str): str: ret "%!(".Concat(spec).Concat(")") end
+
+func _pad(s &: _Spec, sign: str, prefix: str, body: str, zero_ok: bool): str:
+    used := sign.Len() + prefix.Len() + body.Len()
+    if s.width <= used:
+        ret sign.Concat(prefix).Concat(body)
+    end
+    fill := s.width - used
+    if s.minus:
+        ret sign.Concat(prefix).Concat(body).Concat(str.Repeat(" ", fill))
+    end
+    if s.zero and zero_ok:
+        ret sign.Concat(prefix).Concat(str.Repeat("0", fill)).Concat(body)
+    end
+    ret str.Repeat(" ", fill).Concat(sign).Concat(prefix).Concat(body)
+end
+
+func _sign(s &: _Spec, neg: bool): str:
+    if neg:
+        ret "-"
+    end
+    if s.plus:
+        ret "+"
+    end
+    if s.space:
+        ret " "
+    end
+    ret ""
+end
+
+func _mul_small(limbs &: Vector<i64>, m: i64):
+    mut carry := 0 as i64
+    mut i := 0
+    until i < limbs.Len():
+        t := limbs.Get(i) * m + carry
+        r := t % (_LIMB as i64)
+        limbs.Set(i, r)
+        carry = (t - r) / (_LIMB as i64)
+        i++
+    end
+    until carry > (0 as i64):
+        r := carry % (_LIMB as i64)
+        limbs.Push(r)
+        carry = (carry - r) / (_LIMB as i64)
+    end
+end
+
+func _exact_digits(v: f64, d &: Vector<int>): int:
+    mut m := v
+    mut e := 0
+    until m >= 1.6615349947311448e35:
+        m *= 5.421010862427522e-20
+        e += 64
+    end
+    until m >= 9007199254740992.0:
+        m *= 0.5
+        e++
+    end
+    until m < 0.000244140625:
+        m *= 18446744073709551616.0
+        e -= 64
+    end
+    until m < 4503599627370496.0:
+        m *= 2.0
+        e--
+    end
+    mut mi := m as i64
+    until e < 0 and mi % (2 as i64) == (0 as i64):
+        mi /= (2 as i64)
+        e++
+    end
+    mut limbs := Vector {} as Vector<i64>
+    defer limbs.Free()
+    until mi > (0 as i64):
+        r := mi % (_LIMB as i64)
+        limbs.Push(r)
+        mi = (mi - r) / (_LIMB as i64)
+    end
+    mut up := e
+    until up > 0:
+        k := up > 20 ? 20 : up
+        mut f := 1 as i64
+        repeat k:
+            f *= (2 as i64)
+        end
+        _mul_small(limbs, f)
+        up -= k
+    end
+    mut down := -e
+    until down > 0:
+        k := down > 9 ? 9 : down
+        mut f := 1 as i64
+        repeat k:
+            f *= (5 as i64)
+        end
+        _mul_small(limbs, f)
+        down -= k
+    end
+    exp10 := e < 0 ? e : 0
+    d.Clear()
+    mut li := limbs.Len() - 1
+    until li >= 0:
+        mut chunk := [0, 0, 0, 0, 0, 0, 0]
+        mut t := limbs.Get(li)
+        mut c := 6
+        until c >= 0:
+            chunk[c] = (t % (10 as i64)) as int
+            t /= (10 as i64)
+            c--
+        end
+        repeat 7 in j:
+            if d.Len() > 0 or chunk[j] != 0:
+                d.Push(chunk[j])
+            end
+        end
+        li--
+    end
+    x := (d.Len() - 1) + exp10
+    until d.Len() > 1 and d.Get(d.Len() - 1) == 0:
+        d.Pop()
+    end
+    ret x
+end
+
+func _round_digits(d &: Vector<int>, n: int): int:
+    if d.Len() <= n:
+        ret 0
+    end
+    rd := d.Get(n)
+    mut up := rd > 5
+    if rd == 5:
+        mut i := n + 1
+        until not up and i < d.Len():
+            if d.Get(i) != 0:
+                up = true
+            end
+            i++
+        end
+        if not up and n > 0:
+            up = d.Get(n - 1) % 2 == 1
+        end
+    end
+    until d.Len() > n:
+        d.Pop()
+    end
+    if not up:
+        ret 0
+    end
+    mut k := n - 1
+    until k >= 0:
+        if d.Get(k) == 9:
+            d.Set(k, 0)
+            k--
+        else:
+            d.Set(k, d.Get(k) + 1)
+            ret 0
+        end
+    end
+    d.Clear()
+    d.Push(1)
+    ret 1
+end
+
+inline func _dg(d &: Vector<int>, i: int): int:
+    if i < 0 or i >= d.Len():
+        ret 0
+    end
+    ret d.Get(i)
+end
+
+func _fixed_body(d &: Vector<int>, x: int, prec: int, alt: bool): str:
+    mut b := str.NewBuilder()
+    if d.Len() == 0 or x < 0:
+        str.BufAppendChar(b, 48)
+    else:
+        repeat x + 1 in i:
+            str.BufAppendChar(b, 48 + _dg(d, i))
+        end
+    end
+    if prec > 0 or alt:
+        str.BufAppendChar(b, 46)
+    end
+    if d.Len() > 0:
+        repeat prec in k:
+            str.BufAppendChar(b, 48 + _dg(d, (x + 1) + k))
+        end
+    else:
+        repeat prec:
+            str.BufAppendChar(b, 48)
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _exp_body(d &: Vector<int>, prec: int, alt: bool): str:
+    mut b := str.NewBuilder()
+    str.BufAppendChar(b, 48 + _dg(d, 0))
+    if prec > 0 or alt:
+        str.BufAppendChar(b, 46)
+    end
+    repeat prec in k:
+        str.BufAppendChar(b, 48 + _dg(d, 1 + k))
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _exp_suffix(x: int): str:
+    mut v := x
+    mut out := "e+"
+    if v < 0:
+        out = "e-"
+        v = -v
+    end
+    if v < 10:
+        out = out.Concat("0")
+    end
+    ret out.Concat(str.FromInt(v as i64))
+end
+
+func _strip_zeros(body: str): str:
+    if body.Find(".") < 0:
+        ret body
+    end
+    mut n := body.Len()
+    until n > 0 and str.Equals(body.Substr(n - 1, 1), "0"):
+        n--
+    end
+    if n > 0 and str.Equals(body.Substr(n - 1, 1), "."):
+        n--
+    end
+    ret body.Substr(0, n)
+end
+
+func _float_body(v: f64, s &: _Spec, kind: int): str:
+    mut d := Vector {} as Vector<int>
+    defer d.Free()
+    mut x := 0
+    if v == 0.0:
+        d.Push(0)
+    else:
+        x = _exact_digits(v, d)
+    end
+    mut p := s.prec < 0 ? 6 : s.prec
+    if kind == 102:
+        n := (x + 1) + p
+        if n < 0:
+            d.Clear()
+        else:
+            x += _round_digits(d, n)
+        end
+        ret _fixed_body(d, x, p, s.alt)
+    end
+    if kind == 101:
+        x += _round_digits(d, p + 1)
+        ret _exp_body(d, p, s.alt).Concat(_exp_suffix(x))
+    end
+    if p == 0:
+        p = 1
+    end
+    x += _round_digits(d, p)
+    if x < -4 or x >= p:
+        mut m := _exp_body(d, p - 1, s.alt)
+        if not s.alt:
+            m = _strip_zeros(m)
+        end
+        ret m.Concat(_exp_suffix(x))
+    end
+    mut f := _fixed_body(d, x, (p - 1) - x, s.alt)
+    if not s.alt:
+        f = _strip_zeros(f)
+    end
+    ret f
+end
+
+func _int_digits(mag: u64, base: int, upper: bool): str:
+    if mag == (0 as u64):
+        ret "0"
+    end
+    mut rev := Vector {} as Vector<int>
+    defer rev.Free()
+    mut t := mag
+    ub := base as u64
+    until t > (0 as u64):
+        r := t % ub
+        rev.Push(r as int)
+        t = (t - r) / ub
+    end
+    mut b := str.NewBuilder()
+    mut i := rev.Len() - 1
+    until i >= 0:
+        dv := rev.Get(i)
+        if dv < 10:
+            str.BufAppendChar(b, 48 + dv)
+        else:
+            str.BufAppendChar(b, (upper ? 55 : 87) + dv)
+        end
+        i--
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+@en "FormatFloat"
+@fa "عدد اعشار با الگو"
+pub func FormatFloat(x: f64, spec: str): str:
+    mut s := _parse_spec(spec)
+    mut c := s.conv
+    if c == 0:
+        c = 103
+    end
+    upper := c == 70 or c == 69 or c == 71
+    kind := upper ? c + 32 : c
+    if not s.ok or (kind != 102 and kind != 101 and kind != 103):
+        ret _bad(spec)
+    end
+    if x != x:
+        ret _pad(s, _sign(s, false), "", upper ? "NAN" : "nan", false)
+    end
+    neg := x < 0.0 or (x == 0.0 and 1.0 / x < 0.0)
+    v := neg ? -x : x
+    sg := _sign(s, neg)
+    if v / 2.0 == v and v != 0.0:
+        ret _pad(s, sg, "", upper ? "INF" : "inf", false)
+    end
+    mut body := _float_body(v, s, kind)
+    if upper:
+        body = body.Upper()
+    end
+    ret _pad(s, sg, "", body, true)
+end
+
+@en "FormatInt"
+@fa "عدد صحیح با الگو"
+pub func FormatInt(n: i64, spec: str): str:
+    mut s := _parse_spec(spec)
+    mut c := s.conv
+    if c == 0 or c == 105:
+        c = 100
+    end
+    mut base := 0
+    if c == 100:
+        base = 10
+    else c == 120 or c == 88:
+        base = 16
+    else c == 111:
+        base = 8
+    else c == 98:
+        base = 2
+    end
+    if not s.ok or base == 0:
+        ret _bad(spec)
+    end
+    neg := n < (0 as i64)
+    mag := neg ? ((-(n + (1 as i64))) as u64) + (1 as u64) : n as u64
+    mut digits := _int_digits(mag, base, c == 88)
+    if s.prec == 0 and mag == (0 as u64):
+        digits = ""
+    end
+    if s.prec > digits.Len():
+        digits = str.Repeat("0", s.prec - digits.Len()).Concat(digits)
+    end
+    mut prefix := ""
+    if s.alt:
+        if c == 111:
+            if digits.Len() == 0 or not str.Equals(digits.Substr(0, 1), "0"):
+                digits = "0".Concat(digits)
+            end
+        else mag != (0 as u64) and c == 120:
+            prefix = "0x"
+        else mag != (0 as u64) and c == 88:
+            prefix = "0X"
+        else mag != (0 as u64) and c == 98:
+            prefix = "0b"
+        end
+    end
+    ret _pad(s, _sign(s, neg), prefix, digits, s.prec < 0)
+end

@@ -219,6 +219,11 @@ error `E162`: `x = x + 1`, `x = 1 + x`, `x += 1`, `x -= 1` (write `x++` /
 becomes `s += t`; `s = t + s` is a prepend and stays), to plain variables,
 fields (`this.n`, `p.x`), arrays and pointers (`a[i]`, `p[0]`). `x = y - x`,
 `x = x * y + z` and `x = x + y + z` are not self-updates and stay legal.
+**Negate with `-x`, never by subtracting from zero.** `0 - x`, `0 - 1` and
+`0.0 - v` are compile error `E304`: write `-x`, `-1` and `-v`, and
+`-(a * b)` for a longer right side. `salam check --fix` rewrites them. A typed
+zero such as `(0 as u64) - x` is allowed.
+
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
@@ -789,7 +794,7 @@ type Meters: int
         ret ((this as int) * k) as Meters
     end
     func -: Meters:                     // unary minus, no parameters
-        ret (0 - (this as int)) as Meters
+        ret (-(this as int)) as Meters
     end
     func km: f64:                       // ordinary method: m.km()
         ret (this as f64) / 1000.0

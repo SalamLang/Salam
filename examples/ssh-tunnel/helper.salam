@@ -1,0 +1,311 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package helper
+
+import os
+import str
+import fs
+import sync
+import os.shell
+import os.signal
+import net.tun
+import net.tunnel
+import net.socks
+import net.udprelay
+import os.process
+
+include "profile.salam"
+include "resolver.salam"
+
+const STATE_DIR := "/var/db/salam-tunnel"
+
+pub const STATUS_FILE := "/var/db/salam-tunnel/status"
+pub const DNS_FILE := "/var/db/salam-tunnel/dns.backup"
+
+mut _udp_wanted := false
+mut _relay := udprelay.Client {}
+
+func tool(program: str, args: Vector<str>): shell.CmdResult:
+    ret shell.Run(program, args)
+end
+
+func words(a: str, b: str, c: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    out.Push(a)
+    if b.Len() > 0:
+        out.Push(b)
+    end
+    if c.Len() > 0:
+        out.Push(c)
+    end
+    ret out
+end
+
+func network_services(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    r := tool(
+        "/usr/sbin/networksetup", words("-listallnetworkservices", "", "")
+    )
+    mut first := true
+    each line in str.Split(r.out, "\n"):
+        if not first and line.Len() > 0 and not line.StartsWith("*"):
+            out.Push(line)
+        end
+        first = false
+    end
+    ret out
+end
+
+func dns_of(service: str): str:
+    r := tool("/usr/sbin/networksetup", words("-getdnsservers", service, ""))
+    if r.code != 0:
+        ret ""
+    end
+    text := r.out.Trim()
+    if text.Len() == 0 or text.Includes(" "):
+        ret "Empty"
+    end
+    ret str.Replace(text, "\n", " ")
+end
+
+func set_dns(service: str, servers: str): bool:
+    mut args := words("-setdnsservers", service, "")
+    each s in str.Split(servers, " "):
+        if s.Len() > 0:
+            args.Push(s)
+        end
+    end
+    r := tool("/usr/sbin/networksetup", args)
+    ret r.code == 0
+end
+
+func flush_dns():
+    _a := tool("/usr/bin/dscacheutil", words("-flushcache", "", ""))
+    _b := tool("/usr/bin/killall", words("-HUP", "mDNSResponder", ""))
+end
+
+func take_over_dns(server: str): bool:
+    services := network_services()
+    if not os.Exists(DNS_FILE):
+        mut backup := ""
+        each service in services:
+            old := dns_of(service)
+            if old.Len() > 0:
+                backup = backup + service + "\t" + old + "\n"
+            end
+        end
+        if backup.Len() == 0 or os.WriteFile(DNS_FILE, backup) < 0:
+            ret false
+        end
+        _c := fs.Chmod(DNS_FILE, 420)
+    end
+    mut changed := 0
+    each service in services:
+        if set_dns(service, server):
+            changed++
+        end
+    end
+    flush_dns()
+    ret changed > 0
+end
+
+func restore_dns():
+    if not os.Exists(DNS_FILE):
+        ret
+    end
+    each line in str.Split(os.ReadFile(DNS_FILE), "\n"):
+        parts := str.Split(line, "\t")
+        if parts.Len() == 2:
+            _ok := set_dns(parts[0], parts[1])
+        end
+    end
+    _r := os.Remove(DNS_FILE)
+    flush_dns()
+end
+
+func prepare_state_dir():
+    if not os.Exists(STATE_DIR):
+        _m := os.Mkdir(STATE_DIR)
+    end
+    _c := fs.Chmod(STATE_DIR, 493)
+end
+
+func relay_command(path: str, control: str): process.Command:
+    mut cmd := process.NewCommand("/usr/bin/ssh")
+    cmd.Arg("-F")
+    cmd.Arg("/dev/null")
+    cmd.Arg("-S")
+    cmd.Arg(control)
+    cmd.Arg("-T")
+    cmd.Arg("-o")
+    cmd.Arg("BatchMode=yes")
+    cmd.Arg("-o")
+    cmd.Arg("ProxyCommand=/usr/bin/false")
+    cmd.Arg("--")
+    cmd.Arg("salam-tunnel")
+    cmd.Arg("exec " + path)
+    ret cmd
+end
+
+func write_status(state: str, message: str, st: tun.Stats):
+    udp_state := not _udp_wanted ? "off" : (_relay.Ready() ? "on" : "waiting")
+    text := "state=" + state + "\nmessage=" + str.Replace(
+        message, "\n", " "
+    ) + "\npid=" + str.FromInt(
+        os.Pid() as i64
+    ) + "\nbeat=" + str.FromInt(
+        sync.NowMs()
+    ) + "\nup=" + str.FromInt(st.bytes_up) + "\ndown=" + str.FromInt(
+        st.bytes_down
+    ) + "\nactive=" + str.FromInt(st.active) + "\ntotal=" + str.FromInt(
+        st.connections
+    ) + "\ndns=" + str.FromInt(
+        st.dns_queries
+    ) + "\nresolver=" + resolver.Current() + "\nudp=" + udp_state + "\n"
+    next := STATUS_FILE + ".new"
+    _w := os.WriteFile(next, text)
+    _m := os.Move(next, STATUS_FILE)
+    _c := fs.Chmod(STATUS_FILE, 420)
+end
+
+func delete_host_route(ip: str):
+    mut args := words("-q", "-n", "delete")
+    args.Push("-host")
+    args.Push(ip)
+    _r := tool("/sbin/route", args)
+end
+
+func lan_gateway(): str:
+    r := tool("/usr/sbin/netstat", words("-rn", "-f", "inet"))
+    each line in str.Split(r.out, "\n"):
+        f := str.Fields(line)
+        if f.Len() >= 4 and f[0] == "default" and not f[3].StartsWith("utun") and
+            profile.IsName(f[1], "."):
+            ret f[1]
+        end
+    end
+    ret ""
+end
+
+func keep_server_route(ip: str):
+    gw := lan_gateway()
+    if gw.Len() == 0:
+        ret
+    end
+    current := tool("/sbin/route", words("-n", "get", ip))
+    if current.code == 0 and current.out.Includes("gateway: " + gw + "\n"):
+        ret
+    end
+    delete_host_route(ip)
+    mut args := words("-q", "-n", "add")
+    args.Push("-host")
+    args.Push(ip)
+    args.Push(gw)
+    _r := tool("/sbin/route", args)
+end
+
+func helper_options(server_ip: str, socks_port: int): tun.Options:
+    mut blocked := Vector {} as Vector<int>
+    blocked.Push(443)
+    mut exclude := Vector {} as Vector<str>
+    exclude.Push(server_ip)
+    mut client := socks.NewClient("127.0.0.1", socks_port)
+    client.timeout_ms = 20000
+    proxy := tunnel.ProxyDialer {
+        upstream = tunnel.DirectDialer {}, hop = socks.NewConnector(client)
+    }
+    ret tun.Options {
+        dialer = resolver.Failover { inner = proxy },
+        exclude = exclude,
+        upstream = resolver.PLACEHOLDER + ":53",
+        idle_ms = 900000,
+        relay_udp = _udp_wanted,
+        udp = _relay,
+        udp_blocked = blocked
+    }
+end
+
+pub func ProcessAlive(pid: str): bool:
+    if not profile.IsName(pid, ""):
+        ret false
+    end
+    r := tool("/bin/ps", words("-p", pid, ""))
+    ret r.code == 0
+end
+
+pub func RunHelper(
+    server_ip: str,
+    socks_port: int,
+    parent: str,
+    stop_file: str,
+    first_dns: str,
+    relay: str,
+    control: str
+): int:
+    prepare_state_dir()
+    if socks_port == 0 or not profile.IsName(server_ip, ".") or not profile.IsName(first_dns, "."):
+        write_status("error", "bad helper arguments", tun.Stats {})
+        ret 2
+    end
+    set := signal.NewSet()
+    _a := signal.AddSignal(set, 1)
+    _b := signal.AddSignal(set, 2)
+    _c := signal.AddSignal(set, 15)
+    _d := signal.Block(set)
+    restore_dns()
+    delete_host_route(server_ip)
+    if relay != "-" and profile.IsName(relay, ".-_/"):
+        _udp_wanted = true
+        _relay = udprelay.NewClient(relay_command(relay, control))
+    end
+    resolver.Use(first_dns)
+    session := tun.Start(helper_options(server_ip, socks_port))
+    if not session.ok:
+        write_status("error", session.error, tun.Stats {})
+        ret 1
+    end
+    if not take_over_dns(session.dns):
+        restore_dns()
+        tun.Stop(session)
+        write_status("error", "could not change the system DNS servers", tun.Stats {})
+        ret 1
+    end
+    resolver.Watch(socks_port, 20000)
+    arrived := signal.NewSet()
+    mut ticks := 0
+    mut go := true
+    until go:
+        write_status("up", session.name, tun.SessionStats(session))
+        got := signal.WaitTimeout(set, arrived, 1000)
+        ticks++
+        if got > 0 or os.Exists(stop_file) or not ProcessAlive(parent):
+            go = false
+        else ticks % 5 == 0:
+            keep_server_route(server_ip)
+        end
+    end
+    last := tun.SessionStats(session)
+    restore_dns()
+    tun.Stop(session)
+    delete_host_route(server_ip)
+    write_status("stopped", "", last)
+    ret 0
+end
+
+pub func RunRepair(): int:
+    prepare_state_dir()
+    restore_dns()
+    write_status("stopped", "", tun.Stats {})
+    ret 0
+end

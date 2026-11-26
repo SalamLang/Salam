@@ -360,6 +360,26 @@ func wide_lit_retype(s &: Sema, a &: at.Ast, nid: int, dst: int):
     _d := sema_decorate(s, a, nid, dst)
 end
 
+func wide_is_js(s &: Sema): bool:
+    if not s.has_cc:
+        ret false
+    end
+    i := cc.Lookup(s.cctab, "SALAM_JS")
+    ret i >= 0 and cc.EntryBool(s.cctab, i)
+end
+
+func wide_js64(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret (k == TY_I64 or k == TY_U64) and wide_is_js(s)
+end
+
+func type_is_wide_rep(s &: Sema, t: int): bool:
+    ret type_is_wide(s, t) or wide_js64(s, t)
+end
+
 func wide_coerce(s &: Sema, a &: at.Ast, nid: int, dst: int):
     if nid == 0 or dst < 0:
         ret
@@ -368,15 +388,23 @@ func wide_coerce(s &: Sema, a &: at.Ast, nid: int, dst: int):
     if src < 0 or type_is_error(s, src) or type_is_error(s, dst) or type_equiv(s, src, dst):
         ret
     end
-    to_wide := type_is_wide(s, dst)
-    from_wide := type_is_wide(s, src)
-    if not to_wide and not (from_wide and type_is_float(s, dst)):
+    js_to := wide_js64(s, dst)
+    js_from := wide_js64(s, src)
+    to_wide := type_is_wide(s, dst) or js_to
+    from_wide := type_is_wide(s, src) or js_from
+    if not to_wide and not (
+        from_wide and (type_is_float(s, dst) or (js_from and type_is_integer(s, dst)))
+    ):
         ret
     end
     if not type_is_numeric(s, src) and ty_at(s, src).kind != TY_CHAR:
         ret
     end
     if to_wide and at.KindOf(a, nid) == at.AST_LITERAL and at.Get(a, nid).op == tok.TK_INT:
+        if js_to:
+            _dl := sema_decorate(s, a, nid, dst)
+            ret
+        end
         wide_lit_retype(s, a, nid, dst)
         ret
     end
@@ -408,7 +436,7 @@ func wide_wrap_cast(s &: Sema, a &: at.Ast, nid: int, dst: int):
 end
 
 func wide_coerce_shift(s &: Sema, a &: at.Ast, nid: int):
-    if wide_node(a, nid):
+    if wide_node(a, nid) or (nid != 0 and wide_js64(s, wide_node_type(s, a, nid))):
         wide_wrap_cast(s, a, nid, sema_ty(s, TY_I32))
         sema_fold_expr(s, a, nid)
     end

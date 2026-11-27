@@ -1891,39 +1891,70 @@ jobs:
   build-linux-i686:
     needs: [changes, build-linux]
     if: needs.changes.outputs.run == 'true'
-    name: Build Salam for Linux (32-bit / i686, static cross-build)
+    name: Build Salam for Linux (32-bit / i686, cross-compiled static LLVM+LLD)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 180
     continue-on-error: true
+    env:
+      MUSL_TOOLCHAIN: i686-unknown-linux-musl
+      MUSL_TOOLCHAIN_RELEASE: '20261001'
+      MUSL_TOOLCHAIN_SHA256: d433bfbe9e5f7daea61e76fbe5ba28050750ec853cc69a2311fe3479ec3f7f34
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install cross-build prerequisites (cmake, ninja, mingw-w64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake mingw-w64
+      - name: Fetch the musl cross toolchain
+        run: |
+          set -eu
+          curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 10 \
+            -o /tmp/musl-toolchain.tar.xz \
+            "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_TOOLCHAIN_RELEASE}/${MUSL_TOOLCHAIN}.tar.xz"
+          echo "${MUSL_TOOLCHAIN_SHA256}  /tmp/musl-toolchain.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/musl-toolchain
+          tar -xJf /tmp/musl-toolchain.tar.xz -C /tmp/musl-toolchain
+          rm -f /tmp/musl-toolchain.tar.xz
+      - name: Restore static LLVM+LLD built for i686 musl
+        id: cache-llvm
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-i686-install
+          key: llvm-i686-musl-static-20261001-${{ hashFiles('tools/bash/build-llvm-musl.sh') }}
+      - name: Build static LLVM+LLD for i686 musl (cache miss only - slow)
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: sh tools/bash/build-llvm-musl.sh i686 /tmp/musl-toolchain /tmp/llvm-i686-install
+      - name: Save static LLVM+LLD for i686 musl
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-i686-install
+          key: ${{ steps.cache-llvm.outputs.cache-primary-key }}
       - name: Use this run's Linux salam as the cross compiler
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux
           path: /tmp/host-salam
-      - name: Cross-build the i686 compiler from this checkout
+      - name: Cross-build the i686 compiler with embedded LLVM+LLD
         run: |
           set -eu
           chmod +x /tmp/host-salam/salam
-          export SALAM_STD="$PWD/std"
-          /tmp/host-salam/salam build compiler/main.salam --target=i686-linux-musl \
-            -o salam --log-level=warn
-          chmod +x salam
-          file salam
-      - name: Smoke-test the i686 compiler (32-bit binaries run natively here)
+          sh tools/bash/build-linux32.sh i686 /tmp/host-salam/salam /tmp/musl-toolchain \
+            /tmp/llvm-i686-install "$RUNNER_TEMP/linux32"
+      - name: Smoke-test the embedded LLVM backend with nothing installed
+        run: sh tools/bash/smoke-linux32.sh cross i686 ./salam
+      - name: Smoke-test native builds on i686 Debian
         run: |
           set -eu
-          export SALAM_STD="$PWD/std"
-          ./salam version
-          printf 'func main:\n    println "ok-linux32"\nend\n' > smoke.salam
-          ./salam run smoke.salam --log-level=warn
-          ./salam build smoke.salam -o smoke_exec --log-level=warn
-          ./smoke_exec
-          rm -f smoke.salam smoke_exec
+          docker run --rm --platform=linux/386 -v "$PWD:/work" -w /work \
+            debian:bookworm-slim sh -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends gcc libc6-dev
+              sh tools/bash/smoke-linux32.sh native i686 ./salam
+            '
       - name: Stage versioned archive
         run: |
           set -eu
@@ -1935,15 +1966,23 @@ jobs:
           sh tools/bash/stage-mobile.sh "$DIST"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Linux (32-bit / i686) - static build."
+            echo "Salam for Linux (32-bit / i686) - static build with embedded LLVM+LLD."
             echo ""
             echo "  ./salam version"
-            echo "  ./salam exec  app.salam           (interpreter)"
-            echo "  ./salam run   app.salam           (compile and run)"
-            echo "  ./salam build app.salam -o app    (native binary, built-in linker)"
+            echo "  ./salam exec  app.salam                  (interpreter)"
+            echo "  ./salam run   app.salam                  (compile and run)"
+            echo "  ./salam build app.salam -o app           (LLVM backend; links with the system gcc or clang)"
             echo ""
-            echo "This build has no LLVM backend; the C backend, the interpreter and"
-            echo "the built-in linker are all included. Statically linked against musl."
+            echo "These targets need nothing else installed (LLD and their C libraries"
+            echo "are inside salam):"
+            echo ""
+            echo "  ./salam build app.salam --target=i686-linux-musl -o app"
+            echo "  ./salam build app.salam --target=x86_64-linux-musl -o app"
+            echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+            echo "  ./salam build app.salam --target=wasm32-wasi -o app.wasm"
+            echo ""
+            echo "salam llvm --jit does not work in this build: a statically linked"
+            echo "binary cannot look up C library symbols at run time."
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-i686.zip" "$DIST" >/dev/null
           tar -czf "salam-${VERSION}-linux-i686.tar.gz" "$DIST"
@@ -1964,10 +2003,14 @@ jobs:
   build-linux-armhf:
     needs: [changes, build-linux]
     if: needs.changes.outputs.run == 'true'
-    name: Build Salam for Linux (armhf, static cross-build)
+    name: Build Salam for Linux (armhf, cross-compiled static LLVM+LLD)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 180
     continue-on-error: true
+    env:
+      MUSL_TOOLCHAIN: arm-unknown-linux-musleabihf
+      MUSL_TOOLCHAIN_RELEASE: '20261001'
+      MUSL_TOOLCHAIN_SHA256: a2a5785e0b63e78ea36c35fcfe85f76775db31ca5652a25ec41d8fd34f208abd
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1977,30 +2020,57 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm
+      - name: Install cross-build prerequisites (cmake, ninja, mingw-w64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake mingw-w64
+      - name: Fetch the musl cross toolchain
+        run: |
+          set -eu
+          curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 10 \
+            -o /tmp/musl-toolchain.tar.xz \
+            "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_TOOLCHAIN_RELEASE}/${MUSL_TOOLCHAIN}.tar.xz"
+          echo "${MUSL_TOOLCHAIN_SHA256}  /tmp/musl-toolchain.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/musl-toolchain
+          tar -xJf /tmp/musl-toolchain.tar.xz -C /tmp/musl-toolchain
+          rm -f /tmp/musl-toolchain.tar.xz
+      - name: Restore static LLVM+LLD built for armhf musl
+        id: cache-llvm
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-armhf-install
+          key: llvm-armhf-musl-static-20261001-${{ hashFiles('tools/bash/build-llvm-musl.sh') }}
+      - name: Build static LLVM+LLD for armhf musl (cache miss only - slow)
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: sh tools/bash/build-llvm-musl.sh armhf /tmp/musl-toolchain /tmp/llvm-armhf-install
+      - name: Save static LLVM+LLD for armhf musl
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-armhf-install
+          key: ${{ steps.cache-llvm.outputs.cache-primary-key }}
       - name: Use this run's Linux salam as the cross compiler
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux
           path: /tmp/host-salam
-      - name: Cross-build the armhf compiler from this checkout
+      - name: Cross-build the armhf compiler with embedded LLVM+LLD
         run: |
           set -eu
           chmod +x /tmp/host-salam/salam
-          export SALAM_STD="$PWD/std"
-          /tmp/host-salam/salam build compiler/main.salam --target=arm-linux-musleabihf \
-            -o salam --log-level=warn
-          chmod +x salam
-          file salam
-      - name: Smoke-test the armhf compiler under QEMU
+          sh tools/bash/build-linux32.sh armhf /tmp/host-salam/salam /tmp/musl-toolchain \
+            /tmp/llvm-armhf-install "$RUNNER_TEMP/linux32"
+      - name: Smoke-test the embedded LLVM backend with nothing installed
+        run: sh tools/bash/smoke-linux32.sh cross armhf ./salam
+      - name: Smoke-test native builds on armhf Debian
         run: |
           set -eu
-          printf 'func main:\n    println "ok-armhf"\nend\n' > smoke.salam
           docker run --rm --platform=linux/arm/v7 -v "$PWD:/work" -w /work \
-            -e SALAM_STD=/work/std debian:stable-slim sh -euc '
-              ./salam version
-              ./salam exec smoke.salam --log-level=warn
+            debian:bookworm-slim sh -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends gcc libc6-dev
+              sh tools/bash/smoke-linux32.sh native armhf ./salam
             '
-          rm -f smoke.salam
       - name: Stage versioned archive
         run: |
           set -eu
@@ -2012,15 +2082,25 @@ jobs:
           sh tools/bash/stage-mobile.sh "$DIST"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Linux (armhf) - static build."
+            echo "Salam for Linux (armhf) - static build with embedded LLVM+LLD."
             echo ""
             echo "  ./salam version"
-            echo "  ./salam exec  app.salam           (interpreter)"
-            echo "  ./salam run   app.salam           (compile and run)"
-            echo "  ./salam build app.salam -o app    (native binary, built-in linker)"
+            echo "  ./salam exec  app.salam                  (interpreter)"
+            echo "  ./salam run   app.salam                  (compile and run)"
+            echo "  ./salam build app.salam -o app           (LLVM backend; links with the system gcc or clang)"
             echo ""
-            echo "This build has no LLVM backend; the C backend, the interpreter and"
-            echo "the built-in linker are all included. Statically linked against musl."
+            echo "These targets need nothing else installed (LLD and their C libraries"
+            echo "are inside salam):"
+            echo ""
+            echo "  ./salam build app.salam --target=arm-linux-musleabihf -o app"
+            echo "  ./salam build app.salam --target=x86_64-linux-musl -o app"
+            echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+            echo "  ./salam build app.salam --target=wasm32-wasi -o app.wasm"
+            echo ""
+            echo "salam llvm --jit does not work in this build: a statically linked"
+            echo "binary cannot look up C library symbols at run time."
+            echo ""
+            echo "Needs an ARMv6 CPU or newer with a hardware FPU."
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-armhf.zip" "$DIST" >/dev/null
           tar -czf "salam-${VERSION}-linux-armhf.tar.gz" "$DIST"

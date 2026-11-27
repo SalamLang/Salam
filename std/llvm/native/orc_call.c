@@ -11,10 +11,19 @@
  *
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "orc_call.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(__GLIBC__)
+#include <pthread.h>
+#define SALAM_SMALL_THREAD_STACKS 1
+#endif
 
 static char **g_orc_argv = NULL;
 static int g_orc_argc = 0;
@@ -64,10 +73,27 @@ int salam_orc_call_main(int64_t addr)
  */
 #ifdef SALAM_HAVE_LLVM
 
-#  include <llvm-c/Target.h>
+#include <llvm-c/Target.h>
+
+/* musl gives new threads a 128 KiB stack, too little for LLVM's code
+ * generation threads, so raise the default before any of them starts. */
+static void salam_llvm_raise_thread_stack(void)
+{
+#ifdef SALAM_SMALL_THREAD_STACKS
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return;
+    }
+    if (pthread_attr_setstacksize(&attr, (size_t)8 * 1024 * 1024) == 0) {
+        pthread_setattr_default_np(&attr);
+    }
+    pthread_attr_destroy(&attr);
+#endif
+}
 
 void salam_llvm_init_all_target_infos(void)
 {
+    salam_llvm_raise_thread_stack();
     LLVMInitializeAllTargetInfos();
 }
 

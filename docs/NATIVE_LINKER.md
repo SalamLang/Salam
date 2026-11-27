@@ -504,9 +504,11 @@ in-process LLD gets `--subsystem windows`, a mingw `gcc` or `clang`
 ### Which programs are GUI programs
 
 `--subsystem` and `[windows].subsystem` apply to every MinGW (`*-gnu`) link
-path and always win; an `*-msvc` triple ignores them. Without them, a Windows
-executable gets the GUI subsystem when it is built for the native UI (`--ui=native`, or `--platform=windows` in a UI
-project) and has a `page:` block. Everything else stays a console program,
+path and always win. They have no effect when `clang` links an `*-msvc` triple,
+since `-mwindows` is a MinGW option. Without them, a Windows executable gets the
+GUI subsystem when it is built for the native UI (`--ui=native`, or
+`--platform=windows` in a UI project) and has a `page:` block. Everything else
+stays a console program,
 including one that imports `gui.window` or the tray directly and has no
 `page:` block. `salam run` also builds a console program unless the option or
 the project setting says otherwise, so the output stays in the terminal.

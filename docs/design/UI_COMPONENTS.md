@@ -79,11 +79,12 @@ end
 ```
 
 Component children: a `component` may place the elements written inside its
-use site with an element `children:` (Persian `فرزندان`), once, anywhere in
-its body; `Card` is `box: radius = theme.radius.md ... children: end end`.
-A named slot is a second `children: name = "actions" end` and the use site
-fills it with `fill = "actions"` on an element. It is expanded at compile time
-like a component, so no runtime cost and the same on both targets.
+use site with an element `content:` (Persian `محتوا`), once, anywhere in
+its body; `Card` is `box: radius = theme.radius.md ... content: end end`.
+A named slot is `slot: name = "actions" end` (Persian
+`جایگاه: نام = "کنش" پایان`) and the use site fills it with
+`slot = "actions"` (`جایگاه = "کنش"`) on an element. It is expanded at compile
+time like a component, so no runtime cost and the same on both targets.
 
 `style` parameter: `style = [padding = 4, color = red]` is not added. A
 widget exposes the few attributes it allows (`width`, `grow`, `margin`);
@@ -106,7 +107,7 @@ pub component Panel(title: str):
 end
 
 component Frame:
-    box: padding = 8 children: end end
+    box: padding = 8 content: end end
 end
 ```
 
@@ -149,8 +150,8 @@ become typed:
 | --- | --- | --- |
 | E232 | error | `component 'Hidden' is private to 'parts.salam'; it cannot be used from another file` (hint: `mark it 'pub' where it is defined: 'pub component Hidden'`) |
 | W184 | warning | `component 'Button' hides the standard component of the same name` |
-| E185 | error | `'children' used outside a component` |
-| E186 | error | `a component may place 'children' only once; name the second one` |
+| E111 | error | `unknown layout element 'content'` (`content:` used outside a component) |
+| E114 | error | `duplicate slot placeholder 'default' in component` |
 | E187 | error | `no value 'giant' for parameter 'size' of Button: expected sm, md or lg` |
 | E188 | error | `'Span.style' names no entry of the 'text' token group` (static strings only) |
 
@@ -160,7 +161,7 @@ become typed:
 | --- | --- |
 | C1 | one kit in page code (`std/gui/kit`), identical on web and native, no OS widgets |
 | C2 | variants are enum parameters; outside styling is tokens only |
-| C3 | `children:` and named slots, expanded at compile time |
+| C3 | `content:` and named slots, expanded at compile time |
 | C4 | no run time markup: `each`, `items`, typed `Span` lists, `before:` and `after:` |
 | C5 | Windows look is a theme pair plus metric tokens, chosen by `theme = system` |
 | C6 | overlays live in the page layer and close on `Escape` |
@@ -168,7 +169,7 @@ become typed:
 
 ### First implementation steps
 
-1. `children:` and slots in the compiler (component expansion).
+1. `content:` and slots in the compiler (component expansion).
 2. `Button`, `Field`, `TextInput`, `Checkbox`, `Switch`, `Segmented`, `Card`,
    `Text` (smallest set that a form page needs), with one `tests/*/page` and
    one `tests/*/ui` each.

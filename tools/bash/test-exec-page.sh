@@ -42,7 +42,7 @@ run_exec() {
 }
 
 cat >"$T/en.salam" <<'SAL'
-component App():
+component App:
     count := 0
     box:
         heading:
@@ -64,7 +64,7 @@ end
 SAL
 
 cat >"$T/fa.salam" <<'SAL'
-بخش برنامه():
+بخش برنامه:
     شمار := 0
     جعبه:
         سرتیتر:

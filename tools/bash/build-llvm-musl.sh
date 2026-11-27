@@ -17,13 +17,11 @@ i686)
     TRIPLE=i686-unknown-linux-musl
     DEFAULT_TRIPLE=i686-pc-linux-gnu
     PROCESSOR=i686
-    ARCH_FLAGS=
     ;;
 armhf)
     TRIPLE=arm-unknown-linux-musleabihf
     DEFAULT_TRIPLE=arm-unknown-linux-gnueabihf
     PROCESSOR=arm
-    ARCH_FLAGS="-march=armv6 -mfpu=vfp -mfloat-abi=hard -marm"
     ;;
 *)
     echo "error: unknown architecture '$ARCH'" >&2
@@ -62,9 +60,6 @@ cmake -G Ninja -S "$WORK/src/llvm" -B "$WORK/cross" \
     -DCMAKE_ASM_COMPILER="${CROSS}gcc" \
     -DCMAKE_AR="${CROSS}ar" \
     -DCMAKE_RANLIB="${CROSS}ranlib" \
-    -DCMAKE_C_FLAGS="$ARCH_FLAGS" \
-    -DCMAKE_CXX_FLAGS="$ARCH_FLAGS" \
-    -DCMAKE_ASM_FLAGS="$ARCH_FLAGS" \
     -DCMAKE_EXE_LINKER_FLAGS=-static \
     -DLLVM_TABLEGEN="$WORK/native/bin/llvm-tblgen" \
     -DLLVM_HOST_TRIPLE="$DEFAULT_TRIPLE" \

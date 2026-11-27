@@ -23,6 +23,7 @@ mut g_src_loaded := Vector {} as Vector<str>
 mut g_src_digest := Vector {} as Vector<str>
 mut g_src_overlay := HashMap {} as HashMap<str, str>
 mut g_src_error := ""
+mut g_src_shared := HashMap {} as HashMap<str, str>
 
 pub struct SourceFile:
     pub path: str = ""
@@ -39,6 +40,23 @@ func drop_bom(text: str):
     n := text.Len()
     p := text as void*
     _moved := mem.MemMove(p, ((p as i64) + (3 as i64)) as void*, (n - 2) as u64)
+end
+
+func share_text(path: str, text: str): str:
+    if str.Len(text) == 0:
+        ret text
+    end
+    if not g_src_shared.Has(path):
+        g_src_shared.Put(str.Clone(path), text)
+        ret text
+    end
+    old := g_src_shared.Get(path)
+    if str.Equals(old, text):
+        mem.Free(text as void*)
+        ret old
+    end
+    g_src_shared.Put(path, text)
+    ret text
 end
 
 pub func DigestFeed(p: void*, n: int, h1 &: u64, h2 &: u64):
@@ -83,6 +101,14 @@ end
 
 pub func HasOverlay(path: str): bool:
     ret g_src_overlay.Size() > 0 and g_src_overlay.Has(filepath.Clean(path))
+end
+
+pub func LoadShared(path: str, sf &: SourceFile): bool:
+    if not Load(path, sf):
+        ret false
+    end
+    sf.text = share_text(path, sf.text)
+    ret true
 end
 
 pub func Load(path: str, sf &: SourceFile): bool:
@@ -141,7 +167,7 @@ pub func Peek(path: str): str:
     if g_src_overlay.Size() > 0:
         key := filepath.Clean(path)
         if g_src_overlay.Has(key):
-            ret str.Clone(g_src_overlay.Get(key))
+            ret share_text(path, str.Clone(g_src_overlay.Get(key)))
         end
     end
     if not os.Exists(path) or os.IsDir(path):
@@ -151,7 +177,7 @@ pub func Peek(path: str): str:
     if has_bom(text):
         drop_bom(text)
     end
-    ret text
+    ret share_text(path, text)
 end
 
 pub func LoadedPaths(): Vector<str>:

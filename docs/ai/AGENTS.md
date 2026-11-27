@@ -735,7 +735,7 @@ lib/format.salam        include "lib/format.salam" in main.salam
 
 `server func F(x: T): R:` runs only on the front server and calls the backend
 over HTTP. The browser and native app get a stub, never the body. Types must
-cross as JSON (E285), top level only (E287), one per name (E288); secrets come
+cross as JSON (E285), top level of the entry file only (E287), one per name (E288); secrets come
 from `env.Get` and `env` in browser code is E286; backend imports (`db`, `fs`,
 `os`, process, router) warn W280 unless `salam.cfg` sets `allow_backend =
 true`; a static build that reaches one is E289 unless the page sets `server =
@@ -768,6 +768,36 @@ header/title/content/footer`, `badge`, `alert`, `input`, `switch`, `select`,
 `sidebar provider`, `theme toggle`. The shadcn CSS is a web output today.
 Docs: `docs/design/DESIGN_SYSTEMS.md`, `NATIVE_UI.md`, `MOBILE.md`, SKILL.md
 section 9.
+
+Every row that an `each` renders in a `page:` or `component` needs `key = ...`
+(Persian `کلید`) built from the loop's item or index: on the row element or on
+the component use, in every `if`/`else` branch, for every row of a turn, and in
+nested loops for their own variable. A constant, `id` or `data-key` does not
+count (E292). `salam check --fix` adds `key = <index>`. `each` in code needs no
+key, and `each` is the only loop a page body allows.
+
+```salam
+mut names := Vector {} as Vector<str>
+
+func add_name():
+    names.Push("name " + names.Len())
+end
+
+page:
+    button:
+        click = add_name
+        content = "Add"
+    end
+    list:
+        each i, name in names:
+            item:
+                key = i
+                content = name
+            end
+        end
+    end
+end
+```
 
 ## Changing the standard library
 

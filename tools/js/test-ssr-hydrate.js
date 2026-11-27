@@ -125,8 +125,8 @@ async function open(browser, mode) {
     ];
   });
   check(
-    "the call cache hook answers by key",
-    key[0] === "F:162c1995:0" && key[1] === 7 && key[2] == null,
+    "the call cache is empty once the page is hydrated",
+    key[0] === "F:162c1995:0" && key[1] == null && key[2] == null,
     JSON.stringify(key),
   );
 

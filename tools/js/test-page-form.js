@@ -1,4 +1,5 @@
 const fs = require("fs");
+const http = require("http");
 const path = require("path");
 const { chromium } = require("playwright-core");
 
@@ -40,10 +41,31 @@ function check(name, ok, detail) {
   }
 }
 
+function serve(html) {
+  const frameHost =
+    '<!doctype html><iframe sandbox="allow-scripts allow-forms" src="/" style="width:700px;height:700px"></iframe>';
+  const server = http.createServer((req, res) => {
+    const name = req.url.split("?")[0];
+    let body = "<!doctype html><p>submitted</p>";
+    if (name === "/") body = html;
+    if (name === "/frame") body = frameHost;
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(body);
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve(server));
+  });
+}
+
 async function run(page, frame, label) {
-  const text = (sel) => frame.$eval(sel, (e) => e.textContent).catch(() => null);
+  const text = (sel) =>
+    frame.$eval(sel, (e) => e.textContent).catch(() => null);
   const stayed = () =>
     frame.evaluate(() => window.marker === 1).catch(() => false);
+  const expect = async (name, sel, want) => {
+    const got = await text(sel);
+    check(label + name, got === want, got);
+  };
   await frame.waitForSelector("#a-send");
   await frame.evaluate(() => {
     window.marker = 1;
@@ -51,20 +73,24 @@ async function run(page, frame, label) {
 
   await frame.click("#a-send");
   await page.waitForTimeout(300);
-  check(label + "a submit button runs the handler", (await text("#a-out")) === "typed handled", await text("#a-out"));
-  check(label + "the other instance is untouched", (await text("#b-out")) === "typed ", await text("#b-out"));
+  await expect("a submit button runs the handler", "#a-out", "typed handled");
+  await expect("the other instance is untouched", "#b-out", "typed ");
   check(label + "the page does not reload", await stayed());
 
   await frame.press("#b-form input", "Enter");
   await page.waitForTimeout(300);
-  check(label + "Enter in a field runs the handler", (await text("#b-out")) === "typed handled", await text("#b-out"));
+  await expect("Enter in a field runs the handler", "#b-out", "typed handled");
   check(label + "Enter does not reload", await stayed());
 
   await frame.click("#add");
   await frame.click("#y-send");
   await page.waitForTimeout(300);
-  check(label + "a form in a list row runs its own handler", (await text("#y-out")) === "typed handled", await text("#y-out"));
-  check(label + "the other row is untouched", (await text("#x-out")) === "typed ", await text("#x-out"));
+  await expect(
+    "a form in a list row runs its own handler",
+    "#y-out",
+    "typed handled",
+  );
+  await expect("the other row is untouched", "#x-out", "typed ");
   check(label + "a list row does not reload", await stayed());
 
   await frame.click("#named-send");
@@ -76,41 +102,38 @@ async function run(page, frame, label) {
   check(label + "a form without a handler still submits", !(await stayed()));
 }
 
-(async () => {
+async function scenario(url, framed, errors) {
   const browser = await chromium.launch({ executablePath: browserPath() });
-  const errors = [];
-  const open = async () => {
+  const label = framed ? "sandboxed frame: " : "";
+  try {
     const page = await browser.newPage();
     page.on("pageerror", (e) => errors.push(e.message));
-    return page;
-  };
-
-  const url = process.argv[2].startsWith("http")
-    ? process.argv[2]
-    : "file://" + path.resolve(file);
-  const page = await open();
-  await page.goto(url);
-  await run(page, page.mainFrame(), "");
-
-  if (!url.startsWith("http")) {
-    const framed = await open();
-    await framed.setContent(
-      '<iframe sandbox="allow-scripts allow-forms" style="width:700px;height:700px"></iframe>',
-    );
-    await framed.$eval(
-      "iframe",
-      (el, html) => {
-        el.srcdoc = html;
-      },
-      fs.readFileSync(path.resolve(file), "utf8"),
-    );
-    const handle = await framed.waitForSelector("iframe");
-    await framed.waitForTimeout(300);
-    await run(framed, await handle.contentFrame(), "sandboxed frame: ");
+    page.on("crash", () => errors.push(label + "the page crashed"));
+    await page.goto(url);
+    let target = page.mainFrame();
+    if (framed) {
+      const handle = await page.waitForSelector("iframe");
+      target = await handle.contentFrame();
+    }
+    await run(page, target, label);
+  } finally {
+    await browser.close();
   }
+}
+
+(async () => {
+  const server = await serve(fs.readFileSync(path.resolve(file), "utf8"));
+  const base = "http://127.0.0.1:" + server.address().port;
+  const errors = [];
+  try {
+    await scenario(base + "/", false, errors);
+    await scenario(base + "/frame", true, errors);
+  } catch (e) {
+    check("the browser run finishes", false, e.message);
+  }
+  server.close();
 
   check("no script errors", errors.length === 0, errors.join(" | "));
-  await browser.close();
   console.log(failures === 0 ? "page form ok" : failures + " check(s) failed");
   process.exit(failures === 0 ? 0 : 1);
 })();

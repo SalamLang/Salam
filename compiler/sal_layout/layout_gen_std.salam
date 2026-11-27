@@ -1,6 +1,7 @@
 package layout
 
 import str
+import mem
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -17,10 +18,12 @@ include sm "../semantic/semantic.salam"
 include ip "../interp/interp.salam"
 
 const K_LO_GEN_FIELDS := 6
+const K_LO_GEN_SLOTS := 16
 
 mut g_lo_gen_reuse := false
-mut g_lo_gen_source := ""
-mut g_lo_gen_output := ""
+mut g_lo_gen_sources := Vector {} as Vector<str>
+mut g_lo_gen_outputs := Vector {} as Vector<str>
+mut g_lo_gen_next := 0
 
 func gen_std_quote(s: str): str:
     mut out := `"`
@@ -106,10 +109,29 @@ func gen_std(
     html_line(cx, gen_std_marker(idx))
 end
 
+func gen_std_remember(source: str, output: str):
+    if g_lo_gen_sources.Len() < K_LO_GEN_SLOTS:
+        g_lo_gen_sources.Push(str.Clone(source))
+        g_lo_gen_outputs.Push(str.Clone(output))
+        ret
+    end
+    old_source := g_lo_gen_sources.Get(g_lo_gen_next)
+    old_output := g_lo_gen_outputs.Get(g_lo_gen_next)
+    g_lo_gen_sources.Set(g_lo_gen_next, str.Clone(source))
+    g_lo_gen_outputs.Set(g_lo_gen_next, str.Clone(output))
+    mem.Free(old_source as void*)
+    mem.Free(old_output as void*)
+    g_lo_gen_next = (g_lo_gen_next + 1) % K_LO_GEN_SLOTS
+end
+
 func gen_std_compile_run(lgr: lg.Logger, source: str, out &: str, err &: str): bool:
-    if g_lo_gen_reuse and str.Len(g_lo_gen_source) > 0 and str.Equals(source, g_lo_gen_source):
-        out = str.Clone(g_lo_gen_output)
-        ret true
+    if g_lo_gen_reuse:
+        repeat g_lo_gen_sources.Len() in i:
+            if str.Equals(source, g_lo_gen_sources.Get(i)):
+                out = str.Clone(g_lo_gen_outputs.Get(i))
+                ret true
+            end
+        end
     end
     pack := lp.Load("en")
     mut sf := src.New()
@@ -149,8 +171,7 @@ func gen_std_compile_run(lgr: lg.Logger, source: str, out &: str, err &: str): b
         err = fail + vm.err_text
     end
     if ok and g_lo_gen_reuse:
-        g_lo_gen_source = str.Clone(source)
-        g_lo_gen_output = str.Clone(out)
+        gen_std_remember(source, out)
     end
     ip.Free(vm)
     sm.Free(s)

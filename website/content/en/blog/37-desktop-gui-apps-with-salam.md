@@ -117,7 +117,7 @@ Cross builds need nothing extra, because the compiler links Windows and macOS pr
 > [!WARNING]
 > Nothing is signed for you. macOS builds get the ad-hoc signature the compiler writes, which is enough to run after removing the quarantine flag, but real distribution still needs proper signing and notarization, as with any other toolchain.
 
-For Windows programs that should not open a console, `salam build` also takes `--subsystem=windows`, `--icon=FILE.ico` and `--version-info=KEY=VALUE`, which need the native backend or the built-in linker.
+On Windows, a `page:` program built with `--ui=native` opens no console window; `--subsystem=console` brings it back, and `--subsystem=windows` hides it for any other program. `salam build` also takes `--icon=FILE.ico` and `--version-info=KEY=VALUE`, which need the native backend or the built-in linker.
 
 ### A Chromium engine, and its current limits {#chromium}
 

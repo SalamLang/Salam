@@ -350,6 +350,9 @@ the language yet; when it is, it wraps the same stub.
   (name based reachability from every non server definition). Native programs
   lose them through unreachable function removal, because the stub no longer
   mentions them.
+- A page build writes a global of an imported package only when code that stays
+  in the bundle reaches it, so a package that only a server func uses (such as
+  `net/http` and the mutexes it creates) leaves nothing in the browser.
 - Limits of the pruning: methods in `impl` blocks and struct methods are never
   dropped, even when only a server func uses them, and what they call stays
   too. They are also scanned for E286, so a method that uses `env` is an error

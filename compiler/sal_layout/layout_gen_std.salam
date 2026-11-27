@@ -17,6 +17,7 @@ include sm "../semantic/semantic.salam"
 include ip "../interp/interp.salam"
 
 const K_LO_GEN_FIELDS := 6
+const K_LO_VIEW_PAGE_ATTRS := "data-design,data-theme,data-palette,data-tokens,lang,dir"
 
 mut g_lo_gen_reuse := false
 mut g_lo_gen_source := ""
@@ -47,6 +48,31 @@ func gen_std_quote(s: str): str:
     ret out + `"`
 end
 
+func gen_std_reset_views():
+    g_lo_view_gen_src = ""
+    g_lo_view_ds_first = ""
+    g_lo_view_ds_any = false
+end
+
+func gen_std_view_page(a &: at.Ast, page: int, view: int):
+    ei := sm.LayoutElemLookup("page")
+    repeat at.ChildCount(a, page) in i:
+        id := at.Child(a, page, i)
+        item := at.Get(a, id)
+        if item.kind != at.AST_LAYOUT_ATTR:
+            continue
+        end
+        mut key := sm.LayoutAttrKeyFor(ei, item.name)
+        if str.Len(key) == 0:
+            key = item.name
+        end
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai >= 0 and sm.LayoutCsvHas(K_LO_VIEW_PAGE_ATTRS, sm.LayoutAttrOut(ai)):
+            at.AddChild(a, view, at.Clone(a, id))
+        end
+    end
+end
+
 func gen_std_marker(idx: int): str:
     ret char_from_code(2) + "salam-gen-" + co.U64Toa(idx as u64) + char_from_code(3)
 end
@@ -63,7 +89,8 @@ func gen_std(
     tag: str
 ):
     cx.uid_next++
-    uid := "elm_" + co.U64Toa(cx.uid_next as u64)
+    scope := g_lo_skip_base ? str.Replace(g_lo_cls_prefix, "-", "_") : ""
+    uid := "elm_" + scope + co.U64Toa(cx.uid_next as u64)
     save_html := cx.html
     save_indent := cx.indent
     cx.html = ""
@@ -74,7 +101,7 @@ func gen_std(
     cx.indent = save_indent
     idx := cx.gen_count
     cx.gen_count++
-    v := "n" + co.U64Toa(idx as u64)
+    v := "n" + scope + co.U64Toa(idx as u64)
     mut b := "    mut " + v + " := layoutgen.Node {}\n"
     b += "    " + v + ".name = " + gen_std_quote(at.Get(a, el).name) + "\n"
     b += "    " + v + ".tag = " + gen_std_quote(tag) + "\n"
@@ -191,6 +218,19 @@ func gen_std_append_head(cx &: LoCtx, piece: str):
     cx.head += piece
 end
 
+func gen_std_append_record(cx &: LoCtx, record: str):
+    mut f := str.Split(record, char_from_code(31))
+    defer f.Free()
+    until f.Len() < K_LO_GEN_FIELDS:
+        f.Push("")
+    end
+    gen_std_append_unique(cx, f.Get(4), true)
+    gen_std_append_unique(cx, f.Get(1), true)
+    gen_std_append_unique(cx, f.Get(5), false)
+    gen_std_append_unique(cx, f.Get(2), false)
+    gen_std_append_head(cx, f.Get(3))
+end
+
 func gen_std_page_node(cx: LoCtx): str:
     mut b := "    mut np := layoutgen.Node {}\n"
     b += "    np.name = \"page\"\n"
@@ -208,7 +248,27 @@ func gen_std_page_node(cx: LoCtx): str:
 end
 
 func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
-    program := "import layoutgen\n\nfunc main:\n" + gen_std_page_node(cx) + cx.gen_src + "end\n"
+    whole_page := not g_lo_skip_base and str.Len(g_lo_cls_prefix) == 0
+    mut view_src := ""
+    if g_lo_skip_base:
+        g_lo_view_gen_src += cx.gen_src
+        if cx.ds_any:
+            g_lo_view_ds_any = true
+            if str.Len(g_lo_view_ds_first) == 0:
+                g_lo_view_ds_first = str.Clone(cx.ds_first)
+            end
+        end
+    else whole_page:
+        view_src = g_lo_view_gen_src
+        if g_lo_view_ds_any:
+            cx.ds_any = true
+            if str.Len(cx.ds_first) == 0:
+                cx.ds_first = g_lo_view_ds_first
+            end
+        end
+    end
+    program := "import layoutgen\n\nfunc main:\n" + gen_std_page_node(cx) + cx.gen_src + view_src +
+        "end\n"
     quiet := lg.New(lg.LOG_OFF, false)
     mut out := ""
     mut err := ""
@@ -232,17 +292,8 @@ func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
     end
     mut recs := str.Split(out, char_from_code(30))
     defer recs.Free()
-    if recs.Len() > 0:
-        mut pf := str.Split(recs.Get(0), char_from_code(31))
-        until pf.Len() < K_LO_GEN_FIELDS:
-            pf.Push("")
-        end
-        gen_std_append_unique(cx, pf.Get(4), true)
-        gen_std_append_unique(cx, pf.Get(1), true)
-        gen_std_append_unique(cx, pf.Get(5), false)
-        gen_std_append_unique(cx, pf.Get(2), false)
-        gen_std_append_head(cx, pf.Get(3))
-        pf.Free()
+    if recs.Len() > 0 and not g_lo_skip_base:
+        gen_std_append_record(cx, recs.Get(0))
     end
     repeat cx.gen_count in step:
         i := cx.gen_count - 1 - step
@@ -271,12 +322,21 @@ func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
             f.Push("")
         end
         cx.html = str.Replace(cx.html, gen_std_marker(i), f.Get(0))
-        gen_std_append_unique(cx, f.Get(4), true)
-        gen_std_append_unique(cx, f.Get(1), true)
-        gen_std_append_unique(cx, f.Get(5), false)
-        gen_std_append_unique(cx, f.Get(2), false)
-        gen_std_append_head(cx, f.Get(3))
+        if not g_lo_skip_base:
+            gen_std_append_record(cx, rec)
+        end
         f.Free()
+    end
+    if whole_page:
+        mut k := cx.gen_count + 1
+        until k < recs.Len():
+            mut extra := recs.Get(k)
+            if str.StartsWith(extra, "\n"):
+                extra = str.Substr(extra, 1, str.Len(extra) - 1)
+            end
+            gen_std_append_record(cx, extra)
+            k++
+        end
     end
 end
 

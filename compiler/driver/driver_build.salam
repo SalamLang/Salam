@@ -335,13 +335,22 @@ func build_impl(opt &: Dr): int:
         ret LlvmBuild(opt)
     end
 
+    mut link_failed := false
     if use_llvm_backend(opt):
         lrc := LlvmBuild(opt)
         if lrc != RC_LLVM_UNSUPPORTED and lrc != RC_LLVM_LINK_FAILED:
             ret lrc
         end
+        link_failed = lrc == RC_LLVM_LINK_FAILED
         if str.Equals(opt.backend, "llvm"):
+            if link_failed:
+                report_gap_if_any(opt)
+            end
             ret lrc
+        end
+        if not c_compiler_present(opt):
+            report_toolchain_gap(lg.New(opt.log_level, resolve_color(opt.color)))
+            ret 1
         end
         io.EPrintln(
             i18.Tr(
@@ -354,7 +363,18 @@ func build_impl(opt &: Dr): int:
     lk := lock_scratch(scratch)
     brc := build_c(opt, scratch, lib_stem, lib_export_pub)
     unlock_scratch(lk)
+    if brc != 0 and link_failed:
+        report_gap_if_any(opt)
+    end
     ret brc
+end
+
+func report_gap_if_any(opt &: Dr):
+    mut o := lv.Options {}
+    o.lib_paths = opt.lib_paths
+    if host_toolchain_gap(o):
+        report_toolchain_gap(lg.New(opt.log_level, resolve_color(opt.color)))
+    end
 end
 
 func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int:
@@ -786,12 +806,8 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
         if str.Len(bare_cc) == 0 or (cc_is_bare_name(bare_cc) and not sm.FindPathTool(
             bare_cc, cc_probe
         )):
-            lg.Log(
-                lgr,
-                lg.PH_DRIVER,
-                lg.LOG_WARN,
-                "no C compiler found on PATH; Salam will try the built-in linker for linking when object files are available, but compiling C output still requires a C compiler (install gcc/clang/tcc or a bundled toolchain)"
-            )
+            report_toolchain_gap(lgr)
+            ret 1
         end
     end
 

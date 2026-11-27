@@ -362,7 +362,10 @@ end
 
 Web: `<form novalidate>` (our rules decide, the browser does not show its own
 bubbles), `name` and `autocomplete` attributes, `aria-invalid` and
-`aria-describedby` to the error text. Native: the same rules in `gui.ui`
+`aria-describedby` to the error text. A form with a `submit` handler never
+reloads the page; a form without one is submitted by the browser to its
+`action`. A sandboxed preview frame needs `allow-forms`, or the browser blocks
+the submission before the handler runs. Native: the same rules in `gui.ui`
 (text editing, caret and selection keep their state through the rules, R4
 guarantees that typing re-runs only readers), IME composition does not
 validate until committed.

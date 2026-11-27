@@ -2657,7 +2657,7 @@ in place. `mode = hash` and a user `main` are refused with `--ssr`.
 that runs only on the front server and calls the backend over HTTP; its body
 never reaches the browser or a native app, which get a stub that posts to
 `/_salam/fn/Name`. Parameters and result must be JSON types (E285: no
-pointers, references or closures), top level only (E287), one per name (E288).
+pointers, references or closures), top level of the entry file only (E287), one per name (E288).
 Read secrets with `env.Get` inside it; using `env` from browser code is E286.
 A body that imports `db`, `fs`, `os`, process or router warns W280 unless
 `salam.cfg` has `allow_backend = true`. A static build that can reach one is

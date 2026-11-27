@@ -26,6 +26,7 @@ const SL_IF := 7
 const SL_EACH := 8
 const SL_BAD := 9
 const SL_STD := 10
+const SL_URL_TEXT := 11
 
 mut g_lo_env_nodes := Vector {} as Vector<int>
 mut g_lo_env_injected := false
@@ -54,6 +55,7 @@ struct LoLower:
     pub funcs: Vector<str> = Vector {}
     pub loop: int = 0
     pub web: str = "web"
+    pub live: bool = false
 end
 
 func lo_mark(tag: str, n: int): str:
@@ -221,6 +223,32 @@ func lo_slot_kind(el: int, ei: int, name: str): int:
     ret SL_ATTR
 end
 
+func lo_url_output(name: str): bool:
+    ret str.Equals(name, "href") or str.Equals(name, "src") or str.Equals(
+        name, "action"
+    ) or str.Equals(
+        name, "formaction"
+    ) or str.Equals(name, "poster") or str.Equals(
+        name, "xlink:href"
+    )
+end
+
+func lo_attr_slot_kind(lw &: LoLower, el: int, ei: int, name: str): int:
+    k := lo_slot_kind(el, ei, name)
+    if k != SL_ATTR or el == 0 or sm.LayoutNativeTarget():
+        ret k
+    end
+    mut key := sm.LayoutAttrKeyFor(ei, name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ai := sm.LayoutAttrFor(ei, key)
+    if ai >= 0 and lo_url_output(sm.LayoutAttrOut(ai)):
+        ret lw.live ? SL_URL : SL_URL_TEXT
+    end
+    ret k
+end
+
 func lo_bool_out(ei: int, name: str): str:
     mut key := sm.LayoutAttrKeyFor(ei, name)
     if str.Len(key) == 0:
@@ -361,8 +389,8 @@ end
 
 func lo_list_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int, vid: int):
     an := at.Get(a, attr).name
-    mut k := lo_slot_kind(el, ei, an)
-    if k == SL_URL and lo_safe_path(a, vid):
+    mut k := lo_attr_slot_kind(lw, el, ei, an)
+    if (k == SL_URL or k == SL_URL_TEXT) and lo_safe_path(a, vid):
         k = SL_ATTR
     end
     dyn := lo_list_runtime(lw, a, vid)
@@ -511,8 +539,8 @@ func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
     if sm.LayoutNativeTarget() and sm.ResolveStyleAttr(an.name).ok:
         vid = lo_std_text(lw, a, vid, vid)
     end
-    mut k := lo_slot_kind(el, ei, an.name)
-    if k == SL_URL and lo_safe_path(a, vid):
+    mut k := lo_attr_slot_kind(lw, el, ei, an.name)
+    if (k == SL_URL or k == SL_URL_TEXT) and lo_safe_path(a, vid):
         k = SL_ATTR
     end
     if k == SL_IF or k == SL_EACH:
@@ -659,6 +687,9 @@ func lo_slot_writer(kind: int): str:
     if kind == SL_URL:
         ret "PageUrl"
     end
+    if kind == SL_URL_TEXT:
+        ret "PageUrlText"
+    end
     if kind == SL_CSS:
         ret "PageCss"
     end
@@ -702,7 +733,7 @@ func lo_opt_cut(
     doc: str, kind: int, q: int, after: int, start: int, cut &: int, head &: str, tail &: str
 ): bool:
     n := str.Len(doc)
-    if kind == SL_ATTR or kind == SL_URL:
+    if kind == SL_ATTR or kind == SL_URL or kind == SL_URL_TEXT:
         if q - start < 4 or after >= n or byte_at(doc, q - 1) != 34 or byte_at(doc, q - 2) != 61 or
             byte_at(doc, after) != 34:
             ret false

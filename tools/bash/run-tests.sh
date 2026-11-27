@@ -1073,6 +1073,7 @@ if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
     add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
     add_job script "tools/en/diag-bytes" "tools/bash/test-diag-bytes.sh" "en" "tests/en/tools/diag_bytes.out"
+    [ "$(uname -s 2>/dev/null)" = Linux ] && add_job script "tools/en/no-toolchain" "tools/bash/test-no-toolchain.sh" "en" "tests/en/tools/no_toolchain.out"
     add_job script "tools/en/build-dir" "tools/bash/test-build-dir.sh" "en" "tests/en/tools/build_dir.out"
     add_job script "tools/en/time-report" "tools/bash/test-time-report.sh" "en" "tests/en/tools/time_report.out"
     add_job script "tools/en/build-cache" "tools/bash/test-build-cache.sh" "en" "tests/en/tools/build_cache.out"

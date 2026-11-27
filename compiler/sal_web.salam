@@ -32,6 +32,7 @@ include x "xml.salam"
 include cg "codegen/codegen.salam"
 include lv "llvmgen/llvmgen.salam"
 include tr "cli/cli_translate.salam"
+include dr "driver/driver.salam"
 
 mut g_wb_schema_ready := false
 mut g_wb_failed := false
@@ -137,6 +138,73 @@ export:
     end
 end
 
+func page_without_entry(source: str, lang: str): bool:
+    i18.SetLang(lang)
+    pack := lp.Load(lang)
+    if pack == lp.LP_NONE:
+        ret false
+    end
+    lgr := lg.New(lg.LOG_OFF, false)
+    sf := src_from_string(source)
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    mut table := cc.TableBuild("", Vector {} as Vector<str>)
+    cc.TableSetPack(table, pack)
+    mut found := false
+    if lok and pok and cc.PruneProgram(
+        a, lgr, sf.path, table, prog
+    ) and lo.FindLayout(a, prog) != 0:
+        found = true
+        entry := lp.Entry(pack)
+        repeat at.ChildCount(a, prog) in i:
+            item := at.Get(a, at.Child(a, prog, i))
+            if item.kind == at.AST_FUNC_DEF and lp.IdentEqual(item.name, entry):
+                found = false
+            end
+        end
+    end
+    at.FreeAst(a)
+    cc.TableFree(table)
+    ret found
+end
+
+func build_page(source: str, lang: str): dr.SourcePage:
+    i18.SetLang(lang)
+    sm.SetStdlibRoot("")
+    ensure_schema()
+    mut page := dr.PageFromSource(src_from_string(source), lang)
+    if page.no_page:
+        page.diag = i18.Tr(
+            "this program has no layout block; " + "use a `layout:` block to build an HTML page"
+        )
+    end
+    if not page.ok:
+        g_wb_failed = true
+    end
+    ret page
+end
+
+func emit_page_part(source: str, lang: str, phase: str): str:
+    page := build_page(source, lang)
+    if not page.ok:
+        ret page.diag
+    end
+    res := page.result
+    if str.Equals(phase, "css"):
+        ret res.css
+    end
+    if str.Equals(phase, "js"):
+        ret res.js
+    end
+    css_href := str.Len(res.css) > 0 ? "style.css" : ""
+    js_href := str.Len(res.js) > 0 ? "script.js" : ""
+    ret lo.Document(res, false, css_href, js_href, false)
+end
+
 pub func Translate(source: str, target_lang: str): str:
     if str.Len(target_lang) == 0:
         ret source
@@ -166,6 +234,12 @@ end
 
 pub func RunApp(source: str, lang: str): str:
     g_wb_failed = false
+    if page_without_entry(source, lang):
+        g_wb_failed = true
+        ret i18.Tr(
+            "this program is a web page and has no 'main' function to run; switch to Layout mode to see it"
+        )
+    end
     mut lgr := lg.New(lg.LOG_WARN, false)
     fe := front_end(lgr, lang, source)
     if not fe.ok:
@@ -216,47 +290,18 @@ end
 
 pub func BuildLayout(source: str, lang: str): str:
     g_wb_failed = false
-    ensure_schema()
-    mut lgr := lg.New(lg.LOG_WARN, false)
-    fe := front_end(lgr, lang, source)
-    if not fe.ok:
-        g_wb_failed = true
-        d := fe.diag
-        sm.Free(fe.s)
-        at.FreeAst(fe.a)
-        ret d
+    page := build_page(source, lang)
+    if not page.ok:
+        ret page.diag
     end
-
-    lb := lo.FindLayout(fe.a, fe.program)
-    if lb == 0:
-        g_wb_failed = true
-        sm.Free(fe.s)
-        at.FreeAst(fe.a)
-        ret i18.Tr(
-            "this program has no layout block; " + "use a `layout:` block to build an HTML page"
-        )
-    end
-
-    mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
-    res := lo.Generate(lgr, diag_e, "main.salam", fe.a, lb, false, lang)
-    mut result := ""
-    if dg.HasErrors(diag_e):
-        g_wb_failed = true
-        rendered := dg.RenderAll(
-            diag_e, source, str.Len(source), dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
-        )
-        result = str.Len(rendered) > 0 ? rendered : i18.Tr("page build failed")
-    else:
-        result = lo.Document(res, true, "", "", false)
-    end
-    dg.Free(diag_e)
-    sm.Free(fe.s)
-    at.FreeAst(fe.a)
-    ret result
+    ret lo.Document(page.result, true, "", "", false)
 end
 
 pub func Emit(source: str, lang: str, phase: str): str:
     g_wb_failed = false
+    if str.Equals(phase, "html") or str.Equals(phase, "css") or str.Equals(phase, "js"):
+        ret emit_page_part(source, lang, phase)
+    end
     i18.SetLang(lang)
     sm.SetStdlibRoot("")
     mut lgr := lg.New(lg.LOG_WARN, false)
@@ -330,46 +375,6 @@ pub func Emit(source: str, lang: str, phase: str): str:
         sm.Free(s)
         at.FreeAst(a)
         ret r
-    end
-
-    if str.Equals(phase, "html") or str.Equals(phase, "css") or str.Equals(phase, "js"):
-        ensure_schema()
-        lb := lo.FindLayout(a, prog)
-        if lb == 0:
-            g_wb_failed = true
-            sm.Free(s)
-            at.FreeAst(a)
-            ret i18.Tr(
-                "this program has no layout block; " + "use a `layout:` block to build an HTML page"
-            )
-        end
-        mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
-        res := lo.Generate(lgr, diag_e, "main.salam", a, lb, false, lp.Code(pack))
-        if dg.HasErrors(diag_e):
-            g_wb_failed = true
-            rendered := dg.RenderAll(
-                diag_e, sf.text, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
-            )
-            r := str.Len(rendered) > 0 ? rendered : i18.Tr("page build failed")
-            dg.Free(diag_e)
-            sm.Free(s)
-            at.FreeAst(a)
-            ret r
-        end
-        css_href := str.Len(res.css) > 0 ? "style.css" : ""
-        js_href := str.Len(res.js) > 0 ? "script.js" : ""
-        mut part := ""
-        if str.Equals(phase, "html"):
-            part = lo.Document(res, false, css_href, js_href, false)
-        else str.Equals(phase, "css"):
-            part = res.css
-        else:
-            part = res.js
-        end
-        dg.Free(diag_e)
-        sm.Free(s)
-        at.FreeAst(a)
-        ret part
     end
 
     if str.Equals(phase, "c"):

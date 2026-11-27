@@ -1071,6 +1071,7 @@ fi
 
 if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
+    add_job script "tools/en/include-package" "tools/bash/test-include-package.sh" "en" "tests/en/tools/include_package.out"
     add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
     add_job script "tools/en/diag-bytes" "tools/bash/test-diag-bytes.sh" "en" "tests/en/tools/diag_bytes.out"
     add_job script "tools/en/build-dir" "tools/bash/test-build-dir.sh" "en" "tests/en/tools/build_dir.out"

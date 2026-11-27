@@ -135,7 +135,11 @@ const number = async (tab) =>
       (await text(home, "#info")) + " / " + (await text(home, "#again")),
     );
     calls = await click(home, "#again");
-    check("a handler on the new route sends one request", calls === "Other", calls);
+    check(
+      "a handler on the new route sends one request",
+      calls === "Other",
+      calls,
+    );
     check(
       "the handler result is shown",
       (await text(home, "#again")) === againWord + " 82",
@@ -145,8 +149,16 @@ const number = async (tab) =>
     calls = await click(home, "#to-home");
     check("going back loads fresh state", calls === "Next", calls);
     const back = await number(home);
-    check("the old value is not replayed", back > before, before + " -> " + back);
-    check("no errors or warnings", home.seen.logs.length === 0, home.seen.logs.join(" | "));
+    check(
+      "the old value is not replayed",
+      back > before,
+      before + " -> " + back,
+    );
+    check(
+      "no errors or warnings",
+      home.seen.logs.length === 0,
+      home.seen.logs.join(" | "),
+    );
 
     const other = await open(browser, server.base + "/other");
     check(
@@ -160,15 +172,23 @@ const number = async (tab) =>
         (await text(other, "#again")) === againWord + " 42",
       (await text(other, "#info")) + " / " + (await text(other, "#again")),
     );
-    calls = await click(other, "#drop");
+    calls = await click(other, "#add");
     check(
       "the hydrated list can be changed",
-      calls === "" && (await text(other, "#info")) === "BOX 3 1",
+      calls === "" && (await text(other, "#info")) === "BOX 4 3",
       calls + " / " + (await text(other, "#info")),
     );
     calls = await click(other, "#again");
-    check("a handler after hydration sends one request", calls === "Other", calls);
-    check("no errors or warnings after hydration", other.seen.logs.length === 0, other.seen.logs.join(" | "));
+    check(
+      "a handler after hydration sends one request",
+      calls === "Other",
+      calls,
+    );
+    check(
+      "no errors or warnings after hydration",
+      other.seen.logs.length === 0,
+      other.seen.logs.join(" | "),
+    );
   } finally {
     if (browser) await browser.close();
     server.child.kill();

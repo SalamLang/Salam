@@ -2596,6 +2596,10 @@ that.
 
 A `pub component` with an English name must be PascalCase (`MyCard`: capital first letter, no `_`), else E290; Persian names are exempt.
 
+A component without parameters has no parentheses: `component App:` (Persian
+`بخش برنامه:`). With parameters it is `component App(a: str):`. Empty
+parentheses, `component App():`, are error E270. Uses stay `App:`.
+
 **Page projects: routes, rendering, server funcs.** When the entry file is
 `main.salam`, the `pages/` folder next to it is the route table, one file per
 route and exactly one `pub component` in each (E282). `index.salam` is the

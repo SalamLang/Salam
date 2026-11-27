@@ -31,6 +31,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 - Expressions taller than 512 nodes and if/else chains of more than 256 arms are errors instead of crashing the compiler (#3750).
 - `salam test` reports a test that crashes as FAIL, runs the rest of the file, and exits non-zero (#3740, #3763).
 - A program killed by a fatal signal keeps the output it had buffered, names the signal, and still dies by that signal (#3756).
+- On Windows a `page:` program built with `--ui=native` is a GUI program and opens no console window; build with `--subsystem=console` to keep one. `salam run` is unchanged (#4304).
 
 ### Fixed
 

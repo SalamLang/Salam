@@ -466,8 +466,8 @@ set up when the library is loaded. A Windows DLL can be built from Linux with
 
 A `page:` program built for Windows with `--ui=native` is a GUI program: it
 opens no console window. `--subsystem=console` or `--subsystem=windows` picks
-the other kind for any program, on every backend and linker. `salam run` keeps
-the console so you can read the output.
+the other kind for any program, on every backend and linker for MinGW targets.
+`salam run` keeps the console so you can read the output.
 
 A program built for Windows with `--backend=native` (or with
 `--linker=builtin`) can also carry an icon, an application manifest and version

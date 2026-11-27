@@ -14,7 +14,8 @@
 #   - a 'page:' program built with --ui=native gets the GUI subsystem on the
 #     built-in linker, the system linker and the C backend, unless
 #     --subsystem or salam.toml says console; a program with no page stays a
-#     console one.
+#     console one,
+#   - changing --subsystem relinks a cached C backend build.
 #
 # Needs wine on PATH and the mingw-w64 runtime for the target. The steps that
 # need a cross C compiler or llvm-readobj are skipped when it is missing.
@@ -221,6 +222,19 @@ done
 if command -v "$CC" >/dev/null 2>&1; then
     subsystem_case 2 "page, C backend" "$work/page" main.salam --ui=native --backend=c --cc="$CC"
     subsystem_case 3 "no page, C backend" "$work/app" main.salam --backend=c --cc="$CC"
+    exe="$work/page/relink.exe"
+    for step in console:3 windows:2 console:3; do
+        kind=${step%:*}
+        want=${step#*:}
+        if (cd "$work/page" && "$SALAM" build main.salam --ui=native --backend=c --cc="$CC" \
+            --target="$TRIPLE" --subsystem="$kind" --output="$exe" \
+            --log-level=error >"$exe.log" 2>&1) && [ "$(pe_subsystem "$exe")" = "$want" ]; then
+            ok "cached C backend relink, $kind: subsystem $want"
+        else
+            bad "cached C backend relink, $kind: want subsystem $want"
+            head -5 "$exe.log"
+        fi
+    done
 fi
 
 if command -v llvm-readobj >/dev/null 2>&1; then

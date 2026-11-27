@@ -735,7 +735,7 @@ lib/format.salam        include "lib/format.salam" in main.salam
 
 `server func F(x: T): R:` runs only on the front server and calls the backend
 over HTTP. The browser and native app get a stub, never the body. Types must
-cross as JSON (E285), top level only (E287), one per name (E288); secrets come
+cross as JSON (E285), top level of the entry file only (E287), one per name (E288); secrets come
 from `env.Get` and `env` in browser code is E286; backend imports (`db`, `fs`,
 `os`, process, router) warn W280 unless `salam.cfg` sets `allow_backend =
 true`; a static build that reaches one is E289 unless the page sets `server =

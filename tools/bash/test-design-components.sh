@@ -17,26 +17,30 @@ rules() {
 }
 
 for lang in en fa; do
-    for variant in components inline; do
+    for variant in components pages inline; do
         (cd "$dir" && "$SALAM" build "$ROOT/tests/$lang/page/projects/design_$variant/main.salam" \
             --platform=web --no-minify --log-level=error --output="$dir/$lang-$variant.html")
         rules "$dir/$lang-$variant.html" >"$dir/$lang-$variant.css"
     done
-    missing="$(comm -13 "$dir/$lang-components.css" "$dir/$lang-inline.css")"
     count="$(wc -l <"$dir/$lang-inline.css")"
     if [ "$count" -lt 20 ]; then
         echo "FAIL $lang: only $count design rules in the reference page"
         status=1
-    elif [ -n "$missing" ]; then
-        echo "FAIL $lang: rules missing when the controls live in components/"
-        echo "$missing" | head -20
-        status=1
-    elif ! grep -q 'window.salamDsAccordion' "$dir/$lang-components.html"; then
-        echo "FAIL $lang: the accordion script is missing"
-        status=1
-    else
-        echo "PASS $lang: $count design rules in both layouts"
+        continue
     fi
+    for variant in components pages; do
+        missing="$(comm -13 "$dir/$lang-$variant.css" "$dir/$lang-inline.css")"
+        if [ -n "$missing" ]; then
+            echo "FAIL $lang: rules missing when the controls live in $variant/"
+            echo "$missing" | head -20
+            status=1
+        elif ! grep -q 'window.salamDsAccordion' "$dir/$lang-$variant.html"; then
+            echo "FAIL $lang: the accordion script is missing with controls in $variant/"
+            status=1
+        else
+            echo "PASS $lang: $count design rules with controls in $variant/"
+        fi
+    done
 done
 
 exit "$status"

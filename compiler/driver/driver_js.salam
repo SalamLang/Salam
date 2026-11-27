@@ -124,20 +124,6 @@ func js_word_in(buf: void*, text: str, start: int, ln: int): str:
     ret buf as str
 end
 
-func js_ref_set(text: str, set &: HashMap<str, int>):
-    n := str.Len(text)
-    buf := mem.MustAllocateZeroed((n + 1) as u64)
-    defer mem.Free(buf)
-    mut p := 0
-    mut start := 0
-    until js_next_ref(text, n, p, start):
-        word := js_word_in(buf, text, start, p - start)
-        if not set.Has(word):
-            set.Put(word.Concat(""), 1)
-        end
-    end
-end
-
 func js_mark_used(
     roots: str, names: Vector<str>, texts: Vector<str>, used &: Vector<int>
 ):
@@ -309,24 +295,39 @@ end
 
 func js_prune_globals(globals: Vector<str>, code: str, hoisted &: str): Vector<str>:
     mut keep_text := code
+    mut lit := Vector {} as Vector<str>
+    defer lit.Free()
+    mut no_text := Vector {} as Vector<str>
+    defer no_text.Free()
+    mut referenced := Vector {} as Vector<int>
+    defer referenced.Free()
     repeat globals.Len() in gi:
         each line in str.Split(globals.Get(gi), "\n"):
             mut nm := ""
-            if not js_lit_global(line, nm):
+            if js_lit_global(line, nm):
+                lit.Push(nm.Concat(""))
+                no_text.Push("")
+                referenced.Push(0)
+            else:
                 keep_text += line + "\n"
             end
         end
     end
-    mut refs := HashMap {} as HashMap<str, int>
-    defer refs.Free()
-    js_ref_set(keep_text, refs)
+    js_mark_used(keep_text, lit, no_text, referenced)
+    each held in lit:
+        mem.Free(held as void*)
+    end
+    mut li := 0
     mut out := Vector {} as Vector<str>
     repeat globals.Len() in gi2:
         mut kept := ""
         each line in str.Split(globals.Get(gi2), "\n"):
             mut nm := ""
-            if js_lit_global(line, nm) and not refs.Has(nm):
-                continue
+            if js_lit_global(line, nm):
+                li++
+                if referenced.Get(li - 1) == 0:
+                    continue
+                end
             end
             if js_simple_global(line):
                 hoisted += str.Trim(line) + "\n"

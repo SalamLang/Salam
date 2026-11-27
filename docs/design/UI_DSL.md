@@ -447,12 +447,20 @@ duplicate key among siblings is a compile error when it is a literal and a
 run time warning otherwise (E-number to be assigned).
 
 ```salam
+mut items := Vector {} as Vector<str>
+
+func fill():
+    items.Push("a")
+    items.Push("b")
+end
+
 component Row(name: str):
     hits := 0
     item: content = name + " " + hits click = (): hits++ end end
 end
 
 page:
+    button: click = fill content = "Fill" end
     list:
         each it in items:
             Row: key = it name = it end

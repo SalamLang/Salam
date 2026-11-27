@@ -2598,6 +2598,12 @@ that.
 It applies to every target (static web, reactive web, SSR, native, mobile).
 
 ```salam
+mut names := Vector {} as Vector<str>
+
+func add_name():
+    names.Push("name " + names.Len())
+end
+
 component Row(label: str):
     item:
         content = label
@@ -2605,6 +2611,10 @@ component Row(label: str):
 end
 
 page:
+    button:
+        click = add_name
+        content = "Add"
+    end
     list:
         each i, name in names:
             item:
@@ -2798,7 +2808,7 @@ layout Home(user: str, lucky: int, items: Vector<str>, admin: bool):
     end
     list:
         each i, it in items:
-            item: content = i + ": " + it end
+            item: key = i content = i + ": " + it end
         end
     end
     input: type = "checkbox" checked = admin end   // bool attribute toggled at runtime

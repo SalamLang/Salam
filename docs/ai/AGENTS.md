@@ -777,7 +777,17 @@ count (E292). `salam check --fix` adds `key = <index>`. `each` in code needs no
 key, and `each` is the only loop a page body allows.
 
 ```salam
+mut names := Vector {} as Vector<str>
+
+func add_name():
+    names.Push("name " + names.Len())
+end
+
 page:
+    button:
+        click = add_name
+        content = "Add"
+    end
     list:
         each i, name in names:
             item:

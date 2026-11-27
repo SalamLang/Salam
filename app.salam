@@ -29,9 +29,17 @@ extern:
     func salam_js_set_prop(obj: i64, name: str, value: func ())
     func salam_js_global(name: str): func () i64
     func salam_js_get_prop(obj: i64, name: str): bool
+    func salam_js_new(ctor: func () i64, url: str): i64
 end
 
 const STALL_MS := 60000
+const JOB_LIMIT_MS := 20000
+const DEBOUNCE_WORKER_MS := 200
+const DEBOUNCE_INLINE_MS := 500
+const WORKER_NONE := 0
+const WORKER_STARTING := 1
+const WORKER_READY := 2
+const WORKER_RESTARTING := 3
 
 mut g_lang := "en"
 mut g_mode := "app"
@@ -99,6 +107,18 @@ mut g_shown_key := ""
 mut g_preview_doc := ""
 mut g_run_pending := false
 mut g_run_force := false
+mut g_worker := 0 as i64
+mut g_worker_state := WORKER_NONE
+mut g_job_id := 0
+mut g_job_busy := false
+mut g_job_again := false
+mut g_job_src := ""
+mut g_job_base := ""
+mut g_job_mode := ""
+mut g_job_force := false
+mut job_timer := 0 as i64
+mut boot_timer := 0 as i64
+mut g_worker_gen := 0
 
 struct Outputs:
     pub run: str = ""
@@ -149,6 +169,14 @@ func T(key: str): str:
         "stalled":
             if g_lang == "fa": ret "کامپایلر بالا نیامد؛ صفحه را تازه کن" end
             ret "compiler did not start; reload the page"
+        end
+        "compiler_slow":
+            if g_lang == "fa": ret "کامپایل این برنامه بیش از حد طول کشید و متوقف شد" end
+            ret "building this program took too long and was stopped"
+        end
+        "compiler_crashed":
+            if g_lang == "fa": ret "کامپایلر روی این برنامه از کار افتاد" end
+            ret "the compiler crashed on this program"
         end
         "custom":
             if g_lang == "fa": ret "سفارشی" end
@@ -1017,6 +1045,7 @@ func on_wasm_ready():
     end
     set_status("ready", "ok")
     if g_autorun: run() end
+    start_worker(WORKER_STARTING)
 end
 
 func show_phase(view: str, txt: str, failed: bool):
@@ -1077,34 +1106,40 @@ func cache_out(view: str): str:
     ret g_cache.run
 end
 
-func call_compiler(src: str, lang: str, mode: str): Outputs:
-    if mode != "layout":
-        out := fn_run_app(src, lang)
-        ret Outputs { run = out, failed = last_failed() }
-    end
-    doc := fn_build_layout(src, lang)
-    if last_failed():
-        ret Outputs {
-            run = doc,
-            html = doc,
-            css = doc,
-            js = doc,
-            failed = true
-        }
-    end
-    parts := page_parts.Split(doc)
+func failed_outputs(message: str): Outputs:
     ret Outputs {
-        run = doc,
+        run = message,
+        html = message,
+        css = message,
+        js = message,
+        failed = true
+    }
+end
+
+func outputs_of(out: str, failed: bool, mode: str): Outputs:
+    if mode != "layout": ret Outputs { run = out, failed = failed } end
+    if failed: ret failed_outputs(out) end
+    parts := page_parts.Split(out)
+    ret Outputs {
+        run = out,
         html = parts.html,
         css = parts.css,
         js = parts.js
     }
 end
 
-func compute(src: str, force: bool):
-    base := cache_base(src)
-    if force == false and cache_has(base): ret end
-    g_cache = call_compiler(src, g_lang, g_mode)
+func call_compiler(src: str, lang: str, mode: str): Outputs:
+    mut out := ""
+    if mode == "layout":
+        out = fn_build_layout(src, lang)
+    else:
+        out = fn_run_app(src, lang)
+    end
+    ret outputs_of(out, last_failed(), mode)
+end
+
+func store_outputs(base: str, outputs: Outputs):
+    g_cache = outputs
     g_cache_base = base
     g_cache_ready = true
 end
@@ -1141,15 +1176,114 @@ func show_result(view: str, src: str, force: bool):
     set_status(failed ? "error" : "done", failed ? "err" : "ok")
 end
 
+func show_fresh(src: str, force: bool):
+    if force: g_preview_doc = "" end
+    show_result(g_view, src, force)
+end
+
+func post_job(src: str, base: str, force: bool):
+    g_job_id++
+    g_job_busy = true
+    g_job_src = src
+    g_job_base = base
+    g_job_mode = g_mode
+    g_job_force = force
+    obj_ctor := salam_js_global("Object")
+    msg := obj_ctor()
+    dom.SetNum(msg, "id", g_job_id as f64)
+    dom.SetStr(msg, "src", src)
+    dom.SetStr(msg, "lang", g_lang)
+    dom.SetStr(msg, "mode", g_mode)
+    _p := salam_js_call(g_worker, "postMessage", msg)
+    job_timer = dom.SetTimeout((): ret fail_worker("compiler_slow") end, JOB_LIMIT_MS)
+end
+
 func run_now():
     g_run_pending = false
     if g_wasm_ready == false: ret end
+    src := dom.GetValue(el_code)
+    base := cache_base(src)
+    if g_run_force == false and cache_has(base):
+        if g_job_busy: g_job_again = true end
+        show_fresh(src, false)
+        ret
+    end
+    if g_job_busy or g_worker_state == WORKER_RESTARTING:
+        g_job_again = true
+        ret
+    end
     force := g_run_force
     g_run_force = false
-    if force: g_preview_doc = "" end
-    src := dom.GetValue(el_code)
-    compute(src, force)
-    show_result(g_view, src, force)
+    if g_worker_state == WORKER_READY:
+        post_job(src, base, force)
+        ret
+    end
+    store_outputs(base, call_compiler(src, g_lang, g_mode))
+    show_fresh(src, force)
+end
+
+func run_waiting():
+    if g_job_again == false: ret end
+    g_job_again = false
+    run_now()
+end
+
+func finish_job(outputs: Outputs):
+    dom.ClearTimeout(job_timer)
+    g_job_busy = false
+    store_outputs(g_job_base, outputs)
+    if g_job_again:
+        run_waiting()
+    else g_job_mode == g_mode:
+        show_fresh(g_job_src, g_job_force)
+    end
+end
+
+func start_worker(state: int):
+    g_worker_state = state
+    ctor := salam_js_global("Worker")
+    g_worker = salam_js_new(ctor, "worker.js?v=" + build_info.VERSION)
+    g_worker_gen++
+    gen := g_worker_gen
+    dom.OnEventE(g_worker, "message", (ev: i64): ret on_worker_message(gen, ev) end)
+    dom.OnEvent(g_worker, "error", (): ret on_worker_error(gen) end)
+    dom.ClearTimeout(boot_timer)
+    boot_timer = dom.SetTimeout((): ret on_worker_error(gen) end, STALL_MS)
+end
+
+func on_worker_error(gen: int):
+    if gen == g_worker_gen: fail_worker("compiler_crashed") end
+end
+
+func fail_worker(reason: str):
+    was_ready := g_worker_state == WORKER_READY
+    dom.ClearTimeout(job_timer)
+    dom.ClearTimeout(boot_timer)
+    _t := dom.Call0(g_worker, "terminate")
+    g_worker_gen++
+    g_worker_state = WORKER_NONE
+    if was_ready: start_worker(WORKER_RESTARTING) end
+    if g_job_busy:
+        finish_job(failed_outputs(T(reason)))
+    else:
+        run_waiting()
+    end
+end
+
+func on_worker_message(gen: int, ev: i64):
+    if gen != g_worker_gen: ret end
+    data := dom.GetProp(ev, "data")
+    kind := dom.GetStr(data, "type")
+    if kind == "ready":
+        dom.ClearTimeout(boot_timer)
+        g_worker_state = WORKER_READY
+        if g_job_busy == false: run_waiting() end
+    else kind == "crash":
+        fail_worker("compiler_crashed")
+    else g_job_busy and dom.GetNum(data, "id") == (g_job_id as f64):
+        out := dom.GetStr(data, "out")
+        finish_job(outputs_of(out, dom.GetBool(data, "failed"), g_job_mode))
+    end
 end
 
 func run_after_paint():
@@ -1165,6 +1299,10 @@ func request_run(force: bool):
         ret
     end
     set_status("running", "busy")
+    if g_worker_state != WORKER_NONE and g_worker_state != WORKER_STARTING:
+        run_now()
+        ret
+    end
     if g_run_pending: ret end
     g_run_pending = true
     _f := salam_js_call(dom.Window(), "requestAnimationFrame", (): ret run_after_paint() end)
@@ -1181,7 +1319,8 @@ end
 func schedule_run():
     if g_autorun == false: ret end
     dom.ClearTimeout(run_timer)
-    run_timer = dom.SetTimeout((): ret do_scheduled_run() end, 500)
+    delay := g_worker_state == WORKER_READY ? DEBOUNCE_WORKER_MS : DEBOUNCE_INLINE_MS
+    run_timer = dom.SetTimeout((): ret do_scheduled_run() end, delay)
 end
 
 func save_code_state():

@@ -851,7 +851,7 @@ func load_include(ex &: LoExpand, a &: at.Ast, path: str): int:
         ret li
     end
     mut sf := src.New()
-    if not src.Load(path, sf):
+    if not src.LoadShared(path, sf):
         lg.Log(
             ex.log,
             lg.PH_DRIVER,
@@ -864,8 +864,11 @@ func load_include(ex &: LoExpand, a &: at.Ast, path: str): int:
     mut toks := tok.StreamNew(path)
     _l := lx.Run(ex.log, ex.pack, sf, toks)
     mut prog := 0
-    _p := ps.Run(ex.log, toks, a, prog)
+    pok := ps.Run(ex.log, toks, a, prog)
     tok.StreamFree(toks)
+    if not pok:
+        ex.errors++
+    end
     if prog != 0:
         _c := cc.PruneProgram(a, ex.log, path, ex.cctab, prog)
     end
@@ -1092,6 +1095,73 @@ func check_component_arg_type(
     end
 end
 
+func lo_row_key_name(name: str): bool:
+    ret str.Equals(name, "key") or lp.IdentEqual(name, "کلید")
+end
+
+func lo_row_key_attr(a &: at.Ast, from: int, value: int): int:
+    attr := at.NewNode(a, at.AST_LAYOUT_ATTR)
+    copy_span(a, attr, from)
+    mut n := at.Get(a, attr)
+    n.name = at.Get(a, from).name
+    n.value_bool = true
+    n.a = value
+    at.Put(a, attr, n)
+    ret attr
+end
+
+func lo_row_key_put(a &: at.Ast, nid: int, attr: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IF:
+        lo_row_key_put(a, n.b, attr)
+        lo_row_key_put(a, n.c, attr)
+    else n.kind == at.AST_BLOCK:
+        repeat at.ChildCount(a, nid) in i:
+            lo_row_key_put(a, at.Child(a, nid, i), attr)
+        end
+    else n.kind == at.AST_LAYOUT_ELEMENT:
+        mut kids := Vector {} as Vector<int>
+        kids.Push(at.Clone(a, attr))
+        repeat at.ChildCount(a, nid) in j:
+            cid := at.Child(a, nid, j)
+            c := at.Get(a, cid)
+            if c.kind != at.AST_LAYOUT_ATTR or not lo_row_key_name(c.name):
+                kids.Push(cid)
+            end
+        end
+        mut en := at.Get(a, nid)
+        mut old := en.list
+        en.list = kids
+        at.Put(a, nid, en)
+        old.Free()
+    end
+end
+
+func lo_row_key_from(a &: at.Ast, out &: Vector<int>, first: int, attr: int):
+    if attr == 0:
+        ret
+    end
+    mut i := first
+    until i < out.Len():
+        lo_row_key_put(a, out.Get(i), attr)
+        i++
+    end
+end
+
+func lo_row_key_slot(a &: at.Ast, out &: Vector<int>, first: int, slot: int, fr &: LoFrame):
+    repeat at.ChildCount(a, slot) in i:
+        cid := at.Child(a, slot, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and c.value_bool and lo_row_key_name(c.name) and
+            fr.present and not fr.page:
+            lo_row_key_from(a, out, first, lo_row_key_attr(a, cid, subst_value(a, c.a, fr)))
+        end
+    end
+end
+
 func expand_component(
     ex &: LoExpand,
     a &: at.Ast,
@@ -1128,6 +1198,7 @@ func expand_component(
         end
     end
 
+    mut row_key := 0
     mut got_content := false
     mut got_content_attr := false
     mut got_content_children := false
@@ -1240,7 +1311,12 @@ func expand_component(
                 else:
                     bound_params.Push(an.name)
                     sub_val := lo_bub_value(ex, a, subst_value(a, an.a, caller))
-                    if not comp_has_param(a, comp_def, an.name):
+                    own := comp_has_param(a, comp_def, an.name)
+                    row := an.value_bool and lo_row_key_name(an.name)
+                    if row:
+                        row_key = lo_row_key_attr(a, aid, sub_val)
+                    end
+                    if not own and not row:
                         lg.Log(
                             ex.log,
                             lg.PH_DRIVER,
@@ -1252,7 +1328,7 @@ func expand_component(
                             )
                         )
                         ex.errors++
-                    else:
+                    else own:
                         check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
                         frame_set(fr, an.name, sub_val)
                     end
@@ -1511,6 +1587,7 @@ func expand_component(
         ex.errors++
     end
     body := at.Get(a, comp_def).a
+    first_out := out.Len()
     web := g_lo_web_state and not g_lo_native_scopes
     if not g_lo_native_scopes and not web:
         if li_has_storage(a, body):
@@ -1529,6 +1606,7 @@ func expand_component(
         end
         frame_derive(a, fr, body)
         expand_comp_body(ex, a, out, body, fr, ci, depth + 1)
+        lo_row_key_from(a, out, first_out, row_key)
         ret
     end
     mut hparams := Vector {} as Vector<str>
@@ -1538,6 +1616,7 @@ func expand_component(
     if web and not li_has_storage(a, body) and hparams.Len() == 0:
         frame_derive(a, fr, body)
         expand_comp_body(ex, a, out, body, fr, ci, depth + 1)
+        lo_row_key_from(a, out, first_out, row_key)
         ret
     end
     wi := g_lo_wi_mark.Len()
@@ -1631,6 +1710,7 @@ func expand_component(
         g_lo_wi_mark.Set(wi, mark)
     end
     out.Push(mark)
+    lo_row_key_from(a, out, first_out, row_key)
 end
 
 func lo_hr_walk(a &: at.Ast, nid: int, out &: Vector<str>):
@@ -2350,6 +2430,10 @@ func expand_items(
             lo_bind_expand(ex, a, out, cid, container, fr, dir, depth)
             continue
         end
+        first_out := out.Len()
         expand_item(ex, a, out, cid, fr, dir, depth)
+        if ci.kind == at.AST_LAYOUT_ELEMENT and is_slot_placeholder_name(ci.name):
+            lo_row_key_slot(a, out, first_out, cid, fr)
+        end
     end
 end

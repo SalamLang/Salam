@@ -644,24 +644,11 @@ func ws_key_param(lw &: LoLower, a &: at.Ast, ex: int): int:
     ret init
 end
 
-func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int, want: str): int:
-    _ei := sm.LayoutElemOf(a, el)
+func ws_key_attr(lw &: LoLower, a &: at.Ast, el: int): int:
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
         an := at.Get(a, aid)
-        if an.kind != at.AST_LAYOUT_ATTR or str.Len(an.name) == 0 or an.a == 0:
-            continue
-        end
-        mut key := sm.LayoutAttrKeyFor(_ei, an.name)
-        if str.Len(key) == 0:
-            key = an.name
-        end
-        mut is_match := str.Equals(key, want) or str.Equals(an.name, want)
-        if not is_match:
-            ai := sm.LayoutAttrFor(_ei, key)
-            is_match = ai >= 0 and str.Equals(sm.LayoutAttrOut(ai), want)
-        end
-        if not is_match:
+        if an.kind != at.AST_LAYOUT_ATTR or an.a == 0 or not lo_row_key_name(an.name):
             continue
         end
         num := ln_dyn_num(val_str(a, an.a))
@@ -692,17 +679,7 @@ func ws_row_key(lw &: LoLower, a &: at.Ast, body: int): int:
         cid := at.Child(a, body, i)
         k := at.KindOf(a, cid)
         if k == at.AST_LAYOUT_ELEMENT:
-            mut key := ws_key_attr(lw, a, cid, "data-key")
-            if key == 0:
-                key = ws_key_attr(lw, a, cid, "key")
-            end
-            if key == 0:
-                key = ws_key_attr(lw, a, cid, "id")
-            end
-            if key != 0:
-                ret key
-            end
-            key = ws_row_key(lw, a, cid)
+            key := ws_key_attr(lw, a, cid)
             if key != 0:
                 ret key
             end
@@ -1344,6 +1321,24 @@ func ws_type_text(nm: LnNames, n: int): str:
     ret "__salam_wtype_" + co.U64Toa(n as u64)
 end
 
+func ws_synthetic_type(a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    mut n := at.Get(a, nid)
+    if n.kind == at.AST_TYPE:
+        n.synthetic = true
+        at.Put(a, nid, n)
+    end
+    ws_synthetic_type(a, n.ty)
+    ws_synthetic_type(a, n.a)
+    ws_synthetic_type(a, n.b)
+    ws_synthetic_type(a, n.c)
+    repeat n.list.Len() in i:
+        ws_synthetic_type(a, n.list.Get(i))
+    end
+end
+
 func ws_fix_types(a &: at.Ast, nid: int):
     if nid == 0:
         ret
@@ -1358,6 +1353,7 @@ func ws_fix_types(a &: at.Ast, nid: int):
             cn.list = Vector {} as Vector<int>
             cn.ext = 0
             at.Put(a, cp, cn)
+            ws_synthetic_type(a, nid)
         end
         ret
     end
@@ -1368,6 +1364,30 @@ func ws_fix_types(a &: at.Ast, nid: int):
     repeat n.list.Len() in i:
         ws_fix_types(a, n.list.Get(i))
     end
+end
+
+func ws_constant_init(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_UNARY:
+        ret ws_constant_init(a, n.a)
+    end
+    ret n.kind == at.AST_LITERAL and n.value_kind != tok.TV_STRING
+end
+
+func ws_zero_global(a &: at.Ast, vid: int):
+    mut vn := at.Get(a, vid)
+    late := vn.a
+    if late == 0 or at.KindOf(a, late) != at.AST_CAST or at.KindOf(
+        a, at.Get(a, late).a
+    ) != at.AST_LITERAL:
+        ret
+    end
+    vn.ty = at.Get(a, late).ty
+    vn.a = 0
+    at.Put(a, vid, vn)
 end
 
 func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): str:
@@ -1417,7 +1437,11 @@ func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): 
             continue
         end
         decl := g_lo_ws_decl.Get(n)
-        t += "mut " + ws_name(n) + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
+        if ws_constant_init(a, at.Get(a, decl).a):
+            t += "mut " + ws_name(n) + " := " + ws_slot(lw, at.Clone(a, at.Get(a, decl).a)) + "\n"
+        else:
+            t += "mut " + ws_name(n) + " := 0 as " + ws_type_text(nm, n) + "\n"
+        end
     end
     t += "\n"
     repeat count in i:
@@ -1644,6 +1668,7 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
             ws_fix_types(a, cid)
             _vs := lo_splice(lw, a, cid, chunks, lb)
             lo_span_tree(a, cid, lb, base)
+            ws_zero_global(a, cid)
             gvars.Push(cid)
         else cn.kind == at.AST_FUNC_DEF and cn.a != 0:
             fbody := lo_splice(lw, a, cn.a, chunks, lb)
@@ -1676,6 +1701,57 @@ pub func PrepareWebState(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: i
     at.Put(a, prog, pn)
     oldl.Free()
     ret count
+end
+
+pub func WebStateCacheRuntime(): str:
+    ret `var __salam_hydrating = false;
+var __salam_calls = {};
+var __salam_call_seen = {};
+(function () {
+    if (typeof document === "undefined" || !document.getElementById) {
+        return;
+    }
+    var el = document.getElementById("__salam");
+    if (!el) {
+        return;
+    }
+    try {
+        var st = JSON.parse(el.textContent);
+        window.__salam_state = st;
+        __salam_calls = st && st.calls ? st.calls : {};
+        __salam_hydrating = true;
+    } catch (x) {
+        if (typeof console !== "undefined" && console.warn) {
+            console.warn("salam: the embedded page state is not valid, the page renders from scratch");
+        }
+    }
+})();
+function __salam_call_hash(text) {
+    var h = 2166136261;
+    var bytes = unescape(encodeURIComponent(String(text)));
+    for (var i = 0; i < bytes.length; i++) {
+        h ^= bytes.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return ("00000000" + h.toString(16)).slice(-8);
+}
+function __salam_call_key(name, args) {
+    var base = name + ":" + __salam_call_hash(args);
+    var n = __salam_call_seen[base] || 0;
+    __salam_call_seen[base] = n + 1;
+    return base + ":" + n;
+}
+function __salam_call_cache_get(key) {
+    if (!Object.prototype.hasOwnProperty.call(__salam_calls, key)) {
+        return undefined;
+    }
+    var value = __salam_calls[key];
+    delete __salam_calls[key];
+    return value;
+}
+window.__salam_call_key = __salam_call_key;
+window.__salam_call_cache_get = __salam_call_cache_get;
+`
 end
 
 pub func WebStateRuntime(views: Vector<str>, inits: Vector<str>): str:
@@ -1716,9 +1792,7 @@ var __salam_next = {};
 var __salam_rendering = "";
 var __salam_seen = new Map();
 var __salam_wasfresh = false;
-var __salam_hydrating = false;
-var __salam_calls = {};
-var __salam_call_seen = {};
+var __salam_ready = {};
 var __salam_last = {};
 var __salam_marked = false;
 var __salam_rows = {};
@@ -1743,45 +1817,6 @@ var __salam_pfx_i = -1;
 var __salam_pfx_r = null;
 var __salam_scnt = {};
 var __salam_seen_n = 0;
-(function () {
-    if (typeof document === "undefined" || !document.getElementById) {
-        return;
-    }
-    var el = document.getElementById("__salam");
-    if (!el) {
-        return;
-    }
-    try {
-        var st = JSON.parse(el.textContent);
-        window.__salam_state = st;
-        __salam_calls = st && st.calls ? st.calls : {};
-        __salam_hydrating = true;
-    } catch (x) {
-        if (typeof console !== "undefined" && console.warn) {
-            console.warn("salam: the embedded page state is not valid, the page renders from scratch");
-        }
-    }
-})();
-function __salam_call_hash(text) {
-    var h = 2166136261;
-    var bytes = unescape(encodeURIComponent(String(text)));
-    for (var i = 0; i < bytes.length; i++) {
-        h ^= bytes.charCodeAt(i);
-        h = Math.imul(h, 16777619) >>> 0;
-    }
-    return ("00000000" + h.toString(16)).slice(-8);
-}
-function __salam_call_key(name, args) {
-    var base = name + ":" + __salam_call_hash(args);
-    var n = __salam_call_seen[base] || 0;
-    __salam_call_seen[base] = n + 1;
-    return base + ":" + n;
-}
-function __salam_call_cache_get(key) {
-    return Object.prototype.hasOwnProperty.call(__salam_calls, key) ? __salam_calls[key] : undefined;
-}
-window.__salam_call_key = __salam_call_key;
-window.__salam_call_cache_get = __salam_call_cache_get;
 function __salam_strip(list) {
     var box = document.createElement("div");
     for (var a = 0; a < list.length; a++) {
@@ -3077,6 +3112,18 @@ function __salam_render(i, fresh) {
     if (!s || !e || !s.parentNode) {
         return;
     }
+    if (!__salam_ready[i]) {
+        __salam_ready[i] = true;
+        if (__salam_inits && typeof __salam_inits[i] === "function") {
+            try {
+                __salam_inits[i]();
+            } catch (x) {
+                if (typeof console !== "undefined" && console.error) {
+                    console.error(x);
+                }
+            }
+        }
+    }
     var pr = __salam_rendering, ps = __salam_seen, pn = __salam_seen_n, pb = __salam_rowbuf, pd = __salam_rowdep, html = "", rows = null;
     window.__salam_runs++;
     if (window.__salam_trace && typeof console !== "undefined" && console.log) {
@@ -3172,15 +3219,7 @@ function __salam_mount(i) {
         delete __salam_last[j];
         delete __salam_rows[j];
         delete __salam_rf[j];
-        if (__salam_inits && typeof __salam_inits[j] === "function") {
-            try {
-                __salam_inits[j]();
-            } catch (x) {
-                if (typeof console !== "undefined" && console.error) {
-                    console.error(x);
-                }
-            }
-        }
+        delete __salam_ready[j];
         __salam_render(j, fresh);
         if (window.__salam_lifecycle && typeof window.__salam_lifecycle.mount === "function") {
             try { window.__salam_lifecycle.mount(j); } catch (xm) {}
@@ -3311,6 +3350,8 @@ try {
     __salam_mount(__salam_i);
 }
 __salam_hydrating = false;
+__salam_calls = {};
+__salam_call_seen = {};
 `
     ret s
 end

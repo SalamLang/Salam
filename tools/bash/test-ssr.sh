@@ -42,6 +42,18 @@ fi
 [ -d dist.lock ] && echo "lock kept for its owner"
 rm -rf dist.lock
 [ -d dist.tmp ] && echo "staging left behind" || echo "no staging left"
+rebuild() {
+    "$salam" build site --platform=web --ssr="$work/dist" --no-color --log-level=error --lang="$lang" >lock.log 2>&1
+}
+mkdir dist.lock dist.tmp
+echo 999999999 >dist.lock/pid
+if rebuild; then echo "lock of a dead process taken over"; else sed 's/^/  /' lock.log | head -10; fi
+[ -d dist.lock ] || [ -d dist.tmp ] || echo "nothing left"
+mkdir dist.lock
+echo $$ >dist.lock/pid
+: >dist.lock/held
+if rebuild; then echo "lock nobody holds taken over"; else sed 's/^/  /' lock.log | head -10; fi
+[ -d dist.lock ] || echo "nothing left"
 [ -x dist/server ] && echo "server written"
 [ -f dist/public/.shell.html ] && echo "shell written"
 ls dist/public | grep -c '\.js$' | sed 's/^/js files: /'

@@ -1073,10 +1073,12 @@ if want tools; then
     add_job script "tools/en/migrate-style" "tools/bash/test-migrate-style.sh" "en" "tests/en/tools/migrate.out"
     add_job script "tools/en/source-bytes" "tools/bash/test-source-bytes.sh" "en" "tests/en/tools/source_bytes.out"
     add_job script "tools/en/diag-bytes" "tools/bash/test-diag-bytes.sh" "en" "tests/en/tools/diag_bytes.out"
+    [ "$(uname -s 2>/dev/null)" = Linux ] && add_job script "tools/en/no-toolchain" "tools/bash/test-no-toolchain.sh" "en" "tests/en/tools/no_toolchain.out"
     add_job script "tools/en/build-dir" "tools/bash/test-build-dir.sh" "en" "tests/en/tools/build_dir.out"
     add_job script "tools/en/time-report" "tools/bash/test-time-report.sh" "en" "tests/en/tools/time_report.out"
     add_job script "tools/en/build-cache" "tools/bash/test-build-cache.sh" "en" "tests/en/tools/build_cache.out"
     add_job script "tools/en/project-file" "tools/bash/test-project-file.sh" "en" "tests/en/tools/project_file.out"
+    add_job script "tools/en/check-page" "tools/bash/test-check-page.sh" "en" "tests/en/tools/check_page.out"
     if command -v curl >/dev/null 2>&1; then
         case "$(uname -s 2>/dev/null)" in
         Linux | Darwin) add_job script "tools/en/exec-page" "tools/bash/test-exec-page.sh" "en" "tests/en/tools/exec_page.out" ;;

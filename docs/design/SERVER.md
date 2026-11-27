@@ -221,6 +221,11 @@ What was built (the smallest design that works):
 - Variable values are not serialized: views compute them from the route and the
   initial values again. A value that only a server func can give travels in
   the call cache.
+- Component state starts when its component is entered, on the server and in the
+  browser: the first render of a region runs its initialisers, so a page calls
+  only the server funcs of the route it shows, and nothing runs when the server
+  starts. A state variable whose initial value is not a constant is the zero
+  value of its type until then.
 
 Call cache for server funcs (the contract with the server func stubs):
 
@@ -235,9 +240,11 @@ Call cache for server funcs (the contract with the server func stubs):
   `ssrpage.PageCalls()`, a JSON object that is embedded as `calls`.
 - Browser: `__salam_call_key(name, argsJson)` returns the next key (it counts
   occurrences from page load), and `__salam_call_cache_get(key)` returns the
-  stored value or `undefined`. A stub that gets a value returns it at once and
-  does not fetch. Keys are not consumed, a later call with a new occurrence
-  number goes to the network.
+  stored value once, or `undefined`. A stub that gets a value returns it at once
+  and does not fetch. The hooks exist before the route is set and before any
+  region is mounted, and the cache and the counters are cleared when hydration
+  ends, so later calls always go to the network. Page level globals are
+  initialised before the hooks: the server does not record their calls.
 - A difference between the cached and a fresh value is not an error: the next
   state change renders it.
 

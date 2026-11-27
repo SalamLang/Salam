@@ -11,11 +11,12 @@
 
 ## ✅ Prerequisites
 
-| Requirement                 | Notes                                                                                                                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A Salam release             | The installer below. The Linux, macOS and Windows x86-64 releases have LLVM linked in and compile with it by default; the Windows on Arm release uses the native backend                  |
-| A C compiler (sometimes)    | Only for the C backend (`--backend=c`, or a compiler without LLVM): [tcc](https://bellard.org/tcc/) (bundled on Windows), [gcc](https://gcc.gnu.org/) or [clang](https://clang.llvm.org/) |
-| [Git](https://git-scm.com/) | To clone the repository                                                                                                                                                                   |
+| Requirement                 | Notes                                                                                                                                                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Salam release             | The installer below. The Linux, macOS and Windows x86-64 releases have LLVM linked in and compile with it by default; the Windows on Arm release uses the native backend                                         |
+| A C compiler (sometimes)    | Only for the C backend (`--backend=c`, or a compiler without LLVM): [tcc](https://bellard.org/tcc/) (bundled on Windows), [gcc](https://gcc.gnu.org/) or [clang](https://clang.llvm.org/)                        |
+| The system C toolchain      | Linux and macOS, to link programs: `apt install gcc libc6-dev` (Debian, Ubuntu), `dnf install gcc glibc-devel` (Fedora), `pacman -S gcc` (Arch), `apk add build-base` (Alpine), `xcode-select --install` (macOS) |
+| [Git](https://git-scm.com/) | To clone the repository                                                                                                                                                                                          |
 
 ## ⚡ Quick Install
 

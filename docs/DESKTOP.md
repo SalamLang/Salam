@@ -135,7 +135,8 @@ Windows version info. `[windows]`, `[macos]` and `[linux]` repeat any `[app]` ke
 system only, and `[windows]` also takes `subsystem`, `icon`, `manifest`, `product` and
 `copyright`. A native Windows build with no bundle (`salam build --platform=windows`) reads
 the same `[windows]` table and falls back to `[app]` for the version, product name,
-description, company and copyright.
+description, company and copyright. Such a build of a `page:` program opens no
+console window unless `subsystem = "console"` asks for one.
 
 ```sh
 salam bundle

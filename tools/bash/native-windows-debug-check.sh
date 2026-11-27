@@ -57,7 +57,7 @@ end
 func main:
     p := Pt { x = 3, y = 4 }
     println area(p, 1.5)
-    println walk(os.Args().len() + 4, "hello")
+    println walk(os.Args().Len() + 4, "hello")
 end
 SRC
 if ! command -v llvm-pdbutil >/dev/null 2>&1; then

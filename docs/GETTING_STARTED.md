@@ -301,7 +301,7 @@ salam exec                  # interpret the project here
   (`cli`, `http` or `dsl`, the Salam page language), the platforms (`web`,
   `android`, `ios`, `linux`, `macos`, `windows`, or all), the design system
   (`shadcn` or `none`, for `dsl`) and the web mode (`page`, `spa` or `ssr`).
-  It writes a small starter project for that choice with a README that explains
+  It writes a small starter project for that choice with a readme that explains
   each folder, and records the answers in `salam.toml` under `[project]`.
   The flags `--name=`, `--description=`, `--type=`, `--platforms=a,b|all`,
   `--design=` and `--web=` answer the questions up front and `-y` accepts the
@@ -464,9 +464,14 @@ set up when the library is loaded. A Windows DLL can be built from Linux with
 
 ### 🪟 Windows programs: icon, manifest and no console
 
+A `page:` program built for Windows with `--ui=native` is a GUI program: it
+opens no console window. `--subsystem=console` or `--subsystem=windows` picks
+the other kind for any program, on every backend and linker for MinGW targets.
+`salam run` keeps the console so you can read the output.
+
 A program built for Windows with `--backend=native` (or with
-`--linker=builtin`) can carry an icon, an application manifest and version
-information, and can be a GUI program that opens no console window:
+`--linker=builtin`) can also carry an icon, an application manifest and version
+information:
 
 ```sh
 salam build app.salam --backend=native --target=x86_64-w64-windows-gnu \
@@ -488,8 +493,9 @@ company = "Example Ltd"
 ```
 
 The compiler writes the resources itself, so no `windres` is needed. A GUI
-program still starts in `main`; its output only shows up when it is
-redirected to a file or a pipe.
+program still starts in `main`. Started from a terminal it prints nothing
+there: its output and error messages only show up when redirected to a file or
+a pipe.
 
 More examples live in [`tests/en/`](../tests/en/).
 

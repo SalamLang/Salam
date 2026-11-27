@@ -1077,6 +1077,11 @@ if want tools; then
     add_job script "tools/en/time-report" "tools/bash/test-time-report.sh" "en" "tests/en/tools/time_report.out"
     add_job script "tools/en/build-cache" "tools/bash/test-build-cache.sh" "en" "tests/en/tools/build_cache.out"
     add_job script "tools/en/project-file" "tools/bash/test-project-file.sh" "en" "tests/en/tools/project_file.out"
+    if command -v curl >/dev/null 2>&1; then
+        case "$(uname -s 2>/dev/null)" in
+        Linux | Darwin) add_job script "tools/en/exec-page" "tools/bash/test-exec-page.sh" "en" "tests/en/tools/exec_page.out" ;;
+        esac
+    fi
     if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
         add_job script "tools/en/installer-mirror" "tools/bash/test-installer-mirror.sh" "en" "tests/en/tools/installer_mirror.out"
         if [ "$(uname -s 2>/dev/null)" = Linux ]; then

@@ -51,6 +51,13 @@ Emscripten and driven from `app.salam` via `Module.cwrap`:
 | **App**    | `salam_web_run_app(source, lang)`      | the interpreter; returns the program output |
 | **Layout** | `salam_web_build_layout(source, lang)` | the layout backend; returns an HTML page    |
 
+Programs and pages are compiled in a Web Worker (`worker.js`, a second copy of
+the same module), so typing and scrolling stay smooth during a build. Until the
+worker is ready, or if it cannot start, the page compiles on its own thread. Only
+one build runs at a time and the newest text is built next. A build that takes
+longer than 20 seconds is stopped and the worker is started again. The syntax
+check behind auto-indent and the code translation stay on the page.
+
 The selected UI language (`lang`) is also the language the source is lexed in -
 switching to فارسی/العربية and compiling English-keyword source now correctly
 fails with a real diagnostic, rather than silently auto-detecting English.

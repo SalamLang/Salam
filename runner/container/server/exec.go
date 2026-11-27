@@ -116,7 +116,8 @@ func buildArgs(req runRequest, srcPath string) []string {
 }
 
 func childEnv(jobDir string) []string {
-	env := []string{"HOME=" + jobDir}
+	limit := maxTimeout + 5*time.Second
+	env := []string{"HOME=" + jobDir, "SALAM_EXEC_TIMEOUT_MS=" + strconv.FormatInt(limit.Milliseconds(), 10)}
 	if salamStdDir != "" {
 		env = append(env, "SALAM_STD="+salamStdDir)
 	}

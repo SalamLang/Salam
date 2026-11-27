@@ -2577,15 +2577,9 @@ written gets a warning. The compiler marks every write and re-runs only the
 scopes that read what changed: a component instance re-runs as a whole,
 outside components an element, `if` or `each` that reads state re-runs
 alone, a child re-runs when only its parameters change, and a handler that
-changes nothing costs no re-render. Inside `each`, give the row a key
-(`key =`, Persian `کلید`, or an `id`) and each component instance keeps its
-variables when rows are inserted, removed or reordered; without one,
-instances follow the position. The key is an attribute of the row's first
-element: the first element inside the component
-(`component Row(name: str): item: key = name content = name end end`) or an
-element that wraps the use (`item: key = n Row: name = n end end`). A use of a
-component takes only the component's parameters, so a `key =` line under `Row:`
-is rejected (`component 'Row' has no parameter 'key'`). Writes it cannot see (inside another
+changes nothing costs no re-render. Every `each` in a page or component needs a
+key (see below), and with it each component instance keeps its variables when
+rows are inserted, removed or reordered. Writes it cannot see (inside another
 package, through a pointer or a second name for a Vector) need
 `ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A written
 variable needs a visible type: a literal, a typed parameter or
@@ -2598,6 +2592,67 @@ sit inside `each` (they follow the row's key) and the page block may read
 mutable globals; a handler inside `each` cannot read the row's loop
 variable there, so declare `label := name` in the row's component and read
 that.
+
+**Row keys (E292).** Every row that an `each` renders in a `page:` or a
+`component` must have a key: `key = i` or `key = item.id` (Persian `کلید`).
+It applies to every target (static web, reactive web, SSR, native, mobile).
+
+```salam
+mut names := Vector {} as Vector<str>
+
+func add_name():
+    names.Push("name " + names.Len())
+end
+
+component Row(label: str):
+    item:
+        content = label
+    end
+end
+
+page:
+    button:
+        click = add_name
+        content = "Add"
+    end
+    list:
+        each i, name in names:
+            item:
+                key = i
+                content = name
+            end
+        end
+        each other in names:
+            Row:
+                key = other
+                label = other
+            end
+        end
+    end
+end
+```
+
+- A row is each element or component use written directly in the loop body,
+  including those inside `if` / `else`: every branch that renders needs its
+  key, and so does each row when one turn renders several. The first row's key
+  identifies the turn.
+- The value must use the loop's item or index (`i`, `item.id`, `"row-" + item`).
+  A constant such as `key = "row"` is E292 (text in quotes is never filled with
+  the loop variable), and `id` or `data-key` do not count. A key on an element nested inside the row does not count either.
+- A nested `each` needs its own keys, built from its own item or index. When a
+  loop body holds a nested `each` directly, its rows are the rows of the inner
+  loop; elements written beside it still need the outer key.
+- On a component use inside a loop, `key` is the row key: it is written on the
+  elements the component renders. A component that declares its own `key`
+  parameter receives the value as before, and it is the row key too. Outside a
+  loop `key` on a use is still an unknown parameter.
+- A loop body that renders no element (only attribute lines) is E292: wrap the
+  content in an element.
+- `salam check --fix` adds `key = <index>` to each row, and an index to the
+  `each` header when there is none, which keeps the old by-position behaviour.
+  Prefer an identifier of the item when rows move.
+- `each` in a `func` or a handler is ordinary code and needs no key.
+  `each` is the only loop a page or component body allows.
 
 A `pub component` with an English name must be PascalCase (`MyCard`: capital first letter, no `_`), else E290; Persian names are exempt.
 
@@ -2755,7 +2810,7 @@ layout Home(user: str, lucky: int, items: Vector<str>, admin: bool):
     end
     list:
         each i, it in items:
-            item: content = i + ": " + it end
+            item: key = i content = i + ": " + it end
         end
     end
     input: type = "checkbox" checked = admin end   // bool attribute toggled at runtime

@@ -232,7 +232,7 @@ page Profile(name: str, skills: Vector<str>, admin: bool):
     end
     list:
         each i, skill in skills:
-            item: content = (i + 1) + ". " + skill end
+            item: key = i content = (i + 1) + ". " + skill end
         end
     end
 end

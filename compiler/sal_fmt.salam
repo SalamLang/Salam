@@ -78,6 +78,7 @@ struct FmtCtx:
     pub block_top: int = 0
     pub line_has_content: bool = false
     pub force_break: bool = false
+    pub server_head: bool = false
     pub no_space_next: bool = false
     pub prev_gt_generic: bool = false
     pub prev_cmp: bool = false
@@ -362,6 +363,33 @@ func static_word(ts: tok.TokenStream, i: int): bool:
         ret false
     end
     ret tok.StreamAt(ts, i + 1).kind == tok.TK_KW_FUNC
+end
+
+func server_word(ts: tok.TokenStream, i: int): bool:
+    t := tok.StreamAt(ts, i)
+    if t.kind != tok.TK_IDENT or i + 1 >= tok.StreamCount(ts):
+        ret false
+    end
+    if not str.Equals(t.lexeme, "server") and not str.Equals(t.lexeme, "سرور"):
+        ret false
+    end
+    ret tok.StreamAt(ts, i + 1).kind == tok.TK_KW_FUNC
+end
+
+func block_runs_past_line(ts: tok.TokenStream, colon_idx: int): bool:
+    n := tok.StreamCount(ts)
+    line := tok.StreamAt(ts, colon_idx).end_line
+    mut last := tok.TK_EOF
+    mut j := colon_idx + 1
+    until j < n and tok.StreamAt(ts, j).begin_line == line:
+        k := tok.StreamAt(ts, j).kind
+        if k != tok.TK_STMT_END and k != tok.TK_COMMENT_LINE and k != tok.TK_COMMENT_BLOCK and
+            k != tok.TK_EOF:
+            last = k
+        end
+        j++
+    end
+    ret last != tok.TK_EOF and last != tok.TK_KW_END
 end
 
 func is_overload_symbol(k: int): bool:
@@ -1098,7 +1126,7 @@ func decl_group(ts: tok.TokenStream, i: int): int:
         j++
     end
     mut is_pub := false
-    until j < n and head_modifier(tok.StreamAt(ts, j).kind):
+    until j < n and (head_modifier(tok.StreamAt(ts, j).kind) or server_word(ts, j)):
         if tok.StreamAt(ts, j).kind == tok.TK_KW_PUB:
             is_pub = true
         end
@@ -1264,8 +1292,12 @@ func step_state_after(
     end
     if c.stmt_head == tok.TK_EOF and c.bracket == 0 and k != tok.TK_KW_END and k != tok.TK_COLON and
         k != tok.TK_COMMENT_LINE and k != tok.TK_COMMENT_BLOCK and not head_modifier(k) and
-        not static_word(ts, i):
+        not static_word(ts, i) and not server_word(ts, i):
         c.stmt_head = k
+    end
+
+    if server_word(ts, i):
+        c.server_head = true
     end
 
     if (k == tok.TK_KW_MATCH or k == tok.TK_KW_SWITCH) and c.bracket == 0:
@@ -1348,6 +1380,12 @@ func step_state_after(
                 c.force_break = true
                 if c.block_top > 0 and c.block_top <= FMT_MAX_BLOCK:
                     c.block_line[c.block_top - 1] = -1
+                end
+            end
+            if c.server_head:
+                c.server_head = false
+                if block_runs_past_line(ts, i):
+                    c.force_break = true
                 end
             end
             c.stmt_head = tok.TK_EOF
@@ -1570,7 +1608,8 @@ end
 
 func ord_adjusted_begin(toks: tok.TokenStream, tok_idx: int): int:
     mut i := tok_idx
-    until i > 0 and ord_is_modifier_kind(tok.StreamAt(toks, i - 1).kind):
+    until i > 0 and
+        (ord_is_modifier_kind(tok.StreamAt(toks, i - 1).kind) or server_word(toks, i - 1)):
         i--
     end
     ret tok.StreamAt(toks, i).begin_index as int

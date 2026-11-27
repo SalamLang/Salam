@@ -9,6 +9,8 @@ include lg "../logger.salam"
 include co "../sal_core.salam"
 include i18 "../i18n.salam"
 include pm "../pkgmgr/pkgmgr.salam"
+include sm "../semantic/semantic.salam"
+include lv "../llvmgen/llvmgen.salam"
 
 mut g_native_keys := Vector {} as Vector<str>
 mut g_native_vals := Vector {} as Vector<str>
@@ -23,6 +25,75 @@ func abort_message(base: str, failed: Vector<str>): str:
         ret base
     end
     ret base + " (" + str.Join(failed, ", ") + ")"
+end
+
+func host_linker_present(): bool:
+    if SALAM_OS_WINDOWS:
+        ret true
+    else:
+        mut path := ""
+        ret sm.FindPathTool("cc", path)
+    end
+end
+
+func c_compiler_present(opt &: Dr): bool:
+    if opt.cc_explicit:
+        ret true
+    end
+    mut path := ""
+    each name in ["clang", "gcc", "tcc", "cc"]:
+        if sm.FindBundledTool(name, path) or sm.FindPathTool(name, path):
+            ret true
+        end
+    end
+    ret false
+end
+
+if SALAM_OS_LINUX:
+    func host_libc_dev_missing(o: lv.Options): bool:
+        if musl_host():
+            ret false
+        end
+        dirs := glibc_dirs(o, glibc_arch(""))
+        ret str.Len(find_in(dirs, "Scrt1.o")) == 0
+    end
+else:
+    func host_libc_dev_missing(_o: lv.Options): bool:
+        ret false
+    end
+end
+
+func host_toolchain_gap(o: lv.Options): bool:
+    ret not host_linker_present() or host_libc_dev_missing(o)
+end
+
+if SALAM_OS_WINDOWS:
+    func toolchain_install_hint(): str:
+        ret "  MinGW-w64 gcc: https://www.mingw-w64.org"
+    end
+else:
+    if SALAM_OS_MAC:
+        func toolchain_install_hint(): str:
+            ret "  xcode-select --install"
+        end
+    else:
+        func toolchain_install_hint(): str:
+            ret "  Debian, Ubuntu: apt install gcc libc6-dev\n" +
+                "  Fedora, RHEL: dnf install gcc glibc-devel\n" + "  Arch Linux: pacman -S gcc\n" +
+                "  openSUSE: zypper install gcc glibc-devel\n" + "  Alpine: apk add build-base"
+        end
+    end
+end
+
+func report_toolchain_gap(lgr: lg.Logger):
+    lg.Log(
+        lgr,
+        lg.PH_DRIVER,
+        lg.LOG_ERROR,
+        i18.Tr(
+            "cannot build the program: this system is missing the C toolchain (the 'cc' command and the C library development files); install it and build again:"
+        ) + "\n" + toolchain_install_hint()
+    )
 end
 
 func link_spec_is_path(spec: str): bool:

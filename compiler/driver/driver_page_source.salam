@@ -1,0 +1,144 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package driver
+
+import str
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lo "../sal_layout/sal_layout.salam"
+
+pub struct SourcePage:
+    pub ok: bool = false
+    pub no_page: bool = false
+    pub diag: str = ""
+    pub result: lo.Result = lo.Result {}
+end
+
+func source_page_failure(): str:
+    lg.SetCapture(false)
+    rendered := lg.Captured()
+    ret str.Len(rendered) > 0 ? rendered : i18.Tr("page build failed")
+end
+
+pub func PageFromSource(sf: src.SourceFile, lang: str): SourcePage:
+    mut out := SourcePage {}
+    pack := lp.Load(lang)
+    if pack == lp.LP_NONE:
+        out.diag = i18.Tr("unknown language pack")
+        ret out
+    end
+    mut opt := Dr {}
+    opt.lang = lang
+    opt.diag_style = dg.DIAG_STYLE_RUST
+    opt.diag_format = dg.DIAG_FORMAT_HUMAN
+    mut lgr := lg.New(lg.LOG_WARN, false)
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    lg.SetCapture(true)
+
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    mut table := cc.TableBuild(cc.JS_TARGET, opt.defines)
+    cc.TableSetPack(table, pack)
+    ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+    if not lok or not pok or not ck:
+        out.diag = source_page_failure()
+        cc.TableFree(table)
+        at.FreeAst(a)
+        ret out
+    end
+
+    lo.SetRootFile(sf.path)
+    lo.ResetEventNames()
+    expand_before := lo.ExpandErrors()
+    eerr := lo.ExpandPage(lgr, pack, table, a, prog, "")
+    mut ev_names := lo.HoistEventHandlers(a, prog)
+    _ws := lo.PrepareWebState(lgr, pack, a, prog, sf.path)
+    _vw := lo.PrepareViews(lgr, pack, table, a, prog, sf.path)
+    mut s := sm.New(lgr, sf.path, lp.Code(pack))
+    sm.SetCc(s, table)
+    each wid in lo.WebStateIds():
+        s.layout_ids.Push(wid)
+    end
+    sm.SetServerMode(1)
+    sm.SetServerStatic(lo.PageServerSetting(a, prog) ? 1 : 0)
+    sema_ok := sm.Run(s, a, prog)
+    if not sema_ok or eerr > 0 or lo.ExpandErrors() > expand_before:
+        out.diag = source_page_failure()
+        ev_names.Free()
+        sm.Free(s)
+        at.FreeAst(a)
+        ret out
+    end
+
+    lb := lo.FindLayout(a, prog)
+    if lb == 0:
+        lg.SetCapture(false)
+        out.no_page = true
+        ev_names.Free()
+        sm.Free(s)
+        at.FreeAst(a)
+        ret out
+    end
+
+    lo.LocalizeNames(a, lb)
+    mut diag := dg.New(lgr, lg.PH_CODEGEN)
+    mut r := lo.Generate(lgr, diag, sf.path, a, lb, false, lp.Code(pack))
+    r.css += lo.WebStateCss()
+    mut ok := not dg.HasErrors(diag)
+    if ok and (ev_names.Len() > 0 or lo.WebStateCount() > 0):
+        mut ev_ok := true
+        ev_js := collect_event_js(lgr, opt, a, s, prog, sf.path, false, ev_names, ev_ok)
+        ok = ev_ok
+        if str.Len(ev_js) > 0:
+            r.js = str.Len(r.js) > 0 ? r.js + "\n" + ev_js : ev_js
+        end
+        if ok:
+            prerender_page(lgr, a, s, prog, r.html)
+            if prerender_any():
+                r.html = prerender_fill(r.html, "/")
+            end
+        end
+    end
+    if ok:
+        lg.SetCapture(false)
+        out.ok = true
+        out.result = r
+    else dg.HasErrors(diag):
+        lg.SetCapture(false)
+        out.diag = dg.RenderAll(
+            diag, sf.text, sf.len, opt.diag_style, opt.diag_format, false
+        )
+    else:
+        out.diag = source_page_failure()
+    end
+    dg.Free(diag)
+    ev_names.Free()
+    sm.Free(s)
+    at.FreeAst(a)
+    ret out
+end

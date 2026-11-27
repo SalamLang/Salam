@@ -30,6 +30,12 @@ const UD_LOOP := 2
 
 const UD_MAX_SIBLINGS := 100
 
+mut g_ud_dir := ""
+mut g_ud_ready := false
+mut g_ud_files := Vector {} as Vector<str>
+mut g_ud_starts := Vector {} as Vector<int>
+mut g_ud_lines := Vector {} as Vector<str>
+
 struct UdDecl:
     pub node: int = 0
     pub scope: int = 0
@@ -256,17 +262,69 @@ func ud_declares(line: str, name: str, func_only: bool): bool:
     ret keyed or str.StartsWith(after, ":")
 end
 
-func ud_loaded_files(s &: Sema, a &: at.Ast, out &: Vector<str>):
-    out.Push(pth.PathBase(s.file))
+func ud_is_file(path: str, entry: str): bool:
+    if str.Equals(path, entry):
+        ret true
+    end
+    cut := str.Len(path) - str.Len(entry) - 1
+    if cut < 0 or not str.EndsWith(path, entry):
+        ret false
+    end
+    ret byte_at(path, cut) == 47 or byte_at(path, cut) == 92
+end
+
+func ud_is_loaded(s &: Sema, a &: at.Ast, entry: str): bool:
+    if ud_is_file(s.file, entry):
+        ret true
+    end
     if s.program == 0:
-        ret
+        ret false
     end
     top := at.Get(a, s.program).list
     repeat top.Len() in i:
-        file := at.Get(a, top.Get(i)).src_file
-        if str.Len(file) > 0:
-            out.Push(pth.PathBase(file))
+        if ud_is_file(at.Get(a, top.Get(i)).src_file, entry):
+            ret true
         end
+    end
+    ret false
+end
+
+func ud_may_declare(line: str): bool:
+    if str.Len(line) == 0 or byte_at(line, 0) == 32 or byte_at(line, 0) == 9:
+        ret false
+    end
+    marks := [":", "func ", "تابع ", "const ", "ثابت ", "mut ", "ناپایا "]
+    each m in marks:
+        if str.Contains(line, m):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ud_index_folder(folder: str):
+    if g_ud_ready and str.Equals(g_ud_dir, folder):
+        ret
+    end
+    SemaUndefinedReset()
+    g_ud_ready = true
+    g_ud_dir = folder
+    mut entries := os.ListDir(folder)
+    defer entries.Free()
+    sort_entries(entries)
+    each entry in entries:
+        if not str.EndsWith(entry, ".salam") or g_ud_files.Len() >= UD_MAX_SIBLINGS:
+            continue
+        end
+        g_ud_files.Push(entry)
+        g_ud_starts.Push(g_ud_lines.Len())
+        lines := str.Split(io.ReadFile(pth.PathJoin(folder, entry)), "\n")
+        each line in lines:
+            if ud_may_declare(line):
+                g_ud_lines.Push(line)
+            end
+        end
+        lines.Free()
     end
 end
 
@@ -278,37 +336,23 @@ func ud_sibling_file(s &: Sema, a &: at.Ast, name: str, func_only: bool): str:
     if not os.Exists(s.file):
         ret ""
     end
-    mut loaded := Vector {} as Vector<str>
-    defer loaded.Free()
-    ud_loaded_files(s, a, loaded)
-    mut entries := os.ListDir(folder)
-    defer entries.Free()
-    mut best := ""
-    mut seen := 0
-    each entry in entries:
-        if not str.EndsWith(entry, ".salam") or seen >= UD_MAX_SIBLINGS:
-            continue
-        end
-        mut skip := false
-        each done in loaded:
-            if str.Equals(done, entry):
-                skip = true
+    ud_index_folder(folder)
+    repeat g_ud_files.Len() in i:
+        stop := i + 1 < g_ud_files.Len() ? g_ud_starts.Get(i + 1) : g_ud_lines.Len()
+        mut k := g_ud_starts.Get(i)
+        until k < stop:
+            line := g_ud_lines.Get(k)
+            if str.Contains(line, name) and ud_declares(line, name, func_only):
+                entry := g_ud_files.Get(i)
+                if ud_is_loaded(s, a, entry):
+                    break
+                end
+                ret entry
             end
+            k++
         end
-        if skip or (str.Len(best) > 0 and str.Compare(entry, best) >= 0):
-            continue
-        end
-        seen++
-        lines := str.Split(io.ReadFile(pth.PathJoin(folder, entry)), "\n")
-        each line in lines:
-            if ud_declares(line, name, func_only):
-                best = entry
-                break
-            end
-        end
-        lines.Free()
     end
-    ret best
+    ret ""
 end
 
 func ud_not_included(s &: Sema, name: str, file: str): str:
@@ -563,4 +607,12 @@ func report_undefined_function(s &: Sema, a &: at.Ast, callee: int, name: str, s
     else:
         serr(s, 12, sp, msg + tail)
     end
+end
+
+pub func SemaUndefinedReset():
+    g_ud_ready = false
+    g_ud_dir = ""
+    g_ud_files.Clear()
+    g_ud_starts.Clear()
+    g_ud_lines.Clear()
 end

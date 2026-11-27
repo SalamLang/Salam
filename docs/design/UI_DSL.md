@@ -438,22 +438,24 @@ the `Clock` instance.
 
 ### R8. Keyed lists keep instance state across moves
 
-A row is matched by its `key` (or `id`) and its site, so inserting, removing
+A row is matched by its `key` and its site, so inserting, removing
 or reordering rows moves each instance's variables, focus and typed text with
-its row, and only new keys run `mount`, only removed keys run `unmount`. A
+its row, and only new keys run `mount`, only removed keys run `unmount`. Every
+row of an `each` must write a key that uses the loop variable or index, on the
+row element or on the component use (E292). A
 duplicate key among siblings is a compile error when it is a literal and a
 run time warning otherwise (E-number to be assigned).
 
 ```salam
 component Row(name: str):
     hits := 0
-    item: key = name content = name + " " + hits click = (): hits++ end end
+    item: content = name + " " + hits click = (): hits++ end end
 end
 
 page:
     list:
         each it in items:
-            Row: name = it end
+            Row: key = it name = it end
         end
     end
 end

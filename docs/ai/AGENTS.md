@@ -769,6 +769,26 @@ header/title/content/footer`, `badge`, `alert`, `input`, `switch`, `select`,
 Docs: `docs/design/DESIGN_SYSTEMS.md`, `NATIVE_UI.md`, `MOBILE.md`, SKILL.md
 section 9.
 
+Every row that an `each` renders in a `page:` or `component` needs `key = ...`
+(Persian `کلید`) built from the loop's item or index: on the row element or on
+the component use, in every `if`/`else` branch, for every row of a turn, and in
+nested loops for their own variable. A constant, `id` or `data-key` does not
+count (E292). `salam check --fix` adds `key = <index>`. `each` in code needs no
+key, and `each` is the only loop a page body allows.
+
+```salam
+page:
+    list:
+        each i, name in names:
+            item:
+                key = i
+                content = name
+            end
+        end
+    end
+end
+```
+
 ## Changing the standard library
 
 If the task adds to `std/`, the change is not done until every public symbol

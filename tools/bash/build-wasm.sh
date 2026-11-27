@@ -90,7 +90,7 @@ HASH=$(
             printf '%s\n' "${f#"$STD_MIN"}"
             cat "$f"
         done
-        cat "$0"
+        cat "$0" tools/js/editor-wasm-recycle.js
     } | $HASHER | cut -c1-10
 )
 [ -n "$HASH" ] || {
@@ -114,6 +114,7 @@ BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
 # shellcheck disable=SC2086
 "$EMCC" -O2 -I.salam-build $SRCS \
     -o "$BUNDLE.js" \
+    --post-js tools/js/editor-wasm-recycle.js \
     --preload-file "$STD_MIN"@/std \
     -s MODULARIZE=0 \
     -s ENVIRONMENT=web,worker,node \
@@ -123,7 +124,7 @@ BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
     -s EXIT_RUNTIME=0 \
     -s IGNORE_MISSING_MAIN=1 \
     -s FILESYSTEM=1 \
-    -s EXPORTED_FUNCTIONS="['_main','_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_translate','_salam_web_last_failed','_salam_web_version','_malloc','_free']" \
+    -s EXPORTED_FUNCTIONS="['_main','_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_translate','_salam_web_last_failed','_salam_web_version','_sbrk','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $BUNDLE.js (+ .wasm, .data)"
 "$SALAM" build "$OUT_DIR/page.salam" --platform=web --output="$OUT_DIR/index.html"

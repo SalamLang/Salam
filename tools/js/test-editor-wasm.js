@@ -117,6 +117,14 @@ global.Module.onRuntimeInitialized = () => {
         out,
       );
     }
+    const cards =
+      'page:\n    title = "Cards"\n    design = "shadcn"\n    card:\n        card header:\n            card title: content = "Title" end\n        end\n    end\nend\n';
+    const first = lay(cards, "en");
+    let same = Module._salam_web_last_failed() === 0;
+    for (let i = 0; same && i < 80; i++) {
+      same = lay(cards, "en") === first;
+    }
+    check("many compiles stay within the memory limit", same, first);
     times.sort((a, b) => a - b);
     console.log(
       "median call " +

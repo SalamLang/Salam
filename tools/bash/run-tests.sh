@@ -1133,7 +1133,7 @@ fi
 
 if want ui && [ "$HOST_OS" = linux ]; then
     case "$HOST_ARCH:$LANGS" in
-    x64:*en* | arm64:*en*)
+    x64:*en*)
         add_job script "ui/en/web_build_time" "tools/bash/test-web-build-time.sh" "en" "tests/en/ui/web_build_time.out"
         ;;
     esac

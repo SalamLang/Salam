@@ -74,6 +74,19 @@ inclusive environment for building high-performance software.
 
 The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
 
+**Linux and macOS: building programs needs the system C toolchain** (a linker
+and the C library development files). Minimal systems and slim containers often
+lack it:
+
+| System          | Install                       |
+| --------------- | ----------------------------- |
+| Debian, Ubuntu  | `apt install gcc libc6-dev`   |
+| Fedora, RHEL    | `dnf install gcc glibc-devel` |
+| Arch Linux      | `pacman -S gcc`               |
+| openSUSE        | `zypper install gcc glibc-devel` |
+| Alpine          | `apk add build-base`          |
+| macOS           | `xcode-select --install`      |
+
 Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.7.1`.
 The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--os NAME`,
 `--arch NAME`, `--platform NAME`, `--no-modify-path`, `--no-color` and `--help`;

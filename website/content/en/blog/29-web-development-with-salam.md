@@ -190,7 +190,7 @@ It builds to `<html lang="fa" dir="rtl">` with the same generated classes. Logic
 
 ## Components and shared parts {#components}
 
-A `component` is defined once and used like a new element. Its parameters are set like attributes, and a `content: end` line inside it marks a slot where whatever you nest at the use site lands. To share components across pages, put them in their own file and write `include = "parts.salam"` at the top of the page.
+A `component` is defined once and used like a new element. Its parameters are set like attributes, and a `content: end` line inside it marks a slot where whatever you nest at the use site lands. To share components across pages, put them in their own file, mark them `pub component`, and write the line `include = "parts.salam"` inside the `page:` block.
 
 Components keep the generated CSS small, because two uses with identical styles share a class. They also bring one rule worth knowing: if two elements carry the same `class` but different styles, the compiler stops with error E136 rather than letting one silently override the other. Leave `class` off styled elements.
 

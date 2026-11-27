@@ -2577,10 +2577,15 @@ written gets a warning. The compiler marks every write and re-runs only the
 scopes that read what changed: a component instance re-runs as a whole,
 outside components an element, `if` or `each` that reads state re-runs
 alone, a child re-runs when only its parameters change, and a handler that
-changes nothing costs no re-render. Inside `each`, give the row a
-`key = item.id` (Persian `کلید`, or an `id`) and each component instance
-keeps its variables when rows are inserted, removed or reordered; without
-one, instances follow the position. Writes it cannot see (inside another
+changes nothing costs no re-render. Inside `each`, give the row a key
+(`key =`, Persian `کلید`, or an `id`) and each component instance keeps its
+variables when rows are inserted, removed or reordered; without one,
+instances follow the position. The key is an attribute of the row's first
+element: the first element inside the component
+(`component Row(name: str): item: key = name content = name end end`) or an
+element that wraps the use (`item: key = n Row: name = n end end`). A use of a
+component takes only the component's parameters, so a `key =` line under `Row:`
+is rejected (`component 'Row' has no parameter 'key'`). Writes it cannot see (inside another
 package, through a pointer or a second name for a Vector) need
 `ui.Invalidate()`; `ui.ScopeRuns()` counts re-runs for tests. A written
 variable needs a visible type: a literal, a typed parameter or
@@ -2596,28 +2601,40 @@ that.
 
 A `pub component` with an English name must be PascalCase (`MyCard`: capital first letter, no `_`), else E290; Persian names are exempt.
 
+A component without parameters has no parentheses: `component App:` (Persian
+`بخش برنامه:`). With parameters it is `component App(a: str):`. Empty
+parentheses, `component App():`, are error E270. Uses stay `App:`.
+
 **Page projects: routes, rendering, server funcs.** When the entry file is
 `main.salam`, the `pages/` folder next to it is the route table, one file per
 route and exactly one `pub component` in each (E282). `index.salam` is the
 folder, `name.salam` a segment, `[id].salam` the parameter `id`, `[[id]].salam`
 an optional one, `[...rest].salam` the rest of the path, `_404.salam` the
 fallback and `_layout.salam` a component with an `Outlet` that wraps its
-folder and below (E283 without one). Settings at the top of the component
-body: `title`, `guard` (a false guard skips the route, a layout's guard covers
-its folder) and `route = "/..."` to replace the path from the filename
-(Persian `عنوان`, `نگهبان`, `مسیر`). There is no `routes:` block and no
-`redirect` setting. Navigate with `Link: to = "/p"` and in code with
-`page.route.GoTo(path)`, `Redirect`, `Back`, `Forward`; read `page.route.path`,
-`page.route.Param("id")`, `page.route.Query("q")` (Persian `صفحه.مسیر.برو`,
-`هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`). File errors:
-E280 same route twice, E281 `[id]` without that parameter, E284 bad filename.
-Page project layout: `components/` holds the `pub` components (every `.salam`
-file in it, recursively, imports its `pub components` by name, no `include`),
-`pages/` holds the routes, and everything else is included explicitly with
-`include = "path.salam"`. Without a `components/` folder nothing is imported by
-name. A `pub component` name used outside that rule is the unknown element
-error E111 with a hint to move it to `components/`. Two `pub` components with
-one name across `components/`, `main.salam` and `pages/` are E291.
+folder and below (E283 without one). A guard is the first line of the component
+body, `page.Guard(condition)` (a false guard skips the route, a layout's guard
+covers its folder; `guard = x` is E268). After it come the settings `title` and
+`route = "/..."`, which replaces the path from the filename (Persian
+`صفحه.نگهبان`, `عنوان`, `مسیر`); a layout takes only the guard. There is no
+`routes:` block and no `redirect` setting. Navigate with `Link: to = "/p"` and
+in code with `page.route.GoTo(path)`, `Redirect`, `Back`, `Forward`; read
+`page.route.path`, `page.route.Param("id")`, `page.route.Query("q")` (Persian
+`صفحه.مسیر.برو`, `هدایت`, `عقب`, `جلو`, `نشانی`, `پارامتر`, `مقدار پرسمان`).
+File errors: E280 same route twice, E281 `[id]` without that parameter, E284
+bad filename. Page project layout: `components/` holds the `pub` components
+(every `.salam` file in it, recursively, imports its `pub components` by name,
+no `include`), `pages/` holds the routes, and everything else is included
+explicitly, in one of two ways. A component file elsewhere needs the line
+`include = "ui/price_card.salam"` inside the `page:` block or a component
+body (Persian `بگنجان`; the path is relative to that file). Functions come from a top-level
+`include "lib/format.salam"` in `main.salam`, without `=` (Persian `فراخوانی`):
+the file starts with `package format` (the filename), only its `pub` names are
+visible, and they are used as `format.Money(n)`. The `=` form does not load
+functions and the top-level form does not import components. Without a
+`components/` folder nothing is imported by name. A `pub component` name used
+outside that rule is the unknown element error E111 with a hint to move it to
+`components/`. Two `pub` components with one name across `components/`,
+`main.salam` and `pages/` are E291.
 
 ```
 main.salam
@@ -2625,7 +2642,8 @@ pages/index.salam         pub component Home
 pages/product/[id].salam  pub component Product(id: int)
 components/card.salam     pub component Card(title)
 components/shop/badge.salam
-lib/format.salam          include = "lib/format.salam" to use it
+ui/price_card.salam       page: include = "ui/price_card.salam" end
+lib/format.salam          include "lib/format.salam" in main.salam
 ```
 
 `salam build --platform=web --ssr[=DIR]` writes `DIR/server` (a native program) and

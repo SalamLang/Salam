@@ -100,16 +100,17 @@ built-in linker and with lld and runs both sets on a `windows-11-arm`
 runner; all of them pass on that hardware.
 
 The compiler builds for Windows on Arm too, and that build reproduces the
-reference IR on the runner. `tools/bash/package-winarm.sh` turns it into a
-self-contained package (about 30 MB): `salam.exe`, `std`, and the part of
-llvm-mingw's aarch64 runtime the built-in linker needs under
+reference IR on the runner. `tools/bash/package-winarm.sh` turns a
+`salam.exe` into a self-contained package: `salam.exe`, `std`, and the part of
+llvm-mingw's aarch64 runtime the linkers need under
 `sysroots/aarch64-w64-mingw32/lib`, which the compiler finds next to
 itself. On a Windows on Arm host with no `--backend`, the compiler uses the
-native backend, since neither LLVM nor tcc ship for that host. The gate unpacks
-the package on the runner and builds and runs the `llvm` tests with it
+native backend. The gate packages a `salam.exe` built by the native backend,
+unpacks it on the runner and builds and runs the `llvm` tests with it
 (`tools/bash/native-host-check.sh`), with nothing else installed. Releases
-ship it as `salam-<version>-windows-arm64.zip` (and `.tar.gz`), smoke-tested
-on a `windows-11-arm` runner before publishing.
+ship a `salam.exe` with LLVM and LLD embedded (see
+[PLATFORMS.md](PLATFORMS.md)) as `salam-<version>-windows-arm64.zip` (and
+`.tar.gz`), smoke-tested on a `windows-11-arm` runner before publishing.
 
 On Linux, AArch64 and RISC-V objects carry `.eh_frame` (`ng_cfi.salam`).
 The encoders record CFI events as they write each prologue and epilogue: the

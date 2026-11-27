@@ -115,6 +115,50 @@ func build_opt_level(opt &: Dr): int:
     ret lv.LV_OPT_O2
 end
 
+func llvm_link_with_fallback(lgr: lg.Logger, opt &: Dr, llpath: str, o &: lv.Options): int:
+    mut held := ""
+    mut rc := lv.NativeRunHeld(lgr, llpath, o, held)
+    if rc != 0 and o.output_mode == lv.LV_OUT_EXEC and str.Len(opt.lib_kind) == 0 and not str.Equals(
+        linker_mode(opt), "builtin"
+    ) and not str.Equals(linker_mode(opt), "system"):
+        final_exe := o.output_file
+        g_ll_tmp_seq++
+        tobj := os.TempDir() + "/salam-obj-" + driver_pid() + "-" + time.NowMicros() + "-" +
+            g_ll_tmp_seq + ".o"
+        prev_mode := o.output_mode
+        o.output_mode = lv.LV_OUT_OBJ
+        o.output_file = tobj
+        mut obj_err := ""
+        orc := lv.NativeRunHeld(lgr, llpath, o, obj_err)
+        o.output_mode = prev_mode
+        o.output_file = final_exe
+        if orc == 0:
+            if builtin_link_mode(lgr, tobj, final_exe, opt.llvm_target, o, "auto") == 0:
+                if str.Len(held) > 0 and host_linker_present():
+                    lg.Log(
+                        lgr,
+                        lg.PH_DRIVER,
+                        lg.LOG_WARN,
+                        i18.Tr("the system linker failed; linked with the built-in linker instead")
+                    )
+                end
+                rc = 0
+            end
+        end
+        if not opt.keep_temp:
+            _rmo := os.Remove(tobj)
+        end
+        if rc != 0 and str.Len(opt.llvm_target) == 0 and host_toolchain_gap(o):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, held)
+            ret rc
+        end
+    end
+    if rc != 0 and str.Len(held) > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, held)
+    end
+    ret rc
+end
+
 pub func Llvm(opt &: Dr): int:
     mut lgr := lg.New(opt.log_level, resolve_color(opt.color))
     pack := lp.Load(opt.lang)
@@ -471,36 +515,7 @@ pub func Llvm(opt &: Dr): int:
                 _rmo := os.Remove(tobj)
             end
         else:
-            rc = lv.NativeRun(lgr, llpath, o)
-            if rc != 0 and o.output_mode == lv.LV_OUT_EXEC and not is_lib and not str.Equals(
-                linker_mode(opt), "builtin"
-            ) and not str.Equals(linker_mode(opt), "system"):
-                final_exe := o.output_file
-                g_ll_tmp_seq++
-                tobj := os.TempDir() + "/salam-obj-" + driver_pid() + "-" + time.NowMicros() + "-" +
-                    g_ll_tmp_seq + ".o"
-                prev_mode := o.output_mode
-                o.output_mode = lv.LV_OUT_OBJ
-                o.output_file = tobj
-                orc := lv.NativeRun(lgr, llpath, o)
-                o.output_mode = prev_mode
-                o.output_file = final_exe
-                if orc == 0:
-                    lg.Log(
-                        lgr,
-                        lg.PH_DRIVER,
-                        lg.LOG_WARN,
-                        "LLVM/system linking failed, trying built-in linker fallback"
-                    )
-                    brc := builtin_link_mode(lgr, tobj, final_exe, opt.llvm_target, o, "builtin")
-                    if brc == 0:
-                        rc = 0
-                    end
-                end
-                if not opt.keep_temp:
-                    _rmo2 := os.Remove(tobj)
-                end
-            end
+            rc = llvm_link_with_fallback(lgr, opt, llpath, o)
         end
         if opt.keep_temp:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)

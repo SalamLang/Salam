@@ -323,6 +323,104 @@ server.listen(0, "127.0.0.1", async () => {
     }
     await shot("layout-again");
 
+    const pages = {
+      en: 'page:\n    title = "Tabs"\n    style: media = "screen" content = "p { margin: 0 }" end\n    style: content = ".x { color: red }" end\n    script: content = "window.tabs = 1" end\n    paragraph: content = "Hello tabs" end\nend\n',
+      fa: 'صفحه:\n    عنوان = "زبانه"\n    پاراگراف: محتوا = "سلام دنیا" پایان\nپایان\n',
+    };
+    for (const [lang, src] of Object.entries(pages)) {
+      await page.click('#lang-seg [data-value="' + lang + '"]');
+      await setCode(page, src);
+      await page.click("#run");
+      await settled();
+      for (const tab of ["html", "css", "js", "run"]) {
+        const got = await page.evaluate((t) => {
+          document.querySelector('#view-seg [data-value="' + t + '"]').click();
+          return {
+            status: document.querySelector("#status").className,
+            text: document.querySelector("#output").textContent,
+          };
+        }, tab);
+        check(
+          "the " + lang + " " + tab + " tab is ready after one run",
+          /ok/.test(got.status),
+          got.status,
+        );
+        if (tab === "run") continue;
+        const want = await page.evaluate(
+          ([s, l, t]) =>
+            window.Module.cwrap("salam_web_emit", "string", [
+              "string",
+              "string",
+              "string",
+            ])(s, l, t),
+          [src, lang, tab],
+        );
+        check(
+          "the " + lang + " " + tab + " tab matches the compiler",
+          got.text === want,
+          got.text.length + " vs " + want.length + ": " + got.text,
+        );
+      }
+    }
+    await page.click('#lang-seg [data-value="en"]');
+    await setCode(page, pages.en);
+    await page.click("#run");
+    await settled();
+    await page.click('#view-seg [data-value="run"]');
+
+    check(
+      "programs are compiled in a worker",
+      page.workers().length === 1,
+      page.workers().length,
+    );
+    await page.click('#mode-seg [data-value="app"]');
+    await settled();
+    await page.click("#autorun");
+    const printed = (text) =>
+      page
+        .waitForFunction(
+          (t) => document.querySelector("#output").textContent.includes(t),
+          text,
+          { timeout: 30000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+    for (const word of ["first", "second", "third"]) {
+      await setCode(page, 'func main:\n    println "' + word + '"\n end\n');
+    }
+    check(
+      "typing ends on the output of the last edit",
+      await printed("third"),
+      await page.textContent("#output"),
+    );
+    await setCode(
+      page,
+      "func main:\n    mut n := 0\n    until true:\n        n++\n    end\n    println n\nend\n",
+    );
+    await page.waitForFunction(
+      () => /busy/.test(document.querySelector("#status").className),
+      null,
+      { timeout: 30000 },
+    );
+    const started = Date.now();
+    await page.evaluate(() => document.querySelector("#code").focus());
+    check(
+      "the page answers while a program is running",
+      Date.now() - started < 1000,
+      Date.now() - started,
+    );
+    await setCode(page, 'func main:\n    println "after the loop"\nend\n');
+    check(
+      "an edit made during a run is compiled afterwards",
+      await printed("after the loop"),
+      await page.textContent("#output"),
+    );
+    await page.click("#autorun");
+    await page.click('#mode-seg [data-value="layout"]');
+    await page.click('#view-seg [data-value="run"]');
+
     const g = await page.$eval("#gutter", (e) => {
       const r = e.getBoundingClientRect();
       return { x: r.x + r.width / 2, y: r.y + r.height / 2 };

@@ -6,6 +6,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 
 ### Security
 
+- A string containing `</script>` no longer breaks out of a built web page. `</` and `<!` are escaped in emitted JavaScript, styles of a server rendered page cannot close their element, runtime `url` values of components such as the sidebar menu button and command item links refuse script addresses, chart colours are escaped, and the documentation generator escapes its title and data (#4320).
 - sshd and sftpd no longer fall back to a built-in host key derived from a public constant. A missing or unreadable `host_key_file` stops `Listen`; with no file the server makes a random key for that run. OpenSSH ed25519 keys now load (#3739).
 - SFTP and FTP clients can no longer write or create links outside the root; the jail check fails closed, symlink targets are resolved and checked, Windows backslashes are treated as separators (#3742).
 - `net/http` no longer crashes on a very large `Content-Length`, and `GET`, `HEAD` and `OPTIONS` bodies are read instead of being parsed as the next request. Header lines with whitespace before the colon and folded lines get 400 (#3737, #3743).
@@ -15,6 +16,9 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 
 ### Behaviour changes
 
+- A value filled at run time into `href`, `src`, `action`, `formaction` or `poster` that starts with `javascript:`, `vbscript:` or `data:` is written as `#`. A page that sets a `data:` address at run time no longer gets that resource (#4320).
+- Every row that an `each` renders in a `page:` or a `component` needs a key that uses the loop's item or index, otherwise it is error E292, on every target. Write `key = i` or `key = item.id` (Persian `کلید`) on the row element or, newly accepted inside a loop, on the component use; every `if`/`else` branch and every row of a turn needs one, and a nested `each` needs keys of its own. A constant, `id`, `data-key` or a key on an element nested inside the row no longer identifies rows, and warning W138 is gone. To migrate, run `salam check --fix` (it adds `key = <index>`, adding an index to the header when there is none, which keeps the old by-position behaviour), then key rows that move by an identifier of the item. A project that also builds with 0.7.2 or older must put the key on the row's root element, because those versions reject `key` on a component use (#4331).
+- Empty parentheses on a component declaration are error E270. Write `component App:` (Persian `بخش برنامه:`) when there are no parameters; `component App(a: str):` is unchanged, and so are uses such as `App:` and function declarations. To migrate, delete the `()`.
 - The commands `salam js` (and `emit-js`), `salam web`, `salam page build` and `salam app` are removed. Use `salam build` and `salam run` with `--platform`: `salam build a.salam --platform=js`, `salam build [page|dir] --platform=web [--inline] [--ssr[=DIR]]`, `salam build --platform=android|ios app.salam -o DIR -- [app options]` and `salam run --platform=android|ios` to install and start it. `salam page` alone (the page REPL) stays.
 - A page writes names in one language. A Persian page with an English element, attribute, style property or style keyword (`button`, `title`, `layout = "row"`) is error E301, E302 or E303, and an English page with a Persian one is the same error; each carries `help: write 'X'` and a fix for `salam check --fix`. Colours, numbers, units, IDs, content and `data x` / `aria x` attributes are not checked.
 - No design system is applied by default. A page gets the shadcn design only when you ask: `design = "shadcn"` as the first line of the `page:` block (Persian code: `طراحی = "شد سی ان"`), or a project default `design = "shadcn"` in `design.toml` or the `[design]` table of `salam.toml`. The page wins over the project file; with neither, components keep their behaviour with a minimal look, the same as `design = "none"`. The shadcn design brings theme tokens (light, dark, auto; palettes), restyled `button`, `input`, `select`, `table`, `dialog` and more, plus new elements (card, badge, alert, tabs, accordion, sheet, popover, tooltip, dropdown menu, switch, toast, command, calendar, carousel, sidebar, chart and others) with their events; `theme`, `palette` and `design tokens` customize it. To keep the old look of an existing page, add the setting. See `docs/design/DESIGN_SYSTEMS.md` (#4066, #4068, #4081).
@@ -31,6 +35,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 - Expressions taller than 512 nodes and if/else chains of more than 256 arms are errors instead of crashing the compiler (#3750).
 - `salam test` reports a test that crashes as FAIL, runs the rest of the file, and exits non-zero (#3740, #3763).
 - A program killed by a fatal signal keeps the output it had buffered, names the signal, and still dies by that signal (#3756).
+- On Windows a `page:` program built with `--ui=native` is a GUI program and opens no console window; build with `--subsystem=console` to keep one. `salam run` is unchanged (#4304).
 
 ### Fixed
 

@@ -14,8 +14,8 @@ produces binaries for them.
   - The **LLVM backend** (`--backend=llvm`, and the default when the compiler
     has LLVM linked in) is pointer-width aware and emits 32-bit IR for a
     32-bit `--target` (see below). The Linux i686 and armhf release compilers
-    do not have LLVM linked in (their release readme says so), so there the
-    default is the C backend and the built-in linker.
+    have LLVM linked in. They cannot run `salam llvm --jit`, because they are
+    statically linked.
   - The **native backend** (`--backend=native`) writes i686 and 32-bit ARM
     machine code itself, as well as x86-64, AArch64 and RISC-V 64.
 
@@ -127,24 +127,27 @@ the RISC-V `virt` board in `tests/kernel/riscv64/`.
 
 > GitHub Actions workflow: `.github/workflows/compiler-release.yml`
 
-| Job                   | Runner                                                | Release files                                     | Backends in the shipped compiler                                                                   |
-| --------------------- | ----------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `build-linux`         | `ubuntu-24.04`                                        | `linux-x86_64` archives, `salam-linux`            | Embedded static LLVM + LLD, with musl, mingw and wasm32-wasi sysroots for cross builds; C backend  |
-| `build-linux-musl`    | `ubuntu-24.04`                                        | `linux-x86_64-musl` archives                      | C backend only: fully static against musl, no embedded LLVM, so no cross builds and no JIT         |
-| `build-macos`         | `macos-latest` (arm64)                                | `macos-arm64` archives, `salam-mac`               | Embedded static LLVM; links with the system (Xcode) toolchain                                      |
-| `build-windows`       | `windows-2022`, `windows-2025`, `windows-2025-vs2026` | `windows-x86_64` archives, `salam-windows.exe`    | Embedded static LLVM + LLD and sysroots, plus a bundled tcc for the C backend                      |
-| `build-windows-i686`  | `ubuntu-24.04`, cross-compiled with llvm-mingw        | `windows-i686` archives, `salam-windows-i686.exe` | Embedded LLVM + LLD when that cross build succeeds, otherwise built without it; bundled 32-bit tcc |
-| `build-windows-arm64` | `ubuntu-24.04`, cross-compiled                        | `windows-arm64` archives                          | Native backend with its built-in linker (no LLVM, no tcc)                                          |
-| `build-linux-i686`    | `ubuntu-24.04`, `i386/debian` container               | `linux-i686` archives, `salam-linux-i686`         | Embedded LLVM + LLD                                                                                |
-| `build-linux-armhf`   | `ubuntu-24.04`, `arm32v7` container under QEMU        | `linux-armhf` archives, `salam-linux-armhf`       | Embedded LLVM + LLD                                                                                |
-| `build-linux-aarch64` | `ubuntu-24.04-arm`                                    | `linux-aarch64` archives, `salam-linux-aarch64`   | Embedded LLVM + LLD                                                                                |
+| Job                   | Runner                                                   | Release files                                     | Backends in the shipped compiler                                                                   |
+| --------------------- | -------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `build-linux`         | `ubuntu-24.04`                                           | `linux-x86_64` archives, `salam-linux`            | Embedded static LLVM + LLD, with musl, mingw and wasm32-wasi sysroots for cross builds; C backend  |
+| `build-linux-musl`    | `ubuntu-24.04`                                           | `linux-x86_64-musl` archives                      | C backend only: fully static against musl, no embedded LLVM, so no cross builds and no JIT         |
+| `build-macos`         | `macos-latest` (arm64)                                   | `macos-arm64` archives, `salam-mac`               | Embedded static LLVM; links with the system (Xcode) toolchain                                      |
+| `build-macos-intel`   | `macos-15-intel`                                         | `macos-x86_64` archives, `salam-macos-intel`      | Embedded static LLVM; links with the system (Xcode) toolchain                                      |
+| `build-windows`       | `windows-2022`, `windows-2025`, `windows-2025-vs2026`    | `windows-x86_64` archives, `salam-windows.exe`    | Embedded static LLVM + LLD and sysroots, plus a bundled tcc for the C backend                      |
+| `build-windows-i686`  | `ubuntu-24.04`, cross-compiled with llvm-mingw           | `windows-i686` archives, `salam-windows-i686.exe` | Embedded LLVM + LLD when that cross build succeeds, otherwise built without it; bundled 32-bit tcc |
+| `build-windows-arm64` | `ubuntu-24.04`, cross-compiled with llvm-mingw           | `windows-arm64` archives                          | Embedded static LLVM + LLD; native backend by default (no tcc)                                     |
+| `build-linux-i686`    | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-i686` archives, `salam-linux-i686`         | Embedded static LLVM + LLD and sysroots; statically linked, so no JIT                              |
+| `build-linux-armhf`   | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-armhf` archives, `salam-linux-armhf`       | Embedded static LLVM + LLD and sysroots; statically linked, so no JIT                              |
+| `build-linux-aarch64` | `ubuntu-24.04-arm`                                       | `linux-aarch64` archives, `salam-linux-aarch64`   | Embedded LLVM + LLD                                                                                |
 
 "Archives" means `salam-<version>-<name>.zip` and `.tar.gz`, each with
 `std/` next to the binary. Only `build-windows-2025-vs2026` publishes the
-Windows x86-64 files; the other two Windows runners test. macOS ships for
-Apple silicon only; there is no Intel macOS release build. The Windows on
+Windows x86-64 files; the other two Windows runners test. The Intel macOS
+compiler is built on an Intel runner, from a seed cross-compiled on Linux
+(`build-macos-intel-seed`). The Windows on
 Arm bundle is smoke-tested on a `windows-11-arm` runner
-(`smoke-windows-arm64`) before the release.
+(`smoke-windows-arm64`), and the release takes it from that job, so a bundle
+that fails there is not published.
 
 Every job except `build-linux`, `build-macos` and `build-windows` is
 `continue-on-error`, and the release step attaches their files only when
@@ -159,19 +162,32 @@ The release also carries the standard library on its own
 
 ### ❓ Which jobs embed LLVM
 
-- **Linux i686, armhf and aarch64** link LLVM 22 and LLD from packages
-  built for that architecture (Debian sid's `llvm-22-dev` in an `i386` or
-  `arm32v7` container, apt.llvm.org on the arm64 runner), so all three
-  embed it.
+- **Linux aarch64** links LLVM 22 and LLD from the apt.llvm.org packages on
+  the arm64 runner.
+- **Linux i686 and armhf** are cross-compiled on x86-64. The job builds a
+  static LLVM + LLD from source with a musl GCC toolchain
+  (`tools/bash/build-llvm-musl.sh`, cached), then links it into the compiler
+  this run's `build-linux` cross-compiles (`tools/bash/build-linux32.sh`).
+  The result is a static binary that carries the sysroots for its own musl
+  target, `x86_64-linux-musl`, `x86_64-w64-windows-gnu` and `wasm32-wasi`.
+  A native build links with the system gcc or clang, and `--target=` builds
+  for those four need nothing installed. `salam llvm --jit` does not work,
+  because a static musl binary cannot look up symbols at runtime. armhf needs
+  ARMv6 with a hardware FPU. The job fails, and ships nothing, if LLVM cannot
+  be built or fails its smoke tests (`tools/bash/smoke-linux32.sh`); armhf
+  runs them under QEMU.
 - **Linux musl** is a fully static C-backend build, so it runs on any x86-64
   Linux, including ones with an older glibc than the flagship build needs.
 - **Windows i686** cross-builds a static LLVM + LLD for `i686-w64-mingw32`
   and embeds it. If that build fails, the job builds `salam.exe` without
   LLVM so that a 32-bit Windows compiler still ships, with its bundled
   32-bit tcc.
-- **Windows on Arm** ships neither LLVM nor tcc. It uses the native backend
-  and links with the compiler's built-in linker against the aarch64 runtime
-  files packed next to `salam.exe`.
+- **Windows on Arm** cross-builds a static LLVM + LLD for
+  `aarch64-w64-mingw32` (cached) and embeds it. There is no fallback: if that
+  build fails, no bundle ships. With no `--backend` it still uses the native
+  backend and the built-in linker; `--backend=llvm`, `salam llvm --exec` and
+  `salam llvm --jit` use the embedded LLVM. Both link against the aarch64
+  runtime files packed next to `salam.exe`. It ships no tcc.
 
 ## ✅ Recommendation
 

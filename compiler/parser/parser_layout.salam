@@ -602,11 +602,14 @@ func layout_each(p &: Ps, a &: at.Ast): int:
     p_expect(p, tok.TK_COLON, "':' after the layout 'each' header")
     p_skip_terminators(p)
     body := p_mk(p, a, at.AST_BLOCK)
+    p.layout_loops++
     layout_body_ex(p, a, body, false)
+    p.layout_loops--
     p_fin(p, a, body)
     ps_set_b(a, n, body)
     p_expect(p, tok.TK_KW_END, "'end' to close the layout 'each'")
     p_fin(p, a, n)
+    layout_loop_keys(p, a, n)
     p_skip_terminators(p)
     ret n
 end
@@ -703,12 +706,46 @@ func parse_layout_block(p &: Ps, a &: at.Ast): int:
     ret n
 end
 
+func component_empty_parens(p &: Ps, open: tok.Token, word: str, head: str, name: str):
+    example := str.Equals(word, "component") ? "title: str" : "عنوان: رشته"
+    bare := head + " " + name + ":"
+    full := head + " " + name + "(" + example + "):"
+    lg.LogAtHelp(
+        p.lgr,
+        lg.PH_PARSER,
+        lg.LOG_ERROR,
+        p.file,
+        open.begin_line as int,
+        open.begin_col as int,
+        co.Format2(
+            i18.Tr("write '%s', or declare parameters as in '%s'"), co.ArgStr(bare), co.ArgStr(full)
+        ),
+        co.Format1(
+            i18.Tr("E270: component '%s' has empty parentheses; leave them out"), co.ArgStr(name)
+        )
+    )
+    p.had_error = true
+end
+
 func parse_component(p &: Ps, a &: at.Ast): int:
     p_rule(p, "component")
     n := p_mk(p, a, at.AST_LAYOUT_COMPONENT)
+    word := p_peek(p).lexeme
+    mut head := word
+    if p.pos > 0:
+        prev := p.toks.toks.Get(p.pos - 1)
+        if prev.kind == tok.TK_KW_PUB:
+            head = prev.lexeme + " " + word
+        end
+    end
     p_advance(p)
-    at.SetName(a, n, parse_decl_name(p))
+    name := parse_decl_name(p)
+    at.SetName(a, n, name)
+    open := p_peek(p)
     if p_match(p, tok.TK_LPAREN):
+        if p_at(p, tok.TK_RPAREN):
+            component_empty_parens(p, open, word, head, name)
+        end
         parse_params(p, a, n)
         p_expect(p, tok.TK_RPAREN, "')' after component parameters")
         env_reserved_params(p, a, n)

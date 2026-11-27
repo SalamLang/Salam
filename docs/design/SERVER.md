@@ -25,7 +25,6 @@ shop/
       product/[id].salam
     components/           pub components shared by the pages
       card.salam
-    api.salam             server funcs: calls to the backend
   api/                    any language, own repository if you like
 ```
 
@@ -59,8 +58,9 @@ end
 - Top level only. Parameters and result are wire types: `int`, `float`, `bool`,
   `str`, structs and `Vector`s of wire types, optional (`T?`). No pointers,
   references or closures (E285). Enums are allowed. `HashMap` and arrays are
-  not wire types yet. E287 is reported for a method; a nested function cannot
-  be written at all. E288 counts overloads: the wire name is the function name.
+  not wire types yet. E287 is reported for a method, and for a `server func` in
+  an included or imported file (declare them in the entry file); a nested function
+  cannot be written at all. E288 counts overloads: the wire name is the function name.
 - Callable from a component body or `load(...)`, a handler, and another
   `server func`. On the server a call is a direct call. In the browser and on
   native it is the generated stub (below). The call site looks the same.
@@ -221,6 +221,11 @@ What was built (the smallest design that works):
 - Variable values are not serialized: views compute them from the route and the
   initial values again. A value that only a server func can give travels in
   the call cache.
+- Component state starts when its component is entered, on the server and in the
+  browser: the first render of a region runs its initialisers, so a page calls
+  only the server funcs of the route it shows, and nothing runs when the server
+  starts. A state variable whose initial value is not a constant is the zero
+  value of its type until then.
 
 Call cache for server funcs (the contract with the server func stubs):
 
@@ -235,9 +240,11 @@ Call cache for server funcs (the contract with the server func stubs):
   `ssrpage.PageCalls()`, a JSON object that is embedded as `calls`.
 - Browser: `__salam_call_key(name, argsJson)` returns the next key (it counts
   occurrences from page load), and `__salam_call_cache_get(key)` returns the
-  stored value or `undefined`. A stub that gets a value returns it at once and
-  does not fetch. Keys are not consumed, a later call with a new occurrence
-  number goes to the network.
+  stored value once, or `undefined`. A stub that gets a value returns it at once
+  and does not fetch. The hooks exist before the route is set and before any
+  region is mounted, and the cache and the counters are cleared when hydration
+  ends, so later calls always go to the network. Page level globals are
+  initialised before the hooks: the server does not record their calls.
 - A difference between the cached and a fresh value is not an error: the next
   state change renders it.
 
@@ -343,6 +350,9 @@ the language yet; when it is, it wraps the same stub.
   (name based reachability from every non server definition). Native programs
   lose them through unreachable function removal, because the stub no longer
   mentions them.
+- A page build writes a global of an imported package only when code that stays
+  in the bundle reaches it, so a package that only a server func uses (such as
+  `net/http` and the mutexes it creates) leaves nothing in the browser.
 - Limits of the pruning: methods in `impl` blocks and struct methods are never
   dropped, even when only a server func uses them, and what they call stays
   too. They are also scanned for E286, so a method that uses `env` is an error
@@ -366,7 +376,7 @@ the language yet; when it is, it wraps the same stub.
 | --- | --- | --- |
 | E285 | error | `server func 'F' parameter 'x' has type 'T', which cannot cross the network` |
 | E286 | error | `'F' runs in the browser but uses 'G', which only exists on the server` |
-| E287 | error | `server func 'F' must be declared at the top level` |
+| E287 | error | `server func 'F' must be declared at the top level`, or `... in the entry file, not in an included or imported one` |
 | E288 | error | `two server funcs are named 'F'` (after the Persian name is applied) |
 | E289 | error | `server func 'F' is reachable from a static build; build with --ssr or set 'server'` |
 | W280 | warning | `server func 'F' looks like backend code ('db'); call your API from here instead` |

@@ -1,0 +1,333 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package parser
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+
+k_lk_index_en := ["i", "j", "k", "m", "row"]
+k_lk_index_fa := ["ش", "ردیف", "شماره", "اندیس", "رده"]
+
+struct LkLoop:
+    pub node: int = 0
+    pub item: str = ""
+    pub index: str = ""
+    pub add: str = ""
+    pub rows: int = 0
+end
+
+func lk_is_key(name: str): bool:
+    ret str.Equals(name, "key") or lp.IdentEqual(name, "کلید")
+end
+
+func lk_is_var(lk &: LkLoop, name: str): bool:
+    if str.Len(name) == 0 or str.Equals(name, "_"):
+        ret false
+    end
+    ret (str.Len(lk.item) > 0 and lp.IdentEqual(name, lk.item)) or
+        (str.Len(lk.index) > 0 and lp.IdentEqual(name, lk.index))
+end
+
+func lk_refs(lk &: LkLoop, a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret lk_is_var(lk, n.name)
+    end
+    if lk_refs(lk, a, n.a) or lk_refs(lk, a, n.b) or lk_refs(lk, a, n.c) or lk_refs(lk, a, n.d):
+        ret true
+    end
+    repeat n.list.Len() in i:
+        if lk_refs(lk, a, n.list.Get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lk_token_from(p &: Ps, index: u32): int:
+    mut lo := 0
+    mut hi := p.count
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if p.toks.toks.Get(mid).begin_index < index:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    ret lo
+end
+
+func lk_name_taken(p &: Ps, name: str): bool:
+    repeat p.count in i:
+        t := p.toks.toks.Get(i)
+        if t.kind == tok.TK_IDENT and lp.IdentEqual(t.lexeme, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lk_free_index(p &: Ps, depth: int): str:
+    fa := p.toks.pack == lp.LP_FA
+    mut skip := depth
+    repeat len(k_lk_index_en) in i:
+        name := fa ? k_lk_index_fa[i] : k_lk_index_en[i]
+        if lk_name_taken(p, name):
+            continue
+        end
+        if skip == 0:
+            ret name
+        end
+        skip--
+    end
+    ret fa ? "ردیف_حلقه" : "row_index"
+end
+
+func lk_stage(title: str, index: int, length: int, text: str):
+    mut f := lg.Fix {}
+    f.title = title
+    f.index = index
+    f.length = length
+    f.text = text
+    f.preferred = true
+    f.safe = true
+    lg.StageFix(f)
+end
+
+func lk_stage_insert(p &: Ps, a &: at.Ast, lk &: LkLoop, el: int, var_name: str):
+    n := at.Get(a, el)
+    first := lk_token_from(p, n.begin_index)
+    mut c := first
+    until c < p.count and p.toks.toks.Get(c).kind != tok.TK_COLON:
+        c++
+    end
+    if c >= p.count:
+        ret
+    end
+    colon := p.toks.toks.Get(c)
+    key := p.toks.pack == lp.LP_FA ? "کلید" : "key"
+    line := key + " = " + var_name
+    title := co.Format1(i18.Tr("Add '%s' to the row"), co.ArgStr(line))
+    if str.Len(lk.add) > 0:
+        each_node := at.Get(a, lk.node)
+        mut h := lk_token_from(p, each_node.begin_index) + 1
+        h = skip_comments_from(p, h)
+        name_tok := p.toks.toks.Get(h)
+        if str.Equals(lk.index, "_"):
+            lk_stage(
+                title,
+                name_tok.begin_index as int,
+                (name_tok.end_index - name_tok.begin_index) as int,
+                lk.add
+            )
+        else:
+            comma := p.toks.pack == lp.LP_FA ? "، " : ", "
+            lk_stage(title, name_tok.begin_index as int, 0, lk.add + comma)
+        end
+    end
+    mut k := skip_comments_from(p, c + 1)
+    mut one_line := true
+    if k < p.count:
+        one_line = p.toks.toks.Get(k).begin_line == colon.begin_line and
+            p.toks.toks.Get(k).kind != tok.TK_STMT_END
+    end
+    if one_line:
+        lk_stage(title, colon.end_index as int, 0, " " + line)
+        ret
+    end
+    until k < p.count and (p.toks.toks.Get(k).kind == tok.TK_STMT_END or
+        p.toks.toks.Get(k).begin_line == colon.begin_line):
+        k = skip_comments_from(p, k + 1)
+    end
+    mut indent := n.begin_col as int + 3
+    if k < p.count and p.toks.toks.Get(k).kind != tok.TK_KW_END:
+        indent = p.toks.toks.Get(k).begin_col as int - 1
+    end
+    lk_stage(title, colon.end_index as int, 0, "\n" + str.Repeat(" ", indent) + line)
+end
+
+func lk_report(p &: Ps, a &: at.Ast, node: int, help: str, msg: str):
+    n := at.Get(a, node)
+    t := p.toks.toks.Get(lk_token_from(p, n.begin_index))
+    lg.LogSpanHelp(
+        p.lgr,
+        lg.PH_PARSER,
+        lg.LOG_ERROR,
+        p.file,
+        n.begin_line as int,
+        n.begin_col as int,
+        n.begin_index as int,
+        (t.end_index - t.begin_index) as int,
+        help,
+        msg
+    )
+    p.had_error = true
+end
+
+func lk_check_row(p &: Ps, a &: at.Ast, lk &: LkLoop, el: int):
+    mut first_key := 0
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and lk_is_key(c.name):
+            if lk_refs(lk, a, c.a):
+                ret
+            end
+            first_key = cid
+        end
+    end
+    use := str.Len(lk.add) > 0 ? lk.add : lk.index
+    row := at.Get(a, el).name
+    key := p.toks.pack == lp.LP_FA ? "کلید" : "key"
+    line := key + " = " + use
+    if first_key != 0:
+        own := str.Len(lk.add) > 0 ? lk.item : lk.index
+        lk_report(
+            p,
+            a,
+            first_key,
+            co.Format2(
+                i18.Tr("write '%s', or build the key from '%s'"),
+                co.ArgStr(key + " = " + own),
+                co.ArgStr(lk.item)
+            ),
+            co.Format1(
+                i18.Tr(
+                    "E292: this key does not use the variable or the index of its 'each' ('%s'), so rows cannot be told apart"
+                ),
+                co.ArgStr(lk.item)
+            )
+        )
+        ret
+    end
+    mut help := co.Format2(
+        i18.Tr("add the line '%s' inside '%s:'"), co.ArgStr(line), co.ArgStr(row)
+    )
+    if str.Len(lk.add) > 0:
+        comma := p.toks.pack == lp.LP_FA ? "، " : ", "
+        word := p.toks.pack == lp.LP_FA ? "هر" : "each"
+        within := p.toks.pack == lp.LP_FA ? "در" : "in"
+        head := word + " " + lk.add + comma + lk.item + " " + within
+        help = co.Format3(
+            i18.Tr("write '%s ...:' and add the line '%s' inside '%s:'"),
+            co.ArgStr(head),
+            co.ArgStr(line),
+            co.ArgStr(row)
+        )
+    end
+    lk_stage_insert(p, a, lk, el, use)
+    lk_report(
+        p,
+        a,
+        el,
+        help,
+        co.Format1(
+            i18.Tr("E292: '%s' is a row of 'each' and has no key; every rendered row needs one"),
+            co.ArgStr(row)
+        )
+    )
+end
+
+func lk_rows(p &: Ps, a &: at.Ast, lk &: LkLoop, blk: int):
+    if blk == 0:
+        ret
+    end
+    repeat at.ChildCount(a, blk) in i:
+        cid := at.Child(a, blk, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ELEMENT:
+            lk.rows++
+            lk_check_row(p, a, lk, cid)
+        else c.kind == at.AST_IF:
+            lk_rows(p, a, lk, c.b)
+            if c.c != 0 and at.KindOf(a, c.c) == at.AST_IF:
+                mut next := c.c
+                until next != 0 and at.KindOf(a, next) == at.AST_IF:
+                    nn := at.Get(a, next)
+                    lk_rows(p, a, lk, nn.b)
+                    next = nn.c
+                end
+                lk_rows(p, a, lk, next)
+            else:
+                lk_rows(p, a, lk, c.c)
+            end
+        else c.kind == at.AST_EACH:
+            lk.rows++
+        end
+    end
+end
+
+func lk_mark_uses(a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    mut n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ATTR:
+        if lk_is_key(n.name):
+            n.value_bool = true
+            at.Put(a, nid, n)
+        end
+        ret
+    end
+    if n.kind == at.AST_LAYOUT_ELEMENT or n.kind == at.AST_BLOCK:
+        repeat at.ChildCount(a, nid) in i:
+            lk_mark_uses(a, at.Child(a, nid, i))
+        end
+    else n.kind == at.AST_IF:
+        lk_mark_uses(a, n.b)
+        lk_mark_uses(a, n.c)
+    else n.kind == at.AST_EACH:
+        lk_mark_uses(a, n.b)
+    end
+end
+
+func layout_loop_keys(p &: Ps, a &: at.Ast, node: int):
+    n := at.Get(a, node)
+    if n.b == 0 or str.Len(n.name) == 0 or at.ChildCount(a, n.b) == 0:
+        ret
+    end
+    mut lk := LkLoop { node = node, item = n.name }
+    if n.c != 0:
+        lk.index = at.Get(a, n.c).name
+    end
+    if str.Len(lk.index) == 0 or str.Equals(lk.index, "_"):
+        lk.add = lk_free_index(p, p.layout_loops)
+    end
+    lk_mark_uses(a, n.b)
+    lk_rows(p, a, lk, n.b)
+    if lk.rows == 0:
+        use := str.Len(lk.add) > 0 ? lk.add : lk.index
+        key := p.toks.pack == lp.LP_FA ? "کلید" : "key"
+        lk_report(
+            p,
+            a,
+            node,
+            co.Format1(
+                i18.Tr("put the content in an element and write '%s' in it"),
+                co.ArgStr(key + " = " + use)
+            ),
+            i18.Tr("E292: this 'each' renders no element that can carry its key")
+        )
+    end
+end

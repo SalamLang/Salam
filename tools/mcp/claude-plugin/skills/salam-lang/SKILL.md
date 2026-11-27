@@ -129,6 +129,9 @@ component` per file (`[id]`, `[[id]]`, `[...rest]`, `_layout` with an
   it. `server func` runs only on the server and is a stub in the browser and
   native; its types must be JSON (E285), `env` is server only (E286), backend
   imports warn W280, a static build that reaches one is E289.
+- Every row of an `each` in a `page:` or `component` needs `key = i` or
+  `key = item.id` (Persian `کلید`) on the row element or component use, using
+  the loop variable or index (E292); `salam check --fix` adds it.
 - `size(T)` is the size of a type in bytes; there is no `sizeof`.
 
 ## Packages and documentation

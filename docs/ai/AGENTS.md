@@ -701,17 +701,24 @@ With a `main.salam` entry, the `pages/` folder next to it is the route table.
 One file per route with exactly one `pub component` (E282): `index.salam` is the
 folder, `[id].salam` a parameter, `[[id]].salam` an optional one,
 `[...rest].salam` the remaining path, `_404.salam` the fallback, `_layout.salam`
-a component with an `Outlet` wrapping its folder (E283 without one). Settings
-at the top of the body: `title`, `guard`, `route`. There is no `routes:` block
-and no `redirect` setting; use `page.route.GoTo/Redirect/Back/Forward` in code.
-Other file errors: E280 (same route twice), E281, E284. Project convention:
+a component with an `Outlet` wrapping its folder (E283 without one). A guard
+is the first line of the body, `page.Guard(condition)` (`guard = x` is E268),
+followed by the settings `title` and `route`; a layout takes only the guard.
+There is no `routes:` block and no `redirect` setting; use
+`page.route.GoTo/Redirect/Back/Forward` in code. Other file errors: E280 (same
+route twice), E281, E284. Project convention:
 `components/` holds the `pub` components of the project (every `.salam` file in
 it, recursively, imports its `pub` components without `include`), `pages/`
-holds the routes, and everything else is included explicitly with
-`include = "x.salam"`. With no `components/` folder nothing is imported by
-name, and using a component that lives elsewhere is E111 with a hint to move
-it. A duplicate `pub` name across `components/`, `main.salam` and `pages/` is
-E291 and an English name must be PascalCase (E290).
+holds the routes, and everything else is included explicitly. A component file
+elsewhere needs the line `include = "ui/price_card.salam"` inside the `page:`
+block or a component body. Functions need a top-level
+`include "lib/format.salam"` (no `=`) in `main.salam`; that file starts with
+`package format`, and its `pub` names are used as `format.Money(n)`. The `=`
+form does not load functions and the top-level form does not import components.
+With no `components/` folder nothing is imported by name, and using a component
+that lives elsewhere is E111 with a hint to move it. A duplicate `pub` name
+across `components/`, `main.salam` and `pages/` is E291 and an English name
+must be PascalCase (E290).
 
 ```
 main.salam
@@ -719,7 +726,8 @@ pages/index.salam
 pages/product/[id].salam
 components/card.salam
 components/shop/badge.salam
-lib/format.salam        used only with include = "lib/format.salam"
+ui/price_card.salam     page: include = "ui/price_card.salam" end
+lib/format.salam        include "lib/format.salam" in main.salam
 ```
 
 `salam build --platform=web --ssr[=DIR]` writes a native `DIR/server` and `DIR/public`;
@@ -727,7 +735,7 @@ lib/format.salam        used only with include = "lib/format.salam"
 
 `server func F(x: T): R:` runs only on the front server and calls the backend
 over HTTP. The browser and native app get a stub, never the body. Types must
-cross as JSON (E285), top level only (E287), one per name (E288); secrets come
+cross as JSON (E285), top level of the entry file only (E287), one per name (E288); secrets come
 from `env.Get` and `env` in browser code is E286; backend imports (`db`, `fs`,
 `os`, process, router) warn W280 unless `salam.cfg` sets `allow_backend =
 true`; a static build that reaches one is E289 unless the page sets `server =
@@ -760,6 +768,36 @@ header/title/content/footer`, `badge`, `alert`, `input`, `switch`, `select`,
 `sidebar provider`, `theme toggle`. The shadcn CSS is a web output today.
 Docs: `docs/design/DESIGN_SYSTEMS.md`, `NATIVE_UI.md`, `MOBILE.md`, SKILL.md
 section 9.
+
+Every row that an `each` renders in a `page:` or `component` needs `key = ...`
+(Persian `کلید`) built from the loop's item or index: on the row element or on
+the component use, in every `if`/`else` branch, for every row of a turn, and in
+nested loops for their own variable. A constant, `id` or `data-key` does not
+count (E292). `salam check --fix` adds `key = <index>`. `each` in code needs no
+key, and `each` is the only loop a page body allows.
+
+```salam
+mut names := Vector {} as Vector<str>
+
+func add_name():
+    names.Push("name " + names.Len())
+end
+
+page:
+    button:
+        click = add_name
+        content = "Add"
+    end
+    list:
+        each i, name in names:
+            item:
+                key = i
+                content = name
+            end
+        end
+    end
+end
+```
 
 ## Changing the standard library
 

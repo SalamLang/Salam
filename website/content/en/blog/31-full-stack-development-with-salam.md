@@ -57,7 +57,7 @@ page NotesPage(items: Vector<Note>, problem: str):
     end
     list:
         each _, n in items:
-            item: content = n.text end
+            item: key = n.id content = n.text end
         end
     end
     form:

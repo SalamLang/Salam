@@ -16,6 +16,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 
 ### Behaviour changes
 
+- A value filled at run time into `href`, `src`, `action`, `formaction` or `poster` that starts with `javascript:`, `vbscript:` or `data:` is written as `#`. A page that sets a `data:` address at run time no longer gets that resource (#4320).
 - Empty parentheses on a component declaration are error E270. Write `component App:` (Persian `بخش برنامه:`) when there are no parameters; `component App(a: str):` is unchanged, and so are uses such as `App:` and function declarations. To migrate, delete the `()`.
 - The commands `salam js` (and `emit-js`), `salam web`, `salam page build` and `salam app` are removed. Use `salam build` and `salam run` with `--platform`: `salam build a.salam --platform=js`, `salam build [page|dir] --platform=web [--inline] [--ssr[=DIR]]`, `salam build --platform=android|ios app.salam -o DIR -- [app options]` and `salam run --platform=android|ios` to install and start it. `salam page` alone (the page REPL) stays.
 - A page writes names in one language. A Persian page with an English element, attribute, style property or style keyword (`button`, `title`, `layout = "row"`) is error E301, E302 or E303, and an English page with a Persian one is the same error; each carries `help: write 'X'` and a fix for `salam check --fix`. Colours, numbers, units, IDs, content and `data x` / `aria x` attributes are not checked.

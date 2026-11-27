@@ -2,6 +2,7 @@ package driver
 
 import os
 import str
+import mem
 
 include pth "../sal_path.salam"
 include tok "../token.salam"
@@ -82,6 +83,119 @@ func js_refs(text: str, name: str): bool:
             ret true
         end
         p = idx + 1
+    end
+end
+
+func js_word_byte(c: int): bool:
+    ret is_alnum(c) or c == 95 or c == 36
+end
+
+func js_is_word(s: str): bool:
+    n := str.Len(s)
+    repeat n in i:
+        if not js_word_byte(byte_at(s, i)):
+            ret false
+        end
+    end
+    ret n > 0
+end
+
+func js_next_ref(text: str, n: int, p &: int, start &: int): bool:
+    until p < n:
+        if not js_word_byte(byte_at(text, p)):
+            p++
+            continue
+        end
+        start = p
+        until p < n and js_word_byte(byte_at(text, p)):
+            p++
+        end
+        if start == 0 or byte_at(text, start - 1) != 46:
+            ret true
+        end
+    end
+    ret false
+end
+
+func js_word_in(buf: void*, text: str, start: int, ln: int): str:
+    from := (text as void*) as i64 + start as i64
+    mem.Copy(buf, from as void*, ln as u64)
+    mem.Set((buf as i64 + ln as i64) as void*, 0, 1 as u64)
+    ret buf as str
+end
+
+func js_ref_set(text: str, set &: HashMap<str, int>):
+    n := str.Len(text)
+    buf := mem.MustAllocateZeroed((n + 1) as u64)
+    defer mem.Free(buf)
+    mut p := 0
+    mut start := 0
+    until js_next_ref(text, n, p, start):
+        word := js_word_in(buf, text, start, p - start)
+        if not set.Has(word):
+            set.Put(word.Concat(""), 1)
+        end
+    end
+end
+
+func js_mark_used(
+    roots: str, names: Vector<str>, texts: Vector<str>, used &: Vector<int>
+):
+    mut head := HashMap {} as HashMap<str, int>
+    defer head.Free()
+    mut link := Vector {} as Vector<int>
+    defer link.Free()
+    mut odd := Vector {} as Vector<int>
+    defer odd.Free()
+    mut longest := 0
+    repeat names.Len() in i:
+        nm := names.Get(i)
+        if js_is_word(nm):
+            link.Push(head.Has(nm) ? head.Get(nm) : -1)
+            head.Put(nm, i)
+            if str.Len(nm) > longest:
+                longest = str.Len(nm)
+            end
+        else:
+            link.Push(-1)
+            odd.Push(i)
+        end
+    end
+    buf := mem.MustAllocateZeroed((longest + 1) as u64)
+    defer mem.Free(buf)
+    mut queue := Vector {} as Vector<int>
+    defer queue.Free()
+    mut qi := -1
+    until qi < queue.Len():
+        from := qi < 0 ? -1 : queue.Get(qi)
+        text := from < 0 ? roots : texts.Get(from)
+        n := str.Len(text)
+        mut p := 0
+        mut start := 0
+        until js_next_ref(text, n, p, start):
+            if p - start > longest:
+                continue
+            end
+            word := js_word_in(buf, text, start, p - start)
+            if not head.Has(word):
+                continue
+            end
+            mut k := head.Get(word)
+            until k >= 0:
+                if k != from and used.Get(k) == 0:
+                    used.Set(k, 1)
+                    queue.Push(k)
+                end
+                k = link.Get(k)
+            end
+        end
+        each o in odd:
+            if o != from and used.Get(o) == 0 and js_refs(text, names.Get(o)):
+                used.Set(o, 1)
+                queue.Push(o)
+            end
+        end
+        qi++
     end
 end
 
@@ -203,12 +317,15 @@ func js_prune_globals(globals: Vector<str>, code: str, hoisted &: str): Vector<s
             end
         end
     end
+    mut refs := HashMap {} as HashMap<str, int>
+    defer refs.Free()
+    js_ref_set(keep_text, refs)
     mut out := Vector {} as Vector<str>
     repeat globals.Len() in gi2:
         mut kept := ""
         each line in str.Split(globals.Get(gi2), "\n"):
             mut nm := ""
-            if js_lit_global(line, nm) and not js_refs(keep_text, nm):
+            if js_lit_global(line, nm) and not refs.Has(nm):
                 continue
             end
             if js_simple_global(line):
@@ -372,6 +489,8 @@ func js_compile_work(
         mut s := sm.New(lgr, path, lp.Code(modpack))
         sm.SetCc(s, table)
         sm.SetServerMode(1)
+        sm.SetSkipStdBodies(s, true)
+        sm.SetStdLints(s, path)
         sok := sm.RunCached(s, a, prog)
         if not lok or not pok or not sok:
             all_ok = false
@@ -528,36 +647,7 @@ func js_build_bundle(
         m2--
     end
     roots = roots + boot + "\n"
-    mut changed := true
-    until changed:
-        changed = false
-        mut sgi := 0
-        until sgi < seg_names.Len():
-            if seg_used.Get(sgi) != 0:
-                sgi++
-                continue
-            end
-            nm := seg_names.Get(sgi)
-            if js_refs(roots, nm):
-                seg_used.Set(sgi, 1)
-                changed = true
-                sgi++
-                continue
-            end
-            mut ti := 0
-            until ti < seg_names.Len():
-                if ti != sgi and seg_used.Get(ti) != 0:
-                    if js_refs(seg_texts.Get(ti), nm):
-                        seg_used.Set(sgi, 1)
-                        changed = true
-                        break
-                    end
-                end
-                ti++
-            end
-            sgi++
-        end
-    end
+    js_mark_used(roots, seg_names, seg_texts, seg_used)
 
     mut js := str.NewBuilder()
     str.BufAppend(
@@ -704,32 +794,7 @@ func collect_event_js(
         end
         m--
     end
-    mut changed := true
-    until changed:
-        changed = false
-        mut sgi := 0
-        until sgi < seg_names.Len():
-            if seg_used.Get(sgi) == 0:
-                nm := seg_names.Get(sgi)
-                mut hit := js_refs(roots, nm)
-                if not hit:
-                    mut ti := 0
-                    until ti < seg_names.Len():
-                        if ti != sgi and seg_used.Get(ti) != 0 and js_refs(seg_texts.Get(ti), nm):
-                            hit = true
-                            break
-                        end
-                        ti++
-                    end
-                end
-                if hit:
-                    seg_used.Set(sgi, 1)
-                    changed = true
-                end
-            end
-            sgi++
-        end
-    end
+    js_mark_used(roots, seg_names, seg_texts, seg_used)
 
     mut js := str.NewBuilder()
     str.BufAppend(

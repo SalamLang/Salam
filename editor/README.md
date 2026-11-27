@@ -55,6 +55,11 @@ The selected UI language (`lang`) is also the language the source is lexed in -
 switching to فارسی/العربية and compiling English-keyword source now correctly
 fails with a real diagnostic, rather than silently auto-detecting English.
 
+One call serves every output tab. In Layout mode the HTML, CSS and JS tabs are
+cut out of the page that `salam_web_build_layout` returns (`page_parts.salam`),
+so they match `salam_web_emit` without compiling again. The result is kept until
+the source, the mode or the language changes, or Run is pressed.
+
 ## 🎬 Animated output
 
 A program that draws frames - a spinning donut, a game of life, a progress

@@ -323,6 +323,51 @@ server.listen(0, "127.0.0.1", async () => {
     }
     await shot("layout-again");
 
+    const pages = {
+      en: 'page:\n    title = "Tabs"\n    style: media = "screen" content = "p { margin: 0 }" end\n    style: content = ".x { color: red }" end\n    script: content = "window.tabs = 1" end\n    paragraph: content = "Hello tabs" end\nend\n',
+      fa: 'صفحه:\n    عنوان = "زبانه"\n    پاراگراف: محتوا = "سلام دنیا" پایان\nپایان\n',
+    };
+    for (const [lang, src] of Object.entries(pages)) {
+      await page.click('#lang-seg [data-value="' + lang + '"]');
+      await setCode(page, src);
+      await page.click("#run");
+      await settled();
+      for (const tab of ["html", "css", "js", "run"]) {
+        const got = await page.evaluate((t) => {
+          document.querySelector('#view-seg [data-value="' + t + '"]').click();
+          return {
+            status: document.querySelector("#status").className,
+            text: document.querySelector("#output").textContent,
+          };
+        }, tab);
+        check(
+          "the " + lang + " " + tab + " tab is ready after one run",
+          /ok/.test(got.status),
+          got.status,
+        );
+        if (tab === "run") continue;
+        const want = await page.evaluate(
+          ([s, l, t]) =>
+            window.Module.cwrap("salam_web_emit", "string", [
+              "string",
+              "string",
+              "string",
+            ])(s, l, t),
+          [src, lang, tab],
+        );
+        check(
+          "the " + lang + " " + tab + " tab matches the compiler",
+          got.text === want,
+          got.text.length + " vs " + want.length + ": " + got.text,
+        );
+      }
+    }
+    await page.click('#lang-seg [data-value="en"]');
+    await setCode(page, pages.en);
+    await page.click("#run");
+    await settled();
+    await page.click('#view-seg [data-value="run"]');
+
     const g = await page.$eval("#gutter", (e) => {
       const r = e.getBoundingClientRect();
       return { x: r.x + r.width / 2, y: r.y + r.height / 2 };

@@ -182,7 +182,7 @@ emit wasi "$WASI"
 
 case "$($CC -dumpmachine 2>/dev/null)" in
 *mingw* | *windows* | *apple* | *darwin*) ;;
-*linux* | *musl*) printf '.section .note.GNU-stack,"",@progbits\n' >>"$S" ;;
+*linux* | *musl*) printf '.section .note.GNU-stack,"",%%progbits\n' >>"$S" ;;
 esac
 
 $CC -c "$S" -o "$WORK/embed.o"

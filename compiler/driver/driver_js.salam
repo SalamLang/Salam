@@ -21,6 +21,9 @@ include mn "../minify.salam"
 struct JsMods:
     pub globals: Vector<str> = Vector {}
     pub seg_mod: Vector<int> = Vector {}
+    pub global_names: Vector<str> = Vector {}
+    pub global_texts: Vector<str> = Vector {}
+    pub global_mod: Vector<int> = Vector {}
     pub fn_names: Vector<str> = Vector {}
     pub fn_texts: Vector<str> = Vector {}
     pub count: int = 0
@@ -224,9 +227,76 @@ func js_prune_globals(globals: Vector<str>, code: str, hoisted &: str): Vector<s
     ret out
 end
 
+func js_used_refs(texts: Vector<str>, used: Vector<int>, name: str, self: int): bool:
+    repeat texts.Len() in i:
+        if i != self and used.Get(i) != 0 and js_refs(texts.Get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func js_shake(
+    mods &: JsMods,
+    roots: str,
+    seg_names: Vector<str>,
+    seg_texts: Vector<str>,
+    seg_used &: Vector<int>,
+    keep_mods: int
+):
+    mut live := Vector {} as Vector<int>
+    defer live.Free()
+    mut all_roots := roots
+    repeat mods.global_names.Len() in k:
+        kept := mods.global_mod.Get(k) < keep_mods
+        live.Push(kept ? 1 : 0)
+        if kept:
+            all_roots += mods.global_texts.Get(k)
+        end
+    end
+    mut changed := true
+    until changed:
+        changed = false
+        repeat seg_names.Len() in si:
+            if seg_used.Get(si) != 0:
+                continue
+            end
+            nm := seg_names.Get(si)
+            if js_refs(all_roots, nm) or js_used_refs(seg_texts, seg_used, nm, si) or
+                js_used_refs(mods.global_texts, live, nm, -1):
+                seg_used.Set(si, 1)
+                changed = true
+            end
+        end
+        repeat mods.global_names.Len() in gi:
+            if live.Get(gi) != 0:
+                continue
+            end
+            gnm := mods.global_names.Get(gi)
+            if js_refs(all_roots, gnm) or js_used_refs(seg_texts, seg_used, gnm, -1) or
+                js_used_refs(mods.global_texts, live, gnm, gi):
+                live.Set(gi, 1)
+                changed = true
+            end
+        end
+    end
+    repeat mods.globals.Len() in m:
+        mut text := ""
+        repeat mods.global_names.Len() in g:
+            if mods.global_mod.Get(g) == m and live.Get(g) != 0:
+                text += mods.global_texts.Get(g)
+            end
+        end
+        mods.globals.Set(m, text)
+    end
+end
+
 func js_mods_free(mods &: JsMods):
     mods.globals.Free()
     mods.seg_mod.Free()
+    mods.global_names.Free()
+    mods.global_texts.Free()
+    mods.global_mod.Free()
     mods.fn_names.Free()
     mods.fn_texts.Free()
     mods.failed.Free()
@@ -409,6 +479,11 @@ func js_compile_work(
             opt.safe
         )
         mods.globals.Push(out.globals_src)
+        repeat out.global_names.Len() in gn:
+            mods.global_names.Push(out.global_names.Get(gn))
+            mods.global_texts.Push(out.global_texts.Get(gn))
+            mods.global_mod.Push(mods.count)
+        end
         repeat out.fn_names.Len() in fi:
             mods.fn_names.Push(out.fn_names.Get(fi))
             mods.fn_texts.Push(out.fn_texts.Get(fi))
@@ -518,43 +593,7 @@ func js_build_bundle(
     end
 
     boot := mods.entry_name
-    mut roots := ""
-    mut m2 := mods.count - 1
-    until m2 >= 0:
-        roots += mods.globals.Get(m2)
-        m2--
-    end
-    roots = roots + boot + "\n"
-    mut changed := true
-    until changed:
-        changed = false
-        mut sgi := 0
-        until sgi < seg_names.Len():
-            if seg_used.Get(sgi) != 0:
-                sgi++
-                continue
-            end
-            nm := seg_names.Get(sgi)
-            if js_refs(roots, nm):
-                seg_used.Set(sgi, 1)
-                changed = true
-                sgi++
-                continue
-            end
-            mut ti := 0
-            until ti < seg_names.Len():
-                if ti != sgi and seg_used.Get(ti) != 0:
-                    if js_refs(seg_texts.Get(ti), nm):
-                        seg_used.Set(sgi, 1)
-                        changed = true
-                        break
-                    end
-                end
-                ti++
-            end
-            sgi++
-        end
-    end
+    js_shake(mods, boot + "\n", seg_names, seg_texts, seg_used, entries.Len())
 
     mut js := str.NewBuilder()
     str.BufAppend(
@@ -667,14 +706,6 @@ func collect_event_js(
         end
     end
 
-    mut roots := out.globals_src
-    repeat out.fn_texts.Len() in ri:
-        roots += out.fn_texts.Get(ri)
-    end
-    repeat mods.globals.Len() in gi:
-        roots += mods.globals.Get(gi)
-    end
-
     mut seg_names := Vector {} as Vector<str>
     mut seg_texts := Vector {} as Vector<str>
     mut seg_used := Vector {} as Vector<int>
@@ -701,32 +732,11 @@ func collect_event_js(
         end
         m--
     end
-    mut changed := true
-    until changed:
-        changed = false
-        mut sgi := 0
-        until sgi < seg_names.Len():
-            if seg_used.Get(sgi) == 0:
-                nm := seg_names.Get(sgi)
-                mut hit := js_refs(roots, nm)
-                if not hit:
-                    mut ti := 0
-                    until ti < seg_names.Len():
-                        if ti != sgi and seg_used.Get(ti) != 0 and js_refs(seg_texts.Get(ti), nm):
-                            hit = true
-                            break
-                        end
-                        ti++
-                    end
-                end
-                if hit:
-                    seg_used.Set(sgi, 1)
-                    changed = true
-                end
-            end
-            sgi++
-        end
+    mut roots := out.globals_src
+    repeat out.fn_texts.Len() in ri:
+        roots += out.fn_texts.Get(ri)
     end
+    js_shake(mods, roots, seg_names, seg_texts, seg_used, 0)
 
     mut js := str.NewBuilder()
     str.BufAppend(

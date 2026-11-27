@@ -497,8 +497,21 @@ handles `.rsrc` itself.
 `--subsystem=windows` sets `IMAGE_SUBSYSTEM_WINDOWS_GUI` and makes
 `WinMainCRTStartup` (`_WinMainCRTStartup` on i386) the entry point. mingw's
 `crt2.o` defines it next to `mainCRTStartup`; it marks the program as a GUI
-one for the runtime's error reporting and then calls `main` as usual. With
-the system linker the driver passes `-mwindows`.
+one for the runtime's error reporting and then calls `main` as usual. The
+in-process LLD gets `--subsystem windows`, a mingw `gcc` or `clang`
+`-mwindows`, and `tcc` `-Wl,-subsystem=windows`.
+
+### Which programs are GUI programs
+
+`--subsystem` and `[windows].subsystem` apply to every MinGW (`*-gnu`) link
+path and always win. They have no effect when `clang` links an `*-msvc` triple,
+since `-mwindows` is a MinGW option. Without them, a Windows executable gets the
+GUI subsystem when it is built for the native UI (`--ui=native`, or
+`--platform=windows` in a UI project) and has a `page:` block. Everything else
+stays a console program,
+including one that imports `gui.window` or the tray directly and has no
+`page:` block. `salam run` also builds a console program unless the option or
+the project setting says otherwise, so the output stays in the terminal.
 
 `tools/bash/native-windows-gui-check.sh` builds a program with all four
 options and as a project with a `[windows]` table, checks the header and

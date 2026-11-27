@@ -61,8 +61,10 @@ winget = "SQLite.SQLite"
   console), `icon` (an `.ico` file), `manifest`, and the version resource's
   `version` (default `[package].version`), `company`, `description`,
   `product` and `copyright`. The command-line options `--subsystem`,
-  `--icon`, `--manifest` and `--version-info` override them. They apply to
-  builds with `--backend=native` or `--linker=builtin`.
+  `--icon`, `--manifest` and `--version-info` override them. `subsystem`
+  applies to every Windows build; without it a `page:` program built for the
+  native UI is `"windows"` and everything else is `"console"`. The other keys
+  apply to builds with `--backend=native` or `--linker=builtin`.
 - **`[native.<lib>.prebuilt.<platform>]`** lists a ready-built library for
   one platform (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
   `macos-x86_64`, `windows-x86_64`, ...): `url`, `sha256`, and `lib`, the

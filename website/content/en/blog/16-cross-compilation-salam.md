@@ -104,9 +104,8 @@ A `*-linux-gnu` triple links dynamically against glibc, which you need when the 
 
 ### Windows: x64, 32-bit and Windows on Arm {#windows}
 
-`x86_64-w64-windows-gnu` and `i686-w64-windows-gnu` produce ordinary PE executables against the mingw-w64 runtime. A few options exist only for Windows targets and need `--backend=native` or `--linker=builtin`:
+`x86_64-w64-windows-gnu` and `i686-w64-windows-gnu` produce ordinary PE executables against the mingw-w64 runtime. A `page:` program built with `--ui=native` is a GUI program that opens no console window, and `--subsystem=console` or `--subsystem=windows` chooses the kind for any program. A few more options exist only for Windows targets and need `--backend=native` or `--linker=builtin`:
 
-- `--subsystem=windows` builds a GUI program that opens no console window;
 - `--icon=app.ico` embeds the program icon;
 - `--manifest=FILE` embeds an application manifest;
 - `--version-info=KEY=VALUE` adds a version resource (version, company, description, product, copyright).

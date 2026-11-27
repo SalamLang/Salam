@@ -15,6 +15,7 @@
 
   Module.cwrap = (...spec) => {
     const call = wrap(...spec);
+    if (spec[0] === "salam_web_last_failed") return call;
     return (...args) => {
       recycle();
       return call(...args);

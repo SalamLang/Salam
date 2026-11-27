@@ -45,7 +45,7 @@ WINLIBS="crt2.o crtbegin.o crtend.o libmingw32.a libmingwex.a libmsvcrt.a libucr
 libkernel32.a libadvapi32.a libshell32.a libuser32.a libws2_32.a libole32.a libgdi32.a libcomdlg32.a
 libsecur32.a libcrypt32.a libbcrypt.a libiphlpapi.a libwinhttp.a libpsapi.a libunwind.a libuuid.a
 libntdll.a libversion.a libdbghelp.a libwinmm.a libuserenv.a libshlwapi.a libcomctl32.a
-libsetupapi.a libwininet.a libncrypt.a libgcc.a libgcc_eh.a"
+libsetupapi.a libwininet.a libncrypt.a libimm32.a libpowrprof.a libgcc.a libgcc_eh.a"
 bundle() {
     lib=$PKG/sysroots/$1-w64-mingw32/lib
     shift

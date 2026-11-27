@@ -144,8 +144,7 @@ mut next := 1
 
 component Task(name: str):
     done := false
-    item:
-        key = name
+    box:
         span: content = name end
         button: click = (): done = not done end content = done ? "Undo" : "Done" end
     end
@@ -165,14 +164,17 @@ page:
     end
     list:
         each _, t in tasks:
-            Task: name = t end
+            item:
+                key = t
+                Task: name = t end
+            end
         end
     end
     paragraph: content = "" + tasks.Len() + " tasks" end
 end
 ```
 
-The `key = name` line is the same idea as a key in React: when rows are inserted, removed or reordered, each component copy follows its key and keeps its own state, instead of being matched by position. The key belongs on the first element inside the component, as above, or on an element that wraps the use; a `key` line under `Task:` itself is an error, because a use takes only the component's parameters. Without a key, copies follow their position in the list. A fixed `id` inside `each` would repeat, so the compiler rejects it (E134); use a key, a class, or an id built from the row.
+The `key = t` line is the same idea as a key in React: when rows are inserted, removed or reordered, each component copy follows its key and keeps its own state, instead of being matched by position. Every row of an `each` must have one, on the row element as here, built from the loop variable or its index; a row without it, or with a constant such as `key = "row"`, is error E292. Releases after 0.7.2 also accept the key on the component use itself, `Task: key = t name = t end`. A fixed `id` inside `each` would repeat, so the compiler rejects it (E134); use a key, a class, or an id built from the row.
 
 ## Components talking to each other: callbacks and events {#communication}
 

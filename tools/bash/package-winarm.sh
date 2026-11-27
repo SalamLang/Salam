@@ -35,7 +35,7 @@ for f in crt2.o crtbegin.o crtend.o libmingw32.a libmingwex.a libmsvcrt.a libucr
     libole32.a libgdi32.a libcomdlg32.a libsecur32.a libcrypt32.a libbcrypt.a \
     libiphlpapi.a libwinhttp.a libpsapi.a libunwind.a libuuid.a libntdll.a libversion.a \
     libdbghelp.a libwinmm.a libuserenv.a libshlwapi.a libcomctl32.a libsetupapi.a \
-    libwininet.a libncrypt.a; do
+    libwininet.a libncrypt.a libimm32.a libpowrprof.a; do
     if [ -f "$SRC/$f" ]; then
         cp "$SRC/$f" "$OUT/sysroots/aarch64-w64-mingw32/lib/"
     fi

@@ -15,37 +15,41 @@ export SALAM_STD="$root/std"
 cp -R "$root/tests/en/project/include_unit" "$work/app"
 cd "$work/app" || exit 1
 
-report() {
-    printf '%s:' "$1"
-    tr -d '\r' <out.txt | while read -r line; do printf ' %s' "$line"; done
-    echo
+expect() {
+    got=$(tr -d '\r' <out.txt | tr '\n' ' ')
+    if [ "$got" = "8 3 " ]; then
+        return 0
+    fi
+    echo "$1: wrong output: $got"
+    return 1
 }
 
 for backend in c llvm native; do
+    if [ "$backend" = native ] && [ "$(uname -s)-$(uname -m)" != Linux-x86_64 ]; then
+        continue
+    fi
     if "$salam" build main.salam --backend="$backend" --output="app_$backend" --no-color --log-level=error >build.log 2>&1; then
         "./app_$backend" >out.txt 2>&1
-        report "$backend"
-    elif [ "$backend" = c ] || [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ]; then
+        if expect "$backend" && [ "$backend" != native ]; then
+            echo "$backend: ok"
+        fi
+    else
         echo "$backend: build failed"
         sed 's/^/  /' build.log | head -20
-    else
-        echo "$backend: 8 3"
     fi
 done
 
 "$salam" run main.salam --interp --no-color --log-level=error >out.txt 2>&1
-report interp
+expect interp && echo "interp: ok"
 
 if command -v node >/dev/null 2>&1; then
     if "$salam" build main.salam --platform=js --output=app.js --no-color --log-level=error >build.log 2>&1; then
         node app.js >out.txt 2>&1
-        report js
+        expect js
     else
         echo "js: build failed"
         sed 's/^/  /' build.log | head -20
     fi
-else
-    echo "js: 8 3"
 fi
 
 if "$salam" check main.salam --backend=c --no-color --log-level=error >out.txt 2>&1; then

@@ -134,7 +134,7 @@ the RISC-V `virt` board in `tests/kernel/riscv64/`.
 | `build-macos`         | `macos-latest` (arm64)                                | `macos-arm64` archives, `salam-mac`               | Embedded static LLVM; links with the system (Xcode) toolchain                                      |
 | `build-windows`       | `windows-2022`, `windows-2025`, `windows-2025-vs2026` | `windows-x86_64` archives, `salam-windows.exe`    | Embedded static LLVM + LLD and sysroots, plus a bundled tcc for the C backend                      |
 | `build-windows-i686`  | `ubuntu-24.04`, cross-compiled with llvm-mingw        | `windows-i686` archives, `salam-windows-i686.exe` | Embedded LLVM + LLD when that cross build succeeds, otherwise built without it; bundled 32-bit tcc |
-| `build-windows-arm64` | `ubuntu-24.04`, cross-compiled                        | `windows-arm64` archives                          | Native backend with its built-in linker (no LLVM, no tcc)                                          |
+| `build-windows-arm64` | `ubuntu-24.04`, cross-compiled with llvm-mingw        | `windows-arm64` archives                          | Embedded static LLVM + LLD; native backend by default (no tcc)                                     |
 | `build-linux-i686`    | `ubuntu-24.04`, `i386/debian` container               | `linux-i686` archives, `salam-linux-i686`         | Embedded LLVM + LLD                                                                                |
 | `build-linux-armhf`   | `ubuntu-24.04`, `arm32v7` container under QEMU        | `linux-armhf` archives, `salam-linux-armhf`       | Embedded LLVM + LLD                                                                                |
 | `build-linux-aarch64` | `ubuntu-24.04-arm`                                    | `linux-aarch64` archives, `salam-linux-aarch64`   | Embedded LLVM + LLD                                                                                |
@@ -144,7 +144,8 @@ the RISC-V `virt` board in `tests/kernel/riscv64/`.
 Windows x86-64 files; the other two Windows runners test. macOS ships for
 Apple silicon only; there is no Intel macOS release build. The Windows on
 Arm bundle is smoke-tested on a `windows-11-arm` runner
-(`smoke-windows-arm64`) before the release.
+(`smoke-windows-arm64`), and the release takes it from that job, so a bundle
+that fails there is not published.
 
 Every job except `build-linux`, `build-macos` and `build-windows` is
 `continue-on-error`, and the release step attaches their files only when
@@ -169,9 +170,12 @@ The release also carries the standard library on its own
   and embeds it. If that build fails, the job builds `salam.exe` without
   LLVM so that a 32-bit Windows compiler still ships, with its bundled
   32-bit tcc.
-- **Windows on Arm** ships neither LLVM nor tcc. It uses the native backend
-  and links with the compiler's built-in linker against the aarch64 runtime
-  files packed next to `salam.exe`.
+- **Windows on Arm** cross-builds a static LLVM + LLD for
+  `aarch64-w64-mingw32` (cached) and embeds it. There is no fallback: if that
+  build fails, no bundle ships. With no `--backend` it still uses the native
+  backend and the built-in linker; `--backend=llvm`, `salam llvm --exec` and
+  `salam llvm --jit` use the embedded LLVM. Both link against the aarch64
+  runtime files packed next to `salam.exe`. It ships no tcc.
 
 ## ✅ Recommendation
 

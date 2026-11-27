@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const vm = require("node:vm");
 
 const dir = path.resolve(process.argv[2] || "editor");
 const js = fs.readdirSync(dir).find((f) => /^salam-wa-.*\.js$/.test(f));
@@ -57,7 +58,7 @@ const cases = [
     name: "a component with state builds a page that updates",
     kind: "layout",
     lang: "en",
-    src: 'component App():\n    count := 0\n    button:\n        content = "Go"\n        click = (): count++ end\n    end\n    paragraph: content = "Clicked " + count + " times" end\nend\npage:\n    App: end\nend\n',
+    src: 'component App:\n    count := 0\n    button:\n        content = "Go"\n        click = (): count++ end\n    end\n    paragraph: content = "Clicked " + count + " times" end\nend\npage:\n    App: end\nend\n',
     want: (out) =>
       out.indexOf("<script>") >= 0 && out.indexOf("Clicked ${") >= 0,
   },
@@ -147,4 +148,6 @@ global.Module.onRuntimeInitialized = () => {
     process.exit(failures === 0 ? 0 : 1);
   }, 0);
 };
-(0, eval)(fs.readFileSync(path.join(dir, js), "utf8"));
+vm.runInThisContext(fs.readFileSync(path.join(dir, js), "utf8"), {
+  filename: js,
+});

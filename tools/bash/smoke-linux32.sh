@@ -42,6 +42,7 @@ expect_ok() {
 # shellcheck disable=SC2086
 case $MODE in
 cross)
+    sh "$ROOT/tools/bash/llvm-hardfloat-check.sh" "$SALAM"
     for target in x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf \
         riscv64-linux-musl x86_64-w64-windows-gnu wasm32-wasi; do
         echo "emit-obj $target"

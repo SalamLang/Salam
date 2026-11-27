@@ -15,6 +15,7 @@ package driver
 
 import os
 import os.process
+import conv
 import fs
 import str
 import io
@@ -147,47 +148,108 @@ func ssr_wait_listening(child &: process.Child, host: str, port: int): bool:
     ret tcp.WaitListening(host, port, 10000) and child.Poll()
 end
 
-func ssr_pid_alive(pid: str): bool:
-    if not os.IsDir("/proc"):
+if SALAM_OS_WINDOWS:
+    func ssr_guard_take(dir: str): int:
+        _unused := dir
+        ret -1
+    end
+
+    func ssr_held_take(path: str, fd &: int): bool:
+        _unused := path
+        fd = -1
         ret true
     end
-    ret os.IsDir("/proc/" + pid)
+else:
+    func ssr_guard_take(dir: str): int:
+        mut flags := 0o2000000
+        if SALAM_OS_MAC:
+            flags = 0x1000000
+        end
+        fd := open(dir, flags)
+        if fd >= 0:
+            _l := lock_fd_take(fd)
+        end
+        ret fd
+    end
+
+    func ssr_held_take(path: str, fd &: int): bool:
+        fd = lock_dir_open(path)
+        if fd < 0:
+            ret false
+        end
+        if flock(fd, 6) == 0:
+            ret true
+        end
+        _c := close(fd)
+        fd = -1
+        ret false
+    end
 end
 
-func ssr_lock(lgr: lg.Logger, out: str): bool:
+func ssr_legacy_owner_alive(pid: str): bool:
+    n := conv.ParseIntOr(pid, 0)
+    ret n > 0 and n <= 2147483647 as i64 and process.Alive(n as int)
+end
+
+func ssr_lock(lgr: lg.Logger, out: str, held &: int): bool:
     lock := out + ".lock"
-    _mk := os.MkdirAll(dir_of(out))
+    parent := dir_of(out)
+    _mk := os.MkdirAll(str.Len(parent) > 0 ? parent : ".")
+    guard := ssr_guard_take(str.Len(parent) > 0 ? parent : ".")
+    defer lock_fd_drop(guard)
+    pid_file := join_path2(lock, "pid")
+    held_file := join_path2(lock, "held")
+    held = -1
+    mut busy := false
+    mut pid := ""
     if os.Mkdir(lock) != 0:
-        pid_file := join_path2(lock, "pid")
-        pid := os.Exists(pid_file) ? str.Trim(io.ReadFile(pid_file)) : ""
-        if str.Len(pid) > 0 and not ssr_pid_alive(pid):
-            _rl := os.RemoveAll(lock)
-            if os.Mkdir(lock) != 0:
-                ret false
-            end
-        else:
+        if not os.IsDir(lock):
             lg.Log(
                 lgr,
                 lg.PH_DRIVER,
                 lg.LOG_ERROR,
-                co.Format3(
-                    i18.Tr(
-                        "another build is writing '%s' (process %s); wait for it, or remove the folder '%s.lock' if that process is gone"
-                    ),
-                    co.ArgStr(out),
-                    co.ArgStr(str.Len(pid) > 0 ? pid : "?"),
-                    co.ArgStr(out)
-                )
+                co.Format1(i18.Tr("cannot create '%s'"), co.ArgStr(lock))
             )
             ret false
         end
+        pid = os.Exists(pid_file) ? str.Trim(io.ReadFile(pid_file)) : ""
+        if os.Exists(held_file):
+            busy = not ssr_held_take(held_file, held)
+        else:
+            busy = ssr_legacy_owner_alive(pid)
+        end
     end
-    _wp := os.WriteFile(join_path2(lock, "pid"), co.I64Toa(os.Pid() as i64))
+    if not busy and held < 0:
+        busy = not ssr_held_take(held_file, held)
+    end
+    if busy:
+        lg.Log(
+            lgr,
+            lg.PH_DRIVER,
+            lg.LOG_ERROR,
+            co.Format3(
+                i18.Tr(
+                    "another build is writing '%s' (process %s); wait for it, or remove the folder '%s.lock' if that process is gone"
+                ),
+                co.ArgStr(out),
+                co.ArgStr(str.Len(pid) > 0 ? pid : "?"),
+                co.ArgStr(out)
+            )
+        )
+        ret false
+    end
+    _wp := os.WriteFile(pid_file, co.I64Toa(os.Pid() as i64))
     ret true
 end
 
-func ssr_unlock(out: str):
+func ssr_unlock(out: str, held: int):
+    parent := dir_of(out)
+    guard := ssr_guard_take(str.Len(parent) > 0 ? parent : ".")
     _ru := os.RemoveAll(out + ".lock")
+    if held >= 0:
+        lock_fd_drop(held)
+    end
+    lock_fd_drop(guard)
 end
 
 func ssr_swap(out: str, stage: str): bool:
@@ -319,7 +381,8 @@ pub func SsrBuild(opt &: Dr): int:
         )
         ret 2
     end
-    if not ssr_lock(lgr, out):
+    mut held := -1
+    if not ssr_lock(lgr, out, held):
         ret 2
     end
     stage := out + ".tmp"
@@ -341,7 +404,7 @@ pub func SsrBuild(opt &: Dr): int:
             out, SALAM_OS_WINDOWS ? "server.exe" : "server"
         ) + " and " + join_path2(out, "public")
     end
-    ssr_unlock(out)
+    ssr_unlock(out, held)
     ret rc
 end
 

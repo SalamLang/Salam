@@ -6,6 +6,7 @@ All notable changes to the Salam compiler and standard library. Salam is before 
 
 ### Security
 
+- A string containing `</script>` no longer breaks out of a built web page. `</` and `<!` are escaped in emitted JavaScript, styles of a server rendered page cannot close their element, run time `url` values of components such as the sidebar menu button and command item links refuse script addresses, chart colours are escaped, and the documentation generator escapes its title and data (#4320).
 - sshd and sftpd no longer fall back to a built-in host key derived from a public constant. A missing or unreadable `host_key_file` stops `Listen`; with no file the server makes a random key for that run. OpenSSH ed25519 keys now load (#3739).
 - SFTP and FTP clients can no longer write or create links outside the root; the jail check fails closed, symlink targets are resolved and checked, Windows backslashes are treated as separators (#3742).
 - `net/http` no longer crashes on a very large `Content-Length`, and `GET`, `HEAD` and `OPTIONS` bodies are read instead of being parsed as the next request. Header lines with whitespace before the colon and folded lines get 400 (#3737, #3743).

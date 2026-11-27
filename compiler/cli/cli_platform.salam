@@ -260,6 +260,95 @@ func plat_one(opt &: dr.Dr, platform: str, dir: str, entry: str, info: pm.PkgInf
     ret 2
 end
 
+func check_one(opt &: dr.Dr, platform: str, entry: str, info: pm.PkgInfo): int:
+    if str.Equals(platform, "web") or str.Equals(
+        platform, "android"
+    ) or str.Equals(platform, "ios"):
+        ssr := str.Equals(platform, "web") and (opt.ssr or str.Equals(info.project_web, "ssr"))
+        mut web := opt
+        web.ui_target = 0
+        ret dr.CheckWebPage(web, entry, ssr)
+    end
+    if str.Equals(platform, "js"):
+        ret -1
+    end
+    if plat_is_desktop(platform) or str.Equals(platform, "native"):
+        if not dr.IsPageEntry(entry):
+            ret -1
+        end
+        mut desk := opt
+        if desk.ui_target == 0:
+            desk.defines = Vector {} as Vector<str>
+            each d in opt.defines:
+                desk.defines.Push(d)
+            end
+            plat_native(desk)
+        end
+        desk.input = entry
+        ret dr.Inspect(desk)
+    end
+    io.EPrintln(
+        "salam: unknown platform '" + platform +
+            "' (choose web, js, android, ios, linux, macos, windows or all)"
+    )
+    ret 2
+end
+
+func route_check(opt &: dr.Dr): int:
+    if opt.inputs.Len() > 1:
+        ret -1
+    end
+    mut dir := plat_project_dir(opt)
+    mut entry := ""
+    in_dir := str.Len(dir) > 0
+    if in_dir:
+        entry = plat_entry(dir)
+    else:
+        entry = opt.inputs.Get(0)
+        dir = pth.PathDir(entry)
+        if str.Len(dir) == 0:
+            dir = "."
+        end
+    end
+    mut info := pm.PkgInfo {}
+    _ok := pm.ReadPackageInfo(dir, info)
+    mut platform := opt.platform
+    if str.Len(platform) == 0:
+        if opt.ui_target == 1 or not dr.IsPageEntry(entry):
+            ret -1
+        end
+        if str.Equals(info.project_type, "dsl") and info.project_platforms.Len() > 0:
+            platform = has_item(
+                info.project_platforms, "web"
+            ) ? "web" : info.project_platforms.Get(0)
+        else in_dir:
+            platform = "web"
+        else:
+            ret -1
+        end
+    end
+    if in_dir:
+        dr.WarnProject(opt, dir)
+    end
+    if str.Equals(platform, "all"):
+        if info.project_platforms.Len() == 0:
+            io.EPrintln("salam: --platform=all needs a [project] platforms list in salam.toml")
+            ret 2
+        end
+        mut worst := 0
+        repeat info.project_platforms.Len() in i:
+            p := info.project_platforms.Get(i)
+            println "== " + p
+            rc := check_one(opt, p, entry, info)
+            if rc > worst:
+                worst = rc
+            end
+        end
+        ret worst
+    end
+    ret check_one(opt, platform, entry, info)
+end
+
 func exec_platform(opt &: dr.Dr):
     dir := plat_project_dir(opt)
     mut info := pm.PkgInfo {}

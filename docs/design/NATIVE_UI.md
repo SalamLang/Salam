@@ -474,23 +474,32 @@ re-runs: it is matched by site and by its position among siblings of the same
 site. A new instance initialises its state from the declaration.
 
 Inside `each`, an instance follows its row's key instead of its position.
-The key is the `key` attribute (Persian `کلید`, written as `data-key` on the
-web) of the row's first element, or its `id` when it has no key; when the row
-starts with a component, the component's first element counts. The scope is
-then opened with `b.KeyedScope(site, key, ...)` and matched by site and key,
-so inserting, removing or reordering rows moves each instance's state with its
-row:
+Every row of an `each` must write one (E292): the `key` attribute (Persian
+`کلید`, written as `data-key` on the web) of the row element or of the
+component use, built from the loop variable or index. A key on a use is carried
+to the elements the component renders. When a turn renders several rows, the
+first key identifies it. The scope is then opened with
+`b.KeyedScope(site, key, ...)` and matched by site and key, so inserting,
+removing or reordering rows moves each instance's state with its row:
 
 ```salam
+mut items := Vector {} as Vector<str>
+
+func fill():
+    items.Push("a")
+    items.Push("b")
+end
+
 component Row(name: str):
     hits := 0
-    item: key = name content = name + " " + hits click = (): hits++ end end
+    item: content = name + " " + hits click = (): hits++ end end
 end
 
 page:
+    button: click = fill content = "Fill" end
     list:
         each it in items:
-            Row: name = it end
+            Row: key = it name = it end
         end
     end
 end
@@ -530,8 +539,9 @@ holds the `each`, and each such variable is one Vector (`__salam_ws_N`) indexed 
 At the instance's place the render function calls `salamWsSlot(I, key)`, and
 the page script returns the slot kept for that key, or a new one, in which
 case the state is set from its declarations. The key is the row's key, by
-the same rule as natively (the `key` of the row's first element, or its
-`id`, or else the row's index), joined with the slots of the instances
+the same rule as natively (a row that renders no element of its own, such as
+one whose component starts with another `each`, falls back to the index or
+item), joined with the slots of the instances
 around it. A slot not asked for during a render is freed, so a row that goes
 away and comes back starts from its declarations. Reads and writes go
 through `salamWsCur(I)`, which a handler attribute in the row sets first
@@ -667,9 +677,9 @@ block and in components; a function of the program that calls it is an error
   another package, through a pointer, or through a second name for the same
   Vector. Call `ui.Invalidate()` after such a change; it re-runs the whole
   view. `ui.Refresh()` does the same.
-- Instances inside `each` without a `key` or `id` on the row are matched by
-  position: removing the first row moves every later row's component state
-  up by one. Give the row a key.
+- A row keyed by its index (`key = i`) is matched by position: removing the
+  first row moves every later row's component state up by one. Key rows by an
+  identifier of the item when they move.
 - A component variable that is written needs a type the compiler can see
   without type checking: a literal, a typed component parameter or
   `value as Type`.

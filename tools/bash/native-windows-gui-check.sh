@@ -10,7 +10,11 @@
 #     and the version strings through GetFileVersionInfo/VerQueryValue,
 #   - the same settings given in a salam.toml [windows] table give the same
 #     resources,
-#   - a console build has no resource section and the console subsystem.
+#   - a console build has no resource section and the console subsystem,
+#   - a 'page:' program built with --ui=native gets the GUI subsystem on the
+#     built-in linker, the system linker and the C backend, unless
+#     --subsystem or salam.toml says console; a program with no page stays a
+#     console one.
 #
 # Needs wine on PATH and the mingw-w64 runtime for the target. The steps that
 # need a cross C compiler or llvm-readobj are skipped when it is missing.
@@ -163,6 +167,60 @@ if build "$work/proj2" "$work/proj2/proj2.exe" .; then
 else
     bad "project build with [app]"
     head -5 "$work/proj2/proj2.exe.log"
+fi
+
+pe_subsystem() {
+    at=$(od -An -tu4 -j60 -N4 "$1" | tr -d ' ')
+    od -An -tu2 -j$((at + 92)) -N2 "$1" | tr -d ' '
+}
+
+subsystem_case() {
+    want=$1
+    name=$2
+    dir=$3
+    shift 3
+    exe="$dir/sub.exe"
+    rm -f "$exe"
+    if (cd "$dir" && "$SALAM" build "$@" --target="$TRIPLE" --force --output="$exe" \
+        --log-level=error >"$exe.log" 2>&1) && [ "$(pe_subsystem "$exe")" = "$want" ]; then
+        ok "$name: subsystem $want"
+    else
+        bad "$name: want subsystem $want, got $([ -f "$exe" ] && pe_subsystem "$exe")"
+        head -5 "$exe.log"
+    fi
+}
+
+mkdir -p "$work/page" "$work/pagetoml"
+cat >"$work/page/main.salam" <<'EOF'
+page:
+    title = "Subsystem"
+    heading:
+        size = 1
+        content = "Subsystem"
+    end
+end
+EOF
+cp "$work/page/main.salam" "$work/pagetoml/"
+cat >"$work/pagetoml/salam.toml" <<'EOF'
+[package]
+name = "pagetoml"
+
+[windows]
+subsystem = "console"
+EOF
+for linker in builtin system; do
+    set -- --backend=native --linker="$linker"
+    subsystem_case 2 "page, $linker linker" "$work/page" main.salam --ui=native "$@"
+    subsystem_case 3 "page, --subsystem=console, $linker linker" "$work/page" main.salam --ui=native "$@" \
+        --subsystem=console
+    subsystem_case 3 "page, salam.toml console, $linker linker" "$work/pagetoml" . --ui=native "$@"
+    subsystem_case 3 "no page, $linker linker" "$work/app" main.salam --ui=native "$@"
+    subsystem_case 2 "no page, --subsystem=windows, $linker linker" "$work/app" main.salam "$@" \
+        --subsystem=windows
+done
+if command -v "$CC" >/dev/null 2>&1; then
+    subsystem_case 2 "page, C backend" "$work/page" main.salam --ui=native --backend=c --cc="$CC"
+    subsystem_case 3 "no page, C backend" "$work/app" main.salam --backend=c --cc="$CC"
 fi
 
 if command -v llvm-readobj >/dev/null 2>&1; then

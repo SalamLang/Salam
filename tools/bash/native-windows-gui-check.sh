@@ -206,6 +206,10 @@ cat >"$work/pagetoml/salam.toml" <<'EOF'
 [package]
 name = "pagetoml"
 
+[project]
+type = "dsl"
+platforms = ["windows"]
+
 [windows]
 subsystem = "console"
 EOF
@@ -214,7 +218,7 @@ for linker in builtin system; do
     subsystem_case 2 "page, $linker linker" "$work/page" main.salam --ui=native "$@"
     subsystem_case 3 "page, --subsystem=console, $linker linker" "$work/page" main.salam --ui=native "$@" \
         --subsystem=console
-    subsystem_case 3 "page, salam.toml console, $linker linker" "$work/pagetoml" . --ui=native "$@"
+    subsystem_case 3 "page, salam.toml console, $linker linker" "$work/pagetoml" . --platform=windows "$@"
     subsystem_case 3 "no page, $linker linker" "$work/app" main.salam --ui=native "$@"
     subsystem_case 2 "no page, --subsystem=windows, $linker linker" "$work/app" main.salam "$@" \
         --subsystem=windows

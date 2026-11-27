@@ -2639,7 +2639,9 @@ end
 - The value must use the loop's item or index (`i`, `item.id`, `"row-" + item`).
   A constant such as `key = "row"` is E292 (text in quotes is never filled with
   the loop variable), and `id` or `data-key` do not count. A key on an element nested inside the row does not count either.
-- A nested `each` needs its own keys, built from its own item or index.
+- A nested `each` needs its own keys, built from its own item or index. When a
+  loop body holds a nested `each` directly, its rows are the rows of the inner
+  loop; elements written beside it still need the outer key.
 - On a component use inside a loop, `key` is the row key: it is written on the
   elements the component renders. A component that declares its own `key`
   parameter receives the value as before, and it is the row key too. Outside a

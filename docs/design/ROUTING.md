@@ -131,6 +131,8 @@ shop/
   components/
     card.salam
     shop/badge.salam
+  ui/
+    price_card.salam
   lib/
     format.salam
 ```
@@ -148,10 +150,27 @@ symlink loops.
 
 Without a `components/` folder nothing is imported by name. A file anywhere
 else (`lib/`, `ui/`, next to `main.salam`) is used only through an explicit
-`include = "ui/card.salam"`. Using a component that lives there without
-including it is the usual unknown element error (E111), with the hint
-`a pub component 'Card' exists in the project outside components/; move it to
-components/ or include it`. `pages/` is route files only.
+include. For a component file it is a line inside the `page:` block or a
+component body, with a path relative to that file:
+
+```salam
+page:
+    include = "ui/price_card.salam"
+    Outlet: end
+end
+```
+
+Functions are loaded by a top-level `include "lib/format.salam"` (no `=`) in
+`main.salam`. The file starts with `package format` (the filename), only its
+`pub` names are visible, and a page or component calls them as
+`format.Money(n)`. The `=` form does not load functions and the top-level form
+does not import components.
+
+Using a component that lives outside `components/` without including it is the
+usual unknown element error (E111), with the hint
+`a pub component 'PriceCard' exists in the project outside components/; move it
+to components/ or include it`. A name that the standard kit also has, such as
+`Card`, resolves to the kit element instead. `pages/` is route files only.
 
 The duplicate check is `E291`; it covers `components/`, `main.salam` and the
 route files together, so a `pub component` in `pages/about.salam` and another

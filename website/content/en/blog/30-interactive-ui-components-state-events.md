@@ -92,7 +92,7 @@ page:
 end
 ```
 
-Both plans share one generated CSS class, because their styles are identical. Components can live in a file of their own and be pulled in with `include = "parts.salam"` at the top of a page, which is how a site shares a header or a card between pages. In Persian the keyword is `بخش`, and every element and attribute has a Persian name too; the article [One language, two scripts](/blog/one-language-two-scripts/) explains how both spellings compile to the same thing.
+Both plans share one generated CSS class, because their styles are identical. Components can live in a file of their own, declared `pub component`, and be pulled in with an `include = "parts.salam"` line inside the `page:` block, which is how a site shares a header or a card between pages. In Persian the keyword is `بخش`, and every element and attribute has a Persian name too; the article [One language, two scripts](/blog/one-language-two-scripts/) explains how both spellings compile to the same thing.
 
 A component with typed parameters is also a function. Called from ordinary Salam code, `Plan("Pro", 9)` returns its HTML and CSS as a string, which is how a server can render the same piece of UI per request.
 
@@ -172,7 +172,7 @@ page:
 end
 ```
 
-The `key = name` line is the same idea as a key in React: when rows are inserted, removed or reordered, each component copy follows its key and keeps its own state, instead of being matched by position. Without a key, copies follow their position in the list. A fixed `id` inside `each` would repeat, so the compiler rejects it (E134); use a key, a class, or an id built from the row.
+The `key = name` line is the same idea as a key in React: when rows are inserted, removed or reordered, each component copy follows its key and keeps its own state, instead of being matched by position. The key belongs on the first element inside the component, as above, or on an element that wraps the use; a `key` line under `Task:` itself is an error, because a use takes only the component's parameters. Without a key, copies follow their position in the list. A fixed `id` inside `each` would repeat, so the compiler rejects it (E134); use a key, a class, or an id built from the row.
 
 ## Components talking to each other: callbacks and events {#communication}
 

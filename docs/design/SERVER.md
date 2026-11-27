@@ -25,7 +25,6 @@ shop/
       product/[id].salam
     components/           pub components shared by the pages
       card.salam
-    api.salam             server funcs: calls to the backend
   api/                    any language, own repository if you like
 ```
 
@@ -59,8 +58,9 @@ end
 - Top level only. Parameters and result are wire types: `int`, `float`, `bool`,
   `str`, structs and `Vector`s of wire types, optional (`T?`). No pointers,
   references or closures (E285). Enums are allowed. `HashMap` and arrays are
-  not wire types yet. E287 is reported for a method; a nested function cannot
-  be written at all. E288 counts overloads: the wire name is the function name.
+  not wire types yet. E287 is reported for a method, and for a `server func` in
+  an included or imported file (declare them in the entry file); a nested function
+  cannot be written at all. E288 counts overloads: the wire name is the function name.
 - Callable from a component body or `load(...)`, a handler, and another
   `server func`. On the server a call is a direct call. In the browser and on
   native it is the generated stub (below). The call site looks the same.
@@ -369,7 +369,7 @@ the language yet; when it is, it wraps the same stub.
 | --- | --- | --- |
 | E285 | error | `server func 'F' parameter 'x' has type 'T', which cannot cross the network` |
 | E286 | error | `'F' runs in the browser but uses 'G', which only exists on the server` |
-| E287 | error | `server func 'F' must be declared at the top level` |
+| E287 | error | `server func 'F' must be declared at the top level`, or `... in the entry file, not in an included or imported one` |
 | E288 | error | `two server funcs are named 'F'` (after the Persian name is applied) |
 | E289 | error | `server func 'F' is reachable from a static build; build with --ssr or set 'server'` |
 | W280 | warning | `server func 'F' looks like backend code ('db'); call your API from here instead` |

@@ -20,6 +20,7 @@ for lang in en fa; do
     for name in events_rows scope_list; do
         cp "$root/tests/$lang/ui/$name.salam" "${lang}_$name.salam"
         if (
+            # shellcheck disable=SC3045
             ulimit -t "$limit"
             exec "$salam" build "${lang}_$name.salam" --platform=web --lang="$lang" \
                 --no-color --log-level=error

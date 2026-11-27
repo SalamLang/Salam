@@ -117,6 +117,8 @@ mut g_job_base := ""
 mut g_job_mode := ""
 mut g_job_force := false
 mut job_timer := 0 as i64
+mut boot_timer := 0 as i64
+mut g_worker_gen := 0
 
 struct Outputs:
     pub run: str = ""
@@ -1241,14 +1243,24 @@ func start_worker(state: int):
     g_worker_state = state
     ctor := salam_js_global("Worker")
     g_worker = salam_js_new(ctor, "worker.js?v=" + build_info.VERSION)
-    dom.OnEventE(g_worker, "message", (ev: i64): ret on_worker_message(ev) end)
-    dom.OnEvent(g_worker, "error", (): ret fail_worker("compiler_crashed") end)
+    g_worker_gen++
+    gen := g_worker_gen
+    dom.OnEventE(g_worker, "message", (ev: i64): ret on_worker_message(gen, ev) end)
+    dom.OnEvent(g_worker, "error", (): ret on_worker_error(gen) end)
+    dom.ClearTimeout(boot_timer)
+    boot_timer = dom.SetTimeout((): ret on_worker_error(gen) end, STALL_MS)
+end
+
+func on_worker_error(gen: int):
+    if gen == g_worker_gen: fail_worker("compiler_crashed") end
 end
 
 func fail_worker(reason: str):
     was_ready := g_worker_state == WORKER_READY
     dom.ClearTimeout(job_timer)
+    dom.ClearTimeout(boot_timer)
     _t := dom.Call0(g_worker, "terminate")
+    g_worker_gen++
     g_worker_state = WORKER_NONE
     if was_ready: start_worker(WORKER_RESTARTING) end
     if g_job_busy:
@@ -1258,10 +1270,12 @@ func fail_worker(reason: str):
     end
 end
 
-func on_worker_message(ev: i64):
+func on_worker_message(gen: int, ev: i64):
+    if gen != g_worker_gen: ret end
     data := dom.GetProp(ev, "data")
     kind := dom.GetStr(data, "type")
     if kind == "ready":
+        dom.ClearTimeout(boot_timer)
         g_worker_state = WORKER_READY
         if g_job_busy == false: run_waiting() end
     else kind == "crash":

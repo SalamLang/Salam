@@ -18,6 +18,7 @@ include "examples_data.salam"
 include "anim.salam"
 include "history.salam"
 include "complete.salam"
+include "page_parts.salam"
 include "build_info.salam"
 
 extern:
@@ -76,7 +77,6 @@ IR_KEYWORDS := "|define|declare|ret|br|switch|indirectbr|invoke|resume|unreachab
 mut g_module := 0 as i64
 mut fn_run_app := (_a: str, _b: str): ret "" end
 mut fn_build_layout := (_a: str, _b: str): ret "" end
-mut fn_emit := (_a: str, _b: str, _c: str): ret "" end
 mut fn_syntax_ok := (_a: str, _b: str): ret "" end
 mut fn_translate := (_a: str, _b: str): ret "" end
 mut run_timer := 0 as i64
@@ -92,23 +92,21 @@ mut ac_sel := -1
 mut ac_on := false
 mut ac_start := 0
 mut g_pending_translate := ""
+mut g_cache := Outputs {}
 mut g_cache_base := ""
-mut g_cache_run := ""
-mut g_cache_html := ""
-mut g_cache_css := ""
-mut g_cache_js := ""
-mut g_cache_run_failed := false
-mut g_cache_html_failed := false
-mut g_cache_css_failed := false
-mut g_cache_js_failed := false
-mut g_cache_has_run := false
-mut g_cache_has_html := false
-mut g_cache_has_css := false
-mut g_cache_has_js := false
+mut g_cache_ready := false
 mut g_shown_key := ""
 mut g_preview_doc := ""
 mut g_run_pending := false
 mut g_run_force := false
+
+struct Outputs:
+    pub run: str = ""
+    pub html: str = ""
+    pub css: str = ""
+    pub js: str = ""
+    pub failed: bool = false
+end
 
 func T(key: str): str:
     switch key:
@@ -995,9 +993,6 @@ func on_wasm_ready():
     fn_build_layout = salam_js_call(
         g_module, "cwrap", "salam_web_build_layout", "string", ["string", "string"]
     )
-    fn_emit = salam_js_call(
-        g_module, "cwrap", "salam_web_emit", "string", ["string", "string", "string"]
-    )
     fn_syntax_ok = salam_js_call(
         g_module, "cwrap", "salam_web_syntax_ok", "string", ["string", "string"]
     )
@@ -1069,82 +1064,55 @@ func cache_base(src: str): str:
     ret g_mode + "|" + g_lang + "|" + src
 end
 
-func cache_reset(base: str):
-    g_cache_base = base
-    g_cache_has_run = false
-    g_cache_has_html = false
-    g_cache_has_css = false
-    g_cache_has_js = false
-end
-
-func cache_has(base: str, view: str): bool:
-    if base != g_cache_base: ret false end
-    switch view:
-        "run": ret g_cache_has_run end
-        "html": ret g_cache_has_html end
-        "css": ret g_cache_has_css end
-        "js": ret g_cache_has_js end
-    end
-    ret false
+func cache_has(base: str): bool:
+    ret g_cache_ready and base == g_cache_base
 end
 
 func cache_out(view: str): str:
     switch view:
-        "html": ret g_cache_html end
-        "css": ret g_cache_css end
-        "js": ret g_cache_js end
+        "html": ret g_cache.html end
+        "css": ret g_cache.css end
+        "js": ret g_cache.js end
     end
-    ret g_cache_run
+    ret g_cache.run
 end
 
-func cache_failed(view: str): bool:
-    switch view:
-        "html": ret g_cache_html_failed end
-        "css": ret g_cache_css_failed end
-        "js": ret g_cache_js_failed end
+func call_compiler(src: str, lang: str, mode: str): Outputs:
+    if mode != "layout":
+        out := fn_run_app(src, lang)
+        ret Outputs { run = out, failed = last_failed() }
     end
-    ret g_cache_run_failed
+    doc := fn_build_layout(src, lang)
+    if last_failed():
+        ret Outputs {
+            run = doc,
+            html = doc,
+            css = doc,
+            js = doc,
+            failed = true
+        }
+    end
+    parts := page_parts.Split(doc)
+    ret Outputs {
+        run = doc,
+        html = parts.html,
+        css = parts.css,
+        js = parts.js
+    }
 end
 
-func cache_put(base: str, view: str, out: str, failed: bool):
-    if base != g_cache_base: cache_reset(base) end
-    if view == "run":
-        g_cache_run = out
-        g_cache_run_failed = failed
-        g_cache_has_run = true
-    else view == "html":
-        g_cache_html = out
-        g_cache_html_failed = failed
-        g_cache_has_html = true
-    else view == "css":
-        g_cache_css = out
-        g_cache_css_failed = failed
-        g_cache_has_css = true
-    else view == "js":
-        g_cache_js = out
-        g_cache_js_failed = failed
-        g_cache_has_js = true
-    end
-end
-
-func compute(view: str, src: str, force: bool):
+func compute(src: str, force: bool):
     base := cache_base(src)
-    if force == false and cache_has(base, view): ret end
-    mut out := ""
-    if view != "run":
-        out = fn_emit(src, g_lang, view)
-    else g_mode == "layout":
-        out = fn_build_layout(src, g_lang)
-    else:
-        out = fn_run_app(src, g_lang)
-    end
-    cache_put(base, view, out, last_failed())
+    if force == false and cache_has(base): ret end
+    g_cache = call_compiler(src, g_lang, g_mode)
+    g_cache_base = base
+    g_cache_ready = true
 end
 
 func show_result(view: str, src: str, force: bool):
     key := view + "|" + cache_base(src)
     out := cache_out(view)
-    failed := cache_failed(view)
+    failed := g_cache.failed
     if view == "run" and g_mode == "layout":
         anim.Hide()
         if failed:
@@ -1180,7 +1148,7 @@ func run_now():
     g_run_force = false
     if force: g_preview_doc = "" end
     src := dom.GetValue(el_code)
-    compute(g_view, src, force)
+    compute(src, force)
     show_result(g_view, src, force)
 end
 
@@ -1192,7 +1160,7 @@ func request_run(force: bool):
     if g_wasm_ready == false: ret end
     if force: g_run_force = true end
     src := dom.GetValue(el_code)
-    if g_run_force == false and cache_has(cache_base(src), g_view):
+    if g_run_force == false and cache_has(cache_base(src)):
         run_now()
         ret
     end

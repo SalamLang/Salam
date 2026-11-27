@@ -254,198 +254,6 @@ outbound := tunnel.Via(your_tls_dialer, hop)</code></pre>
 <li>No logging happens by itself.</li>
 </ul>
 <h2 id="types">Types</h2>
-<article class="api-item"><h3 class="api-name" id="Connector"><code dir="ltr">Connector</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Connector</span></code></pre><div class="api-doc">One Trojan hop of a <code>tunnel.Chain</code>: over a stream that already reaches the Trojan server it writes the Trojan request for a target. Make one with <code>NewConnector</code>. The stream underneath must already be encrypted (TLS) for the hop to be private.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">server</code></td><td><code dir="ltr">tunnel.Addr</code></td><td>The address of the Trojan server.</td></tr><tr><td><code dir="ltr">password</code></td><td><code dir="ltr">str = ""</code></td><td>The password. It is sent as a SHA-224 hash.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Adapter.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Adapter" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Adapter"><span class="tok-k">import</span> mem
-<span class="tok-k">import</span> net.trojan
-<span class="tok-k">import</span> net.tunnel
-<span class="tok-k">import</span> compress
-
-<span class="tok-k">func</span> <span class="tok-f">text_of</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
-    buf := mem.<span class="tok-f">Allocate</span>((n + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    mem.<span class="tok-f">Copy</span>(buf, p, n <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[n] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
-    <span class="tok-k">ret</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    hop := trojan.<span class="tok-f">NewConnector</span>(<span class="tok-s">&quot;vpn.example.com&quot;</span>, <span class="tok-n">443</span>, <span class="tok-s">&quot;password&quot;</span>)
-    <span class="tok-b">println</span> hop.<span class="tok-f">Name</span>(), hop.<span class="tok-f">Server</span>().host, hop.<span class="tok-f">Server</span>().port
-
-    pair := tunnel.<span class="tok-f">NewPipe</span>()
-    <span class="tok-b">println</span> hop.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(pair), tunnel.<span class="tok-f">NewAddr</span>(<span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>))
-    <span class="tok-k">mut</span> expected := trojan.<span class="tok-f">EncodeRequest</span>(<span class="tok-s">&quot;password&quot;</span>, trojan.CmdConnect, <span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>)
-    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">256</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    n := tunnel.<span class="tok-f">PipeB</span>(pair).<span class="tok-f">ReadBytes</span>(buf, <span class="tok-n">256</span>)
-    <span class="tok-b">println</span> n, n == expected.len, <span class="tok-f">text_of</span>(buf, n) == <span class="tok-f">text_of</span>(expected.data, expected.len)
-
-    <span class="tok-k">mut</span> inbound := trojan.<span class="tok-f">NewInbound</span>()
-    trojan.<span class="tok-f">InboundAddPassword</span>(inbound, <span class="tok-s">&quot;password&quot;</span>)
-    trojan.<span class="tok-f">InboundAddPassword</span>(inbound, <span class="tok-s">&quot;other&quot;</span>)
-    <span class="tok-b">println</span> inbound.<span class="tok-f">Name</span>(), inbound.hashes.<span class="tok-f">Len</span>(), inbound.replies
-
-    good := tunnel.<span class="tok-f">NewPipe</span>()
-    tunnel.<span class="tok-f">PipeB</span>(good).<span class="tok-f">Write</span>(<span class="tok-f">text_of</span>(expected.data, expected.len) + <span class="tok-s">&quot;payload&quot;</span>)
-    session := inbound.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(good))
-    <span class="tok-b">println</span> session.ok,
-        session.target.host,
-        session.target.port,
-        session.protocol,
-        session.command,
-        <span class="tok-f">text_of</span>(session.initial_data, session.initial_size)
-
-    web := tunnel.<span class="tok-f">NewPipe</span>()
-    tunnel.<span class="tok-f">PipeB</span>(web).<span class="tok-f">Write</span>(<span class="tok-s">&quot;GET / HTTP/1.1\r\nHost: x\r\n\r\n&quot;</span>)
-    stranger := inbound.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(web))
-    <span class="tok-b">println</span> stranger.ok, stranger.error, stranger.initial.<span class="tok-f">Len</span>()
-
-    wrong := trojan.<span class="tok-f">EncodeRequest</span>(<span class="tok-s">&quot;nope&quot;</span>, trojan.CmdConnect, <span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>)
-    bad := tunnel.<span class="tok-f">NewPipe</span>()
-    tunnel.<span class="tok-f">PipeB</span>(bad).<span class="tok-f">Write</span>(<span class="tok-f">text_of</span>(wrong.data, wrong.len))
-    rejected := inbound.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(bad))
-    <span class="tok-b">println</span> rejected.ok, rejected.initial.<span class="tok-f">Len</span>() == wrong.len
-    inbound.<span class="tok-f">Reply</span>(tunnel.<span class="tok-f">PipeA</span>(bad), rejected, <span class="tok-k">false</span>)
-
-    <span class="tok-k">mut</span> chain := tunnel.<span class="tok-f">NewChain</span>(tunnel.<span class="tok-f">Direct</span>())
-    tunnel.<span class="tok-f">ChainAdd</span>(chain, hop)
-    <span class="tok-b">println</span> chain.<span class="tok-f">Name</span>()
-    compress.<span class="tok-f">BufFree</span>(expected)
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>trojan vpn.example.com 443
-true
-76 true true
-trojan 2 0
-true example.com 443 trojan 1 payload
-false trojan authentication failed 27
-false true
-chain&gt;trojan</div></div><section class="api-method"><h4 class="api-name" id="Connector.Server"><code dir="ltr">Server</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Server</span>(): tunnel.Addr</code></pre><div class="api-doc">The address of the Trojan server.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Connector.Handshake"><code dir="ltr">Handshake</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Handshake</span>(s: dyn tunnel.Stream, target: tunnel.Addr): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes the Trojan request (hash, connect command, target) on the open stream. It does not wait for an answer, because Trojan has none: data can follow at once.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Connector.Name"><code dir="ltr">Name</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Name</span>(): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns <code>trojan</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section></article>
-<article class="api-item"><h3 class="api-name" id="Inbound"><code dir="ltr">Inbound</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Inbound</span></code></pre><div class="api-doc">The server side of Trojan for <code>tunnel.InboundProtocol</code>: it reads the request from a stream, checks the password hash and returns the target. A request that fails the check is not answered, and the bytes read so far are kept in <code>tunnel.initial</code>, so a caller can pass them to a decoy site. Make one with <code>NewInbound</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">hashes</code></td><td><code dir="ltr">Vector<str></code></td><td>The accepted password hashes, as 56 character hex text.</td></tr><tr><td><code dir="ltr">replies</code></td><td><code dir="ltr">int = 0</code></td><td>A counter kept by the adapter. Trojan sends no reply, so it stays 0.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p><section class="api-method"><h4 class="api-name" id="Inbound.Name"><code dir="ltr">Name</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Name</span>(): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns <code>trojan</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Inbound.Handshake"><code dir="ltr">Handshake</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Handshake</span>(s: dyn tunnel.Stream): tunnel.Session</code></pre><div class="api-doc">Reads until a whole request has arrived, then checks its hash against the known ones. Returns the target, command and any payload that followed the request, or a failed session that still carries what was read.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Inbound.Reply"><code dir="ltr">Reply</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Reply</span>(_s: dyn tunnel.Stream, _sess: tunnel.Session, _ok: <span class="tok-t">bool</span>)</code></pre><div class="api-doc">Does nothing: Trojan has no reply.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section></article>
-<article class="api-item"><h3 class="api-name" id="ClientConfig"><code dir="ltr">ClientConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ClientConfig</span></code></pre><div class="api-doc">How to reach a Trojan server: its address and password, the TLS options and the transport. Make it with <code>NewClientConfig</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">server_host</code></td><td><code dir="ltr">str = ""</code></td><td>The server's host name or IP.</td></tr><tr><td><code dir="ltr">server_port</code></td><td><code dir="ltr">int = 443</code></td><td>The server's port. The default is 443.</td></tr><tr><td><code dir="ltr">password</code></td><td><code dir="ltr">str = ""</code></td><td>The password. It is sent as its SHA-224 hash.</td></tr><tr><td><code dir="ltr">sni</code></td><td><code dir="ltr">str = ""</code></td><td>The server name sent in the TLS handshake and checked in the certificate. Empty means the host.</td></tr><tr><td><code dir="ltr">alpn</code></td><td><code dir="ltr">str = ""</code></td><td>The ALPN protocol to offer, for example <code>h2</code> or <code>http/1.1</code>. Empty offers none.</td></tr><tr><td><code dir="ltr">insecure</code></td><td><code dir="ltr">bool = false</code></td><td>True to skip the certificate check. For tests only: it removes the protection TLS gives.</td></tr><tr><td><code dir="ltr">use_tls</code></td><td><code dir="ltr">bool = true</code></td><td>True to run over TLS, the normal and safe setting. The default is true. With <code>use_ws</code> it controls <code>wss</code> versus <code>ws</code>.</td></tr><tr><td><code dir="ltr">use_ws</code></td><td><code dir="ltr">bool = false</code></td><td>True to carry Trojan inside a WebSocket (so a CDN or a reverse proxy can sit in front). The default is false.</td></tr><tr><td><code dir="ltr">ws_path</code></td><td><code dir="ltr">str = "/"</code></td><td>The WebSocket path. The default is <code>/</code>.</td></tr><tr><td><code dir="ltr">lazy_header</code></td><td><code dir="ltr">bool = false</code></td><td>True to hold the Trojan request back and send it together with the first data you write, so the first packet is not a fixed size request. The default is false.</td></tr><tr><td><code dir="ltr">timeout_ms</code></td><td><code dir="ltr">int = 10000</code></td><td>How long connecting may take, in milliseconds. The default is 10000.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Client.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Client" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Client"><span class="tok-k">import</span> mem
-<span class="tok-k">import</span> net.tcp
-<span class="tok-k">import</span> net.trojan
-<span class="tok-k">import</span> sync
-
-<span class="tok-k">mut</span> echo_port := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> web_port := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> web_seen := <span class="tok-s">&quot;&quot;</span>
-<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
-
-<span class="tok-k">func</span> <span class="tok-f">echo_server</span>():
-    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
-    echo_port = tcp.<span class="tok-f">Port</span>(srv)
-    sync.<span class="tok-f">Done</span>(ready)
-    <span class="tok-k">until</span> <span class="tok-k">true</span>:
-        c := tcp.<span class="tok-f">Accept</span>(srv)
-        <span class="tok-k">until</span> <span class="tok-k">true</span>:
-            data := tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
-            <span class="tok-k">if</span> data.<span class="tok-f">Len</span>() == <span class="tok-n">0</span>:
-                <span class="tok-k">break</span>
-            <span class="tok-k">end</span>
-            tcp.<span class="tok-f">Write</span>(c, <span class="tok-s">&quot;echo:&quot;</span> + data)
-        <span class="tok-k">end</span>
-        tcp.<span class="tok-f">Close</span>(c)
-    <span class="tok-k">end</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">web_server</span>():
-    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
-    web_port = tcp.<span class="tok-f">Port</span>(srv)
-    sync.<span class="tok-f">Done</span>(ready)
-    <span class="tok-k">until</span> <span class="tok-k">true</span>:
-        c := tcp.<span class="tok-f">Accept</span>(srv)
-        web_seen = tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
-        tcp.<span class="tok-f">Write</span>(
-            c, <span class="tok-s">&quot;HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes&quot;</span>
-        )
-        tcp.<span class="tok-f">Close</span>(c)
-    <span class="tok-k">end</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">start_servers</span>():
-    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">2</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
-    _a := <span class="tok-f">spawn</span>(echo_server)
-    _b := <span class="tok-f">spawn</span>(web_server)
-    sync.<span class="tok-f">Wait</span>(ready)
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">text_of</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
-    buf := mem.<span class="tok-f">Allocate</span>((n + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    mem.<span class="tok-f">Copy</span>(buf, p, n <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[n] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
-    <span class="tok-k">ret</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">read_text</span>(l &amp;: trojan.Link, want: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
-    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">8192</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    <span class="tok-k">defer</span> mem.<span class="tok-f">Free</span>(buf)
-    <span class="tok-k">mut</span> out := <span class="tok-s">&quot;&quot;</span>
-    <span class="tok-k">until</span> out.<span class="tok-f">Len</span>() &lt; want:
-        n := trojan.<span class="tok-f">LinkRead</span>(l, buf, <span class="tok-n">8192</span>)
-        <span class="tok-k">if</span> n &lt;= <span class="tok-n">0</span>:
-            <span class="tok-k">break</span>
-        <span class="tok-k">end</span>
-        out += <span class="tok-f">text_of</span>(buf, n)
-    <span class="tok-k">end</span>
-    <span class="tok-k">ret</span> out
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    <span class="tok-f">start_servers</span>()
-
-    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;&quot;</span>, <span class="tok-s">&quot;&quot;</span>)
-    trojan.<span class="tok-f">AllowPrivate</span>(config, <span class="tok-k">true</span>)
-    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;secret&quot;</span>)
-    trojan.<span class="tok-f">AddPasswordHash</span>(config, trojan.<span class="tok-f">PasswordHash</span>(<span class="tok-s">&quot;second&quot;</span>))
-    <span class="tok-b">println</span> config.hashes.<span class="tok-f">Len</span>(), config.handshake_timeout_ms
-    server := trojan.<span class="tok-f">ServePlain</span>(config, <span class="tok-n">0</span>)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;server up:&quot;</span>, server.ok, trojan.<span class="tok-f">ServerPort</span>(server) == server.port
-
-    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;secret&quot;</span>)
-    client.use_tls = <span class="tok-k">false</span>
-    <span class="tok-b">println</span> client.server_port != <span class="tok-n">443</span>, client.use_ws, client.lazy_header, client.timeout_ms
-    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">Dial</span>(client, <span class="tok-s">&quot;127.0.0.1&quot;</span>, echo_port)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;dial ok:&quot;</span>, trojan.<span class="tok-f">LinkOk</span>(link), link.kind == trojan.LinkTCP
-    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkWriteStr</span>(link, <span class="tok-s">&quot;hello trojan&quot;</span>)
-    <span class="tok-b">println</span> <span class="tok-f">read_text</span>(link, <span class="tok-n">17</span>)
-    big := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">30000</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    mem.<span class="tok-f">Set</span>(big, <span class="tok-n">97</span>, <span class="tok-n">30000</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkWrite</span>(link, big, <span class="tok-n">30000</span>)
-    <span class="tok-k">mut</span> total := <span class="tok-n">0</span>
-    <span class="tok-k">until</span> total &lt; <span class="tok-n">30005</span>:
-        buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">8192</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-        n := trojan.<span class="tok-f">LinkRead</span>(link, buf, <span class="tok-n">8192</span>)
-        mem.<span class="tok-f">Free</span>(buf)
-        <span class="tok-k">if</span> n &lt;= <span class="tok-n">0</span>:
-            <span class="tok-k">break</span>
-        <span class="tok-k">end</span>
-        total += n
-    <span class="tok-k">end</span>
-    <span class="tok-b">println</span> <span class="tok-s">&quot;echoed&quot;</span>, total
-    mem.<span class="tok-f">Free</span>(big)
-    trojan.<span class="tok-f">LinkSetTimeout</span>(link, <span class="tok-n">1000</span>)
-    trojan.<span class="tok-f">LinkClose</span>(link)
-
-    <span class="tok-k">mut</span> second := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;second&quot;</span>)
-    second.use_tls = <span class="tok-k">false</span>
-    second.lazy_header = <span class="tok-k">true</span>
-    <span class="tok-k">mut</span> lazy := trojan.<span class="tok-f">Dial</span>(second, <span class="tok-s">&quot;127.0.0.1&quot;</span>, echo_port)
-    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkWriteStr</span>(lazy, <span class="tok-s">&quot;lazy header&quot;</span>)
-    <span class="tok-b">println</span> <span class="tok-f">read_text</span>(lazy, <span class="tok-n">16</span>)
-    trojan.<span class="tok-f">LinkClose</span>(lazy)
-
-    sync.<span class="tok-f">SleepMs</span>(<span class="tok-n">300</span>)
-    stats := trojan.<span class="tok-f">Stats</span>(server)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;stats:&quot;</span>, stats.accepted, stats.authed, stats.fallbacks
-    trojan.<span class="tok-f">Stop</span>(server)
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>2 5000
-server up: true true
-true false false 10000
-dial ok: true true
-true
-echo:hello trojan
-true
-echoed 30040
-true
-echo:lazy header
-stats: 2 2 0</div></div></article>
-<article class="api-item"><h3 class="api-name" id="Link"><code dir="ltr">Link</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Link</span></code></pre><div class="api-doc">One connection to or from a Trojan peer, over TCP, TLS or WebSocket, with the buffers Trojan needs. <code>Dial</code> returns one; the server makes one for each client. Pass it by reference to the read and write functions.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">kind</code></td><td><code dir="ltr">int = 0</code></td><td><code>LinkTCP</code>, <code>LinkTLS</code> or <code>LinkWS</code>.</td></tr><tr><td><code dir="ltr">tc</code></td><td><code dir="ltr">tcp.Conn</code></td><td>The TCP connection, when <code>kind</code> is <code>LinkTCP</code>.</td></tr><tr><td><code dir="ltr">sc</code></td><td><code dir="ltr">tls.Conn</code></td><td>The TLS connection, when <code>kind</code> is <code>LinkTLS</code>.</td></tr><tr><td><code dir="ltr">ws</code></td><td><code dir="ltr">websocket.Conn</code></td><td>The WebSocket connection, when <code>kind</code> is <code>LinkWS</code>.</td></tr><tr><td><code dir="ltr">rbuf</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>Bytes that were read from the peer but not handed out yet.</td></tr><tr><td><code dir="ltr">roff</code></td><td><code dir="ltr">int = 0</code></td><td>How much of <code>rbuf</code> has been handed out.</td></tr><tr><td><code dir="ltr">ubuf</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>Bytes of a UDP packet that is still being assembled.</td></tr><tr><td><code dir="ltr">pending</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>The Trojan request held back by <code>lazy_header</code> until the first write.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="LinkStream"><code dir="ltr">LinkStream</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">LinkStream</span></code></pre><div class="api-doc">A <code>Link</code> seen as a <code>tunnel.Stream</code>, so a Trojan connection can be relayed, routed and counted with the <a href="/Salam/std/net/tunnel/">net.tunnel</a> tools. Make one with <code>AsStream</code>. Closing it only shuts the connection down; <code>LinkClose</code> still releases the <code>Link</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">link</code></td><td><code dir="ltr">Link*</code></td><td>The <code>Link</code> it wraps.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Modes.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Modes" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Modes"><span class="tok-c">/*
  * Salam Programming Language (2018-2026)
  *
@@ -588,7 +396,134 @@ up true down true total 2
 true
 true
 blocked read 0</div></div><section class="api-method"><h4 class="api-name" id="LinkStream.Read"><code dir="ltr">Read</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Read</span>(max: <span class="tok-t">int</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Reads up to <code>max</code> bytes as text.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.ReadBytes"><code dir="ltr">ReadBytes</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ReadBytes</span>(buf: <span class="tok-t">void</span>*, max: <span class="tok-t">int</span>): <span class="tok-t">int</span></code></pre><div class="api-doc">Reads up to <code>max</code> bytes into a buffer and returns how many.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.Write"><code dir="ltr">Write</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Write</span>(data: <span class="tok-t">str</span>): <span class="tok-t">int</span></code></pre><div class="api-doc">Writes text to the link and returns its length, or -1 on failure.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.WriteBytes"><code dir="ltr">WriteBytes</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">WriteBytes</span>(ptr: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">int</span></code></pre><div class="api-doc">Writes <code>n</code> bytes and returns <code>n</code>, or -1 on failure.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.SetDeadline"><code dir="ltr">SetDeadline</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SetDeadline</span>(millis: <span class="tok-t">int</span>)</code></pre><div class="api-doc">Sets the read timeout in milliseconds; 0 means none.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.Shutdown"><code dir="ltr">Shutdown</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Shutdown</span>()</code></pre><div class="api-doc">Shuts the connection down in both directions.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.CloseWrite"><code dir="ltr">CloseWrite</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">CloseWrite</span>()</code></pre><div class="api-doc">The half-close hook that relays call when one side has finished sending. A Trojan link cannot close only one direction, so it shuts the connection down in both, the same as <code>Shutdown</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.Close"><code dir="ltr">Close</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Close</span>()</code></pre><div class="api-doc">Same as <code>Shutdown</code>: the owner of the <code>Link</code> closes it with <code>LinkClose</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section><section class="api-method"><h4 class="api-name" id="LinkStream.Ok"><code dir="ltr">Ok</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Ok</span>(): <span class="tok-t">bool</span></code></pre><div class="api-doc">True while the link is open.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></section></article>
-<article class="api-item"><h3 class="api-name" id="ServerConfig"><code dir="ltr">ServerConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ServerConfig</span></code></pre><div class="api-doc">The settings of a Trojan server: certificate and key, the accepted passwords, the website to show to everyone else and the time limits. Start from <code>NewServerConfig</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">cert_file</code></td><td><code dir="ltr">str = ""</code></td><td>The PEM certificate file for TLS. Use a certificate for a real domain.</td></tr><tr><td><code dir="ltr">key_file</code></td><td><code dir="ltr">str = ""</code></td><td>The PEM private key file.</td></tr><tr><td><code dir="ltr">hashes</code></td><td><code dir="ltr">Vector<str></code></td><td>The accepted password hashes. <code>AddPassword</code> and <code>AddPasswordHash</code> add to it.</td></tr><tr><td><code dir="ltr">fallback_host</code></td><td><code dir="ltr">str = ""</code></td><td>The host of the website that gets every connection that is not a valid Trojan client. Empty means <code>127.0.0.1</code>.</td></tr><tr><td><code dir="ltr">fallback_port</code></td><td><code dir="ltr">int = 0</code></td><td>The port of that website. 0, the default, means there is none and such connections are simply closed.</td></tr><tr><td><code dir="ltr">max_per_source</code></td><td><code dir="ltr">int = 32</code></td><td>How many connections of one address may be in their handshake at once. 0 means no limit.</td></tr><tr><td><code dir="ltr">handshake_timeout_ms</code></td><td><code dir="ltr">int = 5000</code></td><td>How long a client has to send a complete request, in milliseconds. The default is 5000.</td></tr><tr><td><code dir="ltr">connect_timeout_ms</code></td><td><code dir="ltr">int = 10000</code></td><td>How long connecting to the target (or the fallback site) may take. The default is 10000.</td></tr><tr><td><code dir="ltr">idle_timeout_ms</code></td><td><code dir="ltr">int = 0</code></td><td>Cut a connection after this many silent milliseconds once it is running. 0, the default, means never.</td></tr><tr><td><code dir="ltr">mode</code></td><td><code dir="ltr">int = 0</code></td><td>How <code>Listen</code> serves: <code>ModeTLS</code> (the default), <code>ModePlain</code> or <code>ModeWS</code>.</td></tr><tr><td><code dir="ltr">bind_host</code></td><td><code dir="ltr">str = ""</code></td><td>The address to listen on. Empty picks a safe default for the mode: every interface for <code>ModeTLS</code>, <code>127.0.0.1</code> for <code>ModePlain</code> and <code>ModeWS</code>, which are meant to sit behind something that ends TLS. Give <code>0.0.0.0</code> to listen everywhere on purpose.</td></tr><tr><td><code dir="ltr">dialer</code></td><td><code dir="ltr">dyn tunnel.Dialer</code></td><td>The <code>tunnel.Dialer</code> that reaches targets. Used when <code>has_dialer</code> is true; otherwise targets are dialled directly with <code>connect_timeout_ms</code>.</td></tr><tr><td><code dir="ltr">has_dialer</code></td><td><code dir="ltr">bool = false</code></td><td>True after <code>SetDialer</code> or <code>SetRouter</code>.</td></tr><tr><td><code dir="ltr">stats</code></td><td><code dir="ltr">tunnel.Stats</code></td><td>The <code>tunnel.Stats</code> that count bytes and connections of this server. Used when <code>has_stats</code> is true.</td></tr><tr><td><code dir="ltr">has_stats</code></td><td><code dir="ltr">bool = false</code></td><td>True after <code>SetStats</code>.</td></tr><tr><td><code dir="ltr">allow_udp</code></td><td><code dir="ltr">bool = true</code></td><td>True (the default) to accept UDP sessions. UDP is always sent directly and does not go through the dialer, so set this to false when a router must be able to block everything.</td></tr><tr><td><code dir="ltr">policy</code></td><td><code dir="ltr">tunnel.DestPolicy</code></td><td>Which destinations may be reached. By default loopback, private, link local, metadata and other special addresses are refused. See <code>DestPolicy</code>.</td></tr><tr><td><code dir="ltr">router</code></td><td><code dir="ltr">tunnel.RouterDialer</code></td><td>The router dialer set by <code>SetRouter</code>; UDP targets that it sends to a block outbound are dropped.</td></tr><tr><td><code dir="ltr">has_router</code></td><td><code dir="ltr">bool = false</code></td><td>True when a router dialer is set.</td></tr><tr><td><code dir="ltr">max_connections</code></td><td><code dir="ltr">int = 1024</code></td><td>The most connections served at once; more are closed (SOCKS) or answered with 503 (HTTP). The default is 1024; 0 turns the cap off.</td></tr><tr><td><code dir="ltr">handshake_deadline_ms</code></td><td><code dir="ltr">int = 10000</code></td><td>The total time a connection has to finish its handshake, in milliseconds, however slowly it sends. The default is 10000; 0 turns it off.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="ServerConfig"><code dir="ltr">ServerConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ServerConfig</span></code></pre><div class="api-doc">The settings of a Trojan server: certificate and key, the accepted passwords, the website to show to everyone else and the time limits. Start from <code>NewServerConfig</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">cert_file</code></td><td><code dir="ltr">str = ""</code></td><td>The PEM certificate file for TLS. Use a certificate for a real domain.</td></tr><tr><td><code dir="ltr">key_file</code></td><td><code dir="ltr">str = ""</code></td><td>The PEM private key file.</td></tr><tr><td><code dir="ltr">hashes</code></td><td><code dir="ltr">Vector<str></code></td><td>The accepted password hashes. <code>AddPassword</code> and <code>AddPasswordHash</code> add to it.</td></tr><tr><td><code dir="ltr">fallback_host</code></td><td><code dir="ltr">str = ""</code></td><td>The host of the website that gets every connection that is not a valid Trojan client. Empty means <code>127.0.0.1</code>.</td></tr><tr><td><code dir="ltr">fallback_port</code></td><td><code dir="ltr">int = 0</code></td><td>The port of that website. 0, the default, means there is none and such connections are simply closed.</td></tr><tr><td><code dir="ltr">max_per_source</code></td><td><code dir="ltr">int = 32</code></td><td>How many connections of one address may be in their handshake at once. 0 means no limit.</td></tr><tr><td><code dir="ltr">handshake_timeout_ms</code></td><td><code dir="ltr">int = 5000</code></td><td>How long a client has to send a complete request, in milliseconds. The default is 5000.</td></tr><tr><td><code dir="ltr">connect_timeout_ms</code></td><td><code dir="ltr">int = 10000</code></td><td>How long connecting to the target (or the fallback site) may take. The default is 10000.</td></tr><tr><td><code dir="ltr">idle_timeout_ms</code></td><td><code dir="ltr">int = 0</code></td><td>Cut a connection after this many silent milliseconds once it is running. 0, the default, means never.</td></tr><tr><td><code dir="ltr">mode</code></td><td><code dir="ltr">int = 0</code></td><td>How <code>Listen</code> serves: <code>ModeTLS</code> (the default), <code>ModePlain</code> or <code>ModeWS</code>.</td></tr><tr><td><code dir="ltr">bind_host</code></td><td><code dir="ltr">str = ""</code></td><td>The address to listen on. Empty picks a safe default for the mode: every interface for <code>ModeTLS</code>, <code>127.0.0.1</code> for <code>ModePlain</code> and <code>ModeWS</code>, which are meant to sit behind something that ends TLS. Give <code>0.0.0.0</code> to listen everywhere on purpose.</td></tr><tr><td><code dir="ltr">dialer</code></td><td><code dir="ltr">dyn tunnel.Dialer</code></td><td>The <code>tunnel.Dialer</code> that reaches targets. Used when <code>has_dialer</code> is true; otherwise targets are dialled directly with <code>connect_timeout_ms</code>.</td></tr><tr><td><code dir="ltr">has_dialer</code></td><td><code dir="ltr">bool = false</code></td><td>True after <code>SetDialer</code> or <code>SetRouter</code>.</td></tr><tr><td><code dir="ltr">stats</code></td><td><code dir="ltr">tunnel.Stats</code></td><td>The <code>tunnel.Stats</code> that count bytes and connections of this server. Used when <code>has_stats</code> is true.</td></tr><tr><td><code dir="ltr">has_stats</code></td><td><code dir="ltr">bool = false</code></td><td>True after <code>SetStats</code>.</td></tr><tr><td><code dir="ltr">allow_udp</code></td><td><code dir="ltr">bool = true</code></td><td>True (the default) to accept UDP sessions. UDP is always sent directly and does not go through the dialer, so set this to false when a router must be able to block everything.</td></tr><tr><td><code dir="ltr">policy</code></td><td><code dir="ltr">tunnel.DestPolicy</code></td><td>Which destinations may be reached. By default loopback, private, link local, metadata and other special addresses are refused. See <code>DestPolicy</code>.</td></tr><tr><td><code dir="ltr">router</code></td><td><code dir="ltr">tunnel.RouterDialer</code></td><td>The router dialer set by <code>SetRouter</code>; UDP targets that it sends to a block outbound are dropped.</td></tr><tr><td><code dir="ltr">has_router</code></td><td><code dir="ltr">bool = false</code></td><td>True when a router dialer is set.</td></tr><tr><td><code dir="ltr">max_connections</code></td><td><code dir="ltr">int = 1024</code></td><td>The most connections served at once; more are closed (SOCKS) or answered with 503 (HTTP). The default is 1024; 0 turns the cap off.</td></tr><tr><td><code dir="ltr">handshake_deadline_ms</code></td><td><code dir="ltr">int = 10000</code></td><td>The total time a connection has to finish its handshake, in milliseconds, however slowly it sends. The default is 10000; 0 turns it off.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Client.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Client" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Client"><span class="tok-k">import</span> mem
+<span class="tok-k">import</span> net.tcp
+<span class="tok-k">import</span> net.trojan
+<span class="tok-k">import</span> sync
+
+<span class="tok-k">mut</span> echo_port := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> web_port := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> web_seen := <span class="tok-s">&quot;&quot;</span>
+<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
+
+<span class="tok-k">func</span> <span class="tok-f">echo_server</span>():
+    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
+    echo_port = tcp.<span class="tok-f">Port</span>(srv)
+    sync.<span class="tok-f">Done</span>(ready)
+    <span class="tok-k">until</span> <span class="tok-k">true</span>:
+        c := tcp.<span class="tok-f">Accept</span>(srv)
+        <span class="tok-k">until</span> <span class="tok-k">true</span>:
+            data := tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
+            <span class="tok-k">if</span> data.<span class="tok-f">Len</span>() == <span class="tok-n">0</span>:
+                <span class="tok-k">break</span>
+            <span class="tok-k">end</span>
+            tcp.<span class="tok-f">Write</span>(c, <span class="tok-s">&quot;echo:&quot;</span> + data)
+        <span class="tok-k">end</span>
+        tcp.<span class="tok-f">Close</span>(c)
+    <span class="tok-k">end</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">web_server</span>():
+    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
+    web_port = tcp.<span class="tok-f">Port</span>(srv)
+    sync.<span class="tok-f">Done</span>(ready)
+    <span class="tok-k">until</span> <span class="tok-k">true</span>:
+        c := tcp.<span class="tok-f">Accept</span>(srv)
+        web_seen = tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
+        tcp.<span class="tok-f">Write</span>(
+            c, <span class="tok-s">&quot;HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes&quot;</span>
+        )
+        tcp.<span class="tok-f">Close</span>(c)
+    <span class="tok-k">end</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">start_servers</span>():
+    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">2</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
+    _a := <span class="tok-f">spawn</span>(echo_server)
+    _b := <span class="tok-f">spawn</span>(web_server)
+    sync.<span class="tok-f">Wait</span>(ready)
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">text_of</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
+    buf := mem.<span class="tok-f">Allocate</span>((n + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    mem.<span class="tok-f">Copy</span>(buf, p, n <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[n] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
+    <span class="tok-k">ret</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">read_text</span>(l &amp;: trojan.Link, want: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
+    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">8192</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    <span class="tok-k">defer</span> mem.<span class="tok-f">Free</span>(buf)
+    <span class="tok-k">mut</span> out := <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">until</span> out.<span class="tok-f">Len</span>() &lt; want:
+        n := trojan.<span class="tok-f">LinkRead</span>(l, buf, <span class="tok-n">8192</span>)
+        <span class="tok-k">if</span> n &lt;= <span class="tok-n">0</span>:
+            <span class="tok-k">break</span>
+        <span class="tok-k">end</span>
+        out += <span class="tok-f">text_of</span>(buf, n)
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> out
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    <span class="tok-f">start_servers</span>()
+
+    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;&quot;</span>, <span class="tok-s">&quot;&quot;</span>)
+    trojan.<span class="tok-f">AllowPrivate</span>(config, <span class="tok-k">true</span>)
+    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;secret&quot;</span>)
+    trojan.<span class="tok-f">AddPasswordHash</span>(config, trojan.<span class="tok-f">PasswordHash</span>(<span class="tok-s">&quot;second&quot;</span>))
+    <span class="tok-b">println</span> config.hashes.<span class="tok-f">Len</span>(), config.handshake_timeout_ms
+    server := trojan.<span class="tok-f">ServePlain</span>(config, <span class="tok-n">0</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;server up:&quot;</span>, server.ok, trojan.<span class="tok-f">ServerPort</span>(server) == server.port
+
+    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;secret&quot;</span>)
+    client.use_tls = <span class="tok-k">false</span>
+    <span class="tok-b">println</span> client.server_port != <span class="tok-n">443</span>, client.use_ws, client.lazy_header, client.timeout_ms
+    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">Dial</span>(client, <span class="tok-s">&quot;127.0.0.1&quot;</span>, echo_port)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;dial ok:&quot;</span>, trojan.<span class="tok-f">LinkOk</span>(link), link.kind == trojan.LinkTCP
+    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkWriteStr</span>(link, <span class="tok-s">&quot;hello trojan&quot;</span>)
+    <span class="tok-b">println</span> <span class="tok-f">read_text</span>(link, <span class="tok-n">17</span>)
+    big := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">30000</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    mem.<span class="tok-f">Set</span>(big, <span class="tok-n">97</span>, <span class="tok-n">30000</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkWrite</span>(link, big, <span class="tok-n">30000</span>)
+    <span class="tok-k">mut</span> total := <span class="tok-n">0</span>
+    <span class="tok-k">until</span> total &lt; <span class="tok-n">30005</span>:
+        buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">8192</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+        n := trojan.<span class="tok-f">LinkRead</span>(link, buf, <span class="tok-n">8192</span>)
+        mem.<span class="tok-f">Free</span>(buf)
+        <span class="tok-k">if</span> n &lt;= <span class="tok-n">0</span>:
+            <span class="tok-k">break</span>
+        <span class="tok-k">end</span>
+        total += n
+    <span class="tok-k">end</span>
+    <span class="tok-b">println</span> <span class="tok-s">&quot;echoed&quot;</span>, total
+    mem.<span class="tok-f">Free</span>(big)
+    trojan.<span class="tok-f">LinkSetTimeout</span>(link, <span class="tok-n">1000</span>)
+    trojan.<span class="tok-f">LinkClose</span>(link)
+
+    <span class="tok-k">mut</span> second := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;second&quot;</span>)
+    second.use_tls = <span class="tok-k">false</span>
+    second.lazy_header = <span class="tok-k">true</span>
+    <span class="tok-k">mut</span> lazy := trojan.<span class="tok-f">Dial</span>(second, <span class="tok-s">&quot;127.0.0.1&quot;</span>, echo_port)
+    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkWriteStr</span>(lazy, <span class="tok-s">&quot;lazy header&quot;</span>)
+    <span class="tok-b">println</span> <span class="tok-f">read_text</span>(lazy, <span class="tok-n">16</span>)
+    trojan.<span class="tok-f">LinkClose</span>(lazy)
+
+    sync.<span class="tok-f">SleepMs</span>(<span class="tok-n">300</span>)
+    stats := trojan.<span class="tok-f">Stats</span>(server)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;stats:&quot;</span>, stats.accepted, stats.authed, stats.fallbacks
+    trojan.<span class="tok-f">Stop</span>(server)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>2 5000
+server up: true true
+true false false 10000
+dial ok: true true
+true
+echo:hello trojan
+true
+echoed 30040
+true
+echo:lazy header
+stats: 2 2 0</div></div></article>
 <article class="api-item"><h3 class="api-name" id="Session"><code dir="ltr">Session</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Session</span></code></pre><div class="api-doc">The result of <code>Handshake</code>: whether a valid client spoke, what it asked for and the bytes involved.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the request was valid and its password hash is known.</td></tr><tr><td><code dir="ltr">req</code></td><td><code dir="ltr">Request</code></td><td>The parsed request: command and target.</td></tr><tr><td><code dir="ltr">seen</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>Every byte read during the handshake. When <code>ok</code> is false these are what <code>Fallback</code> replays to the website.</td></tr><tr><td><code dir="ltr">extra</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>Payload that arrived in the same read as the request and must go to the target first.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Handshake.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Handshake" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Handshake"><span class="tok-k">import</span> net.tcp
 <span class="tok-k">import</span> net.trojan
 <span class="tok-k">import</span> sync
@@ -630,8 +565,72 @@ blocked read 0</div></div><section class="api-method"><h4 class="api-name" id="L
 server saw a valid client: true
 example.com 443 true
 bytes read: 76 payload after the request: 0</div></div></article>
-<article class="api-item"><h3 class="api-name" id="ServerStats"><code dir="ltr">ServerStats</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ServerStats</span></code></pre><div class="api-doc">Counters of a running server. <code>Stats</code> returns them.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">accepted</code></td><td><code dir="ltr">i64 = 0</code></td><td>Connections accepted.</td></tr><tr><td><code dir="ltr">authed</code></td><td><code dir="ltr">i64 = 0</code></td><td>Connections that were valid Trojan clients.</td></tr><tr><td><code dir="ltr">fallbacks</code></td><td><code dir="ltr">i64 = 0</code></td><td>Connections handed to the fallback website.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Server"><code dir="ltr">Server</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Server</span></code></pre><div class="api-doc">A running Trojan server. <code>Serve</code>, <code>ServePlain</code> and <code>ServeWS</code> return it and <code>Stop</code> ends it.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the port was bound and the server is running.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port it listens on, useful when you asked for 0.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The address the server listens on.</td></tr><tr><td><code dir="ltr">st</code></td><td><code dir="ltr">ServerState*</code></td><td>Internal state: the stop flag and the counters.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="ServerStats"><code dir="ltr">ServerStats</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ServerStats</span></code></pre><div class="api-doc">Counters of a running server. <code>Stats</code> returns them.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">accepted</code></td><td><code dir="ltr">i64 = 0</code></td><td>Connections accepted.</td></tr><tr><td><code dir="ltr">authed</code></td><td><code dir="ltr">i64 = 0</code></td><td>Connections that were valid Trojan clients.</td></tr><tr><td><code dir="ltr">fallbacks</code></td><td><code dir="ltr">i64 = 0</code></td><td>Connections handed to the fallback website.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Server"><code dir="ltr">Server</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Server</span></code></pre><div class="api-doc">A running Trojan server. <code>Serve</code>, <code>ServePlain</code> and <code>ServeWS</code> return it and <code>Stop</code> ends it.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">ok</code></td><td><code dir="ltr">bool = false</code></td><td>True when the port was bound and the server is running.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port it listens on, useful when you asked for 0.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The address the server listens on.</td></tr><tr><td><code dir="ltr">st</code></td><td><code dir="ltr">ServerState*</code></td><td>Internal state: the stop flag and the counters.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Connector"><code dir="ltr">Connector</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Connector</span></code></pre><div class="api-doc">One Trojan hop of a <code>tunnel.Chain</code>: over a stream that already reaches the Trojan server it writes the Trojan request for a target. Make one with <code>NewConnector</code>. The stream underneath must already be encrypted (TLS) for the hop to be private.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">server</code></td><td><code dir="ltr">tunnel.Addr</code></td><td>The address of the Trojan server.</td></tr><tr><td><code dir="ltr">password</code></td><td><code dir="ltr">str = ""</code></td><td>The password. It is sent as a SHA-224 hash.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Adapter.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Adapter" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Adapter"><span class="tok-k">import</span> mem
+<span class="tok-k">import</span> net.trojan
+<span class="tok-k">import</span> net.tunnel
+<span class="tok-k">import</span> compress
+
+<span class="tok-k">func</span> <span class="tok-f">text_of</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
+    buf := mem.<span class="tok-f">Allocate</span>((n + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    mem.<span class="tok-f">Copy</span>(buf, p, n <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[n] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
+    <span class="tok-k">ret</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    hop := trojan.<span class="tok-f">NewConnector</span>(<span class="tok-s">&quot;vpn.example.com&quot;</span>, <span class="tok-n">443</span>, <span class="tok-s">&quot;password&quot;</span>)
+    <span class="tok-b">println</span> hop.<span class="tok-f">Name</span>(), hop.<span class="tok-f">Server</span>().host, hop.<span class="tok-f">Server</span>().port
+
+    pair := tunnel.<span class="tok-f">NewPipe</span>()
+    <span class="tok-b">println</span> hop.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(pair), tunnel.<span class="tok-f">NewAddr</span>(<span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>))
+    <span class="tok-k">mut</span> expected := trojan.<span class="tok-f">EncodeRequest</span>(<span class="tok-s">&quot;password&quot;</span>, trojan.CmdConnect, <span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>)
+    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">256</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    n := tunnel.<span class="tok-f">PipeB</span>(pair).<span class="tok-f">ReadBytes</span>(buf, <span class="tok-n">256</span>)
+    <span class="tok-b">println</span> n, n == expected.len, <span class="tok-f">text_of</span>(buf, n) == <span class="tok-f">text_of</span>(expected.data, expected.len)
+
+    <span class="tok-k">mut</span> inbound := trojan.<span class="tok-f">NewInbound</span>()
+    trojan.<span class="tok-f">InboundAddPassword</span>(inbound, <span class="tok-s">&quot;password&quot;</span>)
+    trojan.<span class="tok-f">InboundAddPassword</span>(inbound, <span class="tok-s">&quot;other&quot;</span>)
+    <span class="tok-b">println</span> inbound.<span class="tok-f">Name</span>(), inbound.hashes.<span class="tok-f">Len</span>(), inbound.replies
+
+    good := tunnel.<span class="tok-f">NewPipe</span>()
+    tunnel.<span class="tok-f">PipeB</span>(good).<span class="tok-f">Write</span>(<span class="tok-f">text_of</span>(expected.data, expected.len) + <span class="tok-s">&quot;payload&quot;</span>)
+    session := inbound.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(good))
+    <span class="tok-b">println</span> session.ok,
+        session.target.host,
+        session.target.port,
+        session.protocol,
+        session.command,
+        <span class="tok-f">text_of</span>(session.initial_data, session.initial_size)
+
+    web := tunnel.<span class="tok-f">NewPipe</span>()
+    tunnel.<span class="tok-f">PipeB</span>(web).<span class="tok-f">Write</span>(<span class="tok-s">&quot;GET / HTTP/1.1\r\nHost: x\r\n\r\n&quot;</span>)
+    stranger := inbound.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(web))
+    <span class="tok-b">println</span> stranger.ok, stranger.error, stranger.initial.<span class="tok-f">Len</span>()
+
+    wrong := trojan.<span class="tok-f">EncodeRequest</span>(<span class="tok-s">&quot;nope&quot;</span>, trojan.CmdConnect, <span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>)
+    bad := tunnel.<span class="tok-f">NewPipe</span>()
+    tunnel.<span class="tok-f">PipeB</span>(bad).<span class="tok-f">Write</span>(<span class="tok-f">text_of</span>(wrong.data, wrong.len))
+    rejected := inbound.<span class="tok-f">Handshake</span>(tunnel.<span class="tok-f">PipeA</span>(bad))
+    <span class="tok-b">println</span> rejected.ok, rejected.initial.<span class="tok-f">Len</span>() == wrong.len
+    inbound.<span class="tok-f">Reply</span>(tunnel.<span class="tok-f">PipeA</span>(bad), rejected, <span class="tok-k">false</span>)
+
+    <span class="tok-k">mut</span> chain := tunnel.<span class="tok-f">NewChain</span>(tunnel.<span class="tok-f">Direct</span>())
+    tunnel.<span class="tok-f">ChainAdd</span>(chain, hop)
+    <span class="tok-b">println</span> chain.<span class="tok-f">Name</span>()
+    compress.<span class="tok-f">BufFree</span>(expected)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>trojan vpn.example.com 443
+true
+76 true true
+trojan 2 0
+true example.com 443 trojan 1 payload
+false trojan authentication failed 27
+false true
+chain&gt;trojan</div></div><section class="api-method"><h4 class="api-name" id="Connector.Server"><code dir="ltr">Server</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Server</span>(): tunnel.Addr</code></pre><div class="api-doc">The address of the Trojan server.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Connector.Handshake"><code dir="ltr">Handshake</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Handshake</span>(s: dyn tunnel.Stream, target: tunnel.Addr): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes the Trojan request (hash, connect command, target) on the open stream. It does not wait for an answer, because Trojan has none: data can follow at once.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Connector.Name"><code dir="ltr">Name</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Name</span>(): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns <code>trojan</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section></article>
+<article class="api-item"><h3 class="api-name" id="Inbound"><code dir="ltr">Inbound</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Inbound</span></code></pre><div class="api-doc">The server side of Trojan for <code>tunnel.InboundProtocol</code>: it reads the request from a stream, checks the password hash and returns the target. A request that fails the check is not answered, and the bytes read so far are kept in <code>tunnel.initial</code>, so a caller can pass them to a decoy site. Make one with <code>NewInbound</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">hashes</code></td><td><code dir="ltr">Vector<str></code></td><td>The accepted password hashes, as 56 character hex text.</td></tr><tr><td><code dir="ltr">replies</code></td><td><code dir="ltr">int = 0</code></td><td>A counter kept by the adapter. Trojan sends no reply, so it stays 0.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p><section class="api-method"><h4 class="api-name" id="Inbound.Name"><code dir="ltr">Name</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Name</span>(): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns <code>trojan</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Inbound.Handshake"><code dir="ltr">Handshake</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Handshake</span>(s: dyn tunnel.Stream): tunnel.Session</code></pre><div class="api-doc">Reads until a whole request has arrived, then checks its hash against the known ones. Returns the target, command and any payload that followed the request, or a failed session that still carries what was read.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section><section class="api-method"><h4 class="api-name" id="Inbound.Reply"><code dir="ltr">Reply</code></h4><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Reply</span>(_s: dyn tunnel.Stream, _sess: tunnel.Session, _ok: <span class="tok-t">bool</span>)</code></pre><div class="api-doc">Does nothing: Trojan has no reply.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></section></article>
+<article class="api-item"><h3 class="api-name" id="ClientConfig"><code dir="ltr">ClientConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">ClientConfig</span></code></pre><div class="api-doc">How to reach a Trojan server: its address and password, the TLS options and the transport. Make it with <code>NewClientConfig</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">server_host</code></td><td><code dir="ltr">str = ""</code></td><td>The server's host name or IP.</td></tr><tr><td><code dir="ltr">server_port</code></td><td><code dir="ltr">int = 443</code></td><td>The server's port. The default is 443.</td></tr><tr><td><code dir="ltr">password</code></td><td><code dir="ltr">str = ""</code></td><td>The password. It is sent as its SHA-224 hash.</td></tr><tr><td><code dir="ltr">sni</code></td><td><code dir="ltr">str = ""</code></td><td>The server name sent in the TLS handshake and checked in the certificate. Empty means the host.</td></tr><tr><td><code dir="ltr">alpn</code></td><td><code dir="ltr">str = ""</code></td><td>The ALPN protocol to offer, for example <code>h2</code> or <code>http/1.1</code>. Empty offers none.</td></tr><tr><td><code dir="ltr">insecure</code></td><td><code dir="ltr">bool = false</code></td><td>True to skip the certificate check. For tests only: it removes the protection TLS gives.</td></tr><tr><td><code dir="ltr">use_tls</code></td><td><code dir="ltr">bool = true</code></td><td>True to run over TLS, the normal and safe setting. The default is true. With <code>use_ws</code> it controls <code>wss</code> versus <code>ws</code>.</td></tr><tr><td><code dir="ltr">use_ws</code></td><td><code dir="ltr">bool = false</code></td><td>True to carry Trojan inside a WebSocket (so a CDN or a reverse proxy can sit in front). The default is false.</td></tr><tr><td><code dir="ltr">ws_path</code></td><td><code dir="ltr">str = "/"</code></td><td>The WebSocket path. The default is <code>/</code>.</td></tr><tr><td><code dir="ltr">lazy_header</code></td><td><code dir="ltr">bool = false</code></td><td>True to hold the Trojan request back and send it together with the first data you write, so the first packet is not a fixed size request. The default is false.</td></tr><tr><td><code dir="ltr">timeout_ms</code></td><td><code dir="ltr">int = 10000</code></td><td>How long connecting may take, in milliseconds. The default is 10000.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Request"><code dir="ltr">Request</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Request</span></code></pre><div class="api-doc">A parsed Trojan request: password hash, command and target.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">status</code></td><td><code dir="ltr">int = 1</code></td><td><code>ParseOK</code>, <code>ParseNeedMore</code> or <code>ParseInvalid</code>. Check it first.</td></tr><tr><td><code dir="ltr">hash</code></td><td><code dir="ltr">str = ""</code></td><td>The 56 character password hash from the request.</td></tr><tr><td><code dir="ltr">cmd</code></td><td><code dir="ltr">int = 0</code></td><td><code>CmdConnect</code> or <code>CmdUDP</code>.</td></tr><tr><td><code dir="ltr">atyp</code></td><td><code dir="ltr">int = 0</code></td><td>The address type of the target.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The target host name or IP.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The target port.</td></tr><tr><td><code dir="ltr">consumed</code></td><td><code dir="ltr">int = 0</code></td><td>How many bytes the request took. Anything after that is payload.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Wire.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Wire" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Wire"><span class="tok-k">import</span> net.trojan
 <span class="tok-k">import</span> compress
 
@@ -713,199 +712,15 @@ true 192.168.1.20
 true 2001:db8::1
 1 3 1 4 1 2</div></div></article>
 <article class="api-item"><h3 class="api-name" id="UDPPacket"><code dir="ltr">UDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">UDPPacket</span></code></pre><div class="api-doc">A parsed Trojan UDP packet: its target and where the payload sits.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">status</code></td><td><code dir="ltr">int = 1</code></td><td><code>ParseOK</code>, <code>ParseNeedMore</code> or <code>ParseInvalid</code>.</td></tr><tr><td><code dir="ltr">atyp</code></td><td><code dir="ltr">int = 0</code></td><td>The address type.</td></tr><tr><td><code dir="ltr">host</code></td><td><code dir="ltr">str = ""</code></td><td>The host the datagram is for or came from.</td></tr><tr><td><code dir="ltr">port</code></td><td><code dir="ltr">int = 0</code></td><td>The port.</td></tr><tr><td><code dir="ltr">payload_off</code></td><td><code dir="ltr">int = 0</code></td><td>The offset of the payload in the parsed bytes.</td></tr><tr><td><code dir="ltr">payload_len</code></td><td><code dir="ltr">int = 0</code></td><td>The payload length.</td></tr><tr><td><code dir="ltr">consumed</code></td><td><code dir="ltr">int = 0</code></td><td>How many bytes the packet took in total.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Link"><code dir="ltr">Link</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> <span class="tok-t">Link</span></code></pre><div class="api-doc">One connection to or from a Trojan peer, over TCP, TLS or WebSocket, with the buffers Trojan needs. <code>Dial</code> returns one; the server makes one for each client. Pass it by reference to the read and write functions.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">kind</code></td><td><code dir="ltr">int = 0</code></td><td><code>LinkTCP</code>, <code>LinkTLS</code> or <code>LinkWS</code>.</td></tr><tr><td><code dir="ltr">tc</code></td><td><code dir="ltr">tcp.Conn</code></td><td>The TCP connection, when <code>kind</code> is <code>LinkTCP</code>.</td></tr><tr><td><code dir="ltr">sc</code></td><td><code dir="ltr">tls.Conn</code></td><td>The TLS connection, when <code>kind</code> is <code>LinkTLS</code>.</td></tr><tr><td><code dir="ltr">ws</code></td><td><code dir="ltr">websocket.Conn</code></td><td>The WebSocket connection, when <code>kind</code> is <code>LinkWS</code>.</td></tr><tr><td><code dir="ltr">rbuf</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>Bytes that were read from the peer but not handed out yet.</td></tr><tr><td><code dir="ltr">roff</code></td><td><code dir="ltr">int = 0</code></td><td>How much of <code>rbuf</code> has been handed out.</td></tr><tr><td><code dir="ltr">ubuf</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>Bytes of a UDP packet that is still being assembled.</td></tr><tr><td><code dir="ltr">pending</code></td><td><code dir="ltr">compress.ByteBuf</code></td><td>The Trojan request held back by <code>lazy_header</code> until the first write.</td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
 <h2 id="values">Constants and variables</h2>
-<article class="api-item"><h3 class="api-name" id="Link"><span>Link kinds</span> <code dir="ltr">Link…</code></h3><div class="api-doc">The values of <code>kind</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="LinkTCP"><td><code dir="ltr">LinkTCP</code></td><td><code dir="ltr">0</code></td></tr><tr id="LinkTLS"><td><code dir="ltr">LinkTLS</code></td><td><code dir="ltr">1</code></td></tr><tr id="LinkWS"><td><code dir="ltr">LinkWS</code></td><td><code dir="ltr">2</code></td></tr></tbody></table></div></article>
 <article class="api-item"><h3 class="api-name" id="Mode"><span>Server modes</span> <code dir="ltr">Mode…</code></h3><div class="api-doc">The values of <code>mode</code>: <code>ModeTLS</code>, <code>ModePlain</code> and <code>ModeWS</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="ModeTLS"><td><code dir="ltr">ModeTLS</code></td><td><code dir="ltr">0</code></td></tr><tr id="ModePlain"><td><code dir="ltr">ModePlain</code></td><td><code dir="ltr">1</code></td></tr><tr id="ModeWS"><td><code dir="ltr">ModeWS</code></td><td><code dir="ltr">2</code></td></tr></tbody></table></div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Cmd"><span>Commands</span> <code dir="ltr">Cmd…</code></h3><div class="api-doc">The commands of <code>cmd</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="CmdConnect"><td><code dir="ltr">CmdConnect</code></td><td><code dir="ltr">1</code></td></tr><tr id="CmdUDP"><td><code dir="ltr">CmdUDP</code></td><td><code dir="ltr">3</code></td></tr></tbody></table></div></article>
 <article class="api-item"><h3 class="api-name" id="Atyp"><span>Address types</span> <code dir="ltr">Atyp…</code></h3><div class="api-doc">The address types of <code>atyp</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="AtypIPv4"><td><code dir="ltr">AtypIPv4</code></td><td><code dir="ltr">1</code></td></tr><tr id="AtypDomain"><td><code dir="ltr">AtypDomain</code></td><td><code dir="ltr">3</code></td></tr><tr id="AtypIPv6"><td><code dir="ltr">AtypIPv6</code></td><td><code dir="ltr">4</code></td></tr></tbody></table></div></article>
 <article class="api-item"><h3 class="api-name" id="Parse"><span>Parse results</span> <code dir="ltr">Parse…</code></h3><div class="api-doc">The values of <code>status</code> and <code>status</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="ParseOK"><td><code dir="ltr">ParseOK</code></td><td><code dir="ltr">0</code></td></tr><tr id="ParseNeedMore"><td><code dir="ltr">ParseNeedMore</code></td><td><code dir="ltr">1</code></td></tr><tr id="ParseInvalid"><td><code dir="ltr">ParseInvalid</code></td><td><code dir="ltr">2</code></td></tr></tbody></table></div></article>
+<article class="api-item"><h3 class="api-name" id="Link"><span>Link kinds</span> <code dir="ltr">Link…</code></h3><div class="api-doc">The values of <code>kind</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="LinkTCP"><td><code dir="ltr">LinkTCP</code></td><td><code dir="ltr">0</code></td></tr><tr id="LinkTLS"><td><code dir="ltr">LinkTLS</code></td><td><code dir="ltr">1</code></td></tr><tr id="LinkWS"><td><code dir="ltr">LinkWS</code></td><td><code dir="ltr">2</code></td></tr></tbody></table></div></article>
 <h2 id="funcs">Functions</h2>
-<article class="api-item"><h3 class="api-name" id="NewConnector"><code dir="ltr">NewConnector</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewConnector</span>(server_host: <span class="tok-t">str</span>, server_port: <span class="tok-t">int</span>, password: <span class="tok-t">str</span>): Connector</code></pre><div class="api-doc">Makes a <code>Connector</code> for a Trojan server address and a password.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="NewInbound"><code dir="ltr">NewInbound</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewInbound</span>(): Inbound</code></pre><div class="api-doc">Returns an <code>Inbound</code> with no passwords. Add them with <code>InboundAddPassword</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="InboundAddPassword"><code dir="ltr">InboundAddPassword</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">InboundAddPassword</span>(inb &amp;: Inbound, password: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Adds a password (stored as its hash) that the inbound accepts.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="NewClientConfig"><code dir="ltr">NewClientConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewClientConfig</span>(server_host: <span class="tok-t">str</span>, server_port: <span class="tok-t">int</span>, password: <span class="tok-t">str</span>): ClientConfig</code></pre><div class="api-doc">Makes a config for a server host, port and password with TLS on and the other options at their defaults.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Dial"><code dir="ltr">Dial</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Dial</span>(cfg: ClientConfig, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>): Link</code></pre><div class="api-doc">Connects to the Trojan server and sends the request for a target host and port. Returns a <code>Link</code> to read and write; check <code>LinkOk</code>. With <code>lazy_header</code> the request waits for your first write.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="DialUDP"><code dir="ltr">DialUDP</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">DialUDP</span>(cfg: ClientConfig): Link</code></pre><div class="api-doc">Connects and starts a UDP session: every packet then carries its own target. Use <code>SendUDP</code> and <code>ReadUDPPacket</code>.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Udp.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Udp" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Udp"><span class="tok-k">import</span> mem
-<span class="tok-k">import</span> net.trojan
-<span class="tok-k">import</span> net.udp
-<span class="tok-k">import</span> sync
-<span class="tok-k">import</span> compress
-
-<span class="tok-k">mut</span> udp_port := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
-
-<span class="tok-k">func</span> <span class="tok-f">udp_server</span>():
-    s := udp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
-    udp_port = udp.<span class="tok-f">Port</span>(s)
-    sync.<span class="tok-f">Done</span>(ready)
-    <span class="tok-k">until</span> <span class="tok-k">true</span>:
-        p := udp.<span class="tok-f">Receive</span>(s, <span class="tok-n">2048</span>)
-        <span class="tok-k">if</span> p.data.<span class="tok-f">Len</span>() &gt; <span class="tok-n">0</span>:
-            udp.<span class="tok-f">Send</span>(s, p.from_host, p.from_port, <span class="tok-s">&quot;echo:&quot;</span> + p.data)
-        <span class="tok-k">end</span>
-    <span class="tok-k">end</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">1</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
-    _t := <span class="tok-f">spawn</span>(udp_server)
-    sync.<span class="tok-f">Wait</span>(ready)
-
-    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;&quot;</span>, <span class="tok-s">&quot;&quot;</span>)
-    trojan.<span class="tok-f">AllowPrivate</span>(config, <span class="tok-k">true</span>)
-    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;secret&quot;</span>)
-    server := trojan.<span class="tok-f">ServePlain</span>(config, <span class="tok-n">0</span>)
-
-    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;secret&quot;</span>)
-    client.use_tls = <span class="tok-k">false</span>
-    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">DialUDP</span>(client)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;udp session:&quot;</span>, trojan.<span class="tok-f">LinkOk</span>(link)
-    <span class="tok-b">println</span> trojan.<span class="tok-f">WriteUDPPacket</span>(link, <span class="tok-s">&quot;127.0.0.1&quot;</span>, udp_port, <span class="tok-s">&quot;ping&quot;</span> <span class="tok-k">as</span> <span class="tok-t">void</span>*, <span class="tok-n">4</span>)
-
-    <span class="tok-k">mut</span> packet := trojan.<span class="tok-f">NewUDPPacket</span>()
-    <span class="tok-k">mut</span> payload := compress.<span class="tok-f">NewByteBuf</span>()
-    <span class="tok-b">println</span> trojan.<span class="tok-f">ReadUDPPacket</span>(link, packet, payload)
-    <span class="tok-b">println</span> packet.host, packet.port == udp_port, packet.status
-    buf := mem.<span class="tok-f">Allocate</span>((payload.len + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    mem.<span class="tok-f">Copy</span>(buf, payload.data, payload.len <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[payload.len] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
-    <span class="tok-b">println</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
-    trojan.<span class="tok-f">LinkClose</span>(link)
-    trojan.<span class="tok-f">Stop</span>(server)
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>udp session: true
-true
-true
-127.0.0.1 true 0
-echo:ping</div></div></article>
-<article class="api-item"><h3 class="api-name" id="SendUDP"><code dir="ltr">SendUDP</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SendUDP</span>(l &amp;: Link, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>, p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Sends one datagram to a host and port through a UDP session.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Sha224"><code dir="ltr">Sha224</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Sha224</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): compress.ByteBuf</code></pre><div class="api-doc">Returns the SHA-224 hash (28 bytes) of some memory.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="HexOf"><code dir="ltr">HexOf</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">HexOf</span>(b: compress.ByteBuf): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the bytes of a buffer as lowercase hex.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Sha224Hex"><code dir="ltr">Sha224Hex</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Sha224Hex</span>(s: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the SHA-224 hash of a text as 56 hex characters.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="PasswordHash"><code dir="ltr">PasswordHash</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">PasswordHash</span>(password: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the hash Trojan puts on the wire for a password: its SHA-224 as 56 hex characters.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="NewTCPLink"><code dir="ltr">NewTCPLink</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewTCPLink</span>(c: tcp.Conn): Link</code></pre><div class="api-doc">Wraps an accepted or dialed TCP connection as a <code>Link</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="NewTLSLink"><code dir="ltr">NewTLSLink</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewTLSLink</span>(c: tls.Conn): Link</code></pre><div class="api-doc">Wraps a TLS connection as a <code>Link</code>.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Tls.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Tls" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Tls"><span class="tok-k">import</span> net.trojan
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;fullchain.pem&quot;</span>, <span class="tok-s">&quot;privkey.pem&quot;</span>)
-    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;a long random password&quot;</span>)
-    trojan.<span class="tok-f">SetFallback</span>(config, <span class="tok-s">&quot;127.0.0.1&quot;</span>, <span class="tok-n">8080</span>)
-    server := trojan.<span class="tok-f">Serve</span>(config, <span class="tok-n">443</span>)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;trojan up:&quot;</span>, server.ok
-
-    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;proxy.example.com&quot;</span>, <span class="tok-n">443</span>, <span class="tok-s">&quot;a long random password&quot;</span>)
-    client.sni = <span class="tok-s">&quot;proxy.example.com&quot;</span>
-    client.alpn = <span class="tok-s">&quot;h2&quot;</span>
-    client.lazy_header = <span class="tok-k">true</span>
-    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">Dial</span>(client, <span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>)
-    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkOk</span>(link), link.kind == trojan.LinkTLS
-    trojan.<span class="tok-f">LinkClose</span>(link)
-    trojan.<span class="tok-f">Stop</span>(server)
-<span class="tok-k">end</span></code></pre></div></article>
-<article class="api-item"><h3 class="api-name" id="NewWSLink"><code dir="ltr">NewWSLink</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewWSLink</span>(c: websocket.Conn): Link</code></pre><div class="api-doc">Wraps a WebSocket connection as a <code>Link</code>.</div></article>
-<article class="api-item"><h3 class="api-name" id="LinkOk"><code dir="ltr">LinkOk</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkOk</span>(l: Link): <span class="tok-t">bool</span></code></pre><div class="api-doc">True when the link is usable.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkFd"><code dir="ltr">LinkFd</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkFd</span>(l: Link): <span class="tok-t">i64</span></code></pre><div class="api-doc">Returns the file descriptor under the link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkRead"><code dir="ltr">LinkRead</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkRead</span>(l &amp;: Link, buf: <span class="tok-t">void</span>*, max: <span class="tok-t">int</span>): <span class="tok-t">int</span></code></pre><div class="api-doc">Reads up to a number of bytes into a buffer, first from what was already buffered. Returns how many, or 0 or less at the end or on error.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkWrite"><code dir="ltr">LinkWrite</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkWrite</span>(l &amp;: Link, p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes bytes from memory. If a Trojan request is being held back it goes out first. False on failure.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkWriteBuf"><code dir="ltr">LinkWriteBuf</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkWriteBuf</span>(l &amp;: Link, b: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes a whole byte buffer.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkWriteStr"><code dir="ltr">LinkWriteStr</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkWriteStr</span>(l &amp;: Link, s: <span class="tok-t">str</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes a text.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkSetTimeout"><code dir="ltr">LinkSetTimeout</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkSetTimeout</span>(l: Link, millis: <span class="tok-t">int</span>)</code></pre><div class="api-doc">Sets the read and write timeout in milliseconds. 0 removes it.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="LinkShutdown"><code dir="ltr">LinkShutdown</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkShutdown</span>(l: Link)</code></pre><div class="api-doc">Stops both directions so that a thread blocked in a read wakes up, without freeing the link.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-WebSocket.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-WebSocket" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-WebSocket"><span class="tok-k">import</span> mem
-<span class="tok-k">import</span> net.tcp
-<span class="tok-k">import</span> net.trojan
-<span class="tok-k">import</span> sync
-
-<span class="tok-k">mut</span> echo_port := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> web_port := <span class="tok-n">0</span>
-<span class="tok-k">mut</span> web_seen := <span class="tok-s">&quot;&quot;</span>
-<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
-
-<span class="tok-k">func</span> <span class="tok-f">echo_server</span>():
-    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
-    echo_port = tcp.<span class="tok-f">Port</span>(srv)
-    sync.<span class="tok-f">Done</span>(ready)
-    <span class="tok-k">until</span> <span class="tok-k">true</span>:
-        c := tcp.<span class="tok-f">Accept</span>(srv)
-        <span class="tok-k">until</span> <span class="tok-k">true</span>:
-            data := tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
-            <span class="tok-k">if</span> data.<span class="tok-f">Len</span>() == <span class="tok-n">0</span>:
-                <span class="tok-k">break</span>
-            <span class="tok-k">end</span>
-            tcp.<span class="tok-f">Write</span>(c, <span class="tok-s">&quot;echo:&quot;</span> + data)
-        <span class="tok-k">end</span>
-        tcp.<span class="tok-f">Close</span>(c)
-    <span class="tok-k">end</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">web_server</span>():
-    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
-    web_port = tcp.<span class="tok-f">Port</span>(srv)
-    sync.<span class="tok-f">Done</span>(ready)
-    <span class="tok-k">until</span> <span class="tok-k">true</span>:
-        c := tcp.<span class="tok-f">Accept</span>(srv)
-        web_seen = tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
-        tcp.<span class="tok-f">Write</span>(
-            c, <span class="tok-s">&quot;HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes&quot;</span>
-        )
-        tcp.<span class="tok-f">Close</span>(c)
-    <span class="tok-k">end</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">start_servers</span>():
-    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">2</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
-    _a := <span class="tok-f">spawn</span>(echo_server)
-    _b := <span class="tok-f">spawn</span>(web_server)
-    sync.<span class="tok-f">Wait</span>(ready)
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">text_of</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
-    buf := mem.<span class="tok-f">Allocate</span>((n + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    mem.<span class="tok-f">Copy</span>(buf, p, n <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[n] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
-    <span class="tok-k">ret</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">read_text</span>(l &amp;: trojan.Link, want: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
-    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">8192</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
-    <span class="tok-k">defer</span> mem.<span class="tok-f">Free</span>(buf)
-    <span class="tok-k">mut</span> out := <span class="tok-s">&quot;&quot;</span>
-    <span class="tok-k">until</span> out.<span class="tok-f">Len</span>() &lt; want:
-        n := trojan.<span class="tok-f">LinkRead</span>(l, buf, <span class="tok-n">8192</span>)
-        <span class="tok-k">if</span> n &lt;= <span class="tok-n">0</span>:
-            <span class="tok-k">break</span>
-        <span class="tok-k">end</span>
-        out += <span class="tok-f">text_of</span>(buf, n)
-    <span class="tok-k">end</span>
-    <span class="tok-k">ret</span> out
-<span class="tok-k">end</span>
-
-<span class="tok-k">func</span> <span class="tok-f">main</span>:
-    <span class="tok-f">start_servers</span>()
-    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;&quot;</span>, <span class="tok-s">&quot;&quot;</span>)
-    trojan.<span class="tok-f">AllowPrivate</span>(config, <span class="tok-k">true</span>)
-    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;wspass&quot;</span>)
-    server := trojan.<span class="tok-f">ServeWS</span>(config, <span class="tok-n">0</span>)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;ws server up:&quot;</span>, server.ok
-
-    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;wspass&quot;</span>)
-    client.use_tls = <span class="tok-k">false</span>
-    client.use_ws = <span class="tok-k">true</span>
-    client.ws_path = <span class="tok-s">&quot;/trojan&quot;</span>
-    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">Dial</span>(client, <span class="tok-s">&quot;127.0.0.1&quot;</span>, echo_port)
-    <span class="tok-b">println</span> <span class="tok-s">&quot;ws dial ok:&quot;</span>, trojan.<span class="tok-f">LinkOk</span>(link), link.kind == trojan.LinkWS
-    trojan.<span class="tok-f">LinkWriteStr</span>(link, <span class="tok-s">&quot;over websocket&quot;</span>)
-    <span class="tok-b">println</span> <span class="tok-f">read_text</span>(link, <span class="tok-n">19</span>)
-    trojan.<span class="tok-f">LinkShutdown</span>(link)
-    trojan.<span class="tok-f">LinkClose</span>(link)
-    trojan.<span class="tok-f">Stop</span>(server)
-<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>ws server up: true
-ws dial ok: true true
-echo:over websocket</div></div></article>
-<article class="api-item"><h3 class="api-name" id="LinkClose"><code dir="ltr">LinkClose</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkClose</span>(l &amp;: Link)</code></pre><div class="api-doc">Closes the link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Relay"><code dir="ltr">Relay</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Relay</span>(a: Link*, b: Link*): <span class="tok-t">i64</span></code></pre><div class="api-doc">Copies data both ways between two links until one ends and returns how many bytes moved in total.</div></article>
-<article class="api-item"><h3 class="api-name" id="NewUDPPacket"><code dir="ltr">NewUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewUDPPacket</span>(): UDPPacket</code></pre><div class="api-doc">Returns an empty <code>UDPPacket</code> to be filled by <code>ReadUDPPacket</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="ReadUDPPacket"><code dir="ltr">ReadUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ReadUDPPacket</span>(l &amp;: Link, pkt &amp;: UDPPacket, payload &amp;: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Reads one UDP packet from a link: fills in the packet's target and puts the payload bytes in a buffer. False at the end of the link or on a malformed packet.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="WriteUDPPacket"><code dir="ltr">WriteUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">WriteUDPPacket</span>(l &amp;: Link, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>, p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes one UDP packet for a host and port to a link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="NewServerConfig"><code dir="ltr">NewServerConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewServerConfig</span>(cert_file: <span class="tok-t">str</span>, key_file: <span class="tok-t">str</span>): ServerConfig</code></pre><div class="api-doc">Makes a config from a certificate file and a key file. Empty names are fine for <code>ServePlain</code> and <code>ServeWS</code>, which use no TLS.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewServerConfig"><code dir="ltr">NewServerConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewServerConfig</span>(cert_file: <span class="tok-t">str</span>, key_file: <span class="tok-t">str</span>): ServerConfig</code></pre><div class="api-doc">Makes a config from a certificate file and a key file. Empty names are fine for <code>ServePlain</code> and <code>ServeWS</code>, which use no TLS.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="SetFallback"><code dir="ltr">SetFallback</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SetFallback</span>(cfg &amp;: ServerConfig, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>)</code></pre><div class="api-doc">Sets the website that receives every connection that is not a valid client. Point it at a real site (your own, on the same machine) so that a probe sees an ordinary web server.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Fallback.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Fallback" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Fallback"><span class="tok-k">import</span> mem
 <span class="tok-k">import</span> net.tcp
 <span class="tok-k">import</span> net.trojan
@@ -1018,8 +833,8 @@ plain web request gets the page too: true
 the site saw: GET / HTTP/1.1
 echo:real client
 accepted 3 authed 1 fallbacks 2</div></div></article>
-<article class="api-item"><h3 class="api-name" id="AddPassword"><code dir="ltr">AddPassword</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AddPassword</span>(cfg &amp;: ServerConfig, password: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Adds a password the server accepts. Only its SHA-224 hash is kept.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="AddPasswordHash"><code dir="ltr">AddPasswordHash</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AddPasswordHash</span>(cfg &amp;: ServerConfig, hash: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Adds an already hashed password (56 hex characters), so the plain password never has to be in the config.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="AddPassword"><code dir="ltr">AddPassword</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AddPassword</span>(cfg &amp;: ServerConfig, password: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Adds a password the server accepts. Only its SHA-224 hash is kept.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="AddPasswordHash"><code dir="ltr">AddPasswordHash</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AddPasswordHash</span>(cfg &amp;: ServerConfig, hash: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Adds an already hashed password (56 hex characters), so the plain password never has to be in the config.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Handshake"><code dir="ltr">Handshake</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Handshake</span>(l &amp;: Link, cfg: ServerConfig): Session</code></pre><div class="api-doc">Reads the client's first bytes until a whole request has arrived, checks the password hash and returns a <code>Session</code>. It never answers the client.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="FreeSession"><code dir="ltr">FreeSession</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">FreeSession</span>(s &amp;: Session)</code></pre><div class="api-doc">Frees the buffers of a session.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Fallback"><code dir="ltr">Fallback</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Fallback</span>(lp: Link*, cfg: ServerConfig, seen: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Connects to the fallback website, replays the bytes the client already sent and then relays both ways, so the client talks to the real site. False when there is no fallback or it cannot be reached.</div></article>
@@ -1033,12 +848,181 @@ accepted 3 authed 1 fallbacks 2</div></div></article>
 <article class="api-item"><h3 class="api-name" id="AllowPrivate"><code dir="ltr">AllowPrivate</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AllowPrivate</span>(cfg &amp;: ServerConfig, enabled: <span class="tok-t">bool</span>)</code></pre><div class="api-doc">Lets the server reach loopback and private addresses. It only takes effect when the server is bound to loopback; on any other address it is ignored.</div></article>
 <article class="api-item"><h3 class="api-name" id="SetStats"><code dir="ltr">SetStats</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SetStats</span>(cfg &amp;: ServerConfig, st: tunnel.Stats)</code></pre><div class="api-doc">Counts bytes up and down, connections, active and failed ones into a <code>tunnel.Stats</code> that you keep.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Listen"><code dir="ltr">Listen</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Listen</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts the server in the mode of the config (<code>ModeTLS</code>, <code>ModePlain</code> or <code>ModeWS</code>) on the configured address and a port (0 picks a free one). <code>Serve</code>, <code>ServePlain</code> and <code>ServeWS</code> are the same call with the mode fixed. Check <code>ok</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkStream">net-trojan-Modes.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Serve"><code dir="ltr">Serve</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Serve</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts a Trojan server on a port (0 picks a free one) with TLS, using the certificate and key of the config. This is the normal way to run one. Check <code>ok</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#NewTLSLink">net-trojan-Tls.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="ServePlain"><code dir="ltr">ServePlain</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ServePlain</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts a server without TLS. Anyone on the path can read the traffic, so use it only on loopback, in tests, or behind something else that provides TLS.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="ServeWS"><code dir="ltr">ServeWS</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ServeWS</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts a server that speaks Trojan inside WebSocket without TLS, meant to sit behind a reverse proxy or CDN that ends TLS. There is no fallback site in this mode.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LinkShutdown">net-trojan-WebSocket.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="ServerPort"><code dir="ltr">ServerPort</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ServerPort</span>(s: Server): <span class="tok-t">int</span></code></pre><div class="api-doc">Returns the port of a server.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Stats"><code dir="ltr">Stats</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Stats</span>(s: Server): ServerStats</code></pre><div class="api-doc">Returns the counters of a server: accepted, authenticated and handed to the fallback.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
-<article class="api-item"><h3 class="api-name" id="Stop"><code dir="ltr">Stop</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Stop</span>(s: Server)</code></pre><div class="api-doc">Stops accepting new clients. Connections already running finish on their own.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ClientConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Serve"><code dir="ltr">Serve</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Serve</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts a Trojan server on a port (0 picks a free one) with TLS, using the certificate and key of the config. This is the normal way to run one. Check <code>ok</code>.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Tls.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Tls" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Tls"><span class="tok-k">import</span> net.trojan
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;fullchain.pem&quot;</span>, <span class="tok-s">&quot;privkey.pem&quot;</span>)
+    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;a long random password&quot;</span>)
+    trojan.<span class="tok-f">SetFallback</span>(config, <span class="tok-s">&quot;127.0.0.1&quot;</span>, <span class="tok-n">8080</span>)
+    server := trojan.<span class="tok-f">Serve</span>(config, <span class="tok-n">443</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;trojan up:&quot;</span>, server.ok
+
+    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;proxy.example.com&quot;</span>, <span class="tok-n">443</span>, <span class="tok-s">&quot;a long random password&quot;</span>)
+    client.sni = <span class="tok-s">&quot;proxy.example.com&quot;</span>
+    client.alpn = <span class="tok-s">&quot;h2&quot;</span>
+    client.lazy_header = <span class="tok-k">true</span>
+    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">Dial</span>(client, <span class="tok-s">&quot;example.com&quot;</span>, <span class="tok-n">443</span>)
+    <span class="tok-b">println</span> trojan.<span class="tok-f">LinkOk</span>(link), link.kind == trojan.LinkTLS
+    trojan.<span class="tok-f">LinkClose</span>(link)
+    trojan.<span class="tok-f">Stop</span>(server)
+<span class="tok-k">end</span></code></pre></div></article>
+<article class="api-item"><h3 class="api-name" id="ServePlain"><code dir="ltr">ServePlain</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ServePlain</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts a server without TLS. Anyone on the path can read the traffic, so use it only on loopback, in tests, or behind something else that provides TLS.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="ServeWS"><code dir="ltr">ServeWS</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ServeWS</span>(cfg: ServerConfig, port: <span class="tok-t">int</span>): Server</code></pre><div class="api-doc">Starts a server that speaks Trojan inside WebSocket without TLS, meant to sit behind a reverse proxy or CDN that ends TLS. There is no fallback site in this mode.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-WebSocket.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-WebSocket" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-WebSocket"><span class="tok-k">import</span> mem
+<span class="tok-k">import</span> net.tcp
+<span class="tok-k">import</span> net.trojan
+<span class="tok-k">import</span> sync
+
+<span class="tok-k">mut</span> echo_port := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> web_port := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> web_seen := <span class="tok-s">&quot;&quot;</span>
+<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
+
+<span class="tok-k">func</span> <span class="tok-f">echo_server</span>():
+    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
+    echo_port = tcp.<span class="tok-f">Port</span>(srv)
+    sync.<span class="tok-f">Done</span>(ready)
+    <span class="tok-k">until</span> <span class="tok-k">true</span>:
+        c := tcp.<span class="tok-f">Accept</span>(srv)
+        <span class="tok-k">until</span> <span class="tok-k">true</span>:
+            data := tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
+            <span class="tok-k">if</span> data.<span class="tok-f">Len</span>() == <span class="tok-n">0</span>:
+                <span class="tok-k">break</span>
+            <span class="tok-k">end</span>
+            tcp.<span class="tok-f">Write</span>(c, <span class="tok-s">&quot;echo:&quot;</span> + data)
+        <span class="tok-k">end</span>
+        tcp.<span class="tok-f">Close</span>(c)
+    <span class="tok-k">end</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">web_server</span>():
+    srv := tcp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
+    web_port = tcp.<span class="tok-f">Port</span>(srv)
+    sync.<span class="tok-f">Done</span>(ready)
+    <span class="tok-k">until</span> <span class="tok-k">true</span>:
+        c := tcp.<span class="tok-f">Accept</span>(srv)
+        web_seen = tcp.<span class="tok-f">Read</span>(c, <span class="tok-n">4096</span>)
+        tcp.<span class="tok-f">Write</span>(
+            c, <span class="tok-s">&quot;HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes&quot;</span>
+        )
+        tcp.<span class="tok-f">Close</span>(c)
+    <span class="tok-k">end</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">start_servers</span>():
+    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">2</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
+    _a := <span class="tok-f">spawn</span>(echo_server)
+    _b := <span class="tok-f">spawn</span>(web_server)
+    sync.<span class="tok-f">Wait</span>(ready)
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">text_of</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
+    buf := mem.<span class="tok-f">Allocate</span>((n + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    mem.<span class="tok-f">Copy</span>(buf, p, n <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[n] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
+    <span class="tok-k">ret</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">read_text</span>(l &amp;: trojan.Link, want: <span class="tok-t">int</span>): <span class="tok-t">str</span>:
+    buf := mem.<span class="tok-f">Allocate</span>(<span class="tok-n">8192</span> <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    <span class="tok-k">defer</span> mem.<span class="tok-f">Free</span>(buf)
+    <span class="tok-k">mut</span> out := <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">until</span> out.<span class="tok-f">Len</span>() &lt; want:
+        n := trojan.<span class="tok-f">LinkRead</span>(l, buf, <span class="tok-n">8192</span>)
+        <span class="tok-k">if</span> n &lt;= <span class="tok-n">0</span>:
+            <span class="tok-k">break</span>
+        <span class="tok-k">end</span>
+        out += <span class="tok-f">text_of</span>(buf, n)
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> out
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    <span class="tok-f">start_servers</span>()
+    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;&quot;</span>, <span class="tok-s">&quot;&quot;</span>)
+    trojan.<span class="tok-f">AllowPrivate</span>(config, <span class="tok-k">true</span>)
+    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;wspass&quot;</span>)
+    server := trojan.<span class="tok-f">ServeWS</span>(config, <span class="tok-n">0</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;ws server up:&quot;</span>, server.ok
+
+    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;wspass&quot;</span>)
+    client.use_tls = <span class="tok-k">false</span>
+    client.use_ws = <span class="tok-k">true</span>
+    client.ws_path = <span class="tok-s">&quot;/trojan&quot;</span>
+    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">Dial</span>(client, <span class="tok-s">&quot;127.0.0.1&quot;</span>, echo_port)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;ws dial ok:&quot;</span>, trojan.<span class="tok-f">LinkOk</span>(link), link.kind == trojan.LinkWS
+    trojan.<span class="tok-f">LinkWriteStr</span>(link, <span class="tok-s">&quot;over websocket&quot;</span>)
+    <span class="tok-b">println</span> <span class="tok-f">read_text</span>(link, <span class="tok-n">19</span>)
+    trojan.<span class="tok-f">LinkShutdown</span>(link)
+    trojan.<span class="tok-f">LinkClose</span>(link)
+    trojan.<span class="tok-f">Stop</span>(server)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>ws server up: true
+ws dial ok: true true
+echo:over websocket</div></div></article>
+<article class="api-item"><h3 class="api-name" id="ServerPort"><code dir="ltr">ServerPort</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ServerPort</span>(s: Server): <span class="tok-t">int</span></code></pre><div class="api-doc">Returns the port of a server.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Stats"><code dir="ltr">Stats</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Stats</span>(s: Server): ServerStats</code></pre><div class="api-doc">Returns the counters of a server: accepted, authenticated and handed to the fallback.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Stop"><code dir="ltr">Stop</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Stop</span>(s: Server)</code></pre><div class="api-doc">Stops accepting new clients. Connections already running finish on their own.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Sha224"><code dir="ltr">Sha224</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Sha224</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): compress.ByteBuf</code></pre><div class="api-doc">Returns the SHA-224 hash (28 bytes) of some memory.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="HexOf"><code dir="ltr">HexOf</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">HexOf</span>(b: compress.ByteBuf): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the bytes of a buffer as lowercase hex.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Sha224Hex"><code dir="ltr">Sha224Hex</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Sha224Hex</span>(s: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the SHA-224 hash of a text as 56 hex characters.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="PasswordHash"><code dir="ltr">PasswordHash</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">PasswordHash</span>(password: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Returns the hash Trojan puts on the wire for a password: its SHA-224 as 56 hex characters.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewConnector"><code dir="ltr">NewConnector</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewConnector</span>(server_host: <span class="tok-t">str</span>, server_port: <span class="tok-t">int</span>, password: <span class="tok-t">str</span>): Connector</code></pre><div class="api-doc">Makes a <code>Connector</code> for a Trojan server address and a password.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewInbound"><code dir="ltr">NewInbound</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewInbound</span>(): Inbound</code></pre><div class="api-doc">Returns an <code>Inbound</code> with no passwords. Add them with <code>InboundAddPassword</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="InboundAddPassword"><code dir="ltr">InboundAddPassword</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">InboundAddPassword</span>(inb &amp;: Inbound, password: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Adds a password (stored as its hash) that the inbound accepts.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Connector">net-trojan-Adapter.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewClientConfig"><code dir="ltr">NewClientConfig</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewClientConfig</span>(server_host: <span class="tok-t">str</span>, server_port: <span class="tok-t">int</span>, password: <span class="tok-t">str</span>): ClientConfig</code></pre><div class="api-doc">Makes a config for a server host, port and password with TLS on and the other options at their defaults.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Dial"><code dir="ltr">Dial</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Dial</span>(cfg: ClientConfig, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>): Link</code></pre><div class="api-doc">Connects to the Trojan server and sends the request for a target host and port. Returns a <code>Link</code> to read and write; check <code>LinkOk</code>. With <code>lazy_header</code> the request waits for your first write.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="DialUDP"><code dir="ltr">DialUDP</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">DialUDP</span>(cfg: ClientConfig): Link</code></pre><div class="api-doc">Connects and starts a UDP session: every packet then carries its own target. Use <code>SendUDP</code> and <code>ReadUDPPacket</code>.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">net-trojan-Udp.salam</span><button type="button" class="copy-button" data-copy-target="ex-net-trojan-Udp" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-net-trojan-Udp"><span class="tok-k">import</span> mem
+<span class="tok-k">import</span> net.trojan
+<span class="tok-k">import</span> net.udp
+<span class="tok-k">import</span> sync
+<span class="tok-k">import</span> compress
+
+<span class="tok-k">mut</span> udp_port := <span class="tok-n">0</span>
+<span class="tok-k">mut</span> ready := sync.<span class="tok-f">NewWaitGroup</span>()
+
+<span class="tok-k">func</span> <span class="tok-f">udp_server</span>():
+    s := udp.<span class="tok-f">Bind</span>(<span class="tok-n">0</span>)
+    udp_port = udp.<span class="tok-f">Port</span>(s)
+    sync.<span class="tok-f">Done</span>(ready)
+    <span class="tok-k">until</span> <span class="tok-k">true</span>:
+        p := udp.<span class="tok-f">Receive</span>(s, <span class="tok-n">2048</span>)
+        <span class="tok-k">if</span> p.data.<span class="tok-f">Len</span>() &gt; <span class="tok-n">0</span>:
+            udp.<span class="tok-f">Send</span>(s, p.from_host, p.from_port, <span class="tok-s">&quot;echo:&quot;</span> + p.data)
+        <span class="tok-k">end</span>
+    <span class="tok-k">end</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    sync.<span class="tok-f">Add</span>(ready, <span class="tok-n">1</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
+    _t := <span class="tok-f">spawn</span>(udp_server)
+    sync.<span class="tok-f">Wait</span>(ready)
+
+    <span class="tok-k">mut</span> config := trojan.<span class="tok-f">NewServerConfig</span>(<span class="tok-s">&quot;&quot;</span>, <span class="tok-s">&quot;&quot;</span>)
+    trojan.<span class="tok-f">AllowPrivate</span>(config, <span class="tok-k">true</span>)
+    trojan.<span class="tok-f">AddPassword</span>(config, <span class="tok-s">&quot;secret&quot;</span>)
+    server := trojan.<span class="tok-f">ServePlain</span>(config, <span class="tok-n">0</span>)
+
+    <span class="tok-k">mut</span> client := trojan.<span class="tok-f">NewClientConfig</span>(<span class="tok-s">&quot;127.0.0.1&quot;</span>, server.port, <span class="tok-s">&quot;secret&quot;</span>)
+    client.use_tls = <span class="tok-k">false</span>
+    <span class="tok-k">mut</span> link := trojan.<span class="tok-f">DialUDP</span>(client)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;udp session:&quot;</span>, trojan.<span class="tok-f">LinkOk</span>(link)
+    <span class="tok-b">println</span> trojan.<span class="tok-f">WriteUDPPacket</span>(link, <span class="tok-s">&quot;127.0.0.1&quot;</span>, udp_port, <span class="tok-s">&quot;ping&quot;</span> <span class="tok-k">as</span> <span class="tok-t">void</span>*, <span class="tok-n">4</span>)
+
+    <span class="tok-k">mut</span> packet := trojan.<span class="tok-f">NewUDPPacket</span>()
+    <span class="tok-k">mut</span> payload := compress.<span class="tok-f">NewByteBuf</span>()
+    <span class="tok-b">println</span> trojan.<span class="tok-f">ReadUDPPacket</span>(link, packet, payload)
+    <span class="tok-b">println</span> packet.host, packet.port == udp_port, packet.status
+    buf := mem.<span class="tok-f">Allocate</span>((payload.len + <span class="tok-n">1</span>) <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    mem.<span class="tok-f">Copy</span>(buf, payload.data, payload.len <span class="tok-k">as</span> <span class="tok-t">u64</span>)
+    (buf <span class="tok-k">as</span> <span class="tok-t">u8</span>*)[payload.len] = <span class="tok-n">0</span> <span class="tok-k">as</span> <span class="tok-t">u8</span>
+    <span class="tok-b">println</span> buf <span class="tok-k">as</span> <span class="tok-t">str</span>
+    trojan.<span class="tok-f">LinkClose</span>(link)
+    trojan.<span class="tok-f">Stop</span>(server)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>udp session: true
+true
+true
+127.0.0.1 true 0
+echo:ping</div></div></article>
+<article class="api-item"><h3 class="api-name" id="SendUDP"><code dir="ltr">SendUDP</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">SendUDP</span>(l &amp;: Link, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>, p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Sends one datagram to a host and port through a UDP session.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="ParseIPv4"><code dir="ltr">ParseIPv4</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ParseIPv4</span>(text: <span class="tok-t">str</span>, out &amp;: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Parses IPv4 text into four bytes appended to a buffer. False when it is not an address.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="ParseIPv6"><code dir="ltr">ParseIPv6</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ParseIPv6</span>(text: <span class="tok-t">str</span>, out &amp;: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Parses IPv6 text into sixteen bytes appended to a buffer. False when it is not an address.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="FormatIPv4"><code dir="ltr">FormatIPv4</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">FormatIPv4</span>(p: <span class="tok-t">void</span>*, off: <span class="tok-t">int</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">Formats four bytes at an offset as dotted text.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
@@ -1050,6 +1034,22 @@ accepted 3 authed 1 fallbacks 2</div></div></article>
 <article class="api-item"><h3 class="api-name" id="ParseRequest"><code dir="ltr">ParseRequest</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ParseRequest</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): Request</code></pre><div class="api-doc">Parses a Trojan request from memory. Check <code>status</code>; on success <code>consumed</code> says where the payload starts.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="EncodeUDPPacket"><code dir="ltr">EncodeUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">EncodeUDPPacket</span>(host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>, payload: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): compress.ByteBuf</code></pre><div class="api-doc">Writes one UDP packet: the target address, the payload length, a line break and the payload.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="ParseUDPPacket"><code dir="ltr">ParseUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ParseUDPPacket</span>(p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): UDPPacket</code></pre><div class="api-doc">Parses one UDP packet from memory. Check <code>status</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Request">net-trojan-Wire.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewTCPLink"><code dir="ltr">NewTCPLink</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewTCPLink</span>(c: tcp.Conn): Link</code></pre><div class="api-doc">Wraps an accepted or dialed TCP connection as a <code>Link</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewTLSLink"><code dir="ltr">NewTLSLink</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewTLSLink</span>(c: tls.Conn): Link</code></pre><div class="api-doc">Wraps a TLS connection as a <code>Link</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Serve">net-trojan-Tls.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="NewWSLink"><code dir="ltr">NewWSLink</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewWSLink</span>(c: websocket.Conn): Link</code></pre><div class="api-doc">Wraps a WebSocket connection as a <code>Link</code>.</div></article>
+<article class="api-item"><h3 class="api-name" id="LinkOk"><code dir="ltr">LinkOk</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkOk</span>(l: Link): <span class="tok-t">bool</span></code></pre><div class="api-doc">True when the link is usable.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkFd"><code dir="ltr">LinkFd</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkFd</span>(l: Link): <span class="tok-t">i64</span></code></pre><div class="api-doc">Returns the file descriptor under the link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkRead"><code dir="ltr">LinkRead</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkRead</span>(l &amp;: Link, buf: <span class="tok-t">void</span>*, max: <span class="tok-t">int</span>): <span class="tok-t">int</span></code></pre><div class="api-doc">Reads up to a number of bytes into a buffer, first from what was already buffered. Returns how many, or 0 or less at the end or on error.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkWrite"><code dir="ltr">LinkWrite</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkWrite</span>(l &amp;: Link, p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes bytes from memory. If a Trojan request is being held back it goes out first. False on failure.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkWriteBuf"><code dir="ltr">LinkWriteBuf</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkWriteBuf</span>(l &amp;: Link, b: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes a whole byte buffer.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#Session">net-trojan-Handshake.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkWriteStr"><code dir="ltr">LinkWriteStr</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkWriteStr</span>(l &amp;: Link, s: <span class="tok-t">str</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes a text.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkSetTimeout"><code dir="ltr">LinkSetTimeout</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkSetTimeout</span>(l: Link, millis: <span class="tok-t">int</span>)</code></pre><div class="api-doc">Sets the read and write timeout in milliseconds. 0 removes it.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkShutdown"><code dir="ltr">LinkShutdown</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkShutdown</span>(l: Link)</code></pre><div class="api-doc">Stops both directions so that a thread blocked in a read wakes up, without freeing the link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServeWS">net-trojan-WebSocket.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="LinkClose"><code dir="ltr">LinkClose</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">LinkClose</span>(l &amp;: Link)</code></pre><div class="api-doc">Closes the link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#ServerConfig">net-trojan-Client.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Relay"><code dir="ltr">Relay</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Relay</span>(a: Link*, b: Link*): <span class="tok-t">i64</span></code></pre><div class="api-doc">Copies data both ways between two links until one ends and returns how many bytes moved in total.</div></article>
+<article class="api-item"><h3 class="api-name" id="NewUDPPacket"><code dir="ltr">NewUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">NewUDPPacket</span>(): UDPPacket</code></pre><div class="api-doc">Returns an empty <code>UDPPacket</code> to be filled by <code>ReadUDPPacket</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="ReadUDPPacket"><code dir="ltr">ReadUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ReadUDPPacket</span>(l &amp;: Link, pkt &amp;: UDPPacket, payload &amp;: compress.ByteBuf): <span class="tok-t">bool</span></code></pre><div class="api-doc">Reads one UDP packet from a link: fills in the packet's target and puts the payload bytes in a buffer. False at the end of the link or on a malformed packet.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="WriteUDPPacket"><code dir="ltr">WriteUDPPacket</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">WriteUDPPacket</span>(l &amp;: Link, host: <span class="tok-t">str</span>, port: <span class="tok-t">int</span>, p: <span class="tok-t">void</span>*, n: <span class="tok-t">int</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Writes one UDP packet for a host and port to a link.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#DialUDP">net-trojan-Udp.salam</a></p></article>
 
           </div>
         </article>

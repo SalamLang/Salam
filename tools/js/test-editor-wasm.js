@@ -54,6 +54,22 @@ const cases = [
     want: (out) => /#0000ff/i.test(out),
   },
   {
+    name: "a component with state builds a page that updates",
+    kind: "layout",
+    lang: "en",
+    src: 'component App():\n    count := 0\n    button:\n        content = "Go"\n        click = (): count++ end\n    end\n    paragraph: content = "Clicked " + count + " times" end\nend\npage:\n    App: end\nend\n',
+    want: (out) =>
+      out.indexOf("<script>") >= 0 && out.indexOf("Clicked ${") >= 0,
+  },
+  {
+    name: "a page run as a program points to layout mode",
+    kind: "app",
+    lang: "en",
+    src: 'page:\n    paragraph: content = "hi" end\nend\n',
+    fail: true,
+    want: (out) => out.indexOf("switch to Layout mode") >= 0,
+  },
+  {
     name: "a parse error is reported",
     kind: "app",
     lang: "en",

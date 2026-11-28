@@ -134,6 +134,9 @@ Status:
   state; on the page block itself those stay E129 for now, as for any
   page-level state. An `if` that shows or hides elements always uses the
   script path.
+- A `pub const` of an included package with a literal value (`theme.SOFT`
+  after `include theme "lib/theme.salam"` in the entry file) is a compile time
+  value in a style, like a constant of the file itself.
 - Native: the compiler injects the same hidden values and a setter, registered
   with `Builder.Env`; `gui.ui` calls it before the first frame and again on
   `Resized` and `ColorSchemeChanged` with the logical window size, so the

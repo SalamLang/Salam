@@ -136,8 +136,8 @@ the RISC-V `virt` board in `tests/kernel/riscv64/`.
 | `build-windows`       | `windows-2022`, `windows-2025`, `windows-2025-vs2026`    | `windows-x86_64` archives, `salam-windows.exe`    | Embedded static LLVM + LLD and sysroots, plus a bundled tcc for the C backend                      |
 | `build-windows-i686`  | `ubuntu-24.04`, cross-compiled with llvm-mingw           | `windows-i686` archives, `salam-windows-i686.exe` | Embedded LLVM + LLD when that cross build succeeds, otherwise built without it; bundled 32-bit tcc |
 | `build-windows-arm64` | `ubuntu-24.04`, cross-compiled with llvm-mingw           | `windows-arm64` archives                          | Embedded static LLVM + LLD; native backend by default (no tcc)                                     |
-| `build-linux-i686`    | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-i686` archives, `salam-linux-i686`         | Embedded static LLVM + LLD and sysroots; statically linked, so no JIT                              |
-| `build-linux-armhf`   | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-armhf` archives, `salam-linux-armhf`       | Embedded static LLVM + LLD and sysroots; statically linked, so no JIT                              |
+| `build-linux-i686`    | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-i686` archives, `salam-linux-i686`         | Embedded static LLVM + LLD and sysroots; statically linked, JIT resolves the C library only        |
+| `build-linux-armhf`   | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-armhf` archives, `salam-linux-armhf`       | Embedded static LLVM + LLD and sysroots; statically linked, JIT resolves the C library only        |
 | `build-linux-aarch64` | `ubuntu-24.04-arm`                                       | `linux-aarch64` archives, `salam-linux-aarch64`   | Embedded LLVM + LLD                                                                                |
 
 "Archives" means `salam-<version>-<name>.zip` and `.tar.gz`, each with

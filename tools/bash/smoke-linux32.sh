@@ -64,9 +64,13 @@ cross)
     SALAM_LLVM_JOBS=4 SALAM_LLVM_PARTITION_MIN=1 \
         NATIVE_HOST_FLAGS="--backend=llvm --linker=system --target=$OWN" \
         sh "$ROOT/tools/bash/native-host-check.sh" "$SALAM" $PROGRAMS
-    echo "JIT (informational: a static musl binary cannot load process symbols)"
-    "$SALAM" llvm smoke.salam --jit --log-level=warn ||
-        echo "::notice::--jit does not work in the $ARCH release binary"
+    echo "run through the JIT"
+    expect_ok "$SALAM" llvm smoke.salam --jit --log-level=warn
+    for f in $PROGRAMS; do
+        echo "jit ${f##*/}"
+        "$SALAM" llvm "$f" --jit --log-level=warn >jit.out
+        diff "${f%.salam}.out" jit.out
+    done
     ;;
 native)
     "$SALAM" llvm smoke.salam --exec -o smoke-exec --log-level=warn

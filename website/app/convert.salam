@@ -1,0 +1,551 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package convert
+
+import str
+import encoding.html
+
+const SKIPPED := "|svg|button|script|style|form|input|select|textarea|noscript|template|"
+const VOID := "|br|img|hr|input|meta|link|source|col|"
+const INLINE := "|p|span|code|small|strong|b|em|i|kbd|summary|dt|time|sup|sub|label|abbr|h1|h2|h3|h4|h5|h6|"
+const BLOCKS := "|box|section|article|nav|aside|paragraph|heading|list|ordered list|preformatted|figure|"
+const ELEMENTS := "|p=paragraph|a=link|ul=list|ol=ordered list|li=item|strong=strong|b=bold|em=emphasis|i=italic|code=code|pre=preformatted|span=span|time=span|sup=span|sub=span|small=small|kbd=keyboard|br=break|hr=line|img=image|iframe=iframe|details=details|summary=summary|figure=figure|blockquote=block quote|dl=description list|dt=term|dd=description|table=table|thead=header|tbody=main|tfoot=footer|tr=row|td=column|th=column|section=section|article=article|nav=nav|aside=aside|h1=heading|h2=heading|h3=heading|h4=heading|h5=heading|h6=heading|"
+
+struct Writer:
+    pub out: str.StringBuilder
+    pub open: Vector<str>
+    pub depth: int = 1
+    pub skip: int = 0
+    pub skip_tag: str = ""
+    pub verbatim: int = 0
+    pub base: str = ""
+    pub prefix: str = ""
+    pub previews: Vector<str>
+    pub seen: HashMap<str, bool>
+    pub plain: int = 0
+end
+
+func literal(text: str): str:
+    mut s := str.Replace(text, "\\", "\\\\")
+    s = str.Replace(s, "\"", "\\\"")
+    s = str.Replace(s, "\n", "\\n")
+    s = str.Replace(s, "\t", "\\t")
+    ret "\"" + str.Replace(s, "\r", "") + "\""
+end
+
+func listed(set: str, name: str): bool:
+    ret set.Find("|" + name + "|") >= 0
+end
+
+func attr(tag: str, name: str): str:
+    needle := " " + name + "=\""
+    at := str.IndexOf(tag, needle)
+    if at < 0:
+        ret ""
+    end
+    from := at + needle.Len()
+    rest := tag.Substr(from, tag.Len() - from)
+    stop := str.IndexOf(rest, "\"")
+    if stop < 0:
+        ret ""
+    end
+    ret html.Unescape(rest.Substr(0, stop))
+end
+
+func line(w &: Writer, text: str):
+    repeat w.depth:
+        str.BufAppend(w.out, "    ")
+    end
+    str.BufAppend(w.out, text + "\n")
+end
+
+func squeeze(text: str): str:
+    mut s := str.Replace(str.Replace(text, "\n", " "), "\t", " ")
+    until s.Find("  ") >= 0:
+        s = str.Replace(s, "  ", " ")
+    end
+    ret s
+end
+
+func words(w &: Writer, text: str):
+    if text.Len() == 0 or w.skip > 0:
+        ret
+    end
+    plain := html.Unescape(text)
+    if w.verbatim > 0:
+        line(w, "span: content = " + literal(plain) + " end")
+        ret
+    end
+    s := squeeze(plain)
+    if str.Trim(s).Len() == 0:
+        top := w.open.Len() > 0 ? w.open.Get(w.open.Len() - 1) : ""
+        if not listed("|p|a|li|code|span|strong|em|b|i|small|h1|h2|h3|h4|td|th|", top):
+            ret
+        end
+    end
+    line(w, "span: content = " + literal(s) + " end")
+end
+
+func element(name: str): str:
+    needle := "|" + name + "="
+    at := ELEMENTS.Find(needle)
+    if at < 0:
+        ret "box"
+    end
+    from := at + needle.Len()
+    rest := ELEMENTS.Substr(from, ELEMENTS.Len() - from)
+    ret rest.Substr(0, rest.Find("|"))
+end
+
+func local_path(w: Writer, href: str): str:
+    mut path := href
+    if w.base.Len() > 0 and str.StartsWith(path, w.base + "/"):
+        path = path.Substr(w.base.Len(), path.Len() - w.base.Len())
+    end
+    ret path
+end
+
+func link_lines(w &: Writer, href: str):
+    if href.Len() == 0:
+        line(w, "url = \"#\"")
+        ret
+    end
+    if str.StartsWith(href, "#"):
+        line(w, "url = " + literal("#" + w.prefix + "-" + href.Substr(1, href.Len() - 1)))
+        ret
+    end
+    path := local_path(w, href)
+    inside := str.StartsWith(path, "/") and not str.StartsWith(path, "//") and path.Find("#") < 0
+    if inside and str.EndsWith(path, "/"):
+        mut route := path
+        if route.Len() > 1:
+            route = route.Substr(0, route.Len() - 1)
+        end
+        line(w, "to = " + literal(route))
+        ret
+    end
+    if str.StartsWith(path, "/") and not str.StartsWith(path, "//"):
+        line(w, "url = " + literal(w.base + path))
+        ret
+    end
+    line(w, "url = " + literal(href))
+end
+
+func style_rules(rules &: Vector<str>, name: str, classes: str):
+    if element(name) == "box":
+        rules.Push("min width = 0")
+    end
+    marks := " " + classes + " "
+    if name == "h1":
+        rules.Push("margin = 0, 0, 12")
+        rules.Push("font size = 36")
+        rules.Push("line height = 1.35")
+    else name == "h2":
+        rules.Push("margin = 32, 0, 10")
+        rules.Push("font size = 26")
+        rules.Push("line height = 1.4")
+    else name == "h3":
+        rules.Push("margin = 24, 0, 8")
+        rules.Push("font size = 20")
+    else name == "p":
+        rules.Push("margin = 0, 0, 12")
+    else name == "a":
+        rules.Push("color = PAL_BRAND_TEXT")
+    else name == "pre":
+        rules.Push("margin = 0, 0, 16")
+        rules.Push("padding = 16")
+        rules.Push("radius = 12")
+        rules.Push("overflow = \"auto\"")
+        rules.Push("font = \"mono\"")
+        rules.Push("font size = 14")
+        rules.Push("background = PAL_CODE_BG")
+        rules.Push("color = PAL_CODE_FG")
+    else name == "table":
+        rules.Push("width = \"fill\"")
+        rules.Push("margin = 0, 0, 16")
+    else name == "td" or name == "th":
+        rules.Push("padding = 8, 12")
+        rules.Push("border = 1, \"solid\", PAL_LINE")
+    else name == "img":
+        rules.Push("max width = 100%")
+    else name == "iframe":
+        rules.Push("width = \"fill\"")
+        rules.Push("height = 360")
+        rules.Push("border = 1, \"solid\", PAL_LINE")
+        rules.Push("radius = 12")
+    else:
+        if marks.Find(" container ") >= 0:
+            rules.Push("width = \"fill\"")
+            rules.Push("max width = 1120")
+            rules.Push("margin = 0, \"auto\"")
+            rules.Push("padding = 24, 20")
+        end
+    end
+    if marks.Find(" tok-k ") >= 0:
+        rules.Push("color = \"#ff8a3d\"")
+    else marks.Find(" tok-t ") >= 0:
+        rules.Push("color = \"#6cc6ff\"")
+    else marks.Find(" tok-b ") >= 0:
+        rules.Push("color = \"#c792ea\"")
+    else marks.Find(" tok-f ") >= 0:
+        rules.Push("color = \"#ffd580\"")
+    else marks.Find(" tok-s ") >= 0:
+        rules.Push("color = \"#a5d68a\"")
+    else marks.Find(" tok-n ") >= 0:
+        rules.Push("color = \"#f78c6c\"")
+    else marks.Find(" tok-c ") >= 0:
+        rules.Push("color = \"#7d8290\"")
+    end
+    if marks.Find(" course ") >= 0:
+        rules.Push("layout = \"grid\"")
+        rules.Push("columns = \"250px, minmax(0, 1fr)\"")
+        rules.Push("gap = 40")
+        rules.Push("align = \"start\"")
+                rules.Push("~columns = \"minmax(0, 1fr)\"")
+    end
+    if marks.Find(" course-aside ") >= 0:
+        rules.Push("position = \"sticky\"")
+        rules.Push("top = 88")
+        rules.Push("max height = 85vh")
+        rules.Push("overflow = \"auto\"")
+        rules.Push("padding = 14")
+        rules.Push("radius = 14")
+        rules.Push("border = 1, \"solid\", PAL_LINE")
+        rules.Push("background = PAL_SOFT")
+                rules.Push("~position = \"normal\"")
+        rules.Push("~top = 0")
+        rules.Push("~max height = 280")
+    end
+    if marks.Find(" course-nav ") >= 0:
+        rules.Push("gap = 2")
+        rules.Push("font size = 14")
+    end
+    if marks.Find(" course-nav-part ") >= 0:
+        rules.Push("margin = 14, 0, 4")
+        rules.Push("font weight = 800")
+        rules.Push("color = PAL_MUTED")
+    end
+    if marks.Find(" course-num ") >= 0:
+        rules.Push("margin = 0, 6")
+        rules.Push("color = PAL_MUTED")
+    end
+    if marks.Find(" lesson-article ") >= 0:
+        rules.Push("min width = 0")
+        rules.Push("max width = 780")
+    end
+    if marks.Find(" lesson-meta ") >= 0:
+        rules.Push("font size = 14")
+        rules.Push("color = PAL_MUTED")
+    end
+    if marks.Find(" lesson-toc ") >= 0 or marks.Find(" note ") >= 0:
+        rules.Push("padding = 14, 18")
+        rules.Push("margin = 0, 0, 20")
+        rules.Push("radius = 12")
+        rules.Push("background = PAL_BRAND_SOFT")
+    end
+    if marks.Find(" lesson-steps ") >= 0:
+        rules.Push("layout = \"row\"")
+        rules.Push("wrap = true")
+        rules.Push("justify = \"between\"")
+        rules.Push("gap = 12")
+        rules.Push("margin = 32, 0, 0")
+    end
+    if marks.Find(" lesson-step ") >= 0 or marks.Find(" button ") >= 0:
+        rules.Push("padding = 10, 18")
+        rules.Push("radius = 10")
+        rules.Push("border = 1, \"solid\", PAL_LINE")
+        rules.Push("decoration = \"none\"")
+    end
+    if marks.Find(" table-wrap ") >= 0:
+        rules.Push("overflow = \"auto\"")
+    end
+    if marks.Find(" page-head ") >= 0:
+        rules.Push("padding = 48, 0, 28")
+        rules.Push("margin = 0, 0, 24")
+        rules.Push("background = PAL_BRAND_SOFT")
+    end
+    if marks.Find(" eyebrow ") >= 0:
+        rules.Push("font size = 14")
+        rules.Push("font weight = 700")
+        rules.Push("color = PAL_BRAND_TEXT")
+    end
+    if marks.Find(" grid-2 ") >= 0:
+        rules.Push("columns = \"repeat(2, minmax(0, 1fr))\"")
+        rules.Push("~columns = \"minmax(0, 1fr)\"")
+    end
+    if marks.Find(" card-head ") >= 0:
+        rules.Push("layout = \"row\"")
+        rules.Push("gap = 12")
+        rules.Push("align = \"center\"")
+    end
+    if marks.Find(" cmd-box ") >= 0 or marks.Find(" cmd ") >= 0:
+        rules.Push("padding = 12")
+        rules.Push("radius = 10")
+        rules.Push("overflow = \"auto\"")
+        rules.Push("min width = 0")
+        rules.Push("direction = \"ltr\"")
+        rules.Push("font size = 13")
+        rules.Push("background = PAL_CODE_BG")
+        rules.Push("color = PAL_CODE_FG")
+    end
+    if marks.Find(" section-head ") >= 0 or marks.Find(" section ") >= 0:
+        rules.Push("margin = 24, 0, 12")
+    end
+    if marks.Find(" lead ") >= 0:
+        rules.Push("font size = 18")
+        rules.Push("color = PAL_MUTED")
+    end
+    if marks.Find(" breadcrumb ") >= 0:
+        rules.Push("layout = \"row\"")
+        rules.Push("wrap = true")
+        rules.Push("gap = 8")
+        rules.Push("font size = 14")
+        rules.Push("color = PAL_MUTED")
+    end
+    if marks.Find(" lesson-layout ") >= 0:
+        rules.Push("layout = \"grid\"")
+        rules.Push("columns = \"260px, minmax(0, 1fr)\"")
+        rules.Push("gap = 32")
+        rules.Push("align = \"start\"")
+                rules.Push("~columns = \"minmax(0, 1fr)\"")
+    end
+    if marks.Find(" grid ") >= 0 or marks.Find(" blog-grid ") >= 0:
+        rules.Push("layout = \"grid\"")
+        rules.Push("columns = \"repeat(fill, minmax(260, 1fr))\"")
+        rules.Push("gap = 16")
+    end
+    if marks.Find(" card ") >= 0 or marks.Find(" blog-card ") >= 0 or marks.Find(
+        " api-item "
+    ) >= 0:
+        rules.Push("padding = 18")
+        rules.Push("margin = 0, 0, 12")
+        rules.Push("radius = 14")
+        rules.Push("border = 1, \"solid\", PAL_LINE")
+        rules.Push("background = PAL_SURFACE")
+        rules.Push("min width = 0")
+    end
+    if marks.Find(" code-window ") >= 0:
+        rules.Push("margin = 0, 0, 16")
+        rules.Push("radius = 14")
+        rules.Push("clip = true")
+        rules.Push("background = PAL_CODE_BG")
+        rules.Push("color = PAL_CODE_FG")
+        rules.Push("min width = 0")
+    end
+    if marks.Find(" code-bar ") >= 0:
+        rules.Push("layout = \"row\"")
+        rules.Push("gap = 8")
+        rules.Push("padding = 8, 16")
+        rules.Push("font size = 13")
+        rules.Push("color = PAL_CODE_MUTED")
+    end
+    if marks.Find(" code-output ") >= 0:
+        rules.Push("padding = 4, 16")
+        rules.Push("color = PAL_CODE_STRING")
+    end
+end
+
+func attribute(rule: str): str:
+    at := rule.Find(" = ")
+    ret at < 0 ? rule : rule.Substr(0, at)
+end
+
+func emit_rules(w &: Writer, rules: Vector<str>):
+    mut narrow := Vector {} as Vector<str>
+    repeat rules.Len() in i:
+        rule := rules.Get(i)
+        mut later := false
+        repeat rules.Len() in j:
+            if j > i and attribute(rules.Get(j)) == attribute(rule):
+                later = true
+            end
+        end
+        if later:
+            continue
+        end
+        if str.StartsWith(rule, "~"):
+            narrow.Push(rule.Substr(1, rule.Len() - 1))
+        else:
+            line(w, rule)
+        end
+    end
+    if narrow.Len() > 0:
+        line(w, "if screen width < 900:")
+        w.depth++
+        each rule in narrow:
+            line(w, rule)
+        end
+        w.depth--
+        line(w, "end")
+    end
+end
+
+func style(w &: Writer, name: str, classes: str):
+    mut rules := Vector {} as Vector<str>
+    style_rules(rules, name, classes)
+    emit_rules(w, rules)
+end
+
+func start(w &: Writer, name: str, tag: str):
+    if w.skip > 0:
+        if name == w.skip_tag:
+            w.skip++
+        end
+        ret
+    end
+    closed := listed(VOID, name) or str.EndsWith(tag, "/")
+    classes := attr(tag, "class")
+    if listed(SKIPPED, name) or (" " + classes + " ").Find(" dots ") >= 0:
+        if not closed:
+            w.skip = 1
+            w.skip_tag = name
+        end
+        ret
+    end
+    mut kind := element(name)
+    if (" " + classes).Find(" course-nav") >= 0 and name == "nav":
+        w.plain = w.open.Len() + 1
+    end
+    if w.plain > 0 and (name == "ol" or name == "ul" or name == "li"):
+        kind = "box"
+    end
+    repeat w.open.Len() in i:
+        if listed(INLINE, w.open.Get(i)) and listed(BLOCKS, kind):
+            kind = "span"
+        end
+    end
+    if kind == "table":
+        line(w, "box:")
+        w.depth++
+        line(w, "min width = 0")
+        line(w, "overflow = \"auto\"")
+    end
+    line(w, kind + ":")
+    w.depth++
+    if kind == "heading":
+        line(w, "size = " + name.Substr(1, 1))
+    end
+    id := attr(tag, "id")
+    if id.Len() > 0 and not w.seen.Has(id):
+        w.seen.Put(id, true)
+        line(w, "id = " + literal(w.prefix + "-" + id))
+    end
+    direction := attr(tag, "dir")
+    if direction.Len() > 0:
+        line(w, "direction = " + literal(direction))
+    end
+    if name == "a":
+        link_lines(w, attr(tag, "href"))
+    end
+    if name == "img":
+        line(w, "url = " + literal(attr(tag, "src")))
+        line(w, "alt = " + literal(attr(tag, "alt")))
+    end
+    if name == "iframe":
+        doc := attr(tag, "srcdoc")
+        if doc.Len() > 0:
+            file := "/previews/" + w.prefix + "-" + str.FromInt(w.previews.Len() as i64) + ".html"
+            w.previews.Push(doc)
+            line(w, "url = " + literal(w.base + file))
+        else:
+            line(w, "url = " + literal(attr(tag, "src")))
+        end
+    end
+    style(w, name, classes)
+    if name == "pre":
+        w.verbatim++
+    end
+    if closed:
+        w.depth--
+        line(w, "end")
+    else:
+        w.open.Push(name)
+    end
+end
+
+func close_tag(w &: Writer, name: str):
+    if w.skip > 0:
+        if name == w.skip_tag:
+            w.skip--
+        end
+        ret
+    end
+    if w.open.Len() == 0 or listed(VOID, name):
+        ret
+    end
+    if w.open.Get(w.open.Len() - 1) != name:
+        ret
+    end
+    _top := w.open.Pop()
+    if w.plain > w.open.Len():
+        w.plain = 0
+    end
+    if name == "pre":
+        w.verbatim--
+    end
+    w.depth--
+    line(w, "end")
+    if name == "table":
+        w.depth--
+        line(w, "end")
+    end
+end
+
+func name_of(tag: str): str:
+    mut cut := tag.Len()
+    each mark in [" ", "\n", "/", "\t"]:
+        at := tag.Find(mark)
+        if at > 0 and at < cut:
+            cut = at
+        end
+    end
+    ret str.Lower(tag.Substr(0, cut))
+end
+
+pub func Body(fragment: str, base: str, prefix: str, previews &: Vector<str>): str:
+    mut w := Writer {
+        out = str.NewBuilder(),
+        open = Vector {} as Vector<str>,
+        base = base,
+        prefix = prefix,
+        previews = Vector {} as Vector<str>,
+        seen = HashMap {} as HashMap<str, bool>
+    }
+    parts := str.Split(fragment, "<")
+    words(w, parts.Get(0))
+    repeat parts.Len() in i:
+        if i == 0:
+            continue
+        end
+        part := parts.Get(i)
+        at := part.Find(">")
+        if at < 0 or str.StartsWith(part, "!"):
+            continue
+        end
+        tag := part.Substr(0, at)
+        if str.StartsWith(tag, "/"):
+            close_tag(w, str.Lower(str.Trim(tag.Substr(1, tag.Len() - 1))))
+        else:
+            start(w, name_of(tag), tag)
+        end
+        words(w, part.Substr(at + 1, part.Len() - at - 1))
+    end
+    until w.open.Len() > 0:
+        close_tag(w, w.open.Get(w.open.Len() - 1))
+    end
+    repeat w.previews.Len() in i:
+        previews.Push(w.previews.Get(i))
+    end
+    ret str.BufStr(w.out)
+end

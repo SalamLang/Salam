@@ -108,7 +108,14 @@ done
 LLVM_CONFIG
 chmod +x "$WORK/llvm-config"
 
+JIT_LIBS="$OWN_SYSROOT/libc.a $OWN_SYSROOT/libgcc.a"
+atomic=$("$GCC" -print-file-name=libatomic.a)
+if [ -f "$atomic" ]; then
+    JIT_LIBS="$JIT_LIBS $atomic"
+fi
+
 SALAM_LLVM_PREFIX=$LLVM_PREFIX WITH_LLD=1 CC=$GCC CXX=${CROSS}g++ AR=${CROSS}ar \
+    NM=${CROSS}nm SALAM_JIT_STATIC_LIBS=$JIT_LIBS \
     sh "$ROOT/std/llvm/native/build.sh" --llvm-config "$WORK/llvm-config" --out "$WORK/llvm"
 
 sh "$ROOT/tools/bash/fetch-musl-sysroots.sh" --out "$WORK/muslcc" --arches x86_64

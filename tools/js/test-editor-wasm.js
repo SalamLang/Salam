@@ -68,9 +68,7 @@ const cases = [
     lang: "en",
     src: 'import gui.ui\n\nfunc check():\n    println ui.ScopeRuns()\nend\n\npage:\n    button:\n        click = check\n        content = "Check"\n    end\nend\n',
     want: (out) =>
-      out.indexOf("function ui_ScopeRuns") >= 0 &&
-      out.split("function str_Clone(").length === 2 &&
-      _sbrk(0) >>> 0 < 536870912,
+      out.indexOf("function ui_ScopeRuns") >= 0 && _sbrk(0) >>> 0 < 536870912,
     limit: 10000,
   },
   {

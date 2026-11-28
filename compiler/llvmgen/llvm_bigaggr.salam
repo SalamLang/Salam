@@ -241,6 +241,21 @@ func ba_uses_line(l: str, name: str): int:
     ret n
 end
 
+func ba_value_at(l: str, p: int): bool:
+    if p + 2 >= str.Len(l):
+        ret true
+    end
+    c := byte_at(l, p + 1)
+    d := byte_at(l, p + 2)
+    if (c == 118 or c == 112) and d == 46:
+        ret false
+    end
+    if c == 76 and d >= 48 and d <= 57:
+        ret false
+    end
+    ret not (c == 115 and d == 116)
+end
+
 func ba_count(lines: Vector<str>, uses &: HashMap<str, int>, last &: HashMap<str, int>):
     repeat lines.Len() in li:
         l := lines.Get(li)
@@ -254,9 +269,11 @@ func ba_count(lines: Vector<str>, uses &: HashMap<str, int>, last &: HashMap<str
             until e < n and ba_ident(byte_at(l, e)):
                 e++
             end
-            name := str.Substr(l, p, e - p)
-            uses.Put(name, uses.GetOr(name, 0) + 1)
-            last.Put(name, li)
+            if ba_value_at(l, p):
+                name := str.Substr(l, p, e - p)
+                uses.Put(name, uses.GetOr(name, 0) + 1)
+                last.Put(name, li)
+            end
             p = ba_find(l, "%", e)
         end
     end
@@ -313,8 +330,13 @@ func ba_type_size(t: str): str:
     ret "ptrtoint (ptr getelementptr (" + t + ", ptr null, i32 1) to i64)"
 end
 
+func ba_private(p: str): bool:
+    ret str.StartsWith(p, "%ba.") or str.EndsWith(p, ".bv") or str.Equals(p, "%sret.out")
+end
+
 func ba_memcpy(dst: str, src: str, t: str): str:
-    ret "  call void @llvm.memcpy.p0.p0.i64(ptr " + dst + ", ptr " + src + ", i64 " +
+    op := ba_private(dst) or ba_private(src) ? "memcpy" : "memmove"
+    ret "  call void @llvm." + op + ".p0.p0.i64(ptr " + dst + ", ptr " + src + ", i64 " +
         ba_type_size(t) + ", i1 false)"
 end
 
@@ -1187,6 +1209,9 @@ func BigAggrRewrite(src: str, native: bool): str:
     end
     if ba_find(src, "declare void @llvm.memcpy.p0.p0.i64(", 0) < 0:
         str.BufAppend(out, "\ndeclare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n")
+    end
+    if ba_find(src, "declare void @llvm.memmove.p0.p0.i64(", 0) < 0:
+        str.BufAppend(out, "\ndeclare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n")
     end
     if ba_find(src, "declare void @llvm.memset.p0.i64(", 0) < 0:
         str.BufAppend(out, "\ndeclare void @llvm.memset.p0.i64(ptr, i8, i64, i1) nounwind\n")

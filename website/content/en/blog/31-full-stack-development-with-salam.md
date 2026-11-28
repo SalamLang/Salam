@@ -111,7 +111,7 @@ func main:
     println http.Status(http.Post(base + "/notes", "text="))
     println http.Body(http.Get(base + "/api/notes"))
     page := http.Body(http.Get(base + "/"))
-    println page.Includes("<li>&lt;b&gt;buy milk&lt;/b&gt;</li>")
+    println page.Includes("&lt;b&gt;buy milk&lt;/b&gt;</li>")
 end
 ```
 

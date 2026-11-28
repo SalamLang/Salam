@@ -5,8 +5,8 @@
 # Usage:
 #   tools/bash/test-ui-web.sh <salam> <en|fa>
 #
-# Needs playwright-core on NODE_PATH. CHROME_PATH picks the browser, otherwise
-# the installed Chrome is used.
+# Needs playwright-core on NODE_PATH. CHROME picks the browser, otherwise the
+# installed Google Chrome or Chromium is used.
 
 set -eu
 

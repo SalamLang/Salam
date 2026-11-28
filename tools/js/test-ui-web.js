@@ -19,19 +19,22 @@ const expected = fs
   .readFileSync(fs.existsSync(web) ? web : `${base}.out`, "utf8")
   .replace(/\n+$/, "");
 
-async function launch() {
-  if (process.env.CHROME_PATH) {
-    return chromium.launch({ executablePath: process.env.CHROME_PATH });
+function browserPath() {
+  const list = [
+    process.env.CHROME,
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+  for (const p of list) {
+    if (p && fs.existsSync(p)) return p;
   }
-  try {
-    return await chromium.launch({ channel: "chrome" });
-  } catch {
-    return chromium.launch();
-  }
+  console.error("no browser found; set CHROME to a Chrome or Chromium binary");
+  process.exit(2);
 }
 
 (async () => {
-  const browser = await launch();
+  const browser = await chromium.launch({ executablePath: browserPath() });
   const page = await browser.newPage({
     viewport: { width: 1024, height: 768 },
   });

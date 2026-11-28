@@ -388388,11 +388388,34 @@ end
 _token = str.Clone(json.Get(http.Body(r), "token"))
 ret _token.Len() > 0
 end
+func _unreserved(c: int): bool:
+if c >= 48 and c <= 57: ret true end
+if c >= 65 and c <= 90: ret true end
+if c >= 97 and c <= 122: ret true end
+ret c == 45 or c == 46 or c == 95 or c == 126
+end
+func _segment(name: str): str:
+hex := "0123456789ABCDEF"
+p := (name as void*) as i8*
+mut out := ""
+mut i := 0
+until i < str.ByteLen(name):
+c := (p[i] as int) & 255
+if _unreserved(c):
+out += str.ByteSub(name, i, 1)
+else:
+out += "%" + hex.Substr(c / 16, 1) + hex.Substr(c % 16, 1)
+end
+i++
+end
+ret out
+end
 func _post(base: str, name: str, args: str): http.Response:
 mut h := http.NewHeaders()
 h.Insert("Content-Type", "application/json")
 h.Insert("X-Salam-Token", _token)
-ret http.PostWith(base + "/_salam/fn/" + name, "{\"args\":" + args + "}", h)
+url := base + "/_salam/fn/" + _segment(name)
+ret http.PostWith(url, "{\"args\":" + args + "}", h)
 end
 @en "Call"
 @fa "فراخوانی"
@@ -389190,12 +389213,14 @@ end
 if _token.Len() == 0 and not _session(base):
 ret _fail("cannot reach the server")
 end
-mut x := _send("POST", base + "/_salam/fn/" + name, "{\"args\":" + args + "}", true, _token)
+segment := salam_js_to_str(salam_js_invoke(salam_js_global("encodeURIComponent"), name))
+url := base + "/_salam/fn/" + segment
+mut x := _send("POST", url, "{\"args\":" + args + "}", true, _token)
 if salam_js_get_num(x, "status") == 403.0:
 if not _session(base):
 ret _fail("cannot reach the server")
 end
-x = _send("POST", base + "/_salam/fn/" + name, "{\"args\":" + args + "}", true, _token)
+x = _send("POST", url, "{\"args\":" + args + "}", true, _token)
 end
 text := salam_js_get_str(x, "responseText")
 if text.Len() == 0 or not json.Valid(text):
@@ -402485,6 +402510,36 @@ if i >= 0: h = _cur_h.Get(i) end
 sync.Unlock(_mu)
 ret h
 end
+func _hex_value(c: int): int:
+if c >= 48 and c <= 57: ret c - 48 end
+if c >= 65 and c <= 70: ret c - 55 end
+if c >= 97 and c <= 102: ret c - 87 end
+ret -1
+end
+func _decode_segment(s: str): str:
+n := str.ByteLen(s)
+p := (s as void*) as i8*
+mut sb := str.NewBuilder()
+defer str.BufFree(sb)
+mut i := 0
+until i < n:
+mut code := (p[i] as int) & 255
+if code == 37:
+if i + 2 >= n: ret str.Clone("") end
+hi := _hex_value((p[i + 1] as int) & 255)
+lo := _hex_value((p[i + 2] as int) & 255)
+if hi < 0 or lo < 0: ret str.Clone("") end
+code = hi * 16 + lo
+if code < 32 or code == 127: ret str.Clone("") end
+i += 3
+else:
+i++
+end
+str.BufAppendChar(sb, code)
+end
+out := str.BufStr(sb)
+ret out
+end
 func _lookup(name: str): i64:
 mut found := 0 as i64
 sync.Lock(_mu)
@@ -402604,8 +402659,10 @@ if not CheckToken(http.Header(c, "X-Salam-Token")):
 _reject(c, 403, "forbidden")
 ret
 end
-name := http.Param(c, "name")
-fn := _lookup(name)
+name := _decode_segment(http.Param(c, "name"))
+mut fn := 0 as i64
+if name.Len() > 0: fn = _lookup(name) end
+_free(name)
 if fn == (0 as i64):
 _reject(c, 404, "unknown function")
 ret

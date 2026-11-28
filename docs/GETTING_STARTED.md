@@ -470,12 +470,12 @@ opens no console window. `--subsystem=console` or `--subsystem=windows` picks
 the other kind for any program, on every backend and linker for MinGW targets.
 `salam run` keeps the console so you can read the output.
 
-A program built for Windows with `--backend=native` (or with
-`--linker=builtin`) can also carry an icon, an application manifest and version
-information:
+A program or DLL built for Windows can also carry an icon (`.ico` or `.png`),
+an application manifest and version information, with every backend and linker
+except the tcc C compiler, which warns instead:
 
 ```sh
-salam build app.salam --backend=native --target=x86_64-w64-windows-gnu \
+salam build app.salam --target=x86_64-w64-windows-gnu \
     --subsystem=windows --icon=app.ico --manifest=app.manifest \
     --version-info=version=1.2.0 --version-info=company="Example Ltd"
 ```
@@ -492,6 +492,11 @@ manifest = "app.manifest"
 description = "Salam demo"
 company = "Example Ltd"
 ```
+
+A project build takes the version, product name, description, company,
+copyright and icon from `[app]` when `[windows]` does not set them. `--sign`
+signs the result; see [DESKTOP.md](DESKTOP.md#signing) and
+[PROJECT_FILE.md](PROJECT_FILE.md).
 
 The compiler writes the resources itself, so no `windres` is needed. A GUI
 program still starts in `main`. Started from a terminal it prints nothing

@@ -278,6 +278,9 @@ static index lookup off). A project with `mode = hash` or its own `main`
 function is refused. Regions that need browser only state (`salamWsStyle`,
 per row state of `each`) are left empty by the server and filled by the bundle.
 
+The static prerender fills the same regions as the server, also the regions
+nested inside other regions (a stateful component in a layout, for example).
+
 The generated server reads `PORT` (`0` picks a free port) and `HOST`, serves `dist/public` with
 `ETag` and caching headers, and listens behind any reverse proxy. Backend
 addresses and secrets come from the environment through `std/env`.

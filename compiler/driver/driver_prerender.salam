@@ -23,6 +23,8 @@ include i18 "../i18n.salam"
 include lo "../sal_layout/sal_layout.salam"
 include ip "../interp/interp.salam"
 
+const PRE_MAX_DEPTH := 32
+
 mut g_dr_pre_route := Vector {} as Vector<str>
 mut g_dr_pre_region := Vector {} as Vector<int>
 mut g_dr_pre_html := Vector {} as Vector<str>
@@ -40,6 +42,44 @@ end
 func pre_marker(i: int): str:
     n := co.I64Toa(i as i64)
     ret "<!--salam:" + n + "--><!--/salam:" + n + "-->"
+end
+
+func pre_render_region(
+    lgr: lg.Logger, vm &: ip.Interp, a &: at.Ast, p: str, r: int, depth: int
+): str:
+    mut none := Vector {} as Vector<ip.Value>
+    defer none.Free()
+    mut out := ""
+    n := co.I64Toa(r as i64)
+    if lo.WebStateKind(r) == 0 and not ip.CallNamed(vm, a, "__salam_init_" + n, none, out):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, "pre-render " + p + " state " + n + ": " + out)
+        ret ""
+    end
+    if not ip.CallNamed(vm, a, "__salam_view_" + n, none, out):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_DEBUG, "pre-render " + p + " region " + n + ": " + out)
+        ret ""
+    end
+    if depth >= PRE_MAX_DEPTH:
+        ret out
+    end
+    repeat lo.WebStateCount() in inner:
+        if inner == r or lo.WebStateKind(inner) == 1:
+            continue
+        end
+        empty := pre_marker(inner)
+        k := str.IndexOf(out, empty)
+        if k < 0:
+            continue
+        end
+        body := pre_render_region(lgr, vm, a, p, inner, depth + 1)
+        out = pre_splice(out, k, inner, body)
+    end
+    ret out
+end
+
+func pre_splice(html: str, at: int, region: int, body: str): str:
+    lead := str.Len("<!--salam:" + co.I64Toa(region as i64) + "-->")
+    ret str.Substr(html, 0, at + lead) + body + str.Substr(html, at + lead, str.Len(html) - at - lead)
 end
 
 func prerender_page(lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, html: str):
@@ -107,33 +147,13 @@ func prerender_page(lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, prog: int, html: 
             g_dr_pre_title.Push(tt)
         end
         each r in regions:
-            mut none := Vector {} as Vector<ip.Value>
-            mut out := ""
-            if lo.WebStateKind(r) == 0 and not ip.CallNamed(
-                vm, a, "__salam_init_" + co.I64Toa(r as i64), none, out
-            ):
-                lg.Log(
-                    lgr,
-                    lg.PH_DRIVER,
-                    lg.LOG_DEBUG,
-                    "pre-render " + p + " state " + co.I64Toa(r as i64) + ": " + out
-                )
-            else ip.CallNamed(vm, a, "__salam_view_" + co.I64Toa(r as i64), none, out):
-                if str.Len(out) > 0:
-                    g_dr_pre_route.Push(p)
-                    g_dr_pre_region.Push(r)
-                    g_dr_pre_html.Push(out)
-                    filled++
-                end
-            else:
-                lg.Log(
-                    lgr,
-                    lg.PH_DRIVER,
-                    lg.LOG_DEBUG,
-                    "pre-render " + p + " region " + co.I64Toa(r as i64) + ": " + out
-                )
+            body := pre_render_region(lgr, vm, a, p, r, 0)
+            if str.Len(body) > 0:
+                g_dr_pre_route.Push(p)
+                g_dr_pre_region.Push(r)
+                g_dr_pre_html.Push(body)
+                filled++
             end
-            none.Free()
         end
     end
     ip.EndWeb()
@@ -179,16 +199,12 @@ func prerender_fill(html: str, route: str): str:
         if not str.Equals(g_dr_pre_route.Get(i), route):
             continue
         end
-        n := co.I64Toa(g_dr_pre_region.Get(i) as i64)
-        empty := "<!--salam:" + n + "--><!--/salam:" + n + "-->"
-        k := str.IndexOf(out, empty)
+        region := g_dr_pre_region.Get(i)
+        k := str.IndexOf(out, pre_marker(region))
         if k < 0:
             continue
         end
-        lead := str.Len("<!--salam:" + n + "-->")
-        out = str.Substr(out, 0, k + lead) + g_dr_pre_html.Get(i) + str.Substr(
-            out, k + lead, str.Len(out) - k - lead
-        )
+        out = pre_splice(out, k, region, g_dr_pre_html.Get(i))
     end
     ret out
 end

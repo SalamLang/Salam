@@ -1,0 +1,242 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package driver
+
+import io
+import str
+import mem
+
+include pth "../sal_path.salam"
+include sm "../semantic/semantic.salam"
+include jg "../jsgen/jsgen.salam"
+
+const K_DR_JSC_MAGIC := "salam-js-cache-2"
+
+mut g_dr_jsc_on := false
+mut g_dr_jsc_read := false
+mut g_dr_jsc_keys := Vector {} as Vector<str>
+mut g_dr_jsc_vals := Vector {} as Vector<JsCached>
+mut g_dr_jsc_ix := HashMap {} as HashMap<str, int>
+
+struct JsCached:
+    pub deps: Vector<str> = Vector {}
+    pub core: str = ""
+    pub globals: str = ""
+    pub global_names: Vector<str> = Vector {}
+    pub global_texts: Vector<str> = Vector {}
+    pub names: Vector<str> = Vector {}
+    pub texts: Vector<str> = Vector {}
+end
+
+struct JsCacheReader:
+    pub text: str = ""
+    pub len: int = 0
+    pub pos: int = 0
+    pub bad: bool = false
+end
+
+func jsc_add(key: str, entry: JsCached):
+    if g_dr_jsc_ix.Has(key):
+        ret
+    end
+    held := str.Clone(key)
+    g_dr_jsc_ix.Put(held, g_dr_jsc_vals.Len())
+    g_dr_jsc_keys.Push(held)
+    g_dr_jsc_vals.Push(entry)
+end
+
+func jsc_put(b &: str.StringBuilder, field: str):
+    str.BufAppend(b, str.FromInt(str.Len(field) as i64))
+    str.BufAppendChar(b, 10)
+    str.BufAppend(b, field)
+end
+
+func jsc_take(r &: JsCacheReader): str:
+    mut n := 0
+    mut digits := 0
+    until r.pos < r.len:
+        c := byte_at(r.text, r.pos)
+        if c < 48 or c > 57 or digits > 8:
+            break
+        end
+        n = n * 10 + (c - 48)
+        digits++
+        r.pos++
+    end
+    if digits == 0 or r.pos >= r.len or byte_at(r.text, r.pos) != 10 or n > r.len - r.pos - 1:
+        r.bad = true
+        r.pos = r.len
+        ret ""
+    end
+    r.pos++
+    out := mem.MustAllocateZeroed((n + 1) as u64)
+    from := (r.text as void*) as i64 + r.pos as i64
+    mem.Copy(out, from as void*, n as u64)
+    r.pos += n
+    ret out as str
+end
+
+func jsc_take_count(r &: JsCacheReader): int:
+    field := jsc_take(r)
+    mut n := 0
+    repeat str.Len(field) in i:
+        n = n * 10 + (byte_at(field, i) - 48)
+    end
+    if n < 0 or n > r.len:
+        r.bad = true
+        ret 0
+    end
+    ret n
+end
+
+func jsc_parse(text: str):
+    mut r := JsCacheReader {}
+    r.text = text
+    r.len = str.Len(text)
+    if not str.Equals(jsc_take(r), K_DR_JSC_MAGIC):
+        ret
+    end
+    until r.pos < r.len:
+        key := jsc_take(r)
+        mut e := JsCached {}
+        e.core = jsc_take(r)
+        e.globals = jsc_take(r)
+        repeat jsc_take_count(r):
+            e.deps.Push(jsc_take(r))
+        end
+        repeat jsc_take_count(r):
+            e.global_names.Push(jsc_take(r))
+            e.global_texts.Push(jsc_take(r))
+        end
+        repeat jsc_take_count(r):
+            e.names.Push(jsc_take(r))
+            e.texts.Push(jsc_take(r))
+        end
+        if r.bad:
+            ret
+        end
+        jsc_add(key, e)
+    end
+end
+
+func jsc_read_shipped():
+    if g_dr_jsc_read:
+        ret
+    end
+    g_dr_jsc_read = true
+    text := io.ReadFile(pth.PathJoin(sm.GetStdlibRoot(), "std/js.cache"))
+    if str.Len(text) > 0:
+        jsc_parse(text)
+    end
+end
+
+func jsc_applies(path: str): bool:
+    ret g_dr_jsc_on and sm.IsStdSource(path)
+end
+
+func jsc_queue(path: str, work &: Vector<str>):
+    if str.Len(path) == 0:
+        ret
+    end
+    repeat work.Len() in i:
+        if str.Equals(work.Get(i), path):
+            ret
+        end
+    end
+    work.Push(path)
+end
+
+func jsc_use(path: str, work &: Vector<str>, mods &: JsMods): bool:
+    if not jsc_applies(path):
+        ret false
+    end
+    jsc_read_shipped()
+    if not g_dr_jsc_ix.Has(path):
+        ret false
+    end
+    e := g_dr_jsc_vals.Get(g_dr_jsc_ix.Get(path))
+    if str.Len(mods.first_module) == 0:
+        mods.first_module = module_of(path)
+    end
+    each dep in e.deps:
+        jsc_queue(dep, work)
+    end
+    jsc_queue(e.core, work)
+    mods.globals.Push(e.globals)
+    repeat e.global_names.Len() in g:
+        mods.global_names.Push(e.global_names.Get(g))
+        mods.global_texts.Push(e.global_texts.Get(g))
+        mods.global_mod.Push(mods.count)
+    end
+    repeat e.names.Len() in i:
+        mods.fn_names.Push(e.names.Get(i))
+        mods.fn_texts.Push(e.texts.Get(i))
+        mods.seg_mod.Push(mods.count)
+    end
+    mods.count++
+    ret true
+end
+
+func jsc_keep(path: str, deps: Vector<str>, core: str, out &: jg.Output):
+    if not jsc_applies(path):
+        ret
+    end
+    mut e := JsCached {}
+    e.core = str.Clone(core)
+    e.globals = str.Clone(out.globals_src)
+    each dep in deps:
+        e.deps.Push(str.Clone(dep))
+    end
+    repeat out.global_names.Len() in g:
+        e.global_names.Push(str.Clone(out.global_names.Get(g)))
+        e.global_texts.Push(str.Clone(out.global_texts.Get(g)))
+    end
+    repeat out.fn_names.Len() in i:
+        e.names.Push(str.Clone(out.fn_names.Get(i)))
+        e.texts.Push(str.Clone(out.fn_texts.Get(i)))
+    end
+    jsc_add(path, e)
+end
+
+pub func ReuseStdScripts(enabled: bool):
+    g_dr_jsc_on = enabled
+end
+
+pub func StdScriptCache(): str:
+    mut b := str.NewBuilder()
+    jsc_put(b, K_DR_JSC_MAGIC)
+    repeat g_dr_jsc_vals.Len() in i:
+        e := g_dr_jsc_vals.Get(i)
+        jsc_put(b, g_dr_jsc_keys.Get(i))
+        jsc_put(b, e.core)
+        jsc_put(b, e.globals)
+        jsc_put(b, str.FromInt(e.deps.Len() as i64))
+        each dep in e.deps:
+            jsc_put(b, dep)
+        end
+        jsc_put(b, str.FromInt(e.global_names.Len() as i64))
+        repeat e.global_names.Len() in g:
+            jsc_put(b, e.global_names.Get(g))
+            jsc_put(b, e.global_texts.Get(g))
+        end
+        jsc_put(b, str.FromInt(e.names.Len() as i64))
+        repeat e.names.Len() in k:
+            jsc_put(b, e.names.Get(k))
+            jsc_put(b, e.texts.Get(k))
+        end
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end

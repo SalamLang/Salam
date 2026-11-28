@@ -90,7 +90,7 @@ HASH=$(
             printf '%s\n' "${f#"$STD_MIN"}"
             cat "$f"
         done
-        cat "$0" tools/js/editor-wasm-recycle.js
+        cat "$0" tools/js/editor-wasm-recycle.js tools/js/editor-std-cache.js
     } | $HASHER | cut -c1-10
 )
 [ -n "$HASH" ] || {
@@ -113,22 +113,27 @@ BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
 
 EXPORTS="'_main','_salam_web_run_app','_salam_web_build_layout','_salam_web_emit'"
 EXPORTS="$EXPORTS,'_salam_web_syntax_ok','_salam_web_translate','_salam_web_last_failed'"
-EXPORTS="$EXPORTS,'_salam_web_version','_sbrk','_malloc','_free'"
-# shellcheck disable=SC2086
-"$EMCC" -O2 -I.salam-build $SRCS \
-    -o "$BUNDLE.js" \
-    --post-js tools/js/editor-wasm-recycle.js \
-    --preload-file "$STD_MIN"@/std \
-    -s MODULARIZE=0 \
-    -s ENVIRONMENT=web,worker,node \
-    -s ALLOW_MEMORY_GROWTH=1 \
-    -s INITIAL_MEMORY=33554432 \
-    -s STACK_SIZE=16777216 \
-    -s EXIT_RUNTIME=0 \
-    -s IGNORE_MISSING_MAIN=1 \
-    -s FILESYSTEM=1 \
-    -s EXPORTED_FUNCTIONS="[$EXPORTS]" \
-    -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
+EXPORTS="$EXPORTS,'_salam_web_std_cache','_salam_web_version','_sbrk','_malloc','_free'"
+link_bundle() {
+    # shellcheck disable=SC2086
+    "$EMCC" -O2 -I.salam-build $SRCS \
+        -o "$BUNDLE.js" \
+        --post-js tools/js/editor-wasm-recycle.js \
+        --preload-file "$STD_MIN"@/std \
+        -s MODULARIZE=0 \
+        -s ENVIRONMENT=web,worker,node \
+        -s ALLOW_MEMORY_GROWTH=1 \
+        -s INITIAL_MEMORY=33554432 \
+        -s STACK_SIZE=16777216 \
+        -s EXIT_RUNTIME=0 \
+        -s IGNORE_MISSING_MAIN=1 \
+        -s FILESYSTEM=1 \
+        -s EXPORTED_FUNCTIONS="[$EXPORTS]" \
+        -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
+}
+link_bundle
+"${EMSDK_NODE:-node}" tools/js/editor-std-cache.js "$BUNDLE.js" "$STD_MIN/js.cache"
+link_bundle
 echo "built $BUNDLE.js (+ .wasm, .data)"
 "$SALAM" build "$OUT_DIR/page.salam" --platform=web --output="$OUT_DIR/index.html"
 echo "built $OUT_DIR/index.html"

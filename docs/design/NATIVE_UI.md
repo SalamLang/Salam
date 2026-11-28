@@ -60,7 +60,7 @@ runtime renders the page. These calls work there against the DOM:
 - `CurrentEvent`, filled from the browser event being handled.
 - `OpenUrl` and `OpenedUrls`.
 - `ScopeRuns`, which counts the regions the web runtime rendered again after the
-  first render. A page value that calls it is rendered at run time.
+  first render. A page value that calls it is rendered at runtime.
 - `Invalidate`, which renders every region again.
 - `WindowVisible`, which is true while the browser tab is visible.
 

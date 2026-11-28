@@ -198,7 +198,8 @@ from `salam.toml`, and it is replaced by `****` in what Salam prints. osslsignco
 receive it through a file that only you can read, removed after the step. **signtool accepts
 a password only on its command line**, where other processes of the same user (and
 administrators) can see it, so Salam warns; prefer a certificate in the Windows store
-(`sign_thumbprint`) or a token. A `sign_command` of yours inherits the environment.
+(`sign_thumbprint`) or a token. A `sign_command` of yours inherits the environment and the
+terminal, so it can ask for a PIN; what it prints is shown as it is, without `****`.
 
 ### Windows
 

@@ -81,6 +81,10 @@ sign_pe "$last"
 END_TOOL
 
 fake mysigner <<'END_TOOL'
+if [ -n "${FAKE_PIN:-}" ]; then
+    read -r pin
+    echo "pin from the terminal input: $pin" >>"$FAKE_LOG"
+fi
 echo "environment password: ${SALAM_SIGN_PASSWORD:+present}" >>"$FAKE_LOG"
 [ -n "${FAKE_NOOP:-}" ] || sign_pe "$2"
 END_TOOL
@@ -182,6 +186,9 @@ name='a;touch pwned $(touch pwned2) &.exe'
 make_pe "$name"
 SALAM_SIGN_PASSWORD=s3cret run sign "$name"
 echo "files made by the name: $(find . -name 'pwned*' | wc -l | tr -d ' ')"
+echo "== custom command reads a PIN from standard input"
+make_pe app.exe
+printf '1234\n' | FAKE_PIN=1 run sign app.exe
 echo "== custom command that signs nothing"
 make_pe app.exe
 FAKE_NOOP=1 run sign app.exe

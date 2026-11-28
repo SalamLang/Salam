@@ -602,18 +602,35 @@ func sign_batch_unsafe(program: str, args: Vector<str>): bool:
     ret false
 end
 
+func sign_refuse_batch(lgr: lg.Logger, program: str):
+    sign_error(
+        lgr,
+        sign_msg(
+            "signing: '%s' is a batch file and an argument holds characters cmd.exe would run; use an .exe",
+            program
+        )
+    )
+end
+
+func sign_failed(lgr: lg.Logger, program: str, code: int, late: bool):
+    if late:
+        sign_error(lgr, sign_msg("signing: '%s' did not finish in time", program))
+        ret
+    end
+    sign_error(
+        lgr,
+        co.Format2(
+            i18.Tr("signing: '%s' failed (exit %d)"), co.ArgStr(program), co.ArgInt(code as i64)
+        )
+    )
+end
+
 func sign_exec(
     lgr: lg.Logger, program: str, args: Vector<str>, password: str, timeout_ms: int, output &: str
 ): bool:
     output = ""
     if SALAM_OS_WINDOWS and sign_batch_unsafe(program, args):
-        sign_error(
-            lgr,
-            sign_msg(
-                "signing: '%s' is a batch file and an argument holds characters cmd.exe would run; use an .exe",
-                program
-            )
-        )
+        sign_refuse_batch(lgr, program)
         ret false
     end
     sign_say(lgr, "signing: " + sign_show(program, args, password))
@@ -631,18 +648,32 @@ func sign_exec(
     if str.Len(text) > 0:
         io.EPrintln(text)
     end
-    if r.timed_out:
-        sign_error(lgr, sign_msg("signing: '%s' did not finish in time", program))
-    else:
-        sign_error(
-            lgr,
-            co.Format2(
-                i18.Tr("signing: '%s' failed (exit %d)"),
-                co.ArgStr(program),
-                co.ArgInt(r.status.code as i64)
-            )
-        )
+    sign_failed(lgr, program, r.status.code, r.timed_out)
+    ret false
+end
+
+func sign_attached(lgr: lg.Logger, program: str, args: Vector<str>, password: str): bool:
+    if SALAM_OS_WINDOWS and sign_batch_unsafe(program, args):
+        sign_refuse_batch(lgr, program)
+        ret false
     end
+    sign_say(lgr, "signing: " + sign_show(program, args, password))
+    mut child := process.Launch(process.Command { program = program, args = args })
+    if not child.ok:
+        sign_error(lgr, sign_msg("signing: cannot run '%s'", program))
+        ret false
+    end
+    mut status := child.Wait(SIGN_TIMEOUT_MS)
+    late := status.timed_out
+    if late:
+        _killed := child.Kill()
+        status = child.Wait(-1)
+    end
+    child.Close()
+    if status.Success() and not late:
+        ret true
+    end
+    sign_failed(lgr, program, status.code, late)
     ret false
 end
 
@@ -755,8 +786,7 @@ func sign_run_custom(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
         item = str.Replace(item, "{description}", cfg.description)
         a.Push(str.Replace(item, "{file}", file))
     end
-    mut out := ""
-    ret sign_exec(lgr, cfg.program, a, cfg.password, SIGN_TIMEOUT_MS, out)
+    ret sign_attached(lgr, cfg.program, a, cfg.password)
 end
 
 func sign_windows_file(lgr: lg.Logger, cfg: SignCfg, file: str): bool:

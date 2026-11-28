@@ -202,15 +202,16 @@ echo "status $(get /..%2f..%2fetc/passwd)"
 echo "== server html equals the client build"
 get /about >/dev/null
 sed 's#<script type="application/json" id="__salam">[^<]*</script>##' body.html >served.html
-if cmp -s served.html dist/public/about/index.html; then
+sed 's#<!--salam-page:[0-9a-f]*-->##g' dist/public/about/index.html >static.html
+if cmp -s served.html static.html; then
     echo "about: same"
 else
     echo "about: differs"
-    diff served.html dist/public/about/index.html | head -10
+    diff served.html static.html | head -10
 fi
 get / >/dev/null
 sed 's#<script type="application/json" id="__salam">[^<]*</script>##; s#<title>[^<]*</title>##' body.html >served.html
-sed 's#<title>[^<]*</title>##' dist/public/index.html >static.html
+sed 's#<title>[^<]*</title>##; s#<!--salam-page:[0-9a-f]*-->##g' dist/public/index.html >static.html
 if cmp -s served.html static.html; then
     echo "home: same"
 else

@@ -11,7 +11,8 @@ publish their interfaces:
   `...AllAsmParsers` are **preprocessor macros** in LLVM's C API, not
   functions, so nothing outside C can call them. This wraps each one in a real
   function. It also carries `salam_orc_call_main`, which calls a JIT'd address
-  through a function pointer.
+  through a function pointer, and `salam_orc_define_symbol`, which fills in
+  LLVM's symbol map structure with the layout the C compiler gives it.
 - **`orc_static.cc` / `orc_static.h`** - the JIT of a statically linked salam.
   LLJIT looks the C library up with `dlopen`, which a static binary does not
   have, so `build.sh` writes a table of symbol addresses from the libraries in
@@ -37,14 +38,14 @@ publish their interfaces:
   manifests; if something did, the merge fails with a parse error.
   See the comment in the file.
 
-Not counting the libxml2 stand-ins, that is eleven exported symbols in total:
+Not counting the libxml2 stand-ins, that is twelve exported symbols in total:
 
     salam_orc_call_main                 salam_llvm_init_all_targets
     salam_llvm_init_all_target_infos    salam_llvm_init_all_target_mcs
     salam_llvm_init_all_asm_printers    salam_llvm_init_all_asm_parsers
     salam_lld_available                 salam_lld_link
     salam_parallel_partitions           salam_parallel_opt_emit
-    salam_orc_static_builder
+    salam_orc_static_builder            salam_orc_define_symbol
 
 Every other native symbol `std/llvm` binds is an `LLVM*` entry point that comes
 from libLLVM itself, so it needs no wrapper of ours.

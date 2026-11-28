@@ -73,7 +73,27 @@ int salam_orc_call_main(int64_t addr)
  */
 #ifdef SALAM_HAVE_LLVM
 
+#include <llvm-c/Orc.h>
 #include <llvm-c/Target.h>
+
+/* The pair is built here because its layout is the C compiler's business: it
+ * is 16 bytes on 32 bit x86 Linux and 24 on the other targets. */
+void salam_orc_define_symbol(void *dylib, void *name, int64_t addr)
+{
+    LLVMOrcCSymbolMapPair pair;
+    memset(&pair, 0, sizeof(pair));
+    pair.Name = (LLVMOrcSymbolStringPoolEntryRef)name;
+    pair.Sym.Address = (LLVMOrcExecutorAddress)(uintptr_t)addr;
+    pair.Sym.Flags.GenericFlags =
+        LLVMJITSymbolGenericFlagsExported | LLVMJITSymbolGenericFlagsCallable;
+
+    LLVMOrcMaterializationUnitRef unit = LLVMOrcAbsoluteSymbols(&pair, 1);
+    LLVMErrorRef err = LLVMOrcJITDylibDefine((LLVMOrcJITDylibRef)dylib, unit);
+    if (err) {
+        LLVMConsumeError(err);
+        LLVMOrcDisposeMaterializationUnit(unit);
+    }
+}
 
 /* musl gives new threads a 128 KiB stack, too little for LLVM's code
  * generation threads, so raise the default before any of them starts. */

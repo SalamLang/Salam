@@ -14,8 +14,9 @@ produces binaries for them.
   - The **LLVM backend** (`--backend=llvm`, and the default when the compiler
     has LLVM linked in) is pointer-width aware and emits 32-bit IR for a
     32-bit `--target` (see below). The Linux i686 and armhf release compilers
-    have LLVM linked in. They cannot run `salam llvm --jit`, because they are
-    statically linked.
+    have LLVM linked in. They are statically linked, so under
+    `salam llvm --jit` a program can call only the C and GCC runtime libraries
+    linked into the compiler.
   - The **native backend** (`--backend=native`) writes i686 and 32-bit ARM
     machine code itself, as well as x86-64, AArch64 and RISC-V 64.
 
@@ -136,8 +137,8 @@ the RISC-V `virt` board in `tests/kernel/riscv64/`.
 | `build-windows`       | `windows-2022`, `windows-2025`, `windows-2025-vs2026`    | `windows-x86_64` archives, `salam-windows.exe`    | Embedded static LLVM + LLD and sysroots, plus a bundled tcc for the C backend                      |
 | `build-windows-i686`  | `ubuntu-24.04`, cross-compiled with llvm-mingw           | `windows-i686` archives, `salam-windows-i686.exe` | Embedded LLVM + LLD when that cross build succeeds, otherwise built without it; bundled 32-bit tcc |
 | `build-windows-arm64` | `ubuntu-24.04`, cross-compiled with llvm-mingw           | `windows-arm64` archives                          | Embedded static LLVM + LLD; native backend by default (no tcc)                                     |
-| `build-linux-i686`    | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-i686` archives, `salam-linux-i686`         | Embedded static LLVM + LLD and sysroots; statically linked, JIT resolves the C library only        |
-| `build-linux-armhf`   | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-armhf` archives, `salam-linux-armhf`       | Embedded static LLVM + LLD and sysroots; statically linked, JIT resolves the C library only        |
+| `build-linux-i686`    | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-i686` archives, `salam-linux-i686`         | Embedded static LLVM + LLD and sysroots; statically linked, JIT sees only the C and GCC libraries  |
+| `build-linux-armhf`   | `ubuntu-24.04`, cross-compiled with a musl GCC toolchain | `linux-armhf` archives, `salam-linux-armhf`       | Embedded static LLVM + LLD and sysroots; statically linked, JIT sees only the C and GCC libraries  |
 | `build-linux-aarch64` | `ubuntu-24.04-arm`                                       | `linux-aarch64` archives, `salam-linux-aarch64`   | Embedded LLVM + LLD                                                                                |
 
 "Archives" means `salam-<version>-<name>.zip` and `.tar.gz`, each with
@@ -171,11 +172,16 @@ The release also carries the standard library on its own
   The result is a static binary that carries the sysroots for its own musl
   target, `x86_64-linux-musl`, `x86_64-w64-windows-gnu` and `wasm32-wasi`.
   A native build links with the system gcc or clang, and `--target=` builds
-  for those four need nothing installed. `salam llvm --jit` does not work,
-  because a static musl binary cannot look up symbols at runtime. armhf needs
-  ARMv6 with a hardware FPU. The job fails, and ships nothing, if LLVM cannot
-  be built or fails its smoke tests (`tools/bash/smoke-linux32.sh`); armhf
-  runs them under QEMU.
+  for those four need nothing installed. A static musl binary cannot look up
+  symbols at runtime, so `salam llvm --jit` resolves them from a table made at
+  build time out of the toolchain's `libc.a`, `libgcc.a`, `libatomic.a` where
+  the toolchain has it and, on armhf, `libgcc_eh.a`; split-stack objects and
+  names containing a dot are left out. armhf needs ARMv6 with a hardware FPU.
+  The job fails, and uploads nothing, if LLVM cannot be built or fails its
+  smoke tests (`tools/bash/smoke-linux32.sh`); armhf runs them under QEMU.
+  The job is `continue-on-error`, so the run itself stays green and reports an
+  error annotation; a stable release is then stopped by the missing-files check,
+  while a nightly is published without that architecture.
 - **Linux musl** is a fully static C-backend build, so it runs on any x86-64
   Linux, including ones with an older glibc than the flagship build needs.
 - **Windows i686** cross-builds a static LLVM + LLD for `i686-w64-mingw32`

@@ -1104,6 +1104,7 @@ fi
 if want ssr && command -v curl >/dev/null 2>&1; then
     for lang in $LANGS; do
         add_job script "ssr/$lang/flow" "tools/bash/test-ssr.sh" "$lang" "tests/$lang/ssr/flow.out"
+        add_job script "ssr/$lang/lazy" "tools/bash/test-ssr-lazy.sh" "$lang" "tests/$lang/ssr/lazy.out"
         for d in tests/"$lang"/ssr/projects/*/; do
             [ -f "${d}main.salam" ] || continue
             add_job ssrbuild "ssr/$lang/projects/$(basename "$d")" "${d}main.salam" "$lang" -

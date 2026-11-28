@@ -146,6 +146,7 @@ class Element {
     const i = l.indexOf(handler);
     if (i >= 0) l.splice(i, 1);
   }
+  select() {}
   dispatchEvent(ev) {
     const l = this.listeners.get(ev.type);
     if (l) for (const h of l.slice()) h(ev);
@@ -187,6 +188,9 @@ const document = {
   listeners: new Map(),
   createElement(tag) {
     return new Element(tag);
+  },
+  execCommand(_command) {
+    return false;
   },
   getElementById(id) {
     let found = null;

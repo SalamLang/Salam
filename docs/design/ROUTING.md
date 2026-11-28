@@ -197,6 +197,34 @@ pages that used the block were converted to folders.
   `page.route.Back` and `page.route.Redirect` use the screen stack. There is no folder at
   run time.
 
+## Static pages stay out of the script
+
+A `--ssr` web build in history mode leaves the markup of a static route out of
+the script. The first load script therefore does not grow with the text of the
+pages. On client navigation the router fetches that route's `index.html`, takes
+the content of the outlet and keeps it in memory, so going back and forward
+fetches nothing. The build also writes `404.html`, which a static host serves
+for every other path.
+
+Nothing in the source changes. A route is left out when all of these hold:
+
+- its pattern has no parameter, and neither the page nor a layout above it has
+  a `page.Guard`;
+- the build could pre-render it, and its outlet is plain markup: the page and
+  its `_layout` chain have no state, nothing computed while the page runs and nothing
+  that is drawn again on its own.
+
+Every other route, `_404` included, is drawn by the script as before. A page
+with a handler and no state is left out too; its handlers stay in the script.
+Keep changing parts of the frame in `main.salam`, outside `Outlet`.
+
+The runtime checks the fetched content against a hash in the script. A page from
+another deployment, a missing file or a failed request reloads the document at
+that address, once. Builds without `--ssr` keep every route in the script.
+
+Each such route still costs a few hundred bytes of script for its pattern,
+title and hash.
+
 ## Decisions
 
 | # | decision |

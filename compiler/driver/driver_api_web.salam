@@ -67,10 +67,21 @@ func ssr_asset_dir(base: str): str:
     ret t
 end
 
+func write_fallback_page(lgr &: lg.Logger, root: str, html: str): bool:
+    nf := join_path2(root, "404.html")
+    if os.Exists(nf) and not str.Contains(io.ReadFile(nf), co.ROUTER_HISTORY_META):
+        ret true
+    end
+    ret write_file(lgr, nf, html)
+end
+
 func write_ssr_pages(lgr &: lg.Logger, shell_path: str): bool:
     html := io.ReadFile(shell_path)
     pats := lo.RoutesStatic()
     mut ok := true
+    if str.Contains(html, co.ROUTER_HISTORY_META):
+        ok = write_fallback_page(lgr, ".", html)
+    end
     repeat pats.Len() in i:
         rel := str.Substr(pats.Get(i), 1, str.Len(pats.Get(i)) - 1)
         pdir := join_path2(".", rel)
@@ -119,10 +130,7 @@ func write_route_pages(lgr &: lg.Logger, html_path: str):
     if not str.Contains(html, co.ROUTER_HISTORY_META):
         ret
     end
-    nf := join_path2(root, "404.html")
-    if not os.Exists(nf) or str.Contains(io.ReadFile(nf), co.ROUTER_HISTORY_META):
-        _w0 := write_file(lgr, nf, html)
-    end
+    _w0 := write_fallback_page(lgr, root, html)
     pats := lo.RoutesStatic()
     repeat pats.Len() in i:
         rel := str.Substr(pats.Get(i), 1, str.Len(pats.Get(i)) - 1)
@@ -337,6 +345,7 @@ pub func LayoutBuild(opt &: Dr): int:
         view_before := lo.ExpandErrors()
         _vw := lo.PrepareViews(lgr, modpack, table, a, prog, path)
         view_errors := lo.ExpandErrors() - view_before
+        lo.LazyScan(a, prog)
         if view_errors > 0:
             rc = 1
             nerr += view_errors
@@ -375,6 +384,11 @@ pub func LayoutBuild(opt &: Dr): int:
         mut r := lo.Generate(lgr, diag, path, a, lb, minify_ws, lp.Code(modpack))
         r.css += lo.WebStateCss()
         if ev_names.Len() > 0 or lo.WebStateCount() > 0:
+            draw := not multi and not opt.check_only and (opt.inline_mode or opt.ssr)
+            if draw and opt.ssr:
+                prerender_page(lgr, a, s, prog, r.html)
+                prerender_lazy(a)
+            end
             mut ev_ok := true
             ev_js := collect_event_js(lgr, opt, a, s, prog, path, minify_ws, ev_names, ev_ok)
             if not ev_ok:
@@ -384,7 +398,7 @@ pub func LayoutBuild(opt &: Dr): int:
             if str.Len(ev_js) > 0:
                 r.js = str.Len(r.js) > 0 ? r.js + (minify_ws ? " " : "\n") + ev_js : ev_js
             end
-            if not multi and not opt.check_only and (opt.inline_mode or opt.ssr):
+            if draw and not opt.ssr:
                 prerender_page(lgr, a, s, prog, r.html)
             end
         end

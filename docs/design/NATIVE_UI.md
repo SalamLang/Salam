@@ -87,11 +87,12 @@ Where the answer differs from a native window:
   the first option.
 - An open `dialog` is an ordinary element of the page in a browser. It is not
   modal, and later content can cover it.
-- `ScopeRuns` follows the web runtime, which renders a component and its keyed
-  rows as one region. A window gives each keyed row a scope of its own, so a
-  change that runs a row and its component counts twice there and once in a
-  browser (`events_rows` reads 2, 4, 2 in a window and 1, 2, 1 on the web).
-  Matching this needs one web region for each keyed row.
+- `ScopeRuns` follows the web runtime, which renders a component together with
+  the components and keyed rows inside it as one region. A window gives each of
+  them a scope of its own, so a change that runs a component and one inside it
+  counts twice there and once in a browser. `events_rows` reads 2, 4, 2 in a
+  window and 1, 2, 1 on the web, and `reactive_chain` reads 2 where the web
+  reads 1. Matching this needs a web region for each of those scopes.
 
 These belong to the native engine. A web build ignores them, and the first call
 of each writes a warning to the browser console. Numbers are 0 and `Style`

@@ -21,7 +21,7 @@ include pth "../sal_path.salam"
 include sm "../semantic/semantic.salam"
 include jg "../jsgen/jsgen.salam"
 
-const K_DR_JSC_MAGIC := "salam-js-cache-2"
+const K_DR_JSC_MAGIC := "salam-js-cache-3"
 
 mut g_dr_jsc_on := false
 mut g_dr_jsc_read := false
@@ -32,7 +32,6 @@ mut g_dr_jsc_ix := HashMap {} as HashMap<str, int>
 struct JsCached:
     pub deps: Vector<str> = Vector {}
     pub core: str = ""
-    pub globals: str = ""
     pub global_names: Vector<str> = Vector {}
     pub global_texts: Vector<str> = Vector {}
     pub names: Vector<str> = Vector {}
@@ -89,45 +88,62 @@ end
 
 func jsc_take_count(r &: JsCacheReader): int:
     field := jsc_take(r)
+    limit := (r.len - r.pos) / 2
+    digits := str.Len(field)
     mut n := 0
-    repeat str.Len(field) in i:
-        n = n * 10 + (byte_at(field, i) - 48)
+    mut ok := digits > 0
+    mut i := 0
+    until ok and i < digits:
+        d := byte_at(field, i) - 48
+        if d < 0 or d > 9 or d > limit or n > (limit - d) / 10:
+            ok = false
+        else:
+            n = n * 10 + d
+            i++
+        end
     end
-    if n < 0 or n > r.len:
+    if not ok:
         r.bad = true
+        r.pos = r.len
         ret 0
     end
     ret n
 end
 
-func jsc_parse(text: str):
+func jsc_take_list(r &: JsCacheReader, out &: Vector<str>):
+    repeat jsc_take_count(r):
+        out.Push(jsc_take(r))
+    end
+end
+
+func jsc_take_pairs(r &: JsCacheReader, names &: Vector<str>, texts &: Vector<str>):
+    repeat jsc_take_count(r):
+        names.Push(jsc_take(r))
+        texts.Push(jsc_take(r))
+    end
+end
+
+func jsc_parse(text: str, keys &: Vector<str>, vals &: Vector<JsCached>): bool:
     mut r := JsCacheReader {}
     r.text = text
     r.len = str.Len(text)
     if not str.Equals(jsc_take(r), K_DR_JSC_MAGIC):
-        ret
+        ret false
     end
     until r.pos < r.len:
         key := jsc_take(r)
         mut e := JsCached {}
         e.core = jsc_take(r)
-        e.globals = jsc_take(r)
-        repeat jsc_take_count(r):
-            e.deps.Push(jsc_take(r))
-        end
-        repeat jsc_take_count(r):
-            e.global_names.Push(jsc_take(r))
-            e.global_texts.Push(jsc_take(r))
-        end
-        repeat jsc_take_count(r):
-            e.names.Push(jsc_take(r))
-            e.texts.Push(jsc_take(r))
-        end
+        jsc_take_list(r, e.deps)
+        jsc_take_pairs(r, e.global_names, e.global_texts)
+        jsc_take_pairs(r, e.names, e.texts)
         if r.bad:
-            ret
+            break
         end
-        jsc_add(key, e)
+        keys.Push(key)
+        vals.Push(e)
     end
+    ret not r.bad
 end
 
 func jsc_read_shipped():
@@ -136,9 +152,20 @@ func jsc_read_shipped():
     end
     g_dr_jsc_read = true
     text := io.ReadFile(pth.PathJoin(sm.GetStdlibRoot(), "std/js.cache"))
-    if str.Len(text) > 0:
-        jsc_parse(text)
+    if str.Len(text) == 0:
+        ret
     end
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<JsCached>
+    _complete := jsc_parse(
+        text, keys, vals
+    )
+    repeat keys.Len() in i:
+        jsc_add(keys.Get(i), vals.Get(i))
+    end
+    keys.Free()
+    vals.Free()
+    mem.Free(text as void*)
 end
 
 func jsc_applies(path: str): bool:
@@ -173,7 +200,7 @@ func jsc_use(path: str, work &: Vector<str>, mods &: JsMods): bool:
         jsc_queue(dep, work)
     end
     jsc_queue(e.core, work)
-    mods.globals.Push(e.globals)
+    mods.globals.Push("")
     repeat e.global_names.Len() in g:
         mods.global_names.Push(e.global_names.Get(g))
         mods.global_texts.Push(e.global_texts.Get(g))
@@ -189,12 +216,11 @@ func jsc_use(path: str, work &: Vector<str>, mods &: JsMods): bool:
 end
 
 func jsc_keep(path: str, deps: Vector<str>, core: str, out &: jg.Output):
-    if not jsc_applies(path):
+    if not jsc_applies(path) or out.uses_lang:
         ret
     end
     mut e := JsCached {}
     e.core = str.Clone(core)
-    e.globals = str.Clone(out.globals_src)
     each dep in deps:
         e.deps.Push(str.Clone(dep))
     end
@@ -209,34 +235,50 @@ func jsc_keep(path: str, deps: Vector<str>, core: str, out &: jg.Output):
     jsc_add(path, e)
 end
 
+func jsc_put_count(b &: str.StringBuilder, n: int):
+    jsc_put(b, str.FromInt(n as i64))
+end
+
+func jsc_put_pairs(b &: str.StringBuilder, names: Vector<str>, texts: Vector<str>):
+    jsc_put_count(b, names.Len())
+    repeat names.Len() in i:
+        jsc_put(b, names.Get(i))
+        jsc_put(b, texts.Get(i))
+    end
+end
+
+func jsc_serialize(keys: Vector<str>, vals: Vector<JsCached>): str:
+    mut b := str.NewBuilder()
+    jsc_put(b, K_DR_JSC_MAGIC)
+    repeat vals.Len() in i:
+        e := vals.Get(i)
+        jsc_put(b, keys.Get(i))
+        jsc_put(b, e.core)
+        jsc_put_count(b, e.deps.Len())
+        each dep in e.deps:
+            jsc_put(b, dep)
+        end
+        jsc_put_pairs(b, e.global_names, e.global_texts)
+        jsc_put_pairs(b, e.names, e.texts)
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
 pub func ReuseStdScripts(enabled: bool):
     g_dr_jsc_on = enabled
 end
 
 pub func StdScriptCache(): str:
-    mut b := str.NewBuilder()
-    jsc_put(b, K_DR_JSC_MAGIC)
-    repeat g_dr_jsc_vals.Len() in i:
-        e := g_dr_jsc_vals.Get(i)
-        jsc_put(b, g_dr_jsc_keys.Get(i))
-        jsc_put(b, e.core)
-        jsc_put(b, e.globals)
-        jsc_put(b, str.FromInt(e.deps.Len() as i64))
-        each dep in e.deps:
-            jsc_put(b, dep)
-        end
-        jsc_put(b, str.FromInt(e.global_names.Len() as i64))
-        repeat e.global_names.Len() in g:
-            jsc_put(b, e.global_names.Get(g))
-            jsc_put(b, e.global_texts.Get(g))
-        end
-        jsc_put(b, str.FromInt(e.names.Len() as i64))
-        repeat e.names.Len() in k:
-            jsc_put(b, e.names.Get(k))
-            jsc_put(b, e.texts.Get(k))
-        end
-    end
-    out := str.BufStr(b)
-    str.BufFree(b)
-    ret out
+    out := jsc_serialize(g_dr_jsc_keys, g_dr_jsc_vals)
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<JsCached>
+    complete := jsc_parse(
+        out, keys, vals
+    )
+    same := complete and vals.Len() > 0 and str.Equals(jsc_serialize(keys, vals), out)
+    keys.Free()
+    vals.Free()
+    ret same ? out : ""
 end

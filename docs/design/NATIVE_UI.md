@@ -67,8 +67,9 @@ Where the answer differs from a native window:
 - `Tag` is worked out from the HTML tag, so elements that share a tag report one
   name: a `checkbox` element reports `input`, and design system components
   report the element their tag stands for.
-- `Rect` is the browser's own layout in page coordinates, so the numbers depend
-  on the fonts and the viewport.
+- `Rect` is the browser's own layout in page coordinates. The numbers depend on
+  the fonts and the viewport, and a page whose direction a window takes from
+  `lang` can still be laid out left to right on the web.
 - `ScopeRuns` follows the web runtime, which renders a component and its keyed
   rows as one region. A change that runs a row and its parent as two scopes in a
   window can count once in a browser.

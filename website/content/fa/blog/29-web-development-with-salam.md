@@ -249,7 +249,7 @@ end
 آغاز صفحه یک شیوه‌نامه‌ی بازنشانی و یک برچسب متای `generator` دارد که بلند است و میان نسخه‌ها تغییر می‌کند؛ بنابراین در فهرست زیر به‌جای آن‌ها `...` آمده است:
 
 ```text
-<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>سارا | نمایه</title>...</head><body><h1>سارا</h1><p>مدیر سامانه</p><ul><li>1. سلام</li><li>2. SQL &amp; &lt;HTML&gt;</li></ul></body></html>
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>سارا | نمایه</title>...</head><body><h1>سارا</h1><p>مدیر سامانه</p><ul><li data-key="0">1. سلام</li><li data-key="1">2. SQL &amp; &lt;HTML&gt;</li></ul></body></html>
 ```
 
 در زمان اجرا نه مفسر قالبی در کار است و نه گونه‌ای برای «HTML خام» که ممکن است گریز دادنش فراموش شود. تابع صفحه `ناب` (pure) است: نمی‌تواند پرونده بخواند، به شبکه وصل شود یا متغیرهای سراسری را تغییر دهد، پس رویدادگیر داده را جمع می‌کند و به صفحه می‌دهد. مقداری که در نشانی یا خاصیت CSS می‌نشیند نمی‌تواند یک رشته‌ی ساده باشد؛ باید اول به `وب.نشانی وب`، `وب.رنگ وب` یا `وب.اندازه وب` خوانده شود که ورودی ناامن را رد می‌کنند. چون صفحه یک تابع است، سرور وب سلام می‌تواند برای هر درخواست آن را صدا بزند:

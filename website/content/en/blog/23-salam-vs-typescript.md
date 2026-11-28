@@ -255,7 +255,7 @@ end
 The page starts with a reset style sheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
 
 ```text
-<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cart of Sara</title>...</head><body><h1>Sara&#39;s cart</h1><p>Items: 2</p><ul><li>Pen</li><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
+<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cart of Sara</title>...</head><body><h1>Sara&#39;s cart</h1><p>Items: 2</p><ul><li data-key="0">Pen</li><li data-key="1">&lt;script&gt;alert(1)&lt;/script&gt;</li></ul></body></html>
 <style>...</style><span class="tag-a">sale</span>
 ```
 

@@ -249,7 +249,7 @@ end
 The page starts with a reset style sheet and a `generator` meta tag that are long and change between releases, so the listing leaves them out and shows `...` in their place:
 
 ```text
-<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sara | Profile</title>...</head><body><h1>Sara</h1><p>Administrator</p><ul><li>1. Salam</li><li>2. SQL &amp; &lt;HTML&gt;</li></ul></body></html>
+<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sara | Profile</title>...</head><body><h1>Sara</h1><p>Administrator</p><ul><li data-key="0">1. Salam</li><li data-key="1">2. SQL &amp; &lt;HTML&gt;</li></ul></body></html>
 ```
 
 There is no template interpreter at runtime, and no raw-HTML type to forget to escape. The layout function is `pure`: it cannot read files, call the network or change globals, so the handler gathers the data and passes it in. A value that goes into a URL or a CSS property cannot be a plain string; it must be parsed first into a `web.Url`, `web.Color` or `web.Length`, which reject unsafe input. Because the page is a function, a Salam web server can call it for each request:

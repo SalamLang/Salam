@@ -1,0 +1,352 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package airegister
+
+import net.http
+import net.router
+import encoding.json
+import calendar
+import str
+import time
+
+include aistore "store.salam"
+include aiweb "web.salam"
+
+const BODY_MAX := 16000
+const NAME_MIN := 2
+const NAME_MAX := 60
+const CITY_MAX := 60
+const EMAIL_MAX := 190
+const INTRO_MAX := 1500
+const MIN_AGE := 4
+const MAX_AGE := 100
+const YEAR_SECONDS := 31556952
+const JALALI_SHIFT := 621
+const PROVINCES := "|تهران|اصفهان|آذربایجان شرقی|آذربایجان غربی|اردبیل|البرز|ایلام|بوشهر|چهارمحال و بختیاری|خراسان جنوبی|خراسان رضوی|خراسان شمالی|خوزستان|زنجان|سمنان|سیستان و بلوچستان|فارس|قزوین|قم|کردستان|کرمان|کرمانشاه|کهگیلویه و بویراحمد|گلستان|گیلان|لرستان|مازندران|مرکزی|هرمزگان|همدان|یزد|"
+const LEVELS := "|none|under1|1to3|3to5|over5|"
+
+mut ORIGINS := ","
+mut PER_IP := 20
+
+struct Entry:
+    pub role: str = ""
+    pub first: str = ""
+    pub last: str = ""
+    pub province: str = ""
+    pub city: str = ""
+    pub mobile: str = ""
+    pub calendar: str = ""
+    pub year: int = 0
+    pub month: int = 0
+    pub day: int = 0
+    pub email: str = ""
+    pub teaching: str = ""
+    pub coding: str = ""
+    pub intro: str = ""
+    pub lang: str = ""
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.Push(v)
+    ret a
+end
+
+func ascii_digits(s: str): str:
+    fa := ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"]
+    ar := ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"]
+    mut out := s
+    repeat 10 in i:
+        d := str.FromInt(i)
+        out = str.Replace(str.Replace(out, fa[i], d), ar[i], d)
+    end
+    ret out
+end
+
+func all_digits(s: str): bool:
+    repeat s.Len() in i:
+        c := s.Substr(i, 1)
+        if c < "0" or c > "9":
+            ret false
+        end
+    end
+    ret s.Len() > 0
+end
+
+func normal_mobile(raw: str): str:
+    mut m := ascii_digits(str.Trim(raw))
+    each junk in [" ", "-", "(", ")"]:
+        m = str.Replace(m, junk, "")
+    end
+    if m.Len() != 11 or not str.StartsWith(m, "09") or not all_digits(m):
+        ret ""
+    end
+    ret m
+end
+
+func one_line(raw: str): str:
+    mut s := str.Replace(str.Replace(raw, "\r", " "), "\n", " ")
+    s = str.Replace(s, "\t", " ")
+    s = str.Replace(str.Replace(s, "ي", "ی"), "ك", "ک")
+    until s.Find("  ") >= 0:
+        s = str.Replace(s, "  ", " ")
+    end
+    ret str.Trim(s)
+end
+
+func chars(s: str): int:
+    ret str.CodePoints(s).Len()
+end
+
+func fits(s: str, min: int, max: int): bool:
+    if s.Find("<") >= 0 or s.Find(">") >= 0:
+        ret false
+    end
+    n := chars(s)
+    ret n >= min and n <= max
+end
+
+func in_set(set: str, v: str): bool:
+    ret v.Len() > 0 and v.Find("|") < 0 and set.Find("|" + v + "|") >= 0
+end
+
+func valid_email(email: str): bool:
+    at := email.Find("@")
+    if email.Len() < 5 or email.Len() > EMAIL_MAX or at <= 0:
+        ret false
+    end
+    if email.Find(" ") >= 0 or email.Find("<") >= 0 or email.Find(">") >= 0:
+        ret false
+    end
+    host := email.Substr(at + 1, email.Len() - at - 1)
+    ret host.Find("@") < 0 and host.Find(".") > 0 and not str.EndsWith(host, ".")
+end
+
+func number_of(raw: str): int:
+    s := ascii_digits(str.Trim(raw))
+    if s.Len() > 4 or not all_digits(s):
+        ret 0
+    end
+    ret s.ToInt()
+end
+
+func gregorian_now(): int:
+    ret 1970 + ((time.Now() / YEAR_SECONDS) as int)
+end
+
+func valid_year(calendar_name: str, year: int): bool:
+    now := calendar_name == "jalali" ? gregorian_now() - JALALI_SHIFT : gregorian_now()
+    ret year >= now - MAX_AGE and year <= now - MIN_AGE
+end
+
+func gregorian_days(year: int, month: int): int:
+    if month == 2:
+        leap := year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        ret leap ? 29 : 28
+    end
+    if month == 4 or month == 6 or month == 9 or month == 11:
+        ret 30
+    end
+    ret 31
+end
+
+func valid_day(calendar_name: str, year: int, month: int, day: int): bool:
+    if calendar_name == "jalali":
+        ret calendar.IsValidJalaliDate(year, month, day)
+    end
+    ret month >= 1 and month <= 12 and day >= 1 and day <= gregorian_days(year, month)
+end
+
+func read_entry(body: str, e &: Entry): str:
+    e.role = json.Get(body, "role")
+    if e.role != "student" and e.role != "teacher":
+        ret "role"
+    end
+    e.first = one_line(json.Get(body, "first_name"))
+    if not fits(e.first, NAME_MIN, NAME_MAX):
+        ret "first_name"
+    end
+    e.last = one_line(json.Get(body, "last_name"))
+    if not fits(e.last, NAME_MIN, NAME_MAX):
+        ret "last_name"
+    end
+    e.province = one_line(json.Get(body, "province"))
+    if not in_set(PROVINCES, e.province):
+        ret "province"
+    end
+    e.city = str.Trim(json.Get(body, "city"))
+    if not fits(e.city, 1, CITY_MAX):
+        ret "city"
+    end
+    e.mobile = normal_mobile(json.Get(body, "mobile"))
+    if e.mobile.Len() == 0:
+        ret "mobile"
+    end
+    e.calendar = json.Get(body, "calendar")
+    if e.calendar != "jalali" and e.calendar != "gregorian":
+        ret "birth_year"
+    end
+    e.year = number_of(json.Get(body, "birth_year"))
+    if not valid_year(e.calendar, e.year):
+        ret "birth_year"
+    end
+    e.coding = json.Get(body, "coding_experience")
+    if not in_set(LEVELS, e.coding):
+        ret "coding_experience"
+    end
+    e.lang = json.Get(body, "lang") == "en" ? "en" : "fa"
+    if e.role == "student":
+        e.month = number_of(json.Get(body, "birth_month"))
+        if e.month < 1 or e.month > 12:
+            ret "birth_month"
+        end
+        e.day = number_of(json.Get(body, "birth_day"))
+        if not valid_day(e.calendar, e.year, e.month, e.day):
+            ret "birth_day"
+        end
+        ret ""
+    end
+    e.email = str.Lower(str.Trim(json.Get(body, "email")))
+    if not valid_email(e.email):
+        ret "email"
+    end
+    e.teaching = json.Get(body, "teaching_experience")
+    if not in_set(LEVELS, e.teaching):
+        ret "teaching_experience"
+    end
+    e.intro = str.Trim(json.Get(body, "intro"))
+    if chars(e.intro) > INTRO_MAX:
+        ret "intro"
+    end
+    ret ""
+end
+
+func allow(ctx: i64):
+    origin := http.Header(ctx, "Origin")
+    if origin.Len() > 0 and ORIGINS.Find("," + origin + ",") >= 0:
+        http.SetHeader(ctx, "Access-Control-Allow-Origin", origin)
+        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Content-Type")
+        http.SetHeader(ctx, "Access-Control-Allow-Methods", "POST, OPTIONS")
+        http.SetHeader(ctx, "Access-Control-Max-Age", "86400")
+    end
+    http.SetHeader(ctx, "Vary", "Origin")
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.SetHeader(ctx, "X-Content-Type-Options", "nosniff")
+end
+
+func answer(ctx: i64, status: int, body: str):
+    allow(ctx)
+    http.SetStatus(ctx, status)
+    http.Json(ctx, body)
+end
+
+func refuse(ctx: i64, status: int, code: str, field: str):
+    mut m := Vector {} as Vector<str>
+    m.Push(json.Member("error", code))
+    m.Push(json.Member("field", field))
+    answer(ctx, status, json.Object(m))
+end
+
+func preflight(ctx: i64):
+    allow(ctx)
+    http.SetStatus(ctx, 204)
+    http.Text(ctx, "")
+end
+
+func save(e: Entry, ip: str): int:
+    mut who := one(e.mobile)
+    who.Push(e.role)
+    who.Push(e.first)
+    who.Push(e.last)
+    mut from := one(ip)
+    from.Push(str.FromInt((aistore.Now() - 3600) as int))
+    mut row := one(e.role)
+    row.Push(e.first)
+    row.Push(e.last)
+    row.Push(e.province)
+    row.Push(e.city)
+    row.Push(e.mobile)
+    row.Push(e.calendar)
+    row.Push(str.FromInt(e.year))
+    row.Push(str.FromInt(e.month))
+    row.Push(str.FromInt(e.day))
+    row.Push(str.FromInt(e.calendar == "jalali" ? e.year + JALALI_SHIFT : e.year))
+    row.Push(e.email)
+    row.Push(e.teaching)
+    row.Push(e.coding)
+    row.Push(e.intro)
+    row.Push(e.lang)
+    row.Push(ip)
+    row.Push(str.FromInt(aistore.Now() as int))
+    aistore.Lock()
+    defer aistore.Unlock()
+    recent := aistore.OneText(
+        "SELECT COUNT(*) FROM registrations WHERE ip = ?1 AND created > ?2", from
+    )
+    if recent.ToInt() >= PER_IP:
+        ret 429
+    end
+    found := aistore.OneText(
+        "SELECT id FROM registrations WHERE mobile = ?1 AND role = ?2 AND first_name = ?3 AND last_name = ?4",
+        who
+    )
+    if found.Len() > 0:
+        ret 409
+    end
+    ok := aistore.Run(
+        "INSERT INTO registrations (role, first_name, last_name, province, city, mobile, calendar, birth_year, birth_month, birth_day, birth_year_gregorian, email, teaching_experience, coding_experience, intro, lang, ip, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        row
+    )
+    ret ok ? 201 : 500
+end
+
+func register(ctx: i64):
+    body := http.Body(ctx)
+    if body.Len() > BODY_MAX:
+        refuse(ctx, 413, "too_large", "")
+        ret
+    end
+    if str.Trim(json.Get(body, "website")).Len() > 0:
+        answer(ctx, 201, `{"ok": true}`)
+        ret
+    end
+    mut e := Entry {}
+    bad := read_entry(body, e)
+    if bad.Len() > 0:
+        refuse(ctx, 400, "invalid", bad)
+        ret
+    end
+    status := save(e, str.CharSubstr(aiweb.ClientIp(ctx), 0, 64))
+    if status == 201:
+        answer(ctx, 201, `{"ok": true}`)
+    else status == 409:
+        refuse(ctx, 409, "exists", "mobile")
+    else status == 429:
+        refuse(ctx, 429, "slow_down", "")
+    else:
+        refuse(ctx, 500, "server", "")
+    end
+end
+
+pub func Configure(origins: str, per_ip: int):
+    ORIGINS = "," + str.Replace(origins, " ", "") + ","
+    if per_ip > 0:
+        PER_IP = per_ip
+    end
+end
+
+pub func Routes(r &: router.Router):
+    router.Post(r, "/registrations", register)
+    router.Options(r, "/registrations", preflight)
+end

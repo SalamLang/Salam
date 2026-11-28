@@ -45,6 +45,7 @@ A program that has its own entry function keeps it, and can call
 `ui.RunPage((): ret ui.NoPatches() end, (b: ui.Builder): __salam_page(b) end)`.
 
 Tests run headless: `SALAM_WINDOW_BACKEND=headless` with `SALAM_UI_SCRIPT`
+(a `--release` build needs `-DSALAM_UI_SCRIPT`)
 naming a file of steps (`click #id`, `type text`, `key Tab`, `dump`,
 `shot out.png`, `quit`). The `ui` section of `tools/bash/run-tests.sh` builds
 each `tests/<lang>/ui/X.salam` with `--ui=native` and runs it with `X.script`.

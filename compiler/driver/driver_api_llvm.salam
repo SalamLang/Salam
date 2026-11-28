@@ -119,6 +119,40 @@ func page_size_opt(opt &: Dr): bool:
     ret not opt.llvm_opt_set and not opt.safe and not opt.debug_info and not opt.asan
 end
 
+func page_without_images(opt &: Dr, a &: at.Ast, prog: int, path: str, text: str): bool:
+    if opt.ui_target != 1 or opt.llvm_emit != lv.LV_OUT_EXEC or not page_size_opt(opt):
+        ret false
+    end
+    if prog == 0 or opt.inputs.Len() > 1:
+        ret false
+    end
+    each d in opt.defines:
+        if str.Equals(d, "SALAM_UI_IMAGES"):
+            ret false
+        end
+    end
+    repeat at.ChildCount(a, prog) in i:
+        if at.KindOf(a, at.Child(a, prog, i)) == at.AST_IMPORT:
+            ret false
+        end
+    end
+    dir := pth.PathDir(path)
+    each name in ["salam.toml", "design.toml", "pages"]:
+        if os.Exists(pth.PathJoin(dir, name)):
+            ret false
+        end
+    end
+    lower := str.Lower(text)
+    each word in [
+        "image", "picture", "avatar", "design", "url", "تصویر", "عکس", "آواتار", "طراحی"
+    ]:
+        if str.Contains(lower, word):
+            ret false
+        end
+    end
+    ret true
+end
+
 func llvm_link_with_fallback(lgr: lg.Logger, opt &: Dr, llpath: str, o &: lv.Options): int:
     mut held := ""
     mut rc := lv.NativeRunHeld(lgr, llpath, o, held)
@@ -214,7 +248,15 @@ pub func Llvm(opt &: Dr): int:
     mut pok := ps.Run(lgr, toks, a, prog)
     pf.End(pf.TP_PARSER, _pt_ps)
     tok.StreamFree(toks)
-    mut table := cc.TableBuild(opt.llvm_target, opt.defines)
+    mut defines := Vector {} as Vector<str>
+    defer defines.Free()
+    each d in opt.defines:
+        defines.Push(d)
+    end
+    if page_without_images(opt, a, prog, sf.path, sf.text):
+        defines.Push("SALAM_UI_NO_IMAGES")
+    end
+    mut table := cc.TableBuild(opt.llvm_target, defines)
     cc.TableSetPack(table, modpack)
     if not cc.PruneProgram(a, lgr, sf.path, table, prog):
         pok = false
@@ -322,6 +364,7 @@ pub func Llvm(opt &: Dr): int:
     o.fp_contract = opt.llvm_fp_contract
     o.fast_math = opt.fast_math
     o.lib_mode = is_lib
+    o.cold_size = npg and o.output_mode == lv.LV_OUT_EXEC and page_size_opt(opt)
     g_win_gui = win_gui_for(opt, win_target(opt.llvm_target), npg)
     o.win_gui = g_win_gui
 
@@ -388,7 +431,7 @@ pub func Llvm(opt &: Dr): int:
     _pt_cg := pf.Begin(pf.TP_CODEGEN, sf.path)
     out := lv.RunOpts(lgr, s, a, prog, module, entry, o, sf.path)
     pf.End(pf.TP_CODEGEN, _pt_cg)
-    if npg and o.output_mode == lv.LV_OUT_EXEC and page_size_opt(opt):
+    if o.cold_size:
         o.opt_level = lv.LV_OPT_OS
     end
 

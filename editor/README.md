@@ -179,6 +179,12 @@ the `.js` loader). It is cached so a reload does not download it again:
 version via `tools/salam/update-version.salam`, which CI checks; the build then
 appends the hash.
 
+The server deploy also uploads a brotli copy of each of the three files
+(`<name>.br`). The web server sends that copy to browsers that accept `br` and
+the original to others, which cuts the download from about 4.7 MB with gzip to
+about 3.3 MB. This is plain nginx configuration on the server (a `map` on
+`Accept-Encoding` and `try_files`), with no brotli module.
+
 ## 🔨 Building
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)

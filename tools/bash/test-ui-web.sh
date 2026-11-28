@@ -22,10 +22,12 @@ DIR=$(mktemp -d)
 trap 'rm -rf "$DIR"' EXIT
 
 status=0
-for name in bind component_pub_file dir_component element_keep element_page \
-    event_each_param events_bubble events_callback events_rows grid_table \
-    input_clear_bound input_push_reset input_value list loop_key_use \
-    scope_components scope_counter scope_keyed scope_list scope_state; do
+for name in bind component_pub_file dir_attr dir_component element_keep \
+    element_names element_open element_page event_each_param events_bubble \
+    events_callback events_rows grid_table input_clear_bound input_push_reset \
+    input_value lang_attr list loop_key_use null_attr reactive_chain \
+    scope_components scope_counter scope_invalidate scope_keyed scope_list \
+    scope_state scope_state_ops; do
     src="$ROOT/tests/$LANG_CODE/ui/$name.salam"
     if "$SALAM" build "$src" --platform=web --output="$DIR/$name.html" > "$DIR/build.log" 2>&1; then
         node "$ROOT/tools/js/test-ui-web.js" "$DIR/$name.html" "$src" || status=1

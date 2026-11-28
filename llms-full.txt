@@ -170401,6 +170401,329 @@ The example for this item is shown with the ones above: nav-History.salam
 
 ---
 
+# web.browser
+
+https://salamlang.github.io/Salam/std/web/browser/
+
+HTTP requests from a page, copying to the clipboard and reading the address.
+
+A page often has to talk to a server: send a form, ask for new chat messages, let the visitor copy an answer. This package does those jobs from event handlers and component code. A request does not stop the page: the call returns at once, and later your function receives the status number and the response text. State that the function changes is drawn again, also inside a component that is one row of a list.
+
+Things that catch people out:
+
+- Status 0 means there was no answer: the network failed, the time limit passed, or the browser refused to hand over the response. An answer such as 404 or 500 keeps its own status and text.
+
+- Other sites must allow you. The browser's cross origin rules apply, so a server on another address has to send `Access-Control-Allow-Origin`, and a JSON request is announced first with an `OPTIONS` request that the server has to answer. Cookies are not sent to other sites.
+
+- The body is not sent with GET or HEAD, and the content type is only sent together with a body.
+
+- Call these from events, such as `click`, or from functions they call. A call in code that runs on every drawing of the page repeats the request each time. While a page is prepared ahead of time, requests and copying do nothing and `QueryParam` gives an empty text.
+
+- A removed list row should not wait for answers. If the row that sent a request is deleted before the answer arrives, a new row can take its place in the page's memory and receive that change.
+
+## Sending a form
+
+Build the body as JSON text with encoding.json, send it with `PostJson`, and decide what to show from the status. The page below also reads `?ref=` from its own address and offers to copy the message. Replace the address with that of your server.
+
+web-browser-Register.salam
+
+```salam
+import encoding.json
+import web.browser
+
+mut name := ""
+mut referrer := browser.QueryParam("ref")
+mut message := ""
+mut busy := false
+
+func saved(status: int, text: str):
+    busy = false
+    if status == 0:
+        message = "The server could not be reached"
+    else status >= 200 and status < 300:
+        message = "Registered"
+    else:
+        message = "Refused with status " + status + ": " + text
+    end
+end
+
+func copied(done: bool):
+    if not done:
+        message = "Copying is not allowed here"
+    end
+end
+
+func send():
+    busy = true
+    message = "Sending"
+    payload := "{\"name\": " + json.Str(name) + ", \"ref\": " + json.Str(referrer) + "}"
+    browser.PostJson("https://example.com/registrations", payload, 15000, (status: int, text: str): saved(status, text) end)
+end
+
+page:
+    title = "Register"
+    box:
+        input:
+            type = "text"
+            placeholder = "Your name"
+            bind = name
+        end
+        button:
+            content = "Register"
+            disabled = busy
+            click = (): send() end
+        end
+        button:
+            content = "Copy the answer"
+            click = (): browser.CopyText(message, (done: bool): copied(done) end) end
+        end
+        paragraph:
+            content = message
+        end
+    end
+end
+```
+
+## Asking again later
+
+Waiting and repeating are done with `SetTimeout` and `SetInterval` from dom. This page asks until the server answers with 200, two seconds apart, and uses `Request` for another method.
+
+web-browser-Poll.salam
+
+```salam
+import dom
+import web.browser
+
+mut answer := "waiting"
+mut polls := 0
+
+func answered(status: int, text: str):
+    if status == 200:
+        answer = text
+    else:
+        dom.SetTimeout((): ask() end, 2000)
+    end
+end
+
+func ask():
+    polls++
+    browser.Get("https://example.com/chat/latest", 5000, (status: int, text: str): answered(status, text) end)
+end
+
+func deleted(status: int, text: str):
+    answer = status + " " + text
+end
+
+func remove():
+    browser.Request("DELETE", "https://example.com/chat/latest", "", "", 5000, (status: int, text: str): deleted(status, text) end)
+end
+
+func copy_link():
+    browser.CopyText("https://example.com/chat")
+end
+
+page:
+    title = "Chat"
+    box:
+        button:
+            content = "Start"
+            click = (): ask() end
+        end
+        button:
+            content = "Copy the link"
+            click = (): copy_link() end
+        end
+        button:
+            content = "Delete"
+            click = (): remove() end
+        end
+        paragraph:
+            content = polls + ": " + answer
+        end
+    end
+end
+```
+
+## Outside the browser
+
+In a native build the same code sends the request with net.http and calls your function before the call returns, so the window waits for the answer: give a short time limit. Copying uses `gui.clipboard`, and `QueryParam` is empty because there is no address. The timers of dom are only available in the browser. In an app with a `pages` folder, `page.route.Query` reads the query of the current route; to take apart any query text use nav.
+
+## Functions
+
+### `Request`
+
+```salam
+func Request(method: str, url: str, body: str, content_type: str, timeout_ms: int, done: func(int, str))
+```
+
+Sends an HTTP request: method, address, body, content type, time limit in milliseconds (0 for none) and the function that receives the status and the response text. The status is 0 when there is no answer.
+
+web-browser-Poll.salam
+
+```salam
+import dom
+import web.browser
+
+mut answer := "waiting"
+mut polls := 0
+
+func answered(status: int, text: str):
+    if status == 200:
+        answer = text
+    else:
+        dom.SetTimeout((): ask() end, 2000)
+    end
+end
+
+func ask():
+    polls++
+    browser.Get("https://example.com/chat/latest", 5000, (status: int, text: str): answered(status, text) end)
+end
+
+func deleted(status: int, text: str):
+    answer = status + " " + text
+end
+
+func remove():
+    browser.Request("DELETE", "https://example.com/chat/latest", "", "", 5000, (status: int, text: str): deleted(status, text) end)
+end
+
+func copy_link():
+    browser.CopyText("https://example.com/chat")
+end
+
+page:
+    title = "Chat"
+    box:
+        button:
+            content = "Start"
+            click = (): ask() end
+        end
+        button:
+            content = "Copy the link"
+            click = (): copy_link() end
+        end
+        button:
+            content = "Delete"
+            click = (): remove() end
+        end
+        paragraph:
+            content = polls + ": " + answer
+        end
+    end
+end
+```
+
+### `Get`
+
+```salam
+func Get(url: str, timeout_ms: int, done: func(int, str))
+```
+
+Asks for an address with GET; the function receives the status and the response text.
+
+The example for this item is shown with the ones above: web-browser-Poll.salam
+
+### `PostJson`
+
+```salam
+func PostJson(url: str, body: str, timeout_ms: int, done: func(int, str))
+```
+
+Sends JSON text with POST and the content type `application/json`.
+
+web-browser-Register.salam
+
+```salam
+import encoding.json
+import web.browser
+
+mut name := ""
+mut referrer := browser.QueryParam("ref")
+mut message := ""
+mut busy := false
+
+func saved(status: int, text: str):
+    busy = false
+    if status == 0:
+        message = "The server could not be reached"
+    else status >= 200 and status < 300:
+        message = "Registered"
+    else:
+        message = "Refused with status " + status + ": " + text
+    end
+end
+
+func copied(done: bool):
+    if not done:
+        message = "Copying is not allowed here"
+    end
+end
+
+func send():
+    busy = true
+    message = "Sending"
+    payload := "{\"name\": " + json.Str(name) + ", \"ref\": " + json.Str(referrer) + "}"
+    browser.PostJson("https://example.com/registrations", payload, 15000, (status: int, text: str): saved(status, text) end)
+end
+
+page:
+    title = "Register"
+    box:
+        input:
+            type = "text"
+            placeholder = "Your name"
+            bind = name
+        end
+        button:
+            content = "Register"
+            disabled = busy
+            click = (): send() end
+        end
+        button:
+            content = "Copy the answer"
+            click = (): browser.CopyText(message, (done: bool): copied(done) end) end
+        end
+        paragraph:
+            content = message
+        end
+    end
+end
+```
+
+### `CopyText`
+
+```salam
+func CopyText(text: str)
+```
+
+Puts a text on the clipboard. The second form tells your function whether it worked; a browser only allows it on a secure page, usually right after a click.
+
+The example for this item is shown with the ones above: web-browser-Register.salam
+
+### `CopyText`
+
+```salam
+func CopyText(text: str, done: func(bool))
+```
+
+Puts a text on the clipboard. The second form tells your function whether it worked; a browser only allows it on a secure page, usually right after a click.
+
+The example for this item is shown with the ones above: web-browser-Register.salam
+
+### `QueryParam`
+
+```salam
+func QueryParam(name: str): str
+```
+
+The value of a name in the query of the page's own address, such as `ref` in `?ref=ali`; an empty text when it is missing.
+
+The example for this item is shown with the ones above: web-browser-Register.salam
+
+
+---
+
 # crypto
 
 https://salamlang.github.io/Salam/std/crypto/

@@ -1625,6 +1625,11 @@ func expand_component(
         )
         ex.errors++
     end
+    outlet := str.Equals(comp_name, "__salam_outlet")
+    if outlet:
+        g_lo_outlet_depth++
+    end
+    defer lo_leave_outlet(outlet)
     body := at.Get(a, comp_def).a
     first_out := out.Len()
     web := g_lo_web_state and not g_lo_native_scopes
@@ -1653,8 +1658,21 @@ func expand_component(
         hparams = lo_handler_params(a, ex.comp_def.Get(ci), body)
     end
     if web and not li_has_storage(a, body) and hparams.Len() == 0:
+        wrap := not outlet and g_lo_outlet_depth == 0 and g_lo_each_depth == 0 and lo_needs_view(
+            ex, a, body, ci
+        )
         frame_derive(a, fr, body)
         expand_comp_body(ex, a, out, body, fr, ci, depth + 1)
+        if wrap:
+            repeat out.Len() - first_out in oi:
+                made := out.Get(first_out + oi)
+                kd := at.KindOf(a, made)
+                if kd == at.AST_LAYOUT_ELEMENT or kd == at.AST_EACH or
+                    (kd == at.AST_IF and not ln_rx_is_comp(a, made)):
+                    out.Set(first_out + oi, ws_region(a, made))
+                end
+            end
+        end
         lo_row_key_from(a, out, first_out, row_key)
         ret
     end
@@ -1783,6 +1801,93 @@ func lo_slot_copy(a &: at.Ast, id: int): int:
         lo_adopt_state(a, id, copy)
     end
     ret copy
+end
+
+func lo_leave_outlet(outlet: bool):
+    if outlet:
+        g_lo_outlet_depth--
+    end
+end
+
+func lo_program_calls(a &: at.Ast, prog: int, callee: int): bool:
+    if prog == 0 or callee == 0:
+        ret false
+    end
+    c := at.Get(a, callee)
+    mut name := c.name
+    mut member := false
+    if c.kind == at.AST_MEMBER and c.a != 0 and at.KindOf(a, c.a) == at.AST_IDENTIFIER:
+        name = at.Get(a, c.a).name
+        member = true
+    else c.kind != at.AST_IDENTIFIER:
+        ret false
+    end
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if member and d.kind == at.AST_IMPORT:
+            if str.Equals(d.name, name) or (d.value_kind == tok.TV_STRING and d.name.Len() == 0):
+                ret true
+            end
+        else not member and d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_calls_program(ex &: LoExpand, a &: at.Ast, nid: int, ci: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret false
+    end
+    if n.kind == at.AST_CALL and (lo_program_calls(a, ex.cur_prog, n.a) or lo_program_calls(
+        a, ex.comp_prog.Get(ci), n.a
+    )):
+        ret true
+    end
+    if lo_calls_program(ex, a, n.a, ci) or lo_calls_program(ex, a, n.b, ci) or lo_calls_program(
+        ex, a, n.c, ci
+    ) or lo_calls_program(ex, a, n.d, ci):
+        ret true
+    end
+    each c in n.list:
+        if lo_calls_program(ex, a, c, ci):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_each_over_local(a &: at.Ast, nid: int, body: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_EACH and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        over := at.Get(a, n.a).name
+        repeat at.ChildCount(a, body) in i:
+            d := at.Get(a, at.Child(a, body, i))
+            if d.kind == at.AST_VAR_DECL and str.Equals(d.name, over):
+                ret true
+            end
+        end
+    end
+    if lo_each_over_local(a, n.b, body) or lo_each_over_local(a, n.c, body):
+        ret true
+    end
+    each c in n.list:
+        if lo_each_over_local(a, c, body):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_needs_view(ex &: LoExpand, a &: at.Ast, body: int, ci: int): bool:
+    ret lo_calls_program(ex, a, body, ci) or lo_each_over_local(a, body, body)
 end
 
 func lo_hr_walk(a &: at.Ast, nid: int, out &: Vector<str>):

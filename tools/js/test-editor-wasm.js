@@ -144,6 +144,18 @@ global.Module.onRuntimeInitialized = () => {
         out,
       );
     }
+    const ui = cases.find((c) => c.name.indexOf("shipped std cache") >= 0).src;
+    let early = 0;
+    for (let i = 0; i < 25; i++) {
+      lay(ui.replace("Check", "Check " + i), "en");
+      if (i === 4) early = _sbrk(0) >>> 0;
+    }
+    const grown = (_sbrk(0) >>> 0) - early;
+    check(
+      "rebuilding a UI page does not keep growing the heap",
+      Module._salam_web_last_failed() === 0 && Math.abs(grown) < 16777216,
+      grown + " bytes over 20 builds",
+    );
     const cards =
       'page:\n    title = "Cards"\n    design = "shadcn"\n    card:\n        card header:\n            card title: content = "Title" end\n        end\n    end\nend\n';
     const first = lay(cards, "en");

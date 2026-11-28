@@ -2,6 +2,7 @@ package interp
 
 import str
 import mem
+import gui.style
 
 include co "../sal_core.salam"
 include at "../ast.salam"
@@ -752,6 +753,63 @@ func prerender_css(s: str): str:
     ret prerender_html(str.Replace(t, "\n", ""))
 end
 
+func web_style_hash(text: str): str:
+    mut h := 2166136261 as u64
+    n := str.ByteLen(text)
+    mut i := 0
+    until i < n:
+        lead := co.ByteAt(text, i)
+        mut cp := lead
+        mut width := 1
+        if lead >= 240:
+            cp = lead & 7
+            width = 4
+        else lead >= 224:
+            cp = lead & 15
+            width = 3
+        else lead >= 192:
+            cp = lead & 31
+            width = 2
+        end
+        repeat width - 1 in k:
+            cp = (cp << 6) | (co.ByteAt(text, i + k + 1) & 63)
+        end
+        i += width
+        if cp > 65535:
+            cp -= 65536
+            h = ((h ^ ((55296 + (cp >> 10)) as u64)) * 16777619) & 4294967295
+            cp = 56320 + (cp & 1023)
+        end
+        h = ((h ^ (cp as u64)) * 16777619) & 4294967295
+    end
+    ret co.U64Toa(h)
+end
+
+func web_style(prop: int, state: int, text: str): str:
+    mut v := style.Value {}
+    if str.Len(text) == 0 or not style.Parse(prop, text, v):
+        ret ""
+    end
+    css := style.Css(prop, v)
+    if str.Len(css) == 0:
+        ret ""
+    end
+    suffixes := [
+        "", ":hover", ":focus", ":focus-within", ":active", ":disabled", ":checked", ":invalid",
+        "::placeholder", "::selection"
+    ]
+    suffix := state >= 0 and state < len(suffixes) ? suffixes[state] : ""
+    name := "s" + web_style_hash(co.I64Toa(prop as i64) + "/" + co.I64Toa(state as i64) + "/" + css)
+    each seen in g_web_style_seen:
+        if str.Equals(seen, name):
+            ret name
+        end
+    end
+    g_web_style_seen.Push(name)
+    g_web_style_rules.Push("." + name + suffix + "{" + css + "}")
+    ret name
+end
+
 func web_extern(ip &: Interp, a &: at.Ast, call: int, name: str, args: Vector<Value>, done &: bool): Value:
     done = true
     arg0 := args.Len() > 0 ? to_str(ip, args.Get(0)) : ""
@@ -784,6 +842,13 @@ func web_extern(ip &: Interp, a &: at.Ast, call: int, name: str, args: Vector<Va
     end
     if str.Equals(name, "salamWsRowIn") or str.Equals(name, "salamWsPut"):
         ret val_null()
+    end
+    if str.Equals(name, "salamWsStyle") and args.Len() == 3:
+        ret val_str(
+            web_style(
+                to_int(args.Get(0)) as int, to_int(args.Get(1)) as int, to_str(ip, args.Get(2))
+            )
+        )
     end
     if str.Equals(name, "salamRouteTitle"):
         g_web_title = str.Clone(arg0)

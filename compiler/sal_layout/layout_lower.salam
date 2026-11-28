@@ -28,6 +28,8 @@ const SL_BAD := 9
 const SL_STD := 10
 const SL_URL_TEXT := 11
 
+const LO_HIDDEN := "display:none!important"
+
 mut g_lo_env_nodes := Vector {} as Vector<int>
 mut g_lo_env_injected := false
 mut g_lo_em_lb := Vector {} as Vector<int>
@@ -1253,6 +1255,44 @@ func lo_env_decl_text(): str:
     ret t
 end
 
+func lo_em_shows(a &: at.Ast, i: int, owner: int, state: int): bool:
+    if g_lo_em_lb.Get(i) != owner:
+        ret false
+    end
+    sa := sm.ResolveStyleAttr(at.Get(a, g_lo_em_attr.Get(i)).name)
+    if not sa.ok or sa.state != state or sa.prop != style.PropByName("visible"):
+        ret false
+    end
+    mut v := style.Value {}
+    text := sm.StyleAttrTextFor(a, g_lo_em_val.Get(i), sa.prop)
+    ret style.Parse(sa.prop, text, v) and str.Len(style.Css(sa.prop, v)) == 0
+end
+
+func lo_em_unless(
+    a &: at.Ast, owner: int, state: int, from: int, rule: str, compact: bool
+): str:
+    mut out := rule
+    repeat g_lo_em_lb.Len() in i:
+        if i < from or not lo_em_shows(a, i, owner, state):
+            continue
+        end
+        q := "not " + lo_em_group(g_lo_em_query.Get(i))
+        if compact:
+            out = "@media " + q + "{" + out + "}"
+        else:
+            out = "@media " + q + " { " + out + " }"
+        end
+    end
+    ret out
+end
+
+func lo_em_hidden_base(a &: at.Ast, owner: int, state: int, compact: bool): str:
+    sel := char_from_code(29) + lo_state_suffix(state) + char_from_code(30)
+    rule := compact ? sel + "{" + LO_HIDDEN + "}" : sel + " { " + LO_HIDDEN + "; }"
+    wrapped := lo_em_unless(a, owner, state, 0, rule, compact)
+    ret str.Equals(wrapped, rule) ? "" : wrapped
+end
+
 func lo_em_rules(a &: at.Ast, owner: int, compact: bool): str:
     sel := char_from_code(29)
     mut out := ""
@@ -1270,13 +1310,21 @@ func lo_em_rules(a &: at.Ast, owner: int, compact: bool): str:
             continue
         end
         decl := style.Css(sa.prop, v)
+        if str.Len(decl) == 0:
+            continue
+        end
         q := g_lo_em_query.Get(i)
         ssel := sel + lo_state_suffix(sa.state) + char_from_code(30)
+        mut rule := ""
         if compact:
-            out += "@media " + q + "{" + ssel + "{" + decl + "}}"
+            rule = "@media " + q + "{" + ssel + "{" + decl + "}}"
         else:
-            out += "@media " + q + " { " + ssel + " { " + decl + "; } }"
+            rule = "@media " + q + " { " + ssel + " { " + decl + "; } }"
         end
+        if str.Equals(decl, LO_HIDDEN):
+            rule = lo_em_unless(a, owner, sa.state, i + 1, rule, compact)
+        end
+        out += rule
     end
     ret out
 end

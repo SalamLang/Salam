@@ -133,7 +133,10 @@ Status:
   number, values that read a variable or parameter, and conditions mixed with
   state; on the page block itself those stay E129 for now, as for any
   page-level state. An `if` that shows or hides elements always uses the
-  script path.
+  script path. `visible = false` that a later block turns back with
+  `visible = true` is written as a rule that holds only while that condition is
+  false (`@media not (width < 900px)`), so the element keeps its own layout
+  when it is shown.
 - A `pub const` of an included package with a literal value (`theme.SOFT`
   after `include theme "lib/theme.salam"` in the entry file) is a compile time
   value in a style, like a constant of the file itself.

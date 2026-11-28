@@ -60,7 +60,19 @@ runtime renders the page. These calls work there against the DOM:
 - `CurrentEvent`, filled from the browser event being handled.
 - `OpenUrl` and `OpenedUrls`.
 - `ScopeRuns`, which counts the regions the web runtime rendered again after the
-  first render.
+  first render. A page value that calls it is rendered at run time.
+- `Invalidate`, which renders every region again.
+- `WindowVisible`, which is true while the browser tab is visible.
+
+A web build follows a window in these cases:
+
+- A `details` or `dialog` element keeps the state the user or the code gave it
+  until its declared `open` value changes.
+- `SetValue` on a select with a value that no option has is read back unchanged.
+- A page with a right to left `lang` and no `dir` is laid out right to left.
+- A handler may have the name of a window member such as `open`, `name`,
+  `status` or `location`. It is published on `window.salamOn` and the browser
+  member stays as it is.
 
 Where the answer differs from a native window:
 
@@ -68,23 +80,37 @@ Where the answer differs from a native window:
   name: a `checkbox` element reports `input`, and design system components
   report the element their tag stands for.
 - `Rect` is the browser's own layout in page coordinates. The numbers depend on
-  the fonts and the viewport, and a page whose direction a window takes from
-  `lang` can still be laid out left to right on the web.
+  the fonts and the viewport. Only the `lang` of the page sets a direction, so a
+  `lang` that changes while the page runs does not turn it.
+- A select with a `size` above one and no `selected` option has nothing selected
+  in a browser, so its value is empty until something is picked. A window reads
+  the first option.
+- An open `dialog` is an ordinary element of the page in a browser. It is not
+  modal, and later content can cover it.
 - `ScopeRuns` follows the web runtime, which renders a component and its keyed
-  rows as one region. A change that runs a row and its parent as two scopes in a
-  window can count once in a browser.
+  rows as one region. A window gives each keyed row a scope of its own, so a
+  change that runs a row and its component counts twice there and once in a
+  browser (`events_rows` reads 2, 4, 2 in a window and 1, 2, 1 on the web).
+  Matching this needs one web region for each keyed row.
 
-These belong to the native engine and do nothing in a web build. Numbers are 0,
-booleans are false, and `Style` returns a default value:
+These belong to the native engine. A web build ignores them, and the first call
+of each writes a warning to the browser console. Numbers are 0 and `Style`
+returns a default value:
 
-- `Element.Style`, `ScopeSkips`, `ScopeNodes`.
-- `Invalidate`, `TouchInstance`, `TouchInstanceVars` and the other `Scope*` calls
-  that generated native code uses.
-- `Stop`, `HideWindow`, `ShowWindow`, `WindowVisible`, `OnCloseRequest`,
-  `OnPause`, `OnResume`, `OnLowMemory`, `OnSaveState`, `KeyboardDismiss`,
-  `SetBack`, `SetForward`, `SetAfterUpdate`, `RunSteps`.
-- `RunPage`, `RenderPage`, `DumpPage` and the `Offscreen*` calls, which draw a
-  window of their own.
+| call                                      | why it has no web meaning                |
+| ----------------------------------------- | ---------------------------------------- |
+| `Element.Style`                           | styles are computed by the browser       |
+| `ScopeNodes`, `ScopeSkips`                | counters of the native scope engine      |
+| `Stop`, `HideWindow`, `ShowWindow`        | a page cannot close or hide its tab      |
+| `OnCloseRequest`, `OnSaveState`           | the handler is never called              |
+| `OnPause`, `OnResume`, `OnLowMemory`      | the handler is never called              |
+| `KeyboardDismiss`                         | the browser owns the on screen keyboard  |
+| `SetBack`, `SetForward`, `SetAfterUpdate` | the page router owns history and updates |
+| `RunSteps`, `RunPage`                     | they drive a native window               |
+
+`TouchInstance`, `TouchInstanceVars` and the other `Scope*` calls are for
+generated native code. `RenderPage`, `DumpPage` and the `Offscreen*` calls draw
+with the native engine and are not supported or tested in a web build.
 
 `tools/js/test-ui-web.js` replays a test's `.script` against its web build in a
 headless browser and compares the output with `.out`, or with `.web.out` where

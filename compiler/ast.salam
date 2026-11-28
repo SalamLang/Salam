@@ -258,15 +258,19 @@ pub struct NodeExt:
     pub rules: Vector<int> = Vector {}
 end
 
+struct PrunedNames:
+    pub latest: HashMap<str, int> = HashMap {}
+    pub files: Vector<str> = Vector {}
+    pub older: Vector<int> = Vector {}
+end
+
 pub struct Ast:
     pub uid: int = 0
     pub pages: Vector<Vector<Node>> = Vector {}
     pub total: int = 0
     pub exts: Vector<NodeExt> = Vector {}
-    pub pruned_names: Vector<str> = Vector {}
-    pub pruned_files: Vector<str> = Vector {}
-    pub pruned_write_files: Vector<str> = Vector {}
-    pub pruned_writes: Vector<str> = Vector {}
+    pub pruned_reads: PrunedNames = PrunedNames {}
+    pub pruned_writes: PrunedNames = PrunedNames {}
 end
 
 func node_ref(a &: Ast, id: NodeId): Node*:
@@ -363,6 +367,35 @@ func emit_child_list(w &: x.Writer, role: str, a &: Ast, ids: Vector<int>):
     x.Close(w)
 end
 
+func pruned_has(p &: PrunedNames, file: str, name: str): bool:
+    if not p.latest.Has(name):
+        ret false
+    end
+    mut i := p.latest.Get(name)
+    until i >= 0:
+        if str.Equals(p.files.Get(i), file):
+            ret true
+        end
+        i = p.older.Get(i)
+    end
+    ret false
+end
+
+func pruned_add(p &: PrunedNames, file: str, name: str):
+    if pruned_has(p, file, name):
+        ret
+    end
+    p.older.Push(p.latest.Has(name) ? p.latest.Get(name) : -1)
+    p.latest.Put(name, p.files.Len())
+    p.files.Push(file)
+end
+
+func pruned_free(p &: PrunedNames):
+    p.latest.Free()
+    p.files.Free()
+    p.older.Free()
+end
+
 pub func NewAst(): Ast:
     mut a := Ast {}
     g_ast_uid++
@@ -392,10 +425,8 @@ pub func FreeAst(a &: Ast):
     end
     a.pages.Free()
     a.exts.Free()
-    a.pruned_names.Free()
-    a.pruned_files.Free()
-    a.pruned_write_files.Free()
-    a.pruned_writes.Free()
+    pruned_free(a.pruned_reads)
+    pruned_free(a.pruned_writes)
 end
 
 pub func Count(a &: Ast): int:
@@ -568,58 +599,22 @@ pub func NotePruned(a &: Ast, file: str, name: str, wrote: bool):
     if str.Len(name) == 0:
         ret
     end
-    mut seen := false
-    repeat a.pruned_names.Len() in i:
-        if str.Equals(a.pruned_names.Get(i), name) and str.Equals(a.pruned_files.Get(i), file):
-            seen = true
-            break
-        end
+    pruned_add(a.pruned_reads, file, name)
+    if wrote:
+        pruned_add(a.pruned_writes, file, name)
     end
-    if not seen:
-        a.pruned_names.Push(name)
-        a.pruned_files.Push(file)
-    end
-    if not wrote:
-        ret
-    end
-    repeat a.pruned_writes.Len() in j:
-        if str.Equals(a.pruned_writes.Get(j), name) and str.Equals(
-            a.pruned_write_files.Get(j), file
-        ):
-            ret
-        end
-    end
-    a.pruned_writes.Push(name)
-    a.pruned_write_files.Push(file)
 end
 
 pub func WasPruned(a &: Ast, file: str, name: str): bool:
-    repeat a.pruned_names.Len() in i:
-        if str.Equals(a.pruned_names.Get(i), name) and str.Equals(a.pruned_files.Get(i), file):
-            ret true
-        end
-    end
-    ret false
+    ret pruned_has(a.pruned_reads, file, name)
 end
 
 pub func WasPrunedAnywhere(a &: Ast, name: str): bool:
-    repeat a.pruned_names.Len() in i:
-        if str.Equals(a.pruned_names.Get(i), name):
-            ret true
-        end
-    end
-    ret false
+    ret a.pruned_reads.latest.Has(name)
 end
 
 pub func WasPrunedWrite(a &: Ast, file: str, name: str): bool:
-    repeat a.pruned_writes.Len() in i:
-        if str.Equals(a.pruned_writes.Get(i), name) and str.Equals(
-            a.pruned_write_files.Get(i), file
-        ):
-            ret true
-        end
-    end
-    ret false
+    ret pruned_has(a.pruned_writes, file, name)
 end
 
 pub func Dims(a &: Ast, ext: int): Vector<int>:

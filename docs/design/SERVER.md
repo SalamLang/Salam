@@ -215,9 +215,13 @@ What was built (the smallest design that works):
   render (nested regions are compared empty, each is checked on its own turn)
   logs `salam: hydration mismatch in region N, it is rendered again from the
   state` through `console.warn` and the patch makes it equal. Nothing throws. A
-  region the server left empty (`each` rows with per row state:
-  `salamWsCur`, `salamWsSlot`, `salamWsFresh`) is simply filled on load without
-  a warning; the first paint is the server HTML.
+  region the server left empty (a view that needs a value only the browser
+  has) is simply filled on load without a warning; the first paint is the server
+  HTML.
+- `each` rows with per row state (a component with variables or event handlers
+  inside `each`) are rendered by the server too: rows take their slots in render
+  order, starting from zero on every request, which is the order the bundle
+  uses on its first render.
 - A style value that is only known when the page renders (it reads a parameter
   or a state, or sits in a style `if` on one) is rendered by the server with the
   same class name the bundle computes, `s` and a hash of the property, the state
@@ -253,8 +257,7 @@ Call cache for server funcs (the contract with the server func stubs):
 - A difference between the cached and a fresh value is not an error: the next
   state change renders it.
 
-Not built: serializing page variables, per element ids, hydration of `each`
-rows with per row state on the server (they are filled by the bundle).
+Not built: serializing page variables and per element IDs.
 
 ## Build and run
 
@@ -280,13 +283,12 @@ hidden file `DIR/public/.shell.html`; the server fills the regions per request
 and never serves that file. Prerendered `index.html` copies are in `DIR/public`
 for CDNs, but the server renders every page itself (`ssr.PageInit` turns the
 static index lookup off). A project with `mode = hash` or its own `main`
-function is refused. Regions that need browser only state (per row state of
-`each`) are left empty by the server and filled by the bundle.
+function is refused.
 
 The static prerender fills the same regions as the server: regions nested
-inside other regions (a stateful component in a layout, for example) and style
-values computed at render time, whose rules go into the `<head>` of that
-route's `index.html`.
+inside other regions (a stateful component in a layout, for example), rows with
+per row state, and style values computed at render time, whose rules go into
+the `<head>` of that route's `index.html`.
 
 The generated server reads `PORT` (`0` picks a free port) and `HOST`, serves `dist/public` with
 `ETag` and caching headers, and listens behind any reverse proxy. Backend

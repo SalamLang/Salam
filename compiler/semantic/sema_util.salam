@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import mem
 
 include co "../sal_core.salam"
 include at "../ast.salam"
@@ -156,7 +157,11 @@ func su_ctx_canon(s: str): str:
         c := lp.CanonWord(fa, w)
         out.Push(c.Len() > 0 ? c : w)
     end
-    ret str.Join(out, " ")
+    joined := co.Share(str.Join(out, " "))
+    each w in parts:
+        mem.Free(w as void*)
+    end
+    ret joined
 end
 
 func su_ident_eq(a: str, b: str): bool:
@@ -213,18 +218,19 @@ func intrinsic_type_canon(name: str): str:
 end
 
 func su_pascal_snake(name: str): str:
-    mut out := ""
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
     mut prev_lower := false
     repeat str.Len(name) in i:
-        c := name.Substr(i, 1)
-        up := c >= "A" and c <= "Z"
+        c := byte_at(name, i)
+        up := c >= 65 and c <= 90
         if up and prev_lower:
-            out += "_"
+            str.BufAppendChar(b, 95)
         end
-        out += str.Lower(c)
-        prev_lower = (c >= "a" and c <= "z") or (c >= "0" and c <= "9")
+        str.BufAppendChar(b, up ? c + 32 : c)
+        prev_lower = (c >= 97 and c <= 122) or (c >= 48 and c <= 57)
     end
-    ret out
+    ret co.Share(str.BufStr(b))
 end
 
 func su_snake_pascal(name: str): str:
@@ -742,8 +748,8 @@ func sema_lookup_iface(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan, why &:
         end
         ret OwnPackageSym(s, name, SYM_INTERFACE)
     end
-    pname := str.Substr(name, 0, dot)
-    tname := str.Substr(name, dot + 1, str.Len(name) - dot - 1)
+    pname := co.Share(str.Substr(name, 0, dot))
+    tname := co.Share(str.Substr(name, dot + 1, str.Len(name) - dot - 1))
     mut pk2 := scope_lookup(s, s.cur, pname)
     if pk2 == 0:
         pk2 = scope_lookup(s, s.global, pname)
@@ -800,7 +806,9 @@ func sema_pure_value_err(s &: Sema, a &: at.Ast, pf: int, sp: co.SrcSpan):
             12,
             sp,
             co.Format1(
-                i18.Tr("component '%s' cannot call a function value: its purity cannot be verified"),
+                i18.Tr(
+                    "component '%s' cannot call a function value: its purity cannot be verified"
+                ),
                 co.ArgStr(name)
             ),
             i18.Tr(

@@ -100,6 +100,8 @@ en)
     w_user="User 7"
     w_missing="Nothing at /nope"
     w_total="Total 21"
+    f_name="%50rice"
+    f_value=63
     ;;
 fa)
     t_home="خانه"
@@ -109,6 +111,8 @@ fa)
     w_user="کاربر 7"
     w_missing="چیزی در /nope نیست"
     w_total="مجموع 21"
+    f_name="%D8%AF%D9%88%D8%A8%D8%B1%D8%A7%D8%A8%D8%B1"
+    f_value=42
     ;;
 esac
 
@@ -168,6 +172,17 @@ has '"path":"/\"onmouseover=\"x"' json-escaped-quote
 echo "== hostile line break"
 echo "status $(get '/x%0d%0aSet-Cookie:%20a=b')"
 grep -qi '^set-cookie' head.txt && echo "  UNEXPECTED header injection" || echo "  no header injection"
+
+echo "== server func by encoded name"
+token=$(curl -s -m 10 "$base/_salam/session" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+call() {
+    curl -s -m 10 -o body.html -w '%{http_code}' -H 'Content-Type: application/json' \
+        -H "X-Salam-Token: $token" -d '{"args":{"n":21}}' "$base/_salam/fn/$1"
+}
+echo "status $(call "$f_name")"
+has "\"value\":$f_value" value
+echo "status $(call "$f_name%00")"
+echo "status $(call "$f_name%zz")"
 
 echo "== static"
 js=$(ls dist/public | grep '\.js$' | head -1)

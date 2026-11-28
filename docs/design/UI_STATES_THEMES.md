@@ -140,6 +140,10 @@ Status:
 - A `pub const` of an included package with a literal value (`theme.SOFT`
   after `include theme "lib/theme.salam"` in the entry file) is a compile time
   value in a style, like a constant of the file itself.
+- A component used in the entry `page:` block outside any route, whose
+  variables call functions of the program or are looped over with `each`, is
+  rendered by the script. The static prerender fills it in a routed project; a
+  project without routes shows it once the script has run.
 - Native: the compiler injects the same hidden values and a setter, registered
   with `Builder.Env`; `gui.ui` calls it before the first frame and again on
   `Resized` and `ColorSchemeChanged` with the logical window size, so the

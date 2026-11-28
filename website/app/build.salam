@@ -17,7 +17,19 @@ import str
 import io
 import fs.dir
 
+include convert "convert.salam"
+
 const SOURCES := "site,home,community,404,install,std,speed,brand,blog,tools,packages"
+
+struct Port:
+    pub old: str = ""
+    pub src: str = ""
+    pub base: str = ""
+    pub sections: str = ""
+    pub count: int = 0
+    pub previews: Vector<str>
+    pub names: Vector<str>
+end
 
 func put_file(words &: HashMap<str, str>, keys &: Vector<str>, path: str):
     lines := str.Split(io.ReadFile(path), "\n")
@@ -202,6 +214,75 @@ func paint(src: str, file: str):
     paint_tree(src, palette, names)
 end
 
+func between(text: str, open_mark: str, close_mark: str): str:
+    a := str.IndexOf(text, open_mark)
+    if a < 0:
+        ret ""
+    end
+    from := a + open_mark.Len()
+    rest := text.Substr(from, text.Len() - from)
+    b := str.IndexOf(rest, close_mark)
+    if b < 0:
+        ret ""
+    end
+    ret rest.Substr(0, b)
+end
+
+func wanted(job: Port, path: str): bool:
+    if path.Len() == 0 or path == "community" or path == "404":
+        ret false
+    end
+    if job.sections.Len() == 0:
+        ret true
+    end
+    each part in str.Split(job.sections, ","):
+        if path == part or str.StartsWith(path, part + "/"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func port_page(job &: Port, path: str):
+    source := io.ReadFile(job.old + "/" + path + "/index.html")
+    fragment := between(source, "<main id=\"main\">", "</main>")
+    if fragment.Len() == 0:
+        ret
+    end
+    job.count++
+    number := str.FromInt(job.count as i64)
+    mut found := Vector {} as Vector<str>
+    body := convert.Body(fragment, job.base, "p" + number, found)
+    repeat found.Len() in i:
+        job.names.Push("p" + number + "-" + str.FromInt(i as i64))
+        job.previews.Push(found.Get(i))
+    end
+    title := plain(between(source, "<title>", "</title>"))
+    out := job.src + "/pages/" + path
+    _m := dir.MkdirAll(out)
+    _w := io.WriteFile(
+        out + "/index.salam",
+        "pub component Page" + number + ":\n    title = " + literal(title) +
+            "\n    box:\n" + indent(body) + "    end\nend\n"
+    )
+end
+
+func indent(body: str): str:
+    ret "    " + str.Replace(str.Trim(body), "\n", "\n    ") + "\n"
+end
+
+func port_tree(job &: Port, path: str):
+    folder := path.Len() == 0 ? job.old : job.old + "/" + path
+    if wanted(job, path):
+        port_page(job, path)
+    end
+    each name in dir.ListDirs(folder):
+        if name != "assets":
+            port_tree(job, path.Len() == 0 ? name : path + "/" + name)
+        end
+    end
+end
+
 func build(salam: str, root: str, lang: str, other: str): bool:
     mut keys := Vector {} as Vector<str>
     words := load(root, lang, other, keys)
@@ -218,6 +299,16 @@ func build(salam: str, root: str, lang: str, other: str): bool:
     fill(src + "/main.salam", words)
     _b := io.WriteFile(src + "/lib/site.salam", io.ReadFile(app + "/lib/site.salam"))
     _c := io.WriteFile(src + "/lib/words.salam", words_source(words, keys))
+    mut job := Port {
+        old = root + "/dist/" + lang,
+        src = src,
+        base = words.Has("site.base") ? words.Get("site.base") : "",
+        sections = os.Env("SITE_SECTIONS"),
+        previews = Vector {} as Vector<str>,
+        names = Vector {} as Vector<str>
+    }
+    port_tree(job, "")
+    println "ported", job.count, "pages for", lang
     paint(src, app + "/palette.txt")
     if dir.Copy(app + "/public", src + "/public") != 0:
         printerrln "website: cannot copy the public files"
@@ -235,6 +326,24 @@ func build(salam: str, root: str, lang: str, other: str): bool:
             _n := dir.RemoveAll(nested)
         end
     end
+    if job.previews.Len() > 0:
+        _pm := dir.MkdirAll(out + "/site/public/previews")
+        repeat job.previews.Len() in i:
+            _pw := io.WriteFile(
+                out + "/site/public/previews/" + job.names.Get(i) + ".html", job.previews.Get(i)
+            )
+        end
+    end
+    old := root + "/dist/" + lang
+    public := out + "/site/public"
+    each name in dir.ListFiles(old):
+        if not str.EndsWith(name, ".html"):
+            _cw := io.WriteFile(public + "/" + name, io.ReadFile(old + "/" + name))
+        end
+    end
+    _am := dir.MkdirAll(public + "/assets")
+    _ci := dir.Copy(old + "/assets/img", public + "/assets/img")
+    _cb := dir.Copy(old + "/assets/brand", public + "/assets/brand")
     println "built", lang, "->", out + "/site/public"
     ret true
 end

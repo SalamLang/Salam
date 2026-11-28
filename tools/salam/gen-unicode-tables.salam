@@ -864,6 +864,25 @@ func pair_hi(ps &: Vector<Span>): Vector<int>:
     ret v
 end
 
+func packed_ranges(rs &: Vector<Rng>, other: int): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    mut next := 0
+    each r in rs:
+        if r.id < 0 or r.id > 255 or r.lo < next:
+            die("range does not fit the packed form at " + hex4(r.lo))
+        end
+        if r.lo > next and v.Len() > 0:
+            v.Push(next * 256 + other)
+        end
+        v.Push(r.lo * 256 + r.id)
+        next = r.hi + 1
+    end
+    if next < MAX_CP:
+        v.Push(next * 256 + other)
+    end
+    ret v
+end
+
 func emit_case_block(e &: Emitter, t &: IntMap, prefix: str, human: str):
     rs := case_ranges(t)
     e_comment(
@@ -874,20 +893,18 @@ func emit_case_block(e &: Emitter, t &: IntMap, prefix: str, human: str):
             "A code point cp in a run maps to cp + delta when\n" +
             "(cp - lo) is a multiple of stride."
     )
-    mut lo := Vector {} as Vector<int>
-    mut hi := Vector {} as Vector<int>
-    mut sd := Vector {} as Vector<int>
-    mut dl := Vector {} as Vector<int>
+    mut keys := Vector {} as Vector<int>
+    mut steps := Vector {} as Vector<int>
     each r in rs:
-        lo.Push(r.lo) hi.Push(r.hi) sd.Push(r.stride) dl.Push(r.delta)
+        if r.hi - r.lo > 255 or r.stride < 1 or r.stride > 2:
+            die("case run does not fit the packed form in " + prefix)
+        end
+        keys.Push(r.lo * 256 + (r.hi - r.lo))
+        steps.Push(r.delta * 2 + (r.stride - 1))
     end
-    e_ints(e, prefix + "_LO", lo, 8)
+    e_ints(e, prefix + "_KEYS", keys, 8)
     e_blank(e)
-    e_ints(e, prefix + "_HI", hi, 8)
-    e_blank(e)
-    e_ints(e, prefix + "_STRIDE", sd, 8)
-    e_blank(e)
-    e_ints(e, prefix + "_DELTA", dl, 8)
+    e_ints(e, prefix + "_STEPS", steps, 8)
     e_blank(e)
 end
 
@@ -1084,7 +1101,7 @@ func main:
         "General category ids. Categories sharing a first letter are numbered\n" +
             "consecutively so that the group predicates in unicode.salam reduce to\n" +
             "a range check on the id. CatCn (unassigned) is last and is what\n" +
-            "Category returns for any code point not covered by _CAT_LO/_CAT_HI."
+            "Category returns for any code point not covered by _CAT_KEYS."
     )
     each nm in cat_names:
         e_const(e, fa, "Cat." + nm, "Cat" + nm, si(cat_id.Get(nm)))
@@ -1102,18 +1119,14 @@ func main:
     end
     e_comment(
         e,
-        "Assigned code point ranges and their general category, sorted and\n" +
-            "non-overlapping. Unassigned code points are simply absent: " + si(
+        "General category changes, sorted. Each key starts a span that runs\n" +
+            "to the next key, and a CatCn key starts an unassigned span. " + si(
                 assigned.Len()
-        ) + " ranges\n" + "cover the whole of Unicode " + UCD_VERSION +
+        ) + "\n" + "assigned ranges cover Unicode " + UCD_VERSION +
             ", which is far smaller than storing a\n" + "category for each of the " + si(MAX_CP) +
             " code points in the space."
     )
-    e_ints(e, "_CAT_LO", col_lo(assigned), 8)
-    e_blank(e)
-    e_ints(e, "_CAT_HI", col_hi(assigned), 8)
-    e_blank(e)
-    e_ints(e, "_CAT_ID", col_id(assigned), 8)
+    e_ints(e, "_CAT_KEYS", packed_ranges(assigned, cn), 8)
     e_blank(e)
 
     emit_case_block(e, upper, "_UP", "Simple uppercase")
@@ -1204,11 +1217,7 @@ func main:
             "the same word with them typed in another. Marks of class 0, and any\n" +
             "two marks of equal class, are never reordered relative to each other."
     )
-    e_ints(e, "_CCC_LO", col_lo(ccc_runs), 8)
-    e_blank(e)
-    e_ints(e, "_CCC_HI", col_hi(ccc_runs), 8)
-    e_blank(e)
-    e_ints(e, "_CCC_VAL", col_id(ccc_runs), 8)
+    e_ints(e, "_CCC_KEYS", packed_ranges(ccc_runs, 0), 8)
     e_blank(e)
 
     emit_seq_block(
@@ -1240,18 +1249,30 @@ func main:
             "backwards, minus the composition exclusions - the pairs Unicode says\n" +
             "must stay apart even though they decomposed.\n" + "\n" +
             "Sorted by starter and then by the combining mark, so a lookup binary\n" +
-            "searches _COMP_A for the starter and then scans that starter's short\n" +
-            "run for the mark."
+            "finds the mark in _COMP_BS and then binary searches _COMP_KEYS, whose\n" +
+            "entries hold the starter times 128 plus the index of the mark."
     )
-    mut comp_a := Vector {} as Vector<int>
-    mut comp_b := Vector {} as Vector<int>
+    mut marks := IntMap {}
+    each c in comp:
+        imap_put(marks, c.b, 0)
+    end
+    mut comp_bs := sorted_keys(marks)
+    if comp_bs.Len() > 128:
+        die("too many combining marks for the packed composition table")
+    end
+    mut comp_keys := Vector {} as Vector<int>
     mut comp_cp := Vector {} as Vector<int>
     each c in comp:
-        comp_a.Push(c.a) comp_b.Push(c.b) comp_cp.Push(c.cp)
+        mut at := 0
+        until comp_bs.Get(at) != c.b:
+            at++
+        end
+        comp_keys.Push(c.a * 128 + at)
+        comp_cp.Push(c.cp)
     end
-    e_ints(e, "_COMP_A", comp_a, 8)
+    e_ints(e, "_COMP_BS", comp_bs, 8)
     e_blank(e)
-    e_ints(e, "_COMP_B", comp_b, 8)
+    e_ints(e, "_COMP_KEYS", comp_keys, 8)
     e_blank(e)
     e_ints(e, "_COMP_CP", comp_cp, 8)
     e_blank(e)
@@ -1273,11 +1294,7 @@ func main:
             "one character rather than by code point: an Arabic letter followed by\n" +
             "two harakat is three code points and one grapheme cluster."
     )
-    e_ints(e, "_GCB_LO", col_lo(gcb), 8)
-    e_blank(e)
-    e_ints(e, "_GCB_HI", col_hi(gcb), 8)
-    e_blank(e)
-    e_ints(e, "_GCB_ID", col_id(gcb), 8)
+    e_ints(e, "_GCB_KEYS", packed_ranges(gcb, gcb_id.Get("Other")), 8)
     e_blank(e)
 
     e_comment(e, "Indic_Conjunct_Break class ids, used by GB9c in the segmenter.")
@@ -1294,11 +1311,7 @@ func main:
             "to a following consonant by a virama in the same grapheme cluster -\n" +
             "so Devanagari क्त counts as one character rather than three."
     )
-    e_ints(e, "_INCB_LO", col_lo(incb), 8)
-    e_blank(e)
-    e_ints(e, "_INCB_HI", col_hi(incb), 8)
-    e_blank(e)
-    e_ints(e, "_INCB_ID", col_id(incb), 8)
+    e_ints(e, "_INCB_KEYS", packed_ranges(incb, incb_id.Get("None")), 8)
     e_blank(e)
 
     e_comment(
@@ -1321,11 +1334,7 @@ func main:
             "are R and AL respectively, and they appear as explicit ranges below\n" +
             "even though no character is assigned to them yet."
     )
-    e_ints(e, "_BIDI_LO", col_lo(bidi), 8)
-    e_blank(e)
-    e_ints(e, "_BIDI_HI", col_hi(bidi), 8)
-    e_blank(e)
-    e_ints(e, "_BIDI_ID", col_id(bidi), 8)
+    e_ints(e, "_BIDI_KEYS", packed_ranges(bidi, bidi_id.Get("L")), 8)
     e_blank(e)
 
     e_comment(e, "Bidi_Paired_Bracket_Type ids, for rule N0.")
@@ -1378,11 +1387,7 @@ func main:
             scripts.Len()
         ) + " (lo, hi, script) ranges. Anything absent is\n" + "ScriptUnknown."
     )
-    e_ints(e, "_SCRIPT_LO", col_lo(scripts), 8)
-    e_blank(e)
-    e_ints(e, "_SCRIPT_HI", col_hi(scripts), 8)
-    e_blank(e)
-    e_ints(e, "_SCRIPT_ID", col_id(scripts), 8)
+    e_ints(e, "_SCRIPT_KEYS", packed_ranges(scripts, 0), 8)
 
     _n := os.WriteFile(out_path, e_text(e))
 

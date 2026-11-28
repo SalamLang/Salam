@@ -19,6 +19,7 @@ include cc "../condcomp.salam"
 include sm "../semantic/semantic.salam"
 include co "../sal_core.salam"
 include pf "../prof_self.salam"
+include lb "../llvm_bridge.salam"
 include lv "../llvmgen/llvmgen.salam"
 
 if SALAM_OS_WINDOWS:
@@ -116,37 +117,140 @@ func build_opt_level(opt &: Dr): int:
 end
 
 func page_size_opt(opt &: Dr): bool:
-    ret not opt.llvm_opt_set and not opt.safe and not opt.debug_info and not opt.asan
+    ret not opt.llvm_opt_set and not opt.debug_info and not opt.asan
 end
 
-func page_without_images(opt &: Dr, a &: at.Ast, prog: int, path: str, text: str): bool:
+func defines_name(opt &: Dr, name: str): bool:
+    each d in opt.defines:
+        if str.Equals(d, name) or str.StartsWith(d, name + "="):
+            ret true
+        end
+    end
+    ret false
+end
+
+func image_free_kind(a &: at.Ast, id: int): bool:
+    if at.StrLitLen(a, id) < (0 as i64):
+        ret false
+    end
+    raw := at.Get(a, id).value_str
+    if str.Contains(raw, "{") or str.Contains(raw, "$"):
+        ret false
+    end
+    kind := str.Replace(str.Replace(str.Lower(str.Trim(raw)), "_", " "), "‌", " ")
+    each word in ["image", "img", "picture", "تصویر", "عکس"]:
+        if str.Contains(kind, word):
+            ret false
+        end
+    end
+    ret true
+end
+
+func element_open_name(name: str): bool:
+    ret str.Equals(name, "Open") or lp.IdentEqual(name, "گشودن عنصر")
+end
+
+func opens_only_image_free(a &: at.Ast): bool:
+    mut named := 0
+    mut proven := 0
+    repeat at.Count(a) in i:
+        if i == 0:
+            continue
+        end
+        n := at.Get(a, i)
+        if n.kind == at.AST_MEMBER and element_open_name(n.name):
+            named++
+        else n.kind == at.AST_CALL and n.a != 0 and n.list.Len() == 1:
+            callee := at.Get(a, n.a)
+            if callee.kind == at.AST_MEMBER and element_open_name(callee.name) and image_free_kind(
+                a, n.list.Get(0)
+            ):
+                proven++
+            end
+        end
+    end
+    ret named == proven
+end
+
+func style_set_name(name: str): bool:
+    ret str.Equals(name, "SetText") or lp.IdentEqual(name, "تنظیم سبک متنی") or str.Equals(
+        name, "Set"
+    ) or lp.IdentEqual(name, "تنظیم سبک")
+end
+
+func image_free_style(a &: at.Ast, id: int): bool:
+    if at.StrLitLen(a, id) < (0 as i64):
+        ret false
+    end
+    raw := str.Lower(at.Get(a, id).value_str)
+    each word in ["image", "url", "تصویر", "{", "$", "\\"]:
+        if str.Contains(raw, word):
+            ret false
+        end
+    end
+    ret true
+end
+
+func styles_only_image_free(a &: at.Ast): bool:
+    mut named := 0
+    mut proven := 0
+    repeat at.Count(a) in i:
+        if i == 0:
+            continue
+        end
+        n := at.Get(a, i)
+        if n.kind == at.AST_MEMBER and style_set_name(n.name):
+            named++
+        else n.kind == at.AST_CALL and n.a != 0 and n.list.Len() == 3:
+            callee := at.Get(a, n.a)
+            if callee.kind == at.AST_MEMBER and style_set_name(callee.name) and image_free_style(
+                a, n.list.Get(2)
+            ):
+                proven++
+            end
+        end
+    end
+    ret named == proven
+end
+
+func page_runtime_import(name: str): bool:
+    plain := str.Replace(name, "‌", " ")
+    each own in [
+        "gui.ui", "gui.style", "nav", "رابط گرافیکی.رابط کاربری", "رابط گرافیکی.سبک", "ناوبری"
+    ]:
+        if str.Equals(plain, own):
+            ret true
+        end
+    end
+    ret false
+end
+
+func imports_only_page_runtime(a &: at.Ast): bool:
+    repeat at.Count(a) in i:
+        if i == 0:
+            continue
+        end
+        d := at.Get(a, i)
+        if d.kind == at.AST_IMPORT and
+            (str.Len(d.value_str) > 0 or not page_runtime_import(d.name)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func page_may_drop_images(opt &: Dr, a &: at.Ast, prog: int, path: str): bool:
     if opt.ui_target != 1 or opt.llvm_emit != lv.LV_OUT_EXEC or not page_size_opt(opt):
         ret false
     end
-    if prog == 0 or opt.inputs.Len() > 1:
+    if prog == 0 or opt.inputs.Len() > 1 or defines_name(opt, "SALAM_UI_IMAGES"):
         ret false
     end
-    each d in opt.defines:
-        if str.Equals(d, "SALAM_UI_IMAGES"):
-            ret false
-        end
+    if sm.PackageFiles(path).Len() > 1:
+        ret false
     end
     repeat at.ChildCount(a, prog) in i:
         if at.KindOf(a, at.Child(a, prog, i)) == at.AST_IMPORT:
-            ret false
-        end
-    end
-    dir := pth.PathDir(path)
-    each name in ["salam.toml", "design.toml", "pages"]:
-        if os.Exists(pth.PathJoin(dir, name)):
-            ret false
-        end
-    end
-    lower := str.Lower(text)
-    each word in [
-        "image", "picture", "avatar", "design", "url", "تصویر", "عکس", "آواتار", "طراحی"
-    ]:
-        if str.Contains(lower, word):
             ret false
         end
     end
@@ -253,9 +357,7 @@ pub func Llvm(opt &: Dr): int:
     each d in opt.defines:
         defines.Push(d)
     end
-    if page_without_images(opt, a, prog, sf.path, sf.text):
-        defines.Push("SALAM_UI_NO_IMAGES")
-    end
+    may_drop_images := page_may_drop_images(opt, a, prog, sf.path)
     mut table := cc.TableBuild(opt.llvm_target, defines)
     cc.TableSetPack(table, modpack)
     if not cc.PruneProgram(a, lgr, sf.path, table, prog):
@@ -274,6 +376,13 @@ pub func Llvm(opt &: Dr): int:
         end
     end
     _vw := lo.PrepareViews(lgr, modpack, table, a, prog, sf.path)
+    if npg and may_drop_images and imports_only_page_runtime(
+        a
+    ) and opens_only_image_free(a) and styles_only_image_free(a):
+        defines.Push("SALAM_UI_NO_IMAGES")
+        table = cc.TableBuild(opt.llvm_target, defines)
+        cc.TableSetPack(table, modpack)
+    end
     mut s := sm.New(lgr, sf.path, lp.Code(modpack))
     sm.SetCc(s, table)
     if opt.ssr_server and lo.SsrPrepared(sf.path):
@@ -364,7 +473,9 @@ pub func Llvm(opt &: Dr): int:
     o.fp_contract = opt.llvm_fp_contract
     o.fast_math = opt.fast_math
     o.lib_mode = is_lib
-    o.cold_size = npg and o.output_mode == lv.LV_OUT_EXEC and page_size_opt(opt)
+    page_exe := npg and o.output_mode == lv.LV_OUT_EXEC
+    o.cold_size = page_exe and page_size_opt(opt)
+    lb.SetSplitSizeBuild(o.cold_size and opt.safe)
     g_win_gui = win_gui_for(opt, win_target(opt.llvm_target), npg)
     o.win_gui = g_win_gui
 

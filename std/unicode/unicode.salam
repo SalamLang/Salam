@@ -79,12 +79,22 @@ pure func _in_ranges(los: int[:], his: int[:], cp: int): bool:
     ret cp <= his[i]
 end
 
-pure func _case_map(los: int[:], his: int[:], strides: int[:], deltas: int[:], cp: int): int:
-    i := _floor_index(los, cp)
+pure func _packed_value(keys: int[:], cp: int, other: int): int:
+    if cp < 0 or cp > MaxCodePoint: ret other end
+    i := _floor_index(keys, (cp << 8) | 255)
+    if i < 0: ret other end
+    ret keys[i] & 255
+end
+
+pure func _case_map(keys: int[:], steps: int[:], cp: int): int:
+    if cp < 0 or cp > MaxCodePoint: ret cp end
+    i := _floor_index(keys, (cp << 8) | 255)
     if i < 0: ret cp end
-    if cp > his[i]: ret cp end
-    if (cp - los[i]) % strides[i] != 0: ret cp end
-    ret cp + deltas[i]
+    off := cp - (keys[i] >> 8)
+    if off > (keys[i] & 255): ret cp end
+    step := steps[i]
+    if (step & 1) != 0 and (off & 1) != 0: ret cp end
+    ret cp + (step >> 1)
 end
 
 pure func _keyed_index(keys: int[:], cp: int): int:
@@ -102,11 +112,7 @@ end
 @en "Category"
 @fa "دسته"
 pub pure func Category(cp: int): int:
-    if cp < 0 or cp > MaxCodePoint: ret CatCn end
-    i := _floor_index(_CAT_LO[:], cp)
-    if i < 0: ret CatCn end
-    if cp > _CAT_HI[i]: ret CatCn end
-    ret _CAT_ID[i]
+    ret _packed_value(_CAT_KEYS[:], cp, CatCn)
 end
 
 @en "CategoryName"
@@ -223,7 +229,7 @@ end
 pub pure func ToUpper(cp: int): int:
     if cp >= 0x61 and cp <= 0x7A: ret cp - 32 end
     if cp <= _ASCII_MAX: ret cp end
-    ret _case_map(_UP_LO[:], _UP_HI[:], _UP_STRIDE[:], _UP_DELTA[:], cp)
+    ret _case_map(_UP_KEYS[:], _UP_STEPS[:], cp)
 end
 
 @en "ToLower"
@@ -231,7 +237,7 @@ end
 pub pure func ToLower(cp: int): int:
     if cp >= 0x41 and cp <= 0x5A: ret cp + 32 end
     if cp <= _ASCII_MAX: ret cp end
-    ret _case_map(_LOW_LO[:], _LOW_HI[:], _LOW_STRIDE[:], _LOW_DELTA[:], cp)
+    ret _case_map(_LOW_KEYS[:], _LOW_STEPS[:], cp)
 end
 
 @en "ToTitle"
@@ -239,7 +245,7 @@ end
 pub pure func ToTitle(cp: int): int:
     if cp >= 0x61 and cp <= 0x7A: ret cp - 32 end
     if cp <= _ASCII_MAX: ret cp end
-    ret _case_map(_TITLE_LO[:], _TITLE_HI[:], _TITLE_STRIDE[:], _TITLE_DELTA[:], cp)
+    ret _case_map(_TITLE_KEYS[:], _TITLE_STEPS[:], cp)
 end
 
 @en "ToFold"
@@ -247,7 +253,7 @@ end
 pub pure func ToFold(cp: int): int:
     if cp >= 0x41 and cp <= 0x5A: ret cp + 32 end
     if cp <= _ASCII_MAX: ret cp end
-    ret _case_map(_FOLD_LO[:], _FOLD_HI[:], _FOLD_STRIDE[:], _FOLD_DELTA[:], cp)
+    ret _case_map(_FOLD_KEYS[:], _FOLD_STEPS[:], cp)
 end
 
 @en "HasFullFold"
@@ -276,10 +282,7 @@ end
 @en "CombiningClass"
 @fa "رده ترکیبی"
 pub pure func CombiningClass(cp: int): int:
-    i := _floor_index(_CCC_LO[:], cp)
-    if i < 0: ret 0 end
-    if cp > _CCC_HI[i]: ret 0 end
-    ret _CCC_VAL[i]
+    ret _packed_value(_CCC_KEYS[:], cp, 0)
 end
 
 @en "DecompLen"
@@ -348,14 +351,12 @@ pub pure func Compose(a: int, b: int): int:
         tidx := b - HangulTBase
         if tidx > 0 and tidx < HangulTCount: ret a + tidx end
     end
-    mut i := _floor_index(_COMP_A[:], a)
+    if a < 0 or a > MaxCodePoint: ret -1 end
+    mark := _keyed_index(_COMP_BS[:], b)
+    if mark < 0: ret -1 end
+    i := _keyed_index(_COMP_KEYS[:], (a << 7) | mark)
     if i < 0: ret -1 end
-    if _COMP_A[i] != a: ret -1 end
-    until i >= 0 and _COMP_A[i] == a:
-        if _COMP_B[i] == b: ret _COMP_CP[i] end
-        i--
-    end
-    ret -1
+    ret _COMP_CP[i]
 end
 
 @en "GraphemeBreak"
@@ -365,28 +366,19 @@ pub pure func GraphemeBreak(cp: int): int:
         if (cp - HangulSBase) % HangulTCount == 0: ret GcbLV end
         ret GcbLVT
     end
-    i := _floor_index(_GCB_LO[:], cp)
-    if i < 0: ret GcbOther end
-    if cp > _GCB_HI[i]: ret GcbOther end
-    ret _GCB_ID[i]
+    ret _packed_value(_GCB_KEYS[:], cp, GcbOther)
 end
 
 @en "ConjunctBreak"
 @fa "شکست پیوند"
 pub pure func ConjunctBreak(cp: int): int:
-    i := _floor_index(_INCB_LO[:], cp)
-    if i < 0: ret IncbNone end
-    if cp > _INCB_HI[i]: ret IncbNone end
-    ret _INCB_ID[i]
+    ret _packed_value(_INCB_KEYS[:], cp, IncbNone)
 end
 
 @en "BidiClass"
 @fa "رده دوسویه"
 pub pure func BidiClass(cp: int): int:
-    i := _floor_index(_BIDI_LO[:], cp)
-    if i < 0: ret BcL end
-    if cp > _BIDI_HI[i]: ret BcL end
-    ret _BIDI_ID[i]
+    ret _packed_value(_BIDI_KEYS[:], cp, BcL)
 end
 
 @en "PairedBracketType"
@@ -408,10 +400,7 @@ end
 @en "Script"
 @fa "خط"
 pub pure func Script(cp: int): int:
-    i := _floor_index(_SCRIPT_LO[:], cp)
-    if i < 0: ret ScriptUnknown end
-    if cp > _SCRIPT_HI[i]: ret ScriptUnknown end
-    ret _SCRIPT_ID[i]
+    ret _packed_value(_SCRIPT_KEYS[:], cp, ScriptUnknown)
 end
 
 @en "ScriptName"

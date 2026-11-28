@@ -4,9 +4,11 @@ import str
 
 include co "../sal_core.salam"
 
-const BA_MIN_BYTES := 512
+const BA_MIN_BYTES := 64
+const BA_ABI_MIN_BYTES := 512
 
-mut g_ba_names := Vector {} as Vector<str>
+mut g_ba_min := 512
+mut g_ba_index := HashMap {} as HashMap<str, int>
 mut g_ba_bodies := Vector {} as Vector<str>
 mut g_ba_memo := Vector {} as Vector<i64>
 mut g_ba_seq := 0
@@ -186,20 +188,19 @@ func ba_size(t0: str, depth: int): i64:
         ret total
     end
     if c0 == 37:
-        repeat g_ba_names.Len() in i:
-            if str.Equals(g_ba_names.Get(i), t):
-                if g_ba_memo.Get(i) < (0 as i64):
-                    g_ba_memo.Set(i, 0 as i64)
-                    g_ba_memo.Set(i, ba_size(g_ba_bodies.Get(i), depth + 1))
-                end
-                ret g_ba_memo.Get(i)
+        if g_ba_index.Has(t):
+            i := g_ba_index.Get(t)
+            if g_ba_memo.Get(i) < (0 as i64):
+                g_ba_memo.Set(i, 0 as i64)
+                g_ba_memo.Set(i, ba_size(g_ba_bodies.Get(i), depth + 1))
             end
+            ret g_ba_memo.Get(i)
         end
     end
     ret 8
 end
 
-func ba_big(ty: str): bool:
+func ba_big_at(ty: str, min_bytes: int): bool:
     if str.Len(ty) == 0:
         ret false
     end
@@ -207,7 +208,11 @@ func ba_big(ty: str): bool:
     if c0 != 37 and c0 != 91:
         ret false
     end
-    ret ba_size(ty, 0) >= (BA_MIN_BYTES as i64)
+    ret ba_size(ty, 0) >= (min_bytes as i64)
+end
+
+func ba_big(ty: str): bool:
+    ret ba_big_at(ty, g_ba_min)
 end
 
 func ba_in(v: Vector<str>, s: str): int:
@@ -236,25 +241,108 @@ func ba_uses_line(l: str, name: str): int:
     ret n
 end
 
-func ba_uses(f: Vector<str>, name: str): int:
-    mut n := 0
-    repeat f.Len() in li:
-        n += ba_uses_line(f.Get(li), name)
+func ba_value_at(l: str, p: int): bool:
+    if p + 2 >= str.Len(l):
+        ret true
     end
-    ret n
+    c := byte_at(l, p + 1)
+    d := byte_at(l, p + 2)
+    if (c == 118 or c == 112) and d == 46:
+        ret false
+    end
+    if c == 76 and d >= 48 and d <= 57:
+        ret false
+    end
+    ret not (c == 115 and d == 116)
+end
+
+func ba_count(lines: Vector<str>, uses &: HashMap<str, int>, last &: HashMap<str, int>):
+    repeat lines.Len() in li:
+        l := lines.Get(li)
+        if ba_find(l, "@llvm.dbg.", 0) >= 0:
+            continue
+        end
+        n := str.Len(l)
+        mut p := ba_find(l, "%", 0)
+        until p >= 0:
+            mut e := p + 1
+            until e < n and ba_ident(byte_at(l, e)):
+                e++
+            end
+            if ba_value_at(l, p):
+                name := str.Substr(l, p, e - p)
+                uses.Put(name, uses.GetOr(name, 0) + 1)
+                last.Put(name, li)
+            end
+            p = ba_find(l, "%", e)
+        end
+    end
+end
+
+func ba_pure(l: str): bool:
+    t := ba_trim(l)
+    if str.Len(t) == 0:
+        ret true
+    end
+    eqp := ba_find(t, " = ", 0)
+    if eqp <= 0 or byte_at(t, 0) != 37:
+        ret false
+    end
+    sp := ba_find(t, " ", eqp + 3)
+    if sp < 0:
+        ret false
+    end
+    op := str.Substr(t, eqp + 3, sp - eqp - 3)
+    each k in [
+        "load", "getelementptr", "add", "sub", "mul", "and", "or", "xor", "shl", "lshr", "ashr",
+        "icmp", "fcmp", "zext", "sext", "trunc", "sitofp", "uitofp", "fadd", "fsub", "fmul", "fdiv",
+        "extractvalue", "bitcast", "ptrtoint", "inttoptr", "select"
+    ]:
+        if str.Equals(op, k):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ba_stored_value(l: str, out_ty &: str, out_val &: str): bool:
+    t := ba_code(l)
+    if not str.StartsWith(t, "store "):
+        ret false
+    end
+    cut := ba_find(t, ", ptr ", 0)
+    if cut < 0:
+        ret false
+    end
+    mut sp := cut - 1
+    until sp >= 6 and byte_at(t, sp) != 32:
+        sp--
+    end
+    if sp < 6:
+        ret false
+    end
+    out_ty = str.Substr(t, 6, sp - 6)
+    out_val = str.Substr(t, sp + 1, cut - sp - 1)
+    ret true
 end
 
 func ba_type_size(t: str): str:
     ret "ptrtoint (ptr getelementptr (" + t + ", ptr null, i32 1) to i64)"
 end
 
+func ba_private(p: str): bool:
+    ret str.StartsWith(p, "%ba.") or str.EndsWith(p, ".bv") or str.Equals(p, "%sret.out")
+end
+
 func ba_memcpy(dst: str, src: str, t: str): str:
-    ret "  call void @llvm.memcpy.p0.p0.i64(ptr " + dst + ", ptr " + src + ", i64 " + ba_type_size(t) +
-        ", i1 false)"
+    op := ba_private(dst) or ba_private(src) ? "memcpy" : "memmove"
+    ret "  call void @llvm." + op + ".p0.p0.i64(ptr " + dst + ", ptr " + src + ", i64 " +
+        ba_type_size(t) + ", i1 false)"
 end
 
 func ba_memset(dst: str, t: str): str:
-    ret "  call void @llvm.memset.p0.i64(ptr " + dst + ", i8 0, i64 " + ba_type_size(t) + ", i1 false)"
+    ret "  call void @llvm.memset.p0.i64(ptr " + dst + ", i8 0, i64 " + ba_type_size(t) +
+        ", i1 false)"
 end
 
 func ba_tmp(): str:
@@ -398,28 +486,35 @@ func ba_parse_define(
     ret true
 end
 
-func ba_addr_safe(lines: Vector<str>, name: str): bool:
-    m := str.Len(name)
+func ba_unsafe_names(lines: Vector<str>, cand: HashMap<str, int>, bad &: HashMap<str, int>):
     repeat lines.Len() in li:
         l := lines.Get(li)
-        mut p := ba_find(l, name, 0)
+        n := str.Len(l)
+        mut p := ba_find(l, "@", 0)
         until p >= 0:
-            after := p + m
-            if after >= str.Len(l) or not ba_ident(byte_at(l, after)):
-                if after >= str.Len(l) or byte_at(l, after) != 40:
-                    ret false
+            mut e := p + 1
+            if e < n and byte_at(l, e) == 34:
+                q := ba_find(l, "\"", e + 1)
+                e = q < 0 ? n : q + 1
+            else:
+                until e < n and ba_ident(byte_at(l, e)):
+                    e++
                 end
-                if not str.StartsWith(l, "define "):
+            end
+            name := str.Substr(l, p, e - p)
+            if cand.Has(name):
+                if e >= n or byte_at(l, e) != 40:
+                    bad.Put(name, 1)
+                else not str.StartsWith(l, "define "):
                     cl := ba_find(l, "call ", 0)
                     if cl < 0 or cl > p or ba_find(str.Substr(l, cl, p - cl), ",", 0) >= 0:
-                        ret false
+                        bad.Put(name, 1)
                     end
                 end
             end
-            p = ba_find(l, name, p + m)
+            p = ba_find(l, "@", e)
         end
     end
-    ret true
 end
 
 func ba_parse_call(
@@ -453,15 +548,6 @@ func ba_parse_call(
     out_args = str.Substr(t, paren + 1, close - paren - 1)
     out_tail = str.Substr(t, close + 1, str.Len(t) - close - 1)
     ret true
-end
-
-func ba_fn_at(fns: Vector<BigFnInfo>, name: str): int:
-    repeat fns.Len() in i:
-        if str.Equals(fns.Get(i).name, name):
-            ret i
-        end
-    end
-    ret -1
 end
 
 func ba_addr_use(l: str, d: str): bool:
@@ -535,7 +621,14 @@ func ba_local_noescape(f: Vector<str>, q: str): bool:
     ret ok
 end
 
-func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilder):
+func ba_function(
+    f: Vector<str>, fns: Vector<BigFnInfo>, fidx: HashMap<str, int>, out &: str.StringBuilder
+):
+    mut uses := HashMap {} as HashMap<str, int>
+    mut last_use := HashMap {} as HashMap<str, int>
+    ba_count(
+        f, uses, last_use
+    )
     mut hdr := f.Get(0)
     mut sret_ty := ""
     mut bv_names := Vector {} as Vector<str>
@@ -546,7 +639,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
     mut dpre := ""
     mut dpost := ""
     if ba_parse_define(hdr, dret, dname, dparams, dpre, dpost):
-        k := ba_fn_at(fns, dname)
+        k := fidx.GetOr(dname, -1)
         if k >= 0:
             fi := fns.Get(k)
             mut ps := ba_split(dparams)
@@ -578,10 +671,11 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
     mut skip_vals := Vector {} as Vector<str>
     mut skip_ptrs := Vector {} as Vector<str>
     mut skip_tys := Vector {} as Vector<str>
+    mut skip_idx := HashMap {} as HashMap<str, int>
     repeat bv_names.Len() in bi:
         pn := bv_names.Get(bi)
         mut handled := false
-        if ba_uses(f, pn) == 2:
+        if uses.GetOr(pn, 0) == 2:
             repeat f.Len() in li:
                 mut q := ""
                 if li > 0 and ba_store(f.Get(li), bv_tys.Get(bi), pn, q):
@@ -590,6 +684,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
             end
         end
         if handled:
+            skip_idx.Put(pn, skip_vals.Len())
             skip_vals.Push(pn)
             skip_ptrs.Push(pn + ".bv")
             skip_tys.Push(bv_tys.Get(bi))
@@ -620,7 +715,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                 ibase, "poison"
             ) or str.Equals(
                 ibase, "zeroinitializer"
-            )) and ba_uses(f, ires) == 2:
+            )) and uses.GetOr(ires, 0) == 2:
                 mut members := Vector {} as Vector<int>
                 members.Push(i)
                 mut last := ires
@@ -639,7 +734,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                     if ba_insert(
                         lj, r2, t2, b2, e2, v2, x2
                     ) and str.Equals(t2, ity) and str.Equals(b2, last):
-                        if ba_uses(f, r2) != 2:
+                        if uses.GetOr(r2, 0) != 2:
                             ok = false
                         else:
                             members.Push(j)
@@ -701,7 +796,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                     "  " + g + " = getelementptr inbounds " + t3 + ", ptr " + ch_build +
                         ", i32 0, " + x3
                 )
-                si2 := ba_in(skip_vals, v3)
+                si2 := skip_idx.GetOr(v3, -1)
                 if si2 >= 0:
                     body.Push(ba_memcpy(g, skip_ptrs.Get(si2), e3))
                 else:
@@ -737,7 +832,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
         mut lname := ""
         mut lty := ""
         mut lptr := ""
-        if ba_load(l, lname, lty, lptr) and ba_uses(f, lname) == 2:
+        if ba_load(l, lname, lty, lptr) and uses.GetOr(lname, 0) == 2:
             mut q := ""
             if ba_store(nx, lty, lname, q):
                 body.Push(ba_memcpy(q, lptr, lty))
@@ -750,40 +845,42 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                 i += 2
                 continue
             end
-            if ba_find(
-                nx, lty + " " + lname, 0
-            ) >= 0 and (ba_find(nx, " = insertvalue ", 0) >= 0 or ba_find(nx, "call ", 0) >= 0):
-                skip_vals.Push(lname)
-                skip_ptrs.Push(lptr)
-                skip_tys.Push(lty)
-                i++
-                continue
-            end
-        end
-        mut sv := ""
-        mut sq := ""
-        if ba_find(ba_trim(l), "store ", 0) == 0:
-            repeat skip_vals.Len() in si:
-                mut q3 := ""
-                if ba_find(l, " " + skip_vals.Get(si) + ", ptr ", 0) >= 0:
-                    st := ba_code(l)
-                    sty := str.Substr(st, 6, ba_find(st, " " + skip_vals.Get(si) + ", ptr ", 0) - 6)
-                    if ba_store(l, sty, skip_vals.Get(si), q3):
-                        sv = skip_ptrs.Get(si) + "|" + sty
-                        sq = q3
+            at_use := last_use.GetOr(lname, -1)
+            if at_use > i:
+                ul := f.Get(at_use)
+                mut uq := ""
+                if ba_store(
+                    ul, lty, lname, uq
+                ) or ba_find(ul, " = insertvalue ", 0) >= 0 or ba_find(ul, "call ", 0) >= 0:
+                    mut k := i + 1
+                    until k < at_use and ba_pure(f.Get(k)):
+                        k++
                     end
+                    mut src := lptr
+                    if k < at_use:
+                        src = ba_tmp()
+                        entry.Push("  " + src + " = alloca " + lty)
+                        body.Push(ba_memcpy(src, lptr, lty))
+                    end
+                    skip_idx.Put(lname, skip_vals.Len())
+                    skip_vals.Push(lname)
+                    skip_ptrs.Push(src)
+                    skip_tys.Push(lty)
+                    i++
+                    continue
                 end
             end
         end
-        if str.Len(sq) > 0:
-            bar := ba_find(sv, "|", 0)
-            body.Push(
-                ba_memcpy(
-                    sq, str.Substr(sv, 0, bar), str.Substr(sv, bar + 1, str.Len(sv) - bar - 1)
-                )
-            )
-            i++
-            continue
+        mut sty := ""
+        mut sval := ""
+        if ba_stored_value(l, sty, sval):
+            si := skip_idx.GetOr(sval, -1)
+            mut q3 := ""
+            if si >= 0 and ba_store(l, sty, sval, q3):
+                body.Push(ba_memcpy(q3, skip_ptrs.Get(si), sty))
+                i++
+                continue
+            end
         end
         mut cres := ""
         mut crty := ""
@@ -791,7 +888,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
         mut cargs := ""
         mut ctail := ""
         if ba_parse_call(l, cres, crty, cname, cargs, ctail):
-            k2 := ba_fn_at(fns, cname)
+            k2 := fidx.GetOr(cname, -1)
             if k2 >= 0:
                 fi2 := fns.Get(k2)
                 mut cas := ba_split(cargs)
@@ -800,8 +897,10 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                     arg := cas.Get(ai)
                     if ai < fi2.byval.Len() and str.Len(fi2.byval.Get(ai)) > 0:
                         aty := fi2.byval.Get(ai)
-                        av := ba_param_name(arg)
-                        si3 := ba_in(skip_vals, av)
+                        av := str.StartsWith(arg, aty + " ") ? str.Substr(
+                            arg, str.Len(aty) + 1, str.Len(arg) - str.Len(aty) - 1
+                        ) : ba_param_name(arg)
+                        si3 := skip_idx.GetOr(av, -1)
                         if si3 >= 0:
                             na.Push("ptr byval(" + aty + ") " + skip_ptrs.Get(si3))
                         else:
@@ -831,16 +930,16 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                     mut dst2 := ""
                     mut eat := 0
                     mut q5 := ""
-                    uses := ba_uses(f, cres)
+                    nuses := uses.GetOr(cres, 0)
                     mut copy_to := ""
-                    if uses == 2 and ba_store(nx, fi2.sret, cres, q5):
+                    if nuses == 2 and ba_store(nx, fi2.sret, cres, q5):
                         if ba_local_noescape(f, q5):
                             dst2 = q5
                         else:
                             copy_to = q5
                         end
                         eat = 1
-                    else uses == 2 and str.Len(sret_ty) > 0 and str.Equals(
+                    else nuses == 2 and str.Len(sret_ty) > 0 and str.Equals(
                         sret_ty, fi2.sret
                     ) and ba_is_ret(
                         nx, fi2.sret, cres
@@ -883,15 +982,17 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                         ) + "(ptr sret(" + fi2.sret + ") " + tmps +
                             (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail
                     )
-                    if uses == 2 and ba_find(
-                        nx, fi2.sret + " " + cres, 0
-                    ) >= 0 and (ba_find(
-                        nx, " = insertvalue ", 0
-                    ) >= 0 or ba_find(nx, "call ", 0) >= 0):
+                    at_res := last_use.GetOr(cres, -1)
+                    rl := nuses == 2 and at_res > i ? f.Get(at_res) : ""
+                    mut rq := ""
+                    if str.Len(rl) > 0 and (ba_store(
+                        rl, fi2.sret, cres, rq
+                    ) or ba_find(rl, " = insertvalue ", 0) >= 0 or ba_find(rl, "call ", 0) >= 0):
+                        skip_idx.Put(cres, skip_vals.Len())
                         skip_vals.Push(cres)
                         skip_ptrs.Push(tmps)
                         skip_tys.Push(fi2.sret)
-                    else uses > 1:
+                    else nuses > 1:
                         body.Push("  " + cres + " = load " + fi2.sret + ", ptr " + tmps)
                     end
                     i++
@@ -908,7 +1009,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
             rp := "ret " + sret_ty + " "
             if str.StartsWith(tl, rp):
                 v := str.Substr(tl, str.Len(rp), str.Len(tl) - str.Len(rp))
-                si4 := ba_in(skip_vals, v)
+                si4 := skip_idx.GetOr(v, -1)
                 if si4 >= 0:
                     body.Push(ba_memcpy("%sret.out", skip_ptrs.Get(si4), sret_ty))
                 else:
@@ -922,9 +1023,14 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
         body.Push(l)
         i++
     end
+    mut left := HashMap {} as HashMap<str, int>
+    mut left_at := HashMap {} as HashMap<str, int>
+    ba_count(
+        body, left, left_at
+    )
     repeat skip_vals.Len() in si:
         v := skip_vals.Get(si)
-        if ba_uses(body, v) > 0:
+        if left.GetOr(v, 0) > 0:
             mut nb := Vector {} as Vector<str>
             mut done := false
             repeat body.Len() in bi:
@@ -972,6 +1078,11 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
     ch_members.Free()
     bv_names.Free()
     bv_tys.Free()
+    skip_idx.Free()
+    uses.Free()
+    last_use.Free()
+    left.Free()
+    left_at.Free()
 end
 
 func ba_is_type_kw(s: str, i: int): bool:
@@ -980,11 +1091,13 @@ func ba_is_type_kw(s: str, i: int): bool:
         byte_at(s, i + 6) == 101 and byte_at(s, i + 7) == 32
 end
 
-func BigAggrRewrite(src: str): str:
+func BigAggrRewrite(src: str, native: bool): str:
     if ba_find(src, " = type ", 0) < 0:
         ret src
     end
-    g_ba_names = Vector {} as Vector<str>
+    g_ba_min = native ? BA_ABI_MIN_BYTES : BA_MIN_BYTES
+    g_ba_index.Free()
+    mut names := Vector {} as Vector<str>
     g_ba_bodies = Vector {} as Vector<str>
     g_ba_memo = Vector {} as Vector<i64>
     total := str.Len(
@@ -1002,7 +1115,9 @@ func BigAggrRewrite(src: str): str:
                 eqp++
             end
             if eqp + 8 <= eol:
-                g_ba_names.Push(str.Substr(src, pos, eqp - pos))
+                tname := str.Substr(src, pos, eqp - pos)
+                g_ba_index.Put(tname, names.Len())
+                names.Push(tname)
                 g_ba_bodies.Push(str.Substr(src, eqp + 8, eol - eqp - 8))
                 g_ba_memo.Push(-1 as i64)
             end
@@ -1010,8 +1125,8 @@ func BigAggrRewrite(src: str): str:
         pos = eol + 1
     end
     mut any_big := false
-    repeat g_ba_names.Len() in i:
-        if ba_big(g_ba_names.Get(i)):
+    repeat names.Len() in i:
+        if ba_big(names.Get(i)):
             any_big = true
         end
     end
@@ -1019,7 +1134,8 @@ func BigAggrRewrite(src: str): str:
         ret src
     end
     mut lines := src.Split("\n")
-    mut fns := Vector {} as Vector<BigFnInfo>
+    mut found := Vector {} as Vector<BigFnInfo>
+    mut cand := HashMap {} as HashMap<str, int>
     repeat lines.Len() in i:
         mut dret := ""
         mut dname := ""
@@ -1027,16 +1143,19 @@ func BigAggrRewrite(src: str): str:
         mut dpre := ""
         mut dpost := ""
         if ba_parse_define(lines.Get(i), dret, dname, dparams, dpre, dpost):
+            limit := str.StartsWith(
+                lines.Get(i), "define internal "
+            ) ? g_ba_min : BA_ABI_MIN_BYTES
             mut fi := BigFnInfo { name = dname }
             mut want := false
-            if ba_big(dret):
+            if ba_big_at(dret, limit):
                 fi.sret = dret
                 want = true
             end
             mut ps := ba_split(dparams)
             repeat ps.Len() in pi:
                 pt := ba_param_ty(ps.Get(pi))
-                if ba_big(pt):
+                if ba_big_at(pt, limit):
                     fi.byval.Push(pt)
                     want = true
                 else:
@@ -1044,9 +1163,21 @@ func BigAggrRewrite(src: str): str:
                 end
             end
             ps.Free()
-            if want and ba_addr_safe(lines, dname):
-                fns.Push(fi)
+            if want:
+                cand.Put(dname, found.Len())
+                found.Push(fi)
             end
+        end
+    end
+    mut bad := HashMap {} as HashMap<str, int>
+    ba_unsafe_names(lines, cand, bad)
+    mut fns := Vector {} as Vector<BigFnInfo>
+    mut fidx := HashMap {} as HashMap<str, int>
+    repeat found.Len() in i:
+        nm := found.Get(i).name
+        if not bad.Has(nm):
+            fidx.Put(nm, fns.Len())
+            fns.Push(found.Get(i))
         end
     end
     mut out := str.NewBuilder()
@@ -1061,7 +1192,7 @@ func BigAggrRewrite(src: str): str:
         end
         if in_fn:
             if str.Equals(l, "}"):
-                ba_function(fbuf, fns, out)
+                ba_function(fbuf, fns, fidx, out)
                 str.BufAppend(out, "}\n")
                 fbuf.Free()
                 fbuf = Vector {} as Vector<str>
@@ -1079,6 +1210,9 @@ func BigAggrRewrite(src: str): str:
     if ba_find(src, "declare void @llvm.memcpy.p0.p0.i64(", 0) < 0:
         str.BufAppend(out, "\ndeclare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n")
     end
+    if ba_find(src, "declare void @llvm.memmove.p0.p0.i64(", 0) < 0:
+        str.BufAppend(out, "\ndeclare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n")
+    end
     if ba_find(src, "declare void @llvm.memset.p0.i64(", 0) < 0:
         str.BufAppend(out, "\ndeclare void @llvm.memset.p0.i64(ptr, i8, i64, i1) nounwind\n")
     end
@@ -1086,6 +1220,11 @@ func BigAggrRewrite(src: str): str:
     str.BufFree(out)
     fbuf.Free()
     fns.Free()
+    found.Free()
+    cand.Free()
+    bad.Free()
+    fidx.Free()
+    names.Free()
     lines.Free()
     ret r
 end

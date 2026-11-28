@@ -149,6 +149,16 @@ The API:
 | `GET /admin/keys`, `PATCH /admin/keys/:id`                                                     | every API key with its owner and behavior (`?user=`, `?custom=1`, `?active=1`, `?before=`), and changing one key's `{salam_prompt, salam_tools, system_prompt}`; the list also says whether the engine has the plain profile (`plain_ready`) |
 | `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                                    |
 
+### Site registration
+
+The `/register/` page of both sites posts to `POST /registrations`, which needs no account. Teachers and students are stored in the `registrations` table. A student gives a full birth date, a teacher gives a birth year, an email address, teaching experience and an optional introduction. `birth_year` is kept in the calendar the form used (`calendar` is `jalali` or `gregorian`) and `birth_year_gregorian` is comparable across both. Province and city are stored in Persian. The same name, role and mobile number are accepted once, so a family can share a number.
+
+`AI_REGISTER_ORIGINS` lists the sites allowed by CORS (default: both sites) and `AI_REGISTER_PER_IP` is how many registrations one address may make in an hour (default `20`).
+
+```sql
+SELECT * FROM registrations WHERE role = 'teacher' ORDER BY id DESC;
+```
+
 ### Voice input
 
 The composer can record from the microphone, turn the speech into text and put that

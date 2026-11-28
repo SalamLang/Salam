@@ -1,7 +1,7 @@
 # checkov:skip=CKV_DOCKER_2:The container only holds a sleeping process for a user shell; there is no service to probe.
 # trivy:ignore:AVD-DS-0026
 FROM debian:trixie-slim AS salam
-ARG SALAM_VERSION=0.5.9
+ARG SALAM_VERSION=0.7.3
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*

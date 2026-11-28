@@ -524,7 +524,8 @@ no external toolchain involved.
    every build rather than just `--release`: a `salam build` through the LLVM
    backend now optimizes at `-O2` (`-O3` with `--release`, `-O0` with
    `--debug-info`/`--asan`), matching the `-O2` the C backend has always
-   handed the C compiler. A named `-O<n>` still wins. `salam llvm` keeps its
+   handed the C compiler. A named `-O<n>` still wins. A `--release` build
+   of a native page app is optimized for size instead. `salam llvm` keeps its
    `-O0` default - that command exists to be read, and the tests under
    `tests/en/llvm` are there to catch bugs in the IR we emit, which running
    the optimizer over it would mask.

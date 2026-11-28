@@ -23,6 +23,12 @@
 #  include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #endif
 
+#ifdef __arm__
+#  include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
+#  include "llvm/ExecutionEngine/SectionMemoryManager.h"
+#endif
+
+#include <memory>
 #include <utility>
 
 using namespace llvm;
@@ -42,6 +48,22 @@ static Expected<JITDylibSP> salam_static_process_symbols(LLJIT &jit)
     return &jd;
 }
 
+#ifdef __arm__
+/* JITLink, the default linker for Arm, rejects the conditional BL that LLVM
+ * itself emits ("Invalid opcode ... for relocation: Arm_Jump24"), so link
+ * with RuntimeDyld. The unnamed arguments differ between LLVM versions. */
+static void salam_use_runtime_dyld(LLJITBuilder &builder)
+{
+    builder.setObjectLinkingLayerCreator(
+        [](ExecutionSession &es,
+           const auto &...) -> Expected<std::unique_ptr<ObjectLayer>> {
+            return std::make_unique<RTDyldObjectLinkingLayer>(es, [](const auto &...) {
+                return std::make_unique<SectionMemoryManager>();
+            });
+        });
+}
+#endif
+
 extern "C" LLVMOrcLLJITBuilderRef salam_orc_static_builder(void)
 {
     if (!salam_jit_symbols[0].name) {
@@ -49,5 +71,8 @@ extern "C" LLVMOrcLLJITBuilderRef salam_orc_static_builder(void)
     }
     LLJITBuilder *builder = new LLJITBuilder();
     builder->setProcessSymbolsJITDylibSetup(salam_static_process_symbols);
+#ifdef __arm__
+    salam_use_runtime_dyld(*builder);
+#endif
     return reinterpret_cast<LLVMOrcLLJITBuilderRef>(builder);
 }

@@ -109,6 +109,10 @@ LLVM_CONFIG
 chmod +x "$WORK/llvm-config"
 
 JIT_LIBS="$OWN_SYSROOT/libc.a $OWN_SYSROOT/libgcc.a"
+if [ "$ARCH" = armhf ]; then
+    # Arm unwind tables name __aeabi_unwind_cpp_pr0, which is in libgcc_eh.
+    JIT_LIBS="$JIT_LIBS $OWN_SYSROOT/libgcc_eh.a"
+fi
 atomic=$("$GCC" -print-file-name=libatomic.a)
 if [ -f "$atomic" ]; then
     JIT_LIBS="$JIT_LIBS $atomic"

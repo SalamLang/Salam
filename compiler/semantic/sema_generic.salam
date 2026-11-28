@@ -26,23 +26,24 @@ func new_node_at(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
 end
 
 func g_sanitize(ts: str): str:
-    mut out := ""
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
     n := str.Len(ts)
     repeat n in i:
         b := byte_at(ts, i)
         if b == 42:
-            out += "_ptr"
+            str.BufAppend(sb, "_ptr")
         else b == 91:
-            out += "_arr"
+            str.BufAppend(sb, "_arr")
         else b == 60 or b == 44 or b == 46:
-            out += "_"
+            str.BufAppend(sb, "_")
         else b == 62 or b == 32 or b == 93:
             continue
         else:
-            out += str.Substr(ts, i, 1)
+            str.BufAppendChar(sb, b)
         end
     end
-    ret out
+    ret co.Share(str.BufStr(sb))
 end
 
 func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
@@ -349,22 +350,25 @@ func g_pre_resolve_targs(s &: Sema, a &: at.Ast, targ_nodes: Vector<int>): Vecto
 end
 
 func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
-    mut out := base
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, base)
     repeat argtypes.Len() in i:
         at_i := argtypes.Get(i)
         tn := type_distinct_sym(s, at_i) != 0 ? ty_at(s, at_i).name : type_to_string(s, at_i)
-        out = out + "_" + g_sanitize(tn)
+        str.BufAppend(b, "_")
+        str.BufAppend(b, g_sanitize(tn))
     end
-    ret out
+    ret co.Share(str.BufStr(b))
 end
 
 func g_template_key(a &: at.Ast, tmpl: int): str:
     tn := at.Get(a, tmpl)
-    file := pth.PathNormalize(tn.src_file)
+    file := co.Share(pth.PathNormalize(tn.src_file))
     if str.Len(file) == 0:
-        ret "#" + tmpl
+        ret co.Share("#" + tmpl)
     end
-    ret file + "#" + tn.begin_index + "#" + tn.name
+    ret co.Share(file + "#" + tn.begin_index + "#" + tn.name)
 end
 
 func g_type_key(s &: Sema, t: int): str:
@@ -373,43 +377,54 @@ func g_type_key(s &: Sema, t: int): str:
     end
     v := ty_at(s, t)
     if v.distinct != 0:
-        ret str.Len(v.origin) > 0 ? "d" + v.origin : "d" + v.distinct
+        ret str.Len(v.origin) > 0 ? co.Share("d" + v.origin) : co.Share("d" + v.distinct)
     end
     k := v.kind
     if k == TY_STRUCT and v.decl > 0 and str.Len(sym_at(s, v.decl).generic_base) > 0:
-        ret "i" + sym_at(s, v.decl).name
+        ret co.Share("i" + sym_at(s, v.decl).name)
     end
     if k == TY_STRUCT or k == TY_ENUM or k == TY_DYN:
-        ret str.Len(v.origin) > 0 ? "o" + k + "." + v.origin : "n" + k + "." + v.decl
+        if str.Len(v.origin) > 0:
+            ret co.Share("o" + k + "." + v.origin)
+        end
+        ret co.Share("n" + k + "." + v.decl)
     end
     if k == TY_ARRAY:
-        ret "a" + v.length + "(" + g_type_key(s, v.elem) + ")"
+        ret co.Share("a" + v.length + "(" + g_type_key(s, v.elem) + ")")
     end
     if k == TY_SLICE or k == TY_VEC:
-        ret "s" + k + "(" + g_type_key(s, v.elem) + ")"
+        ret co.Share("s" + k + "(" + g_type_key(s, v.elem) + ")")
     end
     if k == TY_PTR:
-        ret "p(" + g_type_key(s, v.pointee) + ")"
+        ret co.Share("p(" + g_type_key(s, v.pointee) + ")")
     end
     if k == TY_MAP or k == TY_MAP_ITER:
-        ret "m" + k + "(" + g_type_key(s, v.key) + "," + g_type_key(s, v.elem) + ")"
+        ret co.Share("m" + k + "(" + g_type_key(s, v.key) + "," + g_type_key(s, v.elem) + ")")
     end
     if k == TY_FUNC or k == TY_VARIANT:
-        mut out := "f" + k + "." + v.length + "(" + g_type_key(s, v.elem)
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        str.BufAppend(b, co.Share("f" + k + "." + v.length + "("))
+        str.BufAppend(b, g_type_key(s, v.elem))
         repeat v.params.Len() in i:
-            out += "," + g_type_key(s, v.params.Get(i))
+            str.BufAppend(b, ",")
+            str.BufAppend(b, g_type_key(s, v.params.Get(i)))
         end
-        ret out + ")"
+        str.BufAppend(b, ")")
+        ret co.Share(str.BufStr(b))
     end
-    ret "k" + k
+    ret co.Share("k" + k)
 end
 
 func g_instance_key(s &: Sema, a &: at.Ast, tmpl: int, argtypes: Vector<int>): str:
-    mut out := g_template_key(a, tmpl)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, g_template_key(a, tmpl))
     repeat argtypes.Len() in i:
-        out += "|" + g_type_key(s, argtypes.Get(i))
+        str.BufAppend(b, "|")
+        str.BufAppend(b, g_type_key(s, argtypes.Get(i)))
     end
-    ret out
+    ret co.Share(str.BufStr(b))
 end
 
 func decl_origin(a &: at.Ast, did: int): str:
@@ -420,11 +435,11 @@ func decl_origin(a &: at.Ast, did: int): str:
     if tn.synthetic:
         ret ""
     end
-    file := pth.PathNormalize(tn.src_file)
+    file := co.Share(pth.PathNormalize(tn.src_file))
     if str.Len(file) == 0:
         ret ""
     end
-    ret file + "#" + tn.begin_index + "#" + tn.name
+    ret co.Share(file + "#" + tn.begin_index + "#" + tn.name)
 end
 
 func g_name_taken(s &: Sema, name: str, key: str): bool:

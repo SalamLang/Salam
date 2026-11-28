@@ -1,6 +1,7 @@
 package semantic
 
 import str
+import mem
 
 include at "../ast.salam"
 include tok "../token.salam"
@@ -431,13 +432,22 @@ func su_fields_meet(x: str, y: str): str:
     if str.Equals(y, "*"):
         ret x
     end
-    mut out := ""
-    each part in str.Split(x, ","):
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut any := false
+    parts := str.Split(x, ",")
+    defer parts.Free()
+    each part in parts:
         if str.Len(part) > 0 and su_fields_has(y, part):
-            out = str.Len(out) > 0 ? out + "," + part : part
+            if any:
+                str.BufAppend(b, ",")
+            end
+            str.BufAppend(b, part)
+            any = true
         end
+        mem.Free(part as void*)
     end
-    ret out
+    ret co.Share(str.BufStr(b))
 end
 
 func su_own_fields_expr(s &: Sema, a &: at.Ast, e: int): str:
@@ -689,9 +699,12 @@ func su_gf_merge(cur: str, add: str): str:
     mut out := cur
     mut parts := str.Split(add, ",")
     repeat parts.Len() in i:
-        f := parts.Get(i)
-        if str.Len(f) > 0 and not str.Contains(out, "," + f + ","):
-            out = str.Len(out) == 0 ? "," + f + "," : out + f + ","
+        f := co.Share(parts.Get(i))
+        if str.Len(f) > 0:
+            probe := co.Share("," + f + ",")
+            if not str.Contains(out, probe):
+                out = str.Len(out) == 0 ? probe : co.Share(out + f + ",")
+            end
         end
     end
     parts.Free()
@@ -709,7 +722,7 @@ func su_grow_field(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, r: int): str
         if q != 0 and at.KindOf(a, q) == at.AST_CALL and at.At(a, q).a == p:
             ret "*"
         end
-        ret "," + at.At(a, p).name + ","
+        ret co.Share("," + at.At(a, p).name + ",")
     end
     if k == at.AST_CALL and at.At(a, p).a != r:
         fi := su_fn_idx(s, su_call_decl(s, p))

@@ -297,7 +297,9 @@ func js_lit_global(line: str, name &: str): bool:
 end
 
 func js_prune_globals(globals: Vector<str>, code: str, hoisted &: str): Vector<str>:
-    mut keep_text := code
+    mut keep_text := str.NewBuilder()
+    defer str.BufFree(keep_text)
+    str.BufAppend(keep_text, code)
     mut lit := Vector {} as Vector<str>
     defer lit.Free()
     mut no_text := Vector {} as Vector<str>
@@ -305,43 +307,60 @@ func js_prune_globals(globals: Vector<str>, code: str, hoisted &: str): Vector<s
     mut referenced := Vector {} as Vector<int>
     defer referenced.Free()
     repeat globals.Len() in gi:
-        each line in str.Split(globals.Get(gi), "\n"):
+        lines := str.Split(globals.Get(gi), "\n")
+        each line in lines:
             mut nm := ""
             if js_lit_global(line, nm):
                 lit.Push(nm.Concat(""))
                 no_text.Push("")
                 referenced.Push(0)
+                mem.Free(nm as void*)
             else:
-                keep_text += line + "\n"
+                str.BufAppend(keep_text, line)
+                str.BufAppend(keep_text, "\n")
             end
+            mem.Free(line as void*)
         end
+        lines.Free()
     end
-    js_mark_used(keep_text, lit, no_text, referenced)
+    all_text := str.BufStr(keep_text)
+    js_mark_used(all_text, lit, no_text, referenced)
+    mem.Free(all_text as void*)
     each held in lit:
         mem.Free(held as void*)
     end
     mut li := 0
     mut out := Vector {} as Vector<str>
+    mut up := str.NewBuilder()
+    defer str.BufFree(up)
     repeat globals.Len() in gi2:
-        mut kept := ""
-        each line in str.Split(globals.Get(gi2), "\n"):
+        mut kept := str.NewBuilder()
+        lines := str.Split(globals.Get(gi2), "\n")
+        each line in lines:
             mut nm := ""
+            mut dead := false
             if js_lit_global(line, nm):
                 li++
-                if referenced.Get(li - 1) == 0:
-                    continue
+                dead = referenced.Get(li - 1) == 0
+                mem.Free(nm as void*)
+            end
+            if not dead:
+                if js_simple_global(line):
+                    trimmed := str.Trim(line)
+                    str.BufAppend(up, trimmed)
+                    str.BufAppend(up, "\n")
+                else str.Len(line) > 0:
+                    str.BufAppend(kept, line)
+                    str.BufAppend(kept, "\n")
                 end
             end
-            if js_simple_global(line):
-                hoisted += str.Trim(line) + "\n"
-                continue
-            end
-            if str.Len(line) > 0:
-                kept += line + "\n"
-            end
+            mem.Free(line as void*)
         end
-        out.Push(kept)
+        lines.Free()
+        out.Push(str.BufStr(kept))
+        str.BufFree(kept)
     end
+    hoisted = str.BufStr(up)
     ret out
 end
 
@@ -380,13 +399,14 @@ func js_shake(
         seg_used.Set(s, used.Get(s))
     end
     repeat mods.globals.Len() in m:
-        mut text := ""
+        mut text := str.NewBuilder()
         repeat mods.global_names.Len() in g:
             if mods.global_mod.Get(g) == m and used.Get(nsegs + g) != 0:
-                text += mods.global_texts.Get(g)
+                str.BufAppend(text, mods.global_texts.Get(g))
             end
         end
-        mods.globals.Set(m, text)
+        mods.globals.Set(m, str.BufStr(text))
+        str.BufFree(text)
     end
 end
 
@@ -419,7 +439,7 @@ func js_import_paths(a &: at.Ast, prog: int, idir: str, lang: str, work &: Vecto
             continue
         end
         if sm.IsStdSource(ipath):
-            ipath = pth.PathNormalize(ipath)
+            ipath = co.Share(pth.PathNormalize(ipath))
         end
         mut known := false
         repeat work.Len() in j2:
@@ -601,7 +621,9 @@ func js_compile_work(
         end
         if wi >= nentries and jsc_applies(path):
             mut deps := Vector {} as Vector<str>
-            js_import_paths(a, prog, dir_of(path), lp.Code(modpack), deps)
+            js_import_paths(
+                a, prog, dir_of(path), lp.Code(modpack), deps
+            )
             core := s.prelude_err != 0 ? sm.ResolveImport("", "core") : ""
             jsc_keep(path, deps, core, out)
             deps.Free()
@@ -773,6 +795,17 @@ func js_string_literal(s: str): str:
     ret "\"" + s + "\""
 end
 
+func js_take_runtime(js &: str.StringBuilder, text: str, minify_ws: bool):
+    if minify_ws:
+        small := mn.Js(text)
+        str.BufAppend(js, small)
+        mem.Free(small as void*)
+    else:
+        str.BufAppend(js, text)
+    end
+    mem.Free(text as void*)
+end
+
 func collect_event_js(
     lgr &: lg.Logger,
     opt &: Dr,
@@ -901,11 +934,8 @@ func collect_event_js(
         str.BufAppendChar(js, minify_ws ? 32 : 10)
     end
     if lo.RoutesActive():
-        mut rrt := lo.RouteRuntime(jg.Ident("__salam_route_set"), jg.Ident("__salam_route_check"))
-        if minify_ws:
-            rrt = mn.Js(rrt)
-        end
-        str.BufAppend(js, rrt)
+        rrt := lo.RouteRuntime(jg.Ident("__salam_route_set"), jg.Ident("__salam_route_check"))
+        js_take_runtime(js, rrt, minify_ws)
         str.BufAppendChar(js, minify_ws ? 32 : 10)
     end
     wcount := lo.WebStateCount()
@@ -917,11 +947,8 @@ func collect_event_js(
             wviews.Push(wk == 1 ? "null" : jg.Ident("__salam_view_" + co.U64Toa(wi as u64)))
             winits.Push(wk == 0 ? jg.Ident("__salam_init_" + co.U64Toa(wi as u64)) : "null")
         end
-        mut wrt := lo.WebStateRuntime(wviews, winits)
-        if minify_ws:
-            wrt = mn.Js(wrt)
-        end
-        str.BufAppend(js, wrt)
+        wrt := lo.WebStateRuntime(wviews, winits)
+        js_take_runtime(js, wrt, minify_ws)
         str.BufAppendChar(js, minify_ws ? 32 : 10)
         wviews.Free()
         winits.Free()
@@ -950,6 +977,14 @@ func collect_event_js(
         str.BufAppendChar(js, minify_ws ? 32 : 10)
     end
     str.BufAppend(js, minify_ws ? "})();" : "})();\n")
+    mem.Free(hoisted as void*)
+    each rest in pruned:
+        mem.Free(rest as void*)
+    end
+    pruned.Free()
+    each module_globals in mods.globals:
+        mem.Free(module_globals as void*)
+    end
     text := str.BufStr(js)
     str.BufFree(js)
     jg.FreeOutput(out)

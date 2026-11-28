@@ -38,6 +38,8 @@ include dr "driver/driver.salam"
 
 mut g_wb_schema_ready := false
 mut g_wb_failed := false
+mut g_wb_reply := ""
+mut g_wb_replied := false
 
 struct FrontEnd:
     pub ok: bool = false
@@ -73,7 +75,7 @@ func front_end(lgr &: lg.Logger, lang: str, source: str): FrontEnd:
     sm.SetStdlibRoot("")
     pack := lp.Load(lang)
     if pack == lp.LP_NONE:
-        r.diag = i18.Tr("unknown language pack")
+        r.diag = str.Clone(i18.Tr("unknown language pack"))
         ret r
     end
     r.entry = lp.Entry(pack)
@@ -107,24 +109,33 @@ func front_end(lgr &: lg.Logger, lang: str, source: str): FrontEnd:
     r.s = s
     if not lok or not pok or not sok:
         rendered := lg.Captured()
-        r.diag = str.Len(rendered) > 0 ? rendered : i18.Tr("compilation failed")
+        r.diag = str.Clone(str.Len(rendered) > 0 ? rendered : i18.Tr("compilation failed"))
         ret r
     end
     r.ok = true
     ret r
 end
 
+func reply(out: str): str:
+    if g_wb_replied:
+        mem.Free(g_wb_reply as void*)
+    end
+    g_wb_reply = out
+    g_wb_replied = true
+    ret out
+end
+
 export:
     func salam_web_run_app(source: str, lang: str): str:
-        ret RunApp(source, lang)
+        ret reply(RunApp(source, lang))
     end
 
     func salam_web_build_layout(source: str, lang: str): str:
-        ret BuildLayout(source, lang)
+        ret reply(BuildLayout(source, lang))
     end
 
     func salam_web_emit(source: str, lang: str, phase: str): str:
-        ret Emit(source, lang, phase)
+        ret reply(Emit(source, lang, phase))
     end
 
     func salam_web_version(): str:
@@ -132,15 +143,15 @@ export:
     end
 
     func salam_web_syntax_ok(source: str, lang: str): str:
-        ret SyntaxOk(source, lang)
+        ret reply(SyntaxOk(source, lang))
     end
 
     func salam_web_translate(source: str, target_lang: str): str:
-        ret Translate(source, target_lang)
+        ret reply(Translate(source, target_lang))
     end
 
     func salam_web_std_cache(source: str, lang: str, path: str): str:
-        ret StdCache(source, lang, path)
+        ret reply(StdCache(source, lang, path))
     end
 
     func salam_web_last_failed(): int:
@@ -154,7 +165,7 @@ func page_without_entry(source: str, lang: str): bool:
     if pack == lp.LP_NONE:
         ret false
     end
-    lgr := lg.New(lg.LOG_OFF, false)
+    mut lgr := lg.New(lg.LOG_OFF, false)
     sf := src_from_string(source)
     mut toks := tok.StreamNew(sf.path)
     lok := lx.Run(lgr, pack, sf, toks)
@@ -179,12 +190,14 @@ func page_without_entry(source: str, lang: str): bool:
     end
     at.FreeAst(a)
     cc.TableFree(table)
+    lg.Free(lgr)
     ret found
 end
 
 func build_page(source: str, lang: str): dr.SourcePage:
     i18.SetLang(lang)
     sm.SetStdlibRoot("")
+    src.ForgetLoaded()
     ensure_schema()
     mut page := dr.PageFromSource(src_from_string(source), lang)
     if page.no_page:
@@ -198,17 +211,39 @@ func build_page(source: str, lang: str): dr.SourcePage:
     ret page
 end
 
-func emit_page_part(source: str, lang: str, phase: str): str:
-    page := build_page(source, lang)
-    if not page.ok:
-        ret page.diag
+func page_diag(diag: str): str:
+    ret str.Clone(diag)
+end
+
+func free_page(page &: dr.SourcePage):
+    if page.ok:
+        lo.FreeResult(page.result)
     end
+end
+
+func end_line(b &: str.StringBuilder):
+    if str.BufLen(b) == (0 as i64):
+        ret
+    end
+    text := str.BufStr(b)
+    if not str.EndsWith(text, "\n"):
+        str.BufAppend(b, "\n")
+    end
+    mem.Free(text as void*)
+end
+
+func emit_page_part(source: str, lang: str, phase: str): str:
+    mut page := build_page(source, lang)
+    if not page.ok:
+        ret page_diag(page.diag)
+    end
+    defer free_page(page)
     res := page.result
     if str.Equals(phase, "css"):
-        ret res.css
+        ret str.Clone(res.css)
     end
     if str.Equals(phase, "js"):
-        ret res.js
+        ret str.Clone(res.js)
     end
     css_href := str.Len(res.css) > 0 ? "style.css" : ""
     js_href := str.Len(res.js) > 0 ? "script.js" : ""
@@ -217,19 +252,20 @@ end
 
 pub func Translate(source: str, target_lang: str): str:
     if str.Len(target_lang) == 0:
-        ret source
+        ret str.Clone(source)
     end
     target := lp.Load(target_lang)
     if target == lp.LP_NONE:
-        ret source
+        ret str.Clone(source)
     end
     fallback := lp.Load("en")
     sf := src_from_string(source)
     srcpack := lx.Detect(sf, fallback)
     if srcpack == target:
-        ret source
+        ret str.Clone(source)
     end
-    lgr := lg.New(lg.LOG_OFF, false)
+    mut lgr := lg.New(lg.LOG_OFF, false)
+    defer lg.Free(lgr)
     mut std_root := sm.GetStdlibRoot()
     if str.Len(std_root) == 0:
         std_root = "/std"
@@ -237,27 +273,31 @@ pub func Translate(source: str, target_lang: str): str:
     mut out := ""
     ok := tr.translate_source(lgr, srcpack, target, std_root, sf, out)
     if not ok or str.Len(out) == 0:
-        ret source
+        ret str.Clone(source)
     end
     ret out
 end
 
 pub func RunApp(source: str, lang: str): str:
     g_wb_failed = false
+    src.ForgetLoaded()
     if page_without_entry(source, lang):
         g_wb_failed = true
-        ret i18.Tr(
-            "this program is a web page and has no 'main' function to run; switch to Layout mode to see it"
+        ret str.Clone(
+            i18.Tr(
+                "this program is a web page and has no 'main' function to run; switch to Layout mode to see it"
+            )
         )
     end
     mut lgr := lg.New(lg.LOG_WARN, false)
-    fe := front_end(lgr, lang, source)
+    defer lg.Free(lgr)
+    mut fe := front_end(lgr, lang, source)
     if not fe.ok:
         g_wb_failed = true
-        d := fe.diag
+        sm.DropDiagSources(fe.s)
         sm.Free(fe.s)
         at.FreeAst(fe.a)
-        ret d
+        ret fe.diag
     end
 
     mut opts := ip.NewOptions()
@@ -267,62 +307,62 @@ pub func RunApp(source: str, lang: str): str:
     mut vm := ip.New(lgr, fe.entry, opts)
     _rc := ip.Run(vm, fe.a, fe.s, fe.program)
 
-    mut result := vm.out_text
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, vm.out_text)
     if str.Len(vm.err_text) > 0:
-        if str.Len(result) > 0 and not str.EndsWith(result, "\n"):
-            result += "\n"
-        end
-        result += vm.err_text
+        end_line(b)
+        str.BufAppend(b, vm.err_text)
     end
     fail_text := ip.FailText(vm)
     if str.Len(fail_text) > 0:
         g_wb_failed = true
-        if str.Len(result) > 0 and not str.EndsWith(result, "\n"):
-            result += "\n"
-        end
-        result += fail_text + "\n"
+        end_line(b)
+        str.BufAppend(b, fail_text)
+        str.BufAppend(b, "\n")
     end
     warn_text := dg.RenderAll(
         fe.s.diag, source, str.Len(source), dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
     )
     if str.Len(warn_text) > 0:
-        if str.Len(result) > 0 and not str.EndsWith(result, "\n"):
-            result += "\n"
-        end
-        result += warn_text
+        end_line(b)
+        str.BufAppend(b, warn_text)
     end
 
     ip.Free(vm)
+    sm.DropDiagSources(fe.s)
     sm.Free(fe.s)
     at.FreeAst(fe.a)
-    ret result
+    ret str.BufStr(b)
 end
 
 pub func BuildLayout(source: str, lang: str): str:
     g_wb_failed = false
-    page := build_page(source, lang)
+    mut page := build_page(source, lang)
     if not page.ok:
-        ret page.diag
+        ret page_diag(page.diag)
     end
+    defer free_page(page)
     ret lo.Document(page.result, true, "", "", false)
 end
 
 pub func StdCache(source: str, lang: str, path: str): str:
     g_wb_failed = false
-    page := build_page(source, lang)
+    mut page := build_page(source, lang)
     if not page.ok:
-        ret page.diag
+        ret page_diag(page.diag)
     end
+    free_page(page)
     cache := dr.StdScriptCache()
     if str.Len(cache) == 0:
         g_wb_failed = true
-        ret "the std module cache is empty or does not read back"
+        ret str.Clone("the std module cache is empty or does not read back")
     end
     if io.WriteFile(path, cache) != str.Len(cache):
         g_wb_failed = true
-        ret "the std module cache could not be written"
+        ret str.Clone("the std module cache could not be written")
     end
-    ret ""
+    ret str.Clone("")
 end
 
 pub func Emit(source: str, lang: str, phase: str): str:
@@ -330,13 +370,15 @@ pub func Emit(source: str, lang: str, phase: str): str:
     if str.Equals(phase, "html") or str.Equals(phase, "css") or str.Equals(phase, "js"):
         ret emit_page_part(source, lang, phase)
     end
+    src.ForgetLoaded()
     i18.SetLang(lang)
     sm.SetStdlibRoot("")
     mut lgr := lg.New(lg.LOG_WARN, false)
+    defer lg.Free(lgr)
     pack := lp.Load(lang)
     if pack == lp.LP_NONE:
         g_wb_failed = true
-        ret i18.Tr("unknown language pack")
+        ret str.Clone(i18.Tr("unknown language pack"))
     end
     entry := lp.Entry(pack)
     sf := src_from_string(source)
@@ -390,6 +432,7 @@ pub func Emit(source: str, lang: str, phase: str): str:
         sm.SymbolsToXml(w, s)
         r := x.Str(w)
         x.Free(w)
+        sm.DropDiagSources(s)
         sm.Free(s)
         at.FreeAst(a)
         ret r
@@ -399,7 +442,8 @@ pub func Emit(source: str, lang: str, phase: str): str:
     if not lok or not pok or not sok:
         g_wb_failed = true
         rendered := lg.Captured()
-        r := str.Len(rendered) > 0 ? rendered : i18.Tr("compilation failed")
+        r := str.Clone(str.Len(rendered) > 0 ? rendered : i18.Tr("compilation failed"))
+        sm.DropDiagSources(s)
         sm.Free(s)
         at.FreeAst(a)
         ret r
@@ -407,42 +451,49 @@ pub func Emit(source: str, lang: str, phase: str): str:
 
     if str.Equals(phase, "c"):
         cgo := cg.Run(lgr, s, a, prog, "main", false, false, "main.salam", entry, "", false)
-        mut b := ""
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
         if str.Len(cgo.h_src) > 0:
-            b += "/* ===== salam_mod_main.h ===== */\n"
-            b += cgo.h_src
-            b += "\n"
+            str.BufAppend(b, "/* ===== salam_mod_main.h ===== */\n")
+            str.BufAppend(b, cgo.h_src)
+            str.BufAppend(b, "\n")
+            mem.Free(cgo.h_src as void*)
         end
         if str.Len(cgo.c_src) > 0:
-            b += "/* ===== salam_mod_main.c ===== */\n"
-            b += cgo.c_src
+            str.BufAppend(b, "/* ===== salam_mod_main.c ===== */\n")
+            str.BufAppend(b, cgo.c_src)
+            mem.Free(cgo.c_src as void*)
         end
+        sm.DropDiagSources(s)
         sm.Free(s)
         at.FreeAst(a)
-        ret b
+        ret str.BufStr(b)
     end
 
     if str.Equals(phase, "llvm"):
         llo := lv.Run(lgr, s, a, prog, "main", entry)
-        mut b := ""
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
         if not llo.ok:
-            b += "; note: the LLVM backend supports a subset of Salam.\n; "
-            b += str.Len(llo.error) > 0 ? llo.error : "unsupported construct"
-            b += "\n\n"
+            str.BufAppend(b, "; note: the LLVM backend supports a subset of Salam.\n; ")
+            str.BufAppend(b, str.Len(llo.error) > 0 ? llo.error : "unsupported construct")
+            str.BufAppend(b, "\n\n")
         end
         if str.Len(llo.ll_src) > 0:
-            b += llo.ll_src
+            str.BufAppend(b, llo.ll_src)
             mem.Free(llo.ll_src as void*)
         else llo.ok:
-            b += "; (no IR produced)\n"
+            str.BufAppend(b, "; (no IR produced)\n")
         end
+        sm.DropDiagSources(s)
         sm.Free(s)
         at.FreeAst(a)
-        ret b
+        ret str.BufStr(b)
     end
 
     g_wb_failed = true
-    r := i18.Tr("compilation failed")
+    r := str.Clone(i18.Tr("compilation failed"))
+    sm.DropDiagSources(s)
     sm.Free(s)
     at.FreeAst(a)
     ret r
@@ -461,16 +512,17 @@ pub func SyntaxOk(source: str, lang: str): str:
     sm.SetStdlibRoot("")
     pack := lp.Load(lang)
     if pack == lp.LP_NONE:
-        ret "-1"
+        ret str.Clone("-1")
     end
-    lgr := lg.New(lg.LOG_OFF, false)
+    mut lgr := lg.New(lg.LOG_OFF, false)
+    defer lg.Free(lgr)
     sf := src_from_string(source)
 
     mut toks := tok.StreamNew(sf.path)
     lok := lx.Run(lgr, pack, sf, toks)
     if not lok:
         tok.StreamFree(toks)
-        ret "0"
+        ret str.Clone("0")
     end
 
     mut a := at.NewAst()
@@ -478,5 +530,5 @@ pub func SyntaxOk(source: str, lang: str): str:
     pok := ps.Run(lgr, toks, a, prog)
     tok.StreamFree(toks)
     at.FreeAst(a)
-    ret pok ? "1" : "0"
+    ret str.Clone(pok ? "1" : "0")
 end

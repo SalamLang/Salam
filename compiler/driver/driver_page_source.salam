@@ -14,6 +14,7 @@
 package driver
 
 import str
+import mem
 
 include tok "../token.salam"
 include src "../source.salam"
@@ -53,6 +54,7 @@ pub func PageFromSource(sf: src.SourceFile, lang: str): SourcePage:
     opt.diag_style = dg.DIAG_STYLE_RUST
     opt.diag_format = dg.DIAG_FORMAT_HUMAN
     mut lgr := lg.New(lg.LOG_WARN, false)
+    defer lg.Free(lgr)
     lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
     lg.SetCapture(true)
 
@@ -91,6 +93,7 @@ pub func PageFromSource(sf: src.SourceFile, lang: str): SourcePage:
     if not sema_ok or eerr > 0 or lo.ExpandErrors() > expand_before:
         out.diag = source_page_failure()
         ev_names.Free()
+        sm.DropDiagSources(s)
         sm.Free(s)
         at.FreeAst(a)
         ret out
@@ -101,6 +104,7 @@ pub func PageFromSource(sf: src.SourceFile, lang: str): SourcePage:
         lg.SetCapture(false)
         out.no_page = true
         ev_names.Free()
+        sm.DropDiagSources(s)
         sm.Free(s)
         at.FreeAst(a)
         ret out
@@ -109,14 +113,21 @@ pub func PageFromSource(sf: src.SourceFile, lang: str): SourcePage:
     lo.LocalizeNames(a, lb)
     mut diag := dg.New(lgr, lg.PH_CODEGEN)
     mut r := lo.Generate(lgr, diag, sf.path, a, lb, false, lp.Code(pack))
-    r.css += lo.WebStateCss()
+    plain_css := r.css
+    r.css = plain_css + lo.WebStateCss()
+    mem.Free(plain_css as void*)
     mut ok := not dg.HasErrors(diag)
     if ok and (ev_names.Len() > 0 or lo.WebStateCount() > 0):
         mut ev_ok := true
         ev_js := collect_event_js(lgr, opt, a, s, prog, sf.path, false, ev_names, ev_ok)
         ok = ev_ok
-        if str.Len(ev_js) > 0:
-            r.js = str.Len(r.js) > 0 ? r.js + "\n" + ev_js : ev_js
+        if str.Len(r.js) > 0 and str.Len(ev_js) > 0:
+            page_js := r.js
+            r.js = page_js + "\n" + ev_js
+            mem.Free(page_js as void*)
+            mem.Free(ev_js as void*)
+        else str.Len(ev_js) > 0:
+            r.js = ev_js
         end
         if ok:
             prerender_page(lgr, a, s, prog, r.html)
@@ -139,6 +150,7 @@ pub func PageFromSource(sf: src.SourceFile, lang: str): SourcePage:
     end
     dg.Free(diag)
     ev_names.Free()
+    sm.DropDiagSources(s)
     sm.Free(s)
     at.FreeAst(a)
     ret out

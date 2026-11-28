@@ -67,7 +67,10 @@ const cases = [
     kind: "layout",
     lang: "en",
     src: 'import gui.ui\n\nfunc check():\n    println ui.ScopeRuns()\nend\n\npage:\n    button:\n        click = check\n        content = "Check"\n    end\nend\n',
-    want: (out) => out.indexOf("function ui_ScopeRuns") >= 0,
+    want: (out) =>
+      out.indexOf("function ui_ScopeRuns") >= 0 &&
+      out.split("function str_Clone(").length === 2 &&
+      _sbrk(0) >>> 0 < 536870912,
     limit: 10000,
   },
   {
@@ -111,6 +114,7 @@ global.require = require;
 global.__dirname = dir;
 global.__filename = path.join(dir, js);
 global.Module = {
+  thisProgram: "./this.program",
   locateFile: (f) => path.join(dir, f),
   print: () => {},
   printErr: () => {},

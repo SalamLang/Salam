@@ -66,6 +66,21 @@ cross)
         sh "$ROOT/tools/bash/native-host-check.sh" "$SALAM" $PROGRAMS
     echo "run through the JIT"
     expect_ok "$SALAM" llvm smoke.salam --jit --log-level=warn
+    echo "jit 64-bit division, which calls the compiler runtime"
+    cat >wide.salam <<'WIDE'
+import os
+
+func main:
+    n := os.Env("SALAM_SMOKE_N").ToInt() as i64
+    d := n + 6 as i64
+    u := n as u64 + 3 as u64
+    println (9000000000000 as i64) / d, (9000000000001 as i64) % d
+    println (18000000000000000000 as u64) / u, (18000000000000000001 as u64) % u
+end
+WIDE
+    printf '1285714285714 3\n4500000000000000000 1\n' >wide.out
+    SALAM_SMOKE_N=1 "$SALAM" llvm wide.salam --jit --log-level=warn >jit.out
+    diff wide.out jit.out
     for f in $PROGRAMS; do
         echo "jit ${f##*/}"
         "$SALAM" llvm "$f" --jit --log-level=warn >jit.out

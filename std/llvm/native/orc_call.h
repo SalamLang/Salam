@@ -34,6 +34,11 @@ void salam_orc_args_clear(void);
 void salam_orc_args_push(const char *arg);
 int salam_orc_call_main(int64_t addr);
 
+/* Makes the host function at addr visible to JIT'd code in an LLVMOrc
+ * JITDylib. name is an interned symbol, which this takes over. Only built
+ * where the LLVM headers are available. */
+void salam_orc_define_symbol(void *dylib, void *name, int64_t addr);
+
 /*
  * Callable counterparts of LLVM-C's target initializers.
  *

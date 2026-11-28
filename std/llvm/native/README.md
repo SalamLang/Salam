@@ -3,7 +3,7 @@
 The only C and C++ in the Salam toolchain that is not going away.
 
 Everything else the compiler is made of has a self-hosted counterpart under
-`compiler/`. These nine files do not, and cannot, because of how LLVM and LLD
+`compiler/`. These eleven files do not, and cannot, because of how LLVM and LLD
 publish their interfaces:
 
 - **`orc_call.c` / `orc_call.h`** - `LLVMInitializeAllTargets`,
@@ -12,6 +12,12 @@ publish their interfaces:
   functions, so nothing outside C can call them. This wraps each one in a real
   function. It also carries `salam_orc_call_main`, which calls a JIT'd address
   through a function pointer.
+- **`orc_static.cc` / `orc_static.h`** - the JIT of a statically linked salam.
+  LLJIT looks the C library up with `dlopen`, which a static binary does not
+  have, so `build.sh` writes a table of symbol addresses from the libraries in
+  `SALAM_JIT_STATIC_LIBS` and this C++ hands it to the LLJIT builder, which
+  LLVM's C API cannot configure that far. Without that variable the table is
+  empty and the JIT behaves as usual.
 - **`lld_link.cc` / `lld_link.h`** - LLD has **no C API at all**; its entry
   points are C++ (`lld::coff::link` and friends). This is the C++ wrapper that
   gives them C linkage.
@@ -31,13 +37,14 @@ publish their interfaces:
   manifests; if something did, the merge fails with a parse error.
   See the comment in the file.
 
-Not counting the libxml2 stand-ins, that is ten exported symbols in total:
+Not counting the libxml2 stand-ins, that is eleven exported symbols in total:
 
     salam_orc_call_main                 salam_llvm_init_all_targets
     salam_llvm_init_all_target_infos    salam_llvm_init_all_target_mcs
     salam_llvm_init_all_asm_printers    salam_llvm_init_all_asm_parsers
     salam_lld_available                 salam_lld_link
     salam_parallel_partitions           salam_parallel_opt_emit
+    salam_orc_static_builder
 
 Every other native symbol `std/llvm` binds is an `LLVM*` entry point that comes
 from libLLVM itself, so it needs no wrapper of ours.

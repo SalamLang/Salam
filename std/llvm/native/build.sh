@@ -5,6 +5,10 @@
 # Env:
 #   CC, CXX, AR         host tools (default: cc, c++, llvm-ar or ar)
 #   LLD_EXTRA_LIBDIR    extra directory to search for liblld*.a
+#   SALAM_JIT_STATIC_LIBS
+#                       static libraries (libc.a, libgcc.a) whose symbols JIT'd
+#                       code may call. Set it for a statically linked salam,
+#                       and NM to the nm that reads them (default: nm).
 #   LLD_EXTRA_INCLUDEDIR
 #                       directory holding lld/Common/Driver.h, when lld lives
 #                       in its own prefix. Inferred from LLD_EXTRA_LIBDIR's
@@ -111,6 +115,37 @@ SHIMS="$SHIMS $WORK/xml_stub.o"
 # shellcheck disable=SC2046,SC2086
 $CXX -O2 -I"$HERE" $CPPDEFS $($LLVM_CONFIG --cxxflags) -c "$HERE/parallel_opt.cc" -o "$WORK/parallel_opt.o"
 SHIMS="$SHIMS $WORK/parallel_opt.o"
+# shellcheck disable=SC2046,SC2086
+$CXX -O2 -I"$HERE" $CPPDEFS $($LLVM_CONFIG --cxxflags) -c "$HERE/orc_static.cc" -o "$WORK/orc_static.o"
+SHIMS="$SHIMS $WORK/orc_static.o"
+
+: >"$WORK/jit_names"
+if [ -n "${SALAM_JIT_STATIC_LIBS:-}" ]; then
+    # shellcheck disable=SC2086
+    "${NM:-nm}" -g --defined-only $SALAM_JIT_STATIC_LIBS >"$WORK/jit_nm" 2>"$WORK/nm.err" || {
+        cat "$WORK/nm.err" >&2
+        exit 1
+    }
+    # libgcc's split-stack objects need a runtime that static builds lack.
+    awk 'NF == 1 && /:$/ { skip = /morestack/ }
+        !skip && NF == 3 && $2 ~ /^[TWDBRVC]$/ && $3 !~ /\./ { print $3 }' "$WORK/jit_nm" |
+        LC_ALL=C sort -u >"$WORK/jit_names"
+    grep -qx printf "$WORK/jit_names" || {
+        echo "error: no C library symbols in SALAM_JIT_STATIC_LIBS: $SALAM_JIT_STATIC_LIBS" >&2
+        exit 1
+    }
+    echo "JIT symbol table: $(wc -l <"$WORK/jit_names" | tr -d ' ') symbols"
+fi
+{
+    echo '#include "orc_static.h"'
+    awk '{ printf "extern char salam_jit_sym_%d __asm__(\"%s\");\n", NR, $0 }' "$WORK/jit_names"
+    echo 'const struct salam_jit_symbol salam_jit_symbols[] = {'
+    awk '{ printf "    {\"%s\", &salam_jit_sym_%d},\n", $0, NR }' "$WORK/jit_names"
+    echo '    {0, 0}};'
+} >"$WORK/jit_symbols.c"
+# shellcheck disable=SC2086
+$CC -O2 -fno-builtin -I"$HERE" $CPPDEFS -c "$WORK/jit_symbols.c" -o "$WORK/jit_symbols.o"
+SHIMS="$SHIMS $WORK/jit_symbols.o"
 
 if [ "$WITH_LLD" = 1 ]; then
     LLD_INC=

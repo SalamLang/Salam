@@ -59,6 +59,7 @@ extern:
     func salam_orc_args_clear()
     func salam_orc_args_push(arg: str)
     func salam_orc_call_main(addr: i64): int
+    func salam_orc_static_builder(): void*
 end
 
 if SALAM_ARCH_X86:
@@ -184,7 +185,8 @@ pub func RunJITArgs(ll_path: str, args: Vector<str>): RunResult:
     end
 
     mut jit := null as void*
-    jit_err := LLVMOrcCreateLLJIT(jit, null)
+    builder := salam_orc_static_builder()
+    jit_err := LLVMOrcCreateLLJIT(jit, builder)
     if jit_err != null:
         msg := LLVMGetErrorMessage(jit_err)
         out := msg != null ? str.Clone(msg as str) : "(unknown)"
@@ -206,20 +208,22 @@ pub func RunJITArgs(ll_path: str, args: Vector<str>): RunResult:
 
     jd := LLVMOrcLLJITGetMainJITDylib(jit)
 
-    mut gen := null as void*
-    gen_err := LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(
-        gen, LLVMOrcLLJITGetGlobalPrefix(jit), null, null
-    )
-    if gen_err != null:
-        msg := LLVMGetErrorMessage(gen_err)
-        out := msg != null ? str.Clone(msg as str) : "(unknown)"
-        if msg != null: LLVMDisposeErrorMessage(msg) end
-        _d := LLVMOrcDisposeLLJIT(jit)
-        LLVMOrcDisposeThreadSafeModule(tsm)
-        ret RunResult { ok = false, err = "JIT symbol generator failed: " + out }
+    if builder == null:
+        mut gen := null as void*
+        gen_err := LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(
+            gen, LLVMOrcLLJITGetGlobalPrefix(jit), null, null
+        )
+        if gen_err != null:
+            msg := LLVMGetErrorMessage(gen_err)
+            out := msg != null ? str.Clone(msg as str) : "(unknown)"
+            if msg != null: LLVMDisposeErrorMessage(msg) end
+            _d := LLVMOrcDisposeLLJIT(jit)
+            LLVMOrcDisposeThreadSafeModule(tsm)
+            ret RunResult { ok = false, err = "JIT symbol generator failed: " + out }
+        end
+        LLVMOrcJITDylibAddGenerator(jd, gen)
+        define_runtime_symbols(jit, jd)
     end
-    LLVMOrcJITDylibAddGenerator(jd, gen)
-    define_runtime_symbols(jit, jd)
 
     add_err := LLVMOrcLLJITAddLLVMIRModule(jit, jd, tsm)
     if add_err != null:

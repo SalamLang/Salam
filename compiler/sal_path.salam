@@ -14,6 +14,7 @@
 package salpath
 
 import str
+import mem
 
 include co "sal_core.salam"
 
@@ -29,19 +30,31 @@ func is_sep(b: int): bool:
 end
 
 func collapse_double_sep(p: str): str:
-    if str.Len(p) < 3:
-        ret p
-    end
-    mut q := p
-    mut i := 2
-    until i < str.Len(q):
-        if byte_at(q, i) == K_PATH_SEP and byte_at(q, i - 1) == K_PATH_SEP:
-            q = str.Substr(q, 0, i) + str.Substr(q, i + 1, str.Len(q) - i - 1)
-        else:
-            i++
+    mut sb := str.NewBuilder()
+    mut last := 0
+    repeat str.Len(p) in i:
+        b := byte_at(p, i)
+        if i < 2 or b != K_PATH_SEP or last != K_PATH_SEP:
+            str.BufAppendChar(sb, b)
+            last = b
         end
     end
-    ret q
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func cut_range(q: str, lo: int, hi: int): str:
+    mut sb := str.NewBuilder()
+    repeat str.Len(q) in i:
+        if i < lo or i >= hi:
+            str.BufAppendChar(sb, byte_at(q, i))
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(q as void*)
+    ret out
 end
 
 func trimmed_len(dir: str): int:
@@ -131,7 +144,7 @@ end
 pub func PathBase(p: str): str:
     cut := last_sep(p)
     if cut < 0:
-        ret p
+        ret str.Clone(p)
     end
     ret str.Substr(p, cut + 1, str.Len(p) - cut - 1)
 end
@@ -175,13 +188,17 @@ pub func PathJoin(dir: str, name0: str): str:
 end
 
 pub func PathNormalize(p: str): str:
-    mut q := collapse_double_sep(PathToSlash(p))
+    slashed := PathToSlash(p)
+    mut q := collapse_double_sep(slashed)
+    if (slashed as void*) != (p as void*):
+        mem.Free(slashed as void*)
+    end
     until str.Len(q) >= 2 and byte_at(q, 0) == K_PATH_DOT and byte_at(q, 1) == K_PATH_SEP:
-        q = str.Substr(q, 2, str.Len(q) - 2)
+        q = cut_range(q, 0, 2)
     end
     mut idx := str.IndexOf(q, "/./")
     until idx >= 0:
-        q = str.Substr(q, 0, idx + 1) + str.Substr(q, idx + 3, str.Len(q) - idx - 3)
+        q = cut_range(q, idx + 1, idx + 3)
         idx = str.IndexOf(q, "/./")
     end
     mut dd := str.IndexOf(q, "/../")
@@ -196,11 +213,13 @@ pub func PathNormalize(p: str): str:
             k--
         end
         seg := str.Substr(q, segstart, dd - segstart)
-        if str.Len(seg) == 0 or str.Equals(seg, "..") or str.Contains(seg, ":"):
+        keep := str.Len(seg) == 0 or str.Equals(seg, "..") or str.Contains(seg, ":")
+        mem.Free(seg as void*)
+        if keep:
             dd = str.IndexFrom(q, "/../", dd + 1)
             continue
         end
-        q = str.Substr(q, 0, segstart) + str.Substr(q, dd + 4, str.Len(q) - dd - 4)
+        q = cut_range(q, segstart, dd + 4)
         dd = str.IndexOf(q, "/../")
     end
     ret q

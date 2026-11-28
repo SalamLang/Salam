@@ -2,6 +2,7 @@ package semantic
 
 import str
 import os
+import mem
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -16,7 +17,7 @@ include ps "../parser/parser.salam"
 include pth "../sal_path.salam"
 
 func unit_package_of(path: str): str:
-    key := pth.PathNormalize(path)
+    key := co.Share(pth.PathNormalize(path))
     repeat g_sm_unit_paths.Len() in i:
         if str.Equals(g_sm_unit_paths.Get(i), key):
             ret g_sm_unit_names.Get(i)
@@ -61,7 +62,7 @@ func unit_package_assign(path: str): str:
         name = base + n
         n++
     end
-    g_sm_unit_paths.Push(pth.PathNormalize(path))
+    g_sm_unit_paths.Push(co.Share(pth.PathNormalize(path)))
     g_sm_unit_names.Push(name)
     ret name
 end
@@ -87,10 +88,19 @@ func pkg_in_stdlib(path: str): bool:
     if str.Len(g_sm_stdlib_root) == 0:
         ret str.StartsWith(path, "std/")
     end
-    root := pth.PathNormalize(pth.PathJoin(g_sm_stdlib_root, "std"))
+    if not str.Equals(g_sm_std_norm_of, g_sm_stdlib_root) or str.Len(g_sm_std_norm) == 0:
+        joined := pth.PathJoin(g_sm_stdlib_root, "std")
+        g_sm_std_norm = pth.PathNormalize(joined)
+        g_sm_std_norm_of = co.Share(str.Clone(g_sm_stdlib_root))
+        mem.Free(joined as void*)
+    end
+    root := g_sm_std_norm
     mine := pth.PathNormalize(path)
-    ret str.StartsWith(mine, root) and str.Len(mine) > str.Len(root) and
-        byte_at(mine, str.Len(root)) == 47
+    found := str.StartsWith(mine, root) and str.Len(mine) > str.Len(root) and byte_at(
+        mine, str.Len(root)
+    ) == 47
+    mem.Free(mine as void*)
+    ret found
 end
 
 func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
@@ -199,7 +209,9 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
         end
         fi++
     end
-    lg.Log(s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "resolving package " + path)
+    if lg.Enabled(s.log, lg.LOG_DEBUG):
+        lg.Log(s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "resolving package " + path)
+    end
 
     if unnamed_package(at.Get(a, prog).name) and not pkg_in_stdlib(path):
         at.SetName(a, prog, unit_package_assign(path))
@@ -262,7 +274,11 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     s.in_pkg = true
     s.skip_bodies = s.skip_std and pkg_in_stdlib(path)
     if s.skip_bodies:
-        lg.Log(s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "deferring body checks of std package " + path)
+        if lg.Enabled(s.log, lg.LOG_DEBUG):
+            lg.Log(
+                s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "deferring body checks of std package " + path
+            )
+        end
         s.lazy_cur = s.lazy_global.Len()
         s.lazy_global.Push(pkgscope)
         s.lazy_prog.Push(prog)
@@ -549,10 +565,12 @@ func check_package_name_clash(s &: Sema, a &: at.Ast, path: str, name: str, imp:
     if str.Equals(name, "main") or str.Equals(path, s.pkg_prelude_path):
         ret
     end
-    npath := pth.PathNormalize(path)
+    npath := co.Share(pth.PathNormalize(path))
     repeat s.pkg_cache_paths.Len() in i:
         other := s.pkg_cache_paths.Get(i)
-        if str.Equals(other, s.pkg_prelude_path) or str.Equals(pth.PathNormalize(other), npath):
+        if str.Equals(other, s.pkg_prelude_path) or str.Equals(
+            co.Share(pth.PathNormalize(other)), npath
+        ):
             continue
         end
         if str.Equals(sym_at(s, s.pkg_cache_syms.Get(i)).pkgname, name):

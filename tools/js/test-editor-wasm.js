@@ -63,6 +63,14 @@ const cases = [
       out.indexOf("<script>") >= 0 && out.indexOf("Clicked ${") >= 0,
   },
   {
+    name: "a page importing the UI package builds from the shipped std cache",
+    kind: "layout",
+    lang: "en",
+    src: 'import gui.ui\n\nfunc check():\n    println ui.ScopeRuns()\nend\n\npage:\n    button:\n        click = check\n        content = "Check"\n    end\nend\n',
+    want: (out) => out.indexOf("function ui_ScopeRuns") >= 0,
+    limit: 10000,
+  },
+  {
     name: "a page run as a program points to layout mode",
     kind: "app",
     lang: "en",
@@ -130,7 +138,7 @@ global.Module.onRuntimeInitialized = () => {
       const failed = Module._salam_web_last_failed() === 1;
       check(
         c.name + " in " + ms + " ms",
-        failed === !!c.fail && c.want(out),
+        failed === !!c.fail && c.want(out) && !(c.limit && ms > c.limit),
         out,
       );
     }

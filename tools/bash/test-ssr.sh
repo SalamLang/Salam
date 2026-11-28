@@ -100,6 +100,10 @@ en)
     w_user="User 7"
     w_missing="Nothing at /nope"
     w_total="Total 21"
+    f_name="%50rice"
+    f_value=63
+    f_space="Price%20Twice"
+    f_space_value=42
     ;;
 fa)
     t_home="خانه"
@@ -109,6 +113,10 @@ fa)
     w_user="کاربر 7"
     w_missing="چیزی در /nope نیست"
     w_total="مجموع 21"
+    f_name="%D8%AF%D9%88%D8%A8%D8%B1%D8%A7%D8%A8%D8%B1"
+    f_value=42
+    f_space="%D8%B3%D9%87%20%DA%86%D9%86%D8%AF%D8%A7%D9%86"
+    f_space_value=63
     ;;
 esac
 
@@ -168,6 +176,22 @@ has '"path":"/\"onmouseover=\"x"' json-escaped-quote
 echo "== hostile line break"
 echo "status $(get '/x%0d%0aSet-Cookie:%20a=b')"
 grep -qi '^set-cookie' head.txt && echo "  UNEXPECTED header injection" || echo "  no header injection"
+
+echo "== server func by encoded name"
+token=$(curl -s -m 10 "$base/_salam/session" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+call() {
+    curl -s -m 10 -o body.html -w '%{http_code}' -H 'Content-Type: application/json' \
+        -H "X-Salam-Token: $token" -d '{"args":{"n":21}}' "$base/_salam/fn/$1"
+}
+echo "status $(call "$f_name")"
+has "\"value\":$f_value" value
+echo "status $(call "$f_name%00")"
+echo "status $(call "$f_name%zz")"
+echo "status $(call "$f_space")"
+has "\"value\":$f_space_value" value-of-name-with-space
+echo "status $(call shop%2FPrice)"
+has '"value":105' value-of-name-with-slash
+echo "status $(call shop/Price)"
 
 echo "== static"
 js=$(ls dist/public | grep '\.js$' | head -1)

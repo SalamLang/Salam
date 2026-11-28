@@ -30,6 +30,7 @@ import conv
 import net.router
 import net.devreload
 import mem
+import gui.style
 
 if SALAM_OS_WINDOWS:
     extern:
@@ -46,6 +47,8 @@ end
 const _SHELL_FILE := ".shell.html"
 
 const _STATE_OPEN := "<script type=\"application/json\" id=\"__salam\">"
+
+const _PG_STYLE_CAP := 4096
 
 mut _pg_mu := sync.NewMutex()
 
@@ -78,6 +81,16 @@ mut _pg_call_keys := Vector {} as Vector<str>
 mut _pg_call_vals := Vector {} as Vector<str>
 
 mut _pg_temps := Vector {} as Vector<str>
+
+mut _pg_style_index := HashMap {} as HashMap<str, int>
+
+mut _pg_style_keys := Vector {} as Vector<str>
+
+mut _pg_style_names := Vector {} as Vector<str>
+
+mut _pg_style_rules := Vector {} as Vector<str>
+
+mut _pg_style_used := Vector {} as Vector<int>
 
 func _pg_clean_base(
     base: str
@@ -119,6 +132,26 @@ func _pg_free_temps():
     _pg_temps.Clear()
 end
 
+func _pg_free_styles():
+    _pg_style_used.Clear()
+    if _pg_style_names.Len() < _PG_STYLE_CAP:
+        ret
+    end
+    each name in _pg_style_names:
+        mem.Free(name as void*)
+    end
+    each rule in _pg_style_rules:
+        mem.Free(rule as void*)
+    end
+    _pg_style_index.Free()
+    each key in _pg_style_keys:
+        mem.Free(key as void*)
+    end
+    _pg_style_keys.Clear()
+    _pg_style_names.Clear()
+    _pg_style_rules.Clear()
+end
+
 func _pg_free_calls():
     each k in _pg_call_keys:
         mem.Free(k as void*)
@@ -129,6 +162,7 @@ func _pg_free_calls():
     _pg_call_keys.Clear()
     _pg_call_vals.Clear()
     _pg_free_temps()
+    _pg_free_styles()
 end
 
 func _pg_budget_ms(): int:
@@ -150,6 +184,132 @@ end
 func _pg_byte(s: str, i: int): int:
     p := (s as void*) as u8*
     ret p[i] as int
+end
+
+func _pg_style_hash(text: str): str:
+    mut h := 2166136261 as u64
+    n := str.ByteLen(text)
+    mut i := 0
+    until i < n:
+        lead := _pg_byte(text, i)
+        mut cp := lead
+        mut width := 1
+        if lead >= 240:
+            cp = lead & 7
+            width = 4
+        else lead >= 224:
+            cp = lead & 15
+            width = 3
+        else lead >= 192:
+            cp = lead & 31
+            width = 2
+        end
+        mut k := 1
+        until k < width:
+            cp = (cp << 6) | (_pg_byte(text, i + k) & 63)
+            k++
+        end
+        i += width
+        if cp > 65535:
+            cp -= 65536
+            h = ((h ^ ((55296 + (cp >> 10)) as u64)) * (16777619 as u64)) & (4294967295 as u64)
+            cp = 56320 + (cp & 1023)
+        end
+        h = ((h ^ (cp as u64)) * (16777619 as u64)) & (4294967295 as u64)
+    end
+    ret str.FromInt(h as i64)
+end
+
+func _pg_style_head(html: str): str:
+    at := html.Find("</head>")
+    if _pg_style_used.Len() == 0 or at < 0:
+        ret ""
+    end
+    p1 := html.Substr(0, at)
+    p2 := html.Substr(at, html.Len() - at)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, p1)
+    str.BufAppend(sb, "<style data-salam=\"ssr\">")
+    each i in _pg_style_used:
+        str.BufAppend(sb, _pg_style_rules.Get(i))
+    end
+    str.BufAppend(sb, "</style>")
+    str.BufAppend(sb, p2)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(p1 as void*)
+    mem.Free(p2 as void*)
+    ret out
+end
+
+func _pg_style_key(prop: int, state: int, text: str): str:
+    mut sb := str.NewBuilder()
+    pt := str.FromInt(prop as i64)
+    st := str.FromInt(state as i64)
+    str.BufAppend(sb, pt)
+    str.BufAppend(sb, "/")
+    str.BufAppend(sb, st)
+    str.BufAppend(sb, "/")
+    str.BufAppend(sb, text)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(pt as void*)
+    mem.Free(st as void*)
+    ret out
+end
+
+func _pg_style_name(prop: int, state: int, css: str): str:
+    key := _pg_style_key(prop, state, css)
+    hash := _pg_style_hash(key)
+    mut nb := str.NewBuilder()
+    str.BufAppend(nb, "s")
+    str.BufAppend(nb, hash)
+    out := str.BufStr(nb)
+    str.BufFree(nb)
+    mem.Free(key as void*)
+    mem.Free(hash as void*)
+    ret out
+end
+
+func _pg_style_add(prop: int, state: int, text: str, key: str): int:
+    mut v := style.Value {}
+    if not style.Parse(prop, text, v):
+        ret -1
+    end
+    css := style.Css(prop, v)
+    v.items.Free()
+    if css.Len() == 0:
+        ret -1
+    end
+    name := _pg_style_name(prop, state, css)
+    _pg_style_names.Push(name)
+    _pg_style_rules.Push(_pg_style_rule(name, state, css))
+    at := _pg_style_names.Len() - 1
+    kept := str.Clone(key)
+    _pg_style_keys.Push(kept)
+    _pg_style_index.Put(kept, at)
+    ret at
+end
+
+func _pg_style_rule(name: str, state: int, css: str): str:
+    suffixes := [
+        "", ":hover", ":focus", ":focus-within", ":active", ":disabled", ":checked", ":invalid",
+        "::placeholder", "::selection"
+    ]
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, ".")
+    str.BufAppend(sb, name)
+    if state >= 0 and state < len(suffixes):
+        str.BufAppend(sb, suffixes[state])
+    end
+    str.BufAppend(sb, "{")
+    safe := str.Replace(css, "</", "<\\/")
+    str.BufAppend(sb, safe)
+    str.BufAppend(sb, "}")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(safe as void*)
+    ret out
 end
 
 func _pg_hex(b: int): int:
@@ -423,6 +583,32 @@ pub func PageWrite(u: str):
     _pg_write_heap = true
 end
 
+@en "PageStyle"
+@fa "سبک استاندارد صفحه"
+pub func PageStyle(prop: int, state: int, text: str): str:
+    if text.Len() == 0 or not PageActive():
+        ret ""
+    end
+    key := _pg_style_key(prop, state, text)
+    defer mem.Free(key as void*)
+    at := _pg_style_index.Has(key) ? _pg_style_index.Get(key) : _pg_style_add(
+        prop, state, text, key
+    )
+    if at < 0:
+        ret ""
+    end
+    mut known := false
+    each used in _pg_style_used:
+        if used == at:
+            known = true
+        end
+    end
+    if not known:
+        _pg_style_used.Push(at)
+    end
+    ret PageKeep(str.Clone(_pg_style_names.Get(at)))
+end
+
 @en "PageSkip"
 @fa "پرش از ناحیه"
 pub func PageSkip():
@@ -646,6 +832,10 @@ pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
             mem.Free(h2 as void*)
         end
     end
+    styled := _pg_style_head(head)
+    if styled.Len() > 0:
+        head = styled
+    end
     mut at := head.Find("<script src=")
     if at < 0: at = head.Find("</body>") end
     mut out := ""
@@ -671,6 +861,7 @@ pub func PageRespond(c: i64, path: str, pattern: str, doc: str, calls: str):
     mem.Free(out as void*)
     mem.Free(script as void*)
     if head_own.Len() > 0: mem.Free(head_own as void*) end
+    if styled.Len() > 0: mem.Free(styled as void*) end
 end
 
 @en "PageServe"

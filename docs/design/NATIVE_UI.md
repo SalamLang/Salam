@@ -49,6 +49,46 @@ naming a file of steps (`click #id`, `type text`, `key Tab`, `dump`,
 `shot out.png`, `quit`). The `ui` section of `tools/bash/run-tests.sh` builds
 each `tests/<lang>/ui/X.salam` with `--ui=native` and runs it with `X.script`.
 
+## `gui.ui` in a web build
+
+A web build has no native engine: the browser holds the elements and the web
+runtime renders the page. These calls work there against the DOM:
+
+- `ById`, `ByKey` and the element methods `Exists`, `Tag`, `Text`, `SetText`,
+  `Value`, `SetValue`, `Checked`, `SetChecked`, `Focus`, `ScrollIntoView`,
+  `Click`, `Attr`, `SetAttr` and `Rect`.
+- `CurrentEvent`, filled from the browser event being handled.
+- `OpenUrl` and `OpenedUrls`.
+- `ScopeRuns`, which counts the regions the web runtime rendered again after the
+  first render.
+
+Where the answer differs from a native window:
+
+- `Tag` is worked out from the HTML tag, so elements that share a tag report one
+  name: a `checkbox` element reports `input`, and design system components
+  report the element their tag stands for.
+- `Rect` is the browser's own layout in page coordinates, so the numbers depend
+  on the fonts and the viewport.
+- `ScopeRuns` follows the web runtime, which renders a component and its keyed
+  rows as one region. A change that runs a row and its parent as two scopes in a
+  window can count once in a browser.
+
+These belong to the native engine and do nothing in a web build. Numbers are 0,
+booleans are false, and `Style` returns a default value:
+
+- `Element.Style`, `ScopeSkips`, `ScopeNodes`.
+- `Invalidate`, `TouchInstance`, `TouchInstanceVars` and the other `Scope*` calls
+  that generated native code uses.
+- `Stop`, `HideWindow`, `ShowWindow`, `WindowVisible`, `OnCloseRequest`,
+  `OnPause`, `OnResume`, `OnLowMemory`, `OnSaveState`, `KeyboardDismiss`,
+  `SetBack`, `SetForward`, `SetAfterUpdate`, `RunSteps`.
+- `RunPage`, `RenderPage`, `DumpPage` and the `Offscreen*` calls, which draw a
+  window of their own.
+
+`tools/js/test-ui-web.js` replays a test's `.script` against its web build in a
+headless browser and compares the output with `.out`, or with `.web.out` where
+the two targets differ on purpose.
+
 ## The problem
 
 A `page:` block (`صفحه:` in Persian) compiles to HTML, CSS and JavaScript.

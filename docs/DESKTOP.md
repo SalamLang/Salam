@@ -133,10 +133,12 @@ copyright = "2026 Example Ltd"
 `author` (or the older `publisher`) is the maintainer of the `.deb` and the company in the
 Windows version info. `[windows]`, `[macos]` and `[linux]` repeat any `[app]` key for that
 system only, and `[windows]` also takes `subsystem`, `icon`, `manifest`, `product` and
-`copyright`. A native Windows build with no bundle (`salam build --platform=windows`) reads
-the same `[windows]` table and falls back to `[app]` for the version, product name,
-description, company and copyright. Such a build of a `page:` program opens no
-console window unless `subsystem = "console"` asks for one.
+`copyright`. A Windows build with no bundle (`salam build --platform=windows` in the project
+folder) reads the same `[windows]` table and falls back to `[app]` for the icon, version,
+product name, description, company and copyright. The icon may be a `.ico` or a `.png` file;
+a PNG is stored as it is, so keep it at 256 by 256 pixels or smaller. Every backend and
+linker embeds these, except the tcc C compiler, which warns instead. Such a build of a
+`page:` program opens no console window unless `subsystem = "console"` asks for one.
 
 ```sh
 salam bundle
@@ -155,9 +157,135 @@ compiler itself. The assets go at the end of the executable on Linux and
 Windows, and into `Contents/Resources/app.pack` on macOS so the signature of the
 program stays valid. A PNG icon is converted to `.ico` and `.icns`.
 
-Nothing is signed. macOS binaries get the ad-hoc signature the compiler
+Nothing is signed unless you ask. macOS binaries get the ad-hoc signature the compiler
 writes, which is enough to run them after removing the quarantine flag with
 `xattr -d com.apple.quarantine`. Sign and notarize for real distribution.
+
+## Signing
+
+```sh
+salam build --sign
+salam bundle --sign
+salam bundle --sign --target=x86_64-w64-windows-gnu --format=zip,nsis
+salam bundle --sign --notarize --target=arm64-apple-macos --format=dmg
+salam sign dist/notes-setup.exe
+```
+
+Signing runs only with `--sign` or `salam sign`. The settings come from `[windows]`,
+`[macos]` and `[linux]` in `salam.toml` (every key is in [PROJECT_FILE.md](PROJECT_FILE.md))
+and from options, which win: `--sign-cert`, `--sign-key`, `--sign-thumbprint`, `--sign-tool`,
+`--sign-command`, `--timestamp-url`, `--no-timestamp`, `--sign-identity`, `--entitlements`,
+`--notarize`, `--notary-profile`, `--gpg-key` and `--sign-password-file`. A missing tool,
+certificate or key stops the command before it builds. A signing step that fails makes the
+command fail; the files already written are left in place and must not be given to anyone.
+
+`salam bundle --sign` signs in this order:
+
+| system  | what is signed                                                                                                                                                  |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows | the program, after the assets are added to it, then the NSIS setup program. The `.zip` holds the signed program. The uninstaller that NSIS writes is not signed |
+| macOS   | the `.app`, which is then notarized and stapled when asked, before it goes into `app`, `tar` or `dmg`; the `.dmg` is signed, notarized and stapled too          |
+| Linux   | each package gets a detached GPG signature, `NAME.asc`                                                                                                          |
+
+`salam build --sign` signs the program or shared library it wrote. `salam sign FILE...`
+signs files made by other tools; it tells the system from the file, or takes `--platform`.
+
+### Passwords
+
+The password of a certificate file, a key or a GPG key is read from
+`SALAM_SIGN_PASSWORD`, `SALAM_SIGN_PASSWORD_FILE` or `--sign-password-file=FILE`, never
+from `salam.toml`, and it is replaced by `****` in what Salam prints. osslsigncode and gpg
+receive it through a file that only you can read, removed after the step. **signtool accepts
+a password only on its command line**, where other processes of the same user (and
+administrators) can see it, so Salam warns; prefer a certificate in the Windows store
+(`sign_thumbprint`) or a token. A `sign_command` of yours inherits the environment and the
+terminal, so it can ask for a PIN; what it prints is shown as it is, without `****`.
+
+### Windows
+
+You need a code signing certificate from a certificate authority that Windows trusts.
+Authorities usually require proof of identity, and current industry rules require the
+private key of a publicly trusted code signing certificate to stay in hardware (a USB token,
+a hardware security module or a cloud signing service), so a new certificate normally does
+not come as a `.pfx` file. Check the authority's terms, eligibility and prices yourself.
+
+- A token or smart card whose driver puts the certificate in the Windows store works with
+  `sign_thumbprint` and signtool.
+- A cloud signing service, a PKCS#11 token on Linux or anything else works with
+  `sign_command`, for example:
+
+```toml
+[windows]
+sign_command = ["my-signer", "--timestamp", "{timestamp_url}", "--name", "{description}", "{file}"]
+```
+
+`{file}` is required. The program is found on `PATH`, or by a path relative to the project.
+It must change the file in place; Salam checks that a `.exe` or `.dll` then carries an
+Authenticode signature.
+
+- A `.pfx` file or a certificate and key (an older certificate, or one from your company's
+  own authority) works with signtool on Windows or
+  [osslsigncode](https://github.com/mtrojnar/osslsigncode) on any system.
+
+signtool comes with the Windows SDK; Salam takes it from `PATH` or from the Windows Kits
+folder. Timestamping is on by default (`http://timestamp.digicert.com`; set `timestamp_url`
+to your authority's server). A timestamp keeps the signature valid after the certificate
+expires, so use `--no-timestamp` only for local tests.
+
+A self-signed certificate does not help your users: Windows does not trust it on their
+computers.
+
+### macOS
+
+`codesign`, `notarytool` and `stapler` exist only on a Mac with the Xcode command line
+tools. Distribution outside the App Store needs a "Developer ID Application" certificate in
+your keychain, which comes with the Apple Developer Program. Store the notary credentials
+once, then name the profile:
+
+```sh
+xcrun notarytool store-credentials salam-notary
+```
+
+```toml
+[macos]
+sign_identity = "Developer ID Application: Example Ltd (ABCDE12345)"
+notary_profile = "salam-notary"
+notarize = true
+```
+
+Salam signs with the hardened runtime and a timestamp, verifies the signature, waits for
+Apple's answer and fails unless it is "Accepted". A bare program from `salam build` can be
+notarized but not stapled, so a computer that is offline cannot confirm it; ship an `.app`
+or `.dmg`. `sign_identity = "-"` makes an ad-hoc signature for local use. Programs that
+need extra permissions list them in an `entitlements` file.
+
+### Linux
+
+`gpg_key` writes `FILE.asc` next to the file. Publish your public key so people can check
+it with `gpg --verify FILE.asc FILE`. This is separate from the repository signatures of
+`apt` or `dnf`.
+
+### What signing does not do
+
+A signature says who published a file and that it was not changed afterwards. It does not
+promise that Windows Defender, SmartScreen or another antivirus will stay quiet: a new
+publisher or a new file can still be warned about until it builds a reputation, and
+heuristic detections happen to signed files too.
+
+When Microsoft Defender flags your program and you are sure it is clean:
+
+1. Update the Defender definitions and scan again, and note the detection name.
+2. Check that the file you scanned is the one you built, and rebuild on a clean machine if
+   in doubt.
+3. Send the file to Microsoft at <https://www.microsoft.com/wdsi/filesubmission> as a
+   software developer, say that it is an incorrect detection, and give the detection name,
+   the product name and a link where it is published.
+4. Keep the submission id and wait for the answer. Each new build is a new file, and may
+   need to be sent again.
+
+Other antivirus vendors have their own submission forms. A version resource, an icon, a
+manifest, a stable download address and a signature all help reviewers, but none of them
+guarantees a clean result.
 
 ## Low level and high level in one package
 

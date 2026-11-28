@@ -19,9 +19,13 @@ const PF_ANDROID := "min_sdk:i target_sdk:i abi:s keystore:s key_alias:s "
 
 const PF_IOS := "min_ios:v team:s profile:s sign_identity:s ipa:b "
 
-const PF_WINDOWS := "subsystem:s icon:s manifest:s version:v company:s description:s product:s copyright:s "
+const PF_WINDOWS := "subsystem:s icon:s manifest:s version:v company:s description:s product:s copyright:s sign_tool:s sign_cert:s sign_key:s sign_thumbprint:s sign_command:l timestamp_url:s "
 
-const PF_SECRETS := " keystore_pass keystore_password key_pass key_password password storepass "
+const PF_MACOS := "sign_identity:s entitlements:s hardened_runtime:b timestamp_url:s notarize:b notary_profile:s notary_key:s notary_key_id:s notary_issuer:s "
+
+const PF_LINUX := "gpg_key:s "
+
+const PF_SECRETS := " keystore_pass keystore_password key_pass key_password password storepass sign_pass sign_password pfx_password cert_password certificate_password notary_password apple_password app_password sign_token "
 
 mut g_pm_pin_mods := Vector {} as Vector<str>
 mut g_pm_pin_vers := Vector {} as Vector<str>
@@ -48,6 +52,27 @@ pub struct PkgInfo:
     pub app_icon: str = ""
 end
 
+pub struct SignInfo:
+    pub description: str = ""
+    pub sign_tool: str = ""
+    pub sign_cert: str = ""
+    pub sign_key: str = ""
+    pub sign_thumbprint: str = ""
+    pub sign_command: Vector<str> = Vector {}
+    pub command_not_list: bool = false
+    pub timestamp_url: str = ""
+    pub sign_identity: str = ""
+    pub entitlements: str = ""
+    pub hardened_runtime: bool = true
+    pub mac_timestamp_url: str = ""
+    pub notarize: bool = false
+    pub notary_profile: str = ""
+    pub notary_key: str = ""
+    pub notary_key_id: str = ""
+    pub notary_issuer: str = ""
+    pub gpg_key: str = ""
+end
+
 func pf_spec(table: str): str:
     if table == "app":
         ret PF_APP
@@ -64,8 +89,11 @@ func pf_spec(table: str): str:
     if table == "windows":
         ret PF_APP + PF_WINDOWS
     end
-    if table == "macos" or table == "linux":
-        ret PF_APP
+    if table == "macos":
+        ret PF_APP + PF_MACOS
+    end
+    if table == "linux":
+        ret PF_APP + PF_LINUX
     end
     ret ""
 end
@@ -116,6 +144,53 @@ func pf_check_table(name: str, tbl: value.Value, out &: Vector<str>):
             out.Push("unknown\t" + name + "\t" + key + "\t")
         else not pf_type_ok(item, t):
             out.Push("type\t" + name + "\t" + key + "\t" + t)
+        end
+    end
+end
+
+func pf_table(doc: value.Value, name: str): value.Value:
+    mut ok := false
+    tbl := value.ObjectGetOk(doc, name, ok)
+    if ok and value.IsObject(tbl):
+        ret tbl
+    end
+    ret value.NewValueObject()
+end
+
+func pf_bool(tbl: value.Value, key: str, fallback: bool): bool:
+    mut ok := false
+    x := value.ObjectGetOk(tbl, key, ok)
+    if ok and value.IsBool(x):
+        ret value.AsBool(x)
+    end
+    ret fallback
+end
+
+func pf_app_info(doc: value.Value, out &: PkgInfo):
+    mut ok := false
+    app := value.ObjectGetOk(doc, "app", ok)
+    if ok and value.IsObject(app):
+        out.has_app = true
+        out.app_name = toml_str(app, "name")
+        out.app_version = toml_str(app, "version")
+        out.app_description = toml_str(app, "description")
+        out.app_author = toml_str(app, "author")
+        if str.Len(out.app_author) == 0:
+            out.app_author = toml_str(app, "publisher")
+        end
+        out.app_copyright = toml_str(app, "copyright")
+        out.app_icon = toml_str(app, "icon")
+    end
+    win := value.ObjectGetOk(doc, "windows", ok)
+    if ok and value.IsObject(win):
+        out.win_subsystem = toml_str(win, "subsystem")
+        out.win_icon = toml_str(win, "icon")
+        out.win_manifest = toml_str(win, "manifest")
+        each wk in ["version", "company", "description", "product", "copyright"]:
+            wv := toml_str(win, wk)
+            if str.Len(wv) > 0:
+                out.win_version.Push(wk + "=" + wv)
+            end
         end
     end
 end
@@ -199,6 +274,7 @@ pub func ReadPackageInfo(dir: str, out &: PkgInfo): bool:
     catch:
         ret false
     end
+    pf_app_info(doc, out)
     pkg := value.ObjectGetOk(doc, "package", ok)
     if not ok or not value.IsObject(pkg):
         ret true
@@ -221,31 +297,63 @@ pub func ReadPackageInfo(dir: str, out &: PkgInfo): bool:
         out.project_web = toml_str(prj, "web")
         toml_strs(prj, "platforms", out.project_platforms)
     end
-    app := value.ObjectGetOk(doc, "app", ok)
-    if ok and value.IsObject(app):
-        out.has_app = true
-        out.app_name = toml_str(app, "name")
-        out.app_version = toml_str(app, "version")
-        out.app_description = toml_str(app, "description")
-        out.app_author = toml_str(app, "author")
-        if str.Len(out.app_author) == 0:
-            out.app_author = toml_str(app, "publisher")
-        end
-        out.app_copyright = toml_str(app, "copyright")
-        out.app_icon = toml_str(app, "icon")
+    ret true
+end
+
+pub func ReadSignInfo(dir: str, out &: SignInfo, why &: str): bool:
+    path := pth.PathJoin(dir, MANIFEST_FILE)
+    if not os.Exists(path):
+        ret true
     end
-    win := value.ObjectGetOk(doc, "windows", ok)
-    if ok and value.IsObject(win):
-        out.win_subsystem = toml_str(win, "subsystem")
-        out.win_icon = toml_str(win, "icon")
-        out.win_manifest = toml_str(win, "manifest")
-        each wk in ["version", "company", "description", "product", "copyright"]:
-            wv := toml_str(win, wk)
-            if str.Len(wv) > 0:
-                out.win_version.Push(wk + "=" + wv)
+    mut doc := value.NewValueObject()
+    try:
+        doc = toml.Decode(os.ReadFile(path))
+    catch e:
+        why = path + ": " + e.message
+        ret false
+    end
+    app := pf_table(doc, "app")
+    win := pf_table(doc, "windows")
+    mac := pf_table(doc, "macos")
+    lin := pf_table(doc, "linux")
+    out.description = toml_str(win, "product")
+    if str.Len(out.description) == 0:
+        out.description = toml_str(app, "name")
+    end
+    out.sign_tool = toml_str(win, "sign_tool")
+    out.sign_cert = toml_str(win, "sign_cert")
+    out.sign_key = toml_str(win, "sign_key")
+    out.sign_thumbprint = toml_str(win, "sign_thumbprint")
+    mut ok := false
+    cmd := value.ObjectGetOk(win, "sign_command", ok)
+    if ok:
+        if value.IsArray(cmd):
+            repeat value.ArrayLen(cmd) in i:
+                item := value.ArrayGet(cmd, i)
+                if value.IsString(item):
+                    out.sign_command.Push(value.AsString(item))
+                else:
+                    out.command_not_list = true
+                end
             end
+        else:
+            out.command_not_list = true
         end
     end
+    if out.command_not_list:
+        out.sign_command.Clear()
+    end
+    out.timestamp_url = toml_str(win, "timestamp_url")
+    out.sign_identity = toml_str(mac, "sign_identity")
+    out.entitlements = toml_str(mac, "entitlements")
+    out.hardened_runtime = pf_bool(mac, "hardened_runtime", true)
+    out.mac_timestamp_url = toml_str(mac, "timestamp_url")
+    out.notarize = pf_bool(mac, "notarize", false)
+    out.notary_profile = toml_str(mac, "notary_profile")
+    out.notary_key = toml_str(mac, "notary_key")
+    out.notary_key_id = toml_str(mac, "notary_key_id")
+    out.notary_issuer = toml_str(mac, "notary_issuer")
+    out.gpg_key = toml_str(lin, "gpg_key")
     ret true
 end
 

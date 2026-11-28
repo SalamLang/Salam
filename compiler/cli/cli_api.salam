@@ -98,10 +98,10 @@ pub func NearestCommand(word: str): str:
         ret ""
     end
     names := [
-        "build", "check", "test", "run", "exec", "obj", "llvm", "serve", "bundle", "new", "init",
-        "add", "remove", "update", "deps", "install", "uninstall", "search", "format", "doc",
-        "translate", "sql", "page", "debug", "memcheck", "inspect", "lsp", "dap", "cli", "upgrade",
-        "upgrade-std", "help", "version"
+        "build", "check", "test", "run", "exec", "obj", "llvm", "serve", "bundle", "sign", "new",
+        "init", "add", "remove", "update", "deps", "install", "uninstall", "search", "format",
+        "doc", "translate", "sql", "page", "debug", "memcheck", "inspect", "lsp", "dap", "cli",
+        "upgrade", "upgrade-std", "help", "version"
     ]
     mut best := ""
     mut best_d := 3
@@ -231,6 +231,9 @@ Commands:
                                                 'salam run')
   bundle   [dir] [--target=T] [--format=a,b]    Package a desktop app ([app] in salam.toml) as tar,
                                                 deb, rpm, AppImage, zip, NSIS, .app or dmg
+  sign     FILE... [--project=DIR]              Sign built files with the settings of
+                                                salam.toml: Authenticode, codesign (and
+                                                notarization) or a GPG signature
   serve    --config=FILE [--test]               Run the web server described by FILE (virtual
                                                 hosts, locations, redirects, FastCGI backends);
                                                 --test only checks it
@@ -390,10 +393,32 @@ Build options:
                            manifest (RT_MANIFEST 1)
   --version-info=KEY=VALUE Windows target: add a version resource; KEY is
                            version, company, description, product or
-                           copyright (repeatable). --icon, --manifest and
-                           --version-info need --backend=native or
-                           --linker=builtin; a project can set these and
-                           'subsystem' in a [windows] table in salam.toml
+                           copyright (repeatable). A project can set these and
+                           'subsystem' in a [windows] table in salam.toml;
+                           the icon may be a .ico or a .png file
+  --sign                   Sign the program or shared library after it is built
+                           (build and bundle); a signing failure fails the
+                           command. Settings come from [windows], [macos] or
+                           [linux] in salam.toml and the options below.
+                           A certificate password is read from
+                           $SALAM_SIGN_PASSWORD or $SALAM_SIGN_PASSWORD_FILE,
+                           never from the project file
+  --sign-cert=FILE         Windows: .pfx/.p12 file, or a certificate used with
+                           --sign-key=FILE (osslsigncode)
+  --sign-thumbprint=SHA1   Windows: certificate in the Windows store (signtool)
+  --sign-tool=NAME         Windows: auto (default), signtool or osslsigncode
+  --sign-command=ITEM      Windows: your own signer, one item per option: the
+                           program, then its arguments with {file},
+                           {timestamp_url} and {description}
+  --sign-password-file=F   Read the certificate or key password from F
+  --timestamp-url=URL      Timestamp server (Windows default:
+                           http://timestamp.digicert.com, macOS default: Apple)
+  --no-timestamp           Sign without a timestamp
+  --sign-identity=NAME     macOS: codesign identity ('-' for ad-hoc)
+  --entitlements=FILE      macOS: entitlements property list
+  --notarize               macOS: submit to Apple and staple the ticket
+  --notary-profile=NAME    macOS: notarytool keychain profile
+  --gpg-key=ID             Linux: write FILE.asc with this GPG key
   -dNAME=VALUE             Define a compile-time constant the program can
     (--const=NAME=VALUE)   read by name, as if the source said
                            'const NAME := VALUE' (repeatable). NAME must be
@@ -761,6 +786,14 @@ pub func RunCommand(args: Vector<str>): int:
     if str.Len(opt.msg_lang) > 0:
         i18.SetMsgLang(opt.msg_lang)
     end
+    if opt.command == dr.CMD_BUILD and not opt.sign.on and str.Len(opt.sign.first_flag) > 0:
+        io.EPrintln(
+            co.Format1(
+                i18.Tr("salam: %s has no effect without --sign"), co.ArgStr(opt.sign.first_flag)
+            )
+        )
+        ret 2
+    end
     if opt.command == dr.CMD_BUILD or opt.command == dr.CMD_RUN or opt.command == dr.CMD_OBJ or
         opt.command == dr.CMD_LLVM:
         stamp_source_build(opt)
@@ -889,6 +922,10 @@ pub func RunCommand(args: Vector<str>): int:
         end
         r_llvm := dr.Llvm(opt)
         ret r_llvm
+    end
+    if opt.command == dr.CMD_SIGN:
+        r_sign := dr.Sign(opt)
+        ret r_sign
     end
     if opt.command == dr.CMD_SERVE:
         r_serve := dr.Serve(opt)

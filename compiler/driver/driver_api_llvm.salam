@@ -86,9 +86,10 @@ func build_freestanding_runtime(lgr: lg.Logger, triple: str, out_obj &: str): bo
     end
     obj := scratch_dir() + "/salam-baremetal-" + sanitize_ident(triple) + ".o"
     cmd := shell_arg(cc) + " --target=" + lv.ClangTargetFor(triple) +
-        " -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -O2" +
-        (str.StartsWith(triple, "riscv64") ? " -march=rv64gc -mabi=lp64d -mcmodel=medany" : "") + " -c " +
-        shell_arg(src) + " -o " + shell_arg(obj)
+        " -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -O2" + (str.StartsWith(
+            triple, "riscv64"
+        ) ? " -march=rv64gc -mabi=lp64d -mcmodel=medany" : "") + " -c " + shell_arg(src) + " -o " +
+        shell_arg(obj)
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling bare-metal runtime: " + cmd)
     if os.Run(cmd) != 0:
         lg.Log(
@@ -260,7 +261,9 @@ end
 func llvm_link_with_fallback(lgr: lg.Logger, opt &: Dr, llpath: str, o &: lv.Options): int:
     mut held := ""
     mut rc := lv.NativeRunHeld(lgr, llpath, o, held)
-    if rc != 0 and o.output_mode == lv.LV_OUT_EXEC and str.Len(opt.lib_kind) == 0 and not str.Equals(
+    if rc != 0 and o.output_mode == lv.LV_OUT_EXEC and str.Len(
+        opt.lib_kind
+    ) == 0 and not str.Equals(
         linker_mode(opt), "builtin"
     ) and not str.Equals(linker_mode(opt), "system"):
         final_exe := o.output_file
@@ -657,7 +660,14 @@ pub func Llvm(opt &: Dr): int:
                 output_stem_of(opt.input), o.output_mode, opt.llvm_target
             )
         end
-        if o.output_mode == lv.LV_OUT_EXEC and not is_lib and str.Equals(
+        mut res := ""
+        mut res_ok := true
+        if o.output_mode == lv.LV_OUT_EXEC and not is_lib:
+            res_ok = win_res_attach(lgr, o, o.output_file, o.target_triple, false, res)
+        end
+        if not res_ok:
+            rc = 1
+        else o.output_mode == lv.LV_OUT_EXEC and not is_lib and str.Equals(
             linker_mode(opt), "builtin"
         ):
             final_exe := o.output_file
@@ -678,6 +688,7 @@ pub func Llvm(opt &: Dr): int:
         else:
             rc = llvm_link_with_fallback(lgr, opt, llpath, o)
         end
+        win_res_drop(res)
         if opt.keep_temp:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)
         else:
@@ -699,7 +710,7 @@ pub func Llvm(opt &: Dr): int:
             if str.Len(opt.exe_path) == 0 and o.output_mode == lv.LV_OUT_EXEC:
                 opt.exe_path = o.output_file
             end
-        else o.output_mode == lv.LV_OUT_EXEC and str.Len(opt.llvm_target) == 0:
+        else res_ok and o.output_mode == lv.LV_OUT_EXEC and str.Len(opt.llvm_target) == 0:
             rc = RC_LLVM_LINK_FAILED
         end
     end

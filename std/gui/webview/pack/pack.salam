@@ -172,6 +172,71 @@ func _walk_assets(root: str, rel: str, out &: Vector<str>):
     end
 end
 
+func _signed_data_end(path: str, size: i64): i64:
+    if size < 256:
+        ret size
+    end
+    dos := ReadRange(path, 0 as i64, 64 as i64)
+    if dos == null:
+        ret size
+    end
+    defer mem.Free(dos)
+    mz := dos as u8*
+    if mz[0] != (77 as u8) or mz[1] != (90 as u8):
+        ret size
+    end
+    at := _get_u32(mz, 60 as i64)
+    if at < 0 or at + 192 > size:
+        ret size
+    end
+    head := ReadRange(path, at, 192 as i64)
+    if head == null:
+        ret size
+    end
+    defer mem.Free(head)
+    pe := head as u8*
+    if _get_u32(pe, 0 as i64) != (0x4550 as i64):
+        ret size
+    end
+    wide := pe[24] == (0x0B as u8) and pe[25] == (0x02 as u8)
+    entry := (wide ? 24 + 112 : 24 + 96) + 32
+    start := _get_u32(pe, entry as i64)
+    length := _get_u32(pe, (entry + 4) as i64)
+    if start <= 0 or length <= 0 or start + length > size or size - start - length >= 8:
+        ret size
+    end
+    ret start
+end
+
+func _footer_end(path: str, end_at: i64, size: i64): i64:
+    if end_at == size:
+        ret size
+    end
+    repeat 8 in pad:
+        stop := end_at - (pad as i64)
+        if stop < (_FOOTER_SIZE as i64):
+            break
+        end
+        tail := ReadRange(path, stop - 8, 8 as i64)
+        if tail == null:
+            break
+        end
+        found := tail as u8*
+        magic := _PACK_MAGIC as u8*
+        mut same := true
+        repeat 8 in i:
+            if found[i] != magic[i]:
+                same = false
+            end
+        end
+        mem.Free(tail)
+        if same:
+            ret stop
+        end
+    end
+    ret size
+end
+
 @en "ReadRange"
 @fa "خواندن بازه"
 pub func ReadRange(path: str, offset: i64, n: i64): void*:
@@ -196,7 +261,8 @@ end
 @en "Open"
 @fa "باز کردن"
 pub func Open(path: str, key: str, out &: Pack): bool:
-    size := os.FileSize(path)
+    whole := os.FileSize(path)
+    size := _footer_end(path, _signed_data_end(path, whole), whole)
     if size < (_FOOTER_SIZE as i64) + 4:
         ret false
     end

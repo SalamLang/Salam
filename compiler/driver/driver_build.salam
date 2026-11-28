@@ -72,11 +72,12 @@ func win_from_project(opt &: Dr, pinfo: pm.PkgInfo, rdir: str):
     if str.Len(opt.win_subsystem) == 0:
         opt.win_subsystem = pinfo.win_subsystem
     end
-    use_app := pinfo.has_app and (str.Equals(opt.backend, "native") or str.Equals(
-        linker_mode(opt), "builtin"
-    ) or (str.Equals(opt.backend, "auto") and native_by_default()))
+    use_app := pinfo.has_app
     mut icon := pinfo.win_icon
-    if str.Len(icon) == 0 and use_app and str.EndsWith(str.Lower(pinfo.app_icon), ".ico"):
+    app_icon := str.Lower(pinfo.app_icon)
+    if str.Len(icon) == 0 and use_app and (str.EndsWith(app_icon, ".ico") or str.EndsWith(
+        app_icon, ".png"
+    )):
         icon = pinfo.app_icon
     end
     if str.Len(opt.win_icon) == 0 and str.Len(icon) > 0:
@@ -231,6 +232,16 @@ func protect_binary(lgr: lg.Logger, opt &: Dr, output: str):
 end
 
 func build_impl(opt &: Dr): int:
+    if opt.sign.on and opt.command == CMD_BUILD and not opt.for_run:
+        ret build_signed(opt)
+    end
+    ret build_unsigned(opt)
+end
+
+func build_unsigned(opt &: Dr): int:
+    explicit_res := str.Len(opt.win_icon) > 0 or str.Len(
+        opt.win_manifest
+    ) > 0 or opt.win_version.Len() > 0
     mut lib_stem := ""
     mut lib_export_pub := false
     if opt.inputs.Len() == 0 or (opt.inputs.Len() == 1 and os.IsDir(opt.inputs.Get(0))):
@@ -295,12 +306,10 @@ func build_impl(opt &: Dr): int:
         io.EPrintln("salam: " + werr)
         ret 2
     end
-    if win_resources_used() and not str.Equals(opt.backend, "native") and not str.Equals(
-        linker_mode(opt), "builtin"
-    ) and not (str.Equals(opt.backend, "auto") and native_by_default()):
+    if explicit_res and not str.Equals(sign_target_platform(opt), "windows"):
         io.EPrintln(
             i18.Tr(
-                "salam: warning: --icon, --manifest and --version-info only apply to Windows builds with --backend=native or --linker=builtin"
+                "salam: warning: --icon, --manifest and --version-info only apply to Windows builds"
             )
         )
     end
@@ -734,6 +743,39 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
         opt.llvm_target
     ) == 0 and str.Contains(opt.cc, "mingw"))
     g_win_gui = win_gui_for(opt, win_c, has_page)
+    mut res := ""
+    if win_c and win_resources_used() and not str.Equals(opt.lib_kind, "static"):
+        if str.Contains(opt.cc, "tcc"):
+            if not opt.for_run:
+                lg.Log(
+                    lgr,
+                    lg.PH_DRIVER,
+                    lg.LOG_WARN,
+                    i18.Tr(
+                        "tcc cannot embed the Windows icon, version info or manifest; build with --cc=gcc, --cc=clang or the LLVM backend"
+                    )
+                )
+            end
+        else:
+            mut ro := lv.Options {}
+            named := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.Get(0))
+            mut res_triple := opt.llvm_target
+            if str.Len(res_triple) == 0:
+                res_triple = SALAM_ARCH_ARM64 ? "aarch64-w64-windows-gnu" : (SALAM_ARCH_X86 ? "i686-w64-windows-gnu" : "x86_64-w64-windows-gnu")
+                if str.Contains(opt.cc, "i686-w64"):
+                    res_triple = "i686-w64-windows-gnu"
+                end
+            end
+            is_dll := str.Len(opt.lib_kind) > 0
+            res_name := is_dll ? lib_output_name(
+                opt, str.Len(lib_stem) > 0 ? lib_stem : output_stem_of(opt.inputs.Get(0))
+            ) : exe_name_for(named, res_triple)
+            if not win_res_attach(lgr, ro, res_name, res_triple, is_dll, res):
+                ret 1
+            end
+        end
+    end
+    defer win_res_drop(res)
 
     mut cg_status := Vector {} as Vector<int>
     emit_modules(
@@ -1071,6 +1113,10 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
                     repeat links.Len() in li2:
                         emit_link(cmdb2, lgr, links.Get(li2), link_kinds.Get(li2), use_tcc)
                     end
+                    if str.Len(res) > 0:
+                        str.BufAppendChar(cmdb2, 32)
+                        str.BufAppend(cmdb2, shell_arg(res))
+                    end
                     cmdtext2 = str.BufStr(cmdb2)
                     str.BufFree(cmdb2)
                 end
@@ -1080,8 +1126,18 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
                 pf.End(pf.TP_LINK, _pt_lk2)
                 if crc != 0 and not is_lib and objs.Len() > 0:
                     mut lo := lv.Options {}
-                    lo.link_libs = links
-                    lo.link_kinds = link_kinds
+                    mut flinks := Vector {} as Vector<str>
+                    mut fkinds := Vector {} as Vector<str>
+                    repeat links.Len() in fi:
+                        flinks.Push(links.Get(fi))
+                        fkinds.Push(link_kinds.Get(fi))
+                    end
+                    if str.Len(res) > 0:
+                        flinks.Push(res)
+                        fkinds.Push("")
+                    end
+                    lo.link_libs = flinks
+                    lo.link_kinds = fkinds
                     lo.lib_paths = opt.lib_paths
                     lo.sysroot = ""
                     lo.target_triple = opt.llvm_target
@@ -1137,6 +1193,9 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
                         "built library: " + output + " (header: " + hdr + ")"
                     )
                     println co.Format2(i18.Tr("built %s and %s"), co.ArgStr(output), co.ArgStr(hdr))
+                    if str.Equals(opt.lib_kind, "shared"):
+                        opt.built_path = output
+                    end
                 else:
                     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built executable: " + output)
                     if str.Len(opt.exe_path) == 0:
@@ -1217,6 +1276,11 @@ func build_c(opt &: Dr, scratch: str, lib_stem0: str, lib_export_pub: bool): int
 
             repeat links.Len() in li2b:
                 emit_link(cmdb, lgr, links.Get(li2b), link_kinds.Get(li2b), use_tcc)
+            end
+
+            if str.Len(res) > 0:
+                str.BufAppendChar(cmdb, 32)
+                str.BufAppend(cmdb, shell_arg(res))
             end
 
             if musl_tcc.active:

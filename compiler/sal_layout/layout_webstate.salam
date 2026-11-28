@@ -35,6 +35,7 @@ struct WsUse:
     pub url: bool = false
     pub css: bool = false
     pub std: bool = false
+    pub opt: bool = false
 end
 
 struct WsCtx:
@@ -360,13 +361,41 @@ func ws_reads(r &: LnReact, a &: at.Ast, nid: int): bool:
     ret got
 end
 
+func ws_counts_runs(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret false
+    end
+    if n.kind == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER:
+        m := at.Get(a, n.a).name
+        if str.Equals(m, "ScopeRuns") or str.Equals(m, "شمار اجرای دامنه"):
+            ret true
+        end
+    end
+    if ws_counts_runs(a, n.a) or ws_counts_runs(a, n.b) or ws_counts_runs(a, n.c):
+        ret true
+    end
+    repeat n.list.Len() in i:
+        if ws_counts_runs(a, n.list.Get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
 func ws_own_reads(r &: LnReact, a &: at.Ast, nid: int): bool:
     n := at.Get(a, nid)
     if n.kind == at.AST_LAYOUT_ELEMENT:
         repeat at.ChildCount(a, nid) in i:
             cid := at.Child(a, nid, i)
-            if at.KindOf(a, cid) == at.AST_LAYOUT_ATTR and ws_reads(r, a, at.Get(a, cid).a):
-                ret true
+            if at.KindOf(a, cid) == at.AST_LAYOUT_ATTR:
+                v := at.Get(a, cid).a
+                if ws_reads(r, a, v) or ws_counts_runs(a, v):
+                    ret true
+                end
             end
         end
         ret false
@@ -983,7 +1012,7 @@ func ws_rm_close(
             if str.Equals(kinds[k], "b"):
                 m += "salamWsArgB(" + v + ")\n"
             else:
-                m += "salamWsArgS(\"\" + " + v + ")\n"
+                m += "salamWsArgS(" + ws_key_text(kinds[k], v) + ")\n"
             end
         end
         names.Free()
@@ -1021,7 +1050,7 @@ func ws_rm_close(
         if str.Equals(kinds[k], "b"):
             key += " + (__salam_v_" + names[k] + " ? \"1\" : \"0\")"
         else:
-            key += " + salamWsMk(\"\" + __salam_v_" + names[k] + ")"
+            key += " + salamWsMk(" + ws_key_text(kinds[k], "__salam_v_" + names[k]) + ")"
         end
     end
     names.Free()
@@ -1120,6 +1149,24 @@ func ws_pm_fixed(lw &: LoLower, wc &: WsCtx, a &: at.Ast, inst: int, dyns: str):
     ret out
 end
 
+func ws_may_be_null(a &: at.Ast, sl: LoSlot): bool:
+    if sl.req or
+        (sl.kind != SL_TEXT and sl.kind != SL_ATTR and sl.kind != SL_URL and
+            sl.kind != SL_URL_TEXT):
+        ret false
+    end
+    k := at.KindOf(a, sl.expr)
+    ret k == at.AST_IDENTIFIER or k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_CALL or
+        k == at.AST_TERNARY or k == at.AST_MATCH
+end
+
+func ws_key_text(kind: str, v: str): str:
+    if str.Equals(kind, "o"):
+        ret "(salamWsHas(" + v + ") ? \"\" + salamWsVal(" + v + ") : \"\\x01\")"
+    end
+    ret "\"\" + " + v
+end
+
 func ws_view_source(
     lw &: LoLower,
     wc &: WsCtx,
@@ -1172,21 +1219,44 @@ func ws_view_source(
             p = q + 1
             continue
         end
-        if q > start:
-            body += ws_text(wc, chunks, str.Substr(doc, start, q - start))
+        mut cutp := q
+        mut head := ""
+        mut tail := ""
+        mut did_cut := false
+        mut opt := false
+        if str.Equals(tag, "dyn") and num >= 0 and num < lw.slots.Len():
+            os := lw.slots.Get(num)
+            opt = ws_may_be_null(a, os)
+            if opt:
+                did_cut = lo_opt_cut(doc, os.kind, q, after, start, cutp, head, tail)
+            end
+        end
+        if cutp > start:
+            body += ws_text(wc, chunks, str.Substr(doc, start, cutp - start))
         end
         if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.Len():
             sl := lw.slots.Get(num)
             ns := co.U64Toa(num as u64)
             mut dn := "__salam_dyn_" + ns
             if wc.rm_at.Len() > 0:
-                if str.Equals(tag, "bad") or sl.kind == SL_IF or sl.kind == SL_EACH or sl.kind == SL_STD:
+                if str.Equals(tag, "bad") or sl.kind == SL_IF or sl.kind == SL_EACH or
+                    sl.kind == SL_STD:
                     ws_rm_off(wc)
                 else:
                     dn = ws_rm_token(ns)
                     top := wc.rm_dyn.Len() - 1
-                    wc.rm_dyn[top] = wc.rm_dyn[top] + (sl.kind == SL_BOOL ? "b" : "t") + ns + ","
+                    wc.rm_dyn[top] = wc.rm_dyn[top] + (sl.kind == SL_BOOL ? "b" : (opt ? "o" : "t")) +
+                        ns + ","
                 end
+            end
+            if opt:
+                wu.opt = true
+                body += "__salam_ov_" + ns + " := " + dn + "\n"
+                body += "if salamWsHas(__salam_ov_" + ns + "):\n"
+                if did_cut:
+                    body += ws_text(wc, chunks, head)
+                end
+                dn = "salamWsVal(__salam_ov_" + ns + ")"
             end
             switch sl.kind:
                 SL_IF:
@@ -1247,6 +1317,12 @@ func ws_view_source(
                     body += "__salam_h += salamWsHtml(\"\" + " + dn + ")\n"
                 end
             end
+            if opt:
+                if did_cut and str.Len(tail) > 0:
+                    body += ws_text(wc, chunks, tail)
+                end
+                body += "end\n"
+            end
         else str.Equals(tag, "else"):
             body += "else:\n"
         else str.Equals(tag, "end"):
@@ -1296,6 +1372,10 @@ func ws_view_source(
         end
         p = after
         start = after
+        if did_cut:
+            start += str.Len(tail)
+            p = start
+        end
     end
     if start < n:
         body += ws_text(wc, chunks, str.Substr(doc, start, n - start))
@@ -1429,6 +1509,13 @@ func ws_header(lw &: LoLower, a &: at.Ast, nm: LnNames, count: int, wu: WsUse): 
             t += "    func salamWsFresh(): " + nm.t_bool + "\n"
         end
         t += "end\n\n"
+    end
+    if wu.opt:
+        t += "func salamWsHas<T>(__salam_o: T?): " + nm.t_bool +
+            ":\n    ret __salam_o.present\nend\n\n"
+        t += "func salamWsHas<T>(_o: T): " + nm.t_bool + ":\n    ret true\nend\n\n"
+        t += "func salamWsVal<T>(__salam_o: T?): T:\n    ret __salam_o.value\nend\n\n"
+        t += "func salamWsVal<T>(__salam_o: T): T:\n    ret __salam_o\nend\n\n"
     end
     repeat g_lo_ws_inst.Len() in n:
         if ws_kind(g_lo_ws_inst.Get(n)) == WS_MULTI:
@@ -2175,6 +2262,12 @@ function __salam_hold(el) {
         el.__salam_held = true;
     }
 }
+function __salam_declared(root) {
+    var x = root.querySelectorAll("details,dialog"), i;
+    for (i = 0; i < x.length; i++) {
+        x[i].__salam_open = x[i].hasAttribute("open");
+    }
+}
 function __salam_patch(o, n, fresh) {
     if (o.nodeType !== n.nodeType) {
         return;
@@ -2189,7 +2282,16 @@ function __salam_patch(o, n, fresh) {
         return;
     }
     var nm0 = o.nodeName, form = nm0 === "INPUT" || nm0 === "OPTION" || nm0 === "SELECT" || nm0 === "TEXTAREA" || nm0 === "BUTTON" || nm0 === "FIELDSET" || nm0 === "OPTGROUP";
-    if (nm0 !== "INPUT" && nm0 !== "OPTION" && nm0 !== "SELECT" && nm0 !== "TEXTAREA" && o.isEqualNode(n) && !(n.firstElementChild && n.querySelector("input,option,select,textarea"))) {
+    var opens = nm0 === "DETAILS" || nm0 === "DIALOG", openKept = false;
+    if (opens) {
+        var dec = n.hasAttribute("open"), was = o.__salam_open === undefined ? dec : o.__salam_open;
+        openKept = was === dec;
+        o.__salam_open = dec;
+        if (!openKept && !dec && nm0 === "DIALOG" && o.open) {
+            o.close();
+        }
+    }
+    if (!opens && nm0 !== "INPUT" && nm0 !== "OPTION" && nm0 !== "SELECT" && nm0 !== "TEXTAREA" && o.isEqualNode(n) && !(n.firstElementChild && n.querySelector("input,option,select,textarea,details,dialog"))) {
         return;
     }
     var oa = o.attributes, na = n.attributes, k, nm, val, same = oa.length === na.length;
@@ -2218,7 +2320,7 @@ function __salam_patch(o, n, fresh) {
         }
         for (k = oa.length - 1; k >= 0; k--) {
             nm = oa[k].name;
-            if (!n.hasAttribute(nm)) {
+            if (!n.hasAttribute(nm) && !(openKept && nm === "open")) {
                 o.removeAttribute(nm);
                 if (nm === "checked") {
                     o.checked = false;
@@ -2234,6 +2336,9 @@ function __salam_patch(o, n, fresh) {
         for (k = 0; k < na.length; k++) {
             nm = na[k].name;
             val = na[k].value;
+            if (openKept && nm === "open") {
+                continue;
+            }
             var moved = o.getAttribute(nm) !== val;
             if (moved) {
                 o.setAttribute(nm, val);
@@ -2277,6 +2382,9 @@ function __salam_patch(o, n, fresh) {
                 return x.value === cur;
             }));
             o.__salam_held = keep;
+            if (!keep) {
+                o.__salam_loose = undefined;
+            }
             var want = keep ? cur : sv;
             if (o.value !== want) {
                 o.value = want;
@@ -2520,6 +2628,7 @@ function __salam_unkeep(n) {
     if (kp) {
         var t = document.createElement("template");
         t.innerHTML = kp.h.replace(/[\u0001\u0004]/g, "");
+        __salam_declared(t.content);
         var f = t.content.firstChild;
         n.parentNode ? n.parentNode.replaceChild(t.content, n) : null;
         return f;
@@ -2611,6 +2720,7 @@ function __salam_rows_fast(i, nw, s, e, fresh) {
     if (ch.length > 0) {
         t = document.createElement("template");
         t.innerHTML = buf.replace(/[\u0001\u0004]/g, "");
+        __salam_declared(t.content);
         f = t.content.firstChild;
         for (j = 0; j < ch.length; j++) {
             if (!f || f.nodeType !== 1 || f.nodeName !== els[ch[j]].nodeName) {
@@ -2760,6 +2870,7 @@ function __salam_rows_moved(i, pr, nw, s, e, fresh) {
     if (need.length > 0) {
         t = document.createElement("template");
         t.innerHTML = buf.replace(/[\u0001\u0004]/g, "");
+        __salam_declared(t.content);
         f = t.content.firstChild;
         for (j = 0; j < need.length; j++) {
             oi = src[need[j]];
@@ -3206,6 +3317,7 @@ function __salam_render(i, fresh) {
     }
     var t = document.createElement("template");
     t.innerHTML = html;
+    __salam_declared(t.content);
     var made = Array.prototype.slice.call(t.content.childNodes);
     if (__salam_hydrating) {
         __salam_check(i, s, e, made);
@@ -3366,10 +3478,18 @@ try {
         s += ws_dev_snippet()
         s += "if (window.__salamDevRestore === null) {\n    __salam_hydrating = false;\n}\n"
     end
-    s += `for (var __salam_i = 0; __salam_i < __salam_views.length; __salam_i++) {
+    s += `if (typeof document !== "undefined") {
+    __salam_declared(document);
+}
+for (var __salam_i = 0; __salam_i < __salam_views.length; __salam_i++) {
     __salam_mount(__salam_i);
 }
 window.__salam_base = window.__salam_runs;
+window.__salam_invalidate = function () {
+    for (var i = 0; i < __salam_views.length; i++) {
+        salamWsTouch(i);
+    }
+};
 __salam_hydrating = false;
 __salam_calls = {};
 __salam_call_seen = {};
